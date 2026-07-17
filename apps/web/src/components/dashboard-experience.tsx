@@ -116,7 +116,7 @@ function DemoFallback({
         <span>{message}</span>
       </div>
       <PortfolioDashboard />
-      <div className="dashboard-page">
+      <div className="dashboard-page dashboard-ai-tour">
         <AiCoachPanel
           leagueId={DEMO_LEAGUE_ID}
           features={[

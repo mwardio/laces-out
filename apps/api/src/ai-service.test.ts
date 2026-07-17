@@ -204,7 +204,7 @@ describe("AI service", () => {
 
     expect(analysis).toMatchObject({
       accessMode: "byok",
-      answer: "Start Reed. [Decision Desk]",
+      answer: "Start Reed.",
       league: { id: LEAGUE_ID, name: "Wide Right League" },
       sources: ["League overview", "Decision Desk", "League analytics"],
     });
@@ -215,6 +215,7 @@ describe("AI service", () => {
     expect(complete.mock.calls[1]?.[0].prompt).toContain('"Decision Desk"');
     expect(complete.mock.calls[1]?.[0].prompt).toContain('"League analytics"');
     expect(complete.mock.calls[1]?.[0].system).toContain("Never claim that you changed");
+    expect(complete.mock.calls[1]?.[0].system).toContain("Do not include bracketed source tags");
     expect(repository.usage).toHaveLength(2);
     expect(repository.usage[1]?.metadata).toEqual({
       accessMode: "byok",
@@ -385,6 +386,7 @@ describe("AI service", () => {
     });
 
     expect(response).toMatchObject({ feature: "standings-prediction", outcome: "generated" });
+    expect(response.answer).toBe("Model-assisted forecast.");
     expect(complete.mock.calls[0]?.[0].prompt).toContain("plausible final record for every team");
     expect(complete.mock.calls[0]?.[0].prompt).toContain("Weight all-play results heavily.");
     expect(repository.usage[0]).toMatchObject({

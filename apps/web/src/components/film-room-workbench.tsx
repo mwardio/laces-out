@@ -24,6 +24,7 @@ import {
 import Link from "next/link";
 import { type FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 
+import { aiAnswerForDisplay } from "../lib/ai-answer";
 import {
   apiBaseUrl,
   parseAiAnalysis,
@@ -925,7 +926,7 @@ export function FilmRoomWorkbench() {
                   </span>
                 </div>
                 <h3>{analysis.league.name}</h3>
-                <div className={styles.answerText}>{analysis.answer}</div>
+                <div className={styles.answerText}>{aiAnswerForDisplay(analysis.answer)}</div>
                 <footer>
                   {analysis.sources.map((source) => (
                     <span key={source}>{source}</span>

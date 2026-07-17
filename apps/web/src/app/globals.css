@@ -5365,6 +5365,9 @@
   .exposure-panel {
     margin-top: 16px;
   }
+  .dashboard-ai-tour {
+    margin-top: 24px;
+  }
   .exposure-table-wrap {
     overflow-x: auto;
     border-top: 1px solid var(--ink-100);
@@ -7125,6 +7128,9 @@
       border-right: 0;
       border-left: 0;
       border-radius: 0;
+    }
+    .dashboard-ai-tour {
+      margin-top: 20px;
     }
     .room-strip article {
       min-height: 62px;
