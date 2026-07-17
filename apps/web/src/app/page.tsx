@@ -176,7 +176,6 @@ export default function LandingPage() {
             <LacesOutMark compact />
             <span>
               <strong>Laces Out</strong>
-              <small>Fantasy intelligence</small>
             </span>
           </Link>
 
@@ -212,9 +211,9 @@ export default function LandingPage() {
                 <span>Get the next move.</span>
               </h1>
               <p className={styles.heroLead}>
-                After every sync or projection update, Laces Out rebuilds the league picture, reruns
-                the analysis, and puts the highest-value lineup, waiver, trade, opponent, and draft
-                calls at the top of your locker room.
+                After every sync or projection update, Laces Out rebuilds the league picture and
+                combines automated analysis with AI-powered guidance to surface your highest-value
+                lineup, waiver, trade, opponent, and draft moves.
               </p>
               <div className={styles.heroActions}>
                 <Link className={styles.primaryButton} href="/register">
@@ -818,7 +817,6 @@ export default function LandingPage() {
             <LacesOutMark compact />
             <span>
               <strong>Laces Out</strong>
-              <small>Fantasy intelligence</small>
             </span>
           </Link>
           <p>Connected leagues. Automatic analysis. Better Sundays.</p>

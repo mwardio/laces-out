@@ -30,8 +30,12 @@
 }
 
 .brand strong {
+  font-family: var(--font-brand), var(--font-sans);
   font-size: 14px;
-  line-height: 1.2;
+  font-weight: 400;
+  letter-spacing: 0.005em;
+  line-height: 1;
+  word-spacing: 0.08em;
 }
 
 .brand small {

@@ -1,10 +1,18 @@
 import type { Metadata, Viewport } from "next";
+import { Changa_One } from "next/font/google";
 import type { ReactNode } from "react";
 
 import { publicSiteUrl } from "../lib/public-site";
 
 import "./globals.css";
 import "./polish.css";
+
+const brandFont = Changa_One({
+  weight: "400",
+  subsets: ["latin"],
+  display: "swap",
+  variable: "--font-brand",
+});
 
 export const metadata: Metadata = {
   metadataBase: publicSiteUrl,
@@ -38,7 +46,7 @@ export const viewport: Viewport = {
 
 export default function RootLayout({ children }: Readonly<{ children: ReactNode }>) {
   return (
-    <html lang="en">
+    <html className={brandFont.variable} lang="en">
       <body>{children}</body>
     </html>
   );

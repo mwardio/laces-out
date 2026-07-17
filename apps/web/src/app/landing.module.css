@@ -76,10 +76,12 @@
 
 .brand strong {
   color: inherit;
-  font-size: 14px;
-  font-weight: 760;
-  letter-spacing: -0.015em;
-  line-height: 1.15;
+  font-family: var(--font-brand), var(--font-sans);
+  font-size: 18px;
+  font-weight: 400;
+  letter-spacing: 0.005em;
+  line-height: 1;
+  word-spacing: 0.08em;
 }
 
 .brand small {
@@ -92,7 +94,7 @@
 }
 
 .siteHeader .brand strong {
-  font-size: 16px;
+  font-size: 20px;
 }
 
 .primaryNav {

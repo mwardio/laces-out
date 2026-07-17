@@ -80,20 +80,8 @@ export default function OpenGraphImage() {
             </svg>
           </div>
           <div style={{ display: "flex", flexDirection: "column" }}>
-            <span style={{ fontSize: 24, fontWeight: 750, letterSpacing: "-0.5px" }}>
+            <span style={{ fontSize: 34, fontWeight: 750, letterSpacing: "-0.7px" }}>
               Laces Out
-            </span>
-            <span
-              style={{
-                marginTop: 2,
-                color: "#91a094",
-                fontSize: 11,
-                fontWeight: 700,
-                letterSpacing: "2px",
-                textTransform: "uppercase",
-              }}
-            >
-              Fantasy intelligence
             </span>
           </div>
         </div>

@@ -295,16 +295,17 @@ describe("AI service", () => {
   });
 
   it("enforces the per-user daily safety limit before calling a provider", async () => {
-    const complete = vi.fn((_input: AiCompletionInput) =>
-      Promise.resolve({
+    const complete = vi.fn((input: AiCompletionInput) => {
+      void input;
+      return Promise.resolve({
         text: "Ready",
         requestId: null,
         inputTokens: 1,
         outputTokens: 1,
         cacheReadTokens: 0,
         cacheWriteTokens: 0,
-      }),
-    );
+      });
+    });
     const { service } = serviceFixture({ complete });
     await service.saveProvider(USER_ID, "openai", {
       apiKey: "sk-private-secret",
@@ -359,16 +360,17 @@ describe("AI service", () => {
   });
 
   it("uses feature-specific instructions and records the selected job", async () => {
-    const complete = vi.fn((_input: AiCompletionInput) =>
-      Promise.resolve({
+    const complete = vi.fn((input: AiCompletionInput) => {
+      void input;
+      return Promise.resolve({
         text: "Model-assisted forecast. [League analytics]",
         requestId: "feature-request",
         inputTokens: 140,
         outputTokens: 35,
         cacheReadTokens: 0,
         cacheWriteTokens: 0,
-      }),
-    );
+      });
+    });
     const { service, repository } = serviceFixture({ complete }, new MemoryAiRepository(), {
       apiKey: "managed-gemini-secret",
       dailyRequestLimit: 50,

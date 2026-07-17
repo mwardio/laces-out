@@ -19,7 +19,6 @@ export default function RegisterPage() {
           <LacesOutMark />
           <span className="brand-copy">
             <strong>Laces Out</strong>
-            <span>Fantasy intelligence</span>
           </span>
         </Link>
 
