@@ -1,0 +1,13 @@
+{
+  "name": "@fantasy/espn-bridge",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsup src/service-worker.ts src/popup.ts --format esm --platform browser --target chrome120 --sourcemap --clean --out-dir dist && node scripts/copy-assets.mjs && node scripts/package.mjs",
+    "package": "node scripts/package.mjs"
+  },
+  "devDependencies": {
+    "@types/chrome": "^0.1.1"
+  }
+}

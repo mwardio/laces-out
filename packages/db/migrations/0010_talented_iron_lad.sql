@@ -1,0 +1,11 @@
+ALTER TABLE "projection_sets" ADD COLUMN "league_season_id" uuid;--> statement-breakpoint
+ALTER TABLE "projection_sets" ADD COLUMN "created_by_user_id" uuid;--> statement-breakpoint
+ALTER TABLE "projection_sets" ADD COLUMN "visibility" text DEFAULT 'global' NOT NULL;--> statement-breakpoint
+ALTER TABLE "projection_sets" ADD CONSTRAINT "projection_sets_league_season_id_league_seasons_id_fk" FOREIGN KEY ("league_season_id") REFERENCES "public"."league_seasons"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "projection_sets" ADD CONSTRAINT "projection_sets_created_by_user_id_users_id_fk" FOREIGN KEY ("created_by_user_id") REFERENCES "public"."users"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+CREATE UNIQUE INDEX "projection_sets_scoped_import_unique" ON "projection_sets" USING btree ("league_season_id","created_by_user_id","visibility","input_checksum") WHERE "projection_sets"."league_season_id" is not null;--> statement-breakpoint
+CREATE INDEX "projection_sets_scoped_week_idx" ON "projection_sets" USING btree ("league_season_id","season","week","horizon","fetched_at");--> statement-breakpoint
+CREATE INDEX "projection_sets_creator_idx" ON "projection_sets" USING btree ("created_by_user_id");--> statement-breakpoint
+ALTER TABLE "projection_sets" ADD CONSTRAINT "projection_sets_visibility_check" CHECK ("projection_sets"."visibility" in ('global', 'private', 'league'));--> statement-breakpoint
+ALTER TABLE "projection_sets" ADD CONSTRAINT "projection_sets_scope_check" CHECK (("projection_sets"."visibility" = 'global' and "projection_sets"."league_season_id" is null and "projection_sets"."created_by_user_id" is null) or ("projection_sets"."visibility" in ('private', 'league') and "projection_sets"."league_season_id" is not null and "projection_sets"."created_by_user_id" is not null));--> statement-breakpoint
+ALTER TABLE "projection_sets" ADD CONSTRAINT "projection_sets_week_check" CHECK ("projection_sets"."week" is null or "projection_sets"."week" between 1 and 18);

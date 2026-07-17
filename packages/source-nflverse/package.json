@@ -1,0 +1,11 @@
+{
+  "name": "@fantasy/source-nflverse",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "dependencies": {
+    "csv-parse": "^6.1.0"
+  }
+}

@@ -1,0 +1,32 @@
+{
+  "manifest_version": 3,
+  "name": "Laces Out ESPN Bridge",
+  "short_name": "Laces Out",
+  "version": "0.1.0",
+  "description": "Read-only private ESPN Fantasy league sync for Laces Out.",
+  "minimum_chrome_version": "120",
+  "permissions": ["alarms", "storage"],
+  "host_permissions": ["https://fantasy.espn.com/*", "https://lm-api-reads.fantasy.espn.com/*"],
+  "icons": {
+    "16": "icon-16.png",
+    "32": "icon-32.png",
+    "48": "icon-48.png",
+    "128": "icon-128.png"
+  },
+  "optional_host_permissions": ["http://localhost/*", "http://127.0.0.1/*", "https://*/*"],
+  "background": {
+    "service_worker": "service-worker.js",
+    "type": "module"
+  },
+  "action": {
+    "default_title": "Laces Out ESPN Bridge",
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icon-16.png",
+      "32": "icon-32.png"
+    }
+  },
+  "content_security_policy": {
+    "extension_pages": "default-src 'self'; connect-src https://fantasy.espn.com https://lm-api-reads.fantasy.espn.com http://localhost:* http://127.0.0.1:* https:; img-src 'self'; style-src 'self'"
+  }
+}

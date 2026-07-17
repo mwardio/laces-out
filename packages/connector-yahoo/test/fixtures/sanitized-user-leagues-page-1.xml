@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<fantasy_content>
+  <users><user><games><game>
+    <game_key>449</game_key>
+    <leagues start="0" count="1">
+      <league>
+        <league_key>449.l.12345</league_key><league_id>12345</league_id>
+        <name>Sanitized Auction League</name><season>2026</season>
+      </league>
+    </leagues>
+  </game></games></user></users>
+</fantasy_content>

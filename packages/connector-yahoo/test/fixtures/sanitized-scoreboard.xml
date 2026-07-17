@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<fantasy_content><league>
+  <league_key>449.l.12345</league_key><league_id>12345</league_id>
+  <name>Sanitized Auction League</name><season>2026</season><current_week>4</current_week>
+  <scoreboard><week>4</week><matchups count="1"><matchup>
+    <matchup_id>4-1</matchup_id><week>4</week><status>postevent</status><is_tied>0</is_tied>
+    <winner_team_key>449.l.12345.t.1</winner_team_key><teams>
+      <team><team_key>449.l.12345.t.1</team_key><team_id>1</team_id><team_points><total>112.6</total></team_points></team>
+      <team><team_key>449.l.12345.t.2</team_key><team_id>2</team_id><team_points><total>101.4</total></team_points></team>
+    </teams>
+  </matchup></matchups></scoreboard>
+</league></fantasy_content>

@@ -1,0 +1,211 @@
+:root {
+  color: #111a14;
+  background: #f4f5ef;
+  font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+  font-size: 13px;
+}
+
+* {
+  box-sizing: border-box;
+}
+body {
+  width: 370px;
+  margin: 0;
+}
+main {
+  padding: 18px;
+}
+header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+header div {
+  display: flex;
+  flex-direction: column;
+}
+header strong {
+  font-size: 15px;
+}
+header small {
+  color: #6f7a72;
+}
+.mark {
+  display: grid;
+  width: 36px;
+  height: 36px;
+  place-items: center;
+  color: #0d1410;
+  background: #c9f464;
+  border-radius: 9px;
+}
+.mark svg {
+  width: 30px;
+  height: 30px;
+  fill: #0d1410;
+}
+.mark .seam {
+  fill: none;
+  stroke: #c9f464;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+}
+.status {
+  display: flex;
+  gap: 9px;
+  padding: 12px;
+  background: white;
+  border: 1px solid #d5dad4;
+  border-radius: 11px;
+}
+.status p {
+  margin: 0 0 3px;
+  font-weight: 700;
+}
+.status small {
+  color: #6f7a72;
+}
+.status-dot {
+  width: 9px;
+  height: 9px;
+  margin-top: 4px;
+  flex: 0 0 auto;
+  background: #929b94;
+  border-radius: 50%;
+}
+.status[data-state="healthy"] .status-dot {
+  background: #79a923;
+  box-shadow: 0 0 0 4px #eafbc3;
+}
+.status[data-state="error"] .status-dot,
+.status[data-state="partial-failure"] .status-dot,
+.status[data-state="espn-login-required"] .status-dot,
+.status[data-state="laces-out-auth-failed"] .status-dot {
+  background: #e07843;
+  box-shadow: 0 0 0 4px #fbe5d7;
+}
+form {
+  display: grid;
+  gap: 11px;
+  margin-top: 16px;
+}
+label {
+  display: grid;
+  gap: 5px;
+  color: #344038;
+  font-size: 11px;
+  font-weight: 800;
+}
+input {
+  width: 100%;
+  min-height: 39px;
+  padding: 8px 10px;
+  color: #111a14;
+  background: white;
+  border: 1px solid #b8beb8;
+  border-radius: 8px;
+  font: inherit;
+}
+input:focus {
+  outline: 3px solid rgb(76 150 211 / 30%);
+  border-color: #4c96d3;
+}
+label > small {
+  color: #6f7a72;
+  font-size: 10px;
+  font-weight: 500;
+  line-height: 1.35;
+}
+.fields {
+  display: grid;
+  grid-template-columns: 1.4fr 0.8fr;
+  gap: 9px;
+}
+.check {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  font-weight: 600;
+  line-height: 1.35;
+}
+.check input {
+  width: 16px;
+  min-height: 16px;
+  margin: 1px 0 0;
+  accent-color: #79a923;
+}
+button {
+  min-height: 38px;
+  padding: 8px 12px;
+  color: #1e2921;
+  background: white;
+  border: 1px solid #b8beb8;
+  border-radius: 8px;
+  font: inherit;
+  font-weight: 800;
+  cursor: pointer;
+}
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+button.primary {
+  color: #0d1410;
+  background: #c9f464;
+  border-color: #b9e853;
+}
+button.quiet {
+  color: #6f7a72;
+  background: transparent;
+  border-color: transparent;
+}
+.actions {
+  display: grid;
+  gap: 8px;
+  margin-top: 13px;
+}
+.league-results {
+  display: grid;
+  gap: 6px;
+  margin: 9px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.league-results[hidden] {
+  display: none;
+}
+.league-results li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 2px 8px;
+  padding: 8px 10px;
+  background: white;
+  border: 1px solid #d5dad4;
+  border-radius: 8px;
+}
+.league-results strong,
+.league-results span {
+  font-size: 11px;
+}
+.league-results span {
+  color: #526057;
+  font-weight: 700;
+}
+.league-results small {
+  grid-column: 1 / -1;
+  color: #6f7a72;
+  font-size: 10px;
+}
+.league-results li[data-state="synced"] span {
+  color: #557d17;
+}
+.league-results li:not([data-state="synced"]) span {
+  color: #a04d26;
+}
+.privacy {
+  margin: 14px 2px 0;
+  color: #6f7a72;
+  font-size: 10px;
+  line-height: 1.45;
+}

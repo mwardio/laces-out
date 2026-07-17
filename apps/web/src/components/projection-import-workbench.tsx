@@ -1,0 +1,1031 @@
+"use client";
+
+import type {
+  ProjectionImportPreviewResponse,
+  ProjectionSetListResponse,
+  ProjectionVisibility,
+} from "@fantasy/contracts";
+import {
+  AlertTriangle,
+  Check,
+  Database,
+  Download,
+  FileCheck2,
+  FileSpreadsheet,
+  Info,
+  LoaderCircle,
+  LockKeyhole,
+  RefreshCw,
+  ShieldCheck,
+  Upload,
+  Users,
+} from "lucide-react";
+import Link from "next/link";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+
+import {
+  apiBaseUrl,
+  parseLeagueListResponse,
+  parseProjectionImportCommit,
+  parseProjectionImportPreview,
+  parseProjectionSetList,
+  type LeagueListResponse,
+} from "../lib/api-client";
+import {
+  LEAGUE_PROJECTION_IMPORT_HORIZON,
+  localDateTimeMinuteValue,
+  projectionSourceAsOfText,
+  sourceObservedAtIso,
+} from "../lib/projection-import-form";
+import styles from "./projection-import-workbench.module.css";
+
+const MAX_CSV_BYTES = 512 * 1024;
+const TEMPLATE = `player_id,player_name,mean_points,floor_points,ceiling_points,confidence\n,Tyreek Hill,18.4,12.1,27.8,0.82\n`;
+
+type PortfolioState =
+  | { readonly state: "loading" }
+  | { readonly state: "signed-out" }
+  | { readonly state: "error"; readonly message: string }
+  | { readonly state: "ready"; readonly portfolio: LeagueListResponse };
+
+type SetsState =
+  | { readonly state: "idle" | "loading" }
+  | { readonly state: "error"; readonly message: string }
+  | { readonly state: "ready"; readonly data: ProjectionSetListResponse };
+
+type SubmissionState =
+  | { readonly state: "idle" }
+  | { readonly state: "previewing" | "committing" }
+  | { readonly state: "error"; readonly message: string }
+  | { readonly state: "committed"; readonly message: string };
+
+async function responseMessage(response: Response, fallback: string): Promise<string> {
+  try {
+    const body = (await response.json()) as { readonly detail?: unknown; readonly title?: unknown };
+    if (typeof body.detail === "string") return body.detail;
+    if (typeof body.title === "string") return body.title;
+  } catch {
+    // The status-aware fallback below remains safe for an empty or non-JSON response.
+  }
+  return `${fallback} (${response.status})`;
+}
+
+function readableDate(value: string): string {
+  return new Intl.DateTimeFormat(undefined, {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(new Date(value));
+}
+
+function shortenedChecksum(value: string): string {
+  return `${value.slice(7, 19)}…${value.slice(-8)}`;
+}
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof Error && error.name === "AbortError";
+}
+
+function ProjectionTour() {
+  return (
+    <div className={styles.page}>
+      <div className={styles.demoNotice} role="status">
+        <Info size={17} aria-hidden="true" />
+        <span>
+          <strong>Locker room tour</strong>
+          Illustrative import, match report, and saved projection set. Nothing can be uploaded or
+          saved in tour mode.
+        </span>
+      </div>
+      <header className={styles.hero}>
+        <div>
+          <p className={styles.kicker}>Your model, cleanly sourced</p>
+          <h1>Bring weekly projections into the decision desk.</h1>
+          <p>
+            Preview every player match before saving. Source time, authorship, scope, and checksums
+            stay attached to every set.
+          </p>
+        </div>
+        <label className={styles.leagueControl}>
+          <span>League season</span>
+          <select value="demo" disabled aria-label="Sample league season">
+            <option value="demo">North Loop Auction · 2026</option>
+          </select>
+        </label>
+      </header>
+
+      <section className={styles.boundary} aria-label="Import privacy and matching rules">
+        <div>
+          <ShieldCheck size={18} aria-hidden="true" />
+          <span>
+            <strong>Private by default</strong>
+            Other members cannot read a private set.
+          </span>
+        </div>
+        <div>
+          <FileCheck2 size={18} aria-hidden="true" />
+          <span>
+            <strong>All-or-nothing matching</strong>
+            Ambiguous player rows are never silently skipped.
+          </span>
+        </div>
+        <div>
+          <Database size={18} aria-hidden="true" />
+          <span>
+            <strong>Provenance retained</strong>
+            Source time, import time, checksums, and author remain visible.
+          </span>
+        </div>
+      </section>
+
+      <div className={styles.workspace}>
+        <section className={styles.importPanel} aria-labelledby="tour-import-title">
+          <header className={styles.panelHeader}>
+            <div>
+              <p className={styles.kicker}>Strict CSV import</p>
+              <h2 id="tour-import-title">New projection set</h2>
+            </div>
+            <span className={styles.readyBadge}>Sample</span>
+          </header>
+          <div className={styles.form}>
+            <div className={styles.filePicker}>
+              <span className={styles.fileIcon}>
+                <FileSpreadsheet size={20} aria-hidden="true" />
+              </span>
+              <span>
+                <strong>week-6-blended-projections.csv</strong>
+                <small>218 rows · 24 KB · illustrative file</small>
+              </span>
+            </div>
+            <div className={styles.fields}>
+              <label className={styles.wideField}>
+                <span>Source label</span>
+                <input value="My blended Week 6 model" readOnly />
+              </label>
+              <label>
+                <span>Week</span>
+                <select value="6" disabled>
+                  <option value="6">Week 6</option>
+                </select>
+              </label>
+              <label>
+                <span>Source as of</span>
+                <input value="Oct 8 · 12:55 PM" readOnly />
+              </label>
+            </div>
+            <fieldset className={styles.visibility}>
+              <legend>Who can use this set?</legend>
+              <label className={styles.selectedVisibility}>
+                <input type="radio" checked readOnly />
+                <LockKeyhole size={17} aria-hidden="true" />
+                <span>
+                  <strong>Only me</strong>
+                  <small>Visible solely to this sample account.</small>
+                </span>
+              </label>
+              <label aria-disabled="true">
+                <input type="radio" disabled />
+                <Users size={17} aria-hidden="true" />
+                <span>
+                  <strong>Entire league</strong>
+                  <small>Commissioners can publish league-wide sets.</small>
+                </span>
+              </label>
+            </fieldset>
+            <div className={styles.actions}>
+              <button className={styles.previewButton} type="button" disabled>
+                <FileSpreadsheet size={16} /> Preview matches
+              </button>
+              <button className={styles.commitButton} type="button" disabled>
+                <Check size={16} /> Save projection set
+              </button>
+            </div>
+          </div>
+        </section>
+
+        <section className={styles.previewPanel} aria-labelledby="tour-match-title">
+          <header className={styles.panelHeader}>
+            <div>
+              <p className={styles.kicker}>Before anything is saved</p>
+              <h2 id="tour-match-title">Match report</h2>
+            </div>
+            <span className={styles.readyBadge}>Ready</span>
+          </header>
+          <div className={styles.previewBody}>
+            <div className={styles.previewStats}>
+              <div>
+                <span>Rows</span>
+                <strong>218</strong>
+              </div>
+              <div>
+                <span>Resolved</span>
+                <strong>218</strong>
+              </div>
+              <div>
+                <span>Errors</span>
+                <strong>0</strong>
+              </div>
+            </div>
+            <dl className={styles.checksums}>
+              <div>
+                <dt>Decision scope</dt>
+                <dd>Week 6 · single week</dd>
+              </div>
+              <div>
+                <dt>Player identity</dt>
+                <dd>218 canonical matches</dd>
+              </div>
+              <div>
+                <dt>Source checksum</dt>
+                <dd>sha256: 7b0a…d421</dd>
+              </div>
+              <div>
+                <dt>Resolved import</dt>
+                <dd>sha256: 91fc…8ab2</dd>
+              </div>
+            </dl>
+            <div className={styles.cleanPreview}>
+              <Check size={17} aria-hidden="true" />
+              <span>Every sample row maps to one canonical player.</span>
+            </div>
+          </div>
+        </section>
+      </div>
+
+      <section className={styles.saved} aria-labelledby="tour-saved-title">
+        <header className={styles.savedHeader}>
+          <div>
+            <p className={styles.kicker}>Available in this league</p>
+            <h2 id="tour-saved-title">Saved projection sets</h2>
+          </div>
+          <span className={styles.readyBadge}>2 sets</span>
+        </header>
+        <div className={styles.demoSavedList}>
+          <article>
+            <span>PRIVATE · WEEK 6</span>
+            <strong>My blended Week 6 model</strong>
+            <small>218 players · Source 47 min ago · imported by Sample member</small>
+          </article>
+          <article>
+            <span>LEAGUE · WEEK 6</span>
+            <strong>Commissioner consensus</strong>
+            <small>214 players · Source 2h ago · imported by League commissioner</small>
+          </article>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+export function ProjectionImportWorkbench() {
+  const [portfolio, setPortfolio] = useState<PortfolioState>({ state: "loading" });
+  const [selectedSeasonId, setSelectedSeasonId] = useState("");
+  const [sets, setSets] = useState<SetsState>({ state: "idle" });
+  const [csv, setCsv] = useState("");
+  const [sourceFileName, setSourceFileName] = useState<string | null>(null);
+  const [sourceLabel, setSourceLabel] = useState("My weekly projections");
+  const [week, setWeek] = useState("1");
+  const [sourceObservedAtLocal, setSourceObservedAtLocal] = useState("");
+  const [visibility, setVisibility] = useState<ProjectionVisibility>("private");
+  const [preview, setPreview] = useState<ProjectionImportPreviewResponse | null>(null);
+  const [submission, setSubmission] = useState<SubmissionState>({ state: "idle" });
+  const portfolioAbortRef = useRef<AbortController | null>(null);
+  const setsAbortRef = useRef<AbortController | null>(null);
+  const previewAbortRef = useRef<AbortController | null>(null);
+  const commitAbortRef = useRef<AbortController | null>(null);
+
+  const loadPortfolio = useCallback(async () => {
+    portfolioAbortRef.current?.abort();
+    const controller = new AbortController();
+    portfolioAbortRef.current = controller;
+    setPortfolio({ state: "loading" });
+    try {
+      const response = await fetch(`${apiBaseUrl}/v1/leagues`, {
+        credentials: "include",
+        headers: { Accept: "application/json" },
+        cache: "no-store",
+        signal: controller.signal,
+      });
+      if (portfolioAbortRef.current !== controller) return;
+      if (response.status === 401) {
+        setPortfolio({ state: "signed-out" });
+        return;
+      }
+      if (!response.ok) throw new Error(await responseMessage(response, "Could not load leagues"));
+      const payload: unknown = await response.json();
+      if (portfolioAbortRef.current !== controller) return;
+      const parsed = parseLeagueListResponse(payload);
+      if (!parsed) throw new Error("League response did not match the expected contract");
+      setPortfolio({ state: "ready", portfolio: parsed });
+      const firstSeason = parsed.leagues.find((league) => league.season)?.season;
+      setSelectedSeasonId((current) =>
+        parsed.leagues.some((league) => league.season?.id === current)
+          ? current
+          : (firstSeason?.id ?? ""),
+      );
+    } catch (error) {
+      if (isAbortError(error) || portfolioAbortRef.current !== controller) return;
+      setPortfolio({
+        state: "error",
+        message: error instanceof Error ? error.message : "Could not load leagues",
+      });
+    } finally {
+      if (portfolioAbortRef.current === controller) portfolioAbortRef.current = null;
+    }
+  }, []);
+
+  useEffect(() => void loadPortfolio(), [loadPortfolio]);
+
+  const selectedPortfolioLeague = useMemo(
+    () =>
+      portfolio.state === "ready"
+        ? portfolio.portfolio.leagues.find((league) => league.season?.id === selectedSeasonId)
+        : undefined,
+    [portfolio, selectedSeasonId],
+  );
+
+  const loadSets = useCallback(async () => {
+    setsAbortRef.current?.abort();
+    if (!selectedSeasonId) {
+      setSets({ state: "idle" });
+      return;
+    }
+    const controller = new AbortController();
+    setsAbortRef.current = controller;
+    setSets({ state: "loading" });
+    try {
+      const response = await fetch(
+        `${apiBaseUrl}/v1/league-seasons/${encodeURIComponent(selectedSeasonId)}/projections`,
+        {
+          credentials: "include",
+          headers: { Accept: "application/json" },
+          cache: "no-store",
+          signal: controller.signal,
+        },
+      );
+      if (setsAbortRef.current !== controller) return;
+      if (!response.ok) {
+        throw new Error(await responseMessage(response, "Could not load projection sets"));
+      }
+      const payload: unknown = await response.json();
+      if (setsAbortRef.current !== controller) return;
+      const parsed = parseProjectionSetList(payload);
+      if (!parsed) throw new Error("Projection response did not match the expected contract");
+      setSets({ state: "ready", data: parsed });
+      setWeek(String(parsed.league.currentWeek ?? 1));
+      if (!parsed.league.canShareLeague) setVisibility("private");
+    } catch (error) {
+      if (isAbortError(error) || setsAbortRef.current !== controller) return;
+      setSets({
+        state: "error",
+        message: error instanceof Error ? error.message : "Could not load projection sets",
+      });
+    } finally {
+      if (setsAbortRef.current === controller) setsAbortRef.current = null;
+    }
+  }, [selectedSeasonId]);
+
+  useEffect(() => void loadSets(), [loadSets]);
+
+  useEffect(() => {
+    setSourceObservedAtLocal((current) => current || localDateTimeMinuteValue(new Date()));
+    return () => {
+      portfolioAbortRef.current?.abort();
+      setsAbortRef.current?.abort();
+      previewAbortRef.current?.abort();
+      commitAbortRef.current?.abort();
+    };
+  }, []);
+
+  const clearPreview = () => {
+    previewAbortRef.current?.abort();
+    setPreview(null);
+    setSubmission({ state: "idle" });
+  };
+
+  const handleFile = async (file: File | undefined) => {
+    clearPreview();
+    if (!file) {
+      setCsv("");
+      setSourceFileName(null);
+      return;
+    }
+    if (file.size > MAX_CSV_BYTES) {
+      setCsv("");
+      setSourceFileName(null);
+      setSubmission({ state: "error", message: "CSV files are limited to 512 KB." });
+      return;
+    }
+    try {
+      setCsv(await file.text());
+      setSourceFileName(file.name);
+    } catch {
+      setSubmission({ state: "error", message: "The selected file could not be read." });
+    }
+  };
+
+  const requestBody = (sourceObservedAt: string) => ({
+    csv,
+    metadata: {
+      season: selectedPortfolioLeague?.season?.season ?? 0,
+      week: Number(week),
+      horizon: LEAGUE_PROJECTION_IMPORT_HORIZON,
+      sourceLabel,
+      sourceObservedAt,
+    },
+    visibility,
+    sourceFileName,
+  });
+
+  const previewImport = async () => {
+    if (!selectedSeasonId || !csv) return;
+    const sourceObservedAt = sourceObservedAtIso(sourceObservedAtLocal);
+    if (!sourceObservedAt) {
+      setSubmission({ state: "error", message: "Enter a valid source as-of date and time." });
+      return;
+    }
+    previewAbortRef.current?.abort();
+    const controller = new AbortController();
+    previewAbortRef.current = controller;
+    const seasonId = selectedSeasonId;
+    setSubmission({ state: "previewing" });
+    setPreview(null);
+    try {
+      const response = await fetch(
+        `${apiBaseUrl}/v1/league-seasons/${encodeURIComponent(seasonId)}/projections/preview`,
+        {
+          method: "POST",
+          credentials: "include",
+          headers: { Accept: "application/json", "Content-Type": "application/json" },
+          body: JSON.stringify(requestBody(sourceObservedAt)),
+          signal: controller.signal,
+        },
+      );
+      if (previewAbortRef.current !== controller) return;
+      if (!response.ok) throw new Error(await responseMessage(response, "Preview failed"));
+      const payload: unknown = await response.json();
+      if (previewAbortRef.current !== controller) return;
+      const parsed = parseProjectionImportPreview(payload);
+      if (!parsed) throw new Error("Preview response did not match the expected contract");
+      setPreview(parsed);
+      setSubmission({ state: "idle" });
+    } catch (error) {
+      if (isAbortError(error) || previewAbortRef.current !== controller) return;
+      setSubmission({
+        state: "error",
+        message: error instanceof Error ? error.message : "Preview failed",
+      });
+    } finally {
+      if (previewAbortRef.current === controller) previewAbortRef.current = null;
+    }
+  };
+
+  const commitImport = async () => {
+    if (!selectedSeasonId || !preview?.canCommit || !preview.importChecksum) return;
+    const sourceObservedAt = sourceObservedAtIso(sourceObservedAtLocal);
+    if (!sourceObservedAt) {
+      setSubmission({ state: "error", message: "Enter a valid source as-of date and time." });
+      return;
+    }
+    commitAbortRef.current?.abort();
+    const controller = new AbortController();
+    commitAbortRef.current = controller;
+    const seasonId = selectedSeasonId;
+    setSubmission({ state: "committing" });
+    try {
+      const response = await fetch(
+        `${apiBaseUrl}/v1/league-seasons/${encodeURIComponent(seasonId)}/projections`,
+        {
+          method: "POST",
+          credentials: "include",
+          headers: { Accept: "application/json", "Content-Type": "application/json" },
+          body: JSON.stringify({
+            ...requestBody(sourceObservedAt),
+            expectedImportChecksum: preview.importChecksum,
+          }),
+          signal: controller.signal,
+        },
+      );
+      if (commitAbortRef.current !== controller) return;
+      if (!response.ok) throw new Error(await responseMessage(response, "Import failed"));
+      const payload: unknown = await response.json();
+      if (commitAbortRef.current !== controller) return;
+      const parsed = parseProjectionImportCommit(payload);
+      if (!parsed) throw new Error("Import response did not match the expected contract");
+      setSubmission({
+        state: "committed",
+        message: parsed.deduplicated
+          ? "This exact projection set was already saved."
+          : `${parsed.projectionSet.playerCount} projections saved.`,
+      });
+      setPreview(null);
+      await loadSets();
+    } catch (error) {
+      if (isAbortError(error) || commitAbortRef.current !== controller) return;
+      setSubmission({
+        state: "error",
+        message: error instanceof Error ? error.message : "Import failed",
+      });
+    } finally {
+      if (commitAbortRef.current === controller) commitAbortRef.current = null;
+    }
+  };
+
+  const downloadTemplate = () => {
+    const url = URL.createObjectURL(new Blob([TEMPLATE], { type: "text/csv;charset=utf-8" }));
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = "laces-out-projections-template.csv";
+    anchor.click();
+    URL.revokeObjectURL(url);
+  };
+
+  if (portfolio.state === "loading") {
+    return (
+      <div className={styles.gate} role="status">
+        <LoaderCircle className={styles.spin} size={20} aria-hidden="true" />
+        <span>Loading your league seasons…</span>
+      </div>
+    );
+  }
+  if (portfolio.state === "signed-out") {
+    return <ProjectionTour />;
+  }
+  if (portfolio.state === "error") {
+    return (
+      <div className={styles.gate} role="alert">
+        <AlertTriangle size={22} aria-hidden="true" />
+        <div>
+          <h1>Projection lab is unavailable</h1>
+          <p>{portfolio.message}</p>
+          <button className={styles.secondaryButton} type="button" onClick={loadPortfolio}>
+            Try again
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  const leaguesWithSeasons = portfolio.portfolio.leagues.filter((league) => league.season);
+  if (leaguesWithSeasons.length === 0) {
+    return (
+      <div className={styles.gate}>
+        <Database size={22} aria-hidden="true" />
+        <div>
+          <h1>Connect a league first</h1>
+          <p>A Yahoo or ESPN league season establishes the scoring and privacy boundary.</p>
+          <Link className={styles.primaryLink} href="/connections">
+            Open connections
+          </Link>
+        </div>
+      </div>
+    );
+  }
+
+  const canShare = sets.state === "ready" && sets.data.league.canShareLeague;
+  const visibleDiagnostics = preview?.diagnostics.slice(0, 50) ?? [];
+
+  return (
+    <div className={styles.page}>
+      <header className={styles.hero}>
+        <div>
+          <p className={styles.kicker}>Your model, cleanly sourced</p>
+          <h1>Bring weekly projections into the decision desk.</h1>
+          <p>
+            Preview every match before saving. Unresolved names, duplicate players, invalid ranges,
+            and ambiguous identities stop the entire import.
+          </p>
+        </div>
+        <label className={styles.leagueControl}>
+          <span>League season</span>
+          <select
+            value={selectedSeasonId}
+            onChange={(event) => {
+              setsAbortRef.current?.abort();
+              commitAbortRef.current?.abort();
+              setSelectedSeasonId(event.target.value);
+              setSets({ state: "loading" });
+              setCsv("");
+              setSourceFileName(null);
+              clearPreview();
+            }}
+          >
+            {leaguesWithSeasons.map((league) => (
+              <option value={league.season!.id} key={league.season!.id}>
+                {league.name} · {league.season!.season}
+              </option>
+            ))}
+          </select>
+        </label>
+      </header>
+
+      <section className={styles.boundary} aria-label="Import privacy and matching rules">
+        <div>
+          <ShieldCheck size={18} aria-hidden="true" />
+          <span>
+            <strong>Private by default</strong>
+            Other members cannot read a private set.
+          </span>
+        </div>
+        <div>
+          <FileCheck2 size={18} aria-hidden="true" />
+          <span>
+            <strong>All-or-nothing matching</strong>
+            No unresolved or ambiguous row is silently skipped.
+          </span>
+        </div>
+        <div>
+          <Database size={18} aria-hidden="true" />
+          <span>
+            <strong>Provenance retained</strong>
+            Source as-of time, import time, checksums, and author stay attached.
+          </span>
+        </div>
+      </section>
+
+      <div className={styles.workspace}>
+        <section className={styles.importPanel} aria-labelledby="projection-import-title">
+          <header className={styles.panelHeader}>
+            <div>
+              <p className={styles.kicker}>Strict CSV import</p>
+              <h2 id="projection-import-title">New projection set</h2>
+            </div>
+            <button className={styles.textButton} type="button" onClick={downloadTemplate}>
+              <Download size={15} aria-hidden="true" />
+              Template
+            </button>
+          </header>
+
+          <div className={styles.form}>
+            <label className={styles.filePicker}>
+              <input
+                type="file"
+                accept=".csv,text/csv"
+                onChange={(event) => void handleFile(event.target.files?.[0])}
+              />
+              <span className={styles.fileIcon}>
+                <Upload size={20} aria-hidden="true" />
+              </span>
+              <span>
+                <strong>{sourceFileName ?? "Choose a projection CSV"}</strong>
+                <small>
+                  {csv
+                    ? `${new TextEncoder().encode(csv).byteLength.toLocaleString()} bytes ready`
+                    : "Up to 5,000 rows and 512 KB"}
+                </small>
+              </span>
+            </label>
+
+            <div className={styles.fields}>
+              <label className={styles.wideField}>
+                <span>Source label</span>
+                <input
+                  value={sourceLabel}
+                  maxLength={80}
+                  onChange={(event) => {
+                    setSourceLabel(event.target.value);
+                    clearPreview();
+                  }}
+                />
+              </label>
+              <label>
+                <span>Week</span>
+                <select
+                  value={week}
+                  onChange={(event) => {
+                    setWeek(event.target.value);
+                    clearPreview();
+                  }}
+                >
+                  {Array.from({ length: 18 }, (_, index) => String(index + 1)).map((value) => (
+                    <option value={value} key={value}>
+                      Week {value}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                <span>Source as of</span>
+                <input
+                  type="datetime-local"
+                  step="60"
+                  value={sourceObservedAtLocal}
+                  onChange={(event) => {
+                    setSourceObservedAtLocal(event.target.value);
+                    clearPreview();
+                  }}
+                  aria-describedby="source-observed-at-help"
+                />
+                <small id="source-observed-at-help" className={styles.fieldHelp}>
+                  Local time when this source published or observed the data.
+                </small>
+              </label>
+            </div>
+
+            <fieldset className={styles.visibility}>
+              <legend>Who can use this set?</legend>
+              <label className={visibility === "private" ? styles.selectedVisibility : undefined}>
+                <input
+                  type="radio"
+                  name="projection-visibility"
+                  value="private"
+                  checked={visibility === "private"}
+                  onChange={() => {
+                    setVisibility("private");
+                    clearPreview();
+                  }}
+                />
+                <LockKeyhole size={17} aria-hidden="true" />
+                <span>
+                  <strong>Only me</strong>
+                  <small>Visible solely to your account in this league.</small>
+                </span>
+              </label>
+              <label
+                className={visibility === "league" ? styles.selectedVisibility : undefined}
+                aria-disabled={!canShare}
+              >
+                <input
+                  type="radio"
+                  name="projection-visibility"
+                  value="league"
+                  checked={visibility === "league"}
+                  disabled={!canShare}
+                  onChange={() => {
+                    setVisibility("league");
+                    clearPreview();
+                  }}
+                />
+                <Users size={17} aria-hidden="true" />
+                <span>
+                  <strong>Entire league</strong>
+                  <small>
+                    {canShare
+                      ? "League members can use it in their decision desk."
+                      : "Owner or commissioner permission required."}
+                  </small>
+                </span>
+              </label>
+            </fieldset>
+
+            <div className={styles.actions}>
+              <button
+                className={styles.previewButton}
+                type="button"
+                disabled={
+                  !csv ||
+                  sourceLabel.trim().length < 2 ||
+                  !sourceObservedAtIso(sourceObservedAtLocal) ||
+                  submission.state === "previewing" ||
+                  submission.state === "committing"
+                }
+                onClick={() => void previewImport()}
+              >
+                {submission.state === "previewing" ? (
+                  <LoaderCircle className={styles.spin} size={16} aria-hidden="true" />
+                ) : (
+                  <FileSpreadsheet size={16} aria-hidden="true" />
+                )}
+                Preview matches
+              </button>
+              <button
+                className={styles.commitButton}
+                type="button"
+                disabled={
+                  !preview?.canCommit ||
+                  !preview.importChecksum ||
+                  submission.state === "committing"
+                }
+                onClick={() => void commitImport()}
+              >
+                {submission.state === "committing" ? (
+                  <LoaderCircle className={styles.spin} size={16} aria-hidden="true" />
+                ) : (
+                  <Check size={16} aria-hidden="true" />
+                )}
+                Save projection set
+              </button>
+            </div>
+
+            {submission.state === "error" ? (
+              <div className={styles.errorNotice} role="alert">
+                <AlertTriangle size={17} aria-hidden="true" />
+                <span>{submission.message}</span>
+              </div>
+            ) : null}
+            {submission.state === "committed" ? (
+              <div className={styles.successNotice} role="status">
+                <Check size={17} aria-hidden="true" />
+                <span>{submission.message}</span>
+              </div>
+            ) : null}
+          </div>
+        </section>
+
+        <section className={styles.previewPanel} aria-labelledby="projection-preview-title">
+          <header className={styles.panelHeader}>
+            <div>
+              <p className={styles.kicker}>Before anything is saved</p>
+              <h2 id="projection-preview-title">Match report</h2>
+            </div>
+            {preview ? (
+              <span className={preview.canCommit ? styles.readyBadge : styles.blockedBadge}>
+                {preview.canCommit ? "Ready" : "Blocked"}
+              </span>
+            ) : null}
+          </header>
+          {!preview ? (
+            <div className={styles.emptyPreview}>
+              <FileCheck2 size={24} aria-hidden="true" />
+              <strong>No preview yet</strong>
+              <p>
+                Required columns are player_id or player_name, plus mean_points. Floor, ceiling, and
+                confidence are optional.
+              </p>
+            </div>
+          ) : (
+            <div className={styles.previewBody}>
+              <div className={styles.previewStats}>
+                <div>
+                  <span>Rows</span>
+                  <strong>{preview.rowCount.toLocaleString()}</strong>
+                </div>
+                <div>
+                  <span>Resolved</span>
+                  <strong>{preview.resolvedRowCount.toLocaleString()}</strong>
+                </div>
+                <div>
+                  <span>Errors</span>
+                  <strong>
+                    {preview.diagnostics.filter((item) => item.severity === "error").length}
+                  </strong>
+                </div>
+              </div>
+              <dl className={styles.checksums}>
+                <div>
+                  <dt>Source as of</dt>
+                  <dd>{readableDate(preview.metadata.sourceObservedAt)}</dd>
+                </div>
+                <div>
+                  <dt>Decision scope</dt>
+                  <dd>Week {preview.metadata.week} · single week</dd>
+                </div>
+                <div>
+                  <dt>Imported at</dt>
+                  <dd>Assigned only when saved</dd>
+                </div>
+                <div>
+                  <dt>Source checksum</dt>
+                  <dd title={preview.sourceChecksum}>
+                    {shortenedChecksum(preview.sourceChecksum)}
+                  </dd>
+                </div>
+                <div>
+                  <dt>Resolved import</dt>
+                  <dd title={preview.importChecksum ?? undefined}>
+                    {preview.importChecksum ? shortenedChecksum(preview.importChecksum) : "Blocked"}
+                  </dd>
+                </div>
+              </dl>
+              {visibleDiagnostics.length === 0 ? (
+                <div className={styles.cleanPreview}>
+                  <Check size={17} aria-hidden="true" />
+                  <span>Every row is valid and maps to one canonical player.</span>
+                </div>
+              ) : (
+                <div className={styles.diagnostics}>
+                  {visibleDiagnostics.map((diagnostic, index) => (
+                    <article
+                      className={
+                        diagnostic.severity === "error"
+                          ? styles.diagnosticError
+                          : styles.diagnosticWarning
+                      }
+                      key={`${diagnostic.rowNumber}:${diagnostic.code}:${index}`}
+                    >
+                      <span>Row {diagnostic.rowNumber}</span>
+                      <div>
+                        <strong>{diagnostic.message}</strong>
+                        {diagnostic.candidates?.length ? (
+                          <small>
+                            Candidates:{" "}
+                            {diagnostic.candidates.map((item) => item.playerName).join(", ")}
+                          </small>
+                        ) : null}
+                      </div>
+                    </article>
+                  ))}
+                  {preview.diagnostics.length > visibleDiagnostics.length ? (
+                    <p className={styles.moreDiagnostics}>
+                      {preview.diagnostics.length - visibleDiagnostics.length} more diagnostics are
+                      not shown. Correct the first rows and preview again.
+                    </p>
+                  ) : null}
+                </div>
+              )}
+            </div>
+          )}
+        </section>
+      </div>
+
+      <section className={styles.saved} aria-labelledby="saved-projections-title">
+        <header className={styles.savedHeader}>
+          <div>
+            <p className={styles.kicker}>Available in this league</p>
+            <h2 id="saved-projections-title">Saved projection sets</h2>
+          </div>
+          <button
+            className={styles.textButton}
+            type="button"
+            disabled={sets.state === "loading"}
+            onClick={() => void loadSets()}
+          >
+            <RefreshCw
+              className={sets.state === "loading" ? styles.spin : undefined}
+              size={15}
+              aria-hidden="true"
+            />
+            Refresh
+          </button>
+        </header>
+        {sets.state === "loading" ? (
+          <div className={styles.savedEmpty} role="status">
+            <LoaderCircle className={styles.spin} size={18} aria-hidden="true" />
+            Loading saved sets…
+          </div>
+        ) : sets.state === "error" ? (
+          <div className={styles.savedEmpty} role="alert">
+            <AlertTriangle size={18} aria-hidden="true" />
+            {sets.message}
+          </div>
+        ) : sets.state === "ready" && sets.data.projectionSets.length > 0 ? (
+          <div className={styles.setTableWrap}>
+            <table className={styles.setTable}>
+              <thead>
+                <tr>
+                  <th>Source</th>
+                  <th>Window</th>
+                  <th>Rows</th>
+                  <th>Access</th>
+                  <th>Source as of</th>
+                  <th>Imported</th>
+                  <th>Checksum</th>
+                </tr>
+              </thead>
+              <tbody>
+                {sets.data.projectionSets.map((set) => (
+                  <tr key={set.id}>
+                    <td>
+                      <strong>{set.sourceLabel}</strong>
+                      <small>
+                        {set.isOwnedByCurrentUser ? "You" : set.creatorDisplayName}
+                        {set.sourceFileName ? ` · ${set.sourceFileName}` : ""}
+                      </small>
+                    </td>
+                    <td>
+                      <strong>Week {set.week}</strong>
+                      <small>
+                        {set.season} ·{" "}
+                        {set.horizon === "week"
+                          ? "single week"
+                          : "legacy ROS · not used by Decision Desk"}
+                      </small>
+                    </td>
+                    <td>{set.playerCount.toLocaleString()}</td>
+                    <td>
+                      <span className={styles.accessLabel}>
+                        {set.visibility === "private" ? (
+                          <LockKeyhole size={13} aria-hidden="true" />
+                        ) : (
+                          <Users size={13} aria-hidden="true" />
+                        )}
+                        {set.visibility === "private" ? "Only me" : "League"}
+                      </span>
+                    </td>
+                    <td>
+                      {projectionSourceAsOfText(set, readableDate)}
+                      {set.sourceObservedAtStatus === "unverified" ? (
+                        <small>Legacy import; no trustworthy source timestamp</small>
+                      ) : null}
+                    </td>
+                    <td>{readableDate(set.importedAt)}</td>
+                    <td>
+                      <code title={set.inputChecksum}>{shortenedChecksum(set.inputChecksum)}</code>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <div className={styles.savedEmpty}>
+            <FileSpreadsheet size={19} aria-hidden="true" />
+            No saved projection sets are available for this league season.
+          </div>
+        )}
+      </section>
+    </div>
+  );
+}

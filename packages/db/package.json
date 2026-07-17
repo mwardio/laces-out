@@ -1,0 +1,22 @@
+{
+  "name": "@fantasy/db",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": "./src/index.ts",
+  "dependencies": {
+    "@fantasy/domain": "*",
+    "drizzle-orm": "^0.45.2",
+    "postgres": "^3.4.7"
+  },
+  "devDependencies": {
+    "drizzle-kit": "^0.31.4"
+  },
+  "scripts": {
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "drizzle-kit migrate",
+    "db:smoke": "tsx scripts/schema-smoke.ts",
+    "db:studio": "drizzle-kit studio",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  }
+}

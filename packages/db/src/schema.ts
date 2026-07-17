@@ -1,0 +1,1553 @@
+import { sql } from "drizzle-orm";
+import {
+  type AnyPgColumn,
+  boolean,
+  check,
+  index,
+  integer,
+  jsonb,
+  numeric,
+  pgTable,
+  primaryKey,
+  text,
+  timestamp,
+  uniqueIndex,
+  uuid,
+} from "drizzle-orm/pg-core";
+
+export type ProviderName = "yahoo" | "espn" | "manual";
+export type ConnectionHealth = "pending" | "healthy" | "degraded" | "reauthorize" | "disabled";
+export type ApplicationRole = "member" | "admin";
+export type LeagueMembershipRole = "owner" | "commissioner" | "manager" | "viewer";
+export type RankingListKind = "rankings" | "adp" | "auction-values" | "cheat-sheet";
+export type RankingVisibility = "private" | "league" | "shared-link";
+export type RankingVersionStatus = "draft" | "published";
+export type ImportRunState = "queued" | "processing" | "succeeded" | "failed" | "cancelled";
+export type RefreshRequestState = "queued" | "processing" | "succeeded" | "failed" | "cancelled";
+export type RefreshRequestKind =
+  "player_catalog" | "rankings" | "projections" | "injuries" | "league" | "all";
+export type AiProviderName = "openai" | "anthropic" | "gemini" | "openrouter";
+export type AiCredentialStatus = "active" | "invalid" | "revoked";
+export type StandingStreakType = "win" | "loss" | "tie" | "none";
+export type WeeklyMatchupStatus = "scheduled" | "in-progress" | "final";
+export type ProjectionVisibility = "global" | "private" | "league";
+
+export type JsonPrimitive = string | number | boolean | null;
+export type RankingEntryUserFields = Record<string, JsonPrimitive>;
+export type RankingVisibilityConfig =
+  | { scope: "private" }
+  | { scope: "league"; leagueIds: string[]; allowClone: boolean }
+  | {
+      scope: "shared-link";
+      shareLinkId: string;
+      allowClone: boolean;
+      expiresAt: string | null;
+      revokedAt: string | null;
+    };
+export type RankingFieldAttribution =
+  | { kind: "user"; authorUserId: string; authoredAt: string }
+  | {
+      kind: "derived";
+      sourceId: string;
+      computedAt: string;
+      inputChecksumSha256: string;
+    };
+export type RankingFieldProvenance = Record<string, RankingFieldAttribution>;
+export type CredentialEnvelopeMetadata = {
+  version: number;
+  algorithm: string;
+  keyId: string;
+  purpose: string;
+  createdAt: string;
+  iv: string;
+  ciphertext: string;
+  authTag: string;
+};
+
+export const users = pgTable(
+  "users",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    email: text("email").notNull(),
+    displayName: text("display_name").notNull(),
+    passwordHash: text("password_hash"),
+    role: text("role").$type<ApplicationRole>().notNull().default("member"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("users_email_unique").on(sql`lower(${table.email})`),
+    check("users_role_check", sql`${table.role} in ('member', 'admin')`),
+  ],
+);
+
+export const sessions = pgTable(
+  "sessions",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    tokenHash: text("token_hash").notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    lastSeenAt: timestamp("last_seen_at", { withTimezone: true }).notNull().defaultNow(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("sessions_token_hash_unique").on(table.tokenHash),
+    index("sessions_user_idx").on(table.userId),
+  ],
+);
+
+export const providerConnections = pgTable(
+  "provider_connections",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    provider: text("provider").$type<ProviderName>().notNull(),
+    externalAccountId: text("external_account_id").notNull(),
+    displayName: text("display_name"),
+    encryptedCredential: jsonb("encrypted_credential").$type<Record<string, unknown>>(),
+    // Incremented with every credential rotation for compare-and-swap refresh updates.
+    credentialVersion: integer("credential_version").notNull().default(1),
+    credentialExpiresAt: timestamp("credential_expires_at", { withTimezone: true }),
+    capabilities: jsonb("capabilities")
+      .$type<Record<string, boolean | string>>()
+      .notNull()
+      .default({}),
+    health: text("health").$type<ConnectionHealth>().notNull().default("pending"),
+    lastSuccessfulAt: timestamp("last_successful_at", { withTimezone: true }),
+    lastErrorCode: text("last_error_code"),
+    lastErrorAt: timestamp("last_error_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("provider_connections_account_unique").on(
+      table.userId,
+      table.provider,
+      table.externalAccountId,
+    ),
+    index("provider_connections_user_idx").on(table.userId),
+    check(
+      "provider_connections_provider_check",
+      sql`${table.provider} in ('yahoo', 'espn', 'manual')`,
+    ),
+    check(
+      "provider_connections_health_check",
+      sql`${table.health} in ('pending', 'healthy', 'degraded', 'reauthorize', 'disabled')`,
+    ),
+    check("provider_connections_credential_version_check", sql`${table.credentialVersion} > 0`),
+  ],
+);
+
+export const oauthStates = pgTable(
+  "oauth_states",
+  {
+    stateHash: text("state_hash").primaryKey(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    provider: text("provider").$type<"yahoo">().notNull(),
+    encryptedPkceVerifier: jsonb("encrypted_pkce_verifier")
+      .$type<Record<string, unknown>>()
+      .notNull(),
+    returnTo: text("return_to").notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    consumedAt: timestamp("consumed_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [index("oauth_states_user_expires_idx").on(table.userId, table.expiresAt)],
+);
+
+export const leagues = pgTable(
+  "leagues",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    // Kept on the existing SQL column so ownership can be migrated without a table rewrite.
+    // Access is modeled by leagueMemberships; ownership transfers update this anchor.
+    ownerUserId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "restrict" }),
+    name: text("name").notNull(),
+    archived: boolean("archived").notNull().default(false),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [index("leagues_owner_idx").on(table.ownerUserId)],
+);
+
+export const userPreferences = pgTable(
+  "user_preferences",
+  {
+    userId: uuid("user_id")
+      .primaryKey()
+      .references(() => users.id, { onDelete: "cascade" }),
+    defaultLeagueId: uuid("default_league_id").references(() => leagues.id, {
+      onDelete: "set null",
+    }),
+    timezone: text("timezone").notNull().default("UTC"),
+    theme: text("theme").notNull().default("system"),
+    digestCadence: text("digest_cadence").notNull().default("daily"),
+    emailNotifications: boolean("email_notifications").notNull().default(true),
+    dashboardSettings: jsonb("dashboard_settings")
+      .$type<Record<string, JsonPrimitive>>()
+      .notNull()
+      .default({}),
+    recommendationSettings: jsonb("recommendation_settings")
+      .$type<Record<string, JsonPrimitive>>()
+      .notNull()
+      .default({}),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    index("user_preferences_default_league_idx").on(table.defaultLeagueId),
+    check("user_preferences_theme_check", sql`${table.theme} in ('system', 'light', 'dark')`),
+    check(
+      "user_preferences_digest_check",
+      sql`${table.digestCadence} in ('off', 'daily', 'weekly')`,
+    ),
+  ],
+);
+
+export const invitations = pgTable(
+  "invitations",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    tokenHash: text("token_hash").notNull(),
+    email: text("email").notNull(),
+    // A keyed hash of the normalized email is used for lookups; raw email is never indexed.
+    emailHash: text("email_hash").notNull(),
+    invitedByUserId: uuid("invited_by_user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "restrict" }),
+    role: text("role").$type<ApplicationRole>().notNull().default("member"),
+    leagueId: uuid("league_id").references(() => leagues.id, { onDelete: "cascade" }),
+    leagueRole: text("league_role").$type<Exclude<LeagueMembershipRole, "owner">>(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    acceptedAt: timestamp("accepted_at", { withTimezone: true }),
+    acceptedByUserId: uuid("accepted_by_user_id").references(() => users.id, {
+      onDelete: "restrict",
+    }),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("invitations_token_hash_unique").on(table.tokenHash),
+    index("invitations_pending_email_hash_idx")
+      .on(table.emailHash, table.expiresAt)
+      .where(sql`${table.acceptedAt} is null and ${table.revokedAt} is null`),
+    index("invitations_inviter_created_idx").on(table.invitedByUserId, table.createdAt),
+    index("invitations_league_idx").on(table.leagueId),
+    check("invitations_token_hash_check", sql`char_length(${table.tokenHash}) >= 32`),
+    check("invitations_email_hash_check", sql`char_length(${table.emailHash}) >= 32`),
+    check("invitations_role_check", sql`${table.role} in ('member', 'admin')`),
+    check(
+      "invitations_league_role_check",
+      sql`${table.leagueRole} is null or ${table.leagueRole} in ('commissioner', 'manager', 'viewer')`,
+    ),
+    check(
+      "invitations_league_scope_check",
+      sql`(${table.leagueId} is null) = (${table.leagueRole} is null)`,
+    ),
+    check("invitations_expiry_check", sql`${table.expiresAt} > ${table.createdAt}`),
+    check(
+      "invitations_acceptance_check",
+      sql`(${table.acceptedAt} is null) = (${table.acceptedByUserId} is null)`,
+    ),
+    check(
+      "invitations_terminal_state_check",
+      sql`not (${table.acceptedAt} is not null and ${table.revokedAt} is not null)`,
+    ),
+  ],
+);
+
+export const bridgeDevices = pgTable(
+  "bridge_devices",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    provider: text("provider").$type<"espn">().notNull().default("espn"),
+    name: text("name").notNull(),
+    // Browser bridge bearer material is persisted only as a keyed hash. ESPN cookies never
+    // cross this table boundary.
+    tokenHash: text("token_hash").notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }),
+    lastSeenAt: timestamp("last_seen_at", { withTimezone: true }),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("bridge_devices_token_hash_unique").on(table.tokenHash),
+    index("bridge_devices_user_active_idx")
+      .on(table.userId, table.createdAt)
+      .where(sql`${table.revokedAt} is null`),
+    check("bridge_devices_provider_check", sql`${table.provider} = 'espn'`),
+    check("bridge_devices_name_check", sql`char_length(btrim(${table.name})) > 0`),
+    check("bridge_devices_token_hash_check", sql`char_length(${table.tokenHash}) >= 32`),
+    check(
+      "bridge_devices_expiry_check",
+      sql`${table.expiresAt} is null or ${table.expiresAt} > ${table.createdAt}`,
+    ),
+    check(
+      "bridge_devices_last_seen_check",
+      sql`${table.lastSeenAt} is null or ${table.lastSeenAt} >= ${table.createdAt}`,
+    ),
+  ],
+);
+
+export const bridgeDeviceLeagues = pgTable(
+  "bridge_device_leagues",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    bridgeDeviceId: uuid("bridge_device_id")
+      .notNull()
+      .references(() => bridgeDevices.id, { onDelete: "cascade" }),
+    // ESPN league IDs are decimal strings. They are authorized before the first snapshot can
+    // create/link an internal league.
+    externalLeagueId: text("external_league_id").notNull(),
+    season: integer("season"),
+    leagueId: uuid("league_id").references(() => leagues.id, { onDelete: "set null" }),
+    grantedAt: timestamp("granted_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("bridge_device_leagues_season_unique")
+      .on(table.bridgeDeviceId, table.externalLeagueId, table.season)
+      .where(sql`${table.season} is not null`),
+    uniqueIndex("bridge_device_leagues_all_seasons_unique")
+      .on(table.bridgeDeviceId, table.externalLeagueId)
+      .where(sql`${table.season} is null`),
+    index("bridge_device_leagues_league_idx").on(table.leagueId),
+    check("bridge_device_leagues_external_id_check", sql`${table.externalLeagueId} ~ '^[0-9]+$'`),
+    check(
+      "bridge_device_leagues_season_check",
+      sql`${table.season} is null or (${table.season} >= 2000 and ${table.season} <= 2200)`,
+    ),
+  ],
+);
+
+export const leagueSeasons = pgTable(
+  "league_seasons",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    leagueId: uuid("league_id")
+      .notNull()
+      .references(() => leagues.id, { onDelete: "cascade" }),
+    connectionId: uuid("connection_id").references(() => providerConnections.id, {
+      onDelete: "set null",
+    }),
+    provider: text("provider").$type<ProviderName>().notNull(),
+    externalKey: text("external_key").notNull(),
+    season: integer("season").notNull(),
+    status: text("status").notNull().default("preseason"),
+    teamCount: integer("team_count").notNull(),
+    draftType: text("draft_type").notNull(),
+    waiverType: text("waiver_type"),
+    currentWeek: integer("current_week"),
+    settings: jsonb("settings").$type<Record<string, unknown>>().notNull().default({}),
+    lastSyncedAt: timestamp("last_synced_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("league_seasons_provider_key_unique").on(
+      table.provider,
+      table.externalKey,
+      table.season,
+    ),
+    index("league_seasons_league_idx").on(table.leagueId),
+    check("league_seasons_provider_check", sql`${table.provider} in ('yahoo', 'espn', 'manual')`),
+    check("league_seasons_team_count_check", sql`${table.teamCount} > 1`),
+  ],
+);
+
+/** Many-to-many authorization provenance between user-owned provider accounts and leagues. */
+export const providerLeagueLinks = pgTable(
+  "provider_league_links",
+  {
+    connectionId: uuid("connection_id")
+      .notNull()
+      .references(() => providerConnections.id, { onDelete: "cascade" }),
+    leagueSeasonId: uuid("league_season_id")
+      .notNull()
+      .references(() => leagueSeasons.id, { onDelete: "cascade" }),
+    currentUserTeamExternalKey: text("current_user_team_external_key"),
+    discoveredAt: timestamp("discovered_at", { withTimezone: true }).notNull().defaultNow(),
+    lastSyncedAt: timestamp("last_synced_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.connectionId, table.leagueSeasonId] }),
+    index("provider_league_links_season_idx").on(table.leagueSeasonId),
+    check(
+      "provider_league_links_current_team_check",
+      sql`${table.currentUserTeamExternalKey} is null or char_length(btrim(${table.currentUserTeamExternalKey})) > 0`,
+    ),
+  ],
+);
+
+export const scoringRules = pgTable(
+  "scoring_rules",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    leagueSeasonId: uuid("league_season_id")
+      .notNull()
+      .references(() => leagueSeasons.id, { onDelete: "cascade" }),
+    statKey: text("stat_key").notNull(),
+    operation: text("operation").notNull(),
+    points: numeric("points", { precision: 10, scale: 4 }).notNull(),
+    thresholdLow: numeric("threshold_low", { precision: 10, scale: 2 }),
+    thresholdHigh: numeric("threshold_high", { precision: 10, scale: 2 }),
+    providerStatId: text("provider_stat_id"),
+  },
+  (table) => [index("scoring_rules_league_idx").on(table.leagueSeasonId)],
+);
+
+export const rosterSlotRules = pgTable(
+  "roster_slot_rules",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    leagueSeasonId: uuid("league_season_id")
+      .notNull()
+      .references(() => leagueSeasons.id, { onDelete: "cascade" }),
+    slotCode: text("slot_code").notNull(),
+    count: integer("count").notNull(),
+    eligiblePositions: text("eligible_positions").array().notNull(),
+    isStarter: boolean("is_starter").notNull(),
+  },
+  (table) => [
+    uniqueIndex("roster_slot_rules_unique").on(table.leagueSeasonId, table.slotCode),
+    check("roster_slot_rules_count_check", sql`${table.count} >= 0`),
+  ],
+);
+
+export const fantasyTeams = pgTable(
+  "fantasy_teams",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    leagueSeasonId: uuid("league_season_id")
+      .notNull()
+      .references(() => leagueSeasons.id, { onDelete: "cascade" }),
+    externalKey: text("external_key").notNull(),
+    name: text("name").notNull(),
+    abbreviation: text("abbreviation"),
+    isUserTeam: boolean("is_user_team").notNull().default(false),
+    managerDisplayName: text("manager_display_name"),
+    faabRemaining: integer("faab_remaining"),
+    waiverPriority: integer("waiver_priority"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("fantasy_teams_external_unique").on(table.leagueSeasonId, table.externalKey),
+    index("fantasy_teams_league_idx").on(table.leagueSeasonId),
+  ],
+);
+
+export const leagueMemberships = pgTable(
+  "league_memberships",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    leagueId: uuid("league_id")
+      .notNull()
+      .references(() => leagues.id, { onDelete: "cascade" }),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    role: text("role").$type<LeagueMembershipRole>().notNull().default("manager"),
+    claimedFantasyTeamId: uuid("claimed_fantasy_team_id").references(() => fantasyTeams.id, {
+      onDelete: "set null",
+    }),
+    invitedByUserId: uuid("invited_by_user_id").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    claimedAt: timestamp("claimed_at", { withTimezone: true }),
+    joinedAt: timestamp("joined_at", { withTimezone: true }).notNull().defaultNow(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("league_memberships_league_user_unique").on(table.leagueId, table.userId),
+    uniqueIndex("league_memberships_owner_unique")
+      .on(table.leagueId)
+      .where(sql`${table.role} = 'owner'`),
+    uniqueIndex("league_memberships_claimed_team_unique")
+      .on(table.claimedFantasyTeamId)
+      .where(sql`${table.claimedFantasyTeamId} is not null`),
+    index("league_memberships_user_idx").on(table.userId),
+    index("league_memberships_inviter_idx").on(table.invitedByUserId),
+    check(
+      "league_memberships_role_check",
+      sql`${table.role} in ('owner', 'commissioner', 'manager', 'viewer')`,
+    ),
+    check(
+      "league_memberships_claimed_at_check",
+      sql`${table.claimedAt} is null or ${table.claimedFantasyTeamId} is not null`,
+    ),
+  ],
+);
+
+export const players = pgTable(
+  "players",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    gsisId: text("gsis_id"),
+    fullName: text("full_name").notNull(),
+    firstName: text("first_name"),
+    lastName: text("last_name"),
+    nflTeam: text("nfl_team"),
+    primaryPosition: text("primary_position").notNull(),
+    eligiblePositions: text("eligible_positions").array().notNull(),
+    status: text("status"),
+    birthDate: text("birth_date"),
+    rookieSeason: integer("rookie_season"),
+    lastSeason: integer("last_season"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("players_gsis_unique").on(table.gsisId),
+    index("players_name_idx").on(table.fullName),
+    index("players_last_season_idx").on(table.lastSeason),
+    check(
+      "players_season_bounds_check",
+      sql`(${table.rookieSeason} is null or ${table.rookieSeason} between 1900 and 2200) and (${table.lastSeason} is null or ${table.lastSeason} between 1900 and 2200)`,
+    ),
+    check(
+      "players_season_order_check",
+      sql`${table.rookieSeason} is null or ${table.lastSeason} is null or ${table.lastSeason} >= ${table.rookieSeason}`,
+    ),
+  ],
+);
+
+export const playerExternalIds = pgTable(
+  "player_external_ids",
+  {
+    playerId: uuid("player_id")
+      .notNull()
+      .references(() => players.id, { onDelete: "cascade" }),
+    source: text("source").notNull(),
+    externalId: text("external_id").notNull(),
+    season: integer("season"),
+    confidence: numeric("confidence", { precision: 5, scale: 4 }).notNull().default("1"),
+    verified: boolean("verified").notNull().default(false),
+  },
+  (table) => [
+    primaryKey({ columns: [table.source, table.externalId] }),
+    index("player_external_ids_player_idx").on(table.playerId),
+    check(
+      "player_external_ids_confidence_check",
+      sql`${table.confidence} >= 0 and ${table.confidence} <= 1`,
+    ),
+  ],
+);
+
+export const rankingLists = pgTable(
+  "ranking_lists",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    ownerUserId: uuid("owner_user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    leagueId: uuid("league_id").references(() => leagues.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    description: text("description"),
+    kind: text("kind").$type<RankingListKind>().notNull(),
+    visibility: text("visibility").$type<RankingVisibility>().notNull().default("private"),
+    visibilityConfig: jsonb("visibility_config")
+      .$type<RankingVisibilityConfig>()
+      .notNull()
+      .default({ scope: "private" }),
+    season: integer("season").notNull(),
+    scoringContext: jsonb("scoring_context").$type<Record<string, unknown>>().notNull().default({}),
+    scoringFormat: text("scoring_format"),
+    sourceLabel: text("source_label"),
+    settings: jsonb("settings").$type<Record<string, JsonPrimitive>>().notNull().default({}),
+    currentVersionId: uuid("current_version_id").references(
+      (): AnyPgColumn => rankingListVersions.id,
+      { onDelete: "set null" },
+    ),
+    latestPublishedVersionId: uuid("latest_published_version_id").references(
+      (): AnyPgColumn => rankingListVersions.id,
+      { onDelete: "set null" },
+    ),
+    archivedAt: timestamp("archived_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    index("ranking_lists_owner_updated_idx").on(table.ownerUserId, table.updatedAt),
+    index("ranking_lists_league_visibility_idx").on(table.leagueId, table.visibility),
+    check(
+      "ranking_lists_kind_check",
+      sql`${table.kind} in ('rankings', 'adp', 'auction-values', 'cheat-sheet')`,
+    ),
+    check(
+      "ranking_lists_visibility_check",
+      sql`${table.visibility} in ('private', 'league', 'shared-link')`,
+    ),
+    check(
+      "ranking_lists_visibility_config_check",
+      sql`jsonb_typeof(${table.visibilityConfig}) = 'object' and ${table.visibilityConfig}->>'scope' = ${table.visibility}`,
+    ),
+    check("ranking_lists_season_check", sql`${table.season} >= 2000 and ${table.season} <= 2200`),
+    check("ranking_lists_name_check", sql`char_length(btrim(${table.name})) > 0`),
+  ],
+);
+
+export const importRuns = pgTable(
+  "import_runs",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    rankingListId: uuid("ranking_list_id").references(() => rankingLists.id, {
+      onDelete: "set null",
+    }),
+    idempotencyKey: text("idempotency_key").notNull(),
+    state: text("state").$type<ImportRunState>().notNull().default("queued"),
+    sourceFormat: text("source_format").notNull(),
+    sourceFileName: text("source_file_name"),
+    sourceObjectKey: text("source_object_key"),
+    sourceChecksumSha256: text("content_hash"),
+    previewChecksumSha256: text("preview_checksum_sha256"),
+    columnMapping: jsonb("column_mapping").$type<Record<string, string>>().notNull().default({}),
+    rowsRead: integer("rows_read").notNull().default(0),
+    rowsAccepted: integer("rows_accepted").notNull().default(0),
+    rowsRejected: integer("rows_rejected").notNull().default(0),
+    validationSummary: jsonb("validation_summary")
+      .$type<Record<string, unknown>>()
+      .notNull()
+      .default({}),
+    diagnostics: jsonb("diagnostics")
+      .$type<ReadonlyArray<Record<string, unknown>>>()
+      .notNull()
+      .default([]),
+    commitDecision: text("commit_decision").notNull().default("pending"),
+    acceptedRowNumbers: integer("accepted_row_numbers").array().notNull().default([]),
+    committedAt: timestamp("committed_at", { withTimezone: true }),
+    errorCode: text("error_code"),
+    errorDetail: text("error_detail"),
+    startedAt: timestamp("started_at", { withTimezone: true }),
+    finishedAt: timestamp("finished_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("import_runs_user_idempotency_unique").on(table.userId, table.idempotencyKey),
+    index("import_runs_user_created_idx").on(table.userId, table.createdAt),
+    index("import_runs_ranking_list_idx").on(table.rankingListId),
+    check(
+      "import_runs_state_check",
+      sql`${table.state} in ('queued', 'processing', 'succeeded', 'failed', 'cancelled')`,
+    ),
+    check(
+      "import_runs_row_counts_check",
+      sql`${table.rowsRead} >= 0 and ${table.rowsAccepted} >= 0 and ${table.rowsRejected} >= 0 and ${table.rowsAccepted} + ${table.rowsRejected} <= ${table.rowsRead}`,
+    ),
+    check(
+      "import_runs_finished_at_check",
+      sql`${table.finishedAt} is null or ${table.startedAt} is not null`,
+    ),
+    check(
+      "import_runs_content_hash_check",
+      sql`${table.sourceChecksumSha256} is null or ${table.sourceChecksumSha256} ~ '^[a-f0-9]{64}$'`,
+    ),
+    check(
+      "import_runs_preview_hash_check",
+      sql`${table.previewChecksumSha256} is null or ${table.previewChecksumSha256} ~ '^[a-f0-9]{64}$'`,
+    ),
+    check(
+      "import_runs_commit_decision_check",
+      sql`${table.commitDecision} in ('pending', 'accepted', 'rejected')`,
+    ),
+    check(
+      "import_runs_committed_at_check",
+      sql`(${table.commitDecision} = 'accepted') = (${table.committedAt} is not null)`,
+    ),
+  ],
+);
+
+export const rankingListVersions = pgTable(
+  "ranking_list_versions",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    listId: uuid("ranking_list_id")
+      .notNull()
+      .references(() => rankingLists.id, { onDelete: "cascade" }),
+    versionNumber: integer("version").notNull(),
+    parentVersionId: uuid("parent_version_id").references(
+      (): AnyPgColumn => rankingListVersions.id,
+      { onDelete: "restrict" },
+    ),
+    state: text("status").$type<RankingVersionStatus>().notNull().default("draft"),
+    authorUserId: uuid("created_by_user_id").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    importRunId: uuid("import_run_id").references(() => importRuns.id, { onDelete: "set null" }),
+    dataAsOf: timestamp("data_as_of", { withTimezone: true }),
+    publishedAt: timestamp("published_at", { withTimezone: true }),
+    entryCount: integer("entry_count").notNull().default(0),
+    checksumSha256: text("content_hash"),
+    changeNote: text("notes"),
+    provenance: jsonb("provenance").$type<Record<string, unknown>>().notNull().default({}),
+    metadata: jsonb("metadata").$type<Record<string, JsonPrimitive>>().notNull().default({}),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("ranking_list_versions_list_version_unique").on(table.listId, table.versionNumber),
+    uniqueIndex("ranking_list_versions_import_run_unique")
+      .on(table.importRunId)
+      .where(sql`${table.importRunId} is not null`),
+    index("ranking_list_versions_status_idx").on(table.listId, table.state, table.versionNumber),
+    index("ranking_list_versions_parent_idx").on(table.parentVersionId),
+    check("ranking_list_versions_version_check", sql`${table.versionNumber} > 0`),
+    check("ranking_list_versions_entry_count_check", sql`${table.entryCount} >= 0`),
+    check("ranking_list_versions_status_check", sql`${table.state} in ('draft', 'published')`),
+    check(
+      "ranking_list_versions_published_at_check",
+      sql`(${table.state} = 'published') = (${table.publishedAt} is not null)`,
+    ),
+    check(
+      "ranking_list_versions_content_hash_check",
+      sql`${table.checksumSha256} is null or ${table.checksumSha256} ~ '^[a-f0-9]{64}$'`,
+    ),
+    check(
+      "ranking_list_versions_parent_check",
+      sql`${table.parentVersionId} is null or ${table.parentVersionId} <> ${table.id}`,
+    ),
+  ],
+);
+
+export const rankingEntries = pgTable(
+  "ranking_entries",
+  {
+    versionId: uuid("ranking_list_version_id")
+      .notNull()
+      .references(() => rankingListVersions.id, { onDelete: "cascade" }),
+    playerId: uuid("player_id")
+      .notNull()
+      .references(() => players.id, { onDelete: "restrict" }),
+    position: text("position"),
+    overallRank: integer("rank"),
+    tier: integer("tier"),
+    positionRank: integer("position_rank"),
+    adp: numeric("adp", { precision: 9, scale: 3 }),
+    aav: numeric("aav", { precision: 12, scale: 2 }),
+    floorPrice: numeric("floor", { precision: 12, scale: 2 }),
+    targetPrice: numeric("target", { precision: 12, scale: 2 }),
+    ceilingPrice: numeric("ceiling", { precision: 12, scale: 2 }),
+    confidence: numeric("confidence", { precision: 5, scale: 4 }),
+    tags: text("tags").array(),
+    userFields: jsonb("user_fields").$type<RankingEntryUserFields>().notNull().default({}),
+    fieldProvenance: jsonb("field_provenance")
+      .$type<RankingFieldProvenance>()
+      .notNull()
+      .default({}),
+    notes: text("notes"),
+    target: boolean("is_target"),
+    avoid: boolean("is_avoid"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.versionId, table.playerId] }),
+    index("ranking_entries_version_rank_idx").on(table.versionId, table.overallRank),
+    index("ranking_entries_player_idx").on(table.playerId),
+    check(
+      "ranking_entries_rank_check",
+      sql`${table.overallRank} is null or ${table.overallRank} > 0`,
+    ),
+    check("ranking_entries_tier_check", sql`${table.tier} is null or ${table.tier} > 0`),
+    check(
+      "ranking_entries_position_rank_check",
+      sql`${table.positionRank} is null or (${table.positionRank} > 0 and ${table.position} is not null)`,
+    ),
+    check("ranking_entries_adp_check", sql`${table.adp} is null or ${table.adp} > 0`),
+    check("ranking_entries_aav_check", sql`${table.aav} is null or ${table.aav} >= 0`),
+    check(
+      "ranking_entries_confidence_check",
+      sql`${table.confidence} is null or (${table.confidence} >= 0 and ${table.confidence} <= 1)`,
+    ),
+    check(
+      "ranking_entries_value_bounds_check",
+      sql`(${table.floorPrice} is null or ${table.floorPrice} >= 0) and (${table.targetPrice} is null or ${table.targetPrice} >= 0) and (${table.ceilingPrice} is null or ${table.ceilingPrice} >= 0) and (${table.floorPrice} is null or ${table.targetPrice} is null or ${table.floorPrice} <= ${table.targetPrice}) and (${table.targetPrice} is null or ${table.ceilingPrice} is null or ${table.targetPrice} <= ${table.ceilingPrice}) and (${table.floorPrice} is null or ${table.ceilingPrice} is null or ${table.floorPrice} <= ${table.ceilingPrice})`,
+    ),
+    check(
+      "ranking_entries_target_avoid_check",
+      sql`not (coalesce(${table.target}, false) and coalesce(${table.avoid}, false))`,
+    ),
+    check(
+      "ranking_entries_provenance_check",
+      sql`jsonb_typeof(${table.fieldProvenance}) = 'object' and (${table.overallRank} is null or ${table.fieldProvenance} ? 'overallRank') and (${table.positionRank} is null or ${table.fieldProvenance} ? 'positionRank') and (${table.tier} is null or ${table.fieldProvenance} ? 'tier') and (${table.adp} is null or ${table.fieldProvenance} ? 'adp') and (${table.aav} is null or ${table.fieldProvenance} ? 'aav') and (${table.floorPrice} is null or ${table.fieldProvenance} ? 'floorPrice') and (${table.targetPrice} is null or ${table.fieldProvenance} ? 'targetPrice') and (${table.ceilingPrice} is null or ${table.fieldProvenance} ? 'ceilingPrice') and (${table.confidence} is null or ${table.fieldProvenance} ? 'confidence') and (${table.tags} is null or ${table.fieldProvenance} ? 'tags') and (${table.notes} is null or ${table.fieldProvenance} ? 'notes') and (${table.target} is null or ${table.fieldProvenance} ? 'target') and (${table.avoid} is null or ${table.fieldProvenance} ? 'avoid')`,
+    ),
+  ],
+);
+
+export const shareLinks = pgTable(
+  "share_links",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    tokenHash: text("token_hash").notNull(),
+    createdByUserId: uuid("created_by_user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    rankingListId: uuid("ranking_list_id").references(() => rankingLists.id, {
+      onDelete: "cascade",
+    }),
+    leagueId: uuid("league_id").references(() => leagues.id, { onDelete: "cascade" }),
+    label: text("label"),
+    permission: text("permission").notNull().default("view"),
+    allowCopy: boolean("allow_copy").notNull().default(false),
+    expiresAt: timestamp("expires_at", { withTimezone: true }),
+    maxUses: integer("max_uses"),
+    useCount: integer("use_count").notNull().default(0),
+    lastUsedAt: timestamp("last_used_at", { withTimezone: true }),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("share_links_token_hash_unique").on(table.tokenHash),
+    index("share_links_creator_created_idx").on(table.createdByUserId, table.createdAt),
+    index("share_links_ranking_list_idx").on(table.rankingListId),
+    index("share_links_league_idx").on(table.leagueId),
+    check("share_links_token_hash_check", sql`char_length(${table.tokenHash}) >= 32`),
+    check("share_links_permission_check", sql`${table.permission} in ('view', 'copy')`),
+    check(
+      "share_links_resource_check",
+      sql`num_nonnulls(${table.rankingListId}, ${table.leagueId}) = 1`,
+    ),
+    check("share_links_max_uses_check", sql`${table.maxUses} is null or ${table.maxUses} > 0`),
+    check(
+      "share_links_use_count_check",
+      sql`${table.useCount} >= 0 and (${table.maxUses} is null or ${table.useCount} <= ${table.maxUses})`,
+    ),
+    check(
+      "share_links_expiry_check",
+      sql`${table.expiresAt} is null or ${table.expiresAt} > ${table.createdAt}`,
+    ),
+  ],
+);
+
+export const dataSources = pgTable(
+  "data_sources",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    key: text("key").notNull(),
+    name: text("name").notNull(),
+    kind: text("kind").notNull(),
+    enabled: boolean("enabled").notNull().default(true),
+    // Public discovery/attribution URLs only. Credentials and raw response artifacts do not
+    // belong in freshness state.
+    sourceUrl: text("source_url"),
+    attribution: text("attribution"),
+    attributionUrl: text("attribution_url"),
+    checkIntervalMinutes: integer("check_interval_minutes").notNull().default(1440),
+    nextCheckAt: timestamp("next_check_at", { withTimezone: true }).notNull().defaultNow(),
+    lastCheckedAt: timestamp("last_checked_at", { withTimezone: true }),
+    lastChangedAt: timestamp("last_changed_at", { withTimezone: true }),
+    lastSuccessfulAt: timestamp("last_successful_at", { withTimezone: true }),
+    etag: text("etag"),
+    lastModified: text("last_modified"),
+    lastChecksum: text("last_checksum"),
+    consecutiveFailures: integer("consecutive_failures").notNull().default(0),
+    lastErrorAt: timestamp("last_error_at", { withTimezone: true }),
+    lastErrorCode: text("last_error_code"),
+    lastErrorDetail: text("last_error_detail"),
+    metadata: jsonb("metadata").$type<Record<string, JsonPrimitive>>().notNull().default({}),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("data_sources_key_unique").on(table.key),
+    index("data_sources_due_idx")
+      .on(table.nextCheckAt)
+      .where(sql`${table.enabled} = true`),
+    index("data_sources_kind_idx").on(table.kind),
+    check("data_sources_key_check", sql`${table.key} ~ '^[a-z0-9][a-z0-9._:-]{0,127}$'`),
+    check("data_sources_name_check", sql`char_length(btrim(${table.name})) > 0`),
+    check("data_sources_kind_check", sql`char_length(btrim(${table.kind})) > 0`),
+    check("data_sources_interval_check", sql`${table.checkIntervalMinutes} between 15 and 10080`),
+    check("data_sources_failures_check", sql`${table.consecutiveFailures} >= 0`),
+    check(
+      "data_sources_checksum_check",
+      sql`${table.lastChecksum} is null or char_length(${table.lastChecksum}) >= 32`,
+    ),
+    check(
+      "data_sources_changed_at_check",
+      sql`${table.lastChangedAt} is null or (${table.lastCheckedAt} is not null and ${table.lastChangedAt} <= ${table.lastCheckedAt})`,
+    ),
+    check(
+      "data_sources_success_at_check",
+      sql`${table.lastSuccessfulAt} is null or (${table.lastCheckedAt} is not null and ${table.lastSuccessfulAt} <= ${table.lastCheckedAt})`,
+    ),
+    check(
+      "data_sources_error_state_check",
+      sql`${table.lastErrorAt} is not null or (${table.lastErrorCode} is null and ${table.lastErrorDetail} is null)`,
+    ),
+  ],
+);
+
+export const rosterSnapshots = pgTable(
+  "roster_snapshots",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    teamId: uuid("team_id")
+      .notNull()
+      .references(() => fantasyTeams.id, { onDelete: "cascade" }),
+    season: integer("season").notNull(),
+    week: integer("week"),
+    effectiveAt: timestamp("effective_at", { withTimezone: true }).notNull(),
+    sourceSyncRunId: uuid("source_sync_run_id"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [index("roster_snapshots_team_effective_idx").on(table.teamId, table.effectiveAt)],
+);
+
+export const rosterEntries = pgTable(
+  "roster_entries",
+  {
+    snapshotId: uuid("snapshot_id")
+      .notNull()
+      .references(() => rosterSnapshots.id, { onDelete: "cascade" }),
+    playerId: uuid("player_id")
+      .notNull()
+      .references(() => players.id, { onDelete: "restrict" }),
+    slotCode: text("slot_code").notNull(),
+    isStarter: boolean("is_starter").notNull(),
+    locked: boolean("locked").notNull().default(false),
+  },
+  (table) => [primaryKey({ columns: [table.snapshotId, table.playerId] })],
+);
+
+export const projectionSets = pgTable(
+  "projection_sets",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    leagueSeasonId: uuid("league_season_id").references(() => leagueSeasons.id, {
+      onDelete: "cascade",
+    }),
+    createdByUserId: uuid("created_by_user_id").references(() => users.id, {
+      onDelete: "cascade",
+    }),
+    visibility: text("visibility").$type<ProjectionVisibility>().notNull().default("global"),
+    source: text("source").notNull(),
+    version: text("version").notNull(),
+    season: integer("season").notNull(),
+    week: integer("week"),
+    horizon: text("horizon").notNull(),
+    fetchedAt: timestamp("fetched_at", { withTimezone: true }).notNull(),
+    inputChecksum: text("input_checksum").notNull(),
+    metadata: jsonb("metadata").$type<Record<string, unknown>>().notNull().default({}),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("projection_sets_source_version_unique").on(table.source, table.version),
+    uniqueIndex("projection_sets_scoped_import_unique")
+      .on(table.leagueSeasonId, table.createdByUserId, table.visibility, table.inputChecksum)
+      .where(sql`${table.leagueSeasonId} is not null`),
+    index("projection_sets_scoped_week_idx").on(
+      table.leagueSeasonId,
+      table.season,
+      table.week,
+      table.horizon,
+      table.fetchedAt,
+    ),
+    index("projection_sets_creator_idx").on(table.createdByUserId),
+    check(
+      "projection_sets_visibility_check",
+      sql`${table.visibility} in ('global', 'private', 'league')`,
+    ),
+    check(
+      "projection_sets_scope_check",
+      sql`(${table.visibility} = 'global' and ${table.leagueSeasonId} is null and ${table.createdByUserId} is null) or (${table.visibility} in ('private', 'league') and ${table.leagueSeasonId} is not null and ${table.createdByUserId} is not null)`,
+    ),
+    check(
+      "projection_sets_week_check",
+      sql`${table.week} is null or ${table.week} between 1 and 18`,
+    ),
+  ],
+);
+
+export const playerProjections = pgTable(
+  "player_projections",
+  {
+    projectionSetId: uuid("projection_set_id")
+      .notNull()
+      .references(() => projectionSets.id, { onDelete: "cascade" }),
+    playerId: uuid("player_id")
+      .notNull()
+      .references(() => players.id, { onDelete: "cascade" }),
+    meanPoints: numeric("mean_points", { precision: 10, scale: 3 }).notNull(),
+    floorPoints: numeric("floor_points", { precision: 10, scale: 3 }),
+    ceilingPoints: numeric("ceiling_points", { precision: 10, scale: 3 }),
+    confidence: numeric("confidence", { precision: 5, scale: 4 }),
+    components: jsonb("components").$type<Record<string, number>>().notNull().default({}),
+  },
+  (table) => [primaryKey({ columns: [table.projectionSetId, table.playerId] })],
+);
+
+export const syncRuns = pgTable(
+  "sync_runs",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    connectionId: uuid("connection_id").references(() => providerConnections.id, {
+      onDelete: "set null",
+    }),
+    leagueSeasonId: uuid("league_season_id").references(() => leagueSeasons.id, {
+      onDelete: "set null",
+    }),
+    kind: text("kind").notNull(),
+    state: text("state").notNull().default("queued"),
+    idempotencyKey: text("idempotency_key").notNull(),
+    startedAt: timestamp("started_at", { withTimezone: true }),
+    finishedAt: timestamp("finished_at", { withTimezone: true }),
+    recordsRead: integer("records_read").notNull().default(0),
+    recordsWritten: integer("records_written").notNull().default(0),
+    artifactChecksum: text("artifact_checksum"),
+    errorCode: text("error_code"),
+    errorDetail: text("error_detail"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("sync_runs_idempotency_unique").on(table.idempotencyKey),
+    index("sync_runs_league_created_idx").on(table.leagueSeasonId, table.createdAt),
+  ],
+);
+
+export const standingsSnapshots = pgTable(
+  "standings_snapshots",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    leagueSeasonId: uuid("league_season_id")
+      .notNull()
+      .references(() => leagueSeasons.id, { onDelete: "cascade" }),
+    asOfWeek: integer("as_of_week"),
+    effectiveAt: timestamp("effective_at", { withTimezone: true }).notNull(),
+    sourceSyncRunId: uuid("source_sync_run_id").references(() => syncRuns.id, {
+      onDelete: "set null",
+    }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    index("standings_snapshots_league_effective_idx").on(table.leagueSeasonId, table.effectiveAt),
+    uniqueIndex("standings_snapshots_source_sync_unique")
+      .on(table.sourceSyncRunId)
+      .where(sql`${table.sourceSyncRunId} is not null`),
+    check(
+      "standings_snapshots_week_check",
+      sql`${table.asOfWeek} is null or ${table.asOfWeek} between 1 and 30`,
+    ),
+  ],
+);
+
+export const standingsEntries = pgTable(
+  "standings_entries",
+  {
+    snapshotId: uuid("snapshot_id")
+      .notNull()
+      .references(() => standingsSnapshots.id, { onDelete: "cascade" }),
+    teamId: uuid("team_id")
+      .notNull()
+      .references(() => fantasyTeams.id, { onDelete: "cascade" }),
+    providerTeamId: text("provider_team_id").notNull(),
+    rank: integer("rank").notNull(),
+    playoffSeed: integer("playoff_seed"),
+    wins: integer("wins").notNull(),
+    losses: integer("losses").notNull(),
+    ties: integer("ties").notNull(),
+    pointsFor: numeric("points_for", { precision: 14, scale: 4 }).notNull(),
+    pointsAgainst: numeric("points_against", { precision: 14, scale: 4 }).notNull(),
+    streakType: text("streak_type").$type<StandingStreakType>().notNull(),
+    streakLength: integer("streak_length").notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.snapshotId, table.teamId] }),
+    uniqueIndex("standings_entries_provider_team_unique").on(
+      table.snapshotId,
+      table.providerTeamId,
+    ),
+    uniqueIndex("standings_entries_rank_unique").on(table.snapshotId, table.rank),
+    check(
+      "standings_entries_provider_team_check",
+      sql`char_length(btrim(${table.providerTeamId})) > 0`,
+    ),
+    check("standings_entries_rank_check", sql`${table.rank} > 0`),
+    check(
+      "standings_entries_playoff_seed_check",
+      sql`${table.playoffSeed} is null or ${table.playoffSeed} > 0`,
+    ),
+    check(
+      "standings_entries_record_check",
+      sql`${table.wins} >= 0 and ${table.losses} >= 0 and ${table.ties} >= 0`,
+    ),
+    check(
+      "standings_entries_streak_type_check",
+      sql`${table.streakType} in ('win', 'loss', 'tie', 'none')`,
+    ),
+    check("standings_entries_streak_length_check", sql`${table.streakLength} >= 0`),
+  ],
+);
+
+export const matchupSnapshots = pgTable(
+  "matchup_snapshots",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    leagueSeasonId: uuid("league_season_id")
+      .notNull()
+      .references(() => leagueSeasons.id, { onDelete: "cascade" }),
+    asOfWeek: integer("as_of_week"),
+    effectiveAt: timestamp("effective_at", { withTimezone: true }).notNull(),
+    sourceSyncRunId: uuid("source_sync_run_id").references(() => syncRuns.id, {
+      onDelete: "set null",
+    }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    index("matchup_snapshots_league_effective_idx").on(table.leagueSeasonId, table.effectiveAt),
+    uniqueIndex("matchup_snapshots_source_sync_unique")
+      .on(table.sourceSyncRunId)
+      .where(sql`${table.sourceSyncRunId} is not null`),
+    check(
+      "matchup_snapshots_week_check",
+      sql`${table.asOfWeek} is null or ${table.asOfWeek} between 1 and 30`,
+    ),
+  ],
+);
+
+export const weeklyMatchups = pgTable(
+  "weekly_matchups",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    snapshotId: uuid("snapshot_id")
+      .notNull()
+      .references(() => matchupSnapshots.id, { onDelete: "cascade" }),
+    externalKey: text("external_key").notNull(),
+    providerMatchupId: text("provider_matchup_id").notNull(),
+    week: integer("week").notNull(),
+    status: text("status").$type<WeeklyMatchupStatus>().notNull(),
+    homeTeamId: uuid("home_team_id")
+      .notNull()
+      .references(() => fantasyTeams.id, { onDelete: "cascade" }),
+    awayTeamId: uuid("away_team_id")
+      .notNull()
+      .references(() => fantasyTeams.id, { onDelete: "cascade" }),
+    homeProviderTeamId: text("home_provider_team_id").notNull(),
+    awayProviderTeamId: text("away_provider_team_id").notNull(),
+    homeScore: numeric("home_score", { precision: 14, scale: 4 }),
+    awayScore: numeric("away_score", { precision: 14, scale: 4 }),
+    winnerTeamId: uuid("winner_team_id").references(() => fantasyTeams.id, {
+      onDelete: "cascade",
+    }),
+    tied: boolean("tied").notNull().default(false),
+  },
+  (table) => [
+    uniqueIndex("weekly_matchups_snapshot_external_unique").on(table.snapshotId, table.externalKey),
+    uniqueIndex("weekly_matchups_snapshot_provider_unique").on(
+      table.snapshotId,
+      table.providerMatchupId,
+    ),
+    index("weekly_matchups_snapshot_week_idx").on(table.snapshotId, table.week),
+    check("weekly_matchups_week_check", sql`${table.week} between 1 and 30`),
+    check(
+      "weekly_matchups_status_check",
+      sql`${table.status} in ('scheduled', 'in-progress', 'final')`,
+    ),
+    check(
+      "weekly_matchups_external_key_check",
+      sql`char_length(btrim(${table.externalKey})) > 0 and char_length(btrim(${table.providerMatchupId})) > 0`,
+    ),
+    check(
+      "weekly_matchups_provider_team_check",
+      sql`char_length(btrim(${table.homeProviderTeamId})) > 0 and char_length(btrim(${table.awayProviderTeamId})) > 0`,
+    ),
+    check("weekly_matchups_distinct_teams_check", sql`${table.homeTeamId} <> ${table.awayTeamId}`),
+    check(
+      "weekly_matchups_winner_team_check",
+      sql`${table.winnerTeamId} is null or ${table.winnerTeamId} in (${table.homeTeamId}, ${table.awayTeamId})`,
+    ),
+    check(
+      "weekly_matchups_scores_check",
+      sql`(${table.status} = 'scheduled' and ${table.homeScore} is null and ${table.awayScore} is null) or (${table.status} <> 'scheduled' and ${table.homeScore} is not null and ${table.awayScore} is not null)`,
+    ),
+    check(
+      "weekly_matchups_outcome_check",
+      sql`(${table.status} = 'final' and ((${table.tied} = true and ${table.winnerTeamId} is null) or (${table.tied} = false and ${table.winnerTeamId} is not null))) or (${table.status} <> 'final' and ${table.tied} = false and ${table.winnerTeamId} is null)`,
+    ),
+  ],
+);
+
+export const refreshRequests = pgTable(
+  "refresh_requests",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    requestedByUserId: uuid("requested_by_user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    connectionId: uuid("connection_id").references(() => providerConnections.id, {
+      onDelete: "set null",
+    }),
+    leagueSeasonId: uuid("league_season_id").references(() => leagueSeasons.id, {
+      onDelete: "set null",
+    }),
+    rankingListId: uuid("ranking_list_id").references(() => rankingLists.id, {
+      onDelete: "set null",
+    }),
+    dataSourceId: uuid("data_source_id").references(() => dataSources.id, {
+      onDelete: "set null",
+    }),
+    resultSyncRunId: uuid("result_sync_run_id").references(() => syncRuns.id, {
+      onDelete: "set null",
+    }),
+    kind: text("kind").$type<RefreshRequestKind>().notNull(),
+    state: text("state").$type<RefreshRequestState>().notNull().default("queued"),
+    idempotencyKey: text("idempotency_key").notNull(),
+    force: boolean("force").notNull().default(false),
+    priority: integer("priority").notNull().default(0),
+    notBefore: timestamp("not_before", { withTimezone: true }).notNull().defaultNow(),
+    startedAt: timestamp("started_at", { withTimezone: true }),
+    finishedAt: timestamp("finished_at", { withTimezone: true }),
+    errorCode: text("error_code"),
+    errorDetail: text("error_detail"),
+    resultSummary: jsonb("result_summary")
+      .$type<Record<string, JsonPrimitive>>()
+      .notNull()
+      .default({}),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("refresh_requests_user_idempotency_unique").on(
+      table.requestedByUserId,
+      table.idempotencyKey,
+    ),
+    index("refresh_requests_queue_idx")
+      .on(table.state, table.priority, table.notBefore)
+      .where(sql`${table.state} = 'queued'`),
+    index("refresh_requests_user_created_idx").on(table.requestedByUserId, table.createdAt),
+    index("refresh_requests_league_season_idx").on(table.leagueSeasonId),
+    index("refresh_requests_ranking_list_idx").on(table.rankingListId),
+    index("refresh_requests_data_source_idx").on(table.dataSourceId),
+    check(
+      "refresh_requests_kind_check",
+      sql`${table.kind} in ('player_catalog', 'rankings', 'projections', 'injuries', 'league', 'all')`,
+    ),
+    check(
+      "refresh_requests_state_check",
+      sql`${table.state} in ('queued', 'processing', 'succeeded', 'failed', 'cancelled')`,
+    ),
+    check("refresh_requests_priority_check", sql`${table.priority} between -100 and 100`),
+    check(
+      "refresh_requests_scope_check",
+      sql`(${table.kind} <> 'league' or ${table.leagueSeasonId} is not null) and (${table.kind} <> 'rankings' or ${table.rankingListId} is not null)`,
+    ),
+    check(
+      "refresh_requests_finished_at_check",
+      sql`${table.finishedAt} is null or ${table.startedAt} is not null`,
+    ),
+  ],
+);
+
+export const drafts = pgTable(
+  "drafts",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    leagueSeasonId: uuid("league_season_id")
+      .notNull()
+      .references(() => leagueSeasons.id, { onDelete: "cascade" }),
+    type: text("type").notNull(),
+    state: text("state").notNull().default("created"),
+    budgetPerTeam: integer("budget_per_team"),
+    minimumBid: integer("minimum_bid"),
+    settings: jsonb("settings").$type<Record<string, unknown>>().notNull().default({}),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    index("drafts_league_idx").on(table.leagueSeasonId),
+    check("drafts_type_check", sql`${table.type} in ('snake', 'auction')`),
+    check("drafts_budget_check", sql`${table.budgetPerTeam} is null or ${table.budgetPerTeam} > 0`),
+    check("drafts_minimum_bid_check", sql`${table.minimumBid} is null or ${table.minimumBid} > 0`),
+  ],
+);
+
+export const draftEvents = pgTable(
+  "draft_events",
+  {
+    draftId: uuid("draft_id")
+      .notNull()
+      .references(() => drafts.id, { onDelete: "cascade" }),
+    sequence: integer("sequence").notNull(),
+    idempotencyKey: text("idempotency_key").notNull(),
+    type: text("type").notNull(),
+    occurredAt: timestamp("occurred_at", { withTimezone: true }).notNull(),
+    source: text("source").notNull(),
+    payload: jsonb("payload").$type<Record<string, unknown>>().notNull(),
+    revertsSequence: integer("reverts_sequence"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.draftId, table.sequence] }),
+    uniqueIndex("draft_events_idempotency_unique").on(table.draftId, table.idempotencyKey),
+  ],
+);
+
+export const recommendationRuns = pgTable(
+  "recommendation_runs",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    leagueSeasonId: uuid("league_season_id")
+      .notNull()
+      .references(() => leagueSeasons.id, { onDelete: "cascade" }),
+    kind: text("kind").notNull(),
+    algorithmVersion: text("algorithm_version").notNull(),
+    inputHash: text("input_hash").notNull(),
+    randomSeed: text("random_seed"),
+    inputs: jsonb("inputs").$type<Record<string, unknown>>().notNull(),
+    startedAt: timestamp("started_at", { withTimezone: true }).notNull().defaultNow(),
+    finishedAt: timestamp("finished_at", { withTimezone: true }),
+  },
+  (table) => [index("recommendation_runs_league_kind_idx").on(table.leagueSeasonId, table.kind)],
+);
+
+export const recommendations = pgTable(
+  "recommendations",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    runId: uuid("run_id")
+      .notNull()
+      .references(() => recommendationRuns.id, { onDelete: "cascade" }),
+    rank: integer("rank").notNull(),
+    action: jsonb("action").$type<Record<string, unknown>>().notNull(),
+    expectedValueDelta: numeric("expected_value_delta", { precision: 10, scale: 4 }),
+    confidence: numeric("confidence", { precision: 5, scale: 4 }),
+    explanation: text("explanation").notNull(),
+    warnings: text("warnings").array().notNull().default([]),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [uniqueIndex("recommendations_run_rank_unique").on(table.runId, table.rank)],
+);
+
+export const auditEvents = pgTable(
+  "audit_events",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id").references(() => users.id, { onDelete: "set null" }),
+    action: text("action").notNull(),
+    targetType: text("target_type"),
+    targetId: text("target_id"),
+    correlationId: text("correlation_id").notNull(),
+    metadata: jsonb("metadata").$type<Record<string, unknown>>().notNull().default({}),
+    occurredAt: timestamp("occurred_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [index("audit_events_user_time_idx").on(table.userId, table.occurredAt)],
+);
+
+export const changeEvents = pgTable(
+  "change_events",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    source: text("source").notNull(),
+    deduplicationKey: text("deduplication_key"),
+    eventType: text("event_type").notNull(),
+    aggregateType: text("aggregate_type").notNull(),
+    aggregateId: text("aggregate_id").notNull(),
+    leagueId: uuid("league_id").references(() => leagues.id, { onDelete: "set null" }),
+    actorUserId: uuid("actor_user_id").references(() => users.id, { onDelete: "set null" }),
+    visibility: text("visibility").notNull().default("private"),
+    severity: text("severity").notNull().default("info"),
+    payload: jsonb("payload").$type<Record<string, unknown>>().notNull(),
+    occurredAt: timestamp("occurred_at", { withTimezone: true }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("change_events_source_deduplication_unique")
+      .on(table.source, table.deduplicationKey)
+      .where(sql`${table.deduplicationKey} is not null`),
+    index("change_events_league_occurred_idx").on(table.leagueId, table.occurredAt),
+    index("change_events_aggregate_occurred_idx").on(
+      table.aggregateType,
+      table.aggregateId,
+      table.occurredAt,
+    ),
+    check(
+      "change_events_visibility_check",
+      sql`${table.visibility} in ('private', 'league', 'global')`,
+    ),
+    check(
+      "change_events_severity_check",
+      sql`${table.severity} in ('info', 'action', 'warning', 'critical')`,
+    ),
+  ],
+);
+
+export const changeEventReceipts = pgTable(
+  "change_event_receipts",
+  {
+    eventId: uuid("event_id")
+      .notNull()
+      .references(() => changeEvents.id, { onDelete: "cascade" }),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    deliveredAt: timestamp("delivered_at", { withTimezone: true }),
+    firstSeenAt: timestamp("first_seen_at", { withTimezone: true }),
+    readAt: timestamp("read_at", { withTimezone: true }),
+    dismissedAt: timestamp("dismissed_at", { withTimezone: true }),
+    deliveryChannels: text("delivery_channels").array().notNull().default([]),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.eventId, table.userId] }),
+    index("change_event_receipts_user_unread_idx")
+      .on(table.userId, table.createdAt)
+      .where(sql`${table.readAt} is null and ${table.dismissedAt} is null`),
+    check(
+      "change_event_receipts_read_check",
+      sql`${table.readAt} is null or ${table.firstSeenAt} is not null`,
+    ),
+    check(
+      "change_event_receipts_dismissed_check",
+      sql`${table.dismissedAt} is null or ${table.firstSeenAt} is not null`,
+    ),
+  ],
+);
+
+export const aiProviderCredentials = pgTable(
+  "ai_provider_credentials",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    provider: text("provider").$type<AiProviderName>().notNull(),
+    label: text("label").notNull(),
+    model: text("model"),
+    dailyRequestLimit: integer("daily_request_limit").notNull().default(25),
+    maxOutputTokens: integer("max_output_tokens").notNull().default(900),
+    // This is a keyed fingerprint used only for deduplication; no key suffix is retained.
+    credentialFingerprintHash: text("credential_fingerprint_hash").notNull(),
+    providerAccountIdHash: text("provider_account_id_hash"),
+    credentialEnvelope: jsonb("credential_envelope").$type<CredentialEnvelopeMetadata>().notNull(),
+    envelopeVersion: integer("envelope_version").notNull(),
+    encryptionKeyId: text("encryption_key_id").notNull(),
+    credentialPurpose: text("credential_purpose").notNull(),
+    scopes: text("scopes").array().notNull().default([]),
+    status: text("status").$type<AiCredentialStatus>().notNull().default("active"),
+    expiresAt: timestamp("expires_at", { withTimezone: true }),
+    lastValidatedAt: timestamp("last_validated_at", { withTimezone: true }),
+    lastErrorCode: text("last_error_code"),
+    lastErrorAt: timestamp("last_error_at", { withTimezone: true }),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("ai_provider_credentials_fingerprint_unique").on(
+      table.userId,
+      table.provider,
+      table.credentialFingerprintHash,
+    ),
+    uniqueIndex("ai_provider_credentials_user_provider_unique").on(table.userId, table.provider),
+    index("ai_provider_credentials_user_status_idx").on(table.userId, table.status),
+    check(
+      "ai_provider_credentials_provider_check",
+      sql`${table.provider} in ('openai', 'anthropic', 'gemini', 'openrouter')`,
+    ),
+    check(
+      "ai_provider_credentials_status_check",
+      sql`${table.status} in ('active', 'invalid', 'revoked')`,
+    ),
+    check(
+      "ai_provider_credentials_fingerprint_check",
+      sql`char_length(${table.credentialFingerprintHash}) >= 32`,
+    ),
+    check("ai_provider_credentials_envelope_version_check", sql`${table.envelopeVersion} > 0`),
+    check(
+      "ai_provider_credentials_model_check",
+      sql`${table.model} is null or char_length(${table.model}) between 1 and 160`,
+    ),
+    check(
+      "ai_provider_credentials_daily_limit_check",
+      sql`${table.dailyRequestLimit} between 1 and 500`,
+    ),
+    check(
+      "ai_provider_credentials_output_limit_check",
+      sql`${table.maxOutputTokens} between 64 and 8192`,
+    ),
+    check(
+      "ai_provider_credentials_envelope_shape_check",
+      sql`jsonb_typeof(${table.credentialEnvelope}) = 'object' and ${table.credentialEnvelope} ?& array['version', 'algorithm', 'keyId', 'purpose', 'createdAt', 'iv', 'ciphertext', 'authTag'] and jsonb_typeof(${table.credentialEnvelope}->'ciphertext') = 'string' and jsonb_typeof(${table.credentialEnvelope}->'authTag') = 'string'`,
+    ),
+    check(
+      "ai_provider_credentials_envelope_metadata_check",
+      sql`${table.credentialEnvelope}->>'version' = ${table.envelopeVersion}::text and ${table.credentialEnvelope}->>'keyId' = ${table.encryptionKeyId} and ${table.credentialEnvelope}->>'purpose' = ${table.credentialPurpose}`,
+    ),
+    check(
+      "ai_provider_credentials_revoked_at_check",
+      sql`(${table.status} = 'revoked') = (${table.revokedAt} is not null)`,
+    ),
+  ],
+);
+
+export const aiUsageLedger = pgTable(
+  "ai_usage_ledger",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id").references(() => users.id, { onDelete: "set null" }),
+    credentialId: uuid("credential_id").references(() => aiProviderCredentials.id, {
+      onDelete: "set null",
+    }),
+    provider: text("provider").$type<AiProviderName>().notNull(),
+    model: text("model").notNull(),
+    operation: text("operation").notNull(),
+    // Provider request IDs are keyed before persistence; prompts and responses are never stored here.
+    requestIdHash: text("request_id_hash"),
+    inputTokens: integer("input_tokens").notNull().default(0),
+    outputTokens: integer("output_tokens").notNull().default(0),
+    cacheReadTokens: integer("cache_read_tokens").notNull().default(0),
+    cacheWriteTokens: integer("cache_write_tokens").notNull().default(0),
+    cost: numeric("cost", { precision: 16, scale: 6 }).notNull().default("0"),
+    currency: text("currency").notNull().default("USD"),
+    latencyMs: integer("latency_ms"),
+    succeeded: boolean("succeeded").notNull().default(true),
+    errorCode: text("error_code"),
+    metadata: jsonb("metadata").$type<Record<string, JsonPrimitive>>().notNull().default({}),
+    occurredAt: timestamp("occurred_at", { withTimezone: true }).notNull().defaultNow(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("ai_usage_ledger_provider_request_unique")
+      .on(table.provider, table.requestIdHash)
+      .where(sql`${table.requestIdHash} is not null`),
+    index("ai_usage_ledger_user_occurred_idx").on(table.userId, table.occurredAt),
+    index("ai_usage_ledger_provider_model_occurred_idx").on(
+      table.provider,
+      table.model,
+      table.occurredAt,
+    ),
+    check(
+      "ai_usage_ledger_provider_check",
+      sql`${table.provider} in ('openai', 'anthropic', 'gemini', 'openrouter')`,
+    ),
+    check(
+      "ai_usage_ledger_token_counts_check",
+      sql`${table.inputTokens} >= 0 and ${table.outputTokens} >= 0 and ${table.cacheReadTokens} >= 0 and ${table.cacheWriteTokens} >= 0`,
+    ),
+    check("ai_usage_ledger_cost_check", sql`${table.cost} >= 0`),
+    check(
+      "ai_usage_ledger_latency_check",
+      sql`${table.latencyMs} is null or ${table.latencyMs} >= 0`,
+    ),
+    check("ai_usage_ledger_currency_check", sql`${table.currency} ~ '^[A-Z]{3}$'`),
+    check(
+      "ai_usage_ledger_request_hash_check",
+      sql`${table.requestIdHash} is null or char_length(${table.requestIdHash}) >= 32`,
+    ),
+  ],
+);

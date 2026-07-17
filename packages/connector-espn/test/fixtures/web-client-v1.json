@@ -1,0 +1,241 @@
+{
+  "schemaVersion": 1,
+  "provider": "espn",
+  "authority": "browser-local",
+  "readOnly": true,
+  "leagueId": "98765432101234567890",
+  "season": 2026,
+  "capturedAt": "2026-09-24T14:30:00.000Z",
+  "endpoint": "https://lm-api-reads.fantasy.espn.com/apis/v3/games/ffl/seasons/2026/segments/0/leagues/98765432101234567890?view=mSettings&view=mTeam&view=mRoster&view=mStandings&view=mMatchup",
+  "checksumSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "payload": {
+    "id": "98765432101234567890",
+    "seasonId": 2026,
+    "scoringPeriodId": 4,
+    "status": {
+      "latestScoringPeriod": 4,
+      "inventedFixtureMarker": true
+    },
+    "settings": {
+      "name": "Moonshot Friends League",
+      "size": 2,
+      "acquisitionSettings": {
+        "acquisitionBudget": 100,
+        "acquisitionType": "WAIVERS_TRADITIONAL",
+        "isUsingAcquisitionBudget": true,
+        "waiverOrderReset": false
+      },
+      "draftSettings": {
+        "auctionBudget": 200,
+        "type": "AUCTION"
+      },
+      "rosterSettings": {
+        "lineupSlotCounts": {
+          "0": 1,
+          "2": 1,
+          "4": 1,
+          "6": 1,
+          "16": 1,
+          "17": 1,
+          "20": 2,
+          "21": 1,
+          "22": 0,
+          "23": 1
+        }
+      },
+      "scheduleSettings": {
+        "playoffTeamCount": 1
+      },
+      "scoringSettings": {
+        "scoringItems": [
+          {
+            "statId": 3,
+            "points": 0.04
+          },
+          {
+            "statId": 122,
+            "points": 0,
+            "pointsOverrides": {
+              "16": -1
+            }
+          }
+        ]
+      }
+    },
+    "members": [
+      {
+        "id": "manager-alpha-00000000-0000-0000-0000-000000000001",
+        "displayName": "Avery Example",
+        "isLeagueManager": true
+      },
+      {
+        "id": "manager-beta-00000000-0000-0000-0000-000000000002",
+        "displayName": "Blake Example",
+        "isLeagueManager": false
+      }
+    ],
+    "teams": [
+      {
+        "id": "101",
+        "name": "Pixel Pioneers",
+        "abbrev": "PIX",
+        "logo": null,
+        "owners": ["manager-alpha-00000000-0000-0000-0000-000000000001"],
+        "primaryOwner": "manager-alpha-00000000-0000-0000-0000-000000000001",
+        "playoffSeed": 1,
+        "record": {
+          "overall": {
+            "wins": 3,
+            "losses": 0,
+            "ties": 0,
+            "pointsFor": 365.75,
+            "pointsAgainst": 331.25,
+            "streakLength": 3,
+            "streakType": "WIN"
+          }
+        },
+        "roster": {
+          "entries": [
+            {
+              "lineupSlotId": 0,
+              "playerId": "900000000000000001",
+              "status": "NORMAL",
+              "playerPoolEntry": {
+                "id": "900000000000000001",
+                "onTeamId": "101",
+                "status": "ONTEAM",
+                "player": {
+                  "id": "900000000000000001",
+                  "fullName": "Quinn Sample",
+                  "defaultPositionId": 1,
+                  "eligibleSlots": [0, 7, 20, 21],
+                  "proTeamId": 12,
+                  "injuryStatus": "ACTIVE"
+                }
+              }
+            },
+            {
+              "lineupSlotId": 2,
+              "playerId": "900000000000000002",
+              "status": "NORMAL",
+              "playerPoolEntry": {
+                "id": "900000000000000002",
+                "onTeamId": "101",
+                "status": "ONTEAM",
+                "player": {
+                  "id": "900000000000000002",
+                  "fullName": "Riley Sample",
+                  "defaultPositionId": 2,
+                  "eligibleSlots": [2, 3, 23, 7, 20, 21],
+                  "proTeamId": 33,
+                  "injuryStatus": "QUESTIONABLE"
+                }
+              }
+            }
+          ]
+        }
+      },
+      {
+        "id": "202",
+        "name": "Circuit Breakers",
+        "abbrev": "CBR",
+        "logo": "",
+        "owners": ["manager-beta-00000000-0000-0000-0000-000000000002"],
+        "primaryOwner": "manager-beta-00000000-0000-0000-0000-000000000002",
+        "playoffSeed": 2,
+        "record": {
+          "overall": {
+            "wins": 0,
+            "losses": 3,
+            "ties": 0,
+            "pointsFor": 331.25,
+            "pointsAgainst": 365.75,
+            "streakLength": 3,
+            "streakType": "LOSS"
+          }
+        },
+        "roster": {
+          "entries": [
+            {
+              "lineupSlotId": 4,
+              "playerId": "900000000000000003",
+              "status": "NORMAL",
+              "playerPoolEntry": {
+                "id": "900000000000000003",
+                "onTeamId": "202",
+                "status": "ONTEAM",
+                "player": {
+                  "id": "900000000000000003",
+                  "fullName": "Sage Sample",
+                  "defaultPositionId": 3,
+                  "eligibleSlots": [3, 4, 5, 23, 7, 20, 21],
+                  "proTeamId": 1,
+                  "injuryStatus": "ACTIVE"
+                }
+              }
+            },
+            {
+              "lineupSlotId": 6,
+              "playerId": "900000000000000004",
+              "status": "NORMAL",
+              "playerPoolEntry": {
+                "id": "900000000000000004",
+                "onTeamId": "202",
+                "status": "ONTEAM",
+                "player": {
+                  "id": "900000000000000004",
+                  "fullName": "Taylor Sample",
+                  "defaultPositionId": 4,
+                  "eligibleSlots": [5, 6, 23, 7, 20, 21],
+                  "proTeamId": 34,
+                  "injuryStatus": "ACTIVE"
+                }
+              }
+            }
+          ]
+        }
+      }
+    ],
+    "schedule": [
+      {
+        "id": "70000000000000000001",
+        "matchupPeriodId": 3,
+        "winner": "HOME",
+        "home": {
+          "teamId": "101",
+          "totalPoints": 121.5
+        },
+        "away": {
+          "teamId": "202",
+          "totalPoints": 110.25
+        }
+      },
+      {
+        "id": "70000000000000000002",
+        "matchupPeriodId": 4,
+        "winner": "UNDECIDED",
+        "home": {
+          "teamId": "202",
+          "totalPoints": 67.125
+        },
+        "away": {
+          "teamId": "101",
+          "totalPoints": 71.8
+        }
+      },
+      {
+        "id": "70000000000000000003",
+        "matchupPeriodId": 5,
+        "winner": "UNDECIDED",
+        "home": {
+          "teamId": "101",
+          "totalPoints": 0
+        },
+        "away": {
+          "teamId": "202",
+          "totalPoints": 0
+        }
+      }
+    ]
+  }
+}

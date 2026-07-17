@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<fantasy_content><league>
+  <league_key>449.l.12345</league_key><league_id>12345</league_id>
+  <name>Sanitized Auction League</name><season>2026</season>
+  <teams count="2">
+    <team>
+      <team_key>449.l.12345.t.1</team_key><team_id>1</team_id><name>North Stars</name>
+      <team_abbr>NTH</team_abbr><is_owned_by_current_login>1</is_owned_by_current_login>
+      <managers><manager><manager_id>1001</manager_id><nickname>Sanitized Manager</nickname><is_commissioner>1</is_commissioner></manager></managers>
+    </team>
+    <team>
+      <team_key>449.l.12345.t.2</team_key><team_id>2</team_id><name>South Stars</name>
+      <team_abbr>STH</team_abbr><managers><manager><manager_id>1002</manager_id><nickname>Other Manager</nickname></manager></managers>
+    </team>
+  </teams>
+</league></fantasy_content>

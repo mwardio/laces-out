@@ -1,0 +1,204 @@
+name: laces-out
+
+x-app-environment: &app-environment
+  NODE_ENV: production
+  DATABASE_URL: postgresql://fantasy:${POSTGRES_PASSWORD:-fantasy}@postgres:5432/fantasy
+  WEB_URL: ${PUBLIC_URL:-http://localhost:3000}
+  API_URL: ${PUBLIC_URL:-http://localhost:3000}
+  PORT: "4000"
+  SESSION_SECRET: ${SESSION_SECRET:-}
+  CREDENTIAL_ENCRYPTION_KEY: ${CREDENTIAL_ENCRYPTION_KEY:-}
+  YAHOO_CLIENT_ID: ${YAHOO_CLIENT_ID:-}
+  YAHOO_CLIENT_SECRET: ${YAHOO_CLIENT_SECRET:-}
+  YAHOO_REDIRECT_URI: ${PUBLIC_URL:-http://localhost:3000}/v1/connections/yahoo/callback
+  LOG_LEVEL: ${LOG_LEVEL:-info}
+
+x-service-defaults: &service-defaults
+  init: true
+  restart: unless-stopped
+  security_opt:
+    - no-new-privileges:true
+  logging:
+    driver: json-file
+    options:
+      max-size: 10m
+      max-file: "3"
+
+services:
+  postgres:
+    <<: *service-defaults
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: fantasy
+      POSTGRES_USER: fantasy
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-fantasy}
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-55432}:5432"
+    volumes:
+      - fantasy_postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U fantasy -d fantasy"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 10s
+    stop_grace_period: 30s
+    networks:
+      - data
+
+  migrate:
+    build:
+      context: .
+      target: migrate
+      args:
+        NEXT_PUBLIC_API_URL: ${PUBLIC_URL:-http://localhost:3000}
+        NEXT_PUBLIC_SITE_URL: ${PUBLIC_URL:-http://localhost:3000}
+        NEXT_PUBLIC_CONTACT_EMAIL: ${NEXT_PUBLIC_CONTACT_EMAIL:-}
+        NEXT_PUBLIC_YAHOO_ACCESS_STATUS: ${NEXT_PUBLIC_YAHOO_ACCESS_STATUS:-pending}
+    environment: *app-environment
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - data
+
+  api:
+    <<: *service-defaults
+    build:
+      context: .
+      target: api
+      args:
+        NEXT_PUBLIC_API_URL: ${PUBLIC_URL:-http://localhost:3000}
+        NEXT_PUBLIC_SITE_URL: ${PUBLIC_URL:-http://localhost:3000}
+        NEXT_PUBLIC_CONTACT_EMAIL: ${NEXT_PUBLIC_CONTACT_EMAIL:-}
+        NEXT_PUBLIC_YAHOO_ACCESS_STATUS: ${NEXT_PUBLIC_YAHOO_ACCESS_STATUS:-pending}
+    environment:
+      <<: *app-environment
+      REGISTRATION_INVITE_CODE: ${REGISTRATION_INVITE_CODE:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      MANAGED_AI_DAILY_REQUEST_LIMIT: ${MANAGED_AI_DAILY_REQUEST_LIMIT:-50}
+      MANAGED_AI_MAX_OUTPUT_TOKENS: ${MANAGED_AI_MAX_OUTPUT_TOKENS:-900}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    expose:
+      - "4000"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:4000/health/ready').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    stop_grace_period: 20s
+    cap_drop:
+      - ALL
+    networks:
+      - app
+      - data
+      - egress
+
+  worker:
+    <<: *service-defaults
+    build:
+      context: .
+      target: worker
+      args:
+        NEXT_PUBLIC_API_URL: ${PUBLIC_URL:-http://localhost:3000}
+        NEXT_PUBLIC_SITE_URL: ${PUBLIC_URL:-http://localhost:3000}
+        NEXT_PUBLIC_CONTACT_EMAIL: ${NEXT_PUBLIC_CONTACT_EMAIL:-}
+        NEXT_PUBLIC_YAHOO_ACCESS_STATUS: ${NEXT_PUBLIC_YAHOO_ACCESS_STATUS:-pending}
+    environment: *app-environment
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    stop_grace_period: 40s
+    cap_drop:
+      - ALL
+    networks:
+      - data
+      - egress
+
+  web:
+    <<: *service-defaults
+    build:
+      context: .
+      target: web
+      args:
+        NEXT_PUBLIC_API_URL: ${PUBLIC_URL:-http://localhost:3000}
+        NEXT_PUBLIC_SITE_URL: ${PUBLIC_URL:-http://localhost:3000}
+        NEXT_PUBLIC_CONTACT_EMAIL: ${NEXT_PUBLIC_CONTACT_EMAIL:-}
+        NEXT_PUBLIC_YAHOO_ACCESS_STATUS: ${NEXT_PUBLIC_YAHOO_ACCESS_STATUS:-pending}
+    environment:
+      NODE_ENV: production
+      HOSTNAME: 0.0.0.0
+      PORT: "3000"
+    depends_on:
+      api:
+        condition: service_healthy
+    expose:
+      - "3000"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3000/login').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    cap_drop:
+      - ALL
+    networks:
+      - app
+
+  gateway:
+    <<: *service-defaults
+    image: caddy:2-alpine
+    environment:
+      SITE_ADDRESS: ${SITE_ADDRESS:-:80}
+    ports:
+      - "${APP_PORT:-3000}:80"
+      - "${HTTPS_PORT:-3443}:443"
+      - "${HTTPS_PORT:-3443}:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      api:
+        condition: service_healthy
+      web:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "caddy", "version"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    networks:
+      - app
+      - egress
+
+volumes:
+  fantasy_postgres:
+  caddy_data:
+  caddy_config:
+
+networks:
+  app:
+    internal: true
+  data:
+    internal: true
+  egress:

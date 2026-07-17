@@ -1,0 +1,13 @@
+{
+  "name": "@fantasy/connector-yahoo",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": "./src/index.ts",
+  "dependencies": {
+    "@fantasy/connectors": "*",
+    "@fantasy/domain": "*",
+    "@fantasy/security": "*",
+    "fast-xml-parser": "^5.2.5"
+  }
+}

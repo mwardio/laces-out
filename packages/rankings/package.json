@@ -1,0 +1,14 @@
+{
+  "name": "@fantasy/rankings",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./model": "./src/model.ts"
+  },
+  "dependencies": {
+    "@fantasy/domain": "*",
+    "zod": "^4.0.5"
+  }
+}

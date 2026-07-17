@@ -1,0 +1,10 @@
+{
+  "name": "@fantasy/engine-draft",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": "./src/index.ts",
+  "dependencies": {
+    "@fantasy/domain": "*"
+  }
+}

@@ -1,0 +1,1730 @@
+"use client";
+
+import {
+  ArrowDown,
+  ArrowLeft,
+  ArrowUp,
+  BadgeDollarSign,
+  ChartNoAxesColumnIncreasing,
+  Check,
+  ChevronDown,
+  CircleAlert,
+  Clipboard,
+  Database,
+  Gavel,
+  Keyboard,
+  Link2,
+  ListFilter,
+  LoaderCircle,
+  Play,
+  RefreshCw,
+  RotateCcw,
+  Search,
+  ShieldCheck,
+  Users,
+} from "lucide-react";
+import Link from "next/link";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+
+import {
+  apiBaseUrl,
+  parseAuthenticatedSession,
+  parseDraftMutation,
+  parseDraftSession,
+  parseLeagueDashboard,
+  parseLeagueListResponse,
+  parseRankingListResponse,
+  parseRankingVersionResponse,
+  type DraftSessionSnapshot,
+  type LeagueDashboard,
+  type LeagueListResponse,
+  type RankingList,
+  type RankingVersion,
+} from "../lib/api-client";
+import {
+  analyzeAuctionBoard,
+  buildDraftBoardRows,
+  buildSnakeBestNowQueue,
+  type DraftBoardSort,
+  type DraftBoardValue,
+} from "../lib/draft-board";
+import { preferNewerDraftSnapshot } from "../lib/draft-session-refresh";
+import { LatestRequest } from "../lib/latest-request";
+import { DraftWorkspace as DemoDraftWorkspace } from "./draft-workspace";
+
+type BootState = "loading" | "signed-out" | "ready" | "error";
+type RequestState = "idle" | "loading";
+type RankingLoadState = "idle" | "loading" | "ready" | "error";
+type CoverageFilter = "covered" | "all" | "missing";
+
+interface ProblemBody {
+  readonly detail?: unknown;
+  readonly title?: unknown;
+  readonly currentSequence?: unknown;
+}
+
+function problemMessage(problem: ProblemBody | null, fallback: string): string {
+  if (typeof problem?.detail === "string") return problem.detail;
+  if (typeof problem?.title === "string") return problem.title;
+  return fallback;
+}
+
+async function readProblem(response: Response): Promise<ProblemBody | null> {
+  return (await response.json().catch(() => null)) as ProblemBody | null;
+}
+
+function providerLabel(provider: string): string {
+  if (provider === "espn") return "ESPN";
+  if (provider === "yahoo") return "Yahoo";
+  return "Manual";
+}
+
+function eventLabel(event: DraftSessionSnapshot["events"][number]["event"]): string {
+  switch (event.type) {
+    case "SNAKE_PLAYER_SELECTED":
+      return `Pick ${event.overallPick}`;
+    case "SNAKE_KEEPER_ASSIGNED":
+      return `Keeper · pick ${event.overallPick}`;
+    case "AUCTION_KEEPER_ASSIGNED":
+      return `Keeper · $${event.price}`;
+    case "AUCTION_NOMINATION_STARTED":
+      return `Nomination ${event.nominationNumber}`;
+    case "AUCTION_BID_PLACED":
+      return `Bid $${event.amount}`;
+    case "AUCTION_PLAYER_SOLD":
+      return `$${event.price}`;
+    case "DRAFT_EVENT_REVERTED":
+      return "Reverted";
+  }
+}
+
+function randomMutationKey(prefix: string): string {
+  return `${prefix}-${crypto.randomUUID()}`;
+}
+
+function draftDollar(value: number): string {
+  const rounded = Math.round(value * 10) / 10;
+  return `$${Number.isInteger(rounded) ? rounded.toFixed(0) : rounded.toFixed(1)}`;
+}
+
+export function DraftSessionWorkspace() {
+  const accountId = useRef("");
+  const mutationInFlight = useRef(false);
+  const backgroundRefreshInFlight = useRef(false);
+  const selectedRankingVersionRef = useRef("");
+  const dashboardRequestRef = useRef<AbortController | null>(null);
+  const dashboardRequestGate = useRef(new LatestRequest());
+  const [bootState, setBootState] = useState<BootState>("loading");
+  const [portfolio, setPortfolio] = useState<LeagueListResponse | null>(null);
+  const [session, setSession] = useState<DraftSessionSnapshot | null>(null);
+  const [showDemo, setShowDemo] = useState(false);
+  const [notice, setNotice] = useState("");
+  const [selectedLeagueId, setSelectedLeagueId] = useState("");
+  const [dashboard, setDashboard] = useState<LeagueDashboard | null>(null);
+  const [dashboardLeagueId, setDashboardLeagueId] = useState("");
+  const [dashboardState, setDashboardState] = useState<RequestState>("idle");
+  const [mode, setMode] = useState<"snake" | "auction">("snake");
+  const [teamOrder, setTeamOrder] = useState<readonly string[]>([]);
+  const [budget, setBudget] = useState("200");
+  const [minimumBid, setMinimumBid] = useState("1");
+  const [reconnectId, setReconnectId] = useState("");
+  const [requestState, setRequestState] = useState<RequestState>("idle");
+  const [search, setSearch] = useState("");
+  const [position, setPosition] = useState("ALL");
+  const [selectedPlayerId, setSelectedPlayerId] = useState("");
+  const [selectedTeamId, setSelectedTeamId] = useState("");
+  const [salePrice, setSalePrice] = useState("1");
+  const [rankingLists, setRankingLists] = useState<readonly RankingList[]>([]);
+  const [selectedRankingListId, setSelectedRankingListId] = useState("");
+  const [selectedRankingVersionId, setSelectedRankingVersionId] = useState("");
+  const [rankingVersion, setRankingVersion] = useState<RankingVersion | null>(null);
+  const [rankingState, setRankingState] = useState<RankingLoadState>("idle");
+  const [rankingError, setRankingError] = useState("");
+  const [boardSort, setBoardSort] = useState<DraftBoardSort>("rank");
+  const [coverageFilter, setCoverageFilter] = useState<CoverageFilter>("covered");
+
+  const rememberSession = useCallback((next: DraftSessionSnapshot) => {
+    localStorage.setItem(`laces-out:last-draft-session:${accountId.current}`, next.id);
+    const url = new URL(window.location.href);
+    url.searchParams.set("session", next.id);
+    window.history.replaceState({}, "", url);
+    setReconnectId(next.id);
+    setSession(next);
+  }, []);
+
+  const loadSession = useCallback(
+    async (
+      draftId: string,
+      options: { readonly background?: boolean; readonly quiet?: boolean } = {},
+    ): Promise<boolean> => {
+      const normalized = draftId.trim();
+      if (!normalized) return false;
+      if (!options.quiet) setRequestState("loading");
+      try {
+        const response = await fetch(`${apiBaseUrl}/v1/drafts/${encodeURIComponent(normalized)}`, {
+          credentials: "include",
+          headers: { Accept: "application/json" },
+          cache: "no-store",
+        });
+        if (!response.ok) {
+          const problem = await readProblem(response);
+          throw new Error(problemMessage(problem, "That draft session could not be opened."));
+        }
+        const parsed = parseDraftSession(await response.json());
+        if (!parsed) throw new Error("The draft session response was invalid.");
+        if (options.background) {
+          setSession((current) => preferNewerDraftSnapshot(current, parsed));
+        } else {
+          rememberSession(parsed);
+        }
+        if (!options.quiet) {
+          setNotice(`Reconnected at event ${parsed.sequence}. Laces Out ledger is current.`);
+        }
+        return true;
+      } catch (error) {
+        if (!options.quiet) {
+          setNotice(error instanceof Error ? error.message : "That session could not be opened.");
+        }
+        return false;
+      } finally {
+        if (!options.quiet) setRequestState("idle");
+      }
+    },
+    [rememberSession],
+  );
+
+  const bootstrap = useCallback(async () => {
+    setBootState("loading");
+    setNotice("");
+    try {
+      const sessionResponse = await fetch(`${apiBaseUrl}/v1/auth/session`, {
+        credentials: "include",
+        headers: { Accept: "application/json" },
+        cache: "no-store",
+      });
+      if (sessionResponse.status === 401) {
+        setBootState("signed-out");
+        return;
+      }
+      if (!sessionResponse.ok) {
+        throw new Error("Your account session could not be verified.");
+      }
+      const account = parseAuthenticatedSession(await sessionResponse.json());
+      if (!account) throw new Error("Your account session could not be verified.");
+      accountId.current = account.user.id;
+      const leaguesResponse = await fetch(`${apiBaseUrl}/v1/leagues`, {
+        credentials: "include",
+        headers: { Accept: "application/json" },
+        cache: "no-store",
+      });
+      if (!leaguesResponse.ok) throw new Error("Your synchronized leagues could not be loaded.");
+      const leagues = parseLeagueListResponse(await leaguesResponse.json());
+      if (!leagues) throw new Error("The league list response was invalid.");
+      setPortfolio(leagues);
+      const firstLeague = leagues.leagues.find((league) => league.season !== null);
+      setSelectedLeagueId(firstLeague?.id ?? "");
+      setBootState("ready");
+
+      const queryId = new URLSearchParams(window.location.search).get("session");
+      const rememberedId = localStorage.getItem(`laces-out:last-draft-session:${account.user.id}`);
+      const candidate = queryId ?? rememberedId;
+      if (candidate) {
+        setReconnectId(candidate);
+        const opened = await loadSession(candidate, { quiet: true });
+        if (!opened && queryId) setNotice("That shared session is unavailable to this account.");
+      }
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "The draft room could not load.");
+      setBootState("error");
+    }
+  }, [loadSession]);
+
+  useEffect(() => {
+    void bootstrap();
+  }, [bootstrap]);
+
+  useEffect(() => {
+    if (!session) return;
+    const draftId = session.id;
+    const refresh = () => {
+      if (
+        document.visibilityState !== "visible" ||
+        mutationInFlight.current ||
+        backgroundRefreshInFlight.current
+      ) {
+        return;
+      }
+      backgroundRefreshInFlight.current = true;
+      void loadSession(draftId, { background: true, quiet: true }).finally(() => {
+        backgroundRefreshInFlight.current = false;
+      });
+    };
+    const interval = window.setInterval(refresh, 5_000);
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible") refresh();
+    };
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => {
+      window.clearInterval(interval);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
+  }, [loadSession, session?.id]);
+
+  useEffect(() => {
+    dashboardRequestRef.current?.abort();
+    dashboardRequestRef.current = null;
+    dashboardRequestGate.current.invalidate();
+    setDashboard(null);
+    setDashboardLeagueId("");
+    setTeamOrder([]);
+    if (!portfolio || !selectedLeagueId) {
+      setDashboardState("idle");
+      return;
+    }
+    const selected = portfolio.leagues.find((league) => league.id === selectedLeagueId);
+    const configuredMode = selected?.season?.draftType.toLowerCase().includes("auction")
+      ? "auction"
+      : "snake";
+    setMode(configuredMode);
+    setDashboardState("loading");
+    const controller = new AbortController();
+    const request = dashboardRequestGate.current.begin(selectedLeagueId);
+    dashboardRequestRef.current = controller;
+    const isCurrent = () =>
+      !controller.signal.aborted && dashboardRequestGate.current.isCurrent(request);
+    void fetch(`${apiBaseUrl}/v1/leagues/${encodeURIComponent(selectedLeagueId)}/dashboard`, {
+      credentials: "include",
+      headers: { Accept: "application/json" },
+      cache: "no-store",
+      signal: controller.signal,
+    })
+      .then(async (response) => {
+        if (!response.ok) throw new Error("League setup details could not be loaded.");
+        const parsed = parseLeagueDashboard(await response.json());
+        if (!parsed) throw new Error("League setup details were invalid.");
+        if (!isCurrent()) return;
+        setDashboard(parsed);
+        setDashboardLeagueId(selectedLeagueId);
+        setTeamOrder(parsed.teams.map((team) => team.id));
+      })
+      .catch((error: unknown) => {
+        if (!isCurrent()) return;
+        setDashboard(null);
+        setDashboardLeagueId("");
+        setTeamOrder([]);
+        setNotice(error instanceof Error ? error.message : "League setup could not be loaded.");
+      })
+      .finally(() => {
+        if (!isCurrent()) return;
+        dashboardRequestRef.current = null;
+        setDashboardState("idle");
+      });
+    return () => {
+      controller.abort();
+      if (dashboardRequestRef.current === controller) dashboardRequestRef.current = null;
+      dashboardRequestGate.current.invalidate();
+    };
+  }, [portfolio, selectedLeagueId]);
+
+  function selectLeagueForSetup(leagueId: string) {
+    dashboardRequestRef.current?.abort();
+    dashboardRequestRef.current = null;
+    dashboardRequestGate.current.invalidate();
+    setDashboard(null);
+    setDashboardLeagueId("");
+    setTeamOrder([]);
+    setDashboardState(leagueId ? "loading" : "idle");
+    setSelectedLeagueId(leagueId);
+  }
+
+  const selectedLeague = portfolio?.leagues.find(
+    (league) => league.season?.id === session?.leagueSeasonId,
+  );
+  const draftLeagueId = selectedLeague?.id;
+  const draftSeason = selectedLeague?.season?.season;
+
+  useEffect(() => {
+    if (!session || !draftLeagueId || draftSeason === undefined) {
+      setRankingLists([]);
+      setSelectedRankingListId("");
+      setSelectedRankingVersionId("");
+      setRankingVersion(null);
+      setRankingState("idle");
+      setRankingError("");
+      return;
+    }
+    let cancelled = false;
+    selectedRankingVersionRef.current = "";
+    setRankingVersion(null);
+    setRankingState("loading");
+    setRankingError("");
+    void fetch(`${apiBaseUrl}/v1/rankings`, {
+      credentials: "include",
+      headers: { Accept: "application/json" },
+      cache: "no-store",
+    })
+      .then(async (response) => {
+        if (!response.ok) throw new Error("Draft boards could not be loaded.");
+        const lists = parseRankingListResponse(await response.json());
+        if (!lists) throw new Error("The draft board list response was invalid.");
+        const compatible = lists.filter(
+          (list) =>
+            list.archivedAt === null &&
+            list.season === draftSeason &&
+            list.currentVersionId !== null &&
+            (list.scoringContext.leagueId === null ||
+              list.scoringContext.leagueId === draftLeagueId),
+        );
+        if (cancelled) return;
+        setRankingLists(compatible);
+        setSelectedRankingListId((current) =>
+          compatible.some((list) => list.id === current) ? current : (compatible[0]?.id ?? ""),
+        );
+        if (compatible.length === 0) {
+          setSelectedRankingVersionId("");
+          setRankingVersion(null);
+          setRankingState("ready");
+        }
+      })
+      .catch((error: unknown) => {
+        if (cancelled) return;
+        setRankingLists([]);
+        setSelectedRankingListId("");
+        setSelectedRankingVersionId("");
+        setRankingVersion(null);
+        setRankingState("error");
+        setRankingError(error instanceof Error ? error.message : "Draft boards could not load.");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [draftLeagueId, draftSeason, session?.id]);
+
+  const selectedRankingList = rankingLists.find((list) => list.id === selectedRankingListId);
+  const selectableRankingVersions = useMemo(() => {
+    if (!selectedRankingList) return [];
+    const versions: { readonly id: string; readonly label: string }[] = [];
+    if (selectedRankingList.currentVersionId) {
+      versions.push({ id: selectedRankingList.currentVersionId, label: "Current working version" });
+    }
+    if (
+      selectedRankingList.latestPublishedVersionId &&
+      selectedRankingList.latestPublishedVersionId !== selectedRankingList.currentVersionId
+    ) {
+      versions.push({
+        id: selectedRankingList.latestPublishedVersionId,
+        label: "Latest published version",
+      });
+    }
+    return versions;
+  }, [selectedRankingList]);
+
+  useEffect(() => {
+    if (!selectedRankingList || selectableRankingVersions.length === 0) return;
+    setSelectedRankingVersionId((current) =>
+      selectableRankingVersions.some((version) => version.id === current)
+        ? current
+        : (selectableRankingVersions[0]?.id ?? ""),
+    );
+  }, [selectableRankingVersions, selectedRankingList]);
+
+  useEffect(() => {
+    if (!selectedRankingListId || !selectedRankingVersionId) return;
+    let cancelled = false;
+    setRankingState("loading");
+    setRankingError("");
+    const query = new URLSearchParams({ versionId: selectedRankingVersionId });
+    void fetch(
+      `${apiBaseUrl}/v1/rankings/${encodeURIComponent(selectedRankingListId)}/version?${query.toString()}`,
+      {
+        credentials: "include",
+        headers: { Accept: "application/json" },
+        cache: "no-store",
+      },
+    )
+      .then(async (response) => {
+        if (!response.ok) throw new Error("The selected draft board version could not be loaded.");
+        const version = parseRankingVersionResponse(await response.json());
+        if (!version) throw new Error("The selected draft board version was invalid.");
+        if (cancelled) return;
+        setRankingVersion(version);
+        setRankingState("ready");
+      })
+      .catch((error: unknown) => {
+        if (cancelled) return;
+        setRankingVersion(null);
+        setRankingState("error");
+        setRankingError(
+          error instanceof Error ? error.message : "The selected draft board could not load.",
+        );
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedRankingListId, selectedRankingVersionId, session?.id]);
+
+  const availablePlayers = useMemo(() => {
+    if (!session) return [];
+    const drafted = new Set(session.state.draftedPlayerIds);
+    return session.config.players.filter((player) => !drafted.has(player.id));
+  }, [session]);
+
+  const boardValues = useMemo<readonly DraftBoardValue[]>(
+    () =>
+      rankingVersion?.entries.map((entry) => ({
+        playerId: entry.playerId,
+        overallRank: entry.overallRank?.value ?? null,
+        positionRank: entry.positionRank?.value ?? null,
+        tier: entry.tier?.value ?? null,
+        adp: entry.adp?.value ?? null,
+        aav: entry.aav?.value ?? null,
+        targetPrice: entry.targetPrice?.value ?? null,
+        ceilingPrice: entry.ceilingPrice?.value ?? null,
+        target: entry.target?.value === true,
+        avoid: entry.avoid?.value === true,
+      })) ?? [],
+    [rankingVersion],
+  );
+
+  const boardRows = useMemo(
+    () => buildDraftBoardRows(availablePlayers, boardValues, boardSort),
+    [availablePlayers, boardSort, boardValues],
+  );
+  const coveredPlayerCount = useMemo(
+    () => boardRows.reduce((count, row) => count + Number(row.covered), 0),
+    [boardRows],
+  );
+
+  const positions = useMemo(
+    () => ["ALL", ...new Set(availablePlayers.flatMap((player) => player.positions))],
+    [availablePlayers],
+  );
+
+  const filteredRows = useMemo(() => {
+    const query = search.trim().toLowerCase();
+    return boardRows
+      .filter(
+        (row) =>
+          (coverageFilter === "covered"
+            ? row.covered
+            : query.length > 0 && (coverageFilter === "all" || !row.covered)) &&
+          (position === "ALL" || row.player.positions.some((item) => item === position)) &&
+          (!query ||
+            `${row.player.name} ${row.player.positions.join(" ")} ${row.player.nflTeam ?? ""}`
+              .toLowerCase()
+              .includes(query)),
+      )
+      .slice(0, 250);
+  }, [boardRows, coverageFilter, position, search]);
+
+  useEffect(() => {
+    if (!session) return;
+    if (!availablePlayers.some((player) => player.id === selectedPlayerId)) {
+      setSelectedPlayerId(boardRows.find((row) => row.covered)?.player.id ?? "");
+    }
+    if (!session.config.teams.some((team) => team.id === selectedTeamId)) {
+      setSelectedTeamId(session.config.teams[0]?.id ?? "");
+    }
+    if (session.config.mode === "AUCTION") setSalePrice(String(session.config.minimumBid));
+  }, [availablePlayers, boardRows, selectedPlayerId, selectedTeamId, session]);
+
+  useEffect(() => {
+    if (!rankingVersion) return;
+    if (selectedRankingVersionRef.current === rankingVersion.id) return;
+    selectedRankingVersionRef.current = rankingVersion.id;
+    setSelectedPlayerId((current) => {
+      const currentRow = boardRows.find((row) => row.player.id === current);
+      return currentRow?.covered
+        ? current
+        : (boardRows.find((row) => row.covered)?.player.id ?? "");
+    });
+  }, [boardRows, rankingVersion?.id]);
+
+  const selectedPlayer = session?.config.players.find((player) => player.id === selectedPlayerId);
+  const selectedBoardRow = boardRows.find((row) => row.player.id === selectedPlayerId);
+  const canMutate = session?.accessRole === "owner" || session?.accessRole === "commissioner";
+  const teamStates = session?.state.teams ?? [];
+  const selectedTeam = teamStates.find((team) => team.teamId === selectedTeamId);
+  const activeTeamId =
+    session?.config.mode === "SNAKE" ? session.state.nextPick?.teamId : selectedTeamId;
+  const activeTeam = teamStates.find((team) => team.teamId === activeTeamId);
+  const snakeQueue = useMemo(() => {
+    if (!session || session.config.mode !== "SNAKE" || !activeTeamId || !activeTeam) return [];
+    const team = session.config.teams.find((candidate) => candidate.id === activeTeamId);
+    if (!team) return [];
+    return buildSnakeBestNowQueue({
+      availablePlayers,
+      values: boardValues,
+      allPlayers: session.config.players,
+      rosteredPlayerIds: activeTeam.roster.map((item) => item.playerId),
+      rosterSlots: team.rosterSlots,
+      limit: 5,
+    });
+  }, [activeTeam, activeTeamId, availablePlayers, boardValues, session]);
+  const auctionAnalysis = useMemo(() => {
+    if (!session || session.config.mode !== "AUCTION") return null;
+    return analyzeAuctionBoard({
+      availablePlayerIds: availablePlayers.map((player) => player.id),
+      values: boardValues,
+      teams: teamStates.map((team) => ({
+        teamId: team.teamId,
+        remainingBudget: team.remainingBudget,
+        openSlots: team.openSlots,
+      })),
+      selectedPlayerId,
+      selectedTeamId,
+      minimumBid: session.config.minimumBid,
+    });
+  }, [availablePlayers, boardValues, selectedPlayerId, selectedTeamId, session, teamStates]);
+
+  function moveTeam(index: number, direction: -1 | 1) {
+    const destination = index + direction;
+    if (destination < 0 || destination >= teamOrder.length) return;
+    setTeamOrder((current) => {
+      const next = [...current];
+      const selected = next[index];
+      const displaced = next[destination];
+      if (!selected || !displaced) return current;
+      next[index] = displaced;
+      next[destination] = selected;
+      return next;
+    });
+  }
+
+  async function createSession() {
+    const league = portfolio?.leagues.find((item) => item.id === selectedLeagueId);
+    if (!league?.season || !dashboard || dashboardLeagueId !== selectedLeagueId) return;
+    setRequestState("loading");
+    setNotice("");
+    try {
+      const response = await fetch(`${apiBaseUrl}/v1/drafts`, {
+        method: "POST",
+        credentials: "include",
+        headers: { Accept: "application/json", "Content-Type": "application/json" },
+        body: JSON.stringify({
+          leagueSeasonId: league.season.id,
+          mode,
+          ...(mode === "snake"
+            ? { teamOrder }
+            : { budgetPerTeam: Number(budget), minimumBid: Number(minimumBid) }),
+        }),
+      });
+      if (!response.ok) {
+        const problem = await readProblem(response);
+        throw new Error(problemMessage(problem, "The draft session could not be created."));
+      }
+      const parsed = parseDraftSession(await response.json());
+      if (!parsed) throw new Error("The new draft session response was invalid.");
+      rememberSession(parsed);
+      setNotice("Shared manual draft ledger created. Provider polling remains off.");
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "The draft session could not be created.");
+    } finally {
+      setRequestState("idle");
+    }
+  }
+
+  async function mutate(path: string, body: Readonly<Record<string, unknown>>): Promise<void> {
+    if (!session || mutationInFlight.current) return;
+    mutationInFlight.current = true;
+    setRequestState("loading");
+    try {
+      const response = await fetch(`${apiBaseUrl}/v1/drafts/${session.id}/${path}`, {
+        method: "POST",
+        credentials: "include",
+        headers: { Accept: "application/json", "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (!response.ok) {
+        const problem = await readProblem(response);
+        if (response.status === 409 && typeof problem?.currentSequence === "number") {
+          await loadSession(session.id, { quiet: true });
+        }
+        throw new Error(problemMessage(problem, "The draft ledger rejected that entry."));
+      }
+      const parsed = parseDraftMutation(await response.json());
+      if (!parsed) throw new Error("The draft mutation response was invalid.");
+      rememberSession(parsed.session);
+      setNotice(
+        parsed.idempotent
+          ? `Entry ${parsed.appendedSequences.join(", ")} was already safely recorded.`
+          : `Recorded event ${parsed.appendedSequences.join(", ")}.`,
+      );
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "The draft ledger rejected that entry.");
+    } finally {
+      mutationInFlight.current = false;
+      setRequestState("idle");
+    }
+  }
+
+  async function recordSelection() {
+    if (!session || !selectedPlayer || !canMutate) return;
+    if (session.config.mode === "SNAKE") {
+      const nextPick = session.state.nextPick;
+      if (!nextPick) return;
+      await mutate("events", {
+        expectedSequence: session.sequence,
+        idempotencyKey: randomMutationKey("snake-pick"),
+        action: {
+          type: "SNAKE_PLAYER_SELECTED",
+          teamId: nextPick.teamId,
+          playerId: selectedPlayer.id,
+          overallPick: nextPick.overallPick,
+        },
+      });
+      return;
+    }
+    const price = Number(salePrice);
+    const teamState = session.state.teams.find((team) => team.teamId === selectedTeamId);
+    if (!Number.isSafeInteger(price) || price < session.config.minimumBid) {
+      setNotice(`Sale price must be at least $${session.config.minimumBid}.`);
+      return;
+    }
+    if (teamState?.maximumBid !== undefined && price > teamState.maximumBid) {
+      setNotice(`${teamState.name} has a legal maximum bid of $${teamState.maximumBid}.`);
+      return;
+    }
+    await mutate("events", {
+      expectedSequence: session.sequence,
+      idempotencyKey: randomMutationKey("auction-sale"),
+      action: {
+        type: "AUCTION_PLAYER_SOLD",
+        teamId: selectedTeamId,
+        playerId: selectedPlayer.id,
+        price,
+      },
+    });
+  }
+
+  async function undoLast() {
+    if (!session || !canMutate || session.sequence === 0) return;
+    await mutate("undo", {
+      expectedSequence: session.sequence,
+      idempotencyKey: randomMutationKey("draft-undo"),
+    });
+  }
+
+  function closeSession() {
+    localStorage.removeItem(`laces-out:last-draft-session:${accountId.current}`);
+    const url = new URL(window.location.href);
+    url.searchParams.delete("session");
+    window.history.replaceState({}, "", url);
+    setSession(null);
+    setNotice("Session closed on this device. Its stored event ledger was not deleted.");
+  }
+
+  async function copySessionLink() {
+    if (!session) return;
+    const url = new URL(window.location.href);
+    url.searchParams.set("session", session.id);
+    try {
+      await navigator.clipboard.writeText(url.toString());
+      setNotice("Session link copied. League membership is still required to open it.");
+    } catch {
+      setNotice(`Share this session ID: ${session.id}`);
+    }
+  }
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      const target = event.target;
+      if (
+        target instanceof HTMLElement &&
+        (target.isContentEditable ||
+          ["A", "BUTTON", "INPUT", "SELECT", "TEXTAREA"].includes(target.tagName))
+      ) {
+        return;
+      }
+      if (event.metaKey || event.ctrlKey || event.altKey) return;
+      const key = event.key.toLowerCase();
+      if ((key === "j" || key === "k") && !event.shiftKey && filteredRows.length > 0) {
+        event.preventDefault();
+        const currentIndex = filteredRows.findIndex((row) => row.player.id === selectedPlayerId);
+        const direction = key === "j" ? 1 : -1;
+        const nextIndex =
+          currentIndex < 0
+            ? direction > 0
+              ? 0
+              : filteredRows.length - 1
+            : Math.min(filteredRows.length - 1, Math.max(0, currentIndex + direction));
+        const next = filteredRows[nextIndex];
+        if (next) setSelectedPlayerId(next.player.id);
+        return;
+      }
+      if (
+        event.key === "Enter" &&
+        event.shiftKey &&
+        !event.repeat &&
+        canMutate &&
+        requestState !== "loading" &&
+        !session?.state.complete
+      ) {
+        event.preventDefault();
+        void recordSelection();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [canMutate, filteredRows, requestState, selectedPlayerId, session]);
+
+  if (showDemo || bootState === "signed-out") return <DemoDraftWorkspace />;
+
+  if (bootState === "loading") {
+    return (
+      <div className="draft-session-gate" role="status">
+        <LoaderCircle className="spin" size={22} />
+        <div>
+          <strong>Opening draft studio</strong>
+          <span>Checking your account and synchronized leagues.</span>
+        </div>
+      </div>
+    );
+  }
+
+  if (bootState === "error") {
+    return (
+      <section className="panel draft-session-gate">
+        <span className="draft-session-gate__icon">
+          <CircleAlert size={20} />
+        </span>
+        <div>
+          <p className="eyebrow">Draft studio</p>
+          <h1>Live draft data is unavailable.</h1>
+          <p>{notice}</p>
+          <div className="draft-session-actions">
+            <button className="button button--dark" type="button" onClick={() => void bootstrap()}>
+              Retry <RefreshCw size={14} />
+            </button>
+            <button className="button button--soft" type="button" onClick={() => setShowDemo(true)}>
+              View labeled demo
+            </button>
+          </div>
+        </div>
+      </section>
+    );
+  }
+
+  if (!session) {
+    const league = portfolio?.leagues.find((item) => item.id === selectedLeagueId);
+    const mayCreate =
+      league?.membership.role === "owner" || league?.membership.role === "commissioner";
+    return (
+      <div className="draft-page draft-session-setup">
+        <header className="page-heading">
+          <div>
+            <Link className="back-link" href="/app">
+              <ArrowLeft size={16} /> Overview
+            </Link>
+            <p className="eyebrow">Draft studio</p>
+            <h1>Start or reopen a draft room.</h1>
+            <p className="page-subtitle">
+              Manual event entry is persistent and shared. ESPN and Yahoo live-draft polling is not
+              enabled.
+            </p>
+          </div>
+          <button className="button button--soft" type="button" onClick={() => setShowDemo(true)}>
+            View sample draft
+          </button>
+        </header>
+
+        {notice ? (
+          <div className="draft-notice draft-notice--paused" role="status">
+            <span>
+              <CircleAlert size={14} /> {notice}
+            </span>
+          </div>
+        ) : null}
+
+        <div className="draft-session-setup-grid">
+          <section className="panel">
+            <div className="panel-heading">
+              <div>
+                <p className="eyebrow">New room</p>
+                <h2>Configure from a connected league</h2>
+                <p>Roster slots, teams, and the player pool are copied when you start.</p>
+              </div>
+              <Database size={18} />
+            </div>
+            {portfolio?.leagues.some((item) => item.season !== null) ? (
+              <div className="draft-session-form">
+                <label>
+                  <span>League season</span>
+                  <select
+                    value={selectedLeagueId}
+                    onChange={(event) => selectLeagueForSetup(event.target.value)}
+                  >
+                    {portfolio.leagues.flatMap((item) =>
+                      item.season
+                        ? [
+                            <option value={item.id} key={item.id}>
+                              {item.name} · {item.season.season} ·{" "}
+                              {providerLabel(item.season.provider)}
+                            </option>,
+                          ]
+                        : [],
+                    )}
+                  </select>
+                </label>
+                <fieldset>
+                  <legend>Draft format</legend>
+                  <div className="mode-switch">
+                    <button
+                      type="button"
+                      className={mode === "snake" ? "is-active" : ""}
+                      aria-pressed={mode === "snake"}
+                      onClick={() => setMode("snake")}
+                    >
+                      Snake
+                    </button>
+                    <button
+                      type="button"
+                      className={mode === "auction" ? "is-active" : ""}
+                      aria-pressed={mode === "auction"}
+                      onClick={() => setMode("auction")}
+                    >
+                      Auction
+                    </button>
+                  </div>
+                </fieldset>
+                {mode === "auction" ? (
+                  <div className="draft-session-money-grid">
+                    <label>
+                      <span>Budget per team</span>
+                      <input
+                        inputMode="numeric"
+                        value={budget}
+                        onChange={(event) => setBudget(event.target.value.replace(/[^0-9]/g, ""))}
+                      />
+                    </label>
+                    <label>
+                      <span>Minimum bid</span>
+                      <input
+                        inputMode="numeric"
+                        value={minimumBid}
+                        onChange={(event) =>
+                          setMinimumBid(event.target.value.replace(/[^0-9]/g, ""))
+                        }
+                      />
+                    </label>
+                  </div>
+                ) : (
+                  <div className="draft-session-order">
+                    <div>
+                      <strong>Snake order</strong>
+                      <span>Move teams into their actual first-round order.</span>
+                    </div>
+                    {dashboardState === "loading" ? (
+                      <span className="draft-session-inline-loading">
+                        <LoaderCircle className="spin" size={14} /> Loading teams
+                      </span>
+                    ) : null}
+                    {teamOrder.map((teamId, index) => {
+                      const team = dashboard?.teams.find((item) => item.id === teamId);
+                      return (
+                        <div className="draft-session-order-row" key={teamId}>
+                          <span>{index + 1}</span>
+                          <strong>{team?.name ?? teamId}</strong>
+                          <button
+                            type="button"
+                            onClick={() => moveTeam(index, -1)}
+                            disabled={index === 0}
+                            aria-label={`Move ${team?.name ?? "team"} up`}
+                          >
+                            <ArrowUp size={14} />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => moveTeam(index, 1)}
+                            disabled={index === teamOrder.length - 1}
+                            aria-label={`Move ${team?.name ?? "team"} down`}
+                          >
+                            <ArrowDown size={14} />
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+                {!mayCreate ? (
+                  <p className="draft-session-permission">
+                    <ShieldCheck size={14} /> Only the league owner or a commissioner can create the
+                    shared room. Members can reopen one by ID.
+                  </p>
+                ) : null}
+                <button
+                  className="button button--dark"
+                  type="button"
+                  onClick={() => void createSession()}
+                  disabled={
+                    !dashboard ||
+                    dashboardLeagueId !== selectedLeagueId ||
+                    dashboardState === "loading" ||
+                    !mayCreate ||
+                    requestState === "loading"
+                  }
+                >
+                  {requestState === "loading" ? (
+                    <LoaderCircle className="spin" size={14} />
+                  ) : (
+                    <Play size={14} />
+                  )}{" "}
+                  Start shared room
+                </button>
+              </div>
+            ) : (
+              <div className="draft-session-empty">
+                <Users size={20} />
+                <strong>No synchronized league season is available.</strong>
+                <Link href="/connections">Connect a league first</Link>
+              </div>
+            )}
+          </section>
+
+          <section className="panel">
+            <div className="panel-heading">
+              <div>
+                <p className="eyebrow">Reconnect</p>
+                <h2>Open an existing room</h2>
+                <p>Use the ID from this device or a league mate’s shared link.</p>
+              </div>
+              <Link2 size={18} />
+            </div>
+            <div className="draft-session-reconnect">
+              <label>
+                <span>Draft session ID</span>
+                <input
+                  value={reconnectId}
+                  onChange={(event) => setReconnectId(event.target.value)}
+                  placeholder="00000000-0000-0000-0000-000000000000"
+                />
+              </label>
+              <button
+                className="button button--soft"
+                type="button"
+                onClick={() => void loadSession(reconnectId)}
+                disabled={!reconnectId.trim() || requestState === "loading"}
+              >
+                {requestState === "loading" ? (
+                  <LoaderCircle className="spin" size={14} />
+                ) : (
+                  <RefreshCw size={14} />
+                )}{" "}
+                Reconnect
+              </button>
+              <p>
+                <ShieldCheck size={14} /> The API verifies league membership before returning any
+                draft data.
+              </p>
+            </div>
+          </section>
+        </div>
+      </div>
+    );
+  }
+
+  const recentEvents = [...session.events].reverse().slice(0, 12);
+
+  return (
+    <div className="draft-page draft-session-live">
+      <header className="draft-header">
+        <div className="draft-title-group">
+          <button className="back-link" type="button" onClick={closeSession}>
+            <ArrowLeft size={16} /> Draft rooms
+          </button>
+          <div className="draft-title-line">
+            <div>
+              <p className="eyebrow">
+                {selectedLeague?.name ?? "Shared league"} · {session.config.mode.toLowerCase()}
+              </p>
+              <h1>Draft studio</h1>
+            </div>
+          </div>
+        </div>
+        <div className="draft-header-actions">
+          <div className="connection-indicator">
+            <span className="connection-indicator__dot" />
+            <span>
+              <strong>Laces Out ledger</strong>
+              <small>Event {session.sequence} · auto-refresh on</small>
+            </span>
+          </div>
+          <button
+            className="icon-button"
+            type="button"
+            onClick={() => void copySessionLink()}
+            aria-label="Copy session link"
+            title="Copy session link"
+          >
+            <Clipboard size={17} />
+          </button>
+          <button
+            className="icon-button"
+            type="button"
+            onClick={() => void loadSession(session.id)}
+            aria-label="Reload draft session"
+            title="Reload draft session"
+          >
+            <RefreshCw size={17} />
+          </button>
+          <button
+            className="button button--soft button--small"
+            type="button"
+            onClick={() => void undoLast()}
+            disabled={!canMutate || session.sequence === 0 || requestState === "loading"}
+          >
+            <RotateCcw size={14} /> Undo
+          </button>
+        </div>
+      </header>
+
+      <section
+        className={`draft-notice${notice.toLowerCase().includes("reject") || notice.toLowerCase().includes("could not") ? " draft-notice--paused" : ""}`}
+        aria-live="polite"
+      >
+        <span>
+          <Database size={14} /> {notice || "Persistent event ledger connected."}
+        </span>
+        <span className="draft-notice__meta">
+          <ShieldCheck size={14} /> App ledger refresh · provider polling off
+        </span>
+      </section>
+
+      <section className="draft-board-source" aria-labelledby="draft-board-source-title">
+        <div className="draft-board-source__heading">
+          <span className="draft-board-source__icon">
+            <ChartNoAxesColumnIncreasing size={17} />
+          </span>
+          <div>
+            <p className="eyebrow">Decision source</p>
+            <h2 id="draft-board-source-title">Your draft board</h2>
+          </div>
+        </div>
+        {rankingState === "loading" && rankingLists.length === 0 ? (
+          <span className="draft-board-source__message" role="status">
+            <LoaderCircle className="spin" size={14} /> Loading compatible boards
+          </span>
+        ) : rankingState === "error" && rankingLists.length === 0 ? (
+          <span className="draft-board-source__message draft-board-source__message--error">
+            <CircleAlert size={14} /> {rankingError}
+          </span>
+        ) : rankingLists.length === 0 ? (
+          <span className="draft-board-source__message">
+            No compatible {draftSeason ?? "current-season"} board.{" "}
+            <Link href="/rankings">Create or import one in Rankings</Link>.
+          </span>
+        ) : (
+          <div className="draft-board-source__controls">
+            <label>
+              <span>Board</span>
+              <select
+                value={selectedRankingListId}
+                onChange={(event) => {
+                  const nextId = event.target.value;
+                  const next = rankingLists.find((list) => list.id === nextId);
+                  setSelectedRankingListId(nextId);
+                  setSelectedRankingVersionId(next?.currentVersionId ?? "");
+                  setRankingVersion(null);
+                }}
+              >
+                {rankingLists.map((list) => (
+                  <option value={list.id} key={list.id}>
+                    {list.name} · {list.kind.replaceAll("-", " ")}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              <span>Version</span>
+              <select
+                value={selectedRankingVersionId}
+                onChange={(event) => setSelectedRankingVersionId(event.target.value)}
+              >
+                {selectableRankingVersions.map((version) => (
+                  <option value={version.id} key={version.id}>
+                    {version.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              <span>Order</span>
+              <select
+                value={boardSort}
+                onChange={(event) => setBoardSort(event.target.value as DraftBoardSort)}
+              >
+                <option value="rank">Overall rank / ADP</option>
+                <option value="tier">Tier</option>
+                <option value="aav">Auction value</option>
+                <option value="name">Player name</option>
+              </select>
+            </label>
+          </div>
+        )}
+        <div className="draft-board-source__status">
+          {rankingVersion ? (
+            <>
+              <strong>
+                Version {rankingVersion.versionNumber} · {rankingVersion.state}
+              </strong>
+              <span>
+                {coveredPlayerCount} of {availablePlayers.length} available players covered
+              </span>
+            </>
+          ) : rankingLists.length > 0 ? (
+            <span>
+              {rankingState === "loading"
+                ? "Loading board values"
+                : rankingError || "Board unavailable"}
+            </span>
+          ) : (
+            <span>Unranked catalog players stay hidden until you search for them.</span>
+          )}
+        </div>
+      </section>
+
+      <section className="room-strip" aria-label="Draft room state">
+        <article>
+          <span className="room-stat-icon room-stat-icon--lime">
+            <Database size={18} />
+          </span>
+          <div>
+            <span>Ledger</span>
+            <strong>{session.sequence}</strong>
+            <small>{session.persistedState}</small>
+          </div>
+        </article>
+        <article>
+          <span className="room-stat-icon">
+            <Users size={18} />
+          </span>
+          <div>
+            <span>Teams</span>
+            <strong>{session.state.teams.length}</strong>
+            <small>
+              {session.state.teams.reduce((sum, team) => sum + team.openSlots, 0)} open slots
+            </small>
+          </div>
+        </article>
+        <article>
+          <span className="room-stat-icon">
+            <Search size={18} />
+          </span>
+          <div>
+            <span>Available</span>
+            <strong>{availablePlayers.length}</strong>
+            <small>of {session.config.players.length} players</small>
+          </div>
+        </article>
+        <article>
+          <span className="room-stat-icon">
+            <Check size={18} />
+          </span>
+          <div>
+            <span>{session.config.mode === "SNAKE" ? "On the clock" : "Selected team"}</span>
+            <strong>{activeTeam?.name ?? "Complete"}</strong>
+            <small>
+              {session.config.mode === "SNAKE" && session.state.nextPick
+                ? `Pick ${session.state.nextPick.overallPick}`
+                : session.state.complete
+                  ? "Draft complete"
+                  : "Manual sale entry"}
+            </small>
+          </div>
+        </article>
+      </section>
+
+      <section className="opponent-budget-strip" aria-label="Team state">
+        <div className="opponent-budget-strip__label">
+          <span>League room</span>
+          <small>{session.config.mode === "AUCTION" ? "remaining · max" : "rostered · open"}</small>
+        </div>
+        <div className="opponent-team-scroll">
+          {teamStates.map((team) => {
+            const content = (
+              <>
+                <span>{team.name.slice(0, 8)}</span>
+                <strong>
+                  {session.config.mode === "AUCTION"
+                    ? `$${team.remainingBudget ?? 0} · $${team.maximumBid ?? 0}`
+                    : `${team.roster.length} · ${team.openSlots}`}
+                </strong>
+              </>
+            );
+            return session.config.mode === "AUCTION" ? (
+              <button
+                type="button"
+                key={team.teamId}
+                className={team.teamId === activeTeamId ? "is-selected" : ""}
+                onClick={() => setSelectedTeamId(team.teamId)}
+                aria-pressed={team.teamId === activeTeamId}
+              >
+                {content}
+              </button>
+            ) : (
+              <div
+                className={`draft-team-state${team.teamId === activeTeamId ? " is-selected" : ""}`}
+                aria-current={team.teamId === activeTeamId ? "true" : undefined}
+                key={team.teamId}
+              >
+                {content}
+              </div>
+            );
+          })}
+        </div>
+      </section>
+
+      <div className="draft-workspace-grid">
+        <section className="board-panel" aria-labelledby="live-player-board-title">
+          <div className="board-panel__header">
+            <div>
+              <p className="eyebrow">{selectedRankingList?.name ?? "Stored player catalog"}</p>
+              <h2 id="live-player-board-title">Available players</h2>
+            </div>
+            <div className="board-header-meta">
+              <span>
+                {filteredRows.length}
+                {filteredRows.length < availablePlayers.length
+                  ? ` of ${availablePlayers.length}`
+                  : ""}{" "}
+                shown
+              </span>
+            </div>
+          </div>
+          <div className="board-toolbar">
+            <label className="search-field">
+              <Search size={16} />
+              <span className="sr-only">Search available players</span>
+              <input
+                type="search"
+                placeholder="Search player, team, or position"
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
+              />
+            </label>
+            <div className="position-tabs" role="group" aria-label="Filter by position">
+              {positions.slice(0, 8).map((item) => (
+                <button
+                  type="button"
+                  className={position === item ? "is-active" : ""}
+                  aria-pressed={position === item}
+                  onClick={() => setPosition(item)}
+                  key={item}
+                >
+                  {item}
+                </button>
+              ))}
+            </div>
+            <div className="coverage-tabs" role="group" aria-label="Filter by board coverage">
+              <button
+                type="button"
+                className={coverageFilter === "covered" ? "is-active" : ""}
+                aria-pressed={coverageFilter === "covered"}
+                onClick={() => setCoverageFilter("covered")}
+              >
+                Ranked
+              </button>
+              <button
+                type="button"
+                className={coverageFilter === "all" ? "is-active" : ""}
+                aria-pressed={coverageFilter === "all"}
+                onClick={() => setCoverageFilter("all")}
+                title="Search the full stored catalog"
+              >
+                <ListFilter size={12} /> Catalog
+              </button>
+              <button
+                type="button"
+                className={coverageFilter === "missing" ? "is-active" : ""}
+                aria-pressed={coverageFilter === "missing"}
+                onClick={() => setCoverageFilter("missing")}
+              >
+                Missing
+              </button>
+            </div>
+          </div>
+          <div
+            className="player-table-wrap"
+            role="region"
+            aria-label="Draft player rankings; scroll horizontally to view all columns"
+            tabIndex={0}
+          >
+            <table className="player-table">
+              <thead>
+                <tr>
+                  <th scope="col">Rank</th>
+                  <th scope="col">Player</th>
+                  <th scope="col">Tier</th>
+                  <th scope="col">ADP</th>
+                  <th scope="col">AAV</th>
+                  <th scope="col">Signal</th>
+                  <th scope="col">
+                    <span className="sr-only">Select</span>
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {filteredRows.map(({ player, value, covered }) => (
+                  <tr
+                    className={[
+                      player.id === selectedPlayerId ? "is-selected" : "",
+                      covered ? "" : "is-board-missing",
+                    ]
+                      .filter(Boolean)
+                      .join(" ")}
+                    key={player.id}
+                  >
+                    <td>
+                      <span className="rank-cell">{value?.overallRank ?? "—"}</span>
+                    </td>
+                    <th scope="row">
+                      <button
+                        className="player-name-button"
+                        type="button"
+                        onClick={() => setSelectedPlayerId(player.id)}
+                      >
+                        <span
+                          className={`position-avatar position-avatar--${player.positions[0]?.toLowerCase() ?? "all"}`}
+                        >
+                          {player.positions[0]}
+                        </span>
+                        <span>
+                          <strong>{player.name}</strong>
+                          <small>
+                            {player.positions.join(" · ")} · {player.nflTeam ?? "FA"}
+                          </small>
+                        </span>
+                      </button>
+                    </th>
+                    <td>{value?.tier ? <span className="tier-pill">T{value.tier}</span> : "—"}</td>
+                    <td>{value?.adp?.toFixed(1) ?? "—"}</td>
+                    <td>
+                      {value?.aav !== null && value?.aav !== undefined
+                        ? "$" + String(value.aav)
+                        : "—"}
+                    </td>
+                    <td>
+                      {value?.target ? (
+                        <span className="board-signal board-signal--value">Target</span>
+                      ) : value?.avoid ? (
+                        <span className="board-signal board-signal--risk">Avoid</span>
+                      ) : !covered ? (
+                        <span className="board-signal">Not on board</span>
+                      ) : (
+                        <span className="board-signal">{player.status ?? "Ranked"}</span>
+                      )}
+                    </td>
+                    <td>{player.id === selectedPlayerId ? <Check size={15} /> : null}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            {filteredRows.length === 0 ? (
+              <div className="board-empty">
+                <Search size={20} />
+                <strong>
+                  {coverageFilter === "covered"
+                    ? rankingVersion
+                      ? "No ranked players match."
+                      : "Choose a draft board or search the catalog."
+                    : search.trim()
+                      ? "No catalog players match."
+                      : "Enter a player name to search the stored catalog."}
+                </strong>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSearch("");
+                    setPosition("ALL");
+                    setCoverageFilter("covered");
+                  }}
+                >
+                  Reset filters
+                </button>
+              </div>
+            ) : null}
+          </div>
+          <div className="board-footer">
+            <span>Showing up to 250 matches.</span>
+            <span>
+              {coveredPlayerCount} board-covered · {availablePlayers.length - coveredPlayerCount}{" "}
+              catalog-only
+            </span>
+          </div>
+        </section>
+
+        <aside className="draft-rail" aria-label="Manual draft entry">
+          <section className="draft-intel-card" aria-labelledby="draft-intel-title">
+            <div className="recommendation-card__head">
+              <span>
+                {session.config.mode === "AUCTION" ? (
+                  <BadgeDollarSign size={16} />
+                ) : (
+                  <ChartNoAxesColumnIncreasing size={16} />
+                )}{" "}
+                <span id="draft-intel-title">
+                  {session.config.mode === "AUCTION" ? "Live price check" : "Best now"}
+                </span>
+              </span>
+              <span className="status-chip">
+                {session.config.mode === "AUCTION" ? "Budget model" : "Rank model"}
+              </span>
+            </div>
+            {session.config.mode === "SNAKE" ? (
+              !rankingVersion ? (
+                <div className="draft-intel-unavailable">
+                  <CircleAlert size={16} />
+                  <p>Select a compatible draft board to build the queue.</p>
+                </div>
+              ) : snakeQueue.length > 0 ? (
+                <>
+                  <ol className="draft-best-now">
+                    {snakeQueue.map((row, index) => (
+                      <li key={row.player.id}>
+                        <button
+                          type="button"
+                          className={row.player.id === selectedPlayerId ? "is-selected" : ""}
+                          onClick={() => setSelectedPlayerId(row.player.id)}
+                        >
+                          <span>{index + 1}</span>
+                          <span>
+                            <strong>{row.player.name}</strong>
+                            <small>
+                              {row.needLabel} · base {row.baseRank.toFixed(1)}
+                            </small>
+                          </span>
+                          <span>{row.player.positions[0]}</span>
+                        </button>
+                      </li>
+                    ))}
+                  </ol>
+                  <p className="draft-intel-note">
+                    Rank or ADP, adjusted by at most 12 places only for an unfilled starter slot. No
+                    availability probability is inferred.
+                  </p>
+                </>
+              ) : (
+                <div className="draft-intel-unavailable">
+                  <CircleAlert size={16} />
+                  <p>The selected board has no rank or ADP coverage for available players.</p>
+                </div>
+              )
+            ) : !rankingVersion || !auctionAnalysis ? (
+              <div className="draft-intel-unavailable">
+                <CircleAlert size={16} />
+                <p>Select a compatible board with AAV data to enable live pricing.</p>
+              </div>
+            ) : auctionAnalysis.available ? (
+              <>
+                <div className="draft-price-grid">
+                  <div>
+                    <span>Fair now</span>
+                    <strong>{draftDollar(auctionAnalysis.fairValue)}</strong>
+                  </div>
+                  <div className="is-primary">
+                    <span>Target</span>
+                    <strong>{draftDollar(auctionAnalysis.targetPrice)}</strong>
+                  </div>
+                  <div>
+                    <span>Legal ceiling</span>
+                    <strong>{draftDollar(auctionAnalysis.legalMaximumBid)}</strong>
+                  </div>
+                </div>
+                <p className="draft-intel-note">
+                  {auctionAnalysis.inflationFactor.toFixed(2)}× live inflation ·{" "}
+                  {auctionAnalysis.coveredPlayers} AAVs for {auctionAnalysis.requiredPlayers} open
+                  slots.
+                </p>
+                {selectedBoardRow?.value?.targetPrice !== null &&
+                selectedBoardRow?.value?.targetPrice !== undefined ? (
+                  <p className="draft-intel-note">
+                    Your board target: {draftDollar(selectedBoardRow.value.targetPrice)}
+                    {selectedBoardRow.value.ceilingPrice !== null ? (
+                      <> · ceiling {draftDollar(selectedBoardRow.value.ceilingPrice)}</>
+                    ) : null}
+                  </p>
+                ) : null}
+              </>
+            ) : (
+              <div className="draft-intel-unavailable">
+                <CircleAlert size={16} />
+                <div>
+                  <p>{auctionAnalysis.message}</p>
+                  <small>
+                    Coverage: {auctionAnalysis.coveredPlayers} of {auctionAnalysis.requiredPlayers}{" "}
+                    required.
+                  </small>
+                </div>
+              </div>
+            )}
+            <p className="draft-keyboard-note">
+              <Keyboard size={14} /> J / K selects · Shift + Enter records
+            </p>
+          </section>
+
+          <section className="recommendation-card">
+            <div className="recommendation-card__head">
+              <span>
+                <Database size={16} /> Manual entry
+              </span>
+              <span className="status-chip">Stored</span>
+            </div>
+            {selectedPlayer ? (
+              <div className="recommendation-player">
+                <span
+                  className={`position-avatar position-avatar--large position-avatar--${selectedPlayer.positions[0]?.toLowerCase() ?? "all"}`}
+                >
+                  {selectedPlayer.positions[0]}
+                </span>
+                <div>
+                  <p>{session.config.mode === "SNAKE" ? "Selection" : "Winning player"}</p>
+                  <h2>{selectedPlayer.name}</h2>
+                  <span>
+                    {selectedPlayer.positions.join(" · ")} ·{" "}
+                    {selectedPlayer.nflTeam ?? "Free agent"}
+                  </span>
+                </div>
+              </div>
+            ) : (
+              <div className="draft-session-empty">
+                <strong>No player selected.</strong>
+              </div>
+            )}
+            {session.config.mode === "AUCTION" ? (
+              <div className="auction-entry">
+                <label>
+                  <span>Winning team</span>
+                  <select
+                    value={selectedTeamId}
+                    onChange={(event) => setSelectedTeamId(event.target.value)}
+                  >
+                    {teamStates.map((team) => (
+                      <option value={team.teamId} key={team.teamId}>
+                        {team.name} · ${team.remainingBudget ?? 0}
+                      </option>
+                    ))}
+                  </select>
+                  <ChevronDown size={14} />
+                </label>
+                <label>
+                  <span>Sale price</span>
+                  <div className="money-input">
+                    <span>$</span>
+                    <input
+                      inputMode="numeric"
+                      value={salePrice}
+                      onChange={(event) => setSalePrice(event.target.value.replace(/[^0-9]/g, ""))}
+                    />
+                  </div>
+                </label>
+              </div>
+            ) : (
+              <div className="snake-comparison">
+                <div>
+                  <span>Pick</span>
+                  <strong>{session.state.nextPick?.overallPick ?? "—"}</strong>
+                </div>
+                <div>
+                  <span>Team</span>
+                  <strong>{activeTeam?.name ?? "—"}</strong>
+                </div>
+                <div>
+                  <span>Open</span>
+                  <strong>{activeTeam?.openSlots ?? 0}</strong>
+                </div>
+              </div>
+            )}
+            {!canMutate ? (
+              <p className="draft-session-permission">
+                <ShieldCheck size={14} /> You can follow this room, but only its owner or
+                commissioner can record events.
+              </p>
+            ) : null}
+            <button
+              className="button button--lime button--full button--record"
+              type="button"
+              onClick={() => void recordSelection()}
+              disabled={
+                !selectedPlayer ||
+                !canMutate ||
+                session.state.complete ||
+                requestState === "loading"
+              }
+            >
+              {requestState === "loading" ? (
+                <LoaderCircle className="spin" size={16} />
+              ) : session.config.mode === "AUCTION" ? (
+                <Gavel size={16} />
+              ) : (
+                <Check size={16} />
+              )}{" "}
+              {session.config.mode === "AUCTION"
+                ? `Record sale${salePrice ? ` at $${salePrice}` : ""}`
+                : `Record pick ${session.state.nextPick?.overallPick ?? "—"}`}
+            </button>
+            {selectedTeam?.maximumBid !== undefined ? (
+              <p className="draft-session-legal-max">
+                Legal maximum for {selectedTeam.name}: ${selectedTeam.maximumBid}
+              </p>
+            ) : null}
+          </section>
+        </aside>
+      </div>
+
+      <section className="draft-log" aria-labelledby="live-draft-log-title">
+        <div className="draft-log__heading">
+          <div>
+            <p className="eyebrow">Draft history</p>
+            <h2 id="live-draft-log-title">Recent entries</h2>
+          </div>
+          <button
+            className="text-action"
+            type="button"
+            onClick={() => void undoLast()}
+            disabled={!canMutate || session.sequence === 0 || requestState === "loading"}
+          >
+            <RotateCcw size={14} /> Undo last active action
+          </button>
+        </div>
+        {recentEvents.length ? (
+          <div className="draft-log__events">
+            {recentEvents.map((record) => {
+              const event = record.event;
+              const player =
+                "playerId" in event
+                  ? session.config.players.find((item) => item.id === event.playerId)
+                  : undefined;
+              const team =
+                "teamId" in event
+                  ? session.config.teams.find((item) => item.id === event.teamId)
+                  : undefined;
+              return (
+                <article className="draft-event draft-event--local" key={record.sequence}>
+                  <span className="draft-event__pick">{record.sequence}</span>
+                  <div>
+                    <strong>
+                      {player?.name ??
+                        (event.type === "DRAFT_EVENT_REVERTED" ? "Undo recorded" : "Draft action")}
+                    </strong>
+                    <span>{team?.name ?? event.type.replaceAll("_", " ").toLowerCase()}</span>
+                  </div>
+                  <strong>{eventLabel(event)}</strong>
+                  <small>Manual</small>
+                </article>
+              );
+            })}
+          </div>
+        ) : (
+          <div className="draft-session-empty">
+            <Database size={18} />
+            <strong>No events yet. Select a player to record the first entry.</strong>
+          </div>
+        )}
+        <p className="draft-log__note">
+          <ShieldCheck size={13} /> Every manual entry is saved and visible only to league members.
+          This is not a live ESPN or Yahoo draft feed.
+        </p>
+      </section>
+    </div>
+  );
+}

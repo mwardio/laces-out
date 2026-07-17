@@ -1,0 +1,45 @@
+{
+  "name": "laces-out",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "engines": {
+    "node": ">=22.22 <25"
+  },
+  "scripts": {
+    "dev": "concurrently -k -n web,api,worker -c cyan,green,yellow \"npm run dev -w @fantasy/web\" \"npm run dev -w @fantasy/api\" \"npm run dev -w @fantasy/worker\"",
+    "build": "npm run build -w @fantasy/api && npm run build -w @fantasy/worker && npm run build -w @fantasy/espn-bridge && npm run build -w @fantasy/web",
+    "start": "concurrently -k -n web,api,worker \"npm run start -w @fantasy/web\" \"npm run start -w @fantasy/api\" \"npm run start -w @fantasy/worker\"",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "audit:high": "npm audit --audit-level=high",
+    "runtime:smoke": "npm run build -w @fantasy/api && npm run build -w @fantasy/worker && npm run build -w @fantasy/espn-bridge && npm run build -w @fantasy/web && node scripts/runtime-smoke.mjs",
+    "lint": "eslint . --max-warnings 0",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "check": "npm run format:check && npm run lint && npm run typecheck && npm run test && npm run build"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.31.0",
+    "@types/node": "^22.16.4",
+    "@types/chrome": "^0.1.1",
+    "@vitest/coverage-v8": "^4.1.10",
+    "concurrently": "^9.2.0",
+    "eslint": "^9.31.0",
+    "eslint-config-prettier": "^10.1.5",
+    "fast-check": "^4.2.0",
+    "globals": "^16.3.0",
+    "prettier": "^3.6.2",
+    "tsup": "^8.5.0",
+    "tsx": "^4.20.3",
+    "typescript": "~5.9.3",
+    "typescript-eslint": "^8.38.0",
+    "vitest": "^4.1.10"
+  }
+}

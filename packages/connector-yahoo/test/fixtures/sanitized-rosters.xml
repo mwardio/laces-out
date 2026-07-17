@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<fantasy_content><league>
+  <league_key>449.l.12345</league_key><league_id>12345</league_id>
+  <name>Sanitized Auction League</name><season>2026</season>
+  <teams count="2">
+    <team><team_key>449.l.12345.t.1</team_key><roster week="4"><players count="1"><player>
+      <player_key>449.p.9001</player_key><player_id>9001</player_id><name><full>Example Quarterback</full></name>
+      <editorial_team_abbr>EX</editorial_team_abbr><display_position>QB</display_position><status>Q</status>
+      <selected_position><position>QB</position></selected_position>
+    </player></players></roster></team>
+    <team><team_key>449.l.12345.t.2</team_key><roster week="4"><players count="1"><player>
+      <player_key>449.p.9002</player_key><player_id>9002</player_id><name><full>Example Receiver</full></name>
+      <editorial_team_abbr>YY</editorial_team_abbr><display_position>WR,W/R/T</display_position>
+      <selected_position><position>W/R/T</position></selected_position>
+    </player></players></roster></team>
+  </teams>
+</league></fantasy_content>
