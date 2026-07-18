@@ -28,8 +28,9 @@ import type { Metadata } from "next";
 import Link from "next/link";
 
 import { LacesOutMark } from "../components/laces-out-mark";
-import { publicContactEmail, yahooDeveloperAccessPending } from "../lib/public-site";
+import { yahooDeveloperAccessPending } from "../lib/public-site";
 
+import { ContactEasterEgg } from "./contact-easter-egg";
 import styles from "./landing.module.css";
 
 export const metadata: Metadata = {
@@ -162,8 +163,6 @@ const trustPoints = [
 ] as const;
 
 export default function LandingPage() {
-  const contactHref = publicContactEmail ? `mailto:${publicContactEmail}` : "/privacy#contact";
-
   return (
     <main className={styles.page}>
       <a className={styles.skipLink} href="#main-content">
@@ -823,7 +822,7 @@ export default function LandingPage() {
           <nav aria-label="Legal and account links">
             <Link href="/privacy">Privacy</Link>
             <Link href="/terms">Terms</Link>
-            <a href={contactHref}>Contact</a>
+            <ContactEasterEgg />
             <Link href="/login">Sign in</Link>
           </nav>
         </div>

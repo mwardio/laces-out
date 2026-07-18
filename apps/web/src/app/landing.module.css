@@ -1778,14 +1778,219 @@
   gap: 22px;
 }
 
-.footerTop nav a {
+.footerTop nav a,
+.footerContact {
   color: #9ca79f;
   font-size: 10px;
   font-weight: 650;
 }
 
-.footerTop nav a:hover {
+.footerContact {
+  padding: 0;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+}
+
+.footerTop nav a:hover,
+.footerContact:hover {
   color: #fff;
+}
+
+.footerContact:focus-visible {
+  color: #fff;
+  outline: 2px solid var(--lime-300);
+  outline-offset: 4px;
+}
+
+.contactDialog {
+  position: fixed;
+  width: min(calc(100% - 32px), 470px);
+  max-width: none;
+  max-height: calc(100dvh - 32px);
+  padding: 0;
+  overflow: visible;
+  color: #eef2ed;
+  background: transparent;
+  border: 0;
+}
+
+.contactDialog::backdrop {
+  background: rgb(4 8 5 / 78%);
+  backdrop-filter: blur(3px);
+}
+
+.contactDialog[open] {
+  animation: contact-dialog-in 150ms ease-out;
+}
+
+.contactDialogPanel {
+  position: relative;
+  min-height: 340px;
+  padding: 30px;
+  overflow: clip;
+  background: #111914;
+  border: 1px solid #344138;
+  border-radius: 16px;
+  box-shadow: 0 26px 80px rgb(0 0 0 / 44%);
+}
+
+.contactDialogPanel::after {
+  position: absolute;
+  right: -58px;
+  bottom: -82px;
+  width: 190px;
+  height: 190px;
+  content: "";
+  border: 1px solid rgb(194 234 108 / 12%);
+  border-radius: 50%;
+  box-shadow: 0 0 0 34px rgb(194 234 108 / 4%);
+  pointer-events: none;
+}
+
+.contactDialogClose {
+  position: absolute;
+  z-index: 2;
+  top: 18px;
+  right: 18px;
+  display: grid;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  place-items: center;
+  color: #96a39a;
+  background: #18221b;
+  border: 1px solid #303c33;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.contactDialogClose:hover {
+  color: #fff;
+  border-color: #526157;
+}
+
+.contactDialogCase {
+  color: #829086;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+}
+
+.contactDialogIcon {
+  display: grid;
+  width: 46px;
+  height: 46px;
+  margin-top: 35px;
+  place-items: center;
+  color: #172017;
+  background: var(--lime-300);
+  border-radius: 10px;
+}
+
+.contactDialogEyebrow {
+  margin-top: 20px;
+  color: var(--lime-300);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+}
+
+.contactDialog h2 {
+  margin-top: 6px;
+  color: #f5f7f4;
+  font-size: 30px;
+  font-weight: 700;
+  letter-spacing: -0.035em;
+  line-height: 1.05;
+}
+
+.contactDialog h2 + p {
+  margin-top: 9px;
+  color: #9da8a0;
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+.contactDialogChoices {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin-top: 28px;
+}
+
+.contactDialogChoices button,
+.contactDialogPrimary {
+  display: inline-flex;
+  min-height: 46px;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 0 18px;
+  color: #eef2ed;
+  background: #1b271f;
+  border: 1px solid #3b4b40;
+  border-radius: 9px;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.contactDialogChoices button:hover {
+  color: #172017;
+  background: var(--lime-300);
+  border-color: var(--lime-300);
+}
+
+.contactDialogReveal {
+  animation: contact-reveal-in 180ms ease-out;
+}
+
+.contactDialogPrimary {
+  position: relative;
+  z-index: 1;
+  margin-top: 28px;
+  color: #172017;
+  background: var(--lime-300);
+  border-color: var(--lime-300);
+}
+
+.contactDialogPrimary:hover {
+  background: #d0f280;
+  border-color: #d0f280;
+}
+
+.contactDialog button:focus-visible {
+  outline: 2px solid #f4f7f2;
+  outline-offset: 3px;
+}
+
+@keyframes contact-dialog-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.985);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes contact-reveal-in {
+  from {
+    opacity: 0;
+    transform: translateY(5px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 .footerBottom {
