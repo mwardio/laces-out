@@ -154,7 +154,7 @@ const app = await buildApp({
         requestedAt: requestedAt.toISOString(),
       },
       {
-        singletonKey: "nflverse-player-catalog",
+        singletonKey: "shared-nfl-data",
         singletonSeconds: 60,
       },
     ),

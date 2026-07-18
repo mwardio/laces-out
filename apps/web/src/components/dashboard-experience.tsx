@@ -283,9 +283,9 @@ function LivePortfolio({ portfolio, reloadPortfolio }: LivePortfolioProps) {
         window.location.assign("/login");
         return;
       }
-      if (!response.ok) throw new Error("Player-catalog check could not be queued.");
+      if (!response.ok) throw new Error("Shared NFL-data check could not be queued.");
       const body = parseJobAccepted(await response.json());
-      if (!body) throw new Error("Player-catalog queue response was invalid.");
+      if (!body) throw new Error("Shared NFL-data queue response was invalid.");
       setSourceRefreshState(body.state === "deduplicated" ? "deduplicated" : "queued");
       await reloadPortfolio();
     } catch {
@@ -303,9 +303,9 @@ function LivePortfolio({ portfolio, reloadPortfolio }: LivePortfolioProps) {
           <h1>{portfolio.leagues.length} connected leagues in one view.</h1>
           <p className="page-subtitle">
             This view uses the latest saved data from your connected leagues. Recommendations appear
-            only after real projection inputs are available. The catalog control checks shared
-            nflverse player identities only; provider league sync and projection imports use their
-            own controls.
+            only after real projection inputs are available. The NFL-data control checks shared
+            player identity, status, and waiver-market sources; provider league sync and projection
+            imports use their own controls.
           </p>
         </div>
         <div className="heading-actions">
@@ -325,7 +325,7 @@ function LivePortfolio({ portfolio, reloadPortfolio }: LivePortfolioProps) {
             type="button"
             onClick={() => void checkPlayerCatalog()}
             disabled={sourceRefreshState === "working"}
-            title="Request an immediate nflverse player-catalog check"
+            title="Request an immediate shared NFL-data check"
           >
             {sourceRefreshState === "working" ? (
               <LoaderCircle className="spin" size={16} />
@@ -339,20 +339,20 @@ function LivePortfolio({ portfolio, reloadPortfolio }: LivePortfolioProps) {
             {sourceRefreshState === "working"
               ? "Requesting…"
               : sourceRefreshState === "queued"
-                ? "Catalog check queued"
+                ? "NFL-data check queued"
                 : sourceRefreshState === "deduplicated"
-                  ? "Catalog check already queued"
+                  ? "NFL-data check already queued"
                   : sourceRefreshState === "error"
-                    ? "Retry catalog check"
-                    : "Check player catalog"}
+                    ? "Retry NFL-data check"
+                    : "Check NFL data"}
           </button>
           <span className="sr-only" role="status" aria-live="polite">
             {sourceRefreshState === "queued"
-              ? "NFL player-catalog check queued."
+              ? "Shared NFL-data check queued."
               : sourceRefreshState === "deduplicated"
-                ? "A recent player-catalog check is already queued."
+                ? "A recent shared NFL-data check is already queued."
                 : sourceRefreshState === "error"
-                  ? "Player-catalog check could not be queued."
+                  ? "Shared NFL-data check could not be queued."
                   : ""}
           </span>
         </div>

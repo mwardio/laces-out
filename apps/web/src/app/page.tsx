@@ -109,7 +109,7 @@ const automationSteps = [
   {
     number: "02",
     title: "Normalize",
-    text: "Turn provider-specific snapshots into one consistent league model.",
+    text: "Keep league truth anchored to its host while shared NFL signals retain their source.",
     icon: Database,
   },
   {
@@ -158,7 +158,7 @@ const trustPoints = [
   {
     icon: Database,
     title: "Source-aware data",
-    text: "Sync times, projection dates, and sample states stay visible instead of being blended together.",
+    text: "League syncs, nflverse identity data, Sleeper signals, and projections keep separate timestamps and provenance.",
   },
 ] as const;
 
@@ -480,6 +480,34 @@ export default function LandingPage() {
                     </li>
                   </ul>
                 </article>
+
+                <article className={styles.providerCard}>
+                  <div className={styles.providerCardHead}>
+                    <div className={styles.providerIdentity}>
+                      <span className={styles.providerBadge}>
+                        <Database size={15} />
+                      </span>
+                      <div>
+                        <p>Shared NFL intelligence</p>
+                        <h3>More than one data feed</h3>
+                      </div>
+                    </div>
+                    <span className={styles.connectionMode}>Daily + hourly checks</span>
+                  </div>
+                  <p className={styles.providerDescription}>
+                    nflverse anchors player identity while Sleeper adds an independent player-status
+                    view and attributed add/drop momentum. Laces Out chooses the authority for each
+                    fact instead of hiding everything behind one vendor.
+                  </p>
+                  <ul>
+                    <li>
+                      <RefreshCw size={13} /> Daily player identity and status checks
+                    </li>
+                    <li>
+                      <TrendingUp size={13} /> Hourly waiver-market momentum
+                    </li>
+                  </ul>
+                </article>
               </div>
 
               <div className={styles.enginePanel} aria-label="Automated decision analysis flow">
@@ -532,9 +560,9 @@ export default function LandingPage() {
                 </div>
 
                 <p className={styles.engineCadence}>
-                  The shared NFL player catalog checks daily. Every completed league sync or
-                  projection import reruns the decision picture with visible source and freshness
-                  details.
+                  Shared player facts check daily and waiver-market momentum checks hourly. Every
+                  completed league sync or projection import reruns the decision picture with
+                  visible source and freshness details.
                 </p>
               </div>
             </div>

@@ -894,6 +894,85 @@ export const dataSources = pgTable(
   ],
 );
 
+export const playerSourceObservations = pgTable(
+  "player_source_observations",
+  {
+    sourceId: uuid("source_id")
+      .notNull()
+      .references(() => dataSources.id, { onDelete: "cascade" }),
+    externalPlayerId: text("external_player_id").notNull(),
+    playerId: uuid("player_id").references(() => players.id, { onDelete: "set null" }),
+    gsisId: text("gsis_id"),
+    fullName: text("full_name").notNull(),
+    nflTeam: text("nfl_team"),
+    primaryPosition: text("primary_position").notNull(),
+    eligiblePositions: text("eligible_positions").array().notNull(),
+    status: text("status"),
+    injuryStatus: text("injury_status"),
+    practiceParticipation: text("practice_participation"),
+    depthChartPosition: text("depth_chart_position"),
+    depthChartOrder: integer("depth_chart_order"),
+    observedAt: timestamp("observed_at", { withTimezone: true }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.sourceId, table.externalPlayerId] }),
+    index("player_source_observations_player_idx").on(table.playerId),
+    index("player_source_observations_observed_idx").on(table.observedAt),
+    check(
+      "player_source_observations_external_id_check",
+      sql`char_length(btrim(${table.externalPlayerId})) between 1 and 64`,
+    ),
+    check("player_source_observations_name_check", sql`char_length(btrim(${table.fullName})) > 0`),
+    check(
+      "player_source_observations_position_check",
+      sql`char_length(btrim(${table.primaryPosition})) > 0 and cardinality(${table.eligiblePositions}) > 0`,
+    ),
+    check(
+      "player_source_observations_depth_order_check",
+      sql`${table.depthChartOrder} is null or ${table.depthChartOrder} between 0 and 99`,
+    ),
+  ],
+);
+
+export const playerMarketObservations = pgTable(
+  "player_market_observations",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    sourceId: uuid("source_id")
+      .notNull()
+      .references(() => dataSources.id, { onDelete: "cascade" }),
+    externalPlayerId: text("external_player_id").notNull(),
+    playerId: uuid("player_id").references(() => players.id, { onDelete: "set null" }),
+    signal: text("signal").$type<"add" | "drop">().notNull(),
+    lookbackHours: integer("lookback_hours").notNull(),
+    rank: integer("rank").notNull(),
+    count: integer("count").notNull(),
+    observedAt: timestamp("observed_at", { withTimezone: true }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("player_market_observations_run_unique").on(
+      table.sourceId,
+      table.signal,
+      table.externalPlayerId,
+      table.observedAt,
+    ),
+    index("player_market_observations_player_observed_idx").on(table.playerId, table.observedAt),
+    index("player_market_observations_source_observed_idx").on(table.sourceId, table.observedAt),
+    check(
+      "player_market_observations_external_id_check",
+      sql`char_length(btrim(${table.externalPlayerId})) between 1 and 64`,
+    ),
+    check("player_market_observations_signal_check", sql`${table.signal} in ('add', 'drop')`),
+    check(
+      "player_market_observations_bounds_check",
+      sql`${table.lookbackHours} between 1 and 168 and ${table.rank} between 1 and 250 and ${table.count} >= 0`,
+    ),
+  ],
+);
+
 export const rosterSnapshots = pgTable(
   "roster_snapshots",
   {

@@ -5,10 +5,12 @@ import pino from "pino";
 
 import { ensureDailyRefresh, registerQueues, registerSchedules, registerWorkers } from "./jobs.js";
 import { NflverseCatalogRefresher } from "./nflverse-catalog.js";
+import { SleeperDataRefresher } from "./sleeper-data.js";
 
 const environment = loadEnvironment();
 const database = createDatabase(environment.DATABASE_URL, 4);
 const catalogRefresher = new NflverseCatalogRefresher({ database: database.db });
+const sleeperRefresher = new SleeperDataRefresher({ database: database.db });
 const logger = pino({
   level: environment.LOG_LEVEL,
   redact: {
@@ -32,7 +34,15 @@ async function start(): Promise<void> {
   await boss.start();
   await registerQueues(boss);
   await registerWorkers(boss, logger, {
-    refreshPlayerCatalog: (force) => catalogRefresher.refresh(force),
+    refreshPlayerData: async (force) => {
+      // Identity is intentionally refreshed first so Sleeper observations and trends can attach to
+      // canonical players during a cold start instead of waiting for the next scheduled run.
+      const nflverse = await catalogRefresher.refresh(force);
+      const sleeper = await sleeperRefresher.refreshCatalog(force);
+      const market = await sleeperRefresher.refreshTrends(force);
+      return { nflverse, sleeper, market };
+    },
+    refreshMarketData: (force) => sleeperRefresher.refreshTrends(force),
   });
   await registerSchedules(boss);
   await ensureDailyRefresh(boss);

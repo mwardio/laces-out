@@ -10,6 +10,8 @@ import {
   leagueMemberships,
   leagues,
   leagueSeasons,
+  dataSources,
+  playerMarketObservations,
   playerProjections,
   players,
   projectionSets,
@@ -132,6 +134,15 @@ export interface DecisionProjectionPlayerRow {
   readonly ceilingPoints: string | null;
 }
 
+export interface DecisionMarketSignalRow {
+  readonly playerId: string | null;
+  readonly signal: "add" | "drop";
+  readonly count: number;
+  readonly rank: number;
+  readonly lookbackHours: number;
+  readonly observedAt: Date;
+}
+
 export interface InSeasonDecisionRepository {
   findMembership(userId: string, leagueId: string): Promise<DecisionMembershipRow | undefined>;
   findLatestSeason(leagueId: string): Promise<DecisionSeasonRow | undefined>;
@@ -161,6 +172,10 @@ export interface InSeasonDecisionRepository {
     projectionSetId: string,
     playerIds: readonly string[],
   ): Promise<readonly DecisionProjectionPlayerRow[]>;
+  listLatestMarketSignals(
+    playerIds: readonly string[],
+    limit: number,
+  ): Promise<readonly DecisionMarketSignalRow[]>;
 }
 
 export class DrizzleInSeasonDecisionRepository implements InSeasonDecisionRepository {
@@ -356,6 +371,36 @@ export class DrizzleInSeasonDecisionRepository implements InSeasonDecisionReposi
       )
       .orderBy(asc(players.id))
       .limit(MAX_ROSTER_ENTRIES);
+  }
+
+  listLatestMarketSignals(
+    ids: readonly string[],
+    limit: number,
+  ): Promise<readonly DecisionMarketSignalRow[]> {
+    if (ids.length === 0) return Promise.resolve([]);
+    return this.#database
+      .selectDistinctOn([playerMarketObservations.playerId, playerMarketObservations.signal], {
+        playerId: playerMarketObservations.playerId,
+        signal: playerMarketObservations.signal,
+        count: playerMarketObservations.count,
+        rank: playerMarketObservations.rank,
+        lookbackHours: playerMarketObservations.lookbackHours,
+        observedAt: playerMarketObservations.observedAt,
+      })
+      .from(playerMarketObservations)
+      .innerJoin(dataSources, eq(playerMarketObservations.sourceId, dataSources.id))
+      .where(
+        and(
+          eq(dataSources.key, "sleeper.trends"),
+          inArray(playerMarketObservations.playerId, [...ids]),
+        ),
+      )
+      .orderBy(
+        playerMarketObservations.playerId,
+        playerMarketObservations.signal,
+        desc(playerMarketObservations.observedAt),
+      )
+      .limit(limit);
   }
 
   #projectionPlayerQuery() {
@@ -1160,6 +1205,29 @@ export class InSeasonDecisionService {
         ]);
       } else {
         try {
+          const marketRows = (
+            await this.#repository.listLatestMarketSignals(
+              candidates.map((candidate) => candidate.id),
+              MAX_WAIVER_CANDIDATES * 2,
+            )
+          ).filter((signal) => {
+            const ageHours = (now.getTime() - signal.observedAt.getTime()) / 3_600_000;
+            return ageHours >= 0 && ageHours <= 6;
+          });
+          const marketByPlayer = new Map<
+            string,
+            Partial<Record<"add" | "drop", DecisionMarketSignalRow>>
+          >();
+          for (const signal of marketRows) {
+            if (!signal.playerId) continue;
+            const current = marketByPlayer.get(signal.playerId) ?? {};
+            current[signal.signal] = signal;
+            marketByPlayer.set(signal.playerId, current);
+          }
+          const peakAddCount = Math.max(
+            1,
+            ...marketRows.filter((signal) => signal.signal === "add").map((signal) => signal.count),
+          );
           const result = evaluateWaiverMoves({
             roster: userRoster,
             candidates,
@@ -1181,6 +1249,13 @@ export class InSeasonDecisionService {
               const positionPeers = candidates.filter((candidate) =>
                 candidate.positions.some((position) => add.positions.includes(position)),
               ).length;
+              const marketSignals = marketByPlayer.get(add.id);
+              const addSignal = marketSignals?.add;
+              const dropSignal = marketSignals?.drop;
+              const baselineCompetition = Math.min(0.9, 0.35 + teamRows.length / 40 + index / 100);
+              const marketCompetition = addSignal
+                ? Math.min(0.95, 0.25 + 0.7 * Math.sqrt(addSignal.count / peakAddCount))
+                : 0;
               const bid =
                 claimedTeam.faabRemaining === null
                   ? null
@@ -1189,7 +1264,7 @@ export class InSeasonDecisionService {
                       remainingBudget: claimedTeam.faabRemaining,
                       urgency: Math.min(1, Math.max(0, move.weightedDelta / 10)),
                       scarcity: Math.max(0, 1 - positionPeers / MAX_WAIVER_CANDIDATES),
-                      competition: Math.min(0.9, 0.35 + teamRows.length / 40 + index / 100),
+                      competition: Math.max(baselineCompetition, marketCompetition),
                     });
               return {
                 add: decisionPlayer(add, projectionById),
@@ -1199,6 +1274,15 @@ export class InSeasonDecisionService {
                 faab: bid
                   ? { low: bid.lowBid, recommended: bid.recommendedBid, high: bid.highBid }
                   : null,
+                market:
+                  addSignal || dropSignal
+                    ? {
+                        addCount: addSignal?.count ?? 0,
+                        dropCount: dropSignal?.count ?? 0,
+                        lookbackHours: addSignal?.lookbackHours ?? dropSignal!.lookbackHours,
+                        observedAt: (addSignal?.observedAt ?? dropSignal!.observedAt).toISOString(),
+                      }
+                    : null,
                 rationale: move.explanation,
               };
             });
@@ -1213,6 +1297,9 @@ export class InSeasonDecisionService {
               recommendations.length === 0
                 ? "No bounded add/drop pairing improved projected roster value."
                 : "FAAB ranges are heuristic budget guidance, not bid guarantees.",
+              marketRows.length > 0
+                ? "Sleeper add/drop momentum informs likely waiver competition, never whether a player clears the roster-value bar."
+                : "No current cross-platform waiver momentum was available, so bid competition uses league-size heuristics only.",
             ],
           };
         } catch {

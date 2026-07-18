@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import {
   InSeasonDecisionService,
   type DecisionMembershipRow,
+  type DecisionMarketSignalRow,
   type DecisionProjectionPlayerRow,
   type DecisionProjectionSetRow,
   type DecisionRosterEntryRow,
@@ -158,6 +159,16 @@ class FakeRepository implements InSeasonDecisionRepository {
   season: DecisionSeasonRow | undefined = season;
   projectionSets: readonly DecisionProjectionSetRow[] = [projectionSet];
   projectionRows: readonly DecisionProjectionPlayerRow[] = projectionRows;
+  marketRows: readonly DecisionMarketSignalRow[] = [
+    {
+      playerId: playerIds.freeQb,
+      signal: "add",
+      count: 45,
+      rank: 1,
+      lookbackHours: 24,
+      observedAt: new Date("2026-09-15T11:00:00.000Z"),
+    },
+  ];
   rosterRows: readonly DecisionRosterEntryRow[] = rosterRows;
   projectionSetQuery:
     | readonly [
@@ -213,6 +224,11 @@ class FakeRepository implements InSeasonDecisionRepository {
   }
   listProjectionPlayersByIds(_setId: string, ids: readonly string[]) {
     return Promise.resolve(this.projectionRows.filter((row) => ids.includes(row.playerId)));
+  }
+  listLatestMarketSignals(ids: readonly string[], limit: number) {
+    return Promise.resolve(
+      this.marketRows.filter((row) => row.playerId && ids.includes(row.playerId)).slice(0, limit),
+    );
   }
 }
 
@@ -273,6 +289,12 @@ describe("InSeasonDecisionService", () => {
         drop: { name: "Low Arm" },
       });
       expect(snapshot.waivers.recommendations[0]?.faab?.recommended).toBeGreaterThan(0);
+      expect(snapshot.waivers.recommendations[0]?.market).toMatchObject({
+        addCount: 45,
+        dropCount: 0,
+        lookbackHours: 24,
+      });
+      expect(snapshot.waivers.notes.join(" ")).toContain("Sleeper add/drop momentum");
       expect(snapshot.waivers.evaluatedMoveCount).toBeLessThanOrEqual(24 * 3);
     }
 
@@ -300,6 +322,22 @@ describe("InSeasonDecisionService", () => {
     });
     expect(snapshot?.waivers.state).toBe("unavailable");
     expect(snapshot?.trades.state).toBe("unavailable");
+  });
+
+  it("does not use stale global waiver momentum for bid competition", async () => {
+    const repository = new FakeRepository();
+    repository.marketRows = repository.marketRows.map((row) => ({
+      ...row,
+      observedAt: new Date("2026-09-14T00:00:00.000Z"),
+    }));
+    const snapshot = await new InSeasonDecisionService(repository, () => NOW).getSnapshot(
+      USER_ID,
+      LEAGUE_ID,
+    );
+
+    if (snapshot?.waivers.state !== "available") throw new Error("Waivers should be available");
+    expect(snapshot.waivers.recommendations[0]?.market).toBeNull();
+    expect(snapshot.waivers.notes.join(" ")).toContain("No current cross-platform waiver momentum");
   });
 
   it("never reports legacy user CSV import time as projection freshness", async () => {

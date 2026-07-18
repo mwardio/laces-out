@@ -575,7 +575,7 @@ export const jobAcceptedSchema = z
   .object({
     jobId: z.string().nullable(),
     state: z.enum(["queued", "deduplicated"]),
-    target: z.literal("nflverse-player-catalog"),
+    target: z.literal("shared-nfl-data"),
     requestedAt: z.iso.datetime(),
   })
   .strict();
@@ -994,6 +994,15 @@ const waiverMoveDecisionSchema = z
     weightedGain: z.number().finite(),
     lineupGain: z.number().finite(),
     faab: faabRangeSchema.nullable(),
+    market: z
+      .object({
+        addCount: z.number().int().nonnegative(),
+        dropCount: z.number().int().nonnegative(),
+        lookbackHours: z.number().int().positive().max(168),
+        observedAt: z.iso.datetime(),
+      })
+      .strict()
+      .nullable(),
     rationale: z.string().min(1),
   })
   .strict();

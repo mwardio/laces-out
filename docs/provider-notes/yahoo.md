@@ -5,9 +5,9 @@ Verified: 2026-07-16
 ## Verified provider contract
 
 Yahoo has an official Fantasy Sports API covering games, leagues, teams, players, and other
-fantasy resources. Private league data is authorized with OAuth. Yahoo's current Fantasy
-developer portal describes an application submission, review, and approval process; API access
-must therefore not be assumed immediately after creating a general Yahoo developer application.
+fantasy resources. Private league data is authorized with OAuth. Yahoo's current Fantasy portal
+describes an application submission, review, and approval process; league sync must therefore not
+be assumed immediately after creating a general Yahoo application.
 
 The implemented authorization path is Authorization Code + S256 PKCE:
 
@@ -88,8 +88,8 @@ Laces Out cannot execute it.
 ## Noncommercial friend-sharing and presentation constraints
 
 The published Yahoo Fantasy Sports API terms reviewed on 2026-07-16 permit this direction only as
-a noncommercial, approved use. They prohibit commercial activity, reselling or sublicensing API
-access, and using the API in a product that competes with Yahoo. The application must therefore
+a noncommercial, approved use. They prohibit commercial activity, reselling or sublicensing
+provider access, and using the API in a product that competes with Yahoo. The application must therefore
 remain private/invite-only and free, and the approval submission must accurately describe access
 for a small group of league friends. “FantasyPros replacement” is a product-design aspiration,
 not permission to market or operate a commercial competitor.

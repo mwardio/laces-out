@@ -269,6 +269,9 @@ function WaiverSection({ snapshot }: { readonly snapshot: InSeasonDecisionSnapsh
                     <strong>{move.faab ? `$${move.faab.recommended}` : "—"}</strong>
                     <small>
                       {move.faab ? `$${move.faab.low}–$${move.faab.high}` : "Budget unavailable"}
+                      {move.market
+                        ? ` · ${move.market.addCount} adds/${move.market.lookbackHours}h`
+                        : ""}
                     </small>
                   </div>
                 </article>

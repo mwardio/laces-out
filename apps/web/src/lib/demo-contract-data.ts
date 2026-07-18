@@ -186,6 +186,12 @@ export const demoDecisionSnapshot: InSeasonDecisionSnapshot = {
         weightedGain: 3.2,
         lineupGain: 0,
         faab: { low: 5, recommended: 8, high: 11 },
+        market: {
+          addCount: 38,
+          dropCount: 2,
+          lookbackHours: 24,
+          observedAt: "2026-09-30T15:00:00.000Z",
+        },
         rationale: "Adds contingent running-back upside while removing a redundant second defense.",
       },
     ],

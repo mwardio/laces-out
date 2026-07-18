@@ -734,7 +734,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
       jobAcceptedSchema.parse({
         jobId,
         state: jobId ? "queued" : "deduplicated",
-        target: "nflverse-player-catalog",
+        target: "shared-nfl-data",
         requestedAt: requestedAt.toISOString(),
       }),
     );

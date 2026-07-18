@@ -28,6 +28,7 @@ COPY packages/projections/package.json packages/projections/package.json
 COPY packages/rankings/package.json packages/rankings/package.json
 COPY packages/security/package.json packages/security/package.json
 COPY packages/source-nflverse/package.json packages/source-nflverse/package.json
+COPY packages/source-sleeper/package.json packages/source-sleeper/package.json
 COPY packages/testkit/package.json packages/testkit/package.json
 
 FROM build-base AS dependencies

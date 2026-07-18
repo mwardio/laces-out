@@ -5,7 +5,9 @@ Date: 2026-07-16
 
 ## Context
 
-The product's core value is analysis. Yahoo now grants read-only Fantasy API access by default and separately reviews writes. ESPN has no current public Fantasy OAuth/API, and undocumented writes would add account, terms, and accidental-transaction risk.
+The product's core value is analysis. Yahoo's supported Fantasy integration is read-only by default
+and separately reviews writes. ESPN has no current public Fantasy OAuth/API, and undocumented
+writes would add account, terms, and accidental-transaction risk.
 
 ## Decision
 

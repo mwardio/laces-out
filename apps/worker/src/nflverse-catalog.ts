@@ -49,6 +49,7 @@ export class NflverseCatalogRefresher {
         attribution: NFLVERSE_ATTRIBUTION,
         attributionUrl: NFLVERSE_ATTRIBUTION_URL,
         checkIntervalMinutes,
+        nextCheckAt: now,
       })
       .onConflictDoUpdate({
         target: dataSources.key,

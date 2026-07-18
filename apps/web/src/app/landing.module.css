@@ -2179,8 +2179,8 @@
   }
 
   .headerInner {
-    min-height: 66px;
-    gap: 12px;
+    min-height: 61px;
+    gap: 10px;
   }
 
   .headerActions {
@@ -2202,42 +2202,60 @@
     display: none;
   }
 
+  .siteHeader .brand strong {
+    font-size: 18px;
+  }
+
+  .brand :global(.brand-mark--small) {
+    width: 27px;
+    height: 27px;
+  }
+
   .brand small {
     display: none;
   }
 
   .hero {
     min-height: 0;
-    padding: 120px 0 62px;
+    padding: 108px 0 56px;
   }
 
   .heroFieldLine {
-    top: 115px;
+    top: 104px;
     right: -300px;
   }
 
+  .heroCopy .kicker {
+    font-size: 9px;
+  }
+
   .heroCopy h1 {
-    font-size: clamp(49px, 15.3vw, 68px);
+    margin-top: 20px;
+    font-size: clamp(44px, 13.8vw, 61px);
   }
 
   .heroLead {
-    margin-top: 22px;
+    margin-top: 19px;
     font-size: 14px;
+    line-height: 1.58;
   }
 
   .heroActions {
     align-items: stretch;
     flex-direction: column;
+    margin-top: 28px;
   }
 
   .heroActions a {
     width: 100%;
+    min-height: 44px;
   }
 
   .heroProof {
     align-items: flex-start;
     flex-direction: column;
-    gap: 8px;
+    gap: 7px;
+    margin-top: 22px;
   }
 
   .productPreview {

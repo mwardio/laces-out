@@ -2,7 +2,7 @@
 
 An invite-only, self-hosted fantasy football decision system for friends using Yahoo and ESPN leagues. It provides user-specific and league-specific draft, lineup, waiver, trade, opponent, and league-wide analysis—not generic rankings with a chat layer.
 
-The product is under active development. The current repository contains DB-backed invite and membership boundaries; official Yahoo OAuth, discovery, and read-only league sync; an implemented, fixture- and smoke-tested multi-league ESPN browser companion plus authenticated canonical-JSON recovery; daily player-catalog checks; custom rankings and projection imports; persistent manual draft rooms; projection-backed lineup, waiver, and trade analysis; league analytics and opponent scouting; an implemented Film room with managed Gemini plus encrypted OpenAI, Anthropic, Gemini, and OpenRouter BYOK; and a responsive interface. Sanctioned 2026 private-league testing plus signed-distribution and terms review remain release gates for the companion. The  tracks the remaining hardening work. Demo data is always labeled; no screen should imply that a provider account is connected when it is not.
+The product is under active development. The current repository contains DB-backed invite and membership boundaries; official Yahoo OAuth, discovery, and read-only league sync; an implemented, fixture- and smoke-tested multi-league ESPN browser companion plus authenticated canonical-JSON recovery; daily nflverse identity and Sleeper player/status checks; hourly attributed Sleeper waiver-market signals; custom rankings and projection imports; persistent manual draft rooms; projection-backed lineup, waiver, and trade analysis; league analytics and opponent scouting; an implemented Film room with managed Gemini plus encrypted OpenAI, Anthropic, Gemini, and OpenRouter BYOK; and a responsive interface. Sanctioned 2026 private-league testing plus signed-distribution and terms review remain release gates for the companion. The  tracks the remaining hardening work. Demo data is always labeled; no screen should imply that a provider account is connected when it is not.
 
 ## Important provider status
 
@@ -22,7 +22,7 @@ and terms notices at `/privacy` and `/terms`. Set `NEXT_PUBLIC_SITE_URL` and
 ```text
 apps/web       Next.js responsive PWA
 apps/api       Fastify REST API, provider ingestion, and job-enqueue boundary
-apps/worker    pg-boss runtime; implemented nflverse player-catalog job plus future-job scaffolding
+apps/worker    pg-boss runtime; shared NFL identity/status/market jobs plus future-job scaffolding
 apps/espn-bridge  private ESPN league browser-sync companion
 
 packages/domain             provider-neutral entities and rules
@@ -33,6 +33,8 @@ packages/db                 Drizzle schema and SQL migrations
 packages/projections        source blending and uncertainty
 packages/engine-*           draft, lineup, waiver, trade engines
 packages/security           credential envelopes and redaction
+packages/source-nflverse    canonical player identity source
+packages/source-sleeper     player/status corroboration and attributed waiver trends
 ```
 
 PostgreSQL is the only required stateful service. Provider packages normalize external data; recommendation packages never import provider code.
@@ -129,18 +131,21 @@ conflict-safe automatic claims, connection-to-league provenance, atomic official
 replay idempotency, and rollback on an invalid bundle;
 `invitation:smoke` proves hashed, single-use capabilities and league membership; and
 `registration:smoke` proves normalized unique member creation plus initial password/session hashes.
-To perform a real network check of the daily player source and update the local catalog, run
+To perform a real network check of the canonical nflverse player source and update the local
+catalog, run
 `npm run catalog:refresh -w @fantasy/worker`.
-The dashboard's authenticated **Check player catalog** action queues that same nflverse catalog
-check. Daily and on-demand catalog checks update shared player identities only: Yahoo league sync,
-ESPN browser sync and configured projection imports remain separate workflows in
-Connections and Projections.
+The dashboard's authenticated **Check NFL data** action queues the complete shared-data sweep:
+nflverse identity, Sleeper player/status observations, and Sleeper add/drop momentum. Daily and
+on-demand checks do not replace Yahoo league sync, ESPN browser sync, or configured projection
+imports; those remain separate workflows in Connections and Projections. Sleeper market momentum
+can adjust likely FAAB competition, but a waiver recommendation still has to improve modeled roster
+value.
 `runtime:smoke` builds and actually starts the production API, worker, and web app; verifies API
 liveness/database readiness plus a rendered invite route on isolated ports; then shuts them down.
 
 ## Yahoo setup
 
-1. Apply through the current Yahoo Fantasy developer portal for read-only Fantasy API access.
+1. Apply through the current Yahoo Fantasy portal to enable read-only league sync.
 2. Register an exact callback such as `https://your-host.example/v1/connections/yahoo/callback`.
 3. Set `YAHOO_CLIENT_ID`, `YAHOO_CLIENT_SECRET`, and `YAHOO_REDIRECT_URI` only on the API server.
 4. Keep write access disabled. The connector uses Authorization Code + PKCE and serializes each

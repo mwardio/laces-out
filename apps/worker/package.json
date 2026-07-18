@@ -13,6 +13,7 @@
     "@fantasy/config": "*",
     "@fantasy/db": "*",
     "@fantasy/source-nflverse": "*",
+    "@fantasy/source-sleeper": "*",
     "drizzle-orm": "^0.45.2",
     "pg-boss": "^12.5.1",
     "pino": "^9.7.0"

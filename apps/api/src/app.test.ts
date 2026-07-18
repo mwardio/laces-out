@@ -423,7 +423,7 @@ describe("API", () => {
     expect(response.json()).toMatchObject({
       jobId: "refresh-job-1",
       state: "queued",
-      target: "nflverse-player-catalog",
+      target: "shared-nfl-data",
     });
     expect(enqueued).toMatchObject([
       {
