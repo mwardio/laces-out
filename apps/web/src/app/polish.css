@@ -44,111 +44,19 @@
   /* Brand */
   .brand-mark {
     position: relative;
-    display: grid;
-    overflow: hidden;
+    display: block;
     width: 38px;
     height: 38px;
     flex: 0 0 auto;
-    place-items: center;
-    color: var(--ink-950);
-    background: var(--lime-300);
-    border: 1px solid rgb(255 255 255 / 22%);
-    border-radius: 9px;
+    background: url("/brand/laces-out-playbook-mark.png") center / contain no-repeat;
+    border: 0;
+    border-radius: 0;
     box-shadow: none;
-  }
-
-  .brand-mark > svg {
-    position: absolute;
-    top: 50%;
-    left: 50%;
-    width: 35px;
-    height: 35px;
-    transform: translate(-50%, -50%);
-  }
-
-  .brand-mark__shadow {
-    fill: var(--green-600);
-    opacity: 0.55;
-  }
-
-  .brand-mark__base,
-  .brand-mark__base-foot {
-    fill: var(--ink-950);
-  }
-
-  .brand-mark__orb {
-    fill: #eef8d7;
-    stroke: var(--ink-950);
-    stroke-width: 2.4;
-  }
-
-  .brand-mark__orb-glow {
-    fill: var(--lime-300);
-    opacity: 0.42;
-  }
-
-  .brand-mark__orb-rim,
-  .brand-mark__glint,
-  .brand-mark__base-rim,
-  .brand-mark__seam,
-  .brand-mark__lace {
-    fill: none;
-    stroke-linecap: round;
-  }
-
-  .brand-mark__orb-rim {
-    stroke: #6f9d47;
-    stroke-width: 1.1;
-  }
-
-  .brand-mark__glint {
-    stroke: white;
-    stroke-width: 2.4;
-    opacity: 0.9;
-  }
-
-  .brand-mark__base-rim {
-    stroke: #8fbd53;
-    stroke-width: 1.5;
-  }
-
-  .brand-mark__football {
-    fill: #70462f;
-    stroke: var(--ink-950);
-    stroke-linejoin: round;
-    stroke-width: 1.7;
-  }
-
-  .brand-mark__football-shine {
-    fill: none;
-    stroke: #b77b50;
-    stroke-linecap: round;
-    stroke-width: 1.6;
-  }
-
-  .brand-mark__seam {
-    fill: none;
-    stroke: #281b14;
-    stroke-linecap: round;
-    stroke-width: 2.2;
-  }
-
-  .brand-mark__lace {
-    fill: none;
-    stroke: #fff3d8;
-    stroke-linecap: round;
-    stroke-width: 1.65;
   }
 
   .brand-mark--small {
     width: 31px;
     height: 31px;
-    border-radius: 7px;
-  }
-
-  .brand-mark--small > svg {
-    width: 29px;
-    height: 29px;
   }
 
   .brand-copy strong {
