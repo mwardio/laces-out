@@ -20,7 +20,7 @@ chat subscriptions are not transferable model API credentials.
 ## Managed default
 
 When `GEMINI_API_KEY` is present in the API server environment, every signed-in member can use Film
-Room without provider setup. Managed requests always use `gemini-3.1-flash-lite`; clients cannot
+Room without provider setup. Managed requests always use `gemini-3.5-flash`; clients cannot
 override that model. The default allowance is 50 requests per member per UTC day with a 2,000-token
 answer ceiling. Both limits are operator-configurable. A saved member key takes precedence for its
 provider, and removing a member Gemini key restores managed Gemini.
@@ -32,12 +32,12 @@ discloses that processing.
 
 ## Implemented BYOK provider contracts
 
-| Provider      | Native endpoint                 | Authentication               | Default model           |
-| ------------- | ------------------------------- | ---------------------------- | ----------------------- |
-| OpenAI        | `POST /v1/responses`            | Bearer API key               | `gpt-5.6-luna`          |
-| Anthropic     | `POST /v1/messages`             | `x-api-key` plus API version | `claude-sonnet-5`       |
-| Google Gemini | `POST /v1/interactions`         | `x-goog-api-key`             | `gemini-3.1-flash-lite` |
-| OpenRouter    | `POST /api/v1/chat/completions` | Bearer API key               | `~openai/gpt-latest`    |
+| Provider      | Native endpoint                 | Authentication               | Default model        |
+| ------------- | ------------------------------- | ---------------------------- | -------------------- |
+| OpenAI        | `POST /v1/responses`            | Bearer API key               | `gpt-5.6-luna`       |
+| Anthropic     | `POST /v1/messages`             | `x-api-key` plus API version | `claude-sonnet-5`    |
+| Google Gemini | `POST /v1/interactions`         | `x-goog-api-key`             | `gemini-3.5-flash`   |
+| OpenRouter    | `POST /api/v1/chat/completions` | Bearer API key               | `~openai/gpt-latest` |
 
 The model field is editable only after a member supplies a key because provider catalogs change
 faster than this application. Laces Out uses the four native protocols rather than relying on a
@@ -53,7 +53,7 @@ Official sources:
 - <https://platform.claude.com/docs/en/manage-claude/authentication>
 - <https://platform.claude.com/docs/en/api/messages/create>
 - <https://ai.google.dev/gemini-api/docs/interactions-overview>
-- <https://ai.google.dev/gemini-api/docs/models/gemini-3.1-flash-lite>
+- <https://ai.google.dev/gemini-api/docs/models/gemini-3.5-flash>
 - <https://ai.google.dev/gemini-api/docs/pricing>
 - <https://ai.google.dev/gemini-api/docs/api-key>
 - <https://ai.google.dev/api/interactions-api-v1>

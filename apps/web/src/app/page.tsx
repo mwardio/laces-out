@@ -139,7 +139,7 @@ const aiFeatures = [
   {
     icon: BrainCircuit,
     title: "Gemini included",
-    text: "Every signed-in member starts with Gemini 3.1 Flash-Lite analysis. No provider setup or personal API key is required.",
+    text: "Every signed-in member starts with Gemini 3.5 Flash analysis. No provider setup or personal API key is required.",
   },
   {
     icon: KeyRound,
@@ -771,10 +771,10 @@ export default function LandingPage() {
               <p className={styles.sectionKicker}>Gemini included · Add your own model anytime</p>
               <h2>Fueled by Gemini. Bring another model when you want.</h2>
               <p>
-                Film Room works as soon as you sign in, using Gemini 3.1 Flash-Lite through the
-                Laces Out account. Every request combines synced league facts, the Decision Desk,
-                and league analytics so the answer explains the actual board instead of guessing
-                from a generic prompt.
+                Film Room works as soon as you sign in, using Gemini 3.5 Flash through the Laces Out
+                account. Every request combines synced league facts, the Decision Desk, and league
+                analytics so the answer explains the actual board instead of guessing from a generic
+                prompt.
               </p>
             </div>
 

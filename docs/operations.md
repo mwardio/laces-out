@@ -37,7 +37,7 @@ become healthy.
 
 To make Film Room available without member setup, set `GEMINI_API_KEY` in `.env` to a Google AI
 Studio key restricted to the Gemini API. The key is passed only to the API container. Managed calls
-use the fixed `gemini-3.1-flash-lite` model, default to 50 requests per member per UTC day, and cap
+use the fixed `gemini-3.5-flash` model, default to 50 requests per member per UTC day, and cap
 answers at 2,000 tokens. Adjust `MANAGED_AI_DAILY_REQUEST_LIMIT` or
 `MANAGED_AI_MAX_OUTPUT_TOKENS` only after reviewing the project's current limits in AI Studio.
 Never prefix the key with `NEXT_PUBLIC_` or pass it as a Docker build argument.

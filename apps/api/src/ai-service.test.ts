@@ -246,7 +246,7 @@ describe("AI service", () => {
       configured: false,
       accessMode: "managed",
       modelEditable: false,
-      model: "gemini-3.1-flash-lite",
+      model: "gemini-3.5-flash",
       dailyRequestLimit: 50,
     });
 
@@ -258,11 +258,11 @@ describe("AI service", () => {
     expect(included).toMatchObject({
       provider: "gemini",
       accessMode: "managed",
-      model: "gemini-3.1-flash-lite",
+      model: "gemini-3.5-flash",
     });
     expect(complete.mock.calls[0]?.[0]).toMatchObject({
       apiKey: "managed-gemini-secret",
-      model: "gemini-3.1-flash-lite",
+      model: "gemini-3.5-flash",
       maxOutputTokens: 2000,
     });
     expect(repository.usage[0]).toMatchObject({

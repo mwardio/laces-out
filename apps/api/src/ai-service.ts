@@ -39,13 +39,13 @@ export const AI_PROVIDER_DEFAULTS: Readonly<
 > = {
   openai: { model: "gpt-5.6-luna", dailyRequestLimit: 25, maxOutputTokens: 2000 },
   anthropic: { model: "claude-sonnet-5", dailyRequestLimit: 25, maxOutputTokens: 2000 },
-  gemini: { model: "gemini-3.1-flash-lite", dailyRequestLimit: 25, maxOutputTokens: 2000 },
+  gemini: { model: "gemini-3.5-flash", dailyRequestLimit: 25, maxOutputTokens: 2000 },
   openrouter: { model: "~openai/gpt-latest", dailyRequestLimit: 25, maxOutputTokens: 2000 },
 };
 
 const PROVIDERS = ["openai", "anthropic", "gemini", "openrouter"] as const;
 const MAX_CONTEXT_JSON_CHARS = 48_000;
-export const MANAGED_GEMINI_MODEL = "gemini-3.1-flash-lite";
+export const MANAGED_GEMINI_MODEL = "gemini-3.5-flash";
 
 export interface ManagedGeminiConfiguration {
   readonly apiKey: string;

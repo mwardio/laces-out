@@ -82,7 +82,7 @@ describe("AI routes", () => {
         outcome: "generated",
         provider: "gemini",
         accessMode: "managed",
-        model: "gemini-3.1-flash-lite",
+        model: "gemini-3.5-flash",
         league: { id: LEAGUE_ID, name: "North Loop Auction" },
         title: "Waiver wire scan",
         answer: "Hold this week. [Decision Desk]",
