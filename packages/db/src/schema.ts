@@ -1579,7 +1579,7 @@ export const firstPartyRosChampionArtifacts = pgTable(
     ),
     check(
       "first_party_ros_champion_artifacts_identity_check",
-      sql`char_length(btrim(${table.scoringProfileKey})) between 1 and 256 and char_length(btrim(${table.modelVersion})) between 1 and 128 and char_length(btrim(${table.policyVersion})) between 1 and 128 and char_length(btrim(${table.calibrationVersion})) between 1 and 128`,
+      sql`char_length(btrim(${table.scoringProfileKey})) between 1 and 8192 and char_length(btrim(${table.modelVersion})) between 1 and 128 and char_length(btrim(${table.policyVersion})) between 1 and 128 and char_length(btrim(${table.calibrationVersion})) between 1 and 128`,
     ),
     check(
       "first_party_ros_champion_artifacts_checksum_check",

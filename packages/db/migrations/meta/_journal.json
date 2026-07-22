@@ -127,6 +127,13 @@
       "when": 1784660132995,
       "tag": "0017_lonely_champion",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1784660133995,
+      "tag": "0018_widened_identity",
+      "breakpoints": true
     }
   ]
 }

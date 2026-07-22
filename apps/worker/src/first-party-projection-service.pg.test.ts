@@ -404,6 +404,33 @@ describe.skipIf(!dockerAvailable)(
         `);
       const modelRunIndexNames = new Set(modelRunIndexRows.map((row) => row.indexname));
       expect(modelRunIndexNames.has("projection_model_runs_target_checksum_unique")).toBe(true);
+
+      // Regression for migration 0018: a champion-artifact scoring-profile key is the full
+      // canonical scoring-rules JSON (kilobytes, not a short identifier). The 0017 identity
+      // check capped it at 256 characters and rejected the first real admission.
+      const longScoringKey = JSON.stringify(
+        Array.from({ length: 30 }, (_, index) => ({
+          statId: `pg-test-stat-${index}`,
+          points: index * 0.1,
+          bonuses: [],
+        })),
+      );
+      expect(longScoringKey.length).toBeGreaterThan(256);
+      await mainHandle.db.execute(sql`
+          insert into first_party_ros_champion_artifacts
+            (season, scoring_profile_key, model_version, policy_version, calibration_version,
+             evidence_through_season, source_checksums, policy, release_gate, artifact_checksum,
+             admitted_at)
+          values
+            (2031, ${longScoringKey}, 'pg-test-model-v1', 'pg-test-policy-v1', 'pg-test-cal-v1',
+             2030, ${'[{"key":"pg-test","checksum":"' + "a".repeat(64) + '"}]'}::jsonb,
+             '{}'::jsonb, '{}'::jsonb, ${"b".repeat(64)}, ${FIXED_NOW.toISOString()})
+        `);
+      const artifactRows = await mainHandle.db.execute<{ count: string }>(sql`
+          select count(*)::text as count from first_party_ros_champion_artifacts
+          where season = 2031
+        `);
+      expect(artifactRows[0]?.count).toBe("1");
     }, 20_000);
 
     it("documents why raw sql fragments must serialize Dates explicitly (regression guard for the fixed #recordSourceSuccess defect)", async () => {
