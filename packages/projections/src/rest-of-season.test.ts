@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   FIRST_PARTY_ROS_MODEL_VERSION,
+  FIRST_PARTY_ROS_SEED_VERSION,
   applyFirstPartyRosIntervalCalibration,
   diagnoseFirstPartyRosConvergence,
   evaluateFirstPartyRosChampionPolicy,
@@ -108,8 +109,9 @@ describe("first-party ROS distribution", () => {
     expect(reverse).toEqual(forward);
     expect(forward.provenance.modelVersion).toBe(FIRST_PARTY_ROS_MODEL_VERSION);
     expect(forward.provenance.intervalCalibration).toBe("simulation-only");
-    // The seed material embeds FIRST_PARTY_ROS_MODEL_VERSION, so this pinned digest necessarily
-    // changed with the v3 -> v4 model version bump.
+    // The seed material embeds FIRST_PARTY_ROS_SEED_VERSION (split from the model version at v7
+    // so the kicker-only change cannot reseed non-kicker positions); this digest is frozen at its
+    // v6 value and must survive model version bumps that leave non-K draw consumption unchanged.
     expect(forward.provenance.seedHash).toBe(
       "26c02a1b0d54736ae2da198b64e058d33d41d0560ee53eae4c9e9844ee4501ce",
     );
@@ -396,9 +398,12 @@ describe("first-party ROS distribution", () => {
         { role: 0, production: parents.has(component) ? 0 : 2 },
       ]),
     );
+    // Position QB keeps this synthetic mixed-component fixture on the lognormal shock path whose
+    // invariant restoration is under test; model v7 routes position K to the count process, which
+    // satisfies these identities by construction and is covered by its own coherence test.
     const result = projectFirstPartyRestOfSeason(
       projectionInput({
-        position: "K",
+        position: "QB",
         windowEndWeek: 5,
         weeks: [
           {
@@ -546,6 +551,335 @@ describe("first-party ROS distribution", () => {
     expect(() => projectFirstPartyRestOfSeason(projectionInput({ scenarioCount: 64 }))).toThrow(
       "between 128 and 16384",
     );
+  });
+});
+
+const kickerScoringProfile = {
+  id: "test-kicker-ppr",
+  rules: [
+    { statId: "field_goals_made_0_39", points: 3 },
+    { statId: "field_goals_made_40_49", points: 4 },
+    { statId: "field_goals_made_50_plus", points: 5 },
+    { statId: "field_goals_missed", points: -1 },
+    { statId: "extra_points_made", points: 1 },
+  ],
+} as const;
+
+const kickerProcess = {
+  fgEventDispersion: 0.83,
+  xpDispersion: 0.85,
+  recordedMissRatio: 0.95,
+  centerVolatility: 0,
+  bucketMix: [0.57, 0.27, 0.16],
+} as const;
+
+function kickerWeek(
+  weekNumber: number,
+  options: {
+    readonly bye?: boolean;
+    readonly made0_39?: number;
+    readonly made40_49?: number;
+    readonly made50Plus?: number;
+    readonly attempted?: number;
+    readonly extraPoints?: number;
+  } = {},
+): FirstPartyRosWeeklyScenarioInput {
+  const bye = options.bye ?? false;
+  const made0_39 = options.made0_39 ?? 0.95;
+  const made40_49 = options.made40_49 ?? 0.45;
+  const made50Plus = options.made50Plus ?? 0.28;
+  const made = made0_39 + made40_49 + made50Plus;
+  const attempted = options.attempted ?? made + 0.3;
+  const extraPoints = options.extraPoints ?? 2.2;
+  const components = {
+    field_goals_made_0_19: made0_39 * 0.05,
+    field_goals_made_20_29: made0_39 * 0.45,
+    field_goals_made_30_39: made0_39 * 0.5,
+    field_goals_made_0_39: made0_39,
+    field_goals_made_40_49: made40_49,
+    field_goals_made_50_59: made50Plus * 0.9,
+    field_goals_made_60_plus: made50Plus * 0.1,
+    field_goals_made_50_plus: made50Plus,
+    field_goals_made: made,
+    field_goals_attempted: attempted,
+    field_goals_missed: attempted - made,
+    extra_points_made: extraPoints,
+    extra_points_attempted: extraPoints / 0.95,
+    extra_points_missed: extraPoints / 0.95 - extraPoints,
+  };
+  const componentElasticities = Object.fromEntries(
+    Object.keys(components).map((key) => [key, { role: 1, production: 1 }]),
+  );
+  return {
+    season: 2026,
+    week: weekNumber,
+    scheduled: !bye,
+    bye,
+    contextualComponents: bye
+      ? Object.fromEntries(Object.keys(components).map((k) => [k, 0]))
+      : components,
+    recencyComponents: bye
+      ? Object.fromEntries(Object.keys(components).map((k) => [k, 0]))
+      : components,
+    componentElasticities,
+  };
+}
+
+function kickerInput(
+  overrides: Partial<FirstPartyRosProjectionInput> = {},
+): FirstPartyRosProjectionInput {
+  const weeks = Array.from({ length: 4 }, (_, index) => kickerWeek(index + 5));
+  return {
+    ...projectionInput(),
+    position: "K",
+    windowStartWeek: 5,
+    windowEndWeek: 8,
+    weeks,
+    scoringProfile: kickerScoringProfile,
+    kicker: kickerProcess,
+    scenarioCount: 2_048,
+    ...overrides,
+  };
+}
+
+describe("first-party ROS kicker count process (model v7)", () => {
+  it("requires the kicker process input for position K and rejects it elsewhere", () => {
+    expect(() => {
+      const { kicker, ...withoutKicker } = kickerInput();
+      void kicker;
+      projectFirstPartyRestOfSeason(withoutKicker);
+    }).toThrow("required for position K");
+    expect(() => projectFirstPartyRestOfSeason(projectionInput({ kicker: kickerProcess }))).toThrow(
+      "only supported for position K",
+    );
+  });
+
+  it("keeps the model and seed version constants split with the v6 seed lineage", () => {
+    expect(FIRST_PARTY_ROS_MODEL_VERSION).toBe("laces-ros-distribution-v7");
+    expect(FIRST_PARTY_ROS_SEED_VERSION).toBe("laces-ros-distribution-v6");
+  });
+
+  it("is deterministic and satisfies the prefix property for pinned kicker inputs", () => {
+    const first = projectFirstPartyRestOfSeason(kickerInput());
+    const second = projectFirstPartyRestOfSeason(kickerInput());
+    expect(second).toEqual(first);
+    expect(first.provenance.modelVersion).toBe("laces-ros-distribution-v7");
+  });
+
+  it("keeps every simulated kicker week on the exact scoring lattice", () => {
+    const projection = projectFirstPartyRestOfSeason(kickerInput({ scenarioCount: 512 }));
+    // Weekly quantiles interpolate between lattice atoms, so probe the lattice through the
+    // aggregate: with one scheduled week and always-available fixtures the totals are per-game
+    // scores and must be integers.
+    const oneWeek = projectFirstPartyRestOfSeason(
+      kickerInput({
+        windowStartWeek: 5,
+        windowEndWeek: 5,
+        weeks: [kickerWeek(5)],
+        availability: {
+          ...projectionInput().availability,
+          newAbsenceProbability: 0,
+        },
+        scenarioCount: 512,
+      }),
+    );
+    // Scenario totals are integer lattice points: their mean times the power-of-two scenario
+    // count is exactly representable and integral, and the interpolating median sits either on an
+    // atom or exactly halfway between two adjacent atoms.
+    expect(Number.isInteger(oneWeek.meanPoints * 512)).toBe(true);
+    expect(Number.isInteger(2 * oneWeek.p50Points)).toBe(true);
+    expect(oneWeek.p15Points).toBeGreaterThanOrEqual(-4);
+    expect(projection.state).toBe("projected");
+  });
+
+  it("emits a coherent kicker component map that satisfies every football identity", () => {
+    const projection = projectFirstPartyRestOfSeason(
+      kickerInput({
+        availability: { ...projectionInput().availability, newAbsenceProbability: 0 },
+      }),
+    );
+    const expected = projection.expectedComponents;
+    expect(expected.field_goals_made).toBeCloseTo(
+      expected.field_goals_made_0_39! +
+        expected.field_goals_made_40_49! +
+        expected.field_goals_made_50_plus!,
+      10,
+    );
+    expect(expected.field_goals_attempted).toBeCloseTo(
+      expected.field_goals_made! + expected.field_goals_missed!,
+      10,
+    );
+    expect(expected.field_goals_made_0_39).toBeCloseTo(
+      expected.field_goals_made_0_19! +
+        expected.field_goals_made_20_29! +
+        expected.field_goals_made_30_39!,
+      10,
+    );
+    expect(expected.field_goals_made_50_plus).toBeCloseTo(
+      expected.field_goals_made_50_59! + expected.field_goals_made_60_plus!,
+      10,
+    );
+    expect(expected.extra_points_attempted).toBeCloseTo(expected.extra_points_made!, 10);
+    expect(expected.extra_points_missed).toBe(0);
+  });
+
+  it("preserves the pinned per-component means through the count process", () => {
+    const weeks = Array.from({ length: 4 }, (_, index) => kickerWeek(index + 5));
+    const projection = projectFirstPartyRestOfSeason(
+      kickerInput({
+        weeks,
+        availability: { ...projectionInput().availability, newAbsenceProbability: 0 },
+        scenarioCount: 16_384,
+      }),
+    );
+    const expected = projection.expectedComponents;
+    // Four always-available weeks at the fixture rates; loose 3-sigma-style bounds.
+    expect(expected.field_goals_made_0_39!).toBeGreaterThan(4 * 0.95 * 0.94);
+    expect(expected.field_goals_made_0_39!).toBeLessThan(4 * 0.95 * 1.06);
+    expect(expected.field_goals_made_40_49!).toBeGreaterThan(4 * 0.45 * 0.9);
+    expect(expected.field_goals_made_40_49!).toBeLessThan(4 * 0.45 * 1.1);
+    expect(expected.extra_points_made!).toBeGreaterThan(4 * 2.2 * 0.95);
+    expect(expected.extra_points_made!).toBeLessThan(4 * 2.2 * 1.05);
+    // Recorded-miss semantics: E[MISS] tracks recordedMissRatio x (att - made), never att - made.
+    expect(expected.field_goals_missed!).toBeGreaterThan(4 * 0.95 * 0.3 * 0.85);
+    expect(expected.field_goals_missed!).toBeLessThan(4 * 0.95 * 0.3 * 1.15);
+  });
+
+  it("realizes the calibrated under-dispersion and collapses to Poisson at phi one", () => {
+    const base = kickerInput({
+      windowStartWeek: 5,
+      windowEndWeek: 5,
+      weeks: [kickerWeek(5)],
+      availability: { ...projectionInput().availability, newAbsenceProbability: 0 },
+      scenarioCount: 16_384,
+    });
+    const dispersed = projectFirstPartyRestOfSeason(base);
+    const poisson = projectFirstPartyRestOfSeason({
+      ...base,
+      kicker: { ...kickerProcess, fgEventDispersion: 1 },
+    });
+    // Same stream layout: count parameters must not perturb the availability chain.
+    expect(poisson.expectedGames).toBe(dispersed.expectedGames);
+    // The under-dispersed run concentrates: its variance strictly below the Poisson run's.
+    expect(dispersed.standardDeviation).toBeLessThan(poisson.standardDeviation);
+  });
+
+  it("produces a discrete distribution with mass at zero-or-negative and strong games", () => {
+    const projection = projectFirstPartyRestOfSeason(
+      kickerInput({
+        windowStartWeek: 5,
+        windowEndWeek: 5,
+        weeks: [kickerWeek(5, { made0_39: 0.5, made40_49: 0.2, made50Plus: 0.1, extraPoints: 1 })],
+        availability: { ...projectionInput().availability, newAbsenceProbability: 0 },
+        scenarioCount: 8_192,
+      }),
+    );
+    // Low-volume kicker week: sizable mass at <= 0 yet P85 at a multi-kick game.
+    expect(projection.p15Points).toBeLessThanOrEqual(0);
+    expect(projection.p85Points).toBeGreaterThanOrEqual(5);
+  });
+
+  it("treats a zero-intensity kicker week as a deterministic zero-point game", () => {
+    const zeroWeek = kickerWeek(5, {
+      made0_39: 0,
+      made40_49: 0,
+      made50Plus: 0,
+      attempted: 0,
+      extraPoints: 0,
+    });
+    const projection = projectFirstPartyRestOfSeason(
+      kickerInput({
+        windowStartWeek: 5,
+        windowEndWeek: 5,
+        weeks: [zeroWeek],
+        availability: { ...projectionInput().availability, newAbsenceProbability: 0 },
+        scenarioCount: 512,
+      }),
+    );
+    expect(projection.meanPoints).toBe(0);
+    expect(projection.standardDeviation).toBe(0);
+    expect(projection.expectedGames).toBe(1);
+    expect(Number.isFinite(projection.p85Points)).toBe(true);
+  });
+
+  it("keeps kicker byes as deterministic zero weeks without consuming availability state", () => {
+    const projection = projectFirstPartyRestOfSeason(
+      kickerInput({
+        windowStartWeek: 5,
+        windowEndWeek: 6,
+        weeks: [kickerWeek(5, { bye: true }), kickerWeek(6)],
+        scenarioCount: 512,
+      }),
+    );
+    expect(projection.weekly[0]!.meanPoints).toBe(0);
+    expect(projection.weekly[0]!.bye).toBe(true);
+    expect(projection.weekly[1]!.meanPoints).toBeGreaterThan(0);
+  });
+
+  it("pairs antithetically: pair means concentrate and the center factor stays mean-one", () => {
+    const withCenter = projectFirstPartyRestOfSeason(
+      kickerInput({
+        kicker: { ...kickerProcess, centerVolatility: 0.25 },
+        availability: { ...projectionInput().availability, newAbsenceProbability: 0 },
+        scenarioCount: 16_384,
+      }),
+    );
+    const withoutCenter = projectFirstPartyRestOfSeason(
+      kickerInput({
+        availability: { ...projectionInput().availability, newAbsenceProbability: 0 },
+        scenarioCount: 16_384,
+      }),
+    );
+    // The static center factor is mean-one by construction, so the aggregate mean moves by well
+    // under its added dispersion while the spread strictly widens.
+    expect(Math.abs(withCenter.meanPoints - withoutCenter.meanPoints)).toBeLessThan(
+      0.05 * withoutCenter.meanPoints,
+    );
+    expect(withCenter.standardDeviation).toBeGreaterThan(withoutCenter.standardDeviation);
+  });
+
+  it("validates kicker process parameter ranges fail-closed", () => {
+    expect(() =>
+      projectFirstPartyRestOfSeason(
+        kickerInput({ kicker: { ...kickerProcess, fgEventDispersion: 0.5 } }),
+      ),
+    ).toThrow("between 0.6 and 1");
+    expect(() =>
+      projectFirstPartyRestOfSeason(
+        kickerInput({ kicker: { ...kickerProcess, xpDispersion: 1.2 } }),
+      ),
+    ).toThrow("between 0.7 and 1.05");
+    expect(() =>
+      projectFirstPartyRestOfSeason(
+        kickerInput({ kicker: { ...kickerProcess, recordedMissRatio: 0.5 } }),
+      ),
+    ).toThrow("between 0.85 and 1");
+    expect(() =>
+      projectFirstPartyRestOfSeason(
+        kickerInput({ kicker: { ...kickerProcess, bucketMix: [0.5, 0.5, 0.5] } }),
+      ),
+    ).toThrow("sum to one");
+  });
+});
+
+describe("non-kicker byte identity across the v7 bump", () => {
+  it("reproduces the v6 golden WR projection byte-for-byte", async () => {
+    const { readFileSync } = await import("node:fs");
+    const golden = JSON.parse(
+      readFileSync(new URL("./rest-of-season.v6-golden-wr.json", import.meta.url), "utf8"),
+    ) as ReturnType<typeof projectFirstPartyRestOfSeason>;
+    const current = projectFirstPartyRestOfSeason(projectionInput());
+    // The provenance model version legitimately advanced; every simulated number, every seed
+    // artifact, and every diagnostic must be byte-identical to the captured v6 output.
+    const { provenance: goldenProvenance, ...goldenRest } = golden;
+    const { provenance: currentProvenance, ...currentRest } = current;
+    expect(currentRest).toEqual(goldenRest);
+    expect(currentProvenance.seedHash).toBe(goldenProvenance.seedHash);
+    const { modelVersion: goldenModel, ...goldenProvRest } = goldenProvenance;
+    const { modelVersion: currentModel, ...currentProvRest } = currentProvenance;
+    expect(goldenModel).toBe("laces-ros-distribution-v6");
+    expect(currentModel).toBe("laces-ros-distribution-v7");
+    expect(currentProvRest).toEqual(goldenProvRest);
   });
 });
 

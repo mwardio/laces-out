@@ -8,6 +8,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   calibrateHistoricalRosAvailability,
+  calibrateHistoricalRosKicker,
   calibrateHistoricalRosRole,
 } from "./first-party-ros-backtest.js";
 import { buildFirstPartyRosPlayerCandidate } from "./first-party-ros-candidates.js";
@@ -109,6 +110,7 @@ describe("first-party live ROS candidate builder", () => {
     scoringProfile,
   );
   const roleCalibration = calibrateHistoricalRosRole(history, schedules, scoringProfile);
+  const kickerCalibration = calibrateHistoricalRosKicker(history, schedules, scoringProfile);
 
   it("builds contextual and recency centers for the whole remaining window", () => {
     const candidate = buildFirstPartyRosPlayerCandidate({
@@ -118,6 +120,7 @@ describe("first-party live ROS candidate builder", () => {
       calibration,
       availabilityCalibration,
       roleCalibration,
+      kickerCalibration,
       injuries: [],
       schedules,
       scoringProfile,
@@ -153,6 +156,7 @@ describe("first-party live ROS candidate builder", () => {
       calibration,
       availabilityCalibration,
       roleCalibration,
+      kickerCalibration,
       injuries: [],
       schedules: withBye,
       scoringProfile,

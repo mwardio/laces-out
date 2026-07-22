@@ -32,6 +32,7 @@ import {
   type FirstPartyRosHeldOutForecast,
   type FirstPartyRosHeldOutSeason,
   type FirstPartyRosPosition,
+  type FirstPartyRosKickerProcessInput,
   type FirstPartyRosProjectionInput,
   type FirstPartyRosRemainingWeeksBucket,
   type FirstPartyRosRoleInput,
@@ -174,6 +175,13 @@ export interface HistoricalRosBacktestReport {
   readonly cells: readonly HistoricalRosCellEvidence[];
   readonly availabilityCalibrationVersion: typeof HISTORICAL_ROS_AVAILABILITY_CALIBRATION_VERSION;
   readonly roleCalibrationVersion: typeof HISTORICAL_ROS_ROLE_CALIBRATION_VERSION;
+  readonly kickerCalibrationVersion: typeof HISTORICAL_ROS_KICKER_CALIBRATION_VERSION;
+  /** Per-held-out-season kicker count-family dispersion audit, so the family claim is reviewable. */
+  readonly kickerFamilyAudit: readonly {
+    readonly season: number;
+    readonly dispersion: Readonly<Record<string, number>>;
+    readonly state: "within-bounds" | "out-of-bounds";
+  }[];
   /** Compact worst-metric view of every stratum's release-vs-reference convergence diagnostic. */
   readonly convergenceAudit: readonly HistoricalRosConvergenceAuditEntry[];
 }
@@ -566,6 +574,7 @@ function clamp(value: number, minimum: number, maximum: number): number {
 export const HISTORICAL_ROS_AVAILABILITY_CALIBRATION_VERSION =
   "historical-ros-availability-curve-matched-v3";
 export const HISTORICAL_ROS_ROLE_CALIBRATION_VERSION = "historical-ros-role-center-two-moment-v4";
+export const HISTORICAL_ROS_KICKER_CALIBRATION_VERSION = "historical-ros-kicker-count-process-v1";
 
 /**
  * Consecutive played scheduled opportunities entering a week. `returning` players (streak <= 1)
@@ -1176,6 +1185,272 @@ export function calibrateHistoricalRosRole(
   };
 }
 
+export interface HistoricalRosKickerCalibration {
+  readonly version: typeof HISTORICAL_ROS_KICKER_CALIBRATION_VERSION;
+  /** Dispersion index of per-game scored FG events (makes + recorded misses). League, [0.6, 1.0]. */
+  readonly fgEventDispersion: number;
+  /** Dispersion index of per-game XP makes. League, [0.7, 1.05]; >= 0.97 samples pure Poisson. */
+  readonly xpDispersion: number;
+  /** Sigma(recorded fg_missed) / Sigma(max(0, att - made)): derived-to-recorded miss adapter. */
+  readonly recordedMissRatio: number;
+  /** Log-sd of the static mean-one center-error factor, fit from K weekly-model residuals. */
+  readonly centerVolatility: number;
+  /** League FG-make share by scoring bucket (0-39, 40-49, 50+); degenerate-input fallback only. */
+  readonly leagueBucketMix: readonly [number, number, number];
+  /** Within-kicker-season dispersion of the five simulated components. Diagnostic, report-surfaced. */
+  readonly dispersionAudit: Readonly<
+    Record<"made0_39" | "made40_49" | "made50Plus" | "missed" | "extraPointsMade", number>
+  >;
+  /** "out-of-bounds" iff any audit value leaves [0.7, 1.3]. Never throws; emits per-K-cell blockers. */
+  readonly familyAudit: "within-bounds" | "out-of-bounds";
+  readonly evidence: {
+    readonly kickerGames: number;
+    readonly kickerSeasons: number;
+    readonly centerResidualGroups: number;
+  };
+}
+
+const KICKER_FAMILY_AUDIT_BOUNDS = [0.7, 1.3] as const;
+const KICKER_BUCKET_MIX_FALLBACK = [0.57, 0.27, 0.16] as const;
+
+function kickerComponentValue(components: ProjectionStatComponents, key: string): number {
+  const value = components[key];
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : 0;
+}
+
+/** Coarse scoring-bucket reads with fine-sum fallback (normalizedPlayerComponents guarantees both). */
+function kickerRowEvents(components: ProjectionStatComponents): {
+  readonly made0_39: number;
+  readonly made40_49: number;
+  readonly made50Plus: number;
+  readonly missed: number;
+  readonly extraPointsMade: number;
+  readonly attempted: number;
+  readonly made: number;
+} {
+  const made0_39 =
+    components["field_goals_made_0_39"] !== undefined
+      ? kickerComponentValue(components, "field_goals_made_0_39")
+      : kickerComponentValue(components, "field_goals_made_0_19") +
+        kickerComponentValue(components, "field_goals_made_20_29") +
+        kickerComponentValue(components, "field_goals_made_30_39");
+  const made50Plus =
+    components["field_goals_made_50_plus"] !== undefined
+      ? kickerComponentValue(components, "field_goals_made_50_plus")
+      : kickerComponentValue(components, "field_goals_made_50_59") +
+        kickerComponentValue(components, "field_goals_made_60_plus");
+  return {
+    made0_39,
+    made40_49: kickerComponentValue(components, "field_goals_made_40_49"),
+    made50Plus,
+    missed: kickerComponentValue(components, "field_goals_missed"),
+    extraPointsMade: kickerComponentValue(components, "extra_points_made"),
+    attempted: kickerComponentValue(components, "field_goals_attempted"),
+    made: kickerComponentValue(components, "field_goals_made"),
+  };
+}
+
+/** Pooled within-group dispersion index: Sigma (n-1) s^2 / Sigma (n-1) mean, over listed groups. */
+function pooledWithinSeasonDispersion(groups: readonly (readonly number[])[]): number | null {
+  let weightedVariance = 0;
+  let weightedMean = 0;
+  for (const values of groups) {
+    const count = values.length;
+    if (count < 2) continue;
+    const mean = values.reduce((sum, value) => sum + value, 0) / count;
+    const variance = values.reduce((sum, value) => sum + (value - mean) ** 2, 0) / (count - 1);
+    weightedVariance += (count - 1) * variance;
+    weightedMean += (count - 1) * mean;
+  }
+  return weightedMean > 0 ? weightedVariance / weightedMean : null;
+}
+
+/**
+ * Kicker count-process calibration (model v7). Every parameter is league-level — equivalently, a
+ * per-kicker shrinkage weight of exactly one toward the league prior, chosen by pre-registered
+ * rule rather than tuning: a per-kicker parameter would be admissible only where its per-season
+ * event count clears the 30-event evidence floor this file already uses, and kicker component
+ * counts run roughly 2 (50+ makes) to 13 (0-39 makes) events per season — all far below it, so
+ * full pooling is data-forced. Per-kicker signal enters exclusively through the pinned weekly
+ * means, which already carry per-kicker recency shrunk to role-matched position priors upstream;
+ * a second per-kicker layer here would double-count that shrinkage. Strictly prior-season
+ * training rows only (the caller passes the same walk-forward `training` slice the role and
+ * availability calibrators receive). Total: never throws; every degenerate corpus resolves to
+ * the documented fallback constants (a K-only throw inside the live provider's fail-closed catch
+ * would zero publication for every position).
+ */
+export function calibrateHistoricalRosKicker(
+  training: readonly FirstPartyWeeklyStatLine[],
+  schedules: readonly ProjectionScheduleFact[],
+  scoringProfile: ProjectionScoringProfile,
+  weeklyPredictions: readonly FirstPartyBacktestPrediction[] = [],
+): HistoricalRosKickerCalibration {
+  void schedules; // signature parity with the availability/role calibrators
+  const rows = training.filter((row) => {
+    const position = row.position.trim().toUpperCase();
+    return (position === "K" || position === "PK") && row.played !== false;
+  });
+  const bySeason = new Map<string, FirstPartyWeeklyStatLine[]>();
+  for (const row of rows) {
+    const key = `${row.playerId}:${row.season}`;
+    const group = bySeason.get(key) ?? [];
+    group.push(row);
+    bySeason.set(key, group);
+  }
+
+  // Dispersion groups: kicker-seasons with >= 8 played rows, on the exact simulated estimand
+  // (scored FG events = coarse-bucket makes + recorded misses — immune to blocked-kick rows
+  // where attempted > made + missed).
+  const fgEventGroups: number[][] = [];
+  const xpGroups: number[][] = [];
+  for (const group of bySeason.values()) {
+    if (group.length < 8) continue;
+    const events = group.map((row) => {
+      const value = kickerRowEvents(row.components);
+      return value.made0_39 + value.made40_49 + value.made50Plus + value.missed;
+    });
+    fgEventGroups.push(events);
+    xpGroups.push(group.map((row) => kickerRowEvents(row.components).extraPointsMade));
+  }
+  const fgPooled = fgEventGroups.length >= 30 ? pooledWithinSeasonDispersion(fgEventGroups) : null;
+  const fgEventDispersion = fgPooled === null ? 1 : clamp(fgPooled, 0.6, 1);
+  const xpPooled = xpGroups.length >= 30 ? pooledWithinSeasonDispersion(xpGroups) : null;
+  const xpDispersion = xpPooled === null ? 1 : clamp(xpPooled, 0.7, 1.05);
+
+  // Recorded-miss adapter and league bucket mix from pooled sums.
+  let missedSum = 0;
+  let derivedMissSum = 0;
+  let made0_39Sum = 0;
+  let made40_49Sum = 0;
+  let made50PlusSum = 0;
+  for (const row of rows) {
+    const value = kickerRowEvents(row.components);
+    missedSum += value.missed;
+    derivedMissSum += Math.max(0, value.attempted - value.made);
+    made0_39Sum += value.made0_39;
+    made40_49Sum += value.made40_49;
+    made50PlusSum += value.made50Plus;
+  }
+  const recordedMissRatio = derivedMissSum < 50 ? 0.95 : clamp(missedSum / derivedMissSum, 0.85, 1);
+  const totalMakes = made0_39Sum + made40_49Sum + made50PlusSum;
+  const leagueBucketMix: readonly [number, number, number] =
+    totalMakes < 200
+      ? KICKER_BUCKET_MIX_FALLBACK
+      : [made0_39Sum / totalMakes, made40_49Sum / totalMakes, made50PlusSum / totalMakes];
+
+  // Static center-error volatility: the role calibrator's exact estimator restricted to kicker
+  // prediction rows, owned here so the live path (which historically passed no predictions to
+  // the role calibrator) and the backtest fit it identically.
+  const centerGroups: Array<{ mean: number; count: number; variance: number }> = [];
+  {
+    const residualsByKickerSeason = new Map<string, number[]>();
+    for (const prediction of weeklyPredictions) {
+      const position = prediction.position.trim().toUpperCase();
+      if (position !== "K" && position !== "PK") continue;
+      const predictedPoints = scoreProjectionStatComponents(prediction.predicted, scoringProfile);
+      const actualPoints = scoreProjectionStatComponents(prediction.actual, scoringProfile);
+      if (actualPoints < 0.5) continue; // exclude DNP-style zeros; availability is modeled separately
+      const key = `${prediction.playerId}:${prediction.season}`;
+      const residuals = residualsByKickerSeason.get(key) ?? [];
+      residuals.push(
+        clamp(Math.log((actualPoints + 4) / (Math.max(predictedPoints, 0) + 4)), -2, 2),
+      );
+      residualsByKickerSeason.set(key, residuals);
+    }
+    for (const residuals of residualsByKickerSeason.values()) {
+      if (residuals.length < 6) continue;
+      const count = residuals.length;
+      const mean = residuals.reduce((sum, value) => sum + value, 0) / count;
+      const variance = residuals.reduce((sum, value) => sum + (value - mean) ** 2, 0) / (count - 1);
+      centerGroups.push({ mean, count, variance });
+    }
+  }
+  let centerVolatility = 0.25;
+  if (centerGroups.length >= 20) {
+    const grandMean =
+      centerGroups.reduce((sum, group) => sum + group.mean, 0) / centerGroups.length;
+    const betweenVariance =
+      centerGroups.reduce((sum, group) => sum + (group.mean - grandMean) ** 2, 0) /
+      (centerGroups.length - 1);
+    const samplingVariance =
+      centerGroups.reduce((sum, group) => sum + group.variance / group.count, 0) /
+      centerGroups.length;
+    centerVolatility = clamp(
+      Math.sqrt(Math.max(betweenVariance - samplingVariance, 0.0025)),
+      0.05,
+      0.5,
+    );
+  }
+
+  // Family audit: within-kicker-season dispersion of each simulated component (>= 10 played
+  // rows and component mean >= 0.05, the Step 0 measurement basis), games-weighted.
+  const auditComponents = [
+    "made0_39",
+    "made40_49",
+    "made50Plus",
+    "missed",
+    "extraPointsMade",
+  ] as const;
+  const dispersionAudit: Record<(typeof auditComponents)[number], number> = {
+    made0_39: 1,
+    made40_49: 1,
+    made50Plus: 1,
+    missed: 1,
+    extraPointsMade: 1,
+  };
+  for (const component of auditComponents) {
+    let weightedDispersion = 0;
+    let weight = 0;
+    for (const group of bySeason.values()) {
+      if (group.length < 10) continue;
+      const values = group.map((row) => kickerRowEvents(row.components)[component]);
+      const mean = values.reduce((sum, value) => sum + value, 0) / values.length;
+      if (mean < 0.05) continue;
+      const variance =
+        values.reduce((sum, value) => sum + (value - mean) ** 2, 0) / (values.length - 1);
+      weightedDispersion += values.length * (variance / mean);
+      weight += values.length;
+    }
+    if (weight > 0) dispersionAudit[component] = weightedDispersion / weight;
+  }
+  const familyAudit = auditComponents.some(
+    (component) =>
+      dispersionAudit[component] < KICKER_FAMILY_AUDIT_BOUNDS[0] ||
+      dispersionAudit[component] > KICKER_FAMILY_AUDIT_BOUNDS[1],
+  )
+    ? "out-of-bounds"
+    : "within-bounds";
+
+  return {
+    version: HISTORICAL_ROS_KICKER_CALIBRATION_VERSION,
+    fgEventDispersion,
+    xpDispersion,
+    recordedMissRatio,
+    centerVolatility,
+    leagueBucketMix,
+    dispersionAudit,
+    familyAudit,
+    evidence: {
+      kickerGames: rows.length,
+      kickerSeasons: bySeason.size,
+      centerResidualGroups: centerGroups.length,
+    },
+  };
+}
+
+/** Projects the calibration onto the five scalars the kicker simulation branch consumes. */
+export function historicalRosKickerProcess(
+  calibration: HistoricalRosKickerCalibration,
+): FirstPartyRosKickerProcessInput {
+  return {
+    fgEventDispersion: calibration.fgEventDispersion,
+    xpDispersion: calibration.xpDispersion,
+    recordedMissRatio: calibration.recordedMissRatio,
+    centerVolatility: calibration.centerVolatility,
+    bucketMix: calibration.leagueBucketMix,
+  };
+}
+
 export function historicalRosComponentElasticities(
   contextual: ProjectionStatComponents,
   recency: ProjectionStatComponents,
@@ -1318,6 +1593,7 @@ function createDraft(input: {
   readonly calibration: FirstPartyProjectionCalibration;
   readonly availabilityCalibration: HistoricalRosAvailabilityCalibration;
   readonly roleCalibration: HistoricalRosRoleCalibration;
+  readonly kickerCalibration: HistoricalRosKickerCalibration;
   readonly injuries: readonly ProjectionInjuryFact[];
   readonly schedules: readonly ProjectionScheduleFact[];
   readonly scoringProfile: ProjectionScoringProfile;
@@ -1430,6 +1706,10 @@ function createDraft(input: {
   }
   const asOfAt = historicalRosAsOfAt(input.schedules, input.season, input.asOfWeek);
   const availability = { state: availabilityState, ...availabilityBase };
+  // Kicker fields spread conditionally so every non-K checksum and input stays byte-identical
+  // to its pre-v7 value (the payload version string deliberately stays historical-ros-input-v2).
+  const kicker =
+    input.player.position === "K" ? historicalRosKickerProcess(input.kickerCalibration) : undefined;
   const inputChecksum = historicalRosChecksum({
     version: "historical-ros-input-v2",
     playerId: input.player.playerId,
@@ -1447,6 +1727,7 @@ function createDraft(input: {
     availabilityCalibrationVersion: input.availabilityCalibration.version,
     role,
     roleCalibrationVersion: input.roleCalibration.version,
+    ...(kicker ? { kicker, kickerCalibrationVersion: input.kickerCalibration.version } : {}),
     scoringProfileKey: projectionScoringProfileKey(input.scoringProfile),
   });
   const common = {
@@ -1461,6 +1742,7 @@ function createDraft(input: {
     availability,
     role,
     scoringProfile: input.scoringProfile,
+    ...(kicker ? { kicker } : {}),
     inputChecksum,
     weeklyModelVersion: HISTORICAL_ROS_CANDIDATE_PAIR_VERSION,
     seed: `historical:${input.season}:${input.asOfWeek}:${input.player.playerId}`,
@@ -1844,6 +2126,11 @@ export function buildHistoricalRosBacktest(
   const options = resolveOptions(input.options);
   const qualifiedSeasons = new Set(input.coverage.fullyHeldOutSeasons);
   const drafts: HistoricalRosDraft[] = [];
+  const kickerFamilyAudits: Array<{
+    readonly season: number;
+    readonly dispersion: HistoricalRosKickerCalibration["dispersionAudit"];
+    readonly state: HistoricalRosKickerCalibration["familyAudit"];
+  }> = [];
   // The official D/ST backtest is also the canonical raw-outcome normalizer: its `actual` rows
   // materialize one-hot points-allowed buckets. These rows are joined only after each forecast.
   const defenseOutcomeHistory = canonicalHistoricalRosDefenseOutcomes(input.defenseHistory);
@@ -1869,6 +2156,17 @@ export function buildHistoricalRosBacktest(
       input.scoringProfile,
       weeklyBacktest.predictions,
     );
+    const kickerCalibration = calibrateHistoricalRosKicker(
+      training,
+      input.schedules,
+      input.scoringProfile,
+      weeklyBacktest.predictions,
+    );
+    kickerFamilyAudits.push({
+      season,
+      dispersion: kickerCalibration.dispersionAudit,
+      state: kickerCalibration.familyAudit,
+    });
     input.onProgress?.({
       stage: "season-calibration-ready",
       season,
@@ -1905,6 +2203,7 @@ export function buildHistoricalRosBacktest(
           calibration,
           availabilityCalibration,
           roleCalibration,
+          kickerCalibration,
           injuries: input.injuries,
           schedules: input.schedules,
           scoringProfile: input.scoringProfile,
@@ -2024,6 +2323,15 @@ export function buildHistoricalRosBacktest(
       )
       .map((choice) => `champion_${choice.position}_${choice.bucket}_${choice.reason}`),
     ...historicalRosCalibrationBlockers(champion.livePolicy.choices),
+    // Kicker count-family audit: an out-of-bounds season withholds every K cell (per-cell
+    // blocker grammar) while the run completes and non-K admission proceeds.
+    ...(kickerFamilyAudits.some((audit) => audit.state === "out-of-bounds")
+      ? [
+          "calibration_K_one-to-four_count_family_dispersion_out_of_bounds",
+          "calibration_K_five-to-eight_count_family_dispersion_out_of_bounds",
+          "calibration_K_nine-plus_count_family_dispersion_out_of_bounds",
+        ]
+      : []),
   ];
   return {
     heldOutSeasons,
@@ -2053,6 +2361,8 @@ export function buildHistoricalRosBacktest(
       cells,
       availabilityCalibrationVersion: HISTORICAL_ROS_AVAILABILITY_CALIBRATION_VERSION,
       roleCalibrationVersion: HISTORICAL_ROS_ROLE_CALIBRATION_VERSION,
+      kickerCalibrationVersion: HISTORICAL_ROS_KICKER_CALIBRATION_VERSION,
+      kickerFamilyAudit: kickerFamilyAudits,
       convergenceAudit: [...convergence.entries()]
         .sort(([left], [right]) => left.localeCompare(right))
         .flatMap(([key, evidence]): HistoricalRosConvergenceAuditEntry[] => {

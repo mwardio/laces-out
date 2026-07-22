@@ -10,6 +10,7 @@ import {
 import {
   HISTORICAL_ROS_AVAILABILITY_CALIBRATION_VERSION,
   HISTORICAL_ROS_INTERVAL_METHOD_VERSION,
+  HISTORICAL_ROS_KICKER_CALIBRATION_VERSION,
   HISTORICAL_ROS_ROLE_CALIBRATION_VERSION,
   HISTORICAL_ROS_SCORING_PROFILE,
 } from "./first-party-ros-backtest.js";
@@ -29,6 +30,7 @@ export interface FirstPartyRosAdmissionConstants {
   readonly intervalMethodVersion: string;
   readonly availabilityCalibrationVersion: string;
   readonly roleCalibrationVersion: string;
+  readonly kickerCalibrationVersion: string;
   readonly scoringProfileKey: string;
 }
 
@@ -41,6 +43,7 @@ export function firstPartyRosAdmissionConstants(): FirstPartyRosAdmissionConstan
     intervalMethodVersion: HISTORICAL_ROS_INTERVAL_METHOD_VERSION,
     availabilityCalibrationVersion: HISTORICAL_ROS_AVAILABILITY_CALIBRATION_VERSION,
     roleCalibrationVersion: HISTORICAL_ROS_ROLE_CALIBRATION_VERSION,
+    kickerCalibrationVersion: HISTORICAL_ROS_KICKER_CALIBRATION_VERSION,
     scoringProfileKey: projectionScoringProfileKey(HISTORICAL_ROS_SCORING_PROFILE),
   };
 }
@@ -148,6 +151,9 @@ export function validateFirstPartyRosAdmission(input: {
     }
     if (backtest.roleCalibrationVersion !== constants.roleCalibrationVersion) {
       blockers.push("role_calibration_mismatch");
+    }
+    if (backtest.kickerCalibrationVersion !== constants.kickerCalibrationVersion) {
+      blockers.push("kicker_calibration_mismatch");
     }
   }
 

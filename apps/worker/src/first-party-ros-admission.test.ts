@@ -36,6 +36,7 @@ function validReport(overrides: {
       blockers: [],
       availabilityCalibrationVersion: constants.availabilityCalibrationVersion,
       roleCalibrationVersion: constants.roleCalibrationVersion,
+      kickerCalibrationVersion: constants.kickerCalibrationVersion,
       ...overrides.reportOverrides,
     },
     champion: {
@@ -157,6 +158,25 @@ describe("validateFirstPartyRosAdmission", () => {
     }
   });
 
+  it("classifies kicker count-family audit blockers as per-cell, not global", () => {
+    const familyBlockers = [
+      "calibration_K_one-to-four_count_family_dispersion_out_of_bounds",
+      "calibration_K_five-to-eight_count_family_dispersion_out_of_bounds",
+      "calibration_K_nine-plus_count_family_dispersion_out_of_bounds",
+    ];
+    const result = validateFirstPartyRosAdmission({
+      report: validReport({
+        reportOverrides: { state: "insufficient", blockers: familyBlockers },
+      }),
+      evidenceThroughSeason: 2025,
+      constants,
+    });
+    expect(result.state).toBe("admissible");
+    if (result.state === "admissible") {
+      expect(result.cellBlockers).toEqual(familyBlockers);
+    }
+  });
+
   it("refuses model, scoring, calibration, and evidence-through identity drift", () => {
     const model = validateFirstPartyRosAdmission({
       report: validReport({ championOverrides: { modelVersion: "laces-ros-distribution-v3" } }),
@@ -178,6 +198,13 @@ describe("validateFirstPartyRosAdmission", () => {
       constants,
     });
     expect(calibration.blockers).toContain("role_calibration_mismatch");
+
+    const kickerCalibration = validateFirstPartyRosAdmission({
+      report: validReport({ reportOverrides: { kickerCalibrationVersion: "stale-kicker-v0" } }),
+      evidenceThroughSeason: 2025,
+      constants,
+    });
+    expect(kickerCalibration.blockers).toContain("kicker_calibration_mismatch");
 
     const evidenceThrough = validateFirstPartyRosAdmission({
       report: validReport({}),

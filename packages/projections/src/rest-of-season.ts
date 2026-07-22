@@ -6,7 +6,15 @@ import {
   type ProjectionStatComponents,
 } from "./scoring.js";
 
-export const FIRST_PARTY_ROS_MODEL_VERSION = "laces-ros-distribution-v6";
+export const FIRST_PARTY_ROS_MODEL_VERSION = "laces-ros-distribution-v7";
+/**
+ * Frozen seed-stream lineage, deliberately decoupled from the model version as of v7: the v7
+ * change is kicker-branch-only, and reseeding non-kicker positions would falsify the isolation
+ * proof (acceptance requires non-K output numerically unchanged from v6). Change this constant
+ * only when a global reseed is the intent — and that is itself a new model version. Invariant:
+ * this changes if and only if non-K draw consumption changes.
+ */
+export const FIRST_PARTY_ROS_SEED_VERSION = "laces-ros-distribution-v6";
 export const FIRST_PARTY_ROS_POLICY_VERSION = "season-walk-forward-block-wis-cqr-v4";
 export const FIRST_PARTY_ROS_INTERVAL_CALIBRATION_VERSION = "season-blocked-split-conformal-cqr-v1";
 /**
@@ -142,6 +150,25 @@ export interface FirstPartyRosRoleInput {
   readonly maximumMultiplier: number;
 }
 
+/**
+ * Kicker count-process parameters (model v7). Kicker weeks are simulated as a joint integer count
+ * process on the five scored components — makes per scoring bucket, recorded misses, XP makes —
+ * instead of the lognormal role × production shock, whose smooth unimodal family cannot represent
+ * a kicker's discrete, low-count short-window totals.
+ */
+export interface FirstPartyRosKickerProcessInput {
+  /** Dispersion index of per-game scored FG events (makes + recorded misses). [0.6, 1.0]. */
+  readonly fgEventDispersion: number;
+  /** Dispersion index of per-game XP makes. [0.7, 1.05]; at or above 0.97 samples pure Poisson. */
+  readonly xpDispersion: number;
+  /** Recorded-miss adapter: Σ fg_missed / Σ max(0, att − made) in training. [0.85, 1.0]. */
+  readonly recordedMissRatio: number;
+  /** Log-sd of the static mean-one center-error factor (weekly-model K center error). [0, 1]. */
+  readonly centerVolatility: number;
+  /** League FG-make share by scoring bucket (0-39, 40-49, 50+); degenerate-input fallback only. */
+  readonly bucketMix: readonly [number, number, number];
+}
+
 export interface FirstPartyRosProjectionInput {
   readonly playerId: string;
   readonly position: FirstPartyRosPosition;
@@ -157,6 +184,8 @@ export interface FirstPartyRosProjectionInput {
   readonly availability: FirstPartyRosAvailabilityInput;
   readonly role: FirstPartyRosRoleInput;
   readonly scoringProfile: ProjectionScoringProfile;
+  /** Required for position K under model v7; rejected for every other position. */
+  readonly kicker?: FirstPartyRosKickerProcessInput;
   /** Exact pinned upstream/model input checksum. */
   readonly inputChecksum: string;
   /** Version of the weekly candidates supplied to this model. */
@@ -421,6 +450,193 @@ function normal(random: () => number): number {
 
 function clamp(value: number, minimum: number, maximum: number): number {
   return Math.min(maximum, Math.max(minimum, value));
+}
+
+/** Per-side cap on the FG-event intensity Λ and the XP intensity (proportional rescale). */
+const KICKER_LAMBDA_MAX = 8;
+/** Dispersion at or above this samples pure Poisson (binomial n would exceed its useful range). */
+const KICKER_POISSON_MODE_MIN = 0.97;
+/** NaN-safety cap on Poisson inversion; P(K >= 64 | lambda = 8) < 1e-30. */
+const KICKER_POISSON_STEP_MAX = 64;
+
+function poissonInverse(lambda: number, uniform: number): number {
+  if (!(lambda > 0)) return 0;
+  const u = Math.min(Math.max(uniform, 0), 1 - 2 ** -33);
+  let pmf = Math.exp(-lambda);
+  let cdf = pmf;
+  let k = 0;
+  while (u > cdf && k < KICKER_POISSON_STEP_MAX) {
+    k += 1;
+    pmf *= lambda / k;
+    cdf += pmf;
+  }
+  return k;
+}
+
+function binomialInverse(n: number, p: number, uniform: number): number {
+  if (n <= 0 || p <= 0) return 0;
+  if (p >= 1) return n;
+  const u = Math.min(Math.max(uniform, 0), 1 - 2 ** -33);
+  let pmf = (1 - p) ** n;
+  let cdf = pmf;
+  let k = 0;
+  while (u > cdf && k < n) {
+    k += 1;
+    pmf *= ((n - k + 1) / k) * (p / (1 - p));
+    cdf += pmf;
+  }
+  return k;
+}
+
+/**
+ * Mean-exact under-dispersed count via a fractional-n binomial: dispersion index phi = 1 − p, so
+ * n* = mean / p with the fractional part realized as a Bernoulli on n (E[count] = mean exactly;
+ * variance = phi·mean + p²·r(1−r), excess at most 0.04). Consumes both uniforms' entropy budget
+ * unconditionally — callers draw them regardless — and is monotone nondecreasing in u2, which the
+ * antithetic pairing requires. At phi ≥ 0.97 the Poisson branch uses u2 alone.
+ */
+function underdispersedCount(mean: number, phi: number, u1: number, u2: number): number {
+  if (!(mean > 0)) return 0;
+  if (phi >= KICKER_POISSON_MODE_MIN) return poissonInverse(mean, u2);
+  const p = 1 - phi;
+  const nStar = mean / p;
+  const wholeN = Math.floor(nStar);
+  const fraction = nStar - wholeN;
+  const n = wholeN + (u1 < fraction ? 1 : 0);
+  return binomialInverse(n, p, u2);
+}
+
+interface KickerWeekParams {
+  /** Expected makes per scoring bucket (0-39, 40-49, 50+), pre-scale. */
+  readonly b39: number;
+  readonly b49: number;
+  readonly b50: number;
+  /** Expected recorded misses, pre-scale: recordedMissRatio × max(0, att − made). */
+  readonly missBase: number;
+  /** Expected XP makes, pre-scale. */
+  readonly xpBase: number;
+  /** Fine-bucket shares within 0-39 (0_19, 20_29, 30_39) for the cosmetic component split. */
+  readonly fine39: readonly [number, number, number];
+  /** Fine-bucket shares within 50+ (50_59, 60_plus) for the cosmetic component split. */
+  readonly fine50: readonly [number, number];
+}
+
+interface KickerContext {
+  readonly process: FirstPartyRosKickerProcessInput;
+  readonly weekParams: readonly KickerWeekParams[];
+}
+
+function kickerWeekParams(
+  week: FirstPartyRosWeeklyScenarioInput,
+  strategy: FirstPartyRosStrategy,
+  process: FirstPartyRosKickerProcessInput,
+): KickerWeekParams {
+  const base = strategy === "contextual" ? week.contextualComponents : week.recencyComponents;
+  const read = (key: string): number => {
+    const value = base[key];
+    return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : 0;
+  };
+  const fine019 = read("field_goals_made_0_19");
+  const fine2029 = read("field_goals_made_20_29");
+  const fine3039 = read("field_goals_made_30_39");
+  const fine5059 = read("field_goals_made_50_59");
+  const fine60 = read("field_goals_made_60_plus");
+  let b39 =
+    base["field_goals_made_0_39"] !== undefined
+      ? read("field_goals_made_0_39")
+      : fine019 + fine2029 + fine3039;
+  let b49 = read("field_goals_made_40_49");
+  let b50 =
+    base["field_goals_made_50_plus"] !== undefined
+      ? read("field_goals_made_50_plus")
+      : fine5059 + fine60;
+  const made = read("field_goals_made");
+  const bucketSum = b39 + b49 + b50;
+  if (made > 0 && bucketSum > 0) {
+    const rescale = made / bucketSum;
+    b39 *= rescale;
+    b49 *= rescale;
+    b50 *= rescale;
+  } else if (made > 0) {
+    b39 = made * process.bucketMix[0];
+    b49 = made * process.bucketMix[1];
+    b50 = made * process.bucketMix[2];
+  }
+  const attempted = Math.max(read("field_goals_attempted"), made);
+  const missBase = process.recordedMissRatio * Math.max(0, attempted - made);
+  const xpBase = read("extra_points_made");
+  const fine39Sum = fine019 + fine2029 + fine3039;
+  const fine50Sum = fine5059 + fine60;
+  return {
+    b39,
+    b49,
+    b50,
+    missBase,
+    xpBase,
+    fine39:
+      fine39Sum > 0 ? [fine019 / fine39Sum, fine2029 / fine39Sum, fine3039 / fine39Sum] : [0, 0, 1],
+    fine50: fine50Sum > 0 ? [fine5059 / fine50Sum, fine60 / fine50Sum] : [1, 0],
+  };
+}
+
+/**
+ * Samples one kicker game as the five scored integer counts and expands them into the pinned
+ * 14-key kicker component vocabulary. Satisfies every football component invariant by
+ * construction (made = Σ coarse buckets, attempted = made + missed, fine sums = coarse), so the
+ * caller deliberately skips enforceFootballComponentInvariants. Uses exactly the seven supplied
+ * uniforms; the antithetic leg inverts them through the same monotone CDF inversions.
+ */
+function sampleKickerGame(
+  params: KickerWeekParams,
+  process: FirstPartyRosKickerProcessInput,
+  scale: number,
+  uniforms: readonly number[],
+  antithetic: boolean,
+): Record<string, number> {
+  const u = (index: number): number => {
+    const value = uniforms[index]!;
+    return antithetic ? 1 - value : value;
+  };
+  let lambda39 = scale * params.b39;
+  let lambda49 = scale * params.b49;
+  let lambda50 = scale * params.b50;
+  let lambdaMiss = scale * params.missBase;
+  let lambdaTotal = lambda39 + lambda49 + lambda50 + lambdaMiss;
+  if (lambdaTotal > KICKER_LAMBDA_MAX) {
+    const rescale = KICKER_LAMBDA_MAX / lambdaTotal;
+    lambda39 *= rescale;
+    lambda49 *= rescale;
+    lambda50 *= rescale;
+    lambdaMiss *= rescale;
+    lambdaTotal = KICKER_LAMBDA_MAX;
+  }
+  const lambdaXp = Math.min(scale * params.xpBase, KICKER_LAMBDA_MAX);
+  const events = underdispersedCount(lambdaTotal, process.fgEventDispersion, u(0), u(1));
+  const p39 = lambdaTotal > 0 ? clamp(lambda39 / lambdaTotal, 0, 1) : 0;
+  const made39 = binomialInverse(events, p39, u(2));
+  const p49 = clamp(lambda49 / Math.max(lambdaTotal - lambda39, 1e-12), 0, 1);
+  const made49 = binomialInverse(events - made39, p49, u(3));
+  const p50 = clamp(lambda50 / Math.max(lambdaTotal - lambda39 - lambda49, 1e-12), 0, 1);
+  const made50 = binomialInverse(events - made39 - made49, p50, u(4));
+  const missed = events - made39 - made49 - made50;
+  const extraPoints = underdispersedCount(lambdaXp, process.xpDispersion, u(5), u(6));
+  const made = made39 + made49 + made50;
+  return {
+    field_goals_made_0_19: made39 * params.fine39[0],
+    field_goals_made_20_29: made39 * params.fine39[1],
+    field_goals_made_30_39: made39 * params.fine39[2],
+    field_goals_made_0_39: made39,
+    field_goals_made_40_49: made49,
+    field_goals_made_50_59: made50 * params.fine50[0],
+    field_goals_made_60_plus: made50 * params.fine50[1],
+    field_goals_made_50_plus: made50,
+    field_goals_made: made,
+    field_goals_missed: missed,
+    field_goals_attempted: made + missed,
+    extra_points_made: extraPoints,
+    extra_points_attempted: extraPoints,
+    extra_points_missed: 0,
+  };
 }
 
 function quantile(values: readonly number[], probability: number): number {
@@ -822,6 +1038,41 @@ function validateProjectionInput(input: FirstPartyRosProjectionInput): {
   ) {
     throw new RangeError("current role multiplier must be inside the configured bounds");
   }
+  if (position === "K") {
+    const kicker = input.kicker;
+    if (!kicker) {
+      throw new Error("ROS kicker process input is required for position K under model v7");
+    }
+    assertFinite(kicker.fgEventDispersion, "kicker FG event dispersion");
+    if (kicker.fgEventDispersion < 0.6 || kicker.fgEventDispersion > 1) {
+      throw new RangeError("kicker FG event dispersion must be between 0.6 and 1");
+    }
+    assertFinite(kicker.xpDispersion, "kicker XP dispersion");
+    if (kicker.xpDispersion < 0.7 || kicker.xpDispersion > 1.05) {
+      throw new RangeError("kicker XP dispersion must be between 0.7 and 1.05");
+    }
+    assertFinite(kicker.recordedMissRatio, "kicker recorded miss ratio");
+    if (kicker.recordedMissRatio < 0.85 || kicker.recordedMissRatio > 1) {
+      throw new RangeError("kicker recorded miss ratio must be between 0.85 and 1");
+    }
+    assertNonNegative(kicker.centerVolatility, "kicker center volatility");
+    if (kicker.centerVolatility > 1) {
+      throw new RangeError("kicker center volatility must not exceed one");
+    }
+    if (kicker.bucketMix.length !== 3) {
+      throw new RangeError("kicker bucket mix must contain exactly three shares");
+    }
+    let bucketMixSum = 0;
+    for (const share of kicker.bucketMix) {
+      assertNonNegative(share, "kicker bucket mix share");
+      bucketMixSum += share;
+    }
+    if (Math.abs(bucketMixSum - 1) > 1e-8) {
+      throw new RangeError("kicker bucket mix shares must sum to one");
+    }
+  } else if (input.kicker !== undefined) {
+    throw new Error("ROS kicker process input is only supported for position K");
+  }
   validateProjectionScoringProfile(input.scoringProfile);
   const scenarioCount = input.scenarioCount ?? FIRST_PARTY_ROS_DEFAULT_SCENARIOS;
   if (
@@ -934,6 +1185,7 @@ function simulatePair(
   weeklyAvailability: number[][],
   componentSums: Record<string, number>,
   audit: ScenarioPairAudit,
+  kickerContext: KickerContext | null,
 ): {
   readonly left: ScenarioAccumulator;
   readonly right: ScenarioAccumulator;
@@ -945,9 +1197,13 @@ function simulatePair(
   const right: ScenarioAccumulator = { totalPoints: 0, games: 0, components: {} };
   let boundedRoleSamples = 0;
   // Static, mean-one center-error multiplier: one antithetic draw per pair, constant across the
-  // window. When centerVolatility is zero no draw is consumed, preserving the stream.
-  const centerVolatility = input.role.centerVolatility ?? 0;
-  const centerInnovation = centerVolatility > 0 ? normal(random) : 0;
+  // window. For non-K, when centerVolatility is zero no draw is consumed, preserving the v6
+  // stream byte-for-byte. The kicker branch draws unconditionally so its stream layout never
+  // depends on a calibrated parameter value.
+  const centerVolatility = kickerContext
+    ? kickerContext.process.centerVolatility
+    : (input.role.centerVolatility ?? 0);
+  const centerInnovation = kickerContext || centerVolatility > 0 ? normal(random) : 0;
   const leftCenter =
     centerVolatility > 0
       ? Math.exp(centerVolatility * centerInnovation - 0.5 * centerVolatility ** 2)
@@ -961,22 +1217,39 @@ function simulatePair(
     const availabilityDraw = random();
     transitionAvailability(leftState, week, input.availability, availabilityDraw);
     transitionAvailability(rightState, week, input.availability, 1 - availabilityDraw);
-    const roleInnovation = normal(random);
-    const leftRole = evolveRole(leftState, input.role, roleInnovation);
-    const rightRole = evolveRole(rightState, input.role, -roleInnovation);
-    boundedRoleSamples += Number(leftRole.bounded) + Number(rightRole.bounded);
-    const productionInnovation = normal(random);
+    // Kicker weeks replace the role/production normals with a fixed block of seven count
+    // uniforms (FG fractional-n, FG total, three bucket splits, XP fractional-n, XP total),
+    // drawn unconditionally every window week — bye, unavailable, and zero-intensity weeks
+    // included — mirroring the unconditional role/production draws so path alignment is a pure
+    // function of the window length. The kicker role multiplier is identically one: kicker
+    // "role" (being the team's kicker) carries no meaningful snap-share dynamics, and the count
+    // process already owns the weekly production noise a lognormal shock would double-count.
+    let leftRoleMultiplier = 1;
+    let rightRoleMultiplier = 1;
+    let productionInnovation = 0;
+    let countUniforms: readonly number[] | null = null;
+    if (kickerContext) {
+      countUniforms = [random(), random(), random(), random(), random(), random(), random()];
+    } else {
+      const roleInnovation = normal(random);
+      const leftRole = evolveRole(leftState, input.role, roleInnovation);
+      const rightRole = evolveRole(rightState, input.role, -roleInnovation);
+      boundedRoleSamples += Number(leftRole.bounded) + Number(rightRole.bounded);
+      leftRoleMultiplier = leftRole.multiplier;
+      rightRoleMultiplier = rightRole.multiplier;
+      productionInnovation = normal(random);
+    }
     const pair = [
       {
         state: leftState,
-        role: leftRole.multiplier,
+        role: leftRoleMultiplier,
         center: leftCenter,
         production: productionInnovation,
         result: left,
       },
       {
         state: rightState,
-        role: rightRole.multiplier,
+        role: rightRoleMultiplier,
         center: rightCenter,
         production: -productionInnovation,
         result: right,
@@ -998,13 +1271,21 @@ function simulatePair(
         const roleMultiplier = scenario.role * availabilityRoleMultiplier * scenario.center;
         const base =
           input.strategy === "contextual" ? week.contextualComponents : week.recencyComponents;
-        const components = scaledComponents(
-          base,
-          week.componentElasticities,
-          roleMultiplier,
-          scenario.production,
-          input.role.weeklyProductionVolatility,
-        );
+        const components = kickerContext
+          ? sampleKickerGame(
+              kickerContext.weekParams[index]!,
+              kickerContext.process,
+              roleMultiplier,
+              countUniforms!,
+              side === 1,
+            )
+          : scaledComponents(
+              base,
+              week.componentElasticities,
+              roleMultiplier,
+              scenario.production,
+              input.role.weeklyProductionVolatility,
+            );
         addComponents(scenario.result.components, components);
         addComponents(componentSums, components);
         points = scoreProjectionStatComponents(components, input.scoringProfile);
@@ -1051,7 +1332,7 @@ export function projectFirstPartyRestOfSeason(
   input: FirstPartyRosProjectionInput,
 ): FirstPartyRosProjection {
   const validated = validateProjectionInput(input);
-  const seedMaterial = `${FIRST_PARTY_ROS_MODEL_VERSION}|${input.seed}|${input.inputChecksum}|${input.playerId}|${input.strategy}|${input.season}|${input.asOfWeek}|${input.asOfAt}|${input.windowStartWeek}|${input.windowEndWeek}`;
+  const seedMaterial = `${FIRST_PARTY_ROS_SEED_VERSION}|${input.seed}|${input.inputChecksum}|${input.playerId}|${input.strategy}|${input.season}|${input.asOfWeek}|${input.asOfAt}|${input.windowStartWeek}|${input.windowEndWeek}`;
   const seedHash = sha256Hex(seedMaterial);
   const random = xoshiro128StarStar(seedHash);
   const totalPoints: number[] = [];
@@ -1066,6 +1347,15 @@ export function projectFirstPartyRestOfSeason(
   const roleLeftPaths: number[][] = [];
   const roleRightPaths: number[][] = [];
   let boundedRoleSamples = 0;
+  const kickerContext: KickerContext | null =
+    validated.position === "K"
+      ? {
+          process: input.kicker!,
+          weekParams: validated.weeks.map((week) =>
+            kickerWeekParams(week, input.strategy, input.kicker!),
+          ),
+        }
+      : null;
   for (let pairIndex = 0; pairIndex < validated.scenarioCount / 2; pairIndex += 1) {
     const audit: ScenarioPairAudit = {
       availabilityLeft: [],
@@ -1081,6 +1371,7 @@ export function projectFirstPartyRestOfSeason(
       weeklyAvailability,
       componentSums,
       audit,
+      kickerContext,
     );
     totalPoints.push(pair.left.totalPoints, pair.right.totalPoints);
     games.push(pair.left.games, pair.right.games);

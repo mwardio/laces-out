@@ -35,7 +35,9 @@ import {
   historicalRosBucket,
   historicalRosChecksum,
   historicalRosComponentElasticities,
+  historicalRosKickerProcess,
   type HistoricalRosAvailabilityCalibration,
+  type HistoricalRosKickerCalibration,
   type HistoricalRosRoleCalibration,
 } from "./first-party-ros-backtest.js";
 import {
@@ -166,6 +168,7 @@ export interface BuildFirstPartyRosPlayerCandidateInput {
   readonly calibration: FirstPartyProjectionCalibration;
   readonly availabilityCalibration: HistoricalRosAvailabilityCalibration;
   readonly roleCalibration: HistoricalRosRoleCalibration;
+  readonly kickerCalibration: HistoricalRosKickerCalibration;
   readonly injuries: readonly ProjectionInjuryFact[];
   readonly schedules: readonly ProjectionScheduleFact[];
   readonly scoringProfile: ProjectionScoringProfile;
@@ -308,6 +311,10 @@ export function assembleFirstPartyRosCandidateInputs(
 
   const asOfAt = historicalRosAsOfAt(input.schedules, season, asOfWeek);
   const scoringProfileKey = projectionScoringProfileKey(input.scoringProfile);
+  // Kicker fields spread conditionally so every non-K checksum and input stays byte-identical
+  // to its pre-v7 value (the payload version string deliberately stays live-ros-input-v1).
+  const kicker =
+    input.player.position === "K" ? historicalRosKickerProcess(input.kickerCalibration) : undefined;
   const inputChecksum = historicalRosChecksum({
     version: "live-ros-input-v1",
     playerId: input.player.playerId,
@@ -324,6 +331,7 @@ export function assembleFirstPartyRosCandidateInputs(
     availabilityCalibrationVersion: input.availabilityCalibration.version,
     role,
     roleCalibrationVersion: input.roleCalibration.version,
+    ...(kicker ? { kicker, kickerCalibrationVersion: input.kickerCalibration.version } : {}),
     scoringProfileKey,
   });
   const common = {
@@ -338,6 +346,7 @@ export function assembleFirstPartyRosCandidateInputs(
     availability,
     role,
     scoringProfile: input.scoringProfile,
+    ...(kicker ? { kicker } : {}),
     inputChecksum,
     weeklyModelVersion: HISTORICAL_ROS_CANDIDATE_PAIR_VERSION,
     seed: input.seed,

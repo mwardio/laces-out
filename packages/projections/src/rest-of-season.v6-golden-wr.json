@@ -1,0 +1,128 @@
+{
+  "state": "projected",
+  "playerId": "player-one",
+  "position": "WR",
+  "expectedGames": 6.76171875,
+  "scheduledGames": 8,
+  "meanPoints": 102.38492737412302,
+  "standardDeviation": 31.994844133673492,
+  "p15Points": 71.21508281378966,
+  "p50Points": 105.90978235948684,
+  "p85Points": 134.4043845114368,
+  "expectedComponents": {
+    "receiving_touchdowns": 2.585200972141001,
+    "receiving_yards": 473.85338568735307,
+    "receptions": 39.48838297254183
+  },
+  "weekly": [
+    {
+      "week": 5,
+      "scheduled": true,
+      "bye": false,
+      "availabilityProbability": 0.91796875,
+      "meanPoints": 13.070123963888873,
+      "p15Points": 9.41439752180268,
+      "p50Points": 13.498805487227294,
+      "p85Points": 17.515122030513485
+    },
+    {
+      "week": 6,
+      "scheduled": true,
+      "bye": false,
+      "availabilityProbability": 0.859375,
+      "meanPoints": 12.482404945023948,
+      "p15Points": 7.156981201948152,
+      "p50Points": 13.13290246061345,
+      "p85Points": 18.248394525611968
+    },
+    {
+      "week": 7,
+      "scheduled": true,
+      "bye": false,
+      "availabilityProbability": 0.861328125,
+      "meanPoints": 12.759761215052473,
+      "p15Points": 6.717437216215126,
+      "p50Points": 13.42150419239109,
+      "p85Points": 18.537892791138464
+    },
+    {
+      "week": 8,
+      "scheduled": true,
+      "bye": false,
+      "availabilityProbability": 0.84375,
+      "meanPoints": 12.598129466797458,
+      "p15Points": 0,
+      "p50Points": 13.274285180810859,
+      "p85Points": 18.75125357542866
+    },
+    {
+      "week": 9,
+      "scheduled": true,
+      "bye": false,
+      "availabilityProbability": 0.8515625,
+      "meanPoints": 12.926381800724426,
+      "p15Points": 5.939452376165707,
+      "p50Points": 13.58425124679448,
+      "p85Points": 19.886656411523255
+    },
+    {
+      "week": 10,
+      "scheduled": true,
+      "bye": false,
+      "availabilityProbability": 0.8203125,
+      "meanPoints": 12.798701742366331,
+      "p15Points": 0,
+      "p50Points": 13.604044567101592,
+      "p85Points": 20.076746512846405
+    },
+    {
+      "week": 11,
+      "scheduled": true,
+      "bye": false,
+      "availabilityProbability": 0.80859375,
+      "meanPoints": 12.840099807969143,
+      "p15Points": 0,
+      "p50Points": 14.062909823404604,
+      "p85Points": 19.63362338371773
+    },
+    {
+      "week": 12,
+      "scheduled": true,
+      "bye": false,
+      "availabilityProbability": 0.798828125,
+      "meanPoints": 12.90932443230044,
+      "p15Points": 0,
+      "p50Points": 14.157652819577208,
+      "p85Points": 19.754961518433724
+    }
+  ],
+  "weeklyMeanSemantics": "unconditional-includes-zero-for-bye-or-unavailable",
+  "simulation": {
+    "availabilityLagOneCorrelation": 0.580130832265947,
+    "roleLagOneCorrelation": 0.753391208031158,
+    "boundedRoleSamples": 0
+  },
+  "provenance": {
+    "modelVersion": "laces-ros-distribution-v6",
+    "strategy": "contextual",
+    "weeklyModelVersion": "weekly-v4",
+    "scoringProfileKey": "[{\"statId\":\"receiving_touchdowns\",\"points\":6,\"bonuses\":[]},{\"statId\":\"receiving_yards\",\"points\":0.1,\"bonuses\":[]},{\"statId\":\"receptions\",\"points\":1,\"bonuses\":[]}]",
+    "inputChecksum": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "seedHash": "26c02a1b0d54736ae2da198b64e058d33d41d0560ee53eae4c9e9844ee4501ce",
+    "randomGenerator": "xoshiro128**-sha256-128",
+    "scenarioCount": 512,
+    "season": 2026,
+    "asOfWeek": 4,
+    "asOfAt": "2026-10-01T12:00:00.000Z",
+    "windowStartWeek": 5,
+    "windowEndWeek": 12,
+    "intervalCalibration": "simulation-only"
+  },
+  "diagnostics": [
+    {
+      "severity": "warning",
+      "code": "simulation_interval_not_calibrated",
+      "message": "P15/P85 are deterministic simulation quantiles and must not be described as historically calibrated until the season-level evaluator clears its evidence gates."
+    }
+  ]
+}

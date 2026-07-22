@@ -31,8 +31,10 @@ import { and, desc, eq, inArray } from "drizzle-orm";
 import {
   HISTORICAL_ROS_SUPPORTED_POSITIONS,
   calibrateHistoricalRosAvailability,
+  calibrateHistoricalRosKicker,
   calibrateHistoricalRosRole,
   type HistoricalRosAvailabilityCalibration,
+  type HistoricalRosKickerCalibration,
   type HistoricalRosRoleCalibration,
 } from "./first-party-ros-backtest.js";
 import {
@@ -187,6 +189,7 @@ export function buildFirstPartyRosLeagueTarget(input: {
   readonly calibration: FirstPartyProjectionCalibration;
   readonly availabilityCalibration: HistoricalRosAvailabilityCalibration;
   readonly roleCalibration: HistoricalRosRoleCalibration;
+  readonly kickerCalibration: HistoricalRosKickerCalibration;
   readonly injuries: readonly ProjectionInjuryFact[];
   readonly schedules: readonly ProjectionScheduleFact[];
   readonly futureWindowComplete: boolean;
@@ -222,6 +225,7 @@ export function buildFirstPartyRosLeagueTarget(input: {
       calibration: input.calibration,
       availabilityCalibration: input.availabilityCalibration,
       roleCalibration: input.roleCalibration,
+      kickerCalibration: input.kickerCalibration,
       injuries: input.injuries,
       schedules: input.schedules,
       scoringProfile: input.scoringProfile,
@@ -686,14 +690,24 @@ async function buildDatabaseFirstPartyRosTargets(
   let calibration: FirstPartyProjectionCalibration;
   let availabilityCalibration: HistoricalRosAvailabilityCalibration;
   let roleCalibration: HistoricalRosRoleCalibration;
+  let kickerCalibration: HistoricalRosKickerCalibration;
   try {
-    calibration = runFirstPartyProjectionBacktest(trainingHistory).calibration;
+    const weeklyBacktest = runFirstPartyProjectionBacktest(trainingHistory);
+    calibration = weeklyBacktest.calibration;
     availabilityCalibration = calibrateHistoricalRosAvailability(
       trainingHistory,
       schedules,
       referenceProfile,
     );
     roleCalibration = calibrateHistoricalRosRole(trainingHistory, schedules, referenceProfile);
+    // Total by contract (documented fallbacks, never throws), so the kicker calibration cannot
+    // trip this league-wide fail-closed catch on a sparse corpus.
+    kickerCalibration = calibrateHistoricalRosKicker(
+      trainingHistory,
+      schedules,
+      referenceProfile,
+      weeklyBacktest.predictions,
+    );
   } catch {
     // A calibration that cannot be fitted is a league-wide missing piece: yield nothing.
     return [];
@@ -728,6 +742,7 @@ async function buildDatabaseFirstPartyRosTargets(
       calibration,
       availabilityCalibration,
       roleCalibration,
+      kickerCalibration,
       injuries,
       schedules,
       futureWindowComplete,

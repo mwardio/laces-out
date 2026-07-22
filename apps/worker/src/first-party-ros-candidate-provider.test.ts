@@ -12,6 +12,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   calibrateHistoricalRosAvailability,
+  calibrateHistoricalRosKicker,
   calibrateHistoricalRosRole,
 } from "./first-party-ros-backtest.js";
 import {
@@ -293,6 +294,11 @@ describe("buildFirstPartyRosLeagueTarget", () => {
     scoringProfile,
   );
   const roleCalibration = calibrateHistoricalRosRole(trainingHistory, schedules, scoringProfile);
+  const kickerCalibration = calibrateHistoricalRosKicker(
+    trainingHistory,
+    schedules,
+    scoringProfile,
+  );
 
   function run(input: {
     policy: FirstPartyRosChampionPolicy;
@@ -313,6 +319,7 @@ describe("buildFirstPartyRosLeagueTarget", () => {
       calibration,
       availabilityCalibration,
       roleCalibration,
+      kickerCalibration,
       injuries: [],
       schedules,
       futureWindowComplete: true,
