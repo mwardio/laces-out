@@ -2,15 +2,19 @@
 
 import {
   Archive,
+  ArrowDown,
+  ArrowUp,
   ChartNoAxesCombined,
   Check,
   ChevronRight,
   Clipboard,
   CloudUpload,
+  Copy,
   Download,
   FileJson,
   FileSpreadsheet,
   History,
+  GitCompareArrows,
   Link2,
   ListPlus,
   LoaderCircle,
@@ -52,7 +56,22 @@ interface RankingList {
     readonly format: ScoringFormat;
     readonly label: string | null;
   };
-  readonly visibility: { readonly scope: "private" | "league" | "shared-link" };
+  readonly visibility:
+    | { readonly scope: "private" }
+    | {
+        readonly scope: "league";
+        readonly leagueIds: readonly string[];
+        readonly allowClone: boolean;
+      }
+    | {
+        readonly scope: "shared-link";
+        readonly allowClone: boolean;
+      };
+  readonly capabilities: {
+    readonly canEdit: boolean;
+    readonly canClone: boolean;
+    readonly canCompare: boolean;
+  };
   readonly currentVersionId: string | null;
   readonly latestPublishedVersionId: string | null;
   readonly updatedAt: string;
@@ -148,6 +167,27 @@ interface ShareReceipt {
   readonly id: string;
   readonly shareUrl: string;
   readonly expiresAt: string | null;
+}
+
+interface RankingComparison {
+  readonly left: { readonly list: RankingList; readonly version: RankingVersion };
+  readonly right: { readonly list: RankingList; readonly version: RankingVersion };
+  readonly players: readonly PlayerIdentity[];
+}
+
+interface RankingComparisonRow {
+  readonly playerId: string;
+  readonly fullName: string;
+  readonly position: Position | null;
+  readonly leftRank: number | null;
+  readonly rightRank: number | null;
+  readonly rankDelta: number | null;
+  readonly leftTier: number | null;
+  readonly rightTier: number | null;
+  readonly leftAdp: number | null;
+  readonly rightAdp: number | null;
+  readonly leftAav: number | null;
+  readonly rightAav: number | null;
 }
 
 const csvColumnLabels = {
@@ -306,6 +346,54 @@ function dateLabel(value: string): string {
   }).format(new Date(value));
 }
 
+function comparisonRows(comparison: RankingComparison): readonly RankingComparisonRow[] {
+  const players = new Map(comparison.players.map((player) => [player.id, player]));
+  const left = new Map(comparison.left.version.entries.map((entry) => [entry.playerId, entry]));
+  const right = new Map(comparison.right.version.entries.map((entry) => [entry.playerId, entry]));
+  const playerIds = [
+    ...comparison.left.version.entries.map((entry) => entry.playerId),
+    ...comparison.right.version.entries
+      .map((entry) => entry.playerId)
+      .filter((playerId) => !left.has(playerId)),
+  ];
+  return playerIds
+    .map((playerId) => {
+      const leftEntry = left.get(playerId);
+      const rightEntry = right.get(playerId);
+      const leftRank = leftEntry?.overallRank?.value ?? null;
+      const rightRank = rightEntry?.overallRank?.value ?? null;
+      return {
+        playerId,
+        fullName: players.get(playerId)?.fullName ?? "Unknown player",
+        position: leftEntry?.position ?? rightEntry?.position ?? null,
+        leftRank,
+        rightRank,
+        rankDelta: leftRank === null || rightRank === null ? null : leftRank - rightRank,
+        leftTier: leftEntry?.tier?.value ?? null,
+        rightTier: rightEntry?.tier?.value ?? null,
+        leftAdp: leftEntry?.adp?.value ?? null,
+        rightAdp: rightEntry?.adp?.value ?? null,
+        leftAav: leftEntry?.aav?.value ?? null,
+        rightAav: rightEntry?.aav?.value ?? null,
+      };
+    })
+    .sort((leftRow, rightRow) => {
+      const leftBest = Math.min(
+        leftRow.leftRank ?? Number.MAX_SAFE_INTEGER,
+        leftRow.rightRank ?? Number.MAX_SAFE_INTEGER,
+      );
+      const rightBest = Math.min(
+        rightRow.leftRank ?? Number.MAX_SAFE_INTEGER,
+        rightRow.rightRank ?? Number.MAX_SAFE_INTEGER,
+      );
+      return leftBest - rightBest || leftRow.fullName.localeCompare(rightRow.fullName);
+    });
+}
+
+function comparisonValue(value: number | null, prefix = ""): string {
+  return value === null ? "—" : `${prefix}${value}`;
+}
+
 export function RankingsStudio() {
   const [lists, setLists] = useState<RankingList[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -332,7 +420,11 @@ export function RankingsStudio() {
   const [csvState, setCsvState] = useState<RequestState>("idle");
   const [csvMessage, setCsvMessage] = useState<string | null>(null);
   const [share, setShare] = useState<ShareReceipt | null>(null);
+  const [shareRevokeArmed, setShareRevokeArmed] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [comparisonTargetId, setComparisonTargetId] = useState("");
+  const [comparison, setComparison] = useState<RankingComparison | null>(null);
+  const [comparisonState, setComparisonState] = useState<RequestState>("idle");
   const [mutationInFlight, setMutationInFlight] = useState(false);
   const [versionReload, setVersionReload] = useState(0);
   const [demoMode, setDemoMode] = useState(false);
@@ -357,6 +449,14 @@ export function RankingsStudio() {
   const workspaceMatches = selectedBoardId !== null && workspaceBoardId === selectedBoardId;
   const visibleVersion = workspaceMatches ? version : null;
   const visibleEntries = workspaceMatches ? entries : [];
+  const availableComparisonBoards = useMemo(
+    () => lists.filter((list) => list.id !== selectedBoardId && list.currentVersionId !== null),
+    [lists, selectedBoardId],
+  );
+  const visibleComparisonRows = useMemo(
+    () => (comparison ? comparisonRows(comparison) : []),
+    [comparison],
+  );
   const csvPreview =
     workspaceMatches && boundCsvPreview?.boardId === selectedBoardId
       ? boundCsvPreview.preview
@@ -370,6 +470,7 @@ export function RankingsStudio() {
     mutationInFlight ||
     actionState === "working" ||
     csvState === "working" ||
+    comparisonState === "working" ||
     pageState === "working";
   selectedIdRef.current = selectedId;
   workspaceBoardIdRef.current = workspaceBoardId;
@@ -391,7 +492,10 @@ export function RankingsStudio() {
     setMetadataName("");
     setMetadataDescription("");
     setShare(null);
+    setShareRevokeArmed(false);
     setCopied(false);
+    setComparison(null);
+    setComparisonState("idle");
     setCsvSource("");
     setCsvFileName(defaultCsvFileName);
     setCsvColumns({ ...defaultCsvColumns });
@@ -460,6 +564,7 @@ export function RankingsStudio() {
   useEffect(() => {
     setWorkspaceBoardId(selectedBoardId);
     setShare(null);
+    setShareRevokeArmed(false);
     setCopied(false);
     csvPreviewRequestRef.current?.abort();
     csvPreviewRequestRef.current = null;
@@ -471,6 +576,8 @@ export function RankingsStudio() {
     setCsvDirty(false);
     setCsvState("idle");
     setCsvMessage(null);
+    setComparison(null);
+    setComparisonState("idle");
     if (!selected) {
       setMetadataName("");
       setMetadataDescription("");
@@ -479,6 +586,19 @@ export function RankingsStudio() {
     setMetadataName(selected.name);
     setMetadataDescription(selected.description ?? "");
   }, [selectedBoardId]);
+
+  useEffect(() => {
+    setComparisonTargetId((current) =>
+      current && current !== selectedBoardId && lists.some((list) => list.id === current)
+        ? current
+        : (lists.find((list) => list.id !== selectedBoardId && list.currentVersionId)?.id ?? ""),
+    );
+  }, [lists, selectedBoardId]);
+
+  useEffect(() => {
+    setComparison(null);
+    setComparisonState("idle");
+  }, [selectedVersionId]);
 
   useEffect(() => {
     versionRequestRef.current?.abort();
@@ -701,6 +821,73 @@ export function RankingsStudio() {
     });
   }
 
+  async function cloneBoard() {
+    if (
+      !selected?.currentVersionId ||
+      !selected.capabilities.canClone ||
+      controlsBusy ||
+      !confirmDiscardChanges() ||
+      !beginMutation()
+    )
+      return;
+    const source = selected;
+    const name = `${source.name} — my board`.slice(0, 160);
+    setActionState("working");
+    setMessage(null);
+    try {
+      const result = await apiJson<{ list: { readonly id: string }; version: RankingVersion }>(
+        `/v1/rankings/${source.id}/clone`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            name,
+            sourceVersionId: source.currentVersionId,
+            changeNote: `Started from ${source.name}`,
+          }),
+        },
+      );
+      selectedIdRef.current = result.list.id;
+      resetWorkspace(result.list.id);
+      setSelectedId(result.list.id);
+      await loadLists(result.list.id, { reloadVersion: true, resetMetadata: true });
+      setActionState("done");
+      setMessage(`Baseline copied into an independent private draft.`);
+    } catch (error) {
+      setActionState("error");
+      setMessage(error instanceof Error ? error.message : "The baseline could not be copied.");
+    } finally {
+      finishMutation();
+    }
+  }
+
+  async function compareBoards() {
+    if (
+      !selected?.currentVersionId ||
+      !comparisonTargetId ||
+      entriesDirty ||
+      controlsBusy ||
+      mutationRef.current
+    )
+      return;
+    setComparisonState("working");
+    setComparison(null);
+    setMessage(null);
+    try {
+      const result = await apiJson<RankingComparison>("/v1/rankings/compare", {
+        method: "POST",
+        body: JSON.stringify({
+          left: { listId: selected.id, versionId: selected.currentVersionId },
+          right: { listId: comparisonTargetId },
+        }),
+      });
+      setComparison(result);
+      setComparisonState("done");
+    } catch (error) {
+      setComparisonState("error");
+      setMessage(error instanceof Error ? error.message : "The boards could not be compared.");
+    }
+  }
+
   async function createList(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (controlsBusy || !confirmDiscardChanges() || !beginMutation()) return;
@@ -739,7 +926,13 @@ export function RankingsStudio() {
 
   async function saveMetadata(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!selected || !workspaceMatches || !metadataDirty || controlsBusy || !beginMutation())
+    if (
+      !selected?.capabilities.canEdit ||
+      !workspaceMatches ||
+      !metadataDirty ||
+      controlsBusy ||
+      !beginMutation()
+    )
       return;
     const boardId = selected.id;
     setActionState("working");
@@ -766,7 +959,8 @@ export function RankingsStudio() {
   }
 
   function updateEntry(index: number, patch: Partial<EditableEntry>) {
-    if (!workspaceMatches || controlsBusy || mutationRef.current) return;
+    if (!selected?.capabilities.canEdit || !workspaceMatches || controlsBusy || mutationRef.current)
+      return;
     setEntries((current) =>
       current.map((entry, entryIndex) => (entryIndex === index ? { ...entry, ...patch } : entry)),
     );
@@ -774,8 +968,38 @@ export function RankingsStudio() {
     dirtyRef.current = true;
   }
 
+  function moveEntry(index: number, direction: -1 | 1) {
+    const targetIndex = index + direction;
+    if (
+      !selected?.capabilities.canEdit ||
+      targetIndex < 0 ||
+      targetIndex >= entries.length ||
+      controlsBusy
+    )
+      return;
+    setEntries((current) => {
+      const reordered = [...current];
+      const [moved] = reordered.splice(index, 1);
+      if (!moved) return current;
+      reordered.splice(targetIndex, 0, moved);
+      return reordered.map((entry, entryIndex) => ({
+        ...entry,
+        overallRank: String(entryIndex + 1),
+      }));
+    });
+    setEntriesDirty(true);
+    dirtyRef.current = true;
+  }
+
   async function saveEntries() {
-    if (!selected || !workspaceMatches || !entriesDirty || controlsBusy || !beginMutation()) return;
+    if (
+      !selected?.capabilities.canEdit ||
+      !workspaceMatches ||
+      !entriesDirty ||
+      controlsBusy ||
+      !beginMutation()
+    )
+      return;
     const boardId = selected.id;
     const expectedCurrentVersionId = selected.currentVersionId;
     setActionState("working");
@@ -804,6 +1028,7 @@ export function RankingsStudio() {
   async function publishVersion() {
     if (
       !selected?.currentVersionId ||
+      !selected.capabilities.canEdit ||
       !workspaceMatches ||
       entriesDirty ||
       controlsBusy ||
@@ -856,7 +1081,8 @@ export function RankingsStudio() {
   }
 
   async function previewCsv() {
-    if (!selected || !workspaceMatches || controlsBusy || mutationRef.current) return;
+    if (!selected?.capabilities.canEdit || !workspaceMatches || controlsBusy || mutationRef.current)
+      return;
     const boardId = selected.id;
     const source = csvSource;
     const sourceFileName = csvFileName.trim();
@@ -907,6 +1133,7 @@ export function RankingsStudio() {
     const receipt = boundCsvPreview;
     if (
       !selected ||
+      !selected.capabilities.canEdit ||
       !workspaceMatches ||
       entriesDirty ||
       controlsBusy ||
@@ -1009,7 +1236,8 @@ export function RankingsStudio() {
   }
 
   async function createShare() {
-    if (!selected || !visibleVersion || entriesDirty || !beginMutation()) return;
+    if (!selected?.capabilities.canEdit || !visibleVersion || entriesDirty || !beginMutation())
+      return;
     const boardId = selected.id;
     setActionState("working");
     setMessage(null);
@@ -1019,6 +1247,7 @@ export function RankingsStudio() {
         body: JSON.stringify({ label: "Rankings Studio share", allowCopy: true, maxUses: 100 }),
       });
       setShare(result);
+      setShareRevokeArmed(false);
       setActionState("done");
       setMessage("Private share created. Its access key stays in the link fragment.");
     } catch (error) {
@@ -1041,13 +1270,20 @@ export function RankingsStudio() {
   }
 
   async function revokeShare() {
-    if (!selected || !share || !beginMutation()) return;
+    if (!selected || !share) return;
+    if (!shareRevokeArmed) {
+      setShareRevokeArmed(true);
+      setMessage("Confirm that you want to revoke this private link.");
+      return;
+    }
+    if (!beginMutation()) return;
     const boardId = selected.id;
     const shareId = share.id;
     setActionState("working");
     try {
       await apiJson(`/v1/rankings/${boardId}/shares/${shareId}`, { method: "DELETE" });
       setShare(null);
+      setShareRevokeArmed(false);
       setActionState("done");
       setMessage("Share revoked. The old link no longer opens this board.");
       await loadLists(boardId);
@@ -1204,7 +1440,7 @@ export function RankingsStudio() {
           <div className="panel-heading">
             <div>
               <p className="eyebrow">Library</p>
-              <h2>Your boards</h2>
+              <h2>Available boards</h2>
             </div>
             <span className="count-badge">{lists.length}</span>
           </div>
@@ -1237,7 +1473,8 @@ export function RankingsStudio() {
                   <strong>{list.name}</strong>
                   <small>
                     {list.season} · {kindLabel(list.kind)} ·{" "}
-                    {list.scoringContext.label ?? list.scoringContext.format}
+                    {list.scoringContext.label ?? list.scoringContext.format} ·{" "}
+                    {list.capabilities.canEdit ? "Yours" : "League baseline"}
                   </small>
                 </span>
                 <ChevronRight size={15} />
@@ -1279,7 +1516,7 @@ export function RankingsStudio() {
                         value={metadataName}
                         maxLength={160}
                         required
-                        disabled={controlsBusy}
+                        disabled={controlsBusy || !selected.capabilities.canEdit}
                         onChange={(event) => setMetadataName(event.target.value)}
                       />
                     </label>
@@ -1289,18 +1526,30 @@ export function RankingsStudio() {
                         value={metadataDescription}
                         maxLength={4000}
                         placeholder="What makes this board different?"
-                        disabled={controlsBusy}
+                        disabled={controlsBusy || !selected.capabilities.canEdit}
                         onChange={(event) => setMetadataDescription(event.target.value)}
                       />
                     </label>
                   </div>
-                  <button
-                    className="button button--outline button--small"
-                    type="submit"
-                    disabled={!metadataDirty || controlsBusy}
-                  >
-                    <PencilLine size={14} /> Save metadata
-                  </button>
+                  <div className="ranking-board-actions">
+                    <button
+                      className="button button--outline button--small"
+                      type="button"
+                      disabled={!visibleVersion || !selected.capabilities.canClone || controlsBusy}
+                      onClick={() => void cloneBoard()}
+                    >
+                      <Copy size={14} /> Use as baseline
+                    </button>
+                    {selected.capabilities.canEdit ? (
+                      <button
+                        className="button button--outline button--small"
+                        type="submit"
+                        disabled={!metadataDirty || controlsBusy}
+                      >
+                        <PencilLine size={14} /> Save metadata
+                      </button>
+                    ) : null}
+                  </div>
                 </form>
                 <div className="ranking-version-strip">
                   {visibleVersion ? (
@@ -1330,18 +1579,153 @@ export function RankingsStudio() {
                 </div>
               </section>
 
+              <section className="panel ranking-comparison" aria-labelledby="board-compare-title">
+                <div className="ranking-comparison-toolbar">
+                  <div>
+                    <p className="eyebrow">Board comparison</p>
+                    <h2 id="board-compare-title">Pressure-test the baseline</h2>
+                    <p>Compare saved ranks and market values without changing either board.</p>
+                  </div>
+                  <div className="ranking-comparison-controls">
+                    <label>
+                      <span className="sr-only">Board to compare with {selected.name}</span>
+                      <select
+                        value={comparisonTargetId}
+                        disabled={availableComparisonBoards.length === 0 || controlsBusy}
+                        onChange={(event) => {
+                          setComparisonTargetId(event.target.value);
+                          setComparison(null);
+                          setComparisonState("idle");
+                        }}
+                      >
+                        {availableComparisonBoards.length === 0 ? (
+                          <option value="">No other saved boards</option>
+                        ) : null}
+                        {availableComparisonBoards.map((list) => (
+                          <option value={list.id} key={list.id}>
+                            {list.name}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <button
+                      className="button button--dark button--small"
+                      type="button"
+                      disabled={!comparisonTargetId || entriesDirty || controlsBusy}
+                      onClick={() => void compareBoards()}
+                    >
+                      {comparisonState === "working" ? (
+                        <LoaderCircle className="spin" size={14} />
+                      ) : (
+                        <GitCompareArrows size={14} />
+                      )}{" "}
+                      Compare saved boards
+                    </button>
+                  </div>
+                </div>
+                {availableComparisonBoards.length === 0 ? (
+                  <p className="ranking-comparison-empty">
+                    Create or copy another saved board to compare assumptions side by side.
+                  </p>
+                ) : null}
+                {comparison ? (
+                  <div className="ranking-comparison-result">
+                    <div className="ranking-comparison-summary" aria-live="polite">
+                      <strong>{comparison.left.list.name}</strong>
+                      <GitCompareArrows size={15} />
+                      <strong>{comparison.right.list.name}</strong>
+                      <span>{visibleComparisonRows.length} players across both boards</span>
+                    </div>
+                    <div
+                      className="ranking-table-wrap"
+                      role="region"
+                      aria-label="Board comparison; scroll horizontally to view all columns"
+                      tabIndex={0}
+                    >
+                      <table className="ranking-table ranking-comparison-table">
+                        <thead>
+                          <tr>
+                            <th scope="col">Player</th>
+                            <th scope="col">Pos</th>
+                            <th scope="col">A rank</th>
+                            <th scope="col">B rank</th>
+                            <th scope="col">B movement</th>
+                            <th scope="col">A / B tier</th>
+                            <th scope="col">A / B ADP</th>
+                            <th scope="col">A / B AAV</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {visibleComparisonRows.map((row) => (
+                            <tr key={row.playerId}>
+                              <td>
+                                <strong>{row.fullName}</strong>
+                                <small>{row.playerId.slice(0, 8)}</small>
+                              </td>
+                              <td>{row.position ?? "—"}</td>
+                              <td>{comparisonValue(row.leftRank)}</td>
+                              <td>{comparisonValue(row.rightRank)}</td>
+                              <td>
+                                {row.rankDelta === null ? (
+                                  <span className="ranking-comparison-muted">
+                                    {row.leftRank === null ? "Only B" : "Only A"}
+                                  </span>
+                                ) : row.rankDelta === 0 ? (
+                                  <span className="ranking-comparison-muted">Even</span>
+                                ) : (
+                                  <span
+                                    className={
+                                      row.rankDelta > 0
+                                        ? "ranking-movement ranking-movement--up"
+                                        : "ranking-movement ranking-movement--down"
+                                    }
+                                  >
+                                    {row.rankDelta > 0 ? "↑" : "↓"} {Math.abs(row.rankDelta)}
+                                  </span>
+                                )}
+                              </td>
+                              <td>
+                                {comparisonValue(row.leftTier)} / {comparisonValue(row.rightTier)}
+                              </td>
+                              <td>
+                                {comparisonValue(row.leftAdp)} / {comparisonValue(row.rightAdp)}
+                              </td>
+                              <td>
+                                {comparisonValue(row.leftAav, "$")} /{" "}
+                                {comparisonValue(row.rightAav, "$")}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                ) : null}
+              </section>
+
               <section className="panel ranking-editor">
                 <div className="panel-heading">
                   <div>
-                    <p className="eyebrow">Editable draft</p>
+                    <p className="eyebrow">
+                      {selected.capabilities.canEdit ? "Editable draft" : "Available baseline"}
+                    </p>
                     <h2>{visibleEntries.length} ranked players</h2>
-                    <p>Edits create a new child version; previous snapshots never change.</p>
+                    <p>
+                      {selected.capabilities.canEdit
+                        ? "Edits create a new child version; previous snapshots never change."
+                        : "Copy this board to make private changes without altering its source."}
+                    </p>
                   </div>
                   <div className="ranking-editor-actions">
                     <button
                       className="button button--outline button--small"
                       type="button"
-                      disabled={!visibleVersion || entriesDirty || controlsBusy}
+                      disabled={
+                        !selected.capabilities.canEdit ||
+                        !visibleVersion ||
+                        entriesDirty ||
+                        controlsBusy
+                      }
                       onClick={() => void publishVersion()}
                     >
                       <Send size={14} /> Publish
@@ -1349,7 +1733,12 @@ export function RankingsStudio() {
                     <button
                       className="button button--lime button--small"
                       type="button"
-                      disabled={!visibleVersion || !entriesDirty || controlsBusy}
+                      disabled={
+                        !selected.capabilities.canEdit ||
+                        !visibleVersion ||
+                        !entriesDirty ||
+                        controlsBusy
+                      }
                       onClick={() => void saveEntries()}
                     >
                       {actionState === "working" ? (
@@ -1395,6 +1784,7 @@ export function RankingsStudio() {
                           <th scope="col">Target $</th>
                           <th scope="col">Notes</th>
                           <th scope="col">Flags</th>
+                          <th scope="col">Order</th>
                           <th scope="col">
                             <span className="sr-only">Remove</span>
                           </th>
@@ -1411,7 +1801,7 @@ export function RankingsStudio() {
                               <select
                                 aria-label={`${entry.fullName} position`}
                                 value={entry.position}
-                                disabled={controlsBusy}
+                                disabled={controlsBusy || !selected.capabilities.canEdit}
                                 onChange={(event) =>
                                   updateEntry(index, {
                                     position: event.target.value as Position | "",
@@ -1435,7 +1825,7 @@ export function RankingsStudio() {
                                     aria-label={`${entry.fullName} ${field}`}
                                     inputMode="decimal"
                                     value={entry[field]}
-                                    disabled={controlsBusy}
+                                    disabled={controlsBusy || !selected.capabilities.canEdit}
                                     onChange={(event) =>
                                       updateEntry(index, { [field]: event.target.value })
                                     }
@@ -1448,7 +1838,7 @@ export function RankingsStudio() {
                                 className="ranking-notes-input"
                                 aria-label={`${entry.fullName} notes`}
                                 value={entry.notes}
-                                disabled={controlsBusy}
+                                disabled={controlsBusy || !selected.capabilities.canEdit}
                                 onChange={(event) =>
                                   updateEntry(index, { notes: event.target.value })
                                 }
@@ -1459,7 +1849,7 @@ export function RankingsStudio() {
                                 <input
                                   type="checkbox"
                                   checked={entry.target}
-                                  disabled={controlsBusy}
+                                  disabled={controlsBusy || !selected.capabilities.canEdit}
                                   onChange={(event) =>
                                     updateEntry(index, {
                                       target: event.target.checked,
@@ -1473,7 +1863,7 @@ export function RankingsStudio() {
                                 <input
                                   type="checkbox"
                                   checked={entry.avoid}
-                                  disabled={controlsBusy}
+                                  disabled={controlsBusy || !selected.capabilities.canEdit}
                                   onChange={(event) =>
                                     updateEntry(index, {
                                       avoid: event.target.checked,
@@ -1485,11 +1875,39 @@ export function RankingsStudio() {
                               </label>
                             </td>
                             <td>
+                              <div className="ranking-order-controls">
+                                <button
+                                  className="icon-button icon-button--small"
+                                  type="button"
+                                  aria-label={`Move ${entry.fullName} up one rank`}
+                                  disabled={
+                                    controlsBusy || !selected.capabilities.canEdit || index === 0
+                                  }
+                                  onClick={() => moveEntry(index, -1)}
+                                >
+                                  <ArrowUp size={14} />
+                                </button>
+                                <button
+                                  className="icon-button icon-button--small"
+                                  type="button"
+                                  aria-label={`Move ${entry.fullName} down one rank`}
+                                  disabled={
+                                    controlsBusy ||
+                                    !selected.capabilities.canEdit ||
+                                    index === visibleEntries.length - 1
+                                  }
+                                  onClick={() => moveEntry(index, 1)}
+                                >
+                                  <ArrowDown size={14} />
+                                </button>
+                              </div>
+                            </td>
+                            <td>
                               <button
                                 className="icon-button icon-button--small"
                                 type="button"
                                 aria-label={`Remove ${entry.fullName}`}
-                                disabled={controlsBusy}
+                                disabled={controlsBusy || !selected.capabilities.canEdit}
                                 onClick={() => {
                                   setEntries((current) =>
                                     current.filter((_, candidateIndex) => candidateIndex !== index),
@@ -1525,7 +1943,7 @@ export function RankingsStudio() {
                       <input
                         value={csvFileName}
                         maxLength={240}
-                        disabled={controlsBusy}
+                        disabled={controlsBusy || !selected.capabilities.canEdit}
                         onChange={(event) => {
                           setCsvFileName(event.target.value);
                           markCsvChanged();
@@ -1537,7 +1955,7 @@ export function RankingsStudio() {
                       <textarea
                         value={csvSource}
                         spellCheck={false}
-                        disabled={controlsBusy}
+                        disabled={controlsBusy || !selected.capabilities.canEdit}
                         placeholder={
                           "name,position,rank,tier,adp,aav,target_price,notes\nChristian McCaffrey,RB,1,1,1.4,62,58,Elite dual-threat"
                         }
@@ -1560,7 +1978,7 @@ export function RankingsStudio() {
                             <input
                               value={csvColumns[field]}
                               placeholder="Not mapped"
-                              disabled={controlsBusy}
+                              disabled={controlsBusy || !selected.capabilities.canEdit}
                               onChange={(event) => {
                                 setCsvColumns((current) => ({
                                   ...current,
@@ -1619,7 +2037,9 @@ export function RankingsStudio() {
                       <button
                         className="button button--outline"
                         type="button"
-                        disabled={!csvSource.trim() || controlsBusy}
+                        disabled={
+                          !selected.capabilities.canEdit || !csvSource.trim() || controlsBusy
+                        }
                         onClick={() => void previewCsv()}
                       >
                         {csvState === "working" ? (
@@ -1634,6 +2054,7 @@ export function RankingsStudio() {
                         type="button"
                         disabled={
                           !csvPreview ||
+                          !selected.capabilities.canEdit ||
                           csvPreview.summary.ready === 0 ||
                           entriesDirty ||
                           controlsBusy
@@ -1685,7 +2106,12 @@ export function RankingsStudio() {
                     <button
                       className="ranking-tool-button"
                       type="button"
-                      disabled={!visibleVersion || entriesDirty || controlsBusy}
+                      disabled={
+                        !selected.capabilities.canEdit ||
+                        !visibleVersion ||
+                        entriesDirty ||
+                        controlsBusy
+                      }
                       onClick={() => void createShare()}
                     >
                       <Link2 size={19} />
@@ -1725,8 +2151,22 @@ export function RankingsStudio() {
                             disabled={mutationInFlight}
                             onClick={() => void revokeShare()}
                           >
-                            <Trash2 size={14} /> Revoke
+                            <Trash2 size={14} />
+                            {shareRevokeArmed ? "Yes, revoke link" : "Revoke link"}
                           </button>
+                          {shareRevokeArmed ? (
+                            <button
+                              className="button button--soft button--small"
+                              type="button"
+                              disabled={mutationInFlight}
+                              onClick={() => {
+                                setShareRevokeArmed(false);
+                                setMessage(null);
+                              }}
+                            >
+                              Keep link
+                            </button>
+                          ) : null}
                         </div>
                       </div>
                     ) : null}

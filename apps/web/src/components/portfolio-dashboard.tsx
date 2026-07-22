@@ -31,7 +31,7 @@ import {
   type DecisionAction,
   type LeagueSummary,
 } from "../lib/demo-data";
-import { yahooDeveloperAccessPending } from "../lib/public-site";
+import { yahooComingSoon } from "../lib/public-site";
 
 type LeagueFilter = string;
 
@@ -421,11 +421,11 @@ export function PortfolioDashboard() {
                 <p>Official API + OAuth 2.0</p>
               </div>
               <span className="provider-state provider-state--pending">
-                {yahooDeveloperAccessPending ? "Coming soon" : "OAuth ready"}
+                {yahooComingSoon ? "Coming soon" : "OAuth ready"}
               </span>
             </div>
             <p className="provider-description">
-              {yahooDeveloperAccessPending
+              {yahooComingSoon
                 ? "Yahoo sign-in and read-only league sync are coming soon."
                 : "Laces Out implements Yahoo’s official Authorization Code + PKCE flow. With approved Fantasy API credentials configured, it discovers leagues and performs read-only settings, team, roster, standings, and scoreboard sync."}
             </p>
@@ -452,9 +452,9 @@ export function PortfolioDashboard() {
               <div className="provider-detail">
                 <Info size={15} />
                 <p>
-                  {yahooDeveloperAccessPending
+                  {yahooComingSoon
                     ? "This tour is not a connected account. Yahoo sign-in is coming soon; when available, token exchange will stay server-side and refresh tokens will remain encrypted."
-                    : "This sample screen is not a connected account. After sign-in, Connections can start the implemented OAuth flow with the deployment’s Yahoo-approved client credentials. Token exchange stays server-side and refresh tokens are encrypted."}
+                    : "This sample screen is not a connected account. After sign-in, Connections can start Yahoo authorization. Token exchange stays server-side and refresh tokens are encrypted."}
                 </p>
               </div>
             ) : null}

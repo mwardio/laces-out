@@ -13,6 +13,7 @@ test-results/
 .DS_Store
 backups/
 tmp/
+reports/
 ENHANCEMENT_PLAN.md
 IMPLEMENTATION_PLAN.md
 docs/ROS_V7_KICKER_INTERVALS.md

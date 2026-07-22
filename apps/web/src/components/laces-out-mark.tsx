@@ -13,19 +13,23 @@ export function LacesOutMark({ compact = false }: LacesOutMarkProps) {
       data-ventura-identity="finkle-is-einhorn"
     >
       <svg viewBox="0 0 64 64" focusable="false">
-        <path className="brand-mark__base" d="M18.1 48.8h27.8l3.4 7H14.7Z" />
-        <path className="brand-mark__base-rim" d="M17.5 51.3h29" />
-        <circle className="brand-mark__orb" cx="32" cy="29.5" r="21.5" />
-        <circle className="brand-mark__orb-rim" cx="32" cy="29.5" r="20.2" />
-        <path className="brand-mark__glint" d="M18.4 29.2c.2-7.1 4.2-13.2 10.2-16.1" />
+        <ellipse className="brand-mark__shadow" cx="32" cy="55.2" rx="18" ry="2.4" />
+        <path className="brand-mark__base" d="M18 45.8h28l3.6 7.1H14.4Z" />
+        <path className="brand-mark__base-foot" d="M13.6 52h36.8v4.1H13.6Z" />
+        <path className="brand-mark__base-rim" d="M17.2 49.1h29.6M17 53.7h30" />
+        <circle className="brand-mark__orb" cx="32" cy="27.3" r="22.2" />
+        <circle className="brand-mark__orb-glow" cx="32" cy="27.3" r="19.2" />
+        <circle className="brand-mark__orb-rim" cx="32" cy="27.3" r="21" />
+        <path className="brand-mark__glint" d="M16.8 27c.3-6.9 4.2-12.8 10.1-15.8" />
         <path
           className="brand-mark__football"
-          d="M32 12.7c-6.2 3.2-9.6 9.7-9.6 17.8S25.8 45.2 32 48.4c6.2-3.2 9.6-9.8 9.6-17.9S38.2 15.9 32 12.7Z"
+          d="M32 9.2c-7.1 3.8-10.8 10.3-10.8 18.2S24.9 41.8 32 45.6c7.1-3.8 10.8-10.3 10.8-18.2S39.1 13 32 9.2Z"
         />
-        <path className="brand-mark__seam" d="M32 19.2v22.6" />
+        <path className="brand-mark__football-shine" d="M27 15.4c-2.3 3.6-3.4 7.6-3.4 12" />
+        <path className="brand-mark__seam" d="M32 15.8V40" />
         <path
           className="brand-mark__lace"
-          d="M27.8 24.1h8.4m-9.1 3.9h9.8m-9.8 3.9h9.8m-9.1 3.9h8.4"
+          d="M28.6 19.2h6.8m-7.5 4.1h8.2m-8.2 4.1h8.2m-8.2 4.1h8.2m-7.5 4.1h6.8"
         />
       </svg>
     </span>

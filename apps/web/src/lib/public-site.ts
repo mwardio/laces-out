@@ -8,7 +8,7 @@ function configuredContactEmail(): string | null {
 
 export const publicContactEmail = configuredContactEmail();
 
-export const yahooDeveloperAccessPending =
+export const yahooComingSoon =
   process.env.NEXT_PUBLIC_YAHOO_ACCESS_STATUS?.trim().toLowerCase() !== "available";
 
 function configuredSiteUrl(): URL {

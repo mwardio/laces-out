@@ -45,6 +45,8 @@ const setSummary = {
   leagueSeasonId: SEASON_ID,
   creatorUserId: USER_ID,
   creatorDisplayName: "League Guru",
+  origin: "custom" as const,
+  managed: null,
   visibility: "private" as const,
   sourceLabel: "Personal model",
   sourceFileName: "week-2.csv",
@@ -70,6 +72,12 @@ const listResponse: ProjectionSetListResponse = {
     currentWeek: 2,
     membershipRole: "manager",
     canShareLeague: false,
+  },
+  managedForecastStatus: {
+    state: "pending",
+    evaluatedAt: null,
+    qualityState: null,
+    reasons: [],
   },
   projectionSets: [setSummary],
 };

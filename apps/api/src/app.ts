@@ -26,14 +26,18 @@ import {
   type RefreshRequest,
   type TeamClaimResponse,
 } from "@fantasy/contracts";
-import { EspnImportError } from "@fantasy/connector-espn";
+import { EspnImportError, EspnWebClientNormalizationError } from "@fantasy/connector-espn";
 import Fastify, { type FastifyInstance } from "fastify";
 import { z, ZodError } from "zod";
 
 import { sessionCookieName, sessionLifetimeSeconds, type AuthService } from "./auth.js";
 import { type AiServicePort, registerAiRoutes } from "./ai-routes.js";
 import { getDemoDashboard } from "./demo.js";
-import { type DraftSessionPort, registerDraftRoutes } from "./draft-routes.js";
+import {
+  type DraftMarketPort,
+  type DraftSessionPort,
+  registerDraftRoutes,
+} from "./draft-routes.js";
 import { type EspnManualImportPort, registerEspnManualImportRoutes } from "./espn-import-routes.js";
 import { type InvitationPort, registerInvitationRoutes } from "./invitation-routes.js";
 import {
@@ -49,8 +53,13 @@ import {
   registerProjectionImportRoutes,
 } from "./projection-import-routes.js";
 import { type RankingPort, registerRankingRoutes } from "./ranking-routes.js";
+import {
+  type RosProjectionStatusPort,
+  registerRosProjectionStatusRoutes,
+} from "./ros-projection-status-routes.js";
 import type { RefreshAuthorizationPort } from "./refresh-authorization.js";
 import { type RegistrationPort, registerRegistrationRoutes } from "./registration-routes.js";
+import { type StatsCenterPort, registerStatsCenterRoutes } from "./stats-center-routes.js";
 import { registerYahooRoutes } from "./yahoo-routes.js";
 import type { YahooSyncPort } from "./yahoo-sync.js";
 
@@ -119,6 +128,7 @@ export interface BuildAppOptions {
   readonly requireAuthentication?: boolean;
   readonly readinessCheck?: () => Promise<boolean>;
   readonly draftSessions?: DraftSessionPort;
+  readonly draftMarket?: DraftMarketPort;
   readonly espnBridge?: EspnBridgePort;
   readonly espnImports?: EspnManualImportPort;
   readonly invitations?: InvitationPort;
@@ -128,13 +138,20 @@ export interface BuildAppOptions {
   readonly leagueDashboard?: LeagueDashboardPort;
   readonly projectionImports?: ProjectionImportPort;
   readonly rankings?: RankingPort;
+  readonly rosProjectionStatus?: RosProjectionStatusPort;
   readonly refreshAuthorization?: RefreshAuthorizationPort;
   readonly registration?: RegistrationPort;
+  readonly statsCenter?: StatsCenterPort;
   readonly yahooConnection?: YahooConnectionPort;
   readonly yahooSync?: YahooSyncPort;
   readonly enqueueRefresh?: (request: {
     readonly requestedBy: string;
-    readonly refresh: Extract<RefreshRequest, { scope: "player-data" }>;
+    readonly refresh: Extract<RefreshRequest, { scope: "player-data" | "adp-data" }>;
+    readonly requestedAt: Date;
+  }) => Promise<string | null>;
+  readonly enqueueProjectionRefresh?: (request: {
+    readonly season: number;
+    readonly reason: "league-sync";
     readonly requestedAt: Date;
   }) => Promise<string | null>;
 }
@@ -378,12 +395,16 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   });
   registerDraftRoutes(app, {
     ...(options.draftSessions ? { draftSessions: options.draftSessions } : {}),
+    ...(options.draftMarket ? { draftMarket: options.draftMarket } : {}),
   });
   registerInSeasonDecisionRoutes(app, {
     ...(options.decisions ? { decisions: options.decisions } : {}),
   });
   registerLeagueAnalyticsRoutes(app, {
     ...(options.analytics ? { analytics: options.analytics } : {}),
+  });
+  registerStatsCenterRoutes(app, {
+    ...(options.statsCenter ? { statsCenter: options.statsCenter } : {}),
   });
   registerAiRoutes(app, options.ai);
   registerProjectionImportRoutes(app, {
@@ -392,8 +413,14 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   registerEspnManualImportRoutes(app, {
     ...(options.espnImports ? { espnImports: options.espnImports } : {}),
   });
+  registerRosProjectionStatusRoutes(app, {
+    ...(options.rosProjectionStatus ? { rosProjectionStatus: options.rosProjectionStatus } : {}),
+  });
   registerYahooRoutes(app, {
     ...(options.yahooSync ? { yahooSync: options.yahooSync } : {}),
+    ...(options.enqueueProjectionRefresh
+      ? { enqueueProjectionRefresh: options.enqueueProjectionRefresh }
+      : {}),
   });
 
   app.get("/v1/meta", () => ({
@@ -595,6 +622,20 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
       const receipt = espnBridgeReceiptSchema.parse(
         await options.espnBridge.acceptSnapshot(match[1], snapshot),
       );
+      if (receipt.state === "accepted" && options.enqueueProjectionRefresh) {
+        try {
+          await options.enqueueProjectionRefresh({
+            season: snapshot.season,
+            reason: "league-sync",
+            requestedAt: new Date(),
+          });
+        } catch (error) {
+          request.log.warn(
+            { err: error, season: snapshot.season },
+            "ESPN sync succeeded but projection refresh enqueue failed",
+          );
+        }
+      }
       return reply.code(receipt.state === "accepted" ? 202 : 200).send(receipt);
     },
   );
@@ -657,7 +698,26 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
       destination.searchParams.set("status", "connected");
       if (options.yahooSync) {
         try {
-          await options.yahooSync.discoverAndSync(request.currentUser.id, result.connectionId);
+          const discovery = await options.yahooSync.discoverAndSync(
+            request.currentUser.id,
+            result.connectionId,
+          );
+          if (options.enqueueProjectionRefresh) {
+            for (const season of new Set(discovery.syncs.map((sync) => sync.season))) {
+              try {
+                await options.enqueueProjectionRefresh({
+                  season,
+                  reason: "league-sync",
+                  requestedAt: new Date(),
+                });
+              } catch (error) {
+                request.log.warn(
+                  { err: error, season },
+                  "Yahoo sync succeeded but projection refresh enqueue failed",
+                );
+              }
+            }
+          }
           destination.searchParams.set("sync", "complete");
         } catch (error) {
           request.log.warn(
@@ -734,7 +794,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
       jobAcceptedSchema.parse({
         jobId,
         state: jobId ? "queued" : "deduplicated",
-        target: "shared-nfl-data",
+        target: refresh.scope === "adp-data" ? "draft-market-adp" : "shared-nfl-data",
         requestedAt: requestedAt.toISOString(),
       }),
     );
@@ -763,6 +823,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     const isValidation =
       error instanceof ZodError ||
       error instanceof EspnImportError ||
+      error instanceof EspnWebClientNormalizationError ||
       fastifyError.validation !== undefined;
     const status = isValidation ? 400 : (fastifyError.statusCode ?? 500);
     if (status >= 500) request.log.error({ err: error }, "request failed");

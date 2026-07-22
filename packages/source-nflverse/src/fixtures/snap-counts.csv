@@ -1,0 +1,3 @@
+game_id,pfr_game_id,season,game_type,week,player,pfr_player_id,position,team,opponent,offense_snaps,offense_pct,defense_snaps,defense_pct,st_snaps,st_pct
+2025_01_CHI_GB,202509070chi,2025,REG,1,Example Runner,RunnEx00,WR,CHI,GB,62,0.91,0,0,1,0.04
+2025_01_CHI_GB,202509070chi,2025,REG,1,Sample Defender,DefeSa00,LB,CHI,GB,0,0,58,0.88,7,0.27

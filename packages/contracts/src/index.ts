@@ -214,6 +214,14 @@ export const dataSourceFreshnessSchema = z.object({
   lastCheckedAt: z.iso.datetime().nullable(),
   lastSuccessfulAt: z.iso.datetime().nullable(),
   consecutiveFailures: z.number().int().nonnegative(),
+  quality: z
+    .object({
+      rowsRead: z.number().int().nonnegative(),
+      rowsRejected: z.number().int().nonnegative(),
+      rowsUnmatched: z.number().int().nonnegative(),
+      matchRate: z.number().min(0).max(1).nullable(),
+    })
+    .nullable(),
   freshness: freshnessSchema,
 });
 export type DataSourceFreshness = z.infer<typeof dataSourceFreshnessSchema>;
@@ -575,7 +583,7 @@ export const jobAcceptedSchema = z
   .object({
     jobId: z.string().nullable(),
     state: z.enum(["queued", "deduplicated"]),
-    target: z.literal("shared-nfl-data"),
+    target: z.enum(["shared-nfl-data", "draft-market-adp"]),
     requestedAt: z.iso.datetime(),
   })
   .strict();
@@ -583,6 +591,7 @@ export type JobAccepted = z.infer<typeof jobAcceptedSchema>;
 
 export const refreshRequestSchema = z.discriminatedUnion("scope", [
   z.object({ scope: z.literal("player-data") }).strict(),
+  z.object({ scope: z.literal("adp-data") }).strict(),
   z.object({ scope: z.literal("league"), leagueId: z.string().uuid() }).strict(),
 ]);
 export type RefreshRequest = z.infer<typeof refreshRequestSchema>;
@@ -878,6 +887,65 @@ export const draftSessionSnapshotSchema = z
   })
   .strict();
 export type DraftSessionSnapshot = z.infer<typeof draftSessionSnapshotSchema>;
+
+const draftMarketSourceSchema = z
+  .object({
+    key: z.string().min(1),
+    name: z.string().min(1),
+    attribution: z.string().nullable(),
+    attributionUrl: z.url().nullable(),
+    sourceAsOf: z.iso.datetime(),
+    fetchedAt: z.iso.datetime(),
+    checksumSha256: z.string().regex(/^[a-f0-9]{64}$/u),
+    stale: z.boolean(),
+    matchRate: z.number().min(0).max(1),
+  })
+  .strict();
+
+export const draftMarketBaselineSchema = z.discriminatedUnion("state", [
+  z
+    .object({
+      state: z.literal("available"),
+      context: z
+        .object({
+          season: z.number().int().min(2000).max(2200),
+          scoringFormat: z.enum(["standard", "half-ppr", "ppr"]),
+          teamCount: z.number().int().min(4).max(32),
+          rosterFormat: z.literal("one-qb"),
+        })
+        .strict(),
+      source: draftMarketSourceSchema,
+      players: z.array(
+        z
+          .object({
+            playerId: z.string().uuid(),
+            overallAdp: z.number().positive(),
+            sourceRank: z.number().int().positive().nullable(),
+            positionRank: z.number().int().positive().nullable(),
+            standardDeviation: z.number().nonnegative().nullable(),
+            sampleSize: z.number().int().nonnegative().nullable(),
+          })
+          .strict(),
+      ),
+      warnings: z.array(z.string().min(1)),
+    })
+    .strict(),
+  z
+    .object({
+      state: z.literal("unavailable"),
+      reason: z.enum([
+        "draft-not-found",
+        "unknown-scoring",
+        "unsupported-team-count",
+        "unsupported-roster-format",
+        "source-not-ready",
+        "identity-coverage-low",
+      ]),
+      detail: z.string().min(1),
+    })
+    .strict(),
+]);
+export type DraftMarketBaseline = z.infer<typeof draftMarketBaselineSchema>;
 
 export const draftMutationResponseSchema = z
   .object({
@@ -1184,12 +1252,67 @@ export const projectionImportPreviewResponseSchema = z
   .strict();
 export type ProjectionImportPreviewResponse = z.infer<typeof projectionImportPreviewResponseSchema>;
 
+export const projectionSetOriginSchema = z.enum(["laces-out", "custom"]);
+export type ProjectionSetOrigin = z.infer<typeof projectionSetOriginSchema>;
+
+const projectionWeekReferenceSchema = z
+  .object({
+    season: z.number().int().min(2000).max(2100),
+    week: z.number().int().min(1).max(25).nullable(),
+  })
+  .strict();
+
+const managedProjectionDetailsSchema = z
+  .object({
+    modelVersion: z.string().min(1).max(120).nullable(),
+    computedAt: z.iso.datetime(),
+    inputCheckedAt: z.iso.datetime(),
+    trainingCutoff: projectionWeekReferenceSchema.nullable(),
+    statsThrough: projectionWeekReferenceSchema.nullable(),
+    qualityState: z.enum(["publishable", "degraded", "rejected"]).nullable(),
+    championByPosition: z
+      .array(
+        z
+          .object({
+            position: z.enum(["QB", "RB", "WR", "TE", "K"]),
+            strategy: z.enum(["first-party-model", "recency-only"]),
+            reason: z.enum(["insufficient-samples", "model-cleared-margin", "baseline-defended"]),
+            samples: z.number().int().nonnegative(),
+            completedWeekBatches: z.number().int().nonnegative(),
+            modelImprovement: z.number(),
+          })
+          .strict(),
+      )
+      .max(5),
+    coverage: z
+      .object({
+        projected: z.number().int().nonnegative().max(5_000),
+        eligible: z.number().int().nonnegative().max(5_000),
+        ratio: z.number().min(0).max(1),
+      })
+      .strict()
+      .nullable(),
+    warnings: z.array(z.string().min(1).max(240)).max(20),
+    backtest: z
+      .object({
+        samples: z.number().int().nonnegative(),
+        mae: z.number().nonnegative(),
+        baselineMae: z.number().nonnegative().nullable(),
+        intervalCoverage: z.number().min(0).max(1).nullable(),
+      })
+      .strict()
+      .nullable(),
+  })
+  .strict();
+
 export const projectionSetSummarySchema = z
   .object({
     id: z.string().uuid(),
     leagueSeasonId: z.string().uuid(),
-    creatorUserId: z.string().uuid(),
-    creatorDisplayName: z.string().min(1).max(160),
+    creatorUserId: z.string().uuid().nullable(),
+    creatorDisplayName: z.string().min(1).max(160).nullable(),
+    origin: projectionSetOriginSchema,
+    managed: managedProjectionDetailsSchema.nullable(),
     visibility: projectionVisibilitySchema,
     sourceLabel: z.string().min(2).max(80),
     sourceFileName: z.string().min(1).max(240).nullable(),
@@ -1219,6 +1342,14 @@ export const projectionSetListResponseSchema = z
         currentWeek: z.number().int().min(1).max(18).nullable(),
         membershipRole: leagueMembershipRoleSchema,
         canShareLeague: z.boolean(),
+      })
+      .strict(),
+    managedForecastStatus: z
+      .object({
+        state: z.enum(["published", "withheld", "pending"]),
+        evaluatedAt: z.iso.datetime().nullable(),
+        qualityState: z.enum(["publishable", "degraded", "rejected"]).nullable(),
+        reasons: z.array(z.string().min(1).max(500)).max(10),
       })
       .strict(),
     projectionSets: z.array(projectionSetSummarySchema).max(100),
@@ -1681,6 +1812,110 @@ export const aiFeatureResponseSchema = z
   })
   .strict();
 export type AiFeatureResponse = z.infer<typeof aiFeatureResponseSchema>;
+
+export const statsCenterMetricSchema = z.enum([
+  "targets",
+  "carries",
+  "opportunities",
+  "targetShare",
+  "offensiveSnapShare",
+]);
+export type StatsCenterMetric = z.infer<typeof statsCenterMetricSchema>;
+
+const statsCenterAvailabilitySchema = z
+  .object({
+    state: z.enum(["available", "unavailable", "no-data"]),
+    reason: z.string().min(1).max(500).nullable(),
+  })
+  .strict();
+
+const statsCenterSourceSchema = z
+  .object({
+    dataset: z.enum(["weekly-stats", "snap-counts"]),
+    state: z.enum(["available", "unavailable", "quarantined"]),
+    key: z.string().min(1).max(128),
+    name: z.string().min(1).max(200),
+    attribution: z.string().min(1).max(300).nullable(),
+    attributionUrl: z.url().nullable(),
+    fetchedAt: z.iso.datetime().nullable(),
+    checksumSha256: z
+      .string()
+      .regex(/^[a-f0-9]{64}$/u)
+      .nullable(),
+    coveredWeeks: z.array(z.number().int().min(1).max(25)).max(25),
+    quality: z
+      .object({
+        rowsRead: z.number().int().nonnegative().nullable(),
+        rowsRejected: z.number().int().nonnegative().nullable(),
+        rowsUnmatched: z.number().int().nonnegative().nullable(),
+        matchRate: z.number().min(0).max(1).nullable(),
+      })
+      .strict(),
+    reason: z.string().min(1).max(500).nullable(),
+  })
+  .strict();
+export type StatsCenterSource = z.infer<typeof statsCenterSourceSchema>;
+
+const statsCenterPlayerSchema = z
+  .object({
+    playerId: z.string().uuid(),
+    name: z.string().min(1).max(200),
+    position: z.string().min(1).max(20),
+    team: z.string().min(2).max(4).nullable(),
+    games: z.number().int().nonnegative(),
+    snapGames: z.number().int().nonnegative(),
+    targets: z.number().int().nonnegative().nullable(),
+    carries: z.number().int().nonnegative().nullable(),
+    opportunities: z.number().int().nonnegative().nullable(),
+    targetsPerGame: z.number().finite().nonnegative().nullable(),
+    carriesPerGame: z.number().finite().nonnegative().nullable(),
+    opportunitiesPerGame: z.number().finite().nonnegative().nullable(),
+    targetShare: z.number().min(0).max(1).nullable(),
+    offensiveSnaps: z.number().int().nonnegative().nullable(),
+    offensiveSnapShare: z.number().min(0).max(1).nullable(),
+  })
+  .strict();
+export type StatsCenterPlayer = z.infer<typeof statsCenterPlayerSchema>;
+
+export const statsCenterResponseSchema = z
+  .object({
+    generatedAt: z.iso.datetime(),
+    filters: z
+      .object({
+        season: z.number().int().min(2012).max(2200),
+        week: z.number().int().min(1).max(25).nullable(),
+        position: z.string().min(1).max(20).nullable(),
+        search: z.string().max(80),
+        sort: statsCenterMetricSchema,
+        limit: z.number().int().min(1).max(100),
+      })
+      .strict(),
+    availability: z
+      .object({
+        targets: statsCenterAvailabilitySchema,
+        carries: statsCenterAvailabilitySchema,
+        opportunities: statsCenterAvailabilitySchema,
+        targetShare: statsCenterAvailabilitySchema,
+        offensiveSnapShare: statsCenterAvailabilitySchema,
+        redZone: statsCenterAvailabilitySchema,
+        boomBust: statsCenterAvailabilitySchema,
+        fantasyPointsAllowed: statsCenterAvailabilitySchema,
+      })
+      .strict(),
+    sources: z.array(statsCenterSourceSchema).length(2),
+    players: z.array(statsCenterPlayerSchema).max(100),
+    totalMatched: z.number().int().nonnegative(),
+    truncated: z.boolean(),
+    definitions: z
+      .object({
+        opportunities: z.string().min(1).max(1_000),
+        targetShare: z.string().min(1).max(1_000),
+        offensiveSnapShare: z.string().min(1).max(1_000),
+      })
+      .strict(),
+  })
+  .strict();
+export type StatsCenterResponse = z.infer<typeof statsCenterResponseSchema>;
 
 export const healthResponseSchema = z.object({
   status: z.enum(["ok", "degraded"]),

@@ -3,6 +3,7 @@ import {
   aiFeatureResponseSchema,
   aiProviderConfigurationSchema,
   aiProviderListResponseSchema,
+  draftMarketBaselineSchema,
   draftMutationResponseSchema,
   draftSessionSnapshotSchema,
   inSeasonDecisionSnapshotSchema,
@@ -13,12 +14,14 @@ import {
   projectionImportCommitResponseSchema,
   projectionImportPreviewResponseSchema,
   projectionSetListResponseSchema,
+  statsCenterResponseSchema,
   type AiAnalysisResponse,
   type AiFeatureName,
   type AiFeatureResponse,
   type AiProviderConfiguration,
   type AiProviderListResponse,
   type DraftMutationResponse,
+  type DraftMarketBaseline,
   type DraftSessionSnapshot,
   type InSeasonDecisionSnapshot,
   type JobAccepted,
@@ -28,6 +31,7 @@ import {
   type ProjectionImportCommitResponse,
   type ProjectionImportPreviewResponse,
   type ProjectionSetListResponse,
+  type StatsCenterResponse,
 } from "@fantasy/contracts";
 import {
   rankingListSchema,
@@ -35,6 +39,8 @@ import {
   type RankingList,
   type RankingVersion,
 } from "@fantasy/rankings/model";
+
+export { parseRosProjectionStatus, type RosProjectionStatus } from "./ros-projection-status";
 
 const fallbackApiUrl = "http://localhost:4000";
 
@@ -78,6 +84,7 @@ export type {
   AiProviderConfiguration,
   AiProviderListResponse,
   DraftMutationResponse,
+  DraftMarketBaseline,
   DraftSessionSnapshot,
   InSeasonDecisionSnapshot,
   JobAccepted,
@@ -87,6 +94,7 @@ export type {
   ProjectionImportCommitResponse,
   ProjectionImportPreviewResponse,
   ProjectionSetListResponse,
+  StatsCenterResponse,
   RankingList,
   RankingVersion,
 };
@@ -121,6 +129,11 @@ export function parseDraftMutation(value: unknown): DraftMutationResponse | null
   return result.success ? result.data : null;
 }
 
+export function parseDraftMarketBaseline(value: unknown): DraftMarketBaseline | null {
+  const result = draftMarketBaselineSchema.safeParse(value);
+  return result.success ? result.data : null;
+}
+
 export function parseLeagueListResponse(value: unknown): LeagueListResponse | null {
   const result = leagueListResponseSchema.safeParse(value);
   return result.success ? result.data : null;
@@ -148,6 +161,11 @@ export function parseLeagueAnalyticsSnapshot(value: unknown): LeagueAnalyticsSna
 
 export function parseProjectionSetList(value: unknown): ProjectionSetListResponse | null {
   const result = projectionSetListResponseSchema.safeParse(value);
+  return result.success ? result.data : null;
+}
+
+export function parseStatsCenterResponse(value: unknown): StatsCenterResponse | null {
+  const result = statsCenterResponseSchema.safeParse(value);
   return result.success ? result.data : null;
 }
 

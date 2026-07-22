@@ -7,11 +7,17 @@
     "dev": "tsx watch src/worker.ts",
     "build": "tsup --config tsup.config.ts",
     "start": "node dist/worker.js",
-    "catalog:refresh": "tsx scripts/catalog-refresh.ts"
+    "catalog:refresh": "tsx scripts/catalog-refresh.ts",
+    "projections:validate": "tsx scripts/validate-first-party-projections.ts",
+    "ros:validate": "tsx scripts/validate-first-party-ros.ts",
+    "ros:admit": "tsx scripts/admit-first-party-ros.ts",
+    "ros:coverage": "tsx scripts/validate-ros-data-coverage.ts"
   },
   "dependencies": {
     "@fantasy/config": "*",
     "@fantasy/db": "*",
+    "@fantasy/projections": "*",
+    "@fantasy/source-ffc": "*",
     "@fantasy/source-nflverse": "*",
     "@fantasy/source-sleeper": "*",
     "drizzle-orm": "^0.45.2",

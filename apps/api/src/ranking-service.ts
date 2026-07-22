@@ -5,6 +5,7 @@ import {
   RANKING_SCHEMA_VERSION,
   applyLeagueOverlay,
   checksumUtf8Sha256,
+  cloneRanking,
   commitRankingCsvPreview,
   createRankingList,
   createUserAttribution,
@@ -227,9 +228,27 @@ export interface CreatedRankingShareRecord {
   readonly list: RankingList;
 }
 
+export interface RankingBoardComparisonSide {
+  readonly list: RankingList;
+  readonly version: RankingVersion;
+}
+
+export interface RankingBoardComparison {
+  readonly left: RankingBoardComparisonSide;
+  readonly right: RankingBoardComparisonSide;
+  readonly players: readonly RankingPlayerIdentity[];
+}
+
+export type CreateRankingCloneResult =
+  | { readonly status: "saved" }
+  | { readonly status: "conflict" }
+  | { readonly status: "unknown_players" };
+
 /** Persistence boundary; every version-writing method must commit atomically. */
 export interface RankingRepository {
   createList(list: RankingList, anchorLeagueId: string | null): Promise<void>;
+  /** Atomically persists a new list and its independent first version. */
+  createClone(list: RankingList, version: RankingVersion): Promise<CreateRankingCloneResult>;
   listAccessibleLists(userId: string, includeArchived: boolean): Promise<readonly RankingList[]>;
   getList(listId: string): Promise<RankingList | undefined>;
   updateList(
@@ -552,6 +571,74 @@ export class RankingService {
     const version = await this.#repository.getVersion(selectedVersionId);
     if (!version || version.listId !== list.id) throw new RankingServiceError("RANKING_NOT_FOUND");
     return version;
+  }
+
+  async cloneList(input: {
+    readonly actorUserId: string;
+    readonly sourceListId: string;
+    readonly sourceVersionId?: string;
+    readonly name: string;
+    readonly changeNote?: string | null;
+  }): Promise<{ readonly list: RankingList; readonly version: RankingVersion }> {
+    const actorUserId = uuidSchema.parse(input.actorUserId);
+    const sourceList = await this.getList(actorUserId, uuidSchema.parse(input.sourceListId));
+    if (
+      sourceList.ownerUserId !== actorUserId &&
+      (sourceList.visibility.scope !== "league" || !sourceList.visibility.allowClone)
+    ) {
+      throw new RankingServiceError("RANKING_FORBIDDEN");
+    }
+    const sourceVersion = await this.getVersion(actorUserId, sourceList.id, input.sourceVersionId);
+    const now = this.#now();
+    const cloned = cloneRanking(sourceList, sourceVersion, {
+      listId: this.#id(),
+      versionId: this.#id(),
+      ownerUserId: actorUserId,
+      authorUserId: actorUserId,
+      name: z.string().trim().min(1).max(160).parse(input.name),
+      visibility: { scope: "private" },
+      createdAt: now.toISOString(),
+      changeNote: changeNote(input.changeNote),
+    });
+    const result = await this.#repository.createClone(cloned.list, cloned.version);
+    if (result.status === "conflict") {
+      throw new RankingServiceError("RANKING_VERSION_CONFLICT");
+    }
+    if (result.status === "unknown_players") {
+      throw new RankingServiceError("RANKING_UNKNOWN_PLAYER");
+    }
+    return cloned;
+  }
+
+  async compareLists(input: {
+    readonly actorUserId: string;
+    readonly leftListId: string;
+    readonly leftVersionId?: string;
+    readonly rightListId: string;
+    readonly rightVersionId?: string;
+  }): Promise<RankingBoardComparison> {
+    const actorUserId = uuidSchema.parse(input.actorUserId);
+    const leftListId = uuidSchema.parse(input.leftListId);
+    const rightListId = uuidSchema.parse(input.rightListId);
+    const [leftList, rightList] = await Promise.all([
+      this.getList(actorUserId, leftListId),
+      this.getList(actorUserId, rightListId),
+    ]);
+    const [leftVersion, rightVersion] = await Promise.all([
+      this.getVersion(actorUserId, leftList.id, input.leftVersionId),
+      this.getVersion(actorUserId, rightList.id, input.rightVersionId),
+    ]);
+    const players = await this.#repository.getPlayerIdentities([
+      ...new Set([
+        ...leftVersion.entries.map((entry) => entry.playerId),
+        ...rightVersion.entries.map((entry) => entry.playerId),
+      ]),
+    ]);
+    return {
+      left: { list: leftList, version: leftVersion },
+      right: { list: rightList, version: rightVersion },
+      players,
+    };
   }
 
   async replaceWithManualDraft(input: {

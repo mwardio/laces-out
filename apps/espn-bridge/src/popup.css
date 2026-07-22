@@ -85,6 +85,36 @@ header small {
   background: #e07843;
   box-shadow: 0 0 0 4px #fbe5d7;
 }
+.pairing {
+  display: grid;
+  gap: 11px;
+  margin-top: 13px;
+  padding: 13px;
+  background: #eafbc3;
+  border: 1px solid #b9e853;
+  border-radius: 11px;
+}
+.pairing[hidden] {
+  display: none;
+}
+.pairing-body {
+  display: grid;
+  gap: 4px;
+}
+.pairing-body strong {
+  font-size: 12px;
+  word-break: break-word;
+}
+.pairing-body small {
+  color: #4a5a3f;
+  font-size: 10px;
+  line-height: 1.4;
+}
+.pairing-actions {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px;
+}
 form {
   display: grid;
   gap: 11px;

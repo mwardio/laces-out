@@ -37,6 +37,7 @@ interface CreatedInvitation {
 export function MemberInvitations() {
   const [access, setAccess] = useState<"checking" | "admin" | "denied">("checking");
   const [leagues, setLeagues] = useState<readonly LeagueOption[]>([]);
+  const [leaguesState, setLeaguesState] = useState<"idle" | "loading" | "ready" | "error">("idle");
   const [email, setEmail] = useState("");
   const [role, setRole] = useState<"member" | "admin">("member");
   const [leagueId, setLeagueId] = useState("");
@@ -46,6 +47,7 @@ export function MemberInvitations() {
   const [state, setState] = useState<"idle" | "working" | "error">("idle");
   const [message, setMessage] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [revokeArmed, setRevokeArmed] = useState(false);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -68,18 +70,25 @@ export function MemberInvitations() {
   useEffect(() => {
     if (access !== "admin") return;
     const controller = new AbortController();
+    setLeaguesState("loading");
     void fetch(`${apiBaseUrl}/v1/leagues`, {
       credentials: "include",
       headers: { Accept: "application/json" },
       signal: controller.signal,
     })
       .then(async (response) => {
-        if (!response.ok) return { leagues: [] };
+        if (!response.ok) throw new Error("League access could not be loaded");
         return (await response.json()) as { leagues?: readonly LeagueOption[] };
       })
-      .then((result) => setLeagues(result.leagues ?? []))
+      .then((result) => {
+        setLeagues(result.leagues ?? []);
+        setLeaguesState("ready");
+      })
       .catch(() => {
-        if (!controller.signal.aborted) setLeagues([]);
+        if (!controller.signal.aborted) {
+          setLeagues([]);
+          setLeaguesState("error");
+        }
       });
     return () => controller.abort();
   }, [access]);
@@ -90,6 +99,7 @@ export function MemberInvitations() {
     setMessage(null);
     setCreated(null);
     setCopied(false);
+    setRevokeArmed(false);
     const days = Number(expiresInDays);
     try {
       const response = await fetch(`${apiBaseUrl}/v1/admin/invitations`, {
@@ -114,7 +124,12 @@ export function MemberInvitations() {
                 : "The invitation could not be created.";
         throw new Error(detail);
       }
-      setCreated((await response.json()) as CreatedInvitation);
+      const invitation = (await response.json()) as CreatedInvitation;
+      setCreated(invitation);
+      setEmail("");
+      setRole("member");
+      setLeagueId("");
+      setLeagueRole("manager");
       setState("idle");
     } catch (error) {
       setState("error");
@@ -135,6 +150,11 @@ export function MemberInvitations() {
 
   async function revokeInvitation() {
     if (!created) return;
+    if (!revokeArmed) {
+      setRevokeArmed(true);
+      setMessage(null);
+      return;
+    }
     setState("working");
     setMessage(null);
     try {
@@ -145,6 +165,7 @@ export function MemberInvitations() {
       });
       if (!response.ok && response.status !== 204) throw new Error("Revocation failed");
       setCreated(null);
+      setRevokeArmed(false);
       setState("idle");
       setMessage("Invitation revoked. Its link can no longer be accepted.");
     } catch {
@@ -247,23 +268,35 @@ export function MemberInvitations() {
                 <input
                   id="invite-email"
                   type="email"
-                  autoComplete="off"
+                  autoComplete="email"
+                  inputMode="email"
                   required
                   maxLength={254}
                   value={email}
-                  onChange={(event) => setEmail(event.target.value)}
+                  onChange={(event) => {
+                    setEmail(event.target.value);
+                    setMessage(null);
+                  }}
+                  placeholder="friend@example.com"
                 />
+                <small>The invitation works only for this email address.</small>
               </label>
-              <label htmlFor="invite-workspace-role">
+              <label htmlFor="invite-account-role">
                 Account role
                 <select
-                  id="invite-workspace-role"
+                  id="invite-account-role"
                   value={role}
-                  onChange={(event) => setRole(event.target.value as "member" | "admin")}
+                  onChange={(event) => {
+                    setRole(event.target.value as "member" | "admin");
+                    setMessage(null);
+                  }}
                 >
-                  <option value="member">Member</option>
-                  <option value="admin">Administrator</option>
+                  <option value="member">Member — standard access</option>
+                  <option value="admin">Administrator — full control</option>
                 </select>
+                <small>
+                  Use Member unless this person should manage invitations and host settings.
+                </small>
               </label>
               <label htmlFor="invite-league">
                 League access
@@ -271,14 +304,26 @@ export function MemberInvitations() {
                   id="invite-league"
                   value={leagueId}
                   onChange={(event) => setLeagueId(event.target.value)}
+                  disabled={leaguesState === "loading" || leaguesState === "error"}
                 >
-                  <option value="">Locker room only</option>
+                  <option value="">
+                    {leaguesState === "loading"
+                      ? "Loading leagues…"
+                      : leaguesState === "error"
+                        ? "Leagues unavailable"
+                        : "No specific league"}
+                  </option>
                   {leagues.map((league) => (
                     <option value={league.id} key={league.id}>
                       {league.name}
                     </option>
                   ))}
                 </select>
+                <small>
+                  {leaguesState === "error"
+                    ? "League access could not be loaded. You can still create an account-only invitation."
+                    : "Optional. Assign league access now or add it later."}
+                </small>
               </label>
               <label htmlFor="invite-league-role">
                 League role
@@ -310,6 +355,15 @@ export function MemberInvitations() {
                 </select>
               </label>
             </div>
+            {role === "admin" ? (
+              <div className="member-role-warning" role="status">
+                <AlertCircle size={15} />
+                <span>
+                  <strong>Administrator access is powerful.</strong> This person will be able to
+                  create invitations and use other host-only controls.
+                </span>
+              </div>
+            ) : null}
             <button className="button button--lime button--full" disabled={state === "working"}>
               {state === "working" ? (
                 <LoaderCircle className="spin" size={16} />
@@ -323,7 +377,7 @@ export function MemberInvitations() {
           {message ? (
             <p
               className={state === "error" ? "connection-error" : "provider-attribution"}
-              role="status"
+              role={state === "error" ? "alert" : "status"}
             >
               {state === "error" ? <AlertCircle size={14} /> : <Check size={14} />}
               {message}
@@ -362,18 +416,42 @@ export function MemberInvitations() {
                 {copied ? <Check size={14} /> : <Clipboard size={14} />}
                 {copied ? "Copied" : "Copy link"}
               </button>
-              <button
-                className="button button--soft button--small"
-                type="button"
-                onClick={() => void revokeInvitation()}
-                disabled={state === "working"}
-              >
-                <Trash2 size={14} /> Revoke link
-              </button>
-              <small>
-                The secret lives after <code>#</code>, so browsers do not send it in HTTP request
-                targets or referrers. Laces Out stores only its HMAC.
-              </small>
+              <div className="invitation-actions">
+                {revokeArmed ? (
+                  <button
+                    className="button button--outline button--small"
+                    type="button"
+                    onClick={() => setRevokeArmed(false)}
+                    disabled={state === "working"}
+                  >
+                    Keep invitation
+                  </button>
+                ) : null}
+                <button
+                  className="button button--soft button--small"
+                  type="button"
+                  onClick={() => void revokeInvitation()}
+                  disabled={state === "working"}
+                >
+                  {state === "working" ? (
+                    <LoaderCircle className="spin" size={14} />
+                  ) : (
+                    <Trash2 size={14} />
+                  )}
+                  {state === "working"
+                    ? "Revoking…"
+                    : revokeArmed
+                      ? "Yes, revoke link"
+                      : "Revoke link"}
+                </button>
+              </div>
+              <details className="invitation-security-detail">
+                <summary>How this link is protected</summary>
+                <small>
+                  Its one-time secret stays after <code>#</code>, outside HTTP request targets and
+                  referrers. Laces Out stores only a verification hash.
+                </small>
+              </details>
             </div>
           ) : (
             <div className="bridge-readiness" role="note">

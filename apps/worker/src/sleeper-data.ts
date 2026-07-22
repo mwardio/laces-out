@@ -19,11 +19,14 @@ import { and, eq, inArray, lt, lte, sql } from "drizzle-orm";
 
 const catalogSourceKey = "sleeper.players";
 const trendsSourceKey = "sleeper.trends";
-const catalogCheckIntervalMinutes = 24 * 60;
+// Injury, practice, and availability signals directly affect start/sit projections. Keep the
+// catalog ahead of both hourly and game-aware projection sweeps; conditional requests keep
+// unchanged checks cheap while the final lock-window pass can force one last status check.
+const catalogCheckIntervalMinutes = 30;
 const trendsCheckIntervalMinutes = 60;
 const claimMinutes = 15;
 const chunkSize = 500;
-const catalogSchemaVersion = 2;
+const catalogSchemaVersion = 3;
 const marketRetentionDays = 90;
 
 export interface SleeperRefreshResult {
@@ -32,6 +35,47 @@ export interface SleeperRefreshResult {
   readonly rowsWritten: number;
   readonly rowsRejected: number;
   readonly checkedAt: string | null;
+}
+
+export function sleeperPlayerCrosswalkRows(input: {
+  readonly playerId: string | null;
+  readonly sleeperId: string;
+  readonly espnId: string | null;
+  readonly yahooId: string | null;
+  readonly confidence: string;
+}) {
+  if (!input.playerId) return [];
+  return [
+    {
+      playerId: input.playerId,
+      source: "sleeper",
+      externalId: input.sleeperId,
+      confidence: input.confidence,
+      verified: false,
+    },
+    ...(input.espnId
+      ? [
+          {
+            playerId: input.playerId,
+            source: "sleeper-espn",
+            externalId: input.espnId,
+            confidence: input.confidence,
+            verified: false,
+          },
+        ]
+      : []),
+    ...(input.yahooId
+      ? [
+          {
+            playerId: input.playerId,
+            source: "sleeper-yahoo",
+            externalId: input.yahooId,
+            confidence: input.confidence,
+            verified: false,
+          },
+        ]
+      : []),
+  ];
 }
 
 interface SourceRow {
@@ -94,17 +138,24 @@ async function claimSource(
       metadata: dataSources.metadata,
     });
   if (!source?.enabled) return null;
+  const stableMetadata = { ...source.metadata };
+  delete stableMetadata.refreshClaimedAt;
+  const stableSource = { ...source, metadata: stableMetadata };
   const claimUntil = new Date(input.now.getTime() + claimMinutes * 60_000);
   const claim = await database
     .update(dataSources)
-    .set({ nextCheckAt: claimUntil, updatedAt: input.now })
+    .set({
+      nextCheckAt: claimUntil,
+      metadata: { ...stableMetadata, refreshClaimedAt: input.now.toISOString() },
+      updatedAt: input.now,
+    })
     .where(
       input.force
         ? eq(dataSources.id, source.id)
         : and(eq(dataSources.id, source.id), lte(dataSources.nextCheckAt, input.now)),
     )
     .returning({ id: dataSources.id });
-  return claim.length === 1 ? source : null;
+  return claim.length === 1 ? stableSource : null;
 }
 
 async function recordFailure(
@@ -125,6 +176,7 @@ async function recordFailure(
         error instanceof Error && "code" in error ? String(error.code).slice(0, 64) : "UNKNOWN",
       lastErrorDetail:
         error instanceof Error ? error.message.slice(0, 256) : "Sleeper data refresh failed",
+      metadata: source.metadata,
       updatedAt: failedAt,
     })
     .where(eq(dataSources.id, source.id));
@@ -328,21 +380,17 @@ export class SleeperDataRefresher {
           rowsWritten += batch.length;
         }
 
-        const sleeperIds = resolved.flatMap(({ player, playerId, confidence }) =>
-          playerId
-            ? [
-                {
-                  playerId,
-                  source: "sleeper",
-                  externalId: player.sleeperId,
-                  confidence,
-                  verified: false,
-                },
-              ]
-            : [],
+        const crosswalkIds = resolved.flatMap(({ player, playerId, confidence }) =>
+          sleeperPlayerCrosswalkRows({
+            playerId,
+            sleeperId: player.sleeperId,
+            espnId: player.espnId,
+            yahooId: player.yahooId,
+            confidence,
+          }),
         );
-        for (let index = 0; index < sleeperIds.length; index += chunkSize) {
-          const batch = sleeperIds.slice(index, index + chunkSize);
+        for (let index = 0; index < crosswalkIds.length; index += chunkSize) {
+          const batch = crosswalkIds.slice(index, index + chunkSize);
           await transaction
             .insert(playerExternalIds)
             .values(batch)

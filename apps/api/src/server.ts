@@ -10,6 +10,7 @@ import { AiService, DrizzleAiRepository } from "./ai-service.js";
 import { DrizzleAuthRepository } from "./auth-repository.js";
 import { AuthService } from "./auth.js";
 import { DraftSessionService, DrizzleDraftSessionRepository } from "./draft-session.js";
+import { DraftMarketService } from "./draft-market.js";
 import { EspnBridgeService } from "./espn-bridge.js";
 import { EspnManualImportService } from "./espn-import.js";
 import { DrizzleEspnSyncPersistence } from "./espn-sync-persistence.js";
@@ -23,10 +24,12 @@ import { deriveInvitationKeyring, InvitationService } from "./invitation.js";
 import { DrizzleLeagueDashboardRepository, LeagueDashboardService } from "./league-dashboard.js";
 import { DrizzleProjectionImportRepository, ProjectionImportService } from "./projection-import.js";
 import { DrizzleRefreshAuthorization } from "./refresh-authorization.js";
+import { RosProjectionStatusService } from "./ros-projection-status.js";
 import { DrizzleRankingRepository } from "./ranking-repository.js";
 import { deriveRankingShareKeyring, RankingService } from "./ranking-service.js";
 import { DrizzleRegistrationRepository } from "./registration-repository.js";
 import { RegistrationService } from "./registration.js";
+import { DrizzleStatsCenterRepository, StatsCenterService } from "./stats-center.js";
 import { YahooConnectionService } from "./yahoo-connection.js";
 import { DrizzleYahooSyncRepository, YahooSyncService } from "./yahoo-sync.js";
 
@@ -37,11 +40,13 @@ const credentialKey = environment.CREDENTIAL_ENCRYPTION_KEY
   : undefined;
 const authService = new AuthService(new DrizzleAuthRepository(database.db));
 const draftSessions = new DraftSessionService(new DrizzleDraftSessionRepository(database.db));
+const draftMarket = new DraftMarketService(database.db);
 const espnPersistence = new DrizzleEspnSyncPersistence(database.db);
 const espnBridge = new EspnBridgeService(database.db, () => new Date(), espnPersistence);
 const espnImports = new EspnManualImportService(espnPersistence);
 const decisions = new InSeasonDecisionService(new DrizzleInSeasonDecisionRepository(database.db));
 const analytics = new LeagueAnalyticsService(new DrizzleLeagueAnalyticsRepository(database.db));
+const statsCenter = new StatsCenterService(new DrizzleStatsCenterRepository(database.db));
 const invitations = environment.SESSION_SECRET
   ? new InvitationService(
       new DrizzleInvitationRepository(database.db),
@@ -74,6 +79,7 @@ const projectionImports = new ProjectionImportService(
   new DrizzleProjectionImportRepository(database.db),
 );
 const refreshAuthorization = new DrizzleRefreshAuthorization(database.db);
+const rosProjectionStatus = new RosProjectionStatusService(database.db);
 const rankings = environment.SESSION_SECRET
   ? new RankingService(
       new DrizzleRankingRepository(database.db),
@@ -118,20 +124,31 @@ await jobs.createQueue("data-refresh", {
   retryBackoff: true,
   warningQueueSize: 10,
 });
+await jobs.createQueue("projection-refresh", {
+  retryLimit: 4,
+  retryDelay: 60,
+  retryBackoff: true,
+  retryDelayMax: 30 * 60,
+  expireInSeconds: 30 * 60,
+  warningQueueSize: 10,
+});
 const app = await buildApp({
   environment,
   authService,
   draftSessions,
+  draftMarket,
   espnBridge,
   espnImports,
   decisions,
   analytics,
+  statsCenter,
   ...(ai ? { ai } : {}),
   ...(invitations ? { invitations } : {}),
   leagueDashboard,
   projectionImports,
   refreshAuthorization,
   ...(rankings ? { rankings } : {}),
+  rosProjectionStatus,
   ...(registration ? { registration } : {}),
   ...(yahooConnection ? { yahooConnection } : {}),
   ...(yahooSync ? { yahooSync } : {}),
@@ -144,17 +161,27 @@ const app = await buildApp({
       return false;
     }
   },
-  enqueueRefresh: async ({ requestedBy, requestedAt }) =>
+  enqueueRefresh: async ({ requestedBy, refresh, requestedAt }) =>
     jobs.send(
       "data-refresh",
       {
         requestedBy,
-        scope: "player-data",
+        scope: refresh.scope,
         reason: "user",
         requestedAt: requestedAt.toISOString(),
       },
       {
         singletonKey: "shared-nfl-data",
+        singletonSeconds: 60,
+      },
+    ),
+  enqueueProjectionRefresh: async ({ season }) =>
+    jobs.send(
+      "projection-refresh",
+      { season },
+      {
+        group: { id: "projections" },
+        singletonKey: `projection-refresh:${season}:season`,
         singletonSeconds: 60,
       },
     ),

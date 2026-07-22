@@ -36,8 +36,9 @@ import {
   type LeagueSeasonAnalyticsResult,
   type PowerFactorDefinition,
 } from "@fantasy/league-analytics";
-import { and, asc, desc, eq, inArray, or } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, ne, or, sql } from "drizzle-orm";
 
+import { currentManagedProjectionProfileKey } from "./managed-projection-profile.js";
 import { projectionTimestampProvenance } from "./projection-provenance.js";
 
 export const LEAGUE_ANALYTICS_LIMITS = {
@@ -332,19 +333,29 @@ export class DrizzleLeagueAnalyticsRepository implements LeagueAnalyticsReposito
       .limit(limit);
   }
 
-  listProjectionSetCandidates(
+  async listProjectionSetCandidates(
     actorUserId: string,
     leagueSeasonId: string,
     season: number,
     week: number,
     limit: number,
   ): Promise<readonly AnalyticsProjectionSetRow[]> {
+    const managedProfileKey = await currentManagedProjectionProfileKey(
+      this.#database,
+      leagueSeasonId,
+    );
+    const compatibleManagedSet = managedProfileKey
+      ? or(
+          ne(projectionSets.source, "laces-out-first-party"),
+          sql`${projectionSets.metadata}->>'scoringProfileKey' = ${managedProfileKey}`,
+        )
+      : ne(projectionSets.source, "laces-out-first-party");
     return this.#database
       .select({
         id: projectionSets.id,
         leagueSeasonId: projectionSets.leagueSeasonId,
         createdByUserId: projectionSets.createdByUserId,
-        creatorDisplayName: users.displayName,
+        creatorDisplayName: sql<string>`coalesce(${users.displayName}, 'Laces Out model')`,
         visibility: projectionSets.visibility,
         source: projectionSets.source,
         version: projectionSets.version,
@@ -356,13 +367,14 @@ export class DrizzleLeagueAnalyticsRepository implements LeagueAnalyticsReposito
         metadata: projectionSets.metadata,
       })
       .from(projectionSets)
-      .innerJoin(users, eq(projectionSets.createdByUserId, users.id))
+      .leftJoin(users, eq(projectionSets.createdByUserId, users.id))
       .where(
         and(
           eq(projectionSets.leagueSeasonId, leagueSeasonId),
           eq(projectionSets.season, season),
           eq(projectionSets.week, week),
           eq(projectionSets.horizon, "week"),
+          compatibleManagedSet,
           or(
             eq(projectionSets.visibility, "league"),
             and(
@@ -373,6 +385,11 @@ export class DrizzleLeagueAnalyticsRepository implements LeagueAnalyticsReposito
         ),
       )
       .orderBy(
+        sql`case
+          when ${projectionSets.visibility} = 'private' and ${projectionSets.createdByUserId} = ${actorUserId} then 0
+          when ${projectionSets.createdByUserId} is not null then 1
+          else 2
+        end`,
         desc(projectionSets.fetchedAt),
         desc(projectionSets.createdAt),
         desc(projectionSets.id),
@@ -656,6 +673,11 @@ export function selectAccessibleProjectionSet(
   season: number,
   week: number,
 ): AnalyticsProjectionSetRow | undefined {
+  const priority = (row: AnalyticsProjectionSetRow): number => {
+    if (row.visibility === "private" && row.createdByUserId === actorUserId) return 0;
+    if (row.createdByUserId !== null) return 1;
+    return 2;
+  };
   return candidates
     .filter(
       (row) =>
@@ -668,6 +690,7 @@ export function selectAccessibleProjectionSet(
     )
     .sort(
       (left, right) =>
+        priority(left) - priority(right) ||
         right.fetchedAt.getTime() - left.fetchedAt.getTime() ||
         right.createdAt.getTime() - left.createdAt.getTime() ||
         right.id.localeCompare(left.id),

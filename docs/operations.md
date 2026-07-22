@@ -4,10 +4,12 @@
 
 - `web`: responsive Next.js application;
 - `api`: REST API, health checks, provider callbacks, and authenticated application services;
-- `worker`: pg-boss queues and schedules; today its implemented data-changing job is the daily,
-  startup-recovery, and authenticated on-demand nflverse player-catalog check. Provider sync,
-  manual projection import, and recommendation reads execute through their current API workflows;
-  the other worker handlers are queue scaffolding, not completed orchestration;
+- `worker`: pg-boss queues and schedules for daily/startup/on-demand player identity, schedules,
+  weekly player/team stats, weekly rosters, snap counts, Sleeper status, and contextual ADP; hourly Sleeper market
+  signals; an hourly first-party weekly-forecast sweep; and quarter-hour source health checks.
+  Provider sync, manual projection import, and recommendation reads still execute through their
+  current API workflows. The projection-refresh queue is implemented; league-sync and
+  recommendation-recompute still fail closed when queued until their worker services are wired;
 - `postgres`: canonical state, audit trail, and pg-boss queues.
 
 ## Docker Compose deployment
@@ -131,8 +133,136 @@ rollback; two Yahoo accounts remain isolated while linking the same league, atom
 preserve snapshots, and deduplicate only same-account replays; invitation capabilities hash and
 consume once; and shared-code registration stores only password/session hashes. They never print a
 device, invitation, registration, or session credential.
-`npm run catalog:refresh -w @fantasy/worker` is an explicit live
-source check that downloads nflverse player data and updates the configured database.
+`npm run catalog:refresh -w @fantasy/worker` is an explicit live source check that downloads the
+nflverse player catalog and updates the configured database. The normal shared-data queue checks
+the four-season model window for weekly stats, weekly rosters, and snap counts after refreshing
+canonical IDs.
+Unpublished active-season artifacts remain pending instead of marking the completed-season source
+as failed. Each admitted checksum creates immutable observations linked to its ingestion run;
+replay is idempotent, and unresolved GSIS/PFR identities remain queryable as quarantined rows.
+
+The daily draft-market job checks Fantasy Football Calculator at 05:47 UTC for standard,
+half-PPR, and PPR leagues of 8, 10, 12, and 14 teams. It publishes a context only when canonical
+identity coverage meets the configured threshold. The authenticated Data Health controls can
+request both shared NFL data and draft-market checks without waiting for the schedule.
+
+## First-party weekly forecasts
+
+The projection queue runs at minute 11 every hour in UTC. A second game-aware schedule checks every
+ten minutes but does model work only within 130 minutes of the next known, unresolved kickoff. In
+that near-lock window, current-season nflverse and Sleeper availability inputs use 30-minute
+conditional checks; the final pass inside ten minutes of kickoff forces one last source check.
+Before modeling, the worker asks the current-season nflverse player-stat, team-stat, weekly-roster,
+injury-report, and snap sources, every schedule season in the training window, and the Sleeper
+status catalog to refresh. Conditional claims make unchanged checks cheap and prevent overlapping
+workers from publishing a mixed in-flight snapshot. The daily 05:17 UTC shared-data job refreshes
+the full training window; its successful completion also queues a projection sweep. An
+authenticated **Check NFL data** or Projection Lab **Check inputs & rerun** request forces the same
+input sweep and queues the model without waiting for cron.
+
+Each model run pins exact immutable source checksums for four seasons, a target season/week, and a
+model version. An unchanged aggregate checksum is a no-op only after the worker verifies that the
+corresponding immutable model run, raw component observations, and managed league projection sets
+still exist. Missing, stale, unavailable, actively refreshing, coverage-rejected, or internally
+inconsistent inputs fail closed. A scheduled game with no trustworthy kickoff also withholds that
+week. Once a game begins, its last pre-kickoff raw and league-scored rows are authoritative; later
+status or source changes cannot rewrite them. A failed or degraded candidate does not overwrite
+the last-known-good managed projection set. An unchanged evaluation updates its check time without
+pretending the older artifact was republished. The queue retries four times with exponential
+backoff up to 30 minutes and retains exhausted jobs in `projection-refresh-dead-letter`.
+
+Publication is also gated by locked, strictly prior out-of-sample evaluation. Player forecasts are
+selected per position between the richer contextual model and its transparent recency-only
+challenger using that league's scoring rules. By default, the richer model must reduce MAE by at
+least 2% for that position across at least 100 predictions and eight completed week batches. Until it
+does, recency remains the live strategy. Position-level publication also requires at least 100
+scored targets, at least 100 walk-forward interval observations, 62–78% coverage for the nominal
+70% interval, no regression against the recency challenger, and bounded residual bias. The
+walk-forward backtest applies only the policy available before each whole week. The final selected
+strategy is then replayed on the same locked forecasts for release evidence and live calibration.
+Point centers use the latest eight completed batches, intervals are rebuilt from corrected prior
+residuals, and partially
+completed target-week results are excluded. D/ST is evaluated separately and must beat or tie its
+recency baseline. Unknown, nonlinear, IDP, bonus, override, or otherwise unsafe scoring mappings
+withhold only the affected league publication rather than applying a guessed score. Projection Lab
+shows model/input timestamps, training cutoff, coverage, warnings, and backtest metrics; the exact
+champion policy remains attached to the managed-set audit metadata. These are weekly forecasts, not
+calibrated rest-of-season values. Automatic runs publish only the two earliest actionable weeks;
+explicit week requests remain available for research. A successful ESPN or Yahoo league sync queues
+the same deduplicated refresh immediately. Expensive locked training artifacts are cached while
+their statistical inputs remain unchanged, so roster and scoring updates only redo league work.
+
+The current v7 release reference is the official 2023–2025 replay from 2026-07-21: 9,261 player
+outcomes and 1,632 D/ST outcomes passed the exact worker gate. QB/RB/WR/TE/K all defended the
+availability-aware recency rail; the contextual challenger remained shadow-only. Player MAE was
+4.4065 with 71.02% coverage for the nominal 70% point interval and -0.1074 point bias. D/ST MAE was
+4.3193 versus 4.5309 for its baseline, with 71.69% interval coverage. Reproduce the full official
+audit with `npm run projections:validate -w @fantasy/worker -- --summary`; expect several minutes
+of CPU time because the command deliberately rebuilds every locked batch.
+
+After each weekly sweep, the worker also runs the rest-of-season shadow auditor against the latest
+immutable schedule and weekly artifacts. It intentionally records only a degraded model-run audit:
+publication remains disabled until at least three fully held-out evidence seasons, 30 season/cutoff
+batches, 300 paired outcomes, season-blocked split-conformal interval evidence evaluated on a later
+untouched season, complete future-week centers, and persisted paired candidate inputs all exist.
+Each position and horizon cell must independently span three seasons, three distinct cutoff weeks,
+nine season/cutoff blocks, and 18 paired outcomes. Sparse cells remain withheld. A shadow run never
+replaces the last good weekly set and is not visible to lineup, waiver, trade, draft, API, or UI
+consumers.
+
+The current ROS admission reference is the v4 read-only official nflverse replay run on
+2026-07-21 (2019–2025 sources, 2022–2025 held out, all 17 cutoffs, five deterministic
+recent-production quantiles per position, 2,040 paired forecasts, 68/68 batches, zero skips). It
+reduced the original 41 release blockers to 4: interval-coverage shortfalls in QB
+five-to-eight/nine-plus and K one-to-four/five-to-eight. Convergence passed 144/144 strata at the
+8192-vs-16384 diagnostic and availability passed every cell under gate v2 (MAE ≤ 1.5 short/mid,
+≤ 2.75 nine-plus, |signed bias| ≤ 1.0 — ratified 2026-07-21 on measured oracle-floor evidence; the
+derivation lives beside the constants in `packages/projections/src/rest-of-season.ts`). Model v6 (static center-error component plus corrected two-moment calibration, 12288 release
+paths) targets the four remaining coverage cells. The official v6 + gate-v3 replay (2026-07-22) leaves exactly one blocker — K one-to-four
+interval coverage — with the admission-ready report preserved at
+`reports/ros-validation-v6-2026-07-22.json`; under the ratified per-cell admission policy, every
+other cell is releasable once an artifact is provisioned. The 2022–2025 corpus is
+development evidence — the untouched release proof is the frozen protocol in
+`docs/ros-v6-2026-untouched-protocol.md`, runnable only after the 2026 season resolves. ROS stays
+shadow-only until an artifact is provisioned through `npm run ros:admit -w @fantasy/worker`
+(explicit `--database-url` and `--confirm`, refuses on any blocker).
+
+Completed weekly-roster membership supplies the evaluation spine for recently relevant players who
+recorded neither a stat nor a snap. Those known DNP outcomes are scored as zero but excluded from
+later role training. Announced inactive/reserve/suspended roster states produce a pregame zero;
+unexplained active-roster DNPs remain genuine forecast errors. This avoids survivorship bias without
+teaching the model that an absence was a played-game role collapse.
+
+Operator checks after a projection change:
+
+```bash
+npx vitest run packages/projections/src/first-party.test.ts \
+  packages/projections/src/rest-of-season.test.ts \
+  apps/worker/src/first-party-projections.test.ts \
+  apps/worker/src/first-party-projection-inputs.test.ts \
+  apps/worker/src/first-party-ros-backtest.test.ts \
+  apps/worker/src/projection-lock-window.test.ts
+npm run projections:validate -w @fantasy/worker -- --seasons=2023,2024,2025
+npm run ros:coverage -w @fantasy/worker -- --summary
+npm run ros:validate -w @fantasy/worker -- --allow-incomplete
+npm run typecheck
+npm run build -w @fantasy/worker
+```
+
+The ROS validator is intentionally expensive: the v4 reference run took about 2.7 hours on one CPU
+core (four season-locked policies, 2,040 12288-path forecasts at current defaults, and 144
+16384-path convergence references). It writes progress phases to stderr and final JSON to stdout —
+redirect stdout to keep a report; nothing is written to disk otherwise. The
+`--allow-incomplete` flag keeps a diagnostic run at exit zero while preserving `report.state` and
+all blockers; omit it for a release check, where any blocker must produce a non-zero exit. The
+validator downloads official artifacts directly and performs no database writes.
+
+Inspect the signed-in Data Health and Projection Lab screens after the worker starts. A current
+process health check is not sufficient: confirm the input check time, successful compute time,
+training cutoff, target week, quality state, and league scoring warnings. Do not delete immutable
+source observations or model runs to recover a bad forecast. Disable the affected `data_sources`
+row or stop the worker, preserve the prior good set, diagnose the source/model artifact, and resume
+with a forward-only code or schema correction.
 
 ## Current authentication baseline
 
@@ -145,8 +275,8 @@ not prerequisites the current runbook silently assumes are already installed.
 
 ## Provider release gates
 
-- Yahoo friend access requires application approval, a current executed access agreement that
-  permits the intended presentation, and real-account contract validation with sanitized fixtures.
+- Yahoo friend access remains Coming Soon until the operator completes the current provider terms,
+  configuration, and real-account contract-validation checklist.
 - ESPN companion distribution requires sanctioned private-league validation, terms and store-policy
   review, and a signed build. Canonical manual import remains the recovery path.
 - Neither gate enables provider writes. Lineup, waiver, and trade changes remain recommendation-only

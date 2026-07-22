@@ -15,10 +15,19 @@ const expectedTables = [
   "change_event_receipts",
   "change_events",
   "data_sources",
+  "adp_observations",
   "import_runs",
   "invitations",
   "league_memberships",
   "matchup_snapshots",
+  "nfl_schedule_observations",
+  "player_injury_report_observations",
+  "player_ros_projection_summaries",
+  "player_snap_count_observations",
+  "player_weekly_roster_observations",
+  "player_weekly_stat_observations",
+  "projection_model_runs",
+  "projection_observations",
   "ranking_entries",
   "ranking_list_versions",
   "ranking_lists",
@@ -26,26 +35,55 @@ const expectedTables = [
   "share_links",
   "standings_entries",
   "standings_snapshots",
+  "team_weekly_stat_observations",
   "user_preferences",
   "weekly_matchups",
 ] as const;
 
 const expectedTriggers = [
   "ai_usage_ledger_append_only_trigger",
+  "adp_observations_append_only_trigger",
   "bridge_device_leagues_grant_trigger",
   "change_events_append_only_trigger",
   "invitations_single_use_trigger",
   "league_memberships_integrity_trigger",
   "leagues_sync_owner_membership_trigger",
+  "nfl_schedule_observations_append_only_trigger",
+  "player_injury_reports_append_only_trigger",
+  "player_ros_projection_summaries_append_only_trigger",
+  "player_ros_projection_summaries_scope_trigger",
+  "player_snap_counts_append_only_trigger",
+  "player_weekly_rosters_append_only_trigger",
+  "player_weekly_stats_append_only_trigger",
+  "projection_model_runs_append_only_trigger",
+  "projection_model_runs_weekly_identity_trigger",
+  "projection_observations_append_only_trigger",
+  "projection_sets_ros_identity_immutable_trigger",
+  "projection_sets_weekly_identity_trigger",
   "ranking_entries_immutable_trigger",
   "ranking_list_versions_10_scope_trigger",
   "ranking_list_versions_20_immutable_trigger",
   "ranking_lists_version_pointers_trigger",
+  "team_weekly_stats_append_only_trigger",
 ] as const;
 
 function requiredString(value: unknown, label: string): string {
   if (typeof value !== "string") {
     assert.fail(`${label} was not returned as a string`);
+  }
+  return value;
+}
+
+function requiredRecord(value: unknown, label: string): Record<string, unknown> {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    assert.fail(`${label} was not returned as a record`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function requiredNumber(value: unknown, label: string): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    assert.fail(`${label} was not returned as a finite number`);
   }
   return value;
 }
@@ -221,6 +259,1030 @@ try {
     returning id
   `;
   const playerId = requiredString(player?.id, "player id");
+  const [automatedSource] = await sql`
+    insert into data_sources (key, name, kind)
+    values (${`schema-source-${suffix}`}, 'Schema Source', 'projection')
+    returning id
+  `;
+  const automatedSourceId = requiredString(automatedSource?.id, "automated source id");
+  const [automatedSyncRun] = await sql`
+    insert into sync_runs (
+      kind, state, idempotency_key, started_at, finished_at, records_read, records_written,
+      artifact_checksum
+    ) values (
+      'schema-observations', 'succeeded', ${`schema-observations-${suffix}`}, now(), now(),
+      4, 4, ${"a".repeat(64)}
+    )
+    returning id
+  `;
+  const automatedSyncRunId = requiredString(automatedSyncRun?.id, "automated sync run id");
+  const observationChecksum = "a".repeat(64);
+  const [adpObservation] = await sql`
+    insert into adp_observations (
+      source_id, source_sync_run_id, external_player_id, player_id, season, scoring_format, team_count,
+      roster_format, overall_adp, source_as_of, fetched_at, input_checksum
+    ) values (
+      ${automatedSourceId}, ${automatedSyncRunId}, ${`adp-${suffix}`}, ${playerId}, 2026, 'ppr', 12,
+      'one-qb', 12.5, now(), now(), ${observationChecksum}
+    )
+    returning id
+  `;
+  const adpObservationId = requiredString(adpObservation?.id, "ADP observation id");
+  await expectDatabaseRejection(
+    "ADP observation mutation",
+    () => sql`update adp_observations set overall_adp = 13 where id = ${adpObservationId}`,
+  );
+  const [projectionObservation] = await sql`
+    insert into projection_observations (
+      source_id, source_sync_run_id, external_player_id, player_id, kind, source_version, independence_key,
+      season, week, horizon, components, source_as_of, fetched_at, input_checksum
+    ) values (
+      ${automatedSourceId}, ${automatedSyncRunId}, ${`projection-${suffix}`}, ${playerId}, 'stat-components',
+      'schema-v1', 'schema-independent-source', 2026, 1, 'week',
+      ${sql.json({ passing_yards: 250 })}, now(), now(), ${observationChecksum}
+    )
+    returning id
+  `;
+  const projectionObservationId = requiredString(
+    projectionObservation?.id,
+    "projection observation id",
+  );
+  await expectDatabaseRejection(
+    "duplicate projection observation for the same week",
+    () => sql`
+      insert into projection_observations (
+        source_id, source_sync_run_id, external_player_id, player_id, kind, source_version,
+        independence_key, season, week, horizon, components, source_as_of, fetched_at,
+        input_checksum
+      ) values (
+        ${automatedSourceId}, ${automatedSyncRunId}, ${`projection-${suffix}`}, ${playerId},
+        'stat-components', 'schema-v1', 'schema-independent-source', 2026, 1, 'week',
+        ${sql.json({ passing_yards: 250 })}, now(), now(), ${observationChecksum}
+      )
+    `,
+  );
+  await sql`
+    insert into projection_observations (
+      source_id, source_sync_run_id, external_player_id, player_id, kind, source_version,
+      independence_key, season, week, horizon, components, source_as_of, fetched_at,
+      input_checksum
+    ) values (
+      ${automatedSourceId}, ${automatedSyncRunId}, ${`projection-${suffix}`}, ${playerId},
+      'stat-components', 'schema-v1', 'schema-independent-source', 2026, 2, 'week',
+      ${sql.json({ passing_yards: 245 })}, now(), now(), ${observationChecksum}
+    )
+  `;
+  await expectDatabaseRejection(
+    "projection observation mutation",
+    () => sql`
+      update projection_observations
+      set components = ${sql.json({ passing_yards: 251 })}
+      where id = ${projectionObservationId}
+    `,
+  );
+  const [weeklyStatObservation] = await sql`
+    insert into player_weekly_stat_observations (
+      source_id, source_sync_run_id, external_player_id, player_id, season, week, season_type, game_id,
+      team, opponent_team, components, advanced, source_fantasy_points, fetched_at,
+      input_checksum
+    ) values (
+      ${automatedSourceId}, ${automatedSyncRunId}, '00-0000001', ${playerId}, 2026, 1, 'REG',
+      ${`2026_01_SCHEMA_${suffix}`}, 'CHI', 'DET', ${sql.json({ targets: 8 })},
+      ${sql.json({ targetShare: 0.25 })}, ${sql.json({ standard: 10, ppr: 15 })},
+      now(), ${observationChecksum}
+    )
+    returning id
+  `;
+  const weeklyStatObservationId = requiredString(
+    weeklyStatObservation?.id,
+    "weekly stat observation id",
+  );
+  await expectDatabaseRejection(
+    "weekly stat observation mutation",
+    () => sql`
+      update player_weekly_stat_observations
+      set week = 2
+      where id = ${weeklyStatObservationId}
+    `,
+  );
+  const [weeklyRosterObservation] = await sql`
+    insert into player_weekly_roster_observations (
+      source_id, source_sync_run_id, external_player_id, player_id, season, week, team,
+      position, roster_status, status_description, fetched_at, input_checksum
+    ) values (
+      ${automatedSourceId}, ${automatedSyncRunId}, '00-0000001', ${playerId}, 2026, 1,
+      'CHI', 'WR', 'ACT', 'Active', now(), ${observationChecksum}
+    )
+    returning id
+  `;
+  const weeklyRosterObservationId = requiredString(
+    weeklyRosterObservation?.id,
+    "weekly roster observation id",
+  );
+  await expectDatabaseRejection(
+    "weekly roster observation mutation",
+    () => sql`
+      update player_weekly_roster_observations
+      set week = 2
+      where id = ${weeklyRosterObservationId}
+    `,
+  );
+  const [injuryReportObservation] = await sql`
+    insert into player_injury_report_observations (
+      source_id, source_sync_run_id, external_player_id, player_id, season, week,
+      season_type, game_type, team, position, report_primary_injury, report_status,
+      practice_primary_injury, practice_status, state_key, fetched_at, input_checksum
+    ) values (
+      ${automatedSourceId}, ${automatedSyncRunId}, '00-0000001', ${playerId}, 2026, 1,
+      'REG', 'REG', 'CHI', 'WR', 'Knee', 'questionable', 'Knee', 'limited',
+      ${"b".repeat(64)}, now(), ${observationChecksum}
+    )
+    returning id
+  `;
+  const injuryReportObservationId = requiredString(
+    injuryReportObservation?.id,
+    "injury report observation id",
+  );
+  await expectDatabaseRejection(
+    "injury report observation mutation",
+    () => sql`
+      update player_injury_report_observations
+      set report_status = 'out'
+      where id = ${injuryReportObservationId}
+    `,
+  );
+  const [snapCountObservation] = await sql`
+    insert into player_snap_count_observations (
+      source_id, source_sync_run_id, external_player_id, player_id, season, week, season_type,
+      game_type, game_id,
+      pfr_game_id, team, opponent_team, offense_snaps, offense_share, defense_snaps,
+      defense_share, special_teams_snaps, special_teams_share, fetched_at, input_checksum
+    ) values (
+      ${automatedSourceId}, ${automatedSyncRunId}, 'PlaySc00', ${playerId}, 2026, 1, 'REG', 'REG',
+      ${`2026_01_SCHEMA_${suffix}`}, '202609130chi', 'CHI', 'DET',
+      50, 0.75, 0, 0, 2, 0.1, now(), ${observationChecksum}
+    )
+    returning id
+  `;
+  const snapCountObservationId = requiredString(
+    snapCountObservation?.id,
+    "snap-count observation id",
+  );
+  await expectDatabaseRejection(
+    "snap-count observation mutation",
+    () => sql`
+      delete from player_snap_count_observations where id = ${snapCountObservationId}
+    `,
+  );
+  const observationGameId = `2026_01_DET_CHI_${suffix}`;
+  const [scheduleObservation] = await sql`
+    insert into nfl_schedule_observations (
+      source_id, source_sync_run_id, external_game_id, season, week, season_type,
+      game_date, start_time_eastern, time_tbd, kickoff_at, away_team, home_team,
+      status, neutral_site, away_rest_days, home_rest_days, source_as_of, fetched_at,
+      input_checksum
+    ) values (
+      ${automatedSourceId}, ${automatedSyncRunId}, ${observationGameId}, 2026, 1, 'REG',
+      '2026-09-13', '12:00', false, '2026-09-13T17:00:00Z', 'DET', 'CHI',
+      'scheduled', false, 7, 7, now(), now(), ${observationChecksum}
+    )
+    returning id
+  `;
+  const scheduleObservationId = requiredString(scheduleObservation?.id, "schedule observation id");
+  await expectDatabaseRejection(
+    "schedule observation update",
+    () => sql`
+      update nfl_schedule_observations
+      set status = 'postponed'
+      where id = ${scheduleObservationId}
+    `,
+  );
+  await expectDatabaseRejection(
+    "schedule observation deletion",
+    () => sql`delete from nfl_schedule_observations where id = ${scheduleObservationId}`,
+  );
+
+  const [teamWeeklyObservation] = await sql`
+    insert into team_weekly_stat_observations (
+      source_id, source_sync_run_id, external_team_id, season, week, season_type,
+      game_id, team, opponent_team, components, fetched_at, input_checksum
+    ) values (
+      ${automatedSourceId}, ${automatedSyncRunId}, 'CHI', 2026, 1, 'REG',
+      ${observationGameId}, 'CHI', 'DET',
+      ${sql.json({ passing_yards: 250, defensive_sacks: 3 })}, now(),
+      ${observationChecksum}
+    )
+    returning id
+  `;
+  const teamWeeklyObservationId = requiredString(
+    teamWeeklyObservation?.id,
+    "team weekly observation id",
+  );
+  await expectDatabaseRejection(
+    "team weekly observation update",
+    () => sql`
+      update team_weekly_stat_observations
+      set components = ${sql.json({ passing_yards: 251, defensive_sacks: 3 })}
+      where id = ${teamWeeklyObservationId}
+    `,
+  );
+  await expectDatabaseRejection(
+    "team weekly observation deletion",
+    () => sql`delete from team_weekly_stat_observations where id = ${teamWeeklyObservationId}`,
+  );
+
+  const [projectionModelRun] = await sql`
+    insert into projection_model_runs (
+      source_sync_run_id, source_id, season, target_week, model_version,
+      training_window_start_season, trained_through_season, trained_through_week,
+      quality_state, players_evaluated, players_published, input_checksum,
+      configuration, calibration, metrics, source_as_of
+    ) values (
+      ${automatedSyncRunId}, ${automatedSourceId}, 2026, 1, 'schema-v1',
+      2023, 2025, 18, 'publishable', 1, 1, ${observationChecksum},
+      ${sql.json({ historySeasons: 3 })}, ${sql.json({ sampleSize: 200 })},
+      ${sql.json({ mae: 2.5 })}, now()
+    )
+    returning source_sync_run_id, horizon, target_week, window_start_week, window_end_week,
+      as_of_week
+  `;
+  const projectionModelRunRecord = requiredRecord(projectionModelRun, "projection model run");
+  const projectionModelRunId = requiredString(
+    projectionModelRunRecord.source_sync_run_id,
+    "projection model run id",
+  );
+  assert.deepEqual(
+    {
+      horizon: requiredString(projectionModelRunRecord.horizon, "projection model run horizon"),
+      targetWeek: requiredNumber(
+        projectionModelRunRecord.target_week,
+        "projection model run target week",
+      ),
+      windowStartWeek: requiredNumber(
+        projectionModelRunRecord.window_start_week,
+        "projection model run window start week",
+      ),
+      windowEndWeek: requiredNumber(
+        projectionModelRunRecord.window_end_week,
+        "projection model run window end week",
+      ),
+      asOfWeek: requiredNumber(
+        projectionModelRunRecord.as_of_week,
+        "projection model run as-of week",
+      ),
+    },
+    { horizon: "week", targetWeek: 1, windowStartWeek: 1, windowEndWeek: 1, asOfWeek: 0 },
+    "legacy weekly model-run insert did not receive an isolated weekly identity",
+  );
+  await expectDatabaseRejection(
+    "projection model run update",
+    () => sql`
+      update projection_model_runs
+      set quality_state = 'degraded'
+      where source_sync_run_id = ${projectionModelRunId}
+    `,
+  );
+  await expectDatabaseRejection(
+    "projection model run deletion",
+    () => sql`
+      delete from projection_model_runs where source_sync_run_id = ${projectionModelRunId}
+    `,
+  );
+
+  const [managedWeeklyProjectionSet] = await sql`
+    insert into projection_sets (
+      league_season_id, visibility, source, version, season, week, horizon,
+      fetched_at, input_checksum, metadata
+    ) values (
+      ${seasonId}, 'league', 'laces-out-first-party', ${`schema-managed-${suffix}`},
+      2026, 1, 'week', now(), ${observationChecksum}, ${sql.json({ managed: true })}
+    )
+    returning id, window_start_week, window_end_week, as_of_week
+  `;
+  const managedWeeklyProjectionSetRecord = requiredRecord(
+    managedWeeklyProjectionSet,
+    "managed weekly projection set",
+  );
+  const managedWeeklyProjectionSetId = requiredString(
+    managedWeeklyProjectionSetRecord.id,
+    "managed weekly projection set id",
+  );
+  assert.deepEqual(
+    {
+      windowStartWeek: requiredNumber(
+        managedWeeklyProjectionSetRecord.window_start_week,
+        "managed weekly projection set window start week",
+      ),
+      windowEndWeek: requiredNumber(
+        managedWeeklyProjectionSetRecord.window_end_week,
+        "managed weekly projection set window end week",
+      ),
+      asOfWeek: requiredNumber(
+        managedWeeklyProjectionSetRecord.as_of_week,
+        "managed weekly projection set as-of week",
+      ),
+    },
+    { windowStartWeek: 1, windowEndWeek: 1, asOfWeek: 0 },
+    "legacy weekly projection-set insert did not receive an isolated weekly identity",
+  );
+  await expectDatabaseRejection(
+    "private projection set without a creator",
+    () => sql`
+      insert into projection_sets (
+        league_season_id, visibility, source, version, season, week, horizon,
+        fetched_at, input_checksum
+      ) values (
+        ${seasonId}, 'private', 'schema-private', ${`schema-private-${suffix}`},
+        2026, 1, 'week', now(), ${observationChecksum}
+      )
+    `,
+  );
+
+  const rosInputChecksum = "b".repeat(64);
+  const rosSeedHash = "c".repeat(64);
+  const rosCalibrationChecksum = "5".repeat(64);
+  const rosConvergenceChecksum = "6".repeat(64);
+  const rosIntervalCalibration = {
+    schemaVersion: 1,
+    state: "calibrated",
+    method: "season-locked-conformal-v1",
+    evidenceChecksum: rosCalibrationChecksum,
+    heldOutSeasons: 3,
+    batches: 30,
+    samples: 300,
+    nominalCoverage: 0.7,
+    empiricalCoverage: 0.69,
+    maximumAllowedCoverageError: 0.05,
+  } as const;
+  const rosConvergence = {
+    schemaVersion: 1,
+    state: "converged",
+    method: "nested-prefix-512-vs-4096-v1",
+    evidenceChecksum: rosConvergenceChecksum,
+    lowerScenarioCount: 512,
+    referenceScenarioCount: 4096,
+    maxToleranceRatio: 0.8,
+  } as const;
+  const rosAvailability = {
+    schemaVersion: 1,
+    semantics: "unconditional-active-probability",
+    weeks: Array.from({ length: 17 }, (_, index) => {
+      const week = index + 2;
+      const bye = week === 18;
+      return {
+        week,
+        scheduled: !bye,
+        bye,
+        availabilityProbability: bye ? 0 : week === 17 ? 0.75 : 0.9,
+      };
+    }),
+  } as const;
+  const inactiveRosAvailability = {
+    schemaVersion: 1 as const,
+    semantics: "unconditional-active-probability" as const,
+    weeks: rosAvailability.weeks.map((week) => ({
+      ...week,
+      availabilityProbability: 0,
+    })),
+  };
+  const rosAsOfAt = new Date(Date.now() - 1_000);
+  const rosFetchedAt = new Date();
+  const [rosSyncRun] = await sql`
+    insert into sync_runs (
+      kind, state, idempotency_key, started_at, finished_at, records_read, records_written,
+      artifact_checksum
+    ) values (
+      'schema-ros-projection', 'succeeded', ${`schema-ros-${suffix}`}, now(), now(),
+      1, 1, ${rosInputChecksum}
+    )
+    returning id
+  `;
+  const rosSyncRunId = requiredString(rosSyncRun?.id, "ROS sync run id");
+  await sql`
+    insert into projection_model_runs (
+      source_sync_run_id, source_id, season, horizon, window_start_week, window_end_week,
+      as_of_week, as_of_at, model_version, training_window_start_season,
+      trained_through_season, trained_through_week, quality_state, players_evaluated,
+      players_published, input_checksum, configuration, calibration, metrics, source_as_of
+    ) values (
+      ${rosSyncRunId}, ${automatedSourceId}, 2026, 'rest-of-season', 2, 18,
+      1, ${rosAsOfAt}, 'schema-ros-v1', 2023, 2026, 1, 'publishable', 1, 1,
+      ${rosInputChecksum},
+      ${sql.json({
+        scenarios: 2_048,
+        simulationModelVersion: "schema-ros-v1",
+        orchestrationVersion: "schema-ros-orchestration-v1",
+      })},
+      ${sql.json({ rosIntervals: rosIntervalCalibration })},
+      ${sql.json({ mae: 12.5, rosConvergence })}, ${rosAsOfAt}
+    )
+  `;
+  const [rosProjectionSet] = await sql`
+    insert into projection_sets (
+      league_season_id, visibility, source, version, season, horizon, window_start_week,
+      window_end_week, as_of_week, as_of_at, fetched_at, input_checksum, metadata
+    ) values (
+      ${seasonId}, 'league', 'laces-out-first-party-ros', ${`schema-ros-v1-${suffix}`},
+      2026, 'rest-of-season', 2, 18, 1, ${rosAsOfAt}, ${rosFetchedAt},
+      ${rosInputChecksum}, ${sql.json({ managed: true, methodVersion: "schema-ros-v1" })}
+    )
+    returning id
+  `;
+  const rosProjectionSetId = requiredString(rosProjectionSet?.id, "ROS projection set id");
+  await sql`
+    insert into player_projections (
+      projection_set_id, player_id, mean_points, floor_points, ceiling_points, confidence,
+      components
+    ) values (
+      ${rosProjectionSetId}, ${playerId}, 210, 150, 275, 0.82,
+      ${sql.json({ expected_games: 14 })}
+    )
+  `;
+  const rosPublicationGateCases = [
+    {
+      label: "degraded ROS model run",
+      modelVersion: "schema-ros-degraded-v1",
+      qualityState: "degraded",
+      configuration: {
+        simulationModelVersion: "schema-ros-degraded-v1",
+        orchestrationVersion: "schema-ros-orchestration-v1",
+      },
+      calibration: { rosIntervals: rosIntervalCalibration },
+      metrics: { rosConvergence },
+    },
+    {
+      label: "uncalibrated ROS intervals",
+      modelVersion: "schema-ros-uncalibrated-v1",
+      qualityState: "publishable",
+      configuration: {
+        simulationModelVersion: "schema-ros-uncalibrated-v1",
+        orchestrationVersion: "schema-ros-orchestration-v1",
+      },
+      calibration: {
+        rosIntervals: { ...rosIntervalCalibration, state: "uncalibrated" },
+      },
+      metrics: { rosConvergence },
+    },
+    {
+      label: "unconverged ROS simulation",
+      modelVersion: "schema-ros-unconverged-v1",
+      qualityState: "publishable",
+      configuration: {
+        simulationModelVersion: "schema-ros-unconverged-v1",
+        orchestrationVersion: "schema-ros-orchestration-v1",
+      },
+      calibration: { rosIntervals: rosIntervalCalibration },
+      metrics: {
+        rosConvergence: { ...rosConvergence, state: "unstable" },
+      },
+    },
+    {
+      label: "mixed ROS simulation and model versions",
+      modelVersion: "schema-ros-wrapper-v1",
+      qualityState: "publishable",
+      configuration: {
+        simulationModelVersion: "schema-ros-v1",
+        orchestrationVersion: "schema-ros-orchestration-v1",
+      },
+      calibration: { rosIntervals: rosIntervalCalibration },
+      metrics: { rosConvergence },
+    },
+  ] as const;
+  for (const gateCase of rosPublicationGateCases) {
+    const [gateSyncRun] = await sql`
+      insert into sync_runs (
+        kind, state, idempotency_key, started_at, finished_at, records_read, records_written,
+        artifact_checksum
+      ) values (
+        'schema-ros-projection', 'succeeded',
+        ${`schema-ros-${gateCase.modelVersion}-${suffix}`}, now(), now(), 1, 1,
+        ${rosInputChecksum}
+      )
+      returning id
+    `;
+    const gateSyncRunId = requiredString(gateSyncRun?.id, `${gateCase.label} sync run id`);
+    await sql`
+      insert into projection_model_runs (
+        source_sync_run_id, source_id, season, horizon, window_start_week, window_end_week,
+        as_of_week, as_of_at, model_version, training_window_start_season,
+        trained_through_season, trained_through_week, quality_state, players_evaluated,
+        players_published, input_checksum, configuration, calibration, metrics, source_as_of
+      ) values (
+        ${gateSyncRunId}, ${automatedSourceId}, 2026, 'rest-of-season', 2, 18,
+        1, ${rosAsOfAt}, ${gateCase.modelVersion}, 2023, 2026, 1,
+        ${gateCase.qualityState}, 1, 1, ${rosInputChecksum},
+        ${sql.json(gateCase.configuration)}, ${sql.json(gateCase.calibration)},
+        ${sql.json(gateCase.metrics)}, ${rosAsOfAt}
+      )
+    `;
+    await expectDatabaseRejection(
+      gateCase.label,
+      () => sql`
+      insert into player_ros_projection_summaries (
+        projection_set_id, source_sync_run_id, player_id, season, window_start_week,
+        window_end_week, as_of_week, as_of_at, scheduled_games, expected_games,
+        aggregate_mean_points, p15_points, p50_points, p85_points,
+        mean_points_per_expected_game, points_stddev, availability, scenario_count,
+        method_version, seed_hash, input_checksum
+      ) values (
+        ${rosProjectionSetId}, ${gateSyncRunId}, ${playerId}, 2026, 2, 18, 1, ${rosAsOfAt},
+        16, 14.25, 210, 150, 205, 275, 14.736842, 22.5,
+        ${sql.json(rosAvailability)}, 2048, ${gateCase.modelVersion}, ${rosSeedHash},
+        ${rosInputChecksum}
+      )
+    `,
+    );
+  }
+  await expectDatabaseRejection(
+    "ROS availability using an unversioned probability field",
+    () => sql`
+      insert into player_ros_projection_summaries (
+        projection_set_id, source_sync_run_id, player_id, season, window_start_week,
+        window_end_week, as_of_week, as_of_at, scheduled_games, expected_games,
+        aggregate_mean_points, p15_points, p50_points, p85_points,
+        mean_points_per_expected_game, points_stddev, availability, scenario_count,
+        method_version, seed_hash, input_checksum
+      ) values (
+        ${rosProjectionSetId}, ${rosSyncRunId}, ${playerId}, 2026, 2, 18, 1, ${rosAsOfAt},
+        16, 14.25, 210, 150, 205, 275, 14.736842, 22.5,
+        ${sql.json({
+          schemaVersion: 1,
+          semantics: "unconditional-active-probability",
+          weeks: rosAvailability.weeks.map(({ availabilityProbability, ...week }) => ({
+            ...week,
+            activeProbability: availabilityProbability,
+          })),
+        })},
+        2048, 'schema-ros-v1', ${rosSeedHash}, ${rosInputChecksum}
+      )
+    `,
+  );
+  await expectDatabaseRejection(
+    "ROS availability missing a window week",
+    () => sql`
+      insert into player_ros_projection_summaries (
+        projection_set_id, source_sync_run_id, player_id, season, window_start_week,
+        window_end_week, as_of_week, as_of_at, scheduled_games, expected_games,
+        aggregate_mean_points, p15_points, p50_points, p85_points,
+        mean_points_per_expected_game, points_stddev, availability, scenario_count,
+        method_version, seed_hash, input_checksum
+      ) values (
+        ${rosProjectionSetId}, ${rosSyncRunId}, ${playerId}, 2026, 2, 18, 1, ${rosAsOfAt},
+        16, 14.25, 210, 150, 205, 275, 14.736842, 22.5,
+        ${sql.json({ ...rosAvailability, weeks: rosAvailability.weeks.slice(0, -1) })},
+        2048, 'schema-ros-v1', ${rosSeedHash}, ${rosInputChecksum}
+      )
+    `,
+  );
+  await expectDatabaseRejection(
+    "ROS availability probabilities do not reconcile",
+    () => sql`
+      insert into player_ros_projection_summaries (
+        projection_set_id, source_sync_run_id, player_id, season, window_start_week,
+        window_end_week, as_of_week, as_of_at, scheduled_games, expected_games,
+        aggregate_mean_points, p15_points, p50_points, p85_points,
+        mean_points_per_expected_game, points_stddev, availability, scenario_count,
+        method_version, seed_hash, input_checksum
+      ) values (
+        ${rosProjectionSetId}, ${rosSyncRunId}, ${playerId}, 2026, 2, 18, 1, ${rosAsOfAt},
+        16, 14.25, 210, 150, 205, 275, 14.736842, 22.5,
+        ${sql.json({
+          ...rosAvailability,
+          weeks: rosAvailability.weeks.map((week) =>
+            week.week === 2 ? { ...week, availabilityProbability: 0.8 } : week,
+          ),
+        })},
+        2048, 'schema-ros-v1', ${rosSeedHash}, ${rosInputChecksum}
+      )
+    `,
+  );
+  await expectDatabaseRejection(
+    "ROS summary checksum mismatch",
+    () => sql`
+      insert into player_ros_projection_summaries (
+        projection_set_id, source_sync_run_id, player_id, season, window_start_week,
+        window_end_week, as_of_week, as_of_at, scheduled_games, expected_games,
+        aggregate_mean_points, p15_points, p50_points, p85_points, mean_points_per_expected_game,
+        points_stddev, availability, scenario_count, method_version, seed_hash, input_checksum
+      ) values (
+        ${rosProjectionSetId}, ${rosSyncRunId}, ${playerId}, 2026, 2, 18, 1, ${rosAsOfAt},
+        16, 14.25, 210, 150, 205, 275, 14.736842, 22.5, ${sql.json(rosAvailability)},
+        2048, 'schema-ros-v1', ${rosSeedHash}, ${"d".repeat(64)}
+      )
+    `,
+  );
+  await expectDatabaseRejection(
+    "ROS summary method/model version mismatch",
+    () => sql`
+      insert into player_ros_projection_summaries (
+        projection_set_id, source_sync_run_id, player_id, season, window_start_week,
+        window_end_week, as_of_week, as_of_at, scheduled_games, expected_games,
+        aggregate_mean_points, p15_points, p50_points, p85_points, mean_points_per_expected_game,
+        points_stddev, availability, scenario_count, method_version, seed_hash, input_checksum
+      ) values (
+        ${rosProjectionSetId}, ${rosSyncRunId}, ${playerId}, 2026, 2, 18, 1, ${rosAsOfAt},
+        16, 14.25, 210, 150, 205, 275, 14.736842, 22.5, ${sql.json(rosAvailability)},
+        2048, 'schema-ros-v2', ${rosSeedHash}, ${rosInputChecksum}
+      )
+    `,
+  );
+  await expectDatabaseRejection(
+    "ROS summary aggregate mean mismatch",
+    () => sql`
+      insert into player_ros_projection_summaries (
+        projection_set_id, source_sync_run_id, player_id, season, window_start_week,
+        window_end_week, as_of_week, as_of_at, scheduled_games, expected_games,
+        aggregate_mean_points, p15_points, p50_points, p85_points, mean_points_per_expected_game,
+        points_stddev, availability, scenario_count, method_version, seed_hash, input_checksum
+      ) values (
+        ${rosProjectionSetId}, ${rosSyncRunId}, ${playerId}, 2026, 2, 18, 1, ${rosAsOfAt},
+        16, 14.25, 211, 150, 205, 275, 14.807018, 22.5, ${sql.json(rosAvailability)},
+        2048, 'schema-ros-v1', ${rosSeedHash}, ${rosInputChecksum}
+      )
+    `,
+  );
+  await expectDatabaseRejection(
+    "ROS percentile ordering",
+    () => sql`
+      insert into player_ros_projection_summaries (
+        projection_set_id, source_sync_run_id, player_id, season, window_start_week,
+        window_end_week, as_of_week, as_of_at, scheduled_games, expected_games,
+        aggregate_mean_points, p15_points, p50_points, p85_points, mean_points_per_expected_game,
+        points_stddev, availability, scenario_count, method_version, seed_hash, input_checksum
+      ) values (
+        ${rosProjectionSetId}, ${rosSyncRunId}, ${playerId}, 2026, 2, 18, 1, ${rosAsOfAt},
+        16, 14.25, 210, 150, 300, 275, 14.736842, 22.5, ${sql.json(rosAvailability)},
+        2048, 'schema-ros-v1', ${rosSeedHash}, ${rosInputChecksum}
+      )
+    `,
+  );
+  await expectDatabaseRejection(
+    "ROS scenario count below calibrated bounds",
+    () => sql`
+      insert into player_ros_projection_summaries (
+        projection_set_id, source_sync_run_id, player_id, season, window_start_week,
+        window_end_week, as_of_week, as_of_at, scheduled_games, expected_games,
+        aggregate_mean_points, p15_points, p50_points, p85_points, mean_points_per_expected_game,
+        points_stddev, availability, scenario_count, method_version, seed_hash, input_checksum
+      ) values (
+        ${rosProjectionSetId}, ${rosSyncRunId}, ${playerId}, 2026, 2, 18, 1, ${rosAsOfAt},
+        16, 14.25, 210, 150, 205, 275, 14.736842, 22.5, ${sql.json(rosAvailability)},
+        127, 'schema-ros-v1', ${rosSeedHash}, ${rosInputChecksum}
+      )
+    `,
+  );
+  await sql`
+    insert into player_ros_projection_summaries (
+      projection_set_id, source_sync_run_id, player_id, season, window_start_week,
+      window_end_week, as_of_week, as_of_at, scheduled_games, expected_games,
+      aggregate_mean_points, p15_points, p50_points, p85_points, mean_points_per_expected_game,
+      points_stddev, availability, scenario_count, method_version, seed_hash, input_checksum
+    ) values (
+      ${rosProjectionSetId}, ${rosSyncRunId}, ${playerId}, 2026, 2, 18, 1, ${rosAsOfAt},
+      16, 14.25, 210, 150, 205, 275, 14.736842, 22.5,
+      ${sql.json(rosAvailability)}, 2048,
+      'schema-ros-v1', ${rosSeedHash}, ${rosInputChecksum}
+    )
+  `;
+  const [inactivePlayer] = await sql`
+    insert into players (full_name, primary_position, eligible_positions)
+    values ('Schema Inactive Player', 'RB', ${["RB"]})
+    returning id
+  `;
+  const inactivePlayerId = requiredString(inactivePlayer?.id, "inactive player id");
+  await sql`
+    insert into player_projections (
+      projection_set_id, player_id, mean_points, floor_points, ceiling_points, confidence,
+      components
+    ) values (
+      ${rosProjectionSetId}, ${inactivePlayerId}, 0, 0, 0, 1,
+      ${sql.json({ expected_games: 0 })}
+    )
+  `;
+  await expectDatabaseRejection(
+    "zero-game ROS summary with points per expected game",
+    () => sql`
+      insert into player_ros_projection_summaries (
+        projection_set_id, source_sync_run_id, player_id, season, window_start_week,
+        window_end_week, as_of_week, as_of_at, scheduled_games, expected_games,
+        aggregate_mean_points, p15_points, p50_points, p85_points, mean_points_per_expected_game,
+        points_stddev, availability, scenario_count, method_version, seed_hash, input_checksum
+      ) values (
+        ${rosProjectionSetId}, ${rosSyncRunId}, ${inactivePlayerId}, 2026, 2, 18, 1,
+        ${rosAsOfAt}, 16, 0, 0, 0, 0, 0, 0, 0, ${sql.json(inactiveRosAvailability)},
+        2048, 'schema-ros-v1', ${rosSeedHash}, ${rosInputChecksum}
+      )
+    `,
+  );
+  await sql`
+    insert into player_ros_projection_summaries (
+      projection_set_id, source_sync_run_id, player_id, season, window_start_week,
+      window_end_week, as_of_week, as_of_at, scheduled_games, expected_games,
+      aggregate_mean_points, p15_points, p50_points, p85_points, mean_points_per_expected_game,
+      points_stddev, availability, scenario_count, method_version, seed_hash, input_checksum
+    ) values (
+      ${rosProjectionSetId}, ${rosSyncRunId}, ${inactivePlayerId}, 2026, 2, 18, 1,
+      ${rosAsOfAt}, 16, 0, 0, 0, 0, 0, null, 0, ${sql.json(inactiveRosAvailability)},
+      2048, 'schema-ros-v1', ${rosSeedHash}, ${rosInputChecksum}
+    )
+  `;
+  await expectDatabaseRejection(
+    "duplicate ROS distribution summary",
+    () => sql`
+      insert into player_ros_projection_summaries (
+        projection_set_id, source_sync_run_id, player_id, season, window_start_week,
+        window_end_week, as_of_week, as_of_at, scheduled_games, expected_games,
+        aggregate_mean_points, p15_points, p50_points, p85_points, mean_points_per_expected_game,
+        points_stddev, availability, scenario_count, method_version, seed_hash, input_checksum
+      ) values (
+        ${rosProjectionSetId}, ${rosSyncRunId}, ${playerId}, 2026, 2, 18, 1, ${rosAsOfAt},
+        16, 14.25, 210, 150, 205, 275, 14.736842, 22.5, ${sql.json(rosAvailability)}, 2048,
+        'schema-ros-v1', ${rosSeedHash}, ${rosInputChecksum}
+      )
+    `,
+  );
+  await expectDatabaseRejection(
+    "ROS distribution summary update",
+    () => sql`
+      update player_ros_projection_summaries
+      set expected_games = 14
+      where projection_set_id = ${rosProjectionSetId} and player_id = ${playerId}
+    `,
+  );
+  await expectDatabaseRejection(
+    "ROS distribution summary deletion",
+    () => sql`
+      delete from player_ros_projection_summaries
+      where projection_set_id = ${rosProjectionSetId} and player_id = ${playerId}
+    `,
+  );
+  await expectDatabaseRejection(
+    "weekly projection set used for a ROS summary",
+    () => sql`
+      insert into player_ros_projection_summaries (
+        projection_set_id, source_sync_run_id, player_id, season, window_start_week,
+        window_end_week, as_of_week, as_of_at, scheduled_games, expected_games,
+        aggregate_mean_points, p15_points, p50_points, p85_points, mean_points_per_expected_game,
+        points_stddev, availability, scenario_count, method_version, seed_hash, input_checksum
+      ) values (
+        ${managedWeeklyProjectionSetId}, ${rosSyncRunId}, ${playerId}, 2026, 1, 1, 0,
+        ${rosAsOfAt}, 1, 1, 14.736842, 10, 14, 20, 14.736842, 2.5,
+        ${sql.json(rosAvailability)}, 2048,
+        'schema-ros-v1', ${rosSeedHash}, ${rosInputChecksum}
+      )
+    `,
+  );
+  await expectDatabaseRejection(
+    "ROS projection-set identity mutation",
+    () => sql`
+      update projection_sets set as_of_week = 0 where id = ${rosProjectionSetId}
+    `,
+  );
+  await expectDatabaseRejection(
+    "duplicate managed ROS projection set identity",
+    () => sql`
+      insert into projection_sets (
+        league_season_id, visibility, source, version, season, horizon, window_start_week,
+        window_end_week, as_of_week, as_of_at, fetched_at, input_checksum
+      ) values (
+        ${seasonId}, 'league', 'laces-out-first-party-ros',
+        ${`schema-ros-duplicate-${suffix}`}, 2026, 'rest-of-season', 2, 18, 1,
+        ${rosAsOfAt}, ${rosFetchedAt}, ${rosInputChecksum}
+      )
+    `,
+  );
+  const setChecksumMismatch = "f".repeat(64);
+  const [mismatchedChecksumSet] = await sql`
+    insert into projection_sets (
+      league_season_id, visibility, source, version, season, horizon, window_start_week,
+      window_end_week, as_of_week, as_of_at, fetched_at, input_checksum
+    ) values (
+      ${seasonId}, 'league', 'schema-ros-checksum-mismatch',
+      ${`schema-ros-checksum-mismatch-${suffix}`}, 2026, 'rest-of-season', 2, 18, 1,
+      ${rosAsOfAt}, ${rosFetchedAt}, ${setChecksumMismatch}
+    )
+    returning id
+  `;
+  const mismatchedChecksumSetId = requiredString(
+    mismatchedChecksumSet?.id,
+    "mismatched-checksum projection set id",
+  );
+  await sql`
+    insert into player_projections (
+      projection_set_id, player_id, mean_points, floor_points, ceiling_points, components
+    ) values (
+      ${mismatchedChecksumSetId}, ${playerId}, 210, 150, 275, ${sql.json({})}
+    )
+  `;
+  await expectDatabaseRejection(
+    "ROS projection-set/model-run checksum mismatch",
+    () => sql`
+      insert into player_ros_projection_summaries (
+        projection_set_id, source_sync_run_id, player_id, season, window_start_week,
+        window_end_week, as_of_week, as_of_at, scheduled_games, expected_games,
+        aggregate_mean_points, p15_points, p50_points, p85_points, mean_points_per_expected_game,
+        points_stddev, availability, scenario_count, method_version, seed_hash, input_checksum
+      ) values (
+        ${mismatchedChecksumSetId}, ${rosSyncRunId}, ${playerId}, 2026, 2, 18, 1,
+        ${rosAsOfAt}, 16, 14.25, 210, 150, 205, 275, 14.736842, 22.5,
+        ${sql.json(rosAvailability)}, 2048, 'schema-ros-v1', ${rosSeedHash},
+        ${setChecksumMismatch}
+      )
+    `,
+  );
+
+  const [duplicateRosSyncRun] = await sql`
+    insert into sync_runs (kind, state, idempotency_key, started_at, finished_at)
+    values ('schema-ros-projection', 'succeeded', ${`schema-ros-duplicate-${suffix}`}, now(), now())
+    returning id
+  `;
+  const duplicateRosSyncRunId = requiredString(
+    duplicateRosSyncRun?.id,
+    "duplicate ROS sync run id",
+  );
+  await expectDatabaseRejection(
+    "duplicate ROS model-run identity",
+    () => sql`
+      insert into projection_model_runs (
+        source_sync_run_id, source_id, season, horizon, window_start_week, window_end_week,
+        as_of_week, as_of_at, model_version, training_window_start_season,
+        trained_through_season, trained_through_week, quality_state, players_evaluated,
+        players_published, input_checksum, configuration, calibration, metrics, source_as_of
+      ) values (
+        ${duplicateRosSyncRunId}, ${automatedSourceId}, 2026, 'rest-of-season', 2, 18,
+        1, ${rosAsOfAt}, 'schema-ros-v1', 2023, 2026, 1, 'publishable', 1, 1,
+        ${rosInputChecksum}, ${sql.json({})}, ${sql.json({})}, ${sql.json({})}, ${rosAsOfAt}
+      )
+    `,
+  );
+
+  const [invalidHorizonSyncRun] = await sql`
+    insert into sync_runs (kind, state, idempotency_key, started_at, finished_at)
+    values ('schema-ros-projection', 'succeeded', ${`schema-ros-invalid-${suffix}`}, now(), now())
+    returning id
+  `;
+  const invalidHorizonSyncRunId = requiredString(
+    invalidHorizonSyncRun?.id,
+    "invalid-horizon sync run id",
+  );
+  await expectDatabaseRejection(
+    "ROS model run carrying a weekly target",
+    () => sql`
+      insert into projection_model_runs (
+        source_sync_run_id, source_id, season, horizon, target_week, window_start_week,
+        window_end_week, as_of_week, as_of_at, model_version, training_window_start_season,
+        trained_through_season, trained_through_week, quality_state, players_evaluated,
+        players_published, input_checksum, configuration, calibration, metrics, source_as_of
+      ) values (
+        ${invalidHorizonSyncRunId}, ${automatedSourceId}, 2026, 'rest-of-season', 2, 2,
+        18, 1, ${rosAsOfAt}, 'schema-ros-invalid', 2023, 2026, 1, 'publishable', 1, 1,
+        ${"d".repeat(64)}, ${sql.json({})}, ${sql.json({})}, ${sql.json({})}, ${rosAsOfAt}
+      )
+    `,
+  );
+  await expectDatabaseRejection(
+    "ROS model run without explicit window and as-of identity",
+    () => sql`
+      insert into projection_model_runs (
+        source_sync_run_id, source_id, season, horizon, model_version,
+        training_window_start_season, trained_through_season, trained_through_week,
+        quality_state, players_evaluated, players_published, input_checksum,
+        configuration, calibration, metrics, source_as_of
+      ) values (
+        ${invalidHorizonSyncRunId}, ${automatedSourceId}, 2026, 'rest-of-season',
+        'schema-ros-missing-identity', 2023, 2026, 1, 'publishable', 1, 1,
+        ${"e".repeat(64)}, ${sql.json({})}, ${sql.json({})}, ${sql.json({})}, ${rosAsOfAt}
+      )
+    `,
+  );
+  await expectDatabaseRejection(
+    "ROS projection set without explicit window and as-of identity",
+    () => sql`
+      insert into projection_sets (
+        league_season_id, visibility, source, version, season, horizon, fetched_at,
+        input_checksum
+      ) values (
+        ${seasonId}, 'league', 'schema-ros-missing-identity',
+        ${`schema-ros-missing-identity-${suffix}`}, 2026, 'rest-of-season',
+        ${rosFetchedAt}, ${"e".repeat(64)}
+      )
+    `,
+  );
+  await expectDatabaseRejection(
+    "ROS model source newer than its as-of identity",
+    () => sql`
+      insert into projection_model_runs (
+        source_sync_run_id, source_id, season, horizon, window_start_week, window_end_week,
+        as_of_week, as_of_at, model_version, training_window_start_season,
+        trained_through_season, trained_through_week, quality_state, players_evaluated,
+        players_published, input_checksum, configuration, calibration, metrics, source_as_of
+      ) values (
+        ${invalidHorizonSyncRunId}, ${automatedSourceId}, 2026, 'rest-of-season', 2, 18,
+        1, ${rosAsOfAt}, 'schema-ros-future-source', 2023, 2026, 1, 'publishable', 1, 1,
+        ${"1".repeat(64)}, ${sql.json({})}, ${sql.json({})}, ${sql.json({})}, ${rosFetchedAt}
+      )
+    `,
+  );
+  await expectDatabaseRejection(
+    "ROS model same-season training beyond as-of week",
+    () => sql`
+      insert into projection_model_runs (
+        source_sync_run_id, source_id, season, horizon, window_start_week, window_end_week,
+        as_of_week, as_of_at, model_version, training_window_start_season,
+        trained_through_season, trained_through_week, quality_state, players_evaluated,
+        players_published, input_checksum, configuration, calibration, metrics, source_as_of
+      ) values (
+        ${invalidHorizonSyncRunId}, ${automatedSourceId}, 2026, 'rest-of-season', 2, 18,
+        1, ${rosAsOfAt}, 'schema-ros-training-leak', 2023, 2026, 2, 'publishable', 1, 1,
+        ${"2".repeat(64)}, ${sql.json({})}, ${sql.json({})}, ${sql.json({})}, ${rosAsOfAt}
+      )
+    `,
+  );
+  await expectDatabaseRejection(
+    "ROS model as-of week inside its forecast window",
+    () => sql`
+      insert into projection_model_runs (
+        source_sync_run_id, source_id, season, horizon, window_start_week, window_end_week,
+        as_of_week, as_of_at, model_version, training_window_start_season,
+        trained_through_season, trained_through_week, quality_state, players_evaluated,
+        players_published, input_checksum, configuration, calibration, metrics, source_as_of
+      ) values (
+        ${invalidHorizonSyncRunId}, ${automatedSourceId}, 2026, 'rest-of-season', 2, 18,
+        2, ${rosAsOfAt}, 'schema-ros-overlap', 2023, 2026, 1, 'publishable', 1, 1,
+        ${"3".repeat(64)}, ${sql.json({})}, ${sql.json({})}, ${sql.json({})}, ${rosAsOfAt}
+      )
+    `,
+  );
+  await expectDatabaseRejection(
+    "ROS projection-set as-of week inside its forecast window",
+    () => sql`
+      insert into projection_sets (
+        league_season_id, visibility, source, version, season, horizon, window_start_week,
+        window_end_week, as_of_week, as_of_at, fetched_at, input_checksum
+      ) values (
+        ${seasonId}, 'league', 'schema-ros-overlap', ${`schema-ros-overlap-${suffix}`},
+        2026, 'rest-of-season', 2, 18, 2, ${rosAsOfAt}, ${rosFetchedAt}, ${"3".repeat(64)}
+      )
+    `,
+  );
+  await expectDatabaseRejection(
+    "new legacy-unknown projection identity",
+    () => sql`
+      insert into projection_sets (
+        league_season_id, visibility, source, version, season, horizon, identity_state,
+        fetched_at, input_checksum
+      ) values (
+        ${seasonId}, 'league', 'schema-legacy-unknown',
+        ${`schema-legacy-unknown-${suffix}`}, 2026, 'rest-of-season', 'legacy-unknown',
+        ${rosFetchedAt}, ${"4".repeat(64)}
+      )
+    `,
+  );
+  const [lifecycleProjectionSet] = await sql`
+    insert into projection_sets (
+      league_season_id, visibility, source, version, season, horizon, window_start_week,
+      window_end_week, as_of_week, as_of_at, fetched_at, input_checksum
+    ) values (
+      ${otherSeasonId}, 'league', 'schema-ros-lifecycle',
+      ${`schema-ros-lifecycle-${suffix}`}, 2026, 'rest-of-season', 2, 18, 1,
+      ${rosAsOfAt}, ${rosFetchedAt}, ${rosInputChecksum}
+    )
+    returning id
+  `;
+  const lifecycleProjectionSetId = requiredString(
+    lifecycleProjectionSet?.id,
+    "lifecycle projection set id",
+  );
+  await sql`
+    insert into player_projections (
+      projection_set_id, player_id, mean_points, floor_points, ceiling_points, components
+    ) values (
+      ${lifecycleProjectionSetId}, ${playerId}, 210, 150, 275, ${sql.json({})}
+    )
+  `;
+  await sql`
+    insert into player_ros_projection_summaries (
+      projection_set_id, source_sync_run_id, player_id, season, window_start_week,
+      window_end_week, as_of_week, as_of_at, scheduled_games, expected_games,
+      aggregate_mean_points, p15_points, p50_points, p85_points, mean_points_per_expected_game,
+      points_stddev, availability, scenario_count, method_version, seed_hash, input_checksum
+    ) values (
+      ${lifecycleProjectionSetId}, ${rosSyncRunId}, ${playerId}, 2026, 2, 18, 1,
+      ${rosAsOfAt}, 16, 14.25, 210, 150, 205, 275, 14.736842, 22.5,
+      ${sql.json(rosAvailability)}, 2048, 'schema-ros-v1', ${rosSeedHash}, ${rosInputChecksum}
+    )
+  `;
+  await sql`delete from league_seasons where id = ${otherSeasonId}`;
+  const lifecycleSummaryRows = await sql`
+    select 1
+    from player_ros_projection_summaries
+    where projection_set_id = ${lifecycleProjectionSetId}
+  `;
+  assert.equal(
+    lifecycleSummaryRows.length,
+    0,
+    "league-season deletion did not cascade retained ROS summaries",
+  );
   const [rankingList] = await sql`
     insert into ranking_lists (owner_user_id, name, kind, season)
     values (${ownerId}, 'Schema Rankings', 'cheat-sheet', 2026)

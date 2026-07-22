@@ -364,7 +364,7 @@ describe("AI service", () => {
     const complete = vi.fn((input: AiCompletionInput) => {
       void input;
       return Promise.resolve({
-        text: "Model-assisted forecast. [League analytics]",
+        text: "### Forecast\n\n1. Fourth & Long — 10–4\n\n### Sources\n[League analytics]",
         requestId: "feature-request",
         inputTokens: 140,
         outputTokens: 35,
@@ -386,9 +386,10 @@ describe("AI service", () => {
     });
 
     expect(response).toMatchObject({ feature: "standings-prediction", outcome: "generated" });
-    expect(response.answer).toBe("Model-assisted forecast.");
+    expect(response.answer).toBe("### Forecast\n\n1. Fourth & Long — 10–4");
     expect(complete.mock.calls[0]?.[0].prompt).toContain("plausible final record for every team");
     expect(complete.mock.calls[0]?.[0].prompt).toContain("Weight all-play results heavily.");
+    expect(complete.mock.calls[0]?.[0].system).toContain("Use concise Markdown");
     expect(repository.usage[0]).toMatchObject({
       operation: "league-feature",
       metadata: {

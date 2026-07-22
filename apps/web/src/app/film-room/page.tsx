@@ -5,7 +5,8 @@ import { FilmRoomWorkbench } from "../../components/film-room-workbench";
 
 export const metadata: Metadata = {
   title: "Film Room",
-  description: "Private, league-grounded AI analysis using your own provider API key.",
+  description:
+    "Private, league-grounded AI analysis with included Gemini and optional personal provider keys.",
 };
 
 export default function FilmRoomPage() {

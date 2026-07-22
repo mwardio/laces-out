@@ -45,8 +45,9 @@ import {
 import { optimizeLineup, type LineupLock } from "@fantasy/engine-lineup";
 import { evaluateTrade, type TradeEvaluation, type TradePackage } from "@fantasy/engine-trade";
 import { evaluateWaiverMoves, recommendFaabBid } from "@fantasy/engine-waiver";
-import { and, asc, count, desc, eq, inArray, or } from "drizzle-orm";
+import { and, asc, count, desc, eq, inArray, ne, or, sql } from "drizzle-orm";
 
+import { currentManagedProjectionProfileKey } from "./managed-projection-profile.js";
 import { projectionTimestampProvenance } from "./projection-provenance.js";
 
 const MAX_TEAMS = 32;
@@ -291,14 +292,24 @@ export class DrizzleInSeasonDecisionRepository implements InSeasonDecisionReposi
       .limit(limit);
   }
 
-  findProjectionSets(
+  async findProjectionSets(
     actorUserId: string,
     leagueSeasonId: string,
     season: number,
     week: number | null,
     limit: number,
   ): Promise<readonly DecisionProjectionSetRow[]> {
-    if (week === null) return Promise.resolve([]);
+    if (week === null) return [];
+    const managedProfileKey = await currentManagedProjectionProfileKey(
+      this.#database,
+      leagueSeasonId,
+    );
+    const compatibleManagedSet = managedProfileKey
+      ? or(
+          ne(projectionSets.source, "laces-out-first-party"),
+          sql`${projectionSets.metadata}->>'scoringProfileKey' = ${managedProfileKey}`,
+        )
+      : ne(projectionSets.source, "laces-out-first-party");
     return this.#database
       .select({
         id: projectionSets.id,
@@ -326,6 +337,7 @@ export class DrizzleInSeasonDecisionRepository implements InSeasonDecisionReposi
           eq(projectionSets.season, season),
           eq(projectionSets.week, week),
           eq(projectionSets.horizon, "week"),
+          compatibleManagedSet,
           or(
             eq(projectionSets.visibility, "league"),
             and(
@@ -335,7 +347,15 @@ export class DrizzleInSeasonDecisionRepository implements InSeasonDecisionReposi
           ),
         ),
       )
-      .orderBy(desc(projectionSets.fetchedAt), desc(projectionSets.createdAt))
+      .orderBy(
+        sql`case
+          when ${projectionSets.visibility} = 'private' and ${projectionSets.createdByUserId} = ${actorUserId} then 0
+          when ${projectionSets.createdByUserId} is not null then 1
+          else 2
+        end`,
+        desc(projectionSets.fetchedAt),
+        desc(projectionSets.createdAt),
+      )
       .limit(limit);
   }
 

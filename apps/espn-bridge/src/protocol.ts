@@ -57,7 +57,35 @@ export interface BridgeResultSummary {
 
 export const configurationStorageKey = "lacesOutEspnConfiguration";
 export const statusStorageKey = "lacesOutEspnStatus";
+export const pendingPairingStorageKey = "lacesOutEspnPendingPairing";
 export const syncAlarmName = "laces-out-espn-sync";
+
+// A web page can offer to pair the bridge with itself. Offers are held as
+// pending (never auto-configured) and expire quickly so a stale offer can never
+// silently reconfigure the bridge on a later popup open.
+export const pairingOfferTtlMs = 10 * 60 * 1000;
+
+// The message a Laces Out page posts through `chrome.runtime.sendMessage` to the
+// extension via `externally_connectable`. The offered configuration is only
+// applied after an explicit in-popup confirmation gesture.
+export type BridgePairingOfferMessage = {
+  readonly type: "PAIRING_OFFER";
+  readonly apiBaseUrl: string;
+  readonly deviceToken: string;
+  readonly leagues?: readonly string[];
+  readonly season: number;
+  readonly automaticSync?: boolean;
+};
+
+export type BridgePairingOfferResponse =
+  | { readonly ok: true; readonly state: "pending-confirmation" }
+  | { readonly ok: false; readonly reason: string };
+
+export interface PendingPairingOffer {
+  readonly origin: string;
+  readonly configuration: BridgeConfiguration;
+  readonly receivedAt: string;
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -130,6 +158,69 @@ export function validateBridgeConfiguration(value: unknown): BridgeConfiguration
     season,
     automaticSync,
   };
+}
+
+function normalizeOrigin(value: unknown): string {
+  if (typeof value !== "string" || value.trim() === "") {
+    throw new TypeError("Pairing offer is missing a browser-attested origin");
+  }
+  try {
+    return new URL(value).origin;
+  } catch {
+    throw new TypeError("Pairing offer sender origin is invalid");
+  }
+}
+
+// Validates a PAIRING_OFFER message. Reuses the configuration validator (token
+// length, URL normalization, league/season checks) and additionally requires
+// the browser-attested `senderOrigin` to exactly equal the normalized origin of
+// the offered `apiBaseUrl`: a page can only offer pairing to itself.
+export function validateBridgePairingOffer(
+  message: unknown,
+  senderOrigin: unknown,
+): BridgeConfiguration {
+  if (!isRecord(message) || message.type !== "PAIRING_OFFER") {
+    throw new TypeError("Not a bridge pairing offer");
+  }
+  const configuration = validateBridgeConfiguration({
+    apiBaseUrl: message.apiBaseUrl,
+    deviceToken: message.deviceToken,
+    leagueIds: message.leagues ?? message.leagueIds,
+    season: message.season,
+    automaticSync: typeof message.automaticSync === "boolean" ? message.automaticSync : true,
+  });
+  if (normalizeOrigin(senderOrigin) !== configuration.apiBaseUrl) {
+    throw new TypeError("A page can only offer pairing to its own origin");
+  }
+  return configuration;
+}
+
+export function createPendingPairingOffer(
+  configuration: BridgeConfiguration,
+  receivedAt: string,
+): PendingPairingOffer {
+  return { origin: configuration.apiBaseUrl, configuration, receivedAt };
+}
+
+// Reads a stored pending offer, failing closed on anything malformed so a
+// corrupt or foreign storage value can never be presented as a real offer.
+export function validateStoredPendingOffer(value: unknown): PendingPairingOffer | undefined {
+  if (!isRecord(value)) return undefined;
+  try {
+    const configuration = validateBridgeConfiguration(value.configuration);
+    if (value.origin !== configuration.apiBaseUrl) return undefined;
+    if (typeof value.receivedAt !== "string" || !Number.isFinite(Date.parse(value.receivedAt))) {
+      return undefined;
+    }
+    return { origin: configuration.apiBaseUrl, configuration, receivedAt: value.receivedAt };
+  } catch {
+    return undefined;
+  }
+}
+
+export function pairingOfferIsFresh(offer: PendingPairingOffer, now: number): boolean {
+  const receivedAt = Date.parse(offer.receivedAt);
+  return Number.isFinite(receivedAt) && receivedAt <= now && now - receivedAt < pairingOfferTtlMs;
 }
 
 export function summarizeBridgeResults(

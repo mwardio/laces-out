@@ -1,11 +1,15 @@
 import {
   configurationStorageKey,
+  createPendingPairingOffer,
+  pendingPairingStorageKey,
   statusStorageKey,
   summarizeBridgeResults,
   syncAlarmName,
   validateBridgeConfiguration,
+  validateBridgePairingOffer,
   type BridgeConfiguration,
   type BridgeLeagueResult,
+  type BridgePairingOfferResponse,
   type BridgeRequest,
   type BridgeResponse,
   type BridgeStatus,
@@ -307,6 +311,35 @@ chrome.runtime.onStartup.addListener(() => {
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === syncAlarmName) void synchronize();
 });
+
+// A Laces Out page (allowed via `externally_connectable`) can offer to pair the
+// bridge with itself. Store a valid offer as PENDING and never configure or
+// request permissions here — completion requires an explicit popup gesture. The
+// token is never logged or echoed back.
+async function handlePairingOffer(
+  message: unknown,
+  senderOrigin: string | undefined,
+): Promise<BridgePairingOfferResponse> {
+  let configuration: BridgeConfiguration;
+  try {
+    configuration = validateBridgePairingOffer(message, senderOrigin);
+  } catch (error) {
+    return { ok: false, reason: error instanceof Error ? error.message : "Invalid pairing offer" };
+  }
+  await chrome.storage.local.set({
+    [pendingPairingStorageKey]: createPendingPairingOffer(configuration, new Date().toISOString()),
+  });
+  return { ok: true, state: "pending-confirmation" };
+}
+
+chrome.runtime.onMessageExternal.addListener(
+  (message: unknown, sender, sendResponse: (response: BridgePairingOfferResponse) => void) => {
+    void handlePairingOffer(message, sender.origin)
+      .then(sendResponse)
+      .catch(() => sendResponse({ ok: false, reason: "Pairing offer failed" }));
+    return true;
+  },
+);
 
 chrome.runtime.onMessage.addListener(
   (request: BridgeRequest, _sender, sendResponse: (response: BridgeResponse) => void) => {

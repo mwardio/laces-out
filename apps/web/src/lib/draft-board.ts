@@ -1,4 +1,10 @@
-import { calculateAuctionInflation, recommendBid } from "@fantasy/engine-draft";
+import {
+  calculateAuctionInflation,
+  estimateDraftAvailability,
+  recommendAuctionNominations,
+  recommendBid,
+  type DraftAvailabilityEstimate,
+} from "@fantasy/engine-draft";
 import { playerId } from "@fantasy/domain";
 
 export type DraftBoardSort = "rank" | "tier" | "aav" | "name";
@@ -15,6 +21,8 @@ export interface DraftBoardValue {
   readonly positionRank: number | null;
   readonly tier: number | null;
   readonly adp: number | null;
+  readonly adpStandardDeviation?: number | null;
+  readonly adpSampleSize?: number | null;
   readonly aav: number | null;
   readonly targetPrice: number | null;
   readonly ceilingPrice: number | null;
@@ -120,6 +128,8 @@ export interface SnakeQueueInput<Player extends DraftBoardPlayer> {
   readonly allPlayers: readonly Player[];
   readonly rosteredPlayerIds: readonly string[];
   readonly rosterSlots: readonly DraftBoardRosterSlot[];
+  readonly currentPick?: number;
+  readonly nextPick?: number | null;
   readonly limit?: number;
 }
 
@@ -130,6 +140,20 @@ export interface SnakeQueueRow<
   readonly adjustedRank: number;
   readonly needScore: number;
   readonly needLabel: string;
+  readonly availability: DraftAvailabilityEstimate | null;
+  readonly waitRiskAdjustment: number;
+}
+
+export function nextPickForTeam(
+  pickOrder: readonly string[],
+  currentPick: number,
+  teamId: string,
+): number | null {
+  if (!Number.isSafeInteger(currentPick) || currentPick <= 0) return null;
+  const nextIndex = pickOrder.findIndex(
+    (candidate, index) => index >= currentPick && candidate === teamId,
+  );
+  return nextIndex === -1 ? null : nextIndex + 1;
 }
 
 function unfilledStarterSlots<Player extends DraftBoardPlayer>(
@@ -211,13 +235,37 @@ export function buildSnakeBestNowQueue<Player extends DraftBoardPlayer>(
       const baseRank = rankMetric(row.value);
       if (baseRank === null) return [];
       const need = candidateNeed(row.player, openSlots);
+      const adp = finite(row.value?.adp ?? null);
+      const availability =
+        adp !== null &&
+        input.currentPick !== undefined &&
+        input.nextPick !== undefined &&
+        input.nextPick !== null &&
+        input.nextPick > input.currentPick
+          ? estimateDraftAvailability({
+              meanAdp: adp,
+              ...(finite(row.value?.adpStandardDeviation ?? null) === null
+                ? {}
+                : { standardDeviation: row.value?.adpStandardDeviation as number }),
+              ...(row.value?.adpSampleSize === null || row.value?.adpSampleSize === undefined
+                ? {}
+                : { distributionSampleSize: row.value.adpSampleSize }),
+              currentPick: input.currentPick,
+              nextPick: input.nextPick,
+            })
+          : null;
+      const waitRiskAdjustment = availability
+        ? availability.probabilitySelectedBeforeNextPick * 6
+        : 0;
       return [
         {
           ...row,
           baseRank,
-          adjustedRank: baseRank - Math.min(12, need.score * 3),
+          adjustedRank: baseRank - Math.min(12, need.score * 3) - waitRiskAdjustment,
           needScore: need.score,
           needLabel: need.label,
+          availability,
+          waitRiskAdjustment,
         },
       ];
     })
@@ -228,6 +276,47 @@ export function buildSnakeBestNowQueue<Player extends DraftBoardPlayer>(
         left.player.name.localeCompare(right.player.name),
     )
     .slice(0, input.limit ?? 5);
+}
+
+export interface AuctionNominationRow<Player extends DraftBoardPlayer = DraftBoardPlayer> {
+  readonly player: Player;
+  readonly rank: number;
+  readonly strategy: "target" | "drain";
+  readonly adjustedValue: number;
+  readonly expectedMarketPrice: number;
+  readonly edge: number;
+  readonly reason: string;
+}
+
+/**
+ * Builds nomination advice only from explicit user-authored target prices and
+ * market AAV. Missing values stay missing instead of being synthesized.
+ */
+export function buildAuctionNominationQueue<Player extends DraftBoardPlayer>(input: {
+  readonly availablePlayers: readonly Player[];
+  readonly values: readonly DraftBoardValue[];
+  readonly limit?: number;
+}): readonly AuctionNominationRow<Player>[] {
+  const players = new Map(input.availablePlayers.map((player) => [player.id, player]));
+  const candidates = input.values.flatMap((value) => {
+    const candidate = players.get(value.playerId);
+    const dollarValue = finite(value.targetPrice);
+    const expectedMarketPrice = finite(value.aav);
+    if (!candidate || dollarValue === null || expectedMarketPrice === null) return [];
+    return [
+      {
+        playerId: playerId(value.playerId),
+        dollarValue,
+        expectedMarketPrice,
+      },
+    ];
+  });
+  const recommendations = recommendAuctionNominations(candidates, input.limit ?? 5);
+  return recommendations.flatMap((recommendation) => {
+    if (recommendation.edge <= 0) return [];
+    const candidate = players.get(recommendation.playerId);
+    return candidate ? [{ ...recommendation, player: candidate }] : [];
+  });
 }
 
 export interface AuctionTeamBudget {

@@ -38,13 +38,23 @@ and outsiders cannot sync, auto-enroll, link their scope, or discover the existi
 
 This is an unofficial compatibility integration, not ESPN OAuth. Its parser must fail closed when
 ESPN changes the web-client contract, keep the last good snapshot, and direct the user to reconnect
-or import. Developer builds live in [`apps/espn-bridge`](../../apps/espn-bridge); sharing requires a
-signed extension distribution and separate terms/store-policy review.
+or import. The signed companion is available through its unlisted [Chrome Web Store
+listing](https://chromewebstore.google.com/detail/laces-out-espn-bridge/hmilkmcjlkpnigcfnlfogeafacjpmkbj);
+broader distribution still requires a separate terms/store-policy decision.
 
 Each accepted sync retains point-in-time standings and the schedule rows ESPN returned. Provider
 league, team, and matchup IDs remain text throughout normalization and persistence, including
 20-digit decimal IDs. Current-week undecided matchup scores are retained for live opponent analysis;
 future placeholder scores become `null`. Replaying the same device/checksum receipt is idempotent.
+When present, the same validated snapshot also retains operating rules needed to qualify advice:
+waiver timing and limits, minimum bids, keeper and playoff structure, trade timing/review rules,
+divisions, team waiver priority, and remaining FAAB. Optional omissions remain unknown rather than
+being guessed.
+
+Supplemental ESPN reads must use independent artifact contracts and receipts. The implementation
+priority is league-specific available players, player-level weekly box scores, structured
+transactions, then completed/on-demand draft results. A supplemental request may fail without
+invalidating or rolling back a valid core league snapshot. Message-board content is out of scope.
 
 ### 2. Canonical manual JSON import
 
@@ -118,7 +128,9 @@ visibility is a user/commissioner choice and must not be changed or worked aroun
   in the hosted application. The companion may let the browser attach its local ESPN cookies to a
   direct ESPN request, but it never reads or transmits their values.
 - Never perform lineup, waiver, transaction, trade, commissioner, or draft writes.
-- Never advertise live ESPN draft sync. Manual draft event entry remains primary.
+- Never advertise live ESPN draft sync until real-season cadence and completeness tests establish a
+  safe read contract. Manual draft event entry remains primary; completed/on-demand provider draft
+  results may later reconcile against it without silently rewriting manual history.
 - Do not silently fall back from anonymous reads to browser session credentials.
 
 Disney's terms restrict automated access, monitoring, and copying using robots, spiders, scrapers,
@@ -129,10 +141,12 @@ that endpoint and is the safe release path.
 ## Setup checklist
 
 1. Obtain each numeric league ID using ESPN's normal web/app UI.
-2. For a private league, create a league-scoped device from Laces Out's `/connections` page, load
-   the signed/developer companion, configure the same bounded league-ID set, grant only the exact
-   Laces Out API origin, and sync while signed in to ESPN in the same browser profile. Claim the
-   correct fantasy team after each league's first import.
+2. For automatic private-league sync, install the signed companion from the [Chrome Web Store
+   listing](https://chromewebstore.google.com/detail/laces-out-espn-bridge/hmilkmcjlkpnigcfnlfogeafacjpmkbj),
+   create a league-scoped pairing from Laces Out's `/connections` page, then open the extension and
+   choose **Complete pairing**. Laces Out hands off the credential and bounded league-ID set
+   directly; there is no token to copy or paste. Sync while signed in to ESPN in the same browser
+   profile, then claim the correct fantasy team after each league's first import.
 3. Keep canonical JSON import as recovery. Preview the checksum, source time, league, season, and
    team count; then use the separate confirmation to commit. Do not paste credentials or headers.
 4. If using public read, confirm the league is intentionally public and enable only the

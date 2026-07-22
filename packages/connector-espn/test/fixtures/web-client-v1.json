@@ -23,11 +23,17 @@
         "acquisitionBudget": 100,
         "acquisitionType": "WAIVERS_TRADITIONAL",
         "isUsingAcquisitionBudget": true,
-        "waiverOrderReset": false
+        "waiverOrderReset": false,
+        "acquisitionLimit": 40,
+        "matchupAcquisitionLimit": 7,
+        "minimumBid": 1,
+        "waiverProcessDays": [2, 4, 6],
+        "waiverProcessHour": 3
       },
       "draftSettings": {
         "auctionBudget": 200,
-        "type": "AUCTION"
+        "type": "AUCTION",
+        "keeperCount": 2
       },
       "rosterSettings": {
         "lineupSlotCounts": {
@@ -44,9 +50,22 @@
         }
       },
       "scheduleSettings": {
-        "playoffTeamCount": 1
+        "playoffTeamCount": 1,
+        "matchupPeriodCount": 14,
+        "playoffMatchupPeriodLength": 1,
+        "playoffSeedingRule": "TOTAL_POINTS_SCORED",
+        "divisions": [
+          {
+            "id": "1",
+            "name": "Snowflake Division"
+          }
+        ]
       },
       "scoringSettings": {
+        "matchupTieRule": "NONE",
+        "playoffMatchupTieRule": "HOME_TEAM_WINS",
+        "scoringType": "H2H_POINTS",
+        "scoringEnhancementType": "WIN_BONUS_TOP_HALF",
         "scoringItems": [
           {
             "statId": 3,
@@ -60,6 +79,11 @@
             }
           }
         ]
+      },
+      "tradeSettings": {
+        "deadlineDate": 1794787200000,
+        "revisionHours": 24,
+        "vetoVotesRequired": 4
       }
     },
     "members": [
@@ -83,6 +107,10 @@
         "owners": ["manager-alpha-00000000-0000-0000-0000-000000000001"],
         "primaryOwner": "manager-alpha-00000000-0000-0000-0000-000000000001",
         "playoffSeed": 1,
+        "waiverRank": 2,
+        "transactionCounter": {
+          "acquisitionBudgetSpent": 17
+        },
         "record": {
           "overall": {
             "wins": 3,

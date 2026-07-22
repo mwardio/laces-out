@@ -93,6 +93,34 @@ function draftPort(overrides: Partial<DraftSessionPort>): DraftSessionPort {
 }
 
 describe("draft session routes", () => {
+  it("returns a validated, user-authorized draft-market baseline", async () => {
+    const getBaseline = vi.fn(() =>
+      Promise.resolve({
+        state: "unavailable" as const,
+        reason: "source-not-ready" as const,
+        detail: "The daily draft-market source has not completed its first refresh.",
+      }),
+    );
+    const app = await buildApp({
+      environment: loadEnvironment({ NODE_ENV: "test" }),
+      logger: false,
+      requireAuthentication: true,
+      authService: authenticatedService(),
+      draftMarket: { getBaseline },
+    });
+
+    const response = await app.inject({
+      method: "GET",
+      url: `/v1/drafts/${DRAFT_ID}/market`,
+      headers: { cookie: COOKIE },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({ state: "unavailable", reason: "source-not-ready" });
+    expect(getBaseline).toHaveBeenCalledWith(USER_ID, DRAFT_ID);
+    await app.close();
+  });
+
   it("requires authentication before creating a league-season session", async () => {
     const createSession = vi.fn(() => Promise.resolve(snapshot));
     const app = await buildApp({

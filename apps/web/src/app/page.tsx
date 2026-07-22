@@ -28,33 +28,42 @@ import type { Metadata } from "next";
 import Link from "next/link";
 
 import { LacesOutMark } from "../components/laces-out-mark";
-import { yahooDeveloperAccessPending } from "../lib/public-site";
+import { yahooComingSoon } from "../lib/public-site";
 
 import { ContactEasterEgg } from "./contact-easter-egg";
 import styles from "./landing.module.css";
 
+const socialPreview = {
+  url: "/opengraph-image.png",
+  width: 1733,
+  height: 908,
+  alt: "Laces Out — Finkle is Einhorn!",
+} as const;
+
 export const metadata: Metadata = {
   title: "Laces Out — Automated Fantasy Football Intelligence",
-  description: yahooDeveloperAccessPending
-    ? "Sync ESPN leagues now, with Yahoo coming soon, for automated draft, lineup, waiver, trade, and opponent analysis."
-    : "Connect Yahoo and ESPN leagues for automated draft, lineup, waiver, trade, and opponent analysis.",
+  description: yahooComingSoon
+    ? "Sync your ESPN league for built-in weekly forecasts and automated draft, lineup, waiver, trade, and opponent analysis."
+    : "Connect Yahoo and ESPN leagues for built-in weekly forecasts and automated draft, lineup, waiver, trade, and opponent analysis.",
   alternates: { canonical: "/" },
   robots: { index: true, follow: true },
   openGraph: {
     type: "website",
     title: "Laces Out — Connect your leagues. Get the next move.",
-    description: yahooDeveloperAccessPending
-      ? "A private fantasy football locker room with ESPN sync now and Yahoo coming soon."
-      : "A private fantasy football locker room that turns fresh Yahoo and ESPN league data into prioritized decisions.",
+    description: yahooComingSoon
+      ? "A private fantasy football locker room with ESPN sync, backtested weekly forecasts, and automated decision analysis."
+      : "A private fantasy football locker room that turns fresh Yahoo and ESPN league data into forecasts and prioritized decisions.",
     siteName: "Laces Out",
     url: "/",
+    images: [socialPreview],
   },
   twitter: {
     card: "summary_large_image",
     title: "Laces Out — Automated Fantasy Football Intelligence",
-    description: yahooDeveloperAccessPending
-      ? "ESPN sync, Yahoo coming soon, and automatic league-aware decision analysis."
-      : "Yahoo and ESPN sync with automatic, league-aware decision analysis.",
+    description: yahooComingSoon
+      ? "ESPN league sync, built-in weekly forecasts, and automatic league-aware decision analysis."
+      : "Yahoo and ESPN sync with built-in weekly forecasts and automatic, league-aware decision analysis.",
+    images: [socialPreview],
   },
 };
 
@@ -65,7 +74,7 @@ const applicationSchema = {
   applicationCategory: "SportsApplication",
   operatingSystem: "Web",
   description:
-    "Invite-only fantasy football software that syncs leagues and automates draft, lineup, waiver, trade, and opponent analysis.",
+    "Invite-only fantasy football software that syncs leagues, builds weekly forecasts, and automates draft, lineup, waiver, trade, and opponent analysis.",
   offers: {
     "@type": "Offer",
     price: "0",
@@ -78,23 +87,23 @@ const seasonFeatures = [
     number: "01",
     label: "Connect your leagues",
     title: "Bring every team into one live picture.",
-    text: yahooDeveloperAccessPending
-      ? "Sync ESPN with a private one-click bookmark or automatic Chrome companion. Yahoo league sync is coming soon."
+    text: yahooComingSoon
+      ? "Sync ESPN with a private one-click bookmark or the automatic Chrome companion and pull in settings, rosters, standings, matchups, and the team that is actually yours."
       : "Link Yahoo or sync ESPN to pull league settings, rosters, standings, matchups, and the team that is actually yours.",
     icon: Cable,
   },
   {
     number: "02",
-    label: "Automatic decision sweep",
-    title: "Let Laces Out scan what changed.",
-    text: "Fresh league and projection data reruns lineup, waiver, trade, opponent, and portfolio analysis without asking you to rebuild the context.",
+    label: "Forecast + decision sweep",
+    title: "Let Laces Out recalculate what matters.",
+    text: "Backtested weekly forecasts and fresh league inputs rerun lineup, waiver, trade, opponent, and portfolio analysis without asking you to rebuild the context.",
     icon: ScanLine,
   },
   {
     number: "03",
     label: "Add your edge",
     title: "Tune the engine to the way you play.",
-    text: "Optional rankings, ADP, projections, auction values, and cheat sheets sharpen the baseline. They enhance the automation; they do not power it.",
+    text: "Optional rankings, ADP, custom projections, auction values, and cheat sheets sharpen the built-in forecast. They enhance the automation; they do not power it.",
     icon: SlidersHorizontal,
   },
 ] as const;
@@ -109,7 +118,7 @@ const automationSteps = [
   {
     number: "02",
     title: "Normalize",
-    text: "Keep league truth anchored to its host while shared NFL signals retain their source.",
+    text: "League data and NFL-wide signals stay cleanly separated, so nothing gets mixed up or mislabeled.",
     icon: Database,
   },
   {
@@ -158,7 +167,7 @@ const trustPoints = [
   {
     icon: Database,
     title: "Source-aware data",
-    text: "League syncs, nflverse identity data, Sleeper signals, and projections keep separate timestamps and provenance.",
+    text: "League syncs, nflverse identity and usage data, contextual draft markets, Sleeper signals, and Laces Out forecasts keep separate timestamps and provenance.",
   },
 ] as const;
 
@@ -210,9 +219,9 @@ export default function LandingPage() {
                 <span>Get the next move.</span>
               </h1>
               <p className={styles.heroLead}>
-                After every sync or projection update, Laces Out rebuilds the league picture and
-                combines automated analysis with AI-powered guidance to surface your highest-value
-                lineup, waiver, trade, opponent, and draft moves.
+                Laces Out syncs your league, builds its own weekly forecast, and keeps scanning
+                lineups, waivers, trades, opponents, and draft rooms—then uses AI to explain the
+                next move.
               </p>
               <div className={styles.heroActions}>
                 <Link className={styles.primaryButton} href="/register">
@@ -224,16 +233,17 @@ export default function LandingPage() {
               </div>
               <div className={styles.heroProof} aria-label="Product availability">
                 <span>
-                  {yahooDeveloperAccessPending ? <Clock3 size={13} /> : <Check size={13} />}
-                  {yahooDeveloperAccessPending
-                    ? " ESPN sync · Yahoo coming soon"
-                    : " Yahoo + ESPN league sync"}
+                  <Check size={13} />
+                  {yahooComingSoon ? " ESPN league sync" : " Yahoo + ESPN league sync"}
                 </span>
                 <span>
-                  <Check size={13} /> Automatic decision sweeps
+                  <Check size={13} /> Backtested weekly forecasts
                 </span>
                 <span>
-                  <Check size={13} /> Read-only by default
+                  <RefreshCw size={13} /> Fresh right up to kickoff
+                </span>
+                <span>
+                  <BrainCircuit size={13} /> Gemini coaching included
                 </span>
               </div>
             </div>
@@ -304,7 +314,7 @@ export default function LandingPage() {
                       </div>
                       <strong>+3.7</strong>
                     </div>
-                    <p>Projection edge holds across 3 imported sources.</p>
+                    <p>Built-in forecast scored to this league’s settings.</p>
                   </article>
                 </div>
 
@@ -322,7 +332,7 @@ export default function LandingPage() {
                       <strong>Waiver priority</strong>
                       <small>Add M. Wilson · WR</small>
                     </span>
-                    <span>Routes up 18%</span>
+                    <span>Clears drop threshold</span>
                     <strong>8.4</strong>
                   </div>
                   <div className={styles.decisionRow}>
@@ -355,15 +365,13 @@ export default function LandingPage() {
 
         <section className={styles.signalBar} aria-label="Core Laces Out capabilities">
           <div className={styles.signalInner}>
-            <span>
-              {yahooDeveloperAccessPending ? "ESPN sync · Yahoo coming soon" : "Yahoo + ESPN sync"}
-            </span>
+            <span>{yahooComingSoon ? "ESPN league sync" : "Yahoo + ESPN sync"}</span>
             <i aria-hidden="true" />
-            <span>Automatic decision sweep</span>
+            <span>Backtested weekly forecasts</span>
             <i aria-hidden="true" />
-            <span>Priority call queue</span>
+            <span>Lineup · waiver · trade</span>
             <i aria-hidden="true" />
-            <span>Custom strategy inputs</span>
+            <span>Gemini coaching included</span>
           </div>
         </section>
 
@@ -377,9 +385,9 @@ export default function LandingPage() {
               </h2>
             </div>
             <p>
-              Every successful sync or projection import refreshes the decision picture. Custom
-              boards and values can make it more personal, but the loop starts working from your
-              connected league data.
+              Every successful sync, forecast input change, or custom projection import refreshes
+              the decision picture. Custom boards and values can make it more personal, but the loop
+              starts working from your connected league data.
             </p>
           </div>
 
@@ -406,11 +414,11 @@ export default function LandingPage() {
             <div className={styles.syncIntro}>
               <div>
                 <p className={styles.sectionKicker}>League sync + automation</p>
-                <h2>League data does the traveling. Credentials don’t.</h2>
+                <h2>League data travels. Credentials don’t.</h2>
               </div>
               <p>
-                {yahooDeveloperAccessPending
-                  ? "ESPN sync is available now, with Yahoo league sync coming soon. Both paths land in the same source-aware league model."
+                {yahooComingSoon
+                  ? "ESPN league data lands in a source-aware league model. Once a fresh sync arrives, Laces Out handles the comparison work and rebuilds the calls that matter to each manager."
                   : "Yahoo and ESPN take different paths in, then land in the same source-aware league model. Once fresh data arrives, Laces Out handles the comparison work and rebuilds the calls that matter to each manager."}
               </p>
             </div>
@@ -427,13 +435,13 @@ export default function LandingPage() {
                       </div>
                     </div>
                     <span
-                      className={`${styles.connectionMode}${yahooDeveloperAccessPending ? ` ${styles.connectionModePending}` : ""}`}
+                      className={`${styles.connectionMode}${yahooComingSoon ? ` ${styles.connectionModePending}` : ""}`}
                     >
-                      {yahooDeveloperAccessPending ? "Coming soon" : "Official authorization"}
+                      {yahooComingSoon ? "Coming soon" : "Official authorization"}
                     </span>
                   </div>
                   <p className={styles.providerDescription}>
-                    {yahooDeveloperAccessPending
+                    {yahooComingSoon
                       ? "Yahoo sign-in and read-only league sync are coming soon."
                       : "Authorize on Yahoo with OAuth and PKCE. Encrypted tokens remain server-side; your Yahoo password never passes through Laces Out."}
                   </p>
@@ -442,7 +450,7 @@ export default function LandingPage() {
                       <Check size={13} /> Settings, teams, rosters, standings, and matchups
                     </li>
                     <li>
-                      {yahooDeveloperAccessPending ? (
+                      {yahooComingSoon ? (
                         <>
                           <Clock3 size={13} /> Yahoo league sync coming soon
                         </>
@@ -478,6 +486,17 @@ export default function LandingPage() {
                     <li>
                       <RefreshCw size={13} /> Optional six-hour refresh with the Chrome companion
                     </li>
+                    <li>
+                      <Check size={13} />{" "}
+                      <a
+                        href="https://chromewebstore.google.com/detail/hmilkmcjlkpnigcfnlfogeafacjpmkbj"
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        Chrome extension
+                      </a>
+                      &nbsp;pairs with one click—no tokens to copy
+                    </li>
                   </ul>
                 </article>
 
@@ -495,16 +514,21 @@ export default function LandingPage() {
                     <span className={styles.connectionMode}>Daily + hourly checks</span>
                   </div>
                   <p className={styles.providerDescription}>
-                    nflverse anchors player identity while Sleeper adds an independent player-status
-                    view and attributed add/drop momentum. Laces Out chooses the authority for each
-                    fact instead of hiding everything behind one vendor.
+                    Laces Out blends nflverse identity, usage, injuries, and production with draft
+                    markets, Sleeper signals, and the current schedule into a backtested weekly
+                    forecast scored for each league—every source and timestamp kept visible.
+                    Season-long projections only publish when they pass reliability checks; no
+                    guesses dressed up as data.
                   </p>
                   <ul>
                     <li>
-                      <RefreshCw size={13} /> Daily player identity and status checks
+                      <RefreshCw size={13} /> Daily identity, usage, status, and draft-market checks
                     </li>
                     <li>
                       <TrendingUp size={13} /> Hourly waiver-market momentum
+                    </li>
+                    <li>
+                      <LineChart size={13} /> Availability-aware rest-of-season ranges
                     </li>
                   </ul>
                 </article>
@@ -560,9 +584,10 @@ export default function LandingPage() {
                 </div>
 
                 <p className={styles.engineCadence}>
-                  Shared player facts check daily and waiver-market momentum checks hourly. Every
-                  completed league sync or projection import reruns the decision picture with
-                  visible source and freshness details.
+                  Shared player facts, weekly usage, and contextual ADP check daily. Weekly
+                  forecasts run hourly, tighten to 10-minute checks near kickoff, and rebuild only
+                  from verified inputs. Every completed league sync or custom projection import
+                  reruns the decision picture with visible source and freshness details.
                 </p>
               </div>
             </div>
@@ -583,10 +608,10 @@ export default function LandingPage() {
                 <Check size={14} /> Live inflation, scarcity, and max-bid recalculation
               </li>
               <li>
-                <Check size={14} /> Undo, correction, and reconnect support
+                <Check size={14} /> Seeded snake and auction practice with undo and replay
               </li>
               <li>
-                <Check size={14} /> Custom rankings, ADP, and salary overlays
+                <Check size={14} /> Contextual ADP, wait risk, custom rankings, and salary overlays
               </li>
             </ul>
             <Link href="/app" className={styles.inlineLink}>
@@ -832,7 +857,7 @@ export default function LandingPage() {
               Join Laces Out <ArrowRight size={16} />
             </Link>
             <Link className={styles.secondaryButton} href="/login">
-              Sign in
+              Sign In
             </Link>
           </div>
         </section>
@@ -851,7 +876,7 @@ export default function LandingPage() {
             <Link href="/privacy">Privacy</Link>
             <Link href="/terms">Terms</Link>
             <ContactEasterEgg />
-            <Link href="/login">Sign in</Link>
+            <Link href="/login">Sign In</Link>
           </nav>
         </div>
         <div className={styles.footerBottom}>

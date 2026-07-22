@@ -2,9 +2,9 @@ import { describe, expect, it } from "vitest";
 
 import { NFLVERSE_PLAYERS_URL, NflversePlayersSource } from "./players-source.js";
 
-const csv = `gsis_id,display_name,first_name,last_name,espn_id,position,position_group,latest_team,status,birth_date,rookie_season,last_season
-00-0039999,Example Runner,Example,Runner,12345,RB,RB,CHI,ACT,2000-01-02,2024,2026
-bad,Rejected Player,Rejected,Player,,QB,QB,FA,RET,,2010,2020
+const csv = `gsis_id,display_name,first_name,last_name,espn_id,pfr_id,position,position_group,latest_team,status,birth_date,rookie_season,last_season
+00-0039999,Example Runner,Example,Runner,12345,RunnEx00,RB,RB,CHI,ACT,2000-01-02,2024,2026
+bad,Rejected Player,Rejected,Player,,,QB,QB,FA,RET,,2010,2020
 `;
 
 describe("NflversePlayersSource", () => {
@@ -39,6 +39,7 @@ describe("NflversePlayersSource", () => {
           gsisId: "00-0039999",
           displayName: "Example Runner",
           espnId: "12345",
+          pfrId: "RunnEx00",
           latestTeam: "CHI",
         }),
       ]);

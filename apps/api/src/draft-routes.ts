@@ -1,4 +1,5 @@
 import {
+  draftMarketBaselineSchema,
   draftEventAppendRequestSchema,
   draftEventCorrectionRequestSchema,
   draftEventUndoRequestSchema,
@@ -31,8 +32,13 @@ export interface DraftSessionPort {
   ): Promise<unknown>;
 }
 
+export interface DraftMarketPort {
+  getBaseline(userId: string, draftId: string): Promise<unknown>;
+}
+
 export interface DraftRouteOptions {
   readonly draftSessions?: DraftSessionPort;
+  readonly draftMarket?: DraftMarketPort;
 }
 
 const draftPathSchema = z.object({ draftId: z.string().uuid() }).strict();
@@ -134,6 +140,14 @@ export function registerDraftRoutes(app: FastifyInstance, options: DraftRouteOpt
     } catch (error) {
       return sendDraftError(error, request, reply) ?? rethrowUnknown(error);
     }
+  });
+
+  app.get("/v1/drafts/:draftId/market", async (request, reply) => {
+    const user = authenticatedUser(request, reply);
+    if (!user) return reply;
+    if (!options.draftMarket) return reply.code(503).send(unavailable(request.id));
+    const { draftId } = draftPathSchema.parse(request.params);
+    return draftMarketBaselineSchema.parse(await options.draftMarket.getBaseline(user.id, draftId));
   });
 
   app.post("/v1/drafts/:draftId/events", async (request, reply) => {

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { loadEnvironment } from "@fantasy/config";
+import { EspnWebClientNormalizationError } from "@fantasy/connector-espn";
 
 import { AuthService, type AuthRepository } from "./auth.js";
 import { buildApp, requestPathForLog } from "./app.js";
@@ -429,6 +430,41 @@ describe("API", () => {
       {
         requestedBy: "00000000-0000-4000-8000-000000000001",
         refresh: { scope: "player-data" },
+      },
+    ]);
+    await app.close();
+  });
+
+  it("queues an on-demand draft-market refresh with its own target", async () => {
+    const enqueued: unknown[] = [];
+    const app = await buildApp({
+      environment: loadEnvironment({ NODE_ENV: "test" }),
+      logger: false,
+      requireAuthentication: true,
+      authService: authenticatedService(),
+      enqueueRefresh: (request) => {
+        enqueued.push(request);
+        return Promise.resolve("refresh-job-adp");
+      },
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/refreshes",
+      headers: { cookie: authenticatedCookie },
+      payload: { scope: "adp-data" },
+    });
+
+    expect(response.statusCode).toBe(202);
+    expect(response.json()).toMatchObject({
+      jobId: "refresh-job-adp",
+      state: "queued",
+      target: "draft-market-adp",
+    });
+    expect(enqueued).toMatchObject([
+      {
+        requestedBy: "00000000-0000-4000-8000-000000000001",
+        refresh: { scope: "adp-data" },
       },
     ]);
     await app.close();
@@ -964,6 +1000,7 @@ describe("API", () => {
 
   it("accepts an authenticated ESPN bridge snapshot without an application cookie", async () => {
     const snapshots: unknown[] = [];
+    const projectionRefreshes: unknown[] = [];
     const app = await buildApp({
       environment: loadEnvironment({ NODE_ENV: "test" }),
       logger: false,
@@ -979,6 +1016,10 @@ describe("API", () => {
           });
         },
         revokeDevice: () => Promise.reject(new Error("not used")),
+      },
+      enqueueProjectionRefresh: (request) => {
+        projectionRefreshes.push(request);
+        return Promise.resolve("projection-job");
       },
     });
     const response = await app.inject({
@@ -1000,7 +1041,55 @@ describe("API", () => {
       },
     });
     expect(response.statusCode).toBe(202);
+    expect(projectionRefreshes).toEqual([
+      expect.objectContaining({ season: 2026, reason: "league-sync" }),
+    ]);
     expect(snapshots).toHaveLength(1);
+    await app.close();
+  });
+
+  it("reports future ESPN schema drift as validation instead of an internal failure", async () => {
+    const app = await buildApp({
+      environment: loadEnvironment({ NODE_ENV: "test" }),
+      logger: false,
+      espnBridge: {
+        listDevices: () => Promise.reject(new Error("not used")),
+        registerDevice: () => Promise.reject(new Error("not used")),
+        acceptSnapshot: () =>
+          Promise.reject(
+            new EspnWebClientNormalizationError({
+              code: "SCHEMA_DRIFT",
+              message: "ESPN payload shape changed",
+            }),
+          ),
+        revokeDevice: () => Promise.reject(new Error("not used")),
+      },
+    });
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/bridge/espn/snapshots",
+      headers: { authorization: `Bridge lo_espn_${"b".repeat(43)}` },
+      payload: {
+        schemaVersion: 1,
+        provider: "espn",
+        authority: "browser-local",
+        readOnly: true,
+        leagueId: "12345",
+        season: 2026,
+        capturedAt: "2026-07-16T21:59:00.000Z",
+        endpoint:
+          "https://lm-api-reads.fantasy.espn.com/apis/v3/games/ffl/seasons/2026/segments/0/leagues/12345?view=mRoster",
+        checksumSha256: "a".repeat(64),
+        payload: { id: 12345, teams: [], settings: {} },
+      },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toMatchObject({
+      type: "https://fantasy.local/problems/validation",
+      title: "Request validation failed",
+      detail: "ESPN payload shape changed",
+    });
     await app.close();
   });
 

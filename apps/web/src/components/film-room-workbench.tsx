@@ -24,7 +24,6 @@ import {
 import Link from "next/link";
 import { type FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 
-import { aiAnswerForDisplay } from "../lib/ai-answer";
 import {
   apiBaseUrl,
   parseAiAnalysis,
@@ -33,6 +32,7 @@ import {
   parseLeagueListResponse,
 } from "../lib/api-client";
 import { DEMO_LEAGUE_ID } from "../lib/demo-contract-data";
+import { AiAnswerContent } from "./ai-answer-content";
 import { AiCoachPanel } from "./ai-coach-panel";
 import styles from "./film-room-workbench.module.css";
 
@@ -392,16 +392,79 @@ export function FilmRoomWorkbench() {
     [load, selectedProvider],
   );
 
+  const providerName = currentProvider?.provider;
+  const providerAccessMode = currentProvider?.accessMode;
+  const providerConfigured = currentProvider?.configured;
+  const providerModel = currentProvider?.model;
+  const providerDailyRequestLimit = currentProvider?.dailyRequestLimit;
+  const providerMaxOutputTokens = currentProvider?.maxOutputTokens;
+
   useEffect(() => {
-    if (!currentProvider) return;
-    setModel(currentProvider.model);
-    setDailyRequestLimit(String(currentProvider.dailyRequestLimit));
-    setMaxOutputTokens(String(currentProvider.maxOutputTokens));
+    if (
+      !providerName ||
+      !providerAccessMode ||
+      providerConfigured === undefined ||
+      !providerModel ||
+      providerDailyRequestLimit === undefined ||
+      providerMaxOutputTokens === undefined
+    ) {
+      return;
+    }
+    setModel(providerModel);
+    setDailyRequestLimit(String(providerDailyRequestLimit));
+    setMaxOutputTokens(String(providerMaxOutputTokens));
     setApiKey("");
     setShowKey(false);
     setDeleteArmed(false);
+  }, [
+    providerAccessMode,
+    providerConfigured,
+    providerDailyRequestLimit,
+    providerMaxOutputTokens,
+    providerModel,
+    providerName,
+  ]);
+
+  const settingsDirty = useMemo(() => {
+    if (!currentProvider) return false;
+    return (
+      apiKey.trim().length > 0 ||
+      model.trim() !== currentProvider.model ||
+      dailyRequestLimit !== String(currentProvider.dailyRequestLimit) ||
+      maxOutputTokens !== String(currentProvider.maxOutputTokens)
+    );
+  }, [apiKey, currentProvider, dailyRequestLimit, maxOutputTokens, model]);
+
+  useEffect(() => {
+    if (!settingsDirty) return;
+    const warnBeforeUnload = (event: BeforeUnloadEvent) => event.preventDefault();
+    window.addEventListener("beforeunload", warnBeforeUnload);
+    return () => window.removeEventListener("beforeunload", warnBeforeUnload);
+  }, [settingsDirty]);
+
+  const selectProvider = (provider: AiProviderName) => {
+    if (provider === selectedProvider) return;
+    if (
+      settingsDirty &&
+      !window.confirm("Discard your unsaved provider changes and switch providers?")
+    ) {
+      return;
+    }
     setSettingsAction({ state: "idle" });
-  }, [currentProvider]);
+    setDeleteArmed(false);
+    setSelectedProvider(provider);
+  };
+
+  const resetSettings = () => {
+    if (!currentProvider) return;
+    setApiKey("");
+    setShowKey(false);
+    setModel(currentProvider.model);
+    setDailyRequestLimit(String(currentProvider.dailyRequestLimit));
+    setMaxOutputTokens(String(currentProvider.maxOutputTokens));
+    setDeleteArmed(false);
+    setSettingsAction({ state: "idle" });
+  };
 
   const replaceProvider = (configuration: AiProviderConfiguration) => {
     setLoad((current) =>
@@ -439,6 +502,9 @@ export function FilmRoomWorkbench() {
       if (!parsed) throw new Error("The saved provider response was not recognized");
       replaceProvider(parsed);
       setApiKey("");
+      setModel(parsed.model);
+      setDailyRequestLimit(String(parsed.dailyRequestLimit));
+      setMaxOutputTokens(String(parsed.maxOutputTokens));
       setSettingsAction({
         state: "success",
         message: apiKey.trim()
@@ -489,6 +555,7 @@ export function FilmRoomWorkbench() {
       if (!response.ok) throw new Error(await responseMessage(response, "Could not remove key"));
       await loadData();
       setSelectedProvider(selectedProvider);
+      setDeleteArmed(false);
       setSettingsAction({ state: "success", message: "The encrypted key was removed." });
     } catch (error) {
       setSettingsAction({
@@ -572,6 +639,10 @@ export function FilmRoomWorkbench() {
   const hasLeagues = load.leagues.leagues.length > 0;
   const byokControlsEnabled = Boolean(currentProvider?.configured || apiKey.trim());
   const canAnalyze = Boolean(currentProvider?.available && selectedLeagueId && question.trim());
+  const settingsBusy =
+    settingsAction.state === "saving" ||
+    settingsAction.state === "testing" ||
+    settingsAction.state === "deleting";
 
   return (
     <div className={styles.page}>
@@ -629,7 +700,9 @@ export function FilmRoomWorkbench() {
               type="button"
               role="tab"
               aria-selected={selected}
-              onClick={() => setSelectedProvider(provider.provider)}
+              aria-controls="provider-settings-panel"
+              id={`provider-tab-${provider.provider}`}
+              onClick={() => selectProvider(provider.provider)}
             >
               <span className={styles.providerMark}>{meta.shortName}</span>
               <span className={styles.providerCopy}>
@@ -646,7 +719,12 @@ export function FilmRoomWorkbench() {
       </div>
 
       <div className={styles.mainGrid}>
-        <section className={styles.panel} aria-labelledby="provider-settings-heading">
+        <section
+          className={styles.panel}
+          id="provider-settings-panel"
+          role="tabpanel"
+          aria-labelledby={`provider-tab-${selectedProvider}`}
+        >
           <div className={styles.panelHeader}>
             <div>
               <p className={styles.eyebrow}>
@@ -656,7 +734,7 @@ export function FilmRoomWorkbench() {
               <span>{providerMeta.description}</span>
             </div>
             <a href={providerMeta.keyUrl} target="_blank" rel="noreferrer">
-              Get API key
+              {currentProvider?.accessMode === "managed" ? "Get personal key" : "Get API key"}
               <ArrowUpRight size={14} />
             </a>
           </div>
@@ -677,15 +755,24 @@ export function FilmRoomWorkbench() {
               <span>{currentProvider?.configured ? "Replace API key" : "API key"}</span>
               <div className={styles.secretField}>
                 <input
+                  aria-describedby="provider-key-help"
+                  aria-invalid={currentProvider?.status === "invalid" || undefined}
+                  name={`${selectedProvider}-api-key`}
                   type={showKey ? "text" : "password"}
                   value={apiKey}
-                  onChange={(event) => setApiKey(event.target.value)}
+                  onChange={(event) => {
+                    setApiKey(event.target.value);
+                    setDeleteArmed(false);
+                    setSettingsAction({ state: "idle" });
+                  }}
                   autoComplete="new-password"
                   spellCheck={false}
                   placeholder={
                     currentProvider?.configured ? "Leave blank to keep the saved key" : "Paste key"
                   }
-                  required={!currentProvider?.configured}
+                  required={
+                    !currentProvider?.configured && currentProvider?.accessMode !== "managed"
+                  }
                 />
                 <button
                   type="button"
@@ -695,7 +782,7 @@ export function FilmRoomWorkbench() {
                   {showKey ? <EyeOff size={17} /> : <Eye size={17} />}
                 </button>
               </div>
-              <small>
+              <small id="provider-key-help">
                 Optional. Personal keys are encrypted and never shown again. Provider API usage is
                 billed to that key&apos;s account.
               </small>
@@ -705,7 +792,10 @@ export function FilmRoomWorkbench() {
               <span>Model ID</span>
               <input
                 value={model}
-                onChange={(event) => setModel(event.target.value)}
+                onChange={(event) => {
+                  setModel(event.target.value);
+                  setSettingsAction({ state: "idle" });
+                }}
                 minLength={1}
                 maxLength={160}
                 required
@@ -727,7 +817,10 @@ export function FilmRoomWorkbench() {
                   min="1"
                   max="500"
                   value={dailyRequestLimit}
-                  onChange={(event) => setDailyRequestLimit(event.target.value)}
+                  onChange={(event) => {
+                    setDailyRequestLimit(event.target.value);
+                    setSettingsAction({ state: "idle" });
+                  }}
                   required
                   disabled={!byokControlsEnabled}
                 />
@@ -739,7 +832,10 @@ export function FilmRoomWorkbench() {
                   min="64"
                   max="8192"
                   value={maxOutputTokens}
-                  onChange={(event) => setMaxOutputTokens(event.target.value)}
+                  onChange={(event) => {
+                    setMaxOutputTokens(event.target.value);
+                    setSettingsAction({ state: "idle" });
+                  }}
                   required
                   disabled={!byokControlsEnabled}
                 />
@@ -771,32 +867,43 @@ export function FilmRoomWorkbench() {
               <button
                 className={styles.primaryButton}
                 type="submit"
-                disabled={
-                  settingsAction.state === "saving" ||
-                  settingsAction.state === "testing" ||
-                  settingsAction.state === "deleting"
-                }
+                disabled={settingsBusy || !settingsDirty}
               >
                 {settingsAction.state === "saving" ? (
                   <LoaderCircle className={styles.spin} size={16} />
                 ) : (
                   <Save size={16} />
                 )}
-                Save securely
+                {settingsAction.state === "saving"
+                  ? "Saving securely"
+                  : settingsDirty
+                    ? "Save securely"
+                    : "Settings saved"}
               </button>
-              <button
-                className={styles.secondaryButton}
-                type="button"
-                onClick={() => void testConnection()}
-                disabled={!currentProvider?.configured || settingsAction.state === "testing"}
-              >
-                {settingsAction.state === "testing" ? (
-                  <LoaderCircle className={styles.spin} size={16} />
-                ) : (
-                  <Check size={16} />
-                )}
-                Test live
-              </button>
+              {settingsDirty ? (
+                <button
+                  className={styles.secondaryButton}
+                  type="button"
+                  onClick={resetSettings}
+                  disabled={settingsBusy}
+                >
+                  Undo changes
+                </button>
+              ) : (
+                <button
+                  className={styles.secondaryButton}
+                  type="button"
+                  onClick={() => void testConnection()}
+                  disabled={!currentProvider?.configured || settingsBusy}
+                >
+                  {settingsAction.state === "testing" ? (
+                    <LoaderCircle className={styles.spin} size={16} />
+                  ) : (
+                    <Check size={16} />
+                  )}
+                  {settingsAction.state === "testing" ? "Verifying key" : "Verify key"}
+                </button>
+              )}
             </div>
 
             {currentProvider?.configured ? (
@@ -806,14 +913,39 @@ export function FilmRoomWorkbench() {
                     ? `Last verified ${readableTime(currentProvider.lastValidatedAt)}`
                     : "Saved key has not been tested yet."}
                 </span>
-                <button
-                  type="button"
-                  onClick={() => void removeProvider()}
-                  disabled={settingsAction.state === "deleting"}
-                >
-                  <Trash2 size={14} />
-                  {deleteArmed ? "Confirm removal" : "Remove key"}
-                </button>
+                <span className={styles.removeActions}>
+                  {deleteArmed ? (
+                    <button
+                      className={styles.cancelRemoval}
+                      type="button"
+                      onClick={() => setDeleteArmed(false)}
+                      disabled={settingsBusy}
+                    >
+                      Cancel
+                    </button>
+                  ) : null}
+                  <button
+                    type="button"
+                    onClick={() => void removeProvider()}
+                    disabled={settingsBusy || settingsDirty}
+                    title={
+                      settingsDirty
+                        ? "Undo or save your changes before removing this key"
+                        : undefined
+                    }
+                  >
+                    {settingsAction.state === "deleting" ? (
+                      <LoaderCircle className={styles.spin} size={14} />
+                    ) : (
+                      <Trash2 size={14} />
+                    )}
+                    {settingsAction.state === "deleting"
+                      ? "Removing key"
+                      : deleteArmed
+                        ? "Yes, remove key"
+                        : "Remove key"}
+                  </button>
+                </span>
               </div>
             ) : null}
           </form>
@@ -911,7 +1043,13 @@ export function FilmRoomWorkbench() {
           </form>
 
           <div className={styles.answerRegion} aria-live="polite">
-            {analysis ? (
+            {analysisAction.state === "analyzing" ? (
+              <div className={styles.emptyAnswer} aria-busy="true">
+                <LoaderCircle className={styles.spin} size={25} aria-hidden="true" />
+                <strong>Reading the whole league</strong>
+                <span>Checking the answer against the latest saved decisions and analytics.</span>
+              </div>
+            ) : analysis ? (
               <article className={styles.answer}>
                 <div className={styles.answerMeta}>
                   <span>
@@ -926,13 +1064,21 @@ export function FilmRoomWorkbench() {
                   </span>
                 </div>
                 <h3>{analysis.league.name}</h3>
-                <div className={styles.answerText}>{aiAnswerForDisplay(analysis.answer)}</div>
+                <div className={styles.answerText}>
+                  <AiAnswerContent answer={analysis.answer} />
+                </div>
                 <footer>
                   {analysis.sources.map((source) => (
                     <span key={source}>{source}</span>
                   ))}
                 </footer>
               </article>
+            ) : analysisAction.state === "error" ? (
+              <div className={styles.emptyAnswer} role="alert">
+                <AlertCircle size={25} aria-hidden="true" />
+                <strong>Analysis unavailable</strong>
+                <span>{analysisAction.message}</span>
+              </div>
             ) : (
               <div className={styles.emptyAnswer}>
                 <BrainCircuit size={25} />

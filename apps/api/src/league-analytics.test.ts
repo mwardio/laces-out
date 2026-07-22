@@ -136,7 +136,7 @@ const rosterEntries: readonly AnalyticsRosterEntryRow[] = [
 
 function projectionSet(input: {
   id: string;
-  creator: string;
+  creator: string | null;
   visibility: "private" | "league";
   fetchedAt: string;
 }): AnalyticsProjectionSetRow {
@@ -144,7 +144,12 @@ function projectionSet(input: {
     id: input.id,
     leagueSeasonId: SEASON_ID,
     createdByUserId: input.creator,
-    creatorDisplayName: input.creator === USER_ID ? "League Guru" : "Other Manager",
+    creatorDisplayName:
+      input.creator === USER_ID
+        ? "League Guru"
+        : input.creator === null
+          ? "Laces Out model"
+          : "Other Manager",
     visibility: input.visibility,
     source: "user-csv",
     version: `v-${input.id}`,
@@ -158,6 +163,12 @@ function projectionSet(input: {
 }
 
 const projectionCandidates: readonly AnalyticsProjectionSetRow[] = [
+  projectionSet({
+    id: "50000000-0000-4000-8000-000000000099",
+    creator: null,
+    visibility: "league",
+    fetchedAt: "2026-09-16T12:00:00.000Z",
+  }),
   projectionSet({
     id: PROJECTION_OTHER,
     creator: OTHER_USER_ID,

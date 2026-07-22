@@ -27,6 +27,29 @@ export interface NormalizedLeagueSettings {
   readonly playoffTeamCount: number | null;
   readonly rosterSlots: readonly NormalizedRosterSlot[];
   readonly scoringRules: readonly NormalizedScoringRule[];
+  /** Optional provider-observed operating rules used to guard recommendations and explain timing. */
+  readonly operationalRules?: {
+    readonly acquisitionLimit: number | null;
+    readonly matchupAcquisitionLimit: number | null;
+    readonly minimumBid: number | null;
+    readonly waiverProcessDays: readonly number[];
+    readonly waiverProcessHour: number | null;
+    readonly keeperCount: number | null;
+    readonly regularSeasonMatchupPeriods: number | null;
+    readonly playoffMatchupPeriodLength: number | null;
+    readonly playoffSeedingRule: string | null;
+    readonly matchupTieRule: string | null;
+    readonly playoffMatchupTieRule: string | null;
+    readonly scoringType: string | null;
+    readonly medianGameEnabled: boolean | null;
+    readonly tradeDeadlineAt: string | null;
+    readonly tradeReviewHours: number | null;
+    readonly vetoVotesRequired: number | null;
+    readonly divisions: readonly {
+      readonly providerDivisionId: string;
+      readonly name: string;
+    }[];
+  };
 }
 
 export interface NormalizedManager {
@@ -55,6 +78,10 @@ export interface NormalizedTeam {
   readonly url: string | null;
   readonly logoUrl: string | null;
   readonly isCurrentUser: boolean;
+  /** Null means the provider did not expose a trustworthy current value. */
+  readonly faabRemaining?: number | null;
+  /** One-based provider waiver priority when available. */
+  readonly waiverPriority?: number | null;
   readonly managers: readonly NormalizedManager[];
   readonly roster: readonly NormalizedRosterPlayer[];
 }

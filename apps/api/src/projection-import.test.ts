@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { projectionSetSummarySchema } from "@fantasy/contracts";
 
 import {
   ProjectionImportService,
@@ -270,6 +271,66 @@ describe("ProjectionImportService", () => {
       sourceObservedAt: null,
       sourceObservedAtStatus: "unverified",
       importedAt: NOW.toISOString(),
+    });
+  });
+
+  it("lists a managed forecast without a synthetic user and separates input freshness from compute time", async () => {
+    const repository = new FakeRepository();
+    const service = new ProjectionImportService(repository, () => NOW);
+    repository.sets = [
+      {
+        id: SET_ID,
+        leagueSeasonId: SEASON_ID,
+        creatorUserId: null,
+        creatorDisplayName: null,
+        visibility: "league",
+        source: "laces-out-first-party",
+        season: 2026,
+        week: 2,
+        horizon: "week",
+        inputChecksum: CHECKSUM,
+        metadata: {
+          sourceLabel: "Laces Out Week 2 forecast",
+          modelVersion: "first-party-v1",
+          computedAt: "2026-09-10T11:59:00.000Z",
+          // This conflicting value must not override the persisted input check anchor.
+          inputCheckedAt: "2026-09-10T11:58:00.000Z",
+          trainingCutoff: { season: 2026, week: 1 },
+          statsThrough: { season: 2026, week: 1 },
+          qualityState: "publishable",
+          coverage: { projected: 213, eligible: 214, ratio: 213 / 214 },
+          warnings: ["One eligible player was withheld because current-team identity was missing."],
+          backtest: {
+            samples: 1840,
+            mae: 4.18,
+            baselineMae: 4.62,
+            intervalCoverage: 0.79,
+          },
+        },
+        fetchedAt: new Date("2026-09-10T11:45:00.000Z"),
+        createdAt: new Date("2026-09-10T12:00:00.000Z"),
+        playerCount: 213,
+      },
+    ];
+
+    const [managed] = (await service.list(USER_ID, SEASON_ID)).projectionSets;
+    expect(() => projectionSetSummarySchema.parse(managed)).not.toThrow();
+    expect(managed).toMatchObject({
+      creatorUserId: null,
+      creatorDisplayName: null,
+      origin: "laces-out",
+      isOwnedByCurrentUser: false,
+      sourceObservedAt: "2026-09-10T11:45:00.000Z",
+      importedAt: "2026-09-10T12:00:00.000Z",
+      managed: {
+        modelVersion: "first-party-v1",
+        computedAt: "2026-09-10T11:59:00.000Z",
+        inputCheckedAt: "2026-09-10T11:45:00.000Z",
+        trainingCutoff: { season: 2026, week: 1 },
+        qualityState: "publishable",
+        coverage: { projected: 213, eligible: 214 },
+        backtest: { samples: 1840, mae: 4.18, baselineMae: 4.62 },
+      },
     });
   });
 

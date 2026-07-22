@@ -6,8 +6,23 @@ import { crc32 } from "node:zlib";
 const scriptDirectory = dirname(fileURLToPath(import.meta.url));
 const bridgeDirectory = dirname(scriptDirectory);
 const distributionDirectory = join(bridgeDirectory, "dist");
-const outputDirectory = join(bridgeDirectory, "..", "web", "public", "downloads");
-const outputPath = join(outputDirectory, "laces-out-espn-bridge-v0.1.0.zip");
+
+const target = process.env.BRIDGE_TARGET === "store" ? "store" : "dev";
+const { version } = JSON.parse(await readFile(join(bridgeDirectory, "package.json"), "utf8"));
+
+// The dev zip is published from the site for sideloading; the store zip is a
+// separate artifact uploaded to the Chrome Web Store and kept out of the
+// publicly served downloads directory.
+const outputDirectory =
+  target === "store"
+    ? join(bridgeDirectory, "dist-package")
+    : join(bridgeDirectory, "..", "web", "public", "downloads");
+const outputPath = join(
+  outputDirectory,
+  target === "store"
+    ? `laces-out-espn-bridge-store-v${version}.zip`
+    : `laces-out-espn-bridge-v${version}.zip`,
+);
 
 function localHeader(name, contents) {
   const header = Buffer.alloc(30);

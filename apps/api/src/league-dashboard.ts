@@ -117,6 +117,7 @@ interface DataSourceRow {
   readonly lastCheckedAt: Date | null;
   readonly lastSuccessfulAt: Date | null;
   readonly consecutiveFailures: number;
+  readonly metadata?: Readonly<Record<string, string | number | boolean | null>>;
 }
 
 interface StandingsSnapshotRow {
@@ -464,6 +465,7 @@ export class DrizzleLeagueDashboardRepository implements LeagueDashboardReposito
         lastCheckedAt: dataSources.lastCheckedAt,
         lastSuccessfulAt: dataSources.lastSuccessfulAt,
         consecutiveFailures: dataSources.consecutiveFailures,
+        metadata: dataSources.metadata,
       })
       .from(dataSources)
       .where(eq(dataSources.enabled, true))
@@ -582,6 +584,10 @@ function freshness(observedAt: Date | null, now: Date, subject = "Synced"): Fres
     observedAt: observedAt.toISOString(),
     label: relativeLabel(observedAt, now, subject),
   };
+}
+
+function nonnegativeMetadataInteger(value: unknown): number | null {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : null;
 }
 
 function membershipSummary(row: MembershipRow): LeagueMembershipSummary {
@@ -980,17 +986,35 @@ export class LeagueDashboardService {
     const now = this.#now();
     const [season] = await this.#repository.listSeasons([leagueId]);
     const sources = await this.#repository.listDataSources();
-    const dataSourceFreshness: DataSourceFreshness[] = sources.map((source) => ({
-      key: source.key,
-      name: source.name,
-      kind: source.kind,
-      attribution: source.attribution,
-      attributionUrl: source.attributionUrl,
-      lastCheckedAt: source.lastCheckedAt?.toISOString() ?? null,
-      lastSuccessfulAt: source.lastSuccessfulAt?.toISOString() ?? null,
-      consecutiveFailures: source.consecutiveFailures,
-      freshness: freshness(source.lastSuccessfulAt, now, "Updated"),
-    }));
+    const dataSourceFreshness: DataSourceFreshness[] = sources.map((source) => {
+      const rowsRead = nonnegativeMetadataInteger(source.metadata?.rowsRead);
+      const rowsRejected = nonnegativeMetadataInteger(source.metadata?.rowsRejected);
+      const rowsUnmatched = nonnegativeMetadataInteger(source.metadata?.rowsUnmatched);
+      const quality =
+        rowsRead === null && rowsRejected === null && rowsUnmatched === null
+          ? null
+          : {
+              rowsRead: rowsRead ?? 0,
+              rowsRejected: rowsRejected ?? 0,
+              rowsUnmatched: rowsUnmatched ?? 0,
+              matchRate:
+                rowsRead && rowsRead > 0
+                  ? Math.max(0, Math.min(1, (rowsRead - (rowsUnmatched ?? 0)) / rowsRead))
+                  : null,
+            };
+      return {
+        key: source.key,
+        name: source.name,
+        kind: source.kind,
+        attribution: source.attribution,
+        attributionUrl: source.attributionUrl,
+        lastCheckedAt: source.lastCheckedAt?.toISOString() ?? null,
+        lastSuccessfulAt: source.lastSuccessfulAt?.toISOString() ?? null,
+        consecutiveFailures: source.consecutiveFailures,
+        quality,
+        freshness: freshness(source.lastSuccessfulAt, now, "Successful check"),
+      };
+    });
     const notices: string[] = [];
 
     if (!season) {

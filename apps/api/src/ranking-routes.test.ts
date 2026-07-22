@@ -131,6 +131,80 @@ describe("ranking routes", () => {
     await app.close();
   });
 
+  it("requires authentication and scopes clone requests to the session user", async () => {
+    const cloneList = vi.fn(() => Promise.resolve({ list, version }));
+    const app = await buildApp({
+      environment: loadEnvironment({ NODE_ENV: "test" }),
+      logger: false,
+      requireAuthentication: true,
+      authService: authenticatedService(),
+      rankings: rankingPort({ cloneList }),
+    });
+
+    const denied = await app.inject({
+      method: "POST",
+      url: `/v1/rankings/${LIST_ID}/clone`,
+      payload: { name: "My baseline" },
+    });
+    expect(denied.statusCode).toBe(401);
+    expect(cloneList).not.toHaveBeenCalled();
+
+    const response = await app.inject({
+      method: "POST",
+      url: `/v1/rankings/${LIST_ID}/clone`,
+      headers: { cookie: COOKIE },
+      payload: { name: "My baseline", sourceVersionId: VERSION_ID },
+    });
+    expect(response.statusCode).toBe(201);
+    expect(cloneList).toHaveBeenCalledWith({
+      actorUserId: USER_ID,
+      sourceListId: LIST_ID,
+      sourceVersionId: VERSION_ID,
+      name: "My baseline",
+    });
+    await app.close();
+  });
+
+  it("requires authentication and authorizes both sides of board comparisons through the actor", async () => {
+    const compareLists = vi.fn(() =>
+      Promise.resolve({
+        left: { list, version },
+        right: { list, version },
+        players: [],
+      }),
+    );
+    const app = await buildApp({
+      environment: loadEnvironment({ NODE_ENV: "test" }),
+      logger: false,
+      requireAuthentication: true,
+      authService: authenticatedService(),
+      rankings: rankingPort({ compareLists }),
+    });
+    const payload = {
+      left: { listId: LIST_ID, versionId: VERSION_ID },
+      right: { listId: "20000000-0000-4000-8000-000000000002" },
+    };
+
+    const denied = await app.inject({ method: "POST", url: "/v1/rankings/compare", payload });
+    expect(denied.statusCode).toBe(401);
+    expect(compareLists).not.toHaveBeenCalled();
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/rankings/compare",
+      headers: { cookie: COOKIE },
+      payload,
+    });
+    expect(response.statusCode).toBe(200);
+    expect(compareLists).toHaveBeenCalledWith({
+      actorUserId: USER_ID,
+      leftListId: LIST_ID,
+      leftVersionId: VERSION_ID,
+      rightListId: "20000000-0000-4000-8000-000000000002",
+    });
+    await app.close();
+  });
+
   it("keeps CSV preview separate from the explicit idempotent commit", async () => {
     const preview = {
       sourceChecksumSha256: "a".repeat(64),

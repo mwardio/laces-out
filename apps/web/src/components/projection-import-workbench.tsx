@@ -7,7 +7,10 @@ import type {
 } from "@fantasy/contracts";
 import {
   AlertTriangle,
+  BarChart3,
   Check,
+  CircleAlert,
+  Clock3,
   Database,
   Download,
   FileCheck2,
@@ -26,6 +29,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   apiBaseUrl,
   parseLeagueListResponse,
+  parseJobAccepted,
   parseProjectionImportCommit,
   parseProjectionImportPreview,
   parseProjectionSetList,
@@ -59,6 +63,8 @@ type SubmissionState =
   | { readonly state: "error"; readonly message: string }
   | { readonly state: "committed"; readonly message: string };
 
+type ForecastRefreshState = "idle" | "working" | "queued" | "deduplicated" | "error";
+
 async function responseMessage(response: Response, fallback: string): Promise<string> {
   try {
     const body = (await response.json()) as { readonly detail?: unknown; readonly title?: unknown };
@@ -80,6 +86,15 @@ function readableDate(value: string): string {
   }).format(new Date(value));
 }
 
+function weekReference(value: { readonly season: number; readonly week: number | null } | null) {
+  if (!value) return "Not reported";
+  return value.week === null ? String(value.season) : `${value.season} Week ${value.week}`;
+}
+
+function decimal(value: number): string {
+  return new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 }).format(value);
+}
+
 function shortenedChecksum(value: string): string {
   return `${value.slice(7, 19)}…${value.slice(-8)}`;
 }
@@ -95,17 +110,17 @@ function ProjectionTour() {
         <Info size={17} aria-hidden="true" />
         <span>
           <strong>Locker room tour</strong>
-          Illustrative import, match report, and saved projection set. Nothing can be uploaded or
-          saved in tour mode.
+          Illustrative forecast evidence, import, and match report. Nothing can be uploaded or saved
+          in tour mode.
         </span>
       </div>
       <header className={styles.hero}>
         <div>
-          <p className={styles.kicker}>Your model, cleanly sourced</p>
-          <h1>Bring weekly projections into the decision desk.</h1>
+          <p className={styles.kicker}>Managed forecasts + custom inputs</p>
+          <h1>Use the weekly forecast—or bring your own.</h1>
           <p>
-            Preview every player match before saving. Source time, authorship, scope, and checksums
-            stay attached to every set.
+            Laces Out updates its league-scored forecast as source inputs change. Custom sets keep
+            their source time, authorship, scope, and checksums.
           </p>
         </div>
         <label className={styles.leagueControl}>
@@ -115,6 +130,39 @@ function ProjectionTour() {
           </select>
         </label>
       </header>
+
+      <section className={styles.managedForecast} aria-labelledby="tour-managed-title">
+        <header className={styles.managedHeader}>
+          <div>
+            <p className={styles.kicker}>Laces Out forecast</p>
+            <h2 id="tour-managed-title">Week 6 · ready for North Loop Auction</h2>
+            <p>Scored for this league. Inputs and validation remain visible.</p>
+          </div>
+          <span className={styles.qualityBadge}>Quality gate passed</span>
+        </header>
+        <div className={styles.managedMetrics}>
+          <div>
+            <span>Inputs checked</span>
+            <strong>Oct 8 · 1:40 PM</strong>
+            <small>Oldest required source check</small>
+          </div>
+          <div>
+            <span>Computed</span>
+            <strong>Oct 8 · 1:43 PM</strong>
+            <small>Model first-party-v1</small>
+          </div>
+          <div>
+            <span>Coverage</span>
+            <strong>213 / 214</strong>
+            <small>99.5% of eligible players</small>
+          </div>
+          <div>
+            <span>Backtest</span>
+            <strong>4.18 MAE</strong>
+            <small>4.62 recent-average baseline</small>
+          </div>
+        </div>
+      </section>
 
       <section className={styles.boundary} aria-label="Import privacy and matching rules">
         <div>
@@ -264,14 +312,14 @@ function ProjectionTour() {
         </header>
         <div className={styles.demoSavedList}>
           <article>
+            <span>MANAGED · WEEK 6</span>
+            <strong>Laces Out weekly forecast</strong>
+            <small>213 players · inputs checked 32 min ago · quality gate passed</small>
+          </article>
+          <article>
             <span>PRIVATE · WEEK 6</span>
             <strong>My blended Week 6 model</strong>
             <small>218 players · Source 47 min ago · imported by Sample member</small>
-          </article>
-          <article>
-            <span>LEAGUE · WEEK 6</span>
-            <strong>Commissioner consensus</strong>
-            <small>214 players · Source 2h ago · imported by League commissioner</small>
           </article>
         </div>
       </section>
@@ -291,6 +339,7 @@ export function ProjectionImportWorkbench() {
   const [visibility, setVisibility] = useState<ProjectionVisibility>("private");
   const [preview, setPreview] = useState<ProjectionImportPreviewResponse | null>(null);
   const [submission, setSubmission] = useState<SubmissionState>({ state: "idle" });
+  const [forecastRefresh, setForecastRefresh] = useState<ForecastRefreshState>("idle");
   const portfolioAbortRef = useRef<AbortController | null>(null);
   const setsAbortRef = useRef<AbortController | null>(null);
   const previewAbortRef = useRef<AbortController | null>(null);
@@ -542,6 +591,31 @@ export function ProjectionImportWorkbench() {
     URL.revokeObjectURL(url);
   };
 
+  const checkManagedForecast = async () => {
+    if (forecastRefresh === "working") return;
+    setForecastRefresh("working");
+    try {
+      const response = await fetch(`${apiBaseUrl}/v1/refreshes`, {
+        method: "POST",
+        credentials: "include",
+        headers: { Accept: "application/json", "Content-Type": "application/json" },
+        body: JSON.stringify({ scope: "player-data" }),
+      });
+      if (response.status === 401) {
+        window.location.assign("/login");
+        return;
+      }
+      if (!response.ok) throw new Error("Forecast input check could not be queued.");
+      const queued = parseJobAccepted(await response.json());
+      if (!queued || queued.target !== "shared-nfl-data") {
+        throw new Error("Forecast input queue response was invalid.");
+      }
+      setForecastRefresh(queued.state === "deduplicated" ? "deduplicated" : "queued");
+    } catch {
+      setForecastRefresh("error");
+    }
+  };
+
   if (portfolio.state === "loading") {
     return (
       <div className={styles.gate} role="status">
@@ -586,16 +660,25 @@ export function ProjectionImportWorkbench() {
 
   const canShare = sets.state === "ready" && sets.data.league.canShareLeague;
   const visibleDiagnostics = preview?.diagnostics.slice(0, 50) ?? [];
+  const managedSets =
+    sets.state === "ready"
+      ? sets.data.projectionSets.filter((set) => set.origin === "laces-out" && set.managed)
+      : [];
+  const currentWeek = sets.state === "ready" ? sets.data.league.currentWeek : null;
+  const managedStatus = sets.state === "ready" ? sets.data.managedForecastStatus : null;
+  const managedCandidate =
+    managedSets.find((set) => currentWeek !== null && set.week === currentWeek) ?? managedSets[0];
+  const managedForecast = managedStatus?.state === "withheld" ? undefined : managedCandidate;
 
   return (
     <div className={styles.page}>
       <header className={styles.hero}>
         <div>
-          <p className={styles.kicker}>Your model, cleanly sourced</p>
-          <h1>Bring weekly projections into the decision desk.</h1>
+          <p className={styles.kicker}>Managed forecasts + custom inputs</p>
+          <h1>Use the weekly forecast—or bring your own.</h1>
           <p>
-            Preview every match before saving. Unresolved names, duplicate players, invalid ranges,
-            and ambiguous identities stop the entire import.
+            Laces Out rebuilds its league-scored forecast when verified inputs change. Your own CSV
+            can override that baseline after every player match passes validation.
           </p>
         </div>
         <label className={styles.leagueControl}>
@@ -620,6 +703,166 @@ export function ProjectionImportWorkbench() {
           </select>
         </label>
       </header>
+
+      <section className={styles.managedForecast} aria-labelledby="managed-forecast-title">
+        <header className={styles.managedHeader}>
+          <div>
+            <p className={styles.kicker}>Laces Out forecast</p>
+            <h2 id="managed-forecast-title">
+              {managedForecast
+                ? `Week ${managedForecast.week} · ${managedForecast.sourceLabel}`
+                : `Week ${currentWeek ?? "—"} · no managed forecast published`}
+            </h2>
+            <p>
+              {managedForecast
+                ? "League scoring is applied after each position earns either the qualified model or the safer baseline. Input freshness and compute time stay separate."
+                : "The forecast remains unavailable until required inputs, league scoring, coverage, and backtest gates pass."}
+            </p>
+          </div>
+          <div className={styles.managedActions}>
+            {managedForecast?.managed?.qualityState ? (
+              <span
+                className={
+                  managedForecast.managed.qualityState === "publishable"
+                    ? styles.qualityBadge
+                    : styles.qualityWarningBadge
+                }
+              >
+                {managedForecast.managed.qualityState === "publishable"
+                  ? "Safe forecast published"
+                  : managedForecast.managed.qualityState}
+              </span>
+            ) : null}
+            <button
+              className={styles.textButton}
+              type="button"
+              disabled={forecastRefresh === "working"}
+              onClick={() => void checkManagedForecast()}
+            >
+              {forecastRefresh === "working" ? (
+                <LoaderCircle className={styles.spin} size={15} aria-hidden="true" />
+              ) : forecastRefresh === "queued" || forecastRefresh === "deduplicated" ? (
+                <Check size={15} aria-hidden="true" />
+              ) : forecastRefresh === "error" ? (
+                <CircleAlert size={15} aria-hidden="true" />
+              ) : (
+                <RefreshCw size={15} aria-hidden="true" />
+              )}
+              {forecastRefresh === "working"
+                ? "Requesting…"
+                : forecastRefresh === "queued"
+                  ? "Input check queued"
+                  : forecastRefresh === "deduplicated"
+                    ? "Input check already queued"
+                    : forecastRefresh === "error"
+                      ? "Retry input check"
+                      : "Check inputs & rerun"}
+            </button>
+          </div>
+        </header>
+        {managedForecast?.managed ? (
+          <>
+            <div className={styles.managedMetrics}>
+              <div>
+                <span>Inputs checked</span>
+                <strong>{readableDate(managedForecast.managed.inputCheckedAt)}</strong>
+                <small>Oldest required source check</small>
+              </div>
+              <div>
+                <span>Computed</span>
+                <strong>{readableDate(managedForecast.managed.computedAt)}</strong>
+                <small>
+                  {managedForecast.managed.modelVersion ?? "Model version not reported"}
+                </small>
+              </div>
+              <div>
+                <span>Coverage</span>
+                <strong>
+                  {managedForecast.managed.coverage
+                    ? `${managedForecast.managed.coverage.projected} / ${managedForecast.managed.coverage.eligible}`
+                    : `${managedForecast.playerCount} projected`}
+                </strong>
+                <small>
+                  {managedForecast.managed.coverage
+                    ? `${Math.round(managedForecast.managed.coverage.ratio * 1000) / 10}% of eligible players`
+                    : "Eligible-player count not reported"}
+                </small>
+              </div>
+              <div>
+                <span>Training cutoff</span>
+                <strong>{weekReference(managedForecast.managed.trainingCutoff)}</strong>
+                <small>Stats through {weekReference(managedForecast.managed.statsThrough)}</small>
+              </div>
+            </div>
+            <div className={styles.modelEvidence}>
+              <BarChart3 size={17} aria-hidden="true" />
+              {managedForecast.managed.backtest ? (
+                <p>
+                  <strong>Locked backtest:</strong>{" "}
+                  {managedForecast.managed.backtest.samples.toLocaleString()} player-weeks · MAE{" "}
+                  {decimal(managedForecast.managed.backtest.mae)}
+                  {managedForecast.managed.backtest.baselineMae !== null
+                    ? ` vs. ${decimal(managedForecast.managed.backtest.baselineMae)} baseline`
+                    : ""}
+                  {managedForecast.managed.backtest.intervalCoverage !== null
+                    ? ` · ${Math.round(managedForecast.managed.backtest.intervalCoverage * 100)}% interval coverage`
+                    : ""}
+                </p>
+              ) : (
+                <p>Backtest summary was not attached to this forecast.</p>
+              )}
+            </div>
+            {managedForecast.managed.championByPosition.length > 0 ? (
+              <div className={styles.championRail} aria-label="Forecast strategy by position">
+                <span>Live mean strategy</span>
+                <div>
+                  {managedForecast.managed.championByPosition.map((choice) => (
+                    <small key={choice.position}>
+                      <strong>{choice.position}</strong>
+                      {choice.strategy === "first-party-model"
+                        ? "Qualified model"
+                        : "Safe baseline"}
+                    </small>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+            {managedForecast.managed.warnings.length > 0 ? (
+              <div className={styles.forecastWarnings} role="status">
+                <AlertTriangle size={16} aria-hidden="true" />
+                <ul>
+                  {managedForecast.managed.warnings.map((warning) => (
+                    <li key={warning}>{warning}</li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
+          </>
+        ) : (
+          <div className={styles.managedEmpty}>
+            <Clock3 size={18} aria-hidden="true" />
+            <div>
+              <p>No managed set is available for this league yet.</p>
+              {managedStatus?.state === "withheld" && managedStatus.reasons.length > 0 ? (
+                <div>
+                  <p>The latest update was withheld. Any earlier forecast is inactive.</p>
+                  <ul>
+                    {managedStatus.reasons.map((reason) => (
+                      <li key={reason}>{reason}</li>
+                    ))}
+                  </ul>
+                </div>
+              ) : (
+                <p>A check never publishes a weaker forecast just to produce a newer timestamp.</p>
+              )}
+            </div>
+          </div>
+        )}
+        <p className={styles.refreshFootnote}>
+          Input checks run in the background. A new set is published only when inputs change and the
+          quality gates pass; use Reload list below to read completed results.
+        </p>
+      </section>
 
       <section className={styles.boundary} aria-label="Import privacy and matching rules">
         <div>
@@ -934,7 +1177,7 @@ export function ProjectionImportWorkbench() {
         <header className={styles.savedHeader}>
           <div>
             <p className={styles.kicker}>Available in this league</p>
-            <h2 id="saved-projections-title">Saved projection sets</h2>
+            <h2 id="saved-projections-title">Projection set history</h2>
           </div>
           <button
             className={styles.textButton}
@@ -947,7 +1190,7 @@ export function ProjectionImportWorkbench() {
               size={15}
               aria-hidden="true"
             />
-            Refresh
+            Reload list
           </button>
         </header>
         {sets.state === "loading" ? (
@@ -969,8 +1212,8 @@ export function ProjectionImportWorkbench() {
                   <th>Window</th>
                   <th>Rows</th>
                   <th>Access</th>
-                  <th>Source as of</th>
-                  <th>Imported</th>
+                  <th>Input / source time</th>
+                  <th>Built / imported</th>
                   <th>Checksum</th>
                 </tr>
               </thead>
@@ -980,8 +1223,9 @@ export function ProjectionImportWorkbench() {
                     <td>
                       <strong>{set.sourceLabel}</strong>
                       <small>
-                        {set.isOwnedByCurrentUser ? "You" : set.creatorDisplayName}
-                        {set.sourceFileName ? ` · ${set.sourceFileName}` : ""}
+                        {set.origin === "laces-out"
+                          ? `Managed by Laces Out${set.managed?.modelVersion ? ` · ${set.managed.modelVersion}` : ""}`
+                          : `${set.isOwnedByCurrentUser ? "You" : (set.creatorDisplayName ?? "League member")}${set.sourceFileName ? ` · ${set.sourceFileName}` : ""}`}
                       </small>
                     </td>
                     <td>
@@ -1005,12 +1249,20 @@ export function ProjectionImportWorkbench() {
                       </span>
                     </td>
                     <td>
-                      {projectionSourceAsOfText(set, readableDate)}
-                      {set.sourceObservedAtStatus === "unverified" ? (
+                      {set.origin === "laces-out" && set.managed
+                        ? readableDate(set.managed.inputCheckedAt)
+                        : projectionSourceAsOfText(set, readableDate)}
+                      {set.origin === "custom" && set.sourceObservedAtStatus === "unverified" ? (
                         <small>Legacy import; no trustworthy source timestamp</small>
                       ) : null}
                     </td>
-                    <td>{readableDate(set.importedAt)}</td>
+                    <td>
+                      {readableDate(
+                        set.origin === "laces-out" && set.managed
+                          ? set.managed.computedAt
+                          : set.importedAt,
+                      )}
+                    </td>
                     <td>
                       <code title={set.inputChecksum}>{shortenedChecksum(set.inputChecksum)}</code>
                     </td>

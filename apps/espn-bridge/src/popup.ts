@@ -4,8 +4,15 @@ import type {
   BridgeRequest,
   BridgeResponse,
   BridgeStatus,
+  PendingPairingOffer,
 } from "./protocol.js";
-import { parseLeagueIds, validateBridgeConfiguration } from "./protocol.js";
+import {
+  pairingOfferIsFresh,
+  parseLeagueIds,
+  pendingPairingStorageKey,
+  validateBridgeConfiguration,
+  validateStoredPendingOffer,
+} from "./protocol.js";
 
 function element<T extends HTMLElement>(id: string): T {
   const value = document.getElementById(id);
@@ -21,6 +28,10 @@ const leagueResults = element<HTMLUListElement>("league-results");
 const syncButton = element<HTMLButtonElement>("sync-now");
 const forgetBrowserButton = element<HTMLButtonElement>("forget-browser");
 const loginButton = element<HTMLButtonElement>("open-espn");
+const pairingSection = element<HTMLElement>("pairing-offer");
+const pairingOrigin = element<HTMLSpanElement>("pairing-origin");
+const pairingCompleteButton = element<HTMLButtonElement>("pairing-complete");
+const pairingDismissButton = element<HTMLButtonElement>("pairing-dismiss");
 
 function send(request: BridgeRequest): Promise<BridgeResponse> {
   return chrome.runtime.sendMessage(request);
@@ -119,6 +130,53 @@ forgetBrowserButton.addEventListener("click", () => {
 
 loginButton.addEventListener("click", () => {
   void chrome.tabs.create({ url: "https://fantasy.espn.com/football/" });
+});
+
+let pendingOffer: PendingPairingOffer | undefined;
+
+async function clearPendingOffer(): Promise<void> {
+  pendingOffer = undefined;
+  pairingSection.hidden = true;
+  await chrome.storage.local.remove(pendingPairingStorageKey);
+}
+
+async function loadPendingOffer(): Promise<void> {
+  const stored = await chrome.storage.local.get(pendingPairingStorageKey);
+  const offer = validateStoredPendingOffer(stored[pendingPairingStorageKey]);
+  if (!offer || !pairingOfferIsFresh(offer, Date.now())) {
+    if (stored[pendingPairingStorageKey] !== undefined) await clearPendingOffer();
+    return;
+  }
+  pendingOffer = offer;
+  pairingOrigin.textContent = offer.origin;
+  pairingSection.hidden = false;
+}
+
+pairingCompleteButton.addEventListener("click", () => {
+  const offer = pendingOffer;
+  if (!offer) return;
+  pairingCompleteButton.disabled = true;
+  void (async () => {
+    await requireApiPermission(offer.configuration.apiBaseUrl);
+    const response = await send({ type: "CONFIGURE", configuration: offer.configuration });
+    await clearPendingOffer();
+    render(response.status);
+  })()
+    .catch((error: unknown) => {
+      statusMessage.textContent = error instanceof Error ? error.message : "Pairing failed";
+      statusPanel.dataset.state = "error";
+    })
+    .finally(() => {
+      pairingCompleteButton.disabled = false;
+    });
+});
+
+pairingDismissButton.addEventListener("click", () => {
+  void clearPendingOffer();
+});
+
+void loadPendingOffer().catch(() => {
+  pairingSection.hidden = true;
 });
 
 void send({ type: "GET_STATUS" })

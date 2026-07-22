@@ -31,6 +31,33 @@ export type AiCredentialStatus = "active" | "invalid" | "revoked";
 export type StandingStreakType = "win" | "loss" | "tie" | "none";
 export type WeeklyMatchupStatus = "scheduled" | "in-progress" | "final";
 export type ProjectionVisibility = "global" | "private" | "league";
+export type ProjectionObservationKind = "points" | "stat-components";
+export type ProjectionObservationHorizon = "week" | "rest-of-season" | "full-season";
+export type ProjectionIdentityState = "explicit" | "legacy-unknown";
+export type NflScheduleGameStatus =
+  "scheduled" | "in-progress" | "final" | "postponed" | "cancelled";
+export type ProjectionModelQualityState = "publishable" | "degraded" | "rejected";
+export type AdpScoringFormat = "standard" | "half-ppr" | "ppr";
+export type AdpRosterFormat = "one-qb" | "superflex" | "two-qb" | "unknown";
+
+export interface FirstPartyRosAvailabilityWeek {
+  readonly week: number;
+  readonly scheduled: boolean;
+  readonly bye: boolean;
+  readonly availabilityProbability: number;
+}
+
+export interface FirstPartyRosAvailabilitySnapshot {
+  readonly schemaVersion: 1;
+  readonly semantics: "unconditional-active-probability";
+  readonly weeks: readonly FirstPartyRosAvailabilityWeek[];
+}
+
+/** One pinned upstream input-checksum lineage entry for a ROS champion artifact. */
+export interface FirstPartyRosChampionArtifactSourceChecksum {
+  readonly key: string;
+  readonly checksum: string;
+}
 
 export type JsonPrimitive = string | number | boolean | null;
 export type RankingEntryUserFields = Record<string, JsonPrimitive>;
@@ -835,6 +862,34 @@ export const shareLinks = pgTable(
   ],
 );
 
+export const syncRuns = pgTable(
+  "sync_runs",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    connectionId: uuid("connection_id").references(() => providerConnections.id, {
+      onDelete: "set null",
+    }),
+    leagueSeasonId: uuid("league_season_id").references(() => leagueSeasons.id, {
+      onDelete: "set null",
+    }),
+    kind: text("kind").notNull(),
+    state: text("state").notNull().default("queued"),
+    idempotencyKey: text("idempotency_key").notNull(),
+    startedAt: timestamp("started_at", { withTimezone: true }),
+    finishedAt: timestamp("finished_at", { withTimezone: true }),
+    recordsRead: integer("records_read").notNull().default(0),
+    recordsWritten: integer("records_written").notNull().default(0),
+    artifactChecksum: text("artifact_checksum"),
+    errorCode: text("error_code"),
+    errorDetail: text("error_detail"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("sync_runs_idempotency_unique").on(table.idempotencyKey),
+    index("sync_runs_league_created_idx").on(table.leagueSeasonId, table.createdAt),
+  ],
+);
+
 export const dataSources = pgTable(
   "data_sources",
   {
@@ -973,6 +1028,100 @@ export const playerMarketObservations = pgTable(
   ],
 );
 
+/**
+ * Immutable, context-specific draft-market observations. ADP is not portable
+ * across scoring, league size, roster format, or time, so those dimensions are
+ * part of every stored row rather than metadata inferred by consumers.
+ */
+export const adpObservations = pgTable(
+  "adp_observations",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    sourceId: uuid("source_id")
+      .notNull()
+      .references(() => dataSources.id, { onDelete: "restrict" }),
+    sourceSyncRunId: uuid("source_sync_run_id")
+      .notNull()
+      .references(() => syncRuns.id, { onDelete: "restrict" }),
+    externalPlayerId: text("external_player_id").notNull(),
+    playerId: uuid("player_id").references(() => players.id, { onDelete: "restrict" }),
+    season: integer("season").notNull(),
+    scoringFormat: text("scoring_format").$type<AdpScoringFormat>().notNull(),
+    teamCount: integer("team_count").notNull(),
+    rosterFormat: text("roster_format").$type<AdpRosterFormat>().notNull().default("unknown"),
+    positionFilter: text("position_filter"),
+    overallAdp: numeric("overall_adp", { precision: 8, scale: 3 }).notNull(),
+    sourceRank: integer("source_rank"),
+    positionRank: integer("position_rank"),
+    standardDeviation: numeric("standard_deviation", { precision: 8, scale: 3 }),
+    sampleSize: integer("sample_size"),
+    sourceAsOf: timestamp("source_as_of", { withTimezone: true }).notNull(),
+    fetchedAt: timestamp("fetched_at", { withTimezone: true }).notNull(),
+    inputChecksum: text("input_checksum").notNull(),
+    context: jsonb("context").$type<Record<string, JsonPrimitive>>().notNull().default({}),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("adp_observations_source_context_player_unique").on(
+      table.sourceId,
+      table.season,
+      table.scoringFormat,
+      table.teamCount,
+      table.rosterFormat,
+      table.sourceAsOf,
+      table.externalPlayerId,
+    ),
+    index("adp_observations_player_context_idx").on(
+      table.playerId,
+      table.season,
+      table.scoringFormat,
+      table.teamCount,
+      table.sourceAsOf,
+    ),
+    index("adp_observations_source_freshness_idx").on(table.sourceId, table.sourceAsOf),
+    index("adp_observations_sync_run_idx").on(table.sourceSyncRunId),
+    check(
+      "adp_observations_external_id_check",
+      sql`char_length(btrim(${table.externalPlayerId})) between 1 and 64`,
+    ),
+    check("adp_observations_season_check", sql`${table.season} between 2000 and 2200`),
+    check(
+      "adp_observations_scoring_format_check",
+      sql`${table.scoringFormat} in ('standard', 'half-ppr', 'ppr')`,
+    ),
+    check("adp_observations_team_count_check", sql`${table.teamCount} between 4 and 32`),
+    check(
+      "adp_observations_roster_format_check",
+      sql`${table.rosterFormat} in ('one-qb', 'superflex', 'two-qb', 'unknown')`,
+    ),
+    check(
+      "adp_observations_position_filter_check",
+      sql`${table.positionFilter} is null or char_length(btrim(${table.positionFilter})) between 1 and 16`,
+    ),
+    check(
+      "adp_observations_value_check",
+      sql`${table.overallAdp} > 0 and ${table.overallAdp} <= 1000`,
+    ),
+    check(
+      "adp_observations_rank_check",
+      sql`(${table.sourceRank} is null or ${table.sourceRank} between 1 and 1000) and (${table.positionRank} is null or ${table.positionRank} between 1 and 1000)`,
+    ),
+    check(
+      "adp_observations_dispersion_check",
+      sql`${table.standardDeviation} is null or (${table.standardDeviation} >= 0 and ${table.standardDeviation} <= 1000)`,
+    ),
+    check(
+      "adp_observations_sample_check",
+      sql`${table.sampleSize} is null or ${table.sampleSize} >= 0`,
+    ),
+    check("adp_observations_checksum_check", sql`${table.inputChecksum} ~ '^[a-f0-9]{64}$'`),
+    check(
+      "adp_observations_time_check",
+      sql`${table.sourceAsOf} <= ${table.fetchedAt} + interval '5 minutes'`,
+    ),
+  ],
+);
+
 export const rosterSnapshots = pgTable(
   "roster_snapshots",
   {
@@ -1020,7 +1169,17 @@ export const projectionSets = pgTable(
     version: text("version").notNull(),
     season: integer("season").notNull(),
     week: integer("week"),
-    horizon: text("horizon").notNull(),
+    horizon: text("horizon").$type<ProjectionObservationHorizon>().notNull(),
+    identityState: text("identity_state")
+      .$type<ProjectionIdentityState>()
+      .notNull()
+      .default("explicit"),
+    windowStartWeek: integer("window_start_week").notNull().default(0),
+    windowEndWeek: integer("window_end_week").notNull().default(0),
+    asOfWeek: integer("as_of_week").notNull().default(-1),
+    asOfAt: timestamp("as_of_at", { withTimezone: true })
+      .notNull()
+      .default(sql`'-infinity'::timestamptz`),
     fetchedAt: timestamp("fetched_at", { withTimezone: true }).notNull(),
     inputChecksum: text("input_checksum").notNull(),
     metadata: jsonb("metadata").$type<Record<string, unknown>>().notNull().default({}),
@@ -1039,17 +1198,44 @@ export const projectionSets = pgTable(
       table.fetchedAt,
     ),
     index("projection_sets_creator_idx").on(table.createdByUserId),
+    uniqueIndex("projection_sets_managed_window_input_unique")
+      .on(
+        table.leagueSeasonId,
+        table.source,
+        table.season,
+        table.horizon,
+        table.identityState,
+        table.windowStartWeek,
+        table.windowEndWeek,
+        table.asOfWeek,
+        table.asOfAt,
+        table.inputChecksum,
+      )
+      .where(sql`${table.leagueSeasonId} is not null and ${table.createdByUserId} is null`),
+    index("projection_sets_scoped_window_idx").on(
+      table.leagueSeasonId,
+      table.season,
+      table.horizon,
+      table.identityState,
+      table.windowStartWeek,
+      table.windowEndWeek,
+      table.asOfAt,
+    ),
     check(
       "projection_sets_visibility_check",
       sql`${table.visibility} in ('global', 'private', 'league')`,
     ),
     check(
       "projection_sets_scope_check",
-      sql`(${table.visibility} = 'global' and ${table.leagueSeasonId} is null and ${table.createdByUserId} is null) or (${table.visibility} in ('private', 'league') and ${table.leagueSeasonId} is not null and ${table.createdByUserId} is not null)`,
+      sql`(${table.visibility} = 'global' and ${table.leagueSeasonId} is null and ${table.createdByUserId} is null) or (${table.visibility} = 'private' and ${table.leagueSeasonId} is not null and ${table.createdByUserId} is not null) or (${table.visibility} = 'league' and ${table.leagueSeasonId} is not null)`,
     ),
     check(
       "projection_sets_week_check",
-      sql`${table.week} is null or ${table.week} between 1 and 18`,
+      sql`${table.week} is null or ${table.week} between 1 and 25`,
+    ),
+    check(
+      "projection_sets_horizon_window_check",
+      sql`${table.horizon} in ('week', 'rest-of-season', 'full-season') and ((${table.identityState} = 'explicit' and ${table.windowStartWeek} between 1 and 25 and ${table.windowEndWeek} between ${table.windowStartWeek} and 25 and ${table.asOfWeek} between 0 and 24 and ${table.asOfWeek} < ${table.windowStartWeek} and ${table.asOfAt} >= '2000-01-01'::timestamptz and ${table.asOfAt} <= ${table.fetchedAt} + interval '5 minutes' and ((${table.horizon} = 'week' and ${table.week} is not null and ${table.windowStartWeek} = ${table.week} and ${table.windowEndWeek} = ${table.week}) or (${table.horizon} <> 'week' and ${table.week} is null))) or (${table.identityState} = 'legacy-unknown' and ${table.horizon} <> 'week' and ${table.week} is null and ${table.windowStartWeek} = 0 and ${table.windowEndWeek} = 0 and ${table.asOfWeek} = -1 and ${table.asOfAt} = '-infinity'::timestamptz))`,
     ),
   ],
 );
@@ -1072,31 +1258,772 @@ export const playerProjections = pgTable(
   (table) => [primaryKey({ columns: [table.projectionSetId, table.playerId] })],
 );
 
-export const syncRuns = pgTable(
-  "sync_runs",
+/**
+ * Immutable NFL game context. A new source artifact creates new rows instead of rewriting the
+ * schedule that a prior forecast used, which keeps every model run reproducible after flexes,
+ * postponements, or corrections.
+ */
+export const nflScheduleObservations = pgTable(
+  "nfl_schedule_observations",
   {
     id: uuid("id").primaryKey().defaultRandom(),
-    connectionId: uuid("connection_id").references(() => providerConnections.id, {
-      onDelete: "set null",
-    }),
-    leagueSeasonId: uuid("league_season_id").references(() => leagueSeasons.id, {
-      onDelete: "set null",
-    }),
-    kind: text("kind").notNull(),
-    state: text("state").notNull().default("queued"),
-    idempotencyKey: text("idempotency_key").notNull(),
-    startedAt: timestamp("started_at", { withTimezone: true }),
-    finishedAt: timestamp("finished_at", { withTimezone: true }),
-    recordsRead: integer("records_read").notNull().default(0),
-    recordsWritten: integer("records_written").notNull().default(0),
-    artifactChecksum: text("artifact_checksum"),
-    errorCode: text("error_code"),
-    errorDetail: text("error_detail"),
+    sourceId: uuid("source_id")
+      .notNull()
+      .references(() => dataSources.id, { onDelete: "restrict" }),
+    sourceSyncRunId: uuid("source_sync_run_id")
+      .notNull()
+      .references(() => syncRuns.id, { onDelete: "restrict" }),
+    externalGameId: text("external_game_id").notNull(),
+    season: integer("season").notNull(),
+    week: integer("week").notNull(),
+    seasonType: text("season_type").$type<"REG" | "POST">().notNull(),
+    gameDate: text("game_date").notNull(),
+    startTimeEastern: text("start_time_eastern"),
+    timeTbd: boolean("time_tbd").notNull(),
+    kickoffAt: timestamp("kickoff_at", { withTimezone: true }),
+    awayTeam: text("away_team").notNull(),
+    homeTeam: text("home_team").notNull(),
+    status: text("status").$type<NflScheduleGameStatus>().notNull(),
+    neutralSite: boolean("neutral_site").notNull().default(false),
+    awayRestDays: integer("away_rest_days"),
+    homeRestDays: integer("home_rest_days"),
+    awayScore: integer("away_score"),
+    homeScore: integer("home_score"),
+    sourceAsOf: timestamp("source_as_of", { withTimezone: true }).notNull(),
+    fetchedAt: timestamp("fetched_at", { withTimezone: true }).notNull(),
+    inputChecksum: text("input_checksum").notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [
-    uniqueIndex("sync_runs_idempotency_unique").on(table.idempotencyKey),
-    index("sync_runs_league_created_idx").on(table.leagueSeasonId, table.createdAt),
+    uniqueIndex("nfl_schedule_observations_source_game_unique").on(
+      table.sourceId,
+      table.externalGameId,
+      table.inputChecksum,
+    ),
+    index("nfl_schedule_observations_season_week_idx").on(
+      table.season,
+      table.week,
+      table.seasonType,
+      table.sourceAsOf,
+    ),
+    index("nfl_schedule_observations_away_team_idx").on(table.awayTeam, table.season, table.week),
+    index("nfl_schedule_observations_home_team_idx").on(table.homeTeam, table.season, table.week),
+    index("nfl_schedule_observations_sync_run_idx").on(table.sourceSyncRunId),
+    check(
+      "nfl_schedule_observations_game_id_check",
+      sql`char_length(btrim(${table.externalGameId})) between 1 and 64`,
+    ),
+    check("nfl_schedule_observations_season_check", sql`${table.season} between 1999 and 2200`),
+    check("nfl_schedule_observations_week_check", sql`${table.week} between 1 and 25`),
+    check(
+      "nfl_schedule_observations_season_type_check",
+      sql`${table.seasonType} in ('REG', 'POST')`,
+    ),
+    check(
+      "nfl_schedule_observations_teams_check",
+      sql`${table.awayTeam} ~ '^[A-Z]{2,4}$' and ${table.homeTeam} ~ '^[A-Z]{2,4}$' and ${table.awayTeam} <> ${table.homeTeam}`,
+    ),
+    check(
+      "nfl_schedule_observations_status_check",
+      sql`${table.status} in ('scheduled', 'in-progress', 'final', 'postponed', 'cancelled')`,
+    ),
+    check(
+      "nfl_schedule_observations_timing_check",
+      sql`${table.gameDate} ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$' and ((${table.timeTbd} = true and ${table.startTimeEastern} is null) or (${table.timeTbd} = false and ${table.startTimeEastern} ~ '^([01][0-9]|2[0-3]):[0-5][0-9]$'))`,
+    ),
+    check(
+      "nfl_schedule_observations_rest_check",
+      sql`(${table.awayRestDays} is null or ${table.awayRestDays} between 0 and 30) and (${table.homeRestDays} is null or ${table.homeRestDays} between 0 and 30)`,
+    ),
+    check(
+      "nfl_schedule_observations_score_check",
+      sql`(${table.awayScore} is null or ${table.awayScore} between 0 and 200) and (${table.homeScore} is null or ${table.homeScore} between 0 and 200) and ((${table.awayScore} is null) = (${table.homeScore} is null)) and (${table.status} <> 'final' or ${table.awayScore} is not null)`,
+    ),
+    check(
+      "nfl_schedule_observations_checksum_check",
+      sql`${table.inputChecksum} ~ '^[a-f0-9]{64}$'`,
+    ),
+    check(
+      "nfl_schedule_observations_time_check",
+      sql`${table.sourceAsOf} <= ${table.fetchedAt} + interval '5 minutes'`,
+    ),
+  ],
+);
+
+/** Immutable audit record for one trained and evaluated first-party projection run. */
+export const projectionModelRuns = pgTable(
+  "projection_model_runs",
+  {
+    sourceSyncRunId: uuid("source_sync_run_id")
+      .primaryKey()
+      .references(() => syncRuns.id, { onDelete: "restrict" }),
+    sourceId: uuid("source_id")
+      .notNull()
+      .references(() => dataSources.id, { onDelete: "restrict" }),
+    season: integer("season").notNull(),
+    horizon: text("horizon").$type<ProjectionObservationHorizon>().notNull().default("week"),
+    targetWeek: integer("target_week"),
+    windowStartWeek: integer("window_start_week").notNull().default(0),
+    windowEndWeek: integer("window_end_week").notNull().default(0),
+    asOfWeek: integer("as_of_week").notNull().default(-1),
+    asOfAt: timestamp("as_of_at", { withTimezone: true })
+      .notNull()
+      .default(sql`'-infinity'::timestamptz`),
+    modelVersion: text("model_version").notNull(),
+    trainingWindowStartSeason: integer("training_window_start_season").notNull(),
+    trainedThroughSeason: integer("trained_through_season").notNull(),
+    trainedThroughWeek: integer("trained_through_week"),
+    qualityState: text("quality_state").$type<ProjectionModelQualityState>().notNull(),
+    playersEvaluated: integer("players_evaluated").notNull(),
+    playersPublished: integer("players_published").notNull(),
+    inputChecksum: text("input_checksum").notNull(),
+    configuration: jsonb("configuration").$type<Record<string, unknown>>().notNull(),
+    calibration: jsonb("calibration").$type<Record<string, unknown>>().notNull(),
+    metrics: jsonb("metrics").$type<Record<string, unknown>>().notNull(),
+    sourceAsOf: timestamp("source_as_of", { withTimezone: true }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("projection_model_runs_target_checksum_unique").on(
+      table.sourceId,
+      table.season,
+      table.horizon,
+      table.windowStartWeek,
+      table.windowEndWeek,
+      table.asOfWeek,
+      table.asOfAt,
+      table.modelVersion,
+      table.inputChecksum,
+    ),
+    index("projection_model_runs_target_created_idx").on(
+      table.season,
+      table.horizon,
+      table.windowStartWeek,
+      table.windowEndWeek,
+      table.asOfAt,
+      table.createdAt,
+    ),
+    check("projection_model_runs_season_check", sql`${table.season} between 2000 and 2200`),
+    check(
+      "projection_model_runs_horizon_window_check",
+      sql`${table.horizon} in ('week', 'rest-of-season', 'full-season') and ${table.windowStartWeek} between 1 and 25 and ${table.windowEndWeek} between ${table.windowStartWeek} and 25 and ${table.asOfWeek} between 0 and 24 and ${table.asOfWeek} < ${table.windowStartWeek} and ((${table.horizon} = 'week' and ${table.targetWeek} is not null and ${table.targetWeek} = ${table.windowStartWeek} and ${table.targetWeek} = ${table.windowEndWeek}) or (${table.horizon} <> 'week' and ${table.targetWeek} is null))`,
+    ),
+    check(
+      "projection_model_runs_as_of_time_check",
+      sql`${table.asOfAt} >= '2000-01-01'::timestamptz and ${table.sourceAsOf} <= ${table.asOfAt}`,
+    ),
+    check(
+      "projection_model_runs_training_window_check",
+      sql`${table.trainingWindowStartSeason} between 1999 and ${table.trainedThroughSeason} and ${table.trainedThroughSeason} <= ${table.season} and (${table.trainedThroughWeek} is null or ${table.trainedThroughWeek} between 1 and 25) and (${table.trainedThroughSeason} < ${table.season} or (${table.trainedThroughSeason} = ${table.season} and ${table.trainedThroughWeek} is not null and ${table.trainedThroughWeek} <= ${table.asOfWeek}))`,
+    ),
+    check(
+      "projection_model_runs_identity_check",
+      sql`char_length(btrim(${table.modelVersion})) > 0`,
+    ),
+    check(
+      "projection_model_runs_quality_check",
+      sql`${table.qualityState} in ('publishable', 'degraded', 'rejected')`,
+    ),
+    check(
+      "projection_model_runs_counts_check",
+      sql`${table.playersEvaluated} >= 0 and ${table.playersPublished} >= 0 and ${table.playersPublished} <= ${table.playersEvaluated}`,
+    ),
+    check(
+      "projection_model_runs_payload_check",
+      sql`jsonb_typeof(${table.configuration}) = 'object' and jsonb_typeof(${table.calibration}) = 'object' and jsonb_typeof(${table.metrics}) = 'object'`,
+    ),
+    check("projection_model_runs_checksum_check", sql`${table.inputChecksum} ~ '^[a-f0-9]{64}$'`),
+  ],
+);
+
+/**
+ * League-scored rest-of-season distribution diagnostics. Totals remain in player_projections;
+ * this immutable companion records the schedule, availability, and simulation shape behind them.
+ * Direct changes are rejected. Deletion is allowed only through projection-set, league-season, or
+ * account lifecycle cascade so user erasure does not strand scoped forecasts while automated
+ * observation history stays intact.
+ */
+export const playerRosProjectionSummaries = pgTable(
+  "player_ros_projection_summaries",
+  {
+    projectionSetId: uuid("projection_set_id")
+      .notNull()
+      .references(() => projectionSets.id, { onDelete: "cascade" }),
+    sourceSyncRunId: uuid("source_sync_run_id")
+      .notNull()
+      .references(() => projectionModelRuns.sourceSyncRunId, { onDelete: "restrict" }),
+    playerId: uuid("player_id")
+      .notNull()
+      .references(() => players.id, { onDelete: "restrict" }),
+    season: integer("season").notNull(),
+    windowStartWeek: integer("window_start_week").notNull(),
+    windowEndWeek: integer("window_end_week").notNull(),
+    asOfWeek: integer("as_of_week").notNull(),
+    asOfAt: timestamp("as_of_at", { withTimezone: true }).notNull(),
+    scheduledGames: integer("scheduled_games").notNull(),
+    expectedGames: numeric("expected_games", { precision: 8, scale: 6 }).notNull(),
+    aggregateMeanPoints: numeric("aggregate_mean_points", { precision: 10, scale: 3 }).notNull(),
+    p15Points: numeric("p15_points", { precision: 10, scale: 3 }).notNull(),
+    p50Points: numeric("p50_points", { precision: 10, scale: 3 }).notNull(),
+    p85Points: numeric("p85_points", { precision: 10, scale: 3 }).notNull(),
+    meanPointsPerExpectedGame: numeric("mean_points_per_expected_game", {
+      precision: 12,
+      scale: 6,
+    }),
+    pointsStddev: numeric("points_stddev", { precision: 10, scale: 3 }).notNull(),
+    availability: jsonb("availability").$type<FirstPartyRosAvailabilitySnapshot>().notNull(),
+    scenarioCount: integer("scenario_count").notNull(),
+    methodVersion: text("method_version").notNull(),
+    seedHash: text("seed_hash").notNull(),
+    inputChecksum: text("input_checksum").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.projectionSetId, table.playerId] }),
+    uniqueIndex("player_ros_projection_summaries_identity_unique").on(
+      table.sourceSyncRunId,
+      table.projectionSetId,
+      table.playerId,
+      table.methodVersion,
+      table.seedHash,
+      table.inputChecksum,
+    ),
+    index("player_ros_projection_summaries_run_idx").on(table.sourceSyncRunId),
+    index("player_ros_projection_summaries_player_window_idx").on(
+      table.playerId,
+      table.season,
+      table.windowStartWeek,
+      table.windowEndWeek,
+      table.asOfAt,
+    ),
+    check(
+      "player_ros_projection_summaries_season_check",
+      sql`${table.season} between 2000 and 2200`,
+    ),
+    check(
+      "player_ros_projection_summaries_window_check",
+      sql`${table.windowStartWeek} between 1 and 25 and ${table.windowEndWeek} between ${table.windowStartWeek} and 25 and ${table.asOfWeek} between 0 and 24 and ${table.asOfWeek} < ${table.windowStartWeek} and ${table.asOfAt} >= '2000-01-01'::timestamptz`,
+    ),
+    check(
+      "player_ros_projection_summaries_games_check",
+      sql`${table.scheduledGames} between 0 and (${table.windowEndWeek} - ${table.windowStartWeek} + 1) and ${table.expectedGames} between 0 and ${table.scheduledGames}`,
+    ),
+    check(
+      "player_ros_projection_summaries_distribution_check",
+      sql`${table.aggregateMeanPoints} between -2500 and 5000 and ${table.p15Points} between -2500 and ${table.p50Points} and ${table.p50Points} <= ${table.p85Points} and ${table.p85Points} <= 5000 and ${table.pointsStddev} between 0 and 1000 and ((${table.expectedGames} = 0 and ${table.aggregateMeanPoints} = 0 and ${table.p15Points} = 0 and ${table.p50Points} = 0 and ${table.p85Points} = 0 and ${table.pointsStddev} = 0 and ${table.meanPointsPerExpectedGame} is null) or (${table.expectedGames} > 0 and ${table.meanPointsPerExpectedGame} between -100 and 200 and abs((${table.meanPointsPerExpectedGame} * ${table.expectedGames}) - ${table.aggregateMeanPoints}) <= 0.001))`,
+    ),
+    check(
+      "player_ros_projection_summaries_availability_check",
+      sql`jsonb_typeof(${table.availability}) = 'object' and ${table.availability}->'schemaVersion' = '1'::jsonb and ${table.availability}->>'semantics' = 'unconditional-active-probability' and jsonb_typeof(${table.availability}->'weeks') = 'array'`,
+    ),
+    check(
+      "player_ros_projection_summaries_scenarios_check",
+      sql`${table.scenarioCount} between 128 and 4096`,
+    ),
+    check(
+      "player_ros_projection_summaries_identity_check",
+      sql`char_length(btrim(${table.methodVersion})) between 1 and 128 and ${table.seedHash} ~ '^[a-f0-9]{64}$' and ${table.inputChecksum} ~ '^[a-f0-9]{64}$'`,
+    ),
+  ],
+);
+
+/**
+ * Immutable, checksummed rest-of-season champion/calibration artifact. It is the ONLY thing that
+ * can authorize live ROS publication: the shadow rail fails closed until a row exists here whose
+ * checksum validates, whose model/policy/calibration identities match the running code, and whose
+ * scoring-profile identity matches the target league exactly. There is deliberately no automated
+ * code path that inserts these rows; admission happens through a separate release-proof step, so in
+ * normal operation this table stays empty and the rail records only degraded audit evidence.
+ *
+ * Rows are append-only and immutable (enforced by trigger). `policy` is the serialized
+ * `FirstPartyRosChampionPolicy` (its choices, interval-calibration artifacts, walk-forward and
+ * held-out evidence, and `evidenceIdentity`). `source_checksums` pins the exact input lineage the
+ * admission run consumed. `release_gate` records the admission-time release-gate decision.
+ */
+export const firstPartyRosChampionArtifacts = pgTable(
+  "first_party_ros_champion_artifacts",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    season: integer("season").notNull(),
+    scoringProfileKey: text("scoring_profile_key").notNull(),
+    modelVersion: text("model_version").notNull(),
+    policyVersion: text("policy_version").notNull(),
+    calibrationVersion: text("calibration_version").notNull(),
+    evidenceThroughSeason: integer("evidence_through_season").notNull(),
+    sourceChecksums: jsonb("source_checksums")
+      .$type<readonly FirstPartyRosChampionArtifactSourceChecksum[]>()
+      .notNull(),
+    policy: jsonb("policy").$type<Record<string, unknown>>().notNull(),
+    releaseGate: jsonb("release_gate").$type<Record<string, unknown>>().notNull(),
+    artifactChecksum: text("artifact_checksum").notNull(),
+    admittedAt: timestamp("admitted_at", { withTimezone: true }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("first_party_ros_champion_artifacts_identity_unique").on(
+      table.season,
+      table.scoringProfileKey,
+      table.modelVersion,
+      table.policyVersion,
+      table.calibrationVersion,
+      table.artifactChecksum,
+    ),
+    index("first_party_ros_champion_artifacts_lookup_idx").on(
+      table.season,
+      table.scoringProfileKey,
+      table.admittedAt,
+    ),
+    check(
+      "first_party_ros_champion_artifacts_season_check",
+      sql`${table.season} between 2000 and 2200 and ${table.evidenceThroughSeason} between 1999 and ${table.season}`,
+    ),
+    check(
+      "first_party_ros_champion_artifacts_identity_check",
+      sql`char_length(btrim(${table.scoringProfileKey})) between 1 and 256 and char_length(btrim(${table.modelVersion})) between 1 and 128 and char_length(btrim(${table.policyVersion})) between 1 and 128 and char_length(btrim(${table.calibrationVersion})) between 1 and 128`,
+    ),
+    check(
+      "first_party_ros_champion_artifacts_checksum_check",
+      sql`${table.artifactChecksum} ~ '^[a-f0-9]{64}$'`,
+    ),
+    check(
+      "first_party_ros_champion_artifacts_payload_check",
+      sql`jsonb_typeof(${table.sourceChecksums}) = 'array' and jsonb_array_length(${table.sourceChecksums}) > 0 and jsonb_typeof(${table.policy}) = 'object' and jsonb_typeof(${table.releaseGate}) = 'object'`,
+    ),
+    check(
+      "first_party_ros_champion_artifacts_admitted_check",
+      sql`${table.admittedAt} >= '2000-01-01'::timestamptz`,
+    ),
+  ],
+);
+
+/**
+ * Immutable forecasts captured from automated sources before league scoring or consensus is
+ * applied. Points-only rows carry the exact source scoring profile; component rows remain
+ * scoring-independent so consumers can evaluate them under each league's rules.
+ */
+export const projectionObservations = pgTable(
+  "projection_observations",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    sourceId: uuid("source_id")
+      .notNull()
+      .references(() => dataSources.id, { onDelete: "restrict" }),
+    sourceSyncRunId: uuid("source_sync_run_id")
+      .notNull()
+      .references(() => syncRuns.id, { onDelete: "restrict" }),
+    externalPlayerId: text("external_player_id").notNull(),
+    playerId: uuid("player_id").references(() => players.id, { onDelete: "restrict" }),
+    kind: text("kind").$type<ProjectionObservationKind>().notNull(),
+    sourceVersion: text("source_version").notNull(),
+    independenceKey: text("independence_key").notNull(),
+    season: integer("season").notNull(),
+    week: integer("week"),
+    horizon: text("horizon").$type<ProjectionObservationHorizon>().notNull(),
+    scoringProfile: jsonb("scoring_profile").$type<Record<string, unknown>>(),
+    scoringProfileKey: text("scoring_profile_key"),
+    components: jsonb("components").$type<Record<string, number>>().notNull().default({}),
+    floorComponents: jsonb("floor_components").$type<Record<string, number>>(),
+    ceilingComponents: jsonb("ceiling_components").$type<Record<string, number>>(),
+    meanPoints: numeric("mean_points", { precision: 10, scale: 3 }),
+    floorPoints: numeric("floor_points", { precision: 10, scale: 3 }),
+    ceilingPoints: numeric("ceiling_points", { precision: 10, scale: 3 }),
+    sourceAsOf: timestamp("source_as_of", { withTimezone: true }).notNull(),
+    fetchedAt: timestamp("fetched_at", { withTimezone: true }).notNull(),
+    inputChecksum: text("input_checksum").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("projection_observations_source_version_player_unique").on(
+      table.sourceId,
+      table.sourceVersion,
+      table.season,
+      table.week,
+      table.horizon,
+      table.externalPlayerId,
+      table.inputChecksum,
+    ),
+    index("projection_observations_player_horizon_idx").on(
+      table.playerId,
+      table.season,
+      table.week,
+      table.horizon,
+      table.sourceAsOf,
+    ),
+    index("projection_observations_source_freshness_idx").on(table.sourceId, table.sourceAsOf),
+    index("projection_observations_sync_run_idx").on(table.sourceSyncRunId),
+    index("projection_observations_unmatched_idx")
+      .on(table.sourceId, table.sourceAsOf)
+      .where(sql`${table.playerId} is null`),
+    check(
+      "projection_observations_external_id_check",
+      sql`char_length(btrim(${table.externalPlayerId})) between 1 and 128`,
+    ),
+    check(
+      "projection_observations_kind_check",
+      sql`${table.kind} in ('points', 'stat-components')`,
+    ),
+    check(
+      "projection_observations_identity_check",
+      sql`char_length(btrim(${table.sourceVersion})) > 0 and char_length(btrim(${table.independenceKey})) > 0`,
+    ),
+    check("projection_observations_season_check", sql`${table.season} between 2000 and 2200`),
+    check(
+      "projection_observations_horizon_check",
+      sql`${table.horizon} in ('week', 'rest-of-season', 'full-season') and ((${table.horizon} = 'week' and ${table.week} between 1 and 25) or (${table.horizon} <> 'week' and ${table.week} is null))`,
+    ),
+    check(
+      "projection_observations_payload_check",
+      sql`(${table.kind} = 'points' and ${table.meanPoints} is not null and ${table.scoringProfile} is not null and jsonb_typeof(${table.scoringProfile}) = 'object' and ${table.scoringProfileKey} is not null and char_length(${table.scoringProfileKey}) > 0) or (${table.kind} = 'stat-components' and ${table.meanPoints} is null and ${table.floorPoints} is null and ${table.ceilingPoints} is null and ${table.scoringProfile} is null and ${table.scoringProfileKey} is null and jsonb_typeof(${table.components}) = 'object' and ${table.components} <> '{}'::jsonb)`,
+    ),
+    check(
+      "projection_observations_component_shape_check",
+      sql`jsonb_typeof(${table.components}) = 'object' and (${table.floorComponents} is null or jsonb_typeof(${table.floorComponents}) = 'object') and (${table.ceilingComponents} is null or jsonb_typeof(${table.ceilingComponents}) = 'object')`,
+    ),
+    check(
+      "projection_observations_interval_check",
+      sql`${table.floorPoints} is null or ${table.ceilingPoints} is null or ${table.floorPoints} <= ${table.ceilingPoints}`,
+    ),
+    check("projection_observations_checksum_check", sql`${table.inputChecksum} ~ '^[a-f0-9]{64}$'`),
+    check(
+      "projection_observations_time_check",
+      sql`${table.sourceAsOf} <= ${table.fetchedAt} + interval '5 minutes'`,
+    ),
+  ],
+);
+
+/** Immutable weekly box-score facts used for league scoring, trends, and model evaluation. */
+export const playerWeeklyStatObservations = pgTable(
+  "player_weekly_stat_observations",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    sourceId: uuid("source_id")
+      .notNull()
+      .references(() => dataSources.id, { onDelete: "restrict" }),
+    sourceSyncRunId: uuid("source_sync_run_id")
+      .notNull()
+      .references(() => syncRuns.id, { onDelete: "restrict" }),
+    externalPlayerId: text("external_player_id").notNull(),
+    playerId: uuid("player_id").references(() => players.id, { onDelete: "restrict" }),
+    season: integer("season").notNull(),
+    week: integer("week").notNull(),
+    seasonType: text("season_type").$type<"REG" | "POST">().notNull(),
+    gameId: text("game_id").notNull(),
+    team: text("team").notNull(),
+    opponentTeam: text("opponent_team").notNull(),
+    components: jsonb("components").$type<Record<string, number>>().notNull(),
+    advanced: jsonb("advanced").$type<Record<string, number | null>>().notNull().default({}),
+    sourceFantasyPoints: jsonb("source_fantasy_points")
+      .$type<Record<"standard" | "ppr", number>>()
+      .notNull(),
+    fetchedAt: timestamp("fetched_at", { withTimezone: true }).notNull(),
+    inputChecksum: text("input_checksum").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("player_weekly_stats_source_game_player_unique").on(
+      table.sourceId,
+      table.gameId,
+      table.externalPlayerId,
+      table.inputChecksum,
+    ),
+    index("player_weekly_stats_player_week_idx").on(
+      table.playerId,
+      table.season,
+      table.week,
+      table.seasonType,
+    ),
+    index("player_weekly_stats_source_week_idx").on(table.sourceId, table.season, table.week),
+    index("player_weekly_stats_sync_run_idx").on(table.sourceSyncRunId),
+    index("player_weekly_stats_unmatched_idx")
+      .on(table.sourceId, table.season, table.week)
+      .where(sql`${table.playerId} is null`),
+    check(
+      "player_weekly_stats_external_id_check",
+      sql`${table.externalPlayerId} ~ '^00-[0-9]{7}$'`,
+    ),
+    check("player_weekly_stats_season_check", sql`${table.season} between 1999 and 2200`),
+    check("player_weekly_stats_week_check", sql`${table.week} between 1 and 25`),
+    check("player_weekly_stats_season_type_check", sql`${table.seasonType} in ('REG', 'POST')`),
+    check(
+      "player_weekly_stats_context_check",
+      sql`char_length(btrim(${table.gameId})) between 1 and 64 and ${table.team} ~ '^[A-Z]{2,4}$' and ${table.opponentTeam} ~ '^[A-Z]{2,4}$'`,
+    ),
+    check(
+      "player_weekly_stats_payload_check",
+      sql`jsonb_typeof(${table.components}) = 'object' and ${table.components} <> '{}'::jsonb and jsonb_typeof(${table.advanced}) = 'object' and jsonb_typeof(${table.sourceFantasyPoints}) = 'object'`,
+    ),
+    check("player_weekly_stats_checksum_check", sql`${table.inputChecksum} ~ '^[a-f0-9]{64}$'`),
+  ],
+);
+
+/** Immutable team-week facts used for opponent adjustment and team-defense projections. */
+export const teamWeeklyStatObservations = pgTable(
+  "team_weekly_stat_observations",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    sourceId: uuid("source_id")
+      .notNull()
+      .references(() => dataSources.id, { onDelete: "restrict" }),
+    sourceSyncRunId: uuid("source_sync_run_id")
+      .notNull()
+      .references(() => syncRuns.id, { onDelete: "restrict" }),
+    externalTeamId: text("external_team_id").notNull(),
+    season: integer("season").notNull(),
+    week: integer("week").notNull(),
+    seasonType: text("season_type").$type<"REG" | "POST">().notNull(),
+    gameId: text("game_id").notNull(),
+    team: text("team").notNull(),
+    opponentTeam: text("opponent_team").notNull(),
+    components: jsonb("components").$type<Record<string, number>>().notNull(),
+    fetchedAt: timestamp("fetched_at", { withTimezone: true }).notNull(),
+    inputChecksum: text("input_checksum").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("team_weekly_stats_source_game_team_unique").on(
+      table.sourceId,
+      table.gameId,
+      table.externalTeamId,
+      table.inputChecksum,
+    ),
+    index("team_weekly_stats_team_week_idx").on(
+      table.team,
+      table.season,
+      table.week,
+      table.seasonType,
+    ),
+    index("team_weekly_stats_opponent_week_idx").on(
+      table.opponentTeam,
+      table.season,
+      table.week,
+      table.seasonType,
+    ),
+    index("team_weekly_stats_source_week_idx").on(table.sourceId, table.season, table.week),
+    index("team_weekly_stats_sync_run_idx").on(table.sourceSyncRunId),
+    check(
+      "team_weekly_stats_external_id_check",
+      sql`char_length(btrim(${table.externalTeamId})) between 2 and 16`,
+    ),
+    check("team_weekly_stats_season_check", sql`${table.season} between 1999 and 2200`),
+    check("team_weekly_stats_week_check", sql`${table.week} between 1 and 25`),
+    check("team_weekly_stats_season_type_check", sql`${table.seasonType} in ('REG', 'POST')`),
+    check(
+      "team_weekly_stats_context_check",
+      sql`char_length(btrim(${table.gameId})) between 1 and 64 and ${table.team} ~ '^[A-Z]{2,4}$' and ${table.opponentTeam} ~ '^[A-Z]{2,4}$' and ${table.team} <> ${table.opponentTeam}`,
+    ),
+    check(
+      "team_weekly_stats_payload_check",
+      sql`jsonb_typeof(${table.components}) = 'object' and ${table.components} <> '{}'::jsonb`,
+    ),
+    check("team_weekly_stats_checksum_check", sql`${table.inputChecksum} ~ '^[a-f0-9]{64}$'`),
+  ],
+);
+
+/** Immutable week-level roster membership used to retain zero-snap/DNP forecast outcomes. */
+export const playerWeeklyRosterObservations = pgTable(
+  "player_weekly_roster_observations",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    sourceId: uuid("source_id")
+      .notNull()
+      .references(() => dataSources.id, { onDelete: "restrict" }),
+    sourceSyncRunId: uuid("source_sync_run_id")
+      .notNull()
+      .references(() => syncRuns.id, { onDelete: "restrict" }),
+    externalPlayerId: text("external_player_id").notNull(),
+    playerId: uuid("player_id").references(() => players.id, { onDelete: "restrict" }),
+    season: integer("season").notNull(),
+    week: integer("week").notNull(),
+    team: text("team").notNull(),
+    position: text("position").notNull(),
+    rosterStatus: text("roster_status"),
+    statusDescription: text("status_description"),
+    fetchedAt: timestamp("fetched_at", { withTimezone: true }).notNull(),
+    inputChecksum: text("input_checksum").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("player_weekly_rosters_source_week_player_unique").on(
+      table.sourceId,
+      table.season,
+      table.week,
+      table.team,
+      table.externalPlayerId,
+      table.rosterStatus,
+      table.statusDescription,
+      table.inputChecksum,
+    ),
+    index("player_weekly_rosters_player_week_idx").on(table.playerId, table.season, table.week),
+    index("player_weekly_rosters_source_week_idx").on(table.sourceId, table.season, table.week),
+    index("player_weekly_rosters_sync_run_idx").on(table.sourceSyncRunId),
+    index("player_weekly_rosters_unmatched_idx")
+      .on(table.sourceId, table.season, table.week)
+      .where(sql`${table.playerId} is null`),
+    check(
+      "player_weekly_rosters_external_id_check",
+      sql`char_length(btrim(${table.externalPlayerId})) between 1 and 64`,
+    ),
+    check("player_weekly_rosters_season_check", sql`${table.season} between 2002 and 2200`),
+    check("player_weekly_rosters_week_check", sql`${table.week} between 1 and 25`),
+    check(
+      "player_weekly_rosters_context_check",
+      sql`${table.team} ~ '^[A-Z]{2,4}$' and char_length(btrim(${table.position})) between 1 and 16`,
+    ),
+    check(
+      "player_weekly_rosters_status_check",
+      sql`(${table.rosterStatus} is null or char_length(${table.rosterStatus}) between 1 and 64) and (${table.statusDescription} is null or char_length(${table.statusDescription}) between 1 and 64)`,
+    ),
+    check("player_weekly_rosters_checksum_check", sql`${table.inputChecksum} ~ '^[a-f0-9]{64}$'`),
+  ],
+);
+
+/** Immutable official weekly injury/practice designations used for status-aware evaluation. */
+export const playerInjuryReportObservations = pgTable(
+  "player_injury_report_observations",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    sourceId: uuid("source_id")
+      .notNull()
+      .references(() => dataSources.id, { onDelete: "restrict" }),
+    sourceSyncRunId: uuid("source_sync_run_id")
+      .notNull()
+      .references(() => syncRuns.id, { onDelete: "restrict" }),
+    externalPlayerId: text("external_player_id").notNull(),
+    playerId: uuid("player_id").references(() => players.id, { onDelete: "restrict" }),
+    season: integer("season").notNull(),
+    week: integer("week").notNull(),
+    seasonType: text("season_type").$type<"REG" | "POST">().notNull(),
+    gameType: text("game_type").$type<"REG" | "WC" | "DIV" | "CON" | "SB">().notNull(),
+    team: text("team").notNull(),
+    position: text("position").notNull(),
+    reportPrimaryInjury: text("report_primary_injury"),
+    reportSecondaryInjury: text("report_secondary_injury"),
+    reportStatus: text("report_status"),
+    practicePrimaryInjury: text("practice_primary_injury"),
+    practiceSecondaryInjury: text("practice_secondary_injury"),
+    practiceStatus: text("practice_status"),
+    sourceModifiedAt: timestamp("source_modified_at", { withTimezone: true }),
+    stateKey: text("state_key").notNull(),
+    fetchedAt: timestamp("fetched_at", { withTimezone: true }).notNull(),
+    inputChecksum: text("input_checksum").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("player_injury_reports_source_state_unique").on(
+      table.sourceId,
+      table.season,
+      table.week,
+      table.externalPlayerId,
+      table.stateKey,
+      table.inputChecksum,
+    ),
+    index("player_injury_reports_player_week_idx").on(table.playerId, table.season, table.week),
+    index("player_injury_reports_source_week_idx").on(table.sourceId, table.season, table.week),
+    index("player_injury_reports_sync_run_idx").on(table.sourceSyncRunId),
+    index("player_injury_reports_unmatched_idx")
+      .on(table.sourceId, table.season, table.week)
+      .where(sql`${table.playerId} is null`),
+    check(
+      "player_injury_reports_external_id_check",
+      sql`${table.externalPlayerId} ~ '^00-[0-9]{7}$'`,
+    ),
+    check("player_injury_reports_season_check", sql`${table.season} between 2009 and 2200`),
+    check("player_injury_reports_week_check", sql`${table.week} between 1 and 25`),
+    check("player_injury_reports_season_type_check", sql`${table.seasonType} in ('REG', 'POST')`),
+    check(
+      "player_injury_reports_game_type_check",
+      sql`${table.gameType} in ('REG', 'WC', 'DIV', 'CON', 'SB')`,
+    ),
+    check(
+      "player_injury_reports_context_check",
+      sql`${table.team} ~ '^[A-Z]{2,4}$' and char_length(btrim(${table.position})) between 1 and 16`,
+    ),
+    check(
+      "player_injury_reports_report_status_check",
+      sql`${table.reportStatus} is null or ${table.reportStatus} in ('out', 'doubtful', 'questionable', 'probable', 'note')`,
+    ),
+    check(
+      "player_injury_reports_practice_status_check",
+      sql`${table.practiceStatus} is null or ${table.practiceStatus} in ('did-not-participate', 'limited', 'full', 'out', 'note')`,
+    ),
+    check(
+      "player_injury_reports_payload_check",
+      sql`${table.reportPrimaryInjury} is not null or ${table.reportStatus} is not null or ${table.practicePrimaryInjury} is not null or ${table.practiceStatus} is not null`,
+    ),
+    check("player_injury_reports_state_key_check", sql`${table.stateKey} ~ '^[a-f0-9]{64}$'`),
+    check("player_injury_reports_checksum_check", sql`${table.inputChecksum} ~ '^[a-f0-9]{64}$'`),
+  ],
+);
+
+/** Immutable PFR-keyed participation observations distributed by nflverse. */
+export const playerSnapCountObservations = pgTable(
+  "player_snap_count_observations",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    sourceId: uuid("source_id")
+      .notNull()
+      .references(() => dataSources.id, { onDelete: "restrict" }),
+    sourceSyncRunId: uuid("source_sync_run_id")
+      .notNull()
+      .references(() => syncRuns.id, { onDelete: "restrict" }),
+    externalPlayerId: text("external_player_id").notNull(),
+    playerId: uuid("player_id").references(() => players.id, { onDelete: "restrict" }),
+    season: integer("season").notNull(),
+    week: integer("week").notNull(),
+    seasonType: text("season_type").$type<"REG" | "POST">().notNull(),
+    gameType: text("game_type").$type<"REG" | "WC" | "DIV" | "CON" | "SB">().notNull(),
+    gameId: text("game_id").notNull(),
+    pfrGameId: text("pfr_game_id").notNull(),
+    team: text("team").notNull(),
+    opponentTeam: text("opponent_team").notNull(),
+    offenseSnaps: integer("offense_snaps").notNull(),
+    offenseShare: numeric("offense_share", { precision: 6, scale: 5 }).notNull(),
+    defenseSnaps: integer("defense_snaps").notNull(),
+    defenseShare: numeric("defense_share", { precision: 6, scale: 5 }).notNull(),
+    specialTeamsSnaps: integer("special_teams_snaps").notNull(),
+    specialTeamsShare: numeric("special_teams_share", { precision: 6, scale: 5 }).notNull(),
+    fetchedAt: timestamp("fetched_at", { withTimezone: true }).notNull(),
+    inputChecksum: text("input_checksum").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("player_snap_counts_source_game_player_unique").on(
+      table.sourceId,
+      table.gameId,
+      table.externalPlayerId,
+      table.inputChecksum,
+    ),
+    index("player_snap_counts_player_week_idx").on(
+      table.playerId,
+      table.season,
+      table.week,
+      table.seasonType,
+    ),
+    index("player_snap_counts_source_week_idx").on(table.sourceId, table.season, table.week),
+    index("player_snap_counts_sync_run_idx").on(table.sourceSyncRunId),
+    index("player_snap_counts_unmatched_idx")
+      .on(table.sourceId, table.season, table.week)
+      .where(sql`${table.playerId} is null`),
+    check(
+      "player_snap_counts_external_id_check",
+      sql`${table.externalPlayerId} ~ '^[A-Za-z0-9.-]{1,20}$'`,
+    ),
+    check("player_snap_counts_season_check", sql`${table.season} between 2012 and 2200`),
+    check("player_snap_counts_week_check", sql`${table.week} between 1 and 25`),
+    check("player_snap_counts_season_type_check", sql`${table.seasonType} in ('REG', 'POST')`),
+    check(
+      "player_snap_counts_game_type_check",
+      sql`${table.gameType} in ('REG', 'WC', 'DIV', 'CON', 'SB')`,
+    ),
+    check(
+      "player_snap_counts_context_check",
+      sql`char_length(btrim(${table.gameId})) between 1 and 64 and char_length(btrim(${table.pfrGameId})) between 1 and 32 and ${table.team} ~ '^[A-Z]{2,4}$' and ${table.opponentTeam} ~ '^[A-Z]{2,4}$'`,
+    ),
+    check(
+      "player_snap_counts_bounds_check",
+      sql`${table.offenseSnaps} between 0 and 250 and ${table.defenseSnaps} between 0 and 250 and ${table.specialTeamsSnaps} between 0 and 250 and ${table.offenseShare} between 0 and 1 and ${table.defenseShare} between 0 and 1 and ${table.specialTeamsShare} between 0 and 1`,
+    ),
+    check("player_snap_counts_checksum_check", sql`${table.inputChecksum} ~ '^[a-f0-9]{64}$'`),
   ],
 );
 

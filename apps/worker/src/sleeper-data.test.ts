@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { buildUniqueExactPlayerIdentity } from "./sleeper-data.js";
+import { buildUniqueExactPlayerIdentity, sleeperPlayerCrosswalkRows } from "./sleeper-data.js";
 
 describe("buildUniqueExactPlayerIdentity", () => {
   it("normalizes unique exact name-and-position matches", () => {
@@ -20,5 +20,35 @@ describe("buildUniqueExactPlayerIdentity", () => {
     ]);
 
     expect(identity.has("chris smith|DB")).toBe(false);
+  });
+});
+
+describe("sleeperPlayerCrosswalkRows", () => {
+  it("keeps provider aliases in separate crosswalk namespaces", () => {
+    expect(
+      sleeperPlayerCrosswalkRows({
+        playerId: "canonical-player",
+        sleeperId: "1234",
+        espnId: "5678",
+        yahooId: "9012",
+        confidence: "1.0000",
+      }),
+    ).toEqual([
+      expect.objectContaining({ source: "sleeper", externalId: "1234" }),
+      expect.objectContaining({ source: "sleeper-espn", externalId: "5678" }),
+      expect.objectContaining({ source: "sleeper-yahoo", externalId: "9012" }),
+    ]);
+  });
+
+  it("does not manufacture aliases for an unresolved player", () => {
+    expect(
+      sleeperPlayerCrosswalkRows({
+        playerId: null,
+        sleeperId: "1234",
+        espnId: "5678",
+        yahooId: "9012",
+        confidence: "0.0000",
+      }),
+    ).toEqual([]);
   });
 });

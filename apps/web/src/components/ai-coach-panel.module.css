@@ -373,11 +373,6 @@
     color: var(--ink-700);
     font-size: 11px;
     line-height: 1.68;
-    white-space: pre-line;
-  }
-
-  .answerBody p + p {
-    margin-top: 10px;
   }
 
   .answer footer {

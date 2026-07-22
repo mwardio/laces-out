@@ -12,7 +12,7 @@ const checkIntervalMinutes = 24 * 60;
 const claimMinutes = 15;
 const chunkSize = 500;
 // Increment whenever stored player fields require a full source replay rather than a 304 check.
-const catalogSchemaVersion = 2;
+const catalogSchemaVersion = 3;
 
 export interface CatalogRefreshResult {
   readonly state: "changed" | "unchanged" | "not-due";
@@ -165,17 +165,31 @@ export class NflverseCatalogRefresher {
 
         const externalRows = result.players.flatMap((player) => {
           const playerId = playerIds.get(player.gsisId);
-          return player.espnId && playerId
-            ? [
-                {
-                  playerId,
-                  source: "espn",
-                  externalId: player.espnId,
-                  confidence: "1",
-                  verified: true,
-                },
-              ]
-            : [];
+          if (!playerId) return [];
+          return [
+            ...(player.espnId
+              ? [
+                  {
+                    playerId,
+                    source: "espn",
+                    externalId: player.espnId,
+                    confidence: "1",
+                    verified: true,
+                  },
+                ]
+              : []),
+            ...(player.pfrId
+              ? [
+                  {
+                    playerId,
+                    source: "pfr",
+                    externalId: player.pfrId,
+                    confidence: "1",
+                    verified: true,
+                  },
+                ]
+              : []),
+          ];
         });
         for (let index = 0; index < externalRows.length; index += chunkSize) {
           const batch = externalRows.slice(index, index + chunkSize);

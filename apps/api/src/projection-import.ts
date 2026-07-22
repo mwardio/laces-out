@@ -13,6 +13,7 @@ import {
   leagueSeasons,
   playerProjections,
   players,
+  projectionModelRuns,
   projectionSets,
   users,
   type ApplicationRole,
@@ -64,8 +65,8 @@ export interface ProjectionResolverPlayer {
 export interface StoredProjectionSet {
   readonly id: string;
   readonly leagueSeasonId: string;
-  readonly creatorUserId: string;
-  readonly creatorDisplayName: string;
+  readonly creatorUserId: string | null;
+  readonly creatorDisplayName: string | null;
   readonly visibility: Exclude<ProjectionVisibility, "global">;
   readonly source: string;
   readonly season: number;
@@ -101,6 +102,18 @@ export interface ProjectionImportRepository {
     actorUserId: string,
     leagueSeasonId: string,
   ): Promise<readonly StoredProjectionSet[]>;
+  latestManagedRunStatus?(
+    leagueSeasonId: string,
+    season: number,
+    week: number,
+  ): Promise<
+    | {
+        readonly evaluatedAt: Date;
+        readonly qualityState: "publishable" | "degraded" | "rejected";
+        readonly reasons: readonly string[];
+      }
+    | undefined
+  >;
   commitProjectionSet(
     input: CommitProjectionSetInput,
   ): Promise<{ readonly row: StoredProjectionSet; readonly deduplicated: boolean }>;
@@ -124,6 +137,158 @@ function metadataString(metadata: Record<string, unknown>, key: string): string 
 function metadataInteger(metadata: Record<string, unknown>, key: string): number | null {
   const value = metadata[key];
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : null;
+}
+
+function record(value: unknown): Record<string, unknown> | null {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function metadataIsoDate(metadata: Record<string, unknown>, key: string): string | null {
+  const value = metadata[key];
+  if (typeof value !== "string") return null;
+  const parsed = new Date(value);
+  return Number.isFinite(parsed.getTime()) ? parsed.toISOString() : null;
+}
+
+function metadataWeekReference(
+  metadata: Record<string, unknown>,
+  key: string,
+): { readonly season: number; readonly week: number | null } | null {
+  const value = record(metadata[key]);
+  if (!value) return null;
+  const season = value.season;
+  const week = value.week;
+  if (
+    typeof season !== "number" ||
+    !Number.isSafeInteger(season) ||
+    season < 2000 ||
+    season > 2100 ||
+    (week !== null &&
+      (typeof week !== "number" || !Number.isSafeInteger(week) || week < 1 || week > 25))
+  ) {
+    return null;
+  }
+  return { season, week };
+}
+
+function metadataCoverage(metadata: Record<string, unknown>) {
+  const coverage = record(metadata.coverage);
+  if (!coverage) return null;
+  const projected = coverage.projected;
+  const eligible = coverage.eligible;
+  const ratio = coverage.ratio;
+  if (
+    typeof projected !== "number" ||
+    !Number.isSafeInteger(projected) ||
+    projected < 0 ||
+    projected > 5_000 ||
+    typeof eligible !== "number" ||
+    !Number.isSafeInteger(eligible) ||
+    eligible < 0 ||
+    eligible > 5_000 ||
+    typeof ratio !== "number" ||
+    !Number.isFinite(ratio) ||
+    ratio < 0 ||
+    ratio > 1
+  ) {
+    return null;
+  }
+  return { projected, eligible, ratio };
+}
+
+function metadataBacktest(metadata: Record<string, unknown>) {
+  const backtest = record(metadata.backtest);
+  if (!backtest) return null;
+  const samples = backtest.samples;
+  const mae = backtest.mae;
+  const baselineMae = backtest.baselineMae;
+  const intervalCoverage = backtest.intervalCoverage;
+  if (
+    typeof samples !== "number" ||
+    !Number.isSafeInteger(samples) ||
+    samples < 0 ||
+    typeof mae !== "number" ||
+    !Number.isFinite(mae) ||
+    mae < 0 ||
+    (baselineMae !== null &&
+      (typeof baselineMae !== "number" || !Number.isFinite(baselineMae) || baselineMae < 0)) ||
+    (intervalCoverage !== null &&
+      (typeof intervalCoverage !== "number" ||
+        !Number.isFinite(intervalCoverage) ||
+        intervalCoverage < 0 ||
+        intervalCoverage > 1))
+  ) {
+    return null;
+  }
+  return {
+    samples,
+    mae,
+    baselineMae,
+    intervalCoverage,
+  };
+}
+
+function metadataWarnings(metadata: Record<string, unknown>): readonly string[] {
+  const warnings = metadata.warnings;
+  if (!Array.isArray(warnings)) return [];
+  return warnings
+    .filter((warning): warning is string => typeof warning === "string")
+    .map((warning) => warning.trim())
+    .filter((warning) => warning.length > 0)
+    .slice(0, 20)
+    .map((warning) => warning.slice(0, 240));
+}
+
+function metadataChampionByPosition(metadata: Record<string, unknown>) {
+  const policy = record(metadata.championPolicy);
+  const byPosition = record(policy?.byPosition);
+  if (!byPosition) return [];
+  const positions = ["QB", "RB", "WR", "TE", "K"] as const;
+  return positions.flatMap((position) => {
+    const choice = record(byPosition[position]);
+    if (!choice) return [];
+    const strategy = choice.strategy;
+    const reason = choice.reason;
+    const samples = choice.samples;
+    const completedWeekBatches = choice.completedWeekBatches;
+    const modelImprovement = choice.modelImprovement;
+    if (
+      (strategy !== "first-party-model" && strategy !== "recency-only") ||
+      (reason !== "insufficient-samples" &&
+        reason !== "model-cleared-margin" &&
+        reason !== "baseline-defended") ||
+      typeof samples !== "number" ||
+      !Number.isSafeInteger(samples) ||
+      samples < 0 ||
+      typeof completedWeekBatches !== "number" ||
+      !Number.isSafeInteger(completedWeekBatches) ||
+      completedWeekBatches < 0 ||
+      typeof modelImprovement !== "number" ||
+      !Number.isFinite(modelImprovement)
+    ) {
+      return [];
+    }
+    const validatedStrategy: "first-party-model" | "recency-only" =
+      strategy === "first-party-model" ? "first-party-model" : "recency-only";
+    const validatedReason: "insufficient-samples" | "model-cleared-margin" | "baseline-defended" =
+      reason === "insufficient-samples"
+        ? "insufficient-samples"
+        : reason === "model-cleared-margin"
+          ? "model-cleared-margin"
+          : "baseline-defended";
+    return [
+      {
+        position,
+        strategy: validatedStrategy,
+        reason: validatedReason,
+        samples,
+        completedWeekBatches,
+        modelImprovement,
+      },
+    ];
+  });
 }
 
 function isUserVisibility(
@@ -226,7 +391,7 @@ export class DrizzleProjectionImportRepository implements ProjectionImportReposi
           eq(leagueMemberships.userId, actorUserId),
         ),
       )
-      .innerJoin(users, eq(users.id, projectionSets.createdByUserId))
+      .leftJoin(users, eq(users.id, projectionSets.createdByUserId))
       .where(
         and(
           eq(projectionSets.leagueSeasonId, leagueSeasonId),
@@ -243,10 +408,10 @@ export class DrizzleProjectionImportRepository implements ProjectionImportReposi
       .limit(MAX_ACCESSIBLE_SETS);
     return rows.flatMap((row) =>
       row.leagueSeasonId &&
-      row.creatorUserId &&
       row.week !== null &&
       (row.horizon === "week" || row.horizon === "rest-of-season") &&
-      isUserVisibility(row.visibility)
+      isUserVisibility(row.visibility) &&
+      (row.creatorUserId !== null || row.visibility === "league")
         ? [
             {
               ...row,
@@ -259,6 +424,45 @@ export class DrizzleProjectionImportRepository implements ProjectionImportReposi
           ]
         : [],
     );
+  }
+
+  async latestManagedRunStatus(leagueSeasonId: string, season: number, week: number) {
+    const [run] = await this.#database
+      .select({
+        createdAt: projectionModelRuns.createdAt,
+        qualityState: projectionModelRuns.qualityState,
+        metrics: projectionModelRuns.metrics,
+      })
+      .from(projectionModelRuns)
+      .where(and(eq(projectionModelRuns.season, season), eq(projectionModelRuns.targetWeek, week)))
+      .orderBy(desc(projectionModelRuns.createdAt))
+      .limit(1);
+    if (!run) return undefined;
+    const leagues = record(record(run.metrics)?.leagues);
+    const withheld = Array.isArray(leagues?.withheld) ? leagues.withheld : [];
+    const leagueEntry = withheld
+      .map(record)
+      .find((entry) => entry?.leagueSeasonId === leagueSeasonId);
+    const reasons = Array.isArray(leagueEntry?.reasons)
+      ? leagueEntry.reasons
+          .filter((reason): reason is string => typeof reason === "string")
+          .map((reason) => reason.trim())
+          .filter(Boolean)
+          .slice(0, 10)
+      : [];
+    const qualityState = run.qualityState;
+    if (
+      qualityState !== "publishable" &&
+      qualityState !== "degraded" &&
+      qualityState !== "rejected"
+    ) {
+      return undefined;
+    }
+    return {
+      evaluatedAt: run.createdAt,
+      qualityState,
+      reasons,
+    };
   }
 
   async commitProjectionSet(
@@ -524,15 +728,42 @@ function canShareLeague(scope: ProjectionLeagueScope): boolean {
 }
 
 function summary(row: StoredProjectionSet, actorUserId: string): ProjectionSetSummary {
-  const sourceLabel = metadataString(row.metadata, "sourceLabel") ?? "Imported projections";
+  const isManaged = row.source !== "user-csv";
+  const sourceLabel =
+    metadataString(row.metadata, "sourceLabel") ??
+    (isManaged ? "Laces Out weekly forecast" : "Imported projections");
   const sourceChecksum = metadataString(row.metadata, "sourceChecksum") ?? row.inputChecksum;
   const sourceFileName = metadataString(row.metadata, "sourceFileName");
   const timestamps = projectionTimestampProvenance(row);
+  const modelVersion = metadataString(row.metadata, "modelVersion");
+  const qualityState = row.metadata.qualityState;
   return {
     id: row.id,
     leagueSeasonId: row.leagueSeasonId,
     creatorUserId: row.creatorUserId,
     creatorDisplayName: row.creatorDisplayName,
+    origin: isManaged ? "laces-out" : "custom",
+    managed: isManaged
+      ? {
+          modelVersion: modelVersion && modelVersion.length <= 120 ? modelVersion : null,
+          computedAt: metadataIsoDate(row.metadata, "computedAt") ?? row.createdAt.toISOString(),
+          // For managed sets fetchedAt is the persisted critical-input check time. It deliberately
+          // does not inherit computedAt, so a recompute cannot make old inputs look fresh.
+          inputCheckedAt: row.fetchedAt.toISOString(),
+          trainingCutoff: metadataWeekReference(row.metadata, "trainingCutoff"),
+          statsThrough: metadataWeekReference(row.metadata, "statsThrough"),
+          qualityState:
+            qualityState === "publishable" ||
+            qualityState === "degraded" ||
+            qualityState === "rejected"
+              ? qualityState
+              : null,
+          championByPosition: metadataChampionByPosition(row.metadata),
+          coverage: metadataCoverage(row.metadata),
+          warnings: [...metadataWarnings(row.metadata)],
+          backtest: metadataBacktest(row.metadata),
+        }
+      : null,
     visibility: row.visibility,
     sourceLabel,
     sourceFileName,
@@ -545,7 +776,7 @@ function summary(row: StoredProjectionSet, actorUserId: string): ProjectionSetSu
     sourceObservedAt: timestamps.sourceObservedAt?.toISOString() ?? null,
     sourceObservedAtStatus: timestamps.sourceObservedAtStatus,
     importedAt: timestamps.importedAt.toISOString(),
-    isOwnedByCurrentUser: row.creatorUserId === actorUserId,
+    isOwnedByCurrentUser: row.creatorUserId !== null && row.creatorUserId === actorUserId,
   };
 }
 
@@ -560,7 +791,30 @@ export class ProjectionImportService {
 
   async list(actorUserId: string, leagueSeasonId: string): Promise<ProjectionSetListResponse> {
     const scope = await this.#requireScope(actorUserId, leagueSeasonId);
-    const sets = await this.#repository.listAccessibleSets(actorUserId, leagueSeasonId);
+    const [sets, managedRun] = await Promise.all([
+      this.#repository.listAccessibleSets(actorUserId, leagueSeasonId),
+      scope.currentWeek && this.#repository.latestManagedRunStatus
+        ? this.#repository.latestManagedRunStatus(leagueSeasonId, scope.season, scope.currentWeek)
+        : Promise.resolve(undefined),
+    ]);
+    const summaries = sets
+      .filter(
+        (row) =>
+          row.leagueSeasonId === leagueSeasonId &&
+          (row.visibility === "league" ||
+            (row.creatorUserId !== null && row.creatorUserId === actorUserId)),
+      )
+      .map((row) => summary(row, actorUserId));
+    const currentManaged = summaries.find(
+      (projection) => projection.origin === "laces-out" && projection.week === scope.currentWeek,
+    );
+    const currentManagedAt = currentManaged?.managed?.computedAt ?? currentManaged?.importedAt;
+    const newerWithheldRun =
+      managedRun &&
+      managedRun.reasons.length > 0 &&
+      (!currentManagedAt || managedRun.evaluatedAt.getTime() > new Date(currentManagedAt).getTime())
+        ? managedRun
+        : undefined;
     return {
       league: {
         id: scope.leagueId,
@@ -572,13 +826,37 @@ export class ProjectionImportService {
         membershipRole: scope.membershipRole,
         canShareLeague: canShareLeague(scope),
       },
-      projectionSets: sets
-        .filter(
-          (row) =>
-            row.leagueSeasonId === leagueSeasonId &&
-            (row.visibility === "league" || row.creatorUserId === actorUserId),
-        )
-        .map((row) => summary(row, actorUserId)),
+      managedForecastStatus: newerWithheldRun
+        ? {
+            state: "withheld",
+            evaluatedAt: newerWithheldRun.evaluatedAt.toISOString(),
+            qualityState: newerWithheldRun.qualityState,
+            reasons: [...newerWithheldRun.reasons],
+          }
+        : currentManaged
+          ? {
+              state: "published",
+              evaluatedAt: currentManaged.managed?.computedAt ?? currentManaged.importedAt,
+              qualityState: currentManaged.managed?.qualityState ?? null,
+              reasons: [],
+            }
+          : managedRun
+            ? {
+                state: "withheld",
+                evaluatedAt: managedRun.evaluatedAt.toISOString(),
+                qualityState: managedRun.qualityState,
+                reasons:
+                  managedRun.reasons.length > 0
+                    ? [...managedRun.reasons]
+                    : ["The latest managed forecast did not produce a league-safe publication."],
+              }
+            : {
+                state: "pending",
+                evaluatedAt: null,
+                qualityState: null,
+                reasons: [],
+              },
+      projectionSets: summaries,
     };
   }
 

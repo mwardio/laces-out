@@ -17,6 +17,8 @@ export type RankingPort = Pick<
   | "getList"
   | "getVersion"
   | "getPlayerIdentities"
+  | "cloneList"
+  | "compareLists"
   | "replaceWithManualDraft"
   | "applyUserOverlay"
   | "publish"
@@ -66,6 +68,19 @@ const editListSchema = z
     description: z.string().max(4_000).nullable().optional(),
     visibility: rankingVisibilitySchema.optional(),
     archived: z.boolean().optional(),
+  })
+  .strict();
+const cloneListSchema = z
+  .object({
+    name: z.string().trim().min(1).max(160),
+    sourceVersionId: uuidSchema.optional(),
+    changeNote: z.string().max(2_000).nullable().optional(),
+  })
+  .strict();
+const compareListsSchema = z
+  .object({
+    left: z.object({ listId: uuidSchema, versionId: uuidSchema.optional() }).strict(),
+    right: z.object({ listId: uuidSchema, versionId: uuidSchema.optional() }).strict(),
   })
   .strict();
 
@@ -196,16 +211,29 @@ function sendExport(reply: FastifyReply, format: "json" | "csv", content: string
     .send(content);
 }
 
+function rankingCapabilities(userId: string, list: Awaited<ReturnType<RankingPort["getList"]>>) {
+  const owner = list.ownerUserId === userId;
+  return {
+    canEdit: owner,
+    canClone: owner || (list.visibility.scope === "league" && list.visibility.allowClone === true),
+    canCompare: true,
+  } as const;
+}
+
 export function registerRankingRoutes(app: FastifyInstance, options: RankingRouteOptions): void {
   app.get("/v1/rankings", async (request, reply) => {
     const user = authenticatedUser(request, reply);
     if (!user) return reply;
     if (!options.rankings) return reply.code(503).send(unavailable(request.id));
     const query = listQuerySchema.parse(request.query);
+    const lists = await options.rankings.listLists(user.id, {
+      includeArchived: query.includeArchived === "true",
+    });
     return {
-      lists: await options.rankings.listLists(user.id, {
-        includeArchived: query.includeArchived === "true",
-      }),
+      lists: lists.map((list) => ({
+        ...list,
+        capabilities: rankingCapabilities(user.id, list),
+      })),
     };
   });
 
@@ -214,7 +242,40 @@ export function registerRankingRoutes(app: FastifyInstance, options: RankingRout
     if (!user) return reply;
     if (!options.rankings) return reply.code(503).send(unavailable(request.id));
     const list = await options.rankings.createList(user.id, createListSchema.parse(request.body));
-    return reply.code(201).send({ list });
+    return reply
+      .code(201)
+      .send({ list: { ...list, capabilities: rankingCapabilities(user.id, list) } });
+  });
+
+  app.post("/v1/rankings/compare", async (request, reply) => {
+    const user = authenticatedUser(request, reply);
+    if (!user) return reply;
+    if (!options.rankings) return reply.code(503).send(unavailable(request.id));
+    const input = compareListsSchema.parse(request.body);
+    const comparison = await options.rankings.compareLists({
+      actorUserId: user.id,
+      leftListId: input.left.listId,
+      ...(input.left.versionId === undefined ? {} : { leftVersionId: input.left.versionId }),
+      rightListId: input.right.listId,
+      ...(input.right.versionId === undefined ? {} : { rightVersionId: input.right.versionId }),
+    });
+    return {
+      ...comparison,
+      left: {
+        ...comparison.left,
+        list: {
+          ...comparison.left.list,
+          capabilities: rankingCapabilities(user.id, comparison.left.list),
+        },
+      },
+      right: {
+        ...comparison.right,
+        list: {
+          ...comparison.right.list,
+          capabilities: rankingCapabilities(user.id, comparison.right.list),
+        },
+      },
+    };
   });
 
   app.get("/v1/rankings/:listId", async (request, reply) => {
@@ -222,7 +283,8 @@ export function registerRankingRoutes(app: FastifyInstance, options: RankingRout
     if (!user) return reply;
     if (!options.rankings) return reply.code(503).send(unavailable(request.id));
     const { listId } = listParamsSchema.parse(request.params);
-    return { list: await options.rankings.getList(user.id, listId) };
+    const list = await options.rankings.getList(user.id, listId);
+    return { list: { ...list, capabilities: rankingCapabilities(user.id, list) } };
   });
 
   app.patch("/v1/rankings/:listId", async (request, reply) => {
@@ -230,9 +292,34 @@ export function registerRankingRoutes(app: FastifyInstance, options: RankingRout
     if (!user) return reply;
     if (!options.rankings) return reply.code(503).send(unavailable(request.id));
     const { listId } = listParamsSchema.parse(request.params);
-    return {
-      list: await options.rankings.editList(user.id, listId, editListSchema.parse(request.body)),
-    };
+    const list = await options.rankings.editList(
+      user.id,
+      listId,
+      editListSchema.parse(request.body),
+    );
+    return { list: { ...list, capabilities: rankingCapabilities(user.id, list) } };
+  });
+
+  app.post("/v1/rankings/:listId/clone", async (request, reply) => {
+    const user = authenticatedUser(request, reply);
+    if (!user) return reply;
+    if (!options.rankings) return reply.code(503).send(unavailable(request.id));
+    const { listId } = listParamsSchema.parse(request.params);
+    const input = cloneListSchema.parse(request.body);
+    const cloned = await options.rankings.cloneList({
+      actorUserId: user.id,
+      sourceListId: listId,
+      name: input.name,
+      ...(input.sourceVersionId === undefined ? {} : { sourceVersionId: input.sourceVersionId }),
+      ...(input.changeNote === undefined ? {} : { changeNote: input.changeNote }),
+    });
+    return reply.code(201).send({
+      ...cloned,
+      list: {
+        ...cloned.list,
+        capabilities: rankingCapabilities(user.id, cloned.list),
+      },
+    });
   });
 
   app.get("/v1/rankings/:listId/version", async (request, reply) => {

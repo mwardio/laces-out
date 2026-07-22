@@ -1,5 +1,5 @@
 import type { Metadata, Viewport } from "next";
-import { Changa_One } from "next/font/google";
+import { Fugaz_One } from "next/font/google";
 import type { ReactNode } from "react";
 
 import { publicSiteUrl } from "../lib/public-site";
@@ -7,7 +7,7 @@ import { publicSiteUrl } from "../lib/public-site";
 import "./globals.css";
 import "./polish.css";
 
-const brandFont = Changa_One({
+const brandFont = Fugaz_One({
   weight: "400",
   subsets: ["latin"],
   display: "swap",

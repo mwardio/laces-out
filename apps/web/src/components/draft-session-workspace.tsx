@@ -11,6 +11,8 @@ import {
   CircleAlert,
   Clipboard,
   Database,
+  Dices,
+  FastForward,
   Gavel,
   Keyboard,
   Link2,
@@ -21,7 +23,9 @@ import {
   RotateCcw,
   Search,
   ShieldCheck,
+  StepForward,
   Users,
+  X,
 } from "lucide-react";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -29,12 +33,14 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   apiBaseUrl,
   parseAuthenticatedSession,
+  parseDraftMarketBaseline,
   parseDraftMutation,
   parseDraftSession,
   parseLeagueDashboard,
   parseLeagueListResponse,
   parseRankingListResponse,
   parseRankingVersionResponse,
+  type DraftMarketBaseline,
   type DraftSessionSnapshot,
   type LeagueDashboard,
   type LeagueListResponse,
@@ -43,12 +49,24 @@ import {
 } from "../lib/api-client";
 import {
   analyzeAuctionBoard,
+  buildAuctionNominationQueue,
   buildDraftBoardRows,
   buildSnakeBestNowQueue,
+  nextPickForTeam,
   type DraftBoardSort,
   type DraftBoardValue,
 } from "../lib/draft-board";
 import { preferNewerDraftSnapshot } from "../lib/draft-session-refresh";
+import {
+  advanceLocalDraftMock,
+  createLocalDraftMock,
+  draftMockAvailability,
+  localMockEvents,
+  recordLocalControlledSelection,
+  replayLocalDraftFromEvent,
+  undoLatestLocalDraftEvent,
+  type LocalDraftMock,
+} from "../lib/draft-mock";
 import { LatestRequest } from "../lib/latest-request";
 import { DraftWorkspace as DemoDraftWorkspace } from "./draft-workspace";
 
@@ -112,6 +130,7 @@ export function DraftSessionWorkspace() {
   const mutationInFlight = useRef(false);
   const backgroundRefreshInFlight = useRef(false);
   const selectedRankingVersionRef = useRef("");
+  const claimedDraftTeamAppliedRef = useRef("");
   const dashboardRequestRef = useRef<AbortController | null>(null);
   const dashboardRequestGate = useRef(new LatestRequest());
   const [bootState, setBootState] = useState<BootState>("loading");
@@ -140,8 +159,15 @@ export function DraftSessionWorkspace() {
   const [rankingVersion, setRankingVersion] = useState<RankingVersion | null>(null);
   const [rankingState, setRankingState] = useState<RankingLoadState>("idle");
   const [rankingError, setRankingError] = useState("");
+  const [draftMarket, setDraftMarket] = useState<DraftMarketBaseline | null>(null);
+  const [draftMarketState, setDraftMarketState] = useState<RankingLoadState>("idle");
   const [boardSort, setBoardSort] = useState<DraftBoardSort>("rank");
   const [coverageFilter, setCoverageFilter] = useState<CoverageFilter>("covered");
+  const [showMockSetup, setShowMockSetup] = useState(false);
+  const [mockSeed, setMockSeed] = useState("");
+  const [mockTeamId, setMockTeamId] = useState("");
+  const [localMock, setLocalMock] = useState<LocalDraftMock | null>(null);
+  const [mockReplayEventId, setMockReplayEventId] = useState("");
 
   const rememberSession = useCallback((next: DraftSessionSnapshot) => {
     localStorage.setItem(`laces-out:last-draft-session:${accountId.current}`, next.id);
@@ -344,6 +370,38 @@ export function DraftSessionWorkspace() {
   const draftSeason = selectedLeague?.season?.season;
 
   useEffect(() => {
+    if (!session) {
+      setDraftMarket(null);
+      setDraftMarketState("idle");
+      return;
+    }
+    let cancelled = false;
+    setDraftMarket(null);
+    setDraftMarketState("loading");
+    void fetch(`${apiBaseUrl}/v1/drafts/${encodeURIComponent(session.id)}/market`, {
+      credentials: "include",
+      headers: { Accept: "application/json" },
+      cache: "no-store",
+    })
+      .then(async (response) => {
+        if (!response.ok) throw new Error("Draft-market context could not be loaded.");
+        const parsed = parseDraftMarketBaseline(await response.json());
+        if (!parsed) throw new Error("Draft-market context response was invalid.");
+        if (cancelled) return;
+        setDraftMarket(parsed);
+        setDraftMarketState("ready");
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setDraftMarket(null);
+        setDraftMarketState("error");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [session?.id]);
+
+  useEffect(() => {
     if (!session || !draftLeagueId || draftSeason === undefined) {
       setRankingLists([]);
       setSelectedRankingListId("");
@@ -463,28 +521,53 @@ export function DraftSessionWorkspace() {
     };
   }, [selectedRankingListId, selectedRankingVersionId, session?.id]);
 
+  const activeDraftState = localMock?.state ?? session?.state;
   const availablePlayers = useMemo(() => {
-    if (!session) return [];
-    const drafted = new Set(session.state.draftedPlayerIds);
+    if (!session || !activeDraftState) return [];
+    const drafted = new Set(activeDraftState.draftedPlayerIds);
     return session.config.players.filter((player) => !drafted.has(player.id));
-  }, [session]);
+  }, [activeDraftState, session]);
 
-  const boardValues = useMemo<readonly DraftBoardValue[]>(
-    () =>
-      rankingVersion?.entries.map((entry) => ({
+  const boardValues = useMemo<readonly DraftBoardValue[]>(() => {
+    const values = new Map<string, DraftBoardValue>();
+    if (draftMarket?.state === "available") {
+      for (const row of draftMarket.players) {
+        values.set(row.playerId, {
+          playerId: row.playerId,
+          overallRank: null,
+          positionRank: row.positionRank,
+          tier: null,
+          adp: row.overallAdp,
+          adpStandardDeviation: row.standardDeviation,
+          adpSampleSize: row.sampleSize,
+          aav: null,
+          targetPrice: null,
+          ceilingPrice: null,
+          target: false,
+          avoid: false,
+        });
+      }
+    }
+    for (const entry of rankingVersion?.entries ?? []) {
+      const market = values.get(entry.playerId);
+      const authoredAdp = entry.adp?.value ?? null;
+      values.set(entry.playerId, {
         playerId: entry.playerId,
         overallRank: entry.overallRank?.value ?? null,
-        positionRank: entry.positionRank?.value ?? null,
+        positionRank: entry.positionRank?.value ?? market?.positionRank ?? null,
         tier: entry.tier?.value ?? null,
-        adp: entry.adp?.value ?? null,
+        adp: authoredAdp ?? market?.adp ?? null,
+        adpStandardDeviation: authoredAdp === null ? (market?.adpStandardDeviation ?? null) : null,
+        adpSampleSize: authoredAdp === null ? (market?.adpSampleSize ?? null) : null,
         aav: entry.aav?.value ?? null,
         targetPrice: entry.targetPrice?.value ?? null,
         ceilingPrice: entry.ceilingPrice?.value ?? null,
         target: entry.target?.value === true,
         avoid: entry.avoid?.value === true,
-      })) ?? [],
-    [rankingVersion],
-  );
+      });
+    }
+    return [...values.values()];
+  }, [draftMarket, rankingVersion]);
 
   const boardRows = useMemo(
     () => buildDraftBoardRows(availablePlayers, boardValues, boardSort),
@@ -493,6 +576,10 @@ export function DraftSessionWorkspace() {
   const coveredPlayerCount = useMemo(
     () => boardRows.reduce((count, row) => count + Number(row.covered), 0),
     [boardRows],
+  );
+  const mockAvailability = useMemo(
+    () => (session ? draftMockAvailability(session, boardValues) : null),
+    [boardValues, session],
   );
 
   const positions = useMemo(
@@ -529,6 +616,38 @@ export function DraftSessionWorkspace() {
   }, [availablePlayers, boardRows, selectedPlayerId, selectedTeamId, session]);
 
   useEffect(() => {
+    const claimedTeamId =
+      dashboardLeagueId === draftLeagueId ? dashboard?.membership.claimedFantasyTeamId : null;
+    if (
+      session &&
+      claimedTeamId &&
+      claimedDraftTeamAppliedRef.current !== session.id &&
+      session.config.teams.some((team) => team.id === claimedTeamId)
+    ) {
+      claimedDraftTeamAppliedRef.current = session.id;
+      setSelectedTeamId(claimedTeamId);
+    }
+  }, [dashboard?.membership.claimedFantasyTeamId, dashboardLeagueId, draftLeagueId, session]);
+
+  useEffect(() => {
+    if (!session) {
+      setLocalMock(null);
+      setShowMockSetup(false);
+      setMockReplayEventId("");
+      return;
+    }
+    setLocalMock((current) => (current?.sourceSessionId === session.id ? current : null));
+    setMockSeed((current) => current || `laces-${session.id.slice(0, 8)}`);
+    setMockTeamId((current) =>
+      session.config.teams.some((team) => team.id === current)
+        ? current
+        : session.config.teams.some((team) => team.id === selectedTeamId)
+          ? selectedTeamId
+          : (session.config.teams[0]?.id ?? ""),
+    );
+  }, [selectedTeamId, session]);
+
+  useEffect(() => {
     if (!rankingVersion) return;
     if (selectedRankingVersionRef.current === rankingVersion.id) return;
     selectedRankingVersionRef.current = rankingVersion.id;
@@ -543,11 +662,30 @@ export function DraftSessionWorkspace() {
   const selectedPlayer = session?.config.players.find((player) => player.id === selectedPlayerId);
   const selectedBoardRow = boardRows.find((row) => row.player.id === selectedPlayerId);
   const canMutate = session?.accessRole === "owner" || session?.accessRole === "commissioner";
-  const teamStates = session?.state.teams ?? [];
+  const canRecord = localMock !== null || canMutate;
+  const teamStates = activeDraftState?.teams ?? [];
   const selectedTeam = teamStates.find((team) => team.teamId === selectedTeamId);
+  const onClockTeamId =
+    session?.config.mode === "SNAKE" ? activeDraftState?.nextPick?.teamId : undefined;
+  const onClockTeam = teamStates.find((team) => team.teamId === onClockTeamId);
   const activeTeamId =
-    session?.config.mode === "SNAKE" ? session.state.nextPick?.teamId : selectedTeamId;
+    localMock?.controlledTeamId ??
+    (session?.config.teams.some((team) => team.id === selectedTeamId) === true
+      ? selectedTeamId
+      : onClockTeamId);
   const activeTeam = teamStates.find((team) => team.teamId === activeTeamId);
+  const localAwaitingSelection =
+    localMock !== null &&
+    (localMock.stopReason === "CONTROLLED_PICK" ||
+      localMock.stopReason === "CONTROLLED_NOMINATION");
+  const activeTeamNextPick =
+    session?.config.mode === "SNAKE" && activeDraftState?.nextPick && activeTeamId
+      ? nextPickForTeam(
+          session.config.pickOrder,
+          activeDraftState.nextPick.overallPick,
+          activeTeamId,
+        )
+      : null;
   const snakeQueue = useMemo(() => {
     if (!session || session.config.mode !== "SNAKE" || !activeTeamId || !activeTeam) return [];
     const team = session.config.teams.find((candidate) => candidate.id === activeTeamId);
@@ -558,9 +696,19 @@ export function DraftSessionWorkspace() {
       allPlayers: session.config.players,
       rosteredPlayerIds: activeTeam.roster.map((item) => item.playerId),
       rosterSlots: team.rosterSlots,
+      ...(activeDraftState?.nextPick ? { currentPick: activeDraftState.nextPick.overallPick } : {}),
+      nextPick: activeTeamNextPick,
       limit: 5,
     });
-  }, [activeTeam, activeTeamId, availablePlayers, boardValues, session]);
+  }, [
+    activeDraftState?.nextPick,
+    activeTeam,
+    activeTeamId,
+    activeTeamNextPick,
+    availablePlayers,
+    boardValues,
+    session,
+  ]);
   const auctionAnalysis = useMemo(() => {
     if (!session || session.config.mode !== "AUCTION") return null;
     return analyzeAuctionBoard({
@@ -576,6 +724,17 @@ export function DraftSessionWorkspace() {
       minimumBid: session.config.minimumBid,
     });
   }, [availablePlayers, boardValues, selectedPlayerId, selectedTeamId, session, teamStates]);
+  const auctionNominations = useMemo(
+    () =>
+      session?.config.mode === "AUCTION"
+        ? buildAuctionNominationQueue({
+            availablePlayers,
+            values: boardValues,
+            limit: 5,
+          })
+        : [],
+    [availablePlayers, boardValues, session?.config.mode],
+  );
 
   function moveTeam(index: number, direction: -1 | 1) {
     const destination = index + direction;
@@ -658,8 +817,94 @@ export function DraftSessionWorkspace() {
     }
   }
 
+  function startLocalMock() {
+    if (!session) return;
+    try {
+      const created = createLocalDraftMock(session, boardValues, mockSeed, mockTeamId);
+      setLocalMock(created);
+      setSelectedTeamId(mockTeamId);
+      setMockReplayEventId("");
+      setShowMockSetup(false);
+      setNotice(
+        `Local mock started from room event ${session.sequence}. Nothing in this simulation is saved or sent to a fantasy provider.`,
+      );
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "The local mock could not start.");
+    }
+  }
+
+  function advanceMock(target: "event" | "controlled-turn") {
+    if (!localMock) return;
+    try {
+      const previousCount = localMock.events.length;
+      const next = advanceLocalDraftMock(localMock, target);
+      setLocalMock(next);
+      const added = next.events.length - previousCount;
+      if (next.stopReason === "CONTROLLED_PICK") {
+        setNotice(
+          added > 0
+            ? `Simulated ${added} local event${added === 1 ? "" : "s"}. Your team is on the clock.`
+            : "Your team is on the clock. Select a player from the board to make the local pick.",
+        );
+      } else if (next.stopReason === "CONTROLLED_NOMINATION") {
+        setNotice(
+          added > 0
+            ? `Simulated ${added} local event${added === 1 ? "" : "s"}. Choose your nomination.`
+            : "Choose a player from the board to make your local nomination.",
+        );
+      } else if (next.stopReason === "COMPLETE") {
+        setNotice("Local mock complete. The shared room remains unchanged.");
+      } else if (next.stopReason === "PLAYER_POOL_EXHAUSTED") {
+        setNotice(
+          "The local model ran out of legally rosterable players with the required board data.",
+        );
+      } else {
+        setNotice(`Advanced ${added || 0} local event${added === 1 ? "" : "s"}.`);
+      }
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "The local mock could not advance.");
+    }
+  }
+
+  function stopLocalMock() {
+    setLocalMock(null);
+    setMockReplayEventId("");
+    setNotice("Local mock closed. The shared manual room was never changed.");
+  }
+
+  function replayMockFromEvent(eventId = mockReplayEventId) {
+    if (!localMock || !eventId) return;
+    try {
+      const replayed = replayLocalDraftFromEvent(localMock, eventId);
+      setLocalMock(replayed);
+      setMockReplayEventId(eventId);
+      setNotice("Replayed locally from that event using the same seed.");
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "That local replay could not run.");
+    }
+  }
+
   async function recordSelection() {
-    if (!session || !selectedPlayer || !canMutate) return;
+    if (!session || !selectedPlayer) return;
+    if (localMock) {
+      try {
+        const next = recordLocalControlledSelection(
+          localMock,
+          selectedPlayer.id,
+          `local-${crypto.randomUUID()}`,
+        );
+        setLocalMock(next);
+        setNotice(
+          session.config.mode === "SNAKE"
+            ? `${selectedPlayer.name} added to your local mock roster. Advance when ready.`
+            : `${selectedPlayer.name} nominated locally. The model will resolve bidding when you advance.`,
+        );
+      } catch (error) {
+        setNotice(error instanceof Error ? error.message : "That local action was rejected.");
+      }
+      return;
+    }
+    if (!canMutate) return;
     if (session.config.mode === "SNAKE") {
       const nextPick = session.state.nextPick;
       if (!nextPick) return;
@@ -698,6 +943,17 @@ export function DraftSessionWorkspace() {
   }
 
   async function undoLast() {
+    if (localMock) {
+      const before = localMock.events.length;
+      const next = undoLatestLocalDraftEvent(localMock, `local-undo-${crypto.randomUUID()}`);
+      setLocalMock(next);
+      setNotice(
+        next.events.length === before
+          ? "There is no active local mock event to undo."
+          : "Latest local mock event undone. The shared room remains unchanged.",
+      );
+      return;
+    }
     if (!session || !canMutate || session.sequence === 0) return;
     await mutate("undo", {
       expectedSequence: session.sequence,
@@ -756,9 +1012,9 @@ export function DraftSessionWorkspace() {
         event.key === "Enter" &&
         event.shiftKey &&
         !event.repeat &&
-        canMutate &&
+        canRecord &&
         requestState !== "loading" &&
-        !session?.state.complete
+        !activeDraftState?.complete
       ) {
         event.preventDefault();
         void recordSelection();
@@ -766,7 +1022,7 @@ export function DraftSessionWorkspace() {
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [canMutate, filteredRows, requestState, selectedPlayerId, session]);
+  }, [activeDraftState?.complete, canRecord, filteredRows, requestState, selectedPlayerId]);
 
   if (showDemo || bootState === "signed-out") return <DemoDraftWorkspace />;
 
@@ -1024,6 +1280,7 @@ export function DraftSessionWorkspace() {
   }
 
   const recentEvents = [...session.events].reverse().slice(0, 12);
+  const generatedMockEvents = localMock ? [...localMockEvents(localMock)] : [];
 
   return (
     <div className="draft-page draft-session-live">
@@ -1043,12 +1300,27 @@ export function DraftSessionWorkspace() {
         </div>
         <div className="draft-header-actions">
           <div className="connection-indicator">
-            <span className="connection-indicator__dot" />
+            <span
+              className={`connection-indicator__dot${localMock ? " connection-indicator__dot--mock" : ""}`}
+            />
             <span>
-              <strong>Laces Out ledger</strong>
-              <small>Event {session.sequence} · auto-refresh on</small>
+              <strong>{localMock ? "Local mock" : "Laces Out ledger"}</strong>
+              <small>
+                {localMock
+                  ? `${generatedMockEvents.length} practice events · not saved`
+                  : `Event ${session.sequence} · auto-refresh on`}
+              </small>
             </span>
           </div>
+          <button
+            className="button button--soft button--small"
+            type="button"
+            onClick={() => setShowMockSetup((current) => !current)}
+            aria-expanded={showMockSetup}
+            aria-controls="draft-mock-panel"
+          >
+            <Dices size={14} /> {localMock ? "Mock settings" : "Start mock"}
+          </button>
           <button
             className="icon-button"
             type="button"
@@ -1071,9 +1343,13 @@ export function DraftSessionWorkspace() {
             className="button button--soft button--small"
             type="button"
             onClick={() => void undoLast()}
-            disabled={!canMutate || session.sequence === 0 || requestState === "loading"}
+            disabled={
+              localMock
+                ? generatedMockEvents.length === 0
+                : !canMutate || session.sequence === 0 || requestState === "loading"
+            }
           >
-            <RotateCcw size={14} /> Undo
+            <RotateCcw size={14} /> {localMock ? "Undo local" : "Undo"}
           </button>
         </div>
       </header>
@@ -1083,12 +1359,170 @@ export function DraftSessionWorkspace() {
         aria-live="polite"
       >
         <span>
-          <Database size={14} /> {notice || "Persistent event ledger connected."}
+          {localMock ? <Dices size={14} /> : <Database size={14} />}{" "}
+          {notice || "Persistent event ledger connected."}
         </span>
         <span className="draft-notice__meta">
-          <ShieldCheck size={14} /> App ledger refresh · provider polling off
+          <ShieldCheck size={14} />{" "}
+          {localMock
+            ? "Local memory only · provider polling off"
+            : "App ledger refresh · provider polling off"}
         </span>
       </section>
+
+      {showMockSetup || localMock ? (
+        <section
+          className={`draft-mock-panel${localMock ? " is-running" : ""}`}
+          id="draft-mock-panel"
+          aria-labelledby="draft-mock-title"
+        >
+          <div className="draft-mock-panel__intro">
+            <span className="draft-mock-panel__icon">
+              <Dices size={18} />
+            </span>
+            <div>
+              <p className="eyebrow">Practice room</p>
+              <h2 id="draft-mock-title">
+                {localMock ? "Local mock in progress" : "Fork this room locally"}
+              </h2>
+              <p>
+                Uses this room’s teams, roster rules, players, and current board. Synthetic events
+                stay in this browser memory and never enter the shared ledger or poll ESPN or Yahoo.
+              </p>
+            </div>
+          </div>
+          {!localMock ? (
+            <div className="draft-mock-panel__setup">
+              <label>
+                <span>Repeatable seed</span>
+                <input
+                  value={mockSeed}
+                  onChange={(event) => setMockSeed(event.target.value)}
+                  autoComplete="off"
+                  spellCheck={false}
+                />
+              </label>
+              <label>
+                <span>Your team</span>
+                <select value={mockTeamId} onChange={(event) => setMockTeamId(event.target.value)}>
+                  {session.config.teams.map((team) => (
+                    <option value={team.id} key={team.id}>
+                      {team.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <button
+                className="button button--dark"
+                type="button"
+                onClick={startLocalMock}
+                disabled={!mockAvailability?.available || !mockSeed.trim() || !mockTeamId}
+              >
+                <Play size={14} /> Confirm and start
+              </button>
+              <div
+                className={`draft-mock-panel__coverage${mockAvailability?.available ? " is-ready" : ""}`}
+                role="status"
+              >
+                {mockAvailability?.available ? <Check size={14} /> : <CircleAlert size={14} />}
+                <span>{mockAvailability?.message ?? "Checking board coverage."}</span>
+              </div>
+            </div>
+          ) : (
+            <div className="draft-mock-panel__running">
+              <dl>
+                <div>
+                  <dt>Seed</dt>
+                  <dd>{localMock.seed}</dd>
+                </div>
+                <div>
+                  <dt>Your team</dt>
+                  <dd>
+                    {session.config.teams.find((team) => team.id === localMock.controlledTeamId)
+                      ?.name ?? localMock.controlledTeamId}
+                  </dd>
+                </div>
+                <div>
+                  <dt>Forked at</dt>
+                  <dd>Room event {localMock.baseSequence}</dd>
+                </div>
+                <div>
+                  <dt>Model state</dt>
+                  <dd>{localMock.stopReason.replaceAll("_", " ").toLowerCase()}</dd>
+                </div>
+              </dl>
+              <div className="draft-mock-panel__actions">
+                <button
+                  className="button button--soft"
+                  type="button"
+                  onClick={() => advanceMock("event")}
+                  disabled={
+                    localMock.state.complete ||
+                    localMock.stopReason === "CONTROLLED_PICK" ||
+                    localMock.stopReason === "CONTROLLED_NOMINATION"
+                  }
+                >
+                  <StepForward size={14} /> Advance one event
+                </button>
+                <button
+                  className="button button--dark"
+                  type="button"
+                  onClick={() => advanceMock("controlled-turn")}
+                  disabled={
+                    localMock.state.complete ||
+                    localMock.stopReason === "CONTROLLED_PICK" ||
+                    localMock.stopReason === "CONTROLLED_NOMINATION"
+                  }
+                >
+                  <FastForward size={14} /> Run to my next turn
+                </button>
+                <button className="button button--soft" type="button" onClick={stopLocalMock}>
+                  <X size={14} /> End local mock
+                </button>
+              </div>
+              {generatedMockEvents.length > 0 ? (
+                <div className="draft-mock-panel__replay">
+                  <label>
+                    <span>Replay point</span>
+                    <select
+                      value={mockReplayEventId}
+                      onChange={(event) => setMockReplayEventId(event.target.value)}
+                    >
+                      <option value="">Choose a local event</option>
+                      {generatedMockEvents.map((event, index) => {
+                        const player =
+                          "playerId" in event
+                            ? session.config.players.find((item) => item.id === event.playerId)
+                            : undefined;
+                        return (
+                          <option value={event.id} key={event.id}>
+                            {index + 1}. {eventLabel(event)}
+                            {player ? ` · ${player.name}` : ""}
+                          </option>
+                        );
+                      })}
+                    </select>
+                  </label>
+                  <button
+                    className="button button--soft"
+                    type="button"
+                    onClick={() => replayMockFromEvent()}
+                    disabled={!mockReplayEventId}
+                  >
+                    <RotateCcw size={14} /> Replay from event
+                  </button>
+                </div>
+              ) : null}
+              {session.sequence !== localMock.baseSequence ? (
+                <p className="draft-mock-panel__fork-note">
+                  The shared room has advanced to event {session.sequence}. This mock remains pinned
+                  to event {localMock.baseSequence} until you end it.
+                </p>
+              ) : null}
+            </div>
+          )}
+        </section>
+      ) : null}
 
       <section className="draft-board-source" aria-labelledby="draft-board-source-title">
         <div className="draft-board-source__heading">
@@ -1189,9 +1623,9 @@ export function DraftSessionWorkspace() {
             <Database size={18} />
           </span>
           <div>
-            <span>Ledger</span>
-            <strong>{session.sequence}</strong>
-            <small>{session.persistedState}</small>
+            <span>{localMock ? "Local events" : "Ledger"}</span>
+            <strong>{localMock ? generatedMockEvents.length : session.sequence}</strong>
+            <small>{localMock ? "browser memory" : session.persistedState}</small>
           </div>
         </article>
         <article>
@@ -1200,9 +1634,10 @@ export function DraftSessionWorkspace() {
           </span>
           <div>
             <span>Teams</span>
-            <strong>{session.state.teams.length}</strong>
+            <strong>{activeDraftState?.teams.length ?? 0}</strong>
             <small>
-              {session.state.teams.reduce((sum, team) => sum + team.openSlots, 0)} open slots
+              {activeDraftState?.teams.reduce((sum, team) => sum + team.openSlots, 0) ?? 0} open{" "}
+              slots
             </small>
           </div>
         </article>
@@ -1222,11 +1657,15 @@ export function DraftSessionWorkspace() {
           </span>
           <div>
             <span>{session.config.mode === "SNAKE" ? "On the clock" : "Selected team"}</span>
-            <strong>{activeTeam?.name ?? "Complete"}</strong>
+            <strong>
+              {session.config.mode === "SNAKE"
+                ? (onClockTeam?.name ?? "Complete")
+                : (activeTeam?.name ?? "Select a team")}
+            </strong>
             <small>
-              {session.config.mode === "SNAKE" && session.state.nextPick
-                ? `Pick ${session.state.nextPick.overallPick}`
-                : session.state.complete
+              {session.config.mode === "SNAKE" && activeDraftState?.nextPick
+                ? `Pick ${activeDraftState.nextPick.overallPick}`
+                : activeDraftState?.complete
                   ? "Draft complete"
                   : "Manual sale entry"}
             </small>
@@ -1236,8 +1675,12 @@ export function DraftSessionWorkspace() {
 
       <section className="opponent-budget-strip" aria-label="Team state">
         <div className="opponent-budget-strip__label">
-          <span>League room</span>
-          <small>{session.config.mode === "AUCTION" ? "remaining · max" : "rostered · open"}</small>
+          <span>{localMock ? "Mock room" : "League room"}</span>
+          <small>
+            {session.config.mode === "AUCTION"
+              ? "remaining · max"
+              : "tap advice team · rostered · open"}
+          </small>
         </div>
         <div className="opponent-team-scroll">
           {teamStates.map((team) => {
@@ -1251,24 +1694,21 @@ export function DraftSessionWorkspace() {
                 </strong>
               </>
             );
-            return session.config.mode === "AUCTION" ? (
+            return (
               <button
                 type="button"
                 key={team.teamId}
                 className={team.teamId === activeTeamId ? "is-selected" : ""}
                 onClick={() => setSelectedTeamId(team.teamId)}
                 aria-pressed={team.teamId === activeTeamId}
+                title={
+                  session.config.mode === "SNAKE" && team.teamId === onClockTeamId
+                    ? `${team.name} is on the clock`
+                    : `Show advice for ${team.name}`
+                }
               >
                 {content}
               </button>
-            ) : (
-              <div
-                className={`draft-team-state${team.teamId === activeTeamId ? " is-selected" : ""}`}
-                aria-current={team.teamId === activeTeamId ? "true" : undefined}
-                key={team.teamId}
-              >
-                {content}
-              </div>
             );
           })}
         </div>
@@ -1453,7 +1893,10 @@ export function DraftSessionWorkspace() {
           </div>
         </section>
 
-        <aside className="draft-rail" aria-label="Manual draft entry">
+        <aside
+          className="draft-rail"
+          aria-label={localMock ? "Local mock controls" : "Manual draft entry"}
+        >
           <section className="draft-intel-card" aria-labelledby="draft-intel-title">
             <div className="recommendation-card__head">
               <span>
@@ -1467,14 +1910,24 @@ export function DraftSessionWorkspace() {
                 </span>
               </span>
               <span className="status-chip">
-                {session.config.mode === "AUCTION" ? "Budget model" : "Rank model"}
+                {session.config.mode === "AUCTION"
+                  ? "Budget model"
+                  : draftMarket?.state === "available"
+                    ? "Live ADP + need"
+                    : "Board ADP + need"}
               </span>
             </div>
             {session.config.mode === "SNAKE" ? (
-              !rankingVersion ? (
+              !rankingVersion && draftMarket?.state !== "available" ? (
                 <div className="draft-intel-unavailable">
                   <CircleAlert size={16} />
-                  <p>Select a compatible draft board to build the queue.</p>
+                  <p>
+                    {draftMarketState === "loading"
+                      ? "Loading the compatible draft-market baseline…"
+                      : draftMarket?.state === "unavailable"
+                        ? draftMarket.detail
+                        : "Select a compatible draft board to build the queue."}
+                  </p>
                 </div>
               ) : snakeQueue.length > 0 ? (
                 <>
@@ -1491,6 +1944,9 @@ export function DraftSessionWorkspace() {
                             <strong>{row.player.name}</strong>
                             <small>
                               {row.needLabel} · base {row.baseRank.toFixed(1)}
+                              {row.availability
+                                ? ` · ${Math.round(row.availability.probabilityAvailable * 100)}% next turn`
+                                : ""}
                             </small>
                           </span>
                           <span>{row.player.positions[0]}</span>
@@ -1499,9 +1955,39 @@ export function DraftSessionWorkspace() {
                     ))}
                   </ol>
                   <p className="draft-intel-note">
-                    Rank or ADP, adjusted by at most 12 places only for an unfilled starter slot. No
-                    availability probability is inferred.
+                    {activeTeamNextPick === null
+                      ? "Rank or ADP gets an explainable starter-need adjustment. No later pick remains for the selected advice team, so wait risk is not shown."
+                      : `Rank or ADP gets an explainable starter-need adjustment. Where ADP exists, wait risk is the conditional chance this still-available player reaches pick ${activeTeamNextPick}; source dispersion is used when available, with a conservative fallback otherwise.`}
                   </p>
+                  {draftMarket?.state === "available" ? (
+                    <p className="draft-intel-note">
+                      ADP context: {draftMarket.context.teamCount}-team{" "}
+                      {draftMarket.context.scoringFormat.toUpperCase()} · as of{" "}
+                      {new Date(draftMarket.source.sourceAsOf).toLocaleDateString()} ·{" "}
+                      {Math.round(draftMarket.source.matchRate * 100)}% identity coverage
+                      {draftMarket.source.attributionUrl ? (
+                        <>
+                          {" "}
+                          ·{" "}
+                          <a
+                            href={draftMarket.source.attributionUrl}
+                            target="_blank"
+                            rel="noreferrer"
+                          >
+                            {draftMarket.source.attribution ?? draftMarket.source.name}
+                          </a>
+                        </>
+                      ) : null}
+                      {draftMarket.warnings.map((warning) => ` · ${warning}`)}
+                    </p>
+                  ) : null}
+                  <div className="draft-model-gate">
+                    <CircleAlert size={14} />
+                    <span>
+                      VBD remains off until a compatible season projection feed is available. Rank
+                      is never converted into invented fantasy points.
+                    </span>
+                  </div>
                 </>
               ) : (
                 <div className="draft-intel-unavailable">
@@ -1557,6 +2043,44 @@ export function DraftSessionWorkspace() {
                 </div>
               </div>
             )}
+            {session.config.mode === "AUCTION" && rankingVersion ? (
+              auctionNominations.length > 0 ? (
+                <>
+                  <p className="draft-nomination-head">Nomination board</p>
+                  <ol className="draft-best-now draft-nomination-list">
+                    {auctionNominations.map((row) => (
+                      <li key={row.player.id}>
+                        <button
+                          type="button"
+                          className={row.player.id === selectedPlayerId ? "is-selected" : ""}
+                          onClick={() => setSelectedPlayerId(row.player.id)}
+                        >
+                          <span>{row.rank}</span>
+                          <span>
+                            <strong>{row.player.name}</strong>
+                            <small>{row.reason}</small>
+                          </span>
+                          <span
+                            className={`nomination-strategy nomination-strategy--${row.strategy}`}
+                          >
+                            {row.strategy}
+                          </span>
+                        </button>
+                      </li>
+                    ))}
+                  </ol>
+                  <p className="draft-intel-note">
+                    Uses only explicit board target prices versus AAV; players missing either field
+                    are omitted.
+                  </p>
+                </>
+              ) : (
+                <div className="draft-model-gate">
+                  <CircleAlert size={14} />
+                  <span>Add both target price and AAV to board rows for nomination advice.</span>
+                </div>
+              )
+            ) : null}
             <p className="draft-keyboard-note">
               <Keyboard size={14} /> J / K selects · Shift + Enter records
             </p>
@@ -1565,9 +2089,10 @@ export function DraftSessionWorkspace() {
           <section className="recommendation-card">
             <div className="recommendation-card__head">
               <span>
-                <Database size={16} /> Manual entry
+                {localMock ? <Dices size={16} /> : <Database size={16} />}{" "}
+                {localMock ? "Local action" : "Manual entry"}
               </span>
-              <span className="status-chip">Stored</span>
+              <span className="status-chip">{localMock ? "Not saved" : "Stored"}</span>
             </div>
             {selectedPlayer ? (
               <div className="recommendation-player">
@@ -1590,7 +2115,7 @@ export function DraftSessionWorkspace() {
                 <strong>No player selected.</strong>
               </div>
             )}
-            {session.config.mode === "AUCTION" ? (
+            {session.config.mode === "AUCTION" && !localMock ? (
               <div className="auction-entry">
                 <label>
                   <span>Winning team</span>
@@ -1618,11 +2143,11 @@ export function DraftSessionWorkspace() {
                   </div>
                 </label>
               </div>
-            ) : (
+            ) : session.config.mode === "SNAKE" ? (
               <div className="snake-comparison">
                 <div>
                   <span>Pick</span>
-                  <strong>{session.state.nextPick?.overallPick ?? "—"}</strong>
+                  <strong>{activeDraftState?.nextPick?.overallPick ?? "—"}</strong>
                 </div>
                 <div>
                   <span>Team</span>
@@ -1633,8 +2158,16 @@ export function DraftSessionWorkspace() {
                   <strong>{activeTeam?.openSlots ?? 0}</strong>
                 </div>
               </div>
+            ) : (
+              <div className="draft-local-nomination-note">
+                <Gavel size={16} />
+                <span>
+                  Choose your nomination. The seeded opponent model resolves bidding for every team
+                  when you advance.
+                </span>
+              </div>
             )}
-            {!canMutate ? (
+            {!canMutate && !localMock ? (
               <p className="draft-session-permission">
                 <ShieldCheck size={14} /> You can follow this room, but only its owner or
                 commissioner can record events.
@@ -1646,9 +2179,10 @@ export function DraftSessionWorkspace() {
               onClick={() => void recordSelection()}
               disabled={
                 !selectedPlayer ||
-                !canMutate ||
-                session.state.complete ||
-                requestState === "loading"
+                !canRecord ||
+                activeDraftState?.complete ||
+                requestState === "loading" ||
+                (localMock !== null && !localAwaitingSelection)
               }
             >
               {requestState === "loading" ? (
@@ -1658,11 +2192,15 @@ export function DraftSessionWorkspace() {
               ) : (
                 <Check size={16} />
               )}{" "}
-              {session.config.mode === "AUCTION"
-                ? `Record sale${salePrice ? ` at $${salePrice}` : ""}`
-                : `Record pick ${session.state.nextPick?.overallPick ?? "—"}`}
+              {localMock
+                ? session.config.mode === "AUCTION"
+                  ? "Nominate in local mock"
+                  : `Make local pick ${activeDraftState?.nextPick?.overallPick ?? "—"}`
+                : session.config.mode === "AUCTION"
+                  ? `Record sale${salePrice ? ` at $${salePrice}` : ""}`
+                  : `Record pick ${activeDraftState?.nextPick?.overallPick ?? "—"}`}
             </button>
-            {selectedTeam?.maximumBid !== undefined ? (
+            {!localMock && selectedTeam?.maximumBid !== undefined ? (
               <p className="draft-session-legal-max">
                 Legal maximum for {selectedTeam.name}: ${selectedTeam.maximumBid}
               </p>
@@ -1674,19 +2212,65 @@ export function DraftSessionWorkspace() {
       <section className="draft-log" aria-labelledby="live-draft-log-title">
         <div className="draft-log__heading">
           <div>
-            <p className="eyebrow">Draft history</p>
-            <h2 id="live-draft-log-title">Recent entries</h2>
+            <p className="eyebrow">{localMock ? "Practice history" : "Draft history"}</p>
+            <h2 id="live-draft-log-title">
+              {localMock ? "Recent local events" : "Recent entries"}
+            </h2>
           </div>
           <button
             className="text-action"
             type="button"
             onClick={() => void undoLast()}
-            disabled={!canMutate || session.sequence === 0 || requestState === "loading"}
+            disabled={
+              localMock
+                ? generatedMockEvents.length === 0
+                : !canMutate || session.sequence === 0 || requestState === "loading"
+            }
           >
-            <RotateCcw size={14} /> Undo last active action
+            <RotateCcw size={14} /> Undo last {localMock ? "local event" : "active action"}
           </button>
         </div>
-        {recentEvents.length ? (
+        {localMock && generatedMockEvents.length ? (
+          <div className="draft-log__events">
+            {generatedMockEvents
+              .map((event, index) => ({ event, index }))
+              .reverse()
+              .slice(0, 12)
+              .map(({ event, index }) => {
+                const player =
+                  "playerId" in event
+                    ? session.config.players.find((item) => item.id === event.playerId)
+                    : undefined;
+                const team =
+                  "teamId" in event
+                    ? session.config.teams.find((item) => item.id === event.teamId)
+                    : undefined;
+                return (
+                  <article className="draft-event draft-event--mock" key={event.id}>
+                    <span className="draft-event__pick">L{index + 1}</span>
+                    <div>
+                      <strong>
+                        {player?.name ??
+                          (event.type === "DRAFT_EVENT_REVERTED"
+                            ? "Local undo"
+                            : "Simulated action")}
+                      </strong>
+                      <span>{team?.name ?? event.type.replaceAll("_", " ").toLowerCase()}</span>
+                    </div>
+                    <strong>{eventLabel(event)}</strong>
+                    <button
+                      className="draft-event__replay"
+                      type="button"
+                      onClick={() => replayMockFromEvent(event.id)}
+                      aria-label={`Replay local mock from event ${index + 1}`}
+                    >
+                      Replay
+                    </button>
+                  </article>
+                );
+              })}
+          </div>
+        ) : recentEvents.length && !localMock ? (
           <div className="draft-log__events">
             {recentEvents.map((record) => {
               const event = record.event;
@@ -1716,13 +2300,19 @@ export function DraftSessionWorkspace() {
           </div>
         ) : (
           <div className="draft-session-empty">
-            <Database size={18} />
-            <strong>No events yet. Select a player to record the first entry.</strong>
+            {localMock ? <Dices size={18} /> : <Database size={18} />}
+            <strong>
+              {localMock
+                ? "No local events yet. Advance the seeded simulation when ready."
+                : "No events yet. Select a player to record the first entry."}
+            </strong>
           </div>
         )}
         <p className="draft-log__note">
-          <ShieldCheck size={13} /> Every manual entry is saved and visible only to league members.
-          This is not a live ESPN or Yahoo draft feed.
+          <ShieldCheck size={13} />
+          {localMock
+            ? "Practice events exist only in this browser tab. They are not saved, shared, or sent to ESPN or Yahoo."
+            : "Every manual entry is saved and visible only to league members. This is not a live ESPN or Yahoo draft feed."}
         </p>
       </section>
     </div>

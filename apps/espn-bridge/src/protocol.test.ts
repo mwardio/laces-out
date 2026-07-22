@@ -2,17 +2,34 @@ import { describe, expect, it } from "vitest";
 
 import {
   configurationStorageKey,
+  createPendingPairingOffer,
   maximumLeagueCount,
+  pairingOfferIsFresh,
+  pairingOfferTtlMs,
   parseLeagueIds,
+  pendingPairingStorageKey,
   statusStorageKey,
   summarizeBridgeResults,
   syncAlarmName,
   validateBridgeConfiguration,
+  validateBridgePairingOffer,
   validateLeagueIds,
+  validateStoredPendingOffer,
   type BridgeLeagueResult,
 } from "./protocol.js";
 
 const deviceToken = `lo_espn_${"a".repeat(43)}`;
+
+function offerMessage(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    type: "PAIRING_OFFER",
+    apiBaseUrl: "https://laces.example",
+    deviceToken,
+    leagues: ["123", "456"],
+    season: 2026,
+    ...overrides,
+  };
+}
 
 describe("ESPN bridge multi-league protocol", () => {
   it("uses Laces Out storage and alarm namespaces", () => {
@@ -76,6 +93,80 @@ describe("ESPN bridge multi-league protocol", () => {
         automaticSync: false,
       }).apiBaseUrl,
     ).toBe("http://127.0.0.1:4000");
+  });
+
+  it("uses the Laces Out pending-pairing storage namespace", () => {
+    expect(pendingPairingStorageKey).toBe("lacesOutEspnPendingPairing");
+  });
+
+  it("accepts a self-originated pairing offer and normalizes the configuration", () => {
+    expect(
+      validateBridgePairingOffer(
+        offerMessage({ apiBaseUrl: "https://laces.example/connections" }),
+        "https://laces.example",
+      ),
+    ).toEqual({
+      apiBaseUrl: "https://laces.example",
+      deviceToken,
+      leagueIds: ["123", "456"],
+      season: 2026,
+      automaticSync: true,
+    });
+  });
+
+  it("ignores unknown extra fields and honors an explicit automaticSync flag", () => {
+    const offer = validateBridgePairingOffer(
+      offerMessage({ automaticSync: false, nonce: "ignored", extra: { a: 1 } }),
+      "https://laces.example",
+    );
+    expect(offer.automaticSync).toBe(false);
+    expect(offer.leagueIds).toEqual(["123", "456"]);
+  });
+
+  it("rejects offers whose sender origin does not match the offered API origin", () => {
+    expect(() => validateBridgePairingOffer(offerMessage(), "https://evil.example")).toThrow(
+      "own origin",
+    );
+    expect(() => validateBridgePairingOffer(offerMessage(), "not-a-url")).toThrow("invalid");
+    expect(() => validateBridgePairingOffer(offerMessage(), "")).toThrow("browser-attested");
+  });
+
+  it("rejects short tokens, bad URLs, wrong message types, and missing offers", () => {
+    expect(() =>
+      validateBridgePairingOffer(
+        offerMessage({ deviceToken: "too-short" }),
+        "https://laces.example",
+      ),
+    ).toThrow("device token");
+    expect(() =>
+      validateBridgePairingOffer(
+        offerMessage({ apiBaseUrl: "ftp://laces.example" }),
+        "ftp://laces.example",
+      ),
+    ).toThrow("HTTPS");
+    expect(() =>
+      validateBridgePairingOffer(
+        { ...offerMessage(), type: "SOMETHING_ELSE" },
+        "https://laces.example",
+      ),
+    ).toThrow("Not a bridge pairing offer");
+    expect(() => validateBridgePairingOffer(null, "https://laces.example")).toThrow(
+      "Not a bridge pairing offer",
+    );
+  });
+
+  it("round-trips and expires stored pending offers, failing closed on tampering", () => {
+    const configuration = validateBridgePairingOffer(offerMessage(), "https://laces.example");
+    const fresh = createPendingPairingOffer(configuration, new Date(1_000_000).toISOString());
+    expect(validateStoredPendingOffer(fresh)).toEqual(fresh);
+    expect(pairingOfferIsFresh(fresh, 1_000_000 + pairingOfferTtlMs - 1)).toBe(true);
+    expect(pairingOfferIsFresh(fresh, 1_000_000 + pairingOfferTtlMs)).toBe(false);
+    expect(pairingOfferIsFresh(fresh, 999_999)).toBe(false);
+    expect(
+      validateStoredPendingOffer({ ...fresh, origin: "https://evil.example" }),
+    ).toBeUndefined();
+    expect(validateStoredPendingOffer({ ...fresh, receivedAt: "not-a-date" })).toBeUndefined();
+    expect(validateStoredPendingOffer(undefined)).toBeUndefined();
   });
 
   it("reports full success, partial failure, and login-required aggregates clearly", () => {

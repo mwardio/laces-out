@@ -2,11 +2,11 @@ import type { Metadata } from "next";
 
 import { AppShell } from "../../components/app-shell";
 import { ConnectionWorkbench } from "../../components/connection-workbench";
-import { yahooDeveloperAccessPending } from "../../lib/public-site";
+import { yahooComingSoon } from "../../lib/public-site";
 
 export const metadata: Metadata = {
   title: "Connections",
-  description: yahooDeveloperAccessPending
+  description: yahooComingSoon
     ? "Configure ESPN fantasy sync now, with Yahoo league sync coming soon."
     : "Configure read-only Yahoo and ESPN fantasy league connection paths.",
 };
@@ -17,9 +17,7 @@ export default function ConnectionsPage() {
       active="connections"
       context={{
         label: "Connection Setup",
-        detail: yahooDeveloperAccessPending
-          ? "ESPN ready · Yahoo coming soon"
-          : "Yahoo + ESPN setup",
+        detail: yahooComingSoon ? "ESPN ready · Yahoo coming soon" : "Yahoo + ESPN setup",
         tone: "setup",
       }}
     >

@@ -26,7 +26,7 @@ import {
   type LeagueListResponse,
 } from "../lib/api-client";
 import { LatestRequest } from "../lib/latest-request";
-import { yahooDeveloperAccessPending } from "../lib/public-site";
+import { yahooComingSoon } from "../lib/public-site";
 import { DEMO_LEAGUE_ID } from "../lib/demo-contract-data";
 import { AiCoachPanel } from "./ai-coach-panel";
 import { PortfolioDashboard } from "./portfolio-dashboard";
@@ -153,9 +153,9 @@ function EmptyLivePortfolio() {
           <Cable size={22} />
         </span>
         <div>
-          <h2>{yahooDeveloperAccessPending ? "Connect ESPN" : "Connect Yahoo or ESPN"}</h2>
+          <h2>{yahooComingSoon ? "Connect ESPN" : "Connect Yahoo or ESPN"}</h2>
           <p>
-            {yahooDeveloperAccessPending
+            {yahooComingSoon
               ? "ESPN sync is available now. Yahoo league sync is coming soon."
               : "Once a sync succeeds, this page will use the stored league, team, and roster data."}
           </p>
@@ -180,6 +180,9 @@ function LivePortfolio({ portfolio, reloadPortfolio }: LivePortfolioProps) {
   const [claimState, setClaimState] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [claimMessage, setClaimMessage] = useState("");
   const [sourceRefreshState, setSourceRefreshState] = useState<
+    "idle" | "working" | "queued" | "deduplicated" | "error"
+  >("idle");
+  const [draftMarketRefreshState, setDraftMarketRefreshState] = useState<
     "idle" | "working" | "queued" | "deduplicated" | "error"
   >("idle");
   const dashboardRequest = useRef<AbortController | null>(null);
@@ -293,6 +296,31 @@ function LivePortfolio({ portfolio, reloadPortfolio }: LivePortfolioProps) {
     }
   }
 
+  async function checkDraftMarket() {
+    if (draftMarketRefreshState === "working") return;
+    setDraftMarketRefreshState("working");
+    try {
+      const response = await fetch(`${apiBaseUrl}/v1/refreshes`, {
+        method: "POST",
+        credentials: "include",
+        headers: { Accept: "application/json", "Content-Type": "application/json" },
+        body: JSON.stringify({ scope: "adp-data" }),
+      });
+      if (response.status === 401) {
+        window.location.assign("/login");
+        return;
+      }
+      if (!response.ok) throw new Error("Draft-market check could not be queued.");
+      const body = parseJobAccepted(await response.json());
+      if (!body || body.target !== "draft-market-adp") {
+        throw new Error("Draft-market queue response was invalid.");
+      }
+      setDraftMarketRefreshState(body.state === "deduplicated" ? "deduplicated" : "queued");
+    } catch {
+      setDraftMarketRefreshState("error");
+    }
+  }
+
   if (portfolio.leagues.length === 0) return <EmptyLivePortfolio />;
 
   return (
@@ -303,9 +331,9 @@ function LivePortfolio({ portfolio, reloadPortfolio }: LivePortfolioProps) {
           <h1>{portfolio.leagues.length} connected leagues in one view.</h1>
           <p className="page-subtitle">
             This view uses the latest saved data from your connected leagues. Recommendations appear
-            only after real projection inputs are available. The NFL-data control checks shared
-            player identity, status, and waiver-market sources; provider league sync and projection
-            imports use their own controls.
+            only after real projection inputs are available. The input control checks shared player,
+            status, schedule, and usage sources; managed forecasts rerun when those inputs change.
+            Provider league sync and custom projection imports use their own controls.
           </p>
         </div>
         <div className="heading-actions">
@@ -325,7 +353,7 @@ function LivePortfolio({ portfolio, reloadPortfolio }: LivePortfolioProps) {
             type="button"
             onClick={() => void checkPlayerCatalog()}
             disabled={sourceRefreshState === "working"}
-            title="Request an immediate shared NFL-data check"
+            title="Check shared NFL inputs and rerun managed forecasts when inputs change"
           >
             {sourceRefreshState === "working" ? (
               <LoaderCircle className="spin" size={16} />
@@ -339,20 +367,20 @@ function LivePortfolio({ portfolio, reloadPortfolio }: LivePortfolioProps) {
             {sourceRefreshState === "working"
               ? "Requesting…"
               : sourceRefreshState === "queued"
-                ? "NFL-data check queued"
+                ? "Forecast input check queued"
                 : sourceRefreshState === "deduplicated"
-                  ? "NFL-data check already queued"
+                  ? "Input check already queued"
                   : sourceRefreshState === "error"
-                    ? "Retry NFL-data check"
-                    : "Check NFL data"}
+                    ? "Retry input check"
+                    : "Check forecast inputs"}
           </button>
           <span className="sr-only" role="status" aria-live="polite">
             {sourceRefreshState === "queued"
-              ? "Shared NFL-data check queued."
+              ? "Forecast input check queued."
               : sourceRefreshState === "deduplicated"
-                ? "A recent shared NFL-data check is already queued."
+                ? "A recent forecast input check is already queued."
                 : sourceRefreshState === "error"
-                  ? "Shared NFL-data check could not be queued."
+                  ? "Forecast input check could not be queued."
                   : ""}
           </span>
         </div>
@@ -526,6 +554,8 @@ function LivePortfolio({ portfolio, reloadPortfolio }: LivePortfolioProps) {
           claimState={claimState}
           claimMessage={claimMessage}
           claimTeam={() => void claimTeam()}
+          draftMarketRefreshState={draftMarketRefreshState}
+          checkDraftMarket={() => void checkDraftMarket()}
         />
       )}
     </div>
@@ -539,6 +569,8 @@ interface LeagueDetailProps {
   readonly claimState: "idle" | "saving" | "saved" | "error";
   readonly claimMessage: string;
   readonly claimTeam: () => void;
+  readonly draftMarketRefreshState: "idle" | "working" | "queued" | "deduplicated" | "error";
+  readonly checkDraftMarket: () => void;
 }
 
 function MemberWeekPanel({ dashboard }: { readonly dashboard: LeagueDashboard }) {
@@ -825,6 +857,8 @@ function LeagueDetail({
   claimState,
   claimMessage,
   claimTeam,
+  draftMarketRefreshState,
+  checkDraftMarket,
 }: LeagueDetailProps) {
   const claimedTeam = dashboard.teams.find((team) => team.claimStatus === "current-user");
   const selectableTeams = dashboard.teams.filter(
@@ -997,6 +1031,28 @@ function LeagueDetail({
                   <div>
                     <strong>{source.name}</strong>
                     <span>{source.freshness.label}</span>
+                    {source.lastCheckedAt ? (
+                      <span>Last attempt {new Date(source.lastCheckedAt).toLocaleString()}</span>
+                    ) : null}
+                    {source.consecutiveFailures > 0 ? (
+                      <span>
+                        {source.consecutiveFailures} failed check
+                        {source.consecutiveFailures === 1 ? "" : "s"} since the last success
+                      </span>
+                    ) : null}
+                    {source.quality ? (
+                      <span>
+                        {source.quality.matchRate === null
+                          ? `${source.quality.rowsRead} source rows checked`
+                          : `${Math.round(source.quality.matchRate * 100)}% player match rate`}
+                        {source.quality.rowsUnmatched > 0
+                          ? ` · ${source.quality.rowsUnmatched} unresolved`
+                          : ""}
+                        {source.quality.rowsRejected > 0
+                          ? ` · ${source.quality.rowsRejected} rejected`
+                          : ""}
+                      </span>
+                    ) : null}
                     {source.attributionUrl ? (
                       <a href={source.attributionUrl} target="_blank" rel="noreferrer">
                         {source.attribution ?? "Source attribution"}
@@ -1007,6 +1063,32 @@ function LeagueDetail({
               ))
             )}
           </div>
+          <button
+            className="button button--outline button--small"
+            type="button"
+            onClick={checkDraftMarket}
+            disabled={draftMarketRefreshState === "working"}
+          >
+            {draftMarketRefreshState === "working" ? (
+              <LoaderCircle className="spin" size={14} />
+            ) : draftMarketRefreshState === "queued" ||
+              draftMarketRefreshState === "deduplicated" ? (
+              <CheckCircle2 size={14} />
+            ) : draftMarketRefreshState === "error" ? (
+              <CircleAlert size={14} />
+            ) : (
+              <RefreshCw size={14} />
+            )}
+            {draftMarketRefreshState === "working"
+              ? "Requesting…"
+              : draftMarketRefreshState === "queued"
+                ? "Draft-market check queued"
+                : draftMarketRefreshState === "deduplicated"
+                  ? "Draft-market check already queued"
+                  : draftMarketRefreshState === "error"
+                    ? "Retry draft-market check"
+                    : "Check draft market"}
+          </button>
         </aside>
       </div>
     </section>

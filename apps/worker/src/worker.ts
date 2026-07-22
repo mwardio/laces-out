@@ -3,14 +3,42 @@ import { createDatabase } from "@fantasy/db";
 import { PgBoss } from "pg-boss";
 import pino from "pino";
 
-import { ensureDailyRefresh, registerQueues, registerSchedules, registerWorkers } from "./jobs.js";
+import { DatabaseDataHealthService } from "./data-health.js";
+import { FfcAdpRefresher } from "./ffc-adp.js";
+import {
+  enqueueProjectionRefresh,
+  ensureDailyRefresh,
+  registerQueues,
+  registerSchedules,
+  registerWorkers,
+} from "./jobs.js";
+import { currentNflSeason } from "./nfl-season.js";
 import { NflverseCatalogRefresher } from "./nflverse-catalog.js";
+import {
+  FirstPartyProjectionService,
+  projectionHistorySeasons,
+} from "./first-party-projections.js";
+import { databaseFirstPartyRosCandidateProvider } from "./first-party-ros-candidate-provider.js";
+import { FirstPartyRosProjectionShadowService } from "./first-party-ros-projections.js";
+import { NflverseScheduleRefresher } from "./nflverse-schedules.js";
+import { NflverseWeeklyDataRefresher } from "./nflverse-weekly-data.js";
+import { ProjectionLockWindowService } from "./projection-lock-window.js";
 import { SleeperDataRefresher } from "./sleeper-data.js";
 
 const environment = loadEnvironment();
 const database = createDatabase(environment.DATABASE_URL, 4);
 const catalogRefresher = new NflverseCatalogRefresher({ database: database.db });
+const weeklyDataRefresher = new NflverseWeeklyDataRefresher({ database: database.db });
+const scheduleRefresher = new NflverseScheduleRefresher({ database: database.db });
+const projectionLockWindow = new ProjectionLockWindowService(database.db);
+const projectionService = new FirstPartyProjectionService({ database: database.db });
+const rosProjectionShadowService = new FirstPartyRosProjectionShadowService({
+  database: database.db,
+  candidateProvider: databaseFirstPartyRosCandidateProvider({ database: database.db }),
+});
 const sleeperRefresher = new SleeperDataRefresher({ database: database.db });
+const adpRefresher = new FfcAdpRefresher({ database: database.db });
+const dataHealthService = new DatabaseDataHealthService({ database: database.db });
 const logger = pino({
   level: environment.LOG_LEVEL,
   redact: {
@@ -31,20 +59,77 @@ boss.on("error", (error) => logger.error({ err: error }, "job queue error"));
 boss.on("warning", (warning) => logger.warn({ warning }, "job queue warning"));
 
 async function start(): Promise<void> {
+  const projectionSeason = currentNflSeason();
   await boss.start();
   await registerQueues(boss);
   await registerWorkers(boss, logger, {
+    dataHealth: dataHealthService,
+    projectionRefresh: {
+      refreshProjections: async (job, context) => {
+        const effectiveJob =
+          job.reason === "scheduled" || job.reason === "lock-window"
+            ? { ...job, season: currentNflSeason() }
+            : job;
+        const lockWindow =
+          effectiveJob.reason === "lock-window"
+            ? await projectionLockWindow.check(effectiveJob.season)
+            : null;
+        if (lockWindow !== null && !lockWindow.active) return;
+        // The final near-lock pass bypasses conditional source clocks once, inside a bounded
+        // ten-minute window. Other frequent cron ticks remain conditional and cheap.
+        const forceCurrentInputs = lockWindow?.forceFinalCheck === true;
+        // Refresh every current-season model input before forecasting. Each source owns a claim
+        // window and conditional request, so overlapping/manual sweeps coalesce and unchanged
+        // artifacts do not produce new immutable observations.
+        await weeklyDataRefresher.refreshWeeklyStats(effectiveJob.season, forceCurrentInputs);
+        await weeklyDataRefresher.refreshSnapCounts(effectiveJob.season, forceCurrentInputs);
+        await weeklyDataRefresher.refreshWeeklyRosters(effectiveJob.season, forceCurrentInputs);
+        await weeklyDataRefresher.refreshInjuries(effectiveJob.season, forceCurrentInputs);
+        await weeklyDataRefresher.refreshTeamWeeklyStats(effectiveJob.season, forceCurrentInputs);
+        await sleeperRefresher.refreshCatalog(forceCurrentInputs);
+        // Historical schedules remain part of the reproducible training selection; their longer
+        // source cadence makes these calls cheap no-ops outside an actual correction.
+        for (const season of projectionHistorySeasons(effectiveJob.season)) {
+          await scheduleRefresher.refresh(
+            season,
+            forceCurrentInputs && season === effectiveJob.season,
+          );
+        }
+        await projectionService.refreshProjections(effectiveJob, context);
+        // ROS consumes only the immutable weekly artifacts written above. It remains isolated from
+        // projection sets and recommendations until its held-out evidence and interval gate clear.
+        await rosProjectionShadowService.refreshProjections(effectiveJob, context);
+      },
+    },
     refreshPlayerData: async (force) => {
+      const activeProjectionSeason = currentNflSeason();
       // Identity is intentionally refreshed first so Sleeper observations and trends can attach to
       // canonical players during a cold start instead of waiting for the next scheduled run.
       const nflverse = await catalogRefresher.refresh(force);
+      const weeklyData = await weeklyDataRefresher.refreshCurrentWindow(
+        activeProjectionSeason,
+        force,
+      );
+      const scheduleData = Object.fromEntries(
+        await Promise.all(
+          projectionHistorySeasons(activeProjectionSeason).map(
+            async (season) =>
+              [`schedule${season}`, await scheduleRefresher.refresh(season, force)] as const,
+          ),
+        ),
+      );
       const sleeper = await sleeperRefresher.refreshCatalog(force);
       const market = await sleeperRefresher.refreshTrends(force);
-      return { nflverse, sleeper, market };
+      await enqueueProjectionRefresh(boss, {
+        season: activeProjectionSeason,
+        reason: "on-demand",
+      });
+      return { nflverse, ...weeklyData, ...scheduleData, sleeper, market };
     },
     refreshMarketData: (force) => sleeperRefresher.refreshTrends(force),
+    refreshAdpData: (force) => adpRefresher.refreshDefaultContexts(currentNflSeason(), force),
   });
-  await registerSchedules(boss);
+  await registerSchedules(boss, projectionSeason);
   await ensureDailyRefresh(boss);
   logger.info("fantasy worker started");
 }

@@ -63,6 +63,7 @@ export interface YahooSyncReceipt {
   readonly leagueId: string;
   readonly leagueSeasonId: string;
   readonly externalLeagueKey: string;
+  readonly season: number;
   readonly state: "accepted" | "unchanged";
   readonly recordsWritten: number;
   readonly syncedAt: string;
@@ -517,6 +518,7 @@ export class DrizzleYahooSyncRepository implements YahooSyncRepository {
           leagueId: season.leagueId,
           leagueSeasonId: season.id,
           externalLeagueKey: bundle.league.externalId,
+          season: bundle.league.season,
           state: "unchanged",
           recordsWritten: prior.recordsWritten,
           syncedAt: fetchedAt.toISOString(),
@@ -885,6 +887,7 @@ export class DrizzleYahooSyncRepository implements YahooSyncRepository {
         leagueId,
         leagueSeasonId,
         externalLeagueKey: bundle.league.externalId,
+        season: bundle.league.season,
         state: "accepted",
         recordsWritten,
         syncedAt: fetchedAt.toISOString(),

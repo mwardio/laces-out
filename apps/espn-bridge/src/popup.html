@@ -38,10 +38,24 @@
         hidden
       ></ul>
 
+      <section id="pairing-offer" class="pairing" aria-live="polite" hidden>
+        <div class="pairing-body">
+          <strong>Pairing offer from <span id="pairing-origin"></span></strong>
+          <small>
+            Complete pairing to grant this browser access to that Laces Out origin and store the
+            offered device token. Only continue if you started this from Laces Out.
+          </small>
+        </div>
+        <div class="pairing-actions">
+          <button id="pairing-complete" class="primary" type="button">Complete pairing</button>
+          <button id="pairing-dismiss" class="quiet" type="button">Dismiss</button>
+        </div>
+      </section>
+
       <form id="configuration-form">
         <label>
           Laces Out URL
-          <input name="apiBaseUrl" type="url" value="http://localhost:3000" required />
+          <input name="apiBaseUrl" type="url" value="https://laces.mward.io" required />
         </label>
         <label>
           Bridge device token

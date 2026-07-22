@@ -104,6 +104,204 @@
     line-height: 1.6;
   }
 
+  .managedForecast {
+    overflow: hidden;
+    background: #fff;
+    border: 1px solid #bfcdb8;
+    border-radius: 11px;
+    box-shadow: inset 3px 0 0 #79966c;
+  }
+
+  .managedHeader {
+    display: flex;
+    min-height: 82px;
+    align-items: center;
+    justify-content: space-between;
+    gap: 20px;
+    padding: 15px 18px;
+    background: #f5f8f2;
+    border-bottom: 1px solid #dce5d7;
+  }
+
+  .managedHeader h2 {
+    margin-top: 3px;
+    color: var(--ink-950);
+    font-size: 18px;
+    line-height: 1.2;
+    letter-spacing: -0.025em;
+  }
+
+  .managedHeader p:last-child {
+    margin-top: 5px;
+    color: var(--ink-600);
+    font-size: 11px;
+    line-height: 1.45;
+  }
+
+  .managedActions {
+    display: flex;
+    flex: 0 0 auto;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .qualityBadge,
+  .qualityWarningBadge {
+    padding: 5px 8px;
+    border-radius: 999px;
+    font-size: 9px;
+    font-weight: 800;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    white-space: nowrap;
+  }
+
+  .qualityBadge {
+    color: #365631;
+    background: #deebd8;
+  }
+
+  .qualityWarningBadge {
+    color: #76551b;
+    background: #f4e9cb;
+  }
+
+  .managedMetrics {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .managedMetrics > div {
+    min-width: 0;
+    padding: 14px 16px;
+    border-right: 1px solid var(--ink-100);
+  }
+
+  .managedMetrics > div:last-child {
+    border-right: 0;
+  }
+
+  .managedMetrics span,
+  .managedMetrics strong,
+  .managedMetrics small {
+    display: block;
+  }
+
+  .managedMetrics span {
+    color: var(--ink-500);
+    font-size: 9px;
+    font-weight: 800;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+
+  .managedMetrics strong {
+    overflow: hidden;
+    margin-top: 4px;
+    color: var(--ink-900);
+    font-size: 12px;
+    font-variant-numeric: tabular-nums;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .managedMetrics small {
+    overflow: hidden;
+    margin-top: 3px;
+    color: var(--ink-500);
+    font-size: 9px;
+    line-height: 1.4;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .modelEvidence,
+  .forecastWarnings,
+  .managedEmpty {
+    display: flex;
+    align-items: flex-start;
+    gap: 9px;
+    margin: 0 16px;
+    padding: 11px 0;
+    color: var(--ink-600);
+    border-top: 1px solid var(--ink-100);
+    font-size: 10px;
+    line-height: 1.5;
+  }
+
+  .modelEvidence svg,
+  .managedEmpty svg {
+    flex: 0 0 auto;
+    color: #637d58;
+  }
+
+  .modelEvidence strong {
+    color: var(--ink-800);
+  }
+
+  .championRail {
+    display: grid;
+    gap: 7px;
+    margin: 0 16px;
+    padding: 11px 0;
+    border-top: 1px solid var(--ink-100);
+  }
+
+  .championRail > span {
+    color: var(--ink-500);
+    font-size: 9px;
+    font-weight: 800;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+
+  .championRail > div {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  .championRail small {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 5px 7px;
+    color: var(--ink-600);
+    background: #f4f6f0;
+    border: 1px solid var(--ink-100);
+    border-radius: 6px;
+    font-size: 10px;
+  }
+
+  .championRail strong {
+    color: var(--ink-900);
+  }
+
+  .forecastWarnings {
+    color: #725228;
+  }
+
+  .forecastWarnings svg {
+    flex: 0 0 auto;
+    margin-top: 1px;
+  }
+
+  .forecastWarnings ul {
+    display: grid;
+    gap: 4px;
+    margin: 0;
+    padding-left: 16px;
+  }
+
+  .refreshFootnote {
+    padding: 9px 16px 11px;
+    color: var(--ink-500);
+    background: #fbfcfa;
+    border-top: 1px solid var(--ink-100);
+    font-size: 9px;
+    line-height: 1.5;
+  }
+
   .leagueControl {
     display: grid;
     min-width: min(100%, 310px);
@@ -817,6 +1015,33 @@
 
     .hero h1 {
       font-size: 34px;
+    }
+
+    .managedHeader {
+      display: grid;
+      gap: 12px;
+      padding: 14px;
+    }
+
+    .managedActions {
+      justify-content: space-between;
+    }
+
+    .managedMetrics {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .managedMetrics > div:nth-child(2) {
+      border-right: 0;
+    }
+
+    .managedMetrics > div:nth-child(-n + 2) {
+      border-bottom: 1px solid var(--ink-100);
+    }
+
+    .managedMetrics strong,
+    .managedMetrics small {
+      white-space: normal;
     }
 
     .leagueControl {

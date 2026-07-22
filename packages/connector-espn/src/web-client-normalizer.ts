@@ -120,11 +120,17 @@ const memberIdSchema = z
 const nonEmptyTextSchema = (maximum: number) => z.string().trim().min(1).max(maximum);
 const nullableTextSchema = (maximum: number) =>
   z.union([z.string().trim().max(maximum), z.null()]).optional();
-const httpsUrlSchema = z
+const webUrlSchema = z
   .string()
   .url()
   .max(2048)
-  .refine((value) => URL.canParse(value) && new URL(value).protocol === "https:", "must use HTTPS");
+  .refine(
+    (value) => URL.canParse(value) && ["http:", "https:"].includes(new URL(value).protocol),
+    "must use HTTP or HTTPS",
+  );
+const espnBooleanSchema = z
+  .union([z.boolean(), z.literal(0), z.literal(1)])
+  .transform((value) => value === true || value === 1);
 const knownLineupSlotIdSchema = z
   .number()
   .int()
@@ -211,12 +217,19 @@ const settingsSchema = z
         acquisitionType: z.enum(["WAIVERS_TRADITIONAL", "WAIVERS_CONTINUOUS", "FREE_AGENTS_ONLY"]),
         isUsingAcquisitionBudget: z.boolean(),
         waiverOrderReset: z.boolean(),
+        acquisitionLimit: z.number().int().min(-1).max(10_000).optional(),
+        matchupAcquisitionLimit: z.number().int().min(-1).max(10_000).optional(),
+        matchupLimitPerScoringPeriod: z.number().int().min(-1).max(10_000).optional(),
+        minimumBid: z.number().int().min(0).max(100_000).optional(),
+        waiverProcessDays: z.array(z.number().int().min(0).max(7)).max(8).optional(),
+        waiverProcessHour: z.number().int().min(0).max(23).optional(),
       })
       .passthrough(),
     draftSettings: z
       .object({
         auctionBudget: z.number().int().min(0).max(100_000),
         type: z.enum(["SNAKE", "AUTOPICK", "SNAIL", "AUCTION"]),
+        keeperCount: z.number().int().min(0).max(128).optional(),
       })
       .passthrough(),
     rosterSettings: z
@@ -227,13 +240,44 @@ const settingsSchema = z
     scheduleSettings: z
       .object({
         playoffTeamCount: z.number().int().min(1).max(64),
+        matchupPeriodCount: z.number().int().min(0).max(30).optional(),
+        playoffMatchupPeriodLength: z.number().int().min(0).max(10).optional(),
+        playoffSeedingRule: nullableTextSchema(120),
+        divisions: z
+          .array(
+            z
+              .object({
+                id: providerIdSchema,
+                name: nonEmptyTextSchema(120),
+              })
+              .passthrough(),
+          )
+          .max(64)
+          .optional(),
       })
       .passthrough(),
     scoringSettings: z
       .object({
         scoringItems: z.array(scoringItemSchema).max(256),
+        matchupTieRule: nullableTextSchema(120),
+        playoffMatchupTieRule: nullableTextSchema(120),
+        scoringType: nullableTextSchema(120),
+        scoringEnhancementType: nullableTextSchema(120),
       })
       .passthrough(),
+    tradeSettings: z
+      .object({
+        deadlineDate: z.number().int().nonnegative().max(8_640_000_000_000_000).optional(),
+        revisionHours: z
+          .number()
+          .int()
+          .min(0)
+          .max(24 * 30)
+          .optional(),
+        vetoVotesRequired: z.number().int().min(0).max(64).optional(),
+      })
+      .passthrough()
+      .optional(),
   })
   .passthrough()
   .superRefine((value, context) => {
@@ -250,7 +294,9 @@ const memberSchema = z
   .object({
     id: memberIdSchema,
     displayName: nonEmptyTextSchema(120),
-    isLeagueManager: z.boolean(),
+    // ESPN omits this flag in some current league responses and has historically represented
+    // provider booleans as 0/1 in adjacent payloads. Missing means unknown, never commissioner.
+    isLeagueManager: espnBooleanSchema.optional(),
   })
   .passthrough();
 
@@ -329,10 +375,18 @@ const teamSchema = z
     location: nullableTextSchema(80),
     nickname: nullableTextSchema(80),
     abbrev: nullableTextSchema(12),
-    logo: z.union([httpsUrlSchema, z.literal(""), z.null()]).optional(),
+    logo: z.union([webUrlSchema, z.literal(""), z.null()]).optional(),
     owners: z.array(memberIdSchema).max(16),
     primaryOwner: z.union([memberIdSchema, z.null()]).optional(),
-    playoffSeed: z.number().int().min(1).max(64).optional(),
+    // A zero seed is ESPN's preseason/unranked sentinel. Positive in-season seeds remain strict.
+    playoffSeed: z.number().int().min(0).max(64).optional(),
+    waiverRank: z.number().int().min(0).max(64).optional(),
+    transactionCounter: z
+      .object({
+        acquisitionBudgetSpent: z.number().int().min(0).max(100_000).optional(),
+      })
+      .passthrough()
+      .optional(),
     record: z
       .object({
         overall: standingRecordSchema,
@@ -462,16 +516,16 @@ export const espnWebClientPayloadV1Schema = z
             path: ["teams", teamIndex, "playoffSeed"],
             message: "a standings record requires playoffSeed",
           });
-        } else if (standingSeeds.has(team.playoffSeed)) {
+        } else if (team.playoffSeed > 0 && standingSeeds.has(team.playoffSeed)) {
           context.addIssue({
             code: "custom",
             path: ["teams", teamIndex, "playoffSeed"],
             message: "standings seeds must be unique",
           });
-        } else {
+        } else if (team.playoffSeed > 0) {
           standingSeeds.add(team.playoffSeed);
         }
-      } else if (team.playoffSeed !== undefined) {
+      } else if ((team.playoffSeed ?? 0) > 0) {
         context.addIssue({
           code: "custom",
           path: ["teams", teamIndex, "record"],
@@ -898,7 +952,11 @@ function teamAbbreviation(team: EspnWebClientPayloadV1["teams"][number]): string
 }
 
 function teamLogo(team: EspnWebClientPayloadV1["teams"][number]): string | null {
-  return typeof team.logo === "string" && team.logo.length > 0 ? team.logo : null;
+  if (typeof team.logo !== "string" || team.logo.length === 0) return null;
+  const url = new URL(team.logo);
+  // Never persist or render provider-supplied mixed-content URLs. A logo is optional data, so
+  // dropping a legacy HTTP URL is safer than guessing that its host supports HTTPS.
+  return url.protocol === "https:" ? url.toString() : null;
 }
 
 function teamName(team: EspnWebClientPayloadV1["teams"][number]): string {
@@ -961,7 +1019,13 @@ function normalizeTeam(
   members: ReadonlyMap<string, EspnWebClientPayloadV1["members"][number]>,
   leagueId: string,
   season: number,
+  acquisitionBudget: number | null,
 ): NormalizedTeam {
+  const spent = team.transactionCounter?.acquisitionBudgetSpent;
+  const faabRemaining =
+    acquisitionBudget === null || spent === undefined
+      ? null
+      : Math.max(0, acquisitionBudget - spent);
   return {
     externalId: `espn:${season}:${leagueId}:team:${team.id}`,
     providerTeamId: team.id,
@@ -970,6 +1034,8 @@ function normalizeTeam(
     url: `https://fantasy.espn.com/football/team?leagueId=${leagueId}&teamId=${team.id}`,
     logoUrl: teamLogo(team),
     isCurrentUser: false,
+    faabRemaining,
+    waiverPriority: team.waiverRank && team.waiverRank > 0 ? team.waiverRank : null,
     managers: team.owners.map((ownerId) => {
       const member = members.get(ownerId);
       if (member === undefined) {
@@ -981,10 +1047,53 @@ function normalizeTeam(
       return {
         externalId: member.id,
         displayName: member.displayName,
-        isCommissioner: member.isLeagueManager,
+        isCommissioner: member.isLeagueManager ?? false,
       };
     }),
     roster: team.roster.entries.map((entry) => normalizePlayer(entry, season)),
+  };
+}
+
+function normalizedLimit(value: number | undefined): number | null {
+  return value === undefined || value < 0 ? null : value;
+}
+
+function operationalRules(
+  settings: EspnWebClientPayloadV1["settings"],
+): NonNullable<LeagueSyncBundle["league"]["settings"]["operationalRules"]> {
+  const acquisition = settings.acquisitionSettings;
+  const schedule = settings.scheduleSettings;
+  const scoring = settings.scoringSettings;
+  const trade = settings.tradeSettings;
+  const deadline = trade?.deadlineDate;
+  return {
+    acquisitionLimit: normalizedLimit(acquisition.acquisitionLimit),
+    matchupAcquisitionLimit: normalizedLimit(
+      acquisition.matchupAcquisitionLimit ?? acquisition.matchupLimitPerScoringPeriod,
+    ),
+    minimumBid: acquisition.minimumBid ?? null,
+    waiverProcessDays: [...new Set(acquisition.waiverProcessDays ?? [])].sort(
+      (left, right) => left - right,
+    ),
+    waiverProcessHour: acquisition.waiverProcessHour ?? null,
+    keeperCount: settings.draftSettings.keeperCount ?? null,
+    regularSeasonMatchupPeriods: schedule.matchupPeriodCount ?? null,
+    playoffMatchupPeriodLength: schedule.playoffMatchupPeriodLength ?? null,
+    playoffSeedingRule: schedule.playoffSeedingRule ?? null,
+    matchupTieRule: scoring.matchupTieRule ?? null,
+    playoffMatchupTieRule: scoring.playoffMatchupTieRule ?? null,
+    scoringType: scoring.scoringType ?? null,
+    medianGameEnabled:
+      scoring.scoringEnhancementType === undefined || scoring.scoringEnhancementType === null
+        ? null
+        : scoring.scoringEnhancementType === "WIN_BONUS_TOP_HALF",
+    tradeDeadlineAt: deadline === undefined ? null : new Date(deadline).toISOString(),
+    tradeReviewHours: trade?.revisionHours ?? null,
+    vetoVotesRequired: trade?.vetoVotesRequired ?? null,
+    divisions: (schedule.divisions ?? []).map((division) => ({
+      providerDivisionId: division.id,
+      name: division.name,
+    })),
   };
 }
 
@@ -1000,6 +1109,24 @@ function normalizeStandings(
   payload: EspnWebClientPayloadV1,
 ): NormalizedStandingsSnapshot | undefined {
   if (!payload.teams.some((team) => team.record !== undefined)) return undefined;
+  const hasRankedSeeds = payload.teams.every(
+    (team) => team.playoffSeed !== undefined && team.playoffSeed > 0,
+  );
+  const orderedTeams = [...payload.teams].sort((left, right) => {
+    if (left.record === undefined || right.record === undefined) return 0;
+    if (hasRankedSeeds) return (left.playoffSeed ?? 0) - (right.playoffSeed ?? 0);
+    const leftRecord = left.record.overall;
+    const rightRecord = right.record.overall;
+    return (
+      rightRecord.wins - leftRecord.wins ||
+      leftRecord.losses - rightRecord.losses ||
+      rightRecord.ties - leftRecord.ties ||
+      rightRecord.pointsFor - leftRecord.pointsFor ||
+      leftRecord.pointsAgainst - rightRecord.pointsAgainst ||
+      numericIdComparison(left.id, right.id)
+    );
+  });
+  const rankByTeamId = new Map(orderedTeams.map((team, index) => [team.id, index + 1]));
   const entries = payload.teams.map((team) => {
     if (team.record === undefined || team.playoffSeed === undefined) {
       throw new EspnWebClientNormalizationError({
@@ -1008,11 +1135,18 @@ function normalizeStandings(
       });
     }
     const overall = team.record.overall;
+    const rank = rankByTeamId.get(team.id);
+    if (rank === undefined) {
+      throw new EspnWebClientNormalizationError({
+        code: "SCHEMA_DRIFT",
+        message: "ESPN standings rank could not be derived",
+      });
+    }
     return {
       teamExternalId: normalizedTeamExternalId(payload.id, payload.seasonId, team.id),
       providerTeamId: team.id,
-      rank: team.playoffSeed,
-      playoffSeed: team.playoffSeed,
+      rank,
+      playoffSeed: rank,
       wins: overall.wins,
       losses: overall.losses,
       ties: overall.ties,
@@ -1167,6 +1301,21 @@ export function normalizeEspnWebClientSnapshot(
     "This parser performs no network requests and receives no ESPN cookies or credentials.",
     "The snapshot does not identify the active ESPN member, so isCurrentUser is false for every team.",
   ];
+  if (payload.members.some((member) => member.isLeagueManager === undefined)) {
+    warnings.push(
+      "ESPN omitted one or more league-manager flags; those managers were treated as non-commissioners.",
+    );
+  }
+  if (
+    payload.teams.some((team) => typeof team.logo === "string" && team.logo.startsWith("http://"))
+  ) {
+    warnings.push("Legacy insecure ESPN team-logo URLs were discarded instead of persisted.");
+  }
+  if (payload.teams.some((team) => team.record !== undefined && team.playoffSeed === 0)) {
+    warnings.push(
+      "ESPN reported unranked preseason standings; Laces Out derived a deterministic provisional order.",
+    );
+  }
   if (source.kind === "raw-payload") {
     warnings.push(
       "A raw ESPN payload was normalized without a browser-local envelope; capture metadata is generated locally or supplied by the caller.",
@@ -1222,9 +1371,18 @@ export function normalizeEspnWebClientSnapshot(
             };
           }),
         scoringRules,
+        operationalRules: operationalRules(payload.settings),
       },
     },
-    teams: payload.teams.map((team) => normalizeTeam(team, members, leagueId, season)),
+    teams: payload.teams.map((team) =>
+      normalizeTeam(
+        team,
+        members,
+        leagueId,
+        season,
+        acquisitionSettings.isUsingAcquisitionBudget ? acquisitionSettings.acquisitionBudget : null,
+      ),
+    ),
     ...(standings === undefined ? {} : { standings }),
     ...(matchups === undefined ? {} : { matchups }),
     provenance: {

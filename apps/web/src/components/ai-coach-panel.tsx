@@ -22,8 +22,8 @@ import {
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 
-import { aiAnswerForDisplay } from "../lib/ai-answer";
 import { apiBaseUrl, parseAiFeature, parseAiProviderList } from "../lib/api-client";
+import { AiAnswerContent } from "./ai-answer-content";
 import styles from "./ai-coach-panel.module.css";
 
 interface FeatureMeta {
@@ -87,15 +87,15 @@ const PROVIDER_LABELS: Readonly<Record<AiProviderName, string>> = {
 
 const DEMO_ANSWERS: Readonly<Record<AiFeatureName, string>> = {
   "weekly-brief":
-    "Fourth & Long enters Week 6 at 4–1 with the league's second-strongest power score. Your opponent has the stronger projected WR group, but your RB advantage is meaningful.\n\nOne move: start Quentin Johnston in the FLEX for the modeled 1.5-point edge, then verify his status before lock.",
+    "Fourth & Long enters Week 6 at 4–1 with the league's second-strongest power score. Your opponent has the stronger projected WR group, but your RB advantage is meaningful.\n\n**One move:** Start Quentin Johnston in the FLEX for the modeled 1.5-point edge, then verify his status before lock.",
   "start-sit":
-    "The clear call is Quentin Johnston over Mike Evans in FLEX. The current projection set gives Johnston a 1.5-point edge; the rest of the optimized lineup is unchanged.\n\nClose call: this margin is small enough to recheck after the next projection refresh. No stored lock prevents the switch, but complete provider lock coverage is unavailable.",
+    "**The clear call:** Quentin Johnston over Mike Evans in FLEX. The current projection set gives Johnston a 1.5-point edge; the rest of the optimized lineup is unchanged.\n\n**Close call:** This margin is small enough to recheck after the next projection refresh. No stored lock prevents the switch, but complete provider lock coverage is unavailable.",
   "waiver-scan":
-    "Jaylen Wright is the only addition that clears the worth-the-drop bar. Add Wright and drop the second defense; the pairing improves weighted roster value by 2.8 points while preserving a legal lineup. A bid around $8 is reasonable within the sample FAAB context.\n\nThe remaining available players do not improve the roster enough to justify a drop.",
+    "Jaylen Wright is the only addition that clears the worth-the-drop bar.\n\n- **Add:** Jaylen Wright\n- **Drop:** Your second defense\n- **Suggested bid:** Around $8\n\nThe pairing improves weighted roster value by 2.8 points while preserving a legal lineup. The remaining available players do not improve the roster enough to justify a drop.",
   "trade-builder":
-    "Best fit: send Mike Evans and receive Jahmyr Gibbs. The modeled package improves your optimized roster by 3.2 points and the other team by 0.8, while addressing your RB weakness without creating an illegal roster.\n\nPitch: “You get a weekly WR starter, and I balance out my RB room. The numbers are close for both sides—interested in Evans for Gibbs?”",
+    "**Best fit:** Send Mike Evans and receive Jahmyr Gibbs. The modeled package improves your optimized roster by 3.2 points and the other team by 0.8, while addressing your RB weakness without creating an illegal roster.\n\n> You get a weekly WR starter, and I balance out my RB room. The numbers are close for both sides—interested in Evans for Gibbs?",
   "standings-prediction":
-    "Model-assisted forecast: 1. Fourth & Long 10–4; 2. Uptown Blitz 9–5; 3. Lake Effect 8–6; 4. Sunday Scaries 8–6; 5. Goal Line Fade 6–8; 6. Punt Intended 5–9.\n\nBiggest riser: Fourth & Long, driven by the league's best all-play profile and a top-two power score. Biggest faller: Sunday Scaries, whose record is running ahead of expected wins. Your playoff outlook is strong, with the current roster projecting as a top-two seed.",
+    "### Model-assisted forecast\n1. Fourth & Long — 10–4\n2. Uptown Blitz — 9–5\n3. Lake Effect — 8–6\n4. Sunday Scaries — 8–6\n5. Goal Line Fade — 6–8\n6. Punt Intended — 5–9\n\n**Biggest riser:** Fourth & Long, driven by the league's best all-play profile and a top-two power score.\n\n**Biggest faller:** Sunday Scaries, whose record is running ahead of expected wins. Your playoff outlook is strong, with the current roster projecting as a top-two seed.",
 };
 
 type ResultState =
@@ -122,24 +122,6 @@ async function responseMessage(response: Response): Promise<string> {
     // Use the status-aware fallback below for empty or non-JSON responses.
   }
   return `The AI review could not be generated (${response.status}).`;
-}
-
-function cleanText(value: string): string {
-  return value.replace(/\*\*/gu, "").replace(/^#{1,4}\s+/u, "");
-}
-
-function Answer({ answer }: { readonly answer: string }) {
-  return (
-    <div className={styles.answerBody}>
-      {aiAnswerForDisplay(answer)
-        .split(/\n{2,}/u)
-        .map((paragraph) => paragraph.trim())
-        .filter(Boolean)
-        .map((paragraph, index) => (
-          <p key={`${index}:${paragraph.slice(0, 24)}`}>{cleanText(paragraph)}</p>
-        ))}
-    </div>
-  );
 }
 
 function demoResult(feature: AiFeatureName, leagueId: string): AiFeatureResponse {
@@ -398,7 +380,9 @@ export function AiCoachPanel({
                     : `${PROVIDER_LABELS[result.result.provider]} · ${result.result.model}`}
                 </small>
               </div>
-              <Answer answer={result.result.answer} />
+              <div className={styles.answerBody}>
+                <AiAnswerContent answer={result.result.answer} />
+              </div>
               <footer>
                 {result.result.sources.map((source) => (
                   <span key={source}>{source}</span>

@@ -34,6 +34,7 @@ import { and, countDistinct, desc, eq, gt, inArray, isNull, max, or, sql } from 
 import type {
   AppendRankingVersionInput,
   CommitRankingImportInput,
+  CreateRankingCloneResult,
   CreatedRankingShareRecord,
   RankingImportRecord,
   RankingMutationResult,
@@ -338,6 +339,82 @@ export class DrizzleRankingRepository implements RankingRepository {
       createdAt: new Date(list.createdAt),
       updatedAt: new Date(list.updatedAt),
     });
+  }
+
+  async createClone(
+    listInput: RankingList,
+    versionInput: RankingVersion,
+  ): Promise<CreateRankingCloneResult> {
+    const list = rankingListSchema.parse(listInput);
+    const version = parseRankingVersion(versionInput);
+    if (
+      version.listId !== list.id ||
+      list.currentVersionId !== version.id ||
+      version.versionNumber !== 1 ||
+      version.parentVersionId !== null ||
+      version.authorUserId !== list.ownerUserId
+    ) {
+      throw new TypeError("The ranking clone is not a valid independent first version");
+    }
+    try {
+      return await this.#database.transaction(async (transaction) => {
+        const storageEntries = normalizeEntriesForStorage(version.entries);
+        const missing = await missingPlayerIds(transaction, storageEntries);
+        if (missing.length > 0) return { status: "unknown_players" } as const;
+        const { checksumSha256: _checksumSha256, ...versionPayload } = version;
+        void _checksumSha256;
+        const storedVersion = createRankingVersion({
+          ...versionPayload,
+          entries: storageEntries,
+        });
+        await transaction.insert(rankingLists).values({
+          id: list.id,
+          ownerUserId: list.ownerUserId,
+          leagueId: null,
+          name: list.name,
+          description: list.description,
+          kind: list.kind,
+          visibility: list.visibility.scope,
+          visibilityConfig: list.visibility as RankingVisibilityConfig,
+          season: list.season,
+          scoringContext: list.scoringContext,
+          scoringFormat: list.scoringContext.format,
+          currentVersionId: null,
+          latestPublishedVersionId: null,
+          archivedAt: null,
+          createdAt: new Date(list.createdAt),
+          updatedAt: new Date(list.updatedAt),
+        });
+        await transaction.insert(rankingListVersions).values({
+          id: storedVersion.id,
+          listId: storedVersion.listId,
+          versionNumber: storedVersion.versionNumber,
+          parentVersionId: null,
+          state: storedVersion.state,
+          authorUserId: storedVersion.authorUserId,
+          importRunId: null,
+          publishedAt: null,
+          entryCount: storedVersion.entries.length,
+          checksumSha256: storedVersion.checksumSha256,
+          changeNote: storedVersion.changeNote,
+          provenance: storedVersion.provenance,
+          createdAt: new Date(storedVersion.createdAt),
+        });
+        if (storedVersion.entries.length > 0) {
+          await transaction.insert(rankingEntries).values(valuesForEntries(storedVersion));
+        }
+        await transaction
+          .update(rankingLists)
+          .set({ currentVersionId: storedVersion.id })
+          .where(eq(rankingLists.id, list.id));
+        return { status: "saved" } as const;
+      });
+    } catch (error) {
+      const code = databaseErrorCode(error);
+      if (code === "23505") return { status: "conflict" };
+      if (code === "23503") return { status: "unknown_players" };
+      throw error;
+    }
   }
 
   async listAccessibleLists(

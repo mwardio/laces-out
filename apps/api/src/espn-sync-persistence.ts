@@ -393,6 +393,8 @@ export class DrizzleEspnSyncPersistence {
             abbreviation: team.abbreviation,
             isUserTeam: false,
             managerDisplayName: team.managers[0]?.displayName ?? null,
+            faabRemaining: team.faabRemaining ?? null,
+            waiverPriority: team.waiverPriority ?? null,
           })
           .onConflictDoUpdate({
             target: [fantasyTeams.leagueSeasonId, fantasyTeams.externalKey],
@@ -400,6 +402,8 @@ export class DrizzleEspnSyncPersistence {
               name: team.name,
               abbreviation: team.abbreviation,
               managerDisplayName: team.managers[0]?.displayName ?? null,
+              faabRemaining: team.faabRemaining ?? null,
+              waiverPriority: team.waiverPriority ?? null,
               updatedAt: now,
             },
           })

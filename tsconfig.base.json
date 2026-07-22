@@ -38,6 +38,7 @@
       "@fantasy/engine-trade": ["packages/engine-trade/src/index.ts"],
       "@fantasy/security": ["packages/security/src/index.ts"],
       "@fantasy/source-nflverse": ["packages/source-nflverse/src/index.ts"],
+      "@fantasy/source-ffc": ["packages/source-ffc/src/index.ts"],
       "@fantasy/testkit": ["packages/testkit/src/index.ts"]
     }
   }

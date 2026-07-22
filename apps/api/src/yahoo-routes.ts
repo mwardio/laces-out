@@ -5,6 +5,33 @@ import { YahooSyncError, type YahooSyncPort } from "./yahoo-sync.js";
 
 export interface YahooRouteOptions {
   readonly yahooSync?: YahooSyncPort;
+  readonly enqueueProjectionRefresh?: (request: {
+    readonly season: number;
+    readonly reason: "league-sync";
+    readonly requestedAt: Date;
+  }) => Promise<string | null>;
+}
+
+async function enqueueProjectionRefreshes(
+  options: YahooRouteOptions,
+  seasons: readonly number[],
+  request: FastifyRequest,
+): Promise<void> {
+  if (!options.enqueueProjectionRefresh) return;
+  for (const season of new Set(seasons)) {
+    try {
+      await options.enqueueProjectionRefresh({
+        season,
+        reason: "league-sync",
+        requestedAt: new Date(),
+      });
+    } catch (error) {
+      request.log.warn(
+        { err: error, season },
+        "Yahoo sync succeeded but projection refresh enqueue failed",
+      );
+    }
+  }
 }
 
 const connectionPathSchema = z.object({ connectionId: z.string().uuid() }).strict();
@@ -88,7 +115,13 @@ export function registerYahooRoutes(app: FastifyInstance, options: YahooRouteOpt
     if (!options.yahooSync) return reply.code(503).send(unavailable(request.id));
     const { connectionId } = connectionPathSchema.parse(request.params);
     try {
-      return reply.code(202).send(await options.yahooSync.discoverAndSync(user.id, connectionId));
+      const result = await options.yahooSync.discoverAndSync(user.id, connectionId);
+      await enqueueProjectionRefreshes(
+        options,
+        result.syncs.map((sync) => sync.season),
+        request,
+      );
+      return reply.code(202).send(result);
     } catch (error) {
       const response = sendYahooError(error, request, reply);
       if (response) return response;
@@ -105,6 +138,7 @@ export function registerYahooRoutes(app: FastifyInstance, options: YahooRouteOpt
       const { connectionId, leagueKey } = leaguePathSchema.parse(request.params);
       try {
         const receipt = await options.yahooSync.syncLeague(user.id, connectionId, leagueKey);
+        await enqueueProjectionRefreshes(options, [receipt.season], request);
         return reply.code(receipt.state === "accepted" ? 202 : 200).send(receipt);
       } catch (error) {
         const response = sendYahooError(error, request, reply);

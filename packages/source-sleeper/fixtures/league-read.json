@@ -1,0 +1,138 @@
+{
+  "user": {
+    "user_id": "100000000000000001",
+    "username": "sample_manager",
+    "display_name": "Sample Manager",
+    "avatar": "avatar001"
+  },
+  "leagues": [
+    {
+      "total_rosters": 2,
+      "status": "in_season",
+      "sport": "nfl",
+      "settings": { "playoff_teams": 2, "waiver_budget": 100 },
+      "season_type": "regular",
+      "season": "2026",
+      "scoring_settings": { "rec": 1, "pass_yd": 0.04 },
+      "roster_positions": ["QB", "RB", "WR", "FLEX", "BN"],
+      "previous_league_id": "800000000000000000",
+      "name": "Fixture Friends League",
+      "league_id": "900000000000000000",
+      "draft_id": "910000000000000000",
+      "avatar": "leagueavatar001"
+    },
+    { "league_id": "not-a-provider-id" }
+  ],
+  "leagueUsers": [
+    {
+      "user_id": "100000000000000001",
+      "username": "sample_manager",
+      "display_name": "Sample Manager",
+      "avatar": "avatar001",
+      "metadata": { "team_name": "The Samples" },
+      "is_owner": true
+    },
+    {
+      "user_id": "100000000000000002",
+      "username": "second_manager",
+      "display_name": "Second Manager",
+      "avatar": null,
+      "metadata": { "team_name": "Fixture United" },
+      "is_owner": false
+    }
+  ],
+  "rosters": [
+    {
+      "starters": ["player-qb", "player-rb", "CHI"],
+      "settings": { "wins": 4, "losses": 1, "fpts": 611, "fpts_decimal": 25 },
+      "roster_id": 1,
+      "reserve": ["player-ir"],
+      "taxi": ["player-taxi"],
+      "players": ["player-qb", "player-rb", "player-ir", "player-taxi", "CHI"],
+      "owner_id": "100000000000000001",
+      "co_owners": ["100000000000000003"],
+      "league_id": "900000000000000000",
+      "metadata": { "record": "4-1" }
+    }
+  ],
+  "matchups": [
+    {
+      "starters": ["player-qb", "player-rb", "CHI"],
+      "starters_points": [22.5, 15.25, 8],
+      "players": ["player-qb", "player-rb", "CHI", "player-bench"],
+      "players_points": { "player-qb": 22.5, "player-rb": 15.25, "CHI": 8, "player-bench": 4 },
+      "roster_id": 1,
+      "matchup_id": 1,
+      "points": 45.75,
+      "custom_points": null
+    }
+  ],
+  "transactions": [
+    {
+      "type": "trade",
+      "transaction_id": "920000000000000001",
+      "status_updated": 1780000001000,
+      "status": "complete",
+      "settings": null,
+      "roster_ids": [1, 2],
+      "metadata": { "notes": "fixture trade" },
+      "leg": 6,
+      "drops": { "player-drop": 1 },
+      "draft_picks": [
+        {
+          "season": "2027",
+          "round": 2,
+          "roster_id": 1,
+          "previous_owner_id": 1,
+          "owner_id": 2
+        }
+      ],
+      "creator": "100000000000000001",
+      "created": 1780000000000,
+      "consenter_ids": [1, 2],
+      "adds": { "player-add": 1 },
+      "waiver_budget": [{ "sender": 2, "receiver": 1, "amount": 10 }]
+    }
+  ],
+  "drafts": [
+    {
+      "type": "snake",
+      "status": "complete",
+      "start_time": 1770000000000,
+      "sport": "nfl",
+      "settings": { "teams": 2, "rounds": 3, "pick_timer": 120 },
+      "season_type": "regular",
+      "season": "2026",
+      "metadata": { "scoring_type": "ppr", "name": "Fixture Draft" },
+      "league_id": "900000000000000000",
+      "last_picked": 1770001000000,
+      "draft_order": { "100000000000000001": 1, "100000000000000002": 2 },
+      "slot_to_roster_id": { "1": 1, "2": 2 },
+      "draft_id": "910000000000000000",
+      "creators": ["100000000000000001"],
+      "created": 1769000000000
+    }
+  ],
+  "draftPicks": [
+    {
+      "player_id": "player-qb",
+      "picked_by": "100000000000000001",
+      "roster_id": "1",
+      "round": 1,
+      "draft_slot": 1,
+      "pick_no": 1,
+      "metadata": { "team": "BUF", "position": "QB", "amount": "41" },
+      "is_keeper": false,
+      "draft_id": "910000000000000000"
+    }
+  ],
+  "tradedPicks": [
+    {
+      "season": "2027",
+      "round": 2,
+      "roster_id": 1,
+      "previous_owner_id": 1,
+      "owner_id": 2
+    }
+  ]
+}

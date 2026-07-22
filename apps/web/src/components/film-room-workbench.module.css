@@ -310,7 +310,7 @@
     display: block;
     margin-top: 3px;
     color: var(--ink-500);
-    font-size: 10px;
+    font-size: 11px;
   }
 
   .panelHeader > a {
@@ -342,7 +342,7 @@
 
   .field > span {
     color: var(--ink-600);
-    font-size: 10px;
+    font-size: 11px;
     font-weight: 800;
     letter-spacing: 0.07em;
     text-transform: uppercase;
@@ -359,7 +359,7 @@
     border: 1px solid var(--ink-200);
     border-radius: 8px;
     outline: 0;
-    font-size: 12px;
+    font-size: 13px;
   }
 
   .field textarea {
@@ -386,7 +386,7 @@
 
   .field small {
     color: var(--ink-500);
-    font-size: 10px;
+    font-size: 11px;
     line-height: 1.45;
   }
 
@@ -433,7 +433,7 @@
     background: var(--paper-50);
     border: 1px solid var(--ink-100);
     border-radius: 8px;
-    font-size: 10px;
+    font-size: 11px;
   }
 
   .usageLine strong {
@@ -456,7 +456,7 @@
     gap: 7px;
     padding: 0 13px;
     border-radius: 8px;
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 780;
   }
 
@@ -484,7 +484,14 @@
     padding-top: 12px;
     color: var(--ink-500);
     border-top: 1px solid var(--ink-100);
-    font-size: 10px;
+    font-size: 11px;
+  }
+
+  .removeActions {
+    display: inline-flex;
+    flex: 0 0 auto;
+    align-items: center;
+    gap: 10px;
   }
 
   .removeRow button {
@@ -496,8 +503,12 @@
     color: var(--red-600);
     background: transparent;
     border: 0;
-    font-size: 10px;
+    font-size: 11px;
     font-weight: 750;
+  }
+
+  .removeRow .cancelRemoval {
+    color: var(--ink-500);
   }
 
   .notice,
@@ -508,7 +519,7 @@
     padding: 9px 10px;
     border: 1px solid;
     border-radius: 8px;
-    font-size: 10px;
+    font-size: 11px;
     line-height: 1.5;
   }
 
@@ -625,10 +636,10 @@
   }
 
   .answerText {
+    min-width: 0;
     color: var(--ink-800);
     font-size: 12px;
     line-height: 1.7;
-    white-space: pre-wrap;
   }
 
   .sampleRecommendations {
@@ -821,6 +832,11 @@
     .removeRow {
       align-items: flex-start;
       flex-direction: column;
+    }
+
+    .removeActions {
+      width: 100%;
+      justify-content: space-between;
     }
   }
 

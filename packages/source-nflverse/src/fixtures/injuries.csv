@@ -1,0 +1,5 @@
+season,season_type,game_type,team,week,gsis_id,position,full_name,first_name,last_name,report_primary_injury,report_secondary_injury,report_status,practice_primary_injury,practice_secondary_injury,practice_status
+2025,REG,REG,ARI,1,00-0026190,DE,Calais Campbell,Calais,Campbell,,,,Not injury related - resting player,,Did Not Participate In Practice
+2025,REG,REG,ATL,1,00-0034346,G,Will Hernandez,William,Hernandez,Knee,,Out,Knee,,Limited Participation in Practice
+2025,REG,REG,BUF,3,00-0035228,QB,Kyler Murray,Kyler,Murray,Illness,,,,,
+2025,REG,REG,CAR,3,00-0038571,G,Jon Gaines II,Jon,Gaines,,,,Thumb,,Full Participation in Practice

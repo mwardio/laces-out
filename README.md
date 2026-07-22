@@ -2,12 +2,14 @@
 
 An invite-only, self-hosted fantasy football decision system for friends using Yahoo and ESPN leagues. It provides user-specific and league-specific draft, lineup, waiver, trade, opponent, and league-wide analysis—not generic rankings with a chat layer.
 
-The product is under active development. The current repository contains DB-backed invite and membership boundaries; official Yahoo OAuth, discovery, and read-only league sync; an implemented, fixture- and smoke-tested multi-league ESPN browser companion plus authenticated canonical-JSON recovery; daily nflverse identity and Sleeper player/status checks; hourly attributed Sleeper waiver-market signals; custom rankings and projection imports; persistent manual draft rooms; projection-backed lineup, waiver, and trade analysis; league analytics and opponent scouting; an implemented Film room with managed Gemini plus encrypted OpenAI, Anthropic, Gemini, and OpenRouter BYOK; and a responsive interface. Sanctioned 2026 private-league testing plus signed-distribution and terms review remain release gates for the companion. The  tracks the remaining hardening work. Demo data is always labeled; no screen should imply that a provider account is connected when it is not.
+The product is under active development. The current repository contains DB-backed invite and membership boundaries; official Yahoo OAuth, discovery, and read-only league sync; an implemented, fixture- and smoke-tested multi-league ESPN browser companion plus authenticated canonical-JSON recovery; immutable nflverse identity, schedule, weekly player-stat, team-stat, weekly-roster, injury-report, and snap-count ingestion; daily Fantasy Football Calculator ADP, hourly active-season/status checks, and hourly attributed Sleeper waiver-market signals; a locked-backtest, league-scored Laces Out weekly forecast; a sourced Stats Center; custom rankings, board comparison, and projection imports; persistent snake and auction draft rooms with contextual recommendations and local Practice Room simulation; projection-backed lineup, waiver, and trade analysis; league analytics and opponent scouting; an implemented Film room with managed Gemini plus encrypted OpenAI, Anthropic, Gemini, and OpenRouter BYOK; and a responsive interface. The signed, unlisted Chrome Web Store companion is published; sanctioned 2026 private-league testing and terms review remain release gates. The rest-of-season distribution engine and its hourly audit rail are implemented in shadow mode, but calibrated ROS projections are not published or consumed yet. The  and  track the remaining work. Demo data is always labeled; no screen should imply that a provider account is connected when it is not.
+
+evidence, current ROS blockers, and constraints for the next model iteration.
 
 ## Important provider status
 
-- **Yahoo:** official Fantasy Sports API with OAuth 2, but new access is reviewed by Yahoo and read-only by default. A live connection needs an approved Yahoo application and credentials.
-- **ESPN:** no current public Fantasy OAuth/API offering was found, so private leagues use a scoped one-click sync bookmark or the optional read-only [browser companion](./apps/espn-bridge/README.md). Users sign in on ESPN itself; ESPN passwords and cookies stay in the browser.
+- **Yahoo:** official read-only Fantasy Sports authorization and sync are implemented. Yahoo connection is presented as **Coming Soon** until it is enabled for this deployment.
+- **ESPN:** no current public Fantasy OAuth/API offering was found, so private leagues use a scoped one-click sync bookmark or the optional read-only [Chrome Web Store companion](https://chromewebstore.google.com/detail/laces-out-espn-bridge/hmilkmcjlkpnigcfnlfogeafacjpmkbj). Pairing is handed directly from Laces Out to the extension without copying a device token. Users sign in on ESPN itself; ESPN passwords and cookies stay in the browser.
 - **Writes:** lineup changes, waiver claims, and trades are disabled. The app recommends and deep-links; every action must be verified and completed at the league provider.
 
 See `docs/provider-notes/` for evidence and constraints.
@@ -22,7 +24,7 @@ and terms notices at `/privacy` and `/terms`. Set `NEXT_PUBLIC_SITE_URL` and
 ```text
 apps/web       Next.js responsive PWA
 apps/api       Fastify REST API, provider ingestion, and job-enqueue boundary
-apps/worker    pg-boss runtime; shared NFL identity/status/market jobs plus future-job scaffolding
+apps/worker    pg-boss runtime; shared NFL inputs, weekly forecasts, ADP/status/market jobs
 apps/espn-bridge  private ESPN league browser-sync companion
 
 packages/domain             provider-neutral entities and rules
@@ -30,11 +32,12 @@ packages/connectors         provider capability and sync ports
 packages/connector-yahoo    supported Yahoo OAuth/API adapter
 packages/connector-espn     import/public ESPN adapter boundary
 packages/db                 Drizzle schema and SQL migrations
-packages/projections        source blending and uncertainty
+packages/projections        scoring normalization, source blending, weekly model, and uncertainty
 packages/engine-*           draft, lineup, waiver, trade engines
 packages/security           credential envelopes and redaction
-packages/source-nflverse    canonical player identity source
-packages/source-sleeper     player/status corroboration and attributed waiver trends
+packages/source-ffc         contextual redraft ADP
+packages/source-nflverse    canonical identity, schedules, player/team weekly stats, and snaps
+packages/source-sleeper     player/status/trend sources and read-only league adapter
 ```
 
 PostgreSQL is the only required stateful service. Provider packages normalize external data; recommendation packages never import provider code.
@@ -87,12 +90,27 @@ resolved CSV preview and idempotent commit; manual row edits; JSON/CSV export; a
 bounded share links. Share capabilities live in URL fragments and are submitted to the API only in
 request bodies, so they do not enter server paths or query logs.
 
-`/draft` now opens authenticated, league-scoped snake and auction rooms backed by an append-only
+Accessible saved or league-shared boards can be copied into a private baseline and compared side by
+side without modifying either source. Rank order controls work by pointer or keyboard.
+
+`/draft` opens authenticated, league-scoped snake and auction rooms backed by an append-only
 PostgreSQL event ledger. Owners and commissioners can configure the real snake order or auction
 budget, record manual results, safely retry writes, undo or correct entries, and reopen or share a
-session link; other league members can follow the same room. The interface deliberately reports
+session link; other league members can follow the same room. Snake rooms can use context-matched,
+attributed daily ADP to estimate wait risk, while auction rooms consume authored AAV and target
+prices for target/drain nominations. Projection-derived VBD consumes a compatible league/week set
+and remains visibly unavailable when none passes scoring and quality gates; rankings are never
+relabeled as projected points. Practice Room explicitly forks
+the current room into browser memory for seeded snake or auction simulation, undo, and replay;
+synthetic events never call room or provider mutation APIs. The interface deliberately reports
 `providerPolling=false`: ESPN/Yahoo live-draft polling is not claimed, and the sample board remains
 available only as an explicitly labeled demo.
+
+`/stats` reads only the latest admitted nflverse weekly-stat and snap-count versions. It provides
+filterable targets, carries, opportunities, target-share, and offensive-snap leaders with source
+timestamps, attribution, and identity-quality counts. Metrics that need complete league scoring,
+red-zone inputs, or full coverage remain explicitly unavailable instead of being estimated from an
+incompatible dataset.
 
 Development mode can display a clearly marked sample portfolio without credentials. Before using any real provider connection, generate the secrets described in `.env.example` and keep `.env` out of source control.
 
@@ -135,17 +153,26 @@ To perform a real network check of the canonical nflverse player source and upda
 catalog, run
 `npm run catalog:refresh -w @fantasy/worker`.
 The dashboard's authenticated **Check NFL data** action queues the complete shared-data sweep:
-nflverse identity, Sleeper player/status observations, and Sleeper add/drop momentum. Daily and
-on-demand checks do not replace Yahoo league sync, ESPN browser sync, or configured projection
-imports; those remain separate workflows in Connections and Projections. Sleeper market momentum
-can adjust likely FAAB competition, but a waiver recommendation still has to improve modeled roster
-value.
+nflverse identity, the four-season schedule/player-stat/team-stat/weekly-roster/snap window, Sleeper
+player/status observations, and Sleeper add/drop momentum. A successful sweep then queues the Laces Out weekly
+forecast. The same forecast is scheduled hourly and conditionally checks current-season
+inputs before computing; unchanged checksums do not create duplicate projection artifacts.
+**Check draft market** refreshes the 8-, 10-, 12-, and 14-team standard, half-PPR, and PPR ADP
+contexts. These shared-data checks do not replace Yahoo league sync, ESPN browser sync, or private
+projection imports; those remain separate workflows in Connections and Projections. Sleeper market
+momentum can adjust likely FAAB competition, but a waiver recommendation still has to improve
+modeled roster value.
+
+Weekly roster membership prevents the forecast benchmark from silently dropping recently relevant
+players who finished with no stats and no snaps. Completed DNPs are scored as zero outcomes but do
+not become played-game role training; future games and byes cannot create synthetic zeroes.
 `runtime:smoke` builds and actually starts the production API, worker, and web app; verifies API
 liveness/database readiness plus a rendered invite route on isolated ports; then shuts them down.
 
 ## Yahoo setup
 
-1. Apply through the current Yahoo Fantasy portal to enable read-only league sync.
+1. Yahoo connection remains Coming Soon in the public product. Enable it only after completing the
+   deployment's provider release checklist.
 2. Register an exact callback such as `https://your-host.example/v1/connections/yahoo/callback`.
 3. Set `YAHOO_CLIENT_ID`, `YAHOO_CLIENT_SECRET`, and `YAHOO_REDIRECT_URI` only on the API server.
 4. Keep write access disabled. The connector uses Authorization Code + PKCE and serializes each
@@ -165,8 +192,8 @@ liveness/database readiness plus a rendered invite route on isolated ports; then
    provider-side revocation separately when needed.
 
 Yahoo credentials are not required for fixture tests, the forced-rollback persistence smoke, the
-engines, or manual workflows. Live-account accuracy is not claimed until Yahoo approves the app
-and its exact response shapes pass the same contract suite with sanitized captures.
+engines, or manual workflows. Live-account accuracy is not claimed until the deployment's exact
+response shapes pass the same contract suite with sanitized captures.
 
 ## ESPN setup
 
@@ -187,7 +214,34 @@ npm run bridge:smoke -w @fantasy/api
 npm run espn:import:smoke -w @fantasy/api
 ```
 
-## Projection imports
+## Weekly projections and imports
+
+The worker builds managed Laces Out projection sets for the two earliest actionable weeks of each
+safely supported league; an explicit week can also be requested for research. It forecasts provider-neutral QB, RB, WR, TE, K, and D/ST stat components from
+strictly prior nflverse observations, the schedule, recent role, opponent/team context, and current
+status, then applies that league's exact supported Yahoo or ESPN scoring rules. Unknown, nonlinear,
+IDP, or otherwise unsupported scoring is rejected rather than approximated. Byes are explicit
+zeros, confirmed inactive players are zeroed, and missing, stale, degraded, or incomplete inputs
+preserve the prior good publication instead of replacing it. Managed-set metadata retains input
+checksums, model version, source and training cutoffs, coverage, warnings, and locked-backtest
+metrics. Projection Lab exposes those details and can queue a fresh input check and rerun. The full
+training window refreshes daily, current-season inputs are conditionally checked before every
+hourly forecast sweep, and a ten-minute game-aware sweep runs within 130 minutes of kickoff with a
+forced final source check inside ten minutes. Completed ESPN/Yahoo syncs plus manual checks enqueue
+immediate reruns. In-flight or unavailable sources and unknown kickoff times fail closed, while
+started games retain their last pre-kickoff rows.
+
+The managed model is a weekly forecast, including individually scored future weeks. A separate
+deterministic rest-of-season distribution model, season-blocked champion evaluator, and
+split-conformal interval-calibration rail exist in shadow mode. Trade values, end-of-season
+forecasts, and other ROS consumers remain gated until the official multi-season replay clears every
+position/horizon cell and its later untouched-season interval test.
+
+The current official v6 replay completed all 2,040 forecasts and 68 evaluation batches without a
+missing or skipped forecast. Every portfolio and availability gate passes; only the one-to-four-week
+kicker interval cell remains withheld by its evidence gate. Weekly managed projections remain the
+production source, and no ROS value is exposed to lineup, waiver, trade, standings, API, or UI
+consumers before an explicit admission and rollout decision.
 
 The `/projections` area accepts bounded single-week CSV files after a league has been
 synchronized. Rest-of-season imports are intentionally not offered yet: the Decision Desk and

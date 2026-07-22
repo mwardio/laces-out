@@ -67,7 +67,12 @@ Contract v1 requires the fields used to produce normalized data:
 
 - Root: `id`, `seasonId`, `scoringPeriodId`, `status.latestScoringPeriod`, `settings`, `members`, and `teams`; `schedule` is required when `mMatchup` was requested.
 - `mSettings`: league name/size, acquisition settings, draft settings, lineup-slot counts, playoff team count, and scoring items.
+- Optional operating rules retained when ESPN supplies them: acquisition limits, minimum bid,
+  waiver processing schedule, keeper count, regular-season/playoff structure, seeding and tie
+  rules, median-game scoring, trade deadline/review settings, veto threshold, and divisions.
 - `mTeam`: team identity/name, owner member IDs, and optional abbreviation/logo.
+- Optional team state retained when ESPN supplies it: waiver priority and FAAB remaining, derived
+  from the league budget and that team's reported acquisition-budget spend.
 - Members: ID, display name, and league-manager flag.
 - `mRoster`: team roster entries with matching IDs at `playerId`, `playerPoolEntry.id`, and `playerPoolEntry.player.id`; `ONTEAM` state; team ownership; lineup slot; full name; eligible slots; pro-team ID; and injury status.
 - `mStandings`: an overall record and playoff seed for every team, including wins, losses, ties,
@@ -178,6 +183,23 @@ ESPN can change this response without notice. When a production snapshot fails:
   league-scoped and excluded from unscoped player discovery.
 - It supports the observed NFL lineup-slot and pro-team tables only.
 - It performs no lineup writes or other ESPN mutations.
+
+## Supplemental read roadmap
+
+The maintained `cwendt94/espn-api` client demonstrates additional read-only web-client surfaces
+that are valuable but intentionally remain outside contract v1. Add them as separate bounded,
+versioned artifacts so a supplemental failure can never block the core league snapshot:
+
+1. `kona_player_info` for league-specific `FREEAGENT`/`WAIVERS` state and ownership context;
+2. `mMatchupScore` plus `mScoreboard` for weekly player-level actual/projected scoring and lineup
+   efficiency;
+3. `mTransactions2` for structured adds, drops, waiver claims, and bids; and
+4. `mDraftDetail` for completed/on-demand draft results, including auction bids and keepers.
+
+Do not ingest the league message board. If transaction communication is ever evaluated, request
+only the explicitly filtered activity feed and prove that no conversational content crosses the
+bridge. ESPN player news, positional ratings, and global schedule/catalog reads remain lower-value
+duplicates of the application's blended first-party sources.
 
 ## Research basis
 

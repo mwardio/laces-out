@@ -81,6 +81,7 @@
   font-weight: 400;
   letter-spacing: 0.005em;
   line-height: 1;
+  text-transform: none;
   word-spacing: 0.08em;
 }
 
@@ -247,9 +248,9 @@
 .heroInner {
   position: relative;
   display: grid;
-  grid-template-columns: minmax(0, 0.88fr) minmax(560px, 1.12fr);
+  grid-template-columns: minmax(0, 0.95fr) minmax(540px, 1.05fr);
   align-items: center;
-  gap: clamp(48px, 7vw, 94px);
+  gap: clamp(44px, 6vw, 84px);
 }
 
 .heroCopy {
@@ -274,10 +275,13 @@
   max-width: 620px;
   margin: 24px 0 0;
   color: #f6f7f5;
-  font-size: clamp(54px, 7vw, 86px);
+  /* Sized so each sentence breaks as an intentional balanced pair of lines instead of
+     stacking one word per line and pushing the payoff below the fold. */
+  font-size: clamp(48px, 5vw, 72px);
   font-weight: 700;
   letter-spacing: -0.067em;
-  line-height: 0.92;
+  line-height: 0.96;
+  text-wrap: balance;
 }
 
 .heroCopy h1 span {

@@ -50,6 +50,7 @@ function receipt(
     leagueId: LEAGUE_ID,
     leagueSeasonId: SEASON_ID,
     externalLeagueKey: bundle.league.externalId,
+    season: bundle.league.season,
     state,
     recordsWritten: 12,
     syncedAt: NOW.toISOString(),

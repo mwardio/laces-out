@@ -1,0 +1,6 @@
+game_id,season,game_type,week,gameday,gametime,away_team,away_score,home_team,home_score,location,away_rest,home_rest
+2024_18_CHI_GB,2024,REG,18,2025-01-05,13:00,CHI,14,GB,24,Home,7,7
+2025_01_DAL_PHI,2025,REG,1,2025-09-04,20:20,DAL,20,PHI,24,Home,7,7
+2025_02_NYG_DAL,2025,REG,2,2025-09-14,,NYG,,DAL,,Home,10,10
+2025_03_DEN_LAC,2025,REG,3,2025-09-21,16:05,DEN,,LAC,,Neutral,7,7
+2025_19_GB_PHI,2025,WC,19,2026-01-11,16:30,GB,,PHI,,Home,7,7

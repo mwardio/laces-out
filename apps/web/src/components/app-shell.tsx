@@ -6,6 +6,7 @@ import {
   BarChart3,
   BrainCircuit,
   ChartNoAxesCombined,
+  ChartSpline,
   ClipboardCheck,
   Cable,
   LayoutDashboard,
@@ -31,7 +32,8 @@ type AppSection =
   | "draft"
   | "members"
   | "projections"
-  | "rankings";
+  | "rankings"
+  | "stats";
 
 interface AppShellProps {
   active: AppSection;
@@ -47,6 +49,7 @@ interface AppShellProps {
 const primaryNavigation = [
   { href: "/app", label: "Overview", icon: LayoutDashboard, section: "dashboard" as const },
   { href: "/analytics", label: "League Analytics", icon: BarChart3, section: "analytics" as const },
+  { href: "/stats", label: "Stats Center", icon: ChartSpline, section: "stats" as const },
   {
     href: "/decisions",
     label: "Decision Desk",

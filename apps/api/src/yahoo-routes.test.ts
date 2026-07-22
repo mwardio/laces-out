@@ -48,6 +48,7 @@ function yahooSync(overrides: Partial<YahooSyncPort> = {}): YahooSyncPort {
         leagueId: "40000000-0000-4000-8000-000000000001",
         leagueSeasonId: "50000000-0000-4000-8000-000000000001",
         externalLeagueKey: "449.l.12345",
+        season: 2026,
         state: "accepted",
         recordsWritten: 12,
         syncedAt: "2026-07-16T12:00:00.000Z",
@@ -163,12 +164,14 @@ describe("Yahoo sync routes", () => {
   it("passes discovery and league sync only through the authenticated actor", async () => {
     const discoverAndSync = vi.fn(yahooSync().discoverAndSync);
     const syncLeague = vi.fn(yahooSync().syncLeague);
+    const enqueueProjectionRefresh = vi.fn(() => Promise.resolve("projection-job"));
     const app = await buildApp({
       environment: loadEnvironment({ NODE_ENV: "test" }),
       logger: false,
       requireAuthentication: true,
       authService: authService(),
       yahooSync: yahooSync({ discoverAndSync, syncLeague }),
+      enqueueProjectionRefresh,
     });
 
     const discovery = await app.inject({
@@ -186,6 +189,9 @@ describe("Yahoo sync routes", () => {
     });
     expect(sync.statusCode).toBe(202);
     expect(syncLeague).toHaveBeenCalledWith(USER_ID, CONNECTION_ID, "449.l.12345");
+    expect(enqueueProjectionRefresh).toHaveBeenCalledWith(
+      expect.objectContaining({ season: 2026, reason: "league-sync" }),
+    );
     await app.close();
   });
 

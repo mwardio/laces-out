@@ -2,8 +2,10 @@ import { describe, expect, it } from "vitest";
 
 import {
   analyzeAuctionBoard,
+  buildAuctionNominationQueue,
   buildDraftBoardRows,
   buildSnakeBestNowQueue,
+  nextPickForTeam,
   type DraftBoardPlayer,
   type DraftBoardValue,
 } from "./draft-board.js";
@@ -91,6 +93,50 @@ describe("draft board helpers", () => {
       needLabel: "RB open",
     });
     expect(queue.every((row) => row.baseRank - row.adjustedRank <= 12)).toBe(true);
+  });
+
+  it("adds conditional next-turn availability without pretending rank is ADP", () => {
+    expect(nextPickForTeam(["one", "two", "two", "one"], 1, "one")).toBe(4);
+    expect(nextPickForTeam(["one", "two"], 1, "one")).toBeNull();
+
+    const queue = buildSnakeBestNowQueue({
+      availablePlayers: players,
+      allPlayers: players,
+      rosteredPlayerIds: [],
+      rosterSlots: [
+        { id: "FLEX-1", label: "Flex", kind: "STARTER", eligiblePositions: ["RB", "WR"] },
+      ],
+      values: [value("rb", { overallRank: 1, adp: 2 }), value("wr", { overallRank: 2 })],
+      currentPick: 1,
+      nextPick: 4,
+    });
+
+    expect(queue.find((row) => row.player.id === "rb")?.availability).toMatchObject({
+      method: "normal",
+      sampleSize: 0,
+      confidence: 0.35,
+    });
+    expect(queue.find((row) => row.player.id === "wr")?.availability).toBeNull();
+  });
+
+  it("builds auction target and drain nominations only from explicit target and AAV fields", () => {
+    const queue = buildAuctionNominationQueue({
+      availablePlayers: players,
+      values: [
+        value("rb", { targetPrice: 31, aav: 24 }),
+        value("wr", { targetPrice: 12, aav: 19 }),
+        value("te", { targetPrice: 8, aav: 8 }),
+        value("qb", { targetPrice: 20 }),
+      ],
+    });
+
+    expect(queue).toHaveLength(2);
+    expect(
+      queue.map((row) => ({ player: row.player.id, strategy: row.strategy, edge: row.edge })),
+    ).toEqual([
+      { player: "rb", strategy: "target", edge: 7 },
+      { player: "wr", strategy: "drain", edge: 7 },
+    ]);
   });
 
   it("uses live budgets for auction values and fails explicitly on incomplete AAV coverage", () => {

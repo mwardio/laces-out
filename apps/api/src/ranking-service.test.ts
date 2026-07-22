@@ -13,6 +13,7 @@ import {
   RankingServiceError,
   type AppendRankingVersionInput,
   type CommitRankingImportInput,
+  type CreateRankingCloneResult,
   type CreatedRankingShareRecord,
   type RankingImportRecord,
   type RankingMutationResult,
@@ -77,6 +78,17 @@ class MemoryRankingRepository implements RankingRepository {
 
   async createList(list: RankingList): Promise<void> {
     this.lists.set(list.id, list);
+  }
+
+  async createClone(list: RankingList, version: RankingVersion): Promise<CreateRankingCloneResult> {
+    if (this.lists.has(list.id) || this.versions.has(version.id)) return { status: "conflict" };
+    const playerIds = new Set(this.players.map((player) => player.id));
+    if (version.entries.some((entry) => !playerIds.has(entry.playerId))) {
+      return { status: "unknown_players" };
+    }
+    this.lists.set(list.id, list);
+    this.versions.set(version.id, version);
+    return { status: "saved" };
   }
 
   async listAccessibleLists(
@@ -493,6 +505,118 @@ describe("RankingService", () => {
     expect(published.parentVersionId).toBe(overlaid.id);
     expect(repository.versions.get(overlaid.id)?.state).toBe("draft");
     expect(repository.lists.get(list.id)?.latestPublishedVersionId).toBe(published.id);
+  });
+
+  it("clones an accessible baseline into an independent private board", async () => {
+    const source = await service.createList(OWNER, {
+      name: "League consensus",
+      season: 2026,
+      kind: "rankings",
+      scoringContext: {
+        format: "PPR",
+        leagueId: LEAGUE_A,
+        settingsChecksumSha256: "e".repeat(64),
+        label: "League PPR",
+      },
+      visibility: { scope: "league", leagueIds: [LEAGUE_A], allowClone: true },
+    });
+    const sourceVersion = await firstDraft(source);
+
+    const cloned = await service.cloneList({
+      actorUserId: FRIEND,
+      sourceListId: source.id,
+      name: "My league baseline",
+    });
+
+    expect(cloned.list).toMatchObject({
+      ownerUserId: FRIEND,
+      name: "My league baseline",
+      visibility: { scope: "private" },
+      currentVersionId: cloned.version.id,
+    });
+    expect(cloned.version).toMatchObject({
+      listId: cloned.list.id,
+      versionNumber: 1,
+      parentVersionId: null,
+      authorUserId: FRIEND,
+      entries: sourceVersion.entries,
+      provenance: {
+        operation: "clone",
+        sources: [
+          expect.objectContaining({
+            sourceId: source.id,
+            versionId: sourceVersion.id,
+            checksumSha256: sourceVersion.checksumSha256,
+          }),
+        ],
+      },
+    });
+    expect(cloned.list.id).not.toBe(source.id);
+    expect(cloned.version.id).not.toBe(sourceVersion.id);
+  });
+
+  it("enforces clone permission and authorizes both sides of a comparison", async () => {
+    const privateBoard = await privateList("Private baseline");
+    await firstDraft(privateBoard);
+    await expect(
+      service.cloneList({ actorUserId: FRIEND, sourceListId: privateBoard.id, name: "Nope" }),
+    ).rejects.toMatchObject({ code: "RANKING_FORBIDDEN" });
+
+    const viewOnlyLeagueBoard = await service.createList(OWNER, {
+      name: "View-only league board",
+      season: 2026,
+      kind: "rankings",
+      scoringContext: {
+        format: "PPR",
+        leagueId: LEAGUE_A,
+        settingsChecksumSha256: "f".repeat(64),
+        label: "League PPR",
+      },
+      visibility: { scope: "league", leagueIds: [LEAGUE_A], allowClone: false },
+    });
+    await firstDraft(viewOnlyLeagueBoard);
+    await expect(
+      service.cloneList({
+        actorUserId: FRIEND,
+        sourceListId: viewOnlyLeagueBoard.id,
+        name: "Blocked clone",
+      }),
+    ).rejects.toMatchObject({ code: "RANKING_FORBIDDEN" });
+
+    const friendBoard = await service.createList(FRIEND, {
+      name: "Friend board",
+      season: 2026,
+      kind: "rankings",
+      scoringContext: {
+        format: "PPR",
+        leagueId: null,
+        settingsChecksumSha256: null,
+        label: "PPR",
+      },
+    });
+    await service.replaceWithManualDraft({
+      actorUserId: FRIEND,
+      listId: friendBoard.id,
+      expectedCurrentVersionId: null,
+      entries: [{ playerId: PLAYER_B, position: "RB", overallRank: 1 }],
+    });
+    await expect(
+      service.compareLists({
+        actorUserId: FRIEND,
+        leftListId: friendBoard.id,
+        rightListId: viewOnlyLeagueBoard.id,
+      }),
+    ).resolves.toMatchObject({
+      left: { list: { id: friendBoard.id } },
+      right: { list: { id: viewOnlyLeagueBoard.id } },
+    });
+    await expect(
+      service.compareLists({
+        actorUserId: OUTSIDER,
+        leftListId: friendBoard.id,
+        rightListId: viewOnlyLeagueBoard.id,
+      }),
+    ).rejects.toMatchObject({ code: "RANKING_FORBIDDEN" });
   });
 
   it("previews and idempotently imports custom CSV with user and source provenance", async () => {

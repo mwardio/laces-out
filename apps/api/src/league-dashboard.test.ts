@@ -326,7 +326,12 @@ describe("LeagueDashboardService", () => {
         opponentScore: 110.25,
         scoreState: "won",
       },
-      dataSources: [{ key: "nflverse.players", freshness: { state: "fresh" } }],
+      dataSources: [
+        {
+          key: "nflverse.players",
+          freshness: { state: "fresh", label: "Successful check 2h ago" },
+        },
+      ],
     });
     expect(result).not.toHaveProperty("projectedFor");
     expect(leagueDashboardSchema.safeParse(result).success).toBe(true);

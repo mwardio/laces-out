@@ -29,6 +29,7 @@ export interface NflversePlayer {
   readonly firstName: string | null;
   readonly lastName: string | null;
   readonly espnId: string | null;
+  readonly pfrId: string | null;
   readonly position: string;
   readonly positionGroup: string | null;
   readonly latestTeam: string | null;
@@ -147,7 +148,14 @@ function parsePlayers(csv: string): {
     throw new NflverseSourceError("INVALID_CSV", "nflverse player row count is invalid");
   }
   const headers = new Set(Object.keys(rows[0] ?? {}));
-  for (const required of ["gsis_id", "display_name", "position", "latest_team", "status"]) {
+  for (const required of [
+    "gsis_id",
+    "pfr_id",
+    "display_name",
+    "position",
+    "latest_team",
+    "status",
+  ]) {
     if (!headers.has(required)) {
       throw new NflverseSourceError(
         "INVALID_CSV",
@@ -169,12 +177,14 @@ function parsePlayers(csv: string): {
     }
     seen.add(gsisId);
     const rawEspnId = nullable(row.espn_id, 20);
+    const rawPfrId = nullable(row.pfr_id, 20);
     players.push({
       gsisId,
       displayName,
       firstName: nullable(row.first_name),
       lastName: nullable(row.last_name),
       espnId: rawEspnId && /^\d{1,20}$/u.test(rawEspnId) ? rawEspnId : null,
+      pfrId: rawPfrId && /^[A-Za-z0-9.-]{1,20}$/u.test(rawPfrId) ? rawPfrId : null,
       position,
       positionGroup: nullable(row.position_group, 16),
       latestTeam: nullable(row.latest_team, 8),

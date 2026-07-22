@@ -36,14 +36,17 @@ interface FixtureEnvelope {
     id: string;
     seasonId: number;
     settings: {
-      draftSettings: { type: string };
+      draftSettings: { type: string; keeperCount?: number };
       rosterSettings: { lineupSlotCounts: Record<string, number> };
     };
-    members: Array<{ id: string }>;
+    members: Array<{ id: string; isLeagueManager?: boolean | 0 | 1 }>;
     teams: Array<{
       id: string;
+      logo?: string | null;
       owners: string[];
       playoffSeed?: number;
+      waiverRank?: number;
+      transactionCounter?: { acquisitionBudgetSpent?: number };
       record?: {
         overall: {
           wins: number;
@@ -94,6 +97,25 @@ describe("ESPN web-client snapshot normalizer", () => {
           waiverType: "faab",
           faabBudget: 100,
           playoffTeamCount: 1,
+          operationalRules: {
+            acquisitionLimit: 40,
+            matchupAcquisitionLimit: 7,
+            minimumBid: 1,
+            waiverProcessDays: [2, 4, 6],
+            waiverProcessHour: 3,
+            keeperCount: 2,
+            regularSeasonMatchupPeriods: 14,
+            playoffMatchupPeriodLength: 1,
+            playoffSeedingRule: "TOTAL_POINTS_SCORED",
+            matchupTieRule: "NONE",
+            playoffMatchupTieRule: "HOME_TEAM_WINS",
+            scoringType: "H2H_POINTS",
+            medianGameEnabled: true,
+            tradeDeadlineAt: "2026-11-16T00:00:00.000Z",
+            tradeReviewHours: 24,
+            vetoVotesRequired: 4,
+            divisions: [{ providerDivisionId: "1", name: "Snowflake Division" }],
+          },
         },
       },
       provenance: {
@@ -123,6 +145,8 @@ describe("ESPN web-client snapshot normalizer", () => {
       externalId: "espn:2026:98765432101234567890:team:101",
       providerTeamId: "101",
       isCurrentUser: false,
+      faabRemaining: 83,
+      waiverPriority: 2,
       managers: [
         {
           externalId: "manager-alpha-00000000-0000-0000-0000-000000000001",
@@ -195,6 +219,28 @@ describe("ESPN web-client snapshot normalizer", () => {
       away: { score: null },
     });
     expect(bundle.warnings.join(" ")).toContain("isCurrentUser");
+  });
+
+  it("accepts current preseason manager, seed, and legacy-logo variants safely", () => {
+    const value = parsedFixture();
+    delete value.payload.members[0]!.isLeagueManager;
+    value.payload.members[1]!.isLeagueManager = 1;
+    value.payload.teams[0]!.logo = "http://legacy.example/team-alpha.png";
+    value.payload.teams[0]!.playoffSeed = 0;
+    value.payload.teams[1]!.playoffSeed = 0;
+
+    const bundle = normalizeEspnWebClientSnapshot(value);
+
+    expect(bundle.teams[0]).toMatchObject({
+      logoUrl: null,
+      managers: [{ isCommissioner: false }],
+    });
+    expect(bundle.teams[1]).toMatchObject({ managers: [{ isCommissioner: true }] });
+    expect(bundle.standings?.entries.map((entry) => entry.rank)).toEqual([1, 2]);
+    expect(bundle.standings?.entries.map((entry) => entry.playoffSeed)).toEqual([1, 2]);
+    expect(bundle.warnings.join(" ")).toContain("league-manager flags");
+    expect(bundle.warnings.join(" ")).toContain("team-logo URLs were discarded");
+    expect(bundle.warnings.join(" ")).toContain("unranked preseason standings");
   });
 
   it("preserves 20-digit provider team IDs across teams, standings, and matchup sides", () => {

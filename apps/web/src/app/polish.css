@@ -58,15 +58,33 @@
   }
 
   .brand-mark > svg {
-    position: static;
+    position: absolute;
+    top: 50%;
+    left: 50%;
     width: 35px;
     height: 35px;
-    transform: none;
+    transform: translate(-50%, -50%);
   }
 
-  .brand-mark__orb,
-  .brand-mark__base {
-    fill: currentColor;
+  .brand-mark__shadow {
+    fill: var(--green-600);
+    opacity: 0.55;
+  }
+
+  .brand-mark__base,
+  .brand-mark__base-foot {
+    fill: var(--ink-950);
+  }
+
+  .brand-mark__orb {
+    fill: #eef8d7;
+    stroke: var(--ink-950);
+    stroke-width: 2.4;
+  }
+
+  .brand-mark__orb-glow {
+    fill: var(--lime-300);
+    opacity: 0.42;
   }
 
   .brand-mark__orb-rim,
@@ -79,35 +97,47 @@
   }
 
   .brand-mark__orb-rim {
-    stroke: var(--green-600);
-    stroke-width: 1.8;
+    stroke: #6f9d47;
+    stroke-width: 1.1;
   }
 
   .brand-mark__glint {
-    stroke: var(--lime-100);
-    stroke-width: 2.2;
+    stroke: white;
+    stroke-width: 2.4;
+    opacity: 0.9;
   }
 
   .brand-mark__base-rim {
-    stroke: var(--lime-300);
-    stroke-width: 1.8;
+    stroke: #8fbd53;
+    stroke-width: 1.5;
   }
 
   .brand-mark__football {
-    fill: var(--lime-300);
+    fill: #70462f;
+    stroke: var(--ink-950);
+    stroke-linejoin: round;
+    stroke-width: 1.7;
   }
 
-  .brand-mark__seam,
-  .brand-mark__lace {
-    stroke: currentColor;
+  .brand-mark__football-shine {
+    fill: none;
+    stroke: #b77b50;
+    stroke-linecap: round;
+    stroke-width: 1.6;
   }
 
   .brand-mark__seam {
-    stroke-width: 2.35;
+    fill: none;
+    stroke: #281b14;
+    stroke-linecap: round;
+    stroke-width: 2.2;
   }
 
   .brand-mark__lace {
-    stroke-width: 2.15;
+    fill: none;
+    stroke: #fff3d8;
+    stroke-linecap: round;
+    stroke-width: 1.65;
   }
 
   .brand-mark--small {
@@ -127,6 +157,7 @@
     font-weight: 400;
     letter-spacing: 0.005em;
     line-height: 1;
+    text-transform: none;
     word-spacing: 0.08em;
   }
 
@@ -136,6 +167,7 @@
     font-weight: 400;
     letter-spacing: 0.005em;
     line-height: 1;
+    text-transform: none;
     word-spacing: 0.08em;
   }
 
@@ -693,7 +725,54 @@
 
   .member-registration-note span {
     color: var(--ink-600);
+    font-size: 12px;
+    line-height: 1.45;
+  }
+
+  .member-role-warning {
+    display: flex;
+    align-items: flex-start;
+    gap: 7px;
+    margin-bottom: 9px;
+    padding: 9px 10px;
+    color: var(--orange-600);
+    background: var(--orange-100);
+    border: 1px solid #f0d4c4;
+    border-radius: 7px;
     font-size: 11px;
+    line-height: 1.5;
+  }
+
+  .member-role-warning svg {
+    flex: 0 0 auto;
+    margin-top: 1px;
+  }
+
+  .member-role-warning strong {
+    color: var(--ink-800);
+  }
+
+  .invitation-actions {
+    display: flex !important;
+    flex-wrap: wrap;
+    gap: 7px !important;
+  }
+
+  .invitation-security-detail {
+    color: var(--ink-500);
+    font-size: 11px;
+    line-height: 1.5;
+  }
+
+  .invitation-security-detail summary {
+    width: fit-content;
+    cursor: pointer;
+    font-weight: 700;
+  }
+
+  .invitation-security-detail small {
+    display: block;
+    margin-top: 5px;
   }
 
   .connection-provider--members::before {
@@ -712,6 +791,58 @@
     background: var(--ink-700);
   }
 
+  .yahoo-coming-soon-note {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    margin: 1px 0 18px;
+    padding: 11px 12px;
+    color: #795b12;
+    background: #fff8df;
+    border: 1px solid #ecdca8;
+    border-radius: 7px;
+    font-size: 11px;
+    line-height: 1.5;
+  }
+
+  .yahoo-coming-soon-note svg {
+    flex: 0 0 auto;
+    margin-top: 1px;
+  }
+
+  .yahoo-coming-soon-note strong {
+    color: var(--ink-800);
+  }
+
+  .bridge-revoke-confirmation {
+    display: grid;
+    grid-column: 1 / -1;
+    gap: 9px;
+    padding: 10px;
+    color: var(--ink-700);
+    background: #fff8f6;
+    border: 1px solid #efd2cc;
+    border-radius: 7px;
+  }
+
+  .bridge-revoke-confirmation strong {
+    font-size: 11px;
+  }
+
+  .bridge-revoke-confirmation p {
+    margin-top: 3px;
+    color: var(--ink-600);
+    font-size: 11px;
+    line-height: 1.5;
+  }
+
+  .bridge-revoke-confirmation > div:last-child {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 6px;
+  }
+
   .connection-security-chip {
     border-radius: 7px;
   }
@@ -719,7 +850,7 @@
   .connection-security-chip strong,
   .connection-capabilities li,
   .connection-provider > p:not(.connection-error) {
-    font-size: 11px;
+    font-size: 12px;
   }
 
   .connection-security-chip small,
@@ -732,7 +863,7 @@
   .bridge-device-list__leagues > span,
   .import-editor-label small,
   .import-message {
-    font-size: 10px;
+    font-size: 11px;
   }
 
   .connection-notice,
@@ -744,7 +875,7 @@
   .bridge-device-manager__heading > span,
   .bridge-device-list__summary > strong,
   .import-editor-label span {
-    font-size: 11px;
+    font-size: 12px;
   }
 
   .connection-provider-logo,
@@ -764,7 +895,7 @@
   .bridge-fields label,
   .ranking-form-grid label,
   .ranking-import-body > label {
-    font-size: 10px;
+    font-size: 11px;
   }
 
   .bridge-fields input,
@@ -1521,6 +1652,17 @@
 
     .member-registration-note .button {
       grid-column: 1 / -1;
+      width: 100%;
+    }
+
+    .bridge-revoke-confirmation > div:last-child,
+    .invitation-actions {
+      align-items: stretch;
+      flex-direction: column;
+    }
+
+    .bridge-revoke-confirmation .button,
+    .invitation-actions .button {
       width: 100%;
     }
 
