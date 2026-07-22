@@ -134,6 +134,13 @@
       "when": 1784660133995,
       "tag": "0018_widened_identity",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1784746577095,
+      "tag": "0019_nice_alex_power",
+      "breakpoints": true
     }
   ]
 }

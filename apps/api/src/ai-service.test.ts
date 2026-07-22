@@ -237,7 +237,7 @@ describe("AI service", () => {
     const { service, repository } = serviceFixture({ complete }, new MemoryAiRepository(), {
       apiKey: "managed-gemini-secret",
       dailyRequestLimit: 50,
-      maxOutputTokens: 900,
+      maxOutputTokens: 2000,
     });
 
     const initial = await service.listProviders(USER_ID);
@@ -263,7 +263,7 @@ describe("AI service", () => {
     expect(complete.mock.calls[0]?.[0]).toMatchObject({
       apiKey: "managed-gemini-secret",
       model: "gemini-3.1-flash-lite",
-      maxOutputTokens: 900,
+      maxOutputTokens: 2000,
     });
     expect(repository.usage[0]).toMatchObject({
       credentialId: null,
@@ -337,7 +337,7 @@ describe("AI service", () => {
     const { service, repository } = serviceFixture(
       { complete },
       new MemoryAiRepository(),
-      { apiKey: "managed-gemini-secret", dailyRequestLimit: 50, maxOutputTokens: 900 },
+      { apiKey: "managed-gemini-secret", dailyRequestLimit: 50, maxOutputTokens: 2000 },
       {
         lineup: { state: "available", changes: [] },
         waivers: { state: "available", recommendations: [] },
@@ -375,7 +375,7 @@ describe("AI service", () => {
     const { service, repository } = serviceFixture({ complete }, new MemoryAiRepository(), {
       apiKey: "managed-gemini-secret",
       dailyRequestLimit: 50,
-      maxOutputTokens: 900,
+      maxOutputTokens: 2000,
     });
 
     const response = await service.generateFeature({

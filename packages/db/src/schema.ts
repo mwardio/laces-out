@@ -2435,7 +2435,7 @@ export const aiProviderCredentials = pgTable(
     label: text("label").notNull(),
     model: text("model"),
     dailyRequestLimit: integer("daily_request_limit").notNull().default(25),
-    maxOutputTokens: integer("max_output_tokens").notNull().default(900),
+    maxOutputTokens: integer("max_output_tokens").notNull().default(2000),
     // This is a keyed fingerprint used only for deduplication; no key suffix is retained.
     credentialFingerprintHash: text("credential_fingerprint_hash").notNull(),
     providerAccountIdHash: text("provider_account_id_hash"),

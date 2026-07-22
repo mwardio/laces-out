@@ -11,7 +11,7 @@ const environmentSchema = z.object({
   CREDENTIAL_ENCRYPTION_KEY: z.preprocess(blankToUndefined, z.string().min(1).optional()),
   GEMINI_API_KEY: z.preprocess(blankToUndefined, z.string().trim().min(8).max(512).optional()),
   MANAGED_AI_DAILY_REQUEST_LIMIT: z.coerce.number().int().min(1).max(500).default(50),
-  MANAGED_AI_MAX_OUTPUT_TOKENS: z.coerce.number().int().min(64).max(8192).default(900),
+  MANAGED_AI_MAX_OUTPUT_TOKENS: z.coerce.number().int().min(64).max(8192).default(2000),
   SESSION_SECRET: z.preprocess(blankToUndefined, z.string().min(32).optional()),
   REGISTRATION_INVITE_CODE: z.preprocess(
     blankToUndefined,

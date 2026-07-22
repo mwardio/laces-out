@@ -21,7 +21,7 @@ chat subscriptions are not transferable model API credentials.
 
 When `GEMINI_API_KEY` is present in the API server environment, every signed-in member can use Film
 Room without provider setup. Managed requests always use `gemini-3.1-flash-lite`; clients cannot
-override that model. The default allowance is 50 requests per member per UTC day with a 900-token
+override that model. The default allowance is 50 requests per member per UTC day with a 2,000-token
 answer ceiling. Both limits are operator-configurable. A saved member key takes precedence for its
 provider, and removing a member Gemini key restores managed Gemini.
 
@@ -94,9 +94,9 @@ another member's private data, or provider-write authority.
 ## Cost and failure controls
 
 - Managed Gemini defaults to an operator-controlled 50 requests per member per UTC day and a
-  900-token answer ceiling. The model is fixed server-side.
+  2,000-token answer ceiling. The model is fixed server-side.
 - Every BYOK provider has a user-editable 1–500 request limit per UTC day and a 64–8192
-  answer-token ceiling. Defaults are 25 requests and 900 answer tokens.
+  answer-token ceiling. Defaults are 25 requests and 2,000 answer tokens.
 - Connection tests are real, small provider requests and count against the daily limit.
 - Analysis and test routes have additional per-minute limits; provider calls time out after 30
   seconds.

@@ -48,7 +48,7 @@ function configuration(provider: AiProviderConfiguration["provider"]): AiProvide
     model: provider === "openai" ? "gpt-current" : `default-${provider}`,
     status: provider === "openai" ? "active" : null,
     dailyRequestLimit: 25,
-    maxOutputTokens: 900,
+    maxOutputTokens: 2000,
     requestsToday: 0,
     requestsRemaining: 25,
     lastValidatedAt: null,
@@ -125,7 +125,7 @@ describe("AI routes", () => {
         apiKey: "sk-top-secret",
         model: "gpt-current",
         dailyRequestLimit: 25,
-        maxOutputTokens: 900,
+        maxOutputTokens: 2000,
       },
     });
     expect(saved.statusCode).toBe(200);

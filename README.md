@@ -125,7 +125,7 @@ links as a separate path.
   warnings, backtest metrics, on-demand reruns) plus bounded single-week CSV imports with strict
   preview/commit checksums and full provenance. ROS imports are deliberately not offered while no
   tool consumes them.
-- **`/film-room`** — included Gemini 3.1 Flash-Lite for every member (default 50 requests/day, 900
+- **`/film-room`** — included Gemini 3.1 Flash-Lite for every member (default 50 requests/day, 2,000
   output tokens; see `MANAGED_AI_DAILY_REQUEST_LIMIT` / `MANAGED_AI_MAX_OUTPUT_TOKENS`), optional
   write-only BYOK in AES-256-GCM envelopes, native provider endpoints, no tools, no provider
   execution, and only bounded usage metadata retained. See

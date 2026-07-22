@@ -223,7 +223,7 @@ function FilmRoomTour() {
               </label>
               <label className={styles.field}>
                 <span>Max answer tokens</span>
-                <input value="900" readOnly />
+                <input value="2000" readOnly />
               </label>
             </div>
             <div className={styles.usageLine}>
@@ -324,7 +324,7 @@ export function FilmRoomWorkbench() {
   const [showKey, setShowKey] = useState(false);
   const [model, setModel] = useState("");
   const [dailyRequestLimit, setDailyRequestLimit] = useState("25");
-  const [maxOutputTokens, setMaxOutputTokens] = useState("900");
+  const [maxOutputTokens, setMaxOutputTokens] = useState("2000");
   const [question, setQuestion] = useState<string>(QUICK_QUESTIONS[0]);
   const [settingsAction, setSettingsAction] = useState<ActionState>({ state: "idle" });
   const [analysisAction, setAnalysisAction] = useState<ActionState>({ state: "idle" });

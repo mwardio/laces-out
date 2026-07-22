@@ -37,10 +37,10 @@ export const AI_PROVIDER_DEFAULTS: Readonly<
     { readonly model: string; readonly dailyRequestLimit: number; readonly maxOutputTokens: number }
   >
 > = {
-  openai: { model: "gpt-5.6-luna", dailyRequestLimit: 25, maxOutputTokens: 900 },
-  anthropic: { model: "claude-sonnet-5", dailyRequestLimit: 25, maxOutputTokens: 900 },
-  gemini: { model: "gemini-3.1-flash-lite", dailyRequestLimit: 25, maxOutputTokens: 900 },
-  openrouter: { model: "~openai/gpt-latest", dailyRequestLimit: 25, maxOutputTokens: 900 },
+  openai: { model: "gpt-5.6-luna", dailyRequestLimit: 25, maxOutputTokens: 2000 },
+  anthropic: { model: "claude-sonnet-5", dailyRequestLimit: 25, maxOutputTokens: 2000 },
+  gemini: { model: "gemini-3.1-flash-lite", dailyRequestLimit: 25, maxOutputTokens: 2000 },
+  openrouter: { model: "~openai/gpt-latest", dailyRequestLimit: 25, maxOutputTokens: 2000 },
 };
 
 const PROVIDERS = ["openai", "anthropic", "gemini", "openrouter"] as const;
