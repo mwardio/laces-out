@@ -22,17 +22,12 @@ import {
 } from "@fantasy/db";
 import { and, eq, sql } from "drizzle-orm";
 
-export type EspnSyncAuthority =
-  | {
-      readonly mode: "bridge";
-      readonly actorUserId: string;
-      readonly bridgeDeviceId: string;
-      readonly bridgeScopeId: string;
-    }
-  | {
-      readonly mode: "manual-import";
-      readonly actorUserId: string;
-    };
+export type EspnSyncAuthority = {
+  readonly mode: "bridge";
+  readonly actorUserId: string;
+  readonly bridgeDeviceId: string;
+  readonly bridgeScopeId: string;
+};
 
 export interface PersistEspnSyncInput {
   readonly authority: EspnSyncAuthority;
@@ -40,7 +35,7 @@ export interface PersistEspnSyncInput {
   readonly checksumSha256: string;
   readonly effectiveAt: Date;
   readonly idempotencyKey: string;
-  readonly kind: "espn-bridge" | "espn-manual-import";
+  readonly kind: "espn-bridge";
   readonly now: Date;
 }
 
@@ -54,34 +49,31 @@ export interface PersistEspnSyncReceipt {
 
 export const ESPN_SELF_ASSERTED_PLAYER_SOURCE = "espn-self-asserted";
 
+export class EspnSyncPersistenceError extends Error {
+  readonly code = "STALE_SNAPSHOT";
+  readonly statusCode = 409;
+
+  constructor() {
+    super("A newer ESPN snapshot is already stored for this league");
+    this.name = "EspnSyncPersistenceError";
+  }
+}
+
 /**
- * Decide what league membership, if any, a user should receive as a side effect of
- * importing/refreshing a shared ESPN league. Data-refresh is deliberately DECOUPLED from
- * admin-ownership:
- *
- *  - The first importer of a NEW league becomes its `owner` (the admin role).
- *  - The league's anchored owner is (re)granted `owner` should a membership row be missing.
- *  - Any other authenticated user who refreshes an EXISTING shared league and has no membership
- *    yet is granted `manager`, making them a real member who can then claim their own team via
- *    the existing team-claim flow.
- *  - A user who already holds a membership keeps whatever role they have (no change).
- *
- * Refresh itself is NOT gated on role. Rationale: producing a valid snapshot for a PRIVATE ESPN
- * league requires being signed in as a member (ESPN never serves private-league data to
- * non-members), so snapshot possession is self-gating proof of membership; public-league data is
- * public anyway. This is an explicit trust-among-league-members model that dissolves the
- * first-importer "squatting" lock and the multi-member refresh friction. It is not a relaxation
- * of a confidentiality boundary: the prior owner-lock only controlled who could WRITE the shared
- * record, and self-asserted player rows stay isolated to their own league-season regardless.
+ * A successful provider connection is the league-join mechanism. The first bridge import
+ * bootstraps an owner membership, a later connector joins as a manager, and existing members keep
+ * their role. Merely configuring a league ID grants nothing; this policy runs only after the bridge
+ * token, scope, freshness, checksum, and strict ESPN payload have all been validated.
  */
-export function espnRefreshMembershipGrant(input: {
+export function espnRefreshPolicy(input: {
   readonly createdLeague: boolean;
   readonly actorIsAnchoredOwner: boolean;
   readonly existingMembershipRole: LeagueMembershipRole | null;
-}): LeagueMembershipRole | null {
-  if (input.createdLeague || input.actorIsAnchoredOwner) return "owner";
-  if (input.existingMembershipRole === null) return "manager";
-  return null;
+}): { readonly membershipGrant: "owner" | "manager" | null } {
+  if (input.createdLeague || input.actorIsAnchoredOwner) {
+    return { membershipGrant: "owner" };
+  }
+  return { membershipGrant: input.existingMembershipRole === null ? "manager" : null };
 }
 
 /** Self-asserted provider observations are isolated to one internal league season. */
@@ -162,8 +154,8 @@ function slotEligibility(slotCode: string): string[] {
 }
 
 /**
- * Canonical ESPN persistence shared by the browser bridge and the manual recovery path.
- * Every mutation for one snapshot is deliberately enclosed in one database transaction.
+ * Canonical ESPN persistence for the browser bridge. Every mutation for one snapshot is
+ * deliberately enclosed in one database transaction.
  */
 export class DrizzleEspnSyncPersistence {
   readonly #database: Database;
@@ -216,11 +208,9 @@ export class DrizzleEspnSyncPersistence {
           .limit(1);
         actorIsAnchoredOwner = access?.ownerUserId === authority.actorUserId;
         actorExistingMembershipRole = access?.membershipRole ?? null;
-        // Refresh is intentionally NOT gated on ownership: any authenticated user presenting a
-        // valid snapshot may refresh this shared canonical league/season. See
-        // espnRefreshMembershipGrant for the full rationale (a valid private-league snapshot is
-        // self-gating proof of membership). A legitimate non-owner refresher is turned into a
-        // real member by the membership grant below.
+        if (existingSeason.lastSyncedAt && effectiveAt < existingSeason.lastSyncedAt) {
+          throw new EspnSyncPersistenceError();
+        }
       }
 
       const [prior] = await transaction
@@ -244,20 +234,20 @@ export class DrizzleEspnSyncPersistence {
           .limit(1);
         if (!season) throw new Error("Idempotent ESPN sync referenced a missing league season");
 
-        if (authority.mode === "bridge") {
-          await transaction
-            .update(leagueSeasons)
-            .set({ lastSyncedAt: effectiveAt, updatedAt: now })
-            .where(eq(leagueSeasons.id, season.id));
-          await transaction
-            .update(bridgeDeviceLeagues)
-            .set({ leagueId: season.leagueId })
-            .where(eq(bridgeDeviceLeagues.id, authority.bridgeScopeId));
-          await transaction
-            .update(bridgeDevices)
-            .set({ lastSeenAt: now })
-            .where(eq(bridgeDevices.id, authority.bridgeDeviceId));
-        }
+        // The freshness guard above makes this monotonic. An unchanged recapture still proves that
+        // the stored provider data was checked again, so advance freshness without duplicating rows.
+        await transaction
+          .update(leagueSeasons)
+          .set({ lastSyncedAt: effectiveAt, updatedAt: now })
+          .where(eq(leagueSeasons.id, season.id));
+        await transaction
+          .update(bridgeDeviceLeagues)
+          .set({ leagueId: season.leagueId })
+          .where(eq(bridgeDeviceLeagues.id, authority.bridgeScopeId));
+        await transaction
+          .update(bridgeDevices)
+          .set({ lastSeenAt: now })
+          .where(eq(bridgeDevices.id, authority.bridgeDeviceId));
         return {
           receiptId: prior.id,
           leagueId: season.leagueId,
@@ -336,14 +326,12 @@ export class DrizzleEspnSyncPersistence {
         leagueSeasonId = season.id;
       }
 
-      const membershipGrant = espnRefreshMembershipGrant({
+      const membershipGrant = espnRefreshPolicy({
         createdLeague,
         actorIsAnchoredOwner,
         existingMembershipRole: actorExistingMembershipRole,
-      });
-      if (membershipGrant) {
-        // onConflictDoNothing guarantees an existing membership (e.g. an established owner) is
-        // never downgraded by a later manager grant.
+      }).membershipGrant;
+      if (membershipGrant !== null) {
         await transaction
           .insert(leagueMemberships)
           .values({
@@ -355,12 +343,10 @@ export class DrizzleEspnSyncPersistence {
             target: [leagueMemberships.leagueId, leagueMemberships.userId],
           });
       }
-      if (authority.mode === "bridge") {
-        await transaction
-          .update(bridgeDeviceLeagues)
-          .set({ leagueId })
-          .where(eq(bridgeDeviceLeagues.id, authority.bridgeScopeId));
-      }
+      await transaction
+        .update(bridgeDeviceLeagues)
+        .set({ leagueId })
+        .where(eq(bridgeDeviceLeagues.id, authority.bridgeScopeId));
 
       // League settings are a complete snapshot. Delete-and-reinsert is safe because the
       // surrounding transaction preserves the prior rules if any later write fails.

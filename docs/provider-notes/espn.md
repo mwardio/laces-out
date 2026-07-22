@@ -10,7 +10,7 @@ document league IDs, public/private league behavior, snake and salary-cap format
 user sign-in experience. That is not an API authorization grant.
 
 Consequently this product must not show an official “Connect ESPN” OAuth button. It implements
-three read-only modes:
+two read-only modes:
 
 ### 1. Browser-local private-league bridge
 
@@ -32,13 +32,14 @@ The companion reads and uploads them sequentially, continues after a per-league 
 surfaces retained per-league results plus an aggregate full-success, partial-failure, login-required,
 pairing-rejected, or failed state. The server independently authorizes every uploaded league ID;
 being present in the browser configuration alone grants nothing. A first accepted snapshot may
-create a new internal league owned by the device's authenticated Laces Out user. Once the provider
-league/season exists, the paired user must already be its owner or a commissioner; ordinary members
-and outsiders cannot sync, auto-enroll, link their scope, or discover the existing league by replay.
+create a new internal league owned by the device's authenticated Laces Out user. A later successful
+provider connection automatically joins that shared league as manager; no separate league approval
+is required. Existing roles are preserved, and every joined role may refresh shared provider
+observations. Snapshots older than the current canonical observation are rejected.
 
 This is an unofficial compatibility integration, not ESPN OAuth. Its parser must fail closed when
-ESPN changes the web-client contract, keep the last good snapshot, and direct the user to reconnect
-or import. The signed companion is available through its unlisted [Chrome Web Store
+ESPN changes the web-client contract, keep the last good snapshot, and direct the user to reconnect.
+The signed companion is available through its unlisted [Chrome Web Store
 listing](https://chromewebstore.google.com/detail/laces-out-espn-bridge/hmilkmcjlkpnigcfnlfogeafacjpmkbj);
 broader distribution still requires a separate terms/store-policy decision.
 
@@ -56,52 +57,7 @@ priority is league-specific available players, player-level weekly box scores, s
 transactions, then completed/on-demand draft results. A supplemental request may fail without
 invalidating or rolling back a valid core league snapshot. Message-board content is out of scope.
 
-### 2. Canonical manual JSON import
-
-This is the durable baseline. Schema version 1 accepts league identity, season, settings, roster
-slots, scoring rules, teams, managers, and roster players. It rejects unknown fields,
-inconsistent team counts, duplicate IDs, unknown lineup slots, oversized artifacts, and values
-outside conservative bounds. It normalizes provider IDs into season-scoped keys and attaches the
-original artifact checksum and import timestamp.
-
-The authenticated workflow deliberately has two phases:
-
-1. `POST /v1/connections/espn/import/validate` parses at most 2 MiB, writes nothing, and returns
-   league identity, exact artifact checksum, artifact timestamp, signed age, and warnings.
-2. `POST /v1/connections/espn/import/commit` reparses the original artifact and requires both an
-   explicit confirmation and the checksum returned by preview. A changed artifact receives a
-   conflict response and must be previewed again.
-
-The first bridge or manual import of a provider league/season creates an owner membership for the
-authenticated Laces Out user. Once that season exists, only its owner or a commissioner may replace
-shared canonical data; manager, viewer, and nonmember attempts fail before checksum replay is
-disclosed. A transaction-scoped advisory lock serializes bridge and manual writes for the same ESPN
-season. The sync receipt, settings/scoring, teams, roster links, and standings/matchup snapshots
-commit together.
-A league-season/checksum replay returns the original receipt without duplicate snapshots, and a
-failure rolls every attempted mutation back to the last good state.
-
-Player fields in either artifact are self-asserted observations, not catalog authority. Persistence
-reuses a global ESPN crosswalk only when the trusted catalog has marked it verified and never updates
-that canonical player from the artifact. If no verified crosswalk exists, the roster points to a
-non-verified league-season-scoped observation. Its name, team, position, eligibility, and status
-remain available for that league's roster display, draft room, and projection resolution, but the
-row is excluded from unscoped/global catalog and ranking resolution and cannot be reused by another
-league. A later trusted catalog refresh can establish the canonical crosswalk for subsequent
-snapshots.
-
-`importedAt` becomes the snapshot's effective time and is always displayed as provenance. Old
-artifacts are allowed for recovery, but timestamps more than five minutes ahead of server time are
-rejected so a typo cannot outrank later legitimate data. Neither endpoint accepts ESPN passwords,
-`SWID`, `espn_s2`, browser cookies, copied request headers, or HAR material; unknown fields fail the
-strict contract.
-
-The complete sanitized example is
-[`packages/connector-espn/test/fixtures/canonical-v1.json`](../../packages/connector-espn/test/fixtures/canonical-v1.json).
-Imports are snapshots, so recommendation UI must visibly display their age. A future CSV wizard
-should convert into this JSON contract rather than introducing a second internal format.
-
-### 3. Anonymous public-league read
+### 2. Anonymous public-league read
 
 `EspnPublicReadClient` calls the web client's `lm-api-reads.fantasy.espn.com` endpoint only for a
 numeric league ID and season. This endpoint is **unofficial and undocumented for third-party
@@ -115,7 +71,7 @@ The request boundary:
 - applies a timeout and 5 MiB response limit;
 - treats returned JSON as an untrusted, checksummed artifact rather than a stable normalized
   contract;
-- returns `NOT_PUBLIC` for 401, 403, or 404 so the UI can direct the owner to manual import.
+- returns `NOT_PUBLIC` for 401, 403, or 404 so the UI can direct the owner to the browser bridge.
 
 An LM can use ESPN's documented setting to make a private league public if appropriate. Public
 visibility is a user/commissioner choice and must not be changed or worked around by this app.
@@ -135,8 +91,8 @@ visibility is a user/commissioner choice and must not be changed or worked aroun
 
 Disney's terms restrict automated access, monitoring, and copying using robots, spiders, scrapers,
 or other automated means. The anonymous public-read experiment therefore remains feature-flagged
-and personal-use only until a terms review accepts it. Manual import works without depending on
-that endpoint and is the safe release path.
+and personal-use only until a terms review accepts it. The browser bridge does not depend on that
+anonymous endpoint and is the private-league path.
 
 ## Setup checklist
 
@@ -147,16 +103,14 @@ that endpoint and is the safe release path.
    choose **Complete pairing**. Laces Out hands off the credential and bounded league-ID set
    directly; there is no token to copy or paste. Sync while signed in to ESPN in the same browser
    profile, then claim the correct fantasy team after each league's first import.
-3. Keep canonical JSON import as recovery. Preview the checksum, source time, league, season, and
-   team count; then use the separate confirmation to commit. Do not paste credentials or headers.
-4. If using public read, confirm the league is intentionally public and enable only the
+3. If using public read, confirm the league is intentionally public and enable only the
    `public-unofficial` mode. No ESPN secret environment variables should exist.
-5. Keep the last successful normalized snapshot if a later read/import fails.
-6. Re-run sanitized fixture tests whenever the canonical schema changes. A schema change requires
-   a new explicit version and migration; never reinterpret an existing version.
-7. Run both ESPN API smokes against PostgreSQL. They exercise first-owner creation, bridge
-   outsider/manager denial, commissioner replacement, checksum replay, player-observation
-   quarantine, canonical-player preservation, normalization, and rollback.
+4. Keep the last successful normalized snapshot if a later bridge read fails.
+5. Re-run sanitized web-client fixture tests whenever the bridge schema changes.
+6. Run the ESPN bridge smoke against PostgreSQL. It exercises first-owner creation, no-op league-ID
+   configuration, provider-connection auto-enrollment, member refresh, stale-snapshot rejection,
+   checksum replay, player-observation quarantine, canonical-player preservation, normalization,
+   and rollback.
 
 ## Primary references
 

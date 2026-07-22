@@ -524,61 +524,6 @@ export const espnBridgeReceiptSchema = z.object({
   receivedAt: z.iso.datetime(),
 });
 
-const espnManualImportLeagueSummarySchema = z
-  .object({
-    externalId: z.string().min(1).max(128),
-    name: z.string().min(1).max(160),
-    season: z.number().int().min(2000).max(2100),
-    teamCount: z.number().int().min(1).max(64),
-    draftType: z.enum(["snake", "auction", "offline", "unknown"]),
-  })
-  .strict();
-
-const espnManualImportProvenanceSchema = z
-  .object({
-    mode: z.literal("manual-import"),
-    fetchedAt: z.iso.datetime(),
-    endpoint: z.null(),
-    artifactChecksumSha256: z.string().regex(/^[a-f0-9]{64}$/u),
-    ageSeconds: z.number().int(),
-  })
-  .strict();
-
-export const espnManualImportPreviewResponseSchema = z
-  .object({
-    valid: z.literal(true),
-    league: espnManualImportLeagueSummarySchema,
-    provenance: espnManualImportProvenanceSchema,
-    validatedAt: z.iso.datetime(),
-    warnings: z.array(z.string().min(1).max(1_000)).max(32),
-  })
-  .strict();
-export type EspnManualImportPreviewResponse = z.infer<typeof espnManualImportPreviewResponseSchema>;
-
-export const espnManualImportCommitRequestSchema = z
-  .object({
-    snapshot: z.unknown(),
-    expectedChecksumSha256: z.string().regex(/^[a-f0-9]{64}$/u),
-    confirmed: z.literal(true),
-  })
-  .strict();
-
-export const espnManualImportCommitResponseSchema = z
-  .object({
-    receiptId: z.string().uuid(),
-    state: z.enum(["accepted", "unchanged"]),
-    league: espnManualImportLeagueSummarySchema.extend({
-      id: z.string().uuid(),
-      leagueSeasonId: z.string().uuid(),
-    }),
-    provenance: espnManualImportProvenanceSchema,
-    committedAt: z.iso.datetime(),
-    recordsWritten: z.number().int().nonnegative(),
-    warnings: z.array(z.string().min(1).max(1_000)).max(32),
-  })
-  .strict();
-export type EspnManualImportCommitResponse = z.infer<typeof espnManualImportCommitResponseSchema>;
-
 export const jobAcceptedSchema = z
   .object({
     jobId: z.string().nullable(),

@@ -50,7 +50,7 @@ This application will hold access to real fantasy accounts. Treat it like a smal
 - Every league read and team claim is membership-scoped; private rankings, notes, credentials, and
   recommendation settings are user-owned unless explicitly shared. Yahoo claims additionally
   require the exact, unambiguous current-user team key stored on that authenticated user's own
-  provider-to-league link. ESPN bridge/manual team claims remain visibly self-asserted because those
+  provider-to-league link. ESPN bridge team claims remain visibly self-asserted because those
   sources do not safely identify the signed-in manager. A claim conflict never authorizes a sync
   job to replace historical ownership.
 - The managed Gemini key is read only from the API server's `GEMINI_API_KEY` environment and is
@@ -70,7 +70,7 @@ This application will hold access to real fantasy accounts. Treat it like a smal
 
 ## ESPN-specific rule
 
-Never request or store an ESPN password. Prefer manual import or a browser-local bridge that leaves cookies inside the ESPN origin. The manual-import API accepts only the strict canonical fantasy-data artifact: unknown credential fields, `SWID`, `espn_s2`, cookies, copied headers, and HAR material are rejected. Preview writes nothing; commit requires an authenticated owner/commissioner (or creates ownership for a new league), an explicit confirmation, and the preview checksum. A bridge device's league-ID allowlist is only a transport boundary: the first accepted snapshot may create a new league owned by that authenticated device user, but an existing season requires that user to already be its owner or a commissioner. Neither bridge nor manual artifacts may overwrite shared canonical player fields or create a verified global player crosswalk. Unmapped roster IDs receive non-verified, league-season-scoped observation rows. Their supplied roster fields are available only to that league's roster, draft, and projection workflows and are excluded from unscoped catalog/ranking resolution. A self-asserted observation never becomes authoritative; a later snapshot may instead resolve through a separately verified canonical crosswalk. If a loopback session fallback is ever enabled, it must be opt-in, read-only, local-only, short-lived, absent from database/backups/telemetry, and visibly revocable. `espn_s2` must be treated as a bearer credential with broader risk than fantasy data alone.
+Never request or store an ESPN password. Use the browser-local bridge, which leaves cookies inside the ESPN origin. A bridge device's league-ID allowlist is only a transport boundary and grants nothing before a successful sync. The first accepted snapshot may create a new league owned by that authenticated device user; a later successfully validated provider connection automatically joins the existing shared league as manager. No separate league approval is required. Existing roles are preserved, every joined member may refresh shared provider data, and an older snapshot cannot replace newer canonical state. Bridge artifacts may not overwrite shared canonical player fields or create a verified global player crosswalk. Unmapped roster IDs receive non-verified, league-season-scoped observation rows. Their supplied roster fields are available only to that league's roster, draft, and projection workflows and are excluded from unscoped catalog/ranking resolution. A self-asserted observation never becomes authoritative; a later trusted catalog refresh may establish a canonical crosswalk. `espn_s2` must be treated as a bearer credential with broader risk than fantasy data alone.
 
 ## Before internet exposure
 
@@ -88,7 +88,7 @@ Never request or store an ESPN password. Prefer manual import or a browser-local
 - review sanitized fixture and log output manually;
 - test disconnect/revocation and OAuth error paths;
 - complete the ESPN companion terms/store-policy review and distribute a signed build before asking
-  friends to install it; keep manual import available when the unofficial contract drifts.
+  friends to install it; fail closed and retain the last good snapshot when the unofficial contract drifts.
 
 ## Reporting
 

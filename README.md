@@ -158,7 +158,6 @@ With PostgreSQL running, the persistence and runtime checks are:
 ```bash
 npm run db:smoke -w @fantasy/db
 npm run bridge:smoke -w @fantasy/api        # ESPN device auth, ownership, replay idempotency
-npm run espn:import:smoke -w @fantasy/api   # preview/commit checksums, isolation, rollback
 npm run yahoo:smoke -w @fantasy/api         # account isolation, team claims, atomic reads
 npm run invitation:smoke -w @fantasy/api    # hashed single-use capabilities
 npm run registration:smoke -w @fantasy/api  # unique members, password/session hashes
@@ -187,7 +186,10 @@ renders Yahoo's required attribution globally.
 bookmark, or install the [browser companion](./apps/espn-bridge/README.md) for six-hour background
 refreshes and one-click pairing. Either path syncs up to 32 leagues, uploads only bounded
 checksummed league data, and stores just the sync-token hash. The first accepted snapshot for a
-new internal league establishes its Laces Out owner; replacement requires owner or commissioner.
+new internal league establishes its Laces Out owner. After that, a successful provider connection
+automatically joins the same shared league as a manager and can keep its data fresh—no separate
+league approval is required. Merely entering a league ID grants nothing, and older snapshots cannot
+replace newer canonical league state.
 Members claim their own team in-app because the unofficial response cannot safely identify the
 active ESPN member. Unverified roster identities become quarantined league-season observations —
 usable inside that league, never merged into shared identity.

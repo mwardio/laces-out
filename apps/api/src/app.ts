@@ -26,7 +26,7 @@ import {
   type RefreshRequest,
   type TeamClaimResponse,
 } from "@fantasy/contracts";
-import { EspnImportError, EspnWebClientNormalizationError } from "@fantasy/connector-espn";
+import { EspnWebClientNormalizationError } from "@fantasy/connector-espn";
 import Fastify, { type FastifyInstance } from "fastify";
 import { z, ZodError } from "zod";
 
@@ -38,7 +38,6 @@ import {
   type DraftSessionPort,
   registerDraftRoutes,
 } from "./draft-routes.js";
-import { type EspnManualImportPort, registerEspnManualImportRoutes } from "./espn-import-routes.js";
 import { type InvitationPort, registerInvitationRoutes } from "./invitation-routes.js";
 import {
   type InSeasonDecisionPort,
@@ -130,7 +129,6 @@ export interface BuildAppOptions {
   readonly draftSessions?: DraftSessionPort;
   readonly draftMarket?: DraftMarketPort;
   readonly espnBridge?: EspnBridgePort;
-  readonly espnImports?: EspnManualImportPort;
   readonly invitations?: InvitationPort;
   readonly decisions?: InSeasonDecisionPort;
   readonly analytics?: LeagueAnalyticsPort;
@@ -409,9 +407,6 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   registerAiRoutes(app, options.ai);
   registerProjectionImportRoutes(app, {
     ...(options.projectionImports ? { projectionImports: options.projectionImports } : {}),
-  });
-  registerEspnManualImportRoutes(app, {
-    ...(options.espnImports ? { espnImports: options.espnImports } : {}),
   });
   registerRosProjectionStatusRoutes(app, {
     ...(options.rosProjectionStatus ? { rosProjectionStatus: options.rosProjectionStatus } : {}),
@@ -826,7 +821,6 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     };
     const isValidation =
       error instanceof ZodError ||
-      error instanceof EspnImportError ||
       error instanceof EspnWebClientNormalizationError ||
       fastifyError.validation !== undefined;
     const status = isValidation ? 400 : (fastifyError.statusCode ?? 500);

@@ -46,7 +46,7 @@ describe("EspnPublicReadClient", () => {
     });
   });
 
-  it("directs private leagues to manual import without accepting auth material", async () => {
+  it("directs private leagues to the browser bridge without accepting auth material", async () => {
     const client = new EspnPublicReadClient({
       fetch: () => Promise.resolve(new Response("", { status: 403 })),
     });

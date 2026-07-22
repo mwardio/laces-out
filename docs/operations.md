@@ -116,7 +116,6 @@ Database-backed release checks:
 npm run db:migrate -w @fantasy/db
 npm run db:smoke -w @fantasy/db
 npm run bridge:smoke -w @fantasy/api
-npm run espn:import:smoke -w @fantasy/api
 npm run yahoo:smoke -w @fantasy/api
 npm run invitation:smoke -w @fantasy/api
 npm run registration:smoke -w @fantasy/api
@@ -124,12 +123,12 @@ npm run runtime:smoke
 ```
 
 The API smoke checks use invented data inside forced-rollback transactions. They verify that the
-first accepted bridge or manual snapshot for a previously unknown ESPN season becomes owner while
-an arbitrary league-ID scope cannot auto-enroll an outsider or manager, and that an established
-commissioner can replace shared state; canonical ESPN recovery
-enforces preview and confirmation checksums, owner/commissioner replacement, cross-user isolation,
-canonical-player preservation, non-verified observation quarantine, idempotency, and last-good
-rollback; two Yahoo accounts remain isolated while linking the same league, atomically
+first accepted bridge snapshot for a previously unknown ESPN season becomes owner while merely
+configuring a league-ID scope grants nothing. A successful validated provider sync automatically
+joins a later connector as manager, every joined member can refresh shared state, and monotonic
+snapshot time prevents stale replacement. The bridge also
+verifies cross-user isolation, canonical-player preservation, non-verified observation quarantine,
+idempotency, and last-good rollback; two Yahoo accounts remain isolated while linking the same league, atomically
 preserve snapshots, and deduplicate only same-account replays; invitation capabilities hash and
 consume once; and shared-code registration stores only password/session hashes. They never print a
 device, invitation, registration, or session credential.
@@ -278,7 +277,7 @@ not prerequisites the current runbook silently assumes are already installed.
 - Yahoo friend access remains Coming Soon until the operator completes the current provider terms,
   configuration, and real-account contract-validation checklist.
 - ESPN companion distribution requires sanctioned private-league validation, terms and store-policy
-  review, and a signed build. Canonical manual import remains the recovery path.
+  review, and a signed build. The signed browser bridge is the only hosted private-league path.
 - Neither gate enables provider writes. Lineup, waiver, and trade changes remain recommendation-only
   until separately approved, implemented, and shadow-validated.
 

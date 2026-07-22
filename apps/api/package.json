@@ -10,7 +10,6 @@
     "owner:create": "tsx src/create-owner.ts",
     "password:reset": "tsx src/reset-password.ts",
     "bridge:smoke": "tsx scripts/espn-bridge-smoke.ts",
-    "espn:import:smoke": "tsx scripts/espn-import-smoke.ts",
     "yahoo:smoke": "tsx scripts/yahoo-sync-smoke.ts",
     "invitation:smoke": "tsx scripts/invitation-smoke.ts",
     "registration:smoke": "tsx scripts/registration-smoke.ts"

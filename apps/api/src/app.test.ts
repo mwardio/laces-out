@@ -36,50 +36,6 @@ const leagueId = "00000000-0000-4000-8000-000000000101";
 const teamId = "00000000-0000-4000-8000-000000000102";
 const invitationToken = "i".repeat(43);
 
-function espnManualSnapshot() {
-  return {
-    schemaVersion: 1,
-    provider: "espn",
-    importedAt: "2026-07-16T20:00:00.000Z",
-    league: {
-      id: "12345",
-      season: 2026,
-      name: "Friends League",
-      currentWeek: 1,
-      settings: {
-        teamCount: 2,
-        draftType: "auction",
-        auctionBudget: 200,
-        waiverType: "faab",
-        faabBudget: 100,
-        playoffTeamCount: 2,
-        rosterSlots: [{ position: "QB", count: 1, starting: true }],
-        scoringRules: [],
-      },
-    },
-    teams: [
-      {
-        id: "1",
-        name: "Tech Gurus",
-        abbreviation: "TG",
-        logoUrl: null,
-        isCurrentUser: true,
-        managers: [],
-        roster: [],
-      },
-      {
-        id: "2",
-        name: "Wide Right",
-        abbreviation: "WR",
-        logoUrl: null,
-        isCurrentUser: false,
-        managers: [],
-        roster: [],
-      },
-    ],
-  };
-}
-
 function invitationPort() {
   return {
     create: () =>
@@ -774,143 +730,25 @@ describe("API", () => {
     await app.close();
   });
 
-  it("validates a provenance-bearing ESPN import without storing private cookies", async () => {
+  it("does not expose the retired ESPN manual snapshot endpoints", async () => {
     const app = await buildApp({
       environment: loadEnvironment({ NODE_ENV: "test" }),
       logger: false,
       requireAuthentication: true,
       authService: authenticatedService(),
     });
-    const response = await app.inject({
-      method: "POST",
-      url: "/v1/connections/espn/import/validate",
-      headers: { cookie: authenticatedCookie },
-      payload: {
-        schemaVersion: 1,
-        provider: "espn",
-        importedAt: "2026-07-16T20:00:00.000Z",
-        league: {
-          id: "12345",
-          season: 2026,
-          name: "Friends League",
-          currentWeek: 1,
-          settings: {
-            teamCount: 1,
-            draftType: "auction",
-            auctionBudget: 200,
-            waiverType: "faab",
-            faabBudget: 100,
-            playoffTeamCount: 1,
-            rosterSlots: [{ position: "QB", count: 1, starting: true }],
-            scoringRules: [],
-          },
-        },
-        teams: [
-          {
-            id: "1",
-            name: "Tech Gurus",
-            abbreviation: "TG",
-            logoUrl: null,
-            isCurrentUser: true,
-            managers: [],
-            roster: [],
-          },
-        ],
-      },
-    });
-    expect(response.statusCode).toBe(200);
-    expect(response.json()).toMatchObject({
-      valid: true,
-      league: { name: "Friends League", teamCount: 1, draftType: "auction" },
-      provenance: { mode: "manual-import" },
-    });
-    await app.close();
-  });
-
-  it("commits only an explicitly confirmed ESPN snapshot for the authenticated user", async () => {
-    const commits: unknown[] = [];
-    const checksum = "a".repeat(64);
-    const app = await buildApp({
-      environment: loadEnvironment({ NODE_ENV: "test" }),
-      logger: false,
-      requireAuthentication: true,
-      authService: authenticatedService(),
-      espnImports: {
-        commit: (userId, input) => {
-          commits.push({ userId, input });
-          return Promise.resolve({
-            receiptId: "00000000-0000-4000-8000-000000000401",
-            state: "accepted" as const,
-            league: {
-              id: "00000000-0000-4000-8000-000000000402",
-              leagueSeasonId: "00000000-0000-4000-8000-000000000403",
-              externalId: "espn:2026:12345",
-              name: "Friends League",
-              season: 2026,
-              teamCount: 2,
-              draftType: "auction" as const,
-            },
-            provenance: {
-              mode: "manual-import" as const,
-              fetchedAt: "2026-07-16T20:00:00.000Z",
-              endpoint: null,
-              artifactChecksumSha256: checksum,
-              ageSeconds: 60,
-            },
-            committedAt: "2026-07-16T20:01:00.000Z",
-            recordsWritten: 6,
-            warnings: ["Manual recovery snapshot"],
-          });
-        },
-      },
-    });
-    const snapshot = espnManualSnapshot();
-    const response = await app.inject({
-      method: "POST",
-      url: "/v1/connections/espn/import/commit",
-      headers: { cookie: authenticatedCookie },
-      payload: { snapshot, expectedChecksumSha256: checksum, confirmed: true },
-    });
-
-    expect(response.statusCode).toBe(201);
-    expect(response.json()).toMatchObject({
-      state: "accepted",
-      league: {
-        name: "Friends League",
-        leagueSeasonId: "00000000-0000-4000-8000-000000000403",
-      },
-      provenance: { mode: "manual-import", artifactChecksumSha256: checksum },
-    });
-    expect(commits).toEqual([
-      {
-        userId: "00000000-0000-4000-8000-000000000001",
-        input: { snapshot, expectedChecksumSha256: checksum, confirmed: true },
-      },
-    ]);
-    await app.close();
-  });
-
-  it("rejects ESPN credentials and header material from the strict recovery artifact", async () => {
-    const app = await buildApp({
-      environment: loadEnvironment({ NODE_ENV: "test" }),
-      logger: false,
-      requireAuthentication: true,
-      authService: authenticatedService(),
-    });
-    const response = await app.inject({
-      method: "POST",
-      url: "/v1/connections/espn/import/validate",
-      headers: { cookie: authenticatedCookie },
-      payload: {
-        ...espnManualSnapshot(),
-        espn_s2: "must-never-be-accepted",
-        swid: "{must-never-be-accepted}",
-        headers: { Cookie: "espn_s2=must-never-be-accepted" },
-      },
-    });
-
-    expect(response.statusCode).toBe(400);
-    expect(response.json()).toMatchObject({ title: "Request validation failed" });
+    for (const url of [
+      "/v1/connections/espn/import/validate",
+      "/v1/connections/espn/import/commit",
+    ]) {
+      const response = await app.inject({
+        method: "POST",
+        url,
+        headers: { cookie: authenticatedCookie },
+        payload: {},
+      });
+      expect(response.statusCode).toBe(404);
+    }
     await app.close();
   });
 

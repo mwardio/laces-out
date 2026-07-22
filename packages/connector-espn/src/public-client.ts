@@ -185,7 +185,7 @@ export class EspnPublicReadClient {
     if (response.status === 401 || response.status === 403 || response.status === 404) {
       throw new EspnPublicReadError({
         code: "NOT_PUBLIC",
-        message: "ESPN league was not anonymously readable; use canonical manual import",
+        message: "ESPN league was not anonymously readable; use the browser bridge",
         status: response.status,
       });
     }

@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   ESPN_SELF_ASSERTED_PLAYER_SOURCE,
-  espnRefreshMembershipGrant,
+  espnRefreshPolicy,
   espnSelfAssertedPlayerIdentity,
   espnSelfAssertedPlayerKey,
   trustedEspnPlayerId,
@@ -11,46 +11,44 @@ import {
 describe("ESPN refresh membership policy", () => {
   it("makes the first importer of a brand-new league its owner", () => {
     expect(
-      espnRefreshMembershipGrant({
+      espnRefreshPolicy({
         createdLeague: true,
         actorIsAnchoredOwner: false,
         existingMembershipRole: null,
       }),
-    ).toBe("owner");
+    ).toEqual({ membershipGrant: "owner" });
   });
 
-  it("grants a manager membership to a non-owner refreshing an existing shared league", () => {
-    // The second legitimate member of a shared league can refresh without an owner-lock 404 and
-    // is auto-enrolled as a manager so they can subsequently claim their own team.
+  it("adds a successful new connector to an existing shared league as a manager", () => {
     expect(
-      espnRefreshMembershipGrant({
+      espnRefreshPolicy({
         createdLeague: false,
         actorIsAnchoredOwner: false,
         existingMembershipRole: null,
       }),
-    ).toBe("manager");
+    ).toEqual({ membershipGrant: "manager" });
   });
 
-  it("never downgrades a user who already holds a membership", () => {
+  it("lets every existing member refresh without changing their role", () => {
     for (const existingMembershipRole of ["owner", "commissioner", "manager", "viewer"] as const) {
       expect(
-        espnRefreshMembershipGrant({
+        espnRefreshPolicy({
           createdLeague: false,
           actorIsAnchoredOwner: false,
           existingMembershipRole,
         }),
-      ).toBeNull();
+      ).toEqual({ membershipGrant: null });
     }
   });
 
   it("keeps the anchored owner an owner even when a membership row is missing", () => {
     expect(
-      espnRefreshMembershipGrant({
+      espnRefreshPolicy({
         createdLeague: false,
         actorIsAnchoredOwner: true,
         existingMembershipRole: null,
       }),
-    ).toBe("owner");
+    ).toEqual({ membershipGrant: "owner" });
   });
 });
 

@@ -141,6 +141,13 @@
       "when": 1784746577095,
       "tag": "0019_nice_alex_power",
       "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1784753695530,
+      "tag": "0020_ranking_share_limits",
+      "breakpoints": true
     }
   ]
 }

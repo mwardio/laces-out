@@ -12,7 +12,6 @@ import { AuthService } from "./auth.js";
 import { DraftSessionService, DrizzleDraftSessionRepository } from "./draft-session.js";
 import { DraftMarketService } from "./draft-market.js";
 import { EspnBridgeService } from "./espn-bridge.js";
-import { EspnManualImportService } from "./espn-import.js";
 import { DrizzleEspnSyncPersistence } from "./espn-sync-persistence.js";
 import {
   DrizzleInSeasonDecisionRepository,
@@ -43,7 +42,6 @@ const draftSessions = new DraftSessionService(new DrizzleDraftSessionRepository(
 const draftMarket = new DraftMarketService(database.db);
 const espnPersistence = new DrizzleEspnSyncPersistence(database.db);
 const espnBridge = new EspnBridgeService(database.db, () => new Date(), espnPersistence);
-const espnImports = new EspnManualImportService(espnPersistence);
 const decisions = new InSeasonDecisionService(new DrizzleInSeasonDecisionRepository(database.db));
 const analytics = new LeagueAnalyticsService(new DrizzleLeagueAnalyticsRepository(database.db));
 const statsCenter = new StatsCenterService(new DrizzleStatsCenterRepository(database.db));
@@ -138,7 +136,6 @@ const app = await buildApp({
   draftSessions,
   draftMarket,
   espnBridge,
-  espnImports,
   decisions,
   analytics,
   statsCenter,

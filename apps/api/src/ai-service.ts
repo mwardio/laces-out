@@ -791,13 +791,13 @@ export class AiService {
     const started = Date.now();
     const provider = input.provider ?? "gemini";
     const execution = await this.#executionCredential(input.userId, provider);
-    const reservationId = await this.#reserve(execution, "league-analysis", {
-      leagueId: input.leagueId,
-    });
     const { dashboard, decisions, analytics, leagueName } = await this.#leagueContext(
       input.userId,
       input.leagueId,
     );
+    const reservationId = await this.#reserve(execution, "league-analysis", {
+      leagueId: input.leagueId,
+    });
     const leagueData = serializeLeagueData({
       "League overview": dashboard,
       "Decision Desk": decisions,

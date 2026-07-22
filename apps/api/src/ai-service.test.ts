@@ -193,6 +193,10 @@ function serviceFixture(
     readonly maxOutputTokens: number;
   },
   decisions: unknown = { lineup: { state: "available", moves: ["Start Reed"] } },
+  dashboard: unknown = {
+    league: { id: LEAGUE_ID, name: "Wide Right League" },
+    roster: [],
+  },
 ) {
   const adapters = {
     openai: adapter,
@@ -208,7 +212,7 @@ function serviceFixture(
       adapters,
       leagueDashboard: {
         getDashboard: () =>
-          Promise.resolve({ league: { id: LEAGUE_ID, name: "Wide Right League" }, roster: [] }),
+          dashboard instanceof Error ? Promise.reject(dashboard) : Promise.resolve(dashboard),
       },
       decisions: {
         getSnapshot: () => Promise.resolve(decisions),
@@ -377,6 +381,28 @@ describe("AI service", () => {
       statusCode: 429,
     } satisfies Partial<AiServiceError>);
     expect(complete).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not consume quota when league context cannot be loaded", async () => {
+    const complete = vi.fn();
+    const repository = new MemoryAiRepository();
+    const { service } = serviceFixture(
+      { complete },
+      repository,
+      { apiKey: "managed-gemini-secret", dailyRequestLimit: 50, maxOutputTokens: 2000 },
+      undefined,
+      new Error("league context unavailable"),
+    );
+
+    await expect(
+      service.analyzeLeague({
+        userId: USER_ID,
+        leagueId: LEAGUE_ID,
+        question: "What matters this week?",
+      }),
+    ).rejects.toThrow("league context unavailable");
+    expect(complete).not.toHaveBeenCalled();
+    expect(repository.usage).toHaveLength(0);
   });
 
   it("does not spend a model call when no waiver move clears replacement value", async () => {

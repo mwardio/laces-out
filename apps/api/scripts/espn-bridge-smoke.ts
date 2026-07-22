@@ -33,10 +33,11 @@ interface SmokeResult {
   readonly weeklyMatchups: number;
   readonly recordsRead: number;
   readonly memberships: number;
-  readonly commissionerState: "accepted" | "unchanged";
+  readonly memberState: "accepted" | "unchanged";
   readonly initialOwnerEstablished: true;
-  readonly outsiderDenied: true;
-  readonly managerDenied: true;
+  readonly configuredScopeGrantedNothing: true;
+  readonly providerConnectionAutoEnrolled: true;
+  readonly staleSnapshotRejected: true;
   readonly deviceListed: true;
   readonly revokedReplayRejected: true;
   readonly rolledBack: true;
@@ -119,6 +120,18 @@ try {
     );
     const firstReceipt = await bridge.acceptSnapshot(credential.deviceToken, snapshot);
     const replayReceipt = await bridge.acceptSnapshot(credential.deviceToken, snapshot);
+    const staleSnapshot: EspnBridgeSnapshot = {
+      ...snapshot,
+      capturedAt: new Date(new Date(snapshot.capturedAt).getTime() - 60_000).toISOString(),
+    };
+    await assert.rejects(
+      bridge.acceptSnapshot(credential.deviceToken, staleSnapshot),
+      (error: unknown) =>
+        error instanceof Error &&
+        "statusCode" in error &&
+        (error as { statusCode: unknown }).statusCode === 409,
+      "an older snapshot must not roll canonical league state backward",
+    );
     const driftPayload = JSON.parse(JSON.stringify(snapshot.payload)) as {
       teams: Array<{ playoffSeed?: number; record?: unknown }>;
     };
@@ -165,17 +178,9 @@ try {
     assert.equal(ownerMembership?.role, "owner", "new bridge ownership must be explicit");
 
     const outsiderCredential = await bridge.registerDevice(outsiderUserId, {
-      name: "Outsider database smoke device",
+      name: "League mate database smoke device",
       allowedLeagueIds: [snapshot.leagueId],
     });
-    await assert.rejects(
-      bridge.acceptSnapshot(outsiderCredential.deviceToken, snapshot),
-      (error: unknown) =>
-        error instanceof Error &&
-        "statusCode" in error &&
-        (error as { statusCode: unknown }).statusCode === 404,
-      "a league-ID allowlist must not authorize an outsider or disclose the existing league",
-    );
     const [scopeBeforeAuthority] = await smokeDatabase
       .select({ leagueId: bridgeDeviceLeagues.leagueId })
       .from(bridgeDeviceLeagues)
@@ -191,40 +196,38 @@ try {
         ),
       )
       .limit(1);
-    assert.equal(scopeBeforeAuthority?.leagueId, null, "a denied scope must remain unlinked");
-    assert.equal(membershipBeforeAuthority, undefined, "a denied bridge must not auto-enroll");
-
-    await smokeDatabase.insert(leagueMemberships).values({
-      leagueId: season.leagueId,
-      userId: outsiderUserId,
-      role: "manager",
-    });
-    await assert.rejects(
-      bridge.acceptSnapshot(outsiderCredential.deviceToken, snapshot),
-      (error: unknown) =>
-        error instanceof Error &&
-        "statusCode" in error &&
-        (error as { statusCode: unknown }).statusCode === 404,
-      "an ordinary manager must not replace shared ESPN state through a bridge token",
+    assert.equal(
+      scopeBeforeAuthority?.leagueId,
+      null,
+      "a configured league ID must remain unlinked",
     );
-    await smokeDatabase
-      .update(leagueMemberships)
-      .set({ role: "commissioner", updatedAt: new Date() })
+    assert.equal(
+      membershipBeforeAuthority,
+      undefined,
+      "configuring a league ID without a successful provider sync must grant nothing",
+    );
+
+    const memberReceipt = await bridge.acceptSnapshot(outsiderCredential.deviceToken, snapshot);
+    const [connectedMembership] = await smokeDatabase
+      .select({ role: leagueMemberships.role })
+      .from(leagueMemberships)
       .where(
         and(
           eq(leagueMemberships.leagueId, season.leagueId),
           eq(leagueMemberships.userId, outsiderUserId),
         ),
-      );
-    const commissionerReceipt = await bridge.acceptSnapshot(
-      outsiderCredential.deviceToken,
-      snapshot,
-    );
+      )
+      .limit(1);
 
     assert.equal(replayReceipt.state, "unchanged", "replayed snapshot must be idempotent");
     assert.equal(replayReceipt.receiptId, firstReceipt.receiptId);
-    assert.equal(commissionerReceipt.state, "accepted");
-    assert.notEqual(commissionerReceipt.receiptId, firstReceipt.receiptId);
+    assert.equal(memberReceipt.state, "accepted");
+    assert.notEqual(memberReceipt.receiptId, firstReceipt.receiptId);
+    assert.equal(
+      connectedMembership?.role,
+      "manager",
+      "a successful provider connection must join the existing shared league",
+    );
 
     const [teamTotal] = await smokeDatabase
       .select({ value: count() })
@@ -254,7 +257,7 @@ try {
       .select({ value: count() })
       .from(leagueMemberships)
       .where(eq(leagueMemberships.leagueId, season.leagueId));
-    const [commissionerScope] = await smokeDatabase
+    const [memberScope] = await smokeDatabase
       .select({ leagueId: bridgeDeviceLeagues.leagueId })
       .from(bridgeDeviceLeagues)
       .where(
@@ -274,12 +277,12 @@ try {
     assert.equal(
       Number(membershipTotal?.value ?? 0),
       2,
-      "authority must be established explicitly",
+      "both successful provider connections must establish membership",
     );
     assert.equal(
-      commissionerScope?.leagueId,
+      memberScope?.leagueId,
       season.leagueId,
-      "an authorized commissioner scope may link after a successful sync",
+      "a provider-connected member scope must link after a successful sync",
     );
 
     const devices = await bridge.listDevices(userId);
@@ -311,10 +314,11 @@ try {
       weeklyMatchups: Number(matchupTotal?.value ?? 0),
       recordsRead: run?.recordsRead ?? 0,
       memberships: Number(membershipTotal?.value ?? 0),
-      commissionerState: commissionerReceipt.state,
+      memberState: memberReceipt.state,
       initialOwnerEstablished: true,
-      outsiderDenied: true,
-      managerDenied: true,
+      configuredScopeGrantedNothing: true,
+      providerConnectionAutoEnrolled: true,
+      staleSnapshotRejected: true,
       deviceListed: true,
       revokedReplayRejected: true,
       rolledBack: true,
