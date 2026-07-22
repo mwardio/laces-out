@@ -664,6 +664,34 @@ describe("API", () => {
     await app.close();
   });
 
+  it("limits on-demand refresh requests to ten per minute", async () => {
+    const app = await buildApp({
+      environment: loadEnvironment({ NODE_ENV: "test" }),
+      logger: false,
+      requireAuthentication: true,
+      authService: authenticatedService(),
+      enqueueRefresh: () => Promise.resolve("refresh-job"),
+    });
+
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      const response = await app.inject({
+        method: "POST",
+        url: "/v1/refreshes",
+        headers: { cookie: authenticatedCookie },
+        payload: { scope: "player-data" },
+      });
+      expect(response.statusCode).toBe(202);
+    }
+    const limited = await app.inject({
+      method: "POST",
+      url: "/v1/refreshes",
+      headers: { cookie: authenticatedCookie },
+      payload: { scope: "player-data" },
+    });
+    expect(limited.statusCode).toBe(429);
+    await app.close();
+  });
+
   it("starts a user-bound Yahoo authorization flow", async () => {
     const calls: unknown[] = [];
     const app = await buildApp({

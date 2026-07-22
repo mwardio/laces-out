@@ -5,14 +5,9 @@ import {
   EspnManualImportService,
   type EspnManualImportRepository,
 } from "./espn-import.js";
-import {
-  EspnSyncPersistenceError,
-  type PersistEspnSyncInput,
-  type PersistEspnSyncReceipt,
-} from "./espn-sync-persistence.js";
+import type { PersistEspnSyncInput, PersistEspnSyncReceipt } from "./espn-sync-persistence.js";
 
 const OWNER_ID = "10000000-0000-4000-8000-000000000001";
-const COMMISSIONER_ID = "10000000-0000-4000-8000-000000000002";
 const MANAGER_ID = "10000000-0000-4000-8000-000000000003";
 const LEAGUE_ID = "20000000-0000-4000-8000-000000000001";
 const SEASON_ID = "30000000-0000-4000-8000-000000000001";
@@ -64,7 +59,7 @@ function snapshot(name = "Friends League") {
 }
 
 class FakeAtomicRepository implements EspnManualImportRepository {
-  readonly roles = new Map<string, "owner" | "commissioner" | "manager">();
+  readonly roles = new Map<string, "owner" | "manager">();
   readonly receipts = new Map<string, PersistEspnSyncReceipt>();
   stored: { readonly checksum: string; readonly name: string } | undefined;
   failNext = false;
@@ -72,10 +67,6 @@ class FakeAtomicRepository implements EspnManualImportRepository {
   async persist(input: PersistEspnSyncInput): Promise<PersistEspnSyncReceipt> {
     if (input.authority.mode !== "manual-import") throw new Error("manual test expected");
     const actorUserId = input.authority.actorUserId;
-    if (this.stored) {
-      const role = this.roles.get(actorUserId);
-      if (role !== "owner" && role !== "commissioner") throw new EspnSyncPersistenceError();
-    }
     const prior = this.receipts.get(input.idempotencyKey);
     if (prior) return { ...prior, state: "unchanged" };
 
@@ -89,8 +80,14 @@ class FakeAtomicRepository implements EspnManualImportRepository {
       this.failNext = false;
       throw new Error("simulated database constraint failure");
     }
+    // Refresh is decoupled from ownership: any authenticated user may refresh. The first importer
+    // of a brand-new league becomes owner; a later refresher who is not yet a member joins as a
+    // manager. Nobody is blocked on role.
+    const firstImport = this.stored === undefined;
     this.stored = draft;
-    this.roles.set(actorUserId, this.stored && this.roles.size === 0 ? "owner" : "commissioner");
+    if (!this.roles.has(actorUserId)) {
+      this.roles.set(actorUserId, firstImport ? "owner" : "manager");
+    }
     const receipt: PersistEspnSyncReceipt = {
       receiptId: RECEIPT_ID,
       leagueId: LEAGUE_ID,
@@ -153,7 +150,7 @@ describe("EspnManualImportService", () => {
     expect(repository.stored).toBeUndefined();
   });
 
-  it("is checksum-idempotent and checks authorization before revealing a replay", async () => {
+  it("is checksum-idempotent and lets any authenticated member refresh without an owner lock", async () => {
     const repository = new FakeAtomicRepository();
     const service = new EspnManualImportService(repository, () => NOW);
     const input = snapshot();
@@ -167,36 +164,36 @@ describe("EspnManualImportService", () => {
       snapshot: input,
       expectedChecksumSha256: checksum,
     });
-    await expect(
-      service.commit(MANAGER_ID, { snapshot: input, expectedChecksumSha256: checksum }),
-    ).rejects.toMatchObject({ statusCode: 404, code: "IMPORT_SCOPE_NOT_FOUND" });
+
+    // A second, non-owner user can refresh the same shared league (no disguised 404) and is
+    // auto-granted a manager membership so they can subsequently claim their own team.
+    const refresh = snapshot("Second member refresh");
+    const refreshChecksum = service.preview(refresh).provenance.artifactChecksumSha256;
+    const secondMember = await service.commit(MANAGER_ID, {
+      snapshot: refresh,
+      expectedChecksumSha256: refreshChecksum,
+    });
 
     expect(accepted.state).toBe("accepted");
+    expect(repository.roles.get(OWNER_ID)).toBe("owner");
     expect(replay).toMatchObject({ state: "unchanged", receiptId: accepted.receiptId });
-    expect(repository.stored?.checksum).toBe(checksum);
+    expect(secondMember.state).toBe("accepted");
+    expect(repository.roles.get(MANAGER_ID)).toBe("manager");
   });
 
-  it("allows a commissioner, blocks a manager, and preserves last-good state on failure", async () => {
+  it("refreshes for any member and preserves last-good state when a write fails", async () => {
     const repository = new FakeAtomicRepository();
     const service = new EspnManualImportService(repository, () => NOW);
     const first = snapshot();
     const firstChecksum = service.preview(first).provenance.artifactChecksumSha256;
     await service.commit(OWNER_ID, { snapshot: first, expectedChecksumSha256: firstChecksum });
-    repository.roles.set(COMMISSIONER_ID, "commissioner");
-    repository.roles.set(MANAGER_ID, "manager");
 
-    const replacement = snapshot("Commissioner's update");
+    const replacement = snapshot("Manager's update");
     const replacementChecksum = service.preview(replacement).provenance.artifactChecksumSha256;
-    await expect(
-      service.commit(MANAGER_ID, {
-        snapshot: replacement,
-        expectedChecksumSha256: replacementChecksum,
-      }),
-    ).rejects.toMatchObject({ statusCode: 404 });
 
     repository.failNext = true;
     await expect(
-      service.commit(COMMISSIONER_ID, {
+      service.commit(MANAGER_ID, {
         snapshot: replacement,
         expectedChecksumSha256: replacementChecksum,
       }),
@@ -204,10 +201,11 @@ describe("EspnManualImportService", () => {
     expect(repository.stored).toEqual({ checksum: firstChecksum, name: "Friends League" });
 
     await expect(
-      service.commit(COMMISSIONER_ID, {
+      service.commit(MANAGER_ID, {
         snapshot: replacement,
         expectedChecksumSha256: replacementChecksum,
       }),
-    ).resolves.toMatchObject({ state: "accepted", league: { name: "Commissioner's update" } });
+    ).resolves.toMatchObject({ state: "accepted", league: { name: "Manager's update" } });
+    expect(repository.roles.get(MANAGER_ID)).toBe("manager");
   });
 });

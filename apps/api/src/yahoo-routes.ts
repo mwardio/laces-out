@@ -109,28 +109,33 @@ export function registerYahooRoutes(app: FastifyInstance, options: YahooRouteOpt
     }
   });
 
-  app.post("/v1/connections/yahoo/:connectionId/discover", async (request, reply) => {
-    const user = authenticatedUser(request, reply);
-    if (!user) return reply;
-    if (!options.yahooSync) return reply.code(503).send(unavailable(request.id));
-    const { connectionId } = connectionPathSchema.parse(request.params);
-    try {
-      const result = await options.yahooSync.discoverAndSync(user.id, connectionId);
-      await enqueueProjectionRefreshes(
-        options,
-        result.syncs.map((sync) => sync.season),
-        request,
-      );
-      return reply.code(202).send(result);
-    } catch (error) {
-      const response = sendYahooError(error, request, reply);
-      if (response) return response;
-      throw error;
-    }
-  });
+  app.post(
+    "/v1/connections/yahoo/:connectionId/discover",
+    { config: { rateLimit: { max: 8, timeWindow: "1 minute" } } },
+    async (request, reply) => {
+      const user = authenticatedUser(request, reply);
+      if (!user) return reply;
+      if (!options.yahooSync) return reply.code(503).send(unavailable(request.id));
+      const { connectionId } = connectionPathSchema.parse(request.params);
+      try {
+        const result = await options.yahooSync.discoverAndSync(user.id, connectionId);
+        await enqueueProjectionRefreshes(
+          options,
+          result.syncs.map((sync) => sync.season),
+          request,
+        );
+        return reply.code(202).send(result);
+      } catch (error) {
+        const response = sendYahooError(error, request, reply);
+        if (response) return response;
+        throw error;
+      }
+    },
+  );
 
   app.post(
     "/v1/connections/yahoo/:connectionId/leagues/:leagueKey/sync",
+    { config: { rateLimit: { max: 10, timeWindow: "1 minute" } } },
     async (request, reply) => {
       const user = authenticatedUser(request, reply);
       if (!user) return reply;

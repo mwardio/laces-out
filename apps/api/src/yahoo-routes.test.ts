@@ -219,6 +219,60 @@ describe("Yahoo sync routes", () => {
     await app.close();
   });
 
+  it("limits discovery requests to eight per minute", async () => {
+    const app = await buildApp({
+      environment: loadEnvironment({ NODE_ENV: "test" }),
+      logger: false,
+      requireAuthentication: true,
+      authService: authService(),
+      yahooSync: yahooSync(),
+    });
+    const url = `/v1/connections/yahoo/${CONNECTION_ID}/discover`;
+
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      const response = await app.inject({
+        method: "POST",
+        url,
+        headers: { cookie: COOKIE },
+      });
+      expect(response.statusCode).toBe(202);
+    }
+    const limited = await app.inject({
+      method: "POST",
+      url,
+      headers: { cookie: COOKIE },
+    });
+    expect(limited.statusCode).toBe(429);
+    await app.close();
+  });
+
+  it("limits league sync requests to ten per minute", async () => {
+    const app = await buildApp({
+      environment: loadEnvironment({ NODE_ENV: "test" }),
+      logger: false,
+      requireAuthentication: true,
+      authService: authService(),
+      yahooSync: yahooSync(),
+    });
+    const url = `/v1/connections/yahoo/${CONNECTION_ID}/leagues/449.l.12345/sync`;
+
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      const response = await app.inject({
+        method: "POST",
+        url,
+        headers: { cookie: COOKIE },
+      });
+      expect(response.statusCode).toBe(202);
+    }
+    const limited = await app.inject({
+      method: "POST",
+      url,
+      headers: { cookie: COOKIE },
+    });
+    expect(limited.statusCode).toBe(429);
+    await app.close();
+  });
+
   it("runs the initial read sync after OAuth but preserves the connection if sync fails", async () => {
     const complete = vi.fn(() =>
       Promise.resolve({ connectionId: CONNECTION_ID, returnTo: "/connections" }),

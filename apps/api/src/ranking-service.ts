@@ -320,6 +320,16 @@ function shareToken(): string {
   return `frs_${randomBytes(32).toString("base64url")}`;
 }
 
+// Share-link lifetime policy: a link is never permanent. Callers that omit
+// (or explicitly null out) `expiresAt` get a 30-day default; any explicit
+// expiry is honored up to a hard 180-day ceiling and clamped down to it
+// otherwise. Callers that omit `maxUses` get a 100-use default cap; an
+// explicit `null` is still honored as "unlimited" since the link is always
+// time-bounded, so no share can ever be both permanent and unlimited-use.
+const SHARE_DEFAULT_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+const SHARE_MAX_TTL_MS = 180 * 24 * 60 * 60 * 1000;
+const SHARE_DEFAULT_MAX_USES = 100;
+
 function visibilityLeagueIds(visibility: RankingVisibility): readonly string[] {
   return visibility.scope === "league" ? visibility.leagueIds : [];
 }
@@ -959,11 +969,21 @@ export class RankingService {
     const list = await this.#ownedList(actorUserId, uuidSchema.parse(input.listId));
     if (!list.currentVersionId) throw new RankingServiceError("RANKING_NOT_FOUND");
     const now = this.#now();
-    const expiresAt = input.expiresAt ?? null;
-    if (expiresAt && (!dateSchema.safeParse(expiresAt).success || expiresAt <= now)) {
-      throw new RankingServiceError("RANKING_INVALID_INPUT");
+    // `expiresAt` undefined or null both mean "caller didn't request a specific
+    // expiry" — links are never minted permanent, so both fall back to the
+    // default TTL rather than treating `null` as "no expiry".
+    const requestedExpiresAt = input.expiresAt ?? null;
+    let expiresAt: Date;
+    if (requestedExpiresAt === null) {
+      expiresAt = new Date(now.getTime() + SHARE_DEFAULT_TTL_MS);
+    } else {
+      if (!dateSchema.safeParse(requestedExpiresAt).success || requestedExpiresAt <= now) {
+        throw new RankingServiceError("RANKING_INVALID_INPUT");
+      }
+      const maxExpiresAt = new Date(now.getTime() + SHARE_MAX_TTL_MS);
+      expiresAt = requestedExpiresAt > maxExpiresAt ? maxExpiresAt : requestedExpiresAt;
     }
-    const maxUses = input.maxUses ?? null;
+    const maxUses = input.maxUses === undefined ? SHARE_DEFAULT_MAX_USES : input.maxUses;
     if (maxUses !== null && (!Number.isInteger(maxUses) || maxUses < 1 || maxUses > 1_000_000)) {
       throw new RankingServiceError("RANKING_INVALID_INPUT");
     }

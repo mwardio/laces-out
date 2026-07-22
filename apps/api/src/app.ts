@@ -736,69 +736,73 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     }
   });
 
-  app.post("/v1/refreshes", async (request, reply) => {
-    if (!request.currentUser) {
-      return reply.code(401).type("application/problem+json").send({
-        type: "https://fantasy.local/problems/unauthorized",
-        title: "Authentication required",
-        status: 401,
-        correlationId: request.id,
-      });
-    }
-    const refresh = refreshRequestSchema.parse(request.body);
-    if (refresh.scope === "league") {
-      if (!options.refreshAuthorization) {
+  app.post(
+    "/v1/refreshes",
+    { config: { rateLimit: { max: 10, timeWindow: "1 minute" } } },
+    async (request, reply) => {
+      if (!request.currentUser) {
+        return reply.code(401).type("application/problem+json").send({
+          type: "https://fantasy.local/problems/unauthorized",
+          title: "Authentication required",
+          status: 401,
+          correlationId: request.id,
+        });
+      }
+      const refresh = refreshRequestSchema.parse(request.body);
+      if (refresh.scope === "league") {
+        if (!options.refreshAuthorization) {
+          return reply.code(503).type("application/problem+json").send({
+            type: "https://fantasy.local/problems/refresh-authorization-unavailable",
+            title: "League refresh authorization is not configured",
+            status: 503,
+            correlationId: request.id,
+          });
+        }
+        const canAccess = await options.refreshAuthorization.canAccessLeague(
+          request.currentUser.id,
+          refresh.leagueId,
+        );
+        if (!canAccess) {
+          return reply.code(404).type("application/problem+json").send({
+            type: "https://fantasy.local/problems/league-not-found",
+            title: "League not found",
+            status: 404,
+            correlationId: request.id,
+          });
+        }
+        return reply.code(409).type("application/problem+json").send({
+          type: "https://fantasy.local/problems/provider-refresh-required",
+          title: "Use the provider-specific league sync",
+          status: 409,
+          detail:
+            "Yahoo refresh is available under Connections; ESPN sync comes from the one-click bookmark or optional Chrome companion. Projection imports are handled under Projections.",
+          correlationId: request.id,
+        });
+      }
+      if (!options.enqueueRefresh) {
         return reply.code(503).type("application/problem+json").send({
-          type: "https://fantasy.local/problems/refresh-authorization-unavailable",
-          title: "League refresh authorization is not configured",
+          type: "https://fantasy.local/problems/jobs-unavailable",
+          title: "Refresh jobs are not available",
           status: 503,
           correlationId: request.id,
         });
       }
-      const canAccess = await options.refreshAuthorization.canAccessLeague(
-        request.currentUser.id,
-        refresh.leagueId,
+      const requestedAt = new Date();
+      const jobId = await options.enqueueRefresh({
+        requestedBy: request.currentUser.id,
+        refresh,
+        requestedAt,
+      });
+      return reply.code(jobId ? 202 : 200).send(
+        jobAcceptedSchema.parse({
+          jobId,
+          state: jobId ? "queued" : "deduplicated",
+          target: refresh.scope === "adp-data" ? "draft-market-adp" : "shared-nfl-data",
+          requestedAt: requestedAt.toISOString(),
+        }),
       );
-      if (!canAccess) {
-        return reply.code(404).type("application/problem+json").send({
-          type: "https://fantasy.local/problems/league-not-found",
-          title: "League not found",
-          status: 404,
-          correlationId: request.id,
-        });
-      }
-      return reply.code(409).type("application/problem+json").send({
-        type: "https://fantasy.local/problems/provider-refresh-required",
-        title: "Use the provider-specific league sync",
-        status: 409,
-        detail:
-          "Yahoo refresh is available under Connections; ESPN sync comes from the one-click bookmark or optional Chrome companion. Projection imports are handled under Projections.",
-        correlationId: request.id,
-      });
-    }
-    if (!options.enqueueRefresh) {
-      return reply.code(503).type("application/problem+json").send({
-        type: "https://fantasy.local/problems/jobs-unavailable",
-        title: "Refresh jobs are not available",
-        status: 503,
-        correlationId: request.id,
-      });
-    }
-    const requestedAt = new Date();
-    const jobId = await options.enqueueRefresh({
-      requestedBy: request.currentUser.id,
-      refresh,
-      requestedAt,
-    });
-    return reply.code(jobId ? 202 : 200).send(
-      jobAcceptedSchema.parse({
-        jobId,
-        state: jobId ? "queued" : "deduplicated",
-        target: refresh.scope === "adp-data" ? "draft-market-adp" : "shared-nfl-data",
-        requestedAt: requestedAt.toISOString(),
-      }),
-    );
-  });
+    },
+  );
 
   app.setNotFoundHandler(async (request, reply) => {
     const requestPath = requestPathForLog(request.url);

@@ -2,53 +2,59 @@ import { describe, expect, it } from "vitest";
 
 import {
   ESPN_SELF_ASSERTED_PLAYER_SOURCE,
-  canReplaceExistingEspnSeason,
+  espnRefreshMembershipGrant,
   espnSelfAssertedPlayerIdentity,
   espnSelfAssertedPlayerKey,
   trustedEspnPlayerId,
 } from "./espn-sync-persistence.js";
 
-const ACTOR_ID = "10000000-0000-4000-8000-000000000001";
-const OTHER_ID = "10000000-0000-4000-8000-000000000002";
-
-describe("ESPN persistence security policy", () => {
-  it("requires established owner or commissioner authority for an existing season", () => {
+describe("ESPN refresh membership policy", () => {
+  it("makes the first importer of a brand-new league its owner", () => {
     expect(
-      canReplaceExistingEspnSeason(ACTOR_ID, {
-        ownerUserId: ACTOR_ID,
-        membershipRole: null,
+      espnRefreshMembershipGrant({
+        createdLeague: true,
+        actorIsAnchoredOwner: false,
+        existingMembershipRole: null,
       }),
-    ).toBe(true);
-    expect(
-      canReplaceExistingEspnSeason(ACTOR_ID, {
-        ownerUserId: OTHER_ID,
-        membershipRole: "owner",
-      }),
-    ).toBe(true);
-    expect(
-      canReplaceExistingEspnSeason(ACTOR_ID, {
-        ownerUserId: OTHER_ID,
-        membershipRole: "commissioner",
-      }),
-    ).toBe(true);
+    ).toBe("owner");
   });
 
-  it("does not turn a bridge league-ID allowlist into replacement authority", () => {
-    expect(canReplaceExistingEspnSeason(ACTOR_ID, undefined)).toBe(false);
+  it("grants a manager membership to a non-owner refreshing an existing shared league", () => {
+    // The second legitimate member of a shared league can refresh without an owner-lock 404 and
+    // is auto-enrolled as a manager so they can subsequently claim their own team.
     expect(
-      canReplaceExistingEspnSeason(ACTOR_ID, {
-        ownerUserId: OTHER_ID,
-        membershipRole: "manager",
+      espnRefreshMembershipGrant({
+        createdLeague: false,
+        actorIsAnchoredOwner: false,
+        existingMembershipRole: null,
       }),
-    ).toBe(false);
-    expect(
-      canReplaceExistingEspnSeason(ACTOR_ID, {
-        ownerUserId: OTHER_ID,
-        membershipRole: "viewer",
-      }),
-    ).toBe(false);
+    ).toBe("manager");
   });
 
+  it("never downgrades a user who already holds a membership", () => {
+    for (const existingMembershipRole of ["owner", "commissioner", "manager", "viewer"] as const) {
+      expect(
+        espnRefreshMembershipGrant({
+          createdLeague: false,
+          actorIsAnchoredOwner: false,
+          existingMembershipRole,
+        }),
+      ).toBeNull();
+    }
+  });
+
+  it("keeps the anchored owner an owner even when a membership row is missing", () => {
+    expect(
+      espnRefreshMembershipGrant({
+        createdLeague: false,
+        actorIsAnchoredOwner: true,
+        existingMembershipRole: null,
+      }),
+    ).toBe("owner");
+  });
+});
+
+describe("ESPN persistence identity isolation", () => {
   it("uses only verified global ESPN crosswalks as canonical player identity", () => {
     expect(
       trustedEspnPlayerId({

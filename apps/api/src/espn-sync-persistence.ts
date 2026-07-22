@@ -52,35 +52,36 @@ export interface PersistEspnSyncReceipt {
   readonly state: "accepted" | "unchanged";
 }
 
-export class EspnSyncPersistenceError extends Error {
-  readonly code: "IMPORT_SCOPE_NOT_FOUND";
-  readonly statusCode = 404;
-
-  constructor() {
-    super("This ESPN league is not available to the current user for replacement");
-    this.name = "EspnSyncPersistenceError";
-    this.code = "IMPORT_SCOPE_NOT_FOUND";
-  }
-}
-
 export const ESPN_SELF_ASSERTED_PLAYER_SOURCE = "espn-self-asserted";
 
-interface EspnSeasonAccess {
-  readonly ownerUserId: string;
-  readonly membershipRole: LeagueMembershipRole | null;
-}
-
-/** External league IDs identify a sync target; only established app authority permits replacement. */
-export function canReplaceExistingEspnSeason(
-  actorUserId: string,
-  access: EspnSeasonAccess | undefined,
-): boolean {
-  return (
-    access !== undefined &&
-    (access.ownerUserId === actorUserId ||
-      access.membershipRole === "owner" ||
-      access.membershipRole === "commissioner")
-  );
+/**
+ * Decide what league membership, if any, a user should receive as a side effect of
+ * importing/refreshing a shared ESPN league. Data-refresh is deliberately DECOUPLED from
+ * admin-ownership:
+ *
+ *  - The first importer of a NEW league becomes its `owner` (the admin role).
+ *  - The league's anchored owner is (re)granted `owner` should a membership row be missing.
+ *  - Any other authenticated user who refreshes an EXISTING shared league and has no membership
+ *    yet is granted `manager`, making them a real member who can then claim their own team via
+ *    the existing team-claim flow.
+ *  - A user who already holds a membership keeps whatever role they have (no change).
+ *
+ * Refresh itself is NOT gated on role. Rationale: producing a valid snapshot for a PRIVATE ESPN
+ * league requires being signed in as a member (ESPN never serves private-league data to
+ * non-members), so snapshot possession is self-gating proof of membership; public-league data is
+ * public anyway. This is an explicit trust-among-league-members model that dissolves the
+ * first-importer "squatting" lock and the multi-member refresh friction. It is not a relaxation
+ * of a confidentiality boundary: the prior owner-lock only controlled who could WRITE the shared
+ * record, and self-asserted player rows stay isolated to their own league-season regardless.
+ */
+export function espnRefreshMembershipGrant(input: {
+  readonly createdLeague: boolean;
+  readonly actorIsAnchoredOwner: boolean;
+  readonly existingMembershipRole: LeagueMembershipRole | null;
+}): LeagueMembershipRole | null {
+  if (input.createdLeague || input.actorIsAnchoredOwner) return "owner";
+  if (input.existingMembershipRole === null) return "manager";
+  return null;
 }
 
 /** Self-asserted provider observations are isolated to one internal league season. */
@@ -196,6 +197,7 @@ export class DrizzleEspnSyncPersistence {
         .limit(1);
 
       let actorIsAnchoredOwner = false;
+      let actorExistingMembershipRole: LeagueMembershipRole | null = null;
       if (existingSeason) {
         const [access] = await transaction
           .select({
@@ -213,11 +215,12 @@ export class DrizzleEspnSyncPersistence {
           .where(eq(leagues.id, existingSeason.leagueId))
           .limit(1);
         actorIsAnchoredOwner = access?.ownerUserId === authority.actorUserId;
-        if (!canReplaceExistingEspnSeason(authority.actorUserId, access)) {
-          // A not-found response avoids revealing whether another user's ESPN league exists. A
-          // bridge device's user-chosen league allowlist is transport scope, never membership.
-          throw new EspnSyncPersistenceError();
-        }
+        actorExistingMembershipRole = access?.membershipRole ?? null;
+        // Refresh is intentionally NOT gated on ownership: any authenticated user presenting a
+        // valid snapshot may refresh this shared canonical league/season. See
+        // espnRefreshMembershipGrant for the full rationale (a valid private-league snapshot is
+        // self-gating proof of membership). A legitimate non-owner refresher is turned into a
+        // real member by the membership grant below.
       }
 
       const [prior] = await transaction
@@ -333,13 +336,20 @@ export class DrizzleEspnSyncPersistence {
         leagueSeasonId = season.id;
       }
 
-      if (createdLeague || actorIsAnchoredOwner) {
+      const membershipGrant = espnRefreshMembershipGrant({
+        createdLeague,
+        actorIsAnchoredOwner,
+        existingMembershipRole: actorExistingMembershipRole,
+      });
+      if (membershipGrant) {
+        // onConflictDoNothing guarantees an existing membership (e.g. an established owner) is
+        // never downgraded by a later manager grant.
         await transaction
           .insert(leagueMemberships)
           .values({
             leagueId,
             userId: authority.actorUserId,
-            role: createdLeague || actorIsAnchoredOwner ? "owner" : "manager",
+            role: membershipGrant,
           })
           .onConflictDoNothing({
             target: [leagueMemberships.leagueId, leagueMemberships.userId],

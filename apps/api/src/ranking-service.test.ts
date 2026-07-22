@@ -9,6 +9,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 
 import {
   deriveRankingShareKeyring,
+  hashRankingShareToken,
   RankingService,
   RankingServiceError,
   type AppendRankingVersionInput,
@@ -357,17 +358,24 @@ describe("RankingService", () => {
   let repository: MemoryRankingRepository;
   let service: RankingService;
   let idSequence: number;
+  const keyring = deriveRankingShareKeyring(Buffer.alloc(32, 31));
 
   beforeEach(() => {
     repository = new MemoryRankingRepository();
     repository.addMembership(OWNER, LEAGUE_A);
     repository.addMembership(FRIEND, LEAGUE_A);
     idSequence = 1;
-    service = new RankingService(repository, deriveRankingShareKeyring(Buffer.alloc(32, 31)), {
+    service = new RankingService(repository, keyring, {
       now: () => NOW,
       id: () => generatedId(idSequence++),
     });
   });
+
+  function storedShare(token: string): MemoryShare {
+    const share = repository.sharesByHash.get(hashRankingShareToken(token, keyring));
+    if (!share) throw new Error("expected share to be persisted");
+    return share;
+  }
 
   async function privateList(name = "My board"): Promise<RankingList> {
     return service.createList(OWNER, {
@@ -833,5 +841,74 @@ describe("RankingService", () => {
     await expect(service.openShare(shared.token)).rejects.toMatchObject({
       code: "RANKING_SHARE_UNAVAILABLE",
     });
+  });
+
+  it("never mints a permanent or unlimited-use share link", async () => {
+    const list = await privateList();
+    await firstDraft(list);
+    const thirtyDaysMs = 30 * 24 * 60 * 60 * 1000;
+    const oneEightyDaysMs = 180 * 24 * 60 * 60 * 1000;
+
+    // Omitting expiresAt/maxUses falls back to a bounded default (30 days,
+    // 100 uses) instead of a permanent, unlimited-use link.
+    const defaults = await service.createShare({ actorUserId: OWNER, listId: list.id });
+    expect(defaults.expiresAt).toEqual(new Date(NOW.getTime() + thirtyDaysMs));
+    expect(storedShare(defaults.token).maxUses).toBe(100);
+
+    // An explicit null is treated the same as "unspecified" for expiresAt --
+    // it is never honored as "no expiry".
+    const explicitNull = await service.createShare({
+      actorUserId: OWNER,
+      listId: list.id,
+      expiresAt: null,
+    });
+    expect(explicitNull.expiresAt).toEqual(new Date(NOW.getTime() + thirtyDaysMs));
+
+    // A caller-provided expiry beyond the 180-day ceiling is clamped down to
+    // it rather than honored or rejected outright.
+    const farFuture = new Date(NOW.getTime() + oneEightyDaysMs + thirtyDaysMs);
+    const clamped = await service.createShare({
+      actorUserId: OWNER,
+      listId: list.id,
+      expiresAt: farFuture,
+    });
+    expect(clamped.expiresAt).toEqual(new Date(NOW.getTime() + oneEightyDaysMs));
+
+    // A valid explicit expiry within the ceiling, and an explicit maxUses,
+    // are both honored as requested.
+    const withinCeiling = new Date(NOW.getTime() + oneEightyDaysMs - thirtyDaysMs);
+    const explicit = await service.createShare({
+      actorUserId: OWNER,
+      listId: list.id,
+      expiresAt: withinCeiling,
+      maxUses: 5,
+    });
+    expect(explicit.expiresAt).toEqual(withinCeiling);
+    expect(storedShare(explicit.token).maxUses).toBe(5);
+
+    // An explicit null maxUses is still honored as "unlimited" -- the link
+    // is always time-bounded, so unlimited uses never means unlimited time.
+    const unlimitedUses = await service.createShare({
+      actorUserId: OWNER,
+      listId: list.id,
+      maxUses: null,
+    });
+    expect(storedShare(unlimitedUses.token).maxUses).toBeNull();
+    expect(unlimitedUses.expiresAt).toEqual(new Date(NOW.getTime() + thirtyDaysMs));
+
+    await expect(
+      service.createShare({
+        actorUserId: OWNER,
+        listId: list.id,
+        maxUses: 1_000_001,
+      }),
+    ).rejects.toMatchObject({ code: "RANKING_INVALID_INPUT" });
+    await expect(
+      service.createShare({
+        actorUserId: OWNER,
+        listId: list.id,
+        expiresAt: new Date(NOW.getTime() - 1),
+      }),
+    ).rejects.toMatchObject({ code: "RANKING_INVALID_INPUT" });
   });
 });
