@@ -166,7 +166,7 @@ export function AppShell({ active, children, compact = false, context }: AppShel
       <div className="app-frame">
         <header className="topbar">
           <Link className="mobile-brand" href="/app" aria-label="Laces Out locker room overview">
-            <LacesOutMark compact />
+            <LacesOutMark />
             <strong>Laces Out</strong>
           </Link>
           <div className="topbar-context">

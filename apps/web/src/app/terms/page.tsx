@@ -19,7 +19,7 @@ export default function TermsPage() {
     <main className={styles.page}>
       <header className={styles.header}>
         <Link className={styles.brand} href="/" aria-label="Laces Out home">
-          <LacesOutMark compact />
+          <LacesOutMark />
           <span>
             <strong>Laces Out</strong>
             <small>Terms of use</small>

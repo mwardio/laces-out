@@ -1,5 +1,5 @@
 import type { Metadata, Viewport } from "next";
-import { Fugaz_One } from "next/font/google";
+import { Sora } from "next/font/google";
 import type { ReactNode } from "react";
 
 import { publicSiteUrl } from "../lib/public-site";
@@ -7,8 +7,7 @@ import { publicSiteUrl } from "../lib/public-site";
 import "./globals.css";
 import "./polish.css";
 
-const brandFont = Fugaz_One({
-  weight: "400",
+const brandFont = Sora({
   subsets: ["latin"],
   display: "swap",
   variable: "--font-brand",

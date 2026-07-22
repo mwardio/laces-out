@@ -18,7 +18,7 @@ export default function PrivacyPage() {
     <main className={styles.page}>
       <header className={styles.header}>
         <Link className={styles.brand} href="/" aria-label="Laces Out home">
-          <LacesOutMark compact />
+          <LacesOutMark />
           <span>
             <strong>Laces Out</strong>
             <small>Privacy &amp; data use</small>

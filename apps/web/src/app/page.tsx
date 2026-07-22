@@ -181,7 +181,7 @@ export default function LandingPage() {
       <header className={styles.siteHeader}>
         <div className={styles.headerInner}>
           <Link className={styles.brand} href="/" aria-label="Laces Out home">
-            <LacesOutMark compact />
+            <LacesOutMark />
             <span>
               <strong>Laces Out</strong>
             </span>

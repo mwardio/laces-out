@@ -62,21 +62,19 @@
   .brand-copy strong {
     font-family: var(--font-brand), var(--font-sans);
     font-size: 20px;
-    font-weight: 400;
-    letter-spacing: 0.005em;
+    font-weight: 760;
+    letter-spacing: -0.04em;
     line-height: 1;
     text-transform: none;
-    word-spacing: 0.08em;
   }
 
   .mobile-brand > strong {
     font-family: var(--font-brand), var(--font-sans);
     font-size: 18px;
-    font-weight: 400;
-    letter-spacing: 0.005em;
+    font-weight: 760;
+    letter-spacing: -0.04em;
     line-height: 1;
     text-transform: none;
-    word-spacing: 0.08em;
   }
 
   .brand-copy span {
