@@ -130,7 +130,7 @@ function demoResult(feature: AiFeatureName, leagueId: string): AiFeatureResponse
     outcome: "generated",
     provider: "gemini",
     accessMode: "managed",
-    model: "gemini-3.5-flash",
+    model: "gemini-3.6-flash",
     league: { id: leagueId, name: "Lakeview Auction" },
     title: FEATURES[feature].label,
     answer: DEMO_ANSWERS[feature],

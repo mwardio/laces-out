@@ -155,7 +155,7 @@ function FilmRoomTour() {
           <KeyRound size={18} />
           <span>
             <strong>Ready out of the box</strong>
-            Gemini 3.5 Flash is included after sign-in.
+            Gemini 3.6 Flash is included after sign-in.
           </span>
         </div>
         <div>
@@ -214,7 +214,7 @@ function FilmRoomTour() {
             </label>
             <label className={styles.field}>
               <span>Model ID</span>
-              <input value="gemini-3.5-flash" readOnly />
+              <input value="gemini-3.6-flash" readOnly />
             </label>
             <div className={styles.fieldRow}>
               <label className={styles.field}>
@@ -670,7 +670,7 @@ export function FilmRoomWorkbench() {
           <KeyRound size={18} />
           <span>
             <strong>Ready out of the box</strong>
-            Gemini 3.5 Flash uses the Laces Out key.
+            Gemini 3.6 Flash uses the Laces Out key.
           </span>
         </div>
         <div>

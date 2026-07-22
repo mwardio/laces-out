@@ -100,7 +100,7 @@ export default function PrivacyPage() {
             by default. Provider and football-data services receive only the requests required to
             retrieve their data. Film room sends your question and a bounded snapshot of your
             authorized league, recommendations, and analytics to Google Gemini by default using the
-            operator&apos;s Google AI Studio project. This included access currently uses Gemini 3.5
+            operator&apos;s Google AI Studio project. This included access currently uses Gemini 3.6
             Flash and requires no personal key. Google states that free-tier submitted content may
             be used to improve its products. You may instead add a separately billed OpenAI,
             Anthropic, Gemini, or OpenRouter API key and choose the model; that key is encrypted, is

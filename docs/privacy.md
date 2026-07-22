@@ -14,7 +14,7 @@ freshness, and audit records. Logs are configured to redact passwords, session m
 credentials, authorization headers, and known ESPN credential fields.
 
 Film room is available by default through the operator's server-side Google AI Studio project and
-fixed `gemini-3.5-flash` model. When a member makes an included request, Laces Out sends the
+fixed `gemini-3.6-flash` model. When a member makes an included request, Laces Out sends the
 question plus a bounded snapshot of that member's authorized league overview, Decision Desk, and
 league analytics to Google Gemini. Google's free-tier terms currently state that submitted content
 may be used to improve its products. Laces Out stores provider/model settings and a usage ledger
