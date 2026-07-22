@@ -84,8 +84,8 @@ npm run build -w @fantasy/espn-bridge         # dev: localhost + broad optional 
 npm run build:store -w @fantasy/espn-bridge   # store: pinned to https://laces.mward.io, tightened CSP
 ```
 
-`build:store` writes the upload artifact to `apps/espn-bridge/dist-package/` (git-ignored) and, unlike
-the dev build, is not copied into the site's public downloads. The store manifest drops the
+Both builds write their reproducible archives to `apps/espn-bridge/dist-package/` (git-ignored);
+neither is copied into the public site. The store manifest drops the
 `http://localhost` / `https://*/*` optional hosts down to `https://laces.mward.io/*`, narrows the CSP
 `connect-src` to the three named hosts, tightens `externally_connectable` to `https://laces.mward.io/*`
 only, and removes the dev `key`, so review sees only fixed, single-purpose origins and the store

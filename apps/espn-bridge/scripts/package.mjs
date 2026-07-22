@@ -10,13 +10,10 @@ const distributionDirectory = join(bridgeDirectory, "dist");
 const target = process.env.BRIDGE_TARGET === "store" ? "store" : "dev";
 const { version } = JSON.parse(await readFile(join(bridgeDirectory, "package.json"), "utf8"));
 
-// The dev zip is published from the site for sideloading; the store zip is a
-// separate artifact uploaded to the Chrome Web Store and kept out of the
-// publicly served downloads directory.
-const outputDirectory =
-  target === "store"
-    ? join(bridgeDirectory, "dist-package")
-    : join(bridgeDirectory, "..", "web", "public", "downloads");
+// Both archives are local, reproducible build artifacts. User installation is
+// distributed through the Chrome Web Store; no package is copied into the
+// publicly served web tree.
+const outputDirectory = join(bridgeDirectory, "dist-package");
 const outputPath = join(
   outputDirectory,
   target === "store"
