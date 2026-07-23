@@ -47,13 +47,12 @@
 
 ## Screenshots
 
-Captured from the built-in locker room tour — every view below is the labeled demo mode, no
-account required.
+Every view below is the built-in locker room tour — labeled demo mode, no account required.
 
-|                                                                      |                                                          |
-| -------------------------------------------------------------------- | -------------------------------------------------------- |
-| ![Locker room overview](./docs/screenshots/locker-room-overview.png) | ![Draft studio](./docs/screenshots/draft-studio.png)     |
-| ![Decision Desk](./docs/screenshots/decision-desk.png)               | ![Projection Lab](./docs/screenshots/projection-lab.png) |
+|                                                                       |                                                           |
+| --------------------------------------------------------------------- | --------------------------------------------------------- |
+| ![Locker room overview](./docs/screenshots/locker-room-overview.webp) | ![Draft studio](./docs/screenshots/draft-studio.webp)     |
+| ![Decision Desk](./docs/screenshots/decision-desk.webp)               | ![Projection Lab](./docs/screenshots/projection-lab.webp) |
 
 ## Statistically honest projections
 
@@ -79,9 +78,8 @@ Requirements: Docker with the Compose plugin. The stack is five containers — C
 Next.js web, Fastify API, pg-boss worker, PostgreSQL 17 — plus a one-shot migration job.
 PostgreSQL is the only stateful service, and it binds to host loopback only.
 
-Clone the repository, then from the repo root:
-
 ```bash
+git clone https://github.com/mwardio/laces-out.git && cd laces-out
 cp .env.docker.example .env
 # Replace every `replace-with-...` value. Generator commands are documented in the file.
 docker compose config --quiet
