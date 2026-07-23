@@ -35,8 +35,8 @@ import styles from "./landing.module.css";
 
 const socialPreview = {
   url: "/opengraph-image.jpg",
-  width: 1200,
-  height: 630,
+  width: 1733,
+  height: 908,
   alt: "Laces Out — Finkle is Einhorn!",
 } as const;
 
