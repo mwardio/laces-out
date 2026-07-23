@@ -107,3 +107,32 @@ a future protocol; it cannot be repaired against 2026 data.
 
 The hourly shadow rail may observe 2026 behavior for operational monitoring. Nothing observed may
 change v4 or this protocol; anything learned feeds v5 development only.
+
+## Amendment 1 — kicker-cell confirmation addendum (2026-07-23, pre-kickoff)
+
+**Justification (per the amendment policy):** on 2026-07-23 the kicker-interval work was admitted on development evidence: engine model
+`laces-ros-distribution-v7` (kicker count process; non-kicker simulation proven byte-identical to
+v6 under the frozen seed lineage) with weekly model `laces-weekly-components-v8` (kicker recency
+baseline blends thin-history kickers toward the position mean with the pre-existing n/(n+4)
+reliability form; no new constants). The admission carried zero cell blockers
+(`reports/ros-validation-v8-2026-07-23.json`, artifact `67e7ba09…655d5d`), so the K one-to-four
+cell is live for the first time. Per blueprint §6e, this addendum pre-registers its untouched
+confirmation before any 2026 kickoff.
+
+**Addendum terms:**
+
+- The 2026 untouched run specified above executes unchanged, against the versions actually
+  serving (`laces-ros-distribution-v7` + `laces-weekly-components-v8` +
+  `historical-ros-kicker-count-process-v1`), with one declared measurement clarification: the
+  kicker p50 convergence tolerance is the lattice-aware declaration shipped 2026-07-23 (absolute
+  1 — the integer lattice spacing of kicker window totals — matching the p15/p85 tolerances;
+  ratified as a Monte Carlo stability declaration for a discrete family, not a gate change; all
+  other tolerances and every non-kicker tolerance unchanged).
+- The kicker one-to-four cell is confirmed iff its 2026 evidence passes the identical criteria
+  already frozen above — same gates, same α, same floors. No kicker-specific criterion is added
+  or relaxed.
+- Development-evidence context, stated for honesty: the count-process family and the weekly-v8
+  kicker blend were developed against 2019–2025, with structural measurements disclosed in the
+  blueprint's Step 0 record; 2026 is the first season no kicker-related parameter, constant, or
+  design decision has ever contacted. A 2026 kicker-cell failure is a model-development finding
+  for a future version; it cannot be repaired against 2026 data.

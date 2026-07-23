@@ -231,11 +231,21 @@ calibrated integer count process on the five scored components. Its full replay
 (`reports/ros-validation-v7-2026-07-22.json`) kept all 15 non-K cells byte-identical to v6 with
 no new blocker and moved raw K short-window coverage to nominal, but K one-to-four still failed
 walk-forward block coverage — root-caused to weekly-model kicker centers under roster churn, not
-the interval family. **v7 is on main but not
-admitted: do not rebuild/deploy the worker until a v7 admission exists**, or new ROS publication
-pauses while the stored v6 artifact fails validity against the running v7 constants (prior
-published rows keep serving; the run diagnostics surface
-`ros_champion_artifact_invalid_publication_paused`).
+the interval family.
+
+Weekly model v8 (2026-07-23) fixed that root cause: the kicker recency baseline blends
+thin-history kickers toward the position mean with the pre-existing n/(n+4) reliability form (no
+new constants), and the kicker p50 convergence tolerance was declared at the integer lattice
+spacing (owner-ratified). The v8 replay (`reports/ros-validation-v8-2026-07-23.json`, source
+lineage attached post-run with verification — see `sourceLineageNote` inside) is the project's
+first **zero-blocker** report: every cell releasable, K one-to-four cleared at 1/4 walk-forward
+blocks, convergence 144/144. The champion artifact (`67e7ba09…655d5d`, engine
+`laces-ros-distribution-v7` + weekly `laces-weekly-components-v8`) was admitted 2026-07-23 with
+zero cell blockers, superseding v6 under latest-admitted-wins. Deploy note: the version-bump
+re-seeds every simulation through the weekly fingerprint → input checksum → seed chain, so
+post-deploy ROS numbers legitimately differ draw-level from v6's while remaining
+distribution-identical for non-K positions. The pre-registered 2026 kicker-cell addendum is
+Amendment 1 of the untouched protocol.
 
 Completed weekly-roster membership supplies the evaluation spine for recently relevant players who
 recorded neither a stat nor a snap. Those known DNP outcomes are scored as zero but excluded from

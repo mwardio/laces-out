@@ -438,6 +438,43 @@ export default function LandingPage() {
                 <article className={styles.providerCard}>
                   <div className={styles.providerCardHead}>
                     <div className={styles.providerIdentity}>
+                      <span className={`${styles.providerBadge} ${styles.espnBadge}`}>ESPN</span>
+                      <div>
+                        <p>League connection</p>
+                        <h3>ESPN Fantasy</h3>
+                      </div>
+                    </div>
+                    <span className={styles.connectionMode}>One-click or automatic</span>
+                  </div>
+                  <p className={styles.providerDescription}>
+                    A private sync bookmark or the automatic Chrome companion reads league data
+                    through the ESPN session you already opened. Your password and cookies stay on
+                    ESPN.
+                  </p>
+                  <ul>
+                    <li>
+                      <Check size={13} /> One-click bookmark for fast on-demand sync
+                    </li>
+                    <li>
+                      <RefreshCw size={13} /> Optional six-hour refresh with the Chrome companion
+                    </li>
+                    <li>
+                      <Check size={13} />{" "}
+                      <a
+                        href="https://chromewebstore.google.com/detail/hmilkmcjlkpnigcfnlfogeafacjpmkbj"
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        Chrome extension
+                      </a>
+                      &nbsp;pairs with one click—no tokens to copy
+                    </li>
+                  </ul>
+                </article>
+
+                <article className={styles.providerCard}>
+                  <div className={styles.providerCardHead}>
+                    <div className={styles.providerIdentity}>
                       <span className={`${styles.providerBadge} ${styles.yahooBadge}`}>Yahoo</span>
                       <div>
                         <p>League connection</p>
@@ -469,43 +506,6 @@ export default function LandingPage() {
                           <RefreshCw size={13} /> Refresh when linked or whenever you request it
                         </>
                       )}
-                    </li>
-                  </ul>
-                </article>
-
-                <article className={styles.providerCard}>
-                  <div className={styles.providerCardHead}>
-                    <div className={styles.providerIdentity}>
-                      <span className={`${styles.providerBadge} ${styles.espnBadge}`}>ESPN</span>
-                      <div>
-                        <p>League connection</p>
-                        <h3>ESPN Fantasy</h3>
-                      </div>
-                    </div>
-                    <span className={styles.connectionMode}>One-click or automatic</span>
-                  </div>
-                  <p className={styles.providerDescription}>
-                    A private sync bookmark or the automatic Chrome companion reads league data
-                    through the ESPN session you already opened. Your password and cookies stay on
-                    ESPN.
-                  </p>
-                  <ul>
-                    <li>
-                      <Check size={13} /> One-click bookmark for fast on-demand sync
-                    </li>
-                    <li>
-                      <RefreshCw size={13} /> Optional six-hour refresh with the Chrome companion
-                    </li>
-                    <li>
-                      <Check size={13} />{" "}
-                      <a
-                        href="https://chromewebstore.google.com/detail/hmilkmcjlkpnigcfnlfogeafacjpmkbj"
-                        target="_blank"
-                        rel="noreferrer"
-                      >
-                        Chrome extension
-                      </a>
-                      &nbsp;pairs with one click—no tokens to copy
                     </li>
                   </ul>
                 </article>
