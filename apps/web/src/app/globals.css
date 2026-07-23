@@ -4763,7 +4763,7 @@
   }
   .login-brand {
     align-self: flex-start;
-    padding-inline: 0;
+    padding: 0;
   }
   .login-story__copy {
     position: relative;

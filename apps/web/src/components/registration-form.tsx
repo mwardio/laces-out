@@ -119,7 +119,6 @@ export function RegistrationForm() {
 
         <div className="password-label-row">
           <label htmlFor="registration-email">Email address</label>
-          <span>Used to sign in</span>
         </div>
         <input
           id="registration-email"
@@ -137,7 +136,6 @@ export function RegistrationForm() {
 
         <div className="password-label-row">
           <label htmlFor="registration-code">Shared invite code</label>
-          <span>From your host</span>
         </div>
         <input
           id="registration-code"

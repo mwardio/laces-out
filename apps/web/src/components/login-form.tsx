@@ -107,7 +107,6 @@ export function LoginForm() {
 
         <div className="password-label-row">
           <label htmlFor="owner-password">Password</label>
-          <span>Account credential</span>
         </div>
         <div className="password-field">
           <input
@@ -136,7 +135,7 @@ export function LoginForm() {
 
       <button className="button button--lime login-submit" type="submit" disabled={isSubmitting}>
         {isSubmitting ? <LoaderCircle className="spin" size={16} /> : null}
-        {isSubmitting ? "Signing in…" : "Sign in securely"}
+        {isSubmitting ? "Signing in…" : "Sign in"}
         {!isSubmitting ? <ArrowRight size={15} /> : null}
       </button>
 

@@ -31,6 +31,7 @@ import {
   parseAiProviderList,
   parseLeagueListResponse,
 } from "../lib/api-client";
+import { aiModelOptions, customModelOption, isKnownAiModel } from "../lib/ai-model-options";
 import { DEMO_LEAGUE_ID } from "../lib/demo-contract-data";
 import { AiAnswerContent } from "./ai-answer-content";
 import { AiCoachPanel } from "./ai-coach-panel";
@@ -638,6 +639,8 @@ export function FilmRoomWorkbench() {
   const providerMeta = PROVIDERS[selectedProvider];
   const hasLeagues = load.leagues.leagues.length > 0;
   const byokControlsEnabled = Boolean(currentProvider?.configured || apiKey.trim());
+  const providerModelOptions = aiModelOptions[selectedProvider];
+  const selectedModelOption = isKnownAiModel(selectedProvider, model) ? model : customModelOption;
   const canAnalyze = Boolean(currentProvider?.available && selectedLeagueId && question.trim());
   const settingsBusy =
     settingsAction.state === "saving" ||
@@ -789,25 +792,47 @@ export function FilmRoomWorkbench() {
             </label>
 
             <label className={styles.field}>
-              <span>Model ID</span>
-              <input
-                value={model}
+              <span>Model</span>
+              <select
+                value={selectedModelOption}
                 onChange={(event) => {
-                  setModel(event.target.value);
+                  setModel(event.target.value === customModelOption ? "" : event.target.value);
                   setSettingsAction({ state: "idle" });
                 }}
-                minLength={1}
-                maxLength={160}
-                required
-                spellCheck={false}
                 disabled={!byokControlsEnabled}
-              />
+              >
+                {providerModelOptions.map((option) => (
+                  <option key={option.id} value={option.id}>
+                    {option.label}
+                  </option>
+                ))}
+                <option value={customModelOption}>Custom model ID…</option>
+              </select>
               <small>
                 {byokControlsEnabled
-                  ? "Your key unlocks model selection."
+                  ? "Your key unlocks provider-specific model selection."
                   : "The included model is fixed. Add your own key to choose another model."}
               </small>
             </label>
+
+            {selectedModelOption === customModelOption && byokControlsEnabled ? (
+              <label className={styles.field}>
+                <span>Custom model ID</span>
+                <input
+                  value={model}
+                  onChange={(event) => {
+                    setModel(event.target.value);
+                    setSettingsAction({ state: "idle" });
+                  }}
+                  minLength={1}
+                  maxLength={160}
+                  required
+                  spellCheck={false}
+                  placeholder="Enter the exact provider model ID"
+                />
+                <small>Use this for a model that is not yet listed above.</small>
+              </label>
+            ) : null}
 
             <div className={styles.fieldRow}>
               <label className={styles.field}>

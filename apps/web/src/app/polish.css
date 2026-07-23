@@ -1464,8 +1464,9 @@
     }
 
     .login-story {
-      min-height: auto;
-      padding: max(17px, env(safe-area-inset-top)) 18px 17px;
+      min-height: 61px;
+      justify-content: center;
+      padding: 11px 18px;
       border-bottom: 1px solid #2a352c;
     }
 
@@ -1478,10 +1479,11 @@
 
     .login-brand {
       min-height: 38px;
+      padding: 0;
     }
 
     .login-form-side {
-      min-height: calc(100svh - 73px);
+      min-height: calc(100svh - 61px);
       justify-content: flex-start;
       padding: 20px 16px 48px;
     }
