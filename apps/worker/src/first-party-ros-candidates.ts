@@ -73,6 +73,14 @@ const ROS_LIVE_CONVERGENCE_TOLERANCES: Readonly<
   p85Points: { absolute: 1, relative: 0.04 },
 };
 
+/**
+ * Lattice-aware kicker p50 tolerance, mirroring the release diagnostic's declaration
+ * (owner-ratified 2026-07-23): kicker window totals are integer lattice points under the count
+ * process, so the live p50 tolerance matches the lattice spacing exactly as p15/p85 already do.
+ * Non-kicker positions keep the original table byte-for-byte.
+ */
+const ROS_LIVE_KICKER_P50_TOLERANCE = { absolute: 1, relative: 0.03 } as const;
+
 export const FIRST_PARTY_ROS_LIVE_RELEASE_SCENARIOS = 2_048;
 export const FIRST_PARTY_ROS_LIVE_CONVERGENCE_REFERENCE_SCENARIOS = 4_096;
 
@@ -441,7 +449,10 @@ export function diagnoseBoundedFirstPartyRosConvergence(input: {
   let maxToleranceRatio = 0;
   const metrics = (Object.keys(pairs) as FirstPartyRosConvergenceMetricName[]).map((metric) => {
     const pair = pairs[metric];
-    const tolerance = ROS_LIVE_CONVERGENCE_TOLERANCES[metric];
+    const tolerance =
+      metric === "p50Points" && input.projectionInput.position === "K"
+        ? ROS_LIVE_KICKER_P50_TOLERANCE
+        : ROS_LIVE_CONVERGENCE_TOLERANCES[metric];
     const absoluteDifference = Math.abs(pair.release - pair.reference);
     const allowed = Math.max(tolerance.absolute, Math.abs(pair.reference) * tolerance.relative);
     const ratio = allowed === 0 ? 0 : absoluteDifference / allowed;

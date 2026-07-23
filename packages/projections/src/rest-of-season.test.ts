@@ -838,6 +838,21 @@ describe("first-party ROS kicker count process (model v7)", () => {
     expect(withCenter.standardDeviation).toBeGreaterThan(withoutCenter.standardDeviation);
   });
 
+  it("applies the lattice-aware p50 convergence tolerance to kickers only", () => {
+    const kicker = diagnoseFirstPartyRosConvergence(kickerInput());
+    const kickerP50 = kicker.metrics.find((metric) => metric.metric === "p50Points")!;
+    // Kicker totals live on an integer lattice; the declared absolute tolerance equals the
+    // lattice spacing (1), so a single-atom median hop can never read as instability.
+    expect(kickerP50.allowedDifference).toBeGreaterThanOrEqual(1);
+    const wr = diagnoseFirstPartyRosConvergence(projectionInput());
+    const wrP50 = wr.metrics.find((metric) => metric.metric === "p50Points")!;
+    // Non-kicker positions keep the original 0.75-absolute / 3%-relative tolerance verbatim.
+    expect(wrP50.allowedDifference).toBeCloseTo(
+      Math.max(0.75, Math.abs(wrP50.referenceValue) * 0.03),
+      10,
+    );
+  });
+
   it("validates kicker process parameter ranges fail-closed", () => {
     expect(() =>
       projectFirstPartyRestOfSeason(

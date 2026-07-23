@@ -1522,6 +1522,20 @@ const ROS_CONVERGENCE_TOLERANCES: Readonly<
 };
 
 /**
+ * Lattice-aware p50 tolerance for the kicker count process (owner-ratified 2026-07-23). Kicker
+ * window totals under model v7 are exact integers, so the interpolating median hops between
+ * adjacent lattice atoms in steps of one point; a p50 absolute tolerance below the lattice
+ * spacing (0.75 < 1) misreads a single-atom hop between the release prefix and the reference run
+ * as Monte Carlo instability (observed in the v7 replay at tolerance ratio exactly 4/3 on a
+ * non-gating stratum; recurrence ~16% per full replay). Raising the kicker p50 absolute
+ * tolerance to the lattice spacing — matching the p15/p85 tolerances that already sit at 1 — is
+ * a measurement declaration for a discrete distribution family, not a coverage-gate change: the
+ * coverage evidence gate, availability gates, and sample floors are untouched, and every non-K
+ * position keeps the original tolerances byte-for-byte.
+ */
+const ROS_KICKER_P50_TOLERANCE = { absolute: 1, relative: 0.03 } as const;
+
+/**
  * Deterministically compares the standard release run with a larger deterministic reference. The
  * release paths are an exact seeded prefix of the reference run; this diagnoses Monte Carlo
  * stability without changing a published forecast or claiming statistical calibration.
@@ -1566,7 +1580,10 @@ export function diagnoseFirstPartyRosConvergence(
   };
   const metrics = (Object.keys(values) as FirstPartyRosConvergenceMetricName[]).map((metric) => {
     const pair = values[metric];
-    const tolerance = ROS_CONVERGENCE_TOLERANCES[metric];
+    const tolerance =
+      metric === "p50Points" && release.position === "K"
+        ? ROS_KICKER_P50_TOLERANCE
+        : ROS_CONVERGENCE_TOLERANCES[metric];
     const absoluteDifference = Math.abs(pair.releaseValue - pair.referenceValue);
     const referenceMagnitude = Math.abs(pair.referenceValue);
     const allowedDifference = Math.max(tolerance.absolute, referenceMagnitude * tolerance.relative);

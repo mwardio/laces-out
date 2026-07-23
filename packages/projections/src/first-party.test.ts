@@ -1097,6 +1097,63 @@ describe("first-party rolling backtest", () => {
     ).toBe(true);
   });
 
+  it("blends thin-history kicker baselines toward the position mean and leaves other positions on the hard switch", () => {
+    // League context: two established kickers at the default rates plus the target kickers.
+    const league: FirstPartyWeeklyStatLine[] = [];
+    for (let week = 1; week <= 8; week += 1) {
+      league.push(line("k-league-one", "K", week));
+      league.push(line("k-league-two", "K", week, { team: "DDD", opponent: "EEE" }));
+    }
+    // Debut kicker: exactly one prior game, and a bad one (0-for-1 with one extra point).
+    const debutGame = line("k-debut", "K", 8, {
+      components: {
+        field_goals_attempted: 1,
+        field_goals_made: 0,
+        field_goals_missed: 1,
+        field_goals_made_0_19: 0,
+        field_goals_made_20_29: 0,
+        field_goals_made_30_39: 0,
+        field_goals_made_40_49: 0,
+        field_goals_made_50_59: 0,
+        field_goals_made_60_plus: 0,
+        extra_points_attempted: 1,
+        extra_points_made: 1,
+        extra_points_missed: 0,
+      },
+    });
+    const target = {
+      playerId: "k-debut",
+      position: "K",
+      season: 2025,
+      week: 9,
+      team: "AAA",
+      opponent: "BBB",
+      status: "active",
+    } as const;
+    const blended = projectFirstPartyRecencyBaselineComponents({
+      target,
+      history: [...league, debutGame],
+    });
+    // One usable game at playerPriorGames = 4 gives reliability 0.2: the projected makes must sit
+    // near the league rate (~1.85), not near the single observed zero. The v7 replay's failing
+    // rows were exactly this shape: a debut game trusted at full weight.
+    expect(blended.components.field_goals_made!).toBeGreaterThan(1.2);
+    expect(blended.components.field_goals_made!).toBeLessThan(1.85);
+    // A WR with one quiet game keeps the transparent hard switch: player mean verbatim.
+    const wrLeague: FirstPartyWeeklyStatLine[] = [];
+    for (let week = 1; week <= 8; week += 1) {
+      wrLeague.push(line("wr-league", "WR", week));
+    }
+    const quietGame = line("wr-thin", "WR", 8, {
+      components: { targets: 2, receptions: 1, receiving_yards: 8, receiving_touchdowns: 0 },
+    });
+    const wr = projectFirstPartyRecencyBaselineComponents({
+      target: { ...target, playerId: "wr-thin", position: "WR" },
+      history: [...wrLeague, quietGame],
+    });
+    expect(wr.components.receiving_yards!).toBeCloseTo(8, 6);
+  });
+
   it("projects a status-safe recency champion with strictly prior provenance", () => {
     const history = Array.from({ length: 5 }, (_, index) => line("wr-one", "WR", index + 1));
     const active = projectFirstPartyRecencyBaselineComponents({

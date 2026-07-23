@@ -5,7 +5,7 @@ import {
   type ProjectionStatComponents,
 } from "./scoring.js";
 
-export const FIRST_PARTY_PROJECTION_MODEL_VERSION = "laces-weekly-components-v7";
+export const FIRST_PARTY_PROJECTION_MODEL_VERSION = "laces-weekly-components-v8";
 
 export type FirstPartyProjectionPosition = "QB" | "RB" | "WR" | "TE" | "K";
 
@@ -1722,6 +1722,25 @@ function recencyOnlyBaseline(
         target,
         config.recencyHalfLifeWeeks,
       );
+      // Kickers (weekly model v8): evidence-weighted blend toward the position mean instead of
+      // the hard player-mean switch. A kicker's slot is binary — whoever holds it inherits the
+      // team's kicking volume — so one or two games of personal history carry almost no signal
+      // about next week's opportunity, yet the hard switch trusted a single debut game with full
+      // weight. That collapsed centers for mid-season debut/replacement kickers (the ROS v7
+      // Step 4 verdict's root cause). The blend reuses the contextual model's existing
+      // reliability form and playerPriorGames constant verbatim — no new tunable constants, so
+      // there is nothing to fit and nothing to leak. Other positions keep the hard switch
+      // byte-for-byte: their role continuity genuinely is player-specific, and the transparent
+      // baseline stays maximally simple where it is not measurably wrong.
+      if (position === "K") {
+        const usablePlayerGames = playerRows.filter(
+          (row) => componentValue(row, component) !== undefined,
+        ).length;
+        const reliability = usablePlayerGames / (usablePlayerGames + config.playerPriorGames);
+        const prior = positionMean ?? 0;
+        const blended = (playerMean ?? prior) * reliability + prior * (1 - reliability);
+        return [component, clamp(blended, 0, capFor(component))];
+      }
       return [component, clamp(playerMean ?? positionMean ?? 0, 0, capFor(component))];
     }),
   );
