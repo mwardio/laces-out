@@ -363,15 +363,25 @@ export default function LandingPage() {
           </div>
         </section>
 
-        <section className={styles.signalBar} aria-label="Core Laces Out capabilities">
+        {/* Backtest-rigor strip: per-validation-run figures only (never lifetime totals — replays
+            over the same held-out seasons would double-count evidence). Sources: 2,040 paired
+            forecasts and 4 held-out seasons per official replay (reports/ros-validation-*),
+            12,288 release paths per projection (FIRST_PARTY_ROS_DEFAULT_SCENARIOS). */}
+        <section className={styles.signalBar} aria-label="How the forecasts are validated">
           <div className={styles.signalInner}>
-            <span>{yahooComingSoon ? "ESPN league sync" : "Yahoo + ESPN sync"}</span>
+            <span>
+              <strong>4</strong> held-out NFL seasons
+            </span>
             <i aria-hidden="true" />
-            <span>Backtested weekly forecasts</span>
+            <span>
+              <strong>2K+</strong> walk-forward forecasts per validation
+            </span>
             <i aria-hidden="true" />
-            <span>Lineup · waiver · trade</span>
+            <span>
+              <strong>12.3K</strong> simulated paths per projection
+            </span>
             <i aria-hidden="true" />
-            <span>Gemini coaching included</span>
+            <span>Unearned numbers never publish</span>
           </div>
         </section>
 
