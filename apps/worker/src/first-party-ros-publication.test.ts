@@ -220,6 +220,43 @@ describe("first-party ROS publication decision", () => {
     expect(decision.preservePriorGoodSet).toBe(false);
   });
 
+  it("honors the admitted report's own cell blockers over a releasing live gate", () => {
+    const policy = buildLivePolicy();
+    const blocked = evaluateFirstPartyRosPublication({
+      artifact: loadedArtifact(policy, {
+        releaseGate: {
+          state: "insufficient",
+          blockers: ["calibration_WR_five-to-eight_count_family_dispersion_out_of_bounds"],
+        },
+      }),
+      leagueScoringProfileKey: SCORING_KEY,
+      evidence: [liveEvidence],
+      futureWindowComplete: true,
+      gateOptions: releaseOptions,
+    });
+    expect(blocked.canPublish).toBe(false);
+    expect(blocked.preservePriorGoodSet).toBe(true);
+    expect(blocked.reasons).toContain("ros_admitted_cell_blocker_withheld");
+    expect(blocked.buckets[0]).toMatchObject({ state: "withhold" });
+    // The live gate decision itself is preserved unmodified for observability.
+    expect(blocked.buckets[0]!.gate.state).toBe("release");
+    // A blocker for a different cell leaves this bucket untouched.
+    const unrelated = evaluateFirstPartyRosPublication({
+      artifact: loadedArtifact(policy, {
+        releaseGate: {
+          state: "insufficient",
+          blockers: ["calibration_K_one-to-four_coverage_shortfall_above_maximum"],
+        },
+      }),
+      leagueScoringProfileKey: SCORING_KEY,
+      evidence: [liveEvidence],
+      futureWindowComplete: true,
+      gateOptions: releaseOptions,
+    });
+    expect(unrelated.canPublish).toBe(true);
+    expect(unrelated.reasons).not.toContain("ros_admitted_cell_blocker_withheld");
+  });
+
   it("withholds and preserves the prior set on an invalid artifact checksum", () => {
     const artifact = loadedArtifact(buildLivePolicy());
     const decision = evaluateFirstPartyRosPublication({

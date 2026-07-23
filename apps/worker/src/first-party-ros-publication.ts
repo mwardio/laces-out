@@ -139,7 +139,30 @@ export type FirstPartyRosPublicationReason =
   | "ros_champion_artifact_invalid"
   | "ros_champion_artifact_scoring_profile_mismatch"
   | "ros_future_window_incomplete"
-  | "ros_release_gate_withheld";
+  | "ros_release_gate_withheld"
+  | "ros_admitted_cell_blocker_withheld";
+
+const ARTIFACT_CELL_BLOCKER_PATTERN =
+  /^(?:cell|champion|calibration)_(QB|RB|WR|TE|K|DST)_(one-to-four|five-to-eight|nine-plus)_/u;
+
+/**
+ * Position:bucket cells the admitted evidence itself marked blocked. Most per-cell blocker
+ * families are re-derived from the artifact's policy evidence by the live release gate, but not
+ * all (the kicker count-family audit has no policy counterpart), so publication must also honor
+ * the blockers recorded in the admitted report verbatim — otherwise "admitted with cell blockers"
+ * would release exactly the cells admission promised to withhold.
+ */
+function admittedCellBlockers(artifact: LoadedFirstPartyRosChampionArtifact): ReadonlySet<string> {
+  const cells = new Set<string>();
+  const blockers = (artifact.releaseGate as { readonly blockers?: unknown }).blockers;
+  if (!Array.isArray(blockers)) return cells;
+  for (const blocker of blockers) {
+    if (typeof blocker !== "string") continue;
+    const match = ARTIFACT_CELL_BLOCKER_PATTERN.exec(blocker);
+    if (match) cells.add(`${match[1]}:${match[2]}`);
+  }
+  return cells;
+}
 
 export interface FirstPartyRosBucketDecision {
   readonly position: FirstPartyRosPosition;
@@ -201,6 +224,8 @@ export function evaluateFirstPartyRosPublication(input: {
   if (!input.futureWindowComplete) reasons.add("ros_future_window_incomplete");
 
   const eligible = artifactValid && scoringProfileMatches && input.futureWindowComplete;
+  const blockedCells = eligible ? admittedCellBlockers(input.artifact) : new Set<string>();
+  let blockedCellWithheld = false;
   const buckets: FirstPartyRosBucketDecision[] = eligible
     ? input.evidence.map((live) => {
         const gate = evaluateFirstPartyRosReleaseGate(
@@ -208,10 +233,14 @@ export function evaluateFirstPartyRosPublication(input: {
           live,
           input.gateOptions,
         );
+        // The admitted report's own cell blockers override a releasing gate; the gate decision is
+        // preserved unmodified for observability.
+        const blocked = blockedCells.has(`${live.position}:${live.bucket}`);
+        if (blocked && gate.state === "release") blockedCellWithheld = true;
         return {
           position: live.position,
           bucket: live.bucket,
-          state: gate.state,
+          state: blocked ? "withhold" : gate.state,
           strategy: gate.strategy,
           gate,
         };
@@ -221,6 +250,7 @@ export function evaluateFirstPartyRosPublication(input: {
   if (buckets.some((decision) => decision.state === "withhold")) {
     reasons.add("ros_release_gate_withheld");
   }
+  if (blockedCellWithheld) reasons.add("ros_admitted_cell_blocker_withheld");
   const canPublish = eligible && releasingBuckets.length > 0;
   const preservePriorGoodSet = !canPublish || releasingBuckets.length < buckets.length;
   return {

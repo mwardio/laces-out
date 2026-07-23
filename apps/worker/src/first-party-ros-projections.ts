@@ -26,6 +26,7 @@ import {
   buildFirstPartyRosPlayerPersistenceRow,
   buildFirstPartyRosRunPayload,
   evaluateFirstPartyRosPublication,
+  firstPartyRosChampionArtifactIsValid,
   type FirstPartyRosPublicationDecision,
   type FirstPartyRosReleasedPlayer,
   type FirstPartyRosRunConvergence,
@@ -616,7 +617,7 @@ export class FirstPartyRosProjectionShadowService implements ProjectionRefreshSe
       // publication when it validates, its scoring identity matches the target league, and the live
       // release gate clears; otherwise the prior good set stays authoritative.
       const artifact = await this.#loadChampionArtifact(job.season);
-      const publishedTargets = artifact
+      const publication = artifact
         ? await this.#attemptPublication({
             artifact,
             managedSourceId: managed.id,
@@ -626,7 +627,8 @@ export class FirstPartyRosProjectionShadowService implements ProjectionRefreshSe
             now,
             context,
           })
-        : 0;
+        : { published: 0, artifactInvalid: false };
+      const publishedTargets = publication.published;
 
       await this.#database.transaction(async (transaction) => {
         const [run] = await transaction
@@ -712,7 +714,15 @@ export class FirstPartyRosProjectionShadowService implements ProjectionRefreshSe
         modelVersion: FIRST_PARTY_ROS_SHADOW_MODEL_VERSION,
         qualityState: "degraded",
         result: publishedTargets > 0 ? "released" : "shadow_evidence_recorded",
-        diagnostics: plan.diagnostics.join("|"),
+        diagnostics: [
+          ...plan.diagnostics,
+          // A persisted artifact that fails validity against the running constants means new
+          // publication is paused (deploy-before-admit window); say so instead of letting the
+          // run read as a routine shadow pass.
+          ...(publication.artifactInvalid
+            ? ["ros_champion_artifact_invalid_publication_paused"]
+            : []),
+        ].join("|"),
         ...(publishedTargets > 0 ? { publishedTargets } : {}),
       });
     } catch (error) {
@@ -767,7 +777,15 @@ export class FirstPartyRosProjectionShadowService implements ProjectionRefreshSe
     readonly sourceAsOf: Date;
     readonly now: Date;
     readonly context: WorkerJobContext;
-  }): Promise<number> {
+  }): Promise<{ readonly published: number; readonly artifactInvalid: boolean }> {
+    // Validity precedes the expensive league/candidate pipeline: an artifact minted under a
+    // different running model version (the deploy-before-admit window) can never publish, so
+    // building and discarding every league's simulations would only disguise the pause as work.
+    // The caller surfaces this state in the run diagnostics so a dark publication window is
+    // visible instead of reading as a routine shadow run.
+    if (!firstPartyRosChampionArtifactIsValid(input.artifact)) {
+      return { published: 0, artifactInvalid: true };
+    }
     const targets = await this.#candidateProvider.buildTargets({
       artifact: input.artifact,
       season: input.season,
@@ -804,7 +822,7 @@ export class FirstPartyRosProjectionShadowService implements ProjectionRefreshSe
       });
       if (committed) published += 1;
     }
-    return published;
+    return { published, artifactInvalid: false };
   }
 
   /**
