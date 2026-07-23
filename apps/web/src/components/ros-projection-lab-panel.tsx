@@ -1,6 +1,15 @@
 "use client";
 
-import { CircleAlert, Clock3, Info, LoaderCircle, ShieldCheck, ShieldOff } from "lucide-react";
+import {
+  ArrowUpRight,
+  CircleAlert,
+  Clock3,
+  Info,
+  LoaderCircle,
+  ShieldCheck,
+  ShieldOff,
+  TrendingUp,
+} from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { apiBaseUrl, parseRosProjectionStatus, type RosProjectionStatus } from "../lib/api-client";
@@ -85,16 +94,90 @@ export function RosProjectionLabPanel() {
 
   useEffect(() => void load(), [load]);
 
+  if (panel.state === "signed-out") {
+    return (
+      <section
+        className={`${styles.panel} ${styles.tourPanel}`}
+        id="rest-of-season"
+        aria-labelledby="ros-tour-title"
+      >
+        <div className={styles.header}>
+          <div>
+            <p className={styles.kicker}>Rest-of-season outlook</p>
+            <h2 id="ros-tour-title">See beyond this week.</h2>
+            <p>
+              Laces Out scores the weeks ahead with a first-party forecast, then refreshes the
+              outlook whenever trusted NFL inputs change.
+            </p>
+          </div>
+          <span className={`${styles.badge} ${styles.badgePublishable}`}>
+            <TrendingUp size={14} aria-hidden="true" />
+            Tour preview
+          </span>
+        </div>
+        <div className={styles.metrics}>
+          <div>
+            <span>Forecast window</span>
+            <strong>Weeks 7–17</strong>
+            <small>Regular season + fantasy playoffs</small>
+          </div>
+          <div>
+            <span>Player coverage</span>
+            <strong>210 players</strong>
+            <small>League-scored outlooks</small>
+          </div>
+          <div>
+            <span>Input checks</span>
+            <strong>Daily + on demand</strong>
+            <small>Reruns when source facts change</small>
+          </div>
+          <div>
+            <span>Recommendation use</span>
+            <strong>Validated first</strong>
+            <small>Held back until every check passes</small>
+          </div>
+        </div>
+        <div
+          className={styles.tourPlayers}
+          aria-label="Illustrative rest-of-season player outlooks"
+        >
+          <article>
+            <span>RB · NYJ</span>
+            <strong>Breece Hall</strong>
+            <small>ROS RB4 · workload trending up</small>
+            <ArrowUpRight size={15} aria-hidden="true" />
+          </article>
+          <article>
+            <span>WR · DET</span>
+            <strong>Amon-Ra St. Brown</strong>
+            <small>ROS WR3 · stable target floor</small>
+            <ArrowUpRight size={15} aria-hidden="true" />
+          </article>
+          <article>
+            <span>TE · ARI</span>
+            <strong>Trey McBride</strong>
+            <small>ROS TE2 · elite route share</small>
+            <ArrowUpRight size={15} aria-hidden="true" />
+          </article>
+        </div>
+        <p className={styles.tourNote}>
+          Illustrative tour values. Connected leagues receive scoring-specific forecasts with source
+          age and readiness attached.
+        </p>
+      </section>
+    );
+  }
+
   return (
-    <section className={styles.panel} aria-labelledby="ros-lab-title">
+    <section className={styles.panel} id="rest-of-season" aria-labelledby="ros-lab-title">
       <div className={styles.header}>
         <div>
-          <p className={styles.kicker}>Rest-of-season rail</p>
-          <h2 id="ros-lab-title">Rest-of-season projection status</h2>
+          <p className={styles.kicker}>Rest-of-season forecast</p>
+          <h2 id="ros-lab-title">Rest-of-season model readiness</h2>
           <p>
-            Read-only visibility into the first-party ROS rail: whether a champion artifact is
-            admitted, the latest model-run audit, and any league-scoped published set. Nothing here
-            is used by lineup, waiver, trade, standings, or AI recommendations.
+            See whether the league-scored forecast is ready, when it last ran, and how many players
+            it covers. ROS values remain isolated from recommendations until every release check
+            passes.
           </p>
         </div>
         {panel.state === "ready" ? (
@@ -110,7 +193,7 @@ export function RosProjectionLabPanel() {
             ) : (
               <ShieldOff size={14} aria-hidden="true" />
             )}
-            {panel.status.publication === "publishable" ? "Publishable" : "Fail-closed shadow"}
+            {panel.status.publication === "publishable" ? "Ready" : "Validating"}
           </span>
         ) : null}
       </div>
@@ -119,10 +202,6 @@ export function RosProjectionLabPanel() {
         <p className={styles.message}>
           <LoaderCircle size={14} aria-hidden="true" /> Loading rail status…
         </p>
-      ) : null}
-
-      {panel.state === "signed-out" ? (
-        <p className={styles.message}>Sign in to inspect the rest-of-season rail status.</p>
       ) : null}
 
       {panel.state === "error" ? (
@@ -145,9 +224,8 @@ function RosStatusBody({ status }: { readonly status: RosProjectionStatus }) {
         <div className={styles.shadowBanner} role="status">
           <Info size={17} aria-hidden="true" />
           <span>
-            <strong>Shadow only — not used in any recommendations.</strong>
-            The rail is fail-closed: it records audit evidence and cannot authorize live publication
-            until an admitted champion artifact validates against the running code.
+            <strong>Still validating — not used in recommendations yet.</strong>
+            The latest forecast remains isolated until its model package and source checks pass.
           </span>
         </div>
       ) : null}

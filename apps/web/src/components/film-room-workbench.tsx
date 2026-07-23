@@ -155,21 +155,21 @@ function FilmRoomTour() {
           <KeyRound size={18} />
           <span>
             <strong>Ready out of the box</strong>
-            Gemini 3.6 Flash is included after sign-in.
+            <small>Gemini 3.6 Flash is included after sign-in.</small>
           </span>
         </div>
         <div>
           <BrainCircuit size={18} />
           <span>
             <strong>Grounded, not autonomous</strong>
-            Models explain the league engine&apos;s results.
+            <small>Models explain the league engine&apos;s results.</small>
           </span>
         </div>
         <div>
           <Gauge size={18} />
           <span>
             <strong>Optional model choice</strong>
-            Bring a key to choose a model and independent limits.
+            <small>Bring a key to choose a model and independent limits.</small>
           </span>
         </div>
       </section>
@@ -670,21 +670,21 @@ export function FilmRoomWorkbench() {
           <KeyRound size={18} />
           <span>
             <strong>Ready out of the box</strong>
-            Gemini 3.6 Flash uses the Laces Out key.
+            <small>Gemini 3.6 Flash uses the Laces Out key.</small>
           </span>
         </div>
         <div>
           <BrainCircuit size={18} />
           <span>
             <strong>Grounded, not autonomous</strong>
-            Models explain deterministic league recommendations.
+            <small>Models explain deterministic league recommendations.</small>
           </span>
         </div>
         <div>
           <Gauge size={18} />
           <span>
-            <strong>Bring your own model</strong>A personal key unlocks model choice and independent
-            limits.
+            <strong>Bring your own model</strong>
+            <small>A personal key unlocks model choice and independent limits.</small>
           </span>
         </div>
       </section>

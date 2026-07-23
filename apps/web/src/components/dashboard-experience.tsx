@@ -86,6 +86,69 @@ function FreshnessDot({ state }: { state: "fresh" | "aging" | "stale" | "missing
   return <span className={`live-freshness-dot live-freshness-dot--${state}`} aria-hidden="true" />;
 }
 
+function MobileWeekAtGlance({ dashboard }: { readonly dashboard: LeagueDashboard }) {
+  const context = dashboard.memberWeek;
+  const leagueQuery = `league=${encodeURIComponent(dashboard.league.id)}`;
+  const matchupAvailable = context.state === "available";
+
+  return (
+    <section className="mobile-week-card" aria-labelledby="mobile-week-card-title">
+      <div className="mobile-week-card__heading">
+        <span className="mobile-week-card__icon" aria-hidden="true">
+          <Trophy size={18} />
+        </span>
+        <div>
+          <p className="eyebrow">
+            {context.week ? `Week ${context.week} at a glance` : "Your next move"}
+          </p>
+          <h2 id="mobile-week-card-title">
+            {matchupAvailable
+              ? `${context.teamName ?? "Your team"} vs ${context.opponentTeamName ?? "opponent"}`
+              : dashboard.league.name}
+          </h2>
+        </div>
+        <span className="mobile-week-card__state">
+          {matchupAvailable
+            ? memberScoreStateLabel(context.scoreState)
+            : context.state === "team-unclaimed"
+              ? "Claim team"
+              : "League ready"}
+        </span>
+      </div>
+
+      {matchupAvailable ? (
+        <div className="mobile-week-card__score" aria-label="Current matchup score">
+          <span>
+            You <strong>{scoreLabel(context.teamScore)}</strong>
+          </span>
+          <small>vs</small>
+          <span>
+            Them <strong>{scoreLabel(context.opponentScore)}</strong>
+          </span>
+        </div>
+      ) : (
+        <p className="mobile-week-card__summary">
+          {context.state === "team-unclaimed"
+            ? "Claim your team to unlock lineup, waiver, trade, and opponent guidance."
+            : "Open the decision tools while the next matchup snapshot is prepared."}
+        </p>
+      )}
+
+      <nav className="mobile-week-card__actions" aria-label="This week shortcuts">
+        <Link href={`/decisions?${leagueQuery}#decision-lineup`}>
+          Set lineup <ArrowRight size={13} />
+        </Link>
+        <Link href={`/analytics?${leagueQuery}#analytics-opponent`}>
+          Scout opponent <ArrowRight size={13} />
+        </Link>
+        <Link href={`/analytics?${leagueQuery}#analytics-season`}>
+          League pulse <ArrowRight size={13} />
+        </Link>
+      </nav>
+    </section>
+  );
+}
+
 function LoadingDashboard() {
   return (
     <div className="dashboard-page live-dashboard-loading" role="status">
@@ -115,23 +178,24 @@ function DemoFallback({
         <CircleAlert size={16} />
         <span>{message}</span>
       </div>
-      <PortfolioDashboard />
-      <div className="dashboard-page dashboard-ai-tour">
-        <AiCoachPanel
-          leagueId={DEMO_LEAGUE_ID}
-          features={[
-            "weekly-brief",
-            "start-sit",
-            "waiver-scan",
-            "trade-builder",
-            "standings-prediction",
-          ]}
-          demo
-          eyebrow="AI coaching tour"
-          title="See how the second read works"
-          description="Every sample starts with the league engine's board, then uses Gemini to explain what is worth doing—and what is not."
-        />
-      </div>
+      <PortfolioDashboard
+        afterOverview={
+          <AiCoachPanel
+            leagueId={DEMO_LEAGUE_ID}
+            features={[
+              "weekly-brief",
+              "start-sit",
+              "waiver-scan",
+              "trade-builder",
+              "standings-prediction",
+            ]}
+            demo
+            eyebrow="AI coaching tour"
+            title="See how the second read works"
+            description="Every sample starts with the league engine's board, then uses Gemini to explain what is worth doing—and what is not."
+          />
+        }
+      />
     </>
   );
 }
@@ -328,12 +392,15 @@ function LivePortfolio({ portfolio, reloadPortfolio }: LivePortfolioProps) {
       <section className="page-heading dashboard-heading">
         <div>
           <p className="eyebrow">Your league overview</p>
-          <h1>{portfolio.leagues.length} connected leagues in one view.</h1>
+          <h1>
+            {portfolio.leagues.length === 1
+              ? "1 connected league. One clear view."
+              : `${portfolio.leagues.length} connected leagues in one view.`}
+          </h1>
           <p className="page-subtitle">
-            This view uses the latest saved data from your connected leagues. Recommendations appear
-            only after real projection inputs are available. The input control checks shared player,
-            status, schedule, and usage sources; managed forecasts rerun when those inputs change.
-            Provider league sync and custom projection imports use their own controls.
+            Laces Out turns your latest league, roster, and projection data into the next lineup,
+            waiver, trade, and opponent moves. Shared NFL inputs are checked daily and on demand;
+            each league keeps its own sync and projection controls.
           </p>
         </div>
         <div className="heading-actions">
@@ -385,6 +452,8 @@ function LivePortfolio({ portfolio, reloadPortfolio }: LivePortfolioProps) {
           </span>
         </div>
       </section>
+
+      {currentDashboard ? <MobileWeekAtGlance dashboard={currentDashboard} /> : null}
 
       <section className="dashboard-mode-notice dashboard-mode-notice--live">
         <ShieldCheck size={16} />

@@ -191,6 +191,10 @@
     text-decoration: none;
   }
 
+  .quickBoard {
+    display: none;
+  }
+
   .provenance {
     display: grid;
     grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -788,18 +792,121 @@
       min-width: 0;
     }
 
+    .quickBoard {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      overflow: hidden;
+      background: #fff;
+      border: 1px solid var(--ink-150);
+      border-radius: 11px;
+      box-shadow: 0 10px 28px rgba(16, 26, 19, 0.05);
+    }
+
+    .quickBoardHeader {
+      display: flex;
+      grid-column: 1 / -1;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 10px 12px 9px;
+      background: var(--paper-50);
+      border-bottom: 1px solid var(--ink-150);
+    }
+
+    .quickBoardHeader span {
+      color: #547148;
+      font-size: 10px;
+      font-weight: 800;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    .quickBoardHeader small {
+      color: var(--ink-500);
+      font-size: 9px;
+    }
+
+    .quickBoard > a {
+      display: grid;
+      min-width: 0;
+      min-height: 68px;
+      grid-template-columns: 30px minmax(0, 1fr);
+      align-items: center;
+      gap: 8px;
+      padding: 9px 10px;
+      color: var(--ink-900);
+      border-right: 1px solid var(--ink-150);
+      border-bottom: 1px solid var(--ink-150);
+    }
+
+    .quickBoard > a:nth-of-type(even) {
+      border-right: 0;
+    }
+
+    .quickBoard > a:nth-last-child(-n + 2) {
+      border-bottom: 0;
+    }
+
+    .quickBoardIcon {
+      display: grid;
+      width: 30px;
+      height: 30px;
+      place-items: center;
+      color: #547148;
+      background: #edf4e2;
+      border-radius: 8px;
+    }
+
+    .quickBoard > a > span:last-child,
+    .quickBoard > a small,
+    .quickBoard > a strong {
+      display: block;
+      min-width: 0;
+    }
+
+    .quickBoard > a small {
+      color: var(--ink-500);
+      font-size: 9px;
+      font-weight: 750;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+
+    .quickBoard > a strong {
+      overflow: hidden;
+      margin-top: 2px;
+      font-size: 10px;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
     .provenance {
-      grid-template-columns: 1fr;
+      display: flex;
+      overflow-x: auto;
+      scroll-snap-type: x mandatory;
+      scrollbar-width: none;
     }
 
     .provenance > div,
     .provenance > div:nth-child(2) {
-      border-right: 0;
-      border-bottom: 1px solid #344039;
+      min-width: min(78vw, 290px);
+      flex: 0 0 min(78vw, 290px);
+      border-right: 1px solid #344039;
+      border-bottom: 0;
+      scroll-snap-align: start;
     }
 
     .provenance > div:last-child {
-      border-bottom: 0;
+      border-right: 0;
+    }
+
+    .provenance::-webkit-scrollbar {
+      display: none;
+    }
+
+    .section,
+    .aiAnchor {
+      scroll-margin-top: calc(var(--topbar-height) + 12px);
     }
 
     .metricGrid {

@@ -3,6 +3,7 @@
 import type { InSeasonDecisionSnapshot } from "@fantasy/contracts";
 import {
   ArrowUpRight,
+  BrainCircuit,
   CheckCircle2,
   ClipboardCheck,
   Clock3,
@@ -116,7 +117,7 @@ function UnavailablePanel({
 function LineupSection({ snapshot }: { readonly snapshot: InSeasonDecisionSnapshot }) {
   const section = snapshot.lineup;
   return (
-    <section className={styles.section} aria-labelledby="lineup-title">
+    <section className={styles.section} id="decision-lineup" aria-labelledby="lineup-title">
       <header className={styles.sectionHeader}>
         <span className={styles.sectionIcon}>
           <ClipboardCheck size={18} aria-hidden="true" />
@@ -207,7 +208,7 @@ function LineupSection({ snapshot }: { readonly snapshot: InSeasonDecisionSnapsh
 function WaiverSection({ snapshot }: { readonly snapshot: InSeasonDecisionSnapshot }) {
   const section = snapshot.waivers;
   return (
-    <section className={styles.section} aria-labelledby="waivers-title">
+    <section className={styles.section} id="decision-waivers" aria-labelledby="waivers-title">
       <header className={styles.sectionHeader}>
         <span className={styles.sectionIcon}>
           <UserRoundPlus size={18} aria-hidden="true" />
@@ -355,7 +356,7 @@ function TradeGroup({
 function TradeSection({ snapshot }: { readonly snapshot: InSeasonDecisionSnapshot }) {
   const section = snapshot.trades;
   return (
-    <section className={styles.section} aria-labelledby="trades-title">
+    <section className={styles.section} id="decision-trades" aria-labelledby="trades-title">
       <header className={styles.sectionHeader}>
         <span className={styles.sectionIcon}>
           <Scale size={18} aria-hidden="true" />
@@ -387,6 +388,79 @@ function TradeSection({ snapshot }: { readonly snapshot: InSeasonDecisionSnapsho
         </>
       )}
     </section>
+  );
+}
+
+function DecisionQuickBoard({ snapshot }: { readonly snapshot: InSeasonDecisionSnapshot }) {
+  const lineup = snapshot.lineup;
+  const waivers = snapshot.waivers;
+  const trades = snapshot.trades;
+  const lineupGain = lineup.state === "available" ? lineup.projectedGain : null;
+  const waiverCount = waivers.state === "available" ? waivers.recommendations.length : null;
+  const tradeCount =
+    trades.state === "available" ? Math.max(trades.bestForMe.length, trades.fairest.length) : null;
+
+  return (
+    <nav className={styles.quickBoard} aria-label="Jump to this week's decision results">
+      <div className={styles.quickBoardHeader}>
+        <span>Today&apos;s board</span>
+        <small>Tap any read to jump straight there</small>
+      </div>
+      <a href="#decision-lineup">
+        <span className={styles.quickBoardIcon}>
+          <ClipboardCheck size={16} aria-hidden="true" />
+        </span>
+        <span>
+          <small>Lineup</small>
+          <strong>
+            {lineupGain === null
+              ? "Waiting"
+              : lineupGain > 0
+                ? `${points.format(lineupGain)} pts`
+                : "Already set"}
+          </strong>
+        </span>
+      </a>
+      <a href="#decision-waivers">
+        <span className={styles.quickBoardIcon}>
+          <UserRoundPlus size={16} aria-hidden="true" />
+        </span>
+        <span>
+          <small>Waivers</small>
+          <strong>
+            {waiverCount === null
+              ? "Waiting"
+              : waiverCount > 0
+                ? `${waiverCount} worthwhile ${waiverCount === 1 ? "add" : "adds"}`
+                : "Hold your roster"}
+          </strong>
+        </span>
+      </a>
+      <a href="#decision-trades">
+        <span className={styles.quickBoardIcon}>
+          <Scale size={16} aria-hidden="true" />
+        </span>
+        <span>
+          <small>Trades</small>
+          <strong>
+            {tradeCount === null
+              ? "Waiting"
+              : tradeCount > 0
+                ? `${tradeCount} modeled ${tradeCount === 1 ? "fit" : "fits"}`
+                : "No fit yet"}
+          </strong>
+        </span>
+      </a>
+      <a href="#decision-ai">
+        <span className={styles.quickBoardIcon}>
+          <BrainCircuit size={16} aria-hidden="true" />
+        </span>
+        <span>
+          <small>AI review</small>
+          <strong>Explain the close calls</strong>
+        </span>
+      </a>
+    </nav>
   );
 }
 
@@ -600,6 +674,8 @@ export function DecisionWorkbench() {
         </div>
       ) : snapshot ? (
         <>
+          <DecisionQuickBoard snapshot={snapshot} />
+
           <section className={styles.provenance} aria-label="Recommendation provenance">
             <div>
               <Clock3 size={16} aria-hidden="true" />
@@ -676,14 +752,16 @@ export function DecisionWorkbench() {
             </span>
           </div>
 
-          <AiCoachPanel
-            leagueId={selectedLeagueId}
-            features={["start-sit", "waiver-scan", "trade-builder"]}
-            demo={isDemo}
-            eyebrow="AI decision review"
-            title="Pressure-test the board"
-            description="Get a plain-language second read without letting the model invent a lineup, waiver target, or trade package."
-          />
+          <div className={styles.aiAnchor} id="decision-ai">
+            <AiCoachPanel
+              leagueId={selectedLeagueId}
+              features={["start-sit", "waiver-scan", "trade-builder"]}
+              demo={isDemo}
+              eyebrow="AI decision review"
+              title="Pressure-test the board"
+              description="Get a plain-language second read without letting the model invent a lineup, waiver target, or trade package."
+            />
+          </div>
 
           <LineupSection snapshot={snapshot} />
           <WaiverSection snapshot={snapshot} />

@@ -22,7 +22,7 @@ import {
   Zap,
 } from "lucide-react";
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { type ReactNode, useMemo, useState } from "react";
 
 import {
   decisions,
@@ -72,7 +72,7 @@ function ProjectionSparkline({ favorable }: { favorable: boolean }) {
   );
 }
 
-export function PortfolioDashboard() {
+export function PortfolioDashboard({ afterOverview }: { readonly afterOverview?: ReactNode }) {
   const [leagueFilter, setLeagueFilter] = useState<LeagueFilter>("all");
   const [openDecision, setOpenDecision] = useState<string | null>(decisions[0]?.id ?? null);
   const [reviewed, setReviewed] = useState<ReadonlySet<string>>(new Set());
@@ -159,6 +159,8 @@ export function PortfolioDashboard() {
           </div>
         </article>
       </section>
+
+      {afterOverview ? <div className="dashboard-ai-tour">{afterOverview}</div> : null}
 
       <section className="section-block league-section" aria-labelledby="league-board-title">
         <div className="section-heading">

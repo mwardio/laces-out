@@ -453,6 +453,15 @@
     .resultPane {
       min-height: 250px;
     }
+
+    .demoPanel .resultPane {
+      order: -1;
+      border-bottom: 1px solid var(--ink-150);
+    }
+
+    .demoPanel .requestPane {
+      border-bottom: 0;
+    }
   }
 
   @media (max-width: 520px) {
@@ -464,14 +473,41 @@
     }
 
     .featureGrid {
-      display: flex;
-      overflow-x: auto;
-      scrollbar-width: thin;
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      overflow: visible;
     }
 
     .featureGrid > button {
-      min-width: 154px;
-      flex: 0 0 154px;
+      min-width: 0;
+      padding: 11px 10px;
+      border-right: 1px solid var(--ink-150);
+      border-bottom: 1px solid var(--ink-150);
+    }
+
+    .featureGrid > button:nth-child(even) {
+      border-right: 0;
+    }
+
+    .featureGrid > button:last-child:nth-child(odd) {
+      grid-column: 1 / -1;
+      border-right: 0;
+      border-bottom: 0;
+    }
+
+    .demoPanel .requestPane {
+      padding-top: 12px;
+      padding-bottom: 13px;
+    }
+
+    .demoPanel .requestHeading,
+    .demoPanel .instructions,
+    .demoPanel .providerLine {
+      display: none;
+    }
+
+    .demoPanel .requestControls {
+      margin-top: 0;
     }
 
     .requestControls {

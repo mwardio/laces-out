@@ -162,7 +162,7 @@ function ScoreSection({ snapshot }: { readonly snapshot: LeagueAnalyticsSnapshot
   const section = snapshot.scores;
   if (section.state === "unavailable") {
     return (
-      <section className={styles.panel} aria-labelledby="score-title">
+      <section className={styles.panel} id="analytics-season" aria-labelledby="score-title">
         <SectionHeader
           icon={<BarChart3 size={18} aria-hidden="true" />}
           kicker="Official results"
@@ -181,7 +181,7 @@ function ScoreSection({ snapshot }: { readonly snapshot: LeagueAnalyticsSnapshot
       left.team.name.localeCompare(right.team.name),
   );
   return (
-    <section className={styles.panel} aria-labelledby="score-title">
+    <section className={styles.panel} id="analytics-season" aria-labelledby="score-title">
       <SectionHeader
         icon={<BarChart3 size={18} aria-hidden="true" />}
         kicker="Official results"
@@ -308,7 +308,11 @@ function SectionHeader({
 function PowerSection({ snapshot }: { readonly snapshot: LeagueAnalyticsSnapshot }) {
   const section = snapshot.power;
   return (
-    <section className={styles.panel} aria-labelledby="power-title">
+    <section
+      className={`${styles.panel} ${styles.powerPanel}`}
+      id="analytics-power"
+      aria-labelledby="power-title"
+    >
       <SectionHeader
         icon={<Trophy size={18} aria-hidden="true" />}
         kicker="Availability weighted"
@@ -381,7 +385,11 @@ function strengthClass(value: number | null): string | undefined {
 function PositionalSection({ snapshot }: { readonly snapshot: LeagueAnalyticsSnapshot }) {
   const section = snapshot.positional;
   return (
-    <section className={`${styles.panel} ${styles.widePanel}`} aria-labelledby="position-title">
+    <section
+      className={`${styles.panel} ${styles.widePanel}`}
+      id="analytics-positions"
+      aria-labelledby="position-title"
+    >
       <SectionHeader
         icon={<Target size={18} aria-hidden="true" />}
         kicker="Projection backed"
@@ -478,7 +486,11 @@ function metricValue(value: number | null, unit: string | null): string {
 function OpponentSection({ snapshot }: { readonly snapshot: LeagueAnalyticsSnapshot }) {
   const section = snapshot.opponentScout;
   return (
-    <section className={styles.panel} aria-labelledby="scout-title">
+    <section
+      className={`${styles.panel} ${styles.opponentPanel}`}
+      id="analytics-opponent"
+      aria-labelledby="scout-title"
+    >
       <SectionHeader
         icon={<Crosshair size={18} aria-hidden="true" />}
         kicker="Current matchup"
@@ -523,6 +535,77 @@ function OpponentSection({ snapshot }: { readonly snapshot: LeagueAnalyticsSnaps
         </>
       )}
     </section>
+  );
+}
+
+function AnalyticsQuickRead({ snapshot }: { readonly snapshot: LeagueAnalyticsSnapshot }) {
+  const currentPower =
+    snapshot.power.state === "available"
+      ? snapshot.power.rankings.find((item) => item.team.isCurrentUser)
+      : null;
+  const opponent = snapshot.opponentScout.state === "available" ? snapshot.opponentScout : null;
+  const currentScore =
+    snapshot.scores.state === "available"
+      ? snapshot.scores.teams.find((item) => item.team.isCurrentUser)
+      : null;
+  const currentPositions =
+    snapshot.positional.state === "available"
+      ? snapshot.positional.teams.find((item) => item.team.isCurrentUser)
+      : null;
+  const favorableEdges =
+    opponent?.metrics.filter((metric) => metric.edgeOwner === "subject").length ?? 0;
+
+  return (
+    <nav className={styles.quickRead} aria-label="Jump to league analytics">
+      <div className={styles.quickReadHeader}>
+        <span>League in 10 seconds</span>
+        <small>Tap for the full read</small>
+      </div>
+      <a href="#analytics-opponent">
+        <Crosshair size={16} aria-hidden="true" />
+        <span>
+          <small>Opponent</small>
+          <strong>
+            {opponent
+              ? `${favorableEdges} ${favorableEdges === 1 ? "edge" : "edges"} vs ${opponent.opponent.name}`
+              : "Waiting for matchup"}
+          </strong>
+        </span>
+      </a>
+      <a href="#analytics-power">
+        <Trophy size={16} aria-hidden="true" />
+        <span>
+          <small>Power</small>
+          <strong>
+            {currentPower
+              ? `#${currentPower.rank ?? "—"} · ${currentPower.score === null ? "—" : decimal.format(currentPower.score)}`
+              : "Waiting for inputs"}
+          </strong>
+        </span>
+      </a>
+      <a href="#analytics-season">
+        <BarChart3 size={16} aria-hidden="true" />
+        <span>
+          <small>Season</small>
+          <strong>
+            {currentScore
+              ? `${record(currentScore.actualRecord)} · ${decimal.format(currentScore.expectedWins)} xW`
+              : "No ledger yet"}
+          </strong>
+        </span>
+      </a>
+      <a href="#analytics-positions">
+        <Target size={16} aria-hidden="true" />
+        <span>
+          <small>Roster shape</small>
+          <strong>
+            {currentPositions?.strengths.length
+              ? `Strong at ${currentPositions.strengths.slice(0, 2).join(" / ")}`
+              : "Even profile"}
+          </strong>
+        </span>
+      </a>
+    </nav>
   );
 }
 
@@ -746,6 +829,7 @@ export function LeagueAnalyticsWorkbench() {
               {analytics.snapshot.membership.claimedTeamName ?? "No team claimed"}
             </span>
           </div>
+          <AnalyticsQuickRead snapshot={analytics.snapshot} />
           <Provenance snapshot={analytics.snapshot} />
           <AiCoachPanel
             leagueId={leagueId}
@@ -756,8 +840,8 @@ export function LeagueAnalyticsWorkbench() {
             description="Summarize the week or project the final order from stored results, all-play performance, roster strength, and current projections."
           />
           <div className={styles.primaryGrid}>
-            <PowerSection snapshot={analytics.snapshot} />
             <OpponentSection snapshot={analytics.snapshot} />
+            <PowerSection snapshot={analytics.snapshot} />
           </div>
           <ScoreSection snapshot={analytics.snapshot} />
           <PositionalSection snapshot={analytics.snapshot} />

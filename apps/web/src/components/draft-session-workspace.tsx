@@ -1281,6 +1281,28 @@ export function DraftSessionWorkspace() {
 
   const recentEvents = [...session.events].reverse().slice(0, 12);
   const generatedMockEvents = localMock ? [...localMockEvents(localMock)] : [];
+  const recordDisabled =
+    !selectedPlayer ||
+    !canRecord ||
+    activeDraftState?.complete ||
+    requestState === "loading" ||
+    (localMock !== null && !localAwaitingSelection);
+  const recordActionLabel = localMock
+    ? session.config.mode === "AUCTION"
+      ? "Nominate in local mock"
+      : `Make local pick ${activeDraftState?.nextPick?.overallPick ?? "—"}`
+    : session.config.mode === "AUCTION"
+      ? `Record sale${salePrice ? ` at $${salePrice}` : ""}`
+      : `Record pick ${activeDraftState?.nextPick?.overallPick ?? "—"}`;
+  const mobileSnakeRecommendation = session.config.mode === "SNAKE" ? snakeQueue[0] : undefined;
+  const mobileAuctionRecommendation =
+    session.config.mode === "AUCTION" ? auctionNominations[0] : undefined;
+  const mobileRecommendation =
+    mobileSnakeRecommendation?.player ?? mobileAuctionRecommendation?.player;
+  const mobileRecommendationNote =
+    mobileSnakeRecommendation?.needLabel ??
+    mobileAuctionRecommendation?.reason ??
+    (session.config.mode === "SNAKE" ? "Best available fit" : "Nomination board");
 
   return (
     <div className="draft-page draft-session-live">
@@ -2177,13 +2199,7 @@ export function DraftSessionWorkspace() {
               className="button button--lime button--full button--record"
               type="button"
               onClick={() => void recordSelection()}
-              disabled={
-                !selectedPlayer ||
-                !canRecord ||
-                activeDraftState?.complete ||
-                requestState === "loading" ||
-                (localMock !== null && !localAwaitingSelection)
-              }
+              disabled={recordDisabled}
             >
               {requestState === "loading" ? (
                 <LoaderCircle className="spin" size={16} />
@@ -2192,13 +2208,7 @@ export function DraftSessionWorkspace() {
               ) : (
                 <Check size={16} />
               )}{" "}
-              {localMock
-                ? session.config.mode === "AUCTION"
-                  ? "Nominate in local mock"
-                  : `Make local pick ${activeDraftState?.nextPick?.overallPick ?? "—"}`
-                : session.config.mode === "AUCTION"
-                  ? `Record sale${salePrice ? ` at $${salePrice}` : ""}`
-                  : `Record pick ${activeDraftState?.nextPick?.overallPick ?? "—"}`}
+              {recordActionLabel}
             </button>
             {!localMock && selectedTeam?.maximumBid !== undefined ? (
               <p className="draft-session-legal-max">
@@ -2208,6 +2218,88 @@ export function DraftSessionWorkspace() {
           </section>
         </aside>
       </div>
+
+      <aside
+        className="draft-mobile-action draft-mobile-action--live"
+        role="region"
+        aria-label="Live draft controls"
+      >
+        <button
+          className="draft-mobile-action__intel"
+          type="button"
+          onClick={() => {
+            if (mobileRecommendation) setSelectedPlayerId(mobileRecommendation.id);
+          }}
+          disabled={!mobileRecommendation}
+        >
+          <span className="draft-mobile-action__intel-icon">
+            {session.config.mode === "AUCTION" ? (
+              <BadgeDollarSign size={17} />
+            ) : (
+              <ChartNoAxesColumnIncreasing size={17} />
+            )}
+          </span>
+          <span className="draft-mobile-action__intel-copy">
+            <small>{session.config.mode === "AUCTION" ? "Nominate next" : "Best now"}</small>
+            <strong>{mobileRecommendation?.name ?? "Recommendation unavailable"}</strong>
+          </span>
+          <span className="draft-mobile-action__intel-note">
+            {session.config.mode === "AUCTION" && auctionAnalysis?.available
+              ? `${draftDollar(auctionAnalysis.targetPrice)} target · ${draftDollar(auctionAnalysis.legalMaximumBid)} max`
+              : mobileRecommendationNote}
+          </span>
+        </button>
+
+        <div className="draft-mobile-action__action">
+          {session.config.mode === "AUCTION" && !localMock ? (
+            <div className="draft-mobile-action__auction-fields">
+              <label>
+                <span className="sr-only">Winning team</span>
+                <select
+                  aria-label="Winning team"
+                  value={selectedTeamId}
+                  onChange={(event) => setSelectedTeamId(event.target.value)}
+                >
+                  {teamStates.map((team) => (
+                    <option value={team.teamId} key={team.teamId}>
+                      {team.name} · ${team.remainingBudget ?? 0}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="draft-mobile-action__price">
+                <span aria-hidden="true">$</span>
+                <input
+                  aria-label="Sale price"
+                  inputMode="numeric"
+                  value={salePrice}
+                  onChange={(event) => setSalePrice(event.target.value.replace(/[^0-9]/g, ""))}
+                />
+              </label>
+            </div>
+          ) : (
+            <div className="draft-mobile-action__selection" aria-live="polite">
+              <small>{localMock ? "Your move" : "Selected"}</small>
+              <strong>{selectedPlayer?.name ?? "Choose a player"}</strong>
+            </div>
+          )}
+          <button
+            className="button button--lime draft-mobile-action__record"
+            type="button"
+            onClick={() => void recordSelection()}
+            disabled={recordDisabled}
+          >
+            {requestState === "loading" ? (
+              <LoaderCircle className="spin" size={16} />
+            ) : session.config.mode === "AUCTION" ? (
+              <Gavel size={16} />
+            ) : (
+              <Check size={16} />
+            )}
+            <span>{recordActionLabel}</span>
+          </button>
+        </div>
+      </aside>
 
       <section className="draft-log" aria-labelledby="live-draft-log-title">
         <div className="draft-log__heading">

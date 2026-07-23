@@ -131,7 +131,13 @@ function ProjectionTour() {
         </label>
       </header>
 
-      <section className={styles.managedForecast} aria-labelledby="tour-managed-title">
+      <ProjectionJumpNav />
+
+      <section
+        className={styles.managedForecast}
+        id="weekly-forecast"
+        aria-labelledby="tour-managed-title"
+      >
         <header className={styles.managedHeader}>
           <div>
             <p className={styles.kicker}>Laces Out forecast</p>
@@ -188,7 +194,7 @@ function ProjectionTour() {
         </div>
       </section>
 
-      <div className={styles.workspace}>
+      <div className={`${styles.workspace} ${styles.tourWorkspace}`} id="custom-projections">
         <section className={styles.importPanel} aria-labelledby="tour-import-title">
           <header className={styles.panelHeader}>
             <div>
@@ -324,6 +330,16 @@ function ProjectionTour() {
         </div>
       </section>
     </div>
+  );
+}
+
+function ProjectionJumpNav() {
+  return (
+    <nav className={styles.mobileJump} aria-label="Projection sections">
+      <a href="#weekly-forecast">Weekly</a>
+      <a href="#rest-of-season">Rest of Season</a>
+      <a href="#custom-projections">Custom Sets</a>
+    </nav>
   );
 }
 
@@ -704,7 +720,13 @@ export function ProjectionImportWorkbench() {
         </label>
       </header>
 
-      <section className={styles.managedForecast} aria-labelledby="managed-forecast-title">
+      <ProjectionJumpNav />
+
+      <section
+        className={styles.managedForecast}
+        id="weekly-forecast"
+        aria-labelledby="managed-forecast-title"
+      >
         <header className={styles.managedHeader}>
           <div>
             <p className={styles.kicker}>Laces Out forecast</p>
@@ -888,7 +910,7 @@ export function ProjectionImportWorkbench() {
         </div>
       </section>
 
-      <div className={styles.workspace}>
+      <div className={styles.workspace} id="custom-projections">
         <section className={styles.importPanel} aria-labelledby="projection-import-title">
           <header className={styles.panelHeader}>
             <div>

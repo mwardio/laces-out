@@ -232,7 +232,10 @@ export function AiCoachPanel({
   }
 
   return (
-    <section className={styles.panel} aria-labelledby={`ai-coach-${features.join("-")}`}>
+    <section
+      className={`${styles.panel}${demo ? ` ${styles.demoPanel}` : ""}`}
+      aria-labelledby={`ai-coach-${features.join("-")}`}
+    >
       <header className={styles.header}>
         <div>
           <p>{eyebrow}</p>

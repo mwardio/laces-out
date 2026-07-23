@@ -11,12 +11,14 @@ import {
   Cable,
   LayoutDashboard,
   ListOrdered,
+  Menu,
   Radio,
   ShieldCheck,
   UserPlus,
+  X,
 } from "lucide-react";
 import Link from "next/link";
-import { type ReactNode, useEffect, useState } from "react";
+import { type ReactNode, useEffect, useRef, useState } from "react";
 
 import { apiBaseUrl, parseAuthenticatedSession } from "../lib/api-client";
 import { LacesOutMark } from "./laces-out-mark";
@@ -47,29 +49,77 @@ interface AppShellProps {
 }
 
 const primaryNavigation = [
-  { href: "/app", label: "Overview", icon: LayoutDashboard, section: "dashboard" as const },
-  { href: "/analytics", label: "League Analytics", icon: BarChart3, section: "analytics" as const },
-  { href: "/stats", label: "Stats Center", icon: ChartSpline, section: "stats" as const },
+  {
+    href: "/app",
+    label: "Overview",
+    description: "Your leagues and next moves",
+    icon: LayoutDashboard,
+    section: "dashboard" as const,
+  },
+  {
+    href: "/analytics",
+    label: "League Analytics",
+    description: "Power ranks and opponent edges",
+    icon: BarChart3,
+    section: "analytics" as const,
+  },
+  {
+    href: "/stats",
+    label: "Stats Center",
+    description: "Usage, targets, and weekly trends",
+    icon: ChartSpline,
+    section: "stats" as const,
+  },
   {
     href: "/decisions",
     label: "Decision Desk",
+    description: "Lineups, waivers, and trades",
     icon: ClipboardCheck,
     section: "decisions" as const,
   },
-  { href: "/film-room", label: "Film Room", icon: BrainCircuit, section: "ai" as const },
-  { href: "/connections", label: "Connections", icon: Cable, section: "connections" as const },
-  { href: "/rankings", label: "Rankings", icon: ListOrdered, section: "rankings" as const },
+  {
+    href: "/film-room",
+    label: "Film Room",
+    description: "Gemini briefs and second reads",
+    icon: BrainCircuit,
+    section: "ai" as const,
+  },
+  {
+    href: "/connections",
+    label: "Connections",
+    description: "Sync ESPN · Yahoo coming soon",
+    icon: Cable,
+    section: "connections" as const,
+  },
+  {
+    href: "/rankings",
+    label: "Rankings",
+    description: "Boards, values, and cheat sheets",
+    icon: ListOrdered,
+    section: "rankings" as const,
+  },
   {
     href: "/projections",
     label: "Projections",
+    description: "Weekly and rest-of-season forecasts",
     icon: ChartNoAxesCombined,
     section: "projections" as const,
   },
-  { href: "/draft", label: "Draft Studio", icon: Radio, section: "draft" as const },
+  {
+    href: "/draft",
+    label: "Draft Studio",
+    description: "Auction and snake draft rooms",
+    icon: Radio,
+    section: "draft" as const,
+  },
 ] as const;
 
 export function AppShell({ active, children, compact = false, context }: AppShellProps) {
   const [isAdmin, setIsAdmin] = useState(false);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const mobileMenuTriggerRef = useRef<HTMLButtonElement>(null);
+  const mobileMenuCloseRef = useRef<HTMLButtonElement>(null);
+  const mobileMenuSheetRef = useRef<HTMLElement>(null);
   const shellContext = context ?? {
     label: "2026 season",
     detail: "Live after sign-in",
@@ -93,6 +143,73 @@ export function AppShell({ active, children, compact = false, context }: AppShel
       });
     return () => controller.abort();
   }, []);
+
+  useEffect(() => {
+    if (!mobileMenuOpen) return;
+
+    const previousOverflow = document.body.style.overflow;
+    const focusTimer = window.setTimeout(() => mobileMenuCloseRef.current?.focus(), 0);
+    document.body.style.overflow = "hidden";
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        setMobileMenuOpen(false);
+        mobileMenuTriggerRef.current?.focus();
+        return;
+      }
+      if (event.key !== "Tab") return;
+
+      const sheet = mobileMenuSheetRef.current;
+      if (!sheet) return;
+      const focusable = Array.from(
+        sheet.querySelectorAll<HTMLElement>(
+          'a[href], button:not([disabled]), select:not([disabled]), input:not([disabled]), [tabindex]:not([tabindex="-1"])',
+        ),
+      ).filter((element) => !element.hasAttribute("hidden"));
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (!first || !last) return;
+
+      if (
+        event.shiftKey &&
+        (document.activeElement === first || !sheet.contains(document.activeElement))
+      ) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    }
+
+    function handleResize() {
+      if (window.innerWidth > 820) setMobileMenuOpen(false);
+    }
+
+    document.addEventListener("keydown", handleKeyDown);
+    window.addEventListener("resize", handleResize);
+    return () => {
+      window.clearTimeout(focusTimer);
+      document.body.style.overflow = previousOverflow;
+      document.removeEventListener("keydown", handleKeyDown);
+      window.removeEventListener("resize", handleResize);
+    };
+  }, [mobileMenuOpen]);
+
+  function closeMobileMenuAndRestoreFocus() {
+    setMobileMenuOpen(false);
+    window.setTimeout(() => mobileMenuTriggerRef.current?.focus(), 0);
+  }
+
+  const mobileMenuSections: readonly AppSection[] = [
+    "analytics",
+    "stats",
+    "connections",
+    "rankings",
+    "projections",
+    "members",
+  ];
+  const mobileMenuIsActive = mobileMenuSections.includes(active);
 
   return (
     <div className={`app-shell${compact ? " app-shell--compact" : ""}`}>
@@ -180,7 +297,7 @@ export function AppShell({ active, children, compact = false, context }: AppShel
           </div>
           <div className="topbar-actions">
             <SessionControl />
-            <Link className="button button--dark button--small" href="/draft">
+            <Link className="button button--dark button--small topbar-draft-link" href="/draft">
               <Radio size={15} />
               Draft Room
               <ArrowUpRight size={14} />
@@ -195,6 +312,105 @@ export function AppShell({ active, children, compact = false, context }: AppShel
           </footer>
         </main>
       </div>
+
+      {mobileMenuOpen ? (
+        <div className="mobile-menu-layer">
+          <button
+            className="mobile-menu-backdrop"
+            type="button"
+            aria-label="Close locker room menu"
+            onClick={closeMobileMenuAndRestoreFocus}
+          />
+          <section
+            ref={mobileMenuSheetRef}
+            className="mobile-menu-sheet"
+            id="mobile-locker-room-menu"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="mobile-menu-title"
+          >
+            <header className="mobile-menu-sheet__header">
+              <div>
+                <p>Locker Room</p>
+                <h2 id="mobile-menu-title">Pick your next move.</h2>
+                <span>Every tool is here. No desktop detour required.</span>
+              </div>
+              <button
+                ref={mobileMenuCloseRef}
+                className="mobile-menu-sheet__close"
+                type="button"
+                aria-label="Close locker room menu"
+                onClick={closeMobileMenuAndRestoreFocus}
+              >
+                <X size={19} />
+              </button>
+            </header>
+
+            <nav className="mobile-menu-grid" aria-label="More locker room tools">
+              {primaryNavigation
+                .filter((item) =>
+                  (
+                    [
+                      "analytics",
+                      "stats",
+                      "rankings",
+                      "projections",
+                      "connections",
+                    ] as readonly AppSection[]
+                  ).includes(item.section),
+                )
+                .map((item) => {
+                  const Icon = item.icon;
+                  const isActive = active === item.section;
+                  return (
+                    <Link
+                      className={isActive ? "is-active" : undefined}
+                      href={item.href}
+                      aria-current={isActive ? "page" : undefined}
+                      key={item.href}
+                      onClick={() => setMobileMenuOpen(false)}
+                    >
+                      <span className="mobile-menu-grid__icon">
+                        <Icon size={18} />
+                      </span>
+                      <span>
+                        <strong>{item.label}</strong>
+                        <small>{item.description}</small>
+                      </span>
+                      <ArrowUpRight size={14} />
+                    </Link>
+                  );
+                })}
+              <Link
+                className="mobile-menu-grid__health"
+                href="/connections#data-health"
+                onClick={() => setMobileMenuOpen(false)}
+              >
+                <span className="mobile-menu-grid__icon">
+                  <Activity size={18} />
+                </span>
+                <span>
+                  <strong>Data Health</strong>
+                  <small>Freshness, sources, and checks</small>
+                </span>
+                <ArrowUpRight size={14} />
+              </Link>
+            </nav>
+
+            {isAdmin ? (
+              <Link
+                className="mobile-menu-sheet__admin"
+                href="/admin/members"
+                onClick={() => setMobileMenuOpen(false)}
+              >
+                <UserPlus size={16} />
+                Manage Members
+                <ArrowUpRight size={14} />
+              </Link>
+            ) : null}
+          </section>
+        </div>
+      ) : null}
 
       <nav className="bottom-nav" aria-label="Mobile navigation">
         <Link
@@ -224,21 +440,24 @@ export function AppShell({ active, children, compact = false, context }: AppShel
           <span>Draft</span>
         </Link>
         <Link
-          className={active === "connections" ? "is-active" : ""}
-          href="/connections"
-          aria-current={active === "connections" ? "page" : undefined}
-        >
-          <Cable size={20} />
-          <span>Connect</span>
-        </Link>
-        <Link
           className={active === "ai" ? "is-active" : ""}
           href="/film-room"
           aria-current={active === "ai" ? "page" : undefined}
         >
           <BrainCircuit size={20} />
-          <span>Film</span>
+          <span>Coach</span>
         </Link>
+        <button
+          ref={mobileMenuTriggerRef}
+          className={mobileMenuOpen || mobileMenuIsActive ? "is-active" : undefined}
+          type="button"
+          aria-expanded={mobileMenuOpen}
+          aria-controls="mobile-locker-room-menu"
+          onClick={() => setMobileMenuOpen((current) => !current)}
+        >
+          <Menu size={20} />
+          <span>More</span>
+        </button>
       </nav>
     </div>
   );

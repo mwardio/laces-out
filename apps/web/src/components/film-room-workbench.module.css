@@ -139,13 +139,15 @@
   }
 
   .boundary span,
-  .boundary strong {
+  .boundary strong,
+  .boundary small {
     display: block;
   }
 
-  .boundary span {
+  .boundary small {
     color: #98a49b;
     font-size: 11px;
+    font-weight: 400;
     line-height: 1.45;
   }
 
@@ -795,29 +797,75 @@
     }
 
     .boundary {
-      grid-template-columns: 1fr;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
     }
 
     .boundary > div {
-      padding: 12px 14px;
-      border-right: 0;
-      border-bottom: 1px solid #344039;
-    }
-
-    .boundary > div:last-child {
+      min-height: 70px;
+      align-items: center;
+      justify-content: center;
+      flex-direction: column;
+      gap: 6px;
+      padding: 9px 6px;
+      text-align: center;
+      border-right: 1px solid #344039;
       border-bottom: 0;
     }
 
-    .providerTabs {
-      grid-template-columns: 1fr 1fr;
-    }
-
-    .providerTab:nth-child(2) {
+    .boundary > div:last-child {
       border-right: 0;
     }
 
-    .providerTab:nth-child(-n + 2) {
-      border-bottom: 1px solid var(--ink-100);
+    .boundary svg {
+      margin-top: 0;
+    }
+
+    .boundary strong {
+      font-size: 9px;
+      line-height: 1.25;
+    }
+
+    .boundary small {
+      display: none;
+    }
+
+    .providerTabs {
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+    }
+
+    .providerTab {
+      min-height: 64px;
+      grid-template-columns: 1fr;
+      justify-items: center;
+      gap: 5px;
+      padding: 8px 4px;
+      border-right: 1px solid var(--ink-100);
+      border-bottom: 0;
+    }
+
+    .providerTab:last-child {
+      border-right: 0;
+    }
+
+    .providerMark {
+      width: 28px;
+      height: 28px;
+      border-radius: 8px;
+      font-size: 9px;
+    }
+
+    .providerCopy {
+      width: 100%;
+      text-align: center;
+    }
+
+    .providerCopy strong {
+      font-size: 9px;
+    }
+
+    .providerCopy small,
+    .statusDot {
+      display: none;
     }
 
     .panelHeader {
@@ -841,10 +889,32 @@
   }
 
   @media (max-width: 430px) {
+    .providerTabs {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
     .providerTab {
       grid-template-columns: 30px minmax(0, 1fr) 8px;
       gap: 8px;
       padding: 11px 9px;
+      border-right: 1px solid var(--ink-100);
+      border-bottom: 1px solid var(--ink-100);
+    }
+
+    .providerTab:nth-child(2n) {
+      border-right: 0;
+    }
+
+    .providerTab:nth-last-child(-n + 2) {
+      border-bottom: 0;
+    }
+
+    .providerCopy {
+      text-align: left;
+    }
+
+    .providerCopy strong {
+      font-size: 10px;
     }
 
     .providerMark {

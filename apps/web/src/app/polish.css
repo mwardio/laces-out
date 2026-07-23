@@ -1388,7 +1388,8 @@
       backdrop-filter: none;
     }
 
-    .bottom-nav a {
+    .bottom-nav a,
+    .bottom-nav button {
       min-height: 56px;
       gap: 4px;
       color: #929e95;
@@ -1396,7 +1397,8 @@
       font-weight: 600;
     }
 
-    .bottom-nav a.is-active {
+    .bottom-nav a.is-active,
+    .bottom-nav button.is-active {
       color: var(--lime-300);
     }
 

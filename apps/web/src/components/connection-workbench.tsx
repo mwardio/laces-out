@@ -663,6 +663,16 @@ export function ConnectionWorkbench() {
         </div>
       ) : null}
 
+      <a className="connection-mobile-espn-jump" href="#espn-connection">
+        <span className="connection-provider-logo connection-provider-logo--espn">E</span>
+        <span>
+          <small>Ready now</small>
+          <strong>Connect ESPN</strong>
+          <span>One-click pairing and automatic refresh</span>
+        </span>
+        <ArrowRight size={17} />
+      </a>
+
       <section
         className="connection-grid"
         id="data-health"
@@ -933,7 +943,7 @@ export function ConnectionWorkbench() {
           </small>
         </article>
 
-        <article className="connection-provider connection-provider--espn">
+        <article className="connection-provider connection-provider--espn" id="espn-connection">
           <div className="connection-provider__head">
             <span className="connection-provider-logo connection-provider-logo--espn">E</span>
             <div>
