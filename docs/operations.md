@@ -226,6 +226,17 @@ development evidence — the untouched release proof is the frozen protocol in
 shadow-only until an artifact is provisioned through `npm run ros:admit -w @fantasy/worker`
 (explicit `--database-url` and `--confirm`, refuses on any blocker).
 
+Model v7 (kicker count-process, 2026-07-22) replaced the lognormal shock for kickers with a
+calibrated integer count process on the five scored components. Its full replay
+(`reports/ros-validation-v7-2026-07-22.json`) kept all 15 non-K cells byte-identical to v6 with
+no new blocker and moved raw K short-window coverage to nominal, but K one-to-four still failed
+walk-forward block coverage — root-caused to weekly-model kicker centers under roster churn, not
+the interval family. **v7 is on main but not
+admitted: do not rebuild/deploy the worker until a v7 admission exists**, or new ROS publication
+pauses while the stored v6 artifact fails validity against the running v7 constants (prior
+published rows keep serving; the run diagnostics surface
+`ros_champion_artifact_invalid_publication_paused`).
+
 Completed weekly-roster membership supplies the evaluation spine for recently relevant players who
 recorded neither a stat nor a snap. Those known DNP outcomes are scored as zero but excluded from
 later role training. Announced inactive/reserve/suspended roster states produce a pregame zero;
