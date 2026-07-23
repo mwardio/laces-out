@@ -585,6 +585,16 @@ function kickerWeekParams(
  * construction (made = Σ coarse buckets, attempted = made + missed, fine sums = coarse), so the
  * caller deliberately skips enforceFootballComponentInvariants. Uses exactly the seven supplied
  * uniforms; the antithetic leg inverts them through the same monotone CDF inversions.
+ *
+ * Persisted component semantics (deliberate, scoring-neutral under the pinned profile, but
+ * visible to any analytics consumer of the components map): extra_points_attempted equals XP
+ * makes and extra_points_missed is identically zero (XP misses score nothing in scope, so the
+ * XP leg models makes directly); field_goals_attempted is the recorded scoring lattice
+ * made + missed, structurally excluding blocked-kick attempts. Known fidelity bound: multinomial
+ * thinning of one shared FG-event total caps each simulated component's dispersion index below
+ * one (the measured ~1.05 for the 50+ bucket is knowingly approximated at ~0.98), and the FG and
+ * XP legs share only the scale multiplier, so their volume correlation is ~0 conditional versus
+ * the measured -0.20 — both gaps push the window total wider, never narrower.
  */
 function sampleKickerGame(
   params: KickerWeekParams,

@@ -850,6 +850,87 @@ describe("historical ROS kicker calibration (count-process v1)", () => {
     expect(sparse.centerVolatility).toBe(0.25);
   });
 
+  it("keeps played zero-and-negative kicker games in the center fit and excludes true DNPs", () => {
+    const makePrediction = (
+      playerId: string,
+      week: number,
+      actual: Record<string, number>,
+      predicted: Record<string, number> = { field_goals_made_0_39: 2, extra_points_made: 2 },
+    ) => ({
+      playerId,
+      position: "K" as const,
+      season: 2023,
+      week,
+      predicted,
+      baseline: {},
+      floor: {},
+      ceiling: {},
+      actual,
+      trainingRows: 100,
+      calibrationRows: 50,
+    });
+    const rows = [kickerRow("k-0", 2023, 1)];
+    // 25 kickers, 8 games each: every game is a PLAYED zero-or-negative outcome (miss-only or
+    // XP-attempt-only) that the old points-threshold filter would have discarded wholesale.
+    const playedUgly = [];
+    for (let kicker = 0; kicker < 25; kicker += 1) {
+      for (let week = 1; week <= 8; week += 1) {
+        playedUgly.push(
+          makePrediction(
+            `k-${kicker}`,
+            week,
+            week % 2 === 0
+              ? { field_goals_missed: 2, field_goals_attempted: 2 } // played, -2 points
+              : { extra_points_attempted: 1, extra_points_made: 0 }, // played, 0 points
+          ),
+        );
+      }
+    }
+    const uglyFit = calibrateHistoricalRosKicker(
+      rows,
+      schedules,
+      HISTORICAL_ROS_SCORING_PROFILE,
+      playedUgly,
+    );
+    expect(uglyFit.evidence.centerResidualGroups).toBe(25);
+    // True DNP rows (all-zero kicking components) stay excluded.
+    const dnps = [];
+    for (let kicker = 0; kicker < 25; kicker += 1) {
+      for (let week = 1; week <= 8; week += 1) {
+        dnps.push(makePrediction(`k-${kicker}`, week, {}));
+      }
+    }
+    const dnpFit = calibrateHistoricalRosKicker(
+      rows,
+      schedules,
+      HISTORICAL_ROS_SCORING_PROFILE,
+      dnps,
+    );
+    expect(dnpFit.evidence.centerResidualGroups).toBe(0);
+    expect(dnpFit.centerVolatility).toBe(0.25);
+    // A non-finite predicted component is skipped, never thrown on (live-rail totality).
+    const poisoned = [
+      makePrediction("k-x", 1, { field_goals_made_0_39: 1 }, { field_goals_made_0_39: Number.NaN }),
+    ];
+    expect(() =>
+      calibrateHistoricalRosKicker(rows, schedules, HISTORICAL_ROS_SCORING_PROFILE, poisoned),
+    ).not.toThrow();
+    // Deep-negative games stay finite through the floored numerator.
+    const deepNegative = [];
+    for (let week = 1; week <= 8; week += 1) {
+      deepNegative.push(
+        makePrediction("k-deep", week, { field_goals_missed: 6, field_goals_attempted: 6 }),
+      );
+    }
+    const deepFit = calibrateHistoricalRosKicker(
+      rows,
+      schedules,
+      HISTORICAL_ROS_SCORING_PROFILE,
+      deepNegative,
+    );
+    expect(Number.isFinite(deepFit.centerVolatility)).toBe(true);
+  });
+
   it("records an out-of-bounds family audit without throwing and still clamps dispersion", () => {
     const rows: FirstPartyWeeklyStatLine[] = [];
     for (let kicker = 0; kicker < 35; kicker += 1) {

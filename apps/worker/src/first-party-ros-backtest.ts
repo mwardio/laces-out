@@ -176,11 +176,25 @@ export interface HistoricalRosBacktestReport {
   readonly availabilityCalibrationVersion: typeof HISTORICAL_ROS_AVAILABILITY_CALIBRATION_VERSION;
   readonly roleCalibrationVersion: typeof HISTORICAL_ROS_ROLE_CALIBRATION_VERSION;
   readonly kickerCalibrationVersion: typeof HISTORICAL_ROS_KICKER_CALIBRATION_VERSION;
-  /** Per-held-out-season kicker count-family dispersion audit, so the family claim is reviewable. */
+  /**
+   * Per-held-out-season kicker count-family audit plus the fitted calibration scalars, so a
+   * reviewer can see both the data's dispersion structure and whether any fit hit its clamp or
+   * fallback. The audit is an anomaly rail (drift tripwire), not admission evidence: its bounds
+   * were drawn around the same historical corpus the calibrator trains on, and multinomial
+   * thinning structurally bounds simulated component dispersion below one, so "within-bounds"
+   * certifies the data still looks like the family's domain — not model fidelity.
+   */
   readonly kickerFamilyAudit: readonly {
     readonly season: number;
     readonly dispersion: Readonly<Record<string, number>>;
     readonly state: "within-bounds" | "out-of-bounds";
+    readonly fitted: {
+      readonly fgEventDispersion: number;
+      readonly xpDispersion: number;
+      readonly recordedMissRatio: number;
+      readonly centerVolatility: number;
+      readonly evidence: HistoricalRosKickerCalibration["evidence"];
+    };
   }[];
   /** Compact worst-metric view of every stratum's release-vs-reference convergence diagnostic. */
   readonly convergenceAudit: readonly HistoricalRosConvergenceAuditEntry[];
@@ -1347,13 +1361,41 @@ export function calibrateHistoricalRosKicker(
     for (const prediction of weeklyPredictions) {
       const position = prediction.position.trim().toUpperCase();
       if (position !== "K" && position !== "PK") continue;
+      // Local totality: a non-finite predicted component would make the scorer's assertions
+      // reachable from inside the live provider's league-wide fail-closed catch. The upstream
+      // weekly model filters non-finite values at construction, but that invariant belongs to
+      // another package — skip defensively so this calibrator's never-throws contract is its own.
+      if (Object.values(prediction.predicted).some((value) => !Number.isFinite(value))) continue;
+      // Played-game test on activity, not points: a kicker legitimately scores zero or negative
+      // in a played game (no-attempt weeks, miss-only weeks), and those games concentrate in
+      // exactly the low-intensity kicker-seasons whose center error this parameter must carry.
+      // The role calibrator's points-threshold idiom (which drops them) would bias sigma_c down
+      // roughly 10 percent and narrow the low tail the count process exists to widen. True DNP
+      // rows have all-zero kicking components and remain excluded.
+      const activity = kickerRowEvents(prediction.actual);
+      if (
+        activity.attempted +
+          activity.made +
+          activity.missed +
+          activity.extraPointsMade +
+          kickerComponentValue(prediction.actual, "extra_points_attempted") <=
+        0
+      ) {
+        continue;
+      }
       const predictedPoints = scoreProjectionStatComponents(prediction.predicted, scoringProfile);
       const actualPoints = scoreProjectionStatComponents(prediction.actual, scoringProfile);
-      if (actualPoints < 0.5) continue; // exclude DNP-style zeros; availability is modeled separately
       const key = `${prediction.playerId}:${prediction.season}`;
       const residuals = residualsByKickerSeason.get(key) ?? [];
+      // Floor the numerator: an all-miss game can reach -4 points or below, where the raw log
+      // ratio degenerates; treating deeper-negative games as zero-point games keeps the residual
+      // finite while preserving their (clamped) downside contribution.
       residuals.push(
-        clamp(Math.log((actualPoints + 4) / (Math.max(predictedPoints, 0) + 4)), -2, 2),
+        clamp(
+          Math.log((Math.max(actualPoints, 0) + 4) / (Math.max(predictedPoints, 0) + 4)),
+          -2,
+          2,
+        ),
       );
       residualsByKickerSeason.set(key, residuals);
     }
@@ -2126,11 +2168,7 @@ export function buildHistoricalRosBacktest(
   const options = resolveOptions(input.options);
   const qualifiedSeasons = new Set(input.coverage.fullyHeldOutSeasons);
   const drafts: HistoricalRosDraft[] = [];
-  const kickerFamilyAudits: Array<{
-    readonly season: number;
-    readonly dispersion: HistoricalRosKickerCalibration["dispersionAudit"];
-    readonly state: HistoricalRosKickerCalibration["familyAudit"];
-  }> = [];
+  const kickerFamilyAudits: Array<HistoricalRosBacktestReport["kickerFamilyAudit"][number]> = [];
   // The official D/ST backtest is also the canonical raw-outcome normalizer: its `actual` rows
   // materialize one-hot points-allowed buckets. These rows are joined only after each forecast.
   const defenseOutcomeHistory = canonicalHistoricalRosDefenseOutcomes(input.defenseHistory);
@@ -2166,6 +2204,13 @@ export function buildHistoricalRosBacktest(
       season,
       dispersion: kickerCalibration.dispersionAudit,
       state: kickerCalibration.familyAudit,
+      fitted: {
+        fgEventDispersion: kickerCalibration.fgEventDispersion,
+        xpDispersion: kickerCalibration.xpDispersion,
+        recordedMissRatio: kickerCalibration.recordedMissRatio,
+        centerVolatility: kickerCalibration.centerVolatility,
+        evidence: kickerCalibration.evidence,
+      },
     });
     input.onProgress?.({
       stage: "season-calibration-ready",
