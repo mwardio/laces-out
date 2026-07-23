@@ -6,8 +6,8 @@
 
 <p align="center">
   <strong>Self-hosted fantasy football intelligence for a league of friends.</strong><br>
-  Syncs your ESPN and Yahoo leagues, builds its own backtested weekly projections,
-  and turns every sync into ranked lineup, waiver, trade, and draft calls — on your server, invite-only.
+  Sync ESPN leagues, build scoring-aware forecasts, and turn every refresh into ranked lineup,
+  waiver, trade, opponent, and draft calls—on your server and invite-only.
 </p>
 
 <p align="center">
@@ -22,32 +22,25 @@
 
 ## What it does
 
-- **League sync, read-only by design** — official Yahoo OAuth (PKCE, read-only) and a private ESPN
-  path: a revocable one-click sync bookmark or the signed
-  [Chrome Web Store companion](https://chromewebstore.google.com/detail/laces-out-espn-bridge/hmilkmcjlkpnigcfnlfogeafacjpmkbj)
-  with one-click pairing. Credentials never leave the browser; only bounded league data does.
-  Writes (lineup changes, waivers, trades) are disabled everywhere — the app recommends and
-  deep-links, you complete actions at the provider.
-- **First-party weekly projections** — a locked-backtest model built from immutable nflverse
-  identity, schedule, stats, rosters, injuries, and snap counts, scored to each league's _exact_
-  rules. Unsupported scoring is withheld, never approximated.
-- **Decision automation** — every fresh sync reruns lineup, waiver, trade, opponent, and
-  roster-strength analysis and ranks the calls by impact, confidence, and urgency.
-- **Draft day** — persistent snake and auction rooms on an append-only event ledger, with live
-  inflation, scarcity, wait risk, max-bid math, and a browser-local Practice Room simulator.
-- **Your own edge** — private rankings, ADP, auction values, cheat sheets, and single-week CSV
-  projection imports with strict provenance; they sharpen the built-in engine, never power it.
-- **Stats Center** — filterable usage and opportunity leaders from the latest admitted nflverse
-  versions, with source timestamps and attribution.
-- **Film Room AI** — included Gemini analysis for every member (operator-supplied key, fixed
-  server-side model, daily limits) plus encrypted BYOK for OpenAI, Anthropic, Gemini, or
-  OpenRouter. Grounded in synced league facts; no tools, no provider execution.
-- **Market context** — daily Fantasy Football Calculator ADP across formats and hourly attributed
-  Sleeper waiver-market momentum.
+- **Read-only league sync** — ESPN private leagues sync through a revocable bookmark or the signed
+  [Chrome companion](https://chromewebstore.google.com/detail/laces-out-espn-bridge/hmilkmcjlkpnigcfnlfogeafacjpmkbj).
+  Yahoo OAuth and sync are implemented and remain labeled **Coming Soon** until enabled for a
+  deployment. Laces Out never asks for a provider password or executes roster moves.
+- **Forecasts and decisions** — backtested weekly projections use nflverse identity, schedule,
+  stats, injuries, rosters, and snap counts, scored to each league's exact rules. Every fresh input
+  reruns lineup, waiver, trade, opponent, and roster-strength analysis.
+- **Draft day** — persistent snake and auction rooms use an append-only event ledger with
+  inflation, scarcity, wait risk, max-bid math, undo, replay, and a browser-local Practice Room.
+- **Your own edge** — private rankings, ADP, auction values, cheat sheets, custom projections,
+  Stats Center usage data, Sleeper momentum, and Fantasy Football Calculator markets sharpen the
+  built-in engine without obscuring provenance.
+- **Film Room AI** — included Gemini analysis plus encrypted BYOK support for OpenAI, Anthropic,
+  Gemini, and OpenRouter. Answers are grounded in league facts and deterministic recommendations;
+  models receive no provider credentials, tools, or write access.
 
 ## Screenshots
 
-Every view below is the built-in locker room tour — labeled demo mode, no account required.
+Every view below is the built-in locker room tour—no account required.
 
 |                                                                       |                                                           |
 | --------------------------------------------------------------------- | --------------------------------------------------------- |
@@ -56,41 +49,35 @@ Every view below is the built-in locker room tour — labeled demo mode, no acco
 
 ## Statistically honest projections
 
-Most fantasy tools show you a number. Laces Out shows you a number only when it has earned one:
+Laces Out publishes a forecast only after it earns the right:
 
-- Publication is gated by locked, strictly prior walk-forward backtests. Per position, the richer
-  contextual model must beat a transparent recency baseline on your league's scoring before it
-  goes live — until then, the baseline _is_ the live strategy.
-- Forecasts carry calibrated intervals with audited coverage, pinned input checksums, training
-  cutoffs, and backtest metrics visible in the Projection Lab.
-- Missing, stale, or in-flight inputs fail closed and preserve the last good publication. Byes and
-  confirmed inactives are explicit zeros, never model noise.
-- The rest-of-season distribution engine graduates cell by cell — each position × horizon must
-  independently pass pre-registered evidence gates and an explicit, operator-confirmed admission
-  before its values reach any screen or engine. Cells that have not earned it stay withheld, and
-  the final release proof is a frozen protocol against a fully untouched future season.
+- Locked, strictly prior walk-forward backtests compare each position model with a transparent
+  recency baseline under the league's scoring rules. Until the richer model wins, the baseline
+  remains live.
+- Forecasts carry calibrated intervals, audited coverage, pinned input checksums, training cutoffs,
+  and visible backtest metrics. Missing, stale, or in-flight inputs fail closed.
+- Rest-of-season cells graduate independently by position and horizon through pre-registered
+  evidence gates and explicit admission. Everything else stays withheld.
 
-Details: [packages/projections/README.md](./packages/projections/README.md) and
+See [Projection methodology](./packages/projections/README.md).
 
-## Quick start (Docker Compose)
+## Quick start
 
-Requirements: Docker with the Compose plugin. The stack is five containers — Caddy gateway,
-Next.js web, Fastify API, pg-boss worker, PostgreSQL 17 — plus a one-shot migration job.
-PostgreSQL is the only stateful service, and it binds to host loopback only.
+Requirements: Docker with the Compose plugin.
 
 ```bash
-git clone https://github.com/mwardio/laces-out.git && cd laces-out
+git clone https://github.com/mwardio/laces-out.git
+cd laces-out
 cp .env.docker.example .env
-# Replace every `replace-with-...` value. Generator commands are documented in the file.
+# Replace every replace-with-... value; generator commands are in the file.
 docker compose config --quiet
 docker compose up --build -d --wait
 curl --fail http://localhost:3000/health/ready
 ```
 
-Production startup deliberately rejects placeholder secrets and the default database password —
-fill in every value before expecting the stack to become healthy.
+Production startup rejects placeholder secrets and the default database password.
 
-Create the first administrator (supply the password ephemerally, never in `.env`):
+Create the first administrator without storing its password in `.env`:
 
 ```bash
 read -rsp "Owner password: " OWNER_PASSWORD && echo
@@ -102,166 +89,125 @@ docker compose run --rm --no-deps \
 unset OWNER_PASSWORD
 ```
 
-Open <http://localhost:3000> and sign in; the signed-in app lives at `/app`.
+Open <http://localhost:3000>. Set `REGISTRATION_INVITE_CODE` to enable shared-code registration;
+admins can also issue expiring, single-use invitations.
 
-**Inviting friends:** set `REGISTRATION_INVITE_CODE` to enable `/register` and share the code out
-of band. The API stores only a domain-separated HMAC, compares in constant time, and rate-limits
-attempts; rotating or blanking the code closes registration without touching existing accounts.
-Admins also get personal, expiring, single-use invitation links.
-
-Updates, backups, password resets, and the full runbook are in
-[docs/operations.md](./docs/operations.md). Before exposing a deployment to the internet, read
-[docs/security.md](./docs/security.md).
+For upgrades, backups, password resets, and health checks, use
+[docs/operations.md](./docs/operations.md). Read [docs/security.md](./docs/security.md) before
+exposing a deployment to the internet.
 
 ## Configuration
 
-All configuration is environment variables, documented inline in
-[.env.docker.example](./.env.docker.example) (Compose) and [.env.example](./.env.example)
-(local development).
+Compose settings are documented in [.env.docker.example](./.env.docker.example); local-development
+settings live in [.env.example](./.env.example).
 
-| Variable                                  | Required | Default                 | Purpose                                                                                                                  |
-| ----------------------------------------- | -------- | ----------------------- | ------------------------------------------------------------------------------------------------------------------------ |
-| `PUBLIC_URL`                              | Yes      | `http://localhost:3000` | Browser-visible origin. Compiled into the web bundle — rebuild images after changing it.                                 |
-| `POSTGRES_PASSWORD`                       | Yes      | —                       | Database password. Placeholders and the dev default are rejected at production startup.                                  |
-| `SESSION_SECRET`                          | Yes      | —                       | 32+ random chars for session/capability key derivation (`openssl rand -hex 32`).                                         |
-| `CREDENTIAL_ENCRYPTION_KEY`               | Yes      | —                       | `base64:`-prefixed 32 random bytes for AES-256-GCM credential envelopes (`printf 'base64:' && openssl rand -base64 32`). |
-| `REGISTRATION_INVITE_CODE`                | No       | empty                   | Shared friend-registration code (16–128 chars). Blank disables `/register`.                                              |
-| `GEMINI_API_KEY`                          | No       | empty                   | Server-side Google AI Studio key enabling the included Film Room for every member. Never exposed to the browser.         |
-| `MANAGED_AI_DAILY_REQUEST_LIMIT`          | No       | `50`                    | Included AI requests per member per UTC day.                                                                             |
-| `MANAGED_AI_MAX_OUTPUT_TOKENS`            | No       | `2000`                  | Included AI answer token cap.                                                                                            |
-| `NEXT_PUBLIC_CONTACT_EMAIL`               | No*      | empty                   | Operator contact compiled into the footer, privacy policy, and terms. *Set before internet exposure.                     |
-| `NEXT_PUBLIC_YAHOO_ACCESS_STATUS`         | No       | `pending`               | Set to `available` after a Yahoo app is approved and credentials are configured.                                         |
-| `YAHOO_CLIENT_ID` / `YAHOO_CLIENT_SECRET` | No       | empty                   | Yahoo OAuth app credentials, API server only.                                                                            |
-| `SITE_ADDRESS`                            | No       | `:80`                   | Caddy site address. Set to your domain for automatic HTTPS.                                                              |
-| `APP_PORT` / `HTTPS_PORT`                 | No       | `3000` / `3443`         | Host ports for the gateway. Use `80`/`443` for a public deployment.                                                      |
-| `POSTGRES_PORT`                           | No       | `55432`                 | Host port for PostgreSQL, bound to `127.0.0.1` only.                                                                     |
-| `LOG_LEVEL`                               | No       | `info`                  | API/worker log level.                                                                                                    |
+| Variable                                  | Required | Default                 | Purpose                                                  |
+| ----------------------------------------- | -------- | ----------------------- | -------------------------------------------------------- |
+| `PUBLIC_URL`                              | Yes      | `http://localhost:3000` | Browser-visible origin; rebuild images after changing it |
+| `POSTGRES_PASSWORD`                       | Yes      | —                       | PostgreSQL password; production rejects placeholders     |
+| `SESSION_SECRET`                          | Yes      | —                       | Session and capability-key derivation                    |
+| `CREDENTIAL_ENCRYPTION_KEY`               | Yes      | —                       | `base64:`-prefixed 32-byte AES-256-GCM key               |
+| `REGISTRATION_INVITE_CODE`                | No       | empty                   | Shared registration code; blank disables `/register`     |
+| `GEMINI_API_KEY`                          | No       | empty                   | Enables included Film Room access                        |
+| `MANAGED_AI_DAILY_REQUEST_LIMIT`          | No       | `50`                    | Included AI requests per member per UTC day              |
+| `MANAGED_AI_MAX_OUTPUT_TOKENS`            | No       | `2000`                  | Included AI response limit                               |
+| `NEXT_PUBLIC_CONTACT_EMAIL`               | No*      | empty                   | Public operator contact; set before internet exposure    |
+| `NEXT_PUBLIC_YAHOO_ACCESS_STATUS`         | No       | `pending`               | Controls the public **Coming Soon** state                |
+| `YAHOO_CLIENT_ID` / `YAHOO_CLIENT_SECRET` | No       | empty                   | Yahoo OAuth credentials, API server only                 |
+| `SITE_ADDRESS`                            | No       | `:80`                   | Included Caddy site address                              |
+| `APP_PORT` / `HTTPS_PORT`                 | No       | `3000` / `3443`         | Included gateway host ports                              |
+| `POSTGRES_PORT`                           | No       | `55432`                 | Loopback-only PostgreSQL maintenance port                |
+| `LOG_LEVEL`                               | No       | `info`                  | API and worker log level                                 |
 
-For a public deployment, point a domain at the host and set `PUBLIC_URL`, `SITE_ADDRESS`,
-`APP_PORT=80`, and `HTTPS_PORT=443` as shown in `.env.docker.example` — Caddy then obtains and
-renews TLS automatically. Plain HTTP is a loopback-only development mode.
+For a standalone public deployment, point a domain at the host and set `PUBLIC_URL`,
+`SITE_ADDRESS`, `APP_PORT`, and `HTTPS_PORT` as described in `.env.docker.example`.
 
 ## Architecture
 
-npm-workspaces TypeScript monorepo. One Caddy gateway fronts everything so cookies, OAuth
-callbacks, the web UI, and the API share a single origin.
-
 ```text
-apps/
-  web            Next.js 16 responsive PWA (React 19, hand-authored CSS layers — no Tailwind)
-  api            Fastify 5 REST API: auth, provider callbacks, ingestion, job enqueue
-  worker         pg-boss runtime: NFL data refresh, forecast sweeps, ADP/status/market jobs
-  espn-bridge    Chrome (Manifest V3) companion for private ESPN league sync
-
-packages/
-  domain, contracts, config      provider-neutral entities, zod wire contracts, validated env config
-  connectors, connector-yahoo,   provider capability/sync ports and per-provider adapters
-  connector-espn
-  db                             Drizzle ORM schema and SQL migrations
-  projections                    scoring normalization, weekly model, ROS distributions, uncertainty
-  engine-draft / -lineup /       recommendation engines
-  -trade / -waiver
-  league-analytics               strength, luck, schedule, and opportunity analysis
-  rankings                       private rankings, cheat sheets, CSV import, share integrity
-  source-nflverse / -sleeper /   data-source adapters: identity, schedules, stats, status, ADP
-  -ffc
-  security                       credential envelopes and redaction
-  ingestion, testkit             canonical identity resolution, shared test fixtures
+Browser ──> Caddy ──> Next.js web
+                  └─> Fastify API ──> PostgreSQL
+                                      ↑
+Provider and NFL sources ──> adapters ─┴─ pg-boss worker
+                                      └─ decision engines
 ```
 
-Data flow in one line: source and connector packages normalize external data into PostgreSQL via
-the API and worker; recommendation engines read only normalized domain data and never import
-provider code.
+- `apps/web` — responsive Next.js 16 PWA
+- `apps/api` — authentication, provider sync, ingestion, and REST endpoints
+- `apps/worker` — refresh schedules, forecast sweeps, markets, and job processing
+- `apps/espn-bridge` — Manifest V3 companion for private ESPN league sync
+- `packages/*` — provider adapters, domain contracts, projections, rankings, security, and
+  draft/lineup/waiver/trade engines
 
-**Stack:** TypeScript throughout · Next.js 16 + React 19 · Fastify 5 · PostgreSQL 17 with Drizzle
-ORM · pg-boss job queues · Vitest · Caddy 2 gateway · Docker Compose.
+Provider code ends at its adapter. Recommendation engines consume normalized, source-stamped domain
+data rather than raw provider payloads.
 
 ## Development
 
-Requires Node.js `>=22.22 <25` (see `engines` in `package.json`) and Docker (or your own
-PostgreSQL 17+).
+Requires Node.js `>=22.22 <25`, Docker, and PostgreSQL 17+.
 
 ```bash
 cp .env.example .env
 docker compose up -d postgres
 npm install
 npm run db:migrate -w @fantasy/db
-npm run owner:create -w @fantasy/api   # reads OWNER_EMAIL / OWNER_PASSWORD from the environment
 npm run dev
 ```
 
-Web at <http://localhost:3000>, API at <http://localhost:4000> (liveness at `/health/live`).
+Web runs at <http://localhost:3000>; the API runs at <http://localhost:4000>.
 
-| Command                                         | What it does                                                       |
-| ----------------------------------------------- | ------------------------------------------------------------------ |
-| `npm run dev`                                   | web + api + worker with live reload                                |
-| `npm run check`                                 | format check + lint + typecheck + tests + build (the release gate) |
-| `npm run test` / `test:watch` / `test:coverage` | Vitest suites                                                      |
-| `npm run lint` / `typecheck` / `format`         | ESLint (zero warnings), `tsc --noEmit`, Prettier                   |
-| `npm run build`                                 | builds api, worker, espn-bridge, and web                           |
+| Command              | Purpose                                              |
+| -------------------- | ---------------------------------------------------- |
+| `npm run dev`        | Start web, API, and worker with live reload          |
+| `npm run check`      | Format, lint, typecheck, tests, and production build |
+| `npm run test`       | Run the Vitest suite                                 |
+| `npm run test:watch` | Run Vitest in watch mode                             |
+| `npm run build`      | Build API, worker, ESPN companion, and web           |
+| `npm run format`     | Apply Prettier formatting                            |
 
-With PostgreSQL running, database-backed release checks (forced-rollback transactions against a
-real database; provider contract tests use sanitized fixtures and never issue writes):
-
-```bash
-npm run db:smoke -w @fantasy/db
-npm run bridge:smoke -w @fantasy/api        # ESPN device auth, ownership, replay idempotency
-npm run yahoo:smoke -w @fantasy/api         # account isolation, team claims, atomic reads
-npm run invitation:smoke -w @fantasy/api    # hashed single-use capabilities
-npm run registration:smoke -w @fantasy/api  # unique members, password/session hashes
-npm run runtime:smoke                       # builds and boots api/worker/web on isolated ports
-```
-
-House rules: provider quirks live only in their adapter; every external payload shape gets a
-sanitized fixture and parser test; recommendation inputs, algorithm version, input hash, and seed
-are preserved; uncertain player identities are never silently merged; stale data always carries a
-freshness warning; a live draft must stay completable through manual entry, undo, and replay.
+Database-backed smoke commands and the release runbook live in
+[docs/operations.md](./docs/operations.md).
 
 ## Security and privacy
 
-- Provider access is read-only; secrets and refresh tokens never enter browser storage, and the
-  ESPN path never asks for an ESPN password.
-- Local accounts use Argon2id password hashes and revocable server-side sessions; production
-  cookies are secure, HTTP-only, and same-site (OIDC/passkeys/MFA are roadmap, not claimed).
-- Provider credentials persist in versioned AES-256-GCM envelopes; bridge devices are
-  independently revocable.
-- Request logs strip query strings, Caddy redacts OAuth callback values, and structured secrets,
-  cookies, and auth headers are redacted. Connector egress, payload sizes, and retries are bounded.
+- Provider access is read-only; the ESPN path never asks for a password.
+- Accounts use Argon2id hashes and revocable server-side sessions with secure production cookies.
+- Provider credentials use versioned AES-256-GCM envelopes; bridge devices are independently
+  revocable.
+- Logs redact secrets, cookies, authorization headers, and OAuth callback values.
 - AI providers receive no credentials, tools, or write capability; prompts and answers are not
   persisted.
 
-Threat model and hardening baseline: [docs/security.md](./docs/security.md). Operator privacy
-source of truth (served in-app at `/privacy`): [docs/privacy.md](./docs/privacy.md).
+See [docs/security.md](./docs/security.md) and [docs/privacy.md](./docs/privacy.md).
 
 ## Provider status
 
-| Provider   | Status                                                                                                                                                                                    |
-| ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **ESPN**   | Private leagues sync via the scoped bookmark or the read-only browser companion — no public Fantasy OAuth exists. You sign in on ESPN itself; passwords and cookies stay in your browser. |
-| **Yahoo**  | Official read-only OAuth and sync are implemented, presented as **Coming Soon** until enabled for a deployment (requires an approved Yahoo app).                                          |
-| **Writes** | Disabled everywhere, for every provider. The app recommends and deep-links; every action is completed at the provider.                                                                    |
+| Provider   | Status                                                                                                           |
+| ---------- | ---------------------------------------------------------------------------------------------------------------- |
+| **ESPN**   | Private leagues sync through the bookmark or browser companion; passwords and cookies stay in the browser        |
+| **Yahoo**  | Official read-only OAuth and sync are implemented; deployments show **Coming Soon** until the feature is enabled |
+| **Writes** | Disabled everywhere; Laces Out recommends and deep-links, and members complete actions at the provider           |
 
-Evidence and constraints live in [docs/provider-notes/](./docs/provider-notes/).
+Provider evidence and limitations live in [docs/provider-notes/](./docs/provider-notes/).
 
-## Status and roadmap
+## Status
 
-Weekly managed projections are the production forecast source. The rest-of-season engine serves
-only the cells that have earned admission through its evidence gates — everything else stays
-withheld — with its final proof pre-registered against the untouched 2026 season. Demo data is always labeled, and no screen implies a provider account is connected
-when it is not. Planned work includes provider hardening, automated refresh and notifications, supported live-draft enhancements, deeper
-recommendation validation, and operational hardening.
+Weekly managed projections are the production forecast source. Rest-of-season output is served only
+for cells that pass their evidence gates; demo data is always labeled. Ongoing work focuses on
+provider hardening, refresh and notification depth, live-draft support, recommendation validation,
+and operational resilience.
 
 ## Documentation
 
-| Document                                                                           | Purpose                                                  |
-| ---------------------------------------------------------------------------------- | -------------------------------------------------------- |
-| [docs/operations.md](./docs/operations.md)                                         | Deployment, runbook, health, backup, and operator checks |
-| [docs/security.md](./docs/security.md)                                             | Threat model and hardening baseline                      |
-| [docs/privacy.md](./docs/privacy.md)                                               | Operator privacy source of truth                         |
-| [docs/ros-v6-2026-untouched-protocol.md](./docs/ros-v6-2026-untouched-protocol.md) | Frozen final-proof protocol for the ROS engine           |
-| [docs/provider-notes/](./docs/provider-notes/)                                     | Provider evidence and constraints                        |
-| [apps/espn-bridge/README.md](./apps/espn-bridge/README.md)                         | Browser companion build, pairing, and store submission   |
-| [packages/projections/README.md](./packages/projections/README.md)                 | Model internals and evaluation methodology               |
+| Document                                                                           | Purpose                                           |
+| ---------------------------------------------------------------------------------- | ------------------------------------------------- |
+| [docs/operations.md](./docs/operations.md)                                         | Deployment, backups, health, and operator runbook |
+| [docs/security.md](./docs/security.md)                                             | Threat model and hardening baseline               |
+| [docs/privacy.md](./docs/privacy.md)                                               | Operator privacy source of truth                  |
+| [docs/ros-v6-2026-untouched-protocol.md](./docs/ros-v6-2026-untouched-protocol.md) | Frozen final-proof protocol for the ROS engine    |
+| [docs/provider-notes/](./docs/provider-notes/)                                     | Provider evidence and constraints                 |
+| [apps/espn-bridge/README.md](./apps/espn-bridge/README.md)                         | Browser companion pairing and store submission    |
+| [packages/projections/README.md](./packages/projections/README.md)                 | Model internals and evaluation methodology        |
 
 ## License
 
