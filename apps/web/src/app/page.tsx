@@ -370,18 +370,18 @@ export default function LandingPage() {
         <section className={styles.signalBar} aria-label="How the forecasts are validated">
           <div className={styles.signalInner}>
             <span>
-              <strong>4</strong> held-out NFL seasons
+              <strong>4</strong> backtested NFL seasons
             </span>
             <i aria-hidden="true" />
             <span>
-              <strong>2K+</strong> walk-forward forecasts per validation
+              <strong>2K+</strong> predictions graded against reality
             </span>
             <i aria-hidden="true" />
             <span>
-              <strong>12.3K</strong> simulated paths per projection
+              <strong>12K+</strong> simulations per projection
             </span>
             <i aria-hidden="true" />
-            <span>Unearned numbers never publish</span>
+            <span>If it isn&rsquo;t proven, it isn&rsquo;t published</span>
           </div>
         </section>
 

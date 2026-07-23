@@ -673,6 +673,14 @@
   opacity: 0.45;
 }
 
+/* The validation figures carry the strip; the prose stays at strip scale. */
+.signalInner strong {
+  font-size: 15px;
+  font-weight: 900;
+  line-height: 1;
+  letter-spacing: 0.02em;
+}
+
 .seasonSection,
 .weekSection {
   padding-top: 112px;
