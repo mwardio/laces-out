@@ -45,6 +45,16 @@
 - **Market context** — daily Fantasy Football Calculator ADP across formats and hourly attributed
   Sleeper waiver-market momentum.
 
+## Screenshots
+
+Captured from the built-in locker room tour — every view below is the labeled demo mode, no
+account required.
+
+|                                                                      |                                                          |
+| -------------------------------------------------------------------- | -------------------------------------------------------- |
+| ![Locker room overview](./docs/screenshots/locker-room-overview.png) | ![Draft studio](./docs/screenshots/draft-studio.png)     |
+| ![Decision Desk](./docs/screenshots/decision-desk.png)               | ![Projection Lab](./docs/screenshots/projection-lab.png) |
+
 ## Statistically honest projections
 
 Most fantasy tools show you a number. Laces Out shows you a number only when it has earned one:
