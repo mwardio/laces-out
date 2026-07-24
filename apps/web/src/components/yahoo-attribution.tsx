@@ -7,7 +7,7 @@ export function YahooAttribution() {
       href="https://sports.yahoo.com/fantasy/"
       target="_blank"
       rel="noreferrer"
-      aria-label="Fantasy data provided by Yahoo Fantasy — open Yahoo Fantasy"
+      aria-label="Fantasy data provided by Yahoo Fantasy (opens Yahoo Fantasy)"
     >
       <span className="yahoo-attribution__mark" aria-hidden="true">
         <img src="/providers/yahoo-fantasy.svg" width="174" height="28" alt="" />

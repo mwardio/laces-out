@@ -291,8 +291,8 @@ export function MemberInvitations() {
                     setMessage(null);
                   }}
                 >
-                  <option value="member">Member — standard access</option>
-                  <option value="admin">Administrator — full control</option>
+                  <option value="member">Member (standard access)</option>
+                  <option value="admin">Administrator (full control)</option>
                 </select>
                 <small>
                   Use Member unless this person should manage invitations and host settings.
@@ -449,7 +449,7 @@ export function MemberInvitations() {
                 <summary>How this link is protected</summary>
                 <small>
                   Its one-time secret stays after <code>#</code>, outside HTTP request targets and
-                  referrers. Laces Out stores only a verification hash.
+                  referrers. Only a verification hash is stored.
                 </small>
               </details>
             </div>

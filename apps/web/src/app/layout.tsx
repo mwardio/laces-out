@@ -17,7 +17,7 @@ const brandFont = Sora({
 export const metadata: Metadata = {
   metadataBase: publicSiteUrl,
   title: {
-    default: "Laces Out — Fantasy Football Intelligence",
+    default: "Laces Out · Fantasy Football Intelligence",
     template: "%s · Laces Out",
   },
   description:

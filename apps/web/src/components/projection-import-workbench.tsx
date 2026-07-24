@@ -117,10 +117,10 @@ function ProjectionTour() {
       <header className={styles.hero}>
         <div>
           <p className={styles.kicker}>Managed forecasts + custom inputs</p>
-          <h1>Use the weekly forecast—or bring your own.</h1>
+          <h1>Use the weekly forecast, or bring your own.</h1>
           <p>
-            Laces Out updates its league-scored forecast as source inputs change. Custom sets keep
-            their source time, authorship, scope, and checksums.
+            League-scored forecasts update as source inputs change. Custom sets keep their source
+            time, authorship, scope, and checksums.
           </p>
         </div>
         <label className={styles.leagueControl}>
@@ -691,10 +691,10 @@ export function ProjectionImportWorkbench() {
       <header className={styles.hero}>
         <div>
           <p className={styles.kicker}>Managed forecasts + custom inputs</p>
-          <h1>Use the weekly forecast—or bring your own.</h1>
+          <h1>Use the weekly forecast, or bring your own.</h1>
           <p>
-            Laces Out rebuilds its league-scored forecast when verified inputs change. Your own CSV
-            can override that baseline after every player match passes validation.
+            The league-scored forecast rebuilds when verified inputs change. Your own CSV can
+            override that baseline after every player match passes validation.
           </p>
         </div>
         <label className={styles.leagueControl}>

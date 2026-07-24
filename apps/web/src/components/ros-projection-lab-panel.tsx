@@ -106,8 +106,8 @@ export function RosProjectionLabPanel() {
             <p className={styles.kicker}>Rest-of-season outlook</p>
             <h2 id="ros-tour-title">See beyond this week.</h2>
             <p>
-              Laces Out scores the weeks ahead with a first-party forecast, then refreshes the
-              outlook whenever trusted NFL inputs change.
+              ROS scoring is based on first-party forecasts, and the outlook refreshes whenever
+              trusted NFL inputs change.
             </p>
           </div>
           <span className={`${styles.badge} ${styles.badgePublishable}`}>
@@ -224,7 +224,7 @@ function RosStatusBody({ status }: { readonly status: RosProjectionStatus }) {
         <div className={styles.shadowBanner} role="status">
           <Info size={17} aria-hidden="true" />
           <span>
-            <strong>Still validating — not used in recommendations yet.</strong>
+            <strong>Still validating, not used in recommendations yet.</strong>
             The latest forecast remains isolated until its model package and source checks pass.
           </span>
         </div>
@@ -333,7 +333,7 @@ function RosStatusBody({ status }: { readonly status: RosProjectionStatus }) {
         <h3>Published sets</h3>
         {status.publishedSets.length === 0 ? (
           <p className={styles.empty}>
-            No league-scoped rest-of-season set is published — expected while the rail is
+            No league-scoped rest-of-season set is published, which is expected while the rail is
             fail-closed.
           </p>
         ) : (

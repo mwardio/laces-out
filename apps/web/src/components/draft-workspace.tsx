@@ -88,7 +88,7 @@ export function DraftWorkspace() {
   const [winnerId, setWinnerId] = useState("you");
   const [bid, setBid] = useState("49");
   const [snakePick, setSnakePick] = useState(17);
-  const [notice, setNotice] = useState("Local sandbox ready — provider polling is off");
+  const [notice, setNotice] = useState("Local sandbox ready. Provider polling is off.");
   const [isPaused, setIsPaused] = useState(false);
 
   const draftedIds = useMemo(
@@ -131,7 +131,7 @@ export function DraftWorkspace() {
 
   function selectMode(nextMode: DraftFormat) {
     setMode(nextMode);
-    setNotice(`${nextMode} sandbox active — entries remain in this browser preview`);
+    setNotice(`${nextMode} sandbox active. Entries remain in this browser preview.`);
   }
 
   function recordEvent() {

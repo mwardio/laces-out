@@ -98,7 +98,7 @@ describe("describeRosProjectionRail", () => {
     expect(description.statusLabel).toBe("Fail-closed shadow");
     expect(description.artifactPresent).toBe(false);
     expect(description.reasons.map((reason) => reason.label)).toContain(
-      "Publication is intentionally disabled — shadow evidence only.",
+      "Publication is intentionally disabled; shadow evidence only.",
     );
     expect(description.lastEvaluatedIso).toBe("2026-10-10T01:00:00.000Z");
     expect(description.lastPublishedIso).toBeNull();

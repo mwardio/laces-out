@@ -192,7 +192,7 @@ function DemoFallback({
             demo
             eyebrow="AI coaching tour"
             title="See how the second read works"
-            description="Every sample starts with the league engine's board, then uses Gemini to explain what is worth doing—and what is not."
+            description="Every sample starts with the league engine's board, then uses Gemini to explain what is worth doing and what is not."
           />
         }
       />
@@ -398,9 +398,9 @@ function LivePortfolio({ portfolio, reloadPortfolio }: LivePortfolioProps) {
               : `${portfolio.leagues.length} connected leagues in one view.`}
           </h1>
           <p className="page-subtitle">
-            Laces Out turns your latest league, roster, and projection data into the next lineup,
-            waiver, trade, and opponent moves. Shared NFL inputs are checked daily and on demand;
-            each league keeps its own sync and projection controls.
+            Your latest league, roster, and projection data drive the next lineup, waiver, trade,
+            and opponent moves. Shared NFL inputs are checked daily and on demand; each league keeps
+            its own sync and projection controls.
           </p>
         </div>
         <div className="heading-actions">

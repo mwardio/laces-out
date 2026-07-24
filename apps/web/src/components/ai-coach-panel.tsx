@@ -93,9 +93,9 @@ const DEMO_ANSWERS: Readonly<Record<AiFeatureName, string>> = {
   "waiver-scan":
     "Jaylen Wright is the only addition that clears the worth-the-drop bar.\n\n- **Add:** Jaylen Wright\n- **Drop:** Your second defense\n- **Suggested bid:** Around $8\n\nThe pairing improves weighted roster value by 2.8 points while preserving a legal lineup. The remaining available players do not improve the roster enough to justify a drop.",
   "trade-builder":
-    "**Best fit:** Send Mike Evans and receive Jahmyr Gibbs. The modeled package improves your optimized roster by 3.2 points and the other team by 0.8, while addressing your RB weakness without creating an illegal roster.\n\n> You get a weekly WR starter, and I balance out my RB room. The numbers are close for both sides—interested in Evans for Gibbs?",
+    "**Best fit:** Send Mike Evans and receive Jahmyr Gibbs. The modeled package improves your optimized roster by 3.2 points and the other team by 0.8, while addressing your RB weakness without creating an illegal roster.\n\n> You get a weekly WR starter, and I balance out my RB room. The numbers are close for both sides. Interested in Evans for Gibbs?",
   "standings-prediction":
-    "### Model-assisted forecast\n1. Fourth & Long — 10–4\n2. Uptown Blitz — 9–5\n3. Lake Effect — 8–6\n4. Sunday Scaries — 8–6\n5. Goal Line Fade — 6–8\n6. Punt Intended — 5–9\n\n**Biggest riser:** Fourth & Long, driven by the league's best all-play profile and a top-two power score.\n\n**Biggest faller:** Sunday Scaries, whose record is running ahead of expected wins. Your playoff outlook is strong, with the current roster projecting as a top-two seed.",
+    "### Model-assisted forecast\n1. Fourth & Long (10–4)\n2. Uptown Blitz (9–5)\n3. Lake Effect (8–6)\n4. Sunday Scaries (8–6)\n5. Goal Line Fade (6–8)\n6. Punt Intended (5–9)\n\n**Biggest riser:** Fourth & Long, driven by the league's best all-play profile and a top-two power score.\n\n**Biggest faller:** Sunday Scaries, whose record is running ahead of expected wins. Your playoff outlook is strong, with the current roster projecting as a top-two seed.",
 };
 
 type ResultState =

@@ -242,7 +242,7 @@ const REASON_LABELS: Record<string, string> = {
   held_out_batches_below_minimum: "Held-out batches are below the required minimum.",
   held_out_samples_below_minimum: "Held-out samples are below the required minimum.",
   prediction_intervals_not_calibrated: "Prediction intervals are not calibrated.",
-  shadow_publication_disabled: "Publication is intentionally disabled — shadow evidence only.",
+  shadow_publication_disabled: "Publication is intentionally disabled; shadow evidence only.",
   ros_champion_artifact_absent: "No admitted champion artifact exists.",
   ros_champion_artifact_invalid: "The champion artifact failed validation.",
   ros_champion_artifact_scoring_profile_mismatch:
@@ -288,7 +288,7 @@ export function describeRosProjectionRail(status: RosProjectionStatus): RosRailD
           .sort((left, right) => (left < right ? 1 : left > right ? -1 : 0))[0];
   const artifactSummary = status.artifact.present
     ? `Champion artifact admitted for ${status.artifact.scoringProfileKey} (evidence through ${status.artifact.evidenceThroughSeason}).`
-    : "No champion artifact admitted — the rail cannot authorize live publication.";
+    : "No champion artifact admitted, so the rail cannot authorize live publication.";
   return {
     isShadow,
     statusLabel: isShadow ? "Fail-closed shadow" : "Publishable",

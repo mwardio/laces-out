@@ -80,7 +80,7 @@ function ExecutionLink({ execution }: { readonly execution: Execution }) {
     return (
       <div className={styles.readOnlyNote}>
         <ShieldAlert size={15} aria-hidden="true" />
-        <span>{execution.label}. Laces Out does not make roster changes.</span>
+        <span>{execution.label}. No roster changes are made on your behalf.</span>
       </div>
     );
   }

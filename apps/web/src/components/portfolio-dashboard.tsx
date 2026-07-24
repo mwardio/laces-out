@@ -429,7 +429,7 @@ export function PortfolioDashboard({ afterOverview }: { readonly afterOverview?:
             <p className="provider-description">
               {yahooComingSoon
                 ? "Yahoo sign-in and read-only league sync are coming soon."
-                : "Laces Out implements Yahoo’s official Authorization Code + PKCE flow. With approved Fantasy API credentials configured, it discovers leagues and performs read-only settings, team, roster, standings, and scoreboard sync."}
+                : "Yahoo sign-in uses the official Authorization Code + PKCE flow. With approved Fantasy API credentials configured, leagues are discovered automatically and settings, team, roster, standings, and scoreboard data sync read-only."}
             </p>
             <div className="provider-facts">
               <span>
@@ -506,7 +506,7 @@ export function PortfolioDashboard({ afterOverview }: { readonly afterOverview?:
                 </p>
                 <p>
                   <ShieldAlert size={14} /> <strong>Credential boundary:</strong> ESPN passwords,
-                  cookies, SWID, and espn_s2 never enter Laces Out.
+                  cookies, SWID, and espn_s2 never enter the app.
                 </p>
               </div>
             ) : null}

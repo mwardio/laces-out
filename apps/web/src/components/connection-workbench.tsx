@@ -459,7 +459,7 @@ export function ConnectionWorkbench() {
       setYahooDisconnectCandidate(null);
       setYahooActionMessage({
         tone: "success",
-        text: "Stored Yahoo authorization removed from Laces Out. Previously synchronized league data remains available as last-known data; no Yahoo revocation request was made.",
+        text: "Stored Yahoo authorization removed. Previously synchronized league data remains available as last-known data; no Yahoo revocation request was made.",
       });
       await refreshYahooConnections();
     } catch (error) {
@@ -803,9 +803,9 @@ export function ConnectionWorkbench() {
                               Remove stored Yahoo authorization?
                             </strong>
                             <p>
-                              Laces Out will delete its local Yahoo credential and stop future syncs
-                              for this connection. Previously synchronized league data remains as
-                              last-known data. This does not revoke access at Yahoo.
+                              This deletes the locally stored Yahoo credential and stops future
+                              syncs for this connection. Previously synchronized league data remains
+                              as last-known data. This does not revoke access at Yahoo.
                             </p>
                           </div>
                           <div className="yahoo-disconnect-confirmation__actions">
@@ -958,7 +958,7 @@ export function ConnectionWorkbench() {
           </div>
           <p>
             Choose one connection method. One-click sync is the quickest setup; the Chrome companion
-            is only for automatic refreshes. Both send league data—not your ESPN password or
+            is only for automatic refreshes. Both send league data, not your ESPN password or
             cookies.
           </p>
 

@@ -831,7 +831,7 @@ export function RankingsStudio() {
     )
       return;
     const source = selected;
-    const name = `${source.name} — my board`.slice(0, 160);
+    const name = `${source.name} (my board)`.slice(0, 160);
     setActionState("working");
     setMessage(null);
     try {

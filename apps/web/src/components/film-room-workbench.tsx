@@ -656,7 +656,7 @@ export function FilmRoomWorkbench() {
           <p>
             Ask why a recommendation leads the board. Included Gemini works without setup; add an
             OpenAI, Anthropic, Gemini, or OpenRouter key only to choose the model and use
-            independent limits. Laces Out stores no prompts or answers.
+            independent limits. No prompts or answers are stored.
           </p>
         </div>
         <div className={styles.securityChip}>
@@ -673,7 +673,7 @@ export function FilmRoomWorkbench() {
           <KeyRound size={18} />
           <span>
             <strong>Ready out of the box</strong>
-            <small>Gemini 3.6 Flash uses the Laces Out key.</small>
+            <small>Gemini 3.6 Flash uses the included key.</small>
           </span>
         </div>
         <div>
