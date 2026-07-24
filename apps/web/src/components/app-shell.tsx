@@ -265,14 +265,6 @@ export function AppShell({ active, children, compact = false, context }: AppShel
             <p>Synced league facts stay separate from sample previews.</p>
           </div>
         </section>
-
-        <div className="sidebar-footnote">
-          <span className="sidebar-footnote__stitch" aria-hidden="true" />
-          <span>
-            <strong>Built for league day</strong>
-            <small>Private, transparent, yours.</small>
-          </span>
-        </div>
       </aside>
 
       <div className="app-frame">
