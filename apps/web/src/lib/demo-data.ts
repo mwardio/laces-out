@@ -1,7 +1,7 @@
 export type Provider = "Yahoo" | "ESPN";
 export type DraftFormat = "Auction" | "Snake";
 export type Position = "ALL" | "QB" | "RB" | "WR" | "TE";
-export type PlayerPosition = Exclude<Position, "ALL">;
+export type PlayerPosition = Exclude<Position, "ALL"> | "K";
 
 export interface LeagueSummary {
   id: string;
@@ -60,6 +60,8 @@ export interface DraftPlayer {
   availability: number;
   note: string;
   signal: "target" | "value" | "neutral" | "risk";
+  /** Kept off the board until a search names the player. */
+  hidden?: true;
 }
 
 export interface DraftTeam {
@@ -436,7 +438,37 @@ export const draftPlayers: readonly DraftPlayer[] = [
     note: "High route participation; price is close to full value.",
     signal: "neutral",
   },
+  {
+    id: "p00",
+    rank: 265,
+    name: "Ray Finkle",
+    position: "K",
+    team: "MIA",
+    bye: 5,
+    tier: 26,
+    projected: 0,
+    floor: 0,
+    ceiling: 0,
+    aav: 1,
+    fairValue: 1,
+    adp: 265.9,
+    availability: 100,
+    note: "Stetson '80. One career attempt, wide right. The laces were in.",
+    signal: "risk",
+    hidden: true,
+  },
 ] as const;
+
+const finkleAliases = ["ray finkle", "finkle", "einhorn"];
+
+/** True once the search names the hidden kicker — either name works; Finkle is Einhorn. */
+export function revealsRayFinkle(query: string): boolean {
+  const normalized = query.trim().toLowerCase();
+  return (
+    normalized.length >= 4 &&
+    finkleAliases.some((alias) => alias.includes(normalized) || normalized.includes(alias))
+  );
+}
 
 export const draftTeams: readonly DraftTeam[] = [
   {

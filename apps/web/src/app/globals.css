@@ -6536,6 +6536,10 @@
     color: var(--orange-600);
     background: var(--orange-100);
   }
+  .position-avatar--k {
+    color: var(--red-600);
+    background: var(--red-100);
+  }
   .position-avatar--large {
     width: 41px;
     height: 41px;

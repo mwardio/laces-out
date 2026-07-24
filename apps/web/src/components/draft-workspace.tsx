@@ -37,6 +37,7 @@ import {
   draftPlayers,
   draftTeams,
   initialDraftEvents,
+  revealsRayFinkle,
   type DraftEvent,
   type DraftFormat,
   type DraftPlayer,
@@ -102,11 +103,13 @@ export function DraftWorkspace() {
   const filteredPlayers = useMemo(() => {
     const normalized = search.trim().toLowerCase();
     return draftPlayers.filter((player) => {
-      const matchesPosition = position === "ALL" || player.position === position;
-      const matchesSearch =
+      if (draftedIds.has(player.id)) return false;
+      if (position !== "ALL" && player.position !== position) return false;
+      if (player.hidden) return revealsRayFinkle(search);
+      return (
         !normalized ||
-        `${player.name} ${player.team} ${player.position}`.toLowerCase().includes(normalized);
-      return matchesPosition && matchesSearch && !draftedIds.has(player.id);
+        `${player.name} ${player.team} ${player.position}`.toLowerCase().includes(normalized)
+      );
     });
   }, [draftedIds, position, search]);
 
@@ -173,11 +176,17 @@ export function DraftWorkspace() {
         ),
       );
       setNotice(
-        `${selectedPlayer.name} recorded to ${winner.abbreviation} for $${amount}. Demo state only.`,
+        selectedPlayer.hidden
+          ? `Einhorn is Finkle! Finkle is Einhorn! (Sold to ${winner.abbreviation} for $${amount}.)`
+          : `${selectedPlayer.name} recorded to ${winner.abbreviation} for $${amount}. Demo state only.`,
       );
     } else {
       setSnakePick((current) => current + 1);
-      setNotice(`${selectedPlayer.name} recorded at pick ${snakePick}. Demo state only.`);
+      setNotice(
+        selectedPlayer.hidden
+          ? `Einhorn is Finkle! Finkle is Einhorn! (Pick ${snakePick}.)`
+          : `${selectedPlayer.name} recorded at pick ${snakePick}. Demo state only.`,
+      );
     }
 
     const nextPlayer = filteredPlayers.find((player) => player.id !== selectedPlayer.id);

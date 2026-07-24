@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from "next";
 import { Sora } from "next/font/google";
 import type { ReactNode } from "react";
 
+import { FinkleCode } from "../components/finkle-code";
 import { publicSiteUrl } from "../lib/public-site";
 
 import "./globals.css";
@@ -51,7 +52,9 @@ export const viewport: Viewport = {
 export default function RootLayout({ children }: Readonly<{ children: ReactNode }>) {
   return (
     <html className={brandFont.variable} lang="en">
-      <body>{children}</body>
+      <body>
+        <FinkleCode>{children}</FinkleCode>
+      </body>
     </html>
   );
 }
