@@ -663,286 +663,11 @@ export function ConnectionWorkbench() {
         </div>
       ) : null}
 
-      <a className="connection-mobile-espn-jump" href="#espn-connection">
-        <span className="connection-provider-logo connection-provider-logo--espn">E</span>
-        <span>
-          <small>Ready now</small>
-          <strong>Connect ESPN</strong>
-          <span>One-click pairing and automatic refresh</span>
-        </span>
-        <ArrowRight size={17} />
-      </a>
-
       <section
         className="connection-grid"
         id="data-health"
         aria-label="Fantasy provider connections"
       >
-        <article className="connection-provider connection-provider--yahoo">
-          <div className="connection-provider__head">
-            <span className="connection-provider-logo connection-provider-logo--yahoo">Y!</span>
-            <div>
-              <p className="eyebrow">
-                {yahooComingSoon ? "Yahoo Fantasy · Coming soon" : "Official Yahoo sign-in"}
-              </p>
-              <h2>Connect Yahoo</h2>
-            </div>
-            <span
-              className={`connection-provider-state${yahooConnections.length > 0 && !yahooNeedsReauthorization ? " connection-provider-state--connected" : yahooComingSoon ? " connection-provider-state--pending" : ""}`}
-            >
-              {yahooPanelState}
-            </span>
-          </div>
-          <p>
-            {yahooComingSoon
-              ? "Yahoo sign-in and read-only league sync are coming soon."
-              : "Authorize Laces Out without sharing your Yahoo password. Tokens remain encrypted on the configured server, and synced league access is read-only."}
-          </p>
-          <ul className="connection-capabilities">
-            <li>
-              <Check size={14} />
-              {yahooComingSoon
-                ? "Private league and team discovery"
-                : "Connector path for private league and team discovery"}
-            </li>
-            <li>
-              <Check size={14} /> Read-only settings, rosters, standings, and scoreboards
-            </li>
-            <li>
-              <Check size={14} /> Server-side token exchange and encrypted token storage
-            </li>
-          </ul>
-          {!yahooComingSoon || yahooConnections.length > 0 ? (
-            <div className="yahoo-connection-manager" aria-live="polite">
-              <div className="yahoo-connection-manager__heading">
-                <span>
-                  <ShieldCheck size={16} />
-                  <strong>Yahoo connections</strong>
-                </span>
-                <button
-                  className="button button--outline button--small"
-                  type="button"
-                  onClick={() => void refreshYahooConnections()}
-                  disabled={yahooConnectionsState === "working" || yahooActionKey !== null}
-                >
-                  <RefreshCw
-                    className={yahooConnectionsState === "working" ? "spin" : undefined}
-                    size={14}
-                  />
-                  Refresh
-                </button>
-              </div>
-              {yahooConnectionsError ? (
-                <p className="connection-error" role="alert">
-                  <TriangleAlert size={14} />
-                  {yahooConnectionsError}
-                </p>
-              ) : null}
-              {yahooConnectionsState === "working" && yahooConnections.length === 0 ? (
-                <p className="yahoo-connection-manager__empty">Checking Yahoo connection status…</p>
-              ) : yahooConnections.length === 0 ? (
-                <p className="yahoo-connection-manager__empty">
-                  {yahooComingSoon
-                    ? "Yahoo sign-in is coming soon. No action is needed here yet."
-                    : "No Yahoo account is connected yet. Select Connect Yahoo to begin."}
-                </p>
-              ) : (
-                <ul className="yahoo-connection-list">
-                  {yahooConnections.map((connection) => (
-                    <li key={connection.connectionId}>
-                      <div className="yahoo-connection-list__summary">
-                        <span className={`provider-health provider-health--${connection.health}`}>
-                          {yahooHealthLabel(connection.health)}
-                        </span>
-                        <strong>{connection.displayName}</strong>
-                        <small>
-                          Last successful sync:{" "}
-                          {formatYahooTime(connection.lastSuccessfulAt, "Never")}
-                        </small>
-                      </div>
-                      <div className="yahoo-connection-list__actions">
-                        <button
-                          className="button button--outline button--small"
-                          type="button"
-                          onClick={() => void runYahooSync(connection.connectionId)}
-                          disabled={
-                            yahooActionKey !== null ||
-                            connection.health === "reauthorize" ||
-                            connection.health === "disabled"
-                          }
-                        >
-                          {yahooActionKey === `${connection.connectionId}:discover` ? (
-                            <LoaderCircle className="spin" size={14} />
-                          ) : (
-                            <RefreshCw size={14} />
-                          )}
-                          Discover & sync
-                        </button>
-                        <button
-                          className="button button--outline button--small"
-                          type="button"
-                          onClick={() => {
-                            setYahooActionMessage(null);
-                            setYahooDisconnectCandidate(connection.connectionId);
-                          }}
-                          disabled={yahooActionKey !== null}
-                        >
-                          <Unplug size={14} />
-                          Disconnect
-                        </button>
-                      </div>
-                      {yahooDisconnectCandidate === connection.connectionId ? (
-                        <div
-                          className="yahoo-disconnect-confirmation"
-                          role="alertdialog"
-                          aria-modal="false"
-                          aria-labelledby={"yahoo-disconnect-" + connection.connectionId}
-                        >
-                          <div>
-                            <strong id={"yahoo-disconnect-" + connection.connectionId}>
-                              Remove stored Yahoo authorization?
-                            </strong>
-                            <p>
-                              This deletes the locally stored Yahoo credential and stops future
-                              syncs for this connection. Previously synchronized league data remains
-                              as last-known data. This does not revoke access at Yahoo.
-                            </p>
-                          </div>
-                          <div className="yahoo-disconnect-confirmation__actions">
-                            <button
-                              className="button button--outline button--small"
-                              type="button"
-                              onClick={() => setYahooDisconnectCandidate(null)}
-                              disabled={yahooActionKey !== null}
-                            >
-                              Cancel
-                            </button>
-                            <button
-                              className="button button--danger button--small"
-                              type="button"
-                              onClick={() => void disconnectYahoo(connection.connectionId)}
-                              disabled={yahooActionKey !== null}
-                            >
-                              {yahooActionKey === connection.connectionId + ":disconnect" ? (
-                                <LoaderCircle className="spin" size={14} />
-                              ) : (
-                                <Unplug size={14} />
-                              )}
-                              Remove stored authorization
-                            </button>
-                          </div>
-                        </div>
-                      ) : null}
-                      {connection.lastErrorCode ? (
-                        <p className="yahoo-connection-list__error">
-                          Last attempt needs attention ·{" "}
-                          {formatYahooTime(connection.lastErrorAt, "time unavailable")}
-                        </p>
-                      ) : null}
-                      {connection.leagues.length > 0 ? (
-                        <ul className="yahoo-league-list">
-                          {connection.leagues.map((league) => {
-                            const leagueActionKey = `${connection.connectionId}:${league.externalKey}`;
-                            return (
-                              <li key={league.leagueSeasonId}>
-                                <div>
-                                  <strong>{league.name}</strong>
-                                  <small>
-                                    {league.season}
-                                    {league.currentWeek ? ` · Week ${league.currentWeek}` : ""} ·
-                                    Last synced {formatYahooTime(league.lastSyncedAt, "never")}
-                                  </small>
-                                </div>
-                                <button
-                                  className="button button--outline button--small"
-                                  type="button"
-                                  onClick={() =>
-                                    void runYahooSync(connection.connectionId, {
-                                      externalKey: league.externalKey,
-                                      name: league.name,
-                                    })
-                                  }
-                                  disabled={yahooActionKey !== null}
-                                  aria-label={`Sync ${league.name}`}
-                                >
-                                  {yahooActionKey === leagueActionKey ? (
-                                    <LoaderCircle className="spin" size={14} />
-                                  ) : (
-                                    <RefreshCw size={14} />
-                                  )}
-                                  Sync
-                                </button>
-                              </li>
-                            );
-                          })}
-                        </ul>
-                      ) : (
-                        <p className="yahoo-connection-list__empty">
-                          No football leagues discovered yet.
-                        </p>
-                      )}
-                    </li>
-                  ))}
-                </ul>
-              )}
-              {yahooActionMessage ? (
-                <p
-                  className={`yahoo-action-message yahoo-action-message--${yahooActionMessage.tone}`}
-                  role={yahooActionMessage.tone === "error" ? "alert" : "status"}
-                >
-                  {yahooActionMessage.tone === "success" ? (
-                    <Check size={14} />
-                  ) : (
-                    <TriangleAlert size={14} />
-                  )}
-                  {yahooActionMessage.text}
-                </p>
-              ) : null}
-            </div>
-          ) : (
-            <div className="yahoo-coming-soon-note" role="status">
-              <ShieldCheck size={15} />
-              <span>
-                <strong>No setup needed yet.</strong> The connection button will appear here when
-                Yahoo sync opens.
-              </span>
-            </div>
-          )}
-          {yahooError ? (
-            <p className="connection-error" role="alert">
-              <TriangleAlert size={14} />
-              {yahooError}
-            </p>
-          ) : null}
-          <button
-            className="button button--dark button--full"
-            type="button"
-            onClick={() => void startYahoo()}
-            disabled={
-              yahooState === "working" ||
-              yahooActionKey !== null ||
-              (yahooComingSoon && yahooConnections.length === 0)
-            }
-          >
-            {yahooState === "working" ? (
-              <LoaderCircle className="spin" size={16} />
-            ) : (
-              <Link2 size={16} />
-            )}
-            {yahooState === "working"
-              ? "Opening Yahoo…"
-              : yahooComingSoon && yahooConnections.length === 0
-                ? "Yahoo coming soon"
-                : yahooConnections.length > 0 || yahooState === "done"
-                  ? "Reconnect Yahoo"
-                  : "Connect Yahoo"}
-            {yahooState !== "working" ? <ArrowRight size={15} /> : null}
-          </button>
-          <small className="provider-attribution">
-            Official Yahoo Fantasy attribution is displayed throughout the signed-in locker room.
-          </small>
-        </article>
-
         <article className="connection-provider connection-provider--espn" id="espn-connection">
           <div className="connection-provider__head">
             <span className="connection-provider-logo connection-provider-logo--espn">E</span>
@@ -1481,6 +1206,271 @@ export function ConnectionWorkbench() {
               </ul>
             )}
           </div>
+        </article>
+
+        <article className="connection-provider connection-provider--yahoo">
+          <div className="connection-provider__head">
+            <span className="connection-provider-logo connection-provider-logo--yahoo">Y!</span>
+            <div>
+              <p className="eyebrow">
+                {yahooComingSoon ? "Yahoo Fantasy · Coming soon" : "Official Yahoo sign-in"}
+              </p>
+              <h2>Connect Yahoo</h2>
+            </div>
+            <span
+              className={`connection-provider-state${yahooConnections.length > 0 && !yahooNeedsReauthorization ? " connection-provider-state--connected" : yahooComingSoon ? " connection-provider-state--pending" : ""}`}
+            >
+              {yahooPanelState}
+            </span>
+          </div>
+          <p>
+            {yahooComingSoon
+              ? "Yahoo sign-in and read-only league sync are coming soon."
+              : "Authorize Laces Out without sharing your Yahoo password. Tokens remain encrypted on the configured server, and synced league access is read-only."}
+          </p>
+          <ul className="connection-capabilities">
+            <li>
+              <Check size={14} />
+              {yahooComingSoon
+                ? "Private league and team discovery"
+                : "Connector path for private league and team discovery"}
+            </li>
+            <li>
+              <Check size={14} /> Read-only settings, rosters, standings, and scoreboards
+            </li>
+            <li>
+              <Check size={14} /> Server-side token exchange and encrypted token storage
+            </li>
+          </ul>
+          {!yahooComingSoon || yahooConnections.length > 0 ? (
+            <div className="yahoo-connection-manager" aria-live="polite">
+              <div className="yahoo-connection-manager__heading">
+                <span>
+                  <ShieldCheck size={16} />
+                  <strong>Yahoo connections</strong>
+                </span>
+                <button
+                  className="button button--outline button--small"
+                  type="button"
+                  onClick={() => void refreshYahooConnections()}
+                  disabled={yahooConnectionsState === "working" || yahooActionKey !== null}
+                >
+                  <RefreshCw
+                    className={yahooConnectionsState === "working" ? "spin" : undefined}
+                    size={14}
+                  />
+                  Refresh
+                </button>
+              </div>
+              {yahooConnectionsError ? (
+                <p className="connection-error" role="alert">
+                  <TriangleAlert size={14} />
+                  {yahooConnectionsError}
+                </p>
+              ) : null}
+              {yahooConnectionsState === "working" && yahooConnections.length === 0 ? (
+                <p className="yahoo-connection-manager__empty">Checking Yahoo connection status…</p>
+              ) : yahooConnections.length === 0 ? (
+                <p className="yahoo-connection-manager__empty">
+                  {yahooComingSoon
+                    ? "Yahoo sign-in is coming soon. No action is needed here yet."
+                    : "No Yahoo account is connected yet. Select Connect Yahoo to begin."}
+                </p>
+              ) : (
+                <ul className="yahoo-connection-list">
+                  {yahooConnections.map((connection) => (
+                    <li key={connection.connectionId}>
+                      <div className="yahoo-connection-list__summary">
+                        <span className={`provider-health provider-health--${connection.health}`}>
+                          {yahooHealthLabel(connection.health)}
+                        </span>
+                        <strong>{connection.displayName}</strong>
+                        <small>
+                          Last successful sync:{" "}
+                          {formatYahooTime(connection.lastSuccessfulAt, "Never")}
+                        </small>
+                      </div>
+                      <div className="yahoo-connection-list__actions">
+                        <button
+                          className="button button--outline button--small"
+                          type="button"
+                          onClick={() => void runYahooSync(connection.connectionId)}
+                          disabled={
+                            yahooActionKey !== null ||
+                            connection.health === "reauthorize" ||
+                            connection.health === "disabled"
+                          }
+                        >
+                          {yahooActionKey === `${connection.connectionId}:discover` ? (
+                            <LoaderCircle className="spin" size={14} />
+                          ) : (
+                            <RefreshCw size={14} />
+                          )}
+                          Discover & sync
+                        </button>
+                        <button
+                          className="button button--outline button--small"
+                          type="button"
+                          onClick={() => {
+                            setYahooActionMessage(null);
+                            setYahooDisconnectCandidate(connection.connectionId);
+                          }}
+                          disabled={yahooActionKey !== null}
+                        >
+                          <Unplug size={14} />
+                          Disconnect
+                        </button>
+                      </div>
+                      {yahooDisconnectCandidate === connection.connectionId ? (
+                        <div
+                          className="yahoo-disconnect-confirmation"
+                          role="alertdialog"
+                          aria-modal="false"
+                          aria-labelledby={"yahoo-disconnect-" + connection.connectionId}
+                        >
+                          <div>
+                            <strong id={"yahoo-disconnect-" + connection.connectionId}>
+                              Remove stored Yahoo authorization?
+                            </strong>
+                            <p>
+                              This deletes the locally stored Yahoo credential and stops future
+                              syncs for this connection. Previously synchronized league data remains
+                              as last-known data. This does not revoke access at Yahoo.
+                            </p>
+                          </div>
+                          <div className="yahoo-disconnect-confirmation__actions">
+                            <button
+                              className="button button--outline button--small"
+                              type="button"
+                              onClick={() => setYahooDisconnectCandidate(null)}
+                              disabled={yahooActionKey !== null}
+                            >
+                              Cancel
+                            </button>
+                            <button
+                              className="button button--danger button--small"
+                              type="button"
+                              onClick={() => void disconnectYahoo(connection.connectionId)}
+                              disabled={yahooActionKey !== null}
+                            >
+                              {yahooActionKey === connection.connectionId + ":disconnect" ? (
+                                <LoaderCircle className="spin" size={14} />
+                              ) : (
+                                <Unplug size={14} />
+                              )}
+                              Remove stored authorization
+                            </button>
+                          </div>
+                        </div>
+                      ) : null}
+                      {connection.lastErrorCode ? (
+                        <p className="yahoo-connection-list__error">
+                          Last attempt needs attention ·{" "}
+                          {formatYahooTime(connection.lastErrorAt, "time unavailable")}
+                        </p>
+                      ) : null}
+                      {connection.leagues.length > 0 ? (
+                        <ul className="yahoo-league-list">
+                          {connection.leagues.map((league) => {
+                            const leagueActionKey = `${connection.connectionId}:${league.externalKey}`;
+                            return (
+                              <li key={league.leagueSeasonId}>
+                                <div>
+                                  <strong>{league.name}</strong>
+                                  <small>
+                                    {league.season}
+                                    {league.currentWeek ? ` · Week ${league.currentWeek}` : ""} ·
+                                    Last synced {formatYahooTime(league.lastSyncedAt, "never")}
+                                  </small>
+                                </div>
+                                <button
+                                  className="button button--outline button--small"
+                                  type="button"
+                                  onClick={() =>
+                                    void runYahooSync(connection.connectionId, {
+                                      externalKey: league.externalKey,
+                                      name: league.name,
+                                    })
+                                  }
+                                  disabled={yahooActionKey !== null}
+                                  aria-label={`Sync ${league.name}`}
+                                >
+                                  {yahooActionKey === leagueActionKey ? (
+                                    <LoaderCircle className="spin" size={14} />
+                                  ) : (
+                                    <RefreshCw size={14} />
+                                  )}
+                                  Sync
+                                </button>
+                              </li>
+                            );
+                          })}
+                        </ul>
+                      ) : (
+                        <p className="yahoo-connection-list__empty">
+                          No football leagues discovered yet.
+                        </p>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {yahooActionMessage ? (
+                <p
+                  className={`yahoo-action-message yahoo-action-message--${yahooActionMessage.tone}`}
+                  role={yahooActionMessage.tone === "error" ? "alert" : "status"}
+                >
+                  {yahooActionMessage.tone === "success" ? (
+                    <Check size={14} />
+                  ) : (
+                    <TriangleAlert size={14} />
+                  )}
+                  {yahooActionMessage.text}
+                </p>
+              ) : null}
+            </div>
+          ) : (
+            <div className="yahoo-coming-soon-note" role="status">
+              <ShieldCheck size={15} />
+              <span>
+                <strong>No setup needed yet.</strong> The connection button will appear here when
+                Yahoo sync opens.
+              </span>
+            </div>
+          )}
+          {yahooError ? (
+            <p className="connection-error" role="alert">
+              <TriangleAlert size={14} />
+              {yahooError}
+            </p>
+          ) : null}
+          <button
+            className="button button--dark button--full"
+            type="button"
+            onClick={() => void startYahoo()}
+            disabled={
+              yahooState === "working" ||
+              yahooActionKey !== null ||
+              (yahooComingSoon && yahooConnections.length === 0)
+            }
+          >
+            {yahooState === "working" ? (
+              <LoaderCircle className="spin" size={16} />
+            ) : (
+              <Link2 size={16} />
+            )}
+            {yahooState === "working"
+              ? "Opening Yahoo…"
+              : yahooComingSoon && yahooConnections.length === 0
+                ? "Yahoo coming soon"
+                : yahooConnections.length > 0 || yahooState === "done"
+                  ? "Reconnect Yahoo"
+                  : "Connect Yahoo"}
+            {yahooState !== "working" ? <ArrowRight size={15} /> : null}
+          </button>
+          <small className="provider-attribution">
+            Official Yahoo Fantasy attribution is displayed throughout the signed-in locker room.
+          </small>
         </article>
       </section>
     </div>

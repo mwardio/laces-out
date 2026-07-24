@@ -529,7 +529,6 @@ function withoutInlineSourceTags(value: string): string {
 interface FeatureDefinition {
   readonly title: string;
   readonly instructions: string;
-  readonly sources: AiFeatureResponse["sources"];
 }
 
 const FEATURE_DEFINITIONS: Readonly<Record<AiFeatureName, FeatureDefinition>> = {
@@ -538,14 +537,12 @@ const FEATURE_DEFINITIONS: Readonly<Record<AiFeatureName, FeatureDefinition>> = 
     instructions: `Write a compact weekly briefing for the member's claimed team.
 Cover where the team stands, the current opponent, the highest-leverage lineup, waiver, or trade issue, and exactly one concrete action to take next.
 Separate facts from recommendations. If the current week, opponent, projections, or team claim is missing, say so instead of filling the gap.`,
-    sources: ["League overview", "Decision Desk", "League analytics"],
   },
   "start-sit": {
     title: "Start / sit review",
     instructions: `Review the deterministic lineup result for the member's claimed team.
 Confirm the clear calls, explain only the genuinely close decisions, and flag bye, injury-status, lock, or eligibility risk only when it appears in the supplied data.
 Recommend only players and slot changes present in the Decision Desk lineup result. If there are no changes, clearly say the lineup is already optimized under the current projection set.`,
-    sources: ["Decision Desk", "League overview"],
   },
   "waiver-scan": {
     title: "Waiver wire scan",
@@ -553,21 +550,18 @@ Recommend only players and slot changes present in the Decision Desk lineup resu
 Recommend only add/drop pairs present in Decision Desk waiver recommendations. Never name an unlisted free agent and never recommend an add without its modeled drop or open roster spot.
 For each worthwhile move, compare the incoming player with the outgoing player, cite weighted roster gain and lineup gain when supplied, and distinguish immediate help from depth.
 If the recommendation list is empty, say there are no worthwhile waiver additions right now and recommend holding the roster. Do not manufacture an action for the sake of having one.`,
-    sources: ["Decision Desk", "League overview"],
   },
   "trade-builder": {
     title: "Trade finder",
     instructions: `Evaluate only the legal trade packages produced by the Decision Desk trade finder.
 Rank the proposals by value to the member, plausibility for the other roster, fairness, and fit with positional strengths and weaknesses. It is acceptable—and preferred—to say none are worth sending.
 For the best worthwhile proposal, show who to send and receive, explain both teams' incentives, name the main risk, and draft a short natural message to the other manager. Never invent players or alter a package.`,
-    sources: ["Decision Desk", "League analytics", "League overview"],
   },
   "standings-prediction": {
     title: "Rest-of-season forecast",
     instructions: `Forecast the final regular-season standings from the current standings, official scoring history, all-play performance, power ranking, positional strength, and available projections.
 Give an ordered finish with a plausible final record for every team, one concise reason per team, the biggest projected riser and faller, and the member's playoff outlook.
 Label this clearly as a model-assisted forecast rather than a fact. Do not imply knowledge of future injuries, schedules, or news that is not in the supplied data, and call out weak data coverage.`,
-    sources: ["League analytics", "League overview", "Decision Desk"],
   },
 };
 
@@ -832,7 +826,6 @@ export class AiService {
           inputTokens: completion.inputTokens,
           outputTokens: completion.outputTokens,
         },
-        sources: ["League overview", "Decision Desk", "League analytics"],
       };
     } catch (error) {
       return this.#handleProviderFailure({
@@ -872,7 +865,6 @@ export class AiService {
         answer: noAction,
         generatedAt: generatedAt.toISOString(),
         usage: { inputTokens: 0, outputTokens: 0 },
-        sources: definition.sources,
       };
     }
 
@@ -920,7 +912,6 @@ export class AiService {
           inputTokens: completion.inputTokens,
           outputTokens: completion.outputTokens,
         },
-        sources: definition.sources,
       };
     } catch (error) {
       return this.#handleProviderFailure({

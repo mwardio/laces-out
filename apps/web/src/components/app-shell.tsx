@@ -1,7 +1,6 @@
 "use client";
 
 import {
-  Activity,
   ArrowUpRight,
   BarChart3,
   BrainCircuit,
@@ -85,13 +84,6 @@ const primaryNavigation = [
     section: "ai" as const,
   },
   {
-    href: "/connections",
-    label: "Connections",
-    description: "Sync ESPN · Yahoo coming soon",
-    icon: Cable,
-    section: "connections" as const,
-  },
-  {
     href: "/rankings",
     label: "Rankings",
     description: "Boards, values, and cheat sheets",
@@ -111,6 +103,13 @@ const primaryNavigation = [
     description: "Auction and snake draft rooms",
     icon: Radio,
     section: "draft" as const,
+  },
+  {
+    href: "/connections",
+    label: "Connections",
+    description: "Sync ESPN · Yahoo coming soon",
+    icon: Cable,
+    section: "connections" as const,
   },
 ] as const;
 
@@ -253,10 +252,6 @@ export function AppShell({ active, children, compact = false, context }: AppShel
               <span>Members</span>
             </Link>
           ) : null}
-          <Link className="nav-item" href="/connections#data-health">
-            <Activity size={18} />
-            <span>Data Health</span>
-          </Link>
         </nav>
 
         <div className="sidebar-spacer" />
@@ -381,20 +376,6 @@ export function AppShell({ active, children, compact = false, context }: AppShel
                     </Link>
                   );
                 })}
-              <Link
-                className="mobile-menu-grid__health"
-                href="/connections#data-health"
-                onClick={() => setMobileMenuOpen(false)}
-              >
-                <span className="mobile-menu-grid__icon">
-                  <Activity size={18} />
-                </span>
-                <span>
-                  <strong>Data Health</strong>
-                  <small>Freshness, sources, and checks</small>
-                </span>
-                <ArrowUpRight size={14} />
-              </Link>
             </nav>
 
             {isAdmin ? (

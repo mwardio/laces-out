@@ -266,7 +266,6 @@ describe("AI service", () => {
       accessMode: "byok",
       answer: "Start Reed.",
       league: { id: LEAGUE_ID, name: "Wide Right League" },
-      sources: ["League overview", "Decision Desk", "League analytics"],
     });
     expect(complete.mock.calls[0]?.[0]).toMatchObject({
       apiKey: "sk-private-secret",

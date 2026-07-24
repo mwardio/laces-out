@@ -291,9 +291,10 @@ function FilmRoomTour() {
                 the moves that fit your risk tolerance.
               </p>
               <footer>
-                <span>League overview</span>
-                <span>Decision Desk</span>
-                <span>League analytics</span>
+                <p>
+                  Grounded in Laces Out’s own computed league data (overview, Decision Desk, and
+                  analytics), not the model’s outside knowledge.
+                </p>
               </footer>
             </article>
           </div>
@@ -1093,9 +1094,10 @@ export function FilmRoomWorkbench() {
                   <AiAnswerContent answer={analysis.answer} />
                 </div>
                 <footer>
-                  {analysis.sources.map((source) => (
-                    <span key={source}>{source}</span>
-                  ))}
+                  <p>
+                    Grounded in Laces Out’s own computed league data (overview, Decision Desk, and
+                    analytics), not the model’s outside knowledge.
+                  </p>
                 </footer>
               </article>
             ) : analysisAction.state === "error" ? (

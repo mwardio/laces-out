@@ -73,7 +73,6 @@ describe("AI routes", () => {
         answer: "Start Reed. [Decision Desk]",
         generatedAt: NOW,
         usage: { inputTokens: 100, outputTokens: 20 },
-        sources: ["League overview", "Decision Desk", "League analytics"],
       }),
     );
     const generateFeature = vi.fn((): Promise<AiFeatureResponse> =>
@@ -88,7 +87,6 @@ describe("AI routes", () => {
         answer: "Hold this week. [Decision Desk]",
         generatedAt: NOW,
         usage: { inputTokens: 120, outputTokens: 24 },
-        sources: ["Decision Desk", "League overview"],
       }),
     );
     const ai: AiServicePort = {

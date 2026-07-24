@@ -136,7 +136,6 @@ function demoResult(feature: AiFeatureName, leagueId: string): AiFeatureResponse
     answer: DEMO_ANSWERS[feature],
     generatedAt: new Date().toISOString(),
     usage: { inputTokens: 0, outputTokens: 0 },
-    sources: ["League overview", "Decision Desk", "League analytics"],
   };
 }
 
@@ -387,9 +386,10 @@ export function AiCoachPanel({
                 <AiAnswerContent answer={result.result.answer} />
               </div>
               <footer>
-                {result.result.sources.map((source) => (
-                  <span key={source}>{source}</span>
-                ))}
+                <p>
+                  Grounded in Laces Out’s own computed league data (overview, Decision Desk, and
+                  analytics), not the model’s outside knowledge.
+                </p>
                 {!demo && result.result.usage.outputTokens === 0 ? (
                   <small>No model call needed</small>
                 ) : null}

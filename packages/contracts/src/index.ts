@@ -1766,7 +1766,6 @@ export const aiAnalysisResponseSchema = z
         outputTokens: z.number().int().nonnegative(),
       })
       .strict(),
-    sources: z.array(z.enum(["League overview", "Decision Desk", "League analytics"])).min(1),
   })
   .strict();
 export type AiAnalysisResponse = z.infer<typeof aiAnalysisResponseSchema>;
@@ -1811,7 +1810,6 @@ export const aiFeatureResponseSchema = z
         outputTokens: z.number().int().nonnegative(),
       })
       .strict(),
-    sources: z.array(z.enum(["League overview", "Decision Desk", "League analytics"])).min(1),
   })
   .strict();
 export type AiFeatureResponse = z.infer<typeof aiFeatureResponseSchema>;

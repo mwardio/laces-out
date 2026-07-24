@@ -417,53 +417,6 @@ export function PortfolioDashboard({ afterOverview }: { readonly afterOverview?:
         <div className="provider-grid">
           <article className="provider-card">
             <div className="provider-card__head">
-              <span className="provider-logo provider-logo--yahoo">Y!</span>
-              <div>
-                <h3>Yahoo Fantasy</h3>
-                <p>Official API + OAuth 2.0</p>
-              </div>
-              <span className="provider-state provider-state--pending">
-                {yahooComingSoon ? "Coming soon" : "OAuth ready"}
-              </span>
-            </div>
-            <p className="provider-description">
-              {yahooComingSoon
-                ? "Yahoo sign-in and read-only league sync are coming soon."
-                : "Yahoo sign-in uses the official Authorization Code + PKCE flow. With approved Fantasy API credentials configured, leagues are discovered automatically and settings, team, roster, standings, and scoreboard data sync read-only."}
-            </p>
-            <div className="provider-facts">
-              <span>
-                <Check size={14} /> OAuth + PKCE implemented
-              </span>
-              <span>
-                <Check size={14} /> Read-only league sync implemented
-              </span>
-              <span>
-                <ShieldAlert size={14} /> Provider draft polling not claimed
-              </span>
-            </div>
-            <button
-              className="button button--outline button--full"
-              type="button"
-              onClick={() => setProviderExpanded(providerExpanded === "Yahoo" ? null : "Yahoo")}
-            >
-              {providerExpanded === "Yahoo" ? "Hide readiness details" : "View readiness details"}
-              <ChevronDown className={providerExpanded === "Yahoo" ? "is-rotated" : ""} size={16} />
-            </button>
-            {providerExpanded === "Yahoo" ? (
-              <div className="provider-detail">
-                <Info size={15} />
-                <p>
-                  {yahooComingSoon
-                    ? "This tour is not a connected account. Yahoo sign-in is coming soon; when available, token exchange will stay server-side and refresh tokens will remain encrypted."
-                    : "This sample screen is not a connected account. After sign-in, Connections can start Yahoo authorization. Token exchange stays server-side and refresh tokens are encrypted."}
-                </p>
-              </div>
-            ) : null}
-          </article>
-
-          <article className="provider-card">
-            <div className="provider-card__head">
               <span className="provider-logo provider-logo--espn">E</span>
               <div>
                 <h3>ESPN Fantasy</h3>
@@ -511,6 +464,53 @@ export function PortfolioDashboard({ afterOverview }: { readonly afterOverview?:
                 <p>
                   <ShieldAlert size={14} /> <strong>Credential boundary:</strong> ESPN passwords,
                   cookies, SWID, and espn_s2 never enter the app.
+                </p>
+              </div>
+            ) : null}
+          </article>
+
+          <article className="provider-card">
+            <div className="provider-card__head">
+              <span className="provider-logo provider-logo--yahoo">Y!</span>
+              <div>
+                <h3>Yahoo Fantasy</h3>
+                <p>Official API + OAuth 2.0</p>
+              </div>
+              <span className="provider-state provider-state--pending">
+                {yahooComingSoon ? "Coming soon" : "OAuth ready"}
+              </span>
+            </div>
+            <p className="provider-description">
+              {yahooComingSoon
+                ? "Yahoo sign-in and read-only league sync are coming soon."
+                : "Yahoo sign-in uses the official Authorization Code + PKCE flow. With approved Fantasy API credentials configured, leagues are discovered automatically and settings, team, roster, standings, and scoreboard data sync read-only."}
+            </p>
+            <div className="provider-facts">
+              <span>
+                <Check size={14} /> OAuth + PKCE implemented
+              </span>
+              <span>
+                <Check size={14} /> Read-only league sync implemented
+              </span>
+              <span>
+                <ShieldAlert size={14} /> Provider draft polling not claimed
+              </span>
+            </div>
+            <button
+              className="button button--outline button--full"
+              type="button"
+              onClick={() => setProviderExpanded(providerExpanded === "Yahoo" ? null : "Yahoo")}
+            >
+              {providerExpanded === "Yahoo" ? "Hide readiness details" : "View readiness details"}
+              <ChevronDown className={providerExpanded === "Yahoo" ? "is-rotated" : ""} size={16} />
+            </button>
+            {providerExpanded === "Yahoo" ? (
+              <div className="provider-detail">
+                <Info size={15} />
+                <p>
+                  {yahooComingSoon
+                    ? "This tour is not a connected account. Yahoo sign-in is coming soon; when available, token exchange will stay server-side and refresh tokens will remain encrypted."
+                    : "This sample screen is not a connected account. After sign-in, Connections can start Yahoo authorization. Token exchange stays server-side and refresh tokens are encrypted."}
                 </p>
               </div>
             ) : null}

@@ -378,26 +378,28 @@
   .answer footer {
     display: flex;
     flex-wrap: wrap;
-    gap: 6px;
+    align-items: baseline;
+    gap: 10px;
     margin-top: auto;
     padding-top: 12px;
     border-top: 1px solid var(--ink-150);
   }
 
-  .answer footer span,
-  .answer footer small {
-    padding: 4px 7px;
+  .answer footer p {
+    flex: 1;
+    min-width: 200px;
+    margin: 0;
     color: var(--ink-500);
-    background: var(--paper-100);
-    border-radius: 5px;
-    font-size: 8px;
-    font-weight: 700;
+    font-size: 11px;
+    line-height: 1.45;
   }
 
   .answer footer small {
     margin-left: auto;
     color: #597351;
-    background: #edf5e3;
+    font-size: 10px;
+    font-weight: 600;
+    white-space: nowrap;
   }
 
   .noAction .answerHeader > span {

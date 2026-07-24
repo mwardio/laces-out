@@ -706,20 +706,15 @@
   }
 
   .answer footer {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 5px;
     padding-top: 12px;
     border-top: 1px solid #dce5d8;
   }
 
-  .answer footer span {
-    padding: 4px 7px;
+  .answer footer p {
+    margin: 0;
     color: #4d6944;
-    background: #e8f0e4;
-    border-radius: 999px;
-    font-size: 9px;
-    font-weight: 750;
+    font-size: 11px;
+    line-height: 1.45;
   }
 
   .statePanel {
