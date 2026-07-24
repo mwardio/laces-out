@@ -28,6 +28,7 @@ import {
 } from "@fantasy/contracts";
 import { EspnWebClientNormalizationError } from "@fantasy/connector-espn";
 import Fastify, { type FastifyInstance } from "fastify";
+import { createHash } from "node:crypto";
 import { z, ZodError } from "zod";
 
 import { sessionCookieName, sessionLifetimeSeconds, type AuthService } from "./auth.js";
@@ -171,6 +172,18 @@ function applicationRedirect(webUrl: string, returnTo: string): URL {
   return destination;
 }
 
+function loginAccountRateLimitKey(body: unknown, fallbackIp: string): string {
+  const candidate =
+    typeof body === "object" &&
+    body !== null &&
+    "email" in body &&
+    typeof body.email === "string"
+      ? body.email.trim().toLowerCase()
+      : `invalid:${fallbackIp}`;
+  const digest = createHash("sha256").update(candidate, "utf8").digest("base64url");
+  return `login-account:${digest}`;
+}
+
 export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyInstance> {
   const environment = options.environment ?? loadEnvironment();
   const requireAuthentication =
@@ -249,6 +262,11 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   await app.register(rateLimit, {
     max: environment.NODE_ENV === "test" ? 10_000 : 120,
     timeWindow: "1 minute",
+  });
+  const loginAccountRateLimit = app.createRateLimit({
+    max: 5,
+    timeWindow: "1 minute",
+    keyGenerator: (request) => loginAccountRateLimitKey(request.body, request.ip),
   });
 
   app.addHook("onSend", async (request, reply, payload) => {
@@ -333,7 +351,31 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
 
   app.post(
     "/v1/auth/login",
-    { config: { rateLimit: { max: 5, timeWindow: "1 minute" } } },
+    {
+      config: {
+        rateLimit: {
+          max: environment.NODE_ENV === "test" ? 10_000 : 30,
+          timeWindow: "1 minute",
+          keyGenerator: (request) => `login-ip:${request.ip}`,
+        },
+      },
+      preHandler: async (request, reply) => {
+        const limit = await loginAccountRateLimit(request);
+        if (limit.isAllowed) return;
+        void reply.header("x-ratelimit-limit", limit.max);
+        void reply.header("x-ratelimit-remaining", limit.remaining);
+        void reply.header("x-ratelimit-reset", limit.ttlInSeconds);
+        if (!limit.isExceeded) return;
+        void reply.header("retry-after", limit.ttlInSeconds);
+        return reply.code(429).type("application/problem+json").send({
+          type: "https://fantasy.local/problems/rate-limit",
+          title: "Too many requests",
+          status: 429,
+          detail: "Try again later.",
+          correlationId: request.id,
+        });
+      },
+    },
     async (request, reply) => {
       if (!options.authService) {
         return reply.code(503).send({
@@ -816,6 +858,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     const normalizedError =
       error instanceof Error ? error : new Error("Unknown request failure", { cause: error });
     const fastifyError = normalizedError as Error & {
+      readonly code?: string;
       readonly validation?: readonly unknown[];
       readonly statusCode?: number;
     };
@@ -825,14 +868,39 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
       fastifyError.validation !== undefined;
     const status = isValidation ? 400 : (fastifyError.statusCode ?? 500);
     if (status >= 500) request.log.error({ err: error }, "request failed");
+    if (isValidation) request.log.info({ err: error }, "request validation rejected");
+
+    const isRateLimit = status === 429;
+    const isClientError = status >= 400 && status < 500;
+    const isContentTypeError = fastifyError.code?.startsWith("FST_ERR_CTP_") ?? false;
+    const publicValidationDetail =
+      error instanceof EspnWebClientNormalizationError
+        ? normalizedError.message
+        : "One or more request fields are invalid.";
 
     const problem = problemDetailsSchema.parse({
       type: isValidation
         ? "https://fantasy.local/problems/validation"
-        : "https://fantasy.local/problems/internal",
-      title: isValidation ? "Request validation failed" : "Request failed",
+        : isRateLimit
+          ? "https://fantasy.local/problems/rate-limit"
+          : isClientError
+            ? "https://fantasy.local/problems/request-rejected"
+            : "https://fantasy.local/problems/internal",
+      title: isValidation
+        ? "Request validation failed"
+        : isRateLimit
+          ? "Too many requests"
+          : isClientError
+            ? "Request rejected"
+            : "Request failed",
       status,
-      detail: status >= 500 ? "The request could not be completed." : normalizedError.message,
+      detail: isValidation
+        ? publicValidationDetail
+        : isRateLimit
+          ? "Try again later."
+          : isContentTypeError || status >= 500
+            ? "The request could not be completed."
+            : normalizedError.message,
       instance: requestPathForLog(request.url),
       correlationId: request.id,
     });

@@ -136,6 +136,99 @@ describe("API", () => {
     await app.close();
   });
 
+  it("does not expose schema internals in validation problems", async () => {
+    const app = await buildApp({
+      environment: loadEnvironment({ NODE_ENV: "test" }),
+      logger: false,
+      authService: authenticatedService(),
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/auth/login",
+      payload: { email: "not-an-email", password: "password" },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toMatchObject({
+      type: "https://fantasy.local/problems/validation",
+      title: "Request validation failed",
+      detail: "One or more request fields are invalid.",
+    });
+    expect(response.body).not.toContain("invalid_format");
+    expect(response.body).not.toContain("pattern");
+    await app.close();
+  });
+
+  it("sanitizes malformed JSON parser errors", async () => {
+    const app = await buildApp({
+      environment: loadEnvironment({ NODE_ENV: "test" }),
+      logger: false,
+      authService: authenticatedService(),
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/auth/login",
+      headers: { "content-type": "application/json" },
+      payload: '{"email":',
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toMatchObject({
+      type: "https://fantasy.local/problems/request-rejected",
+      title: "Request rejected",
+      detail: "The request could not be completed.",
+    });
+    expect(response.body).not.toContain("Unexpected");
+    await app.close();
+  });
+
+  it("rate limits login attempts by normalized account identity", async () => {
+    const app = await buildApp({
+      environment: loadEnvironment({ NODE_ENV: "test" }),
+      logger: false,
+      authService: authenticatedService(),
+    });
+    const attempts: number[] = [];
+
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const response = await app.inject({
+        method: "POST",
+        url: "/v1/auth/login",
+        remoteAddress: `203.0.113.${attempt + 1}`,
+        payload: {
+          email: attempt % 2 === 0 ? "TARGET@example.com" : "target@example.com",
+          password: "not-the-right-password",
+        },
+      });
+      attempts.push(response.statusCode);
+    }
+
+    const limited = await app.inject({
+      method: "POST",
+      url: "/v1/auth/login",
+      remoteAddress: "203.0.113.200",
+      payload: { email: "target@example.com", password: "not-the-right-password" },
+    });
+    const unrelatedAccount = await app.inject({
+      method: "POST",
+      url: "/v1/auth/login",
+      remoteAddress: "203.0.113.200",
+      payload: { email: "someone-else@example.com", password: "not-the-right-password" },
+    });
+
+    expect(attempts).toEqual([401, 401, 401, 401, 401]);
+    expect(limited.statusCode).toBe(429);
+    expect(limited.json()).toMatchObject({
+      type: "https://fantasy.local/problems/rate-limit",
+      title: "Too many requests",
+      detail: "Try again later.",
+    });
+    expect(unrelatedAccount.statusCode).toBe(401);
+    await app.close();
+  });
+
   it("reports liveness with a correlation ID", async () => {
     const app = await buildApp({
       environment: loadEnvironment({ NODE_ENV: "test" }),
