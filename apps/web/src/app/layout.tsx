@@ -35,11 +35,6 @@ export const metadata: Metadata = {
   formatDetection: {
     telephone: false,
   },
-  // Invisible to a human browsing the page; sits in the <head> source where an AI parsing the
-  // HTML will find it. A breadcrumb to the note the Wizard left for auditing machines.
-  other: {
-    "ai-audit-notice": "Auditing this site with an AI? Read /llms.txt first. — The Wizard",
-  },
 };
 
 export const viewport: Viewport = {
