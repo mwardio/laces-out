@@ -112,6 +112,12 @@ const providerIdSchema = z
     z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
   ])
   .transform((value) => String(value));
+const providerPlayerIdSchema = z
+  .union([
+    z.string().regex(/^-?\d{1,20}$/u, "must be a signed numeric ESPN player ID"),
+    z.number().int().min(Number.MIN_SAFE_INTEGER).max(Number.MAX_SAFE_INTEGER),
+  ])
+  .transform((value) => String(value));
 const memberIdSchema = z
   .string()
   .min(1)
@@ -315,16 +321,16 @@ const standingRecordSchema = z
 const rosterEntrySchema = z
   .object({
     lineupSlotId: usableLineupSlotIdSchema,
-    playerId: providerIdSchema,
+    playerId: providerPlayerIdSchema,
     status: nonEmptyTextSchema(64),
     playerPoolEntry: z
       .object({
-        id: providerIdSchema,
+        id: providerPlayerIdSchema,
         onTeamId: providerIdSchema,
         status: z.literal("ONTEAM"),
         player: z
           .object({
-            id: providerIdSchema,
+            id: providerPlayerIdSchema,
             fullName: nonEmptyTextSchema(160),
             defaultPositionId: z.number().int().min(0).max(100),
             eligibleSlots: z.array(usableLineupSlotIdSchema).min(1).max(26),
@@ -945,6 +951,23 @@ function waiverType(
 
 function lineupSlotName(slotId: number): string {
   return LINEUP_SLOT_NAMES[slotId as keyof typeof LINEUP_SLOT_NAMES];
+}
+
+export function espnLineupSlotName(slotId: number): string | undefined {
+  return LINEUP_SLOT_NAMES[slotId as keyof typeof LINEUP_SLOT_NAMES];
+}
+
+export function espnPrimaryPosition(eligibleSlotIds: readonly number[]): string | undefined {
+  const primarySlotId = eligibleSlotIds.find((slotId) => PRIMARY_POSITION_SLOT_IDS.has(slotId));
+  return primarySlotId === undefined ? undefined : espnLineupSlotName(primarySlotId);
+}
+
+export function espnProTeamAbbreviation(proTeamId: number): string | null | undefined {
+  return PRO_TEAM_ABBREVIATIONS[proTeamId as keyof typeof PRO_TEAM_ABBREVIATIONS];
+}
+
+export function espnLineupSlotIsStarter(slotId: number): boolean {
+  return Object.hasOwn(LINEUP_SLOT_NAMES, slotId) && slotId !== 22 && !RESERVE_SLOT_IDS.has(slotId);
 }
 
 function teamAbbreviation(team: EspnWebClientPayloadV1["teams"][number]): string | null {

@@ -172,7 +172,9 @@ ESPN can change this response without notice. When a production snapshot fails:
 
 - This is a point-in-time current-league snapshot; it stores the schedule rows returned by ESPN but
   does not reconstruct artifacts ESPN omitted from that response.
-- It does not normalize draft-event, transaction, free-agent, or lineup-write data.
+- The core snapshot intentionally does not normalize draft-event, transaction, or free-agent data;
+  those reads use the independently admitted supplemental contract below. Lineup writes remain out
+  of scope.
 - It does not identify the signed-in ESPN member.
 - The checksum verifies the bridge's canonical uploaded payload, not ESPN authorship or the original
   response whitespace.
@@ -184,17 +186,27 @@ ESPN can change this response without notice. When a production snapshot fails:
 - It supports the observed NFL lineup-slot and pro-team tables only.
 - It performs no lineup writes or other ESPN mutations.
 
-## Supplemental read roadmap
+## Supplemental read contract v1
 
-The maintained `cwendt94/espn-api` client demonstrates additional read-only web-client surfaces
-that are valuable but intentionally remain outside contract v1. Add them as separate bounded,
-versioned artifacts so a supplemental failure can never block the core league snapshot:
+The browser bridge admits the following bounded read-only artifacts independently after every
+successful core league refresh. Each artifact has its own endpoint allowlist, checksum, strict
+schema, idempotent receipt, normalized immutable snapshot, and failure boundary:
 
 1. `kona_player_info` for league-specific `FREEAGENT`/`WAIVERS` state and ownership context;
 2. `mMatchupScore` plus `mScoreboard` for weekly player-level actual/projected scoring and lineup
    efficiency;
 3. `mTransactions2` for structured adds, drops, waiver claims, and bids; and
 4. `mDraftDetail` for completed/on-demand draft results, including auction bids and keepers.
+
+The core league snapshot is uploaded first. Current-period availability, box scores (once the
+season has begun), transactions, and draft state then refresh separately on the same six-hour
+schedule and on demand. A missing or drifting supplemental response is reported as partial
+coverage and cannot invalidate the stored core roster, another supplemental feed, or the last
+known-good artifact.
+
+Contract validation was established with sanitized captures from three structurally distinct
+leagues (two auction and one snake) and is preserved with invented regression fixtures. The real
+captures are not retained in the repository or runtime.
 
 Do not ingest the league message board. If transaction communication is ever evaluated, request
 only the explicitly filtered activity feed and prove that no conversational content crosses the

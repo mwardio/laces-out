@@ -1173,7 +1173,8 @@ export function ConnectionWorkbench() {
                   <strong>Automatic refresh for desktop Chrome</strong>
                   <span>
                     The companion refreshes every six hours while Chrome and your ESPN session are
-                    available.
+                    available, including player availability, box scores, transactions, and draft
+                    results.
                   </span>
                   <a
                     className="button button--outline button--small bridge-download"

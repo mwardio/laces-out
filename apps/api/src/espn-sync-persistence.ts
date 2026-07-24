@@ -1,8 +1,13 @@
-import type { LeagueSyncBundle, NormalizedRosterPlayer } from "@fantasy/connectors";
+import type {
+  LeagueSupplementalBundle,
+  LeagueSyncBundle,
+  NormalizedRosterPlayer,
+} from "@fantasy/connectors";
 import {
   bridgeDeviceLeagues,
   bridgeDevices,
   fantasyTeams,
+  leagueSupplementalSnapshots,
   leagueMemberships,
   leagues,
   leagueSeasons,
@@ -42,6 +47,22 @@ export interface PersistEspnSyncInput {
 export interface PersistEspnSyncReceipt {
   readonly receiptId: string;
   readonly leagueId: string;
+  readonly leagueSeasonId: string;
+  readonly recordsWritten: number;
+  readonly state: "accepted" | "unchanged";
+}
+
+export interface PersistEspnSupplementalInput {
+  readonly authority: EspnSyncAuthority;
+  readonly bundle: LeagueSupplementalBundle;
+  readonly checksumSha256: string;
+  readonly effectiveAt: Date;
+  readonly idempotencyKey: string;
+  readonly now: Date;
+}
+
+export interface PersistEspnSupplementalReceipt {
+  readonly receiptId: string;
   readonly leagueSeasonId: string;
   readonly recordsWritten: number;
   readonly state: "accepted" | "unchanged";
@@ -164,6 +185,136 @@ export class DrizzleEspnSyncPersistence {
     this.#database = database;
   }
 
+  async persistSupplemental(
+    input: PersistEspnSupplementalInput,
+  ): Promise<PersistEspnSupplementalReceipt> {
+    const { authority, bundle, effectiveAt, now } = input;
+    if (bundle.provider !== "espn") {
+      throw new Error("Canonical ESPN supplemental persistence received another provider");
+    }
+
+    return this.#database.transaction(async (transaction) => {
+      const lockKey = `espn:${bundle.providerLeagueId}:${bundle.season}`;
+      await transaction.execute(sql`select pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`);
+
+      const [season] = await transaction
+        .select({ id: leagueSeasons.id, leagueId: leagueSeasons.leagueId })
+        .from(leagueSeasons)
+        .where(
+          and(
+            eq(leagueSeasons.provider, "espn"),
+            eq(leagueSeasons.externalKey, bundle.providerLeagueId),
+            eq(leagueSeasons.season, bundle.season),
+          ),
+        )
+        .limit(1);
+      if (!season) {
+        throw new Error("The core ESPN league snapshot must be stored before supplemental data");
+      }
+
+      const [scope] = await transaction
+        .select({ leagueId: bridgeDeviceLeagues.leagueId })
+        .from(bridgeDeviceLeagues)
+        .where(eq(bridgeDeviceLeagues.id, authority.bridgeScopeId))
+        .limit(1);
+      if (scope?.leagueId !== season.leagueId) {
+        throw new Error("ESPN supplemental data did not match the bridge league scope");
+      }
+
+      const [prior] = await transaction
+        .select({
+          id: syncRuns.id,
+          leagueSeasonId: syncRuns.leagueSeasonId,
+          recordsWritten: syncRuns.recordsWritten,
+          state: syncRuns.state,
+        })
+        .from(syncRuns)
+        .where(eq(syncRuns.idempotencyKey, input.idempotencyKey))
+        .limit(1);
+      if (prior) {
+        if (prior.leagueSeasonId !== season.id || prior.state !== "succeeded") {
+          throw new Error("Idempotent ESPN supplemental receipt is not a completed artifact");
+        }
+        await transaction
+          .update(bridgeDevices)
+          .set({ lastSeenAt: now })
+          .where(eq(bridgeDevices.id, authority.bridgeDeviceId));
+        return {
+          receiptId: prior.id,
+          leagueSeasonId: season.id,
+          recordsWritten: prior.recordsWritten,
+          state: "unchanged",
+        };
+      }
+
+      const recordsRead =
+        bundle.kind === "available-players"
+          ? bundle.players.length
+          : bundle.kind === "weekly-box-scores"
+            ? bundle.matchups.length + bundle.playerScores.length
+            : bundle.kind === "transactions"
+              ? bundle.transactions.length +
+                bundle.transactions.reduce(
+                  (count, transaction) => count + transaction.items.length,
+                  0,
+                )
+              : bundle.picks.length;
+      const [run] = await transaction
+        .insert(syncRuns)
+        .values({
+          leagueSeasonId: season.id,
+          kind: `espn-supplemental:${bundle.kind}`,
+          state: "processing",
+          idempotencyKey: input.idempotencyKey,
+          startedAt: now,
+          recordsRead,
+          artifactChecksum: input.checksumSha256,
+        })
+        .returning({ id: syncRuns.id });
+      if (!run) throw new Error("ESPN supplemental sync receipt could not be created");
+
+      const asOfWeek =
+        bundle.kind === "available-players"
+          ? bundle.asOfWeek
+          : bundle.kind === "completed-draft"
+            ? null
+            : bundle.week;
+      await transaction.insert(leagueSupplementalSnapshots).values({
+        leagueSeasonId: season.id,
+        kind: bundle.kind,
+        asOfWeek,
+        availability: bundle.kind === "available-players" ? bundle.availability : null,
+        effectiveAt,
+        sourceSyncRunId: run.id,
+        bridgeDeviceId: authority.bridgeDeviceId,
+        endpoint: bundle.provenance.endpoint ?? "https://lm-api-reads.fantasy.espn.com",
+        artifactChecksum: input.checksumSha256,
+        artifact: plainRecord(bundle),
+        warnings: [...bundle.warnings],
+      });
+
+      const recordsWritten = 2;
+      await transaction
+        .update(syncRuns)
+        .set({
+          state: "succeeded",
+          finishedAt: now,
+          recordsWritten,
+        })
+        .where(eq(syncRuns.id, run.id));
+      await transaction
+        .update(bridgeDevices)
+        .set({ lastSeenAt: now })
+        .where(eq(bridgeDevices.id, authority.bridgeDeviceId));
+      return {
+        receiptId: run.id,
+        leagueSeasonId: season.id,
+        recordsWritten,
+        state: "accepted",
+      };
+    });
+  }
+
   async persist(input: PersistEspnSyncInput): Promise<PersistEspnSyncReceipt> {
     const { authority, bundle, effectiveAt, now } = input;
     if (bundle.provider !== "espn" || bundle.league.provider !== "espn") {
@@ -242,7 +393,7 @@ export class DrizzleEspnSyncPersistence {
           .where(eq(leagueSeasons.id, season.id));
         await transaction
           .update(bridgeDeviceLeagues)
-          .set({ leagueId: season.leagueId })
+          .set({ leagueId: season.leagueId, season: bundle.league.season })
           .where(eq(bridgeDeviceLeagues.id, authority.bridgeScopeId));
         await transaction
           .update(bridgeDevices)
@@ -345,7 +496,7 @@ export class DrizzleEspnSyncPersistence {
       }
       await transaction
         .update(bridgeDeviceLeagues)
-        .set({ leagueId })
+        .set({ leagueId, season: bundle.league.season })
         .where(eq(bridgeDeviceLeagues.id, authority.bridgeScopeId));
 
       // League settings are a complete snapshot. Delete-and-reinsert is safe because the

@@ -483,6 +483,9 @@ export function PortfolioDashboard({ afterOverview }: { readonly afterOverview?:
                 <Check size={14} /> Optional six-hour Chrome refresh
               </span>
               <span>
+                <Check size={14} /> Availability, box scores, transactions, and draft results
+              </span>
+              <span>
                 <ShieldAlert size={14} /> ESPN cookies stay in the browser
               </span>
             </div>
@@ -502,7 +505,8 @@ export function PortfolioDashboard({ afterOverview }: { readonly afterOverview?:
                 </p>
                 <p>
                   <Zap size={14} /> <strong>Automatic sync:</strong> the optional Chrome companion
-                  refreshes up to 32 explicitly allowed leagues every six hours.
+                  refreshes up to 32 explicitly allowed leagues every six hours, including isolated
+                  availability, player scoring, transaction, and draft feeds.
                 </p>
                 <p>
                   <ShieldAlert size={14} /> <strong>Credential boundary:</strong> ESPN passwords,

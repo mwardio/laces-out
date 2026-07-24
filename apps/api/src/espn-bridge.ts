@@ -1,7 +1,10 @@
 import { createHash, randomBytes } from "node:crypto";
 
-import { normalizeEspnWebClientSnapshot } from "@fantasy/connector-espn";
-import type { EspnBridgeSnapshot } from "@fantasy/contracts";
+import {
+  normalizeEspnSupplementalSnapshot,
+  normalizeEspnWebClientSnapshot,
+} from "@fantasy/connector-espn";
+import type { EspnBridgeSnapshot, EspnSupplementalBridgeSnapshot } from "@fantasy/contracts";
 import { bridgeDeviceLeagues, bridgeDevices, leagues, type Database } from "@fantasy/db";
 import { and, asc, desc, eq, gt, isNull, or } from "drizzle-orm";
 
@@ -257,6 +260,74 @@ export class EspnBridgeService {
       effectiveAt: capturedAt,
       idempotencyKey: `espn-bridge:${device.id}:${snapshot.leagueId}:${snapshot.season}:${snapshot.checksumSha256}`,
       kind: "espn-bridge",
+      now,
+    });
+    return {
+      receiptId: receipt.receiptId,
+      state: receipt.state,
+      receivedAt: now.toISOString(),
+    };
+  }
+
+  async acceptSupplementalSnapshot(
+    deviceToken: string,
+    snapshot: EspnSupplementalBridgeSnapshot,
+  ): Promise<{
+    readonly receiptId: string;
+    readonly state: "accepted" | "unchanged";
+    readonly receivedAt: string;
+  }> {
+    const now = this.#now();
+    const [device] = await this.#database
+      .select()
+      .from(bridgeDevices)
+      .where(
+        and(
+          eq(bridgeDevices.tokenHash, tokenHash(deviceToken)),
+          eq(bridgeDevices.provider, "espn"),
+          isNull(bridgeDevices.revokedAt),
+          or(isNull(bridgeDevices.expiresAt), gt(bridgeDevices.expiresAt, now)),
+        ),
+      )
+      .limit(1);
+    if (!device) throw new EspnBridgeError("UNAUTHORIZED", "ESPN bridge device is not active");
+
+    const [scope] = await this.#database
+      .select()
+      .from(bridgeDeviceLeagues)
+      .where(
+        and(
+          eq(bridgeDeviceLeagues.bridgeDeviceId, device.id),
+          eq(bridgeDeviceLeagues.externalLeagueId, snapshot.leagueId),
+          or(isNull(bridgeDeviceLeagues.season), eq(bridgeDeviceLeagues.season, snapshot.season)),
+        ),
+      )
+      .limit(1);
+    if (!scope) {
+      throw new EspnBridgeError("OUT_OF_SCOPE", "ESPN league is outside this bridge device scope");
+    }
+
+    const capturedAt = new Date(snapshot.capturedAt);
+    const snapshotAge = now.getTime() - capturedAt.getTime();
+    if (snapshotAge > maximumSnapshotAgeMs || snapshotAge < -maximumFutureSkewMs) {
+      throw new EspnBridgeError("STALE", "ESPN bridge snapshot capture time is not current");
+    }
+    if (canonicalChecksum(snapshot.payload) !== snapshot.checksumSha256) {
+      throw new EspnBridgeError("CHECKSUM", "ESPN bridge snapshot checksum does not match payload");
+    }
+
+    const bundle = normalizeEspnSupplementalSnapshot(snapshot);
+    const receipt = await this.#persistence.persistSupplemental({
+      authority: {
+        mode: "bridge",
+        actorUserId: device.userId,
+        bridgeDeviceId: device.id,
+        bridgeScopeId: scope.id,
+      },
+      bundle,
+      checksumSha256: snapshot.checksumSha256,
+      effectiveAt: capturedAt,
+      idempotencyKey: `espn-supplemental:${snapshot.leagueId}:${snapshot.season}:${snapshot.kind}:${snapshot.checksumSha256}`,
       now,
     });
     return {

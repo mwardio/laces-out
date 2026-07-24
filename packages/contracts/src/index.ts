@@ -518,6 +518,64 @@ export const espnBridgeSnapshotSchema = z
   .strict();
 export type EspnBridgeSnapshot = z.infer<typeof espnBridgeSnapshotSchema>;
 
+const espnSupplementalBridgeBase = {
+  schemaVersion: z.literal(1),
+  provider: z.literal("espn"),
+  authority: z.literal("browser-local"),
+  readOnly: z.literal(true),
+  leagueId: z.string().regex(/^\d{1,20}$/u),
+  season: z.number().int().min(2019).max(2100),
+  capturedAt: z.iso.datetime(),
+  endpoint: z
+    .url()
+    .refine(
+      (value) => new URL(value).origin === "https://lm-api-reads.fantasy.espn.com",
+      "must use the allowlisted ESPN fantasy read host",
+    ),
+  checksumSha256: z.string().regex(/^[a-f0-9]{64}$/u),
+  payload: z.unknown(),
+} as const;
+
+export const espnSupplementalBridgeSnapshotSchema = z.discriminatedUnion("kind", [
+  z
+    .object({
+      ...espnSupplementalBridgeBase,
+      kind: z.literal("available-free-agents"),
+      week: z.number().int().min(0).max(30),
+    })
+    .strict(),
+  z
+    .object({
+      ...espnSupplementalBridgeBase,
+      kind: z.literal("available-waivers"),
+      week: z.number().int().min(0).max(30),
+    })
+    .strict(),
+  z
+    .object({
+      ...espnSupplementalBridgeBase,
+      kind: z.literal("weekly-box-scores"),
+      week: z.number().int().min(1).max(30),
+      matchupPeriodId: z.number().int().min(1).max(30),
+    })
+    .strict(),
+  z
+    .object({
+      ...espnSupplementalBridgeBase,
+      kind: z.literal("structured-transactions"),
+      week: z.number().int().min(0).max(30),
+    })
+    .strict(),
+  z
+    .object({
+      ...espnSupplementalBridgeBase,
+      kind: z.literal("completed-draft"),
+      week: z.null(),
+    })
+    .strict(),
+]);
+export type EspnSupplementalBridgeSnapshot = z.infer<typeof espnSupplementalBridgeSnapshotSchema>;
+
 export const espnBridgeReceiptSchema = z.object({
   receiptId: z.string().uuid(),
   state: z.enum(["accepted", "unchanged"]),

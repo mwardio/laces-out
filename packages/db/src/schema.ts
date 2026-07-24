@@ -39,6 +39,8 @@ export type NflScheduleGameStatus =
 export type ProjectionModelQualityState = "publishable" | "degraded" | "rejected";
 export type AdpScoringFormat = "standard" | "half-ppr" | "ppr";
 export type AdpRosterFormat = "one-qb" | "superflex" | "two-qb" | "unknown";
+export type LeagueSupplementalKind =
+  "available-players" | "weekly-box-scores" | "transactions" | "completed-draft";
 
 export interface FirstPartyRosAvailabilityWeek {
   readonly week: number;
@@ -2185,6 +2187,71 @@ export const weeklyMatchups = pgTable(
     check(
       "weekly_matchups_outcome_check",
       sql`(${table.status} = 'final' and ((${table.tied} = true and ${table.winnerTeamId} is null) or (${table.tied} = false and ${table.winnerTeamId} is not null))) or (${table.status} <> 'final' and ${table.tied} = false and ${table.winnerTeamId} is null)`,
+    ),
+  ],
+);
+
+/**
+ * Immutable, normalized league-provider artifacts that enrich the canonical roster snapshot.
+ * Each artifact is admitted independently so a drifting transaction or draft endpoint cannot
+ * roll back a successful core league refresh.
+ */
+export const leagueSupplementalSnapshots = pgTable(
+  "league_supplemental_snapshots",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    leagueSeasonId: uuid("league_season_id")
+      .notNull()
+      .references(() => leagueSeasons.id, { onDelete: "cascade" }),
+    kind: text("kind").$type<LeagueSupplementalKind>().notNull(),
+    asOfWeek: integer("as_of_week"),
+    availability: text("availability").$type<"free-agent" | "waivers">(),
+    effectiveAt: timestamp("effective_at", { withTimezone: true }).notNull(),
+    sourceSyncRunId: uuid("source_sync_run_id")
+      .notNull()
+      .references(() => syncRuns.id, { onDelete: "restrict" }),
+    bridgeDeviceId: uuid("bridge_device_id").references(() => bridgeDevices.id, {
+      onDelete: "set null",
+    }),
+    endpoint: text("endpoint").notNull(),
+    artifactChecksum: text("artifact_checksum").notNull(),
+    artifact: jsonb("artifact").$type<Record<string, unknown>>().notNull(),
+    warnings: jsonb("warnings").$type<string[]>().notNull().default([]),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("league_supplemental_source_sync_unique").on(table.sourceSyncRunId),
+    uniqueIndex("league_supplemental_artifact_unique").on(
+      table.leagueSeasonId,
+      table.kind,
+      table.artifactChecksum,
+    ),
+    index("league_supplemental_latest_idx").on(
+      table.leagueSeasonId,
+      table.kind,
+      table.asOfWeek,
+      table.effectiveAt,
+    ),
+    check(
+      "league_supplemental_kind_check",
+      sql`${table.kind} in ('available-players', 'weekly-box-scores', 'transactions', 'completed-draft')`,
+    ),
+    check(
+      "league_supplemental_week_check",
+      sql`${table.asOfWeek} is null or ${table.asOfWeek} between 0 and 30`,
+    ),
+    check(
+      "league_supplemental_availability_check",
+      sql`(${table.kind} = 'available-players' and ${table.availability} in ('free-agent', 'waivers')) or (${table.kind} <> 'available-players' and ${table.availability} is null)`,
+    ),
+    check(
+      "league_supplemental_endpoint_check",
+      sql`char_length(btrim(${table.endpoint})) between 1 and 2048`,
+    ),
+    check("league_supplemental_checksum_check", sql`${table.artifactChecksum} ~ '^[a-f0-9]{64}$'`),
+    check(
+      "league_supplemental_artifact_shape_check",
+      sql`jsonb_typeof(${table.artifact}) = 'object' and jsonb_typeof(${table.warnings}) = 'array'`,
     ),
   ],
 );

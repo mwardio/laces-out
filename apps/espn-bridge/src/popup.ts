@@ -1,5 +1,4 @@
 import type {
-  BridgeConfiguration,
   BridgeLeagueResultState,
   BridgeRequest,
   BridgeResponse,
@@ -8,9 +7,7 @@ import type {
 } from "./protocol.js";
 import {
   pairingOfferIsFresh,
-  parseLeagueIds,
   pendingPairingStorageKey,
-  validateBridgeConfiguration,
   validateStoredPendingOffer,
 } from "./protocol.js";
 
@@ -20,7 +17,6 @@ function element<T extends HTMLElement>(id: string): T {
   return value as T;
 }
 
-const form = element<HTMLFormElement>("configuration-form");
 const statusPanel = element<HTMLDivElement>("status");
 const statusMessage = element<HTMLParagraphElement>("status-message");
 const lastSync = element<HTMLSpanElement>("last-sync");
@@ -32,14 +28,13 @@ const pairingSection = element<HTMLElement>("pairing-offer");
 const pairingOrigin = element<HTMLSpanElement>("pairing-origin");
 const pairingCompleteButton = element<HTMLButtonElement>("pairing-complete");
 const pairingDismissButton = element<HTMLButtonElement>("pairing-dismiss");
+const unpairedActions = element<HTMLElement>("unpaired-actions");
+const openConnectionsButton = element<HTMLButtonElement>("open-connections");
+
+let pendingOffer: PendingPairingOffer | undefined;
 
 function send(request: BridgeRequest): Promise<BridgeResponse> {
   return chrome.runtime.sendMessage(request);
-}
-
-function formString(data: FormData, name: string): string {
-  const value = data.get(name);
-  return typeof value === "string" ? value : "";
 }
 
 function render(status: BridgeStatus): void {
@@ -54,7 +49,7 @@ function render(status: BridgeStatus): void {
     status.state === "espn-login-required" ||
     status.results.some((result) => result.state === "espn-login-required")
   );
-  form.hidden = status.configured;
+  unpairedActions.hidden = status.configured || pendingOffer !== undefined;
   leagueResults.replaceChildren(
     ...status.results.map((result) => {
       const item = document.createElement("li");
@@ -88,23 +83,8 @@ async function requireApiPermission(apiBaseUrl: string): Promise<void> {
   if (!allowed) throw new Error("Laces Out host permission was not granted");
 }
 
-form.addEventListener("submit", (event) => {
-  event.preventDefault();
-  void (async () => {
-    const data = new FormData(form);
-    const configuration: BridgeConfiguration = validateBridgeConfiguration({
-      apiBaseUrl: formString(data, "apiBaseUrl"),
-      deviceToken: formString(data, "deviceToken"),
-      leagueIds: parseLeagueIds(formString(data, "leagueIds")),
-      season: Number(data.get("season")),
-      automaticSync: data.get("automaticSync") === "on",
-    });
-    await requireApiPermission(configuration.apiBaseUrl);
-    render((await send({ type: "CONFIGURE", configuration })).status);
-  })().catch((error: unknown) => {
-    statusMessage.textContent = error instanceof Error ? error.message : "Pairing failed";
-    statusPanel.dataset.state = "error";
-  });
+openConnectionsButton.addEventListener("click", () => {
+  void chrome.tabs.create({ url: "https://laces.mward.io/connections" });
 });
 
 syncButton.addEventListener("click", () => {
@@ -132,8 +112,6 @@ loginButton.addEventListener("click", () => {
   void chrome.tabs.create({ url: "https://fantasy.espn.com/football/" });
 });
 
-let pendingOffer: PendingPairingOffer | undefined;
-
 async function clearPendingOffer(): Promise<void> {
   pendingOffer = undefined;
   pairingSection.hidden = true;
@@ -150,6 +128,7 @@ async function loadPendingOffer(): Promise<void> {
   pendingOffer = offer;
   pairingOrigin.textContent = offer.origin;
   pairingSection.hidden = false;
+  unpairedActions.hidden = true;
 }
 
 pairingCompleteButton.addEventListener("click", () => {
@@ -172,7 +151,9 @@ pairingCompleteButton.addEventListener("click", () => {
 });
 
 pairingDismissButton.addEventListener("click", () => {
-  void clearPendingOffer();
+  void clearPendingOffer()
+    .then(() => send({ type: "GET_STATUS" }))
+    .then((response) => render(response.status));
 });
 
 void loadPendingOffer().catch(() => {

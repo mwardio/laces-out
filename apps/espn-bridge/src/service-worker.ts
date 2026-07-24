@@ -18,6 +18,21 @@ import {
 
 const ESPN_ORIGIN = "https://lm-api-reads.fantasy.espn.com";
 const MAX_ESPN_BYTES = 5 * 1024 * 1024;
+const supplementalTransactionTypes = [
+  "DRAFT",
+  "TRADE_ACCEPT",
+  "WAIVER",
+  "TRADE_VETO",
+  "FUTURE_ROSTER",
+  "ROSTER",
+  "RETRO_ROSTER",
+  "TRADE_PROPOSAL",
+  "TRADE_UPHOLD",
+  "FREEAGENT",
+  "TRADE_DECLINE",
+  "WAIVER_ERROR",
+  "TRADE_ERROR",
+] as const;
 const statusStates = new Set<BridgeStatusState>([
   "not-configured",
   "ready",
@@ -134,6 +149,195 @@ function leagueEndpoint(configuration: BridgeConfiguration, leagueId: string): U
   return endpoint;
 }
 
+type SupplementalRequest =
+  | {
+      readonly kind: "available-free-agents" | "available-waivers" | "structured-transactions";
+      readonly week: number;
+      readonly views: readonly string[];
+      readonly filter: Record<string, unknown>;
+    }
+  | {
+      readonly kind: "weekly-box-scores";
+      readonly week: number;
+      readonly matchupPeriodId: number;
+      readonly views: readonly string[];
+      readonly filter: Record<string, unknown>;
+    }
+  | {
+      readonly kind: "completed-draft";
+      readonly week: null;
+      readonly views: readonly string[];
+      readonly filter: null;
+    };
+
+function currentScoringPeriod(payload: unknown): number {
+  if (!isRecord(payload)) return 0;
+  const value = payload.scoringPeriodId;
+  return typeof value === "number" && Number.isInteger(value) && value >= 0 && value <= 30
+    ? value
+    : 0;
+}
+
+function matchupPeriodForWeek(payload: unknown, week: number): number {
+  if (!isRecord(payload) || !isRecord(payload.settings)) return week;
+  const scheduleSettings = payload.settings.scheduleSettings;
+  if (!isRecord(scheduleSettings) || !isRecord(scheduleSettings.matchupPeriods)) return week;
+  for (const [period, weeks] of Object.entries(scheduleSettings.matchupPeriods)) {
+    if (
+      Array.isArray(weeks) &&
+      weeks.some((value) => value === week) &&
+      /^\d+$/u.test(period) &&
+      Number(period) >= 1 &&
+      Number(period) <= 30
+    ) {
+      return Number(period);
+    }
+  }
+  return week;
+}
+
+function supplementalRequests(payload: unknown): readonly SupplementalRequest[] {
+  const week = currentScoringPeriod(payload);
+  const requests: SupplementalRequest[] = [
+    {
+      kind: "available-free-agents",
+      week,
+      views: ["kona_player_info"],
+      filter: {
+        players: {
+          filterStatus: { value: ["FREEAGENT"] },
+          limit: 250,
+          sortPercOwned: { sortPriority: 1, sortAsc: false },
+          sortDraftRanks: { sortPriority: 100, sortAsc: true, value: "STANDARD" },
+        },
+      },
+    },
+    {
+      kind: "available-waivers",
+      week,
+      views: ["kona_player_info"],
+      filter: {
+        players: {
+          filterStatus: { value: ["WAIVERS"] },
+          limit: 250,
+          sortPercOwned: { sortPriority: 1, sortAsc: false },
+          sortDraftRanks: { sortPriority: 100, sortAsc: true, value: "STANDARD" },
+        },
+      },
+    },
+    {
+      kind: "structured-transactions",
+      week,
+      views: ["mTransactions2"],
+      filter: {
+        transactions: {
+          filterType: { value: [...supplementalTransactionTypes] },
+        },
+      },
+    },
+    {
+      kind: "completed-draft",
+      week: null,
+      views: ["mDraftDetail"],
+      filter: null,
+    },
+  ];
+  if (week >= 1) {
+    const matchupPeriodId = matchupPeriodForWeek(payload, week);
+    requests.splice(2, 0, {
+      kind: "weekly-box-scores",
+      week,
+      matchupPeriodId,
+      views: ["mMatchupScore", "mScoreboard"],
+      filter: {
+        schedule: {
+          filterMatchupPeriodIds: { value: [matchupPeriodId] },
+        },
+      },
+    });
+  }
+  return requests;
+}
+
+function supplementalEndpoint(
+  configuration: BridgeConfiguration,
+  leagueId: string,
+  request: SupplementalRequest,
+): URL {
+  const endpoint = new URL(
+    `/apis/v3/games/ffl/seasons/${configuration.season}/segments/0/leagues/${leagueId}`,
+    ESPN_ORIGIN,
+  );
+  for (const view of request.views) endpoint.searchParams.append("view", view);
+  if (request.week !== null) endpoint.searchParams.set("scoringPeriodId", String(request.week));
+  return endpoint;
+}
+
+async function synchronizeSupplemental(
+  configuration: BridgeConfiguration,
+  leagueId: string,
+  capturedAt: string,
+  corePayload: unknown,
+): Promise<{ readonly accepted: number; readonly attempted: number }> {
+  let accepted = 0;
+  const requests = supplementalRequests(corePayload);
+  for (const request of requests) {
+    try {
+      const endpoint = supplementalEndpoint(configuration, leagueId, request);
+      const response = await fetch(endpoint, {
+        method: "GET",
+        headers: {
+          Accept: "application/json",
+          ...(request.filter ? { "x-fantasy-filter": JSON.stringify(request.filter) } : {}),
+        },
+        credentials: "include",
+        cache: "no-store",
+        redirect: "error",
+      });
+      if (!response.ok) throw new Error(`ESPN returned status ${response.status}`);
+      if (!(response.headers.get("content-type") ?? "").toLowerCase().includes("json")) {
+        throw new Error("ESPN did not return JSON");
+      }
+      const payload = JSON.parse(await readBoundedText(response)) as unknown;
+      const envelope = {
+        schemaVersion: 1,
+        provider: "espn",
+        authority: "browser-local",
+        readOnly: true,
+        leagueId,
+        season: configuration.season,
+        capturedAt,
+        endpoint: endpoint.toString(),
+        checksumSha256: await sha256(JSON.stringify(payload)),
+        payload,
+        kind: request.kind,
+        week: request.week,
+        ...(request.kind === "weekly-box-scores"
+          ? { matchupPeriodId: request.matchupPeriodId }
+          : {}),
+      };
+      const upload = await fetch(`${configuration.apiBaseUrl}/v1/bridge/espn/supplemental`, {
+        method: "POST",
+        headers: {
+          Accept: "application/json",
+          Authorization: `Bridge ${configuration.deviceToken}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(envelope),
+        cache: "no-store",
+        credentials: "omit",
+        redirect: "error",
+      });
+      if (!upload.ok) throw new Error(`Laces Out returned status ${upload.status}`);
+      accepted += 1;
+    } catch {
+      // Supplemental endpoints are admitted independently. Core roster sync and other successful
+      // artifacts remain useful when any one undocumented ESPN view drifts or is unavailable.
+    }
+  }
+  return { accepted, attempted: requests.length };
+}
+
 async function synchronizeLeague(
   configuration: BridgeConfiguration,
   leagueId: string,
@@ -195,7 +399,20 @@ async function synchronizeLeague(
       };
     }
     if (!uploadResponse.ok) throw new Error(`Laces Out returned status ${uploadResponse.status}`);
-    return { leagueId, state: "synced", message: "Synced successfully." };
+    const supplemental = await synchronizeSupplemental(
+      configuration,
+      leagueId,
+      capturedAt,
+      payload,
+    );
+    return {
+      leagueId,
+      state: "synced",
+      message:
+        supplemental.accepted === supplemental.attempted
+          ? "League and supplemental data synced."
+          : `League synced; ${supplemental.accepted} of ${supplemental.attempted} supplemental feeds updated.`,
+    };
   } catch (error) {
     return {
       leagueId,

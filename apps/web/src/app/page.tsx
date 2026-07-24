@@ -449,7 +449,8 @@ export default function LandingPage() {
                   <p className={styles.providerDescription}>
                     A private sync bookmark or the automatic Chrome companion reads league data
                     through the ESPN session you already opened. Your password and cookies stay on
-                    ESPN.
+                    ESPN. Automatic sync also refreshes player availability, box scores,
+                    transactions, and draft results as isolated feeds.
                   </p>
                   <ul>
                     <li>
@@ -457,6 +458,9 @@ export default function LandingPage() {
                     </li>
                     <li>
                       <RefreshCw size={13} /> Optional six-hour refresh with the Chrome companion
+                    </li>
+                    <li>
+                      <Check size={13} /> Availability, scoring, activity, and draft context
                     </li>
                     <li>
                       <Check size={13} />{" "}

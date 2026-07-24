@@ -1007,6 +1007,53 @@ describe("API", () => {
     await app.close();
   });
 
+  it("accepts independently authenticated ESPN supplemental artifacts", async () => {
+    const snapshots: unknown[] = [];
+    const app = await buildApp({
+      environment: loadEnvironment({ NODE_ENV: "test" }),
+      logger: false,
+      espnBridge: {
+        listDevices: () => Promise.reject(new Error("not used")),
+        registerDevice: () => Promise.reject(new Error("not used")),
+        acceptSnapshot: () => Promise.reject(new Error("not used")),
+        acceptSupplementalSnapshot: (_token, snapshot) => {
+          snapshots.push(snapshot);
+          return Promise.resolve({
+            receiptId: "00000000-0000-4000-8000-000000000021",
+            state: "accepted" as const,
+            receivedAt: "2026-07-24T14:00:00.000Z",
+          });
+        },
+        revokeDevice: () => Promise.reject(new Error("not used")),
+      },
+    });
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/bridge/espn/supplemental",
+      headers: { authorization: `Bridge lo_espn_${"b".repeat(43)}` },
+      payload: {
+        schemaVersion: 1,
+        provider: "espn",
+        authority: "browser-local",
+        readOnly: true,
+        leagueId: "12345",
+        season: 2026,
+        capturedAt: "2026-07-24T13:59:00.000Z",
+        endpoint:
+          "https://lm-api-reads.fantasy.espn.com/apis/v3/games/ffl/seasons/2026/segments/0/leagues/12345?view=kona_player_info&scoringPeriodId=0",
+        checksumSha256: "a".repeat(64),
+        payload: { players: [] },
+        kind: "available-free-agents",
+        week: 0,
+      },
+    });
+    expect(response.statusCode).toBe(202);
+    expect(snapshots).toEqual([
+      expect.objectContaining({ kind: "available-free-agents", leagueId: "12345", week: 0 }),
+    ]);
+    await app.close();
+  });
+
   it("reports future ESPN schema drift as validation instead of an internal failure", async () => {
     const app = await buildApp({
       environment: loadEnvironment({ NODE_ENV: "test" }),

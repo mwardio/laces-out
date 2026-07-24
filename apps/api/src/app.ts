@@ -10,6 +10,7 @@ import {
   espnBridgeDeviceResponseSchema,
   espnBridgeReceiptSchema,
   espnBridgeSnapshotSchema,
+  espnSupplementalBridgeSnapshotSchema,
   healthResponseSchema,
   jobAcceptedSchema,
   leagueDashboardSchema,
@@ -21,12 +22,16 @@ import {
   yahooAuthorizeRequestSchema,
   yahooAuthorizeResponseSchema,
   type EspnBridgeSnapshot,
+  type EspnSupplementalBridgeSnapshot,
   type LeagueDashboard,
   type LeagueListResponse,
   type RefreshRequest,
   type TeamClaimResponse,
 } from "@fantasy/contracts";
-import { EspnWebClientNormalizationError } from "@fantasy/connector-espn";
+import {
+  EspnSupplementalNormalizationError,
+  EspnWebClientNormalizationError,
+} from "@fantasy/connector-espn";
 import Fastify, { type FastifyInstance } from "fastify";
 import { createHash } from "node:crypto";
 import { z, ZodError } from "zod";
@@ -109,6 +114,14 @@ export interface EspnBridgePort {
     readonly state: "accepted" | "unchanged";
     readonly receivedAt: string;
   }>;
+  acceptSupplementalSnapshot?(
+    deviceToken: string,
+    snapshot: EspnSupplementalBridgeSnapshot,
+  ): Promise<{
+    readonly receiptId: string;
+    readonly state: "accepted" | "unchanged";
+    readonly receivedAt: string;
+  }>;
   revokeDevice(
     userId: string,
     deviceId: string,
@@ -174,10 +187,7 @@ function applicationRedirect(webUrl: string, returnTo: string): URL {
 
 function loginAccountRateLimitKey(body: unknown, fallbackIp: string): string {
   const candidate =
-    typeof body === "object" &&
-    body !== null &&
-    "email" in body &&
-    typeof body.email === "string"
+    typeof body === "object" && body !== null && "email" in body && typeof body.email === "string"
       ? body.email.trim().toLowerCase()
       : `invalid:${fallbackIp}`;
   const digest = createHash("sha256").update(candidate, "utf8").digest("base64url");
@@ -244,12 +254,12 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   await app.register(cors, {
     delegator: (request, callback) => {
       const requestPath = request.url.split("?", 1)[0] ?? request.url;
-      const fromEspnBookmark =
-        requestPath === "/v1/bridge/espn/snapshots" &&
+      const fromEspnBridge =
+        ["/v1/bridge/espn/snapshots", "/v1/bridge/espn/supplemental"].includes(requestPath) &&
         request.headers.origin === "https://fantasy.espn.com";
       callback(null, {
-        origin: fromEspnBookmark ? "https://fantasy.espn.com" : environment.WEB_URL,
-        credentials: !fromEspnBookmark,
+        origin: fromEspnBridge ? "https://fantasy.espn.com" : environment.WEB_URL,
+        credentials: !fromEspnBridge,
         methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
       });
     },
@@ -283,6 +293,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     "/v1/auth/register",
     "/v1/auth/session",
     "/v1/bridge/espn/snapshots",
+    "/v1/bridge/espn/supplemental",
     "/v1/invitations/inspect",
     "/v1/invitations/accept",
     "/v1/ranking-shares/open",
@@ -290,7 +301,9 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   ]);
   app.addHook("onRequest", async (request, reply) => {
     const requestPath = request.url.split("?", 1)[0] ?? request.url;
-    const isBridgeSnapshot = requestPath === "/v1/bridge/espn/snapshots";
+    const isBridgeSnapshot = ["/v1/bridge/espn/snapshots", "/v1/bridge/espn/supplemental"].includes(
+      requestPath,
+    );
     if (
       environment.NODE_ENV === "production" &&
       !["GET", "HEAD", "OPTIONS"].includes(request.method) &&
@@ -677,6 +690,41 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     },
   );
 
+  app.post(
+    "/v1/bridge/espn/supplemental",
+    {
+      bodyLimit: 21 * 1024 * 1024,
+      config: {
+        rateLimit: { max: 180, timeWindow: "10 minutes" },
+      },
+    },
+    async (request, reply) => {
+      if (!options.espnBridge?.acceptSupplementalSnapshot) {
+        return reply.code(503).type("application/problem+json").send({
+          type: "https://fantasy.local/problems/espn-bridge-unavailable",
+          title: "ESPN browser sync is not configured",
+          status: 503,
+          correlationId: request.id,
+        });
+      }
+      const authorization = request.headers.authorization;
+      const match = /^Bridge ([A-Za-z0-9._~-]{32,512})$/u.exec(authorization ?? "");
+      if (!match?.[1]) {
+        return reply.code(401).type("application/problem+json").send({
+          type: "https://fantasy.local/problems/bridge-unauthorized",
+          title: "Valid bridge device authorization is required",
+          status: 401,
+          correlationId: request.id,
+        });
+      }
+      const snapshot = espnSupplementalBridgeSnapshotSchema.parse(request.body);
+      const receipt = espnBridgeReceiptSchema.parse(
+        await options.espnBridge.acceptSupplementalSnapshot(match[1], snapshot),
+      );
+      return reply.code(receipt.state === "accepted" ? 202 : 200).send(receipt);
+    },
+  );
+
   app.post("/v1/connections/yahoo/authorize", async (request, reply) => {
     if (!request.currentUser) {
       return reply.code(401).type("application/problem+json").send({
@@ -865,6 +913,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     const isValidation =
       error instanceof ZodError ||
       error instanceof EspnWebClientNormalizationError ||
+      error instanceof EspnSupplementalNormalizationError ||
       fastifyError.validation !== undefined;
     const status = isValidation ? 400 : (fastifyError.statusCode ?? 500);
     if (status >= 500) request.log.error({ err: error }, "request failed");
@@ -876,7 +925,9 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     const publicValidationDetail =
       error instanceof EspnWebClientNormalizationError
         ? normalizedError.message
-        : "One or more request fields are invalid.";
+        : error instanceof EspnSupplementalNormalizationError
+          ? normalizedError.message
+          : "One or more request fields are invalid.";
 
     const problem = problemDetailsSchema.parse({
       type: isValidation

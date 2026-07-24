@@ -3,8 +3,10 @@
 This Manifest V3 companion provides read-only sync for private ESPN Fantasy Football leagues even
 though ESPN does not publish a supported third-party Fantasy OAuth API. The user signs in on ESPN's
 own site. The extension makes a credentialed request from the local browser and uploads only a
-bounded, checksummed league snapshot to Laces Out. The snapshot includes league settings, teams,
-rosters, standings, and weekly matchups for opponent and league-wide analysis.
+bounded, checksummed league data to Laces Out. The core snapshot includes settings, teams, rosters,
+standings, and weekly matchups. Independently admitted supplemental reads add current availability,
+player-level box scores, structured transactions, and draft results without allowing one drifting
+ESPN view to block the rest of the refresh.
 
 It never asks for, reads through the cookies API, uploads, or stores an ESPN password, `SWID`,
 `espn_s2`, copied request header, or HAR file. It cannot set lineups or perform transactions.
@@ -21,8 +23,9 @@ The signed listing keeps the extension ID stable and delivers updates through Ch
 3. Laces Out sends the scoped pairing offer directly to the extension. Open the extension and choose
    **Complete pairing**. There is no device token to copy or paste.
 4. Sign in at `https://fantasy.espn.com/football/` in the same Chrome profile.
-5. Choose **Sync now**. Optional background sync runs every six hours while the browser and ESPN
-   session are available.
+5. Choose **Sync now**. Core league data is stored first, followed by independently isolated
+   supplemental feeds. Optional background sync repeats the check every six hours while the browser
+   and ESPN session are available.
 
 ## Local development build
 

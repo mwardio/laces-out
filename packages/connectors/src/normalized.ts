@@ -198,3 +198,150 @@ export interface DraftDelta {
   readonly nextCursor: string | null;
   readonly complete: boolean;
 }
+
+export type NormalizedAvailabilityStatus = "free-agent" | "waivers";
+
+export interface NormalizedAvailablePlayer {
+  /** Complete season-scoped provider key. */
+  readonly externalId: string;
+  readonly providerPlayerId: string;
+  readonly fullName: string;
+  readonly primaryPosition: string;
+  readonly eligiblePositions: readonly string[];
+  readonly proTeamAbbreviation: string | null;
+  readonly injuryStatus: string | null;
+  readonly availability: NormalizedAvailabilityStatus;
+  readonly percentOwned: number | null;
+  readonly percentStarted: number | null;
+  readonly ownershipTrend: number | null;
+}
+
+export interface NormalizedSupplementalContext {
+  readonly provider: ProviderId;
+  readonly leagueExternalId: string;
+  readonly providerLeagueId: string;
+  readonly season: number;
+  readonly provenance: SyncProvenance;
+  readonly warnings: readonly string[];
+}
+
+export interface NormalizedAvailablePlayerSnapshot extends NormalizedSupplementalContext {
+  readonly kind: "available-players";
+  readonly asOfWeek: number;
+  readonly availability: NormalizedAvailabilityStatus;
+  /**
+   * True when the provider response hit the requested result cap. Consumers must treat a
+   * truncated observation as a useful ranked candidate pool, never as proof that an omitted
+   * player is rostered.
+   */
+  readonly truncated: boolean;
+  readonly players: readonly NormalizedAvailablePlayer[];
+}
+
+export interface NormalizedFantasyPlayerWeekScore {
+  readonly teamExternalId: string;
+  readonly providerTeamId: string;
+  readonly playerExternalId: string;
+  readonly providerPlayerId: string;
+  readonly lineupSlot: string;
+  readonly starter: boolean;
+  /** Null means ESPN omitted an actual-stat row; it is not silently converted to zero. */
+  readonly actualPoints: number | null;
+  readonly projectedPoints: number | null;
+  /** League-scored contribution by provider stat ID when ESPN supplied it. */
+  readonly appliedStats: Readonly<Record<string, number>>;
+}
+
+export interface NormalizedFantasyTeamWeekScore {
+  readonly teamExternalId: string;
+  readonly providerTeamId: string;
+  readonly totalPoints: number;
+}
+
+export interface NormalizedFantasyMatchupWeekScore {
+  readonly externalId: string;
+  readonly providerMatchupId: string;
+  readonly home: NormalizedFantasyTeamWeekScore;
+  readonly away: NormalizedFantasyTeamWeekScore;
+}
+
+export interface NormalizedWeeklyBoxScoreSnapshot extends NormalizedSupplementalContext {
+  readonly kind: "weekly-box-scores";
+  readonly week: number;
+  readonly matchups: readonly NormalizedFantasyMatchupWeekScore[];
+  readonly playerScores: readonly NormalizedFantasyPlayerWeekScore[];
+}
+
+export type NormalizedTransactionType = "free-agent" | "waiver" | "trade" | "lineup" | "draft";
+
+export type NormalizedTransactionStatus =
+  "pending" | "executed" | "cancelled" | "failed" | "unknown";
+
+export type NormalizedTransactionItemType = "add" | "drop" | "trade" | "lineup" | "draft";
+
+export interface NormalizedTransactionItem {
+  readonly sequence: number;
+  readonly type: NormalizedTransactionItemType;
+  readonly playerExternalId: string;
+  readonly providerPlayerId: string;
+  readonly fromTeamExternalId: string | null;
+  readonly fromProviderTeamId: string | null;
+  readonly toTeamExternalId: string | null;
+  readonly toProviderTeamId: string | null;
+  readonly fromLineupSlot: string | null;
+  readonly toLineupSlot: string | null;
+}
+
+export interface NormalizedFantasyTransaction {
+  readonly externalId: string;
+  readonly providerTransactionId: string;
+  readonly scoringPeriodId: number;
+  readonly type: NormalizedTransactionType;
+  readonly providerType: string;
+  readonly status: NormalizedTransactionStatus;
+  readonly providerStatus: string | null;
+  readonly executionType: string;
+  readonly teamExternalId: string | null;
+  readonly providerTeamId: string | null;
+  readonly bidAmount: number | null;
+  readonly proposedAt: string | null;
+  readonly processedAt: string | null;
+  readonly items: readonly NormalizedTransactionItem[];
+}
+
+export interface NormalizedTransactionSnapshot extends NormalizedSupplementalContext {
+  readonly kind: "transactions";
+  readonly week: number;
+  readonly transactions: readonly NormalizedFantasyTransaction[];
+}
+
+export interface NormalizedCompletedDraftPick {
+  readonly externalId: string;
+  readonly providerPickId: string;
+  readonly sequence: number;
+  readonly round: number;
+  readonly roundPick: number;
+  readonly teamExternalId: string;
+  readonly providerTeamId: string;
+  readonly playerExternalId: string;
+  readonly providerPlayerId: string;
+  readonly nominatingTeamExternalId: string | null;
+  readonly nominatingProviderTeamId: string | null;
+  readonly amount: number | null;
+  readonly keeper: boolean;
+}
+
+export interface NormalizedCompletedDraftSnapshot extends NormalizedSupplementalContext {
+  readonly kind: "completed-draft";
+  readonly draftType: Extract<DraftType, "snake" | "auction">;
+  readonly budgetPerTeam: number | null;
+  readonly state: "in-progress" | "complete";
+  readonly completedAt: string | null;
+  readonly picks: readonly NormalizedCompletedDraftPick[];
+}
+
+export type LeagueSupplementalBundle =
+  | NormalizedAvailablePlayerSnapshot
+  | NormalizedWeeklyBoxScoreSnapshot
+  | NormalizedTransactionSnapshot
+  | NormalizedCompletedDraftSnapshot;

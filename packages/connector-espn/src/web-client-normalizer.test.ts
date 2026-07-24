@@ -274,6 +274,23 @@ describe("ESPN web-client snapshot normalizer", () => {
     ).toBe(true);
   });
 
+  it("accepts ESPN's signed player IDs for NFL team defenses", () => {
+    const value = parsedFixture();
+    const entry = value.payload.teams[0]!.roster.entries[0]!;
+    entry.playerId = "-16012";
+    entry.playerPoolEntry.id = "-16012";
+    entry.playerPoolEntry.player.id = "-16012";
+    entry.playerPoolEntry.player.eligibleSlots = [16, 20];
+    entry.lineupSlotId = 16;
+
+    const bundle = normalizeEspnWebClientSnapshot(value);
+    expect(bundle.teams[0]?.roster[0]).toMatchObject({
+      externalId: "espn:2026:player:-16012",
+      providerPlayerId: "-16012",
+      primaryPosition: "D/ST",
+    });
+  });
+
   it("accepts a raw payload and checksums the exact received serialization", () => {
     const envelope = parsedFixture();
     const raw = JSON.stringify(envelope.payload);

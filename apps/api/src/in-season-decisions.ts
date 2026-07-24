@@ -10,8 +10,10 @@ import {
   leagueMemberships,
   leagues,
   leagueSeasons,
+  leagueSupplementalSnapshots,
   dataSources,
   playerMarketObservations,
+  playerExternalIds,
   playerProjections,
   players,
   projectionSets,
@@ -45,7 +47,7 @@ import {
 import { optimizeLineup, type LineupLock } from "@fantasy/engine-lineup";
 import { evaluateTrade, type TradeEvaluation, type TradePackage } from "@fantasy/engine-trade";
 import { evaluateWaiverMoves, recommendFaabBid } from "@fantasy/engine-waiver";
-import { and, asc, count, desc, eq, inArray, ne, or, sql } from "drizzle-orm";
+import { and, asc, count, desc, eq, inArray, like, ne, or, sql } from "drizzle-orm";
 
 import { currentManagedProjectionProfileKey } from "./managed-projection-profile.js";
 import { projectionTimestampProvenance } from "./projection-provenance.js";
@@ -144,6 +146,19 @@ export interface DecisionMarketSignalRow {
   readonly observedAt: Date;
 }
 
+export interface DecisionAvailabilitySnapshotRow {
+  readonly availability: "free-agent" | "waivers" | null;
+  readonly asOfWeek: number | null;
+  readonly effectiveAt: Date;
+  readonly artifact: Record<string, unknown>;
+}
+
+export interface DecisionEspnPlayerIdentityRow {
+  readonly playerId: string;
+  readonly source: string;
+  readonly externalId: string;
+}
+
 export interface InSeasonDecisionRepository {
   findMembership(userId: string, leagueId: string): Promise<DecisionMembershipRow | undefined>;
   findLatestSeason(leagueId: string): Promise<DecisionSeasonRow | undefined>;
@@ -177,6 +192,14 @@ export interface InSeasonDecisionRepository {
     playerIds: readonly string[],
     limit: number,
   ): Promise<readonly DecisionMarketSignalRow[]>;
+  findLatestEspnAvailability?(
+    leagueSeasonId: string,
+    week: number | null,
+  ): Promise<readonly DecisionAvailabilitySnapshotRow[]>;
+  listEspnPlayerIdentities?(
+    leagueSeasonId: string,
+    playerIds: readonly string[],
+  ): Promise<readonly DecisionEspnPlayerIdentityRow[]>;
 }
 
 export class DrizzleInSeasonDecisionRepository implements InSeasonDecisionRepository {
@@ -423,6 +446,60 @@ export class DrizzleInSeasonDecisionRepository implements InSeasonDecisionReposi
       .limit(limit);
   }
 
+  findLatestEspnAvailability(
+    leagueSeasonId: string,
+    week: number | null,
+  ): Promise<readonly DecisionAvailabilitySnapshotRow[]> {
+    return this.#database
+      .selectDistinctOn([leagueSupplementalSnapshots.availability], {
+        availability: leagueSupplementalSnapshots.availability,
+        asOfWeek: leagueSupplementalSnapshots.asOfWeek,
+        effectiveAt: leagueSupplementalSnapshots.effectiveAt,
+        artifact: leagueSupplementalSnapshots.artifact,
+      })
+      .from(leagueSupplementalSnapshots)
+      .where(
+        and(
+          eq(leagueSupplementalSnapshots.leagueSeasonId, leagueSeasonId),
+          eq(leagueSupplementalSnapshots.kind, "available-players"),
+          ...(week === null ? [] : [eq(leagueSupplementalSnapshots.asOfWeek, week)]),
+        ),
+      )
+      .orderBy(
+        leagueSupplementalSnapshots.availability,
+        desc(leagueSupplementalSnapshots.effectiveAt),
+        desc(leagueSupplementalSnapshots.id),
+      )
+      .limit(2);
+  }
+
+  listEspnPlayerIdentities(
+    leagueSeasonId: string,
+    ids: readonly string[],
+  ): Promise<readonly DecisionEspnPlayerIdentityRow[]> {
+    if (ids.length === 0) return Promise.resolve([]);
+    return this.#database
+      .select({
+        playerId: playerExternalIds.playerId,
+        source: playerExternalIds.source,
+        externalId: playerExternalIds.externalId,
+      })
+      .from(playerExternalIds)
+      .where(
+        and(
+          inArray(playerExternalIds.playerId, [...ids]),
+          or(
+            eq(playerExternalIds.source, "espn"),
+            and(
+              eq(playerExternalIds.source, "espn-self-asserted"),
+              like(playerExternalIds.externalId, `${leagueSeasonId}:%`),
+            ),
+          ),
+        ),
+      )
+      .limit(MAX_PROJECTION_ROWS * 2);
+  }
+
   #projectionPlayerQuery() {
     return this.#database
       .select({
@@ -467,6 +544,35 @@ const playerStatusSet = new Set<string>(PLAYER_STATUSES);
 
 function rounded(value: number): number {
   return Number(value.toFixed(3));
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function freshAvailableProviderIds(
+  rows: readonly DecisionAvailabilitySnapshotRow[],
+  now: Date,
+): ReadonlySet<string> | null {
+  if (rows.length === 0) return null;
+  const ids = new Set<string>();
+  let usableRows = 0;
+  for (const row of rows) {
+    const ageHours = (now.getTime() - row.effectiveAt.getTime()) / 3_600_000;
+    if (ageHours < 0 || ageHours > 24 || !isPlainRecord(row.artifact)) continue;
+    if (row.artifact.kind !== "available-players" || !Array.isArray(row.artifact.players)) continue;
+    usableRows += 1;
+    for (const player of row.artifact.players) {
+      if (
+        isPlainRecord(player) &&
+        typeof player.providerPlayerId === "string" &&
+        /^-?\d{1,20}$/u.test(player.providerPlayerId)
+      ) {
+        ids.add(player.providerPlayerId);
+      }
+    }
+  }
+  return usableRows > 0 ? ids : null;
 }
 
 function finiteDecimal(value: string | null, fallback?: number): number | undefined {
@@ -898,18 +1004,22 @@ export class InSeasonDecisionService {
       ]);
     }
 
-    const [teamRows, slotRuleRows, snapshotRows, projectionSetRows] = await Promise.all([
-      this.#repository.listTeams(season.id, MAX_TEAMS + 1),
-      this.#repository.listSlotRules(season.id, MAX_SLOT_RULES + 1),
-      this.#repository.listLatestRosterSnapshots(season.id, MAX_TEAMS + 1),
-      this.#repository.findProjectionSets(
-        userId,
-        season.id,
-        season.season,
-        season.currentWeek,
-        MAX_PROJECTION_SET_CANDIDATES,
-      ),
-    ]);
+    const [teamRows, slotRuleRows, snapshotRows, projectionSetRows, availabilityRows] =
+      await Promise.all([
+        this.#repository.listTeams(season.id, MAX_TEAMS + 1),
+        this.#repository.listSlotRules(season.id, MAX_SLOT_RULES + 1),
+        this.#repository.listLatestRosterSnapshots(season.id, MAX_TEAMS + 1),
+        this.#repository.findProjectionSets(
+          userId,
+          season.id,
+          season.season,
+          season.currentWeek,
+          MAX_PROJECTION_SET_CANDIDATES,
+        ),
+        season.provider === "espn" && this.#repository.findLatestEspnAvailability
+          ? this.#repository.findLatestEspnAvailability(season.id, season.currentWeek)
+          : Promise.resolve([]),
+      ]);
     const claimedTeam = teamRows.find((team) => team.id === membership.claimedFantasyTeamId);
     if (!claimedTeam) {
       return emptySnapshot(membership, now, season, [
@@ -984,6 +1094,25 @@ export class InSeasonDecisionService {
     }
     const allPlayerById = new Map<string, Player>(rosterPlayerById);
     for (const [id, prepared] of preparedById) allPlayerById.set(id, prepared.player);
+    const availableProviderIds = freshAvailableProviderIds(availabilityRows, now);
+    let explicitlyAvailablePlayerIds: ReadonlySet<string> | null = null;
+    if (availableProviderIds && this.#repository.listEspnPlayerIdentities) {
+      const identities = await this.#repository.listEspnPlayerIdentities(season.id, [
+        ...preparedById.keys(),
+      ]);
+      const prefix = `${season.id}:`;
+      explicitlyAvailablePlayerIds = new Set(
+        identities.flatMap((identity) => {
+          const providerPlayerId =
+            identity.source === "espn"
+              ? identity.externalId
+              : identity.externalId.startsWith(prefix)
+                ? identity.externalId.slice(prefix.length)
+                : "";
+          return availableProviderIds.has(providerPlayerId) ? [identity.playerId] : [];
+        }),
+      );
+    }
 
     const userRoster = claimedRosterRows.flatMap((entry) => {
       const player = rosterPlayerById.get(entry.playerId);
@@ -1209,7 +1338,12 @@ export class InSeasonDecisionService {
     } else {
       const rosteredIds = new Set(boundedRosterRows.map((entry) => entry.playerId));
       const candidates = [...preparedById.values()]
-        .filter((prepared) => !rosteredIds.has(prepared.player.id))
+        .filter(
+          (prepared) =>
+            !rosteredIds.has(prepared.player.id) &&
+            (explicitlyAvailablePlayerIds === null ||
+              explicitlyAvailablePlayerIds.has(prepared.player.id)),
+        )
         .sort(
           (left, right) =>
             right.value.mean - left.value.mean || left.player.id.localeCompare(right.player.id),
@@ -1313,7 +1447,9 @@ export class InSeasonDecisionService {
             recommendations,
             execution,
             notes: [
-              `Evaluated the top ${candidates.length} projected players not rostered in any latest team snapshot.`,
+              explicitlyAvailablePlayerIds === null
+                ? `Evaluated the top ${candidates.length} projected players not rostered in any latest team snapshot.`
+                : `Evaluated ${candidates.length} projected players confirmed in ESPN's latest available-player feeds.`,
               recommendations.length === 0
                 ? "No bounded add/drop pairing improved projected roster value."
                 : "FAAB ranges are heuristic budget guidance, not bid guarantees.",
