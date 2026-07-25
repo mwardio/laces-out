@@ -31,9 +31,15 @@
   reruns lineup, waiver, trade, opponent, and roster-strength analysis.
 - **Draft day** — persistent snake and auction rooms use an append-only event ledger with
   inflation, scarcity, wait risk, max-bid math, undo, replay, and a browser-local Practice Room.
+- **Ad-hoc research** — Stats Center serves every admitted weekly field over any week range:
+  volume, scored production, and derived efficiency (air yards, EPA, PACR, WOPR, CPOE), plus a
+  per-player profile with a week-by-week game log. A metric the source file does not carry, or a
+  share whose team coverage is unproven, is withheld with its reason rather than shown as a zero.
+- **Schedule and byes** — matchups, kickoffs, results, and bye weeks. A bye is asserted only where
+  the admitted schedule covers both the team and the week; anything else reads as unknown.
 - **Your own edge** — private rankings, ADP, auction values, cheat sheets, custom projections,
-  Stats Center usage data, Sleeper momentum, and Fantasy Football Calculator markets sharpen the
-  built-in engine without obscuring provenance.
+  Sleeper momentum, and Fantasy Football Calculator markets sharpen the built-in engine without
+  obscuring provenance.
 - **Film Room AI** — included Gemini analysis plus encrypted BYOK support for OpenAI, Anthropic,
   Gemini, and OpenRouter. Answers are grounded in league facts and deterministic recommendations;
   models receive no provider credentials, tools, or write access.

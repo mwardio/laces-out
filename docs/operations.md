@@ -55,6 +55,10 @@ docker compose run --rm --no-deps \
 unset OWNER_PASSWORD
 ```
 
+A member who still knows their password changes it themselves at `/settings`, which keeps their
+current session and signs out their other devices. The command below is for the case they cannot
+sign in at all.
+
 If a member forgets a password, the operator can reset it without editing PostgreSQL directly. The
 command invalidates every existing session for that account. Supply the new password ephemerally:
 

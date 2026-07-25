@@ -29,6 +29,7 @@ import { LatestRequest } from "../lib/latest-request";
 import { yahooComingSoon } from "../lib/public-site";
 import { loginUrlForCurrentPath } from "../lib/safe-return-to";
 import { DEMO_LEAGUE_ID } from "../lib/demo-contract-data";
+import { useDefaultLeague } from "../lib/use-default-league";
 import { AiCoachPanel } from "./ai-coach-panel";
 import { PortfolioDashboard } from "./portfolio-dashboard";
 
@@ -273,6 +274,17 @@ interface LivePortfolioProps {
 
 function LivePortfolio({ portfolio, reloadPortfolio }: LivePortfolioProps) {
   const [selectedLeagueId, setSelectedLeagueId] = useState(portfolio.leagues[0]?.id ?? "");
+  const { defaultLeagueId, loaded: preferenceLoaded } = useDefaultLeague();
+  const appliedDefault = useRef(false);
+
+  useEffect(() => {
+    // Applied once, so a member who switches leagues is not pulled back to their default.
+    if (!preferenceLoaded || appliedDefault.current || !defaultLeagueId) return;
+    appliedDefault.current = true;
+    if (portfolio.leagues.some((league) => league.id === defaultLeagueId)) {
+      setSelectedLeagueId(defaultLeagueId);
+    }
+  }, [defaultLeagueId, portfolio.leagues, preferenceLoaded]);
   const [dashboardState, setDashboardState] = useState<DashboardState>({ status: "loading" });
   const [claimChoice, setClaimChoice] = useState("");
   const [claimState, setClaimState] = useState<"idle" | "saving" | "saved" | "error">("idle");

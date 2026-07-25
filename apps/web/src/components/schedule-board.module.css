@@ -1,0 +1,483 @@
+@layer components {
+  .page {
+    display: grid;
+    gap: 16px;
+    padding: 26px 26px 90px;
+  }
+
+  .hero {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 18px;
+  }
+
+  .hero p {
+    color: var(--green-600);
+    font-size: 10px;
+    font-weight: 800;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+  }
+
+  .hero h1 {
+    margin-top: 6px;
+    color: var(--ink-950);
+    font-size: 38px;
+    letter-spacing: -0.02em;
+    line-height: 1.05;
+  }
+
+  .hero > div > span {
+    display: block;
+    max-width: 62ch;
+    margin-top: 8px;
+    color: var(--ink-500);
+    font-size: 13px;
+    line-height: 1.6;
+  }
+
+  .hero > svg {
+    color: var(--green-600);
+  }
+
+  .filters {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+    align-items: end;
+    gap: 10px;
+    padding: 14px;
+    background: #fff;
+    border: 1px solid var(--ink-150);
+    border-radius: 11px;
+    box-shadow: 0 8px 22px rgb(23 35 28 / 4%);
+  }
+
+  .filters label {
+    display: grid;
+    gap: 6px;
+    min-width: 0;
+  }
+
+  .filters label > span {
+    color: var(--ink-500);
+    font-size: 9px;
+    font-weight: 800;
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
+  }
+
+  .filters select,
+  .filters button {
+    min-height: 38px;
+    border-radius: 8px;
+    font-size: 12px;
+  }
+
+  .filters select {
+    padding: 0 10px;
+    color: var(--ink-900);
+    background: #fff;
+    border: 1px solid var(--ink-200);
+  }
+
+  .filters button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 7px;
+    padding: 0 14px;
+    color: #fff;
+    background: var(--ink-950);
+    border: 0;
+    cursor: pointer;
+    font-weight: 700;
+  }
+
+  .filters button:disabled {
+    cursor: progress;
+    opacity: 0.65;
+  }
+
+  .stateCard {
+    display: flex;
+    min-height: 140px;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    padding: 24px;
+    color: var(--ink-500);
+    background: #fff;
+    border: 1px solid var(--ink-150);
+    border-radius: 11px;
+  }
+
+  .stateCard strong {
+    display: block;
+    color: var(--ink-900);
+    font-size: 13px;
+  }
+
+  .stateCard span {
+    display: block;
+    margin-top: 3px;
+    font-size: 11px;
+  }
+
+  .warning {
+    display: flex;
+    align-items: start;
+    gap: 10px;
+    padding: 14px 18px;
+    color: #8a5a12;
+    background: #fdf6e8;
+    border: 1px solid #f0dfba;
+    border-radius: 11px;
+  }
+
+  .warning strong {
+    display: block;
+    font-size: 12px;
+  }
+
+  .warning span {
+    display: block;
+    margin-top: 2px;
+    font-size: 11px;
+    line-height: 1.5;
+  }
+
+  .panel {
+    min-width: 0;
+    background: #fff;
+    border: 1px solid var(--ink-150);
+    border-radius: 11px;
+  }
+
+  .panelHeading {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 14px;
+    padding: 16px 20px;
+  }
+
+  .panelHeading p {
+    color: var(--green-600);
+    font-size: 9px;
+    font-weight: 800;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+
+  .panelHeading h2 {
+    margin-top: 4px;
+    color: var(--ink-950);
+    font-size: 17px;
+  }
+
+  .panelHeading > span {
+    color: var(--ink-500);
+    font-size: 10px;
+    text-align: right;
+  }
+
+  .gameList {
+    display: grid;
+    margin: 0;
+    border-top: 1px solid var(--ink-100);
+    list-style: none;
+  }
+
+  .gameList li {
+    display: grid;
+    grid-template-columns: minmax(180px, 1.4fr) minmax(140px, 1fr) auto auto;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 20px;
+    border-bottom: 1px solid var(--ink-100);
+  }
+
+  .gameList li:last-child {
+    border-bottom: 0;
+  }
+
+  .matchup {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+  }
+
+  .matchup strong {
+    color: var(--ink-900);
+    font-size: 12px;
+    font-weight: 800;
+  }
+
+  .matchup em {
+    color: var(--ink-500);
+    font-size: 10px;
+    font-style: normal;
+  }
+
+  .kickoff {
+    color: var(--ink-600);
+    font-size: 11px;
+  }
+
+  .status {
+    color: var(--ink-500);
+    font-size: 9px;
+    font-weight: 800;
+    letter-spacing: 0.06em;
+    text-align: right;
+    text-transform: uppercase;
+  }
+
+  .score {
+    min-width: 58px;
+    color: var(--ink-900);
+    font-size: 12px;
+    font-variant-numeric: tabular-nums;
+    text-align: right;
+  }
+
+  .neutralTag,
+  .byeTag,
+  .unknownTag {
+    padding: 2px 7px;
+    border-radius: 20px;
+    font-size: 8px;
+    font-weight: 800;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+
+  .neutralTag {
+    color: var(--ink-600);
+    background: var(--ink-100);
+  }
+
+  .byeTag {
+    color: #1f7a3d;
+    background: #e8f6ed;
+  }
+
+  /* An unknown week is a coverage gap, not a bye, and must not read like one. */
+  .unknownTag {
+    color: #8a5a12;
+    background: #fdf6e8;
+    cursor: help;
+  }
+
+  .tableScroll {
+    overflow-x: auto;
+    border-top: 1px solid var(--ink-100);
+  }
+
+  .tableScroll table {
+    width: 100%;
+    min-width: 620px;
+    border-collapse: collapse;
+  }
+
+  .tableScroll th,
+  .tableScroll td {
+    padding: 11px 14px;
+    text-align: right;
+    border-bottom: 1px solid var(--ink-100);
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .tableScroll thead th {
+    color: var(--ink-500);
+    background: var(--paper-50);
+    font-size: 9px;
+    font-weight: 800;
+    letter-spacing: 0.08em;
+  }
+
+  .tableScroll th:first-child {
+    position: sticky;
+    left: 0;
+    z-index: 1;
+    min-width: 70px;
+    color: var(--ink-900);
+    text-align: left;
+    background: #fff;
+    font-weight: 700;
+  }
+
+  .tableScroll thead th:first-child {
+    background: var(--paper-50);
+  }
+
+  .byeRow,
+  .byeRow th:first-child {
+    background: var(--paper-50);
+  }
+
+  .byeList {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+    margin: 0;
+    border-top: 1px solid var(--ink-100);
+    list-style: none;
+  }
+
+  .byeList li {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 11px 16px;
+    border-bottom: 1px solid var(--ink-100);
+  }
+
+  .byeList strong {
+    color: var(--ink-900);
+    font-size: 12px;
+    font-weight: 800;
+  }
+
+  .byeList span {
+    color: var(--ink-500);
+    font-size: 10px;
+  }
+
+  .emptyState {
+    display: grid;
+    justify-items: center;
+    gap: 6px;
+    padding: 30px 20px;
+    color: var(--ink-500);
+    border-top: 1px solid var(--ink-100);
+    text-align: center;
+  }
+
+  .emptyState strong {
+    color: var(--ink-900);
+    font-size: 13px;
+  }
+
+  .emptyState span {
+    max-width: 70ch;
+    font-size: 11px;
+    line-height: 1.55;
+  }
+
+  .definition {
+    padding: 12px 20px;
+    color: var(--ink-500);
+    font-size: 10px;
+    line-height: 1.55;
+  }
+
+  .sourceGrid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+    gap: 14px;
+    padding: 16px 20px;
+    margin: 0;
+    border-top: 1px solid var(--ink-100);
+  }
+
+  .sourceGrid dt {
+    color: var(--ink-500);
+    font-size: 9px;
+    font-weight: 800;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+
+  .sourceGrid dd {
+    margin-top: 3px;
+    color: var(--ink-800);
+    font-size: 11px;
+  }
+
+  .attribution {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 0 20px 16px;
+    color: var(--ink-500);
+    font-size: 10px;
+  }
+
+  .sourceState {
+    padding: 2px 7px;
+    border-radius: 20px;
+    font-size: 8px;
+    font-weight: 800;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+
+  .sourceState--available {
+    color: #1f7a3d;
+    background: #e8f6ed;
+  }
+
+  .sourceState--quarantined {
+    color: #8a5a12;
+    background: #fdf6e8;
+  }
+
+  .sourceState--unavailable {
+    color: var(--ink-600);
+    background: var(--ink-100);
+  }
+
+  .spin {
+    animation: schedule-spin 900ms linear infinite;
+  }
+
+  @keyframes schedule-spin {
+    to {
+      transform: rotate(360deg);
+    }
+  }
+
+  @media (max-width: 720px) {
+    .page {
+      gap: 14px;
+      padding: 18px 12px 110px;
+    }
+
+    .hero h1 {
+      font-size: 30px;
+    }
+
+    .filters {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 9px;
+      padding: 12px;
+    }
+
+    .filters button {
+      grid-column: 1 / -1;
+    }
+
+    .panelHeading {
+      align-items: start;
+      padding: 16px;
+    }
+
+    .gameList li {
+      grid-template-columns: minmax(0, 1fr) auto;
+      row-gap: 6px;
+      padding: 12px 16px;
+    }
+
+    .status {
+      text-align: left;
+    }
+
+    .definition {
+      padding: 11px 16px;
+    }
+  }
+}

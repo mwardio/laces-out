@@ -26,6 +26,7 @@ import {
   type LeagueListResponse,
 } from "../lib/api-client";
 import { projectionSourceAsOfText } from "../lib/projection-import-form";
+import { useDefaultLeague } from "../lib/use-default-league";
 import {
   DEMO_LEAGUE_ID,
   demoDecisionSnapshot,
@@ -470,8 +471,11 @@ export function DecisionWorkbench() {
   const [decision, setDecision] = useState<DecisionState>({ state: "idle" });
   const [isDemo, setIsDemo] = useState(false);
   const decisionRequest = useRef<AbortController | null>(null);
+  const { defaultLeagueId, loaded: preferenceLoaded } = useDefaultLeague();
 
   useEffect(() => {
+    // Wait for the stored default so the first league read is the one the member wants.
+    if (!preferenceLoaded) return;
     const controller = new AbortController();
     void fetch(`${apiBaseUrl}/v1/leagues`, {
       credentials: "include",
@@ -491,7 +495,11 @@ export function DecisionWorkbench() {
         const parsed = parseLeagueListResponse(await response.json());
         if (!parsed) throw new Error("The league response failed validation.");
         setPortfolio({ state: "ready", portfolio: parsed });
-        setSelectedLeagueId((current) => current || parsed.leagues[0]?.id || "");
+        const preferred =
+          defaultLeagueId && parsed.leagues.some((league) => league.id === defaultLeagueId)
+            ? defaultLeagueId
+            : null;
+        setSelectedLeagueId((current) => current || preferred || parsed.leagues[0]?.id || "");
       })
       .catch((error: unknown) => {
         if (!controller.signal.aborted) {
@@ -502,7 +510,7 @@ export function DecisionWorkbench() {
         }
       });
     return () => controller.abort();
-  }, []);
+  }, [defaultLeagueId, preferenceLoaded]);
 
   const loadDecisions = useCallback(async () => {
     decisionRequest.current?.abort();

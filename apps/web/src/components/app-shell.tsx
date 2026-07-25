@@ -4,6 +4,7 @@ import {
   ArrowUpRight,
   BarChart3,
   BrainCircuit,
+  CalendarDays,
   ChartNoAxesCombined,
   ChartSpline,
   ClipboardCheck,
@@ -12,6 +13,7 @@ import {
   ListOrdered,
   Menu,
   Radio,
+  Settings,
   ShieldCheck,
   UserPlus,
   X,
@@ -36,6 +38,8 @@ type AppSection =
   | "members"
   | "projections"
   | "rankings"
+  | "schedule"
+  | "settings"
   | "stats";
 
 interface AppShellProps {
@@ -69,9 +73,16 @@ const primaryNavigation = [
   {
     href: "/stats",
     label: "Stats Center",
-    description: "Usage, targets, and weekly trends",
+    description: "Usage, production, efficiency, and trends",
     icon: ChartSpline,
     section: "stats" as const,
+  },
+  {
+    href: "/schedule",
+    label: "Schedule",
+    description: "Matchups, kickoffs, and bye weeks",
+    icon: CalendarDays,
+    section: "schedule" as const,
   },
   {
     href: "/decisions",
@@ -114,6 +125,13 @@ const primaryNavigation = [
     description: "Sync ESPN · Yahoo coming soon",
     icon: Cable,
     section: "connections" as const,
+  },
+  {
+    href: "/settings",
+    label: "Settings",
+    description: "Password and default league",
+    icon: Settings,
+    section: "settings" as const,
   },
 ] as const;
 
@@ -213,9 +231,11 @@ export function AppShell({
   const mobileMenuSections: readonly AppSection[] = [
     "analytics",
     "stats",
+    "schedule",
     "connections",
     "rankings",
     "projections",
+    "settings",
     "members",
   ];
   const mobileMenuIsActive = mobileMenuSections.includes(active);
@@ -356,9 +376,11 @@ export function AppShell({
                     [
                       "analytics",
                       "stats",
+                      "schedule",
                       "rankings",
                       "projections",
                       "connections",
+                      "settings",
                     ] as readonly AppSection[]
                   ).includes(item.section),
                 )

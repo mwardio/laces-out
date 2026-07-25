@@ -3,7 +3,7 @@ import { z } from "zod";
 // Mirrored here so the browser contract bundle has no runtime dependency on the domain package.
 // Response parsing fails closed if service vocabulary ever drifts from this wire contract.
 const NFL_POSITIONS = ["QB", "RB", "WR", "TE", "K", "DST", "DL", "LB", "DB", "IDP"] as const;
-const NFL_TEAMS = [
+export const NFL_TEAMS = [
   "ARI",
   "ATL",
   "BAL",
@@ -2286,12 +2286,135 @@ export const statsCenterMetricSchema = z.enum([
 ]);
 export type StatsCenterMetric = z.infer<typeof statsCenterMetricSchema>;
 
+/** Metrics summed from the stored stat components, so a total and a per-game both apply. */
+export const statsCenterAdditiveMetricSchema = z.enum([
+  "passCompletions",
+  "passAttempts",
+  "passYards",
+  "passTouchdowns",
+  "passInterceptions",
+  "rushYards",
+  "rushTouchdowns",
+  "receptions",
+  "recYards",
+  "recTouchdowns",
+  "fumblesLost",
+  "pointsStandard",
+  "pointsPpr",
+  "passAirYards",
+  "passYardsAfterCatch",
+  "passEpa",
+  "rushEpa",
+  "recAirYards",
+  "recYardsAfterCatch",
+  "recEpa",
+]);
+export type StatsCenterAdditiveMetric = z.infer<typeof statsCenterAdditiveMetricSchema>;
+
+/** Rates, which carry a single window value rather than a total. */
+export const statsCenterRatioMetricSchema = z.enum([
+  "passAirConversionRatio",
+  "airYardsShare",
+  "weightedOpportunityRating",
+  "completionPercentageOverExpected",
+]);
+export type StatsCenterRatioMetric = z.infer<typeof statsCenterRatioMetricSchema>;
+
+export const statsCenterDerivedMetricSchema = z.enum([
+  ...statsCenterAdditiveMetricSchema.options,
+  ...statsCenterRatioMetricSchema.options,
+]);
+export type StatsCenterDerivedMetric = z.infer<typeof statsCenterDerivedMetricSchema>;
+
+export const statsCenterSortSchema = z.enum([
+  ...statsCenterMetricSchema.options,
+  ...statsCenterDerivedMetricSchema.options,
+]);
+export type StatsCenterSort = z.infer<typeof statsCenterSortSchema>;
+
+export const statsCenterTrendMetricSchema = z.enum([
+  "targetsPerGame",
+  "carriesPerGame",
+  "opportunitiesPerGame",
+  "targetShare",
+  "offensiveSnapShare",
+  "fantasyPoints",
+]);
+export type StatsCenterTrendMetric = z.infer<typeof statsCenterTrendMetricSchema>;
+
+export const statsCenterScoringSchema = z.enum(["standard", "ppr"]);
+export type StatsCenterScoring = z.infer<typeof statsCenterScoringSchema>;
+
 const statsCenterAvailabilitySchema = z
   .object({
     state: z.enum(["available", "unavailable", "no-data"]),
     reason: z.string().min(1).max(500).nullable(),
   })
   .strict();
+
+/**
+ * A derived metric plus how it fared for the requested window. Definitions ride here rather
+ * than on every player so a withheld metric still explains itself exactly once.
+ */
+const statsCenterMetricDescriptorSchema = z
+  .object({
+    id: statsCenterDerivedMetricSchema,
+    label: z.string().min(1).max(60),
+    family: z.enum(["production", "efficiency"]),
+    kind: z.enum(["additive", "derivedRatio", "perGameMean"]),
+    definition: z.string().min(1).max(1_000),
+    state: z.enum(["available", "unavailable", "no-data"]),
+    reason: z.string().min(1).max(500).nullable(),
+  })
+  .strict();
+export type StatsCenterMetricDescriptor = z.infer<typeof statsCenterMetricDescriptorSchema>;
+
+const statsCenterAdditiveValuesSchema = z.record(
+  statsCenterAdditiveMetricSchema,
+  z.number().finite().nullable(),
+);
+
+const statsCenterRatioValuesSchema = z.record(
+  statsCenterRatioMetricSchema,
+  z.number().finite().nullable(),
+);
+
+const statsCenterTrendSchema = z
+  .object({
+    status: z.enum(["available", "unavailable"]),
+    seasonAverage: z.number().finite().nullable(),
+    recentWeightedAverage: z.number().finite().nullable(),
+    absoluteChange: z.number().finite().nullable(),
+    sampleSize: z.number().int().nonnegative(),
+    recentSampleSize: z.number().int().nonnegative(),
+    reason: z.string().min(1).max(500).nullable(),
+  })
+  .strict();
+export type StatsCenterTrend = z.infer<typeof statsCenterTrendSchema>;
+
+const statsCenterBoomBustSchema = z
+  .object({
+    status: z.enum(["available", "unavailable"]),
+    games: z.number().int().nonnegative(),
+    missingGames: z.number().int().nonnegative(),
+    booms: z.number().int().nonnegative().nullable(),
+    busts: z.number().int().nonnegative().nullable(),
+    neutral: z.number().int().nonnegative().nullable(),
+    boomRate: z.number().min(0).max(1).nullable(),
+    bustRate: z.number().min(0).max(1).nullable(),
+    averagePoints: z.number().finite().nullable(),
+    standardDeviation: z.number().finite().nonnegative().nullable(),
+    threshold: z
+      .object({
+        boomAtOrAbove: z.number().finite(),
+        bustAtOrBelow: z.number().finite(),
+      })
+      .strict()
+      .nullable(),
+    reason: z.string().min(1).max(500).nullable(),
+  })
+  .strict();
+export type StatsCenterBoomBust = z.infer<typeof statsCenterBoomBustSchema>;
 
 const statsCenterSourceSchema = z
   .object({
@@ -2337,49 +2460,274 @@ const statsCenterPlayerSchema = z
     targetShare: z.number().min(0).max(1).nullable(),
     offensiveSnaps: z.number().int().nonnegative().nullable(),
     offensiveSnapShare: z.number().min(0).max(1).nullable(),
+    totals: statsCenterAdditiveValuesSchema,
+    perGame: statsCenterAdditiveValuesSchema,
+    ratios: statsCenterRatioValuesSchema,
+    trend: z.record(statsCenterTrendMetricSchema, statsCenterTrendSchema),
+    boomBust: statsCenterBoomBustSchema,
   })
   .strict();
 export type StatsCenterPlayer = z.infer<typeof statsCenterPlayerSchema>;
 
+const statsCenterFiltersSchema = z
+  .object({
+    season: z.number().int().min(2012).max(2200),
+    weekFrom: z.number().int().min(1).max(25).nullable(),
+    weekTo: z.number().int().min(1).max(25).nullable(),
+    position: z.string().min(1).max(20).nullable(),
+    team: z.string().min(2).max(4).nullable(),
+    search: z.string().max(80),
+    sort: statsCenterSortSchema,
+    scoring: statsCenterScoringSchema,
+    recentWindow: z.number().int().min(1).max(25),
+    recentWeightDecay: z.number().positive().max(1),
+    limit: z.number().int().min(1).max(250),
+  })
+  .strict();
+export type StatsCenterFilters = z.infer<typeof statsCenterFiltersSchema>;
+
+const statsCenterUsageAvailabilitySchema = z
+  .object({
+    targets: statsCenterAvailabilitySchema,
+    carries: statsCenterAvailabilitySchema,
+    opportunities: statsCenterAvailabilitySchema,
+    targetShare: statsCenterAvailabilitySchema,
+    offensiveSnapShare: statsCenterAvailabilitySchema,
+    redZone: statsCenterAvailabilitySchema,
+    boomBust: statsCenterAvailabilitySchema,
+    fantasyPointsAllowed: statsCenterAvailabilitySchema,
+  })
+  .strict();
+
+const statsCenterDefinitionsSchema = z
+  .object({
+    opportunities: z.string().min(1).max(1_000),
+    targetShare: z.string().min(1).max(1_000),
+    offensiveSnapShare: z.string().min(1).max(1_000),
+    recentTrend: z.string().min(1).max(1_000),
+    boomBust: z.string().min(1).max(1_000),
+  })
+  .strict();
+
 export const statsCenterResponseSchema = z
   .object({
     generatedAt: z.iso.datetime(),
-    filters: z
-      .object({
-        season: z.number().int().min(2012).max(2200),
-        week: z.number().int().min(1).max(25).nullable(),
-        position: z.string().min(1).max(20).nullable(),
-        search: z.string().max(80),
-        sort: statsCenterMetricSchema,
-        limit: z.number().int().min(1).max(100),
-      })
-      .strict(),
-    availability: z
-      .object({
-        targets: statsCenterAvailabilitySchema,
-        carries: statsCenterAvailabilitySchema,
-        opportunities: statsCenterAvailabilitySchema,
-        targetShare: statsCenterAvailabilitySchema,
-        offensiveSnapShare: statsCenterAvailabilitySchema,
-        redZone: statsCenterAvailabilitySchema,
-        boomBust: statsCenterAvailabilitySchema,
-        fantasyPointsAllowed: statsCenterAvailabilitySchema,
-      })
-      .strict(),
+    filters: statsCenterFiltersSchema,
+    availability: statsCenterUsageAvailabilitySchema,
+    metrics: z.array(statsCenterMetricDescriptorSchema).max(40),
     sources: z.array(statsCenterSourceSchema).length(2),
-    players: z.array(statsCenterPlayerSchema).max(100),
+    players: z.array(statsCenterPlayerSchema).max(250),
     totalMatched: z.number().int().nonnegative(),
     truncated: z.boolean(),
-    definitions: z
+    definitions: statsCenterDefinitionsSchema,
+  })
+  .strict();
+export type StatsCenterResponse = z.infer<typeof statsCenterResponseSchema>;
+
+const statsCenterGameLogEntrySchema = z
+  .object({
+    season: z.number().int().min(2012).max(2200),
+    week: z.number().int().min(1).max(25),
+    /** Null on a bye row, which has no game to point at. */
+    gameId: z.string().min(1).max(64).nullable(),
+    team: z.string().min(2).max(4).nullable(),
+    opponentTeam: z.string().min(2).max(4).nullable(),
+    targets: z.number().int().nonnegative().nullable(),
+    teamTargets: z.number().int().nonnegative().nullable(),
+    targetShare: z.number().min(0).max(1).nullable(),
+    carries: z.number().int().nonnegative().nullable(),
+    opportunities: z.number().int().nonnegative().nullable(),
+    offensiveSnaps: z.number().int().nonnegative().nullable(),
+    offensiveSnapShare: z.number().min(0).max(1).nullable(),
+    points: z.number().finite().nullable(),
+    /** Set only where the admitted schedule affirms the team had no game that week. */
+    bye: z.boolean(),
+  })
+  .strict();
+export type StatsCenterGameLogEntry = z.infer<typeof statsCenterGameLogEntrySchema>;
+
+export const statsCenterPlayerDetailResponseSchema = z
+  .object({
+    generatedAt: z.iso.datetime(),
+    filters: statsCenterFiltersSchema,
+    player: z
       .object({
-        opportunities: z.string().min(1).max(1_000),
-        targetShare: z.string().min(1).max(1_000),
-        offensiveSnapShare: z.string().min(1).max(1_000),
+        playerId: z.string().uuid(),
+        name: z.string().min(1).max(200),
+        position: z.string().min(1).max(20),
+        team: z.string().min(2).max(4).nullable(),
+        status: z.string().min(1).max(80).nullable(),
+        rookieSeason: z.number().int().min(1900).max(2200).nullable(),
+      })
+      .strict(),
+    availability: statsCenterUsageAvailabilitySchema,
+    metrics: z.array(statsCenterMetricDescriptorSchema).max(40),
+    summary: statsCenterPlayerSchema,
+    gameLog: z.array(statsCenterGameLogEntrySchema).max(30),
+    sources: z.array(statsCenterSourceSchema).length(2),
+    definitions: statsCenterDefinitionsSchema,
+  })
+  .strict();
+export type StatsCenterPlayerDetailResponse = z.infer<typeof statsCenterPlayerDetailResponseSchema>;
+
+const scheduleSourceSchema = z
+  .object({
+    dataset: z.literal("schedule"),
+    state: z.enum(["available", "unavailable", "quarantined"]),
+    key: z.string().min(1).max(128),
+    name: z.string().min(1).max(200),
+    attribution: z.string().min(1).max(300).nullable(),
+    attributionUrl: z.url().nullable(),
+    fetchedAt: z.iso.datetime().nullable(),
+    checksumSha256: z
+      .string()
+      .regex(/^[a-f0-9]{64}$/u)
+      .nullable(),
+    coveredWeeks: z.array(z.number().int().min(1).max(25)).max(25),
+    coveredTeams: z.array(z.string().regex(/^[A-Z]{2,4}$/u)).max(40),
+    quality: z
+      .object({
+        rowsRead: z.number().int().nonnegative().nullable(),
+        rowsRejected: z.number().int().nonnegative().nullable(),
+      })
+      .strict(),
+    reason: z.string().min(1).max(500).nullable(),
+  })
+  .strict();
+export type ScheduleSource = z.infer<typeof scheduleSourceSchema>;
+
+const scheduleGameSchema = z
+  .object({
+    gameId: z.string().min(1).max(64),
+    week: z.number().int().min(1).max(25),
+    gameDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/u),
+    /** Null whenever the source still reports the kickoff time as TBD. */
+    startTimeEastern: z
+      .string()
+      .regex(/^([01]\d|2[0-3]):[0-5]\d$/u)
+      .nullable(),
+    timeTbd: z.boolean(),
+    kickoffAt: z.iso.datetime().nullable(),
+    awayTeam: z.string().regex(/^[A-Z]{2,4}$/u),
+    homeTeam: z.string().regex(/^[A-Z]{2,4}$/u),
+    status: z.enum(["scheduled", "in-progress", "final", "postponed", "cancelled"]),
+    neutralSite: z.boolean(),
+    awayScore: z.number().int().nonnegative().nullable(),
+    homeScore: z.number().int().nonnegative().nullable(),
+  })
+  .strict();
+export type ScheduleGame = z.infer<typeof scheduleGameSchema>;
+
+const teamScheduleWeekSchema = z
+  .object({
+    week: z.number().int().min(1).max(25),
+    /** `unknown` means coverage cannot distinguish a bye from a missing row. */
+    state: z.enum(["game", "bye", "unknown"]),
+    reason: z.string().min(1).max(500).nullable(),
+    opponent: z
+      .string()
+      .regex(/^[A-Z]{2,4}$/u)
+      .nullable(),
+    venue: z.enum(["home", "away", "neutral"]).nullable(),
+    gameId: z.string().min(1).max(64).nullable(),
+    kickoffAt: z.iso.datetime().nullable(),
+    timeTbd: z.boolean(),
+    status: z.enum(["scheduled", "in-progress", "final", "postponed", "cancelled"]).nullable(),
+    restDays: z.number().int().nonnegative().nullable(),
+    teamScore: z.number().int().nonnegative().nullable(),
+    opponentScore: z.number().int().nonnegative().nullable(),
+  })
+  .strict();
+export type TeamScheduleWeekEntry = z.infer<typeof teamScheduleWeekSchema>;
+
+const teamScheduleSchema = z
+  .object({
+    team: z.string().regex(/^[A-Z]{2,4}$/u),
+    weeks: z.array(teamScheduleWeekSchema).max(25),
+    bye: z
+      .object({
+        status: z.enum(["available", "unavailable"]),
+        byeWeeks: z.array(z.number().int().min(1).max(25)).max(25),
+        reason: z.string().min(1).max(500).nullable(),
       })
       .strict(),
   })
   .strict();
-export type StatsCenterResponse = z.infer<typeof statsCenterResponseSchema>;
+export type TeamScheduleEntry = z.infer<typeof teamScheduleSchema>;
+
+export const scheduleResponseSchema = z
+  .object({
+    generatedAt: z.iso.datetime(),
+    filters: z
+      .object({
+        season: z.number().int().min(1999).max(2200),
+        week: z.number().int().min(1).max(25).nullable(),
+        team: z
+          .string()
+          .regex(/^[A-Z]{2,4}$/u)
+          .nullable(),
+      })
+      .strict(),
+    source: scheduleSourceSchema,
+    games: z.array(scheduleGameSchema).max(400),
+    teams: z.array(teamScheduleSchema).max(40),
+    definitions: z
+      .object({
+        bye: z.string().min(1).max(1_000),
+        venue: z.string().min(1).max(1_000),
+      })
+      .strict(),
+  })
+  .strict();
+export type ScheduleResponse = z.infer<typeof scheduleResponseSchema>;
+
+export const scheduleByesResponseSchema = z
+  .object({
+    generatedAt: z.iso.datetime(),
+    season: z.number().int().min(1999).max(2200),
+    source: scheduleSourceSchema,
+    /** Only teams with exactly one affirmed bye appear; the rest are reported as withheld. */
+    byeWeeks: z.record(z.string().regex(/^[A-Z]{2,4}$/u), z.number().int().min(1).max(25)),
+    withheld: z
+      .array(
+        z
+          .object({
+            team: z.string().regex(/^[A-Z]{2,4}$/u),
+            reason: z.string().min(1).max(500),
+          })
+          .strict(),
+      )
+      .max(40),
+    definition: z.string().min(1).max(1_000),
+  })
+  .strict();
+export type ScheduleByesResponse = z.infer<typeof scheduleByesResponseSchema>;
+
+export const changePasswordRequestSchema = z
+  .object({
+    currentPassword: z.string().min(1).max(128),
+    newPassword: z.string().min(12).max(128),
+  })
+  .strict()
+  .refine((value) => value.currentPassword !== value.newPassword, {
+    message: "The new password must differ from the current one",
+    path: ["newPassword"],
+  });
+export type ChangePasswordRequest = z.infer<typeof changePasswordRequestSchema>;
+
+export const changePasswordResponseSchema = z
+  .object({
+    changed: z.literal(true),
+    /** Other devices are signed out; the caller's own session is deliberately preserved. */
+    otherSessionsRevoked: z.literal(true),
+  })
+  .strict();
+export type ChangePasswordResponse = z.infer<typeof changePasswordResponseSchema>;
+
+export const memberPreferencesSchema = z
+  .object({ defaultLeagueId: z.string().uuid().nullable() })
+  .strict();
+export type MemberPreferencesContract = z.infer<typeof memberPreferencesSchema>;
 
 export const healthResponseSchema = z.object({
   status: z.enum(["ok", "degraded"]),

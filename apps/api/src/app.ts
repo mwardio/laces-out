@@ -71,6 +71,8 @@ import {
 } from "./ros-projection-status-routes.js";
 import type { RefreshAuthorizationPort } from "./refresh-authorization.js";
 import { type RegistrationPort, registerRegistrationRoutes } from "./registration-routes.js";
+import { type PreferencesPort, registerAccountRoutes } from "./account-routes.js";
+import { type SchedulePort, registerScheduleRoutes } from "./schedule-routes.js";
 import { type StatsCenterPort, registerStatsCenterRoutes } from "./stats-center-routes.js";
 import { registerYahooRoutes } from "./yahoo-routes.js";
 import type { YahooSyncPort } from "./yahoo-sync.js";
@@ -174,6 +176,8 @@ export interface BuildAppOptions {
   readonly rosProjectionStatus?: RosProjectionStatusPort;
   readonly refreshAuthorization?: RefreshAuthorizationPort;
   readonly registration?: RegistrationPort;
+  readonly preferences?: PreferencesPort;
+  readonly schedule?: SchedulePort;
   readonly statsCenter?: StatsCenterPort;
   readonly yahooConnection?: YahooConnectionPort;
   readonly yahooSync?: YahooSyncPort;
@@ -489,6 +493,14 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   });
   registerStatsCenterRoutes(app, {
     ...(options.statsCenter ? { statsCenter: options.statsCenter } : {}),
+  });
+  registerScheduleRoutes(app, {
+    ...(options.schedule ? { schedule: options.schedule } : {}),
+  });
+  registerAccountRoutes(app, {
+    ...(options.authService ? { authService: options.authService } : {}),
+    ...(options.preferences ? { preferences: options.preferences } : {}),
+    isTest: environment.NODE_ENV === "test",
   });
   registerAiRoutes(app, options.ai);
   registerProjectionImportRoutes(app, {
