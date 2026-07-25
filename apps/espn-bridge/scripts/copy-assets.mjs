@@ -1,4 +1,4 @@
-import { copyFile, readFile, writeFile } from "node:fs/promises";
+import { access, copyFile, readFile, writeFile } from "node:fs/promises";
 
 // `dev` (default) keeps localhost and the broad optional host so an unpacked
 // build can point at a local API. `store` pins the extension to the production
@@ -22,6 +22,29 @@ if (target === "store") {
     "default-src 'self'; " +
     `connect-src https://fantasy.espn.com https://lm-api-reads.fantasy.espn.com ${API_ORIGIN}; ` +
     "img-src 'self'; style-src 'self'";
+}
+
+// The live ESPN draft feed only works if the content script survives manifest rewriting and is
+// actually compiled into `dist`. The store branch above rewrites host and CSP fields, so this
+// asserts — for both targets — that it never quietly drops the declaration or ships a manifest
+// pointing at a file that was not built. A silent miss here would look like ESPN changing its
+// markup, which is the hardest failure of this feature to diagnose.
+const contentScripts = manifest.content_scripts ?? [];
+const declaredFiles = contentScripts.flatMap((entry) => entry.js ?? []);
+if (declaredFiles.length === 0) {
+  throw new Error("manifest.json lost its ESPN draft content script declaration");
+}
+if (
+  !contentScripts.every((entry) =>
+    (entry.matches ?? []).every((match) => match.startsWith("https://fantasy.espn.com/")),
+  )
+) {
+  throw new Error("content scripts must stay scoped to https://fantasy.espn.com");
+}
+for (const file of declaredFiles) {
+  await access(new URL(`../dist/${file}`, import.meta.url)).catch(() => {
+    throw new Error(`manifest.json declares ${file} but the build did not produce it`);
+  });
 }
 
 await Promise.all([

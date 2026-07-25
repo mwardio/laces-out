@@ -1,11 +1,11 @@
 {
   "name": "@fantasy/espn-bridge",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "tsup src/service-worker.ts src/popup.ts --format esm --platform browser --target chrome120 --sourcemap --clean --out-dir dist && node scripts/copy-assets.mjs && node scripts/package.mjs",
-    "build:store": "tsup src/service-worker.ts src/popup.ts --format esm --platform browser --target chrome120 --minify --clean --out-dir dist && BRIDGE_TARGET=store node scripts/copy-assets.mjs && BRIDGE_TARGET=store node scripts/package.mjs",
+    "build": "tsup src/service-worker.ts src/popup.ts --format esm --platform browser --target chrome120 --sourcemap --clean --out-dir dist && tsup src/live-draft/content-script.ts --format iife --platform browser --target chrome120 --sourcemap --out-dir dist && node scripts/copy-assets.mjs && node scripts/package.mjs",
+    "build:store": "tsup src/service-worker.ts src/popup.ts --format esm --platform browser --target chrome120 --minify --clean --out-dir dist && tsup src/live-draft/content-script.ts --format iife --platform browser --target chrome120 --minify --out-dir dist && BRIDGE_TARGET=store node scripts/copy-assets.mjs && BRIDGE_TARGET=store node scripts/package.mjs",
     "package": "node scripts/package.mjs"
   },
   "devDependencies": {

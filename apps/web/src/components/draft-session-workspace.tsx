@@ -19,11 +19,13 @@ import {
   ListFilter,
   LoaderCircle,
   Play,
+  Radio,
   RefreshCw,
   RotateCcw,
   Search,
   ShieldCheck,
   StepForward,
+  TriangleAlert,
   Users,
   X,
 } from "lucide-react";
@@ -57,6 +59,16 @@ import {
   type DraftBoardValue,
 } from "../lib/draft-board";
 import { preferNewerDraftSnapshot } from "../lib/draft-session-refresh";
+import {
+  browserDraftStreamConnect,
+  subscribeToDraftStream,
+  type DraftStreamState,
+} from "../lib/draft-stream";
+import {
+  describeDraftSetupCapability,
+  describeLiveDraft,
+  describeMobileDecision,
+} from "../lib/live-draft-status";
 import {
   advanceLocalDraftMock,
   createLocalDraftMock,
@@ -177,6 +189,12 @@ export function DraftSessionWorkspace() {
   const [mockTeamId, setMockTeamId] = useState("");
   const [localMock, setLocalMock] = useState<LocalDraftMock | null>(null);
   const [mockReplayEventId, setMockReplayEventId] = useState("");
+  const [streamState, setStreamState] = useState<DraftStreamState>("polling");
+  const [manualBackupState, setManualBackupState] = useState<RequestState>("idle");
+  const [manualBackupOpen, setManualBackupOpen] = useState(false);
+  // Freshness has to keep ageing while the poll is failing, otherwise a dead feed
+  // sits on "updated 2s ago" for as long as nothing new arrives.
+  const [clockMs, setClockMs] = useState(() => Date.now());
 
   const rememberSession = useCallback((next: DraftSessionSnapshot) => {
     localStorage.setItem(`laces-out:last-draft-session:${accountId.current}`, next.id);
@@ -284,22 +302,26 @@ export function DraftSessionWorkspace() {
     void bootstrap();
   }, [bootstrap]);
 
-  useEffect(() => {
-    if (!session) return;
-    const draftId = session.id;
-    const refresh = () => {
-      if (
-        document.visibilityState !== "visible" ||
-        mutationInFlight.current ||
-        backgroundRefreshInFlight.current
-      ) {
-        return;
-      }
+  const refreshInBackground = useCallback(
+    (draftId: string) => {
+      if (mutationInFlight.current || backgroundRefreshInFlight.current) return;
       backgroundRefreshInFlight.current = true;
       void loadSession(draftId, { background: true, quiet: true }).finally(() => {
         backgroundRefreshInFlight.current = false;
       });
+    },
+    [loadSession],
+  );
+
+  useEffect(() => {
+    if (!session) return;
+    const draftId = session.id;
+    const refresh = () => {
+      if (document.visibilityState !== "visible") return;
+      refreshInBackground(draftId);
     };
+    // Kept at five seconds unconditionally. The stream is a latency optimization, not
+    // the correctness path, so every viewer converges even if it never connects.
     const interval = window.setInterval(refresh, 5_000);
     const onVisibilityChange = () => {
       if (document.visibilityState === "visible") refresh();
@@ -309,7 +331,45 @@ export function DraftSessionWorkspace() {
       window.clearInterval(interval);
       document.removeEventListener("visibilitychange", onVisibilityChange);
     };
-  }, [loadSession, session?.id]);
+  }, [refreshInBackground, session?.id]);
+
+  useEffect(() => {
+    if (!session) return;
+    const draftId = session.id;
+    // A build or browser without EventSource is not an error: the poll above is the
+    // contract, and the strip says "checking every 5 seconds" rather than warning.
+    if (typeof EventSource === "undefined") {
+      setStreamState("polling");
+      return;
+    }
+    setStreamState("connecting");
+    const subscription = subscribeToDraftStream({
+      draftId,
+      url: `${apiBaseUrl}/v1/drafts/${encodeURIComponent(draftId)}/stream`,
+      connect: browserDraftStreamConnect,
+      onInvalidate: () => refreshInBackground(draftId),
+      onStateChange: setStreamState,
+      setTimer: (handler, delayMs) => window.setTimeout(handler, delayMs),
+      clearTimer: (handle) => window.clearTimeout(handle),
+    });
+    // A backgrounded tab can have its stream dropped past the retry ceiling; give it a
+    // fresh chance the moment someone looks at the draft again.
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible") subscription.retry();
+    };
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+      subscription.close();
+    };
+  }, [refreshInBackground, session?.id]);
+
+  const providerBackedSession = session?.providerFeed !== null && session !== null;
+  useEffect(() => {
+    if (!providerBackedSession) return;
+    const tick = window.setInterval(() => setClockMs(Date.now()), 1_000);
+    return () => window.clearInterval(tick);
+  }, [providerBackedSession]);
 
   useEffect(() => {
     dashboardRequestRef.current?.abort();
@@ -677,7 +737,14 @@ export function DraftSessionWorkspace() {
   const selectedPlayer = session?.config.players.find((player) => player.id === selectedPlayerId);
   const selectedBoardRow = boardRows.find((row) => row.player.id === selectedPlayerId);
   const canMutate = session?.accessRole === "owner" || session?.accessRole === "commissioner";
-  const canRecord = localMock !== null || canMutate;
+  // Provider and manual control must never interleave invisibly (§16.5): typing a pick into a
+  // room a live feed is still driving is how duplicates get made. Manual backup is the door.
+  const providerLocksManualEntry =
+    session !== null &&
+    session.transport !== "manual" &&
+    session.providerFeed !== null &&
+    !session.providerFeed.manualBackupActive;
+  const canRecord = localMock !== null || (canMutate && !providerLocksManualEntry);
   const teamStates = activeDraftState?.teams ?? [];
   const selectedTeam = teamStates.find((team) => team.teamId === selectedTeamId);
   const onClockTeamId =
@@ -790,7 +857,11 @@ export function DraftSessionWorkspace() {
       const parsed = parseDraftSession(await response.json());
       if (!parsed) throw new Error("The new draft session response was invalid.");
       rememberSession(parsed);
-      setNotice("Shared manual draft ledger created. Provider polling remains off.");
+      setNotice(
+        parsed.transport === "espn-live"
+          ? "Shared draft room created and attached to the ESPN live feed. Picks arrive once a paired desktop browser opens the ESPN draft room."
+          : "Shared draft ledger created. Entries are recorded by hand here; no provider feed is attached to this room.",
+      );
     } catch (error) {
       setNotice(error instanceof Error ? error.message : "The draft session could not be created.");
     } finally {
@@ -831,6 +902,58 @@ export function DraftSessionWorkspace() {
     } finally {
       mutationInFlight.current = false;
       setRequestState("idle");
+    }
+  }
+
+  /**
+   * Manual backup is a shared-state change, so it goes through the API rather than local state:
+   * every viewer must see the same freeze. The server keeps validating and counting incoming
+   * provider snapshots while it is on, which is what `pendingReconciliation` reports.
+   */
+  async function setManualBackup(
+    active: boolean,
+    reconciliation?: "accept-provider" | "keep-manual",
+  ): Promise<void> {
+    if (!session || !canMutate || manualBackupState === "loading") return;
+    setManualBackupState("loading");
+    try {
+      const response = await fetch(`${apiBaseUrl}/v1/drafts/${session.id}/manual-backup`, {
+        method: "POST",
+        credentials: "include",
+        headers: { Accept: "application/json", "Content-Type": "application/json" },
+        body: JSON.stringify({
+          expectedSequence: session.sequence,
+          idempotencyKey: randomMutationKey("manual-backup"),
+          active,
+          ...(reconciliation ? { reconciliation } : {}),
+        }),
+      });
+      if (response.status === 404) {
+        throw new Error("This server does not offer manual backup control yet.");
+      }
+      if (!response.ok) {
+        const problem = await readProblem(response);
+        throw new Error(problemMessage(problem, "Manual backup could not be changed."));
+      }
+      const body: unknown = await response.json();
+      const mutation = parseDraftMutation(body);
+      const next = mutation?.session ?? parseDraftSession(body);
+      if (!next) throw new Error("The manual backup response was invalid.");
+      rememberSession(next);
+      setManualBackupOpen(false);
+      setNotice(
+        active
+          ? "Manual backup active. Provider picks are held for review until you return to provider sync."
+          : reconciliation === "keep-manual"
+            ? "Returned to provider sync. The held provider differences were discarded in favor of this ledger."
+            : reconciliation === "accept-provider"
+              ? "Returned to provider sync. The held provider board was applied to this ledger."
+              : "Returned to provider sync.",
+      );
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Manual backup could not be changed.");
+    } finally {
+      setManualBackupState("idle");
     }
   }
 
@@ -1092,8 +1215,7 @@ export function DraftSessionWorkspace() {
             <p className="eyebrow">Draft studio</p>
             <h1>Start or reopen a draft room.</h1>
             <p className="page-subtitle">
-              Manual event entry is persistent and shared. ESPN and Yahoo live-draft polling is not
-              enabled.
+              {describeDraftSetupCapability(league?.season?.provider ?? null)}
             </p>
           </div>
           <button className="button button--soft" type="button" onClick={() => setShowDemo(true)}>
@@ -1320,6 +1442,24 @@ export function DraftSessionWorkspace() {
     mobileSnakeRecommendation?.needLabel ??
     mobileAuctionRecommendation?.reason ??
     (session.config.mode === "SNAKE" ? "Best available fit" : "Nomination board");
+  const liveStatus = describeLiveDraft({
+    session,
+    pollFailures,
+    lastSyncedAt,
+    now: clockMs,
+    streaming: streamState === "streaming",
+    localMock: localMock !== null,
+  });
+  const liveStrip = liveStatus.strip;
+  const manualBackup = liveStatus.manualBackup;
+  const mobileDecision = describeMobileDecision(session, activeTeamId, liveStatus);
+  const providerAuction = session.providerFeed?.currentAuction ?? null;
+  const providerAuctionNominator = providerAuction?.nominatingTeamId
+    ? session.config.teams.find((team) => team.id === providerAuction.nominatingTeamId)
+    : undefined;
+  const providerAuctionHighBidder = providerAuction?.highBidTeamId
+    ? session.config.teams.find((team) => team.id === providerAuction.highBidTeamId)
+    : undefined;
 
   return (
     <div className="draft-page draft-session-live">
@@ -1340,20 +1480,18 @@ export function DraftSessionWorkspace() {
         <div className="draft-header-actions">
           <div className="connection-indicator">
             <span
-              className={`connection-indicator__dot${localMock ? " connection-indicator__dot--mock" : ""}${
-                !localMock && pollFailures > 0 ? " connection-indicator__dot--stale" : ""
-              }`}
+              className={`connection-indicator__dot${
+                liveStatus.indicator === "mock" ? " connection-indicator__dot--mock" : ""
+              }${liveStatus.indicator === "stale" ? " connection-indicator__dot--stale" : ""}`}
             />
             <span>
-              <strong>
-                {localMock ? "Local mock" : pollFailures > 0 ? "Reconnecting" : "Laces Out ledger"}
-              </strong>
+              <strong>{liveStatus.indicatorTitle}</strong>
               <small>
                 {localMock
                   ? `${generatedMockEvents.length} practice events · not saved`
-                  : pollFailures > 0
+                  : pollFailures > 0 && !liveStatus.providerBacked
                     ? `Event ${session.sequence} · ${staleFor(lastSyncedAt)}`
-                    : `Event ${session.sequence} · auto-refresh on`}
+                    : liveStatus.indicatorDetail}
               </small>
             </span>
           </div>
@@ -1400,23 +1538,218 @@ export function DraftSessionWorkspace() {
       </header>
 
       <section
-        className={`draft-notice${notice.toLowerCase().includes("reject") || notice.toLowerCase().includes("could not") ? " draft-notice--paused" : ""}`}
+        className={`draft-notice${
+          notice.toLowerCase().includes("reject") ||
+          notice.toLowerCase().includes("could not") ||
+          (!notice && (liveStatus.tone === "warning" || liveStatus.tone === "critical"))
+            ? " draft-notice--paused"
+            : ""
+        }`}
         aria-live="polite"
       >
         <span>
-          {localMock ? <Dices size={14} /> : <Database size={14} />}{" "}
-          {notice ||
-            (!localMock && pollFailures > 0
-              ? `The ledger is not responding. Showing event ${session.sequence} · ${staleFor(lastSyncedAt)}.`
-              : "Persistent event ledger connected.")}
+          {localMock ? (
+            <Dices size={14} />
+          ) : liveStatus.tone === "critical" ? (
+            <TriangleAlert size={14} />
+          ) : liveStatus.providerBacked ? (
+            <Radio size={14} />
+          ) : (
+            <Database size={14} />
+          )}{" "}
+          {notice || `${liveStatus.heading}. ${liveStatus.detail}`}
         </span>
         <span className="draft-notice__meta">
-          <ShieldCheck size={14} />{" "}
-          {localMock
-            ? "Local memory only · provider polling off"
-            : "App ledger refresh · provider polling off"}
+          <ShieldCheck size={14} /> {liveStatus.transportChip}
         </span>
       </section>
+
+      {liveStrip ? (
+        <section
+          className={`draft-live-strip draft-live-strip--${liveStatus.tone}`}
+          aria-label={`${liveStrip.providerName} live draft feed`}
+        >
+          <div className="draft-live-strip__status">
+            <span
+              className={`live-freshness-dot live-freshness-dot--${liveStrip.freshness}`}
+              aria-hidden="true"
+            />
+            <span>
+              <strong>{liveStrip.statusLabel}</strong>
+              <small>{liveStrip.sourceLabel}</small>
+            </span>
+          </div>
+          <dl className="draft-live-strip__facts">
+            <div>
+              <dt>{liveStrip.currentActionCaption}</dt>
+              <dd>{liveStrip.currentActionLabel}</dd>
+            </div>
+            <div>
+              <dt>Feed</dt>
+              <dd>
+                {liveStrip.freshnessLabel} · {liveStrip.lastAcceptedLabel}
+              </dd>
+            </div>
+            <div>
+              <dt>Accepted</dt>
+              <dd>
+                {liveStrip.pickCountLabel} · {liveStrip.updateChannelLabel}
+              </dd>
+            </div>
+            <div>
+              <dt>Mapping</dt>
+              <dd>
+                {liveStrip.issueCount > 0
+                  ? `${liveStrip.issueCount} held for review`
+                  : "All rows matched"}
+              </dd>
+            </div>
+          </dl>
+          <div className="draft-live-strip__notes">
+            {liveStrip.issueLabel ? (
+              <p className="draft-live-strip__issue">
+                <TriangleAlert size={13} /> {liveStrip.issueLabel}
+              </p>
+            ) : null}
+            {liveStrip.reconnectGuidance ? (
+              <p className="draft-live-strip__guidance">{liveStrip.reconnectGuidance}</p>
+            ) : null}
+            {liveStatus.sourceRequirement ? (
+              <p className="draft-live-strip__guidance">{liveStatus.sourceRequirement}</p>
+            ) : null}
+            {liveStrip.standbyLabel ? (
+              <p className="draft-live-strip__meta">{liveStrip.standbyLabel}</p>
+            ) : null}
+            {liveStrip.verificationLabel ? (
+              <p className="draft-live-strip__meta">{liveStrip.verificationLabel}</p>
+            ) : null}
+          </div>
+          {manualBackup.available && manualBackup.authorized ? (
+            <div className="draft-live-strip__actions">
+              {manualBackup.active ? (
+                manualBackup.requiresChoice ? (
+                  <button
+                    className="button button--soft button--small"
+                    type="button"
+                    onClick={() => setManualBackupOpen((current) => !current)}
+                    aria-expanded={manualBackupOpen}
+                    aria-controls="draft-manual-backup-panel"
+                  >
+                    {manualBackup.returnLabel}
+                  </button>
+                ) : (
+                  <button
+                    className="button button--dark button--small"
+                    type="button"
+                    onClick={() => void setManualBackup(false)}
+                    disabled={manualBackupState === "loading"}
+                  >
+                    {manualBackupState === "loading" ? (
+                      <LoaderCircle className="spin" size={14} />
+                    ) : (
+                      <Radio size={14} />
+                    )}{" "}
+                    {manualBackup.returnLabel}
+                  </button>
+                )
+              ) : (
+                <button
+                  className="button button--soft button--small"
+                  type="button"
+                  onClick={() => void setManualBackup(true)}
+                  disabled={manualBackupState === "loading"}
+                >
+                  {manualBackupState === "loading" ? (
+                    <LoaderCircle className="spin" size={14} />
+                  ) : (
+                    <ShieldCheck size={14} />
+                  )}{" "}
+                  {manualBackup.activateLabel}
+                </button>
+              )}
+            </div>
+          ) : null}
+        </section>
+      ) : null}
+
+      {manualBackup.available && manualBackup.active ? (
+        <section
+          className="draft-manual-backup"
+          id="draft-manual-backup-panel"
+          aria-labelledby="draft-manual-backup-title"
+        >
+          <div className="draft-manual-backup__intro">
+            <span className="draft-manual-backup__icon">
+              <ShieldCheck size={18} />
+            </span>
+            <div>
+              <p className="eyebrow">Conflict control</p>
+              <h2 id="draft-manual-backup-title">Manual backup active</h2>
+              <p>{manualBackup.summary}</p>
+            </div>
+            <span className="draft-manual-backup__count">
+              <strong>{manualBackup.pendingReconciliation}</strong>
+              <small>held {liveStatus.providerName} updates</small>
+            </span>
+          </div>
+          {manualBackup.choiceSummary ? (
+            <p className="draft-manual-backup__choice">{manualBackup.choiceSummary}</p>
+          ) : null}
+          {!manualBackup.authorized ? (
+            <p className="draft-session-permission">
+              <ShieldCheck size={14} /> You can follow this room, but only its owner or commissioner
+              can change backup mode.
+            </p>
+          ) : manualBackup.requiresChoice ? (
+            <div className="draft-manual-backup__actions">
+              <button
+                className="button button--dark button--small"
+                type="button"
+                onClick={() => void setManualBackup(false, "accept-provider")}
+                disabled={manualBackupState === "loading"}
+              >
+                Apply the {liveStatus.providerName} board
+              </button>
+              <button
+                className="button button--soft button--small"
+                type="button"
+                onClick={() => void setManualBackup(false, "keep-manual")}
+                disabled={manualBackupState === "loading"}
+              >
+                Keep these manual entries
+              </button>
+            </div>
+          ) : null}
+        </section>
+      ) : null}
+
+      {providerAuction ? (
+        <section className="draft-live-auction" aria-label="Current auction nomination">
+          <span className="draft-live-auction__icon">
+            <Gavel size={18} />
+          </span>
+          <div className="draft-live-auction__player">
+            <small>Nomination {providerAuction.nominationNumber}</small>
+            <strong>{providerAuction.playerName}</strong>
+            <span>
+              {[providerAuction.position, providerAuction.proTeam].filter(Boolean).join(" · ") ||
+                "position unavailable"}
+              {providerAuctionNominator ? ` · nominated by ${providerAuctionNominator.name}` : ""}
+            </span>
+          </div>
+          <div className="draft-live-auction__bid">
+            <small>Current high bid</small>
+            <strong>
+              {providerAuction.highBid === null ? "No bid yet" : `$${providerAuction.highBid}`}
+            </strong>
+            <span>{providerAuctionHighBidder?.name ?? "no high bidder reported"}</span>
+          </div>
+          <p className="draft-live-auction__note">
+            Nomination state is observed live and is not written to the ledger. Only the completed
+            sale becomes a saved event.
+          </p>
+        </section>
+      ) : null}
 
       {showMockSetup || localMock ? (
         <section
@@ -1435,7 +1768,10 @@ export function DraftSessionWorkspace() {
               </h2>
               <p>
                 Uses this room’s teams, roster rules, players, and current board. Synthetic events
-                stay in this browser memory and never enter the shared ledger or poll ESPN or Yahoo.
+                stay in this browser memory and never enter the shared ledger.{" "}
+                {liveStatus.providerBacked
+                  ? `The ${liveStatus.providerName} feed keeps running underneath and is never sent anything.`
+                  : "Nothing here is sent to a fantasy provider."}
               </p>
             </div>
           </div>
@@ -2138,9 +2474,15 @@ export function DraftSessionWorkspace() {
             <div className="recommendation-card__head">
               <span>
                 {localMock ? <Dices size={16} /> : <Database size={16} />}{" "}
-                {localMock ? "Local action" : "Manual entry"}
+                {localMock
+                  ? "Local action"
+                  : manualBackup.active
+                    ? "Manual backup entry"
+                    : "Manual entry"}
               </span>
-              <span className="status-chip">{localMock ? "Not saved" : "Stored"}</span>
+              <span className="status-chip">
+                {localMock ? "Not saved" : providerLocksManualEntry ? "Provider driven" : "Stored"}
+              </span>
             </div>
             {selectedPlayer ? (
               <div className="recommendation-player">
@@ -2220,6 +2562,12 @@ export function DraftSessionWorkspace() {
                 <ShieldCheck size={14} /> You can follow this room, but only its owner or
                 commissioner can record events.
               </p>
+            ) : providerLocksManualEntry && !localMock ? (
+              <p className="draft-session-permission">
+                <ShieldCheck size={14} /> The {liveStatus.providerName} feed is driving this room.
+                Activate manual backup first so provider and manual entries never interleave
+                silently.
+              </p>
             ) : null}
             <button
               className="button button--lime button--full button--record"
@@ -2246,10 +2594,37 @@ export function DraftSessionWorkspace() {
       </div>
 
       <aside
-        className="draft-mobile-action draft-mobile-action--live"
+        className={`draft-mobile-action draft-mobile-action--live${
+          mobileDecision.stale ? " draft-mobile-action--stale" : ""
+        }`}
         role="region"
         aria-label="Live draft controls"
       >
+        {/* Everything below is decision-critical on a phone (§16.4): who is on the clock or
+            nominated, feed health, roster needs, budget, and an unmissable stale state. */}
+        <div className="draft-mobile-action__feed" aria-live="polite">
+          <span className="draft-mobile-action__feed-status">
+            <span
+              className={`live-freshness-dot live-freshness-dot--${liveStatus.freshness}`}
+              aria-hidden="true"
+            />
+            {mobileDecision.feedLabel}
+          </span>
+          <span className="draft-mobile-action__feed-clock">
+            <small>{mobileDecision.headlineCaption}</small>
+            <strong>{mobileDecision.headline}</strong>
+          </span>
+        </div>
+        {mobileDecision.staleLabel ? (
+          <p className="draft-mobile-action__stale" role="status">
+            <TriangleAlert size={13} /> {mobileDecision.staleLabel}
+          </p>
+        ) : null}
+        <div className="draft-mobile-action__needs">
+          <span>{mobileDecision.needsLabel}</span>
+          {mobileDecision.budgetLabel ? <span>{mobileDecision.budgetLabel}</span> : null}
+        </div>
+
         <button
           className="draft-mobile-action__intel"
           type="button"
@@ -2411,7 +2786,9 @@ export function DraftSessionWorkspace() {
                     <span>{team?.name ?? event.type.replaceAll("_", " ").toLowerCase()}</span>
                   </div>
                   <strong>{eventLabel(event)}</strong>
-                  <small>Manual</small>
+                  {/* Provenance is on the record, not assumed: a provider-backed room
+                      interleaves observed picks with manual backup entries. */}
+                  <small>{record.source === "espn" ? "ESPN" : "Manual"}</small>
                 </article>
               );
             })}
@@ -2428,9 +2805,7 @@ export function DraftSessionWorkspace() {
         )}
         <p className="draft-log__note">
           <ShieldCheck size={13} />
-          {localMock
-            ? "Practice events exist only in this browser tab. They are not saved, shared, or sent to ESPN or Yahoo."
-            : "Every manual entry is saved and visible only to league members. This is not a live ESPN or Yahoo draft feed."}
+          {liveStatus.ledgerNote}
         </p>
       </section>
     </div>

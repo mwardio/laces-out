@@ -12,6 +12,8 @@ import { AuthService } from "./auth.js";
 import { DraftSessionService, DrizzleDraftSessionRepository } from "./draft-session.js";
 import { DraftMarketService } from "./draft-market.js";
 import { EspnBridgeService } from "./espn-bridge.js";
+import { DrizzleEspnLiveDraftRepository } from "./espn-live-draft-persistence.js";
+import { EspnLiveDraftService } from "./espn-live-draft-service.js";
 import { DrizzleEspnSyncPersistence } from "./espn-sync-persistence.js";
 import {
   DrizzleInSeasonDecisionRepository,
@@ -38,10 +40,18 @@ const credentialKey = environment.CREDENTIAL_ENCRYPTION_KEY
   ? parseCredentialKey(environment.CREDENTIAL_ENCRYPTION_KEY)
   : undefined;
 const authService = new AuthService(new DrizzleAuthRepository(database.db));
-const draftSessions = new DraftSessionService(new DrizzleDraftSessionRepository(database.db));
+const espnLiveDraftRepository = new DrizzleEspnLiveDraftRepository(database.db);
+const draftSessions = new DraftSessionService(
+  new DrizzleDraftSessionRepository(database.db, espnLiveDraftRepository),
+);
 const draftMarket = new DraftMarketService(database.db);
 const espnPersistence = new DrizzleEspnSyncPersistence(database.db);
 const espnBridge = new EspnBridgeService(database.db, () => new Date(), espnPersistence);
+// Constructed unconditionally so the flag is enforced in one place inside the service; the route
+// still serves 503 for a deployment that has never configured live draft sync at all.
+const espnLiveDraft = new EspnLiveDraftService(espnLiveDraftRepository, {
+  enabled: environment.ESPN_LIVE_DRAFT_SYNC,
+});
 const decisions = new InSeasonDecisionService(new DrizzleInSeasonDecisionRepository(database.db));
 const analytics = new LeagueAnalyticsService(new DrizzleLeagueAnalyticsRepository(database.db));
 const statsCenter = new StatsCenterService(new DrizzleStatsCenterRepository(database.db));
@@ -135,7 +145,10 @@ const app = await buildApp({
   authService,
   draftSessions,
   draftMarket,
+  // Same service, two doors: bridge-authenticated ingest and the cookie-authenticated freeze.
+  draftManualBackup: espnLiveDraft,
   espnBridge,
+  espnLiveDraft,
   decisions,
   analytics,
   statsCenter,

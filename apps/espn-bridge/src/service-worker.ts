@@ -1,6 +1,7 @@
 import {
   configurationStorageKey,
   createPendingPairingOffer,
+  isBridgeLiveDraftRequest,
   pendingPairingStorageKey,
   statusStorageKey,
   summarizeBridgeResults,
@@ -9,12 +10,34 @@ import {
   validateBridgePairingOffer,
   type BridgeConfiguration,
   type BridgeLeagueResult,
+  type BridgeLiveDraftRequest,
+  type BridgeLiveDraftResponse,
   type BridgePairingOfferResponse,
   type BridgeRequest,
   type BridgeResponse,
   type BridgeStatus,
   type BridgeStatusState,
 } from "./protocol.js";
+import {
+  validateEspnLiveDraftHeartbeat,
+  validateEspnLiveDraftObservation,
+  espnLiveDraftChecksum,
+  espnLiveDraftDigestSource,
+  type EspnLiveDraftObservationV1,
+} from "./live-draft/dom-contract.js";
+import {
+  LiveDraftUploadQueue,
+  classifyUploadStatus,
+  defaultLiveDraftStatus,
+  liveDraftIngestPath,
+  liveDraftPendingStorageKey,
+  liveDraftStatusStorageKey,
+  validateLiveDraftScope,
+  validateLiveDraftSender,
+  validateStoredLiveDraftStatus,
+  type BridgeLiveDraftStatus,
+  type LiveDraftUploadOutcome,
+} from "./live-draft/uplink.js";
 
 const ESPN_ORIGIN = "https://lm-api-reads.fantasy.espn.com";
 const MAX_ESPN_BYTES = 5 * 1024 * 1024;
@@ -471,6 +494,254 @@ function synchronize(): Promise<BridgeStatus> {
   return activeSynchronization;
 }
 
+// ---------------------------------------------------------------------------------------------
+// Live ESPN draft feed
+//
+// The content script is untrusted input. Everything it claims is re-validated here, and the league
+// it may claim is bounded by the browser-attested sender URL, not by the message body. The device
+// credential is attached only in this file and is never echoed back to the content script or page.
+// ---------------------------------------------------------------------------------------------
+
+async function getLiveDraftStatus(): Promise<BridgeLiveDraftStatus> {
+  const stored = await chrome.storage.local.get(liveDraftStatusStorageKey);
+  return validateStoredLiveDraftStatus(stored[liveDraftStatusStorageKey]);
+}
+
+async function setLiveDraftStatus(
+  update: Partial<BridgeLiveDraftStatus>,
+): Promise<BridgeLiveDraftStatus> {
+  const status: BridgeLiveDraftStatus = { ...(await getLiveDraftStatus()), ...update };
+  await chrome.storage.local.set({ [liveDraftStatusStorageKey]: status });
+  return status;
+}
+
+async function uploadLiveDraft(body: string): Promise<LiveDraftUploadOutcome> {
+  const configuration = await getConfiguration();
+  if (!configuration) return { kind: "unauthorized" };
+  try {
+    const response = await fetch(`${configuration.apiBaseUrl}${liveDraftIngestPath}`, {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        Authorization: `Bridge ${configuration.deviceToken}`,
+        "Content-Type": "application/json",
+      },
+      body,
+      cache: "no-store",
+      credentials: "omit",
+      redirect: "error",
+    });
+    return classifyUploadStatus(response.status);
+  } catch {
+    // Laces Out unreachable: retry with backoff rather than dropping the board.
+    return { kind: "retry" };
+  }
+}
+
+const uploadMessages: Readonly<Record<LiveDraftUploadOutcome["kind"], string>> = {
+  accepted: "Live draft sync is current.",
+  rejected: "Laces Out could not accept the observed draft state.",
+  unauthorized: "Laces Out pairing was rejected. Create a new bridge device token.",
+  retry: "Laces Out is unreachable; retrying.",
+};
+
+const liveDraftQueue = new LiveDraftUploadQueue({
+  transport: uploadLiveDraft,
+  sleep: (delayMs) => new Promise((resolve) => setTimeout(resolve, delayMs)),
+  random: () => Math.random(),
+  onEvent: (event) => {
+    void (async () => {
+      if (event.kind === "retrying") {
+        await setLiveDraftStatus({ state: "offline", message: uploadMessages.retry });
+        return;
+      }
+      if (event.kind === "abandoned" || event.kind === "oversized") {
+        const previous = await getLiveDraftStatus();
+        await setLiveDraftStatus({
+          state: "error",
+          message:
+            event.kind === "oversized"
+              ? "The observed draft board exceeded the safety limit and was discarded."
+              : "Laces Out did not accept the latest draft update; retrying on the next change.",
+          consecutiveFailures: previous.consecutiveFailures + 1,
+          queuedSnapshot: liveDraftQueue.queued.snapshot,
+        });
+        return;
+      }
+      const accepted = event.outcome.kind === "accepted";
+      if (accepted && event.slot === "snapshot") {
+        await chrome.storage.local.remove(liveDraftPendingStorageKey);
+      }
+      const previous = await getLiveDraftStatus();
+      await setLiveDraftStatus({
+        state:
+          event.outcome.kind === "accepted"
+            ? previous.draftState === "complete"
+              ? "complete"
+              : "accepted"
+            : event.outcome.kind === "unauthorized"
+              ? "unauthorized"
+              : "rejected",
+        message: uploadMessages[event.outcome.kind],
+        lastAcceptedAt: accepted ? new Date().toISOString() : previous.lastAcceptedAt,
+        consecutiveFailures: accepted ? 0 : previous.consecutiveFailures + 1,
+        queuedSnapshot: liveDraftQueue.queued.snapshot,
+      });
+    })();
+  },
+});
+
+function liveDraftReply(status: BridgeLiveDraftStatus, ok = true): BridgeLiveDraftResponse {
+  return { ok, status };
+}
+
+async function rejectLiveDraft(message: string): Promise<BridgeLiveDraftResponse> {
+  return liveDraftReply(
+    await setLiveDraftStatus({ scope: "out-of-scope", state: "rejected", message }),
+    false,
+  );
+}
+
+/**
+ * Re-derives the checksum from the durable fields rather than trusting the one that arrived.
+ *
+ * The server recomputes it too; doing it here as well means a content script that has been tampered
+ * with cannot get a mismatched body accepted anywhere, and the failure is visible locally.
+ */
+async function checksumMatches(observation: EspnLiveDraftObservationV1): Promise<boolean> {
+  const expected = await espnLiveDraftChecksum(espnLiveDraftDigestSource(observation));
+  return expected === observation.checksumSha256;
+}
+
+async function handleLiveDraftRequest(
+  request: BridgeLiveDraftRequest,
+  sender: chrome.runtime.MessageSender,
+): Promise<BridgeLiveDraftResponse> {
+  const senderCheck = validateLiveDraftSender(sender, chrome.runtime.id);
+
+  // The popup is an extension page, not a draft-room content script, so it has no tab and no ESPN
+  // URL. It may read the stored bounded status and nothing else; every message that could move the
+  // feed still requires a validated content-script sender.
+  if (!senderCheck.ok && request.type === "GET_LIVE_DRAFT_STATUS") {
+    if (sender.id !== chrome.runtime.id || sender.tab !== undefined) {
+      return liveDraftReply({ ...defaultLiveDraftStatus, state: "rejected" }, false);
+    }
+    return liveDraftReply(await getLiveDraftStatus());
+  }
+  if (!senderCheck.ok) {
+    return liveDraftReply(
+      { ...defaultLiveDraftStatus, state: "rejected", message: "Live draft sender was refused." },
+      false,
+    );
+  }
+  const route = senderCheck.route;
+
+  let configuration: BridgeConfiguration | undefined;
+  try {
+    configuration = await getConfiguration();
+  } catch {
+    configuration = undefined;
+  }
+
+  if (request.type === "GET_LIVE_DRAFT_STATUS") {
+    const claimed =
+      typeof request.leagueId === "string" && typeof request.season === "number"
+        ? { leagueId: request.leagueId, season: request.season }
+        : { leagueId: route.leagueId, season: route.season };
+    const scope = validateLiveDraftScope(claimed, route, configuration);
+    const current = await getLiveDraftStatus();
+    return liveDraftReply(
+      await setLiveDraftStatus({
+        scope: scope.ok ? "in-scope" : configuration ? "out-of-scope" : "not-configured",
+        state: scope.ok ? (current.state === "idle" ? "observing" : current.state) : "idle",
+        message: scope.ok
+          ? "Following this ESPN draft room."
+          : configuration
+            ? "This ESPN league is not paired with Laces Out on this browser."
+            : "Pair this bridge with Laces Out to follow a draft.",
+        leagueId: claimed.leagueId,
+        season: claimed.season,
+      }),
+      scope.ok,
+    );
+  }
+
+  if (request.type === "LIVE_DRAFT_PAGE_LEFT") {
+    liveDraftQueue.clear();
+    return liveDraftReply(
+      await setLiveDraftStatus({
+        state: "idle",
+        message: "The ESPN draft room was closed on this browser.",
+        queuedSnapshot: false,
+      }),
+    );
+  }
+
+  if (request.type === "LIVE_DRAFT_HEARTBEAT") {
+    let heartbeat;
+    try {
+      heartbeat = validateEspnLiveDraftHeartbeat(request.heartbeat);
+    } catch {
+      return rejectLiveDraft("A malformed live draft heartbeat was discarded.");
+    }
+    const scope = validateLiveDraftScope(heartbeat, route, configuration);
+    if (!scope.ok) return rejectLiveDraft("This ESPN league is outside the paired bridge scope.");
+    await uploadLiveDraft(JSON.stringify(heartbeat));
+    return liveDraftReply(
+      await setLiveDraftStatus({
+        scope: "in-scope",
+        draftState: heartbeat.state,
+        lastObservedAt: heartbeat.capturedAt,
+      }),
+    );
+  }
+
+  let observation: EspnLiveDraftObservationV1;
+  try {
+    observation = validateEspnLiveDraftObservation(request.observation);
+  } catch {
+    return rejectLiveDraft("A malformed live draft observation was discarded.");
+  }
+  const scope = validateLiveDraftScope(observation, route, configuration);
+  if (!scope.ok) return rejectLiveDraft("This ESPN league is outside the paired bridge scope.");
+  if (!(await checksumMatches(observation))) {
+    return rejectLiveDraft("A live draft observation failed its checksum and was discarded.");
+  }
+
+  // Only the latest snapshot is retained. An unsent older one is superseded, never replayed.
+  if (!request.transient) {
+    await chrome.storage.local.set({ [liveDraftPendingStorageKey]: observation });
+  }
+  void liveDraftQueue.submit(observation, request.transient ? "transient" : "snapshot");
+  return liveDraftReply(
+    await setLiveDraftStatus({
+      scope: "in-scope",
+      state: "observing",
+      message: "Sending the observed draft state to Laces Out.",
+      leagueId: observation.leagueId,
+      season: observation.season,
+      draftState: observation.state,
+      pickCount: observation.picks.length,
+      lastObservedAt: observation.capturedAt,
+      lastChecksumSha256: observation.checksumSha256,
+      queuedSnapshot: liveDraftQueue.queued.snapshot,
+    }),
+  );
+}
+
+/** Re-queues the one retained snapshot after the service worker was evicted mid-upload. */
+async function restoreLiveDraftQueue(): Promise<void> {
+  const stored = await chrome.storage.local.get(liveDraftPendingStorageKey);
+  if (stored[liveDraftPendingStorageKey] === undefined) return;
+  try {
+    const observation = validateEspnLiveDraftObservation(stored[liveDraftPendingStorageKey]);
+    if (await checksumMatches(observation)) void liveDraftQueue.submit(observation, "snapshot");
+    else await chrome.storage.local.remove(liveDraftPendingStorageKey);
+  } catch {
+    await chrome.storage.local.remove(liveDraftPendingStorageKey);
+  }
+}
+
 async function handleRequest(request: BridgeRequest): Promise<BridgeResponse> {
   if (request.type === "GET_STATUS") return { ok: true, status: await getStatus() };
   if (request.type === "DISCONNECT") {
@@ -494,7 +765,11 @@ async function handleRequest(request: BridgeRequest): Promise<BridgeResponse> {
     });
     return { ok: true, status };
   }
-  return { ok: true, status: await synchronize() };
+  if (request.type === "SYNC_NOW") return { ok: true, status: await synchronize() };
+  // Every request type is now explicit. A live draft message reaching here means the listener
+  // routed it wrongly; fail closed rather than silently starting a full league sync — the old
+  // implicit fallthrough would have turned a draft-room mutation into an ESPN refresh storm.
+  throw new TypeError("Unsupported bridge request");
 }
 
 async function restoreAutomaticAlarm(): Promise<void> {
@@ -523,6 +798,7 @@ chrome.runtime.onInstalled.addListener(() => {
 
 chrome.runtime.onStartup.addListener(() => {
   void restoreAutomaticAlarm();
+  void restoreLiveDraftQueue();
 });
 
 chrome.alarms.onAlarm.addListener((alarm) => {
@@ -559,7 +835,26 @@ chrome.runtime.onMessageExternal.addListener(
 );
 
 chrome.runtime.onMessage.addListener(
-  (request: BridgeRequest, _sender, sendResponse: (response: BridgeResponse) => void) => {
+  (
+    request: BridgeRequest,
+    sender,
+    sendResponse: (response: BridgeResponse | BridgeLiveDraftResponse) => void,
+  ) => {
+    if (isBridgeLiveDraftRequest(request)) {
+      void handleLiveDraftRequest(request, sender)
+        .then(sendResponse)
+        .catch(() => {
+          sendResponse({
+            ok: false,
+            status: {
+              ...defaultLiveDraftStatus,
+              state: "error",
+              message: "The live draft update could not be processed.",
+            },
+          });
+        });
+      return true;
+    }
     void handleRequest(request)
       .then(sendResponse)
       .catch(async (error: unknown) => {

@@ -6,6 +6,8 @@ import {
   draftMarketBaselineSchema,
   draftMutationResponseSchema,
   draftSessionSnapshotSchema,
+  espnBridgeDeviceListResponseSchema,
+  espnBridgeDeviceResponseSchema,
   inSeasonDecisionSnapshotSchema,
   jobAcceptedSchema,
   leagueAnalyticsSnapshotSchema,
@@ -134,6 +136,27 @@ export function parseDraftMutation(value: unknown): DraftMutationResponse | null
 
 export function parseDraftMarketBaseline(value: unknown): DraftMarketBaseline | null {
   const result = draftMarketBaselineSchema.safeParse(value);
+  return result.success ? result.data : null;
+}
+
+/**
+ * Bridge responses are validated with the same schemas the API serves them through, so a shape
+ * change fails in one place instead of silently rendering `undefined` in the device list.
+ */
+export type EspnBridgeDeviceStatus = ReturnType<
+  typeof espnBridgeDeviceListResponseSchema.parse
+>["devices"][number];
+export type EspnBridgeDeviceCredential = ReturnType<typeof espnBridgeDeviceResponseSchema.parse>;
+
+export function parseEspnBridgeDeviceList(
+  value: unknown,
+): readonly EspnBridgeDeviceStatus[] | null {
+  const result = espnBridgeDeviceListResponseSchema.safeParse(value);
+  return result.success ? result.data.devices : null;
+}
+
+export function parseEspnBridgeDeviceCredential(value: unknown): EspnBridgeDeviceCredential | null {
+  const result = espnBridgeDeviceResponseSchema.safeParse(value);
   return result.success ? result.data : null;
 }
 

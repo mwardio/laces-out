@@ -3,18 +3,24 @@ import {
   draftEventAppendRequestSchema,
   draftEventCorrectionRequestSchema,
   draftEventUndoRequestSchema,
+  draftManualBackupRequestSchema,
   draftMutationResponseSchema,
   draftSessionCreateRequestSchema,
   draftSessionSnapshotSchema,
   type DraftEventAppendRequest,
   type DraftEventCorrectionRequest,
   type DraftEventUndoRequest,
+  type DraftManualBackupRequest,
   type DraftSessionCreateRequest,
 } from "@fantasy/contracts";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 
 import { DraftSessionError } from "./draft-session.js";
+import { serverSentEvent, type DraftStreamHub } from "./draft-stream.js";
+
+/** Keeps proxies and browsers from dropping an idle stream between draft picks. */
+const streamKeepAliveMs = 20_000;
 
 export interface DraftSessionPort {
   createSession(actorUserId: string, input: DraftSessionCreateRequest): Promise<unknown>;
@@ -36,9 +42,25 @@ export interface DraftMarketPort {
   getBaseline(userId: string, draftId: string): Promise<unknown>;
 }
 
+/**
+ * Manual backup control, supplied by the ESPN live draft service.
+ *
+ * Separate from `DraftSessionPort` because a deployment can run manual draft rooms with no provider
+ * feed at all; where it is absent the route reports the feature unavailable instead of pretending.
+ */
+export interface DraftManualBackupPort {
+  setManualBackup(
+    actorUserId: string,
+    draftId: string,
+    input: DraftManualBackupRequest,
+  ): Promise<{ readonly active: boolean; readonly changed: boolean }>;
+}
+
 export interface DraftRouteOptions {
   readonly draftSessions?: DraftSessionPort;
   readonly draftMarket?: DraftMarketPort;
+  readonly draftManualBackup?: DraftManualBackupPort;
+  readonly draftStream?: DraftStreamHub;
 }
 
 const draftPathSchema = z.object({ draftId: z.string().uuid() }).strict();
@@ -130,6 +152,52 @@ export function registerDraftRoutes(app: FastifyInstance, options: DraftRouteOpt
     }
   });
 
+  app.get("/v1/drafts/:draftId/stream", async (request, reply) => {
+    const user = authenticatedUser(request, reply);
+    if (!user) return reply;
+    if (!options.draftSessions || !options.draftStream) {
+      return reply.code(503).send(unavailable(request.id));
+    }
+    const { draftId } = draftPathSchema.parse(request.params);
+    // Authorize through the normal read path first: a stream must never reveal that a draft
+    // exists to someone who could not GET it.
+    try {
+      validatedSession(await options.draftSessions.getSession(user.id, draftId));
+    } catch (error) {
+      return sendDraftError(error, request, reply) ?? rethrowUnknown(error);
+    }
+
+    const listen = options.draftStream.subscribe(draftId, (event) => {
+      reply.raw.write(serverSentEvent(event));
+    });
+    if (!listen) {
+      return reply.code(503).send({
+        type: "https://fantasy.local/problems/draft-stream-saturated",
+        title: "Too many live viewers for this draft",
+        status: 503,
+        detail: "Reconnect shortly; the draft board continues to refresh by polling.",
+        correlationId: request.id,
+      });
+    }
+
+    reply.raw.writeHead(200, {
+      "content-type": "text/event-stream",
+      "cache-control": "no-store",
+      connection: "keep-alive",
+      "x-accel-buffering": "no",
+    });
+    reply.raw.write(`retry: 5000\n\n`);
+
+    const keepAlive = setInterval(() => reply.raw.write(": keep-alive\n\n"), streamKeepAliveMs);
+    const close = (): void => {
+      clearInterval(keepAlive);
+      listen();
+    };
+    request.raw.on("close", close);
+    reply.raw.on("error", close);
+    return reply;
+  });
+
   app.get("/v1/drafts/:draftId", async (request, reply) => {
     const user = authenticatedUser(request, reply);
     if (!user) return reply;
@@ -183,6 +251,40 @@ export function registerDraftRoutes(app: FastifyInstance, options: DraftRouteOpt
         ),
       );
       return reply.code(result.idempotent ? 200 : 201).send(result);
+    } catch (error) {
+      return sendDraftError(error, request, reply) ?? rethrowUnknown(error);
+    }
+  });
+
+  /**
+   * Freezes or resumes provider application for a shared room (plan §7.3, §16.5).
+   *
+   * A normal cookie-authenticated draft mutation, not a bridge upload: only a league owner or
+   * commissioner may change what every viewer sees. It appends nothing, so the answer is the
+   * session snapshot itself rather than a mutation envelope with an empty sequence list.
+   */
+  app.post("/v1/drafts/:draftId/manual-backup", async (request, reply) => {
+    const user = authenticatedUser(request, reply);
+    if (!user) return reply;
+    if (!options.draftSessions || !options.draftManualBackup) {
+      return reply.code(503).send(unavailable(request.id));
+    }
+    const { draftId } = draftPathSchema.parse(request.params);
+    const input = draftManualBackupRequestSchema.parse(request.body);
+    try {
+      const outcome = await options.draftManualBackup.setManualBackup(user.id, draftId, input);
+      const session = validatedSession(await options.draftSessions.getSession(user.id, draftId));
+      // Identifier-only audit line: what changed about shared draft control, and on whose say-so.
+      request.log.info(
+        {
+          draftId,
+          manualBackupActive: outcome.active,
+          manualBackupChanged: outcome.changed,
+          reconciliation: input.reconciliation ?? null,
+        },
+        "draft manual backup mode set",
+      );
+      return reply.code(200).send(session);
     } catch (error) {
       return sendDraftError(error, request, reply) ?? rethrowUnknown(error);
     }

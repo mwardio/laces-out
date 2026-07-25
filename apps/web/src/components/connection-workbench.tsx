@@ -20,9 +20,15 @@ import {
   Unplug,
   X,
 } from "lucide-react";
+import Link from "next/link";
 import { type FormEvent, useCallback, useEffect, useRef, useState } from "react";
 
-import { apiBaseUrl } from "../lib/api-client";
+import {
+  apiBaseUrl,
+  parseEspnBridgeDeviceCredential,
+  parseEspnBridgeDeviceList,
+  type EspnBridgeDeviceStatus,
+} from "../lib/api-client";
 import {
   chromeWebStoreUrl,
   sendPairingOffer,
@@ -33,35 +39,18 @@ import { parseEspnLeagueIds } from "../lib/espn-league-ids";
 import { yahooComingSoon } from "../lib/public-site";
 import { loginUrlForCurrentPath } from "../lib/safe-return-to";
 
-interface BridgeCredential {
+type EspnConnectionMethod = "one-click" | "automatic";
+
+interface ScopedBridgeCredential {
   readonly deviceId: string;
   readonly deviceToken: string;
   readonly expiresAt: string | null;
-}
-
-type EspnConnectionMethod = "one-click" | "automatic";
-
-interface ScopedBridgeCredential extends BridgeCredential {
   readonly method: EspnConnectionMethod;
   readonly leagueIds: readonly string[];
   readonly season: number;
 }
 
-interface BridgeDevice {
-  readonly deviceId: string;
-  readonly name: string;
-  readonly state: "active" | "expired" | "revoked";
-  readonly allowedLeagues: readonly {
-    readonly externalLeagueId: string;
-    readonly season: number | null;
-    readonly leagueId: string | null;
-    readonly leagueName: string | null;
-  }[];
-  readonly createdAt: string;
-  readonly expiresAt: string | null;
-  readonly lastSeenAt: string | null;
-  readonly revokedAt: string | null;
-}
+type BridgeDevice = EspnBridgeDeviceStatus;
 
 type YahooHealth = "pending" | "healthy" | "degraded" | "reauthorize" | "disabled";
 
@@ -96,30 +85,9 @@ interface UiMessage {
 
 class ConnectionUiError extends Error {}
 
-function isBridgeCredential(value: unknown): value is BridgeCredential {
-  if (typeof value !== "object" || value === null) return false;
-  const record = value as Record<string, unknown>;
-  return (
-    typeof record.deviceId === "string" &&
-    typeof record.deviceToken === "string" &&
-    (record.expiresAt === null || typeof record.expiresAt === "string")
-  );
-}
-
-function isBridgeDevice(value: unknown): value is BridgeDevice {
-  if (typeof value !== "object" || value === null) return false;
-  const record = value as Record<string, unknown>;
-  return (
-    typeof record.deviceId === "string" &&
-    typeof record.name === "string" &&
-    ["active", "expired", "revoked"].includes(String(record.state)) &&
-    Array.isArray(record.allowedLeagues) &&
-    typeof record.createdAt === "string" &&
-    (record.expiresAt === null || typeof record.expiresAt === "string") &&
-    (record.lastSeenAt === null || typeof record.lastSeenAt === "string") &&
-    (record.revokedAt === null || typeof record.revokedAt === "string")
-  );
-}
+/* The ESPN bridge responses have schemas in `@fantasy/contracts` that the API already serves them
+   through, so they are validated with those rather than re-described here. The Yahoo status below
+   has no shared schema yet, so its hand-written predicates stay until one exists. */
 
 function isNullableString(value: unknown): value is string | null {
   return value === null || typeof value === "string";
@@ -250,11 +218,9 @@ export function ConnectionWorkbench() {
         return;
       }
       if (!response.ok) throw new ConnectionUiError("Paired ESPN browsers could not be loaded.");
-      const body = (await response.json()) as { devices?: unknown };
-      if (!Array.isArray(body.devices) || !body.devices.every(isBridgeDevice)) {
-        throw new ConnectionUiError("The bridge device list was invalid.");
-      }
-      setBridgeDevices(body.devices);
+      const devices = parseEspnBridgeDeviceList(await response.json());
+      if (!devices) throw new ConnectionUiError("The bridge device list was invalid.");
+      setBridgeDevices(devices);
       setBridgeDevicesState("done");
     } catch (error) {
       setBridgeDevicesState("error");
@@ -516,12 +482,12 @@ export function ConnectionWorkbench() {
             : "The bridge device could not be created.",
         );
       }
-      const body: unknown = await response.json();
-      if (!isBridgeCredential(body)) {
+      const issued = parseEspnBridgeDeviceCredential(await response.json());
+      if (!issued) {
         throw new ConnectionUiError("The bridge returned an invalid credential.");
       }
       const scopedCredential: ScopedBridgeCredential = {
-        ...body,
+        ...issued,
         method: espnMethod,
         leagueIds: allowedLeagueIds,
         season: espnSeason,
@@ -769,6 +735,16 @@ export function ConnectionWorkbench() {
                   </span>
                 </div>
               </div>
+              <div className="bridge-readiness bridge-readiness--warning" role="note">
+                <Info size={16} />
+                <div>
+                  <strong>One-click sync runs only when you click it</strong>
+                  <span>
+                    It cannot follow a draft as it happens. Following a live ESPN draft needs the
+                    Chrome companion under Automatic Sync.
+                  </span>
+                </div>
+              </div>
 
               <form
                 className="bridge-pair-form"
@@ -940,6 +916,22 @@ export function ConnectionWorkbench() {
                     Install from Chrome Web Store
                     <ExternalLink size={13} />
                   </a>
+                </div>
+              </div>
+              {/* Stated here rather than on the marketing pages: this is where someone decides
+                  which connection method to use, and the requirement is a real constraint. */}
+              <div className="bridge-readiness" role="note">
+                <Laptop size={16} />
+                <div>
+                  <strong>Live draft sync needs this browser open</strong>
+                  <span>
+                    While this Chrome profile has the ESPN draft room open, the companion reads the
+                    picks ESPN has already drawn on the page and sends them to your league&rsquo;s
+                    Draft Studio, read-only. One paired desktop is enough for the whole league:
+                    everyone else, phones included, follows from{" "}
+                    <Link href="/draft">Draft Studio</Link>. Close the tab and the room shows a
+                    stale feed until a paired browser takes over.
+                  </span>
                 </div>
               </div>
               <div

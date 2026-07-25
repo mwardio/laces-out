@@ -76,6 +76,50 @@ header small {
   background: #e07843;
   box-shadow: 0 0 0 4px #fbe5d7;
 }
+.live-draft {
+  display: grid;
+  gap: 4px;
+  margin-top: 13px;
+  padding: 12px;
+  background: white;
+  border: 1px solid #d5dad4;
+  border-radius: 11px;
+}
+.live-draft[hidden] {
+  display: none;
+}
+.live-draft-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+.live-draft-head strong {
+  font-size: 12px;
+}
+.live-draft-state {
+  color: #526057;
+  font-size: 11px;
+  font-weight: 700;
+}
+.live-draft[data-state="accepted"] .live-draft-state,
+.live-draft[data-state="complete"] .live-draft-state {
+  color: #557d17;
+}
+.live-draft[data-state="offline"] .live-draft-state,
+.live-draft[data-state="rejected"] .live-draft-state,
+.live-draft[data-state="unauthorized"] .live-draft-state,
+.live-draft[data-state="error"] .live-draft-state {
+  color: #a04d26;
+}
+.live-draft small {
+  color: #6f7a72;
+  font-size: 10px;
+  line-height: 1.45;
+}
+.live-draft-detail:empty {
+  display: none;
+}
 .pairing {
   display: grid;
   gap: 11px;

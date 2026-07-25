@@ -11,8 +11,10 @@ import {
   players,
   rosterSlotRules,
   type Database,
+  type DraftEventSource,
   type LeagueMembershipRole,
 } from "@fantasy/db";
+import type { EspnLiveDraftFeedStatus } from "@fantasy/contracts";
 import {
   NFL_POSITIONS,
   NFL_TEAMS,
@@ -190,8 +192,10 @@ const storedConfigSchema = z.discriminatedUnion("mode", [
 const storedSettingsSchema = z
   .object({
     schemaVersion: z.literal(1),
-    transport: z.literal("manual"),
-    providerPolling: z.literal(false),
+    // Widened in place rather than version-bumped: no field was added or removed, so every
+    // already-stored manual session still parses byte for byte.
+    transport: z.enum(["manual", "espn-live"]),
+    providerPolling: z.boolean(),
     source: z
       .object({
         leagueSeasonId: uuidSchema,
@@ -268,6 +272,22 @@ const storedEventSchema = z.discriminatedUnion("type", [
     .strict(),
 ]);
 
+const draftEventSources: ReadonlySet<string> = new Set<DraftEventSource>(["manual", "espn"]);
+
+/**
+ * Event IDs are derived, not random, so a replayed write reproduces a byte-identical event. The
+ * source prefix keeps a provider-observed fact from ever colliding with a manually entered one.
+ */
+export function draftEventIdFor(
+  source: DraftEventSource,
+  draftId: string,
+  idempotencyKey: string,
+): DraftEventId {
+  return draftEventId(
+    `${source}:${createHash("sha256").update(`${draftId}\0${idempotencyKey}`).digest("hex")}`,
+  );
+}
+
 export type CreateDraftSessionInput = z.input<typeof createSessionInputSchema>;
 export type AppendDraftEventInput = z.input<typeof appendInputSchema>;
 export type UndoDraftEventInput = z.input<typeof undoInputSchema>;
@@ -283,6 +303,7 @@ export type DraftSessionErrorCode =
   | "DRAFT_IDEMPOTENCY_CONFLICT"
   | "DRAFT_INVARIANT"
   | "DRAFT_CORRECTION_TARGET_INVALID"
+  | "DRAFT_RECONCILIATION_REQUIRED"
   | "DRAFT_STREAM_CORRUPT";
 
 const errorStatus: Readonly<Record<DraftSessionErrorCode, number>> = {
@@ -294,6 +315,7 @@ const errorStatus: Readonly<Record<DraftSessionErrorCode, number>> = {
   DRAFT_IDEMPOTENCY_CONFLICT: 409,
   DRAFT_INVARIANT: 409,
   DRAFT_CORRECTION_TARGET_INVALID: 422,
+  DRAFT_RECONCILIATION_REQUIRED: 409,
   DRAFT_STREAM_CORRUPT: 500,
 };
 
@@ -374,7 +396,7 @@ export interface StoredDraftEvent {
   readonly idempotencyKey: string;
   readonly type: string;
   readonly occurredAt: Date;
-  readonly source: string;
+  readonly source: DraftEventSource;
   readonly payload: Readonly<Record<string, unknown>>;
   readonly revertsSequence: number | null;
   readonly createdAt: Date;
@@ -396,7 +418,7 @@ export interface PendingDraftEvent {
   readonly idempotencyKey: string;
   readonly type: DraftEvent["type"];
   readonly occurredAt: Date;
-  readonly source: "manual";
+  readonly source: DraftEventSource;
   readonly payload: Readonly<Record<string, unknown>>;
   readonly revertsSequence: number | null;
 }
@@ -427,12 +449,17 @@ export interface DraftSessionRepository {
     readonly resultingState: "live" | "complete";
     readonly now: Date;
   }): Promise<AppendStoredEventsResult>;
+  /**
+   * Optional so manual-only deployments and existing test fakes keep working. A draft with no
+   * provider feed simply reports `providerFeed: null`.
+   */
+  loadProviderFeedStatus?(draftId: string): Promise<EspnLiveDraftFeedStatus | undefined>;
 }
 
 export interface DraftSessionEventRecord {
   readonly sequence: number;
   readonly idempotencyKey: string;
-  readonly source: "manual";
+  readonly source: DraftEventSource;
   readonly occurredAt: string;
   readonly revertsSequence: number | null;
   readonly event: DraftEvent;
@@ -441,9 +468,11 @@ export interface DraftSessionEventRecord {
 export interface DraftSessionSnapshot {
   readonly id: string;
   readonly leagueSeasonId: string;
-  readonly transport: "manual";
-  /** Explicitly false: this service never implies ESPN/Yahoo live-draft polling. */
-  readonly providerPolling: false;
+  readonly transport: "manual" | "espn-live";
+  /** True only while an accepted provider feed is actually supplying this room. */
+  readonly providerPolling: boolean;
+  /** Null for a manual room; present whenever an ESPN feed is attached, healthy or not. */
+  readonly providerFeed: EspnLiveDraftFeedStatus | null;
   readonly accessRole: LeagueMembershipRole;
   readonly sequence: number;
   readonly persistedState: string;
@@ -463,7 +492,13 @@ export interface DraftMutationResult {
 
 type DatabaseTransaction = Parameters<Parameters<Database["transaction"]>[0]>[0];
 
-function effectiveRole(
+/**
+ * The role a user actually has in a league, or `undefined` when they have none.
+ *
+ * Exported so every draft-scoped reader resolves access the same way; a caller that gets
+ * `undefined` must answer 404, never 403, so a stranger cannot learn that a room exists.
+ */
+export function effectiveRole(
   ownerUserId: string,
   requestedUserId: string,
   membershipRole: LeagueMembershipRole | null,
@@ -471,7 +506,8 @@ function effectiveRole(
   return ownerUserId === requestedUserId ? "owner" : (membershipRole ?? undefined);
 }
 
-function mayMutate(role: LeagueMembershipRole): boolean {
+/** Shared-state writes belong to the people accountable for the league, not to every member. */
+export function mayMutate(role: LeagueMembershipRole): boolean {
   return role === "owner" || role === "commissioner";
 }
 
@@ -520,7 +556,7 @@ function validatePendingBatch(
     const parsed = storedEventSchema.safeParse(event.payload);
     if (
       event.sequence !== expectedSequence + index + 1 ||
-      event.source !== "manual" ||
+      !draftEventSources.has(event.source) ||
       !idempotencyKeySchema.safeParse(event.idempotencyKey).success ||
       !parsed.success ||
       parsed.data.type !== event.type ||
@@ -531,11 +567,22 @@ function validatePendingBatch(
   }
 }
 
+/** Injected so the draft session layer never has to know how provider feeds are stored. */
+export interface ProviderFeedStatusSource {
+  loadFeedStatus(draftId: string): Promise<EspnLiveDraftFeedStatus | undefined>;
+}
+
 export class DrizzleDraftSessionRepository implements DraftSessionRepository {
   readonly #database: Database;
+  readonly #providerFeeds: ProviderFeedStatusSource | undefined;
 
-  constructor(database: Database) {
+  constructor(database: Database, providerFeeds?: ProviderFeedStatusSource) {
     this.#database = database;
+    this.#providerFeeds = providerFeeds;
+  }
+
+  async loadProviderFeedStatus(draftId: string): Promise<EspnLiveDraftFeedStatus | undefined> {
+    return this.#providerFeeds?.loadFeedStatus(draftId);
   }
 
   async loadLeagueDraftSource(
@@ -1185,9 +1232,7 @@ function actionToEvent(
   input: z.infer<typeof appendActionSchema>,
   occurredAt: Date,
 ): DraftEvent {
-  const id = draftEventId(
-    `manual:${createHash("sha256").update(`${draftId}\0${idempotencyKey}`).digest("hex")}`,
-  );
+  const id = draftEventIdFor("manual", draftId, idempotencyKey);
   const timestamp = occurredAt.toISOString();
   switch (input.type) {
     case "SNAKE_PLAYER_SELECTED":
@@ -1238,9 +1283,7 @@ function revertEvent(
   occurredAt: Date,
 ): DraftEvent {
   return {
-    id: draftEventId(
-      `manual:${createHash("sha256").update(`${draftId}\0${idempotencyKey}`).digest("hex")}`,
-    ),
+    id: draftEventIdFor("manual", draftId, idempotencyKey),
     type: "DRAFT_EVENT_REVERTED",
     targetEventId,
     occurredAt: occurredAt.toISOString(),
@@ -1309,7 +1352,7 @@ function parsedStoredEvent(row: StoredDraftEvent): DraftEvent {
       };
       break;
   }
-  if (event.type !== row.type || row.source !== "manual") {
+  if (event.type !== row.type || !draftEventSources.has(row.source)) {
     throw new Error("Draft event metadata does not match its payload");
   }
   return event;
@@ -1584,7 +1627,8 @@ export class DraftSessionService {
       );
     }
     const rows = await this.#repository.listEvents(draft.id);
-    return this.#hydrate(draft, rows);
+    const providerFeed = (await this.#repository.loadProviderFeedStatus?.(draft.id)) ?? null;
+    return this.#hydrate(draft, rows, providerFeed);
   }
 
   async appendEvent(
@@ -1736,7 +1780,11 @@ export class DraftSessionService {
     return this.#persist(actorUserId, session, pending, resultingState);
   }
 
-  #hydrate(draft: StoredDraft, rows: readonly StoredDraftEvent[]): DraftSessionSnapshot {
+  #hydrate(
+    draft: StoredDraft,
+    rows: readonly StoredDraftEvent[],
+    providerFeed: EspnLiveDraftFeedStatus | null = null,
+  ): DraftSessionSnapshot {
     try {
       const settings = storedSettingsSchema.parse(draft.settings);
       if (
@@ -1776,7 +1824,7 @@ export class DraftSessionService {
         records.push({
           sequence: row.sequence,
           idempotencyKey: row.idempotencyKey,
-          source: "manual",
+          source: row.source,
           occurredAt: row.occurredAt.toISOString(),
           revertsSequence: row.revertsSequence,
           event,
@@ -1790,8 +1838,15 @@ export class DraftSessionService {
       return {
         id: draft.id,
         leagueSeasonId: draft.leagueSeasonId,
-        transport: "manual",
-        providerPolling: false,
+        transport: settings.transport,
+        // Honest liveness: a feed row that has gone stale, degraded, or complete is no longer
+        // polling, so the UI must not keep asserting a live provider connection.
+        providerPolling:
+          providerFeed !== null &&
+          (providerFeed.state === "live" ||
+            providerFeed.state === "waiting" ||
+            providerFeed.state === "paused"),
+        providerFeed,
         accessRole: draft.accessRole,
         sequence: records.length,
         persistedState: draft.state,

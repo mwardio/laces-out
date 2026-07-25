@@ -11,6 +11,7 @@ x-app-environment: &app-environment
   YAHOO_CLIENT_ID: ${YAHOO_CLIENT_ID:-}
   YAHOO_CLIENT_SECRET: ${YAHOO_CLIENT_SECRET:-}
   YAHOO_REDIRECT_URI: ${PUBLIC_URL:-http://localhost:3000}/v1/connections/yahoo/callback
+  ESPN_LIVE_DRAFT_SYNC: ${ESPN_LIVE_DRAFT_SYNC:-false}
   LOG_LEVEL: ${LOG_LEVEL:-info}
 
 x-service-defaults: &service-defaults

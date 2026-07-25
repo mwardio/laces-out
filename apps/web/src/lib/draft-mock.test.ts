@@ -44,6 +44,7 @@ function snakeSession(): DraftSessionSnapshot {
     leagueSeasonId: "30000000-0000-4000-8000-000000000001",
     transport: "manual",
     providerPolling: false,
+    providerFeed: null,
     accessRole: "owner",
     sequence: 0,
     persistedState: "created",

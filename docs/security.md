@@ -72,6 +72,19 @@ This application will hold access to real fantasy accounts. Treat it like a smal
 
 Never request or store an ESPN password. Use the browser-local bridge, which leaves cookies inside the ESPN origin. A bridge device's league-ID allowlist is only a transport boundary and grants nothing before a successful sync. The first accepted snapshot may create a new league owned by that authenticated device user; a later successfully validated provider connection automatically joins the existing shared league as manager. No separate league approval is required. Existing roles are preserved, every joined member may refresh shared provider data, and an older snapshot cannot replace newer canonical state. Bridge artifacts may not overwrite shared canonical player fields or create a verified global player crosswalk. Unmapped roster IDs receive non-verified, league-season-scoped observation rows. Their supplied roster fields are available only to that league's roster, draft, and projection workflows and are excluded from unscoped catalog/ranking resolution. A self-asserted observation never becomes authoritative; a later trusted catalog refresh may establish a canonical crosswalk. `espn_s2` must be treated as a bearer credential with broader risk than fantasy data alone.
 
+Live draft observation widens what the companion reads, not what it may touch. The content script
+observes a draft room the user already has open; it must never intercept, proxy, decode, or hook
+ESPN's draft WebSocket or EventSource fallback, and must never transmit raw page HTML, arbitrary
+text nodes, chat, page storage, draft security tokens, or transport URLs. The device credential is
+held only by the extension service worker and is never exposed to the content script or the page —
+so a hostile ESPN page mutation cannot redirect an upload to another origin, league, or token.
+Server-side, the observation is a `.strict()`-parsed, size-bounded payload whose checksum the server
+recomputes; its text fields reject control characters; and its identifiers must resolve to exactly
+one internal team and player, holding rather than guessing otherwise. Provider-sourced draft events
+carry `source = 'espn'` under a database check constraint so a provider fact and a manually entered
+fact stay distinguishable forever, and the reconciler will not revert a manual event.
+`ESPN_LIVE_DRAFT_SYNC` gates ingest entirely and is the kill switch.
+
 ## Before internet exposure
 
 - replace every development secret;

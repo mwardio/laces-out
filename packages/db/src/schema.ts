@@ -26,6 +26,12 @@ export type ImportRunState = "queued" | "processing" | "succeeded" | "failed" | 
 export type RefreshRequestState = "queued" | "processing" | "succeeded" | "failed" | "cancelled";
 export type RefreshRequestKind =
   "player_catalog" | "rankings" | "projections" | "injuries" | "league" | "all";
+export type DraftEventSource = "manual" | "espn";
+export type DraftProviderFeedState =
+  "waiting" | "live" | "paused" | "stale" | "complete" | "degraded";
+export type DraftProviderFeedVerification = "pending" | "verified" | "mismatched";
+export type DraftProviderObservationResult =
+  "accepted" | "idempotent" | "standby" | "held" | "rejected";
 export type AiProviderName = "openai" | "anthropic" | "gemini" | "openrouter";
 export type AiCredentialStatus = "active" | "invalid" | "revoked";
 export type StandingStreakType = "win" | "loss" | "tie" | "none";
@@ -2359,7 +2365,7 @@ export const draftEvents = pgTable(
     idempotencyKey: text("idempotency_key").notNull(),
     type: text("type").notNull(),
     occurredAt: timestamp("occurred_at", { withTimezone: true }).notNull(),
-    source: text("source").notNull(),
+    source: text("source").$type<DraftEventSource>().notNull(),
     payload: jsonb("payload").$type<Record<string, unknown>>().notNull(),
     revertsSequence: integer("reverts_sequence"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
@@ -2367,6 +2373,133 @@ export const draftEvents = pgTable(
   (table) => [
     primaryKey({ columns: [table.draftId, table.sequence] }),
     uniqueIndex("draft_events_idempotency_unique").on(table.draftId, table.idempotencyKey),
+    // Provenance is now load-bearing: a provider fact and a manual fact must stay distinguishable.
+    check("draft_events_source_check", sql`${table.source} in ('manual', 'espn')`),
+  ],
+);
+
+/**
+ * One live provider feed per provider league season.
+ *
+ * Holds only sanitized, bounded draft facts and lease bookkeeping. No provider credential, cookie,
+ * draft token, WebSocket URL, or raw page markup has a column here, and none may be added.
+ */
+export const draftProviderFeeds = pgTable(
+  "draft_provider_feeds",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    draftId: uuid("draft_id")
+      .notNull()
+      .references(() => drafts.id, { onDelete: "cascade" }),
+    leagueSeasonId: uuid("league_season_id")
+      .notNull()
+      .references(() => leagueSeasons.id, { onDelete: "cascade" }),
+    provider: text("provider").$type<"espn">().notNull().default("espn"),
+    providerLeagueId: text("provider_league_id").notNull(),
+    season: integer("season").notNull(),
+    state: text("state").$type<DraftProviderFeedState>().notNull().default("waiting"),
+    activeDeviceId: uuid("active_device_id").references(() => bridgeDevices.id, {
+      onDelete: "set null",
+    }),
+    leaseGeneration: integer("lease_generation").notNull().default(0),
+    leaseExpiresAt: timestamp("lease_expires_at", { withTimezone: true }),
+    activePageSessionId: uuid("active_page_session_id"),
+    lastPageRevision: integer("last_page_revision"),
+    lastChecksum: text("last_checksum"),
+    lastObservedAt: timestamp("last_observed_at", { withTimezone: true }),
+    lastReceivedAt: timestamp("last_received_at", { withTimezone: true }),
+    lastMaterialEventAt: timestamp("last_material_event_at", { withTimezone: true }),
+    lastPickCount: integer("last_pick_count").notNull().default(0),
+    currentAuctionState: jsonb("current_auction_state").$type<Record<string, unknown>>(),
+    /** A destructive snapshot must repeat before it is allowed to rewrite accepted history. */
+    pendingDestructiveChecksum: text("pending_destructive_checksum"),
+    pendingDestructiveSeenCount: integer("pending_destructive_seen_count").notNull().default(0),
+    manualBackupActive: boolean("manual_backup_active").notNull().default(false),
+    verification: text("verification")
+      .$type<DraftProviderFeedVerification>()
+      .notNull()
+      .default("pending"),
+    lastErrorCode: text("last_error_code"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("draft_provider_feeds_draft_unique").on(table.draftId),
+    uniqueIndex("draft_provider_feeds_league_season_unique").on(
+      table.provider,
+      table.providerLeagueId,
+      table.season,
+    ),
+    index("draft_provider_feeds_state_idx").on(table.state, table.lastReceivedAt),
+    check("draft_provider_feeds_provider_check", sql`${table.provider} = 'espn'`),
+    check(
+      "draft_provider_feeds_state_check",
+      sql`${table.state} in ('waiting', 'live', 'paused', 'stale', 'complete', 'degraded')`,
+    ),
+    check(
+      "draft_provider_feeds_verification_check",
+      sql`${table.verification} in ('pending', 'verified', 'mismatched')`,
+    ),
+    check("draft_provider_feeds_external_id_check", sql`${table.providerLeagueId} ~ '^[0-9]+$'`),
+    check(
+      "draft_provider_feeds_season_check",
+      sql`${table.season} >= 2019 and ${table.season} <= 2100`,
+    ),
+    check(
+      "draft_provider_feeds_counts_check",
+      sql`${table.leaseGeneration} >= 0 and ${table.lastPickCount} >= 0 and ${table.pendingDestructiveSeenCount} >= 0 and (${table.lastPageRevision} is null or ${table.lastPageRevision} >= 0)`,
+    ),
+    check(
+      "draft_provider_feeds_checksum_check",
+      sql`(${table.lastChecksum} is null or ${table.lastChecksum} ~ '^[a-f0-9]{64}$') and (${table.pendingDestructiveChecksum} is null or ${table.pendingDestructiveChecksum} ~ '^[a-f0-9]{64}$')`,
+    ),
+  ],
+);
+
+/**
+ * Immutable audit trail of every provider observation, accepted or not. Retained so a disputed
+ * board can be reconstructed and so ESPN contract drift is measurable after the fact.
+ */
+export const draftProviderObservations = pgTable(
+  "draft_provider_observations",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    feedId: uuid("feed_id")
+      .notNull()
+      .references(() => draftProviderFeeds.id, { onDelete: "cascade" }),
+    deviceId: uuid("device_id").references(() => bridgeDevices.id, { onDelete: "set null" }),
+    pageSessionId: uuid("page_session_id").notNull(),
+    pageRevision: integer("page_revision").notNull(),
+    checksum: text("checksum").notNull(),
+    providerState: text("provider_state").notNull(),
+    pickCount: integer("pick_count").notNull(),
+    capturedAt: timestamp("captured_at", { withTimezone: true }).notNull(),
+    receivedAt: timestamp("received_at", { withTimezone: true }).notNull().defaultNow(),
+    /** Sanitized observation only. Never raw ESPN markup. */
+    normalizedPayload: jsonb("normalized_payload").$type<Record<string, unknown>>().notNull(),
+    result: text("result").$type<DraftProviderObservationResult>().notNull(),
+    issueSummary: jsonb("issue_summary").$type<Record<string, unknown>>(),
+  },
+  (table) => [
+    index("draft_provider_observations_feed_idx").on(table.feedId, table.receivedAt),
+    uniqueIndex("draft_provider_observations_revision_unique").on(
+      table.feedId,
+      table.pageSessionId,
+      table.pageRevision,
+    ),
+    check(
+      "draft_provider_observations_result_check",
+      sql`${table.result} in ('accepted', 'idempotent', 'standby', 'held', 'rejected')`,
+    ),
+    check(
+      "draft_provider_observations_state_check",
+      sql`${table.providerState} in ('waiting', 'live', 'paused', 'complete')`,
+    ),
+    check("draft_provider_observations_checksum_check", sql`${table.checksum} ~ '^[a-f0-9]{64}$'`),
+    check(
+      "draft_provider_observations_counts_check",
+      sql`${table.pageRevision} >= 0 and ${table.pickCount} >= 0`,
+    ),
   ],
 );
 

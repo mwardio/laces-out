@@ -30,6 +30,7 @@ const snapshot: DraftSessionSnapshot = {
   leagueSeasonId: LEAGUE_SEASON_ID,
   transport: "manual",
   providerPolling: false,
+  providerFeed: null,
   accessRole: "owner",
   sequence: 0,
   persistedState: "created",

@@ -57,6 +57,43 @@ priority is league-specific available players, player-level weekly box scores, s
 transactions, then completed/on-demand draft results. A supplemental request may fail without
 invalidating or rolling back a valid core league snapshot. Message-board content is out of scope.
 
+### 1a. Live draft observation
+
+Verified: implementation only. Not yet exercised against a real ESPN draft room.
+
+A separate content script observes an ESPN draft room the user already has open and uploads a
+bounded, sanitized snapshot of the board through the same league-scoped device credential. The
+boundary is deliberately narrower than the core sync:
+
+- it reads only already-rendered fantasy draft facts — completed picks, pick ownership, keepers,
+  auction nominations and sale prices, and draft state;
+- it never intercepts, proxies, decodes, or hooks ESPN's draft WebSocket or its EventSource
+  fallback, and never touches ESPN's network stack;
+- it never transmits raw page HTML, arbitrary text nodes, chat, page storage, or any ESPN session
+  material, and the device credential stays in the extension service worker;
+- the checksum covers durable board state only, so a re-observed unchanged board is an idempotent
+  no-op and a bidding war never enters the permanent ledger; and
+- every observed team and player must resolve to exactly one internal identity. An unknown or
+  ambiguous identity holds that board rather than advancing it, because a wrong pick is worse than
+  a briefly stale board.
+
+Server-side reconciliation is event sourced against the existing draft engine: the candidate stream
+is reduced and must satisfy every snake, roster, budget, and minimum-bid invariant before anything
+is persisted. A destructive difference — a truncation or a changed action before the current end —
+must be observed twice before it rewrites accepted history, because a half-rendered ESPN table is
+indistinguishable from a commissioner rollback in a single frame. Manual events are never reverted
+automatically.
+
+Two limitations are load-bearing and must not be papered over:
+
+1. **The DOM selectors are provisional.** Work Package 0 of the plan — the live DOM contract spike —
+   requires an authenticated ESPN draft room and has not been run. Until it is, the adapter's
+   selector table is unverified and the feature must stay flagged off.
+2. **Late join may be bounded by virtualized rendering.** If ESPN renders only visible rows, a
+   bridge that joins mid-draft may not be able to reconstruct earlier picks. The spike must either
+   disprove this or the "bridge must be present from the start" limitation gets documented in the
+   product UI, not hidden.
+
 ### 2. Anonymous public-league read
 
 `EspnPublicReadClient` calls the web client's `lm-api-reads.fantasy.espn.com` endpoint only for a
@@ -84,9 +121,11 @@ visibility is a user/commissioner choice and must not be changed or worked aroun
   in the hosted application. The companion may let the browser attach its local ESPN cookies to a
   direct ESPN request, but it never reads or transmits their values.
 - Never perform lineup, waiver, transaction, trade, commissioner, or draft writes.
-- Never advertise live ESPN draft sync until real-season cadence and completeness tests establish a
-  safe read contract. Manual draft event entry remains primary; completed/on-demand provider draft
-  results may later reconcile against it without silently rewriting manual history.
+- Never advertise live ESPN draft sync until the live validation matrix in
+  `docs/ESPN_LIVE_DRAFT_SYNC_PLAN.md` §19.4 has passed. The implementation exists behind
+  `ESPN_LIVE_DRAFT_SYNC` (default off) and its DOM adapter is unvalidated; see “Live draft
+  observation” below. Manual draft event entry remains primary; completed/on-demand provider draft
+  results reconcile against it without silently rewriting manual history.
 - Do not silently fall back from anonymous reads to browser session credentials.
 
 Disney's terms restrict automated access, monitoring, and copying using robots, spiders, scrapers,

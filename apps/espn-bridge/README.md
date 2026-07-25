@@ -27,6 +27,62 @@ The signed listing keeps the extension ID stable and delivers updates through Ch
    supplemental feeds. Optional background sync repeats the check every six hours while the browser
    and ESPN session are available.
 
+## Live ESPN draft sync (in development)
+
+Version 0.4.0 adds a narrowly scoped content script for the ESPN football draft room. It passively
+reads the draft state ESPN has **already rendered** in the user's own tab and sends a bounded,
+sanitized, checksummed observation to the service worker, which uploads it with the existing
+league-scoped device credential.
+
+What it does:
+
+- activates only on `https://fantasy.espn.com/football/draft` with a numeric `leagueId` and a
+  `seasonId`, and only when that league and season match this browser's stored pairing;
+- watches with a `MutationObserver` on a short debounce, plus a full rescan every five seconds so a
+  missed mutation is still recovered;
+- sends a full cumulative snapshot on attach, reload, a completed pick or sale, a rollback, and
+  completion; a small heartbeat about every five seconds while live; and at most two transient
+  nomination/high-bid updates per second;
+- keeps at most the latest snapshot plus the latest transient state, replacing a queued stale
+  snapshot instead of replaying every intermediate mutation; and
+- shows a small non-interactive status badge in the corner of the draft room.
+
+What it never does:
+
+- read or transmit an ESPN password, cookie, `SWID`, `espn_s2`, draft security token, WebSocket URL
+  or frame, chat, page storage, or raw page HTML;
+- intercept, proxy, decode, or hook ESPN's WebSocket, EventSource, or network stack — this is DOM
+  observation plus periodic full reconciliation only;
+- receive the Laces Out device token; the service worker attaches it and never echoes it back to
+  the content script or the page; or
+- write anything to ESPN. It cannot pick, nominate, bid, pause, or roll back.
+
+It requires **no new permission and no new host permission**: `https://fantasy.espn.com/*` was
+already declared for league reads.
+
+### Selectors are provisional
+
+`src/live-draft/dom-adapter.ts` is the only module aware of ESPN selectors, labels, and routes, and
+its `ESPN_DRAFT_SELECTORS` table is still **provisional**. Work Package 0 of
+`docs/ESPN_LIVE_DRAFT_SYNC_PLAN.md` — the live DOM spike against a real authenticated draft room —
+has not been run, so every family is marked `verified: false` and the adapter resolves nothing in a
+real room. Until then the feature is inert by design rather than wrong.
+
+WP0 completes it by editing that one table: replace each `candidates` list with the selectors
+observed in a real room (most specific first, preferring `data-testid`, ids, and explicit data
+attributes over text), extend `ESPN_DRAFT_LABELS` with the exact rendered strings, and set
+`verified: true` per family. Nothing else — including the tests, which key off the exported table
+rather than hard-coded selector strings — needs to change.
+
+Every extraction fails closed. A family that matches nothing, or that matches more than one node,
+yields no value; a row whose identity cannot be read is counted in `completeness.unresolvedRows`
+instead of being guessed, and the server holds rather than advancing the board.
+
+The content script is compiled separately as an IIFE (`content-script.global.js`) because Manifest
+V3 static content scripts are classic scripts, not ES modules. `scripts/copy-assets.mjs` asserts for
+both build targets that the manifest still declares it, that it stays scoped to
+`fantasy.espn.com`, and that the file was actually produced.
+
 ## Local development build
 
 ```bash
@@ -105,8 +161,10 @@ For future releases:
 2. Privacy policy URL: `https://laces.mward.io/privacy` (required — the extension handles league data).
 3. Justify permissions in the listing form: `alarms`/`storage` for scheduled local sync and pairing
    state; the two `fantasy.espn.com` / `lm-api-reads.fantasy.espn.com` hosts for the read-only league
-   fetch; the `laces.mward.io` optional host for uploading the bounded snapshot. State that no ESPN
-   password, `SWID`, or `espn_s2` is read or transmitted.
+   fetch and the draft-room content script; the `laces.mward.io` optional host for uploading the
+   bounded snapshot. State that no ESPN password, `SWID`, or `espn_s2` is read or transmitted, and
+   that the draft-room content script only reads already-rendered draft results. Version 0.4.0 adds
+   no new permission or host permission.
 4. Complete the data-safety form: league data only, not sold, used solely to sync the user's leagues.
 5. Retain **Unlisted** visibility unless the release decision explicitly changes.
 6. Provide at least one 1280×800 (or 640×400) screenshot and a 440×280 promo tile.
@@ -114,6 +172,15 @@ For future releases:
 ## Security boundary
 
 - Fixed ESPN read hosts and fixed allowlisted views.
+- The live draft content script is restricted to the ESPN draft-room route, the top frame only, and
+  a league that matches the stored pairing. The service worker independently re-validates the
+  browser-attested sender (own extension, real tab, top frame, recognized draft URL), re-validates
+  the observation contract, re-derives the checksum, and requires the claimed league and season to
+  match both that URL and the paired device's scope — so an ESPN page mutation cannot select another
+  Laces Out origin, another league, or another device token.
+- Live observations carry only bounded enumerated fields: pick order, team and player identity,
+  keeper flag, price, nomination state, and counts. Names are whitespace-normalized, length-capped,
+  and rejected outright if they contain control or bidirectional-override characters.
 - Dynamically granted access only to the configured Laces Out API origin.
 - HTTPS is mandatory outside loopback development.
 - ESPN responses are JSON-only, redirect-free, capped at 5 MiB, minimally shape-checked, and

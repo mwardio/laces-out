@@ -1,5 +1,8 @@
 import type {
   BridgeLeagueResultState,
+  BridgeLiveDraftRequest,
+  BridgeLiveDraftResponse,
+  BridgeLiveDraftStatus,
   BridgeRequest,
   BridgeResponse,
   BridgeStatus,
@@ -30,11 +33,50 @@ const pairingCompleteButton = element<HTMLButtonElement>("pairing-complete");
 const pairingDismissButton = element<HTMLButtonElement>("pairing-dismiss");
 const unpairedActions = element<HTMLElement>("unpaired-actions");
 const openConnectionsButton = element<HTMLButtonElement>("open-connections");
+const liveDraftPanel = element<HTMLElement>("live-draft");
+const liveDraftState = element<HTMLSpanElement>("live-draft-state");
+const liveDraftMessage = element<HTMLElement>("live-draft-message");
+const liveDraftDetail = element<HTMLElement>("live-draft-detail");
 
 let pendingOffer: PendingPairingOffer | undefined;
 
 function send(request: BridgeRequest): Promise<BridgeResponse> {
   return chrome.runtime.sendMessage(request);
+}
+
+function sendLiveDraft(request: BridgeLiveDraftRequest): Promise<BridgeLiveDraftResponse> {
+  return chrome.runtime.sendMessage(request);
+}
+
+const liveDraftLabels: Readonly<Record<BridgeLiveDraftStatus["state"], string>> = {
+  idle: "Not watching",
+  observing: "Watching",
+  accepted: "Live",
+  standby: "Standby",
+  held: "Needs review",
+  rejected: "Not accepted",
+  offline: "Reconnecting",
+  unauthorized: "Pairing rejected",
+  complete: "Draft complete",
+  error: "Needs attention",
+};
+
+// Plain language only: the popup explains what a friend needs to do, never a status code, and
+// never anything about the device credential.
+function renderLiveDraft(status: BridgeLiveDraftStatus): void {
+  liveDraftPanel.hidden = status.scope === "not-configured" && status.state === "idle";
+  liveDraftPanel.dataset.state = status.state;
+  liveDraftState.textContent = liveDraftLabels[status.state];
+  liveDraftMessage.textContent = status.message;
+  const parts: string[] = [];
+  if (status.leagueId !== null) parts.push(`League ${status.leagueId}`);
+  if (status.pickCount > 0) {
+    parts.push(`${status.pickCount} ${status.pickCount === 1 ? "pick" : "picks"} observed`);
+  }
+  if (status.lastAcceptedAt !== null) {
+    parts.push(`Updated ${new Date(status.lastAcceptedAt).toLocaleTimeString()}`);
+  }
+  liveDraftDetail.textContent = parts.join(" · ");
 }
 
 function render(status: BridgeStatus): void {
@@ -165,4 +207,12 @@ void send({ type: "GET_STATUS" })
   .catch((error: unknown) => {
     statusMessage.textContent = error instanceof Error ? error.message : "Bridge status failed";
     statusPanel.dataset.state = "error";
+  });
+
+// The popup is an extension page, not a content script, so this query carries no draft-room sender
+// and the service worker answers with the stored bounded status only.
+void sendLiveDraft({ type: "GET_LIVE_DRAFT_STATUS" })
+  .then((response) => renderLiveDraft(response.status))
+  .catch(() => {
+    liveDraftPanel.hidden = true;
   });

@@ -582,6 +582,380 @@ export const espnBridgeReceiptSchema = z.object({
   receivedAt: z.iso.datetime(),
 });
 
+/**
+ * Bounds for the ESPN live draft feed. Every limit is named here so the browser companion, the
+ * ingest route, and the reconciler agree on one number instead of three drifting literals.
+ */
+export const ESPN_LIVE_DRAFT_LIMITS = {
+  /** Rejected above this size before the body is parsed. */
+  maximumBodyBytes: 1_048_576,
+  maximumTeams: 32,
+  maximumPicks: 1_000,
+  maximumTeamNameLength: 80,
+  maximumPlayerNameLength: 120,
+  maximumPrice: 100_000,
+  /** Heartbeat cadence the companion aims for while a draft is live. */
+  heartbeatIntervalMs: 5_000,
+  /** A feed observed within this window is reported fresh. */
+  freshWindowMs: 10_000,
+  /** A standby source may claim the lease once the active one goes quiet this long. */
+  failoverEligibleMs: 25_000,
+  /** Beyond this the feed is reported disconnected rather than merely stale. */
+  disconnectedMs: 60_000,
+  /** Ceiling on transient auction uploads so a bidding war cannot flood the API. */
+  transientUploadsPerSecond: 2,
+  /**
+   * A destructive snapshot must be seen this many times before it rewrites accepted history.
+   * Guards against a mid-render ESPN table looking like a commissioner rollback.
+   */
+  destructiveConfirmations: 2,
+} as const;
+
+/** ESPN exposes D/ST as negative player IDs, so the player form permits a leading sign. */
+const espnProviderTeamIdSchema = z.string().regex(/^\d{1,20}$/u);
+const espnProviderPlayerIdSchema = z.string().regex(/^-?\d{1,20}$/u);
+
+/**
+ * Text lifted from a provider page is untrusted. Control characters are rejected outright so a
+ * hostile or malformed DOM cannot smuggle framing into logs, names, or downstream rendering.
+ */
+function espnLiveDraftText(maximum: number) {
+  return z
+    .string()
+    .trim()
+    .min(1)
+    .max(maximum)
+    .refine((value) => !/\p{Cc}/u.test(value), "must not contain control characters");
+}
+
+const espnLiveDraftStateSchema = z.enum(["waiting", "live", "paused", "complete"]);
+const espnLiveDraftTypeSchema = z.enum(["snake", "auction"]);
+
+const espnLiveDraftPickSchema = z
+  .object({
+    sequence: z.number().int().min(1).max(ESPN_LIVE_DRAFT_LIMITS.maximumPicks),
+    round: z.number().int().min(1).max(ESPN_LIVE_DRAFT_LIMITS.maximumPicks).nullable(),
+    roundPick: z.number().int().min(1).max(ESPN_LIVE_DRAFT_LIMITS.maximumTeams).nullable(),
+    keeper: z.boolean(),
+    providerTeamId: espnProviderTeamIdSchema.nullable(),
+    teamName: espnLiveDraftText(ESPN_LIVE_DRAFT_LIMITS.maximumTeamNameLength),
+    providerPlayerId: espnProviderPlayerIdSchema.nullable(),
+    playerName: espnLiveDraftText(ESPN_LIVE_DRAFT_LIMITS.maximumPlayerNameLength),
+    proTeam: espnLiveDraftText(12).nullable(),
+    position: espnLiveDraftText(12).nullable(),
+    price: z.number().int().min(0).max(ESPN_LIVE_DRAFT_LIMITS.maximumPrice).nullable(),
+    nominatingProviderTeamId: espnProviderTeamIdSchema.nullable(),
+  })
+  .strict();
+export type EspnLiveDraftPick = z.infer<typeof espnLiveDraftPickSchema>;
+
+const espnLiveDraftPickOwnershipSchema = z
+  .object({
+    overallPick: z.number().int().min(1).max(ESPN_LIVE_DRAFT_LIMITS.maximumPicks),
+    providerTeamId: espnProviderTeamIdSchema.nullable(),
+    teamName: espnLiveDraftText(ESPN_LIVE_DRAFT_LIMITS.maximumTeamNameLength),
+  })
+  .strict();
+export type EspnLiveDraftPickOwnership = z.infer<typeof espnLiveDraftPickOwnershipSchema>;
+
+const espnLiveDraftCurrentAuctionSchema = z
+  .object({
+    nominationNumber: z.number().int().min(1).max(ESPN_LIVE_DRAFT_LIMITS.maximumPicks),
+    nominatingProviderTeamId: espnProviderTeamIdSchema.nullable(),
+    providerPlayerId: espnProviderPlayerIdSchema.nullable(),
+    playerName: espnLiveDraftText(ESPN_LIVE_DRAFT_LIMITS.maximumPlayerNameLength),
+    proTeam: espnLiveDraftText(12).nullable(),
+    position: espnLiveDraftText(12).nullable(),
+    highBidProviderTeamId: espnProviderTeamIdSchema.nullable(),
+    highBid: z.number().int().min(0).max(ESPN_LIVE_DRAFT_LIMITS.maximumPrice).nullable(),
+  })
+  .strict();
+export type EspnLiveDraftCurrentAuction = z.infer<typeof espnLiveDraftCurrentAuctionSchema>;
+
+export const espnLiveDraftObservationSchema = z
+  .object({
+    schemaVersion: z.literal(1),
+    kind: z.literal("espn-live-draft"),
+    leagueId: espnProviderTeamIdSchema,
+    season: z.number().int().min(2019).max(2100),
+    /** Extension-generated random UUID. Never an ESPN token, cookie, or session identifier. */
+    pageSessionId: z.string().uuid(),
+    revision: z.number().int().min(0).max(1_000_000),
+    capturedAt: z.iso.datetime(),
+    state: espnLiveDraftStateSchema,
+    draftType: espnLiveDraftTypeSchema,
+    expectedTeamCount: z.number().int().min(2).max(ESPN_LIVE_DRAFT_LIMITS.maximumTeams),
+    expectedRosterSize: z.number().int().min(1).max(100).nullable(),
+    pickOwnership: z
+      .array(espnLiveDraftPickOwnershipSchema)
+      .max(ESPN_LIVE_DRAFT_LIMITS.maximumPicks),
+    picks: z.array(espnLiveDraftPickSchema).max(ESPN_LIVE_DRAFT_LIMITS.maximumPicks),
+    currentAuction: espnLiveDraftCurrentAuctionSchema.nullable(),
+    completeness: z
+      .object({
+        contiguousThrough: z.number().int().min(0).max(ESPN_LIVE_DRAFT_LIMITS.maximumPicks),
+        duplicateSequences: z.number().int().min(0).max(ESPN_LIVE_DRAFT_LIMITS.maximumPicks),
+        unresolvedRows: z.number().int().min(0).max(ESPN_LIVE_DRAFT_LIMITS.maximumPicks),
+      })
+      .strict(),
+    checksumSha256: z.string().regex(/^[a-f0-9]{64}$/u),
+  })
+  .strict()
+  .superRefine((observation, context) => {
+    if (observation.completeness.contiguousThrough > observation.picks.length) {
+      context.addIssue({
+        code: "custom",
+        path: ["completeness", "contiguousThrough"],
+        message: "cannot exceed the number of reported picks",
+      });
+    }
+    if (observation.draftType === "snake" && observation.currentAuction !== null) {
+      context.addIssue({
+        code: "custom",
+        path: ["currentAuction"],
+        message: "snake drafts cannot report auction nomination state",
+      });
+    }
+    const ownership = new Set(observation.pickOwnership.map((entry) => entry.overallPick));
+    if (ownership.size !== observation.pickOwnership.length) {
+      context.addIssue({
+        code: "custom",
+        path: ["pickOwnership"],
+        message: "overall pick ownership must be unique",
+      });
+    }
+  });
+export type EspnLiveDraftObservation = z.infer<typeof espnLiveDraftObservationSchema>;
+
+/**
+ * Canonical serialization the observation checksum is taken over.
+ *
+ * Deliberately covers only durable board facts. `capturedAt`, `revision`, `pageSessionId`, and the
+ * transient auction block are excluded so that re-observing an unchanged board yields the same
+ * checksum — that identity is what makes a replayed snapshot an idempotent no-op instead of a new
+ * material event. Field order is fixed here rather than inherited from wire JSON key order, so the
+ * browser companion and the server can compute it independently and still agree.
+ *
+ * The browser companion mirrors this function; `espnLiveDraftDigestGolden` pins both to one value.
+ */
+export function espnLiveDraftDigestSource(observation: {
+  readonly leagueId: string;
+  readonly season: number;
+  readonly state: EspnLiveDraftObservation["state"];
+  readonly draftType: EspnLiveDraftObservation["draftType"];
+  readonly expectedTeamCount: number;
+  readonly expectedRosterSize: number | null;
+  readonly pickOwnership: readonly EspnLiveDraftPickOwnership[];
+  readonly picks: readonly EspnLiveDraftPick[];
+}): string {
+  return JSON.stringify([
+    "espn-live-draft/1",
+    observation.leagueId,
+    observation.season,
+    observation.state,
+    observation.draftType,
+    observation.expectedTeamCount,
+    observation.expectedRosterSize,
+    observation.pickOwnership.map((entry) => [
+      entry.overallPick,
+      entry.providerTeamId,
+      entry.teamName,
+    ]),
+    observation.picks.map((pick) => [
+      pick.sequence,
+      pick.round,
+      pick.roundPick,
+      pick.keeper,
+      pick.providerTeamId,
+      pick.teamName,
+      pick.providerPlayerId,
+      pick.playerName,
+      pick.proTeam,
+      pick.position,
+      pick.price,
+      pick.nominatingProviderTeamId,
+    ]),
+  ]);
+}
+
+/**
+ * A fixed observation and the digest it must produce. Imported by both the server and the browser
+ * companion's tests; if either canonicalizer drifts, one of those tests fails instead of every
+ * live observation silently failing its checksum mid-draft.
+ */
+export const espnLiveDraftDigestGolden = {
+  observation: {
+    leagueId: "1234567",
+    season: 2026,
+    state: "live",
+    draftType: "snake",
+    expectedTeamCount: 2,
+    expectedRosterSize: 1,
+    pickOwnership: [
+      { overallPick: 1, providerTeamId: "1", teamName: "Ditka's Revenge" },
+      { overallPick: 2, providerTeamId: "2", teamName: "Finkle Is Einhorn" },
+    ],
+    picks: [
+      {
+        sequence: 1,
+        round: 1,
+        roundPick: 1,
+        keeper: false,
+        providerTeamId: "1",
+        teamName: "Ditka's Revenge",
+        providerPlayerId: "3139477",
+        playerName: "Patrick Mahomes",
+        proTeam: "KC",
+        position: "QB",
+        price: null,
+        nominatingProviderTeamId: null,
+      },
+    ],
+  },
+  source:
+    '["espn-live-draft/1","1234567",2026,"live","snake",2,1,[[1,"1","Ditka\'s Revenge"],[2,"2","Finkle Is Einhorn"]],[[1,1,1,false,"1","Ditka\'s Revenge","3139477","Patrick Mahomes","KC","QB",null,null]]]',
+} as const;
+
+export const espnLiveDraftHeartbeatSchema = z
+  .object({
+    schemaVersion: z.literal(1),
+    kind: z.literal("espn-live-draft-heartbeat"),
+    leagueId: espnProviderTeamIdSchema,
+    season: z.number().int().min(2019).max(2100),
+    pageSessionId: z.string().uuid(),
+    revision: z.number().int().min(0).max(1_000_000),
+    capturedAt: z.iso.datetime(),
+    state: espnLiveDraftStateSchema,
+    /** Lets the server confirm a standby is holding the same board before granting the lease. */
+    lastChecksumSha256: z
+      .string()
+      .regex(/^[a-f0-9]{64}$/u)
+      .nullable(),
+  })
+  .strict();
+export type EspnLiveDraftHeartbeat = z.infer<typeof espnLiveDraftHeartbeatSchema>;
+
+export const espnLiveDraftIngestRequestSchema = z.discriminatedUnion("kind", [
+  espnLiveDraftObservationSchema,
+  espnLiveDraftHeartbeatSchema,
+]);
+export type EspnLiveDraftIngestRequest = z.infer<typeof espnLiveDraftIngestRequestSchema>;
+
+export const espnLiveDraftFeedStateSchema = z.enum([
+  "waiting",
+  "live",
+  "paused",
+  "stale",
+  "complete",
+  "degraded",
+]);
+export type EspnLiveDraftFeedState = z.infer<typeof espnLiveDraftFeedStateSchema>;
+
+/**
+ * Bounded reasons an observation did not advance the board. Kept as an enum so logs and metrics
+ * never carry free text lifted from a provider page.
+ */
+export const espnLiveDraftIssueCodeSchema = z.enum([
+  "UNRESOLVED_TEAM",
+  "UNRESOLVED_PLAYER",
+  "PICK_SEQUENCE_GAP",
+  "DUPLICATE_PICK_SEQUENCE",
+  "EMPTY_RENDER",
+  "PICK_OWNERSHIP_UNKNOWN",
+  "DRAFT_TYPE_MISMATCH",
+  "TEAM_COUNT_MISMATCH",
+  "ROSTER_CAPACITY_EXCEEDED",
+  "PRICE_ILLEGAL",
+  "REDUCER_INVARIANT",
+  "DESTRUCTIVE_PENDING",
+  "MANUAL_BACKUP_ACTIVE",
+  "STALE_PAGE_REVISION",
+  "CHECKSUM_MISMATCH",
+  "SESSION_NOT_READY",
+]);
+export type EspnLiveDraftIssueCode = z.infer<typeof espnLiveDraftIssueCodeSchema>;
+
+export const espnLiveDraftIngestResponseSchema = z
+  .object({
+    status: z.enum(["accepted", "idempotent", "standby", "held", "rejected"]),
+    draftId: z.string().uuid().nullable(),
+    serverSequence: z.number().int().min(0).nullable(),
+    feedState: espnLiveDraftFeedStateSchema,
+    acceptedChecksum: z
+      .string()
+      .regex(/^[a-f0-9]{64}$/u)
+      .nullable(),
+    unresolvedTeams: z.number().int().min(0),
+    unresolvedPlayers: z.number().int().min(0),
+    issueCode: espnLiveDraftIssueCodeSchema.nullable(),
+    sourceLeaseExpiresAt: z.iso.datetime().nullable(),
+  })
+  .strict();
+export type EspnLiveDraftIngestResponse = z.infer<typeof espnLiveDraftIngestResponseSchema>;
+
+/**
+ * Current nomination state, resolved to internal identities. Transient by design: it lives on the
+ * feed row rather than the permanent event ledger so a bidding war never bloats draft history.
+ */
+export const espnLiveDraftTransientAuctionSchema = z
+  .object({
+    nominationNumber: z.number().int().min(1),
+    nominatingTeamId: z.string().uuid().nullable(),
+    playerId: z.string().uuid().nullable(),
+    playerName: espnLiveDraftText(ESPN_LIVE_DRAFT_LIMITS.maximumPlayerNameLength),
+    proTeam: espnLiveDraftText(12).nullable(),
+    position: espnLiveDraftText(12).nullable(),
+    highBidTeamId: z.string().uuid().nullable(),
+    highBid: z.number().int().min(0).nullable(),
+    observedAt: z.iso.datetime(),
+  })
+  .strict();
+export type EspnLiveDraftTransientAuction = z.infer<typeof espnLiveDraftTransientAuctionSchema>;
+
+/**
+ * Feed health as shown to every league viewer. Deliberately carries no device token, device label,
+ * ESPN username, or session material — only whether a source is supplying the board and how fresh
+ * it is.
+ */
+export const espnLiveDraftFeedStatusSchema = z
+  .object({
+    provider: z.literal("espn"),
+    state: espnLiveDraftFeedStateSchema,
+    providerLeagueId: espnProviderTeamIdSchema,
+    season: z.number().int().min(2019).max(2100),
+    fresh: z.boolean(),
+    ageSeconds: z.number().min(0).nullable(),
+    lastAcceptedAt: z.iso.datetime().nullable(),
+    lastMaterialEventAt: z.iso.datetime().nullable(),
+    pickCount: z.number().int().min(0),
+    unresolvedTeams: z.number().int().min(0),
+    unresolvedPlayers: z.number().int().min(0),
+    /** True while an owner or commissioner has frozen provider application. */
+    manualBackupActive: z.boolean(),
+    /** Provider snapshots validated but withheld while manual backup is active. */
+    pendingReconciliation: z.number().int().min(0),
+    standbySources: z.number().int().min(0),
+    verification: z.enum(["pending", "verified", "mismatched"]),
+    lastIssueCode: espnLiveDraftIssueCodeSchema.nullable(),
+    currentAuction: espnLiveDraftTransientAuctionSchema.nullable(),
+  })
+  .strict();
+export type EspnLiveDraftFeedStatus = z.infer<typeof espnLiveDraftFeedStatusSchema>;
+
+/**
+ * Stream payload. Carries only enough to invalidate a cached session, so there is exactly one
+ * canonical response contract for draft state and reconnect stays trivial.
+ */
+export const draftStreamInvalidationSchema = z
+  .object({
+    draftId: z.string().uuid(),
+    sequence: z.number().int().min(0),
+    feedRevision: z.number().int().min(0),
+    occurredAt: z.iso.datetime(),
+  })
+  .strict();
+export type DraftStreamInvalidation = z.infer<typeof draftStreamInvalidationSchema>;
+
 export const jobAcceptedSchema = z
   .object({
     jobId: z.string().nullable(),
@@ -695,6 +1069,27 @@ export const draftEventCorrectionRequestSchema = z
   })
   .strict();
 export type DraftEventCorrectionRequest = z.infer<typeof draftEventCorrectionRequestSchema>;
+
+/**
+ * How a room returns to provider control after a manual backup freeze.
+ *
+ * `accept-provider` lets the next observation reconcile normally; `keep-manual` keeps this ledger
+ * as written. Neither choice reverts a manual event — the reconciler still refuses to rewrite a
+ * room that contains one.
+ */
+export const draftManualBackupReconciliationSchema = z.enum(["accept-provider", "keep-manual"]);
+export type DraftManualBackupReconciliation = z.infer<typeof draftManualBackupReconciliationSchema>;
+
+export const draftManualBackupRequestSchema = z
+  .object({
+    expectedSequence: draftSequenceSchema,
+    idempotencyKey: z.string().trim().min(8).max(200),
+    active: z.boolean(),
+    /** Required only when deactivating with provider snapshots held; the server decides. */
+    reconciliation: draftManualBackupReconciliationSchema.optional(),
+  })
+  .strict();
+export type DraftManualBackupRequest = z.infer<typeof draftManualBackupRequestSchema>;
 
 const draftRosterSlotSchema = z
   .object({
@@ -862,12 +1257,20 @@ const draftStateSchema = z
   })
   .strict();
 
+export const draftTransportSchema = z.enum(["manual", "espn-live"]);
+export type DraftTransport = z.infer<typeof draftTransportSchema>;
+
+/** Provenance travels with every event so provider facts stay distinguishable from manual ones. */
+export const draftEventSourceSchema = z.enum(["manual", "espn"]);
+export type DraftEventSource = z.infer<typeof draftEventSourceSchema>;
+
 export const draftSessionSnapshotSchema = z
   .object({
     id: draftUuidSchema,
     leagueSeasonId: draftUuidSchema,
-    transport: z.literal("manual"),
-    providerPolling: z.literal(false),
+    transport: draftTransportSchema,
+    /** True only while a provider feed is actually supplying this room. */
+    providerPolling: z.boolean(),
     accessRole: leagueMembershipRoleSchema,
     sequence: draftSequenceSchema,
     persistedState: z.enum(["created", "live", "complete"]),
@@ -878,17 +1281,23 @@ export const draftSessionSnapshotSchema = z
         .object({
           sequence: draftPositiveIntegerSchema,
           idempotencyKey: z.string().min(8).max(200),
-          source: z.literal("manual"),
+          source: draftEventSourceSchema,
           occurredAt: z.iso.datetime(),
           revertsSequence: draftPositiveIntegerSchema.nullable(),
           event: draftEventSchema,
         })
         .strict(),
     ),
+    /** Null for a manual room. Present whenever an ESPN feed is attached, healthy or not. */
+    providerFeed: espnLiveDraftFeedStatusSchema.nullable(),
     createdAt: z.iso.datetime(),
     updatedAt: z.iso.datetime(),
   })
-  .strict();
+  .strict()
+  .refine(
+    (session) => session.transport !== "manual" || session.providerFeed === null,
+    "a manual draft session cannot carry a provider feed",
+  );
 export type DraftSessionSnapshot = z.infer<typeof draftSessionSnapshotSchema>;
 
 const draftMarketSourceSchema = z

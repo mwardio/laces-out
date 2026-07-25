@@ -299,6 +299,11 @@ not prerequisites the current runbook silently assumes are already installed.
   configuration, and real-account contract-validation checklist.
 - ESPN companion distribution requires sanctioned private-league validation, terms and store-policy
   review, and a signed build. The signed browser bridge is the only hosted private-league path.
+- ESPN live draft sync stays behind `ESPN_LIVE_DRAFT_SYNC=false` until the live validation matrix in
+  `docs/ESPN_LIVE_DRAFT_SYNC_PLAN.md` §19.4 passes — a full snake mock, a disposable auction draft,
+  reload/late-join, pause/resume, a deliberate rollback, source failover, a mobile viewer, and a
+  completed `mDraftDetail` cross-check. The DOM adapter's selector table is unverified until then.
+  Landing-page copy may not claim the capability before that gate.
 - Neither gate enables provider writes. Lineup, waiver, and trade changes remain recommendation-only
   until separately approved, implemented, and shadow-validated.
 
@@ -338,3 +343,8 @@ Targets are RPO 24 hours and RTO 2 hours for this personal deployment.
 - On schema drift: quarantine the artifact, fail the affected resource without partial overwrite, and surface manual mode.
 - On suspected token exposure: disconnect/revoke at the provider, rotate app/client secrets if needed, delete credential envelopes, invalidate app sessions, and inspect redacted audit events.
 - During a draft: fall back immediately to manual event entry; provider recovery may reconcile later but cannot silently overwrite a manual correction.
+- On a bad live draft feed: set `ESPN_LIVE_DRAFT_SYNC=false` and restart the API. New provider
+  observations stop mutating draft state while accepted events, the last known feed state, manual
+  backup mode, and ordinary ESPN core/supplemental sync all keep working. Never delete or rewrite
+  accepted draft history as a first recovery action; reconcile against the completed `mDraftDetail`
+  snapshot before closing an affected draft.

@@ -88,7 +88,9 @@ export function DraftWorkspace() {
   const [winnerId, setWinnerId] = useState("you");
   const [bid, setBid] = useState("49");
   const [snakePick, setSnakePick] = useState(17);
-  const [notice, setNotice] = useState("Local sandbox ready. Provider polling is off.");
+  const [notice, setNotice] = useState(
+    "Local sandbox ready. Nothing here is connected to a league or a provider.",
+  );
   const [isPaused, setIsPaused] = useState(false);
 
   const draftedIds = useMemo(
@@ -890,8 +892,8 @@ export function DraftWorkspace() {
           )}
         </div>
         <p className="draft-log__note">
-          <Info size={13} /> Provider polling is not represented as live. Manual entries are the
-          reliable baseline and can be undone.
+          <Info size={13} /> This sandbox is not connected to a league or a provider feed. Every
+          entry stays in this browser preview and can be undone.
         </p>
       </section>
 

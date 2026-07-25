@@ -1,6 +1,12 @@
 import { z } from "zod";
 
 const blankToUndefined = (value: unknown): unknown => (value === "" ? undefined : value);
+const booleanFlag = z
+  .preprocess(
+    (value) => (typeof value === "string" ? value.trim().toLowerCase() : value),
+    z.enum(["true", "false", "1", "0"]).default("false"),
+  )
+  .transform((value) => value === "true" || value === "1");
 
 const environmentSchema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
@@ -20,6 +26,12 @@ const environmentSchema = z.object({
   YAHOO_CLIENT_ID: z.preprocess(blankToUndefined, z.string().min(1).optional()),
   YAHOO_CLIENT_SECRET: z.preprocess(blankToUndefined, z.string().min(1).optional()),
   YAHOO_REDIRECT_URI: z.url().default("http://localhost:4000/v1/connections/yahoo/callback"),
+  /**
+   * Master switch for ESPN live draft ingest. Defaults off: the capability must not turn itself on
+   * anywhere it has not been validated, and flipping this to false is the emergency kill switch —
+   * it stops new provider mutation while accepted events and manual backup keep working.
+   */
+  ESPN_LIVE_DRAFT_SYNC: booleanFlag,
   LOG_LEVEL: z.enum(["fatal", "error", "warn", "info", "debug", "trace", "silent"]).default("info"),
 });
 

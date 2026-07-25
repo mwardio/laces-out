@@ -10,7 +10,10 @@ import {
   espnBridgeDeviceResponseSchema,
   espnBridgeReceiptSchema,
   espnBridgeSnapshotSchema,
+  espnLiveDraftIngestRequestSchema,
+  espnLiveDraftIngestResponseSchema,
   espnSupplementalBridgeSnapshotSchema,
+  ESPN_LIVE_DRAFT_LIMITS,
   healthResponseSchema,
   jobAcceptedSchema,
   leagueDashboardSchema,
@@ -22,6 +25,8 @@ import {
   yahooAuthorizeRequestSchema,
   yahooAuthorizeResponseSchema,
   type EspnBridgeSnapshot,
+  type EspnLiveDraftIngestRequest,
+  type EspnLiveDraftIngestResponse,
   type EspnSupplementalBridgeSnapshot,
   type LeagueDashboard,
   type LeagueListResponse,
@@ -40,10 +45,12 @@ import { sessionCookieName, sessionLifetimeSeconds, type AuthService } from "./a
 import { type AiServicePort, registerAiRoutes } from "./ai-routes.js";
 import { getDemoDashboard } from "./demo.js";
 import {
+  type DraftManualBackupPort,
   type DraftMarketPort,
   type DraftSessionPort,
   registerDraftRoutes,
 } from "./draft-routes.js";
+import { DraftStreamHub } from "./draft-stream.js";
 import { type InvitationPort, registerInvitationRoutes } from "./invitation-routes.js";
 import {
   type InSeasonDecisionPort,
@@ -128,6 +135,17 @@ export interface EspnBridgePort {
   ): Promise<{ readonly deviceId: string; readonly revokedAt: string } | undefined>;
 }
 
+/**
+ * Optional so a deployment with the flag off — or an existing test fake — simply serves 503 for
+ * live draft ingest while every other ESPN path keeps working.
+ */
+export interface EspnLiveDraftPort {
+  ingest(
+    deviceToken: string,
+    request: EspnLiveDraftIngestRequest,
+  ): Promise<EspnLiveDraftIngestResponse>;
+}
+
 export interface LeagueDashboardPort {
   listLeagues(userId: string): Promise<LeagueListResponse>;
   getDashboard(userId: string, leagueId: string): Promise<LeagueDashboard | undefined>;
@@ -142,7 +160,10 @@ export interface BuildAppOptions {
   readonly readinessCheck?: () => Promise<boolean>;
   readonly draftSessions?: DraftSessionPort;
   readonly draftMarket?: DraftMarketPort;
+  readonly draftManualBackup?: DraftManualBackupPort;
   readonly espnBridge?: EspnBridgePort;
+  readonly espnLiveDraft?: EspnLiveDraftPort;
+  readonly draftStream?: DraftStreamHub;
   readonly invitations?: InvitationPort;
   readonly decisions?: InSeasonDecisionPort;
   readonly analytics?: LeagueAnalyticsPort;
@@ -251,11 +272,22 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   });
   app.decorateRequest("currentUser", undefined);
 
+  const draftStream = options.draftStream ?? new DraftStreamHub();
+
+  // Device-token authenticated ingest paths. Kept in one place because each of them has to be
+  // reflected in three otherwise-independent gates below: CORS, the production origin check, and
+  // the session-cookie allowlist. Adding a path to only two of the three fails quietly.
+  const espnBridgeIngestPaths: readonly string[] = [
+    "/v1/bridge/espn/snapshots",
+    "/v1/bridge/espn/supplemental",
+    "/v1/bridge/espn/live-draft",
+  ];
+
   await app.register(cors, {
     delegator: (request, callback) => {
       const requestPath = request.url.split("?", 1)[0] ?? request.url;
       const fromEspnBridge =
-        ["/v1/bridge/espn/snapshots", "/v1/bridge/espn/supplemental"].includes(requestPath) &&
+        espnBridgeIngestPaths.includes(requestPath) &&
         request.headers.origin === "https://fantasy.espn.com";
       callback(null, {
         origin: fromEspnBridge ? "https://fantasy.espn.com" : environment.WEB_URL,
@@ -292,8 +324,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     "/v1/auth/logout",
     "/v1/auth/register",
     "/v1/auth/session",
-    "/v1/bridge/espn/snapshots",
-    "/v1/bridge/espn/supplemental",
+    ...espnBridgeIngestPaths,
     "/v1/invitations/inspect",
     "/v1/invitations/accept",
     "/v1/ranking-shares/open",
@@ -301,9 +332,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   ]);
   app.addHook("onRequest", async (request, reply) => {
     const requestPath = request.url.split("?", 1)[0] ?? request.url;
-    const isBridgeSnapshot = ["/v1/bridge/espn/snapshots", "/v1/bridge/espn/supplemental"].includes(
-      requestPath,
-    );
+    const isBridgeSnapshot = espnBridgeIngestPaths.includes(requestPath);
     if (
       environment.NODE_ENV === "production" &&
       !["GET", "HEAD", "OPTIONS"].includes(request.method) &&
@@ -449,6 +478,8 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   registerDraftRoutes(app, {
     ...(options.draftSessions ? { draftSessions: options.draftSessions } : {}),
     ...(options.draftMarket ? { draftMarket: options.draftMarket } : {}),
+    ...(options.draftManualBackup ? { draftManualBackup: options.draftManualBackup } : {}),
+    draftStream,
   });
   registerInSeasonDecisionRoutes(app, {
     ...(options.decisions ? { decisions: options.decisions } : {}),
@@ -722,6 +753,63 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
         await options.espnBridge.acceptSupplementalSnapshot(match[1], snapshot),
       );
       return reply.code(receipt.state === "accepted" ? 202 : 200).send(receipt);
+    },
+  );
+
+  app.post(
+    "/v1/bridge/espn/live-draft",
+    {
+      bodyLimit: ESPN_LIVE_DRAFT_LIMITS.maximumBodyBytes,
+      // Sized for a heartbeat every 5s plus bounded transient auction updates from one active
+      // source, with headroom for a standby that has not yet been told to stand down.
+      config: { rateLimit: { max: 600, timeWindow: "1 minute" } },
+    },
+    async (request, reply) => {
+      if (!options.espnLiveDraft) {
+        return reply.code(503).type("application/problem+json").send({
+          type: "https://fantasy.local/problems/espn-live-draft-unavailable",
+          title: "ESPN live draft sync is not enabled",
+          status: 503,
+          correlationId: request.id,
+        });
+      }
+      const authorization = request.headers.authorization;
+      const match = /^Bridge ([A-Za-z0-9._~-]{32,512})$/u.exec(authorization ?? "");
+      if (!match?.[1]) {
+        return reply.code(401).type("application/problem+json").send({
+          type: "https://fantasy.local/problems/bridge-unauthorized",
+          title: "Valid bridge device authorization is required",
+          status: 401,
+          correlationId: request.id,
+        });
+      }
+      const observation = espnLiveDraftIngestRequestSchema.parse(request.body);
+      const result = espnLiveDraftIngestResponseSchema.parse(
+        await options.espnLiveDraft.ingest(match[1], observation),
+      );
+      // Published only after the write has committed, so a viewer that reacts immediately reads
+      // the state this observation produced rather than the one before it.
+      if (result.status === "accepted" && result.draftId !== null) {
+        draftStream.publish({
+          draftId: result.draftId,
+          sequence: result.serverSequence ?? 0,
+          feedRevision: observation.revision,
+          occurredAt: new Date().toISOString(),
+        });
+      }
+      // Structured, bounded, and identifier-only: no payload, no names, no device credential.
+      request.log.info(
+        {
+          liveDraftStatus: result.status,
+          liveDraftFeedState: result.feedState,
+          liveDraftIssue: result.issueCode,
+          draftId: result.draftId,
+          providerLeagueId: observation.leagueId,
+          pageRevision: observation.revision,
+        },
+        "espn live draft observation processed",
+      );
+      return reply.code(result.status === "accepted" ? 202 : 200).send(result);
     },
   );
 

@@ -156,7 +156,11 @@ export function nextPickForTeam(
   return nextIndex === -1 ? null : nextIndex + 1;
 }
 
-function unfilledStarterSlots<Player extends DraftBoardPlayer>(
+/**
+ * Starter slots a roster cannot cover, by maximum bipartite matching rather than position counting
+ * so a flex-eligible player is never double-counted. Exported for the live-draft mobile summary.
+ */
+export function unfilledStarterSlots<Player extends DraftBoardPlayer>(
   allPlayers: readonly Player[],
   rosteredPlayerIds: readonly string[],
   rosterSlots: readonly DraftBoardRosterSlot[],

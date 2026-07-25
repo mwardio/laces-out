@@ -1,3 +1,5 @@
+import type { BridgeLiveDraftStatus } from "./live-draft/uplink.js";
+
 export const maximumLeagueCount = 32;
 
 export interface BridgeConfiguration {
@@ -36,15 +38,53 @@ export interface BridgeStatus {
   readonly results: readonly BridgeLeagueResult[];
 }
 
+// Live draft messages (plan section 9). They are part of the same `BridgeRequest` union so the
+// message listener sees one type, but they answer with `BridgeLiveDraftResponse` rather than the
+// league-sync `BridgeResponse`, and the service worker routes them to their own handler. They must
+// never fall through to a league sync: see `handleRequest` in the service worker.
+export type BridgeLiveDraftRequest =
+  | {
+      readonly type: "LIVE_DRAFT_OBSERVATION";
+      readonly observation: unknown;
+      /** True for a bounded nomination/high-bid update rather than a material board change. */
+      readonly transient: boolean;
+    }
+  | { readonly type: "LIVE_DRAFT_HEARTBEAT"; readonly heartbeat: unknown }
+  | { readonly type: "LIVE_DRAFT_PAGE_LEFT"; readonly leagueId: string; readonly season: number }
+  | {
+      readonly type: "GET_LIVE_DRAFT_STATUS";
+      readonly leagueId?: string;
+      readonly season?: number;
+    };
+
 export type BridgeRequest =
   | { readonly type: "GET_STATUS" }
   | { readonly type: "CONFIGURE"; readonly configuration: BridgeConfiguration }
   | { readonly type: "SYNC_NOW" }
-  | { readonly type: "DISCONNECT" };
+  | { readonly type: "DISCONNECT" }
+  | BridgeLiveDraftRequest;
+
+export const liveDraftRequestTypes = [
+  "LIVE_DRAFT_OBSERVATION",
+  "LIVE_DRAFT_HEARTBEAT",
+  "LIVE_DRAFT_PAGE_LEFT",
+  "GET_LIVE_DRAFT_STATUS",
+] as const;
+
+export function isBridgeLiveDraftRequest(
+  request: BridgeRequest,
+): request is BridgeLiveDraftRequest {
+  return (liveDraftRequestTypes as readonly string[]).includes(request.type);
+}
 
 export interface BridgeResponse {
   readonly ok: boolean;
   readonly status: BridgeStatus;
+}
+
+export interface BridgeLiveDraftResponse {
+  readonly ok: boolean;
+  readonly status: BridgeLiveDraftStatus;
 }
 
 export interface BridgeResultSummary {
@@ -54,6 +94,8 @@ export interface BridgeResultSummary {
   >;
   readonly message: string;
 }
+
+export type { BridgeLiveDraftStatus };
 
 export const configurationStorageKey = "lacesOutEspnConfiguration";
 export const statusStorageKey = "lacesOutEspnStatus";

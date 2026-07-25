@@ -6254,6 +6254,213 @@
     border-color: #f0d4c4;
   }
 
+  /* Live provider feed status (§16.2). Reuses the live-freshness-dot vocabulary from the
+     dashboard so one dot colour means the same thing everywhere in the app. */
+  .draft-live-strip {
+    display: grid;
+    grid-template-columns: minmax(180px, 250px) minmax(0, 1fr) auto;
+    align-items: start;
+    gap: 12px 18px;
+    margin-top: 10px;
+    padding: 11px 13px;
+    background: var(--white);
+    border: 1px solid var(--ink-150);
+    border-radius: 10px;
+  }
+  .draft-live-strip--live {
+    border-color: #cfe39a;
+    box-shadow: inset 3px 0 0 #8cbf3f;
+  }
+  .draft-live-strip--warning {
+    border-color: #f0d4c4;
+    box-shadow: inset 3px 0 0 var(--orange-500);
+  }
+  .draft-live-strip--critical {
+    border-color: #eec3bb;
+    box-shadow: inset 3px 0 0 #d34a3a;
+  }
+  .draft-live-strip__status {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .draft-live-strip__status > span:last-child {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+  }
+  .draft-live-strip__status strong {
+    font-size: 13px;
+  }
+  .draft-live-strip__status small {
+    color: var(--ink-500);
+    font-size: 11px;
+  }
+  .draft-live-strip__facts {
+    display: grid;
+    margin: 0;
+    grid-template-columns: repeat(auto-fit, minmax(128px, 1fr));
+    gap: 8px 14px;
+  }
+  .draft-live-strip__facts div {
+    min-width: 0;
+  }
+  .draft-live-strip__facts dt {
+    color: var(--ink-500);
+    font-size: 9px;
+    font-weight: 750;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+  .draft-live-strip__facts dd {
+    margin: 1px 0 0;
+    overflow: hidden;
+    font-size: 12px;
+    font-weight: 650;
+    text-overflow: ellipsis;
+  }
+  .draft-live-strip__notes {
+    grid-column: 1 / -1;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .draft-live-strip__notes p {
+    margin: 0;
+    font-size: 11px;
+    line-height: 1.45;
+  }
+  .draft-live-strip__issue {
+    display: flex;
+    align-items: flex-start;
+    gap: 6px;
+    color: var(--orange-600);
+    font-weight: 650;
+  }
+  .draft-live-strip__guidance {
+    color: var(--ink-600);
+  }
+  .draft-live-strip__meta {
+    color: var(--ink-500);
+  }
+  .draft-live-strip__actions {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+  }
+
+  /* Manual backup conflict control (§16.5). Deliberately loud: while it is on, provider
+     picks are frozen and the room is no longer following ESPN. */
+  .draft-manual-backup {
+    margin-top: 10px;
+    padding: 12px 14px;
+    background: var(--orange-100);
+    border: 1px solid #f0d4c4;
+    border-radius: 10px;
+  }
+  .draft-manual-backup__intro {
+    display: grid;
+    grid-template-columns: 34px minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 11px;
+  }
+  .draft-manual-backup__icon {
+    display: grid;
+    width: 34px;
+    height: 34px;
+    place-items: center;
+    color: var(--orange-600);
+    background: var(--white);
+    border-radius: 9px;
+  }
+  .draft-manual-backup__intro h2 {
+    font-size: 15px;
+  }
+  .draft-manual-backup__intro p {
+    margin: 2px 0 0;
+    color: var(--ink-600);
+    font-size: 12px;
+  }
+  .draft-manual-backup__count {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+  }
+  .draft-manual-backup__count strong {
+    font-size: 22px;
+    line-height: 1;
+  }
+  .draft-manual-backup__count small {
+    color: var(--ink-500);
+    font-size: 10px;
+  }
+  .draft-manual-backup__choice {
+    margin: 10px 0 0;
+    font-size: 12px;
+    font-weight: 650;
+  }
+  .draft-manual-backup__actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 10px;
+  }
+
+  /* Transient nomination state. Lives on the feed, never in the event ledger (§14.5). */
+  .draft-live-auction {
+    display: grid;
+    grid-template-columns: 38px minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 12px;
+    margin-top: 10px;
+    padding: 11px 14px;
+    color: #eef3ef;
+    background: var(--ink-900);
+    border-radius: 10px;
+  }
+  .draft-live-auction__icon {
+    display: grid;
+    width: 38px;
+    height: 38px;
+    place-items: center;
+    color: var(--lime-300);
+    background: rgba(201, 244, 100, 0.1);
+    border-radius: 10px;
+  }
+  .draft-live-auction__player,
+  .draft-live-auction__bid {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+  }
+  .draft-live-auction__bid {
+    align-items: flex-end;
+    text-align: right;
+  }
+  .draft-live-auction small {
+    color: #8f9c92;
+    font-size: 9px;
+    font-weight: 750;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+  .draft-live-auction strong {
+    overflow: hidden;
+    font-size: 15px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .draft-live-auction span {
+    color: #aab5ac;
+    font-size: 11px;
+  }
+  .draft-live-auction__note {
+    grid-column: 1 / -1;
+    margin: 0;
+    color: #8f9c92;
+    font-size: 10px;
+  }
+
   .room-strip {
     display: grid;
     grid-template-columns: repeat(4, 1fr);
@@ -7763,7 +7970,96 @@
       flex: 0 0 auto;
     }
     .draft-session-live {
-      padding-bottom: 128px;
+      padding-bottom: 210px;
+    }
+    /* Desktop-width panels collapse rather than disappear: a phone viewer needs the same
+       feed health, nomination, needs, and budget the desktop rail shows (§16.4). */
+    .draft-live-strip {
+      grid-template-columns: minmax(0, 1fr);
+    }
+    .draft-live-strip__facts {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+    .draft-live-auction {
+      grid-template-columns: 34px minmax(0, 1fr);
+    }
+    .draft-live-auction__bid {
+      align-items: flex-start;
+      grid-column: 2;
+      text-align: left;
+    }
+    .draft-manual-backup__intro {
+      grid-template-columns: 34px minmax(0, 1fr);
+    }
+    .draft-manual-backup__count {
+      align-items: flex-start;
+      grid-column: 2;
+    }
+    .draft-mobile-action__feed {
+      display: grid;
+      min-width: 0;
+      grid-template-columns: minmax(0, 1fr) auto;
+      align-items: center;
+      gap: 8px;
+      padding: 4px 7px 0;
+    }
+    .draft-mobile-action__feed-status {
+      display: flex;
+      min-width: 0;
+      align-items: center;
+      overflow: hidden;
+      gap: 6px;
+      color: #aab5ac !important;
+      font-size: 10px !important;
+      font-weight: 650;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .draft-mobile-action__feed-clock {
+      display: flex;
+      min-width: 0;
+      flex-direction: column;
+      align-items: flex-end;
+      text-align: right;
+    }
+    .draft-mobile-action__feed-clock small {
+      color: #8f9c92;
+      font-size: 9px;
+      font-weight: 750;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+    }
+    .draft-mobile-action__feed-clock strong {
+      max-width: 46vw;
+      color: #f5f8f5;
+      font-size: 11px;
+    }
+    .draft-mobile-action__stale {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin: 0;
+      padding: 5px 8px;
+      color: #ffe3dc;
+      background: rgba(211, 74, 58, 0.28);
+      border: 1px solid rgba(211, 74, 58, 0.55);
+      border-radius: 8px;
+      font-size: 10px;
+      font-weight: 700;
+    }
+    .draft-mobile-action__needs {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px 12px;
+      padding: 0 7px;
+    }
+    .draft-mobile-action__needs span {
+      color: #aab5ac;
+      font-size: 10px;
+      font-weight: 650;
+    }
+    .draft-mobile-action--stale {
+      border-color: rgba(211, 74, 58, 0.6);
     }
     .draft-mobile-action--live {
       display: grid;
