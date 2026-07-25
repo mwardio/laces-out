@@ -7,6 +7,7 @@ export const queueNames = {
   recomputeRecommendations: "recommendation-recompute",
   dataHealth: "data-health-check",
   dataRefresh: "data-refresh",
+  notificationSweep: "notification-sweep",
 } as const;
 
 export const deadLetterQueueNames = {
@@ -15,6 +16,7 @@ export const deadLetterQueueNames = {
   recomputeRecommendations: "recommendation-recompute-dead-letter",
   dataHealth: "data-health-check-dead-letter",
   dataRefresh: "data-refresh-dead-letter",
+  notificationSweep: "notification-sweep-dead-letter",
 } as const;
 
 export interface LeagueSyncJob {
@@ -49,6 +51,30 @@ export interface DataRefreshJob {
   readonly scope: "player-data" | "market-data" | "adp-data";
   readonly reason: "daily" | "scheduled" | "user" | "startup-recovery";
   readonly requestedAt: string;
+}
+
+/**
+ * Outbound notification families. The sweep is generic over the kind so a future notification is a
+ * new payload builder and a new value here, not new queue plumbing.
+ */
+export const notificationSweepKinds = ["lineup-lock"] as const;
+export type NotificationSweepKind = (typeof notificationSweepKinds)[number];
+
+export interface NotificationSweepJob {
+  readonly kind: NotificationSweepKind;
+  readonly reason: "scheduled" | "manual";
+}
+
+export interface NotificationSweepResult {
+  readonly considered: number;
+  readonly sent: number;
+  readonly duplicates: number;
+  readonly withoutDevices: number;
+  readonly deliveries: number;
+  readonly pruned: number;
+  readonly failures: number;
+  /** Set when the sweep did nothing on purpose, most often because VAPID keys are absent. */
+  readonly skipped: string | null;
 }
 
 export interface SourceRefreshResult {
@@ -90,11 +116,16 @@ export interface DataHealthCheckResult {
   readonly degradedSourceKeys: readonly string[];
 }
 
+export interface NotificationSweepService {
+  sweep(job: NotificationSweepJob, context: WorkerJobContext): Promise<NotificationSweepResult>;
+}
+
 export interface WorkerServices {
   readonly leagueSync?: LeagueSyncService;
   readonly projectionRefresh?: ProjectionRefreshService;
   readonly recommendationRecompute?: RecommendationRecomputeService;
   readonly dataHealth?: DataHealthService;
+  readonly notificationSweep?: NotificationSweepService;
   readonly refreshPlayerData?: (
     force: boolean,
   ) => Promise<Readonly<Record<string, SourceRefreshResult>>>;
@@ -160,6 +191,19 @@ const queueConfigurations: Readonly<Record<keyof typeof queueNames, QueueConfigu
     deleteAfterSeconds: 7 * DAY_SECONDS,
     deadLetter: deadLetterQueueNames.dataRefresh,
     warningQueueSize: 10,
+  },
+  notificationSweep: {
+    // A lineup alarm that arrives late is worse than one that never arrives, so the sweep retries
+    // briefly and then gives the next quarter-hour tick the job instead.
+    retryLimit: 2,
+    retryDelay: 30,
+    retryBackoff: true,
+    retryDelayMax: 2 * 60,
+    expireInSeconds: 5 * 60,
+    retentionSeconds: 14 * DAY_SECONDS,
+    deleteAfterSeconds: 7 * DAY_SECONDS,
+    deadLetter: deadLetterQueueNames.notificationSweep,
+    warningQueueSize: 5,
   },
 };
 
@@ -326,6 +370,15 @@ function assertDataRefreshJob(job: DataRefreshJob): void {
   }
 }
 
+function assertNotificationSweepJob(job: NotificationSweepJob): void {
+  if (!(notificationSweepKinds as readonly string[]).includes(job.kind)) {
+    throw new Error("Invalid worker job: unsupported notification kind");
+  }
+  if (job.reason !== "scheduled" && job.reason !== "manual") {
+    throw new Error("Invalid worker job: unsupported notification sweep reason");
+  }
+}
+
 function requireService<T>(service: T | undefined, label: string): T {
   if (!service) throw new Error(`${label} service is not configured`);
   return service;
@@ -404,6 +457,20 @@ export async function registerWorkers(
       logger.info(
         { jobId: job.id, source: job.data.source, result },
         "data health check completed",
+      );
+    }
+  });
+
+  await boss.work<NotificationSweepJob>(queueNames.notificationSweep, workOptions, async (jobs) => {
+    const service = requireService(services.notificationSweep, "Notification sweep");
+    for (const job of jobs) {
+      assertNotAborted(job);
+      assertNotificationSweepJob(job.data);
+      const result = await service.sweep(job.data, { jobId: job.id, signal: job.signal });
+      // Counts only. A notification's recipient, devices, and text never reach the log.
+      logger.info(
+        { jobId: job.id, kind: job.data.kind, reason: job.data.reason, result },
+        "notification sweep completed",
       );
     }
   });
@@ -520,6 +587,19 @@ export async function registerSchedules(boss: PgBoss, projectionSeason?: number)
       key: "hourly-waiver-market-data",
       group: { id: "waiver-market-data" },
       singletonKey: "waiver-market-data",
+    },
+  );
+  // Offset from the other quarter-hour schedules so a lineup-lock sweep never queues behind the
+  // source health check. The sweep itself decides which send window, if any, is live.
+  await boss.schedule(
+    queueNames.notificationSweep,
+    "4,19,34,49 * * * *",
+    { kind: "lineup-lock", reason: "scheduled" } satisfies NotificationSweepJob,
+    {
+      tz: "UTC",
+      key: "lineup-lock-alerts",
+      group: { id: "notifications" },
+      singletonKey: "notification-sweep:lineup-lock",
     },
   );
   if (projectionSeason !== undefined) {

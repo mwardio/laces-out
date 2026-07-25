@@ -47,6 +47,11 @@ export type AdpScoringFormat = "standard" | "half-ppr" | "ppr";
 export type AdpRosterFormat = "one-qb" | "superflex" | "two-qb" | "unknown";
 export type LeagueSupplementalKind =
   "available-players" | "weekly-box-scores" | "transactions" | "completed-draft";
+/**
+ * One outbound notification family. New kinds are additive: a payload builder plus an idempotency
+ * key slot, never new delivery plumbing.
+ */
+export type NotificationKind = "lineup-lock";
 
 export interface FirstPartyRosAvailabilityWeek {
   readonly week: number;
@@ -245,6 +250,74 @@ export const userPreferences = pgTable(
       "user_preferences_digest_check",
       sql`${table.digestCadence} in ('off', 'daily', 'weekly')`,
     ),
+  ],
+);
+
+/**
+ * One browser push endpoint a member has registered from a device. The endpoint and its two keys
+ * are the entire credential: they are bearer material for that browser's push service, never for
+ * this application, so they are stored as opaque values and never logged. The row is the member's
+ * own revocable device record, deliberately shaped like `bridge_devices`.
+ */
+export const pushSubscriptions = pgTable(
+  "push_subscriptions",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    endpoint: text("endpoint").notNull(),
+    p256dh: text("p256dh").notNull(),
+    auth: text("auth").notNull(),
+    userAgentLabel: text("user_agent_label"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    lastSuccessAt: timestamp("last_success_at", { withTimezone: true }),
+    lastFailureAt: timestamp("last_failure_at", { withTimezone: true }),
+  },
+  (table) => [
+    uniqueIndex("push_subscriptions_endpoint_unique").on(table.endpoint),
+    index("push_subscriptions_user_idx").on(table.userId),
+    check(
+      "push_subscriptions_endpoint_check",
+      sql`char_length(btrim(${table.endpoint})) between 1 and 2048`,
+    ),
+    check(
+      "push_subscriptions_keys_check",
+      sql`char_length(btrim(${table.p256dh})) between 1 and 256 and char_length(btrim(${table.auth})) between 1 and 256`,
+    ),
+    check(
+      "push_subscriptions_label_check",
+      sql`${table.userAgentLabel} is null or char_length(btrim(${table.userAgentLabel})) between 1 and 80`,
+    ),
+  ],
+);
+
+/**
+ * The idempotency ledger for outbound notifications. One row per (member, notification kind,
+ * occasion); the unique index is the mechanism, so a re-run, a restart, or two overlapping
+ * schedules can never double-send. Rows carry no notification content.
+ */
+export const notificationDeliveries = pgTable(
+  "notification_deliveries",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    kind: text("kind").$type<NotificationKind>().notNull(),
+    idempotencyKey: text("idempotency_key").notNull(),
+    deliveredDeviceCount: integer("delivered_device_count").notNull().default(0),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("notification_deliveries_key_unique").on(table.idempotencyKey),
+    index("notification_deliveries_user_idx").on(table.userId, table.createdAt),
+    check("notification_deliveries_kind_check", sql`${table.kind} in ('lineup-lock')`),
+    check(
+      "notification_deliveries_key_check",
+      sql`char_length(btrim(${table.idempotencyKey})) between 1 and 200`,
+    ),
+    check("notification_deliveries_device_count_check", sql`${table.deliveredDeviceCount} >= 0`),
   ],
 );
 
@@ -472,6 +545,7 @@ export const fantasyTeams = pgTable(
     externalKey: text("external_key").notNull(),
     name: text("name").notNull(),
     abbreviation: text("abbreviation"),
+    logoUrl: text("logo_url"),
     isUserTeam: boolean("is_user_team").notNull().default(false),
     managerDisplayName: text("manager_display_name"),
     faabRemaining: integer("faab_remaining"),

@@ -226,11 +226,19 @@ export const dataSourceFreshnessSchema = z.object({
 });
 export type DataSourceFreshness = z.infer<typeof dataSourceFreshnessSchema>;
 
+/**
+ * Provider-hosted team logo. The connector normalizers are the single enforcement point for
+ * https-only URLs; this schema keeps a malformed or oversized value from reaching a member's
+ * browser rather than re-validating the provider's host.
+ */
+export const teamLogoUrlSchema = z.string().url().max(2_000).nullable();
+
 export const leagueStandingEntrySchema = z.object({
   teamId: z.string().uuid(),
   teamName: z.string(),
   abbreviation: z.string().nullable(),
   managerDisplayName: z.string().nullable(),
+  logoUrl: teamLogoUrlSchema,
   rank: z.number().int().positive(),
   playoffSeed: z.number().int().positive().nullable(),
   wins: z.number().int().nonnegative(),
@@ -259,6 +267,7 @@ export const leagueMatchupTeamSchema = z.object({
   teamName: z.string(),
   abbreviation: z.string().nullable(),
   managerDisplayName: z.string().nullable(),
+  logoUrl: teamLogoUrlSchema,
   score: z.number().nullable(),
 });
 export type LeagueMatchupTeam = z.infer<typeof leagueMatchupTeamSchema>;
@@ -318,12 +327,14 @@ export const memberWeekContextSchema = z.object({
   week: z.number().int().positive().nullable(),
   teamId: z.string().uuid().nullable(),
   teamName: z.string().nullable(),
+  teamLogoUrl: teamLogoUrlSchema,
   standingRank: z.number().int().positive().nullable(),
   wins: z.number().int().nonnegative().nullable(),
   losses: z.number().int().nonnegative().nullable(),
   ties: z.number().int().nonnegative().nullable(),
   opponentTeamId: z.string().uuid().nullable(),
   opponentTeamName: z.string().nullable(),
+  opponentLogoUrl: teamLogoUrlSchema,
   opponentManagerDisplayName: z.string().nullable(),
   opponentStandingRank: z.number().int().positive().nullable(),
   opponentWins: z.number().int().nonnegative().nullable(),
@@ -1844,6 +1855,7 @@ export const leagueAnalyticsUnavailableCodeSchema = z.enum([
   "DEDICATED_STARTERS_MISSING",
   "TEAM_UNCLAIMED",
   "OPPONENT_MISSING",
+  "AWARDS_WEEK_UNAVAILABLE",
 ]);
 export type LeagueAnalyticsUnavailableCode = z.infer<typeof leagueAnalyticsUnavailableCodeSchema>;
 
@@ -1870,6 +1882,7 @@ const leagueAnalyticsTeamSchema = z
     name: z.string().min(1).max(200),
     abbreviation: z.string().max(20).nullable(),
     managerDisplayName: z.string().max(200).nullable(),
+    logoUrl: teamLogoUrlSchema,
     isCurrentUser: z.boolean(),
   })
   .strict();
@@ -2079,6 +2092,77 @@ export const leagueOpponentScoutSectionSchema = z.discriminatedUnion("state", [
 ]);
 export type LeagueOpponentScoutSection = z.infer<typeof leagueOpponentScoutSectionSchema>;
 
+export const weeklyAwardIdSchema = z.enum([
+  "bad-beat",
+  "horseshoe",
+  "bench-warmer",
+  "beatdown",
+  "photo-finish",
+]);
+export type WeeklyAwardId = z.infer<typeof weeklyAwardIdSchema>;
+
+export const weeklyAwardWithheldCodeSchema = z.enum([
+  "WEEK_MISSING",
+  "MATCHUPS_MISSING",
+  "SCORES_INCOMPLETE",
+  "LINEUP_POINTS_MISSING",
+  "NO_QUALIFYING_TEAM",
+]);
+export type WeeklyAwardWithheldCode = z.infer<typeof weeklyAwardWithheldCodeSchema>;
+
+const weeklyAwardWithheldReasonSchema = z
+  .object({
+    code: weeklyAwardWithheldCodeSchema,
+    message: z.string().min(1).max(500),
+  })
+  .strict();
+
+const weeklyAwardSchema = z
+  .object({
+    id: weeklyAwardIdSchema,
+    label: z.string().min(1).max(120),
+    definition: z.string().min(1).max(1_000),
+    team: leagueAnalyticsTeamSchema,
+    /** The number that earned the award, in `unit`. */
+    value: z.number().finite(),
+    unit: z.enum(["points", "percent"]),
+    detail: z
+      .object({
+        opponentTeam: leagueAnalyticsTeamSchema.nullable(),
+        teamPoints: z.number().finite().nullable(),
+        opponentPoints: z.number().finite().nullable(),
+        allPlayWins: z.number().finite().nonnegative().nullable(),
+        allPlayGames: z.number().int().nonnegative().nullable(),
+      })
+      .strict(),
+  })
+  .strict();
+export type WeeklyAward = z.infer<typeof weeklyAwardSchema>;
+
+const withheldWeeklyAwardSchema = z
+  .object({
+    id: weeklyAwardIdSchema,
+    label: z.string().min(1).max(120),
+    reasons: z.array(weeklyAwardWithheldReasonSchema).min(1).max(10),
+  })
+  .strict();
+export type WithheldWeeklyAward = z.infer<typeof withheldWeeklyAwardSchema>;
+
+export const leagueWeeklyAwardsSectionSchema = z.discriminatedUnion("state", [
+  leagueAnalyticsUnavailableSectionSchema,
+  z
+    .object({
+      state: z.literal("available"),
+      week: z.number().int().min(1).max(30),
+      awards: z.array(weeklyAwardSchema).max(10),
+      /** Awards the evidence did not support, each carrying why. Never rendered as a zero. */
+      withheld: z.array(withheldWeeklyAwardSchema).max(10),
+      definitions: z.array(analyticsMetricDefinitionSchema).max(12),
+    })
+    .strict(),
+]);
+export type LeagueWeeklyAwardsSection = z.infer<typeof leagueWeeklyAwardsSectionSchema>;
+
 export const leagueAnalyticsSnapshotSchema = z
   .object({
     generatedAt: z.iso.datetime(),
@@ -2138,6 +2222,7 @@ export const leagueAnalyticsSnapshotSchema = z
     power: leaguePowerAnalyticsSectionSchema,
     positional: leaguePositionalAnalyticsSectionSchema,
     opponentScout: leagueOpponentScoutSectionSchema,
+    weeklyAwards: leagueWeeklyAwardsSectionSchema,
   })
   .strict();
 export type LeagueAnalyticsSnapshot = z.infer<typeof leagueAnalyticsSnapshotSchema>;
@@ -2239,6 +2324,7 @@ export const aiFeatureNameSchema = z.enum([
   "waiver-scan",
   "trade-builder",
   "standings-prediction",
+  "weekly-recap",
 ]);
 export type AiFeatureName = z.infer<typeof aiFeatureNameSchema>;
 
@@ -2735,3 +2821,73 @@ export const healthResponseSchema = z.object({
   version: z.string(),
   time: z.iso.datetime(),
 });
+
+/**
+ * Web push ("game day alerts"). `available: false` is the ordinary state of a deployment whose
+ * operator has not generated VAPID keys; the settings panel renders a labeled disabled section
+ * rather than an error.
+ */
+export const pushConfigurationSchema = z
+  .object({
+    available: z.boolean(),
+    publicKey: z
+      .string()
+      .regex(/^[A-Za-z0-9_-]{32,255}$/u)
+      .nullable(),
+  })
+  .strict();
+export type PushConfiguration = z.infer<typeof pushConfigurationSchema>;
+
+const pushSubscriptionKeySchema = z
+  .string()
+  .trim()
+  .regex(/^[A-Za-z0-9_-]{1,256}$/u);
+
+/** Mirrors `PushSubscription.toJSON()` so the browser value can be posted without reshaping. */
+export const pushSubscriptionRequestSchema = z
+  .object({
+    endpoint: z
+      .url()
+      .max(2048)
+      .refine((value) => value.startsWith("https://"), "must be an https endpoint"),
+    keys: z.object({ p256dh: pushSubscriptionKeySchema, auth: pushSubscriptionKeySchema }).strict(),
+    /** A member-visible device name. Never the raw user-agent string. */
+    label: z.string().trim().min(1).max(80).nullish(),
+  })
+  .strict();
+export type PushSubscriptionRequest = z.infer<typeof pushSubscriptionRequestSchema>;
+
+/** Deliberately excludes the endpoint and both keys: a device list is not a credential list. */
+export const pushDeviceStatusSchema = z
+  .object({
+    subscriptionId: z.string().uuid(),
+    label: z.string().min(1).max(80).nullable(),
+    createdAt: z.iso.datetime(),
+    lastSuccessAt: z.iso.datetime().nullable(),
+    lastFailureAt: z.iso.datetime().nullable(),
+  })
+  .strict();
+export type PushDeviceStatus = z.infer<typeof pushDeviceStatusSchema>;
+
+export const pushDeviceListResponseSchema = z
+  .object({
+    generatedAt: z.iso.datetime(),
+    devices: z.array(pushDeviceStatusSchema).max(20),
+  })
+  .strict();
+export type PushDeviceListResponse = z.infer<typeof pushDeviceListResponseSchema>;
+
+export const pushDeviceRevokeResponseSchema = z
+  .object({ subscriptionId: z.string().uuid(), revokedAt: z.iso.datetime() })
+  .strict();
+export type PushDeviceRevokeResponse = z.infer<typeof pushDeviceRevokeResponseSchema>;
+
+export const pushTestResponseSchema = z
+  .object({
+    attempted: z.number().int().min(0).max(20),
+    delivered: z.number().int().min(0).max(20),
+    /** Endpoints the push service reported as gone; those rows were deleted. */
+    pruned: z.number().int().min(0).max(20),
+  })
+  .strict();
+export type PushTestResponse = z.infer<typeof pushTestResponseSchema>;

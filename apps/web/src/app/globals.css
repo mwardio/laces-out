@@ -2646,6 +2646,9 @@
     padding: 0.58rem 0.65rem;
     border-bottom: 1px solid var(--line, #e4e7ec);
     text-align: left;
+    /* Team cells carry an avatar, so numeric columns stay put whether a logo loads or the
+       initials fallback renders instead of shifting with the cell's first baseline. */
+    vertical-align: middle;
   }
 
   .live-stats-table thead th {
@@ -2681,6 +2684,23 @@
 
   .live-number-cell {
     font-variant-numeric: tabular-nums;
+  }
+
+  /* Team logo beside the team name. The text child keeps min-width: 0 so long names truncate
+     or wrap exactly as they did before the avatar was added. */
+  .live-team-cell {
+    display: flex;
+    min-width: 0;
+    align-items: center;
+    gap: 0.4rem;
+  }
+
+  .live-team-cell > * {
+    min-width: 0;
+  }
+
+  .live-team-cell--end {
+    justify-content: flex-end;
   }
 
   .live-table-empty {
@@ -2946,7 +2966,7 @@
     .mobile-week-card__score {
       display: grid;
       grid-template-columns: 1fr auto 1fr;
-      align-items: baseline;
+      align-items: center;
       gap: 0.7rem;
       padding: 0.65rem 0.75rem;
       background: rgba(255, 255, 255, 0.055);
@@ -3028,6 +3048,10 @@
       padding-top: 0.6rem;
       border-top: 1px solid var(--line, #e4e7ec);
       text-align: left;
+    }
+
+    .live-opponent-score .live-team-cell--end {
+      justify-content: flex-start;
     }
 
     .live-roster-player {

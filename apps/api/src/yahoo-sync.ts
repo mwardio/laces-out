@@ -667,6 +667,7 @@ export class DrizzleYahooSyncRepository implements YahooSyncRepository {
             externalKey: team.externalId,
             name: team.name,
             abbreviation: team.abbreviation,
+            logoUrl: team.logoUrl ?? null,
             isUserTeam: false,
             managerDisplayName: team.managers[0]?.displayName ?? null,
           })
@@ -675,6 +676,7 @@ export class DrizzleYahooSyncRepository implements YahooSyncRepository {
             set: {
               name: team.name,
               abbreviation: team.abbreviation,
+              logoUrl: team.logoUrl ?? null,
               managerDisplayName: team.managers[0]?.displayName ?? null,
               updatedAt: now,
             },

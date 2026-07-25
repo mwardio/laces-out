@@ -171,6 +171,15 @@ export function AppShell({
     return () => controller.abort();
   }, []);
 
+  // Registration only. It installs the handler that shows a notification the member has already
+  // opted into; permission is requested from the Settings toggle and nowhere else.
+  useEffect(() => {
+    if (!("serviceWorker" in navigator)) return;
+    void navigator.serviceWorker.register("/sw.js").catch(() => {
+      // A browser that refuses the registration simply has no game day alerts.
+    });
+  }, []);
+
   useEffect(() => {
     if (!mobileMenuOpen) return;
 

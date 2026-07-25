@@ -162,6 +162,20 @@
       "when": 1784939908277,
       "tag": "0022_whole_absorbing_man",
       "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1785012264158,
+      "tag": "0023_fast_silver_centurion",
+      "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1785013148484,
+      "tag": "0024_charming_princess_powerful",
+      "breakpoints": true
     }
   ]
 }

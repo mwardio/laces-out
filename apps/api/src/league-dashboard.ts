@@ -69,6 +69,7 @@ interface TeamRow {
   readonly name: string;
   readonly abbreviation: string | null;
   readonly managerDisplayName: string | null;
+  readonly logoUrl: string | null;
   readonly faabRemaining: number | null;
   readonly waiverPriority: number | null;
 }
@@ -131,6 +132,7 @@ interface StandingEntryRow {
   readonly teamName: string;
   readonly abbreviation: string | null;
   readonly managerDisplayName: string | null;
+  readonly logoUrl: string | null;
   readonly rank: number;
   readonly playoffSeed: number | null;
   readonly wins: number;
@@ -156,10 +158,12 @@ interface WeeklyMatchupRow {
   readonly homeTeamName: string;
   readonly homeAbbreviation: string | null;
   readonly homeManagerDisplayName: string | null;
+  readonly homeLogoUrl: string | null;
   readonly awayTeamId: string;
   readonly awayTeamName: string;
   readonly awayAbbreviation: string | null;
   readonly awayManagerDisplayName: string | null;
+  readonly awayLogoUrl: string | null;
   readonly homeScore: string | null;
   readonly awayScore: string | null;
   readonly winnerTeamId: string | null;
@@ -279,6 +283,7 @@ export class DrizzleLeagueDashboardRepository implements LeagueDashboardReposito
         name: fantasyTeams.name,
         abbreviation: fantasyTeams.abbreviation,
         managerDisplayName: fantasyTeams.managerDisplayName,
+        logoUrl: fantasyTeams.logoUrl,
         faabRemaining: fantasyTeams.faabRemaining,
         waiverPriority: fantasyTeams.waiverPriority,
       })
@@ -398,6 +403,7 @@ export class DrizzleLeagueDashboardRepository implements LeagueDashboardReposito
         teamName: fantasyTeams.name,
         abbreviation: fantasyTeams.abbreviation,
         managerDisplayName: fantasyTeams.managerDisplayName,
+        logoUrl: fantasyTeams.logoUrl,
         rank: standingsEntries.rank,
         playoffSeed: standingsEntries.playoffSeed,
         wins: standingsEntries.wins,
@@ -438,10 +444,12 @@ export class DrizzleLeagueDashboardRepository implements LeagueDashboardReposito
         homeTeamName: homeFantasyTeam.name,
         homeAbbreviation: homeFantasyTeam.abbreviation,
         homeManagerDisplayName: homeFantasyTeam.managerDisplayName,
+        homeLogoUrl: homeFantasyTeam.logoUrl,
         awayTeamId: weeklyMatchups.awayTeamId,
         awayTeamName: awayFantasyTeam.name,
         awayAbbreviation: awayFantasyTeam.abbreviation,
         awayManagerDisplayName: awayFantasyTeam.managerDisplayName,
+        awayLogoUrl: awayFantasyTeam.logoUrl,
         homeScore: weeklyMatchups.homeScore,
         awayScore: weeklyMatchups.awayScore,
         winnerTeamId: weeklyMatchups.winnerTeamId,
@@ -707,6 +715,7 @@ function standingsView(
       teamName: row.teamName,
       abbreviation: row.abbreviation,
       managerDisplayName: row.managerDisplayName,
+      logoUrl: row.logoUrl,
       rank: row.rank,
       playoffSeed: row.playoffSeed,
       wins: row.wins,
@@ -739,6 +748,7 @@ function matchupView(row: WeeklyMatchupRow, claimedTeamId: string | null): Leagu
       teamName: row.homeTeamName,
       abbreviation: row.homeAbbreviation,
       managerDisplayName: row.homeManagerDisplayName,
+      logoUrl: row.homeLogoUrl,
       score: optionalDecimal(row.homeScore),
     },
     away: {
@@ -746,6 +756,7 @@ function matchupView(row: WeeklyMatchupRow, claimedTeamId: string | null): Leagu
       teamName: row.awayTeamName,
       abbreviation: row.awayAbbreviation,
       managerDisplayName: row.awayManagerDisplayName,
+      logoUrl: row.awayLogoUrl,
       score: optionalDecimal(row.awayScore),
     },
     winnerTeamId: row.winnerTeamId,
@@ -890,6 +901,7 @@ function memberWeekView(
     week: weeklyInsights.week,
     teamId: claimedTeamId,
     teamName: claimedTeam?.name ?? membership.claimedTeamName,
+    teamLogoUrl: claimedTeam?.logoUrl ?? null,
     standingRank: standing?.rank ?? null,
     wins: standing?.wins ?? null,
     losses: standing?.losses ?? null,
@@ -898,6 +910,7 @@ function memberWeekView(
   const emptyOpponent = {
     opponentTeamId: null,
     opponentTeamName: null,
+    opponentLogoUrl: null,
     opponentManagerDisplayName: null,
     opponentStandingRank: null,
     opponentWins: null,
@@ -932,6 +945,7 @@ function memberWeekView(
     ...base,
     opponentTeamId: opponentSide.teamId,
     opponentTeamName: opponentSide.teamName,
+    opponentLogoUrl: opponentSide.logoUrl,
     opponentManagerDisplayName: opponentSide.managerDisplayName,
     opponentStandingRank: opponentStanding?.rank ?? null,
     opponentWins: opponentStanding?.wins ?? null,

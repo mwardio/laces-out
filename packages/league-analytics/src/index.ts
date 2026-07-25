@@ -1,3 +1,4 @@
+export * from "./awards.js";
 export * from "./playoffs.js";
 export * from "./power.js";
 export * from "./opportunity.js";

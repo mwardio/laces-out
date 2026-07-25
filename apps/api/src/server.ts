@@ -31,6 +31,11 @@ import { deriveRankingShareKeyring, RankingService } from "./ranking-service.js"
 import { DrizzleRegistrationRepository } from "./registration-repository.js";
 import { RegistrationService } from "./registration.js";
 import { DrizzlePreferencesRepository, PreferencesService } from "./preferences.js";
+import {
+  createWebPushSender,
+  DrizzlePushSubscriptionRepository,
+  PushSubscriptionService,
+} from "./push-subscriptions.js";
 import { DrizzleScheduleRepository, ScheduleService } from "./schedule.js";
 import { DrizzleStatsCenterRepository, StatsCenterService } from "./stats-center.js";
 import { YahooConnectionService } from "./yahoo-connection.js";
@@ -58,6 +63,21 @@ const decisions = new InSeasonDecisionService(new DrizzleInSeasonDecisionReposit
 const analytics = new LeagueAnalyticsService(new DrizzleLeagueAnalyticsRepository(database.db));
 const schedule = new ScheduleService(new DrizzleScheduleRepository(database.db));
 const preferences = new PreferencesService(new DrizzlePreferencesRepository(database.db));
+// Constructed unconditionally so device management and the config probe answer consistently. The
+// service reports the feature unavailable, and refuses to register or test, when the operator has
+// not configured a VAPID key pair — the default state of every existing deployment.
+const vapid =
+  environment.VAPID_PUBLIC_KEY && environment.VAPID_PRIVATE_KEY && environment.VAPID_SUBJECT
+    ? {
+        subject: environment.VAPID_SUBJECT,
+        publicKey: environment.VAPID_PUBLIC_KEY,
+        privateKey: environment.VAPID_PRIVATE_KEY,
+      }
+    : undefined;
+const push = new PushSubscriptionService({
+  repository: new DrizzlePushSubscriptionRepository(database.db),
+  ...(vapid ? { publicKey: vapid.publicKey, sender: createWebPushSender(vapid) } : {}),
+});
 // The schedule doubles as the bye source so a player's game log can mark an idle week.
 const statsCenter = new StatsCenterService(
   new DrizzleStatsCenterRepository(database.db),
@@ -163,6 +183,7 @@ const app = await buildApp({
   statsCenter,
   schedule,
   preferences,
+  push,
   ...(ai ? { ai } : {}),
   ...(invitations ? { invitations } : {}),
   leagueDashboard,

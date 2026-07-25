@@ -1,0 +1,1 @@
+ALTER TABLE "fantasy_teams" ADD COLUMN "logo_url" text;

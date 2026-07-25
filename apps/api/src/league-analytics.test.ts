@@ -53,12 +53,14 @@ const teams: readonly AnalyticsTeamRow[] = [
     id: TEAM_A,
     name: "The Isotoners",
     abbreviation: "ISO",
+    logoUrl: null,
     managerDisplayName: "Ace",
   },
   {
     id: TEAM_B,
     name: "Snowflake",
     abbreviation: "SNW",
+    logoUrl: null,
     managerDisplayName: "Ray",
   },
 ];
@@ -356,5 +358,34 @@ describe("LeagueAnalyticsService", () => {
         "points-for-per-week",
       ]);
     }
+  });
+
+  it("awards only the weeks the admitted scores cover and withholds the rest with reasons", async () => {
+    const service = new LeagueAnalyticsService(new FakeRepository(), () => NOW);
+    const snapshot = await service.getSnapshot(USER_ID, LEAGUE_ID);
+    const awards = leagueAnalyticsSnapshotSchema.parse(snapshot).weeklyAwards;
+
+    expect(awards.state).toBe("available");
+    if (awards.state !== "available") return;
+
+    // Week 1's latest observation is missing an away score, so week 2 is the only awardable week.
+    expect(awards.week).toBe(2);
+    expect(awards.awards.map((award) => award.id).sort()).toEqual([
+      "bad-beat",
+      "beatdown",
+      "horseshoe",
+    ]);
+
+    const beatdown = awards.awards.find((award) => award.id === "beatdown");
+    expect(beatdown).toMatchObject({ value: 20, unit: "points" });
+    expect(beatdown?.detail).toMatchObject({ teamPoints: 110, opponentPoints: 90 });
+
+    // The two awards the stored evidence cannot support are named with their reason, never zeroed.
+    expect(
+      awards.withheld.map((entry) => ({ id: entry.id, code: entry.reasons[0]?.code })),
+    ).toEqual([
+      { id: "bench-warmer", code: "LINEUP_POINTS_MISSING" },
+      { id: "photo-finish", code: "NO_QUALIFYING_TEAM" },
+    ]);
   });
 });

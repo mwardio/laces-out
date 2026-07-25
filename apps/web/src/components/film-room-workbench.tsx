@@ -78,6 +78,9 @@ const QUICK_QUESTIONS = [
   "What are my three highest-leverage moves this week?",
   "Explain my best waiver priorities and who I can drop.",
   "Which realistic trade improves my weakest position?",
+  "Write a scouting report roasting my opponent's roster this week.",
+  "Write my victory speech — or my concession statement, whichever the projections support.",
+  "Which manager in this league should be most embarrassed this week? Use the numbers.",
 ] as const;
 
 type LoadState =
@@ -314,10 +317,11 @@ function FilmRoomTour() {
           "waiver-scan",
           "trade-builder",
           "standings-prediction",
+          "weekly-recap",
         ]}
         demo
         eyebrow="Purpose-built reviews"
-        title="Five ways to read the league"
+        title="Six ways to read the league"
         description="Choose a job instead of writing a prompt. Each review is grounded in the same deterministic league board."
       />
     </div>
@@ -1134,9 +1138,10 @@ export function FilmRoomWorkbench() {
             "waiver-scan",
             "trade-builder",
             "standings-prediction",
+            "weekly-recap",
           ]}
           eyebrow="Purpose-built reviews"
-          title="Five ways to read the league"
+          title="Six ways to read the league"
           description="Choose a job instead of writing a prompt. Each review is grounded in the same deterministic league board."
         />
       ) : null}

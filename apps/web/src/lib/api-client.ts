@@ -17,6 +17,10 @@ import {
   projectionImportCommitResponseSchema,
   projectionImportPreviewResponseSchema,
   projectionSetListResponseSchema,
+  pushConfigurationSchema,
+  pushDeviceListResponseSchema,
+  pushDeviceStatusSchema,
+  pushTestResponseSchema,
   scheduleByesResponseSchema,
   scheduleResponseSchema,
   statsCenterPlayerDetailResponseSchema,
@@ -38,6 +42,9 @@ import {
   type ProjectionImportCommitResponse,
   type ProjectionImportPreviewResponse,
   type ProjectionSetListResponse,
+  type PushConfiguration,
+  type PushDeviceStatus,
+  type PushTestResponse,
   type ScheduleByesResponse,
   type ScheduleResponse,
   type StatsCenterPlayerDetailResponse,
@@ -105,6 +112,9 @@ export type {
   ProjectionImportCommitResponse,
   ProjectionImportPreviewResponse,
   ProjectionSetListResponse,
+  PushConfiguration,
+  PushDeviceStatus,
+  PushTestResponse,
   ScheduleByesResponse,
   ScheduleResponse,
   StatsCenterPlayerDetailResponse,
@@ -223,6 +233,30 @@ export function parseScheduleResponse(value: unknown): ScheduleResponse | null {
 
 export function parseScheduleByes(value: unknown): ScheduleByesResponse | null {
   const result = scheduleByesResponseSchema.safeParse(value);
+  return result.success ? result.data : null;
+}
+
+/**
+ * Push responses are validated with the API's own schemas. The device list deliberately carries no
+ * endpoint or key, so nothing here can render one by accident.
+ */
+export function parsePushConfiguration(value: unknown): PushConfiguration | null {
+  const result = pushConfigurationSchema.safeParse(value);
+  return result.success ? result.data : null;
+}
+
+export function parsePushDeviceList(value: unknown): readonly PushDeviceStatus[] | null {
+  const result = pushDeviceListResponseSchema.safeParse(value);
+  return result.success ? result.data.devices : null;
+}
+
+export function parsePushDevice(value: unknown): PushDeviceStatus | null {
+  const result = pushDeviceStatusSchema.safeParse(value);
+  return result.success ? result.data : null;
+}
+
+export function parsePushTestResult(value: unknown): PushTestResponse | null {
+  const result = pushTestResponseSchema.safeParse(value);
   return result.success ? result.data : null;
 }
 

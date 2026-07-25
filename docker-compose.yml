@@ -12,6 +12,11 @@ x-app-environment: &app-environment
   YAHOO_CLIENT_SECRET: ${YAHOO_CLIENT_SECRET:-}
   YAHOO_REDIRECT_URI: ${PUBLIC_URL:-http://localhost:3000}/v1/connections/yahoo/callback
   ESPN_LIVE_DRAFT_SYNC: ${ESPN_LIVE_DRAFT_SYNC:-false}
+  # Web push identity. Blank on all three is the supported default: the API reports game day alerts
+  # unavailable and the worker sweep no-ops. Both API and worker need them; the web image never does.
+  VAPID_PUBLIC_KEY: ${VAPID_PUBLIC_KEY:-}
+  VAPID_PRIVATE_KEY: ${VAPID_PRIVATE_KEY:-}
+  VAPID_SUBJECT: ${VAPID_SUBJECT:-}
   LOG_LEVEL: ${LOG_LEVEL:-info}
 
 x-service-defaults: &service-defaults

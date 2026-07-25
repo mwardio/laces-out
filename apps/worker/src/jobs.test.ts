@@ -86,6 +86,7 @@ describe("worker queue reliability", () => {
         recomputeRecommendations: { retryLimit: 3, retryDelayMax: 300, expireInSeconds: 900 },
         dataHealth: { retryLimit: 2, retryDelayMax: 300, expireInSeconds: 300 },
         dataRefresh: { retryLimit: 5, retryDelayMax: 3_600, expireInSeconds: 1_800 },
+        notificationSweep: { retryLimit: 2, retryDelayMax: 120, expireInSeconds: 300 },
       } as const;
       const limits = expectedLimits[key as keyof typeof expectedLimits];
       expect(createQueue).toHaveBeenCalledWith(
@@ -110,7 +111,7 @@ describe("worker queue reliability", () => {
 
     await registerWorkers(boss, logger);
 
-    expect(work).toHaveBeenCalledTimes(5);
+    expect(work).toHaveBeenCalledTimes(6);
     for (const name of Object.values(queueNames)) {
       expect(work).toHaveBeenCalledWith(
         name,
@@ -217,6 +218,11 @@ describe("typed worker service dispatch", () => {
       "Recommendation recompute service is not configured",
     ],
     [queueNames.dataHealth, { source: "schedule" }, "Data health service is not configured"],
+    [
+      queueNames.notificationSweep,
+      { kind: "lineup-lock", reason: "scheduled" },
+      "Notification sweep service is not configured",
+    ],
   ])("fails closed when %s has no service", async (name, data, expected) => {
     await registerWorkers(harness.boss, logger);
 
@@ -404,7 +410,7 @@ describe("dispatch contracts and schedules", () => {
 
     await registerSchedules(boss, 2026);
 
-    expect(schedule).toHaveBeenCalledTimes(6);
+    expect(schedule).toHaveBeenCalledTimes(7);
     expect(schedule).toHaveBeenNthCalledWith(
       1,
       queueNames.dataHealth,
@@ -439,6 +445,18 @@ describe("dispatch contracts and schedules", () => {
     );
     expect(schedule).toHaveBeenNthCalledWith(
       5,
+      queueNames.notificationSweep,
+      "4,19,34,49 * * * *",
+      { kind: "lineup-lock", reason: "scheduled" },
+      expect.objectContaining({
+        tz: "UTC",
+        key: "lineup-lock-alerts",
+        group: { id: "notifications" },
+        singletonKey: "notification-sweep:lineup-lock",
+      }),
+    );
+    expect(schedule).toHaveBeenNthCalledWith(
+      6,
       queueNames.refreshProjections,
       "*/10 * * * *",
       { season: 2026, reason: "lock-window" },
@@ -450,7 +468,7 @@ describe("dispatch contracts and schedules", () => {
       }),
     );
     expect(schedule).toHaveBeenNthCalledWith(
-      6,
+      7,
       queueNames.refreshProjections,
       "11 * * * *",
       { season: 2026, reason: "scheduled" },

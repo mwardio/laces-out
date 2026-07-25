@@ -1,8 +1,14 @@
 "use client";
 
-import type { LeagueAnalyticsSnapshot, LeagueAnalyticsUnavailableReason } from "@fantasy/contracts";
+import type {
+  LeagueAnalyticsSnapshot,
+  LeagueAnalyticsTeam,
+  LeagueAnalyticsUnavailableReason,
+  WeeklyAward,
+} from "@fantasy/contracts";
 import {
   Activity,
+  Award,
   BarChart3,
   Clock3,
   Crosshair,
@@ -31,6 +37,8 @@ import {
 } from "../lib/demo-contract-data";
 import { AiCoachPanel } from "./ai-coach-panel";
 import styles from "./league-analytics-workbench.module.css";
+import { ShareCardButton, type ShareCardAward } from "./share-card-button";
+import { TeamAvatar } from "./team-avatar";
 
 type PortfolioState =
   | { readonly state: "loading" }
@@ -56,6 +64,10 @@ const signedDecimal = new Intl.NumberFormat(undefined, {
 const percent = new Intl.NumberFormat(undefined, {
   style: "percent",
   maximumFractionDigits: 0,
+});
+/** All-play wins count halves for ties, so 7 stays "7" while 6.5 stays "6.5". */
+const tally = new Intl.NumberFormat(undefined, {
+  maximumFractionDigits: 1,
 });
 
 function dateTime(value: string | null): string {
@@ -158,6 +170,243 @@ function Provenance({ snapshot }: { readonly snapshot: LeagueAnalyticsSnapshot }
   );
 }
 
+function awardValue(award: WeeklyAward): string {
+  return award.unit === "percent"
+    ? percent.format(award.value)
+    : `${decimal.format(award.value)} pts`;
+}
+
+function awardScore(detail: WeeklyAward["detail"]): string | null {
+  if (detail.teamPoints === null || detail.opponentPoints === null) return null;
+  return `${decimal.format(detail.teamPoints)}–${decimal.format(detail.opponentPoints)}`;
+}
+
+function awardAllPlay(detail: WeeklyAward["detail"]): string | null {
+  if (detail.allPlayWins === null || detail.allPlayGames === null) return null;
+  if (detail.allPlayGames === 0) return null;
+  return `${tally.format(detail.allPlayWins)} of ${tally.format(detail.allPlayGames)}`;
+}
+
+/** "in a 128.4–131.2 loss to Gridiron Dept.", degrading to whatever the detail actually carries. */
+function awardMatchupClause(detail: WeeklyAward["detail"]): string | null {
+  const opponent = detail.opponentTeam?.name ?? null;
+  const score = awardScore(detail);
+  if (score === null || detail.teamPoints === null || detail.opponentPoints === null) {
+    return opponent === null ? null : `against ${opponent}`;
+  }
+  const result =
+    detail.teamPoints > detail.opponentPoints
+      ? "win"
+      : detail.teamPoints < detail.opponentPoints
+        ? "loss"
+        : "tie";
+  const link = result === "win" ? "over" : result === "loss" ? "to" : "with";
+  return opponent === null
+    ? `in a ${score} ${result}`
+    : `in a ${score} ${result} ${link} ${opponent}`;
+}
+
+/** Team names like "Gridiron Dept." already end a sentence; never double the period. */
+function sentence(value: string): string {
+  return /[.!?]$/u.test(value) ? value : `${value}.`;
+}
+
+/**
+ * One factual line per award, assembled only from the numbers the section supplied. A missing
+ * detail drops its clause instead of printing a placeholder, so a card never implies a number it
+ * was not given.
+ */
+function awardCaption(award: WeeklyAward): string {
+  const detail = award.detail;
+  const opponent = detail.opponentTeam?.name ?? null;
+  const score = awardScore(detail);
+  const allPlay = awardAllPlay(detail);
+  const versus = [score, opponent === null ? null : `to ${opponent}`]
+    .filter((part): part is string => part !== null)
+    .join(" ");
+
+  switch (award.id) {
+    case "bad-beat":
+      if (allPlay !== null) {
+        return sentence(
+          `Outscored ${allPlay} teams and still lost${versus === "" ? "" : `, ${versus}`}`,
+        );
+      }
+      return versus === "" ? "" : sentence(`Lost ${versus}`);
+    case "horseshoe": {
+      const won = score !== null ? `Won ${score}` : opponent !== null ? `Beat ${opponent}` : null;
+      if (allPlay === null) return won === null ? "" : sentence(won);
+      return sentence(
+        won === null
+          ? `Won while outscoring just ${allPlay} teams`
+          : `${won} while outscoring just ${allPlay} teams`,
+      );
+    }
+    case "bench-warmer": {
+      const clause = awardMatchupClause(detail);
+      return sentence(
+        clause === null ? "Points left on the bench" : `Points left on the bench ${clause}`,
+      );
+    }
+    case "beatdown":
+      if (opponent !== null) {
+        return sentence(`Beat ${opponent}${score === null ? "" : ` ${score}`}`);
+      }
+      return score === null ? "" : sentence(`Won ${score}`);
+    case "photo-finish": {
+      const margin = award.unit === "points" ? decimal.format(award.value) : null;
+      if (opponent === null) return margin === null ? "" : sentence(`Won by ${margin}`);
+      return sentence(margin === null ? `Edged ${opponent}` : `Edged ${opponent} by ${margin}`);
+    }
+  }
+}
+
+/** Keeps a share payload inside the render route's field caps without dropping the field. */
+function clampText(value: string, limit: number): string {
+  return value.length <= limit ? value : `${value.slice(0, limit - 1).trimEnd()}…`;
+}
+
+/** The card renderer draws initials rather than a remote logo, so it needs at most three letters. */
+function shareInitials(team: LeagueAnalyticsTeam): string {
+  const abbreviation = team.abbreviation?.trim() ?? "";
+  if (abbreviation.length > 0) return abbreviation.slice(0, 3);
+  const words = team.name.split(/\s+/u).filter((word) => word.length > 0);
+  const [first, second] = words;
+  const derived =
+    first === undefined ? "" : second === undefined ? first.slice(0, 2) : first[0]! + second[0]!;
+  return derived.length > 0 ? derived : "?";
+}
+
+function AwardsSection({
+  snapshot,
+  isDemo,
+}: {
+  readonly snapshot: LeagueAnalyticsSnapshot;
+  readonly isDemo: boolean;
+}) {
+  const section = snapshot.weeklyAwards;
+  if (section.state === "unavailable") {
+    return (
+      <section
+        className={`${styles.panel} ${styles.awardsPanel}`}
+        id="analytics-awards"
+        aria-labelledby="awards-title"
+      >
+        <SectionHeader
+          icon={<Award size={18} aria-hidden="true" />}
+          kicker="Final scores only"
+          title="Monday Morning Awards"
+          tag="Awarded weekly"
+          titleId="awards-title"
+        />
+        <Unavailable title="Weekly awards" reasons={section.reasons} />
+      </section>
+    );
+  }
+
+  const shareAwards: readonly ShareCardAward[] = section.awards.slice(0, 4).map((award) => ({
+    label: clampText(award.label, 40),
+    teamName: clampText(award.team.name, 60),
+    initials: shareInitials(award.team),
+    value: clampText(awardValue(award), 24),
+    caption: clampText(awardCaption(award), 140),
+  }));
+
+  return (
+    <section
+      className={`${styles.panel} ${styles.awardsPanel}`}
+      id="analytics-awards"
+      aria-labelledby="awards-title"
+    >
+      <SectionHeader
+        icon={<Award size={18} aria-hidden="true" />}
+        kicker="Final scores only"
+        title="Monday Morning Awards"
+        tag={`Week ${section.week}`}
+        titleId="awards-title"
+        action={
+          shareAwards.length > 0 ? (
+            <ShareCardButton
+              payload={{
+                leagueName: clampText(snapshot.league.name, 80),
+                week: section.week,
+                sample: isDemo,
+                awards: shareAwards,
+              }}
+              label="Share card"
+            />
+          ) : undefined
+        }
+      />
+      {section.awards.length > 0 ? (
+        <ul className={styles.awardStrip}>
+          {section.awards.map((award) => {
+            const caption = awardCaption(award);
+            return (
+              <li
+                className={`${styles.awardCard}${award.team.isCurrentUser ? ` ${styles.currentAward}` : ""}`}
+                key={award.id}
+                title={award.definition}
+              >
+                <p className={styles.awardLabel}>{award.label}</p>
+                <div className={styles.awardTeam}>
+                  <TeamAvatar
+                    teamName={award.team.name}
+                    logoUrl={award.team.logoUrl}
+                    abbreviation={award.team.abbreviation}
+                    size="large"
+                    highlight={award.team.isCurrentUser}
+                  />
+                  <span className={styles.teamText}>
+                    <strong>
+                      {award.team.name}
+                      {award.team.isCurrentUser ? (
+                        <span className={styles.youLabel}>You</span>
+                      ) : null}
+                    </strong>
+                    <small>{award.team.managerDisplayName ?? "Manager unavailable"}</small>
+                  </span>
+                </div>
+                <strong className={styles.awardValue}>{awardValue(award)}</strong>
+                {caption === "" ? null : <p className={styles.awardCaption}>{caption}</p>}
+              </li>
+            );
+          })}
+        </ul>
+      ) : (
+        <p className={styles.methodNote}>
+          {section.withheld.length > 0
+            ? `Every award for week ${section.week} is withheld; each reason is listed below.`
+            : `No awards were produced for week ${section.week}.`}
+        </p>
+      )}
+      {section.withheld.length > 0 ? (
+        <div className={styles.withheldList}>
+          {section.withheld.map((item) => (
+            <p key={item.id}>
+              <strong>{item.label} withheld</strong>
+              {" — "}
+              {item.reasons.map((reason) => reason.message).join(" ")}
+            </p>
+          ))}
+        </div>
+      ) : null}
+      {section.definitions.length > 0 ? (
+        <details className={styles.definitions}>
+          <summary>How an award is earned</summary>
+          <div>
+            {section.definitions.map((definition) => (
+              <p key={definition.id}>
+                <strong>{definition.label}</strong> {definition.definition}
+              </p>
+            ))}
+          </div>
+        </details>
+      ) : null}
+    </section>
+  );
+}
+
 function ScoreSection({ snapshot }: { readonly snapshot: LeagueAnalyticsSnapshot }) {
   const section = snapshot.scores;
   if (section.state === "unavailable") {
@@ -216,11 +465,24 @@ function ScoreSection({ snapshot }: { readonly snapshot: LeagueAnalyticsSnapshot
                 key={item.team.id}
               >
                 <th scope="row">
-                  <strong>
-                    {item.team.name}
-                    {item.team.isCurrentUser ? <span className={styles.youLabel}>You</span> : null}
-                  </strong>
-                  <small>{item.team.managerDisplayName ?? "Manager unavailable"}</small>
+                  <div className={styles.teamCell}>
+                    <TeamAvatar
+                      teamName={item.team.name}
+                      logoUrl={item.team.logoUrl}
+                      abbreviation={item.team.abbreviation}
+                      size="small"
+                      highlight={item.team.isCurrentUser}
+                    />
+                    <div className={styles.teamText}>
+                      <strong>
+                        {item.team.name}
+                        {item.team.isCurrentUser ? (
+                          <span className={styles.youLabel}>You</span>
+                        ) : null}
+                      </strong>
+                      <small>{item.team.managerDisplayName ?? "Manager unavailable"}</small>
+                    </div>
+                  </div>
                 </th>
                 <td>{record(item.actualRecord)}</td>
                 <td>
@@ -286,12 +548,15 @@ function SectionHeader({
   title,
   tag,
   titleId,
+  action,
 }: {
   readonly icon: ReactNode;
   readonly kicker: string;
   readonly title: string;
   readonly tag: string;
   readonly titleId: string;
+  /** Optional control pinned to the end of the header, beside the tag. */
+  readonly action?: ReactNode;
 }) {
   return (
     <header className={styles.sectionHeader}>
@@ -300,7 +565,14 @@ function SectionHeader({
         <p>{kicker}</p>
         <h2 id={titleId}>{title}</h2>
       </div>
-      <span className={styles.sectionTag}>{tag}</span>
+      {action ? (
+        <span className={styles.sectionMeta}>
+          <span className={styles.sectionTag}>{tag}</span>
+          {action}
+        </span>
+      ) : (
+        <span className={styles.sectionTag}>{tag}</span>
+      )}
     </header>
   );
 }
@@ -332,13 +604,22 @@ function PowerSection({ snapshot }: { readonly snapshot: LeagueAnalyticsSnapshot
               >
                 <span className={styles.rank}>{ranking.rank ?? "—"}</span>
                 <div className={styles.powerTeam}>
-                  <strong>
-                    {ranking.team.name}
-                    {ranking.team.isCurrentUser ? (
-                      <span className={styles.youLabel}>You</span>
-                    ) : null}
-                  </strong>
-                  <small>{ranking.team.managerDisplayName ?? "Manager unavailable"}</small>
+                  <TeamAvatar
+                    teamName={ranking.team.name}
+                    logoUrl={ranking.team.logoUrl}
+                    abbreviation={ranking.team.abbreviation}
+                    size="small"
+                    highlight={ranking.team.isCurrentUser}
+                  />
+                  <div className={styles.teamText}>
+                    <strong>
+                      {ranking.team.name}
+                      {ranking.team.isCurrentUser ? (
+                        <span className={styles.youLabel}>You</span>
+                      ) : null}
+                    </strong>
+                    <small>{ranking.team.managerDisplayName ?? "Manager unavailable"}</small>
+                  </div>
                 </div>
                 <strong className={styles.powerScore}>
                   {ranking.score === null ? "—" : decimal.format(ranking.score)}
@@ -385,11 +666,7 @@ function strengthClass(value: number | null): string | undefined {
 function PositionalSection({ snapshot }: { readonly snapshot: LeagueAnalyticsSnapshot }) {
   const section = snapshot.positional;
   return (
-    <section
-      className={`${styles.panel} ${styles.widePanel}`}
-      id="analytics-positions"
-      aria-labelledby="position-title"
-    >
+    <section className={styles.panel} id="analytics-positions" aria-labelledby="position-title">
       <SectionHeader
         icon={<Target size={18} aria-hidden="true" />}
         kicker="Projection backed"
@@ -616,6 +893,16 @@ export function LeagueAnalyticsWorkbench() {
   const [isDemo, setIsDemo] = useState(false);
   const analyticsRequest = useRef<AbortController | null>(null);
 
+  /** Opt in to the labeled tour after a failed load, matching the Overview page's offer. */
+  const showSample = useCallback(() => {
+    analyticsRequest.current?.abort();
+    analyticsRequest.current = null;
+    setIsDemo(true);
+    setPortfolio({ state: "ready", portfolio: demoLeaguePortfolio });
+    setLeagueId(DEMO_LEAGUE_ID);
+    setAnalytics({ state: "ready", snapshot: demoAnalyticsSnapshot });
+  }, []);
+
   const selectLeague = useCallback((nextLeagueId: string) => {
     setLeagueId(nextLeagueId);
     const url = new URL(window.location.href);
@@ -737,8 +1024,19 @@ export function LeagueAnalyticsWorkbench() {
   }
   if (portfolio.state === "error") {
     return (
-      <div className={styles.errorState} role="alert">
-        {portfolio.message}
+      <div className={styles.errorGroup}>
+        <div className={styles.errorState} role="alert">
+          <span>
+            Your leagues could not be loaded. They are still there — this is a connection problem,
+            not a data loss.
+          </span>
+        </div>
+        <div className={styles.sampleOffer} role="status">
+          <span>Nothing below would be your data.</span>
+          <button type="button" onClick={showSample}>
+            Show the sample locker room
+          </button>
+        </div>
       </div>
     );
   }
@@ -833,6 +1131,7 @@ export function LeagueAnalyticsWorkbench() {
             </span>
           </div>
           <AnalyticsQuickRead snapshot={analytics.snapshot} />
+          <AwardsSection snapshot={analytics.snapshot} isDemo={isDemo} />
           <Provenance snapshot={analytics.snapshot} />
           <AiCoachPanel
             leagueId={leagueId}

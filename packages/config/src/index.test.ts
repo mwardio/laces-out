@@ -122,4 +122,32 @@ describe("loadEnvironment", () => {
       "Yahoo requires YAHOO_CLIENT_ID, YAHOO_CLIENT_SECRET, and CREDENTIAL_ENCRYPTION_KEY together",
     );
   });
+  it("leaves web push unconfigured by default", () => {
+    const environment = loadEnvironment({});
+    expect(environment.VAPID_PUBLIC_KEY).toBeUndefined();
+    expect(environment.VAPID_PRIVATE_KEY).toBeUndefined();
+    expect(environment.VAPID_SUBJECT).toBeUndefined();
+  });
+
+  it("accepts a complete VAPID identity and rejects a partial one", () => {
+    const complete = {
+      VAPID_PUBLIC_KEY: "B".repeat(87),
+      VAPID_PRIVATE_KEY: "k".repeat(43),
+      VAPID_SUBJECT: "mailto:commish@example.com",
+    };
+    expect(loadEnvironment(complete).VAPID_SUBJECT).toBe("mailto:commish@example.com");
+    expect(() => loadEnvironment({ VAPID_PUBLIC_KEY: complete.VAPID_PUBLIC_KEY })).toThrow(
+      "Web push requires VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY, and VAPID_SUBJECT together",
+    );
+  });
+
+  it("rejects a VAPID subject that is neither mailto nor https", () => {
+    expect(() =>
+      loadEnvironment({
+        VAPID_PUBLIC_KEY: "B".repeat(87),
+        VAPID_PRIVATE_KEY: "k".repeat(43),
+        VAPID_SUBJECT: "http://example.com",
+      }),
+    ).toThrow();
+  });
 });
