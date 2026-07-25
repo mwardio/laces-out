@@ -307,16 +307,6 @@
   font-size: 12px;
 }
 
-/* The primary CTA reads "Create your account"; registration actually requires a
-   host-issued code. Say so next to the button, not 6,000px down the page. */
-.heroGate {
-  max-width: 46ch;
-  margin: 14px 0 0;
-  color: #8b968d;
-  font-size: 11px;
-  line-height: 1.55;
-}
-
 .heroProof {
   display: flex;
   flex-wrap: wrap;

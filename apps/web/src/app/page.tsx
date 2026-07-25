@@ -231,10 +231,6 @@ export default function LandingPage() {
                   Tour the locker room <ChevronRight size={16} />
                 </Link>
               </div>
-              <p className={styles.heroGate}>
-                Invite-only — you&rsquo;ll need the shared code from your league host. The tour
-                needs no account.
-              </p>
               <div className={styles.heroProof} aria-label="Product availability">
                 <span>
                   <Check size={13} />
