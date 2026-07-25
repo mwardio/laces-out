@@ -68,7 +68,11 @@ describe("worker queue reliability", () => {
     for (const name of Object.values(deadLetterQueueNames)) {
       expect(createQueue).toHaveBeenCalledWith(
         name,
-        expect.objectContaining({ retryLimit: 0, warningQueueSize: 1 }),
+        expect.objectContaining({
+          retryLimit: 0,
+          expireInSeconds: 82_800,
+          warningQueueSize: 1,
+        }),
       );
       expect(updateQueue).toHaveBeenCalledWith(
         name,

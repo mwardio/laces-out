@@ -78,6 +78,38 @@ export function sleeperPlayerCrosswalkRows(input: {
   ];
 }
 
+type SleeperCrosswalkRow = ReturnType<typeof sleeperPlayerCrosswalkRows>[number];
+
+/**
+ * Produces one unambiguous row per provider alias before a batched upsert.
+ *
+ * Sleeper can temporarily expose the same ESPN or Yahoo identifier on multiple catalog entries
+ * (for example, an obsolete record and its replacement). PostgreSQL cannot update the same
+ * conflict target twice in one INSERT, and choosing either player would silently corrupt the
+ * crosswalk. Exact duplicates collapse; conflicting aliases are withheld until the provider data
+ * becomes unambiguous.
+ */
+export function uniqueSleeperPlayerCrosswalkRows(
+  rows: readonly SleeperCrosswalkRow[],
+): readonly SleeperCrosswalkRow[] {
+  const candidates = new Map<string, SleeperCrosswalkRow | null>();
+  for (const row of rows) {
+    const key = `${row.source}:${row.externalId}`;
+    const existing = candidates.get(key);
+    if (existing === undefined) {
+      candidates.set(key, row);
+      continue;
+    }
+    if (existing === null) continue;
+    if (existing.playerId !== row.playerId) {
+      candidates.set(key, null);
+      continue;
+    }
+    if (Number(row.confidence) > Number(existing.confidence)) candidates.set(key, row);
+  }
+  return [...candidates.values()].flatMap((row) => (row === null ? [] : [row]));
+}
+
 interface SourceRow {
   readonly id: string;
   readonly enabled: boolean;
@@ -380,14 +412,16 @@ export class SleeperDataRefresher {
           rowsWritten += batch.length;
         }
 
-        const crosswalkIds = resolved.flatMap(({ player, playerId, confidence }) =>
-          sleeperPlayerCrosswalkRows({
-            playerId,
-            sleeperId: player.sleeperId,
-            espnId: player.espnId,
-            yahooId: player.yahooId,
-            confidence,
-          }),
+        const crosswalkIds = uniqueSleeperPlayerCrosswalkRows(
+          resolved.flatMap(({ player, playerId, confidence }) =>
+            sleeperPlayerCrosswalkRows({
+              playerId,
+              sleeperId: player.sleeperId,
+              espnId: player.espnId,
+              yahooId: player.yahooId,
+              confidence,
+            }),
+          ),
         );
         for (let index = 0; index < crosswalkIds.length; index += chunkSize) {
           const batch = crosswalkIds.slice(index, index + chunkSize);

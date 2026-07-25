@@ -165,7 +165,10 @@ const queueConfigurations: Readonly<Record<keyof typeof queueNames, QueueConfigu
 
 const deadLetterConfiguration: QueueConfiguration = {
   retryLimit: 0,
-  expireInSeconds: 30 * DAY_SECONDS,
+  // pg-boss requires expiration to be strictly less than 24 hours. Dead-letter jobs are retained
+  // for 30 days after completion, but any single inspection/replay job must respect that runtime
+  // ceiling so queue registration cannot prevent the worker from starting.
+  expireInSeconds: 23 * 60 * 60,
   retentionSeconds: 30 * DAY_SECONDS,
   deleteAfterSeconds: 30 * DAY_SECONDS,
   warningQueueSize: 1,

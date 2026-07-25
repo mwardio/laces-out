@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { buildUniqueExactPlayerIdentity, sleeperPlayerCrosswalkRows } from "./sleeper-data.js";
+import {
+  buildUniqueExactPlayerIdentity,
+  sleeperPlayerCrosswalkRows,
+  uniqueSleeperPlayerCrosswalkRows,
+} from "./sleeper-data.js";
 
 describe("buildUniqueExactPlayerIdentity", () => {
   it("normalizes unique exact name-and-position matches", () => {
@@ -50,5 +54,69 @@ describe("sleeperPlayerCrosswalkRows", () => {
         confidence: "0.0000",
       }),
     ).toEqual([]);
+  });
+});
+
+describe("uniqueSleeperPlayerCrosswalkRows", () => {
+  it("collapses exact aliases and retains their strongest confidence", () => {
+    expect(
+      uniqueSleeperPlayerCrosswalkRows([
+        {
+          playerId: "player-1",
+          source: "sleeper-espn",
+          externalId: "1234",
+          confidence: "0.8000",
+          verified: false,
+        },
+        {
+          playerId: "player-1",
+          source: "sleeper-espn",
+          externalId: "1234",
+          confidence: "1.0000",
+          verified: false,
+        },
+      ]),
+    ).toEqual([
+      expect.objectContaining({
+        playerId: "player-1",
+        source: "sleeper-espn",
+        externalId: "1234",
+        confidence: "1.0000",
+      }),
+    ]);
+  });
+
+  it("withholds provider aliases that resolve to multiple canonical players", () => {
+    expect(
+      uniqueSleeperPlayerCrosswalkRows([
+        {
+          playerId: "player-1",
+          source: "sleeper-yahoo",
+          externalId: "5678",
+          confidence: "1.0000",
+          verified: false,
+        },
+        {
+          playerId: "player-2",
+          source: "sleeper-yahoo",
+          externalId: "5678",
+          confidence: "1.0000",
+          verified: false,
+        },
+        {
+          playerId: "player-3",
+          source: "sleeper",
+          externalId: "unique",
+          confidence: "0.9500",
+          verified: false,
+        },
+      ]),
+    ).toEqual([
+      expect.objectContaining({
+        playerId: "player-3",
+        source: "sleeper",
+        externalId: "unique",
+      }),
+    ]);
   });
 });
