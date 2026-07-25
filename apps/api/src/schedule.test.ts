@@ -119,6 +119,33 @@ describe("ScheduleService", () => {
     });
   });
 
+  it("normalizes nflverse's Rams alias for filters, responses, and bye joins", async () => {
+    const repo = repository({
+      findSource: () =>
+        Promise.resolve(
+          source({
+            coveredWeeks: "1,2",
+            coveredTeams: "LA,SEA",
+            rowsRead: 1,
+          }),
+        ),
+      listGames: () => Promise.resolve([game(1, "LA", "SEA")]),
+    });
+    const result = await service(repo).getSchedule("user", {
+      season: 2025,
+      week: null,
+      team: "LAR",
+    });
+
+    expect(result.filters.team).toBe("LAR");
+    expect(result.source.coveredTeams).toEqual(["LAR", "SEA"]);
+    expect(result.games[0]).toMatchObject({ awayTeam: "LAR", homeTeam: "SEA" });
+    expect(result.teams[0]).toMatchObject({
+      team: "LAR",
+      bye: { status: "available", byeWeeks: [2] },
+    });
+  });
+
   it("reports a TBD kickoff as TBD instead of inventing a time", async () => {
     const repo = repository({
       listGames: () =>

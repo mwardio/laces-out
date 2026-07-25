@@ -69,6 +69,15 @@ class MemoryAuthRepository implements AuthRepository {
       if (session.userId === userId && token !== exceptTokenHash) this.sessions.delete(token);
     }
   }
+
+  async replacePasswordAndDeleteOtherSessions(
+    userId: string,
+    passwordHash: string,
+    exceptTokenHash: string,
+  ): Promise<void> {
+    await this.updatePassword(userId, passwordHash);
+    await this.deleteOtherSessions(userId, exceptTokenHash);
+  }
 }
 
 describe("AuthService", () => {

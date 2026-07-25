@@ -52,11 +52,11 @@ function unavailable(request: FastifyRequest, reply: FastifyReply) {
 }
 
 /**
- * The NFL season rolls over in September, so before then the most recently completed season
- * is the one a member is researching.
+ * Schedule research turns toward the upcoming season once that year's schedule-release window
+ * begins. Before May, the previous season remains the useful default.
  */
 export function defaultScheduleSeason(now: Date): number {
-  return now.getUTCMonth() < 8 ? now.getUTCFullYear() - 1 : now.getUTCFullYear();
+  return now.getUTCMonth() < 4 ? now.getUTCFullYear() - 1 : now.getUTCFullYear();
 }
 
 export function registerScheduleRoutes(app: FastifyInstance, options: ScheduleRouteOptions): void {

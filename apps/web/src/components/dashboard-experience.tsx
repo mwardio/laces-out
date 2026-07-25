@@ -273,17 +273,19 @@ interface LivePortfolioProps {
 }
 
 function LivePortfolio({ portfolio, reloadPortfolio }: LivePortfolioProps) {
-  const [selectedLeagueId, setSelectedLeagueId] = useState(portfolio.leagues[0]?.id ?? "");
+  const [selectedLeagueId, setSelectedLeagueId] = useState("");
   const { defaultLeagueId, loaded: preferenceLoaded } = useDefaultLeague();
   const appliedDefault = useRef(false);
 
   useEffect(() => {
     // Applied once, so a member who switches leagues is not pulled back to their default.
-    if (!preferenceLoaded || appliedDefault.current || !defaultLeagueId) return;
+    if (!preferenceLoaded || appliedDefault.current) return;
     appliedDefault.current = true;
-    if (portfolio.leagues.some((league) => league.id === defaultLeagueId)) {
-      setSelectedLeagueId(defaultLeagueId);
-    }
+    const preferred =
+      defaultLeagueId && portfolio.leagues.some((league) => league.id === defaultLeagueId)
+        ? defaultLeagueId
+        : null;
+    setSelectedLeagueId(preferred ?? portfolio.leagues[0]?.id ?? "");
   }, [defaultLeagueId, portfolio.leagues, preferenceLoaded]);
   const [dashboardState, setDashboardState] = useState<DashboardState>({ status: "loading" });
   const [claimChoice, setClaimChoice] = useState("");

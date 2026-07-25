@@ -52,6 +52,13 @@ export interface AuthRepository {
   updatePassword?(userId: string, passwordHash: string, now: Date): Promise<void>;
   /** Revokes every session for the account except the one presenting `exceptTokenHash`. */
   deleteOtherSessions?(userId: string, exceptTokenHash: string): Promise<void>;
+  /** Production repositories use one transaction so a new password never leaves old sessions. */
+  replacePasswordAndDeleteOtherSessions?(
+    userId: string,
+    passwordHash: string,
+    exceptTokenHash: string,
+    now: Date,
+  ): Promise<void>;
 }
 
 export type ChangePasswordResult =
@@ -146,7 +153,10 @@ export class AuthService {
     currentToken: string | undefined,
   ): Promise<ChangePasswordResult> {
     const repository = this.#repository;
-    if (!repository.findUserById || !repository.updatePassword || !repository.deleteOtherSessions) {
+    const canReplaceAtomically = repository.replacePasswordAndDeleteOtherSessions !== undefined;
+    const canReplaceSeparately =
+      repository.updatePassword !== undefined && repository.deleteOtherSessions !== undefined;
+    if (!repository.findUserById || (!canReplaceAtomically && !canReplaceSeparately)) {
       return { outcome: "unsupported" };
     }
     const user = await repository.findUserById(userId);
@@ -157,12 +167,20 @@ export class AuthService {
     if (!user || !user.passwordHash || !valid) return { outcome: "invalid-current-password" };
 
     const passwordHash = await hashOwnerPassword(newPassword);
-    await repository.updatePassword(user.id, passwordHash, this.#now());
     // An empty hash matches no stored session, so a caller without a cookie revokes them all.
-    await repository.deleteOtherSessions(
-      user.id,
-      currentToken ? hashSessionToken(currentToken) : "",
-    );
+    const currentTokenHash = currentToken ? hashSessionToken(currentToken) : "";
+    const now = this.#now();
+    if (repository.replacePasswordAndDeleteOtherSessions) {
+      await repository.replacePasswordAndDeleteOtherSessions(
+        user.id,
+        passwordHash,
+        currentTokenHash,
+        now,
+      );
+    } else {
+      await repository.updatePassword!(user.id, passwordHash, now);
+      await repository.deleteOtherSessions!(user.id, currentTokenHash);
+    }
     return { outcome: "changed", revokedOtherSessions: true };
   }
 

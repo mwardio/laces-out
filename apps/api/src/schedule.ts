@@ -23,6 +23,7 @@ import {
   selectAdmittedSource,
   type AdmittedSourceRow,
 } from "./admitted-source.js";
+import { canonicalNflTeamCode } from "./nfl-team-code.js";
 
 /** One season of regular-season games is a few hundred rows, so the bound is generous. */
 const SCHEDULE_ROW_LIMIT = 1_001;
@@ -138,7 +139,9 @@ function sourceContract(
     fetchedAt: base.fetchedAt,
     checksumSha256: base.checksumSha256,
     coveredWeeks: base.coveredWeeks,
-    coveredTeams: source ? metadataCoveredTeams(source.metadata) : [],
+    coveredTeams: source
+      ? [...new Set(metadataCoveredTeams(source.metadata).map(canonicalNflTeamCode))]
+      : [],
     quality: { rowsRead: base.quality.rowsRead, rowsRejected: base.quality.rowsRejected },
     reason: boundExceeded
       ? "The schedule for this season exceeded the safe query bound."
@@ -154,8 +157,8 @@ function gameContract(row: ScheduleObservationRow): ScheduleGame {
     startTimeEastern: row.startTimeEastern,
     timeTbd: row.timeTbd,
     kickoffAt: row.kickoffAt?.toISOString() ?? null,
-    awayTeam: row.awayTeam,
-    homeTeam: row.homeTeam,
+    awayTeam: canonicalNflTeamCode(row.awayTeam),
+    homeTeam: canonicalNflTeamCode(row.homeTeam),
     status: row.status,
     neutralSite: row.neutralSite,
     awayScore: row.awayScore,
@@ -253,8 +256,8 @@ export class ScheduleService {
         startTimeEastern: row.startTimeEastern,
         timeTbd: row.timeTbd,
         kickoffAt: row.kickoffAt,
-        awayTeam: row.awayTeam,
-        homeTeam: row.homeTeam,
+        awayTeam: canonicalNflTeamCode(row.awayTeam),
+        homeTeam: canonicalNflTeamCode(row.homeTeam),
         status: row.status,
         neutralSite: row.neutralSite,
         awayRestDays: row.awayRestDays,
@@ -268,13 +271,15 @@ export class ScheduleService {
   }
 
   async getSchedule(_userId: string, query: ScheduleQuery): Promise<ScheduleResponse> {
-    const team = query.team?.toUpperCase() ?? null;
+    const team = query.team ? canonicalNflTeamCode(query.team) : null;
     if (team && !TEAM_PATTERN.test(team)) throw new Error("Invalid schedule team filter");
     const { source, games, derived } = await this.#load(query.season);
     const visibleGames = games.filter(
       (row) =>
         (query.week === null || row.week === query.week) &&
-        (team === null || row.awayTeam === team || row.homeTeam === team),
+        (team === null ||
+          canonicalNflTeamCode(row.awayTeam) === team ||
+          canonicalNflTeamCode(row.homeTeam) === team),
     );
     const visibleTeams = derived.teams
       .filter((entry) => team === null || entry.team === team)

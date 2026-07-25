@@ -102,4 +102,21 @@ export class DrizzleAuthRepository implements AuthRepository {
       .delete(sessions)
       .where(and(eq(sessions.userId, userId), ne(sessions.tokenHash, exceptTokenHash)));
   }
+
+  async replacePasswordAndDeleteOtherSessions(
+    userId: string,
+    passwordHash: string,
+    exceptTokenHash: string,
+    now: Date,
+  ): Promise<void> {
+    await this.#database.transaction(async (transaction) => {
+      await transaction
+        .update(users)
+        .set({ passwordHash, updatedAt: now })
+        .where(eq(users.id, userId));
+      await transaction
+        .delete(sessions)
+        .where(and(eq(sessions.userId, userId), ne(sessions.tokenHash, exceptTokenHash)));
+    });
+  }
 }

@@ -193,8 +193,9 @@ describe("Schedule routes", () => {
     await app.close();
   });
 
-  it("defaults to the most recently completed season before September", () => {
-    expect(defaultScheduleSeason(new Date("2026-07-25T00:00:00.000Z"))).toBe(2025);
-    expect(defaultScheduleSeason(new Date("2026-09-10T00:00:00.000Z"))).toBe(2026);
+  it("moves schedule research to the upcoming season in the schedule-release window", () => {
+    expect(defaultScheduleSeason(new Date("2026-01-25T00:00:00.000Z"))).toBe(2025);
+    expect(defaultScheduleSeason(new Date("2026-05-01T00:00:00.000Z"))).toBe(2026);
+    expect(defaultScheduleSeason(new Date("2026-07-25T00:00:00.000Z"))).toBe(2026);
   });
 });

@@ -217,7 +217,7 @@ export function SettingsPanel() {
               </div>
             </dl>
             <p className={styles.note}>
-              Your name and email are set by whoever invited you. Ask an admin to change either.
+              Your name and email identify this account. Ask an admin if either needs to change.
             </p>
           </section>
 

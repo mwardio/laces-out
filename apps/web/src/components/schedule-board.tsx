@@ -29,7 +29,7 @@ type ViewState =
 
 function defaultSeason(): number {
   const now = new Date();
-  return now.getMonth() < 8 ? now.getFullYear() - 1 : now.getFullYear();
+  return now.getMonth() < 4 ? now.getFullYear() - 1 : now.getFullYear();
 }
 
 /** Groups the flat game list into the week buckets the board renders. */

@@ -43,6 +43,7 @@ import {
   describeStatsCenterMetricAvailability,
   type StatsCenterMetricRow,
 } from "./stats-center-metrics.js";
+import { canonicalNflTeamCode, nflverseNflTeamCode } from "./nfl-team-code.js";
 
 const DATASET_ROW_LIMIT = 60_001;
 const POSITION_PATTERN = /^[A-Z0-9/+.-]{1,20}$/u;
@@ -198,7 +199,7 @@ export class DrizzleStatsCenterRepository implements StatsCenterRepository {
     window: StatsCenterWindow,
     limit: number,
   ): Promise<readonly StatsCenterWeeklyRow[]> {
-    return this.#database
+    const rows = await this.#database
       .select({
         externalPlayerId: playerWeeklyStatObservations.externalPlayerId,
         playerId: playerWeeklyStatObservations.playerId,
@@ -229,7 +230,7 @@ export class DrizzleStatsCenterRepository implements StatsCenterRepository {
             : [lte(playerWeeklyStatObservations.week, window.weekTo)]),
           ...(window.teams === null
             ? []
-            : [inArray(playerWeeklyStatObservations.team, [...window.teams])]),
+            : [inArray(playerWeeklyStatObservations.team, window.teams.map(nflverseNflTeamCode))]),
         ),
       )
       .orderBy(
@@ -238,6 +239,11 @@ export class DrizzleStatsCenterRepository implements StatsCenterRepository {
         asc(playerWeeklyStatObservations.externalPlayerId),
       )
       .limit(limit);
+    return rows.map((row) => ({
+      ...row,
+      team: canonicalNflTeamCode(row.team),
+      opponentTeam: canonicalNflTeamCode(row.opponentTeam),
+    }));
   }
 
   async listSnapCounts(
@@ -246,7 +252,7 @@ export class DrizzleStatsCenterRepository implements StatsCenterRepository {
     window: StatsCenterWindow,
     limit: number,
   ): Promise<readonly StatsCenterSnapRow[]> {
-    return this.#database
+    const rows = await this.#database
       .select({
         externalPlayerId: playerSnapCountObservations.externalPlayerId,
         playerId: playerSnapCountObservations.playerId,
@@ -274,7 +280,7 @@ export class DrizzleStatsCenterRepository implements StatsCenterRepository {
           ...(window.weekTo === null ? [] : [lte(playerSnapCountObservations.week, window.weekTo)]),
           ...(window.teams === null
             ? []
-            : [inArray(playerSnapCountObservations.team, [...window.teams])]),
+            : [inArray(playerSnapCountObservations.team, window.teams.map(nflverseNflTeamCode))]),
         ),
       )
       .orderBy(
@@ -283,6 +289,11 @@ export class DrizzleStatsCenterRepository implements StatsCenterRepository {
         asc(playerSnapCountObservations.externalPlayerId),
       )
       .limit(limit);
+    return rows.map((row) => ({
+      ...row,
+      team: canonicalNflTeamCode(row.team),
+      opponentTeam: canonicalNflTeamCode(row.opponentTeam),
+    }));
   }
 
   async findPlayer(playerId: string): Promise<StatsCenterPlayerIdentity | undefined> {
@@ -298,7 +309,12 @@ export class DrizzleStatsCenterRepository implements StatsCenterRepository {
       .from(players)
       .where(eq(players.id, playerId))
       .limit(1);
-    return row;
+    return row
+      ? {
+          ...row,
+          nflTeam: row.nflTeam ? canonicalNflTeamCode(row.nflTeam) : null,
+        }
+      : undefined;
   }
 
   async listPlayerTeams(
@@ -325,7 +341,7 @@ export class DrizzleStatsCenterRepository implements StatsCenterRepository {
             : [lte(playerWeeklyStatObservations.week, window.weekTo)]),
         ),
       );
-    return rows.map((row) => row.team);
+    return [...new Set(rows.map((row) => canonicalNflTeamCode(row.team)))];
   }
 }
 
