@@ -215,6 +215,7 @@ const analyticsTeams = [
     name: "Budget Ballers",
     abbreviation: "BB",
     managerDisplayName: "You",
+    logoUrl: null,
     isCurrentUser: true,
   },
   {
@@ -222,6 +223,7 @@ const analyticsTeams = [
     name: "Gridiron Dept.",
     abbreviation: "GRD",
     managerDisplayName: "M. Lewis",
+    logoUrl: null,
     isCurrentUser: false,
   },
   {
@@ -229,6 +231,7 @@ const analyticsTeams = [
     name: "Sunday Scaries",
     abbreviation: "SUN",
     managerDisplayName: "A. Patel",
+    logoUrl: null,
     isCurrentUser: false,
   },
   {
@@ -236,6 +239,7 @@ const analyticsTeams = [
     name: "Waiver Theory",
     abbreviation: "WVT",
     managerDisplayName: "J. Kim",
+    logoUrl: null,
     isCurrentUser: false,
   },
 ] as const;
@@ -448,5 +452,95 @@ export const demoAnalyticsSnapshot: LeagueAnalyticsSnapshot = {
     subjectAdvantages: ["QB", "RB", "projection coverage"],
     opponentAdvantages: ["WR depth"],
     definition: "Tour matchup metrics use illustrative league and projection snapshots.",
+  },
+  weeklyAwards: {
+    state: "available",
+    week: 5,
+    awards: [
+      {
+        id: "bad-beat",
+        label: "Bad Beat of the Week",
+        definition:
+          "Highest all-play win rate among teams that lost their head-to-head matchup this week.",
+        team: analyticsTeams[0],
+        value: 0.778,
+        unit: "percent",
+        detail: {
+          opponentTeam: analyticsTeams[1],
+          teamPoints: 128.4,
+          opponentPoints: 131.2,
+          allPlayWins: 7,
+          allPlayGames: 9,
+        },
+      },
+      {
+        id: "horseshoe",
+        label: "The Horseshoe",
+        definition:
+          "Lowest all-play win rate among teams that won their head-to-head matchup this week.",
+        team: analyticsTeams[2],
+        value: 0.444,
+        unit: "percent",
+        detail: {
+          opponentTeam: analyticsTeams[3],
+          teamPoints: 107.9,
+          opponentPoints: 71.6,
+          allPlayWins: 4,
+          allPlayGames: 9,
+        },
+      },
+      {
+        id: "beatdown",
+        label: "Beatdown of the Week",
+        definition: "Largest margin of victory in a completed matchup this week.",
+        team: analyticsTeams[2],
+        value: 36.3,
+        unit: "points",
+        detail: {
+          opponentTeam: analyticsTeams[3],
+          teamPoints: 107.9,
+          opponentPoints: 71.6,
+          allPlayWins: null,
+          allPlayGames: null,
+        },
+      },
+      {
+        id: "photo-finish",
+        label: "Photo Finish",
+        definition:
+          "Smallest non-tie margin in a completed matchup, when it lands inside 3 points.",
+        team: analyticsTeams[1],
+        value: 2.8,
+        unit: "points",
+        detail: {
+          opponentTeam: analyticsTeams[0],
+          teamPoints: 131.2,
+          opponentPoints: 128.4,
+          allPlayWins: null,
+          allPlayGames: null,
+        },
+      },
+    ],
+    withheld: [
+      {
+        id: "bench-warmer",
+        label: "Bench Warmer",
+        reasons: [
+          {
+            code: "LINEUP_POINTS_MISSING",
+            message:
+              "Optimal starter points are not stored for this week, so points left on the bench cannot be measured.",
+          },
+        ],
+      },
+    ],
+    definitions: [
+      {
+        id: "weekly-awards",
+        label: "Monday Morning Awards",
+        definition:
+          "Awards read the same admitted final scores as the season ledger. An award the evidence does not support is withheld with its reason rather than shown as a zero.",
+      },
+    ],
   },
 };

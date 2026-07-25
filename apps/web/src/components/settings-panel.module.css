@@ -184,6 +184,128 @@
     line-height: 1.55;
   }
 
+  .disabledNotice {
+    display: flex;
+    align-items: start;
+    gap: 10px;
+    padding: 16px 20px;
+    color: var(--ink-500);
+    border-top: 1px solid var(--ink-100);
+  }
+
+  .disabledNotice svg {
+    flex: none;
+    margin-top: 2px;
+    color: var(--ink-400, var(--ink-500));
+  }
+
+  .disabledNotice strong {
+    display: block;
+    color: var(--ink-900);
+    font-size: 12px;
+  }
+
+  .disabledNotice span {
+    display: block;
+    margin-top: 4px;
+    font-size: 11px;
+    line-height: 1.55;
+  }
+
+  .disabledNotice code {
+    padding: 1px 4px;
+    background: var(--ink-100);
+    border-radius: 4px;
+    font-size: 10px;
+    overflow-wrap: anywhere;
+  }
+
+  .alertLead {
+    color: var(--ink-500);
+    font-size: 11px;
+    line-height: 1.55;
+  }
+
+  .alertActions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .secondaryButton {
+    color: var(--ink-900) !important;
+    background: #fff !important;
+    border: 1px solid var(--ink-200) !important;
+  }
+
+  .deviceList {
+    display: grid;
+    gap: 10px;
+    padding: 0 20px 16px;
+    margin: 0;
+    list-style: none;
+  }
+
+  .deviceList li {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 10px 12px;
+    border: 1px solid var(--ink-150);
+    border-radius: 9px;
+  }
+
+  .deviceList strong {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 7px;
+    color: var(--ink-900);
+    font-size: 12px;
+  }
+
+  .deviceList span {
+    display: block;
+    margin-top: 3px;
+    color: var(--ink-500);
+    font-size: 10px;
+    line-height: 1.5;
+  }
+
+  .deviceTag {
+    margin-top: 0;
+    padding: 1px 6px;
+    color: var(--green-600) !important;
+    background: var(--ink-100);
+    border-radius: 999px;
+    font-size: 9px;
+    font-weight: 800;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+  }
+
+  .deviceList button {
+    display: inline-flex;
+    flex: none;
+    align-items: center;
+    gap: 6px;
+    min-height: 32px;
+    padding: 0 11px;
+    color: var(--ink-900);
+    background: #fff;
+    border: 1px solid var(--ink-200);
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 11px;
+    font-weight: 700;
+  }
+
+  .deviceList button:disabled {
+    cursor: progress;
+    opacity: 0.65;
+  }
+
   .savedLine,
   .errorLine {
     display: flex;
@@ -238,8 +360,22 @@
 
     .note,
     .savedLine,
-    .errorLine {
+    .errorLine,
+    .deviceList {
       padding: 0 16px 16px;
+    }
+
+    .disabledNotice {
+      padding: 16px;
+    }
+
+    .alertActions button {
+      width: 100%;
+    }
+
+    .deviceList li {
+      align-items: start;
+      flex-direction: column;
     }
   }
 }

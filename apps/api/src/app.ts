@@ -72,6 +72,7 @@ import {
 import type { RefreshAuthorizationPort } from "./refresh-authorization.js";
 import { type RegistrationPort, registerRegistrationRoutes } from "./registration-routes.js";
 import { type PreferencesPort, registerAccountRoutes } from "./account-routes.js";
+import { type PushPort, registerPushRoutes } from "./push-routes.js";
 import { type SchedulePort, registerScheduleRoutes } from "./schedule-routes.js";
 import { type StatsCenterPort, registerStatsCenterRoutes } from "./stats-center-routes.js";
 import { registerYahooRoutes } from "./yahoo-routes.js";
@@ -177,6 +178,7 @@ export interface BuildAppOptions {
   readonly refreshAuthorization?: RefreshAuthorizationPort;
   readonly registration?: RegistrationPort;
   readonly preferences?: PreferencesPort;
+  readonly push?: PushPort;
   readonly schedule?: SchedulePort;
   readonly statsCenter?: StatsCenterPort;
   readonly yahooConnection?: YahooConnectionPort;
@@ -242,6 +244,11 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
                 "*.espn_s2",
                 "*.swid",
                 "req.body.token",
+                // A push endpoint and its two keys are bearer material for that browser's push
+                // service. They are stored, used once per send, and never written to a log.
+                "req.body.endpoint",
+                "req.body.keys.p256dh",
+                "req.body.keys.auth",
                 "req.body.inviteCode",
                 "req.body.password",
                 "req.body.apiKey",
@@ -500,6 +507,10 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   registerAccountRoutes(app, {
     ...(options.authService ? { authService: options.authService } : {}),
     ...(options.preferences ? { preferences: options.preferences } : {}),
+    isTest: environment.NODE_ENV === "test",
+  });
+  registerPushRoutes(app, {
+    ...(options.push ? { push: options.push } : {}),
     isTest: environment.NODE_ENV === "test",
   });
   registerAiRoutes(app, options.ai);

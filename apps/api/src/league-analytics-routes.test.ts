@@ -51,6 +51,7 @@ const snapshot: LeagueAnalyticsSnapshot = {
   power: { state: "unavailable", reasons: [noSeasonReason] },
   positional: { state: "unavailable", reasons: [noSeasonReason] },
   opponentScout: { state: "unavailable", reasons: [noSeasonReason] },
+  weeklyAwards: { state: "unavailable", reasons: [noSeasonReason] },
 };
 
 function authenticatedService(): AuthService {

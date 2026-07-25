@@ -7,6 +7,7 @@ import type {
   LeaguePositionalAnalyticsSection,
   LeaguePowerAnalyticsSection,
   LeagueScoreAnalyticsSection,
+  LeagueWeeklyAwardsSection,
 } from "@fantasy/contracts";
 import {
   fantasyTeams,
@@ -33,7 +34,10 @@ import {
   analyzePositionalStrength,
   buildOpponentScout,
   calculatePowerRankings,
+  calculateWeeklyAwards,
+  latestAwardableWeek,
   type LeagueSeasonAnalyticsResult,
+  type LeagueWeekInput,
   type PowerFactorDefinition,
 } from "@fantasy/league-analytics";
 import { and, asc, desc, eq, inArray, ne, or, sql } from "drizzle-orm";
@@ -111,6 +115,7 @@ export interface AnalyticsTeamRow {
   readonly name: string;
   readonly abbreviation: string | null;
   readonly managerDisplayName: string | null;
+  readonly logoUrl: string | null;
 }
 
 export interface AnalyticsMatchupObservationRow {
@@ -248,6 +253,7 @@ export class DrizzleLeagueAnalyticsRepository implements LeagueAnalyticsReposito
         name: fantasyTeams.name,
         abbreviation: fantasyTeams.abbreviation,
         managerDisplayName: fantasyTeams.managerDisplayName,
+        logoUrl: fantasyTeams.logoUrl,
       })
       .from(fantasyTeams)
       .where(eq(fantasyTeams.leagueSeasonId, leagueSeasonId))
@@ -507,6 +513,7 @@ function identity(team: AnalyticsTeamRow, claimedTeamId: string | null): LeagueA
     name: team.name,
     abbreviation: team.abbreviation,
     managerDisplayName: team.managerDisplayName,
+    logoUrl: team.logoUrl,
     isCurrentUser: team.id === claimedTeamId,
   };
 }
@@ -514,6 +521,8 @@ function identity(team: AnalyticsTeamRow, claimedTeamId: string | null): LeagueA
 interface BuiltScoreAnalytics {
   readonly section: LeagueScoreAnalyticsSection;
   readonly engine: LeagueSeasonAnalyticsResult | null;
+  /** The admitted per-week inputs, reused by the awards section so both read identical facts. */
+  readonly weeks: readonly LeagueWeekInput[];
 }
 
 function buildScoreAnalytics(
@@ -527,6 +536,7 @@ function buildScoreAnalytics(
         reason("MATCHUPS_MISSING", "No matchup snapshots have been synchronized for this season."),
       ),
       engine: null,
+      weeks: [],
     };
   }
 
@@ -593,6 +603,7 @@ function buildScoreAnalytics(
   );
   return {
     engine,
+    weeks: weekInputs,
     section: {
       state: "available",
       weeks: [...engine.weeks],
@@ -978,6 +989,74 @@ function average(values: readonly (number | null)[]): number | null {
     : available.reduce((sum, value) => sum + value, 0) / available.length;
 }
 
+/**
+ * Monday Morning Awards for the most recent week the admitted evidence can award. Awards the
+ * data does not support are withheld individually with their reason; none are ever inferred.
+ */
+function buildWeeklyAwards(
+  teams: readonly AnalyticsTeamRow[],
+  claimedTeamId: string | null,
+  scores: BuiltScoreAnalytics,
+): LeagueWeeklyAwardsSection {
+  if (scores.section.state === "unavailable") {
+    return { state: "unavailable", reasons: [...scores.section.reasons] };
+  }
+  const engineInput = {
+    teams: teams.map((team) => ({ teamId: team.id })),
+    weeks: scores.weeks,
+  };
+  const week = latestAwardableWeek(engineInput);
+  if (week === null) {
+    return unavailable(
+      reason(
+        "AWARDS_WEEK_UNAVAILABLE",
+        "No completed week yet carries the final scores an award requires.",
+      ),
+    );
+  }
+  const result = calculateWeeklyAwards({ ...engineInput, week });
+  const byTeam = new Map(teams.map((team) => [team.id, team]));
+  const identify = (teamId: string | null) => {
+    const team = teamId === null ? undefined : byTeam.get(teamId);
+    return team ? identity(team, claimedTeamId) : null;
+  };
+  return {
+    state: "available",
+    week: result.week,
+    awards: result.awards.flatMap((award) => {
+      const team = identify(award.teamId);
+      if (!team) return [];
+      return [
+        {
+          id: award.id,
+          label: award.label,
+          definition: award.definition,
+          team,
+          value: award.value,
+          unit: award.unit,
+          detail: {
+            opponentTeam: identify(award.detail.opponentTeamId),
+            teamPoints: award.detail.teamPoints,
+            opponentPoints: award.detail.opponentPoints,
+            allPlayWins: award.detail.allPlayWins,
+            allPlayGames: award.detail.allPlayGames,
+          },
+        },
+      ];
+    }),
+    withheld: result.withheld.map((entry) => ({
+      id: entry.id,
+      label: entry.label,
+      reasons: entry.reasons.map((item) => ({ code: item.code, message: item.message })),
+    })),
+    definitions: result.definitions.map((definition) => ({
+      id: definition.id,
+      label: definition.label,
+      definition: definition.definition,
+    })),
+  };
+}
+
 function buildOpponentAnalytics(input: {
   readonly teams: readonly AnalyticsTeamRow[];
   readonly claimedTeamId: string | null;
@@ -1259,6 +1338,7 @@ export class LeagueAnalyticsService {
             week: season.currentWeek,
           });
     const power = buildPowerAnalytics(teams, membership.claimedFantasyTeamId, scores, positional);
+    const weeklyAwards = buildWeeklyAwards(teams, membership.claimedFantasyTeamId, scores);
     const opponentScout = buildOpponentAnalytics({
       teams,
       claimedTeamId: membership.claimedFantasyTeamId,
@@ -1334,6 +1414,7 @@ export class LeagueAnalyticsService {
       power,
       positional: positional.section,
       opponentScout,
+      weeklyAwards,
     };
   }
 
@@ -1375,6 +1456,7 @@ export class LeagueAnalyticsService {
       power: section,
       positional: section,
       opponentScout: section,
+      weeklyAwards: section,
     };
   }
 
@@ -1419,6 +1501,7 @@ export class LeagueAnalyticsService {
       power: section,
       positional: section,
       opponentScout: section,
+      weeklyAwards: section,
     };
   }
 }

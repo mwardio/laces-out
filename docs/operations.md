@@ -6,7 +6,8 @@
 - `api`: REST API, health checks, provider callbacks, and authenticated application services;
 - `worker`: pg-boss queues and schedules for daily/startup/on-demand player identity, schedules,
   weekly player/team stats, weekly rosters, snap counts, Sleeper status, and contextual ADP; hourly Sleeper market
-  signals; an hourly first-party weekly-forecast sweep; and quarter-hour source health checks.
+  signals; an hourly first-party weekly-forecast sweep; a quarter-hour lineup-lock notification
+  sweep; and quarter-hour source health checks.
   Provider sync, manual projection import, and recommendation reads still execute through their
   current API workflows. The projection-refresh queue is implemented; league-sync and
   recommendation-recompute still fail closed when queued until their worker services are wired;
@@ -287,6 +288,60 @@ training cutoff, target week, quality state, and league scoring warnings. Do not
 source observations or model runs to recover a bad forecast. Disable the affected `data_sources`
 row or stop the worker, preserve the prior good set, diagnose the source/model artifact, and resume
 with a forward-only code or schema correction.
+
+## Game day alerts (web push)
+
+Off by default, and cleanly off: with no VAPID keys the API answers `GET /v1/push/config` with
+`{ "available": false, "publicKey": null }`, refuses registration and test sends with 503, Settings
+renders a labeled **Not configured by the operator** panel, and the scheduled worker sweep completes
+as a no-op with `skipped: "vapid-keys-not-configured"`. No device rows are created and nothing is
+sent. Existing deployments need no action.
+
+To turn it on, generate one key pair, keep it for the life of the deployment, and set all three
+variables on the API and worker (the Compose stack does this from one shared block):
+
+```bash
+npx web-push generate-vapid-keys
+```
+
+```bash
+VAPID_PUBLIC_KEY=<publicKey from the command above>
+VAPID_PRIVATE_KEY=<privateKey from the command above>
+VAPID_SUBJECT=mailto:you@example.com   # or an https: URL a push service can contact
+```
+
+Startup rejects a partially configured identity: all three or none. The private key is server-side
+only — never prefix either key with `NEXT_PUBLIC_` and never pass one as a Docker build argument.
+Rotating the pair invalidates every stored device; members re-enable alerts from `/settings`, and
+the old rows are pruned automatically the first time a send returns 410 Gone.
+
+Members opt in per device at `/settings` → **Game day alerts**. Notification permission is requested
+from that toggle and nowhere else. Each device is listed and independently revocable, exactly like an
+ESPN bridge device; the list never shows the endpoint or its keys, and neither the API nor the worker
+writes them to a log.
+
+What the alarm actually checks, from stored data only, for each member with a claimed team and at
+least one registered device:
+
+- a starter whose stored, normalized status is `OUT`, `IR`, or `DOUBTFUL` — the same status the
+  Decision Desk renders. Provider spellings outside that shared vocabulary are not translated, so the
+  alert can never assert something the rest of the app does not show;
+- a starter on a bye, asserted only where the admitted schedule affirms coverage for both the team
+  and the week and the read rejected no rows — the project-wide bye rule, reused rather than
+  restated;
+- a required starting slot left empty, counted against the season's starter slot rules.
+
+Send windows are anchored to the earliest stored kickoff, in the league's current week, of a game
+involving a team on that member's starting lineup: a digest between 24 and 2 hours out, then a final
+warning inside 2 hours. Without a trustworthy stored kickoff nothing is sent, because there is no
+honest lead time to state. Every send is claimed first in `notification_deliveries` under
+`lineup-lock:<userId>:<leagueId>:<season>:<week>:<window>`, whose unique index is what makes a
+re-run, a restart, or two overlapping schedules send exactly once.
+
+The sweep runs at minutes 4, 19, 34, and 49 UTC on the `notification-sweep` queue and dead-letters
+to `notification-sweep-dead-letter`. Its log line carries counts only — never a recipient, a device,
+or notification text. Alerts read the last synced roster, not the provider, and say how old that
+roster is; on iOS, web push is delivered only to a PWA installed to the Home Screen.
 
 ## Current authentication baseline
 

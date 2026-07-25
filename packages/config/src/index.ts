@@ -32,6 +32,35 @@ const environmentSchema = z.object({
    * it stops new provider mutation while accepted events and manual backup keep working.
    */
   ESPN_LIVE_DRAFT_SYNC: booleanFlag,
+  /**
+   * Web push VAPID identity. All three are optional and absent by default: a deployment that has
+   * never generated a key pair reports game-day alerts as unavailable rather than failing.
+   */
+  VAPID_PUBLIC_KEY: z.preprocess(
+    blankToUndefined,
+    z
+      .string()
+      .trim()
+      .regex(/^[A-Za-z0-9_-]{87}$/u)
+      .optional(),
+  ),
+  VAPID_PRIVATE_KEY: z.preprocess(
+    blankToUndefined,
+    z
+      .string()
+      .trim()
+      .regex(/^[A-Za-z0-9_-]{43}$/u)
+      .optional(),
+  ),
+  VAPID_SUBJECT: z.preprocess(
+    blankToUndefined,
+    z
+      .string()
+      .trim()
+      .regex(/^(?:mailto:\S+@\S+|https:\/\/\S+)$/u)
+      .max(255)
+      .optional(),
+  ),
   LOG_LEVEL: z.enum(["fatal", "error", "warn", "info", "debug", "trace", "silent"]).default("info"),
 });
 
@@ -110,6 +139,18 @@ export function loadEnvironment(
 
   if (parsed.data.REGISTRATION_INVITE_CODE && !parsed.data.SESSION_SECRET) {
     throw new Error("REGISTRATION_INVITE_CODE requires SESSION_SECRET");
+  }
+
+  const vapidWasRequested = Boolean(
+    parsed.data.VAPID_PUBLIC_KEY || parsed.data.VAPID_PRIVATE_KEY || parsed.data.VAPID_SUBJECT,
+  );
+  if (
+    vapidWasRequested &&
+    (!parsed.data.VAPID_PUBLIC_KEY || !parsed.data.VAPID_PRIVATE_KEY || !parsed.data.VAPID_SUBJECT)
+  ) {
+    throw new Error(
+      "Web push requires VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY, and VAPID_SUBJECT together",
+    );
   }
 
   const yahooWasRequested = Boolean(parsed.data.YAHOO_CLIENT_ID || parsed.data.YAHOO_CLIENT_SECRET);

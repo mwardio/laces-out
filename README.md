@@ -26,6 +26,9 @@
   [Chrome companion](https://chromewebstore.google.com/detail/laces-out-espn-bridge/hmilkmcjlkpnigcfnlfogeafacjpmkbj).
   Yahoo OAuth and sync are implemented and remain labeled **Coming Soon** until enabled for a
   deployment. Laces Out never asks for a provider password or executes roster moves.
+- **Monday Morning Awards** — every completed week is scored into Bad Beat, The Horseshoe,
+  Beatdown, and Photo Finish, with a one-tap share card for the group chat. An award the stored
+  evidence cannot support is withheld with its reason rather than shown as a zero.
 - **Forecasts and decisions** — backtested weekly projections use nflverse identity, schedule,
   stats, injuries, rosters, and snap counts, scored to each league's exact rules. Every fresh input
   reruns lineup, waiver, trade, opponent, and roster-strength analysis.
@@ -48,10 +51,11 @@
 
 Every view below is the built-in locker room tour—no account required.
 
-|                                                                       |                                                           |
-| --------------------------------------------------------------------- | --------------------------------------------------------- |
-| ![Locker room overview](./docs/screenshots/locker-room-overview.webp) | ![Draft studio](./docs/screenshots/draft-studio.webp)     |
-| ![Decision Desk](./docs/screenshots/decision-desk.webp)               | ![Projection Lab](./docs/screenshots/projection-lab.webp) |
+|                                                                         |                                                           |
+| ----------------------------------------------------------------------- | --------------------------------------------------------- |
+| ![Locker room overview](./docs/screenshots/locker-room-overview.webp)   | ![Draft studio](./docs/screenshots/draft-studio.webp)     |
+| ![Decision Desk](./docs/screenshots/decision-desk.webp)                 | ![Projection Lab](./docs/screenshots/projection-lab.webp) |
+| ![Monday Morning Awards](./docs/screenshots/monday-morning-awards.webp) |                                                           |
 
 ## Statistically honest projections
 
@@ -107,23 +111,25 @@ exposing a deployment to the internet.
 Compose settings are documented in [.env.docker.example](./.env.docker.example); local-development
 settings live in [.env.example](./.env.example).
 
-| Variable                                  | Required | Default                 | Purpose                                                  |
-| ----------------------------------------- | -------- | ----------------------- | -------------------------------------------------------- |
-| `PUBLIC_URL`                              | Yes      | `http://localhost:3000` | Browser-visible origin; rebuild images after changing it |
-| `POSTGRES_PASSWORD`                       | Yes      | —                       | PostgreSQL password; production rejects placeholders     |
-| `SESSION_SECRET`                          | Yes      | —                       | Session and capability-key derivation                    |
-| `CREDENTIAL_ENCRYPTION_KEY`               | Yes      | —                       | `base64:`-prefixed 32-byte AES-256-GCM key               |
-| `REGISTRATION_INVITE_CODE`                | No       | empty                   | Shared registration code; blank disables `/register`     |
-| `GEMINI_API_KEY`                          | No       | empty                   | Enables included Film Room access                        |
-| `MANAGED_AI_DAILY_REQUEST_LIMIT`          | No       | `50`                    | Included AI requests per member per UTC day              |
-| `MANAGED_AI_MAX_OUTPUT_TOKENS`            | No       | `2000`                  | Included AI response limit                               |
-| `NEXT_PUBLIC_CONTACT_EMAIL`               | No*      | empty                   | Public operator contact; set before internet exposure    |
-| `NEXT_PUBLIC_YAHOO_ACCESS_STATUS`         | No       | `pending`               | Controls the public **Coming Soon** state                |
-| `YAHOO_CLIENT_ID` / `YAHOO_CLIENT_SECRET` | No       | empty                   | Yahoo OAuth credentials, API server only                 |
-| `SITE_ADDRESS`                            | No       | `:80`                   | Included Caddy site address                              |
-| `APP_PORT` / `HTTPS_PORT`                 | No       | `3000` / `3443`         | Included gateway host ports                              |
-| `POSTGRES_PORT`                           | No       | `55432`                 | Loopback-only PostgreSQL maintenance port                |
-| `LOG_LEVEL`                               | No       | `info`                  | API and worker log level                                 |
+| Variable                                  | Required | Default                 | Purpose                                                    |
+| ----------------------------------------- | -------- | ----------------------- | ---------------------------------------------------------- |
+| `PUBLIC_URL`                              | Yes      | `http://localhost:3000` | Browser-visible origin; rebuild images after changing it   |
+| `POSTGRES_PASSWORD`                       | Yes      | —                       | PostgreSQL password; production rejects placeholders       |
+| `SESSION_SECRET`                          | Yes      | —                       | Session and capability-key derivation                      |
+| `CREDENTIAL_ENCRYPTION_KEY`               | Yes      | —                       | `base64:`-prefixed 32-byte AES-256-GCM key                 |
+| `REGISTRATION_INVITE_CODE`                | No       | empty                   | Shared registration code; blank disables `/register`       |
+| `GEMINI_API_KEY`                          | No       | empty                   | Enables included Film Room access                          |
+| `MANAGED_AI_DAILY_REQUEST_LIMIT`          | No       | `50`                    | Included AI requests per member per UTC day                |
+| `MANAGED_AI_MAX_OUTPUT_TOKENS`            | No       | `2000`                  | Included AI response limit                                 |
+| `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY`  | No       | empty                   | Enables game day push alerts; blank disables them cleanly  |
+| `VAPID_SUBJECT`                           | No       | empty                   | `mailto:` or `https:` contact required with the VAPID keys |
+| `NEXT_PUBLIC_CONTACT_EMAIL`               | No*      | empty                   | Public operator contact; set before internet exposure      |
+| `NEXT_PUBLIC_YAHOO_ACCESS_STATUS`         | No       | `pending`               | Controls the public **Coming Soon** state                  |
+| `YAHOO_CLIENT_ID` / `YAHOO_CLIENT_SECRET` | No       | empty                   | Yahoo OAuth credentials, API server only                   |
+| `SITE_ADDRESS`                            | No       | `:80`                   | Included Caddy site address                                |
+| `APP_PORT` / `HTTPS_PORT`                 | No       | `3000` / `3443`         | Included gateway host ports                                |
+| `POSTGRES_PORT`                           | No       | `55432`                 | Loopback-only PostgreSQL maintenance port                  |
+| `LOG_LEVEL`                               | No       | `info`                  | API and worker log level                                   |
 
 For a standalone public deployment, point a domain at the host and set `PUBLIC_URL`,
 `SITE_ADDRESS`, `APP_PORT`, and `HTTPS_PORT` as described in `.env.docker.example`.
@@ -180,6 +186,9 @@ Database-backed smoke commands and the release runbook live in
 - Accounts use Argon2id hashes and revocable server-side sessions with secure production cookies.
 - Provider credentials use versioned AES-256-GCM envelopes; bridge devices are independently
   revocable.
+- Push devices are listed and revoked per member; their endpoints and keys are never returned by an
+  API response, never logged, and pruned automatically when a push service reports them gone.
+  Notifications carry only league facts the member can already see.
 - Logs redact secrets, cookies, authorization headers, and OAuth callback values.
 - AI providers receive no credentials, tools, or write capability; prompts and answers are not
   persisted.

@@ -13,6 +13,7 @@ import {
   ClipboardCheck,
   FileText,
   LoaderCircle,
+  Megaphone,
   Scale,
   Sparkles,
   Trophy,
@@ -76,6 +77,14 @@ const FEATURES: Readonly<Record<AiFeatureName, FeatureMeta>> = {
     promptLabel: "Forecast preference",
     promptPlaceholder: "Optional: emphasize roster strength over current record.",
   },
+  "weekly-recap": {
+    label: "Weekly Recap",
+    shortLabel: "Recap",
+    description: "The week's awards written up for the group chat. Jokes optional, numbers real.",
+    icon: Megaphone,
+    promptLabel: "Anything to work in?",
+    promptPlaceholder: "Optional: go easy on me, I already know about the bench.",
+  },
 };
 
 const PROVIDER_LABELS: Readonly<Record<AiProviderName, string>> = {
@@ -96,6 +105,8 @@ const DEMO_ANSWERS: Readonly<Record<AiFeatureName, string>> = {
     "**Best fit:** Send Mike Evans and receive Jahmyr Gibbs. The modeled package improves your optimized roster by 3.2 points and the other team by 0.8, while addressing your RB weakness without creating an illegal roster.\n\n> You get a weekly WR starter, and I balance out my RB room. The numbers are close for both sides. Interested in Evans for Gibbs?",
   "standings-prediction":
     "### Model-assisted forecast\n1. Budget Ballers (10–4)\n2. Gridiron Dept. (8–6)\n3. Sunday Scaries (7–7)\n4. Waiver Theory (5–9)\n\n**Biggest riser:** Budget Ballers, driven by the league's best all-play profile (13 all-play wins) and the top power score.\n\n**Biggest faller:** Sunday Scaries, whose 3–2 record is running ahead of expected wins. Your playoff outlook is strong, with the current roster projecting as the top seed.",
+  "weekly-recap":
+    "### Week 5, and the football gods were not subtle\n\nStart with **Budget Ballers**, who outscored seven of the nine teams they did not play and still lost. 128.4 is a winning score in most weeks. This was not most weeks. Gridiron Dept. put up 131.2 and took it by **2.8**, the closest game on the board.\n\nMeanwhile **Sunday Scaries** won the week's ugliest beauty contest. 107.9 beat only four of nine teams on the all-play board, which normally means a quiet loss — except they drew **Waiver Theory**, who managed 71.6. That is a **36.3-point** beatdown and the least impressive dominant win you will see this year.\n\n**The verdict:** one team played well enough to win and lost, and one team played badly enough to lose and won by five touchdowns. Nobody learned anything. See you Sunday.",
 };
 
 type ResultState =

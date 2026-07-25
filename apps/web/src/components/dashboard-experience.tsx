@@ -32,6 +32,7 @@ import { DEMO_LEAGUE_ID } from "../lib/demo-contract-data";
 import { useDefaultLeague } from "../lib/use-default-league";
 import { AiCoachPanel } from "./ai-coach-panel";
 import { PortfolioDashboard } from "./portfolio-dashboard";
+import { TeamAvatar } from "./team-avatar";
 
 type PortfolioState =
   | { readonly status: "loading" }
@@ -121,12 +122,27 @@ function MobileWeekAtGlance({ dashboard }: { readonly dashboard: LeagueDashboard
 
       {matchupAvailable ? (
         <div className="mobile-week-card__score" aria-label="Current matchup score">
-          <span>
-            You <strong>{scoreLabel(context.teamScore)}</strong>
+          <span className="live-team-cell">
+            <TeamAvatar
+              teamName={context.teamName ?? "Your team"}
+              logoUrl={context.teamLogoUrl}
+              size="medium"
+              highlight
+            />
+            <span>
+              You <strong>{scoreLabel(context.teamScore)}</strong>
+            </span>
           </span>
           <small>vs</small>
-          <span>
-            Them <strong>{scoreLabel(context.opponentScore)}</strong>
+          <span className="live-team-cell live-team-cell--end">
+            <TeamAvatar
+              teamName={context.opponentTeamName ?? "Opponent"}
+              logoUrl={context.opponentLogoUrl}
+              size="medium"
+            />
+            <span>
+              Them <strong>{scoreLabel(context.opponentScore)}</strong>
+            </span>
           </span>
         </div>
       ) : (
@@ -727,7 +743,15 @@ function MemberWeekPanel({ dashboard }: { readonly dashboard: LeagueDashboard })
       </div>
       <div className="live-opponent-score" aria-label="Your matchup score">
         <div>
-          <span>{context.teamName ?? "Your team"}</span>
+          <span className="live-team-cell">
+            <TeamAvatar
+              teamName={context.teamName ?? "Your team"}
+              logoUrl={context.teamLogoUrl}
+              size="medium"
+              highlight
+            />
+            <span>{context.teamName ?? "Your team"}</span>
+          </span>
           <strong>{scoreLabel(context.teamScore)}</strong>
           <small>
             {context.standingRank ? `#${context.standingRank} · ` : ""}
@@ -736,7 +760,14 @@ function MemberWeekPanel({ dashboard }: { readonly dashboard: LeagueDashboard })
         </div>
         <span className="live-score-divider">vs</span>
         <div>
-          <span>{context.opponentTeamName ?? "Opponent"}</span>
+          <span className="live-team-cell live-team-cell--end">
+            <TeamAvatar
+              teamName={context.opponentTeamName ?? "Opponent"}
+              logoUrl={context.opponentLogoUrl}
+              size="medium"
+            />
+            <span>{context.opponentTeamName ?? "Opponent"}</span>
+          </span>
           <strong>{scoreLabel(context.opponentScore)}</strong>
           <small>{memberScoreStateLabel(context.scoreState)}</small>
         </div>
@@ -753,9 +784,27 @@ function MemberWeekPanel({ dashboard }: { readonly dashboard: LeagueDashboard })
   );
 }
 
+type WeeklyMatchupTeam = LeagueDashboard["weeklyInsights"]["matchups"][number]["home"];
+
+/**
+ * Score leader rows name a team but carry no logo of their own. The week's matchup rows are the
+ * source those leaders are derived from, so they are also the source for a leader's avatar.
+ */
+function matchupTeamsById(
+  matchups: LeagueDashboard["weeklyInsights"]["matchups"],
+): ReadonlyMap<string, WeeklyMatchupTeam> {
+  const teams = new Map<string, WeeklyMatchupTeam>();
+  for (const matchup of matchups) {
+    teams.set(matchup.home.teamId, matchup.home);
+    teams.set(matchup.away.teamId, matchup.away);
+  }
+  return teams;
+}
+
 function WeeklyInsightsPanel({ dashboard }: { readonly dashboard: LeagueDashboard }) {
   const insights = dashboard.weeklyInsights;
   const metrics = insights.metrics;
+  const teamsById = useMemo(() => matchupTeamsById(insights.matchups), [insights.matchups]);
   return (
     <section className="panel live-weekly-panel" aria-labelledby="live-weekly-title">
       <div className="panel-heading live-insights-heading">
@@ -840,10 +889,18 @@ function WeeklyInsightsPanel({ dashboard }: { readonly dashboard: LeagueDashboar
                         key={team.teamId}
                       >
                         <small>{index === 0 ? "Away" : "Home"}</small>
-                        <span>
-                          <strong>{team.teamName}</strong>
-                          <small>{team.managerDisplayName ?? "Manager unavailable"}</small>
-                        </span>
+                        <div className="live-team-cell">
+                          <TeamAvatar
+                            teamName={team.teamName}
+                            logoUrl={team.logoUrl}
+                            abbreviation={team.abbreviation}
+                            size="small"
+                          />
+                          <span>
+                            <strong>{team.teamName}</strong>
+                            <small>{team.managerDisplayName ?? "Manager unavailable"}</small>
+                          </span>
+                        </div>
                         <b>{scoreLabel(team.score)}</b>
                       </div>
                     ))}
@@ -871,20 +928,34 @@ function WeeklyInsightsPanel({ dashboard }: { readonly dashboard: LeagueDashboar
                       </tr>
                     </thead>
                     <tbody>
-                      {insights.scoreLeaders.map((leader) => (
-                        <tr
-                          className={leader.isCurrentUser ? "is-current-user" : undefined}
-                          key={leader.teamId}
-                        >
-                          <td>{leader.rank}</td>
-                          <th scope="row">
-                            {leader.teamName}
-                            <small>vs {leader.opponentTeamName}</small>
-                          </th>
-                          <td className="live-number-cell">{scoreLabel(leader.score)}</td>
-                          <td>{roleLabel(leader.outcome)}</td>
-                        </tr>
-                      ))}
+                      {insights.scoreLeaders.map((leader) => {
+                        const leaderTeam = teamsById.get(leader.teamId);
+                        return (
+                          <tr
+                            className={leader.isCurrentUser ? "is-current-user" : undefined}
+                            key={leader.teamId}
+                          >
+                            <td>{leader.rank}</td>
+                            <th scope="row">
+                              <div className="live-team-cell">
+                                <TeamAvatar
+                                  teamName={leader.teamName}
+                                  logoUrl={leaderTeam?.logoUrl ?? null}
+                                  abbreviation={leaderTeam?.abbreviation ?? null}
+                                  size="small"
+                                  highlight={leader.isCurrentUser}
+                                />
+                                <span>
+                                  {leader.teamName}
+                                  <small>vs {leader.opponentTeamName}</small>
+                                </span>
+                              </div>
+                            </th>
+                            <td className="live-number-cell">{scoreLabel(leader.score)}</td>
+                            <td>{roleLabel(leader.outcome)}</td>
+                          </tr>
+                        );
+                      })}
                     </tbody>
                   </table>
                 </div>
@@ -942,8 +1013,19 @@ function StandingsPanel({ dashboard }: { readonly dashboard: LeagueDashboard }) 
                     {entry.playoffSeed ? <small>Seed {entry.playoffSeed}</small> : null}
                   </td>
                   <th scope="row">
-                    {entry.teamName}
-                    <small>{entry.managerDisplayName ?? "Manager unavailable"}</small>
+                    <div className="live-team-cell">
+                      <TeamAvatar
+                        teamName={entry.teamName}
+                        logoUrl={entry.logoUrl}
+                        abbreviation={entry.abbreviation}
+                        size="small"
+                        highlight={entry.isCurrentUser}
+                      />
+                      <span>
+                        {entry.teamName}
+                        <small>{entry.managerDisplayName ?? "Manager unavailable"}</small>
+                      </span>
+                    </div>
                   </th>
                   <td>{recordLabel(entry.wins, entry.losses, entry.ties)}</td>
                   <td className="live-number-cell">{scoreLabel(entry.pointsFor)}</td>

@@ -12,7 +12,14 @@ import {
   registerSchedules,
   registerWorkers,
 } from "./jobs.js";
+import { DrizzleLineupLockRepository, LineupLockAlertService } from "./lineup-lock-alerts.js";
 import { currentNflSeason } from "./nfl-season.js";
+import {
+  createNotificationSweepService,
+  createWebPushTransport,
+  DrizzleNotificationRepository,
+  NotificationSender,
+} from "./push-notifications.js";
 import { NflverseCatalogRefresher } from "./nflverse-catalog.js";
 import {
   FirstPartyProjectionService,
@@ -39,6 +46,31 @@ const rosProjectionShadowService = new FirstPartyRosProjectionShadowService({
 const sleeperRefresher = new SleeperDataRefresher({ database: database.db });
 const adpRefresher = new FfcAdpRefresher({ database: database.db });
 const dataHealthService = new DatabaseDataHealthService({ database: database.db });
+// Web push is opt-in for the operator. Without a VAPID key pair the sender is simply absent and the
+// scheduled sweep completes as a stated no-op, which is the default state of an existing install.
+const vapid =
+  environment.VAPID_PUBLIC_KEY && environment.VAPID_PRIVATE_KEY && environment.VAPID_SUBJECT
+    ? {
+        subject: environment.VAPID_SUBJECT,
+        publicKey: environment.VAPID_PUBLIC_KEY,
+        privateKey: environment.VAPID_PRIVATE_KEY,
+      }
+    : undefined;
+const notificationSweepService = createNotificationSweepService({
+  collectors: {
+    "lineup-lock": new LineupLockAlertService({
+      repository: new DrizzleLineupLockRepository(database.db),
+    }),
+  },
+  ...(vapid
+    ? {
+        sender: new NotificationSender({
+          repository: new DrizzleNotificationRepository(database.db),
+          transport: createWebPushTransport(vapid),
+        }),
+      }
+    : {}),
+});
 const logger = pino({
   level: environment.LOG_LEVEL,
   redact: {
@@ -64,6 +96,7 @@ async function start(): Promise<void> {
   await registerQueues(boss);
   await registerWorkers(boss, logger, {
     dataHealth: dataHealthService,
+    notificationSweep: notificationSweepService,
     projectionRefresh: {
       refreshProjections: async (job, context) => {
         const effectiveJob =

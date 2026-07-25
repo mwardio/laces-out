@@ -538,6 +538,7 @@ export class DrizzleEspnSyncPersistence {
             externalKey: team.externalId,
             name: team.name,
             abbreviation: team.abbreviation,
+            logoUrl: team.logoUrl ?? null,
             isUserTeam: false,
             managerDisplayName: team.managers[0]?.displayName ?? null,
             faabRemaining: team.faabRemaining ?? null,
@@ -548,6 +549,7 @@ export class DrizzleEspnSyncPersistence {
             set: {
               name: team.name,
               abbreviation: team.abbreviation,
+              logoUrl: team.logoUrl ?? null,
               managerDisplayName: team.managers[0]?.displayName ?? null,
               faabRemaining: team.faabRemaining ?? null,
               waiverPriority: team.waiverPriority ?? null,
