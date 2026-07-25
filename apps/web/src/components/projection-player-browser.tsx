@@ -545,7 +545,7 @@ function ProjectionBoard({
         </div>
       ) : (
         <>
-          {withheldNewerRun && resolvedSet?.origin === "laces-out" ? (
+          {withheldNewerRun && horizon === "week" && resolvedSet?.origin === "laces-out" ? (
             <div className={styles.withheldNotice} role="status">
               <AlertTriangle size={15} aria-hidden="true" />
               <span>
@@ -623,7 +623,11 @@ function ProjectionBoard({
             </label>
           </div>
 
-          <div className={styles.table} role="table" aria-label="Player projections">
+          <div
+            className={`${styles.table} has-scroll-cue`}
+            role="table"
+            aria-label="Player projections"
+          >
             <div className={styles.tableHeader} role="row">
               <span role="columnheader" title="Overall rank within this projection set">
                 Ovr

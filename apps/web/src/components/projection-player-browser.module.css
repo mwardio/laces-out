@@ -1,6 +1,9 @@
 @layer components {
   .board {
     overflow: hidden;
+    /* Grid items default to min-width:auto and refuse to shrink below the row
+       grid's min-content, which pushed the whole page sideways. */
+    min-width: 0;
     background: #fff;
     border: 1px solid var(--ink-150);
     border-radius: 11px;
@@ -84,6 +87,11 @@
   .withheldNotice svg {
     flex: 0 0 auto;
     margin-top: 1px;
+  }
+
+  .context svg[class*="lucide-triangle-alert"],
+  .context svg[class*="lucide-alert-triangle"] {
+    color: #b0762f;
   }
 
   .unverified {
@@ -243,7 +251,7 @@
 
   .filters {
     display: grid;
-    grid-template-columns: minmax(240px, 1fr) minmax(130px, 180px) minmax(150px, 210px);
+    grid-template-columns: minmax(180px, 1fr) minmax(110px, 160px) minmax(130px, 190px);
     gap: 8px;
     padding: 11px 18px;
     border-bottom: 1px solid var(--ink-100);
@@ -266,8 +274,11 @@
     padding: 0 11px 0 34px;
   }
 
+  /* The row grid's minmax() floors exceed the card between ~821px and ~1137px.
+     overflow:hidden there swallowed the Confidence / Expected Games column with
+     no gesture able to reach it, so scroll rather than clip. */
   .table {
-    overflow: hidden;
+    overflow-x: auto;
   }
 
   .tableHeader,
