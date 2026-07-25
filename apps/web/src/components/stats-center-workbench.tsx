@@ -1,6 +1,15 @@
 "use client";
 
-import type { StatsCenterMetric, StatsCenterPlayer, StatsCenterResponse } from "@fantasy/contracts";
+import type {
+  StatsCenterAdditiveMetric,
+  StatsCenterMetricDescriptor,
+  StatsCenterPlayer,
+  StatsCenterRatioMetric,
+  StatsCenterResponse,
+  StatsCenterScoring,
+  StatsCenterSort,
+  StatsCenterTrendMetric,
+} from "@fantasy/contracts";
 import {
   ChartSpline,
   Database,
@@ -11,17 +20,35 @@ import {
   Search,
   ShieldAlert,
 } from "lucide-react";
+import Link from "next/link";
 import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { apiBaseUrl, parseStatsCenterResponse } from "../lib/api-client";
+import { NFL_TEAM_CHOICES } from "../lib/nfl-teams";
+import {
+  dateTime,
+  emptyBoomBust,
+  emptyRatioValues,
+  emptyTrendRecord,
+  number,
+  rate,
+  signed,
+  statsAdditiveValues,
+  weekCoverage,
+} from "./stats-formatting";
 import styles from "./stats-center-workbench.module.css";
+
+type MetricFamily = "usage" | "production" | "efficiency" | "trend";
 
 interface FilterState {
   readonly season: number;
-  readonly week: number | null;
+  readonly weekFrom: number | null;
+  readonly weekTo: number | null;
   readonly position: string;
+  readonly team: string;
   readonly search: string;
-  readonly sort: StatsCenterMetric;
+  readonly sort: StatsCenterSort;
+  readonly scoring: StatsCenterScoring;
 }
 
 type ViewState =
@@ -29,13 +56,201 @@ type ViewState =
   | { readonly state: "error"; readonly message: string }
   | { readonly state: "ready"; readonly data: StatsCenterResponse; readonly demo: boolean };
 
-const metricOptions: readonly { value: StatsCenterMetric; label: string; short: string }[] = [
-  { value: "opportunities", label: "Opportunities", short: "OPP" },
-  { value: "targets", label: "Targets", short: "TGT" },
-  { value: "carries", label: "Carries", short: "CAR" },
-  { value: "targetShare", label: "Target share", short: "TGT%" },
-  { value: "offensiveSnapShare", label: "Offensive snap share", short: "SNAP%" },
+type Column =
+  | {
+      readonly kind: "usage";
+      readonly short: string;
+      readonly label: string;
+      readonly format: "int" | "dec" | "rate";
+      readonly read: (player: StatsCenterPlayer) => number | null;
+      readonly sort: StatsCenterSort | null;
+    }
+  | {
+      readonly kind: "total";
+      readonly id: StatsCenterAdditiveMetric;
+      readonly short: string;
+      readonly format: "int" | "dec";
+    }
+  | {
+      readonly kind: "perGame";
+      readonly id: StatsCenterAdditiveMetric;
+      readonly short: string;
+      readonly format: "int" | "dec";
+    }
+  | {
+      readonly kind: "ratio";
+      readonly id: StatsCenterRatioMetric;
+      readonly short: string;
+      readonly format: "dec" | "rate";
+    }
+  | {
+      readonly kind: "boomBust";
+      readonly short: string;
+      readonly label: string;
+      readonly format: "dec" | "rate";
+      readonly read: (player: StatsCenterPlayer) => number | null;
+    };
+
+const usageColumns: readonly Column[] = [
+  {
+    kind: "usage",
+    short: "TGT",
+    label: "Targets",
+    format: "int",
+    read: (player) => player.targets,
+    sort: "targets",
+  },
+  {
+    kind: "usage",
+    short: "CAR",
+    label: "Carries",
+    format: "int",
+    read: (player) => player.carries,
+    sort: "carries",
+  },
+  {
+    kind: "usage",
+    short: "OPP",
+    label: "Opportunities",
+    format: "int",
+    read: (player) => player.opportunities,
+    sort: "opportunities",
+  },
+  {
+    kind: "usage",
+    short: "OPP/G",
+    label: "Opportunities per game",
+    format: "dec",
+    read: (player) => player.opportunitiesPerGame,
+    sort: null,
+  },
+  {
+    kind: "usage",
+    short: "TGT%",
+    label: "Target share",
+    format: "rate",
+    read: (player) => player.targetShare,
+    sort: "targetShare",
+  },
+  {
+    kind: "usage",
+    short: "SNAP%",
+    label: "Offensive snap share",
+    format: "rate",
+    read: (player) => player.offensiveSnapShare,
+    sort: "offensiveSnapShare",
+  },
 ];
+
+const productionColumns: readonly Column[] = [
+  { kind: "total", id: "passYards", short: "PYD", format: "int" },
+  { kind: "total", id: "passTouchdowns", short: "PTD", format: "int" },
+  { kind: "total", id: "passInterceptions", short: "INT", format: "int" },
+  { kind: "total", id: "rushYards", short: "RUYD", format: "int" },
+  { kind: "total", id: "rushTouchdowns", short: "RUTD", format: "int" },
+  { kind: "total", id: "receptions", short: "REC", format: "int" },
+  { kind: "total", id: "recYards", short: "REYD", format: "int" },
+  { kind: "total", id: "recTouchdowns", short: "RETD", format: "int" },
+  { kind: "total", id: "fumblesLost", short: "FL", format: "int" },
+  { kind: "total", id: "pointsPpr", short: "PTS", format: "dec" },
+  { kind: "perGame", id: "pointsPpr", short: "PTS/G", format: "dec" },
+  {
+    kind: "boomBust",
+    short: "BOOM%",
+    label: "Boom rate",
+    format: "rate",
+    read: (player) => player.boomBust.boomRate,
+  },
+  {
+    kind: "boomBust",
+    short: "BUST%",
+    label: "Bust rate",
+    format: "rate",
+    read: (player) => player.boomBust.bustRate,
+  },
+];
+
+const efficiencyColumns: readonly Column[] = [
+  { kind: "ratio", id: "airYardsShare", short: "AY%", format: "rate" },
+  { kind: "ratio", id: "weightedOpportunityRating", short: "WOPR", format: "dec" },
+  { kind: "ratio", id: "passAirConversionRatio", short: "PACR", format: "dec" },
+  { kind: "ratio", id: "completionPercentageOverExpected", short: "CPOE", format: "dec" },
+  { kind: "total", id: "recAirYards", short: "RAY", format: "int" },
+  { kind: "total", id: "recYardsAfterCatch", short: "RYAC", format: "int" },
+  { kind: "total", id: "recEpa", short: "REPA", format: "dec" },
+  { kind: "total", id: "rushEpa", short: "RUEPA", format: "dec" },
+  { kind: "total", id: "passAirYards", short: "PAY", format: "int" },
+  { kind: "total", id: "passEpa", short: "PEPA", format: "dec" },
+];
+
+const familyOptions: readonly { value: MetricFamily; label: string; hint: string }[] = [
+  { value: "usage", label: "Usage", hint: "Targets, carries, and time on the field" },
+  { value: "production", label: "Production", hint: "Scored output and boom or bust shape" },
+  { value: "efficiency", label: "Efficiency", hint: "Air yards, EPA, and derived shares" },
+  { value: "trend", label: "Trend", hint: "Recent weeks against the full window" },
+];
+
+const trendOptions: readonly { value: StatsCenterTrendMetric; label: string }[] = [
+  { value: "opportunitiesPerGame", label: "Opportunities per game" },
+  { value: "targetsPerGame", label: "Targets per game" },
+  { value: "carriesPerGame", label: "Carries per game" },
+  { value: "targetShare", label: "Target share" },
+  { value: "offensiveSnapShare", label: "Snap share" },
+  { value: "fantasyPoints", label: "Points" },
+];
+
+const familyDefaultSort: Readonly<Record<MetricFamily, StatsCenterSort>> = {
+  usage: "opportunities",
+  production: "pointsPpr",
+  efficiency: "recAirYards",
+  trend: "opportunities",
+};
+
+function columnsFor(family: MetricFamily): readonly Column[] {
+  if (family === "production") return productionColumns;
+  if (family === "efficiency") return efficiencyColumns;
+  return usageColumns;
+}
+
+function columnSort(column: Column): StatsCenterSort | null {
+  switch (column.kind) {
+    case "usage":
+      return column.sort;
+    case "total":
+    case "ratio":
+      return column.id;
+    // Per-game and boom/bust are derived from a total the server already sorts by.
+    case "perGame":
+    case "boomBust":
+      return null;
+  }
+}
+
+function columnValue(player: StatsCenterPlayer, column: Column): number | null {
+  switch (column.kind) {
+    case "usage":
+    case "boomBust":
+      return column.read(player);
+    case "total":
+      return player.totals[column.id] ?? null;
+    case "perGame":
+      return player.perGame[column.id] ?? null;
+    case "ratio":
+      return player.ratios[column.id] ?? null;
+  }
+}
+
+function formatted(value: number | null, format: "int" | "dec" | "rate"): string {
+  if (format === "rate") return rate(value);
+  return number(value, format === "dec" ? 1 : 0);
+}
+
+function columnLabel(column: Column, metrics: readonly StatsCenterMetricDescriptor[]): string {
+  if (column.kind === "usage" || column.kind === "boomBust") return column.label;
+  const descriptor = metrics.find((metric) => metric.id === column.id);
+  const suffix = column.kind === "perGame" ? " per game" : "";
+  return `${descriptor?.label ?? column.id}${suffix}`;
+}
 
 const samplePlayers: readonly StatsCenterPlayer[] = [
   {
@@ -54,6 +269,50 @@ const samplePlayers: readonly StatsCenterPlayer[] = [
     targetShare: 0.286,
     offensiveSnaps: 298,
     offensiveSnapShare: 0.91,
+    totals: statsAdditiveValues({
+      receptions: 38,
+      recYards: 452,
+      recTouchdowns: 3,
+      recAirYards: 391,
+      recYardsAfterCatch: 188,
+      recEpa: 22.4,
+      pointsPpr: 101.2,
+      pointsStandard: 63.2,
+    }),
+    perGame: statsAdditiveValues({
+      receptions: 7.6,
+      recYards: 90.4,
+      recTouchdowns: 0.6,
+      pointsPpr: 20.2,
+      pointsStandard: 12.6,
+    }),
+    ratios: { ...emptyRatioValues, airYardsShare: 0.31, weightedOpportunityRating: 0.646 },
+    trend: emptyTrendRecord({
+      opportunitiesPerGame: {
+        status: "available",
+        seasonAverage: 10,
+        recentWeightedAverage: 11.2,
+        absoluteChange: 1.2,
+        sampleSize: 5,
+        recentSampleSize: 4,
+        reason: null,
+      },
+    }),
+    boomBust: {
+      ...emptyBoomBust,
+      status: "available",
+      games: 5,
+      missingGames: 0,
+      booms: 3,
+      busts: 1,
+      neutral: 1,
+      boomRate: 0.6,
+      bustRate: 0.2,
+      averagePoints: 20.2,
+      standardDeviation: 6.1,
+      threshold: { boomAtOrAbove: 20, bustAtOrBelow: 8 },
+      reason: null,
+    },
   },
   {
     playerId: "10000000-0000-4000-8000-000000000002",
@@ -71,6 +330,49 @@ const samplePlayers: readonly StatsCenterPlayer[] = [
     targetShare: 0.168,
     offensiveSnaps: 244,
     offensiveSnapShare: 0.72,
+    totals: statsAdditiveValues({
+      receptions: 21,
+      recYards: 174,
+      rushYards: 341,
+      rushTouchdowns: 2,
+      rushEpa: 4.8,
+      recAirYards: 62,
+      pointsPpr: 94.5,
+      pointsStandard: 73.5,
+    }),
+    perGame: statsAdditiveValues({
+      rushYards: 68.2,
+      receptions: 4.2,
+      pointsPpr: 18.9,
+      pointsStandard: 14.7,
+    }),
+    ratios: { ...emptyRatioValues, airYardsShare: 0.05, weightedOpportunityRating: 0.287 },
+    trend: emptyTrendRecord({
+      opportunitiesPerGame: {
+        status: "available",
+        seasonAverage: 20.6,
+        recentWeightedAverage: 19.1,
+        absoluteChange: -1.5,
+        sampleSize: 5,
+        recentSampleSize: 4,
+        reason: null,
+      },
+    }),
+    boomBust: {
+      ...emptyBoomBust,
+      status: "available",
+      games: 5,
+      missingGames: 0,
+      booms: 2,
+      busts: 1,
+      neutral: 2,
+      boomRate: 0.4,
+      bustRate: 0.2,
+      averagePoints: 18.9,
+      standardDeviation: 7.4,
+      threshold: { boomAtOrAbove: 20, bustAtOrBelow: 8 },
+      reason: null,
+    },
   },
   {
     playerId: "10000000-0000-4000-8000-000000000003",
@@ -88,6 +390,43 @@ const samplePlayers: readonly StatsCenterPlayer[] = [
     targetShare: 0.241,
     offensiveSnaps: 281,
     offensiveSnapShare: 0.88,
+    totals: statsAdditiveValues({
+      receptions: 31,
+      recYards: 336,
+      recTouchdowns: 1,
+      recAirYards: 240,
+      recYardsAfterCatch: 151,
+      pointsPpr: 70.6,
+      pointsStandard: 39.6,
+    }),
+    perGame: statsAdditiveValues({ receptions: 6.2, recYards: 67.2, pointsPpr: 14.1 }),
+    ratios: { ...emptyRatioValues, airYardsShare: 0.22, weightedOpportunityRating: 0.516 },
+    trend: emptyTrendRecord({
+      opportunitiesPerGame: {
+        status: "available",
+        seasonAverage: 8.4,
+        recentWeightedAverage: 9.3,
+        absoluteChange: 0.9,
+        sampleSize: 5,
+        recentSampleSize: 4,
+        reason: null,
+      },
+    }),
+    boomBust: {
+      ...emptyBoomBust,
+      status: "available",
+      games: 5,
+      missingGames: 0,
+      booms: 2,
+      busts: 1,
+      neutral: 2,
+      boomRate: 0.4,
+      bustRate: 0.2,
+      averagePoints: 14.1,
+      standardDeviation: 4.9,
+      threshold: { boomAtOrAbove: 15, bustAtOrBelow: 5 },
+      reason: null,
+    },
   },
   {
     playerId: "10000000-0000-4000-8000-000000000004",
@@ -105,6 +444,51 @@ const samplePlayers: readonly StatsCenterPlayer[] = [
     targetShare: 0,
     offensiveSnaps: 321,
     offensiveSnapShare: 0.98,
+    totals: statsAdditiveValues({
+      passCompletions: 108,
+      passAttempts: 148,
+      passYards: 1_213,
+      passTouchdowns: 7,
+      passInterceptions: 2,
+      rushYards: 264,
+      rushTouchdowns: 4,
+      passAirYards: 1_026,
+      passEpa: 31.7,
+      pointsPpr: 118.9,
+      pointsStandard: 118.9,
+    }),
+    perGame: statsAdditiveValues({ passYards: 242.6, rushYards: 52.8, pointsPpr: 23.8 }),
+    ratios: {
+      ...emptyRatioValues,
+      passAirConversionRatio: 1.18,
+      completionPercentageOverExpected: 5.4,
+    },
+    trend: emptyTrendRecord({
+      opportunitiesPerGame: {
+        status: "available",
+        seasonAverage: 8.2,
+        recentWeightedAverage: 8.6,
+        absoluteChange: 0.4,
+        sampleSize: 5,
+        recentSampleSize: 4,
+        reason: null,
+      },
+    }),
+    boomBust: {
+      ...emptyBoomBust,
+      status: "available",
+      games: 5,
+      missingGames: 0,
+      booms: 2,
+      busts: 0,
+      neutral: 3,
+      boomRate: 0.4,
+      bustRate: 0,
+      averagePoints: 23.8,
+      standardDeviation: 5.2,
+      threshold: { boomAtOrAbove: 25, bustAtOrBelow: 15 },
+      reason: null,
+    },
   },
 ];
 
@@ -115,33 +499,50 @@ function defaultSeason(): number {
 
 const initialFilters: FilterState = {
   season: defaultSeason(),
-  week: null,
+  weekFrom: null,
+  weekTo: null,
   position: "",
+  team: "",
   search: "",
   sort: "opportunities",
+  scoring: "ppr",
 };
 
-function metricValue(player: StatsCenterPlayer, metric: StatsCenterMetric): number | null {
-  if (metric === "targets") return player.targets;
-  if (metric === "carries") return player.carries;
-  if (metric === "opportunities") return player.opportunities;
-  if (metric === "targetShare") return player.targetShare;
-  return player.offensiveSnapShare;
-}
+const SAMPLE_METRIC_DEFINITIONS: readonly StatsCenterMetricDescriptor[] = [
+  {
+    id: "pointsPpr",
+    label: "Points (PPR)",
+    family: "production",
+    kind: "additive",
+    definition: "Illustrative sample of the source dataset's PPR points.",
+    state: "available",
+    reason: null,
+  },
+  {
+    id: "airYardsShare",
+    label: "Air-yards share",
+    family: "efficiency",
+    kind: "derivedRatio",
+    definition: "Illustrative sample of player air yards over team air yards.",
+    state: "available",
+    reason: null,
+  },
+];
 
 function sampleResponse(filters: FilterState): StatsCenterResponse {
   const normalizedSearch = filters.search.trim().toLocaleLowerCase();
-  const hasSample = filters.season === 2025 && filters.week === null;
+  const hasSample = filters.season === 2025 && filters.weekFrom === null && filters.weekTo === null;
   const players = hasSample
     ? samplePlayers
         .filter(
           (player) =>
             (!filters.position || player.position === filters.position) &&
+            (!filters.team || player.team === filters.team) &&
             (!normalizedSearch || player.name.toLocaleLowerCase().includes(normalizedSearch)),
         )
         .sort((left, right) => {
-          const leftValue = metricValue(left, filters.sort);
-          const rightValue = metricValue(right, filters.sort);
+          const leftValue = sampleSortValue(left, filters.sort);
+          const rightValue = sampleSortValue(right, filters.sort);
           return (rightValue ?? -1) - (leftValue ?? -1) || left.name.localeCompare(right.name);
         })
     : [];
@@ -152,10 +553,15 @@ function sampleResponse(filters: FilterState): StatsCenterResponse {
     generatedAt: new Date().toISOString(),
     filters: {
       season: filters.season,
-      week: filters.week,
+      weekFrom: filters.weekFrom,
+      weekTo: filters.weekTo,
       position: filters.position || null,
+      team: filters.team || null,
       search: filters.search.trim(),
       sort: filters.sort,
+      scoring: filters.scoring,
+      recentWindow: 4,
+      recentWeightDecay: 0.75,
       limit: 50,
     },
     availability: {
@@ -168,15 +574,13 @@ function sampleResponse(filters: FilterState): StatsCenterResponse {
         state: "unavailable",
         reason: "Red-zone attempts and targets are not present in the admitted weekly datasets.",
       },
-      boomBust: {
-        state: "unavailable",
-        reason: "Boom and bust rates wait for verified league scoring and complete coverage.",
-      },
+      boomBust: datasetState,
       fantasyPointsAllowed: {
         state: "unavailable",
         reason: "Fantasy points allowed waits for verified league scoring and complete coverage.",
       },
     },
+    metrics: [...SAMPLE_METRIC_DEFINITIONS],
     sources: [
       {
         dataset: "weekly-stats",
@@ -213,58 +617,30 @@ function sampleResponse(filters: FilterState): StatsCenterResponse {
       targetShare:
         "Target share is player targets divided by all player targets for the same team and games.",
       offensiveSnapShare:
-        "Season offensive snap share is the unweighted mean of game-level offensive snap shares.",
+        "Season offensive snap share is the unweighted mean of game-level offensive shares.",
+      recentTrend:
+        "Recent trend compares the full-sample per-game mean with an exponentially weighted mean of the most recent weeks.",
+      boomBust:
+        "Boom and bust use the source dataset's own PPR points with documented thresholds. They are not scored to any league's rules.",
     },
   };
 }
 
-function dateTime(value: string | null): string {
-  if (!value) return "Not available";
-  return new Intl.DateTimeFormat(undefined, {
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-  }).format(new Date(value));
-}
-
-/** "1–5" for a contiguous run, "1–3, 5" when weeks are missing. */
-function weekCoverage(weeks: readonly number[]): string {
-  const sorted = [...weeks].sort((left, right) => left - right);
-  const first = sorted[0];
-  if (first === undefined) return "None";
-  const runs: string[] = [];
-  let start = first;
-  let previous = first;
-  for (const week of sorted.slice(1)) {
-    if (week === previous + 1) {
-      previous = week;
-      continue;
-    }
-    runs.push(start === previous ? `${start}` : `${start}–${previous}`);
-    start = week;
-    previous = week;
-  }
-  runs.push(start === previous ? `${start}` : `${start}–${previous}`);
-  return runs.join(", ");
-}
-
-function number(value: number | null, digits = 0): string {
-  if (value === null) return "—";
-  return new Intl.NumberFormat(undefined, { maximumFractionDigits: digits }).format(value);
-}
-
-function rate(value: number | null): string {
-  if (value === null) return "—";
-  return new Intl.NumberFormat(undefined, {
-    style: "percent",
-    maximumFractionDigits: 1,
-  }).format(value);
+function sampleSortValue(player: StatsCenterPlayer, sort: StatsCenterSort): number | null {
+  if (sort === "targets") return player.targets;
+  if (sort === "carries") return player.carries;
+  if (sort === "opportunities") return player.opportunities;
+  if (sort === "targetShare") return player.targetShare;
+  if (sort === "offensiveSnapShare") return player.offensiveSnapShare;
+  const totals: Partial<Record<string, number | null>> = player.totals;
+  const ratios: Partial<Record<string, number | null>> = player.ratios;
+  return totals[sort] ?? ratios[sort] ?? null;
 }
 
 export function StatsCenterWorkbench() {
   const [filters, setFilters] = useState<FilterState>(initialFilters);
+  const [family, setFamily] = useState<MetricFamily>("usage");
+  const [trendMetric, setTrendMetric] = useState<StatsCenterTrendMetric>("opportunitiesPerGame");
   const [view, setView] = useState<ViewState>({ state: "loading" });
   const requestRef = useRef<AbortController | null>(null);
 
@@ -280,10 +656,13 @@ export function StatsCenterWorkbench() {
     const query = new URLSearchParams({
       season: String(next.season),
       sort: next.sort,
+      scoring: next.scoring,
       limit: "50",
     });
-    if (next.week !== null) query.set("week", String(next.week));
+    if (next.weekFrom !== null) query.set("weekFrom", String(next.weekFrom));
+    if (next.weekTo !== null) query.set("weekTo", String(next.weekTo));
     if (next.position) query.set("position", next.position);
+    if (next.team) query.set("team", next.team);
     if (next.search.trim()) query.set("search", next.search.trim());
     try {
       const response = await fetch(`${apiBaseUrl}/v1/stats/players?${query.toString()}`, {
@@ -293,7 +672,7 @@ export function StatsCenterWorkbench() {
         signal: controller.signal,
       });
       if (response.status === 401) {
-        const tourFilters = { ...next, season: 2025, week: null };
+        const tourFilters = { ...next, season: 2025, weekFrom: null, weekTo: null };
         setFilters(tourFilters);
         setView({ state: "ready", data: sampleResponse(tourFilters), demo: true });
         return;
@@ -327,8 +706,15 @@ export function StatsCenterWorkbench() {
     void load(filters, view.state === "ready" && view.demo);
   }
 
-  function chooseMetric(metric: StatsCenterMetric) {
-    const next = { ...filters, sort: metric };
+  function chooseFamily(next: MetricFamily) {
+    setFamily(next);
+    const nextFilters = { ...filters, sort: familyDefaultSort[next] };
+    setFilters(nextFilters);
+    void load(nextFilters, view.state === "ready" && view.demo);
+  }
+
+  function chooseSort(sort: StatsCenterSort) {
+    const next = { ...filters, sort };
     setFilters(next);
     void load(next, view.state === "ready" && view.demo);
   }
@@ -350,8 +736,8 @@ export function StatsCenterWorkbench() {
           <p>Usage before points</p>
           <h1>Stats Center</h1>
           <span>
-            Compare the volume that creates fantasy value: targets, carries, total opportunities,
-            target share, and time on the field.
+            Every admitted weekly field, one window at a time: volume, scored production, air-yards
+            and EPA efficiency, and how the recent weeks compare with the whole range.
           </span>
         </div>
         <ChartSpline size={34} strokeWidth={1.5} aria-hidden="true" />
@@ -374,17 +760,36 @@ export function StatsCenterWorkbench() {
           </select>
         </label>
         <label>
-          <span>Week</span>
+          <span>From week</span>
           <select
-            value={filters.week ?? ""}
+            value={filters.weekFrom ?? ""}
             onChange={(event) =>
               setFilters((current) => ({
                 ...current,
-                week: event.target.value ? Number(event.target.value) : null,
+                weekFrom: event.target.value ? Number(event.target.value) : null,
               }))
             }
           >
-            <option value="">All weeks</option>
+            <option value="">Week 1</option>
+            {Array.from({ length: 18 }, (_, index) => index + 1).map((week) => (
+              <option value={week} key={week}>
+                Week {week}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          <span>To week</span>
+          <select
+            value={filters.weekTo ?? ""}
+            onChange={(event) =>
+              setFilters((current) => ({
+                ...current,
+                weekTo: event.target.value ? Number(event.target.value) : null,
+              }))
+            }
+          >
+            <option value="">Latest</option>
             {Array.from({ length: 18 }, (_, index) => index + 1).map((week) => (
               <option value={week} key={week}>
                 Week {week}
@@ -406,6 +811,37 @@ export function StatsCenterWorkbench() {
                 {position}
               </option>
             ))}
+          </select>
+        </label>
+        <label>
+          <span>Team</span>
+          <select
+            value={filters.team}
+            onChange={(event) =>
+              setFilters((current) => ({ ...current, team: event.target.value }))
+            }
+          >
+            <option value="">All teams</option>
+            {NFL_TEAM_CHOICES.map((team) => (
+              <option value={team} key={team}>
+                {team}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          <span>Scoring</span>
+          <select
+            value={filters.scoring}
+            onChange={(event) =>
+              setFilters((current) => ({
+                ...current,
+                scoring: event.target.value === "standard" ? "standard" : "ppr",
+              }))
+            }
+          >
+            <option value="ppr">Source PPR</option>
+            <option value="standard">Source standard</option>
           </select>
         </label>
         <label className={styles.search}>
@@ -433,17 +869,17 @@ export function StatsCenterWorkbench() {
         </button>
       </form>
 
-      <div className={styles.metricTabs} aria-label="Sort player leaders by metric">
-        {metricOptions.map((metric) => (
+      <div className={styles.metricTabs} aria-label="Choose a metric family">
+        {familyOptions.map((option) => (
           <button
             type="button"
-            className={filters.sort === metric.value ? styles.activeMetric : undefined}
-            aria-pressed={filters.sort === metric.value}
-            onClick={() => chooseMetric(metric.value)}
-            key={metric.value}
+            className={family === option.value ? styles.activeMetric : undefined}
+            aria-pressed={family === option.value}
+            onClick={() => chooseFamily(option.value)}
+            key={option.value}
           >
-            <span>{metric.short}</span>
-            {metric.label}
+            <span>{option.label}</span>
+            {option.hint}
           </button>
         ))}
       </div>
@@ -465,26 +901,90 @@ export function StatsCenterWorkbench() {
           </div>
         </div>
       ) : (
-        <StatsResult data={view.data} />
+        <StatsResult
+          data={view.data}
+          family={family}
+          trendMetric={trendMetric}
+          onTrendMetric={setTrendMetric}
+          onSort={chooseSort}
+        />
       )}
     </div>
   );
 }
 
-function StatsResult({ data }: { readonly data: StatsCenterResponse }) {
-  const selectedAvailability = data.availability[data.filters.sort];
+/** The withheld notice for the visible view, whether that is a usage metric or a derived one. */
+function selectedAvailability(data: StatsCenterResponse): {
+  readonly state: "available" | "unavailable" | "no-data";
+  readonly reason: string | null;
+} {
+  const sort = data.filters.sort;
+  if (sort in data.availability) {
+    return data.availability[sort as keyof StatsCenterResponse["availability"]];
+  }
+  const descriptor = data.metrics.find((metric) => metric.id === sort);
+  return descriptor ?? { state: "available", reason: null };
+}
+
+function windowLabel(data: StatsCenterResponse): string {
+  const { weekFrom, weekTo } = data.filters;
+  if (weekFrom === null && weekTo === null) return "All weeks";
+  if (weekFrom !== null && weekTo !== null) {
+    return weekFrom === weekTo ? `Week ${weekFrom}` : `Weeks ${weekFrom}–${weekTo}`;
+  }
+  return weekFrom !== null ? `Week ${weekFrom} onward` : `Through week ${weekTo}`;
+}
+
+function StatsResult({
+  data,
+  family,
+  trendMetric,
+  onTrendMetric,
+  onSort,
+}: {
+  readonly data: StatsCenterResponse;
+  readonly family: MetricFamily;
+  readonly trendMetric: StatsCenterTrendMetric;
+  readonly onTrendMetric: (metric: StatsCenterTrendMetric) => void;
+  readonly onSort: (sort: StatsCenterSort) => void;
+}) {
+  const availability = selectedAvailability(data);
+  const columns = columnsFor(family);
+  const withheldColumns =
+    family === "usage"
+      ? []
+      : columns.flatMap((column) => {
+          const id = column.kind === "boomBust" || column.kind === "usage" ? null : column.id;
+          if (!id) return [];
+          const descriptor = data.metrics.find((metric) => metric.id === id);
+          return descriptor && descriptor.state !== "available" ? [descriptor] : [];
+        });
+  const familyDefinition =
+    family === "trend"
+      ? data.definitions.recentTrend
+      : family === "production"
+        ? data.definitions.boomBust
+        : family === "efficiency"
+          ? (data.metrics.find((metric) => metric.id === "airYardsShare")?.definition ??
+            data.definitions.targetShare)
+          : data.filters.sort === "offensiveSnapShare"
+            ? data.definitions.offensiveSnapShare
+            : data.filters.sort === "targetShare"
+              ? data.definitions.targetShare
+              : data.definitions.opportunities;
+
   return (
     <>
-      {selectedAvailability.state !== "available" ? (
+      {availability.state !== "available" ? (
         <div className={styles.warning} role="status">
           <ShieldAlert size={18} aria-hidden="true" />
           <div>
             <strong>
-              {selectedAvailability.state === "no-data"
+              {availability.state === "no-data"
                 ? "No observations for this view"
                 : "This metric is withheld"}
             </strong>
-            <span>{selectedAvailability.reason}</span>
+            <span>{availability.reason}</span>
           </div>
         </div>
       ) : null}
@@ -494,7 +994,7 @@ function StatsResult({ data }: { readonly data: StatsCenterResponse }) {
           <div>
             <p>Regular-season observations</p>
             <h2 id="leader-title">
-              {metricOptions.find((metric) => metric.value === data.filters.sort)?.label} leaders
+              {familyOptions.find((option) => option.value === family)?.label} leaders
             </h2>
           </div>
           {/* The API caps `players` at `limit` but reports the uncapped
@@ -504,20 +1004,43 @@ function StatsResult({ data }: { readonly data: StatsCenterResponse }) {
             {data.truncated
               ? `Top ${data.players.length} of ${data.totalMatched} players`
               : `${data.totalMatched} player${data.totalMatched === 1 ? "" : "s"}`}
-            {data.filters.week ? ` · Week ${data.filters.week}` : " · All weeks"}
+            {` · ${windowLabel(data)}`}
           </span>
         </div>
+
+        {family === "trend" ? (
+          <div className={styles.trendControls}>
+            <label>
+              <span>Trend metric</span>
+              <select
+                value={trendMetric}
+                onChange={(event) => onTrendMetric(event.target.value as StatsCenterTrendMetric)}
+              >
+                {trendOptions.map((option) => (
+                  <option value={option.value} key={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <p>
+              Recent weighting uses the last {data.filters.recentWindow} weeks with a{" "}
+              {data.filters.recentWeightDecay} decay per preceding week.
+            </p>
+          </div>
+        ) : null}
+
         {data.players.length === 0 ? (
           <div className={styles.emptyState}>
             <Database size={22} aria-hidden="true" />
             <strong>No player rows match this view</strong>
-            <span>Try another season, week, position, or player name.</span>
+            <span>Try another season, week range, team, position, or player name.</span>
           </div>
         ) : (
           <div
             className={`${styles.tableScroll} has-scroll-cue`}
             role="region"
-            aria-label="Player opportunity leaders; scroll horizontally to view all columns"
+            aria-label="Player metric leaders; scroll horizontally to view all columns"
             tabIndex={0}
           >
             <table>
@@ -525,50 +1048,95 @@ function StatsResult({ data }: { readonly data: StatsCenterResponse }) {
                 <tr>
                   <th scope="col">Player</th>
                   <th scope="col">G</th>
-                  <th scope="col">TGT</th>
-                  <th scope="col">CAR</th>
-                  <th scope="col">OPP</th>
-                  <th scope="col">OPP / G</th>
-                  <th scope="col">TGT%</th>
-                  <th scope="col">SNAP%</th>
+                  {family === "trend" ? (
+                    <>
+                      <th scope="col">Window avg</th>
+                      <th scope="col">Recent avg</th>
+                      <th scope="col">Change</th>
+                      <th scope="col">Weeks</th>
+                    </>
+                  ) : (
+                    columns.map((column) => {
+                      const sort = columnSort(column);
+                      const active = sort !== null && data.filters.sort === sort;
+                      return (
+                        <th
+                          scope="col"
+                          key={`${column.kind}-${column.short}`}
+                          aria-sort={active ? "descending" : undefined}
+                        >
+                          {sort ? (
+                            <button
+                              type="button"
+                              className={active ? styles.activeSort : undefined}
+                              onClick={() => onSort(sort)}
+                              title={`Sort by ${columnLabel(column, data.metrics)}`}
+                            >
+                              {column.short}
+                            </button>
+                          ) : (
+                            column.short
+                          )}
+                        </th>
+                      );
+                    })
+                  )}
                 </tr>
               </thead>
               <tbody>
-                {data.players.map((player, index) => (
-                  <tr key={player.playerId}>
-                    <th scope="row">
-                      <span className={styles.rank}>{index + 1}</span>
-                      <span>
-                        <strong>{player.name}</strong>
-                        <small>
-                          {player.position} · {player.team ?? "FA"}
-                        </small>
-                      </span>
-                    </th>
-                    <td>{player.games}</td>
-                    <td>{number(player.targets)}</td>
-                    <td>{number(player.carries)}</td>
-                    <td>{number(player.opportunities)}</td>
-                    <td>{number(player.opportunitiesPerGame, 1)}</td>
-                    <td>{rate(player.targetShare)}</td>
-                    <td>{rate(player.offensiveSnapShare)}</td>
-                  </tr>
-                ))}
+                {data.players.map((player, index) => {
+                  const trend = player.trend[trendMetric];
+                  return (
+                    <tr key={player.playerId}>
+                      <th scope="row">
+                        <span className={styles.rank}>{index + 1}</span>
+                        <span>
+                          <Link
+                            href={`/stats/players/${player.playerId}?season=${data.filters.season}`}
+                          >
+                            {player.name}
+                          </Link>
+                          <small>
+                            {player.position} · {player.team ?? "FA"}
+                          </small>
+                        </span>
+                      </th>
+                      <td>{player.games}</td>
+                      {family === "trend" ? (
+                        <>
+                          <td>{number(trend?.seasonAverage ?? null, 1)}</td>
+                          <td>{number(trend?.recentWeightedAverage ?? null, 1)}</td>
+                          <td>{signed(trend?.absoluteChange ?? null)}</td>
+                          <td>
+                            {trend?.status === "available"
+                              ? `${trend.recentSampleSize} / ${trend.sampleSize}`
+                              : "—"}
+                          </td>
+                        </>
+                      ) : (
+                        columns.map((column) => (
+                          <td key={`${column.kind}-${column.short}`}>
+                            {formatted(columnValue(player, column), column.format)}
+                          </td>
+                        ))
+                      )}
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
         )}
-        <p className={styles.definition}>
-          {
-            data.definitions[
-              data.filters.sort === "offensiveSnapShare"
-                ? "offensiveSnapShare"
-                : data.filters.sort === "targetShare"
-                  ? "targetShare"
-                  : "opportunities"
-            ]
-          }
-        </p>
+        <p className={styles.definition}>{familyDefinition}</p>
+        {withheldColumns.length > 0 ? (
+          <ul className={styles.withheldList}>
+            {withheldColumns.map((descriptor) => (
+              <li key={descriptor.id}>
+                <strong>{descriptor.label}</strong> {descriptor.reason}
+              </li>
+            ))}
+          </ul>
+        ) : null}
       </section>
 
       <section className={styles.sourceSection} aria-labelledby="source-title">
@@ -627,28 +1195,39 @@ function StatsResult({ data }: { readonly data: StatsCenterResponse }) {
         </div>
       </section>
 
-      <section className={styles.withheld} aria-labelledby="withheld-title">
-        <div className={styles.sectionHeading}>
-          <div>
-            <p>Honest gaps</p>
-            <h2 id="withheld-title">Not inferred from partial data</h2>
-          </div>
-        </div>
-        <div>
-          {(
-            [
-              ["Red-zone usage", data.availability.redZone],
-              ["Boom / bust", data.availability.boomBust],
-              ["Fantasy points allowed", data.availability.fantasyPointsAllowed],
-            ] as const
-          ).map(([label, item]) => (
-            <article key={label}>
-              <strong>{label}</strong>
-              <span>{item.reason}</span>
-            </article>
-          ))}
-        </div>
-      </section>
+      <HonestGaps data={data} />
     </>
+  );
+}
+
+/** Only genuinely withheld metrics belong here; listing an available one printed a blank row. */
+function HonestGaps({ data }: { readonly data: StatsCenterResponse }) {
+  const gaps = (
+    [
+      ["Red-zone usage", data.availability.redZone],
+      ["Boom / bust", data.availability.boomBust],
+      ["Fantasy points allowed", data.availability.fantasyPointsAllowed],
+    ] as const
+  ).flatMap(([label, item]) =>
+    item.state !== "available" && item.reason ? [{ label, reason: item.reason }] : [],
+  );
+  if (gaps.length === 0) return null;
+  return (
+    <section className={styles.withheld} aria-labelledby="withheld-title">
+      <div className={styles.sectionHeading}>
+        <div>
+          <p>Honest gaps</p>
+          <h2 id="withheld-title">Not inferred from partial data</h2>
+        </div>
+      </div>
+      <div>
+        {gaps.map((gap) => (
+          <article key={gap.label}>
+            <strong>{gap.label}</strong>
+            <span>{gap.reason}</span>
+          </article>
+        ))}
+      </div>
+    </section>
   );
 }

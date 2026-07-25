@@ -48,7 +48,23 @@ export interface AuthRepository {
   touchSession(tokenHash: string, now: Date): Promise<void>;
   deleteSession(tokenHash: string): Promise<void>;
   deleteExpiredSessions(now: Date): Promise<void>;
+  findUserById?(userId: string): Promise<AuthUserRecord | undefined>;
+  updatePassword?(userId: string, passwordHash: string, now: Date): Promise<void>;
+  /** Revokes every session for the account except the one presenting `exceptTokenHash`. */
+  deleteOtherSessions?(userId: string, exceptTokenHash: string): Promise<void>;
+  /** Production repositories use one transaction so a new password never leaves old sessions. */
+  replacePasswordAndDeleteOtherSessions?(
+    userId: string,
+    passwordHash: string,
+    exceptTokenHash: string,
+    now: Date,
+  ): Promise<void>;
 }
+
+export type ChangePasswordResult =
+  | { readonly outcome: "changed"; readonly revokedOtherSessions: true }
+  | { readonly outcome: "invalid-current-password" }
+  | { readonly outcome: "unsupported" };
 
 export interface LoginResult {
   readonly token: string;
@@ -123,6 +139,49 @@ export class AuthService {
   async logout(token: string | undefined): Promise<void> {
     if (!token || token.length > 128) return;
     await this.#repository.deleteSession(hashSessionToken(token));
+  }
+
+  /**
+   * Verifies the current password before rehashing, then revokes every *other* session for the
+   * account. The operator CLI revokes all sessions because it runs without one; a member
+   * changing their own password should not be signed out of the tab they are standing in.
+   */
+  async changePassword(
+    userId: string,
+    currentPassword: string,
+    newPassword: string,
+    currentToken: string | undefined,
+  ): Promise<ChangePasswordResult> {
+    const repository = this.#repository;
+    const canReplaceAtomically = repository.replacePasswordAndDeleteOtherSessions !== undefined;
+    const canReplaceSeparately =
+      repository.updatePassword !== undefined && repository.deleteOtherSessions !== undefined;
+    if (!repository.findUserById || (!canReplaceAtomically && !canReplaceSeparately)) {
+      return { outcome: "unsupported" };
+    }
+    const user = await repository.findUserById(userId);
+    // Spend the same Argon2 verification whether or not the account can change a password, so
+    // the response time does not distinguish the two.
+    const candidateHash = user?.passwordHash ?? (await this.#dummyHash);
+    const valid = await verify(candidateHash, currentPassword);
+    if (!user || !user.passwordHash || !valid) return { outcome: "invalid-current-password" };
+
+    const passwordHash = await hashOwnerPassword(newPassword);
+    // An empty hash matches no stored session, so a caller without a cookie revokes them all.
+    const currentTokenHash = currentToken ? hashSessionToken(currentToken) : "";
+    const now = this.#now();
+    if (repository.replacePasswordAndDeleteOtherSessions) {
+      await repository.replacePasswordAndDeleteOtherSessions(
+        user.id,
+        passwordHash,
+        currentTokenHash,
+        now,
+      );
+    } else {
+      await repository.updatePassword!(user.id, passwordHash, now);
+      await repository.deleteOtherSessions!(user.id, currentTokenHash);
+    }
+    return { outcome: "changed", revokedOtherSessions: true };
   }
 
   async purgeExpiredSessions(): Promise<void> {

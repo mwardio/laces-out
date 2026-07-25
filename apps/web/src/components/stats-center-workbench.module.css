@@ -93,7 +93,7 @@
 
   .filters {
     display: grid;
-    grid-template-columns: repeat(3, minmax(120px, 0.55fr)) minmax(220px, 1.4fr) auto;
+    grid-template-columns: repeat(auto-fit, minmax(128px, 1fr));
     align-items: end;
     gap: 10px;
     padding: 14px;
@@ -172,7 +172,7 @@
 
   .metricTabs {
     display: grid;
-    grid-template-columns: repeat(5, minmax(0, 1fr));
+    grid-template-columns: repeat(4, minmax(0, 1fr));
     padding: 4px;
     background: var(--ink-100);
     border-radius: 10px;
@@ -315,9 +315,96 @@
     display: block;
   }
 
-  .tableScroll tbody th strong {
+  .tableScroll tbody th strong,
+  .tableScroll tbody th a {
     color: var(--ink-900);
     font-size: 12px;
+    font-weight: 700;
+    text-decoration: none;
+  }
+
+  .tableScroll tbody th a:hover,
+  .tableScroll tbody th a:focus-visible {
+    color: var(--green-700, var(--green-600));
+    text-decoration: underline;
+  }
+
+  /* Sortable headers stay text-shaped; only the active column is emphasised. */
+  .tableScroll thead th button {
+    padding: 0;
+    color: inherit;
+    background: none;
+    border: 0;
+    cursor: pointer;
+    font: inherit;
+    letter-spacing: inherit;
+  }
+
+  .tableScroll thead th button:hover,
+  .tableScroll thead th button:focus-visible {
+    color: var(--ink-800);
+    text-decoration: underline;
+  }
+
+  .tableScroll thead th .activeSort {
+    color: var(--ink-950);
+    text-decoration: underline;
+  }
+
+  .trendControls {
+    display: flex;
+    align-items: end;
+    gap: 14px;
+    padding: 12px 20px;
+    border-top: 1px solid var(--ink-100);
+  }
+
+  .trendControls label {
+    display: grid;
+    gap: 6px;
+    min-width: 0;
+  }
+
+  .trendControls label > span {
+    color: var(--ink-500);
+    font-size: 9px;
+    font-weight: 800;
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
+  }
+
+  .trendControls select {
+    min-height: 36px;
+    padding: 0 10px;
+    color: var(--ink-900);
+    background: #fff;
+    border: 1px solid var(--ink-200);
+    border-radius: 8px;
+    font-size: 12px;
+  }
+
+  .trendControls p {
+    color: var(--ink-500);
+    font-size: 10px;
+    line-height: 1.55;
+  }
+
+  .withheldList {
+    display: grid;
+    gap: 6px;
+    padding: 0 20px 14px;
+    margin: 0;
+    list-style: none;
+  }
+
+  .withheldList li {
+    color: var(--ink-500);
+    font-size: 10px;
+    line-height: 1.55;
+  }
+
+  .withheldList strong {
+    color: var(--ink-700);
   }
 
   .tableScroll tbody th small {
@@ -512,6 +599,11 @@
       grid-template-columns: repeat(3, minmax(0, 1fr));
     }
 
+    .trendControls {
+      flex-direction: column;
+      align-items: stretch;
+    }
+
     .search {
       grid-column: span 2;
     }
@@ -600,6 +692,14 @@
 
     .definition {
       padding: 11px 16px;
+    }
+
+    .trendControls {
+      padding: 12px 16px;
+    }
+
+    .withheldList {
+      padding: 0 16px 12px;
     }
 
     .sourceGrid,

@@ -80,7 +80,14 @@ import {
   type LocalDraftMock,
 } from "../lib/draft-mock";
 import { LatestRequest } from "../lib/latest-request";
+import { useByeWeeks } from "../lib/use-bye-weeks";
 import { DraftWorkspace as DemoDraftWorkspace } from "./draft-workspace";
+
+/** Renders nothing when the schedule cannot affirm a bye, rather than showing a guess. */
+function byeLabel(byeWeeks: ReadonlyMap<string, number>, team: string | null | undefined): string {
+  const week = team ? byeWeeks.get(team.toUpperCase()) : undefined;
+  return week === undefined ? "" : ` · Bye ${String(week)}`;
+}
 
 type BootState = "loading" | "signed-out" | "ready" | "error";
 type RequestState = "idle" | "loading";
@@ -443,6 +450,8 @@ export function DraftSessionWorkspace() {
   );
   const draftLeagueId = selectedLeague?.id;
   const draftSeason = selectedLeague?.season?.season;
+  // The practice room has always shown byes; the real room had none until now.
+  const byeWeeks = useByeWeeks(draftSeason);
 
   useEffect(() => {
     if (!session) {
@@ -2216,6 +2225,7 @@ export function DraftSessionWorkspace() {
                           <strong>{player.name}</strong>
                           <small>
                             {player.positions.join(" · ")} · {player.nflTeam ?? "FA"}
+                            {byeLabel(byeWeeks, player.nflTeam)}
                           </small>
                         </span>
                       </button>
@@ -2497,6 +2507,7 @@ export function DraftSessionWorkspace() {
                   <span>
                     {selectedPlayer.positions.join(" · ")} ·{" "}
                     {selectedPlayer.nflTeam ?? "Free agent"}
+                    {byeLabel(byeWeeks, selectedPlayer.nflTeam)}
                   </span>
                 </div>
               </div>

@@ -30,6 +30,8 @@ import { DrizzleRankingRepository } from "./ranking-repository.js";
 import { deriveRankingShareKeyring, RankingService } from "./ranking-service.js";
 import { DrizzleRegistrationRepository } from "./registration-repository.js";
 import { RegistrationService } from "./registration.js";
+import { DrizzlePreferencesRepository, PreferencesService } from "./preferences.js";
+import { DrizzleScheduleRepository, ScheduleService } from "./schedule.js";
 import { DrizzleStatsCenterRepository, StatsCenterService } from "./stats-center.js";
 import { YahooConnectionService } from "./yahoo-connection.js";
 import { DrizzleYahooSyncRepository, YahooSyncService } from "./yahoo-sync.js";
@@ -54,7 +56,14 @@ const espnLiveDraft = new EspnLiveDraftService(espnLiveDraftRepository, {
 });
 const decisions = new InSeasonDecisionService(new DrizzleInSeasonDecisionRepository(database.db));
 const analytics = new LeagueAnalyticsService(new DrizzleLeagueAnalyticsRepository(database.db));
-const statsCenter = new StatsCenterService(new DrizzleStatsCenterRepository(database.db));
+const schedule = new ScheduleService(new DrizzleScheduleRepository(database.db));
+const preferences = new PreferencesService(new DrizzlePreferencesRepository(database.db));
+// The schedule doubles as the bye source so a player's game log can mark an idle week.
+const statsCenter = new StatsCenterService(
+  new DrizzleStatsCenterRepository(database.db),
+  () => new Date(),
+  schedule,
+);
 const invitations = environment.SESSION_SECRET
   ? new InvitationService(
       new DrizzleInvitationRepository(database.db),
@@ -152,6 +161,8 @@ const app = await buildApp({
   decisions,
   analytics,
   statsCenter,
+  schedule,
+  preferences,
   ...(ai ? { ai } : {}),
   ...(invitations ? { invitations } : {}),
   leagueDashboard,

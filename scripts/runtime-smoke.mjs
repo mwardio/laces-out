@@ -92,7 +92,9 @@ const web = startNode(
 try {
   const landingResponse = await waitForHttp(`http://127.0.0.1:${webPort}/`, web);
   const landingHtml = await landingResponse.text();
-  assert.match(landingHtml, /Know the room/u);
+  // Assert on the hero headline, which is what proves the page server-rendered its own copy.
+  // This drifted once already: the "Know the room" hero was replaced without updating the smoke.
+  assert.match(landingHtml, /Connect your leagues/u);
   assert.match(landingHtml, /Create your account/u);
 
   const workspaceResponse = await waitForHttp(`http://127.0.0.1:${webPort}/app`, web);

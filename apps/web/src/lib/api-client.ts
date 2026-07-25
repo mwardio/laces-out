@@ -17,6 +17,9 @@ import {
   projectionImportCommitResponseSchema,
   projectionImportPreviewResponseSchema,
   projectionSetListResponseSchema,
+  scheduleByesResponseSchema,
+  scheduleResponseSchema,
+  statsCenterPlayerDetailResponseSchema,
   statsCenterResponseSchema,
   type AiAnalysisResponse,
   type AiFeatureName,
@@ -35,6 +38,9 @@ import {
   type ProjectionImportCommitResponse,
   type ProjectionImportPreviewResponse,
   type ProjectionSetListResponse,
+  type ScheduleByesResponse,
+  type ScheduleResponse,
+  type StatsCenterPlayerDetailResponse,
   type StatsCenterResponse,
 } from "@fantasy/contracts";
 import {
@@ -99,6 +105,9 @@ export type {
   ProjectionImportCommitResponse,
   ProjectionImportPreviewResponse,
   ProjectionSetListResponse,
+  ScheduleByesResponse,
+  ScheduleResponse,
+  StatsCenterPlayerDetailResponse,
   StatsCenterResponse,
   RankingList,
   RankingVersion,
@@ -197,6 +206,23 @@ export function parseProjectionPlayerList(value: unknown): ProjectionPlayerListR
 
 export function parseStatsCenterResponse(value: unknown): StatsCenterResponse | null {
   const result = statsCenterResponseSchema.safeParse(value);
+  return result.success ? result.data : null;
+}
+
+export function parseStatsCenterPlayerDetail(
+  value: unknown,
+): StatsCenterPlayerDetailResponse | null {
+  const result = statsCenterPlayerDetailResponseSchema.safeParse(value);
+  return result.success ? result.data : null;
+}
+
+export function parseScheduleResponse(value: unknown): ScheduleResponse | null {
+  const result = scheduleResponseSchema.safeParse(value);
+  return result.success ? result.data : null;
+}
+
+export function parseScheduleByes(value: unknown): ScheduleByesResponse | null {
+  const result = scheduleByesResponseSchema.safeParse(value);
   return result.success ? result.data : null;
 }
 
