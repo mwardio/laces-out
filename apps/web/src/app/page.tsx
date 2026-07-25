@@ -219,9 +219,8 @@ export default function LandingPage() {
                 <span>Get the next move.</span>
               </h1>
               <p className={styles.heroLead}>
-                Laces Out syncs your league, builds its own weekly forecast, and keeps scanning
-                lineups, waivers, trades, opponents, and draft rooms—then uses AI to explain the
-                next move.
+                Laces Out builds its own weekly forecast and keeps scanning lineups, waivers,
+                trades, opponents, and draft rooms—then uses AI to explain the next move.
               </p>
               <div className={styles.heroActions}>
                 <Link className={styles.primaryButton} href="/register">
