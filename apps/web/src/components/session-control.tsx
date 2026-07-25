@@ -23,7 +23,13 @@ function userInitials(user: SessionUser): string {
   return (fromName || user.email[0] || "O").toUpperCase();
 }
 
-export function SessionControl() {
+/**
+ * `showDemoChip` exists for surfaces that render real data to a signed-out
+ * viewer — a shared ranking board is not a demo, and labeling it one
+ * contradicts the sidebar's own "synced league facts stay separate from
+ * sample previews."
+ */
+export function SessionControl({ showDemoChip = true }: { readonly showDemoChip?: boolean } = {}) {
   const [session, setSession] = useState<SessionState>({ status: "checking" });
   const [isLoggingOut, setIsLoggingOut] = useState(false);
   const [logoutFailed, setLogoutFailed] = useState(false);
@@ -119,9 +125,11 @@ export function SessionControl() {
   if (session.status === "guest") {
     return (
       <div className="session-control session-control--guest">
-        <span className="session-demo-chip">
-          <ShieldCheck size={13} /> Demo
-        </span>
+        {showDemoChip ? (
+          <span className="session-demo-chip">
+            <ShieldCheck size={13} /> Demo
+          </span>
+        ) : null}
         <Link className="button button--outline button--small" href="/login">
           <LogIn size={14} /> Sign in
         </Link>

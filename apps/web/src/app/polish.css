@@ -452,6 +452,13 @@
     border-radius: 7px;
   }
 
+  /* @layer polish wins over @layer components, so without this the success-green
+     above repaints every ranking error and only the red text survives. */
+  .ranking-notice--error {
+    background: #fbeceb;
+    border-color: #e8c9c5;
+  }
+
   .demo-banner div {
     gap: 10px;
   }
@@ -1458,6 +1465,23 @@
 
     .login-fields > input,
     .password-field input {
+      font-size: 16px;
+    }
+
+    /* iOS Safari auto-zooms any text field under 16px and never zooms back out.
+       Selects are exempt — they open a picker instead of the keyboard. */
+    .app-shell
+      :is(
+        input[type="text"],
+        input[type="email"],
+        input[type="url"],
+        input[type="tel"],
+        input[type="number"],
+        input[type="search"],
+        input[type="password"],
+        input:not([type]),
+        textarea
+      ) {
       font-size: 16px;
     }
   }

@@ -647,10 +647,13 @@ export function DecisionWorkbench() {
               </option>
             ))}
           </select>
+          {/* In tour mode this re-set the identical snapshot, so pressing it
+              produced no spinner, no change, nothing — reading as a broken app. */}
           <button
             type="button"
             onClick={() => void loadDecisions()}
-            disabled={decision.state === "loading"}
+            disabled={isDemo || decision.state === "loading"}
+            title={isDemo ? "Sign in to recalculate against your own league" : undefined}
           >
             <RefreshCw
               className={decision.state === "loading" ? styles.spin : undefined}
@@ -752,6 +755,12 @@ export function DecisionWorkbench() {
             </span>
           </div>
 
+          <LineupSection snapshot={snapshot} />
+          <WaiverSection snapshot={snapshot} />
+          <TradeSection snapshot={snapshot} />
+
+          {/* Follows the board it reviews — "Pressure-test the board" above the
+              board offered a second opinion before the first one existed. */}
           <div className={styles.aiAnchor} id="decision-ai">
             <AiCoachPanel
               leagueId={selectedLeagueId}
@@ -762,10 +771,6 @@ export function DecisionWorkbench() {
               description="Get a plain-language second read without letting the model invent a lineup, waiver target, or trade package."
             />
           </div>
-
-          <LineupSection snapshot={snapshot} />
-          <WaiverSection snapshot={snapshot} />
-          <TradeSection snapshot={snapshot} />
         </>
       ) : null}
     </div>

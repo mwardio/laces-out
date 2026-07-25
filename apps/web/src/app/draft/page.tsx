@@ -4,7 +4,7 @@ import { AppShell } from "../../components/app-shell";
 import { DraftSessionWorkspace } from "../../components/draft-session-workspace";
 
 export const metadata: Metadata = {
-  title: "Draft Studio | Laces Out",
+  title: "Draft Studio",
   description: "Persistent manual auction and snake draft rooms for synchronized leagues.",
 };
 

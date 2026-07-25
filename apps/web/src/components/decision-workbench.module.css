@@ -232,13 +232,15 @@
     text-transform: uppercase;
   }
 
+  /* These four cells exist to state where a number came from and how old it is.
+     Truncating them to "Oct 8, 12:55 PM · Demo · 47 min…" defeats the point, and
+     there is no title attribute to recover the rest — so wrap instead. */
   .provenance strong {
-    overflow: hidden;
     margin-top: 2px;
     color: #fff;
     font-size: 11px;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    line-height: 1.4;
+    overflow-wrap: anywhere;
   }
 
   .providerWarning {
@@ -569,6 +571,8 @@
     text-transform: uppercase;
   }
 
+  .playerMove strong,
+  .playerMove small,
   .moveValue strong,
   .moveValue small {
     display: block;

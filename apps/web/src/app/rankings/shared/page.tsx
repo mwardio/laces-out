@@ -14,6 +14,7 @@ export default function SharedRankingsPage() {
     <AppShell
       active="rankings"
       context={{ label: "Private share", detail: "Access-key protected", tone: "setup" }}
+      showDemoChip={false}
     >
       <SharedRankingViewer />
     </AppShell>

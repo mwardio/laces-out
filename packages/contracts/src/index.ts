@@ -1320,7 +1320,7 @@ export const projectionSetSummarySchema = z
     sourceLabel: z.string().min(2).max(80),
     sourceFileName: z.string().min(1).max(240).nullable(),
     season: z.number().int().min(2000).max(2100),
-    week: z.number().int().min(1).max(18),
+    week: z.number().int().min(1).max(25).nullable(),
     horizon: projectionImportHorizonSchema,
     playerCount: z.number().int().nonnegative().max(5_000),
     inputChecksum: z.string().regex(/^sha256:[a-f0-9]{64}$/u),
@@ -1330,8 +1330,62 @@ export const projectionSetSummarySchema = z
     importedAt: z.iso.datetime(),
     isOwnedByCurrentUser: z.boolean(),
   })
-  .strict();
+  .strict()
+  .superRefine((value, context) => {
+    if (
+      (value.horizon === "week" && value.week === null) ||
+      (value.horizon === "rest-of-season" && value.week !== null)
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["week"],
+        message: "Weekly sets require a week; rest-of-season sets must use a null week",
+      });
+    }
+  });
 export type ProjectionSetSummary = z.infer<typeof projectionSetSummarySchema>;
+
+export const projectionPlayerRosSummarySchema = z
+  .object({
+    windowStartWeek: z.number().int().min(1).max(25),
+    windowEndWeek: z.number().int().min(1).max(25),
+    asOfWeek: z.number().int().min(0).max(24),
+    asOfAt: z.iso.datetime(),
+    scheduledGames: z.number().int().min(0).max(25),
+    expectedGames: z.number().min(0).max(25),
+    medianPoints: z.number().min(-2_500).max(5_000),
+    meanPointsPerExpectedGame: z.number().min(-100).max(200).nullable(),
+    pointsStddev: z.number().min(0).max(1_000),
+  })
+  .strict();
+export type ProjectionPlayerRosSummary = z.infer<typeof projectionPlayerRosSummarySchema>;
+
+export const projectionPlayerRowSchema = z
+  .object({
+    playerId: z.string().uuid(),
+    fullName: z.string().min(1).max(200),
+    nflTeam: z.string().min(1).max(12).nullable(),
+    primaryPosition: z.string().min(1).max(20),
+    eligiblePositions: z.array(z.string().min(1).max(20)).max(12),
+    status: z.string().min(1).max(80).nullable(),
+    overallRank: z.number().int().positive().max(5_000),
+    positionRank: z.number().int().positive().max(5_000),
+    meanPoints: z.number().min(-2_500).max(5_000),
+    floorPoints: z.number().min(-2_500).max(5_000).nullable(),
+    ceilingPoints: z.number().min(-2_500).max(5_000).nullable(),
+    confidence: z.number().min(0).max(1).nullable(),
+    ros: projectionPlayerRosSummarySchema.nullable(),
+  })
+  .strict();
+export type ProjectionPlayerRow = z.infer<typeof projectionPlayerRowSchema>;
+
+export const projectionPlayerListResponseSchema = z
+  .object({
+    projectionSet: projectionSetSummarySchema,
+    players: z.array(projectionPlayerRowSchema).max(5_000),
+  })
+  .strict();
+export type ProjectionPlayerListResponse = z.infer<typeof projectionPlayerListResponseSchema>;
 
 export const projectionSetListResponseSchema = z
   .object({

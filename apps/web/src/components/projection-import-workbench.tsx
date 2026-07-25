@@ -41,6 +41,8 @@ import {
   projectionSourceAsOfText,
   sourceObservedAtIso,
 } from "../lib/projection-import-form";
+import { loginUrlForCurrentPath } from "../lib/safe-return-to";
+import { ProjectionPlayerBrowser, ProjectionPlayerTour } from "./projection-player-browser";
 import styles from "./projection-import-workbench.module.css";
 
 const MAX_CSV_BYTES = 512 * 1024;
@@ -169,6 +171,8 @@ function ProjectionTour() {
           </div>
         </div>
       </section>
+
+      <ProjectionPlayerTour />
 
       <section className={styles.boundary} aria-label="Import privacy and matching rules">
         <div>
@@ -337,6 +341,7 @@ function ProjectionJumpNav() {
   return (
     <nav className={styles.mobileJump} aria-label="Projection sections">
       <a href="#weekly-forecast">Weekly</a>
+      <a href="#player-projections">Player Board</a>
       <a href="#rest-of-season">Rest of Season</a>
       <a href="#custom-projections">Custom Sets</a>
     </nav>
@@ -618,7 +623,7 @@ export function ProjectionImportWorkbench() {
         body: JSON.stringify({ scope: "player-data" }),
       });
       if (response.status === 401) {
-        window.location.assign("/login");
+        window.location.assign(loginUrlForCurrentPath());
         return;
       }
       if (!response.ok) throw new Error("Forecast input check could not be queued.");
@@ -678,7 +683,9 @@ export function ProjectionImportWorkbench() {
   const visibleDiagnostics = preview?.diagnostics.slice(0, 50) ?? [];
   const managedSets =
     sets.state === "ready"
-      ? sets.data.projectionSets.filter((set) => set.origin === "laces-out" && set.managed)
+      ? sets.data.projectionSets.filter(
+          (set) => set.origin === "laces-out" && set.managed && set.horizon === "week",
+        )
       : [];
   const currentWeek = sets.state === "ready" ? sets.data.league.currentWeek : null;
   const managedStatus = sets.state === "ready" ? sets.data.managedForecastStatus : null;
@@ -730,15 +737,26 @@ export function ProjectionImportWorkbench() {
         <header className={styles.managedHeader}>
           <div>
             <p className={styles.kicker}>Laces Out forecast</p>
+            {/* Only claim "not published" once the fetch has actually resolved.
+                While loading or after a failure this asserted a methodology
+                verdict about a request that never returned. */}
             <h2 id="managed-forecast-title">
-              {managedForecast
-                ? `Week ${managedForecast.week} · ${managedForecast.sourceLabel}`
-                : `Week ${currentWeek ?? "—"} · no managed forecast published`}
+              {sets.state === "loading" || sets.state === "idle"
+                ? "Checking for this week's forecast…"
+                : sets.state === "error"
+                  ? "The forecast could not be loaded"
+                  : managedForecast
+                    ? `Week ${managedForecast.week} · ${managedForecast.sourceLabel}`
+                    : `Week ${currentWeek ?? "—"} · no managed forecast published`}
             </h2>
             <p>
-              {managedForecast
-                ? "League scoring is applied after each position earns either the qualified model or the safer baseline. Input freshness and compute time stay separate."
-                : "The forecast remains unavailable until required inputs, league scoring, coverage, and backtest gates pass."}
+              {sets.state === "loading" || sets.state === "idle"
+                ? "Reading the published forecast and its validation record."
+                : sets.state === "error"
+                  ? "This is a connection problem, not a verdict on the model. Try again in a moment."
+                  : managedForecast
+                    ? "League scoring is applied after each position earns either the qualified model or the safer baseline. Input freshness and compute time stay separate."
+                    : "The forecast remains unavailable until required inputs, league scoring, coverage, and backtest gates pass."}
             </p>
           </div>
           <div className={styles.managedActions}>
@@ -885,6 +903,26 @@ export function ProjectionImportWorkbench() {
           quality gates pass; use Reload list below to read completed results.
         </p>
       </section>
+
+      <ProjectionPlayerBrowser
+        leagueSeasonId={selectedSeasonId}
+        leagueName={
+          sets.state === "ready"
+            ? sets.data.league.name
+            : (selectedPortfolioLeague?.name ?? "Selected league")
+        }
+        currentWeek={currentWeek}
+        projectionSets={sets.state === "ready" ? sets.data.projectionSets : []}
+        withheldNewerRun={managedStatus?.state === "withheld"}
+        listState={
+          sets.state === "loading" || sets.state === "idle"
+            ? "loading"
+            : sets.state === "error"
+              ? "error"
+              : "ready"
+        }
+        listError={sets.state === "error" ? sets.message : undefined}
+      />
 
       <section className={styles.boundary} aria-label="Import privacy and matching rules">
         <div>
@@ -1251,12 +1289,12 @@ export function ProjectionImportWorkbench() {
                       </small>
                     </td>
                     <td>
-                      <strong>Week {set.week}</strong>
+                      <strong>
+                        {set.horizon === "week" ? `Week ${set.week ?? "—"}` : "Rest of season"}
+                      </strong>
                       <small>
                         {set.season} ·{" "}
-                        {set.horizon === "week"
-                          ? "single week"
-                          : "legacy ROS · not used by Decision Desk"}
+                        {set.horizon === "week" ? "single week" : "published league-scored window"}
                       </small>
                     </td>
                     <td>{set.playerCount.toLocaleString()}</td>

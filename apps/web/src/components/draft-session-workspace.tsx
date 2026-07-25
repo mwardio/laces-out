@@ -91,6 +91,13 @@ async function readProblem(response: Response): Promise<ProblemBody | null> {
   return (await response.json().catch(() => null)) as ProblemBody | null;
 }
 
+function staleFor(lastSyncedAt: number | null): string {
+  if (lastSyncedAt === null) return "no update yet";
+  const seconds = Math.max(0, Math.round((Date.now() - lastSyncedAt) / 1000));
+  if (seconds < 60) return `last update ${seconds}s ago`;
+  return `last update ${Math.round(seconds / 60)}m ago`;
+}
+
 function providerLabel(provider: string): string {
   if (provider === "espn") return "ESPN";
   if (provider === "yahoo") return "Yahoo";
@@ -148,6 +155,8 @@ export function DraftSessionWorkspace() {
   const [minimumBid, setMinimumBid] = useState("1");
   const [reconnectId, setReconnectId] = useState("");
   const [requestState, setRequestState] = useState<RequestState>("idle");
+  const [pollFailures, setPollFailures] = useState(0);
+  const [lastSyncedAt, setLastSyncedAt] = useState<number | null>(null);
   const [search, setSearch] = useState("");
   const [position, setPosition] = useState("ALL");
   const [selectedPlayerId, setSelectedPlayerId] = useState("");
@@ -206,11 +215,17 @@ export function DraftSessionWorkspace() {
         if (!options.quiet) {
           setNotice(`Reconnected at event ${parsed.sequence}. Laces Out ledger is current.`);
         }
+        setLastSyncedAt(Date.now());
+        setPollFailures(0);
         return true;
       } catch (error) {
         if (!options.quiet) {
           setNotice(error instanceof Error ? error.message : "That session could not be opened.");
         }
+        // The background poll is quiet, so without this a dead connection left
+        // the header asserting "auto-refresh on" against a frozen sequence —
+        // and a follow-only viewer has no write path that would reveal it.
+        setPollFailures((current) => current + 1);
         return false;
       } finally {
         if (!options.quiet) setRequestState("idle");
@@ -797,7 +812,9 @@ export function DraftSessionWorkspace() {
       if (!response.ok) {
         const problem = await readProblem(response);
         if (response.status === 409 && typeof problem?.currentSequence === "number") {
-          await loadSession(session.id, { quiet: true });
+          // Not quiet: this is the recovery path for an out-of-sync client, and
+          // silencing it meant the resync could fail without anyone knowing.
+          await loadSession(session.id, {});
         }
         throw new Error(problemMessage(problem, "The draft ledger rejected that entry."));
       }
@@ -1323,14 +1340,20 @@ export function DraftSessionWorkspace() {
         <div className="draft-header-actions">
           <div className="connection-indicator">
             <span
-              className={`connection-indicator__dot${localMock ? " connection-indicator__dot--mock" : ""}`}
+              className={`connection-indicator__dot${localMock ? " connection-indicator__dot--mock" : ""}${
+                !localMock && pollFailures > 0 ? " connection-indicator__dot--stale" : ""
+              }`}
             />
             <span>
-              <strong>{localMock ? "Local mock" : "Laces Out ledger"}</strong>
+              <strong>
+                {localMock ? "Local mock" : pollFailures > 0 ? "Reconnecting" : "Laces Out ledger"}
+              </strong>
               <small>
                 {localMock
                   ? `${generatedMockEvents.length} practice events · not saved`
-                  : `Event ${session.sequence} · auto-refresh on`}
+                  : pollFailures > 0
+                    ? `Event ${session.sequence} · ${staleFor(lastSyncedAt)}`
+                    : `Event ${session.sequence} · auto-refresh on`}
               </small>
             </span>
           </div>
@@ -1382,7 +1405,10 @@ export function DraftSessionWorkspace() {
       >
         <span>
           {localMock ? <Dices size={14} /> : <Database size={14} />}{" "}
-          {notice || "Persistent event ledger connected."}
+          {notice ||
+            (!localMock && pollFailures > 0
+              ? `The ledger is not responding. Showing event ${session.sequence} · ${staleFor(lastSyncedAt)}.`
+              : "Persistent event ledger connected.")}
         </span>
         <span className="draft-notice__meta">
           <ShieldCheck size={14} />{" "}

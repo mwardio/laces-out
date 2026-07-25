@@ -332,6 +332,38 @@
     padding: 18px;
   }
 
+  /* Sits where the submit control lives in the signed-in form, so the tour
+     panel is not a form that appears to accept input and has no way to send it. */
+  .tourAsk {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+  }
+
+  .tourAsk > span {
+    color: var(--ink-600);
+    font-size: 12px;
+  }
+
+  .tourAskLink {
+    display: inline-flex;
+    align-items: center;
+    min-height: 34px;
+    padding: 0 14px;
+    color: #fff;
+    background: var(--ink-900);
+    border-radius: 999px;
+    font-size: 12px;
+    font-weight: 700;
+    text-decoration: none;
+  }
+
+  .tourAskLink:hover {
+    background: var(--ink-950);
+  }
+
   .field,
   .fieldRow {
     min-width: 0;
@@ -371,9 +403,9 @@
     resize: vertical;
   }
 
-  .field input:focus,
+  .field input:focus:not([readonly]),
   .field select:focus,
-  .field textarea:focus,
+  .field textarea:focus:not([readonly]),
   .secretField:focus-within {
     border-color: #66845a;
     box-shadow: 0 0 0 3px rgba(90, 126, 73, 0.13);
@@ -385,6 +417,19 @@
     background: var(--paper-50);
     cursor: not-allowed;
     opacity: 1;
+  }
+
+  /* Tour-mode fields are readonly. Without this they render identically to live
+     inputs, take a caret and a focus ring, then silently swallow every keystroke. */
+  .field input[readonly],
+  .field textarea[readonly] {
+    color: var(--ink-600);
+    background: var(--paper-50);
+    cursor: default;
+  }
+
+  .field textarea[readonly] {
+    resize: none;
   }
 
   .field small {

@@ -13,7 +13,11 @@ import {
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { apiBaseUrl, parseRosProjectionStatus, type RosProjectionStatus } from "../lib/api-client";
-import { describeRosProjectionRail } from "../lib/ros-projection-status";
+import {
+  describeRosProjectionRail,
+  humanizeRosQualityState,
+  humanizeRosRunMode,
+} from "../lib/ros-projection-status";
 import styles from "./ros-projection-lab-panel.module.css";
 
 type PanelState =
@@ -173,11 +177,11 @@ export function RosProjectionLabPanel() {
       <div className={styles.header}>
         <div>
           <p className={styles.kicker}>Rest-of-season forecast</p>
-          <h2 id="ros-lab-title">Rest-of-season model readiness</h2>
+          <h2 id="ros-lab-title">Rest-of-season forecast status</h2>
           <p>
-            See whether the league-scored forecast is ready, when it last ran, and how many players
-            it covers. ROS values remain isolated from recommendations until every release check
-            passes.
+            Whether the rest-of-season forecast is ready for your league, when it was last checked,
+            and what is still outstanding. Until every check passes it is withheld — it never
+            quietly feeds a lineup, waiver, or trade call.
           </p>
         </div>
         {panel.state === "ready" ? (
@@ -200,7 +204,7 @@ export function RosProjectionLabPanel() {
 
       {panel.state === "loading" ? (
         <p className={styles.message}>
-          <LoaderCircle size={14} aria-hidden="true" /> Loading rail status…
+          <LoaderCircle size={14} aria-hidden="true" /> Checking forecast status…
         </p>
       ) : null}
 
@@ -237,34 +241,36 @@ function RosStatusBody({ status }: { readonly status: RosProjectionStatus }) {
           <small>Model {status.modelVersion}</small>
         </div>
         <div>
-          <span>Champion artifact</span>
-          <strong>{description.artifactPresent ? "Admitted" : "None"}</strong>
+          <span>Validated model</span>
+          <strong>{description.artifactPresent ? "In use" : "None yet"}</strong>
           <small>
             {description.artifactPresent
-              ? "Validated at publication time"
-              : "Rail stays fail-closed"}
+              ? "Re-checked every time it publishes"
+              : "Nothing publishes until one passes"}
           </small>
         </div>
         <div>
-          <span>Last evaluated</span>
+          <span>Last checked</span>
           <strong>{readableDate(description.lastEvaluatedIso)}</strong>
           <small>
-            {status.latestRun ? `Run state: ${status.latestRun.qualityState}` : "No runs"}
+            {status.latestRun
+              ? humanizeRosQualityState(status.latestRun.qualityState)
+              : "Not checked yet this season"}
           </small>
         </div>
         <div>
-          <span>Published sets</span>
+          <span>Leagues receiving it</span>
           <strong>{description.publishedLeagueCount}</strong>
           <small>
             {description.publishedLeagueCount === 0
-              ? "No leagues published"
+              ? "None yet"
               : `${description.publishedPlayerCount} players · ${readableDate(description.lastPublishedIso)}`}
           </small>
         </div>
       </div>
 
       <div className={styles.section}>
-        <h3>Champion artifact</h3>
+        <h3>Where it stands</h3>
         <p className={styles.artifactLine}>
           {description.artifactPresent ? (
             <ShieldCheck size={15} aria-hidden="true" />
@@ -273,75 +279,101 @@ function RosStatusBody({ status }: { readonly status: RosProjectionStatus }) {
           )}
           {description.artifactSummary}
         </p>
-        {status.artifact.present ? (
-          <div className={styles.setMeta}>
-            <span>
-              Policy {status.artifact.policyVersion} · Calibration{" "}
-              {status.artifact.calibrationVersion}
-            </span>
-            <span className={styles.checksum}>
-              Checksum {shortenedChecksum(status.artifact.artifactChecksum)}
-            </span>
-            <span>Admitted {readableDate(status.artifact.admittedAt)}</span>
-            <span>{status.artifact.sourceChecksums.length} pinned source checksums</span>
-          </div>
-        ) : null}
-      </div>
-
-      <div className={styles.section}>
-        <h3>Latest model-run audit</h3>
         {status.latestRun ? (
-          <>
-            <div className={styles.setMeta}>
-              <span>Mode {status.latestRun.mode}</span>
-              <span>Quality {status.latestRun.qualityState}</span>
-              <span>Can publish: {status.latestRun.canPublish ? "yes" : "no"}</span>
-              <span>
-                Window W{status.latestRun.windowStartWeek}–W{status.latestRun.windowEndWeek} (as of
-                W{status.latestRun.asOfWeek})
-              </span>
-              <span>
-                {status.latestRun.playersPublished}/{status.latestRun.playersEvaluated} players
-                published
-              </span>
-            </div>
-            {description.reasons.length > 0 ? (
+          description.reasons.length > 0 ? (
+            <>
+              <p className={styles.reasonLead}>
+                {description.isShadow
+                  ? "Still outstanding before it can be published:"
+                  : "Noted on the most recent check:"}
+              </p>
               <ul className={styles.reasonList}>
                 {description.reasons.map((reason) => (
                   <li key={reason.code}>
                     <CircleAlert size={14} aria-hidden="true" />
-                    <span>
-                      {reason.label}
-                      <span className={styles.reasonCode}>{reason.code}</span>
-                    </span>
+                    <span>{reason.label}</span>
                   </li>
                 ))}
               </ul>
-            ) : (
-              <p className={styles.empty}>No withhold or degraded reasons recorded.</p>
-            )}
-          </>
+            </>
+          ) : (
+            <p className={styles.empty}>Nothing is currently holding it back.</p>
+          )
         ) : (
           <p className={styles.empty}>
-            No rest-of-season model run has been recorded yet. The rail has not evaluated this
-            season.
+            This season has not been checked yet, so there is nothing to publish.
           </p>
         )}
       </div>
 
+      {/* Operator detail: precise, still available, no longer the first thing a
+          fantasy manager reads on a top-level nav item. */}
+      <details className={styles.evidence}>
+        <summary>Model evidence (advanced)</summary>
+        <div className={styles.evidenceBody}>
+          {status.artifact.present ? (
+            <div>
+              <h4>Validated model package</h4>
+              <div className={styles.setMeta}>
+                <span>
+                  Policy {status.artifact.policyVersion} · Calibration{" "}
+                  {status.artifact.calibrationVersion}
+                </span>
+                <span className={styles.checksum}>
+                  Checksum {shortenedChecksum(status.artifact.artifactChecksum)}
+                </span>
+                <span>Admitted {readableDate(status.artifact.admittedAt)}</span>
+                <span>{status.artifact.sourceChecksums.length} pinned source checksums</span>
+              </div>
+            </div>
+          ) : null}
+
+          {status.latestRun ? (
+            <div>
+              <h4>Most recent model run</h4>
+              <div className={styles.setMeta}>
+                <span>{humanizeRosRunMode(status.latestRun.mode)}</span>
+                <span>{humanizeRosQualityState(status.latestRun.qualityState)}</span>
+                <span>
+                  {status.latestRun.canPublish ? "Cleared to publish" : "Not cleared to publish"}
+                </span>
+                <span>
+                  Weeks {status.latestRun.windowStartWeek}–{status.latestRun.windowEndWeek} (as of
+                  week {status.latestRun.asOfWeek})
+                </span>
+                <span>
+                  {status.latestRun.playersPublished} of {status.latestRun.playersEvaluated} players
+                  published
+                </span>
+              </div>
+              {description.reasons.length > 0 ? (
+                <ul className={styles.reasonCodeList}>
+                  {description.reasons.map((reason) => (
+                    <li key={reason.code}>{reason.code}</li>
+                  ))}
+                </ul>
+              ) : null}
+            </div>
+          ) : null}
+        </div>
+      </details>
+
       <div className={styles.section}>
-        <h3>Published sets</h3>
+        <h3>Leagues receiving this forecast</h3>
         {status.publishedSets.length === 0 ? (
           <p className={styles.empty}>
-            No league-scoped rest-of-season set is published, which is expected while the rail is
-            fail-closed.
+            None yet. That is the expected state while the forecast is still being validated — it is
+            withheld rather than published unproven.
           </p>
         ) : (
           <div className={styles.setList}>
             {status.publishedSets.map((set) => (
               <article key={set.projectionSetId}>
                 <header>
-                  <span>League season {set.leagueSeasonId}</span>
+                  <span>
+                    {set.scoringProfileKey ? `${set.scoringProfileKey} scoring` : "League forecast"}{" "}
+                    · {set.leagueSeasonId.slice(0, 8)}
+                  </span>
                   <span>
                     <Clock3 size={13} aria-hidden="true" /> {readableDate(set.fetchedAt)}
                   </span>
@@ -349,18 +381,22 @@ function RosStatusBody({ status }: { readonly status: RosProjectionStatus }) {
                 <div className={styles.setMeta}>
                   <span>{set.playerCount} players</span>
                   <span>
-                    Window W{set.windowStartWeek}–W{set.windowEndWeek} (as of W{set.asOfWeek})
+                    Weeks {set.windowStartWeek}–{set.windowEndWeek} (as of week {set.asOfWeek})
                   </span>
-                  {set.scoringProfileKey ? <span>Scoring {set.scoringProfileKey}</span> : null}
-                  <span className={styles.checksum}>
-                    Input {shortenedChecksum(set.inputChecksum)}
-                  </span>
-                  {set.championArtifactChecksum ? (
-                    <span className={styles.checksum}>
-                      Artifact {shortenedChecksum(set.championArtifactChecksum)}
-                    </span>
-                  ) : null}
                 </div>
+                <details className={styles.setEvidence}>
+                  <summary>Checksums</summary>
+                  <div className={styles.setMeta}>
+                    <span className={styles.checksum}>
+                      Input {shortenedChecksum(set.inputChecksum)}
+                    </span>
+                    {set.championArtifactChecksum ? (
+                      <span className={styles.checksum}>
+                        Model {shortenedChecksum(set.championArtifactChecksum)}
+                      </span>
+                    ) : null}
+                  </div>
+                </details>
               </article>
             ))}
           </div>

@@ -1,6 +1,12 @@
 @layer components {
   .panel {
     display: grid;
+    /* This is the one route that renders two top-level components in AppShell.
+       The workbench wraps itself in `.page` (min(100%,1460px), 30px padding), so
+       its cards render at 1400px. Matching that box keeps this panel's border on
+       the same vertical line instead of 30px past it on each side. */
+    width: min(100% - 60px, 1400px);
+    margin: 0 auto 72px;
     gap: 16px;
     padding: 20px 22px 22px;
     background: var(--paper-50);
@@ -218,12 +224,71 @@
     color: #b08400;
   }
 
-  .reasonCode {
-    display: block;
-    margin-top: 2px;
+  .setEvidence {
+    margin-top: 6px;
+  }
+
+  .setEvidence > summary {
     color: var(--ink-500);
+    cursor: pointer;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+
+  .setEvidence > div {
+    margin-top: 6px;
+  }
+
+  .reasonLead {
+    margin: 10px 0 6px;
+    color: var(--ink-600);
+    font-size: 12px;
+  }
+
+  /* Raw reason codes moved out of the manager-facing list and into the advanced
+     disclosure, where they are useful for debugging a run. */
+  .reasonCodeList {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 10px;
+    margin: 8px 0 0;
+    padding: 0;
+    color: var(--ink-500);
+    list-style: none;
     font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
-    font-size: 9px;
+    font-size: 10px;
+  }
+
+  .evidence {
+    margin-top: 4px;
+    padding: 10px 12px;
+    background: var(--paper-100);
+    border: 1px solid var(--ink-150);
+    border-radius: 10px;
+  }
+
+  .evidence > summary {
+    color: var(--ink-700);
+    cursor: pointer;
+    font-size: 11px;
+    font-weight: 800;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+  }
+
+  .evidenceBody {
+    display: grid;
+    gap: 14px;
+    margin-top: 12px;
+  }
+
+  .evidenceBody h4 {
+    margin: 0 0 6px;
+    color: var(--ink-800);
+    font-size: 12px;
+    font-weight: 800;
   }
 
   .setList {
@@ -274,6 +339,9 @@
 
   @media (max-width: 820px) {
     .panel {
+      /* The workbench drops to 14px padding here, so match its card edge. */
+      width: min(100% - 28px, 1400px);
+      margin-bottom: 92px;
       gap: 12px;
       padding: 16px 14px;
       scroll-margin-top: calc(var(--topbar-height) + 12px);

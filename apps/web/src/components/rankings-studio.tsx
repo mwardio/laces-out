@@ -37,6 +37,7 @@ import {
   guardedNavigationCommitEvent,
   guardedNavigationRequestEvent,
 } from "../lib/navigation-guard";
+import { loginUrlForCurrentPath } from "../lib/safe-return-to";
 import { DemoRankingsStudio } from "./demo-rankings-studio";
 
 type Position = "QB" | "RB" | "WR" | "TE" | "K" | "DST" | "LB" | "DL" | "DB" | "IDP";
@@ -405,6 +406,8 @@ export function RankingsStudio() {
   const [versionState, setVersionState] = useState<RequestState>("idle");
   const [actionState, setActionState] = useState<RequestState>("idle");
   const [message, setMessage] = useState<string | null>(null);
+  const noticeIsError =
+    actionState === "error" || pageState === "error" || versionState === "error";
   const [showCreate, setShowCreate] = useState(false);
   const [newName, setNewName] = useState("My 2026 draft board");
   const [newKind, setNewKind] = useState<ListKind>("cheat-sheet");
@@ -1209,7 +1212,7 @@ export function RankingsStudio() {
         { credentials: "include" },
       );
       if (response.status === 401) {
-        window.location.assign("/login");
+        window.location.assign(loginUrlForCurrentPath());
         return;
       }
       if (!response.ok)
@@ -1341,12 +1344,14 @@ export function RankingsStudio() {
         </div>
       </section>
 
+      {/* A load failure sets pageState, not actionState, so keying the tone off
+          actionState alone rendered "Failed to fetch" as a green checkmark. */}
       {message ? (
         <div
-          className={`ranking-notice ranking-notice--${actionState === "error" ? "error" : "info"}`}
-          role={actionState === "error" ? "alert" : "status"}
+          className={`ranking-notice ranking-notice--${noticeIsError ? "error" : "info"}`}
+          role={noticeIsError ? "alert" : "status"}
         >
-          {actionState === "error" ? <TriangleAlert size={16} /> : <Check size={16} />}
+          {noticeIsError ? <TriangleAlert size={16} /> : <Check size={16} />}
           <span>{message}</span>
           <button type="button" aria-label="Dismiss message" onClick={() => setMessage(null)}>
             <X size={15} />
@@ -1449,11 +1454,20 @@ export function RankingsStudio() {
               <LoaderCircle className="spin" size={18} /> Loading boards…
             </div>
           ) : null}
-          {pageState !== "working" && lists.length === 0 ? (
+          {/* "done" only — a failed load left lists empty and claimed the user
+              had no boards. */}
+          {pageState === "done" && lists.length === 0 ? (
             <div className="ranking-empty">
               <FileSpreadsheet size={24} />
               <strong>No boards yet</strong>
               <p>Create one, then import a custom CSV.</p>
+            </div>
+          ) : null}
+          {pageState === "error" ? (
+            <div className="ranking-empty">
+              <TriangleAlert size={24} />
+              <strong>Your boards could not be loaded</strong>
+              <p>They are still saved. Try again in a moment.</p>
             </div>
           ) : null}
           <div className="ranking-list">

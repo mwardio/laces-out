@@ -117,13 +117,21 @@ export function InvitationAcceptance() {
         </span>
         <div>
           <p className="eyebrow">Private invitation</p>
-          <h1>{state === "accepted" ? "You’re in" : "Join the league room"}</h1>
+          <h1>
+            {state === "accepted"
+              ? "You’re in"
+              : state === "error"
+                ? "This invitation can’t be opened"
+                : "Join the league room"}
+          </h1>
           <p>
             {state === "loading"
               ? "Checking the invitation securely…"
               : inspection
                 ? `Invitation for ${inspection.emailHint}`
-                : "Ask the league administrator for a fresh invitation if needed."}
+                : state === "error"
+                  ? "Invitation links expire and can only be used once."
+                  : "Ask the league administrator for a fresh invitation if needed."}
           </p>
         </div>
       </div>
@@ -219,10 +227,19 @@ export function InvitationAcceptance() {
       ) : null}
 
       {state === "error" ? (
-        <div className="login-demo-route">
-          <span>Already have an account?</span>
-          <Link href="/login">Sign in</Link>
-        </div>
+        <>
+          <p className="login-error-help">
+            Ask your league host for a fresh invitation link. You can look around in the meantime —
+            the tour needs no account.
+          </p>
+          <Link className="button button--lime login-submit" href="/app">
+            Tour the locker room <ArrowRight size={15} />
+          </Link>
+          <div className="login-demo-route">
+            <span>Already have an account?</span>
+            <Link href="/login">Sign in</Link>
+          </div>
+        </>
       ) : null}
     </form>
   );

@@ -1,12 +1,13 @@
 "use client";
 
-import { Check, FileSpreadsheet, Info, ListPlus, RefreshCw, Save, ShieldCheck } from "lucide-react";
+import { Check, FileSpreadsheet, Info, ListPlus, Save, ShieldCheck } from "lucide-react";
+import Link from "next/link";
 
 import { draftPlayers } from "../lib/demo-data";
 
 export function DemoRankingsStudio() {
   return (
-    <div className="rankings-page">
+    <div className="rankings-page rankings-page--tour">
       <div className="ranking-demo-notice" role="status">
         <Info size={17} />
         <span>
@@ -24,12 +25,12 @@ export function DemoRankingsStudio() {
           </p>
         </div>
         <div className="heading-actions">
-          <button className="button button--outline" type="button" disabled>
-            <RefreshCw size={15} /> Refresh
-          </button>
-          <button className="button button--dark" type="button" disabled>
-            <ListPlus size={15} /> New board
-          </button>
+          {/* The tour's controls are all inert. Two solid-looking disabled buttons in
+              the most prominent slot read as a page that failed to load, and this was
+              the only tour surface with no way to sign in from the content. */}
+          <Link className="button button--dark" href="/login">
+            <ListPlus size={15} /> Sign in to build your board
+          </Link>
         </div>
       </section>
 
@@ -124,7 +125,7 @@ export function DemoRankingsStudio() {
                   </tr>
                 </thead>
                 <tbody>
-                  {draftPlayers.slice(0, 8).map((player) => (
+                  {draftPlayers.slice(0, 12).map((player) => (
                     <tr key={player.id}>
                       <th scope="row">
                         <strong>{player.name}</strong>

@@ -35,6 +35,17 @@
 }
 
 @layer components {
+  /* Every control on the rankings tour is inert. The global disabled treatment is
+     opacity alone, which on a filled dark or lime button still reads as live —
+     so the page looked like it had failed rather than like a preview. */
+  .rankings-page--tour button:disabled {
+    color: var(--ink-500);
+    background: var(--paper-50);
+    border-color: var(--ink-150);
+    box-shadow: none;
+    opacity: 1;
+  }
+
   .ranking-demo-notice {
     display: grid;
     grid-template-columns: auto minmax(0, 1fr);
@@ -731,6 +742,11 @@
   .connection-indicator__dot--mock {
     background: var(--lime-400);
     box-shadow: 0 0 0 2px rgba(180, 221, 82, 0.2);
+  }
+
+  .connection-indicator__dot--stale {
+    background: #c0553f;
+    box-shadow: 0 0 0 2px rgba(192, 85, 63, 0.2);
   }
 
   .draft-mock-panel {
@@ -1533,6 +1549,36 @@
     border-top: 1px solid var(--ink-100);
   }
 
+  /* Scroll affordance for wide tables. ScrollCues sets data-cue-start/end; the
+     overlay is a sticky child of the scroller so it paints above the opaque
+     cells and sticky first columns that hide a background-based cue. */
+  .scroll-cue-host {
+    position: relative;
+  }
+
+  .scroll-cue-host::after {
+    position: absolute;
+    top: var(--cue-top, 0);
+    right: 0;
+    width: 32px;
+    height: var(--cue-height, 100%);
+    background: linear-gradient(to left, rgb(23 35 28 / 16%), rgb(23 35 28 / 0%));
+    opacity: 0;
+    transition: opacity 130ms ease;
+    pointer-events: none;
+    content: "";
+  }
+
+  .scroll-cue-host[data-cue-end="true"]::after {
+    opacity: 1;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .scroll-cue-host::after {
+      transition: none;
+    }
+  }
+
   .ranking-table-wrap {
     overflow-x: auto;
     border-top: 1px solid var(--ink-100);
@@ -1540,7 +1586,9 @@
 
   .ranking-table {
     width: 100%;
-    min-width: 950px;
+    /* 950px overflowed the card at an ordinary 1440px desktop, slicing the
+       Signal column mid-pill. */
+    min-width: 820px;
   }
 
   .ranking-table th {
@@ -2190,10 +2238,17 @@
     font-size: 0.85rem;
   }
 
-  .dashboard-mode-notice a {
+  .dashboard-mode-notice a,
+  .dashboard-mode-notice > button {
     margin-left: auto;
     color: inherit;
     font-weight: 700;
+  }
+
+  .dashboard-mode-notice--error {
+    background: #fbeceb;
+    border-color: #e0b4ae;
+    color: #7a2f26;
   }
 
   .dashboard-mode-notice--demo {
@@ -3092,6 +3147,30 @@
   .connection-heading {
     align-items: center;
     gap: 28px;
+  }
+  .connection-signed-out-notice {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 16px;
+    padding: 12px 14px;
+    color: #66430a;
+    background: #fff7e8;
+    border: 1px solid #efc972;
+    border-radius: 10px;
+    font-size: 12px;
+  }
+  .connection-signed-out-notice > span {
+    display: grid;
+    gap: 2px;
+  }
+  .connection-signed-out-notice strong {
+    font-size: 12px;
+    font-weight: 800;
+  }
+  .connection-signed-out-notice .button {
+    margin-left: auto;
+    flex-shrink: 0;
   }
   .connection-security-chip {
     display: flex;
@@ -4966,6 +5045,14 @@
     width: 100%;
     min-height: 43px;
     margin-top: 18px;
+  }
+  /* Recovery copy for a failed invitation, rendered under the error banner
+     rather than above it as a subtitle. */
+  .login-error-help {
+    margin: 4px 0 16px;
+    color: var(--ink-600);
+    font-size: 12px;
+    line-height: 1.55;
   }
   .login-demo-route {
     display: flex;

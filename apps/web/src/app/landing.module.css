@@ -307,6 +307,16 @@
   font-size: 12px;
 }
 
+/* The primary CTA reads "Create your account"; registration actually requires a
+   host-issued code. Say so next to the button, not 6,000px down the page. */
+.heroGate {
+  max-width: 46ch;
+  margin: 14px 0 0;
+  color: #8b968d;
+  font-size: 11px;
+  line-height: 1.55;
+}
+
 .heroProof {
   display: flex;
   flex-wrap: wrap;
@@ -828,6 +838,9 @@
 
 .syncGrid {
   display: grid;
+  /* Without this the shorter column stretches to match the provider stack and
+     ~38% of the largest white panel on the dark band renders empty. */
+  align-items: start;
   grid-template-columns: minmax(340px, 0.88fr) minmax(0, 1.12fr);
   gap: 16px;
   margin-top: 46px;
@@ -2238,6 +2251,9 @@
   .heroCopy h1 {
     margin-top: 20px;
     font-size: clamp(44px, 13.8vw, 61px);
+    /* 0.96 collides descenders with the next line's ascenders at this size —
+       "your"/"leagues." merge into one pixel run in the largest type on the site. */
+    line-height: 1.03;
   }
 
   .heroLead {

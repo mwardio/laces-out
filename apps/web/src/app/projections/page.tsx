@@ -7,7 +7,7 @@ import { RosProjectionLabPanel } from "../../components/ros-projection-lab-panel
 export const metadata: Metadata = {
   title: "Projection Lab",
   description:
-    "Review Laces Out weekly forecasts and import private or league-shared projections with strict player matching.",
+    "Browse league-scored weekly and rest-of-season player forecasts, or import private and league-shared projections.",
 };
 
 export default function ProjectionsPage() {

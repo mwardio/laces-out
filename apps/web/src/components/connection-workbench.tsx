@@ -5,6 +5,7 @@ import {
   Check,
   Clipboard,
   ExternalLink,
+  Info,
   KeyRound,
   Link2,
   LoaderCircle,
@@ -30,6 +31,7 @@ import {
 import { createEspnBookmarklet, currentEspnSeason } from "../lib/espn-bookmarklet";
 import { parseEspnLeagueIds } from "../lib/espn-league-ids";
 import { yahooComingSoon } from "../lib/public-site";
+import { loginUrlForCurrentPath } from "../lib/safe-return-to";
 
 interface BridgeCredential {
   readonly deviceId: string;
@@ -200,6 +202,7 @@ export function ConnectionWorkbench() {
   const [bridgeDevices, setBridgeDevices] = useState<readonly BridgeDevice[]>([]);
   const [bridgeDevicesState, setBridgeDevicesState] = useState<RequestState>("working");
   const [bridgeDevicesError, setBridgeDevicesError] = useState<string | null>(null);
+  const [signedOut, setSignedOut] = useState(false);
   const [revokingDeviceId, setRevokingDeviceId] = useState<string | null>(null);
   const [bridgeRevokeCandidate, setBridgeRevokeCandidate] = useState<string | null>(null);
   const [copyState, setCopyState] = useState<"idle" | "done" | "error">("idle");
@@ -243,6 +246,7 @@ export function ConnectionWorkbench() {
       });
       if (response.status === 401) {
         setBridgeDevicesState("idle");
+        setSignedOut(true);
         return;
       }
       if (!response.ok) throw new ConnectionUiError("Paired ESPN browsers could not be loaded.");
@@ -272,6 +276,7 @@ export function ConnectionWorkbench() {
       });
       if (response.status === 401) {
         setYahooConnectionsState("idle");
+        setSignedOut(true);
         return;
       }
       if (!response.ok) {
@@ -352,7 +357,7 @@ export function ConnectionWorkbench() {
         body: JSON.stringify({ returnTo: "/connections" }),
       });
       if (response.status === 401) {
-        window.location.assign("/login");
+        window.location.assign(loginUrlForCurrentPath());
         return;
       }
       if (!response.ok) {
@@ -394,7 +399,7 @@ export function ConnectionWorkbench() {
         headers: { Accept: "application/json" },
       });
       if (response.status === 401) {
-        window.location.assign("/login");
+        window.location.assign(loginUrlForCurrentPath());
         return;
       }
       if (!response.ok) {
@@ -445,7 +450,7 @@ export function ConnectionWorkbench() {
         },
       );
       if (response.status === 401) {
-        window.location.assign("/login");
+        window.location.assign(loginUrlForCurrentPath());
         return;
       }
       if (!response.ok) {
@@ -501,7 +506,7 @@ export function ConnectionWorkbench() {
         body: JSON.stringify({ name: credentialName, allowedLeagueIds }),
       });
       if (response.status === 401) {
-        window.location.assign("/login");
+        window.location.assign(loginUrlForCurrentPath());
         return;
       }
       if (!response.ok) {
@@ -579,7 +584,7 @@ export function ConnectionWorkbench() {
         headers: { Accept: "application/json" },
       });
       if (response.status === 401) {
-        window.location.assign("/login");
+        window.location.assign(loginUrlForCurrentPath());
         return;
       }
       if (!response.ok) throw new ConnectionUiError("This bridge device could not be revoked.");
@@ -623,10 +628,29 @@ export function ConnectionWorkbench() {
       ? "Awaiting first sync"
       : bridgeDevicesState === "working"
         ? "Checking status"
-        : "Ready to connect";
+        : signedOut
+          ? "Sign in to connect"
+          : "Ready to connect";
 
   return (
     <div className="connections-page">
+      {/* Every other workbench branches on signed-out; this one rendered a live
+          ESPN form to anonymous visitors and bounced them on submit. */}
+      {signedOut ? (
+        <div className="connection-signed-out-notice" role="status">
+          <Info size={17} aria-hidden="true" />
+          <span>
+            <strong>You are signed out</strong>
+            Connecting a league needs an account, so nothing below will save yet.
+          </span>
+          {/* Plain anchor: the returnTo target is computed at render time, which
+              `typedRoutes` cannot verify against the static route map. */}
+          <a className="button button--dark button--small" href={loginUrlForCurrentPath()}>
+            Sign in
+          </a>
+        </div>
+      ) : null}
+
       <section className="page-heading connection-heading">
         <div>
           <p className="eyebrow">League connections</p>
@@ -825,7 +849,13 @@ export function ConnectionWorkbench() {
                       className="button button--lime espn-bookmarklet__link"
                       href="#espn-bookmarklet"
                       draggable
-                      onClick={(event) => event.preventDefault()}
+                      onClick={(event) => {
+                        // Dragging never fires click, so desktop draggers are
+                        // unaffected. Previously a tap (or a click by anyone
+                        // whose bookmarks bar is hidden) did nothing at all.
+                        event.preventDefault();
+                        void copyBookmarklet();
+                      }}
                     >
                       <Link2 size={15} />
                       Laces Out · Sync ESPN
@@ -1469,7 +1499,9 @@ export function ConnectionWorkbench() {
             {yahooState !== "working" ? <ArrowRight size={15} /> : null}
           </button>
           <small className="provider-attribution">
-            Official Yahoo Fantasy attribution is displayed throughout the signed-in locker room.
+            {yahooComingSoon
+              ? "Official Yahoo Fantasy attribution appears throughout the locker room once Yahoo sync is enabled."
+              : "Official Yahoo Fantasy attribution is displayed throughout the signed-in locker room."}
           </small>
         </article>
       </section>

@@ -1,5 +1,6 @@
 import { loadEnvironment } from "@fantasy/config";
 import type {
+  ProjectionPlayerListResponse,
   ProjectionImportCommitResponse,
   ProjectionImportPreviewResponse,
   ProjectionSetListResponse,
@@ -104,9 +105,31 @@ const commitResponse: ProjectionImportCommitResponse = {
   deduplicated: false,
 };
 
+const playerListResponse: ProjectionPlayerListResponse = {
+  projectionSet: setSummary,
+  players: [
+    {
+      playerId: "50000000-0000-4000-8000-000000000001",
+      fullName: "Exact Runner",
+      nflTeam: "CHI",
+      primaryPosition: "RB",
+      eligiblePositions: ["RB", "FLEX"],
+      status: "ACTIVE",
+      overallRank: 1,
+      positionRank: 1,
+      meanPoints: 18.25,
+      floorPoints: 11,
+      ceilingPoints: 27,
+      confidence: 0.8,
+      ros: null,
+    },
+  ],
+};
+
 function projectionPort(): ProjectionImportPort {
   return {
     list: vi.fn(() => Promise.resolve(listResponse)),
+    getPlayers: vi.fn(() => Promise.resolve(playerListResponse)),
     preview: vi.fn(() => Promise.resolve(previewResponse)),
     commit: vi.fn(() => Promise.resolve(commitResponse)),
   };
@@ -138,6 +161,45 @@ describe("projection import routes", () => {
     expect(allowed.statusCode).toBe(200);
     expect(allowed.json()).toMatchObject({ projectionSets: [{ id: SET_ID }] });
     expect(projections.list).toHaveBeenCalledWith(USER_ID, SEASON_ID);
+    await app.close();
+  });
+
+  it("requires authentication and validated IDs for player-level projection rows", async () => {
+    const projections = projectionPort();
+    const app = await buildApp({
+      environment: loadEnvironment({ NODE_ENV: "test" }),
+      logger: false,
+      requireAuthentication: true,
+      authService: authenticatedService(),
+      projectionImports: projections,
+    });
+
+    const denied = await app.inject({
+      method: "GET",
+      url: `/v1/league-seasons/${SEASON_ID}/projections/${SET_ID}/players`,
+    });
+    expect(denied.statusCode).toBe(401);
+    expect(projections.getPlayers).not.toHaveBeenCalled();
+
+    const allowed = await app.inject({
+      method: "GET",
+      url: `/v1/league-seasons/${SEASON_ID}/projections/${SET_ID}/players`,
+      headers: { cookie: COOKIE },
+    });
+    expect(allowed.statusCode).toBe(200);
+    expect(allowed.json()).toMatchObject({
+      projectionSet: { id: SET_ID },
+      players: [{ fullName: "Exact Runner", meanPoints: 18.25 }],
+    });
+    expect(projections.getPlayers).toHaveBeenCalledWith(USER_ID, SEASON_ID, SET_ID);
+
+    const invalid = await app.inject({
+      method: "GET",
+      url: `/v1/league-seasons/${SEASON_ID}/projections/not-a-uuid/players`,
+      headers: { cookie: COOKIE },
+    });
+    expect(invalid.statusCode).toBe(400);
+    expect(projections.getPlayers).toHaveBeenCalledTimes(1);
     await app.close();
   });
 

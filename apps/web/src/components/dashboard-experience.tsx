@@ -27,6 +27,7 @@ import {
 } from "../lib/api-client";
 import { LatestRequest } from "../lib/latest-request";
 import { yahooComingSoon } from "../lib/public-site";
+import { loginUrlForCurrentPath } from "../lib/safe-return-to";
 import { DEMO_LEAGUE_ID } from "../lib/demo-contract-data";
 import { AiCoachPanel } from "./ai-coach-panel";
 import { PortfolioDashboard } from "./portfolio-dashboard";
@@ -37,6 +38,7 @@ type PortfolioState =
       readonly status: "demo";
       readonly reason: "signed-out" | "api-unavailable" | "invalid-response";
     }
+  | { readonly status: "unavailable"; readonly reason: "api-unavailable" | "invalid-response" }
   | { readonly status: "live"; readonly portfolio: LeagueListResponse };
 
 type DashboardState =
@@ -156,6 +158,38 @@ function LoadingDashboard() {
       <div>
         <strong>Loading your leagues</strong>
         <span>Checking your session and synchronized data…</span>
+      </div>
+    </div>
+  );
+}
+
+function PortfolioUnavailable({
+  reason,
+  retry,
+  showSample,
+}: {
+  readonly reason: Extract<PortfolioState, { status: "unavailable" }>["reason"];
+  readonly retry: () => void;
+  readonly showSample: () => void;
+}) {
+  return (
+    <div className="dashboard-page">
+      <div className="dashboard-mode-notice dashboard-mode-notice--error" role="alert">
+        <CircleAlert size={16} />
+        <span>
+          {reason === "api-unavailable"
+            ? "Your leagues could not be loaded. They are still there — this is a connection problem, not a data loss."
+            : "The API returned a response this version could not read, so your leagues were withheld rather than guessed at."}
+        </span>
+        <button className="button button--outline button--small" type="button" onClick={retry}>
+          <RefreshCw size={14} /> Try again
+        </button>
+      </div>
+      <div className="dashboard-mode-notice" role="status">
+        <span>Nothing below is your data.</span>
+        <button className="button button--small" type="button" onClick={showSample}>
+          Show the sample locker room
+        </button>
       </div>
     </div>
   );
@@ -347,7 +381,7 @@ function LivePortfolio({ portfolio, reloadPortfolio }: LivePortfolioProps) {
         body: JSON.stringify({ scope: "player-data" }),
       });
       if (response.status === 401) {
-        window.location.assign("/login");
+        window.location.assign(loginUrlForCurrentPath());
         return;
       }
       if (!response.ok) throw new Error("Shared NFL-data check could not be queued.");
@@ -371,7 +405,7 @@ function LivePortfolio({ portfolio, reloadPortfolio }: LivePortfolioProps) {
         body: JSON.stringify({ scope: "adp-data" }),
       });
       if (response.status === 401) {
-        window.location.assign("/login");
+        window.location.assign(loginUrlForCurrentPath());
         return;
       }
       if (!response.ok) throw new Error("Draft-market check could not be queued.");
@@ -1216,18 +1250,23 @@ export function DashboardExperience() {
         setState({ status: "demo", reason: "signed-out" });
         return;
       }
+      // A failure is not a signed-out visitor. Substituting the sample portfolio
+      // here showed a signed-in user four leagues that are not theirs, with no
+      // way back other than reloading the page.
       if (!response.ok) {
-        setState({ status: "demo", reason: "api-unavailable" });
+        setState({ status: "unavailable", reason: "api-unavailable" });
         return;
       }
       const portfolio = parseLeagueListResponse(await response.json());
       if (!isCurrent()) return;
       setState(
-        portfolio ? { status: "live", portfolio } : { status: "demo", reason: "invalid-response" },
+        portfolio
+          ? { status: "live", portfolio }
+          : { status: "unavailable", reason: "invalid-response" },
       );
     } catch {
       if (!isCurrent()) return;
-      setState({ status: "demo", reason: "api-unavailable" });
+      setState({ status: "unavailable", reason: "api-unavailable" });
     } finally {
       if (isCurrent()) portfolioRequestRef.current = null;
     }
@@ -1245,6 +1284,15 @@ export function DashboardExperience() {
   const content = useMemo(() => {
     if (state.status === "loading") return <LoadingDashboard />;
     if (state.status === "demo") return <DemoFallback reason={state.reason} />;
+    if (state.status === "unavailable") {
+      return (
+        <PortfolioUnavailable
+          reason={state.reason}
+          retry={() => void loadPortfolio()}
+          showSample={() => setState({ status: "demo", reason: state.reason })}
+        />
+      );
+    }
     return <LivePortfolio portfolio={state.portfolio} reloadPortfolio={loadPortfolio} />;
   }, [loadPortfolio, state]);
 

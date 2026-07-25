@@ -229,6 +229,27 @@ function dateTime(value: string | null): string {
   }).format(new Date(value));
 }
 
+/** "1–5" for a contiguous run, "1–3, 5" when weeks are missing. */
+function weekCoverage(weeks: readonly number[]): string {
+  const sorted = [...weeks].sort((left, right) => left - right);
+  const first = sorted[0];
+  if (first === undefined) return "None";
+  const runs: string[] = [];
+  let start = first;
+  let previous = first;
+  for (const week of sorted.slice(1)) {
+    if (week === previous + 1) {
+      previous = week;
+      continue;
+    }
+    runs.push(start === previous ? `${start}` : `${start}–${previous}`);
+    start = week;
+    previous = week;
+  }
+  runs.push(start === previous ? `${start}` : `${start}–${previous}`);
+  return runs.join(", ");
+}
+
 function number(value: number | null, digits = 0): string {
   if (value === null) return "—";
   return new Intl.NumberFormat(undefined, { maximumFractionDigits: digits }).format(value);
@@ -476,8 +497,13 @@ function StatsResult({ data }: { readonly data: StatsCenterResponse }) {
               {metricOptions.find((metric) => metric.value === data.filters.sort)?.label} leaders
             </h2>
           </div>
+          {/* The API caps `players` at `limit` but reports the uncapped
+              `totalMatched`. Printing only the latter claimed the table showed
+              every match. */}
           <span>
-            {data.totalMatched} player{data.totalMatched === 1 ? "" : "s"}
+            {data.truncated
+              ? `Top ${data.players.length} of ${data.totalMatched} players`
+              : `${data.totalMatched} player${data.totalMatched === 1 ? "" : "s"}`}
             {data.filters.week ? ` · Week ${data.filters.week}` : " · All weeks"}
           </span>
         </div>
@@ -489,7 +515,7 @@ function StatsResult({ data }: { readonly data: StatsCenterResponse }) {
           </div>
         ) : (
           <div
-            className={styles.tableScroll}
+            className={`${styles.tableScroll} has-scroll-cue`}
             role="region"
             aria-label="Player opportunity leaders; scroll horizontally to view all columns"
             tabIndex={0}
@@ -547,8 +573,10 @@ function StatsResult({ data }: { readonly data: StatsCenterResponse }) {
 
       <section className={styles.sourceSection} aria-labelledby="source-title">
         <div className={styles.sectionHeading}>
-          <p>Audit trail</p>
-          <h2 id="source-title">Source health</h2>
+          <div>
+            <p>Audit trail</p>
+            <h2 id="source-title">Source health</h2>
+          </div>
         </div>
         <div className={styles.sourceGrid}>
           {data.sources.map((source) => (
@@ -576,6 +604,12 @@ function StatsResult({ data }: { readonly data: StatsCenterResponse }) {
                   <dt>Rejected</dt>
                   <dd>{number(source.quality.rowsRejected)}</dd>
                 </div>
+                {source.coveredWeeks.length > 0 ? (
+                  <div>
+                    <dt>Weeks covered</dt>
+                    <dd>{weekCoverage(source.coveredWeeks)}</dd>
+                  </div>
+                ) : null}
               </dl>
               {source.reason ? <p>{source.reason}</p> : null}
               {source.attribution ? (
@@ -595,8 +629,10 @@ function StatsResult({ data }: { readonly data: StatsCenterResponse }) {
 
       <section className={styles.withheld} aria-labelledby="withheld-title">
         <div className={styles.sectionHeading}>
-          <p>Honest gaps</p>
-          <h2 id="withheld-title">Not inferred from partial data</h2>
+          <div>
+            <p>Honest gaps</p>
+            <h2 id="withheld-title">Not inferred from partial data</h2>
+          </div>
         </div>
         <div>
           {(

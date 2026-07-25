@@ -1026,7 +1026,7 @@
       z-index: 20;
       top: calc(var(--topbar-height) + 6px);
       display: grid;
-      grid-template-columns: 0.8fr 1.25fr 1fr;
+      grid-template-columns: 0.75fr 1fr 1.15fr 0.95fr;
       padding: 4px;
       background: rgba(255, 255, 255, 0.96);
       border: 1px solid var(--ink-150);
@@ -1089,9 +1089,9 @@
       min-width: 0;
     }
 
-    .tourWorkspace .previewPanel {
-      grid-row: 1;
-    }
+    /* Removed: this hoisted the checksummed match report above the import form
+       that produces it, so the tour opened on a green "218/218 resolved" report
+       about a file the visitor had not chosen yet. */
 
     .boundary {
       grid-template-columns: 1fr;

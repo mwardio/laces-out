@@ -1,4 +1,5 @@
 import {
+  projectionPlayerListResponseSchema,
   projectionImportCommitResponseSchema,
   projectionImportPreviewResponseSchema,
   projectionSetListResponseSchema,
@@ -13,13 +14,22 @@ import { z } from "zod";
 
 import type { ProjectionImportRequest, ProjectionImportService } from "./projection-import.js";
 
-export type ProjectionImportPort = Pick<ProjectionImportService, "list" | "preview" | "commit">;
+export type ProjectionImportPort = Pick<
+  ProjectionImportService,
+  "list" | "getPlayers" | "preview" | "commit"
+>;
 
 export interface ProjectionImportRouteOptions {
   readonly projectionImports?: ProjectionImportPort;
 }
 
 const leagueSeasonPathSchema = z.object({ leagueSeasonId: z.string().uuid() }).strict();
+const projectionSetPathSchema = z
+  .object({
+    leagueSeasonId: z.string().uuid(),
+    projectionSetId: z.string().uuid(),
+  })
+  .strict();
 const checksumSchema = z.string().regex(/^sha256:[a-f0-9]{64}$/u);
 const safeFileName = (value: string): boolean =>
   !value.includes("/") &&
@@ -95,6 +105,22 @@ export function registerProjectionImportRoutes(
       await options.projectionImports.list(user.id, leagueSeasonId),
     );
   });
+
+  app.get(
+    "/v1/league-seasons/:leagueSeasonId/projections/:projectionSetId/players",
+    {
+      config: { rateLimit: { max: 60, timeWindow: "1 minute" } },
+    },
+    async (request, reply) => {
+      const user = authenticatedUser(request, reply);
+      if (!user) return reply;
+      if (!options.projectionImports) return reply.code(503).send(unavailable(request.id));
+      const { leagueSeasonId, projectionSetId } = projectionSetPathSchema.parse(request.params);
+      return projectionPlayerListResponseSchema.parse(
+        await options.projectionImports.getPlayers(user.id, leagueSeasonId, projectionSetId),
+      );
+    },
+  );
 
   app.post(
     "/v1/league-seasons/:leagueSeasonId/projections/preview",

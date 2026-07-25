@@ -8,6 +8,7 @@ import {
   type ProjectionImportRequestError,
   type ProjectionLeagueScope,
   type ProjectionResolverPlayer,
+  type StoredProjectionPlayer,
   type StoredProjectionSet,
 } from "./projection-import.js";
 
@@ -42,6 +43,7 @@ class FakeRepository implements ProjectionImportRepository {
   scope: ProjectionLeagueScope | undefined = scope;
   catalog: readonly ProjectionResolverPlayer[] = catalog;
   sets: readonly StoredProjectionSet[] = [];
+  projectionPlayers: readonly StoredProjectionPlayer[] = [];
   committed: CommitProjectionSetInput | undefined;
   resolverCalls = 0;
 
@@ -58,6 +60,10 @@ class FakeRepository implements ProjectionImportRepository {
 
   listAccessibleSets() {
     return Promise.resolve(this.sets);
+  }
+
+  listProjectionPlayers() {
+    return Promise.resolve(this.projectionPlayers);
   }
 
   commitProjectionSet(input: CommitProjectionSetInput) {
@@ -271,6 +277,106 @@ describe("ProjectionImportService", () => {
       sourceObservedAt: null,
       sourceObservedAtStatus: "unverified",
       importedAt: NOW.toISOString(),
+    });
+  });
+
+  it("returns player-level rows only from an accessible projection set", async () => {
+    const repository = new FakeRepository();
+    const service = new ProjectionImportService(repository, () => NOW);
+    repository.sets = [
+      {
+        id: SET_ID,
+        leagueSeasonId: SEASON_ID,
+        creatorUserId: null,
+        creatorDisplayName: null,
+        visibility: "league",
+        source: "laces-out-first-party-ros",
+        season: 2026,
+        week: null,
+        horizon: "rest-of-season",
+        inputChecksum: "b".repeat(64),
+        metadata: { sourceLabel: "Laces Out ROS forecast" },
+        fetchedAt: NOW,
+        createdAt: NOW,
+        playerCount: 2,
+      },
+    ];
+    repository.projectionPlayers = [
+      {
+        playerId: PLAYER_ONE,
+        fullName: "Exact Runner",
+        nflTeam: "CHI",
+        primaryPosition: "RB",
+        eligiblePositions: ["RB", "FLEX"],
+        status: "ACTIVE",
+        meanPoints: "201.250",
+        floorPoints: "150.000",
+        ceilingPoints: "255.500",
+        confidence: null,
+        rosWindowStartWeek: 3,
+        rosWindowEndWeek: 17,
+        rosAsOfWeek: 2,
+        rosAsOfAt: NOW,
+        rosScheduledGames: 15,
+        rosExpectedGames: "14.250000",
+        rosMedianPoints: "198.500",
+        rosMeanPointsPerExpectedGame: "14.122807",
+        rosPointsStddev: "31.400",
+      },
+      {
+        playerId: PLAYER_TWO,
+        fullName: "Clear Receiver",
+        nflTeam: "DET",
+        primaryPosition: "WR",
+        eligiblePositions: ["WR", "FLEX"],
+        status: null,
+        meanPoints: "180.000",
+        floorPoints: "132.000",
+        ceilingPoints: "229.000",
+        confidence: null,
+        rosWindowStartWeek: 3,
+        rosWindowEndWeek: 17,
+        rosAsOfWeek: 2,
+        rosAsOfAt: NOW,
+        rosScheduledGames: 15,
+        rosExpectedGames: "14.000000",
+        rosMedianPoints: "176.000",
+        rosMeanPointsPerExpectedGame: "12.857143",
+        rosPointsStddev: "28.100",
+      },
+    ];
+
+    await expect(service.getPlayers(OTHER_USER_ID, SEASON_ID, SET_ID)).rejects.toMatchObject({
+      statusCode: 404,
+      code: "not_found",
+    });
+    await expect(service.getPlayers(USER_ID, SEASON_ID, SET_ID)).resolves.toMatchObject({
+      projectionSet: {
+        id: SET_ID,
+        week: null,
+        horizon: "rest-of-season",
+        inputChecksum: `sha256:${"b".repeat(64)}`,
+        sourceChecksum: `sha256:${"b".repeat(64)}`,
+      },
+      players: [
+        {
+          playerId: PLAYER_ONE,
+          overallRank: 1,
+          positionRank: 1,
+          meanPoints: 201.25,
+          ros: {
+            windowStartWeek: 3,
+            windowEndWeek: 17,
+            expectedGames: 14.25,
+            medianPoints: 198.5,
+          },
+        },
+        {
+          playerId: PLAYER_TWO,
+          overallRank: 2,
+          positionRank: 1,
+        },
+      ],
     });
   });
 

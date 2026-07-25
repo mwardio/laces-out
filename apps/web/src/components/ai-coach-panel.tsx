@@ -87,7 +87,7 @@ const PROVIDER_LABELS: Readonly<Record<AiProviderName, string>> = {
 
 const DEMO_ANSWERS: Readonly<Record<AiFeatureName, string>> = {
   "weekly-brief":
-    "Fourth & Long enters Week 6 at 4–1 with the league's second-strongest power score. Your opponent has the stronger projected WR group, but your RB advantage is meaningful.\n\n**One move:** Start Quentin Johnston in the FLEX for the modeled 1.5-point edge, then verify his status before lock.",
+    "Budget Ballers enters Week 6 at 4–1 with the league's strongest power score. Gridiron Dept. has the stronger projected WR group, but your RB advantage is meaningful.\n\n**One move:** Start Quentin Johnston in the FLEX for the modeled 1.5-point edge, then verify his status before lock.",
   "start-sit":
     "**The clear call:** Quentin Johnston over Mike Evans in FLEX. The current projection set gives Johnston a 1.5-point edge; the rest of the optimized lineup is unchanged.\n\n**Close call:** This margin is small enough to recheck after the next projection refresh. No stored lock prevents the switch, but complete provider lock coverage is unavailable.",
   "waiver-scan":
@@ -95,7 +95,7 @@ const DEMO_ANSWERS: Readonly<Record<AiFeatureName, string>> = {
   "trade-builder":
     "**Best fit:** Send Mike Evans and receive Jahmyr Gibbs. The modeled package improves your optimized roster by 3.2 points and the other team by 0.8, while addressing your RB weakness without creating an illegal roster.\n\n> You get a weekly WR starter, and I balance out my RB room. The numbers are close for both sides. Interested in Evans for Gibbs?",
   "standings-prediction":
-    "### Model-assisted forecast\n1. Fourth & Long (10–4)\n2. Uptown Blitz (9–5)\n3. Lake Effect (8–6)\n4. Sunday Scaries (8–6)\n5. Goal Line Fade (6–8)\n6. Punt Intended (5–9)\n\n**Biggest riser:** Fourth & Long, driven by the league's best all-play profile and a top-two power score.\n\n**Biggest faller:** Sunday Scaries, whose record is running ahead of expected wins. Your playoff outlook is strong, with the current roster projecting as a top-two seed.",
+    "### Model-assisted forecast\n1. Budget Ballers (10–4)\n2. Gridiron Dept. (8–6)\n3. Sunday Scaries (7–7)\n4. Waiver Theory (5–9)\n\n**Biggest riser:** Budget Ballers, driven by the league's best all-play profile (13 all-play wins) and the top power score.\n\n**Biggest faller:** Sunday Scaries, whose 3–2 record is running ahead of expected wins. Your playoff outlook is strong, with the current roster projecting as the top seed.",
 };
 
 type ResultState =
@@ -131,7 +131,7 @@ function demoResult(feature: AiFeatureName, leagueId: string): AiFeatureResponse
     provider: "gemini",
     accessMode: "managed",
     model: "gemini-3.6-flash",
-    league: { id: leagueId, name: "Lakeview Auction" },
+    league: { id: leagueId, name: "North Loop Auction" },
     title: FEATURES[feature].label,
     answer: DEMO_ANSWERS[feature],
     generatedAt: new Date().toISOString(),
@@ -282,7 +282,6 @@ export function AiCoachPanel({
             <CurrentIcon size={18} aria-hidden="true" />
             <div>
               <strong>{currentMeta.label}</strong>
-              <span>{currentMeta.description}</span>
             </div>
           </div>
 

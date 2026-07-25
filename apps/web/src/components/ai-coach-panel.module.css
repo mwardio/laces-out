@@ -122,7 +122,9 @@
     font-size: 9px;
     line-height: 1.35;
     -webkit-box-orient: vertical;
-    -webkit-line-clamp: 2;
+    /* At 2 lines every one of the five blurbs clipped mid-clause between ~1100px
+       and ~1700px, which reads as a render fault rather than concision. */
+    -webkit-line-clamp: 3;
   }
 
   .featureIcon {

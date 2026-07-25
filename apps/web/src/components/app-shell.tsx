@@ -20,7 +20,9 @@ import Link from "next/link";
 import { type ReactNode, useEffect, useRef, useState } from "react";
 
 import { apiBaseUrl, parseAuthenticatedSession } from "../lib/api-client";
+import { yahooComingSoon } from "../lib/public-site";
 import { LacesOutMark } from "./laces-out-mark";
+import { ScrollCues } from "./scroll-cues";
 import { SessionControl } from "./session-control";
 import { YahooAttribution } from "./yahoo-attribution";
 
@@ -40,6 +42,8 @@ interface AppShellProps {
   active: AppSection;
   children: ReactNode;
   compact?: boolean;
+  /** Set false where a signed-out viewer is shown real data, not a sample. */
+  showDemoChip?: boolean;
   context?: {
     readonly label: string;
     readonly detail: string;
@@ -113,7 +117,13 @@ const primaryNavigation = [
   },
 ] as const;
 
-export function AppShell({ active, children, compact = false, context }: AppShellProps) {
+export function AppShell({
+  active,
+  children,
+  compact = false,
+  context,
+  showDemoChip = true,
+}: AppShellProps) {
   const [isAdmin, setIsAdmin] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const mobileMenuTriggerRef = useRef<HTMLButtonElement>(null);
@@ -283,7 +293,8 @@ export function AppShell({ active, children, compact = false, context }: AppShel
             <span className="muted">{shellContext.detail}</span>
           </div>
           <div className="topbar-actions">
-            <SessionControl />
+            <ScrollCues />
+            <SessionControl showDemoChip={showDemoChip} />
             <Link className="button button--dark button--small topbar-draft-link" href="/draft">
               <Radio size={15} />
               Draft Room
@@ -294,9 +305,14 @@ export function AppShell({ active, children, compact = false, context }: AppShel
 
         <main id="main-content" className="main-content">
           {children}
-          <footer className="provider-footer" aria-label="Data provider attribution">
-            <YahooAttribution />
-          </footer>
+          {/* Attribution belongs on pages that actually show Yahoo data. While
+              Yahoo sync is disabled, every page was asserting a data source the
+              deployment has none of. */}
+          {yahooComingSoon ? null : (
+            <footer className="provider-footer" aria-label="Data provider attribution">
+              <YahooAttribution />
+            </footer>
+          )}
         </main>
       </div>
 

@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 
 import type {
+  ProjectionPlayerListResponse,
   ProjectionImportCommitResponse,
   ProjectionImportPreviewResponse,
   ProjectionSetListResponse,
@@ -12,6 +13,7 @@ import {
   leagues,
   leagueSeasons,
   playerProjections,
+  playerRosProjectionSummaries,
   players,
   projectionModelRuns,
   projectionSets,
@@ -44,6 +46,8 @@ const MAX_RESOLVER_PLAYERS = 30_000;
 const INSERT_CHUNK_SIZE = 500;
 const SOURCE_FUTURE_TOLERANCE_MS = 5 * 60 * 1_000;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
+const RAW_SHA256_PATTERN = /^[a-f0-9]{64}$/u;
+const PREFIXED_SHA256_PATTERN = /^sha256:[a-f0-9]{64}$/u;
 
 export interface ProjectionLeagueScope {
   readonly leagueSeasonId: string;
@@ -70,13 +74,35 @@ export interface StoredProjectionSet {
   readonly visibility: Exclude<ProjectionVisibility, "global">;
   readonly source: string;
   readonly season: number;
-  readonly week: number;
+  readonly week: number | null;
   readonly horizon: "week" | "rest-of-season";
   readonly inputChecksum: string;
   readonly metadata: Record<string, unknown>;
   readonly fetchedAt: Date;
   readonly createdAt: Date;
   readonly playerCount: number;
+}
+
+export interface StoredProjectionPlayer {
+  readonly playerId: string;
+  readonly fullName: string;
+  readonly nflTeam: string | null;
+  readonly primaryPosition: string;
+  readonly eligiblePositions: readonly string[];
+  readonly status: string | null;
+  readonly meanPoints: string;
+  readonly floorPoints: string | null;
+  readonly ceilingPoints: string | null;
+  readonly confidence: string | null;
+  readonly rosWindowStartWeek: number | null;
+  readonly rosWindowEndWeek: number | null;
+  readonly rosAsOfWeek: number | null;
+  readonly rosAsOfAt: Date | null;
+  readonly rosScheduledGames: number | null;
+  readonly rosExpectedGames: string | null;
+  readonly rosMedianPoints: string | null;
+  readonly rosMeanPointsPerExpectedGame: string | null;
+  readonly rosPointsStddev: string | null;
 }
 
 export interface CommitProjectionSetInput {
@@ -102,6 +128,7 @@ export interface ProjectionImportRepository {
     actorUserId: string,
     leagueSeasonId: string,
   ): Promise<readonly StoredProjectionSet[]>;
+  listProjectionPlayers(projectionSetId: string): Promise<readonly StoredProjectionPlayer[]>;
   latestManagedRunStatus?(
     leagueSeasonId: string,
     season: number,
@@ -137,6 +164,12 @@ function metadataString(metadata: Record<string, unknown>, key: string): string 
 function metadataInteger(metadata: Record<string, unknown>, key: string): number | null {
   const value = metadata[key];
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : null;
+}
+
+function contractChecksum(value: string): string {
+  if (PREFIXED_SHA256_PATTERN.test(value)) return value;
+  if (RAW_SHA256_PATTERN.test(value)) return `sha256:${value}`;
+  throw new Error("Stored projection checksum is not a SHA-256 digest");
 }
 
 function record(value: unknown): Record<string, unknown> | null {
@@ -408,8 +441,8 @@ export class DrizzleProjectionImportRepository implements ProjectionImportReposi
       .limit(MAX_ACCESSIBLE_SETS);
     return rows.flatMap((row) =>
       row.leagueSeasonId &&
-      row.week !== null &&
-      (row.horizon === "week" || row.horizon === "rest-of-season") &&
+      ((row.horizon === "week" && row.week !== null) ||
+        (row.horizon === "rest-of-season" && row.week === null)) &&
       isUserVisibility(row.visibility) &&
       (row.creatorUserId !== null || row.visibility === "league")
         ? [
@@ -417,13 +450,49 @@ export class DrizzleProjectionImportRepository implements ProjectionImportReposi
               ...row,
               leagueSeasonId: row.leagueSeasonId,
               creatorUserId: row.creatorUserId,
-              week: row.week,
               horizon: row.horizon,
               visibility: row.visibility,
             },
           ]
         : [],
     );
+  }
+
+  listProjectionPlayers(projectionSetId: string): Promise<readonly StoredProjectionPlayer[]> {
+    return this.#database
+      .select({
+        playerId: players.id,
+        fullName: players.fullName,
+        nflTeam: players.nflTeam,
+        primaryPosition: players.primaryPosition,
+        eligiblePositions: players.eligiblePositions,
+        status: players.status,
+        meanPoints: playerProjections.meanPoints,
+        floorPoints: playerProjections.floorPoints,
+        ceilingPoints: playerProjections.ceilingPoints,
+        confidence: playerProjections.confidence,
+        rosWindowStartWeek: playerRosProjectionSummaries.windowStartWeek,
+        rosWindowEndWeek: playerRosProjectionSummaries.windowEndWeek,
+        rosAsOfWeek: playerRosProjectionSummaries.asOfWeek,
+        rosAsOfAt: playerRosProjectionSummaries.asOfAt,
+        rosScheduledGames: playerRosProjectionSummaries.scheduledGames,
+        rosExpectedGames: playerRosProjectionSummaries.expectedGames,
+        rosMedianPoints: playerRosProjectionSummaries.p50Points,
+        rosMeanPointsPerExpectedGame: playerRosProjectionSummaries.meanPointsPerExpectedGame,
+        rosPointsStddev: playerRosProjectionSummaries.pointsStddev,
+      })
+      .from(playerProjections)
+      .innerJoin(players, eq(players.id, playerProjections.playerId))
+      .leftJoin(
+        playerRosProjectionSummaries,
+        and(
+          eq(playerRosProjectionSummaries.projectionSetId, playerProjections.projectionSetId),
+          eq(playerRosProjectionSummaries.playerId, playerProjections.playerId),
+        ),
+      )
+      .where(eq(playerProjections.projectionSetId, projectionSetId))
+      .orderBy(desc(playerProjections.meanPoints), asc(players.fullName), asc(players.id))
+      .limit(5_000);
   }
 
   async latestManagedRunStatus(leagueSeasonId: string, season: number, week: number) {
@@ -731,8 +800,14 @@ function summary(row: StoredProjectionSet, actorUserId: string): ProjectionSetSu
   const isManaged = row.source !== "user-csv";
   const sourceLabel =
     metadataString(row.metadata, "sourceLabel") ??
-    (isManaged ? "Laces Out weekly forecast" : "Imported projections");
-  const sourceChecksum = metadataString(row.metadata, "sourceChecksum") ?? row.inputChecksum;
+    (isManaged
+      ? row.horizon === "rest-of-season"
+        ? "Laces Out rest-of-season forecast"
+        : "Laces Out weekly forecast"
+      : "Imported projections");
+  const sourceChecksum = contractChecksum(
+    metadataString(row.metadata, "sourceChecksum") ?? row.inputChecksum,
+  );
   const sourceFileName = metadataString(row.metadata, "sourceFileName");
   const timestamps = projectionTimestampProvenance(row);
   const modelVersion = metadataString(row.metadata, "modelVersion");
@@ -771,13 +846,72 @@ function summary(row: StoredProjectionSet, actorUserId: string): ProjectionSetSu
     week: row.week,
     horizon: row.horizon,
     playerCount: metadataInteger(row.metadata, "rowCount") ?? row.playerCount,
-    inputChecksum: row.inputChecksum,
+    inputChecksum: contractChecksum(row.inputChecksum),
     sourceChecksum,
     sourceObservedAt: timestamps.sourceObservedAt?.toISOString() ?? null,
     sourceObservedAtStatus: timestamps.sourceObservedAtStatus,
     importedAt: timestamps.importedAt.toISOString(),
     isOwnedByCurrentUser: row.creatorUserId !== null && row.creatorUserId === actorUserId,
   };
+}
+
+function finiteProjectionNumber(value: string, field: string): number {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) {
+    throw new Error(`Stored projection ${field} is not a finite number`);
+  }
+  return parsed;
+}
+
+function nullableProjectionNumber(value: string | null, field: string): number | null {
+  return value === null ? null : finiteProjectionNumber(value, field);
+}
+
+function playerRows(rows: readonly StoredProjectionPlayer[]) {
+  const positionRanks = new Map<string, number>();
+  return rows.map((row, index) => {
+    const positionRank = (positionRanks.get(row.primaryPosition) ?? 0) + 1;
+    positionRanks.set(row.primaryPosition, positionRank);
+    const hasRosSummary =
+      row.rosWindowStartWeek !== null &&
+      row.rosWindowEndWeek !== null &&
+      row.rosAsOfWeek !== null &&
+      row.rosAsOfAt !== null &&
+      row.rosScheduledGames !== null &&
+      row.rosExpectedGames !== null &&
+      row.rosMedianPoints !== null &&
+      row.rosPointsStddev !== null;
+    return {
+      playerId: row.playerId,
+      fullName: row.fullName,
+      nflTeam: row.nflTeam?.trim() || null,
+      primaryPosition: row.primaryPosition,
+      eligiblePositions: [...row.eligiblePositions],
+      status: row.status?.trim() || null,
+      overallRank: index + 1,
+      positionRank,
+      meanPoints: finiteProjectionNumber(row.meanPoints, "mean"),
+      floorPoints: nullableProjectionNumber(row.floorPoints, "floor"),
+      ceilingPoints: nullableProjectionNumber(row.ceilingPoints, "ceiling"),
+      confidence: nullableProjectionNumber(row.confidence, "confidence"),
+      ros: hasRosSummary
+        ? {
+            windowStartWeek: row.rosWindowStartWeek,
+            windowEndWeek: row.rosWindowEndWeek,
+            asOfWeek: row.rosAsOfWeek,
+            asOfAt: row.rosAsOfAt.toISOString(),
+            scheduledGames: row.rosScheduledGames,
+            expectedGames: finiteProjectionNumber(row.rosExpectedGames, "expected games"),
+            medianPoints: finiteProjectionNumber(row.rosMedianPoints, "median"),
+            meanPointsPerExpectedGame: nullableProjectionNumber(
+              row.rosMeanPointsPerExpectedGame,
+              "mean per expected game",
+            ),
+            pointsStddev: finiteProjectionNumber(row.rosPointsStddev, "standard deviation"),
+          }
+        : null,
+    };
+  });
 }
 
 export class ProjectionImportService {
@@ -805,9 +939,15 @@ export class ProjectionImportService {
             (row.creatorUserId !== null && row.creatorUserId === actorUserId)),
       )
       .map((row) => summary(row, actorUserId));
-    const currentManaged = summaries.find(
-      (projection) => projection.origin === "laces-out" && projection.week === scope.currentWeek,
-    );
+    const currentManaged =
+      scope.currentWeek === null
+        ? undefined
+        : summaries.find(
+            (projection) =>
+              projection.origin === "laces-out" &&
+              projection.horizon === "week" &&
+              projection.week === scope.currentWeek,
+          );
     const currentManagedAt = currentManaged?.managed?.computedAt ?? currentManaged?.importedAt;
     const newerWithheldRun =
       managedRun &&
@@ -857,6 +997,31 @@ export class ProjectionImportService {
                 reasons: [],
               },
       projectionSets: summaries,
+    };
+  }
+
+  async getPlayers(
+    actorUserId: string,
+    leagueSeasonId: string,
+    projectionSetId: string,
+  ): Promise<ProjectionPlayerListResponse> {
+    await this.#requireScope(actorUserId, leagueSeasonId);
+    const accessibleSets = await this.#repository.listAccessibleSets(actorUserId, leagueSeasonId);
+    const projectionSet = accessibleSets.find(
+      (candidate) =>
+        candidate.id === projectionSetId && candidate.leagueSeasonId === leagueSeasonId,
+    );
+    if (!projectionSet) {
+      throw new ProjectionImportRequestError(
+        404,
+        "not_found",
+        "Projection set was not found in this league season",
+      );
+    }
+    const storedPlayers = await this.#repository.listProjectionPlayers(projectionSet.id);
+    return {
+      projectionSet: summary(projectionSet, actorUserId),
+      players: playerRows(storedPlayers),
     };
   }
 

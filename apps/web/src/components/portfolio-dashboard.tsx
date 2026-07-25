@@ -160,8 +160,6 @@ export function PortfolioDashboard({ afterOverview }: { readonly afterOverview?:
         </article>
       </section>
 
-      {afterOverview ? <div className="dashboard-ai-tour">{afterOverview}</div> : null}
-
       <section className="section-block league-section" aria-labelledby="league-board-title">
         <div className="section-heading">
           <div>
@@ -399,6 +397,10 @@ export function PortfolioDashboard({ afterOverview }: { readonly afterOverview?:
         </aside>
       </div>
 
+      {/* Follows the leagues and the decision inbox. Above them it filled 55% of
+          the desktop fold and pushed the inbox two swipes down on mobile. */}
+      {afterOverview ? <div className="dashboard-ai-tour">{afterOverview}</div> : null}
+
       <section className="data-section" id="data-health" aria-labelledby="connections-title">
         <div className="section-heading section-heading--connections">
           <div>
@@ -485,23 +487,41 @@ export function PortfolioDashboard({ afterOverview }: { readonly afterOverview?:
                 ? "Yahoo sign-in and read-only league sync are coming soon."
                 : "Yahoo sign-in uses the official Authorization Code + PKCE flow. With approved Fantasy API credentials configured, leagues are discovered automatically and settings, team, roster, standings, and scoreboard data sync read-only."}
             </p>
+            {/* These were ungated, so the card read "Coming soon" directly above
+                a green check claiming the sync was already there. */}
             <div className="provider-facts">
-              <span>
-                <Check size={14} /> OAuth + PKCE implemented
-              </span>
-              <span>
-                <Check size={14} /> Read-only league sync implemented
-              </span>
-              <span>
-                <ShieldAlert size={14} /> Provider draft polling not claimed
-              </span>
+              {yahooComingSoon ? (
+                <>
+                  <span>
+                    <ShieldAlert size={14} /> Yahoo sign-in is not open yet
+                  </span>
+                  <span>
+                    <Check size={14} /> Official sign-in, no password sharing
+                  </span>
+                  <span>
+                    <Check size={14} /> Read-only when it opens
+                  </span>
+                </>
+              ) : (
+                <>
+                  <span>
+                    <Check size={14} /> Official Yahoo sign-in
+                  </span>
+                  <span>
+                    <Check size={14} /> Read-only league sync
+                  </span>
+                  <span>
+                    <Check size={14} /> Your tokens stay encrypted on your server
+                  </span>
+                </>
+              )}
             </div>
             <button
               className="button button--outline button--full"
               type="button"
               onClick={() => setProviderExpanded(providerExpanded === "Yahoo" ? null : "Yahoo")}
             >
-              {providerExpanded === "Yahoo" ? "Hide readiness details" : "View readiness details"}
+              {providerExpanded === "Yahoo" ? "Hide sync details" : "View sync details"}
               <ChevronDown className={providerExpanded === "Yahoo" ? "is-rotated" : ""} size={16} />
             </button>
             {providerExpanded === "Yahoo" ? (

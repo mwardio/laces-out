@@ -8,12 +8,22 @@ import { type FormEvent, useState } from "react";
 import { apiBaseUrl } from "../lib/api-client";
 
 type RegistrationError =
-  "rejected" | "rate-limit" | "unavailable" | "invalid" | "mismatch" | "unknown" | null;
+  | "rejected"
+  | "rate-limit"
+  | "unavailable"
+  | "network"
+  | "timeout"
+  | "invalid"
+  | "mismatch"
+  | "unknown"
+  | null;
 
 const errorMessages: Record<Exclude<RegistrationError, null>, string> = {
   rejected: "We couldn’t create the account. Check every field and the shared invite code.",
   "rate-limit": "Too many attempts. Wait ten minutes before trying again.",
   unavailable: "Registration isn’t open on this deployment. Ask your Laces Out host for access.",
+  network: "We couldn’t reach the server. Check your connection, then try again.",
+  timeout: "The server took too long to respond. Try again in a moment.",
   invalid: "Check each field. Passwords must be between 12 and 128 characters.",
   mismatch: "The two passwords don’t match.",
   unknown: "Registration couldn’t be completed. Try again in a moment.",
@@ -21,7 +31,10 @@ const errorMessages: Record<Exclude<RegistrationError, null>, string> = {
 
 function classifyResponse(status: number): Exclude<RegistrationError, null> {
   if (status === 429) return "rate-limit";
-  if (status === 404 || status === 502 || status === 503 || status === 504) return "unavailable";
+  // Only a 404 means the endpoint is absent. Routing 5xx here told a prospective
+  // user that signup was switched off during what was really an API restart.
+  if (status === 404) return "unavailable";
+  if (status === 502 || status === 503 || status === 504) return "network";
   if (status === 400) return "rejected";
   if (status === 422) return "invalid";
   return "unknown";
@@ -75,8 +88,8 @@ export function RegistrationForm() {
 
       router.replace("/app");
       router.refresh();
-    } catch {
-      setError("unavailable");
+    } catch (caught) {
+      setError(caught instanceof Error && caught.name === "AbortError" ? "timeout" : "network");
     } finally {
       window.clearTimeout(timeout);
       setIsSubmitting(false);

@@ -257,6 +257,24 @@ export function humanizeRosReason(code: string): string {
   );
 }
 
+/**
+ * The rail records `mode` and `qualityState` as raw enums for the audit trail. The
+ * Projection Lab is read by fantasy managers, not by the person who ran the model,
+ * so render them as sentences without changing what they assert.
+ */
+export function humanizeRosRunMode(mode: string): string {
+  if (mode === "shadow") return "Validation run";
+  if (mode === "release") return "Live release run";
+  return mode.replace(/[_-]+/gu, " ");
+}
+
+export function humanizeRosQualityState(state: string): string {
+  if (state === "publishable") return "Cleared every check";
+  if (state === "degraded") return "Ran, but not every check cleared";
+  if (state === "rejected") return "Did not pass its checks";
+  return state.replace(/[_-]+/gu, " ");
+}
+
 export interface RosRailDescription {
   readonly isShadow: boolean;
   readonly statusLabel: string;
@@ -287,8 +305,8 @@ export function describeRosProjectionRail(status: RosProjectionStatus): RosRailD
           .map((set) => set.fetchedAt)
           .sort((left, right) => (left < right ? 1 : left > right ? -1 : 0))[0];
   const artifactSummary = status.artifact.present
-    ? `Champion artifact admitted for ${status.artifact.scoringProfileKey} (evidence through ${status.artifact.evidenceThroughSeason}).`
-    : "No champion artifact admitted, so the rail cannot authorize live publication.";
+    ? `A validated model is in use for ${status.artifact.scoringProfileKey} scoring, backed by evidence through the ${status.artifact.evidenceThroughSeason} season.`
+    : "No model has passed validation for this season yet, so no rest-of-season forecast is published.";
   return {
     isShadow,
     statusLabel: isShadow ? "Fail-closed shadow" : "Publishable",

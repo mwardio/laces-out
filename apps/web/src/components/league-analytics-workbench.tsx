@@ -190,7 +190,7 @@ function ScoreSection({ snapshot }: { readonly snapshot: LeagueAnalyticsSnapshot
         titleId="score-title"
       />
       <div
-        className={styles.tableScroll}
+        className={`${styles.tableScroll} has-scroll-cue`}
         role="region"
         aria-label="Season ledger; scroll horizontally to view all columns"
         tabIndex={0}
@@ -402,7 +402,7 @@ function PositionalSection({ snapshot }: { readonly snapshot: LeagueAnalyticsSna
       ) : (
         <>
           <div
-            className={styles.tableScroll}
+            className={`${styles.tableScroll} has-scroll-cue`}
             role="region"
             aria-label="Positional map; scroll horizontally to view all columns"
             tabIndex={0}
@@ -789,10 +789,13 @@ export function LeagueAnalyticsWorkbench() {
               </option>
             ))}
           </select>
+          {/* Tour mode re-sets the identical snapshot, so this had no observable
+              effect at all when pressed. */}
           <button
             type="button"
             onClick={() => void loadAnalytics()}
-            disabled={analytics.state === "loading"}
+            disabled={isDemo || analytics.state === "loading"}
+            title={isDemo ? "Sign in to refresh against your own league" : undefined}
           >
             <RefreshCw
               className={analytics.state === "loading" ? styles.spin : undefined}

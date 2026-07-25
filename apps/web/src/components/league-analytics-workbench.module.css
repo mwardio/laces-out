@@ -197,13 +197,13 @@
     text-transform: uppercase;
   }
 
+  /* Wrap rather than truncate — see decision-workbench.module.css for the rationale. */
   .provenance strong {
-    overflow: hidden;
     margin-top: 2px;
     color: #fff;
     font-size: 11px;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    line-height: 1.4;
+    overflow-wrap: anywhere;
   }
 
   .primaryGrid {
@@ -817,6 +817,8 @@
     .controls {
       width: 100%;
       min-width: 0;
+      /* The 230px floor outgrows the viewport below ~370px and scrolls the page sideways. */
+      grid-template-columns: minmax(0, 1fr) auto;
     }
 
     .snapshotTitle {

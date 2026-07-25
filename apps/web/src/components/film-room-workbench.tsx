@@ -252,6 +252,12 @@ function FilmRoomTour() {
               <span>Your question</span>
               <textarea value="What are my three highest-leverage moves this week?" readOnly />
             </label>
+            <div className={styles.tourAsk}>
+              <span>This is a sample question. Sign in to ask your own.</span>
+              <Link className={styles.tourAskLink} href="/login">
+                Sign in
+              </Link>
+            </div>
           </div>
           <div className={styles.answerRegion}>
             <article className={styles.answer}>
