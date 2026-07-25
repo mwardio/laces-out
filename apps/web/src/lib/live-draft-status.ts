@@ -610,13 +610,23 @@ function defaultCaption(session: DraftSessionSnapshot): string {
 
 /**
  * The setup screen has no session yet, so entry copy comes from the league's provider instead.
- * Kept honest in both directions: an ESPN league is told what live sync needs, and a league
- * without one is not promised anything.
+ * Kept honest in both directions: a league is told only what is actually available to it, and a
+ * league without a provider feed is not promised anything.
+ *
+ * TODO(espn-live-draft): restore the ESPN branch when `ESPN_LIVE_DRAFT_SYNC` is turned on.
+ *
+ * ESPN currently gets the neutral line even though the code path exists, because this function
+ * only knows the league's provider — the server reports `providerFeed: null` both when the flag
+ * is off and when it is on with no source connected, so "ESPN" alone cannot tell the difference.
+ * Promising live sync here while the flag is off would be a claim a manager could act on, and
+ * draft day happens once. Restoring the branch needs the server to report capability rather than
+ * this function inferring it; see the rollout steps in docs/ESPN_LIVE_DRAFT_SYNC_PLAN.md §21.
+ *
+ * The sentence to restore, once capability is real and reported:
+ *   "Manual event entry is persistent and shared. An ESPN draft can also drive this room live
+ *    while a paired desktop Chrome keeps the ESPN draft room open."
  */
 export function describeDraftSetupCapability(provider: string | null): string {
-  if (provider === "espn") {
-    return "Manual event entry is persistent and shared. An ESPN draft can also drive this room live while a paired desktop Chrome keeps the ESPN draft room open.";
-  }
   if (provider === "yahoo") {
     return "Manual event entry is persistent and shared. Yahoo live-draft sync is not available yet.";
   }

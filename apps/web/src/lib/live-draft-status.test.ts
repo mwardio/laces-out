@@ -593,12 +593,20 @@ describe("mobile decision summary", () => {
 });
 
 describe("draft setup capability copy", () => {
-  it("promises live sync only for an ESPN league, and explains what it needs", () => {
-    expect(describeDraftSetupCapability("espn")).toContain("paired desktop Chrome");
+  it("names Yahoo's gap without promising anything", () => {
     expect(describeDraftSetupCapability("yahoo")).toContain("not available yet");
     expect(describeDraftSetupCapability(null)).toContain("No live-draft provider feed");
-    for (const provider of ["yahoo", "manual", null]) {
-      expect(describeDraftSetupCapability(provider)).not.toMatch(/live while/u);
+  });
+
+  // Guards the reason the ESPN branch is currently withheld: this function only sees the league's
+  // provider, and `providerFeed: null` means both "flag off" and "flag on, no source yet". Until
+  // the server reports capability, no provider may be promised live sync here.
+  it("promises live sync to nobody while capability is not reported", () => {
+    for (const provider of ["espn", "yahoo", "manual", null]) {
+      const copy = describeDraftSetupCapability(provider);
+      expect(copy).not.toMatch(/live while/u);
+      expect(copy).not.toMatch(/paired desktop Chrome/u);
+      expect(copy).not.toMatch(/drive this room live/u);
     }
   });
 });

@@ -1210,6 +1210,26 @@ Rollout:
 Do not couple server deployment to Web Store approval. Old extension versions should continue
 normal six-hour league sync and simply lack live draft capability.
 
+### 21.1 Copy to restore when the flag is turned on
+
+Deployed 2026-07-25 with `ESPN_LIVE_DRAFT_SYNC` off, so one string was deliberately withheld and
+**must be restored as part of turning the flag on**, not afterwards:
+
+- `apps/web/src/lib/live-draft-status.ts` → `describeDraftSetupCapability` currently gives an ESPN
+  league the same neutral line as a league with no provider feed. The sentence to restore is
+  recorded in that function's `TODO(espn-live-draft)` comment, and
+  `live-draft-status.test.ts` asserts that no provider is promised live sync until it is.
+
+The reason it cannot simply be switched back on its own: that function receives only the league's
+provider, and the server reports `providerFeed: null` both when the flag is off and when it is on
+with no source connected. So the honest fix is for the API to report capability — it already knows
+`ESPN_LIVE_DRAFT_SYNC` — and for the copy to key on that instead of on the provider name. Do that
+first; the canary and per-league allowlist steps above need the same signal anyway.
+
+The distinction matters more here than elsewhere in the UI because every other live-sync surface
+describes an absence, which is self-evidently absent, whereas this one makes a promise a manager
+could plan around. Draft day happens once.
+
 ## 22. Release acceptance criteria
 
 ### Functional
