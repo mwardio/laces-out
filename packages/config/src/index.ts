@@ -21,7 +21,7 @@ const environmentSchema = z.object({
   SESSION_SECRET: z.preprocess(blankToUndefined, z.string().min(32).optional()),
   REGISTRATION_INVITE_CODE: z.preprocess(
     blankToUndefined,
-    z.string().trim().min(16).max(128).optional(),
+    z.string().trim().min(12).max(128).optional(),
   ),
   YAHOO_CLIENT_ID: z.preprocess(blankToUndefined, z.string().min(1).optional()),
   YAHOO_CLIENT_SECRET: z.preprocess(blankToUndefined, z.string().min(1).optional()),

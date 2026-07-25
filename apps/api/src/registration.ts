@@ -9,7 +9,7 @@ import {
   type LoginResult,
 } from "./auth.js";
 
-const minimumInviteCodeLength = 16;
+const minimumInviteCodeLength = 12;
 const maximumInviteCodeLength = 128;
 
 export interface RegisteredUserRecord {

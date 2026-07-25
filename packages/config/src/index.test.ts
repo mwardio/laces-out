@@ -83,6 +83,21 @@ describe("loadEnvironment", () => {
     ).toBe("a-long-shared-code");
   });
 
+  it("accepts a twelve-character registration code", () => {
+    expect(
+      loadEnvironment({
+        SESSION_SECRET: "s".repeat(32),
+        REGISTRATION_INVITE_CODE: "twelve-chars",
+      }).REGISTRATION_INVITE_CODE,
+    ).toBe("twelve-chars");
+    expect(() =>
+      loadEnvironment({
+        SESSION_SECRET: "s".repeat(32),
+        REGISTRATION_INVITE_CODE: "too-short",
+      }),
+    ).toThrow("Too small");
+  });
+
   it("treats a blank registration code as disabled", () => {
     expect(
       loadEnvironment({ REGISTRATION_INVITE_CODE: "" }).REGISTRATION_INVITE_CODE,
