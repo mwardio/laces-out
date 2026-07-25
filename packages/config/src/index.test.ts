@@ -150,4 +150,21 @@ describe("loadEnvironment", () => {
       }),
     ).toThrow();
   });
+
+  it("rejects malformed VAPID key lengths before the sender starts", () => {
+    expect(() =>
+      loadEnvironment({
+        VAPID_PUBLIC_KEY: "B".repeat(86),
+        VAPID_PRIVATE_KEY: "k".repeat(43),
+        VAPID_SUBJECT: "https://laces.mward.io",
+      }),
+    ).toThrow();
+    expect(() =>
+      loadEnvironment({
+        VAPID_PUBLIC_KEY: "B".repeat(87),
+        VAPID_PRIVATE_KEY: "k".repeat(44),
+        VAPID_SUBJECT: "https://laces.mward.io",
+      }),
+    ).toThrow();
+  });
 });

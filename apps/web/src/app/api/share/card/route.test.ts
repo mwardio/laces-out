@@ -50,6 +50,41 @@ describe("share card route", () => {
     expect(response.status).toBe(403);
   });
 
+  it("refuses same-site and headerless callers while allowing an exact origin fallback", async () => {
+    expect(
+      (
+        await POST(
+          request(payload, {
+            "sec-fetch-site": "same-site",
+            origin: "http://dashboard.localhost:3000",
+          }),
+        )
+      ).status,
+    ).toBe(403);
+    expect(
+      (
+        await POST(
+          new Request("http://localhost:3000/api/share/card", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify(payload),
+          }),
+        )
+      ).status,
+    ).toBe(403);
+    expect(
+      (
+        await POST(
+          new Request("http://localhost:3000/api/share/card", {
+            method: "POST",
+            headers: { "content-type": "application/json", origin: "http://localhost:3000" },
+            body: JSON.stringify(payload),
+          }),
+        )
+      ).status,
+    ).toBe(200);
+  }, 30_000);
+
   it("rejects a payload the card contract does not allow", async () => {
     const response = await POST(request({ ...payload, awards: [] }));
     expect(response.status).toBe(400);

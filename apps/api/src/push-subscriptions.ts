@@ -1,5 +1,5 @@
 import { pushSubscriptions, type Database } from "@fantasy/db";
-import { and, asc, eq } from "drizzle-orm";
+import { and, asc, desc, eq, notInArray } from "drizzle-orm";
 import webpush from "web-push";
 
 /**
@@ -30,6 +30,7 @@ export interface PushSubscriptionInput {
 export interface PushSubscriptionRepository {
   listForUser(userId: string, limit: number): Promise<readonly PushSubscriptionRow[]>;
   upsert(userId: string, input: PushSubscriptionInput, now: Date): Promise<PushSubscriptionRow>;
+  trimForUser(userId: string, limit: number): Promise<void>;
   deleteForUser(userId: string, subscriptionId: string): Promise<PushSubscriptionRow | undefined>;
   deleteByEndpoint(endpoint: string): Promise<void>;
   markSuccess(subscriptionId: string, now: Date): Promise<void>;
@@ -91,12 +92,32 @@ export class DrizzlePushSubscriptionRepository implements PushSubscriptionReposi
           p256dh: input.p256dh,
           auth: input.auth,
           userAgentLabel: input.userAgentLabel,
+          createdAt: now,
           lastFailureAt: null,
         },
       })
       .returning(columns);
     if (!row) throw new Error("Push subscription upsert returned no row");
     return row;
+  }
+
+  async trimForUser(userId: string, limit: number): Promise<void> {
+    const keep = await this.#database
+      .select({ id: pushSubscriptions.id })
+      .from(pushSubscriptions)
+      .where(eq(pushSubscriptions.userId, userId))
+      .orderBy(desc(pushSubscriptions.createdAt), desc(pushSubscriptions.id))
+      .limit(limit);
+    if (keep.length === 0) return;
+    await this.#database.delete(pushSubscriptions).where(
+      and(
+        eq(pushSubscriptions.userId, userId),
+        notInArray(
+          pushSubscriptions.id,
+          keep.map((row) => row.id),
+        ),
+      ),
+    );
   }
 
   async deleteForUser(
@@ -267,6 +288,7 @@ export class PushSubscriptionService {
 
   async register(userId: string, input: PushSubscriptionInput): Promise<PushDeviceStatus> {
     const row = await this.#repository.upsert(userId, input, this.#now());
+    await this.#repository.trimForUser(userId, MAX_DEVICES_PER_MEMBER);
     return status(row);
   }
 

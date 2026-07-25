@@ -49,20 +49,38 @@ class MemoryPushRepository implements PushSubscriptionRepository {
     const row: PushSubscriptionRow = {
       id:
         existing === -1
-          ? `20000000-0000-4000-8000-00000000000${this.#nextId++}`
+          ? `20000000-0000-4000-8000-${String(this.#nextId++).padStart(12, "0")}`
           : this.rows[existing]!.id,
       userId,
       endpoint: input.endpoint,
       p256dh: input.p256dh,
       auth: input.auth,
       userAgentLabel: input.userAgentLabel,
-      createdAt: existing === -1 ? now : this.rows[existing]!.createdAt,
+      createdAt: now,
       lastSuccessAt: null,
       lastFailureAt: null,
     };
     if (existing === -1) this.rows.push(row);
     else this.rows[existing] = row;
     return Promise.resolve(row);
+  }
+
+  trimForUser(userId: string, limit: number): Promise<void> {
+    const keep = new Set(
+      this.rows
+        .filter((row) => row.userId === userId)
+        .toSorted(
+          (left, right) =>
+            right.createdAt.getTime() - left.createdAt.getTime() || right.id.localeCompare(left.id),
+        )
+        .slice(0, limit)
+        .map((row) => row.id),
+    );
+    for (let index = this.rows.length - 1; index >= 0; index -= 1) {
+      const row = this.rows[index];
+      if (row?.userId === userId && !keep.has(row.id)) this.rows.splice(index, 1);
+    }
+    return Promise.resolve();
   }
 
   deleteForUser(userId: string, id: string): Promise<PushSubscriptionRow | undefined> {
@@ -123,7 +141,7 @@ async function appWith(
 
 function subscriptionPayload(suffix = "alpha") {
   return {
-    endpoint: `https://push.example.com/send/${suffix}`,
+    endpoint: `https://fcm.googleapis.com/fcm/send/${suffix}`,
     keys: { p256dh: "p".repeat(87), auth: "a".repeat(22) },
     label: "Chrome on Android",
   };
@@ -229,7 +247,7 @@ describe("/v1/push/subscriptions", () => {
         lastFailureAt: null,
       },
     ]);
-    expect(listed.body).not.toContain("push.example.com");
+    expect(listed.body).not.toContain("fcm.googleapis.com");
     expect(listed.body).not.toContain("p".repeat(87));
 
     const revoked = await app.inject({
@@ -267,12 +285,32 @@ describe("/v1/push/subscriptions", () => {
     await app.close();
   });
 
+  it("keeps only the 20 most recently registered devices for one member", async () => {
+    const { app, repository } = await appWith();
+
+    for (let index = 1; index <= 22; index += 1) {
+      const result = await app.inject({
+        method: "POST",
+        url: "/v1/push/subscriptions",
+        headers: { cookie: COOKIE },
+        payload: subscriptionPayload(`device-${String(index).padStart(2, "0")}`),
+      });
+      expect(result.statusCode).toBe(201);
+    }
+
+    expect(repository.rows).toHaveLength(20);
+    expect(repository.rows.some((row) => row.endpoint.endsWith("/device-01"))).toBe(false);
+    expect(repository.rows.some((row) => row.endpoint.endsWith("/device-02"))).toBe(false);
+    expect(repository.rows.some((row) => row.endpoint.endsWith("/device-22"))).toBe(true);
+    await app.close();
+  });
+
   it("never lists or revokes another member's device", async () => {
     const repository = new MemoryPushRepository();
     await repository.upsert(
       OTHER_USER_ID,
       {
-        endpoint: "https://push.example.com/send/theirs",
+        endpoint: "https://fcm.googleapis.com/fcm/send/theirs",
         p256dh: "z".repeat(87),
         auth: "z".repeat(22),
         userAgentLabel: "Their phone",
@@ -305,9 +343,28 @@ describe("/v1/push/subscriptions", () => {
       method: "POST",
       url: "/v1/push/subscriptions",
       headers: { cookie: COOKIE },
-      payload: { ...subscriptionPayload(), endpoint: "http://push.example.com/send/alpha" },
+      payload: { ...subscriptionPayload(), endpoint: "http://fcm.googleapis.com/fcm/send/alpha" },
     });
     expect(notHttps.statusCode).toBe(400);
+
+    const untrustedDestination = await app.inject({
+      method: "POST",
+      url: "/v1/push/subscriptions",
+      headers: { cookie: COOKIE },
+      payload: { ...subscriptionPayload(), endpoint: "https://127.0.0.1/internal" },
+    });
+    expect(untrustedDestination.statusCode).toBe(400);
+
+    const disguisedDestination = await app.inject({
+      method: "POST",
+      url: "/v1/push/subscriptions",
+      headers: { cookie: COOKIE },
+      payload: {
+        ...subscriptionPayload(),
+        endpoint: "https://fcm.googleapis.com@127.0.0.1/internal",
+      },
+    });
+    expect(disguisedDestination.statusCode).toBe(400);
 
     const missingKeys = await app.inject({
       method: "POST",
@@ -352,7 +409,7 @@ describe("/v1/push/subscriptions", () => {
     });
 
     expect(result.statusCode).toBe(503);
-    expect(result.json<{ title: string }>().title).toBe("Game day alerts are not configured");
+    expect(result.json<{ title: string }>().title).toBe("Game day alerts are unavailable");
     expect(repository.rows).toHaveLength(0);
     await app.close();
   });
@@ -376,7 +433,7 @@ describe("POST /v1/push/test", () => {
     await repository.upsert(
       OTHER_USER_ID,
       {
-        endpoint: "https://push.example.com/send/theirs",
+        endpoint: "https://fcm.googleapis.com/fcm/send/theirs",
         p256dh: "z".repeat(87),
         auth: "z".repeat(22),
         userAgentLabel: null,
@@ -401,7 +458,7 @@ describe("POST /v1/push/test", () => {
     expect(result.statusCode).toBe(200);
     expect(result.json()).toEqual({ attempted: 1, delivered: 1, pruned: 0 });
     expect(send).toHaveBeenCalledOnce();
-    expect(send).toHaveBeenCalledWith("https://push.example.com/send/alpha");
+    expect(send).toHaveBeenCalledWith("https://fcm.googleapis.com/fcm/send/alpha");
     await app.close();
   });
 

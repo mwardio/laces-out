@@ -41,7 +41,7 @@ const environmentSchema = z.object({
     z
       .string()
       .trim()
-      .regex(/^[A-Za-z0-9_-]{32,255}$/u)
+      .regex(/^[A-Za-z0-9_-]{87}$/u)
       .optional(),
   ),
   VAPID_PRIVATE_KEY: z.preprocess(
@@ -49,7 +49,7 @@ const environmentSchema = z.object({
     z
       .string()
       .trim()
-      .regex(/^[A-Za-z0-9_-]{32,255}$/u)
+      .regex(/^[A-Za-z0-9_-]{43}$/u)
       .optional(),
   ),
   VAPID_SUBJECT: z.preprocess(

@@ -83,6 +83,16 @@ function applicationServerKey(publicKey: string): ArrayBuffer {
   return buffer;
 }
 
+function sameApplicationServerKey(current: ArrayBuffer | null, expected: ArrayBuffer): boolean {
+  if (!current) return false;
+  const currentBytes = new Uint8Array(current);
+  const expectedBytes = new Uint8Array(expected);
+  return (
+    currentBytes.length === expectedBytes.length &&
+    currentBytes.every((value, index) => value === expectedBytes[index])
+  );
+}
+
 function pushSupport(): PushSupport {
   if (typeof window === "undefined") return "unsupported";
   return "serviceWorker" in navigator && "PushManager" in window && "Notification" in window
@@ -297,12 +307,18 @@ export function SettingsPanel() {
       }
       const registration = await navigator.serviceWorker.register("/sw.js");
       await navigator.serviceWorker.ready;
-      // Re-subscribing keeps the stored keys and the deployment's current VAPID key in step.
-      const existing = await registration.pushManager.getSubscription();
-      if (existing) await existing.unsubscribe();
-      const subscription = await registration.pushManager.subscribe({
+      const expectedKey = applicationServerKey(publicKey);
+      let subscription = await registration.pushManager.getSubscription();
+      if (
+        subscription &&
+        !sameApplicationServerKey(subscription.options.applicationServerKey, expectedKey)
+      ) {
+        await subscription.unsubscribe();
+        subscription = null;
+      }
+      subscription ??= await registration.pushManager.subscribe({
         userVisibleOnly: true,
-        applicationServerKey: applicationServerKey(publicKey),
+        applicationServerKey: expectedKey,
       });
       const payload = subscription.toJSON();
       const response = await fetch(`${apiBaseUrl}/v1/push/subscriptions`, {
@@ -576,12 +592,10 @@ export function SettingsPanel() {
               <div className={styles.disabledNotice} role="note">
                 <ShieldAlert size={16} aria-hidden="true" />
                 <div>
-                  <strong>Not configured by the operator</strong>
+                  <strong>Game day alerts are coming soon</strong>
                   <span>
-                    Game day alerts need a VAPID key pair on the server. Until the operator sets{" "}
-                    <code>VAPID_PUBLIC_KEY</code>, <code>VAPID_PRIVATE_KEY</code>, and{" "}
-                    <code>VAPID_SUBJECT</code>, this deployment sends no push notifications and
-                    nothing about your devices is stored.
+                    This Laces Out instance is not sending browser notifications yet. No device
+                    information is stored until alerts are available.
                   </span>
                 </div>
               </div>
@@ -600,8 +614,9 @@ export function SettingsPanel() {
               <>
                 <div className={styles.form}>
                   <p className={styles.alertLead}>
-                    One push before your first kickoff when a starter is ruled out, is on a bye, or
-                    a starting slot is empty. A day ahead, then a final warning two hours out.
+                    A heads-up before your first kickoff when a starter is ruled out, is on a bye,
+                    or a starting slot is empty. One alert a day ahead, then a final warning two
+                    hours out.
                   </p>
                   <div className={styles.alertActions}>
                     <button type="button" onClick={enableAlerts} disabled={pushBusy}>
@@ -610,7 +625,7 @@ export function SettingsPanel() {
                       ) : (
                         <BellRing size={15} aria-hidden="true" />
                       )}
-                      {alertsEnabledHere ? "Re-register this device" : "Turn on for this device"}
+                      {alertsEnabledHere ? "Refresh this device" : "Turn on for this device"}
                     </button>
                     {alertsEnabledHere ? (
                       <button

@@ -2832,7 +2832,7 @@ export const pushConfigurationSchema = z
     available: z.boolean(),
     publicKey: z
       .string()
-      .regex(/^[A-Za-z0-9_-]{32,255}$/u)
+      .regex(/^[A-Za-z0-9_-]{87}$/u)
       .nullable(),
   })
   .strict();
@@ -2843,13 +2843,42 @@ const pushSubscriptionKeySchema = z
   .trim()
   .regex(/^[A-Za-z0-9_-]{1,256}$/u);
 
+/**
+ * Push endpoints are server-side destinations, so accepting an arbitrary HTTPS URL would turn a
+ * registered member into an SSRF client. Browser subscriptions currently terminate at one of
+ * these platform push services; exact or owned-suffix matching keeps the check narrow without
+ * depending on a particular regional Windows or Mozilla host.
+ */
+export function isTrustedPushServiceEndpoint(value: string): boolean {
+  try {
+    const endpoint = new URL(value);
+    const hostname = endpoint.hostname.toLowerCase();
+    const trustedHostname =
+      hostname === "fcm.googleapis.com" ||
+      hostname === "web.push.apple.com" ||
+      hostname === "push.services.mozilla.com" ||
+      hostname.endsWith(".push.services.mozilla.com") ||
+      hostname.endsWith(".notify.windows.com");
+    return (
+      endpoint.protocol === "https:" &&
+      endpoint.username === "" &&
+      endpoint.password === "" &&
+      endpoint.port === "" &&
+      endpoint.hash === "" &&
+      trustedHostname
+    );
+  } catch {
+    return false;
+  }
+}
+
 /** Mirrors `PushSubscription.toJSON()` so the browser value can be posted without reshaping. */
 export const pushSubscriptionRequestSchema = z
   .object({
     endpoint: z
       .url()
       .max(2048)
-      .refine((value) => value.startsWith("https://"), "must be an https endpoint"),
+      .refine(isTrustedPushServiceEndpoint, "must be a recognized browser push service endpoint"),
     keys: z.object({ p256dh: pushSubscriptionKeySchema, auth: pushSubscriptionKeySchema }).strict(),
     /** A member-visible device name. Never the raw user-agent string. */
     label: z.string().trim().min(1).max(80).nullish(),

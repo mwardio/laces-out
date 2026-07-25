@@ -62,9 +62,9 @@ function authenticatedUser(request: FastifyRequest, reply: FastifyReply) {
 function unconfigured(request: FastifyRequest, reply: FastifyReply) {
   return reply.code(503).type("application/problem+json").send({
     type: "https://fantasy.local/problems/push-unavailable",
-    title: "Game day alerts are not configured",
+    title: "Game day alerts are unavailable",
     status: 503,
-    detail: "This deployment has no VAPID keys, so web push is unavailable.",
+    detail: "This Laces Out instance is not sending browser notifications yet.",
     correlationId: request.id,
   });
 }
