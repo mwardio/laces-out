@@ -26,7 +26,10 @@
     "check": "npm run format:check && npm run lint && npm run typecheck && npm run test && npm run build"
   },
   "overrides": {
-    "postcss": "8.5.22"
+    "postcss": "8.5.22",
+    "next": {
+      "sharp": "0.35.3"
+    }
   },
   "devDependencies": {
     "@eslint/js": "^9.31.0",
