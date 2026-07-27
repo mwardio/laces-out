@@ -1,6 +1,6 @@
 # Schedule Intelligence Enhancement Plan
 
-- Status: proposed
+- Status: proposed; implementation review resolved
 - Last updated: 2026-07-27
 - Target surface: `/schedule`
 - Working product name: **Schedule Edge**
@@ -20,7 +20,8 @@ The official schedule remains available as supporting evidence. It is not the pr
 ## 2. Product decision
 
 Keep the schedule data, public endpoints, and `/schedule` route. Replace the current page hierarchy
-and navigation label with **Schedule Edge** once the first member-facing analysis is complete.
+and navigation label with **Schedule Edge** once the completed experience passes the release
+criteria in section 11. WP1 may improve the existing Schedule page before that rename.
 
 The page should lead with personalized analysis for an authenticated member with a selected league.
 A signed-out visitor should see a clearly labeled, fixed demo of the analytical experience plus the
@@ -78,13 +79,18 @@ The repository already contains most required inputs and safety behavior:
 - Canonical NFL team and player identities.
 - Stored league scoring rules, roster snapshots, roster-slot rules, team claims, and current week.
 - League-scored weekly and rest-of-season projections.
-- A tested `calculatePositionFantasyPointsAllowed` primitive with complete-dataset gating and
-  early-season shrinkage.
+- A test-only `calculatePositionFantasyPointsAllowed` prototype. It has useful shrinkage and
+  completeness concepts but no production caller, and its game-enumeration behavior must be fixed
+  before reuse.
+- Existing scoring normalization and component scoring through
+  `normalizeLeagueScoringProfile`, `scoreProjectionStatComponents`, and
+  `projectionScoringProfileKey`.
+- Week-scoped roster observations containing the position held by each player in that week.
 - A deterministic lineup optimizer and roster eligibility model.
 - Existing source-admission, freshness, provenance, and fail-closed conventions.
 
-The main gaps are orchestration, a league-aware scoring input for fantasy points allowed, historical
-validation, a member-scoped API contract, and the new UI.
+The main gaps are safe game/participation enumeration, opponent adjustment, historical validation,
+orchestration, a member-scoped API contract, and the new UI.
 
 ## 5. Analytical definitions
 
@@ -95,18 +101,58 @@ such as “smash spot” or “elite matchup” unless a disclosed numeric rule 
 
 For each defensive NFL team and supported offensive position:
 
-1. Score every complete player-game observation with the selected league's stored scoring rules.
-2. Sum those player points by defensive opponent, game, and position.
-3. Average only complete games.
-4. Shrink the observed average toward a pre-period baseline.
-5. Retain the raw average, adjusted average, baseline, games observed, incomplete games, and
-   shrinkage weights.
+1. Enumerate completed defense-games from the admitted schedule, not from observed stat rows.
+2. Require the admitted week-level roster artifact to affirm the participating player pool.
+3. Join weekly stat rows to week-scoped roster position. Do not use the player's current primary
+   position for a historical game.
+4. Require every roster and stat row used by an included game to resolve to a canonical player and a
+   supported week-scoped position.
+5. Score complete player-game components with the selected league's normalized scoring profile.
+6. Treat a rostered player with no stat row as zero only when schedule, roster, identity, and
+   participation coverage all cleared admission.
+7. Sum player points by defensive opponent, game, and position.
+8. Calculate raw and opponent-adjusted points allowed over complete games only.
+9. Retain the raw average, adjusted average, baseline, complete and incomplete game counts,
+   unmatched row counts, and shrinkage weights.
 
-The existing league-analytics primitive should be extended rather than replaced. The service must
-affirm complete player coverage for the included games. Partial coverage makes the metric
-unavailable; it does not become a lower defensive score.
+An empty position slice is incomplete, not a complete zero. A completed scheduled game with missing
+stat or roster coverage must increment the incomplete count. Any unmatched stat or roster row that
+could affect the position total withholds that game-position observation.
 
-### 5.2 Early-season baseline
+Extend the existing league-analytics primitive rather than replacing its useful contracts, but fix
+its current silent-zero behavior before connecting it to a production route. Fantasy points allowed
+in Stats Center and Schedule Edge must use this one implementation and definition.
+
+### 5.2 Scoring compatibility
+
+Reuse the existing projections scoring stack:
+
+- normalize stored rules with `normalizeLeagueScoringProfile`;
+- score weekly components with `scoreProjectionStatComponents`; and
+- identify semantically equivalent profiles with `projectionScoringProfileKey`.
+
+Scoring compatibility is a first-class availability result. Fatal unsupported rules withhold the
+affected metric. Ignored or separately modeled rule warnings remain visible in provenance and are
+allowed only when they cannot change the supported offensive-position totals. Do not silently fall
+back to standard or PPR scoring for a league whose rules failed normalization.
+
+### 5.3 Opponent-offense and recency adjustment
+
+Raw fantasy points allowed is confounded by the offenses a defense has faced. For each complete
+defense-game-position:
+
+1. Estimate the opposing offense-position expectation using only games completed before that game,
+   shrunk toward the league positional mean.
+2. Calculate the defense residual: actual points allowed minus that pregame expectation.
+3. Express adjusted points allowed as league mean plus the defense's aggregated residual.
+4. Carry raw and adjusted values together so the adjustment remains auditable.
+
+The production policy must compare equal game weights with bounded recency-weighted candidates in
+the historical gate. Select recency weighting only if it improves held-out performance without
+making early-season estimates unstable. No target-week or future result may enter the offense
+expectation.
+
+### 5.4 Early-season baseline
 
 Before the current season has enough completed games:
 
@@ -118,7 +164,12 @@ The exact prior weight must be selected in historical evaluation and then locked
 If a team identity or prior sample cannot be trusted, use the positional league mean rather than a
 guessed team prior.
 
-### 5.3 Matchup score
+During preseason and Weeks 1–4, the page leads with bye feasibility and official schedule facts.
+Validated prior-season matchup context may appear only as **Low confidence**, with its prior-season
+basis visible. A position receives no favorable/difficult language until its production policy's
+minimum current-season support or validated preseason rule is satisfied.
+
+### 5.5 Matchup score
 
 For a scheduled offensive team and position, the opponent's adjusted fantasy points allowed becomes
 the matchup input. Convert it to a within-position percentile:
@@ -133,10 +184,14 @@ The UI may group percentiles into:
 - **Neutral:** 34–66
 - **Difficult:** 0–33
 
-Always show the numeric percentile or league-scored point differential in detail. Ties use a stable
-midrank. A grade is unavailable when its opponent-position input is unavailable.
+Percentile alone does not earn a directional label. Favorable or Difficult must also clear a
+versioned minimum league-scored point differential from the positional mean selected in historical
+validation. A high percentile with a trivial point spread remains Neutral.
 
-### 5.4 Schedule strength
+Always show the numeric percentile and league-scored point differential in detail. Ties use a
+stable midrank. A grade is unavailable when its opponent-position input is unavailable.
+
+### 5.6 Schedule strength
 
 For an NFL team and position over a selected week range:
 
@@ -145,8 +200,8 @@ For an NFL team and position over a selected week range:
 - withhold unknown weeks rather than treating them as neutral; and
 - calculate the simple mean of available matchup percentiles.
 
-Use equal week weights in the first release. Recency weighting would make the metric harder to
-interpret without established evidence that it improves decisions.
+Future schedule weeks use equal weights. Recency, if validated, applies only while estimating the
+defense's current strength; it does not make one future matchup count more than another.
 
 Return:
 
@@ -156,19 +211,20 @@ Return:
 - the week-by-week opponent and rating; and
 - coverage and confidence state.
 
-### 5.5 Confidence
+### 5.7 Confidence
 
 Confidence describes input support, not certainty about a player's performance.
 
 - **High:** current-season metric with the historically validated minimum number of complete games.
 - **Medium:** mixed current- and prior-season support.
 - **Low:** predominantly prior-season or heavily shrunk support.
-- **Unavailable:** schedule coverage, scoring compatibility, or weekly-stat completeness failed.
+- **Unavailable:** schedule, participation, identity, scoring compatibility, or weekly-stat
+  completeness failed.
 
-The minimum-game thresholds and shrinkage weights are fixed by the validation work in section 11,
+The minimum-game thresholds and shrinkage weights are fixed by the validation work in section 6,
 not chosen to make the current data look persuasive.
 
-### 5.6 Roster outlook
+### 5.8 Roster outlook
 
 Join the claimed roster to canonical NFL team, position eligibility, schedule, and matchup scores.
 For each player, return:
@@ -183,7 +239,7 @@ For each player, return:
 Do not add the matchup score to a projection. Do not claim the schedule “raises” a player by a
 specific number unless a future counterfactual projection model can support that statement.
 
-### 5.7 Bye-week lineup feasibility
+### 5.9 Bye-week lineup feasibility
 
 For every affirmed bye week in the selected range:
 
@@ -194,40 +250,51 @@ For every affirmed bye week in the selected range:
 Return one of:
 
 - **Covered:** a legal lineup remains.
-- **Thin:** a legal lineup remains, but at least one starter slot has no alternative eligible
-  assignment after the selected assignment.
+- **Thin:** a legal lineup exists, and at least one non-bye rostered player exists whose additional
+  removal makes the lineup infeasible.
 - **Gap:** no legal complete lineup can be formed.
 - **Unknown:** roster, slot, identity, or schedule coverage is insufficient.
 
 Reuse or extract the existing deterministic roster-assignment machinery. Do not implement this as
-simple position counts; flex and multi-position eligibility make that answer unreliable.
+simple position counts; flex and multi-position eligibility make that answer unreliable. Enforce
+the optimizer's existing limit of 30 unlocked starter slots and return `Unknown` when a league
+exceeds the supported bound.
 
-### 5.8 Fantasy-playoff window
+### 5.10 Fantasy-playoff window
 
-Use provider-supplied league playoff weeks when they are stored and trustworthy. Otherwise default
-the view to Weeks 15–17 and label it **Weeks 15–17**, not “your playoffs.” The member may adjust the
-range in the page controls without adding a new persisted preference in the first release.
+Read provider-supplied regular-season and playoff-period fields from the already persisted
+`league_seasons.settings.operationalRules` snapshot through a bounded typed parser. Use them only
+when present, valid, and covered by tests for that provider. Otherwise default the view to Weeks
+15–17 and label it **Weeks 15–17**, not “your playoffs.” The member may adjust the range in the page
+controls without adding a new persisted preference in the first release.
 
 ## 6. Historical validation gate
 
 The labels must demonstrate useful signal before they ship as recommendations.
 
-Run locked, week-by-week historical evaluation across the admitted 2023–2025 regular seasons:
+Run locked, week-by-week historical evaluation across the 2023–2025 regular seasons. Add one
+bounded 2022 weekly-stat, weekly-roster, and schedule backfill for evaluation support so the 2023
+fold has a strictly prior baseline; do not expand the recurring production refresh window merely to
+support the backtest.
 
 1. For each target week, build defensive position metrics using only games completed before that
    week.
-2. Apply the same prior-season and shrinkage policy intended for production.
-3. Compare the target-week result with each player's trailing performance baseline and actual
+2. Build opponent-offense expectations using only information available before each evaluated game.
+3. Compare unadjusted, opponent-adjusted, and bounded recency-weighted candidate policies.
+4. Apply the same prior-season and shrinkage policy intended for production.
+5. Compare the target-week result with each player's trailing performance baseline and actual
    league-scored points.
-4. Evaluate QB, RB, WR, and TE independently.
-5. Record sample counts, mean residual by difficult/neutral/favorable bucket, rank correlation,
+6. Evaluate QB, RB, WR, and TE independently under fixed representative standard, half-PPR, and
+   full-PPR profiles.
+7. Record sample counts, mean residual by difficult/neutral/favorable bucket, rank correlation,
    calibration by percentile band, and early- versus late-season performance.
-6. Lock the minimum-game threshold and prior/current weighting without looking at 2026 outcomes.
+8. Lock the minimum-game threshold, minimum point differential, opponent adjustment, recency policy,
+   and prior/current weighting without looking at 2026 outcomes.
 
 Release a position's favorable/difficult language only if the buckets show a stable, correctly
-ordered relationship on held-out weeks and are not driven by a small number of games. If a position
-does not clear the gate, display the underlying adjusted points-allowed statistic as descriptive
-context or withhold it; do not imply predictive value.
+ordered relationship on held-out weeks, clear a meaningful point differential, and are not driven
+by a small number of games. If a position does not clear the gate, display the underlying adjusted
+points-allowed statistic as descriptive context or withhold it; do not imply predictive value.
 
 Store the evaluation summary and policy version with the metric definition. Tests should use frozen
 fixtures, while the full evaluation can run as a bounded script or worker diagnostic.
@@ -243,7 +310,7 @@ Keep these routes public and user-independent:
 
 They remain the official schedule reference and a reusable source for the web page.
 
-### 7.2 Add a member-scoped analysis route
+### 7.2 Add a member-scoped roster route
 
 Add:
 
@@ -268,13 +335,31 @@ The response should contain:
 - supported position definitions and validation status;
 - personalized roster outlook;
 - bye-week feasibility findings;
-- NFL team-by-position schedule-strength summaries for both windows; and
 - definitions required to interpret every score and label.
 
-Bound the response to the 32 NFL teams, supported positions, regular-season weeks, and the claimed
-roster. Do not return all league rosters or another member's private projection set.
+Bound the response to the claimed roster and selected regular-season weeks. Do not return all league
+rosters or another member's private projection set. Deterministically prioritized findings must
+include the algorithm version and input hash required by ADR 0003.
 
-### 7.3 Service boundary
+### 7.3 Add a separately cached matrix route
+
+Add:
+
+```text
+GET /v1/leagues/:leagueId/schedule-edge/matrix
+  ?startWeek=<1..18>
+  &endWeek=<start..18>
+```
+
+This route still requires authentication and league membership because the league chooses the
+scoring profile. Its result contains no member roster data and is cached by semantic scoring profile
+rather than member identity.
+
+Return at most 32 NFL teams by four supported positions, with window summary and bounded
+week-by-week detail. A separate request prevents the larger comparison matrix from delaying every
+personalized roster read.
+
+### 7.4 Service boundary
 
 Create a dedicated `ScheduleEdgeService` rather than expanding `ScheduleService` into league-aware
 analysis. The existing service remains responsible for admitted schedule facts and bye lookup.
@@ -292,27 +377,34 @@ ScheduleEdgeRepository
   readScheduleGames(season)
   readWeeklyStatSource(season)
   readWeeklyPlayerStats(season and optional prior season)
+  readWeeklyRosterSource(season)
+  readWeeklyRosterPlayers(season and optional prior season)
   readCompatibleProjectionContext(userId, leagueSeasonId)
 ```
 
 Pure analytics belong in `packages/league-analytics`; authorization, bounded database reads, source
 admission, and response assembly belong in `apps/api`.
 
-### 7.4 Caching and refresh
+### 7.5 Caching and refresh
 
 Compute on request first. The expected user count and data bounds do not justify a new materialized
 table before measurement.
 
-Use a short in-process cache only if profiling shows a need. Its key must include:
+Use a short in-process cache only if profiling shows a need. Roster-result keys must include:
 
 - league season and claimed team;
-- scoring-rules checksum;
+- the semantic `projectionScoringProfileKey`;
 - schedule source checksum;
 - current- and prior-season weekly-stat checksums;
+- current- and prior-season weekly-roster checksums;
 - roster snapshot identity;
 - projection-set identity when projection context is included;
 - selected windows; and
 - analysis policy version.
+
+Matrix-result keys omit member and roster identity and include the semantic scoring profile key,
+source checksums, selected window, and policy version. Hash the semantic key for storage or logging
+rather than exposing the raw serialized profile.
 
 The existing daily source refresh, hourly forecast sweep, provider sync, and on-demand refresh paths
 are sufficient inputs. A changed checksum must invalidate the result immediately. The UI should
@@ -349,6 +441,10 @@ Sort findings by:
 Projection context may help prioritize which roster players are likely starters. It must remain
 visually distinct from the matchup score.
 
+Because this ordering can influence a fantasy decision, treat it as reproducible analysis under ADR
+0003: return its algorithm version, exact input hash, factors, and availability warnings. It is not
+an independent add/drop, trade, or lineup recommendation.
+
 ### 8.3 Cross-links
 
 - A roster player's name links to player detail.
@@ -382,54 +478,70 @@ The tour should never fall back to an empty shell or a sign-in prompt.
 
 ## 9. Work packages
 
-### WP1 — League-scored matchup engine and validation
-
-Deliver:
-
-- a reusable league-scoring adapter for admitted weekly stat components;
-- an extension of position fantasy points allowed that supports a validated prior/current policy;
-- deterministic percentile, window-strength, confidence, and coverage calculations;
-- the locked 2023–2025 evaluation harness and policy artifact; and
-- unit, property, and fixture tests.
-
-Exit criteria:
-
-- every published metric can be recomputed from stored facts and a versioned policy;
-- incomplete data fails closed;
-- reorderings of equivalent input rows do not change output; and
-- only positions that clear the historical gate receive predictive labels.
-
-### WP2 — Roster and bye intelligence
+### WP1 — Bye intelligence vertical slice
 
 Deliver:
 
 - canonical roster-to-NFL-schedule joins;
-- selected-window and playoff-window roster outlook;
-- legal-lineup bye feasibility using stored slot rules; and
-- focused, deterministic finding prioritization.
+- legal-lineup bye feasibility using stored slot rules;
+- focused, versioned finding prioritization;
+- the initial authenticated contract and route for roster and bye results;
+- a mobile-first Bye Pressure section above the official schedule; and
+- a complete signed-out bye-analysis fixture.
 
 Exit criteria:
 
 - flex, superflex, multi-position eligibility, IR/bench distinctions, and duplicate slot types are
   covered by tests;
-- unknown player team or schedule coverage produces `Unknown`, never `Covered`; and
-- no other league member's roster appears in the member response.
+- unknown player team or schedule coverage produces `Unknown`, never `Covered`;
+- no other league member's roster appears in the member response;
+- preseason users receive useful bye analysis without pretending current-season matchup evidence
+  exists; and
+- the existing public schedule stays available.
 
-### WP3 — Member API and provenance
+This is the first shippable slice and does not wait on matchup-model validation.
+
+### WP2 — League-scored matchup engine and validation
 
 Deliver:
 
-- contracts and parser for the schedule-edge response;
-- repository, service, authenticated route, and server wiring;
-- bounded reads and response sizes;
-- source/policy provenance and per-section availability; and
-- route, authorization, repository, and service tests.
+- fixes for the prototype's empty-slice and missing-game silent-zero behavior;
+- schedule-enumerated games and week-scoped roster participation/position joins;
+- reuse of the existing scoring normalizer, component scorer, and semantic scoring key;
+- first-class scoring compatibility and unmatched-row availability;
+- raw and opponent-offense-adjusted fantasy points allowed;
+- candidate recency, prior/current, confidence, percentile, and minimum-differential policies;
+- the evaluation-only 2022 backfill;
+- the locked 2023–2025 evaluation harness and policy artifact;
+- one shared fantasy-points-allowed definition for Schedule Edge and Stats Center; and
+- unit, property, integration, and frozen-fixture tests.
 
 Exit criteria:
 
-- a league member receives a deterministic snapshot;
+- every published metric can be recomputed from stored facts and a versioned policy;
+- empty or missing position rows never become observed zeroes without affirmed roster coverage;
+- input row ordering does not change output;
+- no evaluation fold uses future information; and
+- only positions that clear the historical gate receive predictive labels.
+
+### WP3 — Matchup API and provenance
+
+Deliver:
+
+- the expanded member roster contract and parser;
+- the separate team-position matrix contract and parser;
+- repository, services, authenticated routes, and server wiring;
+- semantic-profile matrix caching and member-specific roster assembly;
+- bounded reads and response sizes;
+- source, scoring, evaluation-policy, algorithm-version, and input-hash provenance; and
+- route, authorization, repository, service, and cache-isolation tests.
+
+Exit criteria:
+
+- a league member receives a deterministic roster snapshot and separately requested matrix;
+- semantically identical scoring profiles may reuse a matrix without sharing member data;
 - a nonmember receives the same `404` shape as an unknown league;
-- stale, quarantined, partial, and absent inputs are explicit; and
+- stale, quarantined, partial, incompatible, and absent inputs are explicit; and
 - the public schedule endpoints remain unchanged.
 
 ### WP4 — Schedule Edge UI and demo
@@ -471,12 +583,19 @@ Exit criteria:
 
 ### Pure analytics
 
-- League-scoring correctness for representative ESPN scoring rules.
+- League-scoring correctness for representative ESPN and Yahoo rules plus standard, half-PPR, and
+  full-PPR evaluation profiles.
+- Unsupported scoring and allowed ignored-rule warnings.
 - Complete versus partial game coverage.
+- Schedule game with no stat rows, rostered zero-stat player, empty position slice, unmatched stat
+  row, and unmatched weekly-roster row.
+- Week-scoped position changes versus current player position.
 - Duplicate player-game rejection.
 - Canonical team alias handling.
-- Stable ranks, ties, and percentiles.
+- Stable ranks, ties, percentiles, and minimum point-differential labels.
+- Raw versus opponent-offense-adjusted values.
 - Prior/current shrinkage at Weeks 1, 4, 8, and 14.
+- Preseason and Weeks 1–4 low-confidence behavior.
 - Bye and unknown weeks excluded correctly from window averages.
 - No lookahead in historical evaluation.
 - Deterministic output under input reordering.
@@ -494,7 +613,9 @@ Exit criteria:
 - Membership authorization and indistinguishable unknown/inaccessible leagues.
 - Private projection visibility.
 - Query bounds and malformed week ranges.
+- Semantic scoring-profile cache reuse without roster or membership leakage.
 - Missing, stale, quarantined, oversized, and rejected source inputs.
+- Unsupported scoring and unmatched identity/position inputs.
 - Per-section availability without failing the entire response.
 - Contract parsing and response-size limits.
 
@@ -522,8 +643,14 @@ Schedule Edge is ready to replace the current Schedule navigation label when:
 
 - QB, RB, WR, and TE each either clear the historical gate or are explicitly withheld;
 - matchup grades use the selected league's scoring rules;
+- scoring incompatibility and unmatched weekly identities/positions withhold affected metrics;
+- completed schedule games and weekly roster participation prevent missing rows from becoming
+  silent zeroes;
+- matchup ratings are opponent-offense adjusted unless the locked evaluation rejects that policy;
 - all schedule absences preserve the existing bye-versus-unknown distinction;
 - roster bye feasibility handles the league's actual roster-slot rules;
+- preseason and Weeks 1–4 lead with bye analysis, show only explicitly low-confidence prior-season
+  context, and never imply that 2026 games have already informed the model;
 - the first mobile viewport shows a meaningful personalized or demo finding;
 - the official schedule remains available and public;
 - provenance and confidence are visible without dominating the main experience;
@@ -534,6 +661,10 @@ If the historical gate finds that opponent-position points allowed adds little p
 do not manufacture a proprietary score. Ship bye feasibility and transparent descriptive schedule
 context, or keep the raw schedule secondary until a better validated signal exists.
 
+WP1's bye-intelligence slice may ship before the Schedule Edge rename and matchup labels. It must be
+presented as bye planning plus official schedule context, not as the completed schedule-strength
+product.
+
 ## 12. Expected file map
 
 Likely additions or changes:
@@ -542,13 +673,18 @@ Likely additions or changes:
 packages/league-analytics/src/schedule-edge.ts
 packages/league-analytics/src/schedule-edge.test.ts
 packages/league-analytics/src/opportunity.ts
+packages/projections/src/league-scoring.ts
+packages/projections/src/scoring.ts
 packages/contracts/src/index.ts
 apps/api/src/schedule-edge.ts
 apps/api/src/schedule-edge.test.ts
 apps/api/src/schedule-edge-routes.ts
 apps/api/src/schedule-edge-routes.test.ts
+apps/api/src/stats-center.ts
 apps/api/src/app.ts
 apps/api/src/server.ts
+apps/worker/src/schedule-edge-evaluation.ts
+apps/worker/src/schedule-edge-evaluation.test.ts
 apps/web/src/lib/api-client.ts
 apps/web/src/lib/demo-schedule-edge.ts
 apps/web/src/components/schedule-edge-workbench.tsx
@@ -567,8 +703,10 @@ UI formatting.
    `docs/architecture`.
 2. Run `git status -sb` and preserve unrelated changes.
 3. Verify current schema and source coverage rather than relying only on this file map.
-4. Start with WP1 and the historical validation gate.
-5. Do not build favorable/difficult UI labels before a position clears that gate.
+4. Start with the WP1 bye-intelligence vertical slice; it does not depend on historical matchup
+   evidence.
+5. Complete WP2's data-correctness fixes and historical gate before building favorable/difficult
+   labels for any position.
 6. Complete contracts, service, route, UI, tests, and provenance for one vertical slice at a time.
 7. Keep public schedule behavior working throughout.
 8. Update this document's status and any fixed metric definitions when implementation decisions are
@@ -579,8 +717,34 @@ UI formatting.
 ## Appendix A — Implementation review, 2026-07-27
 
 These findings come from checking sections 1 through 13 against the current repository. They are
-unresolved review notes, not accepted decisions. Where an item conflicts with the body of this plan,
-the body still stands until the conflict is decided and the affected section is edited.
+retained as the review record; line references and section descriptions below refer to the
+pre-review version. The authoritative decisions are now integrated into sections 4 through 13.
+
+### A.0 Disposition
+
+- **Accepted:** ship bye intelligence before waiting for matchup validation; define explicit
+  preseason and Weeks 1–4 behavior.
+- **Accepted:** fix both silent-zero paths by enumerating completed games from schedule observations
+  and requiring admitted weekly-roster participation.
+- **Accepted:** resolve historical position from weekly roster observations and withhold unmatched
+  player or position coverage.
+- **Accepted:** reuse the existing scoring normalizer, component scorer, and semantic profile key;
+  expose scoring incompatibility separately.
+- **Accepted:** add opponent-offense adjustment, evaluate recency rather than assuming it, and use
+  the same fantasy-points-allowed definition in Stats Center and Schedule Edge.
+- **Accepted:** replace the matching-dependent `Thin` definition with leave-one-player-out
+  feasibility.
+- **Corrected:** provider playoff timing is already retained inside
+  `league_seasons.settings.operationalRules`; no new column is required. The implementation needs a
+  bounded typed reader and a clearly labeled Weeks 15–17 fallback.
+- **Accepted:** split member roster/bye results from the larger team-position matrix and share only
+  the latter's cache by semantic scoring profile.
+- **Accepted:** evaluate standard, half-PPR, and full-PPR profiles; add an evaluation-only 2022
+  backfill; require a minimum point differential for directional labels; and version/hash
+  prioritized findings under ADR 0003.
+- **Not accepted:** removing `noindex` from `/schedule`. The route may be publicly accessible for
+  the locker-room tour without becoming a search-indexed marketing page; the landing page remains
+  the intended indexed entry point.
 
 ### A.1 Work package order
 
