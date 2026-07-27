@@ -21,7 +21,8 @@ The official schedule remains available as supporting evidence. It is not the pr
 
 Keep the schedule data, public endpoints, and `/schedule` route. Replace the current page hierarchy
 and navigation label with **Schedule Edge** once the completed experience passes the release
-criteria in section 11. WP1 may improve the existing Schedule page before that rename.
+criteria in section 11. Build the complete experience behind the existing Schedule surface and
+release it as one coordinated update.
 
 The page should lead with personalized analysis for an authenticated member with a selected league.
 A signed-out visitor should see a clearly labeled, fixed demo of the analytical experience plus the
@@ -478,7 +479,11 @@ The tour should never fall back to an empty shell or a sign-in prompt.
 
 ## 9. Work packages
 
-### WP1 — Bye intelligence vertical slice
+These packages are implementation checkpoints, not separate rollout stages. Complete WP1 through
+WP5 in one continuous effort, keeping each checkpoint testable and commit-ready while holding the
+public Schedule Edge release until the full criteria in section 11 pass.
+
+### WP1 — Bye intelligence foundation
 
 Deliver:
 
@@ -499,7 +504,8 @@ Exit criteria:
   exists; and
 - the existing public schedule stays available.
 
-This is the first shippable slice and does not wait on matchup-model validation.
+This is the first complete vertical implementation checkpoint. It can be built and tested without
+waiting on matchup-model validation, but it is not intended as a separate public release.
 
 ### WP2 — League-scored matchup engine and validation
 
@@ -661,10 +667,6 @@ If the historical gate finds that opponent-position points allowed adds little p
 do not manufacture a proprietary score. Ship bye feasibility and transparent descriptive schedule
 context, or keep the raw schedule secondary until a better validated signal exists.
 
-WP1's bye-intelligence slice may ship before the Schedule Edge rename and matchup labels. It must be
-presented as bye planning plus official schedule context, not as the completed schedule-strength
-product.
-
 ## 12. Expected file map
 
 Likely additions or changes:
@@ -703,170 +705,14 @@ UI formatting.
    `docs/architecture`.
 2. Run `git status -sb` and preserve unrelated changes.
 3. Verify current schema and source coverage rather than relying only on this file map.
-4. Start with the WP1 bye-intelligence vertical slice; it does not depend on historical matchup
+4. Start with the WP1 bye-intelligence foundation; it does not depend on historical matchup
    evidence.
 5. Complete WP2's data-correctness fixes and historical gate before building favorable/difficult
    labels for any position.
-6. Complete contracts, service, route, UI, tests, and provenance for one vertical slice at a time.
+6. Proceed through WP3–WP5 without a partial public release; keep each implementation checkpoint
+   testable and commit-ready.
 7. Keep public schedule behavior working throughout.
 8. Update this document's status and any fixed metric definitions when implementation decisions are
    locked.
-9. Rebuild or deploy only when requested.
+9. Rebuild or deploy only when requested and after the complete release criteria pass.
 10. Commit or push only when requested.
-
-## Appendix A — Implementation review, 2026-07-27
-
-These findings come from checking sections 1 through 13 against the current repository. They are
-retained as the review record; line references and section descriptions below refer to the
-pre-review version. The authoritative decisions are now integrated into sections 4 through 13.
-
-### A.0 Disposition
-
-- **Accepted:** ship bye intelligence before waiting for matchup validation; define explicit
-  preseason and Weeks 1–4 behavior.
-- **Accepted:** fix both silent-zero paths by enumerating completed games from schedule observations
-  and requiring admitted weekly-roster participation.
-- **Accepted:** resolve historical position from weekly roster observations and withhold unmatched
-  player or position coverage.
-- **Accepted:** reuse the existing scoring normalizer, component scorer, and semantic profile key;
-  expose scoring incompatibility separately.
-- **Accepted:** add opponent-offense adjustment, evaluate recency rather than assuming it, and use
-  the same fantasy-points-allowed definition in Stats Center and Schedule Edge.
-- **Accepted:** replace the matching-dependent `Thin` definition with leave-one-player-out
-  feasibility.
-- **Corrected:** provider playoff timing is already retained inside
-  `league_seasons.settings.operationalRules`; no new column is required. The implementation needs a
-  bounded typed reader and a clearly labeled Weeks 15–17 fallback.
-- **Accepted:** split member roster/bye results from the larger team-position matrix and share only
-  the latter's cache by semantic scoring profile.
-- **Accepted:** evaluate standard, half-PPR, and full-PPR profiles; add an evaluation-only 2022
-  backfill; require a minimum point differential for directional labels; and version/hash
-  prioritized findings under ADR 0003.
-- **Not accepted:** removing `noindex` from `/schedule`. The route may be publicly accessible for
-  the locker-room tour without becoming a search-indexed marketing page; the landing page remains
-  the intended indexed entry point.
-
-### A.1 Work package order
-
-WP2 has no dependency on the historical gate and every input it needs already exists.
-`optimizeLineup` in `packages/engine-lineup/src/index.ts:179` is an exact bitmask assignment search
-that selects maximum filled slots before score (`:327`), so `feasible` and `unfilledSlotIds` are a
-correct legal-lineup test. `apps/api/src/in-season-decisions.ts:264` and `:1275` already read
-`roster_slot_rules`, expand slot counts, and call it.
-
-WP1 depends on evidence that may not arrive, and its launch timing is unfavorable.
-`uniqueSeasonWindow` in `apps/worker/src/nflverse-weekly-data.ts:332` admits
-`currentSeason - 3` through `currentSeason`, and the 2026 season has not started. At release every
-matchup rating would rest entirely on prior-season data regressed substantially toward the
-league-wide positional mean under section 5.2, which is the weakest state described in section 5.5,
-during the draft-preparation and early-waiver period when schedule strength draws the most interest.
-
-Consider making WP2 the first shippable slice. Section 11 should state what the page shows during
-Weeks 1 through 4 of a new season, when no current-season sample exists.
-
-### A.2 Two silent-zero defects in the fantasy-points-allowed primitive
-
-Both are in `packages/league-analytics/src/opportunity.ts`:
-
-- `:782` calls `relevant.every(...)` on a possibly empty array, which returns `true`. A defense,
-  game, and position combination with no stat rows is recorded as a complete 0.0-point game. That is
-  the behavior section 3.3 lists as an explicit non-goal.
-- `:763` builds `defenseGames` from observed stat rows rather than from the admitted schedule. A
-  completed game with no admitted stat rows is invisible: `games` shrinks, `incompleteGames` stays
-  `0`, and section 5.5 would report **High** confidence on a silently truncated sample.
-
-WP1 should enumerate defense-games from the admitted schedule and require an affirmed participation
-basis from `player_weekly_roster_observations` before a zero counts as an observed zero.
-
-Section 4 also overstates the foundation slightly. The primitive has no production caller today; it
-is exercised only by fixtures in `opportunity.test.ts` and has never run against the real table.
-
-### A.3 Position at week
-
-`player_weekly_stat_observations` has no position column (`packages/db/src/schema.ts:1777`), and its
-`player_id` is nullable with a dedicated unmatched-row index (`:1788`, `:1819`). Stats Center
-resolves position through `players.primaryPosition` (`apps/api/src/stats-center.ts:207`), which is a
-current position rather than the position held during the game, and which is unavailable for
-unmatched rows whose points would then silently disappear from a defense's total.
-
-`player_weekly_roster_observations.position` (`packages/db/src/schema.ts:1920`) is the correct
-week-scoped source. Section 5.1's completeness gate should require every stat row in an included game
-to be player-matched and positioned, and should say so explicitly.
-
-### A.4 The league-scoring adapter already exists
-
-WP1 lists a reusable league-scoring adapter as new work. `normalizeLeagueScoringProfile`
-(`packages/projections/src/league-scoring.ts:764`) and `scoreProjectionStatComponents`
-(`packages/projections/src/scoring.ts:108`) already map stored `scoring_rules` into a validated
-profile and score the same nflverse component vocabulary the weekly table stores.
-
-Two consequences belong in the plan. First, `normalizeLeagueScoringProfile` reports unsupported and
-ignored rules, since ESPN bucket and per-N stat IDs are deliberately excluded from the maps, so
-scoring incompatibility needs to be a first-class availability state rather than one clause in
-section 5.5. Second, `projectionScoringProfileKey` (`packages/projections/src/scoring.ts:95`) is a
-better cache key than section 7.4's raw scoring-rules checksum, because leagues with semantically
-identical scoring can then share one cached result.
-
-### A.5 Opponent adjustment and the ENHANCEMENT_PLAN conflict
-
-`ENHANCEMENT_PLAN.md:309` specifies D1 as recent-weighted, schedule-adjusted fantasy points allowed
-producing 1-5 ratings. This plan does no opponent adjustment and uses a 0-100 percentile with three
-buckets. Raw fantasy points allowed is dominated by which offenses a defense has faced, most
-severely in the small early-season samples section 5.2 targets.
-
-Either fold opponent-offense adjustment into section 5.1, which is the largest available accuracy
-lever, or amend D1 so the two documents agree. The same applies to `ENHANCEMENT_PLAN.md:311`, where
-D7 places fantasy points allowed in Stats Center; `apps/api/src/stats-center.ts:818` already carries
-a permanently unavailable `fantasyPointsAllowed` field waiting for this metric. One definition should
-serve both surfaces.
-
-### A.6 The `Thin` state is currently matching-dependent
-
-Section 5.7 defines `Thin` as a starter slot with no alternative eligible assignment after the
-selected assignment. Which assignment is selected depends on the projections and tiebreaks handed to
-the optimizer, so the label is not stable. A deterministic replacement:
-
-> **Thin:** a legal lineup exists, and at least one non-bye rostered player exists whose additional
-> removal makes the lineup infeasible.
-
-That is independent of which matching was chosen and costs at most one extra feasibility check per
-rostered player. Note also the optimizer's 30 unlocked starter slot limit
-(`packages/engine-lineup/src/index.ts:285`).
-
-### A.7 Section 5.8's provider playoff weeks are not stored
-
-`league_seasons` has no playoff week columns (`packages/db/src/schema.ts:442`). The ESPN connector
-normalizes `regularSeasonMatchupPeriods` (`packages/connectors/src/normalized.ts:38`), but nothing
-persists it, so the conditional in section 5.8 currently resolves to never.
-
-Either add persistence of `regularSeasonMatchupPeriods` into `league_seasons.settings` during sync as
-an explicit work item, or remove the branch and ship the labeled Weeks 15-17 default with its
-control.
-
-### A.8 Split the member-scoped route
-
-Section 7.2 returns the 32-team by supported-position matrix for two windows, with week-by-week
-detail, inside the member-private response. That is a few thousand week entries per request,
-recomputed per member, and shareable with no one. The matrix is league-scored but not member-private.
-
-Consider splitting it: `/v1/leagues/:leagueId/schedule-edge` for roster, byes, and findings, and a
-second route for the team-by-position matrix keyed by the normalized scoring profile. That also gives
-section 7.4 a cache entry that more than one league can use.
-
-### A.9 Smaller items
-
-- Section 6 does not name the scoring profile used for the backtest. The gate cannot run per league,
-  so it should fix two or three representative profiles. WR and TE orderings genuinely shift between
-  standard and full PPR.
-- Section 6's 2023 fold has no prior season. With 2022 outside the admitted window, the section 5.2
-  prior and current weighting can only be selected on 2024 and 2025. Either state that constraint or
-  add a one-time bounded 2022 backfill used for evaluation only.
-- Section 5.3 hands out labels by construction. Fixed 67 and 34 percentile cuts produce roughly
-  eleven favorable defenses every week even when the spread is a point and a half per game. The
-  label, as distinct from the percentile, should also require a validated minimum point differential
-  and otherwise fall back to Neutral.
-- Section 8.2's ranked findings are recommendation-shaped. Add one line reconciling them with ADR
-  0003: either the ordering is not a recommendation, or it carries the algorithm version and input
-  hash that ADR requires.
-- `apps/web/src/app/schedule/page.tsx:8` sets `robots: { index: false, follow: false }`. If the
-  section 8.4 signed-out tour is meant to be a public surface, that flag has to change.
