@@ -340,6 +340,8 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     "/v1/invitations/accept",
     "/v1/ranking-shares/open",
     "/v1/ranking-shares/export",
+    "/v1/schedule",
+    "/v1/schedule/byes",
   ]);
   app.addHook("onRequest", async (request, reply) => {
     const requestPath = request.url.split("?", 1)[0] ?? request.url;

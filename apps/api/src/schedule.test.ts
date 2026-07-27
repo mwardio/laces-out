@@ -75,7 +75,7 @@ function service(repo: ScheduleRepository = repository()): ScheduleService {
 
 describe("ScheduleService", () => {
   it("returns the season's games with provenance", async () => {
-    const result = await service().getSchedule("user", {
+    const result = await service().getSchedule({
       season: 2025,
       week: null,
       team: null,
@@ -93,7 +93,7 @@ describe("ScheduleService", () => {
   });
 
   it("derives a bye where coverage affirms the team and the week", async () => {
-    const result = await service().getSchedule("user", {
+    const result = await service().getSchedule({
       season: 2025,
       week: null,
       team: "AAA",
@@ -106,7 +106,7 @@ describe("ScheduleService", () => {
   });
 
   it("resolves the team's own side of a game", async () => {
-    const result = await service().getSchedule("user", { season: 2025, week: 3, team: "AAA" });
+    const result = await service().getSchedule({ season: 2025, week: 3, team: "AAA" });
 
     expect(result.teams[0]?.weeks[0]).toMatchObject({
       week: 3,
@@ -131,7 +131,7 @@ describe("ScheduleService", () => {
         ),
       listGames: () => Promise.resolve([game(1, "LA", "SEA")]),
     });
-    const result = await service(repo).getSchedule("user", {
+    const result = await service(repo).getSchedule({
       season: 2025,
       week: null,
       team: "LAR",
@@ -154,7 +154,7 @@ describe("ScheduleService", () => {
         ]),
       findSource: () => Promise.resolve(source({ coveredWeeks: "1" })),
     });
-    const result = await service(repo).getSchedule("user", {
+    const result = await service(repo).getSchedule({
       season: 2025,
       week: 1,
       team: null,
@@ -173,7 +173,7 @@ describe("ScheduleService", () => {
       findSource: () => Promise.resolve(source({ publishable: false })),
       listGames,
     });
-    const result = await service(repo).getSchedule("user", {
+    const result = await service(repo).getSchedule({
       season: 2025,
       week: null,
       team: null,
@@ -187,7 +187,7 @@ describe("ScheduleService", () => {
 
   it("withholds byes when the schedule read rejected rows", async () => {
     const repo = repository({ findSource: () => Promise.resolve(source({ rowsRejected: 2 })) });
-    const result = await service(repo).getSchedule("user", {
+    const result = await service(repo).getSchedule({
       season: 2025,
       week: null,
       team: "AAA",
@@ -204,7 +204,7 @@ describe("ScheduleService", () => {
   it("filters to one week while keeping the full season read for bye detection", async () => {
     const listGames = vi.fn(() => Promise.resolve(GAMES));
     const repo = repository({ listGames });
-    const result = await service(repo).getSchedule("user", {
+    const result = await service(repo).getSchedule({
       season: 2025,
       week: 2,
       team: "AAA",
@@ -219,14 +219,14 @@ describe("ScheduleService", () => {
 
   it("rejects a team filter that is not an abbreviation", async () => {
     await expect(
-      service().getSchedule("user", { season: 2025, week: null, team: "not-a-team" }),
+      service().getSchedule({ season: 2025, week: null, team: "not-a-team" }),
     ).rejects.toThrow(/Invalid schedule team filter/u);
   });
 });
 
 describe("ScheduleService.getByeWeeks", () => {
   it("maps only teams with exactly one affirmed bye and explains the rest", async () => {
-    const result = await service().getByeWeeks("user", 2025);
+    const result = await service().getByeWeeks(2025);
 
     expect(result.byeWeeks).toEqual({ AAA: 2, BBB: 2 });
     // CCC and DDD are idle in two covered weeks, so a single bye is ambiguous.
@@ -237,7 +237,7 @@ describe("ScheduleService.getByeWeeks", () => {
 
   it("returns no bye map at all when the source is withheld", async () => {
     const repo = repository({ findSource: () => Promise.resolve(source({ publishable: false })) });
-    const result = await service(repo).getByeWeeks("user", 2025);
+    const result = await service(repo).getByeWeeks(2025);
 
     expect(result.byeWeeks).toEqual({});
     expect(result.withheld).toHaveLength(4);

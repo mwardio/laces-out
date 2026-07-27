@@ -270,7 +270,7 @@ export class ScheduleService {
     return { source, games: usable, derived };
   }
 
-  async getSchedule(_userId: string, query: ScheduleQuery): Promise<ScheduleResponse> {
+  async getSchedule(query: ScheduleQuery): Promise<ScheduleResponse> {
     const team = query.team ? canonicalNflTeamCode(query.team) : null;
     if (team && !TEAM_PATTERN.test(team)) throw new Error("Invalid schedule team filter");
     const { source, games, derived } = await this.#load(query.season);
@@ -306,7 +306,7 @@ export class ScheduleService {
     return buildByeWeekLookup(derived);
   }
 
-  async getByeWeeks(_userId: string, season: number): Promise<ScheduleByesResponse> {
+  async getByeWeeks(season: number): Promise<ScheduleByesResponse> {
     const { source, derived } = await this.#load(season);
     const lookup = buildByeWeekLookup(derived);
     const byeWeeks: Record<string, number> = {};

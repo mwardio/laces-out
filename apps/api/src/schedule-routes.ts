@@ -5,8 +5,8 @@ import { z } from "zod";
 import type { ScheduleQuery } from "./schedule.js";
 
 export interface SchedulePort {
-  getSchedule(userId: string, query: ScheduleQuery): Promise<unknown>;
-  getByeWeeks(userId: string, season: number): Promise<unknown>;
+  getSchedule(query: ScheduleQuery): Promise<unknown>;
+  getByeWeeks(season: number): Promise<unknown>;
 }
 
 export interface ScheduleRouteOptions {
@@ -31,17 +31,6 @@ const scheduleQuerySchema = z
 
 const byesQuerySchema = z.object({ season: seasonSchema.optional() }).strict();
 
-function authenticatedUser(request: FastifyRequest, reply: FastifyReply) {
-  if (request.currentUser) return request.currentUser;
-  void reply.code(401).type("application/problem+json").send({
-    type: "https://fantasy.local/problems/unauthorized",
-    title: "Authentication required",
-    status: 401,
-    correlationId: request.id,
-  });
-  return undefined;
-}
-
 function unavailable(request: FastifyRequest, reply: FastifyReply) {
   return reply.code(503).type("application/problem+json").send({
     type: "https://fantasy.local/problems/schedule-unavailable",
@@ -63,8 +52,6 @@ export function registerScheduleRoutes(app: FastifyInstance, options: ScheduleRo
   const now = options.now ?? (() => new Date());
 
   app.get("/v1/schedule", async (request, reply) => {
-    const user = authenticatedUser(request, reply);
-    if (!user) return reply;
     if (!options.schedule) return unavailable(request, reply);
     const input = scheduleQuerySchema.parse(request.query);
     const query: ScheduleQuery = {
@@ -72,15 +59,13 @@ export function registerScheduleRoutes(app: FastifyInstance, options: ScheduleRo
       week: input.week ?? null,
       team: input.team ?? null,
     };
-    return scheduleResponseSchema.parse(await options.schedule.getSchedule(user.id, query));
+    return scheduleResponseSchema.parse(await options.schedule.getSchedule(query));
   });
 
   app.get("/v1/schedule/byes", async (request, reply) => {
-    const user = authenticatedUser(request, reply);
-    if (!user) return reply;
     if (!options.schedule) return unavailable(request, reply);
     const input = byesQuerySchema.parse(request.query);
     const season = input.season ?? defaultScheduleSeason(now());
-    return scheduleByesResponseSchema.parse(await options.schedule.getByeWeeks(user.id, season));
+    return scheduleByesResponseSchema.parse(await options.schedule.getByeWeeks(season));
   });
 }

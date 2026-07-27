@@ -6,25 +6,11 @@ import { buildApp } from "./app.js";
 import { AuthService, type AuthRepository } from "./auth.js";
 import { defaultScheduleSeason } from "./schedule-routes.js";
 
-const USER_ID = "10000000-0000-4000-8000-000000000001";
-const SESSION_TOKEN = "s".repeat(32);
-const COOKIE = `fantasy_session=${SESSION_TOKEN}`;
-
-function authenticatedService(): AuthService {
+function authService(): AuthService {
   const repository: AuthRepository = {
     findUserByEmail: () => Promise.resolve(undefined),
     createSession: () => Promise.resolve(),
-    findSession: () =>
-      Promise.resolve({
-        user: {
-          id: USER_ID,
-          email: "guru@example.com",
-          displayName: "League Guru",
-          role: "member",
-        },
-        expiresAt: new Date("2099-01-01T00:00:00.000Z"),
-        lastSeenAt: new Date(),
-      }),
+    findSession: () => Promise.resolve(undefined),
     touchSession: () => Promise.resolve(),
     deleteSession: () => Promise.resolve(),
     deleteExpiredSessions: () => Promise.resolve(),
@@ -105,28 +91,23 @@ const byesResponse: ScheduleByesResponse = {
 };
 
 describe("Schedule routes", () => {
-  it("requires authentication and forwards the parsed filters", async () => {
+  it("serves the schedule publicly and forwards the parsed filters", async () => {
     const getSchedule = vi.fn(() => Promise.resolve(scheduleResponse));
     const getByeWeeks = vi.fn(() => Promise.resolve(byesResponse));
     const app = await buildApp({
       environment: loadEnvironment({ NODE_ENV: "test" }),
       logger: false,
       requireAuthentication: true,
-      authService: authenticatedService(),
+      authService: authService(),
       schedule: { getSchedule, getByeWeeks },
     });
 
-    const denied = await app.inject({ method: "GET", url: "/v1/schedule?season=2025" });
-    expect(denied.statusCode).toBe(401);
-    expect(getSchedule).not.toHaveBeenCalled();
-
-    const allowed = await app.inject({
+    const result = await app.inject({
       method: "GET",
       url: "/v1/schedule?season=2025&week=1&team=aaa",
-      headers: { cookie: COOKIE },
     });
-    expect(allowed.statusCode).toBe(200);
-    expect(getSchedule).toHaveBeenCalledWith(USER_ID, { season: 2025, week: 1, team: "AAA" });
+    expect(result.statusCode).toBe(200);
+    expect(getSchedule).toHaveBeenCalledWith({ season: 2025, week: 1, team: "AAA" });
     await app.close();
   });
 
@@ -137,18 +118,17 @@ describe("Schedule routes", () => {
       environment: loadEnvironment({ NODE_ENV: "test" }),
       logger: false,
       requireAuthentication: true,
-      authService: authenticatedService(),
+      authService: authService(),
       schedule: { getSchedule, getByeWeeks },
     });
 
     const result = await app.inject({
       method: "GET",
       url: "/v1/schedule/byes?season=2025",
-      headers: { cookie: COOKIE },
     });
 
     expect(result.statusCode).toBe(200);
-    expect(getByeWeeks).toHaveBeenCalledWith(USER_ID, 2025);
+    expect(getByeWeeks).toHaveBeenCalledWith(2025);
     expect(result.json()).toMatchObject({ byeWeeks: { AAA: 7 } });
     await app.close();
   });
@@ -160,14 +140,13 @@ describe("Schedule routes", () => {
       environment: loadEnvironment({ NODE_ENV: "test" }),
       logger: false,
       requireAuthentication: true,
-      authService: authenticatedService(),
+      authService: authService(),
       schedule: { getSchedule, getByeWeeks },
     });
 
     const result = await app.inject({
       method: "GET",
       url: "/v1/schedule?team=toolongforateam",
-      headers: { cookie: COOKIE },
     });
 
     expect(result.statusCode).toBe(400);
@@ -180,13 +159,12 @@ describe("Schedule routes", () => {
       environment: loadEnvironment({ NODE_ENV: "test" }),
       logger: false,
       requireAuthentication: true,
-      authService: authenticatedService(),
+      authService: authService(),
     });
 
     const result = await app.inject({
       method: "GET",
       url: "/v1/schedule",
-      headers: { cookie: COOKIE },
     });
 
     expect(result.statusCode).toBe(503);
