@@ -145,8 +145,13 @@
   .managedActions {
     display: flex;
     flex: 0 0 auto;
+    flex-wrap: wrap;
     align-items: center;
     gap: 8px;
+  }
+
+  .managedActions a {
+    text-decoration: none;
   }
 
   .qualityBadge,

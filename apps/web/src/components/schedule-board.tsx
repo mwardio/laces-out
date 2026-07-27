@@ -59,7 +59,7 @@ function score(game: ScheduleResponse["games"][number]): string {
   return `${game.awayScore}–${game.homeScore}`;
 }
 
-export function ScheduleBoard() {
+export function ScheduleBoard({ embedded = false }: { readonly embedded?: boolean } = {}) {
   const [filters, setFilters] = useState<FilterState>({
     season: defaultSeason(),
     week: null,
@@ -83,7 +83,6 @@ export function ScheduleBoard() {
         headers: { Accept: "application/json" },
         signal: controller.signal,
       });
-      if (response.status === 401) throw new Error("Sign in to browse the schedule.");
       if (!response.ok) throw new Error("The schedule could not be loaded.");
       const parsed = parseScheduleResponse(await response.json());
       if (!parsed) throw new Error("The schedule response failed its data contract.");
@@ -111,15 +110,17 @@ export function ScheduleBoard() {
   const seasons = Array.from({ length: 6 }, (_, index) => new Date().getFullYear() - index);
 
   return (
-    <div className={styles.page}>
-      <header className={styles.hero}>
-        <div>
-          <p>Matchups and byes</p>
-          <h1>Schedule</h1>
-          <span>Every matchup, kickoff, and bye week in one place.</span>
-        </div>
-        <CalendarDays size={34} strokeWidth={1.5} aria-hidden="true" />
-      </header>
+    <div className={embedded ? styles.embedded : styles.page}>
+      {!embedded ? (
+        <header className={styles.hero}>
+          <div>
+            <p>Official NFL reference</p>
+            <h1>Schedule</h1>
+            <span>Browse every matchup, kickoff, result, and affirmed bye.</span>
+          </div>
+          <CalendarDays size={34} strokeWidth={1.5} aria-hidden="true" />
+        </header>
+      ) : null}
 
       <form className={styles.filters} onSubmit={submit}>
         <label>

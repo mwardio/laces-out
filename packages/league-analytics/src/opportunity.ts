@@ -716,6 +716,11 @@ function validateFpaInput(input: PositionFantasyPointsAllowedInput): {
   return { positions, throughWeek, shrinkageGames };
 }
 
+/**
+ * @deprecated Schedule Edge's schedule-enumerated, week-roster-aware pipeline is the production
+ * fantasy-points-allowed definition. This legacy helper is retained for compatibility only when a
+ * caller has already proven its compact stat ledger complete.
+ */
 export function calculatePositionFantasyPointsAllowed(
   input: PositionFantasyPointsAllowedInput,
 ): PositionFantasyPointsAllowedResult {
@@ -779,9 +784,9 @@ export function calculatePositionFantasyPointsAllowed(
           row.gameId === game.gameId &&
           row.position === position,
       );
-      const complete = relevant.every(
-        (row) => row.fantasyPoints !== undefined && row.fantasyPoints !== null,
-      );
+      const complete =
+        relevant.length > 0 &&
+        relevant.every((row) => row.fantasyPoints !== undefined && row.fantasyPoints !== null);
       const points = complete
         ? relevant.reduce((total, row) => total + (row.fantasyPoints ?? 0), 0)
         : 0;

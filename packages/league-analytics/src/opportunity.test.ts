@@ -380,6 +380,27 @@ describe("calculatePositionFantasyPointsAllowed", () => {
     });
   });
 
+  it("never turns an empty position slice into an observed zero", () => {
+    const result = calculatePositionFantasyPointsAllowed({
+      season: 2025,
+      weeklyStats: fpaRows.filter((row) => row.position === "RB"),
+      positions: ["RB", "TE"],
+      datasetCompleteness: "complete",
+      priorPositionAverages: { RB: 20, TE: 8 },
+    });
+
+    expect(result.entries.filter((entry) => entry.position === "TE")).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          status: "unavailable",
+          games: 0,
+          rawPointsPerGame: null,
+          shrunkPointsPerGame: null,
+        }),
+      ]),
+    );
+  });
+
   it("is invariant to observation and requested-position order", () => {
     const first = calculatePositionFantasyPointsAllowed({
       season: 2025,

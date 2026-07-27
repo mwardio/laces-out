@@ -9,6 +9,7 @@ import {
 import { eq } from "drizzle-orm";
 
 const positions = ["QB", "RB", "WR", "TE", "K"] as const;
+export const MANAGED_PROJECTION_SCORING_RULE_LIMIT = 257;
 
 const availableComponents = [
   ...new Set([
@@ -39,7 +40,9 @@ export async function currentManagedProjectionProfileKey(
       providerStatId: scoringRules.providerStatId,
     })
     .from(scoringRules)
-    .where(eq(scoringRules.leagueSeasonId, leagueSeasonId));
+    .where(eq(scoringRules.leagueSeasonId, leagueSeasonId))
+    .limit(MANAGED_PROJECTION_SCORING_RULE_LIMIT);
+  if (rules.length >= MANAGED_PROJECTION_SCORING_RULE_LIMIT) return null;
   const normalized = normalizeLeagueScoringProfile({
     id: `league:${leagueSeasonId}`,
     label: "League scoring",

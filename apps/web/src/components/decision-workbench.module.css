@@ -300,6 +300,22 @@
     font-weight: 700;
   }
 
+  .scheduleLink {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    margin-left: auto;
+    color: #4f6e45;
+    font-weight: 700;
+    text-decoration: none;
+  }
+
+  .scheduleLink:hover,
+  .scheduleLink:focus-visible {
+    text-decoration: underline;
+    text-underline-offset: 3px;
+  }
+
   .section {
     overflow: hidden;
     background: #fff;

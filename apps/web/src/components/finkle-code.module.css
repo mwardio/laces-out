@@ -21,8 +21,15 @@
     transform: none;
   }
 
+  /*
+   * The plant is a dip and a squash, never a sideways drift. transform-origin resolves against
+   * this wrapper's box, which is the whole document, so a negative rotation here swings the
+   * visible viewport left by roughly four percent of its distance from the pivot. On a long
+   * mobile page that lever arm is thousands of pixels and the wind-up reads as the screen
+   * sliding left before the ball ever moves right.
+   */
   16% {
-    transform: translate(-1.2vw, 0.8vh) rotate(-2.4deg) scale(0.992);
+    transform: translate(0, 0.9vh) scale(0.99);
   }
 
   30% {

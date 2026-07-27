@@ -69,6 +69,7 @@ import {
   type RosProjectionStatusPort,
   registerRosProjectionStatusRoutes,
 } from "./ros-projection-status-routes.js";
+import { type ScheduleEdgePort, registerScheduleEdgeRoutes } from "./schedule-edge-routes.js";
 import type { RefreshAuthorizationPort } from "./refresh-authorization.js";
 import { type RegistrationPort, registerRegistrationRoutes } from "./registration-routes.js";
 import { type PreferencesPort, registerAccountRoutes } from "./account-routes.js";
@@ -175,6 +176,7 @@ export interface BuildAppOptions {
   readonly projectionImports?: ProjectionImportPort;
   readonly rankings?: RankingPort;
   readonly rosProjectionStatus?: RosProjectionStatusPort;
+  readonly scheduleEdge?: ScheduleEdgePort;
   readonly refreshAuthorization?: RefreshAuthorizationPort;
   readonly registration?: RegistrationPort;
   readonly preferences?: PreferencesPort;
@@ -499,6 +501,9 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   });
   registerLeagueAnalyticsRoutes(app, {
     ...(options.analytics ? { analytics: options.analytics } : {}),
+  });
+  registerScheduleEdgeRoutes(app, {
+    ...(options.scheduleEdge ? { scheduleEdge: options.scheduleEdge } : {}),
   });
   registerStatsCenterRoutes(app, {
     ...(options.statsCenter ? { statsCenter: options.statsCenter } : {}),

@@ -107,8 +107,8 @@ const primaryNavigation = [
   },
   {
     href: "/schedule",
-    label: "Schedule",
-    description: "Matchups, kickoffs, and bye weeks",
+    label: "Schedule Edge",
+    description: "Roster matchups, bye pressure, and playoff paths",
     icon: CalendarDays,
     section: "schedule" as const,
   },

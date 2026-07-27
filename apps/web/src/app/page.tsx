@@ -96,7 +96,7 @@ const seasonFeatures = [
     number: "02",
     label: "Forecast + decision sweep",
     title: "Let Laces Out recalculate what matters.",
-    text: "Backtested weekly forecasts and fresh league inputs rerun lineup, waiver, trade, opponent, and portfolio analysis without asking you to rebuild the context.",
+    text: "Backtested weekly forecasts, legal-lineup bye checks, and fresh league inputs rerun lineup, waiver, trade, opponent, and portfolio analysis without asking you to rebuild the context.",
     icon: ScanLine,
   },
   {

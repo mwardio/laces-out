@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 
 import {
   firstPartyRecentRoleContext,
+  normalizeHistoricalPlayerStatComponents,
   type FirstPartyPlayerStatus,
   type FirstPartyRoleContext,
   type FirstPartyTeamDefenseWeeklyStatLine,
@@ -81,29 +82,6 @@ function component(components: ProjectionStatComponents, key: string): number {
   return finiteNonnegative(components[key]) ?? 0;
 }
 
-function normalizedPlayerComponents(
-  components: ProjectionStatComponents,
-): ProjectionStatComponents {
-  return {
-    ...components,
-    fumbles_lost: component(components, "fumbles_lost_total"),
-    two_point_conversions:
-      component(components, "passing_two_point_conversions") +
-      component(components, "rushing_two_point_conversions") +
-      component(components, "receiving_two_point_conversions"),
-    field_goals_made_0_39:
-      component(components, "field_goals_made_0_19") +
-      component(components, "field_goals_made_20_29") +
-      component(components, "field_goals_made_30_39"),
-    field_goals_made_50_plus:
-      component(components, "field_goals_made_50_59") +
-      component(components, "field_goals_made_60_plus"),
-    return_yards:
-      component(components, "punt_return_yards") + component(components, "kickoff_return_yards"),
-    return_touchdowns: component(components, "special_teams_touchdowns"),
-  };
-}
-
 function factKey(input: {
   readonly playerId: string;
   readonly season: number;
@@ -159,7 +137,7 @@ export function buildFirstPartyPlayerHistory(
       week: row.week,
       team: row.team,
       opponent: row.opponentTeam,
-      components: normalizedPlayerComponents(row.components),
+      components: normalizeHistoricalPlayerStatComponents(row.components),
       played: true,
       ...(injuryStatus === undefined ? {} : { status: injuryStatus }),
       ...(snapByFact.has(factKey(row))
@@ -191,7 +169,7 @@ export function buildFirstPartyPlayerHistory(
         week: row.week,
         team: row.team,
         opponent: row.opponentTeam,
-        components: normalizedPlayerComponents({}),
+        components: normalizeHistoricalPlayerStatComponents({}),
         played: true,
         snapShare: row.offenseShare,
         ...(injuryStatus === undefined ? {} : { status: injuryStatus }),
@@ -255,7 +233,7 @@ export function buildFirstPartyPlayerHistory(
       week: row.week,
       team: row.team,
       opponent: schedule.awayTeam === row.team ? schedule.homeTeam : schedule.awayTeam,
-      components: normalizedPlayerComponents({}),
+      components: normalizeHistoricalPlayerStatComponents({}),
       played: false,
       snapShare: 0,
       status: firstPartyPlayerStatus(

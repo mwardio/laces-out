@@ -23,6 +23,42 @@ export interface ProjectionScoringProfile {
 
 export type ProjectionStatComponents = Readonly<Record<string, number>>;
 
+function finiteNonnegativeComponent(components: ProjectionStatComponents, key: string): number {
+  const value = components[key];
+  return value !== undefined && Number.isFinite(value) && value >= 0 ? value : 0;
+}
+
+/**
+ * Adds the canonical aggregate component names used by league scoring to an nflverse player row.
+ * The source's original fields remain intact so callers can audit every derived total.
+ */
+export function normalizeHistoricalPlayerStatComponents(
+  components: ProjectionStatComponents,
+): ProjectionStatComponents {
+  return {
+    ...components,
+    fumbles_lost: finiteNonnegativeComponent(components, "fumbles_lost_total"),
+    turnovers:
+      finiteNonnegativeComponent(components, "passing_interceptions") +
+      finiteNonnegativeComponent(components, "fumbles_lost_total"),
+    two_point_conversions:
+      finiteNonnegativeComponent(components, "passing_two_point_conversions") +
+      finiteNonnegativeComponent(components, "rushing_two_point_conversions") +
+      finiteNonnegativeComponent(components, "receiving_two_point_conversions"),
+    field_goals_made_0_39:
+      finiteNonnegativeComponent(components, "field_goals_made_0_19") +
+      finiteNonnegativeComponent(components, "field_goals_made_20_29") +
+      finiteNonnegativeComponent(components, "field_goals_made_30_39"),
+    field_goals_made_50_plus:
+      finiteNonnegativeComponent(components, "field_goals_made_50_59") +
+      finiteNonnegativeComponent(components, "field_goals_made_60_plus"),
+    return_yards:
+      finiteNonnegativeComponent(components, "punt_return_yards") +
+      finiteNonnegativeComponent(components, "kickoff_return_yards"),
+    return_touchdowns: finiteNonnegativeComponent(components, "special_teams_touchdowns"),
+  };
+}
+
 function assertFinite(value: number, label: string): void {
   if (!Number.isFinite(value)) {
     throw new TypeError(`${label} must be finite`);

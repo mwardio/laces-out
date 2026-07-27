@@ -495,11 +495,18 @@ export function DecisionWorkbench() {
         const parsed = parseLeagueListResponse(await response.json());
         if (!parsed) throw new Error("The league response failed validation.");
         setPortfolio({ state: "ready", portfolio: parsed });
+        const requestedLeagueId = new URLSearchParams(window.location.search).get("league");
+        const requested =
+          requestedLeagueId && parsed.leagues.some((league) => league.id === requestedLeagueId)
+            ? requestedLeagueId
+            : null;
         const preferred =
           defaultLeagueId && parsed.leagues.some((league) => league.id === defaultLeagueId)
             ? defaultLeagueId
             : null;
-        setSelectedLeagueId((current) => current || preferred || parsed.leagues[0]?.id || "");
+        setSelectedLeagueId(
+          (current) => current || requested || preferred || parsed.leagues[0]?.id || "",
+        );
       })
       .catch((error: unknown) => {
         if (!controller.signal.aborted) {
@@ -646,6 +653,9 @@ export function DecisionWorkbench() {
               decisionRequest.current?.abort();
               setDecision({ state: "loading" });
               setSelectedLeagueId(event.target.value);
+              const url = new URL(window.location.href);
+              url.searchParams.set("league", event.target.value);
+              window.history.replaceState(window.history.state, "", url);
             }}
           >
             {portfolio.portfolio.leagues.map((league) => (
@@ -761,6 +771,10 @@ export function DecisionWorkbench() {
                 projected
               </strong>
             </span>
+            <Link className={styles.scheduleLink} href={`/schedule?league=${selectedLeagueId}`}>
+              Add schedule context
+              <ArrowUpRight size={13} aria-hidden="true" />
+            </Link>
           </div>
 
           <LineupSection snapshot={snapshot} />

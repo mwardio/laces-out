@@ -1,12 +1,53 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  normalizeHistoricalPlayerStatComponents,
   projectionScoringProfileKey,
   projectionScoringProfilesAreCompatible,
   scoreProjectionStatComponents,
   validateProjectionScoringProfile,
   type ProjectionScoringProfile,
 } from "./scoring.js";
+
+describe("normalizeHistoricalPlayerStatComponents", () => {
+  it("adds the canonical aggregate fields used by league scoring without dropping source fields", () => {
+    expect(
+      normalizeHistoricalPlayerStatComponents({
+        receptions: 4,
+        fumbles_lost_total: 1,
+        passing_interceptions: 2,
+        passing_two_point_conversions: 1,
+        rushing_two_point_conversions: 2,
+        receiving_two_point_conversions: 1,
+        punt_return_yards: 18,
+        kickoff_return_yards: 32,
+        special_teams_touchdowns: 1,
+      }),
+    ).toMatchObject({
+      receptions: 4,
+      fumbles_lost: 1,
+      turnovers: 3,
+      two_point_conversions: 4,
+      return_yards: 50,
+      return_touchdowns: 1,
+    });
+  });
+
+  it("treats absent or non-finite aggregate inputs as zero", () => {
+    expect(
+      normalizeHistoricalPlayerStatComponents({
+        fumbles_lost_total: Number.NaN,
+        punt_return_yards: -1,
+      }),
+    ).toMatchObject({
+      fumbles_lost: 0,
+      turnovers: 0,
+      two_point_conversions: 0,
+      return_yards: 0,
+      return_touchdowns: 0,
+    });
+  });
+});
 
 const standard: ProjectionScoringProfile = {
   id: "standard",

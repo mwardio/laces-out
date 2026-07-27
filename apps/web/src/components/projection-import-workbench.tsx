@@ -8,6 +8,7 @@ import type {
 import {
   AlertTriangle,
   BarChart3,
+  CalendarDays,
   Check,
   CircleAlert,
   Clock3,
@@ -389,7 +390,11 @@ export function ProjectionImportWorkbench() {
       const parsed = parseLeagueListResponse(payload);
       if (!parsed) throw new Error("League response did not match the expected contract");
       setPortfolio({ state: "ready", portfolio: parsed });
-      const firstSeason = parsed.leagues.find((league) => league.season)?.season;
+      const requestedLeagueId = new URLSearchParams(window.location.search).get("league");
+      const requestedSeason = parsed.leagues.find(
+        (league) => league.id === requestedLeagueId && league.season,
+      )?.season;
+      const firstSeason = requestedSeason ?? parsed.leagues.find((league) => league.season)?.season;
       setSelectedSeasonId((current) =>
         parsed.leagues.some((league) => league.season?.id === current)
           ? current
@@ -712,6 +717,12 @@ export function ProjectionImportWorkbench() {
               setsAbortRef.current?.abort();
               commitAbortRef.current?.abort();
               setSelectedSeasonId(event.target.value);
+              const selectedLeague = leaguesWithSeasons.find(
+                (league) => league.season?.id === event.target.value,
+              );
+              const url = new URL(window.location.href);
+              if (selectedLeague) url.searchParams.set("league", selectedLeague.id);
+              window.history.replaceState(window.history.state, "", url);
               setSets({ state: "loading" });
               setCsv("");
               setSourceFileName(null);
@@ -760,6 +771,15 @@ export function ProjectionImportWorkbench() {
             </p>
           </div>
           <div className={styles.managedActions}>
+            {selectedPortfolioLeague ? (
+              <Link
+                className={styles.textButton}
+                href={`/schedule?league=${selectedPortfolioLeague.id}`}
+              >
+                <CalendarDays size={15} aria-hidden="true" />
+                Schedule Edge
+              </Link>
+            ) : null}
             {managedForecast?.managed?.qualityState ? (
               <span
                 className={

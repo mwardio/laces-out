@@ -38,8 +38,10 @@
   volume, scored production, and derived efficiency (air yards, EPA, PACR, WOPR, CPOE), plus a
   per-player profile with a week-by-week game log. A metric the source file does not carry, or a
   share whose team coverage is unproven, is withheld with its reason rather than shown as a zero.
-- **Schedule and byes** — matchups, kickoffs, results, and bye weeks. A bye is asserted only where
-  the admitted schedule covers both the team and the week; anything else reads as unknown.
+- **Schedule Edge** — league-scored matchup context, near-term and playoff windows, and legal-lineup
+  bye pressure for your roster. A bye is asserted only where the admitted schedule covers both the
+  team and week; matchup context stays descriptive unless locked historical validation admits
+  directional language.
 - **Your own edge** — private rankings, ADP, auction values, cheat sheets, custom projections,
   Sleeper momentum, and Fantasy Football Calculator markets sharpen the built-in engine without
   obscuring provenance.

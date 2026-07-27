@@ -22,6 +22,8 @@ import {
   pushDeviceStatusSchema,
   pushTestResponseSchema,
   scheduleByesResponseSchema,
+  scheduleEdgeMatrixResponseSchema,
+  scheduleEdgeResponseSchema,
   scheduleResponseSchema,
   statsCenterPlayerDetailResponseSchema,
   statsCenterResponseSchema,
@@ -46,6 +48,8 @@ import {
   type PushDeviceStatus,
   type PushTestResponse,
   type ScheduleByesResponse,
+  type ScheduleEdgeMatrixResponse,
+  type ScheduleEdgeResponse,
   type ScheduleResponse,
   type StatsCenterPlayerDetailResponse,
   type StatsCenterResponse,
@@ -116,6 +120,8 @@ export type {
   PushDeviceStatus,
   PushTestResponse,
   ScheduleByesResponse,
+  ScheduleEdgeMatrixResponse,
+  ScheduleEdgeResponse,
   ScheduleResponse,
   StatsCenterPlayerDetailResponse,
   StatsCenterResponse,
@@ -233,6 +239,16 @@ export function parseScheduleResponse(value: unknown): ScheduleResponse | null {
 
 export function parseScheduleByes(value: unknown): ScheduleByesResponse | null {
   const result = scheduleByesResponseSchema.safeParse(value);
+  return result.success ? result.data : null;
+}
+
+export function parseScheduleEdgeResponse(value: unknown): ScheduleEdgeResponse | null {
+  const result = scheduleEdgeResponseSchema.safeParse(value);
+  return result.success ? result.data : null;
+}
+
+export function parseScheduleEdgeMatrixResponse(value: unknown): ScheduleEdgeMatrixResponse | null {
+  const result = scheduleEdgeMatrixResponseSchema.safeParse(value);
   return result.success ? result.data : null;
 }
 

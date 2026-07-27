@@ -5,6 +5,7 @@
   "type": "module",
   "exports": "./src/index.ts",
   "dependencies": {
-    "@fantasy/domain": "*"
+    "@fantasy/domain": "*",
+    "@fantasy/projections": "*"
   }
 }

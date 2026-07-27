@@ -1,0 +1,142 @@
+{
+  "schemaVersion": "schedule-edge-validation-release-v1",
+  "generatedAt": "2026-07-27T16:26:56.508Z",
+  "evaluationVersion": "schedule-edge-walk-forward-v1",
+  "command": "npm --workspace @fantasy/worker run schedule-edge:validate",
+  "fullDiagnosticSha256": "bd13d3899892a0be8685ff07432cc5b46d85049deb34488b7f267d416390e9ec",
+  "sources": [
+    {
+      "key": "nflverse.schedules.2022",
+      "checksum": "0ca15cd47e033ecbd19339bf36317d85d1be3e9118e04c6503161da08de061f1",
+      "rows": 271
+    },
+    {
+      "key": "nflverse.stats-player-week.2022",
+      "checksum": "9ee25c230db72c8b9cffc3ad3d218482c3ef53c8a06eadaee85f9e8163552f28",
+      "rows": 17963
+    },
+    {
+      "key": "nflverse.weekly-rosters.2022",
+      "checksum": "bd6a50de334473c10f8058afa948fd0c6adc8a8b081da41c500cc0aa069c5312",
+      "rows": 46152
+    },
+    {
+      "key": "nflverse.schedules.2023",
+      "checksum": "63deb8b9debf71a3e7bd91bbe4d7f6864c4cbb79280374c07fa09af09aebe62f",
+      "rows": 272
+    },
+    {
+      "key": "nflverse.stats-player-week.2023",
+      "checksum": "ee65341b2f28cfbf48df85571bf512ec62b281043623e7ffed2926e5569126b3",
+      "rows": 17788
+    },
+    {
+      "key": "nflverse.weekly-rosters.2023",
+      "checksum": "1433f1f239784dde7fcb35349d211a9b83abfc0156337b72ec4f923abf715bd3",
+      "rows": 45654
+    },
+    {
+      "key": "nflverse.schedules.2024",
+      "checksum": "db189dd835ce80420e2729532a1b986a404b8ce7c57202d594fe1d9d22400cb2",
+      "rows": 272
+    },
+    {
+      "key": "nflverse.stats-player-week.2024",
+      "checksum": "db6379707a8d520f7fb9a90eeacd8a98ec3d5cdca8b98e0943cab5a250d91a97",
+      "rows": 18110
+    },
+    {
+      "key": "nflverse.weekly-rosters.2024",
+      "checksum": "074ecaeb9325de943c11f7bbc941425626985090ef8386f90cd837fa5cb5d4b3",
+      "rows": 46579
+    },
+    {
+      "key": "nflverse.schedules.2025",
+      "checksum": "147b293949a0bc51f75d810fb0279e1958b7b88152fba932df7674e7e436b2aa",
+      "rows": 272
+    },
+    {
+      "key": "nflverse.stats-player-week.2025",
+      "checksum": "40b67b296fda02c7f628741d4aa471208352dd42fb670d4854e7ba95295af1a6",
+      "rows": 18521
+    },
+    {
+      "key": "nflverse.weekly-rosters.2025",
+      "checksum": "c2f7a1ffebe06058400af1989d1cd2900cc5c9659f084623708a06d4e28de35b",
+      "rows": 46845
+    }
+  ],
+  "candidateSelection": {
+    "heldOutSeasons": [2023, 2024],
+    "evidenceChecksum": "57127464b705f967389d2bb482394862912475d92db6594b7b9bccc0a1e744a1",
+    "selectedCandidateId": "raw-equal",
+    "estimator": "raw",
+    "policy": {
+      "version": "schedule-edge-candidate-balanced-equal-v1",
+      "labelsEnabled": false,
+      "validatedPositions": [],
+      "offenseShrinkageGames": 4,
+      "defenseShrinkageGames": 4,
+      "priorSeasonPseudoGames": 4,
+      "highConfidenceGames": 8,
+      "minimumCurrentSeasonGamesForLabel": 6,
+      "recencyDecay": null,
+      "allowPriorOnlyLabels": false,
+      "minimumPointDifferentialByPosition": {
+        "QB": 1.5,
+        "RB": 1,
+        "WR": 1,
+        "TE": 0.75
+      }
+    },
+    "thresholds": {
+      "minimumSamplesPerCell": 300,
+      "minimumDirectionalSamplesPerCell": 80,
+      "minimumOrderedSeasons": 2,
+      "minimumRankCorrelation": 0.02,
+      "minimumBucketSpread": 0.35
+    },
+    "positionGates": {
+      "QB": "descriptive-only",
+      "RB": "descriptive-only",
+      "WR": "descriptive-only",
+      "TE": "descriptive-only"
+    }
+  },
+  "confirmation": {
+    "heldOutSeasons": [2025],
+    "evidenceChecksum": "07e975b9f137e053f59c39f2dbdbf9f87a7e672ba36ac6e65b6befae85f2b3b8",
+    "selectedCandidateId": "raw-equal",
+    "thresholds": {
+      "minimumSamplesPerCell": 100,
+      "minimumDirectionalSamplesPerCell": 30,
+      "minimumOrderedSeasons": 1,
+      "minimumRankCorrelation": 0.02,
+      "minimumBucketSpread": 0.35
+    },
+    "positionGates": {
+      "QB": "validated",
+      "RB": "descriptive-only",
+      "WR": "descriptive-only",
+      "TE": "descriptive-only"
+    }
+  },
+  "fullWindowAudit": {
+    "heldOutSeasons": [2023, 2024, 2025],
+    "evidenceChecksum": "db143047024981db6afdf598d7f3eed3585cba62fa57e3f3dfd952d4ad19bdf6",
+    "selectedCandidateId": "raw-equal",
+    "positionGates": {
+      "QB": "validated",
+      "RB": "descriptive-only",
+      "WR": "descriptive-only",
+      "TE": "descriptive-only"
+    }
+  },
+  "releaseDecision": {
+    "state": "descriptive-only",
+    "selectedCandidateId": "raw-equal",
+    "estimator": "raw",
+    "validatedPositions": [],
+    "reason": "No position cleared both the 2023-2024 selection gate and the untouched 2025 confirmation gate."
+  }
+}

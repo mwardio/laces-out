@@ -37,6 +37,7 @@ import {
   PushSubscriptionService,
 } from "./push-subscriptions.js";
 import { DrizzleScheduleRepository, ScheduleService } from "./schedule.js";
+import { DrizzleScheduleEdgeRepository, ScheduleEdgeService } from "./schedule-edge.js";
 import { DrizzleStatsCenterRepository, StatsCenterService } from "./stats-center.js";
 import { YahooConnectionService } from "./yahoo-connection.js";
 import { DrizzleYahooSyncRepository, YahooSyncService } from "./yahoo-sync.js";
@@ -62,6 +63,7 @@ const espnLiveDraft = new EspnLiveDraftService(espnLiveDraftRepository, {
 const decisions = new InSeasonDecisionService(new DrizzleInSeasonDecisionRepository(database.db));
 const analytics = new LeagueAnalyticsService(new DrizzleLeagueAnalyticsRepository(database.db));
 const schedule = new ScheduleService(new DrizzleScheduleRepository(database.db));
+const scheduleEdge = new ScheduleEdgeService(new DrizzleScheduleEdgeRepository(database.db));
 const preferences = new PreferencesService(new DrizzlePreferencesRepository(database.db));
 // Constructed unconditionally so device management and the config probe answer consistently. The
 // service reports the feature unavailable, and refuses to register or test, when the operator has
@@ -182,6 +184,7 @@ const app = await buildApp({
   analytics,
   statsCenter,
   schedule,
+  scheduleEdge,
   preferences,
   push,
   ...(ai ? { ai } : {}),

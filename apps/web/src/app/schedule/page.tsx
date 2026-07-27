@@ -1,11 +1,12 @@
 import type { Metadata } from "next";
 
 import { AppShell } from "../../components/app-shell";
-import { ScheduleBoard } from "../../components/schedule-board";
+import { ScheduleEdgeWorkbench } from "../../components/schedule-edge-workbench";
 
 export const metadata: Metadata = {
-  title: "Schedule",
-  description: "NFL matchups, kickoffs, and bye weeks from the admitted schedule artifact.",
+  title: "Schedule Edge",
+  description:
+    "Roster-aware matchup windows, bye pressure, playoff paths, and the official NFL schedule.",
   robots: { index: false, follow: false },
 };
 
@@ -13,10 +14,9 @@ export default function SchedulePage() {
   return (
     <AppShell
       active="schedule"
-      showDemoChip={false}
-      context={{ label: "Schedule", detail: "Matchups + byes", tone: "setup" }}
+      context={{ label: "Schedule Edge", detail: "Roster + bye outlook", tone: "setup" }}
     >
-      <ScheduleBoard />
+      <ScheduleEdgeWorkbench />
     </AppShell>
   );
 }

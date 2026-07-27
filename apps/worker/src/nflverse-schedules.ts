@@ -75,7 +75,12 @@ export function scheduleSelectionChecksum(games: readonly NflverseScheduleGame[]
   return createHash("sha256").update(ordered.map(stableGame).join("\n"), "utf8").digest("hex");
 }
 
-/** Fails closed when a modern regular-season ledger cannot prove every team-week assignment. */
+/**
+ * Fails closed when a modern regular-season ledger cannot prove every team-week assignment.
+ * The sole exception is the canceled Buffalo-Cincinnati game in 2022: that admitted ledger has
+ * 271 games, no BUF-CIN row or Week 17 assignment for either club, BUF and CIN each appearing
+ * 16 times, and every other team appearing 17 times.
+ */
 export function assertCompleteModernRegularSeasonSchedule(
   season: number,
   games: readonly NflverseScheduleGame[],
@@ -100,12 +105,28 @@ export function assertCompleteModernRegularSeasonSchedule(
   const completeWeeks =
     weeks.size === 18 &&
     Array.from({ length: 18 }, (_, index) => index + 1).every((week) => weeks.has(week));
+  const known2022Cancellation =
+    season === 2022 &&
+    regular.length === 271 &&
+    gamesByTeam.get("BUF") === 16 &&
+    gamesByTeam.get("CIN") === 16 &&
+    !teamWeeks.has("BUF:17") &&
+    !teamWeeks.has("CIN:17") &&
+    !regular.some(
+      (game) =>
+        (game.awayTeam === "BUF" && game.homeTeam === "CIN") ||
+        (game.awayTeam === "CIN" && game.homeTeam === "BUF"),
+    ) &&
+    [...gamesByTeam.entries()].every(
+      ([team, gamesPlayed]) => gamesPlayed === (team === "BUF" || team === "CIN" ? 16 : 17),
+    );
   const completeTeams =
     gamesByTeam.size === 32 &&
-    [...gamesByTeam.values()].every((gamesPlayed) => gamesPlayed === 17) &&
+    (known2022Cancellation ||
+      [...gamesByTeam.values()].every((gamesPlayed) => gamesPlayed === 17)) &&
     !duplicateTeamWeek &&
     !selfMatchup;
-  if (regular.length !== 272 || !completeWeeks || !completeTeams) {
+  if ((!known2022Cancellation && regular.length !== 272) || !completeWeeks || !completeTeams) {
     throw new Error(
       `Incomplete ${season} regular-season schedule: ${regular.length} games, ${weeks.size} weeks, ${gamesByTeam.size} teams`,
     );

@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 
+import type { NflverseScheduleGame } from "@fantasy/source-nflverse";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -9,7 +10,7 @@ import {
   scheduleSelectionChecksum,
 } from "./nflverse-schedules.js";
 
-function game(overrides: Record<string, unknown> = {}) {
+function game(overrides: Partial<NflverseScheduleGame> = {}): NflverseScheduleGame {
   return {
     gameId: "2026_01_CHI_GB",
     season: 2026,
@@ -28,7 +29,7 @@ function game(overrides: Record<string, unknown> = {}) {
     venue: "home",
     status: "scheduled",
     ...overrides,
-  } as never;
+  };
 }
 
 function completeSchedule() {
@@ -45,8 +46,8 @@ function completeSchedule() {
         game({
           gameId: `2026_${String(round === 0 && index === 0 ? 18 : round + 1).padStart(2, "0")}_${index}`,
           week: round === 0 && index === 0 ? 18 : round + 1,
-          awayTeam: rotation[index],
-          homeTeam: rotation[31 - index],
+          awayTeam: rotation[index]!,
+          homeTeam: rotation[31 - index]!,
         }),
       );
     }
@@ -90,6 +91,48 @@ describe("nflverse schedule worker helpers", () => {
     expect(() => assertCompleteModernRegularSeasonSchedule(2026, complete.slice(1))).toThrow(
       /Incomplete 2026 regular-season schedule/u,
     );
+  });
+
+  it("admits only the known 2022 Buffalo-Cincinnati cancellation as a 271-game ledger", () => {
+    const complete = completeSchedule();
+    const canceledLedger = (week: number) => {
+      const canceledMatchup = complete.find((row) => row.week === week)!;
+      const teamCode = (team: string) =>
+        team === canceledMatchup.awayTeam
+          ? "BUF"
+          : team === canceledMatchup.homeTeam
+            ? "CIN"
+            : team;
+      return complete
+        .map((row) =>
+          game({
+            ...row,
+            season: 2022,
+            awayTeam: teamCode(row.awayTeam),
+            homeTeam: teamCode(row.homeTeam),
+          }),
+        )
+        .filter(
+          (row) =>
+            !(
+              (row.awayTeam === "BUF" && row.homeTeam === "CIN") ||
+              (row.awayTeam === "CIN" && row.homeTeam === "BUF")
+            ),
+        );
+    };
+    const canceled = canceledLedger(17);
+
+    expect(canceled).toHaveLength(271);
+    expect(() => assertCompleteModernRegularSeasonSchedule(2022, canceled)).not.toThrow();
+    expect(() => assertCompleteModernRegularSeasonSchedule(2022, canceledLedger(16))).toThrow(
+      /Incomplete 2022 regular-season schedule/u,
+    );
+    expect(() =>
+      assertCompleteModernRegularSeasonSchedule(
+        2023,
+        canceled.map((row) => game({ ...row, season: 2023 })),
+      ),
+    ).toThrow(/Incomplete 2023 regular-season schedule/u);
   });
 
   it("converts Eastern kickoff clocks across daylight-saving time", () => {

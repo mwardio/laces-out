@@ -2789,6 +2789,384 @@ export const scheduleByesResponseSchema = z
   .strict();
 export type ScheduleByesResponse = z.infer<typeof scheduleByesResponseSchema>;
 
+const scheduleEdgeAvailabilitySchema = z
+  .object({
+    state: z.enum(["available", "partial", "unavailable"]),
+    reason: z.string().min(1).max(700).nullable(),
+  })
+  .strict();
+export type ScheduleEdgeAvailability = z.infer<typeof scheduleEdgeAvailabilitySchema>;
+
+const scheduleEdgeAlgorithmSchema = z
+  .object({
+    version: z.string().min(1).max(80),
+    inputHash: z.string().regex(/^[a-f0-9]{64}$/u),
+    evidenceChecksum: z
+      .string()
+      .regex(/^[a-f0-9]{64}$/u)
+      .nullable(),
+    validationStatus: z.enum(["validated", "descriptive-only", "withheld"]),
+  })
+  .strict()
+  .superRefine((value, context) => {
+    if (value.validationStatus !== "withheld" && value.evidenceChecksum === null) {
+      context.addIssue({
+        code: "custom",
+        path: ["evidenceChecksum"],
+        message: "Published Schedule Edge analysis requires a locked evidence checksum",
+      });
+    }
+  });
+
+const scheduleEdgeWindowSchema = z
+  .object({
+    startWeek: z.number().int().min(1).max(18),
+    endWeek: z.number().int().min(1).max(18),
+    label: z.string().min(1).max(80),
+    source: z.enum(["request", "current-week", "provider", "fallback"]),
+  })
+  .strict();
+export type ScheduleEdgeWindow = z.infer<typeof scheduleEdgeWindowSchema>;
+
+const scheduleEdgeSourceSchema = z
+  .object({
+    dataset: z.enum(["schedule", "weekly-stats", "weekly-rosters", "projections"]),
+    state: z.enum(["available", "unavailable", "quarantined"]),
+    key: z.string().min(1).max(128),
+    name: z.string().min(1).max(200),
+    attribution: z.string().min(1).max(300).nullable(),
+    attributionUrl: z.url().nullable(),
+    fetchedAt: z.iso.datetime().nullable(),
+    checksumSha256: z
+      .string()
+      .regex(/^[a-f0-9]{64}$/u)
+      .nullable(),
+    coveredWeeks: z.array(z.number().int().min(1).max(25)).max(25),
+    quality: z
+      .object({
+        rowsRead: z.number().int().nonnegative().nullable(),
+        rowsRejected: z.number().int().nonnegative().nullable(),
+        rowsUnmatched: z.number().int().nonnegative().nullable(),
+        matchRate: z.number().min(0).max(1).nullable(),
+      })
+      .strict(),
+    reason: z.string().min(1).max(700).nullable(),
+  })
+  .strict();
+export type ScheduleEdgeSource = z.infer<typeof scheduleEdgeSourceSchema>;
+
+const scheduleEdgeMatchupSchema = z
+  .object({
+    state: z.enum(["available", "unavailable"]),
+    percentile: z.number().min(0).max(100).nullable(),
+    label: z.enum(["favorable", "neutral", "difficult", "unavailable"]),
+    confidence: z.enum(["high", "medium", "low", "unavailable"]),
+    rawPointsAllowed: z.number().finite().nullable(),
+    adjustedPointsAllowed: z.number().finite().nullable(),
+    leagueAveragePoints: z.number().finite().nullable(),
+    pointDifferential: z.number().finite().nullable(),
+    currentGames: z.number().int().nonnegative(),
+    priorGames: z.number().int().nonnegative(),
+    incompleteGames: z.number().int().nonnegative(),
+    reason: z.string().min(1).max(700).nullable(),
+  })
+  .strict();
+export type ScheduleEdgeMatchup = z.infer<typeof scheduleEdgeMatchupSchema>;
+
+const scheduleEdgeStrengthWeekSchema = z
+  .object({
+    week: z.number().int().min(1).max(18),
+    state: z.enum(["game", "bye", "unknown"]),
+    opponent: z
+      .string()
+      .regex(/^[A-Z]{2,4}$/u)
+      .nullable(),
+    percentile: z.number().min(0).max(100).nullable(),
+    label: z.enum(["favorable", "neutral", "difficult", "unavailable"]),
+    confidence: z.enum(["high", "medium", "low", "unavailable"]),
+    reason: z.string().min(1).max(700).nullable(),
+  })
+  .strict();
+
+const scheduleEdgeStrengthSchema = z
+  .object({
+    state: z.enum(["available", "partial", "unavailable"]),
+    averagePercentile: z.number().min(0).max(100).nullable(),
+    rank: z.number().int().min(1).max(32).nullable(),
+    teamsRanked: z.number().int().min(0).max(32),
+    favorableWeeks: z.number().int().nonnegative(),
+    neutralWeeks: z.number().int().nonnegative(),
+    difficultWeeks: z.number().int().nonnegative(),
+    byeWeeks: z.number().int().nonnegative(),
+    unknownWeeks: z.number().int().nonnegative(),
+    confidence: z.enum(["high", "medium", "low", "unavailable"]),
+    weeks: z.array(scheduleEdgeStrengthWeekSchema).max(18),
+    reason: z.string().min(1).max(700).nullable(),
+  })
+  .strict();
+export type ScheduleEdgeStrength = z.infer<typeof scheduleEdgeStrengthSchema>;
+
+function hasScheduleEdgeDirectionalStrength(value: ScheduleEdgeStrength): boolean {
+  return (
+    value.favorableWeeks > 0 ||
+    value.neutralWeeks > 0 ||
+    value.difficultWeeks > 0 ||
+    value.weeks.some((week) => week.label !== "unavailable")
+  );
+}
+
+const scheduleEdgePlayerReferenceSchema = z
+  .object({
+    playerId: z.string().uuid(),
+    name: z.string().min(1).max(200),
+    position: z.string().min(1).max(20),
+    nflTeam: z
+      .string()
+      .regex(/^[A-Z]{2,4}$/u)
+      .nullable(),
+  })
+  .strict();
+
+const scheduleEdgeByeFindingSchema = z
+  .object({
+    week: z.number().int().min(1).max(18),
+    status: z.enum(["covered", "thin", "gap", "unknown"]),
+    affectedPlayers: z.array(scheduleEdgePlayerReferenceSchema).max(40),
+    fragilePlayerIds: z.array(z.string().uuid()).max(40),
+    unfilledSlotLabels: z.array(z.string().min(1).max(80)).max(30),
+    detail: z.string().min(1).max(700),
+  })
+  .strict();
+export type ScheduleEdgeByeFinding = z.infer<typeof scheduleEdgeByeFindingSchema>;
+
+const scheduleEdgeFindingSchema = z
+  .object({
+    id: z.string().min(1).max(160),
+    kind: z.enum([
+      "bye-gap",
+      "bye-thin",
+      "bye-unknown",
+      "upcoming-bye",
+      "favorable-window",
+      "difficult-window",
+    ]),
+    severity: z.enum(["critical", "watch", "edge", "info"]),
+    title: z.string().min(1).max(160),
+    detail: z.string().min(1).max(700),
+    week: z.number().int().min(1).max(18).nullable(),
+    playerId: z.string().uuid().nullable(),
+    href: z.string().startsWith("/").max(500).nullable(),
+    factors: z.array(z.string().min(1).max(300)).max(12),
+  })
+  .strict();
+export type ScheduleEdgeFinding = z.infer<typeof scheduleEdgeFindingSchema>;
+
+const scheduleEdgeRosterPlayerSchema = z
+  .object({
+    playerId: z.string().uuid(),
+    name: z.string().min(1).max(200),
+    primaryPosition: z.string().min(1).max(20),
+    eligiblePositions: z.array(z.string().min(1).max(20)).min(1).max(12),
+    nflTeam: z
+      .string()
+      .regex(/^[A-Z]{2,4}$/u)
+      .nullable(),
+    status: z.string().min(1).max(80).nullable(),
+    isLikelyStarter: z.boolean(),
+    currentSlot: z.string().min(1).max(80).nullable(),
+    next: z
+      .object({
+        week: z.number().int().min(1).max(18),
+        state: z.enum(["game", "bye", "unknown"]),
+        opponent: z
+          .string()
+          .regex(/^[A-Z]{2,4}$/u)
+          .nullable(),
+        kickoffAt: z.iso.datetime().nullable(),
+        reason: z.string().min(1).max(700).nullable(),
+      })
+      .strict(),
+    matchup: scheduleEdgeMatchupSchema,
+    selectedWindow: scheduleEdgeStrengthSchema,
+    playoffWindow: scheduleEdgeStrengthSchema,
+    projection: z
+      .object({
+        weeklyPoints: z.number().finite().nullable(),
+        rosPoints: z.number().finite().nullable(),
+        source: z.string().min(1).max(160),
+        sourceObservedAt: z.iso.datetime().nullable(),
+      })
+      .strict()
+      .nullable(),
+  })
+  .strict();
+export type ScheduleEdgeRosterPlayer = z.infer<typeof scheduleEdgeRosterPlayerSchema>;
+
+const scheduleEdgeDefinitionsSchema = z
+  .object({
+    matchup: z.string().min(1).max(1_500),
+    scheduleStrength: z.string().min(1).max(1_500),
+    confidence: z.string().min(1).max(1_500),
+    byeFeasibility: z.string().min(1).max(1_500),
+  })
+  .strict();
+
+export const scheduleEdgeResponseSchema = z
+  .object({
+    generatedAt: z.iso.datetime(),
+    algorithm: scheduleEdgeAlgorithmSchema,
+    league: z
+      .object({
+        id: z.string().uuid(),
+        leagueSeasonId: z.string().uuid(),
+        name: z.string().min(1).max(200),
+        provider: z.enum(["espn", "yahoo", "manual"]),
+        season: z.number().int().min(2000).max(2200),
+        currentWeek: z.number().int().min(1).max(18).nullable(),
+        claimedTeam: z
+          .object({
+            id: z.string().uuid(),
+            name: z.string().min(1).max(200),
+          })
+          .strict()
+          .nullable(),
+      })
+      .strict(),
+    windows: z
+      .object({
+        selected: scheduleEdgeWindowSchema,
+        playoff: scheduleEdgeWindowSchema,
+      })
+      .strict(),
+    availability: z
+      .object({
+        schedule: scheduleEdgeAvailabilitySchema,
+        scoring: scheduleEdgeAvailabilitySchema,
+        matchups: scheduleEdgeAvailabilitySchema,
+        roster: scheduleEdgeAvailabilitySchema,
+        projections: scheduleEdgeAvailabilitySchema,
+        byeFeasibility: scheduleEdgeAvailabilitySchema,
+      })
+      .strict(),
+    scoring: z
+      .object({
+        profileKeyHash: z
+          .string()
+          .regex(/^[a-f0-9]{64}$/u)
+          .nullable(),
+        warnings: z.array(z.string().min(1).max(500)).max(40),
+      })
+      .strict(),
+    findings: z.array(scheduleEdgeFindingSchema).max(3),
+    roster: z.array(scheduleEdgeRosterPlayerSchema).max(80),
+    byeWeeks: z.array(scheduleEdgeByeFindingSchema).max(18),
+    sources: z.array(scheduleEdgeSourceSchema).max(12),
+    definitions: scheduleEdgeDefinitionsSchema,
+  })
+  .strict()
+  .superRefine((value, context) => {
+    if (value.algorithm.validationStatus === "validated") return;
+    const directionalFinding = value.findings.find(
+      (finding) => finding.kind === "favorable-window" || finding.kind === "difficult-window",
+    );
+    if (directionalFinding) {
+      context.addIssue({
+        code: "custom",
+        path: ["findings"],
+        message: "Directional findings require validated Schedule Edge evidence",
+      });
+    }
+    const directionalPlayerIndex = value.roster.findIndex(
+      (player) =>
+        player.matchup.label !== "unavailable" ||
+        hasScheduleEdgeDirectionalStrength(player.selectedWindow) ||
+        hasScheduleEdgeDirectionalStrength(player.playoffWindow),
+    );
+    if (directionalPlayerIndex >= 0) {
+      context.addIssue({
+        code: "custom",
+        path: ["roster", directionalPlayerIndex],
+        message: "Directional matchup labels require validated Schedule Edge evidence",
+      });
+    }
+  });
+export type ScheduleEdgeResponse = z.infer<typeof scheduleEdgeResponseSchema>;
+
+const scheduleEdgeMatrixPositionSchema = z
+  .object({
+    position: z.enum(["QB", "RB", "WR", "TE"]),
+    selectedWindow: scheduleEdgeStrengthSchema,
+    playoffWindow: scheduleEdgeStrengthSchema,
+  })
+  .strict();
+
+export const scheduleEdgeMatrixResponseSchema = z
+  .object({
+    generatedAt: z.iso.datetime(),
+    algorithm: scheduleEdgeAlgorithmSchema,
+    league: z
+      .object({
+        id: z.string().uuid(),
+        leagueSeasonId: z.string().uuid(),
+        name: z.string().min(1).max(200),
+        season: z.number().int().min(2000).max(2200),
+      })
+      .strict(),
+    windows: z
+      .object({
+        selected: scheduleEdgeWindowSchema,
+        playoff: scheduleEdgeWindowSchema,
+      })
+      .strict(),
+    availability: z
+      .object({
+        schedule: scheduleEdgeAvailabilitySchema,
+        scoring: scheduleEdgeAvailabilitySchema,
+        matchups: scheduleEdgeAvailabilitySchema,
+      })
+      .strict(),
+    scoring: z
+      .object({
+        profileKeyHash: z
+          .string()
+          .regex(/^[a-f0-9]{64}$/u)
+          .nullable(),
+        warnings: z.array(z.string().min(1).max(500)).max(40),
+      })
+      .strict(),
+    teams: z
+      .array(
+        z
+          .object({
+            team: z.string().regex(/^[A-Z]{2,4}$/u),
+            positions: z.array(scheduleEdgeMatrixPositionSchema).max(4),
+          })
+          .strict(),
+      )
+      .max(32),
+    sources: z.array(scheduleEdgeSourceSchema).max(12),
+    definitions: scheduleEdgeDefinitionsSchema,
+  })
+  .strict()
+  .superRefine((value, context) => {
+    if (value.algorithm.validationStatus === "validated") return;
+    const teamIndex = value.teams.findIndex((team) =>
+      team.positions.some(
+        (position) =>
+          hasScheduleEdgeDirectionalStrength(position.selectedWindow) ||
+          hasScheduleEdgeDirectionalStrength(position.playoffWindow),
+      ),
+    );
+    if (teamIndex >= 0) {
+      context.addIssue({
+        code: "custom",
+        path: ["teams", teamIndex],
+        message: "Directional schedule labels require validated Schedule Edge evidence",
+      });
+    }
+  });
+export type ScheduleEdgeMatrixResponse = z.infer<typeof scheduleEdgeMatrixResponseSchema>;
+
 export const changePasswordRequestSchema = z
   .object({
     currentPassword: z.string().min(1).max(128),

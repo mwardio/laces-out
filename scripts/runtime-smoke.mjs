@@ -102,6 +102,11 @@ try {
   assert.match(workspaceHtml, /Laces Out/u);
   assert.match(workspaceHtml, /Overview/u);
 
+  const scheduleResponse = await waitForHttp(`http://127.0.0.1:${webPort}/schedule`, web);
+  const scheduleHtml = await scheduleResponse.text();
+  assert.match(scheduleHtml, /Schedule Edge/u);
+  assert.match(scheduleHtml, /See how upcoming opponents have scored/u);
+
   const inviteResponse = await waitForHttp(`http://127.0.0.1:${webPort}/invite`, web);
   const inviteHtml = await inviteResponse.text();
   assert.match(inviteHtml, /Laces Out/u);
@@ -111,5 +116,5 @@ try {
 }
 
 process.stdout.write(
-  `${JSON.stringify({ apiLive: true, apiReady: true, workerStarted: true, landingStarted: true, workspaceStarted: true })}\n`,
+  `${JSON.stringify({ apiLive: true, apiReady: true, workerStarted: true, landingStarted: true, workspaceStarted: true, scheduleStarted: true })}\n`,
 );
