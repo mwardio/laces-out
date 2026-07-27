@@ -3863,86 +3863,6 @@
   .bridge-token .button {
     justify-self: start;
   }
-  .bridge-token__manual-toggle {
-    width: fit-content;
-    padding: 0;
-    color: var(--green-700);
-    background: transparent;
-    border: 0;
-    font-size: 11px;
-    font-weight: 800;
-    text-align: left;
-    text-decoration: underline;
-    text-decoration-color: rgba(28, 97, 61, 0.35);
-    text-underline-offset: 3px;
-  }
-  .bridge-token__manual-toggle:hover {
-    color: var(--ink-950);
-    text-decoration-color: currentColor;
-  }
-  .bridge-token__manual {
-    display: grid !important;
-    align-items: initial !important;
-    gap: 8px !important;
-    padding-top: 10px;
-    border-top: 1px solid rgba(28, 97, 61, 0.16);
-  }
-  .bridge-token__manual-heading {
-    display: flex;
-    align-items: flex-start !important;
-    gap: 7px !important;
-  }
-  .bridge-token__manual-heading > svg {
-    flex: 0 0 auto;
-    margin-top: 1px;
-    color: var(--green-600);
-  }
-  .bridge-token__manual-heading > span {
-    display: flex;
-    min-width: 0;
-    flex-direction: column;
-  }
-  .bridge-token__manual > code {
-    overflow-x: auto;
-    max-width: 100%;
-    padding: 8px;
-    background: rgba(255, 255, 255, 0.8);
-    border: 1px solid rgba(28, 97, 61, 0.12);
-    border-radius: 6px;
-    font-family: var(--font-mono);
-    font-size: 11px;
-    white-space: nowrap;
-  }
-  .bridge-token__legacy-fields {
-    display: grid;
-    grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr) auto;
-    gap: 6px;
-    margin: 0;
-  }
-  .bridge-token__legacy-fields > div {
-    display: grid;
-    min-width: 0;
-    gap: 2px;
-    padding: 7px 8px;
-    background: rgba(255, 255, 255, 0.55);
-    border-radius: 6px;
-  }
-  .bridge-token__legacy-fields dt {
-    color: var(--ink-500);
-    font-size: 9px;
-    font-weight: 800;
-    letter-spacing: 0.06em;
-    text-transform: uppercase;
-  }
-  .bridge-token__legacy-fields dd {
-    overflow: hidden;
-    margin: 0;
-    color: var(--ink-800);
-    font-size: 10px;
-    font-weight: 700;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
   .bridge-token > a {
     display: inline-flex;
     align-items: center;
@@ -8382,12 +8302,6 @@
     }
     .bridge-token .button {
       width: 100%;
-    }
-    .bridge-token__manual-toggle {
-      width: auto;
-    }
-    .bridge-token__legacy-fields {
-      grid-template-columns: 1fr;
     }
     .import-editor-label {
       margin-inline: 13px;

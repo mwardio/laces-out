@@ -174,10 +174,6 @@ export function ConnectionWorkbench() {
   const [revokingDeviceId, setRevokingDeviceId] = useState<string | null>(null);
   const [bridgeRevokeCandidate, setBridgeRevokeCandidate] = useState<string | null>(null);
   const [copyState, setCopyState] = useState<"idle" | "done" | "error">("idle");
-  const [legacyTokenCopyState, setLegacyTokenCopyState] = useState<"idle" | "done" | "error">(
-    "idle",
-  );
-  const [manualPairingOpen, setManualPairingOpen] = useState(false);
   const [sendExtensionState, setSendExtensionState] = useState<
     "idle" | "sending" | "sent" | "failed"
   >("idle");
@@ -456,8 +452,6 @@ export function ConnectionWorkbench() {
     setBridgeError(null);
     setCredential(null);
     setSendExtensionState("idle");
-    setManualPairingOpen(false);
-    setLegacyTokenCopyState("idle");
     try {
       let allowedLeagueIds: readonly string[];
       try {
@@ -533,19 +527,6 @@ export function ConnectionWorkbench() {
       outcome = { ok: false };
     }
     setSendExtensionState(outcome.ok ? "sent" : "failed");
-    setManualPairingOpen(!outcome.ok);
-    setLegacyTokenCopyState("idle");
-  }
-
-  async function copyLegacyBridgeToken() {
-    if (!credential) return;
-    try {
-      await navigator.clipboard.writeText(credential.deviceToken);
-      setLegacyTokenCopyState("done");
-      window.setTimeout(() => setLegacyTokenCopyState("idle"), 2200);
-    } catch {
-      setLegacyTokenCopyState("error");
-    }
   }
 
   async function copyBookmarklet() {
@@ -1085,12 +1066,12 @@ export function ConnectionWorkbench() {
                       <strong>
                         {sendExtensionState === "sent"
                           ? "Pairing offer sent"
-                          : "One-click pairing unavailable"}
+                          : "Chrome companion not detected"}
                       </strong>
                       <small>
                         {sendExtensionState === "sent"
                           ? "Open Laces Out ESPN Bridge and choose Complete pairing."
-                          : "The installed Store version may still require manual pairing."}
+                          : "Install or update the extension, then retry the secure handoff from this page."}
                       </small>
                     </span>
                   </div>
@@ -1111,71 +1092,11 @@ export function ConnectionWorkbench() {
                         ? "Send again"
                         : "Retry pairing"}
                   </button>
-                  <button
-                    className="bridge-token__manual-toggle"
-                    type="button"
-                    aria-expanded={manualPairingOpen}
-                    aria-controls="legacy-bridge-pairing"
-                    onClick={() => {
-                      setManualPairingOpen((open) => !open);
-                      setLegacyTokenCopyState("idle");
-                    }}
-                  >
-                    {manualPairingOpen
-                      ? "Hide manual setup"
-                      : "Using the Store version that asks for a token?"}
-                  </button>
-                  {manualPairingOpen ? (
-                    <div className="bridge-token__manual" id="legacy-bridge-pairing">
-                      <div className="bridge-token__manual-heading">
-                        <ShieldCheck size={15} />
-                        <span>
-                          <strong>Your personal bridge token</strong>
-                          <small>
-                            Paste this only into Laces Out ESPN Bridge in this Chrome profile. Do
-                            not share it with another user.
-                          </small>
-                        </span>
-                      </div>
-                      <code>{credential.deviceToken}</code>
-                      <button
-                        className="button button--outline button--small"
-                        type="button"
-                        onClick={() => void copyLegacyBridgeToken()}
-                      >
-                        {legacyTokenCopyState === "done" ? (
-                          <Check size={14} />
-                        ) : (
-                          <Clipboard size={14} />
-                        )}
-                        {legacyTokenCopyState === "done" ? "Token copied" : "Copy token"}
-                      </button>
-                      <dl className="bridge-token__legacy-fields">
-                        <div>
-                          <dt>Laces Out URL</dt>
-                          <dd>{apiBaseUrl}</dd>
-                        </div>
-                        <div>
-                          <dt>ESPN league IDs</dt>
-                          <dd>{credential.leagueIds.join(", ")}</dd>
-                        </div>
-                        <div>
-                          <dt>Season</dt>
-                          <dd>{credential.season}</dd>
-                        </div>
-                      </dl>
-                      <span className="bridge-copy-status" role="status">
-                        {legacyTokenCopyState === "error"
-                          ? "Clipboard access failed. Select and copy the token above."
-                          : ""}
-                      </span>
-                    </div>
-                  ) : null}
                   <span className="bridge-copy-status" role="status">
                     {sendExtensionState === "sent"
                       ? "No token copying required."
                       : sendExtensionState === "failed"
-                        ? "Manual setup is available above for the currently approved Store version."
+                        ? "The scoped credential stays on this page and is never copied."
                         : ""}
                   </span>
                   {sendExtensionState === "failed" ? (
