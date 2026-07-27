@@ -672,7 +672,7 @@ export function ProjectionImportWorkbench() {
           <h1>Connect a league first</h1>
           <p>A Yahoo or ESPN league season establishes the scoring and privacy boundary.</p>
           <Link className={styles.primaryLink} href="/connections">
-            Open connections
+            Open League Sync
           </Link>
         </div>
       </div>

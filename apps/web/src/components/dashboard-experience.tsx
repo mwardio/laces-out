@@ -276,7 +276,7 @@ function EmptyLivePortfolio() {
           </p>
         </div>
         <Link className="button button--dark" href="/connections">
-          Open connections <ArrowRight size={15} />
+          Open League Sync <ArrowRight size={15} />
         </Link>
       </section>
     </div>

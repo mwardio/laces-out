@@ -530,7 +530,7 @@ export function PortfolioDashboard({ afterOverview }: { readonly afterOverview?:
                 <p>
                   {yahooComingSoon
                     ? "This tour is not a connected account. Yahoo sign-in is coming soon; when available, token exchange will stay server-side and refresh tokens will remain encrypted."
-                    : "This sample screen is not a connected account. After sign-in, Connections can start Yahoo authorization. Token exchange stays server-side and refresh tokens are encrypted."}
+                    : "This sample screen is not a connected account. After sign-in, League Sync can start Yahoo authorization. Token exchange stays server-side and refresh tokens are encrypted."}
                 </p>
               </div>
             ) : null}

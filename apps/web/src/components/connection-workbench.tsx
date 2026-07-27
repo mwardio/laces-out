@@ -618,8 +618,8 @@ export function ConnectionWorkbench() {
 
       <section className="page-heading connection-heading">
         <div>
-          <p className="eyebrow">League connections</p>
-          <h1>Connections</h1>
+          <p className="eyebrow">Provider access</p>
+          <h1>League Sync</h1>
           <p className="page-subtitle">
             {yahooComingSoon
               ? "Connect ESPN with one-click sync or optional automatic refresh. Yahoo sign-in is coming soon."

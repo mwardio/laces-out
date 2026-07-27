@@ -116,10 +116,7 @@ export function ScheduleBoard() {
         <div>
           <p>Matchups and byes</p>
           <h1>Schedule</h1>
-          <span>
-            Kickoffs, results, and bye weeks straight from the admitted schedule artifact. Kickoff
-            times show in your own time zone; a week the source cannot vouch for is never guessed.
-          </span>
+          <span>Every matchup, kickoff, and bye week in one place.</span>
         </div>
         <CalendarDays size={34} strokeWidth={1.5} aria-hidden="true" />
       </header>

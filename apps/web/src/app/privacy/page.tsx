@@ -82,7 +82,7 @@ export default function PrivacyPage() {
             one-click sync bookmark and optional browser companion use the ESPN session already
             present in your browser. They send bounded league data to Laces Out, but never send your
             ESPN password or the values of ESPN cookies. Every scoped sync credential can be revoked
-            from the connections screen.
+            from the League Sync screen.
           </p>
         </section>
 

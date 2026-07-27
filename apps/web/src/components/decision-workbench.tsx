@@ -605,7 +605,7 @@ export function DecisionWorkbench() {
           <strong>Connect a league first</strong>
           <span>Real roster and league settings are required before any recommendation runs.</span>
           <Link className={styles.primaryLink} href="/connections">
-            Open connections
+            Open League Sync
           </Link>
         </div>
       </div>

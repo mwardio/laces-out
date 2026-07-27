@@ -1047,7 +1047,7 @@ export function LeagueAnalyticsWorkbench() {
         <div>
           <strong>No synchronized leagues yet</strong>
           <span>Connect Yahoo or ESPN to create the first season ledger.</span>
-          <Link href="/connections">Open connections</Link>
+          <Link href="/connections">Open League Sync</Link>
         </div>
       </div>
     );

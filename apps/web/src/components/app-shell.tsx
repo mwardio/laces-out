@@ -78,13 +78,6 @@ const primaryNavigation = [
     section: "stats" as const,
   },
   {
-    href: "/schedule",
-    label: "Schedule",
-    description: "Matchups, kickoffs, and bye weeks",
-    icon: CalendarDays,
-    section: "schedule" as const,
-  },
-  {
     href: "/decisions",
     label: "Decision Desk",
     description: "Lineups, waivers, and trades",
@@ -113,6 +106,13 @@ const primaryNavigation = [
     section: "projections" as const,
   },
   {
+    href: "/schedule",
+    label: "Schedule",
+    description: "Matchups, kickoffs, and bye weeks",
+    icon: CalendarDays,
+    section: "schedule" as const,
+  },
+  {
     href: "/draft",
     label: "Draft Studio",
     description: "Auction and snake draft rooms",
@@ -121,7 +121,7 @@ const primaryNavigation = [
   },
   {
     href: "/connections",
-    label: "Connections",
+    label: "League Sync",
     description: "Sync ESPN · Yahoo coming soon",
     icon: Cable,
     section: "connections" as const,
