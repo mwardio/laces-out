@@ -20,7 +20,6 @@ import {
   Unplug,
   X,
 } from "lucide-react";
-import Link from "next/link";
 import { type FormEvent, useCallback, useEffect, useRef, useState } from "react";
 
 import {
@@ -916,22 +915,6 @@ export function ConnectionWorkbench() {
                     Install from Chrome Web Store
                     <ExternalLink size={13} />
                   </a>
-                </div>
-              </div>
-              {/* Stated here rather than on the marketing pages: this is where someone decides
-                  which connection method to use, and the requirement is a real constraint. */}
-              <div className="bridge-readiness" role="note">
-                <Laptop size={16} />
-                <div>
-                  <strong>Live draft sync needs this browser open</strong>
-                  <span>
-                    While this Chrome profile has the ESPN draft room open, the companion reads the
-                    picks ESPN has already drawn on the page and sends them to your league&rsquo;s
-                    Draft Studio, read-only. One paired desktop is enough for the whole league:
-                    everyone else, phones included, follows from{" "}
-                    <Link href="/draft">Draft Studio</Link>. Close the tab and the room shows a
-                    stale feed until a paired browser takes over.
-                  </span>
                 </div>
               </div>
               <div
