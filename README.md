@@ -11,8 +11,7 @@
 </p>
 
 <p align="center">
-  <a href="https://lacesout.app">Live site</a> ·
-  <a href="https://lacesout.app/app">Locker room tour</a> ·
+  <a href="https://lacesout.app/app">Demo/Tour</a> ·
   <a href="https://lacesout.app/methodology">Methodology</a>
 </p>
 
