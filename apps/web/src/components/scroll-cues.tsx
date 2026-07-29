@@ -16,60 +16,109 @@ import { useEffect } from "react";
  */
 const SELECTOR = ".has-scroll-cue, .ranking-table-wrap, .player-table-wrap";
 
-/**
- * The overlay lives on the card, not on the scroller: an absolutely positioned
- * child of a scroll container scrolls away with the content, and a sticky one
- * sits below the table in block flow instead of over it. The card is the
- * scroller's offsetParent once `.scroll-cue-host` makes it relative, so the
- * scroller's band within the card is just offsetTop/clientHeight.
- */
-function update(element: HTMLElement): void {
+interface CueMeasurement {
+  host: HTMLElement;
+  hasMore: boolean;
+  top: number;
+  height: number;
+}
+
+/* All layout reads happen before any style writes: interleaving them per
+   element forces a synchronous reflow for every tracked table on screen. */
+function measure(element: HTMLElement): CueMeasurement | null {
   const host = element.parentElement;
-  if (!host) return;
+  if (!host) return null;
   const max = element.scrollWidth - element.clientWidth;
-  const hasMore = max > 1 && element.scrollLeft < max - 1;
+  return {
+    host,
+    hasMore: max > 1 && element.scrollLeft < max - 1,
+    top: element.offsetTop,
+    height: element.clientHeight,
+  };
+}
+
+function apply({ host, hasMore, top, height }: CueMeasurement): void {
   host.dataset.cueEnd = hasMore ? "true" : "false";
   if (!hasMore) return;
-  host.style.setProperty("--cue-top", `${element.offsetTop}px`);
-  host.style.setProperty("--cue-height", `${element.clientHeight}px`);
+  host.style.setProperty("--cue-top", `${top}px`);
+  host.style.setProperty("--cue-height", `${height}px`);
+}
+
+function updateAll(elements: Iterable<HTMLElement>): void {
+  const measurements: CueMeasurement[] = [];
+  for (const element of elements) {
+    const m = measure(element);
+    if (m) measurements.push(m);
+  }
+  for (const m of measurements) apply(m);
 }
 
 export function ScrollCues(): null {
   useEffect(() => {
     const tracked = new Map<HTMLElement, () => void>();
+    let scanFrame = 0;
+    const pendingScroll = new Set<HTMLElement>();
+    let scrollFrame = 0;
 
-    const track = (element: HTMLElement) => {
-      if (tracked.has(element)) return;
-      element.parentElement?.classList.add("scroll-cue-host");
-      const onScroll = () => update(element);
-      element.addEventListener("scroll", onScroll, { passive: true });
-      tracked.set(element, () => element.removeEventListener("scroll", onScroll));
-      update(element);
+    const flushScroll = () => {
+      scrollFrame = 0;
+      const batch = [...pendingScroll];
+      pendingScroll.clear();
+      updateAll(batch);
     };
 
     const resizeObserver = new ResizeObserver((entries) => {
-      for (const entry of entries) update(entry.target as HTMLElement);
+      updateAll(entries.map((entry) => entry.target as HTMLElement));
     });
 
+    const track = (element: HTMLElement) => {
+      if (tracked.has(element)) return false;
+      element.parentElement?.classList.add("scroll-cue-host");
+      /* One measurement per frame per element: flick-scrolling fires at
+         touch-input rate and each unthrottled pass forced a sync layout. */
+      const onScroll = () => {
+        pendingScroll.add(element);
+        if (!scrollFrame) scrollFrame = requestAnimationFrame(flushScroll);
+      };
+      element.addEventListener("scroll", onScroll, { passive: true });
+      tracked.set(element, () => element.removeEventListener("scroll", onScroll));
+      /* Observing here rather than on every scan: re-observing an already
+         observed target re-delivers its entry, so each scan re-ran every
+         cue for no reason. */
+      resizeObserver.observe(element);
+      return true;
+    };
+
     const scan = () => {
+      scanFrame = 0;
+      const fresh: HTMLElement[] = [];
       for (const element of document.querySelectorAll<HTMLElement>(SELECTOR)) {
-        track(element);
-        resizeObserver.observe(element);
+        if (track(element)) fresh.push(element);
       }
+      updateAll(fresh);
       for (const [element, detach] of tracked) {
         if (element.isConnected) continue;
         detach();
+        resizeObserver.unobserve(element);
         tracked.delete(element);
       }
     };
 
+    /* React commits mutate the tree many times per second in the draft room;
+       one coalesced scan per frame is plenty for discovering new tables. */
+    const scheduleScan = () => {
+      if (!scanFrame) scanFrame = requestAnimationFrame(scan);
+    };
+
     scan();
-    const mutationObserver = new MutationObserver(scan);
+    const mutationObserver = new MutationObserver(scheduleScan);
     mutationObserver.observe(document.body, { childList: true, subtree: true });
 
     return () => {
       mutationObserver.disconnect();
       resizeObserver.disconnect();
+      if (scanFrame) cancelAnimationFrame(scanFrame);
+      if (scrollFrame) cancelAnimationFrame(scrollFrame);
       for (const detach of tracked.values()) detach();
       tracked.clear();
     };

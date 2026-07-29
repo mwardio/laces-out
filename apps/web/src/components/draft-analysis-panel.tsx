@@ -60,6 +60,12 @@ function percent(value: number): string {
   return `${Math.round(Math.max(0, Math.min(1, value)) * 100)}%`;
 }
 
+/* The fill animates scaleX instead of width so the 160ms transition stays on
+   the compositor; at a 3px cap radius the scaled curvature is invisible. */
+function meterFillStyle(value: number): { transform: string } {
+  return { transform: `scaleX(${Math.max(0, Math.min(1, value))})` };
+}
+
 /**
  * The engine's sign convention reads backwards to most managers: a positive `pickVsAdp` means the
  * player went *later* than the market expected. Spell the direction out rather than leaving a
@@ -196,7 +202,7 @@ function SnakeTeamCard({ team }: { readonly team: SnakeTeam }) {
       ) : (
         // A scrollable region needs to be reachable by keyboard, not only by pointer.
         <div
-          className={styles.tableScroll}
+          className={`${styles.tableScroll} has-scroll-cue`}
           role="region"
           aria-label={`${team.name} selections`}
           tabIndex={0}
@@ -301,7 +307,7 @@ function AuctionTeamCard({
             <span className={styles.meterTrack} aria-hidden="true">
               <span
                 className={styles.meterFill}
-                style={{ width: percent(team.budget.budgetSpentRate) }}
+                style={meterFillStyle(team.budget.budgetSpentRate)}
               />
             </span>
             <span className={styles.meterValue}>{percent(team.budget.budgetSpentRate)}</span>
@@ -311,7 +317,7 @@ function AuctionTeamCard({
             <span className={styles.meterTrack} aria-hidden="true">
               <span
                 className={`${styles.meterFill} ${styles.meterFillAlt}`}
-                style={{ width: percent(team.budget.rosterFillRate) }}
+                style={meterFillStyle(team.budget.rosterFillRate)}
               />
             </span>
             <span className={styles.meterValue}>{percent(team.budget.rosterFillRate)}</span>
@@ -348,7 +354,7 @@ function AuctionTeamCard({
         <p className={styles.empty}>No sales recorded for this team yet.</p>
       ) : (
         <div
-          className={styles.tableScroll}
+          className={`${styles.tableScroll} has-scroll-cue`}
           role="region"
           aria-label={`${team.name} purchases`}
           tabIndex={0}

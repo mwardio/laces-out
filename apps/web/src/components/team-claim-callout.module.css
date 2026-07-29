@@ -7,8 +7,8 @@
     gap: 8px 14px;
     padding: 10px 14px;
     background: var(--lime-100);
-    border: 1px solid #cfddae;
-    border-radius: var(--radius-md, 10px);
+    border: 1px solid var(--lime-200);
+    border-radius: var(--radius-md, var(--radius-md));
   }
 
   .copy {
@@ -21,14 +21,14 @@
 
   .copy strong {
     color: var(--ink-800);
-    font-size: 12px;
+    font-size: var(--text-12);
     font-weight: 750;
   }
 
   .copy span {
     overflow: hidden;
     color: var(--ink-600);
-    font-size: 12px;
+    font-size: var(--text-12);
     text-overflow: ellipsis;
     white-space: nowrap;
   }
@@ -37,7 +37,7 @@
     display: flex;
     flex: 0 0 auto;
     align-items: center;
-    gap: 8px;
+    gap: var(--space-8);
   }
 
   /* Height, border-radius, and font-size are intentionally left unset: `.app-shell :is(input,
@@ -55,7 +55,7 @@
     display: inline-flex;
     flex: 0 0 auto;
     align-items: center;
-    gap: 6px;
+    gap: var(--space-6);
     white-space: nowrap;
   }
 
@@ -64,9 +64,9 @@
     display: flex;
     flex: 1 1 100%;
     align-items: center;
-    gap: 6px;
+    gap: var(--space-6);
     margin: 0;
-    font-size: 12px;
+    font-size: var(--text-12);
   }
 
   .savedLine {

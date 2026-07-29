@@ -1,25 +1,25 @@
 @layer components {
   .panel {
     overflow: hidden;
-    background: #fff;
+    background: var(--white);
     border: 1px solid var(--ink-150);
-    border-radius: 12px;
-    box-shadow: 0 12px 34px rgba(18, 30, 22, 0.045);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-hover);
   }
 
   .header {
     display: flex;
     align-items: flex-start;
     justify-content: space-between;
-    gap: 24px;
+    gap: var(--space-24);
     padding: 20px 22px 18px;
-    background: linear-gradient(112deg, #f5f8ef 0%, #fff 58%);
+    background: linear-gradient(112deg, #f5f8ef 0%, var(--white) 58%);
     border-bottom: 1px solid var(--ink-150);
   }
 
   .header p {
-    color: #547148;
-    font-size: 10px;
+    color: var(--fern-600);
+    font-size: var(--text-10);
     font-weight: 800;
     letter-spacing: 0.09em;
     text-transform: uppercase;
@@ -38,7 +38,7 @@
     max-width: 680px;
     margin-top: 5px;
     color: var(--ink-600);
-    font-size: 12px;
+    font-size: var(--text-12);
     line-height: 1.55;
   }
 
@@ -51,7 +51,7 @@
     color: #325039;
     background: #edf6dc;
     border: 1px solid #cedead;
-    border-radius: 8px;
+    border-radius: var(--radius-sm);
   }
 
   .fuelBadge span,
@@ -61,13 +61,13 @@
   }
 
   .fuelBadge strong {
-    font-size: 11px;
+    font-size: var(--text-11);
   }
 
   .fuelBadge small {
     margin-top: 1px;
     color: #668060;
-    font-size: 9px;
+    font-size: var(--text-9);
   }
 
   .featureGrid {
@@ -83,7 +83,7 @@
     gap: 9px;
     padding: 14px 15px;
     color: var(--ink-600);
-    background: #fff;
+    background: var(--white);
     border: 0;
     border-right: 1px solid var(--ink-150);
     cursor: pointer;
@@ -112,14 +112,14 @@
   }
 
   .featureGrid strong {
-    font-size: 11px;
+    font-size: var(--text-11);
   }
 
   .featureGrid small {
     display: -webkit-box;
     overflow: hidden;
     margin-top: 3px;
-    font-size: 9px;
+    font-size: var(--text-9);
     line-height: 1.35;
     -webkit-box-orient: vertical;
     /* At 2 lines every one of the five blurbs clipped mid-clause between ~1100px
@@ -135,7 +135,7 @@
     justify-content: center;
     color: #527047;
     background: #edf4e2;
-    border-radius: 7px;
+    border-radius: var(--radius-sm);
   }
 
   .workArea {
@@ -146,14 +146,14 @@
 
   .requestPane {
     padding: 19px 20px;
-    background: #fbfcfa;
+    background: var(--paper-25);
     border-right: 1px solid var(--ink-150);
   }
 
   .requestHeading {
     display: grid;
     grid-template-columns: auto minmax(0, 1fr);
-    gap: 10px;
+    gap: var(--space-10);
     color: #527047;
   }
 
@@ -168,13 +168,13 @@
 
   .requestHeading strong {
     color: var(--ink-900);
-    font-size: 13px;
+    font-size: var(--text-13);
   }
 
   .requestHeading span {
     margin-top: 3px;
     color: var(--ink-600);
-    font-size: 10px;
+    font-size: var(--text-10);
     line-height: 1.45;
   }
 
@@ -188,7 +188,7 @@
     display: block;
     margin-bottom: 6px;
     color: var(--ink-700);
-    font-size: 10px;
+    font-size: var(--text-10);
     font-weight: 750;
   }
 
@@ -198,11 +198,11 @@
     padding: 10px 11px;
     resize: vertical;
     color: var(--ink-900);
-    background: #fff;
+    background: var(--white);
     border: 1px solid var(--ink-200);
-    border-radius: 8px;
+    border-radius: var(--radius-sm);
     font: inherit;
-    font-size: 11px;
+    font-size: var(--text-11);
     line-height: 1.45;
   }
 
@@ -215,7 +215,7 @@
     display: flex;
     align-items: flex-end;
     justify-content: space-between;
-    gap: 10px;
+    gap: var(--space-10);
     margin-top: 12px;
   }
 
@@ -229,10 +229,10 @@
     min-height: 38px;
     padding: 0 28px 0 9px;
     color: var(--ink-900);
-    background: #fff;
+    background: var(--white);
     border: 1px solid var(--ink-200);
-    border-radius: 7px;
-    font-size: 10px;
+    border-radius: var(--radius-sm);
+    font-size: var(--text-10);
   }
 
   .requestControls > button {
@@ -243,12 +243,12 @@
     justify-content: center;
     gap: 7px;
     padding: 0 12px;
-    color: #fff;
+    color: var(--white);
     background: var(--ink-950);
     border: 1px solid var(--ink-950);
-    border-radius: 7px;
+    border-radius: var(--radius-sm);
     cursor: pointer;
-    font-size: 10px;
+    font-size: var(--text-10);
     font-weight: 750;
   }
 
@@ -259,7 +259,7 @@
 
   .providerLine {
     color: #597351;
-    font-size: 10px;
+    font-size: var(--text-10);
     font-weight: 700;
   }
 
@@ -269,7 +269,7 @@
     gap: 5px;
     margin-top: 12px;
     color: var(--ink-500);
-    font-size: 9px;
+    font-size: var(--text-9);
     text-decoration: none;
   }
 
@@ -281,7 +281,7 @@
     display: flex;
     min-width: 0;
     padding: 20px 22px;
-    background: #fff;
+    background: var(--white);
   }
 
   .emptyResult {
@@ -299,12 +299,12 @@
   .emptyResult strong {
     margin-top: 9px;
     color: var(--ink-700);
-    font-size: 12px;
+    font-size: var(--text-12);
   }
 
   .emptyResult span {
     margin-top: 4px;
-    font-size: 10px;
+    font-size: var(--text-10);
     line-height: 1.45;
   }
 
@@ -313,12 +313,12 @@
     width: 100%;
     grid-template-columns: auto minmax(0, 1fr);
     align-self: flex-start;
-    gap: 10px;
+    gap: var(--space-10);
     padding: 13px;
     color: #7b3731;
     background: #fff8f6;
     border: 1px solid #e7cbc7;
-    border-radius: 8px;
+    border-radius: var(--radius-sm);
   }
 
   .errorResult strong,
@@ -327,12 +327,12 @@
   }
 
   .errorResult strong {
-    font-size: 11px;
+    font-size: var(--text-11);
   }
 
   .errorResult span {
     margin-top: 3px;
-    font-size: 10px;
+    font-size: var(--text-10);
     line-height: 1.45;
   }
 
@@ -347,7 +347,7 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 12px;
+    gap: var(--space-12);
     padding-bottom: 12px;
     border-bottom: 1px solid var(--ink-150);
   }
@@ -357,7 +357,7 @@
     align-items: center;
     gap: 7px;
     color: var(--ink-900);
-    font-size: 12px;
+    font-size: var(--text-12);
     font-weight: 750;
   }
 
@@ -367,13 +367,13 @@
 
   .answerHeader small {
     color: var(--ink-400);
-    font-size: 9px;
+    font-size: var(--text-9);
   }
 
   .answerBody {
     padding: 15px 0;
     color: var(--ink-700);
-    font-size: 11px;
+    font-size: var(--text-11);
     line-height: 1.68;
   }
 
@@ -381,7 +381,7 @@
     display: flex;
     flex-wrap: wrap;
     align-items: baseline;
-    gap: 10px;
+    gap: var(--space-10);
     margin-top: auto;
     padding-top: 12px;
     border-top: 1px solid var(--ink-150);
@@ -392,14 +392,14 @@
     min-width: 200px;
     margin: 0;
     color: var(--ink-500);
-    font-size: 11px;
+    font-size: var(--text-11);
     line-height: 1.45;
   }
 
   .answer footer small {
     margin-left: auto;
     color: #597351;
-    font-size: 10px;
+    font-size: var(--text-10);
     font-weight: 600;
     white-space: nowrap;
   }
@@ -413,7 +413,7 @@
   .requestControls select:focus-visible,
   .instructions textarea:focus-visible,
   .settingsLink:focus-visible {
-    outline: 3px solid rgba(90, 126, 73, 0.25);
+    outline: 3px solid var(--focus-ring-soft);
     outline-offset: 2px;
   }
 
@@ -548,7 +548,7 @@
 .answer footer .toolNote {
   margin-top: 0.35rem;
   font-size: 0.78rem;
-  color: var(--color-text-muted, #5b6472);
+  color: var(--ink-500);
 }
 
 .answer footer .toolProvenance {
@@ -559,7 +559,7 @@
   gap: 0.2rem;
   font-size: 0.72rem;
   line-height: 1.35;
-  color: var(--color-text-muted, #5b6472);
+  color: var(--ink-500);
   /* A checksum line is wide by nature; it scrolls inside its own box rather than the page. */
   overflow-x: auto;
 }

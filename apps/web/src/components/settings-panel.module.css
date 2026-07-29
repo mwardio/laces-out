@@ -1,7 +1,7 @@
 @layer components {
   .page {
     display: grid;
-    gap: 16px;
+    gap: var(--space-16);
     max-width: 780px;
     padding: 26px 26px 90px;
   }
@@ -15,7 +15,7 @@
 
   .hero p {
     color: var(--green-600);
-    font-size: 10px;
+    font-size: var(--text-10);
     font-weight: 800;
     letter-spacing: 0.09em;
     text-transform: uppercase;
@@ -34,7 +34,7 @@
     max-width: 56ch;
     margin-top: 8px;
     color: var(--ink-500);
-    font-size: 12px;
+    font-size: var(--text-12);
     line-height: 1.6;
   }
 
@@ -47,30 +47,30 @@
     min-height: 140px;
     align-items: center;
     justify-content: center;
-    gap: 12px;
+    gap: var(--space-12);
     padding: 24px;
     color: var(--ink-500);
-    background: #fff;
+    background: var(--white);
     border: 1px solid var(--ink-150);
-    border-radius: 11px;
+    border-radius: var(--radius-md);
   }
 
   .stateCard strong {
     display: block;
     color: var(--ink-900);
-    font-size: 13px;
+    font-size: var(--text-13);
   }
 
   .stateCard span {
     display: block;
     margin-top: 3px;
-    font-size: 11px;
+    font-size: var(--text-11);
   }
 
   .panel {
-    background: #fff;
+    background: var(--white);
     border: 1px solid var(--ink-150);
-    border-radius: 11px;
+    border-radius: var(--radius-md);
   }
 
   .panelHeading {
@@ -83,7 +83,7 @@
 
   .panelHeading p {
     color: var(--green-600);
-    font-size: 9px;
+    font-size: var(--text-9);
     font-weight: 800;
     letter-spacing: 0.08em;
     text-transform: uppercase;
@@ -110,7 +110,7 @@
 
   .identity dt {
     color: var(--ink-500);
-    font-size: 9px;
+    font-size: var(--text-9);
     font-weight: 800;
     letter-spacing: 0.06em;
     text-transform: uppercase;
@@ -119,26 +119,26 @@
   .identity dd {
     margin-top: 3px;
     color: var(--ink-900);
-    font-size: 12px;
+    font-size: var(--text-12);
     overflow-wrap: anywhere;
   }
 
   .form {
     display: grid;
-    gap: 12px;
+    gap: var(--space-12);
     padding: 16px 20px;
     border-top: 1px solid var(--ink-100);
   }
 
   .form label {
     display: grid;
-    gap: 6px;
+    gap: var(--space-6);
     min-width: 0;
   }
 
   .form label > span {
     color: var(--ink-500);
-    font-size: 9px;
+    font-size: var(--text-9);
     font-weight: 800;
     letter-spacing: 0.07em;
     text-transform: uppercase;
@@ -149,10 +149,10 @@
     min-height: 40px;
     padding: 0 11px;
     color: var(--ink-900);
-    background: #fff;
+    background: var(--white);
     border: 1px solid var(--ink-200);
-    border-radius: 8px;
-    font-size: 13px;
+    border-radius: var(--radius-sm);
+    font-size: var(--text-13);
   }
 
   .form button {
@@ -163,12 +163,12 @@
     justify-content: center;
     gap: 7px;
     padding: 0 16px;
-    color: #fff;
+    color: var(--white);
     background: var(--ink-950);
     border: 0;
-    border-radius: 8px;
+    border-radius: var(--radius-sm);
     cursor: pointer;
-    font-size: 12px;
+    font-size: var(--text-12);
     font-weight: 700;
   }
 
@@ -180,14 +180,14 @@
   .note {
     padding: 0 20px 16px;
     color: var(--ink-500);
-    font-size: 10px;
+    font-size: var(--text-10);
     line-height: 1.55;
   }
 
   .disabledNotice {
     display: flex;
     align-items: start;
-    gap: 10px;
+    gap: var(--space-10);
     padding: 16px 20px;
     color: var(--ink-500);
     border-top: 1px solid var(--ink-100);
@@ -202,45 +202,45 @@
   .disabledNotice strong {
     display: block;
     color: var(--ink-900);
-    font-size: 12px;
+    font-size: var(--text-12);
   }
 
   .disabledNotice span {
     display: block;
     margin-top: 4px;
-    font-size: 11px;
+    font-size: var(--text-11);
     line-height: 1.55;
   }
 
   .disabledNotice code {
     padding: 1px 4px;
     background: var(--ink-100);
-    border-radius: 4px;
-    font-size: 10px;
+    border-radius: var(--radius-xs);
+    font-size: var(--text-10);
     overflow-wrap: anywhere;
   }
 
   .alertLead {
     color: var(--ink-500);
-    font-size: 11px;
+    font-size: var(--text-11);
     line-height: 1.55;
   }
 
   .alertActions {
     display: flex;
     flex-wrap: wrap;
-    gap: 8px;
+    gap: var(--space-8);
   }
 
   .secondaryButton {
     color: var(--ink-900) !important;
-    background: #fff !important;
+    background: var(--white) !important;
     border: 1px solid var(--ink-200) !important;
   }
 
   .deviceList {
     display: grid;
-    gap: 10px;
+    gap: var(--space-10);
     padding: 0 20px 16px;
     margin: 0;
     list-style: none;
@@ -250,10 +250,10 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 12px;
+    gap: var(--space-12);
     padding: 10px 12px;
     border: 1px solid var(--ink-150);
-    border-radius: 9px;
+    border-radius: var(--radius-sm);
   }
 
   .deviceList strong {
@@ -262,14 +262,14 @@
     align-items: center;
     gap: 7px;
     color: var(--ink-900);
-    font-size: 12px;
+    font-size: var(--text-12);
   }
 
   .deviceList span {
     display: block;
     margin-top: 3px;
     color: var(--ink-500);
-    font-size: 10px;
+    font-size: var(--text-10);
     line-height: 1.5;
   }
 
@@ -279,7 +279,7 @@
     color: var(--green-600) !important;
     background: var(--ink-100);
     border-radius: 999px;
-    font-size: 9px;
+    font-size: var(--text-9);
     font-weight: 800;
     letter-spacing: 0.05em;
     text-transform: uppercase;
@@ -289,15 +289,15 @@
     display: inline-flex;
     flex: none;
     align-items: center;
-    gap: 6px;
+    gap: var(--space-6);
     min-height: 32px;
     padding: 0 11px;
     color: var(--ink-900);
-    background: #fff;
+    background: var(--white);
     border: 1px solid var(--ink-200);
-    border-radius: 8px;
+    border-radius: var(--radius-sm);
     cursor: pointer;
-    font-size: 11px;
+    font-size: var(--text-11);
     font-weight: 700;
   }
 
@@ -309,13 +309,13 @@
   .panelIntro {
     padding: 0 20px 12px;
     color: var(--ink-500);
-    font-size: 12px;
+    font-size: var(--text-12);
     line-height: 1.5;
   }
 
   .teamList {
     display: grid;
-    gap: 10px;
+    gap: var(--space-10);
     padding: 0 20px 16px;
     margin: 0;
     list-style: none;
@@ -326,16 +326,16 @@
     flex-wrap: wrap;
     align-items: center;
     justify-content: space-between;
-    gap: 8px 12px;
+    gap: var(--space-8) var(--space-12);
     padding: 10px 12px;
     border: 1px solid var(--ink-150);
-    border-radius: 9px;
+    border-radius: var(--radius-sm);
   }
 
   .teamRowName {
     overflow: hidden;
     color: var(--ink-900);
-    font-size: 12px;
+    font-size: var(--text-12);
     font-weight: 700;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -344,16 +344,16 @@
   .teamRowNote {
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: var(--space-6);
     color: var(--ink-500);
-    font-size: 11px;
+    font-size: var(--text-11);
   }
 
   .teamRowControls {
     display: flex;
     flex: 0 0 auto;
     align-items: center;
-    gap: 8px;
+    gap: var(--space-8);
   }
 
   /* min-height/border-radius/font-size are left to `.app-shell :is(input, select, textarea)` and
@@ -364,7 +364,7 @@
     max-width: 220px;
     padding: 0 8px;
     color: var(--ink-900);
-    background: #fff;
+    background: var(--white);
     border: 1px solid var(--ink-200);
   }
 
@@ -372,14 +372,14 @@
     display: inline-flex;
     flex: 0 0 auto;
     align-items: center;
-    gap: 6px;
+    gap: var(--space-6);
     padding: 0 12px;
-    color: #fff;
+    color: var(--white);
     background: var(--ink-950);
     border: 0;
-    border-radius: 7px;
+    border-radius: var(--radius-sm);
     cursor: pointer;
-    font-size: 11px;
+    font-size: var(--text-11);
     font-weight: 700;
   }
 
@@ -402,7 +402,7 @@
     align-items: center;
     gap: 7px;
     padding: 0 20px 16px;
-    font-size: 11px;
+    font-size: var(--text-11);
     line-height: 1.5;
   }
 

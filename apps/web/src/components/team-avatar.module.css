@@ -24,19 +24,19 @@
 .small {
   width: 22px;
   height: 22px;
-  font-size: 9px;
+  font-size: var(--text-9);
 }
 
 .medium {
   width: 30px;
   height: 30px;
-  font-size: 11px;
+  font-size: var(--text-11);
 }
 
 .large {
   width: 44px;
   height: 44px;
-  font-size: 15px;
+  font-size: var(--text-15);
 }
 
 .current {

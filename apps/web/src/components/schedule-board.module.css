@@ -26,8 +26,8 @@
   }
 
   .hero p {
-    color: #547148;
-    font-size: 10px;
+    color: var(--fern-600);
+    font-size: var(--text-10);
     font-weight: 800;
     letter-spacing: 0.09em;
     text-transform: uppercase;
@@ -47,7 +47,7 @@
     max-width: 720px;
     margin-top: 13px;
     color: var(--ink-600);
-    font-size: 13px;
+    font-size: var(--text-13);
     line-height: 1.6;
   }
 
@@ -59,23 +59,23 @@
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
     align-items: end;
-    gap: 10px;
+    gap: var(--space-10);
     padding: 14px;
-    background: #fff;
+    background: var(--white);
     border: 1px solid var(--ink-150);
-    border-radius: 11px;
-    box-shadow: 0 8px 22px rgb(23 35 28 / 4%);
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow-hover);
   }
 
   .filters label {
     display: grid;
-    gap: 6px;
+    gap: var(--space-6);
     min-width: 0;
   }
 
   .filters label > span {
     color: var(--ink-600);
-    font-size: 10px;
+    font-size: var(--text-10);
     font-weight: 800;
     letter-spacing: 0.07em;
     text-transform: uppercase;
@@ -88,9 +88,9 @@
     color: var(--ink-900);
     background: var(--paper-50);
     border: 1px solid var(--ink-200);
-    border-radius: 8px;
+    border-radius: var(--radius-sm);
     font: inherit;
-    font-size: 12px;
+    font-size: var(--text-12);
   }
 
   .filters select {
@@ -103,7 +103,7 @@
     justify-content: center;
     gap: 7px;
     padding: 0 14px;
-    color: #fff;
+    color: var(--white);
     background: var(--ink-950);
     border-color: var(--ink-950);
     cursor: pointer;
@@ -118,7 +118,7 @@
   .filters select:focus-visible,
   .filters button:focus-visible,
   .attribution:focus-visible {
-    outline: 3px solid rgba(90, 126, 73, 0.28);
+    outline: 3px solid var(--focus-ring-soft);
     outline-offset: 2px;
   }
 
@@ -127,56 +127,56 @@
     min-height: 140px;
     align-items: center;
     justify-content: center;
-    gap: 12px;
+    gap: var(--space-12);
     padding: 24px;
     color: var(--ink-500);
-    background: #fff;
+    background: var(--white);
     border: 1px solid var(--ink-150);
-    border-radius: 11px;
+    border-radius: var(--radius-md);
   }
 
   .stateCard strong {
     display: block;
     color: var(--ink-900);
-    font-size: 13px;
+    font-size: var(--text-13);
   }
 
   .stateCard span {
     display: block;
     margin-top: 3px;
-    font-size: 11px;
+    font-size: var(--text-11);
   }
 
   .warning {
     display: flex;
     align-items: start;
-    gap: 10px;
+    gap: var(--space-10);
     padding: 14px 18px;
     color: #8a5a12;
     background: #fdf6e8;
     border: 1px solid #f0dfba;
-    border-radius: 11px;
+    border-radius: var(--radius-md);
   }
 
   .warning strong {
     display: block;
-    font-size: 12px;
+    font-size: var(--text-12);
   }
 
   .warning span {
     display: block;
     margin-top: 2px;
-    font-size: 11px;
+    font-size: var(--text-11);
     line-height: 1.5;
   }
 
   .panel {
     overflow: hidden;
     min-width: 0;
-    background: #fff;
+    background: var(--white);
     border: 1px solid var(--ink-150);
-    border-radius: 11px;
-    box-shadow: 0 8px 22px rgb(23 35 28 / 4%);
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow-hover);
   }
 
   .panelHeading {
@@ -189,7 +189,7 @@
 
   .panelHeading p {
     color: var(--green-600);
-    font-size: 9px;
+    font-size: var(--text-9);
     font-weight: 800;
     letter-spacing: 0.08em;
     text-transform: uppercase;
@@ -204,7 +204,7 @@
 
   .panelHeading > span {
     color: var(--ink-500);
-    font-size: 10px;
+    font-size: var(--text-10);
     text-align: right;
   }
 
@@ -219,7 +219,7 @@
     display: grid;
     grid-template-columns: minmax(180px, 1.4fr) minmax(140px, 1fr) auto auto;
     align-items: center;
-    gap: 12px;
+    gap: var(--space-12);
     padding: 12px 20px;
     border-bottom: 1px solid var(--ink-100);
   }
@@ -231,30 +231,30 @@
   .matchup {
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: var(--space-8);
     min-width: 0;
   }
 
   .matchup strong {
     color: var(--ink-900);
-    font-size: 12px;
+    font-size: var(--text-12);
     font-weight: 800;
   }
 
   .matchup em {
     color: var(--ink-500);
-    font-size: 10px;
+    font-size: var(--text-10);
     font-style: normal;
   }
 
   .kickoff {
     color: var(--ink-600);
-    font-size: 11px;
+    font-size: var(--text-11);
   }
 
   .status {
     color: var(--ink-500);
-    font-size: 9px;
+    font-size: var(--text-9);
     font-weight: 800;
     letter-spacing: 0.06em;
     text-align: right;
@@ -264,7 +264,7 @@
   .score {
     min-width: 58px;
     color: var(--ink-900);
-    font-size: 12px;
+    font-size: var(--text-12);
     font-variant-numeric: tabular-nums;
     text-align: right;
   }
@@ -274,7 +274,7 @@
   .unknownTag {
     padding: 2px 7px;
     border-radius: 20px;
-    font-size: 8px;
+    font-size: var(--text-8);
     font-weight: 800;
     letter-spacing: 0.06em;
     text-transform: uppercase;
@@ -313,14 +313,14 @@
     padding: 11px 14px;
     text-align: right;
     border-bottom: 1px solid var(--ink-100);
-    font-size: 11px;
+    font-size: var(--text-11);
     font-variant-numeric: tabular-nums;
   }
 
   .tableScroll thead th {
     color: var(--ink-500);
     background: var(--paper-50);
-    font-size: 9px;
+    font-size: var(--text-9);
     font-weight: 800;
     letter-spacing: 0.08em;
   }
@@ -332,7 +332,7 @@
     min-width: 70px;
     color: var(--ink-900);
     text-align: left;
-    background: #fff;
+    background: var(--white);
     font-weight: 700;
   }
 
@@ -357,26 +357,26 @@
     display: flex;
     align-items: baseline;
     justify-content: space-between;
-    gap: 8px;
+    gap: var(--space-8);
     padding: 11px 16px;
     border-bottom: 1px solid var(--ink-100);
   }
 
   .byeList strong {
     color: var(--ink-900);
-    font-size: 12px;
+    font-size: var(--text-12);
     font-weight: 800;
   }
 
   .byeList span {
     color: var(--ink-500);
-    font-size: 10px;
+    font-size: var(--text-10);
   }
 
   .emptyState {
     display: grid;
     justify-items: center;
-    gap: 6px;
+    gap: var(--space-6);
     padding: 30px 20px;
     color: var(--ink-500);
     border-top: 1px solid var(--ink-100);
@@ -385,19 +385,19 @@
 
   .emptyState strong {
     color: var(--ink-900);
-    font-size: 13px;
+    font-size: var(--text-13);
   }
 
   .emptyState span {
     max-width: 70ch;
-    font-size: 11px;
+    font-size: var(--text-11);
     line-height: 1.55;
   }
 
   .definition {
     padding: 12px 20px;
     color: var(--ink-500);
-    font-size: 10px;
+    font-size: var(--text-10);
     line-height: 1.55;
   }
 
@@ -412,7 +412,7 @@
 
   .sourceGrid dt {
     color: var(--ink-500);
-    font-size: 9px;
+    font-size: var(--text-9);
     font-weight: 800;
     letter-spacing: 0.06em;
     text-transform: uppercase;
@@ -421,7 +421,7 @@
   .sourceGrid dd {
     margin-top: 3px;
     color: var(--ink-800);
-    font-size: 11px;
+    font-size: var(--text-11);
   }
 
   .attribution {
@@ -430,13 +430,13 @@
     gap: 5px;
     padding: 0 20px 16px;
     color: var(--ink-500);
-    font-size: 10px;
+    font-size: var(--text-10);
   }
 
   .sourceState {
     padding: 2px 7px;
     border-radius: 20px;
-    font-size: 8px;
+    font-size: var(--text-8);
     font-weight: 800;
     letter-spacing: 0.06em;
     text-transform: uppercase;
@@ -474,7 +474,7 @@
     }
 
     .embedded {
-      gap: 12px;
+      gap: var(--space-12);
       padding: 12px;
     }
 
@@ -489,7 +489,7 @@
 
     .hero > div > span {
       margin-top: 10px;
-      font-size: 12px;
+      font-size: var(--text-12);
     }
 
     .hero > svg {
@@ -514,7 +514,7 @@
 
     .gameList li {
       grid-template-columns: minmax(0, 1fr) auto;
-      row-gap: 6px;
+      row-gap: var(--space-6);
       padding: 12px 16px;
     }
 

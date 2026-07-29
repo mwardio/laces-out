@@ -419,7 +419,12 @@ function ProfileBody({ data }: { readonly data: StatsCenterPlayerDetailResponse 
             Last {data.filters.recentWindow} weeks · {data.filters.recentWeightDecay} decay
           </span>
         </div>
-        <div className={styles.tableScroll}>
+        <div
+          className={`${styles.tableScroll} has-scroll-cue`}
+          role="region"
+          aria-label="Recent form metrics; scroll horizontally to view all columns"
+          tabIndex={0}
+        >
           <table>
             <thead>
               <tr>
@@ -511,7 +516,12 @@ function ProfileBody({ data }: { readonly data: StatsCenterPlayerDetailResponse 
                 </h2>
               </div>
             </div>
-            <div className={styles.tableScroll}>
+            <div
+              className={`${styles.tableScroll} has-scroll-cue`}
+              role="region"
+              aria-label={`${familyKey === "production" ? "Production" : "Efficiency"} metrics; scroll horizontally to view all columns`}
+              tabIndex={0}
+            >
               <table>
                 <thead>
                   <tr>

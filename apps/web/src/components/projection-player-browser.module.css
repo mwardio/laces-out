@@ -4,9 +4,9 @@
     /* Grid items default to min-width:auto and refuse to shrink below the row
        grid's min-content, which pushed the whole page sideways. */
     min-width: 0;
-    background: #fff;
+    background: var(--white);
     border: 1px solid var(--ink-150);
-    border-radius: 11px;
+    border-radius: var(--radius-md);
   }
 
   .header {
@@ -14,7 +14,7 @@
     min-height: 92px;
     align-items: center;
     justify-content: space-between;
-    gap: 24px;
+    gap: var(--space-24);
     padding: 17px 18px;
     background: var(--paper-50);
     border-bottom: 1px solid var(--ink-150);
@@ -25,8 +25,8 @@
   }
 
   .kicker {
-    color: #547148;
-    font-size: 10px;
+    color: var(--fern-600);
+    font-size: var(--text-10);
     font-weight: 800;
     letter-spacing: 0.09em;
     text-transform: uppercase;
@@ -35,7 +35,7 @@
   .header h2 {
     margin-top: 3px;
     color: var(--ink-950);
-    font-size: 20px;
+    font-size: var(--text-20);
     line-height: 1.15;
     letter-spacing: -0.025em;
   }
@@ -43,7 +43,7 @@
   .header p:last-child {
     margin-top: 6px;
     color: var(--ink-600);
-    font-size: 11px;
+    font-size: var(--text-11);
     line-height: 1.5;
   }
 
@@ -64,7 +64,7 @@
     background: #f4e9cb;
     border: 1px solid #e4d2a4;
     border-radius: 999px;
-    font-size: 10px;
+    font-size: var(--text-10);
     font-weight: 750;
     letter-spacing: 0.03em;
     text-transform: uppercase;
@@ -79,8 +79,8 @@
     color: #725228;
     background: #fdf6e6;
     border: 1px solid #e8d4a8;
-    border-radius: 9px;
-    font-size: 11px;
+    border-radius: var(--radius-sm);
+    font-size: var(--text-11);
     line-height: 1.5;
   }
 
@@ -98,20 +98,20 @@
     display: block;
     margin-top: 2px;
     color: #8a6b33;
-    font-size: 9px;
+    font-size: var(--text-9);
   }
 
   .scope {
     display: inline-flex;
     flex: 0 0 auto;
     align-items: center;
-    gap: 6px;
+    gap: var(--space-6);
     padding: 6px 9px;
     color: #405c38;
     background: #e8f0e4;
     border: 1px solid #d2e0cc;
     border-radius: 999px;
-    font-size: 10px;
+    font-size: var(--text-10);
     font-weight: 750;
   }
 
@@ -121,7 +121,7 @@
     justify-content: space-between;
     gap: 18px;
     padding: 13px 18px;
-    background: #fff;
+    background: var(--white);
     border-bottom: 1px solid var(--ink-100);
   }
 
@@ -131,7 +131,7 @@
     padding: 3px;
     background: var(--paper-100);
     border: 1px solid var(--ink-150);
-    border-radius: 8px;
+    border-radius: var(--radius-sm);
   }
 
   .tabs button {
@@ -144,9 +144,9 @@
     color: var(--ink-600);
     background: transparent;
     border: 0;
-    border-radius: 6px;
+    border-radius: var(--radius-xs);
     cursor: pointer;
-    font-size: 10px;
+    font-size: var(--text-10);
     font-weight: 750;
   }
 
@@ -156,13 +156,13 @@
     color: var(--ink-500);
     background: rgba(255, 255, 255, 0.75);
     border-radius: 999px;
-    font-size: 8px;
+    font-size: var(--text-8);
     line-height: 1.2;
   }
 
   .tabs .activeTab {
     color: var(--ink-950);
-    background: #fff;
+    background: var(--white);
     box-shadow: 0 1px 4px rgba(16, 26, 19, 0.09);
   }
 
@@ -174,7 +174,7 @@
 
   .setControl > span {
     color: var(--ink-500);
-    font-size: 9px;
+    font-size: var(--text-9);
     font-weight: 800;
     letter-spacing: 0.06em;
     text-transform: uppercase;
@@ -186,11 +186,11 @@
     width: 100%;
     min-height: 38px;
     color: var(--ink-850);
-    background: #fff;
+    background: var(--white);
     border: 1px solid var(--ink-200);
-    border-radius: 7px;
+    border-radius: var(--radius-sm);
     outline: 0;
-    font-size: 11px;
+    font-size: var(--text-11);
   }
 
   .setControl select,
@@ -201,7 +201,7 @@
   .setControl select:focus,
   .filters input:focus,
   .filters select:focus {
-    border-color: #66845a;
+    border-color: var(--fern-500);
     box-shadow: 0 0 0 3px rgba(90, 126, 73, 0.13);
   }
 
@@ -215,14 +215,14 @@
     color: var(--ink-500);
     background: #f7faf5;
     border-bottom: 1px solid #e1e9dd;
-    font-size: 9px;
+    font-size: var(--text-9);
   }
 
   .context > div {
     display: flex;
     min-width: 0;
     align-items: center;
-    gap: 8px;
+    gap: var(--space-8);
   }
 
   .context svg {
@@ -239,7 +239,7 @@
     overflow: hidden;
     margin-bottom: 2px;
     color: var(--ink-850);
-    font-size: 11px;
+    font-size: var(--text-11);
     text-overflow: ellipsis;
     white-space: nowrap;
   }
@@ -252,7 +252,7 @@
   .filters {
     display: grid;
     grid-template-columns: minmax(180px, 1fr) minmax(110px, 160px) minmax(130px, 190px);
-    gap: 8px;
+    gap: var(--space-8);
     padding: 11px 18px;
     border-bottom: 1px solid var(--ink-100);
   }
@@ -291,9 +291,9 @@
   .tableHeader {
     min-height: 36px;
     color: var(--ink-500);
-    background: #fbfcfa;
+    background: var(--paper-25);
     border-bottom: 1px solid var(--ink-150);
-    font-size: 9px;
+    font-size: var(--text-9);
     font-weight: 800;
     letter-spacing: 0.05em;
     text-transform: uppercase;
@@ -332,7 +332,7 @@
 
   .rank {
     color: var(--ink-500);
-    font-size: 11px;
+    font-size: var(--text-11);
     font-variant-numeric: tabular-nums;
     font-weight: 750;
   }
@@ -349,7 +349,7 @@
   .identity strong {
     overflow: hidden;
     color: var(--ink-950);
-    font-size: 12px;
+    font-size: var(--text-12);
     text-overflow: ellipsis;
     white-space: nowrap;
   }
@@ -357,12 +357,12 @@
   .identity span {
     margin-top: 3px;
     color: var(--ink-500);
-    font-size: 9px;
+    font-size: var(--text-9);
   }
 
   .position {
     color: var(--ink-700);
-    font-size: 10px;
+    font-size: var(--text-10);
     font-weight: 800;
   }
 
@@ -382,19 +382,19 @@
 
   .rowMetrics strong {
     color: var(--ink-800);
-    font-size: 12px;
+    font-size: var(--text-12);
     font-variant-numeric: tabular-nums;
   }
 
   .rowMetrics .primaryMetric strong {
     color: #3f6535;
-    font-size: 14px;
+    font-size: var(--text-14);
   }
 
   .rowMetrics small {
     margin-top: 2px;
     color: var(--ink-500);
-    font-size: 8px;
+    font-size: var(--text-8);
   }
 
   .state,
@@ -403,10 +403,10 @@
     min-height: 170px;
     align-items: center;
     justify-content: center;
-    gap: 10px;
+    gap: var(--space-10);
     padding: 28px;
     color: var(--ink-500);
-    font-size: 11px;
+    font-size: var(--text-11);
   }
 
   .empty {
@@ -420,7 +420,7 @@
 
   .empty strong {
     color: var(--ink-850);
-    font-size: 12px;
+    font-size: var(--text-12);
   }
 
   .empty p {
@@ -432,7 +432,7 @@
   .noMatches {
     padding: 28px;
     color: var(--ink-500);
-    font-size: 11px;
+    font-size: var(--text-11);
     text-align: center;
   }
 
@@ -461,7 +461,7 @@
     .header {
       display: grid;
       min-height: 0;
-      gap: 12px;
+      gap: var(--space-12);
       padding: 15px 14px;
     }
 
@@ -486,7 +486,7 @@
 
     .context {
       display: grid;
-      gap: 6px;
+      gap: var(--space-6);
       padding: 10px 14px;
     }
 
@@ -525,7 +525,7 @@
       color: #49633f;
       background: #edf3e9;
       border-radius: 999px;
-      font-size: 9px;
+      font-size: var(--text-9);
     }
 
     .rowMetrics {
@@ -552,7 +552,7 @@
       display: block;
       margin-bottom: 4px;
       color: var(--ink-500);
-      font-size: 8px;
+      font-size: var(--text-8);
       font-weight: 800;
       letter-spacing: 0.04em;
       text-transform: uppercase;
@@ -560,7 +560,7 @@
 
     .rowMetrics strong,
     .rowMetrics .primaryMetric strong {
-      font-size: 12px;
+      font-size: var(--text-12);
     }
 
     .state,
@@ -581,7 +581,7 @@
 
     .tabs button {
       padding: 0 7px;
-      font-size: 9px;
+      font-size: var(--text-9);
     }
 
     .rowMetrics {

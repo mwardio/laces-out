@@ -216,8 +216,13 @@ export function AppShell({
       }
     }
 
+    let resizeFrame = 0;
     function handleResize() {
-      if (window.innerWidth > 820) setMobileMenuOpen(false);
+      /* Mobile keyboards fire resize storms; one width check per frame. */
+      resizeFrame ||= window.requestAnimationFrame(() => {
+        resizeFrame = 0;
+        if (window.innerWidth > 820) setMobileMenuOpen(false);
+      });
     }
 
     document.addEventListener("keydown", handleKeyDown);
@@ -227,6 +232,7 @@ export function AppShell({
       document.body.style.overflow = previousOverflow;
       document.removeEventListener("keydown", handleKeyDown);
       window.removeEventListener("resize", handleResize);
+      if (resizeFrame) window.cancelAnimationFrame(resizeFrame);
     };
   }, [mobileMenuOpen]);
 

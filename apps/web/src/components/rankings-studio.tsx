@@ -29,7 +29,7 @@ import {
   X,
 } from "lucide-react";
 import Link from "next/link";
-import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { type FormEvent, memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { apiBaseUrl } from "../lib/api-client";
 import { LatestRequest } from "../lib/latest-request";
@@ -304,6 +304,141 @@ function numberOrNull(value: string): number | null {
   if (!Number.isFinite(parsed)) throw new RankingUiError(`“${value}” is not a number.`, 400);
   return parsed;
 }
+
+const ROW_POSITIONS = ["QB", "RB", "WR", "TE", "K", "DST", "LB", "DL", "DB", "IDP"] as const;
+
+/* Every keystroke into a rank cell replaces one entry object; with the board
+   unbounded (300+ players × ~16 controls each), reconciling every row per
+   digit made typing visibly lag. Each row bails out here unless its own
+   entry, position in the list, or the shared disabled state changed. */
+const RankingRow = memo(function RankingRow({
+  entry,
+  index,
+  disabled,
+  isLast,
+  onUpdate,
+  onMove,
+  onRemove,
+}: {
+  entry: EditableEntry;
+  index: number;
+  disabled: boolean;
+  isLast: boolean;
+  onUpdate: (index: number, patch: Partial<EditableEntry>) => void;
+  onMove: (index: number, direction: -1 | 1) => void;
+  onRemove: (index: number) => void;
+}) {
+  return (
+    <tr>
+      <td>
+        <strong>{entry.fullName}</strong>
+        <small>{entry.playerId.slice(0, 8)}</small>
+      </td>
+      <td>
+        <select
+          aria-label={`${entry.fullName} position`}
+          value={entry.position}
+          disabled={disabled}
+          onChange={(event) =>
+            onUpdate(index, {
+              position: event.target.value as Position | "",
+            })
+          }
+        >
+          <option value="">—</option>
+          {ROW_POSITIONS.map((position) => (
+            <option value={position} key={position}>
+              {position}
+            </option>
+          ))}
+        </select>
+      </td>
+      {(["overallRank", "tier", "adp", "aav", "targetPrice"] as const).map((field) => (
+        <td key={field}>
+          <input
+            aria-label={`${entry.fullName} ${field}`}
+            inputMode="decimal"
+            value={entry[field]}
+            disabled={disabled}
+            onChange={(event) => onUpdate(index, { [field]: event.target.value })}
+          />
+        </td>
+      ))}
+      <td>
+        <input
+          className="ranking-notes-input"
+          aria-label={`${entry.fullName} notes`}
+          value={entry.notes}
+          disabled={disabled}
+          onChange={(event) => onUpdate(index, { notes: event.target.value })}
+        />
+      </td>
+      <td>
+        <label className="ranking-flag">
+          <input
+            type="checkbox"
+            checked={entry.target}
+            disabled={disabled}
+            onChange={(event) =>
+              onUpdate(index, {
+                target: event.target.checked,
+                ...(event.target.checked ? { avoid: false } : {}),
+              })
+            }
+          />{" "}
+          Target
+        </label>
+        <label className="ranking-flag">
+          <input
+            type="checkbox"
+            checked={entry.avoid}
+            disabled={disabled}
+            onChange={(event) =>
+              onUpdate(index, {
+                avoid: event.target.checked,
+                ...(event.target.checked ? { target: false } : {}),
+              })
+            }
+          />{" "}
+          Avoid
+        </label>
+      </td>
+      <td>
+        <div className="ranking-order-controls">
+          <button
+            className="icon-button icon-button--small"
+            type="button"
+            aria-label={`Move ${entry.fullName} up one rank`}
+            disabled={disabled || index === 0}
+            onClick={() => onMove(index, -1)}
+          >
+            <ArrowUp size={14} />
+          </button>
+          <button
+            className="icon-button icon-button--small"
+            type="button"
+            aria-label={`Move ${entry.fullName} down one rank`}
+            disabled={disabled || isLast}
+            onClick={() => onMove(index, 1)}
+          >
+            <ArrowDown size={14} />
+          </button>
+        </div>
+      </td>
+      <td>
+        <button
+          className="icon-button icon-button--small"
+          type="button"
+          aria-label={`Remove ${entry.fullName}`}
+          disabled={disabled}
+          onClick={() => onRemove(index)}
+        >
+          <Trash2 size={14} />
+        </button>
+      </td>
+    </tr>
+  );
+});
 
 function manualEntry(entry: EditableEntry) {
   const tags = entry.tags
@@ -961,38 +1096,47 @@ export function RankingsStudio() {
     }
   }
 
-  function updateEntry(index: number, patch: Partial<EditableEntry>) {
-    if (!selected?.capabilities.canEdit || !workspaceMatches || controlsBusy || mutationRef.current)
-      return;
-    setEntries((current) =>
-      current.map((entry, entryIndex) => (entryIndex === index ? { ...entry, ...patch } : entry)),
-    );
-    setEntriesDirty(true);
-    dirtyRef.current = true;
-  }
+  const canEditSelected = selected?.capabilities.canEdit === true;
 
-  function moveEntry(index: number, direction: -1 | 1) {
-    const targetIndex = index + direction;
-    if (
-      !selected?.capabilities.canEdit ||
-      targetIndex < 0 ||
-      targetIndex >= entries.length ||
-      controlsBusy
-    )
-      return;
-    setEntries((current) => {
-      const reordered = [...current];
-      const [moved] = reordered.splice(index, 1);
-      if (!moved) return current;
-      reordered.splice(targetIndex, 0, moved);
-      return reordered.map((entry, entryIndex) => ({
-        ...entry,
-        overallRank: String(entryIndex + 1),
-      }));
-    });
+  /* Stable references so memoized RankingRows survive sibling keystrokes. */
+  const updateEntry = useCallback(
+    (index: number, patch: Partial<EditableEntry>) => {
+      if (!canEditSelected || !workspaceMatches || controlsBusy || mutationRef.current) return;
+      setEntries((current) =>
+        current.map((entry, entryIndex) => (entryIndex === index ? { ...entry, ...patch } : entry)),
+      );
+      setEntriesDirty(true);
+      dirtyRef.current = true;
+    },
+    [canEditSelected, controlsBusy, workspaceMatches],
+  );
+
+  const moveEntry = useCallback(
+    (index: number, direction: -1 | 1) => {
+      const targetIndex = index + direction;
+      if (!canEditSelected || targetIndex < 0 || targetIndex >= entries.length || controlsBusy)
+        return;
+      setEntries((current) => {
+        const reordered = [...current];
+        const [moved] = reordered.splice(index, 1);
+        if (!moved) return current;
+        reordered.splice(targetIndex, 0, moved);
+        return reordered.map((entry, entryIndex) => ({
+          ...entry,
+          overallRank: String(entryIndex + 1),
+        }));
+      });
+      setEntriesDirty(true);
+      dirtyRef.current = true;
+    },
+    [canEditSelected, controlsBusy, entries.length],
+  );
+
+  const removeEntry = useCallback((index: number) => {
+    setEntries((current) => current.filter((_, candidateIndex) => candidateIndex !== index));
     setEntriesDirty(true);
     dirtyRef.current = true;
-  }
+  }, []);
 
   async function saveEntries() {
     if (
@@ -1806,134 +1950,16 @@ export function RankingsStudio() {
                       </thead>
                       <tbody>
                         {visibleEntries.map((entry, index) => (
-                          <tr key={entry.playerId}>
-                            <td>
-                              <strong>{entry.fullName}</strong>
-                              <small>{entry.playerId.slice(0, 8)}</small>
-                            </td>
-                            <td>
-                              <select
-                                aria-label={`${entry.fullName} position`}
-                                value={entry.position}
-                                disabled={controlsBusy || !selected.capabilities.canEdit}
-                                onChange={(event) =>
-                                  updateEntry(index, {
-                                    position: event.target.value as Position | "",
-                                  })
-                                }
-                              >
-                                <option value="">—</option>
-                                {["QB", "RB", "WR", "TE", "K", "DST", "LB", "DL", "DB", "IDP"].map(
-                                  (position) => (
-                                    <option value={position} key={position}>
-                                      {position}
-                                    </option>
-                                  ),
-                                )}
-                              </select>
-                            </td>
-                            {(["overallRank", "tier", "adp", "aav", "targetPrice"] as const).map(
-                              (field) => (
-                                <td key={field}>
-                                  <input
-                                    aria-label={`${entry.fullName} ${field}`}
-                                    inputMode="decimal"
-                                    value={entry[field]}
-                                    disabled={controlsBusy || !selected.capabilities.canEdit}
-                                    onChange={(event) =>
-                                      updateEntry(index, { [field]: event.target.value })
-                                    }
-                                  />
-                                </td>
-                              ),
-                            )}
-                            <td>
-                              <input
-                                className="ranking-notes-input"
-                                aria-label={`${entry.fullName} notes`}
-                                value={entry.notes}
-                                disabled={controlsBusy || !selected.capabilities.canEdit}
-                                onChange={(event) =>
-                                  updateEntry(index, { notes: event.target.value })
-                                }
-                              />
-                            </td>
-                            <td>
-                              <label className="ranking-flag">
-                                <input
-                                  type="checkbox"
-                                  checked={entry.target}
-                                  disabled={controlsBusy || !selected.capabilities.canEdit}
-                                  onChange={(event) =>
-                                    updateEntry(index, {
-                                      target: event.target.checked,
-                                      ...(event.target.checked ? { avoid: false } : {}),
-                                    })
-                                  }
-                                />{" "}
-                                Target
-                              </label>
-                              <label className="ranking-flag">
-                                <input
-                                  type="checkbox"
-                                  checked={entry.avoid}
-                                  disabled={controlsBusy || !selected.capabilities.canEdit}
-                                  onChange={(event) =>
-                                    updateEntry(index, {
-                                      avoid: event.target.checked,
-                                      ...(event.target.checked ? { target: false } : {}),
-                                    })
-                                  }
-                                />{" "}
-                                Avoid
-                              </label>
-                            </td>
-                            <td>
-                              <div className="ranking-order-controls">
-                                <button
-                                  className="icon-button icon-button--small"
-                                  type="button"
-                                  aria-label={`Move ${entry.fullName} up one rank`}
-                                  disabled={
-                                    controlsBusy || !selected.capabilities.canEdit || index === 0
-                                  }
-                                  onClick={() => moveEntry(index, -1)}
-                                >
-                                  <ArrowUp size={14} />
-                                </button>
-                                <button
-                                  className="icon-button icon-button--small"
-                                  type="button"
-                                  aria-label={`Move ${entry.fullName} down one rank`}
-                                  disabled={
-                                    controlsBusy ||
-                                    !selected.capabilities.canEdit ||
-                                    index === visibleEntries.length - 1
-                                  }
-                                  onClick={() => moveEntry(index, 1)}
-                                >
-                                  <ArrowDown size={14} />
-                                </button>
-                              </div>
-                            </td>
-                            <td>
-                              <button
-                                className="icon-button icon-button--small"
-                                type="button"
-                                aria-label={`Remove ${entry.fullName}`}
-                                disabled={controlsBusy || !selected.capabilities.canEdit}
-                                onClick={() => {
-                                  setEntries((current) =>
-                                    current.filter((_, candidateIndex) => candidateIndex !== index),
-                                  );
-                                  setEntriesDirty(true);
-                                  dirtyRef.current = true;
-                                }}
-                              >
-                                <Trash2 size={14} />
-                              </button>
-                            </td>
-                          </tr>
+                          <RankingRow
+                            key={entry.playerId}
+                            entry={entry}
+                            index={index}
+                            disabled={controlsBusy || !selected.capabilities.canEdit}
+                            isLast={index === visibleEntries.length - 1}
+                            onUpdate={updateEntry}
+                            onMove={moveEntry}
+                            onRemove={removeEntry}
+                          />
                         ))}
                       </tbody>
                     </table>

@@ -1,19 +1,19 @@
 .wrapper {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-8);
 }
 
 .button {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-6);
   padding: 7px 14px;
   border: 1px solid var(--ink-200);
   border-radius: 999px;
   background: var(--white);
   color: var(--ink-800);
-  font-size: 12px;
+  font-size: var(--text-12);
   font-weight: 600;
   cursor: pointer;
   transition:
@@ -32,7 +32,7 @@
 }
 
 .status {
-  font-size: 11px;
+  font-size: var(--text-11);
   color: var(--ink-500);
 }
 

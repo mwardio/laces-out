@@ -13,7 +13,7 @@ import {
   Search,
   ShieldCheck,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 
 import { apiBaseUrl, parseProjectionPlayerList } from "../lib/api-client";
 import styles from "./projection-player-browser.module.css";
@@ -404,8 +404,11 @@ function ProjectionBoard({
       ),
     [players],
   );
+  /* Deferred so each keystroke repaints the input immediately and the
+     full-set filter/sort catches up off the urgent path. */
+  const deferredQuery = useDeferredValue(query);
   const visiblePlayers = useMemo(() => {
-    const normalizedQuery = query.trim().toLocaleLowerCase("en-US");
+    const normalizedQuery = deferredQuery.trim().toLocaleLowerCase("en-US");
     return players
       .filter(
         (player) =>
@@ -430,7 +433,12 @@ function ProjectionBoard({
               : right.meanPoints;
         return (rightValue ?? Number.NEGATIVE_INFINITY) - (leftValue ?? Number.NEGATIVE_INFINITY);
       });
-  }, [players, position, query, sort]);
+  }, [players, position, deferredQuery, sort]);
+
+  /* The grid renders every match; on a full projection set that is the whole
+     admitted pool. 200 rows is more than a screen can use — the search and
+     position filters are the way to reach the tail. */
+  const renderedPlayers = useMemo(() => visiblePlayers.slice(0, 200), [visiblePlayers]);
 
   const resolvedSet = detail.state === "ready" ? detail.detail.projectionSet : activeSet;
   const rosWindow = horizon === "rest-of-season" ? players.find((player) => player.ros)?.ros : null;
@@ -645,7 +653,7 @@ function ProjectionBoard({
             </div>
 
             {visiblePlayers.length > 0 ? (
-              visiblePlayers.map((player) => (
+              renderedPlayers.map((player) => (
                 <div className={styles.playerRow} role="row" key={player.playerId}>
                   <span className={styles.rank} role="cell">
                     {player.overallRank}

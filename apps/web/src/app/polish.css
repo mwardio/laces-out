@@ -10,7 +10,7 @@
   body {
     background: var(--paper-100);
     font-family: var(--font-sans);
-    font-size: 14px;
+    font-size: var(--text-14);
     font-variant-numeric: tabular-nums lining-nums;
     line-height: 1.5;
   }
@@ -18,7 +18,7 @@
   :where(.app-shell, .login-page, .not-found-page) {
     color: var(--ink-900);
     font-family: var(--font-sans);
-    font-size: 14px;
+    font-size: var(--text-14);
     font-variant-numeric: tabular-nums lining-nums;
   }
 
@@ -28,12 +28,12 @@
 
   :where(.app-shell, .login-page, .not-found-page)
     :is(a[href], button, input, select, textarea, summary, [tabindex]):focus-visible {
-    outline: 2px solid #33705a;
+    outline: 2px solid var(--focus-ring);
     outline-offset: 3px;
   }
 
   .login-page .password-field:has(input:focus-visible) {
-    outline: 2px solid #33705a;
+    outline: 2px solid var(--focus-ring);
     outline-offset: 3px;
   }
 
@@ -50,7 +50,9 @@
     flex: 0 0 auto;
     touch-action: manipulation;
     user-select: none;
-    background: url("/brand/laces-out-playbook-mark.png") center / contain no-repeat;
+    /* The 1024px master stays for docs/social; the header renders at 38px,
+       so it ships a 96px WebP (4.9 KB vs 650 KB). */
+    background: url("/brand/laces-out-playbook-mark-96.webp") center / contain no-repeat;
     border: 0;
     border-radius: 0;
     box-shadow: none;
@@ -63,7 +65,7 @@
 
   .brand-copy strong {
     font-family: var(--font-brand), var(--font-sans);
-    font-size: 20px;
+    font-size: var(--text-20);
     font-weight: 760;
     letter-spacing: -0.04em;
     line-height: 1;
@@ -72,7 +74,7 @@
 
   .mobile-brand > strong {
     font-family: var(--font-brand), var(--font-sans);
-    font-size: 18px;
+    font-size: var(--text-18);
     font-weight: 760;
     letter-spacing: -0.04em;
     line-height: 1;
@@ -80,7 +82,7 @@
   }
 
   .brand-copy span {
-    font-size: 10px;
+    font-size: var(--text-10);
     font-weight: 600;
     letter-spacing: 0.095em;
   }
@@ -99,8 +101,8 @@
     padding: 4px 8px 4px 5px;
     color: var(--ink-600);
     border: 1px solid var(--ink-150);
-    border-radius: 7px;
-    font-size: 10px;
+    border-radius: var(--radius-sm);
+    font-size: var(--text-10);
     font-weight: 650;
     line-height: 1.2;
   }
@@ -128,6 +130,7 @@
   /* Shell */
   .app-shell {
     min-height: 100vh;
+    min-height: 100dvh;
     background: var(--paper-100);
   }
 
@@ -135,7 +138,7 @@
     width: 240px;
     padding: 20px 14px 16px;
     background: var(--ink-950);
-    border-right-color: #283229;
+    border-right-color: var(--ink-800);
   }
 
   .brand {
@@ -149,7 +152,7 @@
 
   .nav-label,
   .eyebrow {
-    font-size: 10px;
+    font-size: var(--text-10);
     font-weight: 700;
     letter-spacing: 0.095em;
   }
@@ -158,8 +161,8 @@
     min-height: 43px;
     gap: 11px;
     color: #99a49c;
-    border-radius: 7px;
-    font-size: 13px;
+    border-radius: var(--radius-sm);
+    font-size: var(--text-13);
     font-weight: 600;
   }
 
@@ -169,7 +172,7 @@
   }
 
   .nav-item--active {
-    color: #fff;
+    color: var(--white);
     background: #202c23;
     border-color: #2a382d;
   }
@@ -185,7 +188,7 @@
   .nav-live {
     padding: 2px 5px;
     border-radius: 3px;
-    font-size: 10px;
+    font-size: var(--text-10);
     font-weight: 700;
   }
 
@@ -212,7 +215,7 @@
   }
 
   .topbar-context {
-    font-size: 10px;
+    font-size: var(--text-10);
     font-weight: 700;
     letter-spacing: 0.065em;
   }
@@ -234,7 +237,7 @@
     .topbar-actions .button {
       min-height: 32px;
       padding: 0 12px;
-      font-size: 10px;
+      font-size: var(--text-10);
     }
   }
 
@@ -272,25 +275,25 @@
     margin-top: 11px;
     color: var(--ink-600);
     /* Standardized to 12px to match the workbench-page hero subtitles. */
-    font-size: 12px;
+    font-size: var(--text-12);
     line-height: 1.58;
   }
 
   .section-heading h2,
   .panel-heading h2,
   .panel-heading h3 {
-    font-size: 18px;
+    font-size: var(--text-18);
     font-weight: 700;
     line-height: 1.25;
     letter-spacing: -0.018em;
   }
 
   .app-shell p {
-    font-size: 12px;
+    font-size: var(--text-12);
   }
 
   .app-shell small {
-    font-size: 10px;
+    font-size: var(--text-10);
   }
 
   .app-shell button {
@@ -304,8 +307,8 @@
   .button {
     min-height: 40px;
     padding: 0 14px;
-    border-radius: 7px;
-    font-size: 12px;
+    border-radius: var(--radius-sm);
+    font-size: var(--text-12);
     font-weight: 700;
     box-shadow: none;
   }
@@ -316,7 +319,7 @@
 
   .button--small {
     min-height: 36px;
-    font-size: 11px;
+    font-size: var(--text-11);
   }
 
   .button--dark {
@@ -339,7 +342,7 @@
   .icon-button {
     width: 40px;
     height: 40px;
-    border-radius: 7px;
+    border-radius: var(--radius-sm);
   }
 
   .icon-button--small {
@@ -373,16 +376,16 @@
   .league-freshness,
   .draft-card__flag,
   .read-only-badge {
-    border-radius: 4px;
-    font-size: 10px;
+    border-radius: var(--radius-xs);
+    font-size: var(--text-10);
     font-weight: 700;
   }
 
   .count-badge {
     width: 28px;
     height: 28px;
-    border-radius: 6px;
-    font-size: 11px;
+    border-radius: var(--radius-xs);
+    font-size: var(--text-11);
   }
 
   .freshness-label,
@@ -392,17 +395,17 @@
   .draft-log__note,
   .ranking-column-note,
   .shared-ranking-footer {
-    font-size: 10px;
+    font-size: var(--text-10);
   }
 
   .app-shell :is(input, select, textarea) {
     min-height: 40px;
-    border-radius: 6px;
-    font-size: 12px;
+    border-radius: var(--radius-xs);
+    font-size: var(--text-12);
   }
 
   .app-shell :is(table, .player-table, .ranking-table, .exposure-table, .live-stats-table) {
-    font-size: 12px;
+    font-size: var(--text-12);
     font-variant-numeric: tabular-nums lining-nums;
   }
 
@@ -413,7 +416,7 @@
   .app-shell :is(table thead th, .ranking-table thead th, .player-table thead th) {
     color: var(--ink-600);
     font-family: var(--font-sans);
-    font-size: 10px;
+    font-size: var(--text-10);
     font-weight: 700;
     letter-spacing: 0.055em;
   }
@@ -449,7 +452,7 @@
   .ranking-notice {
     background: #eef3e2;
     border-color: #d4dfbd;
-    border-radius: 7px;
+    border-radius: var(--radius-sm);
   }
 
   /* @layer polish wins over @layer components, so without this the success-green
@@ -460,17 +463,17 @@
   }
 
   .demo-banner div {
-    gap: 10px;
+    gap: var(--space-10);
   }
 
   .demo-banner strong,
   .demo-banner span,
   .demo-banner a {
-    font-size: 11px;
+    font-size: var(--text-11);
   }
 
   .overview-strip {
-    border-radius: 9px;
+    border-radius: var(--radius-sm);
   }
 
   .overview-stat {
@@ -479,7 +482,7 @@
   }
 
   .overview-stat span:not(.overview-stat__icon) {
-    font-size: 10px;
+    font-size: var(--text-10);
     font-weight: 700;
   }
 
@@ -488,7 +491,7 @@
   }
 
   .overview-stat small {
-    font-size: 10px;
+    font-size: var(--text-10);
   }
 
   .league-card {
@@ -513,8 +516,8 @@
   .league-monogram {
     width: 32px;
     height: 32px;
-    border-radius: 6px;
-    font-size: 11px;
+    border-radius: var(--radius-xs);
+    font-size: var(--text-11);
   }
 
   .league-card__identity > span,
@@ -531,24 +534,24 @@
   .health-list span,
   .health-list strong,
   .exposure-table tbody th small {
-    font-size: 10px;
+    font-size: var(--text-10);
   }
 
   .league-card__identity strong {
-    font-size: 14px;
+    font-size: var(--text-14);
   }
 
   .matchup-row strong {
-    font-size: 15px;
+    font-size: var(--text-15);
   }
 
   .decision-copy strong {
-    font-size: 13px;
+    font-size: var(--text-13);
   }
 
   .decision-copy > span:last-child,
   .decision-detail p {
-    font-size: 11px;
+    font-size: var(--text-11);
   }
 
   .draft-card {
@@ -560,22 +563,22 @@
   }
 
   .provider-description {
-    font-size: 11px;
+    font-size: var(--text-11);
   }
 
   .provider-card__head h3 {
-    font-size: 13px;
+    font-size: var(--text-13);
   }
 
   .exposure-table tbody th strong,
   .exposure-table td strong {
-    font-size: 12px;
+    font-size: var(--text-12);
   }
 
   .live-stats-table th,
   .live-stats-table td {
     padding-block: 11px;
-    font-size: 12px;
+    font-size: var(--text-12);
   }
 
   /* Connections and invitations */
@@ -588,7 +591,7 @@
     padding: 13px 14px;
     background: var(--white);
     border: 1px solid var(--ink-150);
-    border-radius: 7px;
+    border-radius: var(--radius-sm);
   }
 
   .member-registration-note > svg {
@@ -601,12 +604,12 @@
   }
 
   .member-registration-note strong {
-    font-size: 12px;
+    font-size: var(--text-12);
   }
 
   .member-registration-note span {
     color: var(--ink-600);
-    font-size: 12px;
+    font-size: var(--text-12);
     line-height: 1.45;
   }
 
@@ -619,8 +622,8 @@
     color: var(--orange-600);
     background: var(--orange-100);
     border: 1px solid #f0d4c4;
-    border-radius: 7px;
-    font-size: 11px;
+    border-radius: var(--radius-sm);
+    font-size: var(--text-11);
     line-height: 1.5;
   }
 
@@ -641,7 +644,7 @@
 
   .invitation-security-detail {
     color: var(--ink-500);
-    font-size: 11px;
+    font-size: var(--text-11);
     line-height: 1.5;
   }
 
@@ -675,14 +678,14 @@
   .yahoo-coming-soon-note {
     display: flex;
     align-items: flex-start;
-    gap: 8px;
+    gap: var(--space-8);
     margin: 1px 0 18px;
     padding: 11px 12px;
     color: #795b12;
     background: #fff8df;
     border: 1px solid #ecdca8;
-    border-radius: 7px;
-    font-size: 11px;
+    border-radius: var(--radius-sm);
+    font-size: var(--text-11);
     line-height: 1.5;
   }
 
@@ -703,17 +706,17 @@
     color: var(--ink-700);
     background: #fff8f6;
     border: 1px solid #efd2cc;
-    border-radius: 7px;
+    border-radius: var(--radius-sm);
   }
 
   .bridge-revoke-confirmation strong {
-    font-size: 11px;
+    font-size: var(--text-11);
   }
 
   .bridge-revoke-confirmation p {
     margin-top: 3px;
     color: var(--ink-600);
-    font-size: 11px;
+    font-size: var(--text-11);
     line-height: 1.5;
   }
 
@@ -721,17 +724,17 @@
     display: flex;
     flex-wrap: wrap;
     justify-content: flex-end;
-    gap: 6px;
+    gap: var(--space-6);
   }
 
   .connection-security-chip {
-    border-radius: 7px;
+    border-radius: var(--radius-sm);
   }
 
   .connection-security-chip strong,
   .connection-capabilities li,
   .connection-provider > p:not(.connection-error) {
-    font-size: 12px;
+    font-size: var(--text-12);
   }
 
   .connection-security-chip small,
@@ -744,7 +747,7 @@
   .bridge-device-list__leagues > span,
   .import-editor-label small,
   .import-message {
-    font-size: 11px;
+    font-size: var(--text-11);
   }
 
   .connection-notice,
@@ -756,12 +759,12 @@
   .bridge-device-manager__heading > span,
   .bridge-device-list__summary > strong,
   .import-editor-label span {
-    font-size: 12px;
+    font-size: var(--text-12);
   }
 
   .connection-provider-logo,
   .provider-logo {
-    border-radius: 7px;
+    border-radius: var(--radius-sm);
     font-weight: 700;
   }
 
@@ -770,18 +773,18 @@
   .bridge-token,
   .bridge-device-manager,
   .bridge-device-list > li {
-    border-radius: 7px;
+    border-radius: var(--radius-sm);
   }
 
   .bridge-fields label,
   .ranking-form-grid label,
   .ranking-import-body > label {
-    font-size: 11px;
+    font-size: var(--text-11);
   }
 
   .bridge-fields input,
   .bridge-fields select {
-    font-size: 12px;
+    font-size: var(--text-12);
   }
 
   .connection-provider-state--connected {
@@ -794,7 +797,7 @@
     padding: 12px;
     background: var(--paper-50);
     border: 1px solid var(--ink-150);
-    border-radius: 7px;
+    border-radius: var(--radius-sm);
   }
 
   .yahoo-connection-manager__heading,
@@ -805,20 +808,20 @@
 
   .yahoo-connection-manager__heading {
     justify-content: space-between;
-    gap: 10px;
+    gap: var(--space-10);
   }
 
   .yahoo-connection-manager__heading > span {
     gap: 7px;
     color: var(--ink-800);
-    font-size: 11px;
+    font-size: var(--text-11);
   }
 
   .yahoo-connection-manager__empty,
   .yahoo-connection-list__empty {
     margin: 10px 0 0;
     color: var(--ink-500);
-    font-size: 11px;
+    font-size: var(--text-11);
     line-height: 1.5;
   }
 
@@ -835,11 +838,11 @@
     display: grid;
     grid-template-columns: minmax(0, 1fr) auto;
     align-items: start;
-    gap: 8px 10px;
+    gap: var(--space-8) var(--space-10);
     padding: 10px;
     background: var(--white);
     border: 1px solid var(--ink-150);
-    border-radius: 7px;
+    border-radius: var(--radius-sm);
   }
 
   .yahoo-connection-list__summary {
@@ -852,7 +855,7 @@
 
   .yahoo-connection-list__summary strong {
     overflow: hidden;
-    font-size: 11px;
+    font-size: var(--text-11);
     text-overflow: ellipsis;
     white-space: nowrap;
   }
@@ -860,15 +863,15 @@
   .yahoo-connection-list__summary small {
     grid-column: 1 / -1;
     color: var(--ink-500);
-    font-size: 10px;
+    font-size: var(--text-10);
   }
 
   .provider-health {
     padding: 3px 5px;
     color: var(--ink-600);
     background: var(--ink-100);
-    border-radius: 4px;
-    font-size: 10px;
+    border-radius: var(--radius-xs);
+    font-size: var(--text-10);
     font-weight: 700;
     letter-spacing: 0.02em;
     text-transform: uppercase;
@@ -896,7 +899,7 @@
     grid-column: 1 / -1;
     margin: 0;
     color: var(--red-600);
-    font-size: 10px;
+    font-size: var(--text-10);
   }
 
   .yahoo-league-list {
@@ -908,7 +911,7 @@
     display: grid;
     grid-template-columns: minmax(0, 1fr) auto;
     align-items: center;
-    gap: 10px;
+    gap: var(--space-10);
     padding: 8px 0 0;
     border-top: 1px solid var(--ink-150);
   }
@@ -921,23 +924,23 @@
 
   .yahoo-league-list strong {
     overflow: hidden;
-    font-size: 11px;
+    font-size: var(--text-11);
     text-overflow: ellipsis;
     white-space: nowrap;
   }
 
   .yahoo-league-list small {
     color: var(--ink-500);
-    font-size: 10px;
+    font-size: var(--text-10);
     line-height: 1.45;
   }
 
   .yahoo-action-message {
     display: flex;
     align-items: flex-start;
-    gap: 6px;
+    gap: var(--space-6);
     margin: 9px 0 0;
-    font-size: 11px;
+    font-size: var(--text-11);
     line-height: 1.45;
   }
 
@@ -958,7 +961,7 @@
   /* Rankings */
   .ranking-studio-grid {
     grid-template-columns: 280px minmax(0, 1fr);
-    gap: 16px;
+    gap: var(--space-16);
   }
 
   .ranking-list > button {
@@ -969,7 +972,7 @@
   .ranking-board-title input,
   .ranking-table td,
   .shared-ranking-table td {
-    font-size: 12px;
+    font-size: var(--text-12);
   }
 
   .ranking-list small,
@@ -981,24 +984,24 @@
   .shared-ranking-meta span,
   .shared-ranking-capability,
   .shared-ranking-table small {
-    font-size: 10px;
+    font-size: var(--text-10);
   }
 
   .ranking-kind-icon {
-    font-size: 12px;
+    font-size: var(--text-12);
   }
 
   .ranking-table input,
   .ranking-table select,
   .ranking-notes-input,
   .ranking-mapping input {
-    font-size: 11px;
+    font-size: var(--text-11);
   }
 
   .ranking-welcome p,
   .ranking-empty p,
   .ranking-inline-message {
-    font-size: 11px;
+    font-size: var(--text-11);
   }
 
   /* Draft room */
@@ -1034,7 +1037,7 @@
   .queue-empty,
   .draft-event > div span,
   .draft-event > small {
-    font-size: 10px;
+    font-size: var(--text-10);
   }
 
   .mode-switch button {
@@ -1049,26 +1052,26 @@
   .probability-ring strong,
   .snake-comparison strong,
   .draft-event > strong {
-    font-size: 12px;
+    font-size: var(--text-12);
   }
 
   .player-name-button strong,
   .recommendation-player h2,
   .queue-list strong,
   .draft-event > div strong {
-    font-size: 12px;
+    font-size: var(--text-12);
   }
 
   .player-name-button small,
   .board-signal {
-    font-size: 10px;
+    font-size: var(--text-10);
   }
 
   .position-tabs button,
   .queue-button {
     min-width: 36px;
     min-height: 36px;
-    font-size: 11px;
+    font-size: var(--text-11);
   }
 
   .recommendation-card,
@@ -1078,7 +1081,7 @@
   .snake-probability,
   .snake-comparison,
   .draft-event {
-    border-radius: 7px;
+    border-radius: var(--radius-sm);
   }
 
   .assistant-callout {
@@ -1092,7 +1095,7 @@
 
   .queue-order,
   .draft-event__pick {
-    font-size: 10px;
+    font-size: var(--text-10);
   }
 
   /* Account access */
@@ -1113,7 +1116,7 @@
     width: 1px;
     height: 58px;
     border: 0;
-    border-left: 2px dashed #556359;
+    border-left: 2px dashed var(--ink-600);
     border-radius: 0;
     transform: rotate(28deg);
   }
@@ -1134,12 +1137,12 @@
   .login-story__copy > p:last-child {
     max-width: 440px;
     color: #a6b0a8;
-    font-size: 13px;
+    font-size: var(--text-13);
     line-height: 1.55;
   }
 
   .login-principles strong {
-    font-size: 12px;
+    font-size: var(--text-12);
   }
 
   .login-principles small,
@@ -1147,7 +1150,7 @@
   .login-help,
   .login-demo-route,
   .password-label-row span {
-    font-size: 12px;
+    font-size: var(--text-12);
   }
 
   .login-form-side {
@@ -1157,7 +1160,7 @@
   .login-form {
     width: min(100%, 450px);
     padding: 28px;
-    border-radius: 11px;
+    border-radius: var(--radius-md);
     box-shadow: 0 12px 32px rgb(16 23 18 / 7%);
   }
 
@@ -1167,23 +1170,23 @@
 
   .login-form__heading div > p:last-child,
   .login-error {
-    font-size: 12px;
+    font-size: var(--text-12);
   }
 
   .login-fields label,
   .password-label-row label {
-    font-size: 11px;
+    font-size: var(--text-11);
   }
 
   .login-fields > input,
   .password-field {
     height: 44px;
-    border-radius: 7px;
+    border-radius: var(--radius-sm);
   }
 
   .login-fields > input,
   .password-field input {
-    font-size: 13px;
+    font-size: var(--text-13);
   }
 
   .opponent-team-scroll :is(button, .draft-team-state) small {
@@ -1210,6 +1213,7 @@
   .not-found-page {
     display: grid;
     min-height: 100vh;
+    min-height: 100dvh;
     place-items: center;
     padding: 24px;
     background: var(--paper-100);
@@ -1224,7 +1228,7 @@
     padding: 34px;
     background: var(--white);
     border: 1px solid var(--ink-150);
-    border-radius: 11px;
+    border-radius: var(--radius-md);
     box-shadow: var(--shadow-card);
   }
 
@@ -1243,7 +1247,7 @@
     max-width: 360px;
     margin: 14px 0 24px;
     color: var(--ink-600);
-    font-size: 13px;
+    font-size: var(--text-13);
   }
 
   .not-found-goal {
@@ -1264,7 +1268,7 @@
     width: max-content;
     color: var(--ink-500);
     cursor: pointer;
-    font-size: 11px;
+    font-size: var(--text-11);
     font-weight: 650;
   }
 
@@ -1272,14 +1276,14 @@
     max-width: 390px;
     margin: 14px 0 5px;
     color: var(--ink-800);
-    font-size: 13px;
+    font-size: var(--text-13);
     font-style: italic;
     line-height: 1.5;
   }
 
   .not-found-easter-egg cite {
     color: var(--ink-500);
-    font-size: 10px;
+    font-size: var(--text-10);
     font-style: normal;
   }
 
@@ -1327,8 +1331,8 @@
     }
 
     .mobile-brand {
-      gap: 8px;
-      font-size: 12px;
+      gap: var(--space-8);
+      font-size: var(--text-12);
     }
 
     .session-control--offline {
@@ -1367,9 +1371,9 @@
     .bottom-nav a,
     .bottom-nav button {
       min-height: 56px;
-      gap: 4px;
+      gap: var(--space-4);
       color: #929e95;
-      font-size: 10px;
+      font-size: var(--text-10);
       font-weight: 600;
     }
 
@@ -1412,7 +1416,7 @@
     }
 
     .page-subtitle {
-      font-size: 12px;
+      font-size: var(--text-12);
     }
 
     .queue-card {
@@ -1422,13 +1426,13 @@
     .draft-mobile-action {
       bottom: calc(72px + env(safe-area-inset-bottom));
       background: var(--ink-900);
-      border-radius: 8px;
+      border-radius: var(--radius-sm);
       backdrop-filter: none;
     }
 
     .draft-mobile-action span,
     .draft-mobile-action strong {
-      font-size: 10px;
+      font-size: var(--text-10);
     }
 
     body:has(.login-page) {
@@ -1436,7 +1440,9 @@
     }
 
     .login-page {
-      grid-template-columns: 1fr;
+      /* minmax(0, ...): a bare 1fr keeps its auto minimum, letting the form's
+         min-content width push the page past a 320px viewport. */
+      grid-template-columns: minmax(0, 1fr);
     }
 
     .login-story {
@@ -1466,7 +1472,7 @@
 
     .login-fields > input,
     .password-field input {
-      font-size: 16px;
+      font-size: var(--text-16);
     }
 
     /* iOS Safari auto-zooms any text field under 16px and never zooms back out.
@@ -1483,7 +1489,7 @@
         input:not([type]),
         textarea
       ) {
-      font-size: 16px;
+      font-size: var(--text-16);
     }
   }
 
@@ -1491,7 +1497,7 @@
     .rankings-heading {
       align-items: stretch;
       flex-direction: column;
-      gap: 16px;
+      gap: var(--space-16);
     }
 
     .rankings-heading .heading-actions {
@@ -1511,7 +1517,7 @@
       width: auto;
       min-width: 62px;
       padding: 0 10px;
-      font-size: 11px;
+      font-size: var(--text-11);
       white-space: nowrap;
     }
 
@@ -1525,7 +1531,7 @@
     }
 
     .overview-stat strong {
-      font-size: 15px;
+      font-size: var(--text-15);
     }
 
     .connection-provider {
@@ -1574,7 +1580,7 @@
     }
 
     .login-principles small {
-      font-size: 10px;
+      font-size: var(--text-10);
     }
 
     .not-found-card {

@@ -13,13 +13,13 @@
     display: grid;
     grid-template-columns: auto minmax(0, 1fr);
     align-items: center;
-    gap: 10px;
+    gap: var(--space-10);
     padding: 10px 12px;
     color: var(--ink-600);
     background: var(--lime-100);
-    border: 1px solid #cfddae;
-    border-radius: 9px;
-    font-size: 11px;
+    border: 1px solid var(--lime-200);
+    border-radius: var(--radius-sm);
+    font-size: var(--text-11);
     line-height: 1.45;
   }
 
@@ -34,7 +34,7 @@
 
   .demoNotice strong {
     color: var(--ink-900);
-    font-size: 12px;
+    font-size: var(--text-12);
   }
 
   .hero {
@@ -53,8 +53,8 @@
   .sectionHeader small,
   .findingsHeading small,
   .disclosurePanel summary small {
-    color: #547148;
-    font-size: 10px;
+    color: var(--fern-600);
+    font-size: var(--text-10);
     font-weight: 800;
     letter-spacing: 0.09em;
     text-transform: uppercase;
@@ -75,21 +75,21 @@
     margin-top: 12px;
     color: var(--ink-600);
     /* Standardized to 12px (was 14px) to match the app's other subtitles. */
-    font-size: 12px;
+    font-size: var(--text-12);
     line-height: 1.55;
   }
 
   .leagueControls {
     display: grid;
     grid-template-columns: minmax(230px, 1fr) auto;
-    gap: 6px 8px;
+    gap: var(--space-6) var(--space-8);
     min-width: min(100%, 390px);
   }
 
   .leagueControls label {
     grid-column: 1 / -1;
     color: var(--ink-600);
-    font-size: 10px;
+    font-size: var(--text-10);
     font-weight: 800;
     letter-spacing: 0.07em;
     text-transform: uppercase;
@@ -101,9 +101,9 @@
   .windowControls button {
     min-height: 42px;
     border: 1px solid var(--ink-200);
-    border-radius: 8px;
+    border-radius: var(--radius-sm);
     font: inherit;
-    font-size: 12px;
+    font-size: var(--text-12);
   }
 
   .leagueControls select,
@@ -111,7 +111,7 @@
     min-width: 0;
     padding: 0 34px 0 11px;
     color: var(--ink-900);
-    background: #fff;
+    background: var(--white);
   }
 
   .leagueControls button,
@@ -121,7 +121,7 @@
     justify-content: center;
     gap: 7px;
     padding: 0 14px;
-    color: #fff;
+    color: var(--white);
     background: var(--ink-950);
     border-color: var(--ink-950);
     cursor: pointer;
@@ -138,12 +138,12 @@
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr)) auto;
     align-items: end;
-    gap: 10px;
+    gap: var(--space-10);
     padding: 13px 14px;
-    background: #fff;
+    background: var(--white);
     border: 1px solid var(--ink-150);
-    border-radius: 11px;
-    box-shadow: 0 8px 22px rgb(23 35 28 / 4%);
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow-hover);
   }
 
   .windowGroup {
@@ -156,7 +156,7 @@
   .windowGroup > span {
     grid-column: 1 / -1;
     color: var(--ink-600);
-    font-size: 10px;
+    font-size: var(--text-10);
     font-weight: 800;
     letter-spacing: 0.07em;
     text-transform: uppercase;
@@ -169,7 +169,7 @@
 
   .windowGroup i {
     color: var(--ink-400);
-    font-size: 10px;
+    font-size: var(--text-10);
     font-style: normal;
   }
 
@@ -182,15 +182,15 @@
     color: var(--ink-600);
     background: var(--paper-50);
     border: 1px solid var(--ink-150);
-    border-radius: 8px;
-    font-size: 11px;
+    border-radius: var(--radius-sm);
+    font-size: var(--text-11);
     font-weight: 700;
   }
 
   .windowError {
     grid-column: 1 / -1;
     color: #8a3f28;
-    font-size: 11px;
+    font-size: var(--text-11);
   }
 
   .snapshotContext {
@@ -200,7 +200,7 @@
     color: #c7d0c8;
     background: var(--ink-950);
     border: 1px solid var(--ink-950);
-    border-radius: 10px;
+    border-radius: var(--radius-md);
   }
 
   .snapshotContext > div {
@@ -209,7 +209,7 @@
     align-items: center;
     gap: 9px;
     padding: 13px 15px;
-    border-right: 1px solid #344039;
+    border-right: 1px solid var(--ink-750);
   }
 
   .snapshotContext > div:last-child {
@@ -230,7 +230,7 @@
 
   .snapshotContext small {
     color: #8d9990;
-    font-size: 9px;
+    font-size: var(--text-9);
     font-weight: 800;
     letter-spacing: 0.05em;
     text-transform: uppercase;
@@ -238,8 +238,8 @@
 
   .snapshotContext strong {
     margin-top: 2px;
-    color: #fff;
-    font-size: 11px;
+    color: var(--white);
+    font-size: var(--text-11);
     line-height: 1.35;
     overflow-wrap: anywhere;
   }
@@ -254,10 +254,10 @@
     gap: 11px;
     padding: 22px;
     color: var(--ink-600);
-    background: #fff;
+    background: var(--white);
     border: 1px solid var(--ink-150);
-    border-radius: 11px;
-    font-size: 12px;
+    border-radius: var(--radius-md);
+    font-size: var(--text-12);
     line-height: 1.55;
   }
 
@@ -274,7 +274,7 @@
 
   .errorState strong {
     color: #5f451d;
-    font-size: 13px;
+    font-size: var(--text-13);
   }
 
   .setupState {
@@ -290,7 +290,7 @@
 
   .setupState strong {
     color: var(--ink-900);
-    font-size: 13px;
+    font-size: var(--text-13);
   }
 
   .setupState a {
@@ -299,10 +299,10 @@
     align-items: center;
     gap: 7px;
     padding: 0 14px;
-    color: #fff;
+    color: var(--white);
     background: var(--ink-950);
-    border-radius: 8px;
-    font-size: 12px;
+    border-radius: var(--radius-sm);
+    font-size: var(--text-12);
     font-weight: 700;
     text-decoration: none;
   }
@@ -316,7 +316,7 @@
     color: #e8eee9;
     background: var(--ink-950);
     border: 1px solid var(--ink-950);
-    border-radius: 11px;
+    border-radius: var(--radius-md);
   }
 
   .findingsHeading {
@@ -325,7 +325,7 @@
     justify-content: space-between;
     gap: 18px;
     padding: 18px 20px;
-    border-bottom: 1px solid #344039;
+    border-bottom: 1px solid var(--ink-750);
   }
 
   .findingsHeading small {
@@ -334,7 +334,7 @@
 
   .findingsHeading h2 {
     margin-top: 4px;
-    color: #fff;
+    color: var(--white);
     font-size: 21px;
     line-height: 1.15;
     letter-spacing: -0.03em;
@@ -342,7 +342,7 @@
 
   .findingsHeading > span:last-child {
     color: #a8b3aa;
-    font-size: 11px;
+    font-size: var(--text-11);
   }
 
   .findingGrid {
@@ -355,9 +355,9 @@
     min-width: 0;
     grid-template-columns: 34px minmax(0, 1fr);
     align-items: start;
-    gap: 10px;
+    gap: var(--space-10);
     padding: 18px;
-    border-right: 1px solid #344039;
+    border-right: 1px solid var(--ink-750);
   }
 
   .findingGrid article:last-child {
@@ -372,7 +372,7 @@
     color: var(--lime-300);
     background: #243129;
     border: 1px solid #3c4b40;
-    border-radius: 8px;
+    border-radius: var(--radius-sm);
   }
 
   .findingGrid article[data-severity="critical"] .findingIcon {
@@ -389,7 +389,7 @@
 
   .findingMeta {
     color: #a6b1a8;
-    font-size: 9px;
+    font-size: var(--text-9);
     font-weight: 800;
     letter-spacing: 0.07em;
     text-transform: uppercase;
@@ -397,15 +397,15 @@
 
   .findingGrid h3 {
     margin-top: 4px;
-    color: #fff;
-    font-size: 15px;
+    color: var(--white);
+    font-size: var(--text-15);
     line-height: 1.28;
   }
 
   .findingGrid p {
     margin-top: 7px;
     color: #bcc6be;
-    font-size: 12px;
+    font-size: var(--text-12);
     line-height: 1.55;
   }
 
@@ -424,7 +424,7 @@
     background: #253128;
     border: 1px solid #39463c;
     border-radius: 999px;
-    font-size: 9px;
+    font-size: var(--text-9);
   }
 
   .findingGrid a {
@@ -433,7 +433,7 @@
     gap: 5px;
     margin-top: 12px;
     color: var(--lime-300);
-    font-size: 11px;
+    font-size: var(--text-11);
     font-weight: 700;
     text-decoration: none;
   }
@@ -452,14 +452,14 @@
   }
 
   .clearFinding strong {
-    color: #fff;
-    font-size: 13px;
+    color: var(--white);
+    font-size: var(--text-13);
   }
 
   .clearFinding small {
     margin-top: 3px;
     color: #aeb9b0;
-    font-size: 11px;
+    font-size: var(--text-11);
   }
 
   .primaryGrid {
@@ -479,10 +479,10 @@
   .disclosurePanel {
     overflow: hidden;
     min-width: 0;
-    background: #fff;
+    background: var(--white);
     border: 1px solid var(--ink-150);
-    border-radius: 11px;
-    box-shadow: 0 8px 22px rgb(23 35 28 / 4%);
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow-hover);
   }
 
   .sectionHeader {
@@ -504,7 +504,7 @@
     color: #47603d;
     background: #e5eddf;
     border: 1px solid #d2dec9;
-    border-radius: 8px;
+    border-radius: var(--radius-sm);
   }
 
   .sectionHeader small,
@@ -515,7 +515,7 @@
   .sectionHeader h2 {
     margin-top: 2px;
     color: var(--ink-950);
-    font-size: 18px;
+    font-size: var(--text-18);
     line-height: 1.12;
     letter-spacing: -0.025em;
   }
@@ -523,7 +523,7 @@
   .sectionDetail {
     margin-left: auto;
     color: var(--ink-500);
-    font-size: 10px;
+    font-size: var(--text-10);
     text-align: right;
   }
 
@@ -537,7 +537,7 @@
     color: #765221;
     background: #fffaf0;
     border: 1px solid #eadcbf;
-    border-radius: 8px;
+    border-radius: var(--radius-sm);
   }
 
   .availabilityNotice[data-state="partial"] {
@@ -551,12 +551,12 @@
   }
 
   .availabilityNotice strong {
-    font-size: 12px;
+    font-size: var(--text-12);
   }
 
   .availabilityNotice small {
     margin-top: 2px;
-    font-size: 11px;
+    font-size: var(--text-11);
     line-height: 1.45;
   }
 
@@ -596,7 +596,7 @@
   .playerIdentity strong,
   .playerIdentity a {
     color: var(--ink-950);
-    font-size: 13px;
+    font-size: var(--text-13);
     font-weight: 700;
   }
 
@@ -612,7 +612,7 @@
   .projectionContext span {
     margin-top: 3px;
     color: var(--ink-500);
-    font-size: 9px;
+    font-size: var(--text-9);
     font-weight: 800;
     letter-spacing: 0.05em;
     text-transform: uppercase;
@@ -621,7 +621,7 @@
   .nextGame strong {
     margin-top: 3px;
     color: var(--ink-850);
-    font-size: 12px;
+    font-size: var(--text-12);
   }
 
   .nextGame small,
@@ -630,7 +630,7 @@
   .projectionContext small {
     margin-top: 3px;
     color: var(--ink-500);
-    font-size: 10px;
+    font-size: var(--text-10);
     line-height: 1.4;
   }
 
@@ -643,7 +643,7 @@
     background: #edf3e8;
     border: 1px solid #dce7d6;
     border-radius: 999px;
-    font-size: 10px;
+    font-size: var(--text-10);
     font-weight: 800;
     font-variant-numeric: tabular-nums;
   }
@@ -652,7 +652,7 @@
   .projectionContext strong {
     margin-top: 3px;
     color: var(--ink-900);
-    font-size: 16px;
+    font-size: var(--text-16);
     font-variant-numeric: tabular-nums;
   }
 
@@ -666,7 +666,7 @@
 
   .rowLinks a {
     color: #4f6e45;
-    font-size: 10px;
+    font-size: var(--text-10);
     font-weight: 700;
     text-decoration: none;
   }
@@ -696,11 +696,11 @@
     color: var(--ink-600);
     background: var(--paper-50);
     border: 1px solid var(--ink-150);
-    border-radius: 8px;
+    border-radius: var(--radius-sm);
   }
 
   .byeWeek span {
-    font-size: 8px;
+    font-size: var(--text-8);
     font-weight: 800;
     letter-spacing: 0.05em;
     text-transform: uppercase;
@@ -717,7 +717,7 @@
     color: var(--ink-600);
     background: var(--ink-100);
     border-radius: 999px;
-    font-size: 9px;
+    font-size: var(--text-9);
     font-weight: 800;
     text-transform: uppercase;
   }
@@ -740,7 +740,7 @@
   .byeCard p {
     margin-top: 6px;
     color: var(--ink-700);
-    font-size: 12px;
+    font-size: var(--text-12);
     line-height: 1.5;
   }
 
@@ -749,7 +749,7 @@
     display: block;
     margin-top: 6px;
     color: var(--ink-500);
-    font-size: 10px;
+    font-size: var(--text-10);
     line-height: 1.4;
   }
 
@@ -765,7 +765,7 @@
     padding: 0 16px;
     color: var(--ink-600);
     cursor: pointer;
-    font-size: 11px;
+    font-size: var(--text-11);
     font-weight: 700;
     list-style: none;
   }
@@ -795,10 +795,10 @@
   .playoffColumns h3 {
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: var(--space-6);
     margin-bottom: 7px;
     color: var(--ink-700);
-    font-size: 11px;
+    font-size: var(--text-11);
   }
 
   .playoffColumns > div > div {
@@ -820,7 +820,7 @@
   .playoffColumns strong {
     overflow: hidden;
     color: var(--ink-900);
-    font-size: 11px;
+    font-size: var(--text-11);
     text-overflow: ellipsis;
     white-space: nowrap;
   }
@@ -828,7 +828,7 @@
   .playoffColumns small {
     margin-top: 2px;
     color: var(--ink-500);
-    font-size: 9px;
+    font-size: var(--text-9);
   }
 
   .playoffColumns > div > div > span:last-child {
@@ -852,18 +852,18 @@
 
   .emptyState strong {
     color: var(--ink-900);
-    font-size: 13px;
+    font-size: var(--text-13);
   }
 
   .emptyState small {
     margin-top: 3px;
-    font-size: 11px;
+    font-size: var(--text-11);
     line-height: 1.5;
   }
 
   .emptyState a {
     color: #4f6e45;
-    font-size: 11px;
+    font-size: var(--text-11);
     font-weight: 700;
   }
 
@@ -871,7 +871,7 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 12px;
+    gap: var(--space-12);
     padding: 12px 16px;
     border-bottom: 1px solid var(--ink-100);
   }
@@ -881,7 +881,7 @@
     overflow: hidden;
     padding: 3px;
     background: var(--paper-100);
-    border-radius: 8px;
+    border-radius: var(--radius-sm);
   }
 
   .matrixControls button {
@@ -891,15 +891,15 @@
     color: var(--ink-600);
     background: transparent;
     border: 0;
-    border-radius: 6px;
+    border-radius: var(--radius-xs);
     cursor: pointer;
-    font-size: 11px;
+    font-size: var(--text-11);
     font-weight: 700;
   }
 
   .matrixControls button[aria-pressed="true"] {
     color: var(--ink-950);
-    background: #fff;
+    background: var(--white);
     box-shadow: 0 2px 7px rgb(23 35 28 / 8%);
   }
 
@@ -907,25 +907,25 @@
     display: grid;
     grid-template-columns: auto minmax(0, 1fr);
     align-items: start;
-    gap: 8px;
+    gap: var(--space-8);
     padding: 10px 16px;
     color: var(--ink-550);
     background: #f8faf5;
     border-bottom: 1px solid var(--ink-100);
-    font-size: 10px;
+    font-size: var(--text-10);
     line-height: 1.45;
   }
 
   .percentileGuide > svg {
     margin-top: 1px;
-    color: #547148;
+    color: var(--fern-600);
   }
 
   .percentileGuide strong {
     display: block;
     margin-bottom: 1px;
     color: var(--ink-800);
-    font-size: 10px;
+    font-size: var(--text-10);
   }
 
   .matrixRows {
@@ -937,7 +937,7 @@
     display: grid;
     grid-template-columns: 62px 78px 86px minmax(0, 1fr);
     align-items: center;
-    gap: 12px;
+    gap: var(--space-12);
     padding: 9px 16px;
   }
 
@@ -945,7 +945,7 @@
     color: var(--ink-500);
     background: var(--paper-50);
     border-bottom: 1px solid var(--ink-100);
-    font-size: 9px;
+    font-size: var(--text-9);
     font-weight: 800;
     letter-spacing: 0.06em;
     text-transform: uppercase;
@@ -962,7 +962,7 @@
 
   .matrixTeam {
     color: var(--ink-950);
-    font-size: 12px;
+    font-size: var(--text-12);
   }
 
   .matrixScore {
@@ -973,8 +973,8 @@
     justify-content: center;
     color: var(--ink-700);
     background: var(--ink-100);
-    border-radius: 7px;
-    font-size: 11px;
+    border-radius: var(--radius-sm);
+    font-size: var(--text-11);
     font-weight: 800;
     font-variant-numeric: tabular-nums;
   }
@@ -986,21 +986,21 @@
 
   .matrixRank {
     color: var(--ink-850);
-    font-size: 11px;
+    font-size: var(--text-11);
     font-weight: 700;
   }
 
   .matrixRank small {
     margin-top: 1px;
     color: var(--ink-500);
-    font-size: 8px;
+    font-size: var(--text-8);
     font-weight: 600;
   }
 
   .weekStrip {
     display: flex;
     min-width: 0;
-    gap: 6px;
+    gap: var(--space-6);
     overflow-x: auto;
     padding: 2px 1px 4px;
     scrollbar-width: thin;
@@ -1016,26 +1016,26 @@
     color: var(--ink-600);
     background: var(--paper-50);
     border: 1px solid var(--ink-100);
-    border-radius: 7px;
+    border-radius: var(--radius-sm);
   }
 
   .weekStrip small {
     grid-column: 1 / -1;
     color: var(--ink-500);
-    font-size: 8px;
+    font-size: var(--text-8);
     font-weight: 800;
   }
 
   .weekStrip strong {
     overflow: hidden;
-    font-size: 10px;
+    font-size: var(--text-10);
     text-overflow: ellipsis;
     white-space: nowrap;
   }
 
   .weekStrip i {
     color: var(--ink-800);
-    font-size: 9px;
+    font-size: var(--text-9);
     font-style: normal;
     font-weight: 800;
   }
@@ -1046,13 +1046,13 @@
     min-height: 44px;
     align-items: center;
     justify-content: center;
-    gap: 6px;
+    gap: var(--space-6);
     color: #4f6e45;
     background: var(--paper-50);
     border: 0;
     border-top: 1px solid var(--ink-100);
     cursor: pointer;
-    font-size: 11px;
+    font-size: var(--text-11);
     font-weight: 700;
   }
 
@@ -1084,13 +1084,13 @@
   .disclosurePanel summary strong {
     margin-top: 2px;
     color: var(--ink-950);
-    font-size: 16px;
+    font-size: var(--text-16);
   }
 
   .disclosurePanel summary i {
     margin-top: 3px;
     color: var(--ink-500);
-    font-size: 11px;
+    font-size: var(--text-11);
     font-style: normal;
   }
 
@@ -1117,7 +1117,7 @@
 
   .methodStatus > div {
     padding: 14px 16px;
-    border-right: 1px solid #344039;
+    border-right: 1px solid var(--ink-750);
   }
 
   .methodStatus > div:last-child {
@@ -1132,7 +1132,7 @@
 
   .methodStatus span {
     color: #8d9990;
-    font-size: 9px;
+    font-size: var(--text-9);
     font-weight: 800;
     letter-spacing: 0.06em;
     text-transform: uppercase;
@@ -1140,15 +1140,15 @@
 
   .methodStatus strong {
     margin-top: 3px;
-    color: #fff;
-    font-size: 11px;
+    color: var(--white);
+    font-size: var(--text-11);
     overflow-wrap: anywhere;
   }
 
   .methodStatus small {
     margin-top: 2px;
     color: #9aa59c;
-    font-size: 9px;
+    font-size: var(--text-9);
     line-height: 1.35;
   }
 
@@ -1156,7 +1156,7 @@
     display: grid;
     grid-template-columns: minmax(280px, 0.9fr) minmax(0, 1.1fr);
     align-items: center;
-    gap: 20px;
+    gap: var(--space-20);
     padding: 13px 16px;
     background: #f7f9f5;
     border-bottom: 1px solid var(--ink-100);
@@ -1171,7 +1171,7 @@
 
   .evidenceRecord small {
     color: var(--ink-500);
-    font-size: 9px;
+    font-size: var(--text-9);
     font-weight: 800;
     letter-spacing: 0.06em;
     text-transform: uppercase;
@@ -1180,7 +1180,7 @@
   .evidenceRecord strong {
     margin-top: 3px;
     color: var(--ink-800);
-    font-size: 9px;
+    font-size: var(--text-9);
     font-variant-numeric: tabular-nums;
     line-height: 1.45;
     overflow-wrap: anywhere;
@@ -1188,7 +1188,7 @@
 
   .evidenceRecord p {
     color: var(--ink-550);
-    font-size: 10px;
+    font-size: var(--text-10);
     line-height: 1.5;
   }
 
@@ -1230,13 +1230,13 @@
 
   .availabilityGrid strong {
     color: var(--ink-850);
-    font-size: 10px;
+    font-size: var(--text-10);
   }
 
   .availabilityGrid small {
     margin-top: 2px;
     color: var(--ink-500);
-    font-size: 9px;
+    font-size: var(--text-9);
     line-height: 1.35;
   }
 
@@ -1251,7 +1251,7 @@
     min-width: 0;
     align-items: center;
     justify-content: space-between;
-    gap: 12px;
+    gap: var(--space-12);
     padding: 12px 16px;
     border-right: 1px solid var(--ink-100);
     border-bottom: 1px solid var(--ink-100);
@@ -1271,7 +1271,7 @@
   .sourceList strong {
     overflow: hidden;
     color: var(--ink-800);
-    font-size: 10px;
+    font-size: var(--text-10);
     text-overflow: ellipsis;
     white-space: nowrap;
   }
@@ -1279,7 +1279,7 @@
   .sourceList small {
     margin-top: 2px;
     color: var(--ink-500);
-    font-size: 9px;
+    font-size: var(--text-9);
   }
 
   .sourceList article > span:last-child {
@@ -1296,14 +1296,14 @@
 
   .definitions dt {
     color: var(--ink-800);
-    font-size: 10px;
+    font-size: var(--text-10);
     font-weight: 800;
   }
 
   .definitions dd {
     margin-top: 3px;
     color: var(--ink-500);
-    font-size: 10px;
+    font-size: var(--text-10);
     line-height: 1.5;
   }
 
@@ -1316,7 +1316,7 @@
   .disclosurePanel summary:focus-visible,
   .coveredByes summary:focus-visible,
   .setupState a:focus-visible {
-    outline: 3px solid rgba(90, 126, 73, 0.28);
+    outline: 3px solid var(--focus-ring-soft);
     outline-offset: 2px;
   }
 
@@ -1337,7 +1337,7 @@
 
     .findingGrid article {
       border-right: 0;
-      border-bottom: 1px solid #344039;
+      border-bottom: 1px solid var(--ink-750);
     }
 
     .findingGrid article:last-child {
@@ -1361,7 +1361,7 @@
     }
 
     .methodStatus > div:nth-child(-n + 2) {
-      border-bottom: 1px solid #344039;
+      border-bottom: 1px solid var(--ink-750);
     }
   }
 
@@ -1385,7 +1385,7 @@
 
     .hero > div:first-child > span {
       margin-top: 9px;
-      font-size: 12px;
+      font-size: var(--text-12);
     }
 
     .leagueControls {
@@ -1426,10 +1426,10 @@
       display: grid;
       grid-template-columns: repeat(2, minmax(0, 1fr));
       overflow: hidden;
-      background: #fff;
+      background: var(--white);
       border: 1px solid var(--ink-150);
-      border-radius: 11px;
-      box-shadow: 0 10px 28px rgba(16, 26, 19, 0.05);
+      border-radius: var(--radius-md);
+      box-shadow: var(--shadow-hover);
     }
 
     .quickReadHeader {
@@ -1437,15 +1437,15 @@
       grid-column: 1 / -1;
       align-items: baseline;
       justify-content: space-between;
-      gap: 10px;
+      gap: var(--space-10);
       padding: 10px 12px 9px;
       background: var(--paper-50);
       border-bottom: 1px solid var(--ink-150);
     }
 
     .quickReadHeader span {
-      color: #547148;
-      font-size: 10px;
+      color: var(--fern-600);
+      font-size: var(--text-10);
       font-weight: 800;
       letter-spacing: 0.08em;
       text-transform: uppercase;
@@ -1453,7 +1453,7 @@
 
     .quickReadHeader small {
       color: var(--ink-500);
-      font-size: 9px;
+      font-size: var(--text-9);
     }
 
     .quickRead > a {
@@ -1462,7 +1462,7 @@
       min-height: 68px;
       grid-template-columns: 30px minmax(0, 1fr);
       align-items: center;
-      gap: 8px;
+      gap: var(--space-8);
       padding: 9px 10px;
       color: var(--ink-900);
       border-right: 1px solid var(--ink-150);
@@ -1482,9 +1482,9 @@
       width: 30px;
       height: 30px;
       padding: 6px;
-      color: #547148;
+      color: var(--fern-600);
       background: #edf4e2;
-      border-radius: 8px;
+      border-radius: var(--radius-sm);
     }
 
     .quickRead > a > span,
@@ -1496,7 +1496,7 @@
 
     .quickRead > a small {
       color: var(--ink-500);
-      font-size: 9px;
+      font-size: var(--text-9);
       font-weight: 800;
       letter-spacing: 0.04em;
       text-transform: uppercase;
@@ -1506,7 +1506,7 @@
       display: -webkit-box;
       overflow: hidden;
       margin-top: 2px;
-      font-size: 10px;
+      font-size: var(--text-10);
       line-height: 1.25;
       -webkit-box-orient: vertical;
       -webkit-line-clamp: 2;
@@ -1518,7 +1518,7 @@
     }
 
     .findingsHeading h2 {
-      font-size: 18px;
+      font-size: var(--text-18);
     }
 
     .findingGrid article {
@@ -1593,7 +1593,7 @@
 
     .methodStatus > div {
       border-right: 0;
-      border-bottom: 1px solid #344039;
+      border-bottom: 1px solid var(--ink-750);
     }
 
     .methodStatus > div:last-child {
@@ -1606,7 +1606,7 @@
 
     .evidenceRecord {
       grid-template-columns: 1fr;
-      gap: 8px;
+      gap: var(--space-8);
     }
   }
 

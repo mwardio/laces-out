@@ -6,7 +6,7 @@
   .stateBlock {
     display: flex;
     align-items: center;
-    gap: 12px;
+    gap: var(--space-12);
     padding: 20px;
     color: var(--ink-500);
   }
@@ -14,13 +14,13 @@
   .stateBlock strong {
     display: block;
     color: var(--ink-900);
-    font-size: 13px;
+    font-size: var(--text-13);
   }
 
   .stateBlock span {
     display: block;
     margin-top: 3px;
-    font-size: 11px;
+    font-size: var(--text-11);
   }
 
   .stateBlock .secondaryButton {
@@ -77,19 +77,19 @@
   }
 
   .openai {
-    --provider-accent: #39715d;
+    --provider-accent: var(--provider-openai);
   }
 
   .anthropic {
-    --provider-accent: #b06442;
+    --provider-accent: var(--provider-anthropic);
   }
 
   .gemini {
-    --provider-accent: #4d72aa;
+    --provider-accent: var(--provider-gemini);
   }
 
   .openrouter {
-    --provider-accent: #765c91;
+    --provider-accent: var(--provider-openrouter);
   }
 
   .providerMark {
@@ -100,8 +100,8 @@
     color: var(--provider-accent);
     background: color-mix(in srgb, var(--provider-accent) 11%, white);
     border: 1px solid color-mix(in srgb, var(--provider-accent) 22%, white);
-    border-radius: 8px;
-    font-size: 9px;
+    border-radius: var(--radius-sm);
+    font-size: var(--text-9);
     font-weight: 850;
     letter-spacing: -0.02em;
   }
@@ -120,13 +120,13 @@
 
   .providerCopy strong {
     color: var(--ink-900);
-    font-size: 11px;
+    font-size: var(--text-11);
   }
 
   .providerCopy small {
     margin-top: 2px;
     color: var(--ink-500);
-    font-size: 10px;
+    font-size: var(--text-10);
   }
 
   .statusDot {
@@ -150,14 +150,14 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 16px;
+    gap: var(--space-16);
     padding: 16px 20px 0;
   }
 
   .panelHeader h3 {
     margin-top: 2px;
     color: var(--ink-950);
-    font-size: 15px;
+    font-size: var(--text-15);
     letter-spacing: -0.02em;
   }
 
@@ -165,7 +165,7 @@
     display: block;
     margin-top: 3px;
     color: var(--ink-500);
-    font-size: 11px;
+    font-size: var(--text-11);
   }
 
   .panelHeader > a {
@@ -174,13 +174,13 @@
     align-items: center;
     gap: 5px;
     color: var(--green-600);
-    font-size: 11px;
+    font-size: var(--text-11);
     font-weight: 750;
   }
 
   .eyebrow {
-    color: #547148;
-    font-size: 9px;
+    color: var(--fern-600);
+    font-size: var(--text-9);
     font-weight: 800;
     letter-spacing: 0.08em;
     text-transform: uppercase;
@@ -194,13 +194,13 @@
 
   .field {
     display: grid;
-    gap: 6px;
+    gap: var(--space-6);
     min-width: 0;
   }
 
   .field > span {
     color: var(--ink-600);
-    font-size: 11px;
+    font-size: var(--text-11);
     font-weight: 800;
     letter-spacing: 0.07em;
     text-transform: uppercase;
@@ -212,17 +212,17 @@
     min-height: 42px;
     padding: 0 11px;
     color: var(--ink-900);
-    background: #fff;
+    background: var(--white);
     border: 1px solid var(--ink-200);
-    border-radius: 8px;
+    border-radius: var(--radius-sm);
     outline: 0;
-    font-size: 13px;
+    font-size: var(--text-13);
   }
 
   .field input:focus:not([readonly]),
   .field select:focus,
   .secretField:focus-within {
-    border-color: #66845a;
+    border-color: var(--fern-500);
     box-shadow: 0 0 0 3px rgba(90, 126, 73, 0.13);
   }
 
@@ -236,7 +236,7 @@
 
   .field small {
     color: var(--ink-500);
-    font-size: 11px;
+    font-size: var(--text-11);
     line-height: 1.45;
   }
 
@@ -245,7 +245,7 @@
     grid-template-columns: minmax(0, 1fr) 42px;
     overflow: hidden;
     border: 1px solid var(--ink-200);
-    border-radius: 8px;
+    border-radius: var(--radius-sm);
   }
 
   .secretField input {
@@ -270,7 +270,7 @@
   .fieldRow {
     display: grid;
     grid-template-columns: 1fr 1fr;
-    gap: 10px;
+    gap: var(--space-10);
     min-width: 0;
   }
 
@@ -278,18 +278,18 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 12px;
+    gap: var(--space-12);
     padding: 10px 11px;
     color: var(--ink-500);
     background: var(--paper-50);
     border: 1px solid var(--ink-100);
-    border-radius: 8px;
-    font-size: 11px;
+    border-radius: var(--radius-sm);
+    font-size: var(--text-11);
   }
 
   .usageLine strong {
     color: var(--ink-800);
-    font-size: 12px;
+    font-size: var(--text-12);
   }
 
   .notice {
@@ -298,8 +298,8 @@
     gap: 7px;
     padding: 9px 10px;
     border: 1px solid;
-    border-radius: 8px;
-    font-size: 11px;
+    border-radius: var(--radius-sm);
+    font-size: var(--text-11);
     line-height: 1.5;
   }
 
@@ -323,7 +323,7 @@
   .formActions {
     display: grid;
     grid-template-columns: 1fr 1fr;
-    gap: 8px;
+    gap: var(--space-8);
   }
 
   .primaryButton,
@@ -334,8 +334,8 @@
     justify-content: center;
     gap: 7px;
     padding: 0 13px;
-    border-radius: 8px;
-    font-size: 12px;
+    border-radius: var(--radius-sm);
+    font-size: var(--text-12);
     font-weight: 780;
   }
 
@@ -357,7 +357,7 @@
 
   .secondaryButton {
     color: var(--ink-800);
-    background: #fff;
+    background: var(--white);
     border: 1px solid var(--ink-200);
   }
 
@@ -365,18 +365,18 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 12px;
+    gap: var(--space-12);
     padding-top: 12px;
     color: var(--ink-500);
     border-top: 1px solid var(--ink-100);
-    font-size: 11px;
+    font-size: var(--text-11);
   }
 
   .removeActions {
     display: inline-flex;
     flex: 0 0 auto;
     align-items: center;
-    gap: 10px;
+    gap: var(--space-10);
   }
 
   .removeRow button {
@@ -388,7 +388,7 @@
     color: var(--red-600);
     background: transparent;
     border: 0;
-    font-size: 11px;
+    font-size: var(--text-11);
     font-weight: 750;
   }
 
@@ -434,7 +434,7 @@
     .panelHeader {
       flex-direction: column;
       align-items: flex-start;
-      gap: 8px;
+      gap: var(--space-8);
     }
   }
 }

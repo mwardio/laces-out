@@ -30,7 +30,7 @@ import {
   X,
 } from "lucide-react";
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
   apiBaseUrl,
@@ -89,6 +89,72 @@ function byeLabel(byeWeeks: ReadonlyMap<string, number>, team: string | null | u
   const week = team ? byeWeeks.get(team.toUpperCase()) : undefined;
   return week === undefined ? "" : ` · Bye ${String(week)}`;
 }
+
+type BoardPlayer = DraftSessionSnapshot["config"]["players"][number];
+
+/* The live-draft clock re-renders the workspace every second; the board is up
+   to 250 rows of ~15 elements, so each row bails out here unless its own
+   data, selection, or coverage changed. */
+const BoardRow = memo(function BoardRow({
+  player,
+  value,
+  covered,
+  selected,
+  byeWeeks,
+  onSelect,
+}: {
+  player: BoardPlayer;
+  value: DraftBoardValue | null;
+  covered: boolean;
+  selected: boolean;
+  byeWeeks: ReadonlyMap<string, number>;
+  onSelect: (playerId: string) => void;
+}) {
+  return (
+    <tr
+      className={[selected ? "is-selected" : "", covered ? "" : "is-board-missing"]
+        .filter(Boolean)
+        .join(" ")}
+    >
+      <td>
+        <span className="rank-cell">{value?.overallRank ?? "—"}</span>
+      </td>
+      <th scope="row">
+        <button className="player-name-button" type="button" onClick={() => onSelect(player.id)}>
+          <span
+            className={`position-avatar position-avatar--${player.positions[0]?.toLowerCase() ?? "all"}`}
+          >
+            {player.positions[0]}
+          </span>
+          <span>
+            <strong>{player.name}</strong>
+            <small>
+              {player.positions.join(" · ")} · {player.nflTeam ?? "FA"}
+              {byeLabel(byeWeeks, player.nflTeam)}
+            </small>
+          </span>
+        </button>
+      </th>
+      <td>{value?.tier ? <span className="tier-pill">T{value.tier}</span> : "—"}</td>
+      <td>{value?.adp?.toFixed(1) ?? "—"}</td>
+      <td>{value?.aav !== null && value?.aav !== undefined ? "$" + String(value.aav) : "—"}</td>
+      <td>
+        {value?.target ? (
+          <span className="board-signal board-signal--value">Target</span>
+        ) : value?.avoid ? (
+          <span className="board-signal board-signal--risk">Avoid</span>
+        ) : !covered ? (
+          <span className="board-signal">Not on board</span>
+        ) : (
+          <span className="board-signal">{player.status ?? "Ranked"}</span>
+        )}
+      </td>
+      <td>{selected ? <Check size={15} /> : null}</td>
+    </tr>
+  );
+});
+
+const EMPTY_TEAM_STATES: never[] = [];
 
 type BootState = "loading" | "signed-out" | "ready" | "error";
 type RequestState = "idle" | "loading";
@@ -689,6 +755,22 @@ export function DraftSessionWorkspace() {
       .slice(0, 250);
   }, [boardRows, coverageFilter, position, search]);
 
+  /* The ledger renders at 1 Hz during provider-backed drafts: reversing the
+     full event list and scanning the player pool per row are per-render costs
+     worth paying once per snapshot instead. */
+  const recentEvents = useMemo(
+    () => (session ? [...session.events].reverse().slice(0, 12) : []),
+    [session],
+  );
+  const playersById = useMemo(
+    () => new Map((session?.config.players ?? []).map((player) => [player.id, player])),
+    [session?.config.players],
+  );
+  const teamsById = useMemo(
+    () => new Map((session?.config.teams ?? []).map((team) => [team.id, team])),
+    [session?.config.teams],
+  );
+
   useEffect(() => {
     if (!session) return;
     if (!availablePlayers.some((player) => player.id === selectedPlayerId)) {
@@ -755,7 +837,7 @@ export function DraftSessionWorkspace() {
     session.providerFeed !== null &&
     !session.providerFeed.manualBackupActive;
   const canRecord = localMock !== null || (canMutate && !providerLocksManualEntry);
-  const teamStates = activeDraftState?.teams ?? [];
+  const teamStates = activeDraftState?.teams ?? EMPTY_TEAM_STATES;
   const selectedTeam = teamStates.find((team) => team.teamId === selectedTeamId);
   const onClockTeamId =
     session?.config.mode === "SNAKE" ? activeDraftState?.nextPick?.teamId : undefined;
@@ -1428,7 +1510,6 @@ export function DraftSessionWorkspace() {
     );
   }
 
-  const recentEvents = [...session.events].reverse().slice(0, 12);
   const generatedMockEvents = localMock ? [...localMockEvents(localMock)] : [];
   const recordDisabled =
     !selectedPlayer ||
@@ -2199,58 +2280,15 @@ export function DraftSessionWorkspace() {
               </thead>
               <tbody>
                 {filteredRows.map(({ player, value, covered }) => (
-                  <tr
-                    className={[
-                      player.id === selectedPlayerId ? "is-selected" : "",
-                      covered ? "" : "is-board-missing",
-                    ]
-                      .filter(Boolean)
-                      .join(" ")}
+                  <BoardRow
                     key={player.id}
-                  >
-                    <td>
-                      <span className="rank-cell">{value?.overallRank ?? "—"}</span>
-                    </td>
-                    <th scope="row">
-                      <button
-                        className="player-name-button"
-                        type="button"
-                        onClick={() => setSelectedPlayerId(player.id)}
-                      >
-                        <span
-                          className={`position-avatar position-avatar--${player.positions[0]?.toLowerCase() ?? "all"}`}
-                        >
-                          {player.positions[0]}
-                        </span>
-                        <span>
-                          <strong>{player.name}</strong>
-                          <small>
-                            {player.positions.join(" · ")} · {player.nflTeam ?? "FA"}
-                            {byeLabel(byeWeeks, player.nflTeam)}
-                          </small>
-                        </span>
-                      </button>
-                    </th>
-                    <td>{value?.tier ? <span className="tier-pill">T{value.tier}</span> : "—"}</td>
-                    <td>{value?.adp?.toFixed(1) ?? "—"}</td>
-                    <td>
-                      {value?.aav !== null && value?.aav !== undefined
-                        ? "$" + String(value.aav)
-                        : "—"}
-                    </td>
-                    <td>
-                      {value?.target ? (
-                        <span className="board-signal board-signal--value">Target</span>
-                      ) : value?.avoid ? (
-                        <span className="board-signal board-signal--risk">Avoid</span>
-                      ) : !covered ? (
-                        <span className="board-signal">Not on board</span>
-                      ) : (
-                        <span className="board-signal">{player.status ?? "Ranked"}</span>
-                      )}
-                    </td>
-                    <td>{player.id === selectedPlayerId ? <Check size={15} /> : null}</td>
-                  </tr>
+                    player={player}
+                    value={value}
+                    covered={covered}
+                    selected={player.id === selectedPlayerId}
+                    byeWeeks={byeWeeks}
+                    onSelect={setSelectedPlayerId}
+                  />
                 ))}
               </tbody>
             </table>
@@ -2779,14 +2817,8 @@ export function DraftSessionWorkspace() {
           <div className="draft-log__events">
             {recentEvents.map((record) => {
               const event = record.event;
-              const player =
-                "playerId" in event
-                  ? session.config.players.find((item) => item.id === event.playerId)
-                  : undefined;
-              const team =
-                "teamId" in event
-                  ? session.config.teams.find((item) => item.id === event.teamId)
-                  : undefined;
+              const player = "playerId" in event ? playersById.get(event.playerId) : undefined;
+              const team = "teamId" in event ? teamsById.get(event.teamId) : undefined;
               return (
                 <article className="draft-event draft-event--local" key={record.sequence}>
                   <span className="draft-event__pick">{record.sequence}</span>

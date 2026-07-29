@@ -1284,7 +1284,12 @@ export function ProjectionImportWorkbench() {
             {sets.message}
           </div>
         ) : sets.state === "ready" && sets.data.projectionSets.length > 0 ? (
-          <div className={styles.setTableWrap}>
+          <div
+            className={`${styles.setTableWrap} has-scroll-cue`}
+            role="region"
+            aria-label="Projection sets; scroll horizontally to view all columns"
+            tabIndex={0}
+          >
             <table className={styles.setTable}>
               <thead>
                 <tr>

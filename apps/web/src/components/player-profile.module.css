@@ -1,7 +1,7 @@
 @layer components {
   .page {
     display: grid;
-    gap: 16px;
+    gap: var(--space-16);
     /* Top padding halved (was 26px), stacked on top of .main-content's own
        halved top padding. */
     padding: 13px 26px 90px;
@@ -13,7 +13,7 @@
     align-items: center;
     gap: 7px;
     color: var(--ink-500);
-    font-size: 11px;
+    font-size: var(--text-11);
     font-weight: 700;
     text-decoration: none;
   }
@@ -33,7 +33,7 @@
 
   .hero p {
     color: var(--green-600);
-    font-size: 10px;
+    font-size: var(--text-10);
     font-weight: 800;
     letter-spacing: 0.09em;
     text-transform: uppercase;
@@ -53,7 +53,7 @@
     margin-top: 8px;
     color: var(--ink-500);
     /* Standardized to 12px (was 13px) to match the app's other subtitles. */
-    font-size: 12px;
+    font-size: var(--text-12);
     line-height: 1.6;
   }
 
@@ -65,23 +65,23 @@
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(128px, 1fr));
     align-items: end;
-    gap: 10px;
+    gap: var(--space-10);
     padding: 14px;
-    background: #fff;
+    background: var(--white);
     border: 1px solid var(--ink-150);
-    border-radius: 11px;
-    box-shadow: 0 8px 22px rgb(23 35 28 / 4%);
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow-hover);
   }
 
   .filters label {
     display: grid;
-    gap: 6px;
+    gap: var(--space-6);
     min-width: 0;
   }
 
   .filters label > span {
     color: var(--ink-500);
-    font-size: 9px;
+    font-size: var(--text-9);
     font-weight: 800;
     letter-spacing: 0.07em;
     text-transform: uppercase;
@@ -90,14 +90,14 @@
   .filters select,
   .filters button {
     min-height: 38px;
-    border-radius: 8px;
-    font-size: 12px;
+    border-radius: var(--radius-sm);
+    font-size: var(--text-12);
   }
 
   .filters select {
     padding: 0 10px;
     color: var(--ink-900);
-    background: #fff;
+    background: var(--white);
     border: 1px solid var(--ink-200);
   }
 
@@ -107,7 +107,7 @@
     justify-content: center;
     gap: 7px;
     padding: 0 14px;
-    color: #fff;
+    color: var(--white);
     background: var(--ink-950);
     border: 0;
     cursor: pointer;
@@ -124,43 +124,43 @@
     min-height: 150px;
     align-items: center;
     justify-content: center;
-    gap: 12px;
+    gap: var(--space-12);
     padding: 24px;
     color: var(--ink-500);
-    background: #fff;
+    background: var(--white);
     border: 1px solid var(--ink-150);
-    border-radius: 11px;
+    border-radius: var(--radius-md);
     text-align: left;
   }
 
   .stateCard strong {
     display: block;
     color: var(--ink-900);
-    font-size: 13px;
+    font-size: var(--text-13);
   }
 
   .stateCard span {
     display: block;
     margin-top: 3px;
-    font-size: 11px;
+    font-size: var(--text-11);
   }
 
   .tiles {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-    gap: 10px;
+    gap: var(--space-10);
   }
 
   .tiles article {
     padding: 14px 16px;
-    background: #fff;
+    background: var(--white);
     border: 1px solid var(--ink-150);
-    border-radius: 11px;
+    border-radius: var(--radius-md);
   }
 
   .tiles p {
     color: var(--ink-500);
-    font-size: 9px;
+    font-size: var(--text-9);
     font-weight: 800;
     letter-spacing: 0.07em;
     text-transform: uppercase;
@@ -178,14 +178,14 @@
     display: block;
     margin-top: 3px;
     color: var(--ink-500);
-    font-size: 10px;
+    font-size: var(--text-10);
   }
 
   .panel {
     min-width: 0;
-    background: #fff;
+    background: var(--white);
     border: 1px solid var(--ink-150);
-    border-radius: 11px;
+    border-radius: var(--radius-md);
   }
 
   .panelHeading {
@@ -198,7 +198,7 @@
 
   .panelHeading p {
     color: var(--green-600);
-    font-size: 9px;
+    font-size: var(--text-9);
     font-weight: 800;
     letter-spacing: 0.08em;
     text-transform: uppercase;
@@ -212,7 +212,7 @@
 
   .panelHeading > span {
     color: var(--ink-500);
-    font-size: 10px;
+    font-size: var(--text-10);
     text-align: right;
   }
 
@@ -233,14 +233,14 @@
     padding: 11px 14px;
     text-align: right;
     border-bottom: 1px solid var(--ink-100);
-    font-size: 11px;
+    font-size: var(--text-11);
     font-variant-numeric: tabular-nums;
   }
 
   .tableScroll thead th {
     color: var(--ink-500);
     background: var(--paper-50);
-    font-size: 9px;
+    font-size: var(--text-9);
     font-weight: 800;
     letter-spacing: 0.08em;
   }
@@ -252,7 +252,7 @@
     min-width: 150px;
     color: var(--ink-900);
     text-align: left;
-    background: #fff;
+    background: var(--white);
     font-weight: 700;
   }
 
@@ -275,7 +275,7 @@
     color: var(--ink-600);
     background: var(--ink-100);
     border-radius: 20px;
-    font-size: 8px;
+    font-size: var(--text-8);
     font-weight: 800;
     letter-spacing: 0.06em;
     text-transform: uppercase;
@@ -283,7 +283,7 @@
 
   .metricState {
     color: var(--ink-500);
-    font-size: 9px;
+    font-size: var(--text-9);
     letter-spacing: 0.06em;
     text-transform: uppercase;
   }
@@ -304,7 +304,7 @@
 
   .boomGrid p {
     color: var(--ink-500);
-    font-size: 9px;
+    font-size: var(--text-9);
     font-weight: 800;
     letter-spacing: 0.07em;
     text-transform: uppercase;
@@ -314,7 +314,7 @@
     display: block;
     margin-top: 6px;
     color: var(--ink-950);
-    font-size: 20px;
+    font-size: var(--text-20);
     font-variant-numeric: tabular-nums;
   }
 
@@ -322,13 +322,13 @@
     display: block;
     margin-top: 3px;
     color: var(--ink-500);
-    font-size: 10px;
+    font-size: var(--text-10);
   }
 
   .warning {
     display: flex;
     align-items: start;
-    gap: 10px;
+    gap: var(--space-10);
     padding: 14px 20px;
     color: #8a5a12;
     background: #fdf6e8;
@@ -337,27 +337,27 @@
 
   .warning strong {
     display: block;
-    font-size: 12px;
+    font-size: var(--text-12);
   }
 
   .warning span {
     display: block;
     margin-top: 2px;
-    font-size: 11px;
+    font-size: var(--text-11);
     line-height: 1.5;
   }
 
   .definition {
     padding: 12px 20px;
     color: var(--ink-500);
-    font-size: 10px;
+    font-size: var(--text-10);
     line-height: 1.55;
   }
 
   .emptyState {
     display: grid;
     justify-items: center;
-    gap: 6px;
+    gap: var(--space-6);
     padding: 34px 20px;
     color: var(--ink-500);
     border-top: 1px solid var(--ink-100);
@@ -366,11 +366,11 @@
 
   .emptyState strong {
     color: var(--ink-900);
-    font-size: 13px;
+    font-size: var(--text-13);
   }
 
   .emptyState span {
-    font-size: 11px;
+    font-size: var(--text-11);
   }
 
   .sourceGrid {
@@ -390,23 +390,23 @@
   .sourceGrid article > div {
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: var(--space-8);
   }
 
   .sourceGrid strong {
     color: var(--ink-900);
-    font-size: 12px;
+    font-size: var(--text-12);
   }
 
   .sourceGrid dl {
     display: grid;
-    gap: 8px;
+    gap: var(--space-8);
     margin-top: 10px;
   }
 
   .sourceGrid dt {
     color: var(--ink-500);
-    font-size: 9px;
+    font-size: var(--text-9);
     font-weight: 800;
     letter-spacing: 0.06em;
     text-transform: uppercase;
@@ -415,13 +415,13 @@
   .sourceGrid dd {
     margin-top: 2px;
     color: var(--ink-800);
-    font-size: 11px;
+    font-size: var(--text-11);
   }
 
   .sourceGrid p {
     margin-top: 10px;
     color: var(--ink-500);
-    font-size: 10px;
+    font-size: var(--text-10);
     line-height: 1.5;
   }
 
@@ -432,13 +432,13 @@
     gap: 5px;
     margin-top: 10px;
     color: var(--ink-500);
-    font-size: 10px;
+    font-size: var(--text-10);
   }
 
   .sourceState {
     padding: 2px 7px;
     border-radius: 20px;
-    font-size: 8px;
+    font-size: var(--text-8);
     font-weight: 800;
     letter-spacing: 0.06em;
     text-transform: uppercase;

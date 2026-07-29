@@ -15,17 +15,17 @@
     display: grid;
     grid-template-columns: auto minmax(0, 1fr);
     align-items: center;
-    gap: 10px;
+    gap: var(--space-10);
     padding: 11px 13px;
     border: 1px solid var(--ink-150);
-    border-radius: 9px;
+    border-radius: var(--radius-sm);
   }
 
   .demoNotice {
     color: var(--ink-600);
     background: var(--lime-100);
-    border-color: #cfddae;
-    font-size: 11px;
+    border-color: var(--lime-200);
+    font-size: var(--text-11);
   }
 
   .demoNotice svg {
@@ -46,7 +46,7 @@
   .stateCard strong {
     margin-bottom: 2px;
     color: var(--ink-900);
-    font-size: 12px;
+    font-size: var(--text-12);
   }
 
   .hero {
@@ -64,8 +64,8 @@
   .hero p,
   .sectionHeading p,
   .panelHeading p {
-    color: #547148;
-    font-size: 10px;
+    color: var(--fern-600);
+    font-size: var(--text-10);
     font-weight: 800;
     letter-spacing: 0.09em;
     text-transform: uppercase;
@@ -87,7 +87,7 @@
     margin-top: 13px;
     color: var(--ink-600);
     /* Standardized to 12px (was 13px) to match the app's other subtitles. */
-    font-size: 12px;
+    font-size: var(--text-12);
     line-height: 1.6;
   }
 
@@ -99,23 +99,23 @@
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(128px, 1fr));
     align-items: end;
-    gap: 10px;
+    gap: var(--space-10);
     padding: 14px;
-    background: #fff;
+    background: var(--white);
     border: 1px solid var(--ink-150);
-    border-radius: 11px;
-    box-shadow: 0 8px 22px rgb(23 35 28 / 4%);
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow-hover);
   }
 
   .filters label {
     display: grid;
-    gap: 6px;
+    gap: var(--space-6);
     min-width: 0;
   }
 
   .filters label > span:first-child {
     color: var(--ink-600);
-    font-size: 10px;
+    font-size: var(--text-10);
     font-weight: 800;
     letter-spacing: 0.07em;
     text-transform: uppercase;
@@ -129,9 +129,9 @@
     color: var(--ink-900);
     background: var(--paper-50);
     border: 1px solid var(--ink-200);
-    border-radius: 8px;
+    border-radius: var(--radius-sm);
     font: inherit;
-    font-size: 12px;
+    font-size: var(--text-12);
   }
 
   .filters select {
@@ -162,7 +162,7 @@
     justify-content: center;
     gap: 7px;
     padding: 0 16px;
-    color: #fff;
+    color: var(--white);
     background: var(--ink-950);
     border-color: var(--ink-950);
     cursor: pointer;
@@ -179,7 +179,7 @@
     grid-template-columns: repeat(4, minmax(0, 1fr));
     padding: 4px;
     background: var(--ink-100);
-    border-radius: 10px;
+    border-radius: var(--radius-md);
   }
 
   .metricTabs button {
@@ -188,20 +188,20 @@
     min-height: 42px;
     align-items: center;
     justify-content: center;
-    gap: 8px;
+    gap: var(--space-8);
     padding: 7px 10px;
     color: var(--ink-600);
     background: transparent;
     border: 0;
-    border-radius: 7px;
+    border-radius: var(--radius-sm);
     cursor: pointer;
-    font-size: 11px;
+    font-size: var(--text-11);
     font-weight: 700;
   }
 
   .metricTabs .activeMetric {
     color: var(--ink-950);
-    background: #fff;
+    background: var(--white);
     box-shadow: 0 1px 4px rgb(23 35 28 / 10%);
   }
 
@@ -210,7 +210,7 @@
   .metricHint {
     margin: 8px 2px 0;
     color: var(--ink-500);
-    font-size: 11px;
+    font-size: var(--text-11);
   }
 
   .stateCard {
@@ -218,8 +218,8 @@
     align-content: center;
     justify-content: center;
     color: var(--ink-500);
-    background: #fff;
-    font-size: 12px;
+    background: var(--white);
+    font-size: var(--text-12);
   }
 
   .warning {
@@ -227,7 +227,7 @@
     color: #715b38;
     background: #fffaf0;
     border-color: #ead8b6;
-    font-size: 11px;
+    font-size: var(--text-11);
   }
 
   .warning svg {
@@ -238,10 +238,10 @@
   .sourceSection,
   .withheld {
     overflow: hidden;
-    background: #fff;
+    background: var(--white);
     border: 1px solid var(--ink-150);
-    border-radius: 11px;
-    box-shadow: 0 8px 22px rgb(23 35 28 / 4%);
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow-hover);
   }
 
   .panelHeading,
@@ -249,7 +249,7 @@
     display: flex;
     align-items: end;
     justify-content: space-between;
-    gap: 20px;
+    gap: var(--space-20);
     padding: 18px 20px;
   }
 
@@ -257,14 +257,14 @@
   .sectionHeading h2 {
     margin-top: 4px;
     color: var(--ink-950);
-    font-size: 20px;
+    font-size: var(--text-20);
     line-height: 1.1;
     letter-spacing: -0.025em;
   }
 
   .panelHeading > span {
     color: var(--ink-500);
-    font-size: 11px;
+    font-size: var(--text-11);
   }
 
   .tableScroll {
@@ -283,14 +283,14 @@
     padding: 12px 14px;
     text-align: right;
     border-bottom: 1px solid var(--ink-100);
-    font-size: 11px;
+    font-size: var(--text-11);
     font-variant-numeric: tabular-nums;
   }
 
   .tableScroll thead th {
     color: var(--ink-500);
     background: var(--paper-50);
-    font-size: 9px;
+    font-size: var(--text-9);
     font-weight: 800;
     letter-spacing: 0.08em;
   }
@@ -301,7 +301,7 @@
     z-index: 1;
     min-width: 250px;
     text-align: left;
-    background: #fff;
+    background: var(--white);
   }
 
   .tableScroll thead th:first-child {
@@ -312,7 +312,7 @@
   .tableScroll tbody th {
     display: flex;
     align-items: center;
-    gap: 10px;
+    gap: var(--space-10);
   }
 
   .tableScroll tbody th > span:last-child,
@@ -324,14 +324,14 @@
   .tableScroll tbody th strong,
   .tableScroll tbody th a {
     color: var(--ink-900);
-    font-size: 12px;
+    font-size: var(--text-12);
     font-weight: 700;
     text-decoration: none;
   }
 
   .tableScroll tbody th a:hover,
   .tableScroll tbody th a:focus-visible {
-    color: var(--green-700, var(--green-600));
+    color: var(--green-700);
     text-decoration: underline;
   }
 
@@ -367,13 +367,13 @@
 
   .trendControls label {
     display: grid;
-    gap: 6px;
+    gap: var(--space-6);
     min-width: 0;
   }
 
   .trendControls label > span {
     color: var(--ink-500);
-    font-size: 9px;
+    font-size: var(--text-9);
     font-weight: 800;
     letter-spacing: 0.07em;
     text-transform: uppercase;
@@ -383,21 +383,21 @@
     min-height: 36px;
     padding: 0 10px;
     color: var(--ink-900);
-    background: #fff;
+    background: var(--white);
     border: 1px solid var(--ink-200);
-    border-radius: 8px;
-    font-size: 12px;
+    border-radius: var(--radius-sm);
+    font-size: var(--text-12);
   }
 
   .trendControls p {
     color: var(--ink-500);
-    font-size: 10px;
+    font-size: var(--text-10);
     line-height: 1.55;
   }
 
   .withheldList {
     display: grid;
-    gap: 6px;
+    gap: var(--space-6);
     padding: 0 20px 14px;
     margin: 0;
     list-style: none;
@@ -405,7 +405,7 @@
 
   .withheldList li {
     color: var(--ink-500);
-    font-size: 10px;
+    font-size: var(--text-10);
     line-height: 1.55;
   }
 
@@ -416,7 +416,7 @@
   .tableScroll tbody th small {
     margin-top: 2px;
     color: var(--ink-500);
-    font-size: 9px;
+    font-size: var(--text-9);
     font-weight: 600;
   }
 
@@ -429,14 +429,14 @@
     color: var(--ink-600);
     background: var(--ink-100);
     border-radius: 50%;
-    font-size: 10px;
+    font-size: var(--text-10);
     font-weight: 800;
   }
 
   .definition {
     padding: 12px 20px;
     color: var(--ink-500);
-    font-size: 10px;
+    font-size: var(--text-10);
     line-height: 1.55;
   }
 
@@ -450,13 +450,13 @@
     color: var(--ink-500);
     border-top: 1px solid var(--ink-100);
     text-align: center;
-    font-size: 11px;
+    font-size: var(--text-11);
   }
 
   .emptyState strong {
     margin-top: 3px;
     color: var(--ink-800);
-    font-size: 13px;
+    font-size: var(--text-13);
   }
 
   .sourceGrid {
@@ -484,15 +484,15 @@
 
   .sourceGrid article > div:first-child > strong {
     color: var(--ink-900);
-    font-size: 12px;
+    font-size: var(--text-12);
   }
 
   .sourceState {
     padding: 4px 6px;
     color: var(--ink-600);
     background: var(--ink-100);
-    border-radius: 4px;
-    font-size: 8px;
+    border-radius: var(--radius-xs);
+    font-size: var(--text-8);
     font-weight: 900;
     letter-spacing: 0.08em;
     text-transform: uppercase;
@@ -511,7 +511,7 @@
   .sourceGrid dl {
     display: grid;
     grid-template-columns: repeat(4, minmax(0, 1fr));
-    gap: 10px;
+    gap: var(--space-10);
     margin: 0;
   }
 
@@ -526,7 +526,7 @@
 
   .sourceGrid dt {
     color: var(--ink-500);
-    font-size: 8px;
+    font-size: var(--text-8);
     font-weight: 800;
     letter-spacing: 0.06em;
     text-transform: uppercase;
@@ -536,7 +536,7 @@
     overflow: hidden;
     margin-top: 4px;
     color: var(--ink-800);
-    font-size: 10px;
+    font-size: var(--text-10);
     font-weight: 700;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -546,7 +546,7 @@
   .sourceGrid a,
   .attribution {
     color: var(--ink-500);
-    font-size: 10px;
+    font-size: var(--text-10);
     line-height: 1.45;
   }
 
@@ -580,13 +580,13 @@
 
   .withheld strong {
     color: var(--ink-800);
-    font-size: 11px;
+    font-size: var(--text-11);
   }
 
   .withheld span {
     margin-top: 5px;
     color: var(--ink-500);
-    font-size: 10px;
+    font-size: var(--text-10);
     line-height: 1.5;
   }
 
@@ -659,7 +659,7 @@
 
     .hero > div > span {
       margin-top: 10px;
-      font-size: 12px;
+      font-size: var(--text-12);
     }
 
     .hero > svg {
@@ -732,6 +732,14 @@
     .sourceGrid article,
     .withheld article {
       padding: 16px;
+    }
+  }
+
+  /* A 215px pinned player column leaves ~one stat column visible on a 320px
+     phone; match player-profile's narrower pin so data stays scannable. */
+  @media (max-width: 480px) {
+    .tableScroll th:first-child {
+      min-width: 150px;
     }
   }
 }

@@ -1,6 +1,7 @@
 .page {
   min-width: 320px;
   min-height: 100vh;
+  min-height: 100dvh;
   padding: 28px 20px 64px;
   overflow-x: hidden;
   color: var(--ink-900);
@@ -14,7 +15,7 @@
   flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
+  gap: var(--space-12);
   margin: 0 auto 24px;
 }
 
@@ -27,7 +28,7 @@
 }
 
 .brand {
-  gap: 10px;
+  gap: var(--space-10);
 }
 
 .brand > span:last-child {
@@ -36,7 +37,7 @@
 
 .brand strong {
   font-family: var(--font-brand), var(--font-sans);
-  font-size: 14px;
+  font-size: var(--text-14);
   font-weight: 760;
   letter-spacing: -0.04em;
   line-height: 1;
@@ -45,7 +46,7 @@
 
 .brand small {
   color: var(--ink-500);
-  font-size: 11px;
+  font-size: var(--text-11);
 }
 
 .back {
@@ -53,7 +54,7 @@
   gap: 7px;
   padding: 0 4px;
   color: var(--ink-600);
-  font-size: 12px;
+  font-size: var(--text-12);
   font-weight: 650;
 }
 
@@ -67,7 +68,7 @@
   padding: clamp(22px, 5vw, 52px);
   background: var(--white);
   border: 1px solid var(--ink-150);
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   box-shadow: var(--shadow-card);
 }
 
@@ -79,7 +80,7 @@
 .heading p {
   margin: 0 0 8px;
   color: var(--lime-700);
-  font-size: 11px;
+  font-size: var(--text-11);
   font-weight: 750;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -96,7 +97,7 @@
 .heading span {
   display: block;
   color: var(--ink-500);
-  font-size: 12px;
+  font-size: var(--text-12);
 }
 
 .section {
@@ -113,19 +114,19 @@
 .sectionNote {
   margin: 0 0 16px;
   color: var(--ink-500);
-  font-size: 12px;
+  font-size: var(--text-12);
 }
 
 .section h3 {
   margin: 24px 0 8px;
-  font-size: 14px;
+  font-size: var(--text-14);
   font-weight: 700;
 }
 
 .section p {
   margin: 0 0 12px;
   color: var(--ink-700);
-  font-size: 13px;
+  font-size: var(--text-13);
   line-height: 1.65;
 }
 
@@ -133,7 +134,7 @@
   margin: 0 0 12px;
   padding-left: 20px;
   color: var(--ink-700);
-  font-size: 13px;
+  font-size: var(--text-13);
   line-height: 1.65;
 }
 
@@ -192,7 +193,7 @@
 .status {
   display: flex;
   align-items: flex-start;
-  gap: 12px;
+  gap: var(--space-12);
   margin: 0 0 18px;
   padding: 16px 18px;
   background: var(--paper-50);
@@ -209,18 +210,18 @@
 
 .status div {
   display: grid;
-  gap: 6px;
+  gap: var(--space-6);
 }
 
 .status strong {
-  font-size: 13px;
+  font-size: var(--text-13);
   font-weight: 700;
 }
 
 .status p {
   margin: 0;
   color: var(--ink-700);
-  font-size: 13px;
+  font-size: var(--text-13);
   line-height: 1.6;
 }
 
@@ -236,7 +237,7 @@
 }
 
 .tableWrap:focus-visible {
-  outline: 3px solid rgb(76 150 211 / 55%);
+  outline: 2px solid var(--focus-ring);
   outline-offset: 2px;
 }
 
@@ -261,7 +262,7 @@
 .captionTitle {
   display: block;
   color: var(--ink-900);
-  font-size: 13px;
+  font-size: var(--text-13);
   font-weight: 700;
   letter-spacing: -0.01em;
   line-height: 1.35;
@@ -271,7 +272,7 @@
   display: block;
   margin-top: 2px;
   color: var(--ink-500);
-  font-size: 10px;
+  font-size: var(--text-10);
   font-weight: 450;
   line-height: 1.45;
 }
@@ -287,7 +288,7 @@
 .table thead th {
   color: var(--ink-600);
   background: var(--paper-50);
-  font-size: 11px;
+  font-size: var(--text-11);
   font-weight: 700;
   letter-spacing: 0.04em;
   text-transform: uppercase;
@@ -312,7 +313,7 @@
 /* Long opaque identifiers must wrap rather than widen the table. */
 .identifier {
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--text-11);
   word-break: break-all;
 }
 
@@ -322,7 +323,7 @@
   display: inline-block;
   padding: 2px 8px;
   border-radius: 999px;
-  font-size: 11px;
+  font-size: var(--text-11);
   font-weight: 700;
   white-space: nowrap;
 }
@@ -365,7 +366,7 @@
   padding: 9px 14px;
   color: var(--ink-600);
   background: var(--paper-50);
-  font-size: 12px;
+  font-size: var(--text-12);
   font-weight: 650;
 }
 
@@ -391,7 +392,7 @@
   }
 
   .document {
-    border-radius: 10px;
+    border-radius: var(--radius-md);
   }
 
   .definitionRow {
