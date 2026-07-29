@@ -11,6 +11,12 @@
 </p>
 
 <p align="center">
+  <a href="https://lacesout.app">Live site</a> ·
+  <a href="https://lacesout.app/app">Locker room tour</a> ·
+  <a href="https://lacesout.app/methodology">Methodology</a>
+</p>
+
+<p align="center">
   <img alt="TypeScript" src="https://img.shields.io/badge/TypeScript-5.9-3178C6?logo=typescript&logoColor=white">
   <img alt="Node.js" src="https://img.shields.io/badge/Node.js-22.22%2B-5FA04E?logo=nodedotjs&logoColor=white">
   <img alt="PostgreSQL" src="https://img.shields.io/badge/PostgreSQL-17-4169E1?logo=postgresql&logoColor=white">
@@ -30,10 +36,13 @@
   Beatdown, and Photo Finish, with a one-tap share card for the group chat. An award the stored
   evidence cannot support is withheld with its reason rather than shown as a zero.
 - **Forecasts and decisions** — backtested weekly projections use nflverse identity, schedule,
-  stats, injuries, rosters, and snap counts, scored to each league's exact rules. Every fresh input
-  reruns lineup, waiver, trade, opponent, and roster-strength analysis.
+  stats, injuries, rosters, and snap counts, scored to each league's exact rules. Fresh provider and
+  projection inputs feed the on-demand engines; accepted league changes also enqueue updated lineup,
+  waiver, trade, opponent, and roster-strength recommendations.
 - **Draft day** — persistent snake and auction rooms use an append-only event ledger with
   inflation, scarcity, wait risk, max-bid math, undo, replay, and a browser-local Practice Room.
+  Manual shared rooms are ready now; ESPN live-board ingest remains off by default until it passes
+  real draft-room validation.
 - **Ad-hoc research** — Stats Center serves every admitted weekly field over any week range:
   volume, scored production, and derived efficiency (air yards, EPA, PACR, WOPR, CPOE), plus a
   per-player profile with a week-by-week game log. A metric the source file does not carry, or a
@@ -47,7 +56,9 @@
   obscuring provenance.
 - **Film Room AI** — included Gemini analysis plus encrypted BYOK support for OpenAI, Anthropic,
   Gemini, and OpenRouter. Answers are grounded in league facts and deterministic recommendations;
-  models receive no provider credentials, tools, or write access.
+  models receive no provider credentials, SQL access, or write capability. Start/sit may use one
+  fixed, server-authorized, read-only lineup tool whose league and member scope the model cannot
+  choose or widen.
 
 ## Screenshots
 
@@ -113,25 +124,25 @@ exposing a deployment to the internet.
 Compose settings are documented in [.env.docker.example](./.env.docker.example); local-development
 settings live in [.env.example](./.env.example).
 
-| Variable                                  | Required | Default                 | Purpose                                                    |
-| ----------------------------------------- | -------- | ----------------------- | ---------------------------------------------------------- |
-| `PUBLIC_URL`                              | Yes      | `http://localhost:3000` | Browser-visible origin; rebuild images after changing it   |
-| `POSTGRES_PASSWORD`                       | Yes      | —                       | PostgreSQL password; production rejects placeholders       |
-| `SESSION_SECRET`                          | Yes      | —                       | Session and capability-key derivation                      |
-| `CREDENTIAL_ENCRYPTION_KEY`               | Yes      | —                       | `base64:`-prefixed 32-byte AES-256-GCM key                 |
-| `REGISTRATION_INVITE_CODE`                | No       | empty                   | Shared registration code; blank disables `/register`       |
-| `GEMINI_API_KEY`                          | No       | empty                   | Enables included Film Room access                          |
-| `MANAGED_AI_DAILY_REQUEST_LIMIT`          | No       | `50`                    | Included AI requests per member per UTC day                |
-| `MANAGED_AI_MAX_OUTPUT_TOKENS`            | No       | `2000`                  | Included AI response limit                                 |
-| `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY`  | No       | empty                   | Enables game day push alerts; blank disables them cleanly  |
-| `VAPID_SUBJECT`                           | No       | empty                   | `mailto:` or `https:` contact required with the VAPID keys |
-| `NEXT_PUBLIC_CONTACT_EMAIL`               | No*      | empty                   | Public operator contact; set before internet exposure      |
-| `NEXT_PUBLIC_YAHOO_ACCESS_STATUS`         | No       | `pending`               | Controls the public **Coming Soon** state                  |
-| `YAHOO_CLIENT_ID` / `YAHOO_CLIENT_SECRET` | No       | empty                   | Yahoo OAuth credentials, API server only                   |
-| `SITE_ADDRESS`                            | No       | `:80`                   | Included Caddy site address                                |
-| `APP_PORT` / `HTTPS_PORT`                 | No       | `3000` / `3443`         | Included gateway host ports                                |
-| `POSTGRES_PORT`                           | No       | `55432`                 | Loopback-only PostgreSQL maintenance port                  |
-| `LOG_LEVEL`                               | No       | `info`                  | API and worker log level                                   |
+| Variable                                  | Required   | Default                 | Purpose                                                    |
+| ----------------------------------------- | ---------- | ----------------------- | ---------------------------------------------------------- |
+| `PUBLIC_URL`                              | Production | `http://localhost:3000` | Browser-visible origin; rebuild images after changing it   |
+| `POSTGRES_PASSWORD`                       | Yes        | —                       | PostgreSQL password; production rejects placeholders       |
+| `SESSION_SECRET`                          | Yes        | —                       | Session and capability-key derivation                      |
+| `CREDENTIAL_ENCRYPTION_KEY`               | Yes        | —                       | `base64:`-prefixed 32-byte AES-256-GCM key                 |
+| `REGISTRATION_INVITE_CODE`                | No         | empty                   | Shared registration code; blank disables `/register`       |
+| `GEMINI_API_KEY`                          | No         | empty                   | Enables included Film Room access                          |
+| `MANAGED_AI_DAILY_REQUEST_LIMIT`          | No         | `50`                    | Included AI requests per member per UTC day                |
+| `MANAGED_AI_MAX_OUTPUT_TOKENS`            | No         | `2000`                  | Included AI response limit                                 |
+| `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY`  | No         | empty                   | Enables game day push alerts; blank disables them cleanly  |
+| `VAPID_SUBJECT`                           | No         | empty                   | `mailto:` or `https:` contact required with the VAPID keys |
+| `NEXT_PUBLIC_CONTACT_EMAIL`               | No         | empty                   | Public operator contact; set before internet exposure      |
+| `NEXT_PUBLIC_YAHOO_ACCESS_STATUS`         | No         | `pending`               | Controls the public **Coming Soon** state                  |
+| `YAHOO_CLIENT_ID` / `YAHOO_CLIENT_SECRET` | No         | empty                   | Yahoo OAuth credentials, API server only                   |
+| `SITE_ADDRESS`                            | No         | `:80`                   | Included Caddy site address                                |
+| `APP_PORT` / `HTTPS_PORT`                 | No         | `3000` / `3443`         | Included gateway host ports                                |
+| `POSTGRES_PORT`                           | No         | `55432`                 | Loopback-only PostgreSQL maintenance port                  |
+| `LOG_LEVEL`                               | No         | `info`                  | API and worker log level                                   |
 
 For a standalone public deployment, point a domain at the host and set `PUBLIC_URL`,
 `SITE_ADDRESS`, `APP_PORT`, and `HTTPS_PORT` as described in `.env.docker.example`.
@@ -192,8 +203,8 @@ Database-backed smoke commands and the release runbook live in
   API response, never logged, and pruned automatically when a push service reports them gone.
   Notifications carry only league facts the member can already see.
 - Logs redact secrets, cookies, authorization headers, and OAuth callback values.
-- AI providers receive no credentials, tools, or write capability; prompts and answers are not
-  persisted.
+- AI providers receive no credentials, SQL access, or write capability. Start/sit may use one
+  fixed, membership-scoped, read-only lineup tool; prompts and answers are not persisted.
 
 See [docs/security.md](./docs/security.md) and [docs/privacy.md](./docs/privacy.md).
 
@@ -210,9 +221,10 @@ Provider evidence and limitations live in [docs/provider-notes/](./docs/provider
 ## Status
 
 Weekly managed projections are the production forecast source. Rest-of-season output is served only
-for cells that pass their evidence gates; demo data is always labeled. Ongoing work focuses on
-provider hardening, refresh and notification depth, live-draft support, recommendation validation,
-and operational resilience.
+for cells that pass their evidence gates; demo data is always labeled. Manual shared snake and
+auction rooms are production-ready. ESPN live-board ingest is implemented behind an off-by-default
+flag and remains inactive until its real draft-room validation passes. Ongoing work focuses on
+provider hardening, recommendation validation, and operational resilience.
 
 ## Documentation
 

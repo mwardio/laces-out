@@ -27,6 +27,12 @@ secrets, is never returned after save, and overrides included Gemini for that me
 removed. The member's provider account governs BYOK processing and billing. Removing the provider
 configuration deletes the encrypted personal key and restores included Gemini when available.
 
+For start/sit requests, the selected model may ask Laces Out for one fixed, read-only lineup result
+already computed by the deterministic Decision Desk engine. The server supplies the authenticated
+member and league scope; the tool cannot select another account or league, expose credentials or
+SQL, or perform any provider change. Its bounded result may be sent back to the selected AI provider
+as part of that request.
+
 Yahoo authorization occurs at Yahoo. Laces Out uses encrypted Yahoo tokens only for read-only
 fantasy synchronization. The optional ESPN companion uses the ESPN browser session locally and
 uploads bounded league data, never the ESPN password or cookie values.

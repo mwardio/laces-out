@@ -61,12 +61,16 @@ This application will hold access to real fantasy accounts. Treat it like a smal
   safety identifiers, and provider request IDs. Prompts and answers are not persisted.
 - AI context is assembled only after league-membership checks from bounded overview, Decision Desk,
   and analytics snapshots. Synced names and fields are labeled untrusted prompt data. Models receive
-  no credentials, tools, SQL access, or provider-write capability. Per-user/provider daily limits,
-  route limits, 30-second egress timeouts, editable output caps, and stateless provider options bound
-  cost and exposure. Managed Gemini uses a fixed server-enforced model and operator-controlled
-  limits; model selection is available only when a member supplies a personal key. Authentication
-  rejection marks a saved key invalid without logging the key or provider response body. Managed
-  credential failures return a host-configuration error without exposing provider details.
+  no credentials, SQL access, or provider-write capability. Start/sit is the only tool-enabled
+  feature: it may invoke one fixed, server-authorized, read-only lineup tool whose member and league
+  scope come from the authenticated request rather than model arguments. The model cannot add tools,
+  select another member or league, or widen the returned Decision Desk section. Per-user/provider
+  daily limits, route limits, 30-second egress timeouts, editable output caps, and stateless provider
+  options bound cost and exposure. Managed Gemini uses a fixed server-enforced model and
+  operator-controlled limits; model selection is available only when a member supplies a personal
+  key. Authentication rejection marks a saved key invalid without logging the key or provider
+  response body. Managed credential failures return a host-configuration error without exposing
+  provider details.
 
 ## ESPN-specific rule
 
