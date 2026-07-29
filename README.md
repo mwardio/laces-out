@@ -63,11 +63,14 @@
 
 Every view below is the built-in locker room tour—no account required.
 
-|                                                                         |                                                           |
-| ----------------------------------------------------------------------- | --------------------------------------------------------- |
-| ![Locker room overview](./docs/screenshots/locker-room-overview.webp)   | ![Draft studio](./docs/screenshots/draft-studio.webp)     |
-| ![Decision Desk](./docs/screenshots/decision-desk.webp)                 | ![Projection Lab](./docs/screenshots/projection-lab.webp) |
-| ![Monday Morning Awards](./docs/screenshots/monday-morning-awards.webp) |                                                           |
+|                                                                       |                                                           |
+| --------------------------------------------------------------------- | --------------------------------------------------------- |
+| ![Locker room overview](./docs/screenshots/locker-room-overview.webp) | ![Draft studio](./docs/screenshots/draft-studio.webp)     |
+| ![Decision Desk](./docs/screenshots/decision-desk.webp)               | ![Projection Lab](./docs/screenshots/projection-lab.webp) |
+
+<p align="center"><strong>Monday Morning Awards</strong> turns final scores into shareable league lore.</p>
+
+![Monday Morning Awards](./docs/screenshots/monday-morning-awards.webp)
 
 ## Statistically honest projections
 
