@@ -30,8 +30,19 @@ export interface NormalizedLeagueSettings {
   /** Optional provider-observed operating rules used to guard recommendations and explain timing. */
   readonly operationalRules?: {
     readonly acquisitionLimit: number | null;
+    /** The per-matchup acquisition count in force, or `null` when no count is in force or known. */
     readonly matchupAcquisitionLimit: number | null;
+    /**
+     * Whether a per-matchup acquisition limit applies at all, or `null` when the provider did not
+     * say. A provider can report that a limit applies without reporting its count, so `true` with a
+     * `null` {@link matchupAcquisitionLimit} means "limited, count unknown" — not "unlimited".
+     */
+    readonly matchupAcquisitionLimitEnabled: boolean | null;
     readonly minimumBid: number | null;
+    /**
+     * Waiver processing days as `Date.prototype.getDay()` numbers (0 = Sunday), de-duplicated and
+     * ascending. Empty means the provider schedules no processing day, which is a real answer.
+     */
     readonly waiverProcessDays: readonly number[];
     readonly waiverProcessHour: number | null;
     readonly keeperCount: number | null;

@@ -8,6 +8,7 @@ import {
   type Database,
   type JsonPrimitive,
 } from "@fantasy/db";
+import { sourceMatchRateThreshold } from "@fantasy/domain";
 import {
   FFC_ADP_DOCUMENTATION_URL,
   FFC_ATTRIBUTION,
@@ -24,7 +25,6 @@ const checkIntervalMinutes = 24 * 60;
 const claimMinutes = 30;
 const chunkSize = 500;
 const sourceSchemaVersion = 2;
-const minimumPublishableMatchRate = 0.95;
 
 export interface FfcAdpRefreshResult {
   readonly sourceKey: string;
@@ -65,7 +65,8 @@ function internalPosition(position: FfcAdpPlayer["position"]): string {
   return position;
 }
 
-function sourceKey(context: FfcAdpContext): string {
+/** Exported so a test can prove every admitted context resolves a registered threshold. */
+export function ffcAdpSourceKey(context: FfcAdpContext): string {
   const position = context.position ? `.${context.position.toLowerCase()}` : "";
   return `ffc.adp.${context.season}.${context.scoringFormat}.${context.teams}${position}`;
 }
@@ -90,7 +91,7 @@ async function claimSource(
   force: boolean,
   now: Date,
 ): Promise<SourceRow | null> {
-  const key = sourceKey(context);
+  const key = ffcAdpSourceKey(context);
   const [source] = await database
     .insert(dataSources)
     .values({
@@ -265,7 +266,7 @@ export class FfcAdpRefresher {
   }
 
   async refresh(context: FfcAdpContext, force = false): Promise<FfcAdpRefreshResult> {
-    const key = sourceKey(context);
+    const key = ffcAdpSourceKey(context);
     const now = this.#now();
     const source = await claimSource(this.#database, context, force, now);
     if (!source) {
@@ -339,6 +340,10 @@ export class FfcAdpRefresher {
       const rowsUnmatched = resolved.filter((row) => !row.playerId).length;
       const matchRate =
         result.rowsRead > 0 ? (result.rowsRead - rowsUnmatched) / result.rowsRead : 0;
+      // The stored key name stays `minimumPublishableMatchRate` because it is part of the persisted
+      // artifact that `apps/api/src/admitted-source.ts` and the Data Health job already read.
+      const { minimumMatchRate: minimumPublishableMatchRate } = sourceMatchRateThreshold(key);
+      const publishable = matchRate >= minimumPublishableMatchRate;
       let rowsWritten = 0;
       await this.#database.transaction(async (transaction) => {
         const idempotencyKey = `${key}:${result.checksumSha256}:v${sourceSchemaVersion}`;
@@ -460,8 +465,11 @@ export class FfcAdpRefresher {
               rowsRejected: result.rowsRejected,
               rowsUnmatched,
               matchRate,
-              publishable: matchRate >= minimumPublishableMatchRate,
+              publishable,
               minimumPublishableMatchRate,
+              // Written beside `publishable` so the quarter-hour Data Health job and the projection
+              // rails read the same vocabulary. Both signals now agree for every source.
+              qualityState: publishable ? "publishable" : "degraded",
             },
             updatedAt: fetchedAt,
           })

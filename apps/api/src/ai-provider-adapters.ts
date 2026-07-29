@@ -1,4 +1,45 @@
-import type { AiProviderName } from "@fantasy/contracts";
+import type { AiProviderName, AiToolParameterSchema } from "@fantasy/contracts";
+
+/**
+ * Provider capability matrix (ENHANCEMENT_PLAN.md §2.5).
+ *
+ * A model that cannot call tools must say so rather than silently answering without them, so the
+ * surface can tell the member why the answer is thinner than usual.
+ */
+export interface AiProviderCapabilities {
+  readonly toolUse: boolean;
+  readonly structuredOutput: boolean;
+  readonly streaming: boolean;
+  readonly modelSelection: boolean;
+}
+
+export interface AiToolSpec {
+  readonly name: string;
+  readonly description: string;
+  readonly parameters: AiToolParameterSchema;
+}
+
+export interface AiProviderToolCall {
+  /** Provider call id. Empty string when the provider omits one. */
+  readonly callId: string;
+  readonly name: string;
+  /** Parsed JSON. UNTRUSTED. `undefined` when the provider sent unparseable arguments. */
+  readonly argumentsValue: unknown;
+}
+
+export interface AiToolResultInput {
+  readonly callId: string;
+  readonly name: string;
+  readonly resultJson: string;
+}
+
+/**
+ * Opaque, adapter-owned resume handle. The orchestrator must never inspect it — Gemini needs
+ * `previous_interaction_id`, and the message-shaped providers need the accumulated transcript.
+ */
+export type AiConversationState =
+  | { readonly kind: "gemini-interaction"; readonly previousInteractionId: string }
+  | { readonly kind: "messages"; readonly messages: readonly unknown[] };
 
 export interface AiCompletionInput {
   readonly apiKey: string;
@@ -7,6 +48,12 @@ export interface AiCompletionInput {
   readonly prompt: string;
   readonly maxOutputTokens: number;
   readonly safetyIdentifier: string;
+  readonly tools?: readonly AiToolSpec[];
+  readonly toolChoice?: "auto" | "none";
+  /** Present on every turn after the first. */
+  readonly conversation?: AiConversationState;
+  /** Results for the tool calls returned by the previous turn. */
+  readonly toolResults?: readonly AiToolResultInput[];
 }
 
 export interface AiCompletionResult {
@@ -16,10 +63,15 @@ export interface AiCompletionResult {
   readonly outputTokens: number;
   readonly cacheReadTokens: number;
   readonly cacheWriteTokens: number;
+  /** Defaults to `[]`, so every existing non-tool call site keeps working unchanged. */
+  readonly toolCalls: readonly AiProviderToolCall[];
+  readonly stopReason: "end" | "tool-calls" | "length";
+  readonly conversation: AiConversationState | null;
 }
 
 export interface AiProviderAdapter {
   complete(input: AiCompletionInput): Promise<AiCompletionResult>;
+  capabilities(model: string): AiProviderCapabilities;
 }
 
 export class AiProviderAdapterError extends Error {
@@ -139,6 +191,62 @@ function requireText(provider: AiProviderName, value: string | undefined): strin
   });
 }
 
+/**
+ * What each provider adapter in THIS repository can actually do — not what the vendor's API can do
+ * in principle.
+ *
+ * Gemini is the only adapter with a tool path today (WP7 Slice 1). OpenAI, Anthropic, and
+ * OpenRouter report `toolUse: false` and refuse a `tools` argument rather than dropping it
+ * silently, so a BYOK member is told why their answer used the bounded-context path instead of
+ * being left to wonder. Unknown models fail closed for the same reason.
+ */
+const GEMINI_TOOL_MODEL_PATTERN = /^gemini-3(?:\.\d+)?-/u;
+
+const PROVIDER_CAPABILITY_DEFAULTS: Readonly<Record<AiProviderName, AiProviderCapabilities>> = {
+  // Managed access pins the model, so the member cannot select one.
+  gemini: { toolUse: false, structuredOutput: true, streaming: true, modelSelection: false },
+  openai: { toolUse: false, structuredOutput: true, streaming: true, modelSelection: true },
+  anthropic: { toolUse: false, structuredOutput: true, streaming: true, modelSelection: true },
+  openrouter: { toolUse: false, structuredOutput: false, streaming: true, modelSelection: true },
+};
+
+export function aiProviderCapabilities(
+  provider: AiProviderName,
+  model: string,
+): AiProviderCapabilities {
+  const defaults = PROVIDER_CAPABILITY_DEFAULTS[provider];
+  if (provider === "gemini" && GEMINI_TOOL_MODEL_PATTERN.test(model)) {
+    return { ...defaults, toolUse: true };
+  }
+  return defaults;
+}
+
+/**
+ * A `tools` argument sent to a model whose matrix entry says `toolUse: false` is a wiring bug, and
+ * a wiring bug that silently produced an ungrounded answer would be the worst possible failure
+ * mode here. Fail loudly, before the request leaves the process.
+ */
+function assertToolsSupported(
+  provider: AiProviderName,
+  model: string,
+  input: AiCompletionInput,
+): void {
+  if (!input.tools?.length && !input.toolResults?.length) return;
+  if (aiProviderCapabilities(provider, model).toolUse) return;
+  throw new AiProviderAdapterError({
+    code: "TOOL_USE_UNSUPPORTED",
+    message: `The ${provider} adapter cannot use deterministic tools with model ${model}.`,
+    statusCode: 422,
+  });
+}
+
+/** The non-tool result shape, so existing call sites read identically to before. */
+function plainResult(
+  base: Omit<AiCompletionResult, "toolCalls" | "stopReason" | "conversation">,
+): AiCompletionResult {
+  return { ...base, toolCalls: [], stopReason: "end", conversation: null };
+}
+
 class OpenAiAdapter implements AiProviderAdapter {
   readonly #fetcher: typeof fetch;
 
@@ -146,7 +254,12 @@ class OpenAiAdapter implements AiProviderAdapter {
     this.#fetcher = fetcher;
   }
 
+  capabilities(model: string): AiProviderCapabilities {
+    return aiProviderCapabilities("openai", model);
+  }
+
   async complete(input: AiCompletionInput): Promise<AiCompletionResult> {
+    assertToolsSupported("openai", input.model, input);
     const { body, response } = await postJson({
       provider: "openai",
       url: "https://api.openai.com/v1/responses",
@@ -173,14 +286,14 @@ class OpenAiAdapter implements AiProviderAdapter {
         .join("\n\n");
     const usage = record(root?.usage);
     const inputDetails = record(usage?.input_tokens_details);
-    return {
+    return plainResult({
       text: requireText("openai", outputText),
       requestId: response.headers.get("x-request-id") ?? textValue(root?.id) ?? null,
       inputTokens: tokenCount(usage?.input_tokens),
       outputTokens: tokenCount(usage?.output_tokens),
       cacheReadTokens: tokenCount(inputDetails?.cached_tokens),
       cacheWriteTokens: 0,
-    };
+    });
   }
 }
 
@@ -191,7 +304,12 @@ class AnthropicAdapter implements AiProviderAdapter {
     this.#fetcher = fetcher;
   }
 
+  capabilities(model: string): AiProviderCapabilities {
+    return aiProviderCapabilities("anthropic", model);
+  }
+
   async complete(input: AiCompletionInput): Promise<AiCompletionResult> {
+    assertToolsSupported("anthropic", input.model, input);
     const { body, response } = await postJson({
       provider: "anthropic",
       url: "https://api.anthropic.com/v1/messages",
@@ -212,16 +330,30 @@ class AnthropicAdapter implements AiProviderAdapter {
       .filter((value): value is string => Boolean(value))
       .join("\n\n");
     const usage = record(root?.usage);
-    return {
+    return plainResult({
       text: requireText("anthropic", outputText),
       requestId: response.headers.get("request-id") ?? textValue(root?.id) ?? null,
       inputTokens: tokenCount(usage?.input_tokens),
       outputTokens: tokenCount(usage?.output_tokens),
       cacheReadTokens: tokenCount(usage?.cache_read_input_tokens),
       cacheWriteTokens: tokenCount(usage?.cache_creation_input_tokens),
-    };
+    });
   }
 }
+
+/**
+ * Gemini Interactions, with function calling.
+ *
+ * Endpoint discipline, checked live against
+ * `https://ai.google.dev/gemini-api/docs/function-calling` on 2026-07-27 (page reports itself last
+ * updated 2026-07-21 UTC): function calling is documented on `/v1beta/interactions`. The existing
+ * non-tool path stays on `/v1/interactions` byte for byte, because moving a shipped path to a beta
+ * version is a behavior change nobody asked for and this build cannot verify against live traffic.
+ * Only a request that actually carries `tools` or `toolResults` goes to `/v1beta`.
+ */
+const GEMINI_INTERACTIONS_URL = "https://generativelanguage.googleapis.com/v1/interactions";
+const GEMINI_TOOL_INTERACTIONS_URL =
+  "https://generativelanguage.googleapis.com/v1beta/interactions";
 
 class GeminiAdapter implements AiProviderAdapter {
   readonly #fetcher: typeof fetch;
@@ -230,23 +362,57 @@ class GeminiAdapter implements AiProviderAdapter {
     this.#fetcher = fetcher;
   }
 
+  capabilities(model: string): AiProviderCapabilities {
+    return aiProviderCapabilities("gemini", model);
+  }
+
   async complete(input: AiCompletionInput): Promise<AiCompletionResult> {
+    assertToolsSupported("gemini", input.model, input);
+    const usesTools = Boolean(input.tools?.length || input.toolResults?.length);
+    // Documented shape: `{ type: "function_result", name, call_id, result: [{type:"text",text}] }`.
+    const toolResultTurn = input.toolResults?.map((result) => ({
+      type: "function_result",
+      name: result.name,
+      call_id: result.callId,
+      result: [{ type: "text", text: result.resultJson }],
+    }));
     const { body, response } = await postJson({
       provider: "gemini",
-      url: "https://generativelanguage.googleapis.com/v1/interactions",
+      url: usesTools ? GEMINI_TOOL_INTERACTIONS_URL : GEMINI_INTERACTIONS_URL,
       headers: { "x-goog-api-key": input.apiKey },
       body: {
         model: input.model,
-        input: input.prompt,
+        input: toolResultTurn?.length ? toolResultTurn : input.prompt,
         system_instruction: input.system,
-        generation_config: { max_output_tokens: input.maxOutputTokens },
+        generation_config: {
+          max_output_tokens: input.maxOutputTokens,
+          // `tool_choice` lives inside generation_config, not at the top level. It is sent only to
+          // shut tools off; `auto` is the documented default and needs no field.
+          ...(input.toolChoice === "none"
+            ? { tool_choice: { allowed_tools: { mode: "none", tools: [] } } }
+            : {}),
+        },
         store: false,
+        // Flat declarations — there is no `functionDeclarations` wrapper on this surface.
+        ...(input.tools?.length
+          ? {
+              tools: input.tools.map((tool) => ({
+                type: "function",
+                name: tool.name,
+                description: tool.description,
+                parameters: tool.parameters,
+              })),
+            }
+          : {}),
+        ...(input.conversation?.kind === "gemini-interaction"
+          ? { previous_interaction_id: input.conversation.previousInteractionId }
+          : {}),
       },
       fetcher: this.#fetcher,
     });
     const root = record(body);
-    const outputText = list(root?.steps)
-      .map((item) => record(item))
+    const steps = list(root?.steps).map((item) => record(item));
+    const outputText = steps
       .filter((item) => item?.type === "model_output")
       .flatMap((item) => list(item?.content))
       .map((item) => record(item))
@@ -254,14 +420,30 @@ class GeminiAdapter implements AiProviderAdapter {
       .map((item) => textValue(item?.text))
       .filter((value): value is string => Boolean(value))
       .join("\n\n");
+    const toolCalls = steps
+      .filter((item) => item?.type === "function_call")
+      .map((item) => ({
+        callId: textValue(item?.id) ?? "",
+        name: textValue(item?.name) ?? "",
+        argumentsValue: record(item?.arguments) ?? undefined,
+      }))
+      .filter((call) => call.name.length > 0);
     const usage = record(root?.usage);
+    const interactionId = textValue(root?.id);
     return {
-      text: requireText("gemini", outputText),
-      requestId: response.headers.get("x-request-id") ?? textValue(root?.id) ?? null,
+      // A turn that only asks for a tool legitimately carries no prose. Requiring text there would
+      // turn a normal tool call into a provider error.
+      text: toolCalls.length > 0 ? (outputText ?? "") : requireText("gemini", outputText),
+      requestId: response.headers.get("x-request-id") ?? interactionId ?? null,
       inputTokens: tokenCount(usage?.total_input_tokens),
       outputTokens: tokenCount(usage?.total_output_tokens),
       cacheReadTokens: tokenCount(usage?.total_cached_tokens),
       cacheWriteTokens: 0,
+      toolCalls,
+      stopReason: toolCalls.length > 0 ? "tool-calls" : "end",
+      conversation: interactionId
+        ? { kind: "gemini-interaction", previousInteractionId: interactionId }
+        : null,
     };
   }
 }
@@ -275,7 +457,12 @@ class OpenRouterAdapter implements AiProviderAdapter {
     this.#webUrl = webUrl;
   }
 
+  capabilities(model: string): AiProviderCapabilities {
+    return aiProviderCapabilities("openrouter", model);
+  }
+
   async complete(input: AiCompletionInput): Promise<AiCompletionResult> {
+    assertToolsSupported("openrouter", input.model, input);
     const { body, response } = await postJson({
       provider: "openrouter",
       url: "https://openrouter.ai/api/v1/chat/completions",
@@ -307,14 +494,14 @@ class OpenRouterAdapter implements AiProviderAdapter {
         .join("\n\n");
     const usage = record(root?.usage);
     const promptDetails = record(usage?.prompt_tokens_details);
-    return {
+    return plainResult({
       text: requireText("openrouter", outputText),
       requestId: response.headers.get("x-request-id") ?? textValue(root?.id) ?? null,
       inputTokens: tokenCount(usage?.prompt_tokens),
       outputTokens: tokenCount(usage?.completion_tokens),
       cacheReadTokens: tokenCount(promptDetails?.cached_tokens),
       cacheWriteTokens: 0,
-    };
+    });
   }
 }
 

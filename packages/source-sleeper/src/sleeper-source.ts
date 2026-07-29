@@ -5,7 +5,13 @@ export const SLEEPER_TRENDS_URL = "https://api.sleeper.app/v1/players/nfl/trendi
 export const SLEEPER_ATTRIBUTION = "Player and trending data provided by Sleeper" as const;
 export const SLEEPER_ATTRIBUTION_URL = "https://sleeper.com/" as const;
 
-const MAX_PLAYER_RESPONSE_BYTES = 16 * 1024 * 1024;
+/**
+ * A live check on 2026-07-27 measured the catalog at 14,609,548 bytes across 12,201 rows — 87% of
+ * a 16 MiB bound. The catalog grows with roster churn, so that headroom would have failed closed
+ * mid-season and staled the whole player catalog. The bound exists to stop a runaway response,
+ * not to sit just above the normal one.
+ */
+const MAX_PLAYER_RESPONSE_BYTES = 32 * 1024 * 1024;
 const MAX_TREND_RESPONSE_BYTES = 1024 * 1024;
 const MAX_PLAYER_ROWS = 100_000;
 const REQUEST_TIMEOUT_MS = 30_000;

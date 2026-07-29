@@ -1,7 +1,13 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 
-import { YahooSyncError, type YahooSyncPort } from "./yahoo-sync.js";
+import type { RecommendationKind } from "@fantasy/jobs";
+
+import {
+  emitProviderSyncChangeEvents,
+  type ChangeEventProducerDependencies,
+} from "./change-event-producers.js";
+import { YahooSyncError, type YahooSyncPort, type YahooSyncReceipt } from "./yahoo-sync.js";
 
 export interface YahooRouteOptions {
   readonly yahooSync?: YahooSyncPort;
@@ -10,6 +16,82 @@ export interface YahooRouteOptions {
     readonly reason: "league-sync";
     readonly requestedAt: Date;
   }) => Promise<string | null>;
+  readonly enqueueRecommendationRecompute?: (request: {
+    readonly leagueSeasonId: string;
+    readonly kinds: readonly RecommendationKind[];
+    readonly requestedAt: Date;
+  }) => Promise<string | null>;
+  /** Absent in tests and in a deployment that has not wired the feed; emitting is then a no-op. */
+  readonly changeEventProducers?: ChangeEventProducerDependencies;
+}
+
+/**
+ * Emitted after the persister committed, only for a receipt that actually changed something, and
+ * inside the producer's own `try/catch`: a change-event failure must never fail a good sync.
+ *
+ * The Yahoo receipt carries no artifact checksum, but `syncRunId` is one-to-one with an admitted
+ * artifact — `sync_runs.idempotency_key` embeds the checksum and an unchanged payload never reaches
+ * `state: "accepted"` — so it is the artifact identity for this producer.
+ */
+async function emitYahooChangeEvents(
+  options: YahooRouteOptions,
+  receipts: readonly YahooSyncReceipt[],
+  request: FastifyRequest,
+): Promise<void> {
+  const producers = options.changeEventProducers;
+  if (!producers) return;
+  const now = new Date();
+  for (const receipt of receipts) {
+    await emitProviderSyncChangeEvents(
+      producers,
+      {
+        provider: "yahoo",
+        state: receipt.state,
+        leagueId: receipt.leagueId,
+        leagueSeasonId: receipt.leagueSeasonId,
+        actorUserId: null,
+        artifactId: receipt.syncRunId,
+        occurredAt: now,
+      },
+      (error) =>
+        request.log.warn(
+          { err: error, leagueSeasonId: receipt.leagueSeasonId },
+          "Yahoo sync succeeded but change-event emission failed",
+        ),
+    );
+  }
+}
+
+/** Mirrors the ESPN ingest path: `draft` has no in-season producer and is deliberately absent. */
+const INGESTION_RECOMPUTE_KINDS: readonly RecommendationKind[] = ["lineup", "trade", "waiver"];
+
+/**
+ * Queued only for a receipt that actually changed something. An unchanged Yahoo payload therefore
+ * cannot produce a duplicate recommendation run.
+ */
+async function enqueueRecomputes(
+  options: YahooRouteOptions,
+  receipts: readonly YahooSyncReceipt[],
+  request: FastifyRequest,
+): Promise<void> {
+  if (!options.enqueueRecommendationRecompute) return;
+  const leagueSeasonIds = new Set(
+    receipts.filter((receipt) => receipt.state === "accepted").map((r) => r.leagueSeasonId),
+  );
+  for (const leagueSeasonId of leagueSeasonIds) {
+    try {
+      await options.enqueueRecommendationRecompute({
+        leagueSeasonId,
+        kinds: INGESTION_RECOMPUTE_KINDS,
+        requestedAt: new Date(),
+      });
+    } catch (error) {
+      request.log.warn(
+        { err: error, leagueSeasonId },
+        "Yahoo sync succeeded but recommendation recompute enqueue failed",
+      );
+    }
+  }
 }
 
 async function enqueueProjectionRefreshes(
@@ -124,6 +206,8 @@ export function registerYahooRoutes(app: FastifyInstance, options: YahooRouteOpt
           result.syncs.map((sync) => sync.season),
           request,
         );
+        await enqueueRecomputes(options, result.syncs, request);
+        await emitYahooChangeEvents(options, result.syncs, request);
         return reply.code(202).send(result);
       } catch (error) {
         const response = sendYahooError(error, request, reply);
@@ -144,6 +228,8 @@ export function registerYahooRoutes(app: FastifyInstance, options: YahooRouteOpt
       try {
         const receipt = await options.yahooSync.syncLeague(user.id, connectionId, leagueKey);
         await enqueueProjectionRefreshes(options, [receipt.season], request);
+        await enqueueRecomputes(options, [receipt], request);
+        await emitYahooChangeEvents(options, [receipt], request);
         return reply.code(receipt.state === "accepted" ? 202 : 200).send(receipt);
       } catch (error) {
         const response = sendYahooError(error, request, reply);

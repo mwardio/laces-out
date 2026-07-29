@@ -16,6 +16,7 @@ import {
   FIRST_PARTY_ROS_POLICY_VERSION,
   evaluateFirstPartyRosChampionPolicy,
   projectFirstPartyRestOfSeason,
+  projectionScoringProfileKey,
   type FirstPartyRosChampionPolicy,
   type FirstPartyRosHeldOutForecast,
   type FirstPartyRosLiveReleaseEvidence,
@@ -37,7 +38,6 @@ import type { ProjectionRefreshJob, WorkerJobContext } from "./jobs.js";
 
 type Row = Record<string, unknown>;
 
-const SCORING_KEY = "live-service-ppr:v1";
 const now = new Date("2026-12-01T12:00:00.000Z");
 const fresh = new Date(now.getTime() - 5 * 60_000);
 
@@ -50,11 +50,14 @@ const scoringProfile: ProjectionScoringProfile = {
     { statId: "receiving_touchdowns", points: 6 },
   ],
 };
+// The admitted key IS the canonical rule JSON, which is what per-position matching recovers it from.
+const SCORING_KEY = projectionScoringProfileKey(scoringProfile);
 
 function heldOutForecast(
   season: number,
   asOfWeek: number,
   playerId: string,
+  scoringProfileKey: string = SCORING_KEY,
 ): FirstPartyRosHeldOutForecast {
   const actual = 100;
   const contextualMean = actual + 1;
@@ -64,7 +67,7 @@ function heldOutForecast(
     position: "WR",
     contextualModelVersion: "contextual-v1",
     recencyModelVersion: "recency-v1",
-    scoringProfileKey: SCORING_KEY,
+    scoringProfileKey,
     intervalMethodVersion: "simulation-p15-p85-v1",
     forecastSeason: season,
     asOfWeek,
@@ -102,13 +105,13 @@ function heldOutForecast(
 }
 
 /** A champion policy that clears the strict default release gate for WR five-to-eight. */
-function releasingPolicy(): FirstPartyRosChampionPolicy {
+function releasingPolicy(scoringProfileKey: string = SCORING_KEY): FirstPartyRosChampionPolicy {
   const seasons = [2023, 2024, 2025].map((season) => ({
     season,
     complete: true,
     forecasts: [10, 11, 12].flatMap((asOfWeek) =>
       Array.from({ length: 7 }, (_, index) =>
-        heldOutForecast(season, asOfWeek, `${season}-${asOfWeek}-${index}`),
+        heldOutForecast(season, asOfWeek, `${season}-${asOfWeek}-${index}`, scoringProfileKey),
       ),
     ),
   }));
@@ -261,13 +264,13 @@ class Harness {
   readonly inserts: { table: unknown; values: Row }[] = [];
   readonly sourceUpdates: Row[] = [];
   readonly #database: Database;
-  readonly #artifact: Row | null;
+  readonly #artifacts: readonly Row[];
   readonly #seenSyncKeys = new Set<string>();
   #syncCounter = 0;
   #setCounter = 0;
 
-  constructor(input: { readonly artifact?: Row | null }) {
-    this.#artifact = input.artifact ?? null;
+  constructor(input: { readonly artifact?: Row | null; readonly artifacts?: readonly Row[] }) {
+    this.#artifacts = input.artifacts ?? (input.artifact ? [input.artifact] : []);
     const facade = {
       select: (selection: Row) =>
         new SelectQuery(selection, (table, sel) => this.#select(table, sel)),
@@ -322,7 +325,7 @@ class Harness {
       return [{ metadata: {}, lastChecksum: null, consecutiveFailures: 0 }];
     }
     if (table === nflScheduleObservations) return schedule();
-    if (table === firstPartyRosChampionArtifacts) return this.#artifact ? [this.#artifact] : [];
+    if (table === firstPartyRosChampionArtifacts) return this.#artifacts;
     if (table === projectionModelRuns) return [];
     if (table === projectionObservations) return [{ count: 0 }];
     return [];
@@ -509,6 +512,118 @@ describe("first-party ROS shadow service publication rail", () => {
           entry.table === projectionModelRuns && entry.values.qualityState === "publishable",
       ).length,
     ).toBe(publishRunsAfterFirst);
+  });
+
+  it("forwards per-position matching and records withheld positions when the live gate releases", async () => {
+    // SYNTHETIC EVIDENCE SHAPE, deliberately. `baseTarget()`'s live evidence carries the ARTIFACT's
+    // key while `leagueScoringProfileKey` is overridden — a combination
+    // `buildFirstPartyRosLeagueTarget` never produces, since it derives both from the same league
+    // profile. Since 2026-07-29 the live release gate's evidence-identity comparison is
+    // position-scoped (`evidenceIdentitiesMatchForPosition`,
+    // `packages/projections/src/rest-of-season.ts`), so the production shape — league-key-stamped
+    // evidence — also publishes its matched positions now; that end-to-end truth is pinned by
+    // "publishes a partially matched league's matched positions in the production evidence shape"
+    // in first-party-ros-publication.test.ts. The synthetic shape is kept here because byte-equal
+    // keys hold the gate's identity comparison on its fast path, isolating the wiring under test.
+    //
+    // What this test pins is the SERVICE WIRING and nothing more: that `positionMatching` is
+    // forwarded from the target, that per-league artifact arbitration keeps a target with its
+    // arbitrated artifact, that the per-position gate — not the whole-profile key — decides
+    // publication, and that withheld positions reach `metrics.cellDecisions`.
+    const target = {
+      ...baseTarget(),
+      leagueScoringProfileKey: "different-profile:v1",
+      leagueScoringProfile: scoringProfile,
+      supportedPositions: ["RB", "WR", "TE"] as const,
+    };
+    const harness = new Harness({ artifact: artifactRow() });
+    const service = new FirstPartyRosProjectionShadowService({
+      database: harness.database,
+      now: () => now,
+      candidateProvider: fakeProvider(target),
+    });
+    await service.refreshProjections(job, context);
+
+    expect(harness.countInserts(projectionSets)).toBe(1);
+    const publishRun = harness.inserts.find(
+      (entry) => entry.table === projectionModelRuns && entry.values.qualityState === "publishable",
+    );
+    const metrics = publishRun!.values.metrics as {
+      readonly cellDecisions: readonly Record<string, unknown>[];
+      readonly preservePriorGoodSet: boolean;
+      readonly withheldReasons: readonly string[];
+    };
+    expect(metrics.withheldReasons).toContain("ros_scoring_profile_position_withheld");
+    expect(metrics.preservePriorGoodSet).toBe(true);
+    expect(metrics.cellDecisions).toContainEqual({
+      position: "QB",
+      bucket: "nine-plus",
+      state: "withhold",
+      reasons: ["position-unsupported"],
+    });
+    expect(metrics.cellDecisions).toContainEqual({
+      position: "K",
+      bucket: "one-to-four",
+      state: "withhold",
+      reasons: ["position-unsupported"],
+    });
+    expect(metrics.cellDecisions).toContainEqual({
+      position: "WR",
+      bucket: "five-to-eight",
+      state: "release",
+      reasons: [],
+    });
+  });
+
+  it("arbitrates a league matching two artifacts to exactly one and records the skip", async () => {
+    // Position-scoped identity is what makes double publication possible: the D/ST-augmented
+    // artifact's offense-scoped keys equal the league's, so its own live gate would release the
+    // same league the whole-key artifact publishes. Arbitration (WP0 Step 3) must keep the
+    // whole-key winner even though the other artifact is newer, and the skipped pass must be
+    // visible in the run record rather than silent.
+    const dstAugmentedKey = projectionScoringProfileKey({
+      id: "live-service-ppr-dst",
+      rules: [...scoringProfile.rules, { statId: "defensive_sacks", points: 2 }],
+    });
+    const wholeKeyArtifact = artifactRow();
+    const dstAugmentedArtifact = artifactRow({
+      scoringProfileKey: dstAugmentedKey,
+      policy: releasingPolicy(dstAugmentedKey),
+    });
+    const target = {
+      ...baseTarget(),
+      leagueScoringProfile: scoringProfile,
+      supportedPositions: ["QB", "RB", "WR", "TE", "K"] as const,
+    };
+    const harness = new Harness({
+      artifacts: [
+        { ...wholeKeyArtifact, admittedAt: new Date("2026-07-01T00:00:00.000Z") },
+        { ...dstAugmentedArtifact, admittedAt: new Date("2026-07-23T00:00:00.000Z") },
+      ],
+    });
+    const service = new FirstPartyRosProjectionShadowService({
+      database: harness.database,
+      now: () => now,
+      candidateProvider: fakeProvider(target),
+    });
+    await service.refreshProjections(job, context);
+
+    // Exactly one set publishes, under the whole-key artifact (tie-break rule 1).
+    expect(harness.countInserts(projectionSets)).toBe(1);
+    const publishRun = harness.inserts.find(
+      (entry) => entry.table === projectionModelRuns && entry.values.qualityState === "publishable",
+    );
+    expect(
+      (publishRun!.values.configuration as { championArtifactChecksum: string })
+        .championArtifactChecksum,
+    ).toBe(wholeKeyArtifact.artifactChecksum);
+    const metadata = harness.sourceUpdates.at(-1)?.metadata as Record<string, unknown>;
+    expect(metadata).toMatchObject({
+      result: "released",
+      publishedTargets: 1,
+      arbitrationSkippedTargets: 1,
+    });
+    expect(String(metadata.diagnostics)).toContain("ros_artifact_arbitration_skipped_targets");
   });
 
   it("withholds and preserves the prior good set on a scoring-profile mismatch", async () => {

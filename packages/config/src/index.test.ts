@@ -54,6 +54,38 @@ describe("loadEnvironment", () => {
     ).toThrow("bare origin");
   });
 
+  it("parses additional web origins and normalizes trailing slashes", () => {
+    expect(loadEnvironment({}).ADDITIONAL_WEB_ORIGINS).toEqual([]);
+    expect(loadEnvironment({ ADDITIONAL_WEB_ORIGINS: "" }).ADDITIONAL_WEB_ORIGINS).toEqual([]);
+    expect(
+      loadEnvironment({
+        ADDITIONAL_WEB_ORIGINS: "https://second.example.com/, https://third.example.com",
+      }).ADDITIONAL_WEB_ORIGINS,
+    ).toEqual(["https://second.example.com", "https://third.example.com"]);
+  });
+
+  it("holds additional production web origins to the WEB_URL rules", () => {
+    const production = {
+      NODE_ENV: "production",
+      SESSION_SECRET: "s".repeat(32),
+      CREDENTIAL_ENCRYPTION_KEY: "k".repeat(32),
+      DATABASE_URL: "postgresql://fantasy:a-strong-password@postgres:5432/fantasy",
+      WEB_URL: "https://laces.example.com",
+    };
+
+    expect(() =>
+      loadEnvironment({ ...production, ADDITIONAL_WEB_ORIGINS: "http://second.example.com" }),
+    ).toThrow("Production ADDITIONAL_WEB_ORIGINS must use HTTPS");
+    expect(() =>
+      loadEnvironment({ ...production, ADDITIONAL_WEB_ORIGINS: "https://second.example.com/app" }),
+    ).toThrow("bare origin");
+    expect(() => loadEnvironment({ ...production, ADDITIONAL_WEB_ORIGINS: "not-a-url" })).toThrow();
+    expect(
+      loadEnvironment({ ...production, ADDITIONAL_WEB_ORIGINS: "https://second.example.com" })
+        .ADDITIONAL_WEB_ORIGINS,
+    ).toEqual(["https://second.example.com"]);
+  });
+
   it("coerces a valid port", () => {
     expect(loadEnvironment({ PORT: "4321" }).PORT).toBe(4321);
   });

@@ -1,0 +1,109 @@
+@layer components {
+  .callout {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px 14px;
+    padding: 10px 14px;
+    background: var(--lime-100);
+    border: 1px solid #cfddae;
+    border-radius: var(--radius-md, 10px);
+  }
+
+  .copy {
+    display: flex;
+    min-width: 0;
+    flex: 1 1 220px;
+    flex-direction: column;
+    gap: 1px;
+  }
+
+  .copy strong {
+    color: var(--ink-800);
+    font-size: 12px;
+    font-weight: 750;
+  }
+
+  .copy span {
+    overflow: hidden;
+    color: var(--ink-600);
+    font-size: 12px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .controls {
+    display: flex;
+    flex: 0 0 auto;
+    align-items: center;
+    gap: 8px;
+  }
+
+  /* Height, border-radius, and font-size are intentionally left unset: `.app-shell :is(input,
+     select, textarea)` in polish.css — the last @layer in the cascade — already normalizes every
+     select in the app to those values, and a value set here would just lose to it silently. */
+  .controls select {
+    max-width: 220px;
+    padding: 0 8px;
+    color: var(--ink-900);
+    background: var(--white);
+    border: 1px solid var(--ink-200);
+  }
+
+  .controls button {
+    display: inline-flex;
+    flex: 0 0 auto;
+    align-items: center;
+    gap: 6px;
+    white-space: nowrap;
+  }
+
+  .savedLine,
+  .errorLine {
+    display: flex;
+    flex: 1 1 100%;
+    align-items: center;
+    gap: 6px;
+    margin: 0;
+    font-size: 12px;
+  }
+
+  .savedLine {
+    color: var(--green-600);
+  }
+
+  .errorLine {
+    color: var(--red-600);
+  }
+
+  .spin {
+    animation: team-claim-callout-spin 0.85s linear infinite;
+  }
+
+  @keyframes team-claim-callout-spin {
+    to {
+      transform: rotate(360deg);
+    }
+  }
+
+  @media (max-width: 820px) {
+    .callout {
+      align-items: stretch;
+      flex-direction: column;
+    }
+
+    .controls {
+      flex-wrap: wrap;
+    }
+
+    .controls select {
+      max-width: none;
+      flex: 1 1 auto;
+    }
+
+    .controls button {
+      flex: 0 0 auto;
+    }
+  }
+}

@@ -1,6 +1,7 @@
+import { DEFAULT_SOURCE_MATCH_RATE, sourceMatchRateThreshold } from "@fantasy/domain";
 import { describe, expect, it } from "vitest";
 
-import { buildUniqueFfcIdentity, defaultFfcAdpContexts } from "./ffc-adp.js";
+import { buildUniqueFfcIdentity, defaultFfcAdpContexts, ffcAdpSourceKey } from "./ffc-adp.js";
 
 describe("FFC ADP worker integration helpers", () => {
   it("builds all admitted redraft scoring and league-size contexts", () => {
@@ -25,5 +26,14 @@ describe("FFC ADP worker integration helpers", () => {
     expect(identity.teamAware.get("chris smith|WR|MIA")).toBe("two");
     expect(identity.namePosition.has("chris smith|WR|")).toBe(false);
     expect(identity.namePosition.get("unique player|RB|")).toBe("three");
+  });
+
+  it("keys every admitted context onto its registered match-rate threshold", () => {
+    for (const context of defaultFfcAdpContexts(2026)) {
+      const threshold = sourceMatchRateThreshold(ffcAdpSourceKey(context));
+
+      expect(threshold.minimumMatchRate).toBe(DEFAULT_SOURCE_MATCH_RATE);
+      expect(threshold.rationale).not.toMatch(/no source-specific threshold/iu);
+    }
   });
 });

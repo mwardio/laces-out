@@ -3,12 +3,21 @@ import { describe, expect, it } from "vitest";
 import type { NflversePlayerInjuryReport } from "@fantasy/source-nflverse";
 
 import {
+  datasetMetadata,
   injuryReportStateKey,
   snapCountsIdentityKey,
   uniqueSeasonWindow,
   weeklyRosterIdentityKey,
   weeklyStatsIdentityKey,
 } from "./nflverse-weekly-data.js";
+
+const metadataInput = {
+  previous: {},
+  season: 2026,
+  rowsRejected: 0,
+  coveredWeeks: [1],
+  coveredSeasonTypes: ["REG"],
+} as const;
 
 describe("nflverse weekly worker helpers", () => {
   it("checks a four-season training window in chronological order", () => {
@@ -57,5 +66,56 @@ describe("nflverse weekly worker helpers", () => {
         report: { primaryInjury: "Knee", secondaryInjury: null, status: "out" },
       }),
     );
+  });
+
+  it("stores the shared registry threshold rather than a local literal", () => {
+    const stats = datasetMetadata({
+      ...metadataInput,
+      sourceKey: "nflverse.stats-player-week.2026",
+      rowsRead: 100,
+      rowsUnmatched: 1,
+    });
+    const snaps = datasetMetadata({
+      ...metadataInput,
+      sourceKey: "nflverse.snap-counts.2026",
+      rowsRead: 100,
+      rowsUnmatched: 1,
+    });
+
+    expect(stats.minimumPublishableMatchRate).toBe(0.95);
+    expect(snaps.minimumPublishableMatchRate).toBe(0.9);
+  });
+
+  it("writes qualityState beside publishable so the health job sees a degraded source", () => {
+    const degraded = datasetMetadata({
+      ...metadataInput,
+      sourceKey: "nflverse.stats-player-week.2026",
+      rowsRead: 100,
+      rowsUnmatched: 18,
+    });
+    const admitted = datasetMetadata({
+      ...metadataInput,
+      sourceKey: "nflverse.stats-player-week.2026",
+      rowsRead: 100,
+      rowsUnmatched: 1,
+    });
+
+    expect(degraded.publishable).toBe(false);
+    expect(degraded.qualityState).toBe("degraded");
+    expect(admitted.publishable).toBe(true);
+    expect(admitted.qualityState).toBe("publishable");
+  });
+
+  it("admits a PFR-keyed snap season that the GSIS threshold would quarantine", () => {
+    const snaps = datasetMetadata({
+      ...metadataInput,
+      sourceKey: "nflverse.snap-counts.2026",
+      rowsRead: 100,
+      rowsUnmatched: 8,
+    });
+
+    expect(snaps.matchRate).toBe(0.92);
+    expect(snaps.publishable).toBe(true);
+    expect(snaps.qualityState).toBe("publishable");
   });
 });

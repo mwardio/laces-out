@@ -3,6 +3,7 @@
 import { ArrowRight, BadgeCheck, CircleHelp, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
+import { requestFinkleKick } from "../lib/finkle-kick";
 import styles from "./landing.module.css";
 
 export function ContactEasterEgg() {
@@ -21,6 +22,13 @@ export function ContactEasterEgg() {
 
   function closeDialog() {
     dialogRef.current?.close();
+  }
+
+  function chooseFinkle() {
+    closeDialog();
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(requestFinkleKick);
+    });
   }
 
   return (
@@ -75,7 +83,7 @@ export function ContactEasterEgg() {
               <h2 id="contact-easter-egg-title">Contact who?</h2>
               <p id="contact-easter-egg-description">Finkle or Einhorn?</p>
               <div className={styles.contactDialogChoices}>
-                <button type="button" onClick={() => setRevealed(true)}>
+                <button type="button" onClick={chooseFinkle}>
                   Finkle
                 </button>
                 <button type="button" onClick={() => setRevealed(true)}>

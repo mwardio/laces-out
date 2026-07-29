@@ -120,6 +120,22 @@ describe("worker queue reliability", () => {
       );
     }
   });
+
+  it("re-exports the shared queue contract rather than redefining it", async () => {
+    const shared = await import("@fantasy/jobs");
+
+    // Identity, not equality. A worker-local copy that happened to hold the same values would
+    // satisfy a deep-equality assertion and then drift the next time one side changed.
+    expect(queueNames).toBe(shared.queueNames);
+    expect(deadLetterQueueNames).toBe(shared.deadLetterQueueNames);
+    expect(enqueueLeagueSync).toBe(shared.enqueueLeagueSync);
+    expect(enqueueRecommendationRecompute).toBe(shared.enqueueRecommendationRecompute);
+    expect(enqueueProjectionRefresh).toBe(shared.enqueueProjectionRefresh);
+    expect(enqueueDataHealthCheck).toBe(shared.enqueueDataHealthCheck);
+    expect(registerQueues).toBe(shared.registerQueues);
+    expect(registerSchedules).toBe(shared.registerSchedules);
+    expect(ensureDailyRefresh).toBe(shared.ensureDailyRefresh);
+  });
 });
 
 describe("typed worker service dispatch", () => {
@@ -145,6 +161,7 @@ describe("typed worker service dispatch", () => {
         degradedSources: 1,
         failingSources: 1,
         staleSources: 0,
+        unmatchedIdentitySources: 0,
         degradedSourceKeys: ["source-3"],
       }),
     );
@@ -410,7 +427,7 @@ describe("dispatch contracts and schedules", () => {
 
     await registerSchedules(boss, 2026);
 
-    expect(schedule).toHaveBeenCalledTimes(7);
+    expect(schedule).toHaveBeenCalledTimes(8);
     expect(schedule).toHaveBeenNthCalledWith(
       1,
       queueNames.dataHealth,
@@ -457,6 +474,19 @@ describe("dispatch contracts and schedules", () => {
     );
     expect(schedule).toHaveBeenNthCalledWith(
       6,
+      queueNames.notificationSweep,
+      // Offset from both the lineup-lock sweep and the quarter-hour health check.
+      "9,24,39,54 * * * *",
+      { kind: "change-event", reason: "scheduled" },
+      expect.objectContaining({
+        tz: "UTC",
+        key: "change-event-alerts",
+        group: { id: "notifications" },
+        singletonKey: "notification-sweep:change-event",
+      }),
+    );
+    expect(schedule).toHaveBeenNthCalledWith(
+      7,
       queueNames.refreshProjections,
       "*/10 * * * *",
       { season: 2026, reason: "lock-window" },
@@ -468,7 +498,7 @@ describe("dispatch contracts and schedules", () => {
       }),
     );
     expect(schedule).toHaveBeenNthCalledWith(
-      7,
+      8,
       queueNames.refreshProjections,
       "11 * * * *",
       { season: 2026, reason: "scheduled" },

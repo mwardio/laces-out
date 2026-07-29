@@ -1924,6 +1924,13 @@
       border-radius: 9px;
     }
 
+    /* Board metadata ("2026 · Cheat sheet · PPR · Yours") still overran the
+       220px card at long board names. Hide it and keep the board name as
+       the card's accessible name, matching the film-room provider tabs. */
+    .ranking-list small {
+      display: none;
+    }
+
     .ranking-list > button.is-selected {
       box-shadow: inset 0 -3px 0 var(--lime-500);
     }
@@ -2255,12 +2262,6 @@
     background: #fff7e8;
     border-color: #efc972;
     color: #66430a;
-  }
-
-  .dashboard-mode-notice--live {
-    background: #eef9e9;
-    border-color: #a6d88b;
-    color: #244c1d;
   }
 
   .live-dashboard-loading {
@@ -2868,6 +2869,83 @@
     font-size: 0.7rem;
   }
 
+  /* Operator detail: unresolved identities per degraded source. Admin-only in the API. */
+  .live-unresolved {
+    margin-top: 0.9rem;
+    padding-top: 0.9rem;
+    border-top: 1px solid var(--line, #e4e7ec);
+  }
+
+  .live-unresolved h4 {
+    margin: 0 0 0.5rem;
+    font-size: 0.82rem;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+  }
+
+  .live-unresolved p {
+    margin: 0.35rem 0;
+    color: var(--muted, #667085);
+    font-size: 0.76rem;
+  }
+
+  .live-unresolved__source {
+    margin-top: 0.45rem;
+    padding: 0.5rem 0.65rem;
+    background: rgba(15, 23, 42, 0.03);
+    border-radius: 7px;
+  }
+
+  .live-unresolved__source summary {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 0.25rem 0.75rem;
+    cursor: pointer;
+    font-size: 0.8rem;
+  }
+
+  .live-unresolved__source summary span {
+    overflow-wrap: anywhere;
+    font-weight: 600;
+  }
+
+  .live-unresolved__source summary small {
+    color: var(--muted, #667085);
+    font-size: 0.72rem;
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* The table scrolls inside its own container; the page body never scrolls horizontally. */
+  .live-unresolved__scroll {
+    max-width: 100%;
+    margin-top: 0.5rem;
+    overflow-x: auto;
+  }
+
+  .live-unresolved__scroll table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.74rem;
+  }
+
+  .live-unresolved__scroll th,
+  .live-unresolved__scroll td {
+    padding: 0.3rem 0.55rem 0.3rem 0;
+    text-align: left;
+    white-space: nowrap;
+  }
+
+  .live-unresolved__scroll th {
+    color: var(--muted, #667085);
+    font-weight: 600;
+  }
+
+  .live-unresolved__scroll td {
+    font-variant-numeric: tabular-nums;
+  }
+
   .live-detail-loading,
   .live-detail-error {
     display: flex;
@@ -3101,7 +3179,9 @@
     --green-600: #347158;
     --green-100: #e0efe7;
     --sidebar-width: 232px;
-    --topbar-height: 64px;
+    /* Desktop app-page top bar. Mobile (<=820px) overrides this independently
+       below and must stay untouched by this value. */
+    --topbar-height: 48px;
     --radius-xs: 5px;
     --radius-sm: 7px;
     --radius-md: 10px;
@@ -3258,6 +3338,140 @@
   }
   .connection-notice button:hover {
     background: rgba(255, 255, 255, 0.5);
+  }
+  /* Data health: member-safe source quality. Impact only, never a source row or a chore.
+     Collapsed by default (native details/summary) so the withheld-source detail doesn't
+     crowd the rest of League Sync; the summary line still carries a worst-state hint so a
+     problem is visible without opening it. */
+  .connection-data-health {
+    margin-top: 25px;
+    padding: 22px;
+    background: var(--white);
+    border: 1px solid var(--ink-150);
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow-card);
+    scroll-margin-top: calc(var(--topbar-height) + 12px);
+  }
+  .connection-data-health__head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 8px 24px;
+    cursor: pointer;
+    list-style: none;
+  }
+  .connection-data-health__head::-webkit-details-marker {
+    display: none;
+  }
+  .connection-data-health__head h2 {
+    margin: 2px 0 0;
+    font-size: 1.15rem;
+  }
+  .connection-data-health__summary-status {
+    display: flex;
+    flex: 0 0 auto;
+    align-items: center;
+    gap: 10px;
+  }
+  .connection-data-health__summary-hint {
+    color: var(--ink-500);
+    font-size: 0.82rem;
+    font-weight: 700;
+    white-space: nowrap;
+  }
+  .connection-data-health__summary-status svg {
+    flex: 0 0 auto;
+    color: var(--ink-400);
+    transition: transform 0.16s ease;
+  }
+  .connection-data-health[open] .connection-data-health__summary-status svg {
+    transform: rotate(90deg);
+  }
+  .connection-data-health__body {
+    margin-top: 14px;
+  }
+  .connection-data-health__lede {
+    max-width: 52ch;
+    margin: 0;
+    color: var(--ink-500);
+    font-size: 0.9rem;
+  }
+  .connection-data-health__state {
+    margin: 16px 0 0;
+    color: var(--ink-500);
+    font-size: 0.9rem;
+  }
+  .connection-data-health__state--error {
+    color: var(--danger-600, #b42318);
+  }
+  .connection-data-health__list {
+    display: grid;
+    gap: 12px;
+    margin: 16px 0 0;
+    padding: 0;
+    list-style: none;
+  }
+  .connection-data-health__item {
+    min-width: 0;
+    padding: 16px;
+    background: var(--ink-025, rgba(15, 23, 42, 0.02));
+    border: 1px solid var(--ink-150);
+    border-radius: var(--radius-sm, 8px);
+  }
+  .connection-data-health__item-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px 12px;
+  }
+  .connection-data-health__item-head h3 {
+    margin: 0;
+    overflow-wrap: anywhere;
+    font-size: 0.98rem;
+  }
+  .connection-data-health__badge {
+    padding: 3px 9px;
+    border-radius: 999px;
+    font-size: 0.74rem;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+    white-space: nowrap;
+  }
+  .connection-data-health__badge--quarantined {
+    background: rgba(180, 35, 24, 0.1);
+    color: #b42318;
+  }
+  .connection-data-health__badge--unavailable {
+    background: rgba(15, 23, 42, 0.07);
+    color: var(--ink-600, #334155);
+  }
+  .connection-data-health__facts {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 10px 24px;
+    margin: 12px 0 0;
+  }
+  .connection-data-health__facts dt {
+    color: var(--ink-500);
+    font-size: 0.76rem;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+  }
+  .connection-data-health__facts dd {
+    margin: 2px 0 0;
+    font-size: 0.92rem;
+    font-variant-numeric: tabular-nums;
+  }
+  .connection-data-health__reason,
+  .connection-data-health__impact {
+    margin: 10px 0 0;
+    font-size: 0.88rem;
+  }
+  .connection-data-health__reason {
+    color: var(--ink-500);
   }
   .connection-grid {
     display: grid;
@@ -3671,6 +3885,11 @@
   }
   .espn-method-switcher__option--active span {
     color: var(--ink-900);
+  }
+  @media (max-width: 820px) {
+    .espn-method-switcher__option small {
+      display: none;
+    }
   }
   .espn-method-panel {
     min-width: 0;
@@ -4429,36 +4648,6 @@
     min-height: 28px;
   }
 
-  .sidebar-status {
-    display: flex;
-    gap: 9px;
-    margin: 10px 3px 13px;
-    padding: 11px;
-    background: rgba(201, 244, 100, 0.055);
-    border: 1px solid rgba(201, 244, 100, 0.12);
-    border-radius: 10px;
-  }
-  .sidebar-status__icon {
-    display: grid;
-    width: 28px;
-    height: 28px;
-    flex: 0 0 auto;
-    place-items: center;
-    color: var(--lime-300);
-    background: rgba(201, 244, 100, 0.1);
-    border-radius: 7px;
-  }
-  .sidebar-status strong {
-    display: block;
-    color: #e7eee8;
-    font-size: 10px;
-  }
-  .sidebar-status p {
-    margin-top: 2px;
-    color: #7f8d83;
-    font-size: 12px;
-    line-height: 1.45;
-  }
   .profile-chip {
     display: grid;
     grid-template-columns: 31px minmax(0, 1fr) 17px;
@@ -4546,6 +4735,12 @@
     background: var(--blue-500);
     box-shadow: 0 0 0 2px rgba(76, 150, 211, 0.2);
   }
+  /* Same lime as the base (unmodified) pulse; spelled out explicitly rather
+     than relying on a missing modifier falling through to it. */
+  .context-pulse--live {
+    background: var(--lime-500);
+    box-shadow: 0 0 0 2px rgba(150, 201, 52, 0.25);
+  }
   .topbar-separator {
     width: 1px;
     height: 13px;
@@ -4558,6 +4753,16 @@
     display: flex;
     align-items: center;
     gap: 8px;
+  }
+  /* Desktop-only: keeps any button that lands in the top bar sized to the
+     slimmer 48px bar without touching the mobile (<=820px) button sizing
+     below, which stays exactly as it was. */
+  @media (min-width: 821px) {
+    .topbar-actions .button {
+      min-height: 32px;
+      padding: 0 12px;
+      font-size: 10px;
+    }
   }
   .icon-button {
     display: grid;
@@ -4751,10 +4956,6 @@
     text-overflow: ellipsis;
     white-space: nowrap;
   }
-  .session-user-copy small {
-    color: var(--ink-500);
-    font-size: 10px;
-  }
   .session-popover {
     position: absolute;
     z-index: 90;
@@ -4813,6 +5014,26 @@
     border-radius: 7px;
     font-size: 11px;
     font-weight: 800;
+  }
+  .session-popover__settings {
+    display: flex;
+    width: 100%;
+    min-height: 32px;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    margin: 9px 0;
+    color: var(--ink-700);
+    background: var(--paper-50);
+    border: 1px solid var(--ink-150);
+    border-radius: 7px;
+    font-size: 11px;
+    font-weight: 800;
+    text-decoration: none;
+  }
+  .session-popover__settings:hover {
+    color: var(--ink-950);
+    background: var(--ink-100);
   }
   .session-popover > button:hover:not(:disabled) {
     color: var(--red-600);
@@ -5134,11 +5355,13 @@
     width: 100%;
     max-width: 1600px;
     margin: 0 auto;
-    padding: 30px 28px 64px;
+    /* Top padding halved (was 30px) to tighten the gap under the top bar. */
+    padding: 15px 28px 64px;
   }
   .app-shell--compact .main-content {
     max-width: none;
-    padding: 18px 20px 45px;
+    /* Top padding halved (was 18px). */
+    padding: 9px 20px 45px;
   }
   .bottom-nav {
     display: none;
@@ -5155,7 +5378,10 @@
   .page-heading h1 {
     max-width: 740px;
     margin-top: 4px;
-    font-size: clamp(27px, 3vw, 39px);
+    /* Standardized to 38px (was clamp(27px, 3vw, 39px)); polish.css's own
+       .page-heading h1 (@layer polish) is the rule that actually renders,
+       kept in sync here so this file isn't misleading if that ever changes. */
+    font-size: 38px;
     line-height: 1.08;
     letter-spacing: -0.045em;
   }
@@ -5943,10 +6169,6 @@
   .provider-state--pending {
     color: #7b3c25;
     background: var(--orange-100);
-  }
-  .provider-state--unofficial {
-    color: #285d55;
-    background: var(--violet-100);
   }
   .provider-state--demo {
     color: var(--ink-600);
@@ -7646,7 +7868,8 @@
     }
     .main-content,
     .app-shell--compact .main-content {
-      padding: 22px 14px 34px;
+      /* Top padding halved (was 22px) to match the desktop reduction. */
+      padding: 11px 14px 34px;
     }
     .bottom-nav {
       position: fixed;
@@ -7820,9 +8043,6 @@
     .mobile-menu-sheet__admin svg:last-child {
       margin-left: auto;
     }
-    .topbar-draft-link {
-      display: none;
-    }
     .bottom-nav__draft-icon {
       display: grid;
       width: 34px;
@@ -7846,6 +8066,13 @@
     }
     .connection-grid {
       margin-top: 18px;
+    }
+    .connection-data-health {
+      margin-top: 18px;
+      padding: 16px;
+    }
+    .connection-data-health__facts {
+      grid-template-columns: 1fr;
     }
     #espn-connection {
       scroll-margin-top: calc(var(--topbar-height) + 12px);

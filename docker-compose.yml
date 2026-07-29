@@ -58,6 +58,7 @@ services:
       target: migrate
       args:
         NEXT_PUBLIC_API_URL: ${PUBLIC_URL:-http://localhost:3000}
+        NEXT_PUBLIC_API_SAME_ORIGIN: "true"
         NEXT_PUBLIC_SITE_URL: ${PUBLIC_URL:-http://localhost:3000}
         NEXT_PUBLIC_CONTACT_EMAIL: ${NEXT_PUBLIC_CONTACT_EMAIL:-}
         NEXT_PUBLIC_YAHOO_ACCESS_STATUS: ${NEXT_PUBLIC_YAHOO_ACCESS_STATUS:-pending}
@@ -78,11 +79,15 @@ services:
       target: api
       args:
         NEXT_PUBLIC_API_URL: ${PUBLIC_URL:-http://localhost:3000}
+        NEXT_PUBLIC_API_SAME_ORIGIN: "true"
         NEXT_PUBLIC_SITE_URL: ${PUBLIC_URL:-http://localhost:3000}
         NEXT_PUBLIC_CONTACT_EMAIL: ${NEXT_PUBLIC_CONTACT_EMAIL:-}
         NEXT_PUBLIC_YAHOO_ACCESS_STATUS: ${NEXT_PUBLIC_YAHOO_ACCESS_STATUS:-pending}
     environment:
       <<: *app-environment
+      # Extra browser origins served by the same gateway, comma separated. WEB_URL stays canonical
+      # for every link the API builds; this only widens which Origin headers are accepted.
+      ADDITIONAL_WEB_ORIGINS: ${ADDITIONAL_WEB_ORIGINS:-}
       REGISTRATION_INVITE_CODE: ${REGISTRATION_INVITE_CODE:-}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       MANAGED_AI_DAILY_REQUEST_LIMIT: ${MANAGED_AI_DAILY_REQUEST_LIMIT:-50}
@@ -119,6 +124,7 @@ services:
       target: worker
       args:
         NEXT_PUBLIC_API_URL: ${PUBLIC_URL:-http://localhost:3000}
+        NEXT_PUBLIC_API_SAME_ORIGIN: "true"
         NEXT_PUBLIC_SITE_URL: ${PUBLIC_URL:-http://localhost:3000}
         NEXT_PUBLIC_CONTACT_EMAIL: ${NEXT_PUBLIC_CONTACT_EMAIL:-}
         NEXT_PUBLIC_YAHOO_ACCESS_STATUS: ${NEXT_PUBLIC_YAHOO_ACCESS_STATUS:-pending}
@@ -140,6 +146,9 @@ services:
       target: web
       args:
         NEXT_PUBLIC_API_URL: ${PUBLIC_URL:-http://localhost:3000}
+        # The browser calls /v1 on whichever domain served the page, so one image works on every
+        # domain the gateway fronts. NEXT_PUBLIC_API_URL stays the server-side and fallback base.
+        NEXT_PUBLIC_API_SAME_ORIGIN: "true"
         NEXT_PUBLIC_SITE_URL: ${PUBLIC_URL:-http://localhost:3000}
         NEXT_PUBLIC_CONTACT_EMAIL: ${NEXT_PUBLIC_CONTACT_EMAIL:-}
         NEXT_PUBLIC_YAHOO_ACCESS_STATUS: ${NEXT_PUBLIC_YAHOO_ACCESS_STATUS:-pending}

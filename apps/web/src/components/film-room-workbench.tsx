@@ -8,18 +8,13 @@ import type {
 } from "@fantasy/contracts";
 import {
   AlertCircle,
-  ArrowUpRight,
   BrainCircuit,
   Check,
-  Eye,
-  EyeOff,
   Gauge,
   KeyRound,
   LoaderCircle,
-  Save,
   Send,
   ShieldCheck,
-  Trash2,
 } from "lucide-react";
 import Link from "next/link";
 import { type FormEvent, useCallback, useEffect, useMemo, useState } from "react";
@@ -27,11 +22,9 @@ import { type FormEvent, useCallback, useEffect, useMemo, useState } from "react
 import {
   apiBaseUrl,
   parseAiAnalysis,
-  parseAiProviderConfiguration,
   parseAiProviderList,
   parseLeagueListResponse,
 } from "../lib/api-client";
-import { aiModelOptions, customModelOption, isKnownAiModel } from "../lib/ai-model-options";
 import { DEMO_LEAGUE_ID } from "../lib/demo-contract-data";
 import { AiAnswerContent } from "./ai-answer-content";
 import { AiCoachPanel } from "./ai-coach-panel";
@@ -108,23 +101,6 @@ async function responseMessage(response: Response, fallback: string): Promise<st
     // The status-aware fallback remains safe for an empty response.
   }
   return `${fallback} (${response.status})`;
-}
-
-function statusLabel(provider: AiProviderConfiguration): string {
-  if (provider.accessMode === "managed") return "Included";
-  if (!provider.configured) return "Add a key";
-  if (provider.status === "invalid") return "Key rejected";
-  if (provider.lastValidatedAt) return "Verified";
-  return "Saved · untested";
-}
-
-function readableTime(value: string): string {
-  return new Intl.DateTimeFormat(undefined, {
-    month: "short",
-    day: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-  }).format(new Date(value));
 }
 
 function FilmRoomTour() {
@@ -332,16 +308,9 @@ export function FilmRoomWorkbench() {
   const [load, setLoad] = useState<LoadState>({ state: "loading" });
   const [selectedProvider, setSelectedProvider] = useState<AiProviderName>("gemini");
   const [selectedLeagueId, setSelectedLeagueId] = useState("");
-  const [apiKey, setApiKey] = useState("");
-  const [showKey, setShowKey] = useState(false);
-  const [model, setModel] = useState("");
-  const [dailyRequestLimit, setDailyRequestLimit] = useState("25");
-  const [maxOutputTokens, setMaxOutputTokens] = useState("2000");
   const [question, setQuestion] = useState<string>(QUICK_QUESTIONS[0]);
-  const [settingsAction, setSettingsAction] = useState<ActionState>({ state: "idle" });
   const [analysisAction, setAnalysisAction] = useState<ActionState>({ state: "idle" });
   const [analysis, setAnalysis] = useState<AiAnalysisResponse | null>(null);
-  const [deleteArmed, setDeleteArmed] = useState(false);
 
   const loadData = useCallback(async () => {
     setLoad({ state: "loading" });
@@ -403,179 +372,6 @@ export function FilmRoomWorkbench() {
         : undefined,
     [load, selectedProvider],
   );
-
-  const providerName = currentProvider?.provider;
-  const providerAccessMode = currentProvider?.accessMode;
-  const providerConfigured = currentProvider?.configured;
-  const providerModel = currentProvider?.model;
-  const providerDailyRequestLimit = currentProvider?.dailyRequestLimit;
-  const providerMaxOutputTokens = currentProvider?.maxOutputTokens;
-
-  useEffect(() => {
-    if (
-      !providerName ||
-      !providerAccessMode ||
-      providerConfigured === undefined ||
-      !providerModel ||
-      providerDailyRequestLimit === undefined ||
-      providerMaxOutputTokens === undefined
-    ) {
-      return;
-    }
-    setModel(providerModel);
-    setDailyRequestLimit(String(providerDailyRequestLimit));
-    setMaxOutputTokens(String(providerMaxOutputTokens));
-    setApiKey("");
-    setShowKey(false);
-    setDeleteArmed(false);
-  }, [
-    providerAccessMode,
-    providerConfigured,
-    providerDailyRequestLimit,
-    providerMaxOutputTokens,
-    providerModel,
-    providerName,
-  ]);
-
-  const settingsDirty = useMemo(() => {
-    if (!currentProvider) return false;
-    return (
-      apiKey.trim().length > 0 ||
-      model.trim() !== currentProvider.model ||
-      dailyRequestLimit !== String(currentProvider.dailyRequestLimit) ||
-      maxOutputTokens !== String(currentProvider.maxOutputTokens)
-    );
-  }, [apiKey, currentProvider, dailyRequestLimit, maxOutputTokens, model]);
-
-  useEffect(() => {
-    if (!settingsDirty) return;
-    const warnBeforeUnload = (event: BeforeUnloadEvent) => event.preventDefault();
-    window.addEventListener("beforeunload", warnBeforeUnload);
-    return () => window.removeEventListener("beforeunload", warnBeforeUnload);
-  }, [settingsDirty]);
-
-  const selectProvider = (provider: AiProviderName) => {
-    if (provider === selectedProvider) return;
-    if (
-      settingsDirty &&
-      !window.confirm("Discard your unsaved provider changes and switch providers?")
-    ) {
-      return;
-    }
-    setSettingsAction({ state: "idle" });
-    setDeleteArmed(false);
-    setSelectedProvider(provider);
-  };
-
-  const resetSettings = () => {
-    if (!currentProvider) return;
-    setApiKey("");
-    setShowKey(false);
-    setModel(currentProvider.model);
-    setDailyRequestLimit(String(currentProvider.dailyRequestLimit));
-    setMaxOutputTokens(String(currentProvider.maxOutputTokens));
-    setDeleteArmed(false);
-    setSettingsAction({ state: "idle" });
-  };
-
-  const replaceProvider = (configuration: AiProviderConfiguration) => {
-    setLoad((current) =>
-      current.state === "ready"
-        ? {
-            ...current,
-            providers: current.providers.map((provider) =>
-              provider.provider === configuration.provider ? configuration : provider,
-            ),
-          }
-        : current,
-    );
-  };
-
-  const saveSettings = async (event: FormEvent) => {
-    event.preventDefault();
-    setSettingsAction({ state: "saving" });
-    try {
-      const response = await fetch(
-        `${apiBaseUrl}/v1/ai/providers/${encodeURIComponent(selectedProvider)}`,
-        {
-          method: "PUT",
-          credentials: "include",
-          headers: { Accept: "application/json", "Content-Type": "application/json" },
-          body: JSON.stringify({
-            ...(apiKey.trim() ? { apiKey: apiKey.trim() } : {}),
-            model: model.trim(),
-            dailyRequestLimit: Number(dailyRequestLimit),
-            maxOutputTokens: Number(maxOutputTokens),
-          }),
-        },
-      );
-      if (!response.ok) throw new Error(await responseMessage(response, "Could not save provider"));
-      const parsed = parseAiProviderConfiguration(await response.json());
-      if (!parsed) throw new Error("The saved provider response was not recognized");
-      replaceProvider(parsed);
-      setApiKey("");
-      setModel(parsed.model);
-      setDailyRequestLimit(String(parsed.dailyRequestLimit));
-      setMaxOutputTokens(String(parsed.maxOutputTokens));
-      setSettingsAction({
-        state: "success",
-        message: apiKey.trim()
-          ? "Key encrypted and settings saved. Run the connection test next."
-          : "Provider settings saved.",
-      });
-    } catch (error) {
-      setSettingsAction({
-        state: "error",
-        message: error instanceof Error ? error.message : "Could not save provider",
-      });
-    }
-  };
-
-  const testConnection = async () => {
-    setSettingsAction({ state: "testing" });
-    try {
-      const response = await fetch(
-        `${apiBaseUrl}/v1/ai/providers/${encodeURIComponent(selectedProvider)}/test`,
-        { method: "POST", credentials: "include", headers: { Accept: "application/json" } },
-      );
-      if (!response.ok) {
-        throw new Error(await responseMessage(response, "Connection test failed"));
-      }
-      await loadData();
-      setSelectedProvider(selectedProvider);
-      setSettingsAction({ state: "success", message: "Connection verified with a live request." });
-    } catch (error) {
-      setSettingsAction({
-        state: "error",
-        message: error instanceof Error ? error.message : "Connection test failed",
-      });
-    }
-  };
-
-  const removeProvider = async () => {
-    if (!deleteArmed) {
-      setDeleteArmed(true);
-      setSettingsAction({ state: "idle" });
-      return;
-    }
-    setSettingsAction({ state: "deleting" });
-    try {
-      const response = await fetch(
-        `${apiBaseUrl}/v1/ai/providers/${encodeURIComponent(selectedProvider)}`,
-        { method: "DELETE", credentials: "include", headers: { Accept: "application/json" } },
-      );
-      if (!response.ok) throw new Error(await responseMessage(response, "Could not remove key"));
-      await loadData();
-      setSelectedProvider(selectedProvider);
-      setDeleteArmed(false);
-      setSettingsAction({ state: "success", message: "The encrypted key was removed." });
-    } catch (error) {
-      setSettingsAction({
-        state: "error",
-        message: error instanceof Error ? error.message : "Could not remove key",
-      });
-    }
-  };
 
   const runAnalysis = async (event: FormEvent) => {
     event.preventDefault();
@@ -649,14 +445,8 @@ export function FilmRoomWorkbench() {
 
   const providerMeta = PROVIDERS[selectedProvider];
   const hasLeagues = load.leagues.leagues.length > 0;
-  const byokControlsEnabled = Boolean(currentProvider?.configured || apiKey.trim());
-  const providerModelOptions = aiModelOptions[selectedProvider];
-  const selectedModelOption = isKnownAiModel(selectedProvider, model) ? model : customModelOption;
   const canAnalyze = Boolean(currentProvider?.available && selectedLeagueId && question.trim());
-  const settingsBusy =
-    settingsAction.state === "saving" ||
-    settingsAction.state === "testing" ||
-    settingsAction.state === "deleting";
+  const availableProviders = load.providers.filter((provider) => provider.available);
 
   return (
     <div className={styles.page}>
@@ -703,432 +493,182 @@ export function FilmRoomWorkbench() {
         </div>
       </section>
 
-      <div className={styles.providerTabs} role="tablist" aria-label="AI providers">
-        {load.providers.map((provider) => {
-          const meta = PROVIDERS[provider.provider];
-          const selected = provider.provider === selectedProvider;
-          return (
-            <button
-              key={provider.provider}
-              className={`${styles.providerTab} ${styles[provider.provider]}${selected ? ` ${styles.selected}` : ""}`}
-              type="button"
-              role="tab"
-              aria-selected={selected}
-              aria-controls="provider-settings-panel"
-              id={`provider-tab-${provider.provider}`}
-              onClick={() => selectProvider(provider.provider)}
+      {currentProvider?.available ? (
+        <div className={`${styles.notice} ${styles.noticeSuccess}`} role="status">
+          <Check size={16} aria-hidden="true" />
+          <span>
+            {currentProvider.accessMode === "managed"
+              ? "Included Gemini is ready to use."
+              : `${providerMeta.name} is configured and ready.`}{" "}
+            <Link href="/settings">Manage AI provider in Settings →</Link>
+          </span>
+        </div>
+      ) : (
+        <div className={styles.inlineGate}>
+          <KeyRound size={17} aria-hidden="true" />
+          <span>
+            No AI provider is configured yet.{" "}
+            <Link href="/settings">Manage AI provider in Settings →</Link>
+          </span>
+        </div>
+      )}
+
+      <section
+        className={`${styles.panel} ${styles.analysisPanel}`}
+        aria-labelledby="analysis-heading"
+      >
+        <div className={styles.panelHeader}>
+          <div>
+            <p className={styles.eyebrow}>League-grounded analysis</p>
+            <h2 id="analysis-heading">Ask the film room</h2>
+            <span>Overview, Decision Desk, and league analytics go in with every request.</span>
+          </div>
+          {availableProviders.length > 1 ? (
+            <label className={styles.headerProviderSelect}>
+              <span>Provider</span>
+              <select
+                value={selectedProvider}
+                onChange={(event) => setSelectedProvider(event.target.value as AiProviderName)}
+              >
+                {availableProviders.map((provider) => (
+                  <option value={provider.provider} key={provider.provider}>
+                    {PROVIDERS[provider.provider].name} · {provider.model}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ) : null}
+        </div>
+
+        <form className={styles.analysisForm} onSubmit={(event) => void runAnalysis(event)}>
+          <label className={styles.field}>
+            <span>League</span>
+            <select
+              value={selectedLeagueId}
+              onChange={(event) => setSelectedLeagueId(event.target.value)}
+              disabled={!hasLeagues}
             >
-              <span className={styles.providerMark}>{meta.shortName}</span>
-              <span className={styles.providerCopy}>
-                <strong>{meta.name}</strong>
-                <small>{statusLabel(provider)}</small>
-              </span>
-              <span
-                className={`${styles.statusDot}${provider.available ? ` ${styles.statusReady}` : ""}${provider.status === "invalid" ? ` ${styles.statusInvalid}` : ""}`}
-                aria-hidden="true"
-              />
-            </button>
-          );
-        })}
-      </div>
-
-      <div className={styles.mainGrid}>
-        <section
-          className={styles.panel}
-          id="provider-settings-panel"
-          role="tabpanel"
-          aria-labelledby={`provider-tab-${selectedProvider}`}
-        >
-          <div className={styles.panelHeader}>
-            <div>
-              <p className={styles.eyebrow}>
-                {currentProvider?.configured ? "Your provider setup" : "Optional BYOK setup"}
-              </p>
-              <h2 id="provider-settings-heading">{providerMeta.name}</h2>
-              <span>{providerMeta.description}</span>
-            </div>
-            <a href={providerMeta.keyUrl} target="_blank" rel="noreferrer">
-              {currentProvider?.accessMode === "managed" ? "Get personal key" : "Get API key"}
-              <ArrowUpRight size={14} />
-            </a>
-          </div>
-
-          <form className={styles.settingsForm} onSubmit={(event) => void saveSettings(event)}>
-            {currentProvider?.accessMode === "managed" ? (
-              <div className={`${styles.notice} ${styles.noticeSuccess}`} role="status">
-                <Check size={16} />
-                <span>
-                  Included Gemini is ready now. Adding your own key is optional and will replace the
-                  included model for your account until you remove it. Included calls use the
-                  host&apos;s Google AI Studio free-tier project and Google&apos;s free-tier data
-                  terms.
-                </span>
-              </div>
-            ) : null}
-            <label className={styles.field}>
-              <span>{currentProvider?.configured ? "Replace API key" : "API key"}</span>
-              <div className={styles.secretField}>
-                <input
-                  aria-describedby="provider-key-help"
-                  aria-invalid={currentProvider?.status === "invalid" || undefined}
-                  name={`${selectedProvider}-api-key`}
-                  type={showKey ? "text" : "password"}
-                  value={apiKey}
-                  onChange={(event) => {
-                    setApiKey(event.target.value);
-                    setDeleteArmed(false);
-                    setSettingsAction({ state: "idle" });
-                  }}
-                  autoComplete="new-password"
-                  spellCheck={false}
-                  placeholder={
-                    currentProvider?.configured ? "Leave blank to keep the saved key" : "Paste key"
-                  }
-                  required={
-                    !currentProvider?.configured && currentProvider?.accessMode !== "managed"
-                  }
-                />
-                <button
-                  type="button"
-                  aria-label={showKey ? "Hide API key" : "Show API key"}
-                  onClick={() => setShowKey((current) => !current)}
-                >
-                  {showKey ? <EyeOff size={17} /> : <Eye size={17} />}
-                </button>
-              </div>
-              <small id="provider-key-help">
-                Optional. Personal keys are encrypted and never shown again. Provider API usage is
-                billed to that key&apos;s account.
-              </small>
-            </label>
-
-            <label className={styles.field}>
-              <span>Model</span>
-              <select
-                value={selectedModelOption}
-                onChange={(event) => {
-                  setModel(event.target.value === customModelOption ? "" : event.target.value);
-                  setSettingsAction({ state: "idle" });
-                }}
-                disabled={!byokControlsEnabled}
-              >
-                {providerModelOptions.map((option) => (
-                  <option key={option.id} value={option.id}>
-                    {option.label}
-                  </option>
-                ))}
-                <option value={customModelOption}>Custom model ID…</option>
-              </select>
-              <small>
-                {byokControlsEnabled
-                  ? "Your key unlocks provider-specific model selection."
-                  : "The included model is fixed. Add your own key to choose another model."}
-              </small>
-            </label>
-
-            {selectedModelOption === customModelOption && byokControlsEnabled ? (
-              <label className={styles.field}>
-                <span>Custom model ID</span>
-                <input
-                  value={model}
-                  onChange={(event) => {
-                    setModel(event.target.value);
-                    setSettingsAction({ state: "idle" });
-                  }}
-                  minLength={1}
-                  maxLength={160}
-                  required
-                  spellCheck={false}
-                  placeholder="Enter the exact provider model ID"
-                />
-                <small>Use this for a model that is not yet listed above.</small>
-              </label>
-            ) : null}
-
-            <div className={styles.fieldRow}>
-              <label className={styles.field}>
-                <span>Requests per day</span>
-                <input
-                  type="number"
-                  min="1"
-                  max="500"
-                  value={dailyRequestLimit}
-                  onChange={(event) => {
-                    setDailyRequestLimit(event.target.value);
-                    setSettingsAction({ state: "idle" });
-                  }}
-                  required
-                  disabled={!byokControlsEnabled}
-                />
-              </label>
-              <label className={styles.field}>
-                <span>Max answer tokens</span>
-                <input
-                  type="number"
-                  min="64"
-                  max="8192"
-                  value={maxOutputTokens}
-                  onChange={(event) => {
-                    setMaxOutputTokens(event.target.value);
-                    setSettingsAction({ state: "idle" });
-                  }}
-                  required
-                  disabled={!byokControlsEnabled}
-                />
-              </label>
-            </div>
-
-            {currentProvider ? (
-              <div className={styles.usageLine}>
-                <span>
-                  <strong>{currentProvider.requestsRemaining}</strong> requests left today
-                </span>
-                <span>
-                  {currentProvider.requestsToday} of {currentProvider.dailyRequestLimit} used
-                </span>
-              </div>
-            ) : null}
-
-            {settingsAction.state === "success" || settingsAction.state === "error" ? (
-              <div
-                className={`${styles.notice} ${settingsAction.state === "error" ? styles.noticeError : styles.noticeSuccess}`}
-                role={settingsAction.state === "error" ? "alert" : "status"}
-              >
-                {settingsAction.state === "error" ? <AlertCircle size={16} /> : <Check size={16} />}
-                <span>{settingsAction.message}</span>
-              </div>
-            ) : null}
-
-            <div className={styles.formActions}>
-              <button
-                className={styles.primaryButton}
-                type="submit"
-                disabled={settingsBusy || !settingsDirty}
-              >
-                {settingsAction.state === "saving" ? (
-                  <LoaderCircle className={styles.spin} size={16} />
-                ) : (
-                  <Save size={16} />
-                )}
-                {settingsAction.state === "saving"
-                  ? "Saving securely"
-                  : settingsDirty
-                    ? "Save securely"
-                    : "Settings saved"}
-              </button>
-              {settingsDirty ? (
-                <button
-                  className={styles.secondaryButton}
-                  type="button"
-                  onClick={resetSettings}
-                  disabled={settingsBusy}
-                >
-                  Undo changes
-                </button>
-              ) : (
-                <button
-                  className={styles.secondaryButton}
-                  type="button"
-                  onClick={() => void testConnection()}
-                  disabled={!currentProvider?.configured || settingsBusy}
-                >
-                  {settingsAction.state === "testing" ? (
-                    <LoaderCircle className={styles.spin} size={16} />
-                  ) : (
-                    <Check size={16} />
-                  )}
-                  {settingsAction.state === "testing" ? "Verifying key" : "Verify key"}
-                </button>
-              )}
-            </div>
-
-            {currentProvider?.configured ? (
-              <div className={styles.removeRow}>
-                <span>
-                  {currentProvider.lastValidatedAt
-                    ? `Last verified ${readableTime(currentProvider.lastValidatedAt)}`
-                    : "Saved key has not been tested yet."}
-                </span>
-                <span className={styles.removeActions}>
-                  {deleteArmed ? (
-                    <button
-                      className={styles.cancelRemoval}
-                      type="button"
-                      onClick={() => setDeleteArmed(false)}
-                      disabled={settingsBusy}
-                    >
-                      Cancel
-                    </button>
-                  ) : null}
-                  <button
-                    type="button"
-                    onClick={() => void removeProvider()}
-                    disabled={settingsBusy || settingsDirty}
-                    title={
-                      settingsDirty
-                        ? "Undo or save your changes before removing this key"
-                        : undefined
-                    }
-                  >
-                    {settingsAction.state === "deleting" ? (
-                      <LoaderCircle className={styles.spin} size={14} />
-                    ) : (
-                      <Trash2 size={14} />
-                    )}
-                    {settingsAction.state === "deleting"
-                      ? "Removing key"
-                      : deleteArmed
-                        ? "Yes, remove key"
-                        : "Remove key"}
-                  </button>
-                </span>
-              </div>
-            ) : null}
-          </form>
-        </section>
-
-        <section
-          className={`${styles.panel} ${styles.analysisPanel}`}
-          aria-labelledby="analysis-heading"
-        >
-          <div className={styles.panelHeader}>
-            <div>
-              <p className={styles.eyebrow}>League-grounded analysis</p>
-              <h2 id="analysis-heading">Ask the film room</h2>
-              <span>Overview, Decision Desk, and league analytics go in with every request.</span>
-            </div>
-          </div>
-
-          <form className={styles.analysisForm} onSubmit={(event) => void runAnalysis(event)}>
-            <label className={styles.field}>
-              <span>League</span>
-              <select
-                value={selectedLeagueId}
-                onChange={(event) => setSelectedLeagueId(event.target.value)}
-                disabled={!hasLeagues}
-              >
-                {hasLeagues ? null : <option value="">Connect a league first</option>}
-                {load.leagues.leagues.map((league) => (
-                  <option key={league.id} value={league.id}>
-                    {league.name}
-                    {league.season ? ` · ${league.season.provider.toUpperCase()}` : ""}
-                  </option>
-                ))}
-              </select>
-            </label>
-
-            <div className={styles.quickQuestions} aria-label="Suggested questions">
-              {QUICK_QUESTIONS.map((suggestion) => (
-                <button key={suggestion} type="button" onClick={() => setQuestion(suggestion)}>
-                  {suggestion}
-                </button>
+              {hasLeagues ? null : <option value="">Connect a league first</option>}
+              {load.leagues.leagues.map((league) => (
+                <option key={league.id} value={league.id}>
+                  {league.name}
+                  {league.season ? ` · ${league.season.provider.toUpperCase()}` : ""}
+                </option>
               ))}
-            </div>
+            </select>
+          </label>
 
-            <label className={styles.field}>
-              <span>Your question</span>
-              <textarea
-                value={question}
-                onChange={(event) => setQuestion(event.target.value)}
-                minLength={3}
-                maxLength={2_000}
-                required
-              />
-            </label>
-
-            {!currentProvider?.available ? (
-              <div className={styles.inlineGate}>
-                <KeyRound size={17} />
-                <span>Save a {providerMeta.name} API key to analyze this league.</span>
-              </div>
-            ) : currentProvider.accessMode === "managed" ? (
-              <div className={`${styles.notice} ${styles.noticeSuccess}`} role="status">
-                <Check size={16} />
-                <span>Included Gemini is selected. No personal API key is required.</span>
-              </div>
-            ) : null}
-            {!hasLeagues ? (
-              <div className={styles.inlineGate}>
-                <AlertCircle size={17} />
-                <span>
-                  <Link href="/connections">Connect Yahoo or ESPN</Link> before requesting league
-                  analysis.
-                </span>
-              </div>
-            ) : null}
-
-            <button
-              className={`${styles.primaryButton} ${styles.analyzeButton}`}
-              type="submit"
-              disabled={!canAnalyze || analysisAction.state === "analyzing"}
-            >
-              {analysisAction.state === "analyzing" ? (
-                <LoaderCircle className={styles.spin} size={17} />
-              ) : (
-                <Send size={17} />
-              )}
-              {analysisAction.state === "analyzing" ? "Reviewing league data" : "Run analysis"}
-            </button>
-
-            {analysisAction.state === "error" ? (
-              <div className={`${styles.notice} ${styles.noticeError}`} role="alert">
-                <AlertCircle size={16} />
-                <span>{analysisAction.message}</span>
-              </div>
-            ) : null}
-          </form>
-
-          <div className={styles.answerRegion} aria-live="polite">
-            {analysisAction.state === "analyzing" ? (
-              <div className={styles.emptyAnswer} aria-busy="true">
-                <LoaderCircle className={styles.spin} size={25} aria-hidden="true" />
-                <strong>Reading the whole league</strong>
-                <span>Checking the answer against the latest saved decisions and analytics.</span>
-              </div>
-            ) : analysis ? (
-              <article className={styles.answer}>
-                <div className={styles.answerMeta}>
-                  <span>
-                    {PROVIDERS[analysis.provider].name} · {analysis.model}
-                  </span>
-                  <span>
-                    {analysis.accessMode === "managed" ? "Included access" : "Your API key"}
-                  </span>
-                  <span>
-                    {analysis.usage.inputTokens.toLocaleString()} in ·{" "}
-                    {analysis.usage.outputTokens.toLocaleString()} out
-                  </span>
-                </div>
-                <h3>{analysis.league.name}</h3>
-                <div className={styles.answerText}>
-                  <AiAnswerContent answer={analysis.answer} />
-                </div>
-                <footer>
-                  <p>
-                    Grounded in Laces Out’s own computed league data (overview, Decision Desk, and
-                    analytics), not the model’s outside knowledge.
-                  </p>
-                </footer>
-              </article>
-            ) : analysisAction.state === "error" ? (
-              <div className={styles.emptyAnswer} role="alert">
-                <AlertCircle size={25} aria-hidden="true" />
-                <strong>Analysis unavailable</strong>
-                <span>{analysisAction.message}</span>
-              </div>
-            ) : (
-              <div className={styles.emptyAnswer}>
-                <BrainCircuit size={25} />
-                <strong>Your answer will land here</strong>
-                <span>
-                  Models receive bounded, current league data. They receive no provider credentials
-                  and no ability to change Yahoo or ESPN.
-                </span>
-              </div>
-            )}
+          <div className={styles.quickQuestions} aria-label="Suggested questions">
+            {QUICK_QUESTIONS.map((suggestion) => (
+              <button key={suggestion} type="button" onClick={() => setQuestion(suggestion)}>
+                {suggestion}
+              </button>
+            ))}
           </div>
-        </section>
-      </div>
+
+          <label className={styles.field}>
+            <span>Your question</span>
+            <textarea
+              value={question}
+              onChange={(event) => setQuestion(event.target.value)}
+              minLength={3}
+              maxLength={2_000}
+              required
+            />
+          </label>
+
+          {!currentProvider?.available ? (
+            <div className={styles.inlineGate}>
+              <KeyRound size={17} />
+              <span>Save a {providerMeta.name} API key to analyze this league.</span>
+            </div>
+          ) : currentProvider.accessMode === "managed" ? (
+            <div className={`${styles.notice} ${styles.noticeSuccess}`} role="status">
+              <Check size={16} />
+              <span>Included Gemini is selected. No personal API key is required.</span>
+            </div>
+          ) : null}
+          {!hasLeagues ? (
+            <div className={styles.inlineGate}>
+              <AlertCircle size={17} />
+              <span>
+                <Link href="/connections">Connect Yahoo or ESPN</Link> before requesting league
+                analysis.
+              </span>
+            </div>
+          ) : null}
+
+          <button
+            className={`${styles.primaryButton} ${styles.analyzeButton}`}
+            type="submit"
+            disabled={!canAnalyze || analysisAction.state === "analyzing"}
+          >
+            {analysisAction.state === "analyzing" ? (
+              <LoaderCircle className={styles.spin} size={17} />
+            ) : (
+              <Send size={17} />
+            )}
+            {analysisAction.state === "analyzing" ? "Reviewing league data" : "Run analysis"}
+          </button>
+
+          {analysisAction.state === "error" ? (
+            <div className={`${styles.notice} ${styles.noticeError}`} role="alert">
+              <AlertCircle size={16} />
+              <span>{analysisAction.message}</span>
+            </div>
+          ) : null}
+        </form>
+
+        <div className={styles.answerRegion} aria-live="polite">
+          {analysisAction.state === "analyzing" ? (
+            <div className={styles.emptyAnswer} aria-busy="true">
+              <LoaderCircle className={styles.spin} size={25} aria-hidden="true" />
+              <strong>Reading the whole league</strong>
+              <span>Checking the answer against the latest saved decisions and analytics.</span>
+            </div>
+          ) : analysis ? (
+            <article className={styles.answer}>
+              <div className={styles.answerMeta}>
+                <span>
+                  {PROVIDERS[analysis.provider].name} · {analysis.model}
+                </span>
+                <span>
+                  {analysis.accessMode === "managed" ? "Included access" : "Your API key"}
+                </span>
+                <span>
+                  {analysis.usage.inputTokens.toLocaleString()} in ·{" "}
+                  {analysis.usage.outputTokens.toLocaleString()} out
+                </span>
+              </div>
+              <h3>{analysis.league.name}</h3>
+              <div className={styles.answerText}>
+                <AiAnswerContent answer={analysis.answer} />
+              </div>
+              <footer>
+                <p>
+                  Grounded in Laces Out’s own computed league data (overview, Decision Desk, and
+                  analytics), not the model’s outside knowledge.
+                </p>
+              </footer>
+            </article>
+          ) : analysisAction.state === "error" ? (
+            <div className={styles.emptyAnswer} role="alert">
+              <AlertCircle size={25} aria-hidden="true" />
+              <strong>Analysis unavailable</strong>
+              <span>{analysisAction.message}</span>
+            </div>
+          ) : (
+            <div className={styles.emptyAnswer}>
+              <BrainCircuit size={25} />
+              <strong>Your answer will land here</strong>
+              <span>
+                Models receive bounded, current league data. They receive no provider credentials
+                and no ability to change Yahoo or ESPN.
+              </span>
+            </div>
+          )}
+        </div>
+      </section>
       {selectedLeagueId ? (
         <AiCoachPanel
           leagueId={selectedLeagueId}

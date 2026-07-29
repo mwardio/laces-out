@@ -30,6 +30,7 @@ export function assessDataSourceHealth(
   let pendingSources = 0;
   let failingSources = 0;
   let staleSources = 0;
+  let unmatchedIdentitySources = 0;
   const degradedSourceKeys: string[] = [];
 
   for (const source of sources) {
@@ -39,6 +40,18 @@ export function assessDataSourceHealth(
     const sourceStale = checkedAt.getTime() - freshnessAnchor.getTime() > staleAfterMilliseconds;
     const qualityState = source.metadata.qualityState;
     const qualityDegraded = typeof qualityState === "string" && qualityState !== "publishable";
+    // The nflverse and FFC ingestions historically wrote only the boolean `publishable` pair, so a
+    // source that fell below its match-rate threshold never reached the `qualityState` branch above
+    // and was invisible to this job. Read the stored pair rather than calling the registry, so the
+    // job reports against the threshold that was actually in force when the artifact was written.
+    const matchRate = source.metadata.matchRate;
+    const minimumMatchRate = source.metadata.minimumPublishableMatchRate;
+    const identityDegraded =
+      typeof matchRate === "number" &&
+      typeof minimumMatchRate === "number" &&
+      Number.isFinite(matchRate) &&
+      Number.isFinite(minimumMatchRate) &&
+      matchRate < minimumMatchRate;
     const hasActiveProjectionTargets =
       typeof source.metadata.targetWeeks === "string" && source.metadata.targetWeeks !== "none";
     const lastPublishedAt =
@@ -60,7 +73,8 @@ export function assessDataSourceHealth(
 
     if (failing) failingSources += 1;
     if (stale) staleSources += 1;
-    if (failing || stale || qualityDegraded) {
+    if (identityDegraded) unmatchedIdentitySources += 1;
+    if (failing || stale || qualityDegraded || identityDegraded) {
       degradedSourceKeys.push(source.key);
     } else if (source.lastSuccessfulAt) {
       healthySources += 1;
@@ -78,6 +92,7 @@ export function assessDataSourceHealth(
     degradedSources: degradedSourceKeys.length,
     failingSources,
     staleSources,
+    unmatchedIdentitySources,
     degradedSourceKeys,
   };
 }

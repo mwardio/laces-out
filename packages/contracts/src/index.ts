@@ -1,5 +1,49 @@
 import { z } from "zod";
 
+import {
+  decisionExecutionSchema,
+  decisionPlayerSchema,
+  freshnessSchema,
+  projectionSourceObservedAtStatusSchema,
+  providerSchema,
+  tradePackageDecisionSchema,
+  unavailableDecisionSectionSchema,
+} from "./decision-primitives.js";
+
+// Decision primitives shared by the snapshot and the trade builder. A leaf module so the builder
+// contract can import them without a circular read through this barrel.
+export * from "./decision-primitives.js";
+
+// User-constructed trade package evaluation.
+export * from "./trade-evaluation.js";
+
+// Kept in its own module because it parses a stored provider blob rather than a wire contract.
+export * from "./league-rules.js";
+
+// Source-quality and unresolved-identity diagnostics.
+export * from "./data-quality.js";
+
+// Post-draft analysis envelope. Its own module because this barrel is a re-export surface rather
+// than a home for new domains.
+export * from "./draft-analysis.js";
+
+// Stored provenance for a persisted recommendation run (ADR 0003). Written by the worker's
+// recompute; read by the change-event feed.
+export * from "./recommendation-runs.js";
+
+// A versioned payload registry plus the feed's wire shapes, kept separate because it is a registry
+// rather than a single wire contract and must degrade rather than throw on an unknown version.
+export * from "./change-events.js";
+
+// Typed, read-only AI tool declarations and their ADR 0003 result provenance. Its own module so
+// the model-facing surface is versioned independently of the deterministic contracts it wraps.
+export * from "./ai-tools.js";
+
+// Six independent rest-of-season release facts. Deliberately not collapsible into one verdict:
+// conflating artifact state with shadow-audit state previously produced the wrong conclusion that
+// all ROS publication was disabled.
+export * from "./ros-release-status.js";
+
 // Mirrored here so the browser contract bundle has no runtime dependency on the domain package.
 // Response parsing fails closed if service vocabulary ever drifts from this wire contract.
 const NFL_POSITIONS = ["QB", "RB", "WR", "TE", "K", "DST", "DL", "LB", "DB", "IDP"] as const;
@@ -68,9 +112,6 @@ const ROSTER_SLOT_TYPES = [
   "TAXI",
 ] as const;
 
-export const providerSchema = z.enum(["yahoo", "espn", "manual"]);
-export type Provider = z.infer<typeof providerSchema>;
-
 export const connectionHealthSchema = z.enum([
   "pending",
   "healthy",
@@ -91,18 +132,6 @@ export const connectionSummarySchema = z.object({
   message: z.string().nullable(),
 });
 export type ConnectionSummary = z.infer<typeof connectionSummarySchema>;
-
-export const freshnessSchema = z.object({
-  state: z.enum(["fresh", "aging", "stale", "missing"]),
-  observedAt: z.iso.datetime().nullable(),
-  label: z.string(),
-});
-export type Freshness = z.infer<typeof freshnessSchema>;
-
-export const projectionSourceObservedAtStatusSchema = z.enum(["verified", "unverified"]);
-export type ProjectionSourceObservedAtStatus = z.infer<
-  typeof projectionSourceObservedAtStatusSchema
->;
 
 export const leagueMembershipRoleSchema = z.enum(["owner", "commissioner", "manager", "viewer"]);
 
@@ -1379,59 +1408,6 @@ export const draftMutationResponseSchema = z
   .strict();
 export type DraftMutationResponse = z.infer<typeof draftMutationResponseSchema>;
 
-export const decisionUnavailableCodeSchema = z.enum([
-  "NO_SEASON",
-  "TEAM_UNCLAIMED",
-  "CLAIMED_TEAM_NOT_IN_SEASON",
-  "ROSTER_MISSING",
-  "ROSTER_INCOMPLETE",
-  "SLOT_RULES_MISSING",
-  "SLOT_RULES_UNSUPPORTED",
-  "PROJECTIONS_MISSING",
-  "PROJECTION_COVERAGE_INCOMPLETE",
-  "OPPONENT_DATA_MISSING",
-  "CANDIDATE_POOL_EMPTY",
-  "LEAGUE_SIZE_UNSUPPORTED",
-  "ENGINE_INFEASIBLE",
-]);
-export type DecisionUnavailableCode = z.infer<typeof decisionUnavailableCodeSchema>;
-
-export const decisionUnavailableReasonSchema = z
-  .object({
-    code: decisionUnavailableCodeSchema,
-    message: z.string().min(1),
-  })
-  .strict();
-export type DecisionUnavailableReason = z.infer<typeof decisionUnavailableReasonSchema>;
-
-const decisionPlayerSchema = z
-  .object({
-    id: z.string().uuid(),
-    name: z.string().min(1),
-    positions: z.array(z.enum(NFL_POSITIONS)).min(1),
-    nflTeam: z.enum(NFL_TEAMS).nullable(),
-    status: z.enum(PLAYER_STATUSES).nullable(),
-    projectedPoints: z.number().finite(),
-  })
-  .strict();
-export type DecisionPlayer = z.infer<typeof decisionPlayerSchema>;
-
-const unavailableDecisionSectionSchema = z
-  .object({
-    state: z.literal("unavailable"),
-    reasons: z.array(decisionUnavailableReasonSchema).min(1),
-  })
-  .strict();
-
-const decisionExecutionSchema = z
-  .object({
-    mode: z.literal("provider-required"),
-    provider: providerSchema,
-    label: z.string().min(1),
-    url: z.url().nullable(),
-  })
-  .strict();
-
 const lineupAssignmentDecisionSchema = z
   .object({
     slotId: z.string().min(1),
@@ -1513,23 +1489,6 @@ export const waiverDecisionSectionSchema = z.discriminatedUnion("state", [
 ]);
 export type WaiverDecisionSection = z.infer<typeof waiverDecisionSectionSchema>;
 
-const tradePackageDecisionSchema = z
-  .object({
-    id: z.string().min(1),
-    partner: z.object({ id: z.string().uuid(), name: z.string().min(1) }).strict(),
-    shape: z.enum(["1-for-1", "2-for-1", "1-for-2"]),
-    send: z.array(decisionPlayerSchema).min(1).max(2),
-    receive: z.array(decisionPlayerSchema).min(1).max(2),
-    forcedDropsForUser: z.array(decisionPlayerSchema).max(2),
-    forcedDropsForPartner: z.array(decisionPlayerSchema).max(2),
-    userGain: z.number().finite(),
-    partnerGain: z.number().finite(),
-    totalGain: z.number().finite(),
-    fairnessGap: z.number().finite().nonnegative(),
-    mutuallyBeneficial: z.boolean(),
-  })
-  .strict();
-
 export const tradeDecisionSectionSchema = z.discriminatedUnion("state", [
   unavailableDecisionSectionSchema,
   z
@@ -1568,6 +1527,10 @@ export const inSeasonDecisionSnapshotSchema = z
       .nullable(),
     provenance: z
       .object({
+        /** ADR 0003: every recommendation-shaped output retains its algorithm version… */
+        algorithmVersion: z.string().min(1).max(120),
+        /** …and the checksum of the inputs it was computed from. */
+        inputChecksum: z.string().regex(/^[0-9a-f]{64}$/u),
         leagueLastSyncedAt: z.iso.datetime().nullable(),
         rosterEffectiveAt: z.iso.datetime().nullable(),
         projectionSet: z
@@ -1856,6 +1819,11 @@ export const leagueAnalyticsUnavailableCodeSchema = z.enum([
   "TEAM_UNCLAIMED",
   "OPPONENT_MISSING",
   "AWARDS_WEEK_UNAVAILABLE",
+  "PLAYOFF_RULES_MISSING",
+  "PLAYOFF_FIELD_UNSUPPORTED",
+  "PLAYOFF_SEASON_COMPLETE",
+  "PLAYOFF_SCHEDULE_INCOMPLETE",
+  "PLAYOFF_SIMULATION_UNSUPPORTED",
 ]);
 export type LeagueAnalyticsUnavailableCode = z.infer<typeof leagueAnalyticsUnavailableCodeSchema>;
 
@@ -2163,6 +2131,63 @@ export const leagueWeeklyAwardsSectionSchema = z.discriminatedUnion("state", [
 ]);
 export type LeagueWeeklyAwardsSection = z.infer<typeof leagueWeeklyAwardsSectionSchema>;
 
+const leaguePlayoffSeedProbabilitySchema = z
+  .object({
+    seed: z.number().int().min(1).max(32),
+    probability: z.number().min(0).max(1),
+  })
+  .strict();
+
+const leaguePlayoffOddsTeamSchema = z
+  .object({
+    team: leagueAnalyticsTeamSchema,
+    playoffProbability: z.number().min(0).max(1),
+    /**
+     * Sampling uncertainty of the simulation itself. It is deliberately not model uncertainty: a
+     * tiny standard error says the Monte Carlo run converged, never that the forecast is right.
+     */
+    monteCarloStandardError: z.number().min(0).max(1),
+    expectedSeed: z.number().finite().positive(),
+    /** One entry per league seed, so a distribution is read whole rather than as a single number. */
+    seedProbabilities: z.array(leaguePlayoffSeedProbabilitySchema).max(32),
+    averageFinalWins: z.number().finite().nonnegative(),
+    averageFinalLosses: z.number().finite().nonnegative(),
+    averageFinalTies: z.number().finite().nonnegative(),
+    averageFinalPointsFor: z.number().finite(),
+    scoringMean: z.number().finite(),
+    scoringStandardDeviation: z.number().finite().nonnegative(),
+  })
+  .strict();
+
+export const leaguePlayoffOddsSectionSchema = z.discriminatedUnion("state", [
+  leagueAnalyticsUnavailableSectionSchema,
+  z
+    .object({
+      state: z.literal("available"),
+      playoffTeamCount: z.number().int().min(1).max(32),
+      /**
+       * The reproducibility pair required by ADR 0003. The seed is derived only from league
+       * season, week, and matchup snapshot, so re-running these two values against the same
+       * stored state replays this exact result.
+       */
+      seed: z.string().min(1).max(300),
+      simulations: z.number().int().positive().max(1_000_000),
+      /** The matchup snapshot the seed was derived from, so a replay can be pinned to it. */
+      matchupSnapshotId: z.string().uuid().nullable(),
+      remainingMatchups: z.number().int().nonnegative(),
+      /** Where each team's future weekly scoring mean and volatility came from. */
+      forecastBasis: analyticsMetricDefinitionSchema,
+      teams: z.array(leaguePlayoffOddsTeamSchema).max(32),
+      definition: z.string().min(1).max(1_000),
+      factors: z.array(z.string().min(1).max(300)).max(12),
+      tieBreakers: z.array(z.string().min(1).max(300)).max(12),
+      /** How the engine itself defines its standard error, kept separate from forecast basis. */
+      samplingErrorDefinition: z.string().min(1).max(1_000).nullable(),
+    })
+    .strict(),
+]);
+export type LeaguePlayoffOddsSection = z.infer<typeof leaguePlayoffOddsSectionSchema>;
+
 export const leagueAnalyticsSnapshotSchema = z
   .object({
     generatedAt: z.iso.datetime(),
@@ -2223,6 +2248,11 @@ export const leagueAnalyticsSnapshotSchema = z
     positional: leaguePositionalAnalyticsSectionSchema,
     opponentScout: leagueOpponentScoutSectionSchema,
     weeklyAwards: leagueWeeklyAwardsSectionSchema,
+    /**
+     * Optional only so snapshots authored before playoff odds existed still parse. The live
+     * service always emits it, in one state or the other.
+     */
+    playoffOdds: leaguePlayoffOddsSectionSchema,
   })
   .strict();
 export type LeagueAnalyticsSnapshot = z.infer<typeof leagueAnalyticsSnapshotSchema>;

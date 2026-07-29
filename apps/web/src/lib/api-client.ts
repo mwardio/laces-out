@@ -1,8 +1,11 @@
 import {
   aiAnalysisResponseSchema,
+  aiFeatureOutcomeWithToolsSchema,
   aiFeatureResponseSchema,
   aiProviderConfigurationSchema,
+  aiToolUseSchema,
   aiProviderListResponseSchema,
+  draftAnalysisResponseSchema,
   draftMarketBaselineSchema,
   draftMutationResponseSchema,
   draftSessionSnapshotSchema,
@@ -27,11 +30,13 @@ import {
   scheduleResponseSchema,
   statsCenterPlayerDetailResponseSchema,
   statsCenterResponseSchema,
+  tradeEvaluationResponseSchema,
   type AiAnalysisResponse,
   type AiFeatureName,
   type AiFeatureResponse,
   type AiProviderConfiguration,
   type AiProviderListResponse,
+  type DraftAnalysisResponse,
   type DraftMutationResponse,
   type DraftMarketBaseline,
   type DraftSessionSnapshot,
@@ -53,6 +58,14 @@ import {
   type ScheduleResponse,
   type StatsCenterPlayerDetailResponse,
   type StatsCenterResponse,
+  type TradeEvaluationResponse,
+} from "@fantasy/contracts";
+import {
+  dataQualityResponseSchema,
+  unresolvedIdentityResponseSchema,
+  type DataQualityResponse,
+  type DataQualitySource,
+  type UnresolvedIdentityResponse,
 } from "@fantasy/contracts";
 import {
   rankingListSchema,
@@ -60,12 +73,52 @@ import {
   type RankingList,
   type RankingVersion,
 } from "@fantasy/rankings/model";
+import type { z } from "zod";
 
-export { parseRosProjectionStatus, type RosProjectionStatus } from "./ros-projection-status";
+export { parseRosReleaseStatus, type RosReleaseStatus } from "./ros-release-status";
+export { parseChangeFeed, prioritizeChangeEvents } from "./change-feed";
+export type {
+  ChangeEvent,
+  ChangeEventFeedResponse,
+  ChangeEventReceiptResponse,
+} from "@fantasy/contracts";
 
 const fallbackApiUrl = "http://localhost:4000";
 
-export const apiBaseUrl = (process.env.NEXT_PUBLIC_API_URL ?? fallbackApiUrl).replace(/\/+$/, "");
+const configuredApiBaseUrl = (process.env.NEXT_PUBLIC_API_URL ?? fallbackApiUrl).replace(
+  /\/+$/,
+  "",
+);
+
+/**
+ * Where browser requests go. One image is served from more than one domain, so a base URL baked in
+ * at build time would send every browser on the second domain cross-origin. In same-origin mode the
+ * browser uses a relative `/v1` path instead and reaches whichever domain it loaded the app from;
+ * the gateway in front of both domains routes `/v1` to the API. Anything that is not a browser —
+ * server rendering, local development, tests — keeps the configured absolute base.
+ */
+export function resolveApiBaseUrl(
+  configured: string,
+  sameOrigin: string | undefined,
+  inBrowser: boolean,
+): string {
+  return sameOrigin === "true" && inBrowser ? "" : configured;
+}
+
+export const apiBaseUrl = resolveApiBaseUrl(
+  configuredApiBaseUrl,
+  process.env.NEXT_PUBLIC_API_SAME_ORIGIN,
+  typeof window !== "undefined",
+);
+
+/**
+ * An absolute origin, for the few places a relative path cannot work: a URL handed to code running
+ * on another site (the ESPN bookmark), or a `new URL()` that has no base to resolve against.
+ */
+export function absoluteApiOrigin(): string {
+  if (apiBaseUrl !== "") return apiBaseUrl;
+  return typeof window === "undefined" ? configuredApiBaseUrl : window.location.origin;
+}
 
 export interface SessionUser {
   readonly id: string;
@@ -104,6 +157,7 @@ export type {
   AiFeatureResponse,
   AiProviderConfiguration,
   AiProviderListResponse,
+  DraftAnalysisResponse,
   DraftMutationResponse,
   DraftMarketBaseline,
   DraftSessionSnapshot,
@@ -127,6 +181,9 @@ export type {
   StatsCenterResponse,
   RankingList,
   RankingVersion,
+  DataQualityResponse,
+  DataQualitySource,
+  UnresolvedIdentityResponse,
 };
 
 export function parseAiProviderList(value: unknown): AiProviderListResponse | null {
@@ -144,8 +201,21 @@ export function parseAiAnalysis(value: unknown): AiAnalysisResponse | null {
   return result.success ? result.data : null;
 }
 
-export function parseAiFeature(value: unknown): AiFeatureResponse | null {
-  const result = aiFeatureResponseSchema.safeParse(value);
+/**
+ * The feature response, widened by WP7's tool-use block.
+ *
+ * Parsed with the extended schema rather than the base one: `aiFeatureResponseSchema` is strict, so
+ * a response carrying `toolUse` would fail the base parse and silently blank the Film Room.
+ */
+const aiFeatureWithToolUseResponseSchema = aiFeatureResponseSchema.extend({
+  outcome: aiFeatureOutcomeWithToolsSchema,
+  toolUse: aiToolUseSchema,
+});
+
+export type AiFeatureWithToolUseResponse = z.infer<typeof aiFeatureWithToolUseResponseSchema>;
+
+export function parseAiFeature(value: unknown): AiFeatureWithToolUseResponse | null {
+  const result = aiFeatureWithToolUseResponseSchema.safeParse(value);
   return result.success ? result.data : null;
 }
 
@@ -161,6 +231,11 @@ export function parseDraftMutation(value: unknown): DraftMutationResponse | null
 
 export function parseDraftMarketBaseline(value: unknown): DraftMarketBaseline | null {
   const result = draftMarketBaselineSchema.safeParse(value);
+  return result.success ? result.data : null;
+}
+
+export function parseDraftAnalysis(value: unknown): DraftAnalysisResponse | null {
+  const result = draftAnalysisResponseSchema.safeParse(value);
   return result.success ? result.data : null;
 }
 
@@ -197,6 +272,11 @@ export function parseLeagueDashboard(value: unknown): LeagueDashboard | null {
 
 export function parseInSeasonDecisionSnapshot(value: unknown): InSeasonDecisionSnapshot | null {
   const result = inSeasonDecisionSnapshotSchema.safeParse(value);
+  return result.success ? result.data : null;
+}
+
+export function parseTradeEvaluationResponse(value: unknown): TradeEvaluationResponse | null {
+  const result = tradeEvaluationResponseSchema.safeParse(value);
   return result.success ? result.data : null;
 }
 
@@ -297,5 +377,20 @@ export function parseRankingListResponse(value: unknown): readonly RankingList[]
 export function parseRankingVersionResponse(value: unknown): RankingVersion | null {
   if (!isRecord(value)) return null;
   const result = rankingVersionSchema.safeParse(value.version);
+  return result.success ? result.data : null;
+}
+
+/**
+ * Source identity quality. Both responses are validated with the API's own schemas: the summary
+ * carries no source rows at all, and `unresolvedIdentitySampleSchema` is `.strict()`, so a future
+ * free-text column added upstream fails parsing here rather than rendering.
+ */
+export function parseDataQualitySources(value: unknown): DataQualityResponse | null {
+  const result = dataQualityResponseSchema.safeParse(value);
+  return result.success ? result.data : null;
+}
+
+export function parseUnresolvedIdentities(value: unknown): UnresolvedIdentityResponse | null {
+  const result = unresolvedIdentityResponseSchema.safeParse(value);
   return result.success ? result.data : null;
 }

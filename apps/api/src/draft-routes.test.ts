@@ -1,5 +1,9 @@
 import { loadEnvironment } from "@fantasy/config";
-import type { DraftMutationResponse, DraftSessionSnapshot } from "@fantasy/contracts";
+import type {
+  DraftAnalysisResponse,
+  DraftMutationResponse,
+  DraftSessionSnapshot,
+} from "@fantasy/contracts";
 import { describe, expect, it, vi } from "vitest";
 
 import { buildApp } from "./app.js";
@@ -307,6 +311,207 @@ describe("draft session routes", () => {
     expect(correction.statusCode).toBe(201);
     expect(correction.json()).toMatchObject({ appendedSequences: [2, 3] });
     expect(correctEvent).toHaveBeenCalledWith(USER_ID, DRAFT_ID, correctionPayload);
+    await app.close();
+  });
+});
+
+const analysis: DraftAnalysisResponse = {
+  draftId: DRAFT_ID,
+  sequence: 0,
+  generatedAt: NOW,
+  algorithmVersion: "draft-analyzer-v1",
+  inputChecksum: "c".repeat(64),
+  mode: "SNAKE",
+  draftStatus: "IN_PROGRESS",
+  market: {
+    state: "unavailable",
+    reason: "source-not-ready",
+    detail: "The daily draft-market source has not completed its first refresh.",
+  },
+  projections: {
+    state: "unavailable",
+    reason: "NO_COMPATIBLE_SET",
+    detail:
+      "No full-season projection set scored under league:ppr:v3 was published before this draft started.",
+    candidatesConsidered: 0,
+  },
+  teams: [
+    {
+      mode: "SNAKE",
+      teamId: TEAM_A_ID,
+      name: "Alpha",
+      roster: {
+        rosteredPlayers: 0,
+        totalRosterSlots: 1,
+        openRosterSlots: 1,
+        starterSlots: 1,
+        coveredStarterSlots: 0,
+        openStarterSlots: [{ slotId: "slot:qb:1", type: "QB", eligiblePositions: ["QB"] }],
+        primaryPositionCounts: [],
+        warnings: [
+          {
+            code: "OPEN_STARTER_SLOTS",
+            message: "1 starter slot is not covered by the current roster.",
+          },
+        ],
+      },
+      selections: [],
+      marketSummary: {
+        status: "UNAVAILABLE",
+        coveredSelections: 0,
+        totalSelections: 0,
+        averagePickVsAdp: null,
+        values: 0,
+        reaches: 0,
+      },
+      teamStrength: {
+        status: "UNAVAILABLE",
+        reason: "NO_PROJECTIONS",
+        missingPlayerIds: [],
+        message: "No league-scored projection set was supplied.",
+      },
+      warnings: [],
+    },
+  ],
+  warnings: [
+    {
+      code: "MARKET_UNAVAILABLE",
+      message: "The draft-market baseline is unavailable: source-not-ready.",
+    },
+    {
+      code: "PROJECTIONS_UNAVAILABLE",
+      message:
+        "No full-season projection set scored under league:ppr:v3 was published before this draft started.",
+    },
+  ],
+};
+
+describe("draft analysis route", () => {
+  it("returns the unknown-draft 404 when a non-member reads draft analysis", async () => {
+    const getAnalysis = vi.fn(() =>
+      Promise.reject(
+        new DraftSessionError(
+          "DRAFT_NOT_FOUND",
+          "The draft session was not found for this account.",
+        ),
+      ),
+    );
+    const app = await buildApp({
+      environment: loadEnvironment({ NODE_ENV: "test" }),
+      logger: false,
+      requireAuthentication: true,
+      authService: authenticatedService(),
+      draftAnalysis: { getAnalysis },
+    });
+
+    const response = await app.inject({
+      method: "GET",
+      url: `/v1/drafts/${DRAFT_ID}/analysis`,
+      headers: { cookie: COOKIE },
+    });
+
+    expect(response.statusCode).toBe(404);
+    expect(response.headers["content-type"]).toContain("application/problem+json");
+    expect(response.json()).toMatchObject({
+      type: "https://fantasy.local/problems/draft-not-found",
+      title: "Draft request failed",
+      status: 404,
+      detail: "The draft session was not found for this account.",
+      code: "DRAFT_NOT_FOUND",
+    });
+    expect(getAnalysis).toHaveBeenCalledWith(USER_ID, DRAFT_ID);
+    await app.close();
+  });
+
+  it("matches the unknown-draft body served by the draft session route", async () => {
+    const notFound = () =>
+      Promise.reject(
+        new DraftSessionError(
+          "DRAFT_NOT_FOUND",
+          "The draft session was not found for this account.",
+        ),
+      );
+    const app = await buildApp({
+      environment: loadEnvironment({ NODE_ENV: "test" }),
+      logger: false,
+      requireAuthentication: true,
+      authService: authenticatedService(),
+      draftSessions: draftPort({ getSession: vi.fn(notFound) }),
+      draftAnalysis: { getAnalysis: vi.fn(notFound) },
+    });
+
+    const [session, report] = await Promise.all([
+      app.inject({
+        method: "GET",
+        url: `/v1/drafts/${DRAFT_ID}`,
+        headers: { cookie: COOKIE },
+      }),
+      app.inject({
+        method: "GET",
+        url: `/v1/drafts/${DRAFT_ID}/analysis`,
+        headers: { cookie: COOKIE },
+      }),
+    ]);
+
+    const withoutCorrelation = (body: Record<string, unknown>): Record<string, unknown> => {
+      const rest = { ...body };
+      delete rest.correlationId;
+      return rest;
+    };
+    const reportBody = report.json<Record<string, unknown>>();
+    expect(report.statusCode).toBe(session.statusCode);
+    expect(withoutCorrelation(reportBody)).toEqual(
+      withoutCorrelation(session.json<Record<string, unknown>>()),
+    );
+    expect(reportBody.correlationId).toEqual(expect.any(String));
+    await app.close();
+  });
+
+  it("requires authentication before serving draft analysis", async () => {
+    const getAnalysis = vi.fn(() => Promise.resolve(analysis));
+    const app = await buildApp({
+      environment: loadEnvironment({ NODE_ENV: "test" }),
+      logger: false,
+      requireAuthentication: true,
+      authService: authenticatedService(),
+      draftAnalysis: { getAnalysis },
+    });
+
+    const denied = await app.inject({ method: "GET", url: `/v1/drafts/${DRAFT_ID}/analysis` });
+    expect(denied.statusCode).toBe(401);
+    expect(getAnalysis).not.toHaveBeenCalled();
+
+    const allowed = await app.inject({
+      method: "GET",
+      url: `/v1/drafts/${DRAFT_ID}/analysis`,
+      headers: { cookie: COOKIE },
+    });
+    expect(allowed.statusCode).toBe(200);
+    expect(allowed.json()).toMatchObject({
+      draftId: DRAFT_ID,
+      mode: "SNAKE",
+      draftStatus: "IN_PROGRESS",
+      projections: { state: "unavailable", reason: "NO_COMPATIBLE_SET" },
+    });
+    await app.close();
+  });
+
+  it("reports draft analysis unavailable when the port is not configured", async () => {
+    const app = await buildApp({
+      environment: loadEnvironment({ NODE_ENV: "test" }),
+      logger: false,
+      requireAuthentication: true,
+      authService: authenticatedService(),
+    });
+
+    const response = await app.inject({
+      method: "GET",
+      url: `/v1/drafts/${DRAFT_ID}/analysis`,
+      headers: { cookie: COOKIE },
+    });
+
+    expect(response.statusCode).toBe(503);
+    expect(response.json()).toMatchObject({ title: "Draft sessions are not configured" });
     await app.close();
   });
 });

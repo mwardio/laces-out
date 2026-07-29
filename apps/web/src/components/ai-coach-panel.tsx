@@ -1,11 +1,6 @@
 "use client";
 
-import type {
-  AiFeatureName,
-  AiFeatureResponse,
-  AiProviderConfiguration,
-  AiProviderName,
-} from "@fantasy/contracts";
+import type { AiFeatureName, AiProviderConfiguration, AiProviderName } from "@fantasy/contracts";
 import {
   AlertCircle,
   ArrowRight,
@@ -23,7 +18,12 @@ import {
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 
-import { apiBaseUrl, parseAiFeature, parseAiProviderList } from "../lib/api-client";
+import {
+  apiBaseUrl,
+  parseAiFeature,
+  parseAiProviderList,
+  type AiFeatureWithToolUseResponse,
+} from "../lib/api-client";
 import { AiAnswerContent } from "./ai-answer-content";
 import styles from "./ai-coach-panel.module.css";
 
@@ -113,7 +113,7 @@ type ResultState =
   | { readonly state: "idle" }
   | { readonly state: "loading" }
   | { readonly state: "error"; readonly message: string }
-  | { readonly state: "ready"; readonly result: AiFeatureResponse };
+  | { readonly state: "ready"; readonly result: AiFeatureWithToolUseResponse };
 
 export interface AiCoachPanelProps {
   readonly leagueId: string;
@@ -135,7 +135,7 @@ async function responseMessage(response: Response): Promise<string> {
   return `The AI review could not be generated (${response.status}).`;
 }
 
-function demoResult(feature: AiFeatureName, leagueId: string): AiFeatureResponse {
+function demoResult(feature: AiFeatureName, leagueId: string): AiFeatureWithToolUseResponse {
   return {
     feature,
     outcome: "generated",
@@ -147,7 +147,52 @@ function demoResult(feature: AiFeatureName, leagueId: string): AiFeatureResponse
     answer: DEMO_ANSWERS[feature],
     generatedAt: new Date().toISOString(),
     usage: { inputTokens: 0, outputTokens: 0 },
+    toolUse: { state: "not-requested" },
   };
+}
+
+/**
+ * Every tool-use state gets a sentence. None of them is a spinner and none of them is silence: a
+ * member whose answer came from the engine rather than the model is entitled to know that, and so
+ * is a member whose chosen model cannot call tools at all.
+ */
+function toolUseNote(toolUse: AiFeatureWithToolUseResponse["toolUse"]): string | null {
+  switch (toolUse.state) {
+    case "used": {
+      const names = toolUse.calls
+        .filter((call) => call.state === "ok")
+        .map((call) => call.name)
+        .join(", ");
+      const versions = `tools ${toolUse.contractVersion} · prompt ${toolUse.promptVersion}`;
+      return names
+        ? `Retrieved through ${names} (${versions}).`
+        : `No deterministic tool result was retrieved (${versions}).`;
+    }
+    case "unsupported":
+      return toolUse.reason;
+    case "budget-exhausted":
+      return "Your daily AI allowance ran out mid-answer, so this is the deterministic engine result with no model summary.";
+    case "turn-limit":
+      return "The review reached its per-request step limit, so this is the deterministic engine result.";
+    case "wall-clock":
+      return "The review reached its per-request time limit, so this is the deterministic engine result.";
+    default:
+      return null;
+  }
+}
+
+/** The ADR 0003 pair behind each retrieved result, shown rather than implied. */
+function toolProvenanceLines(toolUse: AiFeatureWithToolUseResponse["toolUse"]): readonly string[] {
+  if (toolUse.state !== "used") return [];
+  return toolUse.calls.flatMap((call) => {
+    if (!call.provenance) return [];
+    const warnings = call.provenance.warnings.length
+      ? ` · ${call.provenance.warnings.join(" · ")}`
+      : "";
+    return [
+      `${call.name}: ${call.provenance.algorithmVersion} · input ${call.provenance.inputChecksum.slice(0, 12)}… (${call.provenance.checksumScope})${warnings}`,
+    ];
+  });
 }
 
 export function AiCoachPanel({
@@ -347,7 +392,7 @@ export function AiCoachPanel({
               {result.state !== "loading" ? <ArrowRight size={15} aria-hidden="true" /> : null}
             </button>
           </div>
-          <Link className={styles.settingsLink} href="/film-room">
+          <Link className={styles.settingsLink} href="/settings">
             Provider and model settings <ArrowRight size={13} aria-hidden="true" />
           </Link>
         </div>
@@ -400,6 +445,16 @@ export function AiCoachPanel({
                   Grounded in Laces Out’s own computed league data (overview, Decision Desk, and
                   analytics), not the model’s outside knowledge.
                 </p>
+                {!demo && toolUseNote(result.result.toolUse) ? (
+                  <p className={styles.toolNote}>{toolUseNote(result.result.toolUse)}</p>
+                ) : null}
+                {!demo && toolProvenanceLines(result.result.toolUse).length > 0 ? (
+                  <ul className={styles.toolProvenance}>
+                    {toolProvenanceLines(result.result.toolUse).map((line) => (
+                      <li key={line}>{line}</li>
+                    ))}
+                  </ul>
+                ) : null}
                 {!demo && result.result.usage.outputTokens === 0 ? (
                   <small>No model call needed</small>
                 ) : null}

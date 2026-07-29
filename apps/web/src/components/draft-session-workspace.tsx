@@ -81,6 +81,7 @@ import {
 } from "../lib/draft-mock";
 import { LatestRequest } from "../lib/latest-request";
 import { useByeWeeks } from "../lib/use-bye-weeks";
+import { DraftAnalysisPanel } from "./draft-analysis-panel";
 import { DraftWorkspace as DemoDraftWorkspace } from "./draft-workspace";
 
 /** Renders nothing when the schedule cannot affirm a bye, rather than showing a guess. */
@@ -2819,6 +2820,13 @@ export function DraftSessionWorkspace() {
           {liveStatus.ledgerNote}
         </p>
       </section>
+
+      <DraftAnalysisPanel
+        draftId={session.id}
+        sequence={session.sequence}
+        mode={session.config.mode}
+        enabled={!localMock}
+      />
     </div>
   );
 }

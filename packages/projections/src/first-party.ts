@@ -546,6 +546,15 @@ const COMPONENT_CAPS: Readonly<Record<string, number>> = {
   points_allowed_35_plus_probability: 1,
   points_allowed_35_45_probability: 1,
   points_allowed_46_plus_probability: 1,
+  yards_allowed_0_99_probability: 1,
+  yards_allowed_100_199_probability: 1,
+  yards_allowed_200_299_probability: 1,
+  yards_allowed_300_349_probability: 1,
+  yards_allowed_350_399_probability: 1,
+  yards_allowed_400_449_probability: 1,
+  yards_allowed_450_499_probability: 1,
+  yards_allowed_500_549_probability: 1,
+  yards_allowed_550_plus_probability: 1,
 };
 
 const COMMON_TEAM_DEFENSE_POINTS_ALLOWED_BUCKETS = [
@@ -599,7 +608,55 @@ const TEAM_DEFENSE_POINTS_ALLOWED_BUCKETS = [
   ).values(),
 ] as const;
 
-const TEAM_DEFENSE_COMPONENTS = [
+/**
+ * ESPN's evidence-established yards-allowed ladder (provider IDs 128-136 in this order;
+ * `docs/ROS_GATE_AND_DST_PLAN.md` §0.1). The 300-349 tier gets a component even though no
+ * league prices it — the ladder must partition the yards axis or the probabilities cannot sum to 1.
+ */
+const ESPN_TEAM_DEFENSE_YARDS_ALLOWED_BUCKETS = [
+  { component: "yards_allowed_0_99_probability", minimum: 0, maximum: 99 },
+  { component: "yards_allowed_100_199_probability", minimum: 100, maximum: 199 },
+  { component: "yards_allowed_200_299_probability", minimum: 200, maximum: 299 },
+  { component: "yards_allowed_300_349_probability", minimum: 300, maximum: 349 },
+  { component: "yards_allowed_350_399_probability", minimum: 350, maximum: 399 },
+  { component: "yards_allowed_400_449_probability", minimum: 400, maximum: 449 },
+  { component: "yards_allowed_450_499_probability", minimum: 450, maximum: 499 },
+  { component: "yards_allowed_500_549_probability", minimum: 500, maximum: 549 },
+  {
+    component: "yards_allowed_550_plus_probability",
+    minimum: 550,
+    maximum: Number.POSITIVE_INFINITY,
+  },
+] as const;
+
+/**
+ * One ESPN group today. The group shape mirrors `TEAM_DEFENSE_POINTS_ALLOWED_BUCKET_GROUPS` so
+ * Yahoo's 12-bucket yards-allowed ladder (provider IDs 70-81) can be admitted later without
+ * restructuring; Yahoo's bracket boundaries are not evidence-established and stay unsupported.
+ */
+const TEAM_DEFENSE_YARDS_ALLOWED_BUCKET_GROUPS = [
+  {
+    buckets: ESPN_TEAM_DEFENSE_YARDS_ALLOWED_BUCKETS,
+    fallbackComponent: "yards_allowed_300_349_probability",
+  },
+] as const;
+
+const TEAM_DEFENSE_YARDS_ALLOWED_BUCKETS = [
+  ...new Map(
+    TEAM_DEFENSE_YARDS_ALLOWED_BUCKET_GROUPS.flatMap((group) =>
+      group.buckets.map((bucket) => [bucket.component, bucket] as const),
+    ),
+  ).values(),
+] as const;
+
+/**
+ * Every D/ST component the model estimates from history. The de minimis constants below are NOT
+ * here on purpose: they are not fitted, not calibrated and not graded, so keeping them out of this
+ * list is what makes every existing defense number — the confidence denominator, the calibration
+ * intervals, the backtest residual and metric streams — byte-identical to what it was before they
+ * were introduced.
+ */
+const TEAM_DEFENSE_MODELED_COMPONENTS = [
   "defensive_sacks",
   "defensive_interceptions",
   "defensive_fumble_recoveries",
@@ -610,7 +667,48 @@ const TEAM_DEFENSE_COMPONENTS = [
   "points_allowed",
   "yards_allowed",
   ...TEAM_DEFENSE_POINTS_ALLOWED_BUCKETS.map((bucket) => bucket.component),
+  ...TEAM_DEFENSE_YARDS_ALLOWED_BUCKETS.map((bucket) => bucket.component),
 ] as const;
+
+/**
+ * D/ST components priced by the **de minimis zero model**, stated in full in
+ * `docs/dst-stat-id-evidence-2026-07-29.md` §4 ("The de minimis zero criterion"):
+ *
+ * > A scoring component may be modeled at constant zero ONLY when publicly citable occurrence data
+ * > bounds its expected fantasy points below 0.01 per team-week at the league's own point values.
+ *
+ * Both bounds are recorded there with their sources, denominators and arithmetic:
+ * `defensive_two_point_returns` (ESPN stat 206, 2 pts in all three leagues) at 11 league-wide
+ * occurrences across 5,248 team-games, 2015-2024 — **0.0042 expected points per team-week**; and
+ * `one_point_safeties` (ESPN stat 209, 1 pt) at **zero occurrences in NFL history**, whose rule-of-
+ * three upper bound over the same exposure is **0.00057 expected points per team-week**.
+ *
+ * This is a bounded, disclosed model claim graded by the same gates as everything else — NOT a
+ * dropped rule (the rule is mapped, carried in the emitted profile, and multiplied into every scored
+ * line) and NOT a remembered rate (the number shipped is the floor of a cited bound, not a recalled
+ * frequency). No ingested source carries either event — see §1 and §2 — so there is nothing to fit
+ * and nothing to grade; the constant is the model.
+ *
+ * Extending this list requires a new §4 subsection with its own citable bound, first. A future
+ * measurement putting either component at or above 0.01 points per team-week revokes its licence:
+ * it must then be modeled from data or returned to the unsupported set (§4.1).
+ */
+const TEAM_DEFENSE_DE_MINIMIS_ZERO_COMPONENTS = [
+  "defensive_two_point_returns",
+  "one_point_safeties",
+] as const;
+
+const TEAM_DEFENSE_COMPONENTS = [
+  ...TEAM_DEFENSE_MODELED_COMPONENTS,
+  ...TEAM_DEFENSE_DE_MINIMIS_ZERO_COMPONENTS,
+] as const;
+
+/** Writes the de minimis constants onto a component record. Always exactly 0 — see the list above. */
+function applyTeamDefenseDeMinimisZeros(...records: Record<string, number>[]): void {
+  for (const record of records) {
+    for (const component of TEAM_DEFENSE_DE_MINIMIS_ZERO_COMPONENTS) record[component] = 0;
+  }
+}
 
 function deriveTeamDefensePointBuckets(
   components: Record<string, number>,
@@ -644,6 +742,58 @@ function deriveTeamDefensePointBuckets(
     components[bucket.component] = pointMass.reduce(
       (sum, row) =>
         row.points >= bucket.minimum && row.points <= bucket.maximum
+          ? sum + row.mass / totalMass
+          : sum,
+      0,
+    );
+  }
+}
+
+/**
+ * Yards-allowed tier probabilities, structurally parallel to `deriveTeamDefensePointBuckets` but
+ * calibrated on its own scale. The dispersion constants come from
+ * `docs/dst-yards-allowed-calibration-2026-07-29.md` (measured 2023-2025 REG nflverse team-weeks:
+ * league-wide weekly SD 84.97, per-team-season residual SDs 50.4-112.8) and are NOT the points
+ * model's constants: integer grid 0..800 (matching `COMPONENT_CAPS.yards_allowed`), sigma clamped
+ * to [55, 115], variance fallback 7225 (sigma 85) when fewer than two usable rows exist.
+ */
+function deriveTeamDefenseYardBuckets(
+  components: Record<string, number>,
+  training: readonly FirstPartyTeamDefenseWeeklyStatLine[],
+  target: FirstPartyTeamDefenseTarget,
+  config: FirstPartyProjectionConfig,
+): void {
+  const center = clamp(components.yards_allowed ?? 0, 0, capFor("yards_allowed"));
+  const historical = training.flatMap((row) => {
+    const value = row.components.yards_allowed;
+    if (value === undefined || !Number.isFinite(value) || value < 0) return [];
+    return [{ value, weight: defenseRecencyWeight(row, target, config.recencyHalfLifeWeeks) }];
+  });
+  const historicalCenter = historical.length === 0 ? center : (weightedMean(historical) ?? center);
+  const variance =
+    historical.length < 2
+      ? 7225
+      : (weightedMean(
+          historical.map(({ value, weight }) => ({
+            value: (value - historicalCenter) ** 2,
+            weight,
+          })),
+        ) ?? 7225);
+  const standardDeviation = clamp(Math.sqrt(variance), 55, 115);
+  const yardMass = Array.from({ length: 801 }, (_, yards) => ({
+    yards,
+    mass: Math.exp(-0.5 * ((yards - center) / standardDeviation) ** 2),
+  }));
+  const totalMass = yardMass.reduce((sum, row) => sum + row.mass, 0);
+  // Fail-safe: with sigma >= 55 and a clamped in-grid center, the nearest node carries mass ~1, so
+  // total mass cannot vanish in practice. If a degenerate input ever produced zero mass anyway,
+  // dividing would write NaN probabilities; instead leave the step-one shrinkage centers (already
+  // bounded to [0, 1] by the component cap) untouched.
+  if (!(totalMass > 0)) return;
+  for (const bucket of TEAM_DEFENSE_YARDS_ALLOWED_BUCKETS) {
+    components[bucket.component] = yardMass.reduce(
+      (sum, row) =>
+        row.yards >= bucket.minimum && row.yards <= bucket.maximum
           ? sum + row.mass / totalMass
           : sum,
       0,
@@ -2651,12 +2801,22 @@ function defenseComponentValue(
   const bucket = TEAM_DEFENSE_POINTS_ALLOWED_BUCKETS.find(
     (candidate) => candidate.component === component,
   );
-  if (bucket === undefined) return undefined;
-  const pointsAllowed = row.components.points_allowed;
-  if (pointsAllowed === undefined || !Number.isFinite(pointsAllowed) || pointsAllowed < 0) {
+  if (bucket !== undefined) {
+    const pointsAllowed = row.components.points_allowed;
+    if (pointsAllowed === undefined || !Number.isFinite(pointsAllowed) || pointsAllowed < 0) {
+      return undefined;
+    }
+    return pointsAllowed >= bucket.minimum && pointsAllowed <= bucket.maximum ? 1 : 0;
+  }
+  const yardBucket = TEAM_DEFENSE_YARDS_ALLOWED_BUCKETS.find(
+    (candidate) => candidate.component === component,
+  );
+  if (yardBucket === undefined) return undefined;
+  const yardsAllowed = row.components.yards_allowed;
+  if (yardsAllowed === undefined || !Number.isFinite(yardsAllowed) || yardsAllowed < 0) {
     return undefined;
   }
-  return pointsAllowed >= bucket.minimum && pointsAllowed <= bucket.maximum ? 1 : 0;
+  return yardsAllowed >= yardBucket.minimum && yardsAllowed <= yardBucket.maximum ? 1 : 0;
 }
 
 function defenseRecencyWeight(
@@ -2849,7 +3009,7 @@ export function projectFirstPartyTeamDefenseComponents(
   let calibratedComponents = 0;
   let fallbackComponents = 0;
 
-  for (const component of TEAM_DEFENSE_COMPONENTS) {
+  for (const component of TEAM_DEFENSE_MODELED_COMPONENTS) {
     const teamMean = weightedDefenseMean(teamRows, component, target, config.recencyHalfLifeWeeks);
     const leagueMean =
       weightedDefenseMean(training, component, target, config.recencyHalfLifeWeeks) ?? 0;
@@ -2891,12 +3051,19 @@ export function projectFirstPartyTeamDefenseComponents(
   }
 
   deriveTeamDefensePointBuckets(components, training, target, config);
-  for (const bucket of TEAM_DEFENSE_POINTS_ALLOWED_BUCKETS) {
+  deriveTeamDefenseYardBuckets(components, training, target, config);
+  for (const bucket of [
+    ...TEAM_DEFENSE_POINTS_ALLOWED_BUCKETS,
+    ...TEAM_DEFENSE_YARDS_ALLOWED_BUCKETS,
+  ]) {
     const normalizedProbability = components[bucket.component] ?? 0;
     components[bucket.component] = normalizedProbability;
     lower[bucket.component] = Math.min(lower[bucket.component] ?? 0, normalizedProbability);
     upper[bucket.component] = Math.max(upper[bucket.component] ?? 0, normalizedProbability);
   }
+  // Emitted last so component key order stays exactly `TEAM_DEFENSE_COMPONENTS`. The band is
+  // degenerate on purpose: a constant has no forecast error to bound.
+  applyTeamDefenseDeMinimisZeros(components, lower, upper);
 
   const flags: string[] = [];
   if (teamRows.length === 0) flags.push("league_prior_only");
@@ -2910,7 +3077,7 @@ export function projectFirstPartyTeamDefenseComponents(
       clamp(teamRows.length / 8, 0, 1) * 0.46 +
       clamp(training.length / 160, 0, 1) * 0.2 +
       clamp(opponentRows.length / 24, 0, 1) * 0.1 +
-      (1 - fallbackComponents / TEAM_DEFENSE_COMPONENTS.length) * 0.16,
+      (1 - fallbackComponents / TEAM_DEFENSE_MODELED_COMPONENTS.length) * 0.16,
     0,
     0.95,
   );
@@ -2960,7 +3127,9 @@ function defenseCalibrationFromResiduals(
   generatedThrough?: { readonly season: number; readonly week: number },
 ): FirstPartyTeamDefenseCalibration {
   const intervals: Record<string, FirstPartyCalibrationInterval> = {};
-  for (const component of TEAM_DEFENSE_COMPONENTS) {
+  // Modeled components only: the de minimis constants produce no residuals, so an interval for one
+  // would describe nothing.
+  for (const component of TEAM_DEFENSE_MODELED_COMPONENTS) {
     const errors = residuals
       .filter((sample) => sample.component === component)
       .map((sample) => sample.error);
@@ -2991,7 +3160,7 @@ function recencyOnlyDefenseBaseline(
     .filter((row) => row.team.trim().toUpperCase() === targetTeam)
     .slice(-config.maxPlayerGames);
   const components: Record<string, number> = {};
-  for (const component of TEAM_DEFENSE_COMPONENTS) {
+  for (const component of TEAM_DEFENSE_MODELED_COMPONENTS) {
     components[component] = clamp(
       weightedDefenseMean(teamRows, component, target, config.recencyHalfLifeWeeks) ??
         weightedDefenseMean(trainingRows, component, target, config.recencyHalfLifeWeeks) ??
@@ -3001,6 +3170,10 @@ function recencyOnlyDefenseBaseline(
     );
   }
   deriveTeamDefensePointBuckets(components, trainingRows, target, config);
+  deriveTeamDefenseYardBuckets(components, trainingRows, target, config);
+  // The baseline prices the same vocabulary as the champion, constants included, so a league profile
+  // scoring 206/209 cannot make the two lines differ by so much as a rule.
+  applyTeamDefenseDeMinimisZeros(components);
   return components;
 }
 
@@ -3076,7 +3249,12 @@ export function runFirstPartyTeamDefenseBacktest(
         config,
       );
       const actualComponents: Record<string, number> = {};
-      for (const component of TEAM_DEFENSE_COMPONENTS) {
+      // Modeled components only. The de minimis constants are graded by the same league-scored gate
+      // as everything else — they simply contribute 0 to predicted, baseline AND actual on every
+      // line, so they can move no metric. Pushing always-zero residuals into these streams would
+      // dilute the measurements of the components that ARE forecasts, which is the opposite of
+      // grading them.
+      for (const component of TEAM_DEFENSE_MODELED_COMPONENTS) {
         const actualValue = defenseComponentValue(actual, component) ?? 0;
         const predicted = projection.components[component] ?? 0;
         actualComponents[component] = actualValue;
@@ -3089,6 +3267,7 @@ export function runFirstPartyTeamDefenseBacktest(
             actualValue <= (projection.upperComponents[component] ?? 0),
         });
       }
+      applyTeamDefenseDeMinimisZeros(actualComponents);
       predictions.push({
         team: actual.team,
         season: actual.season,
@@ -3106,7 +3285,7 @@ export function runFirstPartyTeamDefenseBacktest(
   }
 
   const metrics: Record<string, FirstPartyBacktestComponentMetrics> = {};
-  for (const component of TEAM_DEFENSE_COMPONENTS) {
+  for (const component of TEAM_DEFENSE_MODELED_COMPONENTS) {
     metrics[component] = metricsFor(
       metricSamples.filter((sample) => sample.component === component),
     );

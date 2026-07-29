@@ -23,8 +23,10 @@ import {
 import { firstPartyAvailableProjectionComponents } from "./first-party-projections.js";
 import type { ProjectionScheduleFact } from "./first-party-projection-inputs.js";
 import {
+  firstPartyRosArtifactScoringProfile,
   firstPartyRosChampionArtifactChecksum,
   type FirstPartyRosChampionArtifactPayload,
+  type FirstPartyRosRailPosition,
   type LoadedFirstPartyRosChampionArtifact,
 } from "./first-party-ros-publication.js";
 import type { FirstPartyRosWindow } from "./first-party-ros-projections.js";
@@ -56,12 +58,56 @@ const pprRules: readonly FirstPartyRosScoringRuleRow[] = [
   pprRule("Rushing Touchdowns", "6"),
 ];
 
-function keyForRules(rules: readonly FirstPartyRosScoringRuleRow[]): string {
+function espnRule(
+  providerStatId: string,
+  points: string,
+  overrides: Partial<FirstPartyRosScoringRuleRow> = {},
+): FirstPartyRosScoringRuleRow {
+  return {
+    leagueSeasonId: "L1",
+    statKey: providerStatId,
+    providerStatId,
+    operation: "multiply",
+    points,
+    thresholdLow: null,
+    thresholdHigh: null,
+    ...overrides,
+  };
+}
+
+/**
+ * ESPN-shaped offense rules plus the two kicker bracket shapes the real leagues actually differ
+ * on: the admitted catalog prices `field_goals_made_50_plus`, every synced ESPN league splits
+ * 50-59 (198) from 60+ (201).
+ */
+const espnOffenseRules: readonly FirstPartyRosScoringRuleRow[] = [
+  espnRule("53", "1"), // receptions
+  espnRule("42", "0.1"), // receiving_yards
+  espnRule("43", "6"), // receiving_touchdowns
+  espnRule("24", "0.1"), // rushing_yards
+  espnRule("25", "6"), // rushing_touchdowns
+];
+const espnAggregateKickerRules: readonly FirstPartyRosScoringRuleRow[] = [
+  espnRule("80", "3"), // field_goals_made_0_39
+  espnRule("77", "4"), // field_goals_made_40_49
+  espnRule("74", "5"), // field_goals_made_50_plus
+];
+const espnSplitKickerRules: readonly FirstPartyRosScoringRuleRow[] = [
+  espnRule("80", "3"),
+  espnRule("77", "4"),
+  espnRule("198", "5"), // field_goals_made_50_59
+  espnRule("201", "6"), // field_goals_made_60_plus
+];
+
+function normalizedProfile(
+  rules: readonly FirstPartyRosScoringRuleRow[],
+  provider: string,
+): ProjectionScoringProfile {
   const normalization = normalizeLeagueScoringProfile({
     id: "league:probe",
     label: "League scoring",
     rows: rules.map((rule) => ({
-      provider: "yahoo",
+      provider,
       statKey: rule.statKey,
       providerStatId: rule.providerStatId,
       operation: rule.operation,
@@ -72,18 +118,29 @@ function keyForRules(rules: readonly FirstPartyRosScoringRuleRow[]): string {
     availableStatIds,
   });
   if (normalization.state !== "available") throw new Error("probe profile did not normalize");
-  return projectionScoringProfileKey(normalization.profile);
+  return normalization.profile;
+}
+
+function keyForRules(rules: readonly FirstPartyRosScoringRuleRow[], provider = "yahoo"): string {
+  return projectionScoringProfileKey(normalizedProfile(rules, provider));
+}
+
+function withLeague(
+  rules: readonly FirstPartyRosScoringRuleRow[],
+  leagueSeasonId: string,
+): readonly FirstPartyRosScoringRuleRow[] {
+  return rules.map((rule) => ({ ...rule, leagueSeasonId }));
 }
 
 describe("enumerateFirstPartyRosScoringMatchedLeagues", () => {
-  it("keeps only leagues whose exact scoring-profile key equals the artifact's", () => {
+  it("matches per position and never widens a mismatched or unnormalizable league", () => {
     const artifactKey = keyForRules(pprRules);
     const halfPprRules = pprRules.map((rule) =>
       rule.statKey === "Receptions"
         ? { ...rule, leagueSeasonId: "L2", points: "0.5" }
         : { ...rule, leagueSeasonId: "L2" },
     );
-    const matched = enumerateFirstPartyRosScoringMatchedLeagues({
+    const report = enumerateFirstPartyRosScoringMatchedLeagues({
       artifactScoringProfileKey: artifactKey,
       leagues: [
         { id: "L1", provider: "yahoo" },
@@ -97,8 +154,135 @@ describe("enumerateFirstPartyRosScoringMatchedLeagues", () => {
       ],
       availableStatIds,
     });
-    expect(matched.map((league) => league.leagueSeasonId)).toEqual(["L1"]);
-    expect(projectionScoringProfileKey(matched[0]!.profile)).toBe(artifactKey);
+
+    expect(report.matched.map((league) => league.leagueSeasonId)).toEqual(["L1", "L2"]);
+    // L1 is the artifact's own profile: every position it prices is releasable. It prices no
+    // kicker rule at all, so K is withheld by normalization rather than silently zero-scored.
+    expect(report.matched[0]!.matchedPositions).toEqual(["QB", "RB", "WR", "TE"]);
+    expect(report.matched[0]!.withheldPositions).toEqual([
+      { position: "K", reason: "position-unsupported" },
+    ]);
+    expect(projectionScoringProfileKey(report.matched[0]!.profile)).toBe(artifactKey);
+
+    // Half PPR: receptions is in RB/WR/TE's vocabulary but not QB's, so QB scores byte-identically
+    // under both profiles and is the only position the artifact may serve.
+    expect(report.matched[1]!.matchedPositions).toEqual(["QB"]);
+    expect(report.matched[1]!.withheldPositions).toEqual([
+      { position: "RB", reason: "scoring-profile-position-mismatch" },
+      { position: "WR", reason: "scoring-profile-position-mismatch" },
+      { position: "TE", reason: "scoring-profile-position-mismatch" },
+      { position: "K", reason: "position-unsupported" },
+    ]);
+
+    // L3 stays excluded entirely — now with a stated reason per position instead of a bare skip.
+    expect(report.excluded.map((league) => league.leagueSeasonId)).toEqual(["L3"]);
+    expect(report.excluded[0]!.withheldPositions).toEqual([
+      { position: "QB", reason: "position-unsupported" },
+      { position: "RB", reason: "position-unsupported" },
+      { position: "WR", reason: "position-unsupported" },
+      { position: "TE", reason: "position-unsupported" },
+      { position: "K", reason: "position-unsupported" },
+    ]);
+  });
+
+  it("withholds only the kicker when a league splits the field-goal brackets", () => {
+    const artifactKey = keyForRules([...espnOffenseRules, ...espnAggregateKickerRules], "espn");
+    const report = enumerateFirstPartyRosScoringMatchedLeagues({
+      artifactScoringProfileKey: artifactKey,
+      leagues: [{ id: "L1", provider: "espn" }],
+      rules: withLeague([...espnOffenseRules, ...espnSplitKickerRules], "L1"),
+      availableStatIds,
+    });
+
+    expect(report.matched).toHaveLength(1);
+    expect(report.matched[0]!.matchedPositions).toEqual(["QB", "RB", "WR", "TE"]);
+    expect(report.matched[0]!.withheldPositions).toEqual([
+      { position: "K", reason: "scoring-profile-position-mismatch" },
+    ]);
+    // 5 for 50-59 plus 6 for 60+ is close to 5 for 50+, and close is exactly what is refused.
+    expect(projectionScoringProfileKey(report.matched[0]!.profile)).not.toBe(artifactKey);
+  });
+
+  it("matches a position whose artifact-side rule is a scoring no-op", () => {
+    // A zero-point rule scores nothing, so a league that discarded it must still match. The
+    // whole-profile key cannot express that; the position-scoped keys can.
+    const artifactKey = projectionScoringProfileKey({
+      id: "artifact-with-noop",
+      rules: [
+        ...normalizedProfile(pprRules, "yahoo").rules,
+        { statId: "special_teams_touchdowns", points: 0 },
+      ],
+    });
+    const report = enumerateFirstPartyRosScoringMatchedLeagues({
+      artifactScoringProfileKey: artifactKey,
+      leagues: [{ id: "L1", provider: "yahoo" }],
+      rules: pprRules,
+      availableStatIds,
+    });
+
+    expect(artifactKey).not.toBe(keyForRules(pprRules));
+    expect(report.matched[0]!.matchedPositions).toEqual(["QB", "RB", "WR", "TE"]);
+  });
+
+  it("fits the shared reference calibration profile from the artifact, not from whichever league matched first", () => {
+    // Two leagues that match QB/RB/WR/TE and differ only in their kicker brackets: A splits
+    // 50-59/60+, B prices 50+ like the artifact, so B matches K and A does not. Before this fix
+    // the run's availability/role/kicker calibrations were fitted from `matched[0].profile`, which
+    // means B's kicker calibration was fitted under A's brackets purely because A sorted first.
+    const artifactKey = keyForRules([...espnOffenseRules, ...espnAggregateKickerRules], "espn");
+    const leagueA = withLeague([...espnOffenseRules, ...espnSplitKickerRules], "A");
+    const leagueB = withLeague([...espnOffenseRules, ...espnAggregateKickerRules], "B");
+    const enumerate = (leagues: readonly { id: string; provider: string }[]) =>
+      enumerateFirstPartyRosScoringMatchedLeagues({
+        artifactScoringProfileKey: artifactKey,
+        leagues,
+        rules: [...leagueA, ...leagueB],
+        availableStatIds,
+      });
+
+    const forward = enumerate([
+      { id: "A", provider: "espn" },
+      { id: "B", provider: "espn" },
+    ]);
+    const reversed = enumerate([
+      { id: "B", provider: "espn" },
+      { id: "A", provider: "espn" },
+    ]);
+
+    // The old reference (`matched[0].profile`) genuinely flips with league order...
+    expect(forward.matched[0]!.leagueSeasonId).toBe("A");
+    expect(reversed.matched[0]!.leagueSeasonId).toBe("B");
+    expect(projectionScoringProfileKey(forward.matched[0]!.profile)).not.toBe(
+      projectionScoringProfileKey(reversed.matched[0]!.profile),
+    );
+    expect(forward.matched[0]!.matchedPositions).not.toContain("K");
+    expect(reversed.matched[0]!.matchedPositions).toContain("K");
+
+    // ...while the reference actually used is the artifact's own profile: order-independent,
+    // league-independent, and exactly the artifact's scoring identity.
+    const reference = firstPartyRosArtifactScoringProfile(artifactKey);
+    expect(projectionScoringProfileKey(reference)).toBe(artifactKey);
+    // Neither matched league's profile is the reference: A differs, and B only coincides because
+    // this fixture makes B whole-key identical to the artifact.
+    expect(projectionScoringProfileKey(forward.matched[0]!.profile)).not.toBe(artifactKey);
+  });
+
+  it("matches nothing when the artifact's stored scoring key is not canonical", () => {
+    const report = enumerateFirstPartyRosScoringMatchedLeagues({
+      artifactScoringProfileKey: "full-ppr:v1",
+      leagues: [{ id: "L1", provider: "yahoo" }],
+      rules: pprRules,
+      availableStatIds,
+    });
+
+    expect(report.matched).toEqual([]);
+    expect(report.excluded[0]!.withheldPositions).toEqual([
+      { position: "QB", reason: "artifact-scoring-profile-key-unreadable" },
+      { position: "RB", reason: "artifact-scoring-profile-key-unreadable" },
+      { position: "WR", reason: "artifact-scoring-profile-key-unreadable" },
+      { position: "TE", reason: "artifact-scoring-profile-key-unreadable" },
+      { position: "K", reason: "artifact-scoring-profile-key-unreadable" },
+    ]);
   });
 });
 
@@ -307,11 +491,16 @@ describe("buildFirstPartyRosLeagueTarget", () => {
       position: string;
       team: string | null;
     }[];
+    matchedPositions?: readonly FirstPartyRosRailPosition[];
+    supportedPositions?: readonly FirstPartyRosRailPosition[];
   }) {
+    const matchedPositions = input.matchedPositions ?? ["QB", "RB", "WR", "TE", "K"];
     return buildFirstPartyRosLeagueTarget({
       artifact: artifact(input.policy),
       leagueSeasonId: "22222222-2222-4222-8222-222222222222",
       scoringProfile,
+      matchedPositions,
+      supportedPositions: input.supportedPositions ?? matchedPositions,
       season: 2026,
       window,
       rosteredPlayers: input.rosteredPlayers,
@@ -324,7 +513,10 @@ describe("buildFirstPartyRosLeagueTarget", () => {
       schedules,
       futureWindowComplete: true,
       sourceAsOf: new Date("2026-10-06T12:00:00.000Z"),
+      // A downscaled release must carry a downscaled reference: the two counts are one contract,
+      // and the production pair (12288/16384) is exercised end to end in the PostgreSQL suite.
       scenarioCount: 128,
+      convergenceReferenceScenarioCount: 256,
     });
   }
 
@@ -351,6 +543,39 @@ describe("buildFirstPartyRosLeagueTarget", () => {
     expect(result.target!.evidence[0]!.bucket).toBe("nine-plus");
     expect(result.target!.evidence[0]!.inputChecksum).toMatch(/^[a-f0-9]{64}$/u);
     expect(result.skippedPlayers).toBe(1);
+    // The publication layer re-derives the per-position match for itself, so the target carries
+    // the two inputs it needs rather than the already-computed answer.
+    expect(result.target!.leagueScoringProfile).toBe(scoringProfile);
+    expect(result.target!.supportedPositions).toEqual(["QB", "RB", "WR", "TE", "K"]);
+  });
+
+  it("withholds players whose position the league did not match", () => {
+    const withheldWr = run({
+      policy: ninePlusPolicy(),
+      matchedPositions: ["QB", "RB", "TE", "K"],
+      supportedPositions: ["QB", "RB", "WR", "TE", "K"],
+      rosteredPlayers: [
+        { playerId: "wr-0", position: "WR", team: "BUF" },
+        { playerId: "wr-1", position: "WR", team: "MIA" },
+      ],
+    });
+    // A withheld position never becomes a candidate, so it is not an audited per-player skip: the
+    // league simply produces nothing for it.
+    expect(withheldWr.target).toBeNull();
+    expect(withheldWr.leagueReason).toBe("no_releasable_candidates");
+    expect(withheldWr.skippedPlayers).toBe(0);
+
+    const releasedWr = run({
+      policy: ninePlusPolicy(),
+      matchedPositions: ["WR"],
+      supportedPositions: ["QB", "RB", "WR", "TE", "K"],
+      rosteredPlayers: [
+        { playerId: "wr-0", position: "WR", team: "BUF" },
+        { playerId: "wr-1", position: "WR", team: "MIA" },
+      ],
+    });
+    expect(releasedWr.target!.released.map((player) => player.playerId)).toEqual(["wr-0", "wr-1"]);
+    expect(releasedWr.target!.supportedPositions).toEqual(["QB", "RB", "WR", "TE", "K"]);
   });
 
   it("yields no target when no rostered player has an authorizing champion choice", () => {

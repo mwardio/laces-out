@@ -1,4 +1,8 @@
 import {
+  projectionScoringProfileKeyForPosition,
+  projectionScoringRulesFromProfileKey,
+} from "./scoring-position-keys.js";
+import {
   projectionScoringProfileKey,
   scoreProjectionStatComponents,
   validateProjectionScoringProfile,
@@ -28,6 +32,15 @@ export const FIRST_PARTY_ROS_INTERVAL_CALIBRATION_VERSION = "season-blocked-spli
  */
 export const FIRST_PARTY_ROS_DEFAULT_SCENARIOS = 12_288;
 export const FIRST_PARTY_ROS_CONVERGENCE_REFERENCE_SCENARIOS = 16_384;
+/**
+ * The inclusive path-count contract every ROS consumer shares. These bounds are the ONLY admissible
+ * scenario counts the engine will simulate, and every downstream store, persistence builder, and
+ * live convergence diagnostic imports them instead of restating a numeric cap. A duplicated literal
+ * is what let `player_ros_projection_summaries` cap a live summary at 4096 while the engine released
+ * at 12288, so the first otherwise-releasable league projection would have failed during
+ * persistence; deriving the storage contract from these constants is what prevents a recurrence.
+ */
+export const FIRST_PARTY_ROS_MINIMUM_SCENARIOS = 128;
 export const FIRST_PARTY_ROS_MAXIMUM_SCENARIOS = 16_384;
 /**
  * Availability gate v2. The uniform 1.5-game expected-games MAE was retained for the one-to-four
@@ -42,6 +55,92 @@ export const FIRST_PARTY_ROS_MAXIMUM_SCENARIOS = 16_384;
 export const FIRST_PARTY_ROS_MAX_AVAILABILITY_MAE = 1.5;
 export const FIRST_PARTY_ROS_MAX_NINE_PLUS_AVAILABILITY_MAE = 2.75;
 export const FIRST_PARTY_ROS_MAX_AVAILABILITY_BIAS = 1.0;
+/**
+ * Availability MAE gate v3 (2026-07-28). Every ceiling above is unchanged; only how evidence
+ * against them is weighed changes. The measured defect: block-bootstrap P(MAE > 2.75) for QB
+ * nine-plus is 0.53-0.67 at a cell standard error of about 0.15, so the point-estimate comparison
+ * fired on sample draw — the identical cell over the identical seasons scored 2.64-2.67 at five
+ * players per position and 2.76-2.81 at eight. This is the same pathology coverage gate v3 fixed,
+ * and it takes the same remedy: the ceiling now fails a cell only when the record is statistical
+ * evidence that the *true* MAE exceeds it, at the same one-sided alpha.
+ *
+ * The bias ceiling deliberately keeps its point comparison. It is the check that actually detects
+ * systematic hazard mismatch (WP1, 2026-07-28), its estimator is a signed mean rather than a
+ * boundary-hugging absolute one, and every cell passes it with room to spare.
+ */
+export const FIRST_PARTY_ROS_AVAILABILITY_EVIDENCE_ALPHA = 0.1;
+/**
+ * The largest expected-games absolute error one row in each remaining-weeks bucket can produce.
+ * Prediction and outcome both lie in [0, scheduled games], and scheduled games cannot exceed the
+ * window length — nor, for the open-ended nine-plus bucket, the 17 games an NFL team plays inside
+ * an 18-week regular season. These are structural bounds read off the schedule, not fitted values,
+ * which is what lets the evidence test below stay distribution-free.
+ */
+export const FIRST_PARTY_ROS_MAXIMUM_AVAILABILITY_ROW_ERROR: Readonly<
+  Record<FirstPartyRosRemainingWeeksBucket, number>
+> = { "one-to-four": 4, "five-to-eight": 8, "nine-plus": 17 };
+
+/**
+ * One-sided evidence test for H0: the cell's true expected-games MAE is at most `maeCeiling`.
+ *
+ * The report records a cell's MAE and its row count, and nothing about the spread of its per-row
+ * absolute errors, so the null distribution cannot be estimated from the evidence — it has to be
+ * bounded. Each row's absolute error lies in [0, `maximumRowError`], and among all laws on that
+ * support with mean `maeCeiling` the two-point law on the endpoints carries the most variance
+ * (Bhatia-Davis) — the standard least-favourable case for an upper-tail test of a bounded mean.
+ * Under it `samples * MAE / maximumRowError` is exactly Binomial(samples, maeCeiling /
+ * maximumRowError), so the null tail is computed exactly rather than approximated, the same way
+ * the coverage gate computes its own.
+ *
+ * The bound is deliberately loose, and that slack is doing two jobs: it costs no distributional
+ * assumption about an error law nobody has measured, and it absorbs the within-block correlation
+ * this test's row-independence would otherwise ignore. At nine-plus the bound admits about six
+ * times the variance a block bootstrap measured (SE 0.15), i.e. any design effect a slate of eight
+ * correlated players could plausibly carry. What it costs is power: at 288 rows a nine-plus cell
+ * fails only from about 3.25 games, and at 128 rows a five-to-eight cell from about 1.88.
+ */
+export function firstPartyRosAvailabilityEvidenceOfExcessMae(
+  samples: number,
+  availabilityMae: number,
+  maeCeiling: number,
+  maximumRowError: number,
+  alpha: number,
+): boolean {
+  if (!Number.isSafeInteger(samples) || samples <= 0) return false;
+  assertNonNegative(availabilityMae, "availability mae");
+  assertPositive(maeCeiling, "availability mae ceiling");
+  assertPositive(maximumRowError, "maximum availability row error");
+  assertProbability(alpha, "availability evidence alpha");
+  if (maeCeiling >= maximumRowError) {
+    throw new RangeError("availability mae ceiling must be below the maximum row error");
+  }
+  if (availabilityMae <= maeCeiling) return false;
+  const exceedances = Math.ceil((samples * availabilityMae) / maximumRowError);
+  if (exceedances > samples) return true;
+  const probability = maeCeiling / maximumRowError;
+  const odds = probability / (1 - probability);
+  // Unnormalised probability-mass recurrence anchored at the mode, then divided by its own total.
+  // Anchoring at the tallest term is what keeps hundreds of rows away from underflow, which a
+  // recurrence started at zero successes would hit long before it reached the tail.
+  const mode = Math.min(samples, Math.floor((samples + 1) * probability));
+  let total = 0;
+  let tail = 0;
+  let weight = 1;
+  for (let successes = mode; successes <= samples; successes += 1) {
+    total += weight;
+    if (successes >= exceedances) tail += weight;
+    weight *= ((samples - successes) / (successes + 1)) * odds;
+    if (weight === 0) break;
+  }
+  weight = 1;
+  for (let successes = mode; successes > 0; successes -= 1) {
+    weight *= successes / ((samples - successes + 1) * odds);
+    total += weight;
+    if (successes - 1 >= exceedances) tail += weight;
+    if (weight === 0) break;
+  }
+  return tail / total < alpha;
+}
 /**
  * Coverage gate v3 (ratified 2026-07-22). The walk-forward record holds only 4-9 blocks per cell,
  * so the previous point-estimate comparison (observed block coverage >= nominal - 0.10) falsely
@@ -1087,12 +1186,12 @@ function validateProjectionInput(input: FirstPartyRosProjectionInput): {
   const scenarioCount = input.scenarioCount ?? FIRST_PARTY_ROS_DEFAULT_SCENARIOS;
   if (
     !Number.isSafeInteger(scenarioCount) ||
-    scenarioCount < 128 ||
+    scenarioCount < FIRST_PARTY_ROS_MINIMUM_SCENARIOS ||
     scenarioCount > FIRST_PARTY_ROS_MAXIMUM_SCENARIOS ||
     scenarioCount % 2 !== 0
   ) {
     throw new RangeError(
-      `ROS scenarioCount must be an even integer between 128 and ${FIRST_PARTY_ROS_MAXIMUM_SCENARIOS}`,
+      `ROS scenarioCount must be an even integer between ${FIRST_PARTY_ROS_MINIMUM_SCENARIOS} and ${FIRST_PARTY_ROS_MAXIMUM_SCENARIOS}`,
     );
   }
   return { position, weeks, scenarioCount };
@@ -1651,6 +1750,118 @@ export interface FirstPartyRosEvidenceIdentity {
   readonly intervalMethodVersion: string;
 }
 
+/**
+ * Rewrites an evidence identity into this interface's declared field order.
+ *
+ * An admitted champion policy is stored as PostgreSQL `jsonb`, which does not preserve object key
+ * order — it reorders keys by length. Every identity comparison and artifact checksum below goes
+ * through `JSON.stringify`, which IS order-sensitive, so a policy read back from the database
+ * compared unequal to a byte-identical in-memory one and withheld a release that should have gone
+ * out (`evidence-identity-mismatch`, `interval-calibration-unavailable`). Canonicalizing here makes
+ * those comparisons depend on the four values and nothing else.
+ *
+ * This changes no threshold and no decision for equal identities. The canonical order is the same
+ * order the code has always constructed these objects in, so every previously computed checksum is
+ * reproduced byte-for-byte; only round-tripped objects change behavior, and only by now agreeing.
+ */
+function canonicalEvidenceIdentity(
+  identity: FirstPartyRosEvidenceIdentity | null,
+): FirstPartyRosEvidenceIdentity | null {
+  if (identity === null) return null;
+  return {
+    contextualModelVersion: identity.contextualModelVersion,
+    recencyModelVersion: identity.recencyModelVersion,
+    scoringProfileKey: identity.scoringProfileKey,
+    intervalMethodVersion: identity.intervalMethodVersion,
+  };
+}
+
+function evidenceIdentitiesMatch(
+  left: FirstPartyRosEvidenceIdentity | null,
+  right: FirstPartyRosEvidenceIdentity | null,
+): boolean {
+  return (
+    JSON.stringify(canonicalEvidenceIdentity(left)) ===
+    JSON.stringify(canonicalEvidenceIdentity(right))
+  );
+}
+
+/**
+ * Builds the scoring profile a stored whole-profile key denotes, mirroring
+ * `firstPartyRosArtifactScoringProfile` (`apps/worker/src/first-party-ros-publication.ts`). The
+ * round trip inside `projectionScoringRulesFromProfileKey` throws on any key that is not the
+ * canonical JSON it claims to be, so callers must treat a throw as "not comparable" (fail closed).
+ */
+function recoveredEvidenceScoringProfile(scoringProfileKey: string): ProjectionScoringProfile {
+  return {
+    id: "recovered-evidence-identity-profile",
+    rules: projectionScoringRulesFromProfileKey(scoringProfileKey),
+  };
+}
+
+/**
+ * Position-scoped evidence-identity comparison for the live release gate (2026-07-29).
+ *
+ * The three version fields (`contextualModelVersion`, `recencyModelVersion`,
+ * `intervalMethodVersion`) must be strictly equal — a model or interval-method drift is a real
+ * identity change for every position, and no scoping can excuse it. Only the scoring-profile
+ * comparison is scoped, and it is scoped to exactly the cell being gated:
+ *
+ * - Byte-equal whole keys match immediately. This fast path is also the only way two keys that are
+ *   not canonical whole-profile keys can ever match, so identities carrying opaque or legacy keys
+ *   keep the exact whole-key behavior they have always had.
+ * - Otherwise each key is recovered into its rule list via `projectionScoringRulesFromProfileKey`;
+ *   a key that does not round-trip is corrupt rather than merely different, and refuses to match
+ *   (fail closed).
+ * - Each recovered profile is reduced to the gated position's own scoped key
+ *   (`projectionScoringProfileKeyForPosition`). A scoped key of `"[]"` — a profile that prices
+ *   nothing for the position — must never read as agreement, even against another `"[]"`: two
+ *   empty subsets are not evidence of identical scoring (`scoring-position-keys.ts` states this
+ *   hazard, and `matchFirstPartyRosPositions` in `apps/worker/src/first-party-ros-publication.ts`
+ *   enforces the same rule).
+ * - The identities match iff the scoped keys are byte-equal.
+ *
+ * Why scoping is sound: positions never interact numerically — a rule outside the position's
+ * component vocabulary contributes exactly 0 to its score (`matchFirstPartyRosPositions`) — so a
+ * rule the position cannot see, for example a D/ST rule joining the league profile the day D/ST
+ * becomes supported, cannot change the position's scoring behavior. Byte-equal scoped keys mean
+ * byte-identical scoring for the cell being gated, which is what keeps the ROS rail publishing for
+ * a league whose whole profile key moves for reasons that cannot touch the rail positions.
+ */
+function evidenceIdentitiesMatchForPosition(
+  admitted: FirstPartyRosEvidenceIdentity | null,
+  live: FirstPartyRosEvidenceIdentity | null,
+  position: FirstPartyRosPosition,
+): boolean {
+  if (admitted === null || live === null) return admitted === live;
+  if (
+    admitted.contextualModelVersion !== live.contextualModelVersion ||
+    admitted.recencyModelVersion !== live.recencyModelVersion ||
+    admitted.intervalMethodVersion !== live.intervalMethodVersion
+  ) {
+    return false;
+  }
+  if (admitted.scoringProfileKey === live.scoringProfileKey) return true;
+  let admittedScopedKey: string;
+  let liveScopedKey: string;
+  try {
+    // `FirstPartyRosPosition` is assignable to `LeagueScoringPosition` (the unions are identical);
+    // if they ever diverge this stops compiling, which is the fail-closed outcome we want.
+    admittedScopedKey = projectionScoringProfileKeyForPosition(
+      recoveredEvidenceScoringProfile(admitted.scoringProfileKey),
+      position,
+    );
+    liveScopedKey = projectionScoringProfileKeyForPosition(
+      recoveredEvidenceScoringProfile(live.scoringProfileKey),
+      position,
+    );
+  } catch {
+    return false;
+  }
+  if (admittedScopedKey === "[]" || liveScopedKey === "[]") return false;
+  return admittedScopedKey === liveScopedKey;
+}
+
 export interface FirstPartyRosHeldOutForecast extends FirstPartyRosEvidenceIdentity {
   readonly playerId: string;
   readonly position: FirstPartyRosPosition;
@@ -2165,7 +2376,7 @@ function intervalCalibrationArtifactChecksum(
       strategy: artifact.strategy,
       position: artifact.position,
       bucket: artifact.bucket,
-      evidenceIdentity: artifact.evidenceIdentity,
+      evidenceIdentity: canonicalEvidenceIdentity(artifact.evidenceIdentity),
       nominalCoverage: artifact.nominalCoverage,
       lowerQuantile: artifact.lowerQuantile,
       upperQuantile: artifact.upperQuantile,
@@ -2807,7 +3018,7 @@ export function evaluateFirstPartyRosChampionPolicy(
         intervalMethodVersion: forecast.intervalMethodVersion,
       };
       if (evidenceIdentity === null) evidenceIdentity = identity;
-      else if (JSON.stringify(evidenceIdentity) !== JSON.stringify(identity)) {
+      else if (!evidenceIdentitiesMatch(evidenceIdentity, identity)) {
         throw new Error("Held-out ROS evidence identities cannot be mixed in one evaluation");
       }
     }
@@ -2925,6 +3136,8 @@ export interface FirstPartyRosReleaseGateOptions {
   readonly maximumIntervalCoverageDeviation?: number;
   /** One-sided exact binomial significance level for the coverage evidence test (gate v3). */
   readonly intervalCoverageEvidenceAlpha?: number;
+  /** One-sided exact binomial significance level for the availability MAE evidence test (gate v3). */
+  readonly availabilityEvidenceAlpha?: number;
   readonly minimumWalkForwardCalibrationSeasons?: number;
   readonly minimumWalkForwardCalibrationBatches?: number;
   readonly minimumWalkForwardCalibrationSamples?: number;
@@ -2955,7 +3168,11 @@ export interface FirstPartyRosReleaseGateDecision {
 
 /**
  * Fail-closed point/quantile release gate. It cannot release unless the selected stratum has an
- * immutable season-blocked split-conformal artifact.
+ * immutable season-blocked split-conformal artifact. Aligned with the report-side availability
+ * gate v3 on 2026-07-29: the availability-MAE comparison is the same one-sided evidence test at
+ * the same ceilings and alpha (`firstPartyRosAvailabilityEvidenceOfExcessMae`), the bias gate
+ * keeps its point comparison, and the evidence-identity comparison is scoped to the position
+ * being gated (`evidenceIdentitiesMatchForPosition`).
  */
 export function evaluateFirstPartyRosReleaseGate(
   policy: FirstPartyRosChampionPolicy,
@@ -2973,6 +3190,8 @@ export function evaluateFirstPartyRosReleaseGate(
   const maximumIntervalCoverageDeviation = options.maximumIntervalCoverageDeviation ?? 0.1;
   const intervalCoverageEvidenceAlpha =
     options.intervalCoverageEvidenceAlpha ?? FIRST_PARTY_ROS_COVERAGE_EVIDENCE_ALPHA;
+  const availabilityEvidenceAlpha =
+    options.availabilityEvidenceAlpha ?? FIRST_PARTY_ROS_AVAILABILITY_EVIDENCE_ALPHA;
   const minimumWalkForwardCalibrationSeasons =
     options.minimumWalkForwardCalibrationSeasons ?? FIRST_PARTY_ROS_MINIMUM_WALK_FORWARD_SEASONS;
   const minimumWalkForwardCalibrationBatches =
@@ -2984,6 +3203,7 @@ export function evaluateFirstPartyRosReleaseGate(
     [minimumHeldOutConvergenceRate, "minimumHeldOutConvergenceRate"],
     [maximumIntervalCoverageDeviation, "maximumIntervalCoverageDeviation"],
     [intervalCoverageEvidenceAlpha, "intervalCoverageEvidenceAlpha"],
+    [availabilityEvidenceAlpha, "availabilityEvidenceAlpha"],
   ] as const) {
     assertProbability(value, label);
   }
@@ -3013,7 +3233,9 @@ export function evaluateFirstPartyRosReleaseGate(
   };
   if (policy.evidenceIdentity === null || choice === undefined) {
     reasons.add("missing-policy-evidence");
-  } else if (JSON.stringify(policy.evidenceIdentity) !== JSON.stringify(liveIdentity)) {
+  } else if (
+    !evidenceIdentitiesMatchForPosition(policy.evidenceIdentity, liveIdentity, live.position)
+  ) {
     reasons.add("evidence-identity-mismatch");
   }
   const liveEvidenceIsValid =
@@ -3057,7 +3279,22 @@ export function evaluateFirstPartyRosReleaseGate(
       live.bucket === "nine-plus"
         ? maximumNinePlusHeldOutAvailabilityMae
         : maximumHeldOutAvailabilityMae;
-    if (heldOut[`${selected}AvailabilityMae`] > availabilityMaeCeiling) {
+    // Availability MAE gate v3: the ceiling is unchanged, but a cell now fails it only on
+    // statistical evidence that its true MAE exceeds it — the same test, bound, and alpha the
+    // report gate applies in `historicalRosCalibrationBlockers`. The point comparison is retained
+    // as a structural guard so no cell inside its ceiling can ever block, whatever the test
+    // returns. `choice.samples` is the paired held-out row count the MAE is averaged over, exactly
+    // as it is on the report side.
+    if (
+      heldOut[`${selected}AvailabilityMae`] > availabilityMaeCeiling &&
+      firstPartyRosAvailabilityEvidenceOfExcessMae(
+        choice.samples,
+        heldOut[`${selected}AvailabilityMae`],
+        availabilityMaeCeiling,
+        FIRST_PARTY_ROS_MAXIMUM_AVAILABILITY_ROW_ERROR[live.bucket],
+        availabilityEvidenceAlpha,
+      )
+    ) {
       reasons.add("availability-error-above-threshold");
     }
     if (Math.abs(heldOut[`${selected}AvailabilityBias`]) > maximumHeldOutAvailabilityBias) {
@@ -3074,7 +3311,11 @@ export function evaluateFirstPartyRosReleaseGate(
       selectedCalibration.strategy !== choice.strategy ||
       selectedCalibration.position !== choice.position ||
       selectedCalibration.bucket !== choice.bucket ||
-      JSON.stringify(selectedCalibration.evidenceIdentity) !== JSON.stringify(liveIdentity)
+      !evidenceIdentitiesMatchForPosition(
+        selectedCalibration.evidenceIdentity,
+        liveIdentity,
+        live.position,
+      )
     ) {
       reasons.add("interval-calibration-unavailable");
     }
@@ -3144,6 +3385,8 @@ export function evaluateFirstPartyRosReleaseGate(
         minimumInputCoverage,
         maximumHeldOutAvailabilityMae,
         maximumNinePlusHeldOutAvailabilityMae,
+        availabilityEvidenceAlpha,
+        maximumAvailabilityRowError: FIRST_PARTY_ROS_MAXIMUM_AVAILABILITY_ROW_ERROR[live.bucket],
         maximumHeldOutAvailabilityBias,
         minimumHeldOutConvergenceRate,
         intervalCoverageEvidenceAlpha,

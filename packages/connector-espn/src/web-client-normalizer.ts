@@ -16,8 +16,13 @@ import { z } from "zod";
 /**
  * Parser contract for the observed ESPN fantasy-football web client response.
  * This is our version, not an ESPN API or schema version.
+ *
+ * v2 (2026-07-28): ESPN re-encoded two `acquisitionSettings` fields. `waiverProcessDays` now
+ * carries uppercase day names, and `matchupLimitPerScoringPeriod` is a boolean flag rather than
+ * the count v1 read it as. Both encodings of both fields parse, but the boolean is never read as
+ * a count, so the meaning of a normalized `matchupAcquisitionLimit` changed for consumers.
  */
-export const ESPN_WEB_CLIENT_CONTRACT_VERSION = 1 as const;
+export const ESPN_WEB_CLIENT_CONTRACT_VERSION = 2 as const;
 export const MAX_ESPN_WEB_CLIENT_SNAPSHOT_BYTES = 5 * 1024 * 1024;
 
 const ESPN_READ_ORIGIN = "https://lm-api-reads.fantasy.espn.com";
@@ -213,6 +218,52 @@ const scoringItemSchema = z
     }
   });
 
+/**
+ * ESPN's observed `waiverProcessDays` day names, indexed so that the array position *is* the
+ * normalized number. The project pins `Date.prototype.getDay()` numbering (0 = Sunday) for
+ * `operationalRules.waiverProcessDays`: nothing downstream consumed the field when the encoding
+ * changed and no other connector populates it, so the platform convention every future JS consumer
+ * will compare against was chosen deliberately. See docs/unofficial-web-client-v2.md.
+ */
+const WAIVER_PROCESS_DAY_NAMES = [
+  "SUNDAY",
+  "MONDAY",
+  "TUESDAY",
+  "WEDNESDAY",
+  "THURSDAY",
+  "FRIDAY",
+  "SATURDAY",
+] as const;
+
+/**
+ * Accepts either encoding but not a mixture of the two, because the numeric encoding's own
+ * convention was never established by ESPN and must not be silently interleaved with day names
+ * that this contract does map. Unknown names fail closed rather than dropping a waiver day.
+ */
+const waiverProcessDaysSchema = z
+  .array(z.union([z.number().int().min(0).max(7), z.string().min(1).max(32)]))
+  .max(8)
+  .superRefine((value, context) => {
+    let names = 0;
+    for (const [index, entry] of value.entries()) {
+      if (typeof entry !== "string") continue;
+      names += 1;
+      if (!(WAIVER_PROCESS_DAY_NAMES as readonly string[]).includes(entry)) {
+        context.addIssue({
+          code: "custom",
+          path: [index],
+          message: "waiverProcessDays uses an unrecognized ESPN day name",
+        });
+      }
+    }
+    if (names > 0 && names !== value.length) {
+      context.addIssue({
+        code: "custom",
+        message: "waiverProcessDays mixes ESPN day names with the legacy numeric encoding",
+      });
+    }
+  });
+
 const settingsSchema = z
   .object({
     name: nonEmptyTextSchema(160),
@@ -225,9 +276,16 @@ const settingsSchema = z
         waiverOrderReset: z.boolean(),
         acquisitionLimit: z.number().int().min(-1).max(10_000).optional(),
         matchupAcquisitionLimit: z.number().int().min(-1).max(10_000).optional(),
-        matchupLimitPerScoringPeriod: z.number().int().min(-1).max(10_000).optional(),
+        /**
+         * Observed as a boolean flag on 2026-07-28 ("is there a per-scoring-period limit") and as
+         * a count before that. The boolean is never read as a count; see
+         * {@link matchupAcquisitionLimits}.
+         */
+        matchupLimitPerScoringPeriod: z
+          .union([z.boolean(), z.number().int().min(-1).max(10_000)])
+          .optional(),
         minimumBid: z.number().int().min(0).max(100_000).optional(),
-        waiverProcessDays: z.array(z.number().int().min(0).max(7)).max(8).optional(),
+        waiverProcessDays: waiverProcessDaysSchema.optional(),
         waiverProcessHour: z.number().int().min(0).max(23).optional(),
       })
       .passthrough(),
@@ -824,7 +882,7 @@ function sanitizedIssues(
     message:
       issue.code === "custom"
         ? issue.message
-        : "Value did not match the expected ESPN web-client v1 shape",
+        : `Value did not match the expected ESPN web-client v${ESPN_WEB_CLIENT_CONTRACT_VERSION} shape`,
   }));
 }
 
@@ -1081,6 +1139,43 @@ function normalizedLimit(value: number | undefined): number | null {
   return value === undefined || value < 0 ? null : value;
 }
 
+/**
+ * Splits ESPN's two per-matchup acquisition fields into the count and the "does a limit apply"
+ * answer. `matchupLimitPerScoringPeriod` is a boolean flag in the current API, so it can only ever
+ * supply the second answer; coercing `false` into the count would write a bogus limit, and mapping
+ * `true` to a number would invent one. A count therefore comes only from a numeric field.
+ *
+ * `false` was observed on both active leagues captured on 2026-07-28 and is treated as
+ * authoritative: no limit applies, so no count is reported even if ESPN also sent one. `true` was
+ * observed only on a league ESPN had not activated for the season, so it is passed through as the
+ * flag ESPN sent and nothing further is concluded from it.
+ */
+function matchupAcquisitionLimits(
+  acquisition: EspnWebClientPayloadV1["settings"]["acquisitionSettings"],
+): { limit: number | null; enabled: boolean | null } {
+  const perPeriod = acquisition.matchupLimitPerScoringPeriod;
+  const flag = typeof perPeriod === "boolean" ? perPeriod : null;
+  const legacyCount = typeof perPeriod === "number" ? perPeriod : undefined;
+  const declared = acquisition.matchupAcquisitionLimit ?? legacyCount;
+  return {
+    limit: flag === false ? null : normalizedLimit(declared),
+    // Without the flag, ESPN's own -1 sentinel still distinguishes "unlimited" from "not told".
+    enabled: flag ?? (declared === undefined ? null : declared >= 0),
+  };
+}
+
+/** Day names normalize by index (0 = Sunday); legacy numbers pass through as ESPN encoded them. */
+function normalizedWaiverProcessDays(
+  value: readonly (number | string)[] | undefined,
+): readonly number[] {
+  const days = (value ?? []).map((entry) =>
+    typeof entry === "number"
+      ? entry
+      : (WAIVER_PROCESS_DAY_NAMES as readonly string[]).indexOf(entry),
+  );
+  return [...new Set(days)].sort((left, right) => left - right);
+}
+
 function operationalRules(
   settings: EspnWebClientPayloadV1["settings"],
 ): NonNullable<LeagueSyncBundle["league"]["settings"]["operationalRules"]> {
@@ -1089,15 +1184,13 @@ function operationalRules(
   const scoring = settings.scoringSettings;
   const trade = settings.tradeSettings;
   const deadline = trade?.deadlineDate;
+  const matchupLimits = matchupAcquisitionLimits(acquisition);
   return {
     acquisitionLimit: normalizedLimit(acquisition.acquisitionLimit),
-    matchupAcquisitionLimit: normalizedLimit(
-      acquisition.matchupAcquisitionLimit ?? acquisition.matchupLimitPerScoringPeriod,
-    ),
+    matchupAcquisitionLimit: matchupLimits.limit,
+    matchupAcquisitionLimitEnabled: matchupLimits.enabled,
     minimumBid: acquisition.minimumBid ?? null,
-    waiverProcessDays: [...new Set(acquisition.waiverProcessDays ?? [])].sort(
-      (left, right) => left - right,
-    ),
+    waiverProcessDays: normalizedWaiverProcessDays(acquisition.waiverProcessDays),
     waiverProcessHour: acquisition.waiverProcessHour ?? null,
     keeperCount: settings.draftSettings.keeperCount ?? null,
     regularSeasonMatchupPeriods: schedule.matchupPeriodCount ?? null,
@@ -1292,7 +1385,7 @@ export function normalizeEspnWebClientSnapshot(
   if (!payloadResult.success) {
     throw new EspnWebClientNormalizationError({
       code: "SCHEMA_DRIFT",
-      message: "ESPN payload did not match observed web-client contract version 1",
+      message: `ESPN payload did not match observed web-client contract version ${ESPN_WEB_CLIENT_CONTRACT_VERSION}`,
       issues: sanitizedIssues(payloadResult.error, "SCHEMA_DRIFT"),
     });
   }

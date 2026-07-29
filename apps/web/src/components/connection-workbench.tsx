@@ -3,6 +3,7 @@
 import {
   ArrowRight,
   Check,
+  ChevronRight,
   Clipboard,
   ExternalLink,
   Info,
@@ -23,9 +24,12 @@ import {
 import { type FormEvent, useCallback, useEffect, useRef, useState } from "react";
 
 import {
+  absoluteApiOrigin,
   apiBaseUrl,
+  parseDataQualitySources,
   parseEspnBridgeDeviceCredential,
   parseEspnBridgeDeviceList,
+  type DataQualitySource,
   type EspnBridgeDeviceStatus,
 } from "../lib/api-client";
 import {
@@ -143,6 +147,17 @@ function formatYahooTime(value: string | null, emptyLabel: string): string {
   }).format(date);
 }
 
+/** Whole percentages only: a match rate is evidence, not a precision claim. */
+function percent(value: number): string {
+  return `${Math.round(value * 100)}%`;
+}
+
+function listSentence(values: readonly string[]): string {
+  if (values.length <= 1) return values[0] ?? "";
+  if (values.length === 2) return `${values[0]} and ${values[1]}`;
+  return `${values.slice(0, -1).join(", ")}, and ${values[values.length - 1]}`;
+}
+
 function yahooHealthLabel(health: YahooHealth): string {
   switch (health) {
     case "healthy":
@@ -185,12 +200,17 @@ export function ConnectionWorkbench() {
   const [yahooActionMessage, setYahooActionMessage] = useState<UiMessage | null>(null);
   const [yahooDisconnectCandidate, setYahooDisconnectCandidate] = useState<string | null>(null);
   const [callbackNotice, setCallbackNotice] = useState<UiMessage | null>(null);
+  const [degradedSources, setDegradedSources] = useState<readonly DataQualitySource[]>([]);
+  const [dataHealthState, setDataHealthState] = useState<RequestState>("working");
+  const [dataHealthError, setDataHealthError] = useState<string | null>(null);
+  const [dataHealthNotice, setDataHealthNotice] = useState<string | null>(null);
   const bookmarkletRef = useRef<HTMLAnchorElement>(null);
 
   const bookmarklet =
     credential?.method === "one-click"
       ? createEspnBookmarklet({
-          apiBaseUrl,
+          // The bookmark runs on fantasy.espn.com, where a relative path would target ESPN.
+          apiBaseUrl: absoluteApiOrigin(),
           deviceToken: credential.deviceToken,
           leagueIds: credential.leagueIds,
           season: credential.season,
@@ -268,6 +288,52 @@ export function ConnectionWorkbench() {
     }
   }, []);
 
+  /**
+   * Member-safe source quality. The summary route carries admission state, match rates, reasons,
+   * and provenance only — never a source row — so this section states impact without implying that
+   * a member should repair upstream data.
+   */
+  const refreshDataHealth = useCallback(async () => {
+    setDataHealthState("working");
+    setDataHealthError(null);
+    setDataHealthNotice(null);
+    try {
+      const response = await fetch(`${apiBaseUrl}/v1/data-quality/sources`, {
+        credentials: "include",
+        headers: { Accept: "application/json" },
+      });
+      if (response.status === 401) {
+        setDataHealthState("idle");
+        setSignedOut(true);
+        return;
+      }
+      if (!response.ok) {
+        throw new ConnectionUiError(
+          response.status === 503
+            ? "Source quality reporting is not configured on this server yet."
+            : "Source health could not be loaded.",
+        );
+      }
+      const summary = parseDataQualitySources(await response.json());
+      if (!summary) throw new ConnectionUiError("The source health response was invalid.");
+      if (summary.availability.state !== "available") {
+        // The bounded read withheld the dataset rather than truncating it; say so plainly.
+        setDegradedSources([]);
+        setDataHealthNotice(summary.availability.reason);
+        setDataHealthState("done");
+        return;
+      }
+      const degraded = summary.degradedSourceKeys;
+      setDegradedSources(summary.sources.filter((source) => degraded.includes(source.key)));
+      setDataHealthState("done");
+    } catch (error) {
+      setDataHealthState("error");
+      setDataHealthError(
+        error instanceof ConnectionUiError ? error.message : "Source health could not be loaded.",
+      );
+    }
+  }, []);
+
   useEffect(() => {
     const parameters = new URLSearchParams(window.location.search);
     if (parameters.get("provider") !== "yahoo") return;
@@ -309,7 +375,8 @@ export function ConnectionWorkbench() {
   useEffect(() => {
     void refreshBridgeDevices();
     void refreshYahooConnections();
-  }, [refreshBridgeDevices, refreshYahooConnections]);
+    void refreshDataHealth();
+  }, [refreshBridgeDevices, refreshYahooConnections, refreshDataHealth]);
 
   async function startYahoo() {
     setYahooState("working");
@@ -587,6 +654,9 @@ export function ConnectionWorkbench() {
               ? "Setup required"
               : "Ready to connect";
   const activeBridgeDevices = bridgeDevices.filter((device) => device.state === "active");
+  // Revoked devices are done, not informative; keep them out of the list a member
+  // scans, without discarding them from the underlying data.
+  const visibleBridgeDevices = bridgeDevices.filter((device) => device.state !== "revoked");
   const espnPanelState = activeBridgeDevices.some((device) => device.lastSeenAt !== null)
     ? "Connected"
     : activeBridgeDevices.length > 0
@@ -596,6 +666,27 @@ export function ConnectionWorkbench() {
         : signedOut
           ? "Sign in to connect"
           : "Ready to connect";
+
+  // A collapsed expander still needs to signal trouble; surface the worst
+  // state (withheld beats not-yet-available) so a member never has to open
+  // the row just to learn everything is fine.
+  const quarantinedSourceCount = degradedSources.filter(
+    (source) => source.admission === "quarantined",
+  ).length;
+  const pendingSourceCount = degradedSources.length - quarantinedSourceCount;
+  const dataHealthHint = signedOut
+    ? "Sign in to check"
+    : dataHealthState === "working"
+      ? "Checking…"
+      : dataHealthState === "error"
+        ? "Check failed"
+        : dataHealthNotice
+          ? "Unavailable"
+          : degradedSources.length === 0
+            ? "All sources healthy"
+            : quarantinedSourceCount > 0
+              ? `${quarantinedSourceCount} withheld${pendingSourceCount > 0 ? `, ${pendingSourceCount} pending` : ""}`
+              : `${pendingSourceCount} pending`;
 
   return (
     <div className="connections-page">
@@ -652,11 +743,91 @@ export function ConnectionWorkbench() {
         </div>
       ) : null}
 
-      <section
-        className="connection-grid"
-        id="data-health"
-        aria-label="Fantasy provider connections"
-      >
+      <details className="connection-data-health" id="data-health">
+        <summary className="connection-data-health__head">
+          <div>
+            <p className="eyebrow">Source health</p>
+            <h2>Data health</h2>
+          </div>
+          <span className="connection-data-health__summary-status">
+            <span className="connection-data-health__summary-hint">{dataHealthHint}</span>
+            <ChevronRight size={18} aria-hidden="true" />
+          </span>
+        </summary>
+
+        <div className="connection-data-health__body">
+          <p className="connection-data-health__lede">
+            Laces Out withholds an analysis rather than publishing it from a source whose player
+            identities did not resolve. Anything listed here is being withheld for you already.
+          </p>
+
+          {signedOut ? (
+            <p className="connection-data-health__state" role="status">
+              Sign in to see which sources are currently withheld.
+            </p>
+          ) : dataHealthState === "working" ? (
+            <p className="connection-data-health__state" role="status">
+              Checking source health…
+            </p>
+          ) : dataHealthState === "error" ? (
+            <p
+              className="connection-data-health__state connection-data-health__state--error"
+              role="alert"
+            >
+              {dataHealthError}
+            </p>
+          ) : dataHealthNotice ? (
+            <p className="connection-data-health__state" role="status">
+              {dataHealthNotice}
+            </p>
+          ) : degradedSources.length === 0 ? (
+            <p className="connection-data-health__state" role="status">
+              Every source is resolving identities above its threshold.
+            </p>
+          ) : (
+            <ul className="connection-data-health__list">
+              {degradedSources.map((source) => (
+                <li className="connection-data-health__item" key={source.key}>
+                  <div className="connection-data-health__item-head">
+                    <h3>{source.name}</h3>
+                    <span
+                      className={`connection-data-health__badge connection-data-health__badge--${source.admission}`}
+                    >
+                      {source.admission === "quarantined" ? "Withheld" : "Not yet available"}
+                    </span>
+                  </div>
+                  <dl className="connection-data-health__facts">
+                    <div>
+                      <dt>Identity coverage</dt>
+                      <dd>
+                        {source.matchRate === null
+                          ? "Not measured yet"
+                          : `${percent(source.matchRate)} of ${percent(source.minimumMatchRate)} required`}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt>Last successful refresh</dt>
+                      <dd>{formatBridgeTime(source.lastSuccessfulAt)}</dd>
+                    </div>
+                  </dl>
+                  <p className="connection-data-health__reason">{source.reason}</p>
+                  {source.affectedAnalysis.length > 0 ? (
+                    <p className="connection-data-health__impact">
+                      {`${listSentence(source.affectedAnalysis)} ${
+                        source.affectedAnalysis.length === 1 ? "is" : "are"
+                      } withheld for this source until identity coverage returns above ${percent(
+                        source.minimumMatchRate,
+                      )}.`}
+                    </p>
+                  ) : null}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      </details>
+
+      <section className="connection-grid" aria-label="Fantasy provider connections">
         <article className="connection-provider connection-provider--espn" id="espn-connection">
           <div className="connection-provider__head">
             <span className="connection-provider-logo connection-provider-logo--espn">E</span>
@@ -1117,16 +1288,16 @@ export function ConnectionWorkbench() {
                 {bridgeDevicesError}
               </p>
             ) : null}
-            {bridgeDevicesState === "working" && bridgeDevices.length === 0 ? (
+            {bridgeDevicesState === "working" && visibleBridgeDevices.length === 0 ? (
               <p className="bridge-device-manager__empty">Checking ESPN sync status…</p>
-            ) : bridgeDevices.length === 0 ? (
+            ) : visibleBridgeDevices.length === 0 ? (
               <p className="bridge-device-manager__empty">
                 No ESPN sync access yet. Create a one-click button or pair the Chrome companion
                 above.
               </p>
             ) : (
               <ul className="bridge-device-list">
-                {bridgeDevices.map((device) => (
+                {visibleBridgeDevices.map((device) => (
                   <li key={device.deviceId}>
                     <div className="bridge-device-list__summary">
                       <span className={`bridge-device-state bridge-device-state--${device.state}`}>

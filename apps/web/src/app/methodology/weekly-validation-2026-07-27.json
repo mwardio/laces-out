@@ -1,0 +1,197 @@
+{
+  "validationMode": "champion-rail",
+  "generatedAt": "2026-07-27T20:27:18.510Z",
+  "elapsedSeconds": 374.909,
+  "seasons": [2023, 2024, 2025],
+  "gate": {
+    "state": "publishable",
+    "reasons": []
+  },
+  "history": {
+    "playerRows": 84712,
+    "defenseRows": 1632,
+    "matchedSnapRows": 76016,
+    "matchedWeeklyRosterRows": 42036,
+    "matchedInjuryRows": 5303
+  },
+  "player": {
+    "predictions": 9261,
+    "policy": {
+      "modelVersion": "laces-weekly-components-v8",
+      "scoringProfileKey": "[{\"statId\":\"defensive_blocked_kicks\",\"points\":2,\"bonuses\":[]},{\"statId\":\"defensive_fumble_recoveries\",\"points\":2,\"bonuses\":[]},{\"statId\":\"defensive_interceptions\",\"points\":2,\"bonuses\":[]},{\"statId\":\"defensive_sacks\",\"points\":1,\"bonuses\":[]},{\"statId\":\"defensive_safeties\",\"points\":2,\"bonuses\":[]},{\"statId\":\"defensive_touchdowns\",\"points\":6,\"bonuses\":[]},{\"statId\":\"extra_points_made\",\"points\":1,\"bonuses\":[]},{\"statId\":\"field_goals_made_0_39\",\"points\":3,\"bonuses\":[]},{\"statId\":\"field_goals_made_40_49\",\"points\":4,\"bonuses\":[]},{\"statId\":\"field_goals_made_50_plus\",\"points\":5,\"bonuses\":[]},{\"statId\":\"field_goals_missed\",\"points\":-1,\"bonuses\":[]},{\"statId\":\"fumbles_lost\",\"points\":-2,\"bonuses\":[]},{\"statId\":\"passing_interceptions\",\"points\":-2,\"bonuses\":[]},{\"statId\":\"passing_touchdowns\",\"points\":4,\"bonuses\":[]},{\"statId\":\"passing_yards\",\"points\":0.04,\"bonuses\":[]},{\"statId\":\"points_allowed_0_probability\",\"points\":10,\"bonuses\":[]},{\"statId\":\"points_allowed_14_20_probability\",\"points\":1,\"bonuses\":[]},{\"statId\":\"points_allowed_1_6_probability\",\"points\":7,\"bonuses\":[]},{\"statId\":\"points_allowed_21_27_probability\",\"points\":0,\"bonuses\":[]},{\"statId\":\"points_allowed_28_34_probability\",\"points\":-1,\"bonuses\":[]},{\"statId\":\"points_allowed_35_plus_probability\",\"points\":-4,\"bonuses\":[]},{\"statId\":\"points_allowed_7_13_probability\",\"points\":4,\"bonuses\":[]},{\"statId\":\"receiving_touchdowns\",\"points\":6,\"bonuses\":[]},{\"statId\":\"receiving_yards\",\"points\":0.1,\"bonuses\":[]},{\"statId\":\"receptions\",\"points\":1,\"bonuses\":[]},{\"statId\":\"rushing_touchdowns\",\"points\":6,\"bonuses\":[]},{\"statId\":\"rushing_yards\",\"points\":0.1,\"bonuses\":[]},{\"statId\":\"special_teams_touchdowns\",\"points\":6,\"bonuses\":[]}]",
+      "minimumModelImprovement": 0.02,
+      "minimumSamples": 100,
+      "minimumWeekBatches": 8,
+      "generatedThrough": {
+        "season": 2025,
+        "week": 18
+      },
+      "byPosition": {
+        "QB": {
+          "strategy": "recency-only",
+          "reason": "baseline-defended",
+          "samples": 1100,
+          "completedWeekBatches": 20,
+          "modelMae": 7.287207353384698,
+          "baselineMae": 7.0994603317884,
+          "modelImprovement": -0.026445252571613887
+        },
+        "RB": {
+          "strategy": "recency-only",
+          "reason": "baseline-defended",
+          "samples": 2054,
+          "completedWeekBatches": 20,
+          "modelMae": 4.790120250328094,
+          "baselineMae": 4.662460330549191,
+          "modelImprovement": -0.027380376609845852
+        },
+        "WR": {
+          "strategy": "recency-only",
+          "reason": "baseline-defended",
+          "samples": 3396,
+          "completedWeekBatches": 20,
+          "modelMae": 4.7726877562364,
+          "baselineMae": 4.668299183976905,
+          "modelImprovement": -0.022361157274964294
+        },
+        "TE": {
+          "strategy": "recency-only",
+          "reason": "baseline-defended",
+          "samples": 2026,
+          "completedWeekBatches": 20,
+          "modelMae": 3.7399435015591456,
+          "baselineMae": 3.5730976393922234,
+          "modelImprovement": -0.04669501900186034
+        },
+        "K": {
+          "strategy": "recency-only",
+          "reason": "baseline-defended",
+          "samples": 685,
+          "completedWeekBatches": 20,
+          "modelMae": 4.4284203547272,
+          "baselineMae": 4.452022883937717,
+          "modelImprovement": 0.0053015291757983075
+        }
+      }
+    },
+    "qualifiedCandidatePositions": [],
+    "fallbackPositions": ["QB", "RB", "WR", "TE", "K"],
+    "candidateOverall": {
+      "samples": 9261,
+      "centerAdjustment": -1.5270196704910004,
+      "lowerError": -5.216800928583002,
+      "upperError": 5.222686637193942,
+      "mae": 4.389884920244801,
+      "rmse": 6.272842498933555,
+      "bias": -0.09199884887241805,
+      "baselineMae": 4.403225450578449,
+      "improvement": 0.0030297177565359323,
+      "beatsBaseline": true,
+      "intervalCoverage": 0.7104962268465584,
+      "intervalCoverageSamples": 8746
+    },
+    "championOverall": {
+      "samples": 9261,
+      "centerAdjustment": -1.6200803317670143,
+      "lowerError": -5.507838239144011,
+      "upperError": 5.112337265326285,
+      "mae": 4.403225450578449,
+      "rmse": 6.252882269210763,
+      "bias": -0.10768621258541408,
+      "baselineMae": 4.403225450578449,
+      "improvement": 0,
+      "beatsBaseline": false,
+      "intervalCoverage": 0.7103818888634804,
+      "intervalCoverageSamples": 8746
+    },
+    "byPosition": {
+      "QB": {
+        "samples": 1100,
+        "centerAdjustment": -3.41414178959488,
+        "lowerError": -9.566264703418978,
+        "upperError": 8.088893945972716,
+        "mae": 6.564075737482577,
+        "rmse": 8.45233597250689,
+        "bias": -0.2820613102578763,
+        "baselineMae": 6.564075737482577,
+        "improvement": 0,
+        "beatsBaseline": false,
+        "intervalCoverage": 0.7185398655139289,
+        "intervalCoverageSamples": 1041
+      },
+      "RB": {
+        "samples": 2054,
+        "centerAdjustment": -1.031647565372739,
+        "lowerError": -5.34082955530826,
+        "upperError": 5.26342635084999,
+        "mae": 4.454523243636057,
+        "rmse": 6.5056208683375045,
+        "bias": 0.07550103060663077,
+        "baselineMae": 4.454523243636057,
+        "improvement": 0,
+        "beatsBaseline": false,
+        "intervalCoverage": 0.6866288074341765,
+        "intervalCoverageSamples": 1937
+      },
+      "WR": {
+        "samples": 3396,
+        "centerAdjustment": -1.7386050149901862,
+        "lowerError": -5.51085473160355,
+        "upperError": 4.759956005671262,
+        "mae": 4.3201644987844805,
+        "rmse": 6.128216400598861,
+        "bias": -0.2290975862676835,
+        "baselineMae": 4.3201644987844805,
+        "improvement": 0,
+        "beatsBaseline": false,
+        "intervalCoverage": 0.727810650887574,
+        "intervalCoverageSamples": 3211
+      },
+      "TE": {
+        "samples": 2026,
+        "centerAdjustment": -1.29681307762396,
+        "lowerError": -4.0164171855972475,
+        "upperError": 3.628880661394504,
+        "mae": 3.326036981428354,
+        "rmse": 4.939890944749614,
+        "bias": -0.09433746992625539,
+        "baselineMae": 3.326036981428354,
+        "improvement": 0,
+        "beatsBaseline": false,
+        "intervalCoverage": 0.7036069001568217,
+        "intervalCoverageSamples": 1913
+      },
+      "K": {
+        "samples": 685,
+        "centerAdjustment": -0.6916979216576862,
+        "lowerError": -5.527925846194101,
+        "upperError": 6.065522470893285,
+        "mae": 4.377178513725341,
+        "rmse": 5.348756493862365,
+        "bias": 0.1854736156201109,
+        "baselineMae": 4.377178513725341,
+        "improvement": 0,
+        "beatsBaseline": false,
+        "intervalCoverage": 0.7018633540372671,
+        "intervalCoverageSamples": 644
+      }
+    }
+  },
+  "defense": {
+    "predictions": 1632,
+    "overall": {
+      "samples": 1632,
+      "centerAdjustment": 0.3083314454799723,
+      "lowerError": -5.2607342743094225,
+      "upperError": 5.551913527801632,
+      "mae": 4.319306819997732,
+      "rmse": 5.538468662170077,
+      "bias": -0.039228119142218035,
+      "baselineMae": 4.530911945945404,
+      "improvement": 0.046702546523119316,
+      "beatsBaseline": true,
+      "intervalCoverage": 0.716875,
+      "intervalCoverageSamples": 1600
+    }
+  }
+}

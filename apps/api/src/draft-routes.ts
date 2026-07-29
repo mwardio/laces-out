@@ -1,4 +1,5 @@
 import {
+  draftAnalysisResponseSchema,
   draftMarketBaselineSchema,
   draftEventAppendRequestSchema,
   draftEventCorrectionRequestSchema,
@@ -42,6 +43,10 @@ export interface DraftMarketPort {
   getBaseline(userId: string, draftId: string): Promise<unknown>;
 }
 
+export interface DraftAnalysisPort {
+  getAnalysis(userId: string, draftId: string): Promise<unknown>;
+}
+
 /**
  * Manual backup control, supplied by the ESPN live draft service.
  *
@@ -59,6 +64,7 @@ export interface DraftManualBackupPort {
 export interface DraftRouteOptions {
   readonly draftSessions?: DraftSessionPort;
   readonly draftMarket?: DraftMarketPort;
+  readonly draftAnalysis?: DraftAnalysisPort;
   readonly draftManualBackup?: DraftManualBackupPort;
   readonly draftStream?: DraftStreamHub;
 }
@@ -120,6 +126,16 @@ function validatedSession(value: unknown) {
   const result = draftSessionSnapshotSchema.safeParse(value);
   if (!result.success) {
     throw new Error("Draft session service returned an invalid response", {
+      cause: result.error,
+    });
+  }
+  return result.data;
+}
+
+function validatedAnalysis(value: unknown) {
+  const result = draftAnalysisResponseSchema.safeParse(value);
+  if (!result.success) {
+    throw new Error("Draft analysis service returned an invalid response", {
       cause: result.error,
     });
   }
@@ -216,6 +232,25 @@ export function registerDraftRoutes(app: FastifyInstance, options: DraftRouteOpt
     if (!options.draftMarket) return reply.code(503).send(unavailable(request.id));
     const { draftId } = draftPathSchema.parse(request.params);
     return draftMarketBaselineSchema.parse(await options.draftMarket.getBaseline(user.id, draftId));
+  });
+
+  /**
+   * Post-draft and in-progress analysis for one room.
+   *
+   * The service authorizes through the same session read as `GET /v1/drafts/:draftId`, and the
+   * `try`/`catch` around `sendDraftError` is what keeps the unknown-draft body byte-identical to
+   * it. Do not copy the `/market` handler above, which has no catch.
+   */
+  app.get("/v1/drafts/:draftId/analysis", async (request, reply) => {
+    const user = authenticatedUser(request, reply);
+    if (!user) return reply;
+    if (!options.draftAnalysis) return reply.code(503).send(unavailable(request.id));
+    const { draftId } = draftPathSchema.parse(request.params);
+    try {
+      return validatedAnalysis(await options.draftAnalysis.getAnalysis(user.id, draftId));
+    } catch (error) {
+      return sendDraftError(error, request, reply) ?? rethrowUnknown(error);
+    }
   });
 
   app.post("/v1/drafts/:draftId/events", async (request, reply) => {

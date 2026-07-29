@@ -5,6 +5,7 @@ import {
   FIRST_PARTY_ROS_POLICY_VERSION,
   projectionScoringProfileKey,
   type FirstPartyRosChampionPolicy,
+  type ProjectionScoringProfile,
 } from "@fantasy/projections";
 
 import {
@@ -34,8 +35,16 @@ export interface FirstPartyRosAdmissionConstants {
   readonly scoringProfileKey: string;
 }
 
-/** Snapshots the admission identities from the running model/policy/calibration/scoring code. */
-export function firstPartyRosAdmissionConstants(): FirstPartyRosAdmissionConstants {
+/**
+ * Snapshots the admission identities from the running model/policy/calibration/scoring code.
+ *
+ * The scoring profile is explicit so the same frozen validation and admission process can be run
+ * independently per profile. It changes only which profile is being admitted; every gate, including
+ * the `scoring_profile_mismatch` comparison below, keeps its original strength.
+ */
+export function firstPartyRosAdmissionConstants(
+  scoringProfile: ProjectionScoringProfile = HISTORICAL_ROS_SCORING_PROFILE,
+): FirstPartyRosAdmissionConstants {
   return {
     modelVersion: FIRST_PARTY_ROS_MODEL_VERSION,
     policyVersion: FIRST_PARTY_ROS_POLICY_VERSION,
@@ -44,7 +53,7 @@ export function firstPartyRosAdmissionConstants(): FirstPartyRosAdmissionConstan
     availabilityCalibrationVersion: HISTORICAL_ROS_AVAILABILITY_CALIBRATION_VERSION,
     roleCalibrationVersion: HISTORICAL_ROS_ROLE_CALIBRATION_VERSION,
     kickerCalibrationVersion: HISTORICAL_ROS_KICKER_CALIBRATION_VERSION,
-    scoringProfileKey: projectionScoringProfileKey(HISTORICAL_ROS_SCORING_PROFILE),
+    scoringProfileKey: projectionScoringProfileKey(scoringProfile),
   };
 }
 

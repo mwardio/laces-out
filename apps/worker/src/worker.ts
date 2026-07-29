@@ -1,5 +1,12 @@
 import { loadEnvironment } from "@fantasy/config";
 import { createDatabase } from "@fantasy/db";
+import { DrizzleInSeasonDecisionRepository, InSeasonDecisionService } from "@fantasy/decisions";
+import {
+  DrizzleYahooSyncRepository,
+  YahooConnectionService,
+  YahooSyncService,
+} from "@fantasy/league-sync";
+import { parseCredentialKey } from "@fantasy/security";
 import { PgBoss } from "pg-boss";
 import pino from "pino";
 
@@ -12,6 +19,16 @@ import {
   registerSchedules,
   registerWorkers,
 } from "./jobs.js";
+import {
+  DrizzleConnectionCircuitStore,
+  DrizzleLeagueSyncTargetReader,
+  LeagueSyncService,
+} from "./league-sync-service.js";
+import {
+  ChangeEventNotificationCollector,
+  DrizzleChangeEventNotificationRepository,
+} from "./change-event-notifications.js";
+import { DrizzleInjuryChangeEventRepository } from "./injury-change-events.js";
 import { DrizzleLineupLockRepository, LineupLockAlertService } from "./lineup-lock-alerts.js";
 import { currentNflSeason } from "./nfl-season.js";
 import {
@@ -30,12 +47,19 @@ import { FirstPartyRosProjectionShadowService } from "./first-party-ros-projecti
 import { NflverseScheduleRefresher } from "./nflverse-schedules.js";
 import { NflverseWeeklyDataRefresher } from "./nflverse-weekly-data.js";
 import { ProjectionLockWindowService } from "./projection-lock-window.js";
+import { createRecommendationRecomputeService } from "./recommendation-recompute-service.js";
 import { SleeperDataRefresher } from "./sleeper-data.js";
 
 const environment = loadEnvironment();
 const database = createDatabase(environment.DATABASE_URL, 4);
 const catalogRefresher = new NflverseCatalogRefresher({ database: database.db });
-const weeklyDataRefresher = new NflverseWeeklyDataRefresher({ database: database.db });
+const weeklyDataRefresher = new NflverseWeeklyDataRefresher({
+  database: database.db,
+  // WP5: a genuinely new injury state becomes a private change event for each rostering member.
+  changeEvents: new DrizzleInjuryChangeEventRepository(database.db),
+  onChangeEventError: (error) =>
+    logger.warn({ err: error }, "injury ingestion succeeded but change-event emission failed"),
+});
 const scheduleRefresher = new NflverseScheduleRefresher({ database: database.db });
 const projectionLockWindow = new ProjectionLockWindowService(database.db);
 const projectionService = new FirstPartyProjectionService({ database: database.db });
@@ -61,6 +85,9 @@ const notificationSweepService = createNotificationSweepService({
     "lineup-lock": new LineupLockAlertService({
       repository: new DrizzleLineupLockRepository(database.db),
     }),
+    "change-event": new ChangeEventNotificationCollector({
+      repository: new DrizzleChangeEventNotificationRepository(database.db),
+    }),
   },
   ...(vapid
     ? {
@@ -71,6 +98,44 @@ const notificationSweepService = createNotificationSweepService({
       }
     : {}),
 });
+// Yahoo is the only provider whose credential the server may hold and replay, and only when the
+// operator has configured all three secrets. Without them, `leagueSync` is simply absent and the
+// queue's handler reports a stated no-op rather than dead-lettering. ESPN is never constructed
+// here at all: its credential stays in the browser (ADR 0002).
+const credentialKey = environment.CREDENTIAL_ENCRYPTION_KEY
+  ? parseCredentialKey(environment.CREDENTIAL_ENCRYPTION_KEY)
+  : undefined;
+const yahooConnection =
+  environment.YAHOO_CLIENT_ID && environment.YAHOO_CLIENT_SECRET && credentialKey
+    ? new YahooConnectionService({
+        database: database.db,
+        credentialKey,
+        clientId: environment.YAHOO_CLIENT_ID,
+        clientSecret: environment.YAHOO_CLIENT_SECRET,
+        redirectUri: environment.YAHOO_REDIRECT_URI,
+      })
+    : undefined;
+const yahooSync = yahooConnection
+  ? new YahooSyncService({
+      repository: new DrizzleYahooSyncRepository(database.db),
+      tokens: yahooConnection,
+    })
+  : undefined;
+const leagueSyncService = new LeagueSyncService({
+  targets: new DrizzleLeagueSyncTargetReader(database.db),
+  circuit: new DrizzleConnectionCircuitStore(database.db),
+  ...(yahooSync ? { yahooSync } : {}),
+});
+const recommendationRecomputeService = createRecommendationRecomputeService({
+  database: database.db,
+  decisions: new InSeasonDecisionService(new DrizzleInSeasonDecisionRepository(database.db)),
+  onChangeEventError: (error) =>
+    logger.warn(
+      { err: error },
+      "recommendation recompute succeeded but change-event emission failed",
+    ),
+});
+
 const logger = pino({
   level: environment.LOG_LEVEL,
   redact: {
@@ -96,7 +161,9 @@ async function start(): Promise<void> {
   await registerQueues(boss);
   await registerWorkers(boss, logger, {
     dataHealth: dataHealthService,
+    leagueSync: leagueSyncService,
     notificationSweep: notificationSweepService,
+    recommendationRecompute: recommendationRecomputeService,
     projectionRefresh: {
       refreshProjections: async (job, context) => {
         const effectiveJob =

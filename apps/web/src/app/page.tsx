@@ -363,9 +363,12 @@ export default function LandingPage() {
         </section>
 
         {/* Backtest-rigor strip: per-validation-run figures only (never lifetime totals — replays
-            over the same held-out seasons would double-count evidence). Sources: 2,040 paired
-            forecasts and 4 held-out seasons per official replay (reports/ros-validation-*),
-            12,288 release paths per projection (FIRST_PARTY_ROS_DEFAULT_SCENARIOS). */}
+            over the same held-out seasons would double-count evidence). Sources: 3,264 paired
+            forecasts and 4 held-out seasons per official replay (reports/ros-validation-v8-*-n8-*,
+            .report.forecasts and .coverage.fullyHeldOutSeasons; identical in all three scoring
+            profiles), 12,288 release paths per projection (FIRST_PARTY_ROS_DEFAULT_SCENARIOS).
+            The forecast count rose from the earlier replay because the sample widened to 8 players
+            per position and cutoff — it is still one run's total, not a sum across runs. */}
         <section className={styles.signalBar} aria-label="How the forecasts are validated">
           <div className={styles.signalInner}>
             <span>
@@ -373,14 +376,16 @@ export default function LandingPage() {
             </span>
             <i aria-hidden="true" />
             <span>
-              <strong>2K+</strong> predictions graded against reality
+              <strong>3K+</strong> predictions graded against reality
             </span>
             <i aria-hidden="true" />
             <span>
               <strong>12K+</strong> simulations per projection
             </span>
             <i aria-hidden="true" />
-            <span>If it isn&rsquo;t proven, it isn&rsquo;t published</span>
+            <Link className={styles.signalLink} href="/methodology">
+              If it isn&rsquo;t proven, it isn&rsquo;t published
+            </Link>
           </div>
         </section>
 
@@ -886,6 +891,7 @@ export default function LandingPage() {
           </Link>
           <p>Connected leagues. Automatic analysis. Better Sundays.</p>
           <nav aria-label="Legal and account links">
+            <Link href="/methodology">Methodology</Link>
             <Link href="/privacy">Privacy</Link>
             <Link href="/terms">Terms</Link>
             <ContactEasterEgg />

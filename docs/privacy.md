@@ -34,8 +34,14 @@ uploads bounded league data, never the ESPN password or cookie values.
 Data is used to operate the deployment, synchronize authorized leagues, provide league-wide facts
 to authorized league members, generate user-specific analysis, and secure or troubleshoot the
 service. Private rankings, notes, credentials, and personal settings are not shared unless their
-owner explicitly creates a permitted share. Laces Out has no advertising or third-party analytics
-by default and does not sell personal information.
+owner explicitly creates a permitted share. Laces Out has no advertising and does not sell personal
+information. This deployment does run Cloudflare Web Analytics so the operator can observe traffic
+levels; it reports page views through a script loaded from Cloudflare, is not used to profile
+individuals, and feeds no recommendation. Cloudflare states that it does not log query strings.
+What Cloudflare records and retains is governed by Cloudflare's own terms rather than this policy.
+The user-facing statement of this is on the `/privacy` page; keep the two consistent, and note that
+the Content-Security-Policy in `Caddyfile` must permit `static.cloudflareinsights.com` (script) and
+`cloudflareinsights.com` (beacon) or the analytics silently do not run.
 
 The live database retains data until the deployment operator deletes it or it remains necessary for
 an active shared league. Deleted records may remain in encrypted backups until the operator's

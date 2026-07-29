@@ -1,9 +1,18 @@
+import { loadEnvironment } from "@fantasy/config";
+import { AI_PROMPT_VERSION, AI_TOOL_CONTRACT_VERSION } from "@fantasy/contracts";
 import { parseCredentialKey, type CredentialEnvelopeV1 } from "@fantasy/security";
 import { describe, expect, it, vi } from "vitest";
 
-import type { AiCompletionInput, AiProviderAdapter } from "./ai-provider-adapters.js";
+import type {
+  AiCompletionInput,
+  AiCompletionResult,
+  AiProviderAdapter,
+  AiProviderCapabilities,
+} from "./ai-provider-adapters.js";
 import {
   AiService,
+  AI_PROVIDER_DEFAULTS,
+  MANAGED_GEMINI_MODEL,
   type AiCredentialRecord,
   type AiRepository,
   type AiServiceError,
@@ -184,8 +193,96 @@ class MemoryAiRepository implements AiRepository {
   }
 }
 
+/**
+ * Adapters in these tests supply only `complete`. The fixture fills in the rest of the widened
+ * `AiProviderAdapter` surface, defaulting to a model that cannot call tools so every pre-existing
+ * test keeps exercising the bounded-context path it was written for.
+ */
+type FakeAdapter = {
+  complete: (input: AiCompletionInput) => Promise<Partial<AiCompletionResult> & { text: string }>;
+  capabilities?: (model: string) => AiProviderCapabilities;
+};
+
+const TOOL_CAPABLE: AiProviderCapabilities = {
+  toolUse: true,
+  structuredOutput: true,
+  streaming: true,
+  modelSelection: false,
+};
+
+/** The real InSeasonDecisionSnapshot fields the lineup tool reads. */
+function toolSnapshot() {
+  return {
+    generatedAt: NOW.toISOString(),
+    league: { id: LEAGUE_ID, name: "Wide Right League", season: 2026, week: 3, provider: "espn" },
+    team: { id: "t1", name: "Fourth & Long", faabRemaining: 42 },
+    provenance: {
+      algorithmVersion: "in-season-decisions-v1",
+      inputChecksum: "9".repeat(64),
+      leagueLastSyncedAt: NOW.toISOString(),
+      rosterEffectiveAt: NOW.toISOString(),
+      projectionSet: {
+        id: "40000000-0000-4000-8000-000000000001",
+        source: "laces-out",
+        version: "v8",
+        horizon: "week",
+        sourceObservedAt: NOW.toISOString(),
+        sourceObservedAtStatus: "verified",
+        importedAt: NOW.toISOString(),
+      },
+      projectionFreshness: { state: "fresh", observedAt: NOW.toISOString(), label: "Fresh" },
+    },
+    lineup: {
+      state: "available",
+      metric: "mean",
+      feasible: true,
+      currentProjectedPoints: 108.2,
+      optimalProjectedPoints: 110.6,
+      projectedGain: 2.4,
+      assignments: [],
+      changes: [
+        {
+          slotId: "FLEX",
+          slotLabel: "FLEX",
+          remove: { id: "p2", name: "Alcott", projectedPoints: 9.1 },
+          add: { id: "p1", name: "Reed", projectedPoints: 12.4 },
+          projectedPointDelta: 2.4,
+        },
+      ],
+      notes: [],
+    },
+    // An empty waiver list keeps the zero-cost short-circuit assertable from the same fixture.
+    waivers: { state: "available", recommendations: [], notes: [] },
+    trades: { state: "available", bestForMe: [], fairest: [], notes: [] },
+  };
+}
+
+const NO_TOOLS: AiProviderCapabilities = {
+  toolUse: false,
+  structuredOutput: false,
+  streaming: false,
+  modelSelection: true,
+};
+
+function fullAdapter(adapter: FakeAdapter): AiProviderAdapter {
+  return {
+    complete: async (input) => ({
+      requestId: null,
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+      toolCalls: [],
+      stopReason: "end" as const,
+      conversation: null,
+      ...(await adapter.complete(input)),
+    }),
+    capabilities: adapter.capabilities ?? (() => NO_TOOLS),
+  };
+}
+
 function serviceFixture(
-  adapter: AiProviderAdapter,
+  adapter: FakeAdapter,
   repository = new MemoryAiRepository(),
   managedGemini?: {
     readonly apiKey: string;
@@ -198,11 +295,12 @@ function serviceFixture(
     roster: [],
   },
 ) {
+  const wrapped = fullAdapter(adapter);
   const adapters = {
-    openai: adapter,
-    anthropic: adapter,
-    gemini: adapter,
-    openrouter: adapter,
+    openai: wrapped,
+    anthropic: wrapped,
+    gemini: wrapped,
+    openrouter: wrapped,
   };
   return {
     repository,
@@ -665,5 +763,199 @@ describe("AI service", () => {
     } satisfies Partial<AiServiceError>);
     // The cap held: only one successful usage row exists for the day.
     expect(repository.usage.filter((row) => row.succeeded)).toHaveLength(1);
+  });
+  it("enforces the managed 50/day budget, not the 25 shown for unconfigured providers", async () => {
+    const complete = vi.fn(() =>
+      Promise.resolve({
+        text: "Analysis",
+        requestId: null,
+        inputTokens: 1,
+        outputTokens: 1,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+      }),
+    );
+    const { service } = serviceFixture({ complete }, new MemoryAiRepository(), {
+      apiKey: "managed-gemini-secret",
+      dailyRequestLimit: 50,
+      maxOutputTokens: 2000,
+    });
+
+    const listed = await service.listProviders(USER_ID);
+    const gemini = listed.providers.find((item) => item.provider === "gemini");
+    const anthropic = listed.providers.find((item) => item.provider === "anthropic");
+
+    // Managed access is governed by MANAGED_AI_DAILY_REQUEST_LIMIT.
+    expect(gemini).toMatchObject({ accessMode: "managed", dailyRequestLimit: 50 });
+    // The 25 in AI_PROVIDER_DEFAULTS is a display placeholder for a provider the member cannot use
+    // at all. It must never govern an executed request.
+    expect(anthropic).toMatchObject({ accessMode: "unavailable", dailyRequestLimit: 25 });
+    expect(AI_PROVIDER_DEFAULTS.gemini.dailyRequestLimit).toBe(25);
+    expect(AI_PROVIDER_DEFAULTS.gemini.model).toBe(MANAGED_GEMINI_MODEL);
+    // And the enforced managed limit is the configured one, not the placeholder.
+    expect(loadEnvironment({ NODE_ENV: "test" }).MANAGED_AI_DAILY_REQUEST_LIMIT).toBe(50);
+  });
+
+  it("answers start-sit from a tool call and reports tool provenance", async () => {
+    const complete = vi
+      .fn<(input: AiCompletionInput) => Promise<AiCompletionResult>>()
+      .mockResolvedValueOnce({
+        text: "",
+        requestId: "r1",
+        inputTokens: 80,
+        outputTokens: 6,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+        toolCalls: [
+          { callId: "c1", name: "get_lineup_recommendation", argumentsValue: { week: 3 } },
+        ],
+        stopReason: "tool-calls",
+        conversation: { kind: "gemini-interaction", previousInteractionId: "i1" },
+      })
+      .mockResolvedValueOnce({
+        text: "Your lineup is already optimized under the current projection set.",
+        requestId: "r2",
+        inputTokens: 140,
+        outputTokens: 18,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+        toolCalls: [],
+        stopReason: "end",
+        conversation: null,
+      });
+    const { service, repository } = serviceFixture(
+      { complete, capabilities: () => TOOL_CAPABLE },
+      new MemoryAiRepository(),
+      { apiKey: "managed-gemini-secret", dailyRequestLimit: 50, maxOutputTokens: 2000 },
+      toolSnapshot(),
+    );
+
+    const response = await service.generateFeature({
+      userId: USER_ID,
+      leagueId: LEAGUE_ID,
+      feature: "start-sit",
+    });
+
+    expect(response).toMatchObject({ feature: "start-sit", outcome: "generated" });
+    expect(response.toolUse).toMatchObject({
+      state: "used",
+      contractVersion: AI_TOOL_CONTRACT_VERSION,
+      promptVersion: AI_PROMPT_VERSION,
+      calls: [{ name: "get_lineup_recommendation", state: "ok" }],
+    });
+    // ADR 0003: the retrieved result carries the engine's own algorithm version and input checksum.
+    const used = response.toolUse;
+    if (used.state !== "used") throw new Error("Expected tool use");
+    expect(used.calls[0]?.provenance).toMatchObject({
+      algorithmVersion: "in-season-decisions-v1",
+      checksumScope: "decision-snapshot-provenance",
+    });
+    // Two model turns, two reserved-and-finalized ledger rows.
+    expect(repository.usage).toHaveLength(2);
+    expect(repository.usage.every((row) => row.metadata.feature === "start-sit")).toBe(true);
+    expect(repository.usage.every((row) => row.succeeded)).toBe(true);
+    // The tool supplies the Decision Desk data, so the prompt no longer ships the whole blob.
+    const prompt = complete.mock.calls[0]?.[0].prompt ?? "";
+    expect(prompt).not.toContain("faabRemaining");
+    expect(prompt).toContain("League identity");
+    expect(complete.mock.calls[0]?.[0].system).toContain("The tool list above is fixed");
+  });
+
+  it("degrades clearly when the selected model cannot use tools", async () => {
+    const complete = vi.fn<
+      (input: AiCompletionInput) => Promise<Partial<AiCompletionResult> & { text: string }>
+    >(() =>
+      Promise.resolve({
+        text: "Bounded-context answer.",
+        requestId: "r",
+        inputTokens: 40,
+        outputTokens: 8,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+      }),
+    );
+    const { service } = serviceFixture(
+      { complete, capabilities: () => NO_TOOLS },
+      new MemoryAiRepository(),
+      { apiKey: "managed-gemini-secret", dailyRequestLimit: 50, maxOutputTokens: 2000 },
+      toolSnapshot(),
+    );
+
+    const response = await service.generateFeature({
+      userId: USER_ID,
+      leagueId: LEAGUE_ID,
+      feature: "start-sit",
+    });
+
+    expect(response.toolUse).toMatchObject({ state: "unsupported" });
+    expect(response.answer).toBe("Bounded-context answer.");
+    expect(complete.mock.calls[0]?.[0].tools).toBeUndefined();
+  });
+
+  it("returns the deterministic result, not an error, when the budget is exhausted", async () => {
+    const repository = new MemoryAiRepository();
+    const complete = vi.fn(() =>
+      Promise.resolve({
+        text: "",
+        requestId: null,
+        inputTokens: 1,
+        outputTokens: 1,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+        toolCalls: [{ callId: "c1", name: "get_lineup_recommendation", argumentsValue: {} }],
+        stopReason: "tool-calls" as const,
+        conversation: { kind: "gemini-interaction" as const, previousInteractionId: "i1" },
+      }),
+    );
+    const { service } = serviceFixture(
+      { complete, capabilities: () => TOOL_CAPABLE },
+      repository,
+      // One slot for the whole day: the second turn cannot reserve.
+      { apiKey: "managed-gemini-secret", dailyRequestLimit: 1, maxOutputTokens: 2000 },
+      toolSnapshot(),
+    );
+
+    const response = await service.generateFeature({
+      userId: USER_ID,
+      leagueId: LEAGUE_ID,
+      feature: "start-sit",
+    });
+
+    // Never a 429, never a blocked core feature.
+    expect(response.outcome).toBe("deterministic");
+    expect(response.toolUse).toMatchObject({ state: "budget-exhausted" });
+    expect(response.answer).toContain("Reed");
+    expect(complete).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the zero-cost no-action short-circuit ahead of any reservation or tool call", async () => {
+    const repository = new MemoryAiRepository();
+    const complete = vi.fn(() =>
+      Promise.resolve({
+        text: "never reached",
+        requestId: null,
+        inputTokens: 0,
+        outputTokens: 0,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+      }),
+    );
+    const { service } = serviceFixture(
+      { complete, capabilities: () => TOOL_CAPABLE },
+      repository,
+      { apiKey: "managed-gemini-secret", dailyRequestLimit: 50, maxOutputTokens: 2000 },
+      toolSnapshot(),
+    );
+
+    const response = await service.generateFeature({
+      userId: USER_ID,
+      leagueId: LEAGUE_ID,
+      feature: "waiver-scan",
+    });
+
+    expect(response.outcome).toBe("no-action");
+    expect(response.toolUse).toEqual({ state: "not-requested" });
+    expect(complete).not.toHaveBeenCalled();
+    expect(repository.usage).toHaveLength(0);
   });
 });

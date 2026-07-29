@@ -3,6 +3,7 @@ import cookie from "@fastify/cookie";
 import helmet from "@fastify/helmet";
 import rateLimit from "@fastify/rate-limit";
 import { loadEnvironment, type Environment } from "@fantasy/config";
+import type { RecommendationKind } from "@fantasy/jobs";
 import {
   espnBridgeDeviceRequestSchema,
   espnBridgeDeviceListResponseSchema,
@@ -37,7 +38,7 @@ import {
   EspnSupplementalNormalizationError,
   EspnWebClientNormalizationError,
 } from "@fantasy/connector-espn";
-import Fastify, { type FastifyInstance } from "fastify";
+import Fastify, { type FastifyInstance, type FastifyRequest } from "fastify";
 import { createHash } from "node:crypto";
 import { z, ZodError } from "zod";
 
@@ -45,6 +46,7 @@ import { sessionCookieName, sessionLifetimeSeconds, type AuthService } from "./a
 import { type AiServicePort, registerAiRoutes } from "./ai-routes.js";
 import { getDemoDashboard } from "./demo.js";
 import {
+  type DraftAnalysisPort,
   type DraftManualBackupPort,
   type DraftMarketPort,
   type DraftSessionPort,
@@ -70,6 +72,12 @@ import {
   registerRosProjectionStatusRoutes,
 } from "./ros-projection-status-routes.js";
 import { type ScheduleEdgePort, registerScheduleEdgeRoutes } from "./schedule-edge-routes.js";
+import { type ChangeEventPort, registerChangeEventRoutes } from "./change-event-routes.js";
+import {
+  emitProviderSyncChangeEvents,
+  type ChangeEventProducerDependencies,
+} from "./change-event-producers.js";
+import { type DataQualityPort, registerDataQualityRoutes } from "./data-quality-routes.js";
 import type { RefreshAuthorizationPort } from "./refresh-authorization.js";
 import { type RegistrationPort, registerRegistrationRoutes } from "./registration-routes.js";
 import { type PreferencesPort, registerAccountRoutes } from "./account-routes.js";
@@ -124,6 +132,12 @@ export interface EspnBridgePort {
     readonly receiptId: string;
     readonly state: "accepted" | "unchanged";
     readonly receivedAt: string;
+    /**
+     * Internal only — `espnBridgeReceiptSchema` strips it from the wire response. The route needs
+     * it to enqueue the downstream recomputation for the league season the payload actually landed
+     * in, rather than re-deriving one from the untrusted external league id.
+     */
+    readonly leagueSeasonId?: string;
   }>;
   acceptSupplementalSnapshot?(
     deviceToken: string,
@@ -132,6 +146,7 @@ export interface EspnBridgePort {
     readonly receiptId: string;
     readonly state: "accepted" | "unchanged";
     readonly receivedAt: string;
+    readonly leagueSeasonId?: string;
   }>;
   revokeDevice(
     userId: string,
@@ -164,6 +179,7 @@ export interface BuildAppOptions {
   readonly readinessCheck?: () => Promise<boolean>;
   readonly draftSessions?: DraftSessionPort;
   readonly draftMarket?: DraftMarketPort;
+  readonly draftAnalysis?: DraftAnalysisPort;
   readonly draftManualBackup?: DraftManualBackupPort;
   readonly espnBridge?: EspnBridgePort;
   readonly espnLiveDraft?: EspnLiveDraftPort;
@@ -177,6 +193,9 @@ export interface BuildAppOptions {
   readonly rankings?: RankingPort;
   readonly rosProjectionStatus?: RosProjectionStatusPort;
   readonly scheduleEdge?: ScheduleEdgePort;
+  readonly changeEvents?: ChangeEventPort;
+  readonly changeEventProducers?: ChangeEventProducerDependencies;
+  readonly dataQuality?: DataQualityPort;
   readonly refreshAuthorization?: RefreshAuthorizationPort;
   readonly registration?: RegistrationPort;
   readonly preferences?: PreferencesPort;
@@ -195,6 +214,83 @@ export interface BuildAppOptions {
     readonly reason: "league-sync";
     readonly requestedAt: Date;
   }) => Promise<string | null>;
+  /**
+   * Queued after a provider ingestion that actually changed something. A duplicate payload returns
+   * `state: "unchanged"` and enqueues nothing, which is what keeps one ingestion to one run.
+   */
+  readonly enqueueRecommendationRecompute?: (request: {
+    readonly leagueSeasonId: string;
+    readonly kinds: readonly RecommendationKind[];
+    readonly requestedAt: Date;
+  }) => Promise<string | null>;
+}
+
+/**
+ * Every in-season kind a provider ingestion can invalidate. `draft` is excluded deliberately: it has
+ * no in-season producer, and the recompute rejects it by name rather than silently ignoring it.
+ */
+const INGESTION_RECOMPUTE_KINDS: readonly RecommendationKind[] = ["lineup", "trade", "waiver"];
+
+/**
+ * A queue outage must not fail an ingestion that already committed. Matches the existing
+ * projection-refresh guard: warn and continue.
+ */
+async function enqueueRecomputeAfterIngestion(
+  options: BuildAppOptions,
+  leagueSeasonId: string | undefined,
+  request: FastifyRequest,
+): Promise<void> {
+  if (!options.enqueueRecommendationRecompute || !leagueSeasonId) return;
+  try {
+    await options.enqueueRecommendationRecompute({
+      leagueSeasonId,
+      kinds: INGESTION_RECOMPUTE_KINDS,
+      requestedAt: new Date(),
+    });
+  } catch (error) {
+    request.log.warn(
+      { err: error, leagueSeasonId },
+      "provider ingestion succeeded but recommendation recompute enqueue failed",
+    );
+  }
+}
+
+/**
+ * The OAuth callback's own emit seam. Gated on `state === "accepted"` inside the producer, and
+ * failures are swallowed there, so a change-event problem cannot break the redirect back to the app.
+ */
+async function emitYahooCallbackChangeEvents(
+  options: BuildAppOptions,
+  syncs: readonly {
+    readonly state: "accepted" | "unchanged";
+    readonly leagueId: string;
+    readonly leagueSeasonId: string;
+    readonly syncRunId: string;
+  }[],
+  request: FastifyRequest,
+): Promise<void> {
+  const producers = options.changeEventProducers;
+  if (!producers) return;
+  const now = new Date();
+  for (const sync of syncs) {
+    await emitProviderSyncChangeEvents(
+      producers,
+      {
+        provider: "yahoo",
+        state: sync.state,
+        leagueId: sync.leagueId,
+        leagueSeasonId: sync.leagueSeasonId,
+        actorUserId: null,
+        artifactId: sync.syncRunId,
+        occurredAt: now,
+      },
+      (error) =>
+        request.log.warn(
+          { err: error, leagueSeasonId: sync.leagueSeasonId },
+          "Yahoo authorization sync succeeded but change-event emission failed",
+        ),
+    );
+  }
 }
 
 const version = "0.1.0";
@@ -296,6 +392,16 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     "/v1/bridge/espn/live-draft",
   ];
 
+  // The browser origins this deployment answers to: the canonical WEB_URL plus any second domain
+  // pointed at the same stack. Membership in this set is the only thing the extra origins buy —
+  // links the API builds stay on WEB_URL.
+  const allowedWebOrigins: ReadonlySet<string> = new Set([
+    environment.WEB_URL,
+    ...environment.ADDITIONAL_WEB_ORIGINS,
+  ]);
+  const allowedWebOrigin = (origin: string | undefined): string | undefined =>
+    typeof origin === "string" && allowedWebOrigins.has(origin) ? origin : undefined;
+
   await app.register(cors, {
     delegator: (request, callback) => {
       const requestPath = request.url.split("?", 1)[0] ?? request.url;
@@ -303,7 +409,12 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
         espnBridgeIngestPaths.includes(requestPath) &&
         request.headers.origin === "https://fantasy.espn.com";
       callback(null, {
-        origin: fromEspnBridge ? "https://fantasy.espn.com" : environment.WEB_URL,
+        // An allowed origin is reflected back so each domain is told it — and only it — is
+        // permitted. `@fastify/cors` always emits `Vary: Origin` for a delegator, so a shared cache
+        // cannot serve one domain's allowance to another.
+        origin: fromEspnBridge
+          ? "https://fantasy.espn.com"
+          : (allowedWebOrigin(request.headers.origin) ?? environment.WEB_URL),
         credentials: !fromEspnBridge,
         methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
       });
@@ -353,8 +464,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
       !["GET", "HEAD", "OPTIONS"].includes(request.method) &&
       !isBridgeSnapshot
     ) {
-      const origin = request.headers.origin;
-      if (origin !== environment.WEB_URL) {
+      if (allowedWebOrigin(request.headers.origin) === undefined) {
         return reply.code(403).type("application/problem+json").send({
           type: "https://fantasy.local/problems/origin",
           title: "Request origin rejected",
@@ -493,6 +603,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   registerDraftRoutes(app, {
     ...(options.draftSessions ? { draftSessions: options.draftSessions } : {}),
     ...(options.draftMarket ? { draftMarket: options.draftMarket } : {}),
+    ...(options.draftAnalysis ? { draftAnalysis: options.draftAnalysis } : {}),
     ...(options.draftManualBackup ? { draftManualBackup: options.draftManualBackup } : {}),
     draftStream,
   });
@@ -504,6 +615,13 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   });
   registerScheduleEdgeRoutes(app, {
     ...(options.scheduleEdge ? { scheduleEdge: options.scheduleEdge } : {}),
+  });
+  registerChangeEventRoutes(app, {
+    ...(options.changeEvents ? { changeEvents: options.changeEvents } : {}),
+    isTest: environment.NODE_ENV === "test",
+  });
+  registerDataQualityRoutes(app, {
+    ...(options.dataQuality ? { dataQuality: options.dataQuality } : {}),
   });
   registerStatsCenterRoutes(app, {
     ...(options.statsCenter ? { statsCenter: options.statsCenter } : {}),
@@ -529,6 +647,10 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   });
   registerYahooRoutes(app, {
     ...(options.yahooSync ? { yahooSync: options.yahooSync } : {}),
+    ...(options.changeEventProducers ? { changeEventProducers: options.changeEventProducers } : {}),
+    ...(options.enqueueRecommendationRecompute
+      ? { enqueueRecommendationRecompute: options.enqueueRecommendationRecompute }
+      : {}),
     ...(options.enqueueProjectionRefresh
       ? { enqueueProjectionRefresh: options.enqueueProjectionRefresh }
       : {}),
@@ -730,9 +852,11 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
         });
       }
       const snapshot = espnBridgeSnapshotSchema.parse(request.body);
-      const receipt = espnBridgeReceiptSchema.parse(
-        await options.espnBridge.acceptSnapshot(match[1], snapshot),
-      );
+      const accepted = await options.espnBridge.acceptSnapshot(match[1], snapshot);
+      const receipt = espnBridgeReceiptSchema.parse(accepted);
+      if (receipt.state === "accepted") {
+        await enqueueRecomputeAfterIngestion(options, accepted.leagueSeasonId, request);
+      }
       if (receipt.state === "accepted" && options.enqueueProjectionRefresh) {
         try {
           await options.enqueueProjectionRefresh({
@@ -779,9 +903,11 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
         });
       }
       const snapshot = espnSupplementalBridgeSnapshotSchema.parse(request.body);
-      const receipt = espnBridgeReceiptSchema.parse(
-        await options.espnBridge.acceptSupplementalSnapshot(match[1], snapshot),
-      );
+      const accepted = await options.espnBridge.acceptSupplementalSnapshot(match[1], snapshot);
+      const receipt = espnBridgeReceiptSchema.parse(accepted);
+      if (receipt.state === "accepted") {
+        await enqueueRecomputeAfterIngestion(options, accepted.leagueSeasonId, request);
+      }
       return reply.code(receipt.state === "accepted" ? 202 : 200).send(receipt);
     },
   );
@@ -921,6 +1047,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
               }
             }
           }
+          await emitYahooCallbackChangeEvents(options, discovery.syncs, request);
           destination.searchParams.set("sync", "complete");
         } catch (error) {
           request.log.warn(

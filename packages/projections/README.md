@@ -226,10 +226,15 @@ position/window cell and selected strategy with their own checksum. The release 
 configured walk-forward season, block, and row counts and compares nominal coverage only with this
 genuinely out-of-sample record; fitted calibration-set coverage cannot satisfy the gate.
 
-`evaluateFirstPartyRosReleaseGate` combines that immutable record with the exact live identity and
-current coverage, availability, and convergence evidence. Any mismatch, thin evidence, unstable
-convergence, coverage miss, availability miss, unavailable or invalid calibration artifact, or
-zero-game window withholds the result. It cannot return `release` with `not-calibrated`; a success
+`evaluateFirstPartyRosReleaseGate` combines that immutable record with the live identity and
+current coverage, availability, and convergence evidence. The identity comparison is
+position-scoped on the scoring profile (byte-equal whole keys fast-path; otherwise the two keys are
+compared as `projectionScoringProfileKeyForPosition` at the cell's position, failing closed on
+unparseable keys and empty scoped vocabularies), and the availability-MAE ceiling withholds only on
+the same one-sided evidence test the report gate applies — the point comparison survives as a
+structural guard. Any identity mismatch, thin evidence, unstable convergence, coverage miss,
+evidenced availability miss, bias miss, unavailable or invalid calibration artifact, or zero-game
+window withholds the result. It cannot return `release` with `not-calibrated`; a success
 identifies the validated artifact and labels the expanded interval `split-conformal-cqr`.
 The worker invokes a separate hourly shadow rail after the weekly forecast sweep. That rail audits
 the current schedule, immutable weekly model runs, horizon completeness, and held-out evidence, and

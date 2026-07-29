@@ -137,6 +137,12 @@ export interface ProjectionImportRepository {
     | {
         readonly evaluatedAt: Date;
         readonly qualityState: "publishable" | "degraded" | "rejected";
+        /**
+         * `"league"` — the run published nothing for this league. `"positions"` — the run DID
+         * publish, minus the positions it could not price. Absent/unrecognised values fail closed
+         * to `"league"`, the meaning every entry carried before per-position withholding existed.
+         */
+        readonly scope: "league" | "positions";
         readonly reasons: readonly string[];
       }
     | undefined
@@ -176,6 +182,17 @@ function record(value: unknown): Record<string, unknown> | null {
   return typeof value === "object" && value !== null && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : null;
+}
+
+/**
+ * Reads the withholding scope off one `projection_model_runs.metrics.leagues.withheld` entry.
+ *
+ * The worker writes `scope: "positions"` when a league published but some of its positions could
+ * not be. Only that exact literal narrows: a run written before per-position withholding existed,
+ * or one carrying a scope this build does not know, keeps the conservative whole-league meaning.
+ */
+export function managedRunWithholdingScope(entry: unknown): "league" | "positions" {
+  return record(entry)?.scope === "positions" ? "positions" : "league";
 }
 
 function metadataIsoDate(metadata: Record<string, unknown>, key: string): string | null {
@@ -530,6 +547,7 @@ export class DrizzleProjectionImportRepository implements ProjectionImportReposi
     return {
       evaluatedAt: run.createdAt,
       qualityState,
+      scope: managedRunWithholdingScope(leagueEntry),
       reasons,
     };
   }
@@ -949,11 +967,19 @@ export class ProjectionImportService {
               projection.week === scope.currentWeek,
           );
     const currentManagedAt = currentManaged?.managed?.computedAt ?? currentManaged?.importedAt;
+    // A `scope: "positions"` run published this league and withheld only some of its positions, so
+    // it is not a withholding signal at all: `projection-import-workbench.tsx` hides the published
+    // forecast outright on `state: "withheld"`, which would drop a league's QB/RB/WR/TE/K because
+    // its D/ST could not be priced. Its reasons still surface, as a partial-coverage note on the
+    // published state.
+    const partialCoverageReasons = managedRun?.scope === "positions" ? managedRun.reasons : [];
+    const withheldRun = managedRun?.scope === "positions" ? undefined : managedRun;
     const newerWithheldRun =
-      managedRun &&
-      managedRun.reasons.length > 0 &&
-      (!currentManagedAt || managedRun.evaluatedAt.getTime() > new Date(currentManagedAt).getTime())
-        ? managedRun
+      withheldRun &&
+      withheldRun.reasons.length > 0 &&
+      (!currentManagedAt ||
+        withheldRun.evaluatedAt.getTime() > new Date(currentManagedAt).getTime())
+        ? withheldRun
         : undefined;
     return {
       league: {
@@ -978,7 +1004,7 @@ export class ProjectionImportService {
               state: "published",
               evaluatedAt: currentManaged.managed?.computedAt ?? currentManaged.importedAt,
               qualityState: currentManaged.managed?.qualityState ?? null,
-              reasons: [],
+              reasons: [...partialCoverageReasons].slice(0, 10),
             }
           : managedRun
             ? {

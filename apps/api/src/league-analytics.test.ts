@@ -16,6 +16,7 @@ import {
   type AnalyticsTeamRow,
   type LeagueAnalyticsRepository,
 } from "./league-analytics.js";
+import type { ManagedProjectionProfile } from "./managed-projection-profile.js";
 
 const USER_ID = "10000000-0000-4000-8000-000000000001";
 const OTHER_USER_ID = "10000000-0000-4000-8000-000000000002";
@@ -23,6 +24,8 @@ const LEAGUE_ID = "20000000-0000-4000-8000-000000000001";
 const SEASON_ID = "30000000-0000-4000-8000-000000000001";
 const TEAM_A = "40000000-0000-4000-8000-000000000001";
 const TEAM_B = "40000000-0000-4000-8000-000000000002";
+const TEAM_C = "40000000-0000-4000-8000-000000000003";
+const TEAM_D = "40000000-0000-4000-8000-000000000004";
 const SNAPSHOT_A = "50000000-0000-4000-8000-000000000001";
 const SNAPSHOT_B = "50000000-0000-4000-8000-000000000002";
 const PLAYER_A = "60000000-0000-4000-8000-000000000001";
@@ -45,6 +48,7 @@ const season: AnalyticsSeasonRow = {
   provider: "espn",
   season: 2026,
   currentWeek: 2,
+  settings: { teamCount: 4, playoffTeamCount: 2 },
   lastSyncedAt: new Date("2026-09-16T11:55:00.000Z"),
 };
 
@@ -72,6 +76,8 @@ function observation(input: {
   week: number;
   providerMatchupId: string;
   status?: "scheduled" | "in-progress" | "final";
+  homeTeamId?: string;
+  awayTeamId?: string;
   homeScore: string | null;
   awayScore: string | null;
 }): AnalyticsMatchupObservationRow {
@@ -83,8 +89,8 @@ function observation(input: {
     providerMatchupId: input.providerMatchupId,
     week: input.week,
     status: input.status ?? "final",
-    homeTeamId: TEAM_A,
-    awayTeamId: TEAM_B,
+    homeTeamId: input.homeTeamId ?? TEAM_A,
+    awayTeamId: input.awayTeamId ?? TEAM_B,
     homeScore: input.homeScore,
     awayScore: input.awayScore,
   };
@@ -119,6 +125,121 @@ const observations: readonly AnalyticsMatchupObservationRow[] = [
     awayScore: "110",
   }),
 ];
+
+const playoffTeams: readonly AnalyticsTeamRow[] = [
+  ...teams,
+  {
+    id: TEAM_C,
+    name: "Cleat Chasers",
+    abbreviation: "CLT",
+    logoUrl: null,
+    managerDisplayName: "Nia",
+  },
+  {
+    id: TEAM_D,
+    name: "Dune Runners",
+    abbreviation: "DUN",
+    logoUrl: null,
+    managerDisplayName: "Otto",
+  },
+];
+
+/**
+ * Four teams, all 1–1, with two unplayed Week 3 games. Every team can still miss or make a
+ * two-team field, so no probability is pinned at 0 or 1 by the fixture itself.
+ */
+function playoffSchedule(week3: {
+  readonly snapshotId: string;
+  readonly effectiveAt: string;
+  readonly matchupIds: readonly [string, string];
+}): readonly AnalyticsMatchupObservationRow[] {
+  return [
+    observation({
+      matchupId: "90000000-0000-4000-8000-000000000001",
+      snapshotId: "82000000-0000-4000-8000-000000000001",
+      effectiveAt: "2026-09-08T12:00:00.000Z",
+      week: 1,
+      providerMatchupId: "week-1-game-1",
+      homeTeamId: TEAM_A,
+      awayTeamId: TEAM_B,
+      homeScore: "110",
+      awayScore: "100",
+    }),
+    observation({
+      matchupId: "90000000-0000-4000-8000-000000000002",
+      snapshotId: "82000000-0000-4000-8000-000000000001",
+      effectiveAt: "2026-09-08T12:00:00.000Z",
+      week: 1,
+      providerMatchupId: "week-1-game-2",
+      homeTeamId: TEAM_C,
+      awayTeamId: TEAM_D,
+      homeScore: "120",
+      awayScore: "90",
+    }),
+    observation({
+      matchupId: "90000000-0000-4000-8000-000000000003",
+      snapshotId: "82000000-0000-4000-8000-000000000002",
+      effectiveAt: "2026-09-15T12:00:00.000Z",
+      week: 2,
+      providerMatchupId: "week-2-game-1",
+      homeTeamId: TEAM_B,
+      awayTeamId: TEAM_A,
+      homeScore: "115",
+      awayScore: "95",
+    }),
+    observation({
+      matchupId: "90000000-0000-4000-8000-000000000004",
+      snapshotId: "82000000-0000-4000-8000-000000000002",
+      effectiveAt: "2026-09-15T12:00:00.000Z",
+      week: 2,
+      providerMatchupId: "week-2-game-2",
+      homeTeamId: TEAM_D,
+      awayTeamId: TEAM_C,
+      homeScore: "130",
+      awayScore: "105",
+    }),
+    observation({
+      matchupId: week3.matchupIds[0],
+      snapshotId: week3.snapshotId,
+      effectiveAt: week3.effectiveAt,
+      week: 3,
+      providerMatchupId: "week-3-game-1",
+      status: "scheduled",
+      homeTeamId: TEAM_A,
+      awayTeamId: TEAM_C,
+      homeScore: null,
+      awayScore: null,
+    }),
+    observation({
+      matchupId: week3.matchupIds[1],
+      snapshotId: week3.snapshotId,
+      effectiveAt: week3.effectiveAt,
+      week: 3,
+      providerMatchupId: "week-3-game-2",
+      status: "scheduled",
+      homeTeamId: TEAM_B,
+      awayTeamId: TEAM_D,
+      homeScore: null,
+      awayScore: null,
+    }),
+  ];
+}
+
+const withRemainingSchedule = playoffSchedule({
+  snapshotId: "82000000-0000-4000-8000-000000000003",
+  effectiveAt: "2026-09-16T09:00:00.000Z",
+  matchupIds: ["90000000-0000-4000-8000-000000000005", "90000000-0000-4000-8000-000000000006"],
+});
+
+/** Identical facts re-observed under a newer snapshot; only the snapshot identity moved. */
+const resyncedSchedule = playoffSchedule({
+  snapshotId: "82000000-0000-4000-8000-000000000004",
+  effectiveAt: "2026-09-16T10:00:00.000Z",
+  matchupIds: ["90000000-0000-4000-8000-000000000007", "90000000-0000-4000-8000-000000000008"],
+});
+
+/** Week 3 never scheduled, so the stored season has nothing left to simulate. */
+const completedSchedule = withRemainingSchedule.filter((row) => row.week !== 3);
 
 const slotRules: readonly AnalyticsSlotRuleRow[] = [
   { slotCode: "QB", count: 1, eligiblePositions: ["QB"], isStarter: true },
@@ -199,6 +320,7 @@ const projectionRows: readonly AnalyticsProjectionRow[] = [
 class FakeRepository implements LeagueAnalyticsRepository {
   membership: AnalyticsMembershipRow | undefined = membership;
   season: AnalyticsSeasonRow | undefined = season;
+  teams: readonly AnalyticsTeamRow[] = teams;
   observations: readonly AnalyticsMatchupObservationRow[] = observations;
   projectionCandidates: readonly AnalyticsProjectionSetRow[] = projectionCandidates;
   projectionRows: readonly AnalyticsProjectionRow[] = projectionRows;
@@ -215,7 +337,7 @@ class FakeRepository implements LeagueAnalyticsRepository {
   }
   listTeams(_leagueSeasonId: string, limit: number) {
     this.downstreamReads += 1;
-    return Promise.resolve(teams.slice(0, limit));
+    return Promise.resolve(this.teams.slice(0, limit));
   }
   listMatchupObservations(_leagueSeasonId: string, limit: number) {
     this.downstreamReads += 1;
@@ -251,6 +373,7 @@ class FakeRepository implements LeagueAnalyticsRepository {
       this.projectionRows.filter((row) => playerIds.includes(row.playerId)).slice(0, limit),
     );
   }
+  findManagedProjectionProfile?: (leagueSeasonId: string) => Promise<ManagedProjectionProfile>;
 }
 
 describe("league analytics data preparation", () => {
@@ -360,6 +483,23 @@ describe("LeagueAnalyticsService", () => {
     }
   });
 
+  it("explains a missing positional projection set when managed weekly scoring is unsupported", async () => {
+    const repository = new FakeRepository();
+    repository.projectionCandidates = [];
+    repository.findManagedProjectionProfile = () => Promise.resolve({ key: null, positions: [] });
+    const snapshot = await new LeagueAnalyticsService(repository, () => NOW).getSnapshot(
+      USER_ID,
+      LEAGUE_ID,
+    );
+
+    expect(snapshot?.positional.state).toBe("unavailable");
+    if (snapshot?.positional.state === "unavailable") {
+      expect(snapshot.positional.reasons[0]?.message).toContain(
+        "managed weekly projections are withheld",
+      );
+    }
+  });
+
   it("awards only the weeks the admitted scores cover and withholds the rest with reasons", async () => {
     const service = new LeagueAnalyticsService(new FakeRepository(), () => NOW);
     const snapshot = await service.getSnapshot(USER_ID, LEAGUE_ID);
@@ -387,5 +527,100 @@ describe("LeagueAnalyticsService", () => {
       { id: "bench-warmer", code: "LINEUP_POINTS_MISSING" },
       { id: "photo-finish", code: "NO_QUALIFYING_TEAM" },
     ]);
+  });
+});
+
+/** Every playoff-odds case reads the same season facts; only the withheld rule or schedule moves. */
+async function playoffSnapshot(
+  overrides: {
+    readonly observations?: readonly AnalyticsMatchupObservationRow[];
+    readonly settings?: Record<string, unknown>;
+  } = {},
+) {
+  const repository = new FakeRepository();
+  repository.teams = playoffTeams;
+  repository.observations = overrides.observations ?? withRemainingSchedule;
+  if (overrides.settings) repository.season = { ...season, settings: overrides.settings };
+  const snapshot = await new LeagueAnalyticsService(repository, () => NOW).getSnapshot(
+    USER_ID,
+    LEAGUE_ID,
+  );
+  return leagueAnalyticsSnapshotSchema.parse(snapshot);
+}
+
+describe("LeagueAnalyticsService playoff odds", () => {
+  it("simulates seeded odds, seed distributions, and sampling error from the effective snapshot", async () => {
+    const odds = (await playoffSnapshot()).playoffOdds;
+
+    expect(odds?.state).toBe("available");
+    if (odds?.state !== "available") return;
+    expect(odds.playoffTeamCount).toBe(2);
+    expect(odds.simulations).toBe(10_000);
+    expect(odds.remainingMatchups).toBe(2);
+    // The seed is a pure function of season, week, and the snapshot the deduplicator kept last.
+    expect(odds.matchupSnapshotId).toBe("82000000-0000-4000-8000-000000000003");
+    expect(odds.seed).toBe(
+      `playoff-odds:v1:${SEASON_ID}:week-2:snapshot-82000000-0000-4000-8000-000000000003`,
+    );
+    expect(odds.forecastBasis.id).toBe("current-points-per-scored-week");
+    expect(odds.samplingErrorDefinition).toContain("Monte Carlo");
+
+    expect(odds.teams).toHaveLength(4);
+    // Exactly two of four teams take the two-team field in every simulated season.
+    expect(odds.teams.reduce((sum, team) => sum + team.playoffProbability, 0)).toBeCloseTo(2, 10);
+    for (const team of odds.teams) {
+      expect(team.playoffProbability).toBeGreaterThan(0);
+      expect(team.playoffProbability).toBeLessThan(1);
+      expect(team.monteCarloStandardError).toBeGreaterThan(0);
+      expect(team.expectedSeed).toBeGreaterThanOrEqual(1);
+      expect(team.expectedSeed).toBeLessThanOrEqual(4);
+      expect(team.seedProbabilities.map((entry) => entry.seed)).toEqual([1, 2, 3, 4]);
+      expect(team.seedProbabilities.reduce((sum, entry) => sum + entry.probability, 0)).toBeCloseTo(
+        1,
+        10,
+      );
+    }
+  });
+
+  it("names the unsupplied playoff rule and leaves every other section available", async () => {
+    const parsed = await playoffSnapshot({ settings: { teamCount: 4 } });
+
+    expect(parsed.playoffOdds).toMatchObject({
+      state: "unavailable",
+      reasons: [{ code: "PLAYOFF_RULES_MISSING" }],
+    });
+    const reasons = parsed.playoffOdds?.state === "unavailable" ? parsed.playoffOdds.reasons : [];
+    expect(reasons[0]?.message).toContain("playoffTeamCount");
+
+    // One unknown rule degrades one section; nothing else in the response notices.
+    expect(parsed.scores.state).toBe("available");
+    expect(parsed.power.state).toBe("available");
+    expect(parsed.positional.state).toBe("available");
+    expect(parsed.opponentScout.state).toBe("available");
+    expect(parsed.weeklyAwards.state).toBe("available");
+  });
+
+  it("reports a completed season instead of simulating a schedule with nothing left", async () => {
+    const parsed = await playoffSnapshot({ observations: completedSchedule });
+
+    expect(parsed.playoffOdds).toMatchObject({
+      state: "unavailable",
+      reasons: [{ code: "PLAYOFF_SEASON_COMPLETE" }],
+    });
+  });
+
+  it("replays identical probabilities for unchanged state and reseeds when the snapshot moves", async () => {
+    const first = (await playoffSnapshot()).playoffOdds;
+    const second = (await playoffSnapshot()).playoffOdds;
+    const resynced = (await playoffSnapshot({ observations: resyncedSchedule })).playoffOdds;
+
+    expect(second).toEqual(first);
+    if (first?.state !== "available" || resynced?.state !== "available") {
+      throw new Error("Expected both playoff simulations to be available");
+    }
+    expect(resynced.seed).not.toBe(first.seed);
+    expect(resynced.teams.map((team) => team.playoffProbability)).not.toEqual(
+      first.teams.map((team) => team.playoffProbability),
+    );
   });
 });

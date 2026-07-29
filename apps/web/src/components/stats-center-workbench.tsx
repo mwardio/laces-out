@@ -183,12 +183,21 @@ const efficiencyColumns: readonly Column[] = [
   { kind: "total", id: "passEpa", short: "PEPA", format: "dec" },
 ];
 
-const familyOptions: readonly { value: MetricFamily; label: string; hint: string }[] = [
-  { value: "usage", label: "Usage", hint: "Targets, carries, and time on the field" },
-  { value: "production", label: "Production", hint: "Scored output and boom or bust shape" },
-  { value: "efficiency", label: "Efficiency", hint: "Air yards, EPA, and derived shares" },
-  { value: "trend", label: "Trend", hint: "Recent weeks against the full window" },
+const familyOptions: readonly { value: MetricFamily; label: string }[] = [
+  { value: "usage", label: "Usage" },
+  { value: "production", label: "Production" },
+  { value: "efficiency", label: "Efficiency" },
+  { value: "trend", label: "Trend" },
 ];
+
+// The metric tabs show titles only; the active family's description renders as
+// a single muted line below the tab strip instead of wrapping inside each tab.
+const familyHints: Readonly<Record<MetricFamily, string>> = {
+  usage: "Targets, carries, and time on the field",
+  production: "Scored output and boom or bust shape",
+  efficiency: "Air yards, EPA, and derived shares",
+  trend: "Recent weeks against the full window",
+};
 
 const trendOptions: readonly { value: StatsCenterTrendMetric; label: string }[] = [
   { value: "opportunitiesPerGame", label: "Opportunities per game" },
@@ -878,11 +887,11 @@ export function StatsCenterWorkbench() {
             onClick={() => chooseFamily(option.value)}
             key={option.value}
           >
-            <span>{option.label}</span>
-            {option.hint}
+            {option.label}
           </button>
         ))}
       </div>
+      <p className={styles.metricHint}>{familyHints[family]}</p>
 
       {view.state === "loading" ? (
         <div className={styles.stateCard} role="status">

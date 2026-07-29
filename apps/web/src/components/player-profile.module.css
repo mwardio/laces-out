@@ -2,7 +2,9 @@
   .page {
     display: grid;
     gap: 16px;
-    padding: 26px 26px 90px;
+    /* Top padding halved (was 26px), stacked on top of .main-content's own
+       halved top padding. */
+    padding: 13px 26px 90px;
   }
 
   .back {
@@ -50,7 +52,8 @@
     max-width: 58ch;
     margin-top: 8px;
     color: var(--ink-500);
-    font-size: 13px;
+    /* Standardized to 12px (was 13px) to match the app's other subtitles. */
+    font-size: 12px;
     line-height: 1.6;
   }
 
@@ -469,7 +472,8 @@
   @media (max-width: 720px) {
     .page {
       gap: 14px;
-      padding: 18px 12px 110px;
+      /* Top padding halved (was 18px). */
+      padding: 9px 12px 110px;
     }
 
     .hero h1 {

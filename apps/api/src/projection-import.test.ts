@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { projectionSetSummarySchema } from "@fantasy/contracts";
+import { projectionSetListResponseSchema, projectionSetSummarySchema } from "@fantasy/contracts";
 
 import {
+  managedRunWithholdingScope,
   ProjectionImportService,
   type CommitProjectionSetInput,
   type ProjectionImportRepository,
@@ -46,6 +47,14 @@ class FakeRepository implements ProjectionImportRepository {
   projectionPlayers: readonly StoredProjectionPlayer[] = [];
   committed: CommitProjectionSetInput | undefined;
   resolverCalls = 0;
+  managedRun:
+    | {
+        readonly evaluatedAt: Date;
+        readonly qualityState: "publishable" | "degraded" | "rejected";
+        readonly scope: "league" | "positions";
+        readonly reasons: readonly string[];
+      }
+    | undefined;
 
   findScope(actorUserId: string, leagueSeasonId: string) {
     return Promise.resolve(
@@ -64,6 +73,10 @@ class FakeRepository implements ProjectionImportRepository {
 
   listProjectionPlayers() {
     return Promise.resolve(this.projectionPlayers);
+  }
+
+  latestManagedRunStatus() {
+    return Promise.resolve(this.managedRun);
   }
 
   commitProjectionSet(input: CommitProjectionSetInput) {
@@ -96,6 +109,35 @@ class FakeRepository implements ProjectionImportRepository {
       },
     });
   }
+}
+
+const MANAGED_COMPUTED_AT = "2026-09-10T11:59:00.000Z";
+
+/** The league's own managed weekly set for `scope.currentWeek`. */
+function managedWeeklySet(): StoredProjectionSet {
+  return {
+    id: SET_ID,
+    leagueSeasonId: SEASON_ID,
+    creatorUserId: null,
+    creatorDisplayName: null,
+    visibility: "league",
+    source: "laces-out-first-party",
+    season: 2026,
+    week: 2,
+    horizon: "week",
+    inputChecksum: CHECKSUM,
+    metadata: {
+      sourceLabel: "Laces Out Week 2 forecast",
+      modelVersion: "first-party-v1",
+      computedAt: MANAGED_COMPUTED_AT,
+      qualityState: "publishable",
+      supportedPositions: ["QB", "RB", "WR", "TE", "K"],
+      publishedPositions: ["QB", "RB", "WR", "TE", "K"],
+    },
+    fetchedAt: new Date("2026-09-10T11:45:00.000Z"),
+    createdAt: new Date(MANAGED_COMPUTED_AT),
+    playerCount: 213,
+  };
 }
 
 function request(csv: string, visibility: "private" | "league" = "private") {
@@ -437,6 +479,86 @@ describe("ProjectionImportService", () => {
         coverage: { projected: 213, eligible: 214 },
         backtest: { samples: 1840, mae: 4.18, baselineMae: 4.62 },
       },
+    });
+  });
+
+  // The weekly rail can now withhold single positions of an otherwise published league
+  // (`scope: "positions"`). `projection-import-workbench.tsx` hides the managed forecast entirely
+  // when this status reads "withheld", so mistaking a partial withholding for a whole-league one
+  // would delete a league's QB/RB/WR/TE/K from the UI because its D/ST could not be priced.
+  describe("managed forecast status", () => {
+    it("reads a per-position withholding as published, with the withheld positions as a note", async () => {
+      const repository = new FakeRepository();
+      repository.sets = [managedWeeklySet()];
+      repository.managedRun = {
+        // Deliberately AFTER the set's computedAt, so the newer-run timestamp predicate would fire
+        // if scope were ignored. Scope, not the clock, must decide this.
+        evaluatedAt: new Date("2026-09-10T12:05:00.000Z"),
+        qualityState: "publishable",
+        scope: "positions",
+        reasons: ["DST withheld: NONLINEAR_RULE: ESPN stat 132 has no per-unit component."],
+      };
+      const service = new ProjectionImportService(repository, () => NOW);
+
+      const response = await service.list(USER_ID, SEASON_ID);
+
+      expect(() => projectionSetListResponseSchema.parse(response)).not.toThrow();
+      expect(response.managedForecastStatus).toEqual({
+        state: "published",
+        evaluatedAt: MANAGED_COMPUTED_AT,
+        qualityState: "publishable",
+        reasons: ["DST withheld: NONLINEAR_RULE: ESPN stat 132 has no per-unit component."],
+      });
+      // The published forecast stays listed — this is the outcome the workbench would otherwise
+      // discard.
+      expect(response.projectionSets.map((set) => set.id)).toContain(SET_ID);
+    });
+
+    it("still reports a whole-league withholding from a newer run as withheld", async () => {
+      const repository = new FakeRepository();
+      repository.sets = [managedWeeklySet()];
+      repository.managedRun = {
+        evaluatedAt: new Date("2026-09-10T12:05:00.000Z"),
+        qualityState: "rejected",
+        scope: "league",
+        reasons: ["League roster snapshots are incomplete."],
+      };
+      const service = new ProjectionImportService(repository, () => NOW);
+
+      const response = await service.list(USER_ID, SEASON_ID);
+
+      expect(response.managedForecastStatus).toEqual({
+        state: "withheld",
+        evaluatedAt: "2026-09-10T12:05:00.000Z",
+        qualityState: "rejected",
+        reasons: ["League roster snapshots are incomplete."],
+      });
+    });
+
+    it("reports a clean published run with no notes", async () => {
+      const repository = new FakeRepository();
+      repository.sets = [managedWeeklySet()];
+      repository.managedRun = {
+        evaluatedAt: new Date("2026-09-10T12:05:00.000Z"),
+        qualityState: "publishable",
+        scope: "league",
+        reasons: [],
+      };
+      const service = new ProjectionImportService(repository, () => NOW);
+
+      expect((await service.list(USER_ID, SEASON_ID)).managedForecastStatus).toMatchObject({
+        state: "published",
+        reasons: [],
+      });
+    });
+
+    it("fails closed to a whole-league scope for entries this build does not recognise", () => {
+      expect(managedRunWithholdingScope({ scope: "positions" })).toBe("positions");
+      expect(managedRunWithholdingScope({ scope: "league" })).toBe("league");
+      // A run written before per-position withholding existed carries no scope at all.
+      expect(managedRunWithholdingScope({ leagueSeasonId: SEASON_ID })).toBe("league");
+      expect(managedRunWithholdingScope({ scope: "something-new" })).toBe("league");
+      expect(managedRunWithholdingScope(undefined)).toBe("league");
     });
   });
 

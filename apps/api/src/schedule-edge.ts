@@ -1,11 +1,12 @@
 import { createHash } from "node:crypto";
 
-import type {
-  ScheduleEdgeAvailability,
-  ScheduleEdgeMatrixResponse,
-  ScheduleEdgeResponse,
-  ScheduleEdgeSource,
-  ScheduleEdgeWindow,
+import {
+  parseLeagueRules,
+  type ScheduleEdgeAvailability,
+  type ScheduleEdgeMatrixResponse,
+  type ScheduleEdgeResponse,
+  type ScheduleEdgeSource,
+  type ScheduleEdgeWindow,
 } from "@fantasy/contracts";
 import {
   fantasyTeams,
@@ -72,7 +73,11 @@ import {
   selectAdmittedSource,
   type AdmittedSourceRow,
 } from "./admitted-source.js";
-import { currentManagedProjectionProfileKey } from "./managed-projection-profile.js";
+import {
+  currentManagedProjectionProfile,
+  currentManagedProjectionProfileKey,
+  type ManagedProjectionProfile,
+} from "./managed-projection-profile.js";
 import { canonicalNflTeamCode } from "./nfl-team-code.js";
 import { projectionTimestampProvenance } from "./projection-provenance.js";
 import type { ScheduleEdgeMatrixQuery, ScheduleEdgeMemberQuery } from "./schedule-edge-routes.js";
@@ -320,6 +325,12 @@ export interface ScheduleEdgeRepository {
     playerIds: readonly string[],
     limit: number,
   ): Promise<readonly ScheduleEdgeProjectionRow[]>;
+  /**
+   * The managed (`laces-out-first-party`) weekly projection profile for this league, so an empty
+   * `listProjectionSets` result can explain WHY managed sets were withheld instead of leaving that
+   * silent. Optional so existing repository implementations and test doubles are unaffected.
+   */
+  findManagedProjectionProfile?(leagueSeasonId: string): Promise<ManagedProjectionProfile>;
 }
 
 export class DrizzleScheduleEdgeRepository implements ScheduleEdgeRepository {
@@ -580,6 +591,11 @@ export class DrizzleScheduleEdgeRepository implements ScheduleEdgeRepository {
     week: number | null,
     limit: number,
   ): Promise<readonly ScheduleEdgeProjectionSetRow[]> {
+    // A null key silently excludes every `laces-out-first-party` set below with no reason attached
+    // to this result. `loadProjectionContext`'s zero-candidates branch recovers that reason via
+    // `findManagedProjectionProfile`; a richer per-position reason is available from
+    // `currentManagedProjectionProfile` (`./managed-projection-profile.js`) if a future pass wants
+    // to attribute the withholding to specific unsupported positions here too.
     const managedProfileKey = await currentManagedProjectionProfileKey(
       this.#database,
       leagueSeasonId,
@@ -664,6 +680,10 @@ export class DrizzleScheduleEdgeRepository implements ScheduleEdgeRepository {
       .orderBy(asc(playerProjections.projectionSetId), asc(playerProjections.playerId))
       .limit(limit);
   }
+
+  findManagedProjectionProfile(leagueSeasonId: string): Promise<ManagedProjectionProfile> {
+    return currentManagedProjectionProfile(this.#database, leagueSeasonId);
+  }
 }
 
 const DEFINITIONS = {
@@ -728,12 +748,6 @@ function completedThroughWeek(value: number | null): number {
   return currentWeek === null ? 0 : currentWeek - 1;
 }
 
-function objectValue(value: unknown): Record<string, unknown> | null {
-  return value !== null && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
-
 function labelForWindow(startWeek: number, endWeek: number): string {
   return startWeek === endWeek ? `Week ${startWeek}` : `Weeks ${startWeek}–${endWeek}`;
 }
@@ -786,10 +800,10 @@ export function resolveScheduleEdgeWindows(
     };
   }
 
-  const operationalRules = objectValue(settings.operationalRules);
-  const regularSeasonPeriods = integerInRange(operationalRules?.regularSeasonMatchupPeriods, 1, 17);
-  const playoffPeriodLength = integerInRange(operationalRules?.playoffMatchupPeriodLength, 1, 10);
-  const playoffTeamCount = integerInRange(settings.playoffTeamCount, 2, 32);
+  const rules = parseLeagueRules(settings);
+  const regularSeasonPeriods = rules.regularSeasonMatchupPeriods;
+  const playoffPeriodLength = rules.playoffMatchupPeriodLength;
+  const playoffTeamCount = rules.playoffTeamCount;
   if (regularSeasonPeriods !== null && playoffPeriodLength !== null && playoffTeamCount !== null) {
     const playoffStart = regularSeasonPeriods + 1;
     const rounds = Math.ceil(Math.log2(playoffTeamCount));
@@ -825,6 +839,21 @@ function availability(
   return { state, reason };
 }
 
+/**
+ * Why managed (`laces-out-first-party`) sets are invisible to `listProjectionSets`' compatibility
+ * filter for this league. Mirrors the equivalent text in `in-season-decisions.ts`; kept separate
+ * rather than shared because the two surfaces' wire contracts are independent.
+ */
+function managedProjectionsWithheldReason(profile: ManagedProjectionProfile): string {
+  if (profile.key !== null) {
+    return "no managed weekly projection set has been published yet for this league's scoring profile";
+  }
+  if (profile.positions === null) {
+    return "the league's stored scoring rules exceeded the bounded read, so they could not be checked";
+  }
+  return "this league's scoring rules do not normalize to a position Laces Out's managed weekly projections support";
+}
+
 function scoringWarnings(result: LeagueScoringNormalizationResult): string[] {
   const warnings = result.warnings.map((warning) => boundedText(warning.message, 500));
   if (result.state === "unavailable") {
@@ -844,6 +873,50 @@ function normalizeScoring(
     rows: rows.map((row) => ({ provider: season.provider, ...row })),
     availableStatIds: WEEKLY_SCORING_COMPONENTS,
   });
+}
+
+/**
+ * Schedule Edge only ever scores QB/RB/WR/TE (`SCHEDULE_EDGE_POSITIONS` has no K or D/ST), so this
+ * narrows `normalizeLeagueScoringProfile`'s always-six-position `positions` array down to the
+ * four this surface can ever use. `state === "available"` on the whole result does NOT imply any
+ * of these four are supported (a league scoring only K normalizes to "available" with all four
+ * withheld) — every availability derivation in this file must read this, not `result.state`.
+ */
+function scheduleEdgeSupportedPositions(
+  normalized: LeagueScoringNormalizationResult | null,
+): readonly SupportedPosition[] {
+  if (!normalized) return [];
+  return SUPPORTED_POSITIONS.filter(
+    (position) =>
+      normalized.positions.find((entry) => entry.position === position)?.supported === true,
+  );
+}
+
+/**
+ * Names the withheld positions and summarizes the underlying per-position fatal reasons (deduped
+ * across positions that failed for the same cause). The full per-rule detail continues to flow
+ * through `scoringWarnings` — this is a bounded, human-scannable summary, not a second warnings
+ * list.
+ */
+function withheldPositionsReason(
+  normalized: LeagueScoringNormalizationResult,
+  withheld: readonly SupportedPosition[],
+): string {
+  const messages = [
+    ...new Set(
+      withheld.flatMap(
+        (position) =>
+          normalized.positions
+            .find((entry) => entry.position === position)
+            ?.reasons.map((reason) => reason.message) ?? [],
+      ),
+    ),
+  ];
+  const summary =
+    messages.length > 0
+      ? messages.join(" ")
+      : "these positions' scoring rules do not normalize to a supported profile.";
+  return boundedText(`${withheld.join(", ")} withheld: ${summary}`, 700);
 }
 
 function checksumOrNull(value: string): string | null {
@@ -1307,14 +1380,17 @@ async function loadProjectionContext(
     (set): set is ScheduleEdgeProjectionSetRow => set !== null,
   );
   if (selectedSets.length === 0) {
+    const managedProfile = repository.findManagedProjectionProfile
+      ? await repository.findManagedProjectionProfile(season.id)
+      : undefined;
+    const reasonText = managedProfile
+      ? `No compatible weekly or rest-of-season projection set is available. Managed weekly projections are withheld: ${managedProjectionsWithheldReason(managedProfile)}.`
+      : "No compatible weekly or rest-of-season projection set is available.";
     return {
       ...selected,
       points: new Map(),
       sources: [],
-      availability: availability(
-        "unavailable",
-        "No compatible weekly or rest-of-season projection set is available.",
-      ),
+      availability: availability("unavailable", reasonText),
     };
   }
   const rows = await repository.listProjectionRows(
@@ -1390,9 +1466,16 @@ function computeAnalysis(input: {
   readonly current: LoadedScheduleEvidence;
   readonly prior: LoadedScheduleEvidence;
   readonly scoringProfile: ProjectionScoringProfile | null;
+  /**
+   * The subset of QB/RB/WR/TE this league's scoring rules support. Ratings and schedule strength
+   * are computed only for these positions; a withheld position simply never gets a totals row, so
+   * every downstream per-position lookup (`findCurrentRating`, `findStrength`) misses and falls
+   * back to its own existing "unavailable" + reason contract — never a fabricated approximation.
+   */
+  readonly supportedPositions: readonly SupportedPosition[];
 }): ComputedScheduleEdgeAnalysis {
   const schedule = teamSchedule(input.current, input.season.season);
-  if (!input.scoringProfile) {
+  if (!input.scoringProfile || input.supportedPositions.length === 0) {
     return {
       schedule,
       ratings: null,
@@ -1427,7 +1510,7 @@ function computeAnalysis(input: {
     weeklyStats: stats,
     weeklyRosters,
     scoringProfile: input.scoringProfile,
-    positions: SCHEDULE_EDGE_POSITIONS,
+    positions: input.supportedPositions,
   });
   const ratings = calculateScheduleEdgeDefenseRatings({
     targetSeason: input.season.season,
@@ -1444,7 +1527,7 @@ function computeAnalysis(input: {
       endWeek: input.windows.selected.endWeek,
       schedule,
       ratings,
-      positions: SCHEDULE_EDGE_POSITIONS,
+      positions: input.supportedPositions,
     }),
     playoffStrength: deriveScheduleStrength({
       season: input.season.season,
@@ -1452,7 +1535,7 @@ function computeAnalysis(input: {
       endWeek: input.windows.playoff.endWeek,
       schedule,
       ratings,
-      positions: SCHEDULE_EDGE_POSITIONS,
+      positions: input.supportedPositions,
     }),
     completeSlices: totals.completeSlices,
     incompleteSlices: totals.incompleteSlices,
@@ -1834,11 +1917,17 @@ function matchupAvailability(
   scoring: LeagueScoringNormalizationResult | null,
   analysis: ComputedScheduleEdgeAnalysis,
 ): ScheduleEdgeAvailability {
-  if (!scoring || scoring.state === "unavailable") {
+  if (!scoring) {
     return availability(
       "unavailable",
       "The league's scoring rules cannot be normalized safely for this analysis.",
     );
+  }
+  // Gate on the schedule-edge-relevant positions, not the whole-league `state` — a league scoring
+  // only kicking (state "available") still withholds every QB/RB/WR/TE matchup.
+  const supported = scheduleEdgeSupportedPositions(scoring);
+  if (supported.length === 0) {
+    return availability("unavailable", withheldPositionsReason(scoring, SUPPORTED_POSITIONS));
   }
   if (!analysis.ratings || analysis.completeSlices === 0) {
     return availability(
@@ -1855,13 +1944,20 @@ function matchupAvailability(
       "Current and prior evidence do not support a defense-position comparison.",
     );
   }
+  const withheld = SUPPORTED_POSITIONS.filter((position) => !supported.includes(position));
+  const positionsReason = withheld.length > 0 ? withheldPositionsReason(scoring, withheld) : null;
+  if (releaseHasDirectionalLabels()) {
+    return availability(
+      "partial",
+      analysis.incompleteSlices > 0
+        ? "Some game-position observations were withheld because their evidence was incomplete."
+        : positionsReason,
+    );
+  }
   return availability(
     "partial",
-    releaseHasDirectionalLabels()
-      ? analysis.incompleteSlices > 0
-        ? "Some game-position observations were withheld because their evidence was incomplete."
-        : null
-      : "League-scored values are available, but directional labels remain disabled until historical validation admits a production policy.",
+    positionsReason ??
+      "League-scored values are available, but directional labels remain disabled until historical validation admits a production policy.",
   );
 }
 
@@ -1882,13 +1978,19 @@ function scoringAvailability(
       "Scoring rules exceeded the bounded read, so no partial profile was used.",
     );
   }
-  if (!normalized || normalized.state === "unavailable") {
+  if (!normalized) {
     return availability(
       "unavailable",
       "The stored league scoring rules cannot be reconstructed safely for these positions.",
     );
   }
-  return availability("available", null);
+  const supported = scheduleEdgeSupportedPositions(normalized);
+  const withheld = SUPPORTED_POSITIONS.filter((position) => !supported.includes(position));
+  if (withheld.length === 0) return availability("available", null);
+  if (supported.length === 0) {
+    return availability("unavailable", withheldPositionsReason(normalized, withheld));
+  }
+  return availability("partial", withheldPositionsReason(normalized, withheld));
 }
 
 function rosterAvailability(
@@ -2001,7 +2103,15 @@ export class ScheduleEdgeService {
     const scoringLimited = scoringRowsRead.length >= SCHEDULE_EDGE_LIMITS.scoringRules;
     const scoring = scoringLimited ? null : normalizeScoring(season, scoringRowsRead);
     const profile = scoring?.state === "available" ? scoring.profile : null;
-    const analysis = computeAnalysis({ season, windows, current, prior, scoringProfile: profile });
+    const supportedPositions = scheduleEdgeSupportedPositions(scoring);
+    const analysis = computeAnalysis({
+      season,
+      windows,
+      current,
+      prior,
+      scoringProfile: profile,
+      supportedPositions,
+    });
 
     const snapshot = claimedTeam
       ? await this.#repository.findLatestRosterSnapshot(claimedTeam.id, season.season)
@@ -2187,7 +2297,15 @@ export class ScheduleEdgeService {
     const scoringLimited = scoringRowsRead.length >= SCHEDULE_EDGE_LIMITS.scoringRules;
     const scoring = scoringLimited ? null : normalizeScoring(season, scoringRowsRead);
     const profile = scoring?.state === "available" ? scoring.profile : null;
-    const analysis = computeAnalysis({ season, windows, current, prior, scoringProfile: profile });
+    const supportedPositions = scheduleEdgeSupportedPositions(scoring);
+    const analysis = computeAnalysis({
+      season,
+      windows,
+      current,
+      prior,
+      scoringProfile: profile,
+      supportedPositions,
+    });
     const profileKeyHash = profile === null ? null : hash(projectionScoringProfileKey(profile));
     const teams = [...NFL_TEAMS].map((team) => ({
       team,

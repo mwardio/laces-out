@@ -537,6 +537,18 @@ function defenseLine(
   };
 }
 
+const yardsAllowedBucketComponents = [
+  "yards_allowed_0_99_probability",
+  "yards_allowed_100_199_probability",
+  "yards_allowed_200_299_probability",
+  "yards_allowed_300_349_probability",
+  "yards_allowed_350_399_probability",
+  "yards_allowed_400_449_probability",
+  "yards_allowed_450_499_probability",
+  "yards_allowed_500_549_probability",
+  "yards_allowed_550_plus_probability",
+] as const;
+
 describe("first-party team-defense projection", () => {
   it("uses a separate team-week path with complete raw DST components", () => {
     const history = Array.from({ length: 8 }, (_, index) => [
@@ -586,10 +598,20 @@ describe("first-party team-defense projection", () => {
       "points_allowed_35_45_probability",
       "points_allowed_46_plus_probability",
     ].reduce((sum, component) => sum + (projection.components[component] ?? 0), 0);
+    const yardBucketTotal = yardsAllowedBucketComponents.reduce(
+      (sum, component) => sum + (projection.components[component] ?? 0),
+      0,
+    );
     expect(yahooPointBucketTotal).toBeCloseTo(1, 10);
     expect(espnPointBucketTotal).toBeCloseTo(1, 10);
+    expect(yardBucketTotal).toBeCloseTo(1, 10);
     expect(projection.components.points_allowed_21_27_probability).toBeGreaterThan(0);
     expect(projection.components.points_allowed_22_27_probability).toBeGreaterThan(0);
+    for (const component of yardsAllowedBucketComponents) {
+      expect(Number.isFinite(projection.components[component])).toBe(true);
+      expect(projection.components[component]).toBeGreaterThanOrEqual(0);
+      expect(projection.components[component]).toBeLessThanOrEqual(1);
+    }
     for (const component of [
       "points_allowed_0_probability",
       "points_allowed_1_6_probability",
@@ -627,7 +649,7 @@ describe("first-party team-defense projection", () => {
       history: [
         ...prior,
         defenseLine("AAA", 3, {
-          components: { ...defenseDefaults, defensive_sacks: 999 },
+          components: { ...defenseDefaults, defensive_sacks: 999, yards_allowed: 9999 },
         }),
       ],
     });
@@ -639,6 +661,9 @@ describe("first-party team-defense projection", () => {
     expect(sentinel).toEqual(baseline);
     expect(bye.state).toBe("unavailable");
     expect(Object.values(bye.components).every((value) => value === 0)).toBe(true);
+    for (const component of yardsAllowedBucketComponents) {
+      expect(bye.components[component]).toBe(0);
+    }
 
     const recency = projectFirstPartyTeamDefenseRecencyBaselineComponents({
       target,
@@ -649,7 +674,7 @@ describe("first-party team-defense projection", () => {
       history: [
         ...prior,
         defenseLine("AAA", 3, {
-          components: { ...defenseDefaults, defensive_sacks: 999 },
+          components: { ...defenseDefaults, defensive_sacks: 999, yards_allowed: 9999 },
         }),
       ],
     });
@@ -730,6 +755,171 @@ describe("first-party team-defense projection", () => {
     expect(scoring.byTeam.AAA?.samples).toBe(8);
     expect(scoring.overall.samples).toBe(history.length);
     expect(scoring.overall.baselineMae).toBeGreaterThanOrEqual(0);
+
+    // The de minimis constants are graded by this same gate — and can move nothing through it,
+    // because they are 0 on predicted, baseline and actual alike. Pricing them at an absurd rate
+    // must therefore reproduce the evaluation exactly.
+    const withDeMinimis = evaluateFirstPartyTeamDefenseBacktestForScoringProfile(
+      backtest,
+      {
+        id: "dst-test",
+        rules: [
+          { statId: "defensive_sacks", points: 1 },
+          { statId: "defensive_interceptions", points: 2 },
+          { statId: "defensive_fumble_recoveries", points: 2 },
+          { statId: "defensive_safeties", points: 2 },
+          { statId: "defensive_touchdowns", points: 6 },
+          { statId: "special_teams_touchdowns", points: 6 },
+          { statId: "defensive_blocked_kicks", points: 2 },
+          { statId: "points_allowed_0_probability", points: 10 },
+          { statId: "points_allowed_1_6_probability", points: 7 },
+          { statId: "points_allowed_7_13_probability", points: 4 },
+          { statId: "points_allowed_14_20_probability", points: 1 },
+          { statId: "points_allowed_21_27_probability", points: 0 },
+          { statId: "points_allowed_28_34_probability", points: -1 },
+          { statId: "points_allowed_35_plus_probability", points: -4 },
+          { statId: "defensive_two_point_returns", points: 1000 },
+          { statId: "one_point_safeties", points: 1000 },
+        ],
+      },
+      { minimumIntervalSamples: 4, minimumPlayerSamples: 4 },
+    );
+    expect(withDeMinimis.overall).toEqual(scoring.overall);
+    expect(withDeMinimis.byTeam).toEqual(scoring.byTeam);
+    // Constants have no residuals to calibrate and no forecast error to measure, so they stay out
+    // of the calibration intervals and the component metric table entirely.
+    for (const component of ["defensive_two_point_returns", "one_point_safeties"]) {
+      expect(backtest.calibration.intervals[component], component).toBeUndefined();
+      expect(backtest.metrics[component], component).toBeUndefined();
+    }
+  });
+
+  /**
+   * The de minimis zero model — `docs/dst-stat-id-evidence-2026-07-29.md` §4. Both components are
+   * emitted on every path so `availableStatIds` can never reject a rule the run does produce, and
+   * both are exactly 0 so the disclosed claim is the one the code makes.
+   */
+  it("emits the de minimis components at exactly zero on every defense path", () => {
+    const deMinimis = ["defensive_two_point_returns", "one_point_safeties"] as const;
+    const history = Array.from({ length: 8 }, (_, index) => [
+      defenseLine("AAA", index + 1),
+      defenseLine("BBB", index + 1),
+    ]).flat();
+    const target = { team: "AAA", season: 2025, week: 9, opponent: "BBB" } as const;
+
+    const projection = projectFirstPartyTeamDefenseComponents({ target, history });
+    const bye = projectFirstPartyTeamDefenseComponents({
+      target: { ...target, isBye: true },
+      history,
+    });
+    const baseline = projectFirstPartyTeamDefenseRecencyBaselineComponents({ target, history });
+    const engine = new Set(firstPartyTeamDefenseProjectionComponents());
+
+    for (const component of deMinimis) {
+      expect(engine.has(component), component).toBe(true);
+      expect(projection.components[component], component).toBe(0);
+      expect(projection.lowerComponents[component], component).toBe(0);
+      expect(projection.upperComponents[component], component).toBe(0);
+      expect(bye.components[component], component).toBe(0);
+      expect(baseline[component], component).toBe(0);
+    }
+
+    // A history row that somehow carried the event does not become a forecast: the constant is the
+    // model, and a nonzero value here would mean the component had silently left the de minimis set.
+    const contaminated = projectFirstPartyTeamDefenseComponents({
+      target,
+      history: history.map((row) =>
+        row.team === "AAA"
+          ? { ...row, components: { ...row.components, defensive_two_point_returns: 5 } }
+          : row,
+      ),
+    });
+    expect(contaminated.components.defensive_two_point_returns).toBe(0);
+  });
+
+  it("shifts yards-allowed bracket mass toward the projected total", () => {
+    const history = Array.from({ length: 8 }, (_, index) => [
+      defenseLine("AAA", index + 1, {
+        components: { ...defenseDefaults, yards_allowed: 260 },
+      }),
+      defenseLine("BBB", index + 1, {
+        components: { ...defenseDefaults, yards_allowed: 420 },
+      }),
+    ]).flat();
+    const lowProjection = projectFirstPartyTeamDefenseComponents({
+      target: { team: "AAA", season: 2025, week: 9, opponent: "BBB" },
+      history,
+    });
+    const highProjection = projectFirstPartyTeamDefenseComponents({
+      target: { team: "BBB", season: 2025, week: 9, opponent: "AAA" },
+      history,
+    });
+    const lowBracketMass = (components: Readonly<Record<string, number>>): number =>
+      [
+        "yards_allowed_0_99_probability",
+        "yards_allowed_100_199_probability",
+        "yards_allowed_200_299_probability",
+      ].reduce((sum, component) => sum + (components[component] ?? 0), 0);
+
+    expect(lowProjection.state).toBe("projected");
+    expect(highProjection.state).toBe("projected");
+    expect(lowProjection.components.yards_allowed).toBeLessThan(
+      highProjection.components.yards_allowed ?? 0,
+    );
+    expect(lowBracketMass(lowProjection.components)).toBeGreaterThan(
+      lowBracketMass(highProjection.components),
+    );
+  });
+
+  it("backtests yards-allowed brackets strictly prior with derived 0/1 actuals", () => {
+    const history = Array.from({ length: 8 }, (_, index) => [
+      defenseLine("AAA", index + 1, {
+        components: {
+          ...defenseDefaults,
+          yards_allowed: index === 0 ? 305 : 250 + 10 * index,
+        },
+      }),
+      defenseLine("BBB", index + 1, {
+        components: { ...defenseDefaults, yards_allowed: 430 - 8 * index },
+      }),
+    ]).flat();
+    const changed = history.map((row) =>
+      row.week === 8 && row.team === "BBB"
+        ? { ...row, components: { ...row.components, yards_allowed: 9999 } }
+        : row,
+    );
+    const backtest = runFirstPartyTeamDefenseBacktest(history, {
+      minimumCalibrationSamples: 4,
+    });
+    const sentinel = runFirstPartyTeamDefenseBacktest(changed, {
+      minimumCalibrationSamples: 4,
+    });
+
+    expect(
+      sentinel.predictions
+        .filter((prediction) => prediction.week === 8)
+        .map((row) => row.predicted),
+    ).toEqual(
+      backtest.predictions
+        .filter((prediction) => prediction.week === 8)
+        .map((row) => row.predicted),
+    );
+
+    const first = backtest.predictions.find(
+      (prediction) => prediction.team === "AAA" && prediction.week === 1,
+    );
+    expect(first?.actual.yards_allowed_300_349_probability).toBe(1);
+    for (const component of yardsAllowedBucketComponents) {
+      if (component === "yards_allowed_300_349_probability") continue;
+      expect(first?.actual[component]).toBe(0);
+    }
+    for (const prediction of backtest.predictions) {
+      const total = yardsAllowedBucketComponents.reduce(
+        (sum, component) => sum + (prediction.predicted[component] ?? 0),
+        0,
+      );
+      expect(total).toBeCloseTo(1, 10);
+    }
   });
 });
 

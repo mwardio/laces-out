@@ -22,7 +22,13 @@ const trendsSourceKey = "sleeper.trends";
 // Injury, practice, and availability signals directly affect start/sit projections. Keep the
 // catalog ahead of both hourly and game-aware projection sweeps; conditional requests keep
 // unchanged checks cheap while the final lock-window pass can force one last status check.
-const catalogCheckIntervalMinutes = 30;
+/**
+ * Sleeper documents the players endpoint as a cache-locally, at-most-daily read. A 2026-07-27
+ * review moved this from 30 to 60 minutes: still short of that guidance, but halving the request
+ * rate against a source whose catalog changes slowly. Conditional revalidation keeps the ordinary
+ * cost a 304 rather than a ~15 MB transfer.
+ */
+const catalogCheckIntervalMinutes = 60;
 const trendsCheckIntervalMinutes = 60;
 const claimMinutes = 15;
 const chunkSize = 500;

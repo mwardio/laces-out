@@ -96,13 +96,18 @@ export default function PrivacyPage() {
             share.
           </p>
           <p>
-            Laces Out does not sell data, run behavioral advertising, or add third-party analytics
-            by default. Provider and football-data services receive only the requests required to
-            retrieve their data. Film room sends your question and a bounded snapshot of your
-            authorized league, recommendations, and analytics to Google Gemini by default using the
-            operator&apos;s Google AI Studio project. This included access currently uses Gemini 3.6
-            Flash and requires no personal key. Google states that free-tier submitted content may
-            be used to improve its products. You may instead add a separately billed OpenAI,
+            Laces Out does not sell data or run behavioral advertising. This deployment uses
+            Cloudflare Web Analytics so the operator can see how much traffic the site receives. It
+            reports page views through a script loaded from Cloudflare; it is not used to build a
+            profile of you, and it plays no part in any recommendation. Cloudflare states that it
+            does not log query strings, so the contents of a search or filter are not sent. What
+            Cloudflare records and retains is described in its own documentation and governed by its
+            terms, not by this policy. Provider and football-data services receive only the requests
+            required to retrieve their data. Film room sends your question and a bounded snapshot of
+            your authorized league, recommendations, and analytics to Google Gemini by default using
+            the operator&apos;s Google AI Studio project. This included access currently uses Gemini
+            3.6 Flash and requires no personal key. Google states that free-tier submitted content
+            may be used to improve its products. You may instead add a separately billed OpenAI,
             Anthropic, Gemini, or OpenRouter API key and choose the model; that key is encrypted, is
             not shown again after save, and can be removed at any time. Provider processing is
             governed by that provider&apos;s account terms and privacy choices.

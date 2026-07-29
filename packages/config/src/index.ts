@@ -1,6 +1,18 @@
 import { z } from "zod";
 
 const blankToUndefined = (value: unknown): unknown => (value === "" ? undefined : value);
+/**
+ * Comma-separated origins arrive as one string. Entries are trimmed and stripped of a trailing
+ * slash so `https://example.app/` and `https://example.app` are the same allowlist entry, which is
+ * what an `Origin` header will actually carry.
+ */
+const commaSeparatedOrigins = (value: unknown): unknown =>
+  typeof value === "string"
+    ? value
+        .split(",")
+        .map((entry) => entry.trim().replace(/\/+$/u, ""))
+        .filter((entry) => entry !== "")
+    : value;
 const booleanFlag = z
   .preprocess(
     (value) => (typeof value === "string" ? value.trim().toLowerCase() : value),
@@ -10,7 +22,16 @@ const booleanFlag = z
 
 const environmentSchema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
+  // WEB_URL is canonical for link-building; ADDITIONAL_WEB_ORIGINS only widens origin acceptance.
   WEB_URL: z.url().default("http://localhost:3000"),
+  /**
+   * Extra browser origins the API accepts requests from — a second domain pointed at this same
+   * deployment. It widens the CORS reflection and the production origin check and nothing else:
+   * every link the API builds (Yahoo callback redirects, invitation URLs, share cards) still uses
+   * the canonical WEB_URL, so a member who arrives on a second domain is never handed a link that
+   * silently changes which domain they are on.
+   */
+  ADDITIONAL_WEB_ORIGINS: z.preprocess(commaSeparatedOrigins, z.array(z.url()).default([])),
   API_URL: z.url().default("http://localhost:4000"),
   PORT: z.coerce.number().int().min(1).max(65_535).default(4000),
   DATABASE_URL: z.string().min(1).default("postgres://fantasy:fantasy@localhost:5432/fantasy"),
@@ -76,6 +97,25 @@ export class ConfigurationError extends Error {
   }
 }
 
+function assertProductionBrowserOrigin(value: string, name: string): void {
+  const origin = new URL(value);
+  const loopback =
+    origin.protocol === "http:" && ["localhost", "127.0.0.1", "[::1]"].includes(origin.hostname);
+  if (origin.protocol !== "https:" && !loopback) {
+    throw new Error(`Production ${name} must use HTTPS unless it is a loopback origin`);
+  }
+  if (
+    origin.username !== "" ||
+    origin.password !== "" ||
+    origin.pathname !== "/" ||
+    origin.search !== "" ||
+    origin.hash !== "" ||
+    value !== origin.origin
+  ) {
+    throw new Error(`Production ${name} must be a bare origin without credentials or a path`);
+  }
+}
+
 export function loadEnvironment(
   source: Readonly<Record<string, string | undefined>> = process.env,
 ): Environment {
@@ -119,21 +159,11 @@ export function loadEnvironment(
       );
     }
 
-    const webUrl = new URL(parsed.data.WEB_URL);
-    const loopbackWebOrigin =
-      webUrl.protocol === "http:" && ["localhost", "127.0.0.1", "[::1]"].includes(webUrl.hostname);
-    if (webUrl.protocol !== "https:" && !loopbackWebOrigin) {
-      throw new Error("Production WEB_URL must use HTTPS unless it is a loopback origin");
-    }
-    if (
-      webUrl.username !== "" ||
-      webUrl.password !== "" ||
-      webUrl.pathname !== "/" ||
-      webUrl.search !== "" ||
-      webUrl.hash !== "" ||
-      parsed.data.WEB_URL !== webUrl.origin
-    ) {
-      throw new Error("Production WEB_URL must be a bare origin without credentials or a path");
+    assertProductionBrowserOrigin(parsed.data.WEB_URL, "WEB_URL");
+    // Every additional origin is held to the WEB_URL rules: a request-acceptance allowlist must not
+    // be the one place a plaintext or path-carrying origin slips into production.
+    for (const additionalOrigin of parsed.data.ADDITIONAL_WEB_ORIGINS) {
+      assertProductionBrowserOrigin(additionalOrigin, "ADDITIONAL_WEB_ORIGINS");
     }
   }
 

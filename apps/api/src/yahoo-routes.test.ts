@@ -306,4 +306,111 @@ describe("Yahoo sync routes", () => {
     expect(discoverAndSync).toHaveBeenCalledWith(USER_ID, CONNECTION_ID);
     await app.close();
   });
+  it("recomputes recommendations for an accepted Yahoo league sync", async () => {
+    const enqueueRecommendationRecompute = vi.fn(() => Promise.resolve("recompute-job"));
+    const app = await buildApp({
+      environment: loadEnvironment({ NODE_ENV: "test" }),
+      logger: false,
+      requireAuthentication: true,
+      authService: authService(),
+      yahooSync: yahooSync(),
+      enqueueRecommendationRecompute,
+    });
+
+    const sync = await app.inject({
+      method: "POST",
+      url: `/v1/connections/yahoo/${CONNECTION_ID}/leagues/449.l.12345/sync`,
+      headers: { cookie: COOKIE },
+    });
+
+    expect(sync.statusCode).toBe(202);
+    expect(enqueueRecommendationRecompute).toHaveBeenCalledTimes(1);
+    expect(enqueueRecommendationRecompute).toHaveBeenCalledWith(
+      expect.objectContaining({
+        leagueSeasonId: "50000000-0000-4000-8000-000000000001",
+        kinds: ["lineup", "trade", "waiver"],
+      }),
+    );
+    await app.close();
+  });
+
+  it("enqueues no recomputation for an unchanged Yahoo payload", async () => {
+    const enqueueRecommendationRecompute = vi.fn(() => Promise.resolve("recompute-job"));
+    const app = await buildApp({
+      environment: loadEnvironment({ NODE_ENV: "test" }),
+      logger: false,
+      requireAuthentication: true,
+      authService: authService(),
+      yahooSync: yahooSync({
+        syncLeague: () =>
+          Promise.resolve({
+            syncRunId: "30000000-0000-4000-8000-000000000001",
+            leagueId: "40000000-0000-4000-8000-000000000001",
+            leagueSeasonId: "50000000-0000-4000-8000-000000000001",
+            externalLeagueKey: "449.l.12345",
+            season: 2026,
+            state: "unchanged" as const,
+            recordsWritten: 0,
+            syncedAt: "2026-07-16T12:00:00.000Z",
+          }),
+      }),
+      enqueueRecommendationRecompute,
+    });
+
+    const sync = await app.inject({
+      method: "POST",
+      url: `/v1/connections/yahoo/${CONNECTION_ID}/leagues/449.l.12345/sync`,
+      headers: { cookie: COOKIE },
+    });
+
+    expect(sync.statusCode).toBe(200);
+    expect(enqueueRecommendationRecompute).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it("recomputes each discovered league season once and survives an enqueue failure", async () => {
+    const enqueueRecommendationRecompute = vi.fn(() => Promise.reject(new Error("queue down")));
+    const receipt = (leagueSeasonId: string, state: "accepted" | "unchanged") => ({
+      syncRunId: "30000000-0000-4000-8000-000000000001",
+      leagueId: "40000000-0000-4000-8000-000000000001",
+      leagueSeasonId,
+      externalLeagueKey: "449.l.12345",
+      season: 2026,
+      state,
+      recordsWritten: 1,
+      syncedAt: "2026-07-16T12:00:00.000Z",
+    });
+    const app = await buildApp({
+      environment: loadEnvironment({ NODE_ENV: "test" }),
+      logger: false,
+      requireAuthentication: true,
+      authService: authService(),
+      yahooSync: yahooSync({
+        discoverAndSync: () =>
+          Promise.resolve({
+            connectionId: CONNECTION_ID,
+            discovered: [],
+            syncs: [
+              receipt("50000000-0000-4000-8000-000000000001", "accepted"),
+              receipt("50000000-0000-4000-8000-000000000001", "accepted"),
+              receipt("50000000-0000-4000-8000-000000000002", "unchanged"),
+            ],
+            generatedAt: "2026-07-16T12:00:00.000Z",
+          }),
+      }),
+      enqueueRecommendationRecompute,
+    });
+
+    const discovery = await app.inject({
+      method: "POST",
+      url: `/v1/connections/yahoo/${CONNECTION_ID}/discover`,
+      headers: { cookie: COOKIE },
+    });
+
+    // Two accepted receipts for one league season collapse to one enqueue; the unchanged one adds
+    // none. A queue outage is logged rather than failing a sync that already committed.
+    expect(discovery.statusCode).toBe(202);
+    expect(enqueueRecommendationRecompute).toHaveBeenCalledTimes(1);
+    await app.close();
+  });
 });

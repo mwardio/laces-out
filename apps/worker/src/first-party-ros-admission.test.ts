@@ -1,10 +1,13 @@
 import { describe, expect, it } from "vitest";
 
+import { projectionScoringProfileKey, rosScoringProfile } from "@fantasy/projections";
+
 import {
   deriveFirstPartyRosSourceChecksums,
   firstPartyRosAdmissionConstants,
   validateFirstPartyRosAdmission,
 } from "./first-party-ros-admission.js";
+import { HISTORICAL_ROS_SCORING_PROFILE } from "./first-party-ros-backtest.js";
 import {
   firstPartyRosChampionArtifactChecksum,
   firstPartyRosChampionArtifactIsValid,
@@ -229,5 +232,82 @@ describe("validateFirstPartyRosAdmission", () => {
     });
     expect(withoutSources.state).toBe("rejected");
     expect(withoutSources.blockers).toContain("source_lineage_unavailable");
+  });
+});
+
+describe("firstPartyRosAdmissionConstants scoring-profile parameter", () => {
+  it("defaults to the historical full-PPR identity", () => {
+    expect(firstPartyRosAdmissionConstants().scoringProfileKey).toBe(
+      projectionScoringProfileKey(HISTORICAL_ROS_SCORING_PROFILE),
+    );
+  });
+
+  it("reproduces the historical profile from the shared catalog", () => {
+    expect(rosScoringProfile("full-ppr").scoringProfileKey).toBe(
+      projectionScoringProfileKey(HISTORICAL_ROS_SCORING_PROFILE),
+    );
+  });
+
+  it("mints a distinct identity for each requested profile without moving any other version", () => {
+    const half = firstPartyRosAdmissionConstants(rosScoringProfile("half-ppr").profile);
+    const standard = firstPartyRosAdmissionConstants(rosScoringProfile("standard").profile);
+
+    expect(half.scoringProfileKey).not.toBe(standard.scoringProfileKey);
+    expect(half.scoringProfileKey).not.toBe(constants.scoringProfileKey);
+    expect(half.modelVersion).toBe(constants.modelVersion);
+    expect(half.policyVersion).toBe(constants.policyVersion);
+    expect(half.calibrationVersion).toBe(constants.calibrationVersion);
+    expect(half.intervalMethodVersion).toBe(constants.intervalMethodVersion);
+    expect(half.availabilityCalibrationVersion).toBe(constants.availabilityCalibrationVersion);
+    expect(half.roleCalibrationVersion).toBe(constants.roleCalibrationVersion);
+    expect(half.kickerCalibrationVersion).toBe(constants.kickerCalibrationVersion);
+  });
+
+  it("rejects a full-PPR report presented for half-PPR admission", () => {
+    const result = validateFirstPartyRosAdmission({
+      report: validReport({}),
+      evidenceThroughSeason: 2025,
+      constants: firstPartyRosAdmissionConstants(rosScoringProfile("half-ppr").profile),
+    });
+
+    expect(result.state).toBe("rejected");
+    expect(result.blockers).toContain("scoring_profile_mismatch");
+  });
+
+  it("admits a half-PPR report only under half-PPR constants", () => {
+    const half = firstPartyRosAdmissionConstants(rosScoringProfile("half-ppr").profile);
+    const report = validReport({
+      evidenceIdentityOverrides: { scoringProfileKey: half.scoringProfileKey },
+    });
+
+    expect(
+      validateFirstPartyRosAdmission({ report, evidenceThroughSeason: 2025, constants: half })
+        .state,
+    ).toBe("admissible");
+    expect(
+      validateFirstPartyRosAdmission({ report, evidenceThroughSeason: 2025, constants }).blockers,
+    ).toContain("scoring_profile_mismatch");
+  });
+
+  it("gives each admitted profile its own artifact checksum", () => {
+    const half = firstPartyRosAdmissionConstants(rosScoringProfile("half-ppr").profile);
+    const fullResult = validateFirstPartyRosAdmission({
+      report: validReport({}),
+      evidenceThroughSeason: 2025,
+      constants,
+    });
+    const halfResult = validateFirstPartyRosAdmission({
+      report: validReport({
+        evidenceIdentityOverrides: { scoringProfileKey: half.scoringProfileKey },
+      }),
+      evidenceThroughSeason: 2025,
+      constants: half,
+    });
+
+    expect(fullResult.state).toBe("admissible");
+    expect(halfResult.state).toBe("admissible");
+    if (fullResult.state !== "admissible" || halfResult.state !== "admissible") return;
+    expect(fullResult.artifactChecksum).not.toBe(halfResult.artifactChecksum);
+    expect(halfResult.payload.scoringProfileKey).toBe(half.scoringProfileKey);
   });
 });

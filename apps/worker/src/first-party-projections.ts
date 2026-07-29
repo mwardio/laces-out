@@ -29,6 +29,7 @@ import {
   FIRST_PARTY_CHAMPION_MINIMUM_WEEK_BATCHES,
   FIRST_PARTY_PROJECTION_MODEL_VERSION,
   LEAGUE_SCORING_NORMALIZATION_VERSION,
+  LEAGUE_SCORING_POSITIONS,
   applyFirstPartyProjectionChampionPolicy,
   applyFirstPartyProjectionFinalPolicy,
   evaluateFirstPartyBacktestForScoringProfile,
@@ -54,6 +55,9 @@ import {
   type FirstPartyTeamDefenseBacktest,
   type FirstPartyTeamDefenseProjection,
   type FirstPartyWeeklyProjection,
+  type LeagueScoringPosition,
+  type LeagueScoringPositionSupport,
+  type LeagueScoringUnsupportedReason,
   type ProjectionScoringProfile,
   type ProjectionStatComponents,
 } from "@fantasy/projections";
@@ -89,9 +93,20 @@ const chunkSize = 500;
 const supportedPositions = ["QB", "RB", "WR", "TE", "K"] as const;
 const defensePositions = new Set(["D/ST", "DST", "DEF"]);
 const espnSelfAssertedPlayerSource = "espn-self-asserted";
+// Disclosure of every D/ST modelling choice a league's numbers depend on but cannot be read off
+// them. Reaches the published set's metadata and every league's warning list, so a user who asks
+// "how was this computed" gets the answer with the number rather than out of band.
 const defenseMethodWarnings = [
   "points_allowed_method=provider-neutral-adjusted-score",
   "blocked_kicks_classification=rare blocked-kick returns can be classified differently by Yahoo and ESPN",
+  // `docs/ROS_GATE_AND_DST_PLAN.md` WP4 Step 4. Stated as an assumption because it is one: whether
+  // ESPN's "yards allowed" is exactly this quantity has not been established from ESPN's own docs.
+  "yards_allowed_method=net offensive yards (passing + sack yardage + rushing); the assumption that this equals the provider's own yards-allowed definition is disclosed, not proved",
+  // `docs/dst-stat-id-evidence-2026-07-29.md` §4. These two components are modeled at a constant
+  // zero under the de minimis criterion, so a league that prices ESPN 206/209 gets the same number
+  // as one that does not. Disclosed here because the rule is present and priced — its coefficient
+  // is what is bounded, and a reader is entitled to know that before trusting the total.
+  "de_minimis_zero_components=defensive_two_point_returns (ESPN 206) and one_point_safeties (ESPN 209) are modeled at constant zero; citable occurrence data bounds each below 0.01 expected points per team-week (docs/dst-stat-id-evidence-2026-07-29.md §4)",
 ] as const;
 const availabilityMethodWarning =
   "Availability adjustments use the latest provider designation within seven days of kickoff; IR/PUP is held out for up to 28 days, then treated as uncertain until a return horizon is known.";
@@ -99,29 +114,10 @@ const minimumIntervalCoverage = 0.62;
 const maximumIntervalCoverage = 0.78;
 const minimumIntervalCoverageSamples = 100;
 const minimumPositionScoredSamples = 100;
-const defenseStatIds = new Set([
-  "defensive_sacks",
-  "defensive_interceptions",
-  "defensive_fumble_recoveries",
-  "defensive_safeties",
-  "defensive_touchdowns",
-  "defensive_blocked_kicks",
-  "special_teams_touchdowns",
-  "points_allowed",
-  "yards_allowed",
-  "points_allowed_0_probability",
-  "points_allowed_1_6_probability",
-  "points_allowed_7_13_probability",
-  "points_allowed_14_17_probability",
-  "points_allowed_14_20_probability",
-  "points_allowed_18_21_probability",
-  "points_allowed_21_27_probability",
-  "points_allowed_22_27_probability",
-  "points_allowed_28_34_probability",
-  "points_allowed_35_plus_probability",
-  "points_allowed_35_45_probability",
-  "points_allowed_46_plus_probability",
-]);
+// Derived from the projection engine's own defense vocabulary rather than hand-typed, so this set
+// structurally cannot drift from the components the engine emits (`docs/ROS_GATE_AND_DST_PLAN.md`
+// WP2 Step 1, "one source of truth").
+const defenseStatIds = new Set(firstPartyTeamDefenseProjectionComponents());
 
 const publicationGateProfile: ProjectionScoringProfile = {
   id: "laces-out-publication-gate-ppr",
@@ -242,12 +238,46 @@ interface LeaguePublication {
   readonly metadata: Record<string, unknown>;
 }
 
+/**
+ * Why one position of one league was withheld. `source` keeps a scoring-rule fact ("this league
+ * prices something no supported projection component can express") distinguishable from an
+ * operational one ("this position's league-scored backtest did not beat its baseline"), which the
+ * flat `reasons` strings alone cannot express.
+ */
+export interface WithheldLeaguePosition {
+  readonly position: LeagueScoringPosition;
+  readonly source: "normalization" | "backtest-gate";
+  readonly reasons: readonly string[];
+}
+
+/**
+ * `scope: "league"` is the pre-existing meaning: this league published nothing at all, and
+ * `reasons` alone describes why. `scope: "positions"` is new and additive: the league DID publish,
+ * but only for the positions absent from `positions`. Both keep `reasons` populated so a reader
+ * that only knows the old flat-string shape still sees a truthful explanation.
+ */
+export interface WithheldLeague {
+  readonly leagueSeasonId: string;
+  readonly scope: "league" | "positions";
+  readonly reasons: readonly string[];
+  readonly positions?: readonly WithheldLeaguePosition[];
+}
+
+/**
+ * Something worth recording about a league that PUBLISHED. Deliberately a separate accumulator from
+ * `withheld`: a note must never be mistaken for a withholding, because `apps/api` turns a withheld
+ * entry into a "withheld" managed-forecast state and the workbench hides the forecast on that state.
+ */
+export interface LeaguePublicationNote {
+  readonly leagueSeasonId: string;
+  readonly code: "pre-draft-roster";
+  readonly message: string;
+}
+
 interface LeaguePublicationPlan {
   readonly publications: readonly LeaguePublication[];
-  readonly withheld: readonly {
-    readonly leagueSeasonId: string;
-    readonly reasons: readonly string[];
-  }[];
+  readonly withheld: readonly WithheldLeague[];
+  readonly notes: readonly LeaguePublicationNote[];
 }
 
 interface ModelGate {
@@ -725,6 +755,52 @@ function residualForPlayer(
   );
 }
 
+/**
+ * The user-visible "Locked backtest" summary, aggregated ONLY over the positions this league's own
+ * scoring rules support — never `evaluation.overall`, which aggregates across every backtested
+ * position (QB/RB/WR/TE/K) regardless of what the league prices. A league whose emitted profile
+ * prices kickers only still backtests every position, and every QB/RB/WR/TE prediction scores
+ * `actual === projected === baseline === 0` (`scoreProjectionStatComponents` returns 0 for a
+ * component the profile never rates) — an exactly-zero residual that deflates `overall.mae` and
+ * `overall.baselineMae` toward "perfect" for a set that never publishes those positions at all.
+ * Weighted by each supported position's own `samples` (and, for interval coverage, its own
+ * `intervalCoverageSamples`) so a position with more evaluated weeks counts proportionally more.
+ */
+function backtestSummaryForSupportedPositions(
+  evaluation: FirstPartyScoredBacktestEvaluation,
+  supportedByLeague: ReadonlySet<LeagueScoringPosition>,
+): {
+  readonly samples: number;
+  readonly mae: number;
+  readonly baselineMae: number;
+  readonly intervalCoverage: number | null;
+} {
+  let samples = 0;
+  let maeTotal = 0;
+  let baselineMaeTotal = 0;
+  let coverageSamples = 0;
+  let coverageTotal = 0;
+  for (const position of supportedPositions) {
+    if (!supportedByLeague.has(position)) continue;
+    const positionEvaluation = evaluation.byPosition[position];
+    if (positionEvaluation === undefined || positionEvaluation.samples === 0) continue;
+    samples += positionEvaluation.samples;
+    maeTotal += positionEvaluation.mae * positionEvaluation.samples;
+    baselineMaeTotal += positionEvaluation.baselineMae * positionEvaluation.samples;
+    if (positionEvaluation.intervalCoverage !== null) {
+      coverageTotal +=
+        positionEvaluation.intervalCoverage * positionEvaluation.intervalCoverageSamples;
+      coverageSamples += positionEvaluation.intervalCoverageSamples;
+    }
+  }
+  return {
+    samples,
+    mae: samples === 0 ? 0 : maeTotal / samples,
+    baselineMae: samples === 0 ? 0 : baselineMaeTotal / samples,
+    intervalCoverage: coverageSamples === 0 ? null : coverageTotal / coverageSamples,
+  };
+}
+
 function residualForDefense(
   evaluation: FirstPartyScoredTeamDefenseEvaluation,
 ): FirstPartyPointResidualCalibration {
@@ -754,20 +830,103 @@ function defenseEvaluationClearsGate(
   return pointEvaluationClearsGate(evaluation.overall);
 }
 
-function playerEvaluationClearsGate(
+/**
+ * One position's own league-scored backtest verdict. A position the profile prices nothing for is
+ * not gated here (there is nothing to score); a position it does price must clear its own residual
+ * gate. The verdict is deliberately NOT collapsed across positions: a failing K must withhold K,
+ * not the league.
+ */
+function playerPositionEvaluationClearsGate(
   evaluation: FirstPartyScoredBacktestEvaluation,
   profile: ProjectionScoringProfile,
+  position: (typeof supportedPositions)[number],
 ): boolean {
   const scoredStats = new Set(profile.rules.map((rule) => rule.statId));
-  return supportedPositions.every((position) => {
-    const components = firstPartyProjectionComponentsForPosition(position);
-    const relevant =
-      components.some((component) => scoredStats.has(component)) ||
-      (position === "K" && scoredStats.has("field_goals_made_50_plus"));
-    if (!relevant) return true;
-    const positionEvaluation = evaluation.byPosition[position];
-    return positionEvaluation !== undefined && pointEvaluationClearsGate(positionEvaluation);
-  });
+  const components = firstPartyProjectionComponentsForPosition(position);
+  const relevant =
+    components.some((component) => scoredStats.has(component)) ||
+    (position === "K" && scoredStats.has("field_goals_made_50_plus"));
+  if (!relevant) return true;
+  const positionEvaluation = evaluation.byPosition[position];
+  return positionEvaluation !== undefined && pointEvaluationClearsGate(positionEvaluation);
+}
+
+/** The long-standing flat reason string for one normalization failure; shape unchanged. */
+function normalizationReasonText(reason: LeagueScoringUnsupportedReason): string {
+  return `${reason.code}: ${reason.message}`;
+}
+
+/**
+ * The positions normalization could not price, each with its own attributed reasons. Present on
+ * both normalization states, so the fully-unavailable branch reports per-position provenance too
+ * instead of only a flat union.
+ */
+function normalizationWithheldPositions(
+  positions: readonly LeagueScoringPositionSupport[],
+): WithheldLeaguePosition[] {
+  return positions
+    .filter((item) => !item.supported)
+    .map((item) => ({
+      position: item.position,
+      source: "normalization" as const,
+      reasons: item.reasons.map(normalizationReasonText),
+    }));
+}
+
+/**
+ * Flattens per-position withholding into the pre-existing `reasons: readonly string[]` shape, so a
+ * reader that predates `positions` still learns which positions were withheld and why.
+ */
+function withheldPositionReasonText(
+  positions: readonly WithheldLeaguePosition[],
+): readonly string[] {
+  return positions.flatMap((item) =>
+    item.reasons.map((reason) => `${item.position} withheld: ${reason}`),
+  );
+}
+
+/** The placeholder `#loadLatestRosters` appends when a league's roster snapshots do not add up. */
+function isIncompleteRosterSentinel(rosterPlayer: LeagueRosterPlayer): boolean {
+  return rosterPlayer.playerId.startsWith("INCOMPLETE-ROSTER:");
+}
+
+export type LeagueRosterCoverage = "complete" | "pre-draft" | "unknown";
+
+/**
+ * What the loaded roster proves about a league, and nothing more.
+ *
+ * - `"complete"` — at least one real rostered player was loaded. (If an incomplete-snapshot
+ *   sentinel sits alongside them the league is partially synced, and the roster-gap branch below
+ *   withholds it before this ever reaches a published set.)
+ * - `"pre-draft"` — snapshots exist for this league but yielded no rostered player anywhere, which
+ *   is what a synced-but-undrafted league looks like: a snapshot per team, all of them empty.
+ *   Nobody has drafted, so there is no roster coverage to verify and nothing to fail closed about.
+ * - `"unknown"` — no roster rows at all, i.e. nothing was observed either way. This is NOT read as
+ *   pre-draft: absence of evidence is not evidence of an undrafted league.
+ *
+ * The distinction that matters is real-player presence. It cannot be faked by a partial sync: the
+ * moment one team's snapshot carries a player, the league is `"complete"` and takes the unchanged
+ * roster-gap path.
+ */
+function leagueRosterCoverage(roster: readonly LeagueRosterPlayer[]): LeagueRosterCoverage {
+  if (roster.length === 0) return "unknown";
+  return roster.some((rosterPlayer) => !isIncompleteRosterSentinel(rosterPlayer))
+    ? "complete"
+    : "pre-draft";
+}
+
+/**
+ * The publishable position a player row would carry, or `undefined` when the player's position is
+ * withheld — or is not one this rail projects at all, which fails closed rather than publishing.
+ */
+function publishablePlayerPositionOf(
+  publishable: ReadonlySet<(typeof supportedPositions)[number]>,
+  position: string,
+): (typeof supportedPositions)[number] | undefined {
+  const normalized = position.trim().toUpperCase();
+  return supportedPositions.find(
+    (candidate) => candidate === normalized && publishable.has(candidate),
+  );
 }
 
 function zeroComponents(keys: readonly string[]): Record<string, number> {
@@ -2180,9 +2339,9 @@ export class FirstPartyProjectionService implements ProjectionRefreshService {
       input.week,
     );
 
-    const leaguePlan =
+    const leaguePlan: LeaguePublicationPlan =
       releaseGate.state === "publishable"
-        ? this.#buildLeaguePublications({
+        ? buildFirstPartyLeaguePublications({
             ...input,
             publishedPlayers,
             publishedDefenses,
@@ -2192,8 +2351,10 @@ export class FirstPartyProjectionService implements ProjectionRefreshService {
             publications: [],
             withheld: input.leagues.map((league) => ({
               leagueSeasonId: league.id,
+              scope: "league" as const,
               reasons: releaseGate.reasons,
             })),
+            notes: [],
           };
     const leaguePublications = leaguePlan.publications;
     // Canonical raw observations are immutable once their NFL game starts. League-scored sets
@@ -2268,6 +2429,9 @@ export class FirstPartyProjectionService implements ProjectionRefreshService {
               0,
             ),
             withheld: leaguePlan.withheld,
+            // Leagues that PUBLISHED under a caveat. Kept out of `withheld` on purpose: every
+            // reader of that array treats an entry as a reason a league did not publish.
+            notes: leaguePlan.notes,
           },
         },
         sourceAsOf: input.sourceAsOf,
@@ -2480,333 +2644,6 @@ export class FirstPartyProjectionService implements ProjectionRefreshService {
     return result;
   }
 
-  #buildLeaguePublications(input: {
-    readonly season: number;
-    readonly week: number;
-    readonly now: Date;
-    readonly sourceAsOf: Date;
-    readonly inputChecksum: string;
-    readonly playerBacktest: FirstPartyProjectionBacktest;
-    readonly basePlayerBacktest: FirstPartyProjectionBacktest;
-    readonly defenseBacktest: FirstPartyTeamDefenseBacktest;
-    readonly players: readonly PlayerRow[];
-    readonly leagues: readonly LeagueRow[];
-    readonly rules: readonly LeagueRuleRow[];
-    readonly rosters: readonly LeagueRosterPlayer[];
-    readonly publishedPlayers: readonly PublishedPlayer[];
-    readonly publishedDefenses: readonly PublishedDefense[];
-    readonly previousRowsByLeague: ReadonlyMap<string, ReadonlyMap<string, ScoredProjectionRow>>;
-  }): LeaguePublicationPlan {
-    const rulesByLeague = new Map<string, LeagueRuleRow[]>();
-    for (const rule of input.rules) {
-      const rows = rulesByLeague.get(rule.leagueSeasonId) ?? [];
-      rows.push(rule);
-      rulesByLeague.set(rule.leagueSeasonId, rows);
-    }
-    const rosterByLeague = new Map<string, LeagueRosterPlayer[]>();
-    for (const player of input.rosters) {
-      const rows = rosterByLeague.get(player.leagueSeasonId) ?? [];
-      rows.push(player);
-      rosterByLeague.set(player.leagueSeasonId, rows);
-    }
-    const defenseByTeam = new Map(
-      input.publishedDefenses.map((defense) => [defense.team, defense]),
-    );
-    const canonicalDefensePlayers = input.players.filter((player) => {
-      const team = upper(player.nflTeam);
-      return (
-        isDefensePosition(player.primaryPosition) &&
-        team !== null &&
-        defenseByTeam.has(team) &&
-        player.id === firstPartyDefensePlayerId(team)
-      );
-    });
-
-    const publications: LeaguePublication[] = [];
-    const withheld: Array<{ leagueSeasonId: string; reasons: readonly string[] }> = [];
-    for (const league of input.leagues) {
-      const visiblePlayers = input.publishedPlayers.filter(
-        (player) =>
-          player.leagueSeasonScopes.length === 0 || player.leagueSeasonScopes.includes(league.id),
-      );
-      const shadowedCanonicalIds = new Set(
-        visiblePlayers.flatMap((player) =>
-          player.leagueSeasonScopes.length > 0 && player.canonicalMatchId
-            ? [player.canonicalMatchId]
-            : [],
-        ),
-      );
-      const leaguePlayers = visiblePlayers.filter(
-        (player) =>
-          player.leagueSeasonScopes.length > 0 || !shadowedCanonicalIds.has(player.playerId),
-      );
-      const playerById = new Map(leaguePlayers.map((player) => [player.playerId, player]));
-      const normalization = normalizeLeagueScoringProfile({
-        id: `league:${league.id}`,
-        label: "League scoring",
-        version: LEAGUE_SCORING_NORMALIZATION_VERSION,
-        rows: (rulesByLeague.get(league.id) ?? []).map((rule) => ({
-          provider: league.provider,
-          statKey: rule.statKey,
-          providerStatId: rule.providerStatId,
-          operation: rule.operation,
-          points: rule.points,
-          thresholdLow: rule.thresholdLow,
-          thresholdHigh: rule.thresholdHigh,
-        })),
-        availableStatIds: firstPartyAvailableProjectionComponents(),
-      });
-      if (normalization.state === "unavailable") {
-        withheld.push({
-          leagueSeasonId: league.id,
-          reasons: normalization.reasons.map((reason) => `${reason.code}: ${reason.message}`),
-        });
-        continue;
-      }
-      const profile = normalization.profile;
-      const profileKey = projectionScoringProfileKey(profile);
-      const playerChampion = applyFirstPartyProjectionChampionPolicy(
-        input.basePlayerBacktest,
-        profile,
-      );
-      const publicationPlayerBacktest = applyFirstPartyProjectionFinalPolicy(
-        input.basePlayerBacktest,
-        playerChampion.policy,
-      );
-      const playerEvaluation = evaluateFirstPartyBacktestForScoringProfile(
-        publicationPlayerBacktest,
-        profile,
-      );
-      const defenseEvaluation = evaluateFirstPartyTeamDefenseBacktestForScoringProfile(
-        input.defenseBacktest,
-        profile,
-      );
-      if (
-        (hasRelevantRules(profile, false) &&
-          !playerEvaluationClearsGate(playerEvaluation, profile)) ||
-        (hasRelevantRules(profile, true) && !defenseEvaluationClearsGate(defenseEvaluation))
-      ) {
-        withheld.push({
-          leagueSeasonId: league.id,
-          reasons: ["League-scored backtest did not clear the recency-only baseline gate."],
-        });
-        continue;
-      }
-
-      const leagueRoster = rosterByLeague.get(league.id) ?? [];
-      const leagueRosterIds = new Set(leagueRoster.map((player) => player.playerId));
-      const rosteredDefenseByTeam = new Map<string, LeagueRosterPlayer[]>();
-      for (const rosterPlayer of leagueRoster) {
-        const team = upper(rosterPlayer.nflTeam);
-        if (!team || !isDefensePosition(rosterPlayer.primaryPosition)) continue;
-        const rows = rosteredDefenseByTeam.get(team) ?? [];
-        rows.push(rosterPlayer);
-        rosteredDefenseByTeam.set(team, rows);
-      }
-      const rosterGaps = leagueRoster.filter((rosterPlayer) => {
-        if (isDefensePosition(rosterPlayer.primaryPosition)) {
-          return !rosterPlayer.nflTeam || !defenseByTeam.has(rosterPlayer.nflTeam.toUpperCase());
-        }
-        return (
-          !firstPartyProjectionPositionIsSupported(rosterPlayer.primaryPosition) ||
-          !playerById.has(rosterPlayer.playerId)
-        );
-      });
-      if (rosterGaps.length > 0) {
-        const snapshotsIncomplete = rosterGaps.some((player) =>
-          player.playerId.startsWith("INCOMPLETE-ROSTER:"),
-        );
-        withheld.push({
-          leagueSeasonId: league.id,
-          reasons: [
-            snapshotsIncomplete
-              ? "League roster snapshots are incomplete."
-              : `Roster coverage is incomplete for ${rosterGaps.length} player${rosterGaps.length === 1 ? "" : "s"}.`,
-          ],
-        });
-        continue;
-      }
-
-      const scored = new Map<string, ScoredProjectionRow>();
-      const previousRows =
-        input.previousRowsByLeague.get(league.id) ?? new Map<string, ScoredProjectionRow>();
-      const lockedRosterWithoutBaseline: string[] = [];
-      let frozenPlayerCount = 0;
-      const frozenPlayerIds = new Set<string>();
-      for (const player of leaguePlayers) {
-        if (player.gameStarted) {
-          const previous = previousRows.get(player.playerId);
-          if (previous) {
-            scored.set(
-              player.playerId,
-              rescoreFrozenProjection(
-                previous,
-                profile,
-                residualForPlayer(playerEvaluation, player.playerId, player.position),
-              ),
-            );
-            frozenPlayerCount += 1;
-            frozenPlayerIds.add(player.playerId);
-          } else if (leagueRosterIds.has(player.playerId)) {
-            lockedRosterWithoutBaseline.push(player.playerId);
-          }
-          continue;
-        }
-        const selectedProjection =
-          firstPartyChampionStrategyForPosition(playerChampion.policy, player.position) ===
-          "first-party-model"
-            ? player.modelProjection
-            : player.baselineProjection;
-        const components = projectionComponents(player.position, selectedProjection.components);
-        const rawMean = scoreProjectionStatComponents(components, profile);
-        const calibration = residualForPlayer(playerEvaluation, player.playerId, player.position);
-        const mean =
-          selectedProjection.state === "zero" ? rawMean : leagueScoredMean(rawMean, calibration);
-        const interval =
-          selectedProjection.state === "zero"
-            ? { floor: mean, ceiling: mean }
-            : leagueScoredInterval(mean, calibration);
-        scored.set(player.playerId, {
-          playerId: player.playerId,
-          mean,
-          ...interval,
-          confidence: selectedProjection.quality.confidence,
-          components,
-        });
-      }
-      for (const player of canonicalDefensePlayers) {
-        const team = upper(player.nflTeam);
-        const defense = team ? defenseByTeam.get(team) : undefined;
-        if (!team || !defense) continue;
-        const rosterAliases = rosteredDefenseByTeam.get(team) ?? [];
-        const outputPlayerIds =
-          rosterAliases.length > 0 ? rosterAliases.map((row) => row.playerId) : [player.id];
-        for (const outputPlayerId of outputPlayerIds) {
-          if (defense.gameStarted) {
-            const previous = previousRows.get(outputPlayerId);
-            if (previous) {
-              scored.set(
-                outputPlayerId,
-                rescoreFrozenProjection(previous, profile, residualForDefense(defenseEvaluation)),
-              );
-              frozenPlayerCount += 1;
-              frozenPlayerIds.add(outputPlayerId);
-            } else if (leagueRosterIds.has(outputPlayerId)) {
-              lockedRosterWithoutBaseline.push(outputPlayerId);
-            }
-            continue;
-          }
-          const components = defense.projection.components;
-          const rawMean = scoreProjectionStatComponents(components, profile);
-          const calibration = residualForDefense(defenseEvaluation);
-          const bye = defense.projection.reasons.some((reason) => reason.includes("confirmed bye"));
-          const mean = bye ? rawMean : leagueScoredMean(rawMean, calibration);
-          const interval = defense.projection.reasons.some((reason) =>
-            reason.includes("confirmed bye"),
-          )
-            ? { floor: mean, ceiling: mean }
-            : leagueScoredInterval(mean, calibration);
-          scored.set(outputPlayerId, {
-            playerId: outputPlayerId,
-            mean,
-            ...interval,
-            confidence: defense.projection.quality.confidence,
-            components: { ...components },
-          });
-        }
-      }
-      if (lockedRosterWithoutBaseline.length > 0) {
-        withheld.push({
-          leagueSeasonId: league.id,
-          reasons: [
-            `No pre-kickoff forecast was available for ${lockedRosterWithoutBaseline.length} locked roster player${lockedRosterWithoutBaseline.length === 1 ? "" : "s"}.`,
-          ],
-        });
-        continue;
-      }
-      if (scored.size === 0) {
-        withheld.push({
-          leagueSeasonId: league.id,
-          reasons: ["No safely scored player projections were available."],
-        });
-        continue;
-      }
-
-      const setChecksum = projectionInputChecksum({
-        modelInputChecksum: input.inputChecksum,
-        leagueSeasonId: league.id,
-        profileKey,
-        roster: leagueRoster.map((player) => player.playerId).sort(),
-        frozenRows:
-          frozenPlayerCount === 0
-            ? []
-            : [...scored.values()]
-                .filter((row) => frozenPlayerIds.has(row.playerId))
-                .sort((left, right) => left.playerId.localeCompare(right.playerId)),
-      });
-      const profileDigest = sha256(profileKey).slice(0, 16);
-      const version = `${FIRST_PARTY_PROJECTION_MODEL_VERSION}:${input.season}:W${input.week}:${league.id}:${profileDigest}:${setChecksum.slice(0, 16)}`;
-      const eligible = scored.size;
-      const trainingCutoff = playerEvaluation.generatedThrough ??
-        defenseEvaluation.generatedThrough ?? { season: input.season - 1, week: 18 };
-      publications.push({
-        league,
-        profile,
-        profileKey,
-        rows: [...scored.values()].sort((left, right) =>
-          left.playerId.localeCompare(right.playerId),
-        ),
-        version,
-        inputChecksum: setChecksum,
-        metadata: {
-          managed: true,
-          sourceLabel: "Laces Out first-party projections",
-          modelVersion: FIRST_PARTY_PROJECTION_MODEL_VERSION,
-          modelInputChecksum: input.inputChecksum,
-          scoringProfile: profile,
-          scoringProfileKey: profileKey,
-          scoringMappingVersion: LEAGUE_SCORING_NORMALIZATION_VERSION,
-          championPolicy: playerChampion.policy,
-          scoringWarnings: normalization.warnings,
-          computedAt: input.now.toISOString(),
-          sourceAsOf: input.sourceAsOf.toISOString(),
-          inputCheckedAt: input.sourceAsOf.toISOString(),
-          trainingCutoff,
-          statsThrough: trainingCutoff,
-          qualityState: "publishable",
-          coverage: {
-            projected: scored.size,
-            eligible,
-            ratio: eligible === 0 ? 0 : scored.size / eligible,
-          },
-          warnings: [
-            ...normalization.warnings.map((warning) => warning.message),
-            ...defenseMethodWarnings,
-            availabilityMethodWarning,
-            ...(frozenPlayerCount > 0
-              ? ["Players whose games started retain their last pre-kickoff forecast."]
-              : []),
-          ],
-          backtest: {
-            samples: playerEvaluation.overall.samples,
-            mae: playerEvaluation.overall.mae,
-            baselineMae: playerEvaluation.overall.baselineMae,
-            intervalCoverage: playerEvaluation.overall.intervalCoverage,
-          },
-          season: input.season,
-          week: input.week,
-          pointIntervals: "league-scored residual quantiles",
-          baseline: "recency-only",
-          playerBacktest: playerEvaluation.overall,
-          defenseBacktest: defenseEvaluation.overall,
-          rosterCoverageChecked: leagueRoster.length > 0,
-          frozenPlayerCount,
-        },
-      });
-    }
-    return { publications, withheld };
-  }
-
   async #recordSourceSuccess(
     sourceId: string,
     now: Date,
@@ -2871,4 +2708,463 @@ export class FirstPartyProjectionService implements ProjectionRefreshService {
       })
       .where(eq(dataSources.id, sourceId));
   }
+}
+
+/**
+ * Plans one week of league-scored publications, one league at a time.
+ *
+ * Publication is decided per POSITION, never per league: `normalizeLeagueScoringProfile` reports
+ * which of QB/RB/WR/TE/K/DST a league's rules can actually be priced for, and each of those
+ * positions then clears (or fails) its own league-scored backtest gate. A position that cannot be
+ * priced, or whose own backtest fails, is withheld alone and reported with its reasons — it never
+ * withholds the positions around it.
+ *
+ * Exported (rather than a private method) because this is the only place per-position withholding
+ * is decided, and it is a pure function of its inputs; driving it directly is the only way to
+ * cover the partial-support branches without seeding a full multi-season training history.
+ */
+export function buildFirstPartyLeaguePublications(input: {
+  readonly season: number;
+  readonly week: number;
+  readonly now: Date;
+  readonly sourceAsOf: Date;
+  readonly inputChecksum: string;
+  readonly playerBacktest: FirstPartyProjectionBacktest;
+  readonly basePlayerBacktest: FirstPartyProjectionBacktest;
+  readonly defenseBacktest: FirstPartyTeamDefenseBacktest;
+  readonly players: readonly PlayerRow[];
+  readonly leagues: readonly LeagueRow[];
+  readonly rules: readonly LeagueRuleRow[];
+  readonly rosters: readonly LeagueRosterPlayer[];
+  readonly publishedPlayers: readonly PublishedPlayer[];
+  readonly publishedDefenses: readonly PublishedDefense[];
+  readonly previousRowsByLeague: ReadonlyMap<string, ReadonlyMap<string, ScoredProjectionRow>>;
+}): LeaguePublicationPlan {
+  const rulesByLeague = new Map<string, LeagueRuleRow[]>();
+  for (const rule of input.rules) {
+    const rows = rulesByLeague.get(rule.leagueSeasonId) ?? [];
+    rows.push(rule);
+    rulesByLeague.set(rule.leagueSeasonId, rows);
+  }
+  const rosterByLeague = new Map<string, LeagueRosterPlayer[]>();
+  for (const player of input.rosters) {
+    const rows = rosterByLeague.get(player.leagueSeasonId) ?? [];
+    rows.push(player);
+    rosterByLeague.set(player.leagueSeasonId, rows);
+  }
+  const defenseByTeam = new Map(input.publishedDefenses.map((defense) => [defense.team, defense]));
+  const canonicalDefensePlayers = input.players.filter((player) => {
+    const team = upper(player.nflTeam);
+    return (
+      isDefensePosition(player.primaryPosition) &&
+      team !== null &&
+      defenseByTeam.has(team) &&
+      player.id === firstPartyDefensePlayerId(team)
+    );
+  });
+
+  const publications: LeaguePublication[] = [];
+  const withheld: WithheldLeague[] = [];
+  const notes: LeaguePublicationNote[] = [];
+  for (const league of input.leagues) {
+    const visiblePlayers = input.publishedPlayers.filter(
+      (player) =>
+        player.leagueSeasonScopes.length === 0 || player.leagueSeasonScopes.includes(league.id),
+    );
+    const shadowedCanonicalIds = new Set(
+      visiblePlayers.flatMap((player) =>
+        player.leagueSeasonScopes.length > 0 && player.canonicalMatchId
+          ? [player.canonicalMatchId]
+          : [],
+      ),
+    );
+    const leaguePlayers = visiblePlayers.filter(
+      (player) =>
+        player.leagueSeasonScopes.length > 0 || !shadowedCanonicalIds.has(player.playerId),
+    );
+    const playerById = new Map(leaguePlayers.map((player) => [player.playerId, player]));
+    const normalization = normalizeLeagueScoringProfile({
+      id: `league:${league.id}`,
+      label: "League scoring",
+      version: LEAGUE_SCORING_NORMALIZATION_VERSION,
+      rows: (rulesByLeague.get(league.id) ?? []).map((rule) => ({
+        provider: league.provider,
+        statKey: rule.statKey,
+        providerStatId: rule.providerStatId,
+        operation: rule.operation,
+        points: rule.points,
+        thresholdLow: rule.thresholdLow,
+        thresholdHigh: rule.thresholdHigh,
+      })),
+      availableStatIds: firstPartyAvailableProjectionComponents(),
+    });
+    if (normalization.state === "unavailable") {
+      withheld.push({
+        leagueSeasonId: league.id,
+        scope: "league",
+        reasons: normalization.reasons.map(normalizationReasonText),
+        positions: normalizationWithheldPositions(normalization.positions),
+      });
+      continue;
+    }
+    const profile = normalization.profile;
+    const profileKey = projectionScoringProfileKey(profile);
+    const playerChampion = applyFirstPartyProjectionChampionPolicy(
+      input.basePlayerBacktest,
+      profile,
+    );
+    const publicationPlayerBacktest = applyFirstPartyProjectionFinalPolicy(
+      input.basePlayerBacktest,
+      playerChampion.policy,
+    );
+    const playerEvaluation = evaluateFirstPartyBacktestForScoringProfile(
+      publicationPlayerBacktest,
+      profile,
+    );
+    const defenseEvaluation = evaluateFirstPartyTeamDefenseBacktestForScoringProfile(
+      input.defenseBacktest,
+      profile,
+    );
+    // Normalization decides which positions this league's rules can be priced for at all; each
+    // surviving position then answers for its own backtest. Neither verdict is collapsed into a
+    // league-wide one: a D/ST the model cannot price, or a K whose residuals miss the gate, must
+    // not take QB/RB/WR/TE down with it.
+    const supportedByLeague = new Set(
+      normalization.positions.filter((item) => item.supported).map((item) => item.position),
+    );
+    const withheldPositions: WithheldLeaguePosition[] = normalizationWithheldPositions(
+      normalization.positions,
+    );
+    const publishablePlayerPositions = new Set<(typeof supportedPositions)[number]>();
+    for (const position of supportedPositions) {
+      if (!supportedByLeague.has(position)) continue;
+      if (playerPositionEvaluationClearsGate(playerEvaluation, profile, position)) {
+        publishablePlayerPositions.add(position);
+        continue;
+      }
+      withheldPositions.push({
+        position,
+        source: "backtest-gate",
+        reasons: [
+          `The ${position} league-scored backtest did not clear the recency-only baseline gate.`,
+        ],
+      });
+    }
+    // The D/ST gate is evaluated only when D/ST is a position this league can be priced for. It
+    // used to run whenever the profile carried any D/ST-relevant rule and withhold the whole
+    // league on failure, which is how a D/ST-only problem silently deleted every offensive
+    // projection in the league.
+    //
+    // `defenseRelevant` is unreachable-false today: normalization marks a position it prices
+    // nothing for as unsupported, and D/ST's vocabulary is a subset of `defenseStatIds` — true by
+    // construction now that both derive from `firstPartyTeamDefenseProjectionComponents()`. It
+    // stays as fail-closed defense-in-depth — but it reports its OWN cause, because blaming a
+    // backtest that was never consulted would be a lie in the run metrics.
+    const defenseRelevant = hasRelevantRules(profile, true);
+    const defensePublishable =
+      supportedByLeague.has("DST") &&
+      defenseRelevant &&
+      defenseEvaluationClearsGate(defenseEvaluation);
+    if (supportedByLeague.has("DST") && !defensePublishable) {
+      withheldPositions.push(
+        defenseRelevant
+          ? {
+              position: "DST",
+              source: "backtest-gate",
+              reasons: [
+                "The D/ST league-scored backtest did not clear the recency-only baseline gate.",
+              ],
+            }
+          : {
+              position: "DST",
+              source: "normalization",
+              reasons: [
+                "The emitted scoring profile carries no D/ST rule this projection run can price.",
+              ],
+            },
+      );
+    }
+    if (publishablePlayerPositions.size === 0 && !defensePublishable) {
+      withheld.push({
+        leagueSeasonId: league.id,
+        scope: "league",
+        reasons: withheldPositionReasonText(withheldPositions),
+        positions: withheldPositions,
+      });
+      continue;
+    }
+
+    const leagueRoster = rosterByLeague.get(league.id) ?? [];
+    const leagueRosterIds = new Set(leagueRoster.map((player) => player.playerId));
+    const rosteredDefenseByTeam = new Map<string, LeagueRosterPlayer[]>();
+    for (const rosterPlayer of leagueRoster) {
+      const team = upper(rosterPlayer.nflTeam);
+      if (!team || !isDefensePosition(rosterPlayer.primaryPosition)) continue;
+      const rows = rosteredDefenseByTeam.get(team) ?? [];
+      rows.push(rosterPlayer);
+      rosteredDefenseByTeam.set(team, rows);
+    }
+    // A league nobody has drafted in has no roster coverage to verify: every team is snapshotted
+    // and every snapshot is empty, so the only roster row is the incomplete-snapshot sentinel and
+    // the gap check below would withhold the league for the entire pre-season. Publishing its
+    // player pool is what the operator chose here — but ONLY for this unambiguous case. One real
+    // rostered player anywhere makes the league `"complete"`, which is a partial sync, and that
+    // keeps failing closed exactly as before.
+    const rosterCoverage = leagueRosterCoverage(leagueRoster);
+    const rosterGaps =
+      rosterCoverage === "pre-draft"
+        ? []
+        : leagueRoster.filter((rosterPlayer) => {
+            if (isDefensePosition(rosterPlayer.primaryPosition)) {
+              return (
+                !rosterPlayer.nflTeam || !defenseByTeam.has(rosterPlayer.nflTeam.toUpperCase())
+              );
+            }
+            return (
+              !firstPartyProjectionPositionIsSupported(rosterPlayer.primaryPosition) ||
+              !playerById.has(rosterPlayer.playerId)
+            );
+          });
+    if (rosterGaps.length > 0) {
+      const snapshotsIncomplete = rosterGaps.some((player) =>
+        player.playerId.startsWith("INCOMPLETE-ROSTER:"),
+      );
+      withheld.push({
+        leagueSeasonId: league.id,
+        scope: "league",
+        reasons: [
+          snapshotsIncomplete
+            ? "League roster snapshots are incomplete."
+            : `Roster coverage is incomplete for ${rosterGaps.length} player${rosterGaps.length === 1 ? "" : "s"}.`,
+        ],
+        // Positions this league could not have published either way stay recorded even when an
+        // unrelated operational failure is what actually stopped the league.
+        ...(withheldPositions.length === 0 ? {} : { positions: withheldPositions }),
+      });
+      continue;
+    }
+
+    const scored = new Map<string, ScoredProjectionRow>();
+    // Position per emitted row, so published coverage is reported from the rows this set actually
+    // carries rather than from the gate verdicts that merely permitted them.
+    const rowPositions = new Map<string, LeagueScoringPosition>();
+    const previousRows =
+      input.previousRowsByLeague.get(league.id) ?? new Map<string, ScoredProjectionRow>();
+    const lockedRosterWithoutBaseline: string[] = [];
+    let frozenPlayerCount = 0;
+    const frozenPlayerIds = new Set<string>();
+    for (const player of leaguePlayers) {
+      // The player's position is the withholding unit; a withheld one contributes no rows and no
+      // locked-roster accounting, so it can neither be published nor withhold anything else.
+      const rowPosition = publishablePlayerPositionOf(publishablePlayerPositions, player.position);
+      if (rowPosition === undefined) continue;
+      if (player.gameStarted) {
+        const previous = previousRows.get(player.playerId);
+        if (previous) {
+          scored.set(
+            player.playerId,
+            rescoreFrozenProjection(
+              previous,
+              profile,
+              residualForPlayer(playerEvaluation, player.playerId, player.position),
+            ),
+          );
+          rowPositions.set(player.playerId, rowPosition);
+          frozenPlayerCount += 1;
+          frozenPlayerIds.add(player.playerId);
+        } else if (leagueRosterIds.has(player.playerId)) {
+          lockedRosterWithoutBaseline.push(player.playerId);
+        }
+        continue;
+      }
+      const selectedProjection =
+        firstPartyChampionStrategyForPosition(playerChampion.policy, player.position) ===
+        "first-party-model"
+          ? player.modelProjection
+          : player.baselineProjection;
+      const components = projectionComponents(player.position, selectedProjection.components);
+      const rawMean = scoreProjectionStatComponents(components, profile);
+      const calibration = residualForPlayer(playerEvaluation, player.playerId, player.position);
+      const mean =
+        selectedProjection.state === "zero" ? rawMean : leagueScoredMean(rawMean, calibration);
+      const interval =
+        selectedProjection.state === "zero"
+          ? { floor: mean, ceiling: mean }
+          : leagueScoredInterval(mean, calibration);
+      scored.set(player.playerId, {
+        playerId: player.playerId,
+        mean,
+        ...interval,
+        confidence: selectedProjection.quality.confidence,
+        components,
+      });
+      rowPositions.set(player.playerId, rowPosition);
+    }
+    for (const player of defensePublishable ? canonicalDefensePlayers : []) {
+      const team = upper(player.nflTeam);
+      const defense = team ? defenseByTeam.get(team) : undefined;
+      if (!team || !defense) continue;
+      const rosterAliases = rosteredDefenseByTeam.get(team) ?? [];
+      const outputPlayerIds =
+        rosterAliases.length > 0 ? rosterAliases.map((row) => row.playerId) : [player.id];
+      for (const outputPlayerId of outputPlayerIds) {
+        if (defense.gameStarted) {
+          const previous = previousRows.get(outputPlayerId);
+          if (previous) {
+            scored.set(
+              outputPlayerId,
+              rescoreFrozenProjection(previous, profile, residualForDefense(defenseEvaluation)),
+            );
+            rowPositions.set(outputPlayerId, "DST");
+            frozenPlayerCount += 1;
+            frozenPlayerIds.add(outputPlayerId);
+          } else if (leagueRosterIds.has(outputPlayerId)) {
+            lockedRosterWithoutBaseline.push(outputPlayerId);
+          }
+          continue;
+        }
+        const components = defense.projection.components;
+        const rawMean = scoreProjectionStatComponents(components, profile);
+        const calibration = residualForDefense(defenseEvaluation);
+        const bye = defense.projection.reasons.some((reason) => reason.includes("confirmed bye"));
+        const mean = bye ? rawMean : leagueScoredMean(rawMean, calibration);
+        const interval = defense.projection.reasons.some((reason) =>
+          reason.includes("confirmed bye"),
+        )
+          ? { floor: mean, ceiling: mean }
+          : leagueScoredInterval(mean, calibration);
+        scored.set(outputPlayerId, {
+          playerId: outputPlayerId,
+          mean,
+          ...interval,
+          confidence: defense.projection.quality.confidence,
+          components: { ...components },
+        });
+        rowPositions.set(outputPlayerId, "DST");
+      }
+    }
+    if (lockedRosterWithoutBaseline.length > 0) {
+      withheld.push({
+        leagueSeasonId: league.id,
+        scope: "league",
+        reasons: [
+          `No pre-kickoff forecast was available for ${lockedRosterWithoutBaseline.length} locked roster player${lockedRosterWithoutBaseline.length === 1 ? "" : "s"}.`,
+        ],
+        ...(withheldPositions.length === 0 ? {} : { positions: withheldPositions }),
+      });
+      continue;
+    }
+    if (scored.size === 0) {
+      withheld.push({
+        leagueSeasonId: league.id,
+        scope: "league",
+        reasons: ["No safely scored player projections were available."],
+        ...(withheldPositions.length === 0 ? {} : { positions: withheldPositions }),
+      });
+      continue;
+    }
+    // The league publishes, but not for everything it asked for. Recording that here — instead of
+    // only in the publication's own metadata — keeps every withholding this run performed visible
+    // in one place, and `scope` tells a reader this league still produced rows.
+    if (withheldPositions.length > 0) {
+      withheld.push({
+        leagueSeasonId: league.id,
+        scope: "positions",
+        reasons: withheldPositionReasonText(withheldPositions),
+        positions: withheldPositions,
+      });
+    }
+
+    const setChecksum = projectionInputChecksum({
+      modelInputChecksum: input.inputChecksum,
+      leagueSeasonId: league.id,
+      profileKey,
+      roster: leagueRoster.map((player) => player.playerId).sort(),
+      frozenRows:
+        frozenPlayerCount === 0
+          ? []
+          : [...scored.values()]
+              .filter((row) => frozenPlayerIds.has(row.playerId))
+              .sort((left, right) => left.playerId.localeCompare(right.playerId)),
+    });
+    const publishedPositionSet = new Set<LeagueScoringPosition>();
+    for (const playerId of scored.keys()) {
+      const rowPosition = rowPositions.get(playerId);
+      if (rowPosition !== undefined) publishedPositionSet.add(rowPosition);
+    }
+    const profileDigest = sha256(profileKey).slice(0, 16);
+    const version = `${FIRST_PARTY_PROJECTION_MODEL_VERSION}:${input.season}:W${input.week}:${league.id}:${profileDigest}:${setChecksum.slice(0, 16)}`;
+    const eligible = scored.size;
+    const trainingCutoff = playerEvaluation.generatedThrough ??
+      defenseEvaluation.generatedThrough ?? { season: input.season - 1, week: 18 };
+    publications.push({
+      league,
+      profile,
+      profileKey,
+      rows: [...scored.values()].sort((left, right) => left.playerId.localeCompare(right.playerId)),
+      version,
+      inputChecksum: setChecksum,
+      metadata: {
+        managed: true,
+        sourceLabel: "Laces Out first-party projections",
+        modelVersion: FIRST_PARTY_PROJECTION_MODEL_VERSION,
+        modelInputChecksum: input.inputChecksum,
+        scoringProfile: profile,
+        scoringProfileKey: profileKey,
+        scoringMappingVersion: LEAGUE_SCORING_NORMALIZATION_VERSION,
+        championPolicy: playerChampion.policy,
+        scoringWarnings: normalization.warnings,
+        // Coverage is per position, so state it per position. `supportedPositions` is what the
+        // league's rules can be priced for; `publishedPositions` is derived from the rows this set
+        // actually carries, so it never claims a position whose gate cleared but which produced no
+        // row (every kicker unavailable, no canonical defense entity, …). A consumer must read the
+        // second.
+        supportedPositions: [...supportedByLeague],
+        publishedPositions: LEAGUE_SCORING_POSITIONS.filter((position) =>
+          publishedPositionSet.has(position),
+        ),
+        withheldPositions,
+        computedAt: input.now.toISOString(),
+        sourceAsOf: input.sourceAsOf.toISOString(),
+        inputCheckedAt: input.sourceAsOf.toISOString(),
+        trainingCutoff,
+        statsThrough: trainingCutoff,
+        qualityState: "publishable",
+        coverage: {
+          projected: scored.size,
+          eligible,
+          ratio: eligible === 0 ? 0 : scored.size / eligible,
+        },
+        warnings: [
+          ...normalization.warnings.map((warning) => warning.message),
+          ...defenseMethodWarnings,
+          availabilityMethodWarning,
+          ...(frozenPlayerCount > 0
+            ? ["Players whose games started retain their last pre-kickoff forecast."]
+            : []),
+        ],
+        backtest: backtestSummaryForSupportedPositions(playerEvaluation, supportedByLeague),
+        season: input.season,
+        week: input.week,
+        pointIntervals: "league-scored residual quantiles",
+        baseline: "recency-only",
+        playerBacktest: playerEvaluation.overall,
+        defenseBacktest: defenseEvaluation.overall,
+        // What the roster told us, and whether it was actually verifiable. A pre-draft set has no
+        // coverage to check, so it must not claim one was performed.
+        rosterCoverage,
+        rosterCoverageChecked: rosterCoverage === "complete",
+        frozenPlayerCount,
+      },
+    });
+    if (rosterCoverage === "pre-draft") {
+      notes.push({
+        leagueSeasonId: league.id,
+        code: "pre-draft-roster",
+        message:
+          "No team has a rostered player yet, so this league published its player pool without a roster coverage check.",
+      });
+    }
+  }
+  return { publications, withheld, notes };
 }

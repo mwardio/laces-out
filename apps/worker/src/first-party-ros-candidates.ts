@@ -2,6 +2,10 @@ import { createHash } from "node:crypto";
 
 import {
   FIRST_PARTY_PROJECTION_MODEL_VERSION,
+  FIRST_PARTY_ROS_CONVERGENCE_REFERENCE_SCENARIOS,
+  FIRST_PARTY_ROS_DEFAULT_SCENARIOS,
+  FIRST_PARTY_ROS_MAXIMUM_SCENARIOS,
+  FIRST_PARTY_ROS_MINIMUM_SCENARIOS,
   FIRST_PARTY_ROS_MODEL_VERSION,
   firstPartyProjectionComponentsForPosition,
   firstPartyRecentRoleContext,
@@ -56,9 +60,11 @@ const INACTIVE_STATUSES = new Set<FirstPartyPlayerStatus>([
 ]);
 
 /**
- * Live convergence tolerances mirror the model's release tolerances, but the live rail compares two
- * persistable scenario counts (both <= the ROS summary storage ceiling of 4096) rather than the
- * admission-time 8192-vs-16384 pair, so a released run's convergence diagnostic can be persisted.
+ * Live convergence tolerances mirror the model's release tolerances. The live rail now compares the
+ * engine's own release and reference path counts (`FIRST_PARTY_ROS_DEFAULT_SCENARIOS` against
+ * `FIRST_PARTY_ROS_CONVERGENCE_REFERENCE_SCENARIOS`) rather than a smaller persistable pair: the
+ * summary storage contract is derived from the same engine constants, so the released run's own
+ * diagnostic is persistable without shrinking the run that gets published.
  */
 const ROS_LIVE_CONVERGENCE_TOLERANCES: Readonly<
   Record<
@@ -81,8 +87,14 @@ const ROS_LIVE_CONVERGENCE_TOLERANCES: Readonly<
  */
 const ROS_LIVE_KICKER_P50_TOLERANCE = { absolute: 1, relative: 0.03 } as const;
 
-export const FIRST_PARTY_ROS_LIVE_RELEASE_SCENARIOS = 2_048;
-export const FIRST_PARTY_ROS_LIVE_CONVERGENCE_REFERENCE_SCENARIOS = 4_096;
+/**
+ * The live rail's release and reference path counts ARE the engine's, re-exported under the live
+ * names so no caller restates a number. Copying these as independent literals is exactly what let
+ * the live rail release at one count while the store admitted another.
+ */
+export const FIRST_PARTY_ROS_LIVE_RELEASE_SCENARIOS = FIRST_PARTY_ROS_DEFAULT_SCENARIOS;
+export const FIRST_PARTY_ROS_LIVE_CONVERGENCE_REFERENCE_SCENARIOS =
+  FIRST_PARTY_ROS_CONVERGENCE_REFERENCE_SCENARIOS;
 
 function statusToAvailabilityState(
   status: FirstPartyPlayerStatus,
@@ -391,6 +403,18 @@ export function buildFirstPartyRosPlayerCandidate(
 ): FirstPartyRosCandidate | null {
   const assembled = assembleFirstPartyRosCandidateInputs(input);
   if (assembled === null) return null;
+  return simulateFirstPartyRosCandidate(assembled);
+}
+
+/**
+ * Simulates both strategies from ALREADY-assembled inputs. Assembly re-projects every future week's
+ * weekly centers over the whole feature history, so a caller that already holds the assembled inputs
+ * must simulate from them rather than reassembling — the two would be byte-identical, and at the
+ * engine's standard 12288-path release count the redundant work is not free.
+ */
+export function simulateFirstPartyRosCandidate(
+  assembled: FirstPartyRosAssembledCandidateInputs,
+): FirstPartyRosCandidate {
   const contextual = projectFirstPartyRestOfSeason(assembled.contextualInput);
   const recency = projectFirstPartyRestOfSeason(assembled.recencyInput);
   return {
@@ -415,14 +439,53 @@ function sha256(value: unknown): string {
 }
 
 /**
- * Deterministic bounded convergence diagnostic for the live rail. Compares the release scenario
- * count with a larger, still-persistable reference; the release run is a seeded prefix of the
- * reference, so this diagnoses Monte Carlo stability without exceeding the summary storage ceiling.
+ * Returns the caller's already-simulated release run when its provenance proves it is the run this
+ * diagnostic would otherwise compute, and simulates it otherwise. Every identity the seed stream
+ * depends on is checked, so reuse is byte-equivalent to recomputation by construction.
+ */
+function reuseOrSimulateRelease(
+  projectionInput: FirstPartyRosProjectionInput,
+  scenarioCount: number,
+  supplied: FirstPartyRosProjection | undefined,
+): FirstPartyRosProjection {
+  if (supplied === undefined) {
+    return projectFirstPartyRestOfSeason({ ...projectionInput, scenarioCount });
+  }
+  const provenance = supplied.provenance;
+  if (
+    provenance.scenarioCount !== scenarioCount ||
+    provenance.inputChecksum !== projectionInput.inputChecksum ||
+    provenance.strategy !== projectionInput.strategy ||
+    provenance.weeklyModelVersion !== projectionInput.weeklyModelVersion ||
+    provenance.season !== projectionInput.season ||
+    provenance.asOfWeek !== projectionInput.asOfWeek ||
+    provenance.windowStartWeek !== projectionInput.windowStartWeek ||
+    provenance.windowEndWeek !== projectionInput.windowEndWeek ||
+    supplied.playerId !== projectionInput.playerId
+  ) {
+    throw new RangeError(
+      "Reused ROS release projection does not match the convergence diagnostic's own input",
+    );
+  }
+  return supplied;
+}
+
+/**
+ * Deterministic bounded convergence diagnostic for the live rail. Compares the release run with a
+ * larger deterministic reference; the release paths are an exact seeded prefix of the reference, so
+ * this diagnoses Monte Carlo stability without changing what gets published.
+ *
+ * `releaseProjection` lets a caller hand back the release run it has ALREADY simulated for this
+ * exact input instead of paying for an identical second simulation. Reuse is only accepted when the
+ * supplied run's provenance proves it is that run: same input checksum, strategy, seed lineage, and
+ * path count. A mismatch throws rather than silently recomputing, so a stale or foreign projection
+ * can never be passed off as the released one.
  */
 export function diagnoseBoundedFirstPartyRosConvergence(input: {
   readonly projectionInput: FirstPartyRosProjectionInput;
   readonly releaseScenarioCount?: number;
   readonly referenceScenarioCount?: number;
+  readonly releaseProjection?: FirstPartyRosProjection;
 }): {
   readonly state: "converged" | "unstable";
   readonly lowerScenarioCount: number;
@@ -433,7 +496,27 @@ export function diagnoseBoundedFirstPartyRosConvergence(input: {
   const lower = input.releaseScenarioCount ?? FIRST_PARTY_ROS_LIVE_RELEASE_SCENARIOS;
   const reference =
     input.referenceScenarioCount ?? FIRST_PARTY_ROS_LIVE_CONVERGENCE_REFERENCE_SCENARIOS;
-  const release = projectFirstPartyRestOfSeason({ ...input.projectionInput, scenarioCount: lower });
+  // Fail closed on an out-of-contract pair before any simulation: the engine's admissible range is
+  // the same range the summary store accepts, and a reference no larger than the release run would
+  // make "converged" meaningless.
+  for (const [label, value] of [
+    ["release", lower],
+    ["reference", reference],
+  ] as const) {
+    if (
+      !Number.isSafeInteger(value) ||
+      value < FIRST_PARTY_ROS_MINIMUM_SCENARIOS ||
+      value > FIRST_PARTY_ROS_MAXIMUM_SCENARIOS
+    ) {
+      throw new RangeError(
+        `Live ROS ${label} scenario count must be between ${FIRST_PARTY_ROS_MINIMUM_SCENARIOS} and ${FIRST_PARTY_ROS_MAXIMUM_SCENARIOS}`,
+      );
+    }
+  }
+  if (reference < lower) {
+    throw new RangeError("Live ROS convergence reference must be at least the release path count");
+  }
+  const release = reuseOrSimulateRelease(input.projectionInput, lower, input.releaseProjection);
   const referenceRun = projectFirstPartyRestOfSeason({
     ...input.projectionInput,
     scenarioCount: reference,

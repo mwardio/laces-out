@@ -673,6 +673,19 @@
   opacity: 0.45;
 }
 
+/* The proof statement links to /methodology. Wording and scale are unchanged; only the underline
+   marks it as the receipt for the three figures beside it. */
+.signalLink {
+  text-align: center;
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+}
+
+.signalLink:hover {
+  text-decoration-thickness: 2px;
+}
+
 /* The validation figures carry the strip; the prose stays at strip scale. */
 .signalInner strong {
   font-size: 15px;
@@ -2097,6 +2110,12 @@
 
   .signalInner i {
     display: none;
+  }
+
+  /* Only at this wrapped, two-column width does the link land in a half-width grid cell rather
+     than the full-width flex row `justify-content: space-between` lays out on desktop. */
+  .signalLink {
+    margin-inline: auto;
   }
 
   .sectionIntro,

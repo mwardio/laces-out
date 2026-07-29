@@ -8,6 +8,10 @@ import type { EspnBridgeSnapshot, EspnSupplementalBridgeSnapshot } from "@fantas
 import { bridgeDeviceLeagues, bridgeDevices, leagues, type Database } from "@fantasy/db";
 import { and, asc, desc, eq, gt, isNull, or } from "drizzle-orm";
 
+import {
+  emitProviderSyncChangeEvents,
+  type ChangeEventProducerDependencies,
+} from "./change-event-producers.js";
 import { DrizzleEspnSyncPersistence } from "./espn-sync-persistence.js";
 
 const deviceLifetimeMs = 365 * 24 * 60 * 60 * 1000;
@@ -70,15 +74,48 @@ export class EspnBridgeService {
   readonly #database: Database;
   readonly #now: () => Date;
   readonly #persistence: DrizzleEspnSyncPersistence;
+  readonly #changeEvents: ChangeEventProducerDependencies | undefined;
+  readonly #onChangeEventError: (error: unknown) => void;
 
   constructor(
     database: Database,
     now: () => Date = () => new Date(),
     persistence: DrizzleEspnSyncPersistence = new DrizzleEspnSyncPersistence(database),
+    /**
+     * Optional so an existing fake-database test constructs the service unchanged. When absent no
+     * change event is emitted, which is a stated no-op rather than a failure.
+     */
+    changeEvents?: {
+      readonly producers: ChangeEventProducerDependencies;
+      readonly onError?: (error: unknown) => void;
+    },
   ) {
     this.#database = database;
     this.#now = now;
     this.#persistence = persistence;
+    this.#changeEvents = changeEvents?.producers;
+    this.#onChangeEventError = changeEvents?.onError ?? (() => undefined);
+  }
+
+  /**
+   * Emitted *after* the persister's transaction has committed, so the new roster snapshot and its
+   * predecessor are both visible. Failures never reach the caller: a change event is an
+   * observability surface and must not turn an admitted snapshot into a 500.
+   */
+  async #emitSyncChangeEvents(input: {
+    readonly state: "accepted" | "unchanged";
+    readonly leagueId: string;
+    readonly leagueSeasonId: string;
+    readonly actorUserId: string;
+    readonly artifactId: string;
+    readonly occurredAt: Date;
+  }): Promise<void> {
+    if (!this.#changeEvents) return;
+    await emitProviderSyncChangeEvents(
+      this.#changeEvents,
+      { provider: "espn", ...input },
+      this.#onChangeEventError,
+    );
   }
 
   async listDevices(userId: string): Promise<EspnBridgeDeviceList> {
@@ -207,6 +244,8 @@ export class EspnBridgeService {
     readonly receiptId: string;
     readonly state: "accepted" | "unchanged";
     readonly receivedAt: string;
+    /** Reported so the route can queue downstream work for the league season that actually changed. */
+    readonly leagueSeasonId: string;
   }> {
     const now = this.#now();
     const [device] = await this.#database
@@ -262,10 +301,19 @@ export class EspnBridgeService {
       kind: "espn-bridge",
       now,
     });
+    await this.#emitSyncChangeEvents({
+      state: receipt.state,
+      leagueId: receipt.leagueId,
+      leagueSeasonId: receipt.leagueSeasonId,
+      actorUserId: device.userId,
+      artifactId: snapshot.checksumSha256,
+      occurredAt: now,
+    });
     return {
       receiptId: receipt.receiptId,
       state: receipt.state,
       receivedAt: now.toISOString(),
+      leagueSeasonId: receipt.leagueSeasonId,
     };
   }
 
@@ -276,6 +324,8 @@ export class EspnBridgeService {
     readonly receiptId: string;
     readonly state: "accepted" | "unchanged";
     readonly receivedAt: string;
+    /** Reported so the route can queue downstream work for the league season that actually changed. */
+    readonly leagueSeasonId: string;
   }> {
     const now = this.#now();
     const [device] = await this.#database
@@ -334,6 +384,7 @@ export class EspnBridgeService {
       receiptId: receipt.receiptId,
       state: receipt.state,
       receivedAt: now.toISOString(),
+      leagueSeasonId: receipt.leagueSeasonId,
     };
   }
 }

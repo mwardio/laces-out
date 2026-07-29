@@ -46,6 +46,7 @@ import {
 } from "../lib/demo-schedule-edge";
 import { useDefaultLeague } from "../lib/use-default-league";
 import { ScheduleBoard } from "./schedule-board";
+import { TeamClaimCallout } from "./team-claim-callout";
 import styles from "./schedule-edge-workbench.module.css";
 
 type PortfolioState =
@@ -378,7 +379,7 @@ function SnapshotContext({
     sourceTimes.length === 0 ? null : new Date(Math.min(...sourceTimes)).toISOString();
 
   return (
-    <section className={styles.snapshotContext} aria-label="Schedule analysis context">
+    <section className={styles.snapshotContext} aria-label="Matchup Outlook context">
       <div>
         <UserRound size={15} aria-hidden="true" />
         <span>
@@ -981,9 +982,9 @@ function QuickRead({ data }: { readonly data: ScheduleEdgeResponse }) {
     )[0];
 
   return (
-    <nav className={styles.quickRead} aria-label="Jump to Schedule Edge sections">
+    <nav className={styles.quickRead} aria-label="Jump to Matchup Outlook sections">
       <div className={styles.quickReadHeader}>
-        <span>Schedule in 10 seconds</span>
+        <span>Matchups in 10 seconds</span>
         <small>Tap for the full read</small>
       </div>
       <a href="#schedule-now">
@@ -1259,21 +1260,20 @@ export function ScheduleEdgeWorkbench() {
         throw new Error(
           response.status === 404
             ? "This league is no longer available to your account."
-            : "Schedule analysis could not be loaded.",
+            : "Matchup Outlook could not be loaded.",
         );
       }
       const parsed = parseScheduleEdgeResponse(await response.json());
-      if (!parsed) throw new Error("Schedule analysis failed its data contract.");
+      if (!parsed) throw new Error("Matchup Outlook failed its data contract.");
       if (parsed.league.id !== selectedLeagueId) {
-        throw new Error("Schedule analysis did not match the selected league.");
+        throw new Error("Matchup Outlook did not match the selected league.");
       }
       if (!controller.signal.aborted) setEdge({ state: "ready", data: parsed });
     } catch (error) {
       if (!controller.signal.aborted) {
         setEdge({
           state: "error",
-          message:
-            error instanceof Error ? error.message : "Schedule analysis could not be loaded.",
+          message: error instanceof Error ? error.message : "Matchup Outlook could not be loaded.",
         });
       }
     } finally {
@@ -1382,8 +1382,8 @@ export function ScheduleEdgeWorkbench() {
 
       <header className={styles.hero}>
         <div>
-          <p>Roster-aware schedule intelligence</p>
-          <h1>Schedule Edge</h1>
+          <p>Roster-aware matchup intelligence</p>
+          <h1>Matchup Outlook</h1>
           <span>
             See how upcoming opponents have scored—and where bye weeks could leave a roster hole.
           </span>
@@ -1430,7 +1430,7 @@ export function ScheduleEdgeWorkbench() {
         <div className={styles.errorState} role="alert">
           <AlertTriangle size={19} aria-hidden="true" />
           <span>
-            <strong>Personalized schedule analysis is unavailable</strong>
+            <strong>Personalized Matchup Outlook is unavailable</strong>
             {portfolio.message}
           </span>
         </div>
@@ -1456,7 +1456,7 @@ export function ScheduleEdgeWorkbench() {
         <div className={styles.errorState} role="alert">
           <ShieldAlert size={19} aria-hidden="true" />
           <span>
-            <strong>Schedule analysis could not be built</strong>
+            <strong>Matchup Outlook could not be built</strong>
             {edge.message}
           </span>
         </div>
@@ -1466,6 +1466,9 @@ export function ScheduleEdgeWorkbench() {
           <SnapshotContext data={readyData} demo={isDemo} />
           <QuickRead data={readyData} />
           <FindingsSection data={readyData} demo={isDemo} />
+          {!isDemo && readyData.league.claimedTeam === null ? (
+            <TeamClaimCallout leagueId={selectedLeagueId} onClaimed={() => void loadEdge()} />
+          ) : null}
           <div className={styles.primaryGrid}>
             <RosterSection data={readyData} demo={isDemo} />
             <div className={styles.sideStack}>

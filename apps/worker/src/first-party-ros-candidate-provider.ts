@@ -24,6 +24,7 @@ import {
   type FirstPartyProjectionPosition,
   type FirstPartyRosLiveReleaseEvidence,
   type FirstPartyWeeklyStatLine,
+  type LeagueScoringPositionSupport,
   type ProjectionScoringProfile,
 } from "@fantasy/projections";
 import { and, desc, eq, inArray } from "drizzle-orm";
@@ -40,8 +41,8 @@ import {
 import {
   assembleFirstPartyRosCandidateInputs,
   buildFirstPartyRosLiveReleaseEvidence,
-  buildFirstPartyRosPlayerCandidate,
   diagnoseBoundedFirstPartyRosConvergence,
+  simulateFirstPartyRosCandidate,
   type FirstPartyRosAssembledCandidateInputs,
   type FirstPartyRosCandidate,
 } from "./first-party-ros-candidates.js";
@@ -63,13 +64,15 @@ import type {
   FirstPartyRosPublicationTarget,
   FirstPartyRosWindow,
 } from "./first-party-ros-projections.js";
-import type {
-  FirstPartyRosReleasedPlayer,
-  FirstPartyRosRunConvergence,
-  LoadedFirstPartyRosChampionArtifact,
+import {
+  firstPartyRosArtifactScoringProfile,
+  matchFirstPartyRosPositions,
+  type FirstPartyRosRailPosition,
+  type FirstPartyRosReleasedPlayer,
+  type FirstPartyRosRunConvergence,
+  type FirstPartyRosWithheldPosition,
+  type LoadedFirstPartyRosChampionArtifact,
 } from "./first-party-ros-publication.js";
-
-const supportedPositions = new Set<string>(HISTORICAL_ROS_SUPPORTED_POSITIONS);
 
 function sha256(value: string): string {
   return createHash("sha256").update(value, "utf8").digest("hex");
@@ -90,6 +93,23 @@ function normalizePosition(value: string): string {
 export interface FirstPartyRosScoringMatchedLeague {
   readonly leagueSeasonId: string;
   readonly profile: ProjectionScoringProfile;
+  /** Rail positions this league may receive from the artifact. Never empty on a matched league. */
+  readonly matchedPositions: readonly FirstPartyRosRailPosition[];
+  /** Rail positions this league may not receive, each with the reason it was withheld. */
+  readonly withheldPositions: readonly FirstPartyRosWithheldPosition[];
+  /** Rail positions league-scoring normalization supports, matched or not. */
+  readonly supportedPositions: readonly FirstPartyRosRailPosition[];
+}
+
+/** A league the artifact authorizes for no position at all, with the reason for each one. */
+export interface FirstPartyRosScoringExcludedLeague {
+  readonly leagueSeasonId: string;
+  readonly withheldPositions: readonly FirstPartyRosWithheldPosition[];
+}
+
+export interface FirstPartyRosScoringMatchReport {
+  readonly matched: readonly FirstPartyRosScoringMatchedLeague[];
+  readonly excluded: readonly FirstPartyRosScoringExcludedLeague[];
 }
 
 export interface FirstPartyRosLeagueRow {
@@ -107,18 +127,37 @@ export interface FirstPartyRosScoringRuleRow {
   readonly thresholdHigh: string | null;
 }
 
+const UNSUPPORTED_RAIL_POSITIONS: readonly FirstPartyRosWithheldPosition[] =
+  HISTORICAL_ROS_SUPPORTED_POSITIONS.map((position) => ({
+    position,
+    reason: "position-unsupported" as const,
+  }));
+
+/** The rail positions a normalization result reports as supported, in rail order. */
+function supportedRailPositions(
+  positions: readonly LeagueScoringPositionSupport[],
+): readonly FirstPartyRosRailPosition[] {
+  const supported = new Set(
+    positions.filter((entry) => entry.supported).map((entry) => entry.position),
+  );
+  return HISTORICAL_ROS_SUPPORTED_POSITIONS.filter((position) => supported.has(position));
+}
+
 /**
- * Enumerates leagues whose exact normalized scoring-profile key equals the champion artifact's
- * `scoringProfileKey`. The artifact authorizes only its own profile, so a league whose rules
- * normalize to any other key — or whose rules cannot be normalized at all — is excluded. Exact
- * digest equality only; no compatibility widening.
+ * Matches leagues against the champion artifact one position at a time. A league receives a
+ * position only when its own normalization supports that position AND the position-scoped scoring
+ * keys are byte-equal to the artifact's, so a league that prices D/ST or kickers differently keeps
+ * every position whose scoring is provably identical and loses exactly the ones that are not.
+ *
+ * Nothing is widened and nothing is silently dropped: a league that matches no position is
+ * excluded exactly as before, but now reports why for each position instead of vanishing.
  */
 export function enumerateFirstPartyRosScoringMatchedLeagues(input: {
   readonly artifactScoringProfileKey: string;
   readonly leagues: readonly FirstPartyRosLeagueRow[];
   readonly rules: readonly FirstPartyRosScoringRuleRow[];
   readonly availableStatIds: readonly string[];
-}): readonly FirstPartyRosScoringMatchedLeague[] {
+}): FirstPartyRosScoringMatchReport {
   const rulesByLeague = new Map<string, FirstPartyRosScoringRuleRow[]>();
   for (const rule of input.rules) {
     const rows = rulesByLeague.get(rule.leagueSeasonId) ?? [];
@@ -126,6 +165,7 @@ export function enumerateFirstPartyRosScoringMatchedLeagues(input: {
     rulesByLeague.set(rule.leagueSeasonId, rows);
   }
   const matched: FirstPartyRosScoringMatchedLeague[] = [];
+  const excluded: FirstPartyRosScoringExcludedLeague[] = [];
   for (const league of input.leagues) {
     const normalization = normalizeLeagueScoringProfile({
       id: `league:${league.id}`,
@@ -142,13 +182,31 @@ export function enumerateFirstPartyRosScoringMatchedLeagues(input: {
       })),
       availableStatIds: input.availableStatIds,
     });
-    if (normalization.state !== "available") continue;
-    if (projectionScoringProfileKey(normalization.profile) !== input.artifactScoringProfileKey) {
+    if (normalization.state !== "available") {
+      // No profile exists to compare, so no position can be attributed anything but its own
+      // unsupported normalization.
+      excluded.push({ leagueSeasonId: league.id, withheldPositions: UNSUPPORTED_RAIL_POSITIONS });
       continue;
     }
-    matched.push({ leagueSeasonId: league.id, profile: normalization.profile });
+    const supportedPositions = supportedRailPositions(normalization.positions);
+    const match = matchFirstPartyRosPositions({
+      artifactScoringProfileKey: input.artifactScoringProfileKey,
+      leagueScoringProfile: normalization.profile,
+      supportedPositions,
+    });
+    if (match.matched.length === 0) {
+      excluded.push({ leagueSeasonId: league.id, withheldPositions: match.withheld });
+      continue;
+    }
+    matched.push({
+      leagueSeasonId: league.id,
+      profile: normalization.profile,
+      matchedPositions: match.matched,
+      withheldPositions: match.withheld,
+      supportedPositions,
+    });
   }
-  return matched;
+  return { matched, excluded };
 }
 
 export interface FirstPartyRosRosteredPlayer {
@@ -182,6 +240,10 @@ export function buildFirstPartyRosLeagueTarget(input: {
   readonly artifact: LoadedFirstPartyRosChampionArtifact;
   readonly leagueSeasonId: string;
   readonly scoringProfile: ProjectionScoringProfile;
+  /** Only these positions may become candidates; every other one is withheld before simulation. */
+  readonly matchedPositions: readonly FirstPartyRosRailPosition[];
+  /** Carried onto the target so publication can re-derive the match rather than trust it. */
+  readonly supportedPositions: readonly FirstPartyRosRailPosition[];
   readonly season: number;
   readonly window: FirstPartyRosWindow;
   readonly rosteredPlayers: readonly FirstPartyRosRosteredPlayer[];
@@ -194,7 +256,13 @@ export function buildFirstPartyRosLeagueTarget(input: {
   readonly schedules: readonly ProjectionScheduleFact[];
   readonly futureWindowComplete: boolean;
   readonly sourceAsOf: Date;
+  /**
+   * Downscales the release simulation. Production never sets it, so the engine default decides.
+   * A caller that downscales the release run must downscale its reference too — an unpaired
+   * override is exactly the half-specified scenario contract this rail was fixed for.
+   */
   readonly scenarioCount?: number;
+  readonly convergenceReferenceScenarioCount?: number;
 }): FirstPartyRosLeagueTargetResult {
   const scoringProfileKey = projectionScoringProfileKey(input.scoringProfile);
   const window = {
@@ -207,9 +275,13 @@ export function buildFirstPartyRosLeagueTarget(input: {
   let skippedPlayers = 0;
   const accepted: AcceptedCandidate[] = [];
   const seenPlayers = new Set<string>();
+  // A position the artifact does not authorize for this league never becomes a candidate, so it is
+  // withheld structurally rather than filtered out later; it is not an audited per-player skip
+  // because nothing about the player was missing.
+  const releasablePositions = new Set<string>(input.matchedPositions);
   for (const rostered of input.rosteredPlayers) {
     const position = normalizePosition(rostered.position);
-    if (!supportedPositions.has(position) || rostered.team === null) continue;
+    if (!releasablePositions.has(position) || rostered.team === null) continue;
     if (seenPlayers.has(rostered.playerId)) continue;
     seenPlayers.add(rostered.playerId);
 
@@ -233,11 +305,15 @@ export function buildFirstPartyRosLeagueTarget(input: {
       ...(input.scenarioCount === undefined ? {} : { scenarioCount: input.scenarioCount }),
     };
 
-    const candidate = buildFirstPartyRosPlayerCandidate(builderInput);
-    if (candidate === null) {
+    // Assembled ONCE per player and reused for the simulation, the bucket evidence, and the bucket
+    // convergence diagnostic. Assembly re-projects every remaining week's weekly centers, and the
+    // pipeline previously performed it twice for every accepted player.
+    const assembled = assembleFirstPartyRosCandidateInputs(builderInput);
+    if (assembled === null) {
       skippedPlayers += 1;
       continue;
     }
+    const candidate = simulateFirstPartyRosCandidate(assembled);
     // The champion policy authorizes exactly one strategy per position/bucket; without a matching
     // choice the player cannot be released (no default, no approximation).
     const choice = input.artifact.policy.choices.find(
@@ -250,11 +326,6 @@ export function buildFirstPartyRosLeagueTarget(input: {
     }
     const projection = choice.strategy === "contextual" ? candidate.contextual : candidate.recency;
     if (projection.state !== "projected" || projection.expectedGames <= 0) {
-      skippedPlayers += 1;
-      continue;
-    }
-    const assembled = assembleFirstPartyRosCandidateInputs(builderInput);
-    if (assembled === null) {
       skippedPlayers += 1;
       continue;
     }
@@ -289,13 +360,24 @@ export function buildFirstPartyRosLeagueTarget(input: {
       left.released.playerId.localeCompare(right.released.playerId),
     );
     const representative = ordered[0]!;
+    // The representative's release runs are already simulated at exactly this path count, so the
+    // diagnostic compares that run against the larger reference instead of re-simulating it. The
+    // diagnostic verifies provenance before accepting the reuse.
+    const scenarioOverrides = {
+      ...(input.scenarioCount === undefined ? {} : { releaseScenarioCount: input.scenarioCount }),
+      ...(input.convergenceReferenceScenarioCount === undefined
+        ? {}
+        : { referenceScenarioCount: input.convergenceReferenceScenarioCount }),
+    };
     const contextualConvergence = diagnoseBoundedFirstPartyRosConvergence({
       projectionInput: representative.assembled.contextualInput,
-      ...(input.scenarioCount === undefined ? {} : { releaseScenarioCount: input.scenarioCount }),
+      releaseProjection: representative.candidate.contextual,
+      ...scenarioOverrides,
     });
     const recencyConvergence = diagnoseBoundedFirstPartyRosConvergence({
       projectionInput: representative.assembled.recencyInput,
-      ...(input.scenarioCount === undefined ? {} : { releaseScenarioCount: input.scenarioCount }),
+      releaseProjection: representative.candidate.recency,
+      ...scenarioOverrides,
     });
     bucketConvergences.push(contextualConvergence);
     const meanCoverage = {
@@ -347,6 +429,8 @@ export function buildFirstPartyRosLeagueTarget(input: {
     target: {
       leagueSeasonId: input.leagueSeasonId,
       leagueScoringProfileKey: scoringProfileKey,
+      leagueScoringProfile: input.scoringProfile,
+      supportedPositions: input.supportedPositions,
       futureWindowComplete: input.futureWindowComplete,
       evidence,
       convergence: runConvergence,
@@ -361,12 +445,15 @@ export function buildFirstPartyRosLeagueTarget(input: {
  * The production candidate provider. It loads the immutable weekly observations already pinned in
  * PostgreSQL, assembles the same inputs the weekly service uses, calibrates availability/role from
  * seasons strictly before the current one, and hands every future-week center to the tested
- * candidate builder. Any league whose scoring profile does not exactly match the artifact — or that
- * cannot be fully assembled — yields no target.
+ * candidate builder. A league is matched against the artifact one position at a time: only the
+ * positions whose scoped scoring keys equal the artifact's — and that the league's own normalization
+ * supports — produce candidates. A league that matches no position, or that cannot be fully
+ * assembled, yields no target.
  */
 export function databaseFirstPartyRosCandidateProvider(input: {
   readonly database: Database;
   readonly scenarioCount?: number;
+  readonly convergenceReferenceScenarioCount?: number;
 }): FirstPartyRosCandidateProvider {
   return {
     buildTargets: (context) => buildDatabaseFirstPartyRosTargets(input, context),
@@ -394,7 +481,11 @@ async function pinnedSourceChecksums(
 }
 
 async function buildDatabaseFirstPartyRosTargets(
-  options: { readonly database: Database; readonly scenarioCount?: number },
+  options: {
+    readonly database: Database;
+    readonly scenarioCount?: number;
+    readonly convergenceReferenceScenarioCount?: number;
+  },
   context: FirstPartyRosCandidateContext,
 ): Promise<readonly FirstPartyRosPublicationTarget[]> {
   const database = options.database;
@@ -421,7 +512,12 @@ async function buildDatabaseFirstPartyRosTargets(
     .innerJoin(leagueSeasons, eq(leagueSeasons.id, scoringRules.leagueSeasonId))
     .where(eq(leagueSeasons.season, season));
 
-  const matched = enumerateFirstPartyRosScoringMatchedLeagues({
+  // `excluded` is deliberately dropped here: this rail has no operator-facing channel of its own
+  // (no logger in this file), and the ROS status surface derives its own per-position reasons from
+  // its own normalization rather than reading these. It is returned so the reasons are available to
+  // a caller and are covered by tests; if a diagnostics channel is ever added, this is where the
+  // exclusions are already computed.
+  const { matched } = enumerateFirstPartyRosScoringMatchedLeagues({
     artifactScoringProfileKey: artifact.scoringProfileKey,
     leagues: leagueRows,
     rules: ruleRows,
@@ -686,12 +782,23 @@ async function buildDatabaseFirstPartyRosTargets(
   // Availability/role calibration must be trained strictly before the current season so a live
   // forecast can never leak its own season into its publication decision.
   if (trainingHistory.length === 0) return [];
-  const referenceProfile = matched[0]!.profile;
   let calibration: FirstPartyProjectionCalibration;
   let availabilityCalibration: HistoricalRosAvailabilityCalibration;
   let roleCalibration: HistoricalRosRoleCalibration;
   let kickerCalibration: HistoricalRosKickerCalibration;
   try {
+    // These three calibrations are fitted ONCE per artifact and shared by every matched league, so
+    // their reference profile must not depend on which leagues matched or on their order. It is the
+    // artifact's own profile, recovered from the key that IS its identity: deterministic, exact
+    // with respect to the artifact, and league-independent. Under per-position matching any single
+    // league's profile would be an approximation for every other matched league, since matched
+    // leagues now agree only on the positions they share.
+    //
+    // A position the artifact prices nothing for cannot be matched by any league (a supported
+    // position's league-side scoped key is never `"[]"`, so it cannot equal the artifact's empty
+    // one), so it is withheld with a stated reason before any player is simulated and a
+    // calibration that is degenerate for it can never reach a released projection.
+    const referenceProfile = firstPartyRosArtifactScoringProfile(artifact.scoringProfileKey);
     const weeklyBacktest = runFirstPartyProjectionBacktest(trainingHistory);
     calibration = weeklyBacktest.calibration;
     availabilityCalibration = calibrateHistoricalRosAvailability(
@@ -709,7 +816,8 @@ async function buildDatabaseFirstPartyRosTargets(
       weeklyBacktest.predictions,
     );
   } catch {
-    // A calibration that cannot be fitted is a league-wide missing piece: yield nothing.
+    // A calibration that cannot be fitted — including one whose reference profile cannot be
+    // recovered from a corrupt artifact key — is a league-wide missing piece: yield nothing.
     return [];
   }
 
@@ -735,6 +843,8 @@ async function buildDatabaseFirstPartyRosTargets(
       artifact,
       leagueSeasonId: league.leagueSeasonId,
       scoringProfile: league.profile,
+      matchedPositions: league.matchedPositions,
+      supportedPositions: league.supportedPositions,
       season,
       window,
       rosteredPlayers,
@@ -748,6 +858,9 @@ async function buildDatabaseFirstPartyRosTargets(
       futureWindowComplete,
       sourceAsOf,
       ...(options.scenarioCount === undefined ? {} : { scenarioCount: options.scenarioCount }),
+      ...(options.convergenceReferenceScenarioCount === undefined
+        ? {}
+        : { convergenceReferenceScenarioCount: options.convergenceReferenceScenarioCount }),
     });
     if (result.target !== null) targets.push(result.target);
   }

@@ -1,6 +1,18 @@
-# ESPN web-client normalizer contract v1
+# ESPN web-client normalizer contract v2
 
 This document describes Laces Out's parser contract for an observed ESPN Fantasy Football web-client response. It is **unofficial**, read-only, and versioned by this project. ESPN does not publish or guarantee this schema.
+
+## Contract history
+
+| Version | Change                                                                                                                                                                                                                                                                                                                      |
+| ------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| v1      | Initial contract.                                                                                                                                                                                                                                                                                                           |
+| v2      | ESPN re-encoded two `acquisitionSettings` fields (observed 2026-07-28). `waiverProcessDays` carries uppercase day names, and `matchupLimitPerScoringPeriod` is a boolean flag rather than the count v1 read it as. Both encodings parse; the boolean is never read as a count, which changes what a normalized limit means. |
+
+The version bump follows this document's own drift protocol: a new encoding of the same meaning
+extends a version, but `matchupLimitPerScoringPeriod` **changed meaning**, so the parser contract
+and the normalized output it produces are versioned as v2. The bridge envelope's `schemaVersion`
+is a separate contract between the browser extension and the server and remains `1`.
 
 The normalizer accepts either:
 
@@ -63,7 +75,7 @@ For raw payload input, the checksum is calculated over the exact input string. O
 
 ## Observed required payload
 
-Contract v1 requires the fields used to produce normalized data:
+Contract v2 requires the fields used to produce normalized data:
 
 - Root: `id`, `seasonId`, `scoringPeriodId`, `status.latestScoringPeriod`, `settings`, `members`, and `teams`; `schedule` is required when `mMatchup` was requested.
 - `mSettings`: league name/size, acquisition settings, draft settings, lineup-slot counts, playoff team count, and scoring items.
@@ -108,7 +120,57 @@ The following consistency rules are enforced:
 | waivers with `waiverOrderReset: true`  | `reverse-standings`                        |
 | waivers with `waiverOrderReset: false` | `rolling`                                  |
 
-Contract v1 accepts only the observed acquisition types `WAIVERS_TRADITIONAL`, `WAIVERS_CONTINUOUS`, and `FREE_AGENTS_ONLY`. A new ESPN value requires a reviewed contract version rather than a guessed mapping.
+Contract v2 accepts only the observed acquisition types `WAIVERS_TRADITIONAL`, `WAIVERS_CONTINUOUS`, and `FREE_AGENTS_ONLY`. A new ESPN value requires a reviewed contract version rather than a guessed mapping.
+
+### Waiver processing days
+
+`acquisitionSettings.waiverProcessDays` has been observed in two encodings. Both parse; a mixture
+of the two in one array does not, because that would interleave numbers whose convention ESPN never
+established with names this contract does map.
+
+| Observed ESPN value                          | Normalized `operationalRules.waiverProcessDays` |
+| -------------------------------------------- | ----------------------------------------------- |
+| `["MONDAY","WEDNESDAY","FRIDAY","SUNDAY",…]` | `[0, 1, 3, 4, 5, 6]`                            |
+| `[2, 4, 6]` (encoding observed before 2026)  | `[2, 4, 6]`, passed through unchanged           |
+| `[]`                                         | `[]` — a real "no scheduled day" answer         |
+
+Day names map to **`Date.prototype.getDay()` numbering (0 = Sunday)**. That convention is a
+deliberate project decision rather than an ESPN fact: when the encoding changed, nothing downstream
+consumed the field, `parseLeagueRules` did not read it, and no other connector populated it, so no
+existing meaning constrained the choice. The pre-2026 numeric values `[2, 4, 6]` are ambiguous —
+they read as Tue/Thu/Sat under both 0 = Sunday and 1 = Monday — so they neither settle nor
+contradict the choice. The platform convention was taken because every future JavaScript consumer
+compares against `getDay()`. Legacy numeric values are still passed through as ESPN encoded them,
+so a legacy `7` (which 0 = Sunday cannot express) would survive as provider-encoded data.
+
+ESPN's array is unordered and its order differs between leagues, so output is de-duplicated and
+sorted ascending for deterministic normalization and stable checksums.
+
+### Per-matchup acquisition limits
+
+`matchupLimitPerScoringPeriod` was read as a count in v1. It is a **boolean flag** in the current
+API — "is there a per-scoring-period acquisition limit", not "how many". It is never read as a
+count: `false` must not flow into a limit, and `true` must not be invented into a number. Numeric
+values are still accepted as counts for older responses.
+
+| ESPN `matchupAcquisitionLimit` | ESPN `matchupLimitPerScoringPeriod` | `matchupAcquisitionLimit` | `matchupAcquisitionLimitEnabled` |
+| ------------------------------ | ----------------------------------- | ------------------------- | -------------------------------- |
+| absent                         | `false`                             | `null`                    | `false`                          |
+| absent                         | `true`                              | `null`                    | `true`                           |
+| `7`                            | `true`                              | `7`                       | `true`                           |
+| `7`                            | `false`                             | `null`                    | `false`                          |
+| `7`                            | absent                              | `7`                       | `true`                           |
+| `-1`                           | absent or `false`                   | `null`                    | `false`                          |
+| absent                         | `5` (numeric, pre-2026)             | `5`                       | `true`                           |
+| absent                         | absent                              | `null`                    | `null`                           |
+
+`matchupAcquisitionLimitEnabled: true` with a `null` limit means "a limit applies, count unknown",
+which is deliberately distinguishable from "no limit". A `false` flag is authoritative over a
+numeric limit ESPN left behind, since no limit is then in force.
+
+`false` was observed on both active leagues captured on 2026-07-28. `true` was observed only on a
+league ESPN had not activated for the season, so it is accepted and passed through verbatim and
+nothing about active-league semantics is inferred from it.
 
 ### Roster positions
 
@@ -165,7 +227,7 @@ ESPN can change this response without notice. When a production snapshot fails:
 1. Keep the rejected artifact private and preserve its checksum/capture metadata.
 2. Compare only field paths and types against the fully invented test fixture; do not commit user payloads, cookies, member names, or real league IDs.
 3. Confirm the change against at least one maintained client or multiple independently captured sanitized payloads.
-4. Add an invented regression fixture and either extend v1 for a truly optional shape or add a new contract version for changed meaning.
+4. Add an invented regression fixture and either extend the current version for a truly optional shape or add a new contract version for changed meaning. Keep the superseded fixture: it is the evidence of what was previously observed. `test/fixtures/web-client-v1.json` holds the pre-2026 numeric encodings; `web-client-v2-active-day-names.json` and `web-client-v2-active-empty-waivers.json` hold the 2026-07-28 shapes captured from active leagues.
 5. Do not weaken an enum or identity check to “accept anything.” Unknown values require an intentional mapping.
 
 ## Known limitations

@@ -1,5 +1,6 @@
 import {
   dataSources,
+  fantasyTeams,
   leagueSeasons,
   nflScheduleObservations,
   playerExternalIds,
@@ -13,6 +14,7 @@ import {
   projectionModelRuns,
   projectionObservations,
   projectionSets,
+  rosterEntries,
   scoringRules,
   syncRuns,
   teamWeeklyStatObservations,
@@ -49,6 +51,7 @@ interface ProjectionDatabaseFixture {
   };
   readonly priorRun?: PriorRunFixture;
   readonly publishConflict?: boolean;
+  readonly leagues?: readonly Row[];
   // Simulates a required source (e.g. weekly stats) completing a concurrent refresh with a new
   // checksum after this run already validated sources and captured its start-of-refresh epoch,
   // but before this run reaches its own persist transaction.
@@ -206,16 +209,18 @@ class ProjectionDatabaseHarness {
     }
     if (table === nflScheduleObservations) return this.fixture.schedule ?? [];
     if (table === players) return this.#defensePlayers;
+    if (table === leagueSeasons) return this.fixture.leagues ?? [];
     if (
       table === playerWeeklyStatObservations ||
       table === playerWeeklyRosterObservations ||
       table === playerInjuryReportObservations ||
       table === playerSnapCountObservations ||
       table === teamWeeklyStatObservations ||
-      table === leagueSeasons ||
       table === scoringRules ||
       table === playerSourceObservations ||
       table === playerExternalIds ||
+      table === fantasyTeams ||
+      table === rosterEntries ||
       table === syncRuns
     ) {
       return [];
@@ -396,7 +401,14 @@ describe("first-party projection service release safety", () => {
     expect(modelRun?.qualityState).toBe("rejected");
     expect(modelRun?.playersPublished).toBe(0);
     expect(metrics?.gate?.reasons).toContain("scheduled_game_kickoff_unknown");
-    expect(metrics?.leagues).toEqual({ published: 0, rowsPublished: 0, eligible: 0, withheld: [] });
+    expect(metrics?.leagues).toEqual({
+      published: 0,
+      rowsPublished: 0,
+      eligible: 0,
+      withheld: [],
+      // Leagues that published under a caveat; deliberately separate from `withheld`.
+      notes: [],
+    });
     const sourceMetadata = latestSourceMetadata(harness);
     expect(sourceMetadata).toMatchObject({
       publishedWeeks: 0,
@@ -405,6 +417,39 @@ describe("first-party projection service release safety", () => {
     });
     expect(String(sourceMetadata.qualityReasons)).toContain("scheduled_game_kickoff_unknown");
     expect(sourceMetadata).not.toHaveProperty("lastPublishedAt");
+  });
+
+  it("persists structured, scoped league withholding in the run metrics", async () => {
+    const now = new Date("2026-09-01T12:00:00.000Z");
+    const harness = new ProjectionDatabaseHarness({
+      now,
+      schedule: scheduleFixture(),
+      leagues: [
+        {
+          id: "11111111-1111-4111-8111-111111111111",
+          provider: "espn",
+          currentWeek: 1,
+          teamCount: 12,
+        },
+      ],
+    });
+    const service = new FirstPartyProjectionService({ database: harness.database, now: () => now });
+
+    await service.refreshProjections({ season: 2026, week: 1 }, jobContext());
+
+    // With no seeded history the whole-model release gate stays closed, so this league is
+    // withheld outright. What matters here is the shape that reaches
+    // `projection_model_runs.metrics`: every entry now carries `scope`, so a reader can tell a
+    // league that published nothing from one that published only some of its positions.
+    const metrics = harness.modelRuns[0]?.metrics as
+      { readonly leagues?: { readonly withheld?: readonly Record<string, unknown>[] } } | undefined;
+    const withheld = metrics?.leagues?.withheld ?? [];
+    expect(withheld).toHaveLength(1);
+    expect(withheld[0]).toMatchObject({
+      leagueSeasonId: "11111111-1111-4111-8111-111111111111",
+      scope: "league",
+    });
+    expect(Array.isArray(withheld[0]?.reasons)).toBe(true);
   });
 
   it("preserves the publication timestamp when an exact, complete output is unchanged", async () => {

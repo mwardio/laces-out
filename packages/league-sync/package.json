@@ -1,0 +1,15 @@
+{
+  "name": "@fantasy/league-sync",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": "./src/index.ts",
+  "dependencies": {
+    "@fantasy/connector-espn": "*",
+    "@fantasy/connector-yahoo": "*",
+    "@fantasy/connectors": "*",
+    "@fantasy/db": "*",
+    "@fantasy/security": "*",
+    "drizzle-orm": "^0.45.2"
+  }
+}

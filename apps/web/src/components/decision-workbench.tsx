@@ -1,6 +1,12 @@
 "use client";
 
-import type { InSeasonDecisionSnapshot } from "@fantasy/contracts";
+import {
+  MAX_TRADE_BUILDER_PLAYERS_PER_SIDE,
+  type DecisionPlayer,
+  type InSeasonDecisionSnapshot,
+  type LeagueDashboard,
+  type TradeEvaluationResponse,
+} from "@fantasy/contracts";
 import {
   ArrowUpRight,
   BrainCircuit,
@@ -17,15 +23,18 @@ import {
   UserRoundPlus,
 } from "lucide-react";
 import Link from "next/link";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 
 import {
   apiBaseUrl,
   parseInSeasonDecisionSnapshot,
+  parseLeagueDashboard,
   parseLeagueListResponse,
+  parseTradeEvaluationResponse,
   type LeagueListResponse,
 } from "../lib/api-client";
 import { projectionSourceAsOfText } from "../lib/projection-import-form";
+import { leagueIsUnclaimed } from "../lib/team-claim";
 import { useDefaultLeague } from "../lib/use-default-league";
 import {
   DEMO_LEAGUE_ID,
@@ -33,6 +42,7 @@ import {
   demoLeaguePortfolio,
 } from "../lib/demo-contract-data";
 import { AiCoachPanel } from "./ai-coach-panel";
+import { TeamClaimCallout } from "./team-claim-callout";
 import styles from "./decision-workbench.module.css";
 
 type PortfolioState =
@@ -331,6 +341,388 @@ function TradeCard({ trade }: { readonly trade: TradeCardData }) {
   );
 }
 
+interface BuilderPlayerOption {
+  readonly id: string;
+  readonly name: string;
+  readonly detail: string;
+}
+
+interface BuilderPartner {
+  readonly id: string;
+  readonly name: string;
+  readonly players: readonly BuilderPlayerOption[];
+}
+
+interface BuilderRosters {
+  readonly user: readonly BuilderPlayerOption[];
+  readonly partners: readonly BuilderPartner[];
+}
+
+function decisionPlayerOption(player: DecisionPlayer): BuilderPlayerOption {
+  return {
+    id: player.id,
+    name: player.name,
+    detail: `${player.positions.join("/")} · ${projectedPoints.format(player.projectedPoints)}`,
+  };
+}
+
+/**
+ * Roster options come from the dashboard read the member can already perform; the builder route
+ * exposes no roster fact beyond it.
+ */
+function dashboardBuilderRosters(dashboard: LeagueDashboard): BuilderRosters {
+  const claimed = dashboard.teams.find((team) => team.claimStatus === "current-user");
+  const option = (player: {
+    readonly id: string;
+    readonly name: string;
+    readonly position: string;
+    readonly nflTeam: string | null;
+  }): BuilderPlayerOption => ({
+    id: player.id,
+    name: player.name,
+    detail: player.nflTeam ? `${player.position} · ${player.nflTeam}` : player.position,
+  });
+  return {
+    user: (claimed?.latestRoster?.players ?? []).map(option),
+    partners: dashboard.teams.flatMap((team) => {
+      const players = team.latestRoster?.players ?? [];
+      if (team.id === claimed?.id || players.length === 0) return [];
+      return [{ id: team.id, name: team.name, players: players.map(option) }];
+    }),
+  };
+}
+
+/** Tour mode derives its options from the sample snapshot so the builder renders without sign-in. */
+function demoBuilderRosters(snapshot: InSeasonDecisionSnapshot): BuilderRosters {
+  const user = new Map<string, BuilderPlayerOption>();
+  const partners = new Map<string, { name: string; players: Map<string, BuilderPlayerOption> }>();
+  const collect = (
+    target: Map<string, BuilderPlayerOption>,
+    players: readonly DecisionPlayer[],
+  ) => {
+    for (const player of players) target.set(player.id, decisionPlayerOption(player));
+  };
+  if (snapshot.lineup.state === "available") {
+    collect(
+      user,
+      snapshot.lineup.assignments.map((assignment) => assignment.player),
+    );
+    collect(
+      user,
+      snapshot.lineup.changes.flatMap((change) => (change.remove ? [change.remove] : [])),
+    );
+  }
+  if (snapshot.waivers.state === "available") {
+    collect(
+      user,
+      snapshot.waivers.recommendations.flatMap((move) => (move.drop ? [move.drop] : [])),
+    );
+  }
+  if (snapshot.trades.state === "available") {
+    for (const trade of [...snapshot.trades.bestForMe, ...snapshot.trades.fairest]) {
+      collect(user, [...trade.send, ...trade.forcedDropsForUser]);
+      const partner = partners.get(trade.partner.id) ?? {
+        name: trade.partner.name,
+        players: new Map<string, BuilderPlayerOption>(),
+      };
+      collect(partner.players, [...trade.receive, ...trade.forcedDropsForPartner]);
+      partners.set(trade.partner.id, partner);
+    }
+  }
+  return {
+    user: [...user.values()],
+    partners: [...partners].map(([id, partner]) => ({
+      id,
+      name: partner.name,
+      players: [...partner.players.values()],
+    })),
+  };
+}
+
+type BuilderResult =
+  | { readonly state: "idle" | "loading" }
+  | { readonly state: "error" | "rejected"; readonly message: string }
+  | { readonly state: "ready"; readonly response: TradeEvaluationResponse };
+
+function BuilderCheckboxGroup({
+  legend,
+  name,
+  options,
+  selected,
+  onToggle,
+  disabled,
+}: {
+  readonly legend: string;
+  readonly name: string;
+  readonly options: readonly BuilderPlayerOption[];
+  readonly selected: readonly string[];
+  readonly onToggle: (id: string) => void;
+  readonly disabled: boolean;
+}) {
+  const atCap = selected.length >= MAX_TRADE_BUILDER_PLAYERS_PER_SIDE;
+  return (
+    <fieldset className={styles.builderFieldset} disabled={disabled}>
+      <legend>
+        {legend}
+        <span className={styles.builderCount} aria-live="polite">
+          {selected.length} of {MAX_TRADE_BUILDER_PLAYERS_PER_SIDE} selected
+          {atCap ? " · maximum reached, clear one to swap" : ""}
+        </span>
+      </legend>
+      {options.length === 0 ? (
+        <p className={styles.emptyText}>No stored roster is available for this side.</p>
+      ) : (
+        <div className={styles.builderOptions}>
+          {options.map((option) => {
+            const checked = selected.includes(option.id);
+            return (
+              <label className={styles.builderOption} key={option.id}>
+                <input
+                  type="checkbox"
+                  name={name}
+                  value={option.id}
+                  checked={checked}
+                  disabled={!checked && atCap}
+                  onChange={() => onToggle(option.id)}
+                />
+                <span>
+                  <strong>{option.name}</strong>
+                  <small>{option.detail}</small>
+                </span>
+              </label>
+            );
+          })}
+        </div>
+      )}
+    </fieldset>
+  );
+}
+
+function BuilderProvenance({
+  response,
+}: {
+  readonly response: Extract<TradeEvaluationResponse, { state: "available" }>;
+}) {
+  const set = response.provenance.projectionSet;
+  return (
+    <p className={styles.methodNote}>
+      {response.algorithmVersion} · input checksum {response.inputChecksum.slice(0, 12)} ·{" "}
+      {set ? `${set.source} · ${set.version}` : "No compatible projection set"} ·{" "}
+      {response.provenance.projectionFreshness.label}
+    </p>
+  );
+}
+
+function TradeBuilderPanel({
+  leagueId,
+  rosters,
+  demo,
+}: {
+  readonly leagueId: string;
+  readonly rosters: BuilderRosters | null;
+  readonly demo: boolean;
+}) {
+  const [partnerId, setPartnerId] = useState("");
+  const [sends, setSends] = useState<readonly string[]>([]);
+  const [receives, setReceives] = useState<readonly string[]>([]);
+  const [result, setResult] = useState<BuilderResult>({ state: "idle" });
+
+  const partner = rosters?.partners.find((team) => team.id === partnerId) ?? null;
+  const toggle =
+    (setter: (updater: (current: readonly string[]) => readonly string[]) => void) =>
+    (id: string) =>
+      setter((current) =>
+        current.includes(id)
+          ? current.filter((value) => value !== id)
+          : current.length >= MAX_TRADE_BUILDER_PLAYERS_PER_SIDE
+            ? current
+            : [...current, id],
+      );
+
+  const submit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (demo || !partner) return;
+    setResult({ state: "loading" });
+    try {
+      const response = await fetch(
+        `${apiBaseUrl}/v1/leagues/${encodeURIComponent(leagueId)}/trade-evaluations`,
+        {
+          method: "POST",
+          credentials: "include",
+          headers: { "Content-Type": "application/json", Accept: "application/json" },
+          cache: "no-store",
+          body: JSON.stringify({
+            opponentTeamId: partner.id,
+            sendsPlayerIds: [...sends],
+            receivesPlayerIds: [...receives],
+          }),
+        },
+      );
+      if (response.status === 404) {
+        setResult({ state: "error", message: "This league is no longer available." });
+        return;
+      }
+      if (response.status === 400) {
+        const problem: unknown = await response.json();
+        const detail =
+          typeof problem === "object" && problem !== null && "detail" in problem
+            ? (problem as { detail?: unknown }).detail
+            : undefined;
+        setResult({
+          state: "rejected",
+          message:
+            typeof detail === "string" ? detail : "This package could not be evaluated as built.",
+        });
+        return;
+      }
+      if (!response.ok) throw new Error("This package could not be evaluated.");
+      const parsed = parseTradeEvaluationResponse(await response.json());
+      if (!parsed) throw new Error("The evaluation response failed validation.");
+      setResult({ state: "ready", response: parsed });
+    } catch (error) {
+      setResult({
+        state: "error",
+        message: error instanceof Error ? error.message : "This package could not be evaluated.",
+      });
+    }
+  };
+
+  if (!rosters || rosters.user.length === 0 || rosters.partners.length === 0) {
+    return (
+      <div className={styles.tradeBuilder}>
+        <h3>Build your own package</h3>
+        <p className={styles.emptyText}>
+          A stored roster snapshot for your team and at least one other team is required before a
+          package can be built.
+        </p>
+      </div>
+    );
+  }
+
+  const submittable = !demo && partner !== null && sends.length > 0 && receives.length > 0;
+  return (
+    <div className={styles.tradeBuilder}>
+      <h3>Build your own package</h3>
+      <p className={styles.emptyText}>
+        Score any package you have in mind against the same engine, roster rules, and projection
+        set. Up to {MAX_TRADE_BUILDER_PLAYERS_PER_SIDE} players per side.
+      </p>
+      <form className={styles.builderForm} onSubmit={(event) => void submit(event)}>
+        <div className={styles.builderPartner}>
+          <label htmlFor="trade-builder-partner">Trade partner</label>
+          <select
+            id="trade-builder-partner"
+            value={partnerId}
+            onChange={(event) => {
+              setPartnerId(event.target.value);
+              setReceives([]);
+              setResult({ state: "idle" });
+            }}
+          >
+            <option value="">Select a team</option>
+            {rosters.partners.map((team) => (
+              <option value={team.id} key={team.id}>
+                {team.name}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div className={styles.builderSides}>
+          <BuilderCheckboxGroup
+            legend="You send"
+            name="trade-builder-send"
+            options={rosters.user}
+            selected={sends}
+            onToggle={toggle(setSends)}
+            disabled={result.state === "loading"}
+          />
+          <BuilderCheckboxGroup
+            legend="You receive"
+            name="trade-builder-receive"
+            options={partner?.players ?? []}
+            selected={receives}
+            onToggle={toggle(setReceives)}
+            disabled={result.state === "loading" || partner === null}
+          />
+        </div>
+        <div className={styles.builderActions}>
+          <button
+            type="submit"
+            disabled={!submittable || result.state === "loading"}
+            title={demo ? "Sign in to evaluate a package against your own league" : undefined}
+          >
+            Evaluate package
+          </button>
+          {demo ? (
+            <span className={styles.emptyText}>
+              Tour mode shows the builder controls only. Sign in with a synced league to score a
+              package; Laces Out will not invent an evaluation for sample data.
+            </span>
+          ) : null}
+        </div>
+      </form>
+
+      {result.state === "loading" ? (
+        <div className={styles.analysisLoading} role="status">
+          <LoaderCircle className={styles.spin} size={17} aria-hidden="true" />
+          <span>Scoring both rosters after the exchange.</span>
+        </div>
+      ) : null}
+      {result.state === "error" ? (
+        <div className={styles.analysisError} role="alert">
+          <ShieldAlert size={17} aria-hidden="true" />
+          <span>{result.message}</span>
+        </div>
+      ) : null}
+      {result.state === "rejected" ? (
+        <div className={styles.analysisError} role="alert">
+          <ShieldAlert size={17} aria-hidden="true" />
+          <span>{result.message}</span>
+        </div>
+      ) : null}
+      {result.state === "ready" ? (
+        <div className={styles.builderResult} role="status">
+          {result.response.state === "unavailable" ? (
+            <UnavailablePanel title="Package evaluation" reasons={result.response.reasons} />
+          ) : (
+            <>
+              {result.response.legal && result.response.package ? (
+                <div className={styles.tradeGrid}>
+                  <TradeCard trade={result.response.package} />
+                </div>
+              ) : (
+                <div className={styles.unavailable}>
+                  <ShieldAlert size={19} aria-hidden="true" />
+                  <div>
+                    <strong>This package is not roster-legal</strong>
+                    <ul>
+                      {result.response.diagnostics.map((diagnostic) => (
+                        <li key={`${diagnostic.code}:${diagnostic.message}`}>
+                          {diagnostic.message}
+                        </li>
+                      ))}
+                    </ul>
+                    <span>
+                      Both rosters must stay within their slot rules after the exchange. A player
+                      recorded as locked cannot be dropped to make room.
+                    </span>
+                  </div>
+                </div>
+              )}
+              {result.response.rosUnavailable ? (
+                <p className={styles.methodNote}>{result.response.rosUnavailable.message}</p>
+              ) : null}
+              <p className={styles.methodNote}>{result.response.notes.join(" ")}</p>
+              <BuilderProvenance response={result.response} />
+              <ExecutionLink execution={result.response.execution} />
+            </>
+          )}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function TradeGroup({
   title,
   trades,
@@ -354,7 +746,17 @@ function TradeGroup({
   );
 }
 
-function TradeSection({ snapshot }: { readonly snapshot: InSeasonDecisionSnapshot }) {
+function TradeSection({
+  snapshot,
+  leagueId,
+  rosters,
+  demo,
+}: {
+  readonly snapshot: InSeasonDecisionSnapshot;
+  readonly leagueId: string;
+  readonly rosters: BuilderRosters | null;
+  readonly demo: boolean;
+}) {
   const section = snapshot.trades;
   return (
     <section className={styles.section} id="decision-trades" aria-labelledby="trades-title">
@@ -384,6 +786,7 @@ function TradeSection({ snapshot }: { readonly snapshot: InSeasonDecisionSnapsho
             <TradeGroup title="Best for my roster" trades={section.bestForMe} />
             <TradeGroup title="Fairest market fits" trades={section.fairest} />
           </div>
+          <TradeBuilderPanel leagueId={leagueId} rosters={rosters} demo={demo} />
           <p className={styles.methodNote}>{section.notes.join(" ")}</p>
           <ExecutionLink execution={section.execution} />
         </>
@@ -470,7 +873,10 @@ export function DecisionWorkbench() {
   const [selectedLeagueId, setSelectedLeagueId] = useState("");
   const [decision, setDecision] = useState<DecisionState>({ state: "idle" });
   const [isDemo, setIsDemo] = useState(false);
+  const [rosters, setRosters] = useState<BuilderRosters | null>(null);
+  const [liveDashboard, setLiveDashboard] = useState<LeagueDashboard | null>(null);
   const decisionRequest = useRef<AbortController | null>(null);
+  const dashboardRequest = useRef<AbortController | null>(null);
   const { defaultLeagueId, loaded: preferenceLoaded } = useDefaultLeague();
 
   useEffect(() => {
@@ -567,6 +973,53 @@ export function DecisionWorkbench() {
     void loadDecisions();
     return () => decisionRequest.current?.abort();
   }, [loadDecisions]);
+
+  // Builder roster options (and the live dashboard behind them) come from the dashboard read the
+  // member can already perform. A failure here only empties the builder; the decision read above
+  // owns the surfaced error state.
+  const loadLiveDashboard = useCallback(async () => {
+    dashboardRequest.current?.abort();
+    if (!selectedLeagueId) {
+      dashboardRequest.current = null;
+      setRosters(null);
+      setLiveDashboard(null);
+      return;
+    }
+    const controller = new AbortController();
+    dashboardRequest.current = controller;
+    try {
+      const response = await fetch(
+        `${apiBaseUrl}/v1/leagues/${encodeURIComponent(selectedLeagueId)}/dashboard`,
+        {
+          credentials: "include",
+          headers: { Accept: "application/json" },
+          cache: "no-store",
+          signal: controller.signal,
+        },
+      );
+      if (!response.ok || controller.signal.aborted) return;
+      const parsed = parseLeagueDashboard(await response.json());
+      if (!parsed || controller.signal.aborted) return;
+      setRosters(dashboardBuilderRosters(parsed));
+      setLiveDashboard(parsed);
+    } catch {
+      // Swallowed: the decision read above owns the surfaced error state for this league.
+    } finally {
+      if (dashboardRequest.current === controller) dashboardRequest.current = null;
+    }
+  }, [selectedLeagueId]);
+
+  useEffect(() => {
+    if (isDemo) {
+      setRosters(demoBuilderRosters(demoDecisionSnapshot));
+      setLiveDashboard(null);
+      return;
+    }
+    setRosters(null);
+    setLiveDashboard(null);
+    void loadLiveDashboard();
+    return () => dashboardRequest.current?.abort();
+  }, [isDemo, loadLiveDashboard]);
 
   if (portfolio.state === "loading") {
     return (
@@ -683,6 +1136,14 @@ export function DecisionWorkbench() {
         </div>
       </header>
 
+      {!isDemo && liveDashboard && leagueIsUnclaimed(liveDashboard) ? (
+        <TeamClaimCallout
+          leagueId={selectedLeagueId}
+          dashboard={liveDashboard}
+          onClaimed={() => void loadLiveDashboard()}
+        />
+      ) : null}
+
       {decision.state === "loading" || decision.state === "idle" ? (
         <div className={styles.analysisLoading} role="status">
           <LoaderCircle className={styles.spin} size={19} aria-hidden="true" />
@@ -772,14 +1233,19 @@ export function DecisionWorkbench() {
               </strong>
             </span>
             <Link className={styles.scheduleLink} href={`/schedule?league=${selectedLeagueId}`}>
-              Add schedule context
+              Add matchup context
               <ArrowUpRight size={13} aria-hidden="true" />
             </Link>
           </div>
 
           <LineupSection snapshot={snapshot} />
           <WaiverSection snapshot={snapshot} />
-          <TradeSection snapshot={snapshot} />
+          <TradeSection
+            snapshot={snapshot}
+            leagueId={selectedLeagueId}
+            rosters={rosters}
+            demo={isDemo}
+          />
 
           {/* Follows the board it reviews — "Pressure-test the board" above the
               board offered a second opinion before the first one existed. */}

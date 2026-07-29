@@ -14,6 +14,18 @@ const fixture = readFileSync(
   "utf8",
 );
 
+/** ESPN's 2026 encoding as captured from an active league: unordered day names, boolean flag. */
+const dayNameFixture = readFileSync(
+  new URL("../test/fixtures/web-client-v2-active-day-names.json", import.meta.url),
+  "utf8",
+);
+
+/** An active league whose waivers process on no scheduled day, so ESPN sends an empty array. */
+const emptyWaiverFixture = readFileSync(
+  new URL("../test/fixtures/web-client-v2-active-empty-waivers.json", import.meta.url),
+  "utf8",
+);
+
 interface FixtureRosterEntry {
   lineupSlotId: number;
   playerId: string;
@@ -36,6 +48,11 @@ interface FixtureEnvelope {
     id: string;
     seasonId: number;
     settings: {
+      acquisitionSettings: {
+        matchupAcquisitionLimit?: number;
+        matchupLimitPerScoringPeriod?: boolean | number;
+        waiverProcessDays?: (number | string)[];
+      };
       draftSettings: { type: string; keeperCount?: number };
       rosterSettings: { lineupSlotCounts: Record<string, number> };
     };
@@ -63,8 +80,18 @@ interface FixtureEnvelope {
   };
 }
 
+function parsedEnvelope(source: string): FixtureEnvelope {
+  return JSON.parse(source) as FixtureEnvelope;
+}
+
 function parsedFixture(): FixtureEnvelope {
-  return JSON.parse(fixture) as FixtureEnvelope;
+  return parsedEnvelope(fixture);
+}
+
+function operationalRulesOf(value: unknown) {
+  const rules = normalizeEspnWebClientSnapshot(value).league.settings.operationalRules;
+  if (rules === undefined) throw new Error("Expected normalized operational rules");
+  return rules;
 }
 
 function captureError(value: unknown): EspnWebClientNormalizationError {
@@ -445,5 +472,126 @@ describe("ESPN web-client snapshot normalizer", () => {
     };
     expect(captureError(JSON.stringify(oversizedObject))).toMatchObject({ code: "TOO_LARGE" });
     expect(captureError(oversizedObject)).toMatchObject({ code: "TOO_LARGE" });
+  });
+});
+
+/**
+ * ESPN re-encoded two `acquisitionSettings` fields between the v1 capture and 2026-07-28:
+ * `waiverProcessDays` became uppercase day names and `matchupLimitPerScoringPeriod` became a
+ * boolean flag. Contract v2 accepts both encodings and refuses to read the flag as a count.
+ */
+describe("ESPN 2026 acquisition-settings encodings", () => {
+  it("maps observed day names to getDay() numbers, de-duplicated and sorted", () => {
+    // The fixture lists MONDAY, WEDNESDAY, FRIDAY, SUNDAY, THURSDAY, SATURDAY in ESPN's order.
+    expect(operationalRulesOf(dayNameFixture).waiverProcessDays).toEqual([0, 1, 3, 4, 5, 6]);
+
+    const shuffled = parsedEnvelope(dayNameFixture);
+    shuffled.payload.settings.acquisitionSettings.waiverProcessDays = [
+      "SATURDAY",
+      "MONDAY",
+      "MONDAY",
+    ];
+    expect(operationalRulesOf(shuffled).waiverProcessDays).toEqual([1, 6]);
+  });
+
+  it("keeps an active league's empty waiver schedule as an empty list", () => {
+    const rules = operationalRulesOf(emptyWaiverFixture);
+    expect(rules.waiverProcessDays).toEqual([]);
+    // ESPN's -1 means "no limit", and the flag agrees.
+    expect(rules.matchupAcquisitionLimit).toBeNull();
+    expect(rules.matchupAcquisitionLimitEnabled).toBe(false);
+  });
+
+  it("still accepts the previously observed numeric day encoding", () => {
+    const rules = operationalRulesOf(fixture);
+    expect(rules.waiverProcessDays).toEqual([2, 4, 6]);
+    expect(rules.matchupAcquisitionLimit).toBe(7);
+    expect(rules.matchupAcquisitionLimitEnabled).toBe(true);
+  });
+
+  it("never reads the boolean per-scoring-period flag as an acquisition limit", () => {
+    const rules = operationalRulesOf(dayNameFixture);
+    expect(rules.matchupAcquisitionLimit).toBeNull();
+    expect(rules.matchupAcquisitionLimit).not.toBe(0);
+    expect(typeof rules.matchupAcquisitionLimit).not.toBe("boolean");
+    expect(rules.matchupAcquisitionLimitEnabled).toBe(false);
+  });
+
+  it("reports a declared per-scoring-period limit without inventing a count", () => {
+    // `true` has only ever been observed on a league ESPN had not activated for the season
+    // (2026-07-28), so it is accepted verbatim and never mapped to a count.
+    const declared = parsedEnvelope(dayNameFixture);
+    declared.payload.settings.acquisitionSettings.matchupLimitPerScoringPeriod = true;
+    const rules = operationalRulesOf(declared);
+    expect(rules.matchupAcquisitionLimitEnabled).toBe(true);
+    expect(rules.matchupAcquisitionLimit).toBeNull();
+
+    declared.payload.settings.acquisitionSettings.matchupAcquisitionLimit = 3;
+    expect(operationalRulesOf(declared)).toMatchObject({
+      matchupAcquisitionLimit: 3,
+      matchupAcquisitionLimitEnabled: true,
+    });
+  });
+
+  it("lets a false flag override a numeric limit ESPN left behind", () => {
+    const contradictory = parsedEnvelope(dayNameFixture);
+    contradictory.payload.settings.acquisitionSettings.matchupAcquisitionLimit = 3;
+    expect(operationalRulesOf(contradictory)).toMatchObject({
+      matchupAcquisitionLimit: null,
+      matchupAcquisitionLimitEnabled: false,
+    });
+  });
+
+  it("still accepts a numeric matchupLimitPerScoringPeriod as a count", () => {
+    const legacy = parsedFixture();
+    delete legacy.payload.settings.acquisitionSettings.matchupAcquisitionLimit;
+    legacy.payload.settings.acquisitionSettings.matchupLimitPerScoringPeriod = 5;
+    expect(operationalRulesOf(legacy)).toMatchObject({
+      matchupAcquisitionLimit: 5,
+      matchupAcquisitionLimitEnabled: true,
+    });
+  });
+
+  it("reports no answer when ESPN supplies neither the flag nor a count", () => {
+    const silent = parsedFixture();
+    delete silent.payload.settings.acquisitionSettings.matchupAcquisitionLimit;
+    expect(operationalRulesOf(silent)).toMatchObject({
+      matchupAcquisitionLimit: null,
+      matchupAcquisitionLimitEnabled: null,
+    });
+  });
+
+  it("fails closed on an unrecognized day name without copying it into issues", () => {
+    const unknownDay = parsedEnvelope(dayNameFixture);
+    unknownDay.payload.settings.acquisitionSettings.waiverProcessDays = [
+      "MONDAY",
+      "FUNDAY-DO-NOT-LOG",
+    ];
+
+    const error = captureError(unknownDay);
+    expect(error.code).toBe("SCHEMA_DRIFT");
+    expect(error.message).toContain("contract version 2");
+    expect(error.issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          path: "settings.acquisitionSettings.waiverProcessDays.1",
+          code: "SCHEMA_DRIFT",
+        }),
+      ]),
+    );
+    expect(JSON.stringify(error.issues)).not.toContain("FUNDAY-DO-NOT-LOG");
+  });
+
+  it("fails closed when day names and numbers are mixed in one array", () => {
+    const mixed = parsedEnvelope(dayNameFixture);
+    mixed.payload.settings.acquisitionSettings.waiverProcessDays = ["MONDAY", 2];
+    expect(captureError(mixed).issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          path: "settings.acquisitionSettings.waiverProcessDays",
+          code: "SCHEMA_DRIFT",
+        }),
+      ]),
+    );
   });
 });

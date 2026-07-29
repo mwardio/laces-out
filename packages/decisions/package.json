@@ -1,0 +1,18 @@
+{
+  "name": "@fantasy/decisions",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": "./src/index.ts",
+  "dependencies": {
+    "@fantasy/contracts": "*",
+    "@fantasy/db": "*",
+    "@fantasy/domain": "*",
+    "@fantasy/engine-lineup": "*",
+    "@fantasy/engine-trade": "*",
+    "@fantasy/engine-waiver": "*",
+    "@fantasy/jobs": "*",
+    "@fantasy/projections": "*",
+    "drizzle-orm": "^0.45.2"
+  }
+}

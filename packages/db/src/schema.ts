@@ -1,3 +1,7 @@
+import {
+  FIRST_PARTY_ROS_MAXIMUM_SCENARIOS,
+  FIRST_PARTY_ROS_MINIMUM_SCENARIOS,
+} from "@fantasy/projections";
 import { sql } from "drizzle-orm";
 import {
   type AnyPgColumn,
@@ -51,7 +55,8 @@ export type LeagueSupplementalKind =
  * One outbound notification family. New kinds are additive: a payload builder plus an idempotency
  * key slot, never new delivery plumbing.
  */
-export type NotificationKind = "lineup-lock";
+/** WP5 adds `change-event`: one digest per member per sweep, never one push per event. */
+export type NotificationKind = "lineup-lock" | "change-event";
 
 export interface FirstPartyRosAvailabilityWeek {
   readonly week: number;
@@ -161,6 +166,13 @@ export const providerConnections = pgTable(
     lastSuccessfulAt: timestamp("last_successful_at", { withTimezone: true }),
     lastErrorCode: text("last_error_code"),
     lastErrorAt: timestamp("last_error_at", { withTimezone: true }),
+    lastErrorDetail: text("last_error_detail"),
+    // Connection-scoped circuit state, named to mirror `data_sources`. `health` records what a user
+    // must do about a connection; these record whether the worker should stop calling it for a
+    // while. Nothing outside league sync reads them, so an open circuit is structurally incapable
+    // of affecting another connection or any unrelated analysis.
+    consecutiveFailures: integer("consecutive_failures").notNull().default(0),
+    circuitOpenUntil: timestamp("circuit_open_until", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
@@ -171,6 +183,7 @@ export const providerConnections = pgTable(
       table.externalAccountId,
     ),
     index("provider_connections_user_idx").on(table.userId),
+    check("provider_connections_failures_check", sql`${table.consecutiveFailures} >= 0`),
     check(
       "provider_connections_provider_check",
       sql`${table.provider} in ('yahoo', 'espn', 'manual')`,
@@ -312,7 +325,10 @@ export const notificationDeliveries = pgTable(
   (table) => [
     uniqueIndex("notification_deliveries_key_unique").on(table.idempotencyKey),
     index("notification_deliveries_user_idx").on(table.userId, table.createdAt),
-    check("notification_deliveries_kind_check", sql`${table.kind} in ('lineup-lock')`),
+    check(
+      "notification_deliveries_kind_check",
+      sql`${table.kind} in ('lineup-lock', 'change-event')`,
+    ),
     check(
       "notification_deliveries_key_check",
       sql`char_length(btrim(${table.idempotencyKey})) between 1 and 200`,
@@ -1598,9 +1614,12 @@ export const playerRosProjectionSummaries = pgTable(
       "player_ros_projection_summaries_availability_check",
       sql`jsonb_typeof(${table.availability}) = 'object' and ${table.availability}->'schemaVersion' = '1'::jsonb and ${table.availability}->>'semantics' = 'unconditional-active-probability' and jsonb_typeof(${table.availability}->'weeks') = 'array'`,
     ),
+    // The persisted contract is exactly the engine's admissible path-count range, imported rather
+    // than restated: a released summary carries the standard 12288-path result and its convergence
+    // diagnostic pins the 16384-path reference. Anything outside these bounds still fails closed.
     check(
       "player_ros_projection_summaries_scenarios_check",
-      sql`${table.scenarioCount} between 128 and 4096`,
+      sql`${table.scenarioCount} between ${sql.raw(String(FIRST_PARTY_ROS_MINIMUM_SCENARIOS))} and ${sql.raw(String(FIRST_PARTY_ROS_MAXIMUM_SCENARIOS))}`,
     ),
     check(
       "player_ros_projection_summaries_identity_check",
@@ -2584,6 +2603,12 @@ export const recommendationRuns = pgTable(
     leagueSeasonId: uuid("league_season_id")
       .notNull()
       .references(() => leagueSeasons.id, { onDelete: "cascade" }),
+    // Lineup, waiver, and trade decisions are per claimed team. Nullable so a future league-wide
+    // kind can share the ledger; the unique index below uses NULLS NOT DISTINCT so such a run still
+    // deduplicates instead of inserting without limit.
+    fantasyTeamId: uuid("fantasy_team_id").references(() => fantasyTeams.id, {
+      onDelete: "cascade",
+    }),
     kind: text("kind").notNull(),
     algorithmVersion: text("algorithm_version").notNull(),
     inputHash: text("input_hash").notNull(),
@@ -2592,7 +2617,28 @@ export const recommendationRuns = pgTable(
     startedAt: timestamp("started_at", { withTimezone: true }).notNull().defaultNow(),
     finishedAt: timestamp("finished_at", { withTimezone: true }),
   },
-  (table) => [index("recommendation_runs_league_kind_idx").on(table.leagueSeasonId, table.kind)],
+  (table) => [
+    index("recommendation_runs_league_kind_idx").on(table.leagueSeasonId, table.kind),
+    // ADR 0003 replay identity. The recompute checks for an existing run first; this is the second
+    // line of defense, so a concurrent duplicate cannot write a second row for identical inputs.
+    //
+    // Migration 0026 additionally declares this index `NULLS NOT DISTINCT`, so a future league-wide
+    // run with a null `fantasy_team_id` deduplicates rather than inserting without limit. Drizzle
+    // 0.45's index builder cannot express that clause — only its unique *constraint* builder can —
+    // so the migration is authoritative and `packages/db/scripts/schema-smoke.ts` asserts the live
+    // behavior, including the null-team replay, against a real database.
+    uniqueIndex("recommendation_runs_identity_unique").on(
+      table.leagueSeasonId,
+      table.fantasyTeamId,
+      table.kind,
+      table.algorithmVersion,
+      table.inputHash,
+    ),
+    check(
+      "recommendation_runs_kind_check",
+      sql`${table.kind} in ('draft', 'lineup', 'waiver', 'trade')`,
+    ),
+  ],
 );
 
 export const recommendations = pgTable(

@@ -1,5 +1,5 @@
 import { loadEnvironment } from "@fantasy/config";
-import type { InSeasonDecisionSnapshot } from "@fantasy/contracts";
+import type { InSeasonDecisionSnapshot, TradeEvaluationResponse } from "@fantasy/contracts";
 import { describe, expect, it, vi } from "vitest";
 
 import { buildApp } from "./app.js";
@@ -23,6 +23,8 @@ const unavailableSnapshot: InSeasonDecisionSnapshot = {
   },
   team: null,
   provenance: {
+    algorithmVersion: "in-season-decisions-v1",
+    inputChecksum: "a".repeat(64),
     leagueLastSyncedAt: NOW,
     rosterEffectiveAt: null,
     projectionSet: null,
@@ -84,7 +86,10 @@ function authenticatedService(): AuthService {
 describe("in-season decision route", () => {
   it("requires authentication and passes only the current member identity to the service", async () => {
     const getSnapshot = vi.fn(() => Promise.resolve(unavailableSnapshot));
-    const decisions: InSeasonDecisionPort = { getSnapshot };
+    const decisions: InSeasonDecisionPort = {
+      getSnapshot,
+      evaluateBuiltTrade: () => Promise.resolve({ outcome: "not-found" as const }),
+    };
     const app = await buildApp({
       environment: loadEnvironment({ NODE_ENV: "test" }),
       logger: false,
@@ -117,6 +122,7 @@ describe("in-season decision route", () => {
   it("does not reveal whether an inaccessible league exists", async () => {
     const decisions: InSeasonDecisionPort = {
       getSnapshot: () => Promise.resolve(undefined),
+      evaluateBuiltTrade: () => Promise.resolve({ outcome: "not-found" as const }),
     };
     const app = await buildApp({
       environment: loadEnvironment({ NODE_ENV: "test" }),
@@ -132,6 +138,196 @@ describe("in-season decision route", () => {
     });
     expect(response.statusCode).toBe(404);
     expect(response.json()).toMatchObject({ title: "League not found" });
+    await app.close();
+  });
+});
+
+const BUILDER_URL = `/v1/leagues/${LEAGUE_ID}/trade-evaluations`;
+const TEAM_B_ID = "40000000-0000-4000-8000-000000000002";
+const SEND_ID = "70000000-0000-4000-8000-000000000003";
+const RECEIVE_ID = "70000000-0000-4000-8000-000000000004";
+const validBody = {
+  opponentTeamId: TEAM_B_ID,
+  sendsPlayerIds: [SEND_ID],
+  receivesPlayerIds: [RECEIVE_ID],
+};
+
+const illegalTradeEvaluationResponse: TradeEvaluationResponse = {
+  state: "available",
+  generatedAt: NOW,
+  league: { id: LEAGUE_ID, name: "Fourth and Long" },
+  algorithmVersion: "trade-builder-v1",
+  inputChecksum: "b".repeat(64),
+  legal: false,
+  package: null,
+  diagnostics: [
+    {
+      code: "NO_LEGAL_FORCED_DROP",
+      message: "Team cannot make the required legal forced drops",
+      teamId: "40000000-0000-4000-8000-000000000001",
+      playerId: null,
+    },
+  ],
+  horizons: [{ id: "60000000-0000-4000-8000-000000000001", label: "Week 2", weight: 1 }],
+  rosUnavailable: null,
+  provenance: {
+    leagueLastSyncedAt: null,
+    rosterEffectiveAt: null,
+    projectionSet: {
+      id: "60000000-0000-4000-8000-000000000001",
+      source: "trusted-weekly-model",
+      version: "2026-w02-v1",
+      horizon: "Week 2",
+      sourceObservedAt: null,
+      sourceObservedAtStatus: "unverified",
+      importedAt: "2026-09-15T11:00:00.000Z",
+    },
+    projectionFreshness: { state: "missing", observedAt: null, label: "No projection set" },
+  },
+  execution: {
+    mode: "provider-required",
+    provider: "manual",
+    label: "Verify and apply manually in your league host",
+    url: null,
+  },
+  notes: [],
+};
+
+async function builderApp(evaluateBuiltTrade: InSeasonDecisionPort["evaluateBuiltTrade"]) {
+  return buildApp({
+    environment: loadEnvironment({ NODE_ENV: "test" }),
+    logger: false,
+    requireAuthentication: true,
+    authService: authenticatedService(),
+    decisions: { getSnapshot: () => Promise.resolve(unavailableSnapshot), evaluateBuiltTrade },
+  });
+}
+
+describe("trade builder route", () => {
+  it("requires authentication before touching the service", async () => {
+    const evaluateBuiltTrade = vi.fn(() => Promise.resolve({ outcome: "not-found" as const }));
+    const app = await builderApp(evaluateBuiltTrade);
+
+    const denied = await app.inject({ method: "POST", url: BUILDER_URL, payload: validBody });
+    expect(denied.statusCode).toBe(401);
+    expect(evaluateBuiltTrade).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it("gives a nonmember the same 404 as an unknown league", async () => {
+    const app = await builderApp(() => Promise.resolve({ outcome: "not-found" as const }));
+    const response = await app.inject({
+      method: "POST",
+      url: BUILDER_URL,
+      headers: { cookie: COOKIE },
+      payload: validBody,
+    });
+
+    expect(response.statusCode).toBe(404);
+    expect(response.json()).toMatchObject({
+      type: "https://fantasy.local/problems/league-not-found",
+      title: "League not found",
+      status: 404,
+    });
+    await app.close();
+  });
+
+  it("passes only the authenticated identity and the parsed body to the service", async () => {
+    const evaluateBuiltTrade = vi.fn(() => Promise.resolve({ outcome: "not-found" as const }));
+    const app = await builderApp(evaluateBuiltTrade);
+    await app.inject({
+      method: "POST",
+      url: BUILDER_URL,
+      headers: { cookie: COOKIE },
+      payload: validBody,
+    });
+
+    expect(evaluateBuiltTrade).toHaveBeenCalledWith(USER_ID, LEAGUE_ID, validBody);
+    await app.close();
+  });
+
+  it("rejects more than four players on a side without calling the service", async () => {
+    const evaluateBuiltTrade = vi.fn(() => Promise.resolve({ outcome: "not-found" as const }));
+    const app = await builderApp(evaluateBuiltTrade);
+    const response = await app.inject({
+      method: "POST",
+      url: BUILDER_URL,
+      headers: { cookie: COOKIE },
+      payload: {
+        ...validBody,
+        sendsPlayerIds: [
+          "70000000-0000-4000-8000-000000000001",
+          "70000000-0000-4000-8000-000000000002",
+          "70000000-0000-4000-8000-000000000003",
+          "70000000-0000-4000-8000-000000000004",
+          "70000000-0000-4000-8000-000000000005",
+        ],
+      },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toMatchObject({ title: "Request validation failed" });
+    expect(evaluateBuiltTrade).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it("rejects an unknown body field", async () => {
+    const app = await builderApp(() => Promise.resolve({ outcome: "not-found" as const }));
+    const response = await app.inject({
+      method: "POST",
+      url: BUILDER_URL,
+      headers: { cookie: COOKIE },
+      payload: { ...validBody, leagueId: LEAGUE_ID },
+    });
+
+    expect(response.statusCode).toBe(400);
+    await app.close();
+  });
+
+  it("turns a rejected package into a 400 that names no player or roster", async () => {
+    const app = await builderApp(() =>
+      Promise.resolve({ outcome: "rejected" as const, code: "PLAYER_NOT_ON_ROSTER" as const }),
+    );
+    const response = await app.inject({
+      method: "POST",
+      url: BUILDER_URL,
+      headers: { cookie: COOKIE },
+      payload: validBody,
+    });
+
+    expect(response.statusCode).toBe(400);
+    const body: unknown = response.json();
+    expect(body).toMatchObject({
+      type: "https://fantasy.local/problems/trade-package-invalid",
+      title: "Trade package rejected",
+      status: 400,
+    });
+    expect(JSON.stringify(body)).not.toContain(SEND_ID);
+    expect(JSON.stringify(body)).not.toContain(RECEIVE_ID);
+    await app.close();
+  });
+
+  it("returns 200 with the NO_LEGAL_FORCED_DROP diagnostic rather than an HTTP error", async () => {
+    const app = await builderApp(() =>
+      Promise.resolve({
+        outcome: "evaluated" as const,
+        response: illegalTradeEvaluationResponse,
+      }),
+    );
+    const response = await app.inject({
+      method: "POST",
+      url: BUILDER_URL,
+      headers: { cookie: COOKIE },
+      payload: validBody,
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      state: "available",
+      legal: false,
+      package: null,
+      diagnostics: [{ code: "NO_LEGAL_FORCED_DROP" }],
+    });
     await app.close();
   });
 });

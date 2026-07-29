@@ -53,10 +53,14 @@ RUN --mount=type=cache,id=laces-out-npm-worker,target=/root/.npm,sharing=locked 
 
 FROM dependencies AS builder
 ARG NEXT_PUBLIC_API_URL=http://localhost:3000
+# "true" makes the browser bundle call /v1 on whatever domain served the page, so one image can be
+# served from more than one domain. Anything not a browser still uses NEXT_PUBLIC_API_URL.
+ARG NEXT_PUBLIC_API_SAME_ORIGIN=false
 ARG NEXT_PUBLIC_CONTACT_EMAIL=
 ARG NEXT_PUBLIC_SITE_URL=http://localhost:3000
 ARG NEXT_PUBLIC_YAHOO_ACCESS_STATUS=pending
 ENV NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL} \
+    NEXT_PUBLIC_API_SAME_ORIGIN=${NEXT_PUBLIC_API_SAME_ORIGIN} \
     NEXT_PUBLIC_CONTACT_EMAIL=${NEXT_PUBLIC_CONTACT_EMAIL} \
     NEXT_PUBLIC_SITE_URL=${NEXT_PUBLIC_SITE_URL} \
     NEXT_PUBLIC_YAHOO_ACCESS_STATUS=${NEXT_PUBLIC_YAHOO_ACCESS_STATUS} \

@@ -31,6 +31,18 @@ function authenticatedService(role: "member" | "admin" = "admin"): AuthService {
   return new AuthService(repository);
 }
 
+/** A production-shaped environment, which is the only mode where the origin gate is active. */
+function productionEnvironment(additionalWebOrigins?: string) {
+  return loadEnvironment({
+    NODE_ENV: "production",
+    WEB_URL: "https://laces.example.com",
+    ADDITIONAL_WEB_ORIGINS: additionalWebOrigins,
+    SESSION_SECRET: "s".repeat(32),
+    CREDENTIAL_ENCRYPTION_KEY: "k".repeat(32),
+    DATABASE_URL: "postgresql://fantasy:a-strong-password@postgres:5432/fantasy",
+  });
+}
+
 const authenticatedCookie = `fantasy_session=${testSessionToken}`;
 const leagueId = "00000000-0000-4000-8000-000000000101";
 const teamId = "00000000-0000-4000-8000-000000000102";
@@ -103,6 +115,61 @@ function leagueListFixture() {
         },
       },
     ],
+  };
+}
+
+/** WP4 helpers: an ESPN bridge that reports a persisted league season alongside its receipt. */
+function bridgeAccepting(state: "accepted" | "unchanged") {
+  return {
+    listDevices: () => Promise.reject(new Error("not used")),
+    registerDevice: () => Promise.reject(new Error("not used")),
+    acceptSnapshot: () =>
+      Promise.resolve({
+        receiptId: "00000000-0000-4000-8000-000000000020",
+        state,
+        receivedAt: "2026-07-16T22:00:00.000Z",
+        leagueSeasonId: "00000000-0000-4000-8000-0000000000aa",
+      }),
+    revokeDevice: () => Promise.reject(new Error("not used")),
+  };
+}
+
+function bridgeSnapshotRequest() {
+  return {
+    method: "POST" as const,
+    url: "/v1/bridge/espn/snapshots",
+    headers: { authorization: `Bridge lo_espn_${"b".repeat(43)}` },
+    payload: {
+      schemaVersion: 1,
+      provider: "espn",
+      authority: "browser-local",
+      readOnly: true,
+      leagueId: "12345",
+      season: 2026,
+      capturedAt: "2026-07-16T21:59:00.000Z",
+      endpoint:
+        "https://lm-api-reads.fantasy.espn.com/apis/v3/games/ffl/seasons/2026/segments/0/leagues/12345?view=mRoster",
+      checksumSha256: "a".repeat(64),
+      payload: { id: 12345, teams: [], settings: {} },
+    },
+  };
+}
+
+function supplementalPayload() {
+  return {
+    schemaVersion: 1,
+    provider: "espn",
+    authority: "browser-local",
+    readOnly: true,
+    leagueId: "12345",
+    season: 2026,
+    capturedAt: "2026-07-24T13:59:00.000Z",
+    endpoint:
+      "https://lm-api-reads.fantasy.espn.com/apis/v3/games/ffl/seasons/2026/segments/0/leagues/12345?view=kona_player_info&scoringPeriodId=0",
+    checksumSha256: "a".repeat(64),
+    payload: { players: [] },
+    kind: "available-free-agents",
+    week: 0,
   };
 }
 
@@ -447,6 +514,112 @@ describe("API", () => {
     expect(unrelatedRoute.headers["access-control-allow-origin"]).not.toBe(
       "https://fantasy.espn.com",
     );
+    await app.close();
+  });
+
+  it("accepts mutations from every configured web origin and reflects the caller's own", async () => {
+    const app = await buildApp({
+      environment: productionEnvironment("https://second.example.com"),
+      logger: false,
+      requireAuthentication: true,
+      authService: authenticatedService(),
+    });
+
+    for (const origin of ["https://laces.example.com", "https://second.example.com"]) {
+      const mutation = await app.inject({
+        method: "POST",
+        url: "/v1/not-a-route",
+        headers: { cookie: authenticatedCookie, origin },
+      });
+      // Past the origin gate: the route itself does not exist, which is a 404 and not a 403.
+      expect(mutation.statusCode).toBe(404);
+
+      const preflight = await app.inject({
+        method: "OPTIONS",
+        url: "/v1/rankings/00000000-0000-4000-8000-000000000001",
+        headers: {
+          origin,
+          "access-control-request-method": "PATCH",
+          "access-control-request-headers": "content-type",
+        },
+      });
+      expect(preflight.statusCode).toBe(204);
+      // Each domain is told it alone is allowed, so `Vary: Origin` has to be there or a shared
+      // cache could hand one domain's allowance to the other.
+      expect(preflight.headers["access-control-allow-origin"]).toBe(origin);
+      expect(preflight.headers["access-control-allow-credentials"]).toBe("true");
+      expect(preflight.headers.vary).toContain("Origin");
+    }
+
+    await app.close();
+  });
+
+  it("keeps rejecting unknown and absent origins for production mutations", async () => {
+    const app = await buildApp({
+      environment: productionEnvironment("https://second.example.com"),
+      logger: false,
+      requireAuthentication: true,
+      authService: authenticatedService(),
+    });
+
+    const unknownOrigin = await app.inject({
+      method: "POST",
+      url: "/v1/not-a-route",
+      headers: { cookie: authenticatedCookie, origin: "https://attacker.example.com" },
+    });
+    expect(unknownOrigin.statusCode).toBe(403);
+    expect(unknownOrigin.json()).toMatchObject({ status: 403, title: "Request origin rejected" });
+    expect(unknownOrigin.headers["access-control-allow-origin"]).not.toBe(
+      "https://attacker.example.com",
+    );
+
+    const noOrigin = await app.inject({
+      method: "POST",
+      url: "/v1/not-a-route",
+      headers: { cookie: authenticatedCookie },
+    });
+    expect(noOrigin.statusCode).toBe(403);
+
+    // A read is never gated on Origin, on either domain.
+    const read = await app.inject({
+      method: "GET",
+      url: "/health/live",
+      headers: { origin: "https://attacker.example.com" },
+    });
+    expect(read.statusCode).toBe(200);
+
+    await app.close();
+  });
+
+  it("leaves the ESPN bridge ingest branch outside the web origin allowlist", async () => {
+    const app = await buildApp({
+      environment: productionEnvironment("https://second.example.com"),
+      logger: false,
+      requireAuthentication: true,
+      authService: authenticatedService(),
+    });
+
+    const preflight = await app.inject({
+      method: "OPTIONS",
+      url: "/v1/bridge/espn/snapshots",
+      headers: {
+        origin: "https://fantasy.espn.com",
+        "access-control-request-method": "POST",
+        "access-control-request-headers": "authorization,content-type",
+      },
+    });
+    expect(preflight.statusCode).toBe(204);
+    expect(preflight.headers["access-control-allow-origin"]).toBe("https://fantasy.espn.com");
+    expect(preflight.headers["access-control-allow-credentials"]).toBeUndefined();
+
+    // The bridge origin is still not a web origin: it cannot mutate anything outside ingest.
+    const elsewhere = await app.inject({
+      method: "POST",
+      url: "/v1/not-a-route",
+      headers: { cookie: authenticatedCookie, origin: "https://fantasy.espn.com" },
+    });
+    expect(elsewhere.statusCode).toBe(403);
+
     await app.close();
   });
 
@@ -1163,6 +1336,99 @@ describe("API", () => {
       payload: { email: "friend@example.com" },
     });
     expect(forbidden.statusCode).toBe(403);
+    await app.close();
+  });
+  it("recomputes recommendations exactly once for an accepted ESPN bridge snapshot", async () => {
+    const recomputes: unknown[] = [];
+    const app = await buildApp({
+      environment: loadEnvironment({ NODE_ENV: "test" }),
+      logger: false,
+      espnBridge: bridgeAccepting("accepted"),
+      enqueueRecommendationRecompute: (request) => {
+        recomputes.push(request);
+        return Promise.resolve("recompute-job");
+      },
+    });
+
+    const response = await app.inject(bridgeSnapshotRequest());
+
+    expect(response.statusCode).toBe(202);
+    expect(recomputes).toEqual([
+      expect.objectContaining({
+        leagueSeasonId: "00000000-0000-4000-8000-0000000000aa",
+        kinds: ["lineup", "trade", "waiver"],
+      }),
+    ]);
+    await app.close();
+  });
+
+  it("enqueues no recomputation when a duplicate ESPN payload is unchanged", async () => {
+    const recomputes: unknown[] = [];
+    const app = await buildApp({
+      environment: loadEnvironment({ NODE_ENV: "test" }),
+      logger: false,
+      espnBridge: bridgeAccepting("unchanged"),
+      enqueueRecommendationRecompute: (request) => {
+        recomputes.push(request);
+        return Promise.resolve("recompute-job");
+      },
+    });
+
+    const response = await app.inject(bridgeSnapshotRequest());
+
+    // A replayed checksum returns "unchanged", which is what makes a duplicate provider payload
+    // structurally incapable of producing a duplicate recommendation run.
+    expect(response.statusCode).toBe(200);
+    expect(recomputes).toEqual([]);
+    await app.close();
+  });
+
+  it("still accepts the snapshot when the recomputation enqueue fails", async () => {
+    const app = await buildApp({
+      environment: loadEnvironment({ NODE_ENV: "test" }),
+      logger: false,
+      espnBridge: bridgeAccepting("accepted"),
+      enqueueRecommendationRecompute: () => Promise.reject(new Error("queue unavailable")),
+    });
+
+    const response = await app.inject(bridgeSnapshotRequest());
+
+    expect(response.statusCode).toBe(202);
+    await app.close();
+  });
+
+  it("recomputes recommendations after an accepted ESPN supplemental snapshot", async () => {
+    const recomputes: unknown[] = [];
+    const app = await buildApp({
+      environment: loadEnvironment({ NODE_ENV: "test" }),
+      logger: false,
+      espnBridge: {
+        ...bridgeAccepting("accepted"),
+        acceptSupplementalSnapshot: () =>
+          Promise.resolve({
+            receiptId: "00000000-0000-4000-8000-000000000021",
+            state: "accepted" as const,
+            receivedAt: "2026-07-16T22:00:00.000Z",
+            leagueSeasonId: "00000000-0000-4000-8000-0000000000bb",
+          }),
+      },
+      enqueueRecommendationRecompute: (request) => {
+        recomputes.push(request);
+        return Promise.resolve("recompute-job");
+      },
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/bridge/espn/supplemental",
+      headers: { authorization: `Bridge lo_espn_${"b".repeat(43)}` },
+      payload: supplementalPayload(),
+    });
+
+    expect(response.statusCode).toBe(202);
+    expect(recomputes).toEqual([
+      expect.objectContaining({ leagueSeasonId: "00000000-0000-4000-8000-0000000000bb" }),
+    ]);
     await app.close();
   });
 });

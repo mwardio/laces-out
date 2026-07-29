@@ -133,6 +133,33 @@ try {
     assert.ok(triggerNames.has(triggerName), `missing invariant trigger ${triggerName}`);
   }
 
+  // Migration 0026 (WP4). Asserted by name so a missing migration fails here rather than at the
+  // first live league sync or recommendation recompute.
+  const columnRows = await sql`
+    select table_name, column_name
+    from information_schema.columns
+    where table_schema = 'public'
+      and table_name in ('provider_connections', 'recommendation_runs')
+  `;
+  const columnNames = new Set(columnRows.map((row) => `${row.table_name}.${row.column_name}`));
+  for (const column of [
+    "provider_connections.consecutive_failures",
+    "provider_connections.circuit_open_until",
+    "provider_connections.last_error_detail",
+    "recommendation_runs.fantasy_team_id",
+  ]) {
+    assert.ok(columnNames.has(column), `missing migrated column ${column}`);
+  }
+
+  const indexRows = await sql`
+    select indexname from pg_catalog.pg_indexes where schemaname = 'public'
+  `;
+  const indexNames = new Set(indexRows.map((row) => String(row.indexname)));
+  assert.ok(
+    indexNames.has("recommendation_runs_identity_unique"),
+    "missing recommendation run replay identity index",
+  );
+
   await sql.unsafe("BEGIN");
   transactionStarted = true;
 
@@ -1575,6 +1602,85 @@ try {
     update ai_usage_ledger set cost = 0 where id = ${usageId}
   `,
   );
+
+  // WP4: connection-scoped circuit state and recommendation-run replay identity (migration 0026).
+  const circuitState = await sql`
+    update provider_connections
+    set consecutive_failures = 5,
+      circuit_open_until = now() + interval '1 minute',
+      last_error_code = 'PROVIDER_UNAVAILABLE',
+      last_error_detail = 'schema smoke'
+    where id = ${connectionId}
+    returning consecutive_failures, circuit_open_until, last_error_detail
+  `;
+  assert.equal(circuitState[0]?.consecutive_failures, 5, "circuit failure counter did not persist");
+  assert.ok(circuitState[0]?.circuit_open_until, "circuit open-until did not persist");
+  assert.equal(circuitState[0]?.last_error_detail, "schema smoke");
+  await expectDatabaseRejection(
+    "negative connection failure counter",
+    () => sql`
+    update provider_connections set consecutive_failures = -1 where id = ${connectionId}
+  `,
+  );
+
+  const recommendationInputHash = "d".repeat(64);
+  const [recommendationRun] = await sql`
+    insert into recommendation_runs (
+      league_season_id, fantasy_team_id, kind, algorithm_version, input_hash, inputs
+    ) values (
+      ${seasonId}, ${teamId}, 'lineup', 'in-season-decisions-v1', ${recommendationInputHash},
+      ${sql.json({ week: 3 })}
+    )
+    returning id
+  `;
+  const recommendationRunId = requiredString(recommendationRun?.id, "recommendation run id");
+  await expectDatabaseRejection(
+    "unknown recommendation kind",
+    () => sql`
+    insert into recommendation_runs (
+      league_season_id, fantasy_team_id, kind, algorithm_version, input_hash, inputs
+    ) values (
+      ${seasonId}, ${teamId}, 'playoffs', 'in-season-decisions-v1', ${"e".repeat(64)},
+      ${sql.json({})}
+    )
+  `,
+  );
+  await expectDatabaseRejection(
+    "replayed recommendation run with identical inputs",
+    () => sql`
+    insert into recommendation_runs (
+      league_season_id, fantasy_team_id, kind, algorithm_version, input_hash, inputs
+    ) values (
+      ${seasonId}, ${teamId}, 'lineup', 'in-season-decisions-v1', ${recommendationInputHash},
+      ${sql.json({ week: 3 })}
+    )
+  `,
+  );
+  // NULLS NOT DISTINCT: a league-wide run must deduplicate too, rather than insert without limit.
+  await sql`
+    insert into recommendation_runs (
+      league_season_id, fantasy_team_id, kind, algorithm_version, input_hash, inputs
+    ) values (
+      ${seasonId}, null, 'waiver', 'in-season-decisions-v1', ${"f".repeat(64)}, ${sql.json({})}
+    )
+  `;
+  await expectDatabaseRejection(
+    "replayed league-wide recommendation run",
+    () => sql`
+    insert into recommendation_runs (
+      league_season_id, fantasy_team_id, kind, algorithm_version, input_hash, inputs
+    ) values (
+      ${seasonId}, null, 'waiver', 'in-season-decisions-v1', ${"f".repeat(64)}, ${sql.json({})}
+    )
+  `,
+  );
+  await sql`
+    insert into recommendations (run_id, rank, action, explanation, warnings)
+    values (
+      ${recommendationRunId}, 1, ${sql.json({ start: playerId })}, 'Schema smoke recommendation',
+      ${["PRIVATE_PROJECTION_SETS_EXCLUDED"]}
+    )
+  `;
 
   const [changeEvent] = await sql`
     insert into change_events (

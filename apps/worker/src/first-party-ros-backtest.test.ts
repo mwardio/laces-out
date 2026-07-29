@@ -453,8 +453,10 @@ describe("historical ROS evidence helpers", () => {
         ...choice.heldOutEvidence,
         contextualMeanInputCoverage: 0.9,
         recencyMeanInputCoverage: 0.9,
-        contextualAvailabilityMae: 2,
-        recencyAvailabilityMae: 2,
+        // Nine rows and a five-to-eight support of eight games: this clears the evidence test's
+        // 2.67-game bar, so the blocker is the availability error and not the sample size.
+        contextualAvailabilityMae: 3,
+        recencyAvailabilityMae: 3,
         contextualConvergenceRate: 0.5,
         recencyConvergenceRate: 0.5,
       },
@@ -466,6 +468,94 @@ describe("historical ROS evidence helpers", () => {
         "calibration_WR_five-to-eight_convergence_below_minimum",
       ]),
     );
+  });
+
+  it("fails an availability cell on evidence of excess error, not on a point estimate", () => {
+    const base = {
+      contextualModelVersion: "contextual",
+      recencyModelVersion: "recency",
+      scoringProfileKey: "profile",
+      intervalMethodVersion: "interval",
+      windowEndWeek: 18,
+      evidence: {
+        coverage: { contextual: 1, recency: 1 },
+        availability: {
+          scheduledGames: 13,
+          actualGames: 13,
+          contextualExpectedGames: 13,
+          recencyExpectedGames: 13,
+        },
+        convergence: {
+          contextual: { state: "converged" as const, diagnosticChecksum: "b".repeat(64) },
+          recency: { state: "converged" as const, diagnosticChecksum: "c".repeat(64) },
+        },
+      },
+      contextual: { meanPoints: 80, p15Points: 60, p50Points: 80, p85Points: 100 },
+      recency: { meanPoints: 75, p15Points: 55, p50Points: 75, p85Points: 95 },
+      actualPoints: 82,
+    };
+    const forecasts = [2023, 2024, 2025].flatMap((season) =>
+      [4, 5, 6].flatMap((asOfWeek) =>
+        [0, 1, 2, 3].map((index) => ({
+          ...base,
+          playerId: `QB:${season}:${asOfWeek}:${index}`,
+          position: "QB" as const,
+          forecastSeason: season,
+          asOfWeek,
+          windowStartWeek: asOfWeek + 1,
+          trainedThroughSeason: season - 1,
+          inputChecksum: historicalRosChecksum({ season, asOfWeek, index }),
+        })),
+      ),
+    );
+    expect(historicalRosBucket(5)).toBe("nine-plus");
+    const champion = evaluateFirstPartyRosChampionPolicy(
+      [2023, 2024, 2025].map((season): FirstPartyRosHeldOutSeason => ({
+        season,
+        complete: true,
+        forecasts: forecasts.filter((forecast) => forecast.forecastSeason === season),
+      })),
+      {
+        minimumHeldOutSeasons: 3,
+        minimumBatches: 9,
+        minimumSamples: 18,
+        minimumCellSeasons: 3,
+        minimumCellCutoffs: 3,
+        minimumCellBatches: 9,
+        minimumCellSamples: 9,
+      },
+    );
+    const ninePlus = champion.livePolicy.choices.find(
+      (candidate) => candidate.position === "QB" && candidate.bucket === "nine-plus",
+    );
+    if (!ninePlus) throw new Error("Expected QB nine-plus calibration choice");
+    expect(ninePlus.samples).toBe(36);
+
+    function blockersAt(availabilityMae: number, samples = ninePlus!.samples): readonly string[] {
+      return historicalRosCalibrationBlockers([
+        {
+          ...ninePlus!,
+          samples,
+          heldOutEvidence: {
+            ...ninePlus!.heldOutEvidence,
+            contextualAvailabilityMae: availabilityMae,
+            recencyAvailabilityMae: availabilityMae,
+          },
+        },
+      ]).filter((blocker) => blocker.endsWith("_availability_mae_above_maximum"));
+    }
+
+    // The measured QB nine-plus cell sits 0.014 games over 2.75 with a cell standard error near
+    // 0.15. That is sampling noise, and the gate must no longer read it as a failure.
+    expect(blockersAt(2.7638, 288)).toEqual([]);
+    expect(blockersAt(3.2, 288)).toEqual([]);
+    // Genuinely and substantially over the ceiling still blocks, at every sample size.
+    expect(blockersAt(3.5, 288)).toEqual([
+      "calibration_QB_nine-plus_availability_mae_above_maximum",
+    ]);
+    expect(blockersAt(8)).toEqual(["calibration_QB_nine-plus_availability_mae_above_maximum"]);
+    // A cell inside the ceiling can never block, however small its sample.
+    expect(blockersAt(2.75, 18)).toEqual([]);
   });
 
   it("buckets availability streaks into returning, settling, and established", () => {

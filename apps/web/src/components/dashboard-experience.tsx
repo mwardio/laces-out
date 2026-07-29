@@ -9,7 +9,6 @@ import {
   Database,
   LoaderCircle,
   RefreshCw,
-  ShieldCheck,
   Trophy,
   UserRoundCheck,
   UsersRound,
@@ -19,20 +18,28 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
   apiBaseUrl,
+  parseAuthenticatedSession,
+  parseDataQualitySources,
   parseJobAccepted,
   parseLeagueDashboard,
   parseLeagueListResponse,
+  parseUnresolvedIdentities,
+  type DataQualitySource,
   type LeagueDashboard,
   type LeagueListResponse,
+  type UnresolvedIdentityResponse,
 } from "../lib/api-client";
 import { LatestRequest } from "../lib/latest-request";
 import { yahooComingSoon } from "../lib/public-site";
 import { loginUrlForCurrentPath } from "../lib/safe-return-to";
 import { DEMO_LEAGUE_ID } from "../lib/demo-contract-data";
+import { leagueIsUnclaimed } from "../lib/team-claim";
 import { useDefaultLeague } from "../lib/use-default-league";
 import { AiCoachPanel } from "./ai-coach-panel";
+import { ChangeFeedPanel } from "./change-feed-panel";
 import { PortfolioDashboard } from "./portfolio-dashboard";
 import { TeamAvatar } from "./team-avatar";
+import { TeamClaimCallout } from "./team-claim-callout";
 
 type PortfolioState =
   | { readonly status: "loading" }
@@ -94,6 +101,11 @@ function MobileWeekAtGlance({ dashboard }: { readonly dashboard: LeagueDashboard
   const context = dashboard.memberWeek;
   const leagueQuery = `league=${encodeURIComponent(dashboard.league.id)}`;
   const matchupAvailable = context.state === "available";
+  const teamUnclaimed = context.state === "team-unclaimed";
+
+  // Once a team is claimed, this card only earns its spot when there is an actual matchup to
+  // glance at; a claimed league between snapshots renders nothing here.
+  if (!matchupAvailable && !teamUnclaimed) return null;
 
   return (
     <section className="mobile-week-card" aria-labelledby="mobile-week-card-title">
@@ -103,7 +115,9 @@ function MobileWeekAtGlance({ dashboard }: { readonly dashboard: LeagueDashboard
         </span>
         <div>
           <p className="eyebrow">
-            {context.week ? `Week ${context.week} at a glance` : "Your next move"}
+            {matchupAvailable && context.week
+              ? `Week ${context.week} at a glance`
+              : "Your next move"}
           </p>
           <h2 id="mobile-week-card-title">
             {matchupAvailable
@@ -112,11 +126,7 @@ function MobileWeekAtGlance({ dashboard }: { readonly dashboard: LeagueDashboard
           </h2>
         </div>
         <span className="mobile-week-card__state">
-          {matchupAvailable
-            ? memberScoreStateLabel(context.scoreState)
-            : context.state === "team-unclaimed"
-              ? "Claim team"
-              : "League ready"}
+          {matchupAvailable ? memberScoreStateLabel(context.scoreState) : "Claim team"}
         </span>
       </div>
 
@@ -147,23 +157,23 @@ function MobileWeekAtGlance({ dashboard }: { readonly dashboard: LeagueDashboard
         </div>
       ) : (
         <p className="mobile-week-card__summary">
-          {context.state === "team-unclaimed"
-            ? "Claim your team to unlock lineup, waiver, trade, and opponent guidance."
-            : "Open the decision tools while the next matchup snapshot is prepared."}
+          Claim your team to unlock lineup, waiver, trade, and opponent guidance.
         </p>
       )}
 
-      <nav className="mobile-week-card__actions" aria-label="This week shortcuts">
-        <Link href={`/decisions?${leagueQuery}#decision-lineup`}>
-          Set lineup <ArrowRight size={13} />
-        </Link>
-        <Link href={`/analytics?${leagueQuery}#analytics-opponent`}>
-          Scout opponent <ArrowRight size={13} />
-        </Link>
-        <Link href={`/analytics?${leagueQuery}#analytics-season`}>
-          League pulse <ArrowRight size={13} />
-        </Link>
-      </nav>
+      {matchupAvailable ? (
+        <nav className="mobile-week-card__actions" aria-label="This week shortcuts">
+          <Link href={`/decisions?${leagueQuery}#decision-lineup`}>
+            Set lineup <ArrowRight size={13} />
+          </Link>
+          <Link href={`/analytics?${leagueQuery}#analytics-opponent`}>
+            Scout opponent <ArrowRight size={13} />
+          </Link>
+          <Link href={`/analytics?${leagueQuery}#analytics-season`}>
+            League pulse <ArrowRight size={13} />
+          </Link>
+        </nav>
+      ) : null}
     </section>
   );
 }
@@ -462,9 +472,8 @@ function LivePortfolio({ portfolio, reloadPortfolio }: LivePortfolioProps) {
               : `${portfolio.leagues.length} connected leagues in one view.`}
           </h1>
           <p className="page-subtitle">
-            Your latest league, roster, and projection data drive the next lineup, waiver, trade,
-            and opponent moves. Shared NFL inputs are checked daily and on demand; each league keeps
-            its own sync and projection controls.
+            Your latest league and projection data drive every lineup, waiver, and trade call — each
+            league keeps its own sync and forecast controls.
           </p>
         </div>
         <div className="heading-actions">
@@ -519,17 +528,6 @@ function LivePortfolio({ portfolio, reloadPortfolio }: LivePortfolioProps) {
 
       {currentDashboard ? <MobileWeekAtGlance dashboard={currentDashboard} /> : null}
 
-      <section className="dashboard-mode-notice dashboard-mode-notice--live">
-        <ShieldCheck size={16} />
-        <span>
-          <strong>Live data active.</strong> Access is limited to leagues where your account has a
-          membership.
-        </span>
-        <Link href="/decisions">
-          Open decision desk <ArrowRight size={14} />
-        </Link>
-      </section>
-
       <section className="overview-strip" aria-label="Live portfolio overview">
         <article className="overview-stat">
           <span className="overview-stat__icon overview-stat__icon--ink">
@@ -577,13 +575,24 @@ function LivePortfolio({ portfolio, reloadPortfolio }: LivePortfolioProps) {
         </article>
       </section>
 
-      <AiCoachPanel
-        leagueId={selectedLeagueId}
-        features={["weekly-brief", "standings-prediction"]}
-        eyebrow="Always-current brief"
-        title="What changed, and what should you do?"
-        description="Generate a weekly read or rest-of-season forecast from the currently selected league."
-      />
+      {/* ChangeFeedPanel and AiCoachPanel are shared components whose own
+          .panel carries no top margin (other host pages sit them inside a
+          CSS-grid gap, which supplies it for free). This page has no such
+          grid, so each needs the same section-to-section gap the rest of
+          the page already uses. */}
+      <div className="section-block">
+        <ChangeFeedPanel leagueId={selectedLeagueId || null} />
+      </div>
+
+      <div className="section-block">
+        <AiCoachPanel
+          leagueId={selectedLeagueId}
+          features={["weekly-brief", "standings-prediction"]}
+          eyebrow="Always-current brief"
+          title="What changed, and what should you do?"
+          description="Generate a weekly read or rest-of-season forecast from the currently selected league."
+        />
+      </div>
 
       <section className="section-block league-section" aria-labelledby="live-league-board-title">
         <div className="section-heading">
@@ -687,6 +696,7 @@ function LivePortfolio({ portfolio, reloadPortfolio }: LivePortfolioProps) {
           claimState={claimState}
           claimMessage={claimMessage}
           claimTeam={() => void claimTeam()}
+          onTeamClaimed={() => void Promise.all([loadDashboard(), reloadPortfolio()])}
           draftMarketRefreshState={draftMarketRefreshState}
           checkDraftMarket={() => void checkDraftMarket()}
         />
@@ -702,6 +712,7 @@ interface LeagueDetailProps {
   readonly claimState: "idle" | "saving" | "saved" | "error";
   readonly claimMessage: string;
   readonly claimTeam: () => void;
+  readonly onTeamClaimed: () => void;
   readonly draftMarketRefreshState: "idle" | "working" | "queued" | "deduplicated" | "error";
   readonly checkDraftMarket: () => void;
 }
@@ -1056,6 +1067,7 @@ function LeagueDetail({
   claimState,
   claimMessage,
   claimTeam,
+  onTeamClaimed,
   draftMarketRefreshState,
   checkDraftMarket,
 }: LeagueDetailProps) {
@@ -1063,6 +1075,7 @@ function LeagueDetail({
   const selectableTeams = dashboard.teams.filter(
     (team) => team.claimStatus === "current-user" || team.claimStatus === "available",
   );
+  const unclaimed = leagueIsUnclaimed(dashboard);
   const claimHeading = claimedTeam
     ? claimedTeam.name
     : dashboard.teamClaim.mode === "provider-mapped"
@@ -1110,6 +1123,14 @@ function LeagueDetail({
         </div>
       ) : null}
 
+      {unclaimed ? (
+        <TeamClaimCallout
+          leagueId={dashboard.league.id}
+          dashboard={dashboard}
+          onClaimed={onTeamClaimed}
+        />
+      ) : null}
+
       <div className="live-overview-grid">
         <article>
           <span>Teams stored</span>
@@ -1149,7 +1170,9 @@ function LeagueDetail({
             ) : null}
           </div>
           <p className="live-claim-explainer">{dashboard.teamClaim.explanation}</p>
-          {selectableTeams.length > 0 ? (
+          {/* Unclaimed leagues get exactly one claim form: the TeamClaimCallout above. This
+              panel's own form only reappears once a team is claimed, for the switch flow. */}
+          {!unclaimed && selectableTeams.length > 0 ? (
             <div className="live-claim-form">
               <label htmlFor="team-claim">Fantasy team</label>
               <select
@@ -1288,9 +1311,214 @@ function LeagueDetail({
                     ? "Retry draft-market check"
                     : "Check draft market"}
           </button>
+          <UnresolvedIdentityPanel />
         </aside>
       </div>
     </section>
+  );
+}
+
+/**
+ * Operator detail for `ENHANCEMENT_PLAN.md` §2.3. The unresolved rows below are immutable
+ * historical facts, not a queue anyone can clear: they record that an external identifier did not
+ * resolve to a canonical player during a completed ingestion. The server's 403 is the real
+ * boundary; the role check here only avoids a fetch that is guaranteed to fail for a member.
+ */
+function UnresolvedIdentityPanel() {
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [degraded, setDegraded] = useState<readonly DataQualitySource[]>([]);
+  const [state, setState] = useState<"loading" | "ready" | "error">("loading");
+  const [notice, setNotice] = useState<string | null>(null);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    void fetch(`${apiBaseUrl}/v1/auth/session`, {
+      credentials: "include",
+      headers: { Accept: "application/json" },
+      cache: "no-store",
+      signal: controller.signal,
+    })
+      .then(async (response) =>
+        response.ok ? parseAuthenticatedSession(await response.json()) : null,
+      )
+      .then((session) => setIsAdmin(session?.user.role === "admin"))
+      .catch(() => {
+        if (!controller.signal.aborted) setIsAdmin(false);
+      });
+    return () => controller.abort();
+  }, []);
+
+  useEffect(() => {
+    if (!isAdmin) return;
+    const controller = new AbortController();
+    setState("loading");
+    void fetch(`${apiBaseUrl}/v1/data-quality/sources`, {
+      credentials: "include",
+      headers: { Accept: "application/json" },
+      signal: controller.signal,
+    })
+      .then(async (response) =>
+        response.ok ? parseDataQualitySources(await response.json()) : null,
+      )
+      .then((summary) => {
+        if (!summary) {
+          setState("error");
+          return;
+        }
+        if (summary.availability.state !== "available") {
+          setDegraded([]);
+          setNotice(summary.availability.reason);
+          setState("ready");
+          return;
+        }
+        setNotice(null);
+        setDegraded(
+          summary.sources.filter((source) => summary.degradedSourceKeys.includes(source.key)),
+        );
+        setState("ready");
+      })
+      .catch(() => {
+        if (!controller.signal.aborted) setState("error");
+      });
+    return () => controller.abort();
+  }, [isAdmin]);
+
+  if (!isAdmin) return null;
+  return (
+    <div className="live-unresolved">
+      <h4>Unresolved identities</h4>
+      {state === "loading" ? (
+        <p role="status">Checking source identity quality…</p>
+      ) : state === "error" ? (
+        <p role="alert">Source identity quality could not be loaded.</p>
+      ) : notice ? (
+        <p role="status">{notice}</p>
+      ) : degraded.length === 0 ? (
+        <p role="status">Every source is resolving identities above its threshold.</p>
+      ) : (
+        degraded.map((source) => <UnresolvedSourceDisclosure key={source.key} source={source} />)
+      )}
+    </div>
+  );
+}
+
+function UnresolvedSourceDisclosure({ source }: { readonly source: DataQualitySource }) {
+  const [open, setOpen] = useState(false);
+  const [detail, setDetail] = useState<UnresolvedIdentityResponse | null>(null);
+  const [state, setState] = useState<"idle" | "loading" | "ready" | "error">("idle");
+
+  useEffect(() => {
+    if (!open || state !== "idle") return;
+    const controller = new AbortController();
+    setState("loading");
+    void fetch(
+      `${apiBaseUrl}/v1/data-quality/sources/${encodeURIComponent(source.key)}/unresolved`,
+      {
+        credentials: "include",
+        headers: { Accept: "application/json" },
+        signal: controller.signal,
+      },
+    )
+      .then(async (response) =>
+        response.ok ? parseUnresolvedIdentities(await response.json()) : null,
+      )
+      .then((result) => {
+        if (!result) {
+          setState("error");
+          return;
+        }
+        setDetail(result);
+        setState("ready");
+      })
+      .catch(() => {
+        if (!controller.signal.aborted) setState("error");
+      });
+    return () => controller.abort();
+  }, [open, state, source.key]);
+
+  return (
+    <details
+      className="live-unresolved__source"
+      open={open}
+      onToggle={(event) => setOpen(event.currentTarget.open)}
+    >
+      <summary>
+        <span>{source.name}</span>
+        <small>
+          {source.matchRate === null
+            ? "No match rate recorded"
+            : `${Math.round(source.matchRate * 100)}% matched · ${Math.round(source.minimumMatchRate * 100)}% required`}
+        </small>
+      </summary>
+      {state === "loading" ? (
+        <p role="status">Loading unresolved rows…</p>
+      ) : state === "error" ? (
+        <p role="alert">Unresolved rows could not be loaded.</p>
+      ) : detail ? (
+        <>
+          {detail.weeks.state === "available" ? (
+            detail.weeks.rows.length === 0 ? (
+              <p>No unresolved rows are recorded for this source.</p>
+            ) : (
+              <div className="live-unresolved__scroll">
+                <table>
+                  <caption className="sr-only">
+                    Unresolved rows by season and week for {source.name}
+                  </caption>
+                  <thead>
+                    <tr>
+                      <th scope="col">Season</th>
+                      <th scope="col">Week</th>
+                      <th scope="col">Unresolved rows</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {detail.weeks.rows.map((row) => (
+                      <tr key={`${row.season}-${row.week}`}>
+                        <td>{row.season}</td>
+                        <td>{row.week}</td>
+                        <td>{row.unresolvedRows}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )
+          ) : (
+            <p role="status">{detail.weeks.reason}</p>
+          )}
+          {detail.sample.state === "available" && detail.sample.rows.length > 0 ? (
+            <div className="live-unresolved__scroll">
+              <table>
+                <caption className="sr-only">
+                  Sample of unresolved source identities for {source.name}
+                </caption>
+                <thead>
+                  <tr>
+                    <th scope="col">Week</th>
+                    <th scope="col">Source identifier</th>
+                    <th scope="col">Team</th>
+                    <th scope="col">Position</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {detail.sample.rows.map((row) => (
+                    <tr key={`${row.week}-${row.externalPlayerId}`}>
+                      <td>{row.week}</td>
+                      <td>{row.externalPlayerId}</td>
+                      <td>{row.team}</td>
+                      <td>{row.position ?? "—"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : detail.sample.state !== "available" ? (
+            <p role="status">{detail.sample.reason}</p>
+          ) : null}
+        </>
+      ) : null}
+    </details>
   );
 }
 

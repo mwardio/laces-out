@@ -13,8 +13,10 @@ import {
   Clock3,
   Crosshair,
   Database,
+  Dices,
   Info,
   LoaderCircle,
+  Percent,
   RefreshCw,
   ShieldAlert,
   Target,
@@ -39,6 +41,7 @@ import { AiCoachPanel } from "./ai-coach-panel";
 import styles from "./league-analytics-workbench.module.css";
 import { ShareCardButton, type ShareCardAward } from "./share-card-button";
 import { TeamAvatar } from "./team-avatar";
+import { TeamClaimCallout } from "./team-claim-callout";
 
 type PortfolioState =
   | { readonly state: "loading" }
@@ -69,6 +72,13 @@ const percent = new Intl.NumberFormat(undefined, {
 const tally = new Intl.NumberFormat(undefined, {
   maximumFractionDigits: 1,
 });
+/** Playoff odds and their sampling error move in fractions of a point, so whole percent hides them. */
+const probability = new Intl.NumberFormat(undefined, {
+  style: "percent",
+  minimumFractionDigits: 1,
+  maximumFractionDigits: 1,
+});
+const count = new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 });
 
 function dateTime(value: string | null): string {
   if (!value) return "Not available";
@@ -121,6 +131,7 @@ function Unavailable({
 
 function Provenance({ snapshot }: { readonly snapshot: LeagueAnalyticsSnapshot }) {
   const projection = snapshot.provenance.projectionSet;
+  const playoff = snapshot.playoffOdds;
   return (
     <section className={styles.provenance} aria-label="Analytics provenance">
       <div>
@@ -164,6 +175,22 @@ function Provenance({ snapshot }: { readonly snapshot: LeagueAnalyticsSnapshot }
         <span>
           <small>Imported at{projection ? ` · ${projection.creatorDisplayName}` : ""}</small>
           <strong>{projection ? dateTime(projection.importedAt) : "Not available"}</strong>
+        </span>
+      </div>
+      <div>
+        <Dices size={16} aria-hidden="true" />
+        <span>
+          <small>Playoff simulation</small>
+          <strong>
+            {playoff === undefined
+              ? "Not in this snapshot"
+              : playoff.state === "available"
+                ? `${count.format(playoff.simulations)} seeded runs`
+                : "Withheld — see section"}
+          </strong>
+          {playoff?.state === "available" ? (
+            <code className={styles.seedValue}>{playoff.seed}</code>
+          ) : null}
         </span>
       </div>
     </section>
@@ -815,6 +842,212 @@ function OpponentSection({ snapshot }: { readonly snapshot: LeagueAnalyticsSnaps
   );
 }
 
+/** A nonzero share must never round to a bare "0%", which would read as impossible. */
+function seedShare(value: number): string {
+  if (value === 0) return "—";
+  if (value < 0.005) return "<1%";
+  return percent.format(value);
+}
+
+/**
+ * "0%" and "100%" are reserved for results the simulation actually produced in every or no run.
+ * A near-miss is shown as a bound so a 99.96% team is never read as already qualified.
+ */
+function oddsShare(value: number): string {
+  if (value === 0 || value === 1) return percent.format(value);
+  if (value < 0.001) return "<0.1%";
+  if (value > 0.999) return ">99.9%";
+  return probability.format(value);
+}
+
+/** "8.4–5.6" or "8.4–5.6–1.0"; simulated ties are dropped only when there are effectively none. */
+function projectedRecord(team: {
+  readonly averageFinalWins: number;
+  readonly averageFinalLosses: number;
+  readonly averageFinalTies: number;
+}): string {
+  const base = `${decimal.format(team.averageFinalWins)}–${decimal.format(team.averageFinalLosses)}`;
+  return team.averageFinalTies >= 0.05 ? `${base}–${decimal.format(team.averageFinalTies)}` : base;
+}
+
+function PlayoffOddsSection({ snapshot }: { readonly snapshot: LeagueAnalyticsSnapshot }) {
+  const section = snapshot.playoffOdds;
+  const ordered =
+    section?.state === "available"
+      ? [...section.teams].sort(
+          (left, right) =>
+            right.playoffProbability - left.playoffProbability ||
+            left.expectedSeed - right.expectedSeed ||
+            left.team.name.localeCompare(right.team.name),
+        )
+      : [];
+  const seeds =
+    section?.state === "available"
+      ? (section.teams[0]?.seedProbabilities.map((entry) => entry.seed) ?? [])
+      : [];
+
+  return (
+    <section className={styles.panel} id="analytics-playoffs" aria-labelledby="playoffs-title">
+      <SectionHeader
+        icon={<Percent size={18} aria-hidden="true" />}
+        kicker="Seeded simulation"
+        title="Playoff odds"
+        tag={
+          section?.state === "available" ? `Top ${section.playoffTeamCount} qualify` : "Rule bound"
+        }
+        titleId="playoffs-title"
+      />
+      {section === undefined ? (
+        <p className={styles.methodNote}>
+          This snapshot carries no playoff odds section. Refresh against a synchronized league to
+          simulate the remaining schedule.
+        </p>
+      ) : section.state === "unavailable" ? (
+        <Unavailable title="Playoff odds" reasons={section.reasons} />
+      ) : (
+        <>
+          <div
+            className={`${styles.tableScroll} has-scroll-cue`}
+            role="region"
+            aria-label="Playoff odds; scroll horizontally to view all columns"
+            tabIndex={0}
+          >
+            <table className={`${styles.dataTable} ${styles.playoffTable}`}>
+              <thead>
+                <tr>
+                  <th scope="col">Team</th>
+                  <th scope="col">Playoff</th>
+                  <th scope="col">± sampling</th>
+                  <th scope="col">Exp. seed</th>
+                  <th scope="col">Proj. record</th>
+                  <th scope="col">Proj. PF</th>
+                  <th scope="col">Wk mean</th>
+                </tr>
+              </thead>
+              <tbody>
+                {ordered.map((item) => (
+                  <tr
+                    className={item.team.isCurrentUser ? styles.currentRow : undefined}
+                    key={item.team.id}
+                  >
+                    <th scope="row">
+                      <div className={styles.teamCell}>
+                        <TeamAvatar
+                          teamName={item.team.name}
+                          logoUrl={item.team.logoUrl}
+                          abbreviation={item.team.abbreviation}
+                          size="small"
+                          highlight={item.team.isCurrentUser}
+                        />
+                        <div className={styles.teamText}>
+                          <strong>
+                            {item.team.name}
+                            {item.team.isCurrentUser ? (
+                              <span className={styles.youLabel}>You</span>
+                            ) : null}
+                          </strong>
+                          <small>{item.team.managerDisplayName ?? "Manager unavailable"}</small>
+                        </div>
+                      </div>
+                    </th>
+                    <td>
+                      <strong>{oddsShare(item.playoffProbability)}</strong>
+                    </td>
+                    <td className={styles.mutedCell}>
+                      ± {probability.format(item.monteCarloStandardError)}
+                    </td>
+                    <td>{decimal.format(item.expectedSeed)}</td>
+                    <td>{projectedRecord(item)}</td>
+                    <td>{decimal.format(item.averageFinalPointsFor)}</td>
+                    <td className={styles.mutedCell}>
+                      {decimal.format(item.scoringMean)} ±{" "}
+                      {decimal.format(item.scoringStandardDeviation)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <p className={styles.subTableTitle}>Seed distribution</p>
+          <div
+            className={`${styles.tableScroll} has-scroll-cue`}
+            role="region"
+            aria-label="Seed distribution; scroll horizontally to view every seed"
+            tabIndex={0}
+          >
+            <table className={`${styles.dataTable} ${styles.seedTable}`}>
+              <thead>
+                <tr>
+                  <th scope="col">Team</th>
+                  {seeds.map((seed) => (
+                    <th scope="col" key={seed}>
+                      #{seed}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {ordered.map((item) => (
+                  <tr
+                    className={item.team.isCurrentUser ? styles.currentRow : undefined}
+                    key={item.team.id}
+                  >
+                    <th scope="row">
+                      <strong>
+                        {item.team.name}
+                        {item.team.isCurrentUser ? (
+                          <span className={styles.youLabel}>You</span>
+                        ) : null}
+                      </strong>
+                      <small>Expected #{decimal.format(item.expectedSeed)}</small>
+                    </th>
+                    {item.seedProbabilities.map((entry) => (
+                      <td
+                        className={
+                          entry.seed <= section.playoffTeamCount ? undefined : styles.mutedCell
+                        }
+                        key={entry.seed}
+                      >
+                        {seedShare(entry.probability)}
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <details className={styles.definitions}>
+            <summary>How these odds are produced</summary>
+            <div>
+              <p>{section.definition}</p>
+              <p>
+                <strong>{section.forecastBasis.label}</strong> {section.forecastBasis.definition}
+              </p>
+              {section.samplingErrorDefinition === null ? null : (
+                <p>
+                  <strong>Sampling error</strong> {section.samplingErrorDefinition}
+                </p>
+              )}
+              <p>
+                <strong>Inputs</strong> {section.factors.join("; ")}.
+              </p>
+              <p>
+                <strong>Tie-breaks</strong> {section.tieBreakers.join("; ")}.
+              </p>
+              <p>
+                {count.format(section.simulations)} simulations over{" "}
+                {count.format(section.remainingMatchups)} remaining{" "}
+                {section.remainingMatchups === 1 ? "matchup" : "matchups"}, seeded from{" "}
+                <code className={styles.seedValue}>{section.seed}</code>.
+              </p>
+            </div>
+          </details>
+        </>
+      )}
+    </section>
+  );
+}
+
 function AnalyticsQuickRead({ snapshot }: { readonly snapshot: LeagueAnalyticsSnapshot }) {
   const currentPower =
     snapshot.power.state === "available"
@@ -1116,6 +1349,13 @@ export function LeagueAnalyticsWorkbench() {
         </div>
       ) : (
         <>
+          {!isDemo &&
+          !(
+            analytics.snapshot.power.state === "available" &&
+            analytics.snapshot.power.rankings.some((ranking) => ranking.team.isCurrentUser)
+          ) ? (
+            <TeamClaimCallout leagueId={leagueId} onClaimed={() => void loadAnalytics()} />
+          ) : null}
           <div className={styles.snapshotTitle}>
             <div>
               <strong>{analytics.snapshot.league.name}</strong>
@@ -1145,6 +1385,7 @@ export function LeagueAnalyticsWorkbench() {
             <OpponentSection snapshot={analytics.snapshot} />
             <PowerSection snapshot={analytics.snapshot} />
           </div>
+          <PlayoffOddsSection snapshot={analytics.snapshot} />
           <ScoreSection snapshot={analytics.snapshot} />
           <PositionalSection snapshot={analytics.snapshot} />
         </>

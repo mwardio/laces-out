@@ -777,7 +777,7 @@ export function ProjectionImportWorkbench() {
                 href={`/schedule?league=${selectedPortfolioLeague.id}`}
               >
                 <CalendarDays size={15} aria-hidden="true" />
-                Schedule Edge
+                Matchup Outlook
               </Link>
             ) : null}
             {managedForecast?.managed?.qualityState ? (

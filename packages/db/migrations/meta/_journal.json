@@ -176,6 +176,27 @@
       "when": 1785013148484,
       "tag": "0024_charming_princess_powerful",
       "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1785099548484,
+      "tag": "0025_ros_scenario_contract",
+      "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1785184154483,
+      "tag": "0026_connection_circuit_and_recommendation_identity",
+      "breakpoints": true
+    },
+    {
+      "idx": 27,
+      "version": "7",
+      "when": 1785187624633,
+      "tag": "0027_change_event_notifications",
+      "breakpoints": true
     }
   ]
 }

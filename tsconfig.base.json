@@ -25,13 +25,16 @@
       "@fantasy/contracts": ["packages/contracts/src/index.ts"],
       "@fantasy/domain": ["packages/domain/src/index.ts"],
       "@fantasy/db": ["packages/db/src/index.ts"],
+      "@fantasy/decisions": ["packages/decisions/src/index.ts"],
       "@fantasy/connectors": ["packages/connectors/src/index.ts"],
       "@fantasy/connector-yahoo": ["packages/connector-yahoo/src/index.ts"],
       "@fantasy/connector-espn": ["packages/connector-espn/src/index.ts"],
       "@fantasy/ingestion": ["packages/ingestion/src/index.ts"],
+      "@fantasy/jobs": ["packages/jobs/src/index.ts"],
       "@fantasy/projections": ["packages/projections/src/index.ts"],
       "@fantasy/rankings": ["packages/rankings/src/index.ts"],
       "@fantasy/league-analytics": ["packages/league-analytics/src/index.ts"],
+      "@fantasy/league-sync": ["packages/league-sync/src/index.ts"],
       "@fantasy/engine-draft": ["packages/engine-draft/src/index.ts"],
       "@fantasy/engine-lineup": ["packages/engine-lineup/src/index.ts"],
       "@fantasy/engine-waiver": ["packages/engine-waiver/src/index.ts"],
@@ -39,6 +42,7 @@
       "@fantasy/security": ["packages/security/src/index.ts"],
       "@fantasy/source-nflverse": ["packages/source-nflverse/src/index.ts"],
       "@fantasy/source-ffc": ["packages/source-ffc/src/index.ts"],
+      "@fantasy/source-sleeper": ["packages/source-sleeper/src/index.ts"],
       "@fantasy/testkit": ["packages/testkit/src/index.ts"]
     }
   }

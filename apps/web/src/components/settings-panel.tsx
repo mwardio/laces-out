@@ -6,24 +6,30 @@ import {
   KeyRound,
   LoaderCircle,
   ShieldAlert,
+  Sparkles,
   Trash2,
   UserRound,
+  UsersRound,
 } from "lucide-react";
 import { type FormEvent, useCallback, useEffect, useState } from "react";
 
 import {
   apiBaseUrl,
   parseAuthenticatedSession,
+  parseLeagueDashboard,
   parseLeagueListResponse,
   parsePushConfiguration,
   parsePushDevice,
   parsePushDeviceList,
   parsePushTestResult,
+  type LeagueDashboard,
   type LeagueListResponse,
   type PushConfiguration,
   type PushDeviceStatus,
   type SessionUser,
 } from "../lib/api-client";
+import { defaultClaimChoice, selectableClaimTeams } from "../lib/team-claim";
+import { AiProviderSettings } from "./ai-provider-settings";
 import styles from "./settings-panel.module.css";
 
 type Status =
@@ -31,6 +37,12 @@ type Status =
   | { readonly state: "saving" }
   | { readonly state: "saved"; readonly message: string }
   | { readonly state: "error"; readonly message: string };
+
+/** One row's own dashboard read — independent per league, so one league's failure never blanks another's row. */
+type TeamRowDashboard =
+  | { readonly status: "loading" }
+  | { readonly status: "unavailable" }
+  | { readonly status: "ready"; readonly dashboard: LeagueDashboard };
 
 const MINIMUM_PASSWORD_LENGTH = 12;
 
@@ -138,6 +150,83 @@ export function SettingsPanel() {
   const [pushBusy, setPushBusy] = useState(false);
   const [support, setSupport] = useState<PushSupport>("unsupported");
   const [localDeviceId, setLocalDeviceId] = useState<string | null>(null);
+  const [teamRows, setTeamRows] = useState<Record<string, TeamRowDashboard>>({});
+  const [teamChoices, setTeamChoices] = useState<Record<string, string>>({});
+  const [teamSaves, setTeamSaves] = useState<Record<string, Status>>({});
+
+  /**
+   * One league's own dashboard read, kept independent per row: a league whose dashboard fails to
+   * load only blanks that row's select (see the "Team identity unavailable" fallback below), never
+   * the whole panel. Reused both for the initial per-league load and to refresh a row after a save.
+   */
+  const loadTeamRow = useCallback(async (leagueId: string) => {
+    setTeamRows((current) => ({ ...current, [leagueId]: { status: "loading" } }));
+    try {
+      const response = await fetch(
+        `${apiBaseUrl}/v1/leagues/${encodeURIComponent(leagueId)}/dashboard`,
+        {
+          credentials: "include",
+          cache: "no-store",
+          headers: { Accept: "application/json" },
+        },
+      );
+      if (!response.ok) {
+        setTeamRows((current) => ({ ...current, [leagueId]: { status: "unavailable" } }));
+        return;
+      }
+      const parsed = parseLeagueDashboard(await response.json());
+      if (!parsed) {
+        setTeamRows((current) => ({ ...current, [leagueId]: { status: "unavailable" } }));
+        return;
+      }
+      setTeamRows((current) => ({
+        ...current,
+        [leagueId]: { status: "ready", dashboard: parsed },
+      }));
+      setTeamChoices((current) => ({ ...current, [leagueId]: defaultClaimChoice(parsed) }));
+    } catch {
+      setTeamRows((current) => ({ ...current, [leagueId]: { status: "unavailable" } }));
+    }
+  }, []);
+
+  async function saveTeamRow(leagueId: string) {
+    const choice = teamChoices[leagueId];
+    if (!choice) return;
+    setTeamSaves((current) => ({ ...current, [leagueId]: { state: "saving" } }));
+    try {
+      const response = await fetch(
+        `${apiBaseUrl}/v1/leagues/${encodeURIComponent(leagueId)}/team-claim`,
+        {
+          method: "POST",
+          credentials: "include",
+          headers: { Accept: "application/json", "Content-Type": "application/json" },
+          body: JSON.stringify({ teamId: choice }),
+        },
+      );
+      if (!response.ok) {
+        // Mirrors `claimTeam()` in dashboard-experience.tsx: this endpoint's errors carry a
+        // problem-detail `detail` field, not the `title` field `problemDetail()` above reads for
+        // the rest of this page's endpoints.
+        const problem = (await response.json().catch(() => null)) as { detail?: unknown } | null;
+        throw new Error(
+          typeof problem?.detail === "string" ? problem.detail : "That team could not be saved.",
+        );
+      }
+      setTeamSaves((current) => ({
+        ...current,
+        [leagueId]: { state: "saved", message: "Team claim saved." },
+      }));
+      await loadTeamRow(leagueId);
+    } catch (error) {
+      setTeamSaves((current) => ({
+        ...current,
+        [leagueId]: {
+          state: "error",
+          message: error instanceof Error ? error.message : "That team could not be saved.",
+        },
+      }));
+    }
+  }
 
   const loadPushDevices = useCallback(async () => {
     const devices = await fetch(`${apiBaseUrl}/v1/push/subscriptions`, {
@@ -212,6 +301,14 @@ export function SettingsPanel() {
     setSupport(pushSupport());
     setLocalDeviceId(window.localStorage.getItem(LOCAL_PUSH_DEVICE_KEY));
   }, []);
+
+  // Members have few leagues (typically ≤3), so every row's dashboard loads up front on mount
+  // rather than lazily per row. Runs once `leagues` (loaded by `loadAll`, session-gated by the API)
+  // is populated; a signed-out visitor never reaches this panel at all (see the render guard below).
+  useEffect(() => {
+    if (!user || leagues.length === 0) return;
+    for (const league of leagues) void loadTeamRow(league.id);
+  }, [user, leagues, loadTeamRow]);
 
   async function savePreferences(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -427,10 +524,6 @@ export function SettingsPanel() {
         <div>
           <p>Your account</p>
           <h1>Settings</h1>
-          <span>
-            Change your own password without an operator, and pick which league the locker room
-            opens first.
-          </span>
         </div>
         <UserRound size={34} strokeWidth={1.5} aria-hidden="true" />
       </header>
@@ -579,6 +672,53 @@ export function SettingsPanel() {
             <StatusLine status={preferenceStatus} />
           </section>
 
+          <section className={styles.panel} aria-labelledby="teams-title">
+            <div className={styles.panelHeading}>
+              <div>
+                <p>Leagues</p>
+                <h2 id="teams-title">Your teams</h2>
+              </div>
+              <UsersRound size={18} aria-hidden="true" />
+            </div>
+            {leagues.length === 0 ? (
+              <p className={styles.note}>
+                Connect a league first and it will appear here to claim a team.
+              </p>
+            ) : (
+              <>
+                <p className={styles.panelIntro}>
+                  Which team is yours in each league. Powers roster-aware analysis.
+                </p>
+                <ul className={styles.teamList}>
+                  {leagues.map((league) => (
+                    <TeamRow
+                      key={league.id}
+                      leagueName={league.name}
+                      row={teamRows[league.id] ?? { status: "loading" }}
+                      choice={teamChoices[league.id] ?? ""}
+                      save={teamSaves[league.id] ?? { state: "idle" }}
+                      onChoiceChange={(teamId) =>
+                        setTeamChoices((current) => ({ ...current, [league.id]: teamId }))
+                      }
+                      onSave={() => void saveTeamRow(league.id)}
+                    />
+                  ))}
+                </ul>
+              </>
+            )}
+          </section>
+
+          <section className={styles.panel} aria-labelledby="ai-provider-title">
+            <div className={styles.panelHeading}>
+              <div>
+                <p>AI</p>
+                <h2 id="ai-provider-title">AI provider (BYOK)</h2>
+              </div>
+              <Sparkles size={18} aria-hidden="true" />
+            </div>
+            <AiProviderSettings />
+          </section>
+
           <section className={styles.panel} aria-labelledby="alerts-title">
             <div className={styles.panelHeading}>
               <div>
@@ -688,6 +828,91 @@ export function SettingsPanel() {
         </>
       )}
     </div>
+  );
+}
+
+interface TeamRowProps {
+  readonly leagueName: string;
+  readonly row: TeamRowDashboard;
+  readonly choice: string;
+  readonly save: Status;
+  readonly onChoiceChange: (teamId: string) => void;
+  readonly onSave: () => void;
+}
+
+function TeamRow({ leagueName, row, choice, save, onChoiceChange, onSave }: TeamRowProps) {
+  if (row.status === "loading") {
+    return (
+      <li className={styles.teamRow}>
+        <span className={styles.teamRowName}>{leagueName}</span>
+        <span className={styles.teamRowNote}>
+          <LoaderCircle className={styles.spin} size={13} aria-hidden="true" />
+          Loading…
+        </span>
+      </li>
+    );
+  }
+
+  if (row.status === "unavailable" || row.dashboard.teamClaim.mode === "unavailable") {
+    return (
+      <li className={styles.teamRow}>
+        <span className={styles.teamRowName}>{leagueName}</span>
+        <span className={styles.teamRowNote}>Team identity unavailable</span>
+      </li>
+    );
+  }
+
+  const { dashboard } = row;
+  const teams = selectableClaimTeams(dashboard);
+  if (teams.length === 0) {
+    return (
+      <li className={styles.teamRow}>
+        <span className={styles.teamRowName}>{leagueName}</span>
+        <span className={styles.teamRowNote}>No selectable team</span>
+      </li>
+    );
+  }
+
+  const claimedTeamId = dashboard.membership.claimedFantasyTeamId;
+  const buttonLabel =
+    claimedTeamId === null && dashboard.teamClaim.mode === "provider-mapped"
+      ? "Confirm team"
+      : "Save";
+
+  return (
+    <li className={styles.teamRow}>
+      <span className={styles.teamRowName}>{leagueName}</span>
+      <div className={styles.teamRowControls}>
+        <label className="sr-only" htmlFor={`settings-team-claim-${dashboard.league.id}`}>
+          Fantasy team for {leagueName}
+        </label>
+        <select
+          id={`settings-team-claim-${dashboard.league.id}`}
+          value={choice}
+          onChange={(event) => onChoiceChange(event.target.value)}
+        >
+          {teams.map((team) => (
+            <option value={team.id} key={team.id}>
+              {team.name}
+              {team.managerDisplayName ? ` · ${team.managerDisplayName}` : ""}
+            </option>
+          ))}
+        </select>
+        <button
+          type="button"
+          disabled={!choice || save.state === "saving" || choice === claimedTeamId}
+          onClick={onSave}
+        >
+          {save.state === "saving" ? (
+            <LoaderCircle className={styles.spin} size={14} aria-hidden="true" />
+          ) : (
+            <CheckCircle2 size={14} aria-hidden="true" />
+          )}
+          {buttonLabel}
+        </button>
+      </div>
+      <StatusLine status={save} />
+    </li>
   );
 }
 

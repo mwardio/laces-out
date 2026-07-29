@@ -4,7 +4,10 @@ import { z } from "zod";
 import type { RosProjectionStatusResponse } from "./ros-projection-status.js";
 
 export interface RosProjectionStatusPort {
-  getStatus(season: number): Promise<RosProjectionStatusResponse>;
+  getStatus(input: {
+    readonly season: number;
+    readonly userId: string;
+  }): Promise<RosProjectionStatusResponse>;
 }
 
 export interface RosProjectionStatusRouteOptions {
@@ -31,8 +34,9 @@ export function registerRosProjectionStatusRoutes(
   app: FastifyInstance,
   options: RosProjectionStatusRouteOptions,
 ): void {
-  // Read-only inspection of the fail-closed ROS rail. Authenticated like neighbouring routes; it
-  // performs no mutation and surfaces no secret, only rail state, audit reasons, and provenance.
+  // Read-only inspection of the ROS rail. Authenticated like neighbouring routes; it performs no
+  // mutation and surfaces no secret, only rail state, audit reasons, and provenance. League-scoped
+  // facts are restricted to the caller's own memberships.
   app.get("/v1/projections/ros-status", async (request, reply) => {
     const user = authenticatedUser(request, reply);
     if (!user) return reply;
@@ -46,6 +50,6 @@ export function registerRosProjectionStatusRoutes(
     }
     const query = querySchema.parse(request.query);
     const season = query.season ?? (options.now ?? (() => new Date()))().getUTCFullYear();
-    return options.rosProjectionStatus.getStatus(season);
+    return options.rosProjectionStatus.getStatus({ season, userId: user.id });
   });
 }

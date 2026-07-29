@@ -1,11 +1,8 @@
 import { loadEnvironment } from "@fantasy/config";
-import type {
-  AiAnalysisResponse,
-  AiFeatureResponse,
-  AiProviderConfiguration,
-} from "@fantasy/contracts";
+import type { AiAnalysisResponse, AiProviderConfiguration } from "@fantasy/contracts";
 import { describe, expect, it, vi } from "vitest";
 
+import type { AiFeatureWithToolUseResponse } from "./ai-feature-contract.js";
 import type { AiServicePort } from "./ai-routes.js";
 import { buildApp } from "./app.js";
 import { AuthService, type AuthRepository } from "./auth.js";
@@ -75,7 +72,7 @@ describe("AI routes", () => {
         usage: { inputTokens: 100, outputTokens: 20 },
       }),
     );
-    const generateFeature = vi.fn((): Promise<AiFeatureResponse> =>
+    const generateFeature = vi.fn((): Promise<AiFeatureWithToolUseResponse> =>
       Promise.resolve({
         feature: "waiver-scan",
         outcome: "generated",
@@ -87,6 +84,7 @@ describe("AI routes", () => {
         answer: "Hold this week. [Decision Desk]",
         generatedAt: NOW,
         usage: { inputTokens: 120, outputTokens: 24 },
+        toolUse: { state: "not-requested" as const },
       }),
     );
     const ai: AiServicePort = {

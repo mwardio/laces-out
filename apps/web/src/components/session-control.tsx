@@ -1,6 +1,14 @@
 "use client";
 
-import { ChevronDown, CloudOff, LoaderCircle, LogIn, LogOut, ShieldCheck } from "lucide-react";
+import {
+  ChevronDown,
+  CloudOff,
+  LoaderCircle,
+  LogIn,
+  LogOut,
+  Settings,
+  ShieldCheck,
+} from "lucide-react";
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 
@@ -145,7 +153,6 @@ export function SessionControl({ showDemoChip = true }: { readonly showDemoChip?
         </span>
         <span className="session-user-copy">
           <strong>{session.user.displayName}</strong>
-          <small>Signed in</small>
         </span>
         <ChevronDown size={14} aria-hidden="true" />
       </summary>
@@ -159,9 +166,9 @@ export function SessionControl({ showDemoChip = true }: { readonly showDemoChip?
             <span>{session.user.email}</span>
           </div>
         </div>
-        <p>
-          <ShieldCheck size={13} /> Signed in to your private fantasy locker room.
-        </p>
+        <Link className="session-popover__settings" href="/settings">
+          <Settings size={14} /> Settings
+        </Link>
         {logoutFailed ? (
           <div className="session-error" role="alert">
             Could not sign out. Try again.

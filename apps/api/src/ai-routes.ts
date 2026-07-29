@@ -3,7 +3,6 @@ import {
   aiAnalysisResponseSchema,
   aiFeatureNameSchema,
   aiFeatureRequestSchema,
-  aiFeatureResponseSchema,
   aiProviderConfigurationSchema,
   aiProviderListResponseSchema,
   aiProviderNameSchema,
@@ -11,7 +10,6 @@ import {
   aiProviderTestResponseSchema,
   type AiAnalysisResponse,
   type AiFeatureName,
-  type AiFeatureResponse,
   type AiProviderConfiguration,
   type AiProviderListResponse,
   type AiProviderName,
@@ -20,6 +18,11 @@ import {
 } from "@fantasy/contracts";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
+
+import {
+  aiFeatureWithToolUseResponseSchema,
+  type AiFeatureWithToolUseResponse,
+} from "./ai-feature-contract.js";
 
 export interface AiServicePort {
   listProviders(userId: string): Promise<AiProviderListResponse>;
@@ -42,7 +45,7 @@ export interface AiServicePort {
     readonly provider?: AiProviderName;
     readonly leagueId: string;
     readonly instructions?: string;
-  }): Promise<AiFeatureResponse>;
+  }): Promise<AiFeatureWithToolUseResponse>;
 }
 
 const providerPathSchema = z.object({ provider: aiProviderNameSchema }).strict();
@@ -138,7 +141,9 @@ export function registerAiRoutes(app: FastifyInstance, ai?: AiServicePort): void
       if (!user || !availableService(request, reply, ai)) return reply;
       const { feature } = featurePathSchema.parse(request.params);
       const input = aiFeatureRequestSchema.parse(request.body);
-      return aiFeatureResponseSchema.parse(
+      // Re-parsed through the extended contract, so a tool-use block that drifted from its schema
+      // fails here rather than reaching the surface unvalidated.
+      return aiFeatureWithToolUseResponseSchema.parse(
         await ai.generateFeature({
           userId: user.id,
           feature,

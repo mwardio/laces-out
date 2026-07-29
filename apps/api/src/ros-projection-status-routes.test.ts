@@ -1,5 +1,5 @@
 import { loadEnvironment } from "@fantasy/config";
-import { FIRST_PARTY_ROS_MODEL_VERSION } from "@fantasy/projections";
+import { FIRST_PARTY_ROS_MODEL_VERSION, rosScoringProfile } from "@fantasy/projections";
 import { describe, expect, it, vi } from "vitest";
 
 import { buildApp } from "./app.js";
@@ -67,16 +67,36 @@ describe("ROS projection status routes", () => {
     await app.close();
   });
 
-  it("reports fail-closed shadow state with no artifact and no runs", async () => {
-    const status: RosProjectionStatusResponse = {
-      season: 2026,
+  const profile = {
+    profileId: "laces-out-historical-ros-full-ppr",
+    label: "Full PPR",
+    scoringProfileKey: rosScoringProfile("full-ppr").scoringProfileKey,
+    digest: rosScoringProfile("full-ppr").digest,
+  };
+
+  function emptyStatus(season: number): RosProjectionStatusResponse {
+    return {
+      season,
       modelVersion: FIRST_PARTY_ROS_MODEL_VERSION,
-      publication: "fail-closed-shadow",
-      artifact: { present: false },
-      latestRun: null,
+      admittedArtifacts: { state: "none", artifacts: [] },
+      scoringProfiles: { supported: [], unsupported: [] },
+      leagueReadiness: [
+        {
+          leagueSeasonId: null,
+          state: "withheld",
+          reasons: ["no-league-synced"],
+          scoringProfile: null,
+          positions: [],
+        },
+      ],
+      cellGates: { state: "none", evaluatedAt: null, cells: [] },
       publishedSets: [],
+      shadowAudit: { state: "none", latestRun: null },
     };
-    const getStatus = vi.fn(() => Promise.resolve(status));
+  }
+
+  it("reports separated facts with no artifact and no runs", async () => {
+    const getStatus = vi.fn(() => Promise.resolve(emptyStatus(2026)));
     const app = await appWith(port({ getStatus }));
     const response = await app.inject({
       method: "GET",
@@ -84,28 +104,25 @@ describe("ROS projection status routes", () => {
       headers: { cookie: COOKIE },
     });
     expect(response.statusCode).toBe(200);
-    expect(response.json()).toMatchObject({
+    const body = response.json<Record<string, unknown>>();
+    expect(body).toMatchObject({
       season: 2026,
-      publication: "fail-closed-shadow",
-      artifact: { present: false },
-      latestRun: null,
+      admittedArtifacts: { state: "none", artifacts: [] },
+      cellGates: { state: "none" },
+      shadowAudit: { state: "none" },
       publishedSets: [],
     });
-    expect(getStatus).toHaveBeenCalledWith(2026);
+    expect(body).not.toHaveProperty("publication");
+    expect(getStatus).toHaveBeenCalledWith({
+      season: 2026,
+      userId: "10000000-0000-4000-8000-000000000001",
+    });
     await app.close();
   });
 
   it("defaults the season to the current UTC year", async () => {
-    const getStatus = vi.fn(() =>
-      Promise.resolve({
-        season: 2031,
-        modelVersion: FIRST_PARTY_ROS_MODEL_VERSION,
-        publication: "fail-closed-shadow",
-        artifact: { present: false },
-        latestRun: null,
-        publishedSets: [],
-      } satisfies RosProjectionStatusResponse),
-    );
+    const year = new Date().getUTCFullYear();
+    const getStatus = vi.fn(() => Promise.resolve(emptyStatus(year)));
     const app = await appWith(port({ getStatus }));
     const response = await app.inject({
       method: "GET",
@@ -113,46 +130,43 @@ describe("ROS projection status routes", () => {
       headers: { cookie: COOKIE },
     });
     expect(response.statusCode).toBe(200);
-    expect(getStatus).toHaveBeenCalledWith(new Date().getUTCFullYear());
+    expect(getStatus).toHaveBeenCalledWith({
+      season: year,
+      userId: "10000000-0000-4000-8000-000000000001",
+    });
     await app.close();
   });
 
-  it("surfaces degraded reasons when an artifact is present but the run is degraded", async () => {
+  it("keeps a degraded shadow audit separate from an admitted, release-capable artifact", async () => {
     const status: RosProjectionStatusResponse = {
-      season: 2026,
-      modelVersion: FIRST_PARTY_ROS_MODEL_VERSION,
-      publication: "fail-closed-shadow",
-      artifact: {
-        present: true,
-        season: 2026,
-        scoringProfileKey: "ppr-standard",
-        modelVersion: FIRST_PARTY_ROS_MODEL_VERSION,
-        policyVersion: "policy-v1",
-        calibrationVersion: "calibration-v1",
-        evidenceThroughSeason: 2025,
-        artifactChecksum: "a".repeat(64),
-        sourceChecksums: [{ key: "nflverse.schedules.2026", checksum: "b".repeat(64) }],
-        admittedAt: "2026-07-01T00:00:00.000Z",
+      ...emptyStatus(2026),
+      admittedArtifacts: {
+        state: "admitted",
+        artifacts: [
+          {
+            scoringProfile: profile,
+            season: 2026,
+            modelVersion: FIRST_PARTY_ROS_MODEL_VERSION,
+            policyVersion: "policy-v1",
+            calibrationVersion: "calibration-v1",
+            evidenceThroughSeason: 2025,
+            artifactChecksum: "a".repeat(64),
+            admittedAt: "2026-07-01T00:00:00.000Z",
+            sourceChecksumCount: 42,
+          },
+        ],
       },
-      latestRun: {
-        sourceSyncRunId: "20000000-0000-4000-8000-000000000001",
-        mode: "shadow",
-        qualityState: "degraded",
-        canPublish: false,
-        season: 2026,
-        windowStartWeek: 6,
-        windowEndWeek: 18,
-        asOfWeek: 5,
-        asOfAt: "2026-10-10T00:00:00.000Z",
-        playersEvaluated: 0,
-        playersPublished: 0,
-        reasons: ["weekly_projection_window_incomplete", "shadow_publication_disabled"],
-        evidenceGate: { cleared: false },
-        inputChecksum: "c".repeat(64),
-        sourceAsOf: "2026-10-09T00:00:00.000Z",
-        createdAt: "2026-10-10T01:00:00.000Z",
+      scoringProfiles: { supported: [profile], unsupported: [] },
+      shadowAudit: {
+        state: "recorded",
+        latestRun: {
+          sourceSyncRunId: "20000000-0000-4000-8000-000000000001",
+          mode: "shadow",
+          qualityState: "degraded",
+          createdAt: "2026-10-10T01:00:00.000Z",
+          reasons: ["weekly_projection_window_incomplete", "shadow_publication_disabled"],
+        },
       },
-      publishedSets: [],
     };
     const getStatus = vi.fn(() => Promise.resolve(status));
     const app = await appWith(port({ getStatus }));
@@ -162,41 +176,60 @@ describe("ROS projection status routes", () => {
       headers: { cookie: COOKIE },
     });
     expect(response.statusCode).toBe(200);
+    // The degraded audit must not downgrade the admitted artifact: both facts are reported.
     expect(response.json()).toMatchObject({
-      publication: "fail-closed-shadow",
-      artifact: { present: true, artifactChecksum: "a".repeat(64) },
-      latestRun: {
-        canPublish: false,
-        reasons: ["weekly_projection_window_incomplete", "shadow_publication_disabled"],
-      },
+      admittedArtifacts: { state: "admitted", artifacts: [{ artifactChecksum: "a".repeat(64) }] },
+      shadowAudit: { state: "recorded", latestRun: { qualityState: "degraded" } },
     });
     await app.close();
   });
 
-  it("reports published set counts and provenance when a release exists", async () => {
+  it("reports mixed cell gates, a retained set, and per-league withholding reasons", async () => {
     const status: RosProjectionStatusResponse = {
-      season: 2026,
-      modelVersion: FIRST_PARTY_ROS_MODEL_VERSION,
-      publication: "publishable",
-      artifact: { present: false },
-      latestRun: null,
+      ...emptyStatus(2026),
+      leagueReadiness: [
+        {
+          leagueSeasonId: "40000000-0000-4000-8000-000000000001",
+          state: "ready",
+          reasons: [],
+          scoringProfile: profile,
+          positions: [],
+        },
+        {
+          leagueSeasonId: "40000000-0000-4000-8000-000000000002",
+          state: "withheld",
+          reasons: ["no-admitted-scoring-profile", "incomplete-schedule"],
+          scoringProfile: null,
+          positions: [],
+        },
+      ],
+      cellGates: {
+        state: "evaluated",
+        evaluatedAt: "2026-10-10T01:00:00.000Z",
+        cells: [
+          { position: "RB", bucket: "one-to-four", decision: "released", reasons: [] },
+          {
+            position: "K",
+            bucket: "one-to-four",
+            decision: "withheld",
+            reasons: ["interval-coverage-gate-failed"],
+          },
+        ],
+      },
       publishedSets: [
         {
           projectionSetId: "30000000-0000-4000-8000-000000000001",
           leagueSeasonId: "40000000-0000-4000-8000-000000000001",
-          source: "laces-out-first-party-ros",
-          version: "v-checksum",
+          scoringProfile: profile,
           season: 2026,
           playerCount: 213,
           windowStartWeek: 6,
           windowEndWeek: 18,
           asOfWeek: 5,
-          asOfAt: "2026-10-10T00:00:00.000Z",
           fetchedAt: "2026-10-10T01:00:00.000Z",
           inputChecksum: "d".repeat(64),
           championArtifactChecksum: "a".repeat(64),
-          scoringProfileKey: "ppr-standard",
-          createdAt: "2026-10-10T01:00:00.000Z",
+          retainedFromEarlierRun: true,
         },
       ],
     };
@@ -209,14 +242,12 @@ describe("ROS projection status routes", () => {
     });
     expect(response.statusCode).toBe(200);
     expect(response.json()).toMatchObject({
-      publication: "publishable",
-      publishedSets: [
-        {
-          playerCount: 213,
-          championArtifactChecksum: "a".repeat(64),
-          scoringProfileKey: "ppr-standard",
-        },
+      leagueReadiness: [
+        { state: "ready", reasons: [] },
+        { state: "withheld", reasons: ["no-admitted-scoring-profile", "incomplete-schedule"] },
       ],
+      cellGates: { cells: [{ decision: "released" }, { decision: "withheld" }] },
+      publishedSets: [{ playerCount: 213, retainedFromEarlierRun: true }],
     });
     await app.close();
   });
@@ -229,6 +260,47 @@ describe("ROS projection status routes", () => {
       url: "/v1/projections/ros-status?season=1999",
       headers: { cookie: COOKIE },
     });
+    expect(response.statusCode).toBe(400);
+    expect(getStatus).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  /**
+   * This endpoint previously returned every league's projection set to any authenticated user.
+   * The fix scopes the read to the caller's own memberships, and these tests pin the half of that
+   * fix which lives at the route: the identity comes from the session and a caller cannot name
+   * whose leagues to read. The membership join itself is exercised by a PostgreSQL-backed test.
+   */
+  it("reads for the authenticated session user, not a caller-supplied identity", async () => {
+    const getStatus = vi.fn(() => Promise.resolve(emptyStatus(2026)));
+    const app = await appWith(port({ getStatus }));
+    const response = await app.inject({
+      method: "GET",
+      url: "/v1/projections/ros-status?season=2026",
+      headers: { cookie: COOKIE },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(getStatus).toHaveBeenCalledTimes(1);
+    expect(getStatus).toHaveBeenCalledWith({
+      season: 2026,
+      userId: "10000000-0000-4000-8000-000000000001",
+    });
+    await app.close();
+  });
+
+  it("rejects a client-supplied userId outright rather than ignoring it", async () => {
+    const getStatus = vi.fn(() => Promise.resolve(emptyStatus(2026)));
+    const app = await appWith(port({ getStatus }));
+    const response = await app.inject({
+      method: "GET",
+      url: "/v1/projections/ros-status?season=2026&userId=10000000-0000-4000-8000-000000000999",
+      headers: { cookie: COOKIE },
+    });
+
+    // The query schema is strict, so an attempt to name a different user fails the request
+    // instead of being silently dropped. That is the stronger of the two behaviors: the caller
+    // gets no signal that the parameter was even considered.
     expect(response.statusCode).toBe(400);
     expect(getStatus).not.toHaveBeenCalled();
     await app.close();

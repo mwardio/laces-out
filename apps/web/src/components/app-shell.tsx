@@ -13,8 +13,6 @@ import {
   ListOrdered,
   Menu,
   Radio,
-  Settings,
-  ShieldCheck,
   UserPlus,
   X,
 } from "lucide-react";
@@ -51,7 +49,7 @@ interface AppShellProps {
   context?: {
     readonly label: string;
     readonly detail: string;
-    readonly tone?: "demo" | "setup";
+    readonly tone?: "demo" | "setup" | "live";
   };
 }
 
@@ -107,8 +105,8 @@ const primaryNavigation = [
   },
   {
     href: "/schedule",
-    label: "Schedule Edge",
-    description: "Roster matchups, bye pressure, and playoff paths",
+    label: "Matchups",
+    description: "Opponent strength, bye pressure, and playoff paths",
     icon: CalendarDays,
     section: "schedule" as const,
   },
@@ -126,13 +124,6 @@ const primaryNavigation = [
     icon: Cable,
     section: "connections" as const,
   },
-  {
-    href: "/settings",
-    label: "Settings",
-    description: "Password and default league",
-    icon: Settings,
-    section: "settings" as const,
-  },
 ] as const;
 
 export function AppShell({
@@ -143,14 +134,15 @@ export function AppShell({
   showDemoChip = true,
 }: AppShellProps) {
   const [isAdmin, setIsAdmin] = useState(false);
+  const [isSignedIn, setIsSignedIn] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const mobileMenuTriggerRef = useRef<HTMLButtonElement>(null);
   const mobileMenuCloseRef = useRef<HTMLButtonElement>(null);
   const mobileMenuSheetRef = useRef<HTMLElement>(null);
   const shellContext = context ?? {
     label: "2026 season",
-    detail: "Live after sign-in",
-    tone: "setup" as const,
+    detail: isSignedIn ? "Live data active" : "Live after sign-in",
+    tone: isSignedIn ? ("live" as const) : ("setup" as const),
   };
 
   useEffect(() => {
@@ -164,9 +156,15 @@ export function AppShell({
       .then(async (response) =>
         response.ok ? parseAuthenticatedSession(await response.json()) : null,
       )
-      .then((session) => setIsAdmin(session?.user.role === "admin"))
+      .then((session) => {
+        setIsAdmin(session?.user.role === "admin");
+        setIsSignedIn(session !== null);
+      })
       .catch(() => {
-        if (!controller.signal.aborted) setIsAdmin(false);
+        if (!controller.signal.aborted) {
+          setIsAdmin(false);
+          setIsSignedIn(false);
+        }
       });
     return () => controller.abort();
   }, []);
@@ -244,7 +242,6 @@ export function AppShell({
     "connections",
     "rankings",
     "projections",
-    "settings",
     "members",
   ];
   const mobileMenuIsActive = mobileMenuSections.includes(active);
@@ -294,16 +291,6 @@ export function AppShell({
         </nav>
 
         <div className="sidebar-spacer" />
-
-        <section className="sidebar-status" aria-labelledby="demo-mode-label">
-          <div className="sidebar-status__icon">
-            <ShieldCheck size={17} />
-          </div>
-          <div>
-            <strong id="demo-mode-label">Clearly labeled data</strong>
-            <p>Synced league facts stay separate from sample previews.</p>
-          </div>
-        </section>
       </aside>
 
       <div className="app-frame">
@@ -324,11 +311,6 @@ export function AppShell({
           <div className="topbar-actions">
             <ScrollCues />
             <SessionControl showDemoChip={showDemoChip} />
-            <Link className="button button--dark button--small topbar-draft-link" href="/draft">
-              <Radio size={15} />
-              Draft Room
-              <ArrowUpRight size={14} />
-            </Link>
           </div>
         </header>
 
@@ -389,7 +371,6 @@ export function AppShell({
                       "rankings",
                       "projections",
                       "connections",
-                      "settings",
                     ] as readonly AppSection[]
                   ).includes(item.section),
                 )

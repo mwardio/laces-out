@@ -34,7 +34,7 @@
     max-width: 56ch;
     margin-top: 8px;
     color: var(--ink-500);
-    font-size: 13px;
+    font-size: 12px;
     line-height: 1.6;
   }
 
@@ -306,6 +306,96 @@
     opacity: 0.65;
   }
 
+  .panelIntro {
+    padding: 0 20px 12px;
+    color: var(--ink-500);
+    font-size: 12px;
+    line-height: 1.5;
+  }
+
+  .teamList {
+    display: grid;
+    gap: 10px;
+    padding: 0 20px 16px;
+    margin: 0;
+    list-style: none;
+  }
+
+  .teamRow {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px 12px;
+    padding: 10px 12px;
+    border: 1px solid var(--ink-150);
+    border-radius: 9px;
+  }
+
+  .teamRowName {
+    overflow: hidden;
+    color: var(--ink-900);
+    font-size: 12px;
+    font-weight: 700;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .teamRowNote {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--ink-500);
+    font-size: 11px;
+  }
+
+  .teamRowControls {
+    display: flex;
+    flex: 0 0 auto;
+    align-items: center;
+    gap: 8px;
+  }
+
+  /* min-height/border-radius/font-size are left to `.app-shell :is(input, select, textarea)` and
+     `.app-shell button` in polish.css — the last @layer in the app's cascade — which already
+     normalize every select and button to those values; declaring conflicting ones here would just
+     lose to them silently. */
+  .teamRowControls select {
+    max-width: 220px;
+    padding: 0 8px;
+    color: var(--ink-900);
+    background: #fff;
+    border: 1px solid var(--ink-200);
+  }
+
+  .teamRowControls button {
+    display: inline-flex;
+    flex: 0 0 auto;
+    align-items: center;
+    gap: 6px;
+    padding: 0 12px;
+    color: #fff;
+    background: var(--ink-950);
+    border: 0;
+    border-radius: 7px;
+    cursor: pointer;
+    font-size: 11px;
+    font-weight: 700;
+  }
+
+  .teamRowControls button:disabled {
+    cursor: progress;
+    opacity: 0.65;
+  }
+
+  /* Overrides the panel-level `.savedLine`/`.errorLine` padding (meant for a full-width panel
+     footer) so the same status-line idiom reads correctly nested inside one compact row instead. */
+  .teamRow .savedLine,
+  .teamRow .errorLine {
+    flex: 1 1 100%;
+    padding: 0;
+  }
+
   .savedLine,
   .errorLine {
     display: flex;
@@ -361,7 +451,9 @@
     .note,
     .savedLine,
     .errorLine,
-    .deviceList {
+    .deviceList,
+    .panelIntro,
+    .teamList {
       padding: 0 16px 16px;
     }
 
@@ -376,6 +468,20 @@
     .deviceList li {
       align-items: start;
       flex-direction: column;
+    }
+
+    .teamRow {
+      align-items: stretch;
+      flex-direction: column;
+    }
+
+    .teamRowControls {
+      flex-wrap: wrap;
+    }
+
+    .teamRowControls select {
+      max-width: none;
+      flex: 1 1 auto;
     }
   }
 }

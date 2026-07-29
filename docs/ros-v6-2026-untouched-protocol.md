@@ -2,6 +2,47 @@
 
 Pre-registered: 2026-07-21, before any 2026 regular-season game has been played.
 
+**Amendment 4 (2026-07-29, pre-kickoff, justified):** two alignments of the **live release gate**
+(`evaluateFirstPartyRosReleaseGate`, `packages/projections/src/rest-of-season.ts`) with decisions
+already in force elsewhere in the rail, batched into one amendment because they are the same
+defect — the live gate lagging a decision already ratified or already shipped on the report side.
+Drafted in `docs/ROS_GATE_AND_DST_PLAN.md` §0c and ratified by Mack (operator direction,
+2026-07-29); applied the same day. No 2026 outcome influenced this amendment.
+
+**(A) Availability MAE — the live gate adopts gate v3's evidence test.** Amendment 3 (2026-07-22)
+replaced a point-estimate comparison with a one-sided exact binomial evidence test at α = 0.10 for
+interval coverage, and the same remedy was applied to the availability MAE ceilings on the report
+side on 2026-07-28: `firstPartyRosAvailabilityEvidenceOfExcessMae`, used by
+`apps/worker/src/first-party-ros-backtest.ts` as point comparison AND evidence test. The live gate
+had not been updated and still failed a cell on the bare point comparison, so a cell could be
+admitted by the report and refused by the live gate on the same numbers. This amendment applies
+the identical conjunction in the live gate: a cell fails `availability-error-above-threshold` only
+when its MAE exceeds the ceiling **and** the record is statistical evidence that its true MAE
+does, at the same α = 0.10 and the same per-bucket maximum row error. **Every ceiling is
+unchanged** (1.5 / 2.75); only how evidence against them is weighed changes. The signed-bias
+ceiling deliberately keeps its point comparison, for the reason recorded beside the constants.
+The frozen release criterion below is superseded and reads as the coverage criterion already does.
+
+**(B) Scoring identity becomes position-scoped, per cell.** The gate's evidence identity compared
+the league's whole scoring profile key against the admitted artifact's, so any scoring difference
+in any position refused **every** cell — including cells whose own scoring is byte-identical to
+what the artifact's evidence was measured under. Positions never interact numerically (a rule
+outside position P's component vocabulary contributes exactly 0 to P's score), so a byte-equal
+position-scoped key is the same evidentiary claim the whole key was making, restricted to the cell
+it is being made about. Each cell is a `position:bucket`, so the comparison is made per cell
+against the artifact profile's key for that cell's position. The other three identity fields —
+contextual model version, recency model version, interval method version — remain whole and
+remain compared.
+
+**Inertness on the untouched proof:** the 2026 untouched run scores every position under the
+single frozen profile `laces-out-historical-ros-ppr` v1 (frozen identity row above). Both sides of
+every comparison derive from that one profile, so (B) cannot change any 2026 cell decision; it can
+differ only for live leagues whose profiles differ from the artifact's, which the frozen corpus
+does not contain. (A) can change a live decision only in the direction of admitting a cell the
+report already admits. Both are pinned by tests that hold the frozen shape (byte-equal keys on
+both sides) and require identical decisions. **No frozen identity row, threshold, ceiling, α,
+corpus, seed, or decision rule is modified.**
+
 **Amendment 3 (2026-07-22, pre-kickoff, justified):** coverage gate v3, ratified by Mack. The
 walk-forward record holds only 4–9 blocks per cell, so the point-estimate comparison falsely
 failed a truly 0.70-covered cell with probability 0.27–0.35 (expected ~5.8 false failures across
@@ -80,8 +121,10 @@ The run must exit zero with `report.state = "evidence-ready"` and an empty block
 exact thresholds frozen here (the code defaults as of this protocol):
 
 - input coverage ≥ 0.95;
-- expected-games MAE ≤ 1.5 (one-to-four, five-to-eight) and ≤ 2.75 (nine-plus);
-- |signed expected-games bias| ≤ 1.0 in every cell;
+- expected-games MAE ceilings 1.5 (one-to-four, five-to-eight) and 2.75 (nine-plus): no
+  statistical evidence that a cell's true MAE exceeds its ceiling — one-sided exact binomial test
+  at α = 0.10 on the structural row-error bound (availability gate v3, Amendment 4);
+- |signed expected-games bias| ≤ 1.0 in every cell (point comparison, unchanged);
 - convergence rate exactly 1.0 (every 12288-vs-16384 stratum representative within every declared
   tolerance — tolerances as in `ROS_CONVERGENCE_TOLERANCES`, unchanged);
 - CQR walk-forward block coverage: no statistical evidence of undercoverage against the 0.60

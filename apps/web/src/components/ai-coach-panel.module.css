@@ -468,6 +468,15 @@
     }
   }
 
+  /* Phone width: the two-line clamp above still ellipsizes mid-word on the
+     narrowest phones, which reads as a render fault. Hide the description
+     and keep the title as the card's accessible name. */
+  @media (max-width: 820px) {
+    .featureGrid small {
+      display: none;
+    }
+  }
+
   @media (max-width: 520px) {
     .header,
     .requestPane,
@@ -533,4 +542,29 @@
       margin-left: 0;
     }
   }
+}
+
+/* WP7 tool-use provenance. Kept quiet: it explains where an answer came from, it is not the answer. */
+.answer footer .toolNote {
+  margin-top: 0.35rem;
+  font-size: 0.78rem;
+  color: var(--color-text-muted, #5b6472);
+}
+
+.answer footer .toolProvenance {
+  margin: 0.35rem 0 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 0.2rem;
+  font-size: 0.72rem;
+  line-height: 1.35;
+  color: var(--color-text-muted, #5b6472);
+  /* A checksum line is wide by nature; it scrolls inside its own box rather than the page. */
+  overflow-x: auto;
+}
+
+.answer footer .toolProvenance li {
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
 }

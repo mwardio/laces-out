@@ -17,7 +17,7 @@ Primary surfaces: ESPN Bridge, Draft Studio, API, draft engine, PostgreSQL
 - [Testing and implementation work packages](#19-testing-strategy)
 - [Rollout, acceptance criteria, and rollback](#21-feature-flags-and-rollout)
 - [File map, risks, and user inputs](#24-expected-file-map)
-- [Fresh-session checklist and definition of done](#27-fresh-session-execution-checklist)
+- [Execution checklist and definition of done](#27-execution-checklist)
 
 ## 1. Objective
 
@@ -38,7 +38,7 @@ The finished experience should:
   tokens, WebSocket URLs, chat, or raw page HTML; and
 - fail closed when ESPN markup or identifiers cannot be interpreted confidently.
 
-This plan is deliberately self-contained so a fresh implementation session can pick it up without
+This plan is deliberately self-contained so future implementation work can proceed without
 repeating the investigation.
 
 ## 2. Executive decision
@@ -1356,7 +1356,7 @@ Keep reconciliation out of route handlers. It belongs to a tested service.
 | Source captures sensitive text          | Strict sanitizer; no raw HTML/log payload; hostile fixture tests               |
 | Completed results differ                | Visible post-draft audit and reconciliation; no silent rewrite                 |
 
-## 26. Inputs needed from the user
+## 26. Required inputs
 
 Implementation can proceed without waiting for the NFL season. User participation is needed only
 for bounded live validation:
@@ -1370,7 +1370,7 @@ for bounded live validation:
 
 No real league should be reset or altered for testing.
 
-## 27. Fresh-session execution checklist
+## 27. Execution checklist
 
 Before coding:
 
@@ -1400,7 +1400,6 @@ Before completion:
 5. Verify the production Web Store archive contents and checksum.
 6. Deploy behind the feature flag.
 7. Verify health, logs, migrations, and live UI.
-8. Commit and push only when explicitly requested.
 
 ## 27a. Implementation deviations and discovered constraints
 

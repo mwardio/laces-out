@@ -1,11 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import {
-  deriveRunAudit,
-  derivePublication,
-  latestPublishedSetPerLeague,
-  type RosModelRunRow,
-} from "./ros-projection-status.js";
+import { deriveRunAudit, type RosModelRunRow } from "./ros-projection-status.js";
 
 function shadowRun(overrides: Partial<RosModelRunRow> = {}): RosModelRunRow {
   return {
@@ -66,96 +61,5 @@ describe("deriveRunAudit", () => {
     );
     expect(audit.canPublish).toBe(false);
     expect(audit.reasons).toEqual([]);
-  });
-});
-
-describe("derivePublication", () => {
-  it("is fail-closed shadow with no publishable run and no sets", () => {
-    expect(derivePublication({ latestRun: null, publishedSetCount: 0 })).toBe("fail-closed-shadow");
-    expect(
-      derivePublication({ latestRun: deriveRunAudit(shadowRun()), publishedSetCount: 0 }),
-    ).toBe("fail-closed-shadow");
-  });
-
-  it("is publishable when a set exists or the latest run released", () => {
-    expect(derivePublication({ latestRun: null, publishedSetCount: 1 })).toBe("publishable");
-    const released = deriveRunAudit(
-      shadowRun({
-        qualityState: "publishable",
-        playersPublished: 5,
-        configuration: { mode: "release" },
-        metrics: {},
-      }),
-    );
-    expect(derivePublication({ latestRun: released, publishedSetCount: 0 })).toBe("publishable");
-  });
-});
-
-describe("latestPublishedSetPerLeague", () => {
-  it("keeps only the most recent set per league and exposes provenance without values", () => {
-    const older = {
-      projectionSetId: "30000000-0000-4000-8000-000000000001",
-      leagueSeasonId: "40000000-0000-4000-8000-000000000001",
-      source: "laces-out-first-party-ros",
-      version: "v-old",
-      season: 2026,
-      playerCount: 100,
-      windowStartWeek: 5,
-      windowEndWeek: 18,
-      asOfWeek: 4,
-      asOfAt: new Date("2026-10-03T00:00:00.000Z"),
-      fetchedAt: new Date("2026-10-03T01:00:00.000Z"),
-      inputChecksum: "d".repeat(64),
-      metadata: { championArtifactChecksum: "a".repeat(64), scoringProfileKey: "ppr-standard" },
-      createdAt: new Date("2026-10-03T01:00:00.000Z"),
-    };
-    const newer = {
-      ...older,
-      projectionSetId: "30000000-0000-4000-8000-000000000002",
-      version: "v-new",
-      playerCount: 213,
-      fetchedAt: new Date("2026-10-10T01:00:00.000Z"),
-      createdAt: new Date("2026-10-10T01:00:00.000Z"),
-    };
-    const otherLeague = {
-      ...older,
-      projectionSetId: "30000000-0000-4000-8000-000000000003",
-      leagueSeasonId: "40000000-0000-4000-8000-000000000002",
-      metadata: {},
-    };
-
-    const result = latestPublishedSetPerLeague([older, newer, otherLeague]);
-    expect(result).toHaveLength(2);
-    const primary = result.find(
-      (set) => set.leagueSeasonId === "40000000-0000-4000-8000-000000000001",
-    );
-    expect(primary?.projectionSetId).toBe("30000000-0000-4000-8000-000000000002");
-    expect(primary?.playerCount).toBe(213);
-    expect(primary?.championArtifactChecksum).toBe("a".repeat(64));
-    const other = result.find(
-      (set) => set.leagueSeasonId === "40000000-0000-4000-8000-000000000002",
-    );
-    expect(other?.championArtifactChecksum).toBeNull();
-    expect(other?.scoringProfileKey).toBeNull();
-  });
-
-  it("ignores rows without a league season", () => {
-    const orphan = {
-      projectionSetId: "30000000-0000-4000-8000-000000000009",
-      leagueSeasonId: null,
-      source: "laces-out-first-party-ros",
-      version: "v",
-      season: 2026,
-      playerCount: 1,
-      windowStartWeek: 6,
-      windowEndWeek: 18,
-      asOfWeek: 5,
-      asOfAt: null,
-      fetchedAt: new Date("2026-10-10T01:00:00.000Z"),
-      inputChecksum: "d".repeat(64),
-      metadata: null,
-      createdAt: new Date("2026-10-10T01:00:00.000Z"),
-    };
-    expect(latestPublishedSetPerLeague([orphan])).toHaveLength(0);
   });
 });

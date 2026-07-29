@@ -196,13 +196,25 @@ explicit week requests remain available for research. A successful ESPN or Yahoo
 the same deduplicated refresh immediately. Expensive locked training artifacts are cached while
 their statistical inputs remain unchanged, so roster and scoring updates only redo league work.
 
-The current v7 release reference is the official 2023–2025 replay from 2026-07-21: 9,261 player
-outcomes and 1,632 D/ST outcomes passed the exact worker gate. QB/RB/WR/TE/K all defended the
-availability-aware recency rail; the contextual challenger remained shadow-only. Player MAE was
-4.4065 with 71.02% coverage for the nominal 70% point interval and -0.1074 point bias. D/ST MAE was
-4.3193 versus 4.5309 for its baseline, with 71.69% interval coverage. Reproduce the full official
-audit with `npm run projections:validate -w @fantasy/worker -- --summary`; expect several minutes
-of CPU time because the command deliberately rebuilds every locked batch.
+The current release reference is model `laces-weekly-components-v8`, re-audited 2026-07-27 against
+the official 2023–2025 replay. The raw audit output is checked in at
+`apps/web/src/app/methodology/weekly-validation-2026-07-27.json`; the figures below are read from it
+rather than transcribed, and `/methodology` publishes the same numbers from the same file.
+
+The history covered 84,712 player rows, 1,632 D/ST outcomes, 76,016 matched snap rows, 42,036
+matched weekly-roster rows, and 5,303 matched injury rows. Champion player MAE was 4.4032 with
+71.04% coverage for the nominal 70% point interval and -0.1077 point bias. D/ST MAE was 4.3193
+versus 4.5309 for its baseline, with 71.69% interval coverage.
+
+Read the champion result honestly: `championOverall.baselineMae` equals `championOverall.mae`, and
+every per-position `baselineMae` equals its own `mae`. The availability-aware recency baseline **is**
+the champion at every player position — the richer contextual candidate won none of them. Its
+overall MAE of 4.3899 is genuinely lower, but that is a 0.30% improvement against a 2% displacement
+threshold, so it correctly remained shadow-only. D/ST is the one place a model beats its baseline.
+
+Reproduce the full official audit with `npm run projections:validate -w @fantasy/worker -- --summary`;
+expect several minutes of CPU time (about 375 seconds observed) because the command deliberately
+rebuilds every locked batch.
 
 After each weekly sweep, the worker also runs the rest-of-season shadow auditor against the latest
 immutable schedule and weekly artifacts. It intentionally records only a degraded model-run audit:
@@ -227,9 +239,10 @@ interval coverage — with the admission-ready report preserved at
 `reports/ros-validation-v6-2026-07-22.json`; under the ratified per-cell admission policy, every
 other cell is releasable once an artifact is provisioned. The 2022–2025 corpus is
 development evidence — the untouched release proof is the frozen protocol in
-`docs/ros-v6-2026-untouched-protocol.md`, runnable only after the 2026 season resolves. ROS stays
-shadow-only until an artifact is provisioned through `npm run ros:admit -w @fantasy/worker`
-(explicit `--database-url` and `--confirm`, refuses on any blocker).
+`docs/ros-v6-2026-untouched-protocol.md`, runnable only after the 2026 season resolves. No ROS set
+reaches a league until an artifact is provisioned through `npm run ros:admit -w @fantasy/worker`
+(explicit `--database-url` and `--confirm`, refuses on any blocker). Provisioning is per scoring
+profile — see "Rest-of-season release status" below.
 
 Model v7 (kicker count-process, 2026-07-22) replaced the lognormal shock for kickers with a
 calibrated integer count process on the five scored components. Its full replay
@@ -252,6 +265,124 @@ post-deploy ROS numbers legitimately differ draw-level from v6's while remaining
 distribution-identical for non-K positions. The pre-registered 2026 kicker-cell addendum is
 Amendment 1 of the untouched protocol.
 
+### Rest-of-season release status
+
+`GET /v1/projections/ros-status` reports **six independent facts** and deliberately has no single
+red/green verdict. It previously returned one `publication` field of `fail-closed-shadow` or
+`publishable`, computed from the newest run under the managed source keyed
+`laces-out.projections.first-party-ros-shadow`. Release-mode runs are written under that same
+source, so a later audit run flipped the whole response back to `fail-closed-shadow` — which is how
+an admitted, release-capable v8 artifact came to be read as "all ROS publication is disabled". Do
+not reintroduce a summary field, and do not read release state from a shadow run.
+
+The six fields:
+
+| Field               | Answers                                                            |
+| ------------------- | ------------------------------------------------------------------ |
+| `admittedArtifacts` | Which immutable champion artifacts are admitted, one per profile   |
+| `scoringProfiles`   | Which scoring profiles that evidence covers, and which it does not |
+| `leagueReadiness`   | Whether the caller's own league inputs are complete                |
+| `cellGates`         | What the live per-position/horizon gate decided most recently      |
+| `publishedSets`     | What each league holds, including a retained last-good set         |
+| `shadowAudit`       | The independent audit rail, which is evidence about nothing above  |
+
+League-scoped fields are restricted to the caller's own memberships. The endpoint previously
+returned every league's published set to any authenticated user.
+
+Structured per-league withholding reasons, emitted in this fixed order:
+
+| Reason                          | Operator meaning                                                        |
+| ------------------------------- | ----------------------------------------------------------------------- |
+| `no-admitted-scoring-profile`   | The league's normalized scoring key matches no admitted artifact        |
+| `incomplete-schedule`           | The regular-season schedule has games without a kickoff time            |
+| `missing-roster-snapshot`       | No roster snapshot exists for any team in the league season             |
+| `insufficient-candidate-inputs` | The league has too few scored candidate inputs to release               |
+| `non-converged-cell`            | At least one position/horizon cell did not settle within tolerance      |
+| `stale-source`                  | The newest source observation is older than the 36-hour freshness limit |
+| `no-league-synced`              | The caller has no league season for the requested season                |
+
+A withheld cell never removes a league's existing set. `metrics.preservePriorGoodSet` on the release
+run records that the last good set stays authoritative, and `metrics.cellDecisions` records every
+cell decision — released and withheld — so a mixed release is readable without re-deriving it.
+
+### Per-profile validation and admission
+
+The rail is validated and admitted **once per scoring profile**. Profiles come from
+`packages/projections/src/ros-scoring-profiles.ts`: `full-ppr`, `half-ppr`, and `standard`. They
+share one rule list and differ only in reception points, so nothing but `receptions` can drift
+between them.
+
+```bash
+npm run ros:validate -w @fantasy/worker -- --scoring-profile=half-ppr --full \
+  > reports/ros-validation-<model>-half-ppr-<date>.json
+npm run ros:admit -w @fantasy/worker -- --scoring-profile=half-ppr \
+  --database-url=postgres://... --report=<that file> --evidence-through=2025 --confirm
+```
+
+`--full` is required for a release check: without it the report carries no `sources` block, so
+admission fail-closes on `source_lineage_unavailable`. That is exactly why the v7 report is
+unadmissible. `--scoring-profile` refuses an unknown name rather than defaulting, and the profile a
+report was graded under is recorded in the report's own `scoringProfile` block alongside the
+authoritative `identityAudit.scoringProfileKey`.
+
+Each profile produces its own scoring fingerprint, evidence report, artifact checksum, and
+`first_party_ros_champion_artifacts` row. Selection at publication time is exact equality on the
+canonical scoring key (`selectFirstPartyRosArtifactForLeague`): a league receives its own profile's
+artifact or nothing. There is no nearest-match, no default, and no fallback to the only admitted
+profile.
+
+#### Per-profile results, 2026-07-27
+
+The frozen v8 process was run independently for `standard` and `half-ppr` with every default
+unchanged (2019–2025 sources, 2022–2025 held out, all 17 cutoffs, 5 players per position/cutoff,
+12,288 release paths, 16,384 convergence reference, unchanged cell and portfolio minimums). No gate,
+threshold, tolerance, or minimum was altered in either direction.
+
+| Profile    | Report state     | Cell blockers                                                                           | Releasable cells | Artifact checksum | Scoring digest |
+| ---------- | ---------------- | --------------------------------------------------------------------------------------- | ---------------- | ----------------- | -------------- |
+| `full-ppr` | `evidence-ready` | none                                                                                    | 18 / 18          | `67e7ba09…655d5d` | `dd74455d…`    |
+| `half-ppr` | `insufficient`   | `calibration_K_one-to-four_coverage_shortfall_above_maximum`                            | 17 / 18          | `fb636ad5…f88ac`  | `66c5c9a4…`    |
+| `standard` | `insufficient`   | the K blocker above, plus `calibration_WR_five-to-eight_availability_mae_above_maximum` | 16 / 18          | `b779d5c1…1dbc7`  | `ecf42385…`    |
+
+All three graded 2,040 forecasts across 68 batches, converged 144/144 strata, completed all 18
+position/horizon sample cells, and pinned the same seven source seasons and the same
+model/policy/interval versions. Each run took about 3.7 hours.
+
+All three are **admissible** — but read that precisely. Under the per-cell admission policy ratified
+2026-07-22, a per-cell blocker is carried into admission and the live release gate withholds exactly
+that cell while every clean cell publishes; only a global or portfolio blocker rejects outright. So
+`full-ppr` is the only profile with a clean zero-blocker report. `half-ppr` would publish with the
+kicker one-to-four cell permanently withheld, and `standard` would additionally withhold WR
+five-to-eight — a heavily used cell, which makes `standard` the weakest of the three.
+
+The differences are genuine consequences of independent validation, not noise: the representative
+sample is chosen by recent-production quantiles, so removing reception points reorders which
+receivers are sampled and changes the availability behaviour those cells are graded on.
+
+None of these artifacts has been provisioned. Provisioning is a separate, deliberate operational
+step per profile, and admitting a second profile widens per-job publication work — confirm the
+headroom above first.
+
+**Before admitting a second profile, confirm publication headroom.** Publication benchmarks at about
+4.77 s marginal per released player against `projection-refresh`'s 1,800 s `expireInSeconds` — about
+377 players per job, measured on a fixture with far less feature history than production. Admitting a
+second profile adds that profile's leagues to the same job. Measure before, not after.
+
+A per-profile validation run costs about 3.4 hours of single-core CPU (the v8 full-PPR run recorded
+12,190 s). Two profiles can run in parallel; each holds roughly 1.4 GB resident, so two fit
+comfortably on a six-core/14 GB host. The run has no checkpointing — an interrupted run restarts
+from zero — so detach it from whatever shell launched it (`setsid nohup … &`, stdout redirected to
+the report path) rather than relying on a terminal or tool session staying alive for four hours.
+
+Redirect the report through `npm run --silent`, or invoke `tsx` directly. Under some environments —
+notably a scrubbed one such as `env -i` — `npm run` writes its two-line `> package@version` banner to
+stdout, which lands at the top of the redirected file and makes the finished report invalid JSON.
+The run itself is unaffected and the damage is recoverable without repeating it: the report is
+appended after the banner, so discarding everything before the first `{` restores a parseable file.
+Progress logging goes to stderr, so it never interleaves into the report body. Verify a finished
+report begins with `{` before trusting it, because a multi-hour run is an expensive place to
+discover a formatting problem.
+
 Completed weekly-roster membership supplies the evaluation spine for recently relevant players who
 recorded neither a stat nor a snap. Those known DNP outcomes are scored as zero but excluded from
 later role training. Announced inactive/reserve/suspended roster states produce a pregame zero;
@@ -273,6 +404,87 @@ npm run ros:validate -w @fantasy/worker -- --allow-incomplete
 npm run typecheck
 npm run build -w @fantasy/worker
 ```
+
+#### Availability MAE gate v3, 2026-07-28 — decision rule replaced, ceilings untouched
+
+**Supersedes the availability-gate decision rule described in the 2026-07-27 results above and in
+the v4 admission-reference paragraph earlier in this section; every number in both stays as
+recorded.** The three ceilings are unchanged — 1.5 games (one-to-four, five-to-eight), 2.75
+(nine-plus), |signed bias| ≤ 1.0. Only how evidence against them is weighed changed.
+
+Why: the MAE ceilings were compared point-estimate to point-estimate against a statistic whose
+sampling noise exceeds the distance being measured. Block-bootstrap `P(MAE > 2.75)` for QB
+nine-plus is 0.53–0.67 at a cell standard error near 0.15, and the identical cell over the identical
+seasons scored 2.64–2.67 at five players per position and 2.76–2.81 at eight. That is the same
+pathology coverage gate v3 fixed on 2026-07-22, and it takes the same remedy: a one-sided evidence
+test at α = 0.10.
+
+The test (`firstPartyRosAvailabilityEvidenceOfExcessMae`, derivation beside
+`FIRST_PARTY_ROS_AVAILABILITY_EVIDENCE_ALPHA` in `packages/projections/src/rest-of-season.ts`): a
+cell fails only when the record is statistical evidence that its **true** MAE exceeds the ceiling.
+Each row's absolute error lies in `[0, maximum row error]` — 4, 8 and 17 games by bucket, read off
+the schedule — and among all laws on that support with mean equal to the ceiling the two-point law
+on the endpoints carries the most variance, so the null tail is an exact binomial computed at that
+least-favourable case. It is deliberately conservative: at 288 rows a nine-plus cell fails from
+about 3.25 games and at 128 rows a five-to-eight cell from about 1.88. The bias ceiling keeps its
+point comparison — it is the check that actually detects hazard mismatch and every cell passes it
+with room to spare.
+
+`FIRST_PARTY_ROS_POLICY_VERSION` is deliberately **not** bumped, on the coverage-gate-v3 precedent:
+that change was recorded as Amendment 3 of `docs/ros-v6-2026-untouched-protocol.md` and left the
+policy version alone. The constant names the champion-selection policy (season walk-forward, block
+WIS, CQR), none of which moved; it is also a frozen row of that pre-registered protocol and an
+equality check in `validateFirstPartyRosAdmission`, so bumping it would void the protocol and reject
+every admitted artifact. `FIRST_PARTY_ROS_SEED_VERSION` is untouched — no draw consumption changed.
+
+Measured effect, from `npm run ros:regate -w @fantasy/worker` over the six stored reports (gate-only
+re-evaluation of stored evidence; **no validation run was performed**):
+
+| Report                                  | Blockers before                          | Blockers after     |
+| --------------------------------------- | ---------------------------------------- | ------------------ |
+| `ros-validation-v8-standard-n8`         | QB nine-plus MAE                         | none               |
+| `ros-validation-v8-half-ppr-n8`         | QB nine-plus MAE                         | none               |
+| `ros-validation-v8-full-ppr-n8`         | QB nine-plus MAE, WR five-to-eight MAE   | none               |
+| `ros-validation-v8-standard-2026-07-27` | WR five-to-eight MAE, K one-to-four cov. | K one-to-four cov. |
+| `ros-validation-v8-half-ppr-2026-07-27` | K one-to-four coverage                   | K one-to-four cov. |
+| `ros-validation-v8-2026-07-23`          | none                                     | none               |
+
+No blocker was added anywhere, and no coverage, convergence, sample-size or bias blocker moved. The
+re-gated verdicts are **not admitted**: admission still requires a report, and the currently
+provisioned artifacts keep the blockers they were admitted with until a fresh run or a re-gate is
+deliberately admitted through `npm run ros:admit`. Two consumers still read the superseded rule and
+must be revisited before that happens — the live release gate
+(`evaluateFirstPartyRosReleaseGate`, `packages/projections/src/rest-of-season.ts`), which still
+withholds a cell on the point comparison and would therefore keep withholding QB nine-plus even
+after the report stops naming it, and the withheld-cell copy in
+`apps/web/src/app/methodology/evidence.ts`.
+
+#### Live release gate aligned, 2026-07-29 — same evidence test, position-scoped identity
+
+**Resolves the "two consumers still read the superseded rule" item recorded above; every number
+above stays as recorded.** Ratified as Amendment 4 of `docs/ros-v6-2026-untouched-protocol.md`
+(operator direction, 2026-07-29, pre-kickoff).
+
+- `evaluateFirstPartyRosReleaseGate` now raises `availability-error-above-threshold` under the
+  identical rule as the report gate: the point comparison survives only as a structural guard, and
+  a cell withholds only on `firstPartyRosAvailabilityEvidenceOfExcessMae` over the champion
+  choice's own held-out row count, the bucket's structural row-error bound (4/8/17), and the same
+  α = 0.10. The bias comparison is untouched. A new `availabilityEvidenceAlpha` gate option and the
+  bucket's row-error bound join the evidence-checksum threshold record, so live evidence checksums
+  move — content addressing working as intended; admitted artifact checksums are unaffected.
+- The gate's evidence-identity comparison — both the policy identity (`evidence-identity-mismatch`)
+  and the interval-calibration artifact identity (`interval-calibration-unavailable`) — is now
+  **position-scoped on the scoring profile**: model and interval-method versions must still match
+  exactly, byte-equal whole keys still match on a fast path, and otherwise the two keys are
+  recovered and compared as `projectionScoringProfileKeyForPosition` at the cell's own position,
+  failing closed on an unparseable key and on `"[]"` (an empty scoped vocabulary never reads as
+  agreement). Positions never interact numerically, so a rule outside the cell's vocabulary — the
+  exact shape a future D/ST flip produces — can no longer take the rail dark for the five rail
+  positions. The withheld-cell copy in `apps/web/src/app/methodology/evidence.ts` was updated in
+  the same change.
+- What this does **not** do: nothing has been admitted, and the admitted-report cell-blocker
+  ratchet is untouched — a cell named by the artifact's own admitted evidence still withholds
+  (`ros_admitted_cell_blocker_withheld`) until a later replay stops naming it and is admitted.
 
 The ROS validator is intentionally expensive: the v4 reference run took about 2.7 hours on one CPU
 core (four season-locked policies, 2,040 12288-path forecasts at current defaults, and 144
@@ -342,6 +554,47 @@ The sweep runs at minutes 4, 19, 34, and 49 UTC on the `notification-sweep` queu
 to `notification-sweep-dead-letter`. Its log line carries counts only — never a recipient, a device,
 or notification text. Alerts read the last synced roster, not the provider, and say how old that
 roster is; on iOS, web push is delivered only to a PWA installed to the Home Screen.
+
+## Change events
+
+The change feed is on for every deployment and needs no configuration. Four producers write to
+`change_events`, and each one compares prior against next before it writes anything:
+
+| Producer         | Fires when                                                                  | Visibility                      |
+| ---------------- | --------------------------------------------------------------------------- | ------------------------------- |
+| `league-sync`    | a provider sync is _accepted_ (an unchanged replay never reaches the emit)  | `league` — current members      |
+| `roster-diff`    | a team's new roster checksum differs from its previous snapshot's           | `league` — current members      |
+| `injury-report`  | an admitted injury observation's `state_key` differs from the prior one     | `private` — rostering members   |
+| `decision-delta` | a newly written `recommendation_runs` row differs materially from the prior | `private` — the claiming member |
+
+`change_events` is **append-only at the database level** (`change_events_append_only_trigger`, from
+migration `0003`): both `UPDATE` and `DELETE` raise. That is deliberate — an event ledger that can be
+rewritten is not a ledger. Three operational consequences follow.
+
+- **Retention is a read window, not a purge.** Nothing older than `CHANGE_EVENT_RETENTION_DAYS`
+  (45) is served or counted by `GET /v1/change-events`. Rows are never deleted, and a future purge
+  would need a forward migration that alters the trigger.
+- **Receipts are prunable and carry no content.** `change_event_receipts` has no trigger. Deleting a
+  receipt outside the read window is safe and cannot resurrect a dismissal, because the event stays
+  outside the window regardless.
+- **A dismissed event never returns.** The writer creates receipts with `ON CONFLICT DO NOTHING` on
+  `(event_id, user_id)`, and a duplicate event insert returns zero rows and creates no receipts at
+  all — so a later re-sync of the same transition cannot rebuild a receipt the member dismissed.
+
+Visibility is enforced in one SQL predicate: a `private` event is reachable only through a receipt
+the writer created, a `league` event is gated on _live_ membership (a removed member stops seeing it
+immediately), and a `global` event carries no private league payload. Unknown, inaccessible, and
+out-of-retention events all answer the same 404.
+
+**Push delivery reuses the game-day alert transport.** A second sweep kind, `change-event`, runs at
+minutes 9, 24, 39, and 54 UTC on the same `notification-sweep` queue, and is subject to the same
+VAPID-keys-not-configured no-op described above. It sends **one digest per member per sweep, not one
+push per event**, filtered to `severity in ('action','warning','critical')` inside a 24-hour window —
+an informational change belongs in the feed and nowhere else. The digest is claimed in
+`notification_deliveries` under `change-event:<userId>:<newestEventId>`; migration `0027` widened
+`notification_deliveries_kind_check` to admit that kind. `change_event_receipts.delivered_at` and
+`delivery_channels` are reconciled from that ledger on the following sweep, so a batch already sent
+is never repeated.
 
 ## Current authentication baseline
 

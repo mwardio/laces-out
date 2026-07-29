@@ -6,9 +6,13 @@ import type {
 } from "@fantasy/db";
 import {
   FIRST_PARTY_ROS_INTERVAL_CALIBRATION_VERSION,
+  FIRST_PARTY_ROS_MAXIMUM_SCENARIOS,
+  FIRST_PARTY_ROS_MINIMUM_SCENARIOS,
   FIRST_PARTY_ROS_MODEL_VERSION,
   FIRST_PARTY_ROS_POLICY_VERSION,
   evaluateFirstPartyRosReleaseGate,
+  projectionScoringProfileKeyForPosition,
+  projectionScoringRulesFromProfileKey,
   type FirstPartyRosChampionPolicy,
   type FirstPartyRosLiveReleaseEvidence,
   type FirstPartyRosPosition,
@@ -17,7 +21,10 @@ import {
   type FirstPartyRosReleaseGateOptions,
   type FirstPartyRosRemainingWeeksBucket,
   type FirstPartyRosStrategy,
+  type ProjectionScoringProfile,
 } from "@fantasy/projections";
+
+import { HISTORICAL_ROS_SUPPORTED_POSITIONS } from "./first-party-ros-backtest.js";
 
 /**
  * The immutable, checksummed portion of a ROS champion artifact. The stored `artifactChecksum` is a
@@ -39,6 +46,11 @@ export interface FirstPartyRosChampionArtifactPayload {
 /** A champion artifact as loaded from `first_party_ros_champion_artifacts`. */
 export interface LoadedFirstPartyRosChampionArtifact extends FirstPartyRosChampionArtifactPayload {
   readonly artifactChecksum: string;
+  /**
+   * Admission time, used only to pick the latest artifact within one scoring profile. It is not
+   * part of the payload the checksum covers, so it is optional for callers that never compare.
+   */
+  readonly admittedAt?: Date | undefined;
 }
 
 export const FIRST_PARTY_ROS_CHAMPION_ARTIFACT_CHECKSUM_VERSION =
@@ -134,10 +146,142 @@ export function firstPartyRosChampionArtifactIsValid(
   return true;
 }
 
+/**
+ * A position the ROS release rail models. D/ST is deliberately absent: the rail has no D/ST
+ * product surface, so a D/ST rule can neither authorize nor block anything published here.
+ */
+export type FirstPartyRosRailPosition = (typeof HISTORICAL_ROS_SUPPORTED_POSITIONS)[number];
+
+const FIRST_PARTY_ROS_BUCKETS: readonly FirstPartyRosRemainingWeeksBucket[] = [
+  "one-to-four",
+  "five-to-eight",
+  "nine-plus",
+];
+
+/**
+ * Why one position was withheld from a league before any player was simulated. The cases are kept
+ * distinct because they are different operator actions: fix the league's unsupported rules, admit
+ * an artifact under the league's own profile, repair a corrupt artifact row, or repair the caller
+ * that supplied an unscoreable league profile.
+ */
+export type FirstPartyRosPositionWithholdReason =
+  | "position-unsupported"
+  | "scoring-profile-position-mismatch"
+  | "artifact-scoring-profile-key-unreadable"
+  | "league-scoring-profile-invalid";
+
+/**
+ * Cell-level superset. A cell can additionally be withheld for a position this rail does not model
+ * at all, which no `FirstPartyRosWithheldPosition` can express because that type is rail-scoped.
+ */
+export type FirstPartyRosCellWithholdReason =
+  FirstPartyRosPositionWithholdReason | "position-not-on-ros-rail";
+
+export interface FirstPartyRosWithheldPosition {
+  readonly position: FirstPartyRosRailPosition;
+  readonly reason: FirstPartyRosPositionWithholdReason;
+}
+
+export interface FirstPartyRosPositionMatch {
+  readonly matched: readonly FirstPartyRosRailPosition[];
+  readonly withheld: readonly FirstPartyRosWithheldPosition[];
+}
+
+function everyRailPositionWithheld(
+  reason: FirstPartyRosPositionWithholdReason,
+): FirstPartyRosPositionMatch {
+  return {
+    matched: [],
+    withheld: HISTORICAL_ROS_SUPPORTED_POSITIONS.map((position) => ({ position, reason })),
+  };
+}
+
+/**
+ * The per-position matching gate. A league may receive position P from an admitted artifact only
+ * when league-scoring normalization supports P AND the position-scoped scoring keys are byte-equal.
+ *
+ * Positions never interact numerically — a rule outside P's component vocabulary contributes
+ * exactly 0 to P's score — so byte-equal position subsets mean byte-identical scoring behavior for
+ * P, which is what the artifact's held-out evidence for P was measured under. Matching stays exact
+ * string equality: there is no nearest-match, no tolerance, and no widening, so a league paying 5
+ * for a 50-59 field goal and 6 for 60+ does not match a catalog that pays 5 for 50+.
+ *
+ * Neither side's scoring profile can throw out of this function: a stored artifact key that is not
+ * the canonical JSON it is defined to be, and a league profile that is not a valid scoring profile,
+ * are both corrupt rather than merely unmatched, and refuse every position with their own reason.
+ */
+export function matchFirstPartyRosPositions(input: {
+  readonly artifactScoringProfileKey: string;
+  readonly leagueScoringProfile: ProjectionScoringProfile;
+  readonly supportedPositions: readonly FirstPartyRosRailPosition[];
+}): FirstPartyRosPositionMatch {
+  let artifactProfile: ProjectionScoringProfile;
+  try {
+    artifactProfile = firstPartyRosArtifactScoringProfile(input.artifactScoringProfileKey);
+  } catch {
+    return everyRailPositionWithheld("artifact-scoring-profile-key-unreadable");
+  }
+
+  const supported = new Set<string>(input.supportedPositions);
+  const matched: FirstPartyRosRailPosition[] = [];
+  const withheld: FirstPartyRosWithheldPosition[] = [];
+  try {
+    for (const position of HISTORICAL_ROS_SUPPORTED_POSITIONS) {
+      if (!supported.has(position)) {
+        withheld.push({ position, reason: "position-unsupported" });
+        continue;
+      }
+      const leagueKey = projectionScoringProfileKeyForPosition(
+        input.leagueScoringProfile,
+        position,
+      );
+      // A position league-scoring normalization reports as supported always prices something in
+      // its own vocabulary, so an empty league-side subset means the caller's `supportedPositions`
+      // disagrees with the profile it handed us. Two empty subsets are not evidence of identical
+      // scoring, so `"[]" === "[]"` is never read as a match
+      // (`packages/projections/src/scoring-position-keys.ts` states this requirement).
+      if (leagueKey === "[]") {
+        withheld.push({ position, reason: "position-unsupported" });
+        continue;
+      }
+      if (leagueKey !== projectionScoringProfileKeyForPosition(artifactProfile, position)) {
+        withheld.push({ position, reason: "scoring-profile-position-mismatch" });
+        continue;
+      }
+      matched.push(position);
+    }
+  } catch {
+    // Only the league profile can throw here: the artifact profile was proved valid by the round
+    // trip inside `projectionScoringRulesFromProfileKey` above.
+    return everyRailPositionWithheld("league-scoring-profile-invalid");
+  }
+  return { matched, withheld };
+}
+
+/**
+ * The scoring profile every league-independent calibration for one artifact is fitted under: the
+ * artifact's own, recovered from the key that IS its identity. It is deterministic and exact with
+ * respect to the artifact, unlike any single matched league's profile, which per-position matching
+ * makes an approximation for every other matched league.
+ *
+ * A position this profile prices nothing for can never be matched by any league — a supported
+ * position's league-side scoped key is never `"[]"`, so it cannot equal this profile's empty one —
+ * so a calibration that is degenerate for such a position can never reach a released player.
+ */
+export function firstPartyRosArtifactScoringProfile(
+  artifactScoringProfileKey: string,
+): ProjectionScoringProfile {
+  return {
+    id: "admitted-ros-artifact",
+    rules: projectionScoringRulesFromProfileKey(artifactScoringProfileKey),
+  };
+}
+
 export type FirstPartyRosPublicationReason =
   | "ros_champion_artifact_absent"
   | "ros_champion_artifact_invalid"
   | "ros_champion_artifact_scoring_profile_mismatch"
+  | "ros_scoring_profile_position_withheld"
   | "ros_future_window_incomplete"
   | "ros_release_gate_withheld"
   | "ros_admitted_cell_blocker_withheld";
@@ -170,6 +314,11 @@ export interface FirstPartyRosBucketDecision {
   readonly state: "release" | "withhold";
   readonly strategy: FirstPartyRosStrategy | null;
   readonly gate: FirstPartyRosReleaseGateDecision;
+  /**
+   * Set when position matching, not the live gate, is what withheld this cell. Every forced
+   * withhold states its reason, including a cell for a position this rail does not model.
+   */
+  readonly positionReason?: FirstPartyRosCellWithholdReason;
 }
 
 export interface FirstPartyRosPublicationDecision {
@@ -180,18 +329,39 @@ export interface FirstPartyRosPublicationDecision {
   readonly reasons: readonly FirstPartyRosPublicationReason[];
   readonly buckets: readonly FirstPartyRosBucketDecision[];
   readonly releasingBuckets: readonly FirstPartyRosBucketDecision[];
+  /** Positions this league may not receive from this artifact, each with its stated reason. */
+  readonly withheldPositions: readonly FirstPartyRosWithheldPosition[];
   /**
    * True whenever the last good published ROS set must remain authoritative: no artifact, an
-   * invalid or mismatched artifact, an incomplete future window, or any bucket that withheld.
+   * invalid or mismatched artifact, an incomplete future window, any bucket that withheld, or any
+   * position withheld before it could produce a bucket.
    */
   readonly preservePriorGoodSet: boolean;
 }
 
 /**
+ * The two inputs the publication layer needs to re-derive the per-position match for itself. It is
+ * deliberately NOT the already-computed match: the candidate provider gates on the same rule, and
+ * publication re-checking it here is the same redundancy the whole-key gate has always had.
+ */
+export interface FirstPartyRosPositionMatchingInput {
+  /** The league's normalized scoring profile — the profile its candidates were scored under. */
+  readonly leagueScoringProfile: ProjectionScoringProfile;
+  /** The rail positions league-scoring normalization reported supported for this league. */
+  readonly supportedPositions: readonly FirstPartyRosRailPosition[];
+}
+
+/**
  * Fail-closed publication decision. With no persisted artifact the result is byte-for-byte the
  * shadow outcome (cannot publish, preserve the prior good set). Publication becomes possible only
- * when the artifact validates, its scoring-profile identity matches the league exactly, the future
- * window is complete, and the live release gate returns "release" for a position/bucket.
+ * when the artifact validates, its scoring-profile identity matches the league, the future window
+ * is complete, and the live release gate returns "release" for a position/bucket.
+ *
+ * Scoring identity is matched per position when `positionMatching` is supplied: the league keeps
+ * exactly the positions whose scoped keys are byte-equal to the artifact's and that normalization
+ * supports, and every other position is withheld with a stated reason. Without it the gate is the
+ * whole-profile identity — strictly narrower, since equal whole keys imply equal position keys —
+ * so a target built without per-position inputs can never over-release.
  */
 export function evaluateFirstPartyRosPublication(input: {
   readonly artifact: LoadedFirstPartyRosChampionArtifact | null;
@@ -199,6 +369,7 @@ export function evaluateFirstPartyRosPublication(input: {
   readonly evidence: readonly FirstPartyRosLiveReleaseEvidence[];
   readonly futureWindowComplete: boolean;
   readonly gateOptions?: FirstPartyRosReleaseGateOptions;
+  readonly positionMatching?: FirstPartyRosPositionMatchingInput;
 }): FirstPartyRosPublicationDecision {
   const reasons = new Set<FirstPartyRosPublicationReason>();
   if (input.artifact === null) {
@@ -211,20 +382,39 @@ export function evaluateFirstPartyRosPublication(input: {
       reasons: [...reasons],
       buckets: [],
       releasingBuckets: [],
+      withheldPositions: [],
       preservePriorGoodSet: true,
     };
   }
   const artifactValid = firstPartyRosChampionArtifactIsValid(input.artifact);
   if (!artifactValid) reasons.add("ros_champion_artifact_invalid");
+  const positionMatch =
+    !artifactValid || input.positionMatching === undefined
+      ? null
+      : matchFirstPartyRosPositions({
+          artifactScoringProfileKey: input.artifact.scoringProfileKey,
+          leagueScoringProfile: input.positionMatching.leagueScoringProfile,
+          supportedPositions: input.positionMatching.supportedPositions,
+        });
   const scoringProfileMatches =
-    artifactValid && input.artifact.scoringProfileKey === input.leagueScoringProfileKey;
+    artifactValid &&
+    (positionMatch === null
+      ? input.artifact.scoringProfileKey === input.leagueScoringProfileKey
+      : positionMatch.matched.length > 0);
   if (artifactValid && !scoringProfileMatches) {
     reasons.add("ros_champion_artifact_scoring_profile_mismatch");
+  }
+  if (positionMatch !== null && positionMatch.withheld.length > 0) {
+    reasons.add("ros_scoring_profile_position_withheld");
   }
   if (!input.futureWindowComplete) reasons.add("ros_future_window_incomplete");
 
   const eligible = artifactValid && scoringProfileMatches && input.futureWindowComplete;
   const blockedCells = eligible ? admittedCellBlockers(input.artifact) : new Set<string>();
+  const matchedPositions = positionMatch === null ? null : new Set<string>(positionMatch.matched);
+  const withheldPositionReasons = new Map<string, FirstPartyRosPositionWithholdReason>(
+    (positionMatch?.withheld ?? []).map((entry) => [entry.position, entry.reason]),
+  );
   let blockedCellWithheld = false;
   const buckets: FirstPartyRosBucketDecision[] = eligible
     ? input.evidence.map((live) => {
@@ -233,16 +423,25 @@ export function evaluateFirstPartyRosPublication(input: {
           live,
           input.gateOptions,
         );
-        // The admitted report's own cell blockers override a releasing gate; the gate decision is
-        // preserved unmodified for observability.
+        // The admitted report's own cell blockers and the per-position match both override a
+        // releasing gate; the gate decision is preserved unmodified for observability.
         const blocked = blockedCells.has(`${live.position}:${live.bucket}`);
+        // A cell for a position outside the matched set is forced to withhold with a stated
+        // reason. `matchedPositions` only ever holds rail positions, so a D/ST cell — which this
+        // rail's provider cannot produce, but a hand-built target could — is withheld as off-rail
+        // rather than silently.
+        const positionReason =
+          matchedPositions === null || matchedPositions.has(live.position)
+            ? undefined
+            : (withheldPositionReasons.get(live.position) ?? "position-not-on-ros-rail");
         if (blocked && gate.state === "release") blockedCellWithheld = true;
         return {
           position: live.position,
           bucket: live.bucket,
-          state: blocked ? "withhold" : gate.state,
+          state: blocked || positionReason !== undefined ? "withhold" : gate.state,
           strategy: gate.strategy,
           gate,
+          ...(positionReason === undefined ? {} : { positionReason }),
         };
       })
     : [];
@@ -251,8 +450,10 @@ export function evaluateFirstPartyRosPublication(input: {
     reasons.add("ros_release_gate_withheld");
   }
   if (blockedCellWithheld) reasons.add("ros_admitted_cell_blocker_withheld");
+  const withheldPositions = positionMatch?.withheld ?? [];
   const canPublish = eligible && releasingBuckets.length > 0;
-  const preservePriorGoodSet = !canPublish || releasingBuckets.length < buckets.length;
+  const preservePriorGoodSet =
+    !canPublish || releasingBuckets.length < buckets.length || withheldPositions.length > 0;
   return {
     canPublish,
     artifactValid,
@@ -261,11 +462,10 @@ export function evaluateFirstPartyRosPublication(input: {
     reasons: [...reasons],
     buckets,
     releasingBuckets,
+    withheldPositions,
     preservePriorGoodSet,
   };
 }
-
-const ROS_SUMMARY_MAXIMUM_SCENARIOS = 4_096;
 
 function round(value: number, digits: number): string {
   if (!Number.isFinite(value)) throw new RangeError("ROS numeric value must be finite");
@@ -317,14 +517,17 @@ export function buildFirstPartyRosPlayerPersistenceRow(
   if (projection.state !== "projected" || projection.expectedGames <= 0) {
     throw new RangeError("Only projected players with positive expected games can be persisted");
   }
+  // The persisted bound is the engine's own admissible path range, imported rather than restated,
+  // so the standard 12288-path release persists and any out-of-contract count still fails closed
+  // here before it can reach the equally derived `player_ros_projection_summaries` check.
   const scenarioCount = projection.provenance.scenarioCount;
   if (
     !Number.isSafeInteger(scenarioCount) ||
-    scenarioCount < 128 ||
-    scenarioCount > ROS_SUMMARY_MAXIMUM_SCENARIOS
+    scenarioCount < FIRST_PARTY_ROS_MINIMUM_SCENARIOS ||
+    scenarioCount > FIRST_PARTY_ROS_MAXIMUM_SCENARIOS
   ) {
     throw new RangeError(
-      `Released ROS scenario count must be between 128 and ${ROS_SUMMARY_MAXIMUM_SCENARIOS}`,
+      `Released ROS scenario count must be between ${FIRST_PARTY_ROS_MINIMUM_SCENARIOS} and ${FIRST_PARTY_ROS_MAXIMUM_SCENARIOS}`,
     );
   }
   if (projection.p15Points > projection.p50Points || projection.p50Points > projection.p85Points) {
@@ -366,6 +569,47 @@ export function buildFirstPartyRosPlayerPersistenceRow(
       seedHash: projection.provenance.seedHash,
     },
   };
+}
+
+interface FirstPartyRosCellDecision {
+  readonly position: FirstPartyRosPosition;
+  readonly bucket: FirstPartyRosRemainingWeeksBucket;
+  readonly state: "release" | "withhold";
+  readonly reasons: readonly string[];
+}
+
+/**
+ * Every cell the run decided, in evaluated-then-withheld order so a truncating reader keeps the
+ * cells that actually produced players. The rail's own partition is 5 positions x 3 buckets = 15
+ * cells; the API's cap is 18 because its position set includes D/ST, and an evaluated D/ST cell can
+ * only ever displace a rail cell that is already evaluated, so the total stays within that cap.
+ */
+function buildFirstPartyRosCellDecisions(
+  decision: FirstPartyRosPublicationDecision,
+): readonly FirstPartyRosCellDecision[] {
+  const evaluated = decision.buckets.map((bucket) => ({
+    position: bucket.position,
+    bucket: bucket.bucket,
+    state: bucket.state,
+    // The position reason is appended last and `deriveCellGates` keeps only the first 16 reasons;
+    // the live gate has 12 distinct reason values over a Set, so it can never be crowded out.
+    reasons: [
+      ...bucket.gate.reasons,
+      ...(bucket.positionReason === undefined ? [] : [bucket.positionReason]),
+    ],
+  }));
+  const evaluatedCells = new Set(evaluated.map((cell) => `${cell.position}:${cell.bucket}`));
+  const withheld = decision.withheldPositions.flatMap((entry) =>
+    FIRST_PARTY_ROS_BUCKETS.filter(
+      (bucket) => !evaluatedCells.has(`${entry.position}:${bucket}`),
+    ).map((bucket) => ({
+      position: entry.position,
+      bucket,
+      state: "withhold" as const,
+      reasons: [entry.reason],
+    })),
+  );
+  return [...evaluated, ...withheld];
 }
 
 export interface FirstPartyRosRunConvergence {
@@ -457,6 +701,87 @@ export function buildFirstPartyRosRunPayload(input: {
       },
       releasingBuckets: releasing.length,
       withheldReasons: input.decision.reasons,
+      // Every cell decision, released and withheld alike, so the read-only status surface can
+      // report a mixed release honestly instead of inferring one number from `releasingBuckets`.
+      // A position withheld before any player was simulated produces no live evidence and so no
+      // gate decision, so its three cells are stated explicitly rather than being absent — an
+      // absent cell reads as "not evaluated", which is precisely what it is not.
+      cellDecisions: buildFirstPartyRosCellDecisions(input.decision),
+      // True when the last good published set must stay authoritative for this league.
+      preservePriorGoodSet: input.decision.preservePriorGoodSet,
     },
   };
+}
+
+/**
+ * Selects the ONE admitted artifact a league may publish under. With the live release gate's
+ * evidence identity position-scoped (2026-07-29), two admitted artifacts whose scoped keys agree
+ * on some positions could each release sets for the same league; publication must therefore
+ * arbitrate to a single artifact per league or the rail double-publishes (WP0 Step 3,
+ * `docs/ROS_GATE_AND_DST_PLAN.md`).
+ *
+ * Recorded tie-break rule (the WP0 Step 3 decision — arbitration is deterministic, and every step
+ * is written down rather than left to iteration order):
+ *
+ * 1. Whole-key equality wins outright; among whole-key matches, the latest `admittedAt` wins —
+ *    the pre-existing behavior, and the ONLY behavior when `leagueScoringProfile` and
+ *    `supportedPositions` are absent.
+ * 2. Otherwise, among artifacts matching at least one supported position via
+ *    `matchFirstPartyRosPositions`, the most matched supported positions wins (maximizes the
+ *    league's published coverage under a single artifact).
+ * 3. Tie: the latest `admittedAt` wins.
+ * 4. Tie: the lexicographically greatest `artifactChecksum` wins (pure determinism backstop).
+ *
+ * A position-scoped key of `"[]"` is never a match — enforced inside
+ * `matchFirstPartyRosPositions`. There is still no nearest-match, no default, and no fallback to
+ * the only admitted profile: an artifact matching zero supported positions is never selected,
+ * because a set scored under a merely similar profile is wrong output rather than degraded output.
+ */
+export function selectFirstPartyRosArtifactForLeague(input: {
+  readonly artifacts: readonly LoadedFirstPartyRosChampionArtifact[];
+  readonly leagueScoringProfileKey: string;
+  /**
+   * Both halves or neither, mirroring `evaluateFirstPartyRosPublication`: matching per position
+   * without knowing what normalization supports could select on a position the league cannot
+   * actually be scored for. When either is absent, selection is whole-key only (rule 1).
+   */
+  readonly leagueScoringProfile?: ProjectionScoringProfile;
+  readonly supportedPositions?: readonly FirstPartyRosRailPosition[];
+}): LoadedFirstPartyRosChampionArtifact | null {
+  let selected: LoadedFirstPartyRosChampionArtifact | null = null;
+  for (const artifact of input.artifacts) {
+    if (artifact.scoringProfileKey !== input.leagueScoringProfileKey) continue;
+    if (selected === null || admittedTime(artifact) > admittedTime(selected)) {
+      selected = artifact;
+    }
+  }
+  if (selected !== null) return selected;
+  if (input.leagueScoringProfile === undefined || input.supportedPositions === undefined) {
+    return null;
+  }
+  let selectedMatchCount = 0;
+  for (const artifact of input.artifacts) {
+    const match = matchFirstPartyRosPositions({
+      artifactScoringProfileKey: artifact.scoringProfileKey,
+      leagueScoringProfile: input.leagueScoringProfile,
+      supportedPositions: input.supportedPositions,
+    });
+    if (match.matched.length === 0) continue;
+    const wins =
+      selected === null ||
+      match.matched.length > selectedMatchCount ||
+      (match.matched.length === selectedMatchCount &&
+        (admittedTime(artifact) > admittedTime(selected) ||
+          (admittedTime(artifact) === admittedTime(selected) &&
+            artifact.artifactChecksum > selected.artifactChecksum)));
+    if (wins) {
+      selected = artifact;
+      selectedMatchCount = match.matched.length;
+    }
+  }
+  return selected;
+}
+
+function admittedTime(artifact: LoadedFirstPartyRosChampionArtifact): number {
+  return artifact.admittedAt instanceof Date ? artifact.admittedAt.getTime() : 0;
 }

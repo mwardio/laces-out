@@ -69,7 +69,11 @@
     max-width: 760px;
     margin-top: 7px;
     color: var(--ink-950);
-    font-size: clamp(30px, 4vw, 47px);
+    /* Standardized to 38px (was clamp(30px, 4vw, 47px)). Coordinator
+       explicitly named film-room in this sweep, so this is the one
+       exception to the BYOK carve-out — font-size only, nothing else in
+       this file touched. */
+    font-size: 38px;
     font-weight: 700;
     line-height: 1;
     letter-spacing: -0.048em;
@@ -325,6 +329,40 @@
     font-weight: 750;
   }
 
+  /* Compact in-session provider switch for "Ask the film room" — mirrors AiCoachPanel's
+     select-only-when-more-than-one-available convention, sized to sit in a panel header
+     rather than a full form field. */
+  .headerProviderSelect {
+    display: grid;
+    flex: 0 0 auto;
+    gap: 4px;
+    min-width: 180px;
+  }
+
+  .headerProviderSelect > span {
+    color: var(--ink-500);
+    font-size: 9px;
+    font-weight: 800;
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
+  }
+
+  .headerProviderSelect select {
+    min-height: 34px;
+    padding: 0 9px;
+    color: var(--ink-900);
+    background: #fff;
+    border: 1px solid var(--ink-200);
+    border-radius: 8px;
+    outline: 0;
+    font-size: 12px;
+  }
+
+  .headerProviderSelect select:focus {
+    border-color: #66845a;
+    box-shadow: 0 0 0 3px rgba(90, 126, 73, 0.13);
+  }
+
   .settingsForm,
   .analysisForm {
     display: grid;
@@ -575,6 +613,15 @@
   .inlineGate svg {
     flex: 0 0 auto;
     margin-top: 1px;
+  }
+
+  /* The "Manage AI provider in Settings" link inside .notice had no anchor
+     styling and rendered as flat prose; match the affordance .inlineGate a
+     already has. */
+  .notice a {
+    font-weight: 800;
+    text-decoration: underline;
+    text-underline-offset: 2px;
   }
 
   .noticeSuccess {
@@ -972,6 +1019,14 @@
 
     .formActions {
       grid-template-columns: 1fr;
+    }
+
+    .panelHeader {
+      flex-wrap: wrap;
+    }
+
+    .headerProviderSelect {
+      width: 100%;
     }
   }
 }

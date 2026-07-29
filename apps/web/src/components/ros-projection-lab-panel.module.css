@@ -55,12 +55,6 @@
     white-space: nowrap;
   }
 
-  .badgeShadow {
-    color: #7a5a00;
-    background: #fdf3d3;
-    border: 1px solid #ecd48f;
-  }
-
   .badgePublishable {
     color: var(--green-600);
     background: var(--lime-100);
@@ -125,7 +119,7 @@
     line-height: 1.5;
   }
 
-  .shadowBanner {
+  .retainedBanner {
     display: grid;
     grid-template-columns: auto minmax(0, 1fr);
     align-items: center;
@@ -138,7 +132,7 @@
     font-size: 11px;
   }
 
-  .shadowBanner strong {
+  .retainedBanner strong {
     display: block;
     color: #5c4400;
     font-size: 12px;
@@ -245,6 +239,41 @@
     margin: 10px 0 6px;
     color: var(--ink-600);
     font-size: 12px;
+  }
+
+  /* Compact per-league position readiness: one row per league, one chip per position. */
+  .positionSummaryList {
+    display: grid;
+    gap: 6px;
+    margin: 10px 0 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .positionSummaryRow {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px 10px;
+    font-size: 11px;
+    font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  }
+
+  .positionSummaryLabel {
+    color: var(--ink-500);
+    font-family: inherit;
+    font-size: 9px;
+    font-weight: 800;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+  }
+
+  .positionChipReady {
+    color: var(--green-600);
+  }
+
+  .positionChipWithheld {
+    color: #b08400;
   }
 
   /* Raw reason codes moved out of the manager-facing list and into the advanced

@@ -79,8 +79,21 @@ function compareStrings(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
 }
 
-function normalizedScoringRules(profile: ProjectionScoringProfile) {
-  return [...profile.rules]
+export interface CanonicalProjectionScoringRule {
+  readonly statId: string;
+  readonly points: number;
+  readonly bonuses: readonly ProjectionScoringBonus[];
+}
+
+/**
+ * The canonical rule shape every scoring key is built from: `-0` normalized, bonuses sorted by
+ * threshold then points, rules sorted by `statId`. Exported so position-scoped keys canonicalize a
+ * subset of the same rules byte-identically to the whole-profile key.
+ */
+export function canonicalProjectionScoringRules(
+  rules: readonly ProjectionScoringRule[],
+): readonly CanonicalProjectionScoringRule[] {
+  return [...rules]
     .map((rule) => ({
       statId: rule.statId,
       points: normalizedNumber(rule.points),
@@ -92,6 +105,12 @@ function normalizedScoringRules(profile: ProjectionScoringProfile) {
         .sort((left, right) => left.atLeast - right.atLeast || left.points - right.points),
     }))
     .sort((left, right) => compareStrings(left.statId, right.statId));
+}
+
+function normalizedScoringRules(
+  profile: ProjectionScoringProfile,
+): readonly CanonicalProjectionScoringRule[] {
+  return canonicalProjectionScoringRules(profile.rules);
 }
 
 export function validateProjectionScoringProfile(profile: ProjectionScoringProfile): void {

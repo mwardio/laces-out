@@ -12,19 +12,19 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { apiBaseUrl, parseRosProjectionStatus, type RosProjectionStatus } from "../lib/api-client";
+import { apiBaseUrl } from "../lib/api-client";
 import {
-  describeRosProjectionRail,
-  humanizeRosQualityState,
-  humanizeRosRunMode,
-} from "../lib/ros-projection-status";
+  describeRosRelease,
+  parseRosReleaseStatus,
+  type RosReleaseStatus,
+} from "../lib/ros-release-status";
 import styles from "./ros-projection-lab-panel.module.css";
 
 type PanelState =
   | { readonly state: "loading" }
   | { readonly state: "signed-out" }
   | { readonly state: "error"; readonly message: string }
-  | { readonly state: "ready"; readonly status: RosProjectionStatus };
+  | { readonly state: "ready"; readonly status: RosReleaseStatus };
 
 function isAbortError(error: unknown): boolean {
   return error instanceof Error && error.name === "AbortError";
@@ -82,7 +82,7 @@ export function RosProjectionLabPanel() {
       }
       const payload: unknown = await response.json();
       if (abortRef.current !== controller) return;
-      const parsed = parseRosProjectionStatus(payload);
+      const parsed = parseRosReleaseStatus(payload);
       if (!parsed) throw new Error("Status response did not match the expected contract");
       setPanel({ state: "ready", status: parsed });
     } catch (error) {
@@ -179,27 +179,11 @@ export function RosProjectionLabPanel() {
           <p className={styles.kicker}>Rest-of-season forecast</p>
           <h2 id="ros-lab-title">Rest-of-season forecast status</h2>
           <p>
-            Whether the rest-of-season forecast is ready for your league, when it was last checked,
-            and what is still outstanding. Until every check passes it is withheld — it never
-            quietly feeds a lineup, waiver, or trade call.
+            Four separate things decide whether your league gets a rest-of-season forecast: whether
+            a model has been validated, whether it covers your scoring, whether your league inputs
+            are complete, and what the latest check released. Each is reported on its own below.
           </p>
         </div>
-        {panel.state === "ready" ? (
-          <span
-            className={`${styles.badge} ${
-              panel.status.publication === "publishable"
-                ? styles.badgePublishable
-                : styles.badgeShadow
-            }`}
-          >
-            {panel.status.publication === "publishable" ? (
-              <ShieldCheck size={14} aria-hidden="true" />
-            ) : (
-              <ShieldOff size={14} aria-hidden="true" />
-            )}
-            {panel.status.publication === "publishable" ? "Ready" : "Validating"}
-          </span>
-        ) : null}
       </div>
 
       {panel.state === "loading" ? (
@@ -219,17 +203,24 @@ export function RosProjectionLabPanel() {
   );
 }
 
-function RosStatusBody({ status }: { readonly status: RosProjectionStatus }) {
-  const description = describeRosProjectionRail(status);
+function RosStatusBody({ status }: { readonly status: RosReleaseStatus }) {
+  const description = describeRosRelease(status);
+  const artifact = status.admittedArtifacts.artifacts[0];
+  const latestPublishedIso =
+    status.publishedSets.length === 0
+      ? null
+      : ([...status.publishedSets]
+          .map((set) => set.fetchedAt)
+          .sort((left, right) => (left < right ? 1 : left > right ? -1 : 0))[0] ?? null);
 
   return (
     <>
-      {description.isShadow ? (
-        <div className={styles.shadowBanner} role="status">
+      {description.retainedSetNotice ? (
+        <div className={styles.retainedBanner} role="status">
           <Info size={17} aria-hidden="true" />
           <span>
-            <strong>Still validating, not used in recommendations yet.</strong>
-            The latest forecast remains isolated until its model package and source checks pass.
+            <strong>Your existing forecast is unchanged.</strong>
+            {description.retainedSetNotice}
           </span>
         </div>
       ) : null}
@@ -242,20 +233,16 @@ function RosStatusBody({ status }: { readonly status: RosProjectionStatus }) {
         </div>
         <div>
           <span>Validated model</span>
-          <strong>{description.artifactPresent ? "In use" : "None yet"}</strong>
-          <small>
-            {description.artifactPresent
-              ? "Re-checked every time it publishes"
-              : "Nothing publishes until one passes"}
-          </small>
+          <strong>{status.admittedArtifacts.state === "admitted" ? "In use" : "None yet"}</strong>
+          <small>{description.supportedProfileSummary}</small>
         </div>
         <div>
-          <span>Last checked</span>
-          <strong>{readableDate(description.lastEvaluatedIso)}</strong>
+          <span>Position groups released</span>
+          <strong>{description.cellSummary ?? "Not checked yet"}</strong>
           <small>
-            {status.latestRun
-              ? humanizeRosQualityState(status.latestRun.qualityState)
-              : "Not checked yet this season"}
+            {description.withheldCells.length === 0
+              ? "Every group cleared the latest check"
+              : `Withheld: ${description.withheldCells.join(", ")}`}
           </small>
         </div>
         <div>
@@ -264,46 +251,74 @@ function RosStatusBody({ status }: { readonly status: RosProjectionStatus }) {
           <small>
             {description.publishedLeagueCount === 0
               ? "None yet"
-              : `${description.publishedPlayerCount} players · ${readableDate(description.lastPublishedIso)}`}
+              : `${description.publishedPlayerCount} players · ${readableDate(latestPublishedIso)}`}
           </small>
         </div>
       </div>
 
       <div className={styles.section}>
-        <h3>Where it stands</h3>
+        <h3>The validated model</h3>
         <p className={styles.artifactLine}>
-          {description.artifactPresent ? (
+          {status.admittedArtifacts.state === "admitted" ? (
             <ShieldCheck size={15} aria-hidden="true" />
           ) : (
             <ShieldOff size={15} aria-hidden="true" />
           )}
-          {description.artifactSummary}
+          {description.artifactHeadline}
         </p>
-        {status.latestRun ? (
-          description.reasons.length > 0 ? (
-            <>
-              <p className={styles.reasonLead}>
-                {description.isShadow
-                  ? "Still outstanding before it can be published:"
-                  : "Noted on the most recent check:"}
-              </p>
-              <ul className={styles.reasonList}>
-                {description.reasons.map((reason) => (
-                  <li key={reason.code}>
-                    <CircleAlert size={14} aria-hidden="true" />
-                    <span>{reason.label}</span>
-                  </li>
-                ))}
-              </ul>
-            </>
-          ) : (
-            <p className={styles.empty}>Nothing is currently holding it back.</p>
-          )
-        ) : (
+        {description.unsupportedProfileSummary ? (
           <p className={styles.empty}>
-            This season has not been checked yet, so there is nothing to publish.
+            {description.unsupportedProfileSummary}. A league scored under an unvalidated profile
+            receives nothing rather than a forecast built for different rules.
           </p>
+        ) : null}
+      </div>
+
+      <div className={styles.section}>
+        <h3>Your leagues</h3>
+        {description.leagueNotices.length === 0 ? (
+          <p className={styles.empty}>
+            {description.readyLeagueCount === 1
+              ? "Your league has everything the forecast needs."
+              : `${description.readyLeagueCount} leagues have everything the forecast needs.`}
+          </p>
+        ) : (
+          <>
+            <p className={styles.reasonLead}>Outstanding for your leagues:</p>
+            <ul className={styles.reasonList}>
+              {description.leagueNotices.map((notice) => (
+                <li key={notice}>
+                  <CircleAlert size={14} aria-hidden="true" />
+                  <span>{notice}</span>
+                </li>
+              ))}
+            </ul>
+          </>
         )}
+        {description.leaguePositionSummaries.length > 0 ? (
+          <ul className={styles.positionSummaryList}>
+            {description.leaguePositionSummaries.map((league) => (
+              <li key={league.leagueSeasonId ?? "unknown"} className={styles.positionSummaryRow}>
+                <span className={styles.positionSummaryLabel}>
+                  {league.leagueSeasonId ? `League ${league.leagueSeasonId.slice(0, 8)}` : "League"}
+                </span>
+                {league.positions.map((position) => (
+                  <span
+                    key={position.position}
+                    className={
+                      position.decision === "ready"
+                        ? styles.positionChipReady
+                        : styles.positionChipWithheld
+                    }
+                    title={position.title ?? undefined}
+                  >
+                    {position.position} {position.decision === "ready" ? "✓" : "✗"}
+                  </span>
+                ))}
+              </li>
+            ))}
+          </ul>
+        ) : null}
       </div>
 
       {/* Operator detail: precise, still available, no longer the first thing a
@@ -311,50 +326,61 @@ function RosStatusBody({ status }: { readonly status: RosProjectionStatus }) {
       <details className={styles.evidence}>
         <summary>Model evidence (advanced)</summary>
         <div className={styles.evidenceBody}>
-          {status.artifact.present ? (
+          {artifact ? (
             <div>
               <h4>Validated model package</h4>
               <div className={styles.setMeta}>
                 <span>
-                  Policy {status.artifact.policyVersion} · Calibration{" "}
-                  {status.artifact.calibrationVersion}
+                  Policy {artifact.policyVersion} · Calibration {artifact.calibrationVersion}
                 </span>
                 <span className={styles.checksum}>
-                  Checksum {shortenedChecksum(status.artifact.artifactChecksum)}
+                  Checksum {shortenedChecksum(artifact.artifactChecksum)}
                 </span>
-                <span>Admitted {readableDate(status.artifact.admittedAt)}</span>
-                <span>{status.artifact.sourceChecksums.length} pinned source checksums</span>
+                <span className={styles.checksum}>
+                  Scoring profile {shortenedChecksum(artifact.scoringProfile.digest)}
+                </span>
+                <span>Admitted {readableDate(artifact.admittedAt)}</span>
+                <span>{artifact.sourceChecksumCount} pinned source checksums</span>
               </div>
             </div>
           ) : null}
 
-          {status.latestRun ? (
+          {status.cellGates.state === "evaluated" ? (
             <div>
-              <h4>Most recent model run</h4>
+              <h4>Latest per-position check</h4>
               <div className={styles.setMeta}>
-                <span>{humanizeRosRunMode(status.latestRun.mode)}</span>
-                <span>{humanizeRosQualityState(status.latestRun.qualityState)}</span>
-                <span>
-                  {status.latestRun.canPublish ? "Cleared to publish" : "Not cleared to publish"}
-                </span>
-                <span>
-                  Weeks {status.latestRun.windowStartWeek}–{status.latestRun.windowEndWeek} (as of
-                  week {status.latestRun.asOfWeek})
-                </span>
-                <span>
-                  {status.latestRun.playersPublished} of {status.latestRun.playersEvaluated} players
-                  published
-                </span>
+                <span>Checked {readableDate(status.cellGates.evaluatedAt)}</span>
               </div>
-              {description.reasons.length > 0 ? (
-                <ul className={styles.reasonCodeList}>
-                  {description.reasons.map((reason) => (
-                    <li key={reason.code}>{reason.code}</li>
-                  ))}
-                </ul>
-              ) : null}
+              <ul className={styles.reasonCodeList}>
+                {status.cellGates.cells.map((cell) => (
+                  <li key={`${cell.position}:${cell.bucket}`}>
+                    {cell.position} {cell.bucket} — {cell.decision}
+                    {cell.reasons.length > 0 ? ` (${cell.reasons.join(", ")})` : ""}
+                  </li>
+                ))}
+              </ul>
             </div>
           ) : null}
+
+          <div>
+            <h4>Independent audit run</h4>
+            <div className={styles.setMeta}>
+              <span>{description.auditHeadline}</span>
+              {status.shadowAudit.latestRun ? (
+                <span>Recorded {readableDate(status.shadowAudit.latestRun.createdAt)}</span>
+              ) : null}
+            </div>
+            {description.auditDetail ? (
+              <p className={styles.empty}>{description.auditDetail}</p>
+            ) : null}
+            {status.shadowAudit.latestRun && status.shadowAudit.latestRun.reasons.length > 0 ? (
+              <ul className={styles.reasonCodeList}>
+                {status.shadowAudit.latestRun.reasons.map((reason) => (
+                  <li key={reason}>{reason}</li>
+                ))}
+              </ul>
+            ) : null}
+          </div>
         </div>
       </details>
 
@@ -371,7 +397,7 @@ function RosStatusBody({ status }: { readonly status: RosProjectionStatus }) {
               <article key={set.projectionSetId}>
                 <header>
                   <span>
-                    {set.scoringProfileKey ? `${set.scoringProfileKey} scoring` : "League forecast"}{" "}
+                    {set.scoringProfile ? `${set.scoringProfile.label} scoring` : "League forecast"}{" "}
                     · {set.leagueSeasonId.slice(0, 8)}
                   </span>
                   <span>
@@ -383,6 +409,9 @@ function RosStatusBody({ status }: { readonly status: RosProjectionStatus }) {
                   <span>
                     Weeks {set.windowStartWeek}–{set.windowEndWeek} (as of week {set.asOfWeek})
                   </span>
+                  {set.retainedFromEarlierRun ? (
+                    <span>Retained from the last good check</span>
+                  ) : null}
                 </div>
                 <details className={styles.setEvidence}>
                   <summary>Checksums</summary>

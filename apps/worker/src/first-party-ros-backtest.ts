@@ -2,8 +2,11 @@ import { createHash } from "node:crypto";
 
 import {
   FIRST_PARTY_PROJECTION_MODEL_VERSION,
+  FIRST_PARTY_ROS_AVAILABILITY_EVIDENCE_ALPHA,
   FIRST_PARTY_ROS_COVERAGE_EVIDENCE_ALPHA,
+  FIRST_PARTY_ROS_MAXIMUM_AVAILABILITY_ROW_ERROR,
   FIRST_PARTY_ROS_MAX_AVAILABILITY_BIAS,
+  firstPartyRosAvailabilityEvidenceOfExcessMae,
   firstPartyRosCoverageEvidenceOfUndercoverage,
   FIRST_PARTY_ROS_MAX_AVAILABILITY_MAE,
   FIRST_PARTY_ROS_MAX_NINE_PLUS_AVAILABILITY_MAE,
@@ -240,7 +243,20 @@ export function historicalRosCalibrationBlockers(
         ? [`${prefix}_held_out_evidence_unavailable`]
         : []),
       ...(inputCoverage < 0.95 ? [`${prefix}_input_coverage_below_minimum`] : []),
-      ...(availabilityMae > availabilityMaeCeiling
+      // Availability MAE gate v3: the ceiling is unchanged, but a cell now fails it only on
+      // statistical evidence that its true MAE exceeds it. The point comparison is retained as a
+      // structural guard so no cell inside its ceiling can ever block, whatever the test returns.
+      // `choice.samples` is the paired held-out row count the MAE is averaged over: both are built
+      // from the same records, which is why the report's `samples` and its availability-audit
+      // `rows` agree cell for cell.
+      ...(availabilityMae > availabilityMaeCeiling &&
+      firstPartyRosAvailabilityEvidenceOfExcessMae(
+        choice.samples,
+        availabilityMae,
+        availabilityMaeCeiling,
+        FIRST_PARTY_ROS_MAXIMUM_AVAILABILITY_ROW_ERROR[choice.bucket],
+        FIRST_PARTY_ROS_AVAILABILITY_EVIDENCE_ALPHA,
+      )
         ? [`${prefix}_availability_mae_above_maximum`]
         : []),
       ...(Math.abs(availabilityBias) > FIRST_PARTY_ROS_MAX_AVAILABILITY_BIAS

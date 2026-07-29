@@ -9,8 +9,10 @@ import type {
   PendingPairingOffer,
 } from "./protocol.js";
 import {
+  configurationStorageKey,
   pairingOfferIsFresh,
   pendingPairingStorageKey,
+  validateBridgeConfiguration,
   validateStoredPendingOffer,
 } from "./protocol.js";
 
@@ -126,7 +128,24 @@ async function requireApiPermission(apiBaseUrl: string): Promise<void> {
 }
 
 openConnectionsButton.addEventListener("click", () => {
-  void chrome.tabs.create({ url: "https://laces.mward.io/connections" });
+  // Follow the origin this device was paired against, so the button lands on whichever
+  // domain the member actually uses (the API and web app share an origin in deployment).
+  // Falls back to the canonical domain when unpaired or the stored configuration is invalid.
+  void chrome.storage.local
+    .get(configurationStorageKey)
+    .then((stored) => {
+      try {
+        const configuration = validateBridgeConfiguration(stored[configurationStorageKey]);
+        return new URL("/connections", configuration.apiBaseUrl).toString();
+      } catch {
+        return "https://laces.mward.io/connections";
+      }
+    })
+    .then((url) => chrome.tabs.create({ url }))
+    .then(
+      () => undefined,
+      () => undefined,
+    );
 });
 
 syncButton.addEventListener("click", () => {

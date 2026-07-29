@@ -1,9 +1,16 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  FIRST_PARTY_ROS_AVAILABILITY_EVIDENCE_ALPHA,
+  FIRST_PARTY_ROS_COVERAGE_EVIDENCE_ALPHA,
+  FIRST_PARTY_ROS_MAXIMUM_AVAILABILITY_ROW_ERROR,
+  FIRST_PARTY_ROS_MAX_AVAILABILITY_BIAS,
+  FIRST_PARTY_ROS_MAX_AVAILABILITY_MAE,
+  FIRST_PARTY_ROS_MAX_NINE_PLUS_AVAILABILITY_MAE,
   FIRST_PARTY_ROS_MODEL_VERSION,
   FIRST_PARTY_ROS_SEED_VERSION,
   applyFirstPartyRosIntervalCalibration,
+  firstPartyRosAvailabilityEvidenceOfExcessMae,
   diagnoseFirstPartyRosConvergence,
   evaluateFirstPartyRosChampionPolicy,
   evaluateFirstPartyRosReleaseGate,
@@ -12,6 +19,7 @@ import {
   type FirstPartyRosProjectionInput,
   type FirstPartyRosWeeklyScenarioInput,
 } from "./rest-of-season.js";
+import { projectionScoringProfileKey } from "./scoring.js";
 
 const scoringProfile = {
   id: "test-ppr",
@@ -1120,6 +1128,318 @@ describe("season-locked ROS champion policy", () => {
     expect(uncalibrated.intervalCalibration).toBe("not-calibrated");
   });
 
+  it("fails the availability ceiling only on evidence of excess error, not on a point estimate", () => {
+    // The releasing fixture above, moved to the nine-plus bucket: asOfWeek 8 and 9 leave 10- and
+    // 9-week windows. The fixture's own availability MAE is 0, so the ceiling behavior is probed
+    // by overriding the derived held-out evidence exactly as the report-gate test does
+    // (apps/worker/src/first-party-ros-backtest.test.ts).
+    const evaluation = evaluateFirstPartyRosChampionPolicy(
+      [2023, 2024, 2025].map((season) => ({
+        season,
+        complete: true,
+        forecasts: [
+          heldOutForecast(season, 8, `${season}-one`),
+          heldOutForecast(season, 9, `${season}-two`),
+        ],
+      })),
+      {
+        minimumHeldOutSeasons: 2,
+        minimumBatches: 4,
+        minimumSamples: 4,
+        minimumCellSeasons: 2,
+        minimumCellSamples: 4,
+        minimumCellCutoffs: 2,
+        minimumCellBatches: 4,
+      },
+    );
+    const policyWithAvailabilityMae = (availabilityMae: number, samples: number) => ({
+      ...evaluation.livePolicy,
+      choices: evaluation.livePolicy.choices.map((choice) =>
+        choice.position === "WR" && choice.bucket === "nine-plus"
+          ? {
+              ...choice,
+              samples,
+              heldOutEvidence: {
+                ...choice.heldOutEvidence,
+                contextualAvailabilityMae: availabilityMae,
+                recencyAvailabilityMae: availabilityMae,
+              },
+            }
+          : choice,
+      ),
+    });
+    const liveEvidence = {
+      contextualModelVersion: "contextual-v1",
+      recencyModelVersion: "recency-v1",
+      scoringProfileKey: "test-ppr:v1",
+      intervalMethodVersion: "simulation-p15-p85-v1",
+      position: "WR" as const,
+      bucket: "nine-plus" as const,
+      inputChecksum: "e".repeat(64),
+      coverage: { contextual: 1, recency: 1 },
+      availability: {
+        scheduledGames: 10,
+        contextualExpectedGames: 9,
+        recencyExpectedGames: 8.5,
+      },
+      convergence: {
+        contextual: { state: "converged" as const, diagnosticChecksum: "c".repeat(64) },
+        recency: { state: "converged" as const, diagnosticChecksum: "d".repeat(64) },
+      },
+    };
+    const releaseOptions = {
+      maximumIntervalCoverageDeviation: 0.31,
+      minimumWalkForwardCalibrationSeasons: 1,
+      minimumWalkForwardCalibrationBatches: 2,
+      minimumWalkForwardCalibrationSamples: 2,
+    };
+
+    // Hundredths over the 2.75 nine-plus ceiling at 288 paired rows is inside the evidence test's
+    // bar (a nine-plus cell fails only from about 3.25 games at that sample), so the cell releases
+    // where the superseded point comparison withheld it.
+    const marginal = evaluateFirstPartyRosReleaseGate(
+      policyWithAvailabilityMae(2.76, 288),
+      liveEvidence,
+      releaseOptions,
+    );
+    expect(marginal).toMatchObject({ state: "release", strategy: "contextual", reasons: [] });
+    // A cell genuinely and substantially over its ceiling still withholds, for exactly that reason.
+    const substantial = evaluateFirstPartyRosReleaseGate(
+      policyWithAvailabilityMae(3.5, 288),
+      liveEvidence,
+      releaseOptions,
+    );
+    expect(substantial.state).toBe("withhold");
+    expect(substantial.reasons).toEqual(["availability-error-above-threshold"]);
+    // A small sample cannot turn hundredths over the ceiling into evidence either.
+    const smallSample = evaluateFirstPartyRosReleaseGate(
+      policyWithAvailabilityMae(2.76, 18),
+      liveEvidence,
+      releaseOptions,
+    );
+    expect(smallSample.state).toBe("release");
+  });
+
+  it("scopes the live gate's evidence identity to the position being gated", () => {
+    const artifactRules = [
+      { statId: "passing_yards", points: 0.04 },
+      { statId: "passing_touchdowns", points: 4 },
+      { statId: "receptions", points: 1 },
+    ];
+    const artifactKey = projectionScoringProfileKey({ id: "artifact", rules: artifactRules });
+    // A D/ST-only rule joining the league profile moves the whole key for a reason that cannot
+    // touch a QB cell: defensive_sacks is outside the QB component vocabulary.
+    const dstAugmentedKey = projectionScoringProfileKey({
+      id: "league-with-dst",
+      rules: [...artifactRules, { statId: "defensive_sacks", points: 1 }],
+    });
+    // Repricing passing yards is inside the QB vocabulary, so the QB-scoped keys diverge.
+    const qbRepricedKey = projectionScoringProfileKey({
+      id: "league-reprices-qb",
+      rules: [{ statId: "passing_yards", points: 0.05 }, ...artifactRules.slice(1)],
+    });
+    const policyFor = (scoringProfileKey: string) =>
+      evaluateFirstPartyRosChampionPolicy(
+        [2023, 2024, 2025].map((season) => ({
+          season,
+          complete: true,
+          forecasts: [
+            {
+              ...heldOutForecast(season, 10, `${season}-one`),
+              position: "QB" as const,
+              scoringProfileKey,
+            },
+            {
+              ...heldOutForecast(season, 11, `${season}-two`),
+              position: "QB" as const,
+              scoringProfileKey,
+            },
+          ],
+        })),
+        {
+          minimumHeldOutSeasons: 2,
+          minimumBatches: 4,
+          minimumSamples: 4,
+          minimumCellSeasons: 2,
+          minimumCellSamples: 4,
+          minimumCellCutoffs: 2,
+          minimumCellBatches: 4,
+        },
+      ).livePolicy;
+    const liveEvidenceFor = (scoringProfileKey: string) => ({
+      contextualModelVersion: "contextual-v1",
+      recencyModelVersion: "recency-v1",
+      scoringProfileKey,
+      intervalMethodVersion: "simulation-p15-p85-v1",
+      position: "QB" as const,
+      bucket: "five-to-eight" as const,
+      inputChecksum: "e".repeat(64),
+      coverage: { contextual: 1, recency: 1 },
+      availability: {
+        scheduledGames: 8,
+        contextualExpectedGames: 7,
+        recencyExpectedGames: 6.5,
+      },
+      convergence: {
+        contextual: { state: "converged" as const, diagnosticChecksum: "c".repeat(64) },
+        recency: { state: "converged" as const, diagnosticChecksum: "d".repeat(64) },
+      },
+    });
+    const releaseOptions = {
+      maximumIntervalCoverageDeviation: 0.31,
+      minimumWalkForwardCalibrationSeasons: 1,
+      minimumWalkForwardCalibrationBatches: 2,
+      minimumWalkForwardCalibrationSamples: 2,
+    };
+    const artifactPolicy = policyFor(artifactKey);
+
+    // The whole keys differ, but byte-equal QB-scoped keys mean byte-identical QB scoring, so the
+    // QB cell keeps releasing when the league profile gains rules outside its vocabulary.
+    const dstAugmented = evaluateFirstPartyRosReleaseGate(
+      artifactPolicy,
+      liveEvidenceFor(dstAugmentedKey),
+      releaseOptions,
+    );
+    expect(dstAugmented).toMatchObject({ state: "release", strategy: "contextual", reasons: [] });
+
+    const repriced = evaluateFirstPartyRosReleaseGate(
+      artifactPolicy,
+      liveEvidenceFor(qbRepricedKey),
+      releaseOptions,
+    );
+    expect(repriced.state).toBe("withhold");
+    expect(repriced.reasons).toContain("evidence-identity-mismatch");
+
+    // Two canonical profiles that both scope to "[]" for the gated position must never read as
+    // agreement (fail closed): pricing nothing for QB is not evidence of identical QB scoring.
+    const dstOnlyPolicy = policyFor(
+      projectionScoringProfileKey({
+        id: "dst-only-a",
+        rules: [{ statId: "defensive_sacks", points: 1 }],
+      }),
+    );
+    const emptyScoped = evaluateFirstPartyRosReleaseGate(
+      dstOnlyPolicy,
+      liveEvidenceFor(
+        projectionScoringProfileKey({
+          id: "dst-only-b",
+          rules: [{ statId: "defensive_sacks", points: 2 }],
+        }),
+      ),
+      releaseOptions,
+    );
+    expect(emptyScoped.state).toBe("withhold");
+    expect(emptyScoped.reasons).toContain("evidence-identity-mismatch");
+  });
+
+  it("pins Amendment 4's inertness argument: one frozen profile on both sides decides exactly as whole-key equality did", () => {
+    // The 2026 untouched run scores every position under a single frozen profile, so both sides of
+    // every identity comparison derive from that one profile and carry the same canonical key.
+    // Byte-equal keys take the fast path that IS whole-key equality, so position scoping cannot
+    // change any frozen-corpus decision (docs/ROS_GATE_AND_DST_PLAN.md, WP0 Step 6).
+    const frozenKey = projectionScoringProfileKey({
+      id: "frozen-untouched-proof-ppr",
+      rules: [
+        { statId: "receptions", points: 1 },
+        { statId: "receiving_yards", points: 0.1 },
+        { statId: "receiving_touchdowns", points: 6 },
+        { statId: "rushing_yards", points: 0.1 },
+        { statId: "passing_yards", points: 0.04 },
+        { statId: "field_goals_made_0_39", points: 3 },
+        { statId: "defensive_sacks", points: 1 },
+      ],
+    });
+    const evaluation = evaluateFirstPartyRosChampionPolicy(
+      [2023, 2024, 2025].map((season) => ({
+        season,
+        complete: true,
+        forecasts: [
+          { ...heldOutForecast(season, 10, `${season}-one`), scoringProfileKey: frozenKey },
+          { ...heldOutForecast(season, 11, `${season}-two`), scoringProfileKey: frozenKey },
+        ],
+      })),
+      {
+        minimumHeldOutSeasons: 2,
+        minimumBatches: 4,
+        minimumSamples: 4,
+        minimumCellSeasons: 2,
+        minimumCellSamples: 4,
+        minimumCellCutoffs: 2,
+        minimumCellBatches: 4,
+      },
+    );
+    const releaseOptions = {
+      maximumIntervalCoverageDeviation: 0.31,
+      minimumWalkForwardCalibrationSeasons: 1,
+      minimumWalkForwardCalibrationBatches: 2,
+      minimumWalkForwardCalibrationSamples: 2,
+    };
+    const liveEvidenceFor = (
+      position: "QB" | "RB" | "WR" | "TE" | "K" | "DST",
+      bucket: "one-to-four" | "five-to-eight" | "nine-plus",
+    ) => ({
+      contextualModelVersion: "contextual-v1",
+      recencyModelVersion: "recency-v1",
+      scoringProfileKey: frozenKey,
+      intervalMethodVersion: "simulation-p15-p85-v1",
+      position,
+      bucket,
+      inputChecksum: "e".repeat(64),
+      coverage: { contextual: 1, recency: 1 },
+      availability: {
+        scheduledGames: 8,
+        contextualExpectedGames: 7,
+        recencyExpectedGames: 6.5,
+      },
+      convergence: {
+        contextual: { state: "converged" as const, diagnosticChecksum: "c".repeat(64) },
+        recency: { state: "converged" as const, diagnosticChecksum: "d".repeat(64) },
+      },
+    });
+
+    // The releasing fixture decides byte-identically to the whole-key gate's pre-change
+    // expectation: release, contextual, no reasons.
+    const released = evaluateFirstPartyRosReleaseGate(
+      evaluation.livePolicy,
+      liveEvidenceFor("WR", "five-to-eight"),
+      releaseOptions,
+    );
+    expect(released).toMatchObject({ state: "release", strategy: "contextual", reasons: [] });
+    // The withholding fixture raises exactly the single reason the whole-key gate raised.
+    const withheld = evaluateFirstPartyRosReleaseGate(
+      evaluation.livePolicy,
+      {
+        ...liveEvidenceFor("WR", "five-to-eight"),
+        convergence: {
+          ...liveEvidenceFor("WR", "five-to-eight").convergence,
+          contextual: { state: "unstable" as const, diagnosticChecksum: "c".repeat(64) },
+        },
+      },
+      releaseOptions,
+    );
+    expect(withheld).toMatchObject({ state: "withhold", reasons: ["convergence-gate-failed"] });
+    // Across the entire position x bucket matrix, identity never decides anything: both sides
+    // carry the frozen key, so no cell can raise evidence-identity-mismatch, and each sparse
+    // cell's reasons are exactly the evidence shortfalls whole-key semantics produced.
+    for (const position of ["QB", "RB", "WR", "TE", "K", "DST"] as const) {
+      for (const bucket of ["one-to-four", "five-to-eight", "nine-plus"] as const) {
+        const decision = evaluateFirstPartyRosReleaseGate(
+          evaluation.livePolicy,
+          liveEvidenceFor(position, bucket),
+          releaseOptions,
+        );
+        expect(decision.reasons).not.toContain("evidence-identity-mismatch");
+        if (position === "WR" && bucket === "five-to-eight") {
+          expect(decision.state).toBe("release");
+        } else {
+          // Sparse cells withhold on evidence, never on identity — same as before the change.
+          expect(decision.state).toBe("withhold");
+          expect(decision.reasons.length).toBeGreaterThan(0);
+        }
+      }
+    }
+  });
+
   it("withholds on a signed availability bias above threshold even when the MAE ceiling is cleared", () => {
     // Consistently shifts the selected (contextual) strategy's expected games 1.2 above actual
     // for every held-out forecast: |bias| = 1.2 exceeds FIRST_PARTY_ROS_MAX_AVAILABILITY_BIAS
@@ -1518,5 +1838,110 @@ describe("season-locked ROS champion policy", () => {
         },
       ]),
     ).not.toThrow();
+  });
+});
+
+describe("availability MAE evidence test (gate v3)", () => {
+  const ninePlus = FIRST_PARTY_ROS_MAXIMUM_AVAILABILITY_ROW_ERROR["nine-plus"];
+  const midRange = FIRST_PARTY_ROS_MAXIMUM_AVAILABILITY_ROW_ERROR["five-to-eight"];
+
+  function ninePlusEvidence(samples: number, mae: number): boolean {
+    return firstPartyRosAvailabilityEvidenceOfExcessMae(
+      samples,
+      mae,
+      FIRST_PARTY_ROS_MAX_NINE_PLUS_AVAILABILITY_MAE,
+      ninePlus,
+      FIRST_PARTY_ROS_AVAILABILITY_EVIDENCE_ALPHA,
+    );
+  }
+
+  it("leaves every ratified availability ceiling exactly where gate v2 put it", () => {
+    expect(FIRST_PARTY_ROS_MAX_AVAILABILITY_MAE).toBe(1.5);
+    expect(FIRST_PARTY_ROS_MAX_NINE_PLUS_AVAILABILITY_MAE).toBe(2.75);
+    expect(FIRST_PARTY_ROS_MAX_AVAILABILITY_BIAS).toBe(1);
+    // Same one-sided convention the coverage evidence test was ratified under.
+    expect(FIRST_PARTY_ROS_AVAILABILITY_EVIDENCE_ALPHA).toBe(
+      FIRST_PARTY_ROS_COVERAGE_EVIDENCE_ALPHA,
+    );
+    expect(FIRST_PARTY_ROS_MAXIMUM_AVAILABILITY_ROW_ERROR).toEqual({
+      "one-to-four": 4,
+      "five-to-eight": 8,
+      "nine-plus": 17,
+    });
+  });
+
+  it("never finds evidence against a ceiling the cell is already inside", () => {
+    for (const mae of [0, 1, 2.5, 2.749_999, 2.75]) {
+      expect(ninePlusEvidence(288, mae)).toBe(false);
+    }
+    // Not even with an enormous sample: the point estimate is the ceiling itself.
+    expect(ninePlusEvidence(1_000_000, 2.75)).toBe(false);
+  });
+
+  it("reproduces an exactly hand-computable binomial tail", () => {
+    // n = 4, ceiling 2, support 4 gives p = 0.5, and MAE 3 needs ceil(4 * 3 / 4) = 3
+    // exceedances, so the null tail is P(Bin(4, 0.5) >= 3) = (4 + 1) / 16 = 0.3125 exactly.
+    expect(firstPartyRosAvailabilityEvidenceOfExcessMae(4, 3, 2, 4, 0.3125)).toBe(false);
+    expect(firstPartyRosAvailabilityEvidenceOfExcessMae(4, 3, 2, 4, 0.3126)).toBe(true);
+  });
+
+  it("reads the measured QB nine-plus cell as sampling noise, not evidence", () => {
+    // The three admitted 8-player-per-position reports, standard/half-PPR/full-PPR.
+    for (const mae of [2.763_827, 2.805_7, 2.809_1]) {
+      expect(ninePlusEvidence(288, mae)).toBe(false);
+    }
+  });
+
+  it("still blocks a cell that is genuinely and substantially over the ceiling", () => {
+    for (const mae of [3.3, 3.5, 4, 6, 12]) {
+      expect(ninePlusEvidence(288, mae)).toBe(true);
+    }
+    // The five-to-eight ceiling behaves the same way at its own support.
+    for (const mae of [1.9, 2.5, 4]) {
+      expect(
+        firstPartyRosAvailabilityEvidenceOfExcessMae(
+          128,
+          mae,
+          FIRST_PARTY_ROS_MAX_AVAILABILITY_MAE,
+          midRange,
+          FIRST_PARTY_ROS_AVAILABILITY_EVIDENCE_ALPHA,
+        ),
+      ).toBe(true);
+    }
+  });
+
+  it("demands more excess from a smaller sample and is monotone in the point estimate", () => {
+    expect(ninePlusEvidence(288, 3.3)).toBe(true);
+    expect(ninePlusEvidence(72, 3.3)).toBe(false);
+    expect(ninePlusEvidence(72, 4.2)).toBe(true);
+    let previous = false;
+    for (const mae of [2.8, 3, 3.2, 3.25, 3.3, 3.6, 4]) {
+      const current = ninePlusEvidence(288, mae);
+      expect(current || !previous).toBe(true);
+      previous = current;
+    }
+  });
+
+  it("treats an impossible MAE as certain evidence and an unusable sample as none", () => {
+    // No row can miss by more than the window it spans, so this tail is exactly zero.
+    expect(ninePlusEvidence(288, ninePlus)).toBe(true);
+    for (const samples of [0, -1, 1.5, Number.NaN]) {
+      expect(ninePlusEvidence(samples, 12)).toBe(false);
+    }
+  });
+
+  it("fails closed on an incoherent test specification", () => {
+    expect(() => firstPartyRosAvailabilityEvidenceOfExcessMae(288, -1, 2.75, 17, 0.1)).toThrow(
+      RangeError,
+    );
+    expect(() => firstPartyRosAvailabilityEvidenceOfExcessMae(288, 3, 0, 17, 0.1)).toThrow(
+      RangeError,
+    );
+    expect(() => firstPartyRosAvailabilityEvidenceOfExcessMae(288, 3, 2.75, 2.75, 0.1)).toThrow(
+      RangeError,
+    );
+    expect(() => firstPartyRosAvailabilityEvidenceOfExcessMae(288, 3, 2.75, 17, 1.5)).toThrow(
+      RangeError,
+    );
   });
 });

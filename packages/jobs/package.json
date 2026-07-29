@@ -1,0 +1,10 @@
+{
+  "name": "@fantasy/jobs",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": "./src/index.ts",
+  "dependencies": {
+    "pg-boss": "^12.5.1"
+  }
+}

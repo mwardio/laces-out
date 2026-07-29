@@ -189,30 +189,6 @@
     font-weight: 700;
   }
 
-  .sidebar-status {
-    padding: 12px;
-    background: #17221a;
-    border-color: #2c3a2e;
-    border-radius: 7px;
-  }
-
-  .sidebar-status__icon {
-    width: 30px;
-    height: 30px;
-    background: #253523;
-    border-radius: 6px;
-  }
-
-  .sidebar-status strong {
-    font-size: 11px;
-  }
-
-  .sidebar-status p {
-    color: #8a968d;
-    font-size: 10px;
-    line-height: 1.45;
-  }
-
   .session-demo-chip {
     color: #984a2d;
   }
@@ -222,7 +198,13 @@
   }
 
   .topbar {
-    height: 64px;
+    /* Was a hard-coded 64px, which silently pinned the bar to its old height
+       regardless of --topbar-height (this layer wins the cascade over
+       @layer components, so the var alone in globals.css had no effect).
+       Referencing the var here lets both the 48px desktop and 56px mobile
+       values actually render, and keeps every other --topbar-height
+       consumer (sticky offsets, scroll-margin) in sync with the real bar. */
+    height: var(--topbar-height);
     padding: 0 28px;
     background: var(--paper-100);
     border-bottom-color: var(--ink-150);
@@ -244,13 +226,27 @@
     gap: 9px;
   }
 
+  /* Desktop-only: matches globals.css's .topbar-actions .button rule, which
+     this layer would otherwise blanket-override via the plain .button /
+     .button--small rules below (this layer beats @layer components
+     regardless of selector specificity). */
+  @media (min-width: 821px) {
+    .topbar-actions .button {
+      min-height: 32px;
+      padding: 0 12px;
+      font-size: 10px;
+    }
+  }
+
   .main-content {
     max-width: 1520px;
-    padding: 31px 30px 72px;
+    /* Top padding halved (was 31px) to tighten the gap under the top bar. */
+    padding: 15.5px 30px 72px;
   }
 
   .app-shell--compact .main-content {
-    padding: 22px 24px 54px;
+    /* Top padding halved (was 22px). */
+    padding: 11px 24px 54px;
   }
 
   /* Type and controls */
@@ -262,7 +258,10 @@
   .page-heading h1 {
     max-width: 760px;
     margin-top: 5px;
-    font-size: clamp(29px, 3vw, 37px);
+    /* Standardized to a flat 38px (was clamp(29px, 3vw, 37px)) to match the
+       other page heroes. Mobile still steps down via the two @media copies
+       of this rule below. */
+    font-size: 38px;
     font-weight: 700;
     line-height: 1.08;
     letter-spacing: -0.035em;
@@ -272,7 +271,8 @@
     max-width: 790px;
     margin-top: 11px;
     color: var(--ink-600);
-    font-size: 13px;
+    /* Standardized to 12px to match the workbench-page hero subtitles. */
+    font-size: 12px;
     line-height: 1.58;
   }
 
@@ -1352,7 +1352,8 @@
 
     .main-content,
     .app-shell--compact .main-content {
-      padding: 24px 15px 42px;
+      /* Top padding halved (was 24px) to match the desktop reduction. */
+      padding: 12px 15px 42px;
     }
 
     .bottom-nav {
@@ -1411,7 +1412,7 @@
     }
 
     .page-subtitle {
-      font-size: 13px;
+      font-size: 12px;
     }
 
     .queue-card {

@@ -1,5 +1,11 @@
 import { loadEnvironment } from "@fantasy/config";
 import { createDatabase } from "@fantasy/db";
+import {
+  enqueueDataRefresh,
+  enqueueProjectionRefresh,
+  enqueueRecommendationRecompute,
+  registerQueues,
+} from "@fantasy/jobs";
 import { parseCredentialKey } from "@fantasy/security";
 import { sql } from "drizzle-orm";
 import { PgBoss } from "pg-boss";
@@ -8,7 +14,10 @@ import { buildApp } from "./app.js";
 import { createAiProviderAdapters } from "./ai-provider-adapters.js";
 import { AiService, DrizzleAiRepository } from "./ai-service.js";
 import { DrizzleAuthRepository } from "./auth-repository.js";
+import { drizzleChangeEventProducers } from "./change-event-producers.js";
+import { ChangeEventService, DrizzleChangeEventRepository } from "./change-events.js";
 import { AuthService } from "./auth.js";
+import { DraftAnalysisService, DrizzleDraftProjectionSource } from "./draft-analysis.js";
 import { DraftSessionService, DrizzleDraftSessionRepository } from "./draft-session.js";
 import { DraftMarketService } from "./draft-market.js";
 import { EspnBridgeService } from "./espn-bridge.js";
@@ -38,6 +47,7 @@ import {
 } from "./push-subscriptions.js";
 import { DrizzleScheduleRepository, ScheduleService } from "./schedule.js";
 import { DrizzleScheduleEdgeRepository, ScheduleEdgeService } from "./schedule-edge.js";
+import { DataQualityService, DrizzleDataQualityRepository } from "./data-quality.js";
 import { DrizzleStatsCenterRepository, StatsCenterService } from "./stats-center.js";
 import { YahooConnectionService } from "./yahoo-connection.js";
 import { DrizzleYahooSyncRepository, YahooSyncService } from "./yahoo-sync.js";
@@ -53,8 +63,19 @@ const draftSessions = new DraftSessionService(
   new DrizzleDraftSessionRepository(database.db, espnLiveDraftRepository),
 );
 const draftMarket = new DraftMarketService(database.db);
+const draftAnalysis = new DraftAnalysisService(
+  draftSessions,
+  draftMarket,
+  new DrizzleDraftProjectionSource(database.db),
+);
 const espnPersistence = new DrizzleEspnSyncPersistence(database.db);
-const espnBridge = new EspnBridgeService(database.db, () => new Date(), espnPersistence);
+// The change-event feed (WP5). Producers write; the service is the only authorized reader.
+const changeEventProducers = drizzleChangeEventProducers(database.db);
+const changeEvents = new ChangeEventService(new DrizzleChangeEventRepository(database.db));
+const espnBridge = new EspnBridgeService(database.db, () => new Date(), espnPersistence, {
+  producers: changeEventProducers,
+  onError: (error) => app.log.warn({ err: error }, "ESPN sync change-event emission failed"),
+});
 // Constructed unconditionally so the flag is enforced in one place inside the service; the route
 // still serves 503 for a deployment that has never configured live draft sync at all.
 const espnLiveDraft = new EspnLiveDraftService(espnLiveDraftRepository, {
@@ -64,6 +85,7 @@ const decisions = new InSeasonDecisionService(new DrizzleInSeasonDecisionReposit
 const analytics = new LeagueAnalyticsService(new DrizzleLeagueAnalyticsRepository(database.db));
 const schedule = new ScheduleService(new DrizzleScheduleRepository(database.db));
 const scheduleEdge = new ScheduleEdgeService(new DrizzleScheduleEdgeRepository(database.db));
+const dataQuality = new DataQualityService(new DrizzleDataQualityRepository(database.db));
 const preferences = new PreferencesService(new DrizzlePreferencesRepository(database.db));
 // Constructed unconditionally so device management and the config probe answer consistently. The
 // service reports the feature unavailable, and refuses to register or test, when the operator has
@@ -157,25 +179,15 @@ const jobs = new PgBoss({
   schedule: false,
 });
 await jobs.start();
-await jobs.createQueue("data-refresh", {
-  retryLimit: 5,
-  retryDelay: 60,
-  retryBackoff: true,
-  warningQueueSize: 10,
-});
-await jobs.createQueue("projection-refresh", {
-  retryLimit: 4,
-  retryDelay: 60,
-  retryBackoff: true,
-  retryDelayMax: 30 * 60,
-  expireInSeconds: 30 * 60,
-  warningQueueSize: 10,
-});
+// One registration function for both processes. The API used to hand-copy two queue definitions
+// here and had already lost the dead-letter target and retention settings the worker applied.
+await registerQueues(jobs);
 const app = await buildApp({
   environment,
   authService,
   draftSessions,
   draftMarket,
+  draftAnalysis,
   // Same service, two doors: bridge-authenticated ingest and the cookie-authenticated freeze.
   draftManualBackup: espnLiveDraft,
   espnBridge,
@@ -185,6 +197,9 @@ const app = await buildApp({
   statsCenter,
   schedule,
   scheduleEdge,
+  changeEvents,
+  changeEventProducers,
+  dataQuality,
   preferences,
   push,
   ...(ai ? { ai } : {}),
@@ -207,29 +222,15 @@ const app = await buildApp({
     }
   },
   enqueueRefresh: async ({ requestedBy, refresh, requestedAt }) =>
-    jobs.send(
-      "data-refresh",
-      {
-        requestedBy,
-        scope: refresh.scope,
-        reason: "user",
-        requestedAt: requestedAt.toISOString(),
-      },
-      {
-        singletonKey: "shared-nfl-data",
-        singletonSeconds: 60,
-      },
-    ),
-  enqueueProjectionRefresh: async ({ season }) =>
-    jobs.send(
-      "projection-refresh",
-      { season },
-      {
-        group: { id: "projections" },
-        singletonKey: `projection-refresh:${season}:season`,
-        singletonSeconds: 60,
-      },
-    ),
+    enqueueDataRefresh(jobs, {
+      requestedBy,
+      scope: refresh.scope,
+      reason: "user",
+      requestedAt: requestedAt.toISOString(),
+    }),
+  enqueueProjectionRefresh: async ({ season }) => enqueueProjectionRefresh(jobs, { season }),
+  enqueueRecommendationRecompute: async ({ leagueSeasonId, kinds }) =>
+    enqueueRecommendationRecompute(jobs, { leagueSeasonId, kinds }),
 });
 app.addHook("onClose", async () => {
   await jobs.stop({ graceful: true, timeout: 10_000 });

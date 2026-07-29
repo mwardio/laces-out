@@ -10,7 +10,13 @@ import {
 } from "@fantasy/source-nflverse";
 
 import {
-  HISTORICAL_ROS_SCORING_PROFILE,
+  ROS_SCORING_PROFILE_KEYS,
+  isRosScoringProfileKey,
+  rosScoringProfile,
+  type RosScoringProfileEntry,
+} from "@fantasy/projections";
+
+import {
   buildHistoricalRosBacktest,
   historicalRosBucket,
 } from "../src/first-party-ros-backtest.js";
@@ -57,6 +63,21 @@ function integerList(name: string, fallback: string): readonly number[] {
   return [...new Set(values)].sort((left, right) => left - right);
 }
 
+/**
+ * Resolves `--scoring-profile=`. The frozen validation process is run once per profile; an unknown
+ * name throws before any work starts rather than silently validating the default.
+ */
+function scoringProfileOption(): RosScoringProfileEntry {
+  const raw = process.argv.find((argument) => argument.startsWith("--scoring-profile="));
+  const value = raw?.slice("--scoring-profile=".length) ?? "full-ppr";
+  if (!isRosScoringProfileKey(value)) {
+    throw new Error(
+      `--scoring-profile must be one of ${ROS_SCORING_PROFILE_KEYS.join(", ")} (received ${value})`,
+    );
+  }
+  return rosScoringProfile(value);
+}
+
 function normalizePosition(value: string): RosCoveragePosition | null {
   const normalized = value.trim().toUpperCase();
   const position =
@@ -76,6 +97,7 @@ function requireChanged<T extends { readonly state: string }>(
 
 async function main(): Promise<void> {
   const startedAt = Date.now();
+  const scoringProfile = scoringProfileOption();
   const seasons = integerList("--seasons", "2019,2020,2021,2022,2023,2024,2025");
   const heldOutSeasons = integerList("--holdouts", "2022,2023,2024,2025");
   const asOfWeeks = integerList("--cutoffs", "1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17");
@@ -98,6 +120,9 @@ async function main(): Promise<void> {
     throw new Error("Every holdout requires at least three earlier source seasons");
   }
 
+  process.stderr.write(
+    `Scoring profile: ${scoringProfile.key} (${scoringProfile.label}, digest ${scoringProfile.digest.slice(0, 12)})\n`,
+  );
   process.stderr.write(
     `Loading official nflverse artifacts for ${seasons.join(", ")} (read-only)...\n`,
   );
@@ -286,6 +311,11 @@ async function main(): Promise<void> {
       elapsedSeconds: (Date.now() - startedAt) / 1_000,
       state: "blocked-before-modeling",
       noDatabaseWrites: true,
+      scoringProfile: {
+        key: scoringProfile.key,
+        label: scoringProfile.label,
+        digest: scoringProfile.digest,
+      },
       coverage: {
         state: coverage.state,
         fullyHeldOutSeasons: coverage.fullyHeldOutSeasons,
@@ -318,7 +348,7 @@ async function main(): Promise<void> {
     injuries,
     schedules,
     coverage,
-    scoringProfile: HISTORICAL_ROS_SCORING_PROFILE,
+    scoringProfile: scoringProfile.profile,
     onProgress: (event) => {
       const now = Date.now();
       process.stderr.write(
@@ -375,6 +405,13 @@ async function main(): Promise<void> {
     elapsedSeconds: (Date.now() - startedAt) / 1_000,
     noDatabaseWrites: true,
     sourcePolicy: "official-nflverse-artifacts",
+    // Recorded so a report can never be misattributed to a profile it was not graded under. The
+    // authoritative identity remains `identityAudit.scoringProfileKey`, which admission compares.
+    scoringProfile: {
+      key: scoringProfile.key,
+      label: scoringProfile.label,
+      digest: scoringProfile.digest,
+    },
     availabilityAudit,
     coverage: {
       state: coverage.state,

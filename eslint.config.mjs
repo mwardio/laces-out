@@ -33,5 +33,33 @@ export default tseslint.config(
       "@typescript-eslint/restrict-template-expressions": ["error", { allowNumber: true }],
     },
   },
+  {
+    // ADR 0001: the API and worker are separate processes. Shared provider-neutral logic belongs in
+    // packages/*, so a cross-app import is a build error rather than a review comment.
+    files: ["apps/api/**/*.ts", "apps/worker/**/*.ts"],
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        {
+          patterns: [
+            {
+              group: [
+                "**/apps/api/*",
+                "**/apps/worker/*",
+                "../../api/*",
+                "../../worker/*",
+                "@fantasy/api",
+                "@fantasy/api/*",
+                "@fantasy/worker",
+                "@fantasy/worker/*",
+              ],
+              message:
+                "apps/api and apps/worker must not import each other (ADR 0001). Move shared logic into packages/*.",
+            },
+          ],
+        },
+      ],
+    },
+  },
   prettier,
 );

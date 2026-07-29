@@ -424,11 +424,10 @@ export function PortfolioDashboard({ afterOverview }: { readonly afterOverview?:
                 <h3>ESPN Fantasy</h3>
                 <p>One-click + automatic sync</p>
               </div>
-              <span className="provider-state provider-state--unofficial">Unofficial</span>
             </div>
             <p className="provider-description">
-              ESPN does not offer a documented public fantasy OAuth API. Private leagues sync from
-              the ESPN session already open in your browser without sharing a password or cookie.
+              Private leagues sync from the ESPN session already open in your browser without
+              sharing a password or cookie.
             </p>
             <div className="provider-facts">
               <span>

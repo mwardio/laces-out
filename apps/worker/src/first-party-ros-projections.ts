@@ -19,21 +19,30 @@ import {
   FIRST_PARTY_ROS_MODEL_VERSION,
   FIRST_PARTY_PROJECTION_MODEL_VERSION,
   type FirstPartyRosChampionPolicy,
+  type ProjectionScoringProfile,
 } from "@fantasy/projections";
 import { and, desc, eq, inArray } from "drizzle-orm";
 
 import {
   buildFirstPartyRosPlayerPersistenceRow,
   buildFirstPartyRosRunPayload,
+  selectFirstPartyRosArtifactForLeague,
   evaluateFirstPartyRosPublication,
   firstPartyRosChampionArtifactIsValid,
   type FirstPartyRosPublicationDecision,
+  type FirstPartyRosRailPosition,
   type FirstPartyRosReleasedPlayer,
   type FirstPartyRosRunConvergence,
   type LoadedFirstPartyRosChampionArtifact,
 } from "./first-party-ros-publication.js";
 import { FIRST_PARTY_PROJECTION_SOURCE_KEY } from "./first-party-projections.js";
 import type { ProjectionRefreshJob, ProjectionRefreshService, WorkerJobContext } from "./jobs.js";
+
+/**
+ * Upper bound on champion-artifact rows read per season. One row per admitted scoring profile is
+ * expected; the bound exists so a mistaken bulk admission cannot make this read unbounded.
+ */
+const MAXIMUM_CHAMPION_ARTIFACT_ROWS = 64;
 
 export const FIRST_PARTY_ROS_RELEASE_SET_SOURCE = "laces-out-first-party-ros";
 
@@ -47,6 +56,13 @@ export const FIRST_PARTY_ROS_RELEASE_SET_SOURCE = "laces-out-first-party-ros";
 export interface FirstPartyRosPublicationTarget {
   readonly leagueSeasonId: string;
   readonly leagueScoringProfileKey: string;
+  /**
+   * The league's normalized scoring profile and the rail positions its normalization supports.
+   * Supplied together, they let publication match the artifact per position; a target that omits
+   * them is gated on whole-profile identity instead, which can only ever release less.
+   */
+  readonly leagueScoringProfile?: ProjectionScoringProfile;
+  readonly supportedPositions?: readonly FirstPartyRosRailPosition[];
   readonly futureWindowComplete: boolean;
   readonly evidence: Parameters<typeof evaluateFirstPartyRosPublication>[0]["evidence"];
   readonly convergence: FirstPartyRosRunConvergence;
@@ -616,18 +632,31 @@ export class FirstPartyRosProjectionShadowService implements ProjectionRefreshSe
       // the shadow audit below is byte-for-byte unchanged. A persisted artifact only authorizes
       // publication when it validates, its scoring identity matches the target league, and the live
       // release gate clears; otherwise the prior good set stays authoritative.
-      const artifact = await this.#loadChampionArtifact(job.season);
-      const publication = artifact
-        ? await this.#attemptPublication({
-            artifact,
-            managedSourceId: managed.id,
-            season: job.season,
-            window,
-            sourceAsOf,
-            now,
-            context,
-          })
-        : { published: 0, artifactInvalid: false };
+      // One artifact per admitted scoring profile, attempted independently. Now that scoring
+      // identity is position-scoped, one league can match more than one admitted artifact, so
+      // every target is arbitrated to exactly one artifact (`selectFirstPartyRosArtifactForLeague`
+      // over the full loaded list) before it may publish — a league can never receive two sets
+      // scored under different artifacts in one window.
+      const artifacts = await this.#loadChampionArtifacts(job.season);
+      let published = 0;
+      let artifactInvalid = false;
+      let arbitrationSkippedTargets = 0;
+      for (const artifact of artifacts) {
+        const attempt = await this.#attemptPublication({
+          artifact,
+          artifacts,
+          managedSourceId: managed.id,
+          season: job.season,
+          window,
+          sourceAsOf,
+          now,
+          context,
+        });
+        published += attempt.published;
+        artifactInvalid = artifactInvalid || attempt.artifactInvalid;
+        arbitrationSkippedTargets += attempt.arbitrationSkippedTargets;
+      }
+      const publication = { published, artifactInvalid };
       const publishedTargets = publication.published;
 
       await this.#database.transaction(async (transaction) => {
@@ -722,8 +751,13 @@ export class FirstPartyRosProjectionShadowService implements ProjectionRefreshSe
           ...(publication.artifactInvalid
             ? ["ros_champion_artifact_invalid_publication_paused"]
             : []),
+          // Per-league artifact arbitration chose a different artifact for at least one target.
+          // A silent skip here is a silent-wrong-output hazard, so the run says it happened and
+          // the metadata carries the count.
+          ...(arbitrationSkippedTargets > 0 ? ["ros_artifact_arbitration_skipped_targets"] : []),
         ].join("|"),
         ...(publishedTargets > 0 ? { publishedTargets } : {}),
+        ...(arbitrationSkippedTargets > 0 ? { arbitrationSkippedTargets } : {}),
       });
     } catch (error) {
       await this.#recordFailure(
@@ -736,8 +770,14 @@ export class FirstPartyRosProjectionShadowService implements ProjectionRefreshSe
     }
   }
 
-  async #loadChampionArtifact(season: number): Promise<LoadedFirstPartyRosChampionArtifact | null> {
-    const [row] = await this.#database
+  /**
+   * Loads the latest admitted artifact for each scoring profile in the season. Latest-admitted-wins
+   * is applied per `scoring_profile_key`, never across profiles.
+   */
+  async #loadChampionArtifacts(
+    season: number,
+  ): Promise<readonly LoadedFirstPartyRosChampionArtifact[]> {
+    const rows = await this.#database
       .select({
         season: firstPartyRosChampionArtifacts.season,
         scoringProfileKey: firstPartyRosChampionArtifacts.scoringProfileKey,
@@ -749,13 +789,14 @@ export class FirstPartyRosProjectionShadowService implements ProjectionRefreshSe
         policy: firstPartyRosChampionArtifacts.policy,
         releaseGate: firstPartyRosChampionArtifacts.releaseGate,
         artifactChecksum: firstPartyRosChampionArtifacts.artifactChecksum,
+        admittedAt: firstPartyRosChampionArtifacts.admittedAt,
       })
       .from(firstPartyRosChampionArtifacts)
       .where(eq(firstPartyRosChampionArtifacts.season, season))
       .orderBy(desc(firstPartyRosChampionArtifacts.admittedAt))
-      .limit(1);
-    if (!row) return null;
-    return {
+      .limit(MAXIMUM_CHAMPION_ARTIFACT_ROWS);
+
+    const loaded = rows.map((row) => ({
       season: row.season,
       scoringProfileKey: row.scoringProfileKey,
       modelVersion: row.modelVersion,
@@ -766,25 +807,43 @@ export class FirstPartyRosProjectionShadowService implements ProjectionRefreshSe
       policy: row.policy as unknown as FirstPartyRosChampionPolicy,
       releaseGate: row.releaseGate,
       artifactChecksum: row.artifactChecksum,
-    };
+      admittedAt: row.admittedAt,
+    }));
+
+    // Rows arrive newest first, so the first per key is the latest admission for that profile.
+    const latestByProfile = new Map<string, LoadedFirstPartyRosChampionArtifact>();
+    for (const artifact of loaded) {
+      const selected = selectFirstPartyRosArtifactForLeague({
+        artifacts: loaded,
+        leagueScoringProfileKey: artifact.scoringProfileKey,
+      });
+      if (selected) latestByProfile.set(artifact.scoringProfileKey, selected);
+    }
+    return [...latestByProfile.values()];
   }
 
   async #attemptPublication(input: {
     readonly artifact: LoadedFirstPartyRosChampionArtifact;
+    /** Every loaded artifact for the season, so per-league arbitration sees the full field. */
+    readonly artifacts: readonly LoadedFirstPartyRosChampionArtifact[];
     readonly managedSourceId: string;
     readonly season: number;
     readonly window: FirstPartyRosWindow;
     readonly sourceAsOf: Date;
     readonly now: Date;
     readonly context: WorkerJobContext;
-  }): Promise<{ readonly published: number; readonly artifactInvalid: boolean }> {
+  }): Promise<{
+    readonly published: number;
+    readonly artifactInvalid: boolean;
+    readonly arbitrationSkippedTargets: number;
+  }> {
     // Validity precedes the expensive league/candidate pipeline: an artifact minted under a
     // different running model version (the deploy-before-admit window) can never publish, so
     // building and discarding every league's simulations would only disguise the pause as work.
     // The caller surfaces this state in the run diagnostics so a dark publication window is
     // visible instead of reading as a routine shadow run.
     if (!firstPartyRosChampionArtifactIsValid(input.artifact)) {
-      return { published: 0, artifactInvalid: true };
+      return { published: 0, artifactInvalid: true, arbitrationSkippedTargets: 0 };
     }
     const targets = await this.#candidateProvider.buildTargets({
       artifact: input.artifact,
@@ -793,13 +852,46 @@ export class FirstPartyRosProjectionShadowService implements ProjectionRefreshSe
       now: input.now,
     });
     let published = 0;
+    let arbitrationSkippedTargets = 0;
     for (const target of targets) {
       if (input.context.signal.aborted) throw new Error("ROS shadow refresh was cancelled");
+      // Position-scoped matching lets one league appear in several artifacts' target lists, and
+      // the position-scoped gate would release under each — the same league receiving two sets
+      // scored under different artifacts. Arbitration picks the single artifact this league
+      // publishes under; when it picks a different one, this pass records the skip (the caller
+      // surfaces it in run diagnostics) and leaves the target to that artifact's own pass. When
+      // arbitration selects nothing, evaluation proceeds so the publication decision states the
+      // mismatch itself, exactly as before.
+      const arbitrated = selectFirstPartyRosArtifactForLeague({
+        artifacts: input.artifacts,
+        leagueScoringProfileKey: target.leagueScoringProfileKey,
+        // Both halves or neither, matching the publication gate's own stance below.
+        ...(target.leagueScoringProfile === undefined || target.supportedPositions === undefined
+          ? {}
+          : {
+              leagueScoringProfile: target.leagueScoringProfile,
+              supportedPositions: target.supportedPositions,
+            }),
+      });
+      if (arbitrated !== null && arbitrated.artifactChecksum !== input.artifact.artifactChecksum) {
+        arbitrationSkippedTargets += 1;
+        continue;
+      }
       const decision = evaluateFirstPartyRosPublication({
         artifact: input.artifact,
         leagueScoringProfileKey: target.leagueScoringProfileKey,
         evidence: target.evidence,
         futureWindowComplete: target.futureWindowComplete,
+        // Both halves or neither: matching per position without knowing what normalization
+        // supports would release a position the league cannot actually be scored for.
+        ...(target.leagueScoringProfile === undefined || target.supportedPositions === undefined
+          ? {}
+          : {
+              positionMatching: {
+                leagueScoringProfile: target.leagueScoringProfile,
+                supportedPositions: target.supportedPositions,
+              },
+            }),
       });
       if (!decision.canPublish) continue;
       const releasing = new Set(
@@ -822,7 +914,7 @@ export class FirstPartyRosProjectionShadowService implements ProjectionRefreshSe
       });
       if (committed) published += 1;
     }
-    return { published, artifactInvalid: false };
+    return { published, artifactInvalid: false, arbitrationSkippedTargets };
   }
 
   /**

@@ -4,11 +4,14 @@ import type {
   LeagueAnalyticsTeam,
   LeagueAnalyticsUnavailableReason,
   LeagueOpponentScoutSection,
+  LeaguePlayoffOddsSection,
   LeaguePositionalAnalyticsSection,
   LeaguePowerAnalyticsSection,
+  LeagueRules,
   LeagueScoreAnalyticsSection,
   LeagueWeeklyAwardsSection,
 } from "@fantasy/contracts";
+import { parseLeagueRules } from "@fantasy/contracts";
 import {
   fantasyTeams,
   leagueMemberships,
@@ -36,13 +39,24 @@ import {
   calculatePowerRankings,
   calculateWeeklyAwards,
   latestAwardableWeek,
+  simulatePlayoffOdds,
   type LeagueSeasonAnalyticsResult,
   type LeagueWeekInput,
+  type PlayoffOddsResult,
   type PowerFactorDefinition,
 } from "@fantasy/league-analytics";
 import { and, asc, desc, eq, inArray, ne, or, sql } from "drizzle-orm";
 
-import { currentManagedProjectionProfileKey } from "./managed-projection-profile.js";
+import {
+  currentManagedProjectionProfile,
+  currentManagedProjectionProfileKey,
+  type ManagedProjectionProfile,
+} from "./managed-projection-profile.js";
+import {
+  buildPlayoffOddsInput,
+  type PlayoffOddsMatchupRow,
+  type PlayoffOddsTeamRow,
+} from "./playoff-odds.js";
 import { projectionTimestampProvenance } from "./projection-provenance.js";
 
 export const LEAGUE_ANALYTICS_LIMITS = {
@@ -53,6 +67,26 @@ export const LEAGUE_ANALYTICS_LIMITS = {
   projectionSets: 16,
   projectionRows: 1_024,
   slotRules: 64,
+} as const;
+
+/**
+ * Bounded, disclosed, and replayable. The count travels in the response beside the seed so a
+ * reader can reproduce a published number exactly rather than take it on trust.
+ */
+const PLAYOFF_ODDS_SIMULATIONS = 10_000;
+
+/** Bumped only when the seed recipe changes, so an old seed is never silently reinterpreted. */
+const PLAYOFF_ODDS_SEED_VERSION = "v1";
+
+/**
+ * The playoff simulator is given each team's own scored-week average as its future weekly mean.
+ * That is a degraded, disclosed basis rather than a forecast, and the response says so.
+ */
+const PLAYOFF_FORECAST_BASIS = {
+  id: "current-points-per-scored-week",
+  label: "Current points per scored week",
+  definition:
+    "Each team's future weekly scoring mean is its own average official points across weeks with a stored score. No projection set feeds this simulation, weekly volatility falls back to the engine's configured league default rather than a measured team variance, and a team with no scored week falls back to the league scoring mean.",
 } as const;
 
 const CANONICAL_POSITIONS = ["QB", "RB", "WR", "TE", "K", "DST", "DL", "LB", "DB", "IDP"] as const;
@@ -107,6 +141,8 @@ export interface AnalyticsSeasonRow {
   readonly provider: ProviderName;
   readonly season: number;
   readonly currentWeek: number | null;
+  /** The stored provider-normalized settings blob, read only through `parseLeagueRules`. */
+  readonly settings: Record<string, unknown>;
   readonly lastSyncedAt: Date | null;
 }
 
@@ -201,6 +237,12 @@ export interface LeagueAnalyticsRepository {
     playerIds: readonly string[],
     limit: number,
   ): Promise<readonly AnalyticsProjectionRow[]>;
+  /**
+   * The managed (`laces-out-first-party`) weekly projection profile for this league, so a missing
+   * accessible projection set can say WHY managed sets were withheld instead of leaving that
+   * silent. Optional so existing repository implementations and test doubles are unaffected.
+   */
+  findManagedProjectionProfile?(leagueSeasonId: string): Promise<ManagedProjectionProfile>;
 }
 
 export class DrizzleLeagueAnalyticsRepository implements LeagueAnalyticsRepository {
@@ -237,6 +279,7 @@ export class DrizzleLeagueAnalyticsRepository implements LeagueAnalyticsReposito
         provider: leagueSeasons.provider,
         season: leagueSeasons.season,
         currentWeek: leagueSeasons.currentWeek,
+        settings: leagueSeasons.settings,
         lastSyncedAt: leagueSeasons.lastSyncedAt,
       })
       .from(leagueSeasons)
@@ -346,6 +389,11 @@ export class DrizzleLeagueAnalyticsRepository implements LeagueAnalyticsReposito
     week: number,
     limit: number,
   ): Promise<readonly AnalyticsProjectionSetRow[]> {
+    // A null key silently excludes every `laces-out-first-party` set below with no reason attached
+    // to this result. `buildPositionalAnalytics`'s no-projection-set branch recovers that reason via
+    // `findManagedProjectionProfile`; a richer per-position reason is available from
+    // `currentManagedProjectionProfile` (`./managed-projection-profile.js`) if a future pass wants
+    // to attribute the withholding to specific unsupported positions here too.
     const managedProfileKey = await currentManagedProjectionProfileKey(
       this.#database,
       leagueSeasonId,
@@ -424,6 +472,10 @@ export class DrizzleLeagueAnalyticsRepository implements LeagueAnalyticsReposito
       .orderBy(asc(playerProjections.playerId))
       .limit(limit);
   }
+
+  findManagedProjectionProfile(leagueSeasonId: string): Promise<ManagedProjectionProfile> {
+    return currentManagedProjectionProfile(this.#database, leagueSeasonId);
+  }
 }
 
 function unavailable(reason: LeagueAnalyticsUnavailableReason) {
@@ -435,6 +487,22 @@ function reason(
   message: string,
 ): LeagueAnalyticsUnavailableReason {
   return { code, message };
+}
+
+/**
+ * Why managed (`laces-out-first-party`) sets are invisible to `listProjectionSetCandidates`'
+ * compatibility filter for this league. Mirrors the equivalent text in `in-season-decisions.ts` and
+ * `schedule-edge.ts`; kept separate rather than shared because the three surfaces' wire contracts
+ * are independent.
+ */
+function managedProjectionsWithheldReason(profile: ManagedProjectionProfile): string {
+  if (profile.key !== null) {
+    return "no managed weekly projection set has been published yet for this league's scoring profile";
+  }
+  if (profile.positions === null) {
+    return "the league's stored scoring rules exceeded the bounded read, so they could not be checked";
+  }
+  return "this league's scoring rules do not normalize to a position Laces Out's managed weekly projections support";
 }
 
 function freshness(
@@ -722,6 +790,8 @@ function buildPositionalAnalytics(input: {
   readonly projectionRows: readonly AnalyticsProjectionRow[];
   readonly projectionSet: AnalyticsProjectionSetRow | undefined;
   readonly week: number | null;
+  /** Present only when `projectionSet` is missing for a known week; explains a managed exclusion. */
+  readonly managedProfile?: ManagedProjectionProfile;
 }): BuiltPositionalAnalytics {
   const empty = new Map<string, number | null>();
   if (input.week === null) {
@@ -736,11 +806,14 @@ function buildPositionalAnalytics(input: {
     };
   }
   if (!input.projectionSet) {
+    const base = `No accessible Week ${input.week} projection set exists for this exact league season.`;
     return {
       section: unavailable(
         reason(
           "PROJECTIONS_MISSING",
-          `No accessible Week ${input.week} projection set exists for this exact league season.`,
+          input.managedProfile
+            ? `${base} Laces Out's managed weekly projections are withheld: ${managedProjectionsWithheldReason(input.managedProfile)}.`
+            : base,
         ),
       ),
       averageByTeam: empty,
@@ -1057,6 +1130,211 @@ function buildWeeklyAwards(
   };
 }
 
+/**
+ * The snapshot the deduplicator's own precedence rule keeps last. Reusing `laterObservation` means
+ * the seed is pinned to exactly the evidence the simulation ran on, not to a separately guessed
+ * "newest" row.
+ */
+function effectiveMatchupSnapshotId(
+  observations: readonly AnalyticsMatchupObservationRow[],
+): string | null {
+  const latest = observations.reduce<AnalyticsMatchupObservationRow | null>(
+    (current, row) => (current === null ? row : laterObservation(current, row)),
+    null,
+  );
+  return latest === null ? null : latest.snapshotId;
+}
+
+/**
+ * The deterministic seed required by ADR 0003. It is a pure function of the league season, the
+ * week being simulated, and the effective matchup snapshot, so repeating a request against
+ * unchanged league state replays an identical result, while a newly synchronized snapshot reseeds
+ * the run. Nothing time-varying participates.
+ */
+function playoffOddsSeed(input: {
+  readonly leagueSeasonId: string;
+  readonly currentWeek: number | null;
+  readonly matchupSnapshotId: string | null;
+}): string {
+  return [
+    "playoff-odds",
+    PLAYOFF_ODDS_SEED_VERSION,
+    input.leagueSeasonId,
+    `week-${input.currentWeek ?? "unknown"}`,
+    `snapshot-${input.matchupSnapshotId ?? "none"}`,
+  ].join(":");
+}
+
+/**
+ * Names why the assembler withheld the simulation. `buildPlayoffOddsInput` fails closed with a
+ * bare null, so this re-checks its rejection conditions in the same order to report which one
+ * fired. "Playoff odds are unavailable" with no cause would not be an answer.
+ */
+function withheldPlayoffOddsReason(input: {
+  readonly playoffTeamCount: number;
+  readonly teams: readonly PlayoffOddsTeamRow[];
+  readonly matchups: readonly PlayoffOddsMatchupRow[];
+}): LeagueAnalyticsUnavailableReason {
+  if (input.teams.length < 2) {
+    return reason(
+      "PLAYOFF_FIELD_UNSUPPORTED",
+      `A playoff race needs at least two teams with a stored record; ${input.teams.length} were available.`,
+    );
+  }
+  if (input.playoffTeamCount > input.teams.length) {
+    return reason(
+      "PLAYOFF_FIELD_UNSUPPORTED",
+      `The league host reports a ${input.playoffTeamCount}-team playoff field, but only ${input.teams.length} teams are synchronized for this season.`,
+    );
+  }
+  const remaining = input.matchups.filter((row) => row.status !== "final");
+  if (remaining.length === 0) {
+    return reason(
+      "PLAYOFF_SEASON_COMPLETE",
+      "Every stored matchup for this season is final, so no remaining game is left to simulate.",
+    );
+  }
+  const known = new Set(input.teams.map((team) => team.teamId));
+  const orphan = remaining.find((row) => !known.has(row.homeTeamId) || !known.has(row.awayTeamId));
+  if (orphan) {
+    return reason(
+      "PLAYOFF_SCHEDULE_INCOMPLETE",
+      `The remaining Week ${orphan.week} schedule references a team missing from the standings, so the games left to play could not be read completely.`,
+    );
+  }
+  return reason(
+    "PLAYOFF_SCHEDULE_INCOMPLETE",
+    "The remaining schedule could not be assembled into a complete simulation input; no partial result was produced.",
+  );
+}
+
+/**
+ * Seeded playoff odds for the remaining schedule. Records, points, and the admitted matchup set
+ * are reused from the sections already computed above so the simulation reads exactly the facts
+ * the rest of the response reports.
+ */
+function buildPlayoffOdds(input: {
+  readonly teams: readonly AnalyticsTeamRow[];
+  readonly claimedTeamId: string | null;
+  readonly scores: BuiltScoreAnalytics;
+  readonly matchups: readonly AnalyticsMatchupObservationRow[];
+  readonly rules: LeagueRules;
+  readonly seed: string;
+  readonly matchupSnapshotId: string | null;
+}): LeaguePlayoffOddsSection {
+  if (input.scores.section.state === "unavailable") {
+    return { state: "unavailable", reasons: [...input.scores.section.reasons] };
+  }
+  if (input.rules.playoffTeamCount === null) {
+    // Named from `rules.missing` so the response says which rule the provider never supplied.
+    const missingRule = input.rules.missing.find((name) => name === "playoffTeamCount");
+    return unavailable(
+      reason(
+        "PLAYOFF_RULES_MISSING",
+        `The league host did not supply a usable ${missingRule ?? "playoffTeamCount"} rule, so the playoff field size is unknown; odds are withheld rather than assuming one.`,
+      ),
+    );
+  }
+
+  const scoreByTeam = new Map(input.scores.section.teams.map((team) => [team.team.id, team]));
+  const teamRows: PlayoffOddsTeamRow[] = input.teams.flatMap((team) => {
+    const metrics = scoreByTeam.get(team.id);
+    if (!metrics) return [];
+    return [
+      {
+        teamId: team.id,
+        wins: metrics.actualRecord.wins,
+        losses: metrics.actualRecord.losses,
+        ties: metrics.actualRecord.ties,
+        pointsFor: metrics.pointsFor.total,
+        // The scored-week average is the honest weekly mean. Letting the engine divide season
+        // points by head-to-head games instead would inflate any team whose completed matchup is
+        // missing an official score.
+        ...(metrics.pointsFor.average === null
+          ? {}
+          : { projectedPointsPerWeek: metrics.pointsFor.average }),
+      },
+    ];
+  });
+  const matchupRows: PlayoffOddsMatchupRow[] = input.matchups.map((row) => ({
+    week: row.week,
+    status: row.status,
+    homeTeamId: row.homeTeamId,
+    awayTeamId: row.awayTeamId,
+    homeScore: numberOrNull(row.homeScore),
+    awayScore: numberOrNull(row.awayScore),
+  }));
+
+  const assembled = buildPlayoffOddsInput({
+    matchups: matchupRows,
+    teams: teamRows,
+    playoffTeamCount: input.rules.playoffTeamCount,
+    seed: input.seed,
+    simulations: PLAYOFF_ODDS_SIMULATIONS,
+  });
+  if (assembled === null) {
+    return unavailable(
+      withheldPlayoffOddsReason({
+        playoffTeamCount: input.rules.playoffTeamCount,
+        teams: teamRows,
+        matchups: matchupRows,
+      }),
+    );
+  }
+
+  let result: PlayoffOddsResult;
+  try {
+    result = simulatePlayoffOdds(assembled);
+  } catch (error) {
+    // A rejected input degrades this section only; the rest of the response is unaffected.
+    const detail = error instanceof Error ? error.message : "unknown validation failure";
+    return unavailable(
+      reason(
+        "PLAYOFF_SIMULATION_UNSUPPORTED",
+        `The playoff simulator rejected this league's stored state: ${detail.slice(0, 300)}`,
+      ),
+    );
+  }
+
+  const teamById = new Map(input.teams.map((team) => [team.id, team]));
+  return {
+    state: "available",
+    playoffTeamCount: result.playoffTeamCount,
+    seed: input.seed,
+    simulations: result.simulations,
+    matchupSnapshotId: input.matchupSnapshotId,
+    remainingMatchups: assembled.remainingMatchups.length,
+    forecastBasis: PLAYOFF_FORECAST_BASIS,
+    samplingErrorDefinition: result.teams[0]?.explanation ?? null,
+    teams: result.teams.flatMap((odds) => {
+      const team = teamById.get(odds.teamId);
+      return team
+        ? [
+            {
+              team: identity(team, input.claimedTeamId),
+              playoffProbability: odds.playoffProbability,
+              monteCarloStandardError: odds.monteCarloStandardError,
+              expectedSeed: odds.expectedSeed,
+              seedProbabilities: odds.seedProbabilities.map((entry) => ({
+                seed: entry.seed,
+                probability: entry.probability,
+              })),
+              averageFinalWins: odds.averageFinalWins,
+              averageFinalLosses: odds.averageFinalLosses,
+              averageFinalTies: odds.averageFinalTies,
+              averageFinalPointsFor: odds.averageFinalPointsFor,
+              scoringMean: odds.scoringMean,
+              scoringStandardDeviation: odds.scoringStandardDeviation,
+            },
+          ]
+        : [];
+    }),
+    definition: result.definition,
+    factors: [...result.factors],
+    tieBreakers: [...result.tieBreakers],
+  };
+}
+
 function buildOpponentAnalytics(input: {
   readonly teams: readonly AnalyticsTeamRow[];
   readonly claimedTeamId: string | null;
@@ -1302,6 +1580,14 @@ export class LeagueAnalyticsService {
     const projectionTimestamps = projectionSet
       ? projectionTimestampProvenance(projectionSet)
       : null;
+    // Only worth the extra bounded read when there is actually a missing-set story to explain: a
+    // known week with zero accessible candidates, which may be because managed sets were withheld.
+    const managedProfile =
+      projectionSet === undefined &&
+      season.currentWeek !== null &&
+      this.#repository.findManagedProjectionProfile
+        ? await this.#repository.findManagedProjectionProfile(season.id)
+        : undefined;
     const uniquePlayerIds = [...new Set(rosterEntries.map((entry) => entry.playerId))];
     const projectionRows = projectionSet
       ? await this.#repository.listProjectionRows(
@@ -1336,9 +1622,24 @@ export class LeagueAnalyticsService {
             projectionRows: boundedProjectionRows,
             projectionSet,
             week: season.currentWeek,
+            ...(managedProfile === undefined ? {} : { managedProfile }),
           });
     const power = buildPowerAnalytics(teams, membership.claimedFantasyTeamId, scores, positional);
     const weeklyAwards = buildWeeklyAwards(teams, membership.claimedFantasyTeamId, scores);
+    const matchupSnapshotId = effectiveMatchupSnapshotId(matchups);
+    const playoffOdds = buildPlayoffOdds({
+      teams,
+      claimedTeamId: membership.claimedFantasyTeamId,
+      scores,
+      matchups,
+      rules: parseLeagueRules(season.settings),
+      seed: playoffOddsSeed({
+        leagueSeasonId: season.id,
+        currentWeek: season.currentWeek,
+        matchupSnapshotId,
+      }),
+      matchupSnapshotId,
+    });
     const opponentScout = buildOpponentAnalytics({
       teams,
       claimedTeamId: membership.claimedFantasyTeamId,
@@ -1415,6 +1716,7 @@ export class LeagueAnalyticsService {
       positional: positional.section,
       opponentScout,
       weeklyAwards,
+      playoffOdds,
     };
   }
 
@@ -1457,6 +1759,7 @@ export class LeagueAnalyticsService {
       positional: section,
       opponentScout: section,
       weeklyAwards: section,
+      playoffOdds: section,
     };
   }
 
@@ -1502,6 +1805,7 @@ export class LeagueAnalyticsService {
       positional: section,
       opponentScout: section,
       weeklyAwards: section,
+      playoffOdds: section,
     };
   }
 }

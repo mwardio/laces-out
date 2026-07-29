@@ -23,5 +23,13 @@ export default function sitemap(): MetadataRoute.Sitemap {
       changeFrequency: "monthly",
       priority: 0.4,
     },
+    {
+      // The receipt behind the landing page's proof claims. It is indexable on purpose: an
+      // unfindable receipt does not support the claim it exists to back.
+      url: new URL("/methodology", publicSiteUrl).toString(),
+      lastModified: new Date("2026-07-27T00:00:00.000Z"),
+      changeFrequency: "monthly",
+      priority: 0.5,
+    },
   ];
 }

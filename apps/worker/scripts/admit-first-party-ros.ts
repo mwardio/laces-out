@@ -1,6 +1,11 @@
 import { readFileSync } from "node:fs";
 
 import { createDatabase, firstPartyRosChampionArtifacts } from "@fantasy/db";
+import {
+  ROS_SCORING_PROFILE_KEYS,
+  isRosScoringProfileKey,
+  rosScoringProfile,
+} from "@fantasy/projections";
 import { and, eq } from "drizzle-orm";
 
 import {
@@ -50,6 +55,18 @@ async function main(): Promise<void> {
     return;
   }
 
+  // Each scoring profile is admitted independently and keeps its own artifact. An unknown name
+  // refuses rather than defaulting, so a report can never be admitted under the wrong identity.
+  const scoringProfileName = stringOption("--scoring-profile") ?? "full-ppr";
+  if (!isRosScoringProfileKey(scoringProfileName)) {
+    fail(
+      `--scoring-profile must be one of ${ROS_SCORING_PROFILE_KEYS.join(", ")} ` +
+        `(received ${scoringProfileName}).`,
+    );
+    return;
+  }
+  const scoringProfile = rosScoringProfile(scoringProfileName);
+
   const confirm = flag("--confirm");
   const dryRunRequested = flag("--dry-run");
   const willWrite = confirm && !dryRunRequested;
@@ -62,7 +79,7 @@ async function main(): Promise<void> {
     return;
   }
 
-  const constants = firstPartyRosAdmissionConstants();
+  const constants = firstPartyRosAdmissionConstants(scoringProfile.profile);
   const validation = validateFirstPartyRosAdmission({
     report,
     evidenceThroughSeason,
@@ -70,7 +87,15 @@ async function main(): Promise<void> {
   });
   if (validation.state === "rejected") {
     process.stdout.write(
-      `${JSON.stringify({ state: "rejected", blockers: validation.blockers }, null, 2)}\n`,
+      `${JSON.stringify(
+        {
+          state: "rejected",
+          scoringProfile: { key: scoringProfile.key, digest: scoringProfile.digest },
+          blockers: validation.blockers,
+        },
+        null,
+        2,
+      )}\n`,
     );
     process.exitCode = 1;
     return;
@@ -79,6 +104,8 @@ async function main(): Promise<void> {
   const { payload, artifactChecksum, cellBlockers } = validation;
   const summary = {
     season: payload.season,
+    scoringProfile: { key: scoringProfile.key, label: scoringProfile.label },
+    scoringProfileDigest: scoringProfile.digest,
     scoringProfileKey: payload.scoringProfileKey,
     modelVersion: payload.modelVersion,
     policyVersion: payload.policyVersion,
