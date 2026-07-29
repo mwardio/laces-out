@@ -41,13 +41,17 @@ Data is used to operate the deployment, synchronize authorized leagues, provide 
 to authorized league members, generate user-specific analysis, and secure or troubleshoot the
 service. Private rankings, notes, credentials, and personal settings are not shared unless their
 owner explicitly creates a permitted share. Laces Out has no advertising and does not sell personal
-information. This deployment does run Cloudflare Web Analytics so the operator can observe traffic
-levels; it reports page views through a script loaded from Cloudflare, is not used to profile
-individuals, and feeds no recommendation. Cloudflare states that it does not log query strings.
-What Cloudflare records and retains is governed by Cloudflare's own terms rather than this policy.
-The user-facing statement of this is on the `/privacy` page; keep the two consistent, and note that
-the Content-Security-Policy in `Caddyfile` must permit `static.cloudflareinsights.com` (script) and
-`cloudflareinsights.com` (beacon) or the analytics silently do not run.
+information. The default self-hosted deployment contains no product-analytics beacon, and its
+Content-Security-Policy does not permit one.
+
+`NEXT_PUBLIC_CLOUDFLARE_ANALYTICS=enabled` changes the user-facing `/privacy` disclosure for an
+operator who separately enables Cloudflare Web Analytics at the hosting edge. The flag does not
+inject analytics. A hosted deployment using it must permit only the origins its setup requires and
+keep this policy consistent. Cloudflare-proxied sites load the script from
+`static.cloudflareinsights.com` and report to the same-origin `/cdn-cgi/rum` endpoint; a
+non-proxied manual setup may also require `cloudflareinsights.com` in `connect-src`. Cloudflare
+states that Web Analytics does not log query strings; its collection and retention remain governed
+by Cloudflare's terms.
 
 The live database retains data until the deployment operator deletes it or it remains necessary for
 an active shared league. Deleted records may remain in encrypted backups until the operator's

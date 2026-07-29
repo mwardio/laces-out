@@ -68,7 +68,7 @@ function boundedReadDatabase(ruleCount: number): {
  * Sanitized, minimal transcription of a real garagely-shaped league: a supported offensive rule
  * (ESPN stat 3, passing yards) alongside a D/ST bracket override
  * (`132:slot:16` — an accepted yards-allowed tier rule since WP2 of
- * `docs/ROS_GATE_AND_DST_PLAN.md`, but excluded from the emitted profile while D/ST is
+ * `docs/plans/ROS_GATE_AND_DST_PLAN.md`, but excluded from the emitted profile while D/ST is
  * unsupported) and a bare D/ST-only unsupported stat (`205`, ESPN's "Defensive 2pt Return").
  * Under the position-scoped core, this normalizes to `available` (QB supported) even though D/ST
  * is not — the exact case that used to collapse `currentManagedProjectionProfileKey` to null.
@@ -119,7 +119,7 @@ describe("currentManagedProjectionProfileKey", () => {
   });
 
   it("prices a yards-allowed tier rule when D/ST is the supported position (fan-out carries WP1's components)", async () => {
-    // WP2 Step 5 (`docs/ROS_GATE_AND_DST_PLAN.md`): this package's private
+    // WP2 Step 5 (`docs/plans/ROS_GATE_AND_DST_PLAN.md`): this package's private
     // `availableComponents` union spreads `firstPartyTeamDefenseProjectionComponents()`, so the
     // nine yards-allowed tiers must be available here without edits. If they were not,
     // COMPONENT_UNAVAILABLE would withhold D/ST and this key would be null.

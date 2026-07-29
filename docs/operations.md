@@ -83,6 +83,13 @@ compiled into the Next.js bundle. Set `NEXT_PUBLIC_CONTACT_EMAIL` to the operato
 the provider application; it is compiled into the public footer, privacy policy, and terms. Do not
 expose the stack over plain HTTP to friends.
 
+When a host-level reverse proxy already owns ports 80 and 443, set
+`GATEWAY_BIND_ADDRESS=127.0.0.1`, leave `SITE_ADDRESS=:80`, and forward the public HTTPS origin to
+`http://127.0.0.1:${APP_PORT:-3000}`. Keep `PUBLIC_URL` on the public HTTPS origin, preserve the
+original host and scheme headers, and publish only the bundled gateway. The API, web, and
+PostgreSQL services are not independent public entry points. Leave `GATEWAY_BIND_ADDRESS=0.0.0.0`
+when the bundled gateway itself terminates public traffic.
+
 Useful lifecycle commands:
 
 ```bash
@@ -612,7 +619,7 @@ not prerequisites the current runbook silently assumes are already installed.
 - ESPN companion distribution requires sanctioned private-league validation, terms and store-policy
   review, and a signed build. The signed browser bridge is the only hosted private-league path.
 - ESPN live draft sync stays behind `ESPN_LIVE_DRAFT_SYNC=false` until the live validation matrix in
-  `docs/ESPN_LIVE_DRAFT_SYNC_PLAN.md` §19.4 passes — a full snake mock, a disposable auction draft,
+  `docs/plans/ESPN_LIVE_DRAFT_SYNC_PLAN.md` §19.4 passes — a full snake mock, a disposable auction draft,
   reload/late-join, pause/resume, a deliberate rollback, source failover, a mobile viewer, and a
   completed `mDraftDetail` cross-check. The DOM adapter's selector table is unverified until then.
   Landing-page copy may not claim the capability before that gate.
@@ -640,8 +647,20 @@ Targets are RPO 24 hours and RTO 2 hours for this personal deployment.
 
 ## Update
 
-1. Review the implementation plan/migration notes and provider capability changes.
-2. Run `npm ci && npm run check` against the proposed version.
+Production deployments should run a published release tag rather than an arbitrary moving `main`
+checkout:
+
+```bash
+VERSION=v1.0.0 # choose and review the release you intend to run
+git fetch --tags --prune
+git checkout "$VERSION"
+git rev-parse --verify HEAD
+```
+
+Then:
+
+1. Review that release's notes, migration changes, and provider capability changes.
+2. Run `npm ci && npm run check` against the checked-out version.
 3. Create and verify a pre-migration backup.
 4. Apply migrations as an explicit one-shot operation.
 5. Start API/worker/web and verify liveness, readiness, worker startup/catalog scheduling, login,

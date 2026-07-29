@@ -112,7 +112,7 @@ const espnDefaultDstProfile: ProjectionScoringProfile = {
 };
 
 /**
- * WP1's evidence-established ESPN yards-allowed ladder (`docs/ROS_GATE_AND_DST_PLAN.md`
+ * WP1's evidence-established ESPN yards-allowed ladder (`docs/plans/ROS_GATE_AND_DST_PLAN.md`
  * §0.1), restated here only to derive strictly-prior bracket outcomes for the calibration
  * measurement — the projector owns the authoritative copy in
  * `packages/projections/src/first-party.ts`.

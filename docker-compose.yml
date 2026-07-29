@@ -61,6 +61,7 @@ services:
         NEXT_PUBLIC_API_SAME_ORIGIN: "true"
         NEXT_PUBLIC_SITE_URL: ${PUBLIC_URL:-http://localhost:3000}
         NEXT_PUBLIC_CONTACT_EMAIL: ${NEXT_PUBLIC_CONTACT_EMAIL:-}
+        NEXT_PUBLIC_CLOUDFLARE_ANALYTICS: ${NEXT_PUBLIC_CLOUDFLARE_ANALYTICS:-disabled}
         NEXT_PUBLIC_YAHOO_ACCESS_STATUS: ${NEXT_PUBLIC_YAHOO_ACCESS_STATUS:-pending}
     environment: *app-environment
     depends_on:
@@ -82,6 +83,7 @@ services:
         NEXT_PUBLIC_API_SAME_ORIGIN: "true"
         NEXT_PUBLIC_SITE_URL: ${PUBLIC_URL:-http://localhost:3000}
         NEXT_PUBLIC_CONTACT_EMAIL: ${NEXT_PUBLIC_CONTACT_EMAIL:-}
+        NEXT_PUBLIC_CLOUDFLARE_ANALYTICS: ${NEXT_PUBLIC_CLOUDFLARE_ANALYTICS:-disabled}
         NEXT_PUBLIC_YAHOO_ACCESS_STATUS: ${NEXT_PUBLIC_YAHOO_ACCESS_STATUS:-pending}
     environment:
       <<: *app-environment
@@ -127,6 +129,7 @@ services:
         NEXT_PUBLIC_API_SAME_ORIGIN: "true"
         NEXT_PUBLIC_SITE_URL: ${PUBLIC_URL:-http://localhost:3000}
         NEXT_PUBLIC_CONTACT_EMAIL: ${NEXT_PUBLIC_CONTACT_EMAIL:-}
+        NEXT_PUBLIC_CLOUDFLARE_ANALYTICS: ${NEXT_PUBLIC_CLOUDFLARE_ANALYTICS:-disabled}
         NEXT_PUBLIC_YAHOO_ACCESS_STATUS: ${NEXT_PUBLIC_YAHOO_ACCESS_STATUS:-pending}
     environment: *app-environment
     depends_on:
@@ -151,6 +154,7 @@ services:
         NEXT_PUBLIC_API_SAME_ORIGIN: "true"
         NEXT_PUBLIC_SITE_URL: ${PUBLIC_URL:-http://localhost:3000}
         NEXT_PUBLIC_CONTACT_EMAIL: ${NEXT_PUBLIC_CONTACT_EMAIL:-}
+        NEXT_PUBLIC_CLOUDFLARE_ANALYTICS: ${NEXT_PUBLIC_CLOUDFLARE_ANALYTICS:-disabled}
         NEXT_PUBLIC_YAHOO_ACCESS_STATUS: ${NEXT_PUBLIC_YAHOO_ACCESS_STATUS:-pending}
     environment:
       NODE_ENV: production
@@ -184,9 +188,9 @@ services:
     environment:
       SITE_ADDRESS: ${SITE_ADDRESS:-:80}
     ports:
-      - "${APP_PORT:-3000}:80"
-      - "${HTTPS_PORT:-3443}:443"
-      - "${HTTPS_PORT:-3443}:443/udp"
+      - "${GATEWAY_BIND_ADDRESS:-0.0.0.0}:${APP_PORT:-3000}:80"
+      - "${GATEWAY_BIND_ADDRESS:-0.0.0.0}:${HTTPS_PORT:-3443}:443"
+      - "${GATEWAY_BIND_ADDRESS:-0.0.0.0}:${HTTPS_PORT:-3443}:443/udp"
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data

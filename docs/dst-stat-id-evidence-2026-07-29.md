@@ -1,7 +1,7 @@
 # ESPN D/ST stat-ID evidence — 206, 209, and the points-allowed ladder
 
 - Date: 2026-07-29
-- Plan: `docs/ROS_GATE_AND_DST_PLAN.md` WP2 Step 8 and WP3
+- Plan: `docs/plans/ROS_GATE_AND_DST_PLAN.md` WP2 Step 8 and WP3
 - Method: documented community sources only, quoted from their raw source files, per the
   never-guess rule. ESPN's own support page (`support.espn.com` "Scoring Formats") and
   `nflreadr.nflverse.com` were unavailable during the evidence review, so no ESPN first-party
@@ -97,7 +97,7 @@ which is all normalization prices anyway.
 ## 4. The de minimis zero criterion (added 2026-07-29; operator-ratified)
 
 This section supersedes §1's and §2's "stays unsupported" conclusions, and supersedes
-`docs/ROS_GATE_AND_DST_PLAN.md` WP3-RESULT's "both stay in the unsupported set" decision and its
+`docs/plans/ROS_GATE_AND_DST_PLAN.md` WP3-RESULT's "both stay in the unsupported set" decision and its
 "pricing at a remembered rate stays forbidden" line **for exactly the two IDs named here and for no
 others**. It does not touch 204, 205, 207 or 208: those variants are not present in any of the
 three leagues' rule sets, no bound has been recorded for them, and they stay unsupported with the

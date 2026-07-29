@@ -15,7 +15,7 @@ describe("rosAvailableProjectionStatIds", () => {
   });
 
   it("exposes the nine yards-allowed tier components through the worker's availability union", () => {
-    // WP2 Step 5 (`docs/ROS_GATE_AND_DST_PLAN.md`): the unions spread
+    // WP2 Step 5 (`docs/plans/ROS_GATE_AND_DST_PLAN.md`): the unions spread
     // `firstPartyTeamDefenseProjectionComponents()`, so the WP1 components must appear here
     // without edits — otherwise COMPONENT_UNAVAILABLE could fire on a rule the run does emit.
     const available = new Set(firstPartyAvailableProjectionComponents());

@@ -64,7 +64,7 @@ already declared for league reads.
 
 `src/live-draft/dom-adapter.ts` is the only module aware of ESPN selectors, labels, and routes, and
 its `ESPN_DRAFT_SELECTORS` table is still **provisional**. Work Package 0 of
-`docs/ESPN_LIVE_DRAFT_SYNC_PLAN.md` — the live DOM spike against a real authenticated draft room —
+`docs/plans/ESPN_LIVE_DRAFT_SYNC_PLAN.md` — the live DOM spike against a real authenticated draft room —
 has not been run, so every family is marked `verified: false` and the adapter resolves nothing in a
 real room. Until then the feature is inert by design rather than wrong.
 

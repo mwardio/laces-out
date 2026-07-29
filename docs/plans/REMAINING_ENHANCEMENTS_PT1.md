@@ -2,7 +2,7 @@
 
 - Status: proposed
 - Last updated: 2026-07-27
-- Companion to: `ENHANCEMENT_PLAN.md` (roadmap), `docs/SCHEDULE_INTELLIGENCE_PLAN.md` (shipped)
+- Companion to: `ENHANCEMENT_PLAN.md` (roadmap), `docs/plans/SCHEDULE_INTELLIGENCE_PLAN.md` (shipped)
 
 **Goal:** Reach the finished work that is already sitting behind an unwired route, an untyped
 settings blob, or a missing surface, and expose it — without adding a provider, a data vendor, or a
@@ -87,7 +87,7 @@ git diff --check
   keep running.
 - **`/v1/state/nfl` as a canonical current-week source.** Deferred with C4 — it is a Sleeper
   endpoint, and the same decision applies. Reconsider alongside C4.
-- **ESPN live-draft DOM validation** (`docs/ESPN_LIVE_DRAFT_SYNC_PLAN.md` WP0/WP5) and anything
+- **ESPN live-draft DOM validation** (`docs/plans/ESPN_LIVE_DRAFT_SYNC_PLAN.md` WP0/WP5) and anything
   depending on it.
 - **Yahoo sync.** Remains **Coming Soon**. Work in this plan may preserve or test its existing
   contracts but must not present it as currently available.

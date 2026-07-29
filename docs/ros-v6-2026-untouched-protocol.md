@@ -6,7 +6,7 @@ Pre-registered: 2026-07-21, before any 2026 regular-season game has been played.
 (`evaluateFirstPartyRosReleaseGate`, `packages/projections/src/rest-of-season.ts`) with decisions
 already in force elsewhere in the rail, batched into one amendment because they are the same
 defect — the live gate lagging a decision already ratified or already shipped on the report side.
-Drafted in `docs/ROS_GATE_AND_DST_PLAN.md` §0c and ratified by Mack (operator direction,
+Drafted in `docs/plans/ROS_GATE_AND_DST_PLAN.md` §0c and ratified by Mack (operator direction,
 2026-07-29); applied the same day. No 2026 outcome influenced this amendment.
 
 **(A) Availability MAE — the live gate adopts gate v3's evidence test.** Amendment 3 (2026-07-22)

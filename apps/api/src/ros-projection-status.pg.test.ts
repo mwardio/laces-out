@@ -213,7 +213,7 @@ const NON_PPR_LEAGUE_ROWS = FULL_PPR_LEAGUE_ROWS.filter((row) => row.statKey !==
  * `state: "available"` with **all six positions supported**
  * since the de minimis zero criterion mapped ESPN 206/209 on 2026-07-29
  * (`docs/dst-stat-id-evidence-2026-07-29.md` §4); the yards-allowed bracket overrides became
- * accepted, mapped tier rules at `docs/ROS_GATE_AND_DST_PLAN.md` WP2. It was D/ST-withheld on those
+ * accepted, mapped tier rules at `docs/plans/ROS_GATE_AND_DST_PLAN.md` WP2. It was D/ST-withheld on those
  * two IDs before the flip.
  */
 const GARAGELY_LEAGUE_ROWS: readonly {

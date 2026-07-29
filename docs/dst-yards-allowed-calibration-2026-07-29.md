@@ -1,7 +1,7 @@
 # D/ST yards-allowed tier model — calibration evidence and pre-registered bars
 
 - Date: 2026-07-29
-- Plan: `docs/ROS_GATE_AND_DST_PLAN.md` WP1 Steps 5–6
+- Plan: `docs/plans/ROS_GATE_AND_DST_PLAN.md` WP1 Steps 5–6
 - Status of this file: the dispersion measurement and the pass bars below were recorded **before**
   any backtest measurement ran, per WP1 Step 6. Measured results are appended afterwards as dated
   sections; nothing above the "Measured results" heading may be edited after the first measurement.

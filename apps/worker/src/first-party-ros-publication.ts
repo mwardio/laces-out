@@ -718,7 +718,7 @@ export function buildFirstPartyRosRunPayload(input: {
  * evidence identity position-scoped (2026-07-29), two admitted artifacts whose scoped keys agree
  * on some positions could each release sets for the same league; publication must therefore
  * arbitrate to a single artifact per league or the rail double-publishes (WP0 Step 3,
- * `docs/ROS_GATE_AND_DST_PLAN.md`).
+ * `docs/plans/ROS_GATE_AND_DST_PLAN.md`).
  *
  * Recorded tie-break rule (the WP0 Step 3 decision — arbitration is deterministic, and every step
  * is written down rather than left to iteration order):

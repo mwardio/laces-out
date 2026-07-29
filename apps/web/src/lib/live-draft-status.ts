@@ -620,7 +620,7 @@ function defaultCaption(session: DraftSessionSnapshot): string {
  * is off and when it is on with no source connected, so "ESPN" alone cannot tell the difference.
  * Promising live sync here while the flag is off would be a claim a manager could act on, and
  * draft day happens once. Restoring the branch needs the server to report capability rather than
- * this function inferring it; see the rollout steps in docs/ESPN_LIVE_DRAFT_SYNC_PLAN.md §21.
+ * this function inferring it; see the rollout steps in docs/plans/ESPN_LIVE_DRAFT_SYNC_PLAN.md §21.
  *
  * The sentence to restore, once capability is real and reported:
  *   "Manual event entry is persistent and shared. An ESPN draft can also drive this room live

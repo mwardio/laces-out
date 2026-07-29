@@ -5,7 +5,7 @@
 - Target surface: `/schedule`
 - Product name: **Schedule Edge**
 - Validation artifact:
-  [`schedule-edge-validation-2026-07-27.json`](./schedule-edge-validation-2026-07-27.json)
+  [`schedule-edge-validation-2026-07-27.json`](../schedule-edge-validation-2026-07-27.json)
 
 ## 1. Objective
 
@@ -294,7 +294,7 @@ is exact and season-bound; every modern 272-game season remains subject to the n
 rule.
 
 The exact source checksums and row counts are stored in the
-[locked validation artifact](./schedule-edge-validation-2026-07-27.json). The three evaluation
+[locked validation artifact](../schedule-edge-validation-2026-07-27.json). The three evaluation
 evidence checksums are:
 
 | Fold                   | Seasons   | Evidence checksum                                                  |

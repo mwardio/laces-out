@@ -99,7 +99,7 @@ const espnSelfAssertedPlayerSource = "espn-self-asserted";
 const defenseMethodWarnings = [
   "points_allowed_method=provider-neutral-adjusted-score",
   "blocked_kicks_classification=rare blocked-kick returns can be classified differently by Yahoo and ESPN",
-  // `docs/ROS_GATE_AND_DST_PLAN.md` WP4 Step 4. Stated as an assumption because it is one: whether
+  // `docs/plans/ROS_GATE_AND_DST_PLAN.md` WP4 Step 4. Stated as an assumption because it is one: whether
   // ESPN's "yards allowed" is exactly this quantity has not been established from ESPN's own docs.
   "yards_allowed_method=net offensive yards (passing + sack yardage + rushing); the assumption that this equals the provider's own yards-allowed definition is disclosed, not proved",
   // `docs/dst-stat-id-evidence-2026-07-29.md` §4. These two components are modeled at a constant
@@ -115,7 +115,7 @@ const maximumIntervalCoverage = 0.78;
 const minimumIntervalCoverageSamples = 100;
 const minimumPositionScoredSamples = 100;
 // Derived from the projection engine's own defense vocabulary rather than hand-typed, so this set
-// structurally cannot drift from the components the engine emits (`docs/ROS_GATE_AND_DST_PLAN.md`
+// structurally cannot drift from the components the engine emits (`docs/plans/ROS_GATE_AND_DST_PLAN.md`
 // WP2 Step 1, "one source of truth").
 const defenseStatIds = new Set(firstPartyTeamDefenseProjectionComponents());
 

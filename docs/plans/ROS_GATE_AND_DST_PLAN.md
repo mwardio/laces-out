@@ -10,8 +10,8 @@
   <br />An earlier version of this line said the flip did not run. That was true when WP3 closed and
   stopped being true when the amendment landed; it is corrected here rather than only 500 lines down.
 - Last updated: 2026-07-29
-- Companion to: `docs/LEAGUE_SCORING_NORMALIZATION_PLAN.md` (implemented 2026-07-29),
-  `docs/ROS_AVAILABILITY_PLAN.md`, `docs/ros-v6-2026-untouched-protocol.md`, `docs/PROJECTIONS.md`
+- Companion to: `docs/plans/LEAGUE_SCORING_NORMALIZATION_PLAN.md` (implemented 2026-07-29),
+  `docs/plans/ROS_AVAILABILITY_PLAN.md`, `docs/ros-v6-2026-untouched-protocol.md`, `docs/PROJECTIONS.md`
 
 **Two goals, in order.**
 
@@ -175,7 +175,7 @@ the answer is (3) — never (1).
 
 Landed in two commits (gate, then arbitration), ratified as Amendment 4 of
 `docs/ros-v6-2026-untouched-protocol.md` using §0c's drafted text, and recorded as WP4b in
-`docs/ROS_AVAILABILITY_PLAN.md`. No ceiling, α, frozen identity row, or version constant moved.
+`docs/plans/ROS_AVAILABILITY_PLAN.md`. No ceiling, α, frozen identity row, or version constant moved.
 Amendment 4(A) shipped alongside: the live gate's availability-MAE comparison is the report gate's
 evidence test (point comparison retained as a structural guard).
 
@@ -267,7 +267,7 @@ underneath then refuses on every cell.
 `"cannot publish a partially matched league in the production evidence shape"` (`:402-437`, written
 2026-07-28) asserts `scoringProfileMatches: true`, `evidence-identity-mismatch` on the bucket, and
 `canPublish: false` — and its own comment names it "RECORDED SEAM for
-docs/ROS_AVAILABILITY_PLAN.md". A second comment block at
+docs/plans/ROS_AVAILABILITY_PLAN.md". A second comment block at
 `first-party-ros-projection-service.test.ts:516-529` documents the same seam from the service side.
 **WP0 is the work those comments were left for, and both must be updated by it** — the seam test
 inverts from "cannot publish" to "publishes the matching positions".
@@ -873,7 +873,7 @@ leagues it published for before the flip; no other position's behavior changed.
 
 1. **Ratify Amendment 4 first** (§0c). It is drafted for signature; WP0's gate change does not merge
    without it.
-2. Read this plan, `docs/LEAGUE_SCORING_NORMALIZATION_PLAN.md` §"Measured results — 2026-07-29", and
+2. Read this plan, `docs/plans/LEAGUE_SCORING_NORMALIZATION_PLAN.md` §"Measured results — 2026-07-29", and
    `docs/ros-v6-2026-untouched-protocol.md`.
 3. Re-measure before starting: run the three sanitized fixtures through
    `normalizeLeagueScoringProfile` and confirm the 12 D/ST reasons per league still hold. The numbers

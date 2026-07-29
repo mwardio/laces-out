@@ -1336,7 +1336,7 @@ describe("season-locked ROS champion policy", () => {
     // The 2026 untouched run scores every position under a single frozen profile, so both sides of
     // every identity comparison derive from that one profile and carry the same canonical key.
     // Byte-equal keys take the fast path that IS whole-key equality, so position scoping cannot
-    // change any frozen-corpus decision (docs/ROS_GATE_AND_DST_PLAN.md, WP0 Step 6).
+    // change any frozen-corpus decision (docs/plans/ROS_GATE_AND_DST_PLAN.md, WP0 Step 6).
     const frozenKey = projectionScoringProfileKey({
       id: "frozen-untouched-proof-ppr",
       rules: [

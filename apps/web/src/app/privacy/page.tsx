@@ -3,7 +3,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 
 import { LacesOutMark } from "../../components/laces-out-mark";
-import { publicContactEmail } from "../../lib/public-site";
+import { cloudflareWebAnalyticsEnabled, publicContactEmail } from "../../lib/public-site";
 
 import styles from "./privacy.module.css";
 
@@ -95,22 +95,32 @@ export default function PrivacyPage() {
             settings are not exposed to another member unless you explicitly create a permitted
             share.
           </p>
+          <p>Laces Out does not sell data or run behavioral advertising.</p>
+          {cloudflareWebAnalyticsEnabled ? (
+            <p>
+              This deployment uses Cloudflare Web Analytics so the operator can see aggregate
+              traffic levels. It reports page views through a script loaded from Cloudflare; it is
+              not used to build a profile of you, and it plays no part in any recommendation.
+              Cloudflare states that it does not log query strings, so the contents of a search or
+              filter are not sent. What Cloudflare records and retains is described in its own
+              documentation and governed by its terms, not by this policy.
+            </p>
+          ) : (
+            <p>
+              This deployment does not include a product-analytics beacon. An operator who adds
+              analytics must update this policy before collecting traffic data.
+            </p>
+          )}
           <p>
-            Laces Out does not sell data or run behavioral advertising. This deployment uses
-            Cloudflare Web Analytics so the operator can see how much traffic the site receives. It
-            reports page views through a script loaded from Cloudflare; it is not used to build a
-            profile of you, and it plays no part in any recommendation. Cloudflare states that it
-            does not log query strings, so the contents of a search or filter are not sent. What
-            Cloudflare records and retains is described in its own documentation and governed by its
-            terms, not by this policy. Provider and football-data services receive only the requests
-            required to retrieve their data. Film room sends your question and a bounded snapshot of
-            your authorized league, recommendations, and analytics to Google Gemini by default using
-            the operator&apos;s Google AI Studio project. This included access currently uses Gemini
-            3.6 Flash and requires no personal key. Google states that free-tier submitted content
-            may be used to improve its products. You may instead add a separately billed OpenAI,
-            Anthropic, Gemini, or OpenRouter API key and choose the model; that key is encrypted, is
-            not shown again after save, and can be removed at any time. Provider processing is
-            governed by that provider&apos;s account terms and privacy choices.
+            Provider and football-data services receive only the requests required to retrieve their
+            data. Film room sends your question and a bounded snapshot of your authorized league,
+            recommendations, and analytics to Google Gemini by default using the operator&apos;s
+            Google AI Studio project. This included access currently uses Gemini 3.6 Flash and
+            requires no personal key. Google states that free-tier submitted content may be used to
+            improve its products. You may instead add a separately billed OpenAI, Anthropic, Gemini,
+            or OpenRouter API key and choose the model; that key is encrypted, is not shown again
+            after save, and can be removed at any time. Provider processing is governed by that
+            provider&apos;s account terms and privacy choices.
           </p>
         </section>
 

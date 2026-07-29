@@ -122,7 +122,7 @@ visibility is a user/commissioner choice and must not be changed or worked aroun
   direct ESPN request, but it never reads or transmits their values.
 - Never perform lineup, waiver, transaction, trade, commissioner, or draft writes.
 - Never advertise live ESPN draft sync until the live validation matrix in
-  `docs/ESPN_LIVE_DRAFT_SYNC_PLAN.md` §19.4 has passed. The implementation exists behind
+  `docs/plans/ESPN_LIVE_DRAFT_SYNC_PLAN.md` §19.4 has passed. The implementation exists behind
   `ESPN_LIVE_DRAFT_SYNC` (default off) and its DOM adapter is unvalidated; see “Live draft
   observation” below. Manual draft event entry remains primary; completed/on-demand provider draft
   results reconcile against it without silently rewriting manual history.

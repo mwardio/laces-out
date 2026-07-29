@@ -11,6 +11,9 @@ export const publicContactEmail = configuredContactEmail();
 export const yahooComingSoon =
   process.env.NEXT_PUBLIC_YAHOO_ACCESS_STATUS?.trim().toLowerCase() !== "available";
 
+export const cloudflareWebAnalyticsEnabled =
+  process.env.NEXT_PUBLIC_CLOUDFLARE_ANALYTICS?.trim().toLowerCase() === "enabled";
+
 function configuredSiteUrl(): URL {
   try {
     return new URL(process.env.NEXT_PUBLIC_SITE_URL?.trim() || fallbackSiteUrl);

@@ -3,7 +3,7 @@
 - Status: **implemented and verified live 2026-07-28/29** (see "Measured results" below; the
   2026-07-28 session-state section further down is superseded by it)
 - Last updated: 2026-07-29
-- Companion to: `docs/ROS_AVAILABILITY_PLAN.md`, `ENHANCEMENT_PLAN.md`
+- Companion to: `docs/plans/ROS_AVAILABILITY_PLAN.md`, `ENHANCEMENT_PLAN.md`
 
 **Goal:** Let a real ESPN league receive league-scored output. Today every real league is refused
 outright, so rest-of-season projections, weekly forecasts, and matchup ratings all produce nothing.
@@ -212,7 +212,7 @@ positions they affect — never silently ignored.
 - It does not promise all three leagues become fully scoreable. FF 2025 League's nonlinear rules may
   legitimately withhold positions, and some D/ST IDs may stay unmapped.
 - It does not address the ROS availability gate, the live release gate, or the untouched protocol —
-  those are `docs/ROS_AVAILABILITY_PLAN.md`, and they are downstream of this. **Nothing there matters
+  those are `docs/plans/ROS_AVAILABILITY_PLAN.md`, and they are downstream of this. **Nothing there matters
   until a league normalizes.**
 
 ## Measured results — 2026-07-29 (supersedes everything below)
@@ -240,7 +240,7 @@ was honestly mappable, and D/ST stays withheld on 206/209 (209 unestablished).
 - The live release gate was NOT modified (untouched-protocol territory): whole-key equality is
   satisfied by construction because the leagues' normalized supported-subset profiles ARE the
   new catalog profiles. Per-position evidence identity for partially-matched leagues remains
-  `docs/ROS_AVAILABILITY_PLAN.md` work; the inertness is pinned by a production-shaped test.
+  `docs/plans/ROS_AVAILABILITY_PLAN.md` work; the inertness is pinned by a production-shaped test.
 - Shakedown: 9 surfaces × 3 leagues — zero broken, zero 500s (probe log:
   `shakedown-results.md` in the session dir). Known follow-ups recorded there and in the
   ledger (offseason `currentWeek` gate on two status summaries; per-player matchup reasons;

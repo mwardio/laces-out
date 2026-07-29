@@ -2,7 +2,7 @@
 
 - Status: WP1/WP4/WP4a/WP4b complete; WP5 (re-admission) open
 - Last updated: 2026-07-29
-- Companion to: `ENHANCEMENT_PLAN.md`, `docs/REMAINING_ENHANCEMENTS_PT1.md`, `docs/operations.md`
+- Companion to: `ENHANCEMENT_PLAN.md`, `docs/plans/REMAINING_ENHANCEMENTS_PT1.md`, `docs/operations.md`
 
 **Goal:** Get all three admitted scoring profiles to zero availability blockers, so rest-of-season
 projections publish for standard, half-PPR, and full-PPR leagues this season — or establish, with
@@ -465,7 +465,7 @@ WP4a's "still to be ratified or done" items are done, on the operator's directio
   second). Semantics: version fields compare exactly; byte-equal whole keys match on a fast path;
   otherwise both keys are recovered via `projectionScoringRulesFromProfileKey` and compared as
   `projectionScoringProfileKeyForPosition` at the cell's position, failing closed on unparseable
-  keys and on `"[]"`. This is `docs/ROS_GATE_AND_DST_PLAN.md` WP0, executed
+  keys and on `"[]"`. This is `docs/plans/ROS_GATE_AND_DST_PLAN.md` WP0, executed
   here because the live gate is this plan's territory. The publication test that pinned the
   whole-key defect now pins the fix: a partially matched league publishes its matched positions.
 - **What a league sees is still governed by admitted evidence.** The admitted-cell-blocker ratchet
