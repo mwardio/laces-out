@@ -6,8 +6,7 @@
 
 <p align="center">
   <strong>Self-hosted fantasy football intelligence for leagues of friends.</strong><br>
-  Sync ESPN leagues, build scoring-aware forecasts, and turn every refresh into ranked lineup,
-  waiver, trade, opponent, and draft calls—on your server and invite-only.
+  On your server and invite-only.
 </p>
 
 <p align="center">
