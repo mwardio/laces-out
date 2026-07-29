@@ -15,7 +15,7 @@ import { LatestRequest } from "../lib/latest-request";
 import styles from "./change-feed-panel.module.css";
 
 /**
- * The change feed (WP5 / D9).
+ * The change feed.
  *
  * Signed out, the API answers 401 and this panel renders nothing at all: a change feed has no
  * honest demo content — every row would be an invented claim about a league that does not exist.

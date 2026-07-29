@@ -314,7 +314,7 @@ describe("AI provider adapters", () => {
     // Fail closed: an unrecognized model is assumed unable to call tools.
     expect(adapters.gemini.capabilities("gemini-2.0-legacy").toolUse).toBe(false);
     expect(adapters.openrouter.capabilities("some/unknown-model").toolUse).toBe(false);
-    // WP7 ships no BYOK tool path, and the matrix says so rather than implying one.
+    // BYOK providers ship no tool path, and the matrix says so rather than implying one.
     expect(adapters.openai.capabilities("gpt-5.6-luna").toolUse).toBe(false);
     expect(adapters.anthropic.capabilities("claude-sonnet-5").toolUse).toBe(false);
 

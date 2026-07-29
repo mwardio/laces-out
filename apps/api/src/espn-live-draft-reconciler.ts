@@ -21,7 +21,7 @@ import type { DraftSessionEventRecord } from "./draft-session.js";
  * observation cannot be trusted. It never mutates and never talks to the database — the caller
  * commits the plan atomically.
  *
- * The load-bearing rules, all from the plan's §14:
+ * The load-bearing rules:
  *   - a rollback must be confirmed twice before it rewrites accepted history, because a
  *     half-rendered ESPN table is indistinguishable from a commissioner undo in a single frame;
  *   - manual events are never reverted here, only provider ones;

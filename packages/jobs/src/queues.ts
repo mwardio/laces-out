@@ -7,8 +7,8 @@ import type { PgBoss, Queue, SendOptions } from "pg-boss";
  * The API and the worker are separate processes (ADR 0001) and neither may import the other, so
  * before this package existed each hand-copied the queue configuration it needed. That copy drifted:
  * the API's `createQueue` calls omitted the dead-letter target and the retention settings the worker
- * set, so an API-dispatched job silently lost the dead-letter behavior `ENHANCEMENT_PLAN.md` §2.4
- * requires. Nothing here is exported as a raw configuration object — `registerQueues` is the only
+ * set, so an API-dispatched job silently lost required dead-letter behavior. Nothing here is
+ * exported as a raw configuration object—`registerQueues` is the only
  * way to declare a queue, and the `enqueue*` helpers are the only way to produce a singleton key —
  * so a second, different declaration cannot be written without deleting this module.
  */

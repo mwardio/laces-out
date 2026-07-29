@@ -236,7 +236,7 @@ describe("recomputeLeagueRecommendations", () => {
     });
 
     // A league-scoped row computed from one user's private projection set would leak that user's
-    // projections into a row WP5 later surfaces league-wide.
+    // projections into a row the change-event feed later surfaces league-wide.
     expect(buildSnapshot).toHaveBeenCalledWith(
       expect.objectContaining({ visibility: "league-only", fantasyTeamId: "team-1" }),
     );

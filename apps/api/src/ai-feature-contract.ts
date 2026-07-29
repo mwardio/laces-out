@@ -9,7 +9,7 @@ import {
 } from "@fantasy/contracts";
 
 /**
- * `AiFeatureResponse`, widened by the two fields WP7 adds.
+ * `AiFeatureResponse`, widened with tool-use provenance.
  *
  * Composed here rather than inlined into the contracts barrel: `packages/contracts/src/index.ts` is
  * a re-export surface, and `ai-tools.ts` is a leaf that must not read its siblings back through the

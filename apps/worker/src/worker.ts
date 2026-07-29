@@ -55,7 +55,7 @@ const database = createDatabase(environment.DATABASE_URL, 4);
 const catalogRefresher = new NflverseCatalogRefresher({ database: database.db });
 const weeklyDataRefresher = new NflverseWeeklyDataRefresher({
   database: database.db,
-  // WP5: a genuinely new injury state becomes a private change event for each rostering member.
+  // A genuinely new injury state becomes a private change event for each rostering member.
   changeEvents: new DrizzleInjuryChangeEventRepository(database.db),
   onChangeEventError: (error) =>
     logger.warn({ err: error }, "injury ingestion succeeded but change-event emission failed"),

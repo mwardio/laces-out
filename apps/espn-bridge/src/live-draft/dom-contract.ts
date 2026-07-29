@@ -11,9 +11,9 @@
  */
 
 /**
- * Bounds from plan section 8.4. Named constants, never magic numbers, and identical to the server's
- * `ESPN_LIVE_DRAFT_LIMITS`. A few entries below (pro-team/position/roster/revision/season bounds)
- * are literals on the server; they are named here so the sanitizer has one place to read them from.
+ * Named bounds, never magic numbers, identical to the server's `ESPN_LIVE_DRAFT_LIMITS`. A few
+ * entries below (pro-team/position/roster/revision/season bounds) are literals on the server; they
+ * are named here so the sanitizer has one place to read them from.
  */
 export const ESPN_LIVE_DRAFT_LIMITS = {
   /** An upload larger than this is dropped before it is sent; the server rejects it too. */

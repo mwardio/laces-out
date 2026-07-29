@@ -1,12 +1,11 @@
 # D/ST yards-allowed tier model — calibration evidence and pre-registered bars
 
 - Date: 2026-07-29
-- Plan: `docs/plans/ROS_GATE_AND_DST_PLAN.md` WP1 Steps 5–6
-- Status of this file: the dispersion measurement and the pass bars below were recorded **before**
-  any backtest measurement ran, per WP1 Step 6. Measured results are appended afterwards as dated
-  sections; nothing above the "Measured results" heading may be edited after the first measurement.
+- Status: the dispersion measurement and pass bars below were recorded **before** any backtest
+  measurement ran. Measured results were appended afterwards; nothing above the "Measured results"
+  heading may be edited after the first measurement.
 
-## 1. Dispersion measurement (WP1 Step 5)
+## 1. Dispersion measurement
 
 Source: nflverse `stats_team_week_<season>.csv` (the exact dataset
 `packages/source-nflverse/src/team-weekly-stats-source.ts` ingests), seasons 2023–2025, REG only —
@@ -50,10 +49,9 @@ variance fallback 100) are reused.
   degenerate input degrades to a thrown-out projection rather than `NaN` probabilities reaching
   `scoreProjectionStatComponents`, which asserts finiteness over every component.
 
-## 3. Pre-registered pass bars (WP1 Step 6 — written before measurement)
+## 3. Pre-registered pass bars
 
-Recorded verbatim from the plan before any backtest ran; a bar moved afterwards must carry a
-recorded reason.
+Recorded before any backtest ran; a bar moved afterwards must carry a recorded reason.
 
 1. The nine probabilities sum to 1 ± 1e-6 and each lies in [0, 1], for every projected team-week.
 2. **Brier skill score > 0 against climatology** on strictly-prior walk-forward predictions, for
@@ -67,13 +65,13 @@ recorded reason.
    [0.62, 0.78] with ≥ 100 samples, and the bias bound.
 
 Bar 4 measures the whole D/ST score under the league profile; bars 2 and 3 are what test the tier
-model itself, because champion and baseline share the bucket derivation (plan WP1 Step 8).
+model itself, because champion and baseline share the bucket derivation.
 
 ## Measured results
 
 _Appended after the bars above were frozen._
 
-### 2026-07-29 — WP1 walk-forward measurement: all four bars pass
+### 2026-07-29 — walk-forward measurement: all four bars pass
 
 Run: `npm run projections:validate -w @fantasy/worker` (seasons 2023–2025, REG), 1,632 walk-forward
 defense predictions, constants exactly as frozen in §2 — none adjusted.
@@ -93,9 +91,9 @@ defense predictions, constants exactly as frozen in §2 — none adjusted.
 The unchanged publication-gate profile run stayed `publishable` with no reasons (defense overall:
 MAE 4.3193 vs baseline 4.5309, coverage 0.7169, bias −0.0392).
 
-**What the gate does and does not prove (plan WP1 Step 8):** champion and baseline share the
-bucket derivation, so bar 4's league-scored margin discriminates only the context/opponent/
-shrinkage adjustment of the yards center. Bars 2 and 3 are the evidence for the tier model itself
-— the ladder's walk-forward probabilities beat strictly-prior climatology and sit within 0.03 of
-observed frequencies in every bracket. Neither bar is evidence about ESPN's own definition of
-"yards allowed"; that remains the stated method assumption the flip must disclose (WP4 Step 4).
+**What the gate does and does not prove:** champion and baseline share the bucket derivation, so bar
+4's league-scored margin discriminates only the context/opponent/shrinkage adjustment of the yards
+center. Bars 2 and 3 are the evidence for the tier model itself—the ladder's walk-forward
+probabilities beat strictly-prior climatology and sit within 0.03 of observed frequencies in every
+bracket. Neither bar is evidence about ESPN's own definition of "yards allowed"; the implementation
+continues to disclose that method assumption.

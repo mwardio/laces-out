@@ -3,9 +3,9 @@ import { createHash } from "node:crypto";
 import type { AiFeatureName, AiProviderName, AiToolProvenance } from "@fantasy/contracts";
 
 /**
- * The cache key for one AI answer (ENHANCEMENT_PLAN.md §2.5).
+ * The cache key for one AI answer.
  *
- * WP7 defines and proves the key; it does not build the store — that is E6. The key exists here so
+ * This module defines and proves the key; it does not build the store. The key exists here so
  * the rule it enforces is testable now rather than asserted later:
  *
  *  - Seven dimensions, all mandatory: user, league, feature, provider, model, prompt version, tool

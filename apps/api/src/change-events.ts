@@ -19,7 +19,7 @@ import { sql } from "drizzle-orm";
  * have been fetched is one refactor away from being forgotten. Concretely:
  *
  * - a `private` event is visible only when the writer created a receipt for this caller — there is
- *   no other path to one, which is the server-side enforcement WP5 §F1 demands;
+ *   no other path to one;
  * - a `league` event is gated on *live* membership, so a removed member stops seeing it immediately
  *   rather than at the next sweep;
  * - a `global` event is visible to every authenticated caller and carries no private league payload.

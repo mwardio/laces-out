@@ -1,4 +1,4 @@
--- Live ROS scenario-count contract (WP9 Task 9.0).
+-- Live ROS scenario-count contract.
 --
 -- The engine's standard release projection simulates FIRST_PARTY_ROS_DEFAULT_SCENARIOS = 12288
 -- paths and its deterministic convergence reference simulates

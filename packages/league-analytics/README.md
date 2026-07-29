@@ -19,6 +19,32 @@ rest-of-season values from whichever public, custom, or user-owned sources they 
   schedule and returns playoff/seed probabilities, expected final record, expected seed, and
   Monte Carlo standard error.
 
+## Matchup Outlook
+
+Matchup Outlook scores completed player-game components under the league's normalized scoring
+profile, grouped by the player's week-specific roster position and defensive opponent. A completed
+game contributes only when schedule, roster, identity, participation, and stat coverage are all
+admitted. Missing coverage makes that game-position incomplete rather than a plausible zero.
+
+Opponent adjustment uses only games completed before the target game. It compares the observed
+position total with a shrunk pregame expectation for that offense, then aggregates the defensive
+residual around the league positional mean. The current policy uses equal game weights, four
+offense-shrinkage games, four defense-shrinkage games, and four prior-season pseudo-games. Future
+schedule weeks are equally weighted; affirmed byes are counted but excluded from the average.
+
+The output is intentionally descriptive. A locked 2023–2024 candidate-selection fold and untouched
+2025 confirmation fold did not establish stable favorable/difficult labels for QB, RB, WR, or TE
+across standard, half-PPR, and full-PPR scoring. The API may therefore show league-scored raw and
+adjusted points allowed, percentiles, point differentials, coverage, and confidence, but it does
+not promote those values into directional matchup claims or projection adjustments. The pinned
+validation inputs and checksums are recorded in
+[`docs/schedule-edge-validation-2026-07-27.json`](../../docs/schedule-edge-validation-2026-07-27.json).
+
+Roster outlook joins that descriptive context to the claimed roster and separately checks bye-week
+lineup feasibility with the deterministic slot-assignment engine. It returns Covered, Thin, Gap,
+or Unknown; simple position counts are insufficient because flex and multi-position eligibility
+change whether a legal lineup exists.
+
 ## Missing data and ties
 
 A team without a score in an included week is marked missing, never assigned a zero or loss.

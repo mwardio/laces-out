@@ -59,8 +59,8 @@ function garagelyShapedScoringRules(): readonly ScheduleEdgeScoringRuleRow[] {
 /**
  * A sanitized shape of the real synced "FF 2025" ESPN league: the same offense rules as Garagely,
  * plus its six bare per-game yardage-bonus IDs (17/18 passing, 37/38 rushing, 56/57 receiving).
- * Each bonus is evidence-attributed (WP3) to the positions whose vocabulary owns its base
- * component, which collectively spans QB (17/18/37/38) and RB/WR/TE (37/38/56/57) — one bad rule
+ * Each bonus is evidence-attributed to the positions whose vocabulary owns its base component,
+ * which collectively spans QB (17/18/37/38) and RB/WR/TE (37/38/56/57) — one bad rule
  * per position is enough to withhold it, so all four schedule-edge positions end up unsupported
  * even though the base linear rules would otherwise have supported them.
  */
@@ -660,7 +660,7 @@ describe("ScheduleEdgeService", () => {
     expect(findManagedProjectionProfile).toHaveBeenCalledWith(SEASON_ID);
   });
 
-  // WP6 regression: the match-rate threshold must gate admission, not merely render a badge. A
+  // The match-rate threshold must gate admission, not merely render a badge. A
   // weekly-stats source that fell below its threshold is quarantined by `admittedSourceContract`,
   // so Schedule Edge must never read a stat row from it or derive an opponent rating with it.
   it("withholds matchup ratings when the weekly-stats source is below its match-rate threshold", async () => {
@@ -713,8 +713,8 @@ describe("ScheduleEdgeService", () => {
     }
   });
 
-  // WP2 Step 3 (Caller 3): `normalizeLeagueScoringProfile`'s result now carries per-position
-  // support, not just a whole-league state — `scoringAvailability`/`matchupAvailability` must
+  // `normalizeLeagueScoringProfile` carries per-position support, not just a whole-league state.
+  // `scoringAvailability`/`matchupAvailability` must
   // gate on QB/RB/WR/TE support, and `computeAnalysis` must compute ratings only for supported
   // positions, letting an unsupported position fall back to the existing per-rating
   // "unavailable" + reason contract instead of a fabricated, incomplete score.

@@ -118,7 +118,7 @@ function leagueListFixture() {
   };
 }
 
-/** WP4 helpers: an ESPN bridge that reports a persisted league season alongside its receipt. */
+/** An ESPN bridge that reports a persisted league season alongside its receipt. */
 function bridgeAccepting(state: "accepted" | "unchanged") {
   return {
     listDevices: () => Promise.reject(new Error("not used")),

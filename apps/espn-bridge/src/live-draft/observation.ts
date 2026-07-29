@@ -1,10 +1,10 @@
 /**
  * Turns a raw draft-room extraction into a sanitized, bounded, checksummed observation.
  *
- * Pure and fully testable in node: no DOM, no chrome API, no network. This module owns the plan's
- * section 8.4 limits, control-character rejection, duplicate/gap detection, and the durable versus
- * transient auction split. It knows no ESPN selector; the only ESPN knowledge it uses is the label
- * vocabulary exported by `dom-adapter.ts`, applied as a lookup.
+ * Pure and fully testable in node: no DOM, no chrome API, no network. This module owns the upload
+ * limits, control-character rejection, duplicate/gap detection, and the durable versus transient
+ * auction split. It knows no ESPN selector; the only ESPN knowledge it uses is the label vocabulary
+ * exported by `dom-adapter.ts`, applied as a lookup.
  *
  * Every rule here is fail-closed. An unreadable field never becomes a guess: it becomes `null` when
  * the contract permits absence, and otherwise drops its row into `completeness.unresolvedRows` so

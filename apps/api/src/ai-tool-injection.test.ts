@@ -5,7 +5,7 @@ import { runAiToolLoop } from "./ai-tool-loop.js";
 import { createAiToolRegistry } from "./ai-tool-registry.js";
 
 /**
- * Prompt-injection resistance (ENHANCEMENT_PLAN.md §2.5).
+ * Prompt-injection resistance for deterministic tool use.
  *
  * Imported news, notes, league names, and member text are untrusted content. So is a tool result,
  * because it carries the same synced strings. The point of these tests is that the defence is

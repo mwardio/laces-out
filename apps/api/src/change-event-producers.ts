@@ -31,8 +31,8 @@ import { asc, desc, eq } from "drizzle-orm";
  *
  * Neither producer emits on every write. The sync producer returns early on any receipt state other
  * than `accepted`, and the roster producer compares the new snapshot's checksum with its
- * predecessor's and returns early when they match — the "compare against the prior run" requirement
- * of `ENHANCEMENT_PLAN.md` §2.4.
+ * predecessor's and returns early when they match, enforcing the prior-run comparison before
+ * emitting a change.
  */
 
 const MAX_LEAGUE_MEMBERS = 64;

@@ -1,9 +1,9 @@
--- Change-event push delivery (WP5, plan IDs A6 + D9).
+-- Change-event push delivery.
 --
 -- `notification_deliveries` is the send-once occasion ledger for outbound notifications, and its
--- `kind` was pinned to the single existing family by a check constraint. WP5 adds a second family:
+-- `kind` was pinned to the single existing family by a check constraint. This adds a second family:
 -- `change-event`, one digest per member per sweep, claimed through the same ledger and dispatched by
--- the same `NotificationSender`. Widening this one check is the only DDL WP5 needs — `change_events`
+-- the same `NotificationSender`. Widening this one check is the only required DDL — `change_events`
 -- and `change_event_receipts` were already migrated in 0003 and are unchanged here.
 --
 -- Forward-only and widening only: every row that satisfied the old constraint satisfies the new one,

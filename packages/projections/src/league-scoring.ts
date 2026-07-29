@@ -427,8 +427,8 @@ export const ESPN_PLAYER_SCORING_STAT_ID_MAP_V1: Readonly<Record<string, string>
 /**
  * The `:slot:16` acceptance gate's defense vocabulary, derived from the projection engine rather
  * than restated, so the gate can never accept a component the projector does not produce — and can
- * never lag behind one it does (`docs/plans/ROS_GATE_AND_DST_PLAN.md` WP2 Step 1, "one source of
- * truth"). The hand-typed predecessor deliberately omitted the three Yahoo-only points tiers
+ * never lag behind one it does. The hand-typed predecessor deliberately omitted the three
+ * Yahoo-only points tiers
  * (`points_allowed_14_20/21_27/35_plus_probability`); that omission was measured as
  * non-load-bearing before collapsing: this set is consulted only at the ESPN `:slot:16` acceptance
  * gate in `positionOverride`, which additionally requires an ESPN-mapped base component, and no
@@ -516,15 +516,14 @@ const ESPN_NONLINEAR_STAT_IDS = new Set([
 /**
  * Evidence-recorded ESPN nonlinear stat ID -> base scoring component. Used ONLY to narrow which
  * positions a `NONLINEAR_RULE` failure attributes to (vocabulary intersection with the base
- * component, WP2-core's mechanism) — this never makes the rule scoreable, never populates
- * `bonuses`, never touches scoring. Source of record for these six per-game yardage bonuses:
- * community vocabulary, cwendt94/espn-api `constant.py`, fetched 2026-07-28, now recorded in-repo
- * in `docs/plans/ROS_GATE_AND_DST_PLAN.md` §0.1 and `docs/dst-stat-id-evidence-2026-07-29.md`
- * (the session evidence file this comment originally cited was never committed). The yards-allowed
- * bracket entries (128-136) left this table on 2026-07-29 when those IDs became mapped
- * `yards_allowed_*_probability` components; their ladder evidence is recorded in the plan's §0.1.
- * Do not extend without recording evidence there first — every ESPN nonlinear ID without an entry
- * here stays pessimistically attributed to all six positions.
+ * component) — this never makes the rule scoreable, never populates `bonuses`, and never touches
+ * scoring. Source of record for these six per-game yardage bonuses: community vocabulary and
+ * cwendt94/espn-api `constant.py`, fetched 2026-07-28, with the supporting evidence recorded in
+ * `docs/dst-stat-id-evidence-2026-07-29.md`. The yards-allowed bracket entries (128-136) left this
+ * table on 2026-07-29 when those IDs became mapped `yards_allowed_*_probability` components; their
+ * evidence is recorded in `docs/dst-yards-allowed-calibration-2026-07-29.md`. Do not extend without
+ * recording evidence first — every ESPN nonlinear ID without an entry here stays pessimistically
+ * attributed to all six positions.
  */
 const ESPN_NONLINEAR_STAT_ID_BASE_COMPONENTS: Readonly<Record<string, string>> = {
   "17": "passing_yards",
@@ -572,10 +571,10 @@ const ESPN_IDP_STAT_IDS = new Set(["106", "107", "108", "109", "110", "111", "11
  * data-gap verification: nflverse `stats_team_week`/`stats_player_week` carry no defensive
  * two-point or one-point-safety columns, and the events exist only in play-by-play, which this
  * repo has no source for. So each ID can be neither projected nor backtested, and pricing one at a
- * remembered rate is forbidden (`docs/plans/ROS_GATE_AND_DST_PLAN.md` WP3).
+ * remembered rate is forbidden.
  *
- * The generic variants 206 and 209 LEFT this table on 2026-07-29 under the operator-ratified de
- * minimis zero criterion (`docs/dst-stat-id-evidence-2026-07-29.md` §4): both are now mapped
+ * The generic variants 206 and 209 left this table on 2026-07-29 under the recorded de minimis zero
+ * criterion (`docs/dst-stat-id-evidence-2026-07-29.md` §4): both are now mapped
  * components priced at a constant zero justified by a citable occurrence bound. The four that
  * remain are the offense/defense-specific variants, which no league in scope carries and for which
  * no bound has been recorded — the criterion is per-component and evidence-gated, not a category

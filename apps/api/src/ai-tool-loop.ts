@@ -10,7 +10,7 @@ import type {
 import type { AiExecutableTool, AiToolContext } from "./ai-tool-registry.js";
 
 /**
- * The bounded orchestration loop (ENHANCEMENT_PLAN.md §2.5).
+ * The bounded orchestration loop.
  *
  * The provider never runs the loop; we do. Every ceiling below exists because a model that can ask
  * for one more tool result can ask for a thousand, and each request costs a reserved daily-budget

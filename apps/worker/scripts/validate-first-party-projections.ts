@@ -112,9 +112,9 @@ const espnDefaultDstProfile: ProjectionScoringProfile = {
 };
 
 /**
- * WP1's evidence-established ESPN yards-allowed ladder (`docs/plans/ROS_GATE_AND_DST_PLAN.md`
- * §0.1), restated here only to derive strictly-prior bracket outcomes for the calibration
- * measurement — the projector owns the authoritative copy in
+ * ESPN's evidence-established yards-allowed ladder, restated here only to derive strictly-prior
+ * bracket outcomes for the calibration measurement (see
+ * `docs/dst-yards-allowed-calibration-2026-07-29.md`). The projector owns the authoritative copy in
  * `packages/projections/src/first-party.ts`.
  */
 const espnYardsAllowedLadder = [
@@ -192,7 +192,7 @@ function espnDstGateConditions(evaluation: FirstPartyPointResidualCalibration): 
 }
 
 /**
- * Walk-forward calibration measurement for the yards-allowed ladder (WP1 Step 7; bars 1-3 of
+ * Walk-forward calibration measurement for the yards-allowed ladder (bars 1-3 of
  * `docs/dst-yards-allowed-calibration-2026-07-29.md`). Every prediction in the backtest is already
  * strictly prior; the climatology baseline recomputes each bracket's observed frequency over the
  * defense-history rows strictly before that prediction's season/week, so model and baseline obey

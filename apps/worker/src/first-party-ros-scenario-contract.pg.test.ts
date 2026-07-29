@@ -1,5 +1,5 @@
 /**
- * Real disposable-PostgreSQL proof that the DEFAULT live ROS path persists (WP9 Task 9.0).
+ * Real disposable-PostgreSQL proof that the default live ROS path persists.
  *
  * Every existing ROS test either stubs the candidate provider or passes an explicit small
  * `scenarioCount` (256 in `first-party-ros-projection-service.test.ts`, 128 in

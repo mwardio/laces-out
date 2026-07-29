@@ -1,7 +1,6 @@
 # ESPN D/ST stat-ID evidence — 206, 209, and the points-allowed ladder
 
 - Date: 2026-07-29
-- Plan: `docs/plans/ROS_GATE_AND_DST_PLAN.md` WP2 Step 8 and WP3
 - Method: documented community sources only, quoted from their raw source files, per the
   never-guess rule. ESPN's own support page (`support.espn.com` "Scoring Formats") and
   `nflreadr.nflverse.com` were unavailable during the evidence review, so no ESPN first-party
@@ -24,13 +23,12 @@ Three documented maps agree:
   `"206" = "2PtConversionReturnedForTouchdown"` (its own wording for the same event; the file's
   header cites espn-api's constant.py). (https://github.com/ffverse/ffscrapr/blob/main/R/espn__helpers.R)
 
-Consistent with the community-believed "defensive two-point return" meaning the plan recorded and
-with the 2-point value the three leagues carry.
+This is consistent with the community-described "defensive two-point return" meaning and with the
+2-point value the three measured leagues carry.
 
-**Pricing decision (WP3 Steps 1–2): 206 stays unsupported.** — **SUPERSEDED 2026-07-29 by §4.**
-206 is now priced by the de minimis zero model. Everything measured below still stands and is the
-premise §4 reasons from; what changed is the conclusion drawn from it. The obstacle is data, not
-meaning. Verified against the live datasets and their generator on 2026-07-29:
+**Data availability and pricing:** 206 is priced by the de minimis zero model in §4. The obstacle
+to a historical-rate model is data, not meaning. Verified against the live datasets and their
+generator on 2026-07-29:
 
 - `stats_team_week_2024.csv` (the exact nflverse asset
   `packages/source-nflverse/src/team-weekly-stats-source.ts` ingests) carries only
@@ -46,10 +44,9 @@ meaning. Verified against the live datasets and their generator on 2026-07-29:
   (`packages/source-nflverse/src/` holds players, injuries, schedules, snap counts, team-weekly,
   weekly-rosters, weekly-stats and nothing else).
 
-So pricing 206 **from history** is a new-data-source project (pbp ingestion + aggregation +
-walk-forward evidence), not a modeling step, exactly as the plan anticipated. Pricing it at a
-remembered rate is forbidden. §4 does neither: it prices it at a constant zero justified by a
-citable occurrence bound, which is a different claim with a different (and much weaker) burden.
+Pricing 206 **from history** would therefore require play-by-play ingestion, aggregation, and
+walk-forward evidence. Pricing it at a remembered rate is forbidden. Section 4 instead prices it
+at constant zero under a citable occurrence bound, a narrower claim with a weaker burden.
 
 ## 2. ID 209 — established: "1pt Safety" (`1PSF`)
 
@@ -60,20 +57,14 @@ The same three maps agree exactly:
 - **nntrn gist** (id column): `209 · 1PSF · 1pt Safety`.
 - **ffscrapr**: `"209" = "1PtSafety"`.
 
-This settles the meaning WP3 Step 3 left open — 209 is the one-point safety (the try-play safety),
-generic variant beside 207/208, consistent with the 1-point value the leagues carry.
+This establishes 209 as the one-point safety (the try-play safety), the generic variant beside
+207/208, consistent with the 1-point value the measured leagues carry.
 
-**Pricing decision (WP3 Step 3): 209 stays unsupported.** — **SUPERSEDED 2026-07-29 by §4.** Same
-shape as 206: no ingested source carries the event (no such column exists in `stats_team_week` or
-`stats_player_week` at all), so it can be neither projected nor backtested; it is also so rare that
-no per-team-week rate could clear a sample-floored walk-forward gate. The ID moves from "meaning
-unestablished" to "established, unpriceable" — and, as of §4, to "established, priced at constant
-zero under a recorded de minimis bound." The last clause above ("so rare that no per-team-week rate
-could clear a sample-floored walk-forward gate") is exactly the observation §4 turns into the
-license: a component that rare has a citable upper bound on its contribution, and that bound is
-what is modeled.
+**Data availability and pricing:** no ingested source carries the event—no such column exists in
+`stats_team_week` or `stats_player_week`—so it can be neither projected nor backtested from the
+current corpus. Section 4 prices it at constant zero under a recorded de minimis occurrence bound.
 
-## 3. Points-allowed ladder 121–125 — repo mapping corroborated (WP2 Step 8)
+## 3. Points-allowed ladder 121–125 — repository mapping corroborated
 
 All consulted documented maps agree:
 
@@ -94,14 +85,11 @@ in the yards ladder. What could **not** be established (ESPN page unreachable): 
 point values for these rungs; the leagues' −1/−3/−5 stand as the leagues' own observed values,
 which is all normalization prices anyway.
 
-## 4. The de minimis zero criterion (added 2026-07-29; operator-ratified)
+## 4. The de minimis zero criterion (adopted 2026-07-29)
 
-This section supersedes §1's and §2's "stays unsupported" conclusions, and supersedes
-`docs/plans/ROS_GATE_AND_DST_PLAN.md` WP3-RESULT's "both stay in the unsupported set" decision and its
-"pricing at a remembered rate stays forbidden" line **for exactly the two IDs named here and for no
-others**. It does not touch 204, 205, 207 or 208: those variants are not present in any of the
-three leagues' rule sets, no bound has been recorded for them, and they stay unsupported with the
-per-ID reasons WP3 gave them.
+This criterion applies **only to the two IDs named here**. It does not touch 204, 205, 207, or 208:
+those variants are not present in any of the three measured leagues' rule sets, no occurrence bound
+has been recorded for them, and they remain unsupported.
 
 ### 4.1 The criterion, stated before it is applied
 

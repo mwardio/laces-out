@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 /**
- * Wire contracts for the change-event feed (WP5 / A6 + D9).
+ * Wire contracts for the change-event feed.
  *
  * **Browser-safe.** This module has no `node:` import — `apps/web` client components read the
  * contracts barrel, so anything requiring `node:crypto` belongs in `@fantasy/change-events` instead.
@@ -13,8 +13,8 @@ import { z } from "zod";
  * so a payload written today can never be migrated in place — forward-compatible reads are the only
  * available answer.
  *
- * **Cursor convention introduced here.** No route in this repository paginated before WP5. The
- * scheme is an opaque `base64url("<occurredAtIso>|<uuid>")` cursor read against
+ * **Cursor convention.** The scheme is an opaque `base64url("<occurredAtIso>|<uuid>")` cursor read
+ * against
  * `order by occurred_at desc, id desc`, with `nextCursor: null` on the last page. Decoding validates
  * both halves and returns `null` on anything else, so a forged cursor can never reach SQL. Copy this
  * scheme rather than inventing a second one.

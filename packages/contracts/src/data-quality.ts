@@ -3,8 +3,8 @@ import { z } from "zod";
 /**
  * Wire contracts for source identity quality.
  *
- * `ENHANCEMENT_PLAN.md` §2.3 requires that ambiguous matches are quarantined rather than guessed,
- * that every ingestion reports rows read, rejected, and unmatched, and that a source-specific
+ * Ambiguous matches are quarantined rather than guessed, every ingestion reports rows read,
+ * rejected, and unmatched, and a source-specific
  * match-rate threshold gates derived analysis. These schemas are the read side of that: the summary
  * every authenticated member may see, and the redacted unresolved sample only an administrator may
  * see.

@@ -849,9 +849,9 @@ export class DrizzleEspnLiveDraftRepository implements EspnLiveDraftRepository {
   /**
    * Bridge device authorization for a live observation.
    *
-   * Mirrors `EspnBridgeService.acceptSnapshot` for the token and scope checks, then adds the plan's
-   * §10.1 requirements: the league season must already exist from an accepted ESPN core snapshot,
-   * the league must not be archived, and the device owner must still be an authorized member of it.
+   * Mirrors `EspnBridgeService.acceptSnapshot` for the token and scope checks, then requires the
+   * league season to exist from an accepted ESPN core snapshot, the league not to be archived, and
+   * the device owner still to be an authorized member.
    * Every failure is a silent `undefined`; the service turns that into one 403 so a probe cannot
    * distinguish "wrong token" from "league not synced".
    */

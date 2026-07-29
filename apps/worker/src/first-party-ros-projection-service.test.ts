@@ -578,9 +578,9 @@ describe("first-party ROS shadow service publication rail", () => {
   it("arbitrates a league matching two artifacts to exactly one and records the skip", async () => {
     // Position-scoped identity is what makes double publication possible: the D/ST-augmented
     // artifact's offense-scoped keys equal the league's, so its own live gate would release the
-    // same league the whole-key artifact publishes. Arbitration (WP0 Step 3) must keep the
-    // whole-key winner even though the other artifact is newer, and the skipped pass must be
-    // visible in the run record rather than silent.
+    // same league the whole-key artifact publishes. Arbitration must keep the whole-key winner even
+    // though the other artifact is newer, and the skipped pass must be visible in the run record
+    // rather than silent.
     const dstAugmentedKey = projectionScoringProfileKey({
       id: "live-service-ppr-dst",
       rules: [...scoringProfile.rules, { statId: "defensive_sacks", points: 2 }],

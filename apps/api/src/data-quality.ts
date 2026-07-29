@@ -26,8 +26,8 @@ import {
 } from "./admitted-source.js";
 
 /**
- * Read-side visibility for `ENHANCEMENT_PLAN.md` §2.3. Ingestion already quarantines an ambiguous
- * match rather than guessing it and already records rows read, rejected, and unmatched. This module
+ * Read-side visibility for source identity quality. Ingestion already quarantines an ambiguous
+ * match rather than guessing it and records rows read, rejected, and unmatched. This module
  * makes that readable: which sources are below their match-rate threshold, what analysis is
  * therefore withheld, and — for an administrator only — which weeks hold unresolved rows.
  *

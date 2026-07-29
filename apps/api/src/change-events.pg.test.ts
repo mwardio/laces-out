@@ -4,8 +4,8 @@
  * The visibility rule is one SQL predicate, so it can only be proved against real PostgreSQL: an
  * in-memory fake would prove the fake agrees with itself. This suite drives the actual
  * `DrizzleChangeEventRepository` and `ChangeEventService` against seeded users, leagues, and
- * memberships, and asserts the four things WP5's exit criteria name — cross-user isolation,
- * cross-league isolation, a dismissal that survives a re-sync, and the retention read window.
+ * memberships, and asserts cross-user isolation, cross-league isolation, a dismissal that survives
+ * a re-sync, and the retention read window.
  *
  * Safety: the container is created with an explicit, freshly generated, task-specific connection
  * string on a docker-assigned host port. No code here reads `process.env.DATABASE_URL` or any

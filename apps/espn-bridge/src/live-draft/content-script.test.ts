@@ -16,7 +16,7 @@ import { createLiveDraftStatusOverlay, type OverlayNode } from "./status-overlay
 import { defaultLiveDraftStatus } from "./uplink.js";
 
 /**
- * Minimal invented draft room. Selector keys come from the exported table, so Work Package 0 can
+ * Minimal invented draft room. Selector keys come from the exported table, so live validation can
  * replace the provisional selectors without touching this fixture.
  */
 function draftRoomFixture(

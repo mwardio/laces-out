@@ -86,13 +86,34 @@ automatically.
 
 Two limitations are load-bearing and must not be papered over:
 
-1. **The DOM selectors are provisional.** Work Package 0 of the plan — the live DOM contract spike —
-   requires an authenticated ESPN draft room and has not been run. Until it is, the adapter's
-   selector table is unverified and the feature must stay flagged off.
+1. **The DOM selectors are provisional.** The live DOM contract requires an authenticated ESPN
+   draft room and has not been validated. Until it is, the adapter's selector table is unverified
+   and the feature must stay flagged off.
 2. **Late join may be bounded by virtualized rendering.** If ESPN renders only visible rows, a
-   bridge that joins mid-draft may not be able to reconstruct earlier picks. The spike must either
+   bridge that joins mid-draft may not be able to reconstruct earlier picks. Validation must either
    disprove this or the "bridge must be present from the start" limitation gets documented in the
    product UI, not hidden.
+
+### Live draft release gate
+
+`ESPN_LIVE_DRAFT_SYNC` remains off by default until all of the following are demonstrated against
+authenticated disposable leagues. ESPN's public mock lobby is insufficient because it exposes no
+paired league ID.
+
+- A complete snake draft and salary-cap draft reproduce every pick, owner, keeper, winning bid,
+  pause/resume transition, and final state.
+- Reload, late join, source failover, deliberate rollback, and API/container restart preserve an
+  exactly-once event ledger. Completed `mDraftDetail` results reconcile with that ledger.
+- Unknown or ambiguous players and teams hold the board instead of being guessed. Schema drift,
+  malformed DOM, and lost browser state preserve the last good board and expose manual backup.
+- A mobile viewer receives the same accepted state; normal provider-to-app latency is at most five
+  seconds at p95 and accepted-state recommendation recalculation remains below 500 ms.
+- No ESPN password, cookie, `SWID`, `espn_s2`, draft token, WebSocket URL or frame, chat, page
+  storage, or raw HTML reaches Laces Out.
+
+Only after this matrix passes may the selectors be marked verified, the flag be enabled for a
+canary league, and product copy advertise live ESPN draft sync. Turning the flag off is the
+rollback: it stops new provider observations while preserving accepted events and manual entry.
 
 ### 2. Anonymous public-league read
 
@@ -121,11 +142,10 @@ visibility is a user/commissioner choice and must not be changed or worked aroun
   in the hosted application. The companion may let the browser attach its local ESPN cookies to a
   direct ESPN request, but it never reads or transmits their values.
 - Never perform lineup, waiver, transaction, trade, commissioner, or draft writes.
-- Never advertise live ESPN draft sync until the live validation matrix in
-  `docs/plans/ESPN_LIVE_DRAFT_SYNC_PLAN.md` §19.4 has passed. The implementation exists behind
-  `ESPN_LIVE_DRAFT_SYNC` (default off) and its DOM adapter is unvalidated; see “Live draft
-  observation” below. Manual draft event entry remains primary; completed/on-demand provider draft
-  results reconcile against it without silently rewriting manual history.
+- Never advertise live ESPN draft sync until the release gate above has passed. The implementation
+  exists behind `ESPN_LIVE_DRAFT_SYNC` (default off) and its DOM adapter is unvalidated. Manual
+  draft event entry remains primary; completed/on-demand provider draft results reconcile against
+  it without silently rewriting manual history.
 - Do not silently fall back from anonymous reads to browser session credentials.
 
 Disney's terms restrict automated access, monitoring, and copying using robots, spiders, scrapers,

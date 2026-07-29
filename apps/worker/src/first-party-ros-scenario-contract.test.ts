@@ -1,5 +1,5 @@
 /**
- * The live ROS scenario-count contract (WP9 Task 9.0).
+ * The live ROS scenario-count contract.
  *
  * The engine releases at `FIRST_PARTY_ROS_DEFAULT_SCENARIOS` and diagnoses convergence against
  * `FIRST_PARTY_ROS_CONVERGENCE_REFERENCE_SCENARIOS`, while `player_ros_projection_summaries`, its

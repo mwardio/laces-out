@@ -208,13 +208,12 @@ const NON_PPR_LEAGUE_ROWS = FULL_PPR_LEAGUE_ROWS.filter((row) => row.statKey !==
 
 /**
  * A sanitized transcription of one of the two real synced ESPN leagues (`league B`, "Garagely" /
- * "The Android's Dungeon") and the WP2 fixture of the same shape in
+ * "The Android's Dungeon") and the fixture of the same shape in
  * `packages/projections/src/league-scoring.test.ts` (`ESPN_LEAGUE_B_ROWS`) — normalizes to
  * `state: "available"` with **all six positions supported**
  * since the de minimis zero criterion mapped ESPN 206/209 on 2026-07-29
- * (`docs/dst-stat-id-evidence-2026-07-29.md` §4); the yards-allowed bracket overrides became
- * accepted, mapped tier rules at `docs/plans/ROS_GATE_AND_DST_PLAN.md` WP2. It was D/ST-withheld on those
- * two IDs before the flip.
+ * (`docs/dst-stat-id-evidence-2026-07-29.md` §4); the yards-allowed bracket overrides are accepted,
+ * mapped tier rules. It was D/ST-withheld on those two IDs before the flip.
  */
 const GARAGELY_LEAGUE_ROWS: readonly {
   readonly statKey: string;
@@ -299,8 +298,8 @@ const GARAGELY_LEAGUE_ROWS: readonly {
 /**
  * A single scoring rule with no exact mapping to any provider ID or display name: fails
  * `UNKNOWN_NONZERO_RULE` for every position (`LEAGUE_SCORING_POSITIONS`), producing a
- * structurally-failing, zero-positions-supported profile without needing WP3's mixed-provider
- * plumbing (`scoringRules` rows share one provider per league season on this real read path, so a
+ * structurally-failing, zero-positions-supported profile without mixed-provider plumbing
+ * (`scoringRules` rows share one provider per league season on this real read path, so a
  * genuinely mixed-provider row set cannot be seeded through `seedLeague`).
  */
 const ZERO_POSITION_LEAGUE_ROWS: readonly {
@@ -679,7 +678,7 @@ describe.skipIf(!dockerAvailable)(
      *    catalog entry does not. Reporting that entry anyway would claim the league is scored
      *    identically to an artifact that prices no team defense, which is false. Null reads as
      *    "no catalog profile has this exact identity", which is the truth. The release gate is
-     *    unaffected: WP0 made it per-cell, and the rail positions still match (below).
+     *    unaffected: identity is compared per cell, and the rail positions still match (below).
      * 2. D/ST is withheld for `scoring-profile-position-mismatch` — a matching fact — instead of
      *    `position-unsupported`. That is the whole point of the flip: the position is now priceable
      *    and simply has no admitted artifact scored the same way.

@@ -1,8 +1,8 @@
 /**
  * Source-specific match-rate thresholds.
  *
- * `ENHANCEMENT_PLAN.md` §2.3 requires a match-rate threshold to exist *before* derived analysis
- * publishes. That threshold shipped as a bare `minimumPublishableMatchRate = 0.95` duplicated in
+ * A match-rate threshold must exist *before* derived analysis publishes. That threshold initially
+ * shipped as a bare `minimumPublishableMatchRate = 0.95` duplicated in
  * `apps/worker/src/nflverse-weekly-data.ts` and `apps/worker/src/ffc-adp.ts`. This module is that
  * same threshold lifted into one registry so the number has one home, a written rationale, and a
  * per-source override where the identity cross-walk genuinely differs. It is not a second,

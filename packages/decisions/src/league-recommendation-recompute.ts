@@ -17,8 +17,8 @@ import type { RecommendationRunProvenance } from "@fantasy/contracts";
  * calls the engines per request, every response carries `cache-control: no-store`, and
  * `recommendation_runs`/`recommendations` have had zero readers and zero writers since migration
  * 0000. So "invalidate a cache" is not available here — there is nothing to invalidate. This is the
- * producer that ADR 0003's persisted provenance and `ENHANCEMENT_PLAN.md` §2.4's "compared with the
- * prior run" both require, and it is what WP5's change-event feed will read.
+ * producer that ADR 0003's persisted provenance and the prior-run comparison both require, and it
+ * is what the change-event feed reads.
  *
  * Ports are injected so the whole thing is unit-testable without a database (the
  * `MemoryNotificationRepository` precedent in `apps/worker/src/push-notifications.test.ts`).
@@ -29,7 +29,7 @@ import type { RecommendationRunProvenance } from "@fantasy/contracts";
  *
  * The on-demand repository admits `visibility = 'private'` sets belonging to the calling actor. A
  * `recommendation_runs` row is league-scoped, so computing one from a private set would leak that
- * user's projections into a row WP5 later surfaces to the whole league. Forcing league visibility is
+ * user's projections into a row later surfaced to the whole league. Forcing league visibility is
  * the fix; recording the restriction is what keeps the difference from the on-demand view honest
  * rather than invisible.
  */

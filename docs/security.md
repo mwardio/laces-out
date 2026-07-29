@@ -109,20 +109,19 @@ fact stay distinguishable forever, and the reconciler will not revert a manual e
 
 ## Reporting
 
-This is a private project. Record discovered security issues in a private tracker without real secrets or provider payloads. Rotate exposed application secrets immediately, disconnect affected provider access, invalidate app sessions, and inspect audit events.
+Do not open a public issue containing a vulnerability, real secret, or provider payload. Use the
+repository's private vulnerability-reporting channel when available. Rotate exposed application
+secrets immediately, disconnect affected provider access, invalidate app sessions, and inspect
+audit events.
 
 ## Known dependency advisories
 
-Audit reviewed 2026-07-17:
+Audit reviewed 2026-07-29:
 
-- Production audit reports two moderate findings because Next 16.2.10 carries PostCSS 8.4.31,
-  below the advisory's 8.5.10 fix. The registry currently suggests an invalid downgrade rather than
-  a supported patched Next release. Laces Out does not accept or stringify user-authored CSS at
-  runtime; monitor the next supported Next release and upgrade promptly rather than forcing an
-  untested nested override.
-- Full audit reports four additional moderate dependency-chain findings through development-only
-  Drizzle migration tooling and esbuild. These tools are not shipped in the production runtime and
-  no development server may be exposed to untrusted networks. Do not apply the registry's suggested
-  Drizzle downgrade without migration compatibility testing.
-- CI runs `npm audit --audit-level=high`; any new high or critical advisory is a release failure.
-  Moderate findings remain an explicit reviewed exception, not a silent pass.
+- The full audit reports four moderate development-toolchain findings through esbuild, including
+  Drizzle migration tooling. No development server may be exposed to untrusted networks, and these
+  tools are not shipped as an internet-facing production service. Do not apply the registry's
+  suggested Drizzle downgrade without migration compatibility testing; update through supported
+  upstream releases instead.
+- Release verification runs `npm audit --audit-level=high`; any new high or critical advisory is a
+  release failure. Moderate findings remain an explicit reviewed exception, not a silent pass.

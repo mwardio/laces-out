@@ -18,10 +18,10 @@ import { createHash } from "node:crypto";
 import { and, asc, desc, eq } from "drizzle-orm";
 
 /**
- * The recommendation-delta producer, and the first reader of WP4's persisted runs.
+ * The recommendation-delta producer and first reader of persisted recommendation runs.
  *
- * `ENHANCEMENT_PLAN.md` §2.4 requires new recommendations to be "compared with the prior run".
- * WP4 made that literal: `recommendation_runs` now has a real producer and a stable replay identity
+ * New recommendations are compared with the prior run. `recommendation_runs` has a real producer
+ * and a stable replay identity
  * — `(league_season_id, fantasy_team_id, kind, algorithm_version, input_hash)` — so the prior run is
  * a stored, replayable artifact rather than something re-derived. This module therefore reads the
  * *previous persisted run* for the same identity and diffs its `recommendations` rows against the

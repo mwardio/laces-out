@@ -38,7 +38,7 @@ export interface BridgeStatus {
   readonly results: readonly BridgeLeagueResult[];
 }
 
-// Live draft messages (plan section 9). They are part of the same `BridgeRequest` union so the
+// Live draft messages. They are part of the same `BridgeRequest` union so the
 // message listener sees one type, but they answer with `BridgeLiveDraftResponse` rather than the
 // league-sync `BridgeResponse`, and the service worker routes them to their own handler. They must
 // never fall through to a league sync: see `handleRequest` in the service worker.

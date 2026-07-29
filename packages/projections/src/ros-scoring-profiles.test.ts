@@ -128,12 +128,9 @@ describe("rosScoringProfileCatalog", () => {
 });
 
 /**
- * WHOLE-KEY equality is the route to publishing tonight: post-WP2, a league's normalized profile
- * contains only its supported-subset rules, so a catalog profile whose rules equal that normalized
- * profile byte-for-byte makes every whole-key comparison in the pipeline succeed. Per the
- * catalog-profiles task brief, the rule lists are NOT hand-derived from source data — this suite
- * runs the real normalizer over the same rows and asserts the catalog key equals its output. That
- * equality check is the spec; the entries in ros-scoring-profiles.ts exist only to satisfy it.
+ * The catalog profiles are not hand-derived from source data. This suite runs the real normalizer
+ * over the same rows and asserts the catalog key equals its output. That equality check is the
+ * specification; the entries in ros-scoring-profiles.ts exist only to satisfy it.
  */
 describe("ESPN-shaped catalog entries", () => {
   function rule(
@@ -308,7 +305,7 @@ describe("ESPN-shaped catalog entries", () => {
     rule("99:slot:16", "ESPN stat 99 override for D/ST", 1, { provider: "espn" }),
   ];
 
-  /** The positions the ROS rail releases — the scope WP0's per-cell identity compares on. */
+  /** The positions the ROS rail releases — the scope compared by per-cell identity. */
   const RAIL_POSITIONS = ["QB", "RB", "WR", "TE", "K"] as const;
 
   /** The normalized profile restricted to what any rail position can be scored on. */
@@ -328,7 +325,7 @@ describe("ESPN-shaped catalog entries", () => {
    * to it byte-for-byte made every whole-key comparison succeed.
    *
    * The D/ST flip ends that coincidence — the leagues' normalized profiles now also carry their
-   * D/ST rules — and WP0 is exactly what makes that safe: matching is per-cell and position-scoped
+   * D/ST rules — and per-cell identity makes that safe: matching is position-scoped
    * (`matchFirstPartyRosPositions`), so what has to hold is that every RAIL position's scoped key is
    * byte-equal, which is what is asserted below. **The catalog rule lists are not touched**: they
    * are the byte-frozen identities admitted artifacts' held-out evidence was measured under, and
@@ -376,8 +373,8 @@ describe("ESPN-shaped catalog entries", () => {
       // And the catalog entry is exactly the rail-scoped subset of the league's own profile.
       expect(entry.scoringProfileKey).toBe(railSubsetKey(result.profile));
 
-      // The whole keys legitimately differ now, and they differ ONLY by D/ST-only rules — the fact
-      // WP0's per-cell identity exists to absorb. The catalog profile stays D/ST-free, so the two
+      // The whole keys legitimately differ now, and they differ only by D/ST-only rules, which
+      // per-cell identity absorbs. The catalog profile stays D/ST-free, so the two
       // catalog entries' `scoresTeamDefense: false` in the methodology manifest stays true.
       const wholeKey = projectionScoringProfileKey(result.profile);
       expect(wholeKey).not.toBe(entry.scoringProfileKey);

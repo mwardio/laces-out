@@ -63,16 +63,17 @@ already declared for league reads.
 ### Selectors are provisional
 
 `src/live-draft/dom-adapter.ts` is the only module aware of ESPN selectors, labels, and routes, and
-its `ESPN_DRAFT_SELECTORS` table is still **provisional**. Work Package 0 of
-`docs/plans/ESPN_LIVE_DRAFT_SYNC_PLAN.md` — the live DOM spike against a real authenticated draft room —
-has not been run, so every family is marked `verified: false` and the adapter resolves nothing in a
-real room. Until then the feature is inert by design rather than wrong.
+its `ESPN_DRAFT_SELECTORS` table is still **provisional**. The live DOM contract has not been
+validated against a real authenticated draft room, so every family is marked `verified: false` and
+the adapter resolves nothing in a real room. Until then the feature is inert by design rather than
+wrong.
 
-WP0 completes it by editing that one table: replace each `candidates` list with the selectors
-observed in a real room (most specific first, preferring `data-testid`, ids, and explicit data
-attributes over text), extend `ESPN_DRAFT_LABELS` with the exact rendered strings, and set
-`verified: true` per family. Nothing else — including the tests, which key off the exported table
-rather than hard-coded selector strings — needs to change.
+Validation edits that one table: replace each `candidates` list with selectors observed in a real
+room (most specific first, preferring `data-testid`, ids, and explicit data attributes over text),
+extend `ESPN_DRAFT_LABELS` with the exact rendered strings, and set `verified: true` per family.
+Nothing else—including the tests, which key off the exported table rather than hard-coded selector
+strings—needs to change. The complete release gate lives in
+[`docs/provider-notes/espn.md`](../../docs/provider-notes/espn.md#live-draft-release-gate).
 
 Every extraction fails closed. A family that matches nothing, or that matches more than one node,
 yields no value; a row whose identity cannot be read is counted in `completeness.unresolvedRows`

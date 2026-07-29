@@ -6,8 +6,8 @@ Pre-registered: 2026-07-21, before any 2026 regular-season game has been played.
 (`evaluateFirstPartyRosReleaseGate`, `packages/projections/src/rest-of-season.ts`) with decisions
 already in force elsewhere in the rail, batched into one amendment because they are the same
 defect — the live gate lagging a decision already ratified or already shipped on the report side.
-Drafted in `docs/plans/ROS_GATE_AND_DST_PLAN.md` §0c and ratified by Mack (operator direction,
-2026-07-29); applied the same day. No 2026 outcome influenced this amendment.
+Recorded and ratified on 2026-07-29 before kickoff; applied the same day. No 2026 outcome influenced
+this amendment.
 
 **(A) Availability MAE — the live gate adopts gate v3's evidence test.** Amendment 3 (2026-07-22)
 replaced a point-estimate comparison with a one-sided exact binomial evidence test at α = 0.10 for
@@ -43,7 +43,7 @@ report already admits. Both are pinned by tests that hold the frozen shape (byte
 both sides) and require identical decisions. **No frozen identity row, threshold, ceiling, α,
 corpus, seed, or decision rule is modified.**
 
-**Amendment 3 (2026-07-22, pre-kickoff, justified):** coverage gate v3, ratified by Mack. The
+**Amendment 3 (2026-07-22, pre-kickoff, justified):** coverage gate v3. The
 walk-forward record holds only 4–9 blocks per cell, so the point-estimate comparison falsely
 failed a truly 0.70-covered cell with probability 0.27–0.35 (expected ~5.8 false failures across
 18 cells; two model versions reproduced byte-identical outcomes because block-max conformal
@@ -175,7 +175,7 @@ confirmation before any 2026 kickoff.
   already frozen above — same gates, same α, same floors. No kicker-specific criterion is added
   or relaxed.
 - Development-evidence context, stated for honesty: the count-process family and the weekly-v8
-  kicker blend were developed against 2019–2025, with structural measurements disclosed in the
-  blueprint's Step 0 record; 2026 is the first season no kicker-related parameter, constant, or
-  design decision has ever contacted. A 2026 kicker-cell failure is a model-development finding
-  for a future version; it cannot be repaired against 2026 data.
+  kicker blend were developed against 2019–2025, with their structural measurements recorded
+  before kickoff; 2026 is the first season no kicker-related parameter, constant, or design
+  decision has ever contacted. A 2026 kicker-cell failure is a model-development finding for a
+  future version; it cannot be repaired against 2026 data.

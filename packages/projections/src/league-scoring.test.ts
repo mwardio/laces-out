@@ -716,7 +716,7 @@ describe("normalizeLeagueScoringProfile", () => {
     ]);
   });
 
-  describe("WP1: evidence-true D/ST override diagnostics", () => {
+  describe("evidence-true D/ST override diagnostics", () => {
     it.each([
       {
         name: "a nonlinear base stat with no per-unit component",
@@ -810,12 +810,10 @@ describe("normalizeLeagueScoringProfile", () => {
     });
 
     it("normalizes the sanitized real-league rule set espn-league-a to available with K and D/ST supported", () => {
-      // Pre-WP3 this whole league was `unavailable` (17/18/37/38/56/57 fell all six positions
-      // pessimistically). WP3 narrows those six bare per-N-yard bonuses to only the positions their
-      // base component belongs to, which withholds QB/RB/WR/TE and leaves K. WP2 mapped the
-      // yards-allowed ladder (128-136), and the de minimis zero criterion then mapped this league's
-      // last two D/ST blockers (206/209), so D/ST joins K with ZERO remaining reasons. This
-      // assertion is the inverse of the one it replaces, and that inversion is the point of the work.
+      // This whole league was previously `unavailable` because 17/18/37/38/56/57 were attributed
+      // pessimistically to all six positions. Base-component attribution now withholds QB/RB/WR/TE
+      // and leaves K. The mapped yards-allowed ladder (128-136) and de minimis zero criterion for
+      // 206/209 leave D/ST with no remaining reasons.
       const result = normalizeLeagueScoringProfile({
         id: "espn-league-a",
         rows: ESPN_LEAGUE_A_ROWS,
@@ -838,14 +836,13 @@ describe("normalizeLeagueScoringProfile", () => {
   });
 
   /**
-   * WP2 — position-scoped support. The three-league fixtures are the load-bearing evidence: leagues
-   * B and C failed only on D/ST-scoped rules, so five positions became legitimately supported at
-   * WP2 (these cases asserted whole-league `unavailable` before it). With the de minimis zero
-   * criterion mapping 206/209, the last two D/ST blockers are gone and B and C become the first
-   * fully-supported leagues in the repo — all six positions. League A's six bare ESPN per-N-yard
-   * bonuses still withhold QB/RB/WR/TE, so it lands on K + D/ST.
+   * Position-scoped support. The three-league fixtures are load-bearing evidence: leagues B and C
+   * failed only on D/ST-scoped rules, so five positions became legitimately supported instead of
+   * inheriting whole-league `unavailable`. With the de minimis zero criterion mapping 206/209, the
+   * last two D/ST blockers are gone and B and C support all six positions. League A's six bare ESPN
+   * per-N-yard bonuses still withhold QB/RB/WR/TE, so it lands on K + D/ST.
    */
-  describe("WP2: position-scoped support", () => {
+  describe("position-scoped support", () => {
     it.each([
       { name: "espn-league-b", rows: ESPN_LEAGUE_B_ROWS },
       { name: "espn-league-c", rows: ESPN_LEAGUE_C_ROWS },
@@ -1129,12 +1126,12 @@ describe("normalizeLeagueScoringProfile", () => {
   });
 
   /**
-   * WP3 — evidence-recorded ESPN nonlinear stat ID attribution. `ESPN_NONLINEAR_STAT_ID_BASE_COMPONENTS`
-   * narrows a `NONLINEAR_RULE` failure to the positions whose vocabulary owns the ID's base
-   * component (vocabulary intersection GOVERNS — never a hardcoded position list), instead of the
-   * pessimistic ALL-positions default every other nonlinear ID still gets.
+   * Evidence-recorded ESPN nonlinear stat ID attribution.
+   * `ESPN_NONLINEAR_STAT_ID_BASE_COMPONENTS` narrows a `NONLINEAR_RULE` failure to the positions
+   * whose vocabulary owns the ID's base component (never a hardcoded position list), instead of the
+   * pessimistic all-positions default every other nonlinear ID still gets.
    */
-  describe("WP3: evidence-recorded nonlinear stat ID attribution", () => {
+  describe("evidence-recorded nonlinear stat ID attribution", () => {
     it("normalizes espn-league-a to available with K and D/ST supported, narrowing each yardage bonus to the positions whose vocabulary owns its base component", () => {
       const result = normalizeLeagueScoringProfile({
         id: "espn-league-a",
@@ -1159,8 +1156,8 @@ describe("normalizeLeagueScoringProfile", () => {
       }
       // K: none of the six bare bonuses attribute to K (its vocabulary has no yardage components).
       expect(supportFor(result, "K").reasons).toEqual([]);
-      // D/ST: unaffected by this table's QB/RB/WR/TE entries; with the 128-136 ladder mapped by
-      // WP2 and 206/209 mapped by the de minimis zero criterion, it has no reason left at all.
+      // D/ST is unaffected by this table's QB/RB/WR/TE entries. With the 128-136 ladder and
+      // de minimis 206/209 rules mapped, it has no reason left at all.
       expect(supportFor(result, "DST").reasons).toEqual([]);
 
       // Reason messages state the mechanism and stay traceable to the provider stat ID.
@@ -1174,9 +1171,8 @@ describe("normalizeLeagueScoringProfile", () => {
       expect(qbReasons.find((item) => item.providerStatId === "37")?.message).toContain(
         "per-game yardage bonus on rushing_yards",
       );
-      // Every D/ST row is an accepted rule now — the 128:slot:16 bracket override (mapped + in the
-      // defense scoring set since WP2) and the 206/209 pair (mapped by the de minimis zero
-      // criterion) alike — so D/ST carries no reason row at all.
+      // Every D/ST row is an accepted rule now — both the mapped 128:slot:16 bracket override and
+      // the de minimis 206/209 pair — so D/ST carries no reason row at all.
       const dstReasons = supportFor(result, "DST").reasons;
       for (const providerStatId of ["128:slot:16", "206", "206:slot:16", "209", "209:slot:16"]) {
         expect(
@@ -1237,9 +1233,9 @@ describe("normalizeLeagueScoringProfile", () => {
     });
 
     it("prices a bare yards-allowed bracket ID arriving with nonzero points as a mapped D/ST tier probability", () => {
-      // Inverted at WP2: before the 128-136 mapping this was a D/ST-scoped NONLINEAR_RULE; a bare
-      // 128 with nonzero points is now a mapped, priceable D/ST rule, so a league with no other
-      // D/ST failure (no 206/209 rows here) flips D/ST to supported.
+      // Before the 128-136 mapping this was a D/ST-scoped NONLINEAR_RULE. A bare 128 with nonzero
+      // points is now a mapped, priceable D/ST rule, so a league with no other D/ST failure
+      // supports D/ST.
       const result = normalized([
         rule("3", "3", 0.04, { provider: "espn" }),
         rule("128", "128", 5, { provider: "espn" }),
@@ -1255,8 +1251,8 @@ describe("normalizeLeagueScoringProfile", () => {
   });
 
   /**
-   * WP2 Steps 1 & 5 — D/ST vocabulary drift guards. The slot-16 acceptance set and the DST
-   * position vocabulary are both `new Set(firstPartyTeamDefenseProjectionComponents())` by
+   * D/ST vocabulary drift guards. The slot-16 acceptance set and DST position vocabulary are both
+   * `new Set(firstPartyTeamDefenseProjectionComponents())` by
    * construction now, so what remains to pin is (a) that every ESPN-mapped defense-family
    * component is one the engine actually produces (a mapped-but-unproduced component would strand
    * every `:slot:16` override at the reject branch, since acceptance requires BOTH the map entry
@@ -1268,7 +1264,7 @@ describe("normalizeLeagueScoringProfile", () => {
    * package's fan-out is exercised in `packages/decisions/src/managed-projection-profile.test.ts`
    * — a package test cannot import either workspace without a cross-workspace cycle.
    */
-  describe("WP2: one D/ST component vocabulary", () => {
+  describe("one D/ST component vocabulary", () => {
     const YARDS_ALLOWED_LADDER: ReadonlyArray<readonly [string, string]> = [
       ["128", "yards_allowed_0_99_probability"],
       ["129", "yards_allowed_100_199_probability"],
@@ -1434,8 +1430,8 @@ describe("normalizeLeagueScoringProfile", () => {
     });
 
     /**
-     * WP0's per-cell identity is what keeps the ROS rail publishing when a league's WHOLE profile
-     * key moves. The flip moves it for all three leagues, so the load-bearing pin is that no
+     * Per-cell identity keeps the ROS rail publishing when a league's whole profile key moves. The
+     * flip moves it for all three leagues, so the load-bearing pin is that no
      * SUPPORTED rail position's scoped key moved with it: D/ST-only components are outside every
      * QB/RB/WR/TE/K vocabulary, so their arrival cannot change what any rail position is scored on.
      *

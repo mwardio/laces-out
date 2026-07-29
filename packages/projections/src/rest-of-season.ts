@@ -64,9 +64,9 @@ export const FIRST_PARTY_ROS_MAX_AVAILABILITY_BIAS = 1.0;
  * and it takes the same remedy: the ceiling now fails a cell only when the record is statistical
  * evidence that the *true* MAE exceeds it, at the same one-sided alpha.
  *
- * The bias ceiling deliberately keeps its point comparison. It is the check that actually detects
- * systematic hazard mismatch (WP1, 2026-07-28), its estimator is a signed mean rather than a
- * boundary-hugging absolute one, and every cell passes it with room to spare.
+ * The bias ceiling deliberately keeps its point comparison. It is the check that detects
+ * systematic hazard mismatch; its estimator is a signed mean rather than a boundary-hugging
+ * absolute one, and every cell passes it with room to spare.
  */
 export const FIRST_PARTY_ROS_AVAILABILITY_EVIDENCE_ALPHA = 0.1;
 /**

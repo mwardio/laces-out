@@ -1,20 +1,19 @@
 /**
  * The ONLY module allowed to know ESPN draft-room selectors or labels.
  *
- * ============================ PROVISIONAL — PENDING WORK PACKAGE 0 ============================
+ * ============================ PROVISIONAL — PENDING LIVE VALIDATION ============================
  * Every selector string and every label below is a documented *candidate*, not a verified value.
- * Work Package 0 (the live DOM spike) has not been run because it needs an authenticated ESPN
- * draft room. Until it has, `verified` stays false on each family and the adapter resolves nothing
- * in a real room.
+ * Live validation has not been run because it needs an authenticated ESPN draft room. Until it
+ * has, `verified` stays false on each family and the adapter resolves nothing in a real room.
  *
- * WP0 fills this in by editing `ESPN_DRAFT_SELECTORS` and `ESPN_DRAFT_LABELS` in this file and
- * nothing else: replace each `candidates` list with the values observed in a real room (most
- * specific first), set `verified: true` on the families it confirmed, and extend the label maps
- * with the exact strings ESPN renders. No other module, and no test, hard-codes a selector string.
+ * Validation updates only `ESPN_DRAFT_SELECTORS` and `ESPN_DRAFT_LABELS` in this file: replace each
+ * `candidates` list with the values observed in a real room (most specific first), set
+ * `verified: true` on confirmed families, and extend the label maps with the exact strings ESPN
+ * renders. No other module, and no test, hard-codes a selector string.
  * =============================================================================================
  *
- * Selector preference order, per plan section 8.2: `data-testid`, then element IDs, then explicit
- * data attributes and link targets, and only then normalized text. Text matching is a fallback.
+ * Selector preference order: `data-testid`, then element IDs, then explicit data attributes and
+ * link targets, and only then normalized text. Text matching is a fallback.
  *
  * Everything here is fail-closed. A family that matches nothing yields `null`; a family that
  * matches more than one node yields `null` plus an ambiguity marker so the sanitizer can count the
@@ -43,18 +42,18 @@ export interface DraftRoomElement {
 }
 
 export interface SelectorFamily {
-  /** What this family identifies. Doubles as the WP0 checklist and the unresolved-family code. */
+  /** What this family identifies. Doubles as the validation checklist and unresolved-family code. */
   readonly purpose: string;
   /** Tried in order. For single lookups the first candidate matching exactly one node wins. */
   readonly candidates: readonly string[];
   /** When set, the value is read from this attribute instead of the element's text. */
   readonly attribute: string | null;
-  /** WP0 sets this to true once the candidate list is confirmed against a real ESPN draft room. */
+  /** Set true once the candidate list is confirmed against a real ESPN draft room. */
   readonly verified: boolean;
 }
 
 /**
- * Candidate selectors. Each entry documents what WP0 must confirm.
+ * Candidate selectors. Each entry documents what live validation must confirm.
  *
  * A family whose `candidates` list is exhausted resolves to nothing, which fails the observation
  * closed rather than producing a guessed board.
@@ -81,7 +80,7 @@ export const ESPN_DRAFT_SELECTORS = {
     attribute: null,
     verified: false,
   },
-  /** Snake versus auction. Plan section 8.2 wants settings plus visible layout; confirm both. */
+  /** Snake versus auction. Confirm both settings and visible layout. */
   draftType: {
     purpose: "draft-type",
     candidates: ["[data-draft-type]", '[data-testid="draft-type"]', "#draft-type"],
@@ -108,7 +107,7 @@ export const ESPN_DRAFT_SELECTORS = {
   },
 
   /**
-   * One row per completed pick or completed auction sale. WP0 must prove a late join or reload
+   * One row per completed pick or completed auction sale. Validation must prove a late join or reload
    * reconstructs every prior row without manual scrolling; if the table is virtualized and only
    * renders visible rows, record that limitation explicitly rather than shipping a partial board.
    */
@@ -195,7 +194,7 @@ export const ESPN_DRAFT_SELECTORS = {
 
   /**
    * Actual owner of every draft slot, including traded picks, custom orders, and keeper-occupied
-   * slots. Plan section 12.4: never infer traded picks from a standard snake pattern.
+   * slots. Never infer traded picks from a standard snake pattern.
    */
   ownershipRow: {
     purpose: "ownership-row",
@@ -283,7 +282,7 @@ export type EspnDraftSelectorName = keyof typeof ESPN_DRAFT_SELECTORS;
 
 /**
  * Normalized-text vocabularies. Keys are compared after `normalizeDraftText` lowercases and
- * collapses whitespace, so WP0 records the *rendered* string and the comparison stays stable
+ * collapses whitespace, so validation records the *rendered* string and the comparison stays stable
  * across casing and spacing changes.
  */
 export const ESPN_DRAFT_LABELS: {
@@ -322,7 +321,7 @@ export const ESPN_DRAFT_ADAPTER_VERSION = 1;
 
 /**
  * The ESPN football draft-room route. Also ESPN knowledge, so it lives in this file with the
- * selectors: WP0 confirms the live room's real path and query names here and nowhere else.
+ * selectors: live validation confirms the real path and query names here and nowhere else.
  *
  * The manifest's `content_scripts.matches` is necessarily coarser than this (match patterns cannot
  * require a query parameter), so this recognizer is the authoritative gate. It is deliberately
@@ -485,7 +484,7 @@ export interface RawAuctionPanel {
 
 export interface RawDraftRoomExtraction {
   readonly adapterVersion: number;
-  /** False until WP0 confirms every family this extraction depended on. */
+  /** False until live validation confirms every family this extraction depended on. */
   readonly selectorsVerified: boolean;
   /** False when the draft-root family did not resolve: this page is not a usable draft room. */
   readonly recognized: boolean;

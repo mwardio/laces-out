@@ -2158,8 +2158,8 @@ export class InSeasonDecisionService {
       ]);
     }
 
-    // WP9 will supply an admitted rest-of-season release here. No compatible published set can be
-    // selected today, so this resolves weekly-only with a stated reason instead of inventing one.
+    // No compatible rest-of-season release can be selected here today, so this resolves
+    // weekly-only with a stated reason instead of inventing one.
     const rosCandidate: RosHorizonCandidate | undefined = undefined;
     const { horizons, projectionsByHorizon, rosUnavailable } = resolveTradeHorizons(
       facts.projectionSet,

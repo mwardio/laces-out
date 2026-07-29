@@ -1,9 +1,9 @@
 /**
  * Change detection for a live draft room: a debounced mutation watcher plus a periodic full rescan.
  *
- * Plan section 8.1. Every timer and every DOM hook is injected, so the whole state machine — attach,
- * debounce, rescan, pick, sale, rollback, completion, heartbeat, and the bounded transient auction
- * rate — is exercised in node without a browser.
+ * Every timer and DOM hook is injected, so the whole state machine — attach, debounce, rescan,
+ * pick, sale, rollback, completion, heartbeat, and the bounded transient auction rate — is
+ * exercised in node without a browser.
  *
  * The observer never touches the network and never sees the device credential. It hands sanitized
  * snapshots to a sink; the content script forwards them and only the service worker uploads.
@@ -18,7 +18,7 @@ import {
 import { ESPN_LIVE_DRAFT_LIMITS, type EspnLiveDraftState } from "./dom-contract.js";
 
 /**
- * Why a full snapshot is being emitted. Plan section 8.1 requires one on attach, reconnect, reload,
+ * Why a full snapshot is being emitted. Full snapshots are required on attach, reconnect, reload,
  * failover, completed pick, completed sale, rollback, and completion.
  */
 export type LiveDraftSnapshotReason =

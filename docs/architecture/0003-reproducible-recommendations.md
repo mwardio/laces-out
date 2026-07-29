@@ -11,7 +11,7 @@ Lineup, waiver, trade, and draft advice must respect hard league rules and must 
 
 Use deterministic optimization and seeded simulation. Persist the exact settings, roster/projection/injury versions, algorithm version, input hash, and seed for every recommendation. Explanations are constructed from the factors and constraints returned by the engine.
 
-An LLM may later summarize or answer questions about already-computed results, but it cannot be the source of player values, legality, or action ranking.
+An LLM may summarize or answer questions about already-computed results, but it cannot be the source of player values, legality, or action ranking.
 
 ## Consequences
 

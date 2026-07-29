@@ -290,6 +290,7 @@ logic, trade analysis, and draft tools remain available without an AI key.
 | [docs/operations.md](./docs/operations.md)                                         | Deployment, backups, health, and operator runbook |
 | [docs/security.md](./docs/security.md)                                             | Threat model and hardening baseline               |
 | [docs/privacy.md](./docs/privacy.md)                                               | Operator privacy source of truth                  |
+| [docs/architecture/](./docs/architecture/)                                         | Accepted system design decisions                  |
 | [docs/ros-v6-2026-untouched-protocol.md](./docs/ros-v6-2026-untouched-protocol.md) | Frozen final-proof protocol for the ROS engine    |
 | [docs/provider-notes/](./docs/provider-notes/)                                     | Provider evidence and constraints                 |
 | [apps/espn-bridge/README.md](./apps/espn-bridge/README.md)                         | Browser companion pairing and store submission    |

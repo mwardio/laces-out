@@ -104,7 +104,7 @@ describe("buildInjuryChangeDrafts", () => {
         rosteringByPlayer: new Map(),
       }),
     ).toEqual([]);
-    // An unresolved identity is WP6's problem and must never be guessed here.
+    // An unresolved identity must never be guessed here.
     expect(
       buildInjuryChangeDrafts({
         observations: [{ ...base, playerId: null }],

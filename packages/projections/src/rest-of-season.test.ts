@@ -1335,8 +1335,8 @@ describe("season-locked ROS champion policy", () => {
   it("pins Amendment 4's inertness argument: one frozen profile on both sides decides exactly as whole-key equality did", () => {
     // The 2026 untouched run scores every position under a single frozen profile, so both sides of
     // every identity comparison derive from that one profile and carry the same canonical key.
-    // Byte-equal keys take the fast path that IS whole-key equality, so position scoping cannot
-    // change any frozen-corpus decision (docs/plans/ROS_GATE_AND_DST_PLAN.md, WP0 Step 6).
+    // Byte-equal keys take the fast path that is whole-key equality, so position scoping cannot
+    // change any frozen-corpus decision.
     const frozenKey = projectionScoringProfileKey({
       id: "frozen-untouched-proof-ppr",
       rules: [

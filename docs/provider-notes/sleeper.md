@@ -76,8 +76,8 @@ The effective floor is therefore one catalog check per hour and one trends check
 during an active lineup-lock window, where the final forced pass bypasses `nextCheckAt` (though not
 the conditional request).
 
-**Open admission item.** The catalog floor was lowered from 30 to 60 minutes on 2026-07-27 by
-product decision, halving the request rate. It remains more frequent than Sleeper's documented
+**Known limitation.** The catalog floor was lowered from 30 to 60 minutes on 2026-07-27, halving
+the request rate. It remains more frequent than Sleeper's documented
 "once per day at most" guidance for `/v1/players/nfl`, and must not be described as compliant with
 that guidance. The conditional request is a real mitigation — a `304` was confirmed live and
 transfers no body — but on any day the catalog changes repeatedly, the cadence can still pull the
@@ -233,8 +233,8 @@ It refuses redirects, applies a 15-second default timeout bounded to 1–60 seco
 carrying endpoint, `fetchedAt`, and SHA-256 on every read, and fails closed when a roster, draft, or
 pick response reports a different league or draft ID than the one requested.
 
-None of that is an admission. Wiring the league connector requires its own source-admission pass
-under `ENHANCEMENT_PLAN.md` §2.1, including the terms question left unresolved above.
+None of that is an admission. Wiring the league connector requires its own source-admission pass,
+including resolution of the terms question above.
 
 ## Setup checklist
 

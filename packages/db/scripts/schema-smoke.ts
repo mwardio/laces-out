@@ -133,7 +133,7 @@ try {
     assert.ok(triggerNames.has(triggerName), `missing invariant trigger ${triggerName}`);
   }
 
-  // Migration 0026 (WP4). Asserted by name so a missing migration fails here rather than at the
+  // Migration 0026. Asserted by name so a missing migration fails here rather than at the
   // first live league sync or recommendation recompute.
   const columnRows = await sql`
     select table_name, column_name
@@ -1603,7 +1603,7 @@ try {
   `,
   );
 
-  // WP4: connection-scoped circuit state and recommendation-run replay identity (migration 0026).
+  // Connection-scoped circuit state and recommendation-run replay identity (migration 0026).
   const circuitState = await sql`
     update provider_connections
     set consecutive_failures = 5,

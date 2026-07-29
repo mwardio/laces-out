@@ -1,10 +1,10 @@
 /**
  * Resolving ESPN's rendered names and IDs onto Laces Out identities.
  *
- * The rule this module exists to enforce is the plan's §5.5: no silent guessing. A wrong pick is
- * worse than a briefly stale board, so every resolution is either an exact, *unique* match or a
- * held mapping issue. There is no fuzzy similarity, no nearest-neighbour, no row-position
- * inference, and no owner-display-name fallback anywhere below.
+ * The rule this module exists to enforce is no silent guessing. A wrong pick is worse than a
+ * briefly stale board, so every resolution is either an exact, *unique* match or a held mapping
+ * issue. There is no fuzzy similarity, no nearest-neighbour, no row-position inference, and no
+ * owner-display-name fallback anywhere below.
  */
 
 export interface ProviderTeamCandidate {

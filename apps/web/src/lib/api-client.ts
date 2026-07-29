@@ -202,7 +202,7 @@ export function parseAiAnalysis(value: unknown): AiAnalysisResponse | null {
 }
 
 /**
- * The feature response, widened by WP7's tool-use block.
+ * The feature response, widened with tool-use provenance.
  *
  * Parsed with the extended schema rather than the base one: `aiFeatureResponseSchema` is strict, so
  * a response carrying `toolUse` would fail the base parse and silently blank the Film Room.

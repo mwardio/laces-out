@@ -12,10 +12,10 @@ import { freshnessSchema } from "./decision-primitives.js";
  * side, so a run written by the worker and a report returned by the API describe reproducibility the
  * same way.
  *
- * WP4 writes these rows; WP5's change-event feed is the reader. There is deliberately no read route
- * yet — a persisted run computed league-wide legitimately differs from what a user holding a private
- * projection set sees on demand, and that difference needs a designed explanation before it is
- * exposed.
+ * The recommendation recompute service writes these rows; the change-event feed is the reader.
+ * There is deliberately no read route yet — a persisted run computed league-wide legitimately
+ * differs from what a user holding a private projection set sees on demand, and that difference
+ * needs a designed explanation before it is exposed.
  */
 
 /** The recommendation kinds an in-season recompute can produce. `draft` has no in-season producer. */

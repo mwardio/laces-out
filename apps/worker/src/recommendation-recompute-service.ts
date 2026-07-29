@@ -63,7 +63,7 @@ export interface RecommendationRecomputeDependencies {
   readonly listClaimedTeamIds: (leagueSeasonId: string) => Promise<readonly string[]>;
   readonly recompute: (input: LeagueRecomputeRequest) => Promise<LeagueRecomputeResult>;
   /**
-   * WP5's change-event producer. Runs after the runs are persisted and never inside their
+   * The change-event producer. Runs after the runs are persisted and never inside their
    * transaction: a change-event failure must not undo a recorded recommendation run.
    */
   readonly onRecomputed?: (input: {
@@ -381,7 +381,7 @@ export function createRecommendationRecomputeService(input: {
         buildSnapshot: snapshots.buildSnapshot,
         writer,
       }),
-    // WP4 persists the run; WP5 reads the prior one and announces only a material difference.
+    // Persist the run first, then compare it with the prior run and announce only a material change.
     onRecomputed: ({ leagueSeasonId, result }) =>
       emitRecommendationChangeEvents(delta, { leagueSeasonId, result, occurredAt: new Date() }),
     ...(input.onChangeEventError ? { onChangeEventError: input.onChangeEventError } : {}),

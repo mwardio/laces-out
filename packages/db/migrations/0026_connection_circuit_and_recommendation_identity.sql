@@ -1,10 +1,10 @@
--- Connection-scoped circuit breaker and recommendation-run identity (WP4).
+-- Connection-scoped circuit breaker and recommendation-run identity.
 --
 -- Two independent gaps this migration closes, both forward-only and additive. No existing row is
 -- rewritten, no column is dropped, and every row that satisfied the old schema still satisfies the
 -- new one.
 --
--- 1. `provider_connections` could not hold circuit state. `ENHANCEMENT_PLAN.md` §2.4 requires
+-- 1. `provider_connections` could not hold circuit state. Repeated failures must
 --    repeated failure to open a circuit "without taking down unrelated analysis", but the only
 --    failure state on the table was `health`, whose sole writer flipped it to 'degraded' on the
 --    first error and never escalated, and which gates nothing. `data_sources` already carries the

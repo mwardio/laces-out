@@ -1319,7 +1319,7 @@ function LeagueDetail({
 }
 
 /**
- * Operator detail for `ENHANCEMENT_PLAN.md` §2.3. The unresolved rows below are immutable
+ * Operator detail for source identity quality. The unresolved rows below are immutable
  * historical facts, not a queue anyone can clear: they record that an external identifier did not
  * resolve to a canonical player during a completed ingestion. The server's 403 is the real
  * boundary; the role check here only avoids a fetch that is guaranteed to fail for a member.

@@ -6,8 +6,8 @@ import type { ProviderName } from "@fantasy/db";
 /**
  * A connection-scoped circuit breaker.
  *
- * `ENHANCEMENT_PLAN.md` §2.4 requires repeated failure to open a circuit "without taking down
- * unrelated analysis". The state lives on the `provider_connections` row and nothing else reads it,
+ * Repeated failure opens a circuit without taking down unrelated analysis. The state lives on the
+ * `provider_connections` row and nothing else reads it,
  * so an open circuit for one connection is structurally incapable of affecting another connection,
  * another provider, another league's analysis, the `recommendation-recompute` queue, or any
  * `data_sources`-gated projection work.

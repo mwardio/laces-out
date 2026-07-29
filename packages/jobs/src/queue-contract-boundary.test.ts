@@ -8,7 +8,7 @@ import { describe, expect, it } from "vitest";
  * pg-boss contract used to be hand-copied into both. The copy drifted: `apps/api/src/server.ts`
  * declared `data-refresh` and `projection-refresh` without the `deadLetter`, `retentionSeconds`, or
  * `deleteAfterSeconds` the worker set, so every API-dispatched job lost the dead-letter behavior
- * `ENHANCEMENT_PLAN.md` §2.4 requires — silently, because no test compared the two files.
+ * needed—silently, because no test compared the two files.
  *
  * A shared constant both sides merely happen to use would not have prevented that; nothing stopped
  * a second literal from being written next to it. These tests make the second literal fail the

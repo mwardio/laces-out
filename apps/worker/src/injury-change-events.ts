@@ -66,8 +66,8 @@ export function buildInjuryChangeDrafts(
 ): readonly ChangeEventDraft[] {
   const drafts: ChangeEventDraft[] = [];
   for (const observation of input.observations) {
-    // An unresolved identity is WP6's problem; guessing one here would attach an injury to the
-    // wrong player on someone's roster.
+    // Never guess an unresolved identity; that could attach an injury to the wrong player on
+    // someone's roster.
     if (observation.playerId === null) continue;
     const rostering = input.rosteringByPlayer.get(observation.playerId);
     if (!rostering || rostering.length === 0) continue;

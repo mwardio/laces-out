@@ -225,52 +225,18 @@ rebuilds every locked batch.
 
 After each weekly sweep, the worker also runs the rest-of-season shadow auditor against the latest
 immutable schedule and weekly artifacts. It intentionally records only a degraded model-run audit:
-publication remains disabled until at least three fully held-out evidence seasons, 30 season/cutoff
-batches, 300 paired outcomes, season-blocked split-conformal interval evidence evaluated on a later
-untouched season, complete future-week centers, and persisted paired candidate inputs all exist.
-Each position and horizon cell must independently span three seasons, three distinct cutoff weeks,
-nine season/cutoff blocks, and 18 paired outcomes. Sparse cells remain withheld. A shadow run never
-replaces the last good weekly set and is not visible to lineup, waiver, trade, draft, API, or UI
-consumers.
+it cannot write managed league sets or replace a prior good result. Release is a separate,
+artifact-gated path. Each position/horizon cell requires the configured held-out season, block, row,
+coverage, availability, convergence, and calibration evidence; sparse or mismatched cells remain
+withheld.
 
-The current ROS admission reference is the v4 read-only official nflverse replay run on
-2026-07-21 (2019–2025 sources, 2022–2025 held out, all 17 cutoffs, five deterministic
-recent-production quantiles per position, 2,040 paired forecasts, 68/68 batches, zero skips). It
-reduced the original 41 release blockers to 4: interval-coverage shortfalls in QB
-five-to-eight/nine-plus and K one-to-four/five-to-eight. Convergence passed 144/144 strata at the
-8192-vs-16384 diagnostic and availability passed every cell under gate v2 (MAE ≤ 1.5 short/mid,
-≤ 2.75 nine-plus, |signed bias| ≤ 1.0 — ratified 2026-07-21 on measured oracle-floor evidence; the
-derivation lives beside the constants in `packages/projections/src/rest-of-season.ts`). Model v6 (static center-error component plus corrected two-moment calibration, 12288 release
-paths) targets the four remaining coverage cells. The official v6 + gate-v3 replay (2026-07-22) leaves exactly one blocker — K one-to-four
-interval coverage — with the admission-ready report preserved at
-`reports/ros-validation-v6-2026-07-22.json`; under the ratified per-cell admission policy, every
-other cell is releasable once an artifact is provisioned. The 2022–2025 corpus is
-development evidence — the untouched release proof is the frozen protocol in
-`docs/ros-v6-2026-untouched-protocol.md`, runnable only after the 2026 season resolves. No ROS set
-reaches a league until an artifact is provisioned through `npm run ros:admit -w @fantasy/worker`
-(explicit `--database-url` and `--confirm`, refuses on any blocker). Provisioning is per scoring
-profile — see "Rest-of-season release status" below.
-
-Model v7 (kicker count-process, 2026-07-22) replaced the lognormal shock for kickers with a
-calibrated integer count process on the five scored components. Its full replay
-(`reports/ros-validation-v7-2026-07-22.json`) kept all 15 non-K cells byte-identical to v6 with
-no new blocker and moved raw K short-window coverage to nominal, but K one-to-four still failed
-walk-forward block coverage — root-caused to weekly-model kicker centers under roster churn, not
-the interval family.
-
-Weekly model v8 (2026-07-23) fixed that root cause: the kicker recency baseline blends
-thin-history kickers toward the position mean with the pre-existing n/(n+4) reliability form (no
-new constants), and the kicker p50 convergence tolerance was declared at the integer lattice
-spacing (owner-ratified). The v8 replay (`reports/ros-validation-v8-2026-07-23.json`, source
-lineage attached post-run with verification — see `sourceLineageNote` inside) is the project's
-first **zero-blocker** report: every cell releasable, K one-to-four cleared at 1/4 walk-forward
-blocks, convergence 144/144. The champion artifact (`67e7ba09…655d5d`, engine
-`laces-ros-distribution-v7` + weekly `laces-weekly-components-v8`) was admitted 2026-07-23 with
-zero cell blockers, superseding v6 under latest-admitted-wins. Deploy note: the version-bump
-re-seeds every simulation through the weekly fingerprint → input checksum → seed chain, so
-post-deploy ROS numbers legitimately differ draw-level from v6's while remaining
-distribution-identical for non-K positions. The pre-registered 2026 kicker-cell addendum is
-Amendment 1 of the untouched protocol.
+The current full-PPR reference combines weekly model `laces-weekly-components-v8` with ROS model
+`laces-ros-distribution-v7`. Its 2019–2025 replay graded 2,040 forecasts across 68 batches,
+converged all 144 strata, and produced a zero-blocker 18-cell artifact admitted on 2026-07-23.
+Historical results remain development evidence; the frozen
+[2026 untouched protocol](./ros-v6-2026-untouched-protocol.md) is the final confirmation. See
+[`packages/projections/README.md`](../packages/projections/README.md) for the model and gate
+definitions.
 
 ### Rest-of-season release status
 
@@ -412,86 +378,20 @@ npm run typecheck
 npm run build -w @fantasy/worker
 ```
 
-#### Availability MAE gate v3, 2026-07-28 — decision rule replaced, ceilings untouched
+#### Current availability and identity gates
 
-**Supersedes the availability-gate decision rule described in the 2026-07-27 results above and in
-the v4 admission-reference paragraph earlier in this section; every number in both stays as
-recorded.** The three ceilings are unchanged — 1.5 games (one-to-four, five-to-eight), 2.75
-(nine-plus), |signed bias| ≤ 1.0. Only how evidence against them is weighed changed.
+Expected-games MAE ceilings remain 1.5 games for one-to-four and five-to-eight weeks and 2.75 for
+nine-plus, with absolute signed bias capped at 1.0. A cell withholds for excess MAE only when the
+one-sided exact-binomial evidence test at α = 0.10 establishes that its true MAE exceeds the
+ceiling; the bias comparison remains direct. The report gate and live release gate use the same
+rule.
 
-Why: the MAE ceilings were compared point-estimate to point-estimate against a statistic whose
-sampling noise exceeds the distance being measured. Block-bootstrap `P(MAE > 2.75)` for QB
-nine-plus is 0.53–0.67 at a cell standard error near 0.15, and the identical cell over the identical
-seasons scored 2.64–2.67 at five players per position and 2.76–2.81 at eight. That is the same
-pathology coverage gate v3 fixed on 2026-07-22, and it takes the same remedy: a one-sided evidence
-test at α = 0.10.
-
-The test (`firstPartyRosAvailabilityEvidenceOfExcessMae`, derivation beside
-`FIRST_PARTY_ROS_AVAILABILITY_EVIDENCE_ALPHA` in `packages/projections/src/rest-of-season.ts`): a
-cell fails only when the record is statistical evidence that its **true** MAE exceeds the ceiling.
-Each row's absolute error lies in `[0, maximum row error]` — 4, 8 and 17 games by bucket, read off
-the schedule — and among all laws on that support with mean equal to the ceiling the two-point law
-on the endpoints carries the most variance, so the null tail is an exact binomial computed at that
-least-favourable case. It is deliberately conservative: at 288 rows a nine-plus cell fails from
-about 3.25 games and at 128 rows a five-to-eight cell from about 1.88. The bias ceiling keeps its
-point comparison — it is the check that actually detects hazard mismatch and every cell passes it
-with room to spare.
-
-`FIRST_PARTY_ROS_POLICY_VERSION` is deliberately **not** bumped, on the coverage-gate-v3 precedent:
-that change was recorded as Amendment 3 of `docs/ros-v6-2026-untouched-protocol.md` and left the
-policy version alone. The constant names the champion-selection policy (season walk-forward, block
-WIS, CQR), none of which moved; it is also a frozen row of that pre-registered protocol and an
-equality check in `validateFirstPartyRosAdmission`, so bumping it would void the protocol and reject
-every admitted artifact. `FIRST_PARTY_ROS_SEED_VERSION` is untouched — no draw consumption changed.
-
-Measured effect, from `npm run ros:regate -w @fantasy/worker` over the six stored reports (gate-only
-re-evaluation of stored evidence; **no validation run was performed**):
-
-| Report                                  | Blockers before                          | Blockers after     |
-| --------------------------------------- | ---------------------------------------- | ------------------ |
-| `ros-validation-v8-standard-n8`         | QB nine-plus MAE                         | none               |
-| `ros-validation-v8-half-ppr-n8`         | QB nine-plus MAE                         | none               |
-| `ros-validation-v8-full-ppr-n8`         | QB nine-plus MAE, WR five-to-eight MAE   | none               |
-| `ros-validation-v8-standard-2026-07-27` | WR five-to-eight MAE, K one-to-four cov. | K one-to-four cov. |
-| `ros-validation-v8-half-ppr-2026-07-27` | K one-to-four coverage                   | K one-to-four cov. |
-| `ros-validation-v8-2026-07-23`          | none                                     | none               |
-
-No blocker was added anywhere, and no coverage, convergence, sample-size or bias blocker moved. The
-re-gated verdicts are **not admitted**: admission still requires a report, and the currently
-provisioned artifacts keep the blockers they were admitted with until a fresh run or a re-gate is
-deliberately admitted through `npm run ros:admit`. Two consumers still read the superseded rule and
-must be revisited before that happens — the live release gate
-(`evaluateFirstPartyRosReleaseGate`, `packages/projections/src/rest-of-season.ts`), which still
-withholds a cell on the point comparison and would therefore keep withholding QB nine-plus even
-after the report stops naming it, and the withheld-cell copy in
-`apps/web/src/app/methodology/evidence.ts`.
-
-#### Live release gate aligned, 2026-07-29 — same evidence test, position-scoped identity
-
-**Resolves the "two consumers still read the superseded rule" item recorded above; every number
-above stays as recorded.** Ratified as Amendment 4 of `docs/ros-v6-2026-untouched-protocol.md`
-(operator direction, 2026-07-29, pre-kickoff).
-
-- `evaluateFirstPartyRosReleaseGate` now raises `availability-error-above-threshold` under the
-  identical rule as the report gate: the point comparison survives only as a structural guard, and
-  a cell withholds only on `firstPartyRosAvailabilityEvidenceOfExcessMae` over the champion
-  choice's own held-out row count, the bucket's structural row-error bound (4/8/17), and the same
-  α = 0.10. The bias comparison is untouched. A new `availabilityEvidenceAlpha` gate option and the
-  bucket's row-error bound join the evidence-checksum threshold record, so live evidence checksums
-  move — content addressing working as intended; admitted artifact checksums are unaffected.
-- The gate's evidence-identity comparison — both the policy identity (`evidence-identity-mismatch`)
-  and the interval-calibration artifact identity (`interval-calibration-unavailable`) — is now
-  **position-scoped on the scoring profile**: model and interval-method versions must still match
-  exactly, byte-equal whole keys still match on a fast path, and otherwise the two keys are
-  recovered and compared as `projectionScoringProfileKeyForPosition` at the cell's own position,
-  failing closed on an unparseable key and on `"[]"` (an empty scoped vocabulary never reads as
-  agreement). Positions never interact numerically, so a rule outside the cell's vocabulary — the
-  exact shape a future D/ST flip produces — can no longer take the rail dark for the five rail
-  positions. The withheld-cell copy in `apps/web/src/app/methodology/evidence.ts` was updated in
-  the same change.
-- What this does **not** do: nothing has been admitted, and the admitted-report cell-blocker
-  ratchet is untouched — a cell named by the artifact's own admitted evidence still withholds
-  (`ros_admitted_cell_blocker_withheld`) until a later replay stops naming it and is admitted.
+Scoring identity is position-scoped per cell. Model and interval-method versions must match
+exactly; scoring profiles must be byte-equal overall or recover to the same nonempty positional
+vocabulary. Unparseable or empty identities fail closed. An admitted artifact's recorded blocker
+also remains authoritative until a later report clears that cell and is explicitly admitted.
+These pre-kickoff decisions are frozen in Amendment 4 of the
+[2026 untouched protocol](./ros-v6-2026-untouched-protocol.md).
 
 The ROS validator is intentionally expensive: the v4 reference run took about 2.7 hours on one CPU
 core (four season-locked policies, 2,040 12288-path forecasts at current defaults, and 144
@@ -618,11 +518,10 @@ not prerequisites the current runbook silently assumes are already installed.
   configuration, and real-account contract-validation checklist.
 - ESPN companion distribution requires sanctioned private-league validation, terms and store-policy
   review, and a signed build. The signed browser bridge is the only hosted private-league path.
-- ESPN live draft sync stays behind `ESPN_LIVE_DRAFT_SYNC=false` until the live validation matrix in
-  `docs/plans/ESPN_LIVE_DRAFT_SYNC_PLAN.md` §19.4 passes — a full snake mock, a disposable auction draft,
-  reload/late-join, pause/resume, a deliberate rollback, source failover, a mobile viewer, and a
-  completed `mDraftDetail` cross-check. The DOM adapter's selector table is unverified until then.
-  Landing-page copy may not claim the capability before that gate.
+- ESPN live draft sync stays behind `ESPN_LIVE_DRAFT_SYNC=false` until the
+  [live draft release gate](./provider-notes/espn.md#live-draft-release-gate) passes against
+  disposable snake and salary-cap leagues. The DOM adapter's selector table is unverified until
+  then, and landing-page copy may not claim the capability before that gate.
 - Neither gate enables provider writes. Lineup, waiver, and trade changes remain recommendation-only
   until separately approved, implemented, and shadow-validated.
 

@@ -609,9 +609,10 @@ const TEAM_DEFENSE_POINTS_ALLOWED_BUCKETS = [
 ] as const;
 
 /**
- * ESPN's evidence-established yards-allowed ladder (provider IDs 128-136 in this order;
- * `docs/plans/ROS_GATE_AND_DST_PLAN.md` §0.1). The 300-349 tier gets a component even though no
- * league prices it — the ladder must partition the yards axis or the probabilities cannot sum to 1.
+ * ESPN's evidence-established yards-allowed ladder (provider IDs 128-136 in this order; see
+ * `docs/dst-yards-allowed-calibration-2026-07-29.md`). The 300-349 tier gets a component even
+ * though no league prices it — the ladder must partition the yards axis or the probabilities
+ * cannot sum to 1.
  */
 const ESPN_TEAM_DEFENSE_YARDS_ALLOWED_BUCKETS = [
   { component: "yards_allowed_0_99_probability", minimum: 0, maximum: 99 },

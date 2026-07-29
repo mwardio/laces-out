@@ -544,7 +544,7 @@
   }
 }
 
-/* WP7 tool-use provenance. Kept quiet: it explains where an answer came from, it is not the answer. */
+/* Tool-use provenance stays quiet: it explains where an answer came from, not the answer itself. */
 .answer footer .toolNote {
   margin-top: 0.35rem;
   font-size: 0.78rem;

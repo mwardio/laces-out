@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 /**
- * Typed, deterministic AI tools (ENHANCEMENT_PLAN.md §2.5, ADR 0003).
+ * Typed, deterministic AI tools governed by ADR 0003.
  *
  * A tool lets the model *retrieve* an already-computed deterministic result. It never lets the
  * model compute one. Everything here is therefore read-only by construction: there is no mutating
@@ -21,7 +21,7 @@ export const AI_PROMPT_VERSION = "2026-07-27.1";
 /**
  * Exactly the tools the server can execute today.
  *
- * WP7 ships `get_lineup_recommendation` end to end. The remaining planned tools
+ * `get_lineup_recommendation` is implemented end to end. The remaining candidate tools
  * (`get_waiver_recommendations`, `get_trade_packages`, `compare_players`, `get_playoff_outlook`,
  * `get_player_stats`, `get_draft_advice`) are deliberately absent rather than declared-and-stubbed:
  * a name in this union is a promise that the registry can serve it, and advertising a tool the
@@ -66,7 +66,7 @@ export interface AiToolDefinition {
  * ADR 0003 requires an input hash beside the algorithm version. It does not permit two different
  * digests to wear the same name. `decision-snapshot-provenance` is `InSeasonDecisionSnapshot`'s own
  * canonical checksum, passed through unchanged; it is computed with the same function as
- * `recommendation_runs.input_hash` (WP4) but under the `decision-snapshot` scope rather than a run
+ * `recommendation_runs.input_hash` but under the `decision-snapshot` scope rather than a run
  * kind, so it is deliberately a different digest from any persisted per-kind run over the same
  * league. Naming the scope says which one a caller is holding, and is what a second tool over a
  * different deterministic surface will extend.

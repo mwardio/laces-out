@@ -802,8 +802,8 @@ function espnRule(providerStatId: string, points: number) {
  * A minimal Garagely-shaped ESPN rule set: ordinary offence and kicking rules, plus one rule that
  * makes D/ST unpriceable — a bare `205` (ESPN's "Defensive 2pt Return", a category with no ingested
  * data source and no recorded occurrence bound). The `132:slot:16` yards-allowed bracket override
- * is an accepted, mapped tier-probability rule since WP2, but it stays out of the emitted profile
- * while D/ST is unsupported. `101` (special-teams touchdowns) is kept because it is scored for BOTH
+ * is an accepted, mapped tier-probability rule, but it stays out of the emitted profile while D/ST
+ * is unsupported. `101` (special-teams touchdowns) is kept because it is scored for both
  * offensive skill positions and D/ST: it is the rule that used to drag the whole league into the
  * D/ST gate.
  *

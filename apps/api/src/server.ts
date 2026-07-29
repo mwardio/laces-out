@@ -69,7 +69,7 @@ const draftAnalysis = new DraftAnalysisService(
   new DrizzleDraftProjectionSource(database.db),
 );
 const espnPersistence = new DrizzleEspnSyncPersistence(database.db);
-// The change-event feed (WP5). Producers write; the service is the only authorized reader.
+// Change-event producers write; the service is the only authorized reader.
 const changeEventProducers = drizzleChangeEventProducers(database.db);
 const changeEvents = new ChangeEventService(new DrizzleChangeEventRepository(database.db));
 const espnBridge = new EspnBridgeService(database.db, () => new Date(), espnPersistence, {

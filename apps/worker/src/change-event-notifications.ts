@@ -12,8 +12,8 @@ import type { NotificationCollector, PendingNotification } from "./push-notifica
 /**
  * The change-event notification collector.
  *
- * **One digest per member per sweep, never one push per event.** `ENHANCEMENT_PLAN.md` §2.4 asks for
- * deduplicated events without duplicate alerts, and D9 already gives the member a prioritized feed
+ * **One digest per member per sweep, never one push per event.** Events are deduplicated without
+ * duplicate alerts, and the member already has a prioritized feed
  * with read and dismiss state — so the push is a nudge toward that feed, not a second copy of it.
  * On a live Sunday a per-event collector would send several pushes per member for one wave of
  * injury news; a digest sends one. Severity ordering lives inside the digest body.

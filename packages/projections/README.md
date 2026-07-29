@@ -236,16 +236,22 @@ structural guard. Any identity mismatch, thin evidence, unstable convergence, co
 evidenced availability miss, bias miss, unavailable or invalid calibration artifact, or zero-game
 window withholds the result. It cannot return `release` with `not-calibrated`; a success
 identifies the validated artifact and labels the expanded interval `split-conformal-cqr`.
-The worker invokes a separate hourly shadow rail after the weekly forecast sweep. That rail audits
-the current schedule, immutable weekly model runs, horizon completeness, and held-out evidence, and
-records only a degraded model-run artifact. It cannot write managed ROS projection sets, summaries,
-observations, or recommendation inputs. The database has append-only, future-window ROS storage
-invariants ready for a later explicit release, but no API, UI, or recommendation consumer uses the
-ROS output yet.
+The worker runs the hourly shadow audit and managed release publisher as separate rails. A shadow
+run can record degraded evidence but cannot write league projection sets. Release requires an
+explicitly admitted, immutable artifact whose scoring identity matches the league; every
+position/window cell then re-clears identity, coverage, convergence, availability, bias, and
+calibration gates. A withheld cell never removes the prior good league set.
 
-The 2026-07-21 official admission replay used 2019–2025 sources with 2022–2025 held out and produced
-the complete 1,224-row, 68-batch, 18-cell matrix. It remained withheld: all offense/K cells missed
-the 100% convergence default, ten medium/long availability cells exceeded 1.5-game MAE, K in all
-three buckets and QB nine-plus undercovered, and the short/mid untouched-season cells had only 12
-rows against the 18-row minimum. D/ST nine-plus cleared every current gate. This result is retained
-as an honest model-quality blocker; it is not evidence that thresholds should be relaxed.
+The current full-PPR reference combines weekly model `laces-weekly-components-v8` with ROS model
+`laces-ros-distribution-v7`. Its 2019–2025 replay graded 2,040 forecasts across 68 season/cutoff
+batches, converged all 144 release/reference strata, and produced the first zero-blocker 18-cell
+artifact, admitted on 2026-07-23. The kicker path uses a calibrated integer count process; the
+weekly v8 thin-history blend fixed the remaining short-window center error while leaving non-kicker
+distributions unchanged apart from deterministic reseeding. Half-PPR and standard profiles are
+validated independently and retain their own per-cell decisions rather than inheriting the
+full-PPR result.
+
+These historical seasons are development evidence. The final untouched confirmation remains the
+pre-registered [2026 protocol](../../docs/ros-v6-2026-untouched-protocol.md), which cannot execute
+until the 2026 regular season resolves. Operational commands, admission rules, and current
+per-profile status live in [`docs/operations.md`](../../docs/operations.md).

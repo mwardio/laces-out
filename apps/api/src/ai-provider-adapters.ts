@@ -1,7 +1,7 @@
 import type { AiProviderName, AiToolParameterSchema } from "@fantasy/contracts";
 
 /**
- * Provider capability matrix (ENHANCEMENT_PLAN.md §2.5).
+ * Provider capability matrix.
  *
  * A model that cannot call tools must say so rather than silently answering without them, so the
  * surface can tell the member why the answer is thinner than usual.
@@ -195,7 +195,7 @@ function requireText(provider: AiProviderName, value: string | undefined): strin
  * What each provider adapter in THIS repository can actually do — not what the vendor's API can do
  * in principle.
  *
- * Gemini is the only adapter with a tool path today (WP7 Slice 1). OpenAI, Anthropic, and
+ * Gemini is the only adapter with a tool path today. OpenAI, Anthropic, and
  * OpenRouter report `toolUse: false` and refuse a `tools` argument rather than dropping it
  * silently, so a BYOK member is told why their answer used the bounded-context path instead of
  * being left to wonder. Unknown models fail closed for the same reason.

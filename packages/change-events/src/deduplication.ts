@@ -8,7 +8,7 @@ import { canonicalJson } from "@fantasy/rankings";
  *
  * `source` names the producer; this key names the **transition**. A replay of the same transition
  * collapses on the partial unique index, while a later genuine recurrence of the same *state* still
- * fires. `ENHANCEMENT_PLAN.md` §2.4 requires both, and they pull in opposite directions, so what
+ * fires. Those requirements pull in opposite directions, so what
  * makes each kind's recurrence distinct is recorded here rather than left to be re-derived:
  *
  * | kind                     | what collapses a replay                | what makes a later recurrence distinct                                                                                                  |
@@ -19,7 +19,7 @@ import { canonicalJson } from "@fantasy/rankings";
  * |                          |                                        | a different state than the first. `leagueId` is included so two managers rostering one player in two leagues each get an event; the       |
  * |                          |                                        | ingestion's `inputChecksum` is deliberately **excluded**, or an artifact refresh touching an unrelated row would re-fire an unchanged     |
  * |                          |                                        | player.                                                                                                                                   |
- * | `recommendation.changed` | the same persisted run                 | `inputChecksum` — the run's `recommendation_runs.input_hash`, which is the ADR 0003 replay identity WP4 persists. A replayed recompute    |
+ * | `recommendation.changed` | the same persisted run                 | `inputChecksum` — the run's `recommendation_runs.input_hash`, which is the persisted ADR 0003 replay identity. A replayed recompute       |
  * |                          |                                        | resolves to the same stored run and therefore the same key.                                                                               |
  *
  * `artifactId` is the identity of the admitted provider artifact: a content checksum where the

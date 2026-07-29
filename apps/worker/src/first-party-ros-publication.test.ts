@@ -401,7 +401,7 @@ describe("first-party ROS per-position publication matching", () => {
   }
 
   it("publishes a partially matched league's matched positions in the production evidence shape", () => {
-    // PRODUCTION SHAPE — formerly the recorded seam for docs/plans/ROS_AVAILABILITY_PLAN.md.
+    // Production shape.
     // `buildFirstPartyRosLeagueTarget` derives both the target's `leagueScoringProfileKey` and
     // every live evidence row's `scoringProfileKey` from the same league profile, so a partially
     // matched league's whole-profile key differs from the artifact's by construction. The live
@@ -824,7 +824,7 @@ describe("selectFirstPartyRosArtifactForLeague", () => {
 
 describe("selectFirstPartyRosArtifactForLeague position-scoped arbitration", () => {
   // With the live gate's evidence identity position-scoped, one league can match several admitted
-  // artifacts on subsets of its positions. These tests pin the recorded WP0 Step 3 tie-break rule:
+  // artifacts on subsets of its positions. These tests pin the deterministic tie-break rule:
   // (1) whole-key equality wins outright, latest admittedAt among whole-key matches; (2) otherwise
   // most matched supported positions wins; (3) tie -> latest admittedAt; (4) tie ->
   // lexicographically greatest artifactChecksum.

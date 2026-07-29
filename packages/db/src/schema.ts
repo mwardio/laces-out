@@ -55,7 +55,7 @@ export type LeagueSupplementalKind =
  * One outbound notification family. New kinds are additive: a payload builder plus an idempotency
  * key slot, never new delivery plumbing.
  */
-/** WP5 adds `change-event`: one digest per member per sweep, never one push per event. */
+/** `change-event` means one digest per member per sweep, never one push per event. */
 export type NotificationKind = "lineup-lock" | "change-event";
 
 export interface FirstPartyRosAvailabilityWeek {
