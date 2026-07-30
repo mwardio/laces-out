@@ -24,10 +24,10 @@
 
 ---
 
-I play in four fantasy leagues, most with auction drafts, and got tired of paying for advice that
+I play in too many fantasy leagues, most with auction drafts, and got tired of paying for tools that
 still felt generic. Laces Out is the app I wanted instead: one invite-only place for league data,
-draft prep, weekly decisions, and the research behind them. The core app works without AI; Film
-Room adds optional Gemini or bring-your-own-key analysis.
+draft prep, weekly decisions, and the research behind them. The core app works without AI, and Film
+Room adds optional Gemini or BYOK analysis.
 
 ## What it does
 
