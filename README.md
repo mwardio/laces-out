@@ -6,7 +6,7 @@
 
 <p align="center">
   <strong>Self-hosted fantasy football tools for leagues of friends.</strong><br>
-  League sync, projections, draft rooms, weekly decisions, and optional AI—running on your server.
+  League sync, projections, draft rooms, weekly decisions, and optional AI analysis. Everything runs on your own server, with invite-only access if you want it.
 </p>
 
 <p align="center">
