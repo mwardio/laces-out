@@ -42,6 +42,7 @@ import {
 } from "../lib/bridge-extension";
 import { createEspnBookmarklet, currentEspnSeason } from "../lib/espn-bookmarklet";
 import { parseEspnLeagueIds } from "../lib/espn-league-ids";
+import { publishYahooConnectionState } from "../lib/provider-connection-events";
 import { yahooComingSoon } from "../lib/public-site";
 import { loginUrlForCurrentPath } from "../lib/safe-return-to";
 
@@ -269,6 +270,7 @@ export function ConnectionWorkbench() {
       if (response.status === 401) {
         setYahooConnectionsState("idle");
         setSignedOut(true);
+        publishYahooConnectionState(false);
         return;
       }
       if (!response.ok) {
@@ -285,6 +287,7 @@ export function ConnectionWorkbench() {
       setYahooConnections(body.connections);
       setYahooConnectionsState("done");
       setYahooState(body.connections.length > 0 ? "done" : "idle");
+      publishYahooConnectionState(body.connections.length > 0);
     } catch (error) {
       setYahooConnectionsState("error");
       setYahooConnectionsError(

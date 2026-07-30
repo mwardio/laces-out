@@ -20,6 +20,7 @@ import Link from "next/link";
 import { type ReactNode, useEffect, useRef, useState } from "react";
 
 import { apiBaseUrl, parseAuthenticatedSession } from "../lib/api-client";
+import { subscribeToYahooConnectionState } from "../lib/provider-connection-events";
 import { yahooComingSoon } from "../lib/public-site";
 import { LacesOutMark } from "./laces-out-mark";
 import { ScrollCues } from "./scroll-cues";
@@ -135,6 +136,7 @@ export function AppShell({
 }: AppShellProps) {
   const [isAdmin, setIsAdmin] = useState(false);
   const [isSignedIn, setIsSignedIn] = useState(false);
+  const [hasYahooConnection, setHasYahooConnection] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const mobileMenuTriggerRef = useRef<HTMLButtonElement>(null);
   const mobileMenuCloseRef = useRef<HTMLButtonElement>(null);
@@ -147,27 +149,44 @@ export function AppShell({
 
   useEffect(() => {
     const controller = new AbortController();
-    void fetch(`${apiBaseUrl}/v1/auth/session`, {
-      credentials: "include",
-      headers: { Accept: "application/json" },
-      cache: "no-store",
-      signal: controller.signal,
-    })
-      .then(async (response) =>
-        response.ok ? parseAuthenticatedSession(await response.json()) : null,
-      )
-      .then((session) => {
+
+    async function loadSession(): Promise<void> {
+      try {
+        const response = await fetch(`${apiBaseUrl}/v1/auth/session`, {
+          credentials: "include",
+          headers: { Accept: "application/json" },
+          cache: "no-store",
+          signal: controller.signal,
+        });
+        const session = response.ok ? parseAuthenticatedSession(await response.json()) : null;
         setIsAdmin(session?.user.role === "admin");
         setIsSignedIn(session !== null);
-      })
-      .catch(() => {
+        setHasYahooConnection(false);
+
+        if (session === null || yahooComingSoon) return;
+        const yahooResponse = await fetch(`${apiBaseUrl}/v1/connections/yahoo`, {
+          credentials: "include",
+          headers: { Accept: "application/json" },
+          cache: "no-store",
+          signal: controller.signal,
+        });
+        if (!yahooResponse.ok) return;
+        const body = (await yahooResponse.json()) as { connections?: unknown };
+        setHasYahooConnection(Array.isArray(body.connections) && body.connections.length > 0);
+      } catch {
         if (!controller.signal.aborted) {
           setIsAdmin(false);
           setIsSignedIn(false);
+          setHasYahooConnection(false);
         }
-      });
+      }
+    }
+
+    void loadSession();
     return () => controller.abort();
   }, []);
+
+  useEffect(() => subscribeToYahooConnectionState(setHasYahooConnection), []);
 
   // Registration only. It installs the handler that shows a notification the member has already
   // opted into; permission is requested from the Settings toggle and nowhere else.
@@ -322,14 +341,11 @@ export function AppShell({
 
         <main id="main-content" className="main-content">
           {children}
-          {/* Attribution belongs on pages that actually show Yahoo data. While
-              Yahoo sync is disabled, every page was asserting a data source the
-              deployment has none of. */}
-          {yahooComingSoon ? null : (
+          {hasYahooConnection ? (
             <footer className="provider-footer" aria-label="Data provider attribution">
               <YahooAttribution />
             </footer>
-          )}
+          ) : null}
         </main>
       </div>
 
