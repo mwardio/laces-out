@@ -195,10 +195,10 @@ function requireText(provider: AiProviderName, value: string | undefined): strin
  * What each provider adapter in THIS repository can actually do — not what the vendor's API can do
  * in principle.
  *
- * Gemini is the only adapter with a tool path today. OpenAI, Anthropic, and
- * OpenRouter report `toolUse: false` and refuse a `tools` argument rather than dropping it
- * silently, so a BYOK member is told why their answer used the bounded-context path instead of
- * being left to wonder. Unknown models fail closed for the same reason.
+ * Gemini is the only adapter with a tool path today. Every other provider reports
+ * `toolUse: false` and refuses a `tools` argument rather than dropping it silently, so a BYOK
+ * member is told why their answer used the bounded-context path instead of being left to wonder.
+ * Unknown models fail closed for the same reason.
  */
 const GEMINI_TOOL_MODEL_PATTERN = /^gemini-3(?:\.\d+)?-/u;
 
@@ -207,6 +207,8 @@ const PROVIDER_CAPABILITY_DEFAULTS: Readonly<Record<AiProviderName, AiProviderCa
   gemini: { toolUse: false, structuredOutput: true, streaming: true, modelSelection: false },
   openai: { toolUse: false, structuredOutput: true, streaming: true, modelSelection: true },
   anthropic: { toolUse: false, structuredOutput: true, streaming: true, modelSelection: true },
+  deepseek: { toolUse: false, structuredOutput: true, streaming: true, modelSelection: true },
+  grok: { toolUse: false, structuredOutput: true, streaming: true, modelSelection: true },
   openrouter: { toolUse: false, structuredOutput: false, streaming: true, modelSelection: true },
 };
 
@@ -505,6 +507,66 @@ class OpenRouterAdapter implements AiProviderAdapter {
   }
 }
 
+class OpenAiCompatibleChatAdapter implements AiProviderAdapter {
+  readonly #fetcher: typeof fetch;
+  readonly #provider: "deepseek" | "grok";
+  readonly #url: string;
+
+  constructor(input: {
+    readonly fetcher: typeof fetch;
+    readonly provider: "deepseek" | "grok";
+    readonly url: string;
+  }) {
+    this.#fetcher = input.fetcher;
+    this.#provider = input.provider;
+    this.#url = input.url;
+  }
+
+  capabilities(model: string): AiProviderCapabilities {
+    return aiProviderCapabilities(this.#provider, model);
+  }
+
+  async complete(input: AiCompletionInput): Promise<AiCompletionResult> {
+    assertToolsSupported(this.#provider, input.model, input);
+    const { body, response } = await postJson({
+      provider: this.#provider,
+      url: this.#url,
+      headers: { Authorization: `Bearer ${input.apiKey}` },
+      body: {
+        model: input.model,
+        messages: [
+          { role: "system", content: input.system },
+          { role: "user", content: input.prompt },
+        ],
+        max_tokens: input.maxOutputTokens,
+      },
+      fetcher: this.#fetcher,
+    });
+    const root = record(body);
+    const firstChoice = record(list(root?.choices)[0]);
+    const message = record(firstChoice?.message);
+    const rawContent = message?.content;
+    const outputText =
+      textValue(rawContent) ??
+      list(rawContent)
+        .map((item) => record(item))
+        .map((item) => textValue(item?.text))
+        .filter((value): value is string => Boolean(value))
+        .join("\n\n");
+    const usage = record(root?.usage);
+    const promptDetails = record(usage?.prompt_tokens_details);
+    return plainResult({
+      text: requireText(this.#provider, outputText),
+      requestId: response.headers.get("x-request-id") ?? textValue(root?.id) ?? null,
+      inputTokens: tokenCount(usage?.prompt_tokens),
+      outputTokens: tokenCount(usage?.completion_tokens),
+      cacheReadTokens:
+        tokenCount(promptDetails?.cached_tokens) + tokenCount(usage?.prompt_cache_hit_tokens),
+      cacheWriteTokens: 0,
+    });
+  }
+}
+
 export function createAiProviderAdapters(
   webUrl: string,
   fetcher: typeof fetch = fetch,
@@ -513,6 +575,16 @@ export function createAiProviderAdapters(
     openai: new OpenAiAdapter(fetcher),
     anthropic: new AnthropicAdapter(fetcher),
     gemini: new GeminiAdapter(fetcher),
+    deepseek: new OpenAiCompatibleChatAdapter({
+      fetcher,
+      provider: "deepseek",
+      url: "https://api.deepseek.com/chat/completions",
+    }),
+    grok: new OpenAiCompatibleChatAdapter({
+      fetcher,
+      provider: "grok",
+      url: "https://api.x.ai/v1/chat/completions",
+    }),
     openrouter: new OpenRouterAdapter(fetcher, webUrl),
   };
 }

@@ -3206,6 +3206,8 @@
     --provider-openai: #39715d;
     --provider-anthropic: #b06442;
     --provider-gemini: #4d72aa;
+    --provider-deepseek: #315fa8;
+    --provider-grok: #33383d;
     --provider-openrouter: #765c91;
     --sidebar-width: 232px;
     /* Desktop app-page top bar. Mobile (<=820px) overrides this independently

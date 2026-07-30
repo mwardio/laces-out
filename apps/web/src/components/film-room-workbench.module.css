@@ -163,7 +163,7 @@
 
   .providerTabs {
     display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-columns: repeat(3, minmax(0, 1fr));
     overflow: hidden;
     background: var(--white);
     border: 1px solid var(--ink-150);
@@ -186,6 +186,14 @@
 
   .providerTab:last-child {
     border-right: 0;
+  }
+
+  .providerTab:nth-child(3n) {
+    border-right: 0;
+  }
+
+  .providerTab:nth-child(-n + 3) {
+    border-bottom: 1px solid var(--ink-100);
   }
 
   .providerTab::after {
@@ -218,6 +226,14 @@
 
   .gemini {
     --provider-accent: var(--provider-gemini);
+  }
+
+  .deepseek {
+    --provider-accent: var(--provider-deepseek);
+  }
+
+  .grok {
+    --provider-accent: var(--provider-grok);
   }
 
   .openrouter {
@@ -918,7 +934,7 @@
     }
 
     .providerTabs {
-      grid-template-columns: repeat(4, minmax(0, 1fr));
+      grid-template-columns: repeat(3, minmax(0, 1fr));
     }
 
     .providerTab {
@@ -933,6 +949,10 @@
 
     .providerTab:last-child {
       border-right: 0;
+    }
+
+    .providerTab:nth-child(-n + 3) {
+      border-bottom: 1px solid var(--ink-100);
     }
 
     .providerMark {
@@ -987,6 +1007,10 @@
       padding: 11px 9px;
       border-right: 1px solid var(--ink-100);
       border-bottom: 1px solid var(--ink-100);
+    }
+
+    .providerTab:nth-child(3n) {
+      border-right: 1px solid var(--ink-100);
     }
 
     .providerTab:nth-child(2n) {

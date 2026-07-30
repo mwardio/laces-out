@@ -1,0 +1,4 @@
+ALTER TABLE "ai_provider_credentials" DROP CONSTRAINT "ai_provider_credentials_provider_check";--> statement-breakpoint
+ALTER TABLE "ai_usage_ledger" DROP CONSTRAINT "ai_usage_ledger_provider_check";--> statement-breakpoint
+ALTER TABLE "ai_provider_credentials" ADD CONSTRAINT "ai_provider_credentials_provider_check" CHECK ("ai_provider_credentials"."provider" in ('openai', 'anthropic', 'gemini', 'deepseek', 'grok', 'openrouter'));--> statement-breakpoint
+ALTER TABLE "ai_usage_ledger" ADD CONSTRAINT "ai_usage_ledger_provider_check" CHECK ("ai_usage_ledger"."provider" in ('openai', 'anthropic', 'gemini', 'deepseek', 'grok', 'openrouter'));

@@ -144,7 +144,7 @@ const aiFeatures = [
   {
     icon: KeyRound,
     title: "Bring your own model",
-    text: "Add an OpenAI, Anthropic, Gemini, or OpenRouter key to choose the model and use limits independent from the included allowance.",
+    text: "Add an OpenAI, Anthropic, Gemini, DeepSeek, Grok, or OpenRouter key to choose the model and use limits independent from the included allowance.",
   },
   {
     icon: BookOpenCheck,

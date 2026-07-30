@@ -21,11 +21,12 @@ may be used to improve its products. Laces Out stores provider/model settings an
 containing token counts, status, timing, access mode, and a keyed provider-request identifier, but
 does not store raw questions or model answers.
 
-A member may instead add an OpenAI, Anthropic, Gemini, or OpenRouter key and choose the model. That
-personal key is stored in the same purpose-bound, versioned encryption system used for provider
-secrets, is never returned after save, and overrides included Gemini for that member/provider until
-removed. The member's provider account governs BYOK processing and billing. Removing the provider
-configuration deletes the encrypted personal key and restores included Gemini when available.
+A member may instead add an OpenAI, Anthropic, Gemini, DeepSeek, Grok, or OpenRouter key and choose
+the model. That personal key is stored in the same purpose-bound, versioned encryption system used
+for provider secrets, is never returned after save, and overrides included Gemini for that
+member/provider until removed. The member's provider account governs BYOK processing and billing.
+Removing the provider configuration deletes the encrypted personal key and restores included
+Gemini when available.
 
 For start/sit requests, the selected model may ask Laces Out for one fixed, read-only lineup result
 already computed by the deterministic Decision Desk engine. The server supplies the authenticated

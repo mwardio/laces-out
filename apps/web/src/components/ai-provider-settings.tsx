@@ -53,6 +53,18 @@ const PROVIDERS: Readonly<
     description: "Native Interactions API",
     keyUrl: "https://aistudio.google.com/app/apikey",
   },
+  deepseek: {
+    name: "DeepSeek",
+    shortName: "DS",
+    description: "Native DeepSeek Chat API",
+    keyUrl: "https://platform.deepseek.com/api_keys",
+  },
+  grok: {
+    name: "Grok",
+    shortName: "X",
+    description: "Native xAI Chat API",
+    keyUrl: "https://console.x.ai/",
+  },
   openrouter: {
     name: "OpenRouter",
     shortName: "OR",

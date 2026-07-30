@@ -185,6 +185,60 @@ describe("AI provider adapters", () => {
     expect(result).toMatchObject({ text: "Hold the current lineup.", requestId: "or_1" });
   });
 
+  it.each([
+    {
+      provider: "deepseek" as const,
+      url: "https://api.deepseek.com/chat/completions",
+      response: {
+        id: "ds_1",
+        choices: [{ message: { content: "Add the running back." } }],
+        usage: {
+          prompt_tokens: 51,
+          completion_tokens: 10,
+          prompt_cache_hit_tokens: 7,
+        },
+      },
+    },
+    {
+      provider: "grok" as const,
+      url: "https://api.x.ai/v1/chat/completions",
+      response: {
+        id: "xai_1",
+        choices: [{ message: { content: "Keep the current starters." } }],
+        usage: {
+          prompt_tokens: 47,
+          completion_tokens: 8,
+          prompt_tokens_details: { cached_tokens: 5 },
+        },
+      },
+    },
+  ])("uses the native $provider chat-completions endpoint", async (fixture) => {
+    const fetcher = vi.fn<Fetcher>(() =>
+      Promise.resolve(new Response(JSON.stringify(fixture.response), { status: 200 })),
+    );
+
+    const result = await createAiProviderAdapters("https://laces.test", fetcher)[
+      fixture.provider
+    ].complete(input);
+    const init = fetcher.mock.calls[0]?.[1] as RequestInit;
+
+    expect(fetcher.mock.calls[0]?.[0]).toBe(fixture.url);
+    expect(init.headers).toMatchObject({ Authorization: "Bearer secret-provider-key" });
+    expect(requestBody(fetcher)).toMatchObject({
+      model: "current-model",
+      messages: [
+        { role: "system", content: "System rules" },
+        { role: "user", content: "League question" },
+      ],
+      max_tokens: 321,
+    });
+    expect(result).toMatchObject({
+      requestId: fixture.response.id,
+      inputTokens: fixture.response.usage.prompt_tokens,
+      outputTokens: fixture.response.usage.completion_tokens,
+    });
+  });
+
   it("maps rejected keys to a safe error without exposing provider response bodies", async () => {
     const fetcher = vi.fn<Fetcher>(() =>
       Promise.resolve(
@@ -318,7 +372,7 @@ describe("AI provider adapters", () => {
     expect(adapters.openai.capabilities("gpt-5.6-luna").toolUse).toBe(false);
     expect(adapters.anthropic.capabilities("claude-sonnet-5").toolUse).toBe(false);
 
-    for (const provider of ["openai", "anthropic", "openrouter"] as const) {
+    for (const provider of ["openai", "anthropic", "deepseek", "grok", "openrouter"] as const) {
       await expect(
         adapters[provider].complete({ ...input, tools: [LINEUP_TOOL_SPEC] }),
       ).rejects.toMatchObject({ code: "TOOL_USE_UNSUPPORTED", statusCode: 422 });

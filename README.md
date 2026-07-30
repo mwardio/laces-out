@@ -47,8 +47,8 @@ Room adds optional Gemini or BYOK analysis.
 - **Your own rankings** — import or edit rankings, ADP, auction values, cheat sheets, and custom
   projections, with Sleeper momentum and Fantasy Football Calculator market context.
 - **Optional AI** — Film Room can use a shared Gemini key or an encrypted user-supplied OpenAI,
-  Anthropic, Gemini, or OpenRouter key. Models explain league facts and computed recommendations;
-  they cannot access credentials, query the database, or make transactions.
+  Anthropic, Gemini, DeepSeek, Grok, or OpenRouter key. Models explain league facts and computed
+  recommendations; they cannot access credentials, query the database, or make transactions.
 
 ## Screenshots
 
@@ -160,15 +160,15 @@ only that gateway—not the API, web, or PostgreSQL services.
 There is no advertising or product-analytics client by default. Sync, research, and optional Film
 Room requests still need to reach their data sources.
 
-| Service                          | What Laces Out uses it for                         | Account or key                                 |
-| -------------------------------- | -------------------------------------------------- | ---------------------------------------------- |
-| nflverse                         | NFL identity, schedules, stats, rosters, and snaps | None                                           |
-| Sleeper                          | Player catalog, status context, and market trends  | None; Sleeper league sync is not implemented   |
-| Fantasy Football Calculator      | Draft-market ADP context                           | None                                           |
-| ESPN                             | Authorized private-league sync                     | Existing browser session; password stays local |
-| Google Gemini                    | Optional shared Film Room access                   | Server-side Google AI Studio key               |
-| OpenAI, Anthropic, or OpenRouter | Optional user-selected Film Room provider          | Encrypted user-supplied key                    |
-| Yahoo                            | Optional read-only league sync when enabled        | Yahoo app credentials configured by the host   |
+| Service                                          | What Laces Out uses it for                         | Account or key                                 |
+| ------------------------------------------------ | -------------------------------------------------- | ---------------------------------------------- |
+| nflverse                                         | NFL identity, schedules, stats, rosters, and snaps | None                                           |
+| Sleeper                                          | Player catalog, status context, and market trends  | None; Sleeper league sync is not implemented   |
+| Fantasy Football Calculator                      | Draft-market ADP context                           | None                                           |
+| ESPN                                             | Authorized private-league sync                     | Existing browser session; password stays local |
+| Google Gemini                                    | Shared or user-selected Film Room provider         | Host key or encrypted user-supplied key        |
+| OpenAI, Anthropic, DeepSeek, Grok, or OpenRouter | Optional user-selected Film Room provider          | Encrypted user-supplied key                    |
+| Yahoo                                            | Optional read-only league sync when enabled        | Yahoo app credentials configured by the host   |
 
 ## Under the hood
 

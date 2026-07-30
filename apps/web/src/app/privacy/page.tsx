@@ -118,9 +118,9 @@ export default function PrivacyPage() {
             Google AI Studio project. This included access currently uses Gemini 3.6 Flash and
             requires no personal key. Google states that free-tier submitted content may be used to
             improve its products. You may instead add a separately billed OpenAI, Anthropic, Gemini,
-            or OpenRouter API key and choose the model; that key is encrypted, is not shown again
-            after save, and can be removed at any time. Provider processing is governed by that
-            provider&apos;s account terms and privacy choices.
+            DeepSeek, Grok, or OpenRouter API key and choose the model; that key is encrypted, is
+            not shown again after save, and can be removed at any time. Provider processing is
+            governed by that provider&apos;s account terms and privacy choices.
           </p>
         </section>
 

@@ -49,7 +49,7 @@ class MemoryAiRepository implements AiRepository {
 
   saveCredential(input: {
     readonly userId: string;
-    readonly provider: "openai" | "anthropic" | "gemini" | "openrouter";
+    readonly provider: "openai" | "anthropic" | "gemini" | "deepseek" | "grok" | "openrouter";
     readonly model: string;
     readonly dailyRequestLimit: number;
     readonly maxOutputTokens: number;
@@ -300,6 +300,8 @@ function serviceFixture(
     openai: wrapped,
     anthropic: wrapped,
     gemini: wrapped,
+    deepseek: wrapped,
+    grok: wrapped,
     openrouter: wrapped,
   };
   return {
@@ -784,12 +786,25 @@ describe("AI service", () => {
     const listed = await service.listProviders(USER_ID);
     const gemini = listed.providers.find((item) => item.provider === "gemini");
     const anthropic = listed.providers.find((item) => item.provider === "anthropic");
+    const deepseek = listed.providers.find((item) => item.provider === "deepseek");
+    const grok = listed.providers.find((item) => item.provider === "grok");
 
     // Managed access is governed by MANAGED_AI_DAILY_REQUEST_LIMIT.
+    expect(listed.providers).toHaveLength(6);
     expect(gemini).toMatchObject({ accessMode: "managed", dailyRequestLimit: 50 });
     // The 25 in AI_PROVIDER_DEFAULTS is a display placeholder for a provider the member cannot use
     // at all. It must never govern an executed request.
     expect(anthropic).toMatchObject({ accessMode: "unavailable", dailyRequestLimit: 25 });
+    expect(deepseek).toMatchObject({
+      accessMode: "unavailable",
+      model: "deepseek-v4-flash",
+      dailyRequestLimit: 25,
+    });
+    expect(grok).toMatchObject({
+      accessMode: "unavailable",
+      model: "grok-4.3",
+      dailyRequestLimit: 25,
+    });
     expect(AI_PROVIDER_DEFAULTS.gemini.dailyRequestLimit).toBe(25);
     expect(AI_PROVIDER_DEFAULTS.gemini.model).toBe(MANAGED_GEMINI_MODEL);
     // And the enforced managed limit is the configured one, not the placeholder.

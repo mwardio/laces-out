@@ -51,10 +51,12 @@ export const AI_PROVIDER_DEFAULTS: Readonly<
   openai: { model: "gpt-5.6-luna", dailyRequestLimit: 25, maxOutputTokens: 2000 },
   anthropic: { model: "claude-sonnet-5", dailyRequestLimit: 25, maxOutputTokens: 2000 },
   gemini: { model: "gemini-3.6-flash", dailyRequestLimit: 25, maxOutputTokens: 2000 },
+  deepseek: { model: "deepseek-v4-flash", dailyRequestLimit: 25, maxOutputTokens: 2000 },
+  grok: { model: "grok-4.3", dailyRequestLimit: 25, maxOutputTokens: 2000 },
   openrouter: { model: "~openai/gpt-latest", dailyRequestLimit: 25, maxOutputTokens: 2000 },
 };
 
-const PROVIDERS = ["openai", "anthropic", "gemini", "openrouter"] as const;
+const PROVIDERS = ["openai", "anthropic", "gemini", "deepseek", "grok", "openrouter"] as const;
 const MAX_CONTEXT_JSON_CHARS = 48_000;
 export const MANAGED_GEMINI_MODEL = "gemini-3.6-flash";
 

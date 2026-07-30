@@ -57,8 +57,8 @@ function configuration(provider: AiProviderConfiguration["provider"]): AiProvide
 
 describe("AI routes", () => {
   it("requires a session, keeps keys write-only, and scopes analysis to the current user", async () => {
-    const providers = ["openai", "anthropic", "gemini", "openrouter"].map((provider) =>
-      configuration(provider as AiProviderConfiguration["provider"]),
+    const providers = ["openai", "anthropic", "gemini", "deepseek", "grok", "openrouter"].map(
+      (provider) => configuration(provider as AiProviderConfiguration["provider"]),
     );
     const saveProvider = vi.fn(() => Promise.resolve(configuration("openai")));
     const analyzeLeague = vi.fn((): Promise<AiAnalysisResponse> =>

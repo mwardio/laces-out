@@ -91,6 +91,8 @@ const PROVIDER_LABELS: Readonly<Record<AiProviderName, string>> = {
   openai: "OpenAI",
   anthropic: "Anthropic",
   gemini: "Gemini",
+  deepseek: "DeepSeek",
+  grok: "Grok",
   openrouter: "OpenRouter",
 };
 

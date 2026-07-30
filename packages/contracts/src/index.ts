@@ -2283,7 +2283,14 @@ export const leagueAnalyticsSnapshotSchema = z
   .strict();
 export type LeagueAnalyticsSnapshot = z.infer<typeof leagueAnalyticsSnapshotSchema>;
 
-export const aiProviderNameSchema = z.enum(["openai", "anthropic", "gemini", "openrouter"]);
+export const aiProviderNameSchema = z.enum([
+  "openai",
+  "anthropic",
+  "gemini",
+  "deepseek",
+  "grok",
+  "openrouter",
+]);
 export type AiProviderName = z.infer<typeof aiProviderNameSchema>;
 
 export const aiProviderAccessModeSchema = z.enum(["managed", "byok", "unavailable"]);
@@ -2313,7 +2320,7 @@ export type AiProviderConfiguration = z.infer<typeof aiProviderConfigurationSche
 export const aiProviderListResponseSchema = z
   .object({
     generatedAt: z.iso.datetime(),
-    providers: z.array(aiProviderConfigurationSchema).length(4),
+    providers: z.array(aiProviderConfigurationSchema).length(6),
   })
   .strict();
 export type AiProviderListResponse = z.infer<typeof aiProviderListResponseSchema>;

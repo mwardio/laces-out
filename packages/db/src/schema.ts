@@ -36,7 +36,7 @@ export type DraftProviderFeedState =
 export type DraftProviderFeedVerification = "pending" | "verified" | "mismatched";
 export type DraftProviderObservationResult =
   "accepted" | "idempotent" | "standby" | "held" | "rejected";
-export type AiProviderName = "openai" | "anthropic" | "gemini" | "openrouter";
+export type AiProviderName = "openai" | "anthropic" | "gemini" | "deepseek" | "grok" | "openrouter";
 export type AiCredentialStatus = "active" | "invalid" | "revoked";
 export type StandingStreakType = "win" | "loss" | "tie" | "none";
 export type WeeklyMatchupStatus = "scheduled" | "in-progress" | "final";
@@ -2821,7 +2821,7 @@ export const aiProviderCredentials = pgTable(
     index("ai_provider_credentials_user_status_idx").on(table.userId, table.status),
     check(
       "ai_provider_credentials_provider_check",
-      sql`${table.provider} in ('openai', 'anthropic', 'gemini', 'openrouter')`,
+      sql`${table.provider} in ('openai', 'anthropic', 'gemini', 'deepseek', 'grok', 'openrouter')`,
     ),
     check(
       "ai_provider_credentials_status_check",
@@ -2897,7 +2897,7 @@ export const aiUsageLedger = pgTable(
     ),
     check(
       "ai_usage_ledger_provider_check",
-      sql`${table.provider} in ('openai', 'anthropic', 'gemini', 'openrouter')`,
+      sql`${table.provider} in ('openai', 'anthropic', 'gemini', 'deepseek', 'grok', 'openrouter')`,
     ),
     check(
       "ai_usage_ledger_token_counts_check",

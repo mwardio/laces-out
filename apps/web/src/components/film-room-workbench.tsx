@@ -59,6 +59,18 @@ const PROVIDERS: Readonly<
     description: "Native Interactions API",
     keyUrl: "https://aistudio.google.com/app/apikey",
   },
+  deepseek: {
+    name: "DeepSeek",
+    shortName: "DS",
+    description: "Native DeepSeek Chat API",
+    keyUrl: "https://platform.deepseek.com/api_keys",
+  },
+  grok: {
+    name: "Grok",
+    shortName: "X",
+    description: "Native xAI Chat API",
+    keyUrl: "https://console.x.ai/",
+  },
   openrouter: {
     name: "OpenRouter",
     shortName: "OR",
@@ -456,8 +468,8 @@ export function FilmRoomWorkbench() {
           <h1>Film Room</h1>
           <p>
             Ask why a recommendation leads the board. Included Gemini works without setup; add an
-            OpenAI, Anthropic, Gemini, or OpenRouter key only to choose the model and use
-            independent limits. No prompts or answers are stored.
+            OpenAI, Anthropic, Gemini, DeepSeek, Grok, or OpenRouter key only to choose the model
+            and use independent limits. No prompts or answers are stored.
           </p>
         </div>
         <div className={styles.securityChip}>

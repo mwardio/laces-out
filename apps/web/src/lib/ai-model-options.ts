@@ -33,6 +33,14 @@ export const aiModelOptions: Readonly<Record<AiProviderName, readonly AiModelOpt
       label: "Gemini 3.5 Flash-Lite · Fastest",
     },
   ],
+  deepseek: [
+    { id: "deepseek-v4-flash", label: "DeepSeek V4 Flash · Fast and efficient" },
+    { id: "deepseek-v4-pro", label: "DeepSeek V4 Pro · Maximum capability" },
+  ],
+  grok: [
+    { id: "grok-4.3", label: "Grok 4.3 · Balanced" },
+    { id: "grok-4.5", label: "Grok 4.5 · Frontier reasoning" },
+  ],
   openrouter: [
     { id: "openrouter/auto", label: "OpenRouter Auto · Smart routing" },
     {

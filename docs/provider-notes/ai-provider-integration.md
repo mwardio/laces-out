@@ -1,7 +1,7 @@
 # AI provider and chat-product integration
 
-Verified: 2026-07-17
-Scope: OpenAI, Anthropic, Google Gemini, and OpenRouter
+Verified: 2026-07-30
+Scope: OpenAI, Anthropic, Google Gemini, DeepSeek, Grok, and OpenRouter
 Decision status: managed Gemini plus per-user BYOK implemented; chat-product MCP connectors remain future work
 
 ## Product boundary
@@ -37,12 +37,14 @@ discloses that processing.
 | OpenAI        | `POST /v1/responses`            | Bearer API key               | `gpt-5.6-luna`       |
 | Anthropic     | `POST /v1/messages`             | `x-api-key` plus API version | `claude-sonnet-5`    |
 | Google Gemini | `POST /v1/interactions`         | `x-goog-api-key`             | `gemini-3.6-flash`   |
+| DeepSeek      | `POST /chat/completions`        | Bearer API key               | `deepseek-v4-flash`  |
+| Grok (xAI)    | `POST /v1/chat/completions`     | Bearer API key               | `grok-4.3`           |
 | OpenRouter    | `POST /api/v1/chat/completions` | Bearer API key               | `~openai/gpt-latest` |
 
 The model field is editable only after a member supplies a key because provider catalogs change
-faster than this application. Laces Out uses the four native protocols rather than relying on a
+faster than this application. Laces Out uses the six native protocols rather than relying on a
 lowest-common-denominator client. It does not set custom sampling parameters, invoke provider
-tools, or enable background execution.
+tools outside the bounded Gemini start/sit path, or enable background execution.
 OpenAI Responses and Gemini Interactions explicitly use stateless storage settings. OpenRouter
 requests include the deployment origin and Laces Out title for provider attribution.
 
@@ -59,6 +61,10 @@ Official sources:
 - <https://ai.google.dev/api/interactions-api-v1>
 - <https://openrouter.ai/docs/quickstart>
 - <https://openrouter.ai/docs/api/reference/authentication>
+- <https://api-docs.deepseek.com/api/create-chat-completion>
+- <https://api-docs.deepseek.com/api/list-models>
+- <https://docs.x.ai/developers/rest-api-reference/inference/chat>
+- <https://docs.x.ai/developers/models>
 
 ## Credential and privacy design
 
