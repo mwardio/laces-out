@@ -26,59 +26,12 @@ import {
   parseAiProviderList,
   parseLeagueListResponse,
 } from "../lib/api-client";
+import { AI_PROVIDER_META as PROVIDERS, AI_PROVIDER_ORDER } from "../lib/ai-provider-meta";
 import { DEMO_LEAGUE_ID } from "../lib/demo-contract-data";
 import { AiAnswerContent } from "./ai-answer-content";
 import { AiCoachPanel } from "./ai-coach-panel";
+import { AiProviderPicker } from "./ai-provider-picker";
 import styles from "./film-room-workbench.module.css";
-
-const PROVIDERS: Readonly<
-  Record<
-    AiProviderName,
-    {
-      readonly name: string;
-      readonly shortName: string;
-      readonly description: string;
-      readonly keyUrl: string;
-    }
-  >
-> = {
-  openai: {
-    name: "OpenAI",
-    shortName: "OA",
-    description: "Native Responses API",
-    keyUrl: "https://platform.openai.com/api-keys",
-  },
-  anthropic: {
-    name: "Anthropic",
-    shortName: "AN",
-    description: "Native Claude Messages API",
-    keyUrl: "https://console.anthropic.com/settings/keys",
-  },
-  gemini: {
-    name: "Google Gemini",
-    shortName: "G",
-    description: "Native Interactions API",
-    keyUrl: "https://aistudio.google.com/app/apikey",
-  },
-  deepseek: {
-    name: "DeepSeek",
-    shortName: "DS",
-    description: "Native DeepSeek Chat API",
-    keyUrl: "https://platform.deepseek.com/api_keys",
-  },
-  grok: {
-    name: "Grok",
-    shortName: "X",
-    description: "Native xAI Chat API",
-    keyUrl: "https://console.x.ai/",
-  },
-  openrouter: {
-    name: "OpenRouter",
-    shortName: "OR",
-    description: "One key, broad model catalog",
-    keyUrl: "https://openrouter.ai/settings/keys",
-  },
-};
 
 const QUICK_QUESTIONS = [
   "What are my three highest-leverage moves this week?",
@@ -101,8 +54,7 @@ type LoadState =
 
 type ActionState =
   | { readonly state: "idle" }
-  | { readonly state: "saving" | "testing" | "deleting" | "analyzing" }
-  | { readonly state: "success"; readonly message: string }
+  | { readonly state: "analyzing" }
   | { readonly state: "error"; readonly message: string };
 
 async function responseMessage(response: Response, fallback: string): Promise<string> {
@@ -117,6 +69,10 @@ async function responseMessage(response: Response, fallback: string): Promise<st
 }
 
 function FilmRoomTour() {
+  const [tourProvider, setTourProvider] = useState<AiProviderName>("gemini");
+  const tourProviderMeta = PROVIDERS[tourProvider];
+  const tourUsesIncludedGemini = tourProvider === "gemini";
+
   return (
     <div className={styles.page}>
       <div className={styles.tourNotice} role="status">
@@ -166,65 +122,45 @@ function FilmRoomTour() {
           </span>
         </div>
       </section>
-      <div className={styles.providerTabs} role="list" aria-label="Supported AI providers">
-        {(Object.keys(PROVIDERS) as AiProviderName[]).map((provider) => {
-          const meta = PROVIDERS[provider];
-          const included = provider === "gemini";
-          return (
-            <div
-              className={`${styles.providerTab} ${styles[provider]}`}
-              key={provider}
-              role="listitem"
-            >
-              <span className={styles.providerMark}>{meta.shortName}</span>
-              <span className={styles.providerCopy}>
-                <strong>{meta.name}</strong>
-                <small>{included ? "Included and ready" : "Available with your key"}</small>
-              </span>
-              <span
-                className={`${styles.statusDot}${included ? ` ${styles.statusReady}` : ""}`}
-                aria-hidden="true"
-              />
-            </div>
-          );
-        })}
-      </div>
       <div className={styles.mainGrid}>
-        <section className={styles.panel}>
+        <section className={`${styles.panel} ${styles.providerPanel}`}>
           <div className={styles.panelHeader}>
             <div>
-              <p className={styles.eyebrow}>Provider setup</p>
-              <h2>Google Gemini</h2>
-              <span>Included access · Native Interactions API</span>
+              <p className={styles.eyebrow}>AI provider</p>
+              <h2>Choose how Film Room answers</h2>
+              <span>Keys and model preferences live in Settings.</span>
             </div>
             <span className={styles.tourTag}>Sample</span>
           </div>
-          <div className={styles.settingsForm}>
-            <label className={styles.field}>
-              <span>API key</span>
-              <input value="Not required for included access" readOnly />
-              <small>Add a personal key only to select another model.</small>
-            </label>
-            <label className={styles.field}>
-              <span>Model ID</span>
-              <input value="gemini-3.6-flash" readOnly />
-            </label>
-            <div className={styles.fieldRow}>
-              <label className={styles.field}>
-                <span>Requests per day</span>
-                <input value="50" readOnly />
-              </label>
-              <label className={styles.field}>
-                <span>Max answer tokens</span>
-                <input value="2000" readOnly />
-              </label>
-            </div>
-            <div className={styles.usageLine}>
-              <span>
-                <strong>50</strong> requests left today
-              </span>
-              <span>0 of 50 used</span>
-            </div>
+          <div className={styles.providerPanelBody}>
+            <AiProviderPicker
+              options={AI_PROVIDER_ORDER.map((provider) => ({
+                provider,
+                detail: provider === "gemini" ? "Included and ready" : "Available with your key",
+                state: provider === "gemini" ? "ready" : "idle",
+              }))}
+              value={tourProvider}
+              onChange={setTourProvider}
+            />
+            <dl className={styles.providerFacts}>
+              <div>
+                <dt>Access</dt>
+                <dd>{tourUsesIncludedGemini ? "Included" : "Personal key"}</dd>
+              </div>
+              <div>
+                <dt>Model</dt>
+                <dd>{tourUsesIncludedGemini ? "Gemini 3.6 Flash" : "Your choice"}</dd>
+              </div>
+              <div>
+                <dt>Limits</dt>
+                <dd>{tourUsesIncludedGemini ? "50 requests/day" : "Independent"}</dd>
+              </div>
+            </dl>
+            <p className={styles.providerFootnote}>
+              {tourUsesIncludedGemini
+                ? "Ready after sign-in with no personal key."
+                : `${tourProviderMeta.name} becomes available after you add a key in Settings.`}
+            </p>
           </div>
         </section>
         <section className={`${styles.panel} ${styles.analysisPanel}`}>
@@ -254,7 +190,10 @@ function FilmRoomTour() {
           <div className={styles.answerRegion}>
             <article className={styles.answer}>
               <div className={styles.answerMeta}>
-                <span>Included Gemini · sample answer</span>
+                <span>
+                  {tourUsesIncludedGemini ? "Included Gemini" : tourProviderMeta.name} · sample
+                  answer
+                </span>
                 <span>No provider request</span>
               </div>
               <h3>North Loop Auction</h3>
@@ -527,15 +466,38 @@ export function FilmRoomWorkbench() {
       </section>
 
       {currentProvider?.available ? (
-        <div className={`${styles.notice} ${styles.noticeSuccess}`} role="status">
-          <Check size={16} aria-hidden="true" />
-          <span>
-            {currentProvider.accessMode === "managed"
-              ? "Included Gemini is ready to use."
-              : `${providerMeta.name} is configured and ready.`}{" "}
-            <Link href="/settings">Manage AI provider in Settings →</Link>
-          </span>
-        </div>
+        <section className={styles.providerControl} aria-label="AI provider">
+          {availableProviders.length > 1 ? (
+            <AiProviderPicker
+              options={availableProviders.map((provider) => ({
+                provider: provider.provider,
+                detail:
+                  provider.accessMode === "managed"
+                    ? `Included · ${provider.model}`
+                    : `Personal key · ${provider.model}`,
+                state: provider.status === "invalid" ? "invalid" : "ready",
+              }))}
+              value={selectedProvider}
+              onChange={setSelectedProvider}
+            />
+          ) : null}
+          <div className={styles.providerControlStatus} role="status">
+            <Check size={16} aria-hidden="true" />
+            <span>
+              <strong>
+                {currentProvider.accessMode === "managed"
+                  ? "Included Gemini is ready"
+                  : `${providerMeta.name} is ready`}
+              </strong>
+              <small>
+                {availableProviders.length > 1
+                  ? "Switch here. Manage keys and models in Settings."
+                  : `${currentProvider.model} · Manage keys and models in Settings.`}
+              </small>
+            </span>
+            <Link href="/settings">Settings →</Link>
+          </div>
+        </section>
       ) : (
         <div className={styles.inlineGate}>
           <KeyRound size={17} aria-hidden="true" />
@@ -556,21 +518,6 @@ export function FilmRoomWorkbench() {
             <h2 id="analysis-heading">Ask the film room</h2>
             <span>Overview, Decision Desk, and league analytics go in with every request.</span>
           </div>
-          {availableProviders.length > 1 ? (
-            <label className={styles.headerProviderSelect}>
-              <span>Provider</span>
-              <select
-                value={selectedProvider}
-                onChange={(event) => setSelectedProvider(event.target.value as AiProviderName)}
-              >
-                {availableProviders.map((provider) => (
-                  <option value={provider.provider} key={provider.provider}>
-                    {PROVIDERS[provider.provider].name} · {provider.model}
-                  </option>
-                ))}
-              </select>
-            </label>
-          ) : null}
         </div>
 
         <form className={styles.analysisForm} onSubmit={(event) => void runAnalysis(event)}>

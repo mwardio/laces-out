@@ -70,7 +70,8 @@ export default function PrivacyPage() {
               Weekly Reckoning recaps your league generates, and the League Intel notes that
               personalize them. Both are league data, visible to league members. A recap keeps the
               provider, model, requester, time, and tone level it was written with, and a reroll
-              replaces it. A failed generation is not stored.
+              replaces it. Mild recaps stay clean; Medium and Scorched deliberately allow uncensored
+              profanity and NSFW adult humor. A failed generation is not stored.
             </li>
           </ul>
         </section>

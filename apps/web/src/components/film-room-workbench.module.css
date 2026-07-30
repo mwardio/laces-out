@@ -69,10 +69,6 @@
     max-width: 760px;
     margin-top: 7px;
     color: var(--ink-950);
-    /* Standardized to 38px (was clamp(30px, 4vw, 47px)). Coordinator
-       explicitly named film-room in this sweep, so this is the one
-       exception to the BYOK carve-out — font-size only, nothing else in
-       this file touched. */
     font-size: 38px;
     font-weight: 700;
     line-height: 1;
@@ -161,139 +157,6 @@
     font-size: var(--text-12);
   }
 
-  .providerTabs {
-    display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    overflow: hidden;
-    background: var(--white);
-    border: 1px solid var(--ink-150);
-    border-radius: var(--radius-md);
-  }
-
-  .providerTab {
-    position: relative;
-    display: grid;
-    grid-template-columns: 34px minmax(0, 1fr) 8px;
-    min-width: 0;
-    align-items: center;
-    gap: var(--space-10);
-    padding: 12px 14px;
-    text-align: left;
-    background: transparent;
-    border: 0;
-    border-right: 1px solid var(--ink-100);
-  }
-
-  .providerTab:last-child {
-    border-right: 0;
-  }
-
-  .providerTab:nth-child(3n) {
-    border-right: 0;
-  }
-
-  .providerTab:nth-child(-n + 3) {
-    border-bottom: 1px solid var(--ink-100);
-  }
-
-  .providerTab::after {
-    position: absolute;
-    right: 12px;
-    bottom: 0;
-    left: 12px;
-    height: 3px;
-    content: "";
-    background: transparent;
-    border-radius: 3px 3px 0 0;
-  }
-
-  .providerTab:hover,
-  .providerTab.selected {
-    background: var(--paper-25);
-  }
-
-  .providerTab.selected::after {
-    background: var(--provider-accent);
-  }
-
-  .openai {
-    --provider-accent: var(--provider-openai);
-  }
-
-  .anthropic {
-    --provider-accent: var(--provider-anthropic);
-  }
-
-  .gemini {
-    --provider-accent: var(--provider-gemini);
-  }
-
-  .deepseek {
-    --provider-accent: var(--provider-deepseek);
-  }
-
-  .grok {
-    --provider-accent: var(--provider-grok);
-  }
-
-  .openrouter {
-    --provider-accent: var(--provider-openrouter);
-  }
-
-  .providerMark {
-    display: grid;
-    width: 34px;
-    height: 34px;
-    place-items: center;
-    color: var(--provider-accent);
-    background: color-mix(in srgb, var(--provider-accent) 11%, white);
-    border: 1px solid color-mix(in srgb, var(--provider-accent) 22%, white);
-    border-radius: var(--radius-sm);
-    font-size: var(--text-10);
-    font-weight: 850;
-    letter-spacing: -0.02em;
-  }
-
-  .providerCopy {
-    min-width: 0;
-  }
-
-  .providerCopy strong,
-  .providerCopy small {
-    display: block;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .providerCopy strong {
-    color: var(--ink-900);
-    font-size: var(--text-12);
-  }
-
-  .providerCopy small {
-    margin-top: 2px;
-    color: var(--ink-500);
-    font-size: var(--text-10);
-  }
-
-  .statusDot {
-    width: 8px;
-    height: 8px;
-    background: var(--ink-200);
-    border-radius: 50%;
-  }
-
-  .statusReady {
-    background: var(--green-600);
-    box-shadow: 0 0 0 3px var(--green-100);
-  }
-
-  .statusInvalid {
-    background: var(--red-600);
-    box-shadow: 0 0 0 3px var(--red-100);
-  }
-
   .mainGrid {
     display: grid;
     grid-template-columns: minmax(330px, 0.78fr) minmax(0, 1.22fr);
@@ -307,6 +170,107 @@
     border: 1px solid var(--ink-150);
     border-radius: var(--radius-md);
     box-shadow: var(--shadow-card);
+  }
+
+  .providerPanel {
+    overflow: visible;
+  }
+
+  .providerPanelBody {
+    display: grid;
+    gap: 14px;
+    padding: 18px;
+  }
+
+  .providerFacts {
+    display: grid;
+    overflow: hidden;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    margin: 0;
+    background: var(--paper-50);
+    border: 1px solid var(--ink-100);
+    border-radius: var(--radius-sm);
+  }
+
+  .providerFacts > div {
+    min-width: 0;
+    padding: 10px 11px;
+    border-right: 1px solid var(--ink-100);
+  }
+
+  .providerFacts > div:last-child {
+    border-right: 0;
+  }
+
+  .providerFacts dt {
+    color: var(--ink-500);
+    font-size: var(--text-9);
+    font-weight: 800;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+
+  .providerFacts dd {
+    overflow: hidden;
+    margin: 3px 0 0;
+    color: var(--ink-800);
+    font-size: var(--text-10);
+    font-weight: 750;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .providerFootnote {
+    color: var(--ink-500);
+    font-size: var(--text-11);
+    line-height: 1.45;
+  }
+
+  .providerControl {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 14px;
+    padding: 12px 14px;
+    background: var(--white);
+    border: 1px solid var(--ink-150);
+    border-radius: var(--radius-md);
+    box-shadow: 0 1px 0 rgba(15, 28, 19, 0.03);
+  }
+
+  .providerControlStatus {
+    display: flex;
+    min-width: 0;
+    align-items: center;
+    gap: 8px;
+    margin-left: auto;
+    color: var(--green-600);
+  }
+
+  .providerControlStatus > svg {
+    flex: 0 0 auto;
+  }
+
+  .providerControlStatus > span {
+    display: grid;
+    min-width: 0;
+  }
+
+  .providerControlStatus strong {
+    color: var(--ink-800);
+    font-size: var(--text-11);
+  }
+
+  .providerControlStatus small {
+    color: var(--ink-500);
+    font-size: var(--text-10);
+  }
+
+  .providerControlStatus > a {
+    flex: 0 0 auto;
+    color: var(--green-600);
+    font-size: var(--text-11);
+    font-weight: 750;
   }
 
   .panelHeader {
@@ -345,41 +309,6 @@
     font-weight: 750;
   }
 
-  /* Compact in-session provider switch for "Ask the film room" — mirrors AiCoachPanel's
-     select-only-when-more-than-one-available convention, sized to sit in a panel header
-     rather than a full form field. */
-  .headerProviderSelect {
-    display: grid;
-    flex: 0 0 auto;
-    gap: var(--space-4);
-    min-width: 180px;
-  }
-
-  .headerProviderSelect > span {
-    color: var(--ink-500);
-    font-size: var(--text-9);
-    font-weight: 800;
-    letter-spacing: 0.07em;
-    text-transform: uppercase;
-  }
-
-  .headerProviderSelect select {
-    min-height: 34px;
-    padding: 0 9px;
-    color: var(--ink-900);
-    background: var(--white);
-    border: 1px solid var(--ink-200);
-    border-radius: var(--radius-sm);
-    outline: 0;
-    font-size: var(--text-12);
-  }
-
-  .headerProviderSelect select:focus {
-    border-color: var(--fern-500);
-    box-shadow: 0 0 0 3px rgba(90, 126, 73, 0.13);
-  }
-
-  .settingsForm,
   .analysisForm {
     display: grid;
     gap: 15px;
@@ -418,8 +347,7 @@
     background: var(--ink-950);
   }
 
-  .field,
-  .fieldRow {
+  .field {
     min-width: 0;
   }
 
@@ -459,8 +387,7 @@
 
   .field input:focus:not([readonly]),
   .field select:focus,
-  .field textarea:focus:not([readonly]),
-  .secretField:focus-within {
+  .field textarea:focus:not([readonly]) {
     border-color: var(--fern-500);
     box-shadow: 0 0 0 3px rgba(90, 126, 73, 0.13);
   }
@@ -492,63 +419,6 @@
     line-height: 1.45;
   }
 
-  .secretField {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) 42px;
-    overflow: hidden;
-    border: 1px solid var(--ink-200);
-    border-radius: var(--radius-sm);
-  }
-
-  .secretField input {
-    min-width: 0;
-    border: 0;
-    border-radius: 0;
-  }
-
-  .secretField input:focus {
-    box-shadow: none;
-  }
-
-  .secretField button {
-    display: grid;
-    place-items: center;
-    color: var(--ink-500);
-    background: var(--paper-50);
-    border: 0;
-    border-left: 1px solid var(--ink-150);
-  }
-
-  .fieldRow {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: var(--space-10);
-  }
-
-  .usageLine {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: var(--space-12);
-    padding: 10px 11px;
-    color: var(--ink-500);
-    background: var(--paper-50);
-    border: 1px solid var(--ink-100);
-    border-radius: var(--radius-sm);
-    font-size: var(--text-11);
-  }
-
-  .usageLine strong {
-    color: var(--ink-800);
-    font-size: var(--text-12);
-  }
-
-  .formActions {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: var(--space-8);
-  }
-
   .primaryButton,
   .secondaryButton {
     display: inline-flex;
@@ -576,41 +446,6 @@
     color: var(--ink-800);
     background: var(--white);
     border: 1px solid var(--ink-200);
-  }
-
-  .removeRow {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: var(--space-12);
-    padding-top: 12px;
-    color: var(--ink-500);
-    border-top: 1px solid var(--ink-100);
-    font-size: var(--text-11);
-  }
-
-  .removeActions {
-    display: inline-flex;
-    flex: 0 0 auto;
-    align-items: center;
-    gap: var(--space-10);
-  }
-
-  .removeRow button {
-    display: inline-flex;
-    flex: 0 0 auto;
-    align-items: center;
-    gap: 5px;
-    padding: 5px 0;
-    color: var(--red-600);
-    background: transparent;
-    border: 0;
-    font-size: var(--text-11);
-    font-weight: 750;
-  }
-
-  .removeRow .cancelRemoval {
-    color: var(--ink-500);
   }
 
   .notice,
@@ -933,124 +768,44 @@
       display: none;
     }
 
-    .providerTabs {
-      grid-template-columns: repeat(3, minmax(0, 1fr));
-    }
-
-    .providerTab {
-      min-height: 64px;
-      grid-template-columns: 1fr;
-      justify-items: center;
-      gap: 5px;
-      padding: 8px 4px;
-      border-right: 1px solid var(--ink-100);
-      border-bottom: 0;
-    }
-
-    .providerTab:last-child {
-      border-right: 0;
-    }
-
-    .providerTab:nth-child(-n + 3) {
-      border-bottom: 1px solid var(--ink-100);
-    }
-
-    .providerMark {
-      width: 28px;
-      height: 28px;
-      border-radius: var(--radius-sm);
-      font-size: var(--text-9);
-    }
-
-    .providerCopy {
-      width: 100%;
-      text-align: center;
-    }
-
-    .providerCopy strong {
-      font-size: var(--text-9);
-    }
-
-    .providerCopy small,
-    .statusDot {
-      display: none;
-    }
-
     .panelHeader {
       align-items: flex-start;
     }
 
-    .fieldRow {
-      grid-template-columns: 1fr;
-    }
-
-    .answerMeta,
-    .removeRow {
+    .answerMeta {
       align-items: flex-start;
       flex-direction: column;
-    }
-
-    .removeActions {
-      width: 100%;
-      justify-content: space-between;
     }
   }
 
   @media (max-width: 430px) {
-    .providerTabs {
-      grid-template-columns: repeat(2, minmax(0, 1fr));
-    }
-
-    .providerTab {
-      grid-template-columns: 30px minmax(0, 1fr) 8px;
-      gap: var(--space-8);
-      padding: 11px 9px;
-      border-right: 1px solid var(--ink-100);
-      border-bottom: 1px solid var(--ink-100);
-    }
-
-    .providerTab:nth-child(3n) {
-      border-right: 1px solid var(--ink-100);
-    }
-
-    .providerTab:nth-child(2n) {
-      border-right: 0;
-    }
-
-    .providerTab:nth-last-child(-n + 2) {
-      border-bottom: 0;
-    }
-
-    .providerCopy {
-      text-align: left;
-    }
-
-    .providerCopy strong {
-      font-size: var(--text-10);
-    }
-
-    .providerMark {
-      width: 30px;
-      height: 30px;
-    }
-
-    .settingsForm,
     .analysisForm,
     .answerRegion {
       padding-right: 14px;
       padding-left: 14px;
     }
 
-    .formActions {
-      grid-template-columns: 1fr;
+    .providerPanelBody {
+      padding: 14px;
+    }
+
+    .providerControl {
+      align-items: stretch;
+      flex-direction: column;
+    }
+
+    .providerControlStatus {
+      width: 100%;
+      margin-left: 0;
+      padding: 2px 1px;
+    }
+
+    .providerControlStatus > a {
+      margin-left: auto;
     }
 
     .panelHeader {
       flex-wrap: wrap;
-    }
-
-    .headerProviderSelect {
-      width: 100%;
     }
   }
 

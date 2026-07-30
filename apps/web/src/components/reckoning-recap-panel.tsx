@@ -50,9 +50,9 @@ const PROVIDER_LABELS: Readonly<Record<AiProviderName, string>> = {
 };
 
 const SPICE_LABELS: Readonly<Record<RecapSpiceLevel, string>> = {
-  mild: "Mild",
-  medium: "Medium",
-  scorched: "Scorched",
+  mild: "Mild · clean",
+  medium: "Medium · NSFW",
+  scorched: "Scorched · NSFW",
 };
 
 export interface ReckoningRecapPanelProps {
@@ -519,9 +519,9 @@ export function ReckoningRecapPanel({ leagueId, snapshot, demo }: ReckoningRecap
                   if (parsed.success) void saveSpice(parsed.data);
                 }}
               >
-                <option value="mild">Mild</option>
-                <option value="medium">Medium</option>
-                <option value="scorched">Scorched</option>
+                <option value="mild">{SPICE_LABELS.mild}</option>
+                <option value="medium">{SPICE_LABELS.medium}</option>
+                <option value="scorched">{SPICE_LABELS.scorched}</option>
               </select>
             </label>
           ) : (
@@ -531,11 +531,17 @@ export function ReckoningRecapPanel({ leagueId, snapshot, demo }: ReckoningRecap
           )}
         </div>
 
-        {configuredSpiceLevel === "scorched" ? (
+        {configuredSpiceLevel === "medium" ? (
           <p className={styles.notice}>
-            This league opted into a scorched recap. Fantasy personas, egos, and league history are
-            fair game; slurs, protected traits, appearance, family, real-world health or injury, and
-            anything private are not.
+            Medium is uncensored and NSFW by design. Expect profanity, crude jokes, and
+            inappropriate locker-room humor. Slurs, protected traits, appearance, family, real-world
+            health or injury, threats, and anything private remain off limits.
+          </p>
+        ) : configuredSpiceLevel === "scorched" ? (
+          <p className={styles.notice}>
+            Scorched is the uncensored, shock-and-awe roast. Fantasy personas, egos, league history,
+            decisions, and humiliating results are fair game; slurs, protected traits, appearance,
+            family, real-world health or injury, threats, and anything private are not.
           </p>
         ) : null}
 

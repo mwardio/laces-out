@@ -16,62 +16,9 @@ import { type FormEvent, useCallback, useEffect, useMemo, useState } from "react
 
 import { apiBaseUrl, parseAiProviderConfiguration, parseAiProviderList } from "../lib/api-client";
 import { aiModelOptions, customModelOption, isKnownAiModel } from "../lib/ai-model-options";
+import { AI_PROVIDER_META as PROVIDERS } from "../lib/ai-provider-meta";
+import { AiProviderPicker } from "./ai-provider-picker";
 import styles from "./ai-provider-settings.module.css";
-
-/**
- * Extracted from the former Film Room provider form (see git history on
- * film-room-workbench.tsx) so BYOK management has a single home: Settings.
- * Owns its own load/save state against the existing /v1/ai/providers endpoints —
- * no new API. Film Room and the AI Coach panel now only link here.
- */
-const PROVIDERS: Readonly<
-  Record<
-    AiProviderName,
-    {
-      readonly name: string;
-      readonly shortName: string;
-      readonly description: string;
-      readonly keyUrl: string;
-    }
-  >
-> = {
-  openai: {
-    name: "OpenAI",
-    shortName: "OA",
-    description: "Native Responses API",
-    keyUrl: "https://platform.openai.com/api-keys",
-  },
-  anthropic: {
-    name: "Anthropic",
-    shortName: "AN",
-    description: "Native Claude Messages API",
-    keyUrl: "https://console.anthropic.com/settings/keys",
-  },
-  gemini: {
-    name: "Google Gemini",
-    shortName: "G",
-    description: "Native Interactions API",
-    keyUrl: "https://aistudio.google.com/app/apikey",
-  },
-  deepseek: {
-    name: "DeepSeek",
-    shortName: "DS",
-    description: "Native DeepSeek Chat API",
-    keyUrl: "https://platform.deepseek.com/api_keys",
-  },
-  grok: {
-    name: "Grok",
-    shortName: "X",
-    description: "Native xAI Chat API",
-    keyUrl: "https://console.x.ai/",
-  },
-  openrouter: {
-    name: "OpenRouter",
-    shortName: "OR",
-    description: "One key, broad model catalog",
-    keyUrl: "https://openrouter.ai/settings/keys",
-  },
-};
 
 type LoadState =
   | { readonly state: "loading" }
@@ -392,40 +339,25 @@ export function AiProviderSettings() {
 
   return (
     <div className={styles.wrapper}>
-      <div className={styles.providerTabs} role="tablist" aria-label="AI providers">
-        {load.providers.map((provider) => {
-          const meta = PROVIDERS[provider.provider];
-          const selected = provider.provider === selectedProvider;
-          return (
-            <button
-              key={provider.provider}
-              className={`${styles.providerTab} ${styles[provider.provider]}${selected ? ` ${styles.selected}` : ""}`}
-              type="button"
-              role="tab"
-              aria-selected={selected}
-              aria-controls="provider-settings-panel"
-              id={`provider-tab-${provider.provider}`}
-              onClick={() => selectProvider(provider.provider)}
-            >
-              <span className={styles.providerMark}>{meta.shortName}</span>
-              <span className={styles.providerCopy}>
-                <strong>{meta.name}</strong>
-                <small>{statusLabel(provider)}</small>
-              </span>
-              <span
-                className={`${styles.statusDot}${provider.available ? ` ${styles.statusReady}` : ""}${provider.status === "invalid" ? ` ${styles.statusInvalid}` : ""}`}
-                aria-hidden="true"
-              />
-            </button>
-          );
-        })}
+      <div className={styles.providerPickerRow}>
+        <AiProviderPicker
+          options={load.providers.map((provider) => ({
+            provider: provider.provider,
+            detail: statusLabel(provider),
+            state:
+              provider.status === "invalid" ? "invalid" : provider.available ? "ready" : "idle",
+          }))}
+          value={selectedProvider}
+          onChange={selectProvider}
+          disabled={settingsBusy}
+        />
       </div>
 
       <div
         className={styles.panelBody}
         id="provider-settings-panel"
-        role="tabpanel"
-        aria-labelledby={`provider-tab-${selectedProvider}`}
+        role="region"
+        aria-labelledby="provider-settings-heading"
       >
         <div className={styles.panelHeader}>
           <div>

@@ -35,8 +35,9 @@ running bits, and league history. It is visible to league members, sent to the s
 only when a recap is generated, and never treated as evidence about a game. Each member edits the
 note for the team they have claimed; a league owner or commissioner may edit or clear any note as a
 moderation action. The recap's tone level is a single league-wide setting chosen by a commissioner,
-and the scorched level is disclosed in the recap section to every member, not only to the
-commissioner who set it.
+and is disclosed in the recap section to every member, not only to the commissioner who set it.
+Mild stays clean; Medium and Scorched deliberately allow uncensored profanity and NSFW adult humor
+while retaining the application's subject limits.
 
 A member may instead add an OpenAI, Anthropic, Gemini, DeepSeek, Grok, or OpenRouter key and choose
 the model. That personal key is stored in the same purpose-bound, versioned encryption system used

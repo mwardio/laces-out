@@ -542,11 +542,18 @@ Report the tool results as they are. Do not recompute, re-rank, round, or extrap
 const DEFAULT_TONE_RULES = `Keep it PG-13: no slurs, attacks on protected traits, or profanity beyond mild. Roast fantasy-football decisions and results, never a real person's appearance, family, real-world health or injury, trauma, private information, or safety. Injuries are reported as facts, never punchlines.`;
 
 /**
- * The scorched floor swaps register, not grounding: slurs stay banned without exception and no
- * factual rule is loosened. The voice is deliberately opened up because a league only reaches
- * this level through explicit commissioner opt-in.
+ * Recap spice changes the register, never the factual or personal-safety floor. Medium and
+ * scorched are intentionally adult settings; mild remains the clean option.
  */
-const SCORCHED_TONE_RULES = `Never use a slur of any kind or attack a protected trait. Never target a real person's appearance, family, real-world health or injury, trauma, private information, or safety. Beyond that floor, this league has opted into an R-rated fantasy-football roast: profanity and dark humor are allowed and expected, and a manager's fantasy persona, ego, league history, decisions, and supplied League Intel are fair game. Every reader knows the recap is AI-written banter rather than anyone's real opinion.`;
+const MEDIUM_RECAP_TONE_RULES = `Never use a slur of any kind or attack a protected trait. Never target a real person's appearance, family, real-world health or injury, trauma, private information, or safety, and never make a threat. Injuries are reported as facts, never punchlines. Beyond that floor, this private league chose an uncensored, NSFW fantasy-football recap. Use ordinary profanity without masking any letters, plus vulgar, crude, inappropriate, or deliberately offensive jokes aimed at fantasy personas, egos, league history, decisions, and supplied League Intel. "Offensive" here means adult locker-room comedy, never hate or identity-based abuse. Do not apologize for the register or soften it into generic sports banter.`;
+
+const SCORCHED_TONE_RULES = `Never use a slur of any kind or attack a protected trait. Never target a real person's appearance, family, real-world health or injury, trauma, private information, or safety, and never make a threat. Injuries are reported as facts, never punchlines. Beyond that floor, this private league deliberately chose a brutally uncensored, NSFW fantasy-football roast. Profanity, vulgarity, obscenity, dark humor, and shocking or deeply inappropriate jokes are required. Cut hard at fantasy personas, egos, league history, decisions, humiliating results, and supplied League Intel. "Offensive" here means vicious adult comedy, never hate or identity-based abuse. Do not mask profanity, apologize, moralize, hedge, or soften the punchlines.`;
+
+const RECAP_TONE_RULES: Readonly<Record<RecapSpiceLevel, string>> = {
+  mild: DEFAULT_TONE_RULES,
+  medium: MEDIUM_RECAP_TONE_RULES,
+  scorched: SCORCHED_TONE_RULES,
+};
 
 function analystSystem(
   openTag: string,
@@ -637,9 +644,9 @@ const PERSONA_USAGE_CLAUSE = `\nA "League Intel" section may be supplied with ma
 
 /** Trusted application configuration: a validated enum selects one of exactly three clauses. */
 const SPICE_INSTRUCTION_CLAUSES: Readonly<Record<RecapSpiceLevel, string>> = {
-  mild: `\nSpice level: mild. Keep the ribbing gentle and celebrate more than you needle; the recap should read like a friendly toast with a couple of soft jabs.`,
-  medium: `\nSpice level: medium. Use the locker-room voice exactly as described above.`,
-  scorched: `\nSpice level: scorched. This league opted into a roast and every reader knows the recap is AI-written. Use an R-rated register: profanity is welcome, dark humor is welcome, and the goal is shock and awe. Roast fantasy personas, egos, league histories, and whatever League Intel supplies, not only lineup decisions. The universal subject limits still apply. Do not soften, do not both-sides, and do not apologize for a joke.`,
+  mild: `\nSpice level: mild. Keep this version clean and safe to read at work. Celebrate more than you needle; it should read like a friendly toast with a couple of soft jabs.`,
+  medium: `\nSpice level: medium. The finished recap should be unmistakably NSFW. Use uncensored profanity throughout and land at least one crude, inappropriate, or dark joke unless the supplied data is too incomplete to write a recap. Make the insults specific to the supplied fantasy results, decisions, history, and League Intel. Do not censor words with asterisks or retreat into safe, generic banter.`,
+  scorched: `\nSpice level: scorched. Write the version that makes an adult group chat briefly go silent before it erupts. Use frequent uncensored profanity and multiple obscene, shocking, or deeply inappropriate punchlines, all grounded in the supplied fantasy results, decisions, history, and League Intel. Roast fantasy personas and egos without mercy. The universal subject limits still apply. Do not censor, soften, both-sides, apologize, or explain the joke.`,
 };
 
 interface LeagueAiContext {
@@ -1044,9 +1051,7 @@ export class AiService {
           leagueData.openTag,
           leagueData.closeTag,
           [],
-          input.feature === "weekly-recap" && spiceLevel === "scorched"
-            ? SCORCHED_TONE_RULES
-            : DEFAULT_TONE_RULES,
+          input.feature === "weekly-recap" ? RECAP_TONE_RULES[spiceLevel] : DEFAULT_TONE_RULES,
         ),
         prompt,
         maxOutputTokens: execution.maxOutputTokens,
