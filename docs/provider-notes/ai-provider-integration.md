@@ -79,7 +79,9 @@ Official sources:
   the encrypted key; historical usage rows retain no credential material.
 - Credential fingerprints, OpenAI safety identifiers, and provider request identifiers use
   domain-separated keyed hashes.
-- Raw questions and model answers are not stored. The usage ledger retains provider, model,
+- Raw questions and model answers are not stored, with one scoped exception: a Weekly Reckoning
+  recap is persisted as league data in `weekly_recaps`, one row per league season and week, and is
+  replaced on reroll. A failed generation stores nothing. The usage ledger retains provider, model,
   operation, token counts, cache counts, latency, success/error code, time, and league ID.
 
 ## Grounded analysis

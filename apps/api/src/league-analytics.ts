@@ -37,8 +37,8 @@ import {
   analyzePositionalStrength,
   buildOpponentScout,
   calculatePowerRankings,
+  awardableWeeks,
   calculateWeeklyAwards,
-  latestAwardableWeek,
   simulatePlayoffOdds,
   type LeagueSeasonAnalyticsResult,
   type LeagueWeekInput,
@@ -1063,13 +1063,31 @@ function average(values: readonly (number | null)[]): number | null {
 }
 
 /**
- * The Weekly Reckoning for the most recent week the admitted evidence can award. Awards the
- * data does not support are withheld individually with their reason; none are ever inferred.
+ * Every week the admitted evidence can award, ascending. Computed once so the snapshot can
+ * publish the selectable list and the award builder can validate a requested week against it.
+ */
+function buildAwardableWeeks(
+  teams: readonly AnalyticsTeamRow[],
+  scores: BuiltScoreAnalytics,
+): readonly number[] {
+  if (scores.section.state === "unavailable") return [];
+  return awardableWeeks({
+    teams: teams.map((team) => ({ teamId: team.id })),
+    weeks: scores.weeks,
+  });
+}
+
+/**
+ * The Weekly Reckoning for a requested week, or for the most recent week the admitted evidence
+ * can award. Awards the data does not support are withheld individually with their reason; none
+ * are ever inferred, and a requested week is never silently swapped for a different one.
  */
 function buildWeeklyAwards(
   teams: readonly AnalyticsTeamRow[],
   claimedTeamId: string | null,
   scores: BuiltScoreAnalytics,
+  available: readonly number[],
+  requestedWeek?: number,
 ): LeagueWeeklyAwardsSection {
   if (scores.section.state === "unavailable") {
     return { state: "unavailable", reasons: [...scores.section.reasons] };
@@ -1078,7 +1096,15 @@ function buildWeeklyAwards(
     teams: teams.map((team) => ({ teamId: team.id })),
     weeks: scores.weeks,
   };
-  const week = latestAwardableWeek(engineInput);
+  if (requestedWeek !== undefined && !available.includes(requestedWeek)) {
+    return unavailable(
+      reason(
+        "AWARDS_WEEK_UNAVAILABLE",
+        `Week ${requestedWeek} does not carry the final scores an award requires.`,
+      ),
+    );
+  }
+  const week = requestedWeek ?? available.at(-1) ?? null;
   if (week === null) {
     return unavailable(
       reason(
@@ -1496,6 +1522,13 @@ export class LeagueAnalyticsService {
   async getSnapshot(
     actorUserId: string,
     leagueId: string,
+    options?: {
+      /**
+       * Target a specific completed week's awards instead of the latest. Out-of-range or
+       * unawardable weeks make the awards section unavailable rather than falling back.
+       */
+      readonly weeklyAwardsWeek?: number;
+    },
   ): Promise<LeagueAnalyticsSnapshot | undefined> {
     const membership = await this.#repository.findMembership(actorUserId, leagueId);
     if (!membership) return undefined;
@@ -1625,7 +1658,14 @@ export class LeagueAnalyticsService {
             ...(managedProfile === undefined ? {} : { managedProfile }),
           });
     const power = buildPowerAnalytics(teams, membership.claimedFantasyTeamId, scores, positional);
-    const weeklyAwards = buildWeeklyAwards(teams, membership.claimedFantasyTeamId, scores);
+    const weeklyAwardWeeks = buildAwardableWeeks(teams, scores);
+    const weeklyAwards = buildWeeklyAwards(
+      teams,
+      membership.claimedFantasyTeamId,
+      scores,
+      weeklyAwardWeeks,
+      options?.weeklyAwardsWeek,
+    );
     const matchupSnapshotId = effectiveMatchupSnapshotId(matchups);
     const playoffOdds = buildPlayoffOdds({
       teams,
@@ -1716,6 +1756,7 @@ export class LeagueAnalyticsService {
       positional: positional.section,
       opponentScout,
       weeklyAwards,
+      weeklyAwardWeeks: [...weeklyAwardWeeks],
       playoffOdds,
     };
   }
@@ -1759,6 +1800,7 @@ export class LeagueAnalyticsService {
       positional: section,
       opponentScout: section,
       weeklyAwards: section,
+      weeklyAwardWeeks: [],
       playoffOdds: section,
     };
   }
@@ -1805,6 +1847,7 @@ export class LeagueAnalyticsService {
       positional: section,
       opponentScout: section,
       weeklyAwards: section,
+      weeklyAwardWeeks: [],
       playoffOdds: section,
     };
   }

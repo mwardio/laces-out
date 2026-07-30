@@ -13,6 +13,7 @@ import {
   Gauge,
   KeyRound,
   LoaderCircle,
+  Megaphone,
   Send,
   ShieldCheck,
 } from "lucide-react";
@@ -305,14 +306,34 @@ function FilmRoomTour() {
           "waiver-scan",
           "trade-builder",
           "standings-prediction",
-          "weekly-recap",
         ]}
         demo
         eyebrow="Purpose-built reviews"
-        title="Six ways to read the league"
+        title="Five ways to read the league"
         description="Choose a job instead of writing a prompt. Each review is grounded in the same deterministic league board."
       />
+      <ReckoningRecapCallout />
     </div>
+  );
+}
+
+/**
+ * The weekly recap is one shared, stored league artifact now, so the Film Room points at The
+ * Weekly Reckoning instead of offering a second, ephemeral generator of the same thing.
+ */
+function ReckoningRecapCallout() {
+  return (
+    <section className={styles.recapCallout}>
+      <Megaphone size={18} aria-hidden="true" />
+      <div>
+        <strong>The weekly recap lives in The Weekly Reckoning</strong>
+        <p>
+          One shared recap per week, kept for the league, personalized by League Intel and the
+          commissioner&rsquo;s tone setting.
+        </p>
+      </div>
+      <Link href="/analytics#reckoning-recap">Open The Weekly Reckoning</Link>
+    </section>
   );
 }
 
@@ -690,13 +711,13 @@ export function FilmRoomWorkbench() {
             "waiver-scan",
             "trade-builder",
             "standings-prediction",
-            "weekly-recap",
           ]}
           eyebrow="Purpose-built reviews"
-          title="Six ways to read the league"
+          title="Five ways to read the league"
           description="Choose a job instead of writing a prompt. Each review is grounded in the same deterministic league board."
         />
       ) : null}
+      <ReckoningRecapCallout />
     </div>
   );
 }

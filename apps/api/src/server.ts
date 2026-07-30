@@ -37,6 +37,7 @@ import { DrizzleRefreshAuthorization } from "./refresh-authorization.js";
 import { RosProjectionStatusService } from "./ros-projection-status.js";
 import { DrizzleRankingRepository } from "./ranking-repository.js";
 import { deriveRankingShareKeyring, RankingService } from "./ranking-service.js";
+import { DrizzleRecapRepository, RecapService } from "./recap-service.js";
 import { DrizzleRegistrationRepository } from "./registration-repository.js";
 import { RegistrationService } from "./registration.js";
 import { DrizzlePreferencesRepository, PreferencesService } from "./preferences.js";
@@ -83,6 +84,9 @@ const espnLiveDraft = new EspnLiveDraftService(espnLiveDraftRepository, {
 });
 const decisions = new InSeasonDecisionService(new DrizzleInSeasonDecisionRepository(database.db));
 const analytics = new LeagueAnalyticsService(new DrizzleLeagueAnalyticsRepository(database.db));
+// Also the AiService recap prompt port, so persona cards reach the prompt without the service
+// cycle a RecapService-implemented port would create.
+const recapRepository = new DrizzleRecapRepository(database.db);
 const schedule = new ScheduleService(new DrizzleScheduleRepository(database.db));
 const scheduleEdge = new ScheduleEdgeService(new DrizzleScheduleEdgeRepository(database.db));
 const dataQuality = new DataQualityService(new DrizzleDataQualityRepository(database.db));
@@ -125,6 +129,7 @@ const ai = credentialKey
       leagueDashboard,
       decisions,
       analytics,
+      recapPrompt: recapRepository,
       ...(environment.GEMINI_API_KEY
         ? {
             managedGemini: {
@@ -136,6 +141,11 @@ const ai = credentialKey
         : {}),
     })
   : undefined;
+const recaps = new RecapService({
+  repository: recapRepository,
+  analytics,
+  ...(ai ? { ai } : {}),
+});
 const projectionImports = new ProjectionImportService(
   new DrizzleProjectionImportRepository(database.db),
 );
@@ -203,6 +213,7 @@ const app = await buildApp({
   preferences,
   push,
   ...(ai ? { ai } : {}),
+  recaps,
   ...(invitations ? { invitations } : {}),
   leagueDashboard,
   projectionImports,

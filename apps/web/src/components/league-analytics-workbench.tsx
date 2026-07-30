@@ -38,6 +38,7 @@ import {
   demoLeaguePortfolio,
 } from "../lib/demo-contract-data";
 import { AiCoachPanel } from "./ai-coach-panel";
+import { ReckoningRecapPanel } from "./reckoning-recap-panel";
 import styles from "./league-analytics-workbench.module.css";
 import { ShareCardButton, type ShareCardAward } from "./share-card-button";
 import { TeamAvatar } from "./team-avatar";
@@ -1372,6 +1373,7 @@ export function LeagueAnalyticsWorkbench() {
           </div>
           <AnalyticsQuickRead snapshot={analytics.snapshot} />
           <AwardsSection snapshot={analytics.snapshot} isDemo={isDemo} />
+          <ReckoningRecapPanel leagueId={leagueId} snapshot={analytics.snapshot} demo={isDemo} />
           <Provenance snapshot={analytics.snapshot} />
           <AiCoachPanel
             leagueId={leagueId}

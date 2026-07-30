@@ -528,6 +528,122 @@ describe("LeagueAnalyticsService", () => {
       { id: "photo-finish", code: "NO_QUALIFYING_TEAM" },
     ]);
   });
+
+  it("publishes an empty awardable week list when no week can be awarded", async () => {
+    const repository = new FakeRepository();
+    repository.observations = [];
+    const snapshot = await new LeagueAnalyticsService(repository, () => NOW).getSnapshot(
+      USER_ID,
+      LEAGUE_ID,
+    );
+
+    expect(leagueAnalyticsSnapshotSchema.parse(snapshot).weeklyAwardWeeks).toEqual([]);
+  });
+});
+
+/**
+ * Weeks 1-3 are final; week 4 is scheduled with one missing score. A recap can be written for any
+ * final week, so the snapshot has to name all three and refuse the fourth by name.
+ */
+const historicalObservations: readonly AnalyticsMatchupObservationRow[] = [
+  observation({
+    matchupId: "83000000-0000-4000-8000-000000000001",
+    snapshotId: "84000000-0000-4000-8000-000000000001",
+    effectiveAt: "2026-09-08T12:00:00.000Z",
+    week: 1,
+    providerMatchupId: "week-1-game-1",
+    homeScore: "120",
+    awayScore: "100",
+  }),
+  observation({
+    matchupId: "83000000-0000-4000-8000-000000000002",
+    snapshotId: "84000000-0000-4000-8000-000000000002",
+    effectiveAt: "2026-09-15T12:00:00.000Z",
+    week: 2,
+    providerMatchupId: "week-2-game-1",
+    homeScore: "90",
+    awayScore: "110",
+  }),
+  observation({
+    matchupId: "83000000-0000-4000-8000-000000000003",
+    snapshotId: "84000000-0000-4000-8000-000000000003",
+    effectiveAt: "2026-09-22T12:00:00.000Z",
+    week: 3,
+    providerMatchupId: "week-3-game-1",
+    homeScore: "105",
+    awayScore: "97",
+  }),
+  observation({
+    matchupId: "83000000-0000-4000-8000-000000000004",
+    snapshotId: "84000000-0000-4000-8000-000000000004",
+    effectiveAt: "2026-09-29T12:00:00.000Z",
+    week: 4,
+    providerMatchupId: "week-4-game-1",
+    status: "in-progress",
+    homeScore: "40",
+    awayScore: null,
+  }),
+];
+
+async function historicalSnapshot(weeklyAwardsWeek?: number) {
+  const repository = new FakeRepository();
+  repository.observations = historicalObservations;
+  const snapshot = await new LeagueAnalyticsService(repository, () => NOW).getSnapshot(
+    USER_ID,
+    LEAGUE_ID,
+    ...(weeklyAwardsWeek === undefined ? [] : [{ weeklyAwardsWeek }]),
+  );
+  return leagueAnalyticsSnapshotSchema.parse(snapshot);
+}
+
+describe("LeagueAnalyticsService historical weekly awards", () => {
+  it("lists every awardable week in ascending order", async () => {
+    const parsed = await historicalSnapshot();
+
+    expect(parsed.weeklyAwardWeeks).toEqual([1, 2, 3]);
+  });
+
+  it("still defaults to the latest awardable week", async () => {
+    const parsed = await historicalSnapshot();
+
+    expect(parsed.weeklyAwards.state).toBe("available");
+    if (parsed.weeklyAwards.state !== "available") return;
+    expect(parsed.weeklyAwards.week).toBe(3);
+  });
+
+  it("builds a requested prior week from that week's own evidence", async () => {
+    const parsed = await historicalSnapshot(1);
+
+    expect(parsed.weeklyAwards.state).toBe("available");
+    if (parsed.weeklyAwards.state !== "available") return;
+    expect(parsed.weeklyAwards.week).toBe(1);
+    expect(parsed.weeklyAwards.awards.find((award) => award.id === "beatdown")).toMatchObject({
+      value: 20,
+      detail: { teamPoints: 120, opponentPoints: 100 },
+    });
+    // The list itself never narrows to the requested week.
+    expect(parsed.weeklyAwardWeeks).toEqual([1, 2, 3]);
+  });
+
+  it("refuses an incomplete week rather than substituting the latest one", async () => {
+    const parsed = await historicalSnapshot(4);
+
+    expect(parsed.weeklyAwards).toMatchObject({
+      state: "unavailable",
+      reasons: [{ code: "AWARDS_WEEK_UNAVAILABLE" }],
+    });
+    if (parsed.weeklyAwards.state !== "unavailable") return;
+    expect(parsed.weeklyAwards.reasons[0]?.message).toContain("Week 4");
+  });
+
+  it("refuses a week the season never carried", async () => {
+    const parsed = await historicalSnapshot(9);
+
+    expect(parsed.weeklyAwards).toMatchObject({
+      state: "unavailable",
+      reasons: [{ code: "AWARDS_WEEK_UNAVAILABLE" }],
+    });
+  });
 });
 
 /** Every playoff-odds case reads the same season facts; only the withheld rule or schedule moves. */

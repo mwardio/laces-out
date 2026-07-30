@@ -52,6 +52,7 @@ const snapshot: LeagueAnalyticsSnapshot = {
   positional: { state: "unavailable", reasons: [noSeasonReason] },
   opponentScout: { state: "unavailable", reasons: [noSeasonReason] },
   weeklyAwards: { state: "unavailable", reasons: [noSeasonReason] },
+  weeklyAwardWeeks: [],
   playoffOdds: { state: "unavailable", reasons: [noSeasonReason] },
 };
 

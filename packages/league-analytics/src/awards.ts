@@ -552,14 +552,20 @@ export function calculateWeeklyAwards(input: CalculateWeeklyAwardsInput): Weekly
   };
 }
 
+/**
+ * Every supplied week that yields at least one award, ascending. A recap may be written for any
+ * of them, so the caller gets the whole selectable set rather than only the newest entry.
+ */
+export function awardableWeeks(input: Omit<CalculateWeeklyAwardsInput, "week">): readonly number[] {
+  validateLeagueInput(input);
+  return sortedUniqueNumbers(input.weeks.map((week) => week.week)).filter(
+    (week) => calculateWeeklyAwards({ ...input, week }).awards.length > 0,
+  );
+}
+
 /** Most recent week that yields at least one award, or null. */
 export function latestAwardableWeek(
   input: Omit<CalculateWeeklyAwardsInput, "week">,
 ): number | null {
-  validateLeagueInput(input);
-  const weeks = [...sortedUniqueNumbers(input.weeks.map((week) => week.week))].reverse();
-  for (const week of weeks) {
-    if (calculateWeeklyAwards({ ...input, week }).awards.length > 0) return week;
-  }
-  return null;
+  return awardableWeeks(input).at(-1) ?? null;
 }

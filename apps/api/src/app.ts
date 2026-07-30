@@ -71,6 +71,7 @@ import {
   registerProjectionImportRoutes,
 } from "./projection-import-routes.js";
 import { type RankingPort, registerRankingRoutes } from "./ranking-routes.js";
+import { type RecapRoutePort, registerRecapRoutes } from "./recap-routes.js";
 import {
   type RosProjectionStatusPort,
   registerRosProjectionStatusRoutes,
@@ -211,6 +212,7 @@ export interface BuildAppOptions {
   readonly decisions?: InSeasonDecisionPort;
   readonly analytics?: LeagueAnalyticsPort;
   readonly ai?: AiServicePort;
+  readonly recaps?: RecapRoutePort;
   readonly leagueDashboard?: LeagueDashboardPort;
   readonly projectionImports?: ProjectionImportPort;
   readonly rankings?: RankingPort;
@@ -640,6 +642,9 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   });
   registerLeagueAnalyticsRoutes(app, {
     ...(options.analytics ? { analytics: options.analytics } : {}),
+  });
+  registerRecapRoutes(app, {
+    ...(options.recaps ? { recaps: options.recaps } : {}),
   });
   registerScheduleEdgeRoutes(app, {
     ...(options.scheduleEdge ? { scheduleEdge: options.scheduleEdge } : {}),

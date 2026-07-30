@@ -2,6 +2,7 @@ import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 
 import {
+  awardableWeeks,
   calculateWeeklyAwards,
   latestAwardableWeek,
   type CalculateWeeklyAwardsInput,
@@ -421,6 +422,62 @@ describe("latestAwardableWeek", () => {
       }),
     ).toBe(null);
     expect(latestAwardableWeek({ teams: TEAMS, weeks: [] })).toBe(null);
+  });
+});
+
+describe("awardableWeeks", () => {
+  it("lists every week that yields an award, ascending", () => {
+    expect(awardableWeeks({ teams: TEAMS, weeks: WEEKS })).toEqual([1, 2, 3]);
+  });
+
+  it("omits weeks the evidence cannot award", () => {
+    const weeks: readonly LeagueWeekInput[] = [
+      // Week 1 has scores but no schedule and no lineup points, so nothing is awardable.
+      {
+        week: 1,
+        performances: [
+          { teamId: "A", points: 100 },
+          { teamId: "B", points: 90 },
+        ],
+      },
+      ...WEEKS.filter((week) => week.week !== 1),
+    ];
+
+    expect(awardableWeeks({ teams: TEAMS, weeks })).toEqual([2, 3]);
+  });
+
+  it("sorts unsorted input and never repeats a week", () => {
+    const shuffled = [...WEEKS].reverse();
+    expect(awardableWeeks({ teams: TEAMS, weeks: shuffled })).toEqual([1, 2, 3]);
+  });
+
+  it("rejects a duplicate week rather than awarding it twice", () => {
+    expect(() => awardableWeeks({ teams: TEAMS, weeks: [...WEEKS, ...WEEKS.slice(0, 1)] })).toThrow(
+      /weeks/u,
+    );
+  });
+
+  it("is empty when no week yields an award", () => {
+    expect(awardableWeeks({ teams: TEAMS, weeks: [] })).toEqual([]);
+    expect(
+      awardableWeeks({
+        teams: TEAMS,
+        weeks: [
+          {
+            week: 1,
+            performances: [
+              { teamId: "A", points: 100 },
+              { teamId: "B", points: 90 },
+            ],
+          },
+        ],
+      }),
+    ).toEqual([]);
+  });
+
+  it("agrees with latestAwardableWeek on its final entry", () => {
+    const weeks = awardableWeeks({ teams: TEAMS, weeks: WEEKS });
+    expect(latestAwardableWeek({ teams: TEAMS, weeks: WEEKS })).toBe(weeks.at(-1));
   });
 });
 

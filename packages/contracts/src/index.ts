@@ -44,6 +44,10 @@ export * from "./ai-tools.js";
 // all ROS publication was disabled.
 export * from "./ros-release-status.js";
 
+// The Weekly Reckoning recap envelope. Its own module because this barrel is a re-export surface
+// rather than a home for new domains.
+export * from "./weekly-recap.js";
+
 // Mirrored here so the browser contract bundle has no runtime dependency on the domain package.
 // Response parsing fails closed if service vocabulary ever drifts from this wire contract.
 const NFL_POSITIONS = ["QB", "RB", "WR", "TE", "K", "DST", "DL", "LB", "DB", "IDP"] as const;
@@ -2274,6 +2278,13 @@ export const leagueAnalyticsSnapshotSchema = z
     positional: leaguePositionalAnalyticsSectionSchema,
     opponentScout: leagueOpponentScoutSectionSchema,
     weeklyAwards: leagueWeeklyAwardsSectionSchema,
+    /**
+     * Every completed week the deterministic award engine can build, ascending. The recap week
+     * selector reads exactly this list, so a client never guesses which weeks are selectable.
+     * Empty whenever no season, a bounded-read limitation, or missing final scores leaves the
+     * awards section unavailable.
+     */
+    weeklyAwardWeeks: z.array(z.number().int().min(1).max(30)).max(30),
     /**
      * Optional only so snapshots authored before playoff odds existed still parse. The live
      * service always emits it, in one state or the other.

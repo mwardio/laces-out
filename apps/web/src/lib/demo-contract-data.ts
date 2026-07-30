@@ -2,6 +2,8 @@ import type {
   InSeasonDecisionSnapshot,
   LeagueAnalyticsSnapshot,
   LeagueListResponse,
+  LeagueRecapResponse,
+  RecapPersonaCardList,
 } from "@fantasy/contracts";
 
 export const DEMO_LEAGUE_ID = "71000000-0000-4000-8000-000000000001";
@@ -546,6 +548,9 @@ export const demoAnalyticsSnapshot: LeagueAnalyticsSnapshot = {
       },
     ],
   },
+  // Weeks 1 and 2 of the tour season are illustrated without final scores, so the selector shows
+  // the three weeks a recap can actually be written for.
+  weeklyAwardWeeks: [3, 4, 5],
   playoffOdds: {
     state: "available",
     playoffTeamCount: 2,
@@ -645,4 +650,68 @@ export const demoAnalyticsSnapshot: LeagueAnalyticsSnapshot = {
     samplingErrorDefinition:
       "Standard error describes how much this probability would move if the simulation were re-run with a different seed. It does not describe how likely the forecast is to be right.",
   },
+};
+
+/**
+ * The tour's stored Weekly Reckoning recap. The body is the same sample the Film Room used to
+ * generate on demand, now shown as the one shared artifact the league keeps.
+ */
+export const demoLeagueRecap: LeagueRecapResponse = {
+  leagueId: DEMO_LEAGUE_ID,
+  week: 5,
+  configuredSpiceLevel: "medium",
+  generation: { state: "available" },
+  recap: {
+    week: 5,
+    body: "### Week 5, and the football gods were not subtle\n\nStart with **Budget Ballers**, who outscored seven of the nine teams they did not play and still lost. 128.4 is a winning score in most weeks. This was not most weeks. Gridiron Dept. put up 131.2 and took it by **2.8**, the closest game on the board.\n\nMeanwhile **Sunday Scaries** won the week's ugliest beauty contest. 107.9 beat only four of nine teams on the all-play board, which normally means a quiet loss — except they drew **Waiver Theory**, who managed 71.6. That is a **36.3-point** beatdown and the least impressive dominant win you will see this year.\n\n**The verdict:** one team played well enough to win and lost, and one team played badly enough to lose and won by five touchdowns. Nobody learned anything. See you Sunday.",
+    provider: "gemini",
+    model: "gemini-3.6-flash",
+    spiceLevel: "medium",
+    generatedByDisplayName: "League Guru",
+    generatedAt: "2026-10-07T16:20:00.000Z",
+  },
+};
+
+/** One entry per team, including a team that has not written its League Intel note yet. */
+export const demoRecapPersonaCards: RecapPersonaCardList = {
+  leagueId: DEMO_LEAGUE_ID,
+  cards: [
+    {
+      teamId: USER_TEAM_ID,
+      teamName: "Budget Ballers",
+      body: "Won the 2019 title and has mentioned it every week since. Terrified of kickers.",
+      updatedAt: "2026-10-01T12:00:00.000Z",
+      updatedByDisplayName: "Mack",
+    },
+    {
+      teamId: OPPONENT_TEAM_ID,
+      teamName: "Gridiron Dept.",
+      body: "Runs the league like a spreadsheet and takes process losses personally.",
+      updatedAt: "2026-10-01T12:00:00.000Z",
+      updatedByDisplayName: "A. Patel",
+    },
+    {
+      teamId: THIRD_TEAM_ID,
+      teamName: "Sunday Scaries",
+      body: null,
+      updatedAt: null,
+      updatedByDisplayName: null,
+    },
+    {
+      teamId: FOURTH_TEAM_ID,
+      teamName: "Waiver Theory",
+      body: "Calls everyone champ. Has never won the week.",
+      updatedAt: "2026-10-01T12:00:00.000Z",
+      updatedByDisplayName: "M. Lewis",
+    },
+  ],
+};
+
+/**
+ * Prior-week recaps the tour's week selector can reach. Week 5 is the live fixture above; these
+ * two exist so switching weeks demonstrably changes the artifact instead of doing nothing.
+ */
+export const demoHistoricalRecapBodies: Readonly<Record<number, string>> = {
+  4: "### Week 4: the quiet one\n\n**Gridiron Dept.** put up 118.6 and beat **Waiver Theory** by **9.4** — the sort of tidy, unremarkable win that gets forgotten by Tuesday. **Budget Ballers** took the beatdown at **31.2** points over **Sunday Scaries**, which is a lot of scoreboard for a game nobody watched past halftime.\n\n**The verdict:** four teams played, two of them cared. See you Sunday.",
+  3: "### Week 3: everybody's fault\n\n**Sunday Scaries** won the Horseshoe going away, beating only three of nine teams on the all-play board and still walking off with the head-to-head. **Budget Ballers** took the bad beat at 121.8 — a number that wins most weeks and lost this one by **1.9**.\n\n**The verdict:** the schedule did more work than any of the lineups. See you Sunday.",
 };

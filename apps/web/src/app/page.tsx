@@ -812,9 +812,10 @@ export default function LandingPage() {
             <div className={styles.aiDisclosure}>
               <ShieldCheck size={16} />
               <p>
-                Laces Out does not retain prompts or answers, and models cannot execute Yahoo or
-                ESPN changes. Included calls are routed through Google AI Studio courtesy of Laces
-                Out.
+                Laces Out does not retain prompts or answers — except the Weekly Reckoning recap
+                your league asks for, which is saved for the league — and models cannot execute
+                Yahoo or ESPN changes. Included calls are routed through Google AI Studio courtesy
+                of Laces Out.
               </p>
               <Link className={styles.aiCta} href="/film-room">
                 Open Film Room <ArrowRight size={14} />

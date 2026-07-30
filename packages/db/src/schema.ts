@@ -23,6 +23,7 @@ export type ProviderName = "yahoo" | "espn" | "manual";
 export type ConnectionHealth = "pending" | "healthy" | "degraded" | "reauthorize" | "disabled";
 export type ApplicationRole = "member" | "admin";
 export type LeagueMembershipRole = "owner" | "commissioner" | "manager" | "viewer";
+export type RecapSpiceLevel = "mild" | "medium" | "scorched";
 export type RankingListKind = "rankings" | "adp" | "auction-values" | "cheat-sheet";
 export type RankingVisibility = "private" | "league" | "shared-link";
 export type RankingVersionStatus = "draft" | "published";
@@ -226,10 +227,18 @@ export const leagues = pgTable(
       .references(() => users.id, { onDelete: "restrict" }),
     name: text("name").notNull(),
     archived: boolean("archived").notNull().default(false),
+    // League-wide tone dial for the Weekly Reckoning recap. Commissioner-set, disclosed to members.
+    recapSpiceLevel: text("recap_spice_level").$type<RecapSpiceLevel>().notNull().default("medium"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
-  (table) => [index("leagues_owner_idx").on(table.ownerUserId)],
+  (table) => [
+    index("leagues_owner_idx").on(table.ownerUserId),
+    check(
+      "leagues_recap_spice_level_check",
+      sql`${table.recapSpiceLevel} in ('mild', 'medium', 'scorched')`,
+    ),
+  ],
 );
 
 export const userPreferences = pgTable(
@@ -652,6 +661,91 @@ export const leagueMemberships = pgTable(
     check(
       "league_memberships_claimed_at_check",
       sql`${table.claimedAt} is null or ${table.claimedFantasyTeamId} is not null`,
+    ),
+  ],
+);
+
+export const recapPersonaCards = pgTable(
+  "recap_persona_cards",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    leagueSeasonId: uuid("league_season_id")
+      .notNull()
+      .references(() => leagueSeasons.id, { onDelete: "cascade" }),
+    fantasyTeamId: uuid("fantasy_team_id")
+      .notNull()
+      .references(() => fantasyTeams.id, { onDelete: "cascade" }),
+    // Style and lore notes only. Never treated as evidence about games.
+    body: text("body").notNull(),
+    updatedByUserId: uuid("updated_by_user_id").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("recap_persona_cards_team_unique").on(table.fantasyTeamId),
+    index("recap_persona_cards_season_idx").on(table.leagueSeasonId),
+    check(
+      "recap_persona_cards_body_check",
+      sql`char_length(btrim(${table.body})) between 1 and 500`,
+    ),
+  ],
+);
+
+export const weeklyRecaps = pgTable(
+  "weekly_recaps",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    leagueSeasonId: uuid("league_season_id")
+      .notNull()
+      .references(() => leagueSeasons.id, { onDelete: "cascade" }),
+    week: integer("week").notNull(),
+    body: text("body").notNull(),
+    provider: text("provider").$type<AiProviderName>().notNull(),
+    model: text("model").notNull(),
+    // The level configured at generation time, so changing the dial never relabels an old recap.
+    spiceLevel: text("spice_level").$type<RecapSpiceLevel>().notNull(),
+    generatedByUserId: uuid("generated_by_user_id").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("weekly_recaps_season_week_unique").on(table.leagueSeasonId, table.week),
+    check("weekly_recaps_week_check", sql`${table.week} between 1 and 30`),
+    check("weekly_recaps_body_check", sql`char_length(${table.body}) between 1 and 30000`),
+    check(
+      "weekly_recaps_provider_check",
+      sql`${table.provider} in ('openai', 'anthropic', 'gemini', 'deepseek', 'grok', 'openrouter')`,
+    ),
+    check(
+      "weekly_recaps_spice_level_check",
+      sql`${table.spiceLevel} in ('mild', 'medium', 'scorched')`,
+    ),
+  ],
+);
+
+export const recapGenerationGuards = pgTable(
+  "recap_generation_guards",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    leagueSeasonId: uuid("league_season_id")
+      .notNull()
+      .references(() => leagueSeasons.id, { onDelete: "cascade" }),
+    week: integer("week").notNull(),
+    leaseToken: uuid("lease_token"),
+    leaseExpiresAt: timestamp("lease_expires_at", { withTimezone: true }),
+    lastCompletedAt: timestamp("last_completed_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("recap_generation_guards_season_week_unique").on(table.leagueSeasonId, table.week),
+    check("recap_generation_guards_week_check", sql`${table.week} between 1 and 30`),
+    check(
+      "recap_generation_guards_lease_pair_check",
+      sql`(${table.leaseToken} is null) = (${table.leaseExpiresAt} is null)`,
     ),
   ],
 );

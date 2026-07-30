@@ -66,6 +66,12 @@ export default function PrivacyPage() {
               personal model-provider API key, it is encrypted. Laces Out does not retain the
               question or answer.
             </li>
+            <li>
+              Weekly Reckoning recaps your league generates, and the League Intel notes that
+              personalize them. Both are league data, visible to league members. A recap keeps the
+              provider, model, requester, time, and tone level it was written with, and a reroll
+              replaces it. A failed generation is not stored.
+            </li>
           </ul>
         </section>
 
@@ -114,7 +120,8 @@ export default function PrivacyPage() {
           <p>
             Provider and football-data services receive only the requests required to retrieve their
             data. Film room sends your question and a bounded snapshot of your authorized league,
-            recommendations, and analytics to Google Gemini by default using the operator&apos;s
+            recommendations, and analytics — plus your league&apos;s League Intel notes when you ask
+            for a Weekly Reckoning recap — to Google Gemini by default using the operator&apos;s
             Google AI Studio project. This included access currently uses Gemini 3.6 Flash and
             requires no personal key. Google states that free-tier submitted content may be used to
             improve its products. You may instead add a separately billed OpenAI, Anthropic, Gemini,

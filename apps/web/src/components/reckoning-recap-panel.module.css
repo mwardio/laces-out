@@ -1,0 +1,206 @@
+@layer components {
+  /* Composed, not copied: the panel and its header keep exactly the workbench's chrome, so a
+     change to the analytics card look reaches this section too. */
+  .panel {
+    composes: panel from "./league-analytics-workbench.module.css";
+    /* The #reckoning-recap deep-link target on every viewport, so the workbench's mobile-only
+       scroll margin is not enough to keep it clear of the sticky top bar. */
+    scroll-margin-top: calc(var(--topbar-height) + 12px);
+  }
+
+  .sectionHeader {
+    composes: sectionHeader from "./league-analytics-workbench.module.css";
+  }
+
+  .sectionIcon {
+    composes: sectionIcon from "./league-analytics-workbench.module.css";
+  }
+
+  .sectionTag {
+    composes: sectionTag from "./league-analytics-workbench.module.css";
+  }
+
+  .body {
+    display: grid;
+    gap: 11px;
+    padding: 15px 18px 18px;
+  }
+
+  .controls {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: end;
+    gap: 10px;
+  }
+
+  .control {
+    display: grid;
+    gap: 4px;
+    min-width: 0;
+  }
+
+  .control > span {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    color: var(--ink-600);
+    font-size: var(--text-10);
+    font-weight: 750;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+
+  .control select {
+    max-width: 100%;
+    padding: 6px 9px;
+    color: var(--ink-950);
+    background: var(--white);
+    border: 1px solid var(--ink-150);
+    border-radius: var(--radius-sm);
+    font-size: var(--text-12);
+  }
+
+  .readOnlySpice {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 6px 9px;
+    color: var(--ink-600);
+    background: var(--paper-50);
+    border: 1px solid var(--ink-150);
+    border-radius: 999px;
+    font-size: var(--text-12);
+  }
+
+  .notice {
+    padding: 9px 11px;
+    color: var(--ink-700, var(--ink-600));
+    background: var(--paper-50);
+    border: 1px solid var(--ink-150);
+    border-radius: var(--radius-sm);
+    font-size: var(--text-12);
+    line-height: 1.5;
+  }
+
+  .byline {
+    color: var(--ink-600);
+    font-size: var(--text-12);
+  }
+
+  .answer {
+    min-width: 0;
+  }
+
+  .actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .status {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--ink-600);
+    font-size: var(--text-12);
+  }
+
+  .spin {
+    animation: reckoning-recap-spin 1s linear infinite;
+  }
+
+  .muted {
+    color: var(--ink-600);
+    font-size: var(--text-12);
+    line-height: 1.55;
+  }
+
+  .settingsLink {
+    color: var(--ink-600);
+    font-size: var(--text-12);
+    text-decoration: underline;
+  }
+
+  .error {
+    color: var(--danger, #b3261e);
+    font-size: var(--text-12);
+  }
+
+  .cards summary {
+    cursor: pointer;
+    color: var(--ink-950);
+    font-size: var(--text-12);
+    font-weight: 750;
+  }
+
+  .cardList {
+    display: grid;
+    gap: 13px;
+    margin: 9px 0 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .card {
+    display: grid;
+    gap: 5px;
+    min-width: 0;
+  }
+
+  .card strong {
+    color: var(--ink-950);
+    font-size: var(--text-12);
+  }
+
+  .card textarea {
+    width: 100%;
+    min-height: 72px;
+    padding: 8px 10px;
+    color: var(--ink-950);
+    background: var(--white);
+    border: 1px solid var(--ink-150);
+    border-radius: var(--radius-sm);
+    font: inherit;
+    font-size: var(--text-12);
+    resize: vertical;
+  }
+
+  .cardMeta {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    color: var(--ink-600);
+    font-size: var(--text-10);
+  }
+
+  .cardButtons {
+    display: inline-flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  @keyframes reckoning-recap-spin {
+    to {
+      transform: rotate(360deg);
+    }
+  }
+
+  /* At 320 CSS pixels the controls stack rather than forcing the page to scroll sideways. */
+  @media (max-width: 420px) {
+    .controls {
+      display: grid;
+      grid-template-columns: 1fr;
+    }
+
+    .control select {
+      width: 100%;
+    }
+
+    .actions > * {
+      flex: 1 1 auto;
+    }
+  }
+}

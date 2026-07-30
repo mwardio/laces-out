@@ -41,7 +41,9 @@ Room adds optional Gemini or BYOK analysis.
 - **Snake and auction drafts** — shared rooms track inflation, scarcity, wait risk, maximum bids,
   nominations, and roster construction, with undo, replay, and a browser-local Practice Room.
 - **The Weekly Reckoning** — Bad Beat, The Horseshoe, Beatdown, and Photo Finish turn final scores
-  into shareable awards and league receipts. If the data cannot support one, Laces Out says so.
+  into shareable awards and league receipts. If the data cannot support one, Laces Out says so. Any
+  completed week can also get one shared, saved trash-talk recap, tuned by League Intel notes and a
+  commissioner-set tone from mild to scorched.
 - **Research and Matchup Outlook** — explore weekly production, advanced efficiency, and game logs,
   then look ahead at opponent context, playoff windows, and bye pressure.
 - **Your own rankings** — import or edit rankings, ADP, auction values, cheat sheets, and custom
@@ -59,7 +61,7 @@ Every view below comes from the built-in locker room tour—no account required.
 | ![Locker room overview](./docs/screenshots/locker-room-overview.webp) | ![Draft studio](./docs/screenshots/draft-studio.webp)     |
 | ![Decision Desk](./docs/screenshots/decision-desk.webp)               | ![Projection Lab](./docs/screenshots/projection-lab.webp) |
 
-<p align="center"><strong>The Weekly Reckoning</strong> turns final scores into shareable league lore.</p>
+<p align="center"><strong>The Weekly Reckoning</strong> turns final scores into shareable league lore, then writes the recap.</p>
 
 ![The Weekly Reckoning](./docs/screenshots/weekly-reckoning.webp)
 
@@ -216,7 +218,8 @@ Laces Out touches real fantasy accounts, so I take the boring security details s
   versioned AES-256-GCM envelopes.
 - Logs redact secrets, cookies, authorization headers, and OAuth callback values.
 - AI providers receive no fantasy credentials, SQL access, or write capability. Prompts and
-  answers are not stored.
+  answers are not stored, with one scoped exception: a member-triggered Weekly Reckoning recap
+  and the league's League Intel are saved as league data.
 
 The full threat model and operator guidance are in [docs/security.md](./docs/security.md) and
 [docs/privacy.md](./docs/privacy.md).

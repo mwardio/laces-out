@@ -1053,4 +1053,47 @@
       width: 100%;
     }
   }
+
+  /* The recap now lives on the Weekly Reckoning page; this is the pointer, not a second generator. */
+  .recapCallout {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 12px;
+    padding: 14px 18px;
+    background: var(--white);
+    border: 1px solid var(--ink-150);
+    border-radius: var(--radius-md);
+  }
+
+  .recapCallout > svg {
+    flex: 0 0 auto;
+    color: #47603d;
+  }
+
+  .recapCallout > div {
+    flex: 1 1 240px;
+    min-width: 0;
+  }
+
+  .recapCallout strong {
+    display: block;
+    color: var(--ink-950);
+    font-size: var(--text-14, 14px);
+  }
+
+  .recapCallout p {
+    margin-top: 3px;
+    color: var(--ink-600);
+    font-size: var(--text-12);
+    line-height: 1.5;
+  }
+
+  .recapCallout a {
+    color: var(--ink-950);
+    font-size: var(--text-12);
+    font-weight: 700;
+    text-decoration: underline;
+    white-space: nowrap;
+  }
 }

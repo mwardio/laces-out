@@ -9,17 +9,34 @@ retention schedule, AI providers beyond the implemented Film room, or other data
 
 The application stores member identity and password/session hashes; league settings, teams,
 rosters, standings, matchups, and draft events; user rankings, notes, shares, and recommendation
-inputs; encrypted Yahoo authorization material; ESPN league snapshots; and bounded operational,
+inputs; stored Weekly Reckoning recaps and League Intel notes; encrypted Yahoo authorization
+material; ESPN league snapshots; and bounded operational,
 freshness, and audit records. Logs are configured to redact passwords, session material, OAuth
 credentials, authorization headers, and known ESPN credential fields.
 
 Film room is available by default through the operator's server-side Google AI Studio project and
 fixed `gemini-3.6-flash` model. When a member makes an included request, Laces Out sends the
-question plus a bounded snapshot of that member's authorized league overview, Decision Desk, and
-league analytics to Google Gemini. Google's free-tier terms currently state that submitted content
+question plus a bounded snapshot of that member's authorized league overview, Decision Desk,
+league analytics, and, for recap requests, the league's manager-written League Intel notes to
+Google Gemini. Google's free-tier terms currently state that submitted content
 may be used to improve its products. Laces Out stores provider/model settings and a usage ledger
 containing token counts, status, timing, access mode, and a keyed provider-request identifier, but
-does not store raw questions or model answers.
+does not store raw questions or model answers, with one exception: a member-triggered Weekly
+Reckoning recap is stored as league data, visible to league members, and replaced on each reroll.
+
+The Weekly Reckoning recap is the only stored AI output, and it is scoped to the league that asked
+for it. A stored recap keeps the provider, model, requesting member, generated time, and the tone
+level in force when it was written; changing the league's tone later never relabels an existing
+recap. A generation that fails, times out, or is refused by the provider is not stored at all and
+leaves the previous recap in place.
+
+League Intel (per-team persona notes) is manager-written style and lore material: rivalries,
+running bits, and league history. It is visible to league members, sent to the selected AI provider
+only when a recap is generated, and never treated as evidence about a game. Each member edits the
+note for the team they have claimed; a league owner or commissioner may edit or clear any note as a
+moderation action. The recap's tone level is a single league-wide setting chosen by a commissioner,
+and the scorched level is disclosed in the recap section to every member, not only to the
+commissioner who set it.
 
 A member may instead add an OpenAI, Anthropic, Gemini, DeepSeek, Grok, or OpenRouter key and choose
 the model. That personal key is stored in the same purpose-bound, versioned encryption system used
