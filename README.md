@@ -25,7 +25,7 @@
 ---
 
 I play in too many fantasy leagues, most with auction drafts, and got tired of paying for tools that
-still felt generic. Laces Out is the app I wanted instead: one invite-only place for league data,
+still felt generic. Laces Out is the app I wanted instead: one private place for league data,
 draft prep, weekly decisions, and the research behind them. The core app works without AI, and Film
 Room adds optional Gemini or BYOK analysis.
 
@@ -217,9 +217,9 @@ Laces Out touches real fantasy accounts, so I take the boring security details s
 - Passwords use Argon2id, sessions are server-side and revocable, and stored credentials use
   versioned AES-256-GCM envelopes.
 - Logs redact secrets, cookies, authorization headers, and OAuth callback values.
-- AI providers receive no fantasy credentials, SQL access, or write capability. Prompts and
-  answers are not stored, with one scoped exception: a member-triggered Weekly Reckoning recap
-  and the league's League Intel are saved as league data.
+- AI providers receive no fantasy credentials, SQL access, or write capability. Questions and
+  one-off answers are not stored. Shared Weekly Reckoning recaps and League Intel notes are stored as
+  league data.
 
 The full threat model and operator guidance are in [docs/security.md](./docs/security.md) and
 [docs/privacy.md](./docs/privacy.md).
