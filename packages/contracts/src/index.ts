@@ -509,6 +509,32 @@ export const espnBridgeDeviceResponseSchema = z.object({
   expiresAt: z.iso.datetime().nullable(),
 });
 
+export const espnBridgePairingCodeSchema = z
+  .string()
+  .trim()
+  .toUpperCase()
+  .regex(/^[A-HJ-NP-Z2-9]{4}(?:-[A-HJ-NP-Z2-9]{4}){3}$/u, "must be a valid Laces Out pairing code");
+
+export const espnBridgePairingSessionRequestSchema = espnBridgeDeviceRequestSchema.extend({
+  season: z.number().int().min(2000).max(2100),
+});
+
+export const espnBridgePairingSessionResponseSchema = z.object({
+  pairingCode: espnBridgePairingCodeSchema,
+  expiresAt: z.iso.datetime(),
+});
+
+export const espnBridgePairingRedeemRequestSchema = z.object({
+  pairingCode: espnBridgePairingCodeSchema,
+});
+
+export const espnBridgePairingRedeemResponseSchema = espnBridgeDeviceResponseSchema.extend({
+  expiresAt: z.iso.datetime(),
+  leagueIds: espnBridgeDeviceRequestSchema.shape.allowedLeagueIds,
+  season: z.number().int().min(2000).max(2100),
+  automaticSync: z.literal(true),
+});
+
 export const espnBridgeDeviceStatusSchema = z.object({
   deviceId: z.string().uuid(),
   name: z.string().min(1).max(80),

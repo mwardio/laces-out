@@ -1,10 +1,10 @@
 import { access, copyFile, readFile, writeFile } from "node:fs/promises";
 
-// `dev` (default) keeps localhost and the broad optional host so an unpacked
-// build can point at a local API. `store` pins the extension to the production
-// Laces Out origins and tightens the CSP so the Chrome Web Store review sees only
-// named, single-purpose hosts. The compiled service worker is identical for both
-// targets; the API base URL is user-configured, never baked into code.
+// `dev` (default) allows direct localhost testing. `store` keeps arbitrary HTTPS
+// hosts as optional permissions so one signed companion can serve self-hosted
+// instances, while externally initiated one-click offers remain pinned to the
+// official hosted origins. The API base URL is user-approved at runtime and is
+// never baked into compiled code.
 const target = process.env.BRIDGE_TARGET === "store" ? "store" : "dev";
 // Both origins front the same deployment; pairing is offered from either, and
 // the popup follows whichever origin the device actually paired against.
@@ -13,16 +13,19 @@ const PRODUCTION_ORIGINS = ["https://laces.mward.io", "https://lacesout.app"];
 const manifest = JSON.parse(await readFile(new URL("../manifest.json", import.meta.url), "utf8"));
 
 if (target === "store") {
-  manifest.optional_host_permissions = PRODUCTION_ORIGINS.map((origin) => `${origin}/*`);
   // Store uploads must not carry a `key`; the Chrome Web Store assigns the
   // published extension ID. The `key` only pins the unpacked dev-build ID.
   delete manifest.key;
   // Web-to-extension pairing is offered only from the production origins in the
   // store build; localhost offers are a dev-only affordance.
   manifest.externally_connectable = { matches: PRODUCTION_ORIGINS.map((origin) => `${origin}/*`) };
+  // Self-hosted pairing starts inside the extension, validates HTTPS (or loopback), asks Chrome
+  // for the exact host at that moment, then performs a one-time credential exchange. A random
+  // website still cannot message or configure the extension.
+  manifest.optional_host_permissions = ["https://*/*", "http://localhost/*", "http://127.0.0.1/*"];
   manifest.content_security_policy.extension_pages =
     "default-src 'self'; " +
-    `connect-src https://fantasy.espn.com https://lm-api-reads.fantasy.espn.com ${PRODUCTION_ORIGINS.join(" ")}; ` +
+    "connect-src https://fantasy.espn.com https://lm-api-reads.fantasy.espn.com https: http://localhost:* http://127.0.0.1:*; " +
     "img-src 'self'; style-src 'self'";
 }
 

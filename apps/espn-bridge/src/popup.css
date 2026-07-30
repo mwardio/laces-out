@@ -204,6 +204,50 @@ button.quiet {
   font-size: 10px;
   line-height: 1.4;
 }
+.setup-link {
+  min-height: 30px;
+  padding: 4px 8px;
+  font-size: 11px;
+}
+.self-hosted-form {
+  display: grid;
+  gap: 10px;
+  padding-top: 11px;
+  border-top: 1px solid #e0e4df;
+}
+.self-hosted-form[hidden] {
+  display: none;
+}
+.self-hosted-form label {
+  display: grid;
+  gap: 5px;
+  color: #354139;
+  font-size: 10px;
+  font-weight: 800;
+}
+.self-hosted-form input {
+  width: 100%;
+  min-height: 38px;
+  padding: 8px 10px;
+  color: #111a14;
+  background: #f8f9f5;
+  border: 1px solid #b8beb8;
+  border-radius: 8px;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+}
+.self-hosted-form input:focus-visible {
+  border-color: #7da326;
+  outline: 2px solid #dff4ad;
+  outline-offset: 1px;
+}
+.self-hosted-message {
+  min-height: 14px;
+  color: #6f7a72;
+  font-size: 10px;
+  line-height: 1.4;
+}
 .league-results {
   display: grid;
   gap: 6px;

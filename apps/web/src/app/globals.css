@@ -4145,6 +4145,41 @@
     font-size: var(--text-11);
     font-weight: 800;
   }
+  .bridge-pairing-code {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 1px;
+    margin: 0;
+    overflow: hidden;
+    background: var(--ink-150);
+    border: 1px solid var(--ink-150);
+    border-radius: var(--radius-xs);
+  }
+  .bridge-pairing-code > div {
+    min-width: 0;
+    padding: 8px 9px;
+    background: rgba(255, 255, 255, 0.78);
+  }
+  .bridge-pairing-code dt {
+    color: var(--ink-500);
+    font-size: var(--text-9);
+    font-weight: 800;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+  .bridge-pairing-code dd {
+    margin: 3px 0 0;
+    overflow-wrap: anywhere;
+    color: var(--ink-800);
+    font-size: var(--text-11);
+    font-weight: 750;
+  }
+  .bridge-pairing-code code {
+    font-family: var(--font-mono);
+    font-size: var(--text-12);
+    letter-spacing: 0.04em;
+    white-space: nowrap;
+  }
   .espn-bookmarklet {
     display: grid;
     gap: var(--space-10);
@@ -8612,6 +8647,9 @@
     }
     .bridge-token .button {
       width: 100%;
+    }
+    .bridge-pairing-code {
+      grid-template-columns: 1fr;
     }
     .import-editor-label {
       margin-inline: 13px;

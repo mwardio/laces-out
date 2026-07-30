@@ -540,7 +540,7 @@ export const demoAnalyticsSnapshot: LeagueAnalyticsSnapshot = {
     definitions: [
       {
         id: "weekly-awards",
-        label: "Monday Morning Awards",
+        label: "The Weekly Reckoning",
         definition:
           "Awards read the same admitted final scores as the season ledger. An award the evidence does not support is withheld with its reason rather than shown as a zero.",
       },

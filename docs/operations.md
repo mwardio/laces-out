@@ -514,8 +514,9 @@ not prerequisites the current runbook silently assumes are already installed.
 
 ## Provider release gates
 
-- Yahoo friend access remains Coming Soon until the operator completes the current provider terms,
-  configuration, and real-account contract-validation checklist.
+- Yahoo friend access may be enabled after the operator completes the current provider terms,
+  configuration, and real-account contract-validation checklist. Set
+  `NEXT_PUBLIC_YAHOO_ACCESS_STATUS=available` only when the OAuth credentials are ready.
 - ESPN companion distribution requires sanctioned private-league validation, terms and store-policy
   review, and a signed build. The signed browser bridge is the only hosted private-league path.
 - ESPN live draft sync stays behind `ESPN_LIVE_DRAFT_SYNC=false` until the

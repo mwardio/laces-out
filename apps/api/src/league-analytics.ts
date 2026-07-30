@@ -1063,7 +1063,7 @@ function average(values: readonly (number | null)[]): number | null {
 }
 
 /**
- * Monday Morning Awards for the most recent week the admitted evidence can award. Awards the
+ * The Weekly Reckoning for the most recent week the admitted evidence can award. Awards the
  * data does not support are withheld individually with their reason; none are ever inferred.
  */
 function buildWeeklyAwards(

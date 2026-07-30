@@ -27,6 +27,13 @@ password, requests the browser cookies API, serializes cookies, or sends ESPN se
 Laces Out. It runs on demand and, when enabled, every six hours while the browser and ESPN
 session are available.
 
+Hosted Laces Out domains can hand the scoped credential directly to the signed companion through
+Chrome's allowlisted external-messaging channel. Any HTTPS self-hosted instance can use that same
+companion through an extension-led exchange: the authenticated app creates a 10-minute,
+single-use pairing code, Chrome grants access only to the entered instance host, and the server
+atomically consumes the hashed code before returning the device credential. The long-lived token
+never enters a URL or the clipboard, and self-hosters do not need their own extension build.
+
 One device can be scoped to up to 32 unique numeric league IDs for a single configured season.
 The companion reads and uploads them sequentially, continues after a per-league failure, and
 surfaces retained per-league results plus an aggregate full-success, partial-failure, login-required,
@@ -158,10 +165,11 @@ anonymous endpoint and is the private-league path.
 1. Obtain each numeric league ID using ESPN's normal web/app UI.
 2. For automatic private-league sync, install the signed companion from the [Chrome Web Store
    listing](https://chromewebstore.google.com/detail/laces-out-espn-bridge/hmilkmcjlkpnigcfnlfogeafacjpmkbj),
-   create a league-scoped pairing from Laces Out's `/connections` page, then open the extension and
-   choose **Complete pairing**. Laces Out hands off the credential and bounded league-ID set
-   directly; there is no token to copy or paste. Sync while signed in to ESPN in the same browser
-   profile, then claim the correct fantasy team after each league's first import.
+   and create a league-scoped pairing from Laces Out's `/connections` page. Hosted deployments hand
+   it directly to the extension; a self-hosted deployment displays a one-time code for **Pair a
+   self-hosted instance** in the popup. Neither path copies the device token. Sync while signed in
+   to ESPN in the same browser profile, then claim the correct fantasy team after each league's
+   first import.
 3. If using public read, confirm the league is intentionally public and enable only the
    `public-unofficial` mode. No ESPN secret environment variables should exist.
 4. Keep the last successful normalized snapshot if a later bridge read fails.

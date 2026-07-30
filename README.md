@@ -31,15 +31,17 @@ Room adds optional Gemini or bring-your-own-key analysis.
 
 ## What it does
 
-- **League sync** — private ESPN leagues sync through a one-click bookmark or the signed
+- **League sync** — private Yahoo leagues connect through official OAuth, while ESPN leagues sync
+  through a one-click bookmark or the signed
   [Chrome companion](https://chromewebstore.google.com/detail/laces-out-espn-bridge/hmilkmcjlkpnigcfnlfogeafacjpmkbj).
-  Yahoo remains **Coming Soon**. Laces Out never asks for a provider password or changes a roster.
+  Self-hosted instances pair with the same companion through a one-time code, with no custom
+  extension build required. Laces Out never asks for a provider password or changes a roster.
 - **Weekly decisions** — league-scored projections drive lineup, waiver, trade, opponent, and
   roster-strength analysis. When the league changes, the recommendations refresh with it.
 - **Snake and auction drafts** — shared rooms track inflation, scarcity, wait risk, maximum bids,
   nominations, and roster construction, with undo, replay, and a browser-local Practice Room.
-- **Monday Morning Awards** — Bad Beat, The Horseshoe, Beatdown, and Photo Finish turn final scores
-  into shareable league awards. If the data cannot support one, Laces Out says so.
+- **The Weekly Reckoning** — Bad Beat, The Horseshoe, Beatdown, and Photo Finish turn final scores
+  into shareable awards and league receipts. If the data cannot support one, Laces Out says so.
 - **Research and Matchup Outlook** — explore weekly production, advanced efficiency, and game logs,
   then look ahead at opponent context, playoff windows, and bye pressure.
 - **Your own rankings** — import or edit rankings, ADP, auction values, cheat sheets, and custom
@@ -57,9 +59,9 @@ Every view below comes from the built-in locker room tour—no account required.
 | ![Locker room overview](./docs/screenshots/locker-room-overview.webp) | ![Draft studio](./docs/screenshots/draft-studio.webp)     |
 | ![Decision Desk](./docs/screenshots/decision-desk.webp)               | ![Projection Lab](./docs/screenshots/projection-lab.webp) |
 
-<p align="center"><strong>Monday Morning Awards</strong> turns final scores into shareable league lore.</p>
+<p align="center"><strong>The Weekly Reckoning</strong> turns final scores into shareable league lore.</p>
 
-![Monday Morning Awards](./docs/screenshots/monday-morning-awards.webp)
+![The Weekly Reckoning](./docs/screenshots/weekly-reckoning.webp)
 
 ## Projections have to earn their way onto the page
 
@@ -76,8 +78,8 @@ The details, formulas, and current evidence are in
 
 ## Current limits
 
-Yahoo sync remains **Coming Soon**. ESPN live-draft ingest is implemented but disabled until it
-passes real snake and auction room validation. Provider writes are intentionally unsupported:
+Yahoo and ESPN league sync are read-only. ESPN live-draft ingest is implemented but disabled until
+it passes real snake and auction room validation. Provider writes are intentionally unsupported:
 Laces Out recommends the move; you make it at ESPN or Yahoo.
 
 ## Quick start
@@ -137,6 +139,7 @@ settings are in [.env.example](./.env.example).
 | `GEMINI_API_KEY`                          | Shared Film Room access                               |
 | `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY`  | Game-day push alerts                                  |
 | `YAHOO_CLIENT_ID` / `YAHOO_CLIENT_SECRET` | Yahoo OAuth when enabled                              |
+| `NEXT_PUBLIC_YAHOO_ACCESS_STATUS`         | Set to `available` when Yahoo OAuth is ready          |
 
 Already running Caddy, Traefik, or another reverse proxy? Keep the included gateway on an
 unprivileged loopback port:
@@ -207,7 +210,8 @@ commands and the release runbook are in [docs/operations.md](./docs/operations.m
 
 Laces Out touches real fantasy accounts, so I take the boring security details seriously.
 
-- Provider access is read-only; the ESPN path never asks for a password.
+- Provider access is read-only. Yahoo uses official OAuth, and the ESPN path never asks for a
+  password.
 - Passwords use Argon2id, sessions are server-side and revocable, and stored credentials use
   versioned AES-256-GCM envelopes.
 - Logs redact secrets, cookies, authorization headers, and OAuth callback values.

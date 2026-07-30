@@ -322,7 +322,7 @@ function AwardsSection({
         <SectionHeader
           icon={<Award size={18} aria-hidden="true" />}
           kicker="Final scores only"
-          title="Monday Morning Awards"
+          title="The Weekly Reckoning"
           tag="Awarded weekly"
           titleId="awards-title"
         />
@@ -348,7 +348,7 @@ function AwardsSection({
       <SectionHeader
         icon={<Award size={18} aria-hidden="true" />}
         kicker="Final scores only"
-        title="Monday Morning Awards"
+        title="The Weekly Reckoning"
         tag={`Week ${section.week}`}
         titleId="awards-title"
         action={

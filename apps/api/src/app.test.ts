@@ -1058,6 +1058,95 @@ describe("API", () => {
     await app.close();
   });
 
+  it("exchanges a short-lived self-hosted pairing code without a session cookie", async () => {
+    const calls: unknown[] = [];
+    let redeemed = false;
+    const pairingCode = "ABCD-EFGH-JKLM-NPQR";
+    const app = await buildApp({
+      environment: productionEnvironment(),
+      logger: false,
+      requireAuthentication: true,
+      authService: authenticatedService(),
+      espnBridge: {
+        listDevices: () => Promise.resolve({ generatedAt: new Date().toISOString(), devices: [] }),
+        registerDevice: () => Promise.reject(new Error("not used")),
+        createPairingSession: (userId, input) => {
+          calls.push({ operation: "create", userId, input });
+          return Promise.resolve({
+            pairingCode,
+            expiresAt: "2026-07-30T13:10:00.000Z",
+          });
+        },
+        redeemPairingSession: (code) => {
+          calls.push({ operation: "redeem", code });
+          if (redeemed || code !== pairingCode) return Promise.resolve(undefined);
+          redeemed = true;
+          return Promise.resolve({
+            deviceId: "00000000-0000-4000-8000-000000000010",
+            deviceToken: `lo_espn_${"a".repeat(43)}`,
+            expiresAt: "2027-07-30T13:00:00.000Z",
+            leagueIds: ["12345", "67890"],
+            season: 2026,
+            automaticSync: true as const,
+          });
+        },
+        acceptSnapshot: () => Promise.reject(new Error("not used")),
+        revokeDevice: () => Promise.reject(new Error("not used")),
+      },
+    });
+
+    const created = await app.inject({
+      method: "POST",
+      url: "/v1/bridge/espn/pairing-sessions",
+      headers: { cookie: authenticatedCookie, origin: "https://laces.example.com" },
+      payload: {
+        name: "Self-hosted Chrome",
+        allowedLeagueIds: ["12345", "67890"],
+        season: 2026,
+      },
+    });
+    expect(created.statusCode).toBe(201);
+    expect(created.json()).toEqual({
+      pairingCode,
+      expiresAt: "2026-07-30T13:10:00.000Z",
+    });
+
+    const redeemedResponse = await app.inject({
+      method: "POST",
+      url: "/v1/bridge/espn/pairing-sessions/redeem",
+      headers: { origin: "chrome-extension://abcdefghijklmnopabcdefghijklmnop" },
+      payload: { pairingCode: pairingCode.toLowerCase() },
+    });
+    expect(redeemedResponse.statusCode).toBe(200);
+    expect(redeemedResponse.json()).toMatchObject({
+      leagueIds: ["12345", "67890"],
+      season: 2026,
+      automaticSync: true,
+    });
+
+    const replay = await app.inject({
+      method: "POST",
+      url: "/v1/bridge/espn/pairing-sessions/redeem",
+      payload: { pairingCode },
+    });
+    expect(replay.statusCode).toBe(400);
+    expect(replay.json()).toMatchObject({ title: "Pairing code is invalid or expired" });
+    expect(calls).toEqual([
+      {
+        operation: "create",
+        userId: "00000000-0000-4000-8000-000000000001",
+        input: {
+          name: "Self-hosted Chrome",
+          allowedLeagueIds: ["12345", "67890"],
+          season: 2026,
+        },
+      },
+      { operation: "redeem", code: pairingCode },
+      { operation: "redeem", code: pairingCode },
+    ]);
+    await app.close();
+  });
+
   it("lists and revokes only the authenticated user's ESPN bridge devices", async () => {
     const calls: Array<{ operation: string; userId: string; deviceId?: string }> = [];
     const deviceId = "00000000-0000-4000-8000-000000000010";

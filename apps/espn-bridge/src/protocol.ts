@@ -106,6 +106,7 @@ export const syncAlarmName = "laces-out-espn-sync";
 // pending (never auto-configured) and expire quickly so a stale offer can never
 // silently reconfigure the bridge on a later popup open.
 export const pairingOfferTtlMs = 10 * 60 * 1000;
+export const pairingCodePattern = /^[A-HJ-NP-Z2-9]{4}(?:-[A-HJ-NP-Z2-9]{4}){3}$/u;
 
 // The message a Laces Out page posts through `chrome.runtime.sendMessage` to the
 // extension via `externally_connectable`. The offered configuration is only
@@ -131,6 +132,31 @@ export interface PendingPairingOffer {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+export function normalizeApiBaseUrl(value: unknown): string {
+  const apiBaseUrl = typeof value === "string" ? value.trim() : "";
+  const apiUrl = new URL(apiBaseUrl);
+  const localDevelopment =
+    apiUrl.protocol === "http:" && ["localhost", "127.0.0.1"].includes(apiUrl.hostname);
+  if (
+    (apiUrl.protocol !== "https:" && !localDevelopment) ||
+    apiUrl.username !== "" ||
+    apiUrl.password !== "" ||
+    apiUrl.search !== "" ||
+    apiUrl.hash !== ""
+  ) {
+    throw new TypeError("Laces Out URL must be HTTPS or a loopback development URL");
+  }
+  return apiUrl.origin;
+}
+
+export function normalizePairingCode(value: unknown): string {
+  const pairingCode = typeof value === "string" ? value.trim().toUpperCase() : "";
+  if (!pairingCodePattern.test(pairingCode)) {
+    throw new TypeError("Laces Out pairing code is invalid");
+  }
+  return pairingCode;
 }
 
 export function parseLeagueIds(value: string): readonly string[] {
@@ -164,23 +190,11 @@ export function validateLeagueIds(value: unknown): readonly string[] {
 
 export function validateBridgeConfiguration(value: unknown): BridgeConfiguration {
   if (!isRecord(value)) throw new TypeError("Bridge configuration is missing");
-  const apiBaseUrl = typeof value.apiBaseUrl === "string" ? value.apiBaseUrl.trim() : "";
+  const apiBaseUrl = normalizeApiBaseUrl(value.apiBaseUrl);
   const deviceToken = typeof value.deviceToken === "string" ? value.deviceToken.trim() : "";
   const leagueIds = validateLeagueIds(value.leagueIds);
   const season = value.season;
   const automaticSync = value.automaticSync;
-  const apiUrl = new URL(apiBaseUrl);
-  const localDevelopment =
-    apiUrl.protocol === "http:" && ["localhost", "127.0.0.1"].includes(apiUrl.hostname);
-  if (
-    (apiUrl.protocol !== "https:" && !localDevelopment) ||
-    apiUrl.username !== "" ||
-    apiUrl.password !== "" ||
-    apiUrl.search !== "" ||
-    apiUrl.hash !== ""
-  ) {
-    throw new TypeError("Laces Out URL must be HTTPS or a loopback development URL");
-  }
   if (deviceToken.length < 32 || deviceToken.length > 512) {
     throw new TypeError("Laces Out device token is invalid");
   }
@@ -194,12 +208,44 @@ export function validateBridgeConfiguration(value: unknown): BridgeConfiguration
   }
   if (typeof automaticSync !== "boolean") throw new TypeError("Automatic sync setting is invalid");
   return {
-    apiBaseUrl: apiUrl.origin,
+    apiBaseUrl,
     deviceToken,
     leagueIds,
     season,
     automaticSync,
   };
+}
+
+export function configurationFromPairingRedemption(
+  value: unknown,
+  apiBaseUrl: unknown,
+): BridgeConfiguration {
+  if (!isRecord(value)) throw new TypeError("Laces Out pairing response is invalid");
+  if (
+    typeof value.deviceId !== "string" ||
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(
+      value.deviceId,
+    )
+  ) {
+    throw new TypeError("Laces Out pairing response is missing a device identifier");
+  }
+  if (
+    typeof value.expiresAt !== "string" ||
+    !Number.isFinite(Date.parse(value.expiresAt)) ||
+    Date.parse(value.expiresAt) <= Date.now()
+  ) {
+    throw new TypeError("Laces Out pairing response has an invalid expiry");
+  }
+  if (value.automaticSync !== true) {
+    throw new TypeError("Laces Out pairing response is not an automatic-sync credential");
+  }
+  return validateBridgeConfiguration({
+    apiBaseUrl,
+    deviceToken: value.deviceToken,
+    leagueIds: value.leagueIds,
+    season: value.season,
+    automaticSync: value.automaticSync,
+  });
 }
 
 function normalizeOrigin(value: unknown): string {

@@ -11,6 +11,7 @@ import {
   draftSessionSnapshotSchema,
   espnBridgeDeviceListResponseSchema,
   espnBridgeDeviceResponseSchema,
+  espnBridgePairingSessionResponseSchema,
   inSeasonDecisionSnapshotSchema,
   jobAcceptedSchema,
   leagueAnalyticsSnapshotSchema,
@@ -247,6 +248,9 @@ export type EspnBridgeDeviceStatus = ReturnType<
   typeof espnBridgeDeviceListResponseSchema.parse
 >["devices"][number];
 export type EspnBridgeDeviceCredential = ReturnType<typeof espnBridgeDeviceResponseSchema.parse>;
+export type EspnBridgePairingSession = ReturnType<
+  typeof espnBridgePairingSessionResponseSchema.parse
+>;
 
 export function parseEspnBridgeDeviceList(
   value: unknown,
@@ -257,6 +261,11 @@ export function parseEspnBridgeDeviceList(
 
 export function parseEspnBridgeDeviceCredential(value: unknown): EspnBridgeDeviceCredential | null {
   const result = espnBridgeDeviceResponseSchema.safeParse(value);
+  return result.success ? result.data : null;
+}
+
+export function parseEspnBridgePairingSession(value: unknown): EspnBridgePairingSession | null {
+  const result = espnBridgePairingSessionResponseSchema.safeParse(value);
   return result.success ? result.data : null;
 }
 

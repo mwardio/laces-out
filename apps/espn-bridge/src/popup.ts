@@ -1,4 +1,5 @@
 import type {
+  BridgeConfiguration,
   BridgeLeagueResultState,
   BridgeLiveDraftRequest,
   BridgeLiveDraftResponse,
@@ -9,7 +10,10 @@ import type {
   PendingPairingOffer,
 } from "./protocol.js";
 import {
+  configurationFromPairingRedemption,
   configurationStorageKey,
+  normalizeApiBaseUrl,
+  normalizePairingCode,
   pairingOfferIsFresh,
   pendingPairingStorageKey,
   validateBridgeConfiguration,
@@ -35,6 +39,13 @@ const pairingCompleteButton = element<HTMLButtonElement>("pairing-complete");
 const pairingDismissButton = element<HTMLButtonElement>("pairing-dismiss");
 const unpairedActions = element<HTMLElement>("unpaired-actions");
 const openConnectionsButton = element<HTMLButtonElement>("open-connections");
+const selfHostedToggle = element<HTMLButtonElement>("self-hosted-toggle");
+const selfHostedForm = element<HTMLFormElement>("self-hosted-form");
+const selfHostedUrl = element<HTMLInputElement>("self-hosted-url");
+const selfHostedCode = element<HTMLInputElement>("self-hosted-code");
+const selfHostedSubmit = element<HTMLButtonElement>("self-hosted-submit");
+const selfHostedCancel = element<HTMLButtonElement>("self-hosted-cancel");
+const selfHostedMessage = element<HTMLElement>("self-hosted-message");
 const liveDraftPanel = element<HTMLElement>("live-draft");
 const liveDraftState = element<HTMLSpanElement>("live-draft-state");
 const liveDraftMessage = element<HTMLElement>("live-draft-message");
@@ -118,13 +129,77 @@ function resultLabel(state: BridgeLeagueResultState): string {
   return "Failed";
 }
 
-async function requireApiPermission(apiBaseUrl: string): Promise<void> {
+function apiPermissionPattern(apiBaseUrl: string): string {
   const url = new URL(apiBaseUrl);
   // Extension match patterns are host-scoped and intentionally omit the configured port.
   // Network requests still go only to the exact validated origin stored by the service worker.
-  const originPattern = `${url.protocol}//${url.hostname}/*`;
+  return `${url.protocol}//${url.hostname}/*`;
+}
+
+async function requireApiPermission(
+  apiBaseUrl: string,
+): Promise<{ readonly pattern: string; readonly newlyGranted: boolean }> {
+  const originPattern = apiPermissionPattern(apiBaseUrl);
+  const alreadyGranted = await chrome.permissions.contains({ origins: [originPattern] });
+  if (alreadyGranted) return { pattern: originPattern, newlyGranted: false };
   const allowed = await chrome.permissions.request({ origins: [originPattern] });
   if (!allowed) throw new Error("Laces Out host permission was not granted");
+  return { pattern: originPattern, newlyGranted: true };
+}
+
+async function boundedJson(response: Response): Promise<unknown> {
+  const maximumBytes = 32 * 1024;
+  const declaredLength = Number(response.headers.get("content-length"));
+  if (Number.isFinite(declaredLength) && declaredLength > maximumBytes) {
+    throw new Error("Laces Out pairing response was too large");
+  }
+  const text = await response.text();
+  if (new Blob([text]).size > maximumBytes) {
+    throw new Error("Laces Out pairing response was too large");
+  }
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw new Error("Laces Out pairing response was invalid");
+  }
+}
+
+async function redeemSelfHostedPairing(
+  apiBaseUrlInput: string,
+  pairingCodeInput: string,
+): Promise<BridgeConfiguration> {
+  const apiBaseUrl = normalizeApiBaseUrl(apiBaseUrlInput);
+  const pairingCode = normalizePairingCode(pairingCodeInput);
+  const permission = await requireApiPermission(apiBaseUrl);
+  try {
+    const response = await fetch(
+      new URL("/v1/bridge/espn/pairing-sessions/redeem", apiBaseUrl).toString(),
+      {
+        method: "POST",
+        headers: { Accept: "application/json", "Content-Type": "application/json" },
+        body: JSON.stringify({ pairingCode }),
+        credentials: "omit",
+        cache: "no-store",
+        redirect: "error",
+        referrerPolicy: "no-referrer",
+      },
+    );
+    if (!response.ok) {
+      throw new Error(
+        response.status === 400
+          ? "That pairing code is invalid or expired"
+          : response.status === 404
+            ? "This Laces Out instance does not support self-hosted pairing"
+            : "The Laces Out instance could not complete pairing",
+      );
+    }
+    return configurationFromPairingRedemption(await boundedJson(response), apiBaseUrl);
+  } catch (error) {
+    if (permission.newlyGranted) {
+      await chrome.permissions.remove({ origins: [permission.pattern] }).catch(() => false);
+    }
+    throw error;
+  }
 }
 
 openConnectionsButton.addEventListener("click", () => {
@@ -146,6 +221,43 @@ openConnectionsButton.addEventListener("click", () => {
       () => undefined,
       () => undefined,
     );
+});
+
+selfHostedToggle.addEventListener("click", () => {
+  selfHostedForm.hidden = false;
+  selfHostedToggle.hidden = true;
+  selfHostedMessage.textContent = "";
+  selfHostedUrl.focus();
+});
+
+selfHostedCancel.addEventListener("click", () => {
+  selfHostedForm.hidden = true;
+  selfHostedToggle.hidden = false;
+  selfHostedMessage.textContent = "";
+});
+
+selfHostedForm.addEventListener("submit", (event) => {
+  event.preventDefault();
+  selfHostedSubmit.disabled = true;
+  selfHostedCancel.disabled = true;
+  selfHostedMessage.textContent = "Pairing with your instance…";
+  void redeemSelfHostedPairing(selfHostedUrl.value, selfHostedCode.value)
+    .then((configuration) => send({ type: "CONFIGURE", configuration }))
+    .then((response) => {
+      selfHostedForm.reset();
+      selfHostedForm.hidden = true;
+      selfHostedToggle.hidden = false;
+      selfHostedMessage.textContent = "";
+      render(response.status);
+    })
+    .catch((error: unknown) => {
+      selfHostedMessage.textContent =
+        error instanceof Error ? error.message : "Self-hosted pairing failed";
+    })
+    .finally(() => {
+      selfHostedSubmit.disabled = false;
+      selfHostedCancel.disabled = false;
+    });
 });
 
 syncButton.addEventListener("click", () => {

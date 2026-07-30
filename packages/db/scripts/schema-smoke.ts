@@ -12,6 +12,7 @@ const expectedTables = [
   "ai_usage_ledger",
   "bridge_device_leagues",
   "bridge_devices",
+  "bridge_pairing_sessions",
   "change_event_receipts",
   "change_events",
   "data_sources",
@@ -1549,6 +1550,36 @@ try {
     insert into bridge_devices (user_id, name, token_hash)
     values (${ownerId}, 'Unsafe Browser', 'short-token')
   `,
+  );
+  await sql`
+    insert into bridge_pairing_sessions (
+      user_id, code_hash, device_name, allowed_league_ids, season, expires_at
+    ) values (
+      ${ownerId}, ${"p".repeat(64)}, 'Self-hosted Browser',
+      ${sql.json(["123456789", "987654321"])}, 2026, now() + interval '10 minutes'
+    )
+  `;
+  await expectDatabaseRejection(
+    "empty self-hosted pairing scope",
+    () => sql`
+      insert into bridge_pairing_sessions (
+        user_id, code_hash, device_name, allowed_league_ids, season, expires_at
+      ) values (
+        ${ownerId}, ${"q".repeat(64)}, 'Unsafe Pairing', ${sql.json([])},
+        2026, now() + interval '10 minutes'
+      )
+    `,
+  );
+  await expectDatabaseRejection(
+    "expired self-hosted pairing session",
+    () => sql`
+      insert into bridge_pairing_sessions (
+        user_id, code_hash, device_name, allowed_league_ids, season, expires_at
+      ) values (
+        ${ownerId}, ${"r".repeat(64)}, 'Expired Pairing', ${sql.json(["123456789"])},
+        2026, now() - interval '1 minute'
+      )
+    `,
   );
 
   const envelope = {

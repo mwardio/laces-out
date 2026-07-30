@@ -16,6 +16,16 @@ const storeExtensionId = "hmilkmcjlkpnigcfnlfogeafacjpmkbj";
 export const chromeWebStoreUrl =
   "https://chromewebstore.google.com/detail/laces-out-espn-bridge/hmilkmcjlkpnigcfnlfogeafacjpmkbj";
 
+const publishedBridgeOrigins = new Set(["https://laces.mward.io", "https://lacesout.app"]);
+
+export function publishedBridgeAcceptsOrigin(origin: string): boolean {
+  try {
+    return publishedBridgeOrigins.has(new URL(origin).origin);
+  } catch {
+    return false;
+  }
+}
+
 // The stable unpacked dev-build extension ID, derived from the public `key`
 // pinned in apps/espn-bridge/manifest.json.
 const devExtensionId = "jmbijafllioopigmpacjkdjhbjkplndh";

@@ -64,8 +64,53 @@
           </small>
         </div>
         <button id="open-connections" class="primary" type="button">
-          Open Laces Out Connections
+          Open Laces Out League Sync
         </button>
+        <button id="self-hosted-toggle" class="quiet setup-link" type="button">
+          Pair a self-hosted instance
+        </button>
+        <form id="self-hosted-form" class="self-hosted-form" hidden>
+          <div class="setup-copy">
+            <strong>Pair your own instance</strong>
+            <small>
+              Create an automatic-sync pairing code in that instance’s League Sync page. The code
+              expires after 10 minutes.
+            </small>
+          </div>
+          <label for="self-hosted-url">
+            Instance URL
+            <input
+              id="self-hosted-url"
+              name="instance-url"
+              type="url"
+              inputmode="url"
+              placeholder="https://fantasy.example.com"
+              autocomplete="url"
+              required
+            />
+          </label>
+          <label for="self-hosted-code">
+            Pairing code
+            <input
+              id="self-hosted-code"
+              name="pairing-code"
+              type="text"
+              inputmode="text"
+              placeholder="ABCD-EFGH-JKLM-NPQR"
+              maxlength="19"
+              pattern="[A-HJ-NP-Za-hj-np-z2-9]{4}(?:-[A-HJ-NP-Za-hj-np-z2-9]{4}){3}"
+              autocomplete="off"
+              autocapitalize="characters"
+              spellcheck="false"
+              required
+            />
+          </label>
+          <small id="self-hosted-message" class="self-hosted-message" aria-live="polite"></small>
+          <div class="pairing-actions">
+            <button id="self-hosted-submit" class="primary" type="submit">Pair instance</button>
+            <button id="self-hosted-cancel" class="quiet" type="button">Cancel</button>
+          </div>
+        </form>
       </section>
 
       <div class="actions">

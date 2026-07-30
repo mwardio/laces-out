@@ -1,6 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { bridgeExtensionIds, chromeWebStoreUrl, sendPairingOffer } from "./bridge-extension";
+import {
+  bridgeExtensionIds,
+  chromeWebStoreUrl,
+  publishedBridgeAcceptsOrigin,
+  sendPairingOffer,
+} from "./bridge-extension";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -10,6 +15,13 @@ describe("bridge extension pairing", () => {
   it("targets the published Chrome Web Store listing first", () => {
     expect(chromeWebStoreUrl).toContain(bridgeExtensionIds()[0] ?? "missing-extension-id");
     expect(bridgeExtensionIds()[0]).toBe("hmilkmcjlkpnigcfnlfogeafacjpmkbj");
+  });
+
+  it("distinguishes published hosts from self-hosted pairing origins", () => {
+    expect(publishedBridgeAcceptsOrigin("https://lacesout.app/connections")).toBe(true);
+    expect(publishedBridgeAcceptsOrigin("https://laces.mward.io")).toBe(true);
+    expect(publishedBridgeAcceptsOrigin("https://fantasy.example.com")).toBe(false);
+    expect(publishedBridgeAcceptsOrigin("not a URL")).toBe(false);
   });
 
   it("hands the scoped credential directly to the installed extension", async () => {

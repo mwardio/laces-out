@@ -120,7 +120,7 @@ const primaryNavigation = [
   {
     href: "/connections",
     label: "League Sync",
-    description: "Sync ESPN · Yahoo coming soon",
+    description: yahooComingSoon ? "Sync ESPN · Yahoo coming soon" : "Sync Yahoo + ESPN",
     icon: Cable,
     section: "connections" as const,
   },

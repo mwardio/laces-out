@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  configurationFromPairingRedemption,
   configurationStorageKey,
   createPendingPairingOffer,
   maximumLeagueCount,
+  normalizePairingCode,
   pairingOfferIsFresh,
   pairingOfferTtlMs,
   parseLeagueIds,
@@ -97,6 +99,56 @@ describe("ESPN bridge multi-league protocol", () => {
 
   it("uses the Laces Out pending-pairing storage namespace", () => {
     expect(pendingPairingStorageKey).toBe("lacesOutEspnPendingPairing");
+  });
+
+  it("normalizes a self-hosted pairing code and validates the redeemed credential", () => {
+    expect(normalizePairingCode("  abcd-efgh-jklm-npqr ")).toBe("ABCD-EFGH-JKLM-NPQR");
+    expect(() => normalizePairingCode("ABCD-EFGH-IJKL-MNOP")).toThrow("pairing code");
+    expect(
+      configurationFromPairingRedemption(
+        {
+          deviceId: "00000000-0000-4000-8000-000000000010",
+          deviceToken,
+          expiresAt: "2099-07-30T13:00:00.000Z",
+          leagueIds: ["123", "456"],
+          season: 2026,
+          automaticSync: true,
+        },
+        "https://self-hosted.example/connections",
+      ),
+    ).toEqual({
+      apiBaseUrl: "https://self-hosted.example",
+      deviceToken,
+      leagueIds: ["123", "456"],
+      season: 2026,
+      automaticSync: true,
+    });
+  });
+
+  it("rejects malformed, expired, or downgraded self-hosted pairing responses", () => {
+    const response = {
+      deviceId: "00000000-0000-4000-8000-000000000010",
+      deviceToken,
+      expiresAt: "2099-07-30T13:00:00.000Z",
+      leagueIds: ["123"],
+      season: 2026,
+      automaticSync: true,
+    };
+    expect(() =>
+      configurationFromPairingRedemption(
+        { ...response, expiresAt: "2020-01-01T00:00:00.000Z" },
+        "https://self-hosted.example",
+      ),
+    ).toThrow("expiry");
+    expect(() =>
+      configurationFromPairingRedemption(
+        { ...response, automaticSync: false },
+        "https://self-hosted.example",
+      ),
+    ).toThrow("automatic-sync");
+    expect(() =>
+      configurationFromPairingRedemption(response, "http://self-hosted.example"),
+    ).toThrow("HTTPS");
   });
 
   it("accepts a self-originated pairing offer and normalizes the configuration", () => {

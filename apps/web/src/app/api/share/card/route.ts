@@ -127,7 +127,7 @@ function card(data: ShareCard): ReactElement {
             [
               text(
                 { fontSize: 22, letterSpacing: 4, color: LIME },
-                "MONDAY MORNING AWARDS",
+                "THE WEEKLY RECKONING",
                 "eyebrow",
               ),
               text({ fontSize: 46, fontWeight: 700, marginTop: 8 }, `Week ${data.week}`, "week"),

@@ -425,6 +425,44 @@ export const bridgeDevices = pgTable(
   ],
 );
 
+export const bridgePairingSessions = pgTable(
+  "bridge_pairing_sessions",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    // The short-lived code is bearer material, so only its SHA-256 digest reaches the database.
+    // Redeeming it creates the real bridge credential in one transaction.
+    codeHash: text("code_hash").notNull(),
+    deviceName: text("device_name").notNull(),
+    allowedLeagueIds: jsonb("allowed_league_ids").$type<readonly string[]>().notNull(),
+    season: integer("season").notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    consumedAt: timestamp("consumed_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("bridge_pairing_sessions_code_hash_unique").on(table.codeHash),
+    index("bridge_pairing_sessions_user_expiry_idx").on(table.userId, table.expiresAt),
+    check("bridge_pairing_sessions_code_hash_check", sql`char_length(${table.codeHash}) >= 32`),
+    check(
+      "bridge_pairing_sessions_device_name_check",
+      sql`char_length(btrim(${table.deviceName})) > 0`,
+    ),
+    check(
+      "bridge_pairing_sessions_leagues_check",
+      sql`jsonb_typeof(${table.allowedLeagueIds}) = 'array' and jsonb_array_length(${table.allowedLeagueIds}) between 1 and 32`,
+    ),
+    check("bridge_pairing_sessions_season_check", sql`${table.season} between 2000 and 2100`),
+    check("bridge_pairing_sessions_expiry_check", sql`${table.expiresAt} > ${table.createdAt}`),
+    check(
+      "bridge_pairing_sessions_consumed_check",
+      sql`${table.consumedAt} is null or ${table.consumedAt} >= ${table.createdAt}`,
+    ),
+  ],
+);
+
 export const bridgeDeviceLeagues = pgTable(
   "bridge_device_leagues",
   {

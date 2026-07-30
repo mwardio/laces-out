@@ -9,6 +9,10 @@ import {
   espnBridgeDeviceListResponseSchema,
   espnBridgeDeviceRevokeResponseSchema,
   espnBridgeDeviceResponseSchema,
+  espnBridgePairingRedeemRequestSchema,
+  espnBridgePairingRedeemResponseSchema,
+  espnBridgePairingSessionRequestSchema,
+  espnBridgePairingSessionResponseSchema,
   espnBridgeReceiptSchema,
   espnBridgeSnapshotSchema,
   espnLiveDraftIngestRequestSchema,
@@ -125,6 +129,25 @@ export interface EspnBridgePort {
     readonly deviceToken: string;
     readonly expiresAt: string | null;
   }>;
+  createPairingSession?(
+    userId: string,
+    input: {
+      readonly name: string;
+      readonly allowedLeagueIds: readonly string[];
+      readonly season: number;
+    },
+  ): Promise<{ readonly pairingCode: string; readonly expiresAt: string }>;
+  redeemPairingSession?(pairingCode: string): Promise<
+    | {
+        readonly deviceId: string;
+        readonly deviceToken: string;
+        readonly expiresAt: string;
+        readonly leagueIds: readonly string[];
+        readonly season: number;
+        readonly automaticSync: true;
+      }
+    | undefined
+  >;
   acceptSnapshot(
     deviceToken: string,
     snapshot: EspnBridgeSnapshot,
@@ -350,6 +373,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
                 "req.body.inviteCode",
                 "req.body.password",
                 "req.body.apiKey",
+                "req.body.pairingCode",
                 "*.inviteCode",
                 "req.body.*.inviteCode",
                 "*.password",
@@ -391,6 +415,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     "/v1/bridge/espn/supplemental",
     "/v1/bridge/espn/live-draft",
   ];
+  const espnBridgePairingRedeemPath = "/v1/bridge/espn/pairing-sessions/redeem";
 
   // The browser origins this deployment answers to: the canonical WEB_URL plus any second domain
   // pointed at the same stack. Membership in this set is the only thing the extra origins buy —
@@ -449,6 +474,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     "/v1/auth/register",
     "/v1/auth/session",
     ...espnBridgeIngestPaths,
+    espnBridgePairingRedeemPath,
     "/v1/invitations/inspect",
     "/v1/invitations/accept",
     "/v1/ranking-shares/open",
@@ -459,10 +485,12 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   app.addHook("onRequest", async (request, reply) => {
     const requestPath = request.url.split("?", 1)[0] ?? request.url;
     const isBridgeSnapshot = espnBridgeIngestPaths.includes(requestPath);
+    const isBridgeCredentialExchange = requestPath === espnBridgePairingRedeemPath;
     if (
       environment.NODE_ENV === "production" &&
       !["GET", "HEAD", "OPTIONS"].includes(request.method) &&
-      !isBridgeSnapshot
+      !isBridgeSnapshot &&
+      !isBridgeCredentialExchange
     ) {
       if (allowedWebOrigin(request.headers.origin) === undefined) {
         return reply.code(403).type("application/problem+json").send({
@@ -792,6 +820,59 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
         ),
       );
   });
+
+  app.post("/v1/bridge/espn/pairing-sessions", async (request, reply) => {
+    if (!request.currentUser) {
+      return reply.code(401).type("application/problem+json").send({
+        type: "https://fantasy.local/problems/unauthorized",
+        title: "Authentication required",
+        status: 401,
+        correlationId: request.id,
+      });
+    }
+    if (!options.espnBridge?.createPairingSession) {
+      return reply.code(503).type("application/problem+json").send({
+        type: "https://fantasy.local/problems/espn-bridge-pairing-unavailable",
+        title: "ESPN companion pairing is not configured",
+        status: 503,
+        correlationId: request.id,
+      });
+    }
+    const input = espnBridgePairingSessionRequestSchema.parse(request.body ?? {});
+    return reply
+      .code(201)
+      .send(
+        espnBridgePairingSessionResponseSchema.parse(
+          await options.espnBridge.createPairingSession(request.currentUser.id, input),
+        ),
+      );
+  });
+
+  app.post(
+    espnBridgePairingRedeemPath,
+    { config: { rateLimit: { max: 8, timeWindow: "1 minute" } } },
+    async (request, reply) => {
+      if (!options.espnBridge?.redeemPairingSession) {
+        return reply.code(503).type("application/problem+json").send({
+          type: "https://fantasy.local/problems/espn-bridge-pairing-unavailable",
+          title: "ESPN companion pairing is not configured",
+          status: 503,
+          correlationId: request.id,
+        });
+      }
+      const input = espnBridgePairingRedeemRequestSchema.parse(request.body ?? {});
+      const credential = await options.espnBridge.redeemPairingSession(input.pairingCode);
+      if (!credential) {
+        return reply.code(400).type("application/problem+json").send({
+          type: "https://fantasy.local/problems/espn-bridge-pairing-invalid",
+          title: "Pairing code is invalid or expired",
+          status: 400,
+          correlationId: request.id,
+        });
+      }
+      return espnBridgePairingRedeemResponseSchema.parse(credential);
+    },
+  );
 
   const bridgeDevicePathSchema = z.object({ deviceId: z.string().uuid() });
   app.delete("/v1/bridge/espn/devices/:deviceId", async (request, reply) => {

@@ -29,11 +29,14 @@ import {
   parseDataQualitySources,
   parseEspnBridgeDeviceCredential,
   parseEspnBridgeDeviceList,
+  parseEspnBridgePairingSession,
   type DataQualitySource,
   type EspnBridgeDeviceStatus,
+  type EspnBridgePairingSession,
 } from "../lib/api-client";
 import {
   chromeWebStoreUrl,
+  publishedBridgeAcceptsOrigin,
   sendPairingOffer,
   type PairingOfferOutcome,
 } from "../lib/bridge-extension";
@@ -188,6 +191,10 @@ export function ConnectionWorkbench() {
   const [revokingDeviceId, setRevokingDeviceId] = useState<string | null>(null);
   const [bridgeRevokeCandidate, setBridgeRevokeCandidate] = useState<string | null>(null);
   const [copyState, setCopyState] = useState<"idle" | "done" | "error">("idle");
+  const [pairingCodeCopyState, setPairingCodeCopyState] = useState<"idle" | "done" | "error">(
+    "idle",
+  );
+  const [selfHostedPairing, setSelfHostedPairing] = useState<EspnBridgePairingSession | null>(null);
   const [sendExtensionState, setSendExtensionState] = useState<
     "idle" | "sending" | "sent" | "failed"
   >("idle");
@@ -395,7 +402,7 @@ export function ConnectionWorkbench() {
       if (!response.ok) {
         throw new ConnectionUiError(
           response.status === 503
-            ? "Yahoo sign-in is coming soon."
+            ? "Yahoo sign-in is unavailable on this server."
             : "Yahoo authorization could not be started.",
         );
       }
@@ -408,7 +415,7 @@ export function ConnectionWorkbench() {
       setYahooError(
         error instanceof ConnectionUiError
           ? error.message
-          : "The API could not start Yahoo authorization. Try again when it is available.",
+          : "The API could not start Yahoo authorization. Try again in a moment.",
       );
     }
   }
@@ -518,6 +525,8 @@ export function ConnectionWorkbench() {
     setBridgeError(null);
     setCredential(null);
     setSendExtensionState("idle");
+    setSelfHostedPairing(null);
+    setPairingCodeCopyState("idle");
     try {
       let allowedLeagueIds: readonly string[];
       try {
@@ -561,7 +570,38 @@ export function ConnectionWorkbench() {
       setCredential(scopedCredential);
       setCopyState("idle");
       if (scopedCredential.method === "automatic") {
-        await sendCredentialToExtension(scopedCredential);
+        const outcome = await sendCredentialToExtension(scopedCredential);
+        if (!outcome.ok && !publishedBridgeAcceptsOrigin(window.location.origin)) {
+          const pairingResponse = await fetch(`${apiBaseUrl}/v1/bridge/espn/pairing-sessions`, {
+            method: "POST",
+            credentials: "include",
+            headers: { Accept: "application/json", "Content-Type": "application/json" },
+            body: JSON.stringify({
+              name: credentialName,
+              allowedLeagueIds,
+              season: espnSeason,
+            }),
+          });
+          if (!pairingResponse.ok) {
+            throw new ConnectionUiError(
+              "The companion was not detected and a self-hosted pairing code could not be created.",
+            );
+          }
+          const pairingSession = parseEspnBridgePairingSession(await pairingResponse.json());
+          if (!pairingSession) {
+            throw new ConnectionUiError("The bridge returned an invalid pairing code.");
+          }
+          setSelfHostedPairing(pairingSession);
+          setCredential(null);
+          // The direct handoff credential never reached an extension. Revoke that unused record
+          // after the independent one-time exchange exists, so the member sees only the device
+          // that actually completes pairing.
+          await fetch(`${apiBaseUrl}/v1/bridge/espn/devices/${issued.deviceId}`, {
+            method: "DELETE",
+            credentials: "include",
+            headers: { Accept: "application/json" },
+          }).catch(() => undefined);
+        }
       }
       setBridgeState("done");
       await refreshBridgeDevices();
@@ -577,8 +617,8 @@ export function ConnectionWorkbench() {
 
   async function sendCredentialToExtension(
     credentialToSend: ScopedBridgeCredential | null = credential,
-  ) {
-    if (!credentialToSend) return;
+  ): Promise<PairingOfferOutcome> {
+    if (!credentialToSend) return { ok: false };
     setSendExtensionState("sending");
     let outcome: PairingOfferOutcome;
     try {
@@ -593,6 +633,7 @@ export function ConnectionWorkbench() {
       outcome = { ok: false };
     }
     setSendExtensionState(outcome.ok ? "sent" : "failed");
+    return outcome;
   }
 
   async function copyBookmarklet() {
@@ -603,6 +644,17 @@ export function ConnectionWorkbench() {
       window.setTimeout(() => setCopyState("idle"), 1800);
     } catch {
       setCopyState("error");
+    }
+  }
+
+  async function copySelfHostedPairingCode() {
+    if (!selfHostedPairing) return;
+    try {
+      await navigator.clipboard.writeText(selfHostedPairing.pairingCode);
+      setPairingCodeCopyState("done");
+      window.setTimeout(() => setPairingCodeCopyState("idle"), 1800);
+    } catch {
+      setPairingCodeCopyState("error");
     }
   }
 
@@ -1208,7 +1260,52 @@ export function ConnectionWorkbench() {
                 </p>
               ) : null}
 
-              {credential?.method === "automatic" ? (
+              {selfHostedPairing ? (
+                <div className="bridge-token bridge-token--pairing">
+                  <div>
+                    <KeyRound size={15} />
+                    <span>
+                      <strong>Finish pairing from the Chrome companion</strong>
+                      <small>
+                        Open the extension, choose Pair a self-hosted instance, and enter this
+                        instance URL with the one-time code below.
+                      </small>
+                    </span>
+                  </div>
+                  <dl className="bridge-pairing-code">
+                    <div>
+                      <dt>Instance URL</dt>
+                      <dd>{absoluteApiOrigin()}</dd>
+                    </div>
+                    <div>
+                      <dt>Pairing code</dt>
+                      <dd>
+                        <code>{selfHostedPairing.pairingCode}</code>
+                      </dd>
+                    </div>
+                  </dl>
+                  <button
+                    className="button button--outline button--small"
+                    type="button"
+                    onClick={() => void copySelfHostedPairingCode()}
+                  >
+                    {pairingCodeCopyState === "done" ? (
+                      <Check size={14} />
+                    ) : (
+                      <Clipboard size={14} />
+                    )}
+                    {pairingCodeCopyState === "done" ? "Code copied" : "Copy pairing code"}
+                  </button>
+                  <span className="bridge-copy-status" role="status">
+                    {pairingCodeCopyState === "error"
+                      ? "Clipboard access failed. Select and copy the code manually."
+                      : `Expires ${new Date(selfHostedPairing.expiresAt).toLocaleTimeString([], {
+                          hour: "numeric",
+                          minute: "2-digit",
+                        })}. The code can be used once.`}
+                  </span>
+                </div>
+              ) : credential?.method === "automatic" ? (
                 <div className="bridge-token">
                   <div>
                     {sendExtensionState === "sent" ? (

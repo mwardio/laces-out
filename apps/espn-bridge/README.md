@@ -27,6 +27,21 @@ The signed listing keeps the extension ID stable and delivers updates through Ch
    supplemental feeds. Optional background sync repeats the check every six hours while the browser
    and ESPN session are available.
 
+### Self-hosted instances
+
+Version 0.5.0 uses the same signed companion for arbitrary HTTPS deployments; a self-hoster does
+not need to rebuild or publish a separate extension.
+
+1. Create the Automatic Sync connection from the self-hosted instance's **League Sync** page.
+2. When the page displays its instance URL and one-time pairing code, open the companion and choose
+   **Pair a self-hosted instance**.
+3. Enter that URL and code. Chrome asks for access to that exact host, the code is exchanged once,
+   and the resulting league-scoped device credential stays in extension storage.
+
+Codes expire after 10 minutes, are stored server-side only as SHA-256 hashes, never appear in a URL,
+and cannot be replayed after a successful exchange. HTTPS is mandatory except for `localhost` and
+`127.0.0.1` development instances.
+
 ## Live ESPN draft sync (in development)
 
 Version 0.4.0 adds a narrowly scoped content script for the ESPN football draft room. It passively
@@ -93,11 +108,13 @@ npm run build -w @fantasy/espn-bridge
 Then open `chrome://extensions`, enable Developer mode, choose **Load unpacked**, and select the
 generated `apps/espn-bridge/dist` directory.
 
-## Web-to-extension pairing
+## Pairing architecture
 
-Laces Out pairs directly with the companion through Chrome's `externally_connectable` channel.
+The two pairing paths issue the same bounded `BridgeConfiguration`, require an explicit extension
+gesture, and end at the same service-worker validation:
 
-- The web app posts a `PAIRING_OFFER` message (`apiBaseUrl`, `deviceToken`, `leagues`, `season`) with
+- **Hosted direct pairing:** the web app posts a `PAIRING_OFFER` message (`apiBaseUrl`,
+  `deviceToken`, `leagues`, `season`) with
   `chrome.runtime.sendMessage(extensionId, …)`. The device token travels only inside that message —
   never in a URL, log, or the clipboard.
 - The service worker validates the offer, requiring the browser-attested sender origin to exactly
@@ -105,9 +122,12 @@ Laces Out pairs directly with the companion through Chrome's `externally_connect
   offer as a **pending** offer with a timestamp; it never configures the bridge or requests host
   permissions on its own, and never echoes the token back.
 - Pending offers expire after 10 minutes. The popup shows a distinct **Pairing offer from &lt;origin&gt;**
-  confirmation with **Complete pairing** (runs the same permission-grant + configure gesture as the
-  recovery form) and **Dismiss**. The recovery form remains available for local development, but it
-  is not part of normal user setup.
+  confirmation with **Complete pairing** and **Dismiss**.
+- **Self-hosted pairing:** the member creates a 10-minute one-time code while authenticated to their
+  instance. The extension normalizes the entered origin, rejects non-HTTPS remote hosts, asks Chrome
+  for only that host, and sends the code in a redirect-free POST with credentials omitted. The server
+  atomically consumes the hashed code and returns the long-lived scoped credential once. A failed
+  exchange removes a newly granted host permission.
 
 For `chrome.runtime.sendMessage` from a page to reach a specific extension, the page needs the
 extension's ID:
@@ -120,7 +140,8 @@ extension's ID:
   baked into the web app as the primary target (store IDs never change across updates).
   `NEXT_PUBLIC_BRIDGE_EXTENSION_ID` remains an optional override in case the listing is ever
   recreated. The store manifest drops the `key` (uploads must not
-  contain one) and narrows `externally_connectable` to `https://laces.mward.io/*` only.
+  contain one) and limits externally initiated messages to `https://laces.mward.io/*` and
+  `https://lacesout.app/*`. Self-hosted sites never receive external-messaging access.
 
 The companion processes configured leagues sequentially to keep memory and network use bounded.
 One league failure does not stop later leagues. The popup retains a per-league result and reports
@@ -141,16 +162,16 @@ The build has two targets. They share identical compiled code — only the manif
 
 ```bash
 npm run build -w @fantasy/espn-bridge         # dev: localhost + broad optional host, for Load unpacked
-npm run build:store -w @fantasy/espn-bridge   # store: pinned to https://laces.mward.io, tightened CSP
+npm run build:store -w @fantasy/espn-bridge   # store: hosted direct pairing + optional self-host access
 ```
 
 Both builds write their reproducible archives to `apps/espn-bridge/dist-package/` (git-ignored);
-neither is copied into the public site. The store manifest drops the
-`http://localhost` / `https://*/*` optional hosts down to `https://laces.mward.io/*`, narrows the CSP
-`connect-src` to the three named hosts, tightens `externally_connectable` to `https://laces.mward.io/*`
-only, and removes the dev `key`, so review sees only fixed, single-purpose origins and the store
-assigns the published extension ID. Both targets write to `dist/`, so re-run the dev build before
-loading an unpacked dev copy.
+neither is copied into the public site. The store manifest keeps HTTPS and loopback hosts
+**optional**: Chrome grants none at install time and prompts for the exact instance only after the
+user starts self-hosted pairing. `externally_connectable` remains limited to the two hosted Laces
+Out domains, and the store build removes the dev `key` so the listing assigns the published
+extension ID. Both targets write to `dist/`, so re-run the dev build before loading an unpacked dev
+copy.
 
 ### Store publication record
 
@@ -162,10 +183,11 @@ For future releases:
 2. Privacy policy URL: `https://laces.mward.io/privacy` (required — the extension handles league data).
 3. Justify permissions in the listing form: `alarms`/`storage` for scheduled local sync and pairing
    state; the two `fantasy.espn.com` / `lm-api-reads.fantasy.espn.com` hosts for the read-only league
-   fetch and the draft-room content script; the `laces.mward.io` optional host for uploading the
-   bounded snapshot. State that no ESPN password, `SWID`, or `espn_s2` is read or transmitted, and
-   that the draft-room content script only reads already-rendered draft results. Version 0.4.0 adds
-   no new permission or host permission.
+   fetch and the draft-room content script; and optional HTTPS/loopback hosts so a user may connect
+   the signed companion to their own Laces Out deployment. State that optional host access is
+   requested only for the exact URL entered by the user, no remote HTTP host is accepted, and a
+   failed exchange removes newly granted access. No ESPN password, `SWID`, or `espn_s2` is read or
+   transmitted; the draft-room content script reads only already-rendered draft results.
 4. Complete the data-safety form: league data only, not sold, used solely to sync the user's leagues.
 5. Retain **Unlisted** visibility unless the release decision explicitly changes.
 6. Provide at least one 1280×800 (or 640×400) screenshot and a 440×280 promo tile.
@@ -184,6 +206,8 @@ For future releases:
   and rejected outright if they contain control or bidirectional-override characters.
 - Dynamically granted access only to the configured Laces Out API origin.
 - HTTPS is mandatory outside loopback development.
+- Self-hosted pairing codes carry 80 bits of entropy, expire after 10 minutes, are stored only as
+  hashes, are rate-limited at redemption, and are consumed atomically before a device is created.
 - ESPN responses are JSON-only, redirect-free, capped at 5 MiB, minimally shape-checked, and
   SHA-256 checksummed before upload.
 - Device tokens are scoped to explicit ESPN league IDs; the server stores only a token hash and can

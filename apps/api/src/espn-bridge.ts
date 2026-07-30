@@ -5,8 +5,14 @@ import {
   normalizeEspnWebClientSnapshot,
 } from "@fantasy/connector-espn";
 import type { EspnBridgeSnapshot, EspnSupplementalBridgeSnapshot } from "@fantasy/contracts";
-import { bridgeDeviceLeagues, bridgeDevices, leagues, type Database } from "@fantasy/db";
-import { and, asc, desc, eq, gt, isNull, or } from "drizzle-orm";
+import {
+  bridgeDeviceLeagues,
+  bridgeDevices,
+  bridgePairingSessions,
+  leagues,
+  type Database,
+} from "@fantasy/db";
+import { and, asc, desc, eq, gt, isNotNull, isNull, lte, or } from "drizzle-orm";
 
 import {
   emitProviderSyncChangeEvents,
@@ -15,8 +21,10 @@ import {
 import { DrizzleEspnSyncPersistence } from "./espn-sync-persistence.js";
 
 const deviceLifetimeMs = 365 * 24 * 60 * 60 * 1000;
+const pairingSessionLifetimeMs = 10 * 60 * 1000;
 const maximumSnapshotAgeMs = 24 * 60 * 60 * 1000;
 const maximumFutureSkewMs = 5 * 60 * 1000;
+const pairingAlphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 
 type BridgeErrorCode = "UNAUTHORIZED" | "OUT_OF_SCOPE" | "STALE" | "CHECKSUM" | "INVALID";
 
@@ -55,6 +63,38 @@ export interface EspnBridgeDeviceList {
 
 function tokenHash(token: string): string {
   return createHash("sha256").update(token, "utf8").digest("base64url");
+}
+
+export function createEspnBridgePairingCode(): string {
+  const bytes = randomBytes(10);
+  let bits = 0;
+  let buffer = 0;
+  let code = "";
+  for (const byte of bytes) {
+    buffer = (buffer << 8) | byte;
+    bits += 8;
+    while (bits >= 5) {
+      bits -= 5;
+      code += pairingAlphabet[(buffer >>> bits) & 31]!;
+    }
+  }
+  return code.match(/.{1,4}/gu)?.join("-") ?? code;
+}
+
+function normalizedPairingCode(value: string): string {
+  return value.trim().toUpperCase();
+}
+
+function storedLeagueIds(value: readonly string[]): readonly string[] {
+  if (
+    value.length < 1 ||
+    value.length > 32 ||
+    value.some((leagueId) => !/^\d{1,20}$/u.test(leagueId)) ||
+    new Set(value).size !== value.length
+  ) {
+    throw new Error("Stored ESPN bridge pairing scope is invalid");
+  }
+  return value;
 }
 
 function canonicalChecksum(payload: unknown): string {
@@ -235,6 +275,103 @@ export class EspnBridgeService {
       return stored;
     });
     return { deviceId: device.id, deviceToken, expiresAt: expiresAt.toISOString() };
+  }
+
+  async createPairingSession(
+    userId: string,
+    input: {
+      readonly name: string;
+      readonly allowedLeagueIds: readonly string[];
+      readonly season: number;
+    },
+  ): Promise<{ readonly pairingCode: string; readonly expiresAt: string }> {
+    const now = this.#now();
+    const expiresAt = new Date(now.getTime() + pairingSessionLifetimeMs);
+    const pairingCode = createEspnBridgePairingCode();
+    await this.#database
+      .delete(bridgePairingSessions)
+      .where(
+        and(
+          eq(bridgePairingSessions.userId, userId),
+          or(
+            lte(bridgePairingSessions.expiresAt, now),
+            isNotNull(bridgePairingSessions.consumedAt),
+          ),
+        ),
+      );
+    await this.#database.insert(bridgePairingSessions).values({
+      userId,
+      codeHash: tokenHash(pairingCode),
+      deviceName: input.name.trim(),
+      allowedLeagueIds: [...input.allowedLeagueIds],
+      season: input.season,
+      expiresAt,
+    });
+    return { pairingCode, expiresAt: expiresAt.toISOString() };
+  }
+
+  async redeemPairingSession(pairingCode: string): Promise<
+    | {
+        readonly deviceId: string;
+        readonly deviceToken: string;
+        readonly expiresAt: string;
+        readonly leagueIds: readonly string[];
+        readonly season: number;
+        readonly automaticSync: true;
+      }
+    | undefined
+  > {
+    const now = this.#now();
+    const expiresAt = new Date(now.getTime() + deviceLifetimeMs);
+    const deviceToken = `lo_espn_${randomBytes(32).toString("base64url")}`;
+    return this.#database.transaction(async (transaction) => {
+      // Updating first makes redemption single-use even when two extension requests race. If any
+      // later insert fails, the transaction rolls this consumption marker back with it.
+      const [session] = await transaction
+        .update(bridgePairingSessions)
+        .set({ consumedAt: now })
+        .where(
+          and(
+            eq(bridgePairingSessions.codeHash, tokenHash(normalizedPairingCode(pairingCode))),
+            isNull(bridgePairingSessions.consumedAt),
+            gt(bridgePairingSessions.expiresAt, now),
+          ),
+        )
+        .returning({
+          userId: bridgePairingSessions.userId,
+          deviceName: bridgePairingSessions.deviceName,
+          allowedLeagueIds: bridgePairingSessions.allowedLeagueIds,
+          season: bridgePairingSessions.season,
+        });
+      if (!session) return undefined;
+
+      const leagueIds = storedLeagueIds(session.allowedLeagueIds);
+      const [device] = await transaction
+        .insert(bridgeDevices)
+        .values({
+          userId: session.userId,
+          provider: "espn",
+          name: session.deviceName,
+          tokenHash: tokenHash(deviceToken),
+          expiresAt,
+        })
+        .returning({ id: bridgeDevices.id });
+      if (!device) throw new Error("ESPN bridge device could not be created");
+      await transaction.insert(bridgeDeviceLeagues).values(
+        leagueIds.map((externalLeagueId) => ({
+          bridgeDeviceId: device.id,
+          externalLeagueId,
+        })),
+      );
+      return {
+        deviceId: device.id,
+        deviceToken,
+        expiresAt: expiresAt.toISOString(),
+        leagueIds,
+        season: session.season,
+        automaticSync: true as const,
+      };
+    });
   }
 
   async acceptSnapshot(
