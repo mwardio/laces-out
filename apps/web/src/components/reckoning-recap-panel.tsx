@@ -534,14 +534,14 @@ export function ReckoningRecapPanel({ leagueId, snapshot, demo }: ReckoningRecap
         {configuredSpiceLevel === "medium" ? (
           <p className={styles.notice}>
             Medium is uncensored and NSFW by design. Expect profanity, crude jokes, and
-            inappropriate locker-room humor. Slurs, protected traits, appearance, family, real-world
-            health or injury, threats, and anything private remain off limits.
+            inappropriate locker-room humor. Slurs, protected traits, threats, and anything private
+            remain off limits.
           </p>
         ) : configuredSpiceLevel === "scorched" ? (
           <p className={styles.notice}>
             Scorched is the uncensored, shock-and-awe roast. Fantasy personas, egos, league history,
-            decisions, and humiliating results are fair game; slurs, protected traits, appearance,
-            family, real-world health or injury, threats, and anything private are not.
+            decisions, and humiliating results are fair game. Slurs, protected traits, threats, and
+            anything private remain off limits.
           </p>
         ) : null}
 

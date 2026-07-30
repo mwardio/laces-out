@@ -130,6 +130,7 @@
   .controls button:focus-visible,
   .gate a:focus-visible,
   .unavailable a:focus-visible,
+  .provenance summary:focus-visible,
   .definitions summary:focus-visible {
     outline: 3px solid var(--focus-ring-soft);
     outline-offset: 2px;
@@ -165,61 +166,108 @@
   }
 
   .provenance {
-    display: grid;
-    grid-template-columns: repeat(5, minmax(0, 1fr));
     overflow: hidden;
-    color: #c7d0c8;
-    background: var(--ink-950);
-    border: 1px solid var(--ink-950);
-    border-radius: var(--radius-md);
+    color: var(--ink-600);
+    background: var(--paper-50);
+    border: 1px solid var(--ink-150);
+    border-radius: var(--radius-sm);
   }
 
-  .provenance > div {
-    display: flex;
-    min-width: 0;
+  .provenance summary {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
     align-items: center;
     gap: var(--space-10);
-    padding: 15px 16px;
-    border-right: 1px solid var(--ink-750);
+    min-height: 48px;
+    padding: 9px 13px;
+    cursor: pointer;
+    list-style: none;
   }
 
-  .provenance > div:last-child {
-    border-right: 0;
+  .provenance summary::-webkit-details-marker {
+    display: none;
   }
 
-  /* The tile's text can be long enough to squeeze the icon to a sliver without this. */
-  .provenance > div > svg {
-    flex: 0 0 auto;
+  .provenance summary > svg {
+    color: var(--fern-600);
   }
 
-  .provenance span,
-  .provenance small,
-  .provenance strong {
+  .provenance summary span,
+  .provenance summary small,
+  .provenance summary strong {
     display: block;
     min-width: 0;
   }
 
-  .provenance small {
-    color: #89958c;
+  .provenance summary strong {
+    color: var(--ink-900);
+    font-size: var(--text-11);
+  }
+
+  .provenance summary small {
+    margin-top: 2px;
+    color: var(--ink-500);
+    font-size: var(--text-10);
+    line-height: 1.4;
+  }
+
+  .provenanceAction {
+    color: var(--ink-600);
+    font-size: var(--text-10);
+    font-weight: 700;
+    white-space: nowrap;
+  }
+
+  .provenanceAction::after {
+    display: inline-block;
+    margin-left: 6px;
+    content: "⌄";
+    transform-origin: center;
+    transition: transform 160ms ease;
+  }
+
+  .provenance[open] .provenanceAction::after {
+    transform: rotate(180deg);
+  }
+
+  .provenanceDetails {
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    margin: 0;
+    border-top: 1px solid var(--ink-150);
+  }
+
+  .provenanceDetails > div {
+    min-width: 0;
+    padding: 11px 13px 13px;
+    border-right: 1px solid var(--ink-150);
+  }
+
+  .provenanceDetails > div:last-child {
+    border-right: 0;
+  }
+
+  .provenanceDetails dt {
+    color: var(--ink-500);
     font-size: var(--text-9);
+    font-weight: 750;
     letter-spacing: 0.06em;
     text-transform: uppercase;
   }
 
-  /* Wrap rather than truncate — see decision-workbench.module.css for the rationale. */
-  .provenance strong {
-    margin-top: 2px;
-    color: var(--white);
-    font-size: var(--text-11);
-    line-height: 1.4;
+  .provenanceDetails dd {
+    margin: 3px 0 0;
+    color: var(--ink-800);
+    font-size: var(--text-10);
+    font-weight: 650;
+    line-height: 1.45;
     overflow-wrap: anywhere;
   }
 
-  /* The seed is the replay key, so it is shown whole and wrapped rather than truncated. */
   .seedValue {
     display: block;
     margin-top: 3px;
-    color: #89958c;
+    color: var(--ink-500);
     font-family: var(--font-mono);
     font-size: var(--text-9);
     line-height: 1.45;
@@ -1006,17 +1054,20 @@
       grid-row: auto;
     }
 
-    .provenance {
+    .provenanceDetails {
       grid-template-columns: repeat(2, minmax(0, 1fr));
     }
 
-    /* Two per row: every even tile ends its row, and every tile but the last opens another. */
-    .provenance > div:nth-child(even) {
+    .provenanceDetails > div {
+      border-bottom: 1px solid var(--ink-150);
+    }
+
+    .provenanceDetails > div:nth-child(even) {
       border-right: 0;
     }
 
-    .provenance > div:not(:last-child) {
-      border-bottom: 1px solid var(--ink-750);
+    .provenanceDetails > div:last-child {
+      border-bottom: 0;
     }
   }
 
@@ -1144,27 +1195,29 @@
     }
 
     .provenance {
-      display: flex;
-      overflow-x: auto;
-      scroll-snap-type: x mandatory;
-      scrollbar-width: none;
+      overflow: visible;
     }
 
-    .provenance > div,
-    .provenance > div:nth-child(2) {
-      min-width: min(78vw, 290px);
-      flex: 0 0 min(78vw, 290px);
-      border-right: 1px solid var(--ink-750);
-      border-bottom: 0;
-      scroll-snap-align: start;
+    .provenance summary {
+      grid-template-columns: auto minmax(0, 1fr);
     }
 
-    .provenance > div:last-child {
-      border-right: 0;
-    }
-
-    .provenance::-webkit-scrollbar {
+    .provenanceAction {
       display: none;
+    }
+
+    .provenanceDetails {
+      grid-template-columns: 1fr;
+    }
+
+    .provenanceDetails > div,
+    .provenanceDetails > div:nth-child(even) {
+      border-right: 0;
+      border-bottom: 1px solid var(--ink-150);
+    }
+
+    .provenanceDetails > div:last-child {
+      border-bottom: 0;
     }
 
     .dataTable th:first-child,

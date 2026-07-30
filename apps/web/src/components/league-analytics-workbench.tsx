@@ -7,13 +7,10 @@ import type {
   WeeklyAward,
 } from "@fantasy/contracts";
 import {
-  Activity,
   Award,
   BarChart3,
-  Clock3,
   Crosshair,
   Database,
-  Dices,
   Info,
   LoaderCircle,
   Percent,
@@ -133,34 +130,47 @@ function Unavailable({
 function Provenance({ snapshot }: { readonly snapshot: LeagueAnalyticsSnapshot }) {
   const projection = snapshot.provenance.projectionSet;
   const playoff = snapshot.playoffOdds;
+  const playoffSummary =
+    playoff === undefined
+      ? "No playoff model"
+      : playoff.state === "available"
+        ? `${count.format(playoff.simulations)} simulations`
+        : "Playoff model withheld";
+
   return (
-    <section className={styles.provenance} aria-label="Analytics provenance">
-      <div>
-        <Clock3 size={16} aria-hidden="true" />
+    <details className={styles.provenance}>
+      <summary>
+        <Database size={16} aria-hidden="true" />
         <span>
+          <strong>Data snapshot</strong>
           <small>
-            Matchups · {snapshot.provenance.matchupObservationsRead} reads →{" "}
-            {snapshot.provenance.deduplicatedMatchups} current
+            {snapshot.provenance.matchupFreshness.label} ·{" "}
+            {projection ? `Week ${projection.week} projections` : "No projection set"} ·{" "}
+            {playoffSummary}
           </small>
-          <strong>{snapshot.provenance.matchupFreshness.label}</strong>
         </span>
-      </div>
-      <div>
-        <Activity size={16} aria-hidden="true" />
-        <span>
-          <small>Projection source</small>
-          <strong>
+        <span className={styles.provenanceAction}>View details</span>
+      </summary>
+      <dl className={styles.provenanceDetails}>
+        <div>
+          <dt>Matchups</dt>
+          <dd>
+            {snapshot.provenance.matchupObservationsRead} reads,{" "}
+            {snapshot.provenance.deduplicatedMatchups} current ·{" "}
+            {snapshot.provenance.matchupFreshness.label}
+          </dd>
+        </div>
+        <div>
+          <dt>Projection source</dt>
+          <dd>
             {projection
               ? `${projection.sourceLabel} · Week ${projection.week} · ${projection.visibility}`
               : "No compatible set"}
-          </strong>
-        </span>
-      </div>
-      <div>
-        <Target size={16} aria-hidden="true" />
-        <span>
-          <small>Source as of</small>
-          <strong>
+          </dd>
+        </div>
+        <div>
+          <dt>Source as of</dt>
+          <dd>
             {projection
               ? `${projectionSourceAsOfText(projection, dateTime)}${
                   projection.sourceObservedAtStatus === "verified"
@@ -168,33 +178,31 @@ function Provenance({ snapshot }: { readonly snapshot: LeagueAnalyticsSnapshot }
                     : ""
                 }`
               : snapshot.provenance.projectionFreshness.label}
-          </strong>
-        </span>
-      </div>
-      <div>
-        <Database size={16} aria-hidden="true" />
-        <span>
-          <small>Imported at{projection ? ` · ${projection.creatorDisplayName}` : ""}</small>
-          <strong>{projection ? dateTime(projection.importedAt) : "Not available"}</strong>
-        </span>
-      </div>
-      <div>
-        <Dices size={16} aria-hidden="true" />
-        <span>
-          <small>Playoff simulation</small>
-          <strong>
+          </dd>
+        </div>
+        <div>
+          <dt>Imported</dt>
+          <dd>
+            {projection
+              ? `${dateTime(projection.importedAt)} · ${projection.creatorDisplayName}`
+              : "Not available"}
+          </dd>
+        </div>
+        <div>
+          <dt>Playoff model</dt>
+          <dd>
             {playoff === undefined
               ? "Not in this snapshot"
               : playoff.state === "available"
                 ? `${count.format(playoff.simulations)} seeded runs`
                 : "Withheld — see section"}
-          </strong>
-          {playoff?.state === "available" ? (
-            <code className={styles.seedValue}>{playoff.seed}</code>
-          ) : null}
-        </span>
-      </div>
-    </section>
+            {playoff?.state === "available" ? (
+              <code className={styles.seedValue}>{playoff.seed}</code>
+            ) : null}
+          </dd>
+        </div>
+      </dl>
+    </details>
   );
 }
 
