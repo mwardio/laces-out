@@ -44,21 +44,36 @@ export interface AuthRepository {
     readonly tokenHash: string;
     readonly expiresAt: Date;
   }): Promise<void>;
+  /**
+   * Creates a password-authenticated session only while the verified password hash is still
+   * current. Production repositories lock the account row so password replacement either revokes
+   * this session or makes this insert fail closed.
+   */
+  createSessionForPassword?(input: {
+    readonly userId: string;
+    readonly expectedPasswordHash: string;
+    readonly tokenHash: string;
+    readonly expiresAt: Date;
+  }): Promise<AuthUserRecord | undefined>;
+  /** Atomically locks a still-existing account and creates a session for a trusted handoff. */
+  createSessionForUser?(input: {
+    readonly userId: string;
+    readonly tokenHash: string;
+    readonly expiresAt: Date;
+  }): Promise<AuthUserRecord | undefined>;
   findSession(tokenHash: string, now: Date): Promise<SessionRecord | undefined>;
   touchSession(tokenHash: string, now: Date): Promise<void>;
   deleteSession(tokenHash: string): Promise<void>;
   deleteExpiredSessions(now: Date): Promise<void>;
   findUserById?(userId: string): Promise<AuthUserRecord | undefined>;
-  updatePassword?(userId: string, passwordHash: string, now: Date): Promise<void>;
-  /** Revokes every session for the account except the one presenting `exceptTokenHash`. */
-  deleteOtherSessions?(userId: string, exceptTokenHash: string): Promise<void>;
-  /** Production repositories use one transaction so a new password never leaves old sessions. */
-  replacePasswordAndDeleteOtherSessions?(
-    userId: string,
-    passwordHash: string,
-    exceptTokenHash: string,
-    now: Date,
-  ): Promise<void>;
+  /** Locks, reauthenticates, replaces the password, and revokes other sessions atomically. */
+  replacePasswordIfCurrent?(input: {
+    readonly userId: string;
+    readonly currentPassword: string;
+    readonly newPasswordHash: string;
+    readonly exceptTokenHash: string;
+    readonly now: Date;
+  }): Promise<"changed" | "invalid-current-password">;
 }
 
 export type ChangePasswordResult =
@@ -86,6 +101,24 @@ export async function hashOwnerPassword(password: string): Promise<string> {
   return hash(password, passwordHashOptions);
 }
 
+const dummyPasswordHash = hash("not-the-owner-password", passwordHashOptions);
+
+/**
+ * Performs one Argon2 verification even when an account or password hash is absent. Repositories
+ * call this only after taking the account lock for a sensitive mutation.
+ */
+export async function verifyOwnerPassword(
+  passwordHash: string | null | undefined,
+  candidatePassword: string,
+): Promise<boolean> {
+  const hasPasswordHash = typeof passwordHash === "string" && passwordHash.length > 0;
+  const valid = await verify(
+    hasPasswordHash ? passwordHash : await dummyPasswordHash,
+    candidatePassword,
+  );
+  return hasPasswordHash && valid;
+}
+
 export function hashSessionToken(token: string): string {
   return createHash("sha256").update(token, "utf8").digest("base64url");
 }
@@ -96,31 +129,55 @@ function publicUser(user: AuthUserRecord): SessionUser {
 
 export class AuthService {
   readonly #repository: AuthRepository;
-  readonly #dummyHash: Promise<string>;
   readonly #now: () => Date;
 
   constructor(repository: AuthRepository, now: () => Date = () => new Date()) {
     this.#repository = repository;
     this.#now = now;
-    // Login always performs one Argon2 verification, including unknown emails.
-    this.#dummyHash = hash("not-the-owner-password", passwordHashOptions);
+  }
+
+  async #createSession(
+    user: AuthUserRecord,
+    expectedPasswordHash?: string,
+  ): Promise<LoginResult | undefined> {
+    const now = this.#now();
+    const expiresAt = new Date(now.getTime() + sessionLifetimeSeconds * 1000);
+    const token = randomBytes(32).toString("base64url");
+    const sessionInput = { userId: user.id, tokenHash: hashSessionToken(token), expiresAt };
+    if (expectedPasswordHash && this.#repository.createSessionForPassword) {
+      const currentUser = await this.#repository.createSessionForPassword({
+        ...sessionInput,
+        expectedPasswordHash,
+      });
+      return currentUser ? { token, expiresAt, user: publicUser(currentUser) } : undefined;
+    }
+    await this.#repository.createSession(sessionInput);
+    return { token, expiresAt, user: publicUser(user) };
   }
 
   async login(email: string, password: string): Promise<LoginResult | undefined> {
     const user = await this.#repository.findUserByEmail(email.trim().toLowerCase());
-    const candidateHash = user?.passwordHash ?? (await this.#dummyHash);
-    const valid = await verify(candidateHash, password);
+    const valid = await verifyOwnerPassword(user?.passwordHash, password);
     if (!user || !user.passwordHash || !valid) return undefined;
+    return this.#createSession(user, user.passwordHash);
+  }
 
-    const now = this.#now();
-    const expiresAt = new Date(now.getTime() + sessionLifetimeSeconds * 1000);
-    const token = randomBytes(32).toString("base64url");
-    await this.#repository.createSession({
-      userId: user.id,
-      tokenHash: hashSessionToken(token),
-      expiresAt,
-    });
-    return { token, expiresAt, user: publicUser(user) };
+  /** Issues a normal revocable session after another trusted, one-time authentication exchange. */
+  async issueSession(userId: string): Promise<LoginResult | undefined> {
+    if (this.#repository.createSessionForUser) {
+      const now = this.#now();
+      const expiresAt = new Date(now.getTime() + sessionLifetimeSeconds * 1000);
+      const token = randomBytes(32).toString("base64url");
+      const user = await this.#repository.createSessionForUser({
+        userId,
+        tokenHash: hashSessionToken(token),
+        expiresAt,
+      });
+      return user ? { token, expiresAt, user: publicUser(user) } : undefined;
+    }
+    if (!this.#repository.findUserById) return undefined;
+    const user = await this.#repository.findUserById(userId);
+    return user ? this.#createSession(user) : undefined;
   }
 
   async validate(token: string | undefined): Promise<SessionUser | undefined> {
@@ -153,34 +210,22 @@ export class AuthService {
     currentToken: string | undefined,
   ): Promise<ChangePasswordResult> {
     const repository = this.#repository;
-    const canReplaceAtomically = repository.replacePasswordAndDeleteOtherSessions !== undefined;
-    const canReplaceSeparately =
-      repository.updatePassword !== undefined && repository.deleteOtherSessions !== undefined;
-    if (!repository.findUserById || (!canReplaceAtomically && !canReplaceSeparately)) {
+    if (!repository.replacePasswordIfCurrent) {
       return { outcome: "unsupported" };
     }
-    const user = await repository.findUserById(userId);
-    // Spend the same Argon2 verification whether or not the account can change a password, so
-    // the response time does not distinguish the two.
-    const candidateHash = user?.passwordHash ?? (await this.#dummyHash);
-    const valid = await verify(candidateHash, currentPassword);
-    if (!user || !user.passwordHash || !valid) return { outcome: "invalid-current-password" };
 
     const passwordHash = await hashOwnerPassword(newPassword);
     // An empty hash matches no stored session, so a caller without a cookie revokes them all.
     const currentTokenHash = currentToken ? hashSessionToken(currentToken) : "";
     const now = this.#now();
-    if (repository.replacePasswordAndDeleteOtherSessions) {
-      await repository.replacePasswordAndDeleteOtherSessions(
-        user.id,
-        passwordHash,
-        currentTokenHash,
-        now,
-      );
-    } else {
-      await repository.updatePassword!(user.id, passwordHash, now);
-      await repository.deleteOtherSessions!(user.id, currentTokenHash);
-    }
+    const outcome = await repository.replacePasswordIfCurrent({
+      userId,
+      currentPassword,
+      newPasswordHash: passwordHash,
+      exceptTokenHash: currentTokenHash,
+      now,
+    });
+    if (outcome === "invalid-current-password") return { outcome };
     return { outcome: "changed", revokedOtherSessions: true };
   }
 

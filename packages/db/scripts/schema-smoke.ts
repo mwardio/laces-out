@@ -13,6 +13,7 @@ const expectedTables = [
   "bridge_device_leagues",
   "bridge_devices",
   "bridge_pairing_sessions",
+  "browser_handoff_tokens",
   "change_event_receipts",
   "change_events",
   "data_sources",
@@ -140,10 +141,12 @@ try {
     select table_name, column_name
     from information_schema.columns
     where table_schema = 'public'
-      and table_name in ('provider_connections', 'recommendation_runs')
+      and table_name in ('browser_handoff_tokens', 'provider_connections', 'recommendation_runs')
   `;
   const columnNames = new Set(columnRows.map((row) => `${row.table_name}.${row.column_name}`));
   for (const column of [
+    "browser_handoff_tokens.source_session_id",
+    "browser_handoff_tokens.confirmed_at",
     "provider_connections.consecutive_failures",
     "provider_connections.circuit_open_until",
     "provider_connections.last_error_detail",
@@ -183,6 +186,33 @@ try {
   const ownerId = requiredString(owner?.id, "owner id");
   const friendId = requiredString(friend?.id, "friend id");
   const outsiderId = requiredString(outsider?.id, "outsider id");
+
+  const [handoffSourceSession] = await sql`
+    insert into sessions (user_id, token_hash, expires_at)
+    values (${ownerId}, ${`source-${suffix}`}, now() + interval '30 days')
+    returning id
+  `;
+  const handoffSourceSessionId = requiredString(
+    handoffSourceSession?.id,
+    "browser handoff source session id",
+  );
+  await sql`
+    insert into browser_handoff_tokens (
+      user_id, source_session_id, token_hash, destination, expires_at, staged_at, confirmed_at
+    ) values (
+      ${ownerId}, ${handoffSourceSessionId}, ${"H".repeat(43)}, '/settings',
+      now() + interval '1 minute', now(), now()
+    )
+  `;
+  await sql`delete from sessions where id = ${handoffSourceSessionId}`;
+  const remainingBoundHandoffs = await sql`
+    select id from browser_handoff_tokens where user_id = ${ownerId}
+  `;
+  assert.equal(
+    remainingBoundHandoffs.length,
+    0,
+    "deleting a source session did not cascade its browser handoff",
+  );
 
   const [league] = await sql`
     insert into leagues (user_id, name)

@@ -9,7 +9,7 @@ import styles from "./privacy.module.css";
 
 export const metadata: Metadata = {
   title: "Privacy",
-  description: "How a self-hosted Laces Out deployment handles account and fantasy league data.",
+  description: "How Laces Out handles account, fantasy league, notification, and AI data.",
   robots: { index: true, follow: false },
 };
 
@@ -31,16 +31,18 @@ export default function PrivacyPage() {
 
       <article className={styles.document}>
         <div className={styles.heading}>
-          <p>Private, self-hosted deployment</p>
+          <p>Hosted or self-hosted deployment</p>
           <h1>Privacy policy</h1>
-          <span>Effective July 17, 2026</span>
+          <span>Effective July 31, 2026</span>
         </div>
 
         <aside className={styles.summary}>
           <ShieldCheck size={20} aria-hidden="true" />
           <p>
-            Laces Out has no advertising network and does not sell personal information. The person
-            who sent your invite operates this deployment and controls its database and backups.
+            Laces Out has no advertising network and does not sell personal information. The
+            operator of the server you choose—Laces Out or a self-host—controls that
+            deployment&apos;s database, encrypted backups, provider configuration, and retention
+            schedule.
           </p>
         </aside>
 
@@ -49,6 +51,10 @@ export default function PrivacyPage() {
           <ul>
             <li>
               Your display name, normalized email address, password hash, and revocable sessions.
+            </li>
+            <li>
+              Notification-device labels and push-service delivery credentials when you explicitly
+              enable alerts. Notification permission is never requested merely by signing in.
             </li>
             <li>
               Fantasy league settings, teams, rosters, standings, matchups, draft events, and the
@@ -103,6 +109,13 @@ export default function PrivacyPage() {
             share.
           </p>
           <p>Laces Out does not sell data or run behavioral advertising.</p>
+          <p>
+            The native iOS app communicates with the Laces Out server you select and contains no ad
+            network or third-party product-analytics SDK. It stores the selected server address and
+            app preferences on your device, keeps the authenticated server cookie in system-managed
+            website storage, and uses the system share sheet only when you choose to share. Its
+            bundled demo uses local sample data and does not require an account.
+          </p>
           {cloudflareWebAnalyticsEnabled ? (
             <p>
               This deployment uses Cloudflare Web Analytics so the operator can see aggregate
@@ -135,11 +148,39 @@ export default function PrivacyPage() {
         <section>
           <h2>Retention, export, and deletion</h2>
           <p>
-            The live database retains an account and its authorized artifacts until they are deleted
-            by the deployment operator or required for an active shared league. Encrypted backups
-            may retain deleted records until that operator’s documented backup rotation completes.
-            Ask the person who invited you to export your data, revoke a connection, delete a share,
-            or delete your account and associated private data.
+            A signed-in member can go directly to{" "}
+            <Link href="/settings#account-data">Settings → Your data</Link> to download a portable
+            JSON export or permanently delete the account. The export includes identity,
+            preferences, memberships, private rankings and projections, activity, connection
+            metadata, notification history, and AI usage. It deliberately excludes password hashes,
+            session or invitation tokens, OAuth and ESPN bridge credentials, push endpoints and
+            keys, browser-handoff tokens, encrypted fantasy-provider or AI keys, provider request
+            hashes, and share-link tokens.
+          </p>
+          <p>
+            When the native app opens an authenticated web tool, the server stores only a digest of
+            a random, single-use handoff lasting at most two minutes. Its bearer is carried in a URL
+            fragment that is not sent in HTTP requests or referrers, removed from browser history,
+            atomically rotated into a one-minute HttpOnly cookie, then deleted when the ordinary
+            revocable browser session is created.
+          </p>
+          <p>
+            Account deletion requires the current password and an explicit destructive confirmation.
+            It immediately revokes all sessions, provider and AI credentials, bridge devices, push
+            subscriptions, invitations, preferences, private rankings/imports/shares, private
+            projections, activity receipts, and league memberships from the live database. A league
+            with surviving members is preserved and ownership moves to a surviving commissioner,
+            manager, or viewer in that order. A league with no other member is deleted. Shared
+            synced facts, league-visible numeric projections, immutable change events, and bounded
+            usage/audit records remain only where other members or security accounting still require
+            them; direct account attribution is removed, including user identifiers embedded in
+            surviving projection and cloned-ranking provenance. League Intel text last written by
+            the member and Weekly Reckoning recap text generated by that member are deleted.
+          </p>
+          <p>
+            Encrypted backups may retain deleted records until the deployment operator&apos;s
+            documented backup rotation completes. Contact the operator if you cannot sign in or need
+            help with an exceptional access request.
           </p>
         </section>
 
@@ -148,19 +189,19 @@ export default function PrivacyPage() {
           <p>
             Passwords are protected with Argon2id, browser sessions are HTTP-only, production
             traffic is intended to use HTTPS, and provider credentials are encrypted at rest. No
-            small self-hosted service can promise absolute security. Use a unique password, revoke
-            provider access if a device or server is compromised, and report unexpected league or
-            account activity to the operator promptly.
+            internet service can promise absolute security. Use a unique password, revoke provider
+            access if a device or server is compromised, and report unexpected league or account
+            activity to the operator promptly.
           </p>
         </section>
 
         <section id="contact">
           <h2>Policy changes and contact</h2>
           <p>
-            Material policy changes should be announced to members before new processing begins.
-            This is a private deployment rather than a centrally operated Laces Out service; the
-            person who issued your invite operates it and is responsible for access, deletion,
-            security, and policy questions.
+            Material policy changes should be announced to members before new processing begins. The
+            operator of the server you selected is responsible for access, backup retention,
+            security, and policy questions for that deployment. The official hosted service and a
+            self-hosted instance may have different operators.
           </p>
           {publicContactEmail ? (
             <p>

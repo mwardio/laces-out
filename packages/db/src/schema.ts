@@ -145,6 +145,53 @@ export const sessions = pgTable(
   ],
 );
 
+/**
+ * Ephemeral, one-time bridge from an authenticated native client into the system browser. The
+ * bearer is never persisted: creation stores its SHA-256 digest, staging atomically rotates that
+ * digest, and consumption deletes the row before issuing a normal session.
+ */
+export const browserHandoffTokens = pgTable(
+  "browser_handoff_tokens",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    sourceSessionId: uuid("source_session_id")
+      .notNull()
+      .references(() => sessions.id, { onDelete: "cascade" }),
+    tokenHash: text("token_hash").notNull(),
+    destination: text("destination").notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    stagedAt: timestamp("staged_at", { withTimezone: true }),
+    confirmedAt: timestamp("confirmed_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("browser_handoff_tokens_token_hash_unique").on(table.tokenHash),
+    uniqueIndex("browser_handoff_tokens_user_unique").on(table.userId),
+    index("browser_handoff_tokens_source_session_idx").on(table.sourceSessionId),
+    index("browser_handoff_tokens_expires_idx").on(table.expiresAt),
+    check("browser_handoff_tokens_hash_check", sql`${table.tokenHash} ~ '^[A-Za-z0-9_-]{43}$'`),
+    check(
+      "browser_handoff_tokens_destination_check",
+      sql`${table.destination} in ('/app', '/analytics', '/connections', '/decisions', '/draft', '/film-room', '/rankings', '/projections', '/schedule', '/settings', '/stats', '/admin/members')`,
+    ),
+    check(
+      "browser_handoff_tokens_lifetime_check",
+      sql`${table.expiresAt} > ${table.createdAt} and ${table.expiresAt} <= ${table.createdAt} + interval '5 minutes'`,
+    ),
+    check(
+      "browser_handoff_tokens_staged_check",
+      sql`${table.stagedAt} is null or (${table.stagedAt} >= ${table.createdAt} and ${table.stagedAt} < ${table.expiresAt})`,
+    ),
+    check(
+      "browser_handoff_tokens_confirmed_check",
+      sql`${table.confirmedAt} is null or (${table.stagedAt} is not null and ${table.confirmedAt} >= ${table.stagedAt} and ${table.confirmedAt} < ${table.expiresAt})`,
+    ),
+  ],
+);
+
 export const providerConnections = pgTable(
   "provider_connections",
   {

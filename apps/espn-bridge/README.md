@@ -148,7 +148,7 @@ One league failure does not stop later leagues. The popup retains a per-league r
 full success, partial failure, ESPN sign-in required, or a rejected Laces Out pairing separately.
 All configured leagues currently use the same season value.
 
-The popup defaults to the hosted deployment at `https://laces.mward.io`. A packaged local Docker
+The popup defaults to the hosted deployment at `https://lacesout.app`. A packaged local Docker
 deployment uses `http://localhost:3000`; a direct local development API normally uses
 `http://localhost:4000`. Always confirm against the API URL shown by the Laces Out connections
 screen.
@@ -180,7 +180,7 @@ The unlisted listing is published at
 For future releases:
 
 1. Upload `dist-package/laces-out-espn-bridge-store-v<version>.zip`.
-2. Privacy policy URL: `https://laces.mward.io/privacy` (required — the extension handles league data).
+2. Privacy policy URL: `https://lacesout.app/privacy` (required — the extension handles league data).
 3. Justify permissions in the listing form: `alarms`/`storage` for scheduled local sync and pairing
    state; the two `fantasy.espn.com` / `lm-api-reads.fantasy.espn.com` hosts for the read-only league
    fetch and the draft-room content script; and optional HTTPS/loopback hosts so a user may connect

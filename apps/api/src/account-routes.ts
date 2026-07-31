@@ -1,12 +1,15 @@
 import {
   changePasswordRequestSchema,
   changePasswordResponseSchema,
+  deleteAccountRequestSchema,
+  deleteAccountResponseSchema,
   memberPreferencesSchema,
 } from "@fantasy/contracts";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 
 import type { AuthService } from "./auth.js";
 import { sessionCookieName } from "./auth.js";
+import type { AccountDataPort } from "./account-data.js";
 import type { MemberPreferences } from "./preferences.js";
 
 export interface PreferencesPort {
@@ -19,6 +22,7 @@ export interface PreferencesPort {
 
 export interface AccountRouteOptions {
   readonly authService?: AuthService;
+  readonly accountData?: AccountDataPort;
   readonly preferences?: PreferencesPort;
   readonly isTest?: boolean;
 }
@@ -35,6 +39,97 @@ function authenticatedUser(request: FastifyRequest, reply: FastifyReply) {
 }
 
 export function registerAccountRoutes(app: FastifyInstance, options: AccountRouteOptions): void {
+  app.get(
+    "/v1/account/export",
+    {
+      config: {
+        rateLimit: {
+          max: options.isTest ? 10_000 : 5,
+          timeWindow: "10 minutes",
+        },
+      },
+    },
+    async (request, reply) => {
+      const user = authenticatedUser(request, reply);
+      if (!user) return reply;
+      if (!options.accountData) {
+        return reply.code(503).type("application/problem+json").send({
+          type: "https://fantasy.local/problems/account-data-unavailable",
+          title: "Account data export is not configured",
+          status: 503,
+          correlationId: request.id,
+        });
+      }
+      const exported = await options.accountData.exportData(user.id);
+      if (!exported) {
+        void reply.clearCookie(sessionCookieName, { path: "/" });
+        return reply.code(401).type("application/problem+json").send({
+          type: "https://fantasy.local/problems/unauthorized",
+          title: "The account no longer exists",
+          status: 401,
+          correlationId: request.id,
+        });
+      }
+      void reply.header(
+        "content-disposition",
+        'attachment; filename="laces-out-account-export.json"',
+      );
+      return reply.type("application/json; charset=utf-8").send(exported);
+    },
+  );
+
+  app.delete(
+    "/v1/account",
+    {
+      config: {
+        // Password reauthentication makes this intentionally expensive. A member gets enough
+        // attempts to correct a typo without making a live session a useful brute-force oracle.
+        rateLimit: {
+          max: options.isTest ? 10_000 : 5,
+          timeWindow: "10 minutes",
+        },
+      },
+    },
+    async (request, reply) => {
+      const user = authenticatedUser(request, reply);
+      if (!user) return reply;
+      if (!options.accountData) {
+        return reply.code(503).type("application/problem+json").send({
+          type: "https://fantasy.local/problems/account-deletion-unavailable",
+          title: "Account deletion is not configured",
+          status: 503,
+          correlationId: request.id,
+        });
+      }
+      const input = deleteAccountRequestSchema.parse(request.body);
+      const deleted = await options.accountData.deleteAccount({
+        userId: user.id,
+        currentPassword: input.currentPassword,
+        correlationId: request.id,
+        deletedAt: new Date(),
+      });
+      if (!deleted) {
+        void reply.clearCookie(sessionCookieName, { path: "/" });
+        return reply.code(401).type("application/problem+json").send({
+          type: "https://fantasy.local/problems/unauthorized",
+          title: "The account no longer exists",
+          status: 401,
+          correlationId: request.id,
+        });
+      }
+      if (!deleted.deleted) {
+        return reply.code(401).type("application/problem+json").send({
+          type: "https://fantasy.local/problems/invalid-credentials",
+          title: "The current password is incorrect",
+          status: 401,
+          correlationId: request.id,
+        });
+      }
+      void reply.clearCookie(sessionCookieName, { path: "/" });
+      return deleteAccountResponseSchema.parse(deleted);
+    },
+  );
+
   app.post(
     "/v1/auth/password",
     {

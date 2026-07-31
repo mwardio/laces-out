@@ -143,7 +143,7 @@ settings are in [.env.example](./.env.example).
 | `YAHOO_CLIENT_ID` / `YAHOO_CLIENT_SECRET` | Yahoo OAuth when enabled                              |
 | `NEXT_PUBLIC_YAHOO_ACCESS_STATUS`         | Set to `available` when Yahoo OAuth is ready          |
 
-If you're using a reverse proxy (Caddy, Traefik, etc.), keep the included gateway on an unprivileged 
+If you're using a reverse proxy (Caddy, Traefik, etc.), keep the included gateway on an unprivileged
 loopback port:
 
 ```dotenv

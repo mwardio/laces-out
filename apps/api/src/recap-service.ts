@@ -149,6 +149,7 @@ export type RecapGenerateResult =
   | { readonly state: "generated"; readonly response: LeagueRecapResponse }
   | { readonly state: "forbidden" }
   | { readonly state: "unconfigured" }
+  | { readonly state: "configuration-changed" }
   | { readonly state: "unavailable"; readonly message: string }
   | { readonly state: "in-progress"; readonly retryAfterSeconds: number }
   | { readonly state: "cooldown"; readonly retryAfterSeconds: number };
@@ -550,7 +551,11 @@ export class RecapService {
   async generate(
     userId: string,
     leagueId: string,
-    input: { readonly week: number; readonly provider?: AiProviderName },
+    input: {
+      readonly week: number;
+      readonly provider?: AiProviderName;
+      readonly expectedSpiceLevel?: RecapSpiceLevel;
+    },
   ): Promise<RecapGenerateResult | undefined> {
     const membership = await this.#repository.findMembership(userId, leagueId);
     if (!membership) return undefined;
@@ -571,6 +576,9 @@ export class RecapService {
     // Read the dial before taking the lease so the stored recap records exactly the level the
     // prompt was assembled with, even if a commissioner moves it mid-generation.
     const spiceLevel = (await this.#repository.getSpiceLevel(leagueId)) ?? "medium";
+    if (input.expectedSpiceLevel !== undefined && input.expectedSpiceLevel !== spiceLevel) {
+      return { state: "configuration-changed" };
+    }
     const lease = await this.#repository.acquireGeneration(season.id, input.week, this.#now());
     if (lease.state !== "acquired") return lease;
 
@@ -584,6 +592,9 @@ export class RecapService {
         recapSpiceLevel: spiceLevel,
         ...(input.provider ? { provider: input.provider } : {}),
       });
+      if (input.provider !== undefined && generated.provider !== input.provider) {
+        throw new Error("The AI provider did not match the consented recap provider");
+      }
     } catch (error) {
       // A provider failure releases the lease, keeps the stored recap, and starts no cooldown.
       await this.#repository.abandonGeneration(season.id, input.week, lease.leaseToken);

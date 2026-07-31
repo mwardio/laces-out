@@ -119,8 +119,25 @@ describe("weekly recap contracts", () => {
 
   it("validates generate and settings requests", () => {
     expect(recapGenerateRequestSchema.parse({ week: 5 })).toEqual({ week: 5 });
+    expect(
+      recapGenerateRequestSchema.parse({
+        week: 5,
+        provider: "gemini",
+        expectedSpiceLevel: "mild",
+      }),
+    ).toEqual({ week: 5, provider: "gemini", expectedSpiceLevel: "mild" });
     expect(recapGenerateRequestSchema.safeParse({ week: 0 }).success).toBe(false);
     expect(recapGenerateRequestSchema.safeParse({ week: 5, provider: "nope" }).success).toBe(false);
+    expect(
+      recapGenerateRequestSchema.safeParse({ week: 5, expectedSpiceLevel: "mild" }).success,
+    ).toBe(false);
+    expect(
+      recapGenerateRequestSchema.safeParse({
+        week: 5,
+        provider: "gemini",
+        expectedSpiceLevel: "nuclear",
+      }).success,
+    ).toBe(false);
     expect(recapSettingsSaveRequestSchema.parse({ spiceLevel: "mild" })).toEqual({
       spiceLevel: "mild",
     });

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { loadEnvironment } from "@fantasy/config";
 import { EspnWebClientNormalizationError } from "@fantasy/connector-espn";
+import { healthResponseSchema } from "@fantasy/contracts";
 
 import { AuthService, type AuthRepository } from "./auth.js";
 import { buildApp, requestPathForLog } from "./app.js";
@@ -305,7 +306,42 @@ describe("API", () => {
     const response = await app.inject({ method: "GET", url: "/health/live" });
     expect(response.statusCode).toBe(200);
     expect(response.headers["x-request-id"]).toBeTruthy();
-    expect(response.json()).toMatchObject({ status: "ok", service: "fantasy-api" });
+    const health = healthResponseSchema.parse(response.json());
+    expect(health).toMatchObject({
+      status: "ok",
+      service: "fantasy-api",
+      mobileApiVersion: 1,
+    });
+    expect(health.mobileCapabilities).toEqual(
+      expect.arrayContaining(["cookie-authentication", "account-data-export", "account-deletion"]),
+    );
+    await app.close();
+  });
+
+  it("publishes the native compatibility declaration on readiness", async () => {
+    const app = await buildApp({
+      environment: loadEnvironment({ NODE_ENV: "test" }),
+      logger: false,
+      readinessCheck: () => Promise.resolve(true),
+    });
+
+    const response = await app.inject({ method: "GET", url: "/health/ready" });
+    expect(response.statusCode).toBe(200);
+    const health = healthResponseSchema.parse(response.json());
+    expect(health).toMatchObject({
+      status: "ok",
+      service: "fantasy-api",
+      mobileApiVersion: 1,
+    });
+    expect(health.mobileCapabilities).toEqual(
+      expect.arrayContaining([
+        "league-portfolio",
+        "league-dashboard",
+        "in-season-decisions",
+        "league-analytics",
+        "weekly-reckoning",
+      ]),
+    );
     await app.close();
   });
 

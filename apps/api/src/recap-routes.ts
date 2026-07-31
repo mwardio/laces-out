@@ -30,7 +30,11 @@ export interface RecapRoutePort {
   generate(
     userId: string,
     leagueId: string,
-    input: { readonly week: number; readonly provider?: AiProviderName },
+    input: {
+      readonly week: number;
+      readonly provider?: AiProviderName;
+      readonly expectedSpiceLevel?: RecapSpiceLevel;
+    },
   ): Promise<RecapGenerateResult | undefined>;
   listPersonaCards(
     userId: string,
@@ -141,6 +145,7 @@ export function registerRecapRoutes(app: FastifyInstance, options: RecapRouteOpt
       const result = await options.recaps.generate(user.id, leagueId, {
         week: input.week,
         ...(input.provider ? { provider: input.provider } : {}),
+        ...(input.expectedSpiceLevel ? { expectedSpiceLevel: input.expectedSpiceLevel } : {}),
       });
       if (!result) return leagueNotFound(request, reply);
       if (result.state === "forbidden") return recapForbidden(request, reply);
@@ -159,6 +164,16 @@ export function registerRecapRoutes(app: FastifyInstance, options: RecapRouteOpt
           status: 409,
           detail: result.message,
           code: "RECAP_WEEK_UNAVAILABLE",
+          correlationId: request.id,
+        });
+      }
+      if (result.state === "configuration-changed") {
+        return reply.code(409).type("application/problem+json").send({
+          type: "https://fantasy.local/problems/recap-configuration-changed",
+          title: "The recap settings changed before generation",
+          status: 409,
+          detail: "Review the current AI provider and league tone, then consent again.",
+          code: "RECAP_CONFIGURATION_CHANGED",
           correlationId: request.id,
         });
       }

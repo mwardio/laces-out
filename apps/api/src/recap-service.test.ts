@@ -139,10 +139,10 @@ type GenerateFeatureInput = Parameters<RecapAiPort["generateFeature"]>[0];
 
 /** A spy that still satisfies `RecapAiPort`, so the fixture never has to cast. */
 function fakeAi(
-  implementation: (input: GenerateFeatureInput) => Promise<RecapGeneration> = () =>
+  implementation: (input: GenerateFeatureInput) => Promise<RecapGeneration> = (input) =>
     Promise.resolve({
       answer: "### Week 5 got weird",
-      provider: "gemini",
+      provider: input.provider ?? "gemini",
       model: "gemini-3.6-flash",
     }),
 ) {
@@ -362,7 +362,7 @@ describe("recap generation", () => {
         leagueSeasonId: SEASON_ID,
         week: 5,
         body: "### Week 5 got weird",
-        provider: "gemini",
+        provider: "openai",
         model: "gemini-3.6-flash",
         spiceLevel: "medium",
         generatedByUserId: USER_ID,
@@ -376,6 +376,64 @@ describe("recap generation", () => {
         recap: { body: "### Week 5 got weird", spiceLevel: "medium" },
       },
     });
+  });
+
+  it("binds a consented native request to the expected Mild tone", async () => {
+    const repository = new FakeRepository();
+    repository.spiceLevel = "mild";
+    const { service, ai } = fixture({ repository });
+
+    await expect(
+      service.generate(USER_ID, LEAGUE_ID, {
+        week: 5,
+        provider: "gemini",
+        expectedSpiceLevel: "mild",
+      }),
+    ).resolves.toMatchObject({
+      state: "generated",
+      response: {
+        configuredSpiceLevel: "mild",
+        recap: { provider: "gemini", spiceLevel: "mild" },
+      },
+    });
+    expect(ai.generateFeature).toHaveBeenCalledWith(
+      expect.objectContaining({ provider: "gemini", recapSpiceLevel: "mild" }),
+    );
+  });
+
+  it("rejects a consented request when the league tone changed before generation", async () => {
+    const repository = new FakeRepository();
+    repository.spiceLevel = "medium";
+    const { service, ai } = fixture({ repository });
+
+    await expect(
+      service.generate(USER_ID, LEAGUE_ID, {
+        week: 5,
+        provider: "gemini",
+        expectedSpiceLevel: "mild",
+      }),
+    ).resolves.toEqual({ state: "configuration-changed" });
+    expect(ai.generateFeature).not.toHaveBeenCalled();
+    expect(repository.savedRecaps).toEqual([]);
+    expect(repository.generationAvailability).toEqual({ state: "available" });
+  });
+
+  it("abandons generation if the AI port returns a provider other than the consented one", async () => {
+    const repository = new FakeRepository();
+    const ai = fakeAi(() =>
+      Promise.resolve({
+        answer: "Wrong provider",
+        provider: "gemini",
+        model: "gemini-3.6-flash",
+      }),
+    );
+    const { service } = fixture({ repository, ai });
+
+    await expect(
+      service.generate(USER_ID, LEAGUE_ID, { week: 5, provider: "openai" }),
+    ).rejects.toThrow(/did not match/u);
+    expect(repository.savedRecaps).toEqual([]);
+    expect(repository.abandoned).toEqual([{ week: 5, leaseToken: LEASE_TOKEN }]);
   });
 
   it("records the spice level in force at generation time", async () => {

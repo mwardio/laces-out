@@ -173,11 +173,15 @@ describe("recap routes", () => {
       method: "POST",
       url: `/v1/leagues/${LEAGUE_ID}/recap`,
       headers: { cookie: COOKIE },
-      payload: { week: 4, provider: "openai" },
+      payload: { week: 4, provider: "openai", expectedSpiceLevel: "mild" },
     });
 
     expect(ok.statusCode).toBe(200);
-    expect(generate).toHaveBeenCalledWith(USER_ID, LEAGUE_ID, { week: 4, provider: "openai" });
+    expect(generate).toHaveBeenCalledWith(USER_ID, LEAGUE_ID, {
+      week: 4,
+      provider: "openai",
+      expectedSpiceLevel: "mild",
+    });
     expect(ok.json()).toMatchObject({ week: 4, recap: { spiceLevel: "medium" } });
     await app.close();
   });
@@ -234,6 +238,19 @@ describe("recap routes", () => {
       detail: "Only week 5 can be recapped right now.",
     });
     await stale.close();
+
+    const changedConfiguration = await recapApp(
+      port({ generate: () => Promise.resolve({ state: "configuration-changed" }) }),
+    );
+    const changed = await changedConfiguration.inject({
+      method: "POST",
+      url: `/v1/leagues/${LEAGUE_ID}/recap`,
+      headers: { cookie: COOKIE },
+      payload: { week: 5, provider: "gemini", expectedSpiceLevel: "mild" },
+    });
+    expect(changed.statusCode).toBe(409);
+    expect(changed.json()).toMatchObject({ code: "RECAP_CONFIGURATION_CHANGED" });
+    await changedConfiguration.close();
 
     const unconfigured = await recapApp(
       port({ generate: () => Promise.resolve({ state: "unconfigured" }) }),
@@ -299,7 +316,13 @@ describe("recap routes", () => {
     );
     const app = await recapApp(port({ generate }));
 
-    for (const payload of [{ week: 0 }, { week: 5, provider: "nope" }, { week: 5, extra: true }]) {
+    for (const payload of [
+      { week: 0 },
+      { week: 5, provider: "nope" },
+      { week: 5, expectedSpiceLevel: "mild" },
+      { week: 5, provider: "gemini", expectedSpiceLevel: "nuclear" },
+      { week: 5, extra: true },
+    ]) {
       const response = await app.inject({
         method: "POST",
         url: `/v1/leagues/${LEAGUE_ID}/recap`,

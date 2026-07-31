@@ -34,7 +34,7 @@ export default function TermsPage() {
         <div className={styles.heading}>
           <p>Private, non-commercial service</p>
           <h1>Terms of use</h1>
-          <span>Effective July 17, 2026</span>
+          <span>Effective July 31, 2026</span>
         </div>
 
         <aside className={styles.summary}>
@@ -74,7 +74,8 @@ export default function TermsPage() {
             access a league you are not authorized to view, probe or bypass security controls,
             upload malicious content, overload provider services, resell access, scrape the service,
             or use it for gambling, commercial exploitation, or unlawful activity. Report suspected
-            account compromise to the deployment operator promptly.
+            account compromise or objectionable league content to the deployment operator promptly.
+            The operator may remove content, revoke league access, or suspend an abusive account.
           </p>
         </section>
 
@@ -85,6 +86,18 @@ export default function TermsPage() {
             data. Laces Out is not affiliated with or endorsed by them. Connecting a provider grants
             only the authorization you approve and does not transfer ownership of provider data.
             Provider availability, rules, and access terms may change independently of Laces Out.
+          </p>
+        </section>
+
+        <section>
+          <h2>AI analysis and generated recaps</h2>
+          <p>
+            Live Film Room and Weekly Reckoning requests may send the question or instructions and
+            bounded, authorized league context to the AI provider selected for that request. The
+            provider&apos;s terms and privacy practices apply. The native app asks for explicit
+            permission before each live transfer; canceling sends nothing. AI output can be
+            incomplete or wrong and remains subject to these acceptable-use rules. Report
+            objectionable generated content to the deployment operator.
           </p>
         </section>
 
@@ -114,9 +127,9 @@ export default function TermsPage() {
           <p>
             The operator may suspend access needed to protect members, providers, or the deployment,
             and may change or discontinue features. Material terms changes should be announced to
-            members. You may stop using Laces Out at any time and ask the operator to disconnect a
-            provider or delete your account subject to the retention described in the privacy
-            policy.
+            members. You may stop using Laces Out at any time. A signed-in member can export data or
+            permanently delete the account directly in Settings. The shared-league and encrypted
+            backup retention described in the privacy policy still applies.
           </p>
         </section>
 

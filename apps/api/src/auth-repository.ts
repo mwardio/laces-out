@@ -1,7 +1,12 @@
 import { and, eq, gt, ilike, lt, ne } from "drizzle-orm";
-import { type Database, sessions, users } from "@fantasy/db";
+import { browserHandoffTokens, type Database, sessions, users } from "@fantasy/db";
 
-import type { AuthRepository, AuthUserRecord, SessionRecord } from "./auth.js";
+import {
+  type AuthRepository,
+  type AuthUserRecord,
+  type SessionRecord,
+  verifyOwnerPassword,
+} from "./auth.js";
 
 export class DrizzleAuthRepository implements AuthRepository {
   readonly #database: Database;
@@ -31,6 +36,59 @@ export class DrizzleAuthRepository implements AuthRepository {
     readonly expiresAt: Date;
   }): Promise<void> {
     await this.#database.insert(sessions).values(input);
+  }
+
+  async createSessionForPassword(input: {
+    readonly userId: string;
+    readonly expectedPasswordHash: string;
+    readonly tokenHash: string;
+    readonly expiresAt: Date;
+  }): Promise<AuthUserRecord | undefined> {
+    return this.#database.transaction(async (transaction) => {
+      const [user] = await transaction
+        .select({
+          id: users.id,
+          email: users.email,
+          displayName: users.displayName,
+          passwordHash: users.passwordHash,
+          role: users.role,
+        })
+        .from(users)
+        .where(and(eq(users.id, input.userId), eq(users.passwordHash, input.expectedPasswordHash)))
+        .limit(1)
+        .for("key share");
+      if (!user) return undefined;
+      await transaction.insert(sessions).values({
+        userId: input.userId,
+        tokenHash: input.tokenHash,
+        expiresAt: input.expiresAt,
+      });
+      return user;
+    });
+  }
+
+  async createSessionForUser(input: {
+    readonly userId: string;
+    readonly tokenHash: string;
+    readonly expiresAt: Date;
+  }): Promise<AuthUserRecord | undefined> {
+    return this.#database.transaction(async (transaction) => {
+      const [user] = await transaction
+        .select({
+          id: users.id,
+          email: users.email,
+          displayName: users.displayName,
+          passwordHash: users.passwordHash,
+          role: users.role,
+        })
+        .from(users)
+        .where(eq(users.id, input.userId))
+        .limit(1)
+        .for("key share");
+      if (!user) return undefined;
+      await transaction.insert(sessions).values(input);
+      return user;
+    });
   }
 
   async findSession(tokenHash: string, now: Date): Promise<SessionRecord | undefined> {
@@ -90,33 +148,37 @@ export class DrizzleAuthRepository implements AuthRepository {
     return user;
   }
 
-  async updatePassword(userId: string, passwordHash: string, now: Date): Promise<void> {
-    await this.#database
-      .update(users)
-      .set({ passwordHash, updatedAt: now })
-      .where(eq(users.id, userId));
-  }
+  async replacePasswordIfCurrent(input: {
+    readonly userId: string;
+    readonly currentPassword: string;
+    readonly newPasswordHash: string;
+    readonly exceptTokenHash: string;
+    readonly now: Date;
+  }): Promise<"changed" | "invalid-current-password"> {
+    return this.#database.transaction(async (transaction) => {
+      const [user] = await transaction
+        .select({ passwordHash: users.passwordHash })
+        .from(users)
+        .where(eq(users.id, input.userId))
+        .limit(1)
+        .for("update");
+      const valid = await verifyOwnerPassword(user?.passwordHash, input.currentPassword);
+      if (!user || !valid) return "invalid-current-password";
 
-  async deleteOtherSessions(userId: string, exceptTokenHash: string): Promise<void> {
-    await this.#database
-      .delete(sessions)
-      .where(and(eq(sessions.userId, userId), ne(sessions.tokenHash, exceptTokenHash)));
-  }
-
-  async replacePasswordAndDeleteOtherSessions(
-    userId: string,
-    passwordHash: string,
-    exceptTokenHash: string,
-    now: Date,
-  ): Promise<void> {
-    await this.#database.transaction(async (transaction) => {
       await transaction
         .update(users)
-        .set({ passwordHash, updatedAt: now })
-        .where(eq(users.id, userId));
+        .set({ passwordHash: input.newPasswordHash, updatedAt: input.now })
+        .where(eq(users.id, input.userId));
+      // A handoff bound to the retained current session would otherwise survive password rotation.
+      await transaction
+        .delete(browserHandoffTokens)
+        .where(eq(browserHandoffTokens.userId, input.userId));
       await transaction
         .delete(sessions)
-        .where(and(eq(sessions.userId, userId), ne(sessions.tokenHash, exceptTokenHash)));
+        .where(
+          and(eq(sessions.userId, input.userId), ne(sessions.tokenHash, input.exceptTokenHash)),
+        );
+      return "changed";
     });
   }
 }

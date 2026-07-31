@@ -218,6 +218,27 @@
       "when": 1785434522633,
       "tag": "0030_gray_mandroid",
       "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "7",
+      "when": 1785510000000,
+      "tag": "0031_account_deletion_provenance",
+      "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1785513600000,
+      "tag": "0032_browser_handoff_tokens",
+      "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "7",
+      "when": 1785517200000,
+      "tag": "0033_bind_browser_handoffs_to_sessions",
+      "breakpoints": true
     }
   ]
 }

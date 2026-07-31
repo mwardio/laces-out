@@ -124,7 +124,7 @@ describe("AI tool loop", () => {
     expect(reserveTurn).toHaveBeenCalledTimes(2);
     expect(result).toMatchObject({ outcome: "answered", answer: "Start Reed." });
     expect(result.toolResults).toHaveLength(1);
-    expect(tool.execute).toHaveBeenCalledWith(CONTEXT, {});
+    expect(tool.execute.mock.calls[0]).toEqual([CONTEXT, {}]);
     // The declared tools reach the provider, and the second turn carries the results back.
     expect(complete.mock.calls[0]?.[0].tools).toEqual([
       expect.objectContaining({ name: "get_lineup_recommendation" }),
@@ -190,7 +190,7 @@ describe("AI tool loop", () => {
       name: "get_lineup_recommendation",
       outcome: { state: "ok" },
     });
-    expect(tool.execute).toHaveBeenCalledTimes(1);
+    expect(tool.execute.mock.calls).toHaveLength(1);
   });
 
   it("propagates a provider failure rather than disguising it as a budget stop", async () => {

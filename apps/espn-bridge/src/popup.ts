@@ -213,7 +213,7 @@ openConnectionsButton.addEventListener("click", () => {
         const configuration = validateBridgeConfiguration(stored[configurationStorageKey]);
         return new URL("/connections", configuration.apiBaseUrl).toString();
       } catch {
-        return "https://laces.mward.io/connections";
+        return "https://lacesout.app/connections";
       }
     })
     .then((url) => chrome.tabs.create({ url }))

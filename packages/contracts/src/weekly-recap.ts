@@ -77,8 +77,23 @@ export const recapGenerateRequestSchema = z
   .object({
     week: z.number().int().min(1).max(30),
     provider: recapProviderSchema.optional(),
+    /**
+     * Binds a consented request to the league tone the client displayed. Older web clients may
+     * omit this; when present, an explicit provider is also required so neither choice is made
+     * after consent.
+     */
+    expectedSpiceLevel: recapSpiceLevelSchema.optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((value, context) => {
+    if (value.expectedSpiceLevel !== undefined && value.provider === undefined) {
+      context.addIssue({
+        code: "custom",
+        path: ["provider"],
+        message: "provider is required when expectedSpiceLevel is supplied",
+      });
+    }
+  });
 export type RecapGenerateRequest = z.infer<typeof recapGenerateRequestSchema>;
 
 export const recapPersonaCardSchema = z

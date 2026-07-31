@@ -3,6 +3,7 @@
 import {
   BellRing,
   CheckCircle2,
+  Download,
   KeyRound,
   LoaderCircle,
   ShieldAlert,
@@ -45,6 +46,7 @@ type TeamRowDashboard =
   | { readonly status: "ready"; readonly dashboard: LeagueDashboard };
 
 const MINIMUM_PASSWORD_LENGTH = 12;
+const ACCOUNT_DELETION_PHRASE = "DELETE MY ACCOUNT";
 
 /** Lets this browser recognize its own row in the member's device list without ever seeing an endpoint. */
 const LOCAL_PUSH_DEVICE_KEY = "laces-out.push-device-id";
@@ -141,9 +143,13 @@ export function SettingsPanel() {
   const [loading, setLoading] = useState(true);
   const [preferenceStatus, setPreferenceStatus] = useState<Status>({ state: "idle" });
   const [passwordStatus, setPasswordStatus] = useState<Status>({ state: "idle" });
+  const [exportStatus, setExportStatus] = useState<Status>({ state: "idle" });
+  const [deletionStatus, setDeletionStatus] = useState<Status>({ state: "idle" });
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
+  const [deletionPassword, setDeletionPassword] = useState("");
+  const [deletionConfirmation, setDeletionConfirmation] = useState("");
   const [pushConfiguration, setPushConfiguration] = useState<PushConfiguration | null>(null);
   const [pushDevices, setPushDevices] = useState<readonly PushDeviceStatus[]>([]);
   const [pushStatus, setPushStatus] = useState<Status>({ state: "idle" });
@@ -379,6 +385,67 @@ export function SettingsPanel() {
       setPasswordStatus({
         state: "error",
         message: error instanceof Error ? error.message : "Your password could not be changed.",
+      });
+    }
+  }
+
+  async function downloadAccountData() {
+    setExportStatus({ state: "saving" });
+    try {
+      const response = await fetch(`${apiBaseUrl}/v1/account/export`, {
+        credentials: "include",
+        cache: "no-store",
+        headers: { Accept: "application/json" },
+      });
+      if (!response.ok) {
+        throw new Error(await problemDetail(response, "Your data export could not be prepared."));
+      }
+      const blobUrl = window.URL.createObjectURL(await response.blob());
+      const link = document.createElement("a");
+      link.href = blobUrl;
+      link.download = `laces-out-account-export-${new Date().toISOString().slice(0, 10)}.json`;
+      document.body.append(link);
+      link.click();
+      link.remove();
+      window.setTimeout(() => window.URL.revokeObjectURL(blobUrl), 0);
+      setExportStatus({ state: "saved", message: "Your JSON export was downloaded." });
+    } catch (error) {
+      setExportStatus({
+        state: "error",
+        message: error instanceof Error ? error.message : "Your data export could not be prepared.",
+      });
+    }
+  }
+
+  async function deleteAccount(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (deletionConfirmation !== ACCOUNT_DELETION_PHRASE) {
+      setDeletionStatus({
+        state: "error",
+        message: `Type ${ACCOUNT_DELETION_PHRASE} exactly to confirm.`,
+      });
+      return;
+    }
+    setDeletionStatus({ state: "saving" });
+    try {
+      const response = await fetch(`${apiBaseUrl}/v1/account`, {
+        method: "DELETE",
+        credentials: "include",
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        body: JSON.stringify({
+          currentPassword: deletionPassword,
+          confirmation: deletionConfirmation,
+        }),
+      });
+      if (!response.ok) {
+        throw new Error(await problemDetail(response, "Your account could not be deleted."));
+      }
+      window.localStorage.removeItem(LOCAL_PUSH_DEVICE_KEY);
+      window.location.replace("/account-deleted");
+    } catch (error) {
+      setDeletionStatus({
+        state: "error",
+        message: error instanceof Error ? error.message : "Your account could not be deleted.",
       });
     }
   }
@@ -824,6 +891,121 @@ export function SettingsPanel() {
               </>
             )}
             <StatusLine status={pushStatus} />
+          </section>
+
+          <section className={styles.panel} id="account-data" aria-labelledby="account-data-title">
+            <div className={styles.panelHeading}>
+              <div>
+                <p>Your data</p>
+                <h2 id="account-data-title">Export account data</h2>
+              </div>
+              <Download size={18} aria-hidden="true" />
+            </div>
+            <div className={styles.dataAction}>
+              <p>
+                Download a portable JSON copy of your identity, preferences, memberships, private
+                rankings and projections, activity, notification history, connection metadata, and
+                Film Room usage. Password hashes, tokens, push endpoints, and encrypted credentials
+                are never included.
+              </p>
+              <button
+                type="button"
+                onClick={() => void downloadAccountData()}
+                disabled={exportStatus.state === "saving"}
+              >
+                {exportStatus.state === "saving" ? (
+                  <LoaderCircle className={styles.spin} size={15} aria-hidden="true" />
+                ) : (
+                  <Download size={15} aria-hidden="true" />
+                )}
+                Download my data
+              </button>
+            </div>
+            <StatusLine status={exportStatus} />
+          </section>
+
+          <section
+            className={`${styles.panel} ${styles.dangerPanel}`}
+            aria-labelledby="delete-account-title"
+          >
+            <div className={styles.panelHeading}>
+              <div>
+                <p>Danger zone</p>
+                <h2 id="delete-account-title">Delete account</h2>
+              </div>
+              <Trash2 size={18} aria-hidden="true" />
+            </div>
+            <div className={styles.deletionExplanation} id="delete-account-explanation">
+              <p>This permanently:</p>
+              <ul>
+                <li>
+                  revokes every session, provider connection, API key, and notification device;
+                </li>
+                <li>
+                  deletes your preferences, private rankings, imports, shares, and memberships;
+                </li>
+                <li>
+                  transfers leagues with other members to another surviving member, preferring a
+                  commissioner and then a manager;
+                </li>
+                <li>
+                  deletes leagues where you are the only member and removes League Intel or recap
+                  text you created, while deterministic shared league facts stay available without
+                  your account attribution.
+                </li>
+              </ul>
+              <p>
+                The live account cannot be recovered. Deleted records may remain in encrypted
+                backups until this deployment&apos;s backup rotation completes.
+              </p>
+            </div>
+            <form
+              className={styles.form}
+              onSubmit={deleteAccount}
+              aria-describedby="delete-account-explanation"
+            >
+              <label>
+                <span>Current password</span>
+                <input
+                  type="password"
+                  autoComplete="current-password"
+                  required
+                  maxLength={128}
+                  value={deletionPassword}
+                  onChange={(event) => setDeletionPassword(event.target.value)}
+                />
+              </label>
+              <label>
+                <span>
+                  Type <strong>{ACCOUNT_DELETION_PHRASE}</strong>
+                </span>
+                <input
+                  type="text"
+                  autoComplete="off"
+                  autoCapitalize="characters"
+                  spellCheck={false}
+                  required
+                  value={deletionConfirmation}
+                  onChange={(event) => setDeletionConfirmation(event.target.value)}
+                />
+              </label>
+              <button
+                className={styles.dangerButton}
+                type="submit"
+                disabled={
+                  deletionStatus.state === "saving" ||
+                  deletionConfirmation !== ACCOUNT_DELETION_PHRASE
+                }
+              >
+                {deletionStatus.state === "saving" ? (
+                  <LoaderCircle className={styles.spin} size={15} aria-hidden="true" />
+                ) : (
+                  <Trash2 size={15} aria-hidden="true" />
+                )}
+                Permanently delete my account
+              </button>
+            </form>
+            <StatusLine status={deletionStatus} />
           </section>
         </>
       )}

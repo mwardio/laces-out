@@ -3262,17 +3262,87 @@ export const changePasswordResponseSchema = z
   .strict();
 export type ChangePasswordResponse = z.infer<typeof changePasswordResponseSchema>;
 
+export const deleteAccountRequestSchema = z
+  .object({
+    currentPassword: z.string().min(1).max(128),
+    /** Intentionally awkward to submit accidentally; both native and web show this exact phrase. */
+    confirmation: z.literal("DELETE MY ACCOUNT"),
+  })
+  .strict();
+export type DeleteAccountRequest = z.infer<typeof deleteAccountRequestSchema>;
+
+export const deleteAccountResponseSchema = z
+  .object({
+    deleted: z.literal(true),
+    transferredLeagueCount: z.number().int().nonnegative(),
+    deletedSoleMemberLeagueCount: z.number().int().nonnegative(),
+    preservedSharedProjectionSetCount: z.number().int().nonnegative(),
+  })
+  .strict();
+export type DeleteAccountResponse = z.infer<typeof deleteAccountResponseSchema>;
+
+/** Exact browser destinations a native session may hand off to; intentionally no arbitrary URL. */
+export const browserHandoffDestinationSchema = z.enum([
+  "/app",
+  "/analytics",
+  "/connections",
+  "/decisions",
+  "/draft",
+  "/film-room",
+  "/rankings",
+  "/projections",
+  "/schedule",
+  "/settings",
+  "/stats",
+  "/admin/members",
+]);
+export type BrowserHandoffDestination = z.infer<typeof browserHandoffDestinationSchema>;
+
+export const createBrowserHandoffRequestSchema = z
+  .object({ destination: browserHandoffDestinationSchema })
+  .strict();
+export type CreateBrowserHandoffRequest = z.infer<typeof createBrowserHandoffRequestSchema>;
+
+export const createBrowserHandoffResponseSchema = z
+  .object({ handoffUrl: z.url(), expiresAt: z.iso.datetime() })
+  .strict();
+export type CreateBrowserHandoffResponse = z.infer<typeof createBrowserHandoffResponseSchema>;
+
 export const memberPreferencesSchema = z
   .object({ defaultLeagueId: z.string().uuid().nullable() })
   .strict();
 export type MemberPreferencesContract = z.infer<typeof memberPreferencesSchema>;
 
-export const healthResponseSchema = z.object({
-  status: z.enum(["ok", "degraded"]),
-  service: z.string(),
-  version: z.string(),
-  time: z.iso.datetime(),
-});
+/**
+ * Public, non-secret feature identifiers a native client may use before signing in. Keep this a
+ * closed vocabulary: it is a compatibility declaration, not an operator-controlled label bag.
+ */
+export const mobileCapabilitySchema = z.enum([
+  "account-data-export",
+  "account-deletion",
+  "activity-feed",
+  "authenticated-browser-handoff",
+  "cookie-authentication",
+  "in-season-decisions",
+  "league-analytics",
+  "league-dashboard",
+  "league-portfolio",
+  "weekly-reckoning",
+]);
+export type MobileCapability = z.infer<typeof mobileCapabilitySchema>;
+
+export const healthResponseSchema = z
+  .object({
+    status: z.enum(["ok", "degraded"]),
+    service: z.literal("fantasy-api"),
+    version: z.string(),
+    time: z.iso.datetime(),
+    /** Increment only when the minimum native HTTP contract changes incompatibly. */
+    mobileApiVersion: z.number().int().positive(),
+    mobileCapabilities: z.array(mobileCapabilitySchema).max(32),
+  })
+  .strict();
+export type HealthResponse = z.infer<typeof healthResponseSchema>;
 
 /**
  * Web push ("game day alerts"). `available: false` is the ordinary state of a deployment whose

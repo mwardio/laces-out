@@ -104,7 +104,7 @@ try {
 
   const scheduleResponse = await waitForHttp(`http://127.0.0.1:${webPort}/schedule`, web);
   const scheduleHtml = await scheduleResponse.text();
-  assert.match(scheduleHtml, /Schedule Edge/u);
+  assert.match(scheduleHtml, /Matchup Outlook/u);
   assert.match(scheduleHtml, /See how upcoming opponents have scored/u);
 
   const inviteResponse = await waitForHttp(`http://127.0.0.1:${webPort}/invite`, web);

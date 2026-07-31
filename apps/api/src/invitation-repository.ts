@@ -1,4 +1,4 @@
-import { and, eq, gt, isNull, ne, sql, type SQL } from "drizzle-orm";
+import { and, asc, eq, gt, inArray, isNull, ne, sql, type SQL } from "drizzle-orm";
 import {
   type ApplicationRole,
   type Database,
@@ -205,7 +205,9 @@ export class DrizzleInvitationRepository implements InvitationRepository {
   }): Promise<AcceptInvitationRepositoryResult> {
     try {
       return await this.#database.transaction(async (transaction) => {
-        const [invitation] = await transaction
+        // Discovery is deliberately non-locking. It tells us which parent rows must be locked
+        // before the invitation child row; the invitation is reselected and revalidated below.
+        const [discoveredInvitation] = await transaction
           .select({
             id: invitations.id,
             email: invitations.email,
@@ -219,13 +221,19 @@ export class DrizzleInvitationRepository implements InvitationRepository {
           })
           .from(invitations)
           .where(eq(invitations.tokenHash, input.tokenHash))
-          .limit(1)
-          .for("update");
-        if (!invitation || !isActive(invitation, input.now)) {
+          .limit(1);
+        if (!discoveredInvitation || !isActive(discoveredInvitation, input.now)) {
           return { status: "unavailable" } as const;
         }
 
-        const [existingUser] = await transaction
+        // Account deletion takes the same parent-before-child order: user, owned league, then
+        // invitation. Lock every existing user dependency in UUID order, including the inviter
+        // whose FK is copied into a league membership during acceptance.
+        const dependencyUserIds = [
+          discoveredInvitation.invitedByUserId,
+          ...(input.identity.kind === "existing_user" ? [input.identity.userId] : []),
+        ].filter((id, index, values) => values.indexOf(id) === index);
+        const lockedUsers = await transaction
           .select({
             id: users.id,
             email: users.email,
@@ -233,8 +241,50 @@ export class DrizzleInvitationRepository implements InvitationRepository {
             role: users.role,
           })
           .from(users)
-          .where(sql`lower(${users.email}) = lower(${invitation.email})`)
-          .limit(1);
+          .where(inArray(users.id, dependencyUserIds))
+          .orderBy(asc(users.id))
+          .for("update");
+        if (!lockedUsers.some((user) => user.id === discoveredInvitation.invitedByUserId)) {
+          return { status: "unavailable" } as const;
+        }
+
+        if (discoveredInvitation.leagueId) {
+          const [league] = await transaction
+            .select({ id: leagues.id })
+            .from(leagues)
+            .where(eq(leagues.id, discoveredInvitation.leagueId))
+            .limit(1)
+            .for("key share");
+          if (!league) return { status: "unavailable" } as const;
+        }
+
+        const [invitation] = await transaction
+          .select({
+            id: invitations.id,
+            email: invitations.email,
+            invitedByUserId: invitations.invitedByUserId,
+            role: invitations.role,
+            leagueId: invitations.leagueId,
+            leagueRole: invitations.leagueRole,
+            expiresAt: invitations.expiresAt,
+            acceptedAt: invitations.acceptedAt,
+            revokedAt: invitations.revokedAt,
+          })
+          .from(invitations)
+          .where(eq(invitations.id, discoveredInvitation.id))
+          .limit(1)
+          .for("update");
+        if (
+          !invitation ||
+          !isActive(invitation, input.now) ||
+          invitation.email !== discoveredInvitation.email ||
+          invitation.invitedByUserId !== discoveredInvitation.invitedByUserId ||
+          invitation.role !== discoveredInvitation.role ||
+          invitation.leagueId !== discoveredInvitation.leagueId ||
+          invitation.leagueRole !== discoveredInvitation.leagueRole
+        ) {
+          return { status: "unavailable" } as const;
+        }
 
         let acceptedUser:
           | {
@@ -246,11 +296,21 @@ export class DrizzleInvitationRepository implements InvitationRepository {
           | undefined;
         let createdUser = false;
         if (input.identity.kind === "existing_user") {
-          if (!existingUser || existingUser.id !== input.identity.userId) {
+          const existingUserId = input.identity.userId;
+          const existingUser = lockedUsers.find((user) => user.id === existingUserId);
+          if (
+            !existingUser ||
+            existingUser.email.toLowerCase() !== invitation.email.toLowerCase()
+          ) {
             return { status: "identity_conflict" } as const;
           }
           acceptedUser = existingUser;
         } else {
+          const [existingUser] = await transaction
+            .select({ id: users.id })
+            .from(users)
+            .where(sql`lower(${users.email}) = lower(${invitation.email})`)
+            .limit(1);
           if (existingUser) return { status: "identity_conflict" } as const;
           const [created] = await transaction
             .insert(users)

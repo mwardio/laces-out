@@ -86,6 +86,15 @@ import { type DataQualityPort, registerDataQualityRoutes } from "./data-quality-
 import type { RefreshAuthorizationPort } from "./refresh-authorization.js";
 import { type RegistrationPort, registerRegistrationRoutes } from "./registration-routes.js";
 import { type PreferencesPort, registerAccountRoutes } from "./account-routes.js";
+import type { AccountDataPort } from "./account-data.js";
+import {
+  browserHandoffConfirmPath,
+  browserHandoffConsumePath,
+  browserHandoffLandingPath,
+  browserHandoffStagePath,
+  registerBrowserHandoffRoutes,
+} from "./browser-handoff-routes.js";
+import { browserHandoffOriginsCompatible, type BrowserHandoffPort } from "./browser-handoff.js";
 import { type PushPort, registerPushRoutes } from "./push-routes.js";
 import { type SchedulePort, registerScheduleRoutes } from "./schedule-routes.js";
 import { type StatsCenterPort, registerStatsCenterRoutes } from "./stats-center-routes.js";
@@ -224,6 +233,8 @@ export interface BuildAppOptions {
   readonly refreshAuthorization?: RefreshAuthorizationPort;
   readonly registration?: RegistrationPort;
   readonly preferences?: PreferencesPort;
+  readonly accountData?: AccountDataPort;
+  readonly browserHandoffs?: BrowserHandoffPort;
   readonly push?: PushPort;
   readonly schedule?: SchedulePort;
   readonly statsCenter?: StatsCenterPort;
@@ -255,6 +266,20 @@ export interface BuildAppOptions {
  * no in-season producer, and the recompute rejects it by name rather than silently ignoring it.
  */
 const INGESTION_RECOMPUTE_KINDS: readonly RecommendationKind[] = ["lineup", "trade", "waiver"];
+
+/** Public compatibility declaration used by native clients before accepting a self-hosted URL. */
+const MOBILE_API_VERSION = 1;
+const MOBILE_CAPABILITIES = [
+  "account-data-export",
+  "account-deletion",
+  "activity-feed",
+  "cookie-authentication",
+  "in-season-decisions",
+  "league-analytics",
+  "league-dashboard",
+  "league-portfolio",
+  "weekly-reckoning",
+] as const;
 
 /**
  * A queue outage must not fail an ingestion that already committed. Matches the existing
@@ -346,6 +371,14 @@ function loginAccountRateLimitKey(body: unknown, fallbackIp: string): string {
 
 export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyInstance> {
   const environment = options.environment ?? loadEnvironment();
+  const browserHandoffs =
+    options.browserHandoffs &&
+    browserHandoffOriginsCompatible(environment.API_URL, environment.WEB_URL)
+      ? options.browserHandoffs
+      : undefined;
+  const mobileCapabilities = browserHandoffs
+    ? [...MOBILE_CAPABILITIES, "authenticated-browser-handoff" as const]
+    : MOBILE_CAPABILITIES;
   const requireAuthentication =
     options.requireAuthentication ?? environment.NODE_ENV === "production";
   if (requireAuthentication && !options.authService) {
@@ -426,6 +459,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     environment.WEB_URL,
     ...environment.ADDITIONAL_WEB_ORIGINS,
   ]);
+  const apiOrigin = new URL(environment.API_URL).origin;
   const allowedWebOrigin = (origin: string | undefined): string | undefined =>
     typeof origin === "string" && allowedWebOrigins.has(origin) ? origin : undefined;
 
@@ -475,6 +509,10 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     "/v1/auth/logout",
     "/v1/auth/register",
     "/v1/auth/session",
+    browserHandoffLandingPath,
+    browserHandoffStagePath,
+    browserHandoffConfirmPath,
+    browserHandoffConsumePath,
     ...espnBridgeIngestPaths,
     espnBridgePairingRedeemPath,
     "/v1/invitations/inspect",
@@ -488,11 +526,16 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     const requestPath = request.url.split("?", 1)[0] ?? request.url;
     const isBridgeSnapshot = espnBridgeIngestPaths.includes(requestPath);
     const isBridgeCredentialExchange = requestPath === espnBridgePairingRedeemPath;
+    const isBrowserHandoffStage = requestPath === browserHandoffStagePath;
+    const isBrowserHandoffConfirmFromLanding =
+      requestPath === browserHandoffConfirmPath && request.headers.origin === apiOrigin;
     if (
       environment.NODE_ENV === "production" &&
       !["GET", "HEAD", "OPTIONS"].includes(request.method) &&
       !isBridgeSnapshot &&
-      !isBridgeCredentialExchange
+      !isBridgeCredentialExchange &&
+      !isBrowserHandoffStage &&
+      !isBrowserHandoffConfirmFromLanding
     ) {
       if (allowedWebOrigin(request.headers.origin) === undefined) {
         return reply.code(403).type("application/problem+json").send({
@@ -527,6 +570,8 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
       service: "fantasy-api",
       version,
       time: new Date().toISOString(),
+      mobileApiVersion: MOBILE_API_VERSION,
+      mobileCapabilities,
     }),
   );
 
@@ -537,6 +582,8 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
       service: "fantasy-api",
       version,
       time: new Date().toISOString(),
+      mobileApiVersion: MOBILE_API_VERSION,
+      mobileCapabilities,
     });
     return reply.code(ready ? 200 : 503).send(response);
   });
@@ -616,6 +663,12 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     return { authenticated: true, user };
   });
 
+  registerBrowserHandoffRoutes(app, {
+    environment,
+    ...(browserHandoffs ? { browserHandoffs } : {}),
+    isTest: environment.NODE_ENV === "test",
+  });
+
   registerRegistrationRoutes(app, {
     environment,
     ...(options.registration ? { registration: options.registration } : {}),
@@ -664,6 +717,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   });
   registerAccountRoutes(app, {
     ...(options.authService ? { authService: options.authService } : {}),
+    ...(options.accountData ? { accountData: options.accountData } : {}),
     ...(options.preferences ? { preferences: options.preferences } : {}),
     isTest: environment.NODE_ENV === "test",
   });

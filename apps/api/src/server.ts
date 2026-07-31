@@ -11,6 +11,8 @@ import { sql } from "drizzle-orm";
 import { PgBoss } from "pg-boss";
 
 import { buildApp } from "./app.js";
+import { DrizzleAccountDataRepository } from "./account-data.js";
+import { BrowserHandoffService, DrizzleBrowserHandoffStore } from "./browser-handoff.js";
 import { createAiProviderAdapters } from "./ai-provider-adapters.js";
 import { AiService, DrizzleAiRepository } from "./ai-service.js";
 import { DrizzleAuthRepository } from "./auth-repository.js";
@@ -59,6 +61,11 @@ const credentialKey = environment.CREDENTIAL_ENCRYPTION_KEY
   ? parseCredentialKey(environment.CREDENTIAL_ENCRYPTION_KEY)
   : undefined;
 const authService = new AuthService(new DrizzleAuthRepository(database.db));
+const accountData = new DrizzleAccountDataRepository(database.db);
+const browserHandoffs = new BrowserHandoffService(
+  new DrizzleBrowserHandoffStore(database.db),
+  environment.API_URL,
+);
 const espnLiveDraftRepository = new DrizzleEspnLiveDraftRepository(database.db);
 const draftSessions = new DraftSessionService(
   new DrizzleDraftSessionRepository(database.db, espnLiveDraftRepository),
@@ -195,6 +202,8 @@ await registerQueues(jobs);
 const app = await buildApp({
   environment,
   authService,
+  accountData,
+  browserHandoffs,
   draftSessions,
   draftMarket,
   draftAnalysis,

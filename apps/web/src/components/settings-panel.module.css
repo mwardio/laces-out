@@ -184,6 +184,76 @@
     line-height: 1.55;
   }
 
+  .dataAction {
+    display: grid;
+    gap: var(--space-12);
+    padding: 16px 20px;
+    border-top: 1px solid var(--ink-100);
+  }
+
+  .dataAction p,
+  .deletionExplanation {
+    color: var(--ink-600);
+    font-size: var(--text-11);
+    line-height: 1.6;
+  }
+
+  .dataAction button {
+    display: inline-flex;
+    width: fit-content;
+    min-height: 40px;
+    align-items: center;
+    justify-content: center;
+    gap: 7px;
+    padding: 0 16px;
+    color: var(--white);
+    background: var(--ink-950);
+    border: 0;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    font-size: var(--text-12);
+    font-weight: 700;
+  }
+
+  .dataAction button:disabled {
+    cursor: progress;
+    opacity: 0.65;
+  }
+
+  .dangerPanel {
+    border-color: #e4b9b2;
+  }
+
+  .dangerPanel .panelHeading p,
+  .dangerPanel .panelHeading svg {
+    color: #a33a2b;
+  }
+
+  .deletionExplanation {
+    padding: 16px 20px;
+    background: #fff8f6;
+    border-top: 1px solid #f0d9d4;
+  }
+
+  .deletionExplanation p {
+    margin: 0;
+  }
+
+  .deletionExplanation ul {
+    display: grid;
+    gap: var(--space-6);
+    padding-left: 20px;
+    margin: 8px 0;
+  }
+
+  .dangerButton {
+    background: #9f3025 !important;
+  }
+
+  .dangerButton:disabled {
+    cursor: not-allowed !important;
+  }
+
   .disabledNotice {
     display: flex;
     align-items: start;
@@ -440,11 +510,17 @@
     }
 
     .identity,
-    .form {
+    .form,
+    .dataAction,
+    .deletionExplanation {
       padding: 16px;
     }
 
     .form button {
+      width: 100%;
+    }
+
+    .dataAction button {
       width: 100%;
     }
 

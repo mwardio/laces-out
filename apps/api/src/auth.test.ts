@@ -6,6 +6,7 @@ import {
   type AuthRepository,
   type AuthUserRecord,
   type SessionRecord,
+  verifyOwnerPassword,
 } from "./auth.js";
 
 class MemoryAuthRepository implements AuthRepository {
@@ -26,6 +27,21 @@ class MemoryAuthRepository implements AuthRepository {
       expiresAt: input.expiresAt,
       lastSeenAt: new Date("2026-07-16T12:00:00Z"),
     });
+  }
+
+  async createSessionForPassword(input: {
+    readonly userId: string;
+    readonly expectedPasswordHash: string;
+    readonly tokenHash: string;
+    readonly expiresAt: Date;
+  }): Promise<AuthUserRecord | undefined> {
+    const user = this.users.find(
+      (candidate) =>
+        candidate.id === input.userId && candidate.passwordHash === input.expectedPasswordHash,
+    );
+    if (!user) return undefined;
+    await this.createSession(input);
+    return user;
   }
 
   async findSession(tokenHash: string, now: Date): Promise<SessionRecord | undefined> {
@@ -58,25 +74,24 @@ class MemoryAuthRepository implements AuthRepository {
     return this.users.find((user) => user.id === userId);
   }
 
-  async updatePassword(userId: string, passwordHash: string): Promise<void> {
-    const index = this.users.findIndex((user) => user.id === userId);
+  async replacePasswordIfCurrent(input: {
+    readonly userId: string;
+    readonly currentPassword: string;
+    readonly newPasswordHash: string;
+    readonly exceptTokenHash: string;
+  }): Promise<"changed" | "invalid-current-password"> {
+    const index = this.users.findIndex((user) => user.id === input.userId);
     const user = this.users[index];
-    if (index >= 0 && user) this.users[index] = { ...user, passwordHash };
-  }
-
-  async deleteOtherSessions(userId: string, exceptTokenHash: string): Promise<void> {
-    for (const [token, session] of this.sessions) {
-      if (session.userId === userId && token !== exceptTokenHash) this.sessions.delete(token);
+    if (!user || !(await verifyOwnerPassword(user.passwordHash, input.currentPassword))) {
+      return "invalid-current-password";
     }
-  }
-
-  async replacePasswordAndDeleteOtherSessions(
-    userId: string,
-    passwordHash: string,
-    exceptTokenHash: string,
-  ): Promise<void> {
-    await this.updatePassword(userId, passwordHash);
-    await this.deleteOtherSessions(userId, exceptTokenHash);
+    this.users[index] = { ...user, passwordHash: input.newPasswordHash };
+    for (const [token, session] of this.sessions) {
+      if (session.userId === input.userId && token !== input.exceptTokenHash) {
+        this.sessions.delete(token);
+      }
+    }
+    return "changed";
   }
 }
 

@@ -5,7 +5,8 @@ import { SettingsPanel } from "../../components/settings-panel";
 
 export const metadata: Metadata = {
   title: "Settings",
-  description: "Change your own password and choose the league the locker room opens first.",
+  description:
+    "Manage your password, leagues, notifications, portable data export, and account deletion.",
   robots: { index: false, follow: false },
 };
 
@@ -14,7 +15,7 @@ export default function SettingsPage() {
     <AppShell
       active="settings"
       showDemoChip={false}
-      context={{ label: "Settings", detail: "Password + default league", tone: "setup" }}
+      context={{ label: "Settings", detail: "Account + preferences", tone: "setup" }}
     >
       <SettingsPanel />
     </AppShell>

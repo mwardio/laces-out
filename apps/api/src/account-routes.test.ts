@@ -2,7 +2,8 @@ import { loadEnvironment } from "@fantasy/config";
 import { describe, expect, it, vi } from "vitest";
 
 import { buildApp } from "./app.js";
-import { AuthService, hashOwnerPassword, type AuthRepository } from "./auth.js";
+import type { AccountDataPort, PortableAccountExport } from "./account-data.js";
+import { AuthService, type AuthRepository } from "./auth.js";
 import { PreferencesService, type PreferencesRepository } from "./preferences.js";
 
 const USER_ID = "10000000-0000-4000-8000-000000000001";
@@ -36,6 +37,7 @@ function authRepository(overrides: Partial<AuthRepository> = {}): AuthRepository
 async function appWith(
   options: {
     readonly auth?: AuthRepository;
+    readonly accountData?: AccountDataPort;
     readonly preferences?: PreferencesRepository;
     readonly withoutPreferences?: boolean;
   } = {},
@@ -50,11 +52,169 @@ async function appWith(
     logger: false,
     requireAuthentication: true,
     authService: new AuthService(options.auth ?? authRepository()),
+    ...(options.accountData ? { accountData: options.accountData } : {}),
     ...(options.withoutPreferences
       ? {}
       : { preferences: new PreferencesService(preferencesRepository) }),
   });
 }
+
+function exportFixture(): PortableAccountExport {
+  return {
+    schemaVersion: 1,
+    exportedAt: "2031-01-02T03:04:05.000Z",
+    account: {
+      id: USER_ID,
+      email: "member@example.com",
+      displayName: "Member",
+      role: "member",
+      createdAt: new Date("2030-01-01T00:00:00.000Z"),
+      updatedAt: new Date("2030-01-02T00:00:00.000Z"),
+    },
+    data: { preferences: { defaultLeagueId: LEAGUE_ID }, sessions: [] },
+    omittedSecrets: ["password hashes", "session, browser-handoff, and invitation token hashes"],
+  };
+}
+
+describe("account portability and deletion", () => {
+  it("requires authentication for both account-data actions", async () => {
+    const accountData: AccountDataPort = {
+      exportData: () => Promise.resolve(exportFixture()),
+      deleteAccount: () =>
+        Promise.resolve({
+          deleted: true,
+          transferredLeagueCount: 0,
+          deletedSoleMemberLeagueCount: 0,
+          preservedSharedProjectionSetCount: 0,
+        }),
+    };
+    const app = await appWith({ accountData });
+
+    expect((await app.inject({ method: "GET", url: "/v1/account/export" })).statusCode).toBe(401);
+    expect(
+      (
+        await app.inject({
+          method: "DELETE",
+          url: "/v1/account",
+          payload: { currentPassword: "the original password", confirmation: "DELETE MY ACCOUNT" },
+        })
+      ).statusCode,
+    ).toBe(401);
+    await app.close();
+  });
+
+  it("downloads a versioned portable JSON export without caching", async () => {
+    const exportData = vi.fn(() => Promise.resolve(exportFixture()));
+    const app = await appWith({
+      accountData: {
+        exportData,
+        deleteAccount: () => Promise.resolve(undefined),
+      },
+    });
+
+    const result = await app.inject({
+      method: "GET",
+      url: "/v1/account/export",
+      headers: { cookie: COOKIE },
+    });
+
+    expect(result.statusCode).toBe(200);
+    expect(result.headers["content-disposition"]).toBe(
+      'attachment; filename="laces-out-account-export.json"',
+    );
+    expect(result.headers["cache-control"]).toBe("no-store");
+    expect(result.json()).toMatchObject({
+      schemaVersion: 1,
+      account: { id: USER_ID, email: "member@example.com" },
+    });
+    expect(exportData).toHaveBeenCalledWith(USER_ID);
+    await app.close();
+  });
+
+  it("requires the exact destructive confirmation phrase", async () => {
+    const deleteAccount = vi.fn(() => Promise.resolve(undefined));
+    const app = await appWith({
+      accountData: { exportData: () => Promise.resolve(exportFixture()), deleteAccount },
+    });
+
+    const result = await app.inject({
+      method: "DELETE",
+      url: "/v1/account",
+      headers: { cookie: COOKIE },
+      payload: { currentPassword: "the original password", confirmation: "delete" },
+    });
+
+    expect(result.statusCode).toBe(400);
+    expect(deleteAccount).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it("reauthenticates the current password before deleting", async () => {
+    const deleteAccount = vi.fn<AccountDataPort["deleteAccount"]>((input) =>
+      Promise.resolve(
+        input.currentPassword === "the original password"
+          ? {
+              deleted: true as const,
+              transferredLeagueCount: 1,
+              deletedSoleMemberLeagueCount: 1,
+              preservedSharedProjectionSetCount: 2,
+            }
+          : { deleted: false as const, reason: "invalid-current-password" as const },
+      ),
+    );
+    const app = await appWith({
+      accountData: { exportData: () => Promise.resolve(exportFixture()), deleteAccount },
+    });
+
+    const wrong = await app.inject({
+      method: "DELETE",
+      url: "/v1/account",
+      headers: { cookie: COOKIE },
+      payload: { currentPassword: "not the password", confirmation: "DELETE MY ACCOUNT" },
+    });
+    expect(wrong.statusCode).toBe(401);
+    expect(deleteAccount).toHaveBeenCalledOnce();
+
+    const deleted = await app.inject({
+      method: "DELETE",
+      url: "/v1/account",
+      headers: { cookie: COOKIE },
+      payload: { currentPassword: "the original password", confirmation: "DELETE MY ACCOUNT" },
+    });
+    expect(deleted.statusCode).toBe(200);
+    expect(deleted.json()).toEqual({
+      deleted: true,
+      transferredLeagueCount: 1,
+      deletedSoleMemberLeagueCount: 1,
+      preservedSharedProjectionSetCount: 2,
+    });
+    expect(deleted.headers["set-cookie"]).toContain("fantasy_session=;");
+    expect(deleteAccount).toHaveBeenCalledTimes(2);
+    const deletionInput = deleteAccount.mock.calls[1]?.[0];
+    expect(deletionInput?.userId).toBe(USER_ID);
+    expect(deletionInput?.currentPassword).toBe("the original password");
+    expect(typeof deletionInput?.correlationId).toBe("string");
+    await app.close();
+  });
+
+  it("reports unavailable when the deployment has no account-data repository", async () => {
+    const app = await appWith();
+    const exported = await app.inject({
+      method: "GET",
+      url: "/v1/account/export",
+      headers: { cookie: COOKIE },
+    });
+    const deleted = await app.inject({
+      method: "DELETE",
+      url: "/v1/account",
+      headers: { cookie: COOKIE },
+      payload: { currentPassword: "the original password", confirmation: "DELETE MY ACCOUNT" },
+    });
+    expect(exported.statusCode).toBe(503);
+    expect(deleted.statusCode).toBe(503);
+    await app.close();
+  });
+});
 
 describe("POST /v1/auth/password", () => {
   it("requires authentication", async () => {
@@ -70,19 +230,12 @@ describe("POST /v1/auth/password", () => {
   });
 
   it("changes the password and reports the other sessions as revoked", async () => {
-    const updatePassword = vi.fn(() => Promise.resolve());
-    const deleteOtherSessions = vi.fn(() => Promise.resolve());
+    const replacePasswordIfCurrent = vi.fn<NonNullable<AuthRepository["replacePasswordIfCurrent"]>>(
+      () => Promise.resolve("changed"),
+    );
     const app = await appWith({
       auth: authRepository({
-        findUserById: async () => ({
-          id: USER_ID,
-          email: "member@example.com",
-          displayName: "Member",
-          passwordHash: await hashOwnerPassword("the original password"),
-          role: "member",
-        }),
-        updatePassword,
-        deleteOtherSessions,
+        replacePasswordIfCurrent,
       }),
     });
 
@@ -95,23 +248,18 @@ describe("POST /v1/auth/password", () => {
 
     expect(result.statusCode).toBe(200);
     expect(result.json()).toEqual({ changed: true, otherSessionsRevoked: true });
-    expect(updatePassword).toHaveBeenCalledOnce();
-    expect(deleteOtherSessions).toHaveBeenCalledOnce();
+    expect(replacePasswordIfCurrent).toHaveBeenCalledOnce();
+    expect(replacePasswordIfCurrent.mock.calls[0]?.[0]).toMatchObject({
+      userId: USER_ID,
+      currentPassword: "the original password",
+    });
     await app.close();
   });
 
   it("answers 401 for a wrong current password", async () => {
     const app = await appWith({
       auth: authRepository({
-        findUserById: async () => ({
-          id: USER_ID,
-          email: "member@example.com",
-          displayName: "Member",
-          passwordHash: await hashOwnerPassword("the original password"),
-          role: "member",
-        }),
-        updatePassword: () => Promise.resolve(),
-        deleteOtherSessions: () => Promise.resolve(),
+        replacePasswordIfCurrent: () => Promise.resolve("invalid-current-password"),
       }),
     });
 
@@ -127,18 +275,12 @@ describe("POST /v1/auth/password", () => {
   });
 
   it("rejects a short password and a reused password before hashing", async () => {
-    const updatePassword = vi.fn(() => Promise.resolve());
+    const replacePasswordIfCurrent = vi.fn<NonNullable<AuthRepository["replacePasswordIfCurrent"]>>(
+      () => Promise.resolve("changed"),
+    );
     const app = await appWith({
       auth: authRepository({
-        findUserById: async () => ({
-          id: USER_ID,
-          email: "member@example.com",
-          displayName: "Member",
-          passwordHash: await hashOwnerPassword("the original password"),
-          role: "member",
-        }),
-        updatePassword,
-        deleteOtherSessions: () => Promise.resolve(),
+        replacePasswordIfCurrent,
       }),
     });
 
@@ -161,7 +303,7 @@ describe("POST /v1/auth/password", () => {
     });
     expect(reused.statusCode).toBe(400);
 
-    expect(updatePassword).not.toHaveBeenCalled();
+    expect(replacePasswordIfCurrent).not.toHaveBeenCalled();
     await app.close();
   });
 
