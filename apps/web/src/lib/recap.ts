@@ -50,17 +50,12 @@ export interface RecapMembershipView {
   readonly claimedTeamId: string | null;
 }
 
-function isCommissioner(membership: RecapMembershipView): boolean {
+export function canManageLeagueIntel(membership: RecapMembershipView): boolean {
   return membership.role === "owner" || membership.role === "commissioner";
 }
 
-export function canEditPersonaCard(teamId: string, membership: RecapMembershipView): boolean {
-  if (isCommissioner(membership)) return true;
-  return membership.role !== "viewer" && membership.claimedTeamId === teamId;
-}
-
 export function canEditSpice(membership: RecapMembershipView): boolean {
-  return isCommissioner(membership);
+  return canManageLeagueIntel(membership);
 }
 
 export function canGenerateRecap(membership: RecapMembershipView): boolean {

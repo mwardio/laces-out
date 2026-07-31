@@ -14,9 +14,9 @@ import {
 
 import {
   awardableWeek,
-  canEditPersonaCard,
   canEditSpice,
   canGenerateRecap,
+  canManageLeagueIntel,
   parseLeagueRecap,
   parseRecapPersonaCards,
   parseRecapSettings,
@@ -87,14 +87,13 @@ describe("recap helpers", () => {
     expect(recapByline({ ...RECAP, spiceLevel: "mild" })).toContain("Mild");
   });
 
-  it("gates persona card editing to the claimed team or a commissioner", () => {
-    expect(canEditPersonaCard(TEAM_ID, { role: "manager", claimedTeamId: TEAM_ID })).toBe(true);
-    expect(canEditPersonaCard(TEAM_ID, { role: "manager", claimedTeamId: null })).toBe(false);
-    expect(canEditPersonaCard(TEAM_ID, { role: "commissioner", claimedTeamId: null })).toBe(true);
-    expect(canEditPersonaCard(TEAM_ID, { role: "owner", claimedTeamId: null })).toBe(true);
-    expect(canEditPersonaCard(TEAM_ID, { role: "viewer", claimedTeamId: null })).toBe(false);
-    // A viewer who somehow claimed a team still cannot write; the role gate comes first.
-    expect(canEditPersonaCard(TEAM_ID, { role: "viewer", claimedTeamId: TEAM_ID })).toBe(false);
+  it("restricts League Intel to league owners and commissioners", () => {
+    expect(canManageLeagueIntel({ role: "manager", claimedTeamId: TEAM_ID })).toBe(false);
+    expect(canManageLeagueIntel({ role: "manager", claimedTeamId: null })).toBe(false);
+    expect(canManageLeagueIntel({ role: "commissioner", claimedTeamId: null })).toBe(true);
+    expect(canManageLeagueIntel({ role: "owner", claimedTeamId: null })).toBe(true);
+    expect(canManageLeagueIntel({ role: "viewer", claimedTeamId: null })).toBe(false);
+    expect(canManageLeagueIntel({ role: "viewer", claimedTeamId: TEAM_ID })).toBe(false);
   });
 
   it("gates spice and generation by role", () => {

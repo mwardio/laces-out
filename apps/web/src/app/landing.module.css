@@ -1813,6 +1813,17 @@
   font-weight: 650;
 }
 
+.footerTop nav .footerGithub {
+  display: inline-flex;
+  width: 32px;
+  height: 32px;
+  align-items: center;
+  justify-content: center;
+  margin: -8px 0;
+  border: 1px solid transparent;
+  border-radius: 50%;
+}
+
 .footerContact {
   padding: 0;
   background: transparent;
@@ -1825,6 +1836,12 @@
   color: var(--white);
 }
 
+.footerTop nav .footerGithub:hover {
+  background: #1c2820;
+  border-color: #344138;
+}
+
+.footerTop nav a:focus-visible,
 .footerContact:focus-visible {
   color: var(--white);
   outline: 2px solid var(--lime-300);

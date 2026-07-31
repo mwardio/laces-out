@@ -53,7 +53,8 @@ function port(overrides: Partial<RecapRoutePort> = {}): RecapRoutePort {
   return {
     getRecap: () => Promise.resolve(ENVELOPE),
     generate: () => Promise.resolve({ state: "generated", response: ENVELOPE }),
-    listPersonaCards: () => Promise.resolve({ leagueId: LEAGUE_ID, cards: [] }),
+    listPersonaCards: () =>
+      Promise.resolve({ state: "listed", list: { leagueId: LEAGUE_ID, cards: [] } }),
     savePersonaCard: () =>
       Promise.resolve({
         state: "saved",
@@ -311,19 +312,22 @@ describe("recap routes", () => {
     await app.close();
   });
 
-  it("lists League Intel for any member", async () => {
+  it("lists League Intel for an authorized league owner or commissioner", async () => {
     const listPersonaCards = vi.fn(() =>
       Promise.resolve({
-        leagueId: LEAGUE_ID,
-        cards: [
-          {
-            teamId: TEAM_ID,
-            teamName: "Budget Ballers",
-            body: "Fears kickers.",
-            updatedAt: "2026-10-01T12:00:00.000Z",
-            updatedByDisplayName: "League Guru",
-          },
-        ],
+        state: "listed" as const,
+        list: {
+          leagueId: LEAGUE_ID,
+          cards: [
+            {
+              teamId: TEAM_ID,
+              teamName: "Budget Ballers",
+              body: "Fears kickers.",
+              updatedAt: "2026-10-01T12:00:00.000Z",
+              updatedByDisplayName: "League Guru",
+            },
+          ],
+        },
       }),
     );
     const app = await recapApp(port({ listPersonaCards }));
@@ -339,6 +343,22 @@ describe("recap routes", () => {
       cards: [{ teamId: TEAM_ID, updatedByDisplayName: "League Guru" }],
     });
     expect(listPersonaCards).toHaveBeenCalledWith(USER_ID, LEAGUE_ID);
+    await app.close();
+  });
+
+  it("refuses League Intel reads from regular league members", async () => {
+    const app = await recapApp(
+      port({ listPersonaCards: () => Promise.resolve({ state: "forbidden" }) }),
+    );
+
+    const response = await app.inject({
+      method: "GET",
+      url: `/v1/leagues/${LEAGUE_ID}/persona-cards`,
+      headers: { cookie: COOKIE },
+    });
+
+    expect(response.statusCode).toBe(403);
+    expect(response.json()).toMatchObject({ code: "RECAP_FORBIDDEN" });
     await app.close();
   });
 

@@ -475,8 +475,17 @@ describe("persona cards", () => {
     await expect(service.listPersonaCards(USER_ID, LEAGUE_ID)).resolves.toBeUndefined();
   });
 
+  it("keeps League Intel private from regular managers", async () => {
+    const { service } = fixture();
+
+    await expect(service.listPersonaCards(USER_ID, LEAGUE_ID)).resolves.toEqual({
+      state: "forbidden",
+    });
+  });
+
   it("lists one entry per team with null bodies for cardless teams", async () => {
     const repository = new FakeRepository();
+    repository.membership = { role: "owner", claimedFantasyTeamId: TEAM_ID };
     repository.cards = [
       {
         fantasyTeamId: TEAM_ID,
@@ -490,7 +499,8 @@ describe("persona cards", () => {
 
     const list = await service.listPersonaCards(USER_ID, LEAGUE_ID);
 
-    expect(list?.cards).toEqual([
+    expect(list?.state).toBe("listed");
+    expect(list?.state === "listed" ? list.list.cards : undefined).toEqual([
       {
         teamId: TEAM_ID,
         teamName: "Budget Ballers",
@@ -508,21 +518,22 @@ describe("persona cards", () => {
     ]);
   });
 
-  it("lets a manager edit only the claimed team's card", async () => {
+  it("keeps League Intel writes private from regular managers", async () => {
     const { service, repository } = fixture();
 
-    const saved = await service.savePersonaCard(USER_ID, LEAGUE_ID, TEAM_ID, "Fears kickers.");
-
-    expect(saved).toMatchObject({ state: "saved", card: { teamId: TEAM_ID } });
-    expect(repository.savedCards).toHaveLength(1);
+    await expect(
+      service.savePersonaCard(USER_ID, LEAGUE_ID, TEAM_ID, "Fears kickers."),
+    ).resolves.toEqual({ state: "forbidden" });
     await expect(
       service.savePersonaCard(USER_ID, LEAGUE_ID, OTHER_TEAM_ID, "Nope."),
     ).resolves.toEqual({ state: "forbidden" });
-    expect(repository.savedCards).toHaveLength(1);
+    expect(repository.savedCards).toHaveLength(0);
   });
 
   it("reports the updater the repository read back rather than a browser guess", async () => {
-    const { service } = fixture();
+    const repository = new FakeRepository();
+    repository.membership = { role: "owner", claimedFantasyTeamId: TEAM_ID };
+    const { service } = fixture({ repository });
 
     const saved = await service.savePersonaCard(USER_ID, LEAGUE_ID, TEAM_ID, "Fears kickers.");
 
@@ -551,7 +562,7 @@ describe("persona cards", () => {
     ).resolves.toEqual({ state: "unknown-team" });
   });
 
-  it("lets an owner clear any card and a manager clear only its own", async () => {
+  it("lets an owner clear any card and refuses a regular manager", async () => {
     const repository = new FakeRepository();
     repository.cards = [
       {

@@ -158,6 +158,10 @@ export type RecapCardSaveResult =
   | { readonly state: "forbidden" }
   | { readonly state: "unknown-team" };
 
+export type RecapPersonaCardListResult =
+  | { readonly state: "listed"; readonly list: RecapPersonaCardList }
+  | { readonly state: "forbidden" };
+
 export type RecapCardDeleteResult =
   | { readonly state: "deleted" }
   | { readonly state: "forbidden" }
@@ -630,28 +634,32 @@ export class RecapService {
   async listPersonaCards(
     userId: string,
     leagueId: string,
-  ): Promise<RecapPersonaCardList | undefined> {
+  ): Promise<RecapPersonaCardListResult | undefined> {
     const membership = await this.#repository.findMembership(userId, leagueId);
     if (!membership) return undefined;
+    if (!mayMutate(membership.role)) return { state: "forbidden" };
     const season = await this.#repository.findLatestSeason(leagueId);
-    if (!season) return { leagueId, cards: [] };
+    if (!season) return { state: "listed", list: { leagueId, cards: [] } };
     const [teams, cards] = await Promise.all([
       this.#repository.listTeams(season.id),
       this.#repository.listCards(season.id),
     ]);
     const byTeam = new Map(cards.map((card) => [card.fantasyTeamId, card]));
     return {
-      leagueId,
-      cards: teams.map((team) => {
-        const card = byTeam.get(team.id);
-        return {
-          teamId: team.id,
-          teamName: team.name,
-          body: card?.body ?? null,
-          updatedAt: card ? card.updatedAt.toISOString() : null,
-          updatedByDisplayName: card?.updatedByDisplayName ?? null,
-        };
-      }),
+      state: "listed",
+      list: {
+        leagueId,
+        cards: teams.map((team) => {
+          const card = byTeam.get(team.id);
+          return {
+            teamId: team.id,
+            teamName: team.name,
+            body: card?.body ?? null,
+            updatedAt: card ? card.updatedAt.toISOString() : null,
+            updatedByDisplayName: card?.updatedByDisplayName ?? null,
+          };
+        }),
+      },
     };
   }
 
@@ -707,7 +715,7 @@ export class RecapService {
     return { state: "saved", settings: { leagueId, spiceLevel } };
   }
 
-  /** Membership, authorization, and team existence — the three checks both card writes share. */
+  /** Commissioner-level authorization and team existence — the checks both card writes share. */
   async #cardContext(
     userId: string,
     leagueId: string,
@@ -720,9 +728,7 @@ export class RecapService {
   > {
     const membership = await this.#repository.findMembership(userId, leagueId);
     if (!membership) return undefined;
-    if (membership.claimedFantasyTeamId !== teamId && !mayMutate(membership.role)) {
-      return { state: "forbidden" };
-    }
+    if (!mayMutate(membership.role)) return { state: "forbidden" };
     const season = await this.#repository.findLatestSeason(leagueId);
     if (!season) return { state: "unknown-team" };
     const teams = await this.#repository.listTeams(season.id);

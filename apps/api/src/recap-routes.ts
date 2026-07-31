@@ -8,7 +8,6 @@ import {
   recapSettingsSchema,
   type AiProviderName,
   type LeagueRecapResponse,
-  type RecapPersonaCardList,
   type RecapSpiceLevel,
 } from "@fantasy/contracts";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
@@ -18,6 +17,7 @@ import type {
   RecapCardDeleteResult,
   RecapCardSaveResult,
   RecapGenerateResult,
+  RecapPersonaCardListResult,
   RecapSettingsSaveResult,
 } from "./recap-service.js";
 
@@ -32,7 +32,10 @@ export interface RecapRoutePort {
     leagueId: string,
     input: { readonly week: number; readonly provider?: AiProviderName },
   ): Promise<RecapGenerateResult | undefined>;
-  listPersonaCards(userId: string, leagueId: string): Promise<RecapPersonaCardList | undefined>;
+  listPersonaCards(
+    userId: string,
+    leagueId: string,
+  ): Promise<RecapPersonaCardListResult | undefined>;
   savePersonaCard(
     userId: string,
     leagueId: string,
@@ -189,9 +192,10 @@ export function registerRecapRoutes(app: FastifyInstance, options: RecapRouteOpt
     const user = authenticatedUser(request, reply);
     if (!user || !availableService(request, reply, options.recaps)) return reply;
     const { leagueId } = leaguePathSchema.parse(request.params);
-    const response = await options.recaps.listPersonaCards(user.id, leagueId);
-    if (!response) return leagueNotFound(request, reply);
-    return recapPersonaCardListSchema.parse(response);
+    const result = await options.recaps.listPersonaCards(user.id, leagueId);
+    if (!result) return leagueNotFound(request, reply);
+    if (result.state === "forbidden") return recapForbidden(request, reply);
+    return recapPersonaCardListSchema.parse(result.list);
   });
 
   app.put(

@@ -22,9 +22,9 @@ import {
 } from "../lib/demo-contract-data";
 import {
   awardableWeek,
-  canEditPersonaCard,
   canEditSpice,
   canGenerateRecap,
+  canManageLeagueIntel,
   parseLeagueRecap,
   parseRecapPersonaCards,
   parseRecapSettings,
@@ -92,6 +92,7 @@ export function ReckoningRecapPanel({ leagueId, snapshot, demo }: ReckoningRecap
   // when no week is awardable yet; the response still explains why generation is unavailable.
   const defaultWeek = weeks[0] ?? snapshot.league.currentWeek ?? 1;
   const membership = snapshot.membership;
+  const managesLeagueIntel = canManageLeagueIntel(membership);
 
   const [selectedWeek, setSelectedWeek] = useState(defaultWeek);
   const [recap, setRecap] = useState<RecapState>({ state: "loading" });
@@ -173,6 +174,13 @@ export function ReckoningRecapPanel({ leagueId, snapshot, demo }: ReckoningRecap
   useEffect(() => {
     if (demo) {
       setCards(demoRecapPersonaCards);
+      setCardsMessage(null);
+      return;
+    }
+    if (!managesLeagueIntel) {
+      setCards(null);
+      setCardsMessage(null);
+      setDrafts({});
       return;
     }
     if (!leagueId) return;
@@ -202,7 +210,7 @@ export function ReckoningRecapPanel({ leagueId, snapshot, demo }: ReckoningRecap
       }
     })();
     return () => controller.abort();
-  }, [demo, leagueId]);
+  }, [demo, leagueId, managesLeagueIntel]);
 
   useEffect(() => {
     if (demo || !leagueId) return;
@@ -617,16 +625,17 @@ export function ReckoningRecapPanel({ leagueId, snapshot, demo }: ReckoningRecap
           </p>
         ) : null}
 
-        {cards ? (
+        {(demo || managesLeagueIntel) && cards ? (
           <details className={styles.cards}>
             <summary>League Intel</summary>
             <p className={styles.muted}>
-              Team notes the recap writer uses for voice, history, and rivalries. They never change
-              a stat, a result, or an award. Edit your own; commissioners can moderate any.
+              {demo
+                ? "Sample commissioner notes the recap writer uses for voice, history, and rivalries. They never change a stat, a result, or an award."
+                : "Private commissioner notes the recap writer uses for voice, history, and rivalries. They never change a stat, a result, or an award. Only league owners and commissioners can view or edit them."}
             </p>
             <ul className={styles.cardList}>
               {cards.cards.map((card) => {
-                const editable = !demo && canEditPersonaCard(card.teamId, membership);
+                const editable = !demo && managesLeagueIntel;
                 const draft = drafts[card.teamId] ?? card.body ?? "";
                 return (
                   <li key={card.teamId} className={styles.card}>
@@ -683,7 +692,7 @@ export function ReckoningRecapPanel({ leagueId, snapshot, demo }: ReckoningRecap
               })}
             </ul>
           </details>
-        ) : cardsMessage ? (
+        ) : (demo || managesLeagueIntel) && cardsMessage ? (
           <p className={styles.muted}>{cardsMessage}</p>
         ) : null}
       </div>

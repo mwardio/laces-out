@@ -9,6 +9,7 @@ interface WorkspaceWebpackConfig {
 const nextConfig: NextConfig = {
   output: "standalone",
   reactStrictMode: true,
+  expireTime: 7200,
   transpilePackages: [
     "@fantasy/contracts",
     "@fantasy/domain",
