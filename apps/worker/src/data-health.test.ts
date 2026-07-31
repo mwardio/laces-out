@@ -77,6 +77,63 @@ describe("data-source health assessment", () => {
     expect(result.degradedSourceKeys).toEqual(["never-ran"]);
   });
 
+  it("keeps not-yet-published current-season feeds pending without aging into an outage", () => {
+    const result = assessDataSourceHealth(
+      [
+        {
+          key: "nflverse.stats-player-week.2026",
+          checkIntervalMinutes: 30,
+          lastSuccessfulAt: null,
+          consecutiveFailures: 0,
+          metadata: { season: 2026, availability: "not-published" },
+          createdAt: new Date("2026-03-01T00:00:00.000Z"),
+        },
+      ],
+      checkedAt,
+    );
+
+    expect(result.pendingSources).toBe(1);
+    expect(result.staleSources).toBe(0);
+    expect(result.degradedSourceKeys).toEqual([]);
+  });
+
+  it("does not flag an intentionally non-publishable shadow rail as degraded", () => {
+    const result = assessDataSourceHealth(
+      [
+        {
+          key: "laces-out.projections.first-party-ros-shadow",
+          checkIntervalMinutes: 60,
+          lastSuccessfulAt: new Date("2026-07-21T11:55:00.000Z"),
+          consecutiveFailures: 0,
+          metadata: { mode: "shadow", qualityState: "degraded", publishable: false },
+          createdAt: new Date("2026-07-01T00:00:00.000Z"),
+        },
+      ],
+      checkedAt,
+    );
+
+    expect(result.healthySources).toBe(1);
+    expect(result.degradedSourceKeys).toEqual([]);
+  });
+
+  it("excludes immutable nflverse history outside the active model window", () => {
+    const source = (season: number): Parameters<typeof assessDataSourceHealth>[0][number] => ({
+      key: `nflverse.stats-player-week.${season}`,
+      checkIntervalMinutes: 1440,
+      lastSuccessfulAt: new Date("2026-07-01T00:00:00.000Z"),
+      consecutiveFailures: 0,
+      metadata: { season },
+      createdAt: new Date("2026-01-01T00:00:00.000Z"),
+    });
+    const result = assessDataSourceHealth([source(2022), source(2023)], checkedAt, {
+      minimumNflverseSeason: 2023,
+    });
+
+    expect(result.enabledSources).toBe(1);
+    expect(result.staleSources).toBe(1);
+    expect(result.degradedSourceKeys).toEqual(["nflverse.stats-player-week.2023"]);
+  });
+
   it("degrades a current projection source when its gate rejects or its output is stale", () => {
     const result = assessDataSourceHealth(
       [

@@ -8,9 +8,8 @@
   weekly player/team stats, weekly rosters, snap counts, Sleeper status, and contextual ADP; hourly Sleeper market
   signals; an hourly first-party weekly-forecast sweep; a quarter-hour lineup-lock notification
   sweep; and quarter-hour source health checks.
-  Provider sync, manual projection import, and recommendation reads still execute through their
-  current API workflows. The projection-refresh queue is implemented; league-sync and
-  recommendation-recompute still fail closed when queued until their worker services are wired;
+  Provider sync, projections, recommendation recomputation, and notification sweeps all have
+  concrete worker services and fail closed when a required dependency is unavailable;
 - `postgres`: canonical state, audit trail, and pg-boss queues.
 
 ## Docker Compose deployment
@@ -35,6 +34,28 @@ curl --fail "${PUBLIC_URL:-http://localhost:3000}/health/ready"
 Production startup rejects copied `replace-with-...` placeholders and the Compose database's
 default `fantasy` password. This is intentional: fill in every secret before expecting the stack to
 become healthy.
+
+## Operator automation
+
+For an always-on deployment, monitor both the public readiness endpoint and a worker heartbeat
+derived from a completed `data-health-check` job. Five-minute availability checks and a 50-minute
+worker-heartbeat threshold cover web/API failures, a stalled scheduler, and one legally long cold
+projection rebuild without treating one provider timeout as a site outage. Source and dead-letter alerts should be transition-based: alert
+when a condition appears, stay quiet while it is unchanged, and send one recovery notice when it
+clears. A short daily digest is useful even when every check passes.
+
+Create a PostgreSQL custom-format dump every night, verify the archive with `pg_restore --list`,
+retain a bounded local history, and periodically restore the newest dump into a disposable database
+and run integrity queries. When the destination is a dedicated disk, fail closed unless that disk is
+actually mounted so a boot-order problem cannot redirect backups onto the system volume. A dump
+stored beside the server is fast recovery, not an off-site backup; copy it to separately controlled
+storage when the deployment matters beyond one machine.
+
+During the season, record a Wednesday scorecard from the newest publishable model batch: player and
+D/ST MAE, bias, nominal-70% interval coverage, per-position challenger versus baseline, and sample
+counts. Run the locked validators after model or input-code changes (plus a low-frequency monthly
+backstop), retain their raw reports, and never promote a model automatically. The publication gate,
+not the scheduler, remains the authority on what reaches members.
 
 To make Film Room available without member setup, set `GEMINI_API_KEY` in `.env` to a Google AI
 Studio key restricted to the Gemini API. The key is passed only to the API container. Managed calls
@@ -235,11 +256,14 @@ The projection queue runs at minute 11 every hour in UTC. A second game-aware sc
 ten minutes but does model work only within 130 minutes of the next known, unresolved kickoff. In
 that near-lock window, current-season nflverse and Sleeper availability inputs use 30-minute
 conditional checks; the final pass inside ten minutes of kickoff forces one last source check.
-Before modeling, the worker asks the current-season nflverse player-stat, team-stat, weekly-roster,
-injury-report, and snap sources, every schedule season in the training window, and the Sleeper
-status catalog to refresh. Conditional claims make unchanged checks cheap and prevent overlapping
-workers from publishing a mixed in-flight snapshot. The daily 05:17 UTC shared-data job refreshes
-the full training window; its successful completion also queues a projection sweep. An
+Before modeling, the worker asks the canonical nflverse player catalog, current-season player-stat,
+team-stat, weekly-roster, injury-report, and snap sources, every schedule season in the training
+window, and the Sleeper status catalog to refresh. Conditional claims make unchanged checks cheap
+and prevent overlapping workers from publishing a mixed in-flight snapshot. Including the player
+catalog in every projection cycle is deliberate: a failed daily catalog request is retried when its
+source clock is due instead of withholding forecasts until the next day. The daily 05:17 UTC
+shared-data job refreshes the full training window; its successful completion also queues a
+projection sweep. An
 authenticated **Check NFL data** or Projection Lab **Check inputs & rerun** request forces the same
 input sweep and queues the model without waiting for cron.
 

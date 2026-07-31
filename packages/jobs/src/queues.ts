@@ -333,6 +333,11 @@ export function assertNotificationSweepJob(job: NotificationSweepJob): void {
 }
 
 export async function registerSchedules(boss: PgBoss, projectionSeason?: number): Promise<void> {
+  // Older deployments registered these schedules before keyed schedules were introduced. pg-boss
+  // treats a different key as a separate schedule, so leaving either row behind runs the same work
+  // twice forever. Unscheduling a missing row is safe and keeps upgrades idempotent.
+  await boss.unschedule(queueNames.dataHealth);
+  await boss.unschedule(queueNames.dataRefresh, "daily-nflverse-player-catalog");
   await boss.schedule(
     queueNames.dataHealth,
     "*/15 * * * *",

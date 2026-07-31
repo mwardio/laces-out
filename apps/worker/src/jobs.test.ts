@@ -29,12 +29,13 @@ function bossHarness() {
   const updateQueue = vi.fn(() => Promise.resolve());
   const send = vi.fn(() => Promise.resolve("job-id"));
   const schedule = vi.fn(() => Promise.resolve());
+  const unschedule = vi.fn(() => Promise.resolve());
   const work = vi.fn((name: string, ...input: unknown[]) => {
     handlers.set(name, input.at(-1) as Handler);
     return Promise.resolve(`worker:${name}`);
   });
-  const boss = { createQueue, updateQueue, send, schedule, work } as unknown as PgBoss;
-  return { boss, createQueue, updateQueue, send, schedule, work, handlers };
+  const boss = { createQueue, updateQueue, send, schedule, unschedule, work } as unknown as PgBoss;
+  return { boss, createQueue, updateQueue, send, schedule, unschedule, work, handlers };
 }
 
 function loggerHarness() {
@@ -423,10 +424,16 @@ describe("dispatch contracts and schedules", () => {
   });
 
   it("registers keyed UTC refresh schedules and a coalesced health schedule", async () => {
-    const { boss, schedule } = bossHarness();
+    const { boss, schedule, unschedule } = bossHarness();
 
     await registerSchedules(boss, 2026);
 
+    expect(unschedule).toHaveBeenNthCalledWith(1, queueNames.dataHealth);
+    expect(unschedule).toHaveBeenNthCalledWith(
+      2,
+      queueNames.dataRefresh,
+      "daily-nflverse-player-catalog",
+    );
     expect(schedule).toHaveBeenCalledTimes(8);
     expect(schedule).toHaveBeenNthCalledWith(
       1,

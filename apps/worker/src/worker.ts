@@ -69,7 +69,10 @@ const rosProjectionShadowService = new FirstPartyRosProjectionShadowService({
 });
 const sleeperRefresher = new SleeperDataRefresher({ database: database.db });
 const adpRefresher = new FfcAdpRefresher({ database: database.db });
-const dataHealthService = new DatabaseDataHealthService({ database: database.db });
+const dataHealthService = new DatabaseDataHealthService({
+  database: database.db,
+  minimumNflverseSeason: Math.min(...projectionHistorySeasons(currentNflSeason())),
+});
 // Web push is opt-in for the operator. Without a VAPID key pair the sender is simply absent and the
 // scheduled sweep completes as a stated no-op, which is the default state of an existing install.
 const vapid =
@@ -181,6 +184,10 @@ async function start(): Promise<void> {
         // Refresh every current-season model input before forecasting. Each source owns a claim
         // window and conditional request, so overlapping/manual sweeps coalesce and unchanged
         // artifacts do not produce new immutable observations.
+        // The canonical player catalog is a hard projection dependency. Checking it here as well
+        // as during the daily shared-data sweep means a transient morning outage is retried on the
+        // next projection cycle instead of withholding every forecast for the rest of the day.
+        await catalogRefresher.refresh(forceCurrentInputs);
         await weeklyDataRefresher.refreshWeeklyStats(effectiveJob.season, forceCurrentInputs);
         await weeklyDataRefresher.refreshSnapCounts(effectiveJob.season, forceCurrentInputs);
         await weeklyDataRefresher.refreshWeeklyRosters(effectiveJob.season, forceCurrentInputs);

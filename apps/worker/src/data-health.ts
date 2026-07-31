@@ -19,9 +19,23 @@ export interface DataSourceHealthRow {
   readonly createdAt: Date;
 }
 
+export interface DataSourceHealthOptions {
+  /** Old immutable nflverse seasons remain stored, but are no longer operational dependencies. */
+  readonly minimumNflverseSeason?: number;
+}
+
+function isMonitoredSource(source: DataSourceHealthRow, options: DataSourceHealthOptions): boolean {
+  if (options.minimumNflverseSeason === undefined || !source.key.startsWith("nflverse.")) {
+    return true;
+  }
+  const season = source.metadata.season;
+  return typeof season !== "number" || season >= options.minimumNflverseSeason;
+}
+
 export function assessDataSourceHealth(
   sources: readonly DataSourceHealthRow[],
   checkedAt: Date,
+  options: DataSourceHealthOptions = {},
 ): DataHealthCheckResult {
   if (!Number.isFinite(checkedAt.getTime()))
     throw new RangeError("Health check time must be valid");
@@ -33,13 +47,21 @@ export function assessDataSourceHealth(
   let unmatchedIdentitySources = 0;
   const degradedSourceKeys: string[] = [];
 
-  for (const source of sources) {
+  const monitoredSources = sources.filter((source) => isMonitoredSource(source, options));
+  for (const source of monitoredSources) {
     const failing = source.consecutiveFailures > 0;
+    const expectedPending = source.metadata.availability === "not-published" && !failing;
     const freshnessAnchor = source.lastSuccessfulAt ?? source.createdAt;
     const staleAfterMilliseconds = source.checkIntervalMinutes * STALE_INTERVAL_MULTIPLIER * 60_000;
-    const sourceStale = checkedAt.getTime() - freshnessAnchor.getTime() > staleAfterMilliseconds;
+    const sourceStale =
+      !expectedPending && checkedAt.getTime() - freshnessAnchor.getTime() > staleAfterMilliseconds;
     const qualityState = source.metadata.qualityState;
-    const qualityDegraded = typeof qualityState === "string" && qualityState !== "publishable";
+    // Shadow rails are intentionally non-publishable until their evidence gate clears. Their own
+    // transport failures and staleness still count, but the expected shadow quality state does not.
+    const qualityDegraded =
+      source.metadata.mode !== "shadow" &&
+      typeof qualityState === "string" &&
+      qualityState !== "publishable";
     // The nflverse and FFC ingestions historically wrote only the boolean `publishable` pair, so a
     // source that fell below its match-rate threshold never reached the `qualityState` branch above
     // and was invisible to this job. Read the stored pair rather than calling the registry, so the
@@ -76,7 +98,7 @@ export function assessDataSourceHealth(
     if (identityDegraded) unmatchedIdentitySources += 1;
     if (failing || stale || qualityDegraded || identityDegraded) {
       degradedSourceKeys.push(source.key);
-    } else if (source.lastSuccessfulAt) {
+    } else if (source.lastSuccessfulAt && !expectedPending) {
       healthySources += 1;
     } else {
       pendingSources += 1;
@@ -86,7 +108,7 @@ export function assessDataSourceHealth(
   degradedSourceKeys.sort((left, right) => left.localeCompare(right));
   return {
     checkedAt: checkedAt.toISOString(),
-    enabledSources: sources.length,
+    enabledSources: monitoredSources.length,
     healthySources,
     pendingSources,
     degradedSources: degradedSourceKeys.length,
@@ -100,10 +122,19 @@ export function assessDataSourceHealth(
 export class DatabaseDataHealthService implements DataHealthService {
   readonly #database: Database;
   readonly #now: () => Date;
+  readonly #options: DataSourceHealthOptions;
 
-  constructor(input: { readonly database: Database; readonly now?: () => Date }) {
+  constructor(input: {
+    readonly database: Database;
+    readonly now?: () => Date;
+    readonly minimumNflverseSeason?: number;
+  }) {
     this.#database = input.database;
     this.#now = input.now ?? (() => new Date());
+    this.#options =
+      input.minimumNflverseSeason === undefined
+        ? {}
+        : { minimumNflverseSeason: input.minimumNflverseSeason };
   }
 
   async checkDataHealth(
@@ -124,6 +155,6 @@ export class DatabaseDataHealthService implements DataHealthService {
       .where(eq(dataSources.enabled, true))
       .orderBy(asc(dataSources.key));
     if (context.signal.aborted) throw new Error("Data health check was aborted during shutdown");
-    return assessDataSourceHealth(sources, this.#now());
+    return assessDataSourceHealth(sources, this.#now(), this.#options);
   }
 }
