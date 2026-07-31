@@ -73,7 +73,7 @@ I do not want Laces Out publishing confident-looking numbers just because a mode
   baseline. If the richer model does not win, the baseline stays live.
 - Forecasts carry calibrated intervals, input checksums, training cutoffs, and visible backtests.
 - Rest-of-season forecasts graduate by position and horizon. Missing, stale, or unproven output
-  stays off the page.
+  stays hidden.
 
 The details, formulas, and current evidence are in
 [Projection methodology](./packages/projections/README.md).
@@ -143,8 +143,8 @@ settings are in [.env.example](./.env.example).
 | `YAHOO_CLIENT_ID` / `YAHOO_CLIENT_SECRET` | Yahoo OAuth when enabled                              |
 | `NEXT_PUBLIC_YAHOO_ACCESS_STATUS`         | Set to `available` when Yahoo OAuth is ready          |
 
-Already running Caddy, Traefik, or another reverse proxy? Keep the included gateway on an
-unprivileged loopback port:
+If you're using a reverse proxy (Caddy, Traefik, etc.), keep the included gateway on an unprivileged 
+loopback port:
 
 ```dotenv
 PUBLIC_URL=https://laces.example.com
