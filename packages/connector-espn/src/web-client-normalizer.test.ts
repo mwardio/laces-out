@@ -56,7 +56,12 @@ interface FixtureEnvelope {
       draftSettings: { type: string; keeperCount?: number };
       rosterSettings: { lineupSlotCounts: Record<string, number> };
     };
-    members: Array<{ id: string; isLeagueManager?: boolean | 0 | 1 }>;
+    members: Array<{
+      id: string;
+      firstName?: string;
+      lastName?: string;
+      isLeagueManager?: boolean | 0 | 1;
+    }>;
     teams: Array<{
       id: string;
       logo?: string | null;
@@ -268,6 +273,32 @@ describe("ESPN web-client snapshot normalizer", () => {
     expect(bundle.warnings.join(" ")).toContain("league-manager flags");
     expect(bundle.warnings.join(" ")).toContain("team-logo URLs were discarded");
     expect(bundle.warnings.join(" ")).toContain("unranked preseason standings");
+  });
+
+  it("carries a member's real name separately from their username", () => {
+    const value = parsedFixture();
+    value.payload.members[0]!.firstName = "Avery";
+    value.payload.members[0]!.lastName = "Ward";
+    // Only a first name: still a real name, and better than the username on its own.
+    value.payload.members[1]!.firstName = "Blake";
+
+    const bundle = normalizeEspnWebClientSnapshot(value);
+
+    expect(bundle.teams[0]?.managers[0]).toMatchObject({
+      displayName: "Avery Example",
+      fullName: "Avery Ward",
+    });
+    expect(bundle.teams[1]?.managers[0]).toMatchObject({ fullName: "Blake" });
+  });
+
+  it("reports no real name when ESPN sends only a username", () => {
+    const bundle = normalizeEspnWebClientSnapshot(parsedFixture());
+
+    // The fixture carries no name parts, which is a normal member state rather than schema drift.
+    expect(bundle.teams[0]?.managers[0]).toMatchObject({
+      displayName: "Avery Example",
+      fullName: null,
+    });
   });
 
   it("preserves 20-digit provider team IDs across teams, standings, and matchup sides", () => {

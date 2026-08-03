@@ -358,6 +358,9 @@ function normalizeManager(manager: XmlRecord): NormalizedManager | null {
   return {
     externalId: text(manager.manager_id) ?? text(manager.guid),
     displayName,
+    // Yahoo's manager element carries one name only — the nickname above, which is whatever the
+    // manager chose to be called. There is no separate given/family name to prefer over it.
+    fullName: null,
     isCommissioner: truthy(manager.is_commissioner),
   };
 }

@@ -889,6 +889,8 @@ export class DrizzleEspnSyncPersistence {
       let recordsWritten = 2;
       const storedTeamIds = new Map<string, string>();
       for (const team of bundle.teams) {
+        const manager = team.managers[0];
+        const managerDisplayName = manager ? (manager.fullName ?? manager.displayName) : null;
         const [storedTeam] = await transaction
           .insert(fantasyTeams)
           .values({
@@ -898,7 +900,7 @@ export class DrizzleEspnSyncPersistence {
             abbreviation: team.abbreviation,
             logoUrl: team.logoUrl ?? null,
             isUserTeam: false,
-            managerDisplayName: team.managers[0]?.displayName ?? null,
+            managerDisplayName,
             faabRemaining: team.faabRemaining ?? null,
             waiverPriority: team.waiverPriority ?? null,
           })
@@ -908,7 +910,7 @@ export class DrizzleEspnSyncPersistence {
               name: team.name,
               abbreviation: team.abbreviation,
               logoUrl: team.logoUrl ?? null,
-              managerDisplayName: team.managers[0]?.displayName ?? null,
+              managerDisplayName,
               faabRemaining: team.faabRemaining ?? null,
               waiverPriority: team.waiverPriority ?? null,
               updatedAt: now,

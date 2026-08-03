@@ -161,6 +161,7 @@ describe("rosReleaseStatusSchema", () => {
         {
           projectionSetId: "set-1",
           leagueSeasonId: "league-1",
+          leagueName: "Daragely",
           scoringProfile: fullPprProfile,
           season: 2026,
           playerCount: 210,
@@ -202,6 +203,7 @@ describe("rosReleaseStatusSchema", () => {
         leagueReadiness: [
           {
             leagueSeasonId: "league-1",
+            leagueName: "Daragely",
             state: "withheld",
             reasons: ["invented-reason"],
             scoringProfile: null,
@@ -218,6 +220,7 @@ describe("rosReleaseStatusSchema", () => {
         ...status,
         leagueReadiness: Array.from({ length: 65 }, (_unused, index) => ({
           leagueSeasonId: `league-${index}`,
+          leagueName: `League ${index}`,
           state: "ready",
           reasons: [],
           scoringProfile: null,
