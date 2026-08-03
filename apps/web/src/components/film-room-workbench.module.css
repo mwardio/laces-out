@@ -678,6 +678,21 @@
     line-height: 1.45;
   }
 
+  /* Compact marker rather than a repeated paragraph: the page states the grounding claim in full
+     once, in the trust strip at the top. */
+  .answerGrounding {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    color: #4d6944;
+    font-size: var(--text-10);
+    font-weight: 700;
+  }
+
+  .answerGrounding svg {
+    flex: 0 0 auto;
+  }
+
   .statePanel {
     display: grid;
     width: min(100%, 600px);

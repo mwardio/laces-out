@@ -86,12 +86,18 @@ function compactDate(value: string | null): string {
   }).format(new Date(value));
 }
 
+/**
+ * The per-card execution affordance. It carries the shield and the section's own call to action,
+ * but not the read-only disclaimer: the page states that once, in the provider-verification
+ * section above. Repeating it under every card meant a member read the same sentence three times
+ * on one screen without learning anything new the second or third time.
+ */
 function ExecutionLink({ execution }: { readonly execution: Execution }) {
   if (!execution.url) {
     return (
       <div className={styles.readOnlyNote}>
         <ShieldAlert size={15} aria-hidden="true" />
-        <span>{execution.label}. No roster changes are made on your behalf.</span>
+        <span>{execution.label}</span>
       </div>
     );
   }

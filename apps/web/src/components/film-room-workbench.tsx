@@ -227,11 +227,9 @@ function FilmRoomTour() {
                 Before kickoff, confirm player locks and the projection timestamp, then make only
                 the moves that fit your risk tolerance.
               </p>
-              <footer>
-                <p>
-                  Grounded in Laces Out’s own computed league data (overview, Decision Desk, and
-                  analytics), not the model’s outside knowledge.
-                </p>
+              <footer className={styles.answerGrounding}>
+                <ShieldCheck size={13} aria-hidden="true" />
+                <span>Grounded in your league&rsquo;s computed data</span>
               </footer>
             </article>
           </div>
@@ -628,11 +626,13 @@ export function FilmRoomWorkbench() {
                 <div className={styles.answerText}>
                   <AiAnswerContent answer={analysis.answer} />
                 </div>
-                <footer>
-                  <p>
-                    Grounded in Laces Out’s own computed league data (overview, Decision Desk, and
-                    analytics), not the model’s outside knowledge.
-                  </p>
+                {/* The grounding claim is made once per page. On Film Room that is the
+                    "Grounded, not autonomous" chip in the trust strip above, which is why this
+                    answer carries the shield marker instead of repeating the full sentence — the
+                    coaching panel below would otherwise state it a second time on one screen. */}
+                <footer className={styles.answerGrounding}>
+                  <ShieldCheck size={13} aria-hidden="true" />
+                  <span>Grounded in your league&rsquo;s computed data</span>
                 </footer>
               </article>
             ) : analysisAction.state === "error" ? (
