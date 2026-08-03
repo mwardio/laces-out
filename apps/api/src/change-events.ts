@@ -71,7 +71,12 @@ export interface ChangeEventRepository {
     userId: string,
     query: ChangeEventRepositoryQuery,
   ): Promise<readonly ChangeEventRow[]>;
-  countUnread(userId: string, retentionFloor: Date): Promise<number>;
+  /**
+   * Scoped by `leagueId` for the same reason `listVisibleEvents` is: the badge sits on a feed the
+   * caller is already reading, and a count drawn from a wider set than the rows below it reads as a
+   * bug — "4 unread" over "Nothing new since your last sync."
+   */
+  countUnread(userId: string, leagueId: string | null, retentionFloor: Date): Promise<number>;
   findVisibleEvent(
     userId: string,
     eventId: string,
@@ -165,9 +170,14 @@ export class DrizzleChangeEventRepository implements ChangeEventRepository {
     return [...rows].map(toRow);
   }
 
-  async countUnread(userId: string, retentionFloor: Date): Promise<number> {
+  async countUnread(
+    userId: string,
+    leagueId: string | null,
+    retentionFloor: Date,
+  ): Promise<number> {
     // Matches `change_event_receipts_user_unread_idx`'s partial predicate exactly, and is capped
-    // before counting so a large backlog cannot turn the badge into a full scan.
+    // before counting so a large backlog cannot turn the badge into a full scan. The league
+    // predicate mirrors `listVisibleEvents` so the badge counts exactly the rows that feed can show.
     const rows = await this.#database.execute<{ readonly unread: number }>(sql`
       select count(*)::int as unread from (
         select e.id
@@ -185,6 +195,7 @@ export class DrizzleChangeEventRepository implements ChangeEventRepository {
                   ))
               or (e.visibility = 'private' and r.event_id is not null)
                )
+           and (${leagueId}::uuid is null or e.league_id = ${leagueId}::uuid)
          limit ${MAX_UNREAD_COUNT + 1}
       ) bounded
     `);
@@ -385,7 +396,7 @@ export class ChangeEventService {
       cursorId: cursor?.id ?? null,
       retentionFloor,
     });
-    const unreadCount = await this.#repository.countUnread(userId, retentionFloor);
+    const unreadCount = await this.#repository.countUnread(userId, query.leagueId, retentionFloor);
 
     const events: ChangeEvent[] = rows.map((row) => {
       const rendered = render(row);

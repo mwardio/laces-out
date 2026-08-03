@@ -2723,6 +2723,12 @@
     gap: 1rem;
   }
 
+  /* Data health used to hold the second column. With it gone the team panel owns the row
+     rather than stretching to a phantom two-column track. */
+  .live-detail-columns--single {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
   .live-team-panel,
   .live-health-panel {
     padding: 1.15rem;
@@ -3396,9 +3402,10 @@
     background: rgba(255, 255, 255, 0.5);
   }
   /* Data health: member-safe source quality. Impact only, never a source row or a chore.
-     Collapsed by default (native details/summary) so the withheld-source detail doesn't
-     crowd the rest of League Sync; the summary line still carries a worst-state hint so a
-     problem is visible without opening it. */
+     Lives at the bottom of Settings and is collapsed by default (native details/summary), so
+     the withheld-source detail is reachable without competing for attention on the pages a
+     member actually works in; the summary line still carries a worst-state hint so a problem
+     is visible without opening it. */
   .connection-data-health {
     margin-top: 25px;
     padding: 22px;

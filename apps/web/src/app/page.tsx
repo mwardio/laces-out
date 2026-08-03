@@ -521,39 +521,6 @@ export default function LandingPage() {
                     </li>
                   </ul>
                 </article>
-
-                <article className={styles.providerCard}>
-                  <div className={styles.providerCardHead}>
-                    <div className={styles.providerIdentity}>
-                      <span className={styles.providerBadge}>
-                        <Database size={15} />
-                      </span>
-                      <div>
-                        <p>Shared NFL intelligence</p>
-                        <h3>More than one data feed</h3>
-                      </div>
-                    </div>
-                    <span className={styles.connectionMode}>Daily + hourly checks</span>
-                  </div>
-                  <p className={styles.providerDescription}>
-                    Laces Out blends nflverse identity, usage, injuries, and production with draft
-                    markets, Sleeper signals, and the current schedule into a backtested weekly
-                    forecast scored for each league—every source and timestamp kept visible.
-                    Season-long projections only publish when they pass reliability checks; no
-                    guesses dressed up as data.
-                  </p>
-                  <ul>
-                    <li>
-                      <RefreshCw size={13} /> Daily identity, usage, status, and draft-market checks
-                    </li>
-                    <li>
-                      <TrendingUp size={13} /> Hourly waiver-market momentum
-                    </li>
-                    <li>
-                      <LineChart size={13} /> Availability-aware rest-of-season ranges
-                    </li>
-                  </ul>
-                </article>
               </div>
 
               <div className={styles.enginePanel} aria-label="Automated decision analysis flow">
@@ -613,6 +580,39 @@ export default function LandingPage() {
                 </p>
               </div>
             </div>
+
+            {/* Shared NFL data is not a per-provider connection, so it reads as a band under
+                both columns rather than as a third card in the provider stack — which also
+                keeps the two columns from ending at ragged heights. */}
+            <aside className={styles.dataFeedBand} aria-label="Shared NFL data sources">
+              <div className={styles.dataFeedIntro}>
+                <span className={styles.dataFeedBadge}>
+                  <Database size={15} />
+                </span>
+                <div>
+                  <p>Shared NFL intelligence</p>
+                  <h3>More than one data feed</h3>
+                </div>
+              </div>
+              <p className={styles.dataFeedDescription}>
+                Laces Out blends nflverse identity, usage, injuries, and production with draft
+                markets, Sleeper signals, and the current schedule into a backtested weekly forecast
+                scored for each league—every source and timestamp kept visible. Season-long
+                projections only publish when they pass reliability checks; no guesses dressed up as
+                data.
+              </p>
+              <ul className={styles.dataFeedChecks}>
+                <li>
+                  <RefreshCw size={13} /> Daily identity, usage, status, and draft-market checks
+                </li>
+                <li>
+                  <TrendingUp size={13} /> Hourly waiver-market momentum
+                </li>
+                <li>
+                  <LineChart size={13} /> Availability-aware rest-of-season ranges
+                </li>
+              </ul>
+            </aside>
           </div>
         </section>
 

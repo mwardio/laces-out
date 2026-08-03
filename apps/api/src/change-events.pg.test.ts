@@ -271,7 +271,7 @@ describe.skipIf(!dockerAvailable)("change-event feed isolation against real Post
 
     expect(mine.map((row) => row.id)).toContain(eventId);
     expect(theirs.map((row) => row.id)).not.toContain(eventId);
-    expect(await repository.countUnread(outsiderId, feedQuery.retentionFloor)).toBe(0);
+    expect(await repository.countUnread(outsiderId, null, feedQuery.retentionFloor)).toBe(0);
     expect(
       await repository.findVisibleEvent(outsiderId, eventId, feedQuery.retentionFloor),
     ).toBeUndefined();

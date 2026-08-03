@@ -395,6 +395,102 @@
     line-height: 1.55;
   }
 
+  /* Column visibility for the "all" view. Collapsed by default so the full table it exists to
+     narrow keeps the space. */
+  .columnPicker {
+    padding: 0 20px;
+    border-top: 1px solid var(--ink-100);
+  }
+
+  .columnPicker > summary {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-12);
+    padding: 11px 0;
+    cursor: pointer;
+    list-style: none;
+  }
+
+  .columnPicker > summary::-webkit-details-marker {
+    display: none;
+  }
+
+  .columnPicker > summary > span {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-6);
+    color: var(--ink-800);
+    font-size: var(--text-11);
+    font-weight: 800;
+  }
+
+  .columnPicker > summary svg {
+    color: var(--ink-500);
+  }
+
+  .columnPicker > summary small {
+    color: var(--ink-500);
+    font-size: var(--text-10);
+  }
+
+  .columnPickerBody {
+    display: grid;
+    gap: var(--space-6) var(--space-12);
+    grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+    padding-bottom: 12px;
+  }
+
+  .columnPickerBody label {
+    display: flex;
+    min-width: 0;
+    align-items: flex-start;
+    gap: var(--space-8);
+    cursor: pointer;
+  }
+
+  .columnPickerBody input {
+    margin-top: 2px;
+    flex: 0 0 auto;
+    accent-color: var(--ink-800);
+  }
+
+  .columnPickerBody input:disabled {
+    cursor: not-allowed;
+  }
+
+  .columnPickerBody label > span {
+    display: grid;
+    min-width: 0;
+  }
+
+  .columnPickerBody strong {
+    color: var(--ink-800);
+    font-size: var(--text-10);
+  }
+
+  .columnPickerBody small {
+    overflow: hidden;
+    color: var(--ink-500);
+    font-size: var(--text-9);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .columnPickerReset {
+    margin-bottom: 12px;
+    color: var(--ink-600);
+    font-size: var(--text-10);
+    font-weight: 750;
+    text-decoration: underline;
+    text-underline-offset: 2px;
+  }
+
+  .columnPickerReset:disabled {
+    color: var(--ink-300);
+    text-decoration: none;
+  }
+
   .withheldList {
     display: grid;
     gap: var(--space-6);
