@@ -760,13 +760,16 @@ export const espnBridgeSnapshotLikeV1Schema = z
   .object({
     schemaVersion: z.literal(1),
     provider: z.literal("espn"),
-    authority: z.literal("browser-local"),
+    // `browser-local` remains wire-compatible with published extensions; native agents use the
+    // same bounded envelope with distinct audit provenance.
+    authority: z.enum(["browser-local", "native-local"]),
     readOnly: z.literal(true),
     leagueId: z.string().regex(/^\d{1,20}$/u),
     season: z.number().int().min(2000).max(2100),
     capturedAt: z.string().datetime({ offset: true }),
     endpoint: endpointSchema,
     checksumSha256: z.string().regex(/^[a-f0-9]{64}$/u),
+    checksumAlgorithm: z.enum(["json-stringify-sha256", "canonical-json-v1-sha256"]).optional(),
     payload: z.unknown(),
   })
   .strict();

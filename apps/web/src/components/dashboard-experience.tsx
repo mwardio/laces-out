@@ -21,10 +21,12 @@ import {
   parseAuthenticatedSession,
   parseDataQualitySources,
   parseJobAccepted,
+  parseEspnLeagueRefreshStatus,
   parseLeagueDashboard,
   parseLeagueListResponse,
   parseUnresolvedIdentities,
   type DataQualitySource,
+  type EspnLeagueRefreshStatus,
   type LeagueDashboard,
   type LeagueListResponse,
   type UnresolvedIdentityResponse,
@@ -54,6 +56,16 @@ type DashboardState =
   | { readonly status: "loading" }
   | { readonly status: "ready"; readonly dashboard: LeagueDashboard }
   | { readonly status: "error"; readonly message: string };
+
+type EspnRefreshUiState =
+  | { readonly status: "idle" }
+  | { readonly status: "working"; readonly current: EspnLeagueRefreshStatus | null }
+  | { readonly status: "ready"; readonly current: EspnLeagueRefreshStatus }
+  | {
+      readonly status: "error";
+      readonly message: string;
+      readonly current: EspnLeagueRefreshStatus | null;
+    };
 
 function providerLabel(provider: string): string {
   if (provider === "espn") return "ESPN";
@@ -324,6 +336,13 @@ function LivePortfolio({ portfolio, reloadPortfolio }: LivePortfolioProps) {
     "idle" | "working" | "queued" | "deduplicated" | "error"
   >("idle");
   const dashboardRequest = useRef<AbortController | null>(null);
+  const completedEspnRequest = useRef<string | null>(null);
+  const [espnRefreshState, setEspnRefreshState] = useState<EspnRefreshUiState>({
+    status: "idle",
+  });
+  const selectedSummary = portfolio.leagues.find((league) => league.id === selectedLeagueId);
+  const selectedEspnSeason =
+    selectedSummary?.season?.provider === "espn" ? selectedSummary.season : null;
 
   const loadDashboard = useCallback(async () => {
     if (!selectedLeagueId) return;
@@ -369,7 +388,118 @@ function LivePortfolio({ portfolio, reloadPortfolio }: LivePortfolioProps) {
     return () => dashboardRequest.current?.abort();
   }, [loadDashboard]);
 
-  const selectedSummary = portfolio.leagues.find((league) => league.id === selectedLeagueId);
+  const requestEspnRefresh = useCallback(async () => {
+    if (!selectedEspnSeason) return;
+    setEspnRefreshState((previous) => ({
+      status: "working",
+      current:
+        previous.status === "ready" || previous.status === "working" || previous.status === "error"
+          ? previous.current
+          : null,
+    }));
+    try {
+      const response = await fetch(
+        `${apiBaseUrl}/v1/leagues/${encodeURIComponent(selectedEspnSeason.id)}/refresh`,
+        {
+          method: "POST",
+          credentials: "include",
+          headers: { Accept: "application/json", "Content-Type": "application/json" },
+          body: "{}",
+          cache: "no-store",
+        },
+      );
+      if (response.status === 401) {
+        window.location.assign(loginUrlForCurrentPath());
+        return;
+      }
+      if (!response.ok) throw new Error("ESPN refresh could not be requested.");
+      const status = parseEspnLeagueRefreshStatus(await response.json());
+      if (!status) throw new Error("ESPN refresh returned an invalid status.");
+      setEspnRefreshState({ status: "ready", current: status });
+    } catch (error) {
+      setEspnRefreshState((previous) => ({
+        status: "error",
+        message: error instanceof Error ? error.message : "ESPN refresh could not be requested.",
+        current:
+          previous.status === "ready" ||
+          previous.status === "working" ||
+          previous.status === "error"
+            ? previous.current
+            : null,
+      }));
+    }
+  }, [selectedEspnSeason]);
+
+  useEffect(() => {
+    completedEspnRequest.current = null;
+    setEspnRefreshState({ status: "idle" });
+  }, [selectedEspnSeason?.id]);
+
+  useEffect(() => {
+    if (!selectedEspnSeason || dashboardState.status !== "ready") return;
+    const key = `laces-out:espn-stale-on-view:${selectedEspnSeason.id}`;
+    try {
+      if (window.sessionStorage.getItem(key) === "requested") return;
+      window.sessionStorage.setItem(key, "requested");
+    } catch {
+      // Session storage may be blocked. Request idempotency still makes one extra call harmless.
+    }
+    void requestEspnRefresh();
+  }, [dashboardState.status, requestEspnRefresh, selectedEspnSeason]);
+
+  const refreshStatus =
+    espnRefreshState.status === "ready" ||
+    espnRefreshState.status === "working" ||
+    espnRefreshState.status === "error"
+      ? espnRefreshState.current
+      : null;
+
+  useEffect(() => {
+    if (!selectedEspnSeason || !refreshStatus?.request) return;
+    const request = refreshStatus.request;
+    if (request.state !== "queued" && request.state !== "processing") return;
+    const controller = new AbortController();
+    let polling = false;
+    const poll = async () => {
+      if (polling) return;
+      polling = true;
+      try {
+        const response = await fetch(
+          `${apiBaseUrl}/v1/leagues/${encodeURIComponent(selectedEspnSeason.id)}/refresh/status`,
+          {
+            credentials: "include",
+            headers: { Accept: "application/json" },
+            cache: "no-store",
+            signal: controller.signal,
+          },
+        );
+        if (!response.ok) return;
+        const status = parseEspnLeagueRefreshStatus(await response.json());
+        if (!status || controller.signal.aborted) return;
+        setEspnRefreshState({ status: "ready", current: status });
+        if (
+          status.current &&
+          status.request?.state === "succeeded" &&
+          completedEspnRequest.current !== status.request.id
+        ) {
+          completedEspnRequest.current = status.request.id;
+          await Promise.all([loadDashboard(), reloadPortfolio()]);
+        }
+      } catch {
+        // Cached data remains rendered; the next status tick or manual action can reconnect.
+      } finally {
+        polling = false;
+      }
+    };
+    const interval = window.setInterval(() => {
+      void poll();
+    }, 5_000);
+    return () => {
+      window.clearInterval(interval);
+      controller.abort();
+    };
+  }, [loadDashboard, refreshStatus, reloadPortfolio, selectedEspnSeason]);
+
   const currentDashboard = dashboardState.status === "ready" ? dashboardState.dashboard : undefined;
   const freshLeagues = portfolio.leagues.filter(
     (league) => league.season?.providerFreshness.state === "fresh",
@@ -477,6 +607,49 @@ function LivePortfolio({ portfolio, reloadPortfolio }: LivePortfolioProps) {
           </p>
         </div>
         <div className="heading-actions">
+          {selectedEspnSeason ? (
+            <>
+              <span
+                className="freshness-label"
+                role="status"
+                title={
+                  refreshStatus
+                    ? refreshStatus.artifacts
+                        .map((artifact) => `${artifact.family}: ${artifact.state}`)
+                        .join(" · ")
+                    : undefined
+                }
+              >
+                <FreshnessDot
+                  state={
+                    refreshStatus?.current
+                      ? "fresh"
+                      : refreshStatus?.artifacts.some((artifact) => artifact.state === "missing")
+                        ? "missing"
+                        : "stale"
+                  }
+                />
+                {espnRefreshState.status === "working" && !refreshStatus
+                  ? "Checking ESPN freshness…"
+                  : espnRefreshState.status === "error" && !refreshStatus
+                    ? espnRefreshState.message
+                    : (refreshStatus?.display.label ?? "ESPN refresh status pending")}
+              </span>
+              <button
+                className="button button--outline"
+                type="button"
+                onClick={() => void requestEspnRefresh()}
+                disabled={espnRefreshState.status === "working"}
+              >
+                {espnRefreshState.status === "working" ? (
+                  <LoaderCircle className="spin" size={16} />
+                ) : (
+                  <RefreshCw size={16} />
+                )}
+                Refresh league
+              </button>
+            </>
+          ) : null}
           <span className="freshness-label">
             <span className="freshness-dot" />
             Updated {new Date(portfolio.generatedAt).toLocaleTimeString()}
@@ -548,7 +721,7 @@ function LivePortfolio({ portfolio, reloadPortfolio }: LivePortfolioProps) {
             <strong>
               {freshLeagues}/{portfolio.leagues.length} fresh
             </strong>
-            <small>Fresh means synced within 6 hours</small>
+            <small>Freshness follows each provider and season context</small>
           </div>
         </article>
         <article className="overview-stat">

@@ -4343,6 +4343,65 @@
     text-overflow: ellipsis;
     white-space: nowrap;
   }
+  .espn-league-manager {
+    background: color-mix(in srgb, var(--blue-100) 38%, var(--paper-50));
+  }
+  .espn-refresh-state,
+  .espn-artifact-state {
+    padding: 3px 5px;
+    color: var(--ink-600);
+    background: var(--ink-100);
+    border-radius: 999px;
+    font-size: var(--text-10);
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+    white-space: nowrap;
+  }
+  .espn-refresh-state--up-to-date,
+  .espn-artifact-state--fresh {
+    color: var(--green-600);
+    background: var(--green-100);
+  }
+  .espn-refresh-state--login-required,
+  .espn-refresh-state--last-good,
+  .espn-artifact-state--stale,
+  .espn-artifact-state--missing {
+    color: var(--red-600);
+    background: var(--orange-100);
+  }
+  .espn-refresh-list__facts {
+    display: grid;
+    grid-column: 1 / -1;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+    margin: 0;
+  }
+  .espn-refresh-list__facts > div {
+    min-width: 0;
+  }
+  .espn-refresh-list__facts dt {
+    color: var(--ink-400);
+    font-size: var(--text-10);
+    font-weight: 700;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+  }
+  .espn-refresh-list__facts dd {
+    overflow: hidden;
+    margin: 2px 0 0;
+    color: var(--ink-700);
+    font-size: var(--text-11);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .espn-refresh-list__artifacts {
+    display: flex;
+    min-width: 0;
+    grid-column: 1 / -1;
+    flex-wrap: wrap;
+    gap: var(--space-4);
+  }
   .button--danger {
     color: var(--red-600);
     background: var(--white);
@@ -8651,6 +8710,17 @@
       width: 100%;
     }
     .bridge-pairing-code {
+      grid-template-columns: 1fr;
+    }
+    .espn-refresh-list > li {
+      grid-template-columns: 1fr;
+    }
+    .espn-refresh-list > li > .button {
+      width: 100%;
+      grid-row: auto;
+      grid-column: 1;
+    }
+    .espn-refresh-list__facts {
       grid-template-columns: 1fr;
     }
     .import-editor-label {

@@ -90,7 +90,7 @@ const seasonFeatures = [
     label: "Connect your leagues",
     title: "Bring every team into one live picture.",
     text: yahooComingSoon
-      ? "Sync ESPN with a private one-click bookmark or the automatic Chrome companion and pull in settings, rosters, standings, matchups, and the team that is actually yours."
+      ? "Sync ESPN with a private one-click bookmark, an automatic sync device, or an operator-verified public read and pull in settings, rosters, standings, matchups, and the team that is actually yours."
       : "Link Yahoo or sync ESPN to pull league settings, rosters, standings, matchups, and the team that is actually yours.",
     icon: Cable,
   },
@@ -453,17 +453,19 @@ export default function LandingPage() {
                     <span className={styles.connectionMode}>One-click or automatic</span>
                   </div>
                   <p className={styles.providerDescription}>
-                    A private sync bookmark or the automatic Chrome companion reads league data
-                    through the ESPN session you already opened. Your password and cookies stay on
-                    ESPN. Automatic sync also refreshes player availability, box scores,
-                    transactions, and draft results as isolated feeds.
+                    A private sync bookmark or automatic sync device reads league data through the
+                    ESPN session you already opened. Your password and cookies stay on ESPN. A
+                    separately verified public league may refresh core data directly when its
+                    operator enables the default-off unofficial path. Supplemental feeds keep their
+                    own freshness.
                   </p>
                   <ul>
                     <li>
                       <Check size={13} /> One-click bookmark for fast on-demand sync
                     </li>
                     <li>
-                      <RefreshCw size={13} /> Optional six-hour refresh with the Chrome companion
+                      <RefreshCw size={13} /> Five-minute request checks with a six-hour safety
+                      sweep
                     </li>
                     <li>
                       <Check size={13} /> Availability, scoring, activity, and draft context

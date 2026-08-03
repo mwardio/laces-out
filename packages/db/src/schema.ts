@@ -52,6 +52,27 @@ export type AdpScoringFormat = "standard" | "half-ppr" | "ppr";
 export type AdpRosterFormat = "one-qb" | "superflex" | "two-qb" | "unknown";
 export type LeagueSupplementalKind =
   "available-players" | "weekly-box-scores" | "transactions" | "completed-draft";
+export type EspnArtifactFamily = "core" | LeagueSupplementalKind;
+export type EspnDirectCapabilityState =
+  "unknown" | "available" | "not-public" | "degraded" | "disabled";
+export type EspnSupplementalCapabilities = Partial<
+  Record<LeagueSupplementalKind, EspnDirectCapabilityState>
+>;
+export type EspnArtifactFreshnessComponent =
+  EspnArtifactFamily | "available-free-agents" | "available-waivers";
+export type EspnArtifactFreshness = Partial<Record<EspnArtifactFreshnessComponent, string>>;
+export type EspnPreferredSyncMode = "direct" | "assisted" | "automatic";
+export type EspnRefreshFulfillmentMode = "server-direct" | "chrome-agent" | "native-agent";
+export type EspnRefreshAttemptState =
+  | "offered"
+  | "started"
+  | "accepted"
+  | "unchanged"
+  | "login-required"
+  | "not-public"
+  | "retryable-error"
+  | "rejected";
+export type BridgeClientKind = "chrome-extension" | "ios-app";
 /**
  * One outbound notification family. New kinds are additive: a payload builder plus an idempotency
  * key slot, never new delivery plumbing.
@@ -453,6 +474,8 @@ export const bridgeDevices = pgTable(
       .notNull()
       .references(() => users.id, { onDelete: "cascade" }),
     provider: text("provider").$type<"espn">().notNull().default("espn"),
+    clientKind: text("client_kind").$type<BridgeClientKind>().notNull().default("chrome-extension"),
+    agentCapable: boolean("agent_capable").notNull().default(false),
     name: text("name").notNull(),
     // Browser bridge bearer material is persisted only as a keyed hash. ESPN cookies never
     // cross this table boundary.
@@ -468,6 +491,10 @@ export const bridgeDevices = pgTable(
       .on(table.userId, table.createdAt)
       .where(sql`${table.revokedAt} is null`),
     check("bridge_devices_provider_check", sql`${table.provider} = 'espn'`),
+    check(
+      "bridge_devices_client_kind_check",
+      sql`${table.clientKind} in ('chrome-extension', 'ios-app')`,
+    ),
     check("bridge_devices_name_check", sql`char_length(btrim(${table.name})) > 0`),
     check("bridge_devices_token_hash_check", sql`char_length(${table.tokenHash}) >= 32`),
     check(
@@ -2499,9 +2526,11 @@ export const leagueSupplementalSnapshots = pgTable(
   },
   (table) => [
     uniqueIndex("league_supplemental_source_sync_unique").on(table.sourceSyncRunId),
-    uniqueIndex("league_supplemental_artifact_unique").on(
+    index("league_supplemental_artifact_lookup_idx").on(
       table.leagueSeasonId,
       table.kind,
+      table.availability,
+      table.effectiveAt,
       table.artifactChecksum,
     ),
     index("league_supplemental_latest_idx").on(
@@ -2545,7 +2574,7 @@ export const refreshRequests = pgTable(
       onDelete: "set null",
     }),
     leagueSeasonId: uuid("league_season_id").references(() => leagueSeasons.id, {
-      onDelete: "set null",
+      onDelete: "cascade",
     }),
     rankingListId: uuid("ranking_list_id").references(() => rankingLists.id, {
       onDelete: "set null",
@@ -2562,6 +2591,14 @@ export const refreshRequests = pgTable(
     force: boolean("force").notNull().default(false),
     priority: integer("priority").notNull().default(0),
     notBefore: timestamp("not_before", { withTimezone: true }).notNull().defaultNow(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }),
+    minimumCaptureAt: timestamp("minimum_capture_at", { withTimezone: true }),
+    requiredArtifacts: jsonb("required_artifacts").$type<readonly EspnArtifactFamily[]>(),
+    fulfillmentMode: text("fulfillment_mode").$type<EspnRefreshFulfillmentMode>(),
+    fulfilledByBridgeDeviceId: uuid("fulfilled_by_bridge_device_id").references(
+      () => bridgeDevices.id,
+      { onDelete: "set null" },
+    ),
     startedAt: timestamp("started_at", { withTimezone: true }),
     finishedAt: timestamp("finished_at", { withTimezone: true }),
     errorCode: text("error_code"),
@@ -2582,6 +2619,9 @@ export const refreshRequests = pgTable(
       .where(sql`${table.state} = 'queued'`),
     index("refresh_requests_user_created_idx").on(table.requestedByUserId, table.createdAt),
     index("refresh_requests_league_season_idx").on(table.leagueSeasonId),
+    uniqueIndex("refresh_requests_live_league_unique")
+      .on(table.leagueSeasonId)
+      .where(sql`${table.kind} = 'league' and ${table.state} in ('queued', 'processing')`),
     index("refresh_requests_ranking_list_idx").on(table.rankingListId),
     index("refresh_requests_data_source_idx").on(table.dataSourceId),
     check(
@@ -2595,11 +2635,122 @@ export const refreshRequests = pgTable(
     check("refresh_requests_priority_check", sql`${table.priority} between -100 and 100`),
     check(
       "refresh_requests_scope_check",
-      sql`(${table.kind} <> 'league' or ${table.leagueSeasonId} is not null) and (${table.kind} <> 'rankings' or ${table.rankingListId} is not null)`,
+      sql`(${table.kind} <> 'league' or (${table.leagueSeasonId} is not null and ${table.expiresAt} is not null and ${table.minimumCaptureAt} is not null and ${table.requiredArtifacts} is not null)) and (${table.kind} <> 'rankings' or ${table.rankingListId} is not null)`,
+    ),
+    check(
+      "refresh_requests_expiry_check",
+      sql`${table.expiresAt} is null or ${table.expiresAt} > ${table.createdAt}`,
+    ),
+    check(
+      "refresh_requests_artifacts_check",
+      sql`${table.requiredArtifacts} is null or (jsonb_typeof(${table.requiredArtifacts}) = 'array' and jsonb_array_length(${table.requiredArtifacts}) between 1 and 5 and ${table.requiredArtifacts} <@ '["core", "available-players", "weekly-box-scores", "transactions", "completed-draft"]'::jsonb)`,
+    ),
+    check(
+      "refresh_requests_fulfillment_mode_check",
+      sql`${table.fulfillmentMode} is null or ${table.fulfillmentMode} in ('server-direct', 'chrome-agent', 'native-agent')`,
     ),
     check(
       "refresh_requests_finished_at_check",
       sql`${table.finishedAt} is null or ${table.startedAt} is not null`,
+    ),
+  ],
+);
+
+/** Shared ESPN capability, artifact-freshness, and direct-read scheduling state. */
+export const espnLeagueSyncStates = pgTable(
+  "espn_league_sync_states",
+  {
+    leagueSeasonId: uuid("league_season_id")
+      .primaryKey()
+      .references(() => leagueSeasons.id, { onDelete: "cascade" }),
+    directCoreState: text("direct_core_state")
+      .$type<EspnDirectCapabilityState>()
+      .notNull()
+      .default("unknown"),
+    supplementalCapabilities: jsonb("supplemental_capabilities")
+      .$type<EspnSupplementalCapabilities>()
+      .notNull()
+      .default({}),
+    artifactFreshness: jsonb("artifact_freshness")
+      .$type<EspnArtifactFreshness>()
+      .notNull()
+      .default({}),
+    lastProbeAt: timestamp("last_probe_at", { withTimezone: true }),
+    nextProbeAt: timestamp("next_probe_at", { withTimezone: true }),
+    lastDirectSuccessAt: timestamp("last_direct_success_at", { withTimezone: true }),
+    lastErrorCode: text("last_error_code"),
+    lastErrorAt: timestamp("last_error_at", { withTimezone: true }),
+    lastErrorDetail: text("last_error_detail"),
+    consecutiveFailures: integer("consecutive_failures").notNull().default(0),
+    circuitOpenUntil: timestamp("circuit_open_until", { withTimezone: true }),
+    preferredMode: text("preferred_mode")
+      .$type<EspnPreferredSyncMode>()
+      .notNull()
+      .default("automatic"),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    index("espn_league_sync_states_due_idx").on(table.nextProbeAt, table.circuitOpenUntil),
+    check(
+      "espn_league_sync_states_direct_core_check",
+      sql`${table.directCoreState} in ('unknown', 'available', 'not-public', 'degraded', 'disabled')`,
+    ),
+    check(
+      "espn_league_sync_states_capability_shape_check",
+      sql`jsonb_typeof(${table.supplementalCapabilities}) = 'object' and jsonb_typeof(${table.artifactFreshness}) = 'object'`,
+    ),
+    check(
+      "espn_league_sync_states_preferred_mode_check",
+      sql`${table.preferredMode} in ('direct', 'assisted', 'automatic')`,
+    ),
+    check("espn_league_sync_states_failure_count_check", sql`${table.consecutiveFailures} >= 0`),
+    check(
+      "espn_league_sync_states_error_bounds_check",
+      sql`(${table.lastErrorCode} is null or char_length(${table.lastErrorCode}) <= 64) and (${table.lastErrorDetail} is null or char_length(${table.lastErrorDetail}) <= 500)`,
+    ),
+  ],
+);
+
+/** Bounded audit records for direct and sync-agent attempts against one durable refresh intent. */
+export const espnRefreshAttempts = pgTable(
+  "espn_refresh_attempts",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    refreshRequestId: uuid("refresh_request_id")
+      .notNull()
+      .references(() => refreshRequests.id, { onDelete: "cascade" }),
+    mode: text("mode").$type<EspnRefreshFulfillmentMode>().notNull(),
+    bridgeDeviceId: uuid("bridge_device_id").references(() => bridgeDevices.id, {
+      onDelete: "cascade",
+    }),
+    state: text("state").$type<EspnRefreshAttemptState>().notNull(),
+    errorCode: text("error_code"),
+    errorDetail: text("error_detail"),
+    startedAt: timestamp("started_at", { withTimezone: true }).notNull().defaultNow(),
+    finishedAt: timestamp("finished_at", { withTimezone: true }),
+  },
+  (table) => [
+    index("espn_refresh_attempts_request_idx").on(table.refreshRequestId, table.startedAt),
+    index("espn_refresh_attempts_device_idx").on(table.bridgeDeviceId, table.startedAt),
+    check(
+      "espn_refresh_attempts_mode_check",
+      sql`${table.mode} in ('server-direct', 'chrome-agent', 'native-agent')`,
+    ),
+    check(
+      "espn_refresh_attempts_state_check",
+      sql`${table.state} in ('offered', 'started', 'accepted', 'unchanged', 'login-required', 'not-public', 'retryable-error', 'rejected')`,
+    ),
+    check(
+      "espn_refresh_attempts_error_bounds_check",
+      sql`(${table.errorCode} is null or char_length(${table.errorCode}) <= 64) and (${table.errorDetail} is null or char_length(${table.errorDetail}) <= 500)`,
+    ),
+    check(
+      "espn_refresh_attempts_provenance_check",
+      sql`(${table.mode} = 'server-direct' and ${table.bridgeDeviceId} is null) or (${table.mode} in ('chrome-agent', 'native-agent') and ${table.bridgeDeviceId} is not null)`,
+    ),
+    check(
+      "espn_refresh_attempts_lifecycle_check",
+      sql`((${table.state} in ('offered', 'started')) = (${table.finishedAt} is null)) and (${table.finishedAt} is null or ${table.finishedAt} >= ${table.startedAt}) and (${table.state} not in ('login-required', 'not-public', 'retryable-error', 'rejected') or ${table.errorCode} is not null)`,
     ),
   ],
 );

@@ -13,6 +13,16 @@ describe("loadEnvironment", () => {
     expect(environment.MANAGED_AI_DAILY_REQUEST_LIMIT).toBe(50);
     expect(environment.MANAGED_AI_MAX_OUTPUT_TOKENS).toBe(2000);
     expect(environment.REGISTRATION_INVITE_CODE).toBeUndefined();
+    expect(environment.ESPN_PUBLIC_DIRECT_SYNC_ENABLED).toBe(false);
+  });
+
+  it("parses the ESPN public-direct release gate without enabling it by default", () => {
+    expect(
+      loadEnvironment({ ESPN_PUBLIC_DIRECT_SYNC_ENABLED: "true" }).ESPN_PUBLIC_DIRECT_SYNC_ENABLED,
+    ).toBe(true);
+    expect(
+      loadEnvironment({ ESPN_PUBLIC_DIRECT_SYNC_ENABLED: "0" }).ESPN_PUBLIC_DIRECT_SYNC_ENABLED,
+    ).toBe(false);
   });
 
   it("requires secrets in production", () => {

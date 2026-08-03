@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 
 import {
   ESPN_SELF_ASSERTED_PLAYER_SOURCE,
+  espnArtifactChecksumNeedsCanonicalization,
+  espnArtifactReceiptState,
   espnRefreshPolicy,
   espnSelfAssertedPlayerIdentity,
   espnSelfAssertedPlayerKey,
@@ -102,5 +104,37 @@ describe("ESPN persistence identity isolation", () => {
       eligiblePositions: ["QB", "OP"],
       status: "QUESTIONABLE",
     });
+  });
+});
+
+describe("ESPN canonical checksum transitions", () => {
+  it("deduplicates only the current artifact and preserves a valid A-B-A reversion", () => {
+    expect(espnArtifactReceiptState({ currentChecksum: "a", incomingChecksum: "a" })).toBe(
+      "unchanged",
+    );
+    expect(espnArtifactReceiptState({ currentChecksum: "b", incomingChecksum: "a" })).toBe(
+      "accepted",
+    );
+    expect(
+      espnArtifactReceiptState({
+        currentChecksum: "legacy-a",
+        incomingChecksum: "canonical-a",
+        incomingChecksumAliases: ["legacy-a"],
+      }),
+    ).toBe("unchanged");
+    expect(
+      espnArtifactChecksumNeedsCanonicalization({
+        currentChecksum: "legacy-a",
+        incomingChecksum: "canonical-a",
+        incomingChecksumAliases: ["legacy-a"],
+      }),
+    ).toBe(true);
+    expect(
+      espnArtifactChecksumNeedsCanonicalization({
+        currentChecksum: "canonical-a",
+        incomingChecksum: "canonical-a",
+        incomingChecksumAliases: ["legacy-a"],
+      }),
+    ).toBe(false);
   });
 });

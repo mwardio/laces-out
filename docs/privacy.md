@@ -1,6 +1,6 @@
 # Privacy policy template
 
-Effective: 2026-07-31
+Effective: 2026-08-03
 
 Laces Out may be used through the official hosted deployment or a self-hosted server. The person or
 organization operating the selected deployment controls its database, encrypted backups, provider
@@ -11,8 +11,10 @@ AI providers beyond the implemented Film room, or other data recipients.
 The application stores member identity and password/session hashes; league settings, teams,
 rosters, standings, matchups, and draft events; user rankings, notes, shares, and recommendation
 inputs; stored Weekly Reckoning recaps and League Intel notes; encrypted Yahoo authorization
-material; ESPN league snapshots; and bounded operational,
-freshness, and audit records. Logs are configured to redact passwords, session material, OAuth
+material; ESPN league snapshots; and bounded refresh-intent, attempt, artifact-freshness, and audit
+records. ESPN refresh metadata can include the request state, fulfillment mode, artifact families,
+timestamps, sanitized error code, and sync-device label, but never an ESPN response body or device
+token. Logs are configured to redact passwords, session material, OAuth
 credentials, authorization headers, and known ESPN credential fields.
 
 Film Room is available by default through the operator's server-side Google AI Studio project and
@@ -55,8 +57,11 @@ SQL, or perform any provider change. Its bounded result may be sent back to the 
 as part of that request.
 
 Yahoo authorization occurs at Yahoo. Laces Out uses encrypted Yahoo tokens only for read-only
-fantasy synchronization. The optional ESPN companion uses the ESPN browser session locally and
-uploads bounded league data, never the ESPN password or cookie values.
+fantasy synchronization. An ESPN sync agent uses the ESPN session locally on the authorized device
+and uploads bounded league data, never the ESPN password or cookie values. An operator-enabled
+public-direct refresh sends no member or ESPN credential and can update only an already-admitted,
+exactly matching public league season. The path is unofficial, default-off, and separately
+evidence-gated by artifact family.
 
 Data is used to operate the deployment, synchronize authorized leagues, provide league-wide facts
 to authorized league members, generate user-specific analysis, and secure or troubleshoot the
@@ -105,7 +110,8 @@ session metadata, memberships and claimed-team context, provider-connection meta
 device metadata, notification-device and delivery metadata, invitations, owned rankings and their
 versions/entries/imports/shares, member-created projection sets and player projections, AI provider
 configuration and usage metadata, activity receipts, audit history, League Intel and recap
-contributions, and refresh history.
+contributions, and user-owned refresh intent/attempt history. Another member's device identifier,
+label, token, and cross-user attempt provenance are not included.
 
 Every export query is an allowlist. It never returns password hashes; session, invitation, bridge,
 pairing, or share-token hashes; OAuth state or PKCE verifiers; encrypted Yahoo credentials; push

@@ -88,6 +88,7 @@ describe("worker queue reliability", () => {
         dataHealth: { retryLimit: 2, retryDelayMax: 300, expireInSeconds: 300 },
         dataRefresh: { retryLimit: 5, retryDelayMax: 3_600, expireInSeconds: 1_800 },
         notificationSweep: { retryLimit: 2, retryDelayMax: 120, expireInSeconds: 300 },
+        providerSyncSweep: { retryLimit: 3, retryDelayMax: 300, expireInSeconds: 240 },
       } as const;
       const limits = expectedLimits[key as keyof typeof expectedLimits];
       expect(createQueue).toHaveBeenCalledWith(
@@ -112,7 +113,7 @@ describe("worker queue reliability", () => {
 
     await registerWorkers(boss, logger);
 
-    expect(work).toHaveBeenCalledTimes(6);
+    expect(work).toHaveBeenCalledTimes(Object.keys(queueNames).length);
     for (const name of Object.values(queueNames)) {
       expect(work).toHaveBeenCalledWith(
         name,
@@ -434,9 +435,21 @@ describe("dispatch contracts and schedules", () => {
       queueNames.dataRefresh,
       "daily-nflverse-player-catalog",
     );
-    expect(schedule).toHaveBeenCalledTimes(8);
+    expect(schedule).toHaveBeenCalledTimes(9);
     expect(schedule).toHaveBeenNthCalledWith(
       1,
+      queueNames.providerSyncSweep,
+      "*/5 * * * *",
+      { requestedAt: "scheduled" },
+      expect.objectContaining({
+        tz: "UTC",
+        key: "espn-provider-sync-sweep",
+        group: { id: "provider-sync-sweep" },
+        singletonKey: "provider-sync-sweep",
+      }),
+    );
+    expect(schedule).toHaveBeenNthCalledWith(
+      2,
       queueNames.dataHealth,
       "*/15 * * * *",
       { source: "schedule" },
@@ -447,28 +460,28 @@ describe("dispatch contracts and schedules", () => {
       }),
     );
     expect(schedule).toHaveBeenNthCalledWith(
-      2,
+      3,
       queueNames.dataRefresh,
       "17 5 * * *",
       expect.objectContaining({ scope: "player-data" }),
       expect.objectContaining({ tz: "UTC", key: "daily-shared-nfl-player-data" }),
     );
     expect(schedule).toHaveBeenNthCalledWith(
-      3,
+      4,
       queueNames.dataRefresh,
       "47 5 * * *",
       expect.objectContaining({ scope: "adp-data" }),
       expect.objectContaining({ tz: "UTC", key: "daily-draft-market-adp" }),
     );
     expect(schedule).toHaveBeenNthCalledWith(
-      4,
+      5,
       queueNames.dataRefresh,
       "23 * * * *",
       expect.objectContaining({ scope: "market-data" }),
       expect.objectContaining({ tz: "UTC", key: "hourly-waiver-market-data" }),
     );
     expect(schedule).toHaveBeenNthCalledWith(
-      5,
+      6,
       queueNames.notificationSweep,
       "4,19,34,49 * * * *",
       { kind: "lineup-lock", reason: "scheduled" },
@@ -480,7 +493,7 @@ describe("dispatch contracts and schedules", () => {
       }),
     );
     expect(schedule).toHaveBeenNthCalledWith(
-      6,
+      7,
       queueNames.notificationSweep,
       // Offset from both the lineup-lock sweep and the quarter-hour health check.
       "9,24,39,54 * * * *",
@@ -493,7 +506,7 @@ describe("dispatch contracts and schedules", () => {
       }),
     );
     expect(schedule).toHaveBeenNthCalledWith(
-      7,
+      8,
       queueNames.refreshProjections,
       "*/10 * * * *",
       { season: 2026, reason: "lock-window" },
@@ -505,7 +518,7 @@ describe("dispatch contracts and schedules", () => {
       }),
     );
     expect(schedule).toHaveBeenNthCalledWith(
-      8,
+      9,
       queueNames.refreshProjections,
       "11 * * * *",
       { season: 2026, reason: "scheduled" },

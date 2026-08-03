@@ -49,7 +49,9 @@ This application will hold access to real fantasy accounts. Treat it like a smal
   are never logged. Account creation and the initial hashed session are one database transaction.
 - Portable account export is an explicit field allowlist. It excludes every stored bearer value,
   hash, encryption envelope, key fingerprint, push destination/key, and provider request hash. The
-  response is authenticated, marked `no-store`, and delivered as a JSON attachment.
+  response is authenticated, marked `no-store`, and delivered as a JSON attachment. ESPN refresh
+  history is restricted to the requesting member's intent and bounded attempt metadata; it never
+  reveals another member's device identity or any bearer material.
 - Password change and account deletion take an account-row lock and verify the current password
   inside the same transaction as the sensitive mutation. Password change replaces the hash,
   revokes every other session, and invalidates every outstanding browser handoff, including one
@@ -117,7 +119,41 @@ This application will hold access to real fantasy accounts. Treat it like a smal
 
 ## ESPN-specific rule
 
-Never request or store an ESPN password. Use the browser-local bridge, which leaves cookies inside the ESPN origin. A bridge device's league-ID allowlist is only a transport boundary and grants nothing before a successful sync. The first accepted snapshot may create a new league owned by that authenticated device user; a later successfully validated provider connection automatically joins the existing shared league as manager. No separate league approval is required. Existing roles are preserved, every joined member may refresh shared provider data, and an older snapshot cannot replace newer canonical state. Bridge artifacts may not overwrite shared canonical player fields or create a verified global player crosswalk. Unmapped roster IDs receive non-verified, league-season-scoped observation rows. Their supplied roster fields are available only to that league's roster, draft, and projection workflows and are excluded from unscoped catalog/ranking resolution. A self-asserted observation never becomes authoritative; a later trusted catalog refresh may establish a canonical crosswalk. `espn_s2` must be treated as a bearer credential with broader risk than fantasy data alone.
+Never request or store an ESPN password. A sync agent leaves cookies inside the ESPN origin on its
+authorized device. A device's numeric league-ID/season allowlist is only a transport boundary and
+grants nothing before a successful sync. Agent tokens are random, hashed at rest, expiring,
+revocable, and accepted only in the `Bridge` authorization header. Poll responses are capped at
+eight and contain only request ID, granted league ID/season, minimum capture time, expiry, and fixed
+artifact-family names. A revoked, expired, non-agent, cross-league, or cross-season device cannot
+observe or report an intent. Native release clients must retain the existing normalized HTTPS
+server-origin and mutation-origin rules; a token never belongs in a URL, log, page, content script,
+or ordinary app preference.
+
+The first accepted device snapshot may create a new league owned by that authenticated device user;
+a later successfully validated provider connection automatically joins the existing shared league
+as manager. In contrast, a server-direct read is authorized only for one existing ESPN league
+season and may never create a league, membership, team claim, provider account, invitation,
+commissioner capability, or current-user identity. It constructs a fixed ESPN HTTPS endpoint from
+the stored numeric ID and season, allowlists views, uses `credentials: omit`, rejects redirects,
+bounds time and bytes, validates returned identity, and passes through the same normalizer and
+atomic persistence boundary. An HTTP success records only `unknown/evidence-required` until an
+operator explicitly approves sanitized evidence; `ESPN_PUBLIC_DIRECT_SYNC_ENABLED=false` is the
+default and kill switch.
+
+Existing roles are preserved, every joined member may request refresh of shared provider data, and
+an older capture cannot replace newer canonical state. Request creation is membership-scoped,
+server-bucketed, rate-limited, limited to one live intent per league season, and cannot accept a
+member force flag or upstream URL. Core and supplemental freshness advance independently and a
+request completes only after every required artifact is sufficiently new. Shared checksum
+deduplication makes racing agents/direct work unchanged after the first accepted canonical write.
+Attempts retain only bounded states, sanitized error codes/details, and timestamps.
+
+Bridge artifacts may not overwrite shared canonical player fields or create a verified global
+player crosswalk. Unmapped roster IDs receive non-verified, league-season-scoped observation rows.
+Their supplied roster fields are available only to that league's roster, draft, and projection
+workflows and are excluded from unscoped catalog/ranking resolution. A self-asserted observation
+never becomes authoritative; a later trusted catalog refresh may establish a canonical crosswalk.
+`espn_s2` must be treated as a bearer credential with broader risk than fantasy data alone.
 
 Live draft observation widens what the companion reads, not what it may touch. The content script
 observes a draft room the user already has open; it must never intercept, proxy, decode, or hook

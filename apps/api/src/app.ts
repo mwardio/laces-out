@@ -15,6 +15,12 @@ import {
   espnBridgePairingSessionResponseSchema,
   espnBridgeReceiptSchema,
   espnBridgeSnapshotSchema,
+  espnLeagueRefreshRequestSchema,
+  espnLeagueRefreshStatusSchema,
+  espnRefreshAgentAttemptRequestSchema,
+  espnRefreshAgentAttemptResponseSchema,
+  espnRefreshAgentPollRequestSchema,
+  espnRefreshAgentPollResponseSchema,
   espnLiveDraftIngestRequestSchema,
   espnLiveDraftIngestResponseSchema,
   espnSupplementalBridgeSnapshotSchema,
@@ -30,6 +36,8 @@ import {
   yahooAuthorizeRequestSchema,
   yahooAuthorizeResponseSchema,
   type EspnBridgeSnapshot,
+  type EspnLeagueRefreshStatus,
+  type EspnRefreshAgentPollResponse,
   type EspnLiveDraftIngestRequest,
   type EspnLiveDraftIngestResponse,
   type EspnSupplementalBridgeSnapshot,
@@ -117,6 +125,8 @@ export interface EspnBridgePort {
     readonly generatedAt: string;
     readonly devices: readonly {
       readonly deviceId: string;
+      readonly clientKind: "chrome-extension" | "ios-app";
+      readonly agentCapable: boolean;
       readonly name: string;
       readonly state: "active" | "expired" | "revoked";
       readonly allowedLeagues: readonly {
@@ -133,9 +143,17 @@ export interface EspnBridgePort {
   }>;
   registerDevice(
     userId: string,
-    input: { readonly name: string; readonly allowedLeagueIds: readonly string[] },
+    input: {
+      readonly name: string;
+      readonly clientKind: "chrome-extension" | "ios-app";
+      readonly agentCapabilities: readonly "refresh-intents-v1"[];
+      readonly season?: number;
+      readonly allowedLeagueIds: readonly string[];
+    },
   ): Promise<{
     readonly deviceId: string;
+    readonly clientKind: "chrome-extension" | "ios-app";
+    readonly agentCapable: boolean;
     readonly deviceToken: string;
     readonly expiresAt: string | null;
   }>;
@@ -143,6 +161,7 @@ export interface EspnBridgePort {
     userId: string,
     input: {
       readonly name: string;
+      readonly agentCapabilities: readonly "refresh-intents-v1"[];
       readonly allowedLeagueIds: readonly string[];
       readonly season: number;
     },
@@ -150,6 +169,8 @@ export interface EspnBridgePort {
   redeemPairingSession?(pairingCode: string): Promise<
     | {
         readonly deviceId: string;
+        readonly clientKind: "chrome-extension";
+        readonly agentCapable: true;
         readonly deviceToken: string;
         readonly expiresAt: string;
         readonly leagueIds: readonly string[];
@@ -187,6 +208,21 @@ export interface EspnBridgePort {
   ): Promise<{ readonly deviceId: string; readonly revokedAt: string } | undefined>;
 }
 
+export interface EspnRefreshPort {
+  requestRefresh(userId: string, leagueSeasonId: string): Promise<EspnLeagueRefreshStatus>;
+  getStatus(userId: string, leagueSeasonId: string): Promise<EspnLeagueRefreshStatus>;
+  pollAgent(deviceToken: string): Promise<EspnRefreshAgentPollResponse>;
+  reportAgentAttempt(
+    deviceToken: string,
+    requestId: string,
+    input: {
+      readonly state: "started" | "login-required" | "retryable-error" | "rejected";
+      readonly errorCode?: string;
+      readonly detail?: string;
+    },
+  ): Promise<{ readonly attemptId: string; readonly state: string; readonly recordedAt: string }>;
+}
+
 /**
  * Optional so a deployment with the flag off — or an existing test fake — simply serves 503 for
  * live draft ingest while every other ESPN path keeps working.
@@ -215,6 +251,7 @@ export interface BuildAppOptions {
   readonly draftAnalysis?: DraftAnalysisPort;
   readonly draftManualBackup?: DraftManualBackupPort;
   readonly espnBridge?: EspnBridgePort;
+  readonly espnRefresh?: EspnRefreshPort;
   readonly espnLiveDraft?: EspnLiveDraftPort;
   readonly draftStream?: DraftStreamHub;
   readonly invitations?: InvitationPort;
@@ -278,6 +315,8 @@ const MOBILE_CAPABILITIES = [
   "league-analytics",
   "league-dashboard",
   "league-portfolio",
+  "espn-automated-refresh",
+  "espn-sync-agent-v1",
   "weekly-reckoning",
 ] as const;
 
@@ -369,6 +408,13 @@ function loginAccountRateLimitKey(body: unknown, fallbackIp: string): string {
   return `login-account:${digest}`;
 }
 
+function bridgeDeviceRateLimitKey(request: FastifyRequest, operation: string): string {
+  const match = /^Bridge ([A-Za-z0-9._~-]{32,512})$/u.exec(request.headers.authorization ?? "");
+  const identity = match?.[1] ?? `invalid:${request.ip}`;
+  const digest = createHash("sha256").update(identity, "utf8").digest("base64url");
+  return `espn-device:${operation}:${digest}`;
+}
+
 export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyInstance> {
   const environment = options.environment ?? loadEnvironment();
   const browserHandoffs =
@@ -449,7 +495,11 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     "/v1/bridge/espn/snapshots",
     "/v1/bridge/espn/supplemental",
     "/v1/bridge/espn/live-draft",
+    "/v1/bridge/espn/refresh-requests/poll",
   ];
+  const espnBridgeAttemptPath = /^\/v1\/bridge\/espn\/refresh-requests\/[0-9a-f-]{36}\/attempts$/iu;
+  const isEspnBridgeDevicePath = (requestPath: string): boolean =>
+    espnBridgeIngestPaths.includes(requestPath) || espnBridgeAttemptPath.test(requestPath);
   const espnBridgePairingRedeemPath = "/v1/bridge/espn/pairing-sessions/redeem";
 
   // The browser origins this deployment answers to: the canonical WEB_URL plus any second domain
@@ -466,9 +516,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   await app.register(cors, {
     delegator: (request, callback) => {
       const requestPath = request.url.split("?", 1)[0] ?? request.url;
-      const fromEspnBridge =
-        espnBridgeIngestPaths.includes(requestPath) &&
-        request.headers.origin === "https://fantasy.espn.com";
+      const fromEspnBridge = isEspnBridgeDevicePath(requestPath);
       callback(null, {
         // An allowed origin is reflected back so each domain is told it — and only it — is
         // permitted. `@fastify/cors` always emits `Vary: Origin` for a delegator, so a shared cache
@@ -494,6 +542,12 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     max: 5,
     timeWindow: "1 minute",
     keyGenerator: (request) => loginAccountRateLimitKey(request.body, request.ip),
+  });
+  const memberEspnRefreshRateLimit = app.createRateLimit({
+    max: 12,
+    timeWindow: "1 minute",
+    keyGenerator: (request) =>
+      `espn-member-refresh:${request.currentUser?.id ?? `anonymous:${request.ip}`}:${requestPathForLog(request.url)}`,
   });
 
   app.addHook("onSend", async (request, reply, payload) => {
@@ -524,7 +578,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   ]);
   app.addHook("onRequest", async (request, reply) => {
     const requestPath = request.url.split("?", 1)[0] ?? request.url;
-    const isBridgeSnapshot = espnBridgeIngestPaths.includes(requestPath);
+    const isBridgeSnapshot = isEspnBridgeDevicePath(requestPath);
     const isBridgeCredentialExchange = requestPath === espnBridgePairingRedeemPath;
     const isBrowserHandoffStage = requestPath === browserHandoffStagePath;
     const isBrowserHandoffConfirmFromLanding =
@@ -547,7 +601,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
       }
     }
 
-    if (publicPaths.has(requestPath)) {
+    if (publicPaths.has(requestPath) || isEspnBridgeDevicePath(requestPath)) {
       return;
     }
     const user = await options.authService?.validate(request.cookies[sessionCookieName]);
@@ -805,6 +859,94 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     return leagueDashboardSchema.parse(dashboard);
   });
 
+  const leagueSeasonRefreshPathSchema = z.object({ leagueSeasonId: z.string().uuid() });
+  app.post(
+    "/v1/leagues/:leagueSeasonId/refresh",
+    {
+      preHandler: async (request, reply) => {
+        const limit = await memberEspnRefreshRateLimit(request);
+        if (limit.isAllowed) return;
+        void reply.header("x-ratelimit-limit", limit.max);
+        void reply.header("x-ratelimit-remaining", limit.remaining);
+        void reply.header("x-ratelimit-reset", limit.ttlInSeconds);
+        if (!limit.isExceeded) return;
+        void reply.header("retry-after", limit.ttlInSeconds);
+        return reply.code(429).type("application/problem+json").send({
+          type: "https://fantasy.local/problems/rate-limit",
+          title: "Too many requests",
+          status: 429,
+          detail: "Try again later.",
+          correlationId: request.id,
+        });
+      },
+    },
+    async (request, reply) => {
+      if (!request.currentUser) {
+        return reply.code(401).type("application/problem+json").send({
+          type: "https://fantasy.local/problems/unauthorized",
+          title: "Authentication required",
+          status: 401,
+          correlationId: request.id,
+        });
+      }
+      if (!options.espnRefresh) {
+        return reply.code(503).type("application/problem+json").send({
+          type: "https://fantasy.local/problems/espn-refresh-unavailable",
+          title: "ESPN automated refresh is not configured",
+          status: 503,
+          correlationId: request.id,
+        });
+      }
+      const { leagueSeasonId } = leagueSeasonRefreshPathSchema.parse(request.params);
+      espnLeagueRefreshRequestSchema.parse(request.body ?? {});
+      const status = espnLeagueRefreshStatusSchema.parse(
+        await options.espnRefresh.requestRefresh(request.currentUser.id, leagueSeasonId),
+      );
+      const live = status.request?.state === "queued" || status.request?.state === "processing";
+      request.log.info(
+        {
+          provider: "espn",
+          operation: "member-refresh",
+          current: status.current,
+          intentDisposition: status.current
+            ? "none"
+            : status.request?.requestedAt === status.generatedAt
+              ? "created"
+              : "coalesced",
+          requestState: status.request?.state ?? "none",
+          fulfillmentMode: status.request?.fulfillmentMode ?? "none",
+          displayCode: status.display.code,
+          activeAgentCount: status.agents.activeCount,
+        },
+        "ESPN member refresh evaluated",
+      );
+      return reply.code(live ? 202 : 200).send(status);
+    },
+  );
+
+  app.get("/v1/leagues/:leagueSeasonId/refresh/status", async (request, reply) => {
+    if (!request.currentUser) {
+      return reply.code(401).type("application/problem+json").send({
+        type: "https://fantasy.local/problems/unauthorized",
+        title: "Authentication required",
+        status: 401,
+        correlationId: request.id,
+      });
+    }
+    if (!options.espnRefresh) {
+      return reply.code(503).type("application/problem+json").send({
+        type: "https://fantasy.local/problems/espn-refresh-unavailable",
+        title: "ESPN automated refresh is not configured",
+        status: 503,
+        correlationId: request.id,
+      });
+    }
+    const { leagueSeasonId } = leagueSeasonRefreshPathSchema.parse(request.params);
+    return espnLeagueRefreshStatusSchema.parse(
+      await options.espnRefresh.getStatus(request.currentUser.id, leagueSeasonId),
+    );
+  });
+
   app.post("/v1/leagues/:leagueId/team-claim", async (request, reply) => {
     if (!request.currentUser) {
       return reply.code(401).type("application/problem+json").send({
@@ -871,11 +1013,18 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
       });
     }
     const input = espnBridgeDeviceRequestSchema.parse(request.body ?? {});
+    const registration = {
+      name: input.name,
+      clientKind: input.clientKind,
+      agentCapabilities: input.agentCapabilities,
+      allowedLeagueIds: input.allowedLeagueIds,
+      ...(input.season === undefined ? {} : { season: input.season }),
+    };
     return reply
       .code(201)
       .send(
         espnBridgeDeviceResponseSchema.parse(
-          await options.espnBridge.registerDevice(request.currentUser.id, input),
+          await options.espnBridge.registerDevice(request.currentUser.id, registration),
         ),
       );
   });
@@ -969,7 +1118,11 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     {
       bodyLimit: 6 * 1024 * 1024,
       config: {
-        rateLimit: { max: 30, timeWindow: "1 minute" },
+        rateLimit: {
+          max: 30,
+          timeWindow: "1 minute",
+          keyGenerator: (request) => bridgeDeviceRateLimitKey(request, "core-upload"),
+        },
       },
     },
     async (request, reply) => {
@@ -1020,7 +1173,11 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     {
       bodyLimit: 21 * 1024 * 1024,
       config: {
-        rateLimit: { max: 180, timeWindow: "10 minutes" },
+        rateLimit: {
+          max: 180,
+          timeWindow: "10 minutes",
+          keyGenerator: (request) => bridgeDeviceRateLimitKey(request, "supplemental-upload"),
+        },
       },
     },
     async (request, reply) => {
@@ -1053,12 +1210,113 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   );
 
   app.post(
+    "/v1/bridge/espn/refresh-requests/poll",
+    {
+      config: {
+        rateLimit: {
+          max: 24,
+          timeWindow: "1 minute",
+          keyGenerator: (request) => bridgeDeviceRateLimitKey(request, "refresh-poll"),
+        },
+      },
+    },
+    async (request, reply) => {
+      if (!options.espnRefresh) {
+        return reply.code(503).type("application/problem+json").send({
+          type: "https://fantasy.local/problems/espn-refresh-unavailable",
+          title: "ESPN refresh relay is not configured",
+          status: 503,
+          correlationId: request.id,
+        });
+      }
+      const authorization = request.headers.authorization;
+      const match = /^Bridge ([A-Za-z0-9._~-]{32,512})$/u.exec(authorization ?? "");
+      if (!match?.[1]) {
+        return reply.code(401).type("application/problem+json").send({
+          type: "https://fantasy.local/problems/bridge-unauthorized",
+          title: "Valid sync device authorization is required",
+          status: 401,
+          correlationId: request.id,
+        });
+      }
+      espnRefreshAgentPollRequestSchema.parse(request.body ?? {});
+      const result = espnRefreshAgentPollResponseSchema.parse(
+        await options.espnRefresh.pollAgent(match[1]),
+      );
+      request.log.info(
+        { provider: "espn", operation: "agent-poll", offeredRequestCount: result.requests.length },
+        "ESPN sync agent polled",
+      );
+      return result;
+    },
+  );
+
+  const refreshAttemptPathSchema = z.object({ requestId: z.string().uuid() });
+  app.post(
+    "/v1/bridge/espn/refresh-requests/:requestId/attempts",
+    {
+      config: {
+        rateLimit: {
+          max: 60,
+          timeWindow: "1 minute",
+          keyGenerator: (request) => bridgeDeviceRateLimitKey(request, "refresh-attempt"),
+        },
+      },
+    },
+    async (request, reply) => {
+      if (!options.espnRefresh) {
+        return reply.code(503).type("application/problem+json").send({
+          type: "https://fantasy.local/problems/espn-refresh-unavailable",
+          title: "ESPN refresh relay is not configured",
+          status: 503,
+          correlationId: request.id,
+        });
+      }
+      const authorization = request.headers.authorization;
+      const match = /^Bridge ([A-Za-z0-9._~-]{32,512})$/u.exec(authorization ?? "");
+      if (!match?.[1]) {
+        return reply.code(401).type("application/problem+json").send({
+          type: "https://fantasy.local/problems/bridge-unauthorized",
+          title: "Valid sync device authorization is required",
+          status: 401,
+          correlationId: request.id,
+        });
+      }
+      const { requestId } = refreshAttemptPathSchema.parse(request.params);
+      const input = espnRefreshAgentAttemptRequestSchema.parse(request.body);
+      const attempt = {
+        state: input.state,
+        ...(input.errorCode === undefined ? {} : { errorCode: input.errorCode }),
+        ...(input.detail === undefined ? {} : { detail: input.detail }),
+      };
+      const result = espnRefreshAgentAttemptResponseSchema.parse(
+        await options.espnRefresh.reportAgentAttempt(match[1], requestId, attempt),
+      );
+      request.log.info(
+        {
+          provider: "espn",
+          operation: "agent-attempt",
+          attemptState: result.state,
+        },
+        "ESPN sync agent attempt recorded",
+      );
+      return reply.code(input.state === "started" ? 202 : 200).send(result);
+    },
+  );
+
+  app.post(
     "/v1/bridge/espn/live-draft",
     {
       bodyLimit: ESPN_LIVE_DRAFT_LIMITS.maximumBodyBytes,
       // Sized for a heartbeat every 5s plus bounded transient auction updates from one active
       // source, with headroom for a standby that has not yet been told to stand down.
-      config: { rateLimit: { max: 600, timeWindow: "1 minute" } },
+      config: {
+        rateLimit: {
+          max: 600,
+          timeWindow: "1 minute",
+          keyGenerator: (request) => bridgeDeviceRateLimitKey(request, "live-draft"),
+        },
+      },
     },
     async (request, reply) => {
       if (!options.espnLiveDraft) {

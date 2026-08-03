@@ -111,6 +111,9 @@ try {
     const bridge = new EspnBridgeService(smokeDatabase);
     const credential = await bridge.registerDevice(userId, {
       name: "Database smoke device",
+      clientKind: "chrome-extension",
+      agentCapabilities: [],
+      season: snapshot.season,
       allowedLeagueIds: [snapshot.leagueId],
     });
     assert.match(
@@ -179,6 +182,9 @@ try {
 
     const outsiderCredential = await bridge.registerDevice(outsiderUserId, {
       name: "League mate database smoke device",
+      clientKind: "chrome-extension",
+      agentCapabilities: [],
+      season: snapshot.season,
       allowedLeagueIds: [snapshot.leagueId],
     });
     const [scopeBeforeAuthority] = await smokeDatabase

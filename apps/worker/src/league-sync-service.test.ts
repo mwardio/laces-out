@@ -102,6 +102,66 @@ describe("LeagueSyncService", () => {
     expect(circuit.recordFailure).not.toHaveBeenCalled();
   });
 
+  it("routes an explicit ESPN server-direct job without resolving a user connection", async () => {
+    const targets = reader();
+    const syncLeague = vi.fn(() =>
+      Promise.resolve({
+        state: "accepted" as const,
+        leagueSeasonId: "league-season-1",
+        leagueId: "league-1",
+        syncRunId: "direct-run-1",
+        season: 2026,
+        checksumSha256: "a".repeat(64),
+        recordsWritten: 21,
+      }),
+    );
+    const service = new LeagueSyncService({
+      targets,
+      espnDirect: { syncLeague },
+      circuit: circuitStore(),
+      now: () => now,
+    });
+    const signal = new AbortController().signal;
+
+    await expect(
+      service.runLeagueSync(
+        job({
+          mode: "server-direct",
+          connectionId: undefined,
+          reason: "stale-on-view",
+          refreshRequestId: "refresh-1",
+          probe: false,
+        }),
+        context(signal),
+      ),
+    ).resolves.toEqual({ state: "synced", recordsWritten: 21, syncRunId: "direct-run-1" });
+    expect(syncLeague).toHaveBeenCalledWith(
+      {
+        leagueSeasonId: "league-season-1",
+        refreshRequestId: "refresh-1",
+        probe: false,
+      },
+      signal,
+    );
+    expect(targets.findSyncTarget).not.toHaveBeenCalled();
+  });
+
+  it("resolves unverified direct capability as assisted work instead of retrying", async () => {
+    const service = new LeagueSyncService({
+      targets: reader(),
+      espnDirect: { syncLeague: () => Promise.resolve({ state: "evidence-required" }) },
+      circuit: circuitStore(),
+      now: () => now,
+    });
+
+    await expect(
+      service.runLeagueSync(
+        job({ mode: "server-direct", connectionId: undefined, reason: "provider-sweep" }),
+        context(),
+      ),
+    ).resolves.toEqual({ state: "external-companion-required", provider: "espn" });
+  });
+
   it("short-circuits an open connection circuit instead of consuming a retry", async () => {
     const syncLeague = vi.fn(() => Promise.reject(new Error("must not be called")));
     const service = new LeagueSyncService({
