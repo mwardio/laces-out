@@ -16,7 +16,12 @@ import {
   playerWeeklyStatObservations,
   type Database,
 } from "@fantasy/db";
-import { sourceMatchRateThreshold } from "@fantasy/domain";
+import {
+  currentNflSeason,
+  isArchivedNflverseSource,
+  sourceMatchRateThreshold,
+  sourceSeason,
+} from "@fantasy/domain";
 import { and, asc, count, eq, isNull } from "drizzle-orm";
 
 import {
@@ -116,15 +121,10 @@ export function datasetForSourceKey(key: string): DataQualityDataset {
   return "other";
 }
 
-/** Only trust a season the ingestion actually recorded; a key suffix is not evidence. */
-function metadataSeason(metadata: AdmittedSourceRow["metadata"]): number | null {
-  const value = metadata.season;
-  return typeof value === "number" && Number.isInteger(value) && value >= 1999 && value <= 2200
-    ? value
-    : null;
-}
-
-export function dataQualitySource(row: AdmittedSourceRow): DataQualitySource {
+export function dataQualitySource(
+  row: AdmittedSourceRow,
+  activeSeason = currentNflSeason(),
+): DataQualitySource {
   const dataset = datasetForSourceKey(row.key);
   const contract = admittedSourceContract(dataset, row.key, row.name, row);
   const quality = admittedSourceQuality(row);
@@ -140,7 +140,10 @@ export function dataQualitySource(row: AdmittedSourceRow): DataQualitySource {
     key: row.key,
     name: row.name,
     dataset,
-    season: metadataSeason(row.metadata),
+    season: sourceSeason(row.metadata),
+    lifecycle: isArchivedNflverseSource(row.key, row.metadata, activeSeason)
+      ? "archived"
+      : "active",
     admission: contract.state,
     matchRate: quality.matchRate,
     minimumMatchRate,
@@ -399,7 +402,8 @@ export class DataQualityService {
         degradedSourceKeys: [],
       };
     }
-    const sources = rows.map((row) => dataQualitySource(row));
+    const activeSeason = currentNflSeason(this.#now());
+    const sources = rows.map((row) => dataQualitySource(row, activeSeason));
     return {
       generatedAt,
       algorithmVersion: DATA_QUALITY_ALGORITHM_VERSION,
@@ -412,7 +416,7 @@ export class DataQualityService {
   async getUnresolvedIdentities(key: string): Promise<UnresolvedIdentityResponse | undefined> {
     const row = await this.#repository.findSource(key);
     if (!row) return undefined;
-    const source = dataQualitySource(row);
+    const source = dataQualitySource(row, currentNflSeason(this.#now()));
     const generatedAt = this.#now().toISOString();
     if (source.season === null) {
       // Without a recorded season the read cannot pin the partial index, so it is withheld rather

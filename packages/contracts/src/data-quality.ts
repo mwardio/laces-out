@@ -38,6 +38,7 @@ export const dataQualitySourceSchema = z
     name: z.string().min(1).max(200),
     dataset: dataQualityDatasetSchema,
     season: z.number().int().min(1999).max(2200).nullable(),
+    lifecycle: z.enum(["active", "archived"]),
     admission: z.enum(["available", "unavailable", "quarantined"]),
     matchRate: z.number().min(0).max(1).nullable(),
     minimumMatchRate: z.number().min(0).max(1),

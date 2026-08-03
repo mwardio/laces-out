@@ -141,8 +141,21 @@ describe("DataQualityService", () => {
     expect(degraded?.checksumSha256).toBeNull();
     expect(degraded?.affectedAnalysis.length).toBeGreaterThan(0);
     expect(healthy?.admission).toBe("available");
+    expect(healthy?.lifecycle).toBe("active");
     expect(healthy?.meetsThreshold).toBe(true);
     expect(result.degradedSourceKeys).toEqual(["nflverse.stats-player-week.2026"]);
+  });
+
+  it("labels completed nflverse datasets as archived snapshots", async () => {
+    const completed = sourceRow("nflverse.stats-player-week.2025", 0.99, true);
+    const service = new DataQualityService(
+      repositoryOf([{ ...completed, metadata: { ...completed.metadata, season: 2025 } }]),
+      now,
+    );
+
+    const [source] = (await service.getSourceQuality()).sources;
+
+    expect(source?.lifecycle).toBe("archived");
   });
 
   it("reports the snap threshold that was in force at ingestion, not today's registry value", async () => {

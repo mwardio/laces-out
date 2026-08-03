@@ -14,7 +14,7 @@ import {
   type JsonPrimitive,
 } from "@fantasy/db";
 import { emitChangeEvents } from "@fantasy/change-events";
-import { sourceMatchRateThreshold } from "@fantasy/domain";
+import { isReusableArchivedSourceArtifact, sourceMatchRateThreshold } from "@fantasy/domain";
 
 import {
   buildInjuryChangeDrafts,
@@ -55,8 +55,9 @@ import { and, eq, lte } from "drizzle-orm";
 
 import { currentNflSeason } from "./nfl-season.js";
 
-// Active-season artifacts are checked during the game-aware near-lock sweep. Historical seasons
-// retain their daily cadence and conditional requests make unchanged current checks inexpensive.
+// Active-season artifacts are checked during the game-aware near-lock sweep. Completed seasons
+// are admitted once and reused until an operator forces a refresh or a parser/schema release
+// requires a replay.
 const currentSeasonCheckIntervalMinutes = 30;
 const historicalCheckIntervalMinutes = 24 * 60;
 const claimMinutes = 45;
@@ -216,6 +217,18 @@ async function claimSource(
   const stableMetadata = { ...source.metadata };
   delete stableMetadata.refreshClaimedAt;
   const stableSource = { ...source, metadata: stableMetadata };
+  if (
+    !force &&
+    isReusableArchivedSourceArtifact({
+      sourceKey: descriptor.key,
+      metadata: stableMetadata,
+      lastChecksum: source.lastChecksum,
+      activeSeason: currentNflSeason(now),
+      sourceSchemaVersion,
+    })
+  ) {
+    return null;
+  }
   const claimed = await database
     .update(dataSources)
     .set({

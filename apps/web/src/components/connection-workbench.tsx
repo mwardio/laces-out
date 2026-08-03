@@ -813,7 +813,9 @@ export function ConnectionWorkbench() {
         <div className="connection-data-health__body">
           <p className="connection-data-health__lede">
             Laces Out withholds an analysis rather than publishing it from a source whose player
-            identities did not resolve. Anything listed here is being withheld for you already.
+            identities did not resolve. Completed-season snapshots are archived after admission;
+            they do not age into a stale state. Anything listed here is being withheld for you
+            already.
           </p>
 
           {signedOut ? (
@@ -861,7 +863,11 @@ export function ConnectionWorkbench() {
                       </dd>
                     </div>
                     <div>
-                      <dt>Last successful refresh</dt>
+                      <dt>
+                        {source.lifecycle === "archived"
+                          ? "Snapshot verified"
+                          : "Last successful refresh"}
+                      </dt>
                       <dd>{formatBridgeTime(source.lastSuccessfulAt)}</dd>
                     </div>
                   </dl>

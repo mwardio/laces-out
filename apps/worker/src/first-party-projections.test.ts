@@ -108,6 +108,7 @@ describe("first-party projection publication policy", () => {
   it("rejects a retained artifact when its upstream dataset is no longer published", () => {
     const now = new Date("2026-09-10T12:00:00.000Z");
     const source = {
+      key: "nflverse.schedules.2026",
       lastCheckedAt: new Date("2026-09-10T11:55:00.000Z"),
       lastSuccessfulAt: new Date("2026-09-10T11:55:00.000Z"),
       lastChecksum: "a".repeat(64),
@@ -139,6 +140,37 @@ describe("first-party projection publication policy", () => {
       sourceIsUsableForProjection(
         { ...source, lastSuccessfulAt: new Date("2026-09-10T08:00:00.000Z") },
         now,
+      ),
+    ).toBe(false);
+  });
+
+  it("keeps an admitted completed-season artifact usable without a freshness clock", () => {
+    const now = new Date("2026-09-10T12:00:00.000Z");
+    const source = {
+      key: "nflverse.stats-player-week.2025",
+      lastCheckedAt: new Date("2026-03-01T00:00:00.000Z"),
+      lastSuccessfulAt: new Date("2026-03-01T00:00:00.000Z"),
+      lastChecksum: "a".repeat(64),
+      consecutiveFailures: 2,
+      checkIntervalMinutes: 1440,
+      metadata: {
+        season: 2025,
+        publishable: true,
+        availability: "available",
+        refreshClaimedAt: now.toISOString(),
+      },
+    } as const;
+
+    expect(sourceIsUsableForProjection(source, now, 2026)).toBe(true);
+    expect(
+      sourceIsUsableForProjection(
+        {
+          ...source,
+          key: "nflverse.stats-player-week.2026",
+          metadata: { ...source.metadata, season: 2026 },
+        },
+        now,
+        2026,
       ),
     ).toBe(false);
   });

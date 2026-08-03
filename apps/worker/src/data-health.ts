@@ -1,4 +1,5 @@
 import { dataSources, type Database } from "@fantasy/db";
+import { isArchivedNflverseSource } from "@fantasy/domain";
 import { asc, eq } from "drizzle-orm";
 
 import type {
@@ -14,22 +15,15 @@ export interface DataSourceHealthRow {
   readonly key: string;
   readonly checkIntervalMinutes: number;
   readonly lastSuccessfulAt: Date | null;
+  readonly lastChecksum?: string | null;
   readonly consecutiveFailures: number;
   readonly metadata: Readonly<Record<string, unknown>>;
   readonly createdAt: Date;
 }
 
 export interface DataSourceHealthOptions {
-  /** Old immutable nflverse seasons remain stored, but are no longer operational dependencies. */
-  readonly minimumNflverseSeason?: number;
-}
-
-function isMonitoredSource(source: DataSourceHealthRow, options: DataSourceHealthOptions): boolean {
-  if (options.minimumNflverseSeason === undefined || !source.key.startsWith("nflverse.")) {
-    return true;
-  }
-  const season = source.metadata.season;
-  return typeof season !== "number" || season >= options.minimumNflverseSeason;
+  /** Completed nflverse seasons are integrity-checked artifacts, not freshness-monitored feeds. */
+  readonly activeNflSeason?: number;
 }
 
 export function assessDataSourceHealth(
@@ -47,14 +41,27 @@ export function assessDataSourceHealth(
   let unmatchedIdentitySources = 0;
   const degradedSourceKeys: string[] = [];
 
-  const monitoredSources = sources.filter((source) => isMonitoredSource(source, options));
+  const monitoredSources = sources;
   for (const source of monitoredSources) {
-    const failing = source.consecutiveFailures > 0;
+    const archived =
+      options.activeNflSeason !== undefined &&
+      isArchivedNflverseSource(source.key, source.metadata, options.activeNflSeason);
+    const archivedArtifactReady =
+      archived &&
+      typeof source.lastChecksum === "string" &&
+      source.lastSuccessfulAt !== null &&
+      source.metadata.availability === "available" &&
+      source.metadata.publishable !== false;
+    // A failed audit says the upstream endpoint was unavailable; it does not corrupt the admitted
+    // snapshot already stored locally.
+    const failing = source.consecutiveFailures > 0 && !archivedArtifactReady;
     const expectedPending = source.metadata.availability === "not-published" && !failing;
     const freshnessAnchor = source.lastSuccessfulAt ?? source.createdAt;
     const staleAfterMilliseconds = source.checkIntervalMinutes * STALE_INTERVAL_MULTIPLIER * 60_000;
     const sourceStale =
-      !expectedPending && checkedAt.getTime() - freshnessAnchor.getTime() > staleAfterMilliseconds;
+      !archivedArtifactReady &&
+      !expectedPending &&
+      checkedAt.getTime() - freshnessAnchor.getTime() > staleAfterMilliseconds;
     const qualityState = source.metadata.qualityState;
     // Shadow rails are intentionally non-publishable until their evidence gate clears. Their own
     // transport failures and staleness still count, but the expected shadow quality state does not.
@@ -127,14 +134,12 @@ export class DatabaseDataHealthService implements DataHealthService {
   constructor(input: {
     readonly database: Database;
     readonly now?: () => Date;
-    readonly minimumNflverseSeason?: number;
+    readonly activeNflSeason?: number;
   }) {
     this.#database = input.database;
     this.#now = input.now ?? (() => new Date());
     this.#options =
-      input.minimumNflverseSeason === undefined
-        ? {}
-        : { minimumNflverseSeason: input.minimumNflverseSeason };
+      input.activeNflSeason === undefined ? {} : { activeNflSeason: input.activeNflSeason };
   }
 
   async checkDataHealth(
@@ -147,6 +152,7 @@ export class DatabaseDataHealthService implements DataHealthService {
         key: dataSources.key,
         checkIntervalMinutes: dataSources.checkIntervalMinutes,
         lastSuccessfulAt: dataSources.lastSuccessfulAt,
+        lastChecksum: dataSources.lastChecksum,
         consecutiveFailures: dataSources.consecutiveFailures,
         metadata: dataSources.metadata,
         createdAt: dataSources.createdAt,

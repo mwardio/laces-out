@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { DEFAULT_SOURCE_MATCH_RATE, sourceMatchRateThreshold } from "./source-quality.js";
+import {
+  DEFAULT_SOURCE_MATCH_RATE,
+  isArchivedNflverseSource,
+  isReusableArchivedSourceArtifact,
+  sourceMatchRateThreshold,
+} from "./source-quality.js";
 
 describe("sourceMatchRateThreshold", () => {
   it("keeps the production 0.95 threshold for GSIS-keyed nflverse datasets", () => {
@@ -52,5 +57,40 @@ describe("sourceMatchRateThreshold", () => {
       expect(threshold.minimumMatchRate).toBeLessThanOrEqual(1);
       expect(threshold.rationale.length).toBeGreaterThan(0);
     }
+  });
+});
+
+describe("completed-season source lifecycle", () => {
+  const metadata = {
+    season: 2025,
+    sourceSchemaVersion: 2,
+    availability: "available",
+    publishable: true,
+  } as const;
+
+  it("archives only completed nflverse seasons", () => {
+    expect(isArchivedNflverseSource("nflverse.stats-player-week.2025", metadata, 2026)).toBe(true);
+    expect(
+      isArchivedNflverseSource(
+        "nflverse.stats-player-week.2026",
+        { ...metadata, season: 2026 },
+        2026,
+      ),
+    ).toBe(false);
+    expect(isArchivedNflverseSource("ffc.adp.2025.ppr.12", metadata, 2026)).toBe(false);
+  });
+
+  it("reuses an admitted snapshot until its parser schema changes", () => {
+    const input = {
+      sourceKey: "nflverse.stats-player-week.2025",
+      metadata,
+      lastChecksum: "a".repeat(64),
+      activeSeason: 2026,
+      sourceSchemaVersion: 2,
+    } as const;
+
+    expect(isReusableArchivedSourceArtifact(input)).toBe(true);
+    expect(isReusableArchivedSourceArtifact({ ...input, sourceSchemaVersion: 3 })).toBe(false);
+    expect(isReusableArchivedSourceArtifact({ ...input, lastChecksum: null })).toBe(false);
   });
 });

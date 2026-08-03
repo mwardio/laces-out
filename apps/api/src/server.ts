@@ -1,10 +1,13 @@
 import { loadEnvironment } from "@fantasy/config";
 import { createDatabase } from "@fantasy/db";
+import { currentNflSeason } from "@fantasy/domain";
 import {
   enqueueDataRefresh,
   enqueueProjectionRefresh,
   enqueueRecommendationRecompute,
+  ensureDailyRefresh,
   registerQueues,
+  registerSchedules,
 } from "@fantasy/jobs";
 import { parseCredentialKey } from "@fantasy/security";
 import { sql } from "drizzle-orm";
@@ -193,12 +196,17 @@ const jobs = new PgBoss({
   application_name: "fantasy-api-jobs",
   schema: "pgboss",
   supervise: false,
-  schedule: false,
+  // Scheduling stays in the lightweight API process. Projection assembly can occupy the worker's
+  // event loop for twenty minutes; letting that process own cron silently dropped one-minute
+  // schedule windows while a model run was active.
+  schedule: true,
 });
 await jobs.start();
 // One registration function for both processes. The API used to hand-copy two queue definitions
 // here and had already lost the dead-letter target and retention settings the worker applied.
 await registerQueues(jobs);
+await registerSchedules(jobs, currentNflSeason());
+await ensureDailyRefresh(jobs);
 const app = await buildApp({
   environment,
   authService,

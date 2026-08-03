@@ -12,13 +12,7 @@ import pino from "pino";
 
 import { DatabaseDataHealthService } from "./data-health.js";
 import { FfcAdpRefresher } from "./ffc-adp.js";
-import {
-  enqueueProjectionRefresh,
-  ensureDailyRefresh,
-  registerQueues,
-  registerSchedules,
-  registerWorkers,
-} from "./jobs.js";
+import { enqueueProjectionRefresh, registerQueues, registerWorkers } from "./jobs.js";
 import {
   DrizzleConnectionCircuitStore,
   DrizzleLeagueSyncTargetReader,
@@ -71,7 +65,7 @@ const sleeperRefresher = new SleeperDataRefresher({ database: database.db });
 const adpRefresher = new FfcAdpRefresher({ database: database.db });
 const dataHealthService = new DatabaseDataHealthService({
   database: database.db,
-  minimumNflverseSeason: Math.min(...projectionHistorySeasons(currentNflSeason())),
+  activeNflSeason: currentNflSeason(),
 });
 // Web push is opt-in for the operator. Without a VAPID key pair the sender is simply absent and the
 // scheduled sweep completes as a stated no-op, which is the default state of an existing install.
@@ -152,14 +146,14 @@ const boss = new PgBoss({
   application_name: "fantasy-worker",
   schema: "pgboss",
   supervise: true,
-  schedule: true,
+  // The API owns cron timekeeping so long-running projection work cannot swallow schedule ticks.
+  schedule: false,
 });
 
 boss.on("error", (error) => logger.error({ err: error }, "job queue error"));
 boss.on("warning", (warning) => logger.warn({ warning }, "job queue warning"));
 
 async function start(): Promise<void> {
-  const projectionSeason = currentNflSeason();
   await boss.start();
   await registerQueues(boss);
   await registerWorkers(boss, logger, {
@@ -194,14 +188,10 @@ async function start(): Promise<void> {
         await weeklyDataRefresher.refreshInjuries(effectiveJob.season, forceCurrentInputs);
         await weeklyDataRefresher.refreshTeamWeeklyStats(effectiveJob.season, forceCurrentInputs);
         await sleeperRefresher.refreshCatalog(forceCurrentInputs);
-        // Historical schedules remain part of the reproducible training selection; their longer
-        // source cadence makes these calls cheap no-ops outside an actual correction.
-        for (const season of projectionHistorySeasons(effectiveJob.season)) {
-          await scheduleRefresher.refresh(
-            season,
-            forceCurrentInputs && season === effectiveJob.season,
-          );
-        }
+        // Completed schedules are immutable admitted artifacts. Only the active schedule belongs
+        // in the recurring projection sweep; historical schedules are loaded once by the shared
+        // data bootstrap and replayed only after a schema change or explicit operator refresh.
+        await scheduleRefresher.refresh(effectiveJob.season, forceCurrentInputs);
         await projectionService.refreshProjections(effectiveJob, context);
         // ROS consumes only the immutable weekly artifacts written above. It remains isolated from
         // projection sets and recommendations until its held-out evidence and interval gate clear.
@@ -236,8 +226,6 @@ async function start(): Promise<void> {
     refreshMarketData: (force) => sleeperRefresher.refreshTrends(force),
     refreshAdpData: (force) => adpRefresher.refreshDefaultContexts(currentNflSeason(), force),
   });
-  await registerSchedules(boss, projectionSeason);
-  await ensureDailyRefresh(boss);
   logger.info("fantasy worker started");
 }
 

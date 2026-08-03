@@ -116,22 +116,25 @@ describe("data-source health assessment", () => {
     expect(result.degradedSourceKeys).toEqual([]);
   });
 
-  it("excludes immutable nflverse history outside the active model window", () => {
+  it("keeps admitted completed nflverse seasons healthy without refreshing them", () => {
     const source = (season: number): Parameters<typeof assessDataSourceHealth>[0][number] => ({
       key: `nflverse.stats-player-week.${season}`,
       checkIntervalMinutes: 1440,
       lastSuccessfulAt: new Date("2026-07-01T00:00:00.000Z"),
-      consecutiveFailures: 0,
-      metadata: { season },
+      lastChecksum: "a".repeat(64),
+      consecutiveFailures: season === 2022 ? 1 : 0,
+      metadata: { season, availability: "available", publishable: true },
       createdAt: new Date("2026-01-01T00:00:00.000Z"),
     });
-    const result = assessDataSourceHealth([source(2022), source(2023)], checkedAt, {
-      minimumNflverseSeason: 2023,
+    const result = assessDataSourceHealth([source(2022), source(2023), source(2026)], checkedAt, {
+      activeNflSeason: 2026,
     });
 
-    expect(result.enabledSources).toBe(1);
+    expect(result.enabledSources).toBe(3);
+    expect(result.healthySources).toBe(2);
     expect(result.staleSources).toBe(1);
-    expect(result.degradedSourceKeys).toEqual(["nflverse.stats-player-week.2023"]);
+    expect(result.failingSources).toBe(0);
+    expect(result.degradedSourceKeys).toEqual(["nflverse.stats-player-week.2026"]);
   });
 
   it("degrades a current projection source when its gate rejects or its output is stale", () => {

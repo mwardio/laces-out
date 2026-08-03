@@ -23,6 +23,7 @@ import {
   teamWeeklyStatObservations,
   type Database,
 } from "@fantasy/db";
+import { isArchivedNflverseSource } from "@fantasy/domain";
 import {
   FIRST_PARTY_CHAMPION_MINIMUM_IMPROVEMENT,
   FIRST_PARTY_CHAMPION_MINIMUM_SAMPLES,
@@ -977,9 +978,11 @@ function sourceIsFresh(
 
 export function sourceIsUsableForProjection(
   source: Parameters<typeof sourceIsFresh>[0] & {
+    readonly key: string;
     readonly metadata: Readonly<Record<string, unknown>>;
   },
   now: Date,
+  projectionSeason?: number,
 ): boolean {
   // Observation ingestors deliberately retain a checksum for failed coverage gates so the bad
   // artifact remains auditable. A fresh checksum therefore is not, by itself, publication-safe.
@@ -988,11 +991,15 @@ export function sourceIsUsableForProjection(
   // unavailable artifact look current to the projection release gate.
   const availability = source.metadata.availability;
   const refreshClaimedAt = source.metadata.refreshClaimedAt;
+  const archivedArtifact =
+    projectionSeason !== undefined &&
+    isArchivedNflverseSource(source.key, source.metadata, projectionSeason);
   return (
     source.metadata.publishable !== false &&
     (availability === undefined || availability === "available") &&
-    refreshClaimedAt === undefined &&
-    sourceIsFresh(source, now)
+    source.lastSuccessfulAt !== null &&
+    source.lastChecksum !== null &&
+    (archivedArtifact || (refreshClaimedAt === undefined && sourceIsFresh(source, now)))
   );
 }
 
@@ -1493,7 +1500,7 @@ export class FirstPartyProjectionService implements ProjectionRefreshService {
     const byKey = new Map(rows.map((row) => [row.key, row]));
     const missing = keys.required.filter((key) => {
       const row = byKey.get(key);
-      return !row?.enabled || !sourceIsUsableForProjection(row, now);
+      return !row?.enabled || !sourceIsUsableForProjection(row, now, season);
     });
     if (missing.length > 0) {
       throw new Error(
@@ -1505,7 +1512,7 @@ export class FirstPartyProjectionService implements ProjectionRefreshService {
       return (
         row?.lastChecksum !== null &&
         row?.lastChecksum !== undefined &&
-        !sourceIsUsableForProjection(row, now)
+        !sourceIsUsableForProjection(row, now, season)
       );
     });
     if (degradedOptional.length > 0) {
@@ -1533,7 +1540,7 @@ export class FirstPartyProjectionService implements ProjectionRefreshService {
     }
     return allKeys.flatMap((key): SelectedSource[] => {
       const row = byKey.get(key);
-      if (!row?.enabled || !sourceIsUsableForProjection(row, now)) return [];
+      if (!row?.enabled || !sourceIsUsableForProjection(row, now, season)) return [];
       return [
         {
           id: row.id,

@@ -16,6 +16,7 @@ import {
   NflverseSchedulesSource,
   type NflverseScheduleGame,
 } from "@fantasy/source-nflverse";
+import { currentNflSeason, isReusableArchivedSourceArtifact } from "@fantasy/domain";
 import { and, eq, lte } from "drizzle-orm";
 
 // Runs beneath the hourly projection sweep. The buffer prevents request/runtime drift from
@@ -255,6 +256,18 @@ export class NflverseScheduleRefresher {
     const stableMetadata = { ...source.metadata };
     delete stableMetadata.refreshClaimedAt;
     const stableSource = { ...source, metadata: stableMetadata };
+    if (
+      !force &&
+      isReusableArchivedSourceArtifact({
+        sourceKey: key,
+        metadata: stableMetadata,
+        lastChecksum: source.lastChecksum,
+        activeSeason: currentNflSeason(now),
+        sourceSchemaVersion,
+      })
+    ) {
+      return this.#notDue(key);
+    }
 
     const claimed = await this.#database
       .update(dataSources)

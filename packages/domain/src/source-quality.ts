@@ -137,3 +137,41 @@ export function sourceMatchRateThreshold(sourceKey: string): SourceMatchRateThre
   }
   return UNREGISTERED_THRESHOLD;
 }
+
+/** Only ingestion-recorded season metadata can classify an artifact as completed history. */
+export function sourceSeason(metadata: Readonly<Record<string, unknown>>): number | null {
+  const season = metadata.season;
+  return typeof season === "number" && Number.isInteger(season) && season >= 1999 && season <= 2200
+    ? season
+    : null;
+}
+
+/** Completed nflverse seasons are immutable model artifacts, not live freshness dependencies. */
+export function isArchivedNflverseSource(
+  sourceKey: string,
+  metadata: Readonly<Record<string, unknown>>,
+  activeSeason: number,
+): boolean {
+  const season = sourceSeason(metadata);
+  return sourceKey.startsWith("nflverse.") && season !== null && season < activeSeason;
+}
+
+/**
+ * An admitted completed-season artifact may be reused indefinitely. A parser/schema release or an
+ * explicit operator refresh is what reopens it, not the passage of wall-clock time.
+ */
+export function isReusableArchivedSourceArtifact(input: {
+  readonly sourceKey: string;
+  readonly metadata: Readonly<Record<string, unknown>>;
+  readonly lastChecksum: string | null;
+  readonly activeSeason: number;
+  readonly sourceSchemaVersion: number;
+}): boolean {
+  return (
+    isArchivedNflverseSource(input.sourceKey, input.metadata, input.activeSeason) &&
+    input.lastChecksum !== null &&
+    input.metadata.sourceSchemaVersion === input.sourceSchemaVersion &&
+    input.metadata.availability === "available" &&
+    input.metadata.publishable !== false
+  );
+}

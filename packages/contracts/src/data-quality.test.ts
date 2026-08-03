@@ -7,6 +7,7 @@ const source = {
   name: "NFL weekly player stats 2026",
   dataset: "weekly-stats" as const,
   season: 2026,
+  lifecycle: "active" as const,
   admission: "quarantined" as const,
   matchRate: 0.82,
   minimumMatchRate: 0.95,
