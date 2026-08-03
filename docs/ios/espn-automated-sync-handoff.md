@@ -1,7 +1,7 @@
 # iOS ESPN automated sync handoff
 
-Status: backend contract complete; iOS implementation pending  
-Contract date: 2026-08-03  
+Status: backend contract complete; iOS implementation pending
+Contract date: 2026-08-03
 Mobile API version: 1
 
 ## Purpose and release boundary
@@ -373,7 +373,7 @@ that attempt and fulfills eligible intents server-side.
 
 ### Artifact upload
 
-Core: `POST /v1/bridge/espn/snapshots` (request body limit 6 MiB).  
+Core: `POST /v1/bridge/espn/snapshots` (request body limit 6 MiB).
 Supplemental: `POST /v1/bridge/espn/supplemental` (request body limit 21 MiB; normalized artifact
 limit 20 MiB). The native client should retain the Chrome agent's stricter 5 MiB per ESPN response
 limit unless evidence justifies a change.

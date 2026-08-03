@@ -26,6 +26,7 @@ import {
   type LeagueDashboard,
   type LeagueListResponse,
 } from "../lib/api-client";
+import { shouldRequestEspnRefreshOnView } from "../lib/espn-refresh";
 import { LatestRequest } from "../lib/latest-request";
 import { yahooComingSoon } from "../lib/public-site";
 import { loginUrlForCurrentPath } from "../lib/safe-return-to";
@@ -430,9 +431,12 @@ function LivePortfolio({ portfolio, reloadPortfolio }: LivePortfolioProps) {
   useEffect(() => {
     if (!selectedEspnSeason || dashboardState.status !== "ready") return;
     const key = `laces-out:espn-stale-on-view:${selectedEspnSeason.id}`;
+    const now = Date.now();
     try {
-      if (window.sessionStorage.getItem(key) === "requested") return;
-      window.sessionStorage.setItem(key, "requested");
+      if (!shouldRequestEspnRefreshOnView(window.sessionStorage.getItem(key), now)) {
+        return;
+      }
+      window.sessionStorage.setItem(key, String(now));
     } catch {
       // Session storage may be blocked. Request idempotency still makes one extra call harmless.
     }
