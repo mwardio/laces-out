@@ -28,7 +28,7 @@ import {
   evaluateEspnRefresh,
   type EspnRefreshEvaluation,
 } from "@fantasy/league-sync";
-import { and, desc, eq, gt, inArray, isNull, or, sql } from "drizzle-orm";
+import { and, desc, eq, gt, inArray, isNull, lte, or, sql } from "drizzle-orm";
 
 const ASSISTED_REQUEST_LIFETIME_MS = 24 * 60 * 60 * 1000;
 const ACTIVE_AGENT_WINDOW_MS = 15 * 60 * 1000;
@@ -651,6 +651,27 @@ export class DrizzleEspnRefreshRepository implements EspnRefreshRepository {
       await transaction.execute(
         sql`select pg_advisory_xact_lock(hashtextextended(${`espn-refresh:${input.leagueSeasonId}`}, 0))`,
       );
+      // The partial unique index intentionally permits only one live request per league, regardless
+      // of its expiry timestamp. Retire an expired row while holding the same league lock before
+      // inserting its replacement; otherwise a request that expires between five-minute sweeps can
+      // turn a perfectly valid stale-on-view refresh into a unique-constraint failure.
+      await transaction
+        .update(refreshRequests)
+        .set({
+          state: "cancelled",
+          startedAt: sql`coalesce(${refreshRequests.startedAt}, ${refreshRequests.createdAt})`,
+          finishedAt: input.now,
+          errorCode: "EXPIRED",
+          errorDetail: "No authorized sync path fulfilled this request before it expired.",
+        })
+        .where(
+          and(
+            eq(refreshRequests.kind, "league"),
+            eq(refreshRequests.leagueSeasonId, input.leagueSeasonId),
+            inArray(refreshRequests.state, ["queued", "processing"] satisfies LiveRequestState[]),
+            lte(refreshRequests.expiresAt, input.now),
+          ),
+        );
       const [existing] = await transaction
         .select({
           id: refreshRequests.id,

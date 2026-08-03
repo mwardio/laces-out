@@ -11,7 +11,8 @@ CREATE INDEX "league_supplemental_artifact_lookup_idx"
 -- polling. The web-created one-click credential has always used this fixed label and cannot poll.
 UPDATE "bridge_devices"
 SET "agent_capable" = true
-WHERE "name" <> 'One-click ESPN sync';
+WHERE "provider" = 'espn'
+  AND "name" <> 'One-click ESPN sync';
 --> statement-breakpoint
 ALTER TABLE "bridge_devices"
   ADD CONSTRAINT "bridge_devices_client_kind_check"
