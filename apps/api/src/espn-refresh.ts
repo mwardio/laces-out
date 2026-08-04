@@ -161,10 +161,19 @@ export interface EspnRefreshRepository {
   ): Promise<{ readonly attemptId: string; readonly state: EspnRefreshAttemptState }>;
 }
 
+function normalizedIso(value: string | Date | null | undefined): string | undefined {
+  const timestamp = value instanceof Date ? value.getTime() : Date.parse(value ?? "");
+  return Number.isFinite(timestamp) ? new Date(timestamp).toISOString() : undefined;
+}
+
 function laterIso(left: string | undefined, right: Date | null): string | undefined {
-  if (!right) return left;
-  if (!left) return right.toISOString();
-  return Date.parse(left) >= right.getTime() ? left : right.toISOString();
+  const normalizedLeft = normalizedIso(left);
+  const normalizedRight = normalizedIso(right);
+  if (!normalizedRight) return normalizedLeft;
+  if (!normalizedLeft) return normalizedRight;
+  return Date.parse(normalizedLeft) >= Date.parse(normalizedRight)
+    ? normalizedLeft
+    : normalizedRight;
 }
 
 function freshnessState(
@@ -378,15 +387,14 @@ export class EspnRefreshCoordinator {
       provider: "espn",
       current: evaluation.current,
       context: evaluation.context,
-      artifacts: evaluation.relevantArtifacts.map((family) => ({
-        family,
-        state: freshnessState(
-          target.artifactFreshness[family],
-          evaluation.policy.staleAfterMs,
-          now,
-        ),
-        observedAt: target.artifactFreshness[family] ?? null,
-      })),
+      artifacts: evaluation.relevantArtifacts.map((family) => {
+        const observedAt = normalizedIso(target.artifactFreshness[family]);
+        return {
+          family,
+          state: freshnessState(observedAt, evaluation.policy.staleAfterMs, now),
+          observedAt: observedAt ?? null,
+        };
+      }),
       direct: {
         enabled: this.#directEnabled,
         coreState: this.#directEnabled ? target.directCoreState : "disabled",

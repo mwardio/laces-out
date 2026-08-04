@@ -14,6 +14,7 @@ import {
   bridgeDeviceLeagues,
   bridgeDevices,
   createDatabase,
+  espnLeagueSyncStates,
   espnRefreshAttempts,
   leagueSeasons,
   leagues,
@@ -272,6 +273,10 @@ describe.skipIf(!dockerAvailable)(
           draftType: "snake",
         },
       ]);
+      await db.insert(espnLeagueSyncStates).values({
+        leagueSeasonId: QUEUED_SEASON_ID,
+        artifactFreshness: { core: "2031-09-19T10:00:00.000+00:00" },
+      });
       await db.insert(bridgeDevices).values({
         id: DEVICE_ID,
         userId: MEMBER_ID,
@@ -414,10 +419,15 @@ describe.skipIf(!dockerAvailable)(
         });
 
         expect(response.statusCode).toBe(200);
-        expect(response.json()).toMatchObject({
+        const body = response.json<EspnLeagueRefreshStatus>();
+        expect(body).toMatchObject({
           leagueSeasonId: QUEUED_SEASON_ID,
           provider: "espn",
           request: null,
+        });
+        expect(body.artifacts.find((artifact) => artifact.family === "core")).toMatchObject({
+          family: "core",
+          observedAt: "2031-09-19T10:00:00.000Z",
         });
       } finally {
         await app.close();
