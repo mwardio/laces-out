@@ -28,7 +28,7 @@ import {
   evaluateEspnRefresh,
   type EspnRefreshEvaluation,
 } from "@fantasy/league-sync";
-import { and, desc, eq, gt, inArray, isNull, lte, or, sql } from "drizzle-orm";
+import { and, desc, eq, gt, gte, inArray, isNull, lte, notExists, or, sql } from "drizzle-orm";
 
 const ASSISTED_REQUEST_LIFETIME_MS = 24 * 60 * 60 * 1000;
 const ACTIVE_AGENT_WINDOW_MS = 15 * 60 * 1000;
@@ -783,19 +783,31 @@ export class DrizzleEspnRefreshRepository implements EspnRefreshRepository {
             inArray(refreshRequests.state, ["queued", "processing"] satisfies LiveRequestState[]),
             gt(refreshRequests.expiresAt, now),
             eq(leagueSeasons.provider, "espn"),
-            sql`not exists (
-              select 1 from ${espnRefreshAttempts} recent_attempt
-              where recent_attempt.refresh_request_id = ${refreshRequests.id}
-                and recent_attempt.bridge_device_id = ${device.id}
-                and (
-                  (recent_attempt.state = 'login-required'
-                    and recent_attempt.finished_at >= ${recentLoginBackoff})
-                  or (recent_attempt.state = 'retryable-error'
-                    and recent_attempt.finished_at >= ${recentRetryableBackoff})
-                  or (recent_attempt.state = 'rejected'
-                    and recent_attempt.finished_at >= ${recentRejectedBackoff})
-                )
-            )`,
+            notExists(
+              transaction
+                .select({ id: espnRefreshAttempts.id })
+                .from(espnRefreshAttempts)
+                .where(
+                  and(
+                    eq(espnRefreshAttempts.refreshRequestId, refreshRequests.id),
+                    eq(espnRefreshAttempts.bridgeDeviceId, device.id),
+                    or(
+                      and(
+                        eq(espnRefreshAttempts.state, "login-required"),
+                        gte(espnRefreshAttempts.finishedAt, recentLoginBackoff),
+                      ),
+                      and(
+                        eq(espnRefreshAttempts.state, "retryable-error"),
+                        gte(espnRefreshAttempts.finishedAt, recentRetryableBackoff),
+                      ),
+                      and(
+                        eq(espnRefreshAttempts.state, "rejected"),
+                        gte(espnRefreshAttempts.finishedAt, recentRejectedBackoff),
+                      ),
+                    ),
+                  ),
+                ),
+            ),
           ),
         )
         .orderBy(desc(refreshRequests.priority), refreshRequests.createdAt)
@@ -933,9 +945,12 @@ export class DrizzleEspnRefreshRepository implements EspnRefreshRepository {
       if (input.state === "started") {
         await transaction
           .update(refreshRequests)
+          .set({ startedAt: now })
+          .where(and(eq(refreshRequests.id, requestId), isNull(refreshRequests.startedAt)));
+        await transaction
+          .update(refreshRequests)
           .set({
             state: "processing",
-            startedAt: sql`coalesce(${refreshRequests.startedAt}, ${now})`,
             fulfillmentMode: modeForClient(scope.clientKind),
           })
           .where(eq(refreshRequests.id, requestId));
@@ -959,7 +974,7 @@ export class DrizzleEspnRefreshRepository implements EspnRefreshRepository {
           eq(refreshRequests.kind, "league"),
           eq(refreshRequests.leagueSeasonId, leagueSeasonId),
           inArray(refreshRequests.state, ["queued", "processing"] satisfies LiveRequestState[]),
-          sql`${refreshRequests.expiresAt} <= ${now}`,
+          lte(refreshRequests.expiresAt, now),
         ),
       );
   }
