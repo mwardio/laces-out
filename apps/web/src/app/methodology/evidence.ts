@@ -12,9 +12,9 @@
  * - Full PPR: `reports/ros-validation-v8-full-ppr-n8-2026-07-28.json`
  * - Half PPR: `reports/ros-validation-v8-half-ppr-n8-2026-07-28.json`
  * - Standard: `reports/ros-validation-v8-standard-n8-2026-07-28.json`
- * - Standard + 2-pt: `reports/ros-validation-v9-espn-standard-2pt-n8-2026-08-03.json`
+ * - Standard + 2-pt: `reports/ros-validation-v10-espn-standard-2pt-n8-2026-08-04.json`
  * - Standard + 2-pt, no XP-missed:
- *   `reports/ros-validation-v9-espn-standard-2pt-nxm-n8-2026-08-03.json`
+ *   `reports/ros-validation-v10-espn-standard-2pt-nxm-n8-2026-08-04.json`
  *
  * Those files are local operator artifacts — `reports/` is listed in `.gitignore`, so they are
  * deliberately not distributed with the repository and the page must not link to them as if they
@@ -40,13 +40,14 @@
  * production selects the newest compatible artifact, while this manifest preserves the original
  * replay verdict that produced each measurement below.
  *
- * The two `espn-standard-*` profiles are league-shaped catalog profiles. Their 2026-08-03 v9
- * replays contain the complete ESPN D/ST rule vocabulary and native `--full` source lineage. They
- * were replayed at eight players per position from the start, so there is no narrower-sample
- * predecessor for those two profiles.
+ * The two `espn-standard-*` profiles are league-shaped catalog profiles. Their 2026-08-04 v10
+ * replays contain the complete ESPN D/ST rule vocabulary, native `--full` source lineage, and the
+ * exact executable publication policy consumed by the release worker. They were replayed at eight
+ * players per position from the start, so there is no narrower-sample predecessor for those two
+ * profiles.
  */
 
-export const METHODOLOGY_EVIDENCE_MANIFEST_VERSION = "methodology-evidence-v5" as const;
+export const METHODOLOGY_EVIDENCE_MANIFEST_VERSION = "methodology-evidence-v6" as const;
 
 export interface EvidenceFigure {
   /** Human label rendered in the page's evidence tables. */
@@ -234,32 +235,32 @@ export const rosScopeFigures: readonly EvidenceFigure[] = [
   {
     label: "Fully held-out NFL seasons",
     value: "4 (2022, 2023, 2024, 2025)",
-    source: "ros-validation-v8/v9-n8 .coverage.fullyHeldOutSeasons",
+    source: "ros-validation-v8/v10-n8 .coverage.fullyHeldOutSeasons",
   },
   {
     label: "Forecasts graded against realized outcomes",
     value: "3,264 per profile",
-    source: "ros-validation-v8/v9-n8 .report.forecasts",
+    source: "ros-validation-v8/v10-n8 .report.forecasts",
   },
   {
     label: "Season/cutoff batches",
     value: "68 of 68 complete",
-    source: "ros-validation-v8/v9-n8 .coverage.completeAsOfBatches / .totalAsOfBatches",
+    source: "ros-validation-v8/v10-n8 .coverage.completeAsOfBatches / .totalAsOfBatches",
   },
   {
     label: "Forecasts skipped or dropped",
     value: "0",
-    source: "ros-validation-v8/v9-n8 .report.skippedForecasts",
+    source: "ros-validation-v8/v10-n8 .report.skippedForecasts",
   },
   {
     label: "Position/horizon evidence cells",
     value: "18 of 18 complete",
-    source: "ros-validation-v8/v9-n8 .report.cells",
+    source: "ros-validation-v8/v10-n8 .report.cells",
   },
   {
     label: "Players sampled per position, per cutoff",
     value: "8",
-    source: "ros-validation-v8/v9-n8 .report.playersPerPosition",
+    source: "ros-validation-v8/v10-n8 .report.playersPerPosition",
   },
   {
     label: "Simulation paths per release projection",
@@ -275,7 +276,7 @@ export const rosScopeFigures: readonly EvidenceFigure[] = [
   {
     label: "Convergence diagnostics that converged",
     value: "144 of 144",
-    source: "ros-validation-v8/v9-n8 .report.convergenceAudit",
+    source: "ros-validation-v8/v10-n8 .report.convergenceAudit",
   },
 ];
 
@@ -311,7 +312,7 @@ export const rosGateRows: readonly ReleaseGateRow[] = [
     requirement:
       "Expected-games error must show no statistical evidence of exceeding 1.5 games for 1-8 week windows or 2.75 for 9+ week windows, with signed bias at most 1.0 game.",
     outcome:
-      "Not cleared by the three legacy profiles graded under the superseded point comparison: quarterback at 9+ weeks is over 2.75 in all three, worst 2.8091 (Full PPR), and wide receiver at 5-8 weeks is over 1.5 under Full PPR, at 1.5399. The two v9 catalog replays carry no availability blocker. Worst signed bias 0.7105 games (kicker, 9+, Standard), inside its ceiling everywhere.",
+      "Not cleared by the three legacy profiles graded under the superseded point comparison: quarterback at 9+ weeks is over 2.75 in all three, worst 2.8091 (Full PPR), and wide receiver at 5-8 weeks is over 1.5 under Full PPR, at 1.5399. The two v10 catalog replays carry no availability blocker. Worst signed bias 0.7105 games (kicker, 9+, Standard), inside its ceiling everywhere.",
     state: "fail",
   },
   {
@@ -319,7 +320,7 @@ export const rosGateRows: readonly ReleaseGateRow[] = [
     requirement:
       "No cell may show statistical evidence of undercoverage against a 60% floor for the nominal 70% interval.",
     outcome:
-      "Team defense at 5–8 weeks failed in both v9 catalog replays: 0 of 4 walk-forward blocks covered against the nominal 70% interval. Every other catalog-profile cell passed.",
+      "Team defense at 5–8 weeks failed in both v10 catalog replays: 0 of 4 walk-forward blocks covered against the nominal 70% interval. Every other catalog-profile cell passed.",
     state: "fail",
   },
   {
@@ -398,7 +399,14 @@ export const rosGateHistory: readonly {
     run: "v9, D/ST-complete catalog profiles — 2026-08-04 (Standard + 2-pt, with and without the XP-missed penalty)",
     state: "insufficient",
     blockers:
-      "Team-defense interval coverage at 5–8 weeks in both profiles. All other cells remain independently releasable.",
+      "Team-defense interval coverage at 5–8 weeks in both profiles; superseded before publication because the reports did not carry the exact executable policy required by the release worker.",
+    outcome: "fail",
+  },
+  {
+    run: "v10, publication-complete catalog profiles — 2026-08-04 (Standard + 2-pt, with and without the XP-missed penalty)",
+    state: "insufficient",
+    blockers:
+      "Team-defense interval coverage at 5–8 weeks in both profiles. Every other cell carries its exact checked publication policy and remains independently releasable.",
     outcome: "fail",
   },
 ];
@@ -482,7 +490,7 @@ export const rosScoringProfiles: readonly RosProfileEvidence[] = [
     withheldCells: "Team defense, 5–8 remaining weeks.",
     admissionState: "admissible",
     admittedAt: "2026-08-04",
-    artifactChecksum: "e870faab6d4e8c387f4b91e92bc77b6ce7e5cf0141a1c05aae7b39a2672e3adf",
+    artifactChecksum: "27c655c47dd4837cb304e66b768241afde57e0e631f0ac0548c5d2a5a259bbe1",
     scoringProfileDigest: "6a2ce8c94a3733673f17056d2ffafc27dca00c1ab93d17ce58a1bdce9b6d6843",
   },
   {
@@ -497,7 +505,7 @@ export const rosScoringProfiles: readonly RosProfileEvidence[] = [
     withheldCells: "Team defense, 5–8 remaining weeks.",
     admissionState: "admissible",
     admittedAt: "2026-08-04",
-    artifactChecksum: "e3f5fb77c01ce377140be137de400b6f4a824ec8d741de8a2321c62450017165",
+    artifactChecksum: "76b8e52803eb11bf0c1687252dd65bc57035979153ee603f00f31d2806481c3f",
     scoringProfileDigest: "d0e49cad7fbbdf20552427d107bea2cd9a6c2f735b4d67745d5e5ca9e85832eb",
   },
 ];
@@ -688,13 +696,13 @@ export const rosWithheldCellFigures: readonly EvidenceFigure[] = [
     label: "Standard + 2-pt — team defense, 5–8 weeks: walk-forward blocks covered",
     value: "0 of 4 — blocked, despite 8.73% lower point error than baseline",
     source:
-      "ros-validation-v9-espn-standard-2pt-n8 .champion.choices[DST, five-to-eight].walkForwardCalibration / .modelImprovement",
+      "ros-validation-v10-espn-standard-2pt-n8 .champion.choices[DST, five-to-eight].walkForwardCalibration / .modelImprovement",
   },
   {
     label: "Standard + 2-pt (no XP-missed) — team defense, 5–8 weeks: walk-forward blocks covered",
     value: "0 of 4 — blocked, despite 8.74% lower point error than baseline",
     source:
-      "ros-validation-v9-espn-standard-2pt-nxm-n8 .champion.choices[DST, five-to-eight].walkForwardCalibration / .modelImprovement",
+      "ros-validation-v10-espn-standard-2pt-nxm-n8 .champion.choices[DST, five-to-eight].walkForwardCalibration / .modelImprovement",
   },
 ];
 

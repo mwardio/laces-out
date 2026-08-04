@@ -329,8 +329,9 @@ withheld.
 The current rest-of-season rail uses model `laces-ros-distribution-v7`. Each current profile replay
 grades 3,264 forecasts across 68 batches and converges all 144 release/reference diagnostics. The
 three generic profiles have clean gate-only re-evaluations admitted under the current availability
-rule. The two ESPN-shaped profiles use native-lineage, D/ST-complete v9 artifacts; only their D/ST
-5–8 week cells are withheld. Historical results remain development evidence; the frozen
+rule. The two ESPN-shaped profiles use native-lineage, D/ST-complete v10 artifacts with exact
+executable publication policies; only their D/ST 5–8 week cells are withheld. Historical results
+remain development evidence; the frozen
 [2026 untouched protocol](./ros-v6-2026-untouched-protocol.md) is the final confirmation. See
 [`packages/projections/README.md`](../packages/projections/README.md) for the model and gate
 definitions.
@@ -420,24 +421,27 @@ reference. No gate, threshold, tolerance, or minimum was relaxed between profile
 | `full-ppr`              | `evidence-ready`       | none            | 18 / 18          | `fa0868a1…92428`  | `dd74455d…`    |
 | `half-ppr`              | `evidence-ready`       | none            | 18 / 18          | `65071929…bd7f`   | `66c5c9a4…`    |
 | `standard`              | `evidence-ready`       | none            | 18 / 18          | `5882b7e1…744f`   | `ecf42385…`    |
-| `espn-standard-2pt`     | `insufficient`         | D/ST, 5–8 weeks | 17 / 18          | `e870faab…3adf`   | `6a2ce8c9…`    |
-| `espn-standard-2pt-nxm` | `insufficient`         | D/ST, 5–8 weeks | 17 / 18          | `e3f5fb77…7165`   | `d0e49cad…`    |
+| `espn-standard-2pt`     | `insufficient`         | D/ST, 5–8 weeks | 17 / 18          | `27c655c4…bbe1`   | `6a2ce8c9…`    |
+| `espn-standard-2pt-nxm` | `insufficient`         | D/ST, 5–8 weeks | 17 / 18          | `76b8e528…c3f`    | `d0e49cad…`    |
 
 The first three rows are append-only gate re-evaluations of the July 28 v8 validation evidence.
 They clear the current evidence-based availability rule without changing any forecast. The two ESPN
-rows are fresh v9 validations with complete D/ST scoring and native `--full` source lineage. Each
-v9 report graded 3,264 forecasts, completed 68 of 68 batches and 18 of 18 cells, skipped zero rows,
-and converged 144 of 144 diagnostics. Their only blocker is statistical undercoverage for D/ST with
-5–8 remaining weeks: 0 of 4 walk-forward blocks covered. Admission is intentionally cell-scoped, so
-that one cell publishes nothing while the other 17 remain independently releasable.
+rows are fresh v10 validations with complete D/ST scoring, native `--full` source lineage, and 18
+exact executable publication-policy choices apiece. Each v10 report graded 3,264 forecasts,
+completed 68 of 68 batches and 18 of 18 cells, skipped zero rows, and converged 144 of 144
+diagnostics. Their only blocker is statistical undercoverage for D/ST with 5–8 remaining weeks: 0
+of 4 walk-forward blocks covered. Admission is intentionally cell-scoped, so that one cell
+publishes nothing while the other 17 remain independently releasable. The statistically equivalent
+v9 reports remain immutable history but were superseded because they did not carry the exact
+runtime policy now required for publication.
 
 All five rows are provisioned in `first_party_ros_champion_artifacts`. Older rows remain immutable
 audit history, and production selects the newest compatible artifact for each exact scoring
 identity. Leagues with byte-identical scoring reuse the same deterministic simulations rather than
 multiplying work by league membership; a distinct admitted profile adds one separate scoring pass.
 
-The two D/ST-complete v9 validations took 22,974 and 23,227 seconds (about 6 hours 23 minutes and 6
-hours 27 minutes) when run in parallel on the current host. The run has no checkpointing, so an
+The two D/ST-complete v10 validations took 22,665 and 22,847 seconds (about 6 hours 18 minutes and 6
+hours 21 minutes) when run in parallel on the current host. The run has no checkpointing, so an
 interrupted validation restarts from zero. Detach it from the launching shell and redirect stdout to
 the report path. `projection-refresh` allows 28,800 seconds for the full shared NFL universe; do not
 reduce that timeout below the measured validation envelope without a separate production benchmark.
@@ -488,7 +492,7 @@ also remains authoritative until a later report clears that cell and is explicit
 These pre-kickoff decisions are frozen in Amendment 4 of the
 [2026 untouched protocol](./ros-v6-2026-untouched-protocol.md).
 
-The ROS validator is intentionally expensive. The current D/ST-complete v9 profile runs took about
+The ROS validator is intentionally expensive. The current D/ST-complete v10 profile runs took about
 6.4 hours apiece on the production host: four season-locked policies, 3,264 12,288-path forecasts,
 and 144 16,384-path convergence references. It writes progress phases to stderr and final JSON to
 stdout — redirect stdout to keep a report; nothing is written to disk otherwise. The
