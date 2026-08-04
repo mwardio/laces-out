@@ -18,6 +18,15 @@ function job(overrides: Partial<LeagueSyncJob> = {}): LeagueSyncJob {
   };
 }
 
+function directJob(overrides: Partial<LeagueSyncJob> = {}): LeagueSyncJob {
+  return {
+    mode: "server-direct",
+    leagueSeasonId: "league-season-1",
+    reason: "stale-on-view",
+    ...overrides,
+  };
+}
+
 function reader(target: Partial<LeagueSyncTarget> | null = {}) {
   return {
     findSyncTarget: vi.fn(() =>
@@ -125,10 +134,7 @@ describe("LeagueSyncService", () => {
 
     await expect(
       service.runLeagueSync(
-        job({
-          mode: "server-direct",
-          connectionId: undefined,
-          reason: "stale-on-view",
+        directJob({
           refreshRequestId: "refresh-1",
           probe: false,
         }),
@@ -155,10 +161,7 @@ describe("LeagueSyncService", () => {
     });
 
     await expect(
-      service.runLeagueSync(
-        job({ mode: "server-direct", connectionId: undefined, reason: "provider-sweep" }),
-        context(),
-      ),
+      service.runLeagueSync(directJob({ reason: "provider-sweep" }), context()),
     ).resolves.toEqual({ state: "external-companion-required", provider: "espn" });
   });
 

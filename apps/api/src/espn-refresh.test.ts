@@ -76,13 +76,16 @@ function repositoryHarness(initial: RefreshTarget | undefined) {
   const repository: EspnRefreshRepository = {
     inspectMemberTarget: vi.fn(async () => current),
     createOrGetRequest,
-    pollAgent: vi.fn(async () => ({
+    pollAgent: vi.fn<EspnRefreshRepository["pollAgent"]>(async () => ({
       schemaVersion: 1,
       generatedAt: NOW.toISOString(),
       pollAfterSeconds: 300,
       requests: [],
     })),
-    reportAgentAttempt: vi.fn(async () => ({ attemptId: REQUEST_ID, state: "started" })),
+    reportAgentAttempt: vi.fn<EspnRefreshRepository["reportAgentAttempt"]>(async () => ({
+      attemptId: REQUEST_ID,
+      state: "started",
+    })),
   };
   return { repository, createOrGetRequest };
 }
