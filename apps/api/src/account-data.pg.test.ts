@@ -30,6 +30,7 @@ import {
   leagues,
   leagueSeasons,
   notificationDeliveries,
+  oauthStates,
   playerProjections,
   players,
   projectionSets,
@@ -46,6 +47,8 @@ import {
   weeklyRecaps,
   type Database,
 } from "@fantasy/db";
+import { hashOAuthState } from "@fantasy/connector-yahoo";
+import { parseCredentialKey } from "@fantasy/security";
 import { and, eq, inArray } from "drizzle-orm";
 import { migrate } from "drizzle-orm/postgres-js/migrator";
 import postgres from "postgres";
@@ -56,6 +59,11 @@ import { DrizzleAuthRepository } from "./auth-repository.js";
 import { AuthService, hashOwnerPassword, hashSessionToken, verifyOwnerPassword } from "./auth.js";
 import { BrowserHandoffService, DrizzleBrowserHandoffStore } from "./browser-handoff.js";
 import { DrizzleInvitationRepository } from "./invitation-repository.js";
+import {
+  YahooConnectionService,
+  type YahooConnectionCallbackError,
+  type YahooConnectionError,
+} from "./yahoo-connection.js";
 
 function dockerIsAvailable(): boolean {
   try {
@@ -258,6 +266,8 @@ const crossOwnerBId = "11000000-0000-4000-8000-0000000000f2";
 const crossLeagueAId = "21000000-0000-4000-8000-0000000000f1";
 const crossLeagueBId = "21000000-0000-4000-8000-0000000000f2";
 const handoffPasswordUserId = "12000000-0000-4000-8000-0000000000f1";
+const nativeYahooUserId = "12000000-0000-4000-8000-0000000000f2";
+const nativeYahooOtherUserId = "12000000-0000-4000-8000-0000000000f3";
 
 describe.skipIf(!postgresAvailable)("account data repository against real PostgreSQL", () => {
   let container: DisposablePostgres;
@@ -291,6 +301,16 @@ describe.skipIf(!postgresAvailable)("account data repository against real Postgr
         id: successorUserId,
         email: "successor@example.test",
         displayName: "Successor",
+      },
+      {
+        id: nativeYahooUserId,
+        email: "native-yahoo@example.test",
+        displayName: "Native Yahoo",
+      },
+      {
+        id: nativeYahooOtherUserId,
+        email: "native-yahoo-other@example.test",
+        displayName: "Other Native Yahoo",
       },
     ]);
     await db.insert(providerConnections).values({
@@ -355,9 +375,18 @@ describe.skipIf(!postgresAvailable)("account data repository against real Postgr
       userId: deletingUserId,
       sourceSessionId: deletingSession.id,
       tokenHash: "H".repeat(43),
-      destination: "/settings",
+      destination: "/connections/yahoo/connect",
       expiresAt: new Date("2031-11-08T14:32:00.000Z"),
       createdAt: NOW,
+    });
+    await db.insert(oauthStates).values({
+      stateHash: "SECRET_OAUTH_STATE_HASH",
+      userId: deletingUserId,
+      provider: "yahoo",
+      encryptedPkceVerifier: { ciphertext: "SECRET_PKCE_CIPHERTEXT" },
+      returnTo: "/connections",
+      returnMode: "ios-app",
+      expiresAt: new Date("2031-11-08T14:40:00.000Z"),
     });
     await db.insert(pushSubscriptions).values({
       userId: deletingUserId,
@@ -1104,6 +1133,7 @@ describe.skipIf(!postgresAvailable)("account data repository against real Postgr
     for (const rows of await Promise.all([
       db.select().from(sessions).where(eq(sessions.userId, deletingUserId)),
       db.select().from(browserHandoffTokens).where(eq(browserHandoffTokens.userId, deletingUserId)),
+      db.select().from(oauthStates).where(eq(oauthStates.userId, deletingUserId)),
       db.select().from(providerConnections).where(eq(providerConnections.userId, deletingUserId)),
       db.select().from(pushSubscriptions).where(eq(pushSubscriptions.userId, deletingUserId)),
       db
@@ -1266,7 +1296,11 @@ describe.skipIf(!postgresAvailable)("account data repository against real Postgr
       () => NOW,
       () => generated.shift() ?? "X".repeat(43),
     );
-    const created = await service.create(successorUserId, sourceSessionToken, "/settings");
+    const created = await service.create(
+      successorUserId,
+      sourceSessionToken,
+      "/connections/yahoo/connect",
+    );
     expect(created).toBeDefined();
     const staged = await service.stage("D".repeat(43));
     expect(staged?.accountHint).toBe("s***@example.test");
@@ -1300,7 +1334,11 @@ describe.skipIf(!postgresAvailable)("account data repository against real Postgr
       () => generated.shift() ?? "X".repeat(43),
     );
     expect(
-      await handoffs.create(handoffPasswordUserId, sourceSessionToken, "/settings"),
+      await handoffs.create(
+        handoffPasswordUserId,
+        sourceSessionToken,
+        "/connections/yahoo/connect",
+      ),
     ).toBeDefined();
     await handoffs.stage("G".repeat(43));
     await handoffs.confirm("H".repeat(43));
@@ -1325,5 +1363,201 @@ describe.skipIf(!postgresAvailable)("account data repository against real Postgr
         .where(eq(browserHandoffTokens.userId, handoffPasswordUserId)),
     ).toHaveLength(0);
     await expect(handoffs.consume("H".repeat(43))).resolves.toBeUndefined();
+  });
+
+  it("binds native Yahoo mode to user, expiry, and one-time OAuth state", async () => {
+    let currentTime = NOW;
+    const credentialKey = parseCredentialKey(`base64:${Buffer.alloc(32, 7).toString("base64")}`);
+    const service = new YahooConnectionService({
+      database: db,
+      credentialKey,
+      clientId: "self-host-client",
+      clientSecret: "self-host-secret",
+      redirectUri: "https://self-host.example/v1/connections/yahoo/callback",
+      now: () => currentTime,
+      fetch: () => Promise.reject(new Error("token exchange must not run for denial")),
+    });
+    const started = await service.start(nativeYahooUserId, {
+      returnMode: "ios-app",
+      returnTo: "/connections",
+    });
+    const expiredStart = await service.start(nativeYahooUserId, {
+      returnMode: "ios-app",
+      returnTo: "/connections",
+    });
+    const browserStart = await service.start(nativeYahooUserId, {
+      returnMode: "browser",
+      returnTo: "/connections?from=settings",
+    });
+    const state = new URL(started.authorizationUrl).searchParams.get("state");
+    const expiringState = new URL(expiredStart.authorizationUrl).searchParams.get("state");
+    const browserState = new URL(browserStart.authorizationUrl).searchParams.get("state");
+    if (!state || !expiringState || !browserState) {
+      throw new Error("Expected Yahoo authorization state");
+    }
+    expect(new URL(started.authorizationUrl).searchParams.get("redirect_uri")).toBe(
+      "https://self-host.example/v1/connections/yahoo/callback",
+    );
+
+    const [stored] = await db
+      .select()
+      .from(oauthStates)
+      .where(eq(oauthStates.stateHash, hashOAuthState(state)));
+    expect(stored).toMatchObject({
+      userId: nativeYahooUserId,
+      returnMode: "ios-app",
+      returnTo: "/connections",
+      consumedAt: null,
+    });
+    expect(JSON.stringify(stored?.encryptedPkceVerifier)).not.toContain(state);
+
+    await expect(service.deny(nativeYahooOtherUserId, state)).rejects.toMatchObject({
+      code: "INVALID_STATE",
+    });
+    expect(
+      await db
+        .select({ consumedAt: oauthStates.consumedAt })
+        .from(oauthStates)
+        .where(eq(oauthStates.stateHash, hashOAuthState(state))),
+    ).toEqual([{ consumedAt: null }]);
+
+    await expect(service.deny(nativeYahooUserId, state)).resolves.toEqual({
+      returnMode: "ios-app",
+      returnTo: "/connections",
+    });
+    await expect(service.deny(nativeYahooUserId, browserState)).resolves.toEqual({
+      returnMode: "browser",
+      returnTo: "/connections?from=settings",
+    });
+    await expect(service.deny(nativeYahooUserId, state)).rejects.toMatchObject({
+      code: "STATE_REPLAYED",
+    });
+    await expect(service.deny(nativeYahooUserId, "malformed-state")).rejects.toMatchObject({
+      code: "INVALID_STATE",
+    });
+
+    currentTime = new Date(NOW.getTime() + 11 * 60 * 1000);
+    await expect(service.deny(nativeYahooUserId, expiringState)).rejects.toMatchObject({
+      code: "STATE_EXPIRED",
+    });
+  });
+
+  it("stores native Yahoo credentials before completion and burns state on every exchange outcome", async () => {
+    const credentialKey = parseCredentialKey(`base64:${Buffer.alloc(32, 8).toString("base64")}`);
+    const successful = new YahooConnectionService({
+      database: db,
+      credentialKey,
+      clientId: "self-host-client",
+      clientSecret: "self-host-secret",
+      redirectUri: "https://self-host.example/v1/connections/yahoo/callback",
+      now: () => NOW,
+      fetch: () =>
+        Promise.resolve(
+          new Response(
+            JSON.stringify({
+              access_token: "SECRET_NATIVE_ACCESS_TOKEN",
+              refresh_token: "SECRET_NATIVE_REFRESH_TOKEN",
+              token_type: "bearer",
+              expires_in: 3600,
+              xoauth_yahoo_guid: "native-yahoo-guid",
+            }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          ),
+        ),
+    });
+    const started = await successful.start(nativeYahooUserId, {
+      returnMode: "ios-app",
+      returnTo: "/connections",
+    });
+    const state = new URL(started.authorizationUrl).searchParams.get("state");
+    if (!state) throw new Error("Expected Yahoo authorization state");
+    const result = await successful.complete(nativeYahooUserId, {
+      code: "SECRET_NATIVE_AUTHORIZATION_CODE",
+      state,
+    });
+    expect(result).toMatchObject({
+      returnMode: "ios-app",
+      returnTo: "/connections",
+    });
+    const [connection] = await db
+      .select()
+      .from(providerConnections)
+      .where(eq(providerConnections.id, result.connectionId));
+    const serializedCredential = JSON.stringify(connection?.encryptedCredential);
+    expect(serializedCredential).not.toContain("SECRET_NATIVE_ACCESS_TOKEN");
+    expect(serializedCredential).not.toContain("SECRET_NATIVE_REFRESH_TOKEN");
+    expect(serializedCredential).not.toContain("SECRET_NATIVE_AUTHORIZATION_CODE");
+    expect(connection).toMatchObject({
+      userId: nativeYahooUserId,
+      externalAccountId: "native-yahoo-guid",
+      health: "healthy",
+    });
+
+    const temporarilyUnavailable = new YahooConnectionService({
+      database: db,
+      credentialKey,
+      clientId: "self-host-client",
+      clientSecret: "self-host-secret",
+      redirectUri: "https://self-host.example/v1/connections/yahoo/callback",
+      now: () => NOW,
+      fetch: () => Promise.reject(new Error("upstream offline")),
+    });
+    const unavailableStart = await temporarilyUnavailable.start(nativeYahooUserId, {
+      returnMode: "ios-app",
+      returnTo: "/connections",
+    });
+    const unavailableState = new URL(unavailableStart.authorizationUrl).searchParams.get("state");
+    if (!unavailableState) throw new Error("Expected unavailable Yahoo state");
+    await expect(
+      temporarilyUnavailable.complete(nativeYahooUserId, {
+        code: "unavailable-authorization-code",
+        state: unavailableState,
+      }),
+    ).rejects.toMatchObject({
+      outcome: "unavailable",
+      completion: { returnMode: "ios-app", returnTo: "/connections" },
+    } satisfies Partial<YahooConnectionCallbackError>);
+    await expect(
+      temporarilyUnavailable.complete(nativeYahooUserId, {
+        code: "unavailable-authorization-code",
+        state: unavailableState,
+      }),
+    ).rejects.toMatchObject({ code: "STATE_REPLAYED" } satisfies Partial<YahooConnectionError>);
+
+    const failed = new YahooConnectionService({
+      database: db,
+      credentialKey,
+      clientId: "self-host-client",
+      clientSecret: "self-host-secret",
+      redirectUri: "https://self-host.example/v1/connections/yahoo/callback",
+      now: () => NOW,
+      fetch: () =>
+        Promise.resolve(
+          new Response(
+            JSON.stringify({
+              access_token: "SECRET_FAILED_ACCESS_TOKEN",
+              refresh_token: "SECRET_FAILED_REFRESH_TOKEN",
+              token_type: "bearer",
+              expires_in: 3600,
+            }),
+            { status: 200 },
+          ),
+        ),
+    });
+    const failedStart = await failed.start(nativeYahooUserId, {
+      returnMode: "ios-app",
+      returnTo: "/connections",
+    });
+    const failedState = new URL(failedStart.authorizationUrl).searchParams.get("state");
+    if (!failedState) throw new Error("Expected failed Yahoo state");
+    await expect(
+      failed.complete(nativeYahooUserId, {
+        code: "failed-authorization-code",
+        state: failedState,
+      }),
+    ).rejects.toMatchObject({
+      outcome: "failed",
+      completion: { returnMode: "ios-app", returnTo: "/connections" },
+    } satisfies Partial<YahooConnectionCallbackError>);
   });
 });

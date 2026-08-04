@@ -487,19 +487,62 @@ export const problemDetailsSchema = z.object({
 });
 export type ProblemDetails = z.infer<typeof problemDetailsSchema>;
 
-export const yahooAuthorizeRequestSchema = z.object({
-  returnTo: z
-    .string()
-    .max(1024)
-    .regex(/^\/(?!\/)[\x20-\x7E]*$/u, "must be an application-relative path")
-    .refine((value) => !value.includes("\\"), "must not contain a backslash")
-    .default("/connections"),
-});
+const yahooBrowserReturnToSchema = z
+  .string()
+  .max(1024)
+  .regex(/^\/(?!\/)[\x20-\x7E]*$/u, "must be an application-relative path")
+  .refine((value) => !value.includes("\\"), "must not contain a backslash");
 
-export const yahooAuthorizeResponseSchema = z.object({
-  authorizationUrl: z.url(),
-  expiresAt: z.iso.datetime(),
-});
+/** Closed completion behavior persisted with a Yahoo OAuth state; never a caller-provided URL. */
+export const yahooReturnModeSchema = z.enum(["browser", "ios-app"]);
+export type YahooReturnMode = z.infer<typeof yahooReturnModeSchema>;
+
+const yahooBrowserAuthorizeRequestSchema = z
+  .object({
+    returnMode: z.literal("browser").optional(),
+    returnTo: yahooBrowserReturnToSchema.default("/connections"),
+  })
+  .strict()
+  .transform((input) => ({ returnMode: "browser" as const, returnTo: input.returnTo }));
+
+const yahooIosAuthorizeRequestSchema = z
+  .object({ returnMode: z.literal("ios-app") })
+  .strict()
+  // The browser fallback stays server-selected even though an iOS completion never uses it.
+  .transform(() => ({ returnMode: "ios-app" as const, returnTo: "/connections" as const }));
+
+/**
+ * Browser callers remain source-compatible with `{ returnTo }` (or an empty body). Native callers
+ * can select only the fixed iOS completion contract and cannot supply any callback or return path.
+ */
+export const yahooAuthorizeRequestSchema = z.union([
+  yahooIosAuthorizeRequestSchema,
+  yahooBrowserAuthorizeRequestSchema,
+]);
+export type YahooAuthorizeRequest = z.infer<typeof yahooAuthorizeRequestSchema>;
+
+export const yahooAuthorizeResponseSchema = z
+  .object({
+    authorizationUrl: z.url(),
+    expiresAt: z.iso.datetime(),
+  })
+  .strict();
+
+export const yahooIosCompletionStatusSchema = z.enum([
+  "connected",
+  "denied",
+  "unavailable",
+  "failed",
+]);
+export type YahooIosCompletionStatus = z.infer<typeof yahooIosCompletionStatusSchema>;
+
+/** Credential-free ASWebAuthenticationSession callbacks owned by the Laces Out iOS application. */
+export const YAHOO_IOS_COMPLETION_URLS = Object.freeze({
+  connected: "lacesout://connections/yahoo?status=connected",
+  denied: "lacesout://connections/yahoo?status=denied",
+  unavailable: "lacesout://connections/yahoo?status=unavailable",
+  failed: "lacesout://connections/yahoo?status=failed",
+} satisfies Readonly<Record<YahooIosCompletionStatus, string>>);
 
 export const espnSyncAgentCapabilitySchema = z.literal("refresh-intents-v1");
 
@@ -3356,6 +3399,7 @@ export const browserHandoffDestinationSchema = z.enum([
   "/app",
   "/analytics",
   "/connections",
+  "/connections/yahoo/connect",
   "/decisions",
   "/draft",
   "/film-room",
@@ -3400,6 +3444,7 @@ export const mobileCapabilitySchema = z.enum([
   "league-dashboard",
   "league-portfolio",
   "weekly-reckoning",
+  "yahoo-native-connect-v1",
 ]);
 export type MobileCapability = z.infer<typeof mobileCapabilitySchema>;
 

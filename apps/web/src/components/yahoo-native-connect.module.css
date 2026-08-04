@@ -1,0 +1,95 @@
+.page {
+  display: grid;
+  min-width: 320px;
+  min-height: 100vh;
+  min-height: 100dvh;
+  place-items: center;
+  padding: 24px;
+  color: #f5f1e8;
+  background: radial-gradient(circle at 50% 15%, rgb(195 232 120 / 12%), transparent 38%), #101511;
+}
+
+.card {
+  display: grid;
+  width: min(100%, 440px);
+  justify-items: center;
+  padding: 34px 30px;
+  text-align: center;
+  background: #19211c;
+  border: 1px solid #425248;
+  border-radius: 18px;
+  box-shadow: 0 24px 70px rgb(0 0 0 / 38%);
+}
+
+.mark {
+  display: grid;
+  width: 48px;
+  height: 48px;
+  margin-bottom: 22px;
+  place-items: center;
+  color: #10150f;
+  background: #d7ff62;
+  border-radius: 14px;
+  font-size: 19px;
+  font-weight: 900;
+}
+
+.eyebrow {
+  margin: 0 0 8px;
+  color: #c5e878;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.card h1 {
+  margin: 0;
+  font-size: clamp(25px, 7vw, 32px);
+  letter-spacing: -0.035em;
+}
+
+.status {
+  display: inline-flex;
+  min-height: 24px;
+  align-items: center;
+  gap: 9px;
+  margin: 20px 0 0;
+  color: #dce4de;
+  line-height: 1.5;
+}
+
+.spinner {
+  flex: 0 0 auto;
+  animation: spin 900ms linear infinite;
+}
+
+.security {
+  display: inline-flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 24px 0 0;
+  padding-top: 18px;
+  color: #9fada4;
+  border-top: 1px solid #344139;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.security svg {
+  flex: 0 0 auto;
+  margin-top: 1px;
+  color: #c5e878;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .spinner {
+    animation: none;
+  }
+}

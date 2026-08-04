@@ -7,6 +7,7 @@ import {
   YAHOO_CAPABILITIES,
   type YahooTokenSet,
 } from "@fantasy/connector-yahoo";
+import type { YahooReturnMode } from "@fantasy/contracts";
 import { oauthStates, providerConnections, type Database } from "@fantasy/db";
 import { decryptCredential, encryptCredential, type CredentialKey } from "@fantasy/security";
 import { and, eq, gt, isNull } from "drizzle-orm";
@@ -25,14 +26,19 @@ export interface StartYahooConnectionResult {
   readonly expiresAt: string;
 }
 
-export interface CompleteYahooConnectionResult {
-  readonly connectionId: string;
+export interface YahooConnectionCompletionTarget {
+  readonly returnMode: YahooReturnMode;
   readonly returnTo: string;
+}
+
+export interface CompleteYahooConnectionResult extends YahooConnectionCompletionTarget {
+  readonly connectionId: string;
 }
 
 export class YahooConnectionError extends Error {
   readonly code:
     | "INVALID_RETURN"
+    | "INVALID_RETURN_MODE"
     | "INVALID_STATE"
     | "STATE_EXPIRED"
     | "STATE_REPLAYED"
@@ -48,10 +54,43 @@ export class YahooConnectionError extends Error {
   }
 }
 
+/**
+ * Raised only after a state was authenticated and atomically consumed. Its completion target is
+ * therefore safe to use for a fixed native callback; state failures never receive this context.
+ */
+export class YahooConnectionCallbackError extends Error {
+  readonly outcome: "unavailable" | "failed";
+  readonly completion: YahooConnectionCompletionTarget;
+
+  constructor(
+    outcome: YahooConnectionCallbackError["outcome"],
+    completion: YahooConnectionCompletionTarget,
+  ) {
+    super(
+      outcome === "unavailable"
+        ? "Yahoo authorization is temporarily unavailable"
+        : "Yahoo authorization could not be completed",
+    );
+    this.name = "YahooConnectionCallbackError";
+    this.outcome = outcome;
+    this.completion = completion;
+  }
+}
+
 function assertReturnTo(returnTo: string): void {
   if (!/^\/(?!\/)[\x20-\x7E]*$/u.test(returnTo) || returnTo.includes("\\")) {
     throw new YahooConnectionError("INVALID_RETURN", "Yahoo return path is invalid");
   }
+}
+
+function assertReturnMode(returnMode: string): asserts returnMode is YahooReturnMode {
+  if (returnMode !== "browser" && returnMode !== "ios-app") {
+    throw new YahooConnectionError("INVALID_RETURN_MODE", "Yahoo return mode is invalid");
+  }
+}
+
+function callbackFailureOutcome(error: unknown): YahooConnectionCallbackError["outcome"] {
+  return error instanceof YahooTokenClientError && error.retryable ? "unavailable" : "failed";
 }
 
 function pkcePurpose(userId: string, stateHash: string): string {
@@ -93,8 +132,12 @@ export class YahooConnectionService {
     });
   }
 
-  async start(userId: string, returnTo: string): Promise<StartYahooConnectionResult> {
-    assertReturnTo(returnTo);
+  async start(
+    userId: string,
+    input: { readonly returnMode: YahooReturnMode; readonly returnTo: string },
+  ): Promise<StartYahooConnectionResult> {
+    assertReturnMode(input.returnMode);
+    assertReturnTo(input.returnTo);
     const request = createYahooAuthorizationRequest({
       clientId: this.#clientId,
       redirectUri: this.#redirectUri,
@@ -110,88 +153,125 @@ export class YahooConnectionService {
       userId,
       provider: "yahoo",
       encryptedPkceVerifier: encryptedPkceVerifier as unknown as Record<string, unknown>,
-      returnTo,
+      returnTo: input.returnTo,
+      returnMode: input.returnMode,
       expiresAt: new Date(request.expiresAt),
     });
     return { authorizationUrl: request.authorizationUrl, expiresAt: request.expiresAt };
+  }
+
+  async #claimState(userId: string, returnedState: string) {
+    let stateHash: string;
+    try {
+      stateHash = hashOAuthState(returnedState);
+    } catch {
+      throw new YahooConnectionError("INVALID_STATE", "Yahoo OAuth state is invalid");
+    }
+    const now = this.#now();
+    return this.#database.transaction(async (transaction) => {
+      const [state] = await transaction
+        .select()
+        .from(oauthStates)
+        .where(
+          and(
+            eq(oauthStates.stateHash, stateHash),
+            eq(oauthStates.userId, userId),
+            eq(oauthStates.provider, "yahoo"),
+          ),
+        )
+        .limit(1)
+        .for("update");
+      if (!state) {
+        throw new YahooConnectionError(
+          "INVALID_STATE",
+          "Yahoo OAuth state is invalid or belongs to another member",
+        );
+      }
+      if (state.consumedAt) {
+        throw new YahooConnectionError("STATE_REPLAYED", "Yahoo OAuth state was already consumed");
+      }
+      if (state.expiresAt.getTime() <= now.getTime()) {
+        throw new YahooConnectionError("STATE_EXPIRED", "Yahoo OAuth state expired");
+      }
+      const verification = verifyOAuthState({
+        returnedState,
+        expectedStateHash: state.stateHash,
+        expiresAt: state.expiresAt.toISOString(),
+        now: () => now,
+      });
+      if (!verification.valid) {
+        throw new YahooConnectionError("INVALID_STATE", "Yahoo OAuth state verification failed");
+      }
+
+      const consumed = await transaction
+        .update(oauthStates)
+        .set({ consumedAt: now })
+        .where(
+          and(
+            eq(oauthStates.stateHash, state.stateHash),
+            eq(oauthStates.userId, userId),
+            eq(oauthStates.provider, "yahoo"),
+            isNull(oauthStates.consumedAt),
+            gt(oauthStates.expiresAt, now),
+          ),
+        )
+        .returning({ stateHash: oauthStates.stateHash });
+      if (consumed.length !== 1) {
+        throw new YahooConnectionError("STATE_REPLAYED", "Yahoo OAuth state was already consumed");
+      }
+      return state;
+    });
+  }
+
+  #completionTarget(state: {
+    readonly returnMode: string;
+    readonly returnTo: string;
+  }): YahooConnectionCompletionTarget {
+    assertReturnMode(state.returnMode);
+    assertReturnTo(state.returnTo);
+    return { returnMode: state.returnMode, returnTo: state.returnTo };
+  }
+
+  /** Consume a provider denial/error exactly once before choosing browser or native completion. */
+  async deny(userId: string, state: string): Promise<YahooConnectionCompletionTarget> {
+    return this.#completionTarget(await this.#claimState(userId, state));
   }
 
   async complete(
     userId: string,
     input: { readonly code: string; readonly state: string },
   ): Promise<CompleteYahooConnectionResult> {
-    let stateHash: string;
+    const state = await this.#claimState(userId, input.state);
+    const completion = this.#completionTarget(state);
     try {
-      stateHash = hashOAuthState(input.state);
-    } catch {
-      throw new YahooConnectionError("INVALID_STATE", "Yahoo OAuth state is invalid");
-    }
-    const now = this.#now();
-    const [state] = await this.#database
-      .select()
-      .from(oauthStates)
-      .where(
-        and(
-          eq(oauthStates.stateHash, stateHash),
-          eq(oauthStates.userId, userId),
-          isNull(oauthStates.consumedAt),
-          gt(oauthStates.expiresAt, now),
-        ),
-      )
-      .limit(1);
-    if (!state) {
-      throw new YahooConnectionError(
-        "STATE_EXPIRED",
-        "Yahoo OAuth state expired, was already used, or belongs to another session",
-      );
-    }
-    const verification = verifyOAuthState({
-      returnedState: input.state,
-      expectedStateHash: state.stateHash,
-      expiresAt: state.expiresAt.toISOString(),
-      now: this.#now,
-    });
-    if (!verification.valid) {
-      throw new YahooConnectionError("INVALID_STATE", "Yahoo OAuth state verification failed");
-    }
-    const pkce = decryptCredential<StoredPkce>(state.encryptedPkceVerifier, this.#key, {
-      expectedPurpose: pkcePurpose(userId, state.stateHash),
-    });
-    const grant = await this.#tokenClient.exchangeAuthorizationCode({
-      code: input.code,
-      codeVerifier: pkce.codeVerifier,
-    });
-    const yahooGuid = grant.tokenSet.yahooGuid;
-    if (!yahooGuid) {
-      throw new YahooConnectionError(
-        "MISSING_ACCOUNT_ID",
-        "Yahoo authorization did not return an account identifier",
-      );
-    }
-    const encryptedCredential = encryptCredential(
-      {
-        credentialVersion: grant.credentialVersion,
-        tokenSet: grant.tokenSet,
-      } satisfies StoredYahooCredential,
-      this.#key,
-      { purpose: tokenPurpose(userId, yahooGuid), now: this.#now },
-    );
-    const capabilities = JSON.parse(JSON.stringify(YAHOO_CAPABILITIES)) as Record<
-      string,
-      string | boolean
-    >;
-
-    const connection = await this.#database.transaction(async (transaction) => {
-      const consumed = await transaction
-        .update(oauthStates)
-        .set({ consumedAt: now })
-        .where(and(eq(oauthStates.stateHash, state.stateHash), isNull(oauthStates.consumedAt)))
-        .returning({ stateHash: oauthStates.stateHash });
-      if (consumed.length !== 1) {
-        throw new YahooConnectionError("STATE_REPLAYED", "Yahoo OAuth state was already consumed");
+      const pkce = decryptCredential<StoredPkce>(state.encryptedPkceVerifier, this.#key, {
+        expectedPurpose: pkcePurpose(userId, state.stateHash),
+      });
+      const grant = await this.#tokenClient.exchangeAuthorizationCode({
+        code: input.code,
+        codeVerifier: pkce.codeVerifier,
+      });
+      const yahooGuid = grant.tokenSet.yahooGuid;
+      if (!yahooGuid) {
+        throw new YahooConnectionError(
+          "MISSING_ACCOUNT_ID",
+          "Yahoo authorization did not return an account identifier",
+        );
       }
-
-      const [stored] = await transaction
+      const encryptedCredential = encryptCredential(
+        {
+          credentialVersion: grant.credentialVersion,
+          tokenSet: grant.tokenSet,
+        } satisfies StoredYahooCredential,
+        this.#key,
+        { purpose: tokenPurpose(userId, yahooGuid), now: this.#now },
+      );
+      const capabilities = JSON.parse(JSON.stringify(YAHOO_CAPABILITIES)) as Record<
+        string,
+        string | boolean
+      >;
+      const now = this.#now();
+      const [connection] = await this.#database
         .insert(providerConnections)
         .values({
           userId,
@@ -224,11 +304,11 @@ export class YahooConnectionService {
           },
         })
         .returning({ id: providerConnections.id });
-      if (!stored) throw new Error("Yahoo connection could not be stored");
-      return stored;
-    });
-
-    return { connectionId: connection.id, returnTo: state.returnTo };
+      if (!connection) throw new Error("Yahoo connection could not be stored");
+      return { connectionId: connection.id, ...completion };
+    } catch (error) {
+      throw new YahooConnectionCallbackError(callbackFailureOutcome(error), completion);
+    }
   }
 
   async refresh(

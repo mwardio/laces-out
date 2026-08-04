@@ -254,6 +254,7 @@ const app = await buildApp({
   ...(registration ? { registration } : {}),
   ...(yahooConnection ? { yahooConnection } : {}),
   ...(yahooSync ? { yahooSync } : {}),
+  yahooNativeConnectLandingAvailable: true,
   requireAuthentication: true,
   readinessCheck: async () => {
     try {

@@ -199,6 +199,24 @@ export function loadEnvironment(
       "Yahoo requires YAHOO_CLIENT_ID, YAHOO_CLIENT_SECRET, and CREDENTIAL_ENCRYPTION_KEY together",
     );
   }
+  if (yahooWasRequested) {
+    const apiUrl = new URL(parsed.data.API_URL);
+    const expectedCallback = new URL("/v1/connections/yahoo/callback", apiUrl);
+    const configuredCallback = new URL(parsed.data.YAHOO_REDIRECT_URI);
+    if (
+      apiUrl.username !== "" ||
+      apiUrl.password !== "" ||
+      configuredCallback.username !== "" ||
+      configuredCallback.password !== "" ||
+      configuredCallback.search !== "" ||
+      configuredCallback.hash !== "" ||
+      configuredCallback.toString() !== expectedCallback.toString()
+    ) {
+      throw new Error(
+        `YAHOO_REDIRECT_URI must be the exact configured API origin callback: ${expectedCallback.toString()}`,
+      );
+    }
+  }
 
   return Object.freeze(parsed.data);
 }

@@ -17,7 +17,11 @@ This application will hold access to real fantasy accounts. Treat it like a smal
 
 ## Controls
 
-- Yahoo uses server-side Authorization Code + PKCE. OAuth state is random, hashed, session-bound, expires quickly, and is consumed once.
+- Yahoo uses server-side Authorization Code + S256 PKCE. OAuth state is random, hashed,
+  member-bound, expires quickly, and is consumed once. Its closed completion mode is stored beside
+  that binding; a provider denial must claim the same state before a native callback is selected.
+  Native completion uses only fixed, credential-free `lacesout://connections/yahoo?status=…`
+  callbacks and never accepts a callback URL from a client.
 - Credential envelopes use AES-256-GCM with a fresh nonce, authenticated context, explicit key version, and no key in the database.
 - Refresh-token rotation is serialized per connection and committed atomically.
 - Browser code receives neither provider client secrets nor refresh tokens.
@@ -82,6 +86,13 @@ This application will hold access to real fantasy accounts. Treat it like a smal
   immediate `history.replaceState` keep the fragment bearer out of HTTP URLs, referrers, and
   browser history. The capability is disabled for split-host API/web deployments because the
   ordinary host-only session cookie would not be portable.
+- The exact `/connections/yahoo/connect` destination begins the existing server-owned Yahoo flow
+  only after the confirmed handoff has created or safely reused the browser member session. Yahoo's
+  HTTPS callback remains on the deployment's configured API origin (including self-hosted origins),
+  while only the final iOS completion uses the fixed custom scheme. Temporary provider or
+  token-endpoint failures return `unavailable`; provider denial returns `denied`; other verified
+  failures return `failed`; and a stored connection remains `connected` even if its first read-only
+  sync fails.
 - The native client accepts only a normalized HTTPS deployment origin in release builds, preflights
   a candidate before adoption, sends that exact origin on mutations, and clears the previous
   origin's cookies when switching. It rejects same-hostname/different-port transitions because the

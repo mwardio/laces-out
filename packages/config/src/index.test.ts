@@ -164,6 +164,33 @@ describe("loadEnvironment", () => {
       "Yahoo requires YAHOO_CLIENT_ID, YAHOO_CLIENT_SECRET, and CREDENTIAL_ENCRYPTION_KEY together",
     );
   });
+
+  it("binds Yahoo's HTTPS callback to the configured deployment origin", () => {
+    const yahoo = {
+      CREDENTIAL_ENCRYPTION_KEY: "base64:MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=",
+      YAHOO_CLIENT_ID: "client-id",
+      YAHOO_CLIENT_SECRET: "client-secret",
+      API_URL: "https://self-host.example",
+      YAHOO_REDIRECT_URI: "https://self-host.example/v1/connections/yahoo/callback",
+    };
+    expect(loadEnvironment(yahoo).YAHOO_REDIRECT_URI).toBe(
+      "https://self-host.example/v1/connections/yahoo/callback",
+    );
+    expect(() =>
+      loadEnvironment({
+        ...yahoo,
+        YAHOO_REDIRECT_URI: "https://lacesout.app/v1/connections/yahoo/callback",
+      }),
+    ).toThrow("exact configured API origin callback");
+    expect(() =>
+      loadEnvironment({
+        ...yahoo,
+        YAHOO_REDIRECT_URI:
+          "https://self-host.example/v1/connections/yahoo/callback?return=lacesout",
+      }),
+    ).toThrow("exact configured API origin callback");
+  });
+
   it("leaves web push unconfigured by default", () => {
     const environment = loadEnvironment({});
     expect(environment.VAPID_PUBLIC_KEY).toBeUndefined();

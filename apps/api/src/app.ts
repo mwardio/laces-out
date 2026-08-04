@@ -33,6 +33,7 @@ import {
   refreshRequestSchema,
   teamClaimRequestSchema,
   teamClaimResponseSchema,
+  YAHOO_IOS_COMPLETION_URLS,
   yahooAuthorizeRequestSchema,
   yahooAuthorizeResponseSchema,
   type EspnBridgeSnapshot,
@@ -43,14 +44,18 @@ import {
   type EspnSupplementalBridgeSnapshot,
   type LeagueDashboard,
   type LeagueListResponse,
+  type MobileCapability,
   type RefreshRequest,
   type TeamClaimResponse,
+  type YahooAuthorizeRequest,
+  type YahooIosCompletionStatus,
+  type YahooReturnMode,
 } from "@fantasy/contracts";
 import {
   EspnSupplementalNormalizationError,
   EspnWebClientNormalizationError,
 } from "@fantasy/connector-espn";
-import Fastify, { type FastifyInstance, type FastifyRequest } from "fastify";
+import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
 import { createHash } from "node:crypto";
 import { z, ZodError } from "zod";
 
@@ -106,18 +111,27 @@ import { browserHandoffOriginsCompatible, type BrowserHandoffPort } from "./brow
 import { type PushPort, registerPushRoutes } from "./push-routes.js";
 import { type SchedulePort, registerScheduleRoutes } from "./schedule-routes.js";
 import { type StatsCenterPort, registerStatsCenterRoutes } from "./stats-center-routes.js";
+import { YahooConnectionCallbackError } from "./yahoo-connection.js";
 import { registerYahooRoutes } from "./yahoo-routes.js";
 import type { YahooSyncPort } from "./yahoo-sync.js";
 
 export interface YahooConnectionPort {
   start(
     userId: string,
-    returnTo: string,
+    input: YahooAuthorizeRequest,
   ): Promise<{ readonly authorizationUrl: string; readonly expiresAt: string }>;
+  deny(
+    userId: string,
+    state: string,
+  ): Promise<{ readonly returnMode: YahooReturnMode; readonly returnTo: string }>;
   complete(
     userId: string,
     input: { readonly code: string; readonly state: string },
-  ): Promise<{ readonly connectionId: string; readonly returnTo: string }>;
+  ): Promise<{
+    readonly connectionId: string;
+    readonly returnMode: YahooReturnMode;
+    readonly returnTo: string;
+  }>;
 }
 
 export interface EspnBridgePort {
@@ -277,6 +291,8 @@ export interface BuildAppOptions {
   readonly statsCenter?: StatsCenterPort;
   readonly yahooConnection?: YahooConnectionPort;
   readonly yahooSync?: YahooSyncPort;
+  /** Set by the composed web/API deployment that includes `/connections/yahoo/connect`. */
+  readonly yahooNativeConnectLandingAvailable?: boolean;
   readonly enqueueRefresh?: (request: {
     readonly requestedBy: string;
     readonly refresh: Extract<RefreshRequest, { scope: "player-data" | "adp-data" }>;
@@ -399,6 +415,52 @@ function applicationRedirect(webUrl: string, returnTo: string): URL {
   return destination;
 }
 
+type YahooCompletionTarget = {
+  readonly returnMode: YahooReturnMode;
+  readonly returnTo: string;
+};
+
+function browserYahooCompletionUrl(
+  webUrl: string,
+  status: "connected" | "denied" | "unavailable" | "error",
+): string {
+  const destination = new URL("/connections", webUrl);
+  destination.searchParams.set("provider", "yahoo");
+  destination.searchParams.set("status", status);
+  return destination.toString();
+}
+
+function yahooNativeProviderErrorStatus(error: string | undefined): YahooIosCompletionStatus {
+  if (error === "access_denied") return "denied";
+  if (error === "server_error" || error === "temporarily_unavailable") return "unavailable";
+  return "failed";
+}
+
+function redirectYahooWithoutReferrer(reply: FastifyReply, destination: string) {
+  void reply.header("referrer-policy", "no-referrer");
+  return reply.redirect(destination);
+}
+
+function yahooCompletionRedirect(
+  reply: FastifyReply,
+  environment: Environment,
+  completion: YahooCompletionTarget,
+  status: YahooIosCompletionStatus,
+  browserParameters: Readonly<Record<string, string>> = {},
+) {
+  if (completion.returnMode === "ios-app") {
+    return redirectYahooWithoutReferrer(reply, YAHOO_IOS_COMPLETION_URLS[status]);
+  }
+  const browserStatus = status === "failed" ? "error" : status;
+  const destination = applicationRedirect(environment.WEB_URL, completion.returnTo);
+  destination.searchParams.set("provider", "yahoo");
+  destination.searchParams.set("status", browserStatus);
+  for (const [name, value] of Object.entries(browserParameters)) {
+    destination.searchParams.set(name, value);
+  }
+  return redirectYahooWithoutReferrer(reply, destination.toString());
+}
+
 function loginAccountRateLimitKey(body: unknown, fallbackIp: string): string {
   const candidate =
     typeof body === "object" && body !== null && "email" in body && typeof body.email === "string"
@@ -422,13 +484,21 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     browserHandoffOriginsCompatible(environment.API_URL, environment.WEB_URL)
       ? options.browserHandoffs
       : undefined;
-  const mobileCapabilities = browserHandoffs
-    ? [...MOBILE_CAPABILITIES, "authenticated-browser-handoff" as const]
-    : MOBILE_CAPABILITIES;
   const requireAuthentication =
     options.requireAuthentication ?? environment.NODE_ENV === "production";
   if (requireAuthentication && !options.authService) {
     throw new Error("Authentication is required but no AuthService was configured");
+  }
+  const mobileCapabilities: MobileCapability[] = [...MOBILE_CAPABILITIES];
+  if (browserHandoffs) mobileCapabilities.push("authenticated-browser-handoff");
+  if (
+    browserHandoffs &&
+    options.authService &&
+    options.yahooConnection &&
+    options.yahooSync &&
+    options.yahooNativeConnectLandingAvailable === true
+  ) {
+    mobileCapabilities.push("yahoo-native-connect-v1");
   }
   const app = Fastify({
     logger:
@@ -1386,7 +1456,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     }
     const input = yahooAuthorizeRequestSchema.parse(request.body ?? {});
     return yahooAuthorizeResponseSchema.parse(
-      await options.yahooConnection.start(request.currentUser.id, input.returnTo),
+      await options.yahooConnection.start(request.currentUser.id, input),
     );
   });
 
@@ -1406,13 +1476,43 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     }
     const query = yahooCallbackSchema.parse(request.query);
     if (!options.yahooConnection) {
-      return reply.redirect(
-        new URL("/connections?provider=yahoo&status=unavailable", environment.WEB_URL).toString(),
+      return redirectYahooWithoutReferrer(
+        reply,
+        browserYahooCompletionUrl(environment.WEB_URL, "unavailable"),
       );
     }
-    if (query.error || !query.code || !query.state) {
-      return reply.redirect(
-        new URL("/connections?provider=yahoo&status=denied", environment.WEB_URL).toString(),
+    if (query.error || !query.code) {
+      if (!query.state) {
+        return redirectYahooWithoutReferrer(
+          reply,
+          browserYahooCompletionUrl(environment.WEB_URL, "denied"),
+        );
+      }
+      try {
+        const completion = await options.yahooConnection.deny(request.currentUser.id, query.state);
+        // Preserve the established browser behavior while giving a verified native flow a bounded,
+        // useful outcome. The provider's arbitrary error text is never copied to either callback.
+        const status =
+          completion.returnMode === "ios-app"
+            ? yahooNativeProviderErrorStatus(query.error)
+            : "denied";
+        return yahooCompletionRedirect(reply, environment, completion, status);
+      } catch (error) {
+        request.log.warn(
+          { errorName: error instanceof Error ? error.name : "UnknownError" },
+          "Yahoo denial callback state was rejected",
+        );
+        // Without authenticated, one-time state there is no trustworthy native completion mode.
+        return redirectYahooWithoutReferrer(
+          reply,
+          browserYahooCompletionUrl(environment.WEB_URL, "denied"),
+        );
+      }
+    }
+    if (!query.state) {
+      return redirectYahooWithoutReferrer(
+        reply,
+        browserYahooCompletionUrl(environment.WEB_URL, "denied"),
       );
     }
     try {
@@ -1420,9 +1520,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
         code: query.code,
         state: query.state,
       });
-      const destination = applicationRedirect(environment.WEB_URL, result.returnTo);
-      destination.searchParams.set("provider", "yahoo");
-      destination.searchParams.set("status", "connected");
+      let sync: "complete" | "failed" | undefined;
       if (options.yahooSync) {
         try {
           const discovery = await options.yahooSync.discoverAndSync(
@@ -1446,20 +1544,37 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
             }
           }
           await emitYahooCallbackChangeEvents(options, discovery.syncs, request);
-          destination.searchParams.set("sync", "complete");
+          sync = "complete";
         } catch (error) {
           request.log.warn(
             { err: error, connectionId: result.connectionId },
             "Yahoo authorization succeeded but initial read sync failed",
           );
-          destination.searchParams.set("sync", "failed");
+          sync = "failed";
         }
       }
-      return reply.redirect(destination.toString());
+      return yahooCompletionRedirect(
+        reply,
+        environment,
+        result,
+        "connected",
+        sync ? { sync } : undefined,
+      );
     } catch (error) {
-      request.log.warn({ err: error }, "Yahoo authorization callback failed");
-      return reply.redirect(
-        new URL("/connections?provider=yahoo&status=error", environment.WEB_URL).toString(),
+      if (error instanceof YahooConnectionCallbackError) {
+        request.log.warn(
+          { callbackOutcome: error.outcome },
+          "Yahoo authorization callback did not complete",
+        );
+        return yahooCompletionRedirect(reply, environment, error.completion, error.outcome);
+      }
+      request.log.warn(
+        { errorName: error instanceof Error ? error.name : "UnknownError" },
+        "Yahoo authorization callback state was rejected",
+      );
+      return redirectYahooWithoutReferrer(
+        reply,
+        browserYahooCompletionUrl(environment.WEB_URL, "error"),
       );
     }
   });

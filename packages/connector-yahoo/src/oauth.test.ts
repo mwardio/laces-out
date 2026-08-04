@@ -50,5 +50,27 @@ describe("Yahoo authorization request", () => {
         now: () => new Date("2026-07-16T12:11:00.000Z"),
       }),
     ).toEqual({ valid: false, reason: "expired" });
+    expect(
+      verifyOAuthState({
+        returnedState: undefined,
+        expectedStateHash: request.stateHash,
+        expiresAt: request.expiresAt,
+      }),
+    ).toEqual({ valid: false, reason: "missing" });
+    expect(
+      verifyOAuthState({
+        returnedState: "malformed-state",
+        expectedStateHash: request.stateHash,
+        expiresAt: request.expiresAt,
+      }),
+    ).toEqual({ valid: false, reason: "mismatch" });
+    expect(
+      verifyOAuthState({
+        returnedState: "A".repeat(43),
+        expectedStateHash: request.stateHash,
+        expiresAt: request.expiresAt,
+        now: () => new Date("2026-07-16T12:05:00.000Z"),
+      }),
+    ).toEqual({ valid: false, reason: "mismatch" });
   });
 });

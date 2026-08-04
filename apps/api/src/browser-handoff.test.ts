@@ -4,7 +4,7 @@ import { loadEnvironment } from "@fantasy/config";
 import { healthResponseSchema } from "@fantasy/contracts";
 import { describe, expect, it, vi } from "vitest";
 
-import { buildApp } from "./app.js";
+import { buildApp, type BuildAppOptions, type YahooConnectionPort } from "./app.js";
 import { AuthService, sessionCookieName, type AuthRepository } from "./auth.js";
 import {
   browserHandoffConfirmPath,
@@ -20,6 +20,7 @@ import {
   type BrowserHandoffPort,
   type BrowserHandoffStore,
 } from "./browser-handoff.js";
+import type { YahooSyncPort } from "./yahoo-sync.js";
 
 const userId = "10000000-0000-4000-8000-0000000000b1";
 const nativeSessionToken = "n".repeat(43);
@@ -76,6 +77,23 @@ function handoffPort(overrides: Partial<BrowserHandoffPort> = {}): BrowserHandof
   };
 }
 
+function yahooConnectionPort(): YahooConnectionPort {
+  return {
+    start: () => Promise.reject(new Error("not used")),
+    deny: () => Promise.reject(new Error("not used")),
+    complete: () => Promise.reject(new Error("not used")),
+  };
+}
+
+function yahooSyncPort(): YahooSyncPort {
+  return {
+    listConnections: () => Promise.resolve([]),
+    disconnectConnection: () => Promise.resolve(),
+    discoverAndSync: () => Promise.reject(new Error("not used")),
+    syncLeague: () => Promise.reject(new Error("not used")),
+  };
+}
+
 describe("BrowserHandoffService", () => {
   it("allows different ports but rejects a split hostname or scheme", () => {
     expect(
@@ -101,7 +119,11 @@ describe("BrowserHandoffService", () => {
     );
     const confirm = vi.fn<BrowserHandoffStore["confirm"]>(() => Promise.resolve(true));
     const consume = vi.fn<BrowserHandoffStore["consume"]>(() =>
-      Promise.resolve({ outcome: "session-created", userId, destination: "/stats" }),
+      Promise.resolve({
+        outcome: "session-created",
+        userId,
+        destination: "/connections/yahoo/connect",
+      }),
     );
     const generated = [creationToken, redemptionToken, browserSessionToken];
     const service = new BrowserHandoffService(
@@ -111,7 +133,7 @@ describe("BrowserHandoffService", () => {
       () => generated.shift() ?? "X".repeat(43),
     );
 
-    const created = await service.create(userId, nativeSessionToken, "/stats");
+    const created = await service.create(userId, nativeSessionToken, "/connections/yahoo/connect");
     const url = new URL(created?.handoffUrl ?? "https://invalid.example");
     expect(url.origin).toBe("https://self-host.example");
     expect(url.pathname).toBe(browserHandoffLandingPath);
@@ -122,7 +144,7 @@ describe("BrowserHandoffService", () => {
         userId,
         sourceSessionTokenHash: digest(nativeSessionToken),
         tokenHash: digest(creationToken),
-        destination: "/stats",
+        destination: "/connections/yahoo/connect",
       }),
     );
     expect(JSON.stringify(create.mock.calls)).not.toContain(nativeSessionToken);
@@ -149,7 +171,7 @@ describe("BrowserHandoffService", () => {
     await expect(service.consume(redemptionToken, nativeSessionToken)).resolves.toEqual({
       outcome: "session-created",
       userId,
-      destination: "/stats",
+      destination: "/connections/yahoo/connect",
       session: {
         token: browserSessionToken,
         expiresAt: new Date("2031-08-30T12:00:00.000Z"),
@@ -228,13 +250,19 @@ describe("browser handoff routes", () => {
         })
       ).statusCode,
     ).toBe(401);
-    const invalid = await app.inject({
-      method: "POST",
-      url: "/v1/auth/browser-handoffs",
-      headers: { cookie: `${sessionCookieName}=${nativeSessionToken}` },
-      payload: { destination: "https://attacker.example/steal" },
-    });
-    expect(invalid.statusCode).toBe(400);
+    for (const destination of [
+      "https://attacker.example/steal",
+      "/connections/yahoo/connect?next=https://attacker.example",
+      "/connections/yahoo/connect/extra",
+    ]) {
+      const invalid = await app.inject({
+        method: "POST",
+        url: "/v1/auth/browser-handoffs",
+        headers: { cookie: `${sessionCookieName}=${nativeSessionToken}` },
+        payload: { destination },
+      });
+      expect(invalid.statusCode).toBe(400);
+    }
     expect(create).not.toHaveBeenCalled();
 
     const result = await app.inject({
@@ -249,6 +277,19 @@ describe("browser handoff routes", () => {
       expiresAt: "2031-07-31T12:02:00.000Z",
     });
     expect(create).toHaveBeenCalledWith(userId, nativeSessionToken, "/stats");
+
+    const yahoo = await app.inject({
+      method: "POST",
+      url: "/v1/auth/browser-handoffs",
+      headers: { cookie: `${sessionCookieName}=${nativeSessionToken}` },
+      payload: { destination: "/connections/yahoo/connect" },
+    });
+    expect(yahoo.statusCode).toBe(200);
+    expect(create).toHaveBeenLastCalledWith(
+      userId,
+      nativeSessionToken,
+      "/connections/yahoo/connect",
+    );
     await app.close();
   });
 
@@ -496,6 +537,9 @@ describe("browser handoff routes", () => {
     expect(healthResponseSchema.parse(health.json()).mobileCapabilities).not.toContain(
       "authenticated-browser-handoff",
     );
+    expect(healthResponseSchema.parse(health.json()).mobileCapabilities).not.toContain(
+      "yahoo-native-connect-v1",
+    );
     const response = await app.inject({
       method: "POST",
       url: "/v1/auth/browser-handoffs",
@@ -508,5 +552,41 @@ describe("browser handoff routes", () => {
     expect(response.statusCode).toBe(503);
     expect(create).not.toHaveBeenCalled();
     await app.close();
+  });
+
+  it("advertises Yahoo native connect only when the complete deployment flow is available", async () => {
+    const complete: BuildAppOptions = {
+      environment: loadEnvironment({ NODE_ENV: "test" }),
+      logger: false,
+      authService: new AuthService(authRepository()),
+      browserHandoffs: handoffPort(),
+      yahooConnection: yahooConnectionPort(),
+      yahooSync: yahooSyncPort(),
+      yahooNativeConnectLandingAvailable: true,
+    };
+    const configured = await buildApp(complete);
+    const configuredHealth = healthResponseSchema.parse(
+      (await configured.inject({ method: "GET", url: "/health/ready" })).json(),
+    );
+    expect(configuredHealth.mobileCapabilities).toContain("authenticated-browser-handoff");
+    expect(configuredHealth.mobileCapabilities).toContain("yahoo-native-connect-v1");
+    await configured.close();
+
+    for (const missing of [
+      "authService",
+      "browserHandoffs",
+      "yahooConnection",
+      "yahooSync",
+      "yahooNativeConnectLandingAvailable",
+    ] as const) {
+      const unavailable = { ...complete };
+      delete unavailable[missing];
+      const app = await buildApp(unavailable);
+      const health = healthResponseSchema.parse(
+        (await app.inject({ method: "GET", url: "/health/ready" })).json(),
+      );
+      expect(health.mobileCapabilities, missing).not.toContain("yahoo-native-connect-v1");
+      await app.close();
+    }
   });
 });

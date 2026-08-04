@@ -196,7 +196,7 @@ export const browserHandoffTokens = pgTable(
     check("browser_handoff_tokens_hash_check", sql`${table.tokenHash} ~ '^[A-Za-z0-9_-]{43}$'`),
     check(
       "browser_handoff_tokens_destination_check",
-      sql`${table.destination} in ('/app', '/analytics', '/connections', '/decisions', '/draft', '/film-room', '/rankings', '/projections', '/schedule', '/settings', '/stats', '/admin/members')`,
+      sql`${table.destination} in ('/app', '/analytics', '/connections', '/connections/yahoo/connect', '/decisions', '/draft', '/film-room', '/rankings', '/projections', '/schedule', '/settings', '/stats', '/admin/members')`,
     ),
     check(
       "browser_handoff_tokens_lifetime_check",
@@ -277,11 +277,15 @@ export const oauthStates = pgTable(
       .$type<Record<string, unknown>>()
       .notNull(),
     returnTo: text("return_to").notNull(),
+    returnMode: text("return_mode").$type<"browser" | "ios-app">().notNull().default("browser"),
     expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
     consumedAt: timestamp("consumed_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
-  (table) => [index("oauth_states_user_expires_idx").on(table.userId, table.expiresAt)],
+  (table) => [
+    index("oauth_states_user_expires_idx").on(table.userId, table.expiresAt),
+    check("oauth_states_return_mode_check", sql`${table.returnMode} in ('browser', 'ios-app')`),
+  ],
 );
 
 export const leagues = pgTable(

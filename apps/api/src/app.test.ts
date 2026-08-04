@@ -958,13 +958,14 @@ describe("API", () => {
       requireAuthentication: true,
       authService: authenticatedService(),
       yahooConnection: {
-        start: (userId, returnTo) => {
-          calls.push({ userId, returnTo });
+        start: (userId, input) => {
+          calls.push({ userId, ...input });
           return Promise.resolve({
             authorizationUrl: "https://api.login.yahoo.com/oauth2/request_auth?state=safe",
             expiresAt: "2026-07-16T22:00:00.000Z",
           });
         },
+        deny: () => Promise.reject(new Error("not used")),
         complete: () => Promise.reject(new Error("not used")),
       },
     });
@@ -980,6 +981,7 @@ describe("API", () => {
     expect(calls).toEqual([
       {
         userId: "00000000-0000-4000-8000-000000000001",
+        returnMode: "browser",
         returnTo: "/connections?from=settings",
       },
     ]);
@@ -994,6 +996,7 @@ describe("API", () => {
       authService: authenticatedService(),
       yahooConnection: {
         start: () => Promise.reject(new Error("must not run")),
+        deny: () => Promise.reject(new Error("must not run")),
         complete: () => Promise.reject(new Error("must not run")),
       },
     });
@@ -1016,7 +1019,13 @@ describe("API", () => {
       authService: authenticatedService(),
       yahooConnection: {
         start: () => Promise.reject(new Error("not used")),
-        complete: () => Promise.resolve({ connectionId: "connection-1", returnTo: "/connections" }),
+        deny: () => Promise.reject(new Error("not used")),
+        complete: () =>
+          Promise.resolve({
+            connectionId: "connection-1",
+            returnMode: "browser",
+            returnTo: "/connections",
+          }),
       },
     });
 

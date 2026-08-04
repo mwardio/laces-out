@@ -145,13 +145,14 @@ try {
     where table_schema = 'public'
       and table_name in (
         'bridge_devices', 'browser_handoff_tokens', 'provider_connections',
-        'recommendation_runs', 'refresh_requests'
+        'recommendation_runs', 'refresh_requests', 'oauth_states'
       )
   `;
   const columnNames = new Set(columnRows.map((row) => `${row.table_name}.${row.column_name}`));
   for (const column of [
     "browser_handoff_tokens.source_session_id",
     "browser_handoff_tokens.confirmed_at",
+    "oauth_states.return_mode",
     "bridge_devices.client_kind",
     "bridge_devices.agent_capable",
     "provider_connections.consecutive_failures",
@@ -226,6 +227,26 @@ try {
   const friendId = requiredString(friend?.id, "friend id");
   const outsiderId = requiredString(outsider?.id, "outsider id");
 
+  await sql`
+    insert into oauth_states (
+      state_hash, user_id, provider, encrypted_pkce_verifier, return_to, return_mode, expires_at
+    ) values (
+      ${`native-state-${suffix}`}, ${ownerId}, 'yahoo', '{}'::jsonb,
+      '/connections', 'ios-app', now() + interval '10 minutes'
+    )
+  `;
+  await expectDatabaseRejection(
+    "arbitrary Yahoo return mode",
+    () => sql`
+    insert into oauth_states (
+      state_hash, user_id, provider, encrypted_pkce_verifier, return_to, return_mode, expires_at
+    ) values (
+      ${`invalid-state-${suffix}`}, ${ownerId}, 'yahoo', '{}'::jsonb,
+      '/connections', 'caller-url', now() + interval '10 minutes'
+    )
+  `,
+  );
+
   const [handoffSourceSession] = await sql`
     insert into sessions (user_id, token_hash, expires_at)
     values (${ownerId}, ${`source-${suffix}`}, now() + interval '30 days')
@@ -235,11 +256,22 @@ try {
     handoffSourceSession?.id,
     "browser handoff source session id",
   );
+  await expectDatabaseRejection(
+    "arbitrary browser handoff destination",
+    () => sql`
+    insert into browser_handoff_tokens (
+      user_id, source_session_id, token_hash, destination, expires_at
+    ) values (
+      ${ownerId}, ${handoffSourceSessionId}, ${"X".repeat(43)},
+      '/connections/yahoo/connect?next=https://attacker.example', now() + interval '1 minute'
+    )
+  `,
+  );
   await sql`
     insert into browser_handoff_tokens (
       user_id, source_session_id, token_hash, destination, expires_at, staged_at, confirmed_at
     ) values (
-      ${ownerId}, ${handoffSourceSessionId}, ${"H".repeat(43)}, '/settings',
+      ${ownerId}, ${handoffSourceSessionId}, ${"H".repeat(43)}, '/connections/yahoo/connect',
       now() + interval '1 minute', now(), now()
     )
   `;
