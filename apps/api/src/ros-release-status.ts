@@ -101,7 +101,7 @@ export interface RosLeaguePositionReadiness {
 
 export interface RosLeagueReadiness {
   readonly leagueSeasonId: string | null;
-  /** The league's own name, so the UI can say "Daragely" rather than a truncated UUID. */
+  /** The league's own name, so the UI can say "Garagely" rather than a truncated UUID. */
   readonly leagueName: string | null;
   readonly state: "ready" | "withheld";
   readonly reasons: readonly RosWithholdingReason[];
