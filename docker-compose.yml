@@ -11,6 +11,7 @@ x-app-environment: &app-environment
   YAHOO_CLIENT_ID: ${YAHOO_CLIENT_ID:-}
   YAHOO_CLIENT_SECRET: ${YAHOO_CLIENT_SECRET:-}
   YAHOO_REDIRECT_URI: ${PUBLIC_URL:-http://localhost:3000}/v1/connections/yahoo/callback
+  YAHOO_AUTOMATED_SYNC_ENABLED: ${YAHOO_AUTOMATED_SYNC_ENABLED:-false}
   ESPN_LIVE_DRAFT_SYNC: ${ESPN_LIVE_DRAFT_SYNC:-false}
   ESPN_PUBLIC_DIRECT_SYNC_ENABLED: ${ESPN_PUBLIC_DIRECT_SYNC_ENABLED:-false}
   # Web push identity. Blank on all three is the supported default: the API reports game day alerts

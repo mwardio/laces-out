@@ -77,6 +77,35 @@ describe("shared queue dispatch contract", () => {
     );
   });
 
+  it("deduplicates automated Yahoo fallbacks per league even when selection changes connection", async () => {
+    const { boss, send } = sendHarness();
+
+    await enqueueLeagueSync(boss, {
+      mode: "connection",
+      connectionId: "connection-primary",
+      leagueSeasonId: "league-1",
+      reason: "provider-sweep",
+    });
+    await enqueueLeagueSync(boss, {
+      mode: "connection",
+      connectionId: "connection-fallback",
+      leagueSeasonId: "league-1",
+      reason: "provider-sweep",
+    });
+
+    for (const call of send.mock.calls) {
+      expect(call).toEqual([
+        queueNames.syncLeague,
+        expect.any(Object),
+        expect.objectContaining({
+          group: { id: "league-season:league-1" },
+          singletonKey: "league-sync:provider-sweep:league-1",
+          singletonSeconds: 60,
+        }),
+      ]);
+    }
+  });
+
   it("coalesces provider sweeps and rejects malformed timestamps before enqueue", async () => {
     const { boss, send } = sendHarness();
 

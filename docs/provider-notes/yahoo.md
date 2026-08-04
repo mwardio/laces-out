@@ -144,6 +144,16 @@ release gates are recorded. This is an engineering release condition, not legal 
   protected by a PostgreSQL row lock spanning the exchange and a credential-version CAS update.
 - Multiple friends may authorize the same league. A many-to-many provenance link preserves each
   account's access and current-user team key while the normalized league snapshot is shared.
+- `YAHOO_AUTOMATED_SYNC_ENABLED` independently gates unattended refresh. The five-minute provider
+  sweep selects only active, non-archived seasons with an exact healthy provider link and live
+  league membership. It prefers the season's linked healthy connection, then deterministically
+  chooses a linked healthy member fallback without crossing account or user boundaries.
+- Active current-season leagues become due after 30 minutes; preseason/offseason leagues after six
+  hours. A stable sub-five-minute jitter spreads provider traffic. Completed, past, archived, and
+  unknown season states never run, and there is intentionally no 15-minute live/near-lock cadence.
+- Automated jobs use the same serialized `league-sync` queue, token-rotation lock, circuit breaker,
+  parser, and atomic persistence as manual refresh. Disabling automation does not disable OAuth or
+  either manual Yahoo refresh endpoint.
 - Yahoo team claims are provider-mapped, not self-asserted. The claim endpoint checks the
   authenticated user's own connection-to-league link and accepts only its exact, unambiguous
   current-user team key. It cannot use another member's connection or claim a different team.

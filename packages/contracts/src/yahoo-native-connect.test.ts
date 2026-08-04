@@ -74,6 +74,8 @@ describe("native Yahoo connection contracts", () => {
 
   it("adds Yahoo native connect to the closed mobile capability vocabulary", () => {
     expect(mobileCapabilitySchema.parse("yahoo-native-connect-v1")).toBe("yahoo-native-connect-v1");
+    expect(mobileCapabilitySchema.parse("yahoo-automated-sync")).toBe("yahoo-automated-sync");
     expect(mobileCapabilitySchema.safeParse("yahoo-native-connect-v2").success).toBe(false);
+    expect(mobileCapabilitySchema.safeParse("yahoo-automated-sync-v2").success).toBe(false);
   });
 });

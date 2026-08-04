@@ -434,9 +434,14 @@ describe("dispatch contracts and schedules", () => {
 
     await registerSchedules(boss, 2026);
 
-    expect(unschedule).toHaveBeenNthCalledWith(1, queueNames.dataHealth);
     expect(unschedule).toHaveBeenNthCalledWith(
-      2,
+      1,
+      queueNames.providerSyncSweep,
+      "espn-provider-sync-sweep",
+    );
+    expect(unschedule).toHaveBeenNthCalledWith(2, queueNames.dataHealth);
+    expect(unschedule).toHaveBeenNthCalledWith(
+      3,
       queueNames.dataRefresh,
       "daily-nflverse-player-catalog",
     );
@@ -448,7 +453,7 @@ describe("dispatch contracts and schedules", () => {
       { requestedAt: "scheduled" },
       expect.objectContaining({
         tz: "UTC",
-        key: "espn-provider-sync-sweep",
+        key: "provider-sync-sweep",
         group: { id: "provider-sync-sweep" },
         singletonKey: "provider-sync-sweep",
       }),
@@ -534,6 +539,30 @@ describe("dispatch contracts and schedules", () => {
         singletonKey: "projection-refresh:2026:season",
       }),
     );
+  });
+
+  it("idempotently removes the legacy ESPN sweep key and keeps one provider-neutral key", async () => {
+    const { boss, schedule, unschedule } = bossHarness();
+
+    await registerSchedules(boss, 2026);
+    await registerSchedules(boss, 2026);
+
+    expect(unschedule).toHaveBeenCalledTimes(6);
+    expect(unschedule).toHaveBeenNthCalledWith(
+      1,
+      queueNames.providerSyncSweep,
+      "espn-provider-sync-sweep",
+    );
+    expect(unschedule).toHaveBeenNthCalledWith(
+      4,
+      queueNames.providerSyncSweep,
+      "espn-provider-sync-sweep",
+    );
+    const providerSchedules = (
+      schedule.mock.calls as unknown as [string, string, unknown, { key?: string }][]
+    ).filter(([queue]) => queue === queueNames.providerSyncSweep);
+    expect(providerSchedules).toHaveLength(2);
+    expect(providerSchedules.every((call) => call[3]?.key === "provider-sync-sweep")).toBe(true);
   });
 
   it("deduplicates startup recovery by UTC date", async () => {

@@ -614,6 +614,41 @@ not prerequisites the current runbook silently assumes are already installed.
 
 ## Provider release gates
 
+### Yahoo unattended league refresh
+
+Yahoo automation is a separate, fail-closed operator choice. `YAHOO_AUTOMATED_SYNC_ENABLED=false`
+is the default and leaves Yahoo OAuth, discovery, manual league refresh, and ESPN behavior intact.
+Enabling it requires `YAHOO_CLIENT_ID`, `YAHOO_CLIENT_SECRET`, `CREDENTIAL_ENCRYPTION_KEY`, and the
+deployment's exact `YAHOO_REDIRECT_URI`; incomplete configuration prevents the process from
+starting instead of advertising a promise it cannot perform.
+
+The provider-neutral `provider-sync-sweep` wakes every five minutes. Yahoo targets are due every
+30 minutes for an active current-season league and every six hours for preseason/offseason, plus a
+stable sub-five-minute per-season jitter. Completed, past-season, archived, unknown-status,
+unhealthy, reauthorization-required, and open-circuit targets are excluded. Selection is authorized
+by the exact `provider_league_links` row and live league membership; a shared league may use a
+deterministically selected healthy member fallback, but an unlinked account or non-member never
+qualifies. There is no 15-minute live/near-lock cadence in this release.
+
+Safe rollout and rollback:
+
+1. Deploy API and worker code with the flag false. No database migration is required. On schedule
+   registration the API idempotently removes the legacy `espn-provider-sync-sweep` key and writes
+   the provider-neutral key, preventing duplicate cron rows after an upgrade.
+2. Confirm manual Yahoo sync and ESPN refresh still behave normally, and `/health/ready` does not
+   include `yahoo-automated-sync`.
+3. Set `YAHOO_AUTOMATED_SYNC_ENABLED=true` for both API and worker (the bundled compose passes the
+   same value to both), restart them through the normal process, and confirm `/health/ready` now
+   includes `yahoo-automated-sync`.
+4. Canary at low approved-account volume. The `provider sync sweep completed` log contains only
+   expired/considered/enqueued counts split by provider. `Yahoo league sync operational event`
+   reports internal connection/season IDs, closed error codes, cooldown/Retry-After durations,
+   throttling state, and accepted/unchanged counts—never tokens, authorization codes, cookies,
+   headers, or provider bodies. Inspect `league-sync-dead-letter` and
+   `provider-sync-sweep-dead-letter` for exhausted work.
+5. To stop unattended Yahoo traffic, set the flag false and restart API and worker. Manual Yahoo
+   refresh and ESPN schedules remain available; no connection deletion or data rollback is needed.
+
 ### ESPN automated refresh
 
 Migration `0034_espn_automated_sync.sql` adds client kind/agent capability to bridge devices,

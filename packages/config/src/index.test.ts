@@ -14,6 +14,7 @@ describe("loadEnvironment", () => {
     expect(environment.MANAGED_AI_MAX_OUTPUT_TOKENS).toBe(2000);
     expect(environment.REGISTRATION_INVITE_CODE).toBeUndefined();
     expect(environment.ESPN_PUBLIC_DIRECT_SYNC_ENABLED).toBe(false);
+    expect(environment.YAHOO_AUTOMATED_SYNC_ENABLED).toBe(false);
   });
 
   it("parses the ESPN public-direct release gate without enabling it by default", () => {
@@ -152,6 +153,23 @@ describe("loadEnvironment", () => {
         CREDENTIAL_ENCRYPTION_KEY: "base64:MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=",
       }).YAHOO_CLIENT_ID,
     ).toBeUndefined();
+  });
+
+  it("keeps Yahoo automation separate, fail-closed, and fully configured", () => {
+    expect(
+      loadEnvironment({ YAHOO_AUTOMATED_SYNC_ENABLED: "0" }).YAHOO_AUTOMATED_SYNC_ENABLED,
+    ).toBe(false);
+    expect(() => loadEnvironment({ YAHOO_AUTOMATED_SYNC_ENABLED: "true" })).toThrow(
+      "YAHOO_AUTOMATED_SYNC_ENABLED requires complete Yahoo server configuration",
+    );
+
+    const environment = loadEnvironment({
+      YAHOO_AUTOMATED_SYNC_ENABLED: "true",
+      YAHOO_CLIENT_ID: "client-id",
+      YAHOO_CLIENT_SECRET: "client-secret",
+      CREDENTIAL_ENCRYPTION_KEY: "base64:MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=",
+    });
+    expect(environment.YAHOO_AUTOMATED_SYNC_ENABLED).toBe(true);
   });
 
   it("rejects a partially configured Yahoo connection", () => {

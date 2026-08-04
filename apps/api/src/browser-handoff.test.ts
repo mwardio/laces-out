@@ -589,4 +589,53 @@ describe("browser handoff routes", () => {
       await app.close();
     }
   });
+
+  it("advertises Yahoo automation only when its flag, services, worker, and schedule are available", async () => {
+    const enabledEnvironment = loadEnvironment({
+      NODE_ENV: "test",
+      YAHOO_AUTOMATED_SYNC_ENABLED: "true",
+      YAHOO_CLIENT_ID: "client-id",
+      YAHOO_CLIENT_SECRET: "client-secret",
+      CREDENTIAL_ENCRYPTION_KEY: "base64:MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=",
+    });
+    const complete: BuildAppOptions = {
+      environment: enabledEnvironment,
+      logger: false,
+      yahooConnection: yahooConnectionPort(),
+      yahooSync: yahooSyncPort(),
+      yahooAutomatedSyncAvailable: true,
+    };
+    const configured = await buildApp(complete);
+    const configuredCapabilities = healthResponseSchema.parse(
+      (await configured.inject({ method: "GET", url: "/health/ready" })).json(),
+    ).mobileCapabilities;
+    expect(configuredCapabilities).toContain("yahoo-automated-sync");
+    expect(configuredCapabilities).not.toContain("yahoo-native-connect-v1");
+    await configured.close();
+
+    for (const missing of [
+      "yahooConnection",
+      "yahooSync",
+      "yahooAutomatedSyncAvailable",
+    ] as const) {
+      const unavailable = { ...complete };
+      delete unavailable[missing];
+      const app = await buildApp(unavailable);
+      const capabilities = healthResponseSchema.parse(
+        (await app.inject({ method: "GET", url: "/health/ready" })).json(),
+      ).mobileCapabilities;
+      expect(capabilities, missing).not.toContain("yahoo-automated-sync");
+      await app.close();
+    }
+
+    const disabled = await buildApp({
+      ...complete,
+      environment: loadEnvironment({ NODE_ENV: "test" }),
+    });
+    const disabledCapabilities = healthResponseSchema.parse(
+      (await disabled.inject({ method: "GET", url: "/health/ready" })).json(),
+    ).mobileCapabilities;
+    expect(disabledCapabilities).not.toContain("yahoo-automated-sync");
+    await disabled.close();
+  });
 });

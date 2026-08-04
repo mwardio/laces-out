@@ -293,6 +293,11 @@ export interface BuildAppOptions {
   readonly yahooSync?: YahooSyncPort;
   /** Set by the composed web/API deployment that includes `/connections/yahoo/connect`. */
   readonly yahooNativeConnectLandingAvailable?: boolean;
+  /**
+   * Set only after the provider-neutral recurring schedule and Yahoo-capable worker path have been
+   * composed. The environment flag is checked independently so a test fake cannot advertise it.
+   */
+  readonly yahooAutomatedSyncAvailable?: boolean;
   readonly enqueueRefresh?: (request: {
     readonly requestedBy: string;
     readonly refresh: Extract<RefreshRequest, { scope: "player-data" | "adp-data" }>;
@@ -499,6 +504,14 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     options.yahooNativeConnectLandingAvailable === true
   ) {
     mobileCapabilities.push("yahoo-native-connect-v1");
+  }
+  if (
+    environment.YAHOO_AUTOMATED_SYNC_ENABLED &&
+    options.yahooConnection &&
+    options.yahooSync &&
+    options.yahooAutomatedSyncAvailable === true
+  ) {
+    mobileCapabilities.push("yahoo-automated-sync");
   }
   const app = Fastify({
     logger:

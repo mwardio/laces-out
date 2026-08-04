@@ -179,6 +179,51 @@ const leagueSyncService = new LeagueSyncService({
   circuit: new DrizzleConnectionCircuitStore(database.db),
   espnDirect: espnDirectSync,
   ...(yahooSync ? { yahooSync } : {}),
+  afterYahooCommit: async (receipt) => {
+    await emitProviderSyncChangeEvents(
+      providerSyncChangeEvents,
+      {
+        provider: "yahoo",
+        state: receipt.state,
+        leagueId: receipt.leagueId,
+        leagueSeasonId: receipt.leagueSeasonId,
+        actorUserId: null,
+        artifactId: receipt.syncRunId,
+        occurredAt: new Date(receipt.syncedAt),
+      },
+      () =>
+        logger.warn(
+          { leagueSeasonId: receipt.leagueSeasonId },
+          "Yahoo sync committed but change-event emission failed",
+        ),
+    );
+    try {
+      await enqueueRecommendationRecompute(boss, {
+        leagueSeasonId: receipt.leagueSeasonId,
+        kinds: ["lineup", "waiver", "trade"],
+      });
+    } catch {
+      logger.warn(
+        { leagueSeasonId: receipt.leagueSeasonId },
+        "Yahoo sync committed but recommendation enqueue failed",
+      );
+    }
+    try {
+      await enqueueProjectionRefresh(boss, {
+        season: receipt.season,
+        reason: "on-demand",
+      });
+    } catch {
+      logger.warn({ season: receipt.season }, "Yahoo sync committed but projection enqueue failed");
+    }
+  },
+  observe: (event) => {
+    if (event.event === "sync-failed" || event.event === "after-commit-failed") {
+      logger.warn(event, "Yahoo league sync operational event");
+    } else {
+      logger.info(event, "Yahoo league sync operational event");
+    }
+  },
 });
 const recommendationRecomputeService = createRecommendationRecomputeService({
   database: database.db,
@@ -207,9 +252,17 @@ const boss = new PgBoss({
   schedule: false,
 });
 const providerSyncSweepService = new ProviderSyncSweepService({
-  enabled: environment.ESPN_PUBLIC_DIRECT_SYNC_ENABLED,
+  espnEnabled: environment.ESPN_PUBLIC_DIRECT_SYNC_ENABLED,
+  yahooEnabled: environment.YAHOO_AUTOMATED_SYNC_ENABLED && yahooSync !== undefined,
   targets: new DrizzleProviderSyncSweepTargetReader(database.db),
   enqueue: (job) => enqueueLeagueSync(boss, job),
+  observe: (event) => {
+    if (event.event === "enqueue-failed") {
+      logger.warn(event, "provider sync sweep operational event");
+    } else {
+      logger.info(event, "provider sync sweep operational event");
+    }
+  },
 });
 
 boss.on("error", (error) => logger.error({ err: error }, "job queue error"));

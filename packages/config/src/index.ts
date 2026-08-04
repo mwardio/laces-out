@@ -48,6 +48,11 @@ const environmentSchema = z.object({
   YAHOO_CLIENT_SECRET: z.preprocess(blankToUndefined, z.string().min(1).optional()),
   YAHOO_REDIRECT_URI: z.url().default("http://localhost:4000/v1/connections/yahoo/callback"),
   /**
+   * Dedicated unattended-read kill switch. Manual Yahoo authorization and refresh remain available
+   * when this is false; true is rejected unless the server-held Yahoo credential path is complete.
+   */
+  YAHOO_AUTOMATED_SYNC_ENABLED: booleanFlag,
+  /**
    * Master switch for ESPN live draft ingest. Defaults off: the capability must not turn itself on
    * anywhere it has not been validated, and flipping this to false is the emergency kill switch —
    * it stops new provider mutation while accepted events and manual backup keep working.
@@ -198,6 +203,14 @@ export function loadEnvironment(
     throw new Error(
       "Yahoo requires YAHOO_CLIENT_ID, YAHOO_CLIENT_SECRET, and CREDENTIAL_ENCRYPTION_KEY together",
     );
+  }
+  if (
+    parsed.data.YAHOO_AUTOMATED_SYNC_ENABLED &&
+    (!parsed.data.YAHOO_CLIENT_ID ||
+      !parsed.data.YAHOO_CLIENT_SECRET ||
+      !parsed.data.CREDENTIAL_ENCRYPTION_KEY)
+  ) {
+    throw new Error("YAHOO_AUTOMATED_SYNC_ENABLED requires complete Yahoo server configuration");
   }
   if (yahooWasRequested) {
     const apiUrl = new URL(parsed.data.API_URL);

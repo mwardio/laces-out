@@ -255,6 +255,8 @@ const app = await buildApp({
   ...(yahooConnection ? { yahooConnection } : {}),
   ...(yahooSync ? { yahooSync } : {}),
   yahooNativeConnectLandingAvailable: true,
+  // Queue and schedule registration completed above; the worker uses this same fail-closed flag.
+  yahooAutomatedSyncAvailable: environment.YAHOO_AUTOMATED_SYNC_ENABLED && yahooSync !== undefined,
   requireAuthentication: true,
   readinessCheck: async () => {
     try {

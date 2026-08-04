@@ -146,6 +146,7 @@ settings are in [.env.example](./.env.example).
 | `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY`  | Game-day push alerts                                  |
 | `YAHOO_CLIENT_ID` / `YAHOO_CLIENT_SECRET` | Yahoo OAuth when enabled                              |
 | `NEXT_PUBLIC_YAHOO_ACCESS_STATUS`         | Set to `available` when Yahoo OAuth is ready          |
+| `YAHOO_AUTOMATED_SYNC_ENABLED`            | Unattended Yahoo reads; defaults `false`              |
 | `ESPN_PUBLIC_DIRECT_SYNC_ENABLED`         | Evidence-gated anonymous ESPN reads; defaults `false` |
 
 If you're using a reverse proxy (Caddy, Traefik, etc.), keep the included gateway on an unprivileged

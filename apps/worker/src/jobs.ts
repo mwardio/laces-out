@@ -65,6 +65,9 @@ export interface ProviderSyncSweepResult {
   readonly expired: number;
   readonly considered: number;
   readonly enqueued: number;
+  readonly byProvider: Readonly<
+    Record<"espn" | "yahoo", { readonly considered: number; readonly enqueued: number }>
+  >;
 }
 
 export interface ProviderSyncSweepService {

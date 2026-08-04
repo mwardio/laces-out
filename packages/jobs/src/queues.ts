@@ -221,7 +221,9 @@ export function enqueueLeagueSync(boss: PgBoss, job: LeagueSyncJob): Promise<str
   const singletonKey =
     job.mode === "server-direct"
       ? `league-sync:server-direct:${job.leagueSeasonId}`
-      : `league-sync:${job.connectionId ?? "missing"}:${job.leagueSeasonId}`;
+      : job.reason === "provider-sweep"
+        ? `league-sync:provider-sweep:${job.leagueSeasonId}`
+        : `league-sync:${job.connectionId ?? "missing"}:${job.leagueSeasonId}`;
   return boss.send(
     queueNames.syncLeague,
     job,
@@ -400,6 +402,7 @@ export async function registerSchedules(boss: PgBoss, projectionSeason?: number)
   // Older deployments registered these schedules before keyed schedules were introduced. pg-boss
   // treats a different key as a separate schedule, so leaving either row behind runs the same work
   // twice forever. Unscheduling a missing row is safe and keeps upgrades idempotent.
+  await boss.unschedule(queueNames.providerSyncSweep, "espn-provider-sync-sweep");
   await boss.unschedule(queueNames.dataHealth);
   await boss.unschedule(queueNames.dataRefresh, "daily-nflverse-player-catalog");
   await boss.schedule(
@@ -408,7 +411,7 @@ export async function registerSchedules(boss: PgBoss, projectionSeason?: number)
     { requestedAt: "scheduled" } satisfies ProviderSyncSweepJob,
     {
       tz: "UTC",
-      key: "espn-provider-sync-sweep",
+      key: "provider-sync-sweep",
       group: { id: "provider-sync-sweep" },
       singletonKey: "provider-sync-sweep",
     },

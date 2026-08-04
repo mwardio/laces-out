@@ -3444,6 +3444,7 @@ export const mobileCapabilitySchema = z.enum([
   "league-dashboard",
   "league-portfolio",
   "weekly-reckoning",
+  "yahoo-automated-sync",
   "yahoo-native-connect-v1",
 ]);
 export type MobileCapability = z.infer<typeof mobileCapabilitySchema>;

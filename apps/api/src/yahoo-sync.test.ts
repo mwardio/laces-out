@@ -5,6 +5,7 @@ import type { LeagueSyncBundle } from "@fantasy/connectors";
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  YahooConnectionError,
   YahooSyncError,
   YahooSyncService,
   type YahooAccessTokenPort,
@@ -263,8 +264,9 @@ describe("YahooSyncService", () => {
 
   it("records a bounded connection health error when provider discovery fails", async () => {
     const markFailure = vi.fn(() => Promise.resolve());
+    const persistBundle = vi.fn<YahooSyncRepository["persistBundle"]>();
     const service = new YahooSyncService({
-      repository: repository({ markFailure }),
+      repository: repository({ markFailure, persistBundle }),
       tokens: tokens(),
       client: readPort({
         getUserLeagues: () =>
@@ -274,6 +276,7 @@ describe("YahooSyncService", () => {
               message: "rate limited",
               status: 429,
               retryable: true,
+              retryAfterMs: 7_000,
             }),
           ),
       }),
@@ -282,8 +285,120 @@ describe("YahooSyncService", () => {
 
     await expect(service.discoverAndSync(USER_ID, CONNECTION_ID)).rejects.toMatchObject({
       code: "PROVIDER_READ_FAILED",
+      retryable: true,
+      retryAfterMs: 7_000,
+      throttled: true,
     });
     expect(markFailure).toHaveBeenCalledWith(USER_ID, CONNECTION_ID, "read_rate_limited", NOW);
+    expect(persistBundle).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      category: "network",
+      client: () =>
+        readPort({
+          getLeagueTeams: () =>
+            Promise.reject(
+              new YahooReadClientError({
+                code: "NETWORK",
+                message: "Yahoo request failed before a response",
+                retryable: true,
+              }),
+            ),
+        }),
+    },
+    {
+      category: "schema",
+      client: () =>
+        readPort({
+          getLeagueTeams: () => Promise.resolve(artifact("<fantasy_content><broken>")),
+        }),
+    },
+    {
+      category: "partial-artifact",
+      client: () =>
+        readPort({
+          getLeagueMatchups: () =>
+            Promise.reject(
+              new YahooReadClientError({
+                code: "UPSTREAM_ERROR",
+                message: "One required artifact was unavailable",
+                status: 503,
+                retryable: true,
+              }),
+            ),
+        }),
+    },
+  ])("preserves last-good state on $category failure", async ({ client }) => {
+    const persistBundle = vi.fn<YahooSyncRepository["persistBundle"]>();
+    const markFailure = vi.fn(() => Promise.resolve());
+    const service = new YahooSyncService({
+      repository: repository({ persistBundle, markFailure }),
+      tokens: tokens(),
+      client: client(),
+      now: () => NOW,
+    });
+
+    await expect(service.syncLeague(USER_ID, CONNECTION_ID, "449.l.12345")).rejects.toMatchObject({
+      code: "PROVIDER_READ_FAILED",
+    });
+    expect(persistBundle).not.toHaveBeenCalled();
+    expect(markFailure).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves last-good state when the connection requires reauthorization", async () => {
+    const persistBundle = vi.fn<YahooSyncRepository["persistBundle"]>();
+    const markFailure = vi.fn(() => Promise.resolve());
+    const baseClient = readPort();
+    const getLeagueSettings = vi.fn((...input: Parameters<YahooReadPort["getLeagueSettings"]>) =>
+      baseClient.getLeagueSettings(...input),
+    );
+    const service = new YahooSyncService({
+      repository: repository({ persistBundle, markFailure }),
+      tokens: tokens({
+        getAccessToken: () =>
+          Promise.reject(
+            new YahooConnectionError(
+              "REAUTHORIZATION_REQUIRED",
+              "Yahoo connection requires reauthorization",
+            ),
+          ),
+      }),
+      client: readPort({ getLeagueSettings }),
+      now: () => NOW,
+    });
+
+    await expect(service.syncLeague(USER_ID, CONNECTION_ID, "449.l.12345")).rejects.toMatchObject({
+      code: "PROVIDER_READ_FAILED",
+    });
+    expect(persistBundle).not.toHaveBeenCalled();
+    expect(getLeagueSettings).not.toHaveBeenCalled();
+    expect(markFailure).toHaveBeenCalledWith(
+      USER_ID,
+      CONNECTION_ID,
+      "reauthorization_required",
+      NOW,
+    );
+  });
+
+  it("reports an atomic persistence failure without a success receipt", async () => {
+    const markFailure = vi.fn(() => Promise.resolve());
+    const persistBundle = vi.fn<YahooSyncRepository["persistBundle"]>(() =>
+      Promise.reject(new Error("transaction rolled back")),
+    );
+    const service = new YahooSyncService({
+      repository: repository({ persistBundle, markFailure }),
+      tokens: tokens(),
+      client: readPort(),
+      now: () => NOW,
+    });
+
+    await expect(service.syncLeague(USER_ID, CONNECTION_ID, "449.l.12345")).rejects.toMatchObject({
+      code: "PERSISTENCE_FAILED",
+    });
+    expect(persistBundle).toHaveBeenCalledTimes(1);
+    expect(markFailure).toHaveBeenCalledWith(USER_ID, CONNECTION_ID, "persistence_failed", NOW);
   });
 
   it("keeps an explicit on-demand sync scoped to the authenticated connection", async () => {

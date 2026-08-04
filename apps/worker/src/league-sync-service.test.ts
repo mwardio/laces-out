@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
+import { YahooSyncError, type YahooSyncReceipt } from "@fantasy/league-sync";
+
 import type { LeagueSyncJob } from "./jobs.js";
 import { LeagueSyncService, type LeagueSyncTarget } from "./league-sync-service.js";
 
@@ -56,8 +58,21 @@ function circuitStore() {
   };
 }
 
+function yahooReceipt(state: "accepted" | "unchanged" = "accepted"): YahooSyncReceipt {
+  return {
+    syncRunId: "run-accepted",
+    leagueId: "league-1",
+    leagueSeasonId: "league-season-1",
+    externalLeagueKey: "nfl.l.12345",
+    season: 2026,
+    state,
+    recordsWritten: state === "accepted" ? 42 : 0,
+    syncedAt: now.toISOString(),
+  };
+}
+
 describe("LeagueSyncService", () => {
-  it("refreshes a Yahoo league through the shared sync service", async () => {
+  it("refreshes a manual Yahoo league through the shared service without an automation flag", async () => {
     const syncLeague = vi.fn(() =>
       Promise.resolve({ syncRunId: "run-1", state: "accepted" as const, recordsWritten: 42 }),
     );
@@ -74,6 +89,59 @@ describe("LeagueSyncService", () => {
     expect(syncLeague).toHaveBeenCalledWith("user-1", "connection-1", "nfl.l.12345");
     expect(outcome).toEqual({ state: "synced", recordsWritten: 42, syncRunId: "run-1" });
     expect(circuit.recordSuccess).toHaveBeenCalledWith("connection-1", now);
+  });
+
+  it("runs post-commit work only for accepted Yahoo artifacts", async () => {
+    const afterYahooCommit = vi.fn(() => Promise.resolve());
+    const observe = vi.fn();
+    const accepted = new LeagueSyncService({
+      targets: reader(),
+      yahooSync: { syncLeague: () => Promise.resolve(yahooReceipt("accepted")) } as never,
+      circuit: circuitStore(),
+      afterYahooCommit,
+      observe,
+      now: () => now,
+    });
+
+    await expect(accepted.runLeagueSync(job(), context())).resolves.toMatchObject({
+      state: "synced",
+    });
+    expect(afterYahooCommit).toHaveBeenCalledWith(yahooReceipt("accepted"));
+    expect(observe).toHaveBeenCalledWith(
+      expect.objectContaining({ event: "sync-completed", state: "accepted" }),
+    );
+
+    afterYahooCommit.mockClear();
+    const unchanged = new LeagueSyncService({
+      targets: reader(),
+      yahooSync: { syncLeague: () => Promise.resolve(yahooReceipt("unchanged")) } as never,
+      circuit: circuitStore(),
+      afterYahooCommit,
+      now: () => now,
+    });
+    await expect(unchanged.runLeagueSync(job(), context())).resolves.toMatchObject({
+      state: "unchanged",
+    });
+    expect(afterYahooCommit).not.toHaveBeenCalled();
+  });
+
+  it("does not retry a committed artifact when a follow-up fails", async () => {
+    const observe = vi.fn();
+    const service = new LeagueSyncService({
+      targets: reader(),
+      yahooSync: { syncLeague: () => Promise.resolve(yahooReceipt("accepted")) } as never,
+      circuit: circuitStore(),
+      afterYahooCommit: () => Promise.reject(new Error("queue unavailable")),
+      observe,
+      now: () => now,
+    });
+
+    await expect(service.runLeagueSync(job(), context())).resolves.toMatchObject({
+      state: "synced",
+    });
+    expect(observe).toHaveBeenCalledWith(
+      expect.objectContaining({ event: "after-commit-failed", leagueSeasonId: "league-season-1" }),
+    );
   });
 
   it("reports an unchanged provider payload without writing a second run", async () => {
@@ -167,6 +235,7 @@ describe("LeagueSyncService", () => {
 
   it("short-circuits an open connection circuit instead of consuming a retry", async () => {
     const syncLeague = vi.fn(() => Promise.reject(new Error("must not be called")));
+    const observe = vi.fn();
     const service = new LeagueSyncService({
       targets: reader({
         consecutiveFailures: 5,
@@ -174,6 +243,7 @@ describe("LeagueSyncService", () => {
       }),
       yahooSync: { syncLeague } as never,
       circuit: circuitStore(),
+      observe,
       now: () => now,
     });
 
@@ -181,6 +251,13 @@ describe("LeagueSyncService", () => {
 
     expect(outcome).toEqual({ state: "circuit-open", retryAfterSeconds: 90 });
     expect(syncLeague).not.toHaveBeenCalled();
+    expect(observe).toHaveBeenCalledWith({
+      event: "circuit-cooldown",
+      provider: "yahoo",
+      connectionId: "connection-1",
+      leagueSeasonId: "league-season-1",
+      retryAfterSeconds: 90,
+    });
   });
 
   it("resumes once the cooldown elapses without any manual intervention", async () => {
@@ -216,6 +293,42 @@ describe("LeagueSyncService", () => {
     expect(circuit.recordFailure).toHaveBeenCalledWith(
       expect.objectContaining({ connectionId: "connection-1", at: now }),
     );
+  });
+
+  it("reports sanitized Yahoo throttling and Retry-After metadata while preserving retries", async () => {
+    const failure = new YahooSyncError(
+      "PROVIDER_READ_FAILED",
+      "Yahoo did not return a valid, complete league response",
+      { retryable: true, retryAfterMs: 7_001, throttled: true },
+    );
+    const observe = vi.fn();
+    const afterYahooCommit = vi.fn(() => Promise.resolve());
+    const service = new LeagueSyncService({
+      targets: reader(),
+      yahooSync: { syncLeague: () => Promise.reject(failure) } as never,
+      circuit: circuitStore(),
+      afterYahooCommit,
+      observe,
+      now: () => now,
+    });
+
+    await expect(service.runLeagueSync(job({ reason: "provider-sweep" }), context())).rejects.toBe(
+      failure,
+    );
+    expect(afterYahooCommit).not.toHaveBeenCalled();
+    expect(observe).toHaveBeenCalledWith({
+      event: "sync-failed",
+      provider: "yahoo",
+      connectionId: "connection-1",
+      leagueSeasonId: "league-season-1",
+      errorCode: "PROVIDER_READ_FAILED",
+      throttled: true,
+      retryAfterSeconds: 8,
+      circuitState: "closed",
+      consecutiveFailures: 1,
+    });
+    expect(JSON.stringify(observe.mock.calls)).not.toContain("authorization");
+    expect(JSON.stringify(observe.mock.calls)).not.toContain("access_token");
   });
 
   it("treats an expired credential as terminal rather than retryable", async () => {

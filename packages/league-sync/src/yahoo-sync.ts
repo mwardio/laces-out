@@ -85,11 +85,26 @@ export class YahooSyncError extends Error {
     | "PROVIDER_READ_FAILED"
     | "PERSISTENCE_FAILED";
   readonly statusCode: number;
+  /** Closed, sanitized retry metadata retained for worker scheduling/telemetry only. */
+  readonly retryable: boolean;
+  readonly retryAfterMs: number | null;
+  readonly throttled: boolean;
 
-  constructor(code: YahooSyncError["code"], message: string) {
+  constructor(
+    code: YahooSyncError["code"],
+    message: string,
+    options: {
+      readonly retryable?: boolean;
+      readonly retryAfterMs?: number | null;
+      readonly throttled?: boolean;
+    } = {},
+  ) {
     super(message);
     this.name = "YahooSyncError";
     this.code = code;
+    this.retryable = options.retryable ?? false;
+    this.retryAfterMs = options.retryAfterMs ?? null;
+    this.throttled = options.throttled ?? false;
     this.statusCode =
       code === "CONNECTION_NOT_FOUND"
         ? 404
@@ -198,6 +213,17 @@ function failureCode(error: unknown): string {
 
 function clientFacingSyncError(error: unknown): YahooSyncError {
   if (error instanceof YahooSyncError) return error;
+  if (error instanceof YahooReadClientError) {
+    return new YahooSyncError(
+      "PROVIDER_READ_FAILED",
+      "Yahoo did not return a valid, complete league response",
+      {
+        retryable: error.retryable,
+        retryAfterMs: error.retryAfterMs,
+        throttled: error.code === "RATE_LIMITED",
+      },
+    );
+  }
   return new YahooSyncError(
     "PROVIDER_READ_FAILED",
     "Yahoo did not return a valid, complete league response",
