@@ -662,6 +662,29 @@ export class DrizzleEspnSyncPersistence {
         }
       }
 
+      const grantBridgeMembership = async (
+        leagueId: string,
+        createdLeague: boolean,
+      ): Promise<void> => {
+        if (authority.mode !== "bridge") return;
+        const membershipGrant = espnRefreshPolicy({
+          createdLeague,
+          actorIsAnchoredOwner,
+          existingMembershipRole: actorExistingMembershipRole,
+        }).membershipGrant;
+        if (membershipGrant === null) return;
+        await transaction
+          .insert(leagueMemberships)
+          .values({
+            leagueId,
+            userId: authority.actorUserId,
+            role: membershipGrant,
+          })
+          .onConflictDoNothing({
+            target: [leagueMemberships.leagueId, leagueMemberships.userId],
+          });
+      };
+
       const [latestCore] = existingSeason
         ? await transaction
             .select({
@@ -734,6 +757,10 @@ export class DrizzleEspnSyncPersistence {
           .set({ lastSyncedAt: effectiveAt, updatedAt: now })
           .where(eq(leagueSeasons.id, season.id));
         if (authority.mode === "bridge") {
+          // An unchanged provider artifact is still proof of league access. Grant membership before
+          // linking the device so the database ownership trigger can enforce the same ordering used
+          // by a newly persisted snapshot.
+          await grantBridgeMembership(season.leagueId, false);
           await transaction
             .update(bridgeDeviceLeagues)
             .set({ leagueId: season.leagueId, season: bundle.league.season })
@@ -834,23 +861,7 @@ export class DrizzleEspnSyncPersistence {
       }
 
       if (authority.mode === "bridge") {
-        const membershipGrant = espnRefreshPolicy({
-          createdLeague,
-          actorIsAnchoredOwner,
-          existingMembershipRole: actorExistingMembershipRole,
-        }).membershipGrant;
-        if (membershipGrant !== null) {
-          await transaction
-            .insert(leagueMemberships)
-            .values({
-              leagueId,
-              userId: authority.actorUserId,
-              role: membershipGrant,
-            })
-            .onConflictDoNothing({
-              target: [leagueMemberships.leagueId, leagueMemberships.userId],
-            });
-        }
+        await grantBridgeMembership(leagueId, createdLeague);
         await transaction
           .update(bridgeDeviceLeagues)
           .set({ leagueId, season: bundle.league.season })

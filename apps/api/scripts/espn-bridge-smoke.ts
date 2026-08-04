@@ -227,8 +227,12 @@ try {
 
     assert.equal(replayReceipt.state, "unchanged", "replayed snapshot must be idempotent");
     assert.equal(replayReceipt.receiptId, firstReceipt.receiptId);
-    assert.equal(memberReceipt.state, "accepted");
-    assert.notEqual(memberReceipt.receiptId, firstReceipt.receiptId);
+    assert.equal(
+      memberReceipt.state,
+      "unchanged",
+      "the same canonical provider artifact must not create duplicate league data",
+    );
+    assert.equal(memberReceipt.receiptId, firstReceipt.receiptId);
     assert.equal(
       connectedMembership?.role,
       "manager",
@@ -297,7 +301,7 @@ try {
     assert.deepEqual(devices.devices[0]?.allowedLeagues, [
       {
         externalLeagueId: snapshot.leagueId,
-        season: null,
+        season: snapshot.season,
         leagueId: season.leagueId,
         leagueName: "Moonshot Friends League",
       },
