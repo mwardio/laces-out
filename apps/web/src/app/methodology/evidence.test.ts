@@ -68,15 +68,15 @@ describe("methodology evidence manifest", () => {
   it("is versioned", () => {
     // v2 widened the rest-of-season block from one scoring profile to three. v3 replaced all three
     // with the eight-player re-validation of 2026-07-28, which superseded them by recency. v4 added
-    // the two league-shaped catalog profiles. v5 replaces their reconstructed v8 evidence with the
-    // native-lineage, D/ST-complete v9 replays admitted 2026-08-04.
-    expect(METHODOLOGY_EVIDENCE_MANIFEST_VERSION).toBe("methodology-evidence-v5");
+    // the two league-shaped catalog profiles. v5 replaced their reconstructed v8 evidence with the
+    // native-lineage, D/ST-complete v9 replays. v6 pins the publication-complete v10 replacements.
+    expect(METHODOLOGY_EVIDENCE_MANIFEST_VERSION).toBe("methodology-evidence-v6");
   });
 
   // These values come from the three reports/ros-validation-v8-*-n8-2026-07-28.json artifacts, the
-  // two native-lineage v9 catalog artifacts, and the engine's own constants. Pinning them means a
-  // change to page copy cannot silently invent a new figure, and a model change forces this test to
-  // be revisited alongside the published claim.
+  // two publication-complete v10 catalog artifacts, and the engine's own constants. Pinning them
+  // means page copy cannot silently invent a new figure, and a model change forces this test to be
+  // revisited alongside the published claim.
   it("pins the held-out seasons of the official rest-of-season replay", () => {
     expect(rosHeldOutSeasons).toEqual([2022, 2023, 2024, 2025]);
     expect(rosHeldOutSeasons).toHaveLength(4);
@@ -219,8 +219,8 @@ describe("rest-of-season scoring profiles", () => {
       ["full-ppr", "739b8306e3f3212542d2f778575bfe741b79e8660bc27357d86064f1554996a1"],
       ["half-ppr", "f419d48b31458a9f1cdf747930bda60e55cc370dad9dd8a72392e1bef5ded358"],
       ["standard", "2ab659edb7b376f2f29583b88846a7dcde6b22ea8db934a1aed1eefde5c4f4d6"],
-      ["espn-standard-2pt", "e870faab6d4e8c387f4b91e92bc77b6ce7e5cf0141a1c05aae7b39a2672e3adf"],
-      ["espn-standard-2pt-nxm", "e3f5fb77c01ce377140be137de400b6f4a824ec8d741de8a2321c62450017165"],
+      ["espn-standard-2pt", "27c655c47dd4837cb304e66b768241afde57e0e631f0ac0548c5d2a5a259bbe1"],
+      ["espn-standard-2pt-nxm", "76b8e52803eb11bf0c1687252dd65bc57035979153ee603f00f31d2806481c3f"],
     ]);
     expect(
       rosScoringProfiles.map((profile) => [profile.key, profile.scoringProfileDigest] as const),
@@ -330,7 +330,7 @@ describe("rest-of-season scoring profiles", () => {
     expect(rosWithheldCellFigures.length).toBeGreaterThan(0);
     for (const figure of rosWithheldCellFigures) {
       expect(figure.source).toMatch(
-        /ros-validation-v(?:8(?:\/v9)?|9)[a-z0-9-]* \.|FIRST_PARTY_ROS_/u,
+        /ros-validation-v(?:8(?:\/v10)?|10)[a-z0-9-]* \.|FIRST_PARTY_ROS_/u,
       );
       expect(figure.value.length).toBeGreaterThan(0);
     }
@@ -470,7 +470,7 @@ describe("published claims stay honest about release state", () => {
 
   it("discloses the replays that did not clear their gates", () => {
     const failed = rosGateHistory.filter((row) => row.outcome === "fail");
-    expect(failed).toHaveLength(5);
+    expect(failed).toHaveLength(6);
     // A receipt that lists only the passing run is not a receipt. The current replay is itself a
     // failing row, so it must appear here and not only in the profile table.
     expect(failed.map((row) => row.run)).toEqual([
@@ -479,6 +479,7 @@ describe("published claims stay honest about release state", () => {
       "v8, narrower sample — 2026-07-28 (Half PPR, Standard)",
       "v8, current sample — 2026-07-28 (all three profiles)",
       "v9, D/ST-complete catalog profiles — 2026-08-04 (Standard + 2-pt, with and without the XP-missed penalty)",
+      "v10, publication-complete catalog profiles — 2026-08-04 (Standard + 2-pt, with and without the XP-missed penalty)",
     ]);
     for (const row of failed) {
       expect(row.blockers.length).toBeGreaterThan(0);
@@ -491,14 +492,15 @@ describe("published claims stay honest about release state", () => {
     expect(passed[0]?.run).toContain("narrower sample");
     expect(passed[0]?.blockers).toContain("Superseded");
     const current = rosGateHistory[rosGateHistory.length - 1];
-    expect(current?.run).toContain("D/ST-complete catalog profiles");
+    expect(current?.run).toContain("publication-complete catalog profiles");
     expect(current?.state).toBe("insufficient");
     expect(current?.outcome).toBe("fail");
     expect(current?.blockers).toContain("Team-defense interval coverage");
-    // The superseded clean catalog run stays on the record directly before the current v9 row.
+    // The publication-incomplete v9 replay stays on the record directly before the current v10 row.
     const priorRun = rosGateHistory[rosGateHistory.length - 2];
-    expect(priorRun?.run).toContain("v8, catalog profiles");
-    expect(priorRun?.state).toBe("evidence-ready");
+    expect(priorRun?.run).toContain("v9, D/ST-complete catalog profiles");
+    expect(priorRun?.state).toBe("insufficient");
+    expect(priorRun?.blockers).toContain("exact executable policy");
   });
 
   it("no longer claims the live publication gate still point-compares", () => {
@@ -798,7 +800,7 @@ describe("no proof number is hardcoded into page copy", () => {
       expect(figure.source.length).toBeGreaterThan(0);
       // Each source must name a real artifact pointer or an exported engine constant.
       expect(figure.source).toMatch(
-        /ros-validation-v(?:8(?:\/v9)?|9)[a-z0-9-]* \.|FIRST_PARTY_ROS_/u,
+        /ros-validation-v(?:8(?:\/v10)?|10)[a-z0-9-]* \.|FIRST_PARTY_ROS_/u,
       );
     }
   });

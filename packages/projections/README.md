@@ -246,10 +246,11 @@ The current rest-of-season reference uses model `laces-ros-distribution-v7`. Eve
 grades 3,264 forecasts across 68 season/cutoff batches, converges all 144 release/reference
 diagnostics, and completes all 18 evidence cells. The generic Full PPR, Half PPR, and Standard
 artifacts have clean gate-only re-evaluations admitted under the current availability rule. The two
-ESPN-shaped v9 artifacts include complete D/ST scoring and native source lineage; each withholds only
-the D/ST 5–8 week cell after 0 of 4 walk-forward blocks covered. All other cells remain
-independently releasable. The kicker path uses a calibrated integer count process, and every scoring
-profile is validated independently rather than inheriting another profile's result.
+ESPN-shaped v10 artifacts include complete D/ST scoring, native source lineage, and the exact
+executable publication policy; each withholds only the D/ST 5–8 week cell after 0 of 4 walk-forward
+blocks covered. All other cells remain independently releasable. The kicker path uses a calibrated
+integer count process, and every scoring profile is validated independently rather than inheriting
+another profile's result.
 
 These historical seasons are development evidence. The final untouched confirmation remains the
 pre-registered [2026 protocol](../../docs/ros-v6-2026-untouched-protocol.md), which cannot execute
