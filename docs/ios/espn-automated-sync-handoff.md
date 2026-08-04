@@ -1,6 +1,7 @@
 # iOS ESPN automated sync handoff
 
-Status: backend contract complete; iOS implementation pending
+Status: backend contract complete; native implementation maintained in a separate repository;
+cross-client integration verification pending
 Contract date: 2026-08-03
 Mobile API version: 1
 
