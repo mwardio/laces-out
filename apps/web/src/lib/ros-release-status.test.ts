@@ -201,8 +201,34 @@ describe("describeRosRelease", () => {
       },
     });
 
-    expect(description.supportedProfileSummary).toBe("Covers Full PPR");
+    expect(description.supportedProfileSummary).toBe("Covers Full PPR scoring");
     expect(description.unsupportedProfileSummary).toBe("Does not cover Standard (non-PPR)");
+  });
+
+  it("collapses validated scoring variants into three readable families", () => {
+    const description = describeRosRelease({
+      ...admittedStatus,
+      scoringProfiles: {
+        supported: [
+          profile,
+          { ...profile, profileId: "half-ppr", label: "Half PPR" },
+          { ...profile, profileId: "standard", label: "Standard (non-PPR)" },
+          {
+            ...profile,
+            profileId: "espn-standard-2pt",
+            label: "Standard + 2-pt, split kicker brackets, XP-missed penalty",
+          },
+          {
+            ...profile,
+            profileId: "espn-standard-2pt-nxm",
+            label: "Standard + 2-pt, split kicker brackets, no XP-missed penalty",
+          },
+        ],
+        unsupported: [],
+      },
+    });
+
+    expect(description.supportedProfileSummary).toBe("Covers Half/Full PPR and Standard scoring");
   });
 
   it("reports no validated model without implying the rail is broken", () => {

@@ -528,10 +528,24 @@ export function describeRosRelease(status: RosReleaseStatus): RosReleaseDescript
       ? `Ready for ${artifact.scoringProfile.label} scoring`
       : "Not ready for this season yet";
 
+  const coversFullPpr = supported.some((profile) => profile.label === "Full PPR");
+  const coversHalfPpr = supported.some((profile) => profile.label === "Half PPR");
+  const supportedScoringFamilies = [
+    coversFullPpr && coversHalfPpr
+      ? "Half/Full PPR"
+      : coversFullPpr
+        ? "Full PPR"
+        : coversHalfPpr
+          ? "Half PPR"
+          : null,
+    supported.some((profile) => profile.label.startsWith("Standard")) ? "Standard" : null,
+  ].filter((family): family is string => family !== null);
   const supportedProfileSummary =
-    supported.length === 0
+    supportedScoringFamilies.length === 0
       ? "No scoring formats ready yet"
-      : `Covers ${supported.map((profile) => profile.label).join(", ")}`;
+      : `Covers ${new Intl.ListFormat("en", { style: "long", type: "conjunction" }).format(
+          supportedScoringFamilies,
+        )} scoring`;
 
   const unsupportedProfileSummary =
     status.scoringProfiles.unsupported.length === 0

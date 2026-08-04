@@ -637,7 +637,7 @@ describe("first-party ROS re-gate equivalence against the stored validation repo
       },
     );
 
-    it.skipIf(stored === null)(`keeps ${relativePath} admissible after re-gating`, () => {
+    it.skipIf(stored === null)(`keeps legacy ${relativePath} fail-closed after re-gating`, () => {
       if (stored === null) throw new Error("unreachable");
       const result = expectRegated(regate(stored.parsed, { sourceReportPath: relativePath }));
       const champion = stored.parsed.champion as Record<string, unknown>;
@@ -659,16 +659,16 @@ describe("first-party ROS re-gate equivalence against the stored validation repo
         evidenceThroughSeason,
         constants,
       });
-      expect(before.state).toBe("admissible");
-      expect(after.state).toBe(before.state);
-      if (before.state === "admissible" && after.state === "admissible") {
-        // Gate outputs feed the artifact checksum, so an unchanged verdict must leave it untouched
-        // and a changed verdict must move it. Both directions are asserted: a checksum that did not
-        // move when the blocker set did would mean admission could not tell the artifacts apart.
-        expect(after.cellBlockers).toEqual(result.blockers);
-        if (result.verdictChanged) expect(after.artifactChecksum).not.toBe(before.artifactChecksum);
-        else expect(after.artifactChecksum).toBe(before.artifactChecksum);
-      }
+      // These machine-local reports predate the executable `publicationPolicy` added to hardened
+      // admission. Re-gating remains useful for replaying their release-gate verdict, but it must
+      // never upgrade a legacy report into an admissible artifact by manufacturing evidence the
+      // source report did not record. Current-shaped admissible artifacts are covered by the
+      // always-on synthetic admission and publication suites.
+      expect(before).toEqual({
+        state: "rejected",
+        blockers: ["publication_policy_missing_or_invalid"],
+      });
+      expect(after).toEqual(before);
     });
   }
 });

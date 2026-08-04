@@ -2,7 +2,6 @@
 
 import {
   ArrowUpRight,
-  CircleAlert,
   Clock3,
   Info,
   LoaderCircle,
@@ -268,53 +267,6 @@ function RosStatusBody({ status }: { readonly status: RosReleaseStatus }) {
             {description.unsupportedProfileSummary}. Leagues on those rules wait rather than get a
             forecast built for a different scoring format.
           </p>
-        ) : null}
-      </div>
-
-      <div className={styles.section}>
-        <h3>Your leagues</h3>
-        {description.leagueNotices.length === 0 ? (
-          <p className={styles.empty}>
-            {description.readyLeagueCount === 1
-              ? "Your league has everything the forecast needs."
-              : `${description.readyLeagueCount} leagues have everything the forecast needs.`}
-          </p>
-        ) : (
-          <>
-            <p className={styles.reasonLead}>Outstanding for your leagues:</p>
-            <ul className={styles.reasonList}>
-              {description.leagueNotices.map((notice) => (
-                <li key={notice}>
-                  <CircleAlert size={14} aria-hidden="true" />
-                  <span>{notice}</span>
-                </li>
-              ))}
-            </ul>
-          </>
-        )}
-        {description.leaguePositionSummaries.length > 0 ? (
-          <ul className={styles.positionSummaryList}>
-            {description.leaguePositionSummaries.map((league) => (
-              <li key={league.leagueSeasonId ?? "unknown"} className={styles.positionSummaryRow}>
-                <span className={styles.positionSummaryLabel} title={league.leagueLabel}>
-                  {league.leagueLabel}
-                </span>
-                {league.positions.map((position) => (
-                  <span
-                    key={position.position}
-                    className={
-                      position.decision === "ready"
-                        ? styles.positionChipReady
-                        : styles.positionChipWithheld
-                    }
-                    title={position.title ?? undefined}
-                  >
-                    {position.position} {position.decision === "ready" ? "✓" : "✗"}
-                  </span>
-                ))}
-              </li>
-            ))}
-          </ul>
         ) : null}
       </div>
 
