@@ -852,6 +852,55 @@ describe("first-party ROS run payload cell observability", () => {
         },
       },
     ]);
+    const intervals = (payload.calibration as { readonly rosIntervals?: Record<string, unknown> })
+      .rosIntervals;
+    expect(intervals?.empiricalCoverage).toBe(calibration.observedCalibratedBlockCoverage);
+  });
+
+  it("records calibrated coverage rather than the raw candidate interval coverage", () => {
+    const policy = buildLivePolicy();
+    const artifact = loadedArtifact(policy);
+    const decision = evaluateFirstPartyRosPublication({
+      artifact,
+      leagueScoringProfileKey: SCORING_KEY,
+      evidence: [liveEvidence],
+      futureWindowComplete: true,
+      gateOptions: releaseOptions,
+    });
+    const released = decision.releasingBuckets[0]!;
+    const driftedPolicy: FirstPartyRosChampionPolicy = {
+      ...policy,
+      choices: policy.choices.map((choice) =>
+        choice.position === released.position && choice.bucket === released.bucket
+          ? {
+              ...choice,
+              heldOutEvidence: {
+                ...choice.heldOutEvidence,
+                contextualObservedIntervalCoverage: 0,
+                recencyObservedIntervalCoverage: 0,
+              },
+            }
+          : choice,
+      ),
+    };
+    const driftedChoice = driftedPolicy.choices.find(
+      (choice) => choice.position === released.position && choice.bucket === released.bucket,
+    )!;
+    const selected = driftedChoice.strategy === "contextual" ? "contextual" : "recency";
+    const calibratedCoverage =
+      driftedChoice.intervalCalibrationArtifacts[selected].observedCalibratedBlockCoverage;
+
+    const payload = buildFirstPartyRosRunPayload({
+      artifact: { ...artifact, policy: driftedPolicy },
+      decision,
+      convergence,
+      orchestrationVersion: "orchestration-v1",
+    });
+    const intervals = (payload.calibration as { readonly rosIntervals?: Record<string, unknown> })
+      .rosIntervals;
+
+    expect(intervals?.empiricalCoverage).toBe(calibratedCoverage);
+    expect(intervals?.empiricalCoverage).not.toBe(0);
   });
 
   it("fails closed when a released decision disagrees with its calibration artifact", () => {

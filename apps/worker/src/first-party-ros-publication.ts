@@ -834,10 +834,11 @@ export function buildFirstPartyRosRunPayload(input: {
     }
     return { decision, choice, selected, calibration };
   });
-  const observedCoverages = releasingPolicies.map(({ choice, selected }) =>
-    selected === "contextual"
-      ? choice.heldOutEvidence.contextualObservedIntervalCoverage
-      : choice.heldOutEvidence.recencyObservedIntervalCoverage,
+  // Persist the coverage measured after applying the exact admitted conformal correction. The
+  // raw held-out interval coverage on `heldOutEvidence` describes the uncalibrated candidate and
+  // can legitimately sit outside the publication bound that this payload is required to prove.
+  const observedCoverages = releasingPolicies.map(
+    ({ calibration }) => calibration.observedCalibratedBlockCoverage,
   );
   const empiricalCoverage =
     observedCoverages.length === 0
