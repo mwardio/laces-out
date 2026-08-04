@@ -30,6 +30,7 @@ import {
   type ProjectionTeamWeekFact,
   type ProjectionWeeklyFact,
 } from "../src/first-party-projection-inputs.js";
+import { firstPartyRosChampionPolicyChecksum } from "../src/first-party-ros-publication.js";
 import {
   ROS_COVERAGE_POSITIONS,
   auditHistoricalRosCoverage,
@@ -453,6 +454,7 @@ async function main(): Promise<void> {
       evidenceThroughSeason: result.champion.livePolicy.evidenceThroughSeason,
       globalBatches: result.champion.livePolicy.globalBatches,
       evidenceIdentity: result.champion.livePolicy.evidenceIdentity,
+      publicationPolicyChecksum: firstPartyRosChampionPolicyChecksum(result.champion.livePolicy),
       choices: result.champion.livePolicy.choices.map((choice) => {
         const selected = choice.strategy === "contextual" ? "contextual" : "recency";
         const calibration = choice.intervalCalibrationArtifacts[selected];
@@ -517,6 +519,10 @@ async function main(): Promise<void> {
         };
       }),
     },
+    // Admission needs the exact executable policy, including immutable calibration artifacts and
+    // their checksums. `champion` above remains the concise human-audit summary; it must never be
+    // cast back into this richer runtime contract.
+    publicationPolicy: result.champion.livePolicy,
     sources: process.argv.includes("--full") ? sourceAudit : undefined,
   };
   process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);

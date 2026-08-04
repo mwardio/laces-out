@@ -396,6 +396,13 @@ unadmissible. `--scoring-profile` refuses an unknown name rather than defaulting
 report was graded under is recorded in the report's own `scoringProfile` block alongside the
 authoritative `identityAudit.scoringProfileKey`.
 
+A releasable report carries both `champion`, the concise audit summary, and `publicationPolicy`,
+the exact executable policy with immutable interval-calibration artifacts and checksums. Admission
+rejects a report missing the latter as `publication_policy_missing_or_invalid`; the summary is
+never cast back into a runtime policy, and its pinned `publicationPolicyChecksum` must match.
+Publication applies the selected artifact's conformal correction to P15/P85 before any player row
+is written.
+
 Each profile produces its own scoring fingerprint, evidence report, artifact checksum, and
 `first_party_ros_champion_artifacts` row. Whole-profile equality wins selection. A league with extra
 or provider-specific rules can also match an artifact only for positions whose canonical scoring

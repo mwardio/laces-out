@@ -4,7 +4,6 @@ import {
   FIRST_PARTY_ROS_MODEL_VERSION,
   FIRST_PARTY_ROS_POLICY_VERSION,
   projectionScoringProfileKey,
-  type FirstPartyRosChampionPolicy,
   type ProjectionScoringProfile,
 } from "@fantasy/projections";
 
@@ -18,6 +17,8 @@ import {
 import {
   firstPartyRosChampionArtifactChecksum,
   firstPartyRosChampionArtifactIsValid,
+  firstPartyRosChampionPolicyChecksum,
+  firstPartyRosChampionPolicyIsPublicationReady,
   type FirstPartyRosChampionArtifactPayload,
 } from "./first-party-ros-publication.js";
 
@@ -189,10 +190,47 @@ export function validateFirstPartyRosAdmission(input: {
     }
   }
 
+  const publicationPolicy = report.publicationPolicy;
+  if (!firstPartyRosChampionPolicyIsPublicationReady(publicationPolicy)) {
+    blockers.push("publication_policy_missing_or_invalid");
+  } else {
+    if (publicationPolicy.modelVersion !== constants.modelVersion) {
+      blockers.push("publication_policy_model_version_mismatch");
+    }
+    if (publicationPolicy.policyVersion !== constants.policyVersion) {
+      blockers.push("publication_policy_version_mismatch");
+    }
+    if (publicationPolicy.evidenceThroughSeason !== evidenceThroughSeason) {
+      blockers.push("publication_policy_evidence_through_season_mismatch");
+    }
+    if (publicationPolicy.evidenceIdentity?.scoringProfileKey !== constants.scoringProfileKey) {
+      blockers.push("publication_policy_scoring_profile_mismatch");
+    }
+    if (
+      isObject(champion) &&
+      (champion.modelVersion !== publicationPolicy.modelVersion ||
+        champion.policyVersion !== publicationPolicy.policyVersion ||
+        champion.evidenceThroughSeason !== publicationPolicy.evidenceThroughSeason)
+    ) {
+      blockers.push("champion_summary_publication_policy_mismatch");
+    }
+    if (
+      !isObject(champion) ||
+      typeof champion.publicationPolicyChecksum !== "string" ||
+      champion.publicationPolicyChecksum !== firstPartyRosChampionPolicyChecksum(publicationPolicy)
+    ) {
+      blockers.push("publication_policy_checksum_mismatch");
+    }
+  }
+
   const sourceChecksums = deriveFirstPartyRosSourceChecksums(report);
   if (sourceChecksums.length === 0) blockers.push("source_lineage_unavailable");
 
-  if (blockers.length > 0 || !isObject(champion)) {
+  if (
+    blockers.length > 0 ||
+    !isObject(champion) ||
+    !firstPartyRosChampionPolicyIsPublicationReady(publicationPolicy)
+  ) {
     return { state: "rejected", blockers };
   }
 
@@ -204,7 +242,7 @@ export function validateFirstPartyRosAdmission(input: {
     calibrationVersion: constants.calibrationVersion,
     evidenceThroughSeason,
     sourceChecksums,
-    policy: champion as unknown as FirstPartyRosChampionPolicy,
+    policy: publicationPolicy,
     releaseGate: isObject(backtest) ? backtest : {},
   };
   const artifactChecksum = firstPartyRosChampionArtifactChecksum(payload);

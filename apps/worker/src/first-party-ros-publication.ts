@@ -10,10 +10,12 @@ import {
   FIRST_PARTY_ROS_MINIMUM_SCENARIOS,
   FIRST_PARTY_ROS_MODEL_VERSION,
   FIRST_PARTY_ROS_POLICY_VERSION,
+  applyFirstPartyRosIntervalCalibration,
   evaluateFirstPartyRosReleaseGate,
   projectionScoringProfileKeyForPosition,
   projectionScoringRulesFromProfileKey,
   type FirstPartyRosChampionPolicy,
+  type FirstPartyRosIntervalCalibrationArtifact,
   type FirstPartyRosLiveReleaseEvidence,
   type FirstPartyRosPosition,
   type FirstPartyRosProjection,
@@ -55,6 +57,8 @@ export interface LoadedFirstPartyRosChampionArtifact extends FirstPartyRosChampi
 
 export const FIRST_PARTY_ROS_CHAMPION_ARTIFACT_CHECKSUM_VERSION =
   "first-party-ros-champion-artifact-v1";
+export const FIRST_PARTY_ROS_CHAMPION_POLICY_CHECKSUM_VERSION =
+  "first-party-ros-champion-policy-v1";
 
 function normalizeForChecksum(value: unknown): unknown {
   if (value instanceof Date) return value.toISOString();
@@ -67,6 +71,20 @@ function normalizeForChecksum(value: unknown): unknown {
     );
   }
   return value;
+}
+
+/** Pins the exact executable policy separately from the concise report summary. */
+export function firstPartyRosChampionPolicyChecksum(policy: FirstPartyRosChampionPolicy): string {
+  return createHash("sha256")
+    .update(
+      JSON.stringify(
+        normalizeForChecksum({
+          version: FIRST_PARTY_ROS_CHAMPION_POLICY_CHECKSUM_VERSION,
+          policy,
+        }),
+      ),
+    )
+    .digest("hex");
 }
 
 /** Canonical checksum over the immutable artifact payload; stable across object key order. */
@@ -93,6 +111,106 @@ export function firstPartyRosChampionArtifactChecksum(
 }
 
 const SHA256_PATTERN = /^[a-f0-9]{64}$/u;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+/**
+ * The stored policy is executable release evidence, not merely the concise champion summary shown
+ * in validation reports. Check every nested field the live gate can read before an artifact is
+ * allowed anywhere near the expensive candidate simulation. This deliberately accepts calibrated
+ * and uncalibrated cells: an admitted report may carry honest per-cell blockers, and the live gate
+ * is responsible for withholding those cells. What it never accepts is a missing nested object
+ * that would turn a fail-closed decision into a late runtime exception.
+ */
+export function firstPartyRosChampionPolicyIsPublicationReady(
+  value: unknown,
+): value is FirstPartyRosChampionPolicy {
+  if (!isRecord(value)) return false;
+  if (
+    value.policyVersion !== FIRST_PARTY_ROS_POLICY_VERSION ||
+    value.modelVersion !== FIRST_PARTY_ROS_MODEL_VERSION ||
+    !Number.isSafeInteger(value.evidenceThroughSeason) ||
+    !isRecord(value.evidenceIdentity) ||
+    typeof value.evidenceIdentity.contextualModelVersion !== "string" ||
+    typeof value.evidenceIdentity.recencyModelVersion !== "string" ||
+    typeof value.evidenceIdentity.scoringProfileKey !== "string" ||
+    typeof value.evidenceIdentity.intervalMethodVersion !== "string" ||
+    !Array.isArray(value.choices) ||
+    value.choices.length === 0
+  ) {
+    return false;
+  }
+
+  const seen = new Set<string>();
+  for (const rawChoice of value.choices) {
+    if (!isRecord(rawChoice)) return false;
+    const position = rawChoice.position;
+    const bucket = rawChoice.bucket;
+    const strategy = rawChoice.strategy;
+    if (
+      !["QB", "RB", "WR", "TE", "K", "DST"].includes(String(position)) ||
+      !FIRST_PARTY_ROS_BUCKETS.includes(bucket as FirstPartyRosRemainingWeeksBucket) ||
+      (strategy !== "contextual" && strategy !== "availability-aware-recency") ||
+      !Number.isSafeInteger(rawChoice.samples) ||
+      (rawChoice.samples as number) < 0
+    ) {
+      return false;
+    }
+    const cell = `${String(position)}:${String(bucket)}`;
+    if (seen.has(cell)) return false;
+    seen.add(cell);
+
+    const heldOut = rawChoice.heldOutEvidence;
+    const artifacts = rawChoice.intervalCalibrationArtifacts;
+    const walkForward = rawChoice.walkForwardCalibrationEvidence;
+    if (!isRecord(heldOut) || !isRecord(artifacts) || !isRecord(walkForward)) return false;
+    const selected = strategy === "contextual" ? "contextual" : "recency";
+    const selectedArtifact = artifacts[selected];
+    const selectedWalkForward = walkForward[selected];
+    if (!isRecord(selectedArtifact) || !isRecord(selectedWalkForward)) return false;
+
+    const selectedPrefix = selected === "contextual" ? "contextual" : "recency";
+    const heldOutNumbers = [
+      heldOut[`${selectedPrefix}MeanInputCoverage`],
+      heldOut[`${selectedPrefix}AvailabilityMae`],
+      heldOut[`${selectedPrefix}AvailabilityBias`],
+      heldOut[`${selectedPrefix}ConvergenceRate`],
+    ];
+    if (
+      heldOutNumbers.some(
+        (candidate) => typeof candidate !== "number" || !Number.isFinite(candidate),
+      )
+    ) {
+      return false;
+    }
+    if (
+      typeof selectedArtifact.nominalCoverage !== "number" ||
+      !Number.isFinite(selectedArtifact.nominalCoverage) ||
+      typeof selectedWalkForward.observedBlockCoverage !== "number" ||
+      !Number.isFinite(selectedWalkForward.observedBlockCoverage) ||
+      !Number.isSafeInteger(selectedWalkForward.seasons) ||
+      !Number.isSafeInteger(selectedWalkForward.blocks) ||
+      !Number.isSafeInteger(selectedWalkForward.samples)
+    ) {
+      return false;
+    }
+
+    // Exercise the canonical artifact validator without changing the interval. A malformed
+    // calibrated artifact becomes "not-calibrated" here and will be withheld by the live gate;
+    // most importantly, the call proves the complete nested shape is safe to evaluate.
+    try {
+      applyFirstPartyRosIntervalCalibration(
+        { p15Points: 0, p50Points: 0, p85Points: 0 },
+        selectedArtifact as unknown as FirstPartyRosIntervalCalibrationArtifact,
+      );
+    } catch {
+      return false;
+    }
+  }
+  return true;
+}
 
 /**
  * Fail-closed artifact validity. An artifact authorizes publication only when its checksum
@@ -133,7 +251,8 @@ export function firstPartyRosChampionArtifactIsValid(
   ) {
     return false;
   }
-  const policy = artifact.policy;
+  const policy: unknown = artifact.policy;
+  if (!firstPartyRosChampionPolicyIsPublicationReady(policy)) return false;
   if (
     policy.policyVersion !== FIRST_PARTY_ROS_POLICY_VERSION ||
     policy.modelVersion !== FIRST_PARTY_ROS_MODEL_VERSION ||
@@ -475,6 +594,63 @@ export interface FirstPartyRosReleasedPlayer {
   readonly bucket: FirstPartyRosRemainingWeeksBucket;
   readonly strategy: FirstPartyRosStrategy;
   readonly projection: FirstPartyRosProjection;
+}
+
+/**
+ * Applies the exact admitted split-conformal correction to every player in a releasing cell.
+ * Candidate simulation intentionally produces the immutable raw distribution; calibration belongs
+ * at this publication boundary, after the gate has selected a strategy and proved its artifact.
+ * Any disagreement between the decision and policy throws before the database transaction.
+ */
+export function calibrateFirstPartyRosReleasedPlayers(input: {
+  readonly artifact: LoadedFirstPartyRosChampionArtifact;
+  readonly decision: FirstPartyRosPublicationDecision;
+  readonly players: readonly FirstPartyRosReleasedPlayer[];
+}): readonly FirstPartyRosReleasedPlayer[] {
+  return input.players.map((player) => {
+    const cell = input.decision.releasingBuckets.find(
+      (candidate) =>
+        candidate.position === player.projection.position && candidate.bucket === player.bucket,
+    );
+    const choice = input.artifact.policy.choices.find(
+      (candidate) =>
+        candidate.position === player.projection.position && candidate.bucket === player.bucket,
+    );
+    if (
+      cell === undefined ||
+      choice === undefined ||
+      cell.strategy === null ||
+      cell.strategy !== player.strategy ||
+      choice.strategy !== player.strategy
+    ) {
+      throw new Error("Released ROS player has no matching calibrated publication decision");
+    }
+    const selected = choice.strategy === "contextual" ? "contextual" : "recency";
+    const calibrated = applyFirstPartyRosIntervalCalibration(
+      {
+        p15Points: player.projection.p15Points,
+        p50Points: player.projection.p50Points,
+        p85Points: player.projection.p85Points,
+      },
+      choice.intervalCalibrationArtifacts[selected],
+    );
+    if (
+      calibrated.intervalCalibration !== "split-conformal-cqr" ||
+      calibrated.calibrationArtifactChecksum === null ||
+      calibrated.calibrationArtifactChecksum !== cell.gate.calibrationArtifactChecksum
+    ) {
+      throw new Error("Released ROS player calibration does not match the cleared gate artifact");
+    }
+    return {
+      ...player,
+      projection: {
+        ...player.projection,
+        p15Points: calibrated.p15Points,
+        p50Points: calibrated.p50Points,
+        p85Points: calibrated.p85Points,
+      },
+    };
+  });
 }
 
 export interface FirstPartyRosPlayerPersistenceRow {

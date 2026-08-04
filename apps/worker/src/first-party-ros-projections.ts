@@ -29,9 +29,10 @@ import { and, desc, eq, inArray } from "drizzle-orm";
 import {
   buildFirstPartyRosPlayerPersistenceRow,
   buildFirstPartyRosRunPayload,
-  selectFirstPartyRosArtifactForLeague,
+  calibrateFirstPartyRosReleasedPlayers,
   evaluateFirstPartyRosPublication,
   firstPartyRosChampionArtifactIsValid,
+  selectFirstPartyRosArtifactForLeague,
   type FirstPartyRosPublicationDecision,
   type FirstPartyRosRailPosition,
   type FirstPartyRosReleasedPlayer,
@@ -1028,9 +1029,13 @@ export class FirstPartyRosProjectionShadowService implements ProjectionRefreshSe
       const releasing = new Set(
         decision.releasingBuckets.map((bucket) => `${bucket.position}:${bucket.bucket}`),
       );
-      const releasedPlayers = target.released.filter((player) =>
-        releasing.has(`${player.projection.position}:${player.bucket}`),
-      );
+      const releasedPlayers = calibrateFirstPartyRosReleasedPlayers({
+        artifact: input.artifact,
+        decision,
+        players: target.released.filter((player) =>
+          releasing.has(`${player.projection.position}:${player.bucket}`),
+        ),
+      });
       if (releasedPlayers.length === 0) continue;
       const committed = await this.#persistPublication({
         artifact: input.artifact,

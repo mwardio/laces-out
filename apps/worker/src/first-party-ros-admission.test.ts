@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { projectionScoringProfileKey, rosScoringProfile } from "@fantasy/projections";
+import {
+  evaluateFirstPartyRosChampionPolicy,
+  projectionScoringProfileKey,
+  rosScoringProfile,
+  type FirstPartyRosHeldOutForecast,
+} from "@fantasy/projections";
 
 import {
   deriveFirstPartyRosSourceChecksums,
@@ -11,6 +16,7 @@ import { HISTORICAL_ROS_SCORING_PROFILE } from "./first-party-ros-backtest.js";
 import {
   firstPartyRosChampionArtifactChecksum,
   firstPartyRosChampionArtifactIsValid,
+  firstPartyRosChampionPolicyChecksum,
 } from "./first-party-ros-publication.js";
 
 const constants = firstPartyRosAdmissionConstants();
@@ -27,12 +33,77 @@ function sourceAudit(season: number): Record<string, unknown> {
   };
 }
 
+function heldOutForecast(
+  season: number,
+  asOfWeek: number,
+  playerId: string,
+  scoringProfileKey: string,
+): FirstPartyRosHeldOutForecast {
+  return {
+    playerId,
+    position: "WR",
+    contextualModelVersion: "contextual-v1",
+    recencyModelVersion: "recency-v1",
+    scoringProfileKey,
+    intervalMethodVersion: constants.intervalMethodVersion,
+    forecastSeason: season,
+    asOfWeek,
+    windowStartWeek: asOfWeek + 1,
+    windowEndWeek: 18,
+    trainedThroughSeason: season - 1,
+    inputChecksum: "1".repeat(64),
+    evidence: {
+      coverage: { contextual: 1, recency: 1 },
+      availability: {
+        scheduledGames: 18 - asOfWeek,
+        actualGames: 17 - asOfWeek,
+        contextualExpectedGames: 17 - asOfWeek,
+        recencyExpectedGames: 16.5 - asOfWeek,
+      },
+      convergence: {
+        contextual: { state: "converged", diagnosticChecksum: "2".repeat(64) },
+        recency: { state: "converged", diagnosticChecksum: "3".repeat(64) },
+      },
+    },
+    contextual: { meanPoints: 101, p15Points: 86, p50Points: 101, p85Points: 116 },
+    recency: { meanPoints: 108, p15Points: 83, p50Points: 108, p85Points: 133 },
+    actualPoints: 100,
+  };
+}
+
+function publicationPolicy(scoringProfileKey: string) {
+  return evaluateFirstPartyRosChampionPolicy(
+    [2023, 2024, 2025].map((season) => ({
+      season,
+      complete: true,
+      forecasts: [
+        heldOutForecast(season, 10, `${season}-one`, scoringProfileKey),
+        heldOutForecast(season, 11, `${season}-two`, scoringProfileKey),
+      ],
+    })),
+    {
+      minimumHeldOutSeasons: 2,
+      minimumBatches: 4,
+      minimumSamples: 4,
+      minimumCellSeasons: 2,
+      minimumCellSamples: 4,
+      minimumCellCutoffs: 2,
+      minimumCellBatches: 4,
+    },
+  ).livePolicy;
+}
+
 function validReport(overrides: {
   reportOverrides?: Record<string, unknown>;
   championOverrides?: Record<string, unknown>;
   evidenceIdentityOverrides?: Record<string, unknown>;
   sources?: unknown;
 }): Record<string, unknown> {
+  const scoringProfileKey =
+    typeof overrides.evidenceIdentityOverrides?.scoringProfileKey === "string"
+      ? overrides.evidenceIdentityOverrides.scoringProfileKey
+      : constants.scoringProfileKey;
+  const policy = publicationPolicy(scoringProfileKey);
   return {
     report: {
       state: "evidence-ready",
@@ -47,6 +118,7 @@ function validReport(overrides: {
       modelVersion: constants.modelVersion,
       evidenceThroughSeason: 2025,
       globalBatches: 40,
+      publicationPolicyChecksum: firstPartyRosChampionPolicyChecksum(policy),
       evidenceIdentity: {
         contextualModelVersion: "contextual-v1",
         recencyModelVersion: "recency-v1",
@@ -57,6 +129,7 @@ function validReport(overrides: {
       choices: [],
       ...overrides.championOverrides,
     },
+    publicationPolicy: policy,
     sources:
       overrides.sources === undefined
         ? [sourceAudit(2022), sourceAudit(2023), sourceAudit(2024), sourceAudit(2025)]
@@ -105,6 +178,44 @@ describe("validateFirstPartyRosAdmission", () => {
         artifactChecksum: result.artifactChecksum,
       }),
     ).toBe(true);
+  });
+
+  it("rejects the concise champion summary when the executable publication policy is absent", () => {
+    const { publicationPolicy: omitted, ...summaryOnly } = validReport({});
+    void omitted;
+    const result = validateFirstPartyRosAdmission({
+      report: summaryOnly,
+      evidenceThroughSeason: 2025,
+      constants,
+    });
+    expect(result.state).toBe("rejected");
+    expect(result.blockers).toContain("publication_policy_missing_or_invalid");
+  });
+
+  it("rejects a publication policy with a missing nested calibration contract", () => {
+    const report = structuredClone(validReport({}));
+    const policy = report.publicationPolicy as { choices: Record<string, unknown>[] };
+    delete policy.choices[0]!.intervalCalibrationArtifacts;
+    const result = validateFirstPartyRosAdmission({
+      report,
+      evidenceThroughSeason: 2025,
+      constants,
+    });
+    expect(result.state).toBe("rejected");
+    expect(result.blockers).toContain("publication_policy_missing_or_invalid");
+  });
+
+  it("rejects a complete publication policy that no longer matches the report summary checksum", () => {
+    const report = structuredClone(validReport({}));
+    const policy = report.publicationPolicy as { choices: { samples: number }[] };
+    policy.choices[0]!.samples += 1;
+    const result = validateFirstPartyRosAdmission({
+      report,
+      evidenceThroughSeason: 2025,
+      constants,
+    });
+    expect(result.state).toBe("rejected");
+    expect(result.blockers).toContain("publication_policy_checksum_mismatch");
   });
 
   it("refuses an insufficient report whose state is unexplained by any blocker", () => {

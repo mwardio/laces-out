@@ -9,12 +9,14 @@ import {
   type FirstPartyRosPosition,
   rosScoringProfile,
   type FirstPartyRosLiveReleaseEvidence,
+  type FirstPartyRosProjection,
   type ProjectionScoringProfile,
 } from "@fantasy/projections";
 import { describe, expect, it } from "vitest";
 
 import {
   buildFirstPartyRosRunPayload,
+  calibrateFirstPartyRosReleasedPlayers,
   evaluateFirstPartyRosPublication,
   firstPartyRosChampionArtifactChecksum,
   firstPartyRosChampionArtifactIsValid,
@@ -219,8 +221,9 @@ describe("first-party ROS publication decision", () => {
   });
 
   it("releases only when the artifact validates and the live gate clears", () => {
+    const artifact = loadedArtifact(buildLivePolicy());
     const decision = evaluateFirstPartyRosPublication({
-      artifact: loadedArtifact(buildLivePolicy()),
+      artifact,
       leagueScoringProfileKey: SCORING_KEY,
       evidence: [liveEvidence],
       futureWindowComplete: true,
@@ -236,6 +239,32 @@ describe("first-party ROS publication decision", () => {
       strategy: "contextual",
     });
     expect(decision.preservePriorGoodSet).toBe(false);
+
+    const choice = artifact.policy.choices.find(
+      (candidate) => candidate.position === "WR" && candidate.bucket === "five-to-eight",
+    )!;
+    const selected = choice.strategy === "contextual" ? "contextual" : "recency";
+    const correction = choice.intervalCalibrationArtifacts[selected].adjustmentPoints;
+    const [calibrated] = calibrateFirstPartyRosReleasedPlayers({
+      artifact,
+      decision,
+      players: [
+        {
+          playerId: "released-player",
+          bucket: "five-to-eight",
+          strategy: choice.strategy,
+          projection: {
+            position: "WR",
+            p15Points: 10,
+            p50Points: 20,
+            p85Points: 30,
+          } as FirstPartyRosProjection,
+        },
+      ],
+    });
+    expect(calibrated!.projection.p15Points).toBe(10 - correction);
+    expect(calibrated!.projection.p50Points).toBe(20);
+    expect(calibrated!.projection.p85Points).toBe(30 + correction);
   });
 
   it("honors the admitted report's own cell blockers over a releasing live gate", () => {
