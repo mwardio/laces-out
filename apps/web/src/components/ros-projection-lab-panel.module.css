@@ -218,23 +218,6 @@
     color: #b08400;
   }
 
-  .setEvidence {
-    margin-top: 6px;
-  }
-
-  .setEvidence > summary {
-    color: var(--ink-500);
-    cursor: pointer;
-    font-size: var(--text-10);
-    font-weight: 700;
-    letter-spacing: 0.04em;
-    text-transform: uppercase;
-  }
-
-  .setEvidence > div {
-    margin-top: 6px;
-  }
-
   .reasonLead {
     margin: 10px 0 6px;
     color: var(--ink-600);
@@ -278,48 +261,6 @@
 
   /* Raw reason codes moved out of the manager-facing list and into the advanced
      disclosure, where they are useful for debugging a run. */
-  .reasonCodeList {
-    display: flex;
-    flex-wrap: wrap;
-    gap: var(--space-4) var(--space-10);
-    margin: 8px 0 0;
-    padding: 0;
-    color: var(--ink-500);
-    list-style: none;
-    font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
-    font-size: var(--text-10);
-  }
-
-  .evidence {
-    margin-top: 4px;
-    padding: 10px 12px;
-    background: var(--paper-100);
-    border: 1px solid var(--ink-150);
-    border-radius: var(--radius-md);
-  }
-
-  .evidence > summary {
-    color: var(--ink-700);
-    cursor: pointer;
-    font-size: var(--text-11);
-    font-weight: 800;
-    letter-spacing: 0.03em;
-    text-transform: uppercase;
-  }
-
-  .evidenceBody {
-    display: grid;
-    gap: 14px;
-    margin-top: 12px;
-  }
-
-  .evidenceBody h4 {
-    margin: 0 0 6px;
-    color: var(--ink-800);
-    font-size: var(--text-12);
-    font-weight: 800;
-  }
-
   .setList {
     display: grid;
     gap: var(--space-8);
@@ -350,10 +291,6 @@
     gap: 4px 14px;
     color: var(--ink-500);
     font-size: var(--text-10);
-  }
-
-  .checksum {
-    font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
   }
 
   .empty,

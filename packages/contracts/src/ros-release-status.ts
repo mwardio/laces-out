@@ -127,6 +127,8 @@ export type RosLeaguePositionReadiness = z.infer<typeof rosLeaguePositionReadine
 export const rosLeagueReadinessSchema = z
   .object({
     leagueSeasonId: z.string().min(1).max(64).nullable(),
+    /** The league's own name, so a reader can recognize their league without decoding an id. */
+    leagueName: z.string().min(1).max(200).nullable(),
     state: z.enum(["ready", "withheld"]),
     reasons: z.array(rosWithholdingReasonSchema).max(8),
     scoringProfile: rosScoringProfileIdentitySchema.nullable(),
@@ -164,6 +166,7 @@ export const rosPublishedLeagueSetSchema = z
   .object({
     projectionSetId: z.string().min(1).max(64),
     leagueSeasonId: z.string().min(1).max(64),
+    leagueName: z.string().min(1).max(200).nullable(),
     scoringProfile: rosScoringProfileIdentitySchema.nullable(),
     season: z.number().int().min(1999).max(2200),
     playerCount: z.number().int().nonnegative().max(10_000),

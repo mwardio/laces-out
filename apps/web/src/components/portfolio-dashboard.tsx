@@ -14,6 +14,7 @@ import {
   Info,
   ListPlus,
   LockKeyhole,
+  RefreshCw,
   Repeat2,
   ShieldAlert,
   Target,
@@ -434,7 +435,7 @@ export function PortfolioDashboard({ afterOverview }: { readonly afterOverview?:
                 <Check size={14} /> One-click, multi-league sync
               </span>
               <span>
-                <Check size={14} /> Optional six-hour Chrome refresh
+                <Check size={14} /> Five-minute intent checks + six-hour safety sweep
               </span>
               <span>
                 <Check size={14} /> Availability, box scores, transactions, and draft results
@@ -459,8 +460,15 @@ export function PortfolioDashboard({ afterOverview }: { readonly afterOverview?:
                 </p>
                 <p>
                   <Zap size={14} /> <strong>Automatic sync:</strong> the optional Chrome companion
-                  refreshes up to 32 explicitly allowed leagues every six hours, including isolated
-                  availability, player scoring, transaction, and draft feeds.
+                  checks for requested work every five minutes while Chrome is running and keeps a
+                  six-hour full sweep. A verified public league can refresh core data directly when
+                  the deployment operator enables the default-off unofficial path.
+                </p>
+                <p>
+                  <RefreshCw size={14} /> <strong>Truthful states:</strong> the live account shows
+                  deterministic examples such as “Refreshing directly from ESPN,” “Refresh queued ·
+                  waiting for a paired device,” “Up to date,” and “Open the paired browser and sign
+                  in to ESPN.” Cached data remains visible in every state.
                 </p>
                 <p>
                   <ShieldAlert size={14} /> <strong>Credential boundary:</strong> ESPN passwords,

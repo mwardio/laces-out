@@ -84,6 +84,8 @@ export interface RosLeaguePositionReadiness {
 
 export interface RosLeagueReadiness {
   readonly leagueSeasonId: string | null;
+  /** Absent on an older API, which is why a missing value degrades to null rather than failing. */
+  readonly leagueName: string | null;
   readonly state: "ready" | "withheld";
   /**
    * Not a hard `RosWithholdingReason[]`: an unrecognized-but-additive value from a newer API is kept
@@ -112,6 +114,7 @@ export interface RosCellGateState {
 export interface RosPublishedLeagueSet {
   readonly projectionSetId: string;
   readonly leagueSeasonId: string;
+  readonly leagueName: string | null;
   readonly scoringProfile: RosScoringProfileIdentity | null;
   readonly season: number;
   readonly playerCount: number;
@@ -267,6 +270,7 @@ function parseReadiness(value: unknown): readonly RosLeagueReadiness[] | null {
     if (entry.scoringProfile !== null && !scoringProfile) return null;
     readiness.push({
       leagueSeasonId: entry.leagueSeasonId,
+      leagueName: isString(entry.leagueName) ? entry.leagueName : null,
       state: entry.state,
       reasons: entry.reasons,
       scoringProfile,
@@ -329,6 +333,7 @@ function parsePublishedSets(value: unknown): readonly RosPublishedLeagueSet[] | 
     sets.push({
       projectionSetId: entry.projectionSetId,
       leagueSeasonId: entry.leagueSeasonId,
+      leagueName: isString(entry.leagueName) ? entry.leagueName : null,
       scoringProfile,
       season: entry.season,
       playerCount: entry.playerCount,
@@ -470,6 +475,8 @@ export interface RosLeaguePositionChip {
 /** One league's per-position readiness, in `POSITION_GROUP_ORDER`. */
 export interface RosLeaguePositionSummary {
   readonly leagueSeasonId: string | null;
+  /** Falls back to a shortened id only when the API did not send a name. */
+  readonly leagueLabel: string;
   readonly positions: readonly RosLeaguePositionChip[];
 }
 
@@ -498,6 +505,16 @@ export interface RosReleaseDescription {
 const POSITION_GROUP_ORDER = ["QB", "RB", "WR", "TE", "K", "DST"] as const;
 
 /**
+ * A league is named by its name. The truncated id is a last resort for a payload that predates
+ * the name field — it is not something anyone can recognize their own league by.
+ */
+export function leagueLabelFor(name: string | null, leagueSeasonId: string | null): string {
+  const trimmed = name?.trim();
+  if (trimmed) return trimmed;
+  return leagueSeasonId ? `League ${leagueSeasonId.slice(0, 8)}` : "League";
+}
+
+/**
  * Builds the panel's copy. Each field answers exactly one of the six facts; no field is computed
  * from another. In particular the audit headline never changes because of the artifact state, and
  * the artifact headline never changes because of the audit.
@@ -508,18 +525,18 @@ export function describeRosRelease(status: RosReleaseStatus): RosReleaseDescript
 
   const artifactHeadline =
     status.admittedArtifacts.state === "admitted" && artifact
-      ? `Validated model in use for ${artifact.scoringProfile.label} scoring`
-      : "No validated model for this season yet";
+      ? `Ready for ${artifact.scoringProfile.label} scoring`
+      : "Not ready for this season yet";
 
   const supportedProfileSummary =
     supported.length === 0
-      ? "No scoring profile is validated yet"
-      : `Validated for ${supported.map((profile) => profile.label).join(", ")}`;
+      ? "No scoring formats ready yet"
+      : `Covers ${supported.map((profile) => profile.label).join(", ")}`;
 
   const unsupportedProfileSummary =
     status.scoringProfiles.unsupported.length === 0
       ? null
-      : `Not validated for ${status.scoringProfiles.unsupported
+      : `Does not cover ${status.scoringProfiles.unsupported
           .map((entry) => entry.profile.label)
           .join(", ")}`;
 
@@ -537,6 +554,7 @@ export function describeRosRelease(status: RosReleaseStatus): RosReleaseDescript
     .filter((league) => league.positions.length > 0)
     .map((league) => ({
       leagueSeasonId: league.leagueSeasonId,
+      leagueLabel: leagueLabelFor(league.leagueName, league.leagueSeasonId),
       positions: league.positions.map((position) => ({
         position: position.position,
         decision: position.decision,
@@ -556,7 +574,7 @@ export function describeRosRelease(status: RosReleaseStatus): RosReleaseDescript
 
   const retained = status.publishedSets.some((set) => set.retainedFromEarlierRun);
   const retainedSetNotice = retained
-    ? "Some positions were withheld on the latest check. The last set that passed every check stays in place for your league."
+    ? "Some positions did not clear the latest check, so your league keeps the last forecast that did."
     : null;
 
   const auditHeadline =

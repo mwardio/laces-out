@@ -24,12 +24,12 @@ The signed listing keeps the extension ID stable and delivers updates through Ch
    **Complete pairing**. There is no device token to copy or paste.
 4. Sign in at `https://fantasy.espn.com/football/` in the same Chrome profile.
 5. Choose **Sync now**. Core league data is stored first, followed by independently isolated
-   supplemental feeds. Optional background sync repeats the check every six hours while the browser
-   and ESPN session are available.
+   supplemental feeds. The maintenance alarm checks Laces Out every five minutes for requested work
+   and retains a six-hour full sync as a safety net while Chrome and the ESPN session are available.
 
 ### Self-hosted instances
 
-Version 0.5.0 uses the same signed companion for arbitrary HTTPS deployments; a self-hoster does
+Version 0.6.0 uses the same signed companion for arbitrary HTTPS deployments; a self-hoster does
 not need to rebuild or publish a separate extension.
 
 1. Create the Automatic Sync connection from the self-hosted instance's **League Sync** page.
@@ -41,6 +41,22 @@ not need to rebuild or publish a separate extension.
 Codes expire after 10 minutes, are stored server-side only as SHA-256 hashes, never appear in a URL,
 and cannot be replayed after a successful exchange. HTTPS is mandatory except for `localhost` and
 `127.0.0.1` development instances.
+
+## Automated maintenance
+
+Version 0.6.0 registers as a `refresh-intents-v1` sync agent. On install, update, Chrome startup,
+and every five-minute maintenance alarm it restores any missing alarm, polls the configured Laces
+Out origin with the device token, and receives at most eight requests limited to its granted league
+IDs and season. It reads and uploads only the requested core/supplemental artifact families. If no
+intent is waiting and the last baseline is at least six hours old, it runs the existing sequential
+full sweep.
+
+Last poll, last baseline, per-league outcomes, and login/provider backoff are stored in
+`chrome.storage.local`; the device token remains service-worker-only. One league failure does not
+stop later leagues. Login-required is reported to Laces Out and backed off locally instead of
+retrying ESPN every five minutes. A sleeping computer misses alarms, but the request remains durable
+and is found after Chrome next starts. If the server predates the poll endpoint, the companion keeps
+the established six-hour baseline behavior.
 
 ## Live ESPN draft sync (in development)
 

@@ -1,6 +1,8 @@
 import { createHash, randomBytes } from "node:crypto";
 
 import {
+  canonicalEspnPayloadChecksumV1,
+  espnPayloadChecksumMatches,
   normalizeEspnSupplementalSnapshot,
   normalizeEspnWebClientSnapshot,
 } from "@fantasy/connector-espn";
@@ -9,10 +11,12 @@ import {
   bridgeDeviceLeagues,
   bridgeDevices,
   bridgePairingSessions,
+  leagueMemberships,
+  leagueSeasons,
   leagues,
   type Database,
 } from "@fantasy/db";
-import { and, asc, desc, eq, gt, isNotNull, isNull, lte, or } from "drizzle-orm";
+import { and, asc, desc, eq, gt, inArray, isNotNull, isNull, lte, or } from "drizzle-orm";
 
 import {
   emitProviderSyncChangeEvents,
@@ -42,6 +46,8 @@ export class EspnBridgeError extends Error {
 
 export interface EspnBridgeDeviceStatus {
   readonly deviceId: string;
+  readonly clientKind: "chrome-extension" | "ios-app";
+  readonly agentCapable: boolean;
   readonly name: string;
   readonly state: "active" | "expired" | "revoked";
   readonly allowedLeagues: readonly {
@@ -97,17 +103,54 @@ function storedLeagueIds(value: readonly string[]): readonly string[] {
   return value;
 }
 
-function canonicalChecksum(payload: unknown): string {
-  let serialized: string | undefined;
+function payloadChecksumMatches(input: {
+  readonly payload: unknown;
+  readonly checksumSha256: string;
+  readonly authority: "browser-local" | "native-local";
+}): boolean {
   try {
-    serialized = JSON.stringify(payload);
+    return espnPayloadChecksumMatches(input);
   } catch {
     throw new EspnBridgeError("INVALID", "ESPN bridge payload is not JSON serializable");
   }
-  if (serialized === undefined) {
-    throw new EspnBridgeError("INVALID", "ESPN bridge payload is empty");
-  }
-  return createHash("sha256").update(serialized, "utf8").digest("hex");
+}
+
+export function espnBridgeAuthorityMatchesClient(
+  clientKind: "chrome-extension" | "ios-app",
+  authority: "browser-local" | "native-local",
+): boolean {
+  return clientKind === "ios-app" ? authority === "native-local" : authority === "browser-local";
+}
+
+type EspnBridgeTransaction = Parameters<Parameters<Database["transaction"]>[0]>[0];
+
+async function knownMemberLeagueIds(
+  transaction: EspnBridgeTransaction,
+  input: {
+    readonly userId: string;
+    readonly externalLeagueIds: readonly string[];
+    readonly season: number | undefined;
+  },
+): Promise<ReadonlyMap<string, string>> {
+  if (input.season === undefined) return new Map();
+  const rows = await transaction
+    .select({ externalLeagueId: leagueSeasons.externalKey, leagueId: leagueSeasons.leagueId })
+    .from(leagueSeasons)
+    .innerJoin(
+      leagueMemberships,
+      and(
+        eq(leagueMemberships.leagueId, leagueSeasons.leagueId),
+        eq(leagueMemberships.userId, input.userId),
+      ),
+    )
+    .where(
+      and(
+        eq(leagueSeasons.provider, "espn"),
+        eq(leagueSeasons.season, input.season),
+        inArray(leagueSeasons.externalKey, input.externalLeagueIds),
+      ),
+    );
+  return new Map(rows.map((row) => [row.externalLeagueId, row.leagueId]));
 }
 
 export class EspnBridgeService {
@@ -163,6 +206,8 @@ export class EspnBridgeService {
     const rows = await this.#database
       .select({
         deviceId: bridgeDevices.id,
+        clientKind: bridgeDevices.clientKind,
+        agentCapable: bridgeDevices.agentCapable,
         name: bridgeDevices.name,
         createdAt: bridgeDevices.createdAt,
         expiresAt: bridgeDevices.expiresAt,
@@ -190,6 +235,8 @@ export class EspnBridgeService {
             : "active";
         device = {
           deviceId: row.deviceId,
+          clientKind: row.clientKind,
+          agentCapable: row.agentCapable,
           name: row.name,
           state,
           allowedLeagues: [],
@@ -245,21 +292,43 @@ export class EspnBridgeService {
 
   async registerDevice(
     userId: string,
-    input: { readonly name: string; readonly allowedLeagueIds: readonly string[] },
+    input: {
+      readonly name: string;
+      readonly clientKind: "chrome-extension" | "ios-app";
+      readonly agentCapabilities: readonly "refresh-intents-v1"[];
+      readonly season?: number;
+      readonly allowedLeagueIds: readonly string[];
+    },
   ): Promise<{
     readonly deviceId: string;
+    readonly clientKind: "chrome-extension" | "ios-app";
+    readonly agentCapable: boolean;
     readonly deviceToken: string;
     readonly expiresAt: string;
   }> {
     const now = this.#now();
     const expiresAt = new Date(now.getTime() + deviceLifetimeMs);
     const deviceToken = `lo_espn_${randomBytes(32).toString("base64url")}`;
+    const agentCapable = input.agentCapabilities.includes("refresh-intents-v1");
+    if (input.clientKind === "ios-app" && (!agentCapable || input.season === undefined)) {
+      throw new EspnBridgeError(
+        "INVALID",
+        "iOS sync devices require agent capability and an exact season",
+      );
+    }
     const device = await this.#database.transaction(async (transaction) => {
+      const knownLeagues = await knownMemberLeagueIds(transaction, {
+        userId,
+        externalLeagueIds: input.allowedLeagueIds,
+        season: input.season,
+      });
       const [stored] = await transaction
         .insert(bridgeDevices)
         .values({
           userId,
           provider: "espn",
+          clientKind: input.clientKind,
+          agentCapable,
           name: input.name.trim(),
           tokenHash: tokenHash(deviceToken),
           expiresAt,
@@ -267,20 +336,32 @@ export class EspnBridgeService {
         .returning({ id: bridgeDevices.id });
       if (!stored) throw new Error("ESPN bridge device could not be created");
       await transaction.insert(bridgeDeviceLeagues).values(
-        input.allowedLeagueIds.map((externalLeagueId) => ({
-          bridgeDeviceId: stored.id,
-          externalLeagueId,
-        })),
+        input.allowedLeagueIds.map((externalLeagueId) => {
+          const leagueId = knownLeagues.get(externalLeagueId);
+          return {
+            bridgeDeviceId: stored.id,
+            externalLeagueId,
+            season: input.season,
+            ...(leagueId ? { leagueId } : {}),
+          };
+        }),
       );
       return stored;
     });
-    return { deviceId: device.id, deviceToken, expiresAt: expiresAt.toISOString() };
+    return {
+      deviceId: device.id,
+      clientKind: input.clientKind,
+      agentCapable,
+      deviceToken,
+      expiresAt: expiresAt.toISOString(),
+    };
   }
 
   async createPairingSession(
     userId: string,
     input: {
       readonly name: string;
+      readonly agentCapabilities: readonly "refresh-intents-v1"[];
       readonly allowedLeagueIds: readonly string[];
       readonly season: number;
     },
@@ -313,6 +394,8 @@ export class EspnBridgeService {
   async redeemPairingSession(pairingCode: string): Promise<
     | {
         readonly deviceId: string;
+        readonly clientKind: "chrome-extension";
+        readonly agentCapable: true;
         readonly deviceToken: string;
         readonly expiresAt: string;
         readonly leagueIds: readonly string[];
@@ -346,11 +429,18 @@ export class EspnBridgeService {
       if (!session) return undefined;
 
       const leagueIds = storedLeagueIds(session.allowedLeagueIds);
+      const knownLeagues = await knownMemberLeagueIds(transaction, {
+        userId: session.userId,
+        externalLeagueIds: leagueIds,
+        season: session.season,
+      });
       const [device] = await transaction
         .insert(bridgeDevices)
         .values({
           userId: session.userId,
           provider: "espn",
+          clientKind: "chrome-extension",
+          agentCapable: true,
           name: session.deviceName,
           tokenHash: tokenHash(deviceToken),
           expiresAt,
@@ -358,13 +448,20 @@ export class EspnBridgeService {
         .returning({ id: bridgeDevices.id });
       if (!device) throw new Error("ESPN bridge device could not be created");
       await transaction.insert(bridgeDeviceLeagues).values(
-        leagueIds.map((externalLeagueId) => ({
-          bridgeDeviceId: device.id,
-          externalLeagueId,
-        })),
+        leagueIds.map((externalLeagueId) => {
+          const leagueId = knownLeagues.get(externalLeagueId);
+          return {
+            bridgeDeviceId: device.id,
+            externalLeagueId,
+            season: session.season,
+            ...(leagueId ? { leagueId } : {}),
+          };
+        }),
       );
       return {
         deviceId: device.id,
+        clientKind: "chrome-extension" as const,
+        agentCapable: true as const,
         deviceToken,
         expiresAt: expiresAt.toISOString(),
         leagueIds,
@@ -398,6 +495,12 @@ export class EspnBridgeService {
       )
       .limit(1);
     if (!device) throw new EspnBridgeError("UNAUTHORIZED", "ESPN bridge device is not active");
+    if (!espnBridgeAuthorityMatchesClient(device.clientKind, snapshot.authority)) {
+      throw new EspnBridgeError(
+        "INVALID",
+        "ESPN snapshot authority does not match the registered sync device",
+      );
+    }
 
     const [scope] = await this.#database
       .select()
@@ -419,22 +522,31 @@ export class EspnBridgeService {
     if (snapshotAge > maximumSnapshotAgeMs || snapshotAge < -maximumFutureSkewMs) {
       throw new EspnBridgeError("STALE", "ESPN bridge snapshot capture time is not current");
     }
-    if (canonicalChecksum(snapshot.payload) !== snapshot.checksumSha256) {
+    if (!payloadChecksumMatches(snapshot)) {
       throw new EspnBridgeError("CHECKSUM", "ESPN bridge snapshot checksum does not match payload");
     }
 
-    const bundle = normalizeEspnWebClientSnapshot(snapshot);
+    const canonicalChecksumSha256 = canonicalEspnPayloadChecksumV1(snapshot.payload);
+    const idempotencyKey = `espn-core:${snapshot.leagueId}:${snapshot.season}:${canonicalChecksumSha256}:${snapshot.capturedAt}`;
+    const bundle = normalizeEspnWebClientSnapshot({
+      ...snapshot,
+      checksumSha256: canonicalChecksumSha256,
+    });
     const receipt = await this.#persistence.persist({
       authority: {
         mode: "bridge",
         actorUserId: device.userId,
         bridgeDeviceId: device.id,
         bridgeScopeId: scope.id,
+        clientKind: device.clientKind,
       },
       bundle,
-      checksumSha256: snapshot.checksumSha256,
+      checksumSha256: canonicalChecksumSha256,
+      ...(snapshot.checksumSha256 === canonicalChecksumSha256
+        ? {}
+        : { checksumAliases: [snapshot.checksumSha256] }),
       effectiveAt: capturedAt,
-      idempotencyKey: `espn-bridge:${device.id}:${snapshot.leagueId}:${snapshot.season}:${snapshot.checksumSha256}`,
+      idempotencyKey,
       kind: "espn-bridge",
       now,
     });
@@ -443,7 +555,7 @@ export class EspnBridgeService {
       leagueId: receipt.leagueId,
       leagueSeasonId: receipt.leagueSeasonId,
       actorUserId: device.userId,
-      artifactId: snapshot.checksumSha256,
+      artifactId: canonicalChecksumSha256,
       occurredAt: now,
     });
     return {
@@ -478,6 +590,12 @@ export class EspnBridgeService {
       )
       .limit(1);
     if (!device) throw new EspnBridgeError("UNAUTHORIZED", "ESPN bridge device is not active");
+    if (!espnBridgeAuthorityMatchesClient(device.clientKind, snapshot.authority)) {
+      throw new EspnBridgeError(
+        "INVALID",
+        "ESPN snapshot authority does not match the registered sync device",
+      );
+    }
 
     const [scope] = await this.#database
       .select()
@@ -499,22 +617,31 @@ export class EspnBridgeService {
     if (snapshotAge > maximumSnapshotAgeMs || snapshotAge < -maximumFutureSkewMs) {
       throw new EspnBridgeError("STALE", "ESPN bridge snapshot capture time is not current");
     }
-    if (canonicalChecksum(snapshot.payload) !== snapshot.checksumSha256) {
+    if (!payloadChecksumMatches(snapshot)) {
       throw new EspnBridgeError("CHECKSUM", "ESPN bridge snapshot checksum does not match payload");
     }
 
-    const bundle = normalizeEspnSupplementalSnapshot(snapshot);
+    const canonicalChecksumSha256 = canonicalEspnPayloadChecksumV1(snapshot.payload);
+    const idempotencyKey = `espn-supplemental:${snapshot.leagueId}:${snapshot.season}:${snapshot.kind}:${canonicalChecksumSha256}:${snapshot.capturedAt}`;
+    const bundle = normalizeEspnSupplementalSnapshot({
+      ...snapshot,
+      checksumSha256: canonicalChecksumSha256,
+    });
     const receipt = await this.#persistence.persistSupplemental({
       authority: {
         mode: "bridge",
         actorUserId: device.userId,
         bridgeDeviceId: device.id,
         bridgeScopeId: scope.id,
+        clientKind: device.clientKind,
       },
       bundle,
-      checksumSha256: snapshot.checksumSha256,
+      checksumSha256: canonicalChecksumSha256,
+      ...(snapshot.checksumSha256 === canonicalChecksumSha256
+        ? {}
+        : { checksumAliases: [snapshot.checksumSha256] }),
       effectiveAt: capturedAt,
-      idempotencyKey: `espn-supplemental:${snapshot.leagueId}:${snapshot.season}:${snapshot.kind}:${snapshot.checksumSha256}`,
+      idempotencyKey,
       now,
     });
     return {

@@ -54,6 +54,11 @@ const environmentSchema = z.object({
    */
   ESPN_LIVE_DRAFT_SYNC: booleanFlag,
   /**
+   * Anonymous reads use an unofficial ESPN web-client endpoint. Keep this off until the operator
+   * has completed the documented evidence and provider-policy gate for the deployment.
+   */
+  ESPN_PUBLIC_DIRECT_SYNC_ENABLED: booleanFlag,
+  /**
    * Web push VAPID identity. All three are optional and absent by default: a deployment that has
    * never generated a key pair reports game-day alerts as unavailable rather than failing.
    */

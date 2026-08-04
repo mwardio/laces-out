@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { canonicalEspnPayloadChecksumV1 } from "./payload-checksum.js";
 
 const ESPN_PUBLIC_API_ORIGIN = "https://lm-api-reads.fantasy.espn.com" as const;
 const MAX_PUBLIC_RESPONSE_BYTES = 5 * 1024 * 1024;
@@ -233,7 +233,7 @@ export class EspnPublicReadClient {
       season: request.season,
       endpoint: endpoint.toString(),
       fetchedAt: this.#now().toISOString(),
-      checksumSha256: createHash("sha256").update(text, "utf8").digest("hex"),
+      checksumSha256: canonicalEspnPayloadChecksumV1(payload),
       payload,
     };
   }

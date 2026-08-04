@@ -48,6 +48,9 @@ export * from "./ros-release-status.js";
 // rather than a home for new domains.
 export * from "./weekly-recap.js";
 
+// Shared automated ESPN refresh and sync-agent wire protocol.
+export * from "./espn-refresh.js";
+
 // Mirrored here so the browser contract bundle has no runtime dependency on the domain package.
 // Response parsing fails closed if service vocabulary ever drifts from this wire contract.
 const NFL_POSITIONS = ["QB", "RB", "WR", "TE", "K", "DST", "DL", "LB", "DB", "IDP"] as const;
@@ -498,8 +501,17 @@ export const yahooAuthorizeResponseSchema = z.object({
   expiresAt: z.iso.datetime(),
 });
 
-export const espnBridgeDeviceRequestSchema = z.object({
+export const espnSyncAgentCapabilitySchema = z.literal("refresh-intents-v1");
+
+const espnBridgeDeviceRequestObjectSchema = z.object({
   name: z.string().trim().min(1).max(80).default("ESPN browser bridge"),
+  clientKind: z.enum(["chrome-extension", "ios-app"]).default("chrome-extension"),
+  agentCapabilities: z
+    .array(espnSyncAgentCapabilitySchema)
+    .max(1)
+    .refine((values) => new Set(values).size === values.length, "capabilities must be unique")
+    .default([]),
+  season: z.number().int().min(2000).max(2100).optional(),
   allowedLeagueIds: z
     .array(z.string().regex(/^\d{1,20}$/u))
     .min(1)
@@ -507,8 +519,29 @@ export const espnBridgeDeviceRequestSchema = z.object({
     .refine((values) => new Set(values).size === values.length, "league IDs must be unique"),
 });
 
+export const espnBridgeDeviceRequestSchema = espnBridgeDeviceRequestObjectSchema.superRefine(
+  (value, context) => {
+    if (value.clientKind === "ios-app" && !value.agentCapabilities.includes("refresh-intents-v1")) {
+      context.addIssue({
+        code: "custom",
+        path: ["agentCapabilities"],
+        message: "iOS sync devices must declare refresh-intents-v1",
+      });
+    }
+    if (value.clientKind === "ios-app" && value.season === undefined) {
+      context.addIssue({
+        code: "custom",
+        path: ["season"],
+        message: "iOS sync devices require an exact season",
+      });
+    }
+  },
+);
+
 export const espnBridgeDeviceResponseSchema = z.object({
   deviceId: z.string().uuid(),
+  clientKind: z.enum(["chrome-extension", "ios-app"]),
+  agentCapable: z.boolean(),
   deviceToken: z.string().min(32).max(512),
   expiresAt: z.iso.datetime().nullable(),
 });
@@ -519,7 +552,9 @@ export const espnBridgePairingCodeSchema = z
   .toUpperCase()
   .regex(/^[A-HJ-NP-Z2-9]{4}(?:-[A-HJ-NP-Z2-9]{4}){3}$/u, "must be a valid Laces Out pairing code");
 
-export const espnBridgePairingSessionRequestSchema = espnBridgeDeviceRequestSchema.extend({
+export const espnBridgePairingSessionRequestSchema = espnBridgeDeviceRequestObjectSchema.extend({
+  clientKind: z.literal("chrome-extension").default("chrome-extension"),
+  agentCapabilities: z.tuple([espnSyncAgentCapabilitySchema]).default(["refresh-intents-v1"]),
   season: z.number().int().min(2000).max(2100),
 });
 
@@ -534,13 +569,16 @@ export const espnBridgePairingRedeemRequestSchema = z.object({
 
 export const espnBridgePairingRedeemResponseSchema = espnBridgeDeviceResponseSchema.extend({
   expiresAt: z.iso.datetime(),
-  leagueIds: espnBridgeDeviceRequestSchema.shape.allowedLeagueIds,
+  leagueIds: espnBridgeDeviceRequestObjectSchema.shape.allowedLeagueIds,
   season: z.number().int().min(2000).max(2100),
   automaticSync: z.literal(true),
+  agentCapable: z.literal(true),
 });
 
 export const espnBridgeDeviceStatusSchema = z.object({
   deviceId: z.string().uuid(),
+  clientKind: z.enum(["chrome-extension", "ios-app"]),
+  agentCapable: z.boolean(),
   name: z.string().min(1).max(80),
   state: z.enum(["active", "expired", "revoked"]),
   allowedLeagues: z.array(
@@ -567,11 +605,16 @@ export const espnBridgeDeviceRevokeResponseSchema = z.object({
   revokedAt: z.iso.datetime(),
 });
 
+export const espnPayloadChecksumAlgorithmSchema = z.enum([
+  "json-stringify-sha256",
+  "canonical-json-v1-sha256",
+]);
+
 export const espnBridgeSnapshotSchema = z
   .object({
     schemaVersion: z.literal(1),
     provider: z.literal("espn"),
-    authority: z.literal("browser-local"),
+    authority: z.enum(["browser-local", "native-local"]),
     readOnly: z.literal(true),
     leagueId: z.string().regex(/^\d{1,20}$/u),
     season: z.number().int().min(2000).max(2100),
@@ -583,15 +626,28 @@ export const espnBridgeSnapshotSchema = z
         "must use the allowlisted ESPN fantasy read host",
       ),
     checksumSha256: z.string().regex(/^[a-f0-9]{64}$/u),
+    checksumAlgorithm: espnPayloadChecksumAlgorithmSchema.optional(),
     payload: z.unknown(),
   })
-  .strict();
+  .strict()
+  .superRefine((value, context) => {
+    if (
+      value.authority === "native-local" &&
+      value.checksumAlgorithm !== "canonical-json-v1-sha256"
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["checksumAlgorithm"],
+        message: "native agents must use portable canonical JSON checksums",
+      });
+    }
+  });
 export type EspnBridgeSnapshot = z.infer<typeof espnBridgeSnapshotSchema>;
 
 const espnSupplementalBridgeBase = {
   schemaVersion: z.literal(1),
   provider: z.literal("espn"),
-  authority: z.literal("browser-local"),
+  authority: z.enum(["browser-local", "native-local"]),
   readOnly: z.literal(true),
   leagueId: z.string().regex(/^\d{1,20}$/u),
   season: z.number().int().min(2019).max(2100),
@@ -603,47 +659,61 @@ const espnSupplementalBridgeBase = {
       "must use the allowlisted ESPN fantasy read host",
     ),
   checksumSha256: z.string().regex(/^[a-f0-9]{64}$/u),
+  checksumAlgorithm: espnPayloadChecksumAlgorithmSchema.optional(),
   payload: z.unknown(),
 } as const;
 
-export const espnSupplementalBridgeSnapshotSchema = z.discriminatedUnion("kind", [
-  z
-    .object({
-      ...espnSupplementalBridgeBase,
-      kind: z.literal("available-free-agents"),
-      week: z.number().int().min(0).max(30),
-    })
-    .strict(),
-  z
-    .object({
-      ...espnSupplementalBridgeBase,
-      kind: z.literal("available-waivers"),
-      week: z.number().int().min(0).max(30),
-    })
-    .strict(),
-  z
-    .object({
-      ...espnSupplementalBridgeBase,
-      kind: z.literal("weekly-box-scores"),
-      week: z.number().int().min(1).max(30),
-      matchupPeriodId: z.number().int().min(1).max(30),
-    })
-    .strict(),
-  z
-    .object({
-      ...espnSupplementalBridgeBase,
-      kind: z.literal("structured-transactions"),
-      week: z.number().int().min(0).max(30),
-    })
-    .strict(),
-  z
-    .object({
-      ...espnSupplementalBridgeBase,
-      kind: z.literal("completed-draft"),
-      week: z.null(),
-    })
-    .strict(),
-]);
+export const espnSupplementalBridgeSnapshotSchema = z
+  .discriminatedUnion("kind", [
+    z
+      .object({
+        ...espnSupplementalBridgeBase,
+        kind: z.literal("available-free-agents"),
+        week: z.number().int().min(0).max(30),
+      })
+      .strict(),
+    z
+      .object({
+        ...espnSupplementalBridgeBase,
+        kind: z.literal("available-waivers"),
+        week: z.number().int().min(0).max(30),
+      })
+      .strict(),
+    z
+      .object({
+        ...espnSupplementalBridgeBase,
+        kind: z.literal("weekly-box-scores"),
+        week: z.number().int().min(1).max(30),
+        matchupPeriodId: z.number().int().min(1).max(30),
+      })
+      .strict(),
+    z
+      .object({
+        ...espnSupplementalBridgeBase,
+        kind: z.literal("structured-transactions"),
+        week: z.number().int().min(0).max(30),
+      })
+      .strict(),
+    z
+      .object({
+        ...espnSupplementalBridgeBase,
+        kind: z.literal("completed-draft"),
+        week: z.null(),
+      })
+      .strict(),
+  ])
+  .superRefine((value, context) => {
+    if (
+      value.authority === "native-local" &&
+      value.checksumAlgorithm !== "canonical-json-v1-sha256"
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["checksumAlgorithm"],
+        message: "native agents must use portable canonical JSON checksums",
+      });
+    }
+  });
 export type EspnSupplementalBridgeSnapshot = z.infer<typeof espnSupplementalBridgeSnapshotSchema>;
 
 export const espnBridgeReceiptSchema = z.object({
@@ -3323,6 +3393,8 @@ export const mobileCapabilitySchema = z.enum([
   "activity-feed",
   "authenticated-browser-handoff",
   "cookie-authentication",
+  "espn-automated-refresh",
+  "espn-sync-agent-v1",
   "in-season-decisions",
   "league-analytics",
   "league-dashboard",

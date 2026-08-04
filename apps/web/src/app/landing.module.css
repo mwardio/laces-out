@@ -982,6 +982,85 @@
   border-radius: var(--radius-md);
 }
 
+/* Shared NFL data applies to every connection rather than being one of them, so it runs the
+   full width beneath the two columns instead of stacking as a third provider card. */
+.dataFeedBand {
+  display: grid;
+  grid-template-columns: minmax(240px, 0.9fr) minmax(0, 1.35fr) minmax(240px, 0.9fr);
+  align-items: start;
+  gap: var(--space-16) var(--space-32);
+  margin-top: var(--space-16);
+  padding: 22px;
+  background: #202a22;
+  border: 1px solid #344137;
+  border-radius: var(--radius-md);
+}
+
+.dataFeedIntro {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 11px;
+}
+
+.dataFeedIntro > div {
+  display: grid;
+  gap: 2px;
+}
+
+.dataFeedIntro p {
+  color: #a5b0a8;
+  font-size: var(--text-8);
+  font-weight: 780;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.dataFeedIntro h3 {
+  font-size: var(--text-15);
+  letter-spacing: -0.02em;
+}
+
+.dataFeedBadge {
+  display: grid;
+  width: 58px;
+  height: 38px;
+  flex: 0 0 auto;
+  place-items: center;
+  color: var(--white);
+  border: 1px solid rgb(255 255 255 / 13%);
+  border-radius: var(--radius-sm);
+}
+
+.dataFeedDescription {
+  color: #a3aea6;
+  font-size: var(--text-13);
+  line-height: 1.65;
+}
+
+.dataFeedChecks {
+  display: grid;
+  gap: 9px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.dataFeedChecks li {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-8);
+  color: #c8d0ca;
+  font-size: var(--text-11);
+  line-height: 1.45;
+}
+
+.dataFeedChecks li svg {
+  flex: 0 0 auto;
+  margin-top: 1px;
+  color: var(--lime-300);
+}
+
 .engineHeader {
   justify-content: space-between;
   gap: 18px;
@@ -2368,8 +2447,13 @@
   }
 
   .enginePanel,
-  .providerCard {
+  .providerCard,
+  .dataFeedBand {
     padding: 18px;
+  }
+
+  .dataFeedBand {
+    grid-template-columns: 1fr;
   }
 
   .engineSteps li {

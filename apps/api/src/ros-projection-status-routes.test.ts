@@ -83,6 +83,7 @@ describe("ROS projection status routes", () => {
       leagueReadiness: [
         {
           leagueSeasonId: null,
+          leagueName: null,
           state: "withheld",
           reasons: ["no-league-synced"],
           scoringProfile: null,
@@ -190,6 +191,7 @@ describe("ROS projection status routes", () => {
       leagueReadiness: [
         {
           leagueSeasonId: "40000000-0000-4000-8000-000000000001",
+          leagueName: "Daragely",
           state: "ready",
           reasons: [],
           scoringProfile: profile,
@@ -197,6 +199,7 @@ describe("ROS projection status routes", () => {
         },
         {
           leagueSeasonId: "40000000-0000-4000-8000-000000000002",
+          leagueName: "North Loop Auction",
           state: "withheld",
           reasons: ["no-admitted-scoring-profile", "incomplete-schedule"],
           scoringProfile: null,
@@ -220,6 +223,7 @@ describe("ROS projection status routes", () => {
         {
           projectionSetId: "30000000-0000-4000-8000-000000000001",
           leagueSeasonId: "40000000-0000-4000-8000-000000000001",
+          leagueName: "Daragely",
           scoringProfile: profile,
           season: 2026,
           playerCount: 213,

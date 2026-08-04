@@ -3,7 +3,6 @@
 import {
   ArrowRight,
   Check,
-  ChevronRight,
   Clipboard,
   ExternalLink,
   Info,
@@ -26,13 +25,14 @@ import { type FormEvent, useCallback, useEffect, useRef, useState } from "react"
 import {
   absoluteApiOrigin,
   apiBaseUrl,
-  parseDataQualitySources,
   parseEspnBridgeDeviceCredential,
   parseEspnBridgeDeviceList,
   parseEspnBridgePairingSession,
-  type DataQualitySource,
+  parseEspnLeagueRefreshStatus,
+  parseLeagueListResponse,
   type EspnBridgeDeviceStatus,
   type EspnBridgePairingSession,
+  type EspnLeagueRefreshStatus,
 } from "../lib/api-client";
 import {
   chromeWebStoreUrl,
@@ -58,6 +58,14 @@ interface ScopedBridgeCredential {
 }
 
 type BridgeDevice = EspnBridgeDeviceStatus;
+
+interface EspnLeagueRefreshItem {
+  readonly leagueId: string;
+  readonly leagueSeasonId: string;
+  readonly name: string;
+  readonly season: number;
+  readonly status: EspnLeagueRefreshStatus;
+}
 
 type YahooHealth = "pending" | "healthy" | "degraded" | "reauthorize" | "disabled";
 
@@ -151,17 +159,6 @@ function formatYahooTime(value: string | null, emptyLabel: string): string {
   }).format(date);
 }
 
-/** Whole percentages only: a match rate is evidence, not a precision claim. */
-function percent(value: number): string {
-  return `${Math.round(value * 100)}%`;
-}
-
-function listSentence(values: readonly string[]): string {
-  if (values.length <= 1) return values[0] ?? "";
-  if (values.length === 2) return `${values[0]} and ${values[1]}`;
-  return `${values.slice(0, -1).join(", ")}, and ${values[values.length - 1]}`;
-}
-
 function yahooHealthLabel(health: YahooHealth): string {
   switch (health) {
     case "healthy":
@@ -177,6 +174,48 @@ function yahooHealthLabel(health: YahooHealth): string {
   }
 }
 
+function artifactLabel(family: EspnLeagueRefreshStatus["artifacts"][number]["family"]): string {
+  switch (family) {
+    case "available-players":
+      return "Players";
+    case "weekly-box-scores":
+      return "Box scores";
+    case "completed-draft":
+      return "Draft";
+    case "transactions":
+      return "Transactions";
+    default:
+      return "Core";
+  }
+}
+
+function espnModeLabel(status: EspnLeagueRefreshStatus): string {
+  const fulfillmentMode = status.request?.fulfillmentMode;
+  if (fulfillmentMode === "server-direct") return "Direct";
+  if (fulfillmentMode === "chrome-agent" || fulfillmentMode === "native-agent") {
+    return "Paired device";
+  }
+  if (
+    status.direct.enabled &&
+    status.direct.coreState === "available" &&
+    status.direct.preferredMode !== "assisted"
+  ) {
+    return "Direct";
+  }
+  if (status.direct.preferredMode === "assisted") return "Paired device";
+  if (status.agents.activeCount > 0) return "Paired device";
+  return "Automatic";
+}
+
+function espnDirectStateLabel(status: EspnLeagueRefreshStatus): string {
+  if (!status.direct.enabled || status.direct.coreState === "disabled")
+    return "Disabled by operator";
+  if (status.direct.coreState === "available") return "Verified public core";
+  if (status.direct.coreState === "not-public") return "Private · paired device needed";
+  if (status.direct.coreState === "degraded") return "Verified · temporarily degraded";
+  return "Evidence not approved";
+}
+
 export function ConnectionWorkbench() {
   const [espnMethod, setEspnMethod] = useState<EspnConnectionMethod>("one-click");
   const [leagueIdsInput, setLeagueIdsInput] = useState("");
@@ -188,6 +227,14 @@ export function ConnectionWorkbench() {
   const [bridgeDevices, setBridgeDevices] = useState<readonly BridgeDevice[]>([]);
   const [bridgeDevicesState, setBridgeDevicesState] = useState<RequestState>("working");
   const [bridgeDevicesError, setBridgeDevicesError] = useState<string | null>(null);
+  const [espnLeagueStatuses, setEspnLeagueStatuses] = useState<readonly EspnLeagueRefreshItem[]>(
+    [],
+  );
+  const [espnLeagueStatusesState, setEspnLeagueStatusesState] = useState<RequestState>("working");
+  const [espnLeagueStatusesError, setEspnLeagueStatusesError] = useState<string | null>(null);
+  const [refreshingEspnLeagueSeasonId, setRefreshingEspnLeagueSeasonId] = useState<string | null>(
+    null,
+  );
   const [signedOut, setSignedOut] = useState(false);
   const [revokingDeviceId, setRevokingDeviceId] = useState<string | null>(null);
   const [bridgeRevokeCandidate, setBridgeRevokeCandidate] = useState<string | null>(null);
@@ -208,10 +255,6 @@ export function ConnectionWorkbench() {
   const [yahooActionMessage, setYahooActionMessage] = useState<UiMessage | null>(null);
   const [yahooDisconnectCandidate, setYahooDisconnectCandidate] = useState<string | null>(null);
   const [callbackNotice, setCallbackNotice] = useState<UiMessage | null>(null);
-  const [degradedSources, setDegradedSources] = useState<readonly DataQualitySource[]>([]);
-  const [dataHealthState, setDataHealthState] = useState<RequestState>("working");
-  const [dataHealthError, setDataHealthError] = useState<string | null>(null);
-  const [dataHealthNotice, setDataHealthNotice] = useState<string | null>(null);
   const bookmarkletRef = useRef<HTMLAnchorElement>(null);
 
   const bookmarklet =
@@ -244,7 +287,8 @@ export function ConnectionWorkbench() {
         setSignedOut(true);
         return;
       }
-      if (!response.ok) throw new ConnectionUiError("Paired ESPN browsers could not be loaded.");
+      if (!response.ok)
+        throw new ConnectionUiError("Paired ESPN sync devices could not be loaded.");
       const devices = parseEspnBridgeDeviceList(await response.json());
       if (!devices) throw new ConnectionUiError("The bridge device list was invalid.");
       setBridgeDevices(devices);
@@ -254,7 +298,7 @@ export function ConnectionWorkbench() {
       setBridgeDevicesError(
         error instanceof ConnectionUiError
           ? error.message
-          : "Paired ESPN browsers could not be loaded.",
+          : "Paired ESPN sync devices could not be loaded.",
       );
     }
   }, []);
@@ -298,52 +342,67 @@ export function ConnectionWorkbench() {
     }
   }, []);
 
-  /**
-   * Member-safe source quality. The summary route carries admission state, match rates, reasons,
-   * and provenance only — never a source row — so this section states impact without implying that
-   * a member should repair upstream data.
-   */
-  const refreshDataHealth = useCallback(async () => {
-    setDataHealthState("working");
-    setDataHealthError(null);
-    setDataHealthNotice(null);
+  const refreshEspnLeagueStatuses = useCallback(async (quiet = false) => {
+    if (!quiet) setEspnLeagueStatusesState("working");
+    setEspnLeagueStatusesError(null);
     try {
-      const response = await fetch(`${apiBaseUrl}/v1/data-quality/sources`, {
+      const leaguesResponse = await fetch(`${apiBaseUrl}/v1/leagues`, {
         credentials: "include",
         headers: { Accept: "application/json" },
+        cache: "no-store",
       });
-      if (response.status === 401) {
-        setDataHealthState("idle");
+      if (leaguesResponse.status === 401) {
+        setEspnLeagueStatusesState("idle");
         setSignedOut(true);
         return;
       }
-      if (!response.ok) {
-        throw new ConnectionUiError(
-          response.status === 503
-            ? "Source quality reporting is not configured on this server yet."
-            : "Source health could not be loaded.",
-        );
+      if (!leaguesResponse.ok) {
+        throw new ConnectionUiError("Connected ESPN leagues could not be loaded.");
       }
-      const summary = parseDataQualitySources(await response.json());
-      if (!summary) throw new ConnectionUiError("The source health response was invalid.");
-      if (summary.availability.state !== "available") {
-        // The bounded read withheld the dataset rather than truncating it; say so plainly.
-        setDegradedSources([]);
-        setDataHealthNotice(summary.availability.reason);
-        setDataHealthState("done");
-        return;
-      }
-      const degraded = summary.degradedSourceKeys;
-      setDegradedSources(summary.sources.filter((source) => degraded.includes(source.key)));
-      setDataHealthState("done");
+      const portfolio = parseLeagueListResponse(await leaguesResponse.json());
+      if (!portfolio) throw new ConnectionUiError("The league list response was invalid.");
+      const espnLeagues = portfolio.leagues.filter(
+        (league) => !league.archived && league.season?.provider === "espn",
+      );
+      const statuses = await Promise.all(
+        espnLeagues.map(async (league): Promise<EspnLeagueRefreshItem> => {
+          const season = league.season;
+          if (!season || season.provider !== "espn") {
+            throw new ConnectionUiError("An ESPN league was missing its season.");
+          }
+          const statusResponse = await fetch(
+            `${apiBaseUrl}/v1/leagues/${encodeURIComponent(season.id)}/refresh/status`,
+            {
+              credentials: "include",
+              headers: { Accept: "application/json" },
+              cache: "no-store",
+            },
+          );
+          if (!statusResponse.ok) {
+            throw new ConnectionUiError(`${league.name} refresh health could not be loaded.`);
+          }
+          const status = parseEspnLeagueRefreshStatus(await statusResponse.json());
+          if (!status) throw new ConnectionUiError(`${league.name} returned invalid sync health.`);
+          return {
+            leagueId: league.id,
+            leagueSeasonId: season.id,
+            name: league.name,
+            season: season.season,
+            status,
+          };
+        }),
+      );
+      setEspnLeagueStatuses(statuses);
+      setEspnLeagueStatusesState("done");
     } catch (error) {
-      setDataHealthState("error");
-      setDataHealthError(
-        error instanceof ConnectionUiError ? error.message : "Source health could not be loaded.",
+      setEspnLeagueStatusesState("error");
+      setEspnLeagueStatusesError(
+        error instanceof ConnectionUiError
+          ? error.message
+          : "Connected ESPN league health could not be loaded.",
       );
     }
   }, []);
-
   useEffect(() => {
     const parameters = new URLSearchParams(window.location.search);
     if (parameters.get("provider") !== "yahoo") return;
@@ -384,9 +443,25 @@ export function ConnectionWorkbench() {
 
   useEffect(() => {
     void refreshBridgeDevices();
+    void refreshEspnLeagueStatuses();
     void refreshYahooConnections();
-    void refreshDataHealth();
-  }, [refreshBridgeDevices, refreshYahooConnections, refreshDataHealth]);
+  }, [refreshBridgeDevices, refreshEspnLeagueStatuses, refreshYahooConnections]);
+
+  useEffect(() => {
+    const hasLiveRequest = espnLeagueStatuses.some(
+      ({ status }) => status.request?.state === "queued" || status.request?.state === "processing",
+    );
+    if (!hasLiveRequest) return;
+    let polling = false;
+    const interval = window.setInterval(() => {
+      if (polling) return;
+      polling = true;
+      void refreshEspnLeagueStatuses(true).finally(() => {
+        polling = false;
+      });
+    }, 5_000);
+    return () => window.clearInterval(interval);
+  }, [espnLeagueStatuses, refreshEspnLeagueStatuses]);
 
   async function startYahoo() {
     setYahooState("working");
@@ -547,7 +622,12 @@ export function ConnectionWorkbench() {
         method: "POST",
         credentials: "include",
         headers: { Accept: "application/json", "Content-Type": "application/json" },
-        body: JSON.stringify({ name: credentialName, allowedLeagueIds }),
+        body: JSON.stringify({
+          name: credentialName,
+          allowedLeagueIds,
+          season: espnSeason,
+          agentCapabilities: espnMethod === "automatic" ? ["refresh-intents-v1"] : [],
+        }),
       });
       if (response.status === 401) {
         window.location.assign(loginUrlForCurrentPath());
@@ -689,6 +769,41 @@ export function ConnectionWorkbench() {
     }
   }
 
+  async function requestEspnLeagueRefresh(leagueSeasonId: string) {
+    setRefreshingEspnLeagueSeasonId(leagueSeasonId);
+    setEspnLeagueStatusesError(null);
+    try {
+      const response = await fetch(
+        `${apiBaseUrl}/v1/leagues/${encodeURIComponent(leagueSeasonId)}/refresh`,
+        {
+          method: "POST",
+          credentials: "include",
+          headers: { Accept: "application/json", "Content-Type": "application/json" },
+          body: "{}",
+          cache: "no-store",
+        },
+      );
+      if (response.status === 401) {
+        window.location.assign(loginUrlForCurrentPath());
+        return;
+      }
+      if (!response.ok) throw new ConnectionUiError("ESPN refresh could not be requested.");
+      const status = parseEspnLeagueRefreshStatus(await response.json());
+      if (!status) throw new ConnectionUiError("ESPN returned an invalid refresh status.");
+      setEspnLeagueStatuses((current) =>
+        current.map((league) =>
+          league.leagueSeasonId === leagueSeasonId ? { ...league, status } : league,
+        ),
+      );
+    } catch (error) {
+      setEspnLeagueStatusesError(
+        error instanceof ConnectionUiError ? error.message : "ESPN refresh could not be requested.",
+      );
+    } finally {
+      setRefreshingEspnLeagueSeasonId(null);
+    }
+  }
+
   const yahooLeagueCount = yahooConnections.reduce(
     (total, connection) => total + connection.leagues.length,
     0,
@@ -721,27 +836,6 @@ export function ConnectionWorkbench() {
         : signedOut
           ? "Sign in to connect"
           : "Ready to connect";
-
-  // A collapsed expander still needs to signal trouble; surface the worst
-  // state (withheld beats not-yet-available) so a member never has to open
-  // the row just to learn everything is fine.
-  const quarantinedSourceCount = degradedSources.filter(
-    (source) => source.admission === "quarantined",
-  ).length;
-  const pendingSourceCount = degradedSources.length - quarantinedSourceCount;
-  const dataHealthHint = signedOut
-    ? "Sign in to check"
-    : dataHealthState === "working"
-      ? "Checking…"
-      : dataHealthState === "error"
-        ? "Check failed"
-        : dataHealthNotice
-          ? "Unavailable"
-          : degradedSources.length === 0
-            ? "All sources healthy"
-            : quarantinedSourceCount > 0
-              ? `${quarantinedSourceCount} withheld${pendingSourceCount > 0 ? `, ${pendingSourceCount} pending` : ""}`
-              : `${pendingSourceCount} pending`;
 
   return (
     <div className="connections-page">
@@ -798,96 +892,6 @@ export function ConnectionWorkbench() {
         </div>
       ) : null}
 
-      <details className="connection-data-health" id="data-health">
-        <summary className="connection-data-health__head">
-          <div>
-            <p className="eyebrow">Source health</p>
-            <h2>Data health</h2>
-          </div>
-          <span className="connection-data-health__summary-status">
-            <span className="connection-data-health__summary-hint">{dataHealthHint}</span>
-            <ChevronRight size={18} aria-hidden="true" />
-          </span>
-        </summary>
-
-        <div className="connection-data-health__body">
-          <p className="connection-data-health__lede">
-            Laces Out withholds an analysis rather than publishing it from a source whose player
-            identities did not resolve. Completed-season snapshots are archived after admission;
-            they do not age into a stale state. Anything listed here is being withheld for you
-            already.
-          </p>
-
-          {signedOut ? (
-            <p className="connection-data-health__state" role="status">
-              Sign in to see which sources are currently withheld.
-            </p>
-          ) : dataHealthState === "working" ? (
-            <p className="connection-data-health__state" role="status">
-              Checking source health…
-            </p>
-          ) : dataHealthState === "error" ? (
-            <p
-              className="connection-data-health__state connection-data-health__state--error"
-              role="alert"
-            >
-              {dataHealthError}
-            </p>
-          ) : dataHealthNotice ? (
-            <p className="connection-data-health__state" role="status">
-              {dataHealthNotice}
-            </p>
-          ) : degradedSources.length === 0 ? (
-            <p className="connection-data-health__state" role="status">
-              Every source is resolving identities above its threshold.
-            </p>
-          ) : (
-            <ul className="connection-data-health__list">
-              {degradedSources.map((source) => (
-                <li className="connection-data-health__item" key={source.key}>
-                  <div className="connection-data-health__item-head">
-                    <h3>{source.name}</h3>
-                    <span
-                      className={`connection-data-health__badge connection-data-health__badge--${source.admission}`}
-                    >
-                      {source.admission === "quarantined" ? "Withheld" : "Not yet available"}
-                    </span>
-                  </div>
-                  <dl className="connection-data-health__facts">
-                    <div>
-                      <dt>Identity coverage</dt>
-                      <dd>
-                        {source.matchRate === null
-                          ? "Not measured yet"
-                          : `${percent(source.matchRate)} of ${percent(source.minimumMatchRate)} required`}
-                      </dd>
-                    </div>
-                    <div>
-                      <dt>
-                        {source.lifecycle === "archived"
-                          ? "Snapshot verified"
-                          : "Last successful refresh"}
-                      </dt>
-                      <dd>{formatBridgeTime(source.lastSuccessfulAt)}</dd>
-                    </div>
-                  </dl>
-                  <p className="connection-data-health__reason">{source.reason}</p>
-                  {source.affectedAnalysis.length > 0 ? (
-                    <p className="connection-data-health__impact">
-                      {`${listSentence(source.affectedAnalysis)} ${
-                        source.affectedAnalysis.length === 1 ? "is" : "are"
-                      } withheld for this source until identity coverage returns above ${percent(
-                        source.minimumMatchRate,
-                      )}.`}
-                    </p>
-                  ) : null}
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
-      </details>
-
       <section className="connection-grid" aria-label="Fantasy provider connections">
         <article className="connection-provider connection-provider--espn" id="espn-connection">
           <div className="connection-provider__head">
@@ -903,9 +907,21 @@ export function ConnectionWorkbench() {
             </span>
           </div>
           <p>
-            Choose one connection method. One-click sync is the quickest setup; the Chrome companion
-            is only for automatic refreshes. Both send league data, not your ESPN password or
-            cookies.
+            One-click sync is the quickest setup. Automatic refresh can use a verified public read
+            when enabled or an authorized sync device such as the Chrome companion. Device-local
+            ESPN sessions never send your password or cookies to Laces Out.
+          </p>
+          <p className="connection-provider__supporting-copy">
+            Public viewability is optional. A league manager may follow ESPN&apos;s{" "}
+            <a
+              href="https://support.espn.com/hc/en-us/articles/47160849553940-Making-a-Private-League-Public-LM-Only"
+              target="_blank"
+              rel="noreferrer"
+            >
+              public-view instructions
+            </a>{" "}
+            to make direct refresh eligible; it does not make the league joinable and does not imply
+            ESPN endorsement.
           </p>
 
           <div className="espn-method-switcher" role="tablist" aria-label="ESPN connection method">
@@ -1134,9 +1150,10 @@ export function ConnectionWorkbench() {
                 <div>
                   <strong>Automatic refresh for desktop Chrome</strong>
                   <span>
-                    The companion refreshes every six hours while Chrome and your ESPN session are
-                    available, including player availability, box scores, transactions, and draft
-                    results.
+                    The companion checks Laces Out every five minutes for requested leagues while
+                    Chrome is running, then keeps the existing six-hour full sync as a safety net.
+                    ESPN reads happen only when work is due and your local ESPN session is
+                    available.
                   </span>
                   <a
                     className="button button--outline button--small bridge-download"
@@ -1369,6 +1386,143 @@ export function ConnectionWorkbench() {
             </div>
           )}
 
+          <div className="bridge-device-manager espn-league-manager" aria-live="polite">
+            <div className="bridge-device-manager__heading">
+              <span>
+                <RefreshCw size={16} />
+                <strong>Connected ESPN leagues</strong>
+              </span>
+              <button
+                className="button button--outline button--small"
+                type="button"
+                onClick={() => void refreshEspnLeagueStatuses()}
+                disabled={espnLeagueStatusesState === "working"}
+              >
+                <RefreshCw
+                  className={espnLeagueStatusesState === "working" ? "spin" : undefined}
+                  size={14}
+                />
+                Refresh status
+              </button>
+            </div>
+            {espnLeagueStatusesError ? (
+              <p className="connection-error" role="alert">
+                <TriangleAlert size={14} />
+                {espnLeagueStatusesError}
+              </p>
+            ) : null}
+            {espnLeagueStatusesState === "working" && espnLeagueStatuses.length === 0 ? (
+              <p className="bridge-device-manager__empty">Checking league refresh health…</p>
+            ) : espnLeagueStatuses.length === 0 ? (
+              <p className="bridge-device-manager__empty">
+                No synchronized ESPN league is attached to this account yet. Run the one-click sync
+                or pair a sync device to import one.
+              </p>
+            ) : (
+              <ul className="bridge-device-list espn-refresh-list">
+                {espnLeagueStatuses.map((league) => {
+                  const core = league.status.artifacts.find(
+                    (artifact) => artifact.family === "core",
+                  );
+                  const requestState = league.status.request?.state ?? "none";
+                  return (
+                    <li key={league.leagueSeasonId}>
+                      <div className="bridge-device-list__summary">
+                        <span
+                          className={`espn-refresh-state espn-refresh-state--${league.status.display.code}`}
+                        >
+                          {league.status.current ? "Current" : "Needs refresh"}
+                        </span>
+                        <strong>
+                          {league.name} · {league.season}
+                        </strong>
+                        <small>{league.status.display.label}</small>
+                      </div>
+                      <button
+                        className="button button--outline button--small"
+                        type="button"
+                        onClick={() => void requestEspnLeagueRefresh(league.leagueSeasonId)}
+                        disabled={refreshingEspnLeagueSeasonId !== null}
+                      >
+                        {refreshingEspnLeagueSeasonId === league.leagueSeasonId ? (
+                          <LoaderCircle className="spin" size={14} />
+                        ) : (
+                          <RefreshCw size={14} />
+                        )}
+                        {refreshingEspnLeagueSeasonId === league.leagueSeasonId
+                          ? "Requesting…"
+                          : "Refresh league"}
+                      </button>
+                      <dl className="espn-refresh-list__facts">
+                        <div>
+                          <dt>Last accepted core sync</dt>
+                          <dd>{formatBridgeTime(core?.observedAt ?? null)}</dd>
+                        </div>
+                        <div>
+                          <dt>Detected mode</dt>
+                          <dd>{espnModeLabel(league.status)}</dd>
+                        </div>
+                        <div>
+                          <dt>Active sync devices</dt>
+                          <dd>
+                            {league.status.agents.activeCount}
+                            {league.status.agents.mostRecentSeenAt
+                              ? ` · ${formatBridgeTime(league.status.agents.mostRecentSeenAt)}`
+                              : " · none seen recently"}
+                          </dd>
+                        </div>
+                        <div>
+                          <dt>Refresh request</dt>
+                          <dd>{requestState}</dd>
+                        </div>
+                        <div>
+                          <dt>Direct read</dt>
+                          <dd>
+                            {espnDirectStateLabel(league.status)}
+                            {league.status.direct.lastProbeAt
+                              ? ` · checked ${formatBridgeTime(league.status.direct.lastProbeAt)}`
+                              : ""}
+                          </dd>
+                        </div>
+                        <div>
+                          <dt>Latest attempt</dt>
+                          <dd>
+                            {league.status.request?.latestAttempt
+                              ? `${league.status.request.latestAttempt.state} · ${formatBridgeTime(
+                                  league.status.request.latestAttempt.finishedAt ??
+                                    league.status.request.latestAttempt.startedAt,
+                                )}`
+                              : "No attempt recorded"}
+                          </dd>
+                        </div>
+                      </dl>
+                      <div
+                        className="espn-refresh-list__artifacts"
+                        aria-label={`${league.name} artifact freshness`}
+                      >
+                        {league.status.artifacts.map((artifact) => (
+                          <span
+                            className={`espn-artifact-state espn-artifact-state--${artifact.state}`}
+                            key={artifact.family}
+                            title={
+                              artifact.observedAt
+                                ? `${artifactLabel(artifact.family)} accepted ${new Date(
+                                    artifact.observedAt,
+                                  ).toLocaleString()}`
+                                : `${artifactLabel(artifact.family)} has not been accepted yet`
+                            }
+                          >
+                            {artifactLabel(artifact.family)} · {artifact.state}
+                          </span>
+                        ))}
+                      </div>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </div>
+
           <div className="bridge-device-manager" aria-live="polite">
             <div className="bridge-device-manager__heading">
               <span>
@@ -1398,7 +1552,7 @@ export function ConnectionWorkbench() {
               <p className="bridge-device-manager__empty">Checking ESPN sync status…</p>
             ) : visibleBridgeDevices.length === 0 ? (
               <p className="bridge-device-manager__empty">
-                No ESPN sync access yet. Create a one-click button or pair the Chrome companion
+                No ESPN sync access yet. Create a one-click button or pair an automatic sync device
                 above.
               </p>
             ) : (
@@ -1414,7 +1568,15 @@ export function ConnectionWorkbench() {
                           : device.state}
                       </span>
                       <strong>{device.name}</strong>
-                      <small>{formatBridgeTime(device.lastSeenAt)}</small>
+                      <small>
+                        {device.clientKind === "ios-app"
+                          ? "iOS sync agent"
+                          : device.agentCapable
+                            ? "Chrome sync agent"
+                            : "One-click credential"}
+                        {" · "}
+                        {formatBridgeTime(device.lastSeenAt)}
+                      </small>
                     </div>
                     <div className="bridge-device-list__leagues">
                       {device.allowedLeagues.map((scope) => (
@@ -1452,7 +1614,7 @@ export function ConnectionWorkbench() {
                             Revoke ESPN sync access for {device.name}?
                           </strong>
                           <p>
-                            Future syncs from this browser will stop. Already-synced league data
+                            Future syncs from this device will stop. Already-synced league data
                             remains available as last-known data.
                           </p>
                         </div>

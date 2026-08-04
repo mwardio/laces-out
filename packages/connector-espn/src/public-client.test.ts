@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
+import { canonicalEspnPayloadChecksumV1 } from "./payload-checksum.js";
 import { EspnPublicReadClient } from "./public-client.js";
 import type { EspnPublicReadError } from "./public-client.js";
 
@@ -43,6 +44,11 @@ describe("EspnPublicReadClient", () => {
       authority: "unofficial",
       readOnly: true,
       fetchedAt: "2026-07-16T12:00:00.000Z",
+      checksumSha256: canonicalEspnPayloadChecksumV1({
+        id: 987654321,
+        seasonId: 2026,
+        teams: [],
+      }),
     });
   });
 

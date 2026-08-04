@@ -141,8 +141,10 @@ export const demoDecisionSnapshot: InSeasonDecisionSnapshot = {
     storedTrueLocksHonored: true,
     storedFalseMeansUnlocked: false,
     storedLockedPlayerCount: 0,
+    // Carries the read-only fact because this section is where the page states it once. The
+    // per-card execution notes below deliberately no longer repeat it.
     actionWarning:
-      "Sample only. In live mode, verify locks and transactions at ESPN before making a move.",
+      "Sample only. In live mode, verify locks and transactions at ESPN before making a move. No roster changes are ever made on your behalf.",
   },
   coverage: {
     leagueTeams: 10,

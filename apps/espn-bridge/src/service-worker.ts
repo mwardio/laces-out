@@ -2,6 +2,7 @@ import {
   configurationStorageKey,
   createPendingPairingOffer,
   isBridgeLiveDraftRequest,
+  maintenanceStorageKey,
   pendingPairingStorageKey,
   statusStorageKey,
   summarizeBridgeResults,
@@ -18,6 +19,19 @@ import {
   type BridgeStatus,
   type BridgeStatusState,
 } from "./protocol.js";
+import {
+  defaultMaintenanceState,
+  loginRequiredBackoffMs,
+  maintenancePlan,
+  maintenancePollIntervalMinutes,
+  pollFailureBackoffUntil,
+  retryableLeagueBackoffMs,
+  validateAgentPollResponse,
+  validateMaintenanceState,
+  type AgentRefreshRequest,
+  type EspnArtifactFamily,
+  type MaintenanceState,
+} from "./maintenance.js";
 import {
   validateEspnLiveDraftHeartbeat,
   validateEspnLiveDraftObservation,
@@ -119,10 +133,20 @@ async function setStatus(status: BridgeStatus): Promise<BridgeStatus> {
   return status;
 }
 
-async function readBoundedText(response: Response): Promise<string> {
+async function getMaintenanceState(): Promise<MaintenanceState> {
+  const stored = await chrome.storage.local.get(maintenanceStorageKey);
+  return validateMaintenanceState(stored[maintenanceStorageKey]);
+}
+
+async function setMaintenanceState(state: MaintenanceState): Promise<MaintenanceState> {
+  await chrome.storage.local.set({ [maintenanceStorageKey]: state });
+  return state;
+}
+
+async function readBoundedText(response: Response, maximumBytes = MAX_ESPN_BYTES): Promise<string> {
   const length = Number(response.headers.get("content-length"));
-  if (Number.isFinite(length) && length > MAX_ESPN_BYTES) {
-    throw new Error("ESPN response exceeded the 5 MiB safety limit");
+  if (Number.isFinite(length) && length > maximumBytes) {
+    throw new Error("Response exceeded the safety limit");
   }
   if (!response.body) return "";
   const reader = response.body.getReader();
@@ -133,9 +157,9 @@ async function readBoundedText(response: Response): Promise<string> {
     if (done) break;
     if (!value) continue;
     total += value.byteLength;
-    if (total > MAX_ESPN_BYTES) {
+    if (total > maximumBytes) {
       await reader.cancel();
-      throw new Error("ESPN response exceeded the 5 MiB safety limit");
+      throw new Error("Response exceeded the safety limit");
     }
     chunks.push(value);
   }
@@ -219,7 +243,18 @@ function matchupPeriodForWeek(payload: unknown, week: number): number {
   return week;
 }
 
-function supplementalRequests(payload: unknown): readonly SupplementalRequest[] {
+function supplementalArtifact(request: SupplementalRequest): Exclude<EspnArtifactFamily, "core"> {
+  if (request.kind === "available-free-agents" || request.kind === "available-waivers") {
+    return "available-players";
+  }
+  if (request.kind === "structured-transactions") return "transactions";
+  return request.kind;
+}
+
+function supplementalRequests(
+  payload: unknown,
+  requiredArtifacts?: readonly EspnArtifactFamily[],
+): readonly SupplementalRequest[] {
   const week = currentScoringPeriod(payload);
   const requests: SupplementalRequest[] = [
     {
@@ -279,7 +314,9 @@ function supplementalRequests(payload: unknown): readonly SupplementalRequest[] 
       },
     });
   }
-  return requests;
+  return requiredArtifacts
+    ? requests.filter((request) => requiredArtifacts.includes(supplementalArtifact(request)))
+    : requests;
 }
 
 function supplementalEndpoint(
@@ -299,11 +336,16 @@ function supplementalEndpoint(
 async function synchronizeSupplemental(
   configuration: BridgeConfiguration,
   leagueId: string,
-  capturedAt: string,
   corePayload: unknown,
-): Promise<{ readonly accepted: number; readonly attempted: number }> {
+  requiredArtifacts?: readonly EspnArtifactFamily[],
+): Promise<{
+  readonly accepted: number;
+  readonly attempted: number;
+  readonly authorizationFailed: boolean;
+}> {
   let accepted = 0;
-  const requests = supplementalRequests(corePayload);
+  let authorizationFailed = false;
+  const requests = supplementalRequests(corePayload, requiredArtifacts);
   for (const request of requests) {
     try {
       const endpoint = supplementalEndpoint(configuration, leagueId, request);
@@ -322,6 +364,7 @@ async function synchronizeSupplemental(
         throw new Error("ESPN did not return JSON");
       }
       const payload = JSON.parse(await readBoundedText(response)) as unknown;
+      const capturedAt = new Date().toISOString();
       const envelope = {
         schemaVersion: 1,
         provider: "espn",
@@ -351,6 +394,7 @@ async function synchronizeSupplemental(
         credentials: "omit",
         redirect: "error",
       });
+      if (upload.status === 401 || upload.status === 403) authorizationFailed = true;
       if (!upload.ok) throw new Error(`Laces Out returned status ${upload.status}`);
       accepted += 1;
     } catch {
@@ -358,13 +402,13 @@ async function synchronizeSupplemental(
       // artifacts remain useful when any one undocumented ESPN view drifts or is unavailable.
     }
   }
-  return { accepted, attempted: requests.length };
+  return { accepted, attempted: requests.length, authorizationFailed };
 }
 
 async function synchronizeLeague(
   configuration: BridgeConfiguration,
   leagueId: string,
-  capturedAt: string,
+  requiredArtifacts?: readonly EspnArtifactFamily[],
 ): Promise<BridgeLeagueResult> {
   const endpoint = leagueEndpoint(configuration, leagueId);
   try {
@@ -390,44 +434,63 @@ async function synchronizeLeague(
     const payload = JSON.parse(raw) as unknown;
     validateEspnPayload(payload, leagueId);
     const canonicalPayload = JSON.stringify(payload);
+    const capturedAt = new Date().toISOString();
 
-    const uploadResponse = await fetch(`${configuration.apiBaseUrl}/v1/bridge/espn/snapshots`, {
-      method: "POST",
-      headers: {
-        Accept: "application/json",
-        Authorization: `Bridge ${configuration.deviceToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        schemaVersion: 1,
-        provider: "espn",
-        authority: "browser-local",
-        readOnly: true,
-        leagueId,
-        season: configuration.season,
-        capturedAt,
-        endpoint: endpoint.toString(),
-        checksumSha256: await sha256(canonicalPayload),
-        payload,
-      }),
-      cache: "no-store",
-      credentials: "omit",
-      redirect: "error",
-    });
-    if (uploadResponse.status === 401 || uploadResponse.status === 403) {
+    if (!requiredArtifacts || requiredArtifacts.includes("core")) {
+      const uploadResponse = await fetch(`${configuration.apiBaseUrl}/v1/bridge/espn/snapshots`, {
+        method: "POST",
+        headers: {
+          Accept: "application/json",
+          Authorization: `Bridge ${configuration.deviceToken}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          schemaVersion: 1,
+          provider: "espn",
+          authority: "browser-local",
+          readOnly: true,
+          leagueId,
+          season: configuration.season,
+          capturedAt,
+          endpoint: endpoint.toString(),
+          checksumSha256: await sha256(canonicalPayload),
+          payload,
+        }),
+        cache: "no-store",
+        credentials: "omit",
+        redirect: "error",
+      });
+      if (uploadResponse.status === 401 || uploadResponse.status === 403) {
+        return {
+          leagueId,
+          state: "laces-out-auth-failed",
+          message: "Laces Out pairing was rejected.",
+        };
+      }
+      if (!uploadResponse.ok) {
+        throw new Error(`Laces Out returned status ${uploadResponse.status}`);
+      }
+    }
+    const supplemental = await synchronizeSupplemental(
+      configuration,
+      leagueId,
+      payload,
+      requiredArtifacts,
+    );
+    if (supplemental.authorizationFailed) {
       return {
         leagueId,
         state: "laces-out-auth-failed",
         message: "Laces Out pairing was rejected.",
       };
     }
-    if (!uploadResponse.ok) throw new Error(`Laces Out returned status ${uploadResponse.status}`);
-    const supplemental = await synchronizeSupplemental(
-      configuration,
-      leagueId,
-      capturedAt,
-      payload,
-    );
+    if (requiredArtifacts && supplemental.accepted !== supplemental.attempted) {
+      return {
+        leagueId,
+        state: "error",
+        message: `${supplemental.accepted} of ${supplemental.attempted} requested supplemental feeds updated.`,
+      };
+    }
     return {
       leagueId,
       state: "synced",
@@ -447,7 +510,10 @@ async function synchronizeLeague(
 
 let activeSynchronization: Promise<BridgeStatus> | undefined;
 
-async function runSynchronization(): Promise<BridgeStatus> {
+async function runSynchronization(
+  requested: readonly AgentRefreshRequest[] | null = null,
+  baselineLeagueIds?: readonly string[],
+): Promise<BridgeStatus> {
   let configuration: BridgeConfiguration | undefined;
   try {
     configuration = await getConfiguration();
@@ -462,16 +528,54 @@ async function runSynchronization(): Promise<BridgeStatus> {
   const previous = await getStatus();
   const attemptedAt = new Date().toISOString();
   const results: BridgeLeagueResult[] = [];
-  for (const [index, leagueId] of configuration.leagueIds.entries()) {
+  const targets =
+    requested ??
+    (baselineLeagueIds ?? configuration.leagueIds).map((externalLeagueId): AgentRefreshRequest => ({
+      requestId: "00000000-0000-4000-8000-000000000000",
+      externalLeagueId,
+      season: configuration.season,
+      minimumCaptureAt: attemptedAt,
+      expiresAt: attemptedAt,
+      requiredArtifacts: [
+        "core",
+        "available-players",
+        "weekly-box-scores",
+        "transactions",
+        "completed-draft",
+      ],
+    }));
+  for (const [index, target] of targets.entries()) {
+    const leagueId = target.externalLeagueId;
     await setStatus({
       ...previous,
       configured: true,
       state: "syncing",
-      message: `Syncing ESPN league ${index + 1} of ${configuration.leagueIds.length}…`,
+      message: `Syncing ESPN league ${index + 1} of ${targets.length}…`,
       lastAttemptAt: attemptedAt,
       results: [...results],
     });
-    results.push(await synchronizeLeague(configuration, leagueId, attemptedAt));
+    if (requested) {
+      await reportAgentAttempt(configuration, target.requestId, {
+        state: "started",
+      });
+    }
+    const result = await synchronizeLeague(
+      configuration,
+      leagueId,
+      requested ? target.requiredArtifacts : undefined,
+    );
+    results.push(result);
+    if (requested && result.state !== "synced") {
+      await reportAgentAttempt(
+        configuration,
+        target.requestId,
+        result.state === "espn-login-required"
+          ? { state: "login-required", errorCode: "ESPN_LOGIN_REQUIRED" }
+          : result.state === "laces-out-auth-failed"
+            ? { state: "rejected", errorCode: "LACES_OUT_AUTH_REJECTED" }
+            : { state: "retryable-error", errorCode: "AGENT_SYNC_FAILED" },
+      );
+    }
   }
   const summary = summarizeBridgeResults(results);
   return setStatus({
@@ -486,12 +590,184 @@ async function runSynchronization(): Promise<BridgeStatus> {
   });
 }
 
-function synchronize(): Promise<BridgeStatus> {
+function synchronize(
+  requested: readonly AgentRefreshRequest[] | null = null,
+  baselineLeagueIds?: readonly string[],
+): Promise<BridgeStatus> {
   if (activeSynchronization) return activeSynchronization;
-  activeSynchronization = runSynchronization().finally(() => {
+  activeSynchronization = runSynchronization(requested, baselineLeagueIds).finally(() => {
     activeSynchronization = undefined;
   });
   return activeSynchronization;
+}
+
+async function reportAgentAttempt(
+  configuration: BridgeConfiguration,
+  requestId: string,
+  attempt:
+    | { readonly state: "started" }
+    | {
+        readonly state: "login-required" | "retryable-error" | "rejected";
+        readonly errorCode: string;
+      },
+): Promise<void> {
+  try {
+    await fetch(
+      `${configuration.apiBaseUrl}/v1/bridge/espn/refresh-requests/${encodeURIComponent(requestId)}/attempts`,
+      {
+        method: "POST",
+        headers: {
+          Accept: "application/json",
+          Authorization: `Bridge ${configuration.deviceToken}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(attempt),
+        cache: "no-store",
+        credentials: "omit",
+        redirect: "error",
+      },
+    );
+  } catch {
+    // Attempt reporting is diagnostic. Snapshot admission remains the authoritative success path,
+    // and an older server may not expose this route during the extension rollout.
+  }
+}
+
+async function pollAgentRequests(configuration: BridgeConfiguration): Promise<{
+  readonly poll: ReturnType<typeof validateAgentPollResponse> | null;
+  readonly unauthorized: boolean;
+}> {
+  const response = await fetch(`${configuration.apiBaseUrl}/v1/bridge/espn/refresh-requests/poll`, {
+    method: "POST",
+    headers: {
+      Accept: "application/json",
+      Authorization: `Bridge ${configuration.deviceToken}`,
+      "Content-Type": "application/json",
+    },
+    body: "{}",
+    cache: "no-store",
+    credentials: "omit",
+    redirect: "error",
+  });
+  if (response.status === 401 || response.status === 403) {
+    return { poll: null, unauthorized: true };
+  }
+  if ([404, 405, 501, 503].includes(response.status)) {
+    // Compatibility path while server support rolls out. The established six-hour upload remains.
+    return { poll: null, unauthorized: false };
+  }
+  if (!response.ok) throw new Error("Laces Out refresh poll failed");
+  const contentType = (response.headers.get("content-type") ?? "").toLowerCase();
+  if (!contentType.includes("json")) throw new Error("Laces Out refresh poll was not JSON");
+  const body = JSON.parse(await readBoundedText(response, 128 * 1024)) as unknown;
+  return { poll: validateAgentPollResponse(body), unauthorized: false };
+}
+
+let activeMaintenance: Promise<void> | undefined;
+
+async function runMaintenanceCycle(): Promise<void> {
+  let configuration: BridgeConfiguration | undefined;
+  try {
+    configuration = await getConfiguration();
+  } catch {
+    configuration = undefined;
+  }
+  if (!configuration?.automaticSync) return;
+
+  const now = new Date();
+  let state = await getMaintenanceState();
+  let poll: ReturnType<typeof validateAgentPollResponse> | null = null;
+  const pollBackoffActive =
+    state.pollBackoffUntil !== null && Date.parse(state.pollBackoffUntil) > now.getTime();
+  if (!pollBackoffActive) {
+    try {
+      const result = await pollAgentRequests(configuration);
+      if (result.unauthorized) {
+        await setStatus({
+          ...(await getStatus()),
+          configured: true,
+          state: "laces-out-auth-failed",
+          message: "Laces Out pairing was rejected. Pair this browser again.",
+          lastAttemptAt: now.toISOString(),
+        });
+        state = {
+          ...state,
+          lastPollAt: now.toISOString(),
+          consecutivePollFailures: 0,
+          pollBackoffUntil: null,
+        };
+        await setMaintenanceState(state);
+        return;
+      }
+      poll = result.poll;
+      state = {
+        ...state,
+        lastPollAt: now.toISOString(),
+        consecutivePollFailures: 0,
+        pollBackoffUntil: null,
+      };
+    } catch {
+      const consecutivePollFailures = Math.min(state.consecutivePollFailures + 1, 100);
+      state = {
+        ...state,
+        lastPollAt: now.toISOString(),
+        consecutivePollFailures,
+        pollBackoffUntil: pollFailureBackoffUntil(consecutivePollFailures, now),
+      };
+    }
+  }
+
+  const plan = maintenancePlan({ configuration, state, poll, now });
+  if (plan.kind === "none") {
+    await setMaintenanceState(state);
+    return;
+  }
+
+  const status = await synchronize(
+    plan.kind === "requested" ? plan.requests : null,
+    plan.kind === "baseline" ? plan.leagueIds : undefined,
+  );
+  const leagueBackoffUntil = { ...state.leagueBackoffUntil };
+  const leagueResults = { ...state.leagueResults };
+  for (const result of status.results) {
+    leagueResults[result.leagueId] = { state: result.state, at: now.toISOString() };
+    if (result.state === "espn-login-required") {
+      leagueBackoffUntil[result.leagueId] = new Date(
+        now.getTime() + loginRequiredBackoffMs,
+      ).toISOString();
+    } else if (result.state === "error") {
+      leagueBackoffUntil[result.leagueId] = new Date(
+        now.getTime() + retryableLeagueBackoffMs,
+      ).toISOString();
+    } else if (result.state === "laces-out-auth-failed") {
+      leagueBackoffUntil[result.leagueId] = new Date(
+        now.getTime() + loginRequiredBackoffMs,
+      ).toISOString();
+    } else if (result.state === "synced") {
+      delete leagueBackoffUntil[result.leagueId];
+    }
+  }
+  await setMaintenanceState({
+    ...state,
+    lastBaselineAt: plan.kind === "baseline" ? now.toISOString() : state.lastBaselineAt,
+    leagueBackoffUntil,
+    leagueResults,
+  });
+}
+
+function runMaintenance(): Promise<void> {
+  if (activeMaintenance) return activeMaintenance;
+  activeMaintenance = runMaintenanceCycle().finally(() => {
+    activeMaintenance = undefined;
+  });
+  return activeMaintenance;
+}
+
+async function runManualSynchronization(): Promise<BridgeStatus> {
+  const status = await synchronize();
+  const state = await getMaintenanceState();
+  await setMaintenanceState({ ...state, lastBaselineAt: new Date().toISOString() });
+  return status;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -745,15 +1021,23 @@ async function restoreLiveDraftQueue(): Promise<void> {
 async function handleRequest(request: BridgeRequest): Promise<BridgeResponse> {
   if (request.type === "GET_STATUS") return { ok: true, status: await getStatus() };
   if (request.type === "DISCONNECT") {
-    await chrome.storage.local.remove([configurationStorageKey, statusStorageKey]);
+    await chrome.storage.local.remove([
+      configurationStorageKey,
+      statusStorageKey,
+      maintenanceStorageKey,
+    ]);
     await chrome.alarms.clear(syncAlarmName);
     return { ok: true, status: DEFAULT_STATUS };
   }
   if (request.type === "CONFIGURE") {
     const configuration = validateBridgeConfiguration(request.configuration);
     await chrome.storage.local.set({ [configurationStorageKey]: configuration });
+    await setMaintenanceState(defaultMaintenanceState);
     if (configuration.automaticSync) {
-      await chrome.alarms.create(syncAlarmName, { delayInMinutes: 1, periodInMinutes: 360 });
+      await chrome.alarms.create(syncAlarmName, {
+        delayInMinutes: 1,
+        periodInMinutes: maintenancePollIntervalMinutes,
+      });
     } else {
       await chrome.alarms.clear(syncAlarmName);
     }
@@ -765,7 +1049,9 @@ async function handleRequest(request: BridgeRequest): Promise<BridgeResponse> {
     });
     return { ok: true, status };
   }
-  if (request.type === "SYNC_NOW") return { ok: true, status: await synchronize() };
+  if (request.type === "SYNC_NOW") {
+    return { ok: true, status: await runManualSynchronization() };
+  }
   // Every request type is now explicit. A live draft message reaching here means the listener
   // routed it wrongly; fail closed rather than silently starting a full league sync — the old
   // implicit fallthrough would have turned a draft-room mutation into an ESPN refresh storm.
@@ -776,7 +1062,10 @@ async function restoreAutomaticAlarm(): Promise<void> {
   try {
     const configuration = await getConfiguration();
     if (configuration?.automaticSync) {
-      await chrome.alarms.create(syncAlarmName, { delayInMinutes: 1, periodInMinutes: 360 });
+      await chrome.alarms.create(syncAlarmName, {
+        delayInMinutes: 1,
+        periodInMinutes: maintenancePollIntervalMinutes,
+      });
     } else {
       await chrome.alarms.clear(syncAlarmName);
     }
@@ -802,7 +1091,7 @@ chrome.runtime.onStartup.addListener(() => {
 });
 
 chrome.alarms.onAlarm.addListener((alarm) => {
-  if (alarm.name === syncAlarmName) void synchronize();
+  if (alarm.name === syncAlarmName) void runMaintenance();
 });
 
 // A Laces Out page (allowed via `externally_connectable`) can offer to pair the

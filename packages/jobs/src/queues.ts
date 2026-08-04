@@ -19,6 +19,7 @@ export const queueNames = {
   dataHealth: "data-health-check",
   dataRefresh: "data-refresh",
   notificationSweep: "notification-sweep",
+  providerSyncSweep: "provider-sync-sweep",
 } as const;
 
 export const deadLetterQueueNames = {
@@ -28,12 +29,21 @@ export const deadLetterQueueNames = {
   dataHealth: "data-health-check-dead-letter",
   dataRefresh: "data-refresh-dead-letter",
   notificationSweep: "notification-sweep-dead-letter",
+  providerSyncSweep: "provider-sync-sweep-dead-letter",
 } as const;
 
 export interface LeagueSyncJob {
-  readonly connectionId: string;
+  /** Omitted by legacy producers; legacy payloads are connection-mode jobs. */
+  readonly mode?: "connection" | "server-direct";
+  readonly connectionId?: string;
   readonly leagueSeasonId: string;
-  readonly reason: "scheduled" | "manual" | "draft";
+  readonly reason: "scheduled" | "manual" | "draft" | "stale-on-view" | "provider-sweep";
+  readonly refreshRequestId?: string;
+  readonly probe?: boolean;
+}
+
+export interface ProviderSyncSweepJob {
+  readonly requestedAt: string;
 }
 
 export interface ProjectionRefreshJob {
@@ -150,6 +160,17 @@ const queueConfigurations: Readonly<Record<keyof typeof queueNames, QueueConfigu
     deadLetter: deadLetterQueueNames.notificationSweep,
     warningQueueSize: 5,
   },
+  providerSyncSweep: {
+    retryLimit: 3,
+    retryDelay: 30,
+    retryBackoff: true,
+    retryDelayMax: 5 * 60,
+    expireInSeconds: 4 * 60,
+    retentionSeconds: 14 * DAY_SECONDS,
+    deleteAfterSeconds: 7 * DAY_SECONDS,
+    deadLetter: deadLetterQueueNames.providerSyncSweep,
+    warningQueueSize: 5,
+  },
 };
 
 const deadLetterConfiguration: QueueConfiguration = {
@@ -197,14 +218,27 @@ function dispatchOptions(
 /** Enqueues a league sync with exact-target deduplication and per-league serialization metadata. */
 export function enqueueLeagueSync(boss: PgBoss, job: LeagueSyncJob): Promise<string | null> {
   assertLeagueSyncJob(job);
+  const singletonKey =
+    job.mode === "server-direct"
+      ? `league-sync:server-direct:${job.leagueSeasonId}`
+      : `league-sync:${job.connectionId ?? "missing"}:${job.leagueSeasonId}`;
   return boss.send(
     queueNames.syncLeague,
     job,
-    dispatchOptions(
-      `league-season:${job.leagueSeasonId}`,
-      `league-sync:${job.connectionId}:${job.leagueSeasonId}`,
-      60,
-    ),
+    dispatchOptions(`league-season:${job.leagueSeasonId}`, singletonKey, 60),
+  );
+}
+
+/** Coalesces the cheap capability/due-state selector independently from provider reads. */
+export function enqueueProviderSyncSweep(
+  boss: PgBoss,
+  job: ProviderSyncSweepJob,
+): Promise<string | null> {
+  assertProviderSyncSweepJob(job);
+  return boss.send(
+    queueNames.providerSyncSweep,
+    job,
+    dispatchOptions("provider-sync-sweep", "provider-sync-sweep", 5 * 60),
   );
 }
 
@@ -271,10 +305,38 @@ function assertNonEmpty(value: unknown, name: string): asserts value is string {
 }
 
 export function assertLeagueSyncJob(job: LeagueSyncJob): void {
-  assertNonEmpty(job.connectionId, "connectionId");
   assertNonEmpty(job.leagueSeasonId, "leagueSeasonId");
-  if (!(["scheduled", "manual", "draft"] as const).includes(job.reason)) {
+  if (
+    !(["scheduled", "manual", "draft", "stale-on-view", "provider-sweep"] as const).includes(
+      job.reason,
+    )
+  ) {
     throw new Error("Invalid worker job: unsupported league sync reason");
+  }
+  const mode = job.mode ?? "connection";
+  if (mode !== "connection" && mode !== "server-direct") {
+    throw new Error("Invalid worker job: unsupported league sync mode");
+  }
+  if (mode === "connection") {
+    assertNonEmpty(job.connectionId, "connectionId");
+    if (job.refreshRequestId !== undefined || job.probe !== undefined) {
+      throw new Error("Invalid worker job: direct fields require server-direct mode");
+    }
+    return;
+  }
+  if (job.connectionId !== undefined) {
+    throw new Error("Invalid worker job: server-direct mode cannot name a connection");
+  }
+  if (job.refreshRequestId !== undefined) assertNonEmpty(job.refreshRequestId, "refreshRequestId");
+  if (job.probe !== undefined && typeof job.probe !== "boolean") {
+    throw new Error("Invalid worker job: probe must be boolean");
+  }
+}
+
+export function assertProviderSyncSweepJob(job: ProviderSyncSweepJob): void {
+  assertNonEmpty(job.requestedAt, "requestedAt");
+  if (job.requestedAt !== "scheduled" && !Number.isFinite(Date.parse(job.requestedAt))) {
+    throw new Error("Invalid worker job: requestedAt must be an ISO timestamp");
   }
 }
 
@@ -340,6 +402,17 @@ export async function registerSchedules(boss: PgBoss, projectionSeason?: number)
   // twice forever. Unscheduling a missing row is safe and keeps upgrades idempotent.
   await boss.unschedule(queueNames.dataHealth);
   await boss.unschedule(queueNames.dataRefresh, "daily-nflverse-player-catalog");
+  await boss.schedule(
+    queueNames.providerSyncSweep,
+    "*/5 * * * *",
+    { requestedAt: "scheduled" } satisfies ProviderSyncSweepJob,
+    {
+      tz: "UTC",
+      key: "espn-provider-sync-sweep",
+      group: { id: "provider-sync-sweep" },
+      singletonKey: "provider-sync-sweep",
+    },
+  );
   await boss.schedule(
     queueNames.dataHealth,
     "*/15 * * * *",

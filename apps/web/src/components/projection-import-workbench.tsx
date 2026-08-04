@@ -7,7 +7,6 @@ import type {
 } from "@fantasy/contracts";
 import {
   AlertTriangle,
-  BarChart3,
   CalendarDays,
   Check,
   CircleAlert,
@@ -39,7 +38,6 @@ import {
 import {
   LEAGUE_PROJECTION_IMPORT_HORIZON,
   localDateTimeMinuteValue,
-  projectionSourceAsOfText,
   sourceObservedAtIso,
 } from "../lib/projection-import-form";
 import { loginUrlForCurrentPath } from "../lib/safe-return-to";
@@ -92,10 +90,6 @@ function readableDate(value: string): string {
 function weekReference(value: { readonly season: number; readonly week: number | null } | null) {
   if (!value) return "Not reported";
   return value.week === null ? String(value.season) : `${value.season} Week ${value.week}`;
-}
-
-function decimal(value: number): string {
-  return new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 }).format(value);
 }
 
 function shortenedChecksum(value: string): string {
@@ -312,28 +306,6 @@ function ProjectionTour() {
           </div>
         </section>
       </div>
-
-      <section className={styles.saved} aria-labelledby="tour-saved-title">
-        <header className={styles.savedHeader}>
-          <div>
-            <p className={styles.kicker}>Available in this league</p>
-            <h2 id="tour-saved-title">Saved projection sets</h2>
-          </div>
-          <span className={styles.readyBadge}>2 sets</span>
-        </header>
-        <div className={styles.demoSavedList}>
-          <article>
-            <span>MANAGED · WEEK 6</span>
-            <strong>Laces Out weekly forecast</strong>
-            <small>213 players · inputs checked 32 min ago · quality gate passed</small>
-          </article>
-          <article>
-            <span>PRIVATE · WEEK 6</span>
-            <strong>My blended Week 6 model</strong>
-            <small>218 players · Source 47 min ago · imported by Sample member</small>
-          </article>
-        </div>
-      </section>
     </div>
   );
 }
@@ -771,15 +743,6 @@ export function ProjectionImportWorkbench() {
             </p>
           </div>
           <div className={styles.managedActions}>
-            {selectedPortfolioLeague ? (
-              <Link
-                className={styles.textButton}
-                href={`/schedule?league=${selectedPortfolioLeague.id}`}
-              >
-                <CalendarDays size={15} aria-hidden="true" />
-                Matchup Outlook
-              </Link>
-            ) : null}
             {managedForecast?.managed?.qualityState ? (
               <span
                 className={
@@ -789,9 +752,18 @@ export function ProjectionImportWorkbench() {
                 }
               >
                 {managedForecast.managed.qualityState === "publishable"
-                  ? "Safe forecast published"
+                  ? "Valid forecast published"
                   : managedForecast.managed.qualityState}
               </span>
+            ) : null}
+            {selectedPortfolioLeague ? (
+              <Link
+                className={styles.textButton}
+                href={`/schedule?league=${selectedPortfolioLeague.id}`}
+              >
+                <CalendarDays size={15} aria-hidden="true" />
+                Matchup Outlook
+              </Link>
             ) : null}
             <button
               className={styles.textButton}
@@ -821,83 +793,36 @@ export function ProjectionImportWorkbench() {
           </div>
         </header>
         {managedForecast?.managed ? (
-          <>
-            <div className={styles.managedMetrics}>
-              <div>
-                <span>Inputs checked</span>
-                <strong>{readableDate(managedForecast.managed.inputCheckedAt)}</strong>
-                <small>Oldest required source check</small>
-              </div>
-              <div>
-                <span>Computed</span>
-                <strong>{readableDate(managedForecast.managed.computedAt)}</strong>
-                <small>
-                  {managedForecast.managed.modelVersion ?? "Model version not reported"}
-                </small>
-              </div>
-              <div>
-                <span>Coverage</span>
-                <strong>
-                  {managedForecast.managed.coverage
-                    ? `${managedForecast.managed.coverage.projected} / ${managedForecast.managed.coverage.eligible}`
-                    : `${managedForecast.playerCount} projected`}
-                </strong>
-                <small>
-                  {managedForecast.managed.coverage
-                    ? `${Math.round(managedForecast.managed.coverage.ratio * 1000) / 10}% of eligible players`
-                    : "Eligible-player count not reported"}
-                </small>
-              </div>
-              <div>
-                <span>Training cutoff</span>
-                <strong>{weekReference(managedForecast.managed.trainingCutoff)}</strong>
-                <small>Stats through {weekReference(managedForecast.managed.statsThrough)}</small>
-              </div>
+          <div className={styles.managedMetrics}>
+            <div>
+              <span>Inputs checked</span>
+              <strong>{readableDate(managedForecast.managed.inputCheckedAt)}</strong>
+              <small>Oldest required source check</small>
             </div>
-            <div className={styles.modelEvidence}>
-              <BarChart3 size={17} aria-hidden="true" />
-              {managedForecast.managed.backtest ? (
-                <p>
-                  <strong>Locked backtest:</strong>{" "}
-                  {managedForecast.managed.backtest.samples.toLocaleString()} player-weeks · MAE{" "}
-                  {decimal(managedForecast.managed.backtest.mae)}
-                  {managedForecast.managed.backtest.baselineMae !== null
-                    ? ` vs. ${decimal(managedForecast.managed.backtest.baselineMae)} baseline`
-                    : ""}
-                  {managedForecast.managed.backtest.intervalCoverage !== null
-                    ? ` · ${Math.round(managedForecast.managed.backtest.intervalCoverage * 100)}% interval coverage`
-                    : ""}
-                </p>
-              ) : (
-                <p>Backtest summary was not attached to this forecast.</p>
-              )}
+            <div>
+              <span>Computed</span>
+              <strong>{readableDate(managedForecast.managed.computedAt)}</strong>
+              <small>{managedForecast.managed.modelVersion ?? "Model version not reported"}</small>
             </div>
-            {managedForecast.managed.championByPosition.length > 0 ? (
-              <div className={styles.championRail} aria-label="Forecast strategy by position">
-                <span>Live mean strategy</span>
-                <div>
-                  {managedForecast.managed.championByPosition.map((choice) => (
-                    <small key={choice.position}>
-                      <strong>{choice.position}</strong>
-                      {choice.strategy === "first-party-model"
-                        ? "Qualified model"
-                        : "Safe baseline"}
-                    </small>
-                  ))}
-                </div>
-              </div>
-            ) : null}
-            {managedForecast.managed.warnings.length > 0 ? (
-              <div className={styles.forecastWarnings} role="status">
-                <AlertTriangle size={16} aria-hidden="true" />
-                <ul>
-                  {managedForecast.managed.warnings.map((warning) => (
-                    <li key={warning}>{warning}</li>
-                  ))}
-                </ul>
-              </div>
-            ) : null}
-          </>
+            <div>
+              <span>Coverage</span>
+              <strong>
+                {managedForecast.managed.coverage
+                  ? `${managedForecast.managed.coverage.projected} / ${managedForecast.managed.coverage.eligible}`
+                  : `${managedForecast.playerCount} projected`}
+              </strong>
+              <small>
+                {managedForecast.managed.coverage
+                  ? `${Math.round(managedForecast.managed.coverage.ratio * 1000) / 10}% of eligible players`
+                  : "Eligible-player count not reported"}
+              </small>
+            </div>
+            <div>
+              <span>Training cutoff</span>
+              <strong>{weekReference(managedForecast.managed.trainingCutoff)}</strong>
+              <small>Stats through {weekReference(managedForecast.managed.statsThrough)}</small>
+            </div>
+          </div>
         ) : (
           <div className={styles.managedEmpty}>
             <Clock3 size={18} aria-hidden="true" />
@@ -920,7 +845,7 @@ export function ProjectionImportWorkbench() {
         )}
         <p className={styles.refreshFootnote}>
           Input checks run in the background. A new set is published only when inputs change and the
-          quality gates pass; use Reload list below to read completed results.
+          quality gates pass; reload the page to read completed results.
         </p>
       </section>
 
@@ -1252,117 +1177,6 @@ export function ProjectionImportWorkbench() {
           )}
         </section>
       </div>
-
-      <section className={styles.saved} aria-labelledby="saved-projections-title">
-        <header className={styles.savedHeader}>
-          <div>
-            <p className={styles.kicker}>Available in this league</p>
-            <h2 id="saved-projections-title">Projection set history</h2>
-          </div>
-          <button
-            className={styles.textButton}
-            type="button"
-            disabled={sets.state === "loading"}
-            onClick={() => void loadSets()}
-          >
-            <RefreshCw
-              className={sets.state === "loading" ? styles.spin : undefined}
-              size={15}
-              aria-hidden="true"
-            />
-            Reload list
-          </button>
-        </header>
-        {sets.state === "loading" ? (
-          <div className={styles.savedEmpty} role="status">
-            <LoaderCircle className={styles.spin} size={18} aria-hidden="true" />
-            Loading saved sets…
-          </div>
-        ) : sets.state === "error" ? (
-          <div className={styles.savedEmpty} role="alert">
-            <AlertTriangle size={18} aria-hidden="true" />
-            {sets.message}
-          </div>
-        ) : sets.state === "ready" && sets.data.projectionSets.length > 0 ? (
-          <div
-            className={`${styles.setTableWrap} has-scroll-cue`}
-            role="region"
-            aria-label="Projection sets; scroll horizontally to view all columns"
-            tabIndex={0}
-          >
-            <table className={styles.setTable}>
-              <thead>
-                <tr>
-                  <th>Source</th>
-                  <th>Window</th>
-                  <th>Rows</th>
-                  <th>Access</th>
-                  <th>Input / source time</th>
-                  <th>Built / imported</th>
-                  <th>Checksum</th>
-                </tr>
-              </thead>
-              <tbody>
-                {sets.data.projectionSets.map((set) => (
-                  <tr key={set.id}>
-                    <td>
-                      <strong>{set.sourceLabel}</strong>
-                      <small>
-                        {set.origin === "laces-out"
-                          ? `Managed by Laces Out${set.managed?.modelVersion ? ` · ${set.managed.modelVersion}` : ""}`
-                          : `${set.isOwnedByCurrentUser ? "You" : (set.creatorDisplayName ?? "League member")}${set.sourceFileName ? ` · ${set.sourceFileName}` : ""}`}
-                      </small>
-                    </td>
-                    <td>
-                      <strong>
-                        {set.horizon === "week" ? `Week ${set.week ?? "—"}` : "Rest of season"}
-                      </strong>
-                      <small>
-                        {set.season} ·{" "}
-                        {set.horizon === "week" ? "single week" : "published league-scored window"}
-                      </small>
-                    </td>
-                    <td>{set.playerCount.toLocaleString()}</td>
-                    <td>
-                      <span className={styles.accessLabel}>
-                        {set.visibility === "private" ? (
-                          <LockKeyhole size={13} aria-hidden="true" />
-                        ) : (
-                          <Users size={13} aria-hidden="true" />
-                        )}
-                        {set.visibility === "private" ? "Only me" : "League"}
-                      </span>
-                    </td>
-                    <td>
-                      {set.origin === "laces-out" && set.managed
-                        ? readableDate(set.managed.inputCheckedAt)
-                        : projectionSourceAsOfText(set, readableDate)}
-                      {set.origin === "custom" && set.sourceObservedAtStatus === "unverified" ? (
-                        <small>Legacy import; no trustworthy source timestamp</small>
-                      ) : null}
-                    </td>
-                    <td>
-                      {readableDate(
-                        set.origin === "laces-out" && set.managed
-                          ? set.managed.computedAt
-                          : set.importedAt,
-                      )}
-                    </td>
-                    <td>
-                      <code title={set.inputChecksum}>{shortenedChecksum(set.inputChecksum)}</code>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        ) : (
-          <div className={styles.savedEmpty}>
-            <FileSpreadsheet size={19} aria-hidden="true" />
-            No saved projection sets are available for this league season.
-          </div>
-        )}
-      </section>
     </div>
   );
 }

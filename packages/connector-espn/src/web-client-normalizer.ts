@@ -358,11 +358,31 @@ const memberSchema = z
   .object({
     id: memberIdSchema,
     displayName: nonEmptyTextSchema(120),
+    // ESPN sends these alongside the username on the league `members` array, but not for every
+    // member and not on every league response — a member who never filled them in has neither.
+    // Optional on purpose: a missing real name is a normal state, not schema drift.
+    firstName: nonEmptyTextSchema(80).optional(),
+    lastName: nonEmptyTextSchema(80).optional(),
     // ESPN omits this flag in some current league responses and has historically represented
     // provider booleans as 0/1 in adjacent payloads. Missing means unknown, never commissioner.
     isLeagueManager: espnBooleanSchema.optional(),
   })
   .passthrough();
+
+/**
+ * Joins ESPN's separate name parts. Returns null unless at least one part is present, so a member
+ * who supplied neither keeps their username rather than being labelled with an empty string.
+ */
+function memberFullName(member: {
+  readonly firstName?: string | undefined;
+  readonly lastName?: string | undefined;
+}): string | null {
+  const joined = [member.firstName, member.lastName]
+    .map((part) => part?.trim())
+    .filter((part): part is string => Boolean(part))
+    .join(" ");
+  return joined.length > 0 ? joined : null;
+}
 
 const standingRecordSchema = z
   .object({
@@ -760,13 +780,16 @@ export const espnBridgeSnapshotLikeV1Schema = z
   .object({
     schemaVersion: z.literal(1),
     provider: z.literal("espn"),
-    authority: z.literal("browser-local"),
+    // `browser-local` remains wire-compatible with published extensions; native agents use the
+    // same bounded envelope with distinct audit provenance.
+    authority: z.enum(["browser-local", "native-local"]),
     readOnly: z.literal(true),
     leagueId: z.string().regex(/^\d{1,20}$/u),
     season: z.number().int().min(2000).max(2100),
     capturedAt: z.string().datetime({ offset: true }),
     endpoint: endpointSchema,
     checksumSha256: z.string().regex(/^[a-f0-9]{64}$/u),
+    checksumAlgorithm: z.enum(["json-stringify-sha256", "canonical-json-v1-sha256"]).optional(),
     payload: z.unknown(),
   })
   .strict();
@@ -1128,6 +1151,7 @@ function normalizeTeam(
       return {
         externalId: member.id,
         displayName: member.displayName,
+        fullName: memberFullName(member),
         isCommissioner: member.isLeagueManager ?? false,
       };
     }),

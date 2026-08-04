@@ -113,6 +113,35 @@ describe("ChangeEventService.list", () => {
     expect(short.nextCursor).toBeNull();
   });
 
+  it("counts unread over the same league scope the page is drawn from", async () => {
+    // The badge and the rows beneath it have to answer the same question. Counting unread across
+    // every league while listing one league's rows produced "4 unread" above "Nothing new since
+    // your last sync" on the overview page.
+    let countedLeague: string | null | undefined;
+    let listedLeague: string | null | undefined;
+    const service = new ChangeEventService(
+      repository({
+        listVisibleEvents: (_user: string, query: ChangeEventRepositoryQuery) => {
+          listedLeague = query.leagueId;
+          return Promise.resolve([]);
+        },
+        countUnread: (_user: string, leagueId: string | null) => {
+          countedLeague = leagueId;
+          return Promise.resolve(0);
+        },
+      }),
+      () => NOW,
+    );
+
+    await service.list(USER, { limit: null, cursor: null, leagueId: LEAGUE });
+    expect(countedLeague).toBe(LEAGUE);
+    expect(listedLeague).toBe(LEAGUE);
+
+    await service.list(USER, { limit: null, cursor: null, leagueId: null });
+    expect(countedLeague).toBeNull();
+    expect(listedLeague).toBeNull();
+  });
+
   it("renders an unparseable legacy payload without dropping the row", async () => {
     const service = new ChangeEventService(
       repository({

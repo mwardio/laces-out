@@ -1,4 +1,5 @@
 import { loadEnvironment } from "@fantasy/config";
+import { drizzleChangeEventProducers, emitProviderSyncChangeEvents } from "@fantasy/change-events";
 import { createDatabase } from "@fantasy/db";
 import { DrizzleInSeasonDecisionRepository, InSeasonDecisionService } from "@fantasy/decisions";
 import {
@@ -12,7 +13,14 @@ import pino from "pino";
 
 import { DatabaseDataHealthService } from "./data-health.js";
 import { FfcAdpRefresher } from "./ffc-adp.js";
-import { enqueueProjectionRefresh, registerQueues, registerWorkers } from "./jobs.js";
+import {
+  enqueueLeagueSync,
+  enqueueProjectionRefresh,
+  enqueueRecommendationRecompute,
+  registerQueues,
+  registerWorkers,
+} from "./jobs.js";
+import { createEspnDirectSyncService } from "./espn-direct-sync.js";
 import {
   DrizzleConnectionCircuitStore,
   DrizzleLeagueSyncTargetReader,
@@ -41,6 +49,10 @@ import { FirstPartyRosProjectionShadowService } from "./first-party-ros-projecti
 import { NflverseScheduleRefresher } from "./nflverse-schedules.js";
 import { NflverseWeeklyDataRefresher } from "./nflverse-weekly-data.js";
 import { ProjectionLockWindowService } from "./projection-lock-window.js";
+import {
+  DrizzleProviderSyncSweepTargetReader,
+  ProviderSyncSweepService,
+} from "./provider-sync-sweep.js";
 import { createRecommendationRecomputeService } from "./recommendation-recompute-service.js";
 import { SleeperDataRefresher } from "./sleeper-data.js";
 
@@ -96,9 +108,9 @@ const notificationSweepService = createNotificationSweepService({
     : {}),
 });
 // Yahoo is the only provider whose credential the server may hold and replay, and only when the
-// operator has configured all three secrets. Without them, `leagueSync` is simply absent and the
-// queue's handler reports a stated no-op rather than dead-lettering. ESPN is never constructed
-// here at all: its credential stays in the browser (ADR 0002).
+// operator has configured all three secrets. ESPN direct sync is a separate credential-free path;
+// it never receives a cookie or browser session and remains disabled by default behind its policy
+// and evidence gate.
 const credentialKey = environment.CREDENTIAL_ENCRYPTION_KEY
   ? parseCredentialKey(environment.CREDENTIAL_ENCRYPTION_KEY)
   : undefined;
@@ -118,9 +130,54 @@ const yahooSync = yahooConnection
       tokens: yahooConnection,
     })
   : undefined;
+const providerSyncChangeEvents = drizzleChangeEventProducers(database.db);
+const espnDirectSync = createEspnDirectSyncService({
+  database: database.db,
+  enabled: environment.ESPN_PUBLIC_DIRECT_SYNC_ENABLED,
+  afterCommit: async ({ receipt, season, checksumSha256, occurredAt }) => {
+    await emitProviderSyncChangeEvents(
+      providerSyncChangeEvents,
+      {
+        provider: "espn",
+        state: receipt.state,
+        leagueId: receipt.leagueId,
+        leagueSeasonId: receipt.leagueSeasonId,
+        actorUserId: null,
+        artifactId: checksumSha256,
+        occurredAt,
+      },
+      (error) =>
+        logger.warn(
+          { err: error, leagueSeasonId: receipt.leagueSeasonId },
+          "ESPN direct sync succeeded but change-event emission failed",
+        ),
+    );
+    if (receipt.state !== "accepted") return;
+    try {
+      await enqueueRecommendationRecompute(boss, {
+        leagueSeasonId: receipt.leagueSeasonId,
+        kinds: ["lineup", "waiver", "trade"],
+      });
+    } catch (error) {
+      logger.warn(
+        { err: error, leagueSeasonId: receipt.leagueSeasonId },
+        "ESPN direct sync succeeded but recommendation enqueue failed",
+      );
+    }
+    try {
+      await enqueueProjectionRefresh(boss, { season, reason: "on-demand" });
+    } catch (error) {
+      logger.warn(
+        { err: error, season },
+        "ESPN direct sync succeeded but projection enqueue failed",
+      );
+    }
+  },
+});
 const leagueSyncService = new LeagueSyncService({
   targets: new DrizzleLeagueSyncTargetReader(database.db),
   circuit: new DrizzleConnectionCircuitStore(database.db),
+  espnDirect: espnDirectSync,
   ...(yahooSync ? { yahooSync } : {}),
 });
 const recommendationRecomputeService = createRecommendationRecomputeService({
@@ -148,6 +205,11 @@ const boss = new PgBoss({
   supervise: true,
   // The API owns cron timekeeping so long-running projection work cannot swallow schedule ticks.
   schedule: false,
+});
+const providerSyncSweepService = new ProviderSyncSweepService({
+  enabled: environment.ESPN_PUBLIC_DIRECT_SYNC_ENABLED,
+  targets: new DrizzleProviderSyncSweepTargetReader(database.db),
+  enqueue: (job) => enqueueLeagueSync(boss, job),
 });
 
 boss.on("error", (error) => logger.error({ err: error }, "job queue error"));
@@ -198,6 +260,7 @@ async function start(): Promise<void> {
         await rosProjectionShadowService.refreshProjections(effectiveJob, context);
       },
     },
+    providerSyncSweep: providerSyncSweepService,
     refreshPlayerData: async (force) => {
       const activeProjectionSeason = currentNflSeason();
       // Identity is intentionally refreshed first so Sleeper observations and trends can attach to

@@ -18,6 +18,8 @@ const expectedTables = [
   "change_events",
   "data_sources",
   "adp_observations",
+  "espn_league_sync_states",
+  "espn_refresh_attempts",
   "import_runs",
   "invitations",
   "league_memberships",
@@ -141,16 +143,26 @@ try {
     select table_name, column_name
     from information_schema.columns
     where table_schema = 'public'
-      and table_name in ('browser_handoff_tokens', 'provider_connections', 'recommendation_runs')
+      and table_name in (
+        'bridge_devices', 'browser_handoff_tokens', 'provider_connections',
+        'recommendation_runs', 'refresh_requests'
+      )
   `;
   const columnNames = new Set(columnRows.map((row) => `${row.table_name}.${row.column_name}`));
   for (const column of [
     "browser_handoff_tokens.source_session_id",
     "browser_handoff_tokens.confirmed_at",
+    "bridge_devices.client_kind",
+    "bridge_devices.agent_capable",
     "provider_connections.consecutive_failures",
     "provider_connections.circuit_open_until",
     "provider_connections.last_error_detail",
     "recommendation_runs.fantasy_team_id",
+    "refresh_requests.expires_at",
+    "refresh_requests.minimum_capture_at",
+    "refresh_requests.required_artifacts",
+    "refresh_requests.fulfillment_mode",
+    "refresh_requests.fulfilled_by_bridge_device_id",
   ]) {
     assert.ok(columnNames.has(column), `missing migrated column ${column}`);
   }
@@ -163,6 +175,33 @@ try {
     indexNames.has("recommendation_runs_identity_unique"),
     "missing recommendation run replay identity index",
   );
+  for (const indexName of [
+    "refresh_requests_live_league_unique",
+    "league_supplemental_artifact_lookup_idx",
+    "espn_league_sync_states_due_idx",
+    "espn_refresh_attempts_request_idx",
+    "espn_refresh_attempts_device_idx",
+  ]) {
+    assert.ok(indexNames.has(indexName), `missing ESPN automated-sync index ${indexName}`);
+  }
+
+  const cascadeRows = await sql`
+    select conname, confdeltype
+    from pg_catalog.pg_constraint
+    where conname in (
+      'refresh_requests_league_season_id_league_seasons_id_fk',
+      'espn_refresh_attempts_bridge_device_id_bridge_devices_id_fk'
+    )
+  `;
+  const cascadeActions = new Map(
+    cascadeRows.map((row) => [String(row.conname), String(row.confdeltype)]),
+  );
+  for (const constraintName of [
+    "refresh_requests_league_season_id_league_seasons_id_fk",
+    "espn_refresh_attempts_bridge_device_id_bridge_devices_id_fk",
+  ]) {
+    assert.equal(cascadeActions.get(constraintName), "c", `${constraintName} must cascade deletes`);
+  }
 
   await sql.unsafe("BEGIN");
   transactionStarted = true;
@@ -1539,11 +1578,13 @@ try {
     returning id
   `;
   const bridgeGrantId = requiredString(bridgeGrant?.id, "bridge league grant id");
-  await sql`
+  const [espnSeason] = await sql`
     insert into league_seasons (
       league_id, provider, external_key, season, team_count, draft_type
     ) values (${leagueId}, 'espn', '123456789', 2026, 10, 'auction')
+    returning id
   `;
+  const espnSeasonId = requiredString(espnSeason?.id, "ESPN league season id");
   await sql`
     update bridge_device_leagues set league_id = ${leagueId} where id = ${bridgeGrantId}
   `;
@@ -1580,6 +1621,92 @@ try {
     insert into bridge_devices (user_id, name, token_hash)
     values (${ownerId}, 'Unsafe Browser', 'short-token')
   `,
+  );
+
+  const [espnSyncState] = await sql`
+    insert into espn_league_sync_states (league_season_id)
+    values (${espnSeasonId})
+    returning direct_core_state, artifact_freshness
+  `;
+  assert.equal(espnSyncState?.direct_core_state, "unknown");
+  assert.deepEqual(espnSyncState?.artifact_freshness, {});
+  await expectDatabaseRejection(
+    "invalid ESPN direct capability state",
+    () => sql`
+      update espn_league_sync_states
+      set direct_core_state = 'authenticated-only'
+      where league_season_id = ${espnSeasonId}
+    `,
+  );
+
+  const [leagueRefresh] = await sql`
+    insert into refresh_requests (
+      requested_by_user_id, league_season_id, kind, idempotency_key,
+      expires_at, minimum_capture_at, required_artifacts
+    ) values (
+      ${ownerId}, ${espnSeasonId}, 'league', ${`espn-refresh-${suffix}`},
+      now() + interval '24 hours', now(), ${sql.json(["core", "transactions"])}
+    )
+    returning id
+  `;
+  const leagueRefreshId = requiredString(leagueRefresh?.id, "ESPN refresh request id");
+  await expectDatabaseRejection(
+    "second live ESPN league refresh",
+    () => sql`
+      insert into refresh_requests (
+        requested_by_user_id, league_season_id, kind, idempotency_key,
+        expires_at, minimum_capture_at, required_artifacts
+      ) values (
+        ${friendId}, ${espnSeasonId}, 'league', ${`espn-refresh-duplicate-${suffix}`},
+        now() + interval '24 hours', now(), ${sql.json(["core"])}
+      )
+    `,
+  );
+  await expectDatabaseRejection(
+    "incomplete ESPN league refresh scope",
+    () => sql`
+      insert into refresh_requests (
+        requested_by_user_id, league_season_id, kind, idempotency_key
+      ) values (
+        ${ownerId}, ${espnSeasonId}, 'league', ${`espn-refresh-incomplete-${suffix}`}
+      )
+    `,
+  );
+  await sql`
+    insert into espn_refresh_attempts (
+      refresh_request_id, mode, bridge_device_id, state
+    ) values (${leagueRefreshId}, 'chrome-agent', ${bridgeDeviceId}, 'offered')
+  `;
+  await sql`
+    insert into espn_refresh_attempts (
+      refresh_request_id, mode, state, finished_at
+    ) values (${leagueRefreshId}, 'server-direct', 'accepted', now())
+  `;
+  await expectDatabaseRejection(
+    "server-direct attempt with a bridge device",
+    () => sql`
+      insert into espn_refresh_attempts (
+        refresh_request_id, mode, bridge_device_id, state
+      ) values (${leagueRefreshId}, 'server-direct', ${bridgeDeviceId}, 'started')
+    `,
+  );
+  await expectDatabaseRejection(
+    "terminal ESPN refresh attempt without a finish time",
+    () => sql`
+      insert into espn_refresh_attempts (
+        refresh_request_id, mode, bridge_device_id, state
+      ) values (${leagueRefreshId}, 'chrome-agent', ${bridgeDeviceId}, 'accepted')
+    `,
+  );
+  await expectDatabaseRejection(
+    "failed ESPN refresh attempt without an error code",
+    () => sql`
+      insert into espn_refresh_attempts (
+        refresh_request_id, mode, bridge_device_id, state, finished_at
+      ) values (
+        ${leagueRefreshId}, 'chrome-agent', ${bridgeDeviceId}, 'retryable-error', now()
+      )
+    `,
   );
   await sql`
     insert into bridge_pairing_sessions (

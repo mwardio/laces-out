@@ -22,6 +22,7 @@
     "baseUrl": ".",
     "paths": {
       "@fantasy/config": ["packages/config/src/index.ts"],
+      "@fantasy/change-events": ["packages/change-events/src/index.ts"],
       "@fantasy/contracts": ["packages/contracts/src/index.ts"],
       "@fantasy/domain": ["packages/domain/src/index.ts"],
       "@fantasy/db": ["packages/db/src/index.ts"],

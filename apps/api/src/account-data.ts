@@ -7,6 +7,7 @@ import {
   bridgePairingSessions,
   changeEventReceipts,
   changeEvents,
+  espnRefreshAttempts,
   fantasyTeams,
   importRuns,
   invitations,
@@ -217,6 +218,8 @@ export class DrizzleAccountDataRepository implements AccountDataPort {
         .select({
           id: bridgeDevices.id,
           provider: bridgeDevices.provider,
+          clientKind: bridgeDevices.clientKind,
+          agentCapable: bridgeDevices.agentCapable,
           name: bridgeDevices.name,
           expiresAt: bridgeDevices.expiresAt,
           lastSeenAt: bridgeDevices.lastSeenAt,
@@ -471,6 +474,10 @@ export class DrizzleAccountDataRepository implements AccountDataPort {
           force: refreshRequests.force,
           priority: refreshRequests.priority,
           notBefore: refreshRequests.notBefore,
+          expiresAt: refreshRequests.expiresAt,
+          minimumCaptureAt: refreshRequests.minimumCaptureAt,
+          requiredArtifacts: refreshRequests.requiredArtifacts,
+          fulfillmentMode: refreshRequests.fulfillmentMode,
           startedAt: refreshRequests.startedAt,
           finishedAt: refreshRequests.finishedAt,
           errorCode: refreshRequests.errorCode,
@@ -483,62 +490,79 @@ export class DrizzleAccountDataRepository implements AccountDataPort {
     ]);
 
     const bridgeIds = bridgeRows.map((row) => row.id);
+    const refreshIds = refreshRows.map((row) => row.id);
     const rankingListIds = rankingListRows.map((row) => row.id);
     const projectionSetIds = projectionSetRows.map((row) => row.id);
 
-    const [bridgeLeagueRows, rankingVersionRows, projectionRows] = await Promise.all([
-      bridgeIds.length === 0
-        ? Promise.resolve([])
-        : this.#database
-            .select({
-              bridgeDeviceId: bridgeDeviceLeagues.bridgeDeviceId,
-              externalLeagueId: bridgeDeviceLeagues.externalLeagueId,
-              season: bridgeDeviceLeagues.season,
-              leagueId: bridgeDeviceLeagues.leagueId,
-              grantedAt: bridgeDeviceLeagues.grantedAt,
-            })
-            .from(bridgeDeviceLeagues)
-            .where(inArray(bridgeDeviceLeagues.bridgeDeviceId, bridgeIds)),
-      rankingListIds.length === 0
-        ? Promise.resolve([])
-        : this.#database
-            .select({
-              id: rankingListVersions.id,
-              listId: rankingListVersions.listId,
-              versionNumber: rankingListVersions.versionNumber,
-              parentVersionId: rankingListVersions.parentVersionId,
-              state: rankingListVersions.state,
-              importRunId: rankingListVersions.importRunId,
-              dataAsOf: rankingListVersions.dataAsOf,
-              publishedAt: rankingListVersions.publishedAt,
-              entryCount: rankingListVersions.entryCount,
-              checksumSha256: rankingListVersions.checksumSha256,
-              changeNote: rankingListVersions.changeNote,
-              provenance: rankingListVersions.provenance,
-              metadata: rankingListVersions.metadata,
-              createdAt: rankingListVersions.createdAt,
-            })
-            .from(rankingListVersions)
-            .where(inArray(rankingListVersions.listId, rankingListIds)),
-      projectionSetIds.length === 0
-        ? Promise.resolve([])
-        : this.#database
-            .select({
-              projectionSetId: playerProjections.projectionSetId,
-              playerId: playerProjections.playerId,
-              playerName: players.fullName,
-              primaryPosition: players.primaryPosition,
-              nflTeam: players.nflTeam,
-              meanPoints: playerProjections.meanPoints,
-              floorPoints: playerProjections.floorPoints,
-              ceilingPoints: playerProjections.ceilingPoints,
-              confidence: playerProjections.confidence,
-              components: playerProjections.components,
-            })
-            .from(playerProjections)
-            .innerJoin(players, eq(playerProjections.playerId, players.id))
-            .where(inArray(playerProjections.projectionSetId, projectionSetIds)),
-    ]);
+    const [bridgeLeagueRows, refreshAttemptRows, rankingVersionRows, projectionRows] =
+      await Promise.all([
+        bridgeIds.length === 0
+          ? Promise.resolve([])
+          : this.#database
+              .select({
+                bridgeDeviceId: bridgeDeviceLeagues.bridgeDeviceId,
+                externalLeagueId: bridgeDeviceLeagues.externalLeagueId,
+                season: bridgeDeviceLeagues.season,
+                leagueId: bridgeDeviceLeagues.leagueId,
+                grantedAt: bridgeDeviceLeagues.grantedAt,
+              })
+              .from(bridgeDeviceLeagues)
+              .where(inArray(bridgeDeviceLeagues.bridgeDeviceId, bridgeIds)),
+        refreshIds.length === 0
+          ? Promise.resolve([])
+          : this.#database
+              .select({
+                id: espnRefreshAttempts.id,
+                refreshRequestId: espnRefreshAttempts.refreshRequestId,
+                mode: espnRefreshAttempts.mode,
+                state: espnRefreshAttempts.state,
+                errorCode: espnRefreshAttempts.errorCode,
+                errorDetail: espnRefreshAttempts.errorDetail,
+                startedAt: espnRefreshAttempts.startedAt,
+                finishedAt: espnRefreshAttempts.finishedAt,
+              })
+              .from(espnRefreshAttempts)
+              .where(inArray(espnRefreshAttempts.refreshRequestId, refreshIds)),
+        rankingListIds.length === 0
+          ? Promise.resolve([])
+          : this.#database
+              .select({
+                id: rankingListVersions.id,
+                listId: rankingListVersions.listId,
+                versionNumber: rankingListVersions.versionNumber,
+                parentVersionId: rankingListVersions.parentVersionId,
+                state: rankingListVersions.state,
+                importRunId: rankingListVersions.importRunId,
+                dataAsOf: rankingListVersions.dataAsOf,
+                publishedAt: rankingListVersions.publishedAt,
+                entryCount: rankingListVersions.entryCount,
+                checksumSha256: rankingListVersions.checksumSha256,
+                changeNote: rankingListVersions.changeNote,
+                provenance: rankingListVersions.provenance,
+                metadata: rankingListVersions.metadata,
+                createdAt: rankingListVersions.createdAt,
+              })
+              .from(rankingListVersions)
+              .where(inArray(rankingListVersions.listId, rankingListIds)),
+        projectionSetIds.length === 0
+          ? Promise.resolve([])
+          : this.#database
+              .select({
+                projectionSetId: playerProjections.projectionSetId,
+                playerId: playerProjections.playerId,
+                playerName: players.fullName,
+                primaryPosition: players.primaryPosition,
+                nflTeam: players.nflTeam,
+                meanPoints: playerProjections.meanPoints,
+                floorPoints: playerProjections.floorPoints,
+                ceilingPoints: playerProjections.ceilingPoints,
+                confidence: playerProjections.confidence,
+                components: playerProjections.components,
+              })
+              .from(playerProjections)
+              .innerJoin(players, eq(playerProjections.playerId, players.id))
+              .where(inArray(playerProjections.projectionSetId, projectionSetIds)),
+      ]);
 
     const rankingVersionIds = rankingVersionRows.map((row) => row.id);
     const rankingEntryRows =
@@ -603,6 +627,7 @@ export class DrizzleAccountDataRepository implements AccountDataPort {
         leagueIntelContributions: personaRows,
         weeklyRecapContributions: recapRows,
         refreshHistory: refreshRows,
+        espnRefreshAttempts: refreshAttemptRows,
       },
       omittedSecrets,
     };

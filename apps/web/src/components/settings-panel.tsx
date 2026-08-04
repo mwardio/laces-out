@@ -31,6 +31,7 @@ import {
 } from "../lib/api-client";
 import { defaultClaimChoice, selectableClaimTeams } from "../lib/team-claim";
 import { AiProviderSettings } from "./ai-provider-settings";
+import { DataHealthPanel } from "./data-health-panel";
 import styles from "./settings-panel.module.css";
 
 type Status =
@@ -1007,6 +1008,11 @@ export function SettingsPanel() {
             </form>
             <StatusLine status={deletionStatus} />
           </section>
+
+          {/* Last, and collapsed. Source health is reference material, not something a member is
+              being asked to act on, so it sits below everything else rather than competing for
+              attention on the overview or League Sync pages. */}
+          <DataHealthPanel />
         </>
       )}
     </div>

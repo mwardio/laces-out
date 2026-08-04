@@ -7,7 +7,8 @@
 - `worker`: pg-boss queues and schedules for daily/startup/on-demand player identity, schedules,
   weekly player/team stats, weekly rosters, snap counts, Sleeper status, and contextual ADP; hourly Sleeper market
   signals; an hourly first-party weekly-forecast sweep; a quarter-hour lineup-lock notification
-  sweep; and quarter-hour source health checks.
+  sweep; quarter-hour source health checks; and a bounded five-minute ESPN refresh-intent expiry and
+  direct-capability sweep.
   Provider sync, projections, recommendation recomputation, and notification sweeps all have
   concrete worker services and fail closed when a required dependency is unavailable;
 - `postgres`: canonical state, audit trail, and pg-boss queues.
@@ -612,6 +613,192 @@ and MFA are not configurable features today. They remain future hardening for br
 not prerequisites the current runbook silently assumes are already installed.
 
 ## Provider release gates
+
+### ESPN automated refresh
+
+Migration `0034_espn_automated_sync.sql` adds client kind/agent capability to bridge devices,
+durable league-refresh fields and the one-live-request partial unique index, shared
+`espn_league_sync_states`, and bounded `espn_refresh_attempts`. It also replaces the supplemental
+artifact's lifetime checksum uniqueness rule with a lookup index: persistence remains serialized
+and idempotent against the current canonical snapshot, while a valid provider reversion such as
+`A → B → A` remains representable and independently scoped free-agent/waiver captures may retain
+the same canonical payload. It backfills existing ESPN seasons with unknown direct capability.
+Existing automatic bridge credentials remain agent-capable across the extension update;
+credentials with the fixed legacy one-click label remain upload-only. Old companions can continue
+six-hour uploads without polling, so deploy the server migration before the new extension.
+After payload verification, the first replay of a legacy browser checksum upgrades only its stored
+checksum metadata to the portable canonical identity; it does not duplicate canonical league rows
+or emit a change event.
+
+The API evaluates stale-on-view and manual member requests; the `provider-sync-sweep` schedule runs
+every five minutes to expire overdue intents even when direct sync is disabled. When direct sync is
+enabled, that sweep dispatches at most 100 due verified refreshes to the normal `league-sync` queue.
+Migrated `unknown` and `not-public` rows remain unscheduled unless an operator deliberately sets
+that one reviewed row's `preferred_mode = 'direct'` for a bounded evidence probe. Queue retries are
+bounded and feed `provider-sync-sweep-dead-letter` or
+`league-sync-dead-letter`; inspect either transition immediately. Chrome polls only Laces Out every
+five minutes, reads ESPN only when an intent is offered, and retains a six-hour full sweep. A
+sleeping or signed-out device is not an infrastructure outage.
+
+Safe rollout order:
+
+1. Take and verify a backup, apply migration `0034`, then run
+   `npm run db:smoke -w @fantasy/db` against a disposable migrated PostgreSQL database.
+2. Deploy API and worker support with `ESPN_PUBLIC_DIRECT_SYNC_ENABLED=false`. Confirm request/status
+   reads, expiry, redacted structured counts, and legacy uploads before publishing the companion.
+3. Publish the compatible companion update and canary one private league. Verify five-minute
+   poll/no-work behavior, stale request fulfillment, login-required backoff, restart recovery, and
+   the unchanged six-hour fallback. Expand only after queued work is not growing while agents are
+   recently seen.
+4. Complete the ESPN terms/policy review and capture sanitized anonymous evidence for each artifact
+   family. Core approval never approves supplemental artifacts. Do not retain cookies, headers,
+   provider bodies, real member identifiers, or unexpected query material as evidence.
+5. For one intentionally public canary, explicitly promote only the proven core capability. An HTTP
+   200 probe deliberately leaves an unknown league at evidence-required; there is no automatic
+   promotion.
+
+```sql
+begin;
+
+select season.id, season.provider, season.external_key, season.season,
+       state.direct_core_state, state.supplemental_capabilities
+from league_seasons season
+join espn_league_sync_states state on state.league_season_id = season.id
+where season.id = '<reviewed-league-season-uuid>'
+for update;
+
+update espn_league_sync_states state
+set direct_core_state = 'available',
+    consecutive_failures = 0,
+    circuit_open_until = null,
+    last_error_code = null,
+    last_error_at = null,
+    last_error_detail = null,
+    next_probe_at = now(),
+    updated_at = now()
+from league_seasons season
+where state.league_season_id = season.id
+  and season.id = '<reviewed-league-season-uuid>'
+  and season.provider = 'espn'
+  and season.external_key ~ '^[0-9]{1,20}$'
+returning state.league_season_id, state.direct_core_state;
+
+commit;
+```
+
+Require exactly one returned row and separately record who accepted the policy/evidence gate. Then
+set `ESPN_PUBLIC_DIRECT_SYNC_ENABLED=true` for both API and worker, restart through the normal
+deployment process, and canary for at least seven days. The flag schedules verified
+`available`/`degraded` rows and only those unverified rows an operator explicitly placed in direct
+probe mode; default `unknown` and private rows remain closed. Verify public-to-private transition,
+429/circuit behavior, parser rejection, no identity or membership mutations, and last-good data
+preservation before expanding.
+
+Use these low-cardinality summaries in the daily operations digest. They contain no response body,
+credential, user email, device token, or league name:
+
+```sql
+select state, coalesce(fulfillment_mode, 'unassigned') as mode, count(*)
+from refresh_requests
+where kind = 'league' and created_at >= now() - interval '24 hours'
+group by state, coalesce(fulfillment_mode, 'unassigned')
+order by state, mode;
+
+select coalesce(fulfillment_mode, 'unassigned') as mode,
+       count(*) as fulfilled,
+       round(avg(extract(epoch from finished_at - created_at))) as mean_seconds,
+       round(percentile_cont(0.95) within group (
+         order by extract(epoch from finished_at - created_at)
+       )) as p95_seconds
+from refresh_requests
+where kind = 'league' and state = 'succeeded'
+  and finished_at is not null and created_at >= now() - interval '24 hours'
+group by coalesce(fulfillment_mode, 'unassigned')
+order by mode;
+
+select state, coalesce(error_code, 'none') as error_code, count(*)
+from espn_refresh_attempts
+where started_at >= now() - interval '24 hours'
+group by state, coalesce(error_code, 'none')
+order by state, error_code;
+
+select direct_core_state, count(*)
+from espn_league_sync_states
+group by direct_core_state
+order by direct_core_state;
+
+select
+  count(*) filter (where last_seen_at >= now() - interval '15 minutes') as seen_15m,
+  count(*) filter (where last_seen_at >= now() - interval '6 hours') as seen_6h,
+  count(*) filter (where last_seen_at >= now() - interval '7 days') as seen_7d
+from bridge_devices
+where provider = 'espn' and agent_capable and revoked_at is null
+  and (expires_at is null or expires_at > now());
+
+select count(*) as waiting_without_recent_agent
+from refresh_requests request
+join league_seasons season on season.id = request.league_season_id
+where request.kind = 'league'
+  and request.state in ('queued', 'processing')
+  and request.expires_at > now()
+  and season.provider = 'espn'
+  and not exists (
+    select 1
+    from bridge_device_leagues scope
+    join bridge_devices device on device.id = scope.bridge_device_id
+    where scope.league_id = season.league_id
+      and scope.external_league_id = season.external_key
+      and (scope.season is null or scope.season = season.season)
+      and device.provider = 'espn' and device.agent_capable
+      and device.revoked_at is null
+      and (device.expires_at is null or device.expires_at > now())
+      and device.last_seen_at >= now() - interval '15 minutes'
+  );
+
+select name, state, count(*)
+from pgboss.job
+where name in (
+  'provider-sync-sweep', 'provider-sync-sweep-dead-letter',
+  'league-sync', 'league-sync-dead-letter'
+)
+group by name, state
+order by name, state;
+```
+
+Alert on repeated failures for a previously available league, cross-league parser rejection that
+suggests schema drift, dead-letter transitions, or a growing non-expired queue despite agents seen
+in the last 15 minutes. Do not alert merely because a league is private, one desktop is offline, or
+one request is waiting. Correlate API `member-refresh`, `agent-poll`, and `agent-attempt` count-only
+records with worker sweep results; never add league payloads or authorization headers to logs.
+
+Rollback is forward-compatible:
+
+- Set `ESPN_PUBLIC_DIRECT_SYNC_ENABLED=false` in API and worker to stop new anonymous reads. Leave
+  the capability rows and last good snapshots intact.
+- Roll back the stale-on-view web client if intent creation must stop; the manual/legacy upload
+  paths remain compatible. The new companion retains its six-hour baseline if polling is disabled
+  server-side or returns no work.
+- Cancel live intents without deleting attempts or canonical facts:
+
+```sql
+update refresh_requests
+set state = 'cancelled',
+    started_at = coalesce(started_at, created_at),
+    finished_at = now(),
+    error_code = 'OPERATOR_CANCELLED',
+    error_detail = 'Cancelled during automated ESPN refresh rollback.'
+where kind = 'league' and state in ('queued', 'processing');
+```
+
+- Do not reverse migration `0034` during an incident. Do not delete shared sync state, attempts, an
+  accepted snapshot, league, membership, or healthy bridge credential as a rollback step.
+
+Heavy release validation includes the PostgreSQL concurrency/race suite, schema smoke, old/new
+extension compatibility, production web/API builds, and the sanitized live matrix in the ESPN
+provider note. It must run away from the live database and only after resource-intensive host work
+has finished.
+
+### Other provider gates
 
 - Yahoo friend access may be enabled after the operator completes the current provider terms,
   configuration, and real-account contract-validation checklist. Set

@@ -7,6 +7,7 @@ import {
   enqueueDataRefresh,
   enqueueLeagueSync,
   enqueueProjectionRefresh,
+  enqueueProviderSyncSweep,
   enqueueRecommendationRecompute,
   queueNames,
   registerQueues,
@@ -52,6 +53,48 @@ describe("shared queue dispatch contract", () => {
         singletonSeconds: 60,
       }),
     );
+  });
+
+  it("serializes server-direct reads with the same league group and a mode-specific singleton", async () => {
+    const { boss, send } = sendHarness();
+
+    await enqueueLeagueSync(boss, {
+      mode: "server-direct",
+      leagueSeasonId: "league-1",
+      refreshRequestId: "refresh-1",
+      reason: "stale-on-view",
+      probe: false,
+    });
+
+    expect(send).toHaveBeenCalledWith(
+      queueNames.syncLeague,
+      expect.any(Object),
+      expect.objectContaining({
+        group: { id: "league-season:league-1" },
+        singletonKey: "league-sync:server-direct:league-1",
+        singletonSeconds: 60,
+      }),
+    );
+  });
+
+  it("coalesces provider sweeps and rejects malformed timestamps before enqueue", async () => {
+    const { boss, send } = sendHarness();
+
+    await enqueueProviderSyncSweep(boss, { requestedAt: "scheduled" });
+
+    expect(send).toHaveBeenCalledWith(
+      queueNames.providerSyncSweep,
+      { requestedAt: "scheduled" },
+      expect.objectContaining({
+        group: { id: "provider-sync-sweep" },
+        singletonKey: "provider-sync-sweep",
+        singletonSeconds: 300,
+      }),
+    );
+    expect(() => enqueueProviderSyncSweep(boss, { requestedAt: "not-a-date" })).toThrow(
+      "ISO timestamp",
+    );
+    expect(send).toHaveBeenCalledTimes(1);
   });
 
   it("serializes recomputation per league season and sorts deduplicated kinds", async () => {

@@ -65,7 +65,14 @@ export interface NormalizedLeagueSettings {
 
 export interface NormalizedManager {
   readonly externalId: string | null;
+  /** The provider's handle — an ESPN username, a Yahoo nickname. Always present. */
   readonly displayName: string;
+  /**
+   * The manager's actual name where the provider gives one separately from the handle, so a
+   * standings table can read "Matt Ward" instead of "mackward". Null when the provider reports
+   * only a handle, which is the normal case for Yahoo.
+   */
+  readonly fullName: string | null;
   readonly isCommissioner: boolean;
 }
 

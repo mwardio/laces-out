@@ -35,7 +35,10 @@ Room adds optional Gemini or BYOK analysis.
   through a one-click bookmark or the signed
   [Chrome companion](https://chromewebstore.google.com/detail/laces-out-espn-bridge/hmilkmcjlkpnigcfnlfogeafacjpmkbj).
   Self-hosted instances pair with the same companion through a one-time code, with no custom
-  extension build required. Laces Out never asks for a provider password or changes a roster.
+  extension build required. Stale ESPN leagues create one durable refresh request: a verified
+  public league can refresh directly when the operator enables the default-off unofficial path,
+  while private leagues wait for an authorized sync device. Laces Out never asks for a provider
+  password or changes a roster.
 - **Weekly decisions** — league-scored projections drive lineup, waiver, trade, opponent, and
   roster-strength analysis. When the league changes, the recommendations refresh with it.
 - **Snake and auction drafts** — shared rooms track inflation, scarcity, wait risk, maximum bids,
@@ -81,8 +84,9 @@ The details, formulas, and current evidence are in
 ## Current limits
 
 Yahoo and ESPN league sync are read-only. ESPN live-draft ingest is implemented but disabled until
-it passes real snake and auction room validation. Provider writes are intentionally unsupported:
-Laces Out recommends the move; you make it at ESPN or Yahoo.
+it passes real snake and auction room validation. Anonymous ESPN reads are unofficial and remain
+disabled until the operator accepts the policy/evidence gate. Provider writes are intentionally
+unsupported: Laces Out recommends the move; you make it at ESPN or Yahoo.
 
 ## Quick start
 
@@ -142,6 +146,7 @@ settings are in [.env.example](./.env.example).
 | `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY`  | Game-day push alerts                                  |
 | `YAHOO_CLIENT_ID` / `YAHOO_CLIENT_SECRET` | Yahoo OAuth when enabled                              |
 | `NEXT_PUBLIC_YAHOO_ACCESS_STATUS`         | Set to `available` when Yahoo OAuth is ready          |
+| `ESPN_PUBLIC_DIRECT_SYNC_ENABLED`         | Evidence-gated anonymous ESPN reads; defaults `false` |
 
 If you're using a reverse proxy (Caddy, Traefik, etc.), keep the included gateway on an unprivileged
 loopback port:
@@ -162,15 +167,15 @@ only that gateway—not the API, web, or PostgreSQL services.
 There is no advertising or product-analytics client by default. Sync, research, and optional Film
 Room requests still need to reach their data sources.
 
-| Service                                          | What Laces Out uses it for                         | Account or key                                 |
-| ------------------------------------------------ | -------------------------------------------------- | ---------------------------------------------- |
-| nflverse                                         | NFL identity, schedules, stats, rosters, and snaps | None                                           |
-| Sleeper                                          | Player catalog, status context, and market trends  | None; Sleeper league sync is not implemented   |
-| Fantasy Football Calculator                      | Draft-market ADP context                           | None                                           |
-| ESPN                                             | Authorized private-league sync                     | Existing browser session; password stays local |
-| Google Gemini                                    | Shared or user-selected Film Room provider         | Host key or encrypted user-supplied key        |
-| OpenAI, Anthropic, DeepSeek, Grok, or OpenRouter | Optional user-selected Film Room provider          | Encrypted user-supplied key                    |
-| Yahoo                                            | Optional read-only league sync when enabled        | Yahoo app credentials configured by the host   |
+| Service                                          | What Laces Out uses it for                         | Account or key                                  |
+| ------------------------------------------------ | -------------------------------------------------- | ----------------------------------------------- |
+| nflverse                                         | NFL identity, schedules, stats, rosters, and snaps | None                                            |
+| Sleeper                                          | Player catalog, status context, and market trends  | None; Sleeper league sync is not implemented    |
+| Fantasy Football Calculator                      | Draft-market ADP context                           | None                                            |
+| ESPN                                             | Scoped device sync; optional verified public read  | Device session stays local; direct needs no key |
+| Google Gemini                                    | Shared or user-selected Film Room provider         | Host key or encrypted user-supplied key         |
+| OpenAI, Anthropic, DeepSeek, Grok, or OpenRouter | Optional user-selected Film Room provider          | Encrypted user-supplied key                     |
+| Yahoo                                            | Optional read-only league sync when enabled        | Yahoo app credentials configured by the host    |
 
 ## Under the hood
 
@@ -185,7 +190,7 @@ Provider and NFL sources ──> adapters ─┴─ pg-boss worker
 - `apps/web` — responsive Next.js 16 PWA
 - `apps/api` — authentication, provider sync, ingestion, and REST endpoints
 - `apps/worker` — refresh schedules, forecast sweeps, markets, and background jobs
-- `apps/espn-bridge` — Manifest V3 companion for private ESPN league sync
+- `apps/espn-bridge` — Manifest V3 sync agent with five-minute intent polling and six-hour baseline
 - `packages/*` — provider adapters, domain contracts, projections, rankings, security, and the
   draft, lineup, waiver, and trade engines
 

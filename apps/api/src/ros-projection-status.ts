@@ -278,6 +278,7 @@ export class RosProjectionStatusService {
     const leagueRows = await this.#database
       .select({
         leagueSeasonId: leagueSeasons.id,
+        leagueName: leagues.name,
         provider: leagueSeasons.provider,
         season: leagueSeasons.season,
       })
@@ -332,6 +333,10 @@ export class RosProjectionStatusService {
             .orderBy(desc(projectionSets.fetchedAt))
             .limit(MAXIMUM_PUBLISHED_SET_ROWS);
 
+    const leagueNamesBySeasonId = new Map(
+      leagueRows.map((row) => [row.leagueSeasonId, row.leagueName] as const),
+    );
+
     const publishedSets = derivePublishedSets({
       rows: publishedRows.flatMap((row) => {
         if (!row.leagueSeasonId) return [];
@@ -340,6 +345,7 @@ export class RosProjectionStatusService {
           {
             projectionSetId: row.projectionSetId,
             leagueSeasonId: row.leagueSeasonId,
+            leagueName: leagueNamesBySeasonId.get(row.leagueSeasonId) ?? null,
             season: row.season,
             playerCount: row.playerCount,
             windowStartWeek: row.windowStartWeek,
@@ -410,6 +416,7 @@ export class RosProjectionStatusService {
   async #leagueInputs(
     leagueRows: readonly {
       readonly leagueSeasonId: string;
+      readonly leagueName: string | null;
       readonly provider: string;
       readonly season: number;
     }[],
@@ -535,6 +542,7 @@ export class RosProjectionStatusService {
       });
       return {
         leagueSeasonId: league.leagueSeasonId,
+        leagueName: league.leagueName,
         scoringProfileKey:
           normalization.state === "available"
             ? projectionScoringProfileKey(normalization.profile)

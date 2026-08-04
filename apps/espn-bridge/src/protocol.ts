@@ -101,6 +101,7 @@ export const configurationStorageKey = "lacesOutEspnConfiguration";
 export const statusStorageKey = "lacesOutEspnStatus";
 export const pendingPairingStorageKey = "lacesOutEspnPendingPairing";
 export const syncAlarmName = "laces-out-espn-sync";
+export const maintenanceStorageKey = "lacesOutEspnMaintenance";
 
 // A web page can offer to pair the bridge with itself. Offers are held as
 // pending (never auto-configured) and expire quickly so a stale offer can never

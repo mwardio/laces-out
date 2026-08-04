@@ -42,6 +42,7 @@ const admittedStatus: RosReleaseStatus = {
   leagueReadiness: [
     {
       leagueSeasonId: "league-1",
+      leagueName: "Daragely",
       state: "ready",
       reasons: [],
       scoringProfile: profile,
@@ -76,6 +77,7 @@ const mixedStatus: RosReleaseStatus = {
     {
       projectionSetId: "set-1",
       leagueSeasonId: "league-1",
+      leagueName: "Daragely",
       scoringProfile: profile,
       season: 2026,
       playerCount: 210,
@@ -95,6 +97,7 @@ const withheldStatus: RosReleaseStatus = {
   leagueReadiness: [
     {
       leagueSeasonId: "league-2",
+      leagueName: "North Loop Auction",
       state: "withheld",
       reasons: ["no-admitted-scoring-profile", "incomplete-schedule"],
       scoringProfile: null,
@@ -119,7 +122,7 @@ describe("describeRosRelease", () => {
       },
     });
 
-    expect(description.artifactHeadline).toBe("Validated model in use for Full PPR scoring");
+    expect(description.artifactHeadline).toBe("Ready for Full PPR scoring");
     expect(description.auditHeadline).toBe("Separate audit run, not a release signal");
     expect(JSON.stringify(description)).not.toMatch(/shadow|globally disabled|fail-closed/iu);
   });
@@ -128,7 +131,7 @@ describe("describeRosRelease", () => {
     const description = describeRosRelease(mixedStatus);
 
     expect(description.retainedSetNotice).toBe(
-      "Some positions were withheld on the latest check. The last set that passed every check stays in place for your league.",
+      "Some positions did not clear the latest check, so your league keeps the last forecast that did.",
     );
     expect(description.cellSummary).toBe("5 of 6 position groups released");
   });
@@ -169,6 +172,7 @@ describe("describeRosRelease", () => {
       leagueReadiness: [
         {
           leagueSeasonId: null,
+          leagueName: null,
           state: "withheld",
           reasons: ["no-league-synced"],
           scoringProfile: null,
@@ -197,8 +201,8 @@ describe("describeRosRelease", () => {
       },
     });
 
-    expect(description.supportedProfileSummary).toBe("Validated for Full PPR");
-    expect(description.unsupportedProfileSummary).toBe("Not validated for Standard (non-PPR)");
+    expect(description.supportedProfileSummary).toBe("Covers Full PPR");
+    expect(description.unsupportedProfileSummary).toBe("Does not cover Standard (non-PPR)");
   });
 
   it("reports no validated model without implying the rail is broken", () => {
@@ -208,8 +212,8 @@ describe("describeRosRelease", () => {
       scoringProfiles: { supported: [], unsupported: [] },
     });
 
-    expect(description.artifactHeadline).toBe("No validated model for this season yet");
-    expect(description.supportedProfileSummary).toBe("No scoring profile is validated yet");
+    expect(description.artifactHeadline).toBe("Not ready for this season yet");
+    expect(description.supportedProfileSummary).toBe("No scoring formats ready yet");
   });
 
   it("summarizes a league's own per-position readiness, with a title only for withheld positions", () => {
@@ -218,6 +222,7 @@ describe("describeRosRelease", () => {
       leagueReadiness: [
         {
           leagueSeasonId: "league-9",
+          leagueName: "Daragely",
           state: "withheld",
           reasons: ["no-admitted-scoring-profile"],
           scoringProfile: null,
@@ -244,6 +249,7 @@ describe("describeRosRelease", () => {
     expect(description.leaguePositionSummaries).toEqual([
       {
         leagueSeasonId: "league-9",
+        leagueLabel: "Daragely",
         positions: [
           { position: "QB", decision: "ready", title: null },
           { position: "RB", decision: "ready", title: null },
@@ -311,6 +317,7 @@ describe("parseRosReleaseStatus", () => {
       leagueReadiness: [
         {
           leagueSeasonId: "league-3",
+          leagueName: "Daragely",
           state: "withheld",
           reasons: ["scoring-rules-unsupported"],
           scoringProfile: null,
@@ -351,6 +358,7 @@ describe("parseRosReleaseStatus", () => {
       leagueReadiness: [
         {
           leagueSeasonId: "league-4",
+          leagueName: "Daragely",
           state: "withheld",
           reasons: ["some-brand-new-reason-added-later"],
           scoringProfile: null,
@@ -373,6 +381,7 @@ describe("parseRosReleaseStatus", () => {
       leagueReadiness: [
         {
           leagueSeasonId: "league-5",
+          leagueName: "Daragely",
           state: "ready",
           reasons: [],
           scoringProfile: profile,
@@ -400,7 +409,13 @@ describe("parseRosReleaseStatus", () => {
     const status = {
       ...admittedStatus,
       leagueReadiness: [
-        { leagueSeasonId: "league-6", state: "ready", reasons: [], scoringProfile: profile },
+        {
+          leagueSeasonId: "league-6",
+          leagueName: "Daragely",
+          state: "ready",
+          reasons: [],
+          scoringProfile: profile,
+        },
       ],
     };
 

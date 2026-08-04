@@ -7,6 +7,7 @@ import {
   assertLeagueSyncJob,
   assertNotificationSweepJob,
   assertProjectionRefreshJob,
+  assertProviderSyncSweepJob,
   assertRecommendationJob,
   queueNames,
 } from "@fantasy/jobs";
@@ -16,6 +17,7 @@ import type {
   LeagueSyncJob,
   NotificationSweepJob,
   ProjectionRefreshJob,
+  ProviderSyncSweepJob,
   RecommendationJob,
 } from "@fantasy/jobs";
 
@@ -59,6 +61,19 @@ export interface ProjectionRefreshService {
   refreshProjections(job: ProjectionRefreshJob, context: WorkerJobContext): Promise<void>;
 }
 
+export interface ProviderSyncSweepResult {
+  readonly expired: number;
+  readonly considered: number;
+  readonly enqueued: number;
+}
+
+export interface ProviderSyncSweepService {
+  sweepProviderSync(
+    job: ProviderSyncSweepJob,
+    context: WorkerJobContext,
+  ): Promise<ProviderSyncSweepResult>;
+}
+
 export interface RecommendationRecomputeService {
   recomputeRecommendations(job: RecommendationJob, context: WorkerJobContext): Promise<void>;
 }
@@ -87,6 +102,7 @@ export interface NotificationSweepService {
 export interface WorkerServices {
   readonly leagueSync?: LeagueSyncService;
   readonly projectionRefresh?: ProjectionRefreshService;
+  readonly providerSyncSweep?: ProviderSyncSweepService;
   readonly recommendationRecompute?: RecommendationRecomputeService;
   readonly dataHealth?: DataHealthService;
   readonly notificationSweep?: NotificationSweepService;
@@ -146,6 +162,19 @@ export async function registerWorkers(
       }
     },
   );
+
+  await boss.work<ProviderSyncSweepJob>(queueNames.providerSyncSweep, workOptions, async (jobs) => {
+    const service = requireService(services.providerSyncSweep, "Provider sync sweep");
+    for (const job of jobs) {
+      assertNotAborted(job);
+      assertProviderSyncSweepJob(job.data);
+      const result = await service.sweepProviderSync(job.data, {
+        jobId: job.id,
+        signal: job.signal,
+      });
+      logger.info({ jobId: job.id, result }, "provider sync sweep completed");
+    }
+  });
 
   await boss.work<RecommendationJob>(
     queueNames.recomputeRecommendations,

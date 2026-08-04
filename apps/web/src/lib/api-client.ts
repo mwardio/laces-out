@@ -12,6 +12,7 @@ import {
   espnBridgeDeviceListResponseSchema,
   espnBridgeDeviceResponseSchema,
   espnBridgePairingSessionResponseSchema,
+  espnLeagueRefreshStatusSchema,
   inSeasonDecisionSnapshotSchema,
   jobAcceptedSchema,
   leagueAnalyticsSnapshotSchema,
@@ -42,6 +43,7 @@ import {
   type DraftMarketBaseline,
   type DraftSessionSnapshot,
   type InSeasonDecisionSnapshot,
+  type EspnLeagueRefreshStatus,
   type JobAccepted,
   type LeagueAnalyticsSnapshot,
   type LeagueDashboard,
@@ -163,6 +165,7 @@ export type {
   DraftMarketBaseline,
   DraftSessionSnapshot,
   InSeasonDecisionSnapshot,
+  EspnLeagueRefreshStatus,
   JobAccepted,
   LeagueAnalyticsSnapshot,
   LeagueDashboard,
@@ -276,6 +279,11 @@ export function parseLeagueListResponse(value: unknown): LeagueListResponse | nu
 
 export function parseLeagueDashboard(value: unknown): LeagueDashboard | null {
   const result = leagueDashboardSchema.safeParse(value);
+  return result.success ? result.data : null;
+}
+
+export function parseEspnLeagueRefreshStatus(value: unknown): EspnLeagueRefreshStatus | null {
+  const result = espnLeagueRefreshStatusSchema.safeParse(value);
   return result.success ? result.data : null;
 }
 

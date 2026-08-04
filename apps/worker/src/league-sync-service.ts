@@ -3,6 +3,7 @@ import {
   evaluateConnectionCircuit,
   nextCircuitOpenUntil,
   providerSupportsServerRefresh,
+  type EspnDirectSyncPort,
   type YahooSyncPort,
 } from "@fantasy/league-sync";
 import {
@@ -23,12 +24,9 @@ import type {
 /**
  * Executes a queued `league-sync` job.
  *
- * The two providers do not share one refresh capability, and that is a product fact rather than a
- * gap. ESPN credentials never leave the user's browser (ADR 0002), so the server cannot initiate an
- * ESPN read at all; the accepted bridge snapshot *is* the sync event. Yahoo authorizes through PKCE
- * and the server holds a refresh token, so a worker is a legitimate caller — `YahooConnectionService`
- * refreshes under `SELECT … FOR UPDATE` with a credential compare-and-swap, which is already
- * multi-process safe.
+ * Provider capability is resolved at the target and mode level. Yahoo connection jobs use the
+ * server-held OAuth refresh token. ESPN server-direct jobs use only the credential-free public-read
+ * port after league-level evidence verification; private ESPN leagues remain assisted-agent work.
  *
  * Every stated no-op therefore *resolves*. Only a genuine retryable provider failure throws, so what
  * reaches `league-sync-dead-letter` is a real fault rather than a permanently impossible job.
@@ -89,17 +87,20 @@ function failureDetail(error: unknown): string {
 export class LeagueSyncService implements LeagueSyncServicePort {
   readonly #targets: LeagueSyncTargetReader;
   readonly #yahooSync: YahooSyncPort | undefined;
+  readonly #espnDirect: EspnDirectSyncPort | undefined;
   readonly #circuit: ConnectionCircuitStore;
   readonly #now: () => Date;
 
   constructor(input: {
     readonly targets: LeagueSyncTargetReader;
     readonly yahooSync?: YahooSyncPort;
+    readonly espnDirect?: EspnDirectSyncPort;
     readonly circuit: ConnectionCircuitStore;
     readonly now?: () => Date;
   }) {
     this.#targets = input.targets;
     this.#yahooSync = input.yahooSync;
+    this.#espnDirect = input.espnDirect;
     this.#circuit = input.circuit;
     this.#now = input.now ?? (() => new Date());
   }
@@ -112,11 +113,44 @@ export class LeagueSyncService implements LeagueSyncServicePort {
   async runLeagueSync(job: LeagueSyncJob, context: WorkerJobContext): Promise<LeagueSyncOutcome> {
     abortIfCancelled(context);
 
+    if (job.mode === "server-direct") {
+      if (!this.#espnDirect) return { state: "provider-unconfigured", provider: "espn" };
+      const outcome = await this.#espnDirect.syncLeague(
+        {
+          leagueSeasonId: job.leagueSeasonId,
+          ...(job.refreshRequestId ? { refreshRequestId: job.refreshRequestId } : {}),
+          probe: job.probe ?? false,
+        },
+        context.signal,
+      );
+      if (outcome.state === "accepted") {
+        return {
+          state: "synced",
+          recordsWritten: outcome.recordsWritten,
+          syncRunId: outcome.syncRunId,
+        };
+      }
+      if (outcome.state === "unchanged") {
+        return { state: "unchanged", syncRunId: outcome.syncRunId };
+      }
+      if (outcome.state === "target-missing") return { state: "target-missing" };
+      if (outcome.state === "circuit-open") {
+        return { state: "circuit-open", retryAfterSeconds: outcome.retryAfterSeconds };
+      }
+      if (outcome.state === "disabled") {
+        return { state: "provider-unconfigured", provider: "espn" };
+      }
+      return { state: "external-companion-required", provider: "espn" };
+    }
+
+    const connectionId = job.connectionId;
+    if (!connectionId) return { state: "target-missing" };
+
     // One query joining the league season to its connection, filtered on both ids. A job naming a
     // connection that does not own the league season therefore finds nothing and resolves, rather
     // than syncing a league the connection has no claim to.
     const target = await this.#targets.findSyncTarget({
-      connectionId: job.connectionId,
+      connectionId,
       leagueSeasonId: job.leagueSeasonId,
     });
     if (!target) return { state: "target-missing" };
@@ -130,7 +164,7 @@ export class LeagueSyncService implements LeagueSyncServicePort {
 
     if (target.connectionHealth === "reauthorize" || target.connectionHealth === "disabled") {
       // Terminal, not retryable: no amount of backoff produces a valid credential.
-      return { state: "reauthorization-required", connectionId: job.connectionId };
+      return { state: "reauthorization-required", connectionId };
     }
 
     const circuit = evaluateConnectionCircuit({
@@ -149,14 +183,10 @@ export class LeagueSyncService implements LeagueSyncServicePort {
 
     let receipt;
     try {
-      receipt = await this.#yahooSync.syncLeague(
-        target.userId,
-        job.connectionId,
-        target.externalKey,
-      );
+      receipt = await this.#yahooSync.syncLeague(target.userId, connectionId, target.externalKey);
     } catch (error) {
       await this.#circuit.recordFailure({
-        connectionId: job.connectionId,
+        connectionId,
         at: this.#now(),
         errorCode: failureCode(error),
         errorDetail: failureDetail(error),
@@ -167,7 +197,7 @@ export class LeagueSyncService implements LeagueSyncServicePort {
     }
 
     abortIfCancelled(context);
-    await this.#circuit.recordSuccess(job.connectionId, this.#now());
+    await this.#circuit.recordSuccess(connectionId, this.#now());
     return receipt.state === "accepted"
       ? {
           state: "synced",

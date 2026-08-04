@@ -227,11 +227,9 @@ function FilmRoomTour() {
                 Before kickoff, confirm player locks and the projection timestamp, then make only
                 the moves that fit your risk tolerance.
               </p>
-              <footer>
-                <p>
-                  Grounded in Laces Out’s own computed league data (overview, Decision Desk, and
-                  analytics), not the model’s outside knowledge.
-                </p>
+              <footer className={styles.answerGrounding}>
+                <ShieldCheck size={13} aria-hidden="true" />
+                <span>Grounded in your league&rsquo;s computed data</span>
               </footer>
             </article>
           </div>
@@ -520,133 +518,140 @@ export function FilmRoomWorkbench() {
           </div>
         </div>
 
-        <form className={styles.analysisForm} onSubmit={(event) => void runAnalysis(event)}>
-          <label className={styles.field}>
-            <span>League</span>
-            <select
-              value={selectedLeagueId}
-              onChange={(event) => setSelectedLeagueId(event.target.value)}
-              disabled={!hasLeagues}
-            >
-              {hasLeagues ? null : <option value="">Connect a league first</option>}
-              {load.leagues.leagues.map((league) => (
-                <option key={league.id} value={league.id}>
-                  {league.name}
-                  {league.season ? ` · ${league.season.provider.toUpperCase()}` : ""}
-                </option>
+        {/* Ask on the left, answer on the right — the same request/result split the coaching
+            panel below already uses, so a full-width card stops stretching a single question
+            field across the whole desktop viewport. Collapses to one column under 1000px. */}
+        <div className={styles.analysisWorkArea}>
+          <form className={styles.analysisForm} onSubmit={(event) => void runAnalysis(event)}>
+            <label className={styles.field}>
+              <span>League</span>
+              <select
+                value={selectedLeagueId}
+                onChange={(event) => setSelectedLeagueId(event.target.value)}
+                disabled={!hasLeagues}
+              >
+                {hasLeagues ? null : <option value="">Connect a league first</option>}
+                {load.leagues.leagues.map((league) => (
+                  <option key={league.id} value={league.id}>
+                    {league.name}
+                    {league.season ? ` · ${league.season.provider.toUpperCase()}` : ""}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <div className={styles.quickQuestions} aria-label="Suggested questions">
+              {QUICK_QUESTIONS.map((suggestion) => (
+                <button key={suggestion} type="button" onClick={() => setQuestion(suggestion)}>
+                  {suggestion}
+                </button>
               ))}
-            </select>
-          </label>
-
-          <div className={styles.quickQuestions} aria-label="Suggested questions">
-            {QUICK_QUESTIONS.map((suggestion) => (
-              <button key={suggestion} type="button" onClick={() => setQuestion(suggestion)}>
-                {suggestion}
-              </button>
-            ))}
-          </div>
-
-          <label className={styles.field}>
-            <span>Your question</span>
-            <textarea
-              value={question}
-              onChange={(event) => setQuestion(event.target.value)}
-              minLength={3}
-              maxLength={2_000}
-              required
-            />
-          </label>
-
-          {!currentProvider?.available ? (
-            <div className={styles.inlineGate}>
-              <KeyRound size={17} />
-              <span>Save a {providerMeta.name} API key to analyze this league.</span>
             </div>
-          ) : currentProvider.accessMode === "managed" ? (
-            <div className={`${styles.notice} ${styles.noticeSuccess}`} role="status">
-              <Check size={16} />
-              <span>Included Gemini is selected. No personal API key is required.</span>
-            </div>
-          ) : null}
-          {!hasLeagues ? (
-            <div className={styles.inlineGate}>
-              <AlertCircle size={17} />
-              <span>
-                <Link href="/connections">Connect Yahoo or ESPN</Link> before requesting league
-                analysis.
-              </span>
-            </div>
-          ) : null}
 
-          <button
-            className={`${styles.primaryButton} ${styles.analyzeButton}`}
-            type="submit"
-            disabled={!canAnalyze || analysisAction.state === "analyzing"}
-          >
+            <label className={styles.field}>
+              <span>Your question</span>
+              <textarea
+                value={question}
+                onChange={(event) => setQuestion(event.target.value)}
+                minLength={3}
+                maxLength={2_000}
+                required
+              />
+            </label>
+
+            {!currentProvider?.available ? (
+              <div className={styles.inlineGate}>
+                <KeyRound size={17} />
+                <span>Save a {providerMeta.name} API key to analyze this league.</span>
+              </div>
+            ) : currentProvider.accessMode === "managed" ? (
+              <div className={`${styles.notice} ${styles.noticeSuccess}`} role="status">
+                <Check size={16} />
+                <span>Included Gemini is selected. No personal API key is required.</span>
+              </div>
+            ) : null}
+            {!hasLeagues ? (
+              <div className={styles.inlineGate}>
+                <AlertCircle size={17} />
+                <span>
+                  <Link href="/connections">Connect Yahoo or ESPN</Link> before requesting league
+                  analysis.
+                </span>
+              </div>
+            ) : null}
+
+            <button
+              className={`${styles.primaryButton} ${styles.analyzeButton}`}
+              type="submit"
+              disabled={!canAnalyze || analysisAction.state === "analyzing"}
+            >
+              {analysisAction.state === "analyzing" ? (
+                <LoaderCircle className={styles.spin} size={17} />
+              ) : (
+                <Send size={17} />
+              )}
+              {analysisAction.state === "analyzing" ? "Reviewing league data" : "Run analysis"}
+            </button>
+
+            {analysisAction.state === "error" ? (
+              <div className={`${styles.notice} ${styles.noticeError}`} role="alert">
+                <AlertCircle size={16} />
+                <span>{analysisAction.message}</span>
+              </div>
+            ) : null}
+          </form>
+
+          <div className={styles.answerRegion} aria-live="polite">
             {analysisAction.state === "analyzing" ? (
-              <LoaderCircle className={styles.spin} size={17} />
+              <div className={styles.emptyAnswer} aria-busy="true">
+                <LoaderCircle className={styles.spin} size={25} aria-hidden="true" />
+                <strong>Reading the whole league</strong>
+                <span>Checking the answer against the latest saved decisions and analytics.</span>
+              </div>
+            ) : analysis ? (
+              <article className={styles.answer}>
+                <div className={styles.answerMeta}>
+                  <span>
+                    {PROVIDERS[analysis.provider].name} · {analysis.model}
+                  </span>
+                  <span>
+                    {analysis.accessMode === "managed" ? "Included access" : "Your API key"}
+                  </span>
+                  <span>
+                    {analysis.usage.inputTokens.toLocaleString()} in ·{" "}
+                    {analysis.usage.outputTokens.toLocaleString()} out
+                  </span>
+                </div>
+                <h3>{analysis.league.name}</h3>
+                <div className={styles.answerText}>
+                  <AiAnswerContent answer={analysis.answer} />
+                </div>
+                {/* The grounding claim is made once per page. On Film Room that is the
+                    "Grounded, not autonomous" chip in the trust strip above, which is why this
+                    answer carries the shield marker instead of repeating the full sentence — the
+                    coaching panel below would otherwise state it a second time on one screen. */}
+                <footer className={styles.answerGrounding}>
+                  <ShieldCheck size={13} aria-hidden="true" />
+                  <span>Grounded in your league&rsquo;s computed data</span>
+                </footer>
+              </article>
+            ) : analysisAction.state === "error" ? (
+              <div className={styles.emptyAnswer} role="alert">
+                <AlertCircle size={25} aria-hidden="true" />
+                <strong>Analysis unavailable</strong>
+                <span>{analysisAction.message}</span>
+              </div>
             ) : (
-              <Send size={17} />
+              <div className={styles.emptyAnswer}>
+                <BrainCircuit size={25} />
+                <strong>Your answer will land here</strong>
+                <span>
+                  Models receive bounded, current league data. They receive no provider credentials
+                  and no ability to change Yahoo or ESPN.
+                </span>
+              </div>
             )}
-            {analysisAction.state === "analyzing" ? "Reviewing league data" : "Run analysis"}
-          </button>
-
-          {analysisAction.state === "error" ? (
-            <div className={`${styles.notice} ${styles.noticeError}`} role="alert">
-              <AlertCircle size={16} />
-              <span>{analysisAction.message}</span>
-            </div>
-          ) : null}
-        </form>
-
-        <div className={styles.answerRegion} aria-live="polite">
-          {analysisAction.state === "analyzing" ? (
-            <div className={styles.emptyAnswer} aria-busy="true">
-              <LoaderCircle className={styles.spin} size={25} aria-hidden="true" />
-              <strong>Reading the whole league</strong>
-              <span>Checking the answer against the latest saved decisions and analytics.</span>
-            </div>
-          ) : analysis ? (
-            <article className={styles.answer}>
-              <div className={styles.answerMeta}>
-                <span>
-                  {PROVIDERS[analysis.provider].name} · {analysis.model}
-                </span>
-                <span>
-                  {analysis.accessMode === "managed" ? "Included access" : "Your API key"}
-                </span>
-                <span>
-                  {analysis.usage.inputTokens.toLocaleString()} in ·{" "}
-                  {analysis.usage.outputTokens.toLocaleString()} out
-                </span>
-              </div>
-              <h3>{analysis.league.name}</h3>
-              <div className={styles.answerText}>
-                <AiAnswerContent answer={analysis.answer} />
-              </div>
-              <footer>
-                <p>
-                  Grounded in Laces Out’s own computed league data (overview, Decision Desk, and
-                  analytics), not the model’s outside knowledge.
-                </p>
-              </footer>
-            </article>
-          ) : analysisAction.state === "error" ? (
-            <div className={styles.emptyAnswer} role="alert">
-              <AlertCircle size={25} aria-hidden="true" />
-              <strong>Analysis unavailable</strong>
-              <span>{analysisAction.message}</span>
-            </div>
-          ) : (
-            <div className={styles.emptyAnswer}>
-              <BrainCircuit size={25} />
-              <strong>Your answer will land here</strong>
-              <span>
-                Models receive bounded, current league data. They receive no provider credentials
-                and no ability to change Yahoo or ESPN.
-              </span>
-            </div>
-          )}
+          </div>
         </div>
       </section>
       {selectedLeagueId ? (

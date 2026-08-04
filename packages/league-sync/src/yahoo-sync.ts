@@ -660,6 +660,10 @@ export class DrizzleYahooSyncRepository implements YahooSyncRepository {
       let recordsWritten = 2;
       const teamIds = new Map<string, string>();
       for (const team of bundle.teams) {
+        const manager = team.managers[0];
+        // Same preference as the ESPN path. Yahoo reports only a nickname today, so this resolves
+        // to that; it stays correct if Yahoo ever starts sending a separate real name.
+        const managerDisplayName = manager ? (manager.fullName ?? manager.displayName) : null;
         const [storedTeam] = await transaction
           .insert(fantasyTeams)
           .values({
@@ -669,7 +673,7 @@ export class DrizzleYahooSyncRepository implements YahooSyncRepository {
             abbreviation: team.abbreviation,
             logoUrl: team.logoUrl ?? null,
             isUserTeam: false,
-            managerDisplayName: team.managers[0]?.displayName ?? null,
+            managerDisplayName,
           })
           .onConflictDoUpdate({
             target: [fantasyTeams.leagueSeasonId, fantasyTeams.externalKey],
@@ -677,7 +681,7 @@ export class DrizzleYahooSyncRepository implements YahooSyncRepository {
               name: team.name,
               abbreviation: team.abbreviation,
               logoUrl: team.logoUrl ?? null,
-              managerDisplayName: team.managers[0]?.displayName ?? null,
+              managerDisplayName,
               updatedAt: now,
             },
           })

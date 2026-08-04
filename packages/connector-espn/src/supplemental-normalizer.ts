@@ -1,5 +1,3 @@
-import { createHash } from "node:crypto";
-
 import {
   type LeagueSupplementalBundle,
   type NormalizedAvailabilityStatus,
@@ -13,6 +11,7 @@ import {
 } from "@fantasy/connectors";
 import { z, type ZodError } from "zod";
 
+import { espnPayloadChecksumMatches } from "./payload-checksum.js";
 import {
   espnLineupSlotIsStarter,
   espnLineupSlotName,
@@ -113,13 +112,14 @@ const knownProTeamSchema = z
 const commonEnvelopeShape = {
   schemaVersion: z.literal(ESPN_SUPPLEMENTAL_CONTRACT_VERSION),
   provider: z.literal("espn"),
-  authority: z.literal("browser-local"),
+  authority: z.enum(["browser-local", "native-local"]),
   readOnly: z.literal(true),
   leagueId: z.string().regex(/^\d{1,20}$/u),
   season: z.number().int().min(2019).max(2100),
   capturedAt: z.iso.datetime(),
   endpoint: z.url(),
   checksumSha256: z.string().regex(/^[a-f0-9]{64}$/u),
+  checksumAlgorithm: z.enum(["json-stringify-sha256", "canonical-json-v1-sha256"]).optional(),
   payload: z.unknown(),
 } as const;
 
@@ -442,7 +442,7 @@ function sanitizedIssues(
   }));
 }
 
-function canonicalPayloadChecksum(payload: unknown): string {
+function assertPayloadBound(payload: unknown): void {
   let serialized: string | undefined;
   try {
     serialized = JSON.stringify(payload);
@@ -464,7 +464,6 @@ function canonicalPayloadChecksum(payload: unknown): string {
       message: "ESPN supplemental payload exceeds the bounded snapshot limit",
     });
   }
-  return createHash("sha256").update(serialized, "utf8").digest("hex");
 }
 
 function expectedViews(kind: EspnSupplementalKind): readonly string[] {
@@ -955,7 +954,17 @@ export function normalizeEspnSupplementalSnapshot(input: unknown): LeagueSupplem
   }
   const envelope = envelopeResult.data;
   validateEndpoint(envelope);
-  if (canonicalPayloadChecksum(envelope.payload) !== envelope.checksumSha256) {
+  assertPayloadBound(envelope.payload);
+  let checksumMatches = false;
+  try {
+    checksumMatches = espnPayloadChecksumMatches(envelope);
+  } catch {
+    throw new EspnSupplementalNormalizationError({
+      code: "INVALID_ENVELOPE",
+      message: "ESPN supplemental payload is not JSON serializable",
+    });
+  }
+  if (!checksumMatches) {
     throw new EspnSupplementalNormalizationError({
       code: "CHECKSUM_MISMATCH",
       message: "ESPN supplemental snapshot checksum does not match its payload",

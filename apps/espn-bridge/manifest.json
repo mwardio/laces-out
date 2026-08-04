@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Laces Out ESPN Bridge",
   "short_name": "Laces Out",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "Read-only private ESPN Fantasy league sync for Laces Out.",
   "minimum_chrome_version": "120",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAm64d1Ejn6xJZPuSciQ7blassey3tq5N+TmS12OvHhNIJ2/dRhVW8NheZSVIjSltoJXy/GJIZRoJZy8r8bQ/JAU8IbRiKlyyfDHQiBJ3aRErJ1/BXO4x58RDGul4eoSW0TtSc+oNI093GrCpZ95NJOi9S5Ew8piCpj2loGHYxr/8TcyA2ajhe+OHimpKPXqZ51LVLyeA8yZmIBq/DoR3qhK3N8y8xH4ekbvGTIKctQpLBLlDZNWL0p0IYmMnxMN5DUQz+HSRbpi54zgEU8kh5lX66osegEQ5aXNGD/POfM/o9/430PGDuHfOqT17l61B+hnPjY7ZYxdBaDkaAUv5cBwIDAQAB",

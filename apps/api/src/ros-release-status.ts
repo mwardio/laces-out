@@ -100,6 +100,8 @@ export interface RosLeaguePositionReadiness {
 
 export interface RosLeagueReadiness {
   readonly leagueSeasonId: string | null;
+  /** The league's own name, so the UI can say "Garagely" rather than a truncated UUID. */
+  readonly leagueName: string | null;
   readonly state: "ready" | "withheld";
   readonly reasons: readonly RosWithholdingReason[];
   readonly scoringProfile: RosScoringProfileIdentity | null;
@@ -122,6 +124,7 @@ export interface RosCellGateState {
 export interface RosPublishedLeagueSet {
   readonly projectionSetId: string;
   readonly leagueSeasonId: string;
+  readonly leagueName: string | null;
   readonly scoringProfile: RosScoringProfileIdentity | null;
   readonly season: number;
   readonly playerCount: number;
@@ -201,6 +204,7 @@ export interface RosLeaguePositionSupport {
 
 export interface RosLeagueInputRow {
   readonly leagueSeasonId: string;
+  readonly leagueName: string | null;
   readonly scoringProfileKey: string | null;
   /** Always all six of `ROS_LEAGUE_POSITIONS`, mirroring `normalizeLeagueScoringProfile`. */
   readonly positions: readonly RosLeaguePositionSupport[];
@@ -291,6 +295,7 @@ export function deriveLeagueReadiness(input: {
     return [
       {
         leagueSeasonId: null,
+        leagueName: null,
         state: "withheld",
         reasons: ["no-league-synced"],
         scoringProfile: null,
@@ -332,6 +337,7 @@ export function deriveLeagueReadiness(input: {
     const ordered = ROS_WITHHOLDING_REASONS.filter((reason) => reasons.has(reason));
     return {
       leagueSeasonId: league.leagueSeasonId,
+      leagueName: league.leagueName,
       state: ordered.length === 0 ? "ready" : "withheld",
       reasons: ordered,
       scoringProfile:
@@ -486,6 +492,7 @@ export function deriveCellGates(
 export interface RosPublishedSetRow {
   readonly projectionSetId: string;
   readonly leagueSeasonId: string;
+  readonly leagueName: string | null;
   readonly season: number;
   readonly playerCount: number;
   readonly windowStartWeek: number;
@@ -519,6 +526,7 @@ export function derivePublishedSets(input: {
     .map((row) => ({
       projectionSetId: row.projectionSetId,
       leagueSeasonId: row.leagueSeasonId,
+      leagueName: row.leagueName,
       scoringProfile:
         row.scoringProfileKey === null
           ? null

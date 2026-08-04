@@ -3,6 +3,7 @@ import { createDatabase } from "@fantasy/db";
 import { currentNflSeason } from "@fantasy/domain";
 import {
   enqueueDataRefresh,
+  enqueueLeagueSync,
   enqueueProjectionRefresh,
   enqueueRecommendationRecompute,
   ensureDailyRefresh,
@@ -28,6 +29,7 @@ import { DraftMarketService } from "./draft-market.js";
 import { EspnBridgeService } from "./espn-bridge.js";
 import { DrizzleEspnLiveDraftRepository } from "./espn-live-draft-persistence.js";
 import { EspnLiveDraftService } from "./espn-live-draft-service.js";
+import { DrizzleEspnRefreshRepository, EspnRefreshCoordinator } from "./espn-refresh.js";
 import { DrizzleEspnSyncPersistence } from "./espn-sync-persistence.js";
 import {
   DrizzleInSeasonDecisionRepository,
@@ -207,6 +209,17 @@ await jobs.start();
 await registerQueues(jobs);
 await registerSchedules(jobs, currentNflSeason());
 await ensureDailyRefresh(jobs);
+const espnRefresh = new EspnRefreshCoordinator(new DrizzleEspnRefreshRepository(database.db), {
+  directEnabled: environment.ESPN_PUBLIC_DIRECT_SYNC_ENABLED,
+  enqueueDirect: ({ leagueSeasonId, refreshRequestId }) =>
+    enqueueLeagueSync(jobs, {
+      mode: "server-direct",
+      leagueSeasonId,
+      refreshRequestId,
+      reason: "stale-on-view",
+      probe: false,
+    }),
+});
 const app = await buildApp({
   environment,
   authService,
@@ -218,6 +231,7 @@ const app = await buildApp({
   // Same service, two doors: bridge-authenticated ingest and the cookie-authenticated freeze.
   draftManualBackup: espnLiveDraft,
   espnBridge,
+  espnRefresh,
   espnLiveDraft,
   decisions,
   analytics,

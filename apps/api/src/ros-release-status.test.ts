@@ -34,6 +34,7 @@ type LeagueRow = Parameters<typeof deriveLeagueReadiness>[0]["leagues"][number];
 function leagueRow(overrides: Partial<LeagueRow> = {}): LeagueRow {
   return {
     leagueSeasonId: "league-1",
+    leagueName: "Daragely",
     scoringProfileKey: supportedKey,
     positions: ALL_POSITIONS_SUPPORTED,
     scheduleComplete: true,
@@ -96,6 +97,7 @@ describe("deriveLeagueReadiness", () => {
     ).toEqual([
       {
         leagueSeasonId: null,
+        leagueName: null,
         state: "withheld",
         reasons: ["no-league-synced"],
         scoringProfile: null,
@@ -418,6 +420,7 @@ describe("derivePublishedSets", () => {
     inputChecksum: "b".repeat(64),
     championArtifactChecksum: "c".repeat(64),
     scoringProfileKey: supportedKey,
+    leagueName: "Daragely",
   };
 
   it("marks the last good set as retained when the newest evaluation withheld", () => {

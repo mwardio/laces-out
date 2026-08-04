@@ -19,6 +19,7 @@ import {
   RefreshCw,
   Search,
   ShieldAlert,
+  SlidersHorizontal,
 } from "lucide-react";
 import Link from "next/link";
 import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -38,7 +39,7 @@ import {
 } from "./stats-formatting";
 import styles from "./stats-center-workbench.module.css";
 
-type MetricFamily = "usage" | "production" | "efficiency" | "trend";
+type MetricFamily = "usage" | "production" | "efficiency" | "trend" | "all";
 
 interface FilterState {
   readonly season: number;
@@ -89,6 +90,16 @@ type Column =
       readonly label: string;
       readonly format: "dec" | "rate";
       readonly read: (player: StatsCenterPlayer) => number | null;
+    }
+  // Only the "all" view uses these. They read from whichever trend metric is selected, which is
+  // why they carry a reader over the resolved trend row rather than a metric id of their own.
+  | {
+      readonly kind: "trend";
+      readonly short: string;
+      readonly label: string;
+      readonly read: (
+        trend: StatsCenterPlayer["trend"][StatsCenterTrendMetric] | undefined,
+      ) => string;
     };
 
 const usageColumns: readonly Column[] = [
@@ -188,6 +199,7 @@ const familyOptions: readonly { value: MetricFamily; label: string }[] = [
   { value: "production", label: "Production" },
   { value: "efficiency", label: "Efficiency" },
   { value: "trend", label: "Trend" },
+  { value: "all", label: "All stats" },
 ];
 
 // The metric tabs show titles only; the active family's description renders as
@@ -197,6 +209,7 @@ const familyHints: Readonly<Record<MetricFamily, string>> = {
   production: "Scored output and boom or bust shape",
   efficiency: "Air yards, EPA, and derived shares",
   trend: "Recent weeks against the full window",
+  all: "Every column from the four views above, in one table",
 };
 
 const trendOptions: readonly { value: StatsCenterTrendMetric; label: string }[] = [
@@ -213,11 +226,58 @@ const familyDefaultSort: Readonly<Record<MetricFamily, StatsCenterSort>> = {
   production: "pointsPpr",
   efficiency: "recAirYards",
   trend: "opportunities",
+  all: "pointsPpr",
 };
+
+const trendColumns: readonly Column[] = [
+  {
+    kind: "trend",
+    short: "WIN AVG",
+    label: "Window average",
+    read: (trend) => number(trend?.seasonAverage ?? null, 1),
+  },
+  {
+    kind: "trend",
+    short: "REC AVG",
+    label: "Recent weighted average",
+    read: (trend) => number(trend?.recentWeightedAverage ?? null, 1),
+  },
+  {
+    kind: "trend",
+    short: "CHG",
+    label: "Change against the window",
+    read: (trend) => signed(trend?.absoluteChange ?? null),
+  },
+  {
+    kind: "trend",
+    short: "WKS",
+    label: "Recent weeks over sampled weeks",
+    read: (trend) =>
+      trend?.status === "available" ? `${trend.recentSampleSize} / ${trend.sampleSize}` : "—",
+  },
+];
+
+/**
+ * "All stats" is the four views concatenated, in tab order, so a column keeps the same short
+ * label and meaning it has in its own view. It is wide on purpose — the column picker beside the
+ * table is how a reader narrows it.
+ */
+const allColumns: readonly Column[] = [
+  ...usageColumns,
+  ...productionColumns,
+  ...efficiencyColumns,
+  ...trendColumns,
+];
+
+/** Stable across renders and unique within a view; used for React keys and picker state. */
+function columnKey(column: Column): string {
+  return `${column.kind}-${column.short}`;
+}
 
 function columnsFor(family: MetricFamily): readonly Column[] {
   if (family === "production") return productionColumns;
   if (family === "efficiency") return efficiencyColumns;
+  if (family === "all") return allColumns;
   return usageColumns;
 }
 
@@ -228,9 +288,11 @@ function columnSort(column: Column): StatsCenterSort | null {
     case "total":
     case "ratio":
       return column.id;
-    // Per-game and boom/bust are derived from a total the server already sorts by.
+    // Per-game and boom/bust are derived from a total the server already sorts by; trend columns
+    // are derived client-side from the selected trend metric and have no server sort at all.
     case "perGame":
     case "boomBust":
+    case "trend":
       return null;
   }
 }
@@ -246,6 +308,8 @@ function columnValue(player: StatsCenterPlayer, column: Column): number | null {
       return player.perGame[column.id] ?? null;
     case "ratio":
       return player.ratios[column.id] ?? null;
+    case "trend":
+      return null;
   }
 }
 
@@ -255,7 +319,9 @@ function formatted(value: number | null, format: "int" | "dec" | "rate"): string
 }
 
 function columnLabel(column: Column, metrics: readonly StatsCenterMetricDescriptor[]): string {
-  if (column.kind === "usage" || column.kind === "boomBust") return column.label;
+  if (column.kind === "usage" || column.kind === "boomBust" || column.kind === "trend") {
+    return column.label;
+  }
   const descriptor = metrics.find((metric) => metric.id === column.id);
   const suffix = column.kind === "perGame" ? " per game" : "";
   return `${descriptor?.label ?? column.id}${suffix}`;
@@ -651,6 +717,9 @@ export function StatsCenterWorkbench() {
   const [family, setFamily] = useState<MetricFamily>("usage");
   const [trendMetric, setTrendMetric] = useState<StatsCenterTrendMetric>("opportunitiesPerGame");
   const [view, setView] = useState<ViewState>({ state: "loading" });
+  // Only the "all" view can hide columns, and it stores what is *hidden* so a column added to a
+  // family later shows up by default rather than being silently absent.
+  const [hiddenColumns, setHiddenColumns] = useState<ReadonlySet<string>>(() => new Set());
   const requestRef = useRef<AbortController | null>(null);
 
   const load = useCallback(async (next: FilterState, demo = false) => {
@@ -726,6 +795,14 @@ export function StatsCenterWorkbench() {
     const next = { ...filters, sort };
     setFilters(next);
     void load(next, view.state === "ready" && view.demo);
+  }
+
+  function toggleColumn(key: string) {
+    setHiddenColumns((current) => {
+      const next = new Set(current);
+      if (!next.delete(key)) next.add(key);
+      return next;
+    });
   }
 
   return (
@@ -916,9 +993,73 @@ export function StatsCenterWorkbench() {
           trendMetric={trendMetric}
           onTrendMetric={setTrendMetric}
           onSort={chooseSort}
+          hiddenColumns={hiddenColumns}
+          onToggleColumn={toggleColumn}
+          onShowAllColumns={() => setHiddenColumns(new Set())}
         />
       )}
     </div>
+  );
+}
+
+/**
+ * Column visibility for the "all" view. A collapsed disclosure rather than an always-open strip:
+ * the whole point of the view is the full table, so the control that narrows it should not take
+ * a row away from it until someone asks for it.
+ */
+function ColumnPicker({
+  columns,
+  hidden,
+  metrics,
+  onToggle,
+  onShowAll,
+}: {
+  readonly columns: readonly Column[];
+  readonly hidden: ReadonlySet<string>;
+  readonly metrics: readonly StatsCenterMetricDescriptor[];
+  readonly onToggle: (key: string) => void;
+  readonly onShowAll: () => void;
+}) {
+  const shown = columns.length - hidden.size;
+  return (
+    <details className={styles.columnPicker}>
+      <summary>
+        <span>
+          <SlidersHorizontal size={14} aria-hidden="true" /> Columns
+        </span>
+        <small>
+          {shown} of {columns.length} shown
+        </small>
+      </summary>
+      <div className={styles.columnPickerBody}>
+        {columns.map((column) => {
+          const key = columnKey(column);
+          return (
+            <label key={key}>
+              <input
+                type="checkbox"
+                checked={!hidden.has(key)}
+                onChange={() => onToggle(key)}
+                // The table needs at least one metric column to remain a table.
+                disabled={shown === 1 && !hidden.has(key)}
+              />
+              <span>
+                <strong>{column.short}</strong>
+                <small>{columnLabel(column, metrics)}</small>
+              </span>
+            </label>
+          );
+        })}
+      </div>
+      <button
+        className={styles.columnPickerReset}
+        type="button"
+        onClick={onShowAll}
+        disabled={hidden.size === 0}
+      >
+        Show every column
+      </button>
+    </details>
   );
 }
 
@@ -950,20 +1091,34 @@ function StatsResult({
   trendMetric,
   onTrendMetric,
   onSort,
+  hiddenColumns,
+  onToggleColumn,
+  onShowAllColumns,
 }: {
   readonly data: StatsCenterResponse;
   readonly family: MetricFamily;
   readonly trendMetric: StatsCenterTrendMetric;
   readonly onTrendMetric: (metric: StatsCenterTrendMetric) => void;
   readonly onSort: (sort: StatsCenterSort) => void;
+  readonly hiddenColumns: ReadonlySet<string>;
+  readonly onToggleColumn: (key: string) => void;
+  readonly onShowAllColumns: () => void;
 }) {
   const availability = selectedAvailability(data);
-  const columns = columnsFor(family);
+  const allViewColumns = columnsFor(family);
+  // Hiding applies to the "all" view only; the four focused views are already curated.
+  const columns =
+    family === "all"
+      ? allViewColumns.filter((column) => !hiddenColumns.has(columnKey(column)))
+      : allViewColumns;
   const withheldColumns =
     family === "usage"
       ? []
       : columns.flatMap((column) => {
-          const id = column.kind === "boomBust" || column.kind === "usage" ? null : column.id;
+          const id =
+            column.kind === "boomBust" || column.kind === "usage" || column.kind === "trend"
+              ? null
+              : column.id;
           if (!id) return [];
           const descriptor = data.metrics.find((metric) => metric.id === id);
           return descriptor && descriptor.state !== "available" ? [descriptor] : [];
@@ -976,11 +1131,13 @@ function StatsResult({
         : family === "efficiency"
           ? (data.metrics.find((metric) => metric.id === "airYardsShare")?.definition ??
             data.definitions.targetShare)
-          : data.filters.sort === "offensiveSnapShare"
-            ? data.definitions.offensiveSnapShare
-            : data.filters.sort === "targetShare"
-              ? data.definitions.targetShare
-              : data.definitions.opportunities;
+          : family === "all"
+            ? data.definitions.opportunities
+            : data.filters.sort === "offensiveSnapShare"
+              ? data.definitions.offensiveSnapShare
+              : data.filters.sort === "targetShare"
+                ? data.definitions.targetShare
+                : data.definitions.opportunities;
 
   return (
     <>
@@ -1017,7 +1174,9 @@ function StatsResult({
           </span>
         </div>
 
-        {family === "trend" ? (
+        {/* "All stats" carries the trend columns too, so it needs the same metric selector — the
+            four trend columns are meaningless without knowing which metric they describe. */}
+        {family === "trend" || family === "all" ? (
           <div className={styles.trendControls}>
             <label>
               <span>Trend metric</span>
@@ -1037,6 +1196,16 @@ function StatsResult({
               {data.filters.recentWeightDecay} decay per preceding week.
             </p>
           </div>
+        ) : null}
+
+        {family === "all" ? (
+          <ColumnPicker
+            columns={allViewColumns}
+            hidden={hiddenColumns}
+            metrics={data.metrics}
+            onToggle={onToggleColumn}
+            onShowAll={onShowAllColumns}
+          />
         ) : null}
 
         {data.players.length === 0 ? (
@@ -1071,7 +1240,7 @@ function StatsResult({
                       return (
                         <th
                           scope="col"
-                          key={`${column.kind}-${column.short}`}
+                          key={columnKey(column)}
                           aria-sort={active ? "descending" : undefined}
                         >
                           {sort ? (
@@ -1124,8 +1293,10 @@ function StatsResult({
                         </>
                       ) : (
                         columns.map((column) => (
-                          <td key={`${column.kind}-${column.short}`}>
-                            {formatted(columnValue(player, column), column.format)}
+                          <td key={columnKey(column)}>
+                            {column.kind === "trend"
+                              ? column.read(trend)
+                              : formatted(columnValue(player, column), column.format)}
                           </td>
                         ))
                       )}

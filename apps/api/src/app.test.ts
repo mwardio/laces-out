@@ -1067,6 +1067,8 @@ describe("API", () => {
           registrations.push({ userId, input });
           return Promise.resolve({
             deviceId: "00000000-0000-4000-8000-000000000010",
+            clientKind: input.clientKind,
+            agentCapable: input.agentCapabilities.includes("refresh-intents-v1"),
             deviceToken: `lo_espn_${"a".repeat(43)}`,
             expiresAt: null,
           });
@@ -1084,11 +1086,45 @@ describe("API", () => {
     expect(response.statusCode).toBe(201);
     expect(response.json()).toMatchObject({
       deviceId: "00000000-0000-4000-8000-000000000010",
+      clientKind: "chrome-extension",
+      agentCapable: false,
+    });
+    const iosResponse = await app.inject({
+      method: "POST",
+      url: "/v1/bridge/espn/devices",
+      headers: { cookie: authenticatedCookie },
+      payload: {
+        name: "Mack's iPhone",
+        clientKind: "ios-app",
+        agentCapabilities: ["refresh-intents-v1"],
+        season: 2026,
+        allowedLeagueIds: ["12345"],
+      },
+    });
+    expect(iosResponse.statusCode).toBe(201);
+    expect(iosResponse.json()).toMatchObject({
+      clientKind: "ios-app",
+      agentCapable: true,
     });
     expect(registrations).toEqual([
       {
         userId: "00000000-0000-4000-8000-000000000001",
-        input: { name: "Mack's Chrome", allowedLeagueIds: ["12345", "67890"] },
+        input: {
+          name: "Mack's Chrome",
+          clientKind: "chrome-extension",
+          agentCapabilities: [],
+          allowedLeagueIds: ["12345", "67890"],
+        },
+      },
+      {
+        userId: "00000000-0000-4000-8000-000000000001",
+        input: {
+          name: "Mack's iPhone",
+          clientKind: "ios-app",
+          agentCapabilities: ["refresh-intents-v1"],
+          season: 2026,
+          allowedLeagueIds: ["12345"],
+        },
       },
     ]);
     await app.close();
@@ -1119,6 +1155,8 @@ describe("API", () => {
           redeemed = true;
           return Promise.resolve({
             deviceId: "00000000-0000-4000-8000-000000000010",
+            clientKind: "chrome-extension" as const,
+            agentCapable: true as const,
             deviceToken: `lo_espn_${"a".repeat(43)}`,
             expiresAt: "2027-07-30T13:00:00.000Z",
             leagueIds: ["12345", "67890"],
@@ -1173,6 +1211,8 @@ describe("API", () => {
         userId: "00000000-0000-4000-8000-000000000001",
         input: {
           name: "Self-hosted Chrome",
+          clientKind: "chrome-extension",
+          agentCapabilities: ["refresh-intents-v1"],
           allowedLeagueIds: ["12345", "67890"],
           season: 2026,
         },
@@ -1199,6 +1239,8 @@ describe("API", () => {
             devices: [
               {
                 deviceId,
+                clientKind: "chrome-extension" as const,
+                agentCapable: true,
                 name: "Mack's Chrome",
                 state: "active" as const,
                 allowedLeagues: [

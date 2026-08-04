@@ -15,6 +15,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { apiBaseUrl } from "../lib/api-client";
 import {
   describeRosRelease,
+  leagueLabelFor,
   parseRosReleaseStatus,
   type RosReleaseStatus,
 } from "../lib/ros-release-status";
@@ -39,10 +40,6 @@ function readableDate(value: string | null): string {
     hour: "numeric",
     minute: "2-digit",
   }).format(new Date(value));
-}
-
-function shortenedChecksum(value: string): string {
-  return value.length <= 20 ? value : `${value.slice(0, 10)}…${value.slice(-6)}`;
 }
 
 async function responseMessage(response: Response, fallback: string): Promise<string> {
@@ -179,9 +176,8 @@ export function RosProjectionLabPanel() {
           <p className={styles.kicker}>Rest-of-season forecast</p>
           <h2 id="ros-lab-title">Rest-of-season forecast status</h2>
           <p>
-            Four separate things decide whether your league gets a rest-of-season forecast: whether
-            a model has been validated, whether it covers your scoring, whether your league inputs
-            are complete, and what the latest check released. Each is reported on its own below.
+            Where each of your leagues stands on getting a rest-of-season forecast, and what is
+            still missing where one has not arrived yet.
           </p>
         </div>
       </div>
@@ -205,7 +201,6 @@ export function RosProjectionLabPanel() {
 
 function RosStatusBody({ status }: { readonly status: RosReleaseStatus }) {
   const description = describeRosRelease(status);
-  const artifact = status.admittedArtifacts.artifacts[0];
   const latestPublishedIso =
     status.publishedSets.length === 0
       ? null
@@ -232,21 +227,23 @@ function RosStatusBody({ status }: { readonly status: RosReleaseStatus }) {
           <small>Model {status.modelVersion}</small>
         </div>
         <div>
-          <span>Validated model</span>
-          <strong>{status.admittedArtifacts.state === "admitted" ? "In use" : "None yet"}</strong>
+          <span>Forecast</span>
+          <strong>
+            {status.admittedArtifacts.state === "admitted" ? "Ready" : "Not ready yet"}
+          </strong>
           <small>{description.supportedProfileSummary}</small>
         </div>
         <div>
-          <span>Position groups released</span>
+          <span>Positions covered</span>
           <strong>{description.cellSummary ?? "Not checked yet"}</strong>
           <small>
             {description.withheldCells.length === 0
-              ? "Every group cleared the latest check"
-              : `Withheld: ${description.withheldCells.join(", ")}`}
+              ? "Every position is covered"
+              : `Not covered: ${description.withheldCells.join(", ")}`}
           </small>
         </div>
         <div>
-          <span>Leagues receiving it</span>
+          <span>Your leagues with a forecast</span>
           <strong>{description.publishedLeagueCount}</strong>
           <small>
             {description.publishedLeagueCount === 0
@@ -257,7 +254,7 @@ function RosStatusBody({ status }: { readonly status: RosReleaseStatus }) {
       </div>
 
       <div className={styles.section}>
-        <h3>The validated model</h3>
+        <h3>What the forecast covers</h3>
         <p className={styles.artifactLine}>
           {status.admittedArtifacts.state === "admitted" ? (
             <ShieldCheck size={15} aria-hidden="true" />
@@ -268,8 +265,8 @@ function RosStatusBody({ status }: { readonly status: RosReleaseStatus }) {
         </p>
         {description.unsupportedProfileSummary ? (
           <p className={styles.empty}>
-            {description.unsupportedProfileSummary}. A league scored under an unvalidated profile
-            receives nothing rather than a forecast built for different rules.
+            {description.unsupportedProfileSummary}. Leagues on those rules wait rather than get a
+            forecast built for a different scoring format.
           </p>
         ) : null}
       </div>
@@ -299,8 +296,8 @@ function RosStatusBody({ status }: { readonly status: RosReleaseStatus }) {
           <ul className={styles.positionSummaryList}>
             {description.leaguePositionSummaries.map((league) => (
               <li key={league.leagueSeasonId ?? "unknown"} className={styles.positionSummaryRow}>
-                <span className={styles.positionSummaryLabel}>
-                  {league.leagueSeasonId ? `League ${league.leagueSeasonId.slice(0, 8)}` : "League"}
+                <span className={styles.positionSummaryLabel} title={league.leagueLabel}>
+                  {league.leagueLabel}
                 </span>
                 {league.positions.map((position) => (
                   <span
@@ -321,75 +318,12 @@ function RosStatusBody({ status }: { readonly status: RosReleaseStatus }) {
         ) : null}
       </div>
 
-      {/* Operator detail: precise, still available, no longer the first thing a
-          fantasy manager reads on a top-level nav item. */}
-      <details className={styles.evidence}>
-        <summary>Model evidence (advanced)</summary>
-        <div className={styles.evidenceBody}>
-          {artifact ? (
-            <div>
-              <h4>Validated model package</h4>
-              <div className={styles.setMeta}>
-                <span>
-                  Policy {artifact.policyVersion} · Calibration {artifact.calibrationVersion}
-                </span>
-                <span className={styles.checksum}>
-                  Checksum {shortenedChecksum(artifact.artifactChecksum)}
-                </span>
-                <span className={styles.checksum}>
-                  Scoring profile {shortenedChecksum(artifact.scoringProfile.digest)}
-                </span>
-                <span>Admitted {readableDate(artifact.admittedAt)}</span>
-                <span>{artifact.sourceChecksumCount} pinned source checksums</span>
-              </div>
-            </div>
-          ) : null}
-
-          {status.cellGates.state === "evaluated" ? (
-            <div>
-              <h4>Latest per-position check</h4>
-              <div className={styles.setMeta}>
-                <span>Checked {readableDate(status.cellGates.evaluatedAt)}</span>
-              </div>
-              <ul className={styles.reasonCodeList}>
-                {status.cellGates.cells.map((cell) => (
-                  <li key={`${cell.position}:${cell.bucket}`}>
-                    {cell.position} {cell.bucket} — {cell.decision}
-                    {cell.reasons.length > 0 ? ` (${cell.reasons.join(", ")})` : ""}
-                  </li>
-                ))}
-              </ul>
-            </div>
-          ) : null}
-
-          <div>
-            <h4>Independent audit run</h4>
-            <div className={styles.setMeta}>
-              <span>{description.auditHeadline}</span>
-              {status.shadowAudit.latestRun ? (
-                <span>Recorded {readableDate(status.shadowAudit.latestRun.createdAt)}</span>
-              ) : null}
-            </div>
-            {description.auditDetail ? (
-              <p className={styles.empty}>{description.auditDetail}</p>
-            ) : null}
-            {status.shadowAudit.latestRun && status.shadowAudit.latestRun.reasons.length > 0 ? (
-              <ul className={styles.reasonCodeList}>
-                {status.shadowAudit.latestRun.reasons.map((reason) => (
-                  <li key={reason}>{reason}</li>
-                ))}
-              </ul>
-            ) : null}
-          </div>
-        </div>
-      </details>
-
       <div className={styles.section}>
-        <h3>Leagues receiving this forecast</h3>
+        <h3>Leagues with a forecast</h3>
         {status.publishedSets.length === 0 ? (
           <p className={styles.empty}>
-            None yet. That is the expected state while the forecast is still being validated — it is
-            withheld rather than published unproven.
+            None yet. The forecast is still being checked, and it waits until it passes rather than
+            publishing early.
           </p>
         ) : (
           <div className={styles.setList}>
@@ -397,8 +331,8 @@ function RosStatusBody({ status }: { readonly status: RosReleaseStatus }) {
               <article key={set.projectionSetId}>
                 <header>
                   <span>
-                    {set.scoringProfile ? `${set.scoringProfile.label} scoring` : "League forecast"}{" "}
-                    · {set.leagueSeasonId.slice(0, 8)}
+                    {leagueLabelFor(set.leagueName, set.leagueSeasonId)}
+                    {set.scoringProfile ? ` · ${set.scoringProfile.label} scoring` : ""}
                   </span>
                   <span>
                     <Clock3 size={13} aria-hidden="true" /> {readableDate(set.fetchedAt)}
@@ -410,22 +344,9 @@ function RosStatusBody({ status }: { readonly status: RosReleaseStatus }) {
                     Weeks {set.windowStartWeek}–{set.windowEndWeek} (as of week {set.asOfWeek})
                   </span>
                   {set.retainedFromEarlierRun ? (
-                    <span>Retained from the last good check</span>
+                    <span>Kept from the last passing check</span>
                   ) : null}
                 </div>
-                <details className={styles.setEvidence}>
-                  <summary>Checksums</summary>
-                  <div className={styles.setMeta}>
-                    <span className={styles.checksum}>
-                      Input {shortenedChecksum(set.inputChecksum)}
-                    </span>
-                    {set.championArtifactChecksum ? (
-                      <span className={styles.checksum}>
-                        Model {shortenedChecksum(set.championArtifactChecksum)}
-                      </span>
-                    ) : null}
-                  </div>
-                </details>
               </article>
             ))}
           </div>

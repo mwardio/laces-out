@@ -238,12 +238,15 @@
     box-shadow: 0 1px 0 rgba(15, 28, 19, 0.03);
   }
 
+  /* With a single available provider there is no picker beside this, so the status is the whole
+     row. Anchoring it left (rather than pushing it right with an auto margin) stops the bar from
+     rendering as a wide empty strip with a chip stranded at the far edge. */
   .providerControlStatus {
     display: flex;
     min-width: 0;
+    flex: 1 1 auto;
     align-items: center;
     gap: 8px;
-    margin-left: auto;
     color: var(--green-600);
   }
 
@@ -268,6 +271,7 @@
 
   .providerControlStatus > a {
     flex: 0 0 auto;
+    margin-left: auto;
     color: var(--green-600);
     font-size: var(--text-11);
     font-weight: 750;
@@ -309,8 +313,22 @@
     font-weight: 750;
   }
 
+  /* The ask and its answer share a row so neither one has to span the full desktop width. The
+     request column is sized to a comfortable question field rather than to the viewport; the
+     answer takes the rest. Both collapse to a single column on narrow screens. */
+  .analysisWorkArea {
+    display: grid;
+    grid-template-columns: minmax(320px, 0.85fr) minmax(0, 1.15fr);
+  }
+
+  .analysisWorkArea > .answerRegion {
+    display: grid;
+    padding: 18px 18px 18px 0;
+  }
+
   .analysisForm {
     display: grid;
+    align-content: start;
     gap: 15px;
     padding: 18px;
   }
@@ -660,6 +678,21 @@
     line-height: 1.45;
   }
 
+  /* Compact marker rather than a repeated paragraph: the page states the grounding claim in full
+     once, in the trust strip at the top. */
+  .answerGrounding {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    color: #4d6944;
+    font-size: var(--text-10);
+    font-weight: 700;
+  }
+
+  .answerGrounding svg {
+    flex: 0 0 auto;
+  }
+
   .statePanel {
     display: grid;
     width: min(100%, 600px);
@@ -712,6 +745,16 @@
 
     .analysisPanel {
       grid-row: 1;
+    }
+
+    /* Below this the two panes would each be too narrow to be worth the split, so the ask
+       returns to sitting above its answer. */
+    .analysisWorkArea {
+      grid-template-columns: minmax(0, 1fr);
+    }
+
+    .analysisWorkArea > .answerRegion {
+      padding: 0 18px 18px;
     }
   }
 

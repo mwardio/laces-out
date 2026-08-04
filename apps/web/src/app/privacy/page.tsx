@@ -64,8 +64,10 @@ export default function PrivacyPage() {
               Your rankings, auction values, notes, shares, and recommendation inputs or feedback.
             </li>
             <li>
-              Operational records such as sync time, source freshness, request correlation IDs, and
-              security audit events. Application logs are configured to redact credentials.
+              Operational records such as sync time, artifact freshness, refresh intent and attempt
+              states, bounded error codes, request correlation IDs, and security audit events.
+              Provider response bodies and device bearer tokens are not stored in refresh history,
+              and application logs are configured to redact credentials.
             </li>
             <li>
               Film room provider, model, request status, token counts, and timing. If you add a
@@ -92,10 +94,12 @@ export default function PrivacyPage() {
           </p>
           <p>
             ESPN does not provide this app with a supported consumer Fantasy OAuth flow. The
-            one-click sync bookmark and optional browser companion use the ESPN session already
-            present in your browser. They send bounded league data to Laces Out, but never send your
-            ESPN password or the values of ESPN cookies. Every scoped sync credential can be revoked
-            from the League Sync screen.
+            one-click sync bookmark and optional sync agent use the ESPN session already present on
+            that device. They send bounded league data to Laces Out, but never send your ESPN
+            password or the values of ESPN cookies. When a deployment operator separately enables
+            the unofficial public-direct path, it sends no member credential and can refresh only an
+            already-known, exactly matching public league season. Every scoped sync credential can
+            be revoked from the League Sync screen.
           </p>
         </section>
 
@@ -152,10 +156,11 @@ export default function PrivacyPage() {
             <Link href="/settings#account-data">Settings → Your data</Link> to download a portable
             JSON export or permanently delete the account. The export includes identity,
             preferences, memberships, private rankings and projections, activity, connection
-            metadata, notification history, and AI usage. It deliberately excludes password hashes,
-            session or invitation tokens, OAuth and ESPN bridge credentials, push endpoints and
-            keys, browser-handoff tokens, encrypted fantasy-provider or AI keys, provider request
-            hashes, and share-link tokens.
+            metadata, notification history, user-owned ESPN refresh and attempt history, and AI
+            usage. It deliberately excludes password hashes, session or invitation tokens, OAuth and
+            ESPN sync-device credentials, another member&apos;s device provenance, push endpoints
+            and keys, browser-handoff tokens, encrypted fantasy-provider or AI keys, provider
+            request hashes, and share-link tokens.
           </p>
           <p>
             When the native app opens an authenticated web tool, the server stores only a digest of

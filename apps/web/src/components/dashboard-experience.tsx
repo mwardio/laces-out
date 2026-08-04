@@ -18,17 +18,15 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
   apiBaseUrl,
-  parseAuthenticatedSession,
-  parseDataQualitySources,
   parseJobAccepted,
+  parseEspnLeagueRefreshStatus,
   parseLeagueDashboard,
   parseLeagueListResponse,
-  parseUnresolvedIdentities,
-  type DataQualitySource,
+  type EspnLeagueRefreshStatus,
   type LeagueDashboard,
   type LeagueListResponse,
-  type UnresolvedIdentityResponse,
 } from "../lib/api-client";
+import { shouldRequestEspnRefreshOnView } from "../lib/espn-refresh";
 import { LatestRequest } from "../lib/latest-request";
 import { yahooComingSoon } from "../lib/public-site";
 import { loginUrlForCurrentPath } from "../lib/safe-return-to";
@@ -54,6 +52,16 @@ type DashboardState =
   | { readonly status: "loading" }
   | { readonly status: "ready"; readonly dashboard: LeagueDashboard }
   | { readonly status: "error"; readonly message: string };
+
+type EspnRefreshUiState =
+  | { readonly status: "idle" }
+  | { readonly status: "working"; readonly current: EspnLeagueRefreshStatus | null }
+  | { readonly status: "ready"; readonly current: EspnLeagueRefreshStatus }
+  | {
+      readonly status: "error";
+      readonly message: string;
+      readonly current: EspnLeagueRefreshStatus | null;
+    };
 
 function providerLabel(provider: string): string {
   if (provider === "espn") return "ESPN";
@@ -320,10 +328,14 @@ function LivePortfolio({ portfolio, reloadPortfolio }: LivePortfolioProps) {
   const [sourceRefreshState, setSourceRefreshState] = useState<
     "idle" | "working" | "queued" | "deduplicated" | "error"
   >("idle");
-  const [draftMarketRefreshState, setDraftMarketRefreshState] = useState<
-    "idle" | "working" | "queued" | "deduplicated" | "error"
-  >("idle");
   const dashboardRequest = useRef<AbortController | null>(null);
+  const completedEspnRequest = useRef<string | null>(null);
+  const [espnRefreshState, setEspnRefreshState] = useState<EspnRefreshUiState>({
+    status: "idle",
+  });
+  const selectedSummary = portfolio.leagues.find((league) => league.id === selectedLeagueId);
+  const selectedEspnSeason =
+    selectedSummary?.season?.provider === "espn" ? selectedSummary.season : null;
 
   const loadDashboard = useCallback(async () => {
     if (!selectedLeagueId) return;
@@ -369,7 +381,121 @@ function LivePortfolio({ portfolio, reloadPortfolio }: LivePortfolioProps) {
     return () => dashboardRequest.current?.abort();
   }, [loadDashboard]);
 
-  const selectedSummary = portfolio.leagues.find((league) => league.id === selectedLeagueId);
+  const requestEspnRefresh = useCallback(async () => {
+    if (!selectedEspnSeason) return;
+    setEspnRefreshState((previous) => ({
+      status: "working",
+      current:
+        previous.status === "ready" || previous.status === "working" || previous.status === "error"
+          ? previous.current
+          : null,
+    }));
+    try {
+      const response = await fetch(
+        `${apiBaseUrl}/v1/leagues/${encodeURIComponent(selectedEspnSeason.id)}/refresh`,
+        {
+          method: "POST",
+          credentials: "include",
+          headers: { Accept: "application/json", "Content-Type": "application/json" },
+          body: "{}",
+          cache: "no-store",
+        },
+      );
+      if (response.status === 401) {
+        window.location.assign(loginUrlForCurrentPath());
+        return;
+      }
+      if (!response.ok) throw new Error("ESPN refresh could not be requested.");
+      const status = parseEspnLeagueRefreshStatus(await response.json());
+      if (!status) throw new Error("ESPN refresh returned an invalid status.");
+      setEspnRefreshState({ status: "ready", current: status });
+    } catch (error) {
+      setEspnRefreshState((previous) => ({
+        status: "error",
+        message: error instanceof Error ? error.message : "ESPN refresh could not be requested.",
+        current:
+          previous.status === "ready" ||
+          previous.status === "working" ||
+          previous.status === "error"
+            ? previous.current
+            : null,
+      }));
+    }
+  }, [selectedEspnSeason]);
+
+  useEffect(() => {
+    completedEspnRequest.current = null;
+    setEspnRefreshState({ status: "idle" });
+  }, [selectedEspnSeason?.id]);
+
+  useEffect(() => {
+    if (!selectedEspnSeason || dashboardState.status !== "ready") return;
+    const key = `laces-out:espn-stale-on-view:${selectedEspnSeason.id}`;
+    const now = Date.now();
+    try {
+      if (!shouldRequestEspnRefreshOnView(window.sessionStorage.getItem(key), now)) {
+        return;
+      }
+      window.sessionStorage.setItem(key, String(now));
+    } catch {
+      // Session storage may be blocked. Request idempotency still makes one extra call harmless.
+    }
+    void requestEspnRefresh();
+  }, [dashboardState.status, requestEspnRefresh, selectedEspnSeason]);
+
+  const refreshStatus =
+    espnRefreshState.status === "ready" ||
+    espnRefreshState.status === "working" ||
+    espnRefreshState.status === "error"
+      ? espnRefreshState.current
+      : null;
+
+  useEffect(() => {
+    if (!selectedEspnSeason || !refreshStatus?.request) return;
+    const request = refreshStatus.request;
+    if (request.state !== "queued" && request.state !== "processing") return;
+    const controller = new AbortController();
+    let polling = false;
+    const poll = async () => {
+      if (polling) return;
+      polling = true;
+      try {
+        const response = await fetch(
+          `${apiBaseUrl}/v1/leagues/${encodeURIComponent(selectedEspnSeason.id)}/refresh/status`,
+          {
+            credentials: "include",
+            headers: { Accept: "application/json" },
+            cache: "no-store",
+            signal: controller.signal,
+          },
+        );
+        if (!response.ok) return;
+        const status = parseEspnLeagueRefreshStatus(await response.json());
+        if (!status || controller.signal.aborted) return;
+        setEspnRefreshState({ status: "ready", current: status });
+        if (
+          status.current &&
+          status.request?.state === "succeeded" &&
+          completedEspnRequest.current !== status.request.id
+        ) {
+          completedEspnRequest.current = status.request.id;
+          await Promise.all([loadDashboard(), reloadPortfolio()]);
+        }
+      } catch {
+        // Cached data remains rendered; the next status tick or manual action can reconnect.
+      } finally {
+        polling = false;
+      }
+    };
+    const interval = window.setInterval(() => {
+      void poll();
+    }, 5_000);
+    return () => {
+      window.clearInterval(interval);
+      controller.abort();
+    };
+  }, [loadDashboard, refreshStatus, reloadPortfolio, selectedEspnSeason]);
+
   const currentDashboard = dashboardState.status === "ready" ? dashboardState.dashboard : undefined;
   const freshLeagues = portfolio.leagues.filter(
     (league) => league.season?.providerFreshness.state === "fresh",
@@ -434,31 +560,6 @@ function LivePortfolio({ portfolio, reloadPortfolio }: LivePortfolioProps) {
     }
   }
 
-  async function checkDraftMarket() {
-    if (draftMarketRefreshState === "working") return;
-    setDraftMarketRefreshState("working");
-    try {
-      const response = await fetch(`${apiBaseUrl}/v1/refreshes`, {
-        method: "POST",
-        credentials: "include",
-        headers: { Accept: "application/json", "Content-Type": "application/json" },
-        body: JSON.stringify({ scope: "adp-data" }),
-      });
-      if (response.status === 401) {
-        window.location.assign(loginUrlForCurrentPath());
-        return;
-      }
-      if (!response.ok) throw new Error("Draft-market check could not be queued.");
-      const body = parseJobAccepted(await response.json());
-      if (!body || body.target !== "draft-market-adp") {
-        throw new Error("Draft-market queue response was invalid.");
-      }
-      setDraftMarketRefreshState(body.state === "deduplicated" ? "deduplicated" : "queued");
-    } catch {
-      setDraftMarketRefreshState("error");
-    }
-  }
-
   if (portfolio.leagues.length === 0) return <EmptyLivePortfolio />;
 
   return (
@@ -477,6 +578,49 @@ function LivePortfolio({ portfolio, reloadPortfolio }: LivePortfolioProps) {
           </p>
         </div>
         <div className="heading-actions">
+          {selectedEspnSeason ? (
+            <>
+              <span
+                className="freshness-label"
+                role="status"
+                title={
+                  refreshStatus
+                    ? refreshStatus.artifacts
+                        .map((artifact) => `${artifact.family}: ${artifact.state}`)
+                        .join(" · ")
+                    : undefined
+                }
+              >
+                <FreshnessDot
+                  state={
+                    refreshStatus?.current
+                      ? "fresh"
+                      : refreshStatus?.artifacts.some((artifact) => artifact.state === "missing")
+                        ? "missing"
+                        : "stale"
+                  }
+                />
+                {espnRefreshState.status === "working" && !refreshStatus
+                  ? "Checking ESPN freshness…"
+                  : espnRefreshState.status === "error" && !refreshStatus
+                    ? espnRefreshState.message
+                    : (refreshStatus?.display.label ?? "ESPN refresh status pending")}
+              </span>
+              <button
+                className="button button--outline"
+                type="button"
+                onClick={() => void requestEspnRefresh()}
+                disabled={espnRefreshState.status === "working"}
+              >
+                {espnRefreshState.status === "working" ? (
+                  <LoaderCircle className="spin" size={16} />
+                ) : (
+                  <RefreshCw size={16} />
+                )}
+                Refresh league
+              </button>
+            </>
+          ) : null}
           <span className="freshness-label">
             <span className="freshness-dot" />
             Updated {new Date(portfolio.generatedAt).toLocaleTimeString()}
@@ -548,7 +692,7 @@ function LivePortfolio({ portfolio, reloadPortfolio }: LivePortfolioProps) {
             <strong>
               {freshLeagues}/{portfolio.leagues.length} fresh
             </strong>
-            <small>Fresh means synced within 6 hours</small>
+            <small>Freshness follows each provider and season context</small>
           </div>
         </article>
         <article className="overview-stat">
@@ -575,23 +719,12 @@ function LivePortfolio({ portfolio, reloadPortfolio }: LivePortfolioProps) {
         </article>
       </section>
 
-      {/* ChangeFeedPanel and AiCoachPanel are shared components whose own
-          .panel carries no top margin (other host pages sit them inside a
-          CSS-grid gap, which supplies it for free). This page has no such
-          grid, so each needs the same section-to-section gap the rest of
-          the page already uses. */}
+      {/* ChangeFeedPanel is a shared component whose own .panel carries no top
+          margin (other host pages sit it inside a CSS-grid gap, which supplies
+          it for free). This page has no such grid, so it needs the same
+          section-to-section gap the rest of the page already uses. */}
       <div className="section-block">
         <ChangeFeedPanel leagueId={selectedLeagueId || null} />
-      </div>
-
-      <div className="section-block">
-        <AiCoachPanel
-          leagueId={selectedLeagueId}
-          features={["weekly-brief", "standings-prediction"]}
-          eyebrow="Always-current brief"
-          title="What changed, and what should you do?"
-          description="Generate a weekly read or rest-of-season forecast from the currently selected league."
-        />
       </div>
 
       <section className="section-block league-section" aria-labelledby="live-league-board-title">
@@ -697,8 +830,6 @@ function LivePortfolio({ portfolio, reloadPortfolio }: LivePortfolioProps) {
           claimMessage={claimMessage}
           claimTeam={() => void claimTeam()}
           onTeamClaimed={() => void Promise.all([loadDashboard(), reloadPortfolio()])}
-          draftMarketRefreshState={draftMarketRefreshState}
-          checkDraftMarket={() => void checkDraftMarket()}
         />
       )}
     </div>
@@ -713,8 +844,6 @@ interface LeagueDetailProps {
   readonly claimMessage: string;
   readonly claimTeam: () => void;
   readonly onTeamClaimed: () => void;
-  readonly draftMarketRefreshState: "idle" | "working" | "queued" | "deduplicated" | "error";
-  readonly checkDraftMarket: () => void;
 }
 
 function MemberWeekPanel({ dashboard }: { readonly dashboard: LeagueDashboard }) {
@@ -1068,8 +1197,6 @@ function LeagueDetail({
   claimMessage,
   claimTeam,
   onTeamClaimed,
-  draftMarketRefreshState,
-  checkDraftMarket,
 }: LeagueDetailProps) {
   const claimedTeam = dashboard.teams.find((team) => team.claimStatus === "current-user");
   const selectableTeams = dashboard.teams.filter(
@@ -1156,7 +1283,10 @@ function LeagueDetail({
       <WeeklyInsightsPanel dashboard={dashboard} />
       <StandingsPanel dashboard={dashboard} />
 
-      <div className="live-detail-columns">
+      {/* Data health used to sit in a second column here. It now lives in exactly one place —
+          the bottom of Settings — so source freshness stops competing with the member's own
+          roster for attention on their league page. */}
+      <div className="live-detail-columns live-detail-columns--single">
         <section className="panel live-team-panel">
           <div className="panel-heading panel-heading--tight">
             <div>
@@ -1225,300 +1355,8 @@ function LeagueDetail({
             <RosterGroup label="Bench / reserve" players={bench} />
           </div>
         </section>
-
-        <aside className="panel live-health-panel" id="data-health">
-          <div className="panel-heading panel-heading--tight">
-            <div>
-              <p className="eyebrow">Sources & freshness</p>
-              <h3>Data health</h3>
-            </div>
-            <Database size={18} />
-          </div>
-          <div className="live-sync-run">
-            <span>Latest league sync</span>
-            <strong>{dashboard.latestSyncRun?.state ?? "No run recorded"}</strong>
-            <small>
-              {dashboard.latestSyncRun
-                ? `${dashboard.latestSyncRun.kind} · ${dashboard.latestSyncRun.recordsWritten} records written`
-                : "Waiting for a provider import"}
-            </small>
-          </div>
-          <div className="live-source-list">
-            {dashboard.dataSources.length === 0 ? (
-              <p>No supporting data sources have reported freshness yet.</p>
-            ) : (
-              dashboard.dataSources.map((source) => (
-                <article key={source.key}>
-                  <FreshnessDot state={source.freshness.state} />
-                  <div>
-                    <strong>{source.name}</strong>
-                    <span>{source.freshness.label}</span>
-                    {source.lastCheckedAt ? (
-                      <span>Last attempt {new Date(source.lastCheckedAt).toLocaleString()}</span>
-                    ) : null}
-                    {source.consecutiveFailures > 0 ? (
-                      <span>
-                        {source.consecutiveFailures} failed check
-                        {source.consecutiveFailures === 1 ? "" : "s"} since the last success
-                      </span>
-                    ) : null}
-                    {source.quality ? (
-                      <span>
-                        {source.quality.matchRate === null
-                          ? `${source.quality.rowsRead} source rows checked`
-                          : `${Math.round(source.quality.matchRate * 100)}% player match rate`}
-                        {source.quality.rowsUnmatched > 0
-                          ? ` · ${source.quality.rowsUnmatched} unresolved`
-                          : ""}
-                        {source.quality.rowsRejected > 0
-                          ? ` · ${source.quality.rowsRejected} rejected`
-                          : ""}
-                      </span>
-                    ) : null}
-                    {source.attributionUrl ? (
-                      <a href={source.attributionUrl} target="_blank" rel="noreferrer">
-                        {source.attribution ?? "Source attribution"}
-                      </a>
-                    ) : null}
-                  </div>
-                </article>
-              ))
-            )}
-          </div>
-          <button
-            className="button button--outline button--small"
-            type="button"
-            onClick={checkDraftMarket}
-            disabled={draftMarketRefreshState === "working"}
-          >
-            {draftMarketRefreshState === "working" ? (
-              <LoaderCircle className="spin" size={14} />
-            ) : draftMarketRefreshState === "queued" ||
-              draftMarketRefreshState === "deduplicated" ? (
-              <CheckCircle2 size={14} />
-            ) : draftMarketRefreshState === "error" ? (
-              <CircleAlert size={14} />
-            ) : (
-              <RefreshCw size={14} />
-            )}
-            {draftMarketRefreshState === "working"
-              ? "Requesting…"
-              : draftMarketRefreshState === "queued"
-                ? "Draft-market check queued"
-                : draftMarketRefreshState === "deduplicated"
-                  ? "Draft-market check already queued"
-                  : draftMarketRefreshState === "error"
-                    ? "Retry draft-market check"
-                    : "Check draft market"}
-          </button>
-          <UnresolvedIdentityPanel />
-        </aside>
       </div>
     </section>
-  );
-}
-
-/**
- * Operator detail for source identity quality. The unresolved rows below are immutable
- * historical facts, not a queue anyone can clear: they record that an external identifier did not
- * resolve to a canonical player during a completed ingestion. The server's 403 is the real
- * boundary; the role check here only avoids a fetch that is guaranteed to fail for a member.
- */
-function UnresolvedIdentityPanel() {
-  const [isAdmin, setIsAdmin] = useState(false);
-  const [degraded, setDegraded] = useState<readonly DataQualitySource[]>([]);
-  const [state, setState] = useState<"loading" | "ready" | "error">("loading");
-  const [notice, setNotice] = useState<string | null>(null);
-
-  useEffect(() => {
-    const controller = new AbortController();
-    void fetch(`${apiBaseUrl}/v1/auth/session`, {
-      credentials: "include",
-      headers: { Accept: "application/json" },
-      cache: "no-store",
-      signal: controller.signal,
-    })
-      .then(async (response) =>
-        response.ok ? parseAuthenticatedSession(await response.json()) : null,
-      )
-      .then((session) => setIsAdmin(session?.user.role === "admin"))
-      .catch(() => {
-        if (!controller.signal.aborted) setIsAdmin(false);
-      });
-    return () => controller.abort();
-  }, []);
-
-  useEffect(() => {
-    if (!isAdmin) return;
-    const controller = new AbortController();
-    setState("loading");
-    void fetch(`${apiBaseUrl}/v1/data-quality/sources`, {
-      credentials: "include",
-      headers: { Accept: "application/json" },
-      signal: controller.signal,
-    })
-      .then(async (response) =>
-        response.ok ? parseDataQualitySources(await response.json()) : null,
-      )
-      .then((summary) => {
-        if (!summary) {
-          setState("error");
-          return;
-        }
-        if (summary.availability.state !== "available") {
-          setDegraded([]);
-          setNotice(summary.availability.reason);
-          setState("ready");
-          return;
-        }
-        setNotice(null);
-        setDegraded(
-          summary.sources.filter((source) => summary.degradedSourceKeys.includes(source.key)),
-        );
-        setState("ready");
-      })
-      .catch(() => {
-        if (!controller.signal.aborted) setState("error");
-      });
-    return () => controller.abort();
-  }, [isAdmin]);
-
-  if (!isAdmin) return null;
-  return (
-    <div className="live-unresolved">
-      <h4>Unresolved identities</h4>
-      {state === "loading" ? (
-        <p role="status">Checking source identity quality…</p>
-      ) : state === "error" ? (
-        <p role="alert">Source identity quality could not be loaded.</p>
-      ) : notice ? (
-        <p role="status">{notice}</p>
-      ) : degraded.length === 0 ? (
-        <p role="status">Every source is resolving identities above its threshold.</p>
-      ) : (
-        degraded.map((source) => <UnresolvedSourceDisclosure key={source.key} source={source} />)
-      )}
-    </div>
-  );
-}
-
-function UnresolvedSourceDisclosure({ source }: { readonly source: DataQualitySource }) {
-  const [open, setOpen] = useState(false);
-  const [detail, setDetail] = useState<UnresolvedIdentityResponse | null>(null);
-  const [state, setState] = useState<"idle" | "loading" | "ready" | "error">("idle");
-
-  useEffect(() => {
-    if (!open || state !== "idle") return;
-    const controller = new AbortController();
-    setState("loading");
-    void fetch(
-      `${apiBaseUrl}/v1/data-quality/sources/${encodeURIComponent(source.key)}/unresolved`,
-      {
-        credentials: "include",
-        headers: { Accept: "application/json" },
-        signal: controller.signal,
-      },
-    )
-      .then(async (response) =>
-        response.ok ? parseUnresolvedIdentities(await response.json()) : null,
-      )
-      .then((result) => {
-        if (!result) {
-          setState("error");
-          return;
-        }
-        setDetail(result);
-        setState("ready");
-      })
-      .catch(() => {
-        if (!controller.signal.aborted) setState("error");
-      });
-    return () => controller.abort();
-  }, [open, state, source.key]);
-
-  return (
-    <details
-      className="live-unresolved__source"
-      open={open}
-      onToggle={(event) => setOpen(event.currentTarget.open)}
-    >
-      <summary>
-        <span>{source.name}</span>
-        <small>
-          {source.matchRate === null
-            ? "No match rate recorded"
-            : `${Math.round(source.matchRate * 100)}% matched · ${Math.round(source.minimumMatchRate * 100)}% required`}
-        </small>
-      </summary>
-      {state === "loading" ? (
-        <p role="status">Loading unresolved rows…</p>
-      ) : state === "error" ? (
-        <p role="alert">Unresolved rows could not be loaded.</p>
-      ) : detail ? (
-        <>
-          {detail.weeks.state === "available" ? (
-            detail.weeks.rows.length === 0 ? (
-              <p>No unresolved rows are recorded for this source.</p>
-            ) : (
-              <div className="live-unresolved__scroll">
-                <table>
-                  <caption className="sr-only">
-                    Unresolved rows by season and week for {source.name}
-                  </caption>
-                  <thead>
-                    <tr>
-                      <th scope="col">Season</th>
-                      <th scope="col">Week</th>
-                      <th scope="col">Unresolved rows</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {detail.weeks.rows.map((row) => (
-                      <tr key={`${row.season}-${row.week}`}>
-                        <td>{row.season}</td>
-                        <td>{row.week}</td>
-                        <td>{row.unresolvedRows}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )
-          ) : (
-            <p role="status">{detail.weeks.reason}</p>
-          )}
-          {detail.sample.state === "available" && detail.sample.rows.length > 0 ? (
-            <div className="live-unresolved__scroll">
-              <table>
-                <caption className="sr-only">
-                  Sample of unresolved source identities for {source.name}
-                </caption>
-                <thead>
-                  <tr>
-                    <th scope="col">Week</th>
-                    <th scope="col">Source identifier</th>
-                    <th scope="col">Team</th>
-                    <th scope="col">Position</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {detail.sample.rows.map((row) => (
-                    <tr key={`${row.week}-${row.externalPlayerId}`}>
-                      <td>{row.week}</td>
-                      <td>{row.externalPlayerId}</td>
-                      <td>{row.team}</td>
-                      <td>{row.position ?? "—"}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          ) : detail.sample.state !== "available" ? (
-            <p role="status">{detail.sample.reason}</p>
-          ) : null}
-        </>
-      ) : null}
-    </details>
   );
 }
 
