@@ -9,13 +9,18 @@ import {
   FIRST_PARTY_ROS_MODEL_VERSION,
   firstPartyProjectionComponentsForPosition,
   firstPartyRecentRoleContext,
+  firstPartyTeamDefenseProjectionComponents,
   projectFirstPartyRecencyBaselineComponents,
   projectFirstPartyRestOfSeason,
+  projectFirstPartyTeamDefenseComponents,
+  projectFirstPartyTeamDefenseRecencyBaselineComponents,
   projectFirstPartyWeeklyComponents,
   projectionScoringProfileKey,
   type FirstPartyPlayerStatus,
   type FirstPartyProjectionCalibration,
   type FirstPartyProjectionPosition,
+  type FirstPartyTeamDefenseCalibration,
+  type FirstPartyTeamDefenseWeeklyStatLine,
   type FirstPartyRosAvailabilityInput,
   type FirstPartyRosConvergenceMetricName,
   type FirstPartyRosLiveReleaseEvidence,
@@ -204,7 +209,7 @@ export interface BuildFirstPartyRosPlayerCandidateInput {
  */
 export interface FirstPartyRosAssembledCandidateInputs {
   readonly playerId: string;
-  readonly position: FirstPartyProjectionPosition;
+  readonly position: FirstPartyRosPosition;
   readonly bucket: FirstPartyRosRemainingWeeksBucket;
   readonly scoringProfileKey: string;
   readonly intervalMethodVersion: string;
@@ -216,6 +221,151 @@ export interface FirstPartyRosAssembledCandidateInputs {
   readonly coverage: { readonly contextual: number; readonly recency: number };
   readonly contextualInput: FirstPartyRosProjectionInput;
   readonly recencyInput: FirstPartyRosProjectionInput;
+}
+
+export interface BuildFirstPartyRosDefenseCandidateInput {
+  readonly defense: { readonly playerId: string; readonly team: string };
+  readonly window: FirstPartyRosCandidateWindow;
+  readonly featureHistory: readonly FirstPartyTeamDefenseWeeklyStatLine[];
+  readonly calibration: FirstPartyTeamDefenseCalibration;
+  readonly schedules: readonly ProjectionScheduleFact[];
+  readonly scoringProfile: ProjectionScoringProfile;
+  readonly seed: string;
+  readonly scenarioCount?: number;
+}
+
+/**
+ * D/ST counterpart to {@link assembleFirstPartyRosCandidateInputs}. Team defenses have no injury,
+ * roster-role, or games-played uncertainty, but otherwise use the same complete-window simulation
+ * contract and the weekly model's own contextual and recency centers.
+ */
+export function assembleFirstPartyRosDefenseCandidateInputs(
+  input: BuildFirstPartyRosDefenseCandidateInput,
+): FirstPartyRosAssembledCandidateInputs | null {
+  const { season, asOfWeek, windowStartWeek, windowEndWeek } = input.window;
+  const team = input.defense.team.trim().toUpperCase();
+  const weeks: FirstPartyRosProjectionInput["weeks"][number][] = [];
+  const fingerprints: unknown[] = [];
+  let scheduledGames = 0;
+  for (let week = windowStartWeek; week <= windowEndWeek; week += 1) {
+    const game = scheduleForTeam(input.schedules, season, week, team);
+    const scheduled = game !== undefined;
+    if (scheduled) scheduledGames += 1;
+    const target = {
+      team,
+      season,
+      week,
+      ...(game ? { opponent: opponentFor(game, team) } : {}),
+      scheduled,
+      isBye: !scheduled,
+    };
+    const contextual = projectFirstPartyTeamDefenseComponents({
+      target,
+      history: input.featureHistory,
+      calibration: input.calibration,
+    });
+    if (scheduled && contextual.state !== "projected") return null;
+    const recency = projectFirstPartyTeamDefenseRecencyBaselineComponents({
+      target,
+      history: input.featureHistory,
+    });
+    const zeros = Object.fromEntries(
+      firstPartyTeamDefenseProjectionComponents().map((component) => [component, 0]),
+    );
+    const contextualComponents = scheduled ? contextual.components : zeros;
+    const recencyComponents = scheduled ? recency : zeros;
+    weeks.push({
+      season,
+      week,
+      scheduled,
+      bye: !scheduled,
+      contextualComponents,
+      recencyComponents,
+      componentElasticities: historicalRosComponentElasticities(
+        contextualComponents,
+        recencyComponents,
+      ),
+    });
+    fingerprints.push({
+      week,
+      contextual: contextual.provenance.inputFingerprint,
+      recency: historicalRosChecksum({
+        version: "live-ros-defense-recency-adapter-v1",
+        target,
+        components: recencyComponents,
+        strictPriorHistoryFingerprint: contextual.provenance.inputFingerprint,
+      }),
+    });
+  }
+
+  const asOfAt = historicalRosAsOfAt(input.schedules, season, asOfWeek);
+  const scoringProfileKey = projectionScoringProfileKey(input.scoringProfile);
+  const availability: FirstPartyRosAvailabilityInput = {
+    state: "active",
+    newAbsenceProbability: 0,
+    recoveryProbability: 1,
+    reserveRecoveryProbability: 1,
+    limitedRoleMultiplier: 1,
+    returnRoleMultiplier: 1,
+  };
+  const role: FirstPartyRosRoleInput = {
+    currentMultiplier: 1,
+    persistence: 1,
+    innovationVolatility: 0,
+    weeklyProductionVolatility: 0.15,
+    minimumMultiplier: 1,
+    maximumMultiplier: 1,
+  };
+  const inputChecksum = historicalRosChecksum({
+    version: "live-ros-defense-input-v1",
+    playerId: input.defense.playerId,
+    position: "DST",
+    team,
+    season,
+    asOfWeek,
+    asOfAt,
+    windowStartWeek,
+    windowEndWeek,
+    fingerprints,
+    availability,
+    role,
+    scoringProfileKey,
+  });
+  const common = {
+    playerId: input.defense.playerId,
+    position: "DST" as const,
+    season,
+    asOfWeek,
+    asOfAt,
+    windowStartWeek,
+    windowEndWeek,
+    weeks,
+    availability,
+    role,
+    scoringProfile: input.scoringProfile,
+    inputChecksum,
+    weeklyModelVersion: HISTORICAL_ROS_CANDIDATE_PAIR_VERSION,
+    seed: input.seed,
+    ...(input.scenarioCount === undefined ? {} : { scenarioCount: input.scenarioCount }),
+  } as const;
+  return {
+    playerId: input.defense.playerId,
+    position: "DST",
+    bucket: historicalRosBucket(windowStartWeek, windowEndWeek),
+    scoringProfileKey,
+    intervalMethodVersion: HISTORICAL_ROS_INTERVAL_METHOD_VERSION,
+    contextualModelVersion: rosModelVersion("contextual"),
+    recencyModelVersion: rosModelVersion("availability-aware-recency"),
+    inputChecksum,
+    asOfAt,
+    scheduledGames,
+    coverage: {
+      contextual: scheduledGames === 0 ? 0 : 1,
+      recency: scheduledGames === 0 ? 0 : 1,
+    },
+    contextualInput: { ...common, strategy: "contextual" },
+    recencyInput: { ...common, strategy: "availability-aware-recency" },
+  };
 }
 
 /**

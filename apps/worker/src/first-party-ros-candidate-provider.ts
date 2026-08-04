@@ -2,7 +2,6 @@ import { createHash } from "node:crypto";
 
 import {
   dataSources,
-  fantasyTeams,
   leagueSeasons,
   nflScheduleObservations,
   playerInjuryReportObservations,
@@ -10,9 +9,8 @@ import {
   playerWeeklyRosterObservations,
   playerWeeklyStatObservations,
   players,
-  rosterEntries,
-  rosterSnapshots,
   scoringRules,
+  teamWeeklyStatObservations,
   type Database,
 } from "@fantasy/db";
 import {
@@ -20,14 +18,17 @@ import {
   normalizeLeagueScoringProfile,
   projectionScoringProfileKey,
   runFirstPartyProjectionBacktest,
+  runFirstPartyTeamDefenseBacktest,
   type FirstPartyProjectionCalibration,
   type FirstPartyProjectionPosition,
   type FirstPartyRosLiveReleaseEvidence,
+  type FirstPartyTeamDefenseCalibration,
+  type FirstPartyTeamDefenseWeeklyStatLine,
   type FirstPartyWeeklyStatLine,
   type LeagueScoringPositionSupport,
   type ProjectionScoringProfile,
 } from "@fantasy/projections";
-import { and, desc, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 
 import {
   HISTORICAL_ROS_SUPPORTED_POSITIONS,
@@ -40,6 +41,7 @@ import {
 } from "./first-party-ros-backtest.js";
 import {
   assembleFirstPartyRosCandidateInputs,
+  assembleFirstPartyRosDefenseCandidateInputs,
   buildFirstPartyRosLiveReleaseEvidence,
   diagnoseBoundedFirstPartyRosConvergence,
   simulateFirstPartyRosCandidate,
@@ -48,14 +50,17 @@ import {
 } from "./first-party-ros-candidates.js";
 import {
   buildFirstPartyPlayerHistory,
+  buildFirstPartyDefenseHistory,
   type ProjectionInjuryFact,
   type ProjectionRosterFact,
   type ProjectionScheduleFact,
   type ProjectionSnapFact,
+  type ProjectionTeamWeekFact,
   type ProjectionWeeklyFact,
 } from "./first-party-projection-inputs.js";
 import {
   firstPartyAvailableProjectionComponents,
+  firstPartyDefensePlayerId,
   projectionHistorySeasons,
 } from "./first-party-projections.js";
 import type {
@@ -67,6 +72,7 @@ import type {
 import {
   firstPartyRosArtifactScoringProfile,
   matchFirstPartyRosPositions,
+  selectFirstPartyRosArtifactForLeague,
   type FirstPartyRosRailPosition,
   type FirstPartyRosReleasedPlayer,
   type FirstPartyRosRunConvergence,
@@ -110,6 +116,27 @@ export interface FirstPartyRosScoringExcludedLeague {
 export interface FirstPartyRosScoringMatchReport {
   readonly matched: readonly FirstPartyRosScoringMatchedLeague[];
   readonly excluded: readonly FirstPartyRosScoringExcludedLeague[];
+}
+
+/**
+ * Applies the release rail's single-artifact arbitration before simulation. The release service
+ * repeats the same check after targets are built as a fail-closed backstop; doing it here avoids
+ * simulating a full player pool for artifacts whose output would necessarily be discarded.
+ */
+export function firstPartyRosArtifactOwnedLeagues(input: {
+  readonly artifact: LoadedFirstPartyRosChampionArtifact;
+  readonly artifacts: readonly LoadedFirstPartyRosChampionArtifact[];
+  readonly leagues: readonly FirstPartyRosScoringMatchedLeague[];
+}): readonly FirstPartyRosScoringMatchedLeague[] {
+  return input.leagues.filter((league) => {
+    const selected = selectFirstPartyRosArtifactForLeague({
+      artifacts: input.artifacts,
+      leagueScoringProfileKey: projectionScoringProfileKey(league.profile),
+      leagueScoringProfile: league.profile,
+      supportedPositions: league.supportedPositions,
+    });
+    return selected?.artifactChecksum === input.artifact.artifactChecksum;
+  });
 }
 
 export interface FirstPartyRosLeagueRow {
@@ -209,7 +236,7 @@ export function enumerateFirstPartyRosScoringMatchedLeagues(input: {
   return { matched, excluded };
 }
 
-export interface FirstPartyRosRosteredPlayer {
+export interface FirstPartyRosCandidatePlayer {
   readonly playerId: string;
   readonly position: string;
   readonly team: string | null;
@@ -246,9 +273,11 @@ export function buildFirstPartyRosLeagueTarget(input: {
   readonly supportedPositions: readonly FirstPartyRosRailPosition[];
   readonly season: number;
   readonly window: FirstPartyRosWindow;
-  readonly rosteredPlayers: readonly FirstPartyRosRosteredPlayer[];
+  readonly candidatePlayers: readonly FirstPartyRosCandidatePlayer[];
   readonly featureHistory: readonly FirstPartyWeeklyStatLine[];
   readonly calibration: FirstPartyProjectionCalibration;
+  readonly defenseFeatureHistory: readonly FirstPartyTeamDefenseWeeklyStatLine[];
+  readonly defenseCalibration: FirstPartyTeamDefenseCalibration;
   readonly availabilityCalibration: HistoricalRosAvailabilityCalibration;
   readonly roleCalibration: HistoricalRosRoleCalibration;
   readonly kickerCalibration: HistoricalRosKickerCalibration;
@@ -279,18 +308,61 @@ export function buildFirstPartyRosLeagueTarget(input: {
   // withheld structurally rather than filtered out later; it is not an audited per-player skip
   // because nothing about the player was missing.
   const releasablePositions = new Set<string>(input.matchedPositions);
-  for (const rostered of input.rosteredPlayers) {
-    const position = normalizePosition(rostered.position);
-    if (!releasablePositions.has(position) || rostered.team === null) continue;
-    if (seenPlayers.has(rostered.playerId)) continue;
-    seenPlayers.add(rostered.playerId);
+  for (const player of input.candidatePlayers) {
+    const position = normalizePosition(player.position);
+    if (!releasablePositions.has(position) || player.team === null) continue;
+    if (seenPlayers.has(player.playerId)) continue;
+    seenPlayers.add(player.playerId);
+
+    if (position === "DST") {
+      const assembled = assembleFirstPartyRosDefenseCandidateInputs({
+        defense: { playerId: player.playerId, team: player.team },
+        window,
+        featureHistory: input.defenseFeatureHistory,
+        calibration: input.defenseCalibration,
+        schedules: input.schedules,
+        scoringProfile: input.scoringProfile,
+        seed: `live-ros:${scoringProfileKey}:${input.season}:${window.asOfWeek}:${player.playerId}`,
+        ...(input.scenarioCount === undefined ? {} : { scenarioCount: input.scenarioCount }),
+      });
+      if (assembled === null) {
+        skippedPlayers += 1;
+        continue;
+      }
+      const candidate = simulateFirstPartyRosCandidate(assembled);
+      const choice = input.artifact.policy.choices.find(
+        (candidate_) =>
+          candidate_.position === candidate.position && candidate_.bucket === candidate.bucket,
+      );
+      if (choice === undefined) {
+        skippedPlayers += 1;
+        continue;
+      }
+      const projection =
+        choice.strategy === "contextual" ? candidate.contextual : candidate.recency;
+      if (projection.state !== "projected" || projection.expectedGames <= 0) {
+        skippedPlayers += 1;
+        continue;
+      }
+      accepted.push({
+        candidate,
+        assembled,
+        released: {
+          playerId: player.playerId,
+          bucket: candidate.bucket,
+          strategy: choice.strategy,
+          projection,
+        },
+      });
+      continue;
+    }
 
     const builderInput = {
       player: {
-        playerId: rostered.playerId,
+        playerId: player.playerId,
         position: position as FirstPartyProjectionPosition,
-        team: rostered.team,
-        ...(rostered.rosterStatus === undefined ? {} : { rosterStatus: rostered.rosterStatus }),
+        team: player.team,
+        ...(player.rosterStatus === undefined ? {} : { rosterStatus: player.rosterStatus }),
       },
       window,
       featureHistory: input.featureHistory,
@@ -301,7 +373,7 @@ export function buildFirstPartyRosLeagueTarget(input: {
       injuries: input.injuries,
       schedules: input.schedules,
       scoringProfile: input.scoringProfile,
-      seed: `live-ros:${input.leagueSeasonId}:${input.season}:${window.asOfWeek}:${rostered.playerId}`,
+      seed: `live-ros:${scoringProfileKey}:${input.season}:${window.asOfWeek}:${player.playerId}`,
       ...(input.scenarioCount === undefined ? {} : { scenarioCount: input.scenarioCount }),
     };
 
@@ -333,7 +405,7 @@ export function buildFirstPartyRosLeagueTarget(input: {
       candidate,
       assembled,
       released: {
-        playerId: rostered.playerId,
+        playerId: player.playerId,
         bucket: candidate.bucket,
         strategy: choice.strategy,
         projection,
@@ -456,8 +528,36 @@ export function databaseFirstPartyRosCandidateProvider(input: {
   readonly convergenceReferenceScenarioCount?: number;
 }): FirstPartyRosCandidateProvider {
   return {
+    sourceChecksum: async ({ season, window }) => {
+      const sourceKeys = firstPartyRosCandidateSourceKeys(season);
+      const sources = await pinnedSourceChecksums(input.database, sourceKeys);
+      return aggregateChecksum("live-ros-candidate-provider-v2", [
+        `season:${season}`,
+        `window:${window.windowStartWeek}-${window.windowEndWeek}:asof-${window.asOfWeek}`,
+        `scenario-count:${input.scenarioCount ?? "default"}`,
+        `reference-scenario-count:${input.convergenceReferenceScenarioCount ?? "default"}`,
+        ...sourceKeys.map((key) => `${key}:${sources.get(key)?.checksum ?? "missing"}`),
+      ]);
+    },
     buildTargets: (context) => buildDatabaseFirstPartyRosTargets(input, context),
   };
+}
+
+export function firstPartyRosCandidateSourceKeys(season: number): readonly string[] {
+  const seasons = projectionHistorySeasons(season);
+  const completedSeasons = seasons.filter((candidate) => candidate < season);
+  return [
+    ...seasons.map((candidate) => `nflverse.schedules.${candidate}`),
+    ...completedSeasons.map((candidate) => `nflverse.stats-player-week.${candidate}`),
+    ...completedSeasons.map((candidate) => `nflverse.snap-counts.${candidate}`),
+    ...completedSeasons.map((candidate) => `nflverse.weekly-rosters.${candidate}`),
+    ...completedSeasons.map((candidate) => `nflverse.injuries.${candidate}`),
+    ...seasons.map((candidate) => `nflverse.stats-team-week.${candidate}`),
+    `nflverse.stats-player-week.${season}`,
+    `nflverse.snap-counts.${season}`,
+    `nflverse.weekly-rosters.${season}`,
+    `nflverse.injuries.${season}`,
+  ];
 }
 
 async function pinnedSourceChecksums(
@@ -491,7 +591,6 @@ async function buildDatabaseFirstPartyRosTargets(
   const database = options.database;
   const { season, window, artifact } = context;
   const seasons = projectionHistorySeasons(season);
-  const completedSeasons = seasons.filter((candidate) => candidate < season);
 
   const leagueRows = await database
     .select({ id: leagueSeasons.id, provider: leagueSeasons.provider })
@@ -517,25 +616,20 @@ async function buildDatabaseFirstPartyRosTargets(
   // its own normalization rather than reading these. It is returned so the reasons are available to
   // a caller and are covered by tests; if a diagnostics channel is ever added, this is where the
   // exclusions are already computed.
-  const { matched } = enumerateFirstPartyRosScoringMatchedLeagues({
+  const matchReport = enumerateFirstPartyRosScoringMatchedLeagues({
     artifactScoringProfileKey: artifact.scoringProfileKey,
     leagues: leagueRows,
     rules: ruleRows,
     availableStatIds: firstPartyAvailableProjectionComponents(),
   });
+  const matched = firstPartyRosArtifactOwnedLeagues({
+    artifact,
+    artifacts: context.artifacts,
+    leagues: matchReport.matched,
+  });
   if (matched.length === 0) return [];
 
-  const sourceKeys = [
-    ...seasons.map((candidate) => `nflverse.schedules.${candidate}`),
-    ...completedSeasons.map((candidate) => `nflverse.stats-player-week.${candidate}`),
-    ...completedSeasons.map((candidate) => `nflverse.snap-counts.${candidate}`),
-    ...completedSeasons.map((candidate) => `nflverse.weekly-rosters.${candidate}`),
-    ...completedSeasons.map((candidate) => `nflverse.injuries.${candidate}`),
-    `nflverse.stats-player-week.${season}`,
-    `nflverse.snap-counts.${season}`,
-    `nflverse.weekly-rosters.${season}`,
-    `nflverse.injuries.${season}`,
-  ];
+  const sourceKeys = firstPartyRosCandidateSourceKeys(season);
   const sources = await pinnedSourceChecksums(database, sourceKeys);
   const scheduleSources = seasons.flatMap((candidate) => {
     const source = sources.get(`nflverse.schedules.${candidate}`);
@@ -558,8 +652,12 @@ async function buildDatabaseFirstPartyRosTargets(
     const source = sources.get(`nflverse.injuries.${candidate}`);
     return source ? [source] : [];
   });
+  const teamStatSources = seasons.flatMap((candidate) => {
+    const source = sources.get(`nflverse.stats-team-week.${candidate}`);
+    return source ? [source] : [];
+  });
 
-  const [scheduleRows, weeklyRows, snapRows, rosterRows, injuryRows] = await Promise.all([
+  const [scheduleRows, weeklyRows, snapRows, rosterRows, injuryRows, teamRows] = await Promise.all([
     database
       .select({
         season: nflScheduleObservations.season,
@@ -653,7 +751,11 @@ async function buildDatabaseFirstPartyRosTargets(
       : database
           .select({
             playerId: playerWeeklyRosterObservations.playerId,
-            position: players.primaryPosition,
+            // The NFL roster feed is the fantasy-position authority for the live pool. The
+            // canonical catalog intentionally records an NFL primary position, which can be CB
+            // for a two-way fantasy WR (or FB for a provider-eligible RB/TE). Replacing the feed's
+            // position with that catalog value would silently drop those players from ROS.
+            position: playerWeeklyRosterObservations.position,
             season: playerWeeklyRosterObservations.season,
             week: playerWeeklyRosterObservations.week,
             team: playerWeeklyRosterObservations.team,
@@ -698,6 +800,32 @@ async function buildDatabaseFirstPartyRosTargets(
               ),
               inArray(playerInjuryReportObservations.season, seasons),
               eq(playerInjuryReportObservations.seasonType, "REG"),
+            ),
+          ),
+    teamStatSources.length === 0
+      ? Promise.resolve([])
+      : database
+          .select({
+            season: teamWeeklyStatObservations.season,
+            week: teamWeeklyStatObservations.week,
+            gameId: teamWeeklyStatObservations.gameId,
+            team: teamWeeklyStatObservations.team,
+            opponentTeam: teamWeeklyStatObservations.opponentTeam,
+            components: teamWeeklyStatObservations.components,
+          })
+          .from(teamWeeklyStatObservations)
+          .where(
+            and(
+              inArray(
+                teamWeeklyStatObservations.sourceId,
+                teamStatSources.map((entry) => entry.id),
+              ),
+              inArray(
+                teamWeeklyStatObservations.inputChecksum,
+                teamStatSources.map((entry) => entry.checksum),
+              ),
+              inArray(teamWeeklyStatObservations.season, seasons),
+              eq(teamWeeklyStatObservations.seasonType, "REG"),
             ),
           ),
   ]);
@@ -763,6 +891,14 @@ async function buildDatabaseFirstPartyRosTargets(
         ]
       : [],
   );
+  const teamWeekly: ProjectionTeamWeekFact[] = teamRows.map((row) => ({
+    season: row.season,
+    week: row.week,
+    gameId: row.gameId,
+    team: row.team,
+    opponentTeam: row.opponentTeam,
+    components: row.components,
+  }));
   const schedules: ProjectionScheduleFact[] = scheduleRows.map((row) => ({
     season: row.season,
     week: row.week,
@@ -776,9 +912,14 @@ async function buildDatabaseFirstPartyRosTargets(
   }));
 
   const history = buildFirstPartyPlayerHistory(weekly, snaps, rosters, schedules, injuries);
+  const defenseHistory = buildFirstPartyDefenseHistory(teamWeekly, schedules);
   const cutoff = season * 32 + window.asOfWeek;
   const featureHistory = history.filter((row) => row.season * 32 + row.week <= cutoff);
   const trainingHistory = history.filter((row) => row.season < season);
+  const defenseFeatureHistory = defenseHistory.filter(
+    (row) => row.season * 32 + row.week <= cutoff,
+  );
+  const defenseTrainingHistory = defenseHistory.filter((row) => row.season < season);
   // Availability/role calibration must be trained strictly before the current season so a live
   // forecast can never leak its own season into its publication decision.
   if (trainingHistory.length === 0) return [];
@@ -786,6 +927,7 @@ async function buildDatabaseFirstPartyRosTargets(
   let availabilityCalibration: HistoricalRosAvailabilityCalibration;
   let roleCalibration: HistoricalRosRoleCalibration;
   let kickerCalibration: HistoricalRosKickerCalibration;
+  let defenseCalibration: FirstPartyTeamDefenseCalibration;
   try {
     // These three calibrations are fitted ONCE per artifact and shared by every matched league, so
     // their reference profile must not depend on which leagues matched or on their order. It is the
@@ -815,6 +957,7 @@ async function buildDatabaseFirstPartyRosTargets(
       referenceProfile,
       weeklyBacktest.predictions,
     );
+    defenseCalibration = runFirstPartyTeamDefenseBacktest(defenseTrainingHistory).calibration;
   } catch {
     // A calibration that cannot be fitted — including one whose reference profile cannot be
     // recovered from a corrupt artifact key — is a league-wide missing piece: yield nothing.
@@ -830,15 +973,29 @@ async function buildDatabaseFirstPartyRosTargets(
       ? context.now
       : new Date(Math.max(...scheduleDates.map((value) => value.getTime())));
 
-  const rosteredByLeague = await loadRosteredPlayers(
-    database,
-    matched.map((league) => league.leagueSeasonId),
-  );
+  const candidatePool = currentFantasyPlayerPool(rosters, schedules, season);
+  if (candidatePool.length === 0) return [];
 
   const targets: FirstPartyRosPublicationTarget[] = [];
+  const targetTemplates = new Map<
+    string,
+    Omit<FirstPartyRosPublicationTarget, "leagueSeasonId"> | null
+  >();
   for (const league of matched) {
-    const rosteredPlayers = rosteredByLeague.get(league.leagueSeasonId) ?? [];
-    if (rosteredPlayers.length === 0) continue;
+    const leagueScoringProfileKey = projectionScoringProfileKey(league.profile);
+    const templateKey = aggregateChecksum("live-ros-target-template-v1", [
+      leagueScoringProfileKey,
+      ...league.matchedPositions,
+      "supported",
+      ...league.supportedPositions,
+    ]);
+    if (targetTemplates.has(templateKey)) {
+      const template = targetTemplates.get(templateKey);
+      if (template !== null && template !== undefined) {
+        targets.push({ leagueSeasonId: league.leagueSeasonId, ...template });
+      }
+      continue;
+    }
     const result = buildFirstPartyRosLeagueTarget({
       artifact,
       leagueSeasonId: league.leagueSeasonId,
@@ -847,9 +1004,11 @@ async function buildDatabaseFirstPartyRosTargets(
       supportedPositions: league.supportedPositions,
       season,
       window,
-      rosteredPlayers,
+      candidatePlayers: candidatePool,
       featureHistory,
       calibration,
+      defenseFeatureHistory,
+      defenseCalibration,
       availabilityCalibration,
       roleCalibration,
       kickerCalibration,
@@ -862,7 +1021,14 @@ async function buildDatabaseFirstPartyRosTargets(
         ? {}
         : { convergenceReferenceScenarioCount: options.convergenceReferenceScenarioCount }),
     });
-    if (result.target !== null) targets.push(result.target);
+    if (result.target === null) {
+      targetTemplates.set(templateKey, null);
+      continue;
+    }
+    const { leagueSeasonId: ignoredLeagueSeasonId, ...template } = result.target;
+    void ignoredLeagueSeasonId;
+    targetTemplates.set(templateKey, template);
+    targets.push({ leagueSeasonId: league.leagueSeasonId, ...template });
   }
   return targets;
 }
@@ -878,65 +1044,62 @@ function futureWindowIsComplete(
   return true;
 }
 
-async function loadRosteredPlayers(
-  database: Database,
-  leagueSeasonIds: readonly string[],
-): Promise<ReadonlyMap<string, FirstPartyRosRosteredPlayer[]>> {
-  const result = new Map<string, FirstPartyRosRosteredPlayer[]>();
-  if (leagueSeasonIds.length === 0) return result;
-  const snapshotRows = await database
-    .select({
-      leagueSeasonId: fantasyTeams.leagueSeasonId,
-      teamId: fantasyTeams.id,
-      snapshotId: rosterSnapshots.id,
-      effectiveAt: rosterSnapshots.effectiveAt,
-    })
-    .from(fantasyTeams)
-    .innerJoin(rosterSnapshots, eq(rosterSnapshots.teamId, fantasyTeams.id))
-    .where(inArray(fantasyTeams.leagueSeasonId, [...leagueSeasonIds]))
-    .orderBy(fantasyTeams.id, desc(rosterSnapshots.effectiveAt), rosterSnapshots.id);
-  const latestSnapshotByTeam = new Map<
-    string,
-    { readonly leagueSeasonId: string; readonly snapshotId: string }
-  >();
-  for (const row of snapshotRows) {
-    if (!latestSnapshotByTeam.has(row.teamId)) {
-      latestSnapshotByTeam.set(row.teamId, {
-        leagueSeasonId: row.leagueSeasonId,
-        snapshotId: row.snapshotId,
-      });
+/**
+ * Builds the shared preseason/in-season ROS universe from the latest current-season NFL roster
+ * facts, then adds one stable app-owned D/ST identity per scheduled team. Fantasy-team rosters are
+ * intentionally irrelevant: an undrafted player and a free agent still need an ROS forecast.
+ */
+export function currentFantasyPlayerPool(
+  rosters: readonly ProjectionRosterFact[],
+  schedules: readonly ProjectionScheduleFact[],
+  season: number,
+): readonly FirstPartyRosCandidatePlayer[] {
+  const latestByPlayer = new Map<string, ProjectionRosterFact>();
+  for (const row of rosters) {
+    if (row.season !== season) continue;
+    const existing = latestByPlayer.get(row.playerId);
+    if (!existing || existing.week < row.week) latestByPlayer.set(row.playerId, row);
+  }
+  const players_ = [...latestByPlayer.values()].flatMap((row) => {
+    const position = normalizePosition(row.position);
+    const status = row.status?.trim().toUpperCase() ?? null;
+    if (
+      !["QB", "RB", "WR", "TE", "K"].includes(position) ||
+      row.team.trim().length === 0 ||
+      status === "CUT" ||
+      status === "RET"
+    ) {
+      return [];
     }
-  }
-  const latestSnapshots = [...latestSnapshotByTeam.values()];
-  if (latestSnapshots.length === 0) return result;
-  const entryRows = await database
-    .select({
-      snapshotId: rosterEntries.snapshotId,
-      playerId: rosterEntries.playerId,
-      primaryPosition: players.primaryPosition,
-      nflTeam: players.nflTeam,
-    })
-    .from(rosterEntries)
-    .innerJoin(players, eq(players.id, rosterEntries.playerId))
-    .where(
-      inArray(
-        rosterEntries.snapshotId,
-        latestSnapshots.map((row) => row.snapshotId),
-      ),
-    );
-  const leagueBySnapshot = new Map(
-    latestSnapshots.map((row) => [row.snapshotId, row.leagueSeasonId]),
+    return [
+      {
+        playerId: row.playerId,
+        position,
+        team: row.team.trim().toUpperCase(),
+        ...(row.status === undefined ? {} : { rosterStatus: row.status }),
+      },
+    ];
+  });
+  const defenseTeams = [
+    ...new Set(
+      schedules
+        .filter((game) => game.season === season)
+        .flatMap((game) => [
+          game.awayTeam.trim().toUpperCase(),
+          game.homeTeam.trim().toUpperCase(),
+        ]),
+    ),
+  ].sort();
+  return [
+    ...players_,
+    ...defenseTeams.map((team) => ({
+      playerId: firstPartyDefensePlayerId(team),
+      position: "DST",
+      team,
+      rosterStatus: "active",
+    })),
+  ].sort(
+    (left, right) =>
+      left.position.localeCompare(right.position) || left.playerId.localeCompare(right.playerId),
   );
-  for (const row of entryRows) {
-    const leagueSeasonId = leagueBySnapshot.get(row.snapshotId);
-    if (!leagueSeasonId) continue;
-    const rows = result.get(leagueSeasonId) ?? [];
-    rows.push({
-      playerId: row.playerId,
-      position: row.primaryPosition,
-      team: row.nflTeam,
-    });
-    result.set(leagueSeasonId, rows);
-  }
-  return result;
 }

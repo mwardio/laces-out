@@ -326,10 +326,11 @@ artifact-gated path. Each position/horizon cell requires the configured held-out
 coverage, availability, convergence, and calibration evidence; sparse or mismatched cells remain
 withheld.
 
-The current full-PPR reference combines weekly model `laces-weekly-components-v8` with ROS model
-`laces-ros-distribution-v7`. Its 2019–2025 replay graded 2,040 forecasts across 68 batches,
-converged all 144 strata, and produced a zero-blocker 18-cell artifact admitted on 2026-07-23.
-Historical results remain development evidence; the frozen
+The current rest-of-season rail uses model `laces-ros-distribution-v7`. Each current profile replay
+grades 3,264 forecasts across 68 batches and converges all 144 release/reference diagnostics. The
+three generic profiles have clean gate-only re-evaluations admitted under the current availability
+rule. The two ESPN-shaped profiles use native-lineage, D/ST-complete v9 artifacts; only their D/ST
+5–8 week cells are withheld. Historical results remain development evidence; the frozen
 [2026 untouched protocol](./ros-v6-2026-untouched-protocol.md) is the final confirmation. See
 [`packages/projections/README.md`](../packages/projections/README.md) for the model and gate
 definitions.
@@ -360,15 +361,15 @@ returned every league's published set to any authenticated user.
 
 Structured per-league withholding reasons, emitted in this fixed order:
 
-| Reason                          | Operator meaning                                                        |
-| ------------------------------- | ----------------------------------------------------------------------- |
-| `no-admitted-scoring-profile`   | The league's normalized scoring key matches no admitted artifact        |
-| `incomplete-schedule`           | The regular-season schedule has games without a kickoff time            |
-| `missing-roster-snapshot`       | No roster snapshot exists for any team in the league season             |
-| `insufficient-candidate-inputs` | The league has too few scored candidate inputs to release               |
-| `non-converged-cell`            | At least one position/horizon cell did not settle within tolerance      |
-| `stale-source`                  | The newest source observation is older than the 36-hour freshness limit |
-| `no-league-synced`              | The caller has no league season for the requested season                |
+| Reason                          | Operator meaning                                                          |
+| ------------------------------- | ------------------------------------------------------------------------- |
+| `no-admitted-scoring-profile`   | The league's normalized scoring key matches no admitted artifact          |
+| `incomplete-schedule`           | The regular-season schedule has games without a kickoff time              |
+| `missing-candidate-pool`        | The current NFL fantasy-player pool has not been captured                 |
+| `insufficient-candidate-inputs` | The league has too few scored candidate inputs to release                 |
+| `non-converged-cell`            | At least one position/horizon cell did not settle within tolerance        |
+| `stale-source`                  | The latest successful source verification is older than the 36-hour limit |
+| `no-league-synced`              | The caller has no league season for the requested season                  |
 
 A withheld cell never removes a league's existing set. `metrics.preservePriorGoodSet` on the release
 run records that the last good set stays authoritative, and `metrics.cellDecisions` records every
@@ -377,9 +378,10 @@ cell decision — released and withheld — so a mixed release is readable witho
 ### Per-profile validation and admission
 
 The rail is validated and admitted **once per scoring profile**. Profiles come from
-`packages/projections/src/ros-scoring-profiles.ts`: `full-ppr`, `half-ppr`, and `standard`. They
-share one rule list and differ only in reception points, so nothing but `receptions` can drift
-between them.
+`packages/projections/src/ros-scoring-profiles.ts`: `full-ppr`, `half-ppr`, `standard`,
+`espn-standard-2pt`, and `espn-standard-2pt-nxm`. The first three share one rule list and differ
+only in reception points. The ESPN profiles pin the two live league shapes independently, including
+their complete D/ST brackets and their differing missed-extra-point rules.
 
 ```bash
 npm run ros:validate -w @fantasy/worker -- --scoring-profile=half-ppr --full \
@@ -395,53 +397,43 @@ report was graded under is recorded in the report's own `scoringProfile` block a
 authoritative `identityAudit.scoringProfileKey`.
 
 Each profile produces its own scoring fingerprint, evidence report, artifact checksum, and
-`first_party_ros_champion_artifacts` row. Selection at publication time is exact equality on the
-canonical scoring key (`selectFirstPartyRosArtifactForLeague`): a league receives its own profile's
-artifact or nothing. There is no nearest-match, no default, and no fallback to the only admitted
-profile.
+`first_party_ros_champion_artifacts` row. Whole-profile equality wins selection. A league with extra
+or provider-specific rules can also match an artifact only for positions whose canonical scoring
+vocabulary is byte-equal; unmatched positions withhold independently. There is no nearest-match,
+default profile, or cross-position fallback.
 
-#### Per-profile results, 2026-07-27
+#### Per-profile results, 2026-08-04
 
-The frozen v8 process was run independently for `standard` and `half-ppr` with every default
-unchanged (2019–2025 sources, 2022–2025 held out, all 17 cutoffs, 5 players per position/cutoff,
-12,288 release paths, 16,384 convergence reference, unchanged cell and portfolio minimums). No gate,
-threshold, tolerance, or minimum was altered in either direction.
+Every current profile uses 2019–2025 sources, holds out 2022–2025, covers all 17 cutoffs, samples
+eight players per position/cutoff, and runs 12,288 release paths against a 16,384-path convergence
+reference. No gate, threshold, tolerance, or minimum was relaxed between profiles.
 
-| Profile    | Report state     | Cell blockers                                                                           | Releasable cells | Artifact checksum | Scoring digest |
-| ---------- | ---------------- | --------------------------------------------------------------------------------------- | ---------------- | ----------------- | -------------- |
-| `full-ppr` | `evidence-ready` | none                                                                                    | 18 / 18          | `67e7ba09…655d5d` | `dd74455d…`    |
-| `half-ppr` | `insufficient`   | `calibration_K_one-to-four_coverage_shortfall_above_maximum`                            | 17 / 18          | `fb636ad5…f88ac`  | `66c5c9a4…`    |
-| `standard` | `insufficient`   | the K blocker above, plus `calibration_WR_five-to-eight_availability_mae_above_maximum` | 16 / 18          | `b779d5c1…1dbc7`  | `ecf42385…`    |
+| Profile                 | Current artifact state | Cell blockers   | Releasable cells | Artifact checksum | Scoring digest |
+| ----------------------- | ---------------------- | --------------- | ---------------- | ----------------- | -------------- |
+| `full-ppr`              | `evidence-ready`       | none            | 18 / 18          | `fa0868a1…92428`  | `dd74455d…`    |
+| `half-ppr`              | `evidence-ready`       | none            | 18 / 18          | `65071929…bd7f`   | `66c5c9a4…`    |
+| `standard`              | `evidence-ready`       | none            | 18 / 18          | `5882b7e1…744f`   | `ecf42385…`    |
+| `espn-standard-2pt`     | `insufficient`         | D/ST, 5–8 weeks | 17 / 18          | `e870faab…3adf`   | `6a2ce8c9…`    |
+| `espn-standard-2pt-nxm` | `insufficient`         | D/ST, 5–8 weeks | 17 / 18          | `e3f5fb77…7165`   | `d0e49cad…`    |
 
-All three graded 2,040 forecasts across 68 batches, converged 144/144 strata, completed all 18
-position/horizon sample cells, and pinned the same seven source seasons and the same
-model/policy/interval versions. Each run took about 3.7 hours.
+The first three rows are append-only gate re-evaluations of the July 28 v8 validation evidence.
+They clear the current evidence-based availability rule without changing any forecast. The two ESPN
+rows are fresh v9 validations with complete D/ST scoring and native `--full` source lineage. Each
+v9 report graded 3,264 forecasts, completed 68 of 68 batches and 18 of 18 cells, skipped zero rows,
+and converged 144 of 144 diagnostics. Their only blocker is statistical undercoverage for D/ST with
+5–8 remaining weeks: 0 of 4 walk-forward blocks covered. Admission is intentionally cell-scoped, so
+that one cell publishes nothing while the other 17 remain independently releasable.
 
-All three are **admissible** — but read that precisely. Under the per-cell admission policy ratified
-2026-07-22, a per-cell blocker is carried into admission and the live release gate withholds exactly
-that cell while every clean cell publishes; only a global or portfolio blocker rejects outright. So
-`full-ppr` is the only profile with a clean zero-blocker report. `half-ppr` would publish with the
-kicker one-to-four cell permanently withheld, and `standard` would additionally withhold WR
-five-to-eight — a heavily used cell, which makes `standard` the weakest of the three.
+All five rows are provisioned in `first_party_ros_champion_artifacts`. Older rows remain immutable
+audit history, and production selects the newest compatible artifact for each exact scoring
+identity. Leagues with byte-identical scoring reuse the same deterministic simulations rather than
+multiplying work by league membership; a distinct admitted profile adds one separate scoring pass.
 
-The differences are genuine consequences of independent validation, not noise: the representative
-sample is chosen by recent-production quantiles, so removing reception points reorders which
-receivers are sampled and changes the availability behaviour those cells are graded on.
-
-None of these artifacts has been provisioned. Provisioning is a separate, deliberate operational
-step per profile, and admitting a second profile widens per-job publication work — confirm the
-headroom above first.
-
-**Before admitting a second profile, confirm publication headroom.** Publication benchmarks at about
-4.77 s marginal per released player against `projection-refresh`'s 1,800 s `expireInSeconds` — about
-377 players per job, measured on a fixture with far less feature history than production. Admitting a
-second profile adds that profile's leagues to the same job. Measure before, not after.
-
-A per-profile validation run costs about 3.4 hours of single-core CPU (the v8 full-PPR run recorded
-12,190 s). Two profiles can run in parallel; each holds roughly 1.4 GB resident, so two fit
-comfortably on a six-core/14 GB host. The run has no checkpointing — an interrupted run restarts
-from zero — so detach it from whatever shell launched it (`setsid nohup … &`, stdout redirected to
-the report path) rather than relying on a terminal or tool session staying alive for four hours.
+The two D/ST-complete v9 validations took 22,974 and 23,227 seconds (about 6 hours 23 minutes and 6
+hours 27 minutes) when run in parallel on the current host. The run has no checkpointing, so an
+interrupted validation restarts from zero. Detach it from the launching shell and redirect stdout to
+the report path. `projection-refresh` allows 28,800 seconds for the full shared NFL universe; do not
+reduce that timeout below the measured validation envelope without a separate production benchmark.
 
 Redirect the report through `npm run --silent`, or invoke `tsx` directly. Under some environments —
 notably a scrubbed one such as `env -i` — `npm run` writes its two-line `> package@version` banner to
@@ -489,10 +481,10 @@ also remains authoritative until a later report clears that cell and is explicit
 These pre-kickoff decisions are frozen in Amendment 4 of the
 [2026 untouched protocol](./ros-v6-2026-untouched-protocol.md).
 
-The ROS validator is intentionally expensive: the v4 reference run took about 2.7 hours on one CPU
-core (four season-locked policies, 2,040 12288-path forecasts at current defaults, and 144
-16384-path convergence references). It writes progress phases to stderr and final JSON to stdout —
-redirect stdout to keep a report; nothing is written to disk otherwise. The
+The ROS validator is intentionally expensive. The current D/ST-complete v9 profile runs took about
+6.4 hours apiece on the production host: four season-locked policies, 3,264 12,288-path forecasts,
+and 144 16,384-path convergence references. It writes progress phases to stderr and final JSON to
+stdout — redirect stdout to keep a report; nothing is written to disk otherwise. The
 `--allow-incomplete` flag keeps a diagnostic run at exit zero while preserving `report.state` and
 all blockers; omit it for a release check, where any blocker must produce a non-zero exit. The
 validator downloads official artifacts directly and performs no database writes.

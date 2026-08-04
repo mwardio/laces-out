@@ -58,6 +58,18 @@ function pin(
 }
 
 describe("first-party ROS shadow window", () => {
+  it("opens the full regular-season window before Week 1", () => {
+    expect(
+      firstPartyRosWindow([scheduled(1), scheduled(18)], new Date("2026-08-03T12:00:00Z")),
+    ).toEqual({
+      currentWeek: 1,
+      currentWeekStarted: false,
+      asOfWeek: 0,
+      windowStartWeek: 1,
+      windowEndWeek: 18,
+    });
+  });
+
   it("begins with the current week before any game kicks off", () => {
     expect(firstPartyRosWindow([final(1), scheduled(2)], now)).toEqual({
       currentWeek: 2,
@@ -212,6 +224,12 @@ describe("first-party ROS live checksum", () => {
         checksum: "b".repeat(64),
       },
       weeklyPins: [pin(8), pin(7)],
+      championArtifacts: [
+        { scoringProfileKey: "profile-b", artifactChecksum: "d".repeat(64) },
+        { scoringProfileKey: "profile-a", artifactChecksum: "c".repeat(64) },
+      ],
+      publicationScopeChecksum: "e".repeat(64),
+      candidateProviderChecksum: "f".repeat(64),
       evidence: {
         heldOutSeasons: 0,
         batches: 0,
@@ -220,6 +238,7 @@ describe("first-party ROS live checksum", () => {
       },
       gateInputs: {
         scheduleFresh: true,
+        candidateSourceFresh: true,
         weeklySourcePresent: true,
         weeklySourceFresh: true,
         candidatePairsPersisted: false,
@@ -233,6 +252,12 @@ describe("first-party ROS live checksum", () => {
     expect(
       firstPartyRosLiveChecksum({
         ...base,
+        championArtifacts: [...base.championArtifacts].reverse(),
+      }),
+    ).toBe(checksum);
+    expect(
+      firstPartyRosLiveChecksum({
+        ...base,
         weeklyPins: [pin(7), pin(8, "c".repeat(64))],
       }),
     ).not.toBe(checksum);
@@ -241,6 +266,21 @@ describe("first-party ROS live checksum", () => {
         ...base,
         gateInputs: { ...base.gateInputs, candidatePairsPersisted: true },
       }),
+    ).not.toBe(checksum);
+    expect(
+      firstPartyRosLiveChecksum({
+        ...base,
+        championArtifacts: [
+          ...base.championArtifacts.slice(0, 1),
+          { ...base.championArtifacts[1], artifactChecksum: "f".repeat(64) },
+        ],
+      }),
+    ).not.toBe(checksum);
+    expect(
+      firstPartyRosLiveChecksum({ ...base, publicationScopeChecksum: "0".repeat(64) }),
+    ).not.toBe(checksum);
+    expect(
+      firstPartyRosLiveChecksum({ ...base, candidateProviderChecksum: "1".repeat(64) }),
     ).not.toBe(checksum);
     expect(
       firstPartyRosShadowIdempotencyKey({ season: 2026, window, inputChecksum: checksum }),

@@ -2,11 +2,7 @@ import { createHash } from "node:crypto";
 
 import { describe, expect, it } from "vitest";
 
-import {
-  leagueScoringPositionComponents,
-  normalizeLeagueScoringProfile,
-  type StoredLeagueScoringRule,
-} from "./league-scoring.js";
+import { normalizeLeagueScoringProfile, type StoredLeagueScoringRule } from "./league-scoring.js";
 import {
   ROS_SCORING_PROFILE_KEYS,
   rosAvailableProjectionStatIds,
@@ -14,14 +10,10 @@ import {
   rosScoringProfileCatalog,
 } from "./ros-scoring-profiles.js";
 import { projectionScoringProfileKeyForPosition } from "./scoring-position-keys.js";
-import {
-  projectionScoringProfileKey,
-  scoreProjectionStatComponents,
-  type ProjectionScoringProfile,
-} from "./scoring.js";
+import { projectionScoringProfileKey, scoreProjectionStatComponents } from "./scoring.js";
 
 describe("rosScoringProfileCatalog", () => {
-  it("keeps the three admitted redraft profiles first, in fixed order", () => {
+  it("keeps the three legacy redraft profiles first, in fixed order", () => {
     expect([...ROS_SCORING_PROFILE_KEYS].slice(0, 3)).toEqual(["full-ppr", "half-ppr", "standard"]);
     expect(
       rosScoringProfileCatalog()
@@ -43,7 +35,7 @@ describe("rosScoringProfileCatalog", () => {
     ]);
   });
 
-  it("pins the three admitted profiles' scoringProfileKey strings verbatim", () => {
+  it("pins the three legacy profiles' scoringProfileKey strings verbatim", () => {
     // These are the byte-frozen identities: apps/web/src/app/methodology/evidence.ts publishes
     // sha256 digests of these exact strings as ROS evidence. A change here means the admitted
     // profile's semantic key changed shape, which must be fixed rather than re-pinned.
@@ -306,48 +298,27 @@ describe("ESPN-shaped catalog entries", () => {
   ];
 
   /** The positions the ROS rail releases — the scope compared by per-cell identity. */
-  const RAIL_POSITIONS = ["QB", "RB", "WR", "TE", "K"] as const;
-
-  /** The normalized profile restricted to what any rail position can be scored on. */
-  function railSubsetKey(profile: ProjectionScoringProfile): string {
-    const railVocabulary = new Set(
-      RAIL_POSITIONS.flatMap((position) => [...leagueScoringPositionComponents(position)]),
-    );
-    return projectionScoringProfileKey({
-      ...profile,
-      rules: profile.rules.filter((item) => railVocabulary.has(item.statId)),
-    });
-  }
+  const RAIL_POSITIONS = ["QB", "RB", "WR", "TE", "K", "DST"] as const;
 
   /**
-   * These two entries were introduced when whole-key equality was the route to publishing: a
-   * league's normalized profile then contained only QB/RB/WR/TE/K rules, so a catalog profile equal
-   * to it byte-for-byte made every whole-key comparison succeed.
-   *
-   * The D/ST flip ends that coincidence — the leagues' normalized profiles now also carry their
-   * D/ST rules — and per-cell identity makes that safe: matching is position-scoped
-   * (`matchFirstPartyRosPositions`), so what has to hold is that every RAIL position's scoped key is
-   * byte-equal, which is what is asserted below. **The catalog rule lists are not touched**: they
-   * are the byte-frozen identities admitted artifacts' held-out evidence was measured under, and
-   * `apps/web/src/app/methodology/evidence.ts` publishes their digests. Re-deriving them from the
-   * post-flip normalized profile would silently redefine what that evidence means.
+   * These ESPN profiles are exact transcriptions of the current league shapes. Their semantic
+   * identities include D/ST because the live rail now models and publishes all six positions.
+   * Changing either digest requires a new held-out validation report and a new admitted artifact.
    */
   it.each([
     {
       key: "espn-standard-2pt" as const,
       rows: ESPN_STANDARD_2PT_SOURCE_ROWS,
-      frozenKey:
-        '[{"statId":"extra_points_made","points":1,"bonuses":[]},{"statId":"extra_points_missed","points":-1,"bonuses":[]},{"statId":"field_goals_made_0_39","points":3,"bonuses":[]},{"statId":"field_goals_made_40_49","points":4,"bonuses":[]},{"statId":"field_goals_made_50_59","points":5,"bonuses":[]},{"statId":"field_goals_made_60_plus","points":5,"bonuses":[]},{"statId":"field_goals_missed","points":-1,"bonuses":[]},{"statId":"fumble_recovery_touchdowns","points":6,"bonuses":[]},{"statId":"fumbles_lost","points":-2,"bonuses":[]},{"statId":"passing_interceptions","points":-2,"bonuses":[]},{"statId":"passing_touchdowns","points":4,"bonuses":[]},{"statId":"passing_two_point_conversions","points":2,"bonuses":[]},{"statId":"passing_yards","points":0.04,"bonuses":[]},{"statId":"receiving_touchdowns","points":6,"bonuses":[]},{"statId":"receiving_two_point_conversions","points":2,"bonuses":[]},{"statId":"receiving_yards","points":0.1,"bonuses":[]},{"statId":"rushing_touchdowns","points":6,"bonuses":[]},{"statId":"rushing_two_point_conversions","points":2,"bonuses":[]},{"statId":"rushing_yards","points":0.1,"bonuses":[]},{"statId":"special_teams_touchdowns","points":6,"bonuses":[]}]',
+      frozenDigest: "6a2ce8c94a3733673f17056d2ffafc27dca00c1ab93d17ce58a1bdce9b6d6843",
     },
     {
       key: "espn-standard-2pt-nxm" as const,
       rows: ESPN_STANDARD_2PT_NXM_SOURCE_ROWS,
-      frozenKey:
-        '[{"statId":"extra_points_made","points":1,"bonuses":[]},{"statId":"field_goals_made_0_39","points":3,"bonuses":[]},{"statId":"field_goals_made_40_49","points":4,"bonuses":[]},{"statId":"field_goals_made_50_59","points":5,"bonuses":[]},{"statId":"field_goals_made_60_plus","points":5,"bonuses":[]},{"statId":"field_goals_missed","points":-1,"bonuses":[]},{"statId":"fumble_recovery_touchdowns","points":6,"bonuses":[]},{"statId":"fumbles_lost","points":-2,"bonuses":[]},{"statId":"passing_interceptions","points":-2,"bonuses":[]},{"statId":"passing_touchdowns","points":4,"bonuses":[]},{"statId":"passing_two_point_conversions","points":2,"bonuses":[]},{"statId":"passing_yards","points":0.04,"bonuses":[]},{"statId":"receiving_touchdowns","points":6,"bonuses":[]},{"statId":"receiving_two_point_conversions","points":2,"bonuses":[]},{"statId":"receiving_yards","points":0.1,"bonuses":[]},{"statId":"rushing_touchdowns","points":6,"bonuses":[]},{"statId":"rushing_two_point_conversions","points":2,"bonuses":[]},{"statId":"rushing_yards","points":0.1,"bonuses":[]},{"statId":"special_teams_touchdowns","points":6,"bonuses":[]}]',
+      frozenDigest: "d0e49cad7fbbdf20552427d107bea2cd9a6c2f735b4d67745d5e5ca9e85832eb",
     },
   ])(
-    "matches the $key source rows at every rail position, with its own key byte-frozen",
-    ({ key, rows, frozenKey }) => {
+    "matches the $key source rows at every rail position, with its digest byte-frozen",
+    ({ key, rows, frozenDigest }) => {
       const result = normalizeLeagueScoringProfile({
         id: `${key}-fixture`,
         rows,
@@ -357,9 +328,7 @@ describe("ESPN-shaped catalog entries", () => {
       if (result.state !== "available") throw new Error("unreachable — asserted above");
 
       const entry = rosScoringProfile(key);
-      // Byte-frozen: a change here means the admitted artifact's identity moved, which must be
-      // fixed rather than re-pinned.
-      expect(entry.scoringProfileKey).toBe(frozenKey);
+      expect(entry.digest).toBe(frozenDigest);
 
       // What the gate actually compares: each rail position's scoped key, byte-equal.
       for (const position of RAIL_POSITIONS) {
@@ -370,29 +339,10 @@ describe("ESPN-shaped catalog entries", () => {
           "[]",
         );
       }
-      // And the catalog entry is exactly the rail-scoped subset of the league's own profile.
-      expect(entry.scoringProfileKey).toBe(railSubsetKey(result.profile));
-
-      // The whole keys legitimately differ now, and they differ only by D/ST-only rules, which
-      // per-cell identity absorbs. The catalog profile stays D/ST-free, so the two
-      // catalog entries' `scoresTeamDefense: false` in the methodology manifest stays true.
+      // The whole semantic identity is exact too, including D/ST rules.
       const wholeKey = projectionScoringProfileKey(result.profile);
-      expect(wholeKey).not.toBe(entry.scoringProfileKey);
-      const railVocabulary = new Set(
-        RAIL_POSITIONS.flatMap((position) => [...leagueScoringPositionComponents(position)]),
-      );
-      const extra = result.profile.rules
-        .filter((item) => !railVocabulary.has(item.statId))
-        .map((item) => item.statId);
-      expect(extra.length).toBeGreaterThan(0);
-      for (const statId of extra) {
-        expect(leagueScoringPositionComponents("DST").has(statId), statId).toBe(true);
-      }
-      expect(extra).toContain("defensive_two_point_returns");
-      expect(extra).toContain("one_point_safeties");
-      for (const item of entry.profile.rules) {
-        expect(railVocabulary.has(item.statId), item.statId).toBe(true);
-      }
+      expect(wholeKey).toBe(entry.scoringProfileKey);
+      expect(projectionScoringProfileKeyForPosition(entry.profile, "DST")).not.toBe("[]");
     },
   );
 

@@ -193,8 +193,8 @@ async function start(): Promise<void> {
         // data bootstrap and replayed only after a schema change or explicit operator refresh.
         await scheduleRefresher.refresh(effectiveJob.season, forceCurrentInputs);
         await projectionService.refreshProjections(effectiveJob, context);
-        // ROS consumes only the immutable weekly artifacts written above. It remains isolated from
-        // projection sets and recommendations until its held-out evidence and interval gate clear.
+        // ROS consumes only the immutable weekly artifacts written above. An admitted current-
+        // catalog artifact may publish only after its held-out evidence and live gates clear.
         await rosProjectionShadowService.refreshProjections(effectiveJob, context);
       },
     },

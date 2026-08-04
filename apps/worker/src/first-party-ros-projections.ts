@@ -3,12 +3,14 @@ import { createHash } from "node:crypto";
 import {
   dataSources,
   firstPartyRosChampionArtifacts,
+  leagueSeasons,
   nflScheduleObservations,
   playerProjections,
   playerRosProjectionSummaries,
   projectionModelRuns,
   projectionObservations,
   projectionSets,
+  scoringRules,
   syncRuns,
   type Database,
 } from "@fantasy/db";
@@ -18,6 +20,7 @@ import {
   FIRST_PARTY_ROS_MINIMUM_SAMPLES,
   FIRST_PARTY_ROS_MODEL_VERSION,
   FIRST_PARTY_PROJECTION_MODEL_VERSION,
+  rosScoringProfileCatalog,
   type FirstPartyRosChampionPolicy,
   type ProjectionScoringProfile,
 } from "@fantasy/projections";
@@ -72,18 +75,34 @@ export interface FirstPartyRosPublicationTarget {
 
 export interface FirstPartyRosCandidateContext {
   readonly artifact: LoadedFirstPartyRosChampionArtifact;
+  /** Full admitted field used to arbitrate a league before expensive candidate simulation. */
+  readonly artifacts: readonly LoadedFirstPartyRosChampionArtifact[];
   readonly season: number;
   readonly window: FirstPartyRosWindow;
   readonly now: Date;
 }
 
 export interface FirstPartyRosCandidateProvider {
+  /**
+   * Cheap fingerprint of every source/configuration input the expensive target build consumes.
+   * It participates in orchestration idempotency, so a changed feed or simulation contract can
+   * never be mistaken for an unchanged hourly refresh.
+   */
+  sourceChecksum(input: {
+    readonly season: number;
+    readonly window: FirstPartyRosWindow;
+  }): Promise<string>;
   buildTargets(
     context: FirstPartyRosCandidateContext,
   ): Promise<readonly FirstPartyRosPublicationTarget[]>;
 }
 
 export const nullFirstPartyRosCandidateProvider: FirstPartyRosCandidateProvider = {
+  sourceChecksum() {
+    return Promise.resolve(
+      createHash("sha256").update("null-first-party-ros-provider-v1").digest("hex"),
+    );
+  },
   buildTargets() {
     return Promise.resolve([]);
   },
@@ -93,8 +112,9 @@ export const FIRST_PARTY_ROS_SHADOW_SOURCE_KEY = "laces-out.projections.first-pa
 export const FIRST_PARTY_ROS_SHADOW_MODEL_VERSION = `${FIRST_PARTY_ROS_MODEL_VERSION}-shadow-rail-v1`;
 
 const scheduleSourceKey = (season: number) => `nflverse.schedules.${season}`;
+const candidateRosterSourceKey = (season: number) => `nflverse.weekly-rosters.${season}`;
 const checkIntervalMinutes = 60;
-const sourceSchemaVersion = 1;
+const sourceSchemaVersion = 2;
 const regularSeasonEndWeek = 18;
 
 export interface FirstPartyRosScheduleFact {
@@ -174,9 +194,16 @@ interface RosChecksumInput {
   readonly schedule: { readonly sourceKey: string; readonly checksum: string };
   readonly weeklySource: { readonly sourceKey: string; readonly checksum: string } | null;
   readonly weeklyPins: readonly FirstPartyRosWeeklyPin[];
+  readonly championArtifacts: readonly {
+    readonly scoringProfileKey: string;
+    readonly artifactChecksum: string;
+  }[];
+  readonly publicationScopeChecksum: string;
+  readonly candidateProviderChecksum: string;
   readonly evidence: FirstPartyRosEvidence;
   readonly gateInputs: {
     readonly scheduleFresh: boolean;
+    readonly candidateSourceFresh: boolean;
     readonly weeklySourcePresent: boolean;
     readonly weeklySourceFresh: boolean;
     readonly candidatePairsPersisted: boolean;
@@ -297,6 +324,9 @@ export function firstPartyRosLiveChecksum(input: RosChecksumInput): string {
     simulationModelVersion: FIRST_PARTY_ROS_MODEL_VERSION,
     ...input,
     weeklyPins: [...input.weeklyPins].sort((left, right) => left.week - right.week),
+    championArtifacts: [...input.championArtifacts].sort((left, right) =>
+      left.scoringProfileKey.localeCompare(right.scoringProfileKey),
+    ),
   };
   return createHash("sha256")
     .update(JSON.stringify(normalizeForChecksum(normalized)))
@@ -402,7 +432,7 @@ function sourceIsFresh(source: ManagedSourceState, now: Date): boolean {
     return false;
   }
   const maximumAgeMinutes = source.checkIntervalMinutes * 3 + 30;
-  return now.getTime() - source.lastCheckedAt.getTime() <= maximumAgeMinutes * 60_000;
+  return now.getTime() - source.lastSuccessfulAt.getTime() <= maximumAgeMinutes * 60_000;
 }
 
 function latestDate(values: readonly Date[]): Date {
@@ -414,23 +444,34 @@ function earliestDate(values: readonly Date[]): Date {
 }
 
 /**
- * Shadow-only ROS orchestration. It audits immutable weekly outputs already in PostgreSQL and
- * records a degraded model run; it deliberately writes no projection observations, sets,
- * summaries, or recommendation-facing rows.
+ * ROS orchestration over immutable weekly inputs. It always records the independent shadow audit;
+ * when a current-catalog champion artifact and every live gate clear, it also publishes a
+ * league-scoped projection set without replacing the prior good set on a withheld run.
  */
 export class FirstPartyRosProjectionShadowService implements ProjectionRefreshService {
   readonly #database: Database;
   readonly #now: () => Date;
   readonly #candidateProvider: FirstPartyRosCandidateProvider;
+  readonly #acceptedScoringProfileKeys: ReadonlySet<string>;
 
   constructor(input: {
     readonly database: Database;
     readonly now?: () => Date;
     readonly candidateProvider?: FirstPartyRosCandidateProvider;
+    /**
+     * Catalog identities eligible for publication. Production deliberately defaults to the
+     * running catalog; the override keeps isolated contract fixtures independent from product
+     * profile definitions while exercising the same retirement behavior.
+     */
+    readonly acceptedScoringProfileKeys?: readonly string[];
   }) {
     this.#database = input.database;
     this.#now = input.now ?? (() => new Date());
     this.#candidateProvider = input.candidateProvider ?? nullFirstPartyRosCandidateProvider;
+    this.#acceptedScoringProfileKeys = new Set(
+      input.acceptedScoringProfileKeys ??
+        rosScoringProfileCatalog().map((profile) => profile.scoringProfileKey),
+    );
   }
 
   async refreshProjections(job: ProjectionRefreshJob, context: WorkerJobContext): Promise<void> {
@@ -459,6 +500,7 @@ export class FirstPartyRosProjectionShadowService implements ProjectionRefreshSe
         .where(
           inArray(dataSources.key, [
             scheduleSourceKey(job.season),
+            candidateRosterSourceKey(job.season),
             FIRST_PARTY_PROJECTION_SOURCE_KEY,
           ]),
         );
@@ -494,6 +536,7 @@ export class FirstPartyRosProjectionShadowService implements ProjectionRefreshSe
       }
 
       const weeklySource = byKey.get(FIRST_PARTY_PROJECTION_SOURCE_KEY);
+      const candidateSource = byKey.get(candidateRosterSourceKey(job.season));
       const weeklyRunRows = weeklySource
         ? await this.#database
             .select({
@@ -577,6 +620,7 @@ export class FirstPartyRosProjectionShadowService implements ProjectionRefreshSe
       };
       const gateInputs = {
         scheduleFresh: sourceIsFresh(scheduleSource, now),
+        candidateSourceFresh: candidateSource ? sourceIsFresh(candidateSource, now) : false,
         weeklySourcePresent: weeklySource !== undefined,
         weeklySourceFresh: weeklySource ? sourceIsFresh(weeklySource, now) : false,
         candidatePairsPersisted: false,
@@ -586,6 +630,12 @@ export class FirstPartyRosProjectionShadowService implements ProjectionRefreshSe
         ...gateInputs,
         weeklyPins,
         evidence,
+      });
+      const artifacts = await this.#loadChampionArtifacts(job.season);
+      const publicationScopeChecksum = await this.#publicationScopeChecksum(job.season);
+      const candidateProviderChecksum = await this.#candidateProvider.sourceChecksum({
+        season: job.season,
+        window,
       });
       const inputChecksum = firstPartyRosLiveChecksum({
         season: job.season,
@@ -598,6 +648,12 @@ export class FirstPartyRosProjectionShadowService implements ProjectionRefreshSe
           ? { sourceKey: weeklySource.key, checksum: weeklySource.lastChecksum }
           : null,
         weeklyPins,
+        championArtifacts: artifacts.map((artifact) => ({
+          scoringProfileKey: artifact.scoringProfileKey,
+          artifactChecksum: artifact.artifactChecksum,
+        })),
+        publicationScopeChecksum,
+        candidateProviderChecksum,
         evidence,
         gateInputs,
       });
@@ -627,6 +683,22 @@ export class FirstPartyRosProjectionShadowService implements ProjectionRefreshSe
         window,
         inputChecksum,
       });
+      const [completedRun] = await this.#database
+        .select({ id: syncRuns.id })
+        .from(syncRuns)
+        .where(and(eq(syncRuns.idempotencyKey, idempotencyKey), eq(syncRuns.state, "complete")))
+        .limit(1);
+      if (completedRun) {
+        await this.#recordSuccess(managed.id, now, inputChecksum, {
+          season: job.season,
+          window: `${window.windowStartWeek}-${window.windowEndWeek}`,
+          asOfWeek: window.asOfWeek,
+          modelVersion: FIRST_PARTY_ROS_SHADOW_MODEL_VERSION,
+          qualityState: plan.qualityState,
+          result: "unchanged",
+        });
+        return;
+      }
 
       // Fail-closed release rail. With no admitted champion artifact this is skipped entirely and
       // the shadow audit below is byte-for-byte unchanged. A persisted artifact only authorizes
@@ -637,24 +709,28 @@ export class FirstPartyRosProjectionShadowService implements ProjectionRefreshSe
       // every target is arbitrated to exactly one artifact (`selectFirstPartyRosArtifactForLeague`
       // over the full loaded list) before it may publish — a league can never receive two sets
       // scored under different artifacts in one window.
-      const artifacts = await this.#loadChampionArtifacts(job.season);
       let published = 0;
       let artifactInvalid = false;
       let arbitrationSkippedTargets = 0;
-      for (const artifact of artifacts) {
-        const attempt = await this.#attemptPublication({
-          artifact,
-          artifacts,
-          managedSourceId: managed.id,
-          season: job.season,
-          window,
-          sourceAsOf,
-          now,
-          context,
-        });
-        published += attempt.published;
-        artifactInvalid = artifactInvalid || attempt.artifactInvalid;
-        arbitrationSkippedTargets += attempt.arbitrationSkippedTargets;
+      // The live candidate pool comes from the current weekly-roster snapshot. The status API has
+      // always reported a stale snapshot as withheld; enforce the same fact on the write path so a
+      // stale-but-checksummed roster can never mint a new ROS set while the UI says it is unready.
+      if (gateInputs.scheduleFresh && gateInputs.candidateSourceFresh) {
+        for (const artifact of artifacts) {
+          const attempt = await this.#attemptPublication({
+            artifact,
+            artifacts,
+            managedSourceId: managed.id,
+            season: job.season,
+            window,
+            sourceAsOf,
+            now,
+            context,
+          });
+          published += attempt.published;
+          artifactInvalid = artifactInvalid || attempt.artifactInvalid;
+          arbitrationSkippedTargets += attempt.arbitrationSkippedTargets;
+        }
       }
       const publication = { published, artifactInvalid };
       const publishedTargets = publication.published;
@@ -745,6 +821,7 @@ export class FirstPartyRosProjectionShadowService implements ProjectionRefreshSe
         result: publishedTargets > 0 ? "released" : "shadow_evidence_recorded",
         diagnostics: [
           ...plan.diagnostics,
+          ...(!gateInputs.candidateSourceFresh ? ["candidate_source_not_fresh"] : []),
           // A persisted artifact that fails validity against the running constants means new
           // publication is paused (deploy-before-admit window); say so instead of letting the
           // run read as a routine shadow pass.
@@ -768,6 +845,54 @@ export class FirstPartyRosProjectionShadowService implements ProjectionRefreshSe
       );
       throw error;
     }
+  }
+
+  /**
+   * Fingerprints every league and scoring rule that can change the publication target set. This is
+   * intentionally much cheaper than candidate simulation and makes an unchanged hourly refresh a
+   * persisted no-op without starving a newly synced league or changed scoring profile.
+   */
+  async #publicationScopeChecksum(season: number): Promise<string> {
+    const [leagueRows, ruleRows] = await Promise.all([
+      this.#database
+        .select({
+          id: leagueSeasons.id,
+          provider: leagueSeasons.provider,
+          status: leagueSeasons.status,
+        })
+        .from(leagueSeasons)
+        .where(eq(leagueSeasons.season, season)),
+      this.#database
+        .select({
+          leagueSeasonId: scoringRules.leagueSeasonId,
+          statKey: scoringRules.statKey,
+          providerStatId: scoringRules.providerStatId,
+          operation: scoringRules.operation,
+          points: scoringRules.points,
+          thresholdLow: scoringRules.thresholdLow,
+          thresholdHigh: scoringRules.thresholdHigh,
+        })
+        .from(scoringRules)
+        .innerJoin(leagueSeasons, eq(leagueSeasons.id, scoringRules.leagueSeasonId))
+        .where(eq(leagueSeasons.season, season)),
+    ]);
+    return createHash("sha256")
+      .update(
+        JSON.stringify(
+          normalizeForChecksum({
+            version: "ros-publication-scope-v1",
+            leagues: [...leagueRows].sort((left, right) => left.id.localeCompare(right.id)),
+            scoringRules: [...ruleRows].sort((left, right) => {
+              const league = left.leagueSeasonId.localeCompare(right.leagueSeasonId);
+              if (league !== 0) return league;
+              const stat = left.statKey.localeCompare(right.statKey);
+              if (stat !== 0) return stat;
+              return (left.providerStatId ?? "").localeCompare(right.providerStatId ?? "");
+            }),
+          }),
+        ),
+      )
+      .digest("hex");
   }
 
   /**
@@ -796,19 +921,24 @@ export class FirstPartyRosProjectionShadowService implements ProjectionRefreshSe
       .orderBy(desc(firstPartyRosChampionArtifacts.admittedAt))
       .limit(MAXIMUM_CHAMPION_ARTIFACT_ROWS);
 
-    const loaded = rows.map((row) => ({
-      season: row.season,
-      scoringProfileKey: row.scoringProfileKey,
-      modelVersion: row.modelVersion,
-      policyVersion: row.policyVersion,
-      calibrationVersion: row.calibrationVersion,
-      evidenceThroughSeason: row.evidenceThroughSeason,
-      sourceChecksums: row.sourceChecksums,
-      policy: row.policy as unknown as FirstPartyRosChampionPolicy,
-      releaseGate: row.releaseGate,
-      artifactChecksum: row.artifactChecksum,
-      admittedAt: row.admittedAt,
-    }));
+    const loaded = rows
+      // A catalog identity change deliberately retires earlier evidence. Keeping an old artifact
+      // on the publication rail after the running catalog stopped naming it would let superseded
+      // semantics compete with the replacement artifact during per-league arbitration.
+      .filter((row) => this.#acceptedScoringProfileKeys.has(row.scoringProfileKey))
+      .map((row) => ({
+        season: row.season,
+        scoringProfileKey: row.scoringProfileKey,
+        modelVersion: row.modelVersion,
+        policyVersion: row.policyVersion,
+        calibrationVersion: row.calibrationVersion,
+        evidenceThroughSeason: row.evidenceThroughSeason,
+        sourceChecksums: row.sourceChecksums,
+        policy: row.policy as unknown as FirstPartyRosChampionPolicy,
+        releaseGate: row.releaseGate,
+        artifactChecksum: row.artifactChecksum,
+        admittedAt: row.admittedAt,
+      }));
 
     // Rows arrive newest first, so the first per key is the latest admission for that profile.
     const latestByProfile = new Map<string, LoadedFirstPartyRosChampionArtifact>();
@@ -847,6 +977,7 @@ export class FirstPartyRosProjectionShadowService implements ProjectionRefreshSe
     }
     const targets = await this.#candidateProvider.buildTargets({
       artifact: input.artifact,
+      artifacts: input.artifacts,
       season: input.season,
       window: input.window,
       now: input.now,
@@ -1040,8 +1171,8 @@ export class FirstPartyRosProjectionShadowService implements ProjectionRefreshSe
         })
         .returning({ id: projectionSets.id });
       if (!set) throw new Error("ROS release projection set insert returned no row");
-      for (const row of rows) {
-        await transaction.insert(playerProjections).values({
+      await transaction.insert(playerProjections).values(
+        rows.map((row) => ({
           projectionSetId: set.id,
           playerId: row.playerId,
           meanPoints: row.playerProjection.meanPoints,
@@ -1049,8 +1180,10 @@ export class FirstPartyRosProjectionShadowService implements ProjectionRefreshSe
           ceilingPoints: row.playerProjection.ceilingPoints,
           confidence: null,
           components: row.playerProjection.components,
-        });
-        await transaction.insert(playerRosProjectionSummaries).values({
+        })),
+      );
+      await transaction.insert(playerRosProjectionSummaries).values(
+        rows.map((row) => ({
           projectionSetId: set.id,
           sourceSyncRunId: run.id,
           playerId: row.playerId,
@@ -1073,8 +1206,8 @@ export class FirstPartyRosProjectionShadowService implements ProjectionRefreshSe
           seedHash: row.summary.seedHash,
           inputChecksum,
           createdAt: now,
-        });
-      }
+        })),
+      );
       await transaction
         .update(syncRuns)
         .set({ state: "complete", finishedAt: now, recordsWritten: rows.length })

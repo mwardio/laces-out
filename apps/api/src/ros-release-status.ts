@@ -27,7 +27,7 @@ export const ROS_WITHHOLDING_REASONS = [
   "scoring-rules-unsupported",
   "no-admitted-scoring-profile",
   "incomplete-schedule",
-  "missing-roster-snapshot",
+  "missing-candidate-pool",
   "insufficient-candidate-inputs",
   "non-converged-cell",
   "stale-source",
@@ -89,9 +89,8 @@ export const ROS_LEAGUE_POSITIONS: readonly RosCellPosition[] = [
  * `reasons` distinguishes two causes: `position-unsupported` is followed by the normalization
  * messages that made this position unscoreable; `scoring-profile-position-mismatch` means the
  * position normalizes fine but its scoped rules do not equal any admitted artifact's scoped rules.
- * Reported for all six positions on every league, D/ST included: this states normalization and
- * catalog-match truth for a position, not whether the ROS rail currently ships that position's
- * forecasts (today only QB/RB/WR/TE/K).
+ * Reported for all six positions on every league, D/ST included. This states normalization and
+ * admitted-artifact matching truth for every position the ROS rail ships.
  */
 export interface RosLeaguePositionReadiness {
   readonly position: RosCellPosition;
@@ -206,9 +205,9 @@ export interface RosLeagueInputRow {
   /** Always all six of `ROS_LEAGUE_POSITIONS`, mirroring `normalizeLeagueScoringProfile`. */
   readonly positions: readonly RosLeaguePositionSupport[];
   readonly scheduleComplete: boolean;
-  readonly rosterSnapshotAt: Date | null;
+  readonly candidatePoolSnapshotAt: Date | null;
   readonly candidateInputCount: number;
-  readonly sourceAsOf: Date | null;
+  readonly sourceVerifiedAt: Date | null;
   readonly nonConvergedCells: number;
 }
 
@@ -311,20 +310,22 @@ export function deriveLeagueReadiness(input: {
 
   return input.leagues.map((league) => {
     const reasons = new Set<RosWithholdingReason>();
+    const positions = derivePositionReadiness(league, admittedPositionKeysByPosition);
+    const hasAdmittedPosition = positions.some((position) => position.decision === "ready");
     if (league.scoringProfileKey === null) {
       // Zero positions supported: normalization itself failed, which is a different fact from
       // "normalizes, but no admitted artifact matches" below.
       reasons.add("scoring-rules-unsupported");
-    } else if (!admitted.has(league.scoringProfileKey)) {
+    } else if (!admitted.has(league.scoringProfileKey) && !hasAdmittedPosition) {
       reasons.add("no-admitted-scoring-profile");
     }
     if (!league.scheduleComplete) reasons.add("incomplete-schedule");
-    if (league.rosterSnapshotAt === null) reasons.add("missing-roster-snapshot");
+    if (league.candidatePoolSnapshotAt === null) reasons.add("missing-candidate-pool");
     if (league.candidateInputCount < MINIMUM_CANDIDATE_INPUTS) {
       reasons.add("insufficient-candidate-inputs");
     }
     if (league.nonConvergedCells > 0) reasons.add("non-converged-cell");
-    if (league.sourceAsOf === null || league.sourceAsOf.getTime() < staleBefore) {
+    if (league.sourceVerifiedAt === null || league.sourceVerifiedAt.getTime() < staleBefore) {
       reasons.add("stale-source");
     }
 
@@ -337,7 +338,7 @@ export function deriveLeagueReadiness(input: {
         league.scoringProfileKey === null
           ? null
           : rosScoringProfileIdentityForKey(league.scoringProfileKey),
-      positions: derivePositionReadiness(league, admittedPositionKeysByPosition),
+      positions,
     };
   });
 }

@@ -43,7 +43,7 @@ const status = {
           digest: "a".repeat(64),
         },
         blockers: ["report_global_blockers_present"],
-        evidenceReport: "reports/ros-validation-v8-standard-2026-07-27.json",
+        evidenceReport: "reports/ros-validation-v8-standard-n8-2026-07-28.json",
       },
     ],
   },
@@ -61,7 +61,7 @@ describe("rosReleaseStatusSchema", () => {
     expect(parsed?.admittedArtifacts.artifacts[0]?.scoringProfile.label).toBe("Full PPR");
     expect(parsed?.scoringProfiles.supported).toHaveLength(1);
     expect(parsed?.scoringProfiles.unsupported[0]?.evidenceReport).toBe(
-      "reports/ros-validation-v8-standard-2026-07-27.json",
+      "reports/ros-validation-v8-standard-n8-2026-07-28.json",
     );
     expect(parsed?.shadowAudit.state).toBe("none");
   });
@@ -184,7 +184,7 @@ describe("rosReleaseStatusSchema", () => {
       "scoring-rules-unsupported",
       "no-admitted-scoring-profile",
       "incomplete-schedule",
-      "missing-roster-snapshot",
+      "missing-candidate-pool",
       "insufficient-candidate-inputs",
       "non-converged-cell",
       "stale-source",

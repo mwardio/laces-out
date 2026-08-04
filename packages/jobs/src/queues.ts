@@ -79,6 +79,8 @@ export interface NotificationSweepJob {
 type QueueConfiguration = Omit<Queue, "name" | "partition" | "policy">;
 
 const DAY_SECONDS = 86_400;
+/** Full-universe ROS simulations are intentionally allowed more time than ordinary queue work. */
+export const SEASON_PROJECTION_REFRESH_EXPIRE_SECONDS = 8 * 60 * 60;
 const queueConfigurations: Readonly<Record<keyof typeof queueNames, QueueConfiguration>> = {
   syncLeague: {
     retryLimit: 5,
@@ -96,7 +98,7 @@ const queueConfigurations: Readonly<Record<keyof typeof queueNames, QueueConfigu
     retryDelay: 60,
     retryBackoff: true,
     retryDelayMax: 30 * 60,
-    expireInSeconds: 30 * 60,
+    expireInSeconds: SEASON_PROJECTION_REFRESH_EXPIRE_SECONDS,
     retentionSeconds: 14 * DAY_SECONDS,
     deleteAfterSeconds: 7 * DAY_SECONDS,
     deadLetter: deadLetterQueueNames.refreshProjections,

@@ -373,7 +373,7 @@ describe("first-party ROS per-position publication matching", () => {
   };
   const artifactKey = projectionScoringProfileKey(artifactProfile);
   const splitKickerKey = projectionScoringProfileKey(splitKickerProfile);
-  const railPositions = ["QB", "RB", "WR", "TE", "K"] as const;
+  const railPositions = ["QB", "RB", "WR", "TE", "K", "DST"] as const;
   /**
    * These cells stamp the ARTIFACT's whole key, which byte-equals the champion policy's evidence
    * identity and so holds the live gate's identity comparison on its fast path. That keeps the
@@ -426,6 +426,7 @@ describe("first-party ROS per-position publication matching", () => {
     expect(decision.scoringProfileMatches).toBe(true);
     expect(decision.withheldPositions).toEqual([
       { position: "K", reason: "scoring-profile-position-mismatch" },
+      { position: "DST", reason: "position-unsupported" },
     ]);
     expect(decision.buckets[0]!.gate.reasons).not.toContain("evidence-identity-mismatch");
     expect(decision.buckets[0]).toMatchObject({
@@ -458,6 +459,7 @@ describe("first-party ROS per-position publication matching", () => {
     expect(decision.canPublish).toBe(true);
     expect(decision.withheldPositions).toEqual([
       { position: "K", reason: "scoring-profile-position-mismatch" },
+      { position: "DST", reason: "position-unsupported" },
     ]);
     expect(decision.reasons).toContain("ros_scoring_profile_position_withheld");
     expect(decision.reasons).not.toContain("ros_champion_artifact_scoring_profile_mismatch");
@@ -478,7 +480,10 @@ describe("first-party ROS per-position publication matching", () => {
       },
     });
 
-    expect(decision.withheldPositions).toEqual([{ position: "K", reason: "position-unsupported" }]);
+    expect(decision.withheldPositions).toEqual([
+      { position: "K", reason: "position-unsupported" },
+      { position: "DST", reason: "position-unsupported" },
+    ]);
     expect(decision.canPublish).toBe(true);
     expect(decision.preservePriorGoodSet).toBe(true);
   });
@@ -603,12 +608,11 @@ describe("first-party ROS per-position publication matching", () => {
       { position: "RB", reason: "position-unsupported" },
       { position: "WR", reason: "position-unsupported" },
       { position: "TE", reason: "position-unsupported" },
+      { position: "DST", reason: "position-unsupported" },
     ]);
   });
 
-  it("states a reason when it withholds a cell for a position this rail does not model", () => {
-    // The provider cannot produce D/ST evidence (candidates are filtered to matched rail
-    // positions), but a hand-built target could. A forced withhold must never be silent.
+  it("states a reason when an artifact does not price a D/ST cell", () => {
     const decision = evaluateFirstPartyRosPublication({
       artifact: keyedArtifact(artifactKey),
       leagueScoringProfileKey: artifactKey,
@@ -624,7 +628,7 @@ describe("first-party ROS per-position publication matching", () => {
     expect(decision.buckets[0]).toMatchObject({
       position: "DST",
       state: "withhold",
-      positionReason: "position-not-on-ros-rail",
+      positionReason: "position-unsupported",
     });
     const payload = buildFirstPartyRosRunPayload({
       artifact: keyedArtifact(artifactKey),
@@ -639,7 +643,19 @@ describe("first-party ROS per-position publication matching", () => {
         position: "DST",
         bucket: "five-to-eight",
         state: "withhold",
-        reasons: [...decision.buckets[0]!.gate.reasons, "position-not-on-ros-rail"],
+        reasons: [...decision.buckets[0]!.gate.reasons, "position-unsupported"],
+      },
+      {
+        position: "DST",
+        bucket: "one-to-four",
+        state: "withhold",
+        reasons: ["position-unsupported"],
+      },
+      {
+        position: "DST",
+        bucket: "nine-plus",
+        state: "withhold",
+        reasons: ["position-unsupported"],
       },
     ]);
     expect(decision.buckets[0]!.gate.reasons.length).toBeGreaterThan(0);
@@ -699,6 +715,24 @@ describe("first-party ROS per-position publication matching", () => {
         bucket: "nine-plus",
         state: "withhold",
         reasons: ["scoring-profile-position-mismatch"],
+      },
+      {
+        position: "DST",
+        bucket: "one-to-four",
+        state: "withhold",
+        reasons: ["position-unsupported"],
+      },
+      {
+        position: "DST",
+        bucket: "five-to-eight",
+        state: "withhold",
+        reasons: ["position-unsupported"],
+      },
+      {
+        position: "DST",
+        bucket: "nine-plus",
+        state: "withhold",
+        reasons: ["position-unsupported"],
       },
     ]);
     expect(payload.metrics.preservePriorGoodSet).toBe(true);
@@ -848,7 +882,7 @@ describe("selectFirstPartyRosArtifactForLeague position-scoped arbitration", () 
       { statId: "field_goals_made_50_plus", points: 5 },
     ],
   };
-  const railPositions = ["QB", "RB", "WR", "TE", "K"] as const;
+  const railPositions = ["QB", "RB", "WR", "TE", "K", "DST"] as const;
 
   function admittedArtifact(
     profile: ProjectionScoringProfile,

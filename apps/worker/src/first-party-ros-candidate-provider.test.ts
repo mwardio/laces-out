@@ -17,7 +17,10 @@ import {
 } from "./first-party-ros-backtest.js";
 import {
   buildFirstPartyRosLeagueTarget,
+  currentFantasyPlayerPool,
   enumerateFirstPartyRosScoringMatchedLeagues,
+  firstPartyRosArtifactOwnedLeagues,
+  firstPartyRosCandidateSourceKeys,
   type FirstPartyRosScoringRuleRow,
 } from "./first-party-ros-candidate-provider.js";
 import { firstPartyAvailableProjectionComponents } from "./first-party-projections.js";
@@ -133,6 +136,48 @@ function withLeague(
 }
 
 describe("enumerateFirstPartyRosScoringMatchedLeagues", () => {
+  it("lets only the winning artifact reach candidate simulation", () => {
+    const fullPprProfile = normalizedProfile(pprRules, "yahoo");
+    const halfPprRows = pprRules.map((rule) =>
+      rule.statKey === "Receptions" ? { ...rule, points: "0.5" } : rule,
+    );
+    const halfPprProfile = normalizedProfile(halfPprRows, "yahoo");
+    const policy = ninePlusPolicy();
+    const fullPprArtifact = artifact(policy, projectionScoringProfileKey(fullPprProfile));
+    const halfPprArtifact = artifact(policy, projectionScoringProfileKey(halfPprProfile));
+    const artifacts = [fullPprArtifact, halfPprArtifact];
+    const leagues = [{ id: "L1", provider: "yahoo" }];
+
+    const fullPprMatches = enumerateFirstPartyRosScoringMatchedLeagues({
+      artifactScoringProfileKey: fullPprArtifact.scoringProfileKey,
+      leagues,
+      rules: halfPprRows,
+      availableStatIds,
+    }).matched;
+    const halfPprMatches = enumerateFirstPartyRosScoringMatchedLeagues({
+      artifactScoringProfileKey: halfPprArtifact.scoringProfileKey,
+      leagues,
+      rules: halfPprRows,
+      availableStatIds,
+    }).matched;
+
+    expect(fullPprMatches).toHaveLength(1);
+    expect(
+      firstPartyRosArtifactOwnedLeagues({
+        artifact: fullPprArtifact,
+        artifacts,
+        leagues: fullPprMatches,
+      }),
+    ).toEqual([]);
+    expect(
+      firstPartyRosArtifactOwnedLeagues({
+        artifact: halfPprArtifact,
+        artifacts,
+        leagues: halfPprMatches,
+      }).map((league) => league.leagueSeasonId),
+    ).toEqual(["L1"]);
+  });
+
   it("matches per position and never widens a mismatched or unnormalizable league", () => {
     const artifactKey = keyForRules(pprRules);
     const halfPprRules = pprRules.map((rule) =>
@@ -161,6 +206,7 @@ describe("enumerateFirstPartyRosScoringMatchedLeagues", () => {
     expect(report.matched[0]!.matchedPositions).toEqual(["QB", "RB", "WR", "TE"]);
     expect(report.matched[0]!.withheldPositions).toEqual([
       { position: "K", reason: "position-unsupported" },
+      { position: "DST", reason: "position-unsupported" },
     ]);
     expect(projectionScoringProfileKey(report.matched[0]!.profile)).toBe(artifactKey);
 
@@ -172,6 +218,7 @@ describe("enumerateFirstPartyRosScoringMatchedLeagues", () => {
       { position: "WR", reason: "scoring-profile-position-mismatch" },
       { position: "TE", reason: "scoring-profile-position-mismatch" },
       { position: "K", reason: "position-unsupported" },
+      { position: "DST", reason: "position-unsupported" },
     ]);
 
     // L3 stays excluded entirely — now with a stated reason per position instead of a bare skip.
@@ -182,6 +229,7 @@ describe("enumerateFirstPartyRosScoringMatchedLeagues", () => {
       { position: "WR", reason: "position-unsupported" },
       { position: "TE", reason: "position-unsupported" },
       { position: "K", reason: "position-unsupported" },
+      { position: "DST", reason: "position-unsupported" },
     ]);
   });
 
@@ -198,6 +246,7 @@ describe("enumerateFirstPartyRosScoringMatchedLeagues", () => {
     expect(report.matched[0]!.matchedPositions).toEqual(["QB", "RB", "WR", "TE"]);
     expect(report.matched[0]!.withheldPositions).toEqual([
       { position: "K", reason: "scoring-profile-position-mismatch" },
+      { position: "DST", reason: "position-unsupported" },
     ]);
     // 5 for 50-59 plus 6 for 60+ is close to 5 for 50+, and close is exactly what is refused.
     expect(projectionScoringProfileKey(report.matched[0]!.profile)).not.toBe(artifactKey);
@@ -282,7 +331,89 @@ describe("enumerateFirstPartyRosScoringMatchedLeagues", () => {
       { position: "WR", reason: "artifact-scoring-profile-key-unreadable" },
       { position: "TE", reason: "artifact-scoring-profile-key-unreadable" },
       { position: "K", reason: "artifact-scoring-profile-key-unreadable" },
+      { position: "DST", reason: "artifact-scoring-profile-key-unreadable" },
     ]);
+  });
+});
+
+describe("currentFantasyPlayerPool", () => {
+  it("pins current-season team stats so live D/ST form invalidates the candidate cache", () => {
+    const keys = firstPartyRosCandidateSourceKeys(2026);
+
+    expect(keys).toContain("nflverse.stats-team-week.2026");
+    expect(keys).toContain("nflverse.stats-team-week.2025");
+  });
+
+  it("builds a preseason candidate pool without fantasy-team roster snapshots", () => {
+    const pool = currentFantasyPlayerPool(
+      [
+        { playerId: "qb-1", position: "QB", season: 2026, week: 1, team: "buf", status: "ACT" },
+        // The roster feed's fantasy position wins even when the canonical NFL catalog describes a
+        // two-way player's primary position differently before this fact reaches the pool builder.
+        {
+          playerId: "two-way-wr",
+          position: "WR",
+          season: 2026,
+          week: 1,
+          team: "JAX",
+          status: "ACT",
+        },
+        { playerId: "rb-cut", position: "RB", season: 2026, week: 1, team: "MIA", status: "CUT" },
+        { playerId: "old", position: "WR", season: 2025, week: 18, team: "NYJ", status: "ACT" },
+      ],
+      [
+        {
+          season: 2026,
+          week: 1,
+          gameId: "2026-1-BUF-MIA",
+          awayTeam: "BUF",
+          homeTeam: "MIA",
+          awayScore: null,
+          homeScore: null,
+          kickoffAt: new Date("2026-09-10T00:00:00.000Z"),
+          status: "scheduled",
+        },
+        {
+          season: 2026,
+          week: 1,
+          gameId: "2026-1-JAX-TEN",
+          awayTeam: "JAX",
+          homeTeam: "TEN",
+          awayScore: null,
+          homeScore: null,
+          kickoffAt: new Date("2026-09-10T00:00:00.000Z"),
+          status: "scheduled",
+        },
+      ],
+      2026,
+    );
+
+    expect(
+      pool
+        .filter((row) => row.position === "DST")
+        .map((row) => row.team)
+        .sort(),
+    ).toEqual(["BUF", "JAX", "MIA", "TEN"]);
+    expect(
+      pool
+        .filter((row) => row.position === "DST")
+        .every(
+          (row) => row.playerId.length === 36 && row.rosterStatus === "active" && row.team !== null,
+        ),
+    ).toBe(true);
+    expect(pool).toContainEqual({
+      playerId: "qb-1",
+      position: "QB",
+      team: "BUF",
+      rosterStatus: "ACT",
+    });
+    expect(pool).toContainEqual({
+      playerId: "two-way-wr",
+      position: "WR",
+      team: "JAX",
+      rosterStatus: "ACT",
+    });
+    expect(pool).toHaveLength(6);
   });
 });
 
@@ -443,10 +574,13 @@ function ninePlusPolicy(): FirstPartyRosChampionPolicy {
   }).livePolicy;
 }
 
-function artifact(policy: FirstPartyRosChampionPolicy): LoadedFirstPartyRosChampionArtifact {
+function artifact(
+  policy: FirstPartyRosChampionPolicy,
+  scoringProfileKey = SCORING_KEY,
+): LoadedFirstPartyRosChampionArtifact {
   const payload: FirstPartyRosChampionArtifactPayload = {
     season: 2026,
-    scoringProfileKey: SCORING_KEY,
+    scoringProfileKey,
     modelVersion: "laces-ros-distribution-v4",
     policyVersion: "season-walk-forward-block-wis-cqr-v4",
     calibrationVersion: "season-blocked-split-conformal-cqr-v1",
@@ -486,15 +620,17 @@ describe("buildFirstPartyRosLeagueTarget", () => {
 
   function run(input: {
     policy: FirstPartyRosChampionPolicy;
-    rosteredPlayers: readonly {
+    candidatePlayers: readonly {
       playerId: string;
       position: string;
       team: string | null;
     }[];
     matchedPositions?: readonly FirstPartyRosRailPosition[];
     supportedPositions?: readonly FirstPartyRosRailPosition[];
+    window?: FirstPartyRosWindow;
   }) {
     const matchedPositions = input.matchedPositions ?? ["QB", "RB", "WR", "TE", "K"];
+    const targetWindow = input.window ?? window;
     return buildFirstPartyRosLeagueTarget({
       artifact: artifact(input.policy),
       leagueSeasonId: "22222222-2222-4222-8222-222222222222",
@@ -502,10 +638,15 @@ describe("buildFirstPartyRosLeagueTarget", () => {
       matchedPositions,
       supportedPositions: input.supportedPositions ?? matchedPositions,
       season: 2026,
-      window,
-      rosteredPlayers: input.rosteredPlayers,
-      featureHistory,
+      window: targetWindow,
+      candidatePlayers: input.candidatePlayers,
+      featureHistory: targetWindow.asOfWeek === 0 ? trainingHistory : featureHistory,
       calibration,
+      defenseFeatureHistory: [],
+      defenseCalibration: {
+        modelVersion: "laces-first-party-v1",
+        intervals: {},
+      },
       availabilityCalibration,
       roleCalibration,
       kickerCalibration,
@@ -520,10 +661,10 @@ describe("buildFirstPartyRosLeagueTarget", () => {
     });
   }
 
-  it("builds a target from rostered supported players and audits per-player skips", () => {
+  it("builds a target from supported candidates and audits per-player skips", () => {
     const result = run({
       policy: ninePlusPolicy(),
-      rosteredPlayers: [
+      candidatePlayers: [
         { playerId: "wr-0", position: "WR", team: "BUF" },
         { playerId: "wr-1", position: "WR", team: "MIA" },
         // Unsupported position: filtered before release, not an audited skip.
@@ -549,12 +690,32 @@ describe("buildFirstPartyRosLeagueTarget", () => {
     expect(result.target!.supportedPositions).toEqual(["QB", "RB", "WR", "TE", "K"]);
   });
 
+  it("publishes veteran candidates before Week 1 without a fantasy roster", () => {
+    const result = run({
+      policy: ninePlusPolicy(),
+      window: {
+        asOfWeek: 0,
+        currentWeek: 1,
+        windowStartWeek: 1,
+        windowEndWeek: 18,
+        currentWeekStarted: false,
+      },
+      candidatePlayers: [
+        { playerId: "wr-0", position: "WR", team: "BUF" },
+        { playerId: "wr-1", position: "WR", team: "MIA" },
+      ],
+    });
+
+    expect(result.target?.released.map((player) => player.playerId)).toEqual(["wr-0", "wr-1"]);
+    expect(result.target?.released.every((player) => player.bucket === "nine-plus")).toBe(true);
+  });
+
   it("withholds players whose position the league did not match", () => {
     const withheldWr = run({
       policy: ninePlusPolicy(),
       matchedPositions: ["QB", "RB", "TE", "K"],
       supportedPositions: ["QB", "RB", "WR", "TE", "K"],
-      rosteredPlayers: [
+      candidatePlayers: [
         { playerId: "wr-0", position: "WR", team: "BUF" },
         { playerId: "wr-1", position: "WR", team: "MIA" },
       ],
@@ -569,7 +730,7 @@ describe("buildFirstPartyRosLeagueTarget", () => {
       policy: ninePlusPolicy(),
       matchedPositions: ["WR"],
       supportedPositions: ["QB", "RB", "WR", "TE", "K"],
-      rosteredPlayers: [
+      candidatePlayers: [
         { playerId: "wr-0", position: "WR", team: "BUF" },
         { playerId: "wr-1", position: "WR", team: "MIA" },
       ],
@@ -578,8 +739,8 @@ describe("buildFirstPartyRosLeagueTarget", () => {
     expect(releasedWr.target!.supportedPositions).toEqual(["QB", "RB", "WR", "TE", "K"]);
   });
 
-  it("yields no target when no rostered player has an authorizing champion choice", () => {
-    // A policy carrying no WR choice cannot authorize any of this WR-only roster, so the whole
+  it("yields no target when no candidate has an authorizing champion choice", () => {
+    // A policy carrying no WR choice cannot authorize any of these WR candidates, so the whole
     // league fails closed rather than approximating a release.
     const base = ninePlusPolicy();
     const withoutWr: FirstPartyRosChampionPolicy = {
@@ -588,7 +749,7 @@ describe("buildFirstPartyRosLeagueTarget", () => {
     };
     const result = run({
       policy: withoutWr,
-      rosteredPlayers: [
+      candidatePlayers: [
         { playerId: "wr-0", position: "WR", team: "BUF" },
         { playerId: "wr-1", position: "WR", team: "MIA" },
       ],

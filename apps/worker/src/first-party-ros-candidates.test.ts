@@ -1,6 +1,9 @@
 import {
   projectionScoringProfileKey,
+  rosScoringProfile,
   runFirstPartyProjectionBacktest,
+  runFirstPartyTeamDefenseBacktest,
+  type FirstPartyTeamDefenseWeeklyStatLine,
   type FirstPartyWeeklyStatLine,
   type ProjectionScoringProfile,
 } from "@fantasy/projections";
@@ -11,7 +14,11 @@ import {
   calibrateHistoricalRosKicker,
   calibrateHistoricalRosRole,
 } from "./first-party-ros-backtest.js";
-import { buildFirstPartyRosPlayerCandidate } from "./first-party-ros-candidates.js";
+import {
+  assembleFirstPartyRosDefenseCandidateInputs,
+  buildFirstPartyRosPlayerCandidate,
+  simulateFirstPartyRosCandidate,
+} from "./first-party-ros-candidates.js";
 import type { ProjectionScheduleFact } from "./first-party-projection-inputs.js";
 
 const scoringProfile: ProjectionScoringProfile = {
@@ -168,5 +175,55 @@ describe("first-party live ROS candidate builder", () => {
     expect(candidate!.scheduledGames).toBe(5);
     const byeWeek = candidate!.contextual.weekly.find((week) => week.week === 9);
     expect(byeWeek).toMatchObject({ scheduled: false, bye: true, availabilityProbability: 0 });
+  });
+
+  it("builds and scores a complete D/ST remaining-season candidate", () => {
+    const defenseHistory: FirstPartyTeamDefenseWeeklyStatLine[] = [];
+    for (const season of seasons) {
+      const lastWeek = season === 2026 ? 6 : 16;
+      for (let week = 1; week <= lastWeek; week += 1) {
+        for (const team of teams) {
+          defenseHistory.push({
+            team,
+            season,
+            week,
+            opponent: opponentOf(team),
+            components: {
+              defensive_sacks: 2 + (week % 3),
+              defensive_interceptions: week % 2,
+              defensive_fumble_recoveries: (week + 1) % 2,
+              defensive_safeties: 0,
+              defensive_touchdowns: week % 7 === 0 ? 1 : 0,
+              defensive_blocked_kicks: 0,
+              special_teams_touchdowns: 0,
+              points_allowed: 17 + (week % 10),
+              yards_allowed: 290 + week * 3,
+            },
+          });
+        }
+      }
+    }
+    const defenseProfile = rosScoringProfile("espn-standard-2pt").profile;
+    const assembled = assembleFirstPartyRosDefenseCandidateInputs({
+      defense: { playerId: "DST:BUF", team: "BUF" },
+      window: { season: 2026, asOfWeek: 6, windowStartWeek: 7, windowEndWeek: 12 },
+      featureHistory: defenseHistory,
+      calibration: runFirstPartyTeamDefenseBacktest(
+        defenseHistory.filter((row) => row.season < 2026),
+      ).calibration,
+      schedules,
+      scoringProfile: defenseProfile,
+      seed: "live:2026:6:DST:BUF",
+      scenarioCount: 256,
+    });
+
+    expect(assembled).not.toBeNull();
+    const candidate = simulateFirstPartyRosCandidate(assembled!);
+    expect(candidate.position).toBe("DST");
+    expect(candidate.scheduledGames).toBe(6);
+    expect(candidate.contextual.state).toBe("projected");
+    expect(candidate.recency.state).toBe("projected");
+    expect(candidate.contextual.meanPoints).toBeGreaterThan(0);
+    expect(candidate.inputChecksum).toMatch(/^[a-f0-9]{64}$/u);
   });
 });

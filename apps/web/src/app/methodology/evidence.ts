@@ -12,18 +12,19 @@
  * - Full PPR: `reports/ros-validation-v8-full-ppr-n8-2026-07-28.json`
  * - Half PPR: `reports/ros-validation-v8-half-ppr-n8-2026-07-28.json`
  * - Standard: `reports/ros-validation-v8-standard-n8-2026-07-28.json`
- * - Standard + 2-pt: `reports/ros-validation-v8-espn-standard-2pt-n8-2026-07-28.with-lineage.json`
+ * - Standard + 2-pt: `reports/ros-validation-v9-espn-standard-2pt-n8-2026-08-03.json`
  * - Standard + 2-pt, no XP-missed:
- *   `reports/ros-validation-v8-espn-standard-2pt-nxm-n8-2026-07-28.with-lineage.json`
+ *   `reports/ros-validation-v9-espn-standard-2pt-nxm-n8-2026-08-03.json`
  *
  * Those files are local operator artifacts — `reports/` is listed in `.gitignore`, so they are
  * deliberately not distributed with the repository and the page must not link to them as if they
  * were public. The file names carry the operator's local date; each report's own `.generatedAt` is
  * UTC and is what every `evaluatedAt` below is read from.
  *
- * These three reports re-ran the same replay at eight sampled players per position and cutoff
+ * The first three reports re-ran the same replay at eight sampled players per position and cutoff
  * instead of five, with every other default unchanged and no gate, threshold, tolerance, or
- * minimum altered in either direction. They superseded the five-player reports by recency:
+ * minimum altered in either direction. They superseded the five-player reports as validation
+ * evidence:
  * `apps/worker/src/first-party-ros-projections.ts` selects per profile with
  * `orderBy(desc(admittedAt))`, and the five-player rows are retained in the database as immutable
  * history. Nothing read from those older reports may be republished here as a current figure — see
@@ -34,18 +35,18 @@
  * corresponding report, once per profile via `firstPartyRosAdmissionConstants(profile)`; that
  * function is pure, so the result is reproducible by any operator holding the reports. The
  * `admittedAt` dates are the `admitted_at` column of `first_party_ros_champion_artifacts` in the
- * production database, matched to these rows by `artifact_checksum`; each row carrying one of these
- * checksums is the newest for its profile.
+ * production database, matched to these rows by `artifact_checksum`. Admission is append-only.
+ * Gate-only re-evaluations of the first three reports therefore coexist with their original rows;
+ * production selects the newest compatible artifact, while this manifest preserves the original
+ * replay verdict that produced each measurement below.
  *
- * The two `espn-standard-*` profiles are league-shaped catalog profiles added 2026-07-28 and
- * replayed overnight. They differ from the three above in two ways the page must state rather than
- * average away: they were only ever replayed at eight players per position (there is no
- * narrower-sample predecessor to compare against), and they carry no team-defense scoring, which
- * makes their D/ST cells degenerate — see `rosTeamDefenseCoverage`. Their source audit was
- * reconstructed after the run rather than emitted by it — see `rosLineageReconstruction`.
+ * The two `espn-standard-*` profiles are league-shaped catalog profiles. Their 2026-08-03 v9
+ * replays contain the complete ESPN D/ST rule vocabulary and native `--full` source lineage. They
+ * were replayed at eight players per position from the start, so there is no narrower-sample
+ * predecessor for those two profiles.
  */
 
-export const METHODOLOGY_EVIDENCE_MANIFEST_VERSION = "methodology-evidence-v4" as const;
+export const METHODOLOGY_EVIDENCE_MANIFEST_VERSION = "methodology-evidence-v5" as const;
 
 export interface EvidenceFigure {
   /** Human label rendered in the page's evidence tables. */
@@ -71,14 +72,10 @@ export interface RosProfileEvidence {
   readonly label: string;
   /** The label prose uses when several profiles are listed in one sentence. */
   readonly shortLabel: string;
-  /** `.report.forecasts` — not shared across profiles once a profile leaves a position unscored. */
+  /** `.report.forecasts`. */
   readonly forecasts: number;
   /** Whether this profile also has a five-player replay to compare against. */
   readonly narrowerSampleReplayed: boolean;
-  /** Whether the profile prices team defense at all. False makes its three D/ST cells degenerate. */
-  readonly scoresTeamDefense: boolean;
-  /** True when `.lineageReconstruction` is present: the source audit was rebuilt after the run. */
-  readonly lineageReconstructed: boolean;
   /** The report's own `.generatedAt`, UTC date only. */
   readonly evaluatedAt: string;
   /** The report's own `.report.state`. Not an admission decision. */
@@ -174,10 +171,10 @@ export const rosAvailabilityCeilings = {
  *
  * Two consequences this page must state rather than smooth over:
  *
- * - The admitted reports below were graded before the revision, so their blocker lists are the
- *   point comparison's. A gate-only re-evaluation of the stored corpus
- *   (`npm run ros:regate -w @fantasy/worker`) clears every availability blocker on it, and nothing
- *   has been re-admitted, so the admitted artifacts keep the blockers they were admitted with.
+ * - The first three reports below were graded before the revision, so their recorded blocker lists
+ *   are the point comparison's. A gate-only re-evaluation of that stored corpus
+ *   (`npm run ros:regate -w @fantasy/worker`) cleared every availability blocker and was admitted as
+ *   a new append-only artifact for each profile. The original rows remain as immutable history.
  * - On 2026-07-29 `evaluateFirstPartyRosReleaseGate` — the live publication gate — adopted the
  *   same one-sided evidence test at the same ceilings and the same alpha, and its
  *   evidence-identity comparison became position-scoped (`evidenceIdentitiesMatchForPosition`).
@@ -237,32 +234,32 @@ export const rosScopeFigures: readonly EvidenceFigure[] = [
   {
     label: "Fully held-out NFL seasons",
     value: "4 (2022, 2023, 2024, 2025)",
-    source: "ros-validation-v8-n8 .coverage.fullyHeldOutSeasons",
+    source: "ros-validation-v8/v9-n8 .coverage.fullyHeldOutSeasons",
   },
   {
     label: "Forecasts graded against realized outcomes",
-    value: "3,264 per profile; 2,965 where team defense is unscored",
-    source: "ros-validation-v8-n8 .report.forecasts",
+    value: "3,264 per profile",
+    source: "ros-validation-v8/v9-n8 .report.forecasts",
   },
   {
     label: "Season/cutoff batches",
     value: "68 of 68 complete",
-    source: "ros-validation-v8-n8 .coverage.completeAsOfBatches / .totalAsOfBatches",
+    source: "ros-validation-v8/v9-n8 .coverage.completeAsOfBatches / .totalAsOfBatches",
   },
   {
     label: "Forecasts skipped or dropped",
     value: "0",
-    source: "ros-validation-v8-n8 .report.skippedForecasts",
+    source: "ros-validation-v8/v9-n8 .report.skippedForecasts",
   },
   {
     label: "Position/horizon evidence cells",
     value: "18 of 18 complete",
-    source: "ros-validation-v8-n8 .report.cells",
+    source: "ros-validation-v8/v9-n8 .report.cells",
   },
   {
     label: "Players sampled per position, per cutoff",
     value: "8",
-    source: "ros-validation-v8-n8 .report.playersPerPosition",
+    source: "ros-validation-v8/v9-n8 .report.playersPerPosition",
   },
   {
     label: "Simulation paths per release projection",
@@ -278,7 +275,7 @@ export const rosScopeFigures: readonly EvidenceFigure[] = [
   {
     label: "Convergence diagnostics that converged",
     value: "144 of 144",
-    source: "ros-validation-v8-n8 .report.convergenceAudit",
+    source: "ros-validation-v8/v9-n8 .report.convergenceAudit",
   },
 ];
 
@@ -286,7 +283,8 @@ export const rosScopeFigures: readonly EvidenceFigure[] = [
  * Release gates, evaluated once across every replay because all profiles were graded at identical
  * scope. The publication row describes the live per-league, per-position gate in
  * `apps/worker/src/first-party-ros-publication.ts` — it was a standing "not performed / shadow only"
- * row until the rail began releasing, and is kept current rather than left as the historical shape. Where a gate's outcome differs by profile, the outcome column names the profile.
+ * row until the rail began releasing, and is kept current rather than left as the historical
+ * shape. Where a gate's outcome differs by profile, the outcome column names the profile.
  *
  * The availability row states each `.availabilityAudit` entry against the ceiling for its own
  * horizon, which is the comparison these reports' own blockers were raised on; `rosAvailabilityGate`
@@ -298,8 +296,7 @@ export const rosGateRows: readonly ReleaseGateRow[] = [
   {
     gate: "Evidence volume",
     requirement: "At least 3 held-out seasons, 30 batches, and 300 graded outcomes.",
-    outcome:
-      "4 seasons and 68 batches in every replay, on 3,264 graded outcomes per profile and 2,965 for the two that leave team defense unscored.",
+    outcome: "4 seasons and 68 batches in every replay, on 3,264 graded outcomes per profile.",
     state: "pass",
   },
   {
@@ -314,21 +311,22 @@ export const rosGateRows: readonly ReleaseGateRow[] = [
     requirement:
       "Expected-games error must show no statistical evidence of exceeding 1.5 games for 1-8 week windows or 2.75 for 9+ week windows, with signed bias at most 1.0 game.",
     outcome:
-      "Not cleared by the three profiles graded under the superseded point comparison: quarterback at 9+ weeks is over 2.75 in all three, worst 2.8091 (Full PPR), and wide receiver at 5-8 weeks is over 1.5 under Full PPR, at 1.5399. The two graded under the evidence test each hold a wide receiver cell over 1.5 that does not block. Worst signed bias 0.7105 games (kicker, 9+, Standard), inside its ceiling everywhere.",
+      "Not cleared by the three legacy profiles graded under the superseded point comparison: quarterback at 9+ weeks is over 2.75 in all three, worst 2.8091 (Full PPR), and wide receiver at 5-8 weeks is over 1.5 under Full PPR, at 1.5399. The two v9 catalog replays carry no availability blocker. Worst signed bias 0.7105 games (kicker, 9+, Standard), inside its ceiling everywhere.",
     state: "fail",
   },
   {
     gate: "Interval calibration",
     requirement:
       "No cell may show statistical evidence of undercoverage against a 60% floor for the nominal 70% interval.",
-    outcome: "No cell failed the test in any replay.",
-    state: "pass",
+    outcome:
+      "Team defense at 5–8 weeks failed in both v9 catalog replays: 0 of 4 walk-forward blocks covered against the nominal 70% interval. Every other catalog-profile cell passed.",
+    state: "fail",
   },
   {
     gate: "Release blockers",
     requirement: "The report must carry no global or per-cell blockers.",
     outcome:
-      "4 blockers across the reports: two under Full PPR, one each under Half PPR and Standard. Every one is cell-scoped; none is global. The two catalog profiles report none.",
+      "6 blockers across the five current reports: two under Full PPR and one under each remaining profile. Every blocker is cell-scoped; none is global.",
     state: "fail",
   },
   {
@@ -396,6 +394,13 @@ export const rosGateHistory: readonly {
       "None. First runs graded under the revised availability gate; each still holds a wide receiver cell over its ceiling that the evidence test does not reject, and team-defense cells that are degenerate under a profile that does not score team defense.",
     outcome: "pass",
   },
+  {
+    run: "v9, D/ST-complete catalog profiles — 2026-08-04 (Standard + 2-pt, with and without the XP-missed penalty)",
+    state: "insufficient",
+    blockers:
+      "Team-defense interval coverage at 5–8 weeks in both profiles. All other cells remain independently releasable.",
+    outcome: "fail",
+  },
 ];
 
 /* ------------------------------------------------------------------ *
@@ -423,8 +428,6 @@ export const rosScoringProfiles: readonly RosProfileEvidence[] = [
     shortLabel: "Full PPR",
     forecasts: 3264,
     narrowerSampleReplayed: true,
-    scoresTeamDefense: true,
-    lineageReconstructed: false,
     evaluatedAt: "2026-07-28",
     reportState: "insufficient",
     reportedBlockers: [
@@ -443,8 +446,6 @@ export const rosScoringProfiles: readonly RosProfileEvidence[] = [
     shortLabel: "Half PPR",
     forecasts: 3264,
     narrowerSampleReplayed: true,
-    scoresTeamDefense: true,
-    lineageReconstructed: false,
     evaluatedAt: "2026-07-28",
     reportState: "insufficient",
     reportedBlockers: ["calibration_QB_nine-plus_availability_mae_above_maximum"],
@@ -460,8 +461,6 @@ export const rosScoringProfiles: readonly RosProfileEvidence[] = [
     shortLabel: "Standard (non-PPR)",
     forecasts: 3264,
     narrowerSampleReplayed: true,
-    scoresTeamDefense: true,
-    lineageReconstructed: false,
     evaluatedAt: "2026-07-28",
     reportState: "insufficient",
     reportedBlockers: ["calibration_QB_nine-plus_availability_mae_above_maximum"],
@@ -475,35 +474,31 @@ export const rosScoringProfiles: readonly RosProfileEvidence[] = [
     key: "espn-standard-2pt",
     label: "Standard + 2-pt, split kicker brackets, XP-missed penalty",
     shortLabel: "Standard + 2-pt",
-    forecasts: 2965,
+    forecasts: 3264,
     narrowerSampleReplayed: false,
-    scoresTeamDefense: false,
-    lineageReconstructed: true,
-    evaluatedAt: "2026-07-29",
-    reportState: "evidence-ready",
-    reportedBlockers: [],
-    withheldCells: "None.",
+    evaluatedAt: "2026-08-04",
+    reportState: "insufficient",
+    reportedBlockers: ["calibration_DST_five-to-eight_coverage_shortfall_above_maximum"],
+    withheldCells: "Team defense, 5–8 remaining weeks.",
     admissionState: "admissible",
-    admittedAt: "2026-07-29",
-    artifactChecksum: "0f715aba1888f35d60f359ef4299c7e80dbe7824f6f28c6a871deda1ce950ff9",
-    scoringProfileDigest: "4835b6c57ae0ceeebb1750ad6ff81ec5f6988f28fb5193b42a067178cfe0a09e",
+    admittedAt: "2026-08-04",
+    artifactChecksum: "e870faab6d4e8c387f4b91e92bc77b6ce7e5cf0141a1c05aae7b39a2672e3adf",
+    scoringProfileDigest: "6a2ce8c94a3733673f17056d2ffafc27dca00c1ab93d17ce58a1bdce9b6d6843",
   },
   {
     key: "espn-standard-2pt-nxm",
     label: "Standard + 2-pt, split kicker brackets, no XP-missed penalty",
     shortLabel: "Standard + 2-pt (no XP-missed)",
-    forecasts: 2965,
+    forecasts: 3264,
     narrowerSampleReplayed: false,
-    scoresTeamDefense: false,
-    lineageReconstructed: true,
-    evaluatedAt: "2026-07-29",
-    reportState: "evidence-ready",
-    reportedBlockers: [],
-    withheldCells: "None.",
+    evaluatedAt: "2026-08-04",
+    reportState: "insufficient",
+    reportedBlockers: ["calibration_DST_five-to-eight_coverage_shortfall_above_maximum"],
+    withheldCells: "Team defense, 5–8 remaining weeks.",
     admissionState: "admissible",
-    admittedAt: "2026-07-29",
-    artifactChecksum: "a513471f27d73e84831dd17215ef959746dfc4315c2b9b8ba03bd1b3970c9430",
-    scoringProfileDigest: "d2bdcbc7a786d05fa4dcf0b9dbd9f519cf9c78c1e883ed2fef7f913c94ceb49e",
+    admittedAt: "2026-08-04",
+    artifactChecksum: "e3f5fb77c01ce377140be137de400b6f4a824ec8d741de8a2321c62450017165",
+    scoringProfileDigest: "d0e49cad7fbbdf20552427d107bea2cd9a6c2f735b4d67745d5e5ca9e85832eb",
   },
 ];
 
@@ -612,13 +607,8 @@ export const rosCellBlockerLifecycle = {
 } as const;
 
 /**
- * The scope every profile shares. Each value below is identical in all of the reports and was
- * checked in each of them.
- *
- * `forecasts` is deliberately *not* in here. It was identical while every profile priced all six
- * positions, and stopped being so when the two catalog profiles landed: a profile that scores no
- * team defense yields far fewer usable D/ST rows, so those two graded 2,965 forecasts against the
- * others' 3,264. The count therefore lives on each profile record, and the scope table states both.
+ * The scope every current profile shares. Each value below is identical in all five reports and
+ * was checked in each of them.
  */
 export const rosSharedReplayScope = {
   /** `.coverage.completeAsOfBatches` / `.totalAsOfBatches` */
@@ -627,56 +617,6 @@ export const rosSharedReplayScope = {
   cells: 18,
   /** `.report.convergenceAudit`, every entry `converged` */
   convergenceDiagnostics: 144,
-} as const;
-
-/**
- * Why the two catalog profiles grade fewer forecasts, and what that costs their D/ST cells.
- *
- * Neither profile prices a team-defense stat beyond return and recovery touchdowns, so D/ST is
- * scored on rare count events. Two things follow, both read from
- * `.champion.choices[DST]` and `.report.cells` in each report:
- *
- * - the three D/ST cells hold 245 rows between them (126 + 57 + 62) against 544 for every other
- *   position, which is the whole of the 3,264 → 2,965 difference;
- * - their observed interval coverage runs 0% to 6.4% against a nominal 70%, and their walk-forward
- *   evidence covers as few as 1 of 4 blocks.
- *
- * Neither blocks, because the coverage gate is an evidence test and four blocks cannot reject
- * anything. That is the gate behaving as designed and is *not* a claim that D/ST is validated under
- * these profiles. The three older profiles price team defense in full and still only reach 9.4% to
- * 13.3% observed coverage on the same cells, so this is a weakness of the D/ST model everywhere —
- * worse, not new, under a profile that barely scores it.
- *
- * Operator decision 2026-07-29: the page publishes this as a caveat about mechanism, not as
- * measurements. The coverage ranges above stay here as the engineering record and are deliberately
- * not exported, so page copy cannot reinstate them without that being a decision. What the page
- * does say is that a profile pricing no team-defense rules leaves those cells with nothing
- * meaningful to validate, and that team defense is not among the positions the rest-of-season rail
- * can release in any case — `HISTORICAL_ROS_SUPPORTED_POSITIONS` in
- * `apps/worker/src/first-party-ros-backtest.ts` is QB/RB/WR/TE/K, and
- * `first-party-ros-publication.ts` derives every released and withheld cell from it.
- */
-export const rosTeamDefenseCoverage = {
-  catalogRows: 245,
-  otherPositionRows: 544,
-  source: "ros-validation-v8-*-n8 .champion.choices[DST]",
-} as const;
-
-/**
- * The two catalog runs were launched without `--full`, so they did not emit their own source audit
- * and it was recomputed afterwards through the identical `@fantasy/source-nflverse` code path.
- * Read verbatim from each report's own `.lineageReconstruction` field, which records the check:
- * 35 of 42 recomputed checksums byte-match all three `--full` sibling reports of the same day, and
- * the schedules checksum is the witnessed pre-change value, because the upstream file changed at
- * 23:16Z — after these runs read it at roughly 21:45Z and after the worker confirmed it unchanged
- * at 21:56Z.
- */
-export const rosLineageReconstruction = {
-  checksumsMatched: 35,
-  checksumsTotal: 42,
-  witnesses:
-    "three same-day sibling reports, the worker ingest log, and the upstream Last-Modified",
-  source: "ros-validation-v8-espn-standard-2pt*-n8 .lineageReconstruction",
 } as const;
 
 /**
@@ -745,28 +685,16 @@ export const rosWithheldCellFigures: readonly EvidenceFigure[] = [
       "ros-validation-v8-standard-n8 .champion.choices[K, one-to-four].walkForwardCalibration.observedBlockCoverage / .blocks",
   },
   {
-    label: "Standard + 2-pt — wide receiver, 5–8 weeks: expected-games error",
-    value: "1.5170 games against a 1.5-game ceiling — over by 0.0170, not blocked",
-    source:
-      "ros-validation-v8-espn-standard-2pt-n8 .availabilityAudit[WR, five-to-eight].expectedGamesRowMae vs FIRST_PARTY_ROS_MAX_AVAILABILITY_MAE",
-  },
-  {
-    label: "Standard + 2-pt (no XP-missed) — wide receiver, 5–8 weeks: expected-games error",
-    value: "1.5153 games against a 1.5-game ceiling — over by 0.0153, not blocked",
-    source:
-      "ros-validation-v8-espn-standard-2pt-nxm-n8 .availabilityAudit[WR, five-to-eight].expectedGamesRowMae vs FIRST_PARTY_ROS_MAX_AVAILABILITY_MAE",
-  },
-  {
     label: "Standard + 2-pt — team defense, 5–8 weeks: walk-forward blocks covered",
-    value: "1 of 4 — not blocked, and the weakest cell in the set",
+    value: "0 of 4 — blocked, despite 8.73% lower point error than baseline",
     source:
-      "ros-validation-v8-espn-standard-2pt-n8 .champion.choices[DST, five-to-eight].walkForwardCalibration.observedBlockCoverage / .blocks",
+      "ros-validation-v9-espn-standard-2pt-n8 .champion.choices[DST, five-to-eight].walkForwardCalibration / .modelImprovement",
   },
   {
     label: "Standard + 2-pt (no XP-missed) — team defense, 5–8 weeks: walk-forward blocks covered",
-    value: "1 of 4 — not blocked, and the weakest cell in the set",
+    value: "0 of 4 — blocked, despite 8.74% lower point error than baseline",
     source:
-      "ros-validation-v8-espn-standard-2pt-nxm-n8 .champion.choices[DST, five-to-eight].walkForwardCalibration.observedBlockCoverage / .blocks",
+      "ros-validation-v9-espn-standard-2pt-nxm-n8 .champion.choices[DST, five-to-eight].walkForwardCalibration / .modelImprovement",
   },
 ];
 

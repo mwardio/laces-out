@@ -7,7 +7,9 @@ import {
   projectionModelRuns,
   projectionObservations,
   projectionSets,
+  scoringRules,
   syncRuns,
+  leagueSeasons,
   type Database,
 } from "@fantasy/db";
 import {
@@ -16,7 +18,7 @@ import {
   FIRST_PARTY_ROS_POLICY_VERSION,
   evaluateFirstPartyRosChampionPolicy,
   projectFirstPartyRestOfSeason,
-  projectionScoringProfileKey,
+  rosScoringProfile,
   type FirstPartyRosChampionPolicy,
   type FirstPartyRosHeldOutForecast,
   type FirstPartyRosLiveReleaseEvidence,
@@ -41,17 +43,9 @@ type Row = Record<string, unknown>;
 const now = new Date("2026-12-01T12:00:00.000Z");
 const fresh = new Date(now.getTime() - 5 * 60_000);
 
-const scoringProfile: ProjectionScoringProfile = {
-  id: "live-service-ppr",
-  version: "1",
-  rules: [
-    { statId: "receptions", points: 1 },
-    { statId: "receiving_yards", points: 0.1 },
-    { statId: "receiving_touchdowns", points: 6 },
-  ],
-};
+const scoringProfile: ProjectionScoringProfile = rosScoringProfile("full-ppr").profile;
 // The admitted key IS the canonical rule JSON, which is what per-position matching recovers it from.
-const SCORING_KEY = projectionScoringProfileKey(scoringProfile);
+const SCORING_KEY = rosScoringProfile("full-ppr").scoringProfileKey;
 
 function heldOutForecast(
   season: number,
@@ -229,9 +223,31 @@ function artifactRow(overrides: Partial<FirstPartyRosChampionArtifactPayload> = 
 
 function fakeProvider(target: FirstPartyRosPublicationTarget): FirstPartyRosCandidateProvider {
   return {
+    async sourceChecksum() {
+      return "9".repeat(64);
+    },
     async buildTargets() {
       return [target];
     },
+  };
+}
+
+function countingProvider(target: FirstPartyRosPublicationTarget): {
+  readonly provider: FirstPartyRosCandidateProvider;
+  readonly calls: () => number;
+} {
+  let calls = 0;
+  return {
+    provider: {
+      async sourceChecksum() {
+        return "9".repeat(64);
+      },
+      async buildTargets() {
+        calls += 1;
+        return [target];
+      },
+    },
+    calls: () => calls,
   };
 }
 
@@ -265,12 +281,18 @@ class Harness {
   readonly sourceUpdates: Row[] = [];
   readonly #database: Database;
   readonly #artifacts: readonly Row[];
+  readonly #candidateLastSuccessfulAt: Date | null;
   readonly #seenSyncKeys = new Set<string>();
   #syncCounter = 0;
   #setCounter = 0;
 
-  constructor(input: { readonly artifact?: Row | null; readonly artifacts?: readonly Row[] }) {
+  constructor(input: {
+    readonly artifact?: Row | null;
+    readonly artifacts?: readonly Row[];
+    readonly candidateLastSuccessfulAt?: Date | null;
+  }) {
     this.#artifacts = input.artifacts ?? (input.artifact ? [input.artifact] : []);
+    this.#candidateLastSuccessfulAt = input.candidateLastSuccessfulAt ?? fresh;
     const facade = {
       select: (selection: Row) =>
         new SelectQuery(selection, (table, sel) => this.#select(table, sel)),
@@ -320,12 +342,27 @@ class Harness {
             consecutiveFailures: 0,
             checkIntervalMinutes: 60,
           },
+          {
+            id: "candidate-src",
+            key: "nflverse.weekly-rosters.2026",
+            enabled: true,
+            lastChecksum: "c".repeat(64),
+            lastSuccessfulAt: this.#candidateLastSuccessfulAt,
+            // A recent check is not a successful verification. This stays fresh in the stale-input
+            // test to prove publication keys freshness off `lastSuccessfulAt`.
+            lastCheckedAt: fresh,
+            lastChangedAt: null,
+            consecutiveFailures: 0,
+            checkIntervalMinutes: 60,
+          },
         ];
       }
       return [{ metadata: {}, lastChecksum: null, consecutiveFailures: 0 }];
     }
     if (table === nflScheduleObservations) return schedule();
     if (table === firstPartyRosChampionArtifacts) return this.#artifacts;
+    if (table === leagueSeasons || table === scoringRules) return [];
+    if (table === syncRuns) return this.#seenSyncKeys.size > 0 ? [{ id: "existing" }] : [];
     if (table === projectionModelRuns) return [];
     if (table === projectionObservations) return [{ count: 0 }];
     return [];
@@ -380,6 +417,9 @@ class SelectQuery implements PromiseLike<readonly Row[]> {
     return this;
   }
   where(): this {
+    return this;
+  }
+  innerJoin(): this {
     return this;
   }
   orderBy(): this {
@@ -459,6 +499,28 @@ describe("first-party ROS shadow service publication rail", () => {
     });
   });
 
+  it("keeps an admitted artifact for a retired scoring identity off the live rail", async () => {
+    const retiredKey = '[{"statId":"receptions","points":0.75,"bonuses":[]}]';
+    const harness = new Harness({
+      artifact: artifactRow({
+        scoringProfileKey: retiredKey,
+        policy: releasingPolicy(retiredKey),
+      }),
+    });
+    const service = new FirstPartyRosProjectionShadowService({
+      database: harness.database,
+      now: () => now,
+      candidateProvider: fakeProvider(baseTarget()),
+    });
+    await service.refreshProjections(job, context);
+
+    expect(harness.countInserts(projectionSets)).toBe(0);
+    expect(harness.countInserts(playerRosProjectionSummaries)).toBe(0);
+    expect(harness.sourceUpdates.at(-1)?.metadata).toMatchObject({
+      result: "shadow_evidence_recorded",
+    });
+  });
+
   it("persists one league-scoped ROS set on a valid artifact and gate release", async () => {
     const harness = new Harness({ artifact: artifactRow() });
     const service = new FirstPartyRosProjectionShadowService({
@@ -492,12 +554,35 @@ describe("first-party ROS shadow service publication rail", () => {
     });
   });
 
-  it("is idempotent: a repeated run persists no new rows", async () => {
-    const harness = new Harness({ artifact: artifactRow() });
+  it("withholds publication when the candidate roster was checked recently but not verified recently", async () => {
+    const harness = new Harness({
+      artifact: artifactRow(),
+      candidateLastSuccessfulAt: new Date(now.getTime() - 4 * 60 * 60_000),
+    });
     const service = new FirstPartyRosProjectionShadowService({
       database: harness.database,
       now: () => now,
       candidateProvider: fakeProvider(baseTarget()),
+    });
+
+    await service.refreshProjections(job, context);
+
+    expect(harness.countInserts(projectionSets)).toBe(0);
+    expect(harness.countInserts(playerRosProjectionSummaries)).toBe(0);
+    expect(harness.sourceUpdates.at(-1)?.metadata).toMatchObject({
+      result: "shadow_evidence_recorded",
+    });
+    const metadata = harness.sourceUpdates.at(-1)?.metadata as Record<string, unknown>;
+    expect(String(metadata.diagnostics)).toContain("candidate_source_not_fresh");
+  });
+
+  it("is idempotent: a repeated run persists no new rows", async () => {
+    const harness = new Harness({ artifact: artifactRow() });
+    const counted = countingProvider(baseTarget());
+    const service = new FirstPartyRosProjectionShadowService({
+      database: harness.database,
+      now: () => now,
+      candidateProvider: counted.provider,
     });
     await service.refreshProjections(job, context);
     const setsAfterFirst = harness.countInserts(projectionSets);
@@ -512,6 +597,8 @@ describe("first-party ROS shadow service publication rail", () => {
           entry.table === projectionModelRuns && entry.values.qualityState === "publishable",
       ).length,
     ).toBe(publishRunsAfterFirst);
+    expect(counted.calls()).toBe(1);
+    expect(harness.sourceUpdates.at(-1)?.metadata).toMatchObject({ result: "unchanged" });
   });
 
   it("forwards per-position matching and records withheld positions when the live gate releases", async () => {
@@ -581,10 +668,8 @@ describe("first-party ROS shadow service publication rail", () => {
     // same league the whole-key artifact publishes. Arbitration must keep the whole-key winner even
     // though the other artifact is newer, and the skipped pass must be visible in the run record
     // rather than silent.
-    const dstAugmentedKey = projectionScoringProfileKey({
-      id: "live-service-ppr-dst",
-      rules: [...scoringProfile.rules, { statId: "defensive_sacks", points: 2 }],
-    });
+    const alternateProfile = rosScoringProfile("standard");
+    const dstAugmentedKey = alternateProfile.scoringProfileKey;
     const wholeKeyArtifact = artifactRow();
     const dstAugmentedArtifact = artifactRow({
       scoringProfileKey: dstAugmentedKey,

@@ -7,7 +7,7 @@ import {
 import { projectionScoringProfileKey, type ProjectionScoringProfile } from "./scoring.js";
 
 /** Player positions the rest-of-season rail models. Mirrors the worker's supported set. */
-const ROS_SUPPORTED_POSITIONS = ["QB", "RB", "WR", "TE", "K"] as const;
+const ROS_SUPPORTED_POSITIONS = ["QB", "RB", "WR", "TE", "K", "DST"] as const;
 
 /**
  * The common redraft scoring profiles the rest-of-season rail can be validated for. Order is fixed
@@ -122,6 +122,32 @@ function buildLegacyEntry(key: LegacyRosScoringProfileKey): RosScoringProfileEnt
  * diverge from the PPR/half-PPR/standard trio, and from each other, without any shared array to
  * keep in sync. Contains only stat IDs and points; no zero-point rules.
  */
+const ESPN_STANDARD_DST_RULES: readonly ProjectionScoringProfile["rules"][number][] = [
+  { statId: "defensive_sacks", points: 1 },
+  { statId: "defensive_interceptions", points: 2 },
+  { statId: "defensive_fumble_recoveries", points: 2 },
+  { statId: "defensive_safeties", points: 2 },
+  { statId: "defensive_touchdowns", points: 6 },
+  { statId: "defensive_blocked_kicks", points: 2 },
+  { statId: "defensive_two_point_returns", points: 2 },
+  { statId: "one_point_safeties", points: 1 },
+  { statId: "points_allowed_0_probability", points: 5 },
+  { statId: "points_allowed_1_6_probability", points: 4 },
+  { statId: "points_allowed_7_13_probability", points: 3 },
+  { statId: "points_allowed_14_17_probability", points: 1 },
+  { statId: "points_allowed_28_34_probability", points: -1 },
+  { statId: "points_allowed_35_45_probability", points: -3 },
+  { statId: "points_allowed_46_plus_probability", points: -5 },
+  { statId: "yards_allowed_0_99_probability", points: 5 },
+  { statId: "yards_allowed_100_199_probability", points: 3 },
+  { statId: "yards_allowed_200_299_probability", points: 2 },
+  { statId: "yards_allowed_350_399_probability", points: -1 },
+  { statId: "yards_allowed_400_449_probability", points: -3 },
+  { statId: "yards_allowed_450_499_probability", points: -5 },
+  { statId: "yards_allowed_500_549_probability", points: -6 },
+  { statId: "yards_allowed_550_plus_probability", points: -7 },
+];
+
 const ESPN_STANDARD_2PT_RULES: readonly ProjectionScoringProfile["rules"][number][] = [
   { statId: "passing_yards", points: 0.04 },
   { statId: "passing_touchdowns", points: 4 },
@@ -143,6 +169,7 @@ const ESPN_STANDARD_2PT_RULES: readonly ProjectionScoringProfile["rules"][number
   { statId: "extra_points_made", points: 1 },
   { statId: "extra_points_missed", points: -1 },
   { statId: "special_teams_touchdowns", points: 6 },
+  ...ESPN_STANDARD_DST_RULES,
 ];
 
 /**
@@ -170,6 +197,7 @@ const ESPN_STANDARD_2PT_NXM_RULES: readonly ProjectionScoringProfile["rules"][nu
   { statId: "field_goals_missed", points: -1 },
   { statId: "extra_points_made", points: 1 },
   { statId: "special_teams_touchdowns", points: 6 },
+  ...ESPN_STANDARD_DST_RULES,
 ];
 
 const CATALOG: readonly RosScoringProfileEntry[] = [

@@ -25,7 +25,7 @@ export const ROS_WITHHOLDING_REASONS = [
   "scoring-rules-unsupported",
   "no-admitted-scoring-profile",
   "incomplete-schedule",
-  "missing-roster-snapshot",
+  "missing-candidate-pool",
   "insufficient-candidate-inputs",
   "non-converged-cell",
   "stale-source",
@@ -427,7 +427,7 @@ const REASON_LABELS: Readonly<Record<RosWithholdingReason, string>> = {
   "no-admitted-scoring-profile":
     "Your league's scoring rules are not one of the validated profiles.",
   "incomplete-schedule": "The NFL schedule for the remaining weeks is not complete yet.",
-  "missing-roster-snapshot": "Your league's rosters have not been captured yet.",
+  "missing-candidate-pool": "The current NFL player pool has not been captured yet.",
   "insufficient-candidate-inputs": "There are not enough scored inputs for your league yet.",
   "non-converged-cell": "One or more position groups did not settle within tolerance.",
   "stale-source": "The NFL source data is older than the freshness limit.",

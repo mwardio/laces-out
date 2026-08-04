@@ -28,11 +28,7 @@ const referencePaths = rosScenarioPaths.reference.toLocaleString("en-US");
 const weeklySeasonCountWord = countWord(weeklySeasons.length);
 const rosHeldOutCountWord = countWord(rosHeldOutSeasons.length);
 const rosProfileCountWord = countWord(rosScoringProfiles.length);
-/**
- * The smallest forecast total any profile was graded on, so "at least" is true of every one of
- * them. Profiles that leave a position unscored grade fewer, and the page states the floor rather
- * than a number that would be wrong for some of them.
- */
+/** The smallest forecast total, preserving the claim if a future profile has a narrower scope. */
 const rosMinimumForecasts = Math.min(
   ...rosScoringProfiles.map((profile) => profile.forecasts),
 ).toLocaleString("en-US");
@@ -119,12 +115,12 @@ export default function MethodologyPage() {
               </p>
             </div>
             <div className={styles.pillar}>
-              <h3>Exact profile matching, no fallback</h3>
+              <h3>Exact scoring matches, no fallback</h3>
               <p>
                 A rule the engine cannot price makes its position unsupported rather than
                 approximated, and no position is priced from a partial rule set. Validated evidence
-                is used only where its scoring key matches the league&rsquo;s exactly &mdash; never
-                a near neighbour&rsquo;s.
+                is used only where that position&rsquo;s scoring key matches the league&rsquo;s
+                exactly &mdash; never a near neighbour&rsquo;s.
               </p>
             </div>
             <div className={styles.pillar}>
@@ -244,10 +240,10 @@ export default function MethodologyPage() {
               <p>
                 A league receives rest-of-season forecasts only when its scoring matches an admitted
                 evidence artifact that has cleared its gates, and its own inputs &mdash; a synced
-                roster and a complete remaining-season window &mdash; are in place. Any position or
-                league that does not clear receives nothing rather than a weaker number. The rail
-                re-evaluates this hourly, and every run records what it released and what it
-                withheld, cell by cell.
+                league, the current NFL player pool, and a complete remaining-season window &mdash;
+                are in place. Any position or league that does not clear receives nothing rather
+                than a weaker number. The rail re-evaluates this hourly, and every run records what
+                it released and what it withheld, cell by cell.
               </p>
             </div>
           </aside>

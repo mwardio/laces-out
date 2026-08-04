@@ -27,7 +27,7 @@ export const ROS_WITHHOLDING_REASONS = [
   "scoring-rules-unsupported",
   "no-admitted-scoring-profile",
   "incomplete-schedule",
-  "missing-roster-snapshot",
+  "missing-candidate-pool",
   "insufficient-candidate-inputs",
   "non-converged-cell",
   "stale-source",
@@ -111,9 +111,8 @@ export type RosScoringProfileCoverage = z.infer<typeof rosScoringProfileCoverage
  * `reasons` distinguishes two causes: `position-unsupported` is followed by the normalization
  * messages that made this position unscoreable; `scoring-profile-position-mismatch` means the
  * position normalizes fine but its scoped rules do not equal any admitted artifact's scoped rules.
- * Reported for all six positions on every league, `DST` included: this field states normalization
- * and catalog-match truth for a position, not whether the ROS rail currently ships that position's
- * forecasts (today only QB/RB/WR/TE/K).
+ * Reported for all six positions on every league, `DST` included. This field states both
+ * normalization and admitted-artifact matching truth for every position the ROS rail ships.
  */
 export const rosLeaguePositionReadinessSchema = z
   .object({

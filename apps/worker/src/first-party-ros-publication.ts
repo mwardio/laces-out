@@ -146,10 +146,7 @@ export function firstPartyRosChampionArtifactIsValid(
   return true;
 }
 
-/**
- * A position the ROS release rail models. D/ST is deliberately absent: the rail has no D/ST
- * product surface, so a D/ST rule can neither authorize nor block anything published here.
- */
+/** Every position the ROS release rail models and may publish. */
 export type FirstPartyRosRailPosition = (typeof HISTORICAL_ROS_SUPPORTED_POSITIONS)[number];
 
 const FIRST_PARTY_ROS_BUCKETS: readonly FirstPartyRosRemainingWeeksBucket[] = [

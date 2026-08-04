@@ -13,6 +13,7 @@ import {
   registerQueues,
   registerSchedules,
   registerWorkers,
+  SEASON_PROJECTION_REFRESH_EXPIRE_SECONDS,
   type DataHealthJob,
   type DataRefreshJob,
   type LeagueSyncJob,
@@ -83,7 +84,11 @@ describe("worker queue reliability", () => {
     for (const [key, name] of Object.entries(queueNames)) {
       const expectedLimits = {
         syncLeague: { retryLimit: 5, retryDelayMax: 900, expireInSeconds: 900 },
-        refreshProjections: { retryLimit: 4, retryDelayMax: 1_800, expireInSeconds: 1_800 },
+        refreshProjections: {
+          retryLimit: 4,
+          retryDelayMax: 1_800,
+          expireInSeconds: SEASON_PROJECTION_REFRESH_EXPIRE_SECONDS,
+        },
         recomputeRecommendations: { retryLimit: 3, retryDelayMax: 300, expireInSeconds: 900 },
         dataHealth: { retryLimit: 2, retryDelayMax: 300, expireInSeconds: 300 },
         dataRefresh: { retryLimit: 5, retryDelayMax: 3_600, expireInSeconds: 1_800 },

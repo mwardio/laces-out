@@ -37,24 +37,31 @@ function leagueRow(overrides: Partial<LeagueRow> = {}): LeagueRow {
     scoringProfileKey: supportedKey,
     positions: ALL_POSITIONS_SUPPORTED,
     scheduleComplete: true,
-    rosterSnapshotAt: new Date("2026-09-01T00:00:00.000Z"),
+    candidatePoolSnapshotAt: new Date("2026-09-01T00:00:00.000Z"),
     candidateInputCount: 300,
-    sourceAsOf: new Date("2026-09-01T00:00:00.000Z"),
+    sourceVerifiedAt: new Date("2026-09-01T00:00:00.000Z"),
     nonConvergedCells: 0,
     ...overrides,
   };
 }
 
 describe("deriveLeagueReadiness", () => {
-  it("reports no admitted scoring profile when the league's rules are unsupported", () => {
+  it("allows a partial profile match when at least one position is admitted", () => {
     const [league] = deriveLeagueReadiness({
       admittedScoringProfileKeys: [supportedKey],
       leagues: [leagueRow({ leagueSeasonId: "league-1", scoringProfileKey: standardKey })],
       now,
     });
 
-    expect(league?.state).toBe("withheld");
-    expect(league?.reasons).toEqual(["no-admitted-scoring-profile"]);
+    expect(league?.state).toBe("ready");
+    expect(league?.reasons).toEqual([]);
+    expect(league?.positions.filter((position) => position.decision === "ready")).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ position: "QB" }),
+        expect.objectContaining({ position: "K" }),
+        expect.objectContaining({ position: "DST" }),
+      ]),
+    );
   });
 
   it("names every unmet input independently rather than stopping at the first", () => {
@@ -64,9 +71,9 @@ describe("deriveLeagueReadiness", () => {
         leagueRow({
           leagueSeasonId: "league-2",
           scheduleComplete: false,
-          rosterSnapshotAt: null,
+          candidatePoolSnapshotAt: null,
           candidateInputCount: 0,
-          sourceAsOf: new Date("2026-01-01T00:00:00.000Z"),
+          sourceVerifiedAt: new Date("2026-01-01T00:00:00.000Z"),
           nonConvergedCells: 2,
         }),
       ],
@@ -75,7 +82,7 @@ describe("deriveLeagueReadiness", () => {
 
     expect(league?.reasons).toEqual([
       "incomplete-schedule",
-      "missing-roster-snapshot",
+      "missing-candidate-pool",
       "insufficient-candidate-inputs",
       "non-converged-cell",
       "stale-source",
@@ -159,7 +166,11 @@ describe("deriveLeagueReadiness position readiness", () => {
 
     const [mismatched] = deriveLeagueReadiness({
       admittedScoringProfileKeys: [supportedKey],
-      leagues: [leagueRow({ scoringProfileKey: standardKey })],
+      leagues: [
+        leagueRow({
+          scoringProfileKey: '[{"statId":"unsupported_stat","points":1,"bonuses":[]}]',
+        }),
+      ],
       now,
     });
     expect(mismatched?.reasons).toEqual(["no-admitted-scoring-profile"]);

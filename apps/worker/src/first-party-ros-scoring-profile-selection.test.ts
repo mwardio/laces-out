@@ -44,6 +44,6 @@ describe("rosAvailableProjectionStatIds", () => {
   });
 
   it("models the same positions the historical backtest supports", () => {
-    expect([...HISTORICAL_ROS_SUPPORTED_POSITIONS]).toEqual(["QB", "RB", "WR", "TE", "K"]);
+    expect([...HISTORICAL_ROS_SUPPORTED_POSITIONS]).toEqual(["QB", "RB", "WR", "TE", "K", "DST"]);
   });
 });

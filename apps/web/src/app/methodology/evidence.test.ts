@@ -22,10 +22,8 @@ import {
   rosScenarioPaths,
   rosScopeFigures,
   rosScoringProfiles,
-  rosLineageReconstruction,
   rosSharedReplayScope,
   rosSourceSeasons,
-  rosTeamDefenseCoverage,
   rosWithheldCellFigures,
   weeklyArtifact,
   weeklyChampionOutcome,
@@ -70,14 +68,15 @@ describe("methodology evidence manifest", () => {
   it("is versioned", () => {
     // v2 widened the rest-of-season block from one scoring profile to three. v3 replaced all three
     // with the eight-player re-validation of 2026-07-28, which superseded them by recency. v4 added
-    // the two league-shaped catalog profiles admitted 2026-07-29.
-    expect(METHODOLOGY_EVIDENCE_MANIFEST_VERSION).toBe("methodology-evidence-v4");
+    // the two league-shaped catalog profiles. v5 replaces their reconstructed v8 evidence with the
+    // native-lineage, D/ST-complete v9 replays admitted 2026-08-04.
+    expect(METHODOLOGY_EVIDENCE_MANIFEST_VERSION).toBe("methodology-evidence-v5");
   });
 
-  // These values come from the three reports/ros-validation-v8-*-n8-2026-07-28.json artifacts and
-  // from the engine's own constants. Pinning them means a change to page copy cannot silently
-  // invent a new figure, and a change to the underlying model forces this test to be revisited
-  // alongside the published claim.
+  // These values come from the three reports/ros-validation-v8-*-n8-2026-07-28.json artifacts, the
+  // two native-lineage v9 catalog artifacts, and the engine's own constants. Pinning them means a
+  // change to page copy cannot silently invent a new figure, and a model change forces this test to
+  // be revisited alongside the published claim.
   it("pins the held-out seasons of the official rest-of-season replay", () => {
     expect(rosHeldOutSeasons).toEqual([2022, 2023, 2024, 2025]);
     expect(rosHeldOutSeasons).toHaveLength(4);
@@ -189,8 +188,8 @@ describe("rest-of-season scoring profiles", () => {
       ["full-ppr", "insufficient"],
       ["half-ppr", "insufficient"],
       ["standard", "insufficient"],
-      ["espn-standard-2pt", "evidence-ready"],
-      ["espn-standard-2pt-nxm", "evidence-ready"],
+      ["espn-standard-2pt", "insufficient"],
+      ["espn-standard-2pt-nxm", "insufficient"],
     ]);
     expect(rosScoringProfiles.map((profile) => [...profile.reportedBlockers])).toEqual([
       [
@@ -199,8 +198,8 @@ describe("rest-of-season scoring profiles", () => {
       ],
       ["calibration_QB_nine-plus_availability_mae_above_maximum"],
       ["calibration_QB_nine-plus_availability_mae_above_maximum"],
-      [],
-      [],
+      ["calibration_DST_five-to-eight_coverage_shortfall_above_maximum"],
+      ["calibration_DST_five-to-eight_coverage_shortfall_above_maximum"],
     ]);
     // Every blocker must match the admission policy's cell pattern, or the artifact would have been
     // rejected outright rather than admitted with cells withheld.
@@ -220,8 +219,8 @@ describe("rest-of-season scoring profiles", () => {
       ["full-ppr", "739b8306e3f3212542d2f778575bfe741b79e8660bc27357d86064f1554996a1"],
       ["half-ppr", "f419d48b31458a9f1cdf747930bda60e55cc370dad9dd8a72392e1bef5ded358"],
       ["standard", "2ab659edb7b376f2f29583b88846a7dcde6b22ea8db934a1aed1eefde5c4f4d6"],
-      ["espn-standard-2pt", "0f715aba1888f35d60f359ef4299c7e80dbe7824f6f28c6a871deda1ce950ff9"],
-      ["espn-standard-2pt-nxm", "a513471f27d73e84831dd17215ef959746dfc4315c2b9b8ba03bd1b3970c9430"],
+      ["espn-standard-2pt", "e870faab6d4e8c387f4b91e92bc77b6ce7e5cf0141a1c05aae7b39a2672e3adf"],
+      ["espn-standard-2pt-nxm", "e3f5fb77c01ce377140be137de400b6f4a824ec8d741de8a2321c62450017165"],
     ]);
     expect(
       rosScoringProfiles.map((profile) => [profile.key, profile.scoringProfileDigest] as const),
@@ -229,8 +228,8 @@ describe("rest-of-season scoring profiles", () => {
       ["full-ppr", "dd74455ddb551d53f68ba9420f4446aebf63e3e8ea34efd24119cc780c47a484"],
       ["half-ppr", "66c5c9a41225e6b1b2fde37f680a78a450c3b098c107a8eff47e1df251c338c8"],
       ["standard", "ecf4238506ddd4284870dcec5408b1acff501de29ee0f7662ef12f6d19a24ad0"],
-      ["espn-standard-2pt", "4835b6c57ae0ceeebb1750ad6ff81ec5f6988f28fb5193b42a067178cfe0a09e"],
-      ["espn-standard-2pt-nxm", "d2bdcbc7a786d05fa4dcf0b9dbd9f519cf9c78c1e883ed2fef7f913c94ceb49e"],
+      ["espn-standard-2pt", "6a2ce8c94a3733673f17056d2ffafc27dca00c1ab93d17ce58a1bdce9b6d6843"],
+      ["espn-standard-2pt-nxm", "d0e49cad7fbbdf20552427d107bea2cd9a6c2f735b4d67745d5e5ca9e85832eb"],
     ]);
     const digests = new Set<string>();
     for (const profile of rosScoringProfiles) {
@@ -258,15 +257,15 @@ describe("rest-of-season scoring profiles", () => {
       "2026-07-28",
       "2026-07-28",
       "2026-07-28",
-      "2026-07-29",
-      "2026-07-29",
+      "2026-08-04",
+      "2026-08-04",
     ]);
     expect(rosScoringProfiles.map((profile) => profile.admittedAt)).toEqual([
       "2026-07-28",
       "2026-07-28",
       "2026-07-28",
-      "2026-07-29",
-      "2026-07-29",
+      "2026-08-04",
+      "2026-08-04",
     ]);
     // Nothing may be admitted before the replay that justifies it.
     for (const profile of rosScoringProfiles) {
@@ -280,22 +279,17 @@ describe("rest-of-season scoring profiles", () => {
     expect(rosSharedReplayScope.convergenceDiagnostics).toBe(rosConvergence.total);
   });
 
-  it("keeps the forecast count per profile, because it is no longer shared", () => {
-    // It was identical while every profile priced all six positions. The two catalog profiles
-    // score no team defense, so their D/ST rows thin out and they grade fewer forecasts. Publishing
-    // one number for all five would be wrong for two of them, so the count lives on each record.
+  it("pins the same complete six-position forecast count for every profile", () => {
     expect(rosScoringProfiles.map((profile) => [profile.key, profile.forecasts] as const)).toEqual([
       ["full-ppr", rosForecastCount],
       ["half-ppr", rosForecastCount],
       ["standard", rosForecastCount],
-      ["espn-standard-2pt", 2965],
-      ["espn-standard-2pt-nxm", 2965],
+      ["espn-standard-2pt", rosForecastCount],
+      ["espn-standard-2pt-nxm", rosForecastCount],
     ]);
-    // Exactly the profiles that do not score team defense are the ones that grade fewer.
-    for (const profile of rosScoringProfiles) {
-      expect(profile.forecasts === rosForecastCount).toBe(profile.scoresTeamDefense);
-    }
-    expect(new Set(rosScoringProfiles.map((profile) => profile.forecasts)).size).toBeGreaterThan(1);
+    expect(new Set(rosScoringProfiles.map((profile) => profile.forecasts))).toEqual(
+      new Set([rosForecastCount]),
+    );
   });
 
   it("spells the profile counts the page states in prose", () => {
@@ -303,9 +297,9 @@ describe("rest-of-season scoring profiles", () => {
     // the array. This pins the entries that indexing actually reaches.
     expect(ROS_COUNT_WORDS[rosScoringProfiles.length]).toBe("five");
     const blocked = rosScoringProfiles.filter((profile) => profile.reportedBlockers.length > 0);
-    expect(ROS_COUNT_WORDS[blocked.length]).toBe("three");
+    expect(ROS_COUNT_WORDS[blocked.length]).toBe("five");
     const clean = rosScoringProfiles.filter((profile) => profile.reportedBlockers.length === 0);
-    expect(ROS_COUNT_WORDS[clean.length]).toBe("two");
+    expect(ROS_COUNT_WORDS[clean.length]).toBe("zero");
     expect(ROS_COUNT_WORDS[rosScoringProfiles.filter((p) => p.narrowerSampleReplayed).length]).toBe(
       "three",
     );
@@ -335,7 +329,9 @@ describe("rest-of-season scoring profiles", () => {
   it("sources every withheld-cell figure from a named artifact field or code constant", () => {
     expect(rosWithheldCellFigures.length).toBeGreaterThan(0);
     for (const figure of rosWithheldCellFigures) {
-      expect(figure.source).toMatch(/ros-validation-v8[a-z0-9-]* \.|FIRST_PARTY_ROS_/u);
+      expect(figure.source).toMatch(
+        /ros-validation-v(?:8(?:\/v9)?|9)[a-z0-9-]* \.|FIRST_PARTY_ROS_/u,
+      );
       expect(figure.value.length).toBeGreaterThan(0);
     }
     // The artifact-pointer column was dropped from the rendered tables by direction. Every pointer
@@ -455,7 +451,9 @@ describe("published claims stay honest about release state", () => {
     // page. The replacement is true in both states because it states the gate, not the moment.
     expect(pageProse).toContain("Rest-of-season release is gated per league and per position");
     expect(pageProse).toContain("its scoring matches an admitted evidence artifact");
-    expect(pageProse).toContain("a synced roster and a complete remaining-season window");
+    expect(pageProse).toContain(
+      "a synced league, the current NFL player pool, and a complete remaining-season window",
+    );
     expect(pageProse).toContain("receives nothing rather than a weaker number");
     // The audit clause is allowed, but only as auditing — never as the reason nothing ships.
     expect(pageProse).toContain("records what it released and what it withheld");
@@ -472,7 +470,7 @@ describe("published claims stay honest about release state", () => {
 
   it("discloses the replays that did not clear their gates", () => {
     const failed = rosGateHistory.filter((row) => row.outcome === "fail");
-    expect(failed).toHaveLength(4);
+    expect(failed).toHaveLength(5);
     // A receipt that lists only the passing run is not a receipt. The current replay is itself a
     // failing row, so it must appear here and not only in the profile table.
     expect(failed.map((row) => row.run)).toEqual([
@@ -480,27 +478,27 @@ describe("published claims stay honest about release state", () => {
       "v7 — 2026-07-23",
       "v8, narrower sample — 2026-07-28 (Half PPR, Standard)",
       "v8, current sample — 2026-07-28 (all three profiles)",
+      "v9, D/ST-complete catalog profiles — 2026-08-04 (Standard + 2-pt, with and without the XP-missed penalty)",
     ]);
     for (const row of failed) {
       expect(row.blockers.length).toBeGreaterThan(0);
       expect(row.blockers).not.toBe("None.");
     }
-    // Two rows pass. The older one is the superseded narrow-sample Full PPR replay and must say
-    // so; the newer one is the catalog pair, which cleared its gates and must still disclose what
-    // its clean result does and does not cover.
+    // Two historical rows pass. The superseded narrow-sample Full PPR replay and the earlier v8
+    // catalog pair remain in the receipt even though neither is the current evidence.
     const passed = rosGateHistory.filter((row) => row.outcome === "pass");
     expect(passed).toHaveLength(2);
     expect(passed[0]?.run).toContain("narrower sample");
     expect(passed[0]?.blockers).toContain("Superseded");
     const current = rosGateHistory[rosGateHistory.length - 1];
-    expect(current?.run).toContain("catalog profiles");
-    expect(current?.state).toBe("evidence-ready");
-    expect(current?.outcome).toBe("pass");
-    expect(current?.blockers).toContain("degenerate");
-    // The failing PPR-family run stays on the record rather than being displaced by the clean one.
+    expect(current?.run).toContain("D/ST-complete catalog profiles");
+    expect(current?.state).toBe("insufficient");
+    expect(current?.outcome).toBe("fail");
+    expect(current?.blockers).toContain("Team-defense interval coverage");
+    // The superseded clean catalog run stays on the record directly before the current v9 row.
     const priorRun = rosGateHistory[rosGateHistory.length - 2];
-    expect(priorRun?.run).toContain("current sample");
-    expect(priorRun?.state).toBe("insufficient");
+    expect(priorRun?.run).toContain("v8, catalog profiles");
+    expect(priorRun?.state).toBe("evidence-ready");
   });
 
   it("no longer claims the live publication gate still point-compares", () => {
@@ -544,7 +542,7 @@ describe("published claims stay honest about release state", () => {
 
   it("never presents a profile that did not clear its gates as cleanly validated", () => {
     const blocked = rosScoringProfiles.filter((profile) => profile.reportedBlockers.length > 0);
-    expect(blocked).toHaveLength(3);
+    expect(blocked).toHaveLength(5);
     for (const profile of blocked) {
       // Its own run did not clear, and admission did not change that.
       expect(profile.reportState).toBe("insufficient");
@@ -564,33 +562,29 @@ describe("published claims stay honest about release state", () => {
     // publishes nothing — which is pinned in "states that a withheld cell publishes nothing".
   });
 
-  it("never presents a blocker-free profile as validated at every position", () => {
-    // Two catalog profiles withhold no cells. That is their real gate outcome and the page states
-    // it — but neither prices team defense, so their three D/ST cells are degenerate rather than
-    // validated, and the page must say so beside the clean count instead of only in a footnote.
+  it("pins the current D/ST interval blocker without weakening the other cells", () => {
     const clean = rosScoringProfiles.filter((profile) => profile.reportedBlockers.length === 0);
-    expect(clean).toHaveLength(2);
-    for (const profile of clean) {
-      expect(profile.reportState).toBe("evidence-ready");
-      expect(profile.scoresTeamDefense).toBe(false);
+    expect(clean).toHaveLength(0);
+    const catalogProfiles = rosScoringProfiles.filter((profile) =>
+      profile.key.startsWith("espn-standard-2pt"),
+    );
+    expect(catalogProfiles).toHaveLength(2);
+    for (const profile of catalogProfiles) {
+      expect(profile.reportState).toBe("insufficient");
+      expect(profile.reportedBlockers).toEqual([
+        "calibration_DST_five-to-eight_coverage_shortfall_above_maximum",
+      ]);
+      expect(profile.withheldCells).toBe("Team defense, 5–8 remaining weeks.");
     }
-    // Exactly the blocker-free profiles are the ones whose team-defense cells are degenerate. If a
-    // genuinely clean profile that DOES score team defense ever lands, this fails and the copy
-    // above has to be rewritten rather than silently generalised.
-    for (const profile of rosScoringProfiles) {
-      expect(profile.reportedBlockers.length === 0).toBe(!profile.scoresTeamDefense);
-    }
-    // RETIRED (round 6): the profiles table and its row-level D/ST caveat were cut, so there is no
-    // per-profile claim left to qualify — no "0 of N cells withheld" chip, no clean/blocked count,
-    // nothing on the page that could read as "validated at every position". The invariant above
-    // still holds the line: if a blocker-free profile that DOES price team defense ever lands, this
-    // fails and the decision has to be taken again rather than inherited.
-    // The two withheld-cell rows for those degenerate D/ST cells stay on the page as the receipt.
     const defenceRows = rosWithheldCellFigures.filter((figure) =>
       figure.label.includes("team defense"),
     );
     expect(defenceRows).toHaveLength(2);
-    for (const row of defenceRows) expect(row.value).toContain("not blocked");
+    for (const row of defenceRows) {
+      expect(row.value).toContain("0 of 4");
+      expect(row.value).toContain("blocked");
+      expect(row.value).toContain("lower point error than baseline");
+    }
     // Full PPR was the clean profile at the narrower sample and is not at this one.
     expect(rosArtifact.reportState).not.toBe("evidence-ready");
     for (const stale of [
@@ -601,44 +595,28 @@ describe("published claims stay honest about release state", () => {
     ]) {
       expect(pageProse).not.toContain(stale);
     }
-    // The gate table must still show the two gates the PPR-family reports actually failed.
+    // The gate table keeps legacy availability failures separate from the current D/ST interval
+    // failure, and the blocker summary acknowledges both.
     const failedGates = rosGateRows.filter((row) => row.state === "fail").map((row) => row.gate);
-    expect(failedGates).toEqual(["Availability accuracy", "Release blockers"]);
+    expect(failedGates).toEqual([
+      "Availability accuracy",
+      "Interval calibration",
+      "Release blockers",
+    ]);
   });
 
-  it("discloses the degenerate team-defense cells and the reconstructed lineage", () => {
-    expect(rosTeamDefenseCoverage.catalogRows).toBe(245);
-    expect(rosTeamDefenseCoverage.otherPositionRows).toBe(544);
-    // Operator decision 2026-07-29: the caveat is published as mechanism, without measurements.
-    // The coverage ranges stay in the manifest's doc comment as the engineering record and are not
-    // exported, so page copy cannot reinstate them by accident. Narrowing the disclosure, not
-    // contradicting it — the row-level caveat and the two withheld-cell rows below are unchanged.
-    expect(rosTeamDefenseCoverage).not.toHaveProperty("catalogCoverageRange");
-    expect(rosTeamDefenseCoverage).not.toHaveProperty("scoringFamilyCoverageRange");
-    // RETIRED (round 6): the D/ST caveat bullet was cut with the per-profile material it qualified.
-    // The page no longer names a profile or a cell count, so it asserts nothing about either.
-    // Lineage: reconstructed, not emitted, and the page says which and how it was checked.
-    expect(rosLineageReconstruction.checksumsMatched).toBe(35);
-    expect(rosLineageReconstruction.checksumsTotal).toBe(42);
-    expect(rosLineageReconstruction.checksumsMatched).toBeLessThan(
-      rosLineageReconstruction.checksumsTotal,
-    );
-    // RETIRED (round 6): the reconstructed-lineage bullet was cut. The page states no run lineage
-    // at all now, so there is nothing to qualify; the reconstruction stays pinned here.
-    for (const profile of rosScoringProfiles) {
-      expect(profile.lineageReconstructed).toBe(!profile.scoresTeamDefense);
-    }
-  });
-
-  it("cannot republish any figure from the superseded five-player replays", () => {
-    // Every value below was a published claim on this page until the eight-player re-validation
-    // superseded it. Reinstating one would be a false current claim, so each is pinned as stale
-    // across the manifest and the rendered copy alike.
+  it("cannot republish any figure from superseded replay generations", () => {
+    // Every value below was a published claim until a wider or D/ST-complete validation superseded
+    // it. Reinstating one would be a false current claim, so each is pinned as stale across the
+    // manifest and rendered copy alike.
     const manifest = readFileSync(fileURLToPath(new URL("./evidence.ts", import.meta.url)), "utf8");
     const staleFigures = [
       // .report.forecasts and its display form at five players per position.
       "2040",
       "2,040",
+      // The first catalog replay omitted meaningful D/ST scoring and therefore graded fewer rows.
+      "2965",
+      "2,965",
       // Superseded availability MAE values: standard/full-ppr WR five-to-eight, and QB nine-plus.
       "1.5031",
       "1.4118",
@@ -651,6 +629,11 @@ describe("published claims stay honest about release state", () => {
       "67e7ba0945444df5b43dff75f5073721f10e3aa092c49723b88ac09d3e655d5d",
       "fb636ad5028350f67ac7c1222c969ad52872ef8967ae4cce063ea3d3f36f88ac",
       "b779d5c13b9147b16a04107456c0c3128b6baef7a6f5d03f52eadb313321dbc7",
+      // Superseded v8 catalog artifact checksums and scoring digests.
+      "0f715aba1888f35d60f359ef4299c7e80dbe7824f6f28c6a871deda1ce950ff9",
+      "a513471f27d73e84831dd17215ef959746dfc4315c2b9b8ba03bd1b3970c9430",
+      "4835b6c57ae0ceeebb1750ad6ff81ec5f6988f28fb5193b42a067178cfe0a09e",
+      "d2bdcbc7a786d05fa4dcf0b9dbd9f519cf9c78c1e883ed2fef7f913c94ceb49e",
     ];
     for (const stale of staleFigures) {
       expect(pageSource).not.toContain(stale);
@@ -814,7 +797,9 @@ describe("no proof number is hardcoded into page copy", () => {
     for (const figure of rosScopeFigures) {
       expect(figure.source.length).toBeGreaterThan(0);
       // Each source must name a real artifact pointer or an exported engine constant.
-      expect(figure.source).toMatch(/ros-validation-v8[a-z0-9-]* \.|FIRST_PARTY_ROS_/u);
+      expect(figure.source).toMatch(
+        /ros-validation-v(?:8(?:\/v9)?|9)[a-z0-9-]* \.|FIRST_PARTY_ROS_/u,
+      );
     }
   });
 

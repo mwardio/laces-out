@@ -62,6 +62,7 @@ import {
   type FirstPartyRosChampionPolicy,
   type FirstPartyRosHeldOutForecast,
 } from "@fantasy/projections";
+import { SEASON_PROJECTION_REFRESH_EXPIRE_SECONDS } from "@fantasy/jobs";
 import { and, eq, sql } from "drizzle-orm";
 import { migrate } from "drizzle-orm/postgres-js/migrator";
 import postgres from "postgres";
@@ -104,7 +105,7 @@ const migrationsFolder = path.resolve(
  * The `projection-refresh` queue's `expireInSeconds`. A ROS refresh that outlives this is killed
  * and retried by pg-boss, so the measured cost of the real default path is reported against it.
  */
-const PROJECTION_REFRESH_JOB_TIMEOUT_SECONDS = 30 * 60;
+const PROJECTION_REFRESH_JOB_TIMEOUT_SECONDS = SEASON_PROJECTION_REFRESH_EXPIRE_SECONDS;
 
 // A fixed, never-real season keeps this suite isolated from any other fixture data.
 const TEST_SEASON = 2031;
@@ -116,8 +117,10 @@ const FRESH = new Date(FIXED_NOW.getTime() - 5 * 60_000);
 
 const NFL_TEAMS = ["BUF", "MIA", "NYJ", "NEP"] as const;
 const WR_COUNT = 8;
-/** Rostered players actually released. Kept small so the suite stays fast at 12288 paths. */
-const ROSTERED_WR_COUNT = 4;
+/** Current NFL candidate rows released. Kept small so the suite stays fast at 12288 paths. */
+const CANDIDATE_WR_COUNT = WR_COUNT;
+/** Only half are on the fantasy roster, proving preseason/free-agent candidates still publish. */
+const FANTASY_ROSTERED_WR_COUNT = 4;
 
 function checksumFor(key: string): string {
   return createHash("sha256").update(`ros-pg-test:${key}`, "utf8").digest("hex");
@@ -656,7 +659,7 @@ async function seedLeague(
     .returning({ id: rosterSnapshots.id });
   if (!snapshot) throw new Error("Failed to seed the pg-test roster snapshot");
   await db.insert(rosterEntries).values(
-    seeded.slice(0, ROSTERED_WR_COUNT).map((player, index) => ({
+    seeded.slice(0, FANTASY_ROSTERED_WR_COUNT).map((player, index) => ({
       snapshotId: snapshot.id,
       playerId: player.id,
       slotCode: index < 2 ? "WR" : "BN",
@@ -771,6 +774,7 @@ describe.skipIf(!dockerAvailable)(
         database: handle.db,
         now: () => FIXED_NOW,
         candidateProvider: databaseFirstPartyRosCandidateProvider({ database: handle.db }),
+        acceptedScoringProfileKeys: [SCORING_KEY],
       });
 
       const started = process.hrtime.bigint();
@@ -780,7 +784,7 @@ describe.skipIf(!dockerAvailable)(
       const summaries = await handle.db.execute<PersistedSummary>(sql`
           select scenario_count, method_version from player_ros_projection_summaries
         `);
-      expect(summaries.length).toBe(ROSTERED_WR_COUNT);
+      expect(summaries.length).toBe(CANDIDATE_WR_COUNT);
       for (const summary of summaries) {
         // The whole defect in one assertion: this used to be capped at 4096.
         expect(Number(summary.scenario_count)).toBe(FIRST_PARTY_ROS_DEFAULT_SCENARIOS);
@@ -804,7 +808,7 @@ describe.skipIf(!dockerAvailable)(
           ),
         );
       expect(releaseRun).toBeDefined();
-      expect(releaseRun?.playersPublished).toBe(ROSTERED_WR_COUNT);
+      expect(releaseRun?.playersPublished).toBe(CANDIDATE_WR_COUNT);
       const convergence = (
         releaseRun?.metrics as { readonly rosConvergence?: Record<string, unknown> }
       ).rosConvergence;
@@ -833,11 +837,11 @@ describe.skipIf(!dockerAvailable)(
 
     it("reports the real default path's cost against the projection-refresh job timeout", () => {
       expect(refreshDurationMs).toBeGreaterThan(0);
-      const perPlayerMs = refreshDurationMs / ROSTERED_WR_COUNT;
+      const perPlayerMs = refreshDurationMs / CANDIDATE_WR_COUNT;
       const timeoutMs = PROJECTION_REFRESH_JOB_TIMEOUT_SECONDS * 1_000;
       console.info(
         `[ros-scenario-contract] real default candidate-to-publication path: ` +
-          `${refreshDurationMs.toFixed(0)} ms for ${ROSTERED_WR_COUNT} released players ` +
+          `${refreshDurationMs.toFixed(0)} ms for ${CANDIDATE_WR_COUNT} released players ` +
           `(${perPlayerMs.toFixed(0)} ms/player) against a ` +
           `${PROJECTION_REFRESH_JOB_TIMEOUT_SECONDS}s (${timeoutMs} ms) ` +
           `${queueNames.refreshProjections} job timeout; ` +
@@ -915,6 +919,7 @@ describe.skipIf(!dockerAvailable)(
           database: handle.db,
           scenarioCount: FIRST_PARTY_ROS_MAXIMUM_SCENARIOS + 2,
         }),
+        acceptedScoringProfileKeys: [SCORING_KEY],
       });
 
       // An out-of-contract path count is not silently clamped to something persistable: the engine
@@ -927,7 +932,7 @@ describe.skipIf(!dockerAvailable)(
           select count(*)::text as count from player_ros_projection_summaries
         `);
       expect(after[0]?.count).toBe(before[0]?.count);
-      expect(Number(after[0]?.count)).toBe(ROSTERED_WR_COUNT);
+      expect(Number(after[0]?.count)).toBe(CANDIDATE_WR_COUNT);
     }, 120_000);
   },
 );

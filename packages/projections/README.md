@@ -242,14 +242,14 @@ explicitly admitted, immutable artifact whose scoring identity matches the leagu
 position/window cell then re-clears identity, coverage, convergence, availability, bias, and
 calibration gates. A withheld cell never removes the prior good league set.
 
-The current full-PPR reference combines weekly model `laces-weekly-components-v8` with ROS model
-`laces-ros-distribution-v7`. Its 2019–2025 replay graded 2,040 forecasts across 68 season/cutoff
-batches, converged all 144 release/reference strata, and produced the first zero-blocker 18-cell
-artifact, admitted on 2026-07-23. The kicker path uses a calibrated integer count process; the
-weekly v8 thin-history blend fixed the remaining short-window center error while leaving non-kicker
-distributions unchanged apart from deterministic reseeding. Half-PPR and standard profiles are
-validated independently and retain their own per-cell decisions rather than inheriting the
-full-PPR result.
+The current rest-of-season reference uses model `laces-ros-distribution-v7`. Every current profile
+grades 3,264 forecasts across 68 season/cutoff batches, converges all 144 release/reference
+diagnostics, and completes all 18 evidence cells. The generic Full PPR, Half PPR, and Standard
+artifacts have clean gate-only re-evaluations admitted under the current availability rule. The two
+ESPN-shaped v9 artifacts include complete D/ST scoring and native source lineage; each withholds only
+the D/ST 5–8 week cell after 0 of 4 walk-forward blocks covered. All other cells remain
+independently releasable. The kicker path uses a calibrated integer count process, and every scoring
+profile is validated independently rather than inheriting another profile's result.
 
 These historical seasons are development evidence. The final untouched confirmation remains the
 pre-registered [2026 protocol](../../docs/ros-v6-2026-untouched-protocol.md), which cannot execute

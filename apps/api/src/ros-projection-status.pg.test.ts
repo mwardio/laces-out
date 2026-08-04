@@ -30,6 +30,7 @@ import {
   leagueSeasons,
   leagues,
   nflScheduleObservations,
+  playerWeeklyRosterObservations,
   players,
   rosterEntries,
   rosterSnapshots,
@@ -499,16 +500,37 @@ describe.skipIf(!dockerAvailable)(
 
       // A complete, fresh regular-season schedule, so `incomplete-schedule` and `stale-source`
       // cannot fire and the scoring-identity reason is isolated.
-      const [source] = await db
+      const scheduleChecksum = "b".repeat(64);
+      const rosterChecksum = "c".repeat(64);
+      const sources = await db
         .insert(dataSources)
-        .values({
-          key: `ros-status-pg-test.schedules.${randomUUID()}`,
-          name: "ROS status pg-test schedule source",
-          kind: "pg-test-source",
-          checkIntervalMinutes: 60,
-        })
-        .returning({ id: dataSources.id });
-      if (!source) throw new Error("Failed to seed the pg-test schedule source");
+        .values([
+          {
+            key: `nflverse.schedules.${SEASON}`,
+            name: "ROS status pg-test schedule source",
+            kind: "pg-test-source",
+            checkIntervalMinutes: 60,
+            lastChecksum: scheduleChecksum,
+            lastSuccessfulAt: FRESH,
+            lastCheckedAt: FRESH,
+          },
+          {
+            key: `nflverse.weekly-rosters.${SEASON}`,
+            name: "ROS status pg-test candidate source",
+            kind: "pg-test-source",
+            checkIntervalMinutes: 60,
+            lastChecksum: rosterChecksum,
+            lastSuccessfulAt: FRESH,
+            lastCheckedAt: FRESH,
+          },
+        ])
+        .returning({ id: dataSources.id, key: dataSources.key });
+      const sourceByKey = new Map(sources.map((source) => [source.key, source.id]));
+      const scheduleSourceId = sourceByKey.get(`nflverse.schedules.${SEASON}`);
+      const rosterSourceId = sourceByKey.get(`nflverse.weekly-rosters.${SEASON}`);
+      if (!scheduleSourceId || !rosterSourceId) {
+        throw new Error("Failed to seed the pg-test ROS sources");
+      }
       const [run] = await db
         .insert(syncRuns)
         .values({
@@ -521,7 +543,7 @@ describe.skipIf(!dockerAvailable)(
         .returning({ id: syncRuns.id });
       if (!run) throw new Error("Failed to seed the pg-test sync run");
       await db.insert(nflScheduleObservations).values({
-        sourceId: source.id,
+        sourceId: scheduleSourceId,
         sourceSyncRunId: run.id,
         externalGameId: `${SEASON}_01_SF_SEA`,
         season: SEASON,
@@ -541,7 +563,21 @@ describe.skipIf(!dockerAvailable)(
         homeScore: null,
         sourceAsOf: FRESH,
         fetchedAt: FRESH,
-        inputChecksum: "b".repeat(64),
+        inputChecksum: scheduleChecksum,
+      });
+      await db.insert(playerWeeklyRosterObservations).values({
+        sourceId: rosterSourceId,
+        sourceSyncRunId: run.id,
+        externalPlayerId: "ros-status-receiver",
+        playerId: player.id,
+        season: SEASON,
+        week: 1,
+        team: "SF",
+        position: "WR",
+        rosterStatus: "ACT",
+        statusDescription: null,
+        fetchedAt: FRESH,
+        inputChecksum: rosterChecksum,
       });
 
       status = await new RosProjectionStatusService(db, () => NOW).getStatus({
@@ -586,15 +622,35 @@ describe.skipIf(!dockerAvailable)(
       for (const entry of status.scoringProfiles.unsupported) {
         expect(entry.blockers).toEqual(["no_admitted_artifact"]);
       }
+      expect(
+        Object.fromEntries(
+          status.scoringProfiles.unsupported.map((entry) => [
+            entry.profile.profileId,
+            entry.evidenceReport,
+          ]),
+        ),
+      ).toEqual({
+        "laces-out-historical-ros-half-ppr": "ros-validation-v8-half-ppr-n8-2026-07-28",
+        "laces-out-historical-ros-standard": "ros-validation-v8-standard-n8-2026-07-28",
+        "laces-out-historical-ros-espn-standard-2pt":
+          "ros-validation-v9-espn-standard-2pt-n8-2026-08-03",
+        "laces-out-historical-ros-espn-standard-2pt-nxm":
+          "ros-validation-v9-espn-standard-2pt-nxm-n8-2026-08-03",
+      });
     });
 
-    it("withholds a non-matching league with a structured reason instead of a mismatched set", () => {
+    it("keeps the positions that match even when the league differs elsewhere", () => {
       const readiness = status.leagueReadiness.find(
         (entry) => entry.leagueSeasonId === nonPprLeague.leagueSeasonId,
       );
       expect(readiness).toBeDefined();
-      expect(readiness!.state).toBe("withheld");
-      expect(readiness!.reasons).toEqual(["no-admitted-scoring-profile"]);
+      expect(readiness!.state).toBe("ready");
+      expect(readiness!.reasons).toEqual([]);
+      expect(
+        readiness!.positions
+          .filter((position) => position.decision === "ready")
+          .map((position) => position.position),
+      ).toEqual(["QB", "K", "DST"]);
       expect(status.publishedSets).toEqual([]);
     });
 
@@ -610,15 +666,10 @@ describe.skipIf(!dockerAvailable)(
      * (`enumerateFirstPartyRosScoringMatchedLeagues` in
      * `apps/worker/src/first-party-ros-candidate-provider.ts`).
      *
-     * The consequence is that admitting an artifact authorizes zero leagues: a genuinely full-PPR
-     * league is withheld for `no-admitted-scoring-profile` exactly like a non-PPR one, and its
-     * `scoringProfile` reads back as null because its key is not in the catalog at all.
-     *
-     * This test pins the CURRENT behaviour so the gap is visible rather than silent. When the
-     * reachability gap is closed, this test will fail — that failure is the intended signal, and
-     * the expectations below should then be flipped to `ready` / a non-null profile.
+     * Position-scoped identity deliberately makes this whole-key difference non-blocking: every
+     * scoreable position can still match the admitted artifact exactly.
      */
-    it("cannot match even a genuinely full-PPR league, because the admitted key is unreachable", () => {
+    it("does not let a harmless whole-key normalization difference block a matching league", () => {
       const catalogKey = rosScoringProfile("full-ppr").scoringProfileKey;
       const leagueKey = normalizedLeagueKey(FULL_PPR_LEAGUE_ROWS);
 
@@ -631,8 +682,8 @@ describe.skipIf(!dockerAvailable)(
         (entry) => entry.leagueSeasonId === fullPprLeague.leagueSeasonId,
       );
       expect(readiness).toBeDefined();
-      expect(readiness!.state).toBe("withheld");
-      expect(readiness!.reasons).toEqual(["no-admitted-scoring-profile"]);
+      expect(readiness!.state).toBe("ready");
+      expect(readiness!.reasons).toEqual([]);
       expect(readiness!.scoringProfile).toBeNull();
     });
 
@@ -644,17 +695,15 @@ describe.skipIf(!dockerAvailable)(
      * BOTH sides of the comparison (the admitted key's recovered rules and the league's own recovered
      * rules), so the same rule that makes the whole key unreachable never enters either position-scoped
      * key in the first place. A genuinely matching league is therefore reachable position by position
-     * even while the whole-key defect above persists — `readiness.state` stays "withheld" for
-     * `no-admitted-scoring-profile`, but every position reports `decision: "ready"`.
+     * even while its harmless whole-key difference remains.
      */
     it("reports every position ready for a genuinely full-PPR league even though its whole-profile key is unreachable", () => {
       const readiness = status.leagueReadiness.find(
         (entry) => entry.leagueSeasonId === fullPprLeague.leagueSeasonId,
       );
       expect(readiness).toBeDefined();
-      // The whole-key defect is unchanged: still withheld, still no-admitted-scoring-profile.
-      expect(readiness!.state).toBe("withheld");
-      expect(readiness!.reasons).toEqual(["no-admitted-scoring-profile"]);
+      expect(readiness!.state).toBe("ready");
+      expect(readiness!.reasons).toEqual([]);
 
       expect(readiness!.positions).toHaveLength(6);
       for (const entry of readiness!.positions) {
@@ -668,20 +717,10 @@ describe.skipIf(!dockerAvailable)(
      * "Garagely" / "Android's Dungeon" ESPN league) rather than a synthetic one, so this asserts
      * against the shape the real synced leagues actually have.
      *
-     * **Post-D/ST-flip truth (2026-07-29).** The de minimis zero criterion mapped ESPN 206/209
+     * The de minimis zero criterion mapped ESPN 206/209
      * (`docs/dst-stat-id-evidence-2026-07-29.md` §4), which were this league's last two D/ST
-     * blockers, so it now normalizes with ALL SIX positions supported. Two consequences are
-     * asserted here rather than smoothed over:
-     *
-     * 1. `readiness.scoringProfile` is now **null**. It is a WHOLE-key catalog lookup, and the
-     *    league's whole key now carries its D/ST rules while the byte-frozen `espn-standard-2pt`
-     *    catalog entry does not. Reporting that entry anyway would claim the league is scored
-     *    identically to an artifact that prices no team defense, which is false. Null reads as
-     *    "no catalog profile has this exact identity", which is the truth. The release gate is
-     *    unaffected: identity is compared per cell, and the rail positions still match (below).
-     * 2. D/ST is withheld for `scoring-profile-position-mismatch` — a matching fact — instead of
-     *    `position-unsupported`. That is the whole point of the flip: the position is now priceable
-     *    and simply has no admitted artifact scored the same way.
+     * blockers, so it normalizes with all six positions supported and resolves to the exact ESPN
+     * catalog identity. It is still withheld here because this fixture admits only Full PPR.
      */
     it("reports honest per-position truth for an available-but-unmatched league with every position supported", () => {
       const readiness = status.leagueReadiness.find(
@@ -692,15 +731,14 @@ describe.skipIf(!dockerAvailable)(
       // not "scoring-rules-unsupported".
       expect(readiness!.state).toBe("withheld");
       expect(readiness!.reasons).toEqual(["no-admitted-scoring-profile"]);
-      // The whole key moved with the flip and no longer equals any catalog entry byte-for-byte.
-      expect(readiness!.scoringProfile).toBeNull();
-      // The catalog entry it used to equal is still D/ST-free and still byte-frozen — the league
-      // grew rules the profile does not have, not the other way round.
+      expect(readiness!.scoringProfile?.profileId).toBe(
+        "laces-out-historical-ros-espn-standard-2pt",
+      );
       expect(
         rosScoringProfile("espn-standard-2pt").profile.rules.some((item) =>
           item.statId.startsWith("points_allowed"),
         ),
-      ).toBe(false);
+      ).toBe(true);
 
       const byPosition = new Map(readiness!.positions.map((entry) => [entry.position, entry]));
       // All six now report a MATCHING fact rather than a support fact: `admittedScoringProfileKeys`

@@ -58,7 +58,7 @@ import type { RosHistoricalCoverageReport } from "./ros-data-coverage.js";
 export const HISTORICAL_ROS_INTERVAL_METHOD_VERSION = "simulation-p15-p50-p85-cqr-v1";
 export const HISTORICAL_ROS_CANDIDATE_PAIR_VERSION = `${FIRST_PARTY_PROJECTION_MODEL_VERSION}:contextual-vs-recency-v1`;
 export const HISTORICAL_ROS_DEFAULT_CUTOFFS = Array.from({ length: 17 }, (_, index) => index + 1);
-export const HISTORICAL_ROS_SUPPORTED_POSITIONS = ["QB", "RB", "WR", "TE", "K"] as const;
+export const HISTORICAL_ROS_SUPPORTED_POSITIONS = ["QB", "RB", "WR", "TE", "K", "DST"] as const;
 export const HISTORICAL_ROS_SCORING_PROFILE: ProjectionScoringProfile = {
   id: "laces-out-historical-ros-ppr",
   version: "1",

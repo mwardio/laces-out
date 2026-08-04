@@ -1,16 +1,14 @@
 import {
   dataSources,
-  fantasyTeams,
   firstPartyRosChampionArtifacts,
   leagueMemberships,
   leagueSeasons,
   leagues,
   nflScheduleObservations,
+  playerWeeklyRosterObservations,
   playerProjections,
   projectionModelRuns,
   projectionSets,
-  rosterEntries,
-  rosterSnapshots,
   scoringRules,
   type Database,
 } from "@fantasy/db";
@@ -20,6 +18,7 @@ import {
   normalizeLeagueScoringProfile,
   projectionScoringProfileKey,
   rosAvailableProjectionStatIds,
+  rosScoringProfileCatalog,
   type LeagueScoringProvider,
 } from "@fantasy/projections";
 import { and, desc, eq, inArray, sql } from "drizzle-orm";
@@ -61,9 +60,11 @@ const MAXIMUM_SCORING_RULE_ROWS = 4_000;
  * Operator-facing provenance only: these are report identities, not fetchable paths.
  */
 const ROS_EVIDENCE_REPORTS: Readonly<Record<string, string>> = {
-  "full-ppr": "ros-validation-v8-2026-07-23",
-  "half-ppr": "ros-validation-v8-half-ppr-2026-07-27",
-  standard: "ros-validation-v8-standard-2026-07-27",
+  "full-ppr": "ros-validation-v8-full-ppr-n8-2026-07-28",
+  "half-ppr": "ros-validation-v8-half-ppr-n8-2026-07-28",
+  standard: "ros-validation-v8-standard-n8-2026-07-28",
+  "espn-standard-2pt": "ros-validation-v9-espn-standard-2pt-n8-2026-08-03",
+  "espn-standard-2pt-nxm": "ros-validation-v9-espn-standard-2pt-nxm-n8-2026-08-03",
 };
 
 // The shadow rail (apps/worker) writes its degraded audit under this managed source key and, when an
@@ -193,7 +194,9 @@ export class RosProjectionStatusService {
   }): Promise<RosProjectionStatusResponse> {
     const { season, userId } = input;
 
-    // 1. Admitted artifact state: every profile admitted for the season, not just the newest row.
+    // 1. Admitted artifact state: every running-catalog profile admitted for the season, not just
+    // the newest row. Immutable rows for retired scoring identities remain in PostgreSQL as audit
+    // history but cannot describe what this build is eligible to publish.
     const artifactRows = await this.#database
       .select({
         season: firstPartyRosChampionArtifacts.season,
@@ -211,18 +214,23 @@ export class RosProjectionStatusService {
       .orderBy(desc(firstPartyRosChampionArtifacts.admittedAt))
       .limit(MAXIMUM_ARTIFACT_ROWS);
 
+    const activeCatalogKeys = new Set(
+      rosScoringProfileCatalog().map((profile) => profile.scoringProfileKey),
+    );
     const admittedArtifacts = deriveAdmittedArtifacts(
-      artifactRows.map((row) => ({
-        season: row.season,
-        scoringProfileKey: row.scoringProfileKey,
-        modelVersion: row.modelVersion,
-        policyVersion: row.policyVersion,
-        calibrationVersion: row.calibrationVersion,
-        evidenceThroughSeason: row.evidenceThroughSeason,
-        artifactChecksum: row.artifactChecksum,
-        admittedAt: row.admittedAt,
-        sourceChecksumCount: (row.sourceChecksums ?? []).length,
-      })),
+      artifactRows
+        .filter((row) => activeCatalogKeys.has(row.scoringProfileKey))
+        .map((row) => ({
+          season: row.season,
+          scoringProfileKey: row.scoringProfileKey,
+          modelVersion: row.modelVersion,
+          policyVersion: row.policyVersion,
+          calibrationVersion: row.calibrationVersion,
+          evidenceThroughSeason: row.evidenceThroughSeason,
+          artifactChecksum: row.artifactChecksum,
+          admittedAt: row.admittedAt,
+          sourceChecksumCount: (row.sourceChecksums ?? []).length,
+        })),
     );
 
     // 2. Supported scoring-profile identity.
@@ -425,32 +433,63 @@ export class RosProjectionStatusService {
       .where(inArray(scoringRules.leagueSeasonId, leagueSeasonIds))
       .limit(MAXIMUM_SCORING_RULE_ROWS);
 
-    // Latest roster snapshot time and the number of rostered players that snapshot carries. Both
-    // are real measurements: a league with no snapshot, or a snapshot with no entries, has nothing
-    // to forecast for and says so rather than reporting a plausible default.
-    const rosterRows = await this.#database
+    const sourceKeys = [
+      `nflverse.schedules.${season}`,
+      `nflverse.weekly-rosters.${season}`,
+    ] as const;
+    const sourceRows = await this.#database
       .select({
-        leagueSeasonId: fantasyTeams.leagueSeasonId,
-        effectiveAt: sql<Date | null>`max(${rosterSnapshots.effectiveAt})`,
-        candidateInputCount: sql<number>`count(distinct ${rosterEntries.playerId})::int`,
+        id: dataSources.id,
+        key: dataSources.key,
+        lastChecksum: dataSources.lastChecksum,
+        lastSuccessfulAt: dataSources.lastSuccessfulAt,
       })
-      .from(rosterSnapshots)
-      .innerJoin(fantasyTeams, eq(fantasyTeams.id, rosterSnapshots.teamId))
-      .leftJoin(rosterEntries, eq(rosterEntries.snapshotId, rosterSnapshots.id))
-      .where(inArray(fantasyTeams.leagueSeasonId, leagueSeasonIds))
-      .groupBy(fantasyTeams.leagueSeasonId);
+      .from(dataSources)
+      .where(inArray(dataSources.key, [...sourceKeys]));
+    const sourceByKey = new Map(sourceRows.map((row) => [row.key, row]));
+    const scheduleSource = sourceByKey.get(sourceKeys[0]);
+    const candidateSource = sourceByKey.get(sourceKeys[1]);
+
+    // ROS is a league-scored player product, not a roster-only product. Before a draft, and for
+    // waiver research after it, the candidate universe is the current NFL fantasy player pool.
+    // Measure that shared pool from the latest successfully pinned weekly-roster artifact instead
+    // of treating an empty fantasy roster as if there were no players to project.
+    const [candidateRow] =
+      candidateSource?.lastChecksum === null || candidateSource?.lastChecksum === undefined
+        ? [{ candidateInputCount: 0 }]
+        : await this.#database
+            .select({
+              candidateInputCount: sql<number>`count(distinct ${playerWeeklyRosterObservations.playerId})::int`,
+            })
+            .from(playerWeeklyRosterObservations)
+            .where(
+              and(
+                eq(playerWeeklyRosterObservations.sourceId, candidateSource.id),
+                eq(playerWeeklyRosterObservations.inputChecksum, candidateSource.lastChecksum),
+                eq(playerWeeklyRosterObservations.season, season),
+                // Match the publisher's fantasy-position authority. Canonical `players` records
+                // NFL primary positions, so joining through that field would omit two-way players
+                // whose live roster position is WR/RB/TE.
+                inArray(playerWeeklyRosterObservations.position, ["QB", "RB", "WR", "TE", "K"]),
+              ),
+            );
 
     const [scheduleRow] = await this.#database
       .select({
         scheduled: sql<number>`count(*) filter (where ${nflScheduleObservations.kickoffAt} is not null)::int`,
         total: sql<number>`count(*)::int`,
-        sourceAsOf: sql<Date | null>`max(${nflScheduleObservations.sourceAsOf})`,
       })
       .from(nflScheduleObservations)
       .where(
         and(
           eq(nflScheduleObservations.season, season),
           eq(nflScheduleObservations.seasonType, "REG"),
+          ...(scheduleSource?.lastChecksum
+            ? [
+                eq(nflScheduleObservations.sourceId, scheduleSource.id),
+                eq(nflScheduleObservations.inputChecksum, scheduleSource.lastChecksum),
+              ]
+            : []),
         ),
       );
 
@@ -458,7 +497,18 @@ export class RosProjectionStatusService {
     // every league equally.
     const scheduleComplete =
       (scheduleRow?.total ?? 0) > 0 && scheduleRow?.scheduled === scheduleRow?.total;
-    const sourceAsOf = scheduleRow?.sourceAsOf ?? null;
+    // A source can be successfully checked without changing immutable observations. Freshness is
+    // therefore the latest successful verification, while observation source-as-of remains
+    // provenance on the forecast itself.
+    const sourceVerifiedAt =
+      scheduleSource?.lastSuccessfulAt && candidateSource?.lastSuccessfulAt
+        ? new Date(
+            Math.min(
+              scheduleSource.lastSuccessfulAt.getTime(),
+              candidateSource.lastSuccessfulAt.getTime(),
+            ),
+          )
+        : null;
 
     const rulesByLeague = new Map<string, typeof ruleRows>();
     for (const rule of ruleRows) {
@@ -466,19 +516,6 @@ export class RosProjectionStatusService {
       rows.push(rule);
       rulesByLeague.set(rule.leagueSeasonId, rows);
     }
-    const rosterByLeague = new Map(
-      rosterRows.flatMap((row) =>
-        row.leagueSeasonId
-          ? ([
-              [
-                row.leagueSeasonId,
-                { effectiveAt: row.effectiveAt, candidateInputCount: row.candidateInputCount },
-              ],
-            ] as const)
-          : [],
-      ),
-    );
-
     return leagueRows.map((league) => {
       const rules = rulesByLeague.get(league.leagueSeasonId) ?? [];
       const normalization = normalizeLeagueScoringProfile({
@@ -496,8 +533,6 @@ export class RosProjectionStatusService {
         })),
         availableStatIds: rosAvailableProjectionStatIds(),
       });
-      const roster = rosterByLeague.get(league.leagueSeasonId);
-      const effectiveAt = roster?.effectiveAt ?? null;
       return {
         leagueSeasonId: league.leagueSeasonId,
         scoringProfileKey:
@@ -512,9 +547,12 @@ export class RosProjectionStatusService {
           reasons: support.reasons.map((reason) => reason.message),
         })),
         scheduleComplete,
-        rosterSnapshotAt: effectiveAt === null ? null : new Date(effectiveAt),
-        candidateInputCount: roster?.candidateInputCount ?? 0,
-        sourceAsOf: sourceAsOf === null ? null : new Date(sourceAsOf),
+        candidatePoolSnapshotAt:
+          candidateSource?.lastSuccessfulAt && (candidateRow?.candidateInputCount ?? 0) > 0
+            ? new Date(candidateSource.lastSuccessfulAt)
+            : null,
+        candidateInputCount: candidateRow?.candidateInputCount ?? 0,
+        sourceVerifiedAt: sourceVerifiedAt === null ? null : new Date(sourceVerifiedAt),
         nonConvergedCells,
       };
     });
