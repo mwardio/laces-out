@@ -198,6 +198,11 @@ export interface BuildFirstPartyRosPlayerCandidateInput {
   readonly schedules: readonly ProjectionScheduleFact[];
   readonly scoringProfile: ProjectionScoringProfile;
   readonly seed: string;
+  /**
+   * Trusted live cutoff for a production candidate. Historical validation omits this and derives
+   * its deterministic cutoff from the replayed schedule instead.
+   */
+  readonly asOfAt?: string;
   readonly scenarioCount?: number;
 }
 
@@ -231,6 +236,8 @@ export interface BuildFirstPartyRosDefenseCandidateInput {
   readonly schedules: readonly ProjectionScheduleFact[];
   readonly scoringProfile: ProjectionScoringProfile;
   readonly seed: string;
+  /** See {@link BuildFirstPartyRosPlayerCandidateInput.asOfAt}. */
+  readonly asOfAt?: string;
   readonly scenarioCount?: number;
 }
 
@@ -298,7 +305,7 @@ export function assembleFirstPartyRosDefenseCandidateInputs(
     });
   }
 
-  const asOfAt = historicalRosAsOfAt(input.schedules, season, asOfWeek);
+  const asOfAt = input.asOfAt ?? historicalRosAsOfAt(input.schedules, season, asOfWeek);
   const scoringProfileKey = projectionScoringProfileKey(input.scoringProfile);
   const availability: FirstPartyRosAvailabilityInput = {
     state: "active",
@@ -479,7 +486,7 @@ export function assembleFirstPartyRosCandidateInputs(
     });
   }
 
-  const asOfAt = historicalRosAsOfAt(input.schedules, season, asOfWeek);
+  const asOfAt = input.asOfAt ?? historicalRosAsOfAt(input.schedules, season, asOfWeek);
   const scoringProfileKey = projectionScoringProfileKey(input.scoringProfile);
   // Kicker fields spread conditionally so every non-K checksum and input stays byte-identical
   // to its pre-v7 value (the payload version string deliberately stays live-ros-input-v1).

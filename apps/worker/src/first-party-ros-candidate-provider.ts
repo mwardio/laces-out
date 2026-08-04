@@ -285,6 +285,8 @@ export function buildFirstPartyRosLeagueTarget(input: {
   readonly schedules: readonly ProjectionScheduleFact[];
   readonly futureWindowComplete: boolean;
   readonly sourceAsOf: Date;
+  /** Actual live refresh cutoff; never the historical replay helper's preseason fallback. */
+  readonly asOfAt: Date;
   /**
    * Downscales the release simulation. Production never sets it, so the engine default decides.
    * A caller that downscales the release run must downscale its reference too — an unpaired
@@ -323,6 +325,7 @@ export function buildFirstPartyRosLeagueTarget(input: {
         schedules: input.schedules,
         scoringProfile: input.scoringProfile,
         seed: `live-ros:${scoringProfileKey}:${input.season}:${window.asOfWeek}:${player.playerId}`,
+        asOfAt: input.asOfAt.toISOString(),
         ...(input.scenarioCount === undefined ? {} : { scenarioCount: input.scenarioCount }),
       });
       if (assembled === null) {
@@ -374,6 +377,7 @@ export function buildFirstPartyRosLeagueTarget(input: {
       schedules: input.schedules,
       scoringProfile: input.scoringProfile,
       seed: `live-ros:${scoringProfileKey}:${input.season}:${window.asOfWeek}:${player.playerId}`,
+      asOfAt: input.asOfAt.toISOString(),
       ...(input.scenarioCount === undefined ? {} : { scenarioCount: input.scenarioCount }),
     };
 
@@ -1016,6 +1020,7 @@ async function buildDatabaseFirstPartyRosTargets(
       schedules,
       futureWindowComplete,
       sourceAsOf,
+      asOfAt: context.now,
       ...(options.scenarioCount === undefined ? {} : { scenarioCount: options.scenarioCount }),
       ...(options.convergenceReferenceScenarioCount === undefined
         ? {}

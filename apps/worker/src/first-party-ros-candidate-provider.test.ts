@@ -628,6 +628,7 @@ describe("buildFirstPartyRosLeagueTarget", () => {
     matchedPositions?: readonly FirstPartyRosRailPosition[];
     supportedPositions?: readonly FirstPartyRosRailPosition[];
     window?: FirstPartyRosWindow;
+    asOfAt?: Date;
   }) {
     const matchedPositions = input.matchedPositions ?? ["QB", "RB", "WR", "TE", "K"];
     const targetWindow = input.window ?? window;
@@ -654,6 +655,7 @@ describe("buildFirstPartyRosLeagueTarget", () => {
       schedules,
       futureWindowComplete: true,
       sourceAsOf: new Date("2026-10-06T12:00:00.000Z"),
+      asOfAt: input.asOfAt ?? new Date("2026-10-06T12:00:00.000Z"),
       // A downscaled release must carry a downscaled reference: the two counts are one contract,
       // and the production pair (12288/16384) is exercised end to end in the PostgreSQL suite.
       scenarioCount: 128,
@@ -691,6 +693,7 @@ describe("buildFirstPartyRosLeagueTarget", () => {
   });
 
   it("publishes veteran candidates before Week 1 without a fantasy roster", () => {
+    const liveCutoff = new Date("2026-08-04T12:00:00.000Z");
     const result = run({
       policy: ninePlusPolicy(),
       window: {
@@ -704,10 +707,16 @@ describe("buildFirstPartyRosLeagueTarget", () => {
         { playerId: "wr-0", position: "WR", team: "BUF" },
         { playerId: "wr-1", position: "WR", team: "MIA" },
       ],
+      asOfAt: liveCutoff,
     });
 
     expect(result.target?.released.map((player) => player.playerId)).toEqual(["wr-0", "wr-1"]);
     expect(result.target?.released.every((player) => player.bucket === "nine-plus")).toBe(true);
+    expect(
+      result.target?.released.every(
+        (player) => player.projection.provenance.asOfAt === liveCutoff.toISOString(),
+      ),
+    ).toBe(true);
   });
 
   it("withholds players whose position the league did not match", () => {
