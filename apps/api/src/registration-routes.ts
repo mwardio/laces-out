@@ -6,7 +6,7 @@ import { sessionCookieName, sessionLifetimeSeconds, type LoginResult } from "./a
 
 const registrationBodySchema = z
   .object({
-    inviteCode: z.string().min(1).max(128),
+    inviteCode: z.string().min(1).max(128).optional(),
     displayName: z.string().trim().min(1).max(100),
     email: z.email().max(254),
     password: z.string().min(12).max(128),
@@ -15,7 +15,7 @@ const registrationBodySchema = z
 
 export interface RegistrationPort {
   register(input: {
-    readonly inviteCode: string;
+    readonly inviteCode?: string;
     readonly displayName: string;
     readonly email: string;
     readonly password: string;

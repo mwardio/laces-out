@@ -170,11 +170,12 @@ const rankings = environment.SESSION_SECRET
     )
   : undefined;
 const registration =
-  environment.SESSION_SECRET && environment.REGISTRATION_INVITE_CODE
+  environment.SESSION_SECRET &&
+  (environment.REGISTRATION_OPEN || environment.REGISTRATION_INVITE_CODE)
     ? new RegistrationService(
         new DrizzleRegistrationRepository(database.db),
         environment.SESSION_SECRET,
-        environment.REGISTRATION_INVITE_CODE,
+        environment.REGISTRATION_OPEN ? undefined : environment.REGISTRATION_INVITE_CODE,
       )
     : undefined;
 const yahooConnection =

@@ -43,12 +43,14 @@ This application will hold access to real fantasy accounts. Treat it like a smal
 - Invite capabilities contain 256 random bits, are stored only as domain-separated HMACs, expire,
   revoke, and consume once under a row lock. Shareable links keep the capability in the URL fragment
   so it is absent from web/API request targets and referrers.
-- Optional group registration uses one environment-only, high-entropy invite code. The running
+- Registration is closed by default. Operators may explicitly enable open registration or use one
+  environment-only, high-entropy invite code. In shared-code mode, the running
   service retains a domain-separated HMAC rather than storing the plaintext in PostgreSQL, verifies
   candidate digests with a timing-safe comparison, returns the same response for code and email
   conflicts, and allows only 30 attempts per source IP every ten minutes. This accommodates a small
   group sharing one home network while bounding password-hashing work. Rotating or blanking
-  `REGISTRATION_INVITE_CODE` closes registration without disabling existing members.
+  Disabling `REGISTRATION_OPEN` and blanking `REGISTRATION_INVITE_CODE` closes registration without
+  disabling existing members.
 - Local passwords require 12–128 characters and non-whitespace text, are hashed with Argon2id, and
   are never logged. Account creation and the initial hashed session are one database transaction.
 - Portable account export is an explicit field allowlist. It excludes every stored bearer value,

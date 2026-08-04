@@ -75,7 +75,7 @@ export function LoginForm() {
           <LockKeyhole size={17} />
         </span>
         <div>
-          <p className="eyebrow">Invite-only access</p>
+          <p className="eyebrow">Member access</p>
           <h1>Welcome back</h1>
           <p>Sign in to reach your leagues, private research, and provider connections.</p>
         </div>

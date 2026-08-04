@@ -19,7 +19,7 @@ type RegistrationError =
   | null;
 
 const errorMessages: Record<Exclude<RegistrationError, null>, string> = {
-  rejected: "We couldn’t create the account. Check every field and the shared invite code.",
+  rejected: "We couldn’t create the account. Check every field and try again.",
   "rate-limit": "Too many attempts. Wait ten minutes before trying again.",
   unavailable: "Registration isn’t open on this deployment. Ask your Laces Out host for access.",
   network: "We couldn’t reach the server. Check your connection, then try again.",
@@ -41,6 +41,7 @@ function classifyResponse(status: number): Exclude<RegistrationError, null> {
 }
 
 export function RegistrationForm() {
+  const openRegistration = process.env.NEXT_PUBLIC_REGISTRATION_OPEN === "true";
   const router = useRouter();
   const [displayName, setDisplayName] = useState("");
   const [email, setEmail] = useState("");
@@ -73,7 +74,7 @@ export function RegistrationForm() {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          inviteCode: inviteCode.trim(),
+          ...(openRegistration ? {} : { inviteCode: inviteCode.trim() }),
           displayName: displayName.trim(),
           email: email.trim(),
           password,
@@ -103,9 +104,9 @@ export function RegistrationForm() {
           <KeyRound size={17} />
         </span>
         <div>
-          <p className="eyebrow">Shared-code access</p>
+          <p className="eyebrow">Member account</p>
           <h1>Create your account</h1>
-          <p>Use the invite code from your Laces Out host. Your account remains your own.</p>
+          <p>Bring your leagues into Laces Out. Your account remains your own.</p>
         </div>
       </div>
 
@@ -147,21 +148,25 @@ export function RegistrationForm() {
           disabled={isSubmitting}
         />
 
-        <div className="password-label-row">
-          <label htmlFor="registration-code">Shared invite code</label>
-        </div>
-        <input
-          id="registration-code"
-          name="inviteCode"
-          type="password"
-          autoComplete="off"
-          spellCheck={false}
-          required
-          maxLength={128}
-          value={inviteCode}
-          onChange={(event) => setInviteCode(event.target.value)}
-          disabled={isSubmitting}
-        />
+        {!openRegistration ? (
+          <>
+            <div className="password-label-row">
+              <label htmlFor="registration-code">Shared invite code</label>
+            </div>
+            <input
+              id="registration-code"
+              name="inviteCode"
+              type="password"
+              autoComplete="off"
+              spellCheck={false}
+              required
+              maxLength={128}
+              value={inviteCode}
+              onChange={(event) => setInviteCode(event.target.value)}
+              disabled={isSubmitting}
+            />
+          </>
+        ) : null}
 
         <div className="password-label-row">
           <label htmlFor="registration-password">Password</label>

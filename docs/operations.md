@@ -206,9 +206,12 @@ snapshot, and not make the whole API unready.
 
 ## Registration access
 
-- `REGISTRATION_INVITE_CODE` blank: shared-code registration returns unavailable.
-- `REGISTRATION_INVITE_CODE` set: `/register` creates member accounts; `SESSION_SECRET` must also be
-  set and stable.
+- `REGISTRATION_OPEN=true`: `/register` creates member accounts without a code. It takes precedence
+  over `REGISTRATION_INVITE_CODE`; `SESSION_SECRET` must also be set and stable.
+- `REGISTRATION_OPEN=false` with `REGISTRATION_INVITE_CODE` set: `/register` requires the shared
+  code.
+- Leaving both settings disabled makes shared registration unavailable while preserving admin-issued
+  invitation links.
 - Generate a high-entropy 16–128 character code, share it outside application logs, and rotate or
   blank it after the invited group is onboarded. Rotation does not invalidate existing sessions.
 - Registration attempts are limited to 30 per source IP every ten minutes, allowing a small draft

@@ -97,49 +97,60 @@ export interface RegistrationServiceOptions {
 }
 
 /**
- * Verifies one deployment-wide shared code without persisting it. Only its
- * keyed digest remains on this instance after construction.
+ * Creates member accounts in either open or shared-code mode. In shared-code mode, only a keyed
+ * digest remains on this instance after construction; the code itself is never persisted.
  */
 export class RegistrationService {
   readonly #repository: RegistrationRepository;
-  readonly #inviteCodeKey: Buffer;
-  readonly #expectedInviteCodeDigest: Buffer;
+  readonly #inviteCodeKey: Buffer | undefined;
+  readonly #expectedInviteCodeDigest: Buffer | undefined;
   readonly #now: () => Date;
   readonly #tokenFactory: () => string;
 
   constructor(
     repository: RegistrationRepository,
     rootSecret: Uint8Array | string,
-    inviteCode: string,
+    inviteCode: string | undefined,
     options: RegistrationServiceOptions = {},
   ) {
-    const normalizedInviteCode = normalizeInviteCode(inviteCode);
-    if (!normalizedInviteCode) {
+    const normalizedInviteCode =
+      inviteCode === undefined ? undefined : normalizeInviteCode(inviteCode);
+    if (inviteCode !== undefined && !normalizedInviteCode) {
       throw new RangeError(
         `Registration invite code must be ${minimumInviteCodeLength}-${maximumInviteCodeLength} characters without controls`,
       );
     }
     this.#repository = repository;
-    this.#inviteCodeKey = deriveInviteCodeKey(rootSecret);
-    this.#expectedInviteCodeDigest = digestInviteCode(normalizedInviteCode, this.#inviteCodeKey);
+    if (normalizedInviteCode) {
+      this.#inviteCodeKey = deriveInviteCodeKey(rootSecret);
+      this.#expectedInviteCodeDigest = digestInviteCode(normalizedInviteCode, this.#inviteCodeKey);
+    }
     this.#now = options.now ?? (() => new Date());
     this.#tokenFactory = options.tokenFactory ?? (() => randomBytes(32).toString("base64url"));
   }
 
   async register(input: {
-    readonly inviteCode: string;
+    readonly inviteCode?: string;
     readonly email: string;
     readonly displayName: string;
     readonly password: string;
   }): Promise<LoginResult | undefined> {
-    const normalizedCandidate = normalizeInviteCode(input.inviteCode);
-    // HMAC output has a fixed length, so timingSafeEqual never falls back to a
-    // length-dependent branch. Invalid shapes are represented by a sentinel.
-    const candidateDigest = digestInviteCode(
-      normalizedCandidate ?? "\u0000invalid-registration-code",
-      this.#inviteCodeKey,
-    );
-    const inviteCodeIsValid = timingSafeEqual(candidateDigest, this.#expectedInviteCodeDigest);
+    const expectedInviteCodeDigest = this.#expectedInviteCodeDigest;
+    const inviteCodeKey = this.#inviteCodeKey;
+    const inviteCodeIsValid =
+      !expectedInviteCodeDigest || !inviteCodeKey
+        ? true
+        : timingSafeEqual(
+            // HMAC output has a fixed length, so timingSafeEqual never falls back to a
+            // length-dependent branch. Invalid shapes are represented by a sentinel.
+            digestInviteCode(
+              input.inviteCode === undefined
+                ? "\u0000invalid-registration-code"
+                : (normalizeInviteCode(input.inviteCode) ?? "\u0000invalid-registration-code"),
+              inviteCodeKey,
+            ),
+            expectedInviteCodeDigest,
+          );
     const email = normalizeEmail(input.email);
     const displayName = normalizeDisplayName(input.displayName);
     // Hash every well-formed request before applying the generic rejection so

@@ -40,6 +40,11 @@ const environmentSchema = z.object({
   MANAGED_AI_DAILY_REQUEST_LIMIT: z.coerce.number().int().min(1).max(500).default(50),
   MANAGED_AI_MAX_OUTPUT_TOKENS: z.coerce.number().int().min(64).max(8192).default(2000),
   SESSION_SECRET: z.preprocess(blankToUndefined, z.string().min(32).optional()),
+  /**
+   * Allows account creation without the deployment-wide invite code. This stays off by default so
+   * self-hosted instances remain closed unless their operator makes an explicit choice.
+   */
+  REGISTRATION_OPEN: booleanFlag,
   REGISTRATION_INVITE_CODE: z.preprocess(
     blankToUndefined,
     z.string().trim().min(12).max(128).optional(),
@@ -179,6 +184,9 @@ export function loadEnvironment(
 
   if (parsed.data.REGISTRATION_INVITE_CODE && !parsed.data.SESSION_SECRET) {
     throw new Error("REGISTRATION_INVITE_CODE requires SESSION_SECRET");
+  }
+  if (parsed.data.REGISTRATION_OPEN && !parsed.data.SESSION_SECRET) {
+    throw new Error("REGISTRATION_OPEN requires SESSION_SECRET");
   }
 
   const vapidWasRequested = Boolean(

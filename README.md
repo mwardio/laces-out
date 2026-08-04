@@ -123,8 +123,9 @@ docker compose run --rm --no-deps \
 unset OWNER_PASSWORD
 ```
 
-Open <http://localhost:3000>. To let friends register, set `REGISTRATION_INVITE_CODE`; admins can
-also create expiring, single-use invitation links.
+Open <http://localhost:3000>. To let friends register, set a shared
+`REGISTRATION_INVITE_CODE` or enable `REGISTRATION_OPEN`. Admins can also create expiring,
+single-use invitation links.
 
 For upgrades, backups, password resets, and health checks, see
 [docs/operations.md](./docs/operations.md). Read [docs/security.md](./docs/security.md) before
@@ -141,6 +142,7 @@ settings are in [.env.example](./.env.example).
 | `POSTGRES_PASSWORD`                       | PostgreSQL password                                   |
 | `SESSION_SECRET`                          | Sessions and capability-key derivation                |
 | `CREDENTIAL_ENCRYPTION_KEY`               | AES-256-GCM key for stored credentials                |
+| `REGISTRATION_OPEN`                       | Code-free registration; defaults `false`              |
 | `REGISTRATION_INVITE_CODE`                | Shared registration; blank disables `/register`       |
 | `GEMINI_API_KEY`                          | Shared Film Room access                               |
 | `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY`  | Game-day push alerts                                  |
