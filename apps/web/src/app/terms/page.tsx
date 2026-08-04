@@ -40,7 +40,7 @@ export default function TermsPage() {
         <aside className={styles.summary}>
           <Scale size={20} aria-hidden="true" />
           <p>
-            Laces Out is an invite-only fantasy football research tool shared among friends. It is
+            Laces Out is a fantasy football research tool built for leagues of friends. It is
             independent from fantasy providers, free to use, and offered without a promise that a
             recommendation or provider sync will always be available or correct.
           </p>
@@ -149,7 +149,7 @@ export default function TermsPage() {
 
         <footer className={styles.footer}>
           <FileCheck2 size={15} aria-hidden="true" />
-          <span>Free, invite-only, and independently operated.</span>
+          <span>Free and independently operated.</span>
         </footer>
       </article>
     </main>

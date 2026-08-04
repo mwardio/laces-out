@@ -7,7 +7,7 @@ import { LoginForm } from "../../components/login-form";
 
 export const metadata: Metadata = {
   title: "Sign In",
-  description: "Sign in to your invite-only Laces Out locker room.",
+  description: "Sign in to your Laces Out locker room.",
   robots: { index: false, follow: false },
 };
 
@@ -36,7 +36,7 @@ export default function LoginPage() {
           <div>
             <ShieldCheck size={17} />
             <span>
-              <strong>Invite-only identities</strong>
+              <strong>Separate identities</strong>
               <small>No open registration or shared provider accounts.</small>
             </span>
           </div>

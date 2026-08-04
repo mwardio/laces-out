@@ -12,6 +12,7 @@ describe("loadEnvironment", () => {
     expect(environment.GEMINI_API_KEY).toBeUndefined();
     expect(environment.MANAGED_AI_DAILY_REQUEST_LIMIT).toBe(50);
     expect(environment.MANAGED_AI_MAX_OUTPUT_TOKENS).toBe(2000);
+    expect(environment.REGISTRATION_OPEN).toBe(false);
     expect(environment.REGISTRATION_INVITE_CODE).toBeUndefined();
     expect(environment.ESPN_PUBLIC_DIRECT_SYNC_ENABLED).toBe(false);
     expect(environment.YAHOO_AUTOMATED_SYNC_ENABLED).toBe(false);
@@ -124,6 +125,16 @@ describe("loadEnvironment", () => {
         REGISTRATION_INVITE_CODE: "a-long-shared-code",
       }).REGISTRATION_INVITE_CODE,
     ).toBe("a-long-shared-code");
+  });
+
+  it("enables open registration only with a session secret", () => {
+    expect(() => loadEnvironment({ REGISTRATION_OPEN: "true" })).toThrow(
+      "REGISTRATION_OPEN requires SESSION_SECRET",
+    );
+    expect(
+      loadEnvironment({ SESSION_SECRET: "s".repeat(32), REGISTRATION_OPEN: "true" })
+        .REGISTRATION_OPEN,
+    ).toBe(true);
   });
 
   it("accepts a twelve-character registration code", () => {

@@ -25,7 +25,7 @@ function authService(): AuthService {
   return new AuthService(repository);
 }
 
-describe("shared-code registration routes", () => {
+describe("registration routes", () => {
   it("allows public registration and establishes an HTTP-only session", async () => {
     const received: unknown[] = [];
     const app = await buildApp({
@@ -63,6 +63,44 @@ describe("shared-code registration routes", () => {
       user: { email: "friend@example.com", role: "member" },
     });
     expect(received).toEqual([payload]);
+    await app.close();
+  });
+
+  it("accepts an account request without an invite code when registration is open", async () => {
+    const received: unknown[] = [];
+    const app = await buildApp({
+      environment: loadEnvironment({ NODE_ENV: "test" }),
+      logger: false,
+      registration: {
+        register: (input) => {
+          received.push(input);
+          return Promise.resolve({
+            token: sessionToken,
+            expiresAt: new Date("2026-08-15T12:00:00.000Z"),
+            user: {
+              id: "00000000-0000-4000-8000-000000000501",
+              email: "friend@example.com",
+              displayName: "Fantasy Friend",
+              role: "member",
+            },
+          });
+        },
+      },
+    });
+    const openPayload = {
+      displayName: payload.displayName,
+      email: payload.email,
+      password: payload.password,
+    };
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/auth/register",
+      payload: openPayload,
+    });
+
+    expect(response.statusCode).toBe(201);
+    expect(received).toEqual([openPayload]);
     await app.close();
   });
 

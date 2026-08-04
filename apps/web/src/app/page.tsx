@@ -76,7 +76,7 @@ const applicationSchema = {
   applicationCategory: "SportsApplication",
   operatingSystem: "Web",
   description:
-    "Invite-only fantasy football software that syncs leagues, builds weekly forecasts, and automates draft, lineup, waiver, trade, and opponent analysis.",
+    "Self-hosted fantasy football software that syncs leagues, builds weekly forecasts, and automates draft, lineup, waiver, trade, and opponent analysis.",
   offers: {
     "@type": "Offer",
     price: "0",

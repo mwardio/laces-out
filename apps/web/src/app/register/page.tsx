@@ -7,7 +7,7 @@ import { RegistrationForm } from "../../components/registration-form";
 
 export const metadata: Metadata = {
   title: "Create Account",
-  description: "Create an invite-only Laces Out account.",
+  description: "Create a Laces Out account.",
   robots: { index: false, follow: false },
 };
 
@@ -36,8 +36,8 @@ export default function RegisterPage() {
           <div>
             <KeyRound size={17} />
             <span>
-              <strong>Shared-code entry</strong>
-              <small>Your host controls who can register.</small>
+              <strong>Private by default</strong>
+              <small>Your league connections stay tied to your account.</small>
             </span>
           </div>
           <div>
@@ -57,16 +57,15 @@ export default function RegisterPage() {
         </div>
 
         <p className="login-story__footnote">
-          <ShieldCheck size={13} /> Passwords are protected with Argon2id. The shared code is never
-          saved to the database.
+          <ShieldCheck size={13} /> Passwords are protected with Argon2id.
         </p>
       </section>
 
       <section className="login-form-side register-form-side" aria-label="Create account">
         <RegistrationForm />
         <p className="login-help">
-          Registration works only when your host has enabled a deployment-wide invite code. Existing
-          one-time invitation links continue to work separately.
+          Every account stays separate, including league connections, rankings, and AI provider
+          settings.
         </p>
       </section>
     </main>

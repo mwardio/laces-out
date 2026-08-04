@@ -222,26 +222,26 @@ export function MemberInvitations() {
           <p className="eyebrow">Member access</p>
           <h1>Invite your league mates.</h1>
           <p className="page-subtitle">
-            Share the group code for ordinary registration, or create a one-time link when someone
-            needs a specific account or league role.
+            Send league mates to registration when it is enabled, or create a one-time link for a
+            specific account or league role.
           </p>
         </div>
         <div className="connection-security-chip">
           <ShieldCheck size={18} />
           <span>
             <strong>Separate accounts</strong>
-            <small>Shared code or scoped link</small>
+            <small>Registration or scoped link</small>
           </span>
         </div>
       </section>
 
-      <section className="member-registration-note" aria-labelledby="shared-code-title">
+      <section className="member-registration-note" aria-labelledby="registration-access-title">
         <KeyRound size={18} />
         <div>
-          <strong id="shared-code-title">Using the shared group code?</strong>
+          <strong id="registration-access-title">Registration access</strong>
           <span>
-            Send friends to the registration page with the code configured by the host. The same
-            code can be used by the whole group.
+            The registration page follows this deployment’s open or shared-code setting. One-time
+            invitation links work separately.
           </span>
         </div>
         <Link className="button button--outline button--small" href="/register">

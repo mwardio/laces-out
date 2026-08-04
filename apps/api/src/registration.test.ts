@@ -42,6 +42,23 @@ function service(repository: MemoryRegistrationRepository): RegistrationService 
 }
 
 describe("RegistrationService", () => {
+  it("creates an account without a code in open-registration mode", async () => {
+    const repository = new MemoryRegistrationRepository();
+    const openService = new RegistrationService(repository, rootSecret, undefined, {
+      now: () => new Date("2026-07-16T12:00:00.000Z"),
+      tokenFactory: () => sessionToken,
+    });
+
+    await expect(
+      openService.register({
+        email: "friend@example.com",
+        displayName: "Fantasy Friend",
+        password: "a genuinely long password",
+      }),
+    ).resolves.toMatchObject({ user: { email: "friend@example.com", role: "member" } });
+    expect(repository.inputs).toHaveLength(1);
+  });
+
   it("normalizes identity data and creates an Argon2id-backed member session", async () => {
     const repository = new MemoryRegistrationRepository();
     const result = await service(repository).register({
@@ -72,6 +89,18 @@ describe("RegistrationService", () => {
     await expect(
       service(repository).register({
         inviteCode: "wrong-shared-code-value",
+        email: "friend@example.com",
+        displayName: "Fantasy Friend",
+        password: "a genuinely long password",
+      }),
+    ).resolves.toBeUndefined();
+    expect(repository.inputs).toHaveLength(0);
+  });
+
+  it("rejects a missing code in shared-code mode", async () => {
+    const repository = new MemoryRegistrationRepository();
+    await expect(
+      service(repository).register({
         email: "friend@example.com",
         displayName: "Fantasy Friend",
         password: "a genuinely long password",
