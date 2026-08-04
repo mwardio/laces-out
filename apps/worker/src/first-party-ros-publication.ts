@@ -811,19 +811,34 @@ export function buildFirstPartyRosRunPayload(input: {
 } {
   const policy = input.artifact.policy;
   const releasing = input.decision.releasingBuckets;
-  const observedCoverages = releasing.flatMap((decision) => {
+  const releasingPolicies = releasing.map((decision) => {
     const choice = policy.choices.find(
       (candidate) =>
         candidate.position === decision.position && candidate.bucket === decision.bucket,
     );
-    if (!choice) return [];
+    if (
+      choice === undefined ||
+      decision.strategy === null ||
+      choice.strategy !== decision.strategy
+    ) {
+      throw new Error("Released ROS cell has no matching champion-policy strategy");
+    }
     const selected = choice.strategy === "contextual" ? "contextual" : "recency";
-    return [
-      selected === "contextual"
-        ? choice.heldOutEvidence.contextualObservedIntervalCoverage
-        : choice.heldOutEvidence.recencyObservedIntervalCoverage,
-    ];
+    const calibration = choice.intervalCalibrationArtifacts[selected];
+    if (
+      calibration.state !== "calibrated" ||
+      calibration.artifactChecksum === null ||
+      calibration.artifactChecksum !== decision.gate.calibrationArtifactChecksum
+    ) {
+      throw new Error("Released ROS cell does not match its cleared calibration artifact");
+    }
+    return { decision, choice, selected, calibration };
   });
+  const observedCoverages = releasingPolicies.map(({ choice, selected }) =>
+    selected === "contextual"
+      ? choice.heldOutEvidence.contextualObservedIntervalCoverage
+      : choice.heldOutEvidence.recencyObservedIntervalCoverage,
+  );
   const empiricalCoverage =
     observedCoverages.length === 0
       ? 0.7
@@ -840,10 +855,23 @@ export function buildFirstPartyRosRunPayload(input: {
       calibrationVersion: FIRST_PARTY_ROS_INTERVAL_CALIBRATION_VERSION,
       championArtifactChecksum: input.artifact.artifactChecksum,
       scoringProfileKey: input.artifact.scoringProfileKey,
-      releasingBuckets: releasing.map((decision) => ({
+      // Persist the exact executable correction for each released cell. The champion artifact is
+      // immutable, but recording this alongside the run makes the applied policy independently
+      // auditable without reconstructing it from a later artifact lookup.
+      releasingBuckets: releasingPolicies.map(({ decision, calibration }) => ({
         position: decision.position,
         bucket: decision.bucket,
         strategy: decision.strategy,
+        intervalCalibration: {
+          method: calibration.calibrationVersion,
+          nominalCoverage: calibration.nominalCoverage,
+          lowerQuantile: calibration.lowerQuantile,
+          upperQuantile: calibration.upperQuantile,
+          adjustmentPoints: calibration.adjustmentPoints,
+          trainedThroughSeason: calibration.trainedThroughSeason,
+          evidenceChecksum: calibration.evidenceChecksum,
+          artifactChecksum: calibration.artifactChecksum,
+        },
       })),
       ...input.extraConfiguration,
     },

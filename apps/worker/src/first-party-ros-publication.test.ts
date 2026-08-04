@@ -810,8 +810,9 @@ describe("first-party ROS run payload cell observability", () => {
 
   it("records a releasing cell with its gate reasons and no retained-set flag", () => {
     const policy = buildLivePolicy();
+    const artifact = loadedArtifact(policy);
     const decision = evaluateFirstPartyRosPublication({
-      artifact: loadedArtifact(policy),
+      artifact,
       leagueScoringProfileKey: SCORING_KEY,
       evidence: [liveEvidence],
       futureWindowComplete: true,
@@ -819,7 +820,7 @@ describe("first-party ROS run payload cell observability", () => {
     });
 
     const payload = buildFirstPartyRosRunPayload({
-      artifact: loadedArtifact(policy),
+      artifact,
       decision,
       convergence,
       orchestrationVersion: "orchestration-v1",
@@ -829,6 +830,55 @@ describe("first-party ROS run payload cell observability", () => {
       { position: "WR", bucket: "five-to-eight", state: "release", reasons: [] },
     ]);
     expect(payload.metrics.preservePriorGoodSet).toBe(false);
+    const choice = policy.choices.find(
+      (candidate) => candidate.position === "WR" && candidate.bucket === "five-to-eight",
+    )!;
+    const selected = choice.strategy === "contextual" ? "contextual" : "recency";
+    const calibration = choice.intervalCalibrationArtifacts[selected];
+    expect(payload.configuration.releasingBuckets).toEqual([
+      {
+        position: "WR",
+        bucket: "five-to-eight",
+        strategy: choice.strategy,
+        intervalCalibration: {
+          method: calibration.calibrationVersion,
+          nominalCoverage: calibration.nominalCoverage,
+          lowerQuantile: calibration.lowerQuantile,
+          upperQuantile: calibration.upperQuantile,
+          adjustmentPoints: calibration.adjustmentPoints,
+          trainedThroughSeason: calibration.trainedThroughSeason,
+          evidenceChecksum: calibration.evidenceChecksum,
+          artifactChecksum: calibration.artifactChecksum,
+        },
+      },
+    ]);
+  });
+
+  it("fails closed when a released decision disagrees with its calibration artifact", () => {
+    const policy = buildLivePolicy();
+    const artifact = loadedArtifact(policy);
+    const decision = evaluateFirstPartyRosPublication({
+      artifact,
+      leagueScoringProfileKey: SCORING_KEY,
+      evidence: [liveEvidence],
+      futureWindowComplete: true,
+      gateOptions: releaseOptions,
+    });
+
+    expect(() =>
+      buildFirstPartyRosRunPayload({
+        artifact,
+        decision: {
+          ...decision,
+          releasingBuckets: decision.releasingBuckets.map((bucket) => ({
+            ...bucket,
+            gate: { ...bucket.gate, calibrationArtifactChecksum: "0".repeat(64) },
+          })),
+        },
+        convergence,
+        orchestrationVersion: "orchestration-v1",
+      }),
+    ).toThrow("Released ROS cell does not match its cleared calibration artifact");
   });
 });
 
