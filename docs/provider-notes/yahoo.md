@@ -1,13 +1,13 @@
 # Yahoo Fantasy provider
 
-Verified: 2026-07-16
+Verified: 2026-08-05
 
 ## Verified provider contract
 
 Yahoo has an official Fantasy Sports API covering games, leagues, teams, players, and other
-fantasy resources. Private league data is authorized with OAuth. Yahoo's current Fantasy portal
-describes an application submission, review, and approval process; league sync must therefore not
-be assumed immediately after creating a general Yahoo application.
+fantasy resources. Private league data is authorized with OAuth. Yahoo reviews Fantasy API
+applications separately; a general Yahoo application or OAuth key does not by itself establish
+Fantasy API access.
 
 The implemented authorization path is Authorization Code + S256 PKCE:
 
@@ -85,14 +85,13 @@ eligibility validity only. A stored affirmative lock is enforced, but the absenc
 prove that Yahoo considers a player unlocked. Users must verify every recommendation in Yahoo;
 Laces Out cannot execute it.
 
-## Noncommercial friend-sharing and presentation constraints
+## Approved-use and presentation constraints
 
-The published Yahoo Fantasy Sports API terms reviewed on 2026-07-16 permit this direction only as
-a noncommercial, approved use. They prohibit commercial activity, reselling or sublicensing
-provider access, and using the API in a product that competes with Yahoo. The application must therefore
-remain private/invite-only and free, and the approval submission must accurately describe access
-for a small group of league friends. “FantasyPros replacement” is a product-design aspiration,
-not permission to market or operate a commercial competitor.
+Yahoo's published API terms prohibit selling, reselling, or sublicensing API access and prohibit a
+competing use without express permission. This repository is intended for free, noncommercial
+friend-sharing. Each operator must keep the deployment's actual audience, registration posture,
+and use within the scope Yahoo approved for that application. `REGISTRATION_OPEN=true` changes who
+may create a Laces Out account; it does not widen the application's Yahoo authorization.
 
 The terms also prohibit compiling complete box scores or complete statistics for all players in a
 fantasy league on one screen. League analytics should expose derived team-level strength, luck,
@@ -104,15 +103,14 @@ The authenticated Laces Out app shell implements that treatment globally. Its ch
 the official `Yahoo_Fantasy.svg` asset published by Yahoo's Fantasy API portal; it is not a traced,
 redrawn, or generated substitute.
 
-Yahoo's current approval-gated access agreement may add or supersede published requirements. Before
-friend access is enabled, recheck the executed agreement, confirm retention and multi-user display
-rules, publish an accurate privacy policy, and make the capability flag fail closed until those
-release gates are recorded. This is an engineering release condition, not legal advice.
+Yahoo's executed access agreement may add or supersede published requirements. Before enabling
+Yahoo on a deployment, recheck that agreement, confirm retention and multi-user display rules,
+publish an accurate privacy policy, and keep the capability flag fail closed until those release
+gates are recorded. This is an engineering release condition, not legal advice.
 
 ## Setup checklist
 
-1. Submit the use case through the [Yahoo Fantasy API portal](https://sports.yahoo.com/developer/)
-   and wait for approval/next steps.
+1. Obtain approved access through the [Yahoo Fantasy API portal](https://sports.yahoo.com/developer/).
 2. Configure the exact callback
    `https://your-host.example/v1/connections/yahoo/callback`. Use HTTPS outside local loopback development.
 3. Supply the server process with `YAHOO_CLIENT_ID`, `YAHOO_CLIENT_SECRET`, and the exact callback
@@ -123,8 +121,8 @@ release gates are recorded. This is an engineering release condition, not legal 
    available while new envelopes use the new primary key.
 5. Persist OAuth transactions with a short expiry and a uniqueness constraint. Mark state used in
    the same transaction that creates/updates the provider connection.
-6. After approval, run the existing fetch-mock transport and forced-rollback persistence suites,
-   then capture only sanitized XML
+6. With approved credentials, run the existing fetch-mock transport and forced-rollback persistence
+   suites, then capture only sanitized XML
    fixtures and run authenticated contract tests before enabling real league sync or draft
    polling. In particular, verify the `draftresults` auction cost fields and the chained
    league-team-roster path against the approved application.
@@ -140,6 +138,11 @@ release gates are recorded. This is an engineering release condition, not legal 
 - `POST /v1/connections/yahoo/:connectionId/leagues/:leagueKey/sync` refreshes one league on demand.
 - OAuth completion runs the same bounded discovery/read sync. An initial sync failure does not
   erase the successfully stored authorization; it marks health for retry.
+- A compatible native app reuses this exact server-owned OAuth flow. It creates an authenticated
+  browser handoff only to `/connections/yahoo/connect`; after explicit browser confirmation, Yahoo
+  handles sign-in and consent. Completion returns to the app through one of four fixed,
+  credential-free `lacesout://connections/yahoo?status=...` URLs. No caller-supplied callback URL
+  or redirect target is accepted.
 - A resource 401 performs one serialized refresh and one retry. Yahoo refresh-token rotation is
   protected by a PostgreSQL row lock spanning the exchange and a credential-version CAS update.
 - Multiple friends may authorize the same league. A many-to-many provenance link preserves each

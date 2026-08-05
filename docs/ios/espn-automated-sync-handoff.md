@@ -6,8 +6,8 @@
 > current API. This document remains historical reference for the separate cookie-opaque native
 > sync-agent experiment. Where the two documents conflict, the newer production handoff governs.
 
-Status: backend contract complete; native implementation maintained in a separate repository;
-cross-client integration verification pending
+Status: backend and native sync-agent implementations complete; production setup is governed by
+the always-on handoff; end-to-end release verification remains
 Contract date: 2026-08-03
 Mobile API version: 1
 

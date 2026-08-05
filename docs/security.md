@@ -113,7 +113,7 @@ This application will hold access to real fantasy accounts. Treat it like a smal
   job to replace historical ownership.
 - Operator-managed Gemini and OpenRouter keys are read only from the API server's `GEMINI_API_KEY`
   and `OPENROUTER_API_KEY` environment values. They are never compiled into the web image, returned
-  by an endpoint, or persisted in PostgreSQL. Film room member keys are write-only through
+  by an endpoint, or persisted in PostgreSQL. Film Room member keys are write-only through
   authenticated, same-origin endpoints and use
   purpose-bound AES-256-GCM envelopes. The API never returns a key or suffix. Request logging
   explicitly redacts `apiKey`; keyed hashes are used for credential fingerprints, stable OpenAI
@@ -206,10 +206,10 @@ fact stay distinguishable forever, and the reconciler will not revert a manual e
 ## Before internet exposure
 
 - replace every development secret;
-- use a randomly generated group registration code, distribute it out of band, and blank or rotate
-  it as soon as the intended group has registered;
+- choose the registration posture deliberately: closed, a randomly generated out-of-band group
+  code, or explicitly open. Rotate or blank a shared code after the intended group has registered;
 - use unique local account passwords and the implemented Argon2id/session controls for the current
-  small invited group; OIDC/passkey/MFA integration is future work and must not be represented as an
+  deployment; OIDC/passkey/MFA integration is future work and must not be represented as an
   available login option;
 - terminate TLS and verify secure cookie/HSTS/CSP behavior. Prioritize the planned
   passkey/MFA-capable identity-provider migration before materially broader or higher-risk exposure;

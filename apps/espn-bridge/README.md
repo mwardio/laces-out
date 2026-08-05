@@ -22,7 +22,7 @@ Install the unlisted [Laces Out ESPN Bridge from the Chrome Web
 Store](https://chromewebstore.google.com/detail/laces-out-espn-bridge/hmilkmcjlkpnigcfnlfogeafacjpmkbj).
 The signed listing keeps the extension ID stable and delivers updates through Chrome.
 
-1. Sign in to Laces Out and open `/connections`.
+1. Sign in to Laces Out and open **League Sync** (`/connections`).
 2. Choose **Connect & Keep Synced**, enter up to 32 numeric ESPN league IDs and the season, then
    choose **Connect & keep synced**.
 3. Laces Out sends the scoped pairing offer directly to the extension. Open the extension and choose
@@ -35,8 +35,8 @@ The signed listing keeps the extension ID stable and delivers updates through Ch
 
 ### Always-on sync
 
-Version 0.7.0 makes always-on refresh the recommended connection path for deployments whose operator
-enables it. The pairing confirmation displays the authorization behavior and requires a member
+The current companion makes always-on refresh the recommended connection path for deployments whose
+operator enables it. The pairing confirmation displays the authorization behavior and requires a member
 click before capture. The companion checks the ESPN football page opened by that action and, if
 signed in, asks Chrome for the exact `SWID` and `espn_s2` cookies and sends only those values to the
 paired Laces Out origin. This works even when ESPN marks the cookies `HttpOnly`; no page script can
@@ -51,7 +51,7 @@ League Sync; an expired ESPN session changes to **Sign-in needed** and requires 
 
 ### Self-hosted instances
 
-Version 0.6.0 uses the same signed companion for arbitrary HTTPS deployments; a self-hoster does
+The current signed companion supports arbitrary HTTPS deployments; a self-hoster does
 not need to rebuild or publish a separate extension.
 
 1. Create the **Connect & Keep Synced** connection from the self-hosted instance's **League Sync**
@@ -67,7 +67,7 @@ and cannot be replayed after a successful exchange. HTTPS is mandatory except fo
 
 ## Automated maintenance
 
-Version 0.6.0 registers as a `refresh-intents-v1` sync agent. On install, update, Chrome startup,
+The current companion registers as a `refresh-intents-v1` sync agent. On install, update, Chrome startup,
 and every five-minute maintenance alarm it restores any missing alarm, polls the configured Laces
 Out origin with the device token, and receives at most eight requests limited to its granted league
 IDs and season. It reads and uploads only the requested core/supplemental artifact families. If no
@@ -83,7 +83,7 @@ the established six-hour baseline behavior.
 
 ## Live ESPN draft sync (in development)
 
-Version 0.4.0 adds a narrowly scoped content script for the ESPN football draft room. It passively
+The companion includes a narrowly scoped content script for the ESPN football draft room. It passively
 reads the draft state ESPN has **already rendered** in the user's own tab and sends a bounded,
 sanitized, checksummed observation to the service worker, which uploads it with the existing
 league-scoped device credential.

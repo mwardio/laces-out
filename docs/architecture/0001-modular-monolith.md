@@ -5,7 +5,7 @@ Date: 2026-07-16
 
 ## Context
 
-The application serves an invite-only group across multiple leagues, but provider synchronization,
+The application serves a small group across multiple leagues, but provider synchronization,
 future active-draft polling, and projection ingestion should not share a request lifecycle with
 interactive pages. The implemented browser-local ESPN companion also benefits from a stable HTTP
 contract.

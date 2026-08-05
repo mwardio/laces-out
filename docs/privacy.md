@@ -6,7 +6,7 @@ Laces Out may be used through the official hosted deployment or a self-hosted se
 organization operating the selected deployment controls its database, encrypted backups, provider
 application credentials, and retention settings. This template describes the default application
 behavior; an operator must update it if they add analytics, email, a different retention schedule,
-AI providers beyond the implemented Film room, or other data recipients.
+AI providers beyond the implemented Film Room, or other data recipients.
 
 The application stores member identity and password/session hashes; league settings, teams,
 rosters, standings, matchups, and draft events; user rankings, notes, shares, and recommendation
@@ -60,7 +60,10 @@ SQL, or perform any provider change. Its bounded result may be sent back to the 
 as part of that request.
 
 Yahoo authorization occurs at Yahoo. Laces Out uses encrypted Yahoo tokens only for read-only
-fantasy synchronization. ESPN device-only companion sync uses the session locally and uploads
+fantasy synchronization. A compatible native app reaches that same server-owned Yahoo OAuth flow
+through a short-lived authenticated browser handoff and receives only a fixed completion status;
+Yahoo credentials and tokens never return through the native callback. ESPN device-only companion
+sync uses the session locally and uploads
 bounded league data. If both the operator and member enable always-on ESPN sync, an authorized paired client sends
 `SWID` and `espn_s2` once over HTTPS; Laces Out stores them in a purpose-bound encrypted credential
 envelope and uses them only for fixed, read-only fantasy endpoints. Chrome obtains them from the

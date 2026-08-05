@@ -240,7 +240,9 @@ The worker runs the hourly shadow audit and managed release publisher as separat
 run can record degraded evidence but cannot write league projection sets. Release requires an
 explicitly admitted, immutable artifact whose scoring identity matches the league; every
 position/window cell then re-clears identity, coverage, convergence, availability, bias, and
-calibration gates. A withheld cell never removes the prior good league set.
+calibration gates. Published-set coverage is measured after applying the exact admitted conformal
+correction, not from the raw uncalibrated candidate interval. A withheld cell never removes the
+prior good league set.
 
 The current rest-of-season reference uses model `laces-ros-distribution-v7`. Every current profile
 grades 3,264 forecasts across 68 season/cutoff batches, converges all 144 release/reference

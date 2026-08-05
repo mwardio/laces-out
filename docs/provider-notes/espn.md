@@ -14,7 +14,7 @@ read-only modes:
 
 ### Browser-local private-league bridge
 
-The primary private-league compatibility path is a Manifest V3 browser companion. The user signs
+The web private-league compatibility path is a Manifest V3 browser companion. The user signs
 in on ESPN's own site. An extension service worker with explicit ESPN host permission makes a
 credentialed read using that browser profile, bounds and checksums the response, and sends the
 league artifact to a fixed Laces Out server chosen by the user.
@@ -106,7 +106,7 @@ An authenticated member opening a stale ESPN league or selecting **Refresh leagu
 reuses one 24-hour, league-season-scoped refresh intent. The server derives the required artifact
 families from stored freshness; the client cannot force work or supply an ESPN URL. A healthy,
 member-linked always-on connection is preferred, a verified public core capability may dispatch a
-credential-free background read, and otherwise an authorized Chrome or future iOS sync agent sees
+credential-free background read, and otherwise an authorized Chrome or compatible iOS sync agent sees
 the request on its bounded poll. Multiple paths may race: capture-time,
 stale-snapshot, shared checksum, and transactional persistence rules make one current artifact
 canonical and later copies unchanged.
@@ -122,8 +122,9 @@ Device registration declares `client_kind` (`chrome-extension` or `ios-app`) and
 implements the `refresh-intents-v1` agent protocol. The API otherwise uses the same league scope,
 artifact upload, normalization, checksum, and persistence boundary for both kinds. Legacy
 companions continue their six-hour uploads; their absence from polling is not an outage.
-The separate native implementation should follow the standalone
-[iOS automated-sync handoff](../ios/espn-automated-sync-handoff.md).
+The native implementation uses the contracts documented in the standalone
+[iOS automated-sync handoff](../ios/espn-automated-sync-handoff.md) and production
+[always-on sign-in handoff](../ios/espn-always-on-sync-handoff.md).
 
 ### Browser-local live draft observation
 
@@ -240,7 +241,7 @@ accept the additional server-held-authorization risk.
 1. Obtain each numeric league ID using ESPN's normal web/app UI.
 2. For automatic private-league sync, install the signed companion from the [Chrome Web Store
    listing](https://chromewebstore.google.com/detail/laces-out-espn-bridge/hmilkmcjlkpnigcfnlfogeafacjpmkbj),
-   and create a league-scoped pairing from Laces Out's `/connections` page. Hosted deployments hand
+   and create a league-scoped pairing from Laces Out's **League Sync** (`/connections`) page. Hosted deployments hand
    it directly to the extension; a self-hosted deployment displays a one-time code for **Pair a
    self-hosted instance** in the popup. Neither path copies the device token. Sync while signed in
    to ESPN in the same browser profile, then claim the correct fantasy team after each league's

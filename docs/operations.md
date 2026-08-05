@@ -171,6 +171,11 @@ power a differently hosted web origin. Split-host operators must route both surf
 canonical HTTPS gateway; until then `/health/ready` omits `authenticated-browser-handoff` and the
 creation endpoint returns `503`.
 
+Native Yahoo setup advertises `yahoo-native-connect-v1` only when this handoff and the Yahoo OAuth
+configuration are both available. The app may request only the exact
+`/connections/yahoo/connect` destination. Yahoo still owns sign-in and consent; the native callback
+receives one fixed completion status and no Yahoo code, token, or credential.
+
 For local use, keep `SITE_ADDRESS=:80` and `PUBLIC_URL=http://localhost:3000`. For internet
 sharing, point a domain at the host and set `SITE_ADDRESS`, `PUBLIC_URL`, `APP_PORT=80`, and
 `HTTPS_PORT=443` as shown in `.env.docker.example`; Caddy then obtains and renews TLS
@@ -869,11 +874,12 @@ has finished.
 
 ### Other provider gates
 
-- Yahoo friend access may be enabled after the operator completes the current provider terms,
-  configuration, and real-account contract-validation checklist. Set
+- Yahoo access may be enabled after the operator completes the current provider terms,
+  approved-application configuration, and real-account contract-validation checklist. Set
   `NEXT_PUBLIC_YAHOO_ACCESS_STATUS=available` only when the OAuth credentials are ready.
 - ESPN companion distribution requires sanctioned private-league validation, terms and store-policy
-  review, and a signed build. The signed browser bridge is the only hosted private-league path.
+  review, and a signed build. It is the web private-league path; a compatible native client may
+  establish the same encrypted always-on authorization through ESPN-hosted sign-in.
 - ESPN live draft sync stays behind `ESPN_LIVE_DRAFT_SYNC=false` until the
   [live draft release gate](./provider-notes/espn.md#live-draft-release-gate) passes against
   disposable snake and salary-cap leagues. The DOM adapter's selector table is unverified until
@@ -906,9 +912,11 @@ Production deployments should run a published release tag rather than an arbitra
 checkout:
 
 ```bash
-VERSION=v1.0.0 # choose and review the release you intend to run
 git fetch --tags --prune
-git checkout "$VERSION"
+git tag --sort=-version:refname | head
+# Replace the placeholder with a release you have reviewed.
+RELEASE_TAG=vX.Y.Z
+git checkout "$RELEASE_TAG"
 git rev-parse --verify HEAD
 ```
 

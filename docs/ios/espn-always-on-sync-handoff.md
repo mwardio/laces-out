@@ -1,6 +1,7 @@
 # iOS ESPN sign-in and always-on sync handoff
 
-Status: server contract complete; iOS implementation required
+Status: server contract complete; native implementation merged in the separate iOS repository;
+end-to-end release verification remains
 Contract date: 2026-08-05
 Mobile API version: 1
 Target repository: `mwardio/laces-out-ios`

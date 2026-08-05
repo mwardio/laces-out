@@ -1,6 +1,6 @@
 # AI provider and chat-product integration
 
-Verified: 2026-07-30
+Verified: 2026-08-05
 Scope: OpenAI, Anthropic, Google Gemini, DeepSeek, Grok, and OpenRouter
 Decision status: managed Gemini, managed recap Grok, and per-user BYOK implemented; chat-product MCP connectors remain future work
 
@@ -9,7 +9,7 @@ Decision status: managed Gemini, managed recap Grok, and per-user BYOK implement
 Keep these concepts separate:
 
 1. **Sign in to Laces Out** authenticates a member to this application.
-2. **Use the Film room** calls managed Gemini by default or a separately billed model API when the
+2. **Use Film Room** calls managed Gemini by default or a separately billed model API when the
    member has added a personal key.
 3. **Connect Laces Out to a chat product** would expose scoped fantasy tools through remote MCP.
    This is not implemented and is independent of BYOK.
@@ -91,7 +91,7 @@ Official sources:
 
 ## Grounded analysis
 
-The Film room reuses the same authorization-scoped services as the signed-in app. Before a model
+Film Room reuses the same authorization-scoped services as the signed-in app. Before a model
 call it loads:
 
 - **League overview:** membership, provider freshness, teams, standings, matchup, and claimed team;

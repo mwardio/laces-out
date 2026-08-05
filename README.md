@@ -27,7 +27,7 @@
 I play in too many fantasy leagues, most with auction drafts, and got tired of paying for tools that
 still felt generic. Laces Out is the app I wanted instead: one private place for league data,
 draft prep, weekly decisions, and the research behind them. The core app works without AI, and Film
-Room adds optional Gemini or BYOK analysis.
+Room adds optional managed or BYOK analysis.
 
 ## What it does
 
@@ -66,7 +66,7 @@ Every view below comes from the built-in locker room tour—no account required.
 | ![Locker room overview](./docs/screenshots/locker-room-overview.webp) | ![Draft studio](./docs/screenshots/draft-studio.webp)     |
 | ![Decision Desk](./docs/screenshots/decision-desk.webp)               | ![Projection Lab](./docs/screenshots/projection-lab.webp) |
 
-<p align="center"><strong>The Weekly Reckoning</strong> turns final scores into shareable league lore, then writes the recap.</p>
+<p align="center"><strong>The Weekly Reckoning</strong> turns final scores into shareable league receipts, then writes the recap.</p>
 
 ![The Weekly Reckoning](./docs/screenshots/weekly-reckoning.webp)
 
@@ -101,10 +101,6 @@ arm64 may work, but it has not been release-tested yet.
 git clone https://github.com/mwardio/laces-out.git
 cd laces-out
 
-# Pin a published release instead of following main.
-VERSION=v1.0.0
-git checkout "$VERSION"
-
 cp .env.docker.example .env
 # Replace every replace-with-... value; generator commands are included in the file.
 docker compose config --quiet
@@ -112,7 +108,9 @@ docker compose up --build -d --wait
 curl --fail http://localhost:3000/health/ready
 ```
 
-Production startup refuses placeholder secrets and the default database password.
+Production startup refuses placeholder secrets and the default database password. For a long-lived
+deployment, check out a release tag you have reviewed instead of following a moving branch; the
+update runbook covers backups, migrations, and rollback.
 
 Create the first admin account without storing its password in `.env`:
 
@@ -146,8 +144,9 @@ settings are in [.env.example](./.env.example).
 | `SESSION_SECRET`                          | Sessions and capability-key derivation                |
 | `CREDENTIAL_ENCRYPTION_KEY`               | AES-256-GCM key for stored credentials                |
 | `REGISTRATION_OPEN`                       | Code-free registration; defaults `false`              |
-| `REGISTRATION_INVITE_CODE`                | Shared registration; blank disables `/register`       |
+| `REGISTRATION_INVITE_CODE`                | Shared-code registration; ignored when open           |
 | `GEMINI_API_KEY`                          | Shared Film Room access                               |
+| `OPENROUTER_API_KEY`                      | Shared Medium/Scorched Reckoning recaps               |
 | `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY`  | Game-day push alerts                                  |
 | `YAHOO_CLIENT_ID` / `YAHOO_CLIENT_SECRET` | Yahoo OAuth when enabled                              |
 | `NEXT_PUBLIC_YAHOO_ACCESS_STATUS`         | Set to `available` when Yahoo OAuth is ready          |
