@@ -222,7 +222,7 @@ export default function LandingPage() {
               </h1>
               <p className={styles.heroLead}>
                 Laces Out builds its own weekly forecast and keeps scanning lineups, waivers,
-                trades, opponents, and draft rooms—then uses AI to explain the next move.
+                trades, opponents, and draft rooms, then surfaces the moves worth making.
               </p>
               <div className={styles.heroActions}>
                 <Link className={styles.primaryButton} href="/register">
