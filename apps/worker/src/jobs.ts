@@ -284,3 +284,29 @@ export async function registerWorkers(
     }
   });
 }
+
+/**
+ * Registers the CPU-heavy ROS consumer separately so a long universe simulation cannot block
+ * league sync, notifications, health checks, or current-week projection work.
+ */
+export async function registerRosProjectionWorker(
+  boss: PgBoss,
+  logger: Logger,
+  service: ProjectionRefreshService,
+): Promise<void> {
+  await boss.work<ProjectionRefreshJob>(
+    queueNames.refreshRosProjections,
+    workOptions,
+    async (jobs) => {
+      for (const job of jobs) {
+        assertNotAborted(job);
+        assertProjectionRefreshJob(job.data);
+        if (job.data.horizon === "weekly") {
+          throw new Error("ROS projection worker received weekly-only work");
+        }
+        await service.refreshProjections(job.data, { jobId: job.id, signal: job.signal });
+        logger.info({ jobId: job.id, ...job.data }, "ROS projection refresh completed");
+      }
+    },
+  );
+}

@@ -65,16 +65,17 @@ rows are persisted on either result because the market series is a time series.
 
 - `23 * * * *` UTC — hourly `market-data` refresh calls `SleeperDataRefresher.refreshTrends`.
 - `17 5 * * *` UTC — daily `player-data` refresh calls `refreshCatalog` then `refreshTrends`.
-- `11 * * * *` UTC — the hourly projection refresh also calls `refreshCatalog`, because injury,
-  practice, and availability signals feed start/sit forecasts.
+- `30 1 * * *` America/Chicago — the nightly full weekly/ROS forecast calls `refreshCatalog`,
+  because injury, practice, and availability signals feed start/sit forecasts.
 - `*/10 * * * *` UTC — the lock-window projection tick calls `refreshCatalog` only while a lineup
-  lock window is active; its final pass sets `force`, which bypasses the source's `nextCheckAt`
-  clock but **not** the conditional request. Only a `catalogSchemaVersion` bump clears the stored
-  validators and forces a full re-read.
+  lock window is active. It rebuilds weekly output without invoking the multi-hour ROS rail; its
+  final pass sets `force`, which bypasses the source's `nextCheckAt` clock but **not** the
+  conditional request. Only a `catalogSchemaVersion` bump clears the stored validators and forces
+  a full re-read.
 
-The effective floor is therefore one catalog check per hour and one trends check per hour, except
-during an active lineup-lock window, where the final forced pass bypasses `nextCheckAt` (though not
-the conditional request).
+The effective floor is therefore one trends check per hour and one scheduled catalog check per day,
+plus conditional catalog checks during an active lineup-lock window. The final forced pass bypasses
+`nextCheckAt` but not the conditional request.
 
 **Known limitation.** The catalog floor was lowered from 30 to 60 minutes on 2026-07-27, halving
 the request rate. It remains more frequent than Sleeper's documented

@@ -93,8 +93,9 @@ export default function PrivacyPage() {
           <p>
             Yahoo authorization happens on Yahoo. The server stores Yahoo tokens in an encrypted,
             versioned credential envelope and uses them only for read-only fantasy sync initiated
-            through this deployment. The current release shows the last successful sync and keeps
-            unattended Yahoo league refreshes disabled until that scheduler is separately validated.
+            through this deployment. The current release shows the last successful sync and supports
+            automatic, server-side read-only Yahoo league refreshes in addition to member-initiated
+            refreshes. Refresh timing is best effort and is not guaranteed.
           </p>
           <p>
             ESPN does not provide this app with a supported consumer Fantasy OAuth flow. The Chrome

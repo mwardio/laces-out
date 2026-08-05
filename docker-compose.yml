@@ -150,6 +150,31 @@ services:
       - data
       - egress
 
+  ros-worker:
+    <<: *service-defaults
+    build:
+      context: .
+      target: worker
+      args:
+        NEXT_PUBLIC_API_URL: ${PUBLIC_URL:-http://localhost:3000}
+        NEXT_PUBLIC_API_SAME_ORIGIN: "true"
+        NEXT_PUBLIC_SITE_URL: ${PUBLIC_URL:-http://localhost:3000}
+        NEXT_PUBLIC_CONTACT_EMAIL: ${NEXT_PUBLIC_CONTACT_EMAIL:-}
+        NEXT_PUBLIC_CLOUDFLARE_ANALYTICS: ${NEXT_PUBLIC_CLOUDFLARE_ANALYTICS:-disabled}
+        NEXT_PUBLIC_REGISTRATION_OPEN: ${REGISTRATION_OPEN:-false}
+        NEXT_PUBLIC_YAHOO_ACCESS_STATUS: ${NEXT_PUBLIC_YAHOO_ACCESS_STATUS:-pending}
+    command: ["node", "apps/worker/dist/ros-worker.js"]
+    environment: *app-environment
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    stop_grace_period: 40s
+    cap_drop:
+      - ALL
+    networks:
+      - data
+      - egress
+
   web:
     <<: *service-defaults
     build:

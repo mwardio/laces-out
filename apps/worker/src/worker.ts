@@ -19,6 +19,7 @@ import {
   enqueueLeagueSync,
   enqueueProjectionRefresh,
   enqueueRecommendationRecompute,
+  enqueueRosProjectionRefresh,
   registerQueues,
   registerWorkers,
 } from "./jobs.js";
@@ -46,11 +47,10 @@ import {
   FirstPartyProjectionService,
   projectionHistorySeasons,
 } from "./first-party-projections.js";
-import { databaseFirstPartyRosCandidateProvider } from "./first-party-ros-candidate-provider.js";
-import { FirstPartyRosProjectionShadowService } from "./first-party-ros-projections.js";
 import { NflverseScheduleRefresher } from "./nflverse-schedules.js";
 import { NflverseWeeklyDataRefresher } from "./nflverse-weekly-data.js";
 import { ProjectionLockWindowService } from "./projection-lock-window.js";
+import { ProjectionRefreshOrchestrator } from "./projection-refresh-orchestrator.js";
 import {
   DrizzleProviderSyncSweepTargetReader,
   ProviderSyncSweepService,
@@ -71,10 +71,6 @@ const weeklyDataRefresher = new NflverseWeeklyDataRefresher({
 const scheduleRefresher = new NflverseScheduleRefresher({ database: database.db });
 const projectionLockWindow = new ProjectionLockWindowService(database.db);
 const projectionService = new FirstPartyProjectionService({ database: database.db });
-const rosProjectionShadowService = new FirstPartyRosProjectionShadowService({
-  database: database.db,
-  candidateProvider: databaseFirstPartyRosCandidateProvider({ database: database.db }),
-});
 const sleeperRefresher = new SleeperDataRefresher({ database: database.db });
 const adpRefresher = new FfcAdpRefresher({ database: database.db });
 const dataHealthService = new DatabaseDataHealthService({
@@ -179,7 +175,11 @@ const espnDirectSync = createEspnDirectSyncService({
       );
     }
     try {
-      await enqueueProjectionRefresh(boss, { season, reason: "on-demand" });
+      await enqueueProjectionRefresh(boss, {
+        season,
+        horizon: "weekly",
+        reason: "on-demand",
+      });
     } catch (error) {
       logger.warn(
         { err: error, season },
@@ -226,6 +226,7 @@ const leagueSyncService = new LeagueSyncService({
     try {
       await enqueueProjectionRefresh(boss, {
         season: receipt.season,
+        horizon: "weekly",
         reason: "on-demand",
       });
     } catch {
@@ -264,6 +265,7 @@ const leagueSyncService = new LeagueSyncService({
     try {
       await enqueueProjectionRefresh(boss, {
         season: receipt.season,
+        horizon: "weekly",
         reason: "on-demand",
       });
     } catch {
@@ -315,6 +317,16 @@ const boss = new PgBoss({
   // The API owns cron timekeeping so long-running projection work cannot swallow schedule ticks.
   schedule: false,
 });
+const projectionRefreshService = new ProjectionRefreshOrchestrator({
+  currentSeason: currentNflSeason,
+  lockWindow: projectionLockWindow,
+  catalog: catalogRefresher,
+  weeklyData: weeklyDataRefresher,
+  sleeperCatalog: sleeperRefresher,
+  schedule: scheduleRefresher,
+  weeklyProjections: projectionService,
+  enqueueRosProjections: (job) => enqueueRosProjectionRefresh(boss, job),
+});
 const providerSyncSweepService = new ProviderSyncSweepService({
   espnEnabled: environment.ESPN_PUBLIC_DIRECT_SYNC_ENABLED,
   espnSessionEnabled: espnSessionSync !== undefined,
@@ -341,43 +353,7 @@ async function start(): Promise<void> {
     leagueSync: leagueSyncService,
     notificationSweep: notificationSweepService,
     recommendationRecompute: recommendationRecomputeService,
-    projectionRefresh: {
-      refreshProjections: async (job, context) => {
-        const effectiveJob =
-          job.reason === "scheduled" || job.reason === "lock-window"
-            ? { ...job, season: currentNflSeason() }
-            : job;
-        const lockWindow =
-          effectiveJob.reason === "lock-window"
-            ? await projectionLockWindow.check(effectiveJob.season)
-            : null;
-        if (lockWindow !== null && !lockWindow.active) return;
-        // The final near-lock pass bypasses conditional source clocks once, inside a bounded
-        // ten-minute window. Other frequent cron ticks remain conditional and cheap.
-        const forceCurrentInputs = lockWindow?.forceFinalCheck === true;
-        // Refresh every current-season model input before forecasting. Each source owns a claim
-        // window and conditional request, so overlapping/manual sweeps coalesce and unchanged
-        // artifacts do not produce new immutable observations.
-        // The canonical player catalog is a hard projection dependency. Checking it here as well
-        // as during the daily shared-data sweep means a transient morning outage is retried on the
-        // next projection cycle instead of withholding every forecast for the rest of the day.
-        await catalogRefresher.refresh(forceCurrentInputs);
-        await weeklyDataRefresher.refreshWeeklyStats(effectiveJob.season, forceCurrentInputs);
-        await weeklyDataRefresher.refreshSnapCounts(effectiveJob.season, forceCurrentInputs);
-        await weeklyDataRefresher.refreshWeeklyRosters(effectiveJob.season, forceCurrentInputs);
-        await weeklyDataRefresher.refreshInjuries(effectiveJob.season, forceCurrentInputs);
-        await weeklyDataRefresher.refreshTeamWeeklyStats(effectiveJob.season, forceCurrentInputs);
-        await sleeperRefresher.refreshCatalog(forceCurrentInputs);
-        // Completed schedules are immutable admitted artifacts. Only the active schedule belongs
-        // in the recurring projection sweep; historical schedules are loaded once by the shared
-        // data bootstrap and replayed only after a schema change or explicit operator refresh.
-        await scheduleRefresher.refresh(effectiveJob.season, forceCurrentInputs);
-        await projectionService.refreshProjections(effectiveJob, context);
-        // ROS consumes only the immutable weekly artifacts written above. An admitted current-
-        // catalog artifact may publish only after its held-out evidence and live gates clear.
-        await rosProjectionShadowService.refreshProjections(effectiveJob, context);
-      },
-    },
+    projectionRefresh: projectionRefreshService,
     providerSyncSweep: providerSyncSweepService,
     refreshPlayerData: async (force) => {
       const activeProjectionSeason = currentNflSeason();
@@ -400,6 +376,7 @@ async function start(): Promise<void> {
       const market = await sleeperRefresher.refreshTrends(force);
       await enqueueProjectionRefresh(boss, {
         season: activeProjectionSeason,
+        horizon: force ? "full" : "weekly",
         reason: "on-demand",
       });
       return { nflverse, ...weeklyData, ...scheduleData, sleeper, market };

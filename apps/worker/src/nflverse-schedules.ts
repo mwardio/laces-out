@@ -19,8 +19,8 @@ import {
 import { currentNflSeason, isReusableArchivedSourceArtifact } from "@fantasy/domain";
 import { and, eq, lte } from "drizzle-orm";
 
-// Runs beneath the hourly projection sweep. The buffer prevents request/runtime drift from
-// skipping the next conditional schedule check.
+// Runs beneath the daily, game-day, and on-demand weekly projection paths. The buffer prevents
+// request/runtime drift from issuing duplicate conditional schedule checks close together.
 const checkIntervalMinutes = 45;
 const claimMinutes = 30;
 const chunkSize = 500;

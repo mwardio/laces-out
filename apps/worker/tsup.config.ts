@@ -1,7 +1,7 @@
 import { defineConfig } from "tsup";
 
 export default defineConfig({
-  entry: ["src/worker.ts"],
+  entry: ["src/worker.ts", "src/ros-worker.ts"],
   format: ["esm"],
   platform: "node",
   target: "node22",

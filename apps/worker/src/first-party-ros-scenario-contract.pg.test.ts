@@ -15,7 +15,7 @@
  * `player_ros_projection_summaries` row lands with `scenario_count = 12288` and a persisted
  * convergence diagnostic pinning the 16384-path reference. It also proves the contract still fails
  * closed above and below the engine's bounds, and reports the measured wall-clock cost of the real
- * path against the `projection-refresh` queue's `expireInSeconds` job timeout.
+ * path against the `ros-projection-refresh` queue's `expireInSeconds` job timeout.
  *
  * Safety: the container is created with an explicit, freshly generated, task-specific connection
  * string on a docker-assigned host port. No code here reads `process.env.DATABASE_URL` or any
@@ -842,7 +842,7 @@ describe.skipIf(!dockerAvailable)(
       expect(publishedSets[0]?.count).toBe("1");
     }, 600_000);
 
-    it("reports the real default path's cost against the projection-refresh job timeout", () => {
+    it("reports the real default path's cost against the ROS projection job timeout", () => {
       expect(refreshDurationMs).toBeGreaterThan(0);
       const perPlayerMs = refreshDurationMs / CANDIDATE_WR_COUNT;
       const timeoutMs = PROJECTION_REFRESH_JOB_TIMEOUT_SECONDS * 1_000;
@@ -851,7 +851,7 @@ describe.skipIf(!dockerAvailable)(
           `${refreshDurationMs.toFixed(0)} ms for ${CANDIDATE_WR_COUNT} released players ` +
           `(${perPlayerMs.toFixed(0)} ms/player) against a ` +
           `${PROJECTION_REFRESH_JOB_TIMEOUT_SECONDS}s (${timeoutMs} ms) ` +
-          `${queueNames.refreshProjections} job timeout; ` +
+          `${queueNames.refreshRosProjections} job timeout; ` +
           `budget allows about ${Math.floor(timeoutMs / perPlayerMs)} released players per job.`,
       );
       expect(refreshDurationMs).toBeLessThan(timeoutMs);

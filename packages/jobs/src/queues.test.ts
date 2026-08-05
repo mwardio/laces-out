@@ -7,6 +7,7 @@ import {
   enqueueDataRefresh,
   enqueueLeagueSync,
   enqueueProjectionRefresh,
+  enqueueRosProjectionRefresh,
   enqueueProviderSyncSweep,
   enqueueRecommendationRecompute,
   queueNames,
@@ -181,23 +182,49 @@ describe("shared queue dispatch contract", () => {
     );
   });
 
-  it("serializes one projection horizon per season", async () => {
+  it("serializes weekly and full projection work independently per season", async () => {
     const { boss, send } = sendHarness();
 
     await enqueueProjectionRefresh(boss, { season: 2026 });
     await enqueueProjectionRefresh(boss, { season: 2026, week: 4 });
+    await enqueueProjectionRefresh(boss, { season: 2026, horizon: "weekly" });
 
     expect(send).toHaveBeenNthCalledWith(
       1,
       queueNames.refreshProjections,
       expect.any(Object),
-      expect.objectContaining({ singletonKey: "projection-refresh:2026:season" }),
+      expect.objectContaining({ singletonKey: "projection-refresh:2026:season:full" }),
     );
     expect(send).toHaveBeenNthCalledWith(
       2,
       queueNames.refreshProjections,
       expect.any(Object),
-      expect.objectContaining({ singletonKey: "projection-refresh:2026:week-4" }),
+      expect.objectContaining({ singletonKey: "projection-refresh:2026:week-4:full" }),
+    );
+    expect(send).toHaveBeenNthCalledWith(
+      3,
+      queueNames.refreshProjections,
+      expect.any(Object),
+      expect.objectContaining({ singletonKey: "projection-refresh:2026:season:weekly" }),
+    );
+  });
+
+  it("dispatches ROS work onto its isolated queue", async () => {
+    const { boss, send } = sendHarness();
+
+    await enqueueRosProjectionRefresh(boss, {
+      season: 2026,
+      horizon: "full",
+      reason: "scheduled",
+    });
+
+    expect(send).toHaveBeenCalledWith(
+      queueNames.refreshRosProjections,
+      { season: 2026, horizon: "full", reason: "scheduled" },
+      expect.objectContaining({
+        group: { id: "ros-projections" },
+        singletonKey: "ros-projection-refresh:2026:scheduled",
+      }),
     );
   });
 

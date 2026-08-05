@@ -190,13 +190,14 @@ Room requests still need to reach their data sources.
 Browser ──> Caddy ──> Next.js web
                   └─> Fastify API ──> PostgreSQL
                                       ↑
-Provider and NFL sources ──> adapters ─┴─ pg-boss worker
-                                      └─ decision engines
+Provider and NFL sources ──> adapters ─┴─ pg-boss workers
+                                      ├─ decision engines
+                                      └─ isolated ROS simulation
 ```
 
 - `apps/web` — responsive Next.js 16 PWA
 - `apps/api` — authentication, provider sync, ingestion, and REST endpoints
-- `apps/worker` — refresh schedules, forecast sweeps, markets, and background jobs
+- `apps/worker` — refresh schedules, forecast sweeps, markets, and isolated ROS work
 - `apps/espn-bridge` — Manifest V3 sync agent, live draft observer, and always-on ESPN authorization
 - `packages/*` — provider adapters, domain contracts, projections, rankings, security, and the
   draft, lineup, waiver, and trade engines

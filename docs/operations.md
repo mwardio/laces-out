@@ -5,20 +5,22 @@
 - `web`: responsive Next.js application;
 - `api`: REST API, health checks, provider callbacks, and authenticated application services;
 - `worker`: pg-boss queues and schedules for daily/startup/on-demand player identity, schedules,
-  weekly player/team stats, weekly rosters, snap counts, Sleeper status, and contextual ADP; hourly Sleeper market
-  signals; an hourly first-party weekly-forecast sweep; a quarter-hour lineup-lock notification
-  sweep; quarter-hour source health checks; and a bounded five-minute ESPN refresh-intent expiry and
-  direct-capability sweep.
+  weekly player/team stats, weekly rosters, snap counts, Sleeper status, and contextual ADP; hourly
+  Sleeper market signals; nightly and game-aware first-party weekly forecasts; quarter-hour
+  lineup-lock notifications and source health checks; and a bounded five-minute provider sync
+  sweep;
+- `ros-worker`: the isolated CPU-heavy rest-of-season simulation consumer. It shares the worker
+  image but runs in a separate process so a multi-hour forecast cannot stall time-sensitive jobs;
   Provider sync, projections, recommendation recomputation, and notification sweeps all have
   concrete worker services and fail closed when a required dependency is unavailable;
 - `postgres`: canonical state, audit trail, and pg-boss queues.
 
 ## Docker Compose deployment
 
-The root `Dockerfile` has distinct `web`, `api`, `worker`, and one-shot `migrate` targets. The
-Compose stack binds PostgreSQL only to host loopback, blocks application startup until migrations
-complete, and exposes one Caddy gateway so browser cookies, OAuth callbacks, the web UI, and the
-API share an origin.
+The root `Dockerfile` has distinct `web`, `api`, `worker`, and one-shot `migrate` targets. Both
+worker services use the worker image with separate entry points. The Compose stack binds PostgreSQL
+only to host loopback, blocks application startup until migrations complete, and exposes one Caddy
+gateway so browser cookies, OAuth callbacks, the web UI, and the API share an origin.
 
 Fastify logs only request paths, never query strings. Caddy also replaces Yahoo OAuth `code` and
 `state` query values before writing access or upstream-error logs. Preserve both controls when
@@ -195,7 +197,7 @@ Useful lifecycle commands:
 
 ```bash
 docker compose ps
-docker compose logs -f --tail=200 api worker
+docker compose logs -f --tail=200 api worker ros-worker
 docker compose up --build -d --wait       # migrate and deploy an update
 docker compose down                       # preserves database and Caddy volumes
 ```
@@ -268,20 +270,22 @@ request both shared NFL data and draft-market checks without waiting for the sch
 
 ## First-party weekly forecasts
 
-The projection queue runs at minute 11 every hour in UTC. A second game-aware schedule checks every
-ten minutes but does model work only within 130 minutes of the next known, unresolved kickoff. In
-that near-lock window, current-season nflverse and Sleeper availability inputs use 30-minute
-conditional checks; the final pass inside ten minutes of kickoff forces one last source check.
-Before modeling, the worker asks the canonical nflverse player catalog, current-season player-stat,
-team-stat, weekly-roster, injury-report, and snap sources, every schedule season in the training
-window, and the Sleeper status catalog to refresh. Conditional claims make unchanged checks cheap
-and prevent overlapping workers from publishing a mixed in-flight snapshot. Including the player
-catalog in every projection cycle is deliberate: a failed daily catalog request is retried when its
-source clock is due instead of withholding forecasts until the next day. The daily 05:17 UTC
-shared-data job refreshes the full training window; its successful completion also queues a
-projection sweep. An
+The full weekly and ROS forecast runs once per day at 01:30 America/Chicago. A separate game-aware
+schedule checks every ten minutes but does model work only within 130 minutes of the next known,
+unresolved kickoff. That path refreshes current-week output without invoking the multi-hour ROS
+rail; the final pass inside ten minutes of kickoff forces one last source check. Provider syncs and
+automatic shared-data recovery use the same weekly-only horizon, while an explicit user rerun keeps
+the full weekly + ROS behavior.
+
+Before weekly modeling, the worker asks the canonical nflverse player catalog, current-season
+player-stat, team-stat, weekly-roster, injury-report, and snap sources, every schedule season in the
+training window, and the Sleeper status catalog to refresh. Conditional claims make unchanged
+checks cheap and prevent overlapping workers from publishing a mixed in-flight snapshot. Including
+the player catalog in every projection cycle is deliberate: a failed daily catalog request is
+retried when its source clock is due instead of withholding forecasts until the next day. The daily
+05:17 UTC shared-data job refreshes the full training window and queues weekly output. An
 authenticated **Check NFL data** or Projection Lab **Check inputs & rerun** request forces the same
-input sweep and queues the model without waiting for cron.
+input sweep and queues both horizons without waiting for cron.
 
 Each model run pins exact immutable source checksums for four seasons, a target season/week, and a
 model version. An unchanged aggregate checksum is a no-op only after the worker verifies that the
@@ -292,7 +296,8 @@ week. Once a game begins, its last pre-kickoff raw and league-scored rows are au
 status or source changes cannot rewrite them. A failed or degraded candidate does not overwrite
 the last-known-good managed projection set. An unchanged evaluation updates its check time without
 pretending the older artifact was republished. The queue retries four times with exponential
-backoff up to 30 minutes and retains exhausted jobs in `projection-refresh-dead-letter`.
+backoff up to 30 minutes. Exhausted weekly jobs land in `projection-refresh-dead-letter`; exhausted
+ROS jobs land in `ros-projection-refresh-dead-letter`.
 
 Publication is also gated by locked, strictly prior out-of-sample evaluation. Player forecasts are
 selected per position between the richer contextual model and its transparent recency-only
@@ -335,12 +340,12 @@ Reproduce the full official audit with `npm run projections:validate -w @fantasy
 expect several minutes of CPU time (about 375 seconds observed) because the command deliberately
 rebuilds every locked batch.
 
-After each weekly sweep, the worker also runs the rest-of-season shadow auditor against the latest
-immutable schedule and weekly artifacts. It intentionally records only a degraded model-run audit:
-it cannot write managed league sets or replace a prior good result. Release is a separate,
-artifact-gated path. Each position/horizon cell requires the configured held-out season, block, row,
-coverage, availability, convergence, and calibration evidence; sparse or mismatched cells remain
-withheld.
+After the nightly weekly sweep, the dedicated ROS worker runs the rest-of-season rail against the
+latest immutable schedule and weekly artifacts. The separate process prevents its multi-hour CPU
+work from delaying provider syncs, health checks, notifications, or game-day weekly forecasts.
+Release remains artifact-gated: each position/horizon cell requires the configured held-out season,
+block, row, coverage, availability, convergence, and calibration evidence; sparse or mismatched
+cells remain withheld without replacing a prior good result.
 
 The current rest-of-season rail uses model `laces-ros-distribution-v7`. Each current profile replay
 grades 3,264 forecasts across 68 batches and converges all 144 release/reference diagnostics. The
@@ -459,8 +464,9 @@ multiplying work by league membership; a distinct admitted profile adds one sepa
 The two D/ST-complete v10 validations took 22,665 and 22,847 seconds (about 6 hours 18 minutes and 6
 hours 21 minutes) when run in parallel on the current host. The run has no checkpointing, so an
 interrupted validation restarts from zero. Detach it from the launching shell and redirect stdout to
-the report path. `projection-refresh` allows 28,800 seconds for the full shared NFL universe; do not
-reduce that timeout below the measured validation envelope without a separate production benchmark.
+the report path. `ros-projection-refresh` allows 28,800 seconds for the full shared NFL universe; do
+not reduce that timeout below the measured validation envelope without a separate production
+benchmark.
 
 Redirect the report through `npm run --silent`, or invoke `tsx` directly. Under some environments —
 notably a scrubbed one such as `env -i` — `npm run` writes its two-line `> package@version` banner to

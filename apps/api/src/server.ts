@@ -305,7 +305,8 @@ const app = await buildApp({
       reason: "user",
       requestedAt: requestedAt.toISOString(),
     }),
-  enqueueProjectionRefresh: async ({ season }) => enqueueProjectionRefresh(jobs, { season }),
+  enqueueProjectionRefresh: async ({ season }) =>
+    enqueueProjectionRefresh(jobs, { season, horizon: "weekly", reason: "on-demand" }),
   enqueueRecommendationRecompute: async ({ leagueSeasonId, kinds }) =>
     enqueueRecommendationRecompute(jobs, { leagueSeasonId, kinds }),
 });

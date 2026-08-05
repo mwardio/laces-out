@@ -7,12 +7,15 @@ import {
   enqueueDataHealthCheck,
   enqueueLeagueSync,
   enqueueProjectionRefresh,
+  enqueueRosProjectionRefresh,
   enqueueRecommendationRecompute,
   ensureDailyRefresh,
   queueNames,
   registerQueues,
+  registerRosProjectionWorker,
   registerSchedules,
   registerWorkers,
+  DAILY_PROJECTION_REFRESH_SINGLETON_SECONDS,
   SEASON_PROJECTION_REFRESH_EXPIRE_SECONDS,
   type DataHealthJob,
   type DataRefreshJob,
@@ -89,6 +92,11 @@ describe("worker queue reliability", () => {
           retryDelayMax: 1_800,
           expireInSeconds: SEASON_PROJECTION_REFRESH_EXPIRE_SECONDS,
         },
+        refreshRosProjections: {
+          retryLimit: 4,
+          retryDelayMax: 1_800,
+          expireInSeconds: SEASON_PROJECTION_REFRESH_EXPIRE_SECONDS,
+        },
         recomputeRecommendations: { retryLimit: 3, retryDelayMax: 300, expireInSeconds: 900 },
         dataHealth: { retryLimit: 2, retryDelayMax: 300, expireInSeconds: 300 },
         dataRefresh: { retryLimit: 5, retryDelayMax: 3_600, expireInSeconds: 1_800 },
@@ -118,14 +126,48 @@ describe("worker queue reliability", () => {
 
     await registerWorkers(boss, logger);
 
-    expect(work).toHaveBeenCalledTimes(Object.keys(queueNames).length);
-    for (const name of Object.values(queueNames)) {
+    const mainQueueNames = Object.values(queueNames).filter(
+      (name) => name !== queueNames.refreshRosProjections,
+    );
+    expect(work).toHaveBeenCalledTimes(mainQueueNames.length);
+    for (const name of mainQueueNames) {
       expect(work).toHaveBeenCalledWith(
         name,
         { batchSize: 1, groupConcurrency: 1 },
         expect.any(Function),
       );
     }
+  });
+
+  it("registers ROS work on its dedicated consumer", async () => {
+    const { boss, work, handlers } = bossHarness();
+    const { logger, info } = loggerHarness();
+    const refreshProjections = vi.fn(() => Promise.resolve());
+
+    await registerRosProjectionWorker(boss, logger, { refreshProjections });
+    await run(
+      handlers,
+      queueNames.refreshRosProjections,
+      job(queueNames.refreshRosProjections, {
+        season: 2026,
+        horizon: "full",
+        reason: "scheduled",
+      }),
+    );
+
+    expect(work).toHaveBeenCalledWith(
+      queueNames.refreshRosProjections,
+      { batchSize: 1, groupConcurrency: 1 },
+      expect.any(Function),
+    );
+    expect(refreshProjections).toHaveBeenCalledWith(
+      { season: 2026, horizon: "full", reason: "scheduled" },
+      expect.objectContaining({ jobId: "ros-projection-refresh-job-id" }),
+    );
+    expect(info).toHaveBeenCalledWith(
+      expect.objectContaining({ season: 2026, horizon: "full" }),
+      "ROS projection refresh completed",
+    );
   });
 
   it("re-exports the shared queue contract rather than redefining it", async () => {
@@ -138,6 +180,7 @@ describe("worker queue reliability", () => {
     expect(enqueueLeagueSync).toBe(shared.enqueueLeagueSync);
     expect(enqueueRecommendationRecompute).toBe(shared.enqueueRecommendationRecompute);
     expect(enqueueProjectionRefresh).toBe(shared.enqueueProjectionRefresh);
+    expect(enqueueRosProjectionRefresh).toBe(shared.enqueueRosProjectionRefresh);
     expect(enqueueDataHealthCheck).toBe(shared.enqueueDataHealthCheck);
     expect(registerQueues).toBe(shared.registerQueues);
     expect(registerSchedules).toBe(shared.registerSchedules);
@@ -409,7 +452,7 @@ describe("dispatch contracts and schedules", () => {
       expect.any(Object),
       expect.objectContaining({
         group: { id: "projections" },
-        singletonKey: "projection-refresh:2026:week-4",
+        singletonKey: "projection-refresh:2026:week-4:full",
       }),
     );
     expect(send).toHaveBeenNthCalledWith(
@@ -429,7 +472,7 @@ describe("dispatch contracts and schedules", () => {
     );
   });
 
-  it("registers keyed UTC refresh schedules and a coalesced health schedule", async () => {
+  it("registers one daily full forecast and lightweight game-day projection checks", async () => {
     const { boss, schedule, unschedule } = bossHarness();
 
     await registerSchedules(boss, 2026);
@@ -444,6 +487,11 @@ describe("dispatch contracts and schedules", () => {
       3,
       queueNames.dataRefresh,
       "daily-nflverse-player-catalog",
+    );
+    expect(unschedule).toHaveBeenNthCalledWith(
+      4,
+      queueNames.refreshProjections,
+      "hourly-first-party-projections",
     );
     expect(schedule).toHaveBeenCalledTimes(9);
     expect(schedule).toHaveBeenNthCalledWith(
@@ -519,7 +567,7 @@ describe("dispatch contracts and schedules", () => {
       8,
       queueNames.refreshProjections,
       "*/10 * * * *",
-      { season: 2026, reason: "lock-window" },
+      { season: 2026, horizon: "weekly", reason: "lock-window" },
       expect.objectContaining({
         tz: "UTC",
         key: "near-lock-first-party-projections",
@@ -530,14 +578,14 @@ describe("dispatch contracts and schedules", () => {
     expect(schedule).toHaveBeenNthCalledWith(
       9,
       queueNames.refreshProjections,
-      "11 * * * *",
-      { season: 2026, reason: "scheduled" },
+      "30 1 * * *",
+      { season: 2026, horizon: "full", reason: "scheduled" },
       expect.objectContaining({
-        tz: "UTC",
-        key: "hourly-first-party-projections",
+        tz: "America/Chicago",
+        key: "daily-first-party-projections",
         group: { id: "projections" },
-        singletonKey: "projection-refresh:2026:season",
-        singletonSeconds: SEASON_PROJECTION_REFRESH_EXPIRE_SECONDS,
+        singletonKey: "automatic-projection-refresh:2026:daily-full",
+        singletonSeconds: DAILY_PROJECTION_REFRESH_SINGLETON_SECONDS,
       }),
     );
   });
@@ -548,14 +596,14 @@ describe("dispatch contracts and schedules", () => {
     await registerSchedules(boss, 2026);
     await registerSchedules(boss, 2026);
 
-    expect(unschedule).toHaveBeenCalledTimes(6);
+    expect(unschedule).toHaveBeenCalledTimes(8);
     expect(unschedule).toHaveBeenNthCalledWith(
       1,
       queueNames.providerSyncSweep,
       "espn-provider-sync-sweep",
     );
     expect(unschedule).toHaveBeenNthCalledWith(
-      4,
+      5,
       queueNames.providerSyncSweep,
       "espn-provider-sync-sweep",
     );

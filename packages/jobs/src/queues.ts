@@ -15,6 +15,7 @@ import type { PgBoss, Queue, SendOptions } from "pg-boss";
 export const queueNames = {
   syncLeague: "league-sync",
   refreshProjections: "projection-refresh",
+  refreshRosProjections: "ros-projection-refresh",
   recomputeRecommendations: "recommendation-recompute",
   dataHealth: "data-health-check",
   dataRefresh: "data-refresh",
@@ -25,6 +26,7 @@ export const queueNames = {
 export const deadLetterQueueNames = {
   syncLeague: "league-sync-dead-letter",
   refreshProjections: "projection-refresh-dead-letter",
+  refreshRosProjections: "ros-projection-refresh-dead-letter",
   recomputeRecommendations: "recommendation-recompute-dead-letter",
   dataHealth: "data-health-check-dead-letter",
   dataRefresh: "data-refresh-dead-letter",
@@ -49,6 +51,8 @@ export interface ProviderSyncSweepJob {
 export interface ProjectionRefreshJob {
   readonly season: number;
   readonly week?: number;
+  /** Omitted by legacy and explicit user requests, which retain full weekly + ROS behavior. */
+  readonly horizon?: "weekly" | "full";
   /** Scheduled jobs re-resolve the active NFL season when they execute across a March rollover. */
   readonly reason?: "scheduled" | "lock-window" | "on-demand";
 }
@@ -91,6 +95,8 @@ type QueueConfiguration = Omit<Queue, "name" | "partition" | "policy">;
 const DAY_SECONDS = 86_400;
 /** Full-universe ROS simulations are intentionally allowed more time than ordinary queue work. */
 export const SEASON_PROJECTION_REFRESH_EXPIRE_SECONDS = 8 * 60 * 60;
+/** Suppress a repeated 01:30 during DST fallback without skipping the next 23-hour spring run. */
+export const DAILY_PROJECTION_REFRESH_SINGLETON_SECONDS = 20 * 60 * 60;
 const queueConfigurations: Readonly<Record<keyof typeof queueNames, QueueConfiguration>> = {
   syncLeague: {
     retryLimit: 5,
@@ -113,6 +119,17 @@ const queueConfigurations: Readonly<Record<keyof typeof queueNames, QueueConfigu
     deleteAfterSeconds: 7 * DAY_SECONDS,
     deadLetter: deadLetterQueueNames.refreshProjections,
     warningQueueSize: 10,
+  },
+  refreshRosProjections: {
+    retryLimit: 4,
+    retryDelay: 60,
+    retryBackoff: true,
+    retryDelayMax: 30 * 60,
+    expireInSeconds: SEASON_PROJECTION_REFRESH_EXPIRE_SECONDS,
+    retentionSeconds: 14 * DAY_SECONDS,
+    deleteAfterSeconds: 7 * DAY_SECONDS,
+    deadLetter: deadLetterQueueNames.refreshRosProjections,
+    warningQueueSize: 3,
   },
   recomputeRecommendations: {
     retryLimit: 3,
@@ -250,11 +267,33 @@ export function enqueueProjectionRefresh(
   job: ProjectionRefreshJob,
 ): Promise<string | null> {
   assertProjectionRefreshJob(job);
-  const horizon = job.week === undefined ? "season" : `week-${job.week}`;
+  const window = job.week === undefined ? "season" : `week-${job.week}`;
+  const horizon = job.horizon ?? "full";
   return boss.send(
     queueNames.refreshProjections,
     job,
-    dispatchOptions("projections", `projection-refresh:${job.season}:${horizon}`, 5 * 60),
+    dispatchOptions("projections", `projection-refresh:${job.season}:${window}:${horizon}`, 5 * 60),
+  );
+}
+
+/** Runs the CPU-heavy shared ROS horizon independently from time-sensitive worker queues. */
+export function enqueueRosProjectionRefresh(
+  boss: PgBoss,
+  job: ProjectionRefreshJob,
+): Promise<string | null> {
+  assertProjectionRefreshJob(job);
+  if (job.horizon === "weekly") {
+    throw new Error("Weekly-only projection work cannot be enqueued on the ROS queue");
+  }
+  const requestClass = job.reason === "scheduled" ? "scheduled" : "on-demand";
+  return boss.send(
+    queueNames.refreshRosProjections,
+    { ...job, horizon: "full" } satisfies ProjectionRefreshJob,
+    dispatchOptions(
+      "ros-projections",
+      `ros-projection-refresh:${job.season}:${requestClass}`,
+      5 * 60,
+    ),
   );
 }
 
@@ -349,6 +388,9 @@ export function assertProjectionRefreshJob(job: ProjectionRefreshJob): void {
   if (job.week !== undefined && (!Number.isInteger(job.week) || job.week < 1 || job.week > 25)) {
     throw new Error("Invalid worker job: week must be between 1 and 25");
   }
+  if (job.horizon !== undefined && job.horizon !== "weekly" && job.horizon !== "full") {
+    throw new Error("Invalid worker job: unsupported projection horizon");
+  }
   if (
     job.reason !== undefined &&
     job.reason !== "scheduled" &&
@@ -405,6 +447,7 @@ export async function registerSchedules(boss: PgBoss, projectionSeason?: number)
   await boss.unschedule(queueNames.providerSyncSweep, "espn-provider-sync-sweep");
   await boss.unschedule(queueNames.dataHealth);
   await boss.unschedule(queueNames.dataRefresh, "daily-nflverse-player-catalog");
+  await boss.unschedule(queueNames.refreshProjections, "hourly-first-party-projections");
   await boss.schedule(
     queueNames.providerSyncSweep,
     "*/5 * * * *",
@@ -501,10 +544,17 @@ export async function registerSchedules(boss: PgBoss, projectionSeason?: number)
   );
   if (projectionSeason !== undefined) {
     assertProjectionRefreshJob({ season: projectionSeason });
+    // This frequent trigger is cheap outside a live window. During the two hours before kickoff,
+    // the worker refreshes current inputs and weekly projections only; it deliberately skips the
+    // multi-hour ROS simulation run.
     await boss.schedule(
       queueNames.refreshProjections,
       "*/10 * * * *",
-      { season: projectionSeason, reason: "lock-window" } satisfies ProjectionRefreshJob,
+      {
+        season: projectionSeason,
+        horizon: "weekly",
+        reason: "lock-window",
+      } satisfies ProjectionRefreshJob,
       {
         tz: "UTC",
         key: "near-lock-first-party-projections",
@@ -514,20 +564,21 @@ export async function registerSchedules(boss: PgBoss, projectionSeason?: number)
     );
     await boss.schedule(
       queueNames.refreshProjections,
-      "11 * * * *",
-      { season: projectionSeason, reason: "scheduled" } satisfies ProjectionRefreshJob,
+      "30 1 * * *",
       {
-        tz: "UTC",
-        key: "hourly-first-party-projections",
-        // The worker resolves the active NFL season again at execution time. A season-neutral
-        // group therefore keeps scheduled and on-demand refreshes serialized across March
-        // rollover even when the long-running schedule payload still names the prior season.
+        season: projectionSeason,
+        horizon: "full",
+        reason: "scheduled",
+      } satisfies ProjectionRefreshJob,
+      {
+        tz: "America/Chicago",
+        key: "daily-first-party-projections",
+        // The worker resolves the active NFL season again at execution time. Manual and on-demand
+        // work keeps its own enqueue path, while this DST-safe guard prevents duplicate automatic
+        // runs if 01:30 occurs twice when clocks fall back.
         group: { id: "projections" },
-        singletonKey: `projection-refresh:${projectionSeason}:season`,
-        // A full-universe ROS pass can take several hours. Keep the hourly cron as a recovery
-        // opportunity, but admit at most one expensive season refresh per timeout window so ticks
-        // do not accumulate behind a healthy run and replay the same inputs all night.
-        singletonSeconds: SEASON_PROJECTION_REFRESH_EXPIRE_SECONDS,
+        singletonKey: `automatic-projection-refresh:${projectionSeason}:daily-full`,
+        singletonSeconds: DAILY_PROJECTION_REFRESH_SINGLETON_SECONDS,
       },
     );
   }

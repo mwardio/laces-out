@@ -19,9 +19,9 @@ import { and, eq, inArray, lt, lte, sql } from "drizzle-orm";
 
 const catalogSourceKey = "sleeper.players";
 const trendsSourceKey = "sleeper.trends";
-// Injury, practice, and availability signals directly affect start/sit projections. Keep the
-// catalog ahead of both hourly and game-aware projection sweeps; conditional requests keep
-// unchanged checks cheap while the final lock-window pass can force one last status check.
+// Injury, practice, and availability signals directly affect start/sit projections. The daily
+// shared-data refresh keeps the catalog warm before the nightly forecast; conditional requests
+// keep game-day lock-window checks and explicit on-demand refreshes cheap.
 /**
  * Sleeper documents the players endpoint as a cache-locally, at-most-daily read. A 2026-07-27
  * review moved this from 30 to 60 minutes: still short of that guidance, but halving the request
