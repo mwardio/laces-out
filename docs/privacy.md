@@ -116,7 +116,8 @@ by Cloudflare's terms.
 
 Authenticated members can download their data from `GET /v1/account/export` or the direct web
 destination `/settings#account-data`. The versioned portable JSON includes identity, preferences,
-session metadata, memberships and claimed-team context, provider-connection metadata, ESPN bridge
+session metadata, memberships and claimed-team context, removed-league sync choices,
+provider-connection metadata, ESPN bridge
 device metadata, notification-device and delivery metadata, invitations, owned rankings and their
 versions/entries/imports/shares, member-created projection sets and player projections, AI provider
 configuration and usage metadata, activity receipts, audit history, League Intel and recap

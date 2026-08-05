@@ -5,7 +5,7 @@ import { EspnWebClientNormalizationError } from "@fantasy/connector-espn";
 import { healthResponseSchema } from "@fantasy/contracts";
 
 import { AuthService, type AuthRepository } from "./auth.js";
-import { buildApp, requestPathForLog } from "./app.js";
+import { buildApp, type LeagueMembershipPort, requestPathForLog } from "./app.js";
 import { LeagueDashboardError } from "./league-dashboard.js";
 
 const testSessionToken = "s".repeat(32);
@@ -315,6 +315,7 @@ describe("API", () => {
     expect(health.mobileCapabilities).toEqual(
       expect.arrayContaining(["cookie-authentication", "account-data-export", "account-deletion"]),
     );
+    expect(health.mobileCapabilities).not.toContain("league-removal-v1");
     await app.close();
   });
 
@@ -479,6 +480,78 @@ describe("API", () => {
         requestedTeamId: teamId,
       },
     ]);
+    await app.close();
+  });
+
+  it("removes only the authenticated member's confirmed league membership", async () => {
+    const removals: Parameters<LeagueMembershipPort["removeLeague"]>[0][] = [];
+    const app = await buildApp({
+      environment: loadEnvironment({ NODE_ENV: "test" }),
+      logger: false,
+      requireAuthentication: true,
+      authService: authenticatedService(),
+      leagueMemberships: {
+        removeLeague: (input) => {
+          removals.push(input);
+          return Promise.resolve({
+            outcome: "removed" as const,
+            response: {
+              leagueId,
+              leagueName: "Friends League",
+              leagueDeleted: false,
+              ownershipTransferred: true,
+              removedAt: "2026-08-05T16:00:00.000Z",
+            },
+          });
+        },
+      },
+    });
+
+    const response = await app.inject({
+      method: "DELETE",
+      url: `/v1/leagues/${leagueId}/membership`,
+      headers: { cookie: authenticatedCookie },
+      payload: { confirmation: "Friends League" },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      leagueId,
+      leagueDeleted: false,
+      ownershipTransferred: true,
+    });
+    expect(removals).toHaveLength(1);
+    expect(removals[0]).toMatchObject({
+      userId: "00000000-0000-4000-8000-000000000001",
+      leagueId,
+      confirmation: "Friends League",
+    });
+    expect(typeof removals[0]?.correlationId).toBe("string");
+    const health = healthResponseSchema.parse(
+      (await app.inject({ method: "GET", url: "/health/ready" })).json(),
+    );
+    expect(health.mobileCapabilities).toContain("league-removal-v1");
+    await app.close();
+  });
+
+  it("does not reveal whether a league exists when the member-scoped removal misses", async () => {
+    const app = await buildApp({
+      environment: loadEnvironment({ NODE_ENV: "test" }),
+      logger: false,
+      requireAuthentication: true,
+      authService: authenticatedService(),
+      leagueMemberships: {
+        removeLeague: () => Promise.resolve({ outcome: "not-found" as const }),
+      },
+    });
+
+    const response = await app.inject({
+      method: "DELETE",
+      url: `/v1/leagues/${leagueId}/membership`,
+      headers: { cookie: authenticatedCookie },
+      payload: { confirmation: "Friends League" },
+    });
+    expect(response.statusCode).toBe(404);
+    expect(response.json()).toMatchObject({ title: "League not found" });
     await app.close();
   });
 

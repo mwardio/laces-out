@@ -13,6 +13,7 @@ import {
   bridgePairingSessions,
   leagueMemberships,
   leagueSeasons,
+  leagueSyncExclusions,
   leagues,
   type Database,
 } from "@fantasy/db";
@@ -151,6 +152,27 @@ async function knownMemberLeagueIds(
       ),
     );
   return new Map(rows.map((row) => [row.externalLeagueId, row.leagueId]));
+}
+
+async function restoreExplicitEspnScopes(
+  transaction: EspnBridgeTransaction,
+  input: {
+    readonly userId: string;
+    readonly externalLeagueIds: readonly string[];
+    readonly season: number | undefined;
+  },
+): Promise<void> {
+  if (input.season === undefined) return;
+  await transaction
+    .delete(leagueSyncExclusions)
+    .where(
+      and(
+        eq(leagueSyncExclusions.userId, input.userId),
+        eq(leagueSyncExclusions.provider, "espn"),
+        eq(leagueSyncExclusions.season, input.season),
+        inArray(leagueSyncExclusions.externalKey, input.externalLeagueIds),
+      ),
+    );
 }
 
 export class EspnBridgeService {
@@ -317,6 +339,11 @@ export class EspnBridgeService {
       );
     }
     const device = await this.#database.transaction(async (transaction) => {
+      await restoreExplicitEspnScopes(transaction, {
+        userId,
+        externalLeagueIds: input.allowedLeagueIds,
+        season: input.season,
+      });
       const knownLeagues = await knownMemberLeagueIds(transaction, {
         userId,
         externalLeagueIds: input.allowedLeagueIds,
@@ -429,6 +456,11 @@ export class EspnBridgeService {
       if (!session) return undefined;
 
       const leagueIds = storedLeagueIds(session.allowedLeagueIds);
+      await restoreExplicitEspnScopes(transaction, {
+        userId: session.userId,
+        externalLeagueIds: leagueIds,
+        season: session.season,
+      });
       const knownLeagues = await knownMemberLeagueIds(transaction, {
         userId: session.userId,
         externalLeagueIds: leagueIds,

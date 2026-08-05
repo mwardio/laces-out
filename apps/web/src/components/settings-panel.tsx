@@ -9,6 +9,7 @@ import {
   ShieldAlert,
   Sparkles,
   Trash2,
+  Unlink,
   UserRound,
   UsersRound,
 } from "lucide-react";
@@ -19,6 +20,7 @@ import {
   parseAuthenticatedSession,
   parseLeagueDashboard,
   parseLeagueListResponse,
+  parseLeagueRemovalResponse,
   parsePushConfiguration,
   parsePushDevice,
   parsePushDeviceList,
@@ -124,6 +126,18 @@ function formatDeviceTime(value: string | null, emptyLabel: string): string {
   );
 }
 
+function membershipRoleLabel(
+  role: LeagueListResponse["leagues"][number]["membership"]["role"],
+): string {
+  const labels: Record<typeof role, string> = {
+    owner: "Owner",
+    commissioner: "Commissioner",
+    manager: "Manager",
+    viewer: "Viewer",
+  };
+  return labels[role];
+}
+
 async function problemDetail(response: Response, fallback: string): Promise<string> {
   try {
     const body: unknown = await response.json();
@@ -160,6 +174,8 @@ export function SettingsPanel() {
   const [teamRows, setTeamRows] = useState<Record<string, TeamRowDashboard>>({});
   const [teamChoices, setTeamChoices] = useState<Record<string, string>>({});
   const [teamSaves, setTeamSaves] = useState<Record<string, Status>>({});
+  const [removalTargetId, setRemovalTargetId] = useState<string | null>(null);
+  const [removalStatus, setRemovalStatus] = useState<Status>({ state: "idle" });
 
   /**
    * One league's own dashboard read, kept independent per row: a league whose dashboard fails to
@@ -232,6 +248,56 @@ export function SettingsPanel() {
           message: error instanceof Error ? error.message : "That team could not be saved.",
         },
       }));
+    }
+  }
+
+  async function removeLeague(leagueId: string) {
+    const league = leagues.find((candidate) => candidate.id === leagueId);
+    if (!league || removalStatus.state === "saving") return;
+    setRemovalStatus({ state: "saving" });
+    try {
+      const response = await fetch(
+        `${apiBaseUrl}/v1/leagues/${encodeURIComponent(league.id)}/membership`,
+        {
+          method: "DELETE",
+          credentials: "include",
+          cache: "no-store",
+          headers: { Accept: "application/json", "Content-Type": "application/json" },
+          body: JSON.stringify({ confirmation: league.name }),
+        },
+      );
+      if (!response.ok) {
+        throw new Error(await problemDetail(response, "That league could not be removed."));
+      }
+      const removed = parseLeagueRemovalResponse(await response.json());
+      if (!removed) throw new Error("League removal returned an invalid response.");
+
+      setLeagues((current) => current.filter((candidate) => candidate.id !== league.id));
+      if (defaultLeagueId === league.id) setDefaultLeagueId("");
+      setTeamRows((current) => {
+        const next = { ...current };
+        delete next[league.id];
+        return next;
+      });
+      setTeamChoices((current) => {
+        const next = { ...current };
+        delete next[league.id];
+        return next;
+      });
+      setRemovalTargetId(null);
+      setRemovalStatus({
+        state: "saved",
+        message: removed.leagueDeleted
+          ? `${removed.leagueName} was removed and its unshared data was deleted.`
+          : removed.ownershipTransferred
+            ? `${removed.leagueName} was removed. Another member now owns the shared league.`
+            : `${removed.leagueName} was removed from your account.`,
+      });
+    } catch (error) {
+      setRemovalStatus({
+        state: "error",
+        message: error instanceof Error ? error.message : "That league could not be removed.",
+      });
     }
   }
 
@@ -774,6 +840,110 @@ export function SettingsPanel() {
                 </ul>
               </>
             )}
+          </section>
+
+          <section className={styles.panel} aria-labelledby="synced-leagues-title">
+            <div className={styles.panelHeading}>
+              <div>
+                <p>League access</p>
+                <h2 id="synced-leagues-title">Synced leagues</h2>
+              </div>
+              <Unlink size={18} aria-hidden="true" />
+            </div>
+            {leagues.length === 0 ? (
+              <p className={styles.note}>No synced leagues are attached to this account.</p>
+            ) : (
+              <>
+                <p className={styles.panelIntro}>
+                  Remove a league you no longer want Laces Out to track for you.
+                </p>
+                <ul className={styles.leagueAccessList}>
+                  {leagues.map((league) => {
+                    const confirming = removalTargetId === league.id;
+                    const provider = league.season?.provider;
+                    return (
+                      <li key={league.id}>
+                        <div className={styles.leagueAccessSummary}>
+                          <div>
+                            <strong>{league.name}</strong>
+                            <span>
+                              {provider === "espn"
+                                ? "ESPN"
+                                : provider === "yahoo"
+                                  ? "Yahoo"
+                                  : "Manual"}
+                              {league.season ? ` · ${league.season.season}` : ""} ·{" "}
+                              {membershipRoleLabel(league.membership.role)}
+                            </span>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setRemovalTargetId(confirming ? null : league.id);
+                              setRemovalStatus({ state: "idle" });
+                            }}
+                            disabled={removalStatus.state === "saving"}
+                            aria-expanded={confirming}
+                            aria-controls={`remove-league-${league.id}`}
+                          >
+                            <Trash2 size={14} aria-hidden="true" />
+                            Remove
+                          </button>
+                        </div>
+                        {confirming ? (
+                          <div
+                            className={styles.leagueRemovalConfirmation}
+                            id={`remove-league-${league.id}`}
+                            role="alertdialog"
+                            aria-modal="false"
+                            aria-labelledby={`remove-league-title-${league.id}`}
+                          >
+                            <strong id={`remove-league-title-${league.id}`}>
+                              Remove {league.name}?
+                            </strong>
+                            <p>
+                              Syncing stops for your account. Other members keep their access. If
+                              you are the only member, the stored league is deleted; otherwise,
+                              ownership transfers automatically when needed.
+                            </p>
+                            <div className={styles.leagueRemovalActions}>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setRemovalTargetId(null);
+                                  setRemovalStatus({ state: "idle" });
+                                }}
+                                disabled={removalStatus.state === "saving"}
+                              >
+                                Keep league
+                              </button>
+                              <button
+                                className={styles.leagueRemovalButton}
+                                type="button"
+                                onClick={() => void removeLeague(league.id)}
+                                disabled={removalStatus.state === "saving"}
+                              >
+                                {removalStatus.state === "saving" ? (
+                                  <LoaderCircle
+                                    className={styles.spin}
+                                    size={14}
+                                    aria-hidden="true"
+                                  />
+                                ) : (
+                                  <Trash2 size={14} aria-hidden="true" />
+                                )}
+                                Remove league
+                              </button>
+                            </div>
+                          </div>
+                        ) : null}
+                      </li>
+                    );
+                  })}
+                </ul>
+              </>
+            )}
+            <StatusLine status={removalStatus} />
           </section>
 
           <section className={styles.panel} aria-labelledby="ai-provider-title">

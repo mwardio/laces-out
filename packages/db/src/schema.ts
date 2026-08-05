@@ -20,6 +20,7 @@ import {
 } from "drizzle-orm/pg-core";
 
 export type ProviderName = "yahoo" | "espn" | "manual";
+export type SyncedProviderName = Exclude<ProviderName, "manual">;
 export type ConnectionHealth = "pending" | "healthy" | "degraded" | "reauthorize" | "disabled";
 export type ApplicationRole = "member" | "admin";
 export type LeagueMembershipRole = "owner" | "commissioner" | "manager" | "viewer";
@@ -641,6 +642,34 @@ export const providerLeagueLinks = pgTable(
       "provider_league_links_current_team_check",
       sql`${table.currentUserTeamExternalKey} is null or char_length(btrim(${table.currentUserTeamExternalKey})) > 0`,
     ),
+  ],
+);
+
+/**
+ * A member deliberately removed one provider season from their account. Provider discovery and
+ * stale bridge credentials must respect this record instead of silently recreating membership on
+ * the next background sync. A fresh, explicit provider pairing may remove the exclusion.
+ */
+export const leagueSyncExclusions = pgTable(
+  "league_sync_exclusions",
+  {
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    provider: text("provider").$type<SyncedProviderName>().notNull(),
+    externalKey: text("external_key").notNull(),
+    season: integer("season").notNull(),
+    removedAt: timestamp("removed_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.userId, table.provider, table.externalKey, table.season] }),
+    index("league_sync_exclusions_user_idx").on(table.userId, table.removedAt),
+    check("league_sync_exclusions_provider_check", sql`${table.provider} in ('yahoo', 'espn')`),
+    check(
+      "league_sync_exclusions_external_key_check",
+      sql`char_length(btrim(${table.externalKey})) > 0`,
+    ),
+    check("league_sync_exclusions_season_check", sql`${table.season} between 2000 and 2200`),
   ],
 );
 

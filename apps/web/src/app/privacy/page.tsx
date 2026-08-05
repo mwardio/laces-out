@@ -164,12 +164,12 @@ export default function PrivacyPage() {
             A signed-in member can go directly to{" "}
             <Link href="/settings#account-data">Settings → Your data</Link> to download a portable
             JSON export or permanently delete the account. The export includes identity,
-            preferences, memberships, private rankings and projections, activity, connection
-            metadata, notification history, user-owned ESPN refresh and attempt history, and AI
-            usage. It deliberately excludes password hashes, session or invitation tokens, OAuth and
-            ESPN sync-device credentials, another member&apos;s device provenance, push endpoints
-            and keys, browser-handoff tokens, encrypted fantasy-provider or AI keys, provider
-            request hashes, and share-link tokens.
+            preferences, memberships, removed-league sync choices, private rankings and projections,
+            activity, connection metadata, notification history, user-owned ESPN refresh and attempt
+            history, and AI usage. It deliberately excludes password hashes, session or invitation
+            tokens, OAuth and ESPN sync-device credentials, another member&apos;s device provenance,
+            push endpoints and keys, browser-handoff tokens, encrypted fantasy-provider or AI keys,
+            provider request hashes, and share-link tokens.
           </p>
           <p>
             When the native app opens an authenticated web tool, the server stores only a digest of
@@ -177,6 +177,13 @@ export default function PrivacyPage() {
             fragment that is not sent in HTTP requests or referrers, removed from browser history,
             atomically rotated into a one-minute HttpOnly cookie, then deleted when the ordinary
             revocable browser session is created.
+          </p>
+          <p>
+            Removing one synced league in Settings detaches your membership, provider links, and
+            ESPN device scope for that league. Other members keep shared data and ownership moves
+            automatically when needed; a sole-member league is deleted. Background sync will not
+            silently add the removed provider season again, but an explicit new provider pairing can
+            restore it.
           </p>
           <p>
             Account deletion requires the current password and an explicit destructive confirmation.

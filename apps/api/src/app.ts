@@ -32,6 +32,8 @@ import {
   jobAcceptedSchema,
   leagueDashboardSchema,
   leagueListResponseSchema,
+  leagueRemovalRequestSchema,
+  leagueRemovalResponseSchema,
   problemDetailsSchema,
   refreshRequestSchema,
   teamClaimRequestSchema,
@@ -120,6 +122,7 @@ import { type StatsCenterPort, registerStatsCenterRoutes } from "./stats-center-
 import { YahooConnectionCallbackError } from "./yahoo-connection.js";
 import { registerYahooRoutes } from "./yahoo-routes.js";
 import type { YahooSyncPort } from "./yahoo-sync.js";
+import type { RemoveLeagueResult } from "./league-membership.js";
 
 export interface YahooConnectionPort {
   start(
@@ -274,6 +277,15 @@ export interface LeagueDashboardPort {
   claimTeam(userId: string, leagueId: string, teamId: string): Promise<TeamClaimResponse>;
 }
 
+export interface LeagueMembershipPort {
+  removeLeague(input: {
+    readonly userId: string;
+    readonly leagueId: string;
+    readonly confirmation: string;
+    readonly correlationId: string;
+  }): Promise<RemoveLeagueResult>;
+}
+
 export interface BuildAppOptions {
   readonly environment?: Environment;
   readonly logger?: boolean;
@@ -295,6 +307,7 @@ export interface BuildAppOptions {
   readonly ai?: AiServicePort;
   readonly recaps?: RecapRoutePort;
   readonly leagueDashboard?: LeagueDashboardPort;
+  readonly leagueMemberships?: LeagueMembershipPort;
   readonly projectionImports?: ProjectionImportPort;
   readonly rankings?: RankingPort;
   readonly rosProjectionStatus?: RosProjectionStatusPort;
@@ -516,6 +529,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     throw new Error("Authentication is required but no AuthService was configured");
   }
   const mobileCapabilities: MobileCapability[] = [...MOBILE_CAPABILITIES];
+  if (options.leagueMemberships) mobileCapabilities.push("league-removal-v1");
   if (browserHandoffs) mobileCapabilities.push("authenticated-browser-handoff");
   if (
     browserHandoffs &&
@@ -972,6 +986,55 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     }
     return leagueDashboardSchema.parse(dashboard);
   });
+
+  app.delete(
+    "/v1/leagues/:leagueId/membership",
+    { config: { rateLimit: { max: 12, timeWindow: "1 minute" } } },
+    async (request, reply) => {
+      if (!request.currentUser) {
+        return reply.code(401).type("application/problem+json").send({
+          type: "https://fantasy.local/problems/unauthorized",
+          title: "Authentication required",
+          status: 401,
+          correlationId: request.id,
+        });
+      }
+      if (!options.leagueMemberships) {
+        return reply.code(503).type("application/problem+json").send({
+          type: "https://fantasy.local/problems/league-membership-unavailable",
+          title: "League membership management is not configured",
+          status: 503,
+          correlationId: request.id,
+        });
+      }
+      const { leagueId } = leaguePathSchema.parse(request.params);
+      const input = leagueRemovalRequestSchema.parse(request.body);
+      const result = await options.leagueMemberships.removeLeague({
+        userId: request.currentUser.id,
+        leagueId,
+        confirmation: input.confirmation,
+        correlationId: request.id,
+      });
+      if (result.outcome === "not-found") {
+        return reply.code(404).type("application/problem+json").send({
+          type: "https://fantasy.local/problems/league-not-found",
+          title: "League not found",
+          status: 404,
+          correlationId: request.id,
+        });
+      }
+      if (result.outcome === "confirmation-mismatch") {
+        return reply.code(409).type("application/problem+json").send({
+          type: "https://fantasy.local/problems/league-removal-confirmation",
+          title: "League confirmation did not match",
+          status: 409,
+          detail: "Reload Settings and try again.",
+          correlationId: request.id,
+        });
+      }
+      return leagueRemovalResponseSchema.parse(result.response);
+    },
+  );
 
   const leagueSeasonRefreshPathSchema = z.object({ leagueSeasonId: z.string().uuid() });
   app.post(
@@ -1670,6 +1733,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
           const discovery = await options.yahooSync.discoverAndSync(
             request.currentUser.id,
             result.connectionId,
+            { restoreRemoved: true },
           );
           if (options.enqueueProjectionRefresh) {
             for (const season of new Set(discovery.syncs.map((sync) => sync.season))) {

@@ -158,9 +158,11 @@ function sendYahooError(
       title:
         error.code === "CONNECTION_NOT_FOUND"
           ? "Yahoo connection not found"
-          : error.code === "LOCAL_DISCONNECT_FAILED"
-            ? "Yahoo authorization removal failed"
-            : "Yahoo sync failed",
+          : error.code === "LEAGUE_REMOVED"
+            ? "Yahoo league was removed"
+            : error.code === "LOCAL_DISCONNECT_FAILED"
+              ? "Yahoo authorization removal failed"
+              : "Yahoo sync failed",
       status: error.statusCode,
       detail: error.message,
       code: error.code,

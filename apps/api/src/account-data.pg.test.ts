@@ -29,12 +29,14 @@ import {
   leagueMemberships,
   leagues,
   leagueSeasons,
+  leagueSyncExclusions,
   notificationDeliveries,
   oauthStates,
   playerProjections,
   players,
   projectionSets,
   providerConnections,
+  providerLeagueLinks,
   pushSubscriptions,
   rankingEntries,
   rankingLists,
@@ -59,6 +61,7 @@ import { DrizzleAuthRepository } from "./auth-repository.js";
 import { AuthService, hashOwnerPassword, hashSessionToken, verifyOwnerPassword } from "./auth.js";
 import { BrowserHandoffService, DrizzleBrowserHandoffStore } from "./browser-handoff.js";
 import { DrizzleInvitationRepository } from "./invitation-repository.js";
+import { LeagueMembershipService } from "./league-membership.js";
 import {
   YahooConnectionService,
   type YahooConnectionCallbackError,
@@ -1559,5 +1562,191 @@ describe.skipIf(!postgresAvailable)("account data repository against real Postgr
       outcome: "failed",
       completion: { returnMode: "ios-app", returnTo: "/connections" },
     } satisfies Partial<YahooConnectionCallbackError>);
+  });
+
+  it("atomically leaves a shared league, transfers ownership, and detaches only that member's sync", async () => {
+    const ownerId = randomUUID();
+    const successorId = randomUUID();
+    const leagueId = randomUUID();
+    const seasonId = randomUUID();
+    const ownerConnectionId = randomUUID();
+    const successorConnectionId = randomUUID();
+    const bridgeDeviceId = randomUUID();
+    await db.insert(users).values([
+      {
+        id: ownerId,
+        email: `${ownerId}@example.test`,
+        displayName: "Leaving owner",
+      },
+      {
+        id: successorId,
+        email: `${successorId}@example.test`,
+        displayName: "Remaining commissioner",
+      },
+    ]);
+    await db.insert(providerConnections).values([
+      {
+        id: ownerConnectionId,
+        userId: ownerId,
+        provider: "espn",
+        externalAccountId: `owner-${ownerId}`,
+        health: "healthy",
+      },
+      {
+        id: successorConnectionId,
+        userId: successorId,
+        provider: "espn",
+        externalAccountId: `successor-${successorId}`,
+        health: "healthy",
+      },
+    ]);
+    await db.insert(leagues).values({ id: leagueId, ownerUserId: ownerId, name: "Shared Removal" });
+    await db.insert(leagueMemberships).values({
+      leagueId,
+      userId: successorId,
+      role: "commissioner",
+    });
+    await db.insert(leagueSeasons).values({
+      id: seasonId,
+      leagueId,
+      connectionId: ownerConnectionId,
+      provider: "espn",
+      externalKey: "24681012",
+      season: 2031,
+      teamCount: 10,
+      draftType: "auction",
+    });
+    await db.insert(providerLeagueLinks).values([
+      { connectionId: ownerConnectionId, leagueSeasonId: seasonId },
+      { connectionId: successorConnectionId, leagueSeasonId: seasonId },
+    ]);
+    await db.insert(bridgeDevices).values({
+      id: bridgeDeviceId,
+      userId: ownerId,
+      provider: "espn",
+      clientKind: "chrome-extension",
+      agentCapable: true,
+      name: "Owner Chrome",
+      tokenHash: "owner-bridge-token-hash-that-is-long-enough",
+    });
+    await db.insert(bridgeDeviceLeagues).values({
+      bridgeDeviceId,
+      externalLeagueId: "24681012",
+      season: 2031,
+      leagueId,
+    });
+    await db.insert(userPreferences).values({ userId: ownerId, defaultLeagueId: leagueId });
+
+    const service = new LeagueMembershipService(db, () => NOW);
+    const result = await service.removeLeague({
+      userId: ownerId,
+      leagueId,
+      confirmation: "Shared Removal",
+      correlationId: "shared-removal-test",
+    });
+
+    expect(result).toMatchObject({
+      outcome: "removed",
+      response: { leagueDeleted: false, ownershipTransferred: true },
+    });
+    expect(
+      await db
+        .select({ ownerUserId: leagues.ownerUserId })
+        .from(leagues)
+        .where(eq(leagues.id, leagueId)),
+    ).toEqual([{ ownerUserId: successorId }]);
+    expect(
+      await db
+        .select({ userId: leagueMemberships.userId, role: leagueMemberships.role })
+        .from(leagueMemberships)
+        .where(eq(leagueMemberships.leagueId, leagueId)),
+    ).toEqual([{ userId: successorId, role: "owner" }]);
+    expect(
+      await db
+        .select({ connectionId: providerLeagueLinks.connectionId })
+        .from(providerLeagueLinks)
+        .where(eq(providerLeagueLinks.leagueSeasonId, seasonId)),
+    ).toEqual([{ connectionId: successorConnectionId }]);
+    expect(
+      await db
+        .select({ connectionId: leagueSeasons.connectionId })
+        .from(leagueSeasons)
+        .where(eq(leagueSeasons.id, seasonId)),
+    ).toEqual([{ connectionId: successorConnectionId }]);
+    expect(
+      await db
+        .select()
+        .from(bridgeDeviceLeagues)
+        .where(eq(bridgeDeviceLeagues.bridgeDeviceId, bridgeDeviceId)),
+    ).toEqual([]);
+    expect(
+      await db
+        .select({ defaultLeagueId: userPreferences.defaultLeagueId })
+        .from(userPreferences)
+        .where(eq(userPreferences.userId, ownerId)),
+    ).toEqual([{ defaultLeagueId: null }]);
+    expect(
+      await db
+        .select({
+          provider: leagueSyncExclusions.provider,
+          externalKey: leagueSyncExclusions.externalKey,
+        })
+        .from(leagueSyncExclusions)
+        .where(eq(leagueSyncExclusions.userId, ownerId)),
+    ).toEqual([{ provider: "espn", externalKey: "24681012" }]);
+  });
+
+  it("deletes a sole-member league but retains the provider exclusion", async () => {
+    const ownerId = randomUUID();
+    const leagueId = randomUUID();
+    const seasonId = randomUUID();
+    const connectionId = randomUUID();
+    await db.insert(users).values({
+      id: ownerId,
+      email: `${ownerId}@example.test`,
+      displayName: "Solo owner",
+    });
+    await db.insert(providerConnections).values({
+      id: connectionId,
+      userId: ownerId,
+      provider: "yahoo",
+      externalAccountId: `solo-${ownerId}`,
+      health: "healthy",
+    });
+    await db.insert(leagues).values({ id: leagueId, ownerUserId: ownerId, name: "Solo Removal" });
+    await db.insert(leagueSeasons).values({
+      id: seasonId,
+      leagueId,
+      connectionId,
+      provider: "yahoo",
+      externalKey: "999.l.123456",
+      season: 2031,
+      teamCount: 10,
+      draftType: "snake",
+    });
+    await db.insert(providerLeagueLinks).values({ connectionId, leagueSeasonId: seasonId });
+
+    const service = new LeagueMembershipService(db, () => NOW);
+    const result = await service.removeLeague({
+      userId: ownerId,
+      leagueId,
+      confirmation: "Solo Removal",
+      correlationId: "solo-removal-test",
+    });
+
+    expect(result).toMatchObject({
+      outcome: "removed",
+      response: { leagueDeleted: true, ownershipTransferred: false },
+    });
+    expect(await db.select().from(leagues).where(eq(leagues.id, leagueId))).toEqual([]);
+    expect(
+      await db
+        .select({
+          provider: leagueSyncExclusions.provider,
+          externalKey: leagueSyncExclusions.externalKey,
+        })
+        .from(leagueSyncExclusions)
+        .where(eq(leagueSyncExclusions.userId, ownerId)),
+    ).toEqual([{ provider: "yahoo", externalKey: "999.l.123456" }]);
   });
 });

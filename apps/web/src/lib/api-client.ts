@@ -19,6 +19,7 @@ import {
   leagueAnalyticsSnapshotSchema,
   leagueDashboardSchema,
   leagueListResponseSchema,
+  leagueRemovalResponseSchema,
   projectionPlayerListResponseSchema,
   projectionImportCommitResponseSchema,
   projectionImportPreviewResponseSchema,
@@ -50,6 +51,7 @@ import {
   type LeagueAnalyticsSnapshot,
   type LeagueDashboard,
   type LeagueListResponse,
+  type LeagueRemovalResponse,
   type ProjectionPlayerListResponse,
   type ProjectionImportCommitResponse,
   type ProjectionImportPreviewResponse,
@@ -172,6 +174,7 @@ export type {
   LeagueAnalyticsSnapshot,
   LeagueDashboard,
   LeagueListResponse,
+  LeagueRemovalResponse,
   ProjectionPlayerListResponse,
   ProjectionImportCommitResponse,
   ProjectionImportPreviewResponse,
@@ -281,6 +284,11 @@ export function parseLeagueListResponse(value: unknown): LeagueListResponse | nu
 
 export function parseLeagueDashboard(value: unknown): LeagueDashboard | null {
   const result = leagueDashboardSchema.safeParse(value);
+  return result.success ? result.data : null;
+}
+
+export function parseLeagueRemovalResponse(value: unknown): LeagueRemovalResponse | null {
+  const result = leagueRemovalResponseSchema.safeParse(value);
   return result.success ? result.data : null;
 }
 

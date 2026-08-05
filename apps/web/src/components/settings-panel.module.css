@@ -466,6 +466,100 @@
     padding: 0;
   }
 
+  .leagueAccessList {
+    display: grid;
+    gap: var(--space-10);
+    padding: 0 20px 16px;
+    margin: 0;
+    list-style: none;
+  }
+
+  .leagueAccessList > li {
+    overflow: hidden;
+    border: 1px solid var(--ink-150);
+    border-radius: var(--radius-sm);
+  }
+
+  .leagueAccessSummary {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-12);
+    padding: 11px 12px;
+  }
+
+  .leagueAccessSummary strong,
+  .leagueAccessSummary span {
+    display: block;
+  }
+
+  .leagueAccessSummary strong {
+    color: var(--ink-900);
+    font-size: var(--text-12);
+  }
+
+  .leagueAccessSummary span {
+    margin-top: 3px;
+    color: var(--ink-500);
+    font-size: var(--text-10);
+  }
+
+  .leagueAccessSummary button,
+  .leagueRemovalActions button {
+    display: inline-flex;
+    flex: none;
+    align-items: center;
+    justify-content: center;
+    gap: var(--space-6);
+    min-height: 34px;
+    padding: 0 11px;
+    color: var(--ink-900);
+    background: var(--white);
+    border: 1px solid var(--ink-200);
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    font-size: var(--text-11);
+    font-weight: 700;
+  }
+
+  .leagueAccessSummary button:disabled,
+  .leagueRemovalActions button:disabled {
+    cursor: progress;
+    opacity: 0.65;
+  }
+
+  .leagueRemovalConfirmation {
+    padding: 12px;
+    color: var(--ink-600);
+    background: #fff8f6;
+    border-top: 1px solid #f0d9d4;
+  }
+
+  .leagueRemovalConfirmation > strong {
+    color: var(--ink-950);
+    font-size: var(--text-12);
+  }
+
+  .leagueRemovalConfirmation > p {
+    margin-top: 5px;
+    font-size: var(--text-11);
+    line-height: 1.55;
+  }
+
+  .leagueRemovalActions {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: var(--space-8);
+    margin-top: 12px;
+  }
+
+  .leagueRemovalButton {
+    color: var(--white) !important;
+    background: #9f3025 !important;
+    border-color: #9f3025 !important;
+  }
+
   .savedLine,
   .errorLine {
     display: flex;
@@ -533,6 +627,10 @@
       padding: 0 16px 16px;
     }
 
+    .leagueAccessList {
+      padding: 0 16px 16px;
+    }
+
     .disabledNotice {
       padding: 16px;
     }
@@ -558,6 +656,15 @@
     .teamRowControls select {
       max-width: none;
       flex: 1 1 auto;
+    }
+
+    .leagueAccessSummary {
+      align-items: flex-start;
+    }
+
+    .leagueRemovalActions {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
     }
   }
 }

@@ -158,7 +158,10 @@ preference.
 
 The first accepted device snapshot may create a new league owned by that authenticated device user;
 a later successfully validated provider connection automatically joins the existing shared league
-as manager. In contrast, a server-direct read is authorized only for one existing ESPN league
+as manager unless that member previously removed the exact provider season. League removal records
+that exclusion, detaches the member's provider links and bridge scopes, and prevents a stale or
+background sync from silently recreating membership. A fresh explicit pairing can restore it. In
+contrast, a server-direct read is authorized only for one existing ESPN league
 season and may never create a league, membership, team claim, provider account, invitation,
 commissioner capability, or current-user identity. It constructs a fixed ESPN HTTPS endpoint from
 the stored numeric ID and season, allowlists views, uses `credentials: omit`, rejects redirects,

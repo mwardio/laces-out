@@ -40,6 +40,7 @@ import { DrizzleLeagueAnalyticsRepository, LeagueAnalyticsService } from "./leag
 import { DrizzleInvitationRepository } from "./invitation-repository.js";
 import { deriveInvitationKeyring, InvitationService } from "./invitation.js";
 import { DrizzleLeagueDashboardRepository, LeagueDashboardService } from "./league-dashboard.js";
+import { LeagueMembershipService } from "./league-membership.js";
 import { DrizzleProjectionImportRepository, ProjectionImportService } from "./projection-import.js";
 import { DrizzleRefreshAuthorization } from "./refresh-authorization.js";
 import { RosProjectionStatusService } from "./ros-projection-status.js";
@@ -141,6 +142,7 @@ const invitations = environment.SESSION_SECRET
 const leagueDashboard = new LeagueDashboardService(
   new DrizzleLeagueDashboardRepository(database.db),
 );
+const leagueMemberships = new LeagueMembershipService(database.db);
 const ai = credentialKey
   ? new AiService({
       repository: new DrizzleAiRepository(database.db),
@@ -276,6 +278,7 @@ const app = await buildApp({
   recaps,
   ...(invitations ? { invitations } : {}),
   leagueDashboard,
+  leagueMemberships,
   projectionImports,
   refreshAuthorization,
   ...(rankings ? { rankings } : {}),

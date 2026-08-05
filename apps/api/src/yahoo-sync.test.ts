@@ -68,6 +68,8 @@ function repository(overrides: Partial<YahooSyncRepository> = {}): YahooSyncRepo
       ),
     listConnectionStatus: () => Promise.resolve([]),
     disconnectOwnedConnection: () => Promise.resolve(true),
+    listLeagueExclusions: () => Promise.resolve([]),
+    clearLeagueExclusions: () => Promise.resolve(),
     persistBundle: (_userId, _connectionId, bundle) => Promise.resolve(receipt(bundle)),
     markFailure: () => Promise.resolve(),
     ...overrides,
@@ -202,6 +204,62 @@ describe("YahooSyncService", () => {
     expect(persisted?.[2].league).toMatchObject({ externalId: "449.l.12345", season: 2026 });
     expect(persisted?.[2].standings?.entries).toHaveLength(2);
     expect(persisted?.[2].matchups?.matchups).toHaveLength(1);
+  });
+
+  it("keeps a removed league out of discovery until the member explicitly reconnects Yahoo", async () => {
+    let excluded = true;
+    const persistBundle = vi.fn(
+      (_userId: string, _connectionId: string, bundle: LeagueSyncBundle) =>
+        Promise.resolve(receipt(bundle)),
+    );
+    const clearLeagueExclusions = vi.fn(() => {
+      excluded = false;
+      return Promise.resolve();
+    });
+    const service = new YahooSyncService({
+      repository: repository({
+        persistBundle,
+        clearLeagueExclusions,
+        listLeagueExclusions: () =>
+          Promise.resolve(excluded ? [{ externalKey: "449.l.12345", season: 2026 }] : []),
+      }),
+      tokens: tokens(),
+      client: readPort(),
+      now: () => NOW,
+    });
+
+    await expect(service.discoverAndSync(USER_ID, CONNECTION_ID)).resolves.toMatchObject({
+      discovered: [],
+      syncs: [],
+    });
+    expect(persistBundle).not.toHaveBeenCalled();
+
+    await expect(
+      service.discoverAndSync(USER_ID, CONNECTION_ID, { restoreRemoved: true }),
+    ).resolves.toMatchObject({ syncs: [{ externalLeagueKey: "449.l.12345" }] });
+    expect(clearLeagueExclusions).toHaveBeenCalledWith(USER_ID);
+    expect(persistBundle).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects an explicit sync for a removed league without touching Yahoo or connection health", async () => {
+    const getAccessToken = vi.fn(() => Promise.resolve("must-not-be-used"));
+    const markFailure = vi.fn(() => Promise.resolve());
+    const service = new YahooSyncService({
+      repository: repository({
+        markFailure,
+        listLeagueExclusions: () => Promise.resolve([{ externalKey: "449.l.12345", season: 2026 }]),
+      }),
+      tokens: tokens({ getAccessToken }),
+      client: readPort(),
+      now: () => NOW,
+    });
+
+    await expect(service.syncLeague(USER_ID, CONNECTION_ID, "449.l.12345")).rejects.toMatchObject({
+      code: "LEAGUE_REMOVED",
+      statusCode: 409,
+    });
+    expect(getAccessToken).not.toHaveBeenCalled();
+    expect(markFailure).not.toHaveBeenCalled();
   });
 
   it("refreshes once after an authenticated resource 401, then retries without exposing tokens", async () => {

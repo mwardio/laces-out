@@ -182,6 +182,19 @@ export const leagueListResponseSchema = z.object({
 });
 export type LeagueListResponse = z.infer<typeof leagueListResponseSchema>;
 
+export const leagueRemovalRequestSchema = z.object({
+  confirmation: z.string().min(1).max(500),
+});
+
+export const leagueRemovalResponseSchema = z.object({
+  leagueId: z.string().uuid(),
+  leagueName: z.string(),
+  leagueDeleted: z.boolean(),
+  ownershipTransferred: z.boolean(),
+  removedAt: z.iso.datetime(),
+});
+export type LeagueRemovalResponse = z.infer<typeof leagueRemovalResponseSchema>;
+
 export const rosterPlayerSchema = z.object({
   id: z.string().uuid(),
   name: z.string(),
@@ -3457,6 +3470,7 @@ export const mobileCapabilitySchema = z.enum([
   "league-analytics",
   "league-dashboard",
   "league-portfolio",
+  "league-removal-v1",
   "weekly-reckoning",
   "yahoo-automated-sync",
   "yahoo-native-connect-v1",

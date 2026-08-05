@@ -318,7 +318,9 @@ describe("Yahoo sync routes", () => {
     expect(response.headers.location).toBe(
       "https://laces.example/connections?provider=yahoo&status=connected&sync=failed",
     );
-    expect(discoverAndSync).toHaveBeenCalledWith(USER_ID, CONNECTION_ID);
+    expect(discoverAndSync).toHaveBeenCalledWith(USER_ID, CONNECTION_ID, {
+      restoreRemoved: true,
+    });
     await app.close();
   });
 
@@ -598,7 +600,9 @@ describe("Yahoo sync routes", () => {
       headers: { cookie: COOKIE },
     });
     expect(response.headers.location).toBe("lacesout://connections/yahoo?status=connected");
-    expect(discoverAndSync).toHaveBeenCalledWith(USER_ID, CONNECTION_ID);
+    expect(discoverAndSync).toHaveBeenCalledWith(USER_ID, CONNECTION_ID, {
+      restoreRemoved: true,
+    });
     await app.close();
   });
   it("recomputes recommendations for an accepted Yahoo league sync", async () => {

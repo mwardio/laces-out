@@ -13,6 +13,7 @@ import {
   invitations,
   leagueMemberships,
   leagues,
+  leagueSyncExclusions,
   notificationDeliveries,
   playerProjections,
   players,
@@ -138,6 +139,7 @@ export class DrizzleAccountDataRepository implements AccountDataPort {
       preferenceRows,
       sessionRows,
       membershipRows,
+      leagueSyncExclusionRows,
       providerRows,
       bridgeRows,
       pairingRows,
@@ -197,6 +199,16 @@ export class DrizzleAccountDataRepository implements AccountDataPort {
         .leftJoin(fantasyTeams, eq(leagueMemberships.claimedFantasyTeamId, fantasyTeams.id))
         .where(eq(leagueMemberships.userId, userId))
         .orderBy(asc(leagues.name)),
+      this.#database
+        .select({
+          provider: leagueSyncExclusions.provider,
+          externalKey: leagueSyncExclusions.externalKey,
+          season: leagueSyncExclusions.season,
+          removedAt: leagueSyncExclusions.removedAt,
+        })
+        .from(leagueSyncExclusions)
+        .where(eq(leagueSyncExclusions.userId, userId))
+        .orderBy(asc(leagueSyncExclusions.provider), asc(leagueSyncExclusions.season)),
       this.#database
         .select({
           id: providerConnections.id,
@@ -606,6 +618,7 @@ export class DrizzleAccountDataRepository implements AccountDataPort {
         preferences: preferenceRows[0] ?? null,
         sessions: sessionRows,
         leagueMemberships: membershipRows,
+        removedLeagueSyncs: leagueSyncExclusionRows,
         providerConnections: providerRows,
         espnBridgeDevices: bridgeRows,
         espnBridgeLeagueGrants: bridgeLeagueRows,

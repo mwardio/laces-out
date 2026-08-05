@@ -12,6 +12,7 @@ import {
   leagueMemberships,
   leagues,
   leagueSeasons,
+  leagueSyncExclusions,
   matchupSnapshots,
   playerExternalIds,
   players,
@@ -82,6 +83,7 @@ export class YahooSyncError extends Error {
     | "DISCOVERY_LIMIT"
     | "DUPLICATE_LEAGUE"
     | "LOCAL_DISCONNECT_FAILED"
+    | "LEAGUE_REMOVED"
     | "PROVIDER_READ_FAILED"
     | "PERSISTENCE_FAILED";
   readonly statusCode: number;
@@ -108,11 +110,13 @@ export class YahooSyncError extends Error {
     this.statusCode =
       code === "CONNECTION_NOT_FOUND"
         ? 404
-        : code === "DISCOVERY_LIMIT"
-          ? 422
-          : code === "LOCAL_DISCONNECT_FAILED"
-            ? 500
-            : 502;
+        : code === "LEAGUE_REMOVED"
+          ? 409
+          : code === "DISCOVERY_LIMIT"
+            ? 422
+            : code === "LOCAL_DISCONNECT_FAILED"
+              ? 500
+              : 502;
   }
 }
 
@@ -130,6 +134,13 @@ export interface YahooSyncRepository {
     readonly correlationId: string;
     readonly disconnectedAt: Date;
   }): Promise<boolean>;
+  listLeagueExclusions(userId: string): Promise<
+    readonly {
+      readonly externalKey: string;
+      readonly season: number;
+    }[]
+  >;
+  clearLeagueExclusions(userId: string): Promise<void>;
   persistBundle(
     userId: string,
     connectionId: string,
@@ -325,6 +336,28 @@ export class DrizzleYahooSyncRepository implements YahooSyncRepository {
     }));
   }
 
+  async listLeagueExclusions(
+    userId: string,
+  ): Promise<readonly { readonly externalKey: string; readonly season: number }[]> {
+    return this.#database
+      .select({
+        externalKey: leagueSyncExclusions.externalKey,
+        season: leagueSyncExclusions.season,
+      })
+      .from(leagueSyncExclusions)
+      .where(
+        and(eq(leagueSyncExclusions.userId, userId), eq(leagueSyncExclusions.provider, "yahoo")),
+      );
+  }
+
+  async clearLeagueExclusions(userId: string): Promise<void> {
+    await this.#database
+      .delete(leagueSyncExclusions)
+      .where(
+        and(eq(leagueSyncExclusions.userId, userId), eq(leagueSyncExclusions.provider, "yahoo")),
+      );
+  }
+
   async disconnectOwnedConnection(input: {
     readonly userId: string;
     readonly connectionId: string;
@@ -448,6 +481,25 @@ export class DrizzleYahooSyncRepository implements YahooSyncRepository {
         .for("update");
       if (!connection) {
         throw new YahooSyncError("CONNECTION_NOT_FOUND", "Yahoo connection was not found");
+      }
+
+      const [excluded] = await transaction
+        .select({ userId: leagueSyncExclusions.userId })
+        .from(leagueSyncExclusions)
+        .where(
+          and(
+            eq(leagueSyncExclusions.userId, userId),
+            eq(leagueSyncExclusions.provider, "yahoo"),
+            eq(leagueSyncExclusions.externalKey, bundle.league.externalId),
+            eq(leagueSyncExclusions.season, bundle.league.season),
+          ),
+        )
+        .limit(1);
+      if (excluded) {
+        throw new YahooSyncError(
+          "LEAGUE_REMOVED",
+          "This Yahoo league was removed from the member's account",
+        );
       }
 
       await transaction.execute(
@@ -976,20 +1028,32 @@ export class YahooSyncService {
     }
   }
 
-  async discoverAndSync(userId: string, connectionId: string): Promise<YahooDiscoveryResult> {
+  async discoverAndSync(
+    userId: string,
+    connectionId: string,
+    options: { readonly restoreRemoved?: boolean } = {},
+  ): Promise<YahooDiscoveryResult> {
     const connection = await this.#repository.findOwnedConnection(userId, connectionId);
     if (!connection) {
       throw new YahooSyncError("CONNECTION_NOT_FOUND", "Yahoo connection was not found");
     }
     try {
+      if (options.restoreRemoved) await this.#repository.clearLeagueExclusions(userId);
       const discovered = await this.#discover(userId, connectionId);
+      const exclusions = await this.#repository.listLeagueExclusions(userId);
+      const excluded = new Set(
+        exclusions.map((league) => `${league.externalKey}:${league.season}`),
+      );
+      const eligible = discovered.filter(
+        (league) => !excluded.has(`${league.externalId}:${league.season}`),
+      );
       const syncs: YahooSyncReceipt[] = [];
-      for (const league of discovered) {
+      for (const league of eligible) {
         syncs.push(await this.#syncLeague(userId, connectionId, league.externalId, league));
       }
       return {
         connectionId,
-        discovered,
+        discovered: eligible,
         syncs,
         generatedAt: this.#now().toISOString(),
       };
@@ -1010,6 +1074,13 @@ export class YahooSyncService {
     }
     if (!/^(?:[a-z][a-z0-9-]{0,15}|[0-9]{1,10})\.l\.[0-9]{1,20}$/u.test(leagueKey)) {
       throw new TypeError("Yahoo league key is invalid");
+    }
+    const exclusions = await this.#repository.listLeagueExclusions(userId);
+    if (exclusions.some((league) => league.externalKey === leagueKey)) {
+      throw new YahooSyncError(
+        "LEAGUE_REMOVED",
+        "This Yahoo league was removed. Reconnect Yahoo to add it again.",
+      );
     }
     try {
       return await this.#syncLeague(userId, connectionId, leagueKey);

@@ -13,6 +13,7 @@ import {
   leagueMemberships,
   leagues,
   leagueSeasons,
+  leagueSyncExclusions,
   matchupSnapshots,
   playerExternalIds,
   players,
@@ -102,6 +103,39 @@ export class EspnSyncPersistenceError extends Error {
     super("A newer ESPN snapshot is already stored for this league");
     this.name = "EspnSyncPersistenceError";
   }
+}
+
+export class EspnLeagueRemovedError extends Error {
+  readonly code = "LEAGUE_REMOVED";
+  readonly statusCode = 403;
+
+  constructor() {
+    super("This ESPN league was removed. Pair it again to restore access.");
+    this.name = "EspnLeagueRemovedError";
+  }
+}
+
+async function rejectRemovedActorLeague(
+  transaction: EspnPersistenceTransaction,
+  authority: EspnSyncAuthority,
+  externalKey: string,
+  season: number,
+): Promise<void> {
+  if (authority.mode === "server-direct") return;
+  const actorUserId = authority.actorUserId;
+  const [excluded] = await transaction
+    .select({ userId: leagueSyncExclusions.userId })
+    .from(leagueSyncExclusions)
+    .where(
+      and(
+        eq(leagueSyncExclusions.userId, actorUserId),
+        eq(leagueSyncExclusions.provider, "espn"),
+        eq(leagueSyncExclusions.externalKey, externalKey),
+        eq(leagueSyncExclusions.season, season),
+      ),
+    )
+    .limit(1);
+  if (excluded) throw new EspnLeagueRemovedError();
 }
 
 /** Deduplication is relative to the current canonical artifact, never lifetime checksum history. */
@@ -419,6 +453,12 @@ export class DrizzleEspnSyncPersistence {
     return this.#database.transaction(async (transaction) => {
       const lockKey = `espn:${bundle.providerLeagueId}:${bundle.season}`;
       await transaction.execute(sql`select pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`);
+      await rejectRemovedActorLeague(
+        transaction,
+        authority,
+        bundle.providerLeagueId,
+        bundle.season,
+      );
 
       const [season] = await transaction
         .select({ id: leagueSeasons.id, leagueId: leagueSeasons.leagueId })
@@ -660,6 +700,12 @@ export class DrizzleEspnSyncPersistence {
       // two first imports could otherwise both try to create the globally unique season row.
       const lockKey = `espn:${bundle.league.providerLeagueId}:${bundle.league.season}`;
       await transaction.execute(sql`select pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`);
+      await rejectRemovedActorLeague(
+        transaction,
+        authority,
+        bundle.league.providerLeagueId,
+        bundle.league.season,
+      );
 
       const [existingSeason] = await transaction
         .select()

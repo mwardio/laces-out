@@ -11,6 +11,7 @@ const validHealth = {
   mobileCapabilities: [
     "cookie-authentication",
     "league-dashboard",
+    "league-removal-v1",
     "authenticated-browser-handoff",
   ],
 } as const;
