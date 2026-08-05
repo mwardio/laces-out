@@ -13,6 +13,7 @@ import {
   espnBridgeDeviceResponseSchema,
   espnBridgePairingSessionResponseSchema,
   espnLeagueRefreshStatusSchema,
+  espnSessionConnectionListSchema,
   inSeasonDecisionSnapshotSchema,
   jobAcceptedSchema,
   leagueAnalyticsSnapshotSchema,
@@ -44,6 +45,7 @@ import {
   type DraftSessionSnapshot,
   type InSeasonDecisionSnapshot,
   type EspnLeagueRefreshStatus,
+  type EspnSessionConnectionList,
   type JobAccepted,
   type LeagueAnalyticsSnapshot,
   type LeagueDashboard,
@@ -115,8 +117,8 @@ export const apiBaseUrl = resolveApiBaseUrl(
 );
 
 /**
- * An absolute origin, for the few places a relative path cannot work: a URL handed to code running
- * on another site (the ESPN bookmark), or a `new URL()` that has no base to resolve against.
+ * An absolute origin for the few places a relative path cannot work, such as a self-hosted pairing
+ * value displayed to another client or a `new URL()` that has no base to resolve against.
  */
 export function absoluteApiOrigin(): string {
   if (apiBaseUrl !== "") return apiBaseUrl;
@@ -284,6 +286,13 @@ export function parseLeagueDashboard(value: unknown): LeagueDashboard | null {
 
 export function parseEspnLeagueRefreshStatus(value: unknown): EspnLeagueRefreshStatus | null {
   const result = espnLeagueRefreshStatusSchema.safeParse(value);
+  return result.success ? result.data : null;
+}
+
+export type { EspnSessionConnectionList };
+
+export function parseEspnSessionConnectionList(value: unknown): EspnSessionConnectionList | null {
+  const result = espnSessionConnectionListSchema.safeParse(value);
   return result.success ? result.data : null;
 }
 

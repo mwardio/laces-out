@@ -1,6 +1,7 @@
 import { loadEnvironment } from "@fantasy/config";
 import { createDatabase } from "@fantasy/db";
 import { currentNflSeason } from "@fantasy/domain";
+import { EspnSessionConnectionService } from "@fantasy/league-sync";
 import {
   enqueueDataRefresh,
   enqueueLeagueSync,
@@ -82,6 +83,13 @@ const draftAnalysis = new DraftAnalysisService(
   new DrizzleDraftProjectionSource(database.db),
 );
 const espnPersistence = new DrizzleEspnSyncPersistence(database.db);
+const espnSessionConnections = credentialKey
+  ? new EspnSessionConnectionService({
+      database: database.db,
+      credentialKey,
+      enabled: environment.ESPN_SERVER_SESSION_SYNC_ENABLED,
+    })
+  : undefined;
 // Change-event producers write; the service is the only authorized reader.
 const changeEventProducers = drizzleChangeEventProducers(database.db);
 const changeEvents = new ChangeEventService(new DrizzleChangeEventRepository(database.db));
@@ -220,6 +228,17 @@ const espnRefresh = new EspnRefreshCoordinator(new DrizzleEspnRefreshRepository(
       reason: "stale-on-view",
       probe: false,
     }),
+  ...(environment.ESPN_SERVER_SESSION_SYNC_ENABLED && espnSessionConnections
+    ? {
+        enqueueSession: ({ connectionId, leagueSeasonId }) =>
+          enqueueLeagueSync(jobs, {
+            mode: "connection",
+            connectionId,
+            leagueSeasonId,
+            reason: "stale-on-view",
+          }),
+      }
+    : {}),
 });
 const app = await buildApp({
   environment,
@@ -232,6 +251,7 @@ const app = await buildApp({
   // Same service, two doors: bridge-authenticated ingest and the cookie-authenticated freeze.
   draftManualBackup: espnLiveDraft,
   espnBridge,
+  ...(espnSessionConnections ? { espnSessionConnections } : {}),
   espnRefresh,
   espnLiveDraft,
   decisions,

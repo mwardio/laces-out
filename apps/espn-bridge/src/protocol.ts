@@ -59,6 +59,9 @@ export type BridgeLiveDraftRequest =
 
 export type BridgeRequest =
   | { readonly type: "GET_STATUS" }
+  | { readonly type: "GET_SERVER_SESSION_STATUS" }
+  | { readonly type: "ENABLE_SERVER_SESSION" }
+  | { readonly type: "ESPN_SESSION_PAGE_READY" }
   | { readonly type: "CONFIGURE"; readonly configuration: BridgeConfiguration }
   | { readonly type: "SYNC_NOW" }
   | { readonly type: "DISCONNECT" }
@@ -82,6 +85,21 @@ export interface BridgeResponse {
   readonly status: BridgeStatus;
 }
 
+export type BridgeServerSessionState =
+  "not-enabled" | "enabling" | "enabled" | "login-required" | "unavailable" | "error";
+
+export interface BridgeServerSessionStatus {
+  readonly state: BridgeServerSessionState;
+  readonly message: string;
+  readonly connectionId: string | null;
+  readonly updatedAt: string | null;
+}
+
+export interface BridgeServerSessionResponse {
+  readonly ok: boolean;
+  readonly status: BridgeServerSessionStatus;
+}
+
 export interface BridgeLiveDraftResponse {
   readonly ok: boolean;
   readonly status: BridgeLiveDraftStatus;
@@ -102,6 +120,8 @@ export const statusStorageKey = "lacesOutEspnStatus";
 export const pendingPairingStorageKey = "lacesOutEspnPendingPairing";
 export const syncAlarmName = "laces-out-espn-sync";
 export const maintenanceStorageKey = "lacesOutEspnMaintenance";
+export const serverSessionStatusStorageKey = "lacesOutEspnServerSessionStatus";
+export const serverSessionPendingStorageKey = "lacesOutEspnServerSessionPending";
 
 // A web page can offer to pair the bridge with itself. Offers are held as
 // pending (never auto-configured) and expire quickly so a stale offer can never
@@ -121,9 +141,15 @@ export type BridgePairingOfferMessage = {
   readonly automaticSync?: boolean;
 };
 
+export type BridgeServerSessionOfferMessage = {
+  readonly type: "ENABLE_SERVER_SESSION";
+};
+
 export type BridgePairingOfferResponse =
   | { readonly ok: true; readonly state: "pending-confirmation" }
   | { readonly ok: false; readonly reason: string };
+
+export type BridgeServerSessionOfferResponse = BridgeServerSessionResponse;
 
 export interface PendingPairingOffer {
   readonly origin: string;

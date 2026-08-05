@@ -31,11 +31,18 @@ function reader(
       readonly connectionId: string;
       readonly dueAt: Date;
     }[];
+    readonly espnSessions?: readonly {
+      readonly provider: "espn";
+      readonly leagueSeasonId: string;
+      readonly connectionId: string;
+      readonly dueAt: Date;
+    }[];
   } = {},
 ) {
   return {
     expireRequests: vi.fn(async () => input.expired ?? 0),
     listDueEspn: vi.fn(async () => input.espn ?? []),
+    listDueEspnSessions: vi.fn(async () => input.espnSessions ?? []),
     listDueYahoo: vi.fn(async () => input.yahoo ?? []),
   };
 }
@@ -238,6 +245,44 @@ describe("provider sync sweep", () => {
       considered: 1,
       enqueued: 1,
       deduplicated: 0,
+    });
+  });
+
+  it("prefers an encrypted ESPN session over a duplicate credential-free target", async () => {
+    const targets = reader({
+      espn: [{ provider: "espn", leagueSeasonId: "season-shared", directCoreState: "available" }],
+      espnSessions: [
+        {
+          provider: "espn",
+          leagueSeasonId: "season-shared",
+          connectionId: "connection-espn",
+          dueAt: NOW,
+        },
+      ],
+    });
+    const enqueue = vi.fn(async () => "job-espn-session");
+    const service = new ProviderSyncSweepService({
+      espnEnabled: true,
+      espnSessionEnabled: true,
+      yahooEnabled: false,
+      targets,
+      enqueue,
+      now: () => NOW,
+    });
+
+    await expect(
+      service.sweepProviderSync({ requestedAt: "scheduled" }, context()),
+    ).resolves.toMatchObject({
+      considered: 1,
+      enqueued: 1,
+      byProvider: { espn: { considered: 1, enqueued: 1 } },
+    });
+    expect(enqueue).toHaveBeenCalledTimes(1);
+    expect(enqueue).toHaveBeenCalledWith({
+      mode: "connection",
+      connectionId: "connection-espn",
+      leagueSeasonId: "season-shared",
+      reason: "provider-sweep",
     });
   });
 

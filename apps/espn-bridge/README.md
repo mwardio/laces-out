@@ -8,8 +8,13 @@ standings, and weekly matchups. Independently admitted supplemental reads add cu
 player-level box scores, structured transactions, and draft results without allowing one drifting
 ESPN view to block the rest of the refresh.
 
-It never asks for, reads through the cookies API, uploads, or stores an ESPN password, `SWID`,
-`espn_s2`, copied request header, or HAR file. It cannot set lineups or perform transactions.
+It never asks for or stores an ESPN password, copied request header, or HAR file, and it cannot set
+lineups or perform transactions. The recommended setup explicitly confirms always-on access: a
+user-initiated service-worker action uses Chrome's ESPN-scoped cookie API to read only `SWID` and
+`espn_s2`, sends them once to the paired HTTPS Laces Out origin, and keeps the raw values out of
+extension storage and logs. The server encrypts that authorization at rest and uses it only for
+fixed, read-only ESPN Fantasy endpoints. A member can uncheck that choice and keep all ESPN session
+material in Chrome instead.
 
 ## Install and pair
 
@@ -18,21 +23,39 @@ Store](https://chromewebstore.google.com/detail/laces-out-espn-bridge/hmilkmcjlk
 The signed listing keeps the extension ID stable and delivers updates through Chrome.
 
 1. Sign in to Laces Out and open `/connections`.
-2. Choose **Automatic Sync**, enter up to 32 numeric ESPN league IDs and the season, then choose
-   **Pair with Chrome companion**.
+2. Choose **Connect & Keep Synced**, enter up to 32 numeric ESPN league IDs and the season, then
+   choose **Connect & keep synced**.
 3. Laces Out sends the scoped pairing offer directly to the extension. Open the extension and choose
-   **Complete pairing**. There is no device token to copy or paste.
+   **Connect & keep synced**. The recommended always-on choice is visibly preselected and can be
+   unchecked for device-only sync. There is no device token to copy or paste.
 4. Sign in at `https://fantasy.espn.com/football/` in the same Chrome profile.
 5. Choose **Sync now**. Core league data is stored first, followed by independently isolated
    supplemental feeds. The maintenance alarm checks Laces Out every five minutes for requested work
    and retains a six-hour full sync as a safety net while Chrome and the ESPN session are available.
+
+### Always-on sync
+
+Version 0.7.0 makes always-on refresh the recommended connection path for deployments whose operator
+enables it. The pairing confirmation displays the authorization behavior and requires a member
+click before capture. The companion checks the ESPN football page opened by that action and, if
+signed in, asks Chrome for the exact `SWID` and `espn_s2` cookies and sends only those values to the
+paired Laces Out origin. This works even when ESPN marks the cookies `HttpOnly`; no page script can
+read them. The values exist in extension memory only for the upload. They are never placed in
+`chrome.storage`, returned to a Laces Out page, or written to a log.
+
+The server encrypts the authorization with its deployment-owned credential key. Scheduled private
+league reads can then continue while Chrome is closed, and a stale mobile view can request the same
+server-side refresh. Device-only sync remains available and is used when the member unchecks the
+keep-synced choice or the host disables the feature. A member can remove always-on access from
+League Sync; an expired ESPN session changes to **Sign-in needed** and requires confirmation again.
 
 ### Self-hosted instances
 
 Version 0.6.0 uses the same signed companion for arbitrary HTTPS deployments; a self-hoster does
 not need to rebuild or publish a separate extension.
 
-1. Create the Automatic Sync connection from the self-hosted instance's **League Sync** page.
+1. Create the **Connect & Keep Synced** connection from the self-hosted instance's **League Sync**
+   page.
 2. When the page displays its instance URL and one-time pairing code, open the companion and choose
    **Pair a self-hosted instance**.
 3. Enter that URL and code. Chrome asks for access to that exact host, the code is exchanged once,
@@ -198,19 +221,29 @@ For future releases:
 1. Upload `dist-package/laces-out-espn-bridge-store-v<version>.zip`.
 2. Privacy policy URL: `https://lacesout.app/privacy` (required — the extension handles league data).
 3. Justify permissions in the listing form: `alarms`/`storage` for scheduled local sync and pairing
-   state; the two `fantasy.espn.com` / `lm-api-reads.fantasy.espn.com` hosts for the read-only league
-   fetch and the draft-room content script; and optional HTTPS/loopback hosts so a user may connect
+   state; `cookies` solely to read the exact ESPN `SWID` and `espn_s2` values after a member
+   explicitly enables always-on sync (including when ESPN marks them `HttpOnly`); the two
+   `fantasy.espn.com` / `lm-api-reads.fantasy.espn.com` hosts for the read-only league fetch and the
+   draft-room content script; and optional HTTPS/loopback hosts so a user may connect
    the signed companion to their own Laces Out deployment. State that optional host access is
    requested only for the exact URL entered by the user, no remote HTTP host is accepted, and a
-   failed exchange removes newly granted access. No ESPN password, `SWID`, or `espn_s2` is read or
-   transmitted; the draft-room content script reads only already-rendered draft results.
-4. Complete the data-safety form: league data only, not sold, used solely to sync the user's leagues.
+   failed exchange removes newly granted access. No ESPN password is read or transmitted. Standard
+   sync keeps ESPN session material local; the optional, user-initiated always-on feature transmits
+   `SWID` and `espn_s2` only to the paired Laces Out origin, where they are encrypted at rest. The
+   draft-room content script reads only already-rendered draft results.
+4. Complete the data-safety form accurately: league data and, for optional always-on sync,
+   authentication information are used only to provide the user's read-only sync, are not sold,
+   and are sent only after an explicit user action.
 5. Retain **Unlisted** visibility unless the release decision explicitly changes.
 6. Provide at least one 1280×800 (or 640×400) screenshot and a 440×280 promo tile.
 
 ## Security boundary
 
 - Fixed ESPN read hosts and fixed allowlisted views.
+- Always-on capture runs only after an explicit extension or paired-page action, accepts a fresh
+  ESPN football-page sender, keeps the raw values out of extension storage, and uploads only to the
+  normalized paired origin with the Bridge credential. The server independently validates capture
+  age/scope and immediately encrypts the authorization.
 - The live draft content script is restricted to the ESPN draft-room route, the top frame only, and
   a league that matches the stored pairing. The service worker independently re-validates the
   browser-attested sender (own extension, real tab, top frame, recognized draft URL), re-validates
@@ -228,8 +261,9 @@ For future releases:
   SHA-256 checksummed before upload.
 - Device tokens are scoped to explicit ESPN league IDs; the server stores only a token hash and can
   revoke a device independently of the user's application session.
-- “Forget on this browser” removes only the browser's local pairing. Revoke the device from the
-  Laces Out Connections screen to disable its server credential.
+- “Forget on this browser” removes only the browser's local pairing. Revoking the device disables
+  that browser credential. Removing **Always-on ESPN sync** from League Sync separately deletes the
+  encrypted ESPN authorization.
 - Each device and browser configuration is limited to 32 unique 1–20 digit league IDs. Every
   response remains independently capped at 5 MiB and is discarded on validation failure.
 - No remote JavaScript; all executable code ships in the extension bundle.

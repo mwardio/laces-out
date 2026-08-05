@@ -34,6 +34,13 @@ export interface EspnProviderSyncSweepTarget {
   readonly directCoreState: EspnDirectCapabilityState;
 }
 
+export interface EspnSessionProviderSyncSweepTarget {
+  readonly provider: "espn";
+  readonly leagueSeasonId: string;
+  readonly connectionId: string;
+  readonly dueAt: Date;
+}
+
 export interface YahooProviderSyncSweepTarget {
   readonly provider: "yahoo";
   readonly leagueSeasonId: string;
@@ -41,11 +48,16 @@ export interface YahooProviderSyncSweepTarget {
   readonly dueAt: Date;
 }
 
-export type ProviderSyncSweepTarget = EspnProviderSyncSweepTarget | YahooProviderSyncSweepTarget;
+export type ProviderSyncSweepTarget =
+  EspnProviderSyncSweepTarget | EspnSessionProviderSyncSweepTarget | YahooProviderSyncSweepTarget;
 
 export interface ProviderSyncSweepTargetReader {
   expireRequests(now: Date): Promise<number>;
   listDueEspn(now: Date, limit: number): Promise<readonly EspnProviderSyncSweepTarget[]>;
+  listDueEspnSessions?(
+    now: Date,
+    limit: number,
+  ): Promise<readonly EspnSessionProviderSyncSweepTarget[]>;
   listDueYahoo(now: Date, limit: number): Promise<readonly YahooProviderSyncSweepTarget[]>;
 }
 
@@ -106,6 +118,7 @@ export function nextYahooAutomatedSyncAt(input: {
 
 export class ProviderSyncSweepService implements ProviderSyncSweepServicePort {
   readonly #espnEnabled: boolean;
+  readonly #espnSessionEnabled: boolean;
   readonly #yahooEnabled: boolean;
   readonly #targets: ProviderSyncSweepTargetReader;
   readonly #enqueue: (job: LeagueSyncJob) => Promise<string | null>;
@@ -114,6 +127,7 @@ export class ProviderSyncSweepService implements ProviderSyncSweepServicePort {
 
   constructor(input: {
     readonly espnEnabled: boolean;
+    readonly espnSessionEnabled?: boolean;
     readonly yahooEnabled: boolean;
     readonly targets: ProviderSyncSweepTargetReader;
     readonly enqueue: (job: LeagueSyncJob) => Promise<string | null>;
@@ -121,6 +135,7 @@ export class ProviderSyncSweepService implements ProviderSyncSweepServicePort {
     readonly now?: () => Date;
   }) {
     this.#espnEnabled = input.espnEnabled;
+    this.#espnSessionEnabled = input.espnSessionEnabled ?? false;
     this.#yahooEnabled = input.yahooEnabled;
     this.#targets = input.targets;
     this.#enqueue = input.enqueue;
@@ -143,14 +158,22 @@ export class ProviderSyncSweepService implements ProviderSyncSweepServicePort {
     if (context.signal.aborted) throw new Error("Provider sync sweep was aborted during shutdown");
     const now = this.#now();
     const expired = await this.#targets.expireRequests(now);
-    const [espnTargets, yahooTargets] = await Promise.all([
+    const [espnDirectTargets, espnSessionTargets, yahooTargets] = await Promise.all([
       this.#espnEnabled
         ? this.#targets.listDueEspn(now, MAX_DUE_LEAGUES_PER_PROVIDER)
+        : Promise.resolve([]),
+      this.#espnSessionEnabled && this.#targets.listDueEspnSessions
+        ? this.#targets.listDueEspnSessions(now, MAX_DUE_LEAGUES_PER_PROVIDER)
         : Promise.resolve([]),
       this.#yahooEnabled
         ? this.#targets.listDueYahoo(now, MAX_DUE_LEAGUES_PER_PROVIDER)
         : Promise.resolve([]),
     ]);
+    const sessionLeagueIds = new Set(espnSessionTargets.map((target) => target.leagueSeasonId));
+    const espnTargets = [
+      ...espnSessionTargets,
+      ...espnDirectTargets.filter((target) => !sessionLeagueIds.has(target.leagueSeasonId)),
+    ];
     const targets: readonly ProviderSyncSweepTarget[] = [...espnTargets, ...yahooTargets];
     this.#emit({
       event: "due-targets-selected",
@@ -164,7 +187,7 @@ export class ProviderSyncSweepService implements ProviderSyncSweepServicePort {
       let jobId: string | null;
       try {
         jobId = await this.#enqueue(
-          target.provider === "espn"
+          target.provider === "espn" && !("connectionId" in target)
             ? {
                 mode: "server-direct",
                 leagueSeasonId: target.leagueSeasonId,
@@ -212,6 +235,12 @@ export class ProviderSyncSweepService implements ProviderSyncSweepServicePort {
 }
 
 interface YahooDueTargetRow extends Record<string, unknown> {
+  readonly leagueSeasonId: string;
+  readonly connectionId: string;
+  readonly dueAt: Date | string;
+}
+
+interface EspnSessionDueTargetRow extends Record<string, unknown> {
   readonly leagueSeasonId: string;
   readonly connectionId: string;
   readonly dueAt: Date | string;
@@ -359,6 +388,98 @@ export class DrizzleProviderSyncSweepTargetReader implements ProviderSyncSweepTa
     `);
     return rows.map((row) => ({
       provider: "yahoo",
+      leagueSeasonId: row.leagueSeasonId,
+      connectionId: row.connectionId,
+      dueAt: row.dueAt instanceof Date ? row.dueAt : new Date(row.dueAt),
+    }));
+  }
+
+  async listDueEspnSessions(
+    now: Date,
+    limit: number,
+  ): Promise<readonly EspnSessionProviderSyncSweepTarget[]> {
+    const activeSeason = currentNflSeason(now);
+    const nowIso = now.toISOString();
+    const rows = await this.#database.execute<EspnSessionDueTargetRow>(sql`
+      with eligible_connections as (
+        select
+          ${leagueSeasons.id} as league_season_id,
+          ${providerConnections.id} as connection_id,
+          ${leagueSeasons.season} as season,
+          ${leagueSeasons.status} as status,
+          ${leagueSeasons.lastSyncedAt} as last_synced_at,
+          ${leagueSeasons.createdAt} as season_created_at,
+          row_number() over (
+            partition by ${leagueSeasons.id}
+            order by
+              case when ${providerConnections.id} = ${leagueSeasons.connectionId} then 0 else 1 end,
+              ${providerConnections.createdAt},
+              ${providerConnections.id}
+          ) as connection_rank
+        from ${leagueSeasons}
+        inner join ${leagues}
+          on ${leagues.id} = ${leagueSeasons.leagueId}
+        inner join ${providerLeagueLinks}
+          on ${providerLeagueLinks.leagueSeasonId} = ${leagueSeasons.id}
+        inner join ${providerConnections}
+          on ${providerConnections.id} = ${providerLeagueLinks.connectionId}
+        inner join ${leagueMemberships}
+          on ${leagueMemberships.leagueId} = ${leagues.id}
+         and ${leagueMemberships.userId} = ${providerConnections.userId}
+        where ${leagueSeasons.provider} = 'espn'
+          and ${providerConnections.provider} = 'espn'
+          and ${leagues.archived} = false
+          and ${providerConnections.health} = 'healthy'
+          and ${providerConnections.encryptedCredential} is not null
+          and (
+            ${providerConnections.circuitOpenUntil} is null
+            or ${providerConnections.circuitOpenUntil} <= ${nowIso}::timestamptz
+          )
+          and (
+            (${leagueSeasons.status} = 'active' and ${leagueSeasons.season} = ${activeSeason})
+            or (
+              ${leagueSeasons.status} in ('preseason', 'offseason')
+              and ${leagueSeasons.season} >= ${activeSeason}
+            )
+          )
+      ), selected_connections as (
+        select
+          league_season_id,
+          connection_id,
+          season,
+          status,
+          last_synced_at,
+          season_created_at
+        from eligible_connections
+        where connection_rank = 1
+      ), due_targets as (
+        select
+          league_season_id,
+          connection_id,
+          coalesce(last_synced_at, season_created_at)
+            + case
+                when status = 'active'
+                  then ${YAHOO_ACTIVE_SYNC_INTERVAL_MS} * interval '1 millisecond'
+                else ${YAHOO_OFFSEASON_SYNC_INTERVAL_MS} * interval '1 millisecond'
+              end
+            + (
+                (('x' || substr(md5(league_season_id::text), 1, 8))::bit(32)::bigint
+                  % ${YAHOO_SYNC_JITTER_WINDOW_MS})
+                * interval '1 millisecond'
+              ) as due_at
+        from selected_connections
+      )
+      select
+        league_season_id as "leagueSeasonId",
+        connection_id as "connectionId",
+        due_at as "dueAt"
+      from due_targets
+      where due_at <= ${nowIso}::timestamptz
+      order by due_at, league_season_id
+      limit ${limit}
+    `);
+    return rows.map((row) => ({
+      provider: "espn",
       leagueSeasonId: row.leagueSeasonId,
       connectionId: row.connectionId,
       dueAt: row.dueAt instanceof Date ? row.dueAt : new Date(row.dueAt),

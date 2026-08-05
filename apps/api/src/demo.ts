@@ -25,7 +25,7 @@ const demoDashboard: DashboardSnapshot = {
       label: "ESPN Fantasy",
       health: "disabled",
       official: false,
-      mode: "One-click / automatic sync",
+      mode: "Automatic sync",
       readOnly: true,
       lastSuccessfulAt: null,
       message: "Private leagues sync from the ESPN session already open in the user's browser.",
@@ -84,8 +84,7 @@ const demoDashboard: DashboardSnapshot = {
           kind: "connection",
           priority: "medium",
           title: "Connect ESPN",
-          summary:
-            "Use one-click sync or the automatic Chrome companion without sharing credentials.",
+          summary: "Pair the Chrome companion without sharing your ESPN password.",
           valueLabel: null,
           href: "/connections",
         },

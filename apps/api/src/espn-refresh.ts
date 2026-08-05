@@ -10,6 +10,8 @@ import {
   leagueSeasons,
   leagueSupplementalSnapshots,
   matchupSnapshots,
+  providerConnections,
+  providerLeagueLinks,
   refreshRequests,
   weeklyMatchups,
   type BridgeClientKind,
@@ -28,7 +30,21 @@ import {
   evaluateEspnRefresh,
   type EspnRefreshEvaluation,
 } from "@fantasy/league-sync";
-import { and, desc, eq, gt, gte, inArray, isNull, lte, notExists, or, sql } from "drizzle-orm";
+import {
+  and,
+  asc,
+  desc,
+  eq,
+  gt,
+  gte,
+  inArray,
+  isNotNull,
+  isNull,
+  lte,
+  notExists,
+  or,
+  sql,
+} from "drizzle-orm";
 
 const ASSISTED_REQUEST_LIFETIME_MS = 24 * 60 * 60 * 1000;
 const ACTIVE_AGENT_WINDOW_MS = 15 * 60 * 1000;
@@ -108,6 +124,7 @@ export interface RefreshTarget {
   readonly circuitOpenUntil: Date | null;
   readonly activeAgentCount: number;
   readonly mostRecentAgentSeenAt: Date | null;
+  readonly serverSessionConnectionId: string | null;
   readonly request: StoredRefreshRequest | null;
   readonly latestAttempt: StoredAttempt | null;
 }
@@ -129,6 +146,10 @@ export interface EspnRefreshCoordinatorOptions {
   readonly enqueueDirect?: (input: {
     readonly leagueSeasonId: string;
     readonly refreshRequestId: string;
+  }) => Promise<string | null>;
+  readonly enqueueSession?: (input: {
+    readonly connectionId: string;
+    readonly leagueSeasonId: string;
   }) => Promise<string | null>;
 }
 
@@ -238,6 +259,13 @@ function displayStatus(input: {
         actionRequired: false,
       };
     }
+    if (target.request?.fulfillmentMode === "server-session") {
+      return {
+        code: "refreshing-direct",
+        label: "Refreshing securely from ESPN",
+        actionRequired: false,
+      };
+    }
     if (attempt && (attempt.state === "offered" || attempt.state === "started")) {
       const ownDevice = attempt.deviceUserId === input.requestingUserId ? attempt.deviceName : null;
       const deviceLabel =
@@ -272,6 +300,7 @@ export class EspnRefreshCoordinator {
   readonly #repository: EspnRefreshRepository;
   readonly #directEnabled: boolean;
   readonly #enqueueDirect: EspnRefreshCoordinatorOptions["enqueueDirect"];
+  readonly #enqueueSession: EspnRefreshCoordinatorOptions["enqueueSession"];
   readonly #now: () => Date;
 
   constructor(
@@ -282,6 +311,7 @@ export class EspnRefreshCoordinator {
     this.#repository = repository;
     this.#directEnabled = options.directEnabled;
     this.#enqueueDirect = options.enqueueDirect;
+    this.#enqueueSession = options.enqueueSession;
     this.#now = now;
   }
 
@@ -298,7 +328,10 @@ export class EspnRefreshCoordinator {
     });
     if (evaluation.current) return this.#status(userId, target, evaluation, now);
 
+    const sessionAvailable =
+      target.serverSessionConnectionId !== null && this.#enqueueSession !== undefined;
     const directAvailable =
+      !sessionAvailable &&
       this.#directEnabled &&
       target.directCoreState === "available" &&
       target.preferredMode !== "assisted" &&
@@ -315,10 +348,19 @@ export class EspnRefreshCoordinator {
       minimumCaptureAt: now,
       expiresAt: new Date(now.getTime() + ASSISTED_REQUEST_LIFETIME_MS),
       requiredArtifacts: evaluation.staleArtifacts,
-      fulfillmentMode: directAvailable ? "server-direct" : null,
+      fulfillmentMode: sessionAvailable
+        ? "server-session"
+        : directAvailable
+          ? "server-direct"
+          : null,
       now,
     });
-    if (directAvailable && this.#enqueueDirect) {
+    if (sessionAvailable && target.serverSessionConnectionId) {
+      await this.#enqueueSession({
+        connectionId: target.serverSessionConnectionId,
+        leagueSeasonId,
+      });
+    } else if (directAvailable && this.#enqueueDirect) {
       await this.#enqueueDirect({ leagueSeasonId, refreshRequestId: request.id });
     }
     const refreshed = await this.#repository.inspectMemberTarget(userId, leagueSeasonId, now);
@@ -487,6 +529,7 @@ export class DrizzleEspnRefreshRepository implements EspnRefreshRepository {
         leagueSeasonId: leagueSeasons.id,
         externalLeagueId: leagueSeasons.externalKey,
         season: leagueSeasons.season,
+        preferredConnectionId: leagueSeasons.connectionId,
         seasonStatus: leagueSeasons.status,
         currentWeek: leagueSeasons.currentWeek,
         lastSyncedAt: leagueSeasons.lastSyncedAt,
@@ -578,6 +621,35 @@ export class DrizzleEspnRefreshRepository implements EspnRefreshRepository {
       (device) => device.lastSeenAt && device.lastSeenAt.getTime() >= activeThreshold,
     ).length;
 
+    const [serverSession] = await this.#database
+      .select({ connectionId: providerConnections.id })
+      .from(providerLeagueLinks)
+      .innerJoin(providerConnections, eq(providerConnections.id, providerLeagueLinks.connectionId))
+      .innerJoin(
+        leagueMemberships,
+        and(
+          eq(leagueMemberships.leagueId, row.leagueId),
+          eq(leagueMemberships.userId, providerConnections.userId),
+        ),
+      )
+      .where(
+        and(
+          eq(providerLeagueLinks.leagueSeasonId, leagueSeasonId),
+          eq(providerConnections.provider, "espn"),
+          eq(providerConnections.health, "healthy"),
+          isNotNull(providerConnections.encryptedCredential),
+          or(
+            isNull(providerConnections.circuitOpenUntil),
+            lte(providerConnections.circuitOpenUntil, now),
+          ),
+        ),
+      )
+      .orderBy(
+        sql`case when ${providerConnections.id} = ${row.preferredConnectionId} then 0 else 1 end`,
+        asc(providerConnections.createdAt),
+      )
+      .limit(1);
+
     const [requestRow] = await this.#database
       .select({
         id: refreshRequests.id,
@@ -640,6 +712,7 @@ export class DrizzleEspnRefreshRepository implements EspnRefreshRepository {
       circuitOpenUntil: row.circuitOpenUntil,
       activeAgentCount,
       mostRecentAgentSeenAt,
+      serverSessionConnectionId: serverSession?.connectionId ?? null,
       request,
       latestAttempt,
     };

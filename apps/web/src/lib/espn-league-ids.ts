@@ -1,5 +1,10 @@
 export const maximumEspnBridgeLeagues = 32;
 
+export function currentEspnSeason(now = new Date()): number {
+  const year = now.getFullYear();
+  return now.getMonth() < 2 ? year - 1 : year;
+}
+
 function parseEspnLeagueEntry(entry: string): string {
   if (/^\d{1,20}$/u.test(entry)) return entry;
   let url: URL;
@@ -27,7 +32,9 @@ export function parseEspnLeagueIds(value: string): readonly string[] {
     .map(parseEspnLeagueEntry);
   if (leagueIds.length === 0) throw new TypeError("Enter at least one ESPN league ID.");
   if (leagueIds.length > maximumEspnBridgeLeagues) {
-    throw new TypeError(`ESPN browser sync supports at most ${maximumEspnBridgeLeagues} leagues.`);
+    throw new TypeError(
+      `ESPN companion sync supports at most ${maximumEspnBridgeLeagues} leagues.`,
+    );
   }
   if (new Set(leagueIds).size !== leagueIds.length) {
     throw new TypeError("Remove duplicate ESPN league IDs.");

@@ -278,7 +278,11 @@ const RECENCY_MODEL_VERSION = `${FIRST_PARTY_ROS_MODEL_VERSION}:availability-awa
 const CORPUS_SEASONS = [2027, 2028, 2029, 2030] as const;
 const CORPUS_CUTOFFS = [1, 2, 3, 4, 5, 6, 7, 8, 9] as const;
 const CORPUS_PER_BLOCK = 10;
-const CORPUS_COVERED_PER_BLOCK = 7;
+// The conformal contract treats one season/cutoff as a block and deliberately scores the worst
+// player in that block. Cover whole blocks rather than 7 of 10 rows inside every block; otherwise
+// every block contains a miss and the fixture correctly appears to have zero calibrated coverage.
+// ceil((36 + 1) * 0.70) = 26, so the derived calibrated block coverage is 26 / 36 = 0.7222.
+const CORPUS_COVERED_BLOCKS = 26;
 
 function heldOutForecast(
   season: number,
@@ -286,9 +290,12 @@ function heldOutForecast(
   index: number,
 ): FirstPartyRosHeldOutForecast {
   const actual = 100;
-  // Three of every ten samples deliberately miss, so the derived observed interval coverage lands
-  // on the 0.70 nominal instead of a degenerate 1.0 the calibration evidence check would reject.
-  const shift = index < CORPUS_COVERED_PER_BLOCK ? 0 : 60;
+  const seasonIndex = CORPUS_SEASONS.indexOf(season as (typeof CORPUS_SEASONS)[number]);
+  const cutoffIndex = CORPUS_CUTOFFS.indexOf(asOfWeek as (typeof CORPUS_CUTOFFS)[number]);
+  const blockIndex = seasonIndex * CORPUS_CUTOFFS.length + cutoffIndex;
+  // Ten blocks deliberately miss, keeping the calibrated block coverage near the 0.70 nominal
+  // instead of producing a degenerate 1.0 artifact that the database evidence gate must reject.
+  const shift = blockIndex < CORPUS_COVERED_BLOCKS ? 0 : 60;
   return {
     playerId: `${season}-${asOfWeek}-${index}`,
     position: "WR",

@@ -39,6 +39,7 @@ function target(overrides: Partial<RefreshTarget> = {}): RefreshTarget {
     circuitOpenUntil: null,
     activeAgentCount: 0,
     mostRecentAgentSeenAt: null,
+    serverSessionConnectionId: null,
     request: null,
     latestAttempt: null,
     ...overrides,

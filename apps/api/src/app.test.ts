@@ -519,7 +519,7 @@ describe("API", () => {
     await app.close();
   });
 
-  it("allows the ESPN one-click bookmark to preflight the bridge snapshot route", async () => {
+  it("does not expose bridge ingest to scripts running on an ESPN page", async () => {
     const app = await buildApp({
       environment: loadEnvironment({ NODE_ENV: "test" }),
       logger: false,
@@ -534,9 +534,8 @@ describe("API", () => {
         "access-control-request-headers": "authorization,content-type",
       },
     });
-    expect(response.statusCode).toBe(204);
-    expect(response.headers["access-control-allow-origin"]).toBe("https://fantasy.espn.com");
-    expect(response.headers["access-control-allow-headers"]).toContain("authorization");
+    expect(response.statusCode).toBe(404);
+    expect(response.headers["access-control-allow-origin"]).toBeUndefined();
     expect(response.headers["access-control-allow-credentials"]).toBeUndefined();
 
     const unrelatedRoute = await app.inject({
@@ -627,7 +626,7 @@ describe("API", () => {
     await app.close();
   });
 
-  it("leaves the ESPN bridge ingest branch outside the web origin allowlist", async () => {
+  it("leaves ESPN bridge ingest outside browser CORS and web-origin authorization", async () => {
     const app = await buildApp({
       environment: productionEnvironment("https://second.example.com"),
       logger: false,
@@ -644,8 +643,8 @@ describe("API", () => {
         "access-control-request-headers": "authorization,content-type",
       },
     });
-    expect(preflight.statusCode).toBe(204);
-    expect(preflight.headers["access-control-allow-origin"]).toBe("https://fantasy.espn.com");
+    expect(preflight.statusCode).toBe(404);
+    expect(preflight.headers["access-control-allow-origin"]).toBeUndefined();
     expect(preflight.headers["access-control-allow-credentials"]).toBeUndefined();
 
     // The bridge origin is still not a web origin: it cannot mutate anything outside ingest.

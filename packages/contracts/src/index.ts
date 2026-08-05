@@ -51,6 +51,9 @@ export * from "./weekly-recap.js";
 // Shared automated ESPN refresh and sync-agent wire protocol.
 export * from "./espn-refresh.js";
 
+// Opt-in encrypted ESPN web-session connection contracts.
+export * from "./espn-session.js";
+
 // Mirrored here so the browser contract bundle has no runtime dependency on the domain package.
 // Response parsing fails closed if service vocabulary ever drifts from this wire contract.
 const NFL_POSITIONS = ["QB", "RB", "WR", "TE", "K", "DST", "DL", "LB", "DB", "IDP"] as const;
@@ -3438,6 +3441,8 @@ export const mobileCapabilitySchema = z.enum([
   "authenticated-browser-handoff",
   "cookie-authentication",
   "espn-automated-refresh",
+  "espn-native-session-grant-v1",
+  "espn-server-session-v1",
   "espn-sync-agent-v1",
   "in-season-decisions",
   "league-analytics",

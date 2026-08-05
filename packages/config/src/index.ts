@@ -69,6 +69,11 @@ const environmentSchema = z.object({
    */
   ESPN_PUBLIC_DIRECT_SYNC_ENABLED: booleanFlag,
   /**
+   * Allows members to opt in to encrypted server-side ESPN session storage for unattended,
+   * read-only refreshes. Disabled by default because this is an unofficial provider path.
+   */
+  ESPN_SERVER_SESSION_SYNC_ENABLED: booleanFlag,
+  /**
    * Web push VAPID identity. All three are optional and absent by default: a deployment that has
    * never generated a key pair reports game-day alerts as unavailable rather than failing.
    */
@@ -219,6 +224,9 @@ export function loadEnvironment(
       !parsed.data.CREDENTIAL_ENCRYPTION_KEY)
   ) {
     throw new Error("YAHOO_AUTOMATED_SYNC_ENABLED requires complete Yahoo server configuration");
+  }
+  if (parsed.data.ESPN_SERVER_SESSION_SYNC_ENABLED && !parsed.data.CREDENTIAL_ENCRYPTION_KEY) {
+    throw new Error("ESPN_SERVER_SESSION_SYNC_ENABLED requires CREDENTIAL_ENCRYPTION_KEY");
   }
   if (yahooWasRequested) {
     const apiUrl = new URL(parsed.data.API_URL);

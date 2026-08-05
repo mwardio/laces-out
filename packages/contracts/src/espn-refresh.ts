@@ -22,6 +22,7 @@ export const espnDirectCapabilityStateSchema = z.enum([
 export const espnPreferredSyncModeSchema = z.enum(["direct", "assisted", "automatic"]);
 export const espnRefreshFulfillmentModeSchema = z.enum([
   "server-direct",
+  "server-session",
   "chrome-agent",
   "native-agent",
 ]);

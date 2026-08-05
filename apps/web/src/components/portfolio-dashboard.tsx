@@ -9,7 +9,6 @@ import {
   ChevronDown,
   CircleGauge,
   ClipboardCheck,
-  ExternalLink,
   HeartPulse,
   Info,
   ListPlus,
@@ -423,16 +422,16 @@ export function PortfolioDashboard({ afterOverview }: { readonly afterOverview?:
               <span className="provider-logo provider-logo--espn">E</span>
               <div>
                 <h3>ESPN Fantasy</h3>
-                <p>One-click + automatic sync</p>
+                <p>Private automatic sync</p>
               </div>
             </div>
             <p className="provider-description">
-              Private leagues sync from the ESPN session already open in your browser without
-              sharing a password or cookie.
+              Private leagues sync through your signed-in browser. Recommended always-on access
+              keeps them fresh after Chrome closes without collecting your ESPN password.
             </p>
             <div className="provider-facts">
               <span>
-                <Check size={14} /> One-click, multi-league sync
+                <Check size={14} /> Secure multi-league pairing
               </span>
               <span>
                 <Check size={14} /> Five-minute intent checks + six-hour safety sweep
@@ -441,7 +440,7 @@ export function PortfolioDashboard({ afterOverview }: { readonly afterOverview?:
                 <Check size={14} /> Availability, box scores, transactions, and draft results
               </span>
               <span>
-                <ShieldAlert size={14} /> ESPN cookies stay in the browser
+                <ShieldAlert size={14} /> Always-on access is encrypted and revocable
               </span>
             </div>
             <button
@@ -455,14 +454,10 @@ export function PortfolioDashboard({ afterOverview }: { readonly afterOverview?:
             {providerExpanded === "ESPN" ? (
               <div className="provider-detail provider-detail--stack">
                 <p>
-                  <ExternalLink size={14} /> <strong>One-click sync:</strong> save a scoped
-                  bookmark, sign in on ESPN, and run it whenever you want fresh league data.
-                </p>
-                <p>
-                  <Zap size={14} /> <strong>Automatic sync:</strong> the optional Chrome companion
-                  checks for requested work every five minutes while Chrome is running and keeps a
-                  six-hour full sweep. A verified public league can refresh core data directly when
-                  the deployment operator enables the default-off unofficial path.
+                  <Zap size={14} /> <strong>Automatic sync:</strong> the Chrome companion checks for
+                  requested work every five minutes while Chrome is running and keeps a six-hour
+                  full sweep. If your host offers it, the recommended encrypted authorization keeps
+                  refreshes running when Chrome is closed.
                 </p>
                 <p>
                   <RefreshCw size={14} /> <strong>Truthful states:</strong> the live account shows
@@ -471,8 +466,9 @@ export function PortfolioDashboard({ afterOverview }: { readonly afterOverview?:
                   in to ESPN.” Cached data remains visible in every state.
                 </p>
                 <p>
-                  <ShieldAlert size={14} /> <strong>Credential boundary:</strong> ESPN passwords,
-                  cookies, SWID, and espn_s2 never enter the app.
+                  <ShieldAlert size={14} /> <strong>Credential boundary:</strong> Laces Out never
+                  collects the ESPN password. Device-only sync stays in Chrome; always-on mode sends
+                  only session authorization, stores it encrypted, and can be revoked at any time.
                 </p>
               </div>
             ) : null}

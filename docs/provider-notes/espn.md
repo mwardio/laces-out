@@ -1,6 +1,6 @@
 # ESPN Fantasy Football provider
 
-Verified: 2026-08-03
+Verified: 2026-08-05
 
 ## Supported boundary
 
@@ -9,10 +9,10 @@ a supported, general third-party ESPN Fantasy Football OAuth/API contract. ESPN 
 document league IDs, public/private league behavior, snake and salary-cap formats, and the normal
 user sign-in experience. That is not an API authorization grant.
 
-Consequently this product must not show an official “Connect ESPN” OAuth button. It implements
-two read-only modes:
+Consequently this product must not represent its ESPN connection as OAuth. It implements three
+read-only modes:
 
-### 1. Browser-local private-league bridge
+### Browser-local private-league bridge
 
 The primary private-league compatibility path is a Manifest V3 browser companion. The user signs
 in on ESPN's own site. An extension service worker with explicit ESPN host permission makes a
@@ -22,12 +22,12 @@ league artifact to a fixed Laces Out server chosen by the user.
 The server issues a high-entropy device token scoped to explicit ESPN league IDs and stores only
 its hash. It revalidates device state, scope, capture time, endpoint, checksum, and the versioned
 ESPN shape before atomically writing roster, standings, and weekly matchup snapshots. A rejected
-or partially invalid payload cannot replace the last good state. The extension never asks for an ESPN
-password, requests the browser cookies API, serializes cookies, or sends ESPN session material to
-Laces Out. The current companion polls Laces Out every five minutes for bounded refresh intents,
-reads only requested artifact families, and retains the six-hour full sweep as a safety net while
-Chrome and the ESPN session are available. A sleeping computer is simply an offline agent; the
-request remains queued until an authorized device returns or the 24-hour intent expires.
+or partially invalid payload cannot replace the last good state. In device-only mode, the
+extension never sends ESPN session material to Laces Out. It polls Laces Out every five minutes for
+bounded refresh intents, reads only requested artifact families, and retains the six-hour full
+sweep as a safety net while Chrome and the ESPN session are available. A sleeping computer is
+simply an offline agent; the request remains queued until an authorized device returns or the
+24-hour intent expires.
 
 Hosted Laces Out domains can hand the scoped credential directly to the signed companion through
 Chrome's allowlisted external-messaging channel. Any HTTPS self-hosted instance can use that same
@@ -66,13 +66,48 @@ league-specific available players, player-level weekly box scores, structured tr
 completed/on-demand draft results. A supplemental request may fail without invalidating, blessing,
 or rolling back a valid core league snapshot. Message-board content is out of scope.
 
+### Opt-in always-on private-league refresh
+
+An operator may enable `ESPN_SERVER_SESSION_SYNC_ENABLED`. A member may then grant always-on access
+from an already paired Chrome companion or a compatible native app. Chrome uses its ESPN-scoped
+cookie permission to read only `SWID` and `espn_s2` after that user-initiated action, including when
+ESPN marks them `HttpOnly`. The native flow keeps username, password, MFA, and challenges on an
+ESPN-hosted page, then captures only those same two established session values. Either client
+immediately sends them over HTTPS to its paired Laces Out instance with the scoped Bridge
+credential. It does not persist the raw values, log them, or expose them back to application UI.
+
+The server validates capture age and format, derives a non-reversible account fingerprint, and
+stores the authorization in the existing purpose-bound AES-256-GCM provider credential envelope.
+Only an active, agent-capable Chrome or iOS device owned by that member may create or replace the
+envelope. The resulting
+provider connection is linked only to ESPN league seasons already inside that device's explicit
+scope and for which the member still has league membership; the grant cannot create a league,
+claim a team, or widen membership.
+
+API and worker reads construct only the fixed `lm-api-reads.fantasy.espn.com` HTTPS route from the
+stored numeric league ID and season. They use GET, refuse redirects, allowlist views and filters,
+bound time and response bytes, and pass every result through the same normalizer, checksum, and
+atomic persistence boundary as browser uploads. Core and each supplemental family fail
+independently. Active current-season leagues are checked about every 30 minutes; preseason and
+offseason leagues about every six hours, with stable jitter. Opening a stale league can enqueue the
+same server-side read immediately, including from mobile, without requiring the desktop browser to
+be awake.
+
+The connection is visible and revocable in **League Sync**. A 401 or 403 marks it as needing ESPN
+sign-in again and stops scheduled reads until the member explicitly renews it. Disconnecting
+deletes the encrypted authorization and provider links while preserving the last successfully
+normalized league data. The feature is disabled by default for self-hosters because encrypted
+database backups contain the credential envelope and because ESPN exposes no supported
+third-party Fantasy authorization contract.
+
 ### Automated refresh intent lifecycle
 
 An authenticated member opening a stale ESPN league or selecting **Refresh league** creates or
 reuses one 24-hour, league-season-scoped refresh intent. The server derives the required artifact
-families from stored freshness; the client cannot force work or supply an ESPN URL. A verified
-public core capability may dispatch a background direct read. Otherwise an authorized Chrome or
-future iOS sync agent sees the request on its bounded poll. Multiple devices may race: capture-time,
+families from stored freshness; the client cannot force work or supply an ESPN URL. A healthy,
+member-linked always-on connection is preferred, a verified public core capability may dispatch a
+credential-free background read, and otherwise an authorized Chrome or future iOS sync agent sees
+the request on its bounded poll. Multiple paths may race: capture-time,
 stale-snapshot, shared checksum, and transactional persistence rules make one current artifact
 canonical and later copies unchanged.
 
@@ -90,7 +125,7 @@ companions continue their six-hour uploads; their absence from polling is not an
 The separate native implementation should follow the standalone
 [iOS automated-sync handoff](../ios/espn-automated-sync-handoff.md).
 
-### 1a. Live draft observation
+### Browser-local live draft observation
 
 Verified: implementation only. Not yet exercised against a real ESPN draft room.
 
@@ -148,7 +183,7 @@ Only after this matrix passes may the selectors be marked verified, the flag be 
 canary league, and product copy advertise live ESPN draft sync. Turning the flag off is the
 rollback: it stops new provider observations while preserving accepted events and manual entry.
 
-### 2. Anonymous public-league read
+### Anonymous public-league read
 
 `EspnPublicReadClient` calls the web client's `lm-api-reads.fantasy.espn.com` endpoint only for the
 numeric league ID and season of an already-admitted ESPN league. This endpoint is **unofficial and
@@ -182,21 +217,23 @@ visibility is a user/commissioner choice and must not be changed or worked aroun
 ## Explicit exclusions
 
 - Never ask for or store an ESPN password.
-- Never automate the ESPN sign-in form.
-- Never accept or replay `SWID`, `espn_s2`, browser cookies, copied request headers, or a HAR file
-  in the hosted application. The companion may let the browser attach its local ESPN cookies to a
-  direct ESPN request, but it never reads or transmits their values.
+- Never automate or reproduce the ESPN sign-in form; native sign-in remains on ESPN/Disney pages.
+- Never accept copied request headers, HAR files, arbitrary cookies, or credentials through a
+  member form. The only server-held ESPN authorization path is the explicit paired-device grant above;
+  it accepts only `SWID` and `espn_s2` from a fresh capture made by an active, scoped device and
+  immediately places them inside the encrypted provider-credential boundary.
 - Never perform lineup, waiver, transaction, trade, commissioner, or draft writes.
 - Never advertise live ESPN draft sync until the release gate above has passed. The implementation
   exists behind `ESPN_LIVE_DRAFT_SYNC` (default off) and its DOM adapter is unvalidated. Manual
   draft event entry remains primary; completed/on-demand provider draft results reconcile against
   it without silently rewriting manual history.
-- Do not silently fall back from anonymous reads to browser session credentials.
+- Do not silently fall back from anonymous reads or device-only mode to server-held session
+  authorization. Enabling and renewing always-on mode require an explicit member action.
 
 Disney's terms restrict automated access, monitoring, and copying using robots, spiders, scrapers,
-or other automated means. The anonymous public-read experiment therefore remains feature-flagged
-and personal-use only until a terms review accepts it. The browser bridge does not depend on that
-anonymous endpoint and is the private-league path.
+or other automated means. Both server-side modes therefore remain feature-flagged, unofficial,
+and operator-controlled. The browser-local bridge remains available when an operator does not
+accept the additional server-held-authorization risk.
 
 ## Setup checklist
 
@@ -208,12 +245,16 @@ anonymous endpoint and is the private-league path.
    self-hosted instance** in the popup. Neither path copies the device token. Sync while signed in
    to ESPN in the same browser profile, then claim the correct fantasy team after each league's
    first import.
-3. If using public direct read, confirm the league is intentionally public, complete the operator
+3. To offer always-on private sync, set `ESPN_SERVER_SESSION_SYNC_ENABLED=true` in API and worker,
+   confirm `CREDENTIAL_ENCRYPTION_KEY` and encrypted off-host backups are configured, then let each
+   member opt in from League Sync or the extension popup. Test renewal and disconnect before wider
+   use.
+4. If using public direct read, confirm the league is intentionally public, complete the operator
    evidence/policy gate in [operations](../operations.md#espn-automated-refresh), and only then set
    `ESPN_PUBLIC_DIRECT_SYNC_ENABLED=true`. No ESPN secret environment variables should exist.
-4. Keep the last successful normalized snapshot if a later bridge read fails.
-5. Re-run sanitized web-client fixture tests whenever the bridge schema changes.
-6. Run the ESPN bridge and schema smokes against disposable PostgreSQL. They exercise first-owner creation, no-op league-ID
+5. Keep the last successful normalized snapshot if a later read fails.
+6. Re-run sanitized web-client fixture tests whenever the bridge schema changes.
+7. Run the ESPN bridge and schema smokes against disposable PostgreSQL. They exercise first-owner creation, no-op league-ID
    configuration, provider-connection auto-enrollment, member refresh, stale-snapshot rejection,
    checksum replay, player-observation quarantine, canonical-player preservation, normalization,
    and rollback.

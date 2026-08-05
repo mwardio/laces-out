@@ -1,5 +1,11 @@
 # iOS ESPN automated sync handoff
 
+> The server now supports encrypted, always-on ESPN refresh after Chrome pairing or a native,
+> ESPN-hosted iOS sign-in. The production iOS path is defined in
+> [`espn-always-on-sync-handoff.md`](espn-always-on-sync-handoff.md) before shipping against the
+> current API. This document remains historical reference for the separate cookie-opaque native
+> sync-agent experiment. Where the two documents conflict, the newer production handoff governs.
+
 Status: backend contract complete; native implementation maintained in a separate repository;
 cross-client integration verification pending
 Contract date: 2026-08-03

@@ -1,6 +1,6 @@
 # Provider credential security
 
-Verified: 2026-07-16
+Verified: 2026-08-05
 
 `@fantasy/security` provides a deliberately small server-side boundary:
 

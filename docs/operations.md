@@ -678,9 +678,28 @@ bounded and feed `provider-sync-sweep-dead-letter` or
 five minutes, reads ESPN only when an intent is offered, and retains a six-hour full sweep. A
 sleeping or signed-out device is not an infrastructure outage.
 
+Migration `0036_espn_server_session.sql` adds a nullable bridge-to-provider-connection link and the
+`server-session` refresh provenance value. It enables a separate, default-off private-league path:
+after scoped Chrome or iOS device registration, a member may explicitly grant `SWID` and `espn_s2`
+to that paired instance. A native client must keep credential entry on an ESPN-hosted page. The API
+accepts a fresh grant only through the hashed Bridge bearer boundary, stores it
+immediately in the purpose-bound AES-256-GCM credential envelope, and never returns it. The worker
+then performs fixed-host, GET-only, redirect-free, size-bounded ESPN reads for league seasons
+already linked to that member. Active current-season leagues use the same 30-minute cadence as
+Yahoo; preseason/offseason uses six hours, both with stable jitter. Stale-on-view prefers this path
+and works from mobile without an online desktop.
+
+`ESPN_SERVER_SESSION_SYNC_ENABLED=false` leaves the feature and capability advertisement absent.
+Before enabling it, verify `CREDENTIAL_ENCRYPTION_KEY`, TLS, log redaction, encrypted backups,
+restore access controls, account export exclusion, and member disconnect. Treat every database
+backup containing a provider credential envelope as credential-bearing. Canary one account, verify
+an accepted and unchanged sync, force a 401/403 to verify **reauthorization required**, renew from
+the paired client, and remove the connection from League Sync. Neither enabling nor deleting this
+connection may create a league, membership, or team claim.
+
 Safe rollout order:
 
-1. Take and verify a backup, apply migration `0034`, then run
+1. Take and verify a backup, apply migrations through `0036`, then run
    `npm run db:smoke -w @fantasy/db` against a disposable migrated PostgreSQL database.
 2. Deploy API and worker support with `ESPN_PUBLIC_DIRECT_SYNC_ENABLED=false`. Confirm request/status
    reads, expiry, redacted structured counts, and legacy uploads before publishing the companion.
@@ -805,14 +824,19 @@ order by name, state;
 
 Alert on repeated failures for a previously available league, cross-league parser rejection that
 suggests schema drift, dead-letter transitions, or a growing non-expired queue despite agents seen
-in the last 15 minutes. Do not alert merely because a league is private, one desktop is offline, or
-one request is waiting. Correlate API `member-refresh`, `agent-poll`, and `agent-attempt` count-only
-records with worker sweep results; never add league payloads or authorization headers to logs.
+in the last 15 minutes or a healthy always-on connection. Do not alert merely because a league is
+private, one desktop is offline, or one request is waiting. Correlate API `member-refresh`,
+`agent-poll`, and `agent-attempt` count-only records with worker sweep results; never add league
+payloads or authorization headers to logs.
 
 Rollback is forward-compatible:
 
 - Set `ESPN_PUBLIC_DIRECT_SYNC_ENABLED=false` in API and worker to stop new anonymous reads. Leave
   the capability rows and last good snapshots intact.
+- Set `ESPN_SERVER_SESSION_SYNC_ENABLED=false` in API and worker to stop scheduled/session-backed
+  reads without deleting accepted league data. Re-enable only after the incident is understood;
+  delete affected connections and rotate `CREDENTIAL_ENCRYPTION_KEY` through the documented keyring
+  procedure if confidentiality may have been lost.
 - Roll back the stale-on-view web client if intent creation must stop; the manual/legacy upload
   paths remain compatible. The new companion retains its six-hour baseline if polling is disabled
   server-side or returns no work.

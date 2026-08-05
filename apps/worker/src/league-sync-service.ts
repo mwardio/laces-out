@@ -2,8 +2,10 @@ import {
   CONNECTION_CIRCUIT_FAILURE_THRESHOLD,
   evaluateConnectionCircuit,
   nextCircuitOpenUntil,
-  providerSupportsServerRefresh,
+  connectionSupportsServerRefresh,
   type EspnDirectSyncPort,
+  type EspnSessionSyncPort,
+  type EspnSessionSyncReceipt,
   YahooSyncError,
   type YahooSyncPort,
   type YahooSyncReceipt,
@@ -50,6 +52,7 @@ export interface LeagueSyncTarget {
   readonly userId: string;
   readonly provider: ProviderName;
   readonly externalKey: string;
+  readonly connectionCapabilities: unknown;
   readonly connectionHealth: ConnectionHealth;
   readonly consecutiveFailures: number;
   readonly circuitOpenUntil: Date | null;
@@ -75,20 +78,20 @@ export interface ConnectionCircuitStore {
 export type LeagueSyncOperationalEvent =
   | {
       readonly event: "circuit-cooldown";
-      readonly provider: "yahoo";
+      readonly provider: "yahoo" | "espn";
       readonly connectionId: string;
       readonly leagueSeasonId: string;
       readonly retryAfterSeconds: number;
     }
   | {
       readonly event: "reauthorization-required";
-      readonly provider: "yahoo";
+      readonly provider: "yahoo" | "espn";
       readonly connectionId: string;
       readonly leagueSeasonId: string;
     }
   | {
       readonly event: "sync-failed";
-      readonly provider: "yahoo";
+      readonly provider: "yahoo" | "espn";
       readonly connectionId: string;
       readonly leagueSeasonId: string;
       readonly errorCode: string;
@@ -99,7 +102,7 @@ export type LeagueSyncOperationalEvent =
     }
   | {
       readonly event: "sync-completed";
-      readonly provider: "yahoo";
+      readonly provider: "yahoo" | "espn";
       readonly connectionId: string;
       readonly leagueSeasonId: string;
       readonly state: "accepted" | "unchanged";
@@ -107,7 +110,7 @@ export type LeagueSyncOperationalEvent =
     }
   | {
       readonly event: "after-commit-failed";
-      readonly provider: "yahoo";
+      readonly provider: "yahoo" | "espn";
       readonly connectionId: string;
       readonly leagueSeasonId: string;
     };
@@ -132,26 +135,32 @@ function failureDetail(error: unknown): string {
 export class LeagueSyncService implements LeagueSyncServicePort {
   readonly #targets: LeagueSyncTargetReader;
   readonly #yahooSync: YahooSyncPort | undefined;
+  readonly #espnSessionSync: EspnSessionSyncPort | undefined;
   readonly #espnDirect: EspnDirectSyncPort | undefined;
   readonly #circuit: ConnectionCircuitStore;
   readonly #afterYahooCommit: ((receipt: YahooSyncReceipt) => Promise<void>) | undefined;
+  readonly #afterEspnCommit: ((receipt: EspnSessionSyncReceipt) => Promise<void>) | undefined;
   readonly #observe: ((event: LeagueSyncOperationalEvent) => void) | undefined;
   readonly #now: () => Date;
 
   constructor(input: {
     readonly targets: LeagueSyncTargetReader;
     readonly yahooSync?: YahooSyncPort;
+    readonly espnSessionSync?: EspnSessionSyncPort;
     readonly espnDirect?: EspnDirectSyncPort;
     readonly circuit: ConnectionCircuitStore;
     readonly afterYahooCommit?: (receipt: YahooSyncReceipt) => Promise<void>;
+    readonly afterEspnCommit?: (receipt: EspnSessionSyncReceipt) => Promise<void>;
     readonly observe?: (event: LeagueSyncOperationalEvent) => void;
     readonly now?: () => Date;
   }) {
     this.#targets = input.targets;
     this.#yahooSync = input.yahooSync;
+    this.#espnSessionSync = input.espnSessionSync;
     this.#espnDirect = input.espnDirect;
     this.#circuit = input.circuit;
     this.#afterYahooCommit = input.afterYahooCommit;
+    this.#afterEspnCommit = input.afterEspnCommit;
     this.#observe = input.observe;
     this.#now = input.now ?? (() => new Date());
   }
@@ -218,20 +227,18 @@ export class LeagueSyncService implements LeagueSyncServicePort {
     // Derived from the existing capability objects: a connection whose credential mode is not
     // server-refreshable cannot be refreshed here, and pretending otherwise would either fetch
     // without authorization or dead-letter a job that can never succeed.
-    if (!providerSupportsServerRefresh(target.provider)) {
+    if (!connectionSupportsServerRefresh(target.provider, target.connectionCapabilities)) {
       return { state: "external-companion-required", provider: target.provider };
     }
 
     if (target.connectionHealth === "reauthorize" || target.connectionHealth === "disabled") {
       // Terminal, not retryable: no amount of backoff produces a valid credential.
-      if (target.provider === "yahoo") {
-        this.#emit({
-          event: "reauthorization-required",
-          provider: "yahoo",
-          connectionId,
-          leagueSeasonId: job.leagueSeasonId,
-        });
-      }
+      this.#emit({
+        event: "reauthorization-required",
+        provider: target.provider === "espn" ? "espn" : "yahoo",
+        connectionId,
+        leagueSeasonId: job.leagueSeasonId,
+      });
       return { state: "reauthorization-required", connectionId };
     }
 
@@ -241,27 +248,51 @@ export class LeagueSyncService implements LeagueSyncServicePort {
       now: this.#now(),
     });
     if (circuit.state === "open") {
-      if (target.provider === "yahoo") {
-        this.#emit({
-          event: "circuit-cooldown",
-          provider: "yahoo",
-          connectionId,
-          leagueSeasonId: job.leagueSeasonId,
-          retryAfterSeconds: circuit.retryAfterSeconds ?? 0,
-        });
-      }
+      this.#emit({
+        event: "circuit-cooldown",
+        provider: target.provider === "espn" ? "espn" : "yahoo",
+        connectionId,
+        leagueSeasonId: job.leagueSeasonId,
+        retryAfterSeconds: circuit.retryAfterSeconds ?? 0,
+      });
       return { state: "circuit-open", retryAfterSeconds: circuit.retryAfterSeconds ?? 0 };
     }
 
-    if (!this.#yahooSync) {
-      // A deployment without Yahoo credentials configured is a stated no-op, not a fault.
+    const providerSync =
+      target.provider === "yahoo"
+        ? this.#yahooSync
+        : target.provider === "espn"
+          ? this.#espnSessionSync
+          : undefined;
+    if (!providerSync) {
       return { state: "provider-unconfigured", provider: target.provider };
     }
 
-    let receipt;
+    let receipt: YahooSyncReceipt | EspnSessionSyncReceipt;
     try {
-      receipt = await this.#yahooSync.syncLeague(target.userId, connectionId, target.externalKey);
+      receipt =
+        target.provider === "espn"
+          ? await (providerSync as EspnSessionSyncPort).syncLeague(
+              target.userId,
+              connectionId,
+              job.leagueSeasonId,
+              context.signal,
+            )
+          : await (providerSync as YahooSyncPort).syncLeague(
+              target.userId,
+              connectionId,
+              target.externalKey,
+            );
     } catch (error) {
+      if (target.provider === "espn" && failureCode(error) === "REAUTHORIZATION_REQUIRED") {
+        this.#emit({
+          event: "reauthorization-required",
+          provider: "espn",
+          connectionId,
+          leagueSeasonId: job.leagueSeasonId,
+        });
+        return { state: "reauthorization-required", connectionId };
+      }
       const circuitFailure = await this.#circuit.recordFailure({
         connectionId,
         at: this.#now(),
@@ -270,7 +301,7 @@ export class LeagueSyncService implements LeagueSyncServicePort {
       });
       this.#emit({
         event: "sync-failed",
-        provider: "yahoo",
+        provider: target.provider === "espn" ? "espn" : "yahoo",
         connectionId,
         leagueSeasonId: job.leagueSeasonId,
         errorCode: failureCode(error),
@@ -291,22 +322,26 @@ export class LeagueSyncService implements LeagueSyncServicePort {
     await this.#circuit.recordSuccess(connectionId, this.#now());
     this.#emit({
       event: "sync-completed",
-      provider: "yahoo",
+      provider: target.provider === "espn" ? "espn" : "yahoo",
       connectionId,
       leagueSeasonId: receipt.leagueSeasonId,
       state: receipt.state,
       recordsWritten: receipt.recordsWritten,
     });
-    if (receipt.state === "accepted" && this.#afterYahooCommit) {
+    if (receipt.state === "accepted") {
       try {
-        await this.#afterYahooCommit(receipt);
+        if (target.provider === "espn") {
+          await this.#afterEspnCommit?.(receipt as EspnSessionSyncReceipt);
+        } else {
+          await this.#afterYahooCommit?.(receipt);
+        }
       } catch {
         // A committed provider artifact must not be retried because downstream notification or
         // queue infrastructure failed. Retrying would turn the same artifact into `unchanged` and
         // still not repair that downstream system.
         this.#emit({
           event: "after-commit-failed",
-          provider: "yahoo",
+          provider: target.provider === "espn" ? "espn" : "yahoo",
           connectionId,
           leagueSeasonId: receipt.leagueSeasonId,
         });
@@ -339,6 +374,7 @@ export class DrizzleLeagueSyncTargetReader implements LeagueSyncTargetReader {
         userId: providerConnections.userId,
         provider: leagueSeasons.provider,
         externalKey: leagueSeasons.externalKey,
+        connectionCapabilities: providerConnections.capabilities,
         connectionHealth: providerConnections.health,
         consecutiveFailures: providerConnections.consecutiveFailures,
         circuitOpenUntil: providerConnections.circuitOpenUntil,

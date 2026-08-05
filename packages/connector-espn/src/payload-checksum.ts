@@ -48,7 +48,7 @@ export function legacyBrowserEspnPayloadChecksum(payload: unknown): string {
 export function espnPayloadChecksumMatches(input: {
   readonly payload: unknown;
   readonly checksumSha256: string;
-  readonly authority: "browser-local" | "native-local";
+  readonly authority: "browser-local" | "native-local" | "server-session";
 }): boolean {
   if (canonicalEspnPayloadChecksumV1(input.payload) === input.checksumSha256) return true;
   return (

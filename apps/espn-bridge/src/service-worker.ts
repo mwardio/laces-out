@@ -4,6 +4,8 @@ import {
   isBridgeLiveDraftRequest,
   maintenanceStorageKey,
   pendingPairingStorageKey,
+  serverSessionPendingStorageKey,
+  serverSessionStatusStorageKey,
   statusStorageKey,
   summarizeBridgeResults,
   syncAlarmName,
@@ -16,6 +18,9 @@ import {
   type BridgePairingOfferResponse,
   type BridgeRequest,
   type BridgeResponse,
+  type BridgeServerSessionOfferResponse,
+  type BridgeServerSessionResponse,
+  type BridgeServerSessionStatus,
   type BridgeStatus,
   type BridgeStatusState,
 } from "./protocol.js";
@@ -52,6 +57,7 @@ import {
   type BridgeLiveDraftStatus,
   type LiveDraftUploadOutcome,
 } from "./live-draft/uplink.js";
+import { capturedEspnSessionFromCookies, type CapturedEspnSession } from "./session-credential.js";
 
 const ESPN_ORIGIN = "https://lm-api-reads.fantasy.espn.com";
 const MAX_ESPN_BYTES = 5 * 1024 * 1024;
@@ -88,6 +94,13 @@ const DEFAULT_STATUS: BridgeStatus = {
   lastSuccessfulAt: null,
   results: [],
 };
+const DEFAULT_SERVER_SESSION_STATUS: BridgeServerSessionStatus = {
+  state: "not-enabled",
+  message: "Always-on ESPN sync is not enabled.",
+  connectionId: null,
+  updatedAt: null,
+};
+const SERVER_SESSION_PENDING_TTL_MS = 10 * 60 * 1000;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -130,6 +143,38 @@ async function getStatus(): Promise<BridgeStatus> {
 
 async function setStatus(status: BridgeStatus): Promise<BridgeStatus> {
   await chrome.storage.local.set({ [statusStorageKey]: status });
+  return status;
+}
+
+function validServerSessionStatus(value: unknown): value is BridgeServerSessionStatus {
+  return (
+    isRecord(value) &&
+    ["not-enabled", "enabling", "enabled", "login-required", "unavailable", "error"].includes(
+      String(value.state),
+    ) &&
+    typeof value.message === "string" &&
+    value.message.length <= 240 &&
+    (value.connectionId === null ||
+      (typeof value.connectionId === "string" &&
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(
+          value.connectionId,
+        ))) &&
+    (value.updatedAt === null ||
+      (typeof value.updatedAt === "string" && Number.isFinite(Date.parse(value.updatedAt))))
+  );
+}
+
+async function getServerSessionStatus(): Promise<BridgeServerSessionStatus> {
+  const stored = await chrome.storage.local.get(serverSessionStatusStorageKey);
+  return validServerSessionStatus(stored[serverSessionStatusStorageKey])
+    ? stored[serverSessionStatusStorageKey]
+    : DEFAULT_SERVER_SESSION_STATUS;
+}
+
+async function setServerSessionStatus(
+  status: BridgeServerSessionStatus,
+): Promise<BridgeServerSessionStatus> {
+  await chrome.storage.local.set({ [serverSessionStatusStorageKey]: status });
   return status;
 }
 
@@ -770,6 +815,196 @@ async function runManualSynchronization(): Promise<BridgeStatus> {
   return status;
 }
 
+function sessionReply(status: BridgeServerSessionStatus, ok = true): BridgeServerSessionResponse {
+  return { ok, status };
+}
+
+async function captureEspnSessionFromCookieStore(): Promise<CapturedEspnSession | undefined> {
+  try {
+    const [swid, espnS2] = await Promise.all([
+      chrome.cookies.get({ url: "https://fantasy.espn.com/football/", name: "SWID" }),
+      chrome.cookies.get({ url: "https://fantasy.espn.com/football/", name: "espn_s2" }),
+    ]);
+    return capturedEspnSessionFromCookies(swid, espnS2, new Date().toISOString());
+  } catch {
+    return undefined;
+  }
+}
+
+async function pendingServerSessionEnable(): Promise<boolean> {
+  const stored = await chrome.storage.local.get(serverSessionPendingStorageKey);
+  const value = stored[serverSessionPendingStorageKey];
+  if (
+    !isRecord(value) ||
+    typeof value.requestedAt !== "string" ||
+    !Number.isFinite(Date.parse(value.requestedAt)) ||
+    Date.now() - Date.parse(value.requestedAt) >= SERVER_SESSION_PENDING_TTL_MS
+  ) {
+    if (value !== undefined) await chrome.storage.local.remove(serverSessionPendingStorageKey);
+    return false;
+  }
+  return true;
+}
+
+async function uploadServerSession(
+  configuration: BridgeConfiguration,
+  captured: CapturedEspnSession,
+): Promise<BridgeServerSessionResponse> {
+  let response: Response;
+  try {
+    response = await fetch(`${configuration.apiBaseUrl}/v1/bridge/espn/session-grants`, {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        Authorization: `Bridge ${configuration.deviceToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        swid: captured.swid,
+        espnS2: captured.espnS2,
+        capturedAt: captured.capturedAt,
+      }),
+      cache: "no-store",
+      credentials: "omit",
+      redirect: "error",
+      referrerPolicy: "no-referrer",
+    });
+  } catch {
+    const status = await setServerSessionStatus({
+      state: "error",
+      message: "Laces Out could not be reached. Try again.",
+      connectionId: null,
+      updatedAt: new Date().toISOString(),
+    });
+    return sessionReply(status, false);
+  }
+  if (!response.ok) {
+    const unavailable = response.status === 404 || response.status === 503;
+    const status = await setServerSessionStatus({
+      state: unavailable ? "unavailable" : "error",
+      message: unavailable
+        ? "This Laces Out instance does not offer always-on ESPN sync."
+        : response.status === 401 || response.status === 403
+          ? "Laces Out pairing was rejected. Pair this browser again."
+          : "Always-on ESPN sync could not be enabled.",
+      connectionId: null,
+      updatedAt: new Date().toISOString(),
+    });
+    return sessionReply(status, false);
+  }
+  const raw = await readBoundedText(response, 32 * 1024);
+  let body: unknown;
+  try {
+    body = JSON.parse(raw);
+  } catch {
+    body = undefined;
+  }
+  if (
+    !isRecord(body) ||
+    typeof body.connectionId !== "string" ||
+    !/^[0-9a-f-]{36}$/iu.test(body.connectionId)
+  ) {
+    const status = await setServerSessionStatus({
+      state: "error",
+      message: "Laces Out returned an invalid authorization response.",
+      connectionId: null,
+      updatedAt: new Date().toISOString(),
+    });
+    return sessionReply(status, false);
+  }
+  await chrome.storage.local.remove(serverSessionPendingStorageKey);
+  const status = await setServerSessionStatus({
+    state: "enabled",
+    message: "Always-on ESPN sync is enabled.",
+    connectionId: body.connectionId,
+    updatedAt: new Date().toISOString(),
+  });
+  return sessionReply(status);
+}
+
+async function captureServerSessionFromTab(tabId: number): Promise<BridgeServerSessionResponse> {
+  const configuration = await getConfiguration();
+  if (!configuration) {
+    return sessionReply(
+      await setServerSessionStatus({
+        state: "error",
+        message: "Pair this bridge with Laces Out first.",
+        connectionId: null,
+        updatedAt: new Date().toISOString(),
+      }),
+      false,
+    );
+  }
+  let tab: chrome.tabs.Tab | undefined;
+  try {
+    tab = await chrome.tabs.get(tabId);
+  } catch {
+    tab = undefined;
+  }
+  const tabUrl = tab?.url;
+  const captured =
+    typeof tabUrl === "string" && tabUrl.startsWith("https://fantasy.espn.com/football/")
+      ? await captureEspnSessionFromCookieStore()
+      : undefined;
+  if (!captured) {
+    return sessionReply(
+      await setServerSessionStatus({
+        state: "login-required",
+        message: "Sign in to ESPN in the opened tab to finish enabling always-on sync.",
+        connectionId: null,
+        updatedAt: new Date().toISOString(),
+      }),
+      false,
+    );
+  }
+  return uploadServerSession(configuration, captured);
+}
+
+async function beginServerSessionEnable(): Promise<BridgeServerSessionResponse> {
+  const configuration = await getConfiguration();
+  if (!configuration) {
+    return sessionReply(
+      await setServerSessionStatus({
+        state: "error",
+        message: "Pair this bridge with Laces Out first.",
+        connectionId: null,
+        updatedAt: new Date().toISOString(),
+      }),
+      false,
+    );
+  }
+  const requestedAt = new Date().toISOString();
+  await chrome.storage.local.set({ [serverSessionPendingStorageKey]: { requestedAt } });
+  await setServerSessionStatus({
+    state: "enabling",
+    message: "Checking your ESPN sign-in…",
+    connectionId: null,
+    updatedAt: requestedAt,
+  });
+  const tabs = await chrome.tabs.query({ url: "https://fantasy.espn.com/football/*" });
+  const tab = tabs.find((candidate) => candidate.active && candidate.id !== undefined) ?? tabs[0];
+  if (tab?.id !== undefined) return captureServerSessionFromTab(tab.id);
+  await chrome.tabs.create({ url: "https://fantasy.espn.com/football/", active: true });
+  return sessionReply(await getServerSessionStatus());
+}
+
+async function continueServerSessionEnable(
+  sender: chrome.runtime.MessageSender,
+): Promise<BridgeServerSessionResponse> {
+  if (!(await pendingServerSessionEnable())) return sessionReply(await getServerSessionStatus());
+  const tabId = sender.tab?.id;
+  const senderUrl = sender.url ?? sender.tab?.url;
+  if (
+    sender.id !== chrome.runtime.id ||
+    tabId === undefined ||
+    typeof senderUrl !== "string" ||
+    !senderUrl.startsWith("https://fantasy.espn.com/football/")
+  ) {
+    return sessionReply(await getServerSessionStatus(), false);
+  }
+  return captureServerSessionFromTab(tabId);
+}
+
 // ---------------------------------------------------------------------------------------------
 // Live ESPN draft feed
 //
@@ -1018,13 +1253,25 @@ async function restoreLiveDraftQueue(): Promise<void> {
   }
 }
 
-async function handleRequest(request: BridgeRequest): Promise<BridgeResponse> {
+async function handleRequest(
+  request: BridgeRequest,
+  sender: chrome.runtime.MessageSender,
+): Promise<BridgeResponse | BridgeServerSessionResponse> {
   if (request.type === "GET_STATUS") return { ok: true, status: await getStatus() };
+  if (request.type === "GET_SERVER_SESSION_STATUS") {
+    return sessionReply(await getServerSessionStatus());
+  }
+  if (request.type === "ENABLE_SERVER_SESSION") return beginServerSessionEnable();
+  if (request.type === "ESPN_SESSION_PAGE_READY") {
+    return continueServerSessionEnable(sender);
+  }
   if (request.type === "DISCONNECT") {
     await chrome.storage.local.remove([
       configurationStorageKey,
       statusStorageKey,
       maintenanceStorageKey,
+      serverSessionStatusStorageKey,
+      serverSessionPendingStorageKey,
     ]);
     await chrome.alarms.clear(syncAlarmName);
     return { ok: true, status: DEFAULT_STATUS };
@@ -1115,10 +1362,31 @@ async function handlePairingOffer(
 }
 
 chrome.runtime.onMessageExternal.addListener(
-  (message: unknown, sender, sendResponse: (response: BridgePairingOfferResponse) => void) => {
-    void handlePairingOffer(message, sender.origin)
+  (
+    message: unknown,
+    sender,
+    sendResponse: (response: BridgePairingOfferResponse | BridgeServerSessionOfferResponse) => void,
+  ) => {
+    void (async () => {
+      if (isRecord(message) && message.type === "ENABLE_SERVER_SESSION") {
+        const configuration = await getConfiguration();
+        if (!configuration || sender.origin !== configuration.apiBaseUrl) {
+          return sessionReply(
+            {
+              state: "error",
+              message: "This page is not the paired Laces Out instance.",
+              connectionId: null,
+              updatedAt: new Date().toISOString(),
+            },
+            false,
+          );
+        }
+        return beginServerSessionEnable();
+      }
+      return handlePairingOffer(message, sender.origin);
+    })()
       .then(sendResponse)
-      .catch(() => sendResponse({ ok: false, reason: "Pairing offer failed" }));
+      .catch(() => sendResponse({ ok: false, reason: "Bridge request failed" }));
     return true;
   },
 );
@@ -1127,7 +1395,9 @@ chrome.runtime.onMessage.addListener(
   (
     request: BridgeRequest,
     sender,
-    sendResponse: (response: BridgeResponse | BridgeLiveDraftResponse) => void,
+    sendResponse: (
+      response: BridgeResponse | BridgeLiveDraftResponse | BridgeServerSessionResponse,
+    ) => void,
   ) => {
     if (isBridgeLiveDraftRequest(request)) {
       void handleLiveDraftRequest(request, sender)
@@ -1144,9 +1414,30 @@ chrome.runtime.onMessage.addListener(
         });
       return true;
     }
-    void handleRequest(request)
+    void handleRequest(request, sender)
       .then(sendResponse)
       .catch(async (error: unknown) => {
+        if (
+          request.type === "ENABLE_SERVER_SESSION" ||
+          request.type === "GET_SERVER_SESSION_STATUS" ||
+          request.type === "ESPN_SESSION_PAGE_READY"
+        ) {
+          sendResponse(
+            sessionReply(
+              await setServerSessionStatus({
+                state: "error",
+                message:
+                  error instanceof Error
+                    ? error.message.slice(0, 180)
+                    : "Always-on sync request failed",
+                connectionId: null,
+                updatedAt: new Date().toISOString(),
+              }),
+              false,
+            ),
+          );
+          return;
+        }
         const status = await setStatus({
           ...DEFAULT_STATUS,
           state: "error",

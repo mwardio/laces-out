@@ -1,6 +1,17 @@
 import { describe, expect, it } from "vitest";
 
-import { maximumEspnBridgeLeagues, parseEspnLeagueIds } from "./espn-league-ids.js";
+import {
+  currentEspnSeason,
+  maximumEspnBridgeLeagues,
+  parseEspnLeagueIds,
+} from "./espn-league-ids.js";
+
+describe("currentEspnSeason", () => {
+  it("uses the previous year before March and the current year afterward", () => {
+    expect(currentEspnSeason(new Date("2027-02-15T12:00:00Z"))).toBe(2026);
+    expect(currentEspnSeason(new Date("2027-03-01T12:00:00Z"))).toBe(2027);
+  });
+});
 
 describe("parseEspnLeagueIds", () => {
   it("accepts a unique comma-or-whitespace-separated set", () => {

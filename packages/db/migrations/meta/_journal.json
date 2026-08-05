@@ -253,6 +253,13 @@
       "when": 1785862800000,
       "tag": "0035_yahoo_native_connect",
       "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "7",
+      "when": 1785949200000,
+      "tag": "0036_espn_server_session",
+      "breakpoints": true
     }
   ]
 }

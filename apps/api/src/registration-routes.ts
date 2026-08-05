@@ -39,7 +39,12 @@ export function registerRegistrationRoutes(
         });
       }
       const input = registrationBodySchema.parse(request.body);
-      const result = await options.registration.register(input);
+      const result = await options.registration.register({
+        displayName: input.displayName,
+        email: input.email,
+        password: input.password,
+        ...(input.inviteCode === undefined ? {} : { inviteCode: input.inviteCode }),
+      });
       if (!result) {
         // Deliberately identical for an invalid code and an existing email.
         return reply.code(400).type("application/problem+json").send({

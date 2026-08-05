@@ -39,6 +39,9 @@ function reader(target: Partial<LeagueSyncTarget> | null = {}) {
               userId: "user-1",
               provider: "yahoo",
               externalKey: "nfl.l.12345",
+              connectionCapabilities: {
+                authentication: ["oauth2-authorization-code-pkce"],
+              },
               connectionHealth: "healthy",
               consecutiveFailures: 0,
               circuitOpenUntil: null,
@@ -162,11 +165,15 @@ describe("LeagueSyncService", () => {
     expect(second).toEqual({ state: "unchanged", syncRunId: "run-1" });
   });
 
-  it("never fetches ESPN and reports that the companion is required", async () => {
+  it("never fetches browser-only ESPN and reports that the companion is required", async () => {
     const syncLeague = vi.fn(() => Promise.reject(new Error("must not be called")));
     const circuit = circuitStore();
     const service = new LeagueSyncService({
-      targets: reader({ provider: "espn", externalKey: "1234567" }),
+      targets: reader({
+        provider: "espn",
+        externalKey: "1234567",
+        connectionCapabilities: { authentication: ["browser-session"] },
+      }),
       yahooSync: { syncLeague } as never,
       circuit,
       now: () => now,
@@ -177,6 +184,38 @@ describe("LeagueSyncService", () => {
     expect(outcome).toEqual({ state: "external-companion-required", provider: "espn" });
     expect(syncLeague).not.toHaveBeenCalled();
     expect(circuit.recordFailure).not.toHaveBeenCalled();
+  });
+
+  it("routes an ESPN server-session connection through the unattended sync port", async () => {
+    const syncLeague = vi.fn(() =>
+      Promise.resolve({
+        state: "accepted" as const,
+        syncRunId: "espn-session-run-1",
+        recordsWritten: 18,
+      }),
+    );
+    const service = new LeagueSyncService({
+      targets: reader({
+        provider: "espn",
+        externalKey: "1234567",
+        connectionCapabilities: { authentication: ["server-session-cookie"] },
+      }),
+      espnSessionSync: { syncLeague } as never,
+      circuit: circuitStore(),
+      now: () => now,
+    });
+
+    await expect(service.runLeagueSync(job({ reason: "scheduled" }), context())).resolves.toEqual({
+      state: "synced",
+      recordsWritten: 18,
+      syncRunId: "espn-session-run-1",
+    });
+    expect(syncLeague).toHaveBeenCalledWith(
+      "user-1",
+      "connection-1",
+      "league-season-1",
+      expect.any(AbortSignal),
+    );
   });
 
   it("routes an explicit ESPN server-direct job without resolving a user connection", async () => {

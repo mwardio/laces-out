@@ -23,6 +23,9 @@ import {
   espnRefreshAgentPollResponseSchema,
   espnLiveDraftIngestRequestSchema,
   espnLiveDraftIngestResponseSchema,
+  espnSessionConnectionListSchema,
+  espnSessionGrantRequestSchema,
+  espnSessionGrantResponseSchema,
   espnSupplementalBridgeSnapshotSchema,
   ESPN_LIVE_DRAFT_LIMITS,
   healthResponseSchema,
@@ -41,6 +44,9 @@ import {
   type EspnRefreshAgentPollResponse,
   type EspnLiveDraftIngestRequest,
   type EspnLiveDraftIngestResponse,
+  type EspnSessionConnectionList,
+  type EspnSessionGrantRequest,
+  type EspnSessionGrantResponse,
   type EspnSupplementalBridgeSnapshot,
   type LeagueDashboard,
   type LeagueListResponse,
@@ -248,6 +254,20 @@ export interface EspnLiveDraftPort {
   ): Promise<EspnLiveDraftIngestResponse>;
 }
 
+export interface EspnSessionConnectionPort {
+  grantFromBridge(
+    deviceToken: string,
+    input: EspnSessionGrantRequest,
+    correlationId: string,
+  ): Promise<EspnSessionGrantResponse>;
+  listConnections(userId: string): Promise<EspnSessionConnectionList>;
+  disconnectConnection(
+    userId: string,
+    connectionId: string,
+    correlationId: string,
+  ): Promise<boolean>;
+}
+
 export interface LeagueDashboardPort {
   listLeagues(userId: string): Promise<LeagueListResponse>;
   getDashboard(userId: string, leagueId: string): Promise<LeagueDashboard | undefined>;
@@ -267,6 +287,7 @@ export interface BuildAppOptions {
   readonly espnBridge?: EspnBridgePort;
   readonly espnRefresh?: EspnRefreshPort;
   readonly espnLiveDraft?: EspnLiveDraftPort;
+  readonly espnSessionConnections?: EspnSessionConnectionPort;
   readonly draftStream?: DraftStreamHub;
   readonly invitations?: InvitationPort;
   readonly decisions?: InSeasonDecisionPort;
@@ -513,6 +534,10 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   ) {
     mobileCapabilities.push("yahoo-automated-sync");
   }
+  if (environment.ESPN_SERVER_SESSION_SYNC_ENABLED && options.espnSessionConnections) {
+    mobileCapabilities.push("espn-native-session-grant-v1");
+    mobileCapabilities.push("espn-server-session-v1");
+  }
   const app = Fastify({
     logger:
       options.logger === false
@@ -527,7 +552,10 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
                 "*.access_token",
                 "*.refresh_token",
                 "*.espn_s2",
+                "*.espnS2",
                 "*.swid",
+                "req.body.espnS2",
+                "req.body.swid",
                 "req.body.token",
                 // A push endpoint and its two keys are bearer material for that browser's push
                 // service. They are stored, used once per send, and never written to a log.
@@ -578,6 +606,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     "/v1/bridge/espn/snapshots",
     "/v1/bridge/espn/supplemental",
     "/v1/bridge/espn/live-draft",
+    "/v1/bridge/espn/session-grants",
     "/v1/bridge/espn/refresh-requests/poll",
   ];
   const espnBridgeAttemptPath = /^\/v1\/bridge\/espn\/refresh-requests\/[0-9a-f-]{36}\/attempts$/iu;
@@ -604,8 +633,10 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
         // An allowed origin is reflected back so each domain is told it — and only it — is
         // permitted. `@fastify/cors` always emits `Vary: Origin` for a delegator, so a shared cache
         // cannot serve one domain's allowance to another.
+        // Bridge clients authenticate with a scoped device token and use native/extension host
+        // permissions. Do not expose these endpoints to scripts running on an ESPN page.
         origin: fromEspnBridge
-          ? "https://fantasy.espn.com"
+          ? false
           : (allowedWebOrigin(request.headers.origin) ?? environment.WEB_URL),
         credentials: !fromEspnBridge,
         methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
@@ -1196,6 +1227,106 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     return espnBridgeDeviceRevokeResponseSchema.parse(revoked);
   });
 
+  app.get("/v1/connections/espn/sessions", async (request, reply) => {
+    if (!request.currentUser) {
+      return reply.code(401).type("application/problem+json").send({
+        type: "https://fantasy.local/problems/unauthorized",
+        title: "Authentication required",
+        status: 401,
+        correlationId: request.id,
+      });
+    }
+    if (!options.espnSessionConnections) {
+      return espnSessionConnectionListSchema.parse({ available: false, connections: [] });
+    }
+    return espnSessionConnectionListSchema.parse(
+      await options.espnSessionConnections.listConnections(request.currentUser.id),
+    );
+  });
+
+  const espnSessionConnectionPathSchema = z.object({ connectionId: z.string().uuid() });
+  app.delete("/v1/connections/espn/sessions/:connectionId", async (request, reply) => {
+    if (!request.currentUser) {
+      return reply.code(401).type("application/problem+json").send({
+        type: "https://fantasy.local/problems/unauthorized",
+        title: "Authentication required",
+        status: 401,
+        correlationId: request.id,
+      });
+    }
+    if (!options.espnSessionConnections) {
+      return reply.code(503).type("application/problem+json").send({
+        type: "https://fantasy.local/problems/espn-session-unavailable",
+        title: "Always-on ESPN sync is not enabled",
+        status: 503,
+        correlationId: request.id,
+      });
+    }
+    const { connectionId } = espnSessionConnectionPathSchema.parse(request.params);
+    const removed = await options.espnSessionConnections.disconnectConnection(
+      request.currentUser.id,
+      connectionId,
+      request.id,
+    );
+    if (!removed) {
+      return reply.code(404).type("application/problem+json").send({
+        type: "https://fantasy.local/problems/espn-session-not-found",
+        title: "ESPN connection not found",
+        status: 404,
+        correlationId: request.id,
+      });
+    }
+    return reply.code(204).send();
+  });
+
+  app.post(
+    "/v1/bridge/espn/session-grants",
+    {
+      bodyLimit: 8 * 1024,
+      config: {
+        rateLimit: {
+          max: 6,
+          timeWindow: "10 minutes",
+          keyGenerator: (request) => bridgeDeviceRateLimitKey(request, "session-grant"),
+        },
+      },
+    },
+    async (request, reply) => {
+      if (!options.espnSessionConnections) {
+        return reply.code(503).type("application/problem+json").send({
+          type: "https://fantasy.local/problems/espn-session-unavailable",
+          title: "Always-on ESPN sync is not enabled",
+          status: 503,
+          correlationId: request.id,
+        });
+      }
+      const authorization = request.headers.authorization;
+      const match = /^Bridge ([A-Za-z0-9._~-]{32,512})$/u.exec(authorization ?? "");
+      if (!match?.[1]) {
+        return reply.code(401).type("application/problem+json").send({
+          type: "https://fantasy.local/problems/bridge-unauthorized",
+          title: "Valid bridge device authorization is required",
+          status: 401,
+          correlationId: request.id,
+        });
+      }
+      const input = espnSessionGrantRequestSchema.parse(request.body);
+      const result = espnSessionGrantResponseSchema.parse(
+        await options.espnSessionConnections.grantFromBridge(match[1], input, request.id),
+      );
+      request.log.info(
+        {
+          provider: "espn",
+          operation: "server-session-enabled",
+          connectionId: result.connectionId,
+          linkedLeagueCount: result.linkedLeagueCount,
+        },
+        "always-on ESPN sync enabled",
+      );
+      return reply.code(201).send(result);
+    },
+  );
+
   app.post(
     "/v1/bridge/espn/snapshots",
     {
@@ -1631,7 +1762,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
           title: "Use the provider-specific league sync",
           status: 409,
           detail:
-            "Yahoo refresh is available under Connections; ESPN sync comes from the one-click bookmark or optional Chrome companion. Projection imports are handled under Projections.",
+            "Yahoo refresh is available under League Sync; ESPN refresh uses a paired Chrome companion or an authorized always-on session. Projection imports are handled under Projections.",
           correlationId: request.id,
         });
       }

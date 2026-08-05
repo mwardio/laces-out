@@ -16,6 +16,7 @@ import {
   matchupSnapshots,
   playerExternalIds,
   players,
+  providerLeagueLinks,
   rosterEntries,
   rosterSlotRules,
   rosterSnapshots,
@@ -47,6 +48,12 @@ export type EspnSyncAuthority =
   | {
       readonly mode: "server-direct";
       readonly leagueSeasonId: string;
+    }
+  | {
+      readonly mode: "server-session";
+      readonly actorUserId: string;
+      readonly connectionId: string;
+      readonly leagueSeasonId: string;
     };
 
 export interface PersistEspnSyncInput {
@@ -56,7 +63,7 @@ export interface PersistEspnSyncInput {
   readonly checksumAliases?: readonly string[];
   readonly effectiveAt: Date;
   readonly idempotencyKey: string;
-  readonly kind: "espn-bridge" | "espn-direct";
+  readonly kind: "espn-bridge" | "espn-direct" | "espn-session";
   readonly now: Date;
 }
 
@@ -222,7 +229,41 @@ type EspnPersistenceTransaction = Parameters<Parameters<Database["transaction"]>
 
 function fulfillmentMode(authority: EspnSyncAuthority): EspnRefreshFulfillmentMode {
   if (authority.mode === "server-direct") return "server-direct";
+  if (authority.mode === "server-session") return "server-session";
   return authority.clientKind === "ios-app" ? "native-agent" : "chrome-agent";
+}
+
+/**
+ * A session grant can precede the bridge's first accepted league snapshot. Once that snapshot has
+ * established the canonical season, attach the already encrypted account connection without
+ * granting any additional membership or scope.
+ */
+async function linkCapturedBridgeConnection(
+  transaction: EspnPersistenceTransaction,
+  authority: EspnSyncAuthority,
+  leagueSeasonId: string,
+  now: Date,
+): Promise<void> {
+  if (authority.mode !== "bridge") return;
+  const [device] = await transaction
+    .select({ connectionId: bridgeDevices.connectionId })
+    .from(bridgeDevices)
+    .where(eq(bridgeDevices.id, authority.bridgeDeviceId))
+    .limit(1);
+  if (!device?.connectionId) return;
+  await transaction
+    .insert(providerLeagueLinks)
+    .values({
+      connectionId: device.connectionId,
+      leagueSeasonId,
+      discoveredAt: now,
+      updatedAt: now,
+    })
+    .onConflictDoNothing();
+  await transaction
+    .update(leagueSeasons)
+    .set({ connectionId: device.connectionId, updatedAt: now })
+    .where(and(eq(leagueSeasons.id, leagueSeasonId), isNull(leagueSeasons.connectionId)));
 }
 
 /**
@@ -394,9 +435,9 @@ export class DrizzleEspnSyncPersistence {
         throw new Error("The core ESPN league snapshot must be stored before supplemental data");
       }
 
-      if (authority.mode === "server-direct") {
+      if (authority.mode !== "bridge") {
         if (authority.leagueSeasonId !== season.id) {
-          throw new Error("ESPN supplemental data did not match the direct sync target");
+          throw new Error("ESPN supplemental data did not match the server sync target");
         }
       } else {
         const [scope] = await transaction
@@ -507,6 +548,7 @@ export class DrizzleEspnSyncPersistence {
             .set({ lastSeenAt: now })
             .where(eq(bridgeDevices.id, authority.bridgeDeviceId));
         }
+        await linkCapturedBridgeConnection(transaction, authority, season.id, now);
         await recordAcceptedArtifact(transaction, {
           authority,
           artifact: bundle.kind,
@@ -540,6 +582,7 @@ export class DrizzleEspnSyncPersistence {
       const [run] = await transaction
         .insert(syncRuns)
         .values({
+          connectionId: authority.mode === "server-session" ? authority.connectionId : null,
           leagueSeasonId: season.id,
           kind: `espn-supplemental:${bundle.kind}`,
           state: "processing",
@@ -586,6 +629,7 @@ export class DrizzleEspnSyncPersistence {
           .set({ lastSeenAt: now })
           .where(eq(bridgeDevices.id, authority.bridgeDeviceId));
       }
+      await linkCapturedBridgeConnection(transaction, authority, season.id, now);
       await recordAcceptedArtifact(transaction, {
         authority,
         artifact: bundle.kind,
@@ -632,11 +676,14 @@ export class DrizzleEspnSyncPersistence {
       let actorIsAnchoredOwner = false;
       let actorExistingMembershipRole: LeagueMembershipRole | null = null;
       if (existingSeason) {
-        if (authority.mode === "server-direct" && authority.leagueSeasonId !== existingSeason.id) {
-          throw new Error("ESPN snapshot did not match the direct sync target");
+        if (authority.mode !== "bridge" && authority.leagueSeasonId !== existingSeason.id) {
+          throw new Error("ESPN snapshot did not match the server sync target");
         }
         if (authority.mode === "server-direct" && input.kind !== "espn-direct") {
           throw new Error("Server-direct authority requires an ESPN direct sync kind");
+        }
+        if (authority.mode === "server-session" && input.kind !== "espn-session") {
+          throw new Error("Server-session authority requires an ESPN session sync kind");
         }
         if (authority.mode === "bridge") {
           const [access] = await transaction
@@ -700,7 +747,7 @@ export class DrizzleEspnSyncPersistence {
             .where(
               and(
                 eq(fantasyTeams.leagueSeasonId, existingSeason.id),
-                inArray(syncRuns.kind, ["espn-bridge", "espn-direct"]),
+                inArray(syncRuns.kind, ["espn-bridge", "espn-direct", "espn-session"]),
                 eq(syncRuns.state, "succeeded"),
               ),
             )
@@ -770,6 +817,7 @@ export class DrizzleEspnSyncPersistence {
             .set({ lastSeenAt: now })
             .where(eq(bridgeDevices.id, authority.bridgeDeviceId));
         }
+        await linkCapturedBridgeConnection(transaction, authority, season.id, now);
         await recordAcceptedArtifact(transaction, {
           authority,
           artifact: "core",
@@ -796,6 +844,7 @@ export class DrizzleEspnSyncPersistence {
       const [run] = await transaction
         .insert(syncRuns)
         .values({
+          connectionId: authority.mode === "server-session" ? authority.connectionId : null,
           kind: input.kind,
           state: "processing",
           idempotencyKey: input.idempotencyKey,
@@ -830,8 +879,8 @@ export class DrizzleEspnSyncPersistence {
           })
           .where(eq(leagueSeasons.id, leagueSeasonId));
       } else {
-        if (authority.mode === "server-direct") {
-          throw new Error("Server-direct ESPN sync cannot create a league season");
+        if (authority.mode !== "bridge") {
+          throw new Error("Server ESPN sync cannot create a league season");
         }
         const [created] = await transaction
           .insert(leagues)
@@ -867,7 +916,6 @@ export class DrizzleEspnSyncPersistence {
           .set({ leagueId, season: bundle.league.season })
           .where(eq(bridgeDeviceLeagues.id, authority.bridgeScopeId));
       }
-
       // League settings are a complete snapshot. Delete-and-reinsert is safe because the
       // surrounding transaction preserves the prior rules if any later write fails.
       await transaction.delete(scoringRules).where(eq(scoringRules.leagueSeasonId, leagueSeasonId));
@@ -1106,6 +1154,7 @@ export class DrizzleEspnSyncPersistence {
           .set({ lastSeenAt: now })
           .where(eq(bridgeDevices.id, authority.bridgeDeviceId));
       }
+      await linkCapturedBridgeConnection(transaction, authority, leagueSeasonId, now);
       await recordAcceptedArtifact(transaction, {
         authority,
         artifact: "core",

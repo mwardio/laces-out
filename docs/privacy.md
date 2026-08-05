@@ -1,6 +1,6 @@
 # Privacy policy template
 
-Effective: 2026-08-03
+Effective: 2026-08-05
 
 Laces Out may be used through the official hosted deployment or a self-hosted server. The person or
 organization operating the selected deployment controls its database, encrypted backups, provider
@@ -11,8 +11,9 @@ AI providers beyond the implemented Film room, or other data recipients.
 The application stores member identity and password/session hashes; league settings, teams,
 rosters, standings, matchups, and draft events; user rankings, notes, shares, and recommendation
 inputs; stored Weekly Reckoning recaps and League Intel notes; encrypted Yahoo authorization
-material; ESPN league snapshots; and bounded refresh-intent, attempt, artifact-freshness, and audit
-records. ESPN refresh metadata can include the request state, fulfillment mode, artifact families,
+material; encrypted ESPN session authorization when a member explicitly enables always-on sync;
+ESPN league snapshots; and bounded refresh-intent, attempt, artifact-freshness, and audit records.
+ESPN refresh metadata can include the request state, fulfillment mode, artifact families,
 timestamps, sanitized error code, and sync-device label, but never an ESPN response body or device
 token. Logs are configured to redact passwords, session material, OAuth
 credentials, authorization headers, and known ESPN credential fields.
@@ -57,11 +58,15 @@ SQL, or perform any provider change. Its bounded result may be sent back to the 
 as part of that request.
 
 Yahoo authorization occurs at Yahoo. Laces Out uses encrypted Yahoo tokens only for read-only
-fantasy synchronization. An ESPN sync agent uses the ESPN session locally on the authorized device
-and uploads bounded league data, never the ESPN password or cookie values. An operator-enabled
+fantasy synchronization. ESPN device-only companion sync uses the session locally and uploads
+bounded league data. If both the operator and member enable always-on ESPN sync, an authorized paired client sends
+`SWID` and `espn_s2` once over HTTPS; Laces Out stores them in a purpose-bound encrypted credential
+envelope and uses them only for fixed, read-only fantasy endpoints. Chrome obtains them from the
+existing ESPN session; a compatible native app keeps credential entry on an ESPN-hosted sign-in
+page. The ESPN password is never collected. The member can revoke this connection from League Sync,
+expiration requires explicit renewal, and self-hosted operators can disable the feature entirely. An operator-enabled
 public-direct refresh sends no member or ESPN credential and can update only an already-admitted,
-exactly matching public league season. The path is unofficial, default-off, and separately
-evidence-gated by artifact family.
+exactly matching public league season. All ESPN server-side paths are unofficial and default off.
 
 Data is used to operate the deployment, synchronize authorized leagues, provide league-wide facts
 to authorized league members, generate user-specific analysis, and secure or troubleshoot the
@@ -115,7 +120,7 @@ label, token, and cross-user attempt provenance are not included.
 
 Every export query is an allowlist. It never returns password hashes; session, invitation, bridge,
 pairing, or share-token hashes; OAuth state or PKCE verifiers; encrypted Yahoo credentials; push
-endpoints or encryption keys; browser-handoff tokens; AI key envelopes, fingerprints,
+endpoints or encryption keys; browser-handoff tokens; encrypted ESPN session authorization; AI key envelopes, fingerprints,
 provider-account hashes, or provider request hashes. The export response is marked `no-store` and
 downloaded as JSON.
 

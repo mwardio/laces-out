@@ -1,6 +1,4 @@
-import { ESPN_BROWSER_BRIDGE_CAPABILITIES } from "@fantasy/connector-espn";
-import { YAHOO_CAPABILITIES } from "@fantasy/connector-yahoo";
-import type { AuthenticationCapability, ProviderCapabilities } from "@fantasy/connectors";
+import type { AuthenticationCapability } from "@fantasy/connectors";
 import type { ProviderName } from "@fantasy/db";
 
 /**
@@ -27,26 +25,33 @@ const CIRCUIT_MAX_COOLDOWN_SECONDS = 60 * 60;
 
 /**
  * The credential mode that lets a server refresh a league on the user's behalf. ESPN advertises
- * `browser-session`, so its credential never reaches Laces Out and no server-initiated read is
- * possible (ADR 0002); Yahoo advertises the PKCE authorization-code flow, whose refresh token the
- * server holds.
+ * a replayable, explicitly authorized credential. Browser-only ESPN devices are not provider
+ * connections and therefore never enter this circuit.
  */
-const SERVER_REFRESHABLE_AUTHENTICATION: AuthenticationCapability =
-  "oauth2-authorization-code-pkce";
-
-const providerCapabilities: Partial<Record<ProviderName, ProviderCapabilities>> = {
-  yahoo: YAHOO_CAPABILITIES,
-  espn: ESPN_BROWSER_BRIDGE_CAPABILITIES,
+const SERVER_REFRESHABLE_AUTHENTICATION: Readonly<
+  Record<"yahoo" | "espn", AuthenticationCapability>
+> = {
+  yahoo: "oauth2-authorization-code-pkce",
+  espn: "server-session-cookie",
 };
 
 /**
- * Derived from the existing capability objects rather than a new provider registry. A provider is
- * server-refreshable exactly when it advertises a credential the server can hold and replay.
+ * Decide from the stored connection capability, not the provider name. ESPN can have browser-only,
+ * public, and encrypted server-session connections at the same time; treating every ESPN row as
+ * replayable would send browser-only work into a server credential path that can never succeed.
  */
-export function providerSupportsServerRefresh(provider: ProviderName): boolean {
-  const capabilities = providerCapabilities[provider];
-  if (!capabilities) return false;
-  return capabilities.authentication.includes(SERVER_REFRESHABLE_AUTHENTICATION);
+export function connectionSupportsServerRefresh(
+  provider: ProviderName,
+  capabilities: unknown,
+): boolean {
+  if (provider !== "yahoo" && provider !== "espn") return false;
+  if (capabilities === null || typeof capabilities !== "object" || Array.isArray(capabilities)) {
+    return false;
+  }
+  if (!("authentication" in capabilities)) return false;
+  const { authentication } = capabilities;
+  if (!Array.isArray(authentication)) return false;
+  return authentication.includes(SERVER_REFRESHABLE_AUTHENTICATION[provider]);
 }
 
 export interface ConnectionCircuitState {

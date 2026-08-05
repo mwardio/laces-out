@@ -113,6 +113,52 @@ export interface PairingOfferOutcome {
   readonly extensionId?: string;
 }
 
+export interface ServerSessionOfferOutcome {
+  readonly ok: boolean;
+  readonly extensionId?: string;
+  readonly state?: string;
+  readonly message?: string;
+}
+
+function offerServerSessionToExtension(
+  runtime: NonNullable<ReturnType<typeof chromeRuntime>>,
+  extensionId: string,
+): Promise<ServerSessionOfferOutcome> {
+  return new Promise((resolve) => {
+    try {
+      runtime.sendMessage?.(extensionId, { type: "ENABLE_SERVER_SESSION" }, (response: unknown) => {
+        void runtime.lastError;
+        if (typeof response !== "object" || response === null) {
+          resolve({ ok: false });
+          return;
+        }
+        const record = response as {
+          ok?: unknown;
+          status?: { state?: unknown; message?: unknown };
+        };
+        resolve({
+          ok: record.ok === true,
+          extensionId,
+          ...(typeof record.status?.state === "string" ? { state: record.status.state } : {}),
+          ...(typeof record.status?.message === "string" ? { message: record.status.message } : {}),
+        });
+      });
+    } catch {
+      resolve({ ok: false });
+    }
+  });
+}
+
+export async function sendServerSessionOffer(): Promise<ServerSessionOfferOutcome> {
+  const runtime = chromeRuntime();
+  if (!runtime) return { ok: false };
+  for (const extensionId of bridgeExtensionIds()) {
+    const outcome = await offerServerSessionToExtension(runtime, extensionId);
+    if (outcome.ok || outcome.state !== undefined) return outcome;
+  }
+  return { ok: false };
+}
+
 // Tries each known extension ID in order, resolving on the first that accepts
 // the offer. Resolves { ok: false } if none respond (extension not installed).
 export async function sendPairingOffer(payload: PairingOfferPayload): Promise<PairingOfferOutcome> {

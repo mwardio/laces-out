@@ -3,7 +3,11 @@ export type ProviderId = "yahoo" | "espn";
 export type ProviderAuthority = "official" | "unofficial" | "manual";
 
 export type AuthenticationCapability =
-  "oauth2-authorization-code-pkce" | "browser-session" | "public-none" | "manual-import";
+  | "oauth2-authorization-code-pkce"
+  | "browser-session"
+  | "server-session-cookie"
+  | "public-none"
+  | "manual-import";
 
 export type DraftReadCapability = "none" | "completed" | "polling-unverified" | "live";
 
@@ -61,7 +65,7 @@ export function defineProviderCapabilities(
   if (
     capabilities.accountData === "authorized-private" &&
     !capabilities.authentication.some((mode) =>
-      ["oauth2-authorization-code-pkce", "browser-session"].includes(mode),
+      ["oauth2-authorization-code-pkce", "browser-session", "server-session-cookie"].includes(mode),
     )
   ) {
     throw new TypeError("Private account data requires an authorized authentication mode");

@@ -112,7 +112,7 @@ const knownProTeamSchema = z
 const commonEnvelopeShape = {
   schemaVersion: z.literal(ESPN_SUPPLEMENTAL_CONTRACT_VERSION),
   provider: z.literal("espn"),
-  authority: z.enum(["browser-local", "native-local"]),
+  authority: z.enum(["browser-local", "native-local", "server-session"]),
   readOnly: z.literal(true),
   leagueId: z.string().regex(/^\d{1,20}$/u),
   season: z.number().int().min(2019).max(2100),
@@ -581,7 +581,10 @@ function commonContext(envelope: EspnSupplementalEnvelopeV1) {
     providerLeagueId: envelope.leagueId,
     season: envelope.season,
     provenance: {
-      mode: "browser-local" as const,
+      mode:
+        envelope.authority === "server-session"
+          ? ("server-session" as const)
+          : ("browser-local" as const),
       fetchedAt: envelope.capturedAt,
       endpoint: envelope.endpoint,
       artifactChecksumSha256: envelope.checksumSha256,

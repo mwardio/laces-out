@@ -4,6 +4,8 @@ import { createDatabase } from "@fantasy/db";
 import { DrizzleInSeasonDecisionRepository, InSeasonDecisionService } from "@fantasy/decisions";
 import {
   DrizzleYahooSyncRepository,
+  EspnSessionConnectionService,
+  EspnSessionSyncService,
   YahooConnectionService,
   YahooSyncService,
 } from "@fantasy/league-sync";
@@ -107,10 +109,8 @@ const notificationSweepService = createNotificationSweepService({
       }
     : {}),
 });
-// Yahoo is the only provider whose credential the server may hold and replay, and only when the
-// operator has configured all three secrets. ESPN direct sync is a separate credential-free path;
-// it never receives a cookie or browser session and remains disabled by default behind its policy
-// and evidence gate.
+// Server-held credentials are always encrypted with a deployment-owned key. Yahoo uses OAuth;
+// ESPN's optional session mode is an explicit, read-only opt-in and remains disabled by default.
 const credentialKey = environment.CREDENTIAL_ENCRYPTION_KEY
   ? parseCredentialKey(environment.CREDENTIAL_ENCRYPTION_KEY)
   : undefined;
@@ -130,6 +130,20 @@ const yahooSync = yahooConnection
       tokens: yahooConnection,
     })
   : undefined;
+const espnSessionConnection = credentialKey
+  ? new EspnSessionConnectionService({
+      database: database.db,
+      credentialKey,
+      enabled: environment.ESPN_SERVER_SESSION_SYNC_ENABLED,
+    })
+  : undefined;
+const espnSessionSync =
+  environment.ESPN_SERVER_SESSION_SYNC_ENABLED && espnSessionConnection
+    ? new EspnSessionSyncService({
+        database: database.db,
+        credentials: espnSessionConnection,
+      })
+    : undefined;
 const providerSyncChangeEvents = drizzleChangeEventProducers(database.db);
 const espnDirectSync = createEspnDirectSyncService({
   database: database.db,
@@ -178,6 +192,7 @@ const leagueSyncService = new LeagueSyncService({
   targets: new DrizzleLeagueSyncTargetReader(database.db),
   circuit: new DrizzleConnectionCircuitStore(database.db),
   espnDirect: espnDirectSync,
+  ...(espnSessionSync ? { espnSessionSync } : {}),
   ...(yahooSync ? { yahooSync } : {}),
   afterYahooCommit: async (receipt) => {
     await emitProviderSyncChangeEvents(
@@ -217,11 +232,52 @@ const leagueSyncService = new LeagueSyncService({
       logger.warn({ season: receipt.season }, "Yahoo sync committed but projection enqueue failed");
     }
   },
+  afterEspnCommit: async (receipt) => {
+    await emitProviderSyncChangeEvents(
+      providerSyncChangeEvents,
+      {
+        provider: "espn",
+        state: receipt.state,
+        leagueId: receipt.leagueId,
+        leagueSeasonId: receipt.leagueSeasonId,
+        actorUserId: null,
+        artifactId: receipt.syncRunId,
+        occurredAt: new Date(receipt.syncedAt),
+      },
+      () =>
+        logger.warn(
+          { leagueSeasonId: receipt.leagueSeasonId },
+          "ESPN session sync committed but change-event emission failed",
+        ),
+    );
+    try {
+      await enqueueRecommendationRecompute(boss, {
+        leagueSeasonId: receipt.leagueSeasonId,
+        kinds: ["lineup", "waiver", "trade"],
+      });
+    } catch {
+      logger.warn(
+        { leagueSeasonId: receipt.leagueSeasonId },
+        "ESPN session sync committed but recommendation enqueue failed",
+      );
+    }
+    try {
+      await enqueueProjectionRefresh(boss, {
+        season: receipt.season,
+        reason: "on-demand",
+      });
+    } catch {
+      logger.warn(
+        { season: receipt.season },
+        "ESPN session sync committed but projection enqueue failed",
+      );
+    }
+  },
   observe: (event) => {
     if (event.event === "sync-failed" || event.event === "after-commit-failed") {
-      logger.warn(event, "Yahoo league sync operational event");
+      logger.warn(event, "provider league sync operational event");
     } else {
-      logger.info(event, "Yahoo league sync operational event");
+      logger.info(event, "provider league sync operational event");
     }
   },
 });
@@ -238,7 +294,15 @@ const recommendationRecomputeService = createRecommendationRecomputeService({
 const logger = pino({
   level: environment.LOG_LEVEL,
   redact: {
-    paths: ["*.authorization", "*.cookie", "*.access_token", "*.refresh_token", "*.espn_s2"],
+    paths: [
+      "*.authorization",
+      "*.cookie",
+      "*.access_token",
+      "*.refresh_token",
+      "*.espn_s2",
+      "*.espnS2",
+      "*.swid",
+    ],
     censor: "[REDACTED]",
   },
 });
@@ -253,6 +317,7 @@ const boss = new PgBoss({
 });
 const providerSyncSweepService = new ProviderSyncSweepService({
   espnEnabled: environment.ESPN_PUBLIC_DIRECT_SYNC_ENABLED,
+  espnSessionEnabled: espnSessionSync !== undefined,
   yahooEnabled: environment.YAHOO_AUTOMATED_SYNC_ENABLED && yahooSync !== undefined,
   targets: new DrizzleProviderSyncSweepTargetReader(database.db),
   enqueue: (job) => enqueueLeagueSync(boss, job),

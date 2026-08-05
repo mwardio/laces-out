@@ -41,16 +41,45 @@
         <small id="live-draft-detail" class="live-draft-detail"></small>
       </section>
 
+      <section id="always-on" class="always-on" aria-live="polite" hidden>
+        <div class="always-on-copy">
+          <div class="always-on-head">
+            <strong>Always-on ESPN sync</strong>
+            <span id="always-on-state">Recommended</span>
+          </div>
+          <small id="always-on-message">
+            Let Laces Out refresh this account when Chrome is closed.
+          </small>
+          <small class="always-on-disclosure">
+            This sends your ESPN session authorization to your Laces Out server, where it is
+            encrypted at rest and used only for read-only fantasy data.
+          </small>
+        </div>
+        <button id="enable-always-on" class="primary" type="button">Enable always-on sync</button>
+      </section>
+
       <section id="pairing-offer" class="pairing" aria-live="polite" hidden>
         <div class="pairing-body">
           <strong>Pairing offer from <span id="pairing-origin"></span></strong>
           <small>
-            Complete pairing to grant this browser read-only sync access. Only continue if you
-            started this from Laces Out.
+            Complete pairing to grant read-only ESPN sync access. Only continue if you started this
+            from Laces Out.
           </small>
+          <label class="sync-preference" for="pairing-keep-synced">
+            <input id="pairing-keep-synced" type="checkbox" checked />
+            <span>
+              <strong>Keep synced when Chrome is closed</strong>
+              <small>
+                Recommended. Sends ESPN session authorization to your Laces Out server, encrypted at
+                rest and removable at any time.
+              </small>
+            </span>
+          </label>
         </div>
         <div class="pairing-actions">
-          <button id="pairing-complete" class="primary" type="button">Complete pairing</button>
+          <button id="pairing-complete" class="primary" type="button">
+            Connect &amp; keep synced
+          </button>
           <button id="pairing-dismiss" class="quiet" type="button">Dismiss</button>
         </div>
       </section>
@@ -105,9 +134,21 @@
               required
             />
           </label>
+          <label class="sync-preference" for="self-hosted-keep-synced">
+            <input id="self-hosted-keep-synced" type="checkbox" checked />
+            <span>
+              <strong>Keep synced when Chrome is closed</strong>
+              <small>
+                Recommended when your server supports encrypted always-on ESPN sync. Uncheck for
+                device-only access while Chrome is open.
+              </small>
+            </span>
+          </label>
           <small id="self-hosted-message" class="self-hosted-message" aria-live="polite"></small>
           <div class="pairing-actions">
-            <button id="self-hosted-submit" class="primary" type="submit">Pair instance</button>
+            <button id="self-hosted-submit" class="primary" type="submit">
+              Connect &amp; keep synced
+            </button>
             <button id="self-hosted-cancel" class="quiet" type="button">Cancel</button>
           </div>
         </form>
@@ -122,9 +163,9 @@
       </div>
 
       <p class="privacy">
-        Your ESPN password and cookies stay in Chrome. Only bounded league data is sent to Laces
-        Out. Forgetting this browser clears its local pairing only; revoke the device from Laces Out
-        Connections to disable its server credential.
+        Your ESPN password is never collected. Standard sync keeps session authorization in Chrome.
+        Always-on sync stores only the ESPN session authorization on your Laces Out server. Remove
+        it anytime from League Sync.
       </p>
     </main>
     <script type="module" src="popup.js"></script>

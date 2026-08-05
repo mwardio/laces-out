@@ -33,7 +33,7 @@ export default function PrivacyPage() {
         <div className={styles.heading}>
           <p>Hosted or self-hosted deployment</p>
           <h1>Privacy policy</h1>
-          <span>Effective July 31, 2026</span>
+          <span>Effective August 5, 2026</span>
         </div>
 
         <aside className={styles.summary}>
@@ -70,6 +70,10 @@ export default function PrivacyPage() {
               and application logs are configured to redact credentials.
             </li>
             <li>
+              Encrypted Yahoo authorization and, only when you explicitly enable always-on ESPN
+              sync, encrypted ESPN session authorization. Provider passwords are never collected.
+            </li>
+            <li>
               Film room provider, model, request status, token counts, and timing. If you add a
               personal model-provider API key, it is encrypted. Laces Out does not retain the
               question or answer.
@@ -93,13 +97,16 @@ export default function PrivacyPage() {
             unattended Yahoo league refreshes disabled until that scheduler is separately validated.
           </p>
           <p>
-            ESPN does not provide this app with a supported consumer Fantasy OAuth flow. The
-            one-click sync bookmark and optional sync agent use the ESPN session already present on
-            that device. They send bounded league data to Laces Out, but never send your ESPN
-            password or the values of ESPN cookies. When a deployment operator separately enables
-            the unofficial public-direct path, it sends no member credential and can refresh only an
-            already-known, exactly matching public league season. Every scoped sync credential can
-            be revoked from the League Sync screen.
+            ESPN does not provide this app with a supported consumer Fantasy OAuth flow. The Chrome
+            companion uses the ESPN session already present on that device and sends bounded league
+            data to Laces Out. If both the deployment operator and member enable always-on ESPN
+            sync, an authorized paired client sends ESPN&apos;s session authorization once over
+            HTTPS. A compatible native app keeps credential entry on an ESPN-hosted page. Laces Out
+            encrypts the resulting authorization at rest and uses it only for fixed, read-only
+            fantasy endpoints; the ESPN password is never collected. The member can revoke that
+            connection from League Sync, and expiration requires an explicit renewal. A separately
+            enabled public-direct path sends no member credential and can refresh only an
+            already-known, exactly matching public league season.
           </p>
         </section>
 

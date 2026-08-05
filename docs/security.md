@@ -132,15 +132,25 @@ This application will hold access to real fantasy accounts. Treat it like a smal
 
 ## ESPN-specific rule
 
-Never request or store an ESPN password. A sync agent leaves cookies inside the ESPN origin on its
-authorized device. A device's numeric league-ID/season allowlist is only a transport boundary and
-grants nothing before a successful sync. Agent tokens are random, hashed at rest, expiring,
-revocable, and accepted only in the `Bridge` authorization header. Poll responses are capped at
-eight and contain only request ID, granted league ID/season, minimum capture time, expiry, and fixed
-artifact-family names. A revoked, expired, non-agent, cross-league, or cross-season device cannot
-observe or report an intent. Native release clients must retain the existing normalized HTTPS
-server-origin and mutation-origin rules; a token never belongs in a URL, log, page, content script,
-or ordinary app preference.
+Never request or store an ESPN password. Device-only companion sync leaves ESPN session material
+inside the ESPN origin on its authorized device. If an operator enables the separate always-on mode, an active
+agent-capable Chrome or iOS device may capture only `SWID` and `espn_s2` after an explicit member
+action and send them once to its paired HTTPS origin. Native credential entry must remain on an
+ESPN-hosted page. The client keeps the raw values in memory only; the API validates a fresh capture,
+encrypts it immediately in a purpose-bound AES-256-GCM envelope, and never returns it. Logs redact
+both field spellings, account export omits the envelope, and encrypted backups must be treated as
+credential-bearing until their retention expires. A member can delete the envelope from League
+Sync, and a 401/403 changes the connection to reauthorization required instead of retrying
+indefinitely.
+
+A device's numeric league-ID/season allowlist is only a transport boundary and grants nothing
+before a successful sync. Agent tokens are random, hashed at rest, expiring, revocable, and
+accepted only in the `Bridge` authorization header. Poll responses are capped at eight and contain
+only request ID, granted league ID/season, minimum capture time, expiry, and fixed artifact-family
+names. A revoked, expired, non-agent, cross-league, or cross-season device cannot observe or report
+an intent. Native release clients must retain the existing normalized HTTPS server-origin and
+mutation-origin rules; a token never belongs in a URL, log, page, content script, or ordinary app
+preference.
 
 The first accepted device snapshot may create a new league owned by that authenticated device user;
 a later successfully validated provider connection automatically joins the existing shared league
@@ -160,6 +170,14 @@ member force flag or upstream URL. Core and supplemental freshness advance indep
 request completes only after every required artifact is sufficiently new. Shared checksum
 deduplication makes racing agents/direct work unchanged after the first accepted canonical write.
 Attempts retain only bounded states, sanitized error codes/details, and timestamps.
+
+An always-on server read resolves the provider account and league through the exact encrypted ESPN
+connection, `provider_league_links`, and current membership. It may read only stored numeric league
+ID/season pairs through a fixed ESPN HTTPS origin with GET, an allowlisted view/filter set, redirect
+rejection, timeout, and response-size cap. It cannot accept a URL, header, league, account, or force
+flag from a client; create a league or membership; claim a team; perform an ESPN write; or silently
+replace device-only/public-direct mode. The worker uses the same normalization, identity
+quarantine, checksum, freshness, and atomic persistence boundary as every other ESPN artifact.
 
 Bridge artifacts may not overwrite shared canonical player fields or create a verified global
 player crosswalk. Unmapped roster IDs receive non-verified, league-season-scoped observation rows.

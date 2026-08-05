@@ -90,7 +90,7 @@ const seasonFeatures = [
     label: "Connect your leagues",
     title: "Bring every team into one live picture.",
     text: yahooComingSoon
-      ? "Sync ESPN with a private one-click bookmark, an automatic sync device, or an operator-verified public read and pull in settings, rosters, standings, matchups, and the team that is actually yours."
+      ? "Sync ESPN with the Chrome companion or an operator-verified public read and pull in settings, rosters, standings, matchups, and the team that is actually yours."
       : "Link Yahoo or sync ESPN to pull league settings, rosters, standings, matchups, and the team that is actually yours.",
     icon: Cable,
   },
@@ -164,7 +164,7 @@ const trustPoints = [
   {
     icon: LockKeyhole,
     title: "Private connections",
-    text: "Yahoo authorization stays encrypted server-side. ESPN passwords and cookies stay with ESPN.",
+    text: "Yahoo authorization and optional always-on ESPN access are encrypted server-side. Provider passwords are never collected.",
   },
   {
     icon: Database,
@@ -430,7 +430,7 @@ export default function LandingPage() {
             <div className={styles.syncIntro}>
               <div>
                 <p className={styles.sectionKicker}>League sync + automation</p>
-                <h2>League data travels. Credentials don’t.</h2>
+                <h2>Fresh league data. Your password stays put.</h2>
               </div>
               <p>
                 {yahooComingSoon
@@ -450,22 +450,24 @@ export default function LandingPage() {
                         <h3>ESPN Fantasy</h3>
                       </div>
                     </div>
-                    <span className={styles.connectionMode}>One-click or automatic</span>
+                    <span className={styles.connectionMode}>Automatic sync</span>
                   </div>
                   <p className={styles.providerDescription}>
-                    A private sync bookmark or automatic sync device reads league data through the
-                    ESPN session you already opened. Your password and cookies stay on ESPN. A
-                    separately verified public league may refresh core data directly when its
-                    operator enables the default-off unofficial path. Supplemental feeds keep their
-                    own freshness.
+                    Pair the Chrome companion once. If your host offers it, the recommended
+                    always-on setup encrypts ESPN&apos;s session authorization so scheduled and
+                    mobile-requested refreshes keep working after Chrome closes. Your ESPN password
+                    is never collected.
                   </p>
                   <ul>
                     <li>
-                      <Check size={13} /> One-click bookmark for fast on-demand sync
+                      <Check size={13} /> Private multi-league sync
                     </li>
                     <li>
                       <RefreshCw size={13} /> Five-minute request checks with a six-hour safety
                       sweep
+                    </li>
+                    <li>
+                      <Check size={13} /> Encrypted always-on refresh
                     </li>
                     <li>
                       <Check size={13} /> Availability, scoring, activity, and draft context

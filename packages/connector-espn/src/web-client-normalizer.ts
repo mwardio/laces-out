@@ -782,7 +782,7 @@ export const espnBridgeSnapshotLikeV1Schema = z
     provider: z.literal("espn"),
     // `browser-local` remains wire-compatible with published extensions; native agents use the
     // same bounded envelope with distinct audit provenance.
-    authority: z.enum(["browser-local", "native-local"]),
+    authority: z.enum(["browser-local", "native-local", "server-session"]),
     readOnly: z.literal(true),
     leagueId: z.string().regex(/^\d{1,20}$/u),
     season: z.number().int().min(2000).max(2100),
@@ -840,6 +840,7 @@ interface NormalizationSource {
   readonly endpoint: string | null;
   readonly fetchedAt: string;
   readonly kind: "bridge-envelope" | "raw-payload";
+  readonly authority: "browser-local" | "native-local" | "server-session" | null;
   readonly payload: unknown;
   readonly expectedLeagueId: string | null;
   readonly expectedSeason: number | null;
@@ -981,6 +982,7 @@ function rawMetadata(
     endpoint: result.data.endpoint ?? null,
     fetchedAt,
     kind: "raw-payload",
+    authority: null,
   };
 }
 
@@ -1015,6 +1017,7 @@ function sourceFromInput(
     fetchedAt: envelope.capturedAt,
     checksumSha256: envelope.checksumSha256,
     kind: "bridge-envelope",
+    authority: envelope.authority,
   };
 }
 
@@ -1526,7 +1529,12 @@ export function normalizeEspnWebClientSnapshot(
     ...(standings === undefined ? {} : { standings }),
     ...(matchups === undefined ? {} : { matchups }),
     provenance: {
-      mode: source.kind === "bridge-envelope" ? "browser-local" : "public-unofficial",
+      mode:
+        source.authority === "server-session"
+          ? "server-session"
+          : source.kind === "bridge-envelope"
+            ? "browser-local"
+            : "public-unofficial",
       fetchedAt: source.fetchedAt,
       endpoint: source.endpoint,
       artifactChecksumSha256: source.checksumSha256,

@@ -6,6 +6,8 @@ import type {
   BridgeLiveDraftStatus,
   BridgeRequest,
   BridgeResponse,
+  BridgeServerSessionResponse,
+  BridgeServerSessionStatus,
   BridgeStatus,
   PendingPairingOffer,
 } from "./protocol.js";
@@ -37,6 +39,7 @@ const pairingSection = element<HTMLElement>("pairing-offer");
 const pairingOrigin = element<HTMLSpanElement>("pairing-origin");
 const pairingCompleteButton = element<HTMLButtonElement>("pairing-complete");
 const pairingDismissButton = element<HTMLButtonElement>("pairing-dismiss");
+const pairingKeepSynced = element<HTMLInputElement>("pairing-keep-synced");
 const unpairedActions = element<HTMLElement>("unpaired-actions");
 const openConnectionsButton = element<HTMLButtonElement>("open-connections");
 const selfHostedToggle = element<HTMLButtonElement>("self-hosted-toggle");
@@ -46,12 +49,21 @@ const selfHostedCode = element<HTMLInputElement>("self-hosted-code");
 const selfHostedSubmit = element<HTMLButtonElement>("self-hosted-submit");
 const selfHostedCancel = element<HTMLButtonElement>("self-hosted-cancel");
 const selfHostedMessage = element<HTMLElement>("self-hosted-message");
+const selfHostedKeepSynced = element<HTMLInputElement>("self-hosted-keep-synced");
 const liveDraftPanel = element<HTMLElement>("live-draft");
 const liveDraftState = element<HTMLSpanElement>("live-draft-state");
 const liveDraftMessage = element<HTMLElement>("live-draft-message");
 const liveDraftDetail = element<HTMLElement>("live-draft-detail");
+const alwaysOnPanel = element<HTMLElement>("always-on");
+const alwaysOnState = element<HTMLElement>("always-on-state");
+const alwaysOnMessage = element<HTMLElement>("always-on-message");
+const enableAlwaysOnButton = element<HTMLButtonElement>("enable-always-on");
 
 let pendingOffer: PendingPairingOffer | undefined;
+
+function updateConnectButtonLabel(button: HTMLButtonElement, keepSynced: boolean): void {
+  button.textContent = keepSynced ? "Connect & keep synced" : "Connect this device only";
+}
 
 function send(request: BridgeRequest): Promise<BridgeResponse> {
   return chrome.runtime.sendMessage(request);
@@ -59,6 +71,32 @@ function send(request: BridgeRequest): Promise<BridgeResponse> {
 
 function sendLiveDraft(request: BridgeLiveDraftRequest): Promise<BridgeLiveDraftResponse> {
   return chrome.runtime.sendMessage(request);
+}
+
+function sendServerSession(
+  request: Extract<BridgeRequest, { type: "GET_SERVER_SESSION_STATUS" | "ENABLE_SERVER_SESSION" }>,
+): Promise<BridgeServerSessionResponse> {
+  return chrome.runtime.sendMessage(request);
+}
+
+const serverSessionLabels: Readonly<Record<BridgeServerSessionStatus["state"], string>> = {
+  "not-enabled": "Recommended",
+  enabling: "Enabling",
+  enabled: "Enabled",
+  "login-required": "Sign-in needed",
+  unavailable: "Unavailable",
+  error: "Needs attention",
+};
+
+function renderServerSession(status: BridgeServerSessionStatus, configured: boolean): void {
+  alwaysOnPanel.hidden = !configured;
+  alwaysOnPanel.dataset.state = status.state;
+  alwaysOnState.textContent = serverSessionLabels[status.state];
+  alwaysOnMessage.textContent = status.message;
+  enableAlwaysOnButton.hidden = status.state === "enabled" || status.state === "unavailable";
+  enableAlwaysOnButton.disabled = status.state === "enabling";
+  enableAlwaysOnButton.textContent =
+    status.state === "login-required" ? "Finish ESPN sign-in" : "Enable always-on sync";
 }
 
 const liveDraftLabels: Readonly<Record<BridgeLiveDraftStatus["state"], string>> = {
@@ -120,6 +158,7 @@ function render(status: BridgeStatus): void {
     }),
   );
   leagueResults.hidden = status.results.length === 0;
+  alwaysOnPanel.hidden = !status.configured;
 }
 
 function resultLabel(state: BridgeLeagueResultState): string {
@@ -233,7 +272,17 @@ selfHostedToggle.addEventListener("click", () => {
 selfHostedCancel.addEventListener("click", () => {
   selfHostedForm.hidden = true;
   selfHostedToggle.hidden = false;
+  selfHostedKeepSynced.checked = true;
+  updateConnectButtonLabel(selfHostedSubmit, true);
   selfHostedMessage.textContent = "";
+});
+
+pairingKeepSynced.addEventListener("change", () => {
+  updateConnectButtonLabel(pairingCompleteButton, pairingKeepSynced.checked);
+});
+
+selfHostedKeepSynced.addEventListener("change", () => {
+  updateConnectButtonLabel(selfHostedSubmit, selfHostedKeepSynced.checked);
 });
 
 selfHostedForm.addEventListener("submit", (event) => {
@@ -242,7 +291,14 @@ selfHostedForm.addEventListener("submit", (event) => {
   selfHostedCancel.disabled = true;
   selfHostedMessage.textContent = "Pairing with your instance…";
   void redeemSelfHostedPairing(selfHostedUrl.value, selfHostedCode.value)
-    .then((configuration) => send({ type: "CONFIGURE", configuration }))
+    .then(async (configuration) => {
+      const response = await send({ type: "CONFIGURE", configuration });
+      if (selfHostedKeepSynced.checked) {
+        const session = await sendServerSession({ type: "ENABLE_SERVER_SESSION" });
+        renderServerSession(session.status, true);
+      }
+      return response;
+    })
     .then((response) => {
       selfHostedForm.reset();
       selfHostedForm.hidden = true;
@@ -285,6 +341,24 @@ loginButton.addEventListener("click", () => {
   void chrome.tabs.create({ url: "https://fantasy.espn.com/football/" });
 });
 
+enableAlwaysOnButton.addEventListener("click", () => {
+  enableAlwaysOnButton.disabled = true;
+  alwaysOnMessage.textContent = "Checking your ESPN sign-in…";
+  void sendServerSession({ type: "ENABLE_SERVER_SESSION" })
+    .then((response) => renderServerSession(response.status, true))
+    .catch((error: unknown) => {
+      renderServerSession(
+        {
+          state: "error",
+          message: error instanceof Error ? error.message : "Always-on sync could not be enabled.",
+          connectionId: null,
+          updatedAt: new Date().toISOString(),
+        },
+        true,
+      );
+    });
+});
+
 async function clearPendingOffer(): Promise<void> {
   pendingOffer = undefined;
   pairingSection.hidden = true;
@@ -299,6 +373,8 @@ async function loadPendingOffer(): Promise<void> {
     return;
   }
   pendingOffer = offer;
+  pairingKeepSynced.checked = true;
+  updateConnectButtonLabel(pairingCompleteButton, true);
   pairingOrigin.textContent = offer.origin;
   pairingSection.hidden = false;
   unpairedActions.hidden = true;
@@ -311,6 +387,10 @@ pairingCompleteButton.addEventListener("click", () => {
   void (async () => {
     await requireApiPermission(offer.configuration.apiBaseUrl);
     const response = await send({ type: "CONFIGURE", configuration: offer.configuration });
+    if (pairingKeepSynced.checked) {
+      const session = await sendServerSession({ type: "ENABLE_SERVER_SESSION" });
+      renderServerSession(session.status, true);
+    }
     await clearPendingOffer();
     render(response.status);
   })()
@@ -334,7 +414,14 @@ void loadPendingOffer().catch(() => {
 });
 
 void send({ type: "GET_STATUS" })
-  .then((response) => render(response.status))
+  .then((response) => {
+    render(response.status);
+    if (response.status.configured) {
+      void sendServerSession({ type: "GET_SERVER_SESSION_STATUS" })
+        .then((session) => renderServerSession(session.status, true))
+        .catch(() => undefined);
+    }
+  })
   .catch((error: unknown) => {
     statusMessage.textContent = error instanceof Error ? error.message : "Bridge status failed";
     statusPanel.dataset.state = "error";

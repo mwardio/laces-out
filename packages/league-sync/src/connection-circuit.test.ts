@@ -2,9 +2,9 @@ import { describe, expect, it } from "vitest";
 
 import {
   CONNECTION_CIRCUIT_FAILURE_THRESHOLD,
+  connectionSupportsServerRefresh,
   evaluateConnectionCircuit,
   nextCircuitOpenUntil,
-  providerSupportsServerRefresh,
 } from "./connection-circuit.js";
 
 const now = new Date("2026-09-10T12:00:00.000Z");
@@ -79,16 +79,31 @@ describe("nextCircuitOpenUntil", () => {
   });
 });
 
-describe("providerSupportsServerRefresh", () => {
-  it("admits a provider whose capability set advertises a server-refreshable credential", () => {
-    expect(providerSupportsServerRefresh("yahoo")).toBe(true);
+describe("connectionSupportsServerRefresh", () => {
+  it("admits Yahoo OAuth connections", () => {
+    expect(
+      connectionSupportsServerRefresh("yahoo", {
+        authentication: ["oauth2-authorization-code-pkce"],
+      }),
+    ).toBe(true);
   });
 
-  it("refuses ESPN, whose credential never leaves the user's browser", () => {
-    expect(providerSupportsServerRefresh("espn")).toBe(false);
+  it("admits only ESPN connections with a stored server-session capability", () => {
+    expect(
+      connectionSupportsServerRefresh("espn", { authentication: ["server-session-cookie"] }),
+    ).toBe(true);
+    expect(connectionSupportsServerRefresh("espn", { authentication: ["browser-session"] })).toBe(
+      false,
+    );
   });
 
-  it("refuses a manual connection, which has no provider credential at all", () => {
-    expect(providerSupportsServerRefresh("manual")).toBe(false);
+  it("fails closed for manual or malformed capability records", () => {
+    expect(connectionSupportsServerRefresh("manual", { authentication: ["manual-import"] })).toBe(
+      false,
+    );
+    expect(connectionSupportsServerRefresh("espn", {})).toBe(false);
+    expect(
+      connectionSupportsServerRefresh("espn", { authentication: "server-session-cookie" }),
+    ).toBe(false);
   });
 });

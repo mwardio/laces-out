@@ -168,7 +168,7 @@ export interface NormalizedMatchupSnapshot {
 }
 
 export type SyncSourceMode =
-  "official-api" | "browser-local" | "public-unofficial" | "manual-import";
+  "official-api" | "browser-local" | "server-session" | "public-unofficial" | "manual-import";
 
 export interface SyncProvenance {
   readonly mode: SyncSourceMode;

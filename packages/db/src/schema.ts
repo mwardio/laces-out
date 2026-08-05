@@ -62,7 +62,8 @@ export type EspnArtifactFreshnessComponent =
   EspnArtifactFamily | "available-free-agents" | "available-waivers";
 export type EspnArtifactFreshness = Partial<Record<EspnArtifactFreshnessComponent, string>>;
 export type EspnPreferredSyncMode = "direct" | "assisted" | "automatic";
-export type EspnRefreshFulfillmentMode = "server-direct" | "chrome-agent" | "native-agent";
+export type EspnRefreshFulfillmentMode =
+  "server-direct" | "server-session" | "chrome-agent" | "native-agent";
 export type EspnRefreshAttemptState =
   | "offered"
   | "started"
@@ -227,10 +228,7 @@ export const providerConnections = pgTable(
     // Incremented with every credential rotation for compare-and-swap refresh updates.
     credentialVersion: integer("credential_version").notNull().default(1),
     credentialExpiresAt: timestamp("credential_expires_at", { withTimezone: true }),
-    capabilities: jsonb("capabilities")
-      .$type<Record<string, boolean | string>>()
-      .notNull()
-      .default({}),
+    capabilities: jsonb("capabilities").$type<Record<string, unknown>>().notNull().default({}),
     health: text("health").$type<ConnectionHealth>().notNull().default("pending"),
     lastSuccessfulAt: timestamp("last_successful_at", { withTimezone: true }),
     lastErrorCode: text("last_error_code"),
@@ -477,6 +475,10 @@ export const bridgeDevices = pgTable(
     userId: uuid("user_id")
       .notNull()
       .references(() => users.id, { onDelete: "cascade" }),
+    /** Optional opt-in unattended ESPN authorization captured by this paired client. */
+    connectionId: uuid("connection_id").references(() => providerConnections.id, {
+      onDelete: "set null",
+    }),
     provider: text("provider").$type<"espn">().notNull().default("espn"),
     clientKind: text("client_kind").$type<BridgeClientKind>().notNull().default("chrome-extension"),
     agentCapable: boolean("agent_capable").notNull().default(false),
@@ -491,6 +493,7 @@ export const bridgeDevices = pgTable(
   },
   (table) => [
     uniqueIndex("bridge_devices_token_hash_unique").on(table.tokenHash),
+    index("bridge_devices_connection_idx").on(table.connectionId),
     index("bridge_devices_user_active_idx")
       .on(table.userId, table.createdAt)
       .where(sql`${table.revokedAt} is null`),
@@ -2651,7 +2654,7 @@ export const refreshRequests = pgTable(
     ),
     check(
       "refresh_requests_fulfillment_mode_check",
-      sql`${table.fulfillmentMode} is null or ${table.fulfillmentMode} in ('server-direct', 'chrome-agent', 'native-agent')`,
+      sql`${table.fulfillmentMode} is null or ${table.fulfillmentMode} in ('server-direct', 'server-session', 'chrome-agent', 'native-agent')`,
     ),
     check(
       "refresh_requests_finished_at_check",
@@ -2738,7 +2741,7 @@ export const espnRefreshAttempts = pgTable(
     index("espn_refresh_attempts_device_idx").on(table.bridgeDeviceId, table.startedAt),
     check(
       "espn_refresh_attempts_mode_check",
-      sql`${table.mode} in ('server-direct', 'chrome-agent', 'native-agent')`,
+      sql`${table.mode} in ('server-direct', 'server-session', 'chrome-agent', 'native-agent')`,
     ),
     check(
       "espn_refresh_attempts_state_check",
@@ -2750,7 +2753,7 @@ export const espnRefreshAttempts = pgTable(
     ),
     check(
       "espn_refresh_attempts_provenance_check",
-      sql`(${table.mode} = 'server-direct' and ${table.bridgeDeviceId} is null) or (${table.mode} in ('chrome-agent', 'native-agent') and ${table.bridgeDeviceId} is not null)`,
+      sql`(${table.mode} in ('server-direct', 'server-session') and ${table.bridgeDeviceId} is null) or (${table.mode} in ('chrome-agent', 'native-agent') and ${table.bridgeDeviceId} is not null)`,
     ),
     check(
       "espn_refresh_attempts_lifecycle_check",
