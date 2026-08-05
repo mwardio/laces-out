@@ -537,6 +537,7 @@ describe("dispatch contracts and schedules", () => {
         key: "hourly-first-party-projections",
         group: { id: "projections" },
         singletonKey: "projection-refresh:2026:season",
+        singletonSeconds: SEASON_PROJECTION_REFRESH_EXPIRE_SECONDS,
       }),
     );
   });

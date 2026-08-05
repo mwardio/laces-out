@@ -524,6 +524,10 @@ export async function registerSchedules(boss: PgBoss, projectionSeason?: number)
         // rollover even when the long-running schedule payload still names the prior season.
         group: { id: "projections" },
         singletonKey: `projection-refresh:${projectionSeason}:season`,
+        // A full-universe ROS pass can take several hours. Keep the hourly cron as a recovery
+        // opportunity, but admit at most one expensive season refresh per timeout window so ticks
+        // do not accumulate behind a healthy run and replay the same inputs all night.
+        singletonSeconds: SEASON_PROJECTION_REFRESH_EXPIRE_SECONDS,
       },
     );
   }
