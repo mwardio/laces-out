@@ -145,14 +145,16 @@ export default function PrivacyPage() {
           <p>
             Provider and football-data services receive only the requests required to retrieve their
             data. Film room sends your question and a bounded snapshot of your authorized league,
-            recommendations, and analytics — plus your league&apos;s League Intel notes when you ask
-            for a Weekly Reckoning recap — to Google Gemini by default using the operator&apos;s
-            Google AI Studio project. This included access currently uses Gemini 3.6 Flash and
-            requires no personal key. Google states that free-tier submitted content may be used to
-            improve its products. You may instead add a separately billed OpenAI, Anthropic, Gemini,
-            DeepSeek, Grok, or OpenRouter API key and choose the model; that key is encrypted, is
-            not shown again after save, and can be removed at any time. Provider processing is
-            governed by that provider&apos;s account terms and privacy choices.
+            recommendations, and analytics to Google Gemini by default using the operator&apos;s
+            Google AI Studio project. This included Film Room access uses Gemini 3.6 Flash and
+            requires no personal key. When the operator has enabled it, included Medium and Scorched
+            Weekly Reckoning recaps send the same bounded league context and the league&apos;s
+            League Intel notes to Grok 4.3 through OpenRouter; Mild recaps use Gemini. Google states
+            that free-tier submitted content may be used to improve its products. You may instead
+            add a separately billed OpenAI, Anthropic, Gemini, DeepSeek, Grok, or OpenRouter API key
+            and choose the model; that key is encrypted, is not shown again after save, and can be
+            removed at any time. Provider processing is governed by that provider&apos;s account
+            terms and privacy choices.
           </p>
         </section>
 

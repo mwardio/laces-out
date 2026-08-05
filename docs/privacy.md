@@ -21,13 +21,15 @@ credentials, authorization headers, and known ESPN credential fields.
 Film Room is available by default through the operator's server-side Google AI Studio project and
 fixed `gemini-3.6-flash` model. An ordinary Film Room request sends the member's question or workflow
 instructions plus a bounded snapshot of that member's authorized league overview, Decision Desk,
-and league analytics to Google Gemini. A Weekly Reckoning generation sends bounded league context
-and the league's manager-written League Intel notes, but no ordinary Film Room question. Google's
-free-tier terms currently state that submitted content may be used to improve its products. Laces
-Out stores provider/model settings and a usage ledger containing token counts, status, timing,
-access mode, and a keyed provider-request identifier, but does not store raw Film Room questions or
-answers. A member-triggered Weekly Reckoning recap is the exception: it is stored as league data,
-visible to league members, and replaced on each reroll.
+and league analytics to Google Gemini. When the operator configures `OPENROUTER_API_KEY`, included
+Medium and Scorched Weekly Reckoning generations instead send bounded league context and the
+league's manager-written League Intel notes to `x-ai/grok-4.3` through OpenRouter. Mild recaps and
+deployments without that key use Gemini. Google's free-tier terms currently state that submitted
+content may be used to improve its products. Laces Out stores provider/model settings and a usage
+ledger containing token counts, status, timing, access mode, and a keyed provider-request
+identifier, but does not store raw Film Room questions or answers. A member-triggered Weekly
+Reckoning recap is the exception: it is stored as league data, visible to league members, and
+replaced on each reroll.
 
 The Weekly Reckoning recap is the only stored AI output, and it is scoped to the league that asked
 for it. A stored recap keeps the provider, model, requesting member, generated time, and the tone
@@ -35,21 +37,21 @@ level in force when it was written; changing the league's tone later never relab
 recap. A generation that fails, times out, or is refused by the provider is not stored at all and
 leaves the previous recap in place.
 
-League Intel (per-team persona notes) is manager-written style and lore material: rivalries,
-running bits, and league history. It is visible to league members, sent to the selected AI provider
-only when a recap is generated, and never treated as evidence about a game. Each member edits the
-note for the team they have claimed; a league owner or commissioner may edit or clear any note as a
-moderation action. The recap's tone level is a single league-wide setting chosen by a commissioner,
-and is disclosed in the recap section to every member, not only to the commissioner who set it.
-Mild stays clean; Medium and Scorched deliberately allow uncensored profanity and NSFW adult humor
-while retaining the application's subject limits.
+League Intel (per-team persona notes) is owner- or commissioner-written style and lore material:
+rivalries, running bits, and league history. Only league owners and commissioners can view, edit,
+or clear the notes. They are sent to the selected AI provider only when a recap is generated and
+are never treated as evidence about a game. The recap's tone level is a single league-wide setting
+chosen by a commissioner and is disclosed in the recap section to every member. Mild stays clean;
+Medium and Scorched deliberately allow uncensored profanity and NSFW adult humor while retaining
+the application's subject limits.
 
 A member may instead add an OpenAI, Anthropic, Gemini, DeepSeek, Grok, or OpenRouter key and choose
 the model. That personal key is stored in the same purpose-bound, versioned encryption system used
-for provider secrets, is never returned after save, and overrides included Gemini for that
-member/provider until removed. The member's provider account governs BYOK processing and billing.
-Removing the provider configuration deletes the encrypted personal key and restores included
-Gemini when available.
+for provider secrets, is never returned after save, and overrides the included route for that
+request. The member's provider account governs BYOK processing and billing. Removing the provider
+configuration deletes the encrypted personal key and restores the applicable included route when
+available. Included Medium and Scorched recaps each allow one generation per member per UTC day.
+Those two caps do not count, limit, or otherwise affect BYOK requests.
 
 For start/sit requests, the selected model may ask Laces Out for one fixed, read-only lineup result
 already computed by the deterministic Decision Desk engine. The server supplies the authenticated

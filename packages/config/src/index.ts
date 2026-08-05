@@ -37,6 +37,7 @@ const environmentSchema = z.object({
   DATABASE_URL: z.string().min(1).default("postgres://fantasy:fantasy@localhost:5432/fantasy"),
   CREDENTIAL_ENCRYPTION_KEY: z.preprocess(blankToUndefined, z.string().min(1).optional()),
   GEMINI_API_KEY: z.preprocess(blankToUndefined, z.string().trim().min(8).max(512).optional()),
+  OPENROUTER_API_KEY: z.preprocess(blankToUndefined, z.string().trim().min(8).max(512).optional()),
   MANAGED_AI_DAILY_REQUEST_LIMIT: z.coerce.number().int().min(1).max(500).default(50),
   MANAGED_AI_MAX_OUTPUT_TOKENS: z.coerce.number().int().min(64).max(8192).default(2000),
   SESSION_SECRET: z.preprocess(blankToUndefined, z.string().min(32).optional()),
@@ -160,6 +161,7 @@ export function loadEnvironment(
       ["CREDENTIAL_ENCRYPTION_KEY", parsed.data.CREDENTIAL_ENCRYPTION_KEY],
       ["REGISTRATION_INVITE_CODE", parsed.data.REGISTRATION_INVITE_CODE],
       ["GEMINI_API_KEY", parsed.data.GEMINI_API_KEY],
+      ["OPENROUTER_API_KEY", parsed.data.OPENROUTER_API_KEY],
       ["YAHOO_CLIENT_ID", parsed.data.YAHOO_CLIENT_ID],
       ["YAHOO_CLIENT_SECRET", parsed.data.YAHOO_CLIENT_SECRET],
     ].flatMap(([name, value]) =>

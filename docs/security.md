@@ -5,8 +5,8 @@ This application will hold access to real fantasy accounts. Treat it like a smal
 ## Threats in scope
 
 - theft of Yahoo client credentials, access tokens, or refresh tokens;
-- theft or accidental browser/log disclosure of the operator Gemini key or a member-supplied AI
-  API key;
+- theft or accidental browser/log disclosure of an operator-managed Gemini/OpenRouter key or a
+  member-supplied AI API key;
 - theft of an authenticated local app session;
 - ESPN session material escaping through logs, browser storage, crash reports, or backups;
 - Yahoo OAuth authorization CSRF, code interception, replay, or open redirect;
@@ -48,8 +48,8 @@ This application will hold access to real fantasy accounts. Treat it like a smal
   service retains a domain-separated HMAC rather than storing the plaintext in PostgreSQL, verifies
   candidate digests with a timing-safe comparison, returns the same response for code and email
   conflicts, and allows only 30 attempts per source IP every ten minutes. This accommodates a small
-  group sharing one home network while bounding password-hashing work. Rotating or blanking
-  Disabling `REGISTRATION_OPEN` and blanking `REGISTRATION_INVITE_CODE` closes registration without
+  group sharing one home network while bounding password-hashing work. Disabling
+  `REGISTRATION_OPEN` and blanking `REGISTRATION_INVITE_CODE` closes registration without
   disabling existing members.
 - Local passwords require 12–128 characters and non-whitespace text, are hashed with Argon2id, and
   are never logged. Account creation and the initial hashed session are one database transaction.
@@ -111,9 +111,10 @@ This application will hold access to real fantasy accounts. Treat it like a smal
   provider-to-league link. ESPN bridge team claims remain visibly self-asserted because those
   sources do not safely identify the signed-in manager. A claim conflict never authorizes a sync
   job to replace historical ownership.
-- The managed Gemini key is read only from the API server's `GEMINI_API_KEY` environment and is
-  never compiled into the web image, returned by an endpoint, or persisted in PostgreSQL. Film room
-  member keys are write-only through authenticated, same-origin endpoints and use
+- Operator-managed Gemini and OpenRouter keys are read only from the API server's `GEMINI_API_KEY`
+  and `OPENROUTER_API_KEY` environment values. They are never compiled into the web image, returned
+  by an endpoint, or persisted in PostgreSQL. Film room member keys are write-only through
+  authenticated, same-origin endpoints and use
   purpose-bound AES-256-GCM envelopes. The API never returns a key or suffix. Request logging
   explicitly redacts `apiKey`; keyed hashes are used for credential fingerprints, stable OpenAI
   safety identifiers, and provider request IDs. Prompts and answers are not persisted.
@@ -125,10 +126,13 @@ This application will hold access to real fantasy accounts. Treat it like a smal
   select another member or league, or widen the returned Decision Desk section. Per-user/provider
   daily limits, route limits, 30-second egress timeouts, editable output caps, and stateless provider
   options bound cost and exposure. Managed Gemini uses a fixed server-enforced model and
-  operator-controlled limits; model selection is available only when a member supplies a personal
-  key. Authentication rejection marks a saved key invalid without logging the key or provider
-  response body. Managed credential failures return a host-configuration error without exposing
-  provider details.
+  operator-controlled limits. Included Medium and Scorched recaps use the fixed
+  `x-ai/grok-4.3` OpenRouter route when configured, with one independent generation per member per
+  tone per UTC day. Those counters apply only to the operator key; BYOK calls retain the member's
+  configured limit. Model selection is available only when a member supplies a personal key.
+  Authentication rejection marks a saved key invalid without logging the key or provider response
+  body. Managed credential failures return a host-configuration error without exposing provider
+  details.
 
 ## ESPN-specific rule
 

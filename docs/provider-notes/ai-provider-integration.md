@@ -2,7 +2,7 @@
 
 Verified: 2026-07-30
 Scope: OpenAI, Anthropic, Google Gemini, DeepSeek, Grok, and OpenRouter
-Decision status: managed Gemini plus per-user BYOK implemented; chat-product MCP connectors remain future work
+Decision status: managed Gemini, managed recap Grok, and per-user BYOK implemented; chat-product MCP connectors remain future work
 
 ## Product boundary
 
@@ -24,6 +24,11 @@ Room without provider setup. Managed requests always use `gemini-3.6-flash`; cli
 override that model. The default allowance is 50 requests per member per UTC day with a 2,000-token
 answer ceiling. Both limits are operator-configurable. A saved member key takes precedence for its
 provider, and removing a member Gemini key restores managed Gemini.
+
+When `OPENROUTER_API_KEY` is also present, included Medium and Scorched Weekly Reckoning recaps use
+`x-ai/grok-4.3` through OpenRouter. Each member receives one included Medium generation and one
+included Scorched generation per UTC day. These are independent operator-key counters; selecting a
+personal provider uses only that BYOK credential's configured limit. Mild recaps remain on Gemini.
 
 The operator key is never sent to browser code or persisted in PostgreSQL. Managed usage rows have
 no credential ID and are counted separately from that member's BYOK usage. Google's free-tier terms
@@ -68,8 +73,8 @@ Official sources:
 
 ## Credential and privacy design
 
-- The operator Gemini key is read only from the API server environment and never returned or stored
-  in the database.
+- Operator Gemini and OpenRouter keys are read only from the API server environment and never
+  returned or stored in the database.
 - BYOK configuration endpoints are authenticated and same-origin protected.
 - A key enters only a write request and is explicitly redacted from structured request logging.
 - Keys are encrypted with AES-256-GCM and authenticated purpose
@@ -103,6 +108,8 @@ another member's private data, or provider-write authority.
 
 - Managed Gemini defaults to an operator-controlled 50 requests per member per UTC day and a
   2,000-token answer ceiling. The model is fixed server-side.
+- Managed OpenRouter is limited to Weekly Reckoning: one Medium and one Scorched generation per
+  member per UTC day, using the fixed `x-ai/grok-4.3` model. BYOK usage is excluded from both caps.
 - Every BYOK provider has a user-editable 1–500 request limit per UTC day and a 64–8192
   answer-token ceiling. Defaults are 25 requests and 2,000 answer tokens.
 - Connection tests are real, small provider requests and count against the daily limit.

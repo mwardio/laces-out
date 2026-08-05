@@ -340,8 +340,24 @@ describe("recap generation", () => {
     });
     expect(analyticsSnapshot).toHaveBeenCalledWith(USER_ID, LEAGUE_ID, { weeklyAwardsWeek: 4 });
     expect(ai.generateFeature).toHaveBeenCalledWith(
-      expect.objectContaining({ weeklyAwardsWeek: 4 }),
+      expect.objectContaining({ weeklyAwardsWeek: 4, useIncludedProvider: true }),
     );
+  });
+
+  it("uses the spice-aware included route only when no personal provider is selected", async () => {
+    const { service, ai } = fixture();
+
+    await expect(service.generate(USER_ID, LEAGUE_ID, { week: 5 })).resolves.toMatchObject({
+      state: "generated",
+    });
+    expect(ai.generateFeature).toHaveBeenCalledWith({
+      userId: USER_ID,
+      feature: "weekly-recap",
+      leagueId: LEAGUE_ID,
+      weeklyAwardsWeek: 5,
+      recapSpiceLevel: "medium",
+      useIncludedProvider: true,
+    });
   });
 
   it("generates through the AI port and persists the answer", async () => {

@@ -4,6 +4,7 @@ import {
   PERSONA_CARD_MAX_LENGTH,
   recapSpiceLevelSchema,
   type AiProviderConfiguration,
+  type AiProviderListResponse,
   type AiProviderName,
   type LeagueAnalyticsSnapshot,
   type LeagueRecapResponse,
@@ -39,6 +40,8 @@ type RecapState =
   | { readonly state: "loading" }
   | { readonly state: "error"; readonly message: string }
   | { readonly state: "ready"; readonly response: LeagueRecapResponse };
+
+type RecapProviderSelection = AiProviderName | "included";
 
 const PROVIDER_LABELS: Readonly<Record<AiProviderName, string>> = {
   openai: "OpenAI",
@@ -99,7 +102,9 @@ export function ReckoningRecapPanel({ leagueId, snapshot, demo }: ReckoningRecap
   const [cards, setCards] = useState<RecapPersonaCardList | null>(null);
   const [cardsMessage, setCardsMessage] = useState<string | null>(null);
   const [providers, setProviders] = useState<readonly AiProviderConfiguration[]>([]);
-  const [selectedProvider, setSelectedProvider] = useState<AiProviderName>("gemini");
+  const [includedRecapProvider, setIncludedRecapProvider] =
+    useState<AiProviderListResponse["includedRecapProvider"]>(null);
+  const [selectedProvider, setSelectedProvider] = useState<RecapProviderSelection>("included");
   const [drafts, setDrafts] = useState<Readonly<Record<string, string>>>({});
   const [pendingTeamId, setPendingTeamId] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -111,6 +116,10 @@ export function ReckoningRecapPanel({ leagueId, snapshot, demo }: ReckoningRecap
   const availableProviders = useMemo(
     () => providers.filter((provider) => provider.available),
     [providers],
+  );
+  const byokProviders = useMemo(
+    () => availableProviders.filter((provider) => provider.accessMode === "byok"),
+    [availableProviders],
   );
 
   useEffect(() => {
@@ -226,11 +235,8 @@ export function ReckoningRecapPanel({ leagueId, snapshot, demo }: ReckoningRecap
         const parsed = parseAiProviderList(await response.json());
         if (!parsed || controller.signal.aborted) return;
         setProviders(parsed.providers);
-        const includedGemini = parsed.providers.find(
-          (provider) => provider.provider === "gemini" && provider.available,
-        );
-        const firstAvailable = parsed.providers.find((provider) => provider.available);
-        setSelectedProvider(includedGemini?.provider ?? firstAvailable?.provider ?? "gemini");
+        setIncludedRecapProvider(parsed.includedRecapProvider ?? null);
+        setSelectedProvider("included");
       })
       .catch(() => undefined);
     return () => controller.abort();
@@ -264,6 +270,10 @@ export function ReckoningRecapPanel({ leagueId, snapshot, demo }: ReckoningRecap
   const stored = recap.state === "ready" ? recap.response.recap : null;
   const configuredSpiceLevel =
     recap.state === "ready" ? recap.response.configuredSpiceLevel : "medium";
+  const usesIncludedGrok =
+    selectedProvider === "included" &&
+    configuredSpiceLevel !== "mild" &&
+    includedRecapProvider?.provider === "openrouter";
 
   const generate = useCallback(async () => {
     if (generating) return;
@@ -287,7 +297,7 @@ export function ReckoningRecapPanel({ leagueId, snapshot, demo }: ReckoningRecap
         headers: { Accept: "application/json", "Content-Type": "application/json" },
         body: JSON.stringify({
           week: selectedWeek,
-          ...(availableProviders.length > 0 ? { provider: selectedProvider } : {}),
+          ...(selectedProvider === "included" ? {} : { provider: selectedProvider }),
         }),
       });
       if (!response.ok) {
@@ -309,15 +319,7 @@ export function ReckoningRecapPanel({ leagueId, snapshot, demo }: ReckoningRecap
     } finally {
       setGenerating(false);
     }
-  }, [
-    availableProviders.length,
-    demo,
-    generating,
-    leagueId,
-    selectedProvider,
-    selectedWeek,
-    stored,
-  ]);
+  }, [demo, generating, leagueId, selectedProvider, selectedWeek, stored]);
 
   async function copyRecap(body: string) {
     try {
@@ -465,7 +467,8 @@ export function ReckoningRecapPanel({ leagueId, snapshot, demo }: ReckoningRecap
       : recapUnavailableReasons(snapshot.weeklyAwards);
   const canGenerate =
     canGenerateRecap(membership) && (generation === null || generation.state === "available");
-  const noProvider = !demo && providers.length > 0 && availableProviders.length === 0;
+  const noProvider =
+    !demo && providers.length > 0 && availableProviders.length === 0 && !usesIncludedGrok;
 
   return (
     <section id="reckoning-recap" className={styles.panel} aria-labelledby="reckoning-recap-title">
@@ -498,14 +501,19 @@ export function ReckoningRecapPanel({ leagueId, snapshot, demo }: ReckoningRecap
             </label>
           ) : null}
 
-          {!demo && availableProviders.length > 1 ? (
+          {!demo && byokProviders.length > 0 ? (
             <label className={styles.control}>
               <span>Provider</span>
               <select
                 value={selectedProvider}
-                onChange={(event) => setSelectedProvider(event.target.value as AiProviderName)}
+                onChange={(event) =>
+                  setSelectedProvider(event.target.value as RecapProviderSelection)
+                }
               >
-                {availableProviders.map((provider) => (
+                <option value="included">
+                  {usesIncludedGrok ? "Included · Grok 4.3" : "Included default"}
+                </option>
+                {byokProviders.map((provider) => (
                   <option value={provider.provider} key={provider.provider}>
                     {PROVIDER_LABELS[provider.provider]} · {provider.model}
                   </option>
@@ -544,12 +552,18 @@ export function ReckoningRecapPanel({ leagueId, snapshot, demo }: ReckoningRecap
             Medium is uncensored and NSFW by design. Expect profanity, crude jokes, and
             inappropriate locker-room humor. Slurs, protected traits, threats, and anything private
             remain off limits.
+            {usesIncludedGrok
+              ? " Included Grok is limited to one Medium recap per member per day."
+              : ""}
           </p>
         ) : configuredSpiceLevel === "scorched" ? (
           <p className={styles.notice}>
             Scorched is the uncensored, shock-and-awe roast. Fantasy personas, egos, league history,
             decisions, and humiliating results are fair game. Slurs, protected traits, threats, and
             anything private remain off limits.
+            {usesIncludedGrok
+              ? " Included Grok is limited to one Scorched recap per member per day."
+              : ""}
           </p>
         ) : null}
 

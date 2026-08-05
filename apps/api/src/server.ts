@@ -159,6 +159,14 @@ const ai = credentialKey
             },
           }
         : {}),
+      ...(environment.OPENROUTER_API_KEY
+        ? {
+            managedRecapOpenRouter: {
+              apiKey: environment.OPENROUTER_API_KEY,
+              maxOutputTokens: environment.MANAGED_AI_MAX_OUTPUT_TOKENS,
+            },
+          }
+        : {}),
     })
   : undefined;
 const recaps = new RecapService({

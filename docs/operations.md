@@ -65,6 +65,13 @@ answers at 2,000 tokens. Adjust `MANAGED_AI_DAILY_REQUEST_LIMIT` or
 `MANAGED_AI_MAX_OUTPUT_TOKENS` only after reviewing the project's current limits in AI Studio.
 Never prefix the key with `NEXT_PUBLIC_` or pass it as a Docker build argument.
 
+To route included Medium and Scorched Weekly Reckoning recaps through Grok, also set
+`OPENROUTER_API_KEY` in `.env` to the operator's OpenRouter key. The API fixes this route to
+`x-ai/grok-4.3` and enforces two independent included-key budgets: one Medium and one Scorched
+generation per member per UTC day. A member's BYOK calls do not consume either budget and continue
+to use that member's configured request limit. Mild recaps continue through Gemini. Keep this key
+server-side; never prefix it with `NEXT_PUBLIC_` or pass it as a Docker build argument.
+
 Create the first administrator only after migrations are healthy. Supply its password
 ephemerally; do not add it to `.env`:
 

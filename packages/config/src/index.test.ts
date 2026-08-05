@@ -10,6 +10,7 @@ describe("loadEnvironment", () => {
     expect(environment.NODE_ENV).toBe("development");
     expect(environment.CREDENTIAL_ENCRYPTION_KEY).toBeUndefined();
     expect(environment.GEMINI_API_KEY).toBeUndefined();
+    expect(environment.OPENROUTER_API_KEY).toBeUndefined();
     expect(environment.MANAGED_AI_DAILY_REQUEST_LIMIT).toBe(50);
     expect(environment.MANAGED_AI_MAX_OUTPUT_TOKENS).toBe(2000);
     expect(environment.REGISTRATION_OPEN).toBe(false);
@@ -102,14 +103,16 @@ describe("loadEnvironment", () => {
     expect(loadEnvironment({ PORT: "4321" }).PORT).toBe(4321);
   });
 
-  it("accepts an optional managed Gemini key and bounded usage controls", () => {
+  it("accepts optional managed AI keys and bounded usage controls", () => {
     const environment = loadEnvironment({
       GEMINI_API_KEY: "managed-gemini-key",
+      OPENROUTER_API_KEY: "managed-openrouter-key",
       MANAGED_AI_DAILY_REQUEST_LIMIT: "14",
       MANAGED_AI_MAX_OUTPUT_TOKENS: "1200",
     });
 
     expect(environment.GEMINI_API_KEY).toBe("managed-gemini-key");
+    expect(environment.OPENROUTER_API_KEY).toBe("managed-openrouter-key");
     expect(environment.MANAGED_AI_DAILY_REQUEST_LIMIT).toBe(14);
     expect(environment.MANAGED_AI_MAX_OUTPUT_TOKENS).toBe(1200);
   });

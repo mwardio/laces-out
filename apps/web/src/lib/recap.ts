@@ -42,7 +42,11 @@ export function recapByline(recap: WeeklyRecap): string {
   const requester = recap.generatedByDisplayName
     ? ` · requested by ${recap.generatedByDisplayName}`
     : "";
-  return `Week ${recap.week} · written by ${PROVIDER_LABELS[recap.provider]} · ${spice}${requester}`;
+  const provider =
+    recap.provider === "openrouter" && recap.model.startsWith("x-ai/grok-")
+      ? "Grok via OpenRouter"
+      : PROVIDER_LABELS[recap.provider];
+  return `Week ${recap.week} · written by ${provider} · ${spice}${requester}`;
 }
 
 export interface RecapMembershipView {

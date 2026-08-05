@@ -142,6 +142,7 @@ export interface RecapAiPort {
     readonly provider?: AiProviderName;
     readonly weeklyAwardsWeek: number;
     readonly recapSpiceLevel: RecapSpiceLevel;
+    readonly useIncludedProvider?: boolean;
   }): Promise<RecapGeneration>;
 }
 
@@ -590,7 +591,7 @@ export class RecapService {
         leagueId,
         weeklyAwardsWeek: input.week,
         recapSpiceLevel: spiceLevel,
-        ...(input.provider ? { provider: input.provider } : {}),
+        ...(input.provider ? { provider: input.provider } : { useIncludedProvider: true }),
       });
       if (input.provider !== undefined && generated.provider !== input.provider) {
         throw new Error("The AI provider did not match the consented recap provider");

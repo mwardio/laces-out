@@ -60,10 +60,17 @@ export const AI_PROVIDER_DEFAULTS: Readonly<
 const PROVIDERS = ["openai", "anthropic", "gemini", "deepseek", "grok", "openrouter"] as const;
 const MAX_CONTEXT_JSON_CHARS = 48_000;
 export const MANAGED_GEMINI_MODEL = "gemini-3.6-flash";
+export const MANAGED_RECAP_OPENROUTER_MODEL = "x-ai/grok-4.3";
+const MANAGED_RECAP_DAILY_LIMIT_PER_SPICE = 1;
 
 export interface ManagedGeminiConfiguration {
   readonly apiKey: string;
   readonly dailyRequestLimit: number;
+  readonly maxOutputTokens: number;
+}
+
+export interface ManagedRecapOpenRouterConfiguration {
+  readonly apiKey: string;
   readonly maxOutputTokens: number;
 }
 
@@ -96,6 +103,10 @@ interface AiExecutionBase {
   readonly model: string;
   readonly dailyRequestLimit: number;
   readonly maxOutputTokens: number;
+  /** Optional independent counter within a provider/key, used by included recap spice quotas. */
+  readonly budgetScope?: string;
+  /** User-facing explanation when this execution's independent counter is exhausted. */
+  readonly dailyLimitMessage?: string;
 }
 
 interface ByokAiExecution extends AiExecutionBase {
@@ -148,6 +159,7 @@ export interface AiUsageReservationRequest {
   readonly model: string;
   readonly operation: AiUsageRecord["operation"];
   readonly dailyRequestLimit: number;
+  readonly budgetScope?: string;
   readonly since: Date;
   readonly metadata: Record<string, string | number | boolean | null>;
   readonly occurredAt: Date;
@@ -321,10 +333,10 @@ export class DrizzleAiRepository implements AiRepository {
 
   async reserveDailyRequest(input: AiUsageReservationRequest): Promise<AiUsageReservation | null> {
     return this.#database.transaction(async (transaction) => {
-      // Serialize concurrent reservations for the same (user, provider) so the
+      // Serialize concurrent reservations for the same (user, provider, scope) so the
       // count-then-insert below is atomic and the cap cannot be overshot.
       await transaction.execute(
-        sql`select pg_advisory_xact_lock(hashtext('ai-usage-daily-limit'), hashtext(${`${input.userId}:${input.provider}:${input.credentialId ?? ""}`}))`,
+        sql`select pg_advisory_xact_lock(hashtext('ai-usage-daily-limit'), hashtext(${`${input.userId}:${input.provider}:${input.credentialId ?? ""}:${input.budgetScope ?? ""}`}))`,
       );
       const [current] = await transaction
         .select({ value: count() })
@@ -337,6 +349,9 @@ export class DrizzleAiRepository implements AiRepository {
             input.credentialId === null
               ? isNull(aiUsageLedger.credentialId)
               : eq(aiUsageLedger.credentialId, input.credentialId),
+            input.budgetScope
+              ? sql`${aiUsageLedger.metadata}->>'budgetScope' = ${input.budgetScope}`
+              : undefined,
           ),
         );
       if ((current?.value ?? 0) >= input.dailyRequestLimit) {
@@ -703,6 +718,7 @@ export class AiService {
   readonly #recapPrompt: RecapPromptPort | undefined;
   readonly #tools: ReadonlyMap<AiToolName, AiExecutableTool>;
   readonly #managedGemini: ManagedGeminiConfiguration | undefined;
+  readonly #managedRecapOpenRouter: ManagedRecapOpenRouterConfiguration | undefined;
   readonly #now: () => Date;
 
   constructor(input: {
@@ -714,6 +730,7 @@ export class AiService {
     readonly analytics: AiAnalyticsSnapshotPort;
     readonly recapPrompt?: RecapPromptPort;
     readonly managedGemini?: ManagedGeminiConfiguration;
+    readonly managedRecapOpenRouter?: ManagedRecapOpenRouterConfiguration;
     readonly now?: () => Date;
   }) {
     this.#repository = input.repository;
@@ -727,6 +744,7 @@ export class AiService {
     // service instance — and therefore the very same membership check — the HTTP routes use.
     this.#tools = createAiToolRegistry({ decisions: input.decisions });
     this.#managedGemini = input.managedGemini;
+    this.#managedRecapOpenRouter = input.managedRecapOpenRouter;
     this.#now = input.now ?? (() => new Date());
   }
 
@@ -774,7 +792,17 @@ export class AiService {
         };
       }),
     );
-    return { generatedAt: now.toISOString(), providers };
+    return {
+      generatedAt: now.toISOString(),
+      providers,
+      includedRecapProvider: this.#managedRecapOpenRouter
+        ? {
+            provider: "openrouter",
+            model: MANAGED_RECAP_OPENROUTER_MODEL,
+            dailyRequestLimitPerSpice: MANAGED_RECAP_DAILY_LIMIT_PER_SPICE,
+          }
+        : null,
+    };
   }
 
   async saveProvider(
@@ -947,27 +975,42 @@ export class AiService {
      * the stored recap can record exactly the setting the prompt used.
      */
     readonly recapSpiceLevel?: RecapSpiceLevel;
+    /** Recap service only: use the operator's spice-aware included route instead of BYOK. */
+    readonly useIncludedProvider?: boolean;
   }): Promise<AiFeatureWithToolUseResponse> {
     const started = Date.now();
-    const provider = input.provider ?? "gemini";
     if (
       input.feature !== "weekly-recap" &&
-      (input.weeklyAwardsWeek !== undefined || input.recapSpiceLevel !== undefined)
+      (input.weeklyAwardsWeek !== undefined ||
+        input.recapSpiceLevel !== undefined ||
+        input.useIncludedProvider !== undefined)
     ) {
       throw new AiServiceError(
         "NOT_CONFIGURED",
-        "weeklyAwardsWeek and recapSpiceLevel apply only to the weekly-recap feature.",
+        "weeklyAwardsWeek, recapSpiceLevel, and useIncludedProvider apply only to the weekly-recap feature.",
         400,
       );
     }
+    if (input.useIncludedProvider && input.provider !== undefined) {
+      throw new AiServiceError(
+        "NOT_CONFIGURED",
+        "An included recap request cannot also select a personal provider.",
+        400,
+      );
+    }
+    const requestedSpiceLevel = input.recapSpiceLevel ?? "medium";
+    const executionPromise = input.useIncludedProvider
+      ? this.#includedRecapExecution(input.userId, requestedSpiceLevel)
+      : this.#executionCredential(input.userId, input.provider ?? "gemini");
     const [execution, context] = await Promise.all([
-      this.#executionCredential(input.userId, provider),
+      executionPromise,
       this.#leagueContext(input.userId, input.leagueId, {
         ...(input.weeklyAwardsWeek === undefined
           ? {}
           : { weeklyAwardsWeek: input.weeklyAwardsWeek }),
       }),
     ]);
+    const provider = execution.provider;
     const definition = FEATURE_DEFINITIONS[input.feature];
     const generatedAt = this.#now();
     const envelope = {
@@ -1303,6 +1346,26 @@ export class AiService {
     );
   }
 
+  async #includedRecapExecution(userId: string, spiceLevel: RecapSpiceLevel): Promise<AiExecution> {
+    if (spiceLevel !== "mild" && this.#managedRecapOpenRouter) {
+      const label = spiceLevel === "medium" ? "Medium" : "Scorched";
+      return {
+        credential: null,
+        credentialId: null,
+        userId,
+        provider: "openrouter",
+        accessMode: "managed",
+        apiKey: this.#managedRecapOpenRouter.apiKey,
+        model: MANAGED_RECAP_OPENROUTER_MODEL,
+        dailyRequestLimit: MANAGED_RECAP_DAILY_LIMIT_PER_SPICE,
+        maxOutputTokens: this.#managedRecapOpenRouter.maxOutputTokens,
+        budgetScope: `weekly-recap-${spiceLevel}`,
+        dailyLimitMessage: `Included ${label} recaps are limited to one generation per member per UTC day. Choose a personal AI provider for an independent limit.`,
+      };
+    }
+    return this.#executionCredential(userId, "gemini");
+  }
+
   /**
    * Atomically reserve a daily-limit slot BEFORE the provider call and return
    * the reservation id. Because the reservation row is written (and counts)
@@ -1323,9 +1386,11 @@ export class AiService {
       model: execution.model,
       operation,
       dailyRequestLimit: execution.dailyRequestLimit,
+      ...(execution.budgetScope ? { budgetScope: execution.budgetScope } : {}),
       since: utcDayStart(now),
       metadata: {
         accessMode: execution.accessMode,
+        ...(execution.budgetScope ? { budgetScope: execution.budgetScope } : {}),
         ...(metadataExtras.leagueId ? { leagueId: metadataExtras.leagueId } : {}),
         ...(metadataExtras.feature ? { feature: metadataExtras.feature } : {}),
       },
@@ -1334,9 +1399,10 @@ export class AiService {
     if (!reservation) {
       throw new AiServiceError(
         "DAILY_LIMIT",
-        execution.accessMode === "managed"
-          ? `Your included Gemini allowance of ${execution.dailyRequestLimit} requests per UTC day has been reached. Add your own API key for an independent limit.`
-          : `Your ${execution.provider} safety limit of ${execution.dailyRequestLimit} requests per UTC day has been reached.`,
+        execution.dailyLimitMessage ??
+          (execution.accessMode === "managed"
+            ? `Your included ${execution.provider} allowance of ${execution.dailyRequestLimit} requests per UTC day has been reached. Add your own API key for an independent limit.`
+            : `Your ${execution.provider} safety limit of ${execution.dailyRequestLimit} requests per UTC day has been reached.`),
         429,
       );
     }
@@ -1424,7 +1490,9 @@ export class AiService {
         ? "INVALID_CREDENTIAL"
         : "PROVIDER_ERROR",
       providerError.credentialInvalid && input.execution.accessMode === "managed"
-        ? "Included Gemini access is temporarily unavailable. The Laces Out host needs to check its AI configuration."
+        ? input.execution.provider === "openrouter"
+          ? "Included Grok access through OpenRouter is temporarily unavailable. The Laces Out host needs to check its AI configuration."
+          : "Included Gemini access is temporarily unavailable. The Laces Out host needs to check its AI configuration."
         : providerError.message,
       providerError.credentialInvalid && input.execution.accessMode === "managed"
         ? 503

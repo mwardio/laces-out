@@ -81,6 +81,9 @@ describe("recap helpers", () => {
     expect(recapByline({ ...RECAP, generatedByDisplayName: null })).toBe(
       "Week 5 · written by Gemini · Scorched",
     );
+    expect(recapByline({ ...RECAP, provider: "openrouter", model: "x-ai/grok-4.3" })).toContain(
+      "written by Grok via OpenRouter",
+    );
   });
 
   it("bylines the level a recap was written at, not today's setting", () => {

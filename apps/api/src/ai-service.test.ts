@@ -13,6 +13,7 @@ import {
   AiService,
   AI_PROVIDER_DEFAULTS,
   MANAGED_GEMINI_MODEL,
+  MANAGED_RECAP_OPENROUTER_MODEL,
   type AiCredentialRecord,
   type AiRepository,
   type AiServiceError,
@@ -126,7 +127,8 @@ class MemoryAiRepository implements AiRepository {
         item.userId === input.userId &&
         item.provider === input.provider &&
         item.credentialId === input.credentialId &&
-        item.occurredAt >= input.since,
+        item.occurredAt >= input.since &&
+        (input.budgetScope === undefined || item.metadata.budgetScope === input.budgetScope),
     ).length;
     if (used >= input.dailyRequestLimit) {
       return Promise.resolve(null);
@@ -297,6 +299,10 @@ function serviceFixture(
     roster: [],
   },
   recapPrompt?: RecapPromptPort,
+  managedRecapOpenRouter?: {
+    readonly apiKey: string;
+    readonly maxOutputTokens: number;
+  },
 ) {
   const wrapped = fullAdapter(adapter);
   const adapters = {
@@ -331,6 +337,7 @@ function serviceFixture(
       },
       analytics: { getSnapshot: analyticsSnapshot },
       ...(managedGemini ? { managedGemini } : {}),
+      ...(managedRecapOpenRouter ? { managedRecapOpenRouter } : {}),
       ...(recapPrompt ? { recapPrompt } : {}),
       now: () => new Date(NOW),
     }),
@@ -998,6 +1005,10 @@ describe("weekly recap personalization", () => {
     dailyRequestLimit: 50,
     maxOutputTokens: 2000,
   };
+  const MANAGED_RECAP_OPENROUTER = {
+    apiKey: "managed-openrouter-secret",
+    maxOutputTokens: 2000,
+  };
 
   function completion() {
     return vi.fn((input: AiCompletionInput) => {
@@ -1050,6 +1061,141 @@ describe("weekly recap personalization", () => {
     expect(call?.prompt).toContain("Spice level: medium.");
     expect(call?.prompt).toContain("finished recap should be unmistakably NSFW");
     expect(call?.prompt).toContain("Do not censor words with asterisks");
+  });
+
+  it("routes included Medium and Scorched recaps through Grok with separate daily quotas", async () => {
+    const complete = completion();
+    const repository = new MemoryAiRepository();
+    const { service } = serviceFixture(
+      { complete },
+      repository,
+      MANAGED,
+      undefined,
+      undefined,
+      undefined,
+      MANAGED_RECAP_OPENROUTER,
+    );
+
+    await expect(service.listProviders(USER_ID)).resolves.toMatchObject({
+      includedRecapProvider: {
+        provider: "openrouter",
+        model: MANAGED_RECAP_OPENROUTER_MODEL,
+        dailyRequestLimitPerSpice: 1,
+      },
+    });
+
+    const medium = await service.generateFeature({
+      userId: USER_ID,
+      feature: "weekly-recap",
+      leagueId: LEAGUE_ID,
+      recapSpiceLevel: "medium",
+      useIncludedProvider: true,
+    });
+    expect(medium).toMatchObject({
+      provider: "openrouter",
+      accessMode: "managed",
+      model: MANAGED_RECAP_OPENROUTER_MODEL,
+    });
+    expect(complete.mock.calls[0]?.[0]).toMatchObject({
+      apiKey: "managed-openrouter-secret",
+      model: MANAGED_RECAP_OPENROUTER_MODEL,
+    });
+    expect(repository.usage[0]?.metadata).toMatchObject({
+      accessMode: "managed",
+      feature: "weekly-recap",
+      budgetScope: "weekly-recap-medium",
+    });
+
+    await expect(
+      service.generateFeature({
+        userId: USER_ID,
+        feature: "weekly-recap",
+        leagueId: LEAGUE_ID,
+        recapSpiceLevel: "medium",
+        useIncludedProvider: true,
+      }),
+    ).rejects.toThrow(/one generation per member per UTC day/u);
+
+    await expect(
+      service.generateFeature({
+        userId: USER_ID,
+        feature: "weekly-recap",
+        leagueId: LEAGUE_ID,
+        recapSpiceLevel: "scorched",
+        useIncludedProvider: true,
+      }),
+    ).resolves.toMatchObject({
+      provider: "openrouter",
+      model: MANAGED_RECAP_OPENROUTER_MODEL,
+    });
+    expect(repository.usage[1]?.metadata).toMatchObject({
+      budgetScope: "weekly-recap-scorched",
+    });
+  });
+
+  it("keeps personal-provider recap generations outside the included spice quota", async () => {
+    const complete = completion();
+    const repository = new MemoryAiRepository();
+    const { service } = serviceFixture(
+      { complete },
+      repository,
+      MANAGED,
+      undefined,
+      undefined,
+      undefined,
+      MANAGED_RECAP_OPENROUTER,
+    );
+
+    await service.generateFeature({
+      userId: USER_ID,
+      feature: "weekly-recap",
+      leagueId: LEAGUE_ID,
+      recapSpiceLevel: "medium",
+      useIncludedProvider: true,
+    });
+    await service.saveProvider(USER_ID, "openrouter", {
+      apiKey: "sk-or-personal-secret",
+      model: "x-ai/grok-4.3",
+      dailyRequestLimit: 3,
+      maxOutputTokens: 2000,
+    });
+
+    await expect(
+      service.generateFeature({
+        userId: USER_ID,
+        feature: "weekly-recap",
+        leagueId: LEAGUE_ID,
+        provider: "openrouter",
+        recapSpiceLevel: "medium",
+      }),
+    ).resolves.toMatchObject({ provider: "openrouter", accessMode: "byok" });
+    await expect(
+      service.generateFeature({
+        userId: USER_ID,
+        feature: "weekly-recap",
+        leagueId: LEAGUE_ID,
+        provider: "openrouter",
+        recapSpiceLevel: "medium",
+      }),
+    ).resolves.toMatchObject({ provider: "openrouter", accessMode: "byok" });
+    await expect(
+      service.generateFeature({
+        userId: USER_ID,
+        feature: "weekly-recap",
+        leagueId: LEAGUE_ID,
+        provider: "openrouter",
+        recapSpiceLevel: "medium",
+      }),
+    ).resolves.toMatchObject({ provider: "openrouter", accessMode: "byok" });
+    await expect(
+      service.generateFeature({
+        userId: USER_ID,
+        feature: "weekly-recap",
+        leagueId: LEAGUE_ID,
+        provider: "openrouter",
+        recapSpiceLevel: "medium",
+      }),
+    ).rejects.toThrow(/safety limit of 3 requests/u);
   });
 
   it("injects persona cards inside the untrusted league data block only", async () => {

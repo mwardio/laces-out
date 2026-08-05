@@ -2448,6 +2448,15 @@ export const aiProviderListResponseSchema = z
   .object({
     generatedAt: z.iso.datetime(),
     providers: z.array(aiProviderConfigurationSchema).length(6),
+    includedRecapProvider: z
+      .object({
+        provider: aiProviderNameSchema,
+        model: z.string().min(1).max(160),
+        dailyRequestLimitPerSpice: z.number().int().min(1).max(500),
+      })
+      .strict()
+      .nullable()
+      .optional(),
   })
   .strict();
 export type AiProviderListResponse = z.infer<typeof aiProviderListResponseSchema>;
