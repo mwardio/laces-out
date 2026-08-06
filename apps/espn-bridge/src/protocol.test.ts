@@ -15,6 +15,7 @@ import {
   syncAlarmName,
   validateBridgeConfiguration,
   validateBridgePairingOffer,
+  validateDiscoverLeaguesMessage,
   validateLeagueIds,
   validateStoredPendingOffer,
   type BridgeLeagueResult,
@@ -251,4 +252,28 @@ describe("ESPN bridge multi-league protocol", () => {
       message: "Sign in to ESPN in this browser, then sync again.",
     });
   });
+});
+
+describe("bridge discovery protocol", () => {
+  it("accepts a discovery request and returns its validated season", () => {
+    expect(validateDiscoverLeaguesMessage({ type: "DISCOVER_LEAGUES", season: 2026 })).toBe(2026);
+  });
+
+  it.each([
+    [null],
+    ["DISCOVER_LEAGUES"],
+    [{ type: "PAIRING_OFFER", season: 2026 }],
+    [{ season: 2026 }],
+  ])("rejects non-discovery messages: %j", (message) => {
+    expect(() => validateDiscoverLeaguesMessage(message)).toThrow("Not a bridge discovery request");
+  });
+
+  it.each([[undefined], ["2026"], [1999], [2101], [2026.5]])(
+    "rejects out-of-bounds or non-numeric seasons: %j",
+    (season) => {
+      expect(() => validateDiscoverLeaguesMessage({ type: "DISCOVER_LEAGUES", season })).toThrow(
+        "ESPN season is invalid",
+      );
+    },
+  );
 });

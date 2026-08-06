@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { capturedEspnSessionFromCookies, type EspnCookieCandidate } from "./session-credential.js";
+import {
+  capturedEspnSessionFromCookies,
+  isValidSwid,
+  type EspnCookieCandidate,
+} from "./session-credential.js";
 
 const capturedAt = "2026-08-05T18:00:00.000Z";
 const swid: EspnCookieCandidate = {
@@ -41,4 +45,12 @@ describe("ESPN extension session credential reduction", () => {
       ).toBeUndefined();
     },
   );
+
+  it("validates a braced-UUID SWID and nothing else", () => {
+    expect(isValidSwid("{123e4567-e89b-42d3-a456-426614174000}")).toBe(true);
+    expect(isValidSwid("{123E4567-E89B-42D3-A456-426614174000}")).toBe(true);
+    expect(isValidSwid("123e4567-e89b-42d3-a456-426614174000")).toBe(false);
+    expect(isValidSwid("{123e4567-e89b-42d3-a456-42661417400}")).toBe(false);
+    expect(isValidSwid("")).toBe(false);
+  });
 });

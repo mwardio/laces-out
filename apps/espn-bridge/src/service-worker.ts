@@ -3,6 +3,7 @@ import {
   createPendingPairingOffer,
   isBridgeLiveDraftRequest,
   maintenanceStorageKey,
+  pairingOfferIsFresh,
   pendingPairingStorageKey,
   serverSessionPendingStorageKey,
   serverSessionStatusStorageKey,
@@ -11,11 +12,15 @@ import {
   syncAlarmName,
   validateBridgeConfiguration,
   validateBridgePairingOffer,
+  validateDiscoverLeaguesMessage,
+  validateStoredPendingOffer,
   type BridgeConfiguration,
+  type BridgeDiscoverLeaguesResponse,
   type BridgeLeagueResult,
   type BridgeLiveDraftRequest,
   type BridgeLiveDraftResponse,
   type BridgePairingOfferResponse,
+  type BridgePingResponse,
   type BridgeRequest,
   type BridgeResponse,
   type BridgeServerSessionOfferResponse,
@@ -24,6 +29,7 @@ import {
   type BridgeStatus,
   type BridgeStatusState,
 } from "./protocol.js";
+import { fanProfileEndpoint, parseFanProfileLeagues } from "./discovery.js";
 import {
   defaultMaintenanceState,
   loginRequiredBackoffMs,
@@ -57,7 +63,11 @@ import {
   type BridgeLiveDraftStatus,
   type LiveDraftUploadOutcome,
 } from "./live-draft/uplink.js";
-import { capturedEspnSessionFromCookies, type CapturedEspnSession } from "./session-credential.js";
+import {
+  capturedEspnSessionFromCookies,
+  isValidSwid,
+  type CapturedEspnSession,
+} from "./session-credential.js";
 
 const ESPN_ORIGIN = "https://lm-api-reads.fantasy.espn.com";
 const MAX_ESPN_BYTES = 5 * 1024 * 1024;
@@ -831,6 +841,136 @@ async function captureEspnSessionFromCookieStore(): Promise<CapturedEspnSession 
   }
 }
 
+// League discovery answers a Laces Out page's DISCOVER_LEAGUES with the leagues
+// on the signed-in ESPN account, so members pick from a list instead of typing
+// IDs. Only the SWID cookie is read — for the URL path; `espn_s2` rides along
+// via `credentials: "include"` and is never touched. Nothing is stored, and the
+// in-flight/cache pair bounds how much ESPN traffic a polling page can cause.
+const DISCOVERY_CACHE_TTL_MS = 30 * 1000;
+let activeDiscovery:
+  { readonly season: number; readonly promise: Promise<BridgeDiscoverLeaguesResponse> } | undefined;
+let discoveryCache:
+  | {
+      readonly season: number;
+      readonly at: number;
+      readonly response: BridgeDiscoverLeaguesResponse;
+    }
+  | undefined;
+
+async function readSwidFromCookieStore(): Promise<string | undefined> {
+  let cookie: chrome.cookies.Cookie | null;
+  try {
+    cookie = await chrome.cookies.get({
+      url: "https://fantasy.espn.com/football/",
+      name: "SWID",
+    });
+  } catch {
+    return undefined;
+  }
+  if (cookie?.name !== "SWID") return undefined;
+  let swid = cookie.value;
+  try {
+    swid = decodeURIComponent(swid);
+  } catch {
+    // Keep the raw value; validation below decides.
+  }
+  swid = swid.trim();
+  return isValidSwid(swid) ? swid : undefined;
+}
+
+async function performLeagueDiscovery(season: number): Promise<BridgeDiscoverLeaguesResponse> {
+  const loginRequired: BridgeDiscoverLeaguesResponse = {
+    ok: false,
+    state: "espn-login-required",
+    reason: "Sign in to ESPN in this browser, then try again.",
+  };
+  const swid = await readSwidFromCookieStore();
+  if (swid === undefined) return loginRequired;
+  let response: Response;
+  try {
+    response = await fetch(fanProfileEndpoint(swid), {
+      method: "GET",
+      headers: { Accept: "application/json" },
+      credentials: "include",
+      cache: "no-store",
+      redirect: "error",
+      referrerPolicy: "no-referrer",
+    });
+  } catch {
+    return { ok: false, state: "error", reason: "ESPN could not be reached." };
+  }
+  if ([401, 403].includes(response.status)) return loginRequired;
+  if (!response.ok) {
+    return { ok: false, state: "error", reason: `ESPN returned status ${response.status}.` };
+  }
+  let payload: unknown;
+  try {
+    payload = JSON.parse(await readBoundedText(response));
+  } catch {
+    return { ok: false, state: "error", reason: "ESPN returned an unreadable profile." };
+  }
+  const { leagues, seasonMatched } = parseFanProfileLeagues(payload, season);
+  return { ok: true, state: "ok", leagues, seasonMatched };
+}
+
+function handleDiscoverLeagues(message: unknown): Promise<BridgeDiscoverLeaguesResponse> {
+  let season: number;
+  try {
+    season = validateDiscoverLeaguesMessage(message);
+  } catch (error) {
+    return Promise.resolve({
+      ok: false,
+      state: "error",
+      reason: error instanceof Error ? error.message : "Invalid discovery request",
+    });
+  }
+  if (
+    discoveryCache !== undefined &&
+    discoveryCache.season === season &&
+    Date.now() - discoveryCache.at < DISCOVERY_CACHE_TTL_MS
+  ) {
+    return Promise.resolve(discoveryCache.response);
+  }
+  if (activeDiscovery?.season === season) return activeDiscovery.promise;
+  const promise = performLeagueDiscovery(season)
+    .then((response) => {
+      if (response.ok) discoveryCache = { season, at: Date.now(), response };
+      return response;
+    })
+    .finally(() => {
+      if (activeDiscovery?.promise === promise) activeDiscovery = undefined;
+    });
+  activeDiscovery = { season, promise };
+  return promise;
+}
+
+async function handleBridgePing(senderOrigin: string | undefined): Promise<BridgePingResponse> {
+  let configuration: BridgeConfiguration | undefined;
+  try {
+    configuration = await getConfiguration();
+  } catch {
+    configuration = undefined;
+  }
+  const [status, stored] = await Promise.all([
+    getStatus(),
+    chrome.storage.local.get(pendingPairingStorageKey),
+  ]);
+  const pending = validateStoredPendingOffer(stored[pendingPairingStorageKey]);
+  return {
+    ok: true,
+    discovery: true,
+    version: chrome.runtime.getManifest().version,
+    configured: configuration !== undefined,
+    pairedToThisOrigin:
+      configuration !== undefined &&
+      typeof senderOrigin === "string" &&
+      senderOrigin === configuration.apiBaseUrl,
+    pendingOffer: pending !== undefined && pairingOfferIsFresh(pending, Date.now()),
+    state: status.state,
+    lastSuccessfulAt: status.lastSuccessfulAt,
+  };
+}
+
 async function pendingServerSessionEnable(): Promise<boolean> {
   const stored = await chrome.storage.local.get(serverSessionPendingStorageKey);
   const value = stored[serverSessionPendingStorageKey];
@@ -1274,6 +1414,7 @@ async function handleRequest(
       serverSessionPendingStorageKey,
     ]);
     await chrome.alarms.clear(syncAlarmName);
+    void clearPairingNudge();
     return { ok: true, status: DEFAULT_STATUS };
   }
   if (request.type === "CONFIGURE") {
@@ -1294,6 +1435,11 @@ async function handleRequest(
       state: "ready",
       message: `Paired for ${configuration.leagueIds.length} ESPN ${configuration.leagueIds.length === 1 ? "league" : "leagues"}. Sync while signed in to ESPN.`,
     });
+    void clearPairingNudge();
+    // First sync starts now rather than at the alarm's one-minute delay, and
+    // deliberately does not block this response: the popup renders "paired"
+    // immediately while data lands in the background.
+    void runManualSynchronization();
     return { ok: true, status };
   }
   if (request.type === "SYNC_NOW") {
@@ -1341,6 +1487,37 @@ chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === syncAlarmName) void runMaintenance();
 });
 
+const DEFAULT_ACTION_TITLE = "Laces Out ESPN Bridge";
+
+// Draws the member to the one remaining pairing step. `openPopup` exists from
+// Chrome 127 and may throw (no focused window, popup already open); the badge
+// is the always-available fallback. Cosmetic — never fails the pairing path.
+async function showPairingNudge(): Promise<void> {
+  try {
+    await chrome.action.setBadgeBackgroundColor({ color: "#b45309" });
+    await chrome.action.setBadgeText({ text: "1" });
+    await chrome.action.setTitle({ title: "Laces Out — confirm pairing" });
+  } catch {
+    // Badge APIs are cosmetic.
+  }
+  if (typeof chrome.action.openPopup === "function") {
+    try {
+      await chrome.action.openPopup();
+    } catch {
+      // The badge remains as the nudge.
+    }
+  }
+}
+
+async function clearPairingNudge(): Promise<void> {
+  try {
+    await chrome.action.setBadgeText({ text: "" });
+    await chrome.action.setTitle({ title: DEFAULT_ACTION_TITLE });
+  } catch {
+    // Badge APIs are cosmetic.
+  }
+}
+
 // A Laces Out page (allowed via `externally_connectable`) can offer to pair the
 // bridge with itself. Store a valid offer as PENDING and never configure or
 // request permissions here — completion requires an explicit popup gesture. The
@@ -1358,6 +1535,7 @@ async function handlePairingOffer(
   await chrome.storage.local.set({
     [pendingPairingStorageKey]: createPendingPairingOffer(configuration, new Date().toISOString()),
   });
+  void showPairingNudge();
   return { ok: true, state: "pending-confirmation" };
 }
 
@@ -1365,9 +1543,21 @@ chrome.runtime.onMessageExternal.addListener(
   (
     message: unknown,
     sender,
-    sendResponse: (response: BridgePairingOfferResponse | BridgeServerSessionOfferResponse) => void,
+    sendResponse: (
+      response:
+        | BridgePairingOfferResponse
+        | BridgeServerSessionOfferResponse
+        | BridgePingResponse
+        | BridgeDiscoverLeaguesResponse,
+    ) => void,
   ) => {
     void (async () => {
+      if (isRecord(message) && message.type === "BRIDGE_PING") {
+        return handleBridgePing(sender.origin);
+      }
+      if (isRecord(message) && message.type === "DISCOVER_LEAGUES") {
+        return handleDiscoverLeagues(message);
+      }
       if (isRecord(message) && message.type === "ENABLE_SERVER_SESSION") {
         const configuration = await getConfiguration();
         if (!configuration || sender.origin !== configuration.apiBaseUrl) {

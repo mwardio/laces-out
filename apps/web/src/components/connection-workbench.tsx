@@ -3,16 +3,11 @@
 import {
   ArrowRight,
   Check,
-  Clipboard,
-  ExternalLink,
   Info,
-  KeyRound,
   Link2,
   LoaderCircle,
   LockKeyhole,
   Laptop,
-  MonitorUp,
-  PackageCheck,
   RefreshCw,
   ServerCog,
   ShieldCheck,
@@ -20,41 +15,23 @@ import {
   Unplug,
   X,
 } from "lucide-react";
-import { type FormEvent, useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 import {
-  absoluteApiOrigin,
   apiBaseUrl,
-  parseEspnBridgeDeviceCredential,
   parseEspnBridgeDeviceList,
-  parseEspnBridgePairingSession,
   parseEspnLeagueRefreshStatus,
   parseEspnSessionConnectionList,
   parseLeagueListResponse,
   type EspnBridgeDeviceStatus,
-  type EspnBridgePairingSession,
   type EspnLeagueRefreshStatus,
   type EspnSessionConnectionList,
 } from "../lib/api-client";
-import {
-  chromeWebStoreUrl,
-  publishedBridgeAcceptsOrigin,
-  sendPairingOffer,
-  sendServerSessionOffer,
-  type PairingOfferOutcome,
-} from "../lib/bridge-extension";
-import { currentEspnSeason, parseEspnLeagueIds } from "../lib/espn-league-ids";
+import { sendServerSessionOffer } from "../lib/bridge-extension";
 import { publishYahooConnectionState } from "../lib/provider-connection-events";
 import { yahooComingSoon } from "../lib/public-site";
 import { loginUrlForCurrentPath } from "../lib/safe-return-to";
-
-interface ScopedBridgeCredential {
-  readonly deviceId: string;
-  readonly deviceToken: string;
-  readonly expiresAt: string | null;
-  readonly leagueIds: readonly string[];
-  readonly season: number;
-}
+import { EspnPairingStepper } from "./espn-pairing-stepper";
 
 type BridgeDevice = EspnBridgeDeviceStatus;
 type EspnServerSessionConnection = EspnSessionConnectionList["connections"][number];
@@ -218,12 +195,6 @@ function espnDirectStateLabel(status: EspnLeagueRefreshStatus): string {
 }
 
 export function ConnectionWorkbench() {
-  const [leagueIdsInput, setLeagueIdsInput] = useState("");
-  const [espnSeason, setEspnSeason] = useState(() => currentEspnSeason());
-  const [deviceName, setDeviceName] = useState("My Chrome bridge");
-  const [bridgeState, setBridgeState] = useState<RequestState>("idle");
-  const [bridgeError, setBridgeError] = useState<string | null>(null);
-  const [credential, setCredential] = useState<ScopedBridgeCredential | null>(null);
   const [bridgeDevices, setBridgeDevices] = useState<readonly BridgeDevice[]>([]);
   const [bridgeDevicesState, setBridgeDevicesState] = useState<RequestState>("working");
   const [bridgeDevicesError, setBridgeDevicesError] = useState<string | null>(null);
@@ -247,13 +218,6 @@ export function ConnectionWorkbench() {
   const [signedOut, setSignedOut] = useState(false);
   const [revokingDeviceId, setRevokingDeviceId] = useState<string | null>(null);
   const [bridgeRevokeCandidate, setBridgeRevokeCandidate] = useState<string | null>(null);
-  const [pairingCodeCopyState, setPairingCodeCopyState] = useState<"idle" | "done" | "error">(
-    "idle",
-  );
-  const [selfHostedPairing, setSelfHostedPairing] = useState<EspnBridgePairingSession | null>(null);
-  const [sendExtensionState, setSendExtensionState] = useState<
-    "idle" | "sending" | "sent" | "failed"
-  >("idle");
   const [yahooState, setYahooState] = useState<RequestState>("idle");
   const [yahooError, setYahooError] = useState<string | null>(null);
   const [yahooConnections, setYahooConnections] = useState<readonly YahooConnectionStatus[]>([]);
@@ -460,6 +424,15 @@ export function ConnectionWorkbench() {
     window.history.replaceState({}, "", window.location.pathname);
   }, []);
 
+  const handleBridgeDevicesChanged = useCallback(() => {
+    void refreshBridgeDevices();
+  }, [refreshBridgeDevices]);
+
+  const handleBridgeSyncActivity = useCallback(() => {
+    void refreshEspnLeagueStatuses(true);
+    void refreshEspnServerSessions(true);
+  }, [refreshEspnLeagueStatuses, refreshEspnServerSessions]);
+
   useEffect(() => {
     void refreshBridgeDevices();
     void refreshEspnLeagueStatuses();
@@ -628,135 +601,6 @@ export function ConnectionWorkbench() {
     }
   }
 
-  async function pairBridge(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    setBridgeState("working");
-    setBridgeError(null);
-    setCredential(null);
-    setSendExtensionState("idle");
-    setSelfHostedPairing(null);
-    setPairingCodeCopyState("idle");
-    try {
-      let allowedLeagueIds: readonly string[];
-      try {
-        allowedLeagueIds = parseEspnLeagueIds(leagueIdsInput);
-      } catch (error) {
-        throw new ConnectionUiError(
-          error instanceof Error ? error.message : "The ESPN league ID list is invalid.",
-        );
-      }
-      if (!Number.isSafeInteger(espnSeason) || espnSeason < 2000 || espnSeason > 2100) {
-        throw new ConnectionUiError("Choose a valid ESPN fantasy season.");
-      }
-      const credentialName = deviceName.trim();
-      const response = await fetch(`${apiBaseUrl}/v1/bridge/espn/devices`, {
-        method: "POST",
-        credentials: "include",
-        headers: { Accept: "application/json", "Content-Type": "application/json" },
-        body: JSON.stringify({
-          name: credentialName,
-          allowedLeagueIds,
-          season: espnSeason,
-          agentCapabilities: ["refresh-intents-v1"],
-        }),
-      });
-      if (response.status === 401) {
-        window.location.assign(loginUrlForCurrentPath());
-        return;
-      }
-      if (!response.ok) {
-        throw new ConnectionUiError(
-          response.status === 503
-            ? "The bridge API is temporarily unavailable. Check the database and API process."
-            : "The bridge device could not be created.",
-        );
-      }
-      const issued = parseEspnBridgeDeviceCredential(await response.json());
-      if (!issued) {
-        throw new ConnectionUiError("The bridge returned an invalid credential.");
-      }
-      const scopedCredential: ScopedBridgeCredential = {
-        ...issued,
-        leagueIds: allowedLeagueIds,
-        season: espnSeason,
-      };
-      setCredential(scopedCredential);
-      const outcome = await sendCredentialToExtension(scopedCredential);
-      if (!outcome.ok && !publishedBridgeAcceptsOrigin(window.location.origin)) {
-        const pairingResponse = await fetch(`${apiBaseUrl}/v1/bridge/espn/pairing-sessions`, {
-          method: "POST",
-          credentials: "include",
-          headers: { Accept: "application/json", "Content-Type": "application/json" },
-          body: JSON.stringify({
-            name: credentialName,
-            allowedLeagueIds,
-            season: espnSeason,
-          }),
-        });
-        if (!pairingResponse.ok) {
-          throw new ConnectionUiError(
-            "The companion was not detected and a self-hosted pairing code could not be created.",
-          );
-        }
-        const pairingSession = parseEspnBridgePairingSession(await pairingResponse.json());
-        if (!pairingSession) {
-          throw new ConnectionUiError("The bridge returned an invalid pairing code.");
-        }
-        setSelfHostedPairing(pairingSession);
-        setCredential(null);
-        // The direct handoff credential never reached an extension. Revoke that unused record
-        // after the independent one-time exchange exists, so the member sees only the device
-        // that actually completes pairing.
-        await fetch(`${apiBaseUrl}/v1/bridge/espn/devices/${issued.deviceId}`, {
-          method: "DELETE",
-          credentials: "include",
-          headers: { Accept: "application/json" },
-        }).catch(() => undefined);
-      }
-      setBridgeState("done");
-      await refreshBridgeDevices();
-    } catch (error) {
-      setBridgeState("error");
-      setBridgeError(
-        error instanceof ConnectionUiError
-          ? error.message
-          : "The API could not pair this bridge. Try again when it is available.",
-      );
-    }
-  }
-
-  async function sendCredentialToExtension(
-    credentialToSend: ScopedBridgeCredential | null = credential,
-  ): Promise<PairingOfferOutcome> {
-    if (!credentialToSend) return { ok: false };
-    setSendExtensionState("sending");
-    let outcome: PairingOfferOutcome;
-    try {
-      // The token travels only inside this message payload — never a URL, log, or clipboard.
-      outcome = await sendPairingOffer({
-        apiBaseUrl: window.location.origin,
-        deviceToken: credentialToSend.deviceToken,
-        leagues: credentialToSend.leagueIds,
-        season: credentialToSend.season,
-      });
-    } catch {
-      outcome = { ok: false };
-    }
-    setSendExtensionState(outcome.ok ? "sent" : "failed");
-    return outcome;
-  }
-
-  async function copySelfHostedPairingCode() {
-    if (!selfHostedPairing) return;
-    try {
-      await navigator.clipboard.writeText(selfHostedPairing.pairingCode);
-      setPairingCodeCopyState("done");
-      window.setTimeout(() => setPairingCodeCopyState("idle"), 1800);
-    } catch {
-      setPairingCodeCopyState("error");
-    }
-  }
-
   async function revokeBridgeDevice(deviceId: string) {
     setRevokingDeviceId(deviceId);
     setBridgeDevicesError(null);
@@ -771,7 +615,6 @@ export function ConnectionWorkbench() {
         return;
       }
       if (!response.ok) throw new ConnectionUiError("This bridge device could not be revoked.");
-      if (credential?.deviceId === deviceId) setCredential(null);
       setBridgeRevokeCandidate(null);
       await refreshBridgeDevices();
     } catch (error) {
@@ -981,260 +824,46 @@ export function ConnectionWorkbench() {
             </span>
           </div>
           <p>
-            The Chrome companion connects your private leagues without collecting your ESPN
-            password. The recommended keep-synced setup stores encrypted session authorization so
-            scheduled and mobile-requested refreshes continue when Chrome is closed.
-          </p>
-          <p className="connection-provider__supporting-copy">
-            Public viewability is optional. A league manager may follow ESPN&apos;s{" "}
-            <a
-              href="https://support.espn.com/hc/en-us/articles/47160849553940-Making-a-Private-League-Public-LM-Only"
-              target="_blank"
-              rel="noreferrer"
-            >
-              public-view instructions
-            </a>{" "}
-            to make direct refresh eligible; it does not make the league joinable and does not imply
-            ESPN endorsement.
+            The Chrome companion finds the leagues on your signed-in ESPN account and keeps them
+            current — read-only, and your ESPN password is never collected.
           </p>
 
-          <div className="espn-method-panel">
-            <div className="bridge-readiness" role="note">
-              <PackageCheck size={16} />
-              <div>
-                <strong>Connect once, then stay current</strong>
-                <span>
-                  The Chrome companion pairs your ESPN account and, with your confirmation, enables
-                  encrypted always-on refreshes. Laces Out can then update scheduled and
-                  mobile-requested league data even when Chrome is closed.
-                </span>
-                <a
-                  className="button button--outline button--small bridge-download"
-                  href={chromeWebStoreUrl}
-                  target="_blank"
-                  rel="noreferrer"
-                >
-                  Install from Chrome Web Store
-                  <ExternalLink size={13} />
-                </a>
-              </div>
-            </div>
-            <div
-              className="bridge-readiness bridge-readiness--warning"
-              role="note"
-              id="bridge-api-note"
-            >
-              <ServerCog size={16} />
-              <div>
-                <strong>Your ESPN password is never collected</strong>
-                <span>
-                  Session authorization is encrypted on your Laces Out server, limited to read-only
-                  fantasy data, and removable at any time. You can disable keep-synced access in the
-                  companion if you prefer device-only refreshes while Chrome is open.
-                </span>
-              </div>
-            </div>
+          <EspnPairingStepper
+            signedOut={signedOut}
+            onDevicesChanged={handleBridgeDevicesChanged}
+            onSyncActivity={handleBridgeSyncActivity}
+          />
 
-            <ol className="bridge-steps">
-              <li>
-                <span>1</span>
-                <div>
-                  <strong>Install the Chrome companion</strong>
-                  <small>Use the Chrome Web Store listing for automatic, signed updates.</small>
-                </div>
-                <a
-                  href={chromeWebStoreUrl}
-                  target="_blank"
-                  rel="noreferrer"
-                  aria-label="Install Laces Out ESPN Bridge from the Chrome Web Store"
-                >
-                  <ExternalLink size={17} />
-                </a>
-              </li>
-              <li>
-                <span>2</span>
-                <div>
-                  <strong>Sign in directly on ESPN</strong>
-                  <small>Standard sync keeps ESPN authorization in this browser.</small>
-                </div>
-                <a
-                  href="https://fantasy.espn.com/football/"
-                  target="_blank"
-                  rel="noreferrer"
-                  aria-label="Open ESPN Fantasy"
-                >
-                  <ExternalLink size={17} />
-                </a>
-              </li>
-            </ol>
-
-            <form
-              className="bridge-pair-form"
-              onSubmit={(event) => void pairBridge(event)}
-              aria-describedby="bridge-api-note"
-            >
-              <div className="bridge-form-heading">
-                <span>3</span>
-                <div>
-                  <strong>Pair the companion</strong>
-                  <small>
-                    Create scoped access and send it directly to the installed extension.
-                  </small>
-                </div>
-              </div>
-              <div className="bridge-fields bridge-fields--three">
-                <label htmlFor="bridge-device-name">
-                  Device label
-                  <input
-                    id="bridge-device-name"
-                    value={deviceName}
-                    onChange={(event) => setDeviceName(event.target.value)}
-                    maxLength={80}
-                    required
-                    autoComplete="off"
-                  />
-                </label>
-                <label htmlFor="espn-automatic-leagues">
-                  ESPN league URL or ID
-                  <input
-                    id="espn-automatic-leagues"
-                    value={leagueIdsInput}
-                    onChange={(event) => setLeagueIdsInput(event.target.value)}
-                    inputMode="url"
-                    placeholder="123456789"
-                    aria-describedby="espn-automatic-leagues-help"
-                    required
-                  />
-                  <small id="espn-automatic-leagues-help">
-                    Add more than one with spaces or commas.
-                  </small>
-                </label>
-                <label htmlFor="espn-automatic-season">
-                  Season
-                  <input
-                    id="espn-automatic-season"
-                    type="number"
-                    min="2000"
-                    max="2100"
-                    value={espnSeason}
-                    onChange={(event) => setEspnSeason(Number(event.target.value))}
-                    required
-                  />
-                </label>
-              </div>
-              <button
-                className="button button--lime button--full"
-                type="submit"
-                disabled={bridgeState === "working"}
+          <details className="connection-provider__footnote">
+            <summary>Optional: direct refresh for public leagues</summary>
+            <p>
+              A league manager may follow ESPN&apos;s{" "}
+              <a
+                href="https://support.espn.com/hc/en-us/articles/47160849553940-Making-a-Private-League-Public-LM-Only"
+                target="_blank"
+                rel="noreferrer"
               >
-                {bridgeState === "working" ? (
-                  <LoaderCircle className="spin" size={16} />
-                ) : (
-                  <KeyRound size={16} />
-                )}
-                {bridgeState === "working" ? "Sending pairing…" : "Connect & keep synced"}
-              </button>
-            </form>
+                public-view instructions
+              </a>{" "}
+              to make server-side direct refresh eligible. It does not make the league joinable and
+              does not imply ESPN endorsement.
+            </p>
+          </details>
 
-            {bridgeError ? (
-              <p className="connection-error" role="alert">
-                <TriangleAlert size={14} />
-                {bridgeError}
-              </p>
-            ) : null}
-
-            {selfHostedPairing ? (
-              <div className="bridge-token bridge-token--pairing">
-                <div>
-                  <KeyRound size={15} />
-                  <span>
-                    <strong>Finish pairing from the Chrome companion</strong>
-                    <small>
-                      Open the extension, choose Pair a self-hosted instance, and enter this
-                      instance URL with the one-time code below.
-                    </small>
-                  </span>
-                </div>
-                <dl className="bridge-pairing-code">
-                  <div>
-                    <dt>Instance URL</dt>
-                    <dd>{absoluteApiOrigin()}</dd>
-                  </div>
-                  <div>
-                    <dt>Pairing code</dt>
-                    <dd>
-                      <code>{selfHostedPairing.pairingCode}</code>
-                    </dd>
-                  </div>
-                </dl>
-                <button
-                  className="button button--outline button--small"
-                  type="button"
-                  onClick={() => void copySelfHostedPairingCode()}
-                >
-                  {pairingCodeCopyState === "done" ? <Check size={14} /> : <Clipboard size={14} />}
-                  {pairingCodeCopyState === "done" ? "Code copied" : "Copy pairing code"}
-                </button>
-                <span className="bridge-copy-status" role="status">
-                  {pairingCodeCopyState === "error"
-                    ? "Clipboard access failed. Select and copy the code manually."
-                    : `Expires ${new Date(selfHostedPairing.expiresAt).toLocaleTimeString([], {
-                        hour: "numeric",
-                        minute: "2-digit",
-                      })}. The code can be used once.`}
-                </span>
-              </div>
-            ) : credential ? (
-              <div className="bridge-token">
-                <div>
-                  {sendExtensionState === "sent" ? <Check size={15} /> : <LockKeyhole size={15} />}
-                  <span>
-                    <strong>
-                      {sendExtensionState === "sent"
-                        ? "Pairing offer sent"
-                        : "Chrome companion not detected"}
-                    </strong>
-                    <small>
-                      {sendExtensionState === "sent"
-                        ? "Open Laces Out ESPN Bridge and confirm the recommended keep-synced setup."
-                        : "Install or update the extension, then retry the secure handoff from this page."}
-                    </small>
-                  </span>
-                </div>
-                <button
-                  className="button button--outline button--small"
-                  type="button"
-                  onClick={() => void sendCredentialToExtension(credential)}
-                  disabled={sendExtensionState === "sending"}
-                >
-                  {sendExtensionState === "sending" ? (
-                    <LoaderCircle className="spin" size={14} />
-                  ) : (
-                    <MonitorUp size={14} />
-                  )}
-                  {sendExtensionState === "sending"
-                    ? "Sending…"
-                    : sendExtensionState === "sent"
-                      ? "Send again"
-                      : "Retry pairing"}
-                </button>
-                <span className="bridge-copy-status" role="status">
-                  {sendExtensionState === "sent"
-                    ? "No token copying required."
-                    : sendExtensionState === "failed"
-                      ? "The scoped credential stays on this page and is never copied."
-                      : ""}
-                </span>
-                {sendExtensionState === "failed" ? (
-                  <a href={chromeWebStoreUrl} target="_blank" rel="noreferrer">
-                    Open the Chrome Web Store listing <ExternalLink size={13} />
-                  </a>
-                ) : null}
-              </div>
-            ) : null}
-          </div>
-
-          <div className="bridge-device-manager espn-always-on-manager" aria-live="polite">
+          {/* A member on a host-disabled deployment can take no action here, so
+              the whole panel is hidden rather than pinned open as "Host disabled"
+              noise. It stays visible while loading, on errors, and whenever an
+              existing connection needs managing. */}
+          <div
+            className="bridge-device-manager espn-always-on-manager"
+            aria-live="polite"
+            hidden={
+              !espnServerSessionsAvailable &&
+              !activeEspnServerSession &&
+              espnServerSessionsState === "done" &&
+              !espnServerSessionsError
+            }
+          >
             <div className="bridge-device-manager__heading">
               <span>
                 <ServerCog size={16} />
@@ -1374,8 +1003,8 @@ export function ConnectionWorkbench() {
               <p className="bridge-device-manager__empty">Checking league refresh health…</p>
             ) : espnLeagueStatuses.length === 0 ? (
               <p className="bridge-device-manager__empty">
-                No synchronized ESPN league is attached to this account yet. Pair the Chrome
-                companion above to import one.
+                No ESPN league is connected yet. Use <strong>Find my ESPN leagues</strong> above and
+                they appear here after the first sync.
               </p>
             ) : (
               <ul className="bridge-device-list espn-refresh-list">
@@ -1520,7 +1149,8 @@ export function ConnectionWorkbench() {
               <p className="bridge-device-manager__empty">Checking ESPN sync status…</p>
             ) : visibleBridgeDevices.length === 0 ? (
               <p className="bridge-device-manager__empty">
-                No ESPN sync access yet. Pair the Chrome companion above.
+                No browser is paired yet. Connect one with <strong>Find my ESPN leagues</strong>{" "}
+                above; each paired browser is listed here.
               </p>
             ) : (
               <ul className="bridge-device-list">

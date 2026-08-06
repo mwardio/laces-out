@@ -14,6 +14,11 @@ export interface CapturedEspnSession {
 const swidPattern =
   /^\{[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\}$/iu;
 
+/** True for a braced-UUID SWID, the only shape ever interpolated into an ESPN URL. */
+export function isValidSwid(value: string): boolean {
+  return swidPattern.test(value);
+}
+
 function espnCookieDomain(value: string): boolean {
   const domain = value.trim().toLowerCase().replace(/^\.+/u, "");
   return domain === "espn.com" || domain.endsWith(".espn.com");

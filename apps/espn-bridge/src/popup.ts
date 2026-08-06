@@ -363,6 +363,14 @@ async function clearPendingOffer(): Promise<void> {
   pendingOffer = undefined;
   pairingSection.hidden = true;
   await chrome.storage.local.remove(pendingPairingStorageKey);
+  // The offer is gone on every path through here (confirmed, dismissed, or
+  // expired), so the icon nudge set when the offer arrived goes with it.
+  try {
+    await chrome.action.setBadgeText({ text: "" });
+    await chrome.action.setTitle({ title: "Laces Out ESPN Bridge" });
+  } catch {
+    // Badge APIs are cosmetic.
+  }
 }
 
 async function loadPendingOffer(): Promise<void> {

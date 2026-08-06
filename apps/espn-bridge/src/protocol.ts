@@ -151,6 +151,57 @@ export type BridgePairingOfferResponse =
 
 export type BridgeServerSessionOfferResponse = BridgeServerSessionResponse;
 
+// A Laces Out page may probe for the extension before offering to pair. The
+// reply carries only presence/pairing state — never the device token, the
+// paired league IDs, or per-league messages. `discovery: true` distinguishes
+// builds that understand DISCOVER_LEAGUES from older builds, whose external
+// listener answers every unknown message with a pairing-offer rejection.
+export type BridgePingMessage = { readonly type: "BRIDGE_PING" };
+
+export interface BridgePingResponse {
+  readonly ok: true;
+  readonly discovery: true;
+  readonly version: string;
+  readonly configured: boolean;
+  readonly pairedToThisOrigin: boolean;
+  /** A fresh pairing offer is stored and awaiting the popup confirmation. */
+  readonly pendingOffer: boolean;
+  readonly state: BridgeStatusState;
+  readonly lastSuccessfulAt: string | null;
+}
+
+export interface DiscoveredEspnLeague {
+  readonly leagueId: string;
+  readonly leagueName: string;
+  readonly teamName?: string;
+  readonly seasonId: number;
+}
+
+export type BridgeDiscoverLeaguesMessage = {
+  readonly type: "DISCOVER_LEAGUES";
+  readonly season: number;
+};
+
+export type BridgeDiscoverLeaguesResponse =
+  | {
+      readonly ok: true;
+      readonly state: "ok";
+      readonly leagues: readonly DiscoveredEspnLeague[];
+      readonly seasonMatched: boolean;
+    }
+  | {
+      readonly ok: false;
+      readonly state: "espn-login-required" | "error";
+      readonly reason: string;
+    };
+
+export function validateDiscoverLeaguesMessage(message: unknown): number {
+  if (!isRecord(message) || message.type !== "DISCOVER_LEAGUES") {
+    throw new TypeError("Not a bridge discovery request");
+  }
+  return validateSeason(message.season);
+}
+
 export interface PendingPairingOffer {
   readonly origin: string;
   readonly configuration: BridgeConfiguration;
@@ -215,23 +266,22 @@ export function validateLeagueIds(value: unknown): readonly string[] {
   return leagueIds;
 }
 
+export function validateSeason(value: unknown): number {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 2000 || value > 2100) {
+    throw new TypeError("ESPN season is invalid");
+  }
+  return value;
+}
+
 export function validateBridgeConfiguration(value: unknown): BridgeConfiguration {
   if (!isRecord(value)) throw new TypeError("Bridge configuration is missing");
   const apiBaseUrl = normalizeApiBaseUrl(value.apiBaseUrl);
   const deviceToken = typeof value.deviceToken === "string" ? value.deviceToken.trim() : "";
   const leagueIds = validateLeagueIds(value.leagueIds);
-  const season = value.season;
+  const season = validateSeason(value.season);
   const automaticSync = value.automaticSync;
   if (deviceToken.length < 32 || deviceToken.length > 512) {
     throw new TypeError("Laces Out device token is invalid");
-  }
-  if (
-    typeof season !== "number" ||
-    !Number.isSafeInteger(season) ||
-    season < 2000 ||
-    season > 2100
-  ) {
-    throw new TypeError("ESPN season is invalid");
   }
   if (typeof automaticSync !== "boolean") throw new TypeError("Automatic sync setting is invalid");
   return {

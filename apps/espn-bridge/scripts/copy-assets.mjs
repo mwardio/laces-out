@@ -29,6 +29,22 @@ if (target === "store") {
     "img-src 'self'; style-src 'self'";
 }
 
+// League discovery, core sync, and supplemental sync each require exactly one of these ESPN
+// hosts. The store branch above rewrites permission fields, so this asserts — for both targets —
+// that the required host list survives intact: a dropped entry only fails inside the packaged
+// build, where a credentialed cross-origin fetch silently loses its cookies.
+const REQUIRED_HOST_PERMISSIONS = [
+  "https://fantasy.espn.com/*",
+  "https://lm-api-reads.fantasy.espn.com/*",
+  "https://fan.api.espn.com/*",
+];
+if (
+  JSON.stringify([...(manifest.host_permissions ?? [])].sort()) !==
+  JSON.stringify([...REQUIRED_HOST_PERMISSIONS].sort())
+) {
+  throw new Error("manifest.json host_permissions must be exactly the three ESPN hosts");
+}
+
 // The live ESPN draft feed only works if the content script survives manifest rewriting and is
 // actually compiled into `dist`. The store branch above rewrites host and CSP fields, so this
 // asserts — for both targets — that it never quietly drops the declaration or ships a manifest

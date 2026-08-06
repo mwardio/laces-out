@@ -36,6 +36,23 @@ single-use pairing code, Chrome grants access only to the entered instance host,
 atomically consumes the hashed code before returning the device credential. The long-lived token
 never enters a URL or the clipboard, and self-hosters do not need their own extension build.
 
+The same allowlisted channel carries two read-only probes that make first-time pairing one guided
+flow instead of manual ID copying. `BRIDGE_PING` answers with presence, version, whether this
+browser is paired to the asking origin, whether a fresh pairing offer awaits confirmation, and the
+last-sync summary — never the device token, league IDs, or per-league detail. `DISCOVER_LEAGUES`
+reads only the `SWID` cookie (for the URL path; `espn_s2` rides along as an ambient credential on
+the fetch), calls ESPN's fan-profile endpoint `https://fan.api.espn.com/apis/v2/fans/{SWID}`
+(shape pinned from community documentation 2026-08-06 — re-verify against a live signed-in
+response before each store release, since this environment could not reach ESPN directly), and
+returns parsed fantasy-football league IDs, league names, team names, and seasons to the asking
+page. Results are never written to extension storage, responses are bounded and fail closed on
+shape drift, and an in-flight/30-second cache pair bounds ESPN traffic from a polling page. The
+`https://fan.api.espn.com/*` host permission exists solely for this credentialed read. When a
+valid pairing offer is stored, the service worker may open its own popup (Chrome 127+) and always
+badges the toolbar icon; applying the offer still requires the explicit in-popup confirmation
+click, and a page-initiated silent configure remains rejected. A confirmed configuration starts
+its first synchronization immediately rather than waiting for the first alarm.
+
 One device can be scoped to up to 32 unique numeric league IDs for a single configured season.
 The companion reads and uploads them sequentially, continues after a per-league failure, and
 surfaces retained per-league results plus an aggregate full-success, partial-failure, login-required,

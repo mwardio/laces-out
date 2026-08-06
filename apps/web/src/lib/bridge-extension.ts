@@ -171,3 +171,162 @@ export async function sendPairingOffer(payload: PairingOfferPayload): Promise<Pa
   }
   return { ok: false };
 }
+
+export interface BridgePingOutcome {
+  readonly installed: boolean;
+  readonly supportsDiscovery: boolean;
+  readonly extensionId?: string;
+  readonly version?: string;
+  readonly configured?: boolean;
+  readonly pairedToThisOrigin?: boolean;
+  readonly pendingOffer?: boolean;
+  readonly state?: string;
+  readonly lastSuccessfulAt?: string | null;
+}
+
+export interface DiscoveredEspnLeague {
+  readonly leagueId: string;
+  readonly leagueName: string;
+  readonly teamName?: string;
+  readonly seasonId: number;
+}
+
+export type DiscoverLeaguesOutcome =
+  | {
+      readonly ok: true;
+      readonly leagues: readonly DiscoveredEspnLeague[];
+      readonly seasonMatched: boolean;
+    }
+  | {
+      readonly ok: false;
+      readonly state: "espn-login-required" | "error" | "unavailable";
+      readonly reason?: string;
+    };
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function sendToExtension(
+  runtime: NonNullable<ReturnType<typeof chromeRuntime>>,
+  extensionId: string,
+  message: unknown,
+): Promise<unknown> {
+  return new Promise((resolve) => {
+    try {
+      runtime.sendMessage?.(extensionId, message, (response: unknown) => {
+        void runtime.lastError;
+        resolve(response);
+      });
+    } catch {
+      resolve(undefined);
+    }
+  });
+}
+
+// An extension build that predates BRIDGE_PING still answers — its external
+// listener replies with a pairing-offer rejection ({ ok: false, reason }). Any
+// response object therefore proves the extension is installed; only the full
+// validated ping shape proves it supports league discovery.
+function pingOutcomeFromResponse(
+  response: unknown,
+  extensionId: string,
+): BridgePingOutcome | undefined {
+  if (response === undefined || response === null) return undefined;
+  if (!isRecord(response)) return { installed: true, supportsDiscovery: false, extensionId };
+  if (
+    response.ok === true &&
+    response.discovery === true &&
+    typeof response.version === "string" &&
+    typeof response.configured === "boolean" &&
+    typeof response.pairedToThisOrigin === "boolean" &&
+    typeof response.pendingOffer === "boolean" &&
+    typeof response.state === "string" &&
+    (response.lastSuccessfulAt === null || typeof response.lastSuccessfulAt === "string")
+  ) {
+    return {
+      installed: true,
+      supportsDiscovery: true,
+      extensionId,
+      version: response.version.slice(0, 32),
+      configured: response.configured,
+      pairedToThisOrigin: response.pairedToThisOrigin,
+      pendingOffer: response.pendingOffer,
+      state: response.state.slice(0, 64),
+      lastSuccessfulAt: response.lastSuccessfulAt,
+    };
+  }
+  return { installed: true, supportsDiscovery: false, extensionId };
+}
+
+// Probes every known extension ID, preferring a discovery-capable build over a
+// merely-installed legacy one when both answer.
+export async function pingBridge(): Promise<BridgePingOutcome> {
+  const runtime = chromeRuntime();
+  if (!runtime) return { installed: false, supportsDiscovery: false };
+  let installedOnly: BridgePingOutcome | undefined;
+  for (const extensionId of bridgeExtensionIds()) {
+    const outcome = pingOutcomeFromResponse(
+      await sendToExtension(runtime, extensionId, { type: "BRIDGE_PING" }),
+      extensionId,
+    );
+    if (outcome?.supportsDiscovery) return outcome;
+    installedOnly ??= outcome;
+  }
+  return installedOnly ?? { installed: false, supportsDiscovery: false };
+}
+
+function discoveredLeagueFromResponse(value: unknown): DiscoveredEspnLeague | undefined {
+  if (!isRecord(value)) return undefined;
+  if (typeof value.leagueId !== "string" || !/^\d{1,20}$/u.test(value.leagueId)) return undefined;
+  if (typeof value.leagueName !== "string" || value.leagueName.trim() === "") return undefined;
+  if (
+    typeof value.seasonId !== "number" ||
+    !Number.isSafeInteger(value.seasonId) ||
+    value.seasonId < 2000 ||
+    value.seasonId > 2100
+  ) {
+    return undefined;
+  }
+  const teamName = typeof value.teamName === "string" ? value.teamName.trim().slice(0, 120) : "";
+  return {
+    leagueId: value.leagueId,
+    leagueName: value.leagueName.trim().slice(0, 120),
+    ...(teamName === "" ? {} : { teamName }),
+    seasonId: value.seasonId,
+  };
+}
+
+// Asks one specific extension (the ID that answered the ping) for the ESPN
+// leagues on the signed-in account. The response is re-validated field by field
+// before it can reach React state.
+export async function discoverLeagues(
+  extensionId: string,
+  season: number,
+): Promise<DiscoverLeaguesOutcome> {
+  const runtime = chromeRuntime();
+  if (!runtime) return { ok: false, state: "unavailable" };
+  const response = await sendToExtension(runtime, extensionId, {
+    type: "DISCOVER_LEAGUES",
+    season,
+  });
+  if (!isRecord(response)) return { ok: false, state: "unavailable" };
+  if (response.ok === true && response.state === "ok" && Array.isArray(response.leagues)) {
+    const leagues = response.leagues
+      .map(discoveredLeagueFromResponse)
+      .filter((league): league is DiscoveredEspnLeague => league !== undefined)
+      .slice(0, 32);
+    return { ok: true, leagues, seasonMatched: response.seasonMatched === true };
+  }
+  if (
+    response.ok === false &&
+    (response.state === "espn-login-required" || response.state === "error")
+  ) {
+    return {
+      ok: false,
+      state: response.state,
+      ...(typeof response.reason === "string" ? { reason: response.reason.slice(0, 200) } : {}),
+    };
+  }
+  return { ok: false, state: "unavailable" };
+}

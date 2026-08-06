@@ -74,7 +74,12 @@ fantasy synchronization. A compatible native app reaches that same server-owned 
 through a short-lived authenticated browser handoff and receives only a fixed completion status;
 Yahoo credentials and tokens never return through the native callback. ESPN device-only companion
 sync uses the session locally and uploads
-bounded league data. If both the operator and member enable always-on ESPN sync, an authorized paired client sends
+bounded league data. When a member starts pairing from the League Sync page, that page may ask the
+installed companion to list the fantasy-football leagues on the signed-in ESPN account so the
+member picks from names instead of typing IDs; the companion reads only the `SWID` cookie for that
+lookup, returns league IDs, names, team names, and seasons to that page alone, and stores none of
+it. No cookie value ever reaches the page, and nothing is sent to Laces Out until the member
+confirms pairing in the extension popup. If both the operator and member enable always-on ESPN sync, an authorized paired client sends
 `SWID` and `espn_s2` once over HTTPS; Laces Out stores them in a purpose-bound encrypted credential
 envelope and uses them only for fixed, read-only fantasy endpoints. Chrome obtains them from the
 existing ESPN session; a compatible native app keeps credential entry on an ESPN-hosted sign-in

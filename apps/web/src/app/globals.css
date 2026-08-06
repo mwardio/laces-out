@@ -4154,6 +4154,87 @@
     color: var(--red-600);
     font-size: var(--text-11);
   }
+  .bridge-token--attention {
+    background: var(--orange-100);
+    border-color: #f0d4c4;
+  }
+  .bridge-step-status {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    margin: 12px 0 0;
+    color: var(--ink-600);
+    font-size: var(--text-11);
+    font-weight: 700;
+  }
+  .bridge-league-picker {
+    display: grid;
+    gap: 6px;
+    margin: 0 0 10px;
+    padding: 0;
+    list-style: none;
+  }
+  .bridge-league-picker label {
+    display: flex;
+    align-items: flex-start;
+    gap: 9px;
+    padding: 8px 10px;
+    background: var(--white);
+    border: 1px solid var(--ink-200);
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+  }
+  .bridge-league-picker label:hover {
+    border-color: var(--blue-500);
+  }
+  .bridge-league-picker input[type="checkbox"] {
+    margin-top: 2px;
+    accent-color: var(--green-600);
+  }
+  .bridge-league-picker label > span {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+  }
+  .bridge-league-picker strong {
+    overflow-wrap: anywhere;
+    color: var(--ink-800);
+    font-size: var(--text-11);
+  }
+  .bridge-league-picker small {
+    color: var(--ink-500);
+    font-size: var(--text-10);
+  }
+  .connection-provider__footnote {
+    margin-top: 10px;
+  }
+  .connection-provider__footnote > summary {
+    color: var(--ink-500);
+    cursor: pointer;
+    font-size: var(--text-11);
+    font-weight: 800;
+  }
+  .connection-provider__footnote > p {
+    margin: 6px 0 0;
+    color: var(--ink-600);
+    font-size: var(--text-11);
+    line-height: 1.5;
+  }
+  .bridge-manual-entry {
+    margin: 9px 0;
+  }
+  .bridge-manual-entry > summary {
+    color: var(--ink-500);
+    cursor: pointer;
+    font-size: var(--text-11);
+    font-weight: 800;
+  }
+  .bridge-manual-entry[open] > summary {
+    margin-bottom: 8px;
+  }
+  .bridge-pair-form .button + .button {
+    margin-top: 7px;
+  }
   .bridge-device-manager {
     margin-top: 12px;
     padding: 12px;

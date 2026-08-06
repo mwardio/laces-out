@@ -206,6 +206,16 @@ carry `source = 'espn'` under a database check constraint so a provider fact and
 fact stay distinguishable forever, and the reconciler will not revert a manual event.
 `ESPN_LIVE_DRAFT_SYNC` gates ingest entirely and is the kill switch.
 
+The companion's external-message surface is reachable only from origins in its
+`externally_connectable` allowlist (the two published Laces Out domains in the store build).
+Beyond the pairing offer, it answers two read-only probes: a presence/pairing-state ping and a
+league-discovery request that returns the signed-in ESPN account's fantasy-football league list
+(IDs, names, team names, seasons) to the asking page. Discovery reads only the `SWID` cookie,
+never returns cookie values, stores nothing, and is rate-bounded in the worker. Pairing consent is
+unchanged: a stored offer may auto-open the popup and badge the icon, but only the explicit
+in-popup click applies a configuration, so a compromised allowed page still cannot silently
+re-point uploads at another account or origin.
+
 ## Before internet exposure
 
 - replace every development secret;

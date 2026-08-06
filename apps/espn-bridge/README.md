@@ -22,16 +22,25 @@ Install the unlisted [Laces Out ESPN Bridge from the Chrome Web
 Store](https://chromewebstore.google.com/detail/laces-out-espn-bridge/hmilkmcjlkpnigcfnlfogeafacjpmkbj).
 The signed listing keeps the extension ID stable and delivers updates through Chrome.
 
-1. Sign in to Laces Out and open **League Sync** (`/connections`).
-2. Choose **Connect & Keep Synced**, enter up to 32 numeric ESPN league IDs and the season, then
-   choose **Connect & keep synced**.
-3. Laces Out sends the scoped pairing offer directly to the extension. Open the extension and choose
-   **Connect & keep synced**. The recommended always-on choice is visibly preselected and can be
-   unchecked for device-only sync. There is no device token to copy or paste.
-4. Sign in at `https://fantasy.espn.com/football/` in the same Chrome profile.
-5. Choose **Sync now**. Core league data is stored first, followed by independently isolated
-   supplemental feeds. The maintenance alarm checks Laces Out every five minutes for requested work
-   and retains a six-hour full sync as a safety net while Chrome and the ESPN session are available.
+1. Sign in to Laces Out and open **League Sync** (`/connections`). The page detects the installed
+   companion automatically and continues on its own once it appears.
+2. Choose **Find my ESPN leagues**. The companion lists the fantasy-football leagues on the ESPN
+   account signed in to this Chrome profile — no league IDs to look up or type. (If ESPN is signed
+   out, the page says so and retries after you sign in. League IDs can still be entered manually.)
+3. Untick any league you don't want, then choose **Connect & keep synced**. The scoped pairing
+   offer goes directly to the extension, whose popup opens itself (Chrome 127+; otherwise the
+   toolbar icon shows a badge). One click on **Connect & keep synced** in the popup completes
+   pairing. The recommended always-on choice is visibly preselected and can be unchecked for
+   device-only sync. There is no device token to copy or paste.
+4. The first sync starts immediately after that confirmation. Core league data is stored first,
+   followed by independently isolated supplemental feeds. The maintenance alarm checks Laces Out
+   every five minutes for requested work and retains a six-hour full sync as a safety net while
+   Chrome and the ESPN session are available.
+
+League discovery is a read-only lookup of ESPN's fan-profile endpoint (`fan.api.espn.com`) using
+the existing ESPN session; only the `SWID` cookie is read (for the URL path), the result goes only
+to the Laces Out page that asked, and nothing about it is stored by the extension. The
+`https://fan.api.espn.com/*` host permission exists solely for this lookup.
 
 ### Always-on sync
 
@@ -160,8 +169,18 @@ gesture, and end at the same service-worker validation:
   equal the normalized origin of the offered `apiBaseUrl` (a page can only pair itself). It stores the
   offer as a **pending** offer with a timestamp; it never configures the bridge or requests host
   permissions on its own, and never echoes the token back.
+- After storing a valid offer, the worker nudges the member to the one remaining click: it badges
+  the toolbar icon and, on Chrome 127+, opens its own popup. The nudge is cosmetic — applying the
+  configuration still happens only through the explicit in-popup confirmation.
 - Pending offers expire after 10 minutes. The popup shows a distinct **Pairing offer from &lt;origin&gt;**
   confirmation with **Complete pairing** and **Dismiss**.
+- Before any offer, an allowlisted page may send two read-only probes. `BRIDGE_PING` reports
+  presence, version, pairing state for that origin, whether an offer is pending, and the last-sync
+  summary — never the token or league list. `DISCOVER_LEAGUES` reads the `SWID` cookie, fetches the
+  ESPN fan profile with the existing session, and returns the account's fantasy-football leagues
+  (IDs, names, team names, seasons) so the page can offer a picker instead of manual ID entry.
+  Discovery stores nothing, never returns cookie values, and is deduplicated and cached for 30
+  seconds in the worker.
 - **Self-hosted pairing:** the member creates a 10-minute one-time code while authenticated to their
   instance. The extension normalizes the entered origin, rejects non-HTTPS remote hosts, asks Chrome
   for only that host, and sends the code in a redirect-free POST with credentials omitted. The server
@@ -221,11 +240,14 @@ For future releases:
 1. Upload `dist-package/laces-out-espn-bridge-store-v<version>.zip`.
 2. Privacy policy URL: `https://lacesout.app/privacy` (required — the extension handles league data).
 3. Justify permissions in the listing form: `alarms`/`storage` for scheduled local sync and pairing
-   state; `cookies` solely to read the exact ESPN `SWID` and `espn_s2` values after a member
-   explicitly enables always-on sync (including when ESPN marks them `HttpOnly`); the two
-   `fantasy.espn.com` / `lm-api-reads.fantasy.espn.com` hosts for the read-only league fetch and the
-   draft-room content script; and optional HTTPS/loopback hosts so a user may connect
-   the signed companion to their own Laces Out deployment. State that optional host access is
+   state; `cookies` to read the exact ESPN `SWID` value for user-initiated league discovery and,
+   with `espn_s2`, after a member explicitly enables always-on sync (including when ESPN marks
+   them `HttpOnly`); the `fantasy.espn.com` / `lm-api-reads.fantasy.espn.com` hosts for the
+   read-only league fetch and the draft-room content script; the `fan.api.espn.com` host solely
+   for the read-only league-discovery lookup; and optional HTTPS/loopback hosts so a user may
+   connect the signed companion to their own Laces Out deployment. Note: `fan.api.espn.com` is a
+   new required host permission as of 0.8.0 — Chrome disables the extension for existing users
+   until they approve it, so call it out in the release notes. State that optional host access is
    requested only for the exact URL entered by the user, no remote HTTP host is accepted, and a
    failed exchange removes newly granted access. No ESPN password is read or transmitted. Standard
    sync keeps ESPN session material local; the optional, user-initiated always-on feature transmits
