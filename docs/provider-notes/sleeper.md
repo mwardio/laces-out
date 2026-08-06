@@ -216,26 +216,32 @@ stated. Any commercial operation of this product needs a fresh terms review and,
 still unclear, direct written permission from Sleeper. That is an engineering release condition, not
 legal advice.
 
-## League connection is deferred
+## Sleeper league sync contribution brief
 
-Connecting Sleeper leagues is deferred by product decision on 2026-07-27. This document does not
-propose, plan, or authorize it.
+Read-only Sleeper league sync is open for contribution. The goal is the same experience as Yahoo
+and ESPN without inventing a second set of downstream types.
 
-`packages/source-sleeper/src/sleeper-league-source.ts` is built and unit tested but intentionally
-unwired. `SleeperLeagueSource` is referenced only by its own test file; no worker, job, or API route
-constructs it. It is exported from the package index, so keeping it dormant is a standing decision
-rather than an accident of module wiring — do not wire it up as incidental cleanup.
+There is already a tested read client in
+`packages/source-sleeper/src/sleeper-league-source.ts`. Build from it rather than replacing it. It
+accepts no credential, refuses redirects and off-origin paths, bounds response sizes, records
+provenance, and rejects league or draft IDs that drift between request and response.
 
-For the record, its boundary is already narrow. `#request` resolves each path against
-`SLEEPER_API_BASE_URL` and throws `RangeError("Sleeper endpoint escaped the official API origin")`
-unless the resolved origin is exactly `https://api.sleeper.app` and the pathname starts with `/v1/`.
-It refuses redirects, applies a 15-second default timeout bounded to 1–60 seconds, caps responses at
-1 MiB single / 4 MiB collection / 8 MiB large collection, returns a `SleeperResponseProvenance`
-carrying endpoint, `fetchedAt`, and SHA-256 on every read, and fails closed when a roster, draft, or
-pick response reports a different league or draft ID than the one requested.
+Keep the first PR focused:
 
-None of that is an admission. Wiring the league connector requires its own source-admission pass,
-including resolution of the terms question above.
+1. Add `sleeper` to the provider-neutral capability and normalized-data contracts.
+2. Connect by Sleeper username or user ID, then discover that user's NFL leagues by season.
+3. Normalize and persist league settings, managers, teams, rosters, standings, and weekly matchups
+   through the existing league-sync boundary.
+4. Add connection status, manual refresh, removal, and Sleeper attribution to the existing UI.
+5. Cover the adapter and persistence path with deterministic fixtures. Tests must not call the live
+   Sleeper API.
+
+Raw Sleeper shapes stop at the adapter. The connector remains read-only, stores no provider secret,
+and does not add a second persistence model. Completed drafts, live draft polling, transactions,
+and other supplemental data can follow after core sync is clean.
+
+Base the work on current `main` and open a draft PR once discovery plus one normalized league
+fixture works. Run `npm run check` before requesting final review.
 
 ## Setup checklist
 
@@ -250,7 +256,7 @@ including resolution of the terms question above.
    disappears, lower the catalog cadence before shipping.
 5. Re-measure the catalog payload against `MAX_PLAYER_RESPONSE_BYTES` at the same review. Raise the
    cap or move to incremental parsing well before the measured size approaches it.
-6. Leave the league source unwired.
+6. Keep league syncing read-only and credential-free.
 
 ## Primary references
 
