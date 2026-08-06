@@ -107,7 +107,7 @@ const environmentSchema = z.object({
    * Outbound email identity, optional and absent by default: a deployment without SMTP settings
    * simply sends no email — registration, password entry, and the worker all keep working. The
    * four are all-or-nothing; SMTP_PORT alone carries a default because 587 (STARTTLS submission)
-   * is right for nearly every provider, including iCloud custom domains.
+   * is right for nearly every provider.
    */
   SMTP_HOST: z.preprocess(blankToUndefined, z.string().trim().min(1).max(255).optional()),
   SMTP_PORT: z.coerce.number().int().min(1).max(65_535).default(587),

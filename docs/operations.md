@@ -597,10 +597,10 @@ To turn it on, set all of these on the API and worker (the Compose stack does th
 block); startup rejects a partial identity:
 
 ```bash
-SMTP_HOST=smtp.mail.me.com        # any TLS SMTP submission service
+SMTP_HOST=smtp.resend.com         # any TLS SMTP submission service
 SMTP_PORT=587                     # default; 465 switches to implicit TLS
-SMTP_USER=you@icloud.com          # the account that authenticates the send
-SMTP_PASSWORD=<app-specific password — never the account password>
+SMTP_USER=resend                  # the account that authenticates the send
+SMTP_PASSWORD=<sending API key>
 EMAIL_FROM="Laces Out <noreply@lacesout.app>"
 EMAIL_VERIFICATION_ENABLED=false # enable only after SMTP and client compatibility smoke tests
 ```
@@ -613,10 +613,9 @@ flag and confirmation service are active.
 
 The transport requires TLS on every hop (STARTTLS on 587, implicit on 465) and never logs a
 recipient, a message body, or a server response — send failures surface as counts plus a sanitized
-code such as `EAUTH` or `550`. The example above is an iCloud+ custom domain: Apple publishes
-SPF/DKIM for it, `EMAIL_FROM` must be the custom-domain alias of the authenticating Apple ID, and
-Apple's daily sending caps make it a small-deployment choice — swapping providers later is an
-environment change, not a code change.
+code such as `EAUTH` or `550`. The example above uses Resend: verify the sending domain so
+SPF/DKIM pass, use `resend` as the SMTP user, and use a sending API key as the password. Swapping
+providers later is an environment change, not a code change.
 
 What actually sends, and when:
 
