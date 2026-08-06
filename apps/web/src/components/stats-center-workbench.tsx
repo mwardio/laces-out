@@ -955,20 +955,22 @@ export function StatsCenterWorkbench() {
         </button>
       </form>
 
-      <div className={styles.metricTabs} aria-label="Choose a metric family">
-        {familyOptions.map((option) => (
-          <button
-            type="button"
-            className={family === option.value ? styles.activeMetric : undefined}
-            aria-pressed={family === option.value}
-            onClick={() => chooseFamily(option.value)}
-            key={option.value}
-          >
-            {option.label}
-          </button>
-        ))}
+      <div className={styles.metricSelector}>
+        <div className={styles.metricTabs} aria-label="Choose a metric family" role="group">
+          {familyOptions.map((option) => (
+            <button
+              type="button"
+              className={family === option.value ? styles.activeMetric : undefined}
+              aria-pressed={family === option.value}
+              onClick={() => chooseFamily(option.value)}
+              key={option.value}
+            >
+              {option.label}
+            </button>
+          ))}
+        </div>
+        <p className={styles.metricHint}>{familyHints[family]}</p>
       </div>
-      <p className={styles.metricHint}>{familyHints[family]}</p>
 
       {view.state === "loading" ? (
         <div className={styles.stateCard} role="status">

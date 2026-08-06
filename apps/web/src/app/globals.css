@@ -2499,6 +2499,11 @@
     padding: 1.15rem;
   }
 
+  .live-weekly-panel > .panel-heading,
+  .live-standings-panel > .panel-heading {
+    padding: 0;
+  }
+
   .live-insights-heading {
     align-items: flex-start;
     margin-bottom: 1rem;
@@ -2732,6 +2737,10 @@
   .live-team-panel,
   .live-health-panel {
     padding: 1.15rem;
+  }
+
+  .live-team-panel > .panel-heading {
+    padding: 0 0 0.65rem;
   }
 
   .live-team-panel h3,

@@ -573,8 +573,7 @@ function LivePortfolio({ portfolio, reloadPortfolio }: LivePortfolioProps) {
               : `${portfolio.leagues.length} connected leagues in one view.`}
           </h1>
           <p className="page-subtitle">
-            Your latest league and projection data drive every lineup, waiver, and trade call — each
-            league keeps its own sync and forecast controls.
+            Fresh league and projection data power every lineup, waiver, and trade call.
           </p>
         </div>
         <div className="heading-actions">

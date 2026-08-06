@@ -279,6 +279,27 @@
     line-height: 1.58;
   }
 
+  .live-dashboard-page .dashboard-heading {
+    display: grid;
+    align-items: start;
+    gap: 14px;
+  }
+
+  .dashboard-heading > div:first-child {
+    width: 100%;
+    max-width: 900px;
+  }
+
+  .dashboard-heading h1 {
+    max-width: none;
+  }
+
+  .dashboard-heading .heading-actions {
+    width: 100%;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
+
   .section-heading h2,
   .panel-heading h2,
   .panel-heading h3 {

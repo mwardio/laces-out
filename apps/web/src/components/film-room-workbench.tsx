@@ -118,7 +118,7 @@ function FilmRoomTour() {
           <Gauge size={18} />
           <span>
             <strong>Optional model choice</strong>
-            <small>Bring a key to choose a model and independent limits.</small>
+            <small>Your key unlocks model choice.</small>
           </span>
         </div>
       </section>
@@ -458,7 +458,7 @@ export function FilmRoomWorkbench() {
           <Gauge size={18} />
           <span>
             <strong>Bring your own model</strong>
-            <small>A personal key unlocks model choice and independent limits.</small>
+            <small>Your key unlocks model choice.</small>
           </span>
         </div>
       </section>

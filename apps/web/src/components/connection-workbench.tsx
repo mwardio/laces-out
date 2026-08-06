@@ -1384,6 +1384,13 @@ export function ConnectionWorkbench() {
                     (artifact) => artifact.family === "core",
                   );
                   const requestState = league.status.request?.state ?? "none";
+                  const hasAlwaysOnSync = espnServerSessions.some(
+                    (connection) =>
+                      connection.health !== "disabled" &&
+                      connection.leagues.some(
+                        (linkedLeague) => linkedLeague.leagueSeasonId === league.leagueSeasonId,
+                      ),
+                  );
                   return (
                     <li key={league.leagueSeasonId}>
                       <div className="bridge-device-list__summary">
@@ -1434,15 +1441,17 @@ export function ConnectionWorkbench() {
                           <dt>Refresh request</dt>
                           <dd>{requestState}</dd>
                         </div>
-                        <div>
-                          <dt>Direct read</dt>
-                          <dd>
-                            {espnDirectStateLabel(league.status)}
-                            {league.status.direct.lastProbeAt
-                              ? ` · checked ${formatBridgeTime(league.status.direct.lastProbeAt)}`
-                              : ""}
-                          </dd>
-                        </div>
+                        {!hasAlwaysOnSync ? (
+                          <div>
+                            <dt>Direct read</dt>
+                            <dd>
+                              {espnDirectStateLabel(league.status)}
+                              {league.status.direct.lastProbeAt
+                                ? ` · checked ${formatBridgeTime(league.status.direct.lastProbeAt)}`
+                                : ""}
+                            </dd>
+                          </div>
+                        ) : null}
                         <div>
                           <dt>Latest attempt</dt>
                           <dd>
