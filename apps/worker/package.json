@@ -32,6 +32,7 @@
     "@fantasy/source-nflverse": "*",
     "@fantasy/source-sleeper": "*",
     "drizzle-orm": "^0.45.2",
+    "nodemailer": "^9.0.4",
     "pg-boss": "^12.5.1",
     "pino": "^9.7.0",
     "web-push": "^3.6.7"

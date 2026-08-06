@@ -8,5 +8,7 @@ export default defineConfig({
   sourcemap: true,
   clean: true,
   outDir: "dist",
+  // Nodemailer is CommonJS and must be loaded by Node rather than folded into the ESM bundle.
+  external: ["nodemailer"],
   noExternal: [/^@fantasy\//u],
 });

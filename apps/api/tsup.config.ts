@@ -8,6 +8,9 @@ export default defineConfig({
   sourcemap: true,
   clean: true,
   outDir: "dist",
+  // Nodemailer is CommonJS and relies on runtime requires for Node built-ins. Keep it outside the
+  // ESM bundle; the API image installs it as a production dependency.
+  external: ["nodemailer"],
   // Workspace package exports point at TypeScript for local development. Bundle only those
   // packages so the production Node entrypoint never attempts to execute .ts files.
   noExternal: [/^@fantasy\//u],
