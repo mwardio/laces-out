@@ -4,7 +4,7 @@ import {
   type Player,
   type PlayerId,
   type TeamId,
-} from "@fantasy/domain";
+} from "@laces-out/domain";
 
 import { maximumLegalBid } from "./auction.js";
 import {

@@ -45,12 +45,12 @@ WORKDIR /app
 FROM runtime-base AS api-production-dependencies
 COPY --from=workspace-manifests / /app/
 RUN --mount=type=cache,id=laces-out-npm-api,target=/root/.npm,sharing=locked \
-    npm ci --omit=dev --workspace @fantasy/api
+    npm ci --omit=dev --workspace @laces-out/api
 
 FROM runtime-base AS worker-production-dependencies
 COPY --from=workspace-manifests / /app/
 RUN --mount=type=cache,id=laces-out-npm-worker,target=/root/.npm,sharing=locked \
-    npm ci --omit=dev --workspace @fantasy/worker
+    npm ci --omit=dev --workspace @laces-out/worker
 
 FROM dependencies AS builder
 ARG NEXT_PUBLIC_API_URL=http://localhost:3000

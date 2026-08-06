@@ -1,1 +1,1 @@
-export * from "@fantasy/change-events";
+export * from "@laces-out/change-events";

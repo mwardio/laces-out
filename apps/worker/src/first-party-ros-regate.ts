@@ -15,7 +15,7 @@ import {
   type FirstPartyRosRemainingWeeksBucket,
   type FirstPartyRosStrategy,
   type FirstPartyRosWalkForwardCalibrationEvidence,
-} from "@fantasy/projections";
+} from "@laces-out/projections";
 
 import { historicalRosCalibrationBlockers } from "./first-party-ros-backtest.js";
 

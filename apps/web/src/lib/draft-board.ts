@@ -4,8 +4,8 @@ import {
   recommendAuctionNominations,
   recommendBid,
   type DraftAvailabilityEstimate,
-} from "@fantasy/engine-draft";
-import { playerId } from "@fantasy/domain";
+} from "@laces-out/engine-draft";
+import { playerId } from "@laces-out/domain";
 
 export type DraftBoardSort = "rank" | "tier" | "aav" | "name";
 

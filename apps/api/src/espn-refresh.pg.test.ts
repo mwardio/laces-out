@@ -8,8 +8,8 @@ import { createHash, randomBytes, randomUUID } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { loadEnvironment } from "@fantasy/config";
-import type { EspnLeagueRefreshStatus } from "@fantasy/contracts";
+import { loadEnvironment } from "@laces-out/config";
+import type { EspnLeagueRefreshStatus } from "@laces-out/contracts";
 import {
   bridgeDeviceLeagues,
   bridgeDevices,
@@ -21,7 +21,7 @@ import {
   refreshRequests,
   users,
   type Database,
-} from "@fantasy/db";
+} from "@laces-out/db";
 import { eq } from "drizzle-orm";
 import { migrate } from "drizzle-orm/postgres-js/migrator";
 import postgres from "postgres";

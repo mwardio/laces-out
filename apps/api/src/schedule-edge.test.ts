@@ -1,4 +1,4 @@
-import { scheduleEdgeMatrixResponseSchema, scheduleEdgeResponseSchema } from "@fantasy/contracts";
+import { scheduleEdgeMatrixResponseSchema, scheduleEdgeResponseSchema } from "@laces-out/contracts";
 import { describe, expect, it, vi } from "vitest";
 
 import {

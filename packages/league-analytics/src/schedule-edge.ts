@@ -5,14 +5,14 @@ import {
   type RosterAssignment,
   type RosterSlot,
   type RosterSlotId,
-} from "@fantasy/domain";
+} from "@laces-out/domain";
 import {
   normalizeHistoricalPlayerStatComponents,
   projectionScoringProfileKey,
   scoreProjectionStatComponents,
   type ProjectionScoringProfile,
   type ProjectionStatComponents,
-} from "@fantasy/projections";
+} from "@laces-out/projections";
 
 import {
   ANALYTICS_EPSILON,

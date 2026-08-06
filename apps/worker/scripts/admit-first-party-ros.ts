@@ -1,11 +1,11 @@
 import { readFileSync } from "node:fs";
 
-import { createDatabase, firstPartyRosChampionArtifacts } from "@fantasy/db";
+import { createDatabase, firstPartyRosChampionArtifacts } from "@laces-out/db";
 import {
   ROS_SCORING_PROFILE_KEYS,
   isRosScoringProfileKey,
   rosScoringProfile,
-} from "@fantasy/projections";
+} from "@laces-out/projections";
 import { and, eq } from "drizzle-orm";
 
 import {

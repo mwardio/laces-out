@@ -12,9 +12,9 @@ import {
   syncRuns,
   type Database,
   type JsonPrimitive,
-} from "@fantasy/db";
-import { emitChangeEvents } from "@fantasy/change-events";
-import { isReusableArchivedSourceArtifact, sourceMatchRateThreshold } from "@fantasy/domain";
+} from "@laces-out/db";
+import { emitChangeEvents } from "@laces-out/change-events";
+import { isReusableArchivedSourceArtifact, sourceMatchRateThreshold } from "@laces-out/domain";
 
 import {
   buildInjuryChangeDrafts,
@@ -50,7 +50,7 @@ import {
   type NflversePlayerInjuryReport,
   type NflversePlayerWeeklyStats,
   type NflverseWeeklyRosterPlayer,
-} from "@fantasy/source-nflverse";
+} from "@laces-out/source-nflverse";
 import { and, eq, lte } from "drizzle-orm";
 
 import { currentNflSeason } from "./nfl-season.js";

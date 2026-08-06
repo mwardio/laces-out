@@ -48,9 +48,9 @@ import {
   users,
   weeklyRecaps,
   type Database,
-} from "@fantasy/db";
-import { hashOAuthState } from "@fantasy/connector-yahoo";
-import { parseCredentialKey } from "@fantasy/security";
+} from "@laces-out/db";
+import { hashOAuthState } from "@laces-out/connector-yahoo";
+import { parseCredentialKey } from "@laces-out/security";
 import { and, eq, inArray } from "drizzle-orm";
 import { migrate } from "drizzle-orm/postgres-js/migrator";
 import postgres from "postgres";

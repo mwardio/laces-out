@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { YahooSyncError, type YahooSyncReceipt } from "@fantasy/league-sync";
+import { YahooSyncError, type YahooSyncReceipt } from "@laces-out/league-sync";
 
 import type { LeagueSyncJob } from "./jobs.js";
 import { LeagueSyncService, type LeagueSyncTarget } from "./league-sync-service.js";

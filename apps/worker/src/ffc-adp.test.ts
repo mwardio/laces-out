@@ -1,4 +1,4 @@
-import { DEFAULT_SOURCE_MATCH_RATE, sourceMatchRateThreshold } from "@fantasy/domain";
+import { DEFAULT_SOURCE_MATCH_RATE, sourceMatchRateThreshold } from "@laces-out/domain";
 import { describe, expect, it } from "vitest";
 
 import { buildUniqueFfcIdentity, defaultFfcAdpContexts, ffcAdpSourceKey } from "./ffc-adp.js";

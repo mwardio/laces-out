@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import type { LeagueMembershipRole } from "@fantasy/db";
+import type { LeagueMembershipRole } from "@laces-out/db";
 
 import {
   DraftSessionService,

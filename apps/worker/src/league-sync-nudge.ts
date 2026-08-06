@@ -1,5 +1,5 @@
-import { emailSends, leagueMemberships, userPreferences, users, type Database } from "@fantasy/db";
-import { renderLeagueSyncNudgeEmail, type EmailTransport } from "@fantasy/email";
+import { emailSends, leagueMemberships, userPreferences, users, type Database } from "@laces-out/db";
+import { renderLeagueSyncNudgeEmail, type EmailTransport } from "@laces-out/email";
 import { and, asc, eq, gte, isNotNull, isNull, lte, or } from "drizzle-orm";
 
 import type { EmailSweepJob, EmailSweepResult, EmailSweepService } from "./jobs.js";

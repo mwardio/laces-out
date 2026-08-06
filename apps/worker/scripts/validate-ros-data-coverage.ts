@@ -6,7 +6,7 @@ import {
   NflverseWeeklyRostersSource,
   NflverseWeeklyStatsSource,
   type NflverseDatasetState,
-} from "@fantasy/source-nflverse";
+} from "@laces-out/source-nflverse";
 
 import {
   ROS_COVERAGE_POSITIONS,

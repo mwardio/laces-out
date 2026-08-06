@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 
-import { loadEnvironment } from "@fantasy/config";
-import { EspnWebClientNormalizationError } from "@fantasy/connector-espn";
-import { healthResponseSchema } from "@fantasy/contracts";
+import { loadEnvironment } from "@laces-out/config";
+import { EspnWebClientNormalizationError } from "@laces-out/connector-espn";
+import { healthResponseSchema } from "@laces-out/contracts";
 
 import { AuthService, hashOwnerPassword, type AuthRepository } from "./auth.js";
 import { buildApp, type LeagueMembershipPort, requestPathForLog } from "./app.js";

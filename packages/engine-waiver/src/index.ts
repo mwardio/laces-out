@@ -6,12 +6,12 @@ import {
   type ProjectionLookup,
   type ProjectionMetric,
   type RosterSlot,
-} from "@fantasy/domain";
+} from "@laces-out/domain";
 import {
   optimizeLineup,
   type LineupChange,
   type LineupOptimizationResult,
-} from "@fantasy/engine-lineup";
+} from "@laces-out/engine-lineup";
 
 export interface WaiverHorizon {
   readonly id: string;

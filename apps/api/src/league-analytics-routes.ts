@@ -1,4 +1,4 @@
-import { leagueAnalyticsSnapshotSchema } from "@fantasy/contracts";
+import { leagueAnalyticsSnapshotSchema } from "@laces-out/contracts";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 

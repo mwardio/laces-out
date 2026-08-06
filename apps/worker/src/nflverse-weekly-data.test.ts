@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import type { NflversePlayerInjuryReport } from "@fantasy/source-nflverse";
+import type { NflversePlayerInjuryReport } from "@laces-out/source-nflverse";
 
 import {
   datasetMetadata,

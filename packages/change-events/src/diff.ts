@@ -1,4 +1,4 @@
-import { checksumSha256 } from "@fantasy/rankings";
+import { checksumSha256 } from "@laces-out/rankings";
 
 /**
  * Prior-versus-next roster comparison.

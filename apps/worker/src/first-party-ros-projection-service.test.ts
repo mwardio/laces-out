@@ -11,7 +11,7 @@ import {
   syncRuns,
   leagueSeasons,
   type Database,
-} from "@fantasy/db";
+} from "@laces-out/db";
 import {
   FIRST_PARTY_ROS_INTERVAL_CALIBRATION_VERSION,
   FIRST_PARTY_ROS_MODEL_VERSION,
@@ -24,7 +24,7 @@ import {
   type FirstPartyRosLiveReleaseEvidence,
   type FirstPartyRosProjection,
   type ProjectionScoringProfile,
-} from "@fantasy/projections";
+} from "@laces-out/projections";
 import { describe, expect, it } from "vitest";
 
 import {

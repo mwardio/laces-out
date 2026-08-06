@@ -238,12 +238,12 @@ snapshot, and not make the whole API unready.
 Database-backed release checks:
 
 ```bash
-npm run db:migrate -w @fantasy/db
-npm run db:smoke -w @fantasy/db
-npm run bridge:smoke -w @fantasy/api
-npm run yahoo:smoke -w @fantasy/api
-npm run invitation:smoke -w @fantasy/api
-npm run registration:smoke -w @fantasy/api
+npm run db:migrate -w @laces-out/db
+npm run db:smoke -w @laces-out/db
+npm run bridge:smoke -w @laces-out/api
+npm run yahoo:smoke -w @laces-out/api
+npm run invitation:smoke -w @laces-out/api
+npm run registration:smoke -w @laces-out/api
 npm run runtime:smoke
 ```
 
@@ -257,7 +257,7 @@ idempotency, and last-good rollback; two Yahoo accounts remain isolated while li
 preserve snapshots, and deduplicate only same-account replays; invitation capabilities hash and
 consume once; and shared-code registration stores only password/session hashes. They never print a
 device, invitation, registration, or session credential.
-`npm run catalog:refresh -w @fantasy/worker` is an explicit live source check that downloads the
+`npm run catalog:refresh -w @laces-out/worker` is an explicit live source check that downloads the
 nflverse player catalog and updates the configured database. The normal shared-data queue checks
 the four-season model window for weekly stats, weekly rosters, and snap counts after refreshing
 canonical IDs.
@@ -338,7 +338,7 @@ the champion at every player position — the richer contextual candidate won no
 overall MAE of 4.3899 is genuinely lower, but that is a 0.30% improvement against a 2% displacement
 threshold, so it correctly remained shadow-only. D/ST is the one place a model beats its baseline.
 
-Reproduce the full official audit with `npm run projections:validate -w @fantasy/worker -- --summary`;
+Reproduce the full official audit with `npm run projections:validate -w @laces-out/worker -- --summary`;
 expect several minutes of CPU time (about 375 seconds observed) because the command deliberately
 rebuilds every locked batch.
 
@@ -408,9 +408,9 @@ only in reception points. The ESPN profiles pin the two live league shapes indep
 their complete D/ST brackets and their differing missed-extra-point rules.
 
 ```bash
-npm run ros:validate -w @fantasy/worker -- --scoring-profile=half-ppr --full \
+npm run ros:validate -w @laces-out/worker -- --scoring-profile=half-ppr --full \
   > reports/ros-validation-<model>-half-ppr-<date>.json
-npm run ros:admit -w @fantasy/worker -- --scoring-profile=half-ppr \
+npm run ros:admit -w @laces-out/worker -- --scoring-profile=half-ppr \
   --database-url=postgres://... --report=<that file> --evidence-through=2025 --confirm
 ```
 
@@ -494,11 +494,11 @@ npx vitest run packages/projections/src/first-party.test.ts \
   apps/worker/src/first-party-projection-inputs.test.ts \
   apps/worker/src/first-party-ros-backtest.test.ts \
   apps/worker/src/projection-lock-window.test.ts
-npm run projections:validate -w @fantasy/worker -- --seasons=2023,2024,2025
-npm run ros:coverage -w @fantasy/worker -- --summary
-npm run ros:validate -w @fantasy/worker -- --allow-incomplete
+npm run projections:validate -w @laces-out/worker -- --seasons=2023,2024,2025
+npm run ros:coverage -w @laces-out/worker -- --summary
+npm run ros:validate -w @laces-out/worker -- --allow-incomplete
 npm run typecheck
-npm run build -w @fantasy/worker
+npm run build -w @laces-out/worker
 ```
 
 #### Current availability and identity gates
@@ -781,7 +781,7 @@ connection may create a league, membership, or team claim.
 Safe rollout order:
 
 1. Take and verify a backup, apply migrations through `0036`, then run
-   `npm run db:smoke -w @fantasy/db` against a disposable migrated PostgreSQL database.
+   `npm run db:smoke -w @laces-out/db` against a disposable migrated PostgreSQL database.
 2. Deploy API and worker support with `ESPN_PUBLIC_DIRECT_SYNC_ENABLED=false`. Confirm request/status
    reads, expiry, redacted structured counts, and legacy uploads before publishing the companion.
 3. Publish the compatible companion update and canary one private league. Verify five-minute

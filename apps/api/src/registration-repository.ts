@@ -1,4 +1,4 @@
-import { emailVerificationTokens, sessions, users, type Database } from "@fantasy/db";
+import { emailVerificationTokens, sessions, users, type Database } from "@laces-out/db";
 import { and, eq, isNull, sql } from "drizzle-orm";
 
 import type {

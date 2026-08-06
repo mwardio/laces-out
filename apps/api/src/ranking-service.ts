@@ -30,7 +30,7 @@ import {
   type RankingVersion,
   type RankingVisibility,
   type ScoringContext,
-} from "@fantasy/rankings";
+} from "@laces-out/rankings";
 import { z } from "zod";
 
 const uuidSchema = z.string().uuid();

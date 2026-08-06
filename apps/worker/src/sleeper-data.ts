@@ -6,7 +6,7 @@ import {
   players,
   syncRuns,
   type Database,
-} from "@fantasy/db";
+} from "@laces-out/db";
 import {
   SLEEPER_ATTRIBUTION,
   SLEEPER_ATTRIBUTION_URL,
@@ -14,7 +14,7 @@ import {
   SLEEPER_TRENDS_URL,
   SleeperPlayersSource,
   SleeperTrendsSource,
-} from "@fantasy/source-sleeper";
+} from "@laces-out/source-sleeper";
 import { and, eq, inArray, lt, lte, sql } from "drizzle-orm";
 
 const catalogSourceKey = "sleeper.players";

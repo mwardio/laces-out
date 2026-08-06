@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 
 import { ForgotPasswordForm } from "../../components/forgot-password-form";
+import { PublicAccountShell } from "../public-site-chrome";
 
 export const metadata: Metadata = {
   title: "Forgot Password",
@@ -10,14 +11,8 @@ export const metadata: Metadata = {
 
 export default function ForgotPasswordPage() {
   return (
-    <main className="login-page login-page--single">
-      <section className="login-form-side" aria-label="Request a password reset">
-        <ForgotPasswordForm />
-        <p className="login-help">
-          The reset link arrives by email and works for 30 minutes. For your privacy, the response
-          looks the same whether or not an account exists for the address.
-        </p>
-      </section>
-    </main>
+    <PublicAccountShell ariaLabel="Request a password reset">
+      <ForgotPasswordForm />
+    </PublicAccountShell>
   );
 }

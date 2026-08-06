@@ -3,7 +3,7 @@ import {
   type DraftSessionSnapshot,
   type EspnLiveDraftFeedStatus,
   type EspnLiveDraftIssueCode,
-} from "@fantasy/contracts";
+} from "@laces-out/contracts";
 
 import { unfilledStarterSlots } from "./draft-board";
 

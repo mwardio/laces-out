@@ -1,4 +1,4 @@
-import { defineProviderCapabilities } from "@fantasy/connectors";
+import { defineProviderCapabilities } from "@laces-out/connectors";
 
 export const YAHOO_CAPABILITIES = defineProviderCapabilities({
   provider: "yahoo",

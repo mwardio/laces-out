@@ -1,18 +1,18 @@
 {
-  "name": "@fantasy/decisions",
+  "name": "@laces-out/decisions",
   "version": "0.1.0",
   "private": true,
   "type": "module",
   "exports": "./src/index.ts",
   "dependencies": {
-    "@fantasy/contracts": "*",
-    "@fantasy/db": "*",
-    "@fantasy/domain": "*",
-    "@fantasy/engine-lineup": "*",
-    "@fantasy/engine-trade": "*",
-    "@fantasy/engine-waiver": "*",
-    "@fantasy/jobs": "*",
-    "@fantasy/projections": "*",
+    "@laces-out/contracts": "*",
+    "@laces-out/db": "*",
+    "@laces-out/domain": "*",
+    "@laces-out/engine-lineup": "*",
+    "@laces-out/engine-trade": "*",
+    "@laces-out/engine-waiver": "*",
+    "@laces-out/jobs": "*",
+    "@laces-out/projections": "*",
     "drizzle-orm": "^0.45.2"
   }
 }

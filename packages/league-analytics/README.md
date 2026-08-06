@@ -1,4 +1,4 @@
-# `@fantasy/league-analytics`
+# `@laces-out/league-analytics`
 
 Pure TypeScript analytics for normalized fantasy-league data. Nothing in this package calls a
 provider or consumes proprietary rankings; callers supply scores, schedules, projections, and

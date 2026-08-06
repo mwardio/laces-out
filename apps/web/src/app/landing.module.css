@@ -38,6 +38,37 @@
   border-bottom: 1px solid rgb(255 255 255 / 10%);
 }
 
+.siteHeader.siteHeaderSolid {
+  position: relative;
+  flex: 0 0 auto;
+  background: var(--ink-950);
+}
+
+.siteHeaderCompact .headerInner {
+  grid-template-columns: 1fr auto;
+}
+
+.accountPage {
+  display: flex;
+  flex-direction: column;
+}
+
+.accountMain {
+  display: flex;
+  width: 100%;
+  flex: 1 0 auto;
+  align-items: center;
+  justify-content: center;
+  padding: 52px 24px 60px;
+}
+
+.accountFormSide {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: center;
+}
+
 .headerInner,
 .heroInner,
 .signalInner,
@@ -2306,6 +2337,11 @@
 
   .siteHeader {
     position: absolute;
+  }
+
+  .accountMain {
+    align-items: flex-start;
+    padding: 30px 16px 42px;
   }
 
   .headerInner {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { loadEnvironment } from "@fantasy/config";
+import { loadEnvironment } from "@laces-out/config";
 
 import { buildApp } from "./app.js";
 import type { EmailVerificationPort } from "./email-verification-routes.js";

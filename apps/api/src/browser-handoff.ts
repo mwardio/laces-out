@@ -1,7 +1,7 @@
 import { createHash, randomBytes } from "node:crypto";
 
-import type { BrowserHandoffDestination } from "@fantasy/contracts";
-import { browserHandoffTokens, type Database, sessions, users } from "@fantasy/db";
+import type { BrowserHandoffDestination } from "@laces-out/contracts";
+import { browserHandoffTokens, type Database, sessions, users } from "@laces-out/db";
 import { and, eq, gt, isNotNull, isNull } from "drizzle-orm";
 
 import { sessionLifetimeSeconds } from "./auth.js";

@@ -38,7 +38,7 @@ import {
   syncRuns,
   users,
   type Database,
-} from "@fantasy/db";
+} from "@laces-out/db";
 import {
   FIRST_PARTY_ROS_MODEL_VERSION,
   LEAGUE_SCORING_NORMALIZATION_VERSION,
@@ -46,7 +46,7 @@ import {
   projectionScoringProfileKey,
   rosAvailableProjectionStatIds,
   rosScoringProfile,
-} from "@fantasy/projections";
+} from "@laces-out/projections";
 import { migrate } from "drizzle-orm/postgres-js/migrator";
 import postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";

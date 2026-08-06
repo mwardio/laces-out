@@ -1,6 +1,6 @@
 "use client";
 
-import type { ScheduleResponse } from "@fantasy/contracts";
+import type { ScheduleResponse } from "@laces-out/contracts";
 import {
   CalendarDays,
   CalendarOff,

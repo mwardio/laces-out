@@ -2,7 +2,7 @@ import {
   projectionScoringProfileKeyForPosition,
   projectionScoringRulesFromProfileKey,
   rosScoringProfileCatalog,
-} from "@fantasy/projections";
+} from "@laces-out/projections";
 
 /**
  * Pure derivations behind `GET /v1/projections/ros-status`.

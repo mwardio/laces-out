@@ -1,5 +1,5 @@
-import type { Freshness, RecommendationRunKind } from "@fantasy/contracts";
-import { recommendationKinds, type RecommendationKind } from "@fantasy/jobs";
+import type { Freshness, RecommendationRunKind } from "@laces-out/contracts";
+import { recommendationKinds, type RecommendationKind } from "@laces-out/jobs";
 
 import {
   RECOMMENDATION_ALGORITHM_VERSION,
@@ -8,7 +8,7 @@ import {
   type RecommendationRunChecksumInput,
   type RecommendationRunIdentity,
 } from "./recommendation-run.js";
-import type { RecommendationRunProvenance } from "@fantasy/contracts";
+import type { RecommendationRunProvenance } from "@laces-out/contracts";
 
 /**
  * Provider-neutral recomputation of a league season's stored recommendation runs.

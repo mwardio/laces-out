@@ -15,7 +15,7 @@ import {
   type AiProviderName,
   type AiProviderSaveRequest,
   type AiProviderTestResponse,
-} from "@fantasy/contracts";
+} from "@laces-out/contracts";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 

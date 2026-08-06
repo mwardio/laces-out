@@ -6,7 +6,7 @@ import {
   type InSeasonDecisionSnapshot,
   type LeagueDashboard,
   type TradeEvaluationResponse,
-} from "@fantasy/contracts";
+} from "@laces-out/contracts";
 import {
   ArrowUpRight,
   BrainCircuit,

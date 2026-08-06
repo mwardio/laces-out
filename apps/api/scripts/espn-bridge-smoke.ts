@@ -2,8 +2,8 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 
-import { loadEnvironment } from "@fantasy/config";
-import type { EspnBridgeSnapshot } from "@fantasy/contracts";
+import { loadEnvironment } from "@laces-out/config";
+import type { EspnBridgeSnapshot } from "@laces-out/contracts";
 import {
   bridgeDeviceLeagues,
   createDatabase,
@@ -19,7 +19,7 @@ import {
   syncRuns,
   users,
   weeklyMatchups,
-} from "@fantasy/db";
+} from "@laces-out/db";
 import { and, count, eq } from "drizzle-orm";
 
 import { EspnBridgeService } from "../src/espn-bridge.js";

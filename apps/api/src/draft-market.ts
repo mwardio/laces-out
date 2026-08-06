@@ -1,4 +1,4 @@
-import type { DraftMarketBaseline } from "@fantasy/contracts";
+import type { DraftMarketBaseline } from "@laces-out/contracts";
 import {
   adpObservations,
   dataSources,
@@ -10,7 +10,7 @@ import {
   type AdpScoringFormat,
   type Database,
   type JsonPrimitive,
-} from "@fantasy/db";
+} from "@laces-out/db";
 import { and, desc, eq } from "drizzle-orm";
 
 const supportedTeamCounts = new Set([8, 10, 12, 14]);

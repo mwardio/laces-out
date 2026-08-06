@@ -1,12 +1,12 @@
 {
-  "name": "@fantasy/db",
+  "name": "@laces-out/db",
   "version": "0.1.0",
   "private": true,
   "type": "module",
   "exports": "./src/index.ts",
   "dependencies": {
-    "@fantasy/domain": "*",
-    "@fantasy/projections": "*",
+    "@laces-out/domain": "*",
+    "@laces-out/projections": "*",
     "drizzle-orm": "^0.45.2",
     "postgres": "^3.4.7"
   },

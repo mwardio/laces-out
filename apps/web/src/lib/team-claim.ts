@@ -6,7 +6,7 @@
  * No parsing lives here: callers already hold a validated `LeagueDashboard`, either preloaded (the
  * Overview page's own fetch) or self-fetched by `TeamClaimCallout`.
  */
-import type { LeagueTeamSnapshot } from "@fantasy/contracts";
+import type { LeagueTeamSnapshot } from "@laces-out/contracts";
 
 import type { LeagueDashboard } from "./api-client";
 

@@ -6,10 +6,10 @@ import {
   YahooTokenClientError,
   YAHOO_CAPABILITIES,
   type YahooTokenSet,
-} from "@fantasy/connector-yahoo";
-import type { YahooReturnMode } from "@fantasy/contracts";
-import { oauthStates, providerConnections, type Database } from "@fantasy/db";
-import { decryptCredential, encryptCredential, type CredentialKey } from "@fantasy/security";
+} from "@laces-out/connector-yahoo";
+import type { YahooReturnMode } from "@laces-out/contracts";
+import { oauthStates, providerConnections, type Database } from "@laces-out/db";
+import { decryptCredential, encryptCredential, type CredentialKey } from "@laces-out/security";
 import { and, eq, gt, isNull } from "drizzle-orm";
 
 interface StoredPkce {

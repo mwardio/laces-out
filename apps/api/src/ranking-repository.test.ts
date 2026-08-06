@@ -1,5 +1,5 @@
-import type { Database } from "@fantasy/db";
-import { RANKING_SCHEMA_VERSION, createRankingVersion } from "@fantasy/rankings";
+import type { Database } from "@laces-out/db";
+import { RANKING_SCHEMA_VERSION, createRankingVersion } from "@laces-out/rankings";
 import { describe, expect, it, vi } from "vitest";
 
 import { DrizzleRankingRepository } from "./ranking-repository.js";

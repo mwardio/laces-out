@@ -10,7 +10,7 @@ import type {
   TradeEvaluationRequest,
   TradeEvaluationResponse,
   TradeRosUnavailable,
-} from "@fantasy/contracts";
+} from "@laces-out/contracts";
 import {
   fantasyTeams,
   leagueMemberships,
@@ -29,7 +29,7 @@ import {
   type Database,
   type LeagueMembershipRole,
   type ProviderName,
-} from "@fantasy/db";
+} from "@laces-out/db";
 import {
   NFL_POSITIONS,
   NFL_TEAMS,
@@ -49,15 +49,15 @@ import {
   type RosterSlot,
   type RosterSlotKind,
   type RosterSlotType,
-} from "@fantasy/domain";
-import { optimizeLineup, type LineupLock } from "@fantasy/engine-lineup";
+} from "@laces-out/domain";
+import { optimizeLineup, type LineupLock } from "@laces-out/engine-lineup";
 import {
   evaluateTrade,
   type TradeEvaluation,
   type TradeHorizon,
   type TradePackage,
-} from "@fantasy/engine-trade";
-import { evaluateWaiverMoves, recommendFaabBid } from "@fantasy/engine-waiver";
+} from "@laces-out/engine-trade";
+import { evaluateWaiverMoves, recommendFaabBid } from "@laces-out/engine-waiver";
 import { and, asc, count, desc, eq, inArray, like, ne, or, sql } from "drizzle-orm";
 
 import {

@@ -1,4 +1,4 @@
-import type { ChangeEventVisibility } from "@fantasy/contracts";
+import type { ChangeEventVisibility } from "@laces-out/contracts";
 
 /**
  * Who a change event is written *to*.

@@ -6,7 +6,7 @@ import {
   type AiFeatureResponse,
   type AiFeatureOutcomeWithTools,
   type AiToolUse,
-} from "@fantasy/contracts";
+} from "@laces-out/contracts";
 
 /**
  * `AiFeatureResponse`, widened with tool-use provenance.

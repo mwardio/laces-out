@@ -1,6 +1,6 @@
-import { loadEnvironment } from "@fantasy/config";
-import type { DraftSessionSnapshot, EspnLiveDraftFeedStatus } from "@fantasy/contracts";
-import type { LeagueMembershipRole } from "@fantasy/db";
+import { loadEnvironment } from "@laces-out/config";
+import type { DraftSessionSnapshot, EspnLiveDraftFeedStatus } from "@laces-out/contracts";
+import type { LeagueMembershipRole } from "@laces-out/db";
 import { describe, expect, it } from "vitest";
 
 import { buildApp } from "./app.js";

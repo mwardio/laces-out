@@ -4,7 +4,7 @@ import {
   EspnPublicReadError,
   canonicalEspnPayloadChecksumV1,
   type EspnPublicLeagueArtifact,
-} from "@fantasy/connector-espn";
+} from "@laces-out/connector-espn";
 import { describe, expect, it, vi } from "vitest";
 
 import {

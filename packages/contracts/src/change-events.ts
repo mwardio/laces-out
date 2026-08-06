@@ -4,7 +4,7 @@ import { z } from "zod";
  * Wire contracts for the change-event feed.
  *
  * **Browser-safe.** This module has no `node:` import — `apps/web` client components read the
- * contracts barrel, so anything requiring `node:crypto` belongs in `@fantasy/change-events` instead.
+ * contracts barrel, so anything requiring `node:crypto` belongs in `@laces-out/change-events` instead.
  *
  * **Versioned registry, not a single wire shape.** Every stored payload begins with
  * `v: CHANGE_EVENT_PAYLOAD_VERSION`. `parseChangeEventPayload` reads `v` *before* validating, so a

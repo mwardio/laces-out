@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 
-import { playerId, rosterSlotId, teamId, type RosterSlot } from "@fantasy/domain";
-import { reduceDraft, type DraftConfig } from "@fantasy/engine-draft";
+import { playerId, rosterSlotId, teamId, type RosterSlot } from "@laces-out/domain";
+import { reduceDraft, type DraftConfig } from "@laces-out/engine-draft";
 import { describe, expect, it } from "vitest";
 
 import type { DraftSessionEventRecord } from "./draft-session.js";

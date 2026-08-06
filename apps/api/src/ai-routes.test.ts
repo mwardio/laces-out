@@ -1,5 +1,5 @@
-import { loadEnvironment } from "@fantasy/config";
-import type { AiAnalysisResponse, AiProviderConfiguration } from "@fantasy/contracts";
+import { loadEnvironment } from "@laces-out/config";
+import type { AiAnalysisResponse, AiProviderConfiguration } from "@laces-out/contracts";
 import { describe, expect, it, vi } from "vitest";
 
 import type { AiFeatureWithToolUseResponse } from "./ai-feature-contract.js";

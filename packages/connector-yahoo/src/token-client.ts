@@ -1,4 +1,4 @@
-import { redactText } from "@fantasy/security";
+import { redactText } from "@laces-out/security";
 
 export const YAHOO_TOKEN_ENDPOINT = "https://api.login.yahoo.com/oauth2/get_token" as const;
 const MAX_TOKEN_RESPONSE_BYTES = 64 * 1024;

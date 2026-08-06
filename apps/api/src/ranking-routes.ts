@@ -3,7 +3,7 @@ import {
   csvColumnMappingSchema,
   positionSchema,
   rankingVisibilitySchema,
-} from "@fantasy/rankings";
+} from "@laces-out/rankings";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 

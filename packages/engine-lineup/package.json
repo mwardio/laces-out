@@ -1,10 +1,10 @@
 {
-  "name": "@fantasy/engine-lineup",
+  "name": "@laces-out/engine-lineup",
   "version": "0.1.0",
   "private": true,
   "type": "module",
   "exports": "./src/index.ts",
   "dependencies": {
-    "@fantasy/domain": "*"
+    "@laces-out/domain": "*"
   }
 }

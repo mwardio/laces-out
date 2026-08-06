@@ -1,5 +1,5 @@
 import { and, eq, gt, ilike, lt, ne } from "drizzle-orm";
-import { browserHandoffTokens, type Database, sessions, users } from "@fantasy/db";
+import { browserHandoffTokens, type Database, sessions, users } from "@laces-out/db";
 
 import {
   type AuthRepository,

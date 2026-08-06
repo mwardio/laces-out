@@ -3,7 +3,7 @@ import {
   type ChangeEvent,
   type ChangeEventFeedResponse,
   type ChangeEventSeverity,
-} from "@fantasy/contracts";
+} from "@laces-out/contracts";
 
 /**
  * Client-side helpers for the change feed.

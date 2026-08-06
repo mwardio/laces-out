@@ -1,7 +1,7 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 
-import type { RecommendationKind } from "@fantasy/jobs";
+import type { RecommendationKind } from "@laces-out/jobs";
 
 import {
   emitProviderSyncChangeEvents,

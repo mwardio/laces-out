@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 
-import type { ChangeEventKind } from "@fantasy/contracts";
-import { canonicalJson } from "@fantasy/rankings";
+import type { ChangeEventKind } from "@laces-out/contracts";
+import { canonicalJson } from "@laces-out/rankings";
 
 /**
  * The deduplication half of `change_events_source_deduplication_unique`.

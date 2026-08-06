@@ -66,20 +66,20 @@ import {
   type StatsCenterPlayerDetailResponse,
   type StatsCenterResponse,
   type TradeEvaluationResponse,
-} from "@fantasy/contracts";
+} from "@laces-out/contracts";
 import {
   dataQualityResponseSchema,
   unresolvedIdentityResponseSchema,
   type DataQualityResponse,
   type DataQualitySource,
   type UnresolvedIdentityResponse,
-} from "@fantasy/contracts";
+} from "@laces-out/contracts";
 import {
   rankingListSchema,
   rankingVersionSchema,
   type RankingList,
   type RankingVersion,
-} from "@fantasy/rankings/model";
+} from "@laces-out/rankings/model";
 import type { z } from "zod";
 
 export { parseRosReleaseStatus, type RosReleaseStatus } from "./ros-release-status";
@@ -88,7 +88,7 @@ export type {
   ChangeEvent,
   ChangeEventFeedResponse,
   ChangeEventReceiptResponse,
-} from "@fantasy/contracts";
+} from "@laces-out/contracts";
 
 const fallbackApiUrl = "http://localhost:4000";
 

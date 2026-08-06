@@ -1,5 +1,5 @@
-import { loadEnvironment } from "@fantasy/config";
-import { createDatabase } from "@fantasy/db";
+import { loadEnvironment } from "@laces-out/config";
+import { createDatabase } from "@laces-out/db";
 import { PgBoss } from "pg-boss";
 import pino from "pino";
 

@@ -5,7 +5,7 @@ import {
   teamId,
   type Player,
   type TeamId,
-} from "@fantasy/domain";
+} from "@laces-out/domain";
 import {
   reduceDraft,
   simulateAuctionMockDraft,
@@ -17,7 +17,7 @@ import {
   type MockDraftStopReason,
   type MockPlayerMarket,
   type SnakeDraftConfig,
-} from "@fantasy/engine-draft";
+} from "@laces-out/engine-draft";
 
 import type { DraftSessionSnapshot } from "./api-client";
 import type { DraftBoardValue } from "./draft-board";

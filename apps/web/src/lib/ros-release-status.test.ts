@@ -1,7 +1,7 @@
 // Conformance-only import of the canonical wire contract, mirroring the pattern
 // `apps/api/src/ros-release-status.test.ts` uses against the same package. Keeps this module's known
 // reason list from silently drifting from the one `packages/contracts/src/ros-release-status.ts` pins.
-import { ROS_WITHHOLDING_REASONS as CONTRACT_ROS_WITHHOLDING_REASONS } from "@fantasy/contracts";
+import { ROS_WITHHOLDING_REASONS as CONTRACT_ROS_WITHHOLDING_REASONS } from "@laces-out/contracts";
 import { describe, expect, it } from "vitest";
 
 import {

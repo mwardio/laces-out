@@ -2,7 +2,7 @@ import {
   renderEmailConfirmationEmail,
   renderPasswordResetEmail,
   type EmailTransport,
-} from "@fantasy/email";
+} from "@laces-out/email";
 
 import type { EmailConfirmationDelivery } from "./email-verification.js";
 import type { PasswordResetEmailDelivery } from "./password-reset.js";

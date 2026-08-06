@@ -27,7 +27,7 @@ import {
   type EspnLiveDraftFeedStatus,
   type EspnLiveDraftObservation,
   type EspnLiveDraftPickOwnership,
-} from "@fantasy/contracts";
+} from "@laces-out/contracts";
 import {
   bridgeDeviceLeagues,
   bridgeDevices,
@@ -44,7 +44,7 @@ import {
   type Database,
   type DraftProviderFeedState,
   type DraftProviderFeedVerification,
-} from "@fantasy/db";
+} from "@laces-out/db";
 import {
   NFL_POSITIONS,
   NFL_TEAMS,
@@ -61,13 +61,13 @@ import {
   type RosterSlot,
   type RosterSlotKind,
   type RosterSlotType,
-} from "@fantasy/domain";
+} from "@laces-out/domain";
 import {
   DraftInvariantError,
   reduceDraft,
   type DraftConfig,
   type DraftEvent,
-} from "@fantasy/engine-draft";
+} from "@laces-out/engine-draft";
 import {
   and,
   asc,

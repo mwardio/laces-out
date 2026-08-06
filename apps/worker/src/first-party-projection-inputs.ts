@@ -8,7 +8,7 @@ import {
   type FirstPartyTeamDefenseWeeklyStatLine,
   type FirstPartyWeeklyStatLine,
   type ProjectionStatComponents,
-} from "@fantasy/projections";
+} from "@laces-out/projections";
 
 export interface ProjectionWeeklyFact {
   readonly playerId: string;

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { createRosterSlots, draftEventId, playerId, teamId, type Player } from "@fantasy/domain";
+import { createRosterSlots, draftEventId, playerId, teamId, type Player } from "@laces-out/domain";
 
 import {
   analyzeDraft,

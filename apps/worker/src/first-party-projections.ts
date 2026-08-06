@@ -22,8 +22,8 @@ import {
   syncRuns,
   teamWeeklyStatObservations,
   type Database,
-} from "@fantasy/db";
-import { isArchivedNflverseSource } from "@fantasy/domain";
+} from "@laces-out/db";
+import { isArchivedNflverseSource } from "@laces-out/domain";
 import {
   FIRST_PARTY_CHAMPION_MINIMUM_IMPROVEMENT,
   FIRST_PARTY_CHAMPION_MINIMUM_SAMPLES,
@@ -61,7 +61,7 @@ import {
   type LeagueScoringUnsupportedReason,
   type ProjectionScoringProfile,
   type ProjectionStatComponents,
-} from "@fantasy/projections";
+} from "@laces-out/projections";
 import { and, count, desc, eq, inArray, or, sql, type SQLWrapper } from "drizzle-orm";
 
 import {

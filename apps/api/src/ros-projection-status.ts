@@ -11,7 +11,7 @@ import {
   projectionSets,
   scoringRules,
   type Database,
-} from "@fantasy/db";
+} from "@laces-out/db";
 import {
   FIRST_PARTY_ROS_MODEL_VERSION,
   LEAGUE_SCORING_NORMALIZATION_VERSION,
@@ -20,7 +20,7 @@ import {
   rosAvailableProjectionStatIds,
   rosScoringProfileCatalog,
   type LeagueScoringProvider,
-} from "@fantasy/projections";
+} from "@laces-out/projections";
 import { and, desc, eq, inArray, sql } from "drizzle-orm";
 
 import {

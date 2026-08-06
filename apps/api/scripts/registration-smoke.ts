@@ -1,16 +1,17 @@
 import assert from "node:assert/strict";
 
-import { loadEnvironment } from "@fantasy/config";
+import { loadEnvironment } from "@laces-out/config";
 import {
   createDatabase,
   emailVerificationTokens,
   type Database,
   sessions,
   users,
-} from "@fantasy/db";
+} from "@laces-out/db";
 import { eq } from "drizzle-orm";
 
 import { hashSessionToken } from "../src/auth.js";
+import { DrizzleEmailVerificationRepository } from "../src/email-verification-repository.js";
 import { DrizzlePasswordResetRepository } from "../src/password-reset-repository.js";
 import { DrizzleRegistrationRepository } from "../src/registration-repository.js";
 import { RegistrationService } from "../src/registration.js";
@@ -25,6 +26,7 @@ interface SmokeResult {
   readonly pendingIdentityPreserved: true;
   readonly pendingHasNoSession: true;
   readonly verificationRotated: true;
+  readonly verificationRedeemed: true;
   readonly resetDoesNotVerify: true;
   readonly rolledBack: true;
 }
@@ -202,6 +204,22 @@ try {
       .limit(1);
     assert.equal(pendingAfterReset?.emailVerifiedAt, null);
 
+    const verificationRepository = new DrizzleEmailVerificationRepository(smokeDatabase);
+    const verifiedAt = new Date(resetAt.getTime() + 1_000);
+    assert.deepEqual(
+      await verificationRepository.redeemToken({
+        tokenHash: hashSessionToken(confirmationTokens[1] ?? ""),
+        now: verifiedAt,
+      }),
+      { userId: originalPendingUser.id },
+    );
+    const [verifiedUser] = await smokeDatabase
+      .select({ emailVerifiedAt: users.emailVerifiedAt })
+      .from(users)
+      .where(eq(users.id, originalPendingUser.id))
+      .limit(1);
+    assert.equal(verifiedUser?.emailVerifiedAt?.toISOString(), verifiedAt.toISOString());
+
     throw new SmokeRollback({
       normalizedEmail: true,
       memberRole: true,
@@ -212,6 +230,7 @@ try {
       pendingIdentityPreserved: true,
       pendingHasNoSession: true,
       verificationRotated: true,
+      verificationRedeemed: true,
       resetDoesNotVerify: true,
       rolledBack: true,
     });

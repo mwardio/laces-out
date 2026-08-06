@@ -1,1 +1,1 @@
-export { currentNflSeason } from "@fantasy/domain";
+export { currentNflSeason } from "@laces-out/domain";

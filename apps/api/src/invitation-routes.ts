@@ -1,5 +1,5 @@
-import type { Environment } from "@fantasy/config";
-import type { ApplicationRole } from "@fantasy/db";
+import type { Environment } from "@laces-out/config";
+import type { ApplicationRole } from "@laces-out/db";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 

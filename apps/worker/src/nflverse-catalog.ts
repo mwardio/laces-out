@@ -1,10 +1,10 @@
-import { dataSources, playerExternalIds, players, syncRuns, type Database } from "@fantasy/db";
+import { dataSources, playerExternalIds, players, syncRuns, type Database } from "@laces-out/db";
 import {
   NFLVERSE_ATTRIBUTION,
   NFLVERSE_ATTRIBUTION_URL,
   NFLVERSE_PLAYERS_URL,
   NflversePlayersSource,
-} from "@fantasy/source-nflverse";
+} from "@laces-out/source-nflverse";
 import { and, eq, lte, sql } from "drizzle-orm";
 
 const sourceKey = "nflverse.players";

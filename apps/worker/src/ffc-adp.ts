@@ -7,8 +7,8 @@ import {
   type AdpScoringFormat,
   type Database,
   type JsonPrimitive,
-} from "@fantasy/db";
-import { sourceMatchRateThreshold } from "@fantasy/domain";
+} from "@laces-out/db";
+import { sourceMatchRateThreshold } from "@laces-out/domain";
 import {
   FFC_ADP_DOCUMENTATION_URL,
   FFC_ATTRIBUTION,
@@ -18,7 +18,7 @@ import {
   type FfcAdpContext,
   type FfcAdpPlayer,
   type FfcScoringFormat,
-} from "@fantasy/source-ffc";
+} from "@laces-out/source-ffc";
 import { and, eq, lte, sql } from "drizzle-orm";
 
 const checkIntervalMinutes = 24 * 60;

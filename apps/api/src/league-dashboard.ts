@@ -14,7 +14,7 @@ import type {
   TeamClaimPolicy,
   TeamClaimResponse,
   WeeklyScoreLeader,
-} from "@fantasy/contracts";
+} from "@laces-out/contracts";
 import {
   dataSources,
   fantasyTeams,
@@ -35,7 +35,7 @@ import {
   type LeagueMembershipRole,
   type StandingStreakType,
   type WeeklyMatchupStatus,
-} from "@fantasy/db";
+} from "@laces-out/db";
 import { and, asc, desc, eq, inArray } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 

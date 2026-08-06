@@ -1,10 +1,10 @@
 import { randomBytes } from "node:crypto";
 
-import type { Environment } from "@fantasy/config";
+import type { Environment } from "@laces-out/config";
 import {
   createBrowserHandoffRequestSchema,
   createBrowserHandoffResponseSchema,
-} from "@fantasy/contracts";
+} from "@laces-out/contracts";
 import type { FastifyInstance, FastifyReply } from "fastify";
 import { z } from "zod";
 

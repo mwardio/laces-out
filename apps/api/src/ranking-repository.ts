@@ -12,7 +12,7 @@ import {
   type RankingFieldAttribution,
   type RankingFieldProvenance,
   type RankingVisibilityConfig,
-} from "@fantasy/db";
+} from "@laces-out/db";
 import {
   RANKING_FIELD_NAMES,
   RANKING_SCHEMA_VERSION,
@@ -28,7 +28,7 @@ import {
   type RankingFieldName,
   type RankingList,
   type RankingVersion,
-} from "@fantasy/rankings";
+} from "@laces-out/rankings";
 import { and, countDistinct, desc, eq, gt, inArray, isNull, max, or, sql } from "drizzle-orm";
 
 import type {

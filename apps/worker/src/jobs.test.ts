@@ -172,7 +172,7 @@ describe("worker queue reliability", () => {
   });
 
   it("re-exports the shared queue contract rather than redefining it", async () => {
-    const shared = await import("@fantasy/jobs");
+    const shared = await import("@laces-out/jobs");
 
     // Identity, not equality. A worker-local copy that happened to hold the same values would
     // satisfy a deep-equality assertion and then drift the next time one side changed.

@@ -7,7 +7,7 @@
  * set it already has.
  *
  * The canonical schema lives in `packages/contracts/src/ros-release-status.ts` (now re-exported from
- * the `@fantasy/contracts` barrel); `apps/api` carries the same shapes locally. `ros-release-status.test.ts`
+ * the `@laces-out/contracts` barrel); `apps/api` carries the same shapes locally. `ros-release-status.test.ts`
  * pins this module's known reason list against the canonical one so the two cannot silently drift.
  *
  * Parsing here is deliberately more forgiving than the server-side wire schema on two axes that grow

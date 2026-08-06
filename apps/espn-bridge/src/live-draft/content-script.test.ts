@@ -95,9 +95,13 @@ describe("draft route activation", () => {
   });
 });
 
-// The publish path awaits a real SHA-256 digest, so a microtask turn is not enough.
-async function settle(): Promise<void> {
-  await new Promise((resolve) => setTimeout(resolve, 0));
+// The publish path awaits a real SHA-256 digest. Poll for its observable result so this test does
+// not depend on one event-loop turn being long enough under a busy full-suite run.
+async function settle(sent: readonly BridgeLiveDraftRequest[]): Promise<void> {
+  const deadline = Date.now() + 1_000;
+  while (sent.length === 0 && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 1));
+  }
 }
 
 describe("live draft session", () => {
@@ -123,7 +127,7 @@ describe("live draft session", () => {
 
   it("sends only a sanitized observation the wire validator accepts", async () => {
     const { sent } = session([{ sequence: "1", player: "Patrick Mahomes" }]);
-    await settle();
+    await settle(sent);
 
     expect(sent).toHaveLength(1);
     const message = sent[0];
@@ -143,7 +147,7 @@ describe("live draft session", () => {
 
   it("never puts raw markup, page text, or credentials on the wire", async () => {
     const { sent } = session([{ sequence: "1", player: "Patrick Mahomes" }]);
-    await settle();
+    await settle(sent);
 
     const body = JSON.stringify(sent).toLowerCase();
     for (const forbidden of [

@@ -1,5 +1,5 @@
-import { loadEnvironment } from "@fantasy/config";
-import type { InSeasonDecisionSnapshot, TradeEvaluationResponse } from "@fantasy/contracts";
+import { loadEnvironment } from "@laces-out/config";
+import type { InSeasonDecisionSnapshot, TradeEvaluationResponse } from "@laces-out/contracts";
 import { describe, expect, it, vi } from "vitest";
 
 import { buildApp } from "./app.js";

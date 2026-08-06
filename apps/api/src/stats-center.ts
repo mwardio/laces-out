@@ -11,13 +11,13 @@ import type {
   StatsCenterSource,
   StatsCenterTrend,
   StatsCenterTrendMetric,
-} from "@fantasy/contracts";
+} from "@laces-out/contracts";
 import {
   playerSnapCountObservations,
   playerWeeklyStatObservations,
   players,
   type Database,
-} from "@fantasy/db";
+} from "@laces-out/db";
 import {
   derivePlayerOpportunityMetrics,
   type BoomBustSummary,
@@ -26,7 +26,7 @@ import {
   type PlayerOpportunityMetrics,
   type WeeklyPlayerSnapObservation,
   type WeeklyPlayerStatObservation,
-} from "@fantasy/league-analytics";
+} from "@laces-out/league-analytics";
 import { and, asc, eq, gte, inArray, lte } from "drizzle-orm";
 
 import {

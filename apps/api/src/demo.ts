@@ -1,4 +1,4 @@
-import { dashboardSnapshotSchema, type DashboardSnapshot } from "@fantasy/contracts";
+import { dashboardSnapshotSchema, type DashboardSnapshot } from "@laces-out/contracts";
 
 const generatedAt = new Date().toISOString();
 

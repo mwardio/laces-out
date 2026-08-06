@@ -1,4 +1,4 @@
-import { normalizeProjectionSourceObservedAt } from "@fantasy/projections";
+import { normalizeProjectionSourceObservedAt } from "@laces-out/projections";
 
 export type ProjectionSourceObservedAtStatus = "verified" | "unverified";
 

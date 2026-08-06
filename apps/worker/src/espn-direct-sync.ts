@@ -5,7 +5,7 @@ import {
   normalizeEspnWebClientSnapshot,
   type EspnPublicLeagueArtifact,
   type EspnPublicLeagueRequest,
-} from "@fantasy/connector-espn";
+} from "@laces-out/connector-espn";
 import {
   espnLeagueSyncStates,
   espnRefreshAttempts,
@@ -14,7 +14,7 @@ import {
   type Database,
   type EspnDirectCapabilityState,
   type EspnPreferredSyncMode,
-} from "@fantasy/db";
+} from "@laces-out/db";
 import {
   DrizzleEspnSyncPersistence,
   nextEspnDirectCircuitOpenUntil,
@@ -22,7 +22,7 @@ import {
   type EspnDirectSyncOutcome,
   type EspnDirectSyncPort,
   type PersistEspnSyncReceipt,
-} from "@fantasy/league-sync";
+} from "@laces-out/league-sync";
 import { and, eq, inArray, isNull, sql } from "drizzle-orm";
 
 const ACTIVE_PROBE_INTERVAL_MS = 30 * 60 * 1000;

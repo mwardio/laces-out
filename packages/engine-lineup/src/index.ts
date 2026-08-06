@@ -7,7 +7,7 @@ import {
   type ProjectionMetric,
   type RosterSlot,
   type RosterSlotId,
-} from "@fantasy/domain";
+} from "@laces-out/domain";
 
 export type LineupLock =
   | {

@@ -38,8 +38,8 @@ import {
   nflScheduleObservations,
   projectionModelRuns,
   syncRuns,
-} from "@fantasy/db";
-import type { Database } from "@fantasy/db";
+} from "@laces-out/db";
+import type { Database } from "@laces-out/db";
 import { and, count, eq, sql } from "drizzle-orm";
 import { migrate } from "drizzle-orm/postgres-js/migrator";
 import postgres from "postgres";

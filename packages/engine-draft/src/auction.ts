@@ -1,4 +1,4 @@
-import type { PlayerId } from "@fantasy/domain";
+import type { PlayerId } from "@laces-out/domain";
 
 export interface AuctionBudgetSnapshot {
   readonly remainingBudget: number;

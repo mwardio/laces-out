@@ -8,7 +8,7 @@ import {
   teamId,
   type Player,
   type Position,
-} from "@fantasy/domain";
+} from "@laces-out/domain";
 
 import {
   boundedSeededNoise,

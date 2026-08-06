@@ -1,6 +1,6 @@
 import { createHmac, randomBytes } from "node:crypto";
 
-import type { ApplicationRole, LeagueMembershipRole } from "@fantasy/db";
+import type { ApplicationRole, LeagueMembershipRole } from "@laces-out/db";
 
 import { hashOwnerPassword, hashSessionToken } from "./auth.js";
 import {

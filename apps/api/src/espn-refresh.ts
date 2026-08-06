@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 
-import type { EspnLeagueRefreshStatus, EspnRefreshAgentPollResponse } from "@fantasy/contracts";
+import type { EspnLeagueRefreshStatus, EspnRefreshAgentPollResponse } from "@laces-out/contracts";
 import {
   bridgeDeviceLeagues,
   bridgeDevices,
@@ -23,13 +23,13 @@ import {
   type EspnRefreshAttemptState,
   type EspnRefreshFulfillmentMode,
   type RefreshRequestState,
-} from "@fantasy/db";
+} from "@laces-out/db";
 import {
   advanceEspnArtifactFreshness,
   espnRefreshBucket,
   evaluateEspnRefresh,
   type EspnRefreshEvaluation,
-} from "@fantasy/league-sync";
+} from "@laces-out/league-sync";
 import {
   and,
   asc,

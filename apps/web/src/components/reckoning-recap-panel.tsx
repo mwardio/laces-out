@@ -10,7 +10,7 @@ import {
   type LeagueRecapResponse,
   type RecapPersonaCardList,
   type RecapSpiceLevel,
-} from "@fantasy/contracts";
+} from "@laces-out/contracts";
 import { Clipboard, Flame, LoaderCircle, Megaphone, RefreshCw, Trash2 } from "lucide-react";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";

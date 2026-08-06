@@ -2,7 +2,7 @@
 
 Verified: 2026-08-05
 
-`@fantasy/security` provides a deliberately small server-side boundary:
+`@laces-out/security` provides a deliberately small server-side boundary:
 
 - exactly 32-byte keys parsed from explicit `base64:`, `base64url:`, or `hex:` encodings;
 - version 1 AES-256-GCM envelopes with a fresh 96-bit IV;

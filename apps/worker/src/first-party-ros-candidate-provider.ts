@@ -12,7 +12,7 @@ import {
   scoringRules,
   teamWeeklyStatObservations,
   type Database,
-} from "@fantasy/db";
+} from "@laces-out/db";
 import {
   LEAGUE_SCORING_NORMALIZATION_VERSION,
   normalizeLeagueScoringProfile,
@@ -27,7 +27,7 @@ import {
   type FirstPartyWeeklyStatLine,
   type LeagueScoringPositionSupport,
   type ProjectionScoringProfile,
-} from "@fantasy/projections";
+} from "@laces-out/projections";
 import { and, eq, inArray } from "drizzle-orm";
 
 import {

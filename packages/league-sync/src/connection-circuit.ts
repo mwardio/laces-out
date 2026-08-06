@@ -1,5 +1,5 @@
-import type { AuthenticationCapability } from "@fantasy/connectors";
-import type { ProviderName } from "@fantasy/db";
+import type { AuthenticationCapability } from "@laces-out/connectors";
+import type { ProviderName } from "@laces-out/db";
 
 /**
  * A connection-scoped circuit breaker.

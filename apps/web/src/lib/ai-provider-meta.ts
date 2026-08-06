@@ -1,4 +1,4 @@
-import type { AiProviderName } from "@fantasy/contracts";
+import type { AiProviderName } from "@laces-out/contracts";
 
 export interface AiProviderMeta {
   readonly name: string;

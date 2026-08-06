@@ -7,7 +7,7 @@ import {
   type RecapPersonaCardList,
   type RecapSettings,
   type WeeklyRecap,
-} from "@fantasy/contracts";
+} from "@laces-out/contracts";
 
 export function parseLeagueRecap(payload: unknown): LeagueRecapResponse | null {
   const result = leagueRecapResponseSchema.safeParse(payload);

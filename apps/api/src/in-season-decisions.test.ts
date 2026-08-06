@@ -1,13 +1,13 @@
 import { createHash } from "node:crypto";
 
-import { inSeasonDecisionSnapshotSchema, tradeEvaluationResponseSchema } from "@fantasy/contracts";
+import { inSeasonDecisionSnapshotSchema, tradeEvaluationResponseSchema } from "@laces-out/contracts";
 import {
   playerId,
   rosterSlotId,
   type Player,
   type ProjectionValue,
   type RosterSlot,
-} from "@fantasy/domain";
+} from "@laces-out/domain";
 import { describe, expect, it, vi } from "vitest";
 
 import {

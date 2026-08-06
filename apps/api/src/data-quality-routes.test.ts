@@ -1,6 +1,6 @@
-import { loadEnvironment } from "@fantasy/config";
-import { unresolvedIdentityResponseSchema } from "@fantasy/contracts";
-import type { ApplicationRole } from "@fantasy/db";
+import { loadEnvironment } from "@laces-out/config";
+import { unresolvedIdentityResponseSchema } from "@laces-out/contracts";
+import type { ApplicationRole } from "@laces-out/db";
 import { describe, expect, it, vi } from "vitest";
 
 import { buildApp } from "./app.js";

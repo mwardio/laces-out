@@ -1,4 +1,4 @@
-import type { ProjectionRefreshJob } from "@fantasy/jobs";
+import type { ProjectionRefreshJob } from "@laces-out/jobs";
 
 import type { ProjectionRefreshService, WorkerJobContext } from "./jobs.js";
 import type { ProjectionLockWindowState } from "./projection-lock-window.js";

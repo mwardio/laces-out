@@ -4,9 +4,9 @@ import {
   espnLiveDraftDigestSource,
   type EspnLiveDraftIngestRequest,
   type EspnLiveDraftObservation,
-} from "@fantasy/contracts";
-import { playerId, rosterSlotId, teamId, type RosterSlot } from "@fantasy/domain";
-import type { DraftConfig } from "@fantasy/engine-draft";
+} from "@laces-out/contracts";
+import { playerId, rosterSlotId, teamId, type RosterSlot } from "@laces-out/domain";
+import type { DraftConfig } from "@laces-out/engine-draft";
 import { beforeEach, describe, expect, it } from "vitest";
 
 import type { DraftSessionEventRecord } from "./draft-session.js";

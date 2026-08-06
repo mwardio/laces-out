@@ -1,4 +1,4 @@
-import { YAHOO_IOS_COMPLETION_URLS, yahooAuthorizeResponseSchema } from "@fantasy/contracts";
+import { YAHOO_IOS_COMPLETION_URLS, yahooAuthorizeResponseSchema } from "@laces-out/contracts";
 
 export type YahooNativeConnectNavigation =
   | { readonly kind: "authorization"; readonly url: string }

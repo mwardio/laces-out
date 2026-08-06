@@ -1,11 +1,11 @@
-import type { FirstPartyRosChampionArtifactSourceChecksum } from "@fantasy/db";
+import type { FirstPartyRosChampionArtifactSourceChecksum } from "@laces-out/db";
 import {
   FIRST_PARTY_ROS_INTERVAL_CALIBRATION_VERSION,
   FIRST_PARTY_ROS_MODEL_VERSION,
   FIRST_PARTY_ROS_POLICY_VERSION,
   projectionScoringProfileKey,
   type ProjectionScoringProfile,
-} from "@fantasy/projections";
+} from "@laces-out/projections";
 
 import {
   HISTORICAL_ROS_AVAILABILITY_CALIBRATION_VERSION,

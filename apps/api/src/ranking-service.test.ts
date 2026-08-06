@@ -4,7 +4,7 @@ import {
   rankingListSchema,
   type RankingList,
   type RankingVersion,
-} from "@fantasy/rankings";
+} from "@laces-out/rankings";
 import { beforeEach, describe, expect, it } from "vitest";
 
 import {

@@ -1,4 +1,4 @@
-import type { EspnArtifactFamily, EspnArtifactFreshness } from "@fantasy/db";
+import type { EspnArtifactFamily, EspnArtifactFreshness } from "@laces-out/db";
 
 export const ESPN_ARTIFACT_FAMILIES = [
   "core",

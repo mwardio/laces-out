@@ -1,6 +1,6 @@
 "use client";
 
-import type { AiProviderName } from "@fantasy/contracts";
+import type { AiProviderName } from "@laces-out/contracts";
 import { Check, ChevronDown } from "lucide-react";
 import { type KeyboardEvent, useEffect, useId, useRef, useState } from "react";
 

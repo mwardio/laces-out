@@ -6,7 +6,7 @@ import {
   teamId,
   type Player,
   type ProjectionValue,
-} from "@fantasy/domain";
+} from "@laces-out/domain";
 
 import { evaluateTrade, rankTradePackages, type TradeTeamContext } from "./index.js";
 

@@ -1,4 +1,4 @@
-import { dataSources, nflScheduleObservations, type Database } from "@fantasy/db";
+import { dataSources, nflScheduleObservations, type Database } from "@laces-out/db";
 import { and, eq } from "drizzle-orm";
 
 const DEFAULT_LEAD_MINUTES = 130;

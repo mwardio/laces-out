@@ -1,7 +1,7 @@
 /**
  * Wire contract for one ESPN live draft observation.
  *
- * This file is a deliberate, self-contained mirror of the `@fantasy/contracts` live-draft schemas.
+ * This file is a deliberate, self-contained mirror of the `@laces-out/contracts` live-draft schemas.
  * The browser companion has no workspace dependencies so the packaged bundle stays free of server
  * libraries; the price is that these types, limits, and the digest canonicalizer must match the
  * server copy exactly. `dom-contract.test.ts` pins the digest to the same golden string the server

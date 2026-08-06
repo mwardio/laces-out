@@ -7,7 +7,7 @@ import {
   type Database,
   type JsonPrimitive,
   type NflScheduleGameStatus,
-} from "@fantasy/db";
+} from "@laces-out/db";
 import {
   NFLVERSE_DATA_LICENSE,
   NFLVERSE_SCHEDULES_ATTRIBUTION,
@@ -15,8 +15,8 @@ import {
   NFLVERSE_SCHEDULES_URL,
   NflverseSchedulesSource,
   type NflverseScheduleGame,
-} from "@fantasy/source-nflverse";
-import { currentNflSeason, isReusableArchivedSourceArtifact } from "@fantasy/domain";
+} from "@laces-out/source-nflverse";
+import { currentNflSeason, isReusableArchivedSourceArtifact } from "@laces-out/domain";
 import { and, eq, lte } from "drizzle-orm";
 
 // Runs beneath the daily, game-day, and on-demand weekly projection paths. The buffer prevents

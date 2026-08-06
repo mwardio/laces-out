@@ -1,4 +1,4 @@
-import type { AiProviderName, AiToolParameterSchema } from "@fantasy/contracts";
+import type { AiProviderName, AiToolParameterSchema } from "@laces-out/contracts";
 
 /**
  * Provider capability matrix.

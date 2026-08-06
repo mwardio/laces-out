@@ -20,7 +20,7 @@ import {
   users,
   type ConnectionHealth,
   type Database,
-} from "@fantasy/db";
+} from "@laces-out/db";
 import { migrate } from "drizzle-orm/postgres-js/migrator";
 import postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";

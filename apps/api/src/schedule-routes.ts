@@ -1,4 +1,4 @@
-import { scheduleByesResponseSchema, scheduleResponseSchema } from "@fantasy/contracts";
+import { scheduleByesResponseSchema, scheduleResponseSchema } from "@laces-out/contracts";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 

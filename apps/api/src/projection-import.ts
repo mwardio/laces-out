@@ -7,7 +7,7 @@ import type {
   ProjectionSetListResponse,
   ProjectionSetSummary,
   ProjectionVisibility as ContractProjectionVisibility,
-} from "@fantasy/contracts";
+} from "@laces-out/contracts";
 import {
   leagueMemberships,
   leagues,
@@ -23,7 +23,7 @@ import {
   type LeagueMembershipRole,
   type ProjectionVisibility,
   type ProviderName,
-} from "@fantasy/db";
+} from "@laces-out/db";
 import {
   parseProjectionCsv,
   ProjectionCsvError,
@@ -35,7 +35,7 @@ import {
   type ProjectionImportMetadataInput,
   type ProjectionPlayerReference,
   type ProjectionPlayerResolution,
-} from "@fantasy/projections";
+} from "@laces-out/projections";
 import { and, asc, desc, eq, gte, inArray, isNull, or, sql } from "drizzle-orm";
 
 import { leagueScopedPlayerCatalogFilter } from "./espn-sync-persistence.js";

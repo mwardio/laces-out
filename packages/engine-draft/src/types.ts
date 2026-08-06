@@ -1,4 +1,4 @@
-import type { DraftEventId, Player, PlayerId, RosterSlot, TeamId } from "@fantasy/domain";
+import type { DraftEventId, Player, PlayerId, RosterSlot, TeamId } from "@laces-out/domain";
 
 export interface DraftTeamConfig {
   readonly id: TeamId;

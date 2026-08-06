@@ -3,7 +3,7 @@
 Verified: 2026-08-05
 
 These notes distinguish supported provider contracts from observed or manual behavior. The
-capability objects in `@fantasy/connector-yahoo` and `@fantasy/connector-espn` are the runtime
+capability objects in `@laces-out/connector-yahoo` and `@laces-out/connector-espn` are the runtime
 source of truth for UI enablement. A league being present in the database does not imply that
 live sync, draft polling, or writes are supported.
 

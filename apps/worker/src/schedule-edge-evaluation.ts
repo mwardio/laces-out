@@ -7,7 +7,7 @@ import {
   type ScheduleEdgeGamePositionTotalsResult,
   type ScheduleEdgePolicy,
   type ScheduleEdgePosition,
-} from "@fantasy/league-analytics";
+} from "@laces-out/league-analytics";
 
 export const SCHEDULE_EDGE_EVALUATION_VERSION = "schedule-edge-walk-forward-v1" as const;
 

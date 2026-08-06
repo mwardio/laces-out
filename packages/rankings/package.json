@@ -1,5 +1,5 @@
 {
-  "name": "@fantasy/rankings",
+  "name": "@laces-out/rankings",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -8,7 +8,7 @@
     "./model": "./src/model.ts"
   },
   "dependencies": {
-    "@fantasy/domain": "*",
+    "@laces-out/domain": "*",
     "zod": "^4.0.5"
   }
 }

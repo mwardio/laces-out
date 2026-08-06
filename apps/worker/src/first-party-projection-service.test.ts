@@ -19,7 +19,7 @@ import {
   syncRuns,
   teamWeeklyStatObservations,
   type Database,
-} from "@fantasy/db";
+} from "@laces-out/db";
 import { describe, expect, it } from "vitest";
 
 import { FIRST_PARTY_INPUT_EPOCH_VERSION } from "./first-party-projection-inputs.js";

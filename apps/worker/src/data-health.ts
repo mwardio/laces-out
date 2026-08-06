@@ -1,5 +1,5 @@
-import { dataSources, type Database } from "@fantasy/db";
-import { isArchivedNflverseSource } from "@fantasy/domain";
+import { dataSources, type Database } from "@laces-out/db";
+import { isArchivedNflverseSource } from "@laces-out/domain";
 import { asc, eq } from "drizzle-orm";
 
 import type {

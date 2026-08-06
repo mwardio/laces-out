@@ -2,7 +2,7 @@
   "schemaVersion": "schedule-edge-validation-release-v1",
   "generatedAt": "2026-07-27T16:26:56.508Z",
   "evaluationVersion": "schedule-edge-walk-forward-v1",
-  "command": "npm --workspace @fantasy/worker run schedule-edge:validate",
+  "command": "npm --workspace @laces-out/worker run schedule-edge:validate",
   "fullDiagnosticSha256": "bd13d3899892a0be8685ff07432cc5b46d85049deb34488b7f267d416390e9ec",
   "sources": [
     {

@@ -1,12 +1,12 @@
 import { createHash } from "node:crypto";
 
-import { loadEnvironment } from "@fantasy/config";
+import { loadEnvironment } from "@laces-out/config";
 import {
   espnLiveDraftDigestSource,
   espnLiveDraftIngestResponseSchema,
   type EspnLiveDraftIngestRequest,
   type EspnLiveDraftIngestResponse,
-} from "@fantasy/contracts";
+} from "@laces-out/contracts";
 import { describe, expect, it } from "vitest";
 
 import { buildApp, type EspnLiveDraftPort } from "./app.js";

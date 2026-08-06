@@ -1,4 +1,4 @@
-import { rosScoringProfile } from "@fantasy/projections";
+import { rosScoringProfile } from "@laces-out/projections";
 import { describe, expect, it } from "vitest";
 
 // Conformance-only import of the canonical wire contract. Production code cannot import it until

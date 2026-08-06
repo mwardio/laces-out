@@ -5,8 +5,8 @@
  * here, so callers pass raw strings and cannot re-introduce markup by accident.
  *
  * The palette is the web app's own: paper `#f3f2ec`, ink `#101712`/`#3d4a41`/`#646f67`, hairline
- * `#dde1db`, lime `#a8cf53`. No images at all — a text wordmark keeps rendering identical with
- * remote content blocked and keeps the messages light enough to stay out of spam heuristics.
+ * `#dde1db`, lime `#a8cf53`. The compact brand mark is served by the same deployment that owns
+ * each action URL, while the adjacent text wordmark remains visible when remote images are blocked.
  */
 
 export interface RenderedEmail {
@@ -30,6 +30,8 @@ export function escapeHtml(value: string): string {
 interface LayoutInput {
   /** Inbox preview line; hidden inside the rendered message. */
   readonly preheader: string;
+  /** Absolute URL for the compact brand mark. */
+  readonly brandMarkUrl: string;
   readonly heading: string;
   /** Already-escaped paragraph fragments, rendered in order. */
   readonly paragraphsHtml: readonly string[];
@@ -82,10 +84,14 @@ function renderLayout(input: LayoutInput): string {
       <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:560px;background:#ffffff;border:1px solid #dde1db;border-radius:12px;">
         <tr>
           <td style="padding:32px 40px 28px 40px;font-family:${FONT_STACK};">
-            <p style="margin:0 0 28px 0;font-size:13px;font-weight:700;letter-spacing:0.18em;color:#101712;">
-              <span style="display:inline-block;width:10px;height:10px;border-radius:3px;background:#a8cf53;"></span>&nbsp;
-              LACES&nbsp;OUT
-            </p>
+            <table role="presentation" cellpadding="0" cellspacing="0" style="margin:0 0 28px 0;">
+              <tr>
+                <td style="padding:0 10px 0 0;vertical-align:middle;">
+                  <img src="${escapeHtml(input.brandMarkUrl)}" width="32" height="32" alt="" style="display:block;width:32px;height:32px;border:0;outline:none;">
+                </td>
+                <td style="vertical-align:middle;font-family:${FONT_STACK};font-size:13px;font-weight:700;letter-spacing:0.18em;color:#101712;">LACES&nbsp;OUT</td>
+              </tr>
+            </table>
             <h1 style="margin:0 0 16px 0;font-size:24px;line-height:1.3;font-weight:700;color:#101712;">${escapeHtml(input.heading)}</h1>
 ${paragraphs}
 ${cta}
@@ -106,6 +112,10 @@ function textDocument(lines: readonly string[]): string {
   return `${lines.join("\n")}\n`;
 }
 
+function brandMarkUrl(actionUrl: string): string {
+  return new URL("/icon-192.png", actionUrl).toString();
+}
+
 export interface EmailConfirmationEmailInput {
   readonly displayName: string;
   /** Full confirmation link including the one-time token. */
@@ -119,15 +129,14 @@ export interface EmailConfirmationEmailInput {
  */
 export function renderEmailConfirmationEmail(input: EmailConfirmationEmailInput): RenderedEmail {
   const name = escapeHtml(input.displayName);
-  const hours = String(input.expiresHours);
   return {
     subject: "Confirm your email to open your locker room",
     html: renderLayout({
-      preheader: "One click activates your Laces Out account.",
-      heading: "Welcome — one click to go.",
+      preheader: "Activate your Laces Out account in one click.",
+      brandMarkUrl: brandMarkUrl(input.confirmUrl),
+      heading: "League domination awaits.",
       paragraphsHtml: [
-        `${name} — welcome to Laces Out, your private fantasy football locker room: draft help, start/sit calls, waiver targets, and trade analysis built from your actual leagues.`,
-        `Confirm this email address within ${hours} hours to activate your account. Until then, the account stays dormant and nobody can sign in to it.`,
+        `Welcome to Laces Out, ${name}! Activate your account to unlock draft help, start/sit calls, waiver targets, and trade analysis built from your actual leagues.`,
       ],
       cta: { label: "Confirm my email", url: input.confirmUrl },
       afterCtaHtml: `If the button doesn't work, paste this link into your browser:<br>${escapeHtml(input.confirmUrl)}`,
@@ -139,9 +148,9 @@ export function renderEmailConfirmationEmail(input: EmailConfirmationEmailInput)
     text: textDocument([
       "LACES OUT",
       "",
-      `${input.displayName} — welcome to Laces Out, your private fantasy football locker room: draft help, start/sit calls, waiver targets, and trade analysis built from your actual leagues.`,
+      "League domination awaits.",
       "",
-      `Confirm this email address within ${hours} hours to activate your account. Until then, the account stays dormant and nobody can sign in to it.`,
+      `Welcome to Laces Out, ${input.displayName}! Activate your account to unlock draft help, start/sit calls, waiver targets, and trade analysis built from your actual leagues.`,
       "",
       `Confirm my email: ${input.confirmUrl}`,
       "",
@@ -165,6 +174,7 @@ export function renderPasswordResetEmail(input: PasswordResetEmailInput): Render
     subject: "Reset your Laces Out password",
     html: renderLayout({
       preheader: `Set a new password within ${minutes} minutes.`,
+      brandMarkUrl: brandMarkUrl(input.resetUrl),
       heading: "Let's get you back in.",
       paragraphsHtml: [
         `${name} — someone asked to reset the password for the Laces Out account tied to this address. If that was you, set a new password within ${minutes} minutes; after that this link expires.`,
@@ -202,6 +212,7 @@ export function renderLeagueSyncNudgeEmail(input: LeagueSyncNudgeEmailInput): Re
     subject: "One step left: sync your league",
     html: renderLayout({
       preheader: "Your Laces Out account is ready — it just needs a league.",
+      brandMarkUrl: brandMarkUrl(input.webUrl),
       heading: "Your locker room is still empty.",
       paragraphsHtml: [
         `${name} — you created your Laces Out account a few days ago, but no league is connected yet, so the locker room is running on empty.`,

@@ -1,4 +1,4 @@
-import type { DraftStreamInvalidation } from "@fantasy/contracts";
+import type { DraftStreamInvalidation } from "@laces-out/contracts";
 import { describe, expect, it } from "vitest";
 
 import {

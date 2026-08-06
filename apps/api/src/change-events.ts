@@ -7,8 +7,8 @@ import {
   type ChangeEventReceiptResponse,
   type ChangeEventSeverity,
   type ChangeEventVisibility,
-} from "@fantasy/contracts";
-import type { Database } from "@fantasy/db";
+} from "@laces-out/contracts";
+import type { Database } from "@laces-out/db";
 import { sql } from "drizzle-orm";
 
 /**

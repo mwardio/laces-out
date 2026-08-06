@@ -1,5 +1,5 @@
-import { loadEnvironment } from "@fantasy/config";
-import { createDatabase, sessions, users } from "@fantasy/db";
+import { loadEnvironment } from "@laces-out/config";
+import { createDatabase, sessions, users } from "@laces-out/db";
 import { eq, sql } from "drizzle-orm";
 
 import { hashOwnerPassword } from "./auth.js";

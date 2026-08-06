@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { loadEnvironment } from "@fantasy/config";
-import type { EspnLeagueRefreshStatus } from "@fantasy/contracts";
+import { loadEnvironment } from "@laces-out/config";
+import type { EspnLeagueRefreshStatus } from "@laces-out/contracts";
 
 import { buildApp, type EspnRefreshPort } from "./app.js";
 import { AuthService, type AuthRepository } from "./auth.js";

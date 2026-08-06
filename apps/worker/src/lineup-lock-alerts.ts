@@ -12,13 +12,13 @@ import {
   rosterSnapshots,
   type Database,
   type JsonPrimitive,
-} from "@fantasy/db";
-import { PLAYER_STATUSES, type PlayerStatus } from "@fantasy/domain";
+} from "@laces-out/db";
+import { PLAYER_STATUSES, type PlayerStatus } from "@laces-out/domain";
 import {
   deriveTeamScheduleWeeks,
   type ScheduleCoverage,
   type ScheduleGameObservation,
-} from "@fantasy/league-analytics";
+} from "@laces-out/league-analytics";
 import { and, asc, desc, eq, exists, isNotNull, sql } from "drizzle-orm";
 
 import type { NotificationPayload, PendingNotification } from "./push-notifications.js";

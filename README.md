@@ -215,7 +215,7 @@ Requires Node.js `>=22.22 <25`, Docker, and PostgreSQL 17+.
 cp .env.example .env
 docker compose up -d postgres
 npm install
-npm run db:migrate -w @fantasy/db
+npm run db:migrate -w @laces-out/db
 npm run dev
 ```
 

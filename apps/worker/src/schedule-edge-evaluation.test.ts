@@ -2,7 +2,7 @@ import {
   type ScheduleEdgeGamePositionTotal,
   type ScheduleEdgeGamePositionTotalsResult,
   type ScheduleEdgePolicy,
-} from "@fantasy/league-analytics";
+} from "@laces-out/league-analytics";
 import { describe, expect, it } from "vitest";
 
 import { evaluateScheduleEdgeHistory } from "./schedule-edge-evaluation.js";

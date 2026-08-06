@@ -1,5 +1,5 @@
 {
-  "name": "@fantasy/contracts",
+  "name": "@laces-out/contracts",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -7,7 +7,7 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
-    "@fantasy/domain": "*",
+    "@laces-out/domain": "*",
     "zod": "^4.0.5"
   }
 }

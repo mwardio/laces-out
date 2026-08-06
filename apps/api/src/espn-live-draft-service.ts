@@ -12,9 +12,9 @@ import {
   type EspnLiveDraftIssueCode,
   type EspnLiveDraftObservation,
   type EspnLiveDraftTransientAuction,
-} from "@fantasy/contracts";
-import type { LeagueMembershipRole } from "@fantasy/db";
-import type { DraftConfig } from "@fantasy/engine-draft";
+} from "@laces-out/contracts";
+import type { LeagueMembershipRole } from "@laces-out/db";
+import type { DraftConfig } from "@laces-out/engine-draft";
 
 import { DraftSessionError, mayMutate, type DraftSessionEventRecord } from "./draft-session.js";
 import {

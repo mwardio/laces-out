@@ -1,4 +1,4 @@
-import { passwordResetTokens, sessions, users, type Database } from "@fantasy/db";
+import { passwordResetTokens, sessions, users, type Database } from "@laces-out/db";
 import { and, eq, isNull, ne, sql } from "drizzle-orm";
 
 import type { PasswordResetRepository, PasswordResetUserRecord } from "./password-reset.js";

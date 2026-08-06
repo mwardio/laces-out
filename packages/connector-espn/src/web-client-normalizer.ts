@@ -10,7 +10,7 @@ import {
   type NormalizedStandingsSnapshot,
   type NormalizedTeam,
   type WaiverType,
-} from "@fantasy/connectors";
+} from "@laces-out/connectors";
 import { z } from "zod";
 
 /**

@@ -5,7 +5,7 @@ import type {
   LeagueAnalyticsTeam,
   LeagueAnalyticsUnavailableReason,
   WeeklyAward,
-} from "@fantasy/contracts";
+} from "@laces-out/contracts";
 import {
   Award,
   BarChart3,

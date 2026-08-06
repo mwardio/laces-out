@@ -1,4 +1,4 @@
-import { dataSources, type Database, type JsonPrimitive } from "@fantasy/db";
+import { dataSources, type Database, type JsonPrimitive } from "@laces-out/db";
 import { and, eq } from "drizzle-orm";
 
 /**

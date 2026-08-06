@@ -1,4 +1,4 @@
-import type { DraftStreamInvalidation } from "@fantasy/contracts";
+import type { DraftStreamInvalidation } from "@laces-out/contracts";
 
 /**
  * In-process fan-out for draft invalidations.

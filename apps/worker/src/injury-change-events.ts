@@ -1,5 +1,5 @@
-import { changeEventDeduplicationKey, type ChangeEventDraft } from "@fantasy/change-events";
-import { CHANGE_EVENT_PAYLOAD_VERSION, type ChangeEventSeverity } from "@fantasy/contracts";
+import { changeEventDeduplicationKey, type ChangeEventDraft } from "@laces-out/change-events";
+import { CHANGE_EVENT_PAYLOAD_VERSION, type ChangeEventSeverity } from "@laces-out/contracts";
 import {
   fantasyTeams,
   leagueMemberships,
@@ -7,7 +7,7 @@ import {
   rosterEntries,
   rosterSnapshots,
   type Database,
-} from "@fantasy/db";
+} from "@laces-out/db";
 import { and, desc, eq, inArray, ne, sql } from "drizzle-orm";
 
 /**

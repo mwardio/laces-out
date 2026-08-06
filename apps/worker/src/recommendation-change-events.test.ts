@@ -1,7 +1,7 @@
-import type { LeagueRecomputeResult } from "@fantasy/decisions";
+import type { LeagueRecomputeResult } from "@laces-out/decisions";
 import { describe, expect, it, vi } from "vitest";
 
-import type { ChangeEventDraft } from "@fantasy/change-events";
+import type { ChangeEventDraft } from "@laces-out/change-events";
 
 import {
   decisionFingerprint,

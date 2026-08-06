@@ -4,7 +4,7 @@ import type {
   LeagueListResponse,
   LeagueRecapResponse,
   RecapPersonaCardList,
-} from "@fantasy/contracts";
+} from "@laces-out/contracts";
 
 export const DEMO_LEAGUE_ID = "71000000-0000-4000-8000-000000000001";
 export const DEMO_SEASON_ID = "71000000-0000-4000-8000-000000000002";

@@ -1,4 +1,4 @@
-import { leagueAnalyticsSnapshotSchema } from "@fantasy/contracts";
+import { leagueAnalyticsSnapshotSchema } from "@laces-out/contracts";
 import { describe, expect, it } from "vitest";
 
 import {

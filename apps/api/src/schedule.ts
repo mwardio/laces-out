@@ -5,8 +5,8 @@ import type {
   ScheduleSource,
   TeamScheduleEntry,
   TeamScheduleWeekEntry,
-} from "@fantasy/contracts";
-import { nflScheduleObservations, type Database } from "@fantasy/db";
+} from "@laces-out/contracts";
+import { nflScheduleObservations, type Database } from "@laces-out/db";
 import {
   buildByeWeekLookup,
   deriveTeamScheduleWeeks,
@@ -14,7 +14,7 @@ import {
   type ScheduleGameObservation,
   type TeamSchedule,
   type TeamScheduleResult,
-} from "@fantasy/league-analytics";
+} from "@laces-out/league-analytics";
 import { and, asc, eq } from "drizzle-orm";
 
 import {

@@ -4,11 +4,11 @@ import {
   projectionImportPreviewResponseSchema,
   projectionSetListResponseSchema,
   projectionVisibilitySchema,
-} from "@fantasy/contracts";
+} from "@laces-out/contracts";
 import {
   normalizeProjectionSourceObservedAt,
   PROJECTION_IMPORT_DEFAULT_LIMITS,
-} from "@fantasy/projections";
+} from "@laces-out/projections";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 

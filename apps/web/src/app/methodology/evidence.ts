@@ -174,7 +174,7 @@ export const rosAvailabilityCeilings = {
  *
  * - The first three reports below were graded before the revision, so their recorded blocker lists
  *   are the point comparison's. A gate-only re-evaluation of that stored corpus
- *   (`npm run ros:regate -w @fantasy/worker`) cleared every availability blocker and was admitted as
+ *   (`npm run ros:regate -w @laces-out/worker`) cleared every availability blocker and was admitted as
  *   a new append-only artifact for each profile. The original rows remain as immutable history.
  * - On 2026-07-29 `evaluateFirstPartyRosReleaseGate` — the live publication gate — adopted the
  *   same one-sided evidence test at the same ceilings and the same alpha, and its
@@ -755,7 +755,7 @@ export const weeklyGateRows: readonly ReleaseGateRow[] = [
  *
  * The weekly validator writes its result to standard output and persists no artifact, so there was
  * no stored record to cite. The official audit was therefore re-run for this page —
- * `npm run projections:validate -w @fantasy/worker -- --summary`, completed 2026-07-27, exit 0 —
+ * `npm run projections:validate -w @laces-out/worker -- --summary`, completed 2026-07-27, exit 0 —
  * and its output is checked in beside this module as `weekly-validation-2026-07-27.json`. Every
  * weekly figure below is read from that file, which any reader holding the repository can
  * regenerate with the same command.
@@ -777,7 +777,7 @@ export const weeklyArtifact = {
   /** `.player.policy.generatedThrough` */
   evidenceThrough: "2025 week 18",
   artifactFile: "weekly-validation-2026-07-27.json",
-  command: "npm run projections:validate -w @fantasy/worker -- --summary",
+  command: "npm run projections:validate -w @laces-out/worker -- --summary",
 } as const;
 
 /** Evaluated seasons, read from `.seasons`. */

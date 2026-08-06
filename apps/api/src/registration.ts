@@ -1,6 +1,6 @@
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 
-import type { ApplicationRole } from "@fantasy/db";
+import type { ApplicationRole } from "@laces-out/db";
 
 import {
   hashOwnerPassword,

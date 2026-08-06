@@ -9,7 +9,7 @@ import {
   YahooSyncError,
   type YahooSyncPort,
   type YahooSyncReceipt,
-} from "@fantasy/league-sync";
+} from "@laces-out/league-sync";
 import {
   leagueMemberships,
   leagues,
@@ -19,7 +19,7 @@ import {
   type ConnectionHealth,
   type Database,
   type ProviderName,
-} from "@fantasy/db";
+} from "@laces-out/db";
 import { and, eq, sql } from "drizzle-orm";
 
 import type {

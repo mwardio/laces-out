@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 
-import { loadEnvironment } from "@fantasy/config";
+import { loadEnvironment } from "@laces-out/config";
 import {
   createDatabase,
   type Database,
@@ -8,7 +8,7 @@ import {
   leagueMemberships,
   leagues,
   users,
-} from "@fantasy/db";
+} from "@laces-out/db";
 import { and, eq } from "drizzle-orm";
 
 import { DrizzleInvitationRepository } from "../src/invitation-repository.js";

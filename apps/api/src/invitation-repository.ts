@@ -7,7 +7,7 @@ import {
   leagueMemberships,
   leagues,
   users,
-} from "@fantasy/db";
+} from "@laces-out/db";
 
 import type {
   AcceptInvitationRepositoryResult,

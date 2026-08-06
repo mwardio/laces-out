@@ -1,10 +1,10 @@
-import { loadEnvironment } from "@fantasy/config";
+import { loadEnvironment } from "@laces-out/config";
 import type {
   ProjectionPlayerListResponse,
   ProjectionImportCommitResponse,
   ProjectionImportPreviewResponse,
   ProjectionSetListResponse,
-} from "@fantasy/contracts";
+} from "@laces-out/contracts";
 import { describe, expect, it, vi } from "vitest";
 
 import { buildApp } from "./app.js";

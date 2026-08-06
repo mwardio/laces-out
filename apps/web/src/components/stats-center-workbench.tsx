@@ -9,7 +9,7 @@ import type {
   StatsCenterScoring,
   StatsCenterSort,
   StatsCenterTrendMetric,
-} from "@fantasy/contracts";
+} from "@laces-out/contracts";
 import {
   ChartSpline,
   Database,

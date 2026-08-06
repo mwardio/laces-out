@@ -5,7 +5,7 @@ import {
   type FirstPartyRosHeldOutSeason,
   type FirstPartyTeamDefenseWeeklyStatLine,
   type FirstPartyWeeklyStatLine,
-} from "@fantasy/projections";
+} from "@laces-out/projections";
 
 import {
   HISTORICAL_ROS_AVAILABILITY_CALIBRATION_VERSION,

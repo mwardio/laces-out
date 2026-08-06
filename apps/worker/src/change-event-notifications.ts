@@ -1,10 +1,10 @@
-import type { ChangeEventSeverity } from "@fantasy/contracts";
+import type { ChangeEventSeverity } from "@laces-out/contracts";
 import {
   changeEventReceipts,
   changeEvents,
   notificationDeliveries,
   type Database,
-} from "@fantasy/db";
+} from "@laces-out/db";
 import { and, desc, eq, gt, inArray, isNull, sql } from "drizzle-orm";
 
 import type { NotificationCollector, PendingNotification } from "./push-notifications.js";

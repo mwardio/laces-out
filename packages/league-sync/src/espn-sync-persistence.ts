@@ -2,7 +2,7 @@ import type {
   LeagueSupplementalBundle,
   LeagueSyncBundle,
   NormalizedRosterPlayer,
-} from "@fantasy/connectors";
+} from "@laces-out/connectors";
 import {
   bridgeDeviceLeagues,
   bridgeDevices,
@@ -33,7 +33,7 @@ import {
   type EspnArtifactFreshness,
   type EspnRefreshFulfillmentMode,
   type LeagueMembershipRole,
-} from "@fantasy/db";
+} from "@laces-out/db";
 import { and, desc, eq, gt, inArray, isNull, sql } from "drizzle-orm";
 
 import { advanceEspnArtifactFreshness } from "./espn-refresh.js";

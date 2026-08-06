@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { createRosterSlots, playerId, type Player, type ProjectionValue } from "@fantasy/domain";
+import { createRosterSlots, playerId, type Player, type ProjectionValue } from "@laces-out/domain";
 
 import { evaluateWaiverMoves, recommendFaabBid } from "./index.js";
 

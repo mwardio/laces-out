@@ -1,4 +1,4 @@
-import type { DerivedNumericMetric } from "@fantasy/league-analytics";
+import type { DerivedNumericMetric } from "@laces-out/league-analytics";
 
 /**
  * Stats Center reads the same admitted weekly artifact the projection engine does, so the

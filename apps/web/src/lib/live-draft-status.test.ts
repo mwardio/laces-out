@@ -1,4 +1,4 @@
-import type { DraftSessionSnapshot, EspnLiveDraftFeedStatus } from "@fantasy/contracts";
+import type { DraftSessionSnapshot, EspnLiveDraftFeedStatus } from "@laces-out/contracts";
 import { describe, expect, it } from "vitest";
 
 import {

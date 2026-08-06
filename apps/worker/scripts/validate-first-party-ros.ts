@@ -7,14 +7,14 @@ import {
   NflverseWeeklyRostersSource,
   NflverseWeeklyStatsSource,
   type NflverseDatasetState,
-} from "@fantasy/source-nflverse";
+} from "@laces-out/source-nflverse";
 
 import {
   ROS_SCORING_PROFILE_KEYS,
   isRosScoringProfileKey,
   rosScoringProfile,
   type RosScoringProfileEntry,
-} from "@fantasy/projections";
+} from "@laces-out/projections";
 
 import {
   buildHistoricalRosBacktest,

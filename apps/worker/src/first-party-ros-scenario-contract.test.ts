@@ -24,7 +24,7 @@ import {
   projectFirstPartyRestOfSeason,
   type FirstPartyRosProjectionInput,
   type ProjectionScoringProfile,
-} from "@fantasy/projections";
+} from "@laces-out/projections";
 import { describe, expect, it } from "vitest";
 
 import {

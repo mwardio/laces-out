@@ -4,7 +4,7 @@ import type {
   StatsCenterMetricDescriptor,
   StatsCenterPlayerDetailResponse,
   StatsCenterScoring,
-} from "@fantasy/contracts";
+} from "@laces-out/contracts";
 import {
   ArrowLeft,
   CalendarOff,

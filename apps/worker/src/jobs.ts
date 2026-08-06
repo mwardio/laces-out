@@ -11,7 +11,7 @@ import {
   assertProviderSyncSweepJob,
   assertRecommendationJob,
   queueNames,
-} from "@fantasy/jobs";
+} from "@laces-out/jobs";
 import type {
   DataHealthJob,
   DataRefreshJob,
@@ -21,15 +21,15 @@ import type {
   ProjectionRefreshJob,
   ProviderSyncSweepJob,
   RecommendationJob,
-} from "@fantasy/jobs";
+} from "@laces-out/jobs";
 
 /**
  * Queue names, payloads, reliability settings, validators, dispatch helpers, and schedules are the
- * shared process contract and live in `@fantasy/jobs` so the API cannot declare them differently.
+ * shared process contract and live in `@laces-out/jobs` so the API cannot declare them differently.
  * What stays here is what only a worker process has: the services that execute a job, and the
  * handler registration that binds them to a queue.
  */
-export * from "@fantasy/jobs";
+export * from "@laces-out/jobs";
 
 export interface NotificationSweepResult {
   readonly considered: number;

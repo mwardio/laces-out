@@ -3,7 +3,7 @@ import {
   applyFirstPartyProjectionFinalPolicy,
   evaluateFirstPartyBacktestForScoringProfile,
   FIRST_PARTY_PROJECTION_MODEL_VERSION,
-} from "@fantasy/projections";
+} from "@laces-out/projections";
 import type {
   FirstPartyBacktestPrediction,
   FirstPartyProjectionBacktest,
@@ -11,7 +11,7 @@ import type {
   FirstPartyScoredTeamDefenseEvaluation,
   FirstPartyTeamDefenseBacktest,
   FirstPartyTeamDefenseBacktestPrediction,
-} from "@fantasy/projections";
+} from "@laces-out/projections";
 import { describe, expect, it } from "vitest";
 
 import {

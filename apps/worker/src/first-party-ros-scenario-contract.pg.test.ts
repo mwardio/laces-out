@@ -47,7 +47,7 @@ import {
   syncRuns,
   users,
   type Database,
-} from "@fantasy/db";
+} from "@laces-out/db";
 import {
   FIRST_PARTY_PROJECTION_MODEL_VERSION,
   FIRST_PARTY_ROS_CONVERGENCE_REFERENCE_SCENARIOS,
@@ -61,8 +61,8 @@ import {
   projectionScoringProfileKey,
   type FirstPartyRosChampionPolicy,
   type FirstPartyRosHeldOutForecast,
-} from "@fantasy/projections";
-import { SEASON_PROJECTION_REFRESH_EXPIRE_SECONDS } from "@fantasy/jobs";
+} from "@laces-out/projections";
+import { SEASON_PROJECTION_REFRESH_EXPIRE_SECONDS } from "@laces-out/jobs";
 import { and, eq, sql } from "drizzle-orm";
 import { migrate } from "drizzle-orm/postgres-js/migrator";
 import postgres from "postgres";

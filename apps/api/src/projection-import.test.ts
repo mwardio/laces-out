@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { projectionSetListResponseSchema, projectionSetSummarySchema } from "@fantasy/contracts";
+import { projectionSetListResponseSchema, projectionSetSummarySchema } from "@laces-out/contracts";
 
 import {
   managedRunWithholdingScope,

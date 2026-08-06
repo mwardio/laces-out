@@ -16,8 +16,8 @@ import { randomBytes, randomUUID } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { changeEventReceipts, changeEvents, createDatabase, leagues, users } from "@fantasy/db";
-import type { Database } from "@fantasy/db";
+import { changeEventReceipts, changeEvents, createDatabase, leagues, users } from "@laces-out/db";
+import type { Database } from "@laces-out/db";
 import { and, desc, eq, sql } from "drizzle-orm";
 import { migrate } from "drizzle-orm/postgres-js/migrator";
 import postgres from "postgres";

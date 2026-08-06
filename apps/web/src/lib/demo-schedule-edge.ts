@@ -5,7 +5,7 @@ import type {
   ScheduleEdgeRosterPlayer,
   ScheduleEdgeSource,
   ScheduleEdgeStrength,
-} from "@fantasy/contracts";
+} from "@laces-out/contracts";
 
 import { DEMO_LEAGUE_ID, DEMO_SEASON_ID } from "./demo-contract-data";
 import { NFL_TEAM_CHOICES } from "./nfl-teams";

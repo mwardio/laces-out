@@ -110,7 +110,7 @@ pre-registered protocol.
 Command to be run once, after the final 2026 Week 18 game is authoritative:
 
 ```bash
-npm run ros:validate -w @fantasy/worker -- \
+npm run ros:validate -w @laces-out/worker -- \
   --seasons=2019,2020,2021,2022,2023,2024,2025,2026 \
   --holdouts=2022,2023,2024,2025,2026
 ```

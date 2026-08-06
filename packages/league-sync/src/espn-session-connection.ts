@@ -4,13 +4,13 @@ import {
   ESPN_SERVER_SESSION_CAPABILITIES,
   normalizeEspnSessionCredential,
   type EspnSessionCredential,
-} from "@fantasy/connector-espn";
+} from "@laces-out/connector-espn";
 import type {
   EspnSessionConnection,
   EspnSessionConnectionList,
   EspnSessionGrantRequest,
   EspnSessionGrantResponse,
-} from "@fantasy/contracts";
+} from "@laces-out/contracts";
 import {
   auditEvents,
   bridgeDeviceLeagues,
@@ -21,8 +21,8 @@ import {
   providerConnections,
   providerLeagueLinks,
   type Database,
-} from "@fantasy/db";
-import { decryptCredential, encryptCredential, type CredentialKey } from "@fantasy/security";
+} from "@laces-out/db";
+import { decryptCredential, encryptCredential, type CredentialKey } from "@laces-out/security";
 import { and, asc, eq, gt, inArray, isNotNull, isNull, or } from "drizzle-orm";
 
 const maximumCaptureAgeMs = 10 * 60 * 1_000;

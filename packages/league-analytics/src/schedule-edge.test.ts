@@ -5,8 +5,8 @@ import {
   type Player,
   type Position,
   type RosterSlot,
-} from "@fantasy/domain";
-import type { ProjectionScoringProfile } from "@fantasy/projections";
+} from "@laces-out/domain";
+import type { ProjectionScoringProfile } from "@laces-out/projections";
 import { describe, expect, it } from "vitest";
 
 import {

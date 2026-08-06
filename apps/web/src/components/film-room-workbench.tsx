@@ -5,7 +5,7 @@ import type {
   AiProviderConfiguration,
   AiProviderName,
   LeagueListResponse,
-} from "@fantasy/contracts";
+} from "@laces-out/contracts";
 import {
   AlertCircle,
   BrainCircuit,

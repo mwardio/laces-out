@@ -6,9 +6,9 @@ import {
   type DraftAnalysisProjectionUnavailableReason,
   type DraftAnalysisResponse,
   type DraftMarketBaseline,
-} from "@fantasy/contracts";
-import { leagueSeasons, playerProjections, projectionSets, type Database } from "@fantasy/db";
-import { playerId } from "@fantasy/domain";
+} from "@laces-out/contracts";
+import { leagueSeasons, playerProjections, projectionSets, type Database } from "@laces-out/db";
+import { playerId } from "@laces-out/domain";
 import {
   analyzeDraft,
   DRAFT_ANALYZER_ALGORITHM_VERSION,
@@ -18,7 +18,7 @@ import {
   type DraftAnalysisProjectionSet,
   type DraftConfig,
   type DraftEvent,
-} from "@fantasy/engine-draft";
+} from "@laces-out/engine-draft";
 
 import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
 

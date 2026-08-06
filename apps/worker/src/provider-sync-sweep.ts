@@ -10,8 +10,8 @@ import {
   refreshRequests,
   type Database,
   type EspnDirectCapabilityState,
-} from "@fantasy/db";
-import type { LeagueSyncJob, ProviderSyncSweepJob } from "@fantasy/jobs";
+} from "@laces-out/db";
+import type { LeagueSyncJob, ProviderSyncSweepJob } from "@laces-out/jobs";
 import { and, asc, eq, inArray, isNull, lte, ne, or, sql } from "drizzle-orm";
 
 import type {

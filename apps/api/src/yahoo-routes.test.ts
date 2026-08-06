@@ -1,4 +1,4 @@
-import { loadEnvironment } from "@fantasy/config";
+import { loadEnvironment } from "@laces-out/config";
 import { describe, expect, it, vi } from "vitest";
 
 import { buildApp, type YahooConnectionPort } from "./app.js";

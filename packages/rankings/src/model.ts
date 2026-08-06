@@ -1,4 +1,4 @@
-import { NFL_POSITIONS } from "@fantasy/domain";
+import { NFL_POSITIONS } from "@laces-out/domain";
 import { z } from "zod";
 
 export const RANKING_SCHEMA_VERSION = 1 as const;

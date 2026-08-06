@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 
-import { loadEnvironment } from "@fantasy/config";
+import { loadEnvironment } from "@laces-out/config";
 import {
   createDatabase,
   dataSources,
@@ -9,7 +9,7 @@ import {
   playerWeeklyStatObservations,
   type Database,
   type JsonPrimitive,
-} from "@fantasy/db";
+} from "@laces-out/db";
 import {
   SCHEDULE_EDGE_POSITIONS,
   buildScheduleEdgeGamePositionTotals,
@@ -18,12 +18,12 @@ import {
   type ScheduleEdgePosition,
   type ScheduleEdgeWeeklyRosterFact,
   type ScheduleEdgeWeeklyStatFact,
-} from "@fantasy/league-analytics";
+} from "@laces-out/league-analytics";
 import {
   normalizeHistoricalPlayerStatComponents,
   scoreProjectionStatComponents,
   type ProjectionScoringProfile,
-} from "@fantasy/projections";
+} from "@laces-out/projections";
 import { and, asc, eq } from "drizzle-orm";
 
 import {

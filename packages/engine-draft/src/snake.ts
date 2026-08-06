@@ -1,4 +1,4 @@
-import type { TeamId } from "@fantasy/domain";
+import type { TeamId } from "@laces-out/domain";
 
 export interface SnakeOrderOptions {
   readonly thirdRoundReversal?: boolean;

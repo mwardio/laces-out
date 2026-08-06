@@ -5,7 +5,7 @@ import {
   projectionScoringProfileKey,
   rosScoringProfile,
   type FirstPartyRosHeldOutForecast,
-} from "@fantasy/projections";
+} from "@laces-out/projections";
 
 import {
   deriveFirstPartyRosSourceChecksums,

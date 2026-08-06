@@ -1,4 +1,4 @@
-import type { ProjectionSourceObservedAtStatus } from "@fantasy/contracts";
+import type { ProjectionSourceObservedAtStatus } from "@laces-out/contracts";
 
 export const LEAGUE_PROJECTION_IMPORT_HORIZON = "week" as const;
 

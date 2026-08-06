@@ -1,11 +1,11 @@
 {
-  "name": "@fantasy/engine-waiver",
+  "name": "@laces-out/engine-waiver",
   "version": "0.1.0",
   "private": true,
   "type": "module",
   "exports": "./src/index.ts",
   "dependencies": {
-    "@fantasy/domain": "*",
-    "@fantasy/engine-lineup": "*"
+    "@laces-out/domain": "*",
+    "@laces-out/engine-lineup": "*"
   }
 }

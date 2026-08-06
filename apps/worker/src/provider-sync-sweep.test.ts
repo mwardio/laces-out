@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import type { LeagueSyncJob } from "@fantasy/jobs";
+import type { LeagueSyncJob } from "@laces-out/jobs";
 
 import {
   nextYahooAutomatedSyncAt,

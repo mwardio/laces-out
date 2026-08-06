@@ -1,6 +1,6 @@
-import { loadEnvironment } from "@fantasy/config";
-import { AI_PROMPT_VERSION, AI_TOOL_CONTRACT_VERSION } from "@fantasy/contracts";
-import { parseCredentialKey, type CredentialEnvelopeV1 } from "@fantasy/security";
+import { loadEnvironment } from "@laces-out/config";
+import { AI_PROMPT_VERSION, AI_TOOL_CONTRACT_VERSION } from "@laces-out/contracts";
+import { parseCredentialKey, type CredentialEnvelopeV1 } from "@laces-out/security";
 import { describe, expect, it, vi } from "vitest";
 
 import type {

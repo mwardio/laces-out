@@ -2,10 +2,10 @@ import {
   changeEventDeduplicationKey,
   emitChangeEvents,
   type ChangeEventDraft,
-} from "@fantasy/change-events";
-import { CHANGE_EVENT_PAYLOAD_VERSION, type RecommendationRunKind } from "@fantasy/contracts";
-import type { LeagueRecomputeResult } from "@fantasy/decisions";
-import { canonicalJson } from "@fantasy/rankings";
+} from "@laces-out/change-events";
+import { CHANGE_EVENT_PAYLOAD_VERSION, type RecommendationRunKind } from "@laces-out/contracts";
+import type { LeagueRecomputeResult } from "@laces-out/decisions";
+import { canonicalJson } from "@laces-out/rankings";
 import {
   fantasyTeams,
   leagueMemberships,
@@ -13,7 +13,7 @@ import {
   recommendationRuns,
   recommendations,
   type Database,
-} from "@fantasy/db";
+} from "@laces-out/db";
 import { createHash } from "node:crypto";
 import { and, asc, desc, eq } from "drizzle-orm";
 

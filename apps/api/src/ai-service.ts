@@ -13,20 +13,20 @@ import type {
   AiToolName,
   AiToolUse,
   RecapSpiceLevel,
-} from "@fantasy/contracts";
-import { AI_PROMPT_VERSION, AI_TOOL_CONTRACT_VERSION } from "@fantasy/contracts";
+} from "@laces-out/contracts";
+import { AI_PROMPT_VERSION, AI_TOOL_CONTRACT_VERSION } from "@laces-out/contracts";
 import {
   aiProviderCredentials,
   aiUsageLedger,
   type Database,
   type CredentialEnvelopeMetadata,
-} from "@fantasy/db";
+} from "@laces-out/db";
 import {
   decryptCredential,
   encryptCredential,
   type CredentialEnvelopeV1,
   type CredentialKey,
-} from "@fantasy/security";
+} from "@laces-out/security";
 import { and, count, eq, gte, isNull, sql } from "drizzle-orm";
 
 import { boundedValue, neutralizeLeagueDataDelimiters, objectValue } from "./ai-bounded-text.js";

@@ -1,4 +1,4 @@
-import type { LeagueRemovalResponse } from "@fantasy/contracts";
+import type { LeagueRemovalResponse } from "@laces-out/contracts";
 import {
   auditEvents,
   bridgeDeviceLeagues,
@@ -12,7 +12,7 @@ import {
   userPreferences,
   type Database,
   type LeagueMembershipRole,
-} from "@fantasy/db";
+} from "@laces-out/db";
 import { and, asc, eq, inArray, isNull, or } from "drizzle-orm";
 
 interface LeagueSeasonIdentity {

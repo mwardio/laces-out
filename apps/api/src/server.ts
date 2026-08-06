@@ -1,7 +1,7 @@
-import { loadEnvironment } from "@fantasy/config";
-import { createDatabase } from "@fantasy/db";
-import { currentNflSeason } from "@fantasy/domain";
-import { EspnSessionConnectionService } from "@fantasy/league-sync";
+import { loadEnvironment } from "@laces-out/config";
+import { createDatabase } from "@laces-out/db";
+import { currentNflSeason } from "@laces-out/domain";
+import { EspnSessionConnectionService } from "@laces-out/league-sync";
 import {
   enqueueDataRefresh,
   enqueueLeagueSync,
@@ -10,12 +10,12 @@ import {
   ensureDailyRefresh,
   registerQueues,
   registerSchedules,
-} from "@fantasy/jobs";
-import { parseCredentialKey } from "@fantasy/security";
+} from "@laces-out/jobs";
+import { parseCredentialKey } from "@laces-out/security";
 import { sql } from "drizzle-orm";
 import { PgBoss } from "pg-boss";
 
-import { createSmtpEmailTransport, type SmtpSendFailure } from "@fantasy/email";
+import { createSmtpEmailTransport, type SmtpSendFailure } from "@laces-out/email";
 
 import { buildApp } from "./app.js";
 import { DrizzleAccountDataRepository } from "./account-data.js";

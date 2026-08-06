@@ -1,5 +1,5 @@
-import { loadEnvironment } from "@fantasy/config";
-import { FIRST_PARTY_ROS_MODEL_VERSION, rosScoringProfile } from "@fantasy/projections";
+import { loadEnvironment } from "@laces-out/config";
+import { FIRST_PARTY_ROS_MODEL_VERSION, rosScoringProfile } from "@laces-out/projections";
 import { describe, expect, it, vi } from "vitest";
 
 import { buildApp } from "./app.js";

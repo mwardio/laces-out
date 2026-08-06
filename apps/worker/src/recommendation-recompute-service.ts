@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 
-import type { InSeasonDecisionSnapshot } from "@fantasy/contracts";
-import type { InSeasonDecisionService } from "@fantasy/decisions";
+import type { InSeasonDecisionSnapshot } from "@laces-out/contracts";
+import type { InSeasonDecisionService } from "@laces-out/decisions";
 import {
   RECOMMENDATION_ALGORITHM_VERSION,
   recomputeLeagueRecommendations,
@@ -12,7 +12,7 @@ import {
   type RecommendationRunWriter,
   type RecommendationSnapshot,
   type RecommendationSnapshotRequest,
-} from "@fantasy/decisions";
+} from "@laces-out/decisions";
 import {
   fantasyTeams,
   leagueMemberships,
@@ -24,7 +24,7 @@ import {
   rosterSlotRules,
   rosterSnapshots,
   type Database,
-} from "@fantasy/db";
+} from "@laces-out/db";
 import { and, asc, desc, eq, isNotNull } from "drizzle-orm";
 
 import {
@@ -41,7 +41,7 @@ import type {
  * Executes a queued `recommendation-recompute` job.
  *
  * Thin on purpose: it checks cancellation, resolves which teams the league season actually has a
- * claimant for, and delegates to `@fantasy/decisions`. Every engine decision and every identity rule
+ * claimant for, and delegates to `@laces-out/decisions`. Every engine decision and every identity rule
  * lives in the package so the API and the worker cannot diverge on what a run means (ADR 0001).
  */
 

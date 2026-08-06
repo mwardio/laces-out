@@ -1,4 +1,4 @@
-import { CHANGE_EVENT_PAYLOAD_VERSION } from "@fantasy/contracts";
+import { CHANGE_EVENT_PAYLOAD_VERSION } from "@laces-out/contracts";
 import {
   fantasyTeams,
   leagueMemberships,
@@ -7,7 +7,7 @@ import {
   rosterEntries,
   rosterSnapshots,
   type Database,
-} from "@fantasy/db";
+} from "@laces-out/db";
 import { asc, desc, eq } from "drizzle-orm";
 
 import { changeEventDeduplicationKey } from "./deduplication.js";

@@ -1,14 +1,14 @@
 import { createHash } from "node:crypto";
 
-import type { EspnLiveDraftIssueCode } from "@fantasy/contracts";
-import type { DraftEventSource } from "@fantasy/db";
-import { draftEventId, playerId, teamId } from "@fantasy/domain";
+import type { EspnLiveDraftIssueCode } from "@laces-out/contracts";
+import type { DraftEventSource } from "@laces-out/db";
+import { draftEventId, playerId, teamId } from "@laces-out/domain";
 import {
   DraftInvariantError,
   reduceDraft,
   type DraftConfig,
   type DraftEvent,
-} from "@fantasy/engine-draft";
+} from "@laces-out/engine-draft";
 
 import type { DraftSessionEventRecord } from "./draft-session.js";
 

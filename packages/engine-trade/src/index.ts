@@ -7,8 +7,8 @@ import {
   type ProjectionMetric,
   type RosterSlot,
   type TeamId,
-} from "@fantasy/domain";
-import { optimizeLineup, type LineupOptimizationResult } from "@fantasy/engine-lineup";
+} from "@laces-out/domain";
+import { optimizeLineup, type LineupOptimizationResult } from "@laces-out/engine-lineup";
 
 export interface TradeHorizon {
   readonly id: string;

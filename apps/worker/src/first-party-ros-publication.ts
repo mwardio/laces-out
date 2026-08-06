@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import type {
   FirstPartyRosAvailabilitySnapshot,
   FirstPartyRosChampionArtifactSourceChecksum,
-} from "@fantasy/db";
+} from "@laces-out/db";
 import {
   FIRST_PARTY_ROS_INTERVAL_CALIBRATION_VERSION,
   FIRST_PARTY_ROS_MAXIMUM_SCENARIOS,
@@ -24,7 +24,7 @@ import {
   type FirstPartyRosRemainingWeeksBucket,
   type FirstPartyRosStrategy,
   type ProjectionScoringProfile,
-} from "@fantasy/projections";
+} from "@laces-out/projections";
 
 import { HISTORICAL_ROS_SUPPORTED_POSITIONS } from "./first-party-ros-backtest.js";
 

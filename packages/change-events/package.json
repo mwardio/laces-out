@@ -1,13 +1,13 @@
 {
-  "name": "@fantasy/change-events",
+  "name": "@laces-out/change-events",
   "version": "0.1.0",
   "private": true,
   "type": "module",
   "exports": "./src/index.ts",
   "dependencies": {
-    "@fantasy/contracts": "*",
-    "@fantasy/db": "*",
-    "@fantasy/rankings": "*",
+    "@laces-out/contracts": "*",
+    "@laces-out/db": "*",
+    "@laces-out/rankings": "*",
     "drizzle-orm": "^0.45.2"
   }
 }

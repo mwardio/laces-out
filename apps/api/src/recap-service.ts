@@ -7,7 +7,7 @@ import {
   type RecapSettings,
   type RecapSpiceLevel,
   type WeeklyRecap,
-} from "@fantasy/contracts";
+} from "@laces-out/contracts";
 import {
   fantasyTeams,
   leagueMemberships,
@@ -19,7 +19,7 @@ import {
   weeklyRecaps,
   type Database,
   type LeagueMembershipRole,
-} from "@fantasy/db";
+} from "@laces-out/db";
 import { and, desc, eq, sql } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";

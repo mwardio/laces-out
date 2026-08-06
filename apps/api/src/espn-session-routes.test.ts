@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { loadEnvironment } from "@fantasy/config";
-import { espnSessionConnectionListSchema, healthResponseSchema } from "@fantasy/contracts";
+import { loadEnvironment } from "@laces-out/config";
+import { espnSessionConnectionListSchema, healthResponseSchema } from "@laces-out/contracts";
 
 import { buildApp, type EspnSessionConnectionPort } from "./app.js";
 import { AuthService, type AuthRepository } from "./auth.js";

@@ -13,7 +13,7 @@ import {
   scoringRules,
   syncRuns,
   type Database,
-} from "@fantasy/db";
+} from "@laces-out/db";
 import {
   FIRST_PARTY_ROS_MINIMUM_BATCHES,
   FIRST_PARTY_ROS_MINIMUM_HELD_OUT_SEASONS,
@@ -23,7 +23,7 @@ import {
   rosScoringProfileCatalog,
   type FirstPartyRosChampionPolicy,
   type ProjectionScoringProfile,
-} from "@fantasy/projections";
+} from "@laces-out/projections";
 import { and, desc, eq, inArray } from "drizzle-orm";
 
 import {

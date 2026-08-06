@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import type { ChangeEventDraft, ChangeEventEmitResult } from "@fantasy/change-events";
+import type { ChangeEventDraft, ChangeEventEmitResult } from "@laces-out/change-events";
 
 import {
   emitLeagueSyncChangeEvents,

@@ -1,4 +1,4 @@
-import { NFL_TEAMS } from "@fantasy/contracts";
+import { NFL_TEAMS } from "@laces-out/contracts";
 
 /**
  * The team filter reuses the contract's canonical list so a dropdown can never offer an

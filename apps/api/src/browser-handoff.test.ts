@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 
-import { loadEnvironment } from "@fantasy/config";
-import { healthResponseSchema } from "@fantasy/contracts";
+import { loadEnvironment } from "@laces-out/config";
+import { healthResponseSchema } from "@laces-out/contracts";
 import { describe, expect, it, vi } from "vitest";
 
 import { buildApp, type BuildAppOptions, type YahooConnectionPort } from "./app.js";

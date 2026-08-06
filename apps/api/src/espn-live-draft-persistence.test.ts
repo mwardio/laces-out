@@ -1,6 +1,6 @@
-import type { EspnLiveDraftPickOwnership } from "@fantasy/contracts";
-import { playerId, rosterSlotId, teamId, type RosterSlot } from "@fantasy/domain";
-import type { DraftConfig } from "@fantasy/engine-draft";
+import type { EspnLiveDraftPickOwnership } from "@laces-out/contracts";
+import { playerId, rosterSlotId, teamId, type RosterSlot } from "@laces-out/domain";
+import type { DraftConfig } from "@laces-out/engine-draft";
 import { describe, expect, it } from "vitest";
 
 import {

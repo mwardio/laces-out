@@ -4,7 +4,7 @@ import type {
   StatsCenterRatioMetric,
   StatsCenterTrend,
   StatsCenterTrendMetric,
-} from "@fantasy/contracts";
+} from "@laces-out/contracts";
 
 /**
  * Formatters and empty-metric builders shared by the Stats Center leaderboard and the player

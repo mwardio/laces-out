@@ -4,7 +4,7 @@ import type {
   ProjectionPlayerListResponse,
   ProjectionPlayerRow,
   ProjectionSetSummary,
-} from "@fantasy/contracts";
+} from "@laces-out/contracts";
 import {
   AlertTriangle,
   BarChart3,

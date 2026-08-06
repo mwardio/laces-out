@@ -1,4 +1,4 @@
-import { draftStreamInvalidationSchema, type DraftStreamInvalidation } from "@fantasy/contracts";
+import { draftStreamInvalidationSchema, type DraftStreamInvalidation } from "@laces-out/contracts";
 
 /**
  * Where this client is getting its updates.

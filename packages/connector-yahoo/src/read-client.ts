@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 
-import type { LeagueSyncBundle } from "@fantasy/connectors";
-import { redactText } from "@fantasy/security";
+import type { LeagueSyncBundle } from "@laces-out/connectors";
+import { redactText } from "@laces-out/security";
 
 import { MAX_YAHOO_XML_BYTES, parseYahooLeagueXml, parseYahooXml, YahooXmlError } from "./xml.js";
 

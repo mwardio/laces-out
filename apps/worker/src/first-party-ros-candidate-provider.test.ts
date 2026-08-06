@@ -7,7 +7,7 @@ import {
   type FirstPartyRosHeldOutForecast,
   type FirstPartyWeeklyStatLine,
   type ProjectionScoringProfile,
-} from "@fantasy/projections";
+} from "@laces-out/projections";
 import { describe, expect, it } from "vitest";
 
 import {

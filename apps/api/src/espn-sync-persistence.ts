@@ -1,1 +1,1 @@
-export * from "@fantasy/league-sync";
+export * from "@laces-out/league-sync";

@@ -16,7 +16,7 @@ import {
   type NormalizedTeam,
   type NormalizedWeeklyMatchup,
   type WaiverType,
-} from "@fantasy/connectors";
+} from "@laces-out/connectors";
 import { XMLParser, XMLValidator } from "fast-xml-parser";
 
 export const MAX_YAHOO_XML_BYTES = 5 * 1024 * 1024;

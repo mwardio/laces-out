@@ -1,4 +1,4 @@
-import type { Environment } from "@fantasy/config";
+import type { Environment } from "@laces-out/config";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 

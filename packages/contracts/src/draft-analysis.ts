@@ -3,7 +3,7 @@ import { z } from "zod";
 /**
  * Wire contract for `GET /v1/drafts/:draftId/analysis`.
  *
- * The engine (`@fantasy/engine-draft`) owns the analysis shapes; this module is the browser-facing
+ * The engine (`@laces-out/engine-draft`) owns the analysis shapes; this module is the browser-facing
  * mirror of them plus the provenance envelope the engine has no way to know about — which market
  * baseline was admitted, which projection set was selected, and why either one is missing. It is a
  * separate module because `index.ts` is a re-export barrel, not a home for new domains.

@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 
-import { parseYahooLeagueSyncArtifacts } from "@fantasy/connector-yahoo";
-import type { LeagueSyncBundle } from "@fantasy/connectors";
-import { loadEnvironment } from "@fantasy/config";
+import { parseYahooLeagueSyncArtifacts } from "@laces-out/connector-yahoo";
+import type { LeagueSyncBundle } from "@laces-out/connectors";
+import { loadEnvironment } from "@laces-out/config";
 import {
   createDatabase,
   fantasyTeams,
@@ -13,7 +13,7 @@ import {
   syncRuns,
   type Database,
   users,
-} from "@fantasy/db";
+} from "@laces-out/db";
 import { count, eq } from "drizzle-orm";
 
 import { DrizzleLeagueDashboardRepository } from "../src/league-dashboard.js";

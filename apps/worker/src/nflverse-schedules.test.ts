@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 
-import type { NflverseScheduleGame } from "@fantasy/source-nflverse";
+import type { NflverseScheduleGame } from "@laces-out/source-nflverse";
 import { describe, expect, it } from "vitest";
 
 import {

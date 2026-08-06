@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 
-import { YahooReadClientError, type YahooXmlArtifact } from "@fantasy/connector-yahoo";
-import type { LeagueSyncBundle } from "@fantasy/connectors";
+import { YahooReadClientError, type YahooXmlArtifact } from "@laces-out/connector-yahoo";
+import type { LeagueSyncBundle } from "@laces-out/connectors";
 import { describe, expect, it, vi } from "vitest";
 
 import {

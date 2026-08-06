@@ -1,4 +1,4 @@
-import { createRosterSlots, playerId, type Position } from "@fantasy/domain";
+import { createRosterSlots, playerId, type Position } from "@laces-out/domain";
 import { describe, expect, it } from "vitest";
 
 import {

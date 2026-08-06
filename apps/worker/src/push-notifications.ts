@@ -3,7 +3,7 @@ import {
   pushSubscriptions,
   type Database,
   type NotificationKind,
-} from "@fantasy/db";
+} from "@laces-out/db";
 import { asc, eq } from "drizzle-orm";
 import webpush from "web-push";
 

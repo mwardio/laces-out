@@ -2,7 +2,7 @@ import {
   inSeasonDecisionSnapshotSchema,
   leagueAnalyticsSnapshotSchema,
   leagueListResponseSchema,
-} from "@fantasy/contracts";
+} from "@laces-out/contracts";
 import { describe, expect, it } from "vitest";
 
 import {

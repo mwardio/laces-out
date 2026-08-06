@@ -73,7 +73,7 @@ _Appended after the bars above were frozen._
 
 ### 2026-07-29 — walk-forward measurement: all four bars pass
 
-Run: `npm run projections:validate -w @fantasy/worker` (seasons 2023–2025, REG), 1,632 walk-forward
+Run: `npm run projections:validate -w @laces-out/worker` (seasons 2023–2025, REG), 1,632 walk-forward
 defense predictions, constants exactly as frozen in §2 — none adjusted.
 
 1. **Probability sum — pass.** Max |Σ − 1| over all 1,632 predictions: 2.89e-15 (bar ≤ 1e-6);

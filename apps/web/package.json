@@ -1,5 +1,5 @@
 {
-  "name": "@fantasy/web",
+  "name": "@laces-out/web",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -9,10 +9,10 @@
     "start": "next start --port 3000"
   },
   "dependencies": {
-    "@fantasy/contracts": "*",
-    "@fantasy/domain": "*",
-    "@fantasy/engine-draft": "*",
-    "@fantasy/rankings": "*",
+    "@laces-out/contracts": "*",
+    "@laces-out/domain": "*",
+    "@laces-out/engine-draft": "*",
+    "@laces-out/rankings": "*",
     "lucide-react": "^0.525.0",
     "next": "16.3.0",
     "react": "19.2.7",

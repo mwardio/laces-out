@@ -1,4 +1,4 @@
-import { pushSubscriptions, type Database } from "@fantasy/db";
+import { pushSubscriptions, type Database } from "@laces-out/db";
 import { and, asc, desc, eq, notInArray } from "drizzle-orm";
 import webpush from "web-push";
 

@@ -2,8 +2,8 @@ import cors from "@fastify/cors";
 import cookie from "@fastify/cookie";
 import helmet from "@fastify/helmet";
 import rateLimit from "@fastify/rate-limit";
-import { loadEnvironment, type Environment } from "@fantasy/config";
-import type { RecommendationKind } from "@fantasy/jobs";
+import { loadEnvironment, type Environment } from "@laces-out/config";
+import type { RecommendationKind } from "@laces-out/jobs";
 import {
   espnBridgeDeviceRequestSchema,
   espnBridgeDeviceListResponseSchema,
@@ -58,11 +58,11 @@ import {
   type YahooAuthorizeRequest,
   type YahooIosCompletionStatus,
   type YahooReturnMode,
-} from "@fantasy/contracts";
+} from "@laces-out/contracts";
 import {
   EspnSupplementalNormalizationError,
   EspnWebClientNormalizationError,
-} from "@fantasy/connector-espn";
+} from "@laces-out/connector-espn";
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
 import { createHash } from "node:crypto";
 import { z, ZodError } from "zod";

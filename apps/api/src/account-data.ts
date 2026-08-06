@@ -31,7 +31,7 @@ import {
   users,
   weeklyRecaps,
   type Database,
-} from "@fantasy/db";
+} from "@laces-out/db";
 import { and, asc, eq, inArray, ne, or, sql } from "drizzle-orm";
 
 import { verifyOwnerPassword } from "./auth.js";

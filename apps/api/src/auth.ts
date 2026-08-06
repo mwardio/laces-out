@@ -1,7 +1,7 @@
 import { hash, verify, type Options as ArgonOptions } from "@node-rs/argon2";
 import { createHash, randomBytes } from "node:crypto";
 
-import type { ApplicationRole } from "@fantasy/db";
+import type { ApplicationRole } from "@laces-out/db";
 
 export const sessionCookieName = "fantasy_session";
 export const sessionLifetimeSeconds = 60 * 60 * 24 * 30;

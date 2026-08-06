@@ -1,6 +1,6 @@
 import { count, sql } from "drizzle-orm";
-import { createDatabase, users } from "@fantasy/db";
-import { loadEnvironment } from "@fantasy/config";
+import { createDatabase, users } from "@laces-out/db";
+import { loadEnvironment } from "@laces-out/config";
 
 import { hashOwnerPassword } from "./auth.js";
 

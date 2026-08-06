@@ -5,8 +5,8 @@ import {
   espnPayloadChecksumMatches,
   normalizeEspnSupplementalSnapshot,
   normalizeEspnWebClientSnapshot,
-} from "@fantasy/connector-espn";
-import type { EspnBridgeSnapshot, EspnSupplementalBridgeSnapshot } from "@fantasy/contracts";
+} from "@laces-out/connector-espn";
+import type { EspnBridgeSnapshot, EspnSupplementalBridgeSnapshot } from "@laces-out/contracts";
 import {
   bridgeDeviceLeagues,
   bridgeDevices,
@@ -16,7 +16,7 @@ import {
   leagueSyncExclusions,
   leagues,
   type Database,
-} from "@fantasy/db";
+} from "@laces-out/db";
 import { and, asc, desc, eq, gt, inArray, isNotNull, isNull, lte, or } from "drizzle-orm";
 
 import {

@@ -9,7 +9,7 @@ import {
   type FirstPartyTeamDefenseBacktest,
   type FirstPartyTeamDefenseWeeklyStatLine,
   type ProjectionScoringProfile,
-} from "@fantasy/projections";
+} from "@laces-out/projections";
 import {
   NflversePlayersSource,
   NflverseInjuriesSource,
@@ -19,7 +19,7 @@ import {
   NflverseWeeklyRostersSource,
   NflverseWeeklyStatsSource,
   type NflverseDatasetState,
-} from "@fantasy/source-nflverse";
+} from "@laces-out/source-nflverse";
 
 import {
   buildFirstPartyDefenseHistory,

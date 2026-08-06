@@ -1,4 +1,4 @@
-import { leagueMemberships, type Database } from "@fantasy/db";
+import { leagueMemberships, type Database } from "@laces-out/db";
 import { and, eq } from "drizzle-orm";
 
 export interface RefreshAuthorizationPort {

@@ -7,7 +7,7 @@ import {
   type UnresolvedIdentityResponse,
   type UnresolvedIdentitySample,
   type UnresolvedIdentityWeek,
-} from "@fantasy/contracts";
+} from "@laces-out/contracts";
 import {
   dataSources,
   playerInjuryReportObservations,
@@ -15,13 +15,13 @@ import {
   playerWeeklyRosterObservations,
   playerWeeklyStatObservations,
   type Database,
-} from "@fantasy/db";
+} from "@laces-out/db";
 import {
   currentNflSeason,
   isArchivedNflverseSource,
   sourceMatchRateThreshold,
   sourceSeason,
-} from "@fantasy/domain";
+} from "@laces-out/domain";
 import { and, asc, count, eq, isNull } from "drizzle-orm";
 
 import {

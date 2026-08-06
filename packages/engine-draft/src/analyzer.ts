@@ -6,7 +6,7 @@ import {
   type Position,
   type RosterSlot,
   type TeamId,
-} from "@fantasy/domain";
+} from "@laces-out/domain";
 
 import { maximumLegalBid } from "./auction.js";
 import { reduceDraft } from "./reducer.js";

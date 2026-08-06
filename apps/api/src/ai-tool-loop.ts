@@ -1,4 +1,4 @@
-import type { AiToolDenialCode, AiToolName, AiToolOutcome } from "@fantasy/contracts";
+import type { AiToolDenialCode, AiToolName, AiToolOutcome } from "@laces-out/contracts";
 
 import { neutralizeLeagueDataDelimiters } from "./ai-bounded-text.js";
 import type {

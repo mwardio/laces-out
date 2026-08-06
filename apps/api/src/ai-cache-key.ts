@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 
-import type { AiFeatureName, AiProviderName, AiToolProvenance } from "@fantasy/contracts";
+import type { AiFeatureName, AiProviderName, AiToolProvenance } from "@laces-out/contracts";
 
 /**
  * The cache key for one AI answer.

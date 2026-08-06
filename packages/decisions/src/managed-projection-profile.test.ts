@@ -1,4 +1,4 @@
-import type { Database } from "@fantasy/db";
+import type { Database } from "@laces-out/db";
 import { describe, expect, it, vi } from "vitest";
 
 import {

@@ -5,7 +5,7 @@ import {
   ROS_SCORING_PROFILE_KEYS,
   isRosScoringProfileKey,
   rosScoringProfile,
-} from "@fantasy/projections";
+} from "@laces-out/projections";
 
 import {
   firstPartyRosAdmissionConstants,
@@ -23,7 +23,7 @@ import { regateFirstPartyRosReport } from "../src/first-party-ros-regate.js";
  * numbers. This script performs no forecast, no simulation and no database work; it never writes
  * back over its input.
  *
- *   npm run ros:regate -w @fantasy/worker -- \
+ *   npm run ros:regate -w @laces-out/worker -- \
  *     --report=reports/ros-validation-v8-full-ppr-n8-2026-07-28.json \
  *     --out=reports/ros-validation-v8-full-ppr-n8-2026-07-28.regated.json
  *

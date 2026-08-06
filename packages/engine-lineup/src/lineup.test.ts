@@ -8,7 +8,7 @@ import {
   rosterSlotId,
   type Player,
   type ProjectionValue,
-} from "@fantasy/domain";
+} from "@laces-out/domain";
 
 import { optimizeLineup } from "./index.js";
 

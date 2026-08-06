@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import type { EmailMessage, EmailTransport } from "@fantasy/email";
+import type { EmailMessage, EmailTransport } from "@laces-out/email";
 
 import {
   LeagueSyncNudgeService,

@@ -1,16 +1,16 @@
-import { loadEnvironment } from "@fantasy/config";
-import { drizzleChangeEventProducers, emitProviderSyncChangeEvents } from "@fantasy/change-events";
-import { createDatabase } from "@fantasy/db";
-import { createSmtpEmailTransport } from "@fantasy/email";
-import { DrizzleInSeasonDecisionRepository, InSeasonDecisionService } from "@fantasy/decisions";
+import { loadEnvironment } from "@laces-out/config";
+import { drizzleChangeEventProducers, emitProviderSyncChangeEvents } from "@laces-out/change-events";
+import { createDatabase } from "@laces-out/db";
+import { createSmtpEmailTransport } from "@laces-out/email";
+import { DrizzleInSeasonDecisionRepository, InSeasonDecisionService } from "@laces-out/decisions";
 import {
   DrizzleYahooSyncRepository,
   EspnSessionConnectionService,
   EspnSessionSyncService,
   YahooConnectionService,
   YahooSyncService,
-} from "@fantasy/league-sync";
-import { parseCredentialKey } from "@fantasy/security";
+} from "@laces-out/league-sync";
+import { parseCredentialKey } from "@laces-out/security";
 import { PgBoss } from "pg-boss";
 import pino from "pino";
 

@@ -5,7 +5,7 @@ import {
   deleteAccountResponseSchema,
   memberPreferencesSchema,
   memberPreferencesUpdateSchema,
-} from "@fantasy/contracts";
+} from "@laces-out/contracts";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 
 import type { AuthService } from "./auth.js";

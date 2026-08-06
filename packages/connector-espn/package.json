@@ -1,12 +1,12 @@
 {
-  "name": "@fantasy/connector-espn",
+  "name": "@laces-out/connector-espn",
   "version": "0.1.0",
   "private": true,
   "type": "module",
   "exports": "./src/index.ts",
   "dependencies": {
-    "@fantasy/connectors": "*",
-    "@fantasy/domain": "*",
+    "@laces-out/connectors": "*",
+    "@laces-out/domain": "*",
     "zod": "^4.0.5"
   }
 }

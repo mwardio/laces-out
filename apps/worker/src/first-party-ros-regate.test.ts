@@ -11,7 +11,7 @@ import {
   FIRST_PARTY_ROS_MAX_AVAILABILITY_MAE,
   FIRST_PARTY_ROS_MAX_NINE_PLUS_AVAILABILITY_MAE,
   firstPartyRosAvailabilityEvidenceOfExcessMae,
-} from "@fantasy/projections";
+} from "@laces-out/projections";
 
 import {
   firstPartyRosAdmissionConstants,
@@ -454,7 +454,7 @@ describe("first-party ROS re-gate provenance", () => {
 describe("first-party ROS re-gate change detection", () => {
   it("raises a nine-plus blocker when the ceiling is lowered beneath the stored MAE", async () => {
     vi.resetModules();
-    vi.doMock("@fantasy/projections", async (importOriginal) => {
+    vi.doMock("@laces-out/projections", async (importOriginal) => {
       const actual = await importOriginal<Record<string, unknown>>();
       return { ...actual, FIRST_PARTY_ROS_MAX_NINE_PLUS_AVAILABILITY_MAE: 2.5 };
     });
@@ -479,14 +479,14 @@ describe("first-party ROS re-gate change detection", () => {
       // constant and nothing else.
       expect(expectRegated(regate(source)).blockers).toEqual([]);
     } finally {
-      vi.doUnmock("@fantasy/projections");
+      vi.doUnmock("@laces-out/projections");
       vi.resetModules();
     }
   });
 
   it("clears a stored blocker when the ceiling is raised above the stored MAE", async () => {
     vi.resetModules();
-    vi.doMock("@fantasy/projections", async (importOriginal) => {
+    vi.doMock("@laces-out/projections", async (importOriginal) => {
       const actual = await importOriginal<Record<string, unknown>>();
       return { ...actual, FIRST_PARTY_ROS_MAX_NINE_PLUS_AVAILABILITY_MAE: 3 };
     });
@@ -513,7 +513,7 @@ describe("first-party ROS re-gate change detection", () => {
         "calibration_QB_nine-plus_availability_mae_above_maximum",
       ]);
     } finally {
-      vi.doUnmock("@fantasy/projections");
+      vi.doUnmock("@laces-out/projections");
       vi.resetModules();
     }
   });
@@ -590,7 +590,7 @@ describe("first-party ROS re-gate equivalence against the stored validation repo
       async () => {
         if (stored === null) throw new Error("unreachable");
         vi.resetModules();
-        vi.doMock("@fantasy/projections", async (importOriginal) => {
+        vi.doMock("@laces-out/projections", async (importOriginal) => {
           const actual = await importOriginal<Record<string, unknown>>();
           return { ...actual, firstPartyRosAvailabilityEvidenceOfExcessMae: () => true };
         });
@@ -610,7 +610,7 @@ describe("first-party ROS re-gate equivalence against the stored validation repo
           expect((result.report.report as Record<string, unknown>).blockers).toEqual(body.blockers);
           expect((result.report.report as Record<string, unknown>).state).toBe(body.state);
         } finally {
-          vi.doUnmock("@fantasy/projections");
+          vi.doUnmock("@laces-out/projections");
           vi.resetModules();
         }
       },

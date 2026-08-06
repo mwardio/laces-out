@@ -9,7 +9,7 @@ import type {
   ScheduleEdgeResponse,
   ScheduleEdgeRosterPlayer,
   ScheduleEdgeStrength,
-} from "@fantasy/contracts";
+} from "@laces-out/contracts";
 import {
   AlertTriangle,
   ArrowRight,

@@ -4,7 +4,7 @@ import type {
   ProjectionImportPreviewResponse,
   ProjectionSetListResponse,
   ProjectionVisibility,
-} from "@fantasy/contracts";
+} from "@laces-out/contracts";
 import {
   AlertTriangle,
   CalendarDays,

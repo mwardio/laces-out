@@ -8,7 +8,7 @@ import {
   type NormalizedTransactionItem,
   type NormalizedTransactionStatus,
   type NormalizedTransactionType,
-} from "@fantasy/connectors";
+} from "@laces-out/connectors";
 import { z, type ZodError } from "zod";
 
 import { espnPayloadChecksumMatches } from "./payload-checksum.js";

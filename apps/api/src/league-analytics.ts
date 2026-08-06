@@ -10,8 +10,8 @@ import type {
   LeagueRules,
   LeagueScoreAnalyticsSection,
   LeagueWeeklyAwardsSection,
-} from "@fantasy/contracts";
-import { parseLeagueRules } from "@fantasy/contracts";
+} from "@laces-out/contracts";
+import { parseLeagueRules } from "@laces-out/contracts";
 import {
   fantasyTeams,
   leagueMemberships,
@@ -31,7 +31,7 @@ import {
   type ProjectionVisibility,
   type ProviderName,
   type WeeklyMatchupStatus,
-} from "@fantasy/db";
+} from "@laces-out/db";
 import {
   analyzeLeagueSeason,
   analyzePositionalStrength,
@@ -44,7 +44,7 @@ import {
   type LeagueWeekInput,
   type PlayoffOddsResult,
   type PowerFactorDefinition,
-} from "@fantasy/league-analytics";
+} from "@laces-out/league-analytics";
 import { and, asc, desc, eq, inArray, ne, or, sql } from "drizzle-orm";
 
 import {

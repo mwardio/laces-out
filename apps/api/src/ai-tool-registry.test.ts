@@ -1,4 +1,4 @@
-import { RECOMMENDATION_ALGORITHM_VERSION } from "@fantasy/decisions";
+import { RECOMMENDATION_ALGORITHM_VERSION } from "@laces-out/decisions";
 import { describe, expect, it, vi } from "vitest";
 
 import { AI_TOOL_LOOP_LIMITS } from "./ai-tool-loop.js";

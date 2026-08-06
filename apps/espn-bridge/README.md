@@ -150,7 +150,7 @@ both build targets that the manifest still declares it, that it stays scoped to
 ## Local development build
 
 ```bash
-npm run build -w @fantasy/espn-bridge
+npm run build -w @laces-out/espn-bridge
 ```
 
 Then open `chrome://extensions`, enable Developer mode, choose **Load unpacked**, and select the
@@ -219,8 +219,8 @@ listing so updates are authenticated and the extension ID remains stable.
 The build has two targets. They share identical compiled code — only the manifest differs.
 
 ```bash
-npm run build -w @fantasy/espn-bridge         # dev: localhost + broad optional host, for Load unpacked
-npm run build:store -w @fantasy/espn-bridge   # store: hosted direct pairing + optional self-host access
+npm run build -w @laces-out/espn-bridge         # dev: localhost + broad optional host, for Load unpacked
+npm run build:store -w @laces-out/espn-bridge   # store: hosted direct pairing + optional self-host access
 ```
 
 Both builds write their reproducible archives to `apps/espn-bridge/dist-package/` (git-ignored);

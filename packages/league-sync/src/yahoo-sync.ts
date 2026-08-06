@@ -4,8 +4,8 @@ import {
   YahooFantasyReadClient,
   YahooReadClientError,
   type YahooXmlArtifact,
-} from "@fantasy/connector-yahoo";
-import type { ExternalLeagueRef, LeagueSyncBundle } from "@fantasy/connectors";
+} from "@laces-out/connector-yahoo";
+import type { ExternalLeagueRef, LeagueSyncBundle } from "@laces-out/connectors";
 import {
   auditEvents,
   fantasyTeams,
@@ -28,7 +28,7 @@ import {
   weeklyMatchups,
   type ConnectionHealth,
   type Database,
-} from "@fantasy/db";
+} from "@laces-out/db";
 import { and, asc, eq, inArray, isNull, sql } from "drizzle-orm";
 
 import { YahooConnectionError } from "./yahoo-connection.js";

@@ -1,4 +1,4 @@
-import { emailVerificationTokens, users, type Database } from "@fantasy/db";
+import { emailVerificationTokens, users, type Database } from "@laces-out/db";
 import { and, eq, isNull, ne, sql } from "drizzle-orm";
 
 import type {
@@ -33,14 +33,15 @@ export class DrizzleEmailVerificationRepository implements EmailVerificationRepo
         return undefined;
       }
 
-      // Keep the first successful confirmation timestamp if a retry reaches this transaction.
+      // Bind through the timestamp columns so Drizzle serializes Date values for postgres-js.
+      // Restricting the update to a pending account also keeps the first confirmation timestamp.
       await transaction
         .update(users)
         .set({
-          emailVerifiedAt: sql`coalesce(${users.emailVerifiedAt}, ${input.now})`,
+          emailVerifiedAt: input.now,
           updatedAt: input.now,
         })
-        .where(eq(users.id, token.userId));
+        .where(and(eq(users.id, token.userId), isNull(users.emailVerifiedAt)));
       await transaction
         .update(emailVerificationTokens)
         .set({ usedAt: input.now })

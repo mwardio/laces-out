@@ -1,7 +1,7 @@
 import { fileURLToPath } from "node:url";
 
-import { loadEnvironment } from "@fantasy/config";
-import { createDatabase } from "@fantasy/db";
+import { loadEnvironment } from "@laces-out/config";
+import { createDatabase } from "@laces-out/db";
 import { migrate } from "drizzle-orm/postgres-js/migrator";
 
 const environment = loadEnvironment();

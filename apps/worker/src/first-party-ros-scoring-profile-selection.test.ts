@@ -1,4 +1,4 @@
-import { rosAvailableProjectionStatIds, rosScoringProfileCatalog } from "@fantasy/projections";
+import { rosAvailableProjectionStatIds, rosScoringProfileCatalog } from "@laces-out/projections";
 import { describe, expect, it } from "vitest";
 
 import { firstPartyAvailableProjectionComponents } from "./first-party-projections.js";

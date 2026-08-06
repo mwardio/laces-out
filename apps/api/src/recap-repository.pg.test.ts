@@ -26,7 +26,7 @@ import {
   users,
   weeklyRecaps,
   type Database,
-} from "@fantasy/db";
+} from "@laces-out/db";
 import { and, eq } from "drizzle-orm";
 import { migrate } from "drizzle-orm/postgres-js/migrator";
 import postgres from "postgres";

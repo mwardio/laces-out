@@ -3,7 +3,7 @@ import {
   statsCenterResponseSchema,
   statsCenterScoringSchema,
   statsCenterSortSchema,
-} from "@fantasy/contracts";
+} from "@laces-out/contracts";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 

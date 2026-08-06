@@ -1,4 +1,4 @@
-import { leagueSeasons, scoringRules, type Database } from "@fantasy/db";
+import { leagueSeasons, scoringRules, type Database } from "@laces-out/db";
 import {
   LEAGUE_SCORING_NORMALIZATION_VERSION,
   firstPartyProjectionComponentsForPosition,
@@ -6,7 +6,7 @@ import {
   normalizeLeagueScoringProfile,
   projectionScoringProfileKey,
   type LeagueScoringPositionSupport,
-} from "@fantasy/projections";
+} from "@laces-out/projections";
 import { eq } from "drizzle-orm";
 
 const positions = ["QB", "RB", "WR", "TE", "K"] as const;

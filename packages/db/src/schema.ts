@@ -1,7 +1,7 @@
 import {
   FIRST_PARTY_ROS_MAXIMUM_SCENARIOS,
   FIRST_PARTY_ROS_MINIMUM_SCENARIOS,
-} from "@fantasy/projections";
+} from "@laces-out/projections";
 import { sql } from "drizzle-orm";
 import {
   type AnyPgColumn,

@@ -1,7 +1,7 @@
 import { verify } from "@node-rs/argon2";
 import { describe, expect, it } from "vitest";
 
-import type { ApplicationRole, LeagueMembershipRole } from "@fantasy/db";
+import type { ApplicationRole, LeagueMembershipRole } from "@laces-out/db";
 
 import { hashSessionToken } from "./auth.js";
 import {

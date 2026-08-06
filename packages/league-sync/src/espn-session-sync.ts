@@ -4,14 +4,14 @@ import {
   normalizeEspnSupplementalSnapshot,
   normalizeEspnWebClientSnapshot,
   type EspnSessionSupplementalArtifact,
-} from "@fantasy/connector-espn";
+} from "@laces-out/connector-espn";
 import {
   leagueMemberships,
   leagueSeasons,
   providerConnections,
   providerLeagueLinks,
   type Database,
-} from "@fantasy/db";
+} from "@laces-out/db";
 import { and, eq } from "drizzle-orm";
 
 import type { EspnSessionCredentialPort } from "./espn-session-connection.js";

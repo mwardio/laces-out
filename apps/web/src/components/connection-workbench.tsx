@@ -77,7 +77,7 @@ interface UiMessage {
 
 class ConnectionUiError extends Error {}
 
-/* The ESPN bridge responses have schemas in `@fantasy/contracts` that the API already serves them
+/* The ESPN bridge responses have schemas in `@laces-out/contracts` that the API already serves them
    through, so they are validated with those rather than re-described here. The Yahoo status below
    has no shared schema yet, so its hand-written predicates stay until one exists. */
 

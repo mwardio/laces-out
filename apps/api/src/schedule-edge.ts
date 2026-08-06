@@ -7,7 +7,7 @@ import {
   type ScheduleEdgeResponse,
   type ScheduleEdgeSource,
   type ScheduleEdgeWindow,
-} from "@fantasy/contracts";
+} from "@laces-out/contracts";
 import {
   fantasyTeams,
   leagueMemberships,
@@ -27,7 +27,7 @@ import {
   type LeagueMembershipRole,
   type ProjectionVisibility,
   type ProviderName,
-} from "@fantasy/db";
+} from "@laces-out/db";
 import {
   NFL_POSITIONS,
   NFL_TEAMS,
@@ -39,7 +39,7 @@ import {
   type RosterSlot,
   type RosterSlotKind,
   type RosterSlotType,
-} from "@fantasy/domain";
+} from "@laces-out/domain";
 import {
   SCHEDULE_EDGE_DESCRIPTIVE_POLICY,
   SCHEDULE_EDGE_EVALUATION_ARTIFACT,
@@ -57,14 +57,14 @@ import {
   type ScheduleStrengthEntry,
   type ScheduleStrengthResult,
   type TeamScheduleResult,
-} from "@fantasy/league-analytics";
+} from "@laces-out/league-analytics";
 import {
   LEAGUE_SCORING_NORMALIZATION_VERSION,
   normalizeLeagueScoringProfile,
   projectionScoringProfileKey,
   type LeagueScoringNormalizationResult,
   type ProjectionScoringProfile,
-} from "@fantasy/projections";
+} from "@laces-out/projections";
 import { and, asc, desc, eq, inArray, ne, or, sql } from "drizzle-orm";
 
 import {

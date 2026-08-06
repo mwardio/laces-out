@@ -33,7 +33,7 @@ import {
   type FirstPartyWeeklyStatLine,
   type ProjectionScoringProfile,
   type ProjectionStatComponents,
-} from "@fantasy/projections";
+} from "@laces-out/projections";
 
 import {
   HISTORICAL_ROS_CANDIDATE_PAIR_VERSION,

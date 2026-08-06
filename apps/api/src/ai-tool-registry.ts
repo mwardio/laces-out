@@ -7,7 +7,7 @@ import {
   type AiToolName,
   type AiToolOutcome,
   type AiToolProvenance,
-} from "@fantasy/contracts";
+} from "@laces-out/contracts";
 import { boundedValue, neutralizeLeagueDataDelimiters, objectValue } from "./ai-bounded-text.js";
 import { AI_TOOL_LOOP_LIMITS } from "./ai-tool-loop.js";
 

@@ -1,6 +1,6 @@
-import type { DraftMarketBaseline } from "@fantasy/contracts";
-import { createRosterSlots, draftEventId, playerId, teamId } from "@fantasy/domain";
-import { reduceDraft, type DraftEvent, type SnakeDraftConfig } from "@fantasy/engine-draft";
+import type { DraftMarketBaseline } from "@laces-out/contracts";
+import { createRosterSlots, draftEventId, playerId, teamId } from "@laces-out/domain";
+import { reduceDraft, type DraftEvent, type SnakeDraftConfig } from "@laces-out/engine-draft";
 import { describe, expect, it, vi } from "vitest";
 
 import {

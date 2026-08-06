@@ -2,7 +2,7 @@ import {
   leagueRecapResponseSchema,
   recapPersonaCardListSchema,
   type LeagueWeeklyAwardsSection,
-} from "@fantasy/contracts";
+} from "@laces-out/contracts";
 import { describe, expect, it } from "vitest";
 
 import {

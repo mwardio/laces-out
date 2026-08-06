@@ -20,7 +20,7 @@ describe("escapeHtml", () => {
 describe("renderEmailConfirmationEmail", () => {
   const confirmUrl = "https://lacesout.app/verify-email#abc123";
 
-  it("carries the confirmation link as button and paste-able fallback, and states the window", () => {
+  it("carries the confirmation link as button and paste-able fallback", () => {
     const rendered = renderEmailConfirmationEmail({
       displayName: "Mack",
       confirmUrl,
@@ -29,9 +29,16 @@ describe("renderEmailConfirmationEmail", () => {
     expect(rendered.subject).toBe("Confirm your email to open your locker room");
     expect(rendered.html.split(escapeHtml(confirmUrl))).toHaveLength(3);
     expect(rendered.text).toContain(confirmUrl);
-    expect(rendered.html).toContain("24 hours");
-    expect(rendered.text).toContain("24 hours");
-    expect(rendered.text).toContain("Mack");
+    expect(rendered.html).toContain("League domination awaits.");
+    expect(rendered.text).toContain("League domination awaits.");
+    expect(rendered.html).toContain(
+      "Welcome to Laces Out, Mack! Activate your account to unlock draft help",
+    );
+    expect(rendered.text).toContain(
+      "Welcome to Laces Out, Mack! Activate your account to unlock draft help",
+    );
+    expect(rendered.html).not.toContain("24 hours");
+    expect(rendered.text).not.toContain("24 hours");
   });
 
   it("tells an unintended recipient that ignoring it is safe", () => {
@@ -107,6 +114,7 @@ describe("shared layout", () => {
       expect(rendered.text).not.toContain("<");
       expect(rendered.text.length).toBeGreaterThan(100);
       expect(rendered.html).toContain("LACES&nbsp;OUT");
+      expect(rendered.html).toContain('src="https://lacesout.app/icon-192.png"');
     }
   });
 });

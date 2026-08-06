@@ -1,6 +1,6 @@
 "use client";
 
-import type { AiProviderConfiguration, AiProviderName } from "@fantasy/contracts";
+import type { AiProviderConfiguration, AiProviderName } from "@laces-out/contracts";
 import {
   AlertCircle,
   ArrowUpRight,

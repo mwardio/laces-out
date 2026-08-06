@@ -4,7 +4,7 @@ import {
   type PlayerId,
   type Position,
   type RosterSlot,
-} from "@fantasy/domain";
+} from "@laces-out/domain";
 
 export interface DraftAdvisorPlayer {
   readonly playerId: PlayerId;

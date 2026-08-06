@@ -1,4 +1,4 @@
-import type { DerivedNumericMetric } from "@fantasy/league-analytics";
+import type { DerivedNumericMetric } from "@laces-out/league-analytics";
 import { describe, expect, it } from "vitest";
 
 import {

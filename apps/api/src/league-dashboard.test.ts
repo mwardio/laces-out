@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { leagueDashboardSchema } from "@fantasy/contracts";
+import { leagueDashboardSchema } from "@laces-out/contracts";
 
 import { LeagueDashboardService, type LeagueDashboardRepository } from "./league-dashboard.js";
 import type { LeagueDashboardError } from "./league-dashboard.js";
