@@ -18,6 +18,16 @@ timestamps, sanitized error code, and sync-device label, but never an ESPN respo
 token. Logs are configured to redact passwords, session material, OAuth
 credentials, authorization headers, and known ESPN credential fields.
 
+When the operator configures outbound SMTP email, the deployment can send account email to the
+member's registered address: a requested password-reset link, at most one league-setup reminder,
+and, when confirm-first registration is enabled, an account-confirmation link. It stores a
+send-once ledger row for the reminder (which kind, which account, when), the account's
+email-confirmation timestamp, and SHA-256 digests of outstanding confirmation and reset tokens,
+never message content or a plaintext token. Confirmation and reset links keep their bearer token
+in the URL fragment so it is not sent in the initial web request. The Settings **Email updates**
+toggle suppresses the optional reminder; confirmation and password-reset email exist only in
+response to a member's own action. Recipient addresses are never written to logs.
+
 Film Room is available by default through the operator's server-side Google AI Studio project and
 fixed `gemini-3.6-flash` model. An ordinary Film Room request sends the member's question or workflow
 instructions plus a bounded snapshot of that member's authorized league overview, Decision Desk,

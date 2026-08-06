@@ -24,7 +24,10 @@ try {
   }
 
   const passwordHash = await hashOwnerPassword(password);
-  await database.db.insert(users).values({ email, displayName, passwordHash, role: "admin" });
+  // Operator-created accounts activate immediately; null email_verified_at means pending only.
+  await database.db
+    .insert(users)
+    .values({ email, displayName, passwordHash, role: "admin", emailVerifiedAt: new Date() });
   // Avoid logging the supplied email; it is not needed to confirm success.
   process.stdout.write(
     "Owner administrator account created. Clear OWNER_PASSWORD from the environment now.\n",

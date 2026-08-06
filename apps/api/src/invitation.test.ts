@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 
 import type { ApplicationRole, LeagueMembershipRole } from "@fantasy/db";
 
+import { hashSessionToken } from "./auth.js";
 import {
   deriveInvitationKeyring,
   hashInvitationEmail,
@@ -50,6 +51,10 @@ class MemoryInvitationRepository implements InvitationRepository {
   readonly invitations = new Map<string, MemoryInvitation>();
   readonly users = new Map<string, MemoryUser>();
   readonly memberships = new Map<string, LeagueMembershipRole>();
+  readonly verificationTokens = new Map<
+    string,
+    { readonly userId: string; readonly expiresAt: Date }
+  >();
   #sequence = 10;
   #acceptTail: Promise<void> = Promise.resolve();
 
@@ -156,6 +161,12 @@ class MemoryInvitationRepository implements InvitationRepository {
           role: invitation.role,
         };
         this.users.set(user.id, user);
+        if (input.identity.verification) {
+          this.verificationTokens.set(input.identity.verification.tokenHash, {
+            userId: user.id,
+            expiresAt: input.identity.verification.expiresAt,
+          });
+        }
         createdUser = true;
       }
       if (invitation.role === "admin") user.role = "admin";
@@ -179,6 +190,10 @@ class MemoryInvitationRepository implements InvitationRepository {
           invitationId: invitation.id,
           user: { id: user.id, email: user.email, displayName: user.displayName },
           createdUser,
+          verificationRequired:
+            createdUser &&
+            input.identity.kind === "new_user" &&
+            input.identity.verification !== undefined,
           membership,
         },
       };
@@ -311,6 +326,7 @@ describe("InvitationService", () => {
     });
 
     expect(acceptance.createdUser).toBe(true);
+    expect(acceptance.verificationRequired).toBe(false);
     expect(acceptance.user).toMatchObject({
       email: "new.friend@example.com",
       displayName: "New Friend",
@@ -319,6 +335,91 @@ describe("InvitationService", () => {
     const persistedUser = repository.findUserByEmail("NEW.FRIEND@example.com");
     expect(persistedUser?.passwordHash).not.toBe("a long unique password");
     expect(await verify(persistedUser?.passwordHash ?? "", "a long unique password")).toBe(true);
+    await expect(invitations.inspect(created.token)).rejects.toMatchObject({
+      code: "INVITATION_UNAVAILABLE",
+    });
+  });
+
+  it("preserves invitation membership while a new account awaits confirmation", async () => {
+    const repository = new MemoryInvitationRepository();
+    const verificationToken = "v".repeat(43);
+    const sends: unknown[] = [];
+    const invitations = new InvitationService(repository, KEYRING, {
+      now: () => NOW,
+      confirmation: {
+        webUrl: "https://lacesout.app",
+        tokenFactory: () => verificationToken,
+        delivery: {
+          sendConfirmationEmail: (input) => {
+            sends.push(input);
+            return Promise.resolve();
+          },
+        },
+      },
+    });
+    const created = await invitations.create({
+      invitedByUserId: ADMIN_ID,
+      email: "new.friend@example.com",
+      scope: { leagueId: LEAGUE_ID, leagueRole: "manager" },
+    });
+
+    const acceptance = await invitations.accept({
+      token: created.token,
+      displayName: "New Friend",
+      password: "a long unique password",
+    });
+
+    expect(acceptance).toMatchObject({
+      createdUser: true,
+      verificationRequired: true,
+      membership: { leagueId: LEAGUE_ID, role: "manager" },
+    });
+    expect(repository.verificationTokens.get(hashSessionToken(verificationToken))).toEqual({
+      userId: acceptance.user.id,
+      expiresAt: new Date("2026-07-17T12:00:00.000Z"),
+    });
+    expect(sends).toEqual([
+      {
+        email: "new.friend@example.com",
+        displayName: "New Friend",
+        confirmUrl: `https://lacesout.app/verify-email#${verificationToken}`,
+        expiresHours: 24,
+      },
+    ]);
+  });
+
+  it("keeps the accepted invitation recoverable when confirmation delivery fails", async () => {
+    const repository = new MemoryInvitationRepository();
+    const deliveryErrors: unknown[] = [];
+    const invitations = new InvitationService(repository, KEYRING, {
+      now: () => NOW,
+      confirmation: {
+        webUrl: "https://lacesout.app",
+        tokenFactory: () => "v".repeat(43),
+        delivery: {
+          sendConfirmationEmail: () => Promise.reject(new Error("transport unavailable")),
+        },
+        onDeliveryError: (error) => deliveryErrors.push(error),
+      },
+    });
+    const created = await invitations.create({
+      invitedByUserId: ADMIN_ID,
+      email: "delivery.failure@example.com",
+      scope: { leagueId: LEAGUE_ID, leagueRole: "viewer" },
+    });
+
+    const acceptance = await invitations.accept({
+      token: created.token,
+      displayName: "Delivery Failure",
+      password: "a long unique password",
+    });
+
+    expect(acceptance).toMatchObject({
+      verificationRequired: true,
+      membership: { leagueId: LEAGUE_ID, role: "viewer" },
+    });
+    expect(repository.verificationTokens.size).toBe(1);
+    expect(deliveryErrors).toHaveLength(1);
     await expect(invitations.inspect(created.token)).rejects.toMatchObject({
       code: "INVITATION_UNAVAILABLE",
     });

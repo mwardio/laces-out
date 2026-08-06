@@ -3,12 +3,15 @@ import { and, eq } from "drizzle-orm";
 
 /**
  * Member preferences, deliberately narrow. `user_preferences` also stores a theme, a timezone,
- * and digest settings, but the app has no dark mode, formats every date in the viewer's own zone
- * already, and sends no email — exposing those would be three controls that do nothing. Only the
- * default league, which the dashboard and Decision Desk otherwise guess at, is served here.
+ * and a digest cadence, but the app has no dark mode, formats every date in the viewer's own zone
+ * already, and sends no digest — exposing those would be controls that do nothing. What is served:
+ * the default league, which the dashboard and Decision Desk otherwise guess at, and the email
+ * opt-out the worker's nudge sweep honors. Password reset email ignores the opt-out on purpose —
+ * it is requested, not broadcast.
  */
 export interface MemberPreferences {
   readonly defaultLeagueId: string | null;
+  readonly emailNotifications: boolean;
 }
 
 export interface PreferencesRepository {
@@ -26,7 +29,10 @@ export class DrizzlePreferencesRepository implements PreferencesRepository {
 
   async find(userId: string): Promise<MemberPreferences | undefined> {
     const [row] = await this.#database
-      .select({ defaultLeagueId: userPreferences.defaultLeagueId })
+      .select({
+        defaultLeagueId: userPreferences.defaultLeagueId,
+        emailNotifications: userPreferences.emailNotifications,
+      })
       .from(userPreferences)
       .where(eq(userPreferences.userId, userId))
       .limit(1);
@@ -36,10 +42,19 @@ export class DrizzlePreferencesRepository implements PreferencesRepository {
   async upsert(userId: string, preferences: MemberPreferences, now: Date): Promise<void> {
     await this.#database
       .insert(userPreferences)
-      .values({ userId, defaultLeagueId: preferences.defaultLeagueId, updatedAt: now })
+      .values({
+        userId,
+        defaultLeagueId: preferences.defaultLeagueId,
+        emailNotifications: preferences.emailNotifications,
+        updatedAt: now,
+      })
       .onConflictDoUpdate({
         target: userPreferences.userId,
-        set: { defaultLeagueId: preferences.defaultLeagueId, updatedAt: now },
+        set: {
+          defaultLeagueId: preferences.defaultLeagueId,
+          emailNotifications: preferences.emailNotifications,
+          updatedAt: now,
+        },
       });
   }
 
@@ -67,7 +82,9 @@ export class PreferencesService {
   }
 
   async get(userId: string): Promise<MemberPreferences> {
-    return (await this.#repository.find(userId)) ?? { defaultLeagueId: null };
+    return (
+      (await this.#repository.find(userId)) ?? { defaultLeagueId: null, emailNotifications: true }
+    );
   }
 
   /** A default the member does not belong to would silently fail every read that used it. */

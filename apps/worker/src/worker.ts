@@ -1,6 +1,7 @@
 import { loadEnvironment } from "@fantasy/config";
 import { drizzleChangeEventProducers, emitProviderSyncChangeEvents } from "@fantasy/change-events";
 import { createDatabase } from "@fantasy/db";
+import { createSmtpEmailTransport } from "@fantasy/email";
 import { DrizzleInSeasonDecisionRepository, InSeasonDecisionService } from "@fantasy/decisions";
 import {
   DrizzleYahooSyncRepository,
@@ -34,6 +35,7 @@ import {
   DrizzleChangeEventNotificationRepository,
 } from "./change-event-notifications.js";
 import { DrizzleInjuryChangeEventRepository } from "./injury-change-events.js";
+import { DrizzleLeagueSyncNudgeRepository, LeagueSyncNudgeService } from "./league-sync-nudge.js";
 import { DrizzleLineupLockRepository, LineupLockAlertService } from "./lineup-lock-alerts.js";
 import { currentNflSeason } from "./nfl-season.js";
 import {
@@ -104,6 +106,29 @@ const notificationSweepService = createNotificationSweepService({
         }),
       }
     : {}),
+});
+// Outbound email mirrors web push: without a complete SMTP identity the transport is absent and
+// the scheduled email sweep completes as a stated no-op, the default state of an existing install.
+const emailTransport =
+  environment.SMTP_HOST &&
+  environment.SMTP_USER &&
+  environment.SMTP_PASSWORD &&
+  environment.EMAIL_FROM
+    ? createSmtpEmailTransport(
+        {
+          host: environment.SMTP_HOST,
+          port: environment.SMTP_PORT,
+          user: environment.SMTP_USER,
+          password: environment.SMTP_PASSWORD,
+          from: environment.EMAIL_FROM,
+        },
+        (failure) => logger.warn(failure, "outbound email send failed"),
+      )
+    : undefined;
+const emailSweepService = new LeagueSyncNudgeService({
+  repository: new DrizzleLeagueSyncNudgeRepository(database.db),
+  ...(emailTransport ? { transport: emailTransport } : {}),
+  webUrl: environment.WEB_URL,
 });
 // Server-held credentials are always encrypted with a deployment-owned key. Yahoo uses OAuth;
 // ESPN's optional session mode is an explicit, read-only opt-in and remains disabled by default.
@@ -350,6 +375,7 @@ async function start(): Promise<void> {
   await registerQueues(boss);
   await registerWorkers(boss, logger, {
     dataHealth: dataHealthService,
+    emailSweep: emailSweepService,
     leagueSync: leagueSyncService,
     notificationSweep: notificationSweepService,
     recommendationRecompute: recommendationRecomputeService,

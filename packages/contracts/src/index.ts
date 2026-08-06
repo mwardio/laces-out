@@ -3448,9 +3448,21 @@ export const createBrowserHandoffResponseSchema = z
 export type CreateBrowserHandoffResponse = z.infer<typeof createBrowserHandoffResponseSchema>;
 
 export const memberPreferencesSchema = z
-  .object({ defaultLeagueId: z.string().uuid().nullable() })
+  .object({
+    defaultLeagueId: z.string().uuid().nullable(),
+    /** Gates optional account email (the league-setup reminder), never password reset email. */
+    emailNotifications: z.boolean(),
+  })
   .strict();
 export type MemberPreferencesContract = z.infer<typeof memberPreferencesSchema>;
+
+/** Partial for backwards-compatible clients that only know one preference field. */
+export const memberPreferencesUpdateSchema = memberPreferencesSchema
+  .partial()
+  .refine((value) => Object.keys(value).length > 0, {
+    message: "At least one preference is required",
+  });
+export type MemberPreferencesUpdateContract = z.infer<typeof memberPreferencesUpdateSchema>;
 
 /**
  * Public, non-secret feature identifiers a native client may use before signing in. Keep this a
@@ -3462,6 +3474,7 @@ export const mobileCapabilitySchema = z.enum([
   "activity-feed",
   "authenticated-browser-handoff",
   "cookie-authentication",
+  "email-verification-v1",
   "espn-automated-refresh",
   "espn-native-session-grant-v1",
   "espn-server-session-v1",

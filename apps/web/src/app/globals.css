@@ -5175,6 +5175,10 @@
     grid-template-columns: minmax(360px, 0.82fr) minmax(480px, 1.18fr);
     background: var(--paper-100);
   }
+  /* Password-recovery pages: same room, no story column. */
+  .login-page--single {
+    grid-template-columns: 1fr;
+  }
   .login-story {
     position: relative;
     display: flex;
@@ -5371,6 +5375,15 @@
   .password-label-row span {
     color: var(--ink-400);
     font-size: var(--text-11);
+  }
+  .password-label-row a {
+    color: var(--ink-500);
+    font-size: var(--text-11);
+    text-decoration: underline;
+    text-underline-offset: 3px;
+  }
+  .password-label-row a:hover {
+    color: var(--ink-900);
   }
   .password-field {
     display: flex;

@@ -4,6 +4,7 @@ import type { Logger } from "pino";
 import {
   assertDataHealthJob,
   assertDataRefreshJob,
+  assertEmailSweepJob,
   assertLeagueSyncJob,
   assertNotificationSweepJob,
   assertProjectionRefreshJob,
@@ -14,6 +15,7 @@ import {
 import type {
   DataHealthJob,
   DataRefreshJob,
+  EmailSweepJob,
   LeagueSyncJob,
   NotificationSweepJob,
   ProjectionRefreshJob,
@@ -102,6 +104,19 @@ export interface NotificationSweepService {
   sweep(job: NotificationSweepJob, context: WorkerJobContext): Promise<NotificationSweepResult>;
 }
 
+export interface EmailSweepResult {
+  readonly considered: number;
+  readonly sent: number;
+  readonly duplicates: number;
+  readonly failures: number;
+  /** Set when the sweep did nothing on purpose, most often because SMTP is not configured. */
+  readonly skipped: string | null;
+}
+
+export interface EmailSweepService {
+  sweep(job: EmailSweepJob, context: WorkerJobContext): Promise<EmailSweepResult>;
+}
+
 export interface WorkerServices {
   readonly leagueSync?: LeagueSyncService;
   readonly projectionRefresh?: ProjectionRefreshService;
@@ -109,6 +124,7 @@ export interface WorkerServices {
   readonly recommendationRecompute?: RecommendationRecomputeService;
   readonly dataHealth?: DataHealthService;
   readonly notificationSweep?: NotificationSweepService;
+  readonly emailSweep?: EmailSweepService;
   readonly refreshPlayerData?: (
     force: boolean,
   ) => Promise<Readonly<Record<string, SourceRefreshResult>>>;
@@ -225,6 +241,20 @@ export async function registerWorkers(
       logger.info(
         { jobId: job.id, kind: job.data.kind, reason: job.data.reason, result },
         "notification sweep completed",
+      );
+    }
+  });
+
+  await boss.work<EmailSweepJob>(queueNames.emailSweep, workOptions, async (jobs) => {
+    const service = requireService(services.emailSweep, "Email sweep");
+    for (const job of jobs) {
+      assertNotAborted(job);
+      assertEmailSweepJob(job.data);
+      const result = await service.sweep(job.data, { jobId: job.id, signal: job.signal });
+      // Counts only. A recipient address or message body never reaches the log.
+      logger.info(
+        { jobId: job.id, kind: job.data.kind, reason: job.data.reason, result },
+        "email sweep completed",
       );
     }
   });

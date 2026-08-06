@@ -22,6 +22,15 @@ x-app-environment: &app-environment
   VAPID_SUBJECT: ${VAPID_SUBJECT:-}
   LOG_LEVEL: ${LOG_LEVEL:-info}
 
+# SMTP credentials are intentionally limited to the two processes that send mail. Migration,
+# projection, and web containers do not receive them.
+x-email-environment: &email-environment
+  SMTP_HOST: ${SMTP_HOST:-}
+  SMTP_PORT: ${SMTP_PORT:-587}
+  SMTP_USER: ${SMTP_USER:-}
+  SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+  EMAIL_FROM: ${EMAIL_FROM:-}
+
 x-service-defaults: &service-defaults
   init: true
   restart: unless-stopped
@@ -91,7 +100,7 @@ services:
         NEXT_PUBLIC_REGISTRATION_OPEN: ${REGISTRATION_OPEN:-false}
         NEXT_PUBLIC_YAHOO_ACCESS_STATUS: ${NEXT_PUBLIC_YAHOO_ACCESS_STATUS:-pending}
     environment:
-      <<: *app-environment
+      <<: [*app-environment, *email-environment]
       # Extra browser origins served by the same gateway, comma separated. WEB_URL stays canonical
       # for every link the API builds; this only widens which Origin headers are accepted.
       ADDITIONAL_WEB_ORIGINS: ${ADDITIONAL_WEB_ORIGINS:-}
@@ -101,6 +110,8 @@ services:
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
       MANAGED_AI_DAILY_REQUEST_LIMIT: ${MANAGED_AI_DAILY_REQUEST_LIMIT:-50}
       MANAGED_AI_MAX_OUTPUT_TOKENS: ${MANAGED_AI_MAX_OUTPUT_TOKENS:-2000}
+      # Delivery support and confirm-first enforcement roll out independently.
+      EMAIL_VERIFICATION_ENABLED: ${EMAIL_VERIFICATION_ENABLED:-false}
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -139,7 +150,8 @@ services:
         NEXT_PUBLIC_CLOUDFLARE_ANALYTICS: ${NEXT_PUBLIC_CLOUDFLARE_ANALYTICS:-disabled}
         NEXT_PUBLIC_REGISTRATION_OPEN: ${REGISTRATION_OPEN:-false}
         NEXT_PUBLIC_YAHOO_ACCESS_STATUS: ${NEXT_PUBLIC_YAHOO_ACCESS_STATUS:-pending}
-    environment: *app-environment
+    environment:
+      <<: [*app-environment, *email-environment]
     depends_on:
       migrate:
         condition: service_completed_successfully

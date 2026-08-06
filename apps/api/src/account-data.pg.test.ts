@@ -782,6 +782,7 @@ describe.skipIf(!postgresAvailable)("account data repository against real Postgr
       email: "stale-login@example.test",
       displayName: "Stale Login",
       passwordHash: originalHash,
+      emailVerifiedAt: NOW,
     });
 
     const authRepository = new DrizzleAuthRepository(db);

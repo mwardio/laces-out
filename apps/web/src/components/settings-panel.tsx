@@ -155,6 +155,7 @@ export function SettingsPanel() {
   const [user, setUser] = useState<SessionUser | null>(null);
   const [leagues, setLeagues] = useState<LeagueListResponse["leagues"]>([]);
   const [defaultLeagueId, setDefaultLeagueId] = useState("");
+  const [emailNotifications, setEmailNotifications] = useState(true);
   const [loading, setLoading] = useState(true);
   const [preferenceStatus, setPreferenceStatus] = useState<Status>({ state: "idle" });
   const [passwordStatus, setPasswordStatus] = useState<Status>({ state: "idle" });
@@ -354,13 +355,12 @@ export function SettingsPanel() {
     setUser(session?.user ?? null);
     setLeagues(leagueList?.leagues ?? []);
     setPushConfiguration(configuration ?? { available: false, publicKey: null });
-    if (
-      preferences &&
-      typeof preferences === "object" &&
-      "defaultLeagueId" in preferences &&
-      typeof (preferences as { defaultLeagueId?: unknown }).defaultLeagueId === "string"
-    ) {
-      setDefaultLeagueId((preferences as { defaultLeagueId: string }).defaultLeagueId);
+    if (preferences && typeof preferences === "object") {
+      const stored = preferences as { defaultLeagueId?: unknown; emailNotifications?: unknown };
+      if (typeof stored.defaultLeagueId === "string") setDefaultLeagueId(stored.defaultLeagueId);
+      if (typeof stored.emailNotifications === "boolean") {
+        setEmailNotifications(stored.emailNotifications);
+      }
     }
     if (configuration?.available && session?.user) await loadPushDevices();
     setLoading(false);
@@ -391,7 +391,7 @@ export function SettingsPanel() {
         method: "PATCH",
         credentials: "include",
         headers: { "Content-Type": "application/json", Accept: "application/json" },
-        body: JSON.stringify({ defaultLeagueId: defaultLeagueId || null }),
+        body: JSON.stringify({ defaultLeagueId: defaultLeagueId || null, emailNotifications }),
       });
       if (!response.ok) {
         throw new Error(await problemDetail(response, "Your preferences could not be saved."));
@@ -770,15 +770,15 @@ export function SettingsPanel() {
             <div className={styles.panelHeading}>
               <div>
                 <p>Preferences</p>
-                <h2 id="default-league-title">Default league</h2>
+                <h2 id="default-league-title">Default league &amp; email</h2>
               </div>
             </div>
-            {leagues.length === 0 ? (
-              <p className={styles.note}>
-                Connect a league first and it will appear here as a choice.
-              </p>
-            ) : (
-              <form className={styles.form} onSubmit={savePreferences}>
+            <form className={styles.form} onSubmit={savePreferences}>
+              {leagues.length === 0 ? (
+                <p className={styles.note}>
+                  Connect a league first and it will appear here as a choice.
+                </p>
+              ) : (
                 <label>
                   <span>Open first</span>
                   <select
@@ -793,16 +793,28 @@ export function SettingsPanel() {
                     ))}
                   </select>
                 </label>
-                <button type="submit" disabled={preferenceStatus.state === "saving"}>
-                  {preferenceStatus.state === "saving" ? (
-                    <LoaderCircle className={styles.spin} size={15} aria-hidden="true" />
-                  ) : (
-                    <CheckCircle2 size={15} aria-hidden="true" />
-                  )}
-                  Save
-                </button>
-              </form>
-            )}
+              )}
+              <label className={styles.checkboxRow}>
+                <input
+                  type="checkbox"
+                  checked={emailNotifications}
+                  onChange={(event) => setEmailNotifications(event.target.checked)}
+                />
+                <span>
+                  <strong>Email updates</strong>
+                  Occasional account email, like the one-time league-setup reminder. Password resets
+                  ignore this preference.
+                </span>
+              </label>
+              <button type="submit" disabled={preferenceStatus.state === "saving"}>
+                {preferenceStatus.state === "saving" ? (
+                  <LoaderCircle className={styles.spin} size={15} aria-hidden="true" />
+                ) : (
+                  <CheckCircle2 size={15} aria-hidden="true" />
+                )}
+                Save
+              </button>
+            </form>
             <StatusLine status={preferenceStatus} />
           </section>
 

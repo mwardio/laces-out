@@ -22,6 +22,11 @@ export interface AuthUserRecord {
   readonly displayName: string;
   readonly passwordHash: string | null;
   readonly role: ApplicationRole;
+  /**
+   * Explicit null means the account was created pending email confirmation and never activated.
+   * Absent (legacy repositories, fakes) reads as verified, matching the migration backfill.
+   */
+  readonly emailVerifiedAt?: Date | null;
 }
 
 export interface SessionUser {
@@ -155,10 +160,13 @@ export class AuthService {
     return { token, expiresAt, user: publicUser(user) };
   }
 
-  async login(email: string, password: string): Promise<LoginResult | undefined> {
+  async login(email: string, password: string): Promise<LoginResult | "unverified" | undefined> {
     const user = await this.#repository.findUserByEmail(email.trim().toLowerCase());
     const valid = await verifyOwnerPassword(user?.passwordHash, password);
     if (!user || !user.passwordHash || !valid) return undefined;
+    // Only revealed behind a correct password: a dormant account stays indistinguishable from a
+    // missing one to anyone who cannot already authenticate as it.
+    if (user.emailVerifiedAt === null) return "unverified";
     return this.#createSession(user, user.passwordHash);
   }
 

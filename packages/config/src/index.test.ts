@@ -17,6 +17,7 @@ describe("loadEnvironment", () => {
     expect(environment.REGISTRATION_INVITE_CODE).toBeUndefined();
     expect(environment.ESPN_PUBLIC_DIRECT_SYNC_ENABLED).toBe(false);
     expect(environment.YAHOO_AUTOMATED_SYNC_ENABLED).toBe(false);
+    expect(environment.EMAIL_VERIFICATION_ENABLED).toBe(false);
   });
 
   it("parses the ESPN public-direct release gate without enabling it by default", () => {
@@ -267,5 +268,75 @@ describe("loadEnvironment", () => {
         VAPID_SUBJECT: "https://laces.mward.io",
       }),
     ).toThrow();
+  });
+
+  it("leaves outbound email unconfigured by default with the standard submission port", () => {
+    const environment = loadEnvironment({});
+    expect(environment.SMTP_HOST).toBeUndefined();
+    expect(environment.SMTP_USER).toBeUndefined();
+    expect(environment.SMTP_PASSWORD).toBeUndefined();
+    expect(environment.EMAIL_FROM).toBeUndefined();
+    expect(environment.SMTP_PORT).toBe(587);
+  });
+
+  it("accepts a complete SMTP identity and rejects a partial one", () => {
+    const complete = {
+      SMTP_HOST: "smtp.mail.me.com",
+      SMTP_USER: "operator@icloud.com",
+      SMTP_PASSWORD: "app-specific-password",
+      EMAIL_FROM: "Laces Out <noreply@lacesout.app>",
+    };
+    const environment = loadEnvironment(complete);
+    expect(environment.SMTP_HOST).toBe("smtp.mail.me.com");
+    expect(environment.EMAIL_FROM).toBe("Laces Out <noreply@lacesout.app>");
+    expect(() => loadEnvironment({ SMTP_HOST: complete.SMTP_HOST })).toThrow(
+      "Outbound email requires SMTP_HOST, SMTP_USER, SMTP_PASSWORD, and EMAIL_FROM together",
+    );
+    expect(() => loadEnvironment({ EMAIL_FROM: complete.EMAIL_FROM })).toThrow(
+      "Outbound email requires SMTP_HOST, SMTP_USER, SMTP_PASSWORD, and EMAIL_FROM together",
+    );
+  });
+
+  it("enables email verification only with a complete SMTP identity", () => {
+    const complete = {
+      SMTP_HOST: "smtp.mail.me.com",
+      SMTP_USER: "operator@icloud.com",
+      SMTP_PASSWORD: "app-specific-password",
+      EMAIL_FROM: "Laces Out <noreply@lacesout.app>",
+      EMAIL_VERIFICATION_ENABLED: "true",
+    };
+    expect(loadEnvironment(complete).EMAIL_VERIFICATION_ENABLED).toBe(true);
+    expect(() => loadEnvironment({ EMAIL_VERIFICATION_ENABLED: "true" })).toThrow(
+      "EMAIL_VERIFICATION_ENABLED requires complete outbound email configuration",
+    );
+  });
+
+  it("accepts a bare From address and rejects a malformed one", () => {
+    const base = {
+      SMTP_HOST: "smtp.mail.me.com",
+      SMTP_USER: "operator@icloud.com",
+      SMTP_PASSWORD: "app-specific-password",
+    };
+    expect(loadEnvironment({ ...base, EMAIL_FROM: "noreply@lacesout.app" }).EMAIL_FROM).toBe(
+      "noreply@lacesout.app",
+    );
+    expect(() => loadEnvironment({ ...base, EMAIL_FROM: "not-an-address" })).toThrow();
+    expect(() => loadEnvironment({ ...base, EMAIL_FROM: "Laces Out <not-an-address>" })).toThrow();
+  });
+
+  it("rejects a placeholder SMTP password in production", () => {
+    expect(() =>
+      loadEnvironment({
+        NODE_ENV: "production",
+        WEB_URL: "https://laces.example.app",
+        DATABASE_URL: "postgres://owner:distinct-secret@db:5432/fantasy",
+        SESSION_SECRET: "s".repeat(48),
+        CREDENTIAL_ENCRYPTION_KEY: "c".repeat(48),
+        SMTP_HOST: "smtp.mail.me.com",
+        SMTP_USER: "operator@icloud.com",
+        SMTP_PASSWORD: "replace-with-app-specific-password",
+        EMAIL_FROM: "noreply@lacesout.app",
+      }),
+    ).toThrow("Unsafe production placeholder configuration: SMTP_PASSWORD");
   });
 });

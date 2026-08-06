@@ -116,17 +116,39 @@ describe("AuthService", () => {
     const service = new AuthService(repository, () => new Date("2026-07-16T12:00:00Z"));
 
     const result = await service.login("OWNER@example.com", "a genuinely long password");
-    expect(result?.token).toHaveLength(43);
+    const session = typeof result === "object" ? result : undefined;
+    expect(session?.token).toHaveLength(43);
     expect(repository.sessions.size).toBe(1);
-    expect(await service.validate(result?.token)).toEqual({
+    expect(await service.validate(session?.token)).toEqual({
       id: "owner",
       email: "owner@example.com",
       displayName: "Owner",
       role: "admin",
     });
 
-    await service.logout(result?.token);
-    expect(await service.validate(result?.token)).toBeUndefined();
+    await service.logout(session?.token);
+    expect(await service.validate(session?.token)).toBeUndefined();
+  });
+
+  it("blocks sign-in for a never-confirmed account, only behind the correct password", async () => {
+    const repository = new MemoryAuthRepository();
+    repository.users.push({
+      id: "pending",
+      email: "pending@example.com",
+      displayName: "Pending",
+      passwordHash: await hashOwnerPassword("a genuinely long password"),
+      role: "member",
+      emailVerifiedAt: null,
+    });
+    const service = new AuthService(repository);
+
+    expect(await service.login("pending@example.com", "a genuinely long password")).toBe(
+      "unverified",
+    );
+    // A wrong password answers exactly as it would for any account: the pending state is never
+    // disclosed to a caller who cannot already authenticate.
+    expect(await service.login("pending@example.com", "the wrong password!!")).toBeUndefined();
+    expect(repository.sessions.size).toBe(0);
   });
 
   it("rejects an invalid password", async () => {
@@ -160,7 +182,9 @@ describe("AuthService.changePassword", () => {
     const service = new AuthService(repository, () => new Date("2026-07-16T12:00:00Z"));
     const first = await service.login("member@example.com", "the original password");
     const second = await service.login("member@example.com", "the original password");
-    if (!first || !second) throw new Error("expected two sessions");
+    if (typeof first !== "object" || typeof second !== "object") {
+      throw new Error("expected two sessions");
+    }
     expect(repository.sessions.size).toBe(2);
     return { repository, service, token: first.token };
   }

@@ -81,6 +81,7 @@ export type BridgeClientKind = "chrome-extension" | "ios-app";
  */
 /** `change-event` means one digest per member per sweep, never one push per event. */
 export type NotificationKind = "lineup-lock" | "change-event";
+export type EmailSendKind = "league-sync-nudge";
 
 export interface FirstPartyRosAvailabilityWeek {
   readonly week: number;
@@ -141,6 +142,13 @@ export const users = pgTable(
     displayName: text("display_name").notNull(),
     passwordHash: text("password_hash"),
     role: text("role").$type<ApplicationRole>().notNull().default("member"),
+    /**
+     * Null means exactly one thing: the account was created pending email confirmation and has
+     * never proven inbox access. Accounts created without confirmation (no SMTP configured,
+     * operator CLI, pre-feature rows) are stamped verified at creation/migration, so sign-in can
+     * gate on null unconditionally without ever locking out a legitimately live account.
+     */
+    emailVerifiedAt: timestamp("email_verified_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
@@ -165,6 +173,74 @@ export const sessions = pgTable(
   (table) => [
     uniqueIndex("sessions_token_hash_unique").on(table.tokenHash),
     index("sessions_user_idx").on(table.userId),
+  ],
+);
+
+/**
+ * One outstanding self-service password reset link. The emailed token is never persisted — only
+ * its SHA-256 digest, shaped exactly like a session token hash. Requesting a new link deletes the
+ * previous unused rows, and redemption marks the row used inside the same transaction that
+ * replaces the password and revokes every session.
+ */
+export const passwordResetTokens = pgTable(
+  "password_reset_tokens",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    tokenHash: text("token_hash").notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    usedAt: timestamp("used_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("password_reset_tokens_token_hash_unique").on(table.tokenHash),
+    index("password_reset_tokens_user_idx").on(table.userId),
+    index("password_reset_tokens_expires_idx").on(table.expiresAt),
+    check("password_reset_tokens_hash_check", sql`${table.tokenHash} ~ '^[A-Za-z0-9_-]{43}$'`),
+    check(
+      "password_reset_tokens_lifetime_check",
+      sql`${table.expiresAt} > ${table.createdAt} and ${table.expiresAt} <= ${table.createdAt} + interval '60 minutes'`,
+    ),
+    check(
+      "password_reset_tokens_used_check",
+      sql`${table.usedAt} is null or ${table.usedAt} >= ${table.createdAt}`,
+    ),
+  ],
+);
+
+/**
+ * One outstanding email-confirmation link for a pending account, shaped exactly like
+ * `password_reset_tokens`: only the SHA-256 digest is stored, a newer request supersedes older
+ * unused rows, and redemption is single-use inside the transaction that marks the account
+ * verified.
+ */
+export const emailVerificationTokens = pgTable(
+  "email_verification_tokens",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    tokenHash: text("token_hash").notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    usedAt: timestamp("used_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("email_verification_tokens_token_hash_unique").on(table.tokenHash),
+    index("email_verification_tokens_user_idx").on(table.userId),
+    index("email_verification_tokens_expires_idx").on(table.expiresAt),
+    check("email_verification_tokens_hash_check", sql`${table.tokenHash} ~ '^[A-Za-z0-9_-]{43}$'`),
+    check(
+      "email_verification_tokens_lifetime_check",
+      sql`${table.expiresAt} > ${table.createdAt} and ${table.expiresAt} <= ${table.createdAt} + interval '24 hours'`,
+    ),
+    check(
+      "email_verification_tokens_used_check",
+      sql`${table.usedAt} is null or ${table.usedAt} >= ${table.createdAt}`,
+    ),
   ],
 );
 
@@ -414,6 +490,33 @@ export const notificationDeliveries = pgTable(
       sql`char_length(btrim(${table.idempotencyKey})) between 1 and 200`,
     ),
     check("notification_deliveries_device_count_check", sql`${table.deliveredDeviceCount} >= 0`),
+  ],
+);
+
+/**
+ * Send-once ledger for outbound email, mirroring `notification_deliveries`: the unique
+ * idempotency-key insert is the claim, so a sweep re-run, a restart, or two racing processes send
+ * one email per occasion. Rows record that an email went out, never what it said.
+ */
+export const emailSends = pgTable(
+  "email_sends",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    kind: text("kind").$type<EmailSendKind>().notNull(),
+    idempotencyKey: text("idempotency_key").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("email_sends_key_unique").on(table.idempotencyKey),
+    index("email_sends_user_idx").on(table.userId, table.createdAt),
+    check("email_sends_kind_check", sql`${table.kind} in ('league-sync-nudge')`),
+    check(
+      "email_sends_key_check",
+      sql`char_length(btrim(${table.idempotencyKey})) between 1 and 200`,
+    ),
   ],
 );
 

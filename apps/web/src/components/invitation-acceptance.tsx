@@ -1,6 +1,14 @@
 "use client";
 
-import { AlertCircle, ArrowRight, Check, LoaderCircle, LockKeyhole, UserPlus } from "lucide-react";
+import {
+  AlertCircle,
+  ArrowRight,
+  Check,
+  LoaderCircle,
+  LockKeyhole,
+  MailCheck,
+  UserPlus,
+} from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { type FormEvent, useEffect, useState } from "react";
@@ -18,7 +26,7 @@ interface InvitationInspection {
   readonly requiresAuthentication: boolean;
 }
 
-type ViewState = "loading" | "ready" | "submitting" | "accepted" | "error";
+type ViewState = "loading" | "ready" | "submitting" | "accepted" | "pending-confirmation" | "error";
 
 function invitationToken(): string | null {
   const token = window.location.hash.slice(1);
@@ -89,6 +97,18 @@ export function InvitationAcceptance() {
         }),
       });
       if (!response.ok) {
+        const problem: unknown = await response.json().catch(() => null);
+        if (
+          response.status === 403 &&
+          problem !== null &&
+          typeof problem === "object" &&
+          "code" in problem &&
+          problem.code === "email_verification_required"
+        ) {
+          window.history.replaceState(null, "", "/invite#confirmation-pending");
+          setState("pending-confirmation");
+          return;
+        }
         const detail =
           response.status === 401
             ? "Sign in to the invited account, then return here and accept again."
@@ -113,25 +133,35 @@ export function InvitationAcceptance() {
     <form className="login-form" onSubmit={(event) => void accept(event)}>
       <div className="login-form__heading">
         <span className="login-lock">
-          {state === "accepted" ? <Check size={17} /> : <UserPlus size={17} />}
+          {state === "accepted" ? (
+            <Check size={17} />
+          ) : state === "pending-confirmation" ? (
+            <MailCheck size={17} />
+          ) : (
+            <UserPlus size={17} />
+          )}
         </span>
         <div>
           <p className="eyebrow">Private invitation</p>
           <h1>
             {state === "accepted"
               ? "You’re in"
-              : state === "error"
-                ? "This invitation can’t be opened"
-                : "Join the league room"}
+              : state === "pending-confirmation"
+                ? "Check your inbox"
+                : state === "error"
+                  ? "This invitation can’t be opened"
+                  : "Join the league room"}
           </h1>
           <p>
             {state === "loading"
               ? "Checking the invitation securely…"
-              : inspection
-                ? `Invitation for ${inspection.emailHint}`
-                : state === "error"
-                  ? "Invitation links expire and can only be used once."
-                  : "Ask the league administrator for a fresh invitation if needed."}
+              : state === "pending-confirmation"
+                ? "Your invitation and league access are saved. Confirm your email, then sign in."
+                : inspection
+                  ? `Invitation for ${inspection.emailHint}`
+                  : state === "error"
+                    ? "Invitation links expire and can only be used once."
+                    : "Ask the league administrator for a fresh invitation if needed."}
           </p>
         </div>
       </div>
@@ -149,7 +179,7 @@ export function InvitationAcceptance() {
         </button>
       ) : null}
 
-      {inspection && state !== "accepted" ? (
+      {inspection && state !== "accepted" && state !== "pending-confirmation" ? (
         <>
           <div className="login-error" role="status">
             <LockKeyhole size={16} />
@@ -224,6 +254,18 @@ export function InvitationAcceptance() {
         <button className="button button--lime login-submit" type="button" disabled>
           <Check size={16} /> Opening your dashboard…
         </button>
+      ) : null}
+
+      {state === "pending-confirmation" ? (
+        <>
+          <Link className="button button--lime login-submit" href="/verify-email">
+            Resend confirmation <ArrowRight size={15} />
+          </Link>
+          <div className="login-demo-route">
+            <span>Already confirmed?</span>
+            <Link href="/login">Sign in</Link>
+          </div>
+        </>
       ) : null}
 
       {state === "error" ? (

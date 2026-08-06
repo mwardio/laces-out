@@ -43,7 +43,7 @@ async function appWith(
   } = {},
 ) {
   const preferencesRepository: PreferencesRepository = options.preferences ?? {
-    find: () => Promise.resolve({ defaultLeagueId: null }),
+    find: () => Promise.resolve({ defaultLeagueId: null, emailNotifications: true }),
     upsert: () => Promise.resolve(),
     isLeagueMember: (_userId, leagueId) => Promise.resolve(leagueId === LEAGUE_ID),
   };
@@ -329,10 +329,10 @@ describe("/v1/preferences", () => {
     await app.close();
   });
 
-  it("serves the stored default league", async () => {
+  it("serves the stored default league and email preference", async () => {
     const app = await appWith({
       preferences: {
-        find: () => Promise.resolve({ defaultLeagueId: LEAGUE_ID }),
+        find: () => Promise.resolve({ defaultLeagueId: LEAGUE_ID, emailNotifications: false }),
         upsert: () => Promise.resolve(),
         isLeagueMember: () => Promise.resolve(true),
       },
@@ -345,7 +345,7 @@ describe("/v1/preferences", () => {
     });
 
     expect(result.statusCode).toBe(200);
-    expect(result.json()).toEqual({ defaultLeagueId: LEAGUE_ID });
+    expect(result.json()).toEqual({ defaultLeagueId: LEAGUE_ID, emailNotifications: false });
     await app.close();
   });
 
@@ -353,7 +353,7 @@ describe("/v1/preferences", () => {
     const upsert = vi.fn(() => Promise.resolve());
     const app = await appWith({
       preferences: {
-        find: () => Promise.resolve({ defaultLeagueId: null }),
+        find: () => Promise.resolve({ defaultLeagueId: null, emailNotifications: true }),
         upsert,
         isLeagueMember: (_userId, leagueId) => Promise.resolve(leagueId === LEAGUE_ID),
       },
@@ -363,19 +363,54 @@ describe("/v1/preferences", () => {
       method: "PATCH",
       url: "/v1/preferences",
       headers: { cookie: COOKIE },
-      payload: { defaultLeagueId: LEAGUE_ID },
+      payload: { defaultLeagueId: LEAGUE_ID, emailNotifications: true },
     });
     expect(saved.statusCode).toBe(200);
-    expect(saved.json()).toEqual({ defaultLeagueId: LEAGUE_ID });
+    expect(saved.json()).toEqual({ defaultLeagueId: LEAGUE_ID, emailNotifications: true });
 
     const cleared = await app.inject({
       method: "PATCH",
       url: "/v1/preferences",
       headers: { cookie: COOKIE },
-      payload: { defaultLeagueId: null },
+      payload: { defaultLeagueId: null, emailNotifications: false },
     });
     expect(cleared.statusCode).toBe(200);
     expect(upsert).toHaveBeenCalledTimes(2);
+    expect(upsert).toHaveBeenLastCalledWith(
+      USER_ID,
+      { defaultLeagueId: null, emailNotifications: false },
+      expect.any(Date),
+    );
+    await app.close();
+  });
+
+  it("keeps older clients compatible when they update only the default league", async () => {
+    const upsert = vi.fn(() => Promise.resolve());
+    const app = await appWith({
+      preferences: {
+        find: () => Promise.resolve({ defaultLeagueId: null, emailNotifications: false }),
+        upsert,
+        isLeagueMember: (_userId, leagueId) => Promise.resolve(leagueId === LEAGUE_ID),
+      },
+    });
+
+    const response = await app.inject({
+      method: "PATCH",
+      url: "/v1/preferences",
+      headers: { cookie: COOKIE },
+      payload: { defaultLeagueId: LEAGUE_ID },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({
+      defaultLeagueId: LEAGUE_ID,
+      emailNotifications: false,
+    });
+    expect(upsert).toHaveBeenCalledWith(
+      USER_ID,
+      { defaultLeagueId: LEAGUE_ID, emailNotifications: false },
+      expect.any(Date),
+    );
     await app.close();
   });
 
@@ -383,7 +418,7 @@ describe("/v1/preferences", () => {
     const upsert = vi.fn(() => Promise.resolve());
     const app = await appWith({
       preferences: {
-        find: () => Promise.resolve({ defaultLeagueId: null }),
+        find: () => Promise.resolve({ defaultLeagueId: null, emailNotifications: true }),
         upsert,
         isLeagueMember: (_userId, leagueId) => Promise.resolve(leagueId === LEAGUE_ID),
       },
@@ -393,7 +428,7 @@ describe("/v1/preferences", () => {
       method: "PATCH",
       url: "/v1/preferences",
       headers: { cookie: COOKIE },
-      payload: { defaultLeagueId: OTHER_LEAGUE_ID },
+      payload: { defaultLeagueId: OTHER_LEAGUE_ID, emailNotifications: true },
     });
 
     expect(result.statusCode).toBe(403);
@@ -408,7 +443,7 @@ describe("/v1/preferences", () => {
       method: "PATCH",
       url: "/v1/preferences",
       headers: { cookie: COOKIE },
-      payload: { defaultLeagueId: "not-a-uuid" },
+      payload: { defaultLeagueId: "not-a-uuid", emailNotifications: true },
     });
 
     expect(result.statusCode).toBe(400);

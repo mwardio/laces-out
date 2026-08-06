@@ -18,6 +18,7 @@ COPY packages/connectors/package.json packages/connectors/package.json
 COPY packages/contracts/package.json packages/contracts/package.json
 COPY packages/db/package.json packages/db/package.json
 COPY packages/domain/package.json packages/domain/package.json
+COPY packages/email/package.json packages/email/package.json
 COPY packages/engine-draft/package.json packages/engine-draft/package.json
 COPY packages/engine-lineup/package.json packages/engine-lineup/package.json
 COPY packages/engine-trade/package.json packages/engine-trade/package.json

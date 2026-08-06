@@ -2,7 +2,12 @@ import { createHmac, randomBytes } from "node:crypto";
 
 import type { ApplicationRole, LeagueMembershipRole } from "@fantasy/db";
 
-import { hashOwnerPassword } from "./auth.js";
+import { hashOwnerPassword, hashSessionToken } from "./auth.js";
+import {
+  buildConfirmUrl,
+  emailVerificationTokenLifetimeHours,
+  type EmailConfirmationDelivery,
+} from "./email-verification.js";
 
 const invitationTokenBytes = 32;
 const invitationTokenPattern = /^[A-Za-z0-9_-]{43}$/;
@@ -46,6 +51,10 @@ export type InvitationAcceptanceIdentity =
       readonly kind: "new_user";
       readonly displayName: string;
       readonly passwordHash: string;
+      readonly verification?: {
+        readonly tokenHash: string;
+        readonly expiresAt: Date;
+      };
     }
   | { readonly kind: "existing_user"; readonly userId: string };
 
@@ -57,6 +66,7 @@ export interface AcceptedInvitationRecord {
     readonly displayName: string;
   };
   readonly createdUser: boolean;
+  readonly verificationRequired: boolean;
   readonly membership: {
     readonly leagueId: string;
     readonly role: LeagueMembershipRole;
@@ -198,6 +208,12 @@ export interface AcceptInvitationInput {
 export interface InvitationServiceOptions {
   readonly now?: () => Date;
   readonly tokenFactory?: () => string;
+  readonly confirmation?: {
+    readonly delivery: EmailConfirmationDelivery;
+    readonly webUrl: string;
+    readonly tokenFactory?: () => string;
+    readonly onDeliveryError?: (error: unknown) => void;
+  };
 }
 
 /**
@@ -290,6 +306,7 @@ export class InvitationService {
   readonly #keyring: InvitationKeyring;
   readonly #now: () => Date;
   readonly #tokenFactory: () => string;
+  readonly #confirmation: InvitationServiceOptions["confirmation"];
 
   constructor(
     repository: InvitationRepository,
@@ -304,6 +321,7 @@ export class InvitationService {
     this.#now = options.now ?? (() => new Date());
     this.#tokenFactory =
       options.tokenFactory ?? (() => randomBytes(invitationTokenBytes).toString("base64url"));
+    this.#confirmation = options.confirmation;
   }
 
   async create(input: CreateInvitationInput): Promise<CreatedInvitation> {
@@ -400,6 +418,7 @@ export class InvitationService {
     if (!invitation) throw new InvitationError("INVITATION_UNAVAILABLE");
 
     let identity: InvitationAcceptanceIdentity;
+    let rawVerificationToken: string | undefined;
     if (invitation.existingUserId) {
       if (!input.authenticatedUserId) {
         throw new InvitationError("INVITATION_AUTHENTICATION_REQUIRED");
@@ -427,7 +446,31 @@ export class InvitationService {
         }
         throw error;
       }
-      identity = { kind: "new_user", displayName, passwordHash };
+      const confirmation = this.#confirmation;
+      if (confirmation) {
+        rawVerificationToken =
+          confirmation.tokenFactory?.() ?? randomBytes(invitationTokenBytes).toString("base64url");
+        if (!invitationTokenPattern.test(rawVerificationToken)) {
+          throw new Error(
+            "Email verification token factory must return 32 random bytes as base64url",
+          );
+        }
+      }
+      identity = {
+        kind: "new_user",
+        displayName,
+        passwordHash,
+        ...(rawVerificationToken
+          ? {
+              verification: {
+                tokenHash: hashSessionToken(rawVerificationToken),
+                expiresAt: new Date(
+                  now.getTime() + emailVerificationTokenLifetimeHours * 60 * 60 * 1000,
+                ),
+              },
+            }
+          : {}),
+      };
     }
 
     const result = await this.#repository.accept({ tokenHash, identity, now });
@@ -437,7 +480,21 @@ export class InvitationService {
     if (result.status === "identity_conflict") {
       throw new InvitationError("INVITATION_STATE_CHANGED");
     }
-    return result.acceptance;
+    const acceptance = result.acceptance;
+    if (acceptance.verificationRequired && rawVerificationToken && this.#confirmation) {
+      try {
+        await this.#confirmation.delivery.sendConfirmationEmail({
+          email: acceptance.user.email,
+          displayName: acceptance.user.displayName,
+          confirmUrl: buildConfirmUrl(this.#confirmation.webUrl, rawVerificationToken),
+          expiresHours: emailVerificationTokenLifetimeHours,
+        });
+      } catch (error) {
+        // The accepted invitation, account, membership, and token remain recoverable via resend.
+        this.#confirmation.onDeliveryError?.(error);
+      }
+    }
+    return acceptance;
   }
 
   async revoke(revokedByUserId: string, invitationId: string): Promise<{ id: string }> {

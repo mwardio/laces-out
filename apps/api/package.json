@@ -23,6 +23,7 @@
     "@fantasy/db": "*",
     "@fantasy/decisions": "*",
     "@fantasy/domain": "*",
+    "@fantasy/email": "*",
     "@fantasy/engine-draft": "*",
     "@fantasy/engine-lineup": "*",
     "@fantasy/engine-trade": "*",

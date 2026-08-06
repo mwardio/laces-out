@@ -37,13 +37,14 @@ describe("registration routes", () => {
         register: (input) => {
           received.push(input);
           return Promise.resolve({
+            status: "active" as const,
             token: sessionToken,
             expiresAt: new Date("2026-08-15T12:00:00.000Z"),
             user: {
               id: "00000000-0000-4000-8000-000000000501",
               email: "friend@example.com",
               displayName: "Fantasy Friend",
-              role: "member",
+              role: "member" as const,
             },
           });
         },
@@ -75,13 +76,14 @@ describe("registration routes", () => {
         register: (input) => {
           received.push(input);
           return Promise.resolve({
+            status: "active" as const,
             token: sessionToken,
             expiresAt: new Date("2026-08-15T12:00:00.000Z"),
             user: {
               id: "00000000-0000-4000-8000-000000000501",
               email: "friend@example.com",
               displayName: "Fantasy Friend",
-              role: "member",
+              role: "member" as const,
             },
           });
         },
@@ -101,6 +103,28 @@ describe("registration routes", () => {
 
     expect(response.statusCode).toBe(201);
     expect(received).toEqual([openPayload]);
+    await app.close();
+  });
+
+  it("answers a pending registration with the legacy-client-compatible problem and no session", async () => {
+    const app = await buildApp({
+      environment: loadEnvironment({ NODE_ENV: "test" }),
+      logger: false,
+      registration: { register: () => Promise.resolve({ status: "pending" as const }) },
+    });
+
+    const response = await app.inject({ method: "POST", url: "/v1/auth/register", payload });
+
+    expect(response.statusCode).toBe(403);
+    expect(response.headers["content-type"]).toContain("application/problem+json");
+    expect(response.json()).toMatchObject({
+      type: "https://fantasy.local/problems/email-verification-required",
+      title: "Email confirmation required",
+      status: 403,
+      code: "email_verification_required",
+      detail: "Check your email to confirm your account, then return to the sign-in screen.",
+    });
+    expect(response.headers["set-cookie"]).toBeUndefined();
     await app.close();
   });
 

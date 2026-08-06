@@ -2,6 +2,7 @@ import { and, asc, eq, gt, inArray, isNull, ne, sql, type SQL } from "drizzle-or
 import {
   type ApplicationRole,
   type Database,
+  emailVerificationTokens,
   invitations,
   leagueMemberships,
   leagues,
@@ -319,6 +320,7 @@ export class DrizzleInvitationRepository implements InvitationRepository {
               displayName: input.identity.displayName,
               passwordHash: input.identity.passwordHash,
               role: invitation.role,
+              emailVerifiedAt: input.identity.verification ? null : input.now,
               updatedAt: input.now,
             })
             // Handles two different invitations for the same normalized email.
@@ -332,6 +334,14 @@ export class DrizzleInvitationRepository implements InvitationRepository {
           if (!created) return { status: "identity_conflict" } as const;
           acceptedUser = created;
           createdUser = true;
+          if (input.identity.verification) {
+            await transaction.insert(emailVerificationTokens).values({
+              userId: created.id,
+              tokenHash: input.identity.verification.tokenHash,
+              expiresAt: input.identity.verification.expiresAt,
+              createdAt: input.now,
+            });
+          }
         }
 
         if (invitation.role === "admin" && acceptedUser.role !== "admin") {
@@ -402,6 +412,10 @@ export class DrizzleInvitationRepository implements InvitationRepository {
               displayName: acceptedUser.displayName,
             },
             createdUser,
+            verificationRequired:
+              createdUser &&
+              input.identity.kind === "new_user" &&
+              input.identity.verification !== undefined,
             membership,
           },
         } as const;

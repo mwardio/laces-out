@@ -177,6 +177,40 @@
     opacity: 0.65;
   }
 
+  .form .note {
+    padding: 0;
+  }
+
+  .form label.checkboxRow {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+  }
+
+  .form label.checkboxRow input[type="checkbox"] {
+    width: 15px;
+    height: 15px;
+    min-height: 0;
+    margin-top: 2px;
+    padding: 0;
+    accent-color: var(--lime-500);
+  }
+
+  .form label.checkboxRow > span {
+    display: grid;
+    gap: 2px;
+    color: var(--ink-500);
+    font-size: var(--text-10);
+    font-weight: 500;
+    letter-spacing: normal;
+    line-height: 1.55;
+    text-transform: none;
+  }
+
+  .form label.checkboxRow > span strong {
+    color: var(--ink-900);
+  }
+
   .note {
     padding: 0 20px 16px;
     color: var(--ink-500);

@@ -2,7 +2,9 @@ import type { Environment } from "@fantasy/config";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 
-import { sessionCookieName, sessionLifetimeSeconds, type LoginResult } from "./auth.js";
+import { sessionCookieName, sessionLifetimeSeconds } from "./auth.js";
+import { emailVerificationRequiredProblem } from "./email-verification.js";
+import type { RegistrationOutcome } from "./registration.js";
 
 const registrationBodySchema = z
   .object({
@@ -19,7 +21,7 @@ export interface RegistrationPort {
     readonly displayName: string;
     readonly email: string;
     readonly password: string;
-  }): Promise<LoginResult | undefined>;
+  }): Promise<RegistrationOutcome | undefined>;
 }
 
 export function registerRegistrationRoutes(
@@ -54,6 +56,14 @@ export function registerRegistrationRoutes(
           detail: "Check the registration details and try again.",
           correlationId: request.id,
         });
+      }
+      if (result.status === "pending") {
+        // Legacy iOS understands Problem Details but cannot decode a new 2xx registration shape.
+        // The account exists, but no session is issued before the emailed link is consumed.
+        return reply
+          .code(403)
+          .type("application/problem+json")
+          .send(emailVerificationRequiredProblem(request.id));
       }
       void reply.setCookie(sessionCookieName, result.token, {
         path: "/",

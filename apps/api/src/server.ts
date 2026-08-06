@@ -15,6 +15,8 @@ import { parseCredentialKey } from "@fantasy/security";
 import { sql } from "drizzle-orm";
 import { PgBoss } from "pg-boss";
 
+import { createSmtpEmailTransport, type SmtpSendFailure } from "@fantasy/email";
+
 import { buildApp } from "./app.js";
 import { DrizzleAccountDataRepository } from "./account-data.js";
 import { BrowserHandoffService, DrizzleBrowserHandoffStore } from "./browser-handoff.js";
@@ -49,6 +51,14 @@ import { deriveRankingShareKeyring, RankingService } from "./ranking-service.js"
 import { DrizzleRecapRepository, RecapService } from "./recap-service.js";
 import { DrizzleRegistrationRepository } from "./registration-repository.js";
 import { RegistrationService } from "./registration.js";
+import {
+  createEmailConfirmationDelivery,
+  createPasswordResetEmailDelivery,
+} from "./email-delivery.js";
+import { DrizzleEmailVerificationRepository } from "./email-verification-repository.js";
+import { EmailVerificationService } from "./email-verification.js";
+import { DrizzlePasswordResetRepository } from "./password-reset-repository.js";
+import { PasswordResetService } from "./password-reset.js";
 import { DrizzlePreferencesRepository, PreferencesService } from "./preferences.js";
 import {
   createWebPushSender,
@@ -133,12 +143,6 @@ const statsCenter = new StatsCenterService(
   () => new Date(),
   schedule,
 );
-const invitations = environment.SESSION_SECRET
-  ? new InvitationService(
-      new DrizzleInvitationRepository(database.db),
-      deriveInvitationKeyring(environment.SESSION_SECRET),
-    )
-  : undefined;
 const leagueDashboard = new LeagueDashboardService(
   new DrizzleLeagueDashboardRepository(database.db),
 );
@@ -187,15 +191,77 @@ const rankings = environment.SESSION_SECRET
       deriveRankingShareKeyring(Buffer.from(environment.SESSION_SECRET, "utf8")),
     )
   : undefined;
+// SMTP support and verification enforcement roll out independently. `app` is bound lazily in
+// these callbacks; nothing sends before it listens.
+const emailTransport =
+  environment.SMTP_HOST &&
+  environment.SMTP_USER &&
+  environment.SMTP_PASSWORD &&
+  environment.EMAIL_FROM
+    ? createSmtpEmailTransport(
+        {
+          host: environment.SMTP_HOST,
+          port: environment.SMTP_PORT,
+          user: environment.SMTP_USER,
+          password: environment.SMTP_PASSWORD,
+          from: environment.EMAIL_FROM,
+        },
+        (failure: SmtpSendFailure) => app.log.warn(failure, "outbound email send failed"),
+      )
+    : undefined;
+const emailVerificationEnabled =
+  environment.EMAIL_VERIFICATION_ENABLED && emailTransport !== undefined;
+const registrationRepository = new DrizzleRegistrationRepository(database.db);
 const registration =
   environment.SESSION_SECRET &&
   (environment.REGISTRATION_OPEN || environment.REGISTRATION_INVITE_CODE)
     ? new RegistrationService(
-        new DrizzleRegistrationRepository(database.db),
+        registrationRepository,
         environment.SESSION_SECRET,
         environment.REGISTRATION_OPEN ? undefined : environment.REGISTRATION_INVITE_CODE,
+        emailVerificationEnabled && emailTransport
+          ? {
+              confirmation: {
+                repository: registrationRepository,
+                delivery: createEmailConfirmationDelivery(emailTransport),
+                webUrl: environment.WEB_URL,
+                onDeliveryError: (error: unknown) =>
+                  app.log.warn({ err: error }, "confirmation email failed"),
+              },
+            }
+          : {},
       )
     : undefined;
+const emailVerification = emailTransport
+  ? new EmailVerificationService({
+      repository: new DrizzleEmailVerificationRepository(database.db),
+      delivery: createEmailConfirmationDelivery(emailTransport),
+      webUrl: environment.WEB_URL,
+    })
+  : undefined;
+const invitations = environment.SESSION_SECRET
+  ? new InvitationService(
+      new DrizzleInvitationRepository(database.db),
+      deriveInvitationKeyring(environment.SESSION_SECRET),
+      emailVerificationEnabled && emailTransport
+        ? {
+            confirmation: {
+              delivery: createEmailConfirmationDelivery(emailTransport),
+              webUrl: environment.WEB_URL,
+              onDeliveryError: (error: unknown) =>
+                app.log.warn({ err: error }, "invitation confirmation email failed"),
+            },
+          }
+        : {},
+    )
+  : undefined;
+const passwordReset = emailTransport
+  ? new PasswordResetService({
+      repository: new DrizzlePasswordResetRepository(database.db),
+      delivery: createPasswordResetEmailDelivery(emailTransport),
+      webUrl: environment.WEB_URL,
+    })
+  : undefined;
 const yahooConnection =
   environment.YAHOO_CLIENT_ID && environment.YAHOO_CLIENT_SECRET && credentialKey
     ? new YahooConnectionService({
@@ -284,6 +350,8 @@ const app = await buildApp({
   ...(rankings ? { rankings } : {}),
   rosProjectionStatus,
   ...(registration ? { registration } : {}),
+  ...(emailVerification ? { emailVerification } : {}),
+  ...(passwordReset ? { passwordReset } : {}),
   ...(yahooConnection ? { yahooConnection } : {}),
   ...(yahooSync ? { yahooSync } : {}),
   yahooNativeConnectLandingAvailable: true,

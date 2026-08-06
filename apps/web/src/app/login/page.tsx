@@ -66,8 +66,8 @@ export default function LoginPage() {
         <LoginForm />
         <p className="login-help">
           Friends can register with the shared group code or accept an expiring personal invitation
-          link. If you forget your password, ask the host to reset it; the reset signs out every
-          existing session.
+          link. If you forget your password, request a reset link by email; completing a reset signs
+          out every existing session.
         </p>
       </section>
     </main>

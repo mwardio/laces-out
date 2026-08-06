@@ -7,10 +7,12 @@ import { type FormEvent, useState } from "react";
 import { apiBaseUrl } from "../lib/api-client";
 import { safeReturnTo } from "../lib/safe-return-to";
 
-type LoginError = "credentials" | "rate-limit" | "unavailable" | "invalid" | "unknown" | null;
+type LoginError =
+  "credentials" | "unverified" | "rate-limit" | "unavailable" | "invalid" | "unknown" | null;
 
 const errorMessages: Record<Exclude<LoginError, null>, string> = {
   credentials: "We couldn’t sign you in with those credentials.",
+  unverified: "This account’s email hasn’t been confirmed yet. Use the link in your inbox first.",
   "rate-limit": "Too many attempts. Wait a minute, then try again.",
   unavailable: "The private API can’t be reached right now. Demo mode is still available.",
   invalid: "Check the email and password, then try again.",
@@ -54,6 +56,17 @@ export function LoginForm() {
       });
 
       if (!response.ok) {
+        const problem: unknown = await response.json().catch(() => null);
+        if (
+          response.status === 403 &&
+          problem !== null &&
+          typeof problem === "object" &&
+          "code" in problem &&
+          problem.code === "email_verification_required"
+        ) {
+          setError("unverified");
+          return;
+        }
         setError(classifyResponse(response.status));
         return;
       }
@@ -84,7 +97,15 @@ export function LoginForm() {
       {error ? (
         <div className="login-error" role="alert">
           <AlertCircle size={16} />
-          <span>{errorMessages[error]}</span>
+          <span>
+            {errorMessages[error]}
+            {error === "unverified" ? (
+              <>
+                {" "}
+                <Link href="/verify-email">Request a new confirmation link.</Link>
+              </>
+            ) : null}
+          </span>
         </div>
       ) : null}
 
@@ -107,6 +128,7 @@ export function LoginForm() {
 
         <div className="password-label-row">
           <label htmlFor="owner-password">Password</label>
+          <Link href="/forgot-password">Forgot password?</Link>
         </div>
         <div className="password-field">
           <input

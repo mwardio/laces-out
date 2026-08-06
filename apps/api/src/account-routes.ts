@@ -4,6 +4,7 @@ import {
   deleteAccountRequestSchema,
   deleteAccountResponseSchema,
   memberPreferencesSchema,
+  memberPreferencesUpdateSchema,
 } from "@fantasy/contracts";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 
@@ -205,8 +206,17 @@ export function registerAccountRoutes(app: FastifyInstance, options: AccountRout
         correlationId: request.id,
       });
     }
-    const input = memberPreferencesSchema.parse(request.body);
-    const result = await options.preferences.save(user.id, input);
+    const update = memberPreferencesUpdateSchema.parse(request.body);
+    const current = await options.preferences.get(user.id);
+    const preferences: MemberPreferences = {
+      defaultLeagueId:
+        "defaultLeagueId" in update ? (update.defaultLeagueId ?? null) : current.defaultLeagueId,
+      emailNotifications:
+        "emailNotifications" in update
+          ? (update.emailNotifications ?? true)
+          : current.emailNotifications,
+    };
+    const result = await options.preferences.save(user.id, preferences);
     if (result.outcome === "not-a-member") {
       return reply.code(403).type("application/problem+json").send({
         type: "https://fantasy.local/problems/not-a-league-member",
@@ -215,6 +225,6 @@ export function registerAccountRoutes(app: FastifyInstance, options: AccountRout
         correlationId: request.id,
       });
     }
-    return memberPreferencesSchema.parse(input);
+    return memberPreferencesSchema.parse(preferences);
   });
 }

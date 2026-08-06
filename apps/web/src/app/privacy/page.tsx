@@ -57,6 +57,13 @@ export default function PrivacyPage() {
               enable alerts. Notification permission is never requested merely by signing in.
             </li>
             <li>
+              If the operator enables account email, hashed confirmation and password-reset tokens
+              and a send-once record of the one league-setup reminder — never message content. The
+              account also records when its email was confirmed. Optional email honors the Settings
+              toggle; confirmation and password-reset email exist only in response to your own
+              action.
+            </li>
+            <li>
               Fantasy league settings, teams, rosters, standings, matchups, draft events, and the
               team you claim in each league.
             </li>

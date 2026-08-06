@@ -102,6 +102,7 @@ describe("worker queue reliability", () => {
         dataRefresh: { retryLimit: 5, retryDelayMax: 3_600, expireInSeconds: 1_800 },
         notificationSweep: { retryLimit: 2, retryDelayMax: 120, expireInSeconds: 300 },
         providerSyncSweep: { retryLimit: 3, retryDelayMax: 300, expireInSeconds: 240 },
+        emailSweep: { retryLimit: 2, retryDelayMax: 600, expireInSeconds: 600 },
       } as const;
       const limits = expectedLimits[key as keyof typeof expectedLimits];
       expect(createQueue).toHaveBeenCalledWith(
@@ -493,7 +494,7 @@ describe("dispatch contracts and schedules", () => {
       queueNames.refreshProjections,
       "hourly-first-party-projections",
     );
-    expect(schedule).toHaveBeenCalledTimes(9);
+    expect(schedule).toHaveBeenCalledTimes(10);
     expect(schedule).toHaveBeenNthCalledWith(
       1,
       queueNames.providerSyncSweep,
@@ -565,6 +566,18 @@ describe("dispatch contracts and schedules", () => {
     );
     expect(schedule).toHaveBeenNthCalledWith(
       8,
+      queueNames.emailSweep,
+      "10 16 * * *",
+      { kind: "league-sync-nudge", reason: "scheduled" },
+      expect.objectContaining({
+        tz: "UTC",
+        key: "daily-league-sync-nudge",
+        group: { id: "email" },
+        singletonKey: "email-sweep:league-sync-nudge",
+      }),
+    );
+    expect(schedule).toHaveBeenNthCalledWith(
+      9,
       queueNames.refreshProjections,
       "*/10 * * * *",
       { season: 2026, horizon: "weekly", reason: "lock-window" },
@@ -576,7 +589,7 @@ describe("dispatch contracts and schedules", () => {
       }),
     );
     expect(schedule).toHaveBeenNthCalledWith(
-      9,
+      10,
       queueNames.refreshProjections,
       "30 1 * * *",
       { season: 2026, horizon: "full", reason: "scheduled" },

@@ -23,6 +23,7 @@ export class DrizzleAuthRepository implements AuthRepository {
         displayName: users.displayName,
         passwordHash: users.passwordHash,
         role: users.role,
+        emailVerifiedAt: users.emailVerifiedAt,
       })
       .from(users)
       .where(ilike(users.email, email))

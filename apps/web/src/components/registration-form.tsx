@@ -1,6 +1,14 @@
 "use client";
 
-import { AlertCircle, ArrowRight, Eye, EyeOff, KeyRound, LoaderCircle } from "lucide-react";
+import {
+  AlertCircle,
+  ArrowRight,
+  Eye,
+  EyeOff,
+  KeyRound,
+  LoaderCircle,
+  MailCheck,
+} from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { type FormEvent, useState } from "react";
@@ -50,6 +58,9 @@ export function RegistrationForm() {
   const [confirmation, setConfirmation] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [pendingVerification, setPendingVerification] = useState(false);
+  const [isResending, setIsResending] = useState(false);
+  const [resendSent, setResendSent] = useState(false);
   const [error, setError] = useState<RegistrationError>(null);
 
   async function submit(event: FormEvent<HTMLFormElement>) {
@@ -83,6 +94,18 @@ export function RegistrationForm() {
       });
 
       if (!response.ok) {
+        const problem: unknown = await response.json().catch(() => null);
+        if (
+          response.status === 403 &&
+          problem !== null &&
+          typeof problem === "object" &&
+          (("code" in problem && problem.code === "email_verification_required") ||
+            ("type" in problem &&
+              problem.type === "https://fantasy.local/problems/email-verification-required"))
+        ) {
+          setPendingVerification(true);
+          return;
+        }
         setError(classifyResponse(response.status));
         return;
       }
@@ -95,6 +118,68 @@ export function RegistrationForm() {
       window.clearTimeout(timeout);
       setIsSubmitting(false);
     }
+  }
+
+  async function resendVerification() {
+    if (isResending) return;
+    setIsResending(true);
+    setResendSent(false);
+    try {
+      const response = await fetch(`${apiBaseUrl}/v1/auth/resend-verification`, {
+        method: "POST",
+        credentials: "include",
+        headers: { Accept: "application/json", "Content-Type": "application/json" },
+        body: JSON.stringify({ email: email.trim() }),
+      });
+      if (!response.ok) {
+        setError(classifyResponse(response.status));
+        return;
+      }
+      setResendSent(true);
+    } catch {
+      setError("network");
+    } finally {
+      setIsResending(false);
+    }
+  }
+
+  if (pendingVerification) {
+    return (
+      <div className="login-form register-form">
+        <div className="login-form__heading">
+          <span className="login-lock">
+            <MailCheck size={17} />
+          </span>
+          <div>
+            <p className="eyebrow">Member account</p>
+            <h1>Check your inbox</h1>
+            <p>
+              We sent a confirmation link to <strong>{email.trim()}</strong>. Click it within 24
+              hours to activate your account. Until then, nobody can sign in to it.
+            </p>
+          </div>
+        </div>
+        {error ? (
+          <div className="login-error" role="alert" aria-live="polite">
+            <AlertCircle size={16} />
+            <span>{errorMessages[error]}</span>
+          </div>
+        ) : null}
+        <button
+          className="button button--outline login-submit"
+          type="button"
+          onClick={() => void resendVerification()}
+          disabled={isResending || resendSent}
+        >
+          {isResending ? <LoaderCircle className="spin" size={16} /> : <MailCheck size={16} />}
+          {isResending ? "Sending…" : resendSent ? "New link sent" : "Send a new link"}
+        </button>
+        <div className="login-demo-route registration-signin-route">
+          <span>{resendSent ? "Check your inbox, then come back." : "Already confirmed?"}</span>
+          <Link href="/login">Sign in</Link>
+        </div>
+      </div>
+    );
   }
 
   return (

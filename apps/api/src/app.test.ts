@@ -4,7 +4,7 @@ import { loadEnvironment } from "@fantasy/config";
 import { EspnWebClientNormalizationError } from "@fantasy/connector-espn";
 import { healthResponseSchema } from "@fantasy/contracts";
 
-import { AuthService, type AuthRepository } from "./auth.js";
+import { AuthService, hashOwnerPassword, type AuthRepository } from "./auth.js";
 import { buildApp, type LeagueMembershipPort, requestPathForLog } from "./app.js";
 import { LeagueDashboardError } from "./league-dashboard.js";
 
@@ -78,6 +78,7 @@ function invitationPort() {
           displayName: "Fantasy Friend",
         },
         createdUser: false,
+        verificationRequired: false,
         membership: null,
       }),
     revoke: (_userId: string, invitationId: string) => Promise.resolve({ id: invitationId }),
@@ -297,6 +298,57 @@ describe("API", () => {
     await app.close();
   });
 
+  it("returns the stable confirmation problem only after a correct password", async () => {
+    const passwordHash = await hashOwnerPassword("a genuinely long password");
+    const repository: AuthRepository = {
+      findUserByEmail: () =>
+        Promise.resolve({
+          id: "00000000-0000-4000-8000-000000000001",
+          email: "pending@example.com",
+          displayName: "Pending Member",
+          passwordHash,
+          role: "member",
+          emailVerifiedAt: null,
+        }),
+      createSession: () => Promise.resolve(),
+      findSession: () => Promise.resolve(undefined),
+      touchSession: () => Promise.resolve(),
+      deleteSession: () => Promise.resolve(),
+      deleteExpiredSessions: () => Promise.resolve(),
+    };
+    const app = await buildApp({
+      environment: loadEnvironment({ NODE_ENV: "test" }),
+      logger: false,
+      authService: new AuthService(repository),
+    });
+
+    const wrongPassword = await app.inject({
+      method: "POST",
+      url: "/v1/auth/login",
+      payload: { email: "pending@example.com", password: "not the password" },
+    });
+    expect(wrongPassword.statusCode).toBe(401);
+    expect(wrongPassword.json()).toMatchObject({
+      type: "https://fantasy.local/problems/invalid-credentials",
+    });
+
+    const pending = await app.inject({
+      method: "POST",
+      url: "/v1/auth/login",
+      payload: { email: "pending@example.com", password: "a genuinely long password" },
+    });
+    expect(pending.statusCode).toBe(403);
+    expect(pending.headers["content-type"]).toContain("application/problem+json");
+    expect(pending.headers["set-cookie"]).toBeUndefined();
+    expect(pending.json()).toMatchObject({
+      type: "https://fantasy.local/problems/email-verification-required",
+      status: 403,
+      code: "email_verification_required",
+      detail: "Check your email to confirm your account, then return to the sign-in screen.",
+    });
+    await app.close();
+  });
+
   it("reports liveness with a correlation ID", async () => {
     const app = await buildApp({
       environment: loadEnvironment({ NODE_ENV: "test" }),
@@ -316,6 +368,36 @@ describe("API", () => {
       expect.arrayContaining(["cookie-authentication", "account-data-export", "account-deletion"]),
     );
     expect(health.mobileCapabilities).not.toContain("league-removal-v1");
+    expect(health.mobileCapabilities).not.toContain("email-verification-v1");
+    await app.close();
+  });
+
+  it("advertises email verification only when enforcement and the service are operational", async () => {
+    const environment = loadEnvironment({
+      NODE_ENV: "test",
+      SMTP_HOST: "smtp.example.com",
+      SMTP_USER: "operator@example.com",
+      SMTP_PASSWORD: "app-password",
+      EMAIL_FROM: "Laces Out <noreply@example.com>",
+      EMAIL_VERIFICATION_ENABLED: "true",
+    });
+    const app = await buildApp({
+      environment,
+      logger: false,
+      emailVerification: {
+        verifyEmail: () => Promise.resolve(undefined),
+        requestResend: () => Promise.resolve(),
+      },
+    });
+
+    const liveness = healthResponseSchema.parse(
+      (await app.inject({ method: "GET", url: "/health/live" })).json(),
+    );
+    const readiness = healthResponseSchema.parse(
+      (await app.inject({ method: "GET", url: "/health/ready" })).json(),
+    );
+    expect(liveness.mobileCapabilities).toContain("email-verification-v1");
+    expect(readiness.mobileCapabilities).toContain("email-verification-v1");
     await app.close();
   });
 
@@ -1584,6 +1666,47 @@ describe("API", () => {
       payload: { email: "friend@example.com" },
     });
     expect(forbidden.statusCode).toBe(403);
+    await app.close();
+  });
+
+  it("preserves an accepted invitation while requiring confirmation before login", async () => {
+    const port = invitationPort();
+    const app = await buildApp({
+      environment: loadEnvironment({ NODE_ENV: "test" }),
+      logger: false,
+      authService: authenticatedService("member"),
+      invitations: {
+        ...port,
+        accept: () =>
+          Promise.resolve({
+            invitationId: "00000000-0000-4000-8000-000000000201",
+            user: {
+              id: "00000000-0000-4000-8000-000000000202",
+              email: "friend@example.com",
+              displayName: "Fantasy Friend",
+            },
+            createdUser: true,
+            verificationRequired: true,
+            membership: { leagueId, role: "manager" as const },
+          }),
+      },
+    });
+
+    const acceptance = await app.inject({
+      method: "POST",
+      url: "/v1/invitations/accept",
+      payload: {
+        token: invitationToken,
+        displayName: "Fantasy Friend",
+        password: "a genuinely long password",
+      },
+    });
+    expect(acceptance.statusCode).toBe(403);
+    expect(acceptance.headers["set-cookie"]).toBeUndefined();
+    expect(acceptance.json()).toMatchObject({
+      code: "email_verification_required",
+      detail: "Check your email to confirm your account, then return to the sign-in screen.",
+    });
     await app.close();
   });
   it("recomputes recommendations exactly once for an accepted ESPN bridge snapshot", async () => {

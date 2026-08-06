@@ -106,6 +106,12 @@ import {
 import { type DataQualityPort, registerDataQualityRoutes } from "./data-quality-routes.js";
 import type { RefreshAuthorizationPort } from "./refresh-authorization.js";
 import { type RegistrationPort, registerRegistrationRoutes } from "./registration-routes.js";
+import { type PasswordResetPort, registerPasswordResetRoutes } from "./password-reset-routes.js";
+import { emailVerificationRequiredProblem } from "./email-verification.js";
+import {
+  type EmailVerificationPort,
+  registerEmailVerificationRoutes,
+} from "./email-verification-routes.js";
 import { type PreferencesPort, registerAccountRoutes } from "./account-routes.js";
 import type { AccountDataPort } from "./account-data.js";
 import {
@@ -317,6 +323,8 @@ export interface BuildAppOptions {
   readonly dataQuality?: DataQualityPort;
   readonly refreshAuthorization?: RefreshAuthorizationPort;
   readonly registration?: RegistrationPort;
+  readonly passwordReset?: PasswordResetPort;
+  readonly emailVerification?: EmailVerificationPort;
   readonly preferences?: PreferencesPort;
   readonly accountData?: AccountDataPort;
   readonly browserHandoffs?: BrowserHandoffPort;
@@ -530,6 +538,9 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   }
   const mobileCapabilities: MobileCapability[] = [...MOBILE_CAPABILITIES];
   if (options.leagueMemberships) mobileCapabilities.push("league-removal-v1");
+  if (environment.EMAIL_VERIFICATION_ENABLED && options.emailVerification) {
+    mobileCapabilities.push("email-verification-v1");
+  }
   if (browserHandoffs) mobileCapabilities.push("authenticated-browser-handoff");
   if (
     browserHandoffs &&
@@ -691,6 +702,10 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     "/v1/auth/logout",
     "/v1/auth/register",
     "/v1/auth/session",
+    "/v1/auth/forgot-password",
+    "/v1/auth/reset-password",
+    "/v1/auth/verify-email",
+    "/v1/auth/resend-verification",
     browserHandoffLandingPath,
     browserHandoffStagePath,
     browserHandoffConfirmPath,
@@ -821,6 +836,14 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
           correlationId: request.id,
         });
       }
+      if (result === "unverified") {
+        // Reached only with the correct password: the caller already owns the credentials and
+        // needs to finish confirmation, not be told the sign-in was wrong.
+        return reply
+          .code(403)
+          .type("application/problem+json")
+          .send(emailVerificationRequiredProblem(request.id));
+      }
       void reply.setCookie(sessionCookieName, result.token, {
         path: "/",
         httpOnly: true,
@@ -854,6 +877,16 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   registerRegistrationRoutes(app, {
     environment,
     ...(options.registration ? { registration: options.registration } : {}),
+  });
+
+  registerPasswordResetRoutes(app, {
+    environment,
+    ...(options.passwordReset ? { passwordReset: options.passwordReset } : {}),
+  });
+
+  registerEmailVerificationRoutes(app, {
+    environment,
+    ...(options.emailVerification ? { emailVerification: options.emailVerification } : {}),
   });
 
   registerInvitationRoutes(app, {

@@ -4,6 +4,7 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 
 import { sessionCookieName, sessionLifetimeSeconds, type AuthService } from "./auth.js";
+import { emailVerificationRequiredProblem } from "./email-verification.js";
 import type {
   AcceptedInvitationRecord,
   CreatedInvitation,
@@ -123,40 +124,58 @@ export function registerInvitationRoutes(
     };
   });
 
-  app.post("/v1/invitations/accept", async (request, reply) => {
-    if (!options.invitations) return reply.code(503).send(unavailable(request.id));
-    const input = acceptBodySchema.parse(request.body);
-    const sessionUser = await options.authService?.validate(request.cookies[sessionCookieName]);
-    const acceptance = await options.invitations.accept({
-      token: input.token,
-      ...(sessionUser ? { authenticatedUserId: sessionUser.id } : {}),
-      ...(input.displayName ? { displayName: input.displayName } : {}),
-      ...(input.password ? { password: input.password } : {}),
-    });
+  app.post(
+    "/v1/invitations/accept",
+    {
+      config: {
+        rateLimit: {
+          max: options.environment.NODE_ENV === "test" ? 10_000 : 10,
+          timeWindow: "15 minutes",
+          keyGenerator: (request) => `invitation-accept-ip:${request.ip}`,
+        },
+      },
+    },
+    async (request, reply) => {
+      if (!options.invitations) return reply.code(503).send(unavailable(request.id));
+      const input = acceptBodySchema.parse(request.body);
+      const sessionUser = await options.authService?.validate(request.cookies[sessionCookieName]);
+      const acceptance = await options.invitations.accept({
+        token: input.token,
+        ...(sessionUser ? { authenticatedUserId: sessionUser.id } : {}),
+        ...(input.displayName ? { displayName: input.displayName } : {}),
+        ...(input.password ? { password: input.password } : {}),
+      });
 
-    let sessionEstablished = sessionUser !== undefined;
-    if (acceptance.createdUser && input.password && options.authService) {
-      const login = await options.authService.login(acceptance.user.email, input.password);
-      if (login) {
-        sessionEstablished = true;
-        void reply.setCookie(sessionCookieName, login.token, {
-          path: "/",
-          httpOnly: true,
-          secure: options.environment.NODE_ENV === "production",
-          sameSite: "lax",
-          maxAge: sessionLifetimeSeconds,
-          expires: login.expiresAt,
-        });
+      let sessionEstablished = sessionUser !== undefined;
+      if (acceptance.verificationRequired) {
+        return reply
+          .code(403)
+          .type("application/problem+json")
+          .send(emailVerificationRequiredProblem(request.id));
       }
-    }
-    return {
-      invitationId: acceptance.invitationId,
-      user: acceptance.user,
-      createdUser: acceptance.createdUser,
-      membership: acceptance.membership,
-      sessionEstablished,
-    };
-  });
+      if (acceptance.createdUser && input.password && options.authService) {
+        const login = await options.authService.login(acceptance.user.email, input.password);
+        if (login && login !== "unverified") {
+          sessionEstablished = true;
+          void reply.setCookie(sessionCookieName, login.token, {
+            path: "/",
+            httpOnly: true,
+            secure: options.environment.NODE_ENV === "production",
+            sameSite: "lax",
+            maxAge: sessionLifetimeSeconds,
+            expires: login.expiresAt,
+          });
+        }
+      }
+      return {
+        invitationId: acceptance.invitationId,
+        user: acceptance.user,
+        createdUser: acceptance.createdUser,
+        membership: acceptance.membership,
+        sessionEstablished,
+      };
+    },
+  );
 
   app.delete("/v1/admin/invitations/:invitationId", async (request, reply) => {
     if (!request.currentUser) {

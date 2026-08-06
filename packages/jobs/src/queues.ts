@@ -21,6 +21,7 @@ export const queueNames = {
   dataRefresh: "data-refresh",
   notificationSweep: "notification-sweep",
   providerSyncSweep: "provider-sync-sweep",
+  emailSweep: "email-sweep",
 } as const;
 
 export const deadLetterQueueNames = {
@@ -32,6 +33,7 @@ export const deadLetterQueueNames = {
   dataRefresh: "data-refresh-dead-letter",
   notificationSweep: "notification-sweep-dead-letter",
   providerSyncSweep: "provider-sync-sweep-dead-letter",
+  emailSweep: "email-sweep-dead-letter",
 } as const;
 
 export interface LeagueSyncJob {
@@ -87,6 +89,19 @@ export type NotificationSweepKind = (typeof notificationSweepKinds)[number];
 
 export interface NotificationSweepJob {
   readonly kind: NotificationSweepKind;
+  readonly reason: "scheduled" | "manual";
+}
+
+/**
+ * Outbound email families the worker sends on a schedule. Transactional email (welcome, password
+ * reset) is sent inline by the API and never queues here; this sweep exists for occasions that
+ * are discovered by scanning, not triggered by a request.
+ */
+export const emailSweepKinds = ["league-sync-nudge"] as const;
+export type EmailSweepKind = (typeof emailSweepKinds)[number];
+
+export interface EmailSweepJob {
+  readonly kind: EmailSweepKind;
   readonly reason: "scheduled" | "manual";
 }
 
@@ -186,6 +201,19 @@ const queueConfigurations: Readonly<Record<keyof typeof queueNames, QueueConfigu
     retentionSeconds: 14 * DAY_SECONDS,
     deleteAfterSeconds: 7 * DAY_SECONDS,
     deadLetter: deadLetterQueueNames.providerSyncSweep,
+    warningQueueSize: 5,
+  },
+  emailSweep: {
+    // A nudge email is not urgent: retry briefly, then let tomorrow's tick pick the members up
+    // again — the send-once claim in email_sends is what prevents a double send, not the queue.
+    retryLimit: 2,
+    retryDelay: 60,
+    retryBackoff: true,
+    retryDelayMax: 10 * 60,
+    expireInSeconds: 10 * 60,
+    retentionSeconds: 14 * DAY_SECONDS,
+    deleteAfterSeconds: 7 * DAY_SECONDS,
+    deadLetter: deadLetterQueueNames.emailSweep,
     warningQueueSize: 5,
   },
 };
@@ -440,6 +468,15 @@ export function assertNotificationSweepJob(job: NotificationSweepJob): void {
   }
 }
 
+export function assertEmailSweepJob(job: EmailSweepJob): void {
+  if (!(emailSweepKinds as readonly string[]).includes(job.kind)) {
+    throw new Error("Invalid worker job: unsupported email sweep kind");
+  }
+  if (job.reason !== "scheduled" && job.reason !== "manual") {
+    throw new Error("Invalid worker job: unsupported email sweep reason");
+  }
+}
+
 export async function registerSchedules(boss: PgBoss, projectionSeason?: number): Promise<void> {
   // Older deployments registered these schedules before keyed schedules were introduced. pg-boss
   // treats a different key as a separate schedule, so leaving either row behind runs the same work
@@ -540,6 +577,19 @@ export async function registerSchedules(boss: PgBoss, projectionSeason?: number)
       key: "change-event-alerts",
       group: { id: "notifications" },
       singletonKey: "notification-sweep:change-event",
+    },
+  );
+  // One daily tick, mid-morning US time, so a setup nudge lands when someone might act on it.
+  // The sweep re-decides eligibility at execution; the schedule only supplies the occasion.
+  await boss.schedule(
+    queueNames.emailSweep,
+    "10 16 * * *",
+    { kind: "league-sync-nudge", reason: "scheduled" } satisfies EmailSweepJob,
+    {
+      tz: "UTC",
+      key: "daily-league-sync-nudge",
+      group: { id: "email" },
+      singletonKey: "email-sweep:league-sync-nudge",
     },
   );
   if (projectionSeason !== undefined) {

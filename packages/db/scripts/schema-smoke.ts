@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 
 import postgres from "postgres";
 
@@ -18,6 +18,8 @@ const expectedTables = [
   "change_events",
   "data_sources",
   "adp_observations",
+  "email_sends",
+  "email_verification_tokens",
   "espn_league_sync_states",
   "espn_refresh_attempts",
   "import_runs",
@@ -30,6 +32,7 @@ const expectedTables = [
   "player_snap_count_observations",
   "player_weekly_roster_observations",
   "player_weekly_stat_observations",
+  "password_reset_tokens",
   "projection_model_runs",
   "projection_observations",
   "ranking_entries",
@@ -145,7 +148,7 @@ try {
     where table_schema = 'public'
       and table_name in (
         'bridge_devices', 'browser_handoff_tokens', 'provider_connections',
-        'recommendation_runs', 'refresh_requests', 'oauth_states'
+        'recommendation_runs', 'refresh_requests', 'oauth_states', 'users'
       )
   `;
   const columnNames = new Set(columnRows.map((row) => `${row.table_name}.${row.column_name}`));
@@ -164,6 +167,7 @@ try {
     "refresh_requests.required_artifacts",
     "refresh_requests.fulfillment_mode",
     "refresh_requests.fulfilled_by_bridge_device_id",
+    "users.email_verified_at",
   ]) {
     assert.ok(columnNames.has(column), `missing migrated column ${column}`);
   }
@@ -177,6 +181,9 @@ try {
     "missing recommendation run replay identity index",
   );
   for (const indexName of [
+    "email_sends_key_unique",
+    "email_verification_tokens_token_hash_unique",
+    "password_reset_tokens_token_hash_unique",
     "refresh_requests_live_league_unique",
     "league_supplemental_artifact_lookup_idx",
     "espn_league_sync_states_due_idx",
@@ -226,6 +233,39 @@ try {
   const ownerId = requiredString(owner?.id, "owner id");
   const friendId = requiredString(friend?.id, "friend id");
   const outsiderId = requiredString(outsider?.id, "outsider id");
+
+  const verificationTokenHash = randomBytes(32).toString("base64url");
+  await sql`
+    insert into email_verification_tokens (user_id, token_hash, expires_at)
+    values (${friendId}, ${verificationTokenHash}, now() + interval '30 minutes')
+  `;
+  await expectDatabaseRejection(
+    "plaintext-shaped email verification token",
+    () => sql`
+      insert into email_verification_tokens (user_id, token_hash, expires_at)
+      values (${friendId}, 'plaintext-token', now() + interval '30 minutes')
+    `,
+  );
+  await expectDatabaseRejection(
+    "reused email verification token digest",
+    () => sql`
+      insert into email_verification_tokens (user_id, token_hash, expires_at)
+      values (${friendId}, ${verificationTokenHash}, now() + interval '30 minutes')
+    `,
+  );
+
+  const resetTokenHash = randomBytes(32).toString("base64url");
+  await sql`
+    insert into password_reset_tokens (user_id, token_hash, expires_at)
+    values (${friendId}, ${resetTokenHash}, now() + interval '30 minutes')
+  `;
+  await expectDatabaseRejection(
+    "overlong password reset window",
+    () => sql`
+      insert into password_reset_tokens (user_id, token_hash, expires_at)
+      values (${friendId}, ${randomBytes(32).toString("base64url")}, now() + interval '61 minutes')
+    `,
+  );
 
   await sql`
     insert into oauth_states (

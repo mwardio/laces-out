@@ -89,8 +89,10 @@ unset OWNER_PASSWORD
 
 A member who still knows their password changes it themselves at `/settings`, which keeps their
 current session, signs out their other devices, and invalidates every outstanding browser handoff,
-including one created from the retained session. The command below is for the case they cannot sign
-in at all.
+including one created from the retained session. A member who forgot it uses **Forgot password?**
+on `/login` when the deployment sends email (see _Outbound email_ below); the emailed link expires
+after 30 minutes, redeems once, and signs out every existing session. The command below is the
+operator fallback for the case self-service reset is unavailable or the member lost inbox access.
 
 If a member forgets a password, the operator can reset it without editing PostgreSQL directly. The
 command invalidates every existing session for that account. Supply the new password ephemerally:
@@ -582,6 +584,67 @@ The sweep runs at minutes 4, 19, 34, and 49 UTC on the `notification-sweep` queu
 to `notification-sweep-dead-letter`. Its log line carries counts only — never a recipient, a device,
 or notification text. Alerts read the last synced roster, not the provider, and say how old that
 roster is; on iOS, web push is delivered only to a PWA installed to the Home Screen.
+
+## Outbound email (SMTP)
+
+Off by default, and cleanly off: with no SMTP settings registration activates accounts
+immediately (exactly the pre-email behavior), `POST /v1/auth/forgot-password` and
+`POST /v1/auth/verify-email` answer 404 with a labeled problem (`/forgot-password` and
+`/verify-email` render an "ask the host" message), and the daily worker sweep completes as a
+no-op with `skipped: "smtp-not-configured"`. Existing deployments need no action.
+
+To turn it on, set all of these on the API and worker (the Compose stack does this from one shared
+block); startup rejects a partial identity:
+
+```bash
+SMTP_HOST=smtp.mail.me.com        # any TLS SMTP submission service
+SMTP_PORT=587                     # default; 465 switches to implicit TLS
+SMTP_USER=you@icloud.com          # the account that authenticates the send
+SMTP_PASSWORD=<app-specific password — never the account password>
+EMAIL_FROM="Laces Out <noreply@lacesout.app>"
+EMAIL_VERIFICATION_ENABLED=false # enable only after SMTP and client compatibility smoke tests
+```
+
+SMTP delivery and registration enforcement are separate on purpose. Apply migration `0038`,
+deploy the SMTP-capable API and worker with `EMAIL_VERIFICATION_ENABLED=false`, validate password
+reset and delivery, then set the flag to `true`. Startup rejects the enabled flag unless the full
+SMTP identity is present. Health responses advertise `email-verification-v1` only when both the
+flag and confirmation service are active.
+
+The transport requires TLS on every hop (STARTTLS on 587, implicit on 465) and never logs a
+recipient, a message body, or a server response — send failures surface as counts plus a sanitized
+code such as `EAUTH` or `550`. The example above is an iCloud+ custom domain: Apple publishes
+SPF/DKIM for it, `EMAIL_FROM` must be the custom-domain alias of the authenticating Apple ID, and
+Apple's daily sending caps make it a small-deployment choice — swapping providers later is an
+environment change, not a code change.
+
+What actually sends, and when:
+
+- **Email confirmation** — the welcome email and activation gate in one message. With
+  `EMAIL_VERIFICATION_ENABLED=true`, registration creates a dormant account and no session. Both
+  registration and a correct-password login answer the same 403 Problem Details response with
+  stable code `email_verification_required`; incorrect credentials remain the generic 401. This
+  preserves the current iOS error contract while web shows its confirmation screen. The link
+  expires after 24 hours, redeems once from a stored SHA-256 digest in
+  `email_verification_tokens`, and deliberately returns the member to normal sign-in instead of
+  creating a session. Re-registering a pending address or using the resend form rotates only the
+  confirmation token; it cannot replace that account's credentials, identity, or league
+  membership. New invitation accounts also wait for confirmation while the accepted invitation
+  and membership remain saved. Password reset does not confirm a pending account. Operator-created
+  accounts activate immediately, and migration `0038` stamps every pre-existing account verified.
+- **Password reset** — on request from `/forgot-password`. The API answers 202 before doing any
+  work, so neither the body nor the timing discloses whether an account exists. Only a SHA-256
+  digest of the token is stored (`password_reset_tokens`); the link expires after 30 minutes, a
+  newer request supersedes any older link, redemption is single-use, and completing it revokes
+  every session — the same boundary as the operator CLI. Requests are rate-limited to 5 per IP per
+  15 minutes, redemptions to 10.
+- **League-setup reminder** — the one follow-up: members registered 3–14 days ago with no league
+  membership, at most once per member ever, claimed under `league-sync-nudge:<userId>`. The
+  14-day edge is deliberate: enabling SMTP on an old deployment must not greet the dormant
+  backlog. Members opt out with the **Email updates** toggle at `/settings`, which the sweep
+  honors; password reset email ignores the toggle on purpose because it is requested, not
+  broadcast. The sweep runs daily at 16:10 UTC on the `email-sweep` queue, dead-letters to
+  `email-sweep-dead-letter`, and its log line carries counts only.
 
 ## Change events
 

@@ -25,6 +25,7 @@
       "@fantasy/change-events": ["packages/change-events/src/index.ts"],
       "@fantasy/contracts": ["packages/contracts/src/index.ts"],
       "@fantasy/domain": ["packages/domain/src/index.ts"],
+      "@fantasy/email": ["packages/email/src/index.ts"],
       "@fantasy/db": ["packages/db/src/index.ts"],
       "@fantasy/decisions": ["packages/decisions/src/index.ts"],
       "@fantasy/connectors": ["packages/connectors/src/index.ts"],

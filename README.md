@@ -148,6 +148,8 @@ settings are in [.env.example](./.env.example).
 | `GEMINI_API_KEY`                          | Shared Film Room access                               |
 | `OPENROUTER_API_KEY`                      | Shared Medium/Scorched Reckoning recaps               |
 | `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY`  | Game-day push alerts                                  |
+| `SMTP_HOST` / `SMTP_USER` / `EMAIL_FROM`  | Account email: confirmation, password reset, nudge    |
+| `EMAIL_VERIFICATION_ENABLED`              | Confirm-first registration after SMTP validation      |
 | `YAHOO_CLIENT_ID` / `YAHOO_CLIENT_SECRET` | Yahoo OAuth when enabled                              |
 | `NEXT_PUBLIC_YAHOO_ACCESS_STATUS`         | Set to `available` when Yahoo OAuth is ready          |
 | `YAHOO_AUTOMATED_SYNC_ENABLED`            | Unattended Yahoo reads; defaults `false`              |

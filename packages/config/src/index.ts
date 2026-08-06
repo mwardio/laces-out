@@ -103,6 +103,33 @@ const environmentSchema = z.object({
       .max(255)
       .optional(),
   ),
+  /**
+   * Outbound email identity, optional and absent by default: a deployment without SMTP settings
+   * simply sends no email — registration, password entry, and the worker all keep working. The
+   * four are all-or-nothing; SMTP_PORT alone carries a default because 587 (STARTTLS submission)
+   * is right for nearly every provider, including iCloud custom domains.
+   */
+  SMTP_HOST: z.preprocess(blankToUndefined, z.string().trim().min(1).max(255).optional()),
+  SMTP_PORT: z.coerce.number().int().min(1).max(65_535).default(587),
+  SMTP_USER: z.preprocess(blankToUndefined, z.string().trim().min(1).max(320).optional()),
+  SMTP_PASSWORD: z.preprocess(blankToUndefined, z.string().min(1).max(1024).optional()),
+  /** RFC 5322 From: either `user@example.app` or `Display Name <user@example.app>`. */
+  EMAIL_FROM: z.preprocess(
+    blankToUndefined,
+    z
+      .string()
+      .trim()
+      .max(320)
+      .regex(
+        /^(?:[^<>\r\n]{1,100}<[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+>|[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+)$/u,
+      )
+      .optional(),
+  ),
+  /**
+   * Enforces confirm-first registration and invitation acceptance. Kept separate from SMTP so
+   * schema and delivery support can be deployed before legacy clients are exposed to the gate.
+   */
+  EMAIL_VERIFICATION_ENABLED: booleanFlag,
   LOG_LEVEL: z.enum(["fatal", "error", "warn", "info", "debug", "trace", "silent"]).default("info"),
 });
 
@@ -164,6 +191,7 @@ export function loadEnvironment(
       ["OPENROUTER_API_KEY", parsed.data.OPENROUTER_API_KEY],
       ["YAHOO_CLIENT_ID", parsed.data.YAHOO_CLIENT_ID],
       ["YAHOO_CLIENT_SECRET", parsed.data.YAHOO_CLIENT_SECRET],
+      ["SMTP_PASSWORD", parsed.data.SMTP_PASSWORD],
     ].flatMap(([name, value]) =>
       typeof value === "string" && placeholderPattern.test(value) ? [name] : [],
     );
@@ -206,6 +234,33 @@ export function loadEnvironment(
     throw new Error(
       "Web push requires VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY, and VAPID_SUBJECT together",
     );
+  }
+
+  const smtpWasRequested = Boolean(
+    parsed.data.SMTP_HOST ||
+    parsed.data.SMTP_USER ||
+    parsed.data.SMTP_PASSWORD ||
+    parsed.data.EMAIL_FROM,
+  );
+  if (
+    smtpWasRequested &&
+    (!parsed.data.SMTP_HOST ||
+      !parsed.data.SMTP_USER ||
+      !parsed.data.SMTP_PASSWORD ||
+      !parsed.data.EMAIL_FROM)
+  ) {
+    throw new Error(
+      "Outbound email requires SMTP_HOST, SMTP_USER, SMTP_PASSWORD, and EMAIL_FROM together",
+    );
+  }
+  if (
+    parsed.data.EMAIL_VERIFICATION_ENABLED &&
+    (!parsed.data.SMTP_HOST ||
+      !parsed.data.SMTP_USER ||
+      !parsed.data.SMTP_PASSWORD ||
+      !parsed.data.EMAIL_FROM)
+  ) {
+    throw new Error("EMAIL_VERIFICATION_ENABLED requires complete outbound email configuration");
   }
 
   const yahooWasRequested = Boolean(parsed.data.YAHOO_CLIENT_ID || parsed.data.YAHOO_CLIENT_SECRET);

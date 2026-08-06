@@ -8,6 +8,11 @@ import {
   sessionLifetimeSeconds,
   type LoginResult,
 } from "./auth.js";
+import {
+  buildConfirmUrl,
+  emailVerificationTokenLifetimeHours,
+  type EmailConfirmationDelivery,
+} from "./email-verification.js";
 
 const minimumInviteCodeLength = 12;
 const maximumInviteCodeLength = 128;
@@ -33,6 +38,25 @@ export interface RegistrationRepository {
     readonly expiresAt: Date;
   }): Promise<RegisteredUserRecord | undefined>;
 }
+
+/**
+ * Persistence boundary for confirm-first registration. A repeated request for an existing pending
+ * address rotates only its verification token; it must not replace identity, credentials, or an
+ * invitation-granted membership. A verified account is a conflict, represented as `undefined`.
+ */
+export interface PendingRegistrationRepository {
+  createOrRotatePendingMember(input: {
+    readonly email: string;
+    readonly displayName: string;
+    readonly passwordHash: string;
+    readonly verificationTokenHash: string;
+    readonly verificationExpiresAt: Date;
+    readonly now: Date;
+  }): Promise<RegisteredUserRecord | undefined>;
+}
+
+export type RegistrationOutcome =
+  ({ readonly status: "active" } & LoginResult) | { readonly status: "pending" };
 
 function normalizeInviteCode(value: string): string | undefined {
   const normalized = value.normalize("NFKC").trim();
@@ -94,6 +118,18 @@ function digestInviteCode(code: string, key: Uint8Array): Buffer {
 export interface RegistrationServiceOptions {
   readonly now?: () => Date;
   readonly tokenFactory?: () => string;
+  /**
+   * When present, registration is confirm-first: the account is created dormant with no session
+   * and a confirmation email carries the activation link. Absent (no SMTP), accounts activate
+   * immediately as before.
+   */
+  readonly confirmation?: {
+    readonly repository: PendingRegistrationRepository;
+    readonly delivery: EmailConfirmationDelivery;
+    readonly webUrl: string;
+    /** A failed send is recoverable via re-registration; it is reported here, never thrown. */
+    readonly onDeliveryError?: (error: unknown) => void;
+  };
 }
 
 /**
@@ -102,6 +138,7 @@ export interface RegistrationServiceOptions {
  */
 export class RegistrationService {
   readonly #repository: RegistrationRepository;
+  readonly #confirmation: RegistrationServiceOptions["confirmation"];
   readonly #inviteCodeKey: Buffer | undefined;
   readonly #expectedInviteCodeDigest: Buffer | undefined;
   readonly #now: () => Date;
@@ -121,6 +158,7 @@ export class RegistrationService {
       );
     }
     this.#repository = repository;
+    this.#confirmation = options.confirmation;
     if (normalizedInviteCode) {
       this.#inviteCodeKey = deriveInviteCodeKey(rootSecret);
       this.#expectedInviteCodeDigest = digestInviteCode(normalizedInviteCode, this.#inviteCodeKey);
@@ -134,7 +172,7 @@ export class RegistrationService {
     readonly email: string;
     readonly displayName: string;
     readonly password: string;
-  }): Promise<LoginResult | undefined> {
+  }): Promise<RegistrationOutcome | undefined> {
     const expectedInviteCodeDigest = this.#expectedInviteCodeDigest;
     const inviteCodeKey = this.#inviteCodeKey;
     const inviteCodeIsValid =
@@ -165,11 +203,39 @@ export class RegistrationService {
     if (!inviteCodeIsValid || !email || !displayName) return undefined;
 
     const now = this.#now();
-    const expiresAt = new Date(now.getTime() + sessionLifetimeSeconds * 1000);
     const token = this.#tokenFactory();
     if (!/^[A-Za-z0-9_-]{43}$/u.test(token)) {
       throw new Error("Registration token factory must return 32 random bytes as base64url");
     }
+
+    const confirmation = this.#confirmation;
+    if (confirmation) {
+      const user = await confirmation.repository.createOrRotatePendingMember({
+        email,
+        displayName,
+        passwordHash,
+        verificationTokenHash: hashSessionToken(token),
+        verificationExpiresAt: new Date(
+          now.getTime() + emailVerificationTokenLifetimeHours * 60 * 60 * 1000,
+        ),
+        now,
+      });
+      if (!user) return undefined;
+      try {
+        await confirmation.delivery.sendConfirmationEmail({
+          email: user.email,
+          displayName: user.displayName,
+          confirmUrl: buildConfirmUrl(confirmation.webUrl, token),
+          expiresHours: emailVerificationTokenLifetimeHours,
+        });
+      } catch (error) {
+        // The pending account exists and re-registering resends; a lost email must not undo that.
+        confirmation.onDeliveryError?.(error);
+      }
+      return { status: "pending" };
+    }
+
+    const expiresAt = new Date(now.getTime() + sessionLifetimeSeconds * 1000);
     const user = await this.#repository.createMemberWithSession({
       email,
       displayName,
@@ -178,6 +244,6 @@ export class RegistrationService {
       expiresAt,
     });
     if (!user) return undefined;
-    return { token, expiresAt, user };
+    return { status: "active", token, expiresAt, user };
   }
 }
