@@ -136,7 +136,6 @@ export function ChangeFeedPanel({ leagueId }: ChangeFeedPanelProps) {
     <section className={styles.panel} aria-labelledby="change-feed-title">
       <div className={styles.header}>
         <div>
-          <p>What changed</p>
           <h2 id="change-feed-title">Recent league activity</h2>
         </div>
         <div className={styles.headerActions}>

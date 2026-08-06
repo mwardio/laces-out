@@ -13,6 +13,7 @@ import Link from "next/link";
 import { type FormEvent, useEffect, useState } from "react";
 
 import { apiBaseUrl } from "../lib/api-client";
+import { AUTH_ERRORS } from "../lib/copy";
 
 const MINIMUM_PASSWORD_LENGTH = 12;
 
@@ -30,11 +31,11 @@ const errorMessages: Record<Exclude<ResetError, null>, string> = {
   expired: "This reset link is invalid or has expired. Request a fresh one below.",
   mismatch: "The passwords do not match.",
   "too-short": `Use at least ${MINIMUM_PASSWORD_LENGTH} characters.`,
-  "rate-limit": "Too many attempts. Wait a few minutes, then try again.",
-  unavailable: "The private API can’t be reached right now. Try again in a moment.",
+  "rate-limit": AUTH_ERRORS.rateLimit,
+  unavailable: AUTH_ERRORS.unavailable,
   "not-configured":
     "This deployment doesn’t support self-service reset. Ask the host to reset your password.",
-  unknown: "The reset couldn’t be completed. Try again in a moment.",
+  unknown: `The reset couldn’t be completed. ${AUTH_ERRORS.tryAgain}`,
 };
 
 function classifyResponse(status: number): Exclude<ResetError, null> {
@@ -120,10 +121,6 @@ export function ResetPasswordForm() {
           <div>
             <p className="eyebrow">Password reset</p>
             <h1>You’re back in business</h1>
-            <p>
-              Your password is set and every previously signed-in device has been signed out. Sign
-              in with the new password to continue.
-            </p>
           </div>
         </div>
         <div className="login-demo-route">
@@ -154,10 +151,6 @@ export function ResetPasswordForm() {
           <div>
             <p className="eyebrow">Password reset</p>
             <h1>That link is incomplete</h1>
-            <p>
-              This page only works from the link in a reset email. Request a fresh one and open it
-              from your inbox.
-            </p>
           </div>
         </div>
         <div className="login-demo-route">

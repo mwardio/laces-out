@@ -3,6 +3,7 @@
 import { Check, FileSpreadsheet, Info, ListPlus, Save, ShieldCheck } from "lucide-react";
 import Link from "next/link";
 
+import { TOUR_BANNER } from "../lib/copy";
 import { draftPlayers } from "../lib/demo-data";
 
 export function DemoRankingsStudio() {
@@ -11,8 +12,8 @@ export function DemoRankingsStudio() {
       <div className="ranking-demo-notice" role="status">
         <Info size={17} />
         <span>
-          <strong>Locker room tour</strong>
-          Illustrative boards and player values. Tour controls never save or share data.
+          <strong>{TOUR_BANNER.title}</strong>
+          {TOUR_BANNER.detail}
         </span>
       </div>
 

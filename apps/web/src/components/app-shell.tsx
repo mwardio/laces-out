@@ -58,70 +58,70 @@ const primaryNavigation = [
   {
     href: "/app",
     label: "Overview",
-    description: "Your leagues and next moves",
+    description: "Leagues and actions",
     icon: LayoutDashboard,
     section: "dashboard" as const,
   },
   {
     href: "/analytics",
     label: "League Analytics",
-    description: "Power ranks and opponent edges",
+    description: "League and opponents",
     icon: BarChart3,
     section: "analytics" as const,
   },
   {
     href: "/stats",
     label: "Stats Center",
-    description: "Usage, production, efficiency, and trends",
+    description: "Player performance",
     icon: ChartSpline,
     section: "stats" as const,
   },
   {
     href: "/decisions",
     label: "Decision Desk",
-    description: "Lineups, waivers, and trades",
+    description: "Lineups, waivers, trades",
     icon: ClipboardCheck,
     section: "decisions" as const,
   },
   {
     href: "/film-room",
     label: "Film Room",
-    description: "Gemini briefs and second reads",
+    description: "AI league review",
     icon: BrainCircuit,
     section: "ai" as const,
   },
   {
     href: "/rankings",
     label: "Rankings",
-    description: "Boards, values, and cheat sheets",
+    description: "Boards and values",
     icon: ListOrdered,
     section: "rankings" as const,
   },
   {
     href: "/projections",
     label: "Projections",
-    description: "Weekly and rest-of-season forecasts",
+    description: "Weekly and ROS",
     icon: ChartNoAxesCombined,
     section: "projections" as const,
   },
   {
     href: "/schedule",
     label: "Matchups",
-    description: "Opponent strength, bye pressure, and playoff paths",
+    description: "Schedule and strength",
     icon: CalendarDays,
     section: "schedule" as const,
   },
   {
     href: "/draft",
     label: "Draft Studio",
-    description: "Auction and snake draft rooms",
+    description: "Auction and snake",
     icon: Radio,
     section: "draft" as const,
   },
   {
     href: "/connections",
     label: "League Sync",
-    description: yahooComingSoon ? "Sync ESPN · Yahoo coming soon" : "Sync Yahoo + ESPN",
+    description: yahooComingSoon ? "ESPN sync" : "ESPN and Yahoo",
     icon: Cable,
     section: "connections" as const,
   },
@@ -366,11 +366,7 @@ export function AppShell({
             aria-labelledby="mobile-menu-title"
           >
             <header className="mobile-menu-sheet__header">
-              <div>
-                <p>Locker Room</p>
-                <h2 id="mobile-menu-title">Pick your next move.</h2>
-                <span>Every tool is here. No desktop detour required.</span>
-              </div>
+              <h2 id="mobile-menu-title">Locker Room</h2>
               <button
                 ref={mobileMenuCloseRef}
                 className="mobile-menu-sheet__close"

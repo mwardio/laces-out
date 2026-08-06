@@ -45,6 +45,7 @@ type ListKind = "rankings" | "adp" | "auction-values" | "cheat-sheet";
 type ScoringFormat = "STANDARD" | "HALF_PPR" | "PPR" | "CUSTOM";
 type RequestState = "idle" | "working" | "done" | "error";
 const rankingsHistoryGuardKey = "__lacesOutRankingsDirtyGuard";
+const discardChangesPrompt = "Discard unsaved changes?";
 
 interface RankingList {
   readonly id: string;
@@ -839,7 +840,7 @@ export function RankingsStudio() {
         pushHistoryGuard();
         return;
       }
-      if (window.confirm("Discard unsaved board edits and CSV work before leaving this page?")) {
+      if (window.confirm(discardChangesPrompt)) {
         dirtyRef.current = false;
         history.back();
         return;
@@ -874,7 +875,7 @@ export function RankingsStudio() {
       ) {
         return;
       }
-      if (!window.confirm("Discard unsaved board edits and CSV work before leaving this page?")) {
+      if (!window.confirm(discardChangesPrompt)) {
         event.preventDefault();
         event.stopPropagation();
         return;
@@ -887,11 +888,7 @@ export function RankingsStudio() {
     };
     const warnBeforeGuardedNavigation = (event: Event) => {
       guardedNavigationApproved = false;
-      if (
-        controlsBusyRef.current ||
-        mutationRef.current ||
-        !window.confirm("Discard unsaved board edits and CSV work before signing out?")
-      ) {
+      if (controlsBusyRef.current || mutationRef.current || !window.confirm(discardChangesPrompt)) {
         event.preventDefault();
         return;
       }
@@ -931,10 +928,7 @@ export function RankingsStudio() {
   }
 
   function confirmDiscardChanges(): boolean {
-    return (
-      !dirtyRef.current ||
-      window.confirm("Discard unsaved board edits and CSV work before continuing?")
-    );
+    return !dirtyRef.current || window.confirm(discardChangesPrompt);
   }
 
   function selectBoard(boardId: string) {
@@ -989,7 +983,7 @@ export function RankingsStudio() {
       setSelectedId(result.list.id);
       await loadLists(result.list.id, { reloadVersion: true, resetMetadata: true });
       setActionState("done");
-      setMessage(`Baseline copied into an independent private draft.`);
+      setMessage("Baseline copied.");
     } catch (error) {
       setActionState("error");
       setMessage(error instanceof Error ? error.message : "The baseline could not be copied.");
@@ -1048,7 +1042,7 @@ export function RankingsStudio() {
         }),
       });
       setShowCreate(false);
-      setMessage("Board created. Import a CSV below to save its first version.");
+      setMessage("Board created.");
       selectedIdRef.current = result.list.id;
       resetWorkspace(result.list.id);
       setSelectedId(result.list.id);
@@ -1160,7 +1154,7 @@ export function RankingsStudio() {
           changeNote: "Edited in Rankings Studio",
         }),
       });
-      setMessage(`Draft v${result.version.versionNumber} saved with its source details.`);
+      setMessage(`Draft v${result.version.versionNumber} saved.`);
       setEntriesDirty(false);
       await loadLists(boardId, { reloadVersion: true });
       setActionState("done");
@@ -1396,7 +1390,7 @@ export function RankingsStudio() {
       setShare(result);
       setShareRevokeArmed(false);
       setActionState("done");
-      setMessage("Private share created. Its access key stays in the link fragment.");
+      setMessage("Private share created.");
     } catch (error) {
       setActionState("error");
       setMessage(error instanceof Error ? error.message : "A share could not be created.");
@@ -1420,7 +1414,6 @@ export function RankingsStudio() {
     if (!selected || !share) return;
     if (!shareRevokeArmed) {
       setShareRevokeArmed(true);
-      setMessage("Confirm that you want to revoke this private link.");
       return;
     }
     if (!beginMutation()) return;
@@ -1432,7 +1425,7 @@ export function RankingsStudio() {
       setShare(null);
       setShareRevokeArmed(false);
       setActionState("done");
-      setMessage("Share revoked. The old link no longer opens this board.");
+      setMessage("Share revoked.");
       await loadLists(boardId);
     } catch (error) {
       setActionState("error");
@@ -1448,13 +1441,7 @@ export function RankingsStudio() {
     <div className="rankings-page">
       <section className="page-heading rankings-heading">
         <div>
-          <p className="eyebrow">Your board, your numbers</p>
           <h1>Rankings Studio</h1>
-          <p className="page-subtitle">
-            Build rankings, ADP, auction values, and cheat sheets. Keep every revision, see where
-            each number came from, and match CSV imports against the daily player catalog before
-            saving.
-          </p>
         </div>
         <div className="heading-actions">
           <Link
@@ -1507,7 +1494,6 @@ export function RankingsStudio() {
         <form className="panel ranking-create" onSubmit={(event) => void createList(event)}>
           <div className="panel-heading">
             <div>
-              <p className="eyebrow">New board</p>
               <h2>Create a private board</h2>
             </div>
             <button
@@ -1588,7 +1574,6 @@ export function RankingsStudio() {
         <aside className="panel ranking-library" aria-label="Ranking boards">
           <div className="panel-heading">
             <div>
-              <p className="eyebrow">Library</p>
               <h2>Available boards</h2>
             </div>
             <span className="count-badge">{lists.length}</span>
@@ -1740,8 +1725,7 @@ export function RankingsStudio() {
               <section className="panel ranking-comparison" aria-labelledby="board-compare-title">
                 <div className="ranking-comparison-toolbar">
                   <div>
-                    <p className="eyebrow">Board comparison</p>
-                    <h2 id="board-compare-title">Pressure-test the baseline</h2>
+                    <h2 id="board-compare-title">Compare boards</h2>
                     <p>Compare saved ranks and market values without changing either board.</p>
                   </div>
                   <div className="ranking-comparison-controls">
@@ -1777,7 +1761,7 @@ export function RankingsStudio() {
                       ) : (
                         <GitCompareArrows size={14} />
                       )}{" "}
-                      Compare saved boards
+                      Compare
                     </button>
                   </div>
                 </div>
@@ -1864,9 +1848,6 @@ export function RankingsStudio() {
               <section className="panel ranking-editor">
                 <div className="panel-heading">
                   <div>
-                    <p className="eyebrow">
-                      {selected.capabilities.canEdit ? "Editable draft" : "Available baseline"}
-                    </p>
                     <h2>{visibleEntries.length} ranked players</h2>
                     <p>
                       {selected.capabilities.canEdit
@@ -1916,11 +1897,7 @@ export function RankingsStudio() {
                 {versionState !== "working" && visibleEntries.length === 0 ? (
                   <div className="ranking-empty ranking-empty--editor">
                     <CloudUpload size={25} />
-                    <strong>Import your first player set below</strong>
-                    <p>
-                      Names are resolved against the player catalog before a version can be
-                      committed.
-                    </p>
+                    <strong>No players yet</strong>
                   </div>
                 ) : null}
                 {visibleEntries.length > 0 ? (
@@ -1971,9 +1948,7 @@ export function RankingsStudio() {
                 <section className="panel ranking-import">
                   <div className="panel-heading">
                     <div>
-                      <p className="eyebrow">Safe import</p>
-                      <h2>Preview CSV before commit</h2>
-                      <p>Nothing is persisted until you accept the resolved rows.</p>
+                      <h2>Import CSV</h2>
                     </div>
                     <FileSpreadsheet size={20} />
                   </div>
@@ -2087,7 +2062,7 @@ export function RankingsStudio() {
                         ) : (
                           <CloudUpload size={15} />
                         )}{" "}
-                        Preview resolution
+                        Preview
                       </button>
                       <button
                         className="button button--lime"
@@ -2110,7 +2085,6 @@ export function RankingsStudio() {
                 <section className="panel ranking-portability">
                   <div className="panel-heading">
                     <div>
-                      <p className="eyebrow">Portable by design</p>
                       <h2>Export or share</h2>
                       <p>JSON keeps complete versions and source details; CSV travels anywhere.</p>
                     </div>

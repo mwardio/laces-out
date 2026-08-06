@@ -5,6 +5,7 @@ import Link from "next/link";
 import { type FormEvent, useState } from "react";
 
 import { apiBaseUrl } from "../lib/api-client";
+import { AUTH_ERRORS } from "../lib/copy";
 import { safeReturnTo } from "../lib/safe-return-to";
 
 type LoginError =
@@ -13,10 +14,10 @@ type LoginError =
 const errorMessages: Record<Exclude<LoginError, null>, string> = {
   credentials: "We couldn’t sign you in with those credentials.",
   unverified: "This account’s email hasn’t been confirmed yet. Use the link in your inbox first.",
-  "rate-limit": "Too many attempts. Wait a minute, then try again.",
-  unavailable: "The private API can’t be reached right now. Demo mode is still available.",
+  "rate-limit": AUTH_ERRORS.rateLimit,
+  unavailable: AUTH_ERRORS.unavailable,
   invalid: "Check the email and password, then try again.",
-  unknown: "Sign-in couldn’t be completed. Try again in a moment.",
+  unknown: `Sign-in couldn’t be completed. ${AUTH_ERRORS.tryAgain}`,
 };
 
 function classifyResponse(status: number): Exclude<LoginError, null> {
@@ -90,7 +91,6 @@ export function LoginForm() {
         <div>
           <p className="eyebrow">Member access</p>
           <h1>Welcome back</h1>
-          <p>Sign in to reach your leagues, private research, and provider connections.</p>
         </div>
       </div>
 
@@ -164,16 +164,6 @@ export function LoginForm() {
       <div className="login-demo-route login-register-route">
         <span>Need an account?</span>
         <Link href="/register">Create your account</Link>
-      </div>
-
-      <div className="login-demo-route">
-        <span>Want to look around before signing in?</span>
-        <Link href="/app">Tour the locker room.</Link>
-      </div>
-
-      <div className="login-demo-route">
-        <span>Review how this deployment handles league data.</span>
-        <Link href="/privacy">Privacy policy</Link>
       </div>
     </form>
   );

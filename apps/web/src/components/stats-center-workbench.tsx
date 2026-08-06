@@ -25,6 +25,7 @@ import Link from "next/link";
 import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { apiBaseUrl, parseStatsCenterResponse } from "../lib/api-client";
+import { TOUR_BANNER } from "../lib/copy";
 import { NFL_TEAM_CHOICES } from "../lib/nfl-teams";
 import {
   dateTime,
@@ -201,16 +202,6 @@ const familyOptions: readonly { value: MetricFamily; label: string }[] = [
   { value: "trend", label: "Trend" },
   { value: "all", label: "All stats" },
 ];
-
-// The metric tabs show titles only; the active family's description renders as
-// a single muted line below the tab strip instead of wrapping inside each tab.
-const familyHints: Readonly<Record<MetricFamily, string>> = {
-  usage: "Targets, carries, and time on the field",
-  production: "Scored output and boom or bust shape",
-  efficiency: "Air yards, EPA, and derived shares",
-  trend: "Recent weeks against the full window",
-  all: "Every column from the four views above, in one table",
-};
 
 const trendOptions: readonly { value: StatsCenterTrendMetric; label: string }[] = [
   { value: "opportunitiesPerGame", label: "Opportunities per game" },
@@ -811,20 +802,15 @@ export function StatsCenterWorkbench() {
         <div className={styles.demoNotice} role="status">
           <Info size={17} aria-hidden="true" />
           <span>
-            <strong>Locker room tour</strong>
-            Illustrative opportunity and participation rows. No live player data is shown.
+            <strong>{TOUR_BANNER.title}</strong>
+            {TOUR_BANNER.detail}
           </span>
         </div>
       ) : null}
 
       <header className={styles.hero}>
         <div>
-          <p>Usage before points</p>
           <h1>Stats Center</h1>
-          <span>
-            Every admitted weekly field, one window at a time: volume, scored production, air-yards
-            and EPA efficiency, and how the recent weeks compare with the whole range.
-          </span>
         </div>
         <ChartSpline size={34} strokeWidth={1.5} aria-hidden="true" />
       </header>
@@ -969,7 +955,6 @@ export function StatsCenterWorkbench() {
             </button>
           ))}
         </div>
-        <p className={styles.metricHint}>{familyHints[family]}</p>
       </div>
 
       {view.state === "loading" ? (
@@ -977,7 +962,6 @@ export function StatsCenterWorkbench() {
           <LoaderCircle className={styles.spin} size={20} aria-hidden="true" />
           <div>
             <strong>Reading the latest admitted files</strong>
-            <span>Resolving players and rebuilding opportunity metrics.</span>
           </div>
         </div>
       ) : view.state === "error" ? (
@@ -1059,7 +1043,7 @@ function ColumnPicker({
         onClick={onShowAll}
         disabled={hidden.size === 0}
       >
-        Show every column
+        Show all
       </button>
     </details>
   );
@@ -1160,7 +1144,6 @@ function StatsResult({
       <section className={styles.leaderPanel} aria-labelledby="leader-title">
         <div className={styles.panelHeading}>
           <div>
-            <p>Regular-season observations</p>
             <h2 id="leader-title">
               {familyOptions.find((option) => option.value === family)?.label} leaders
             </h2>
@@ -1213,8 +1196,7 @@ function StatsResult({
         {data.players.length === 0 ? (
           <div className={styles.emptyState}>
             <Database size={22} aria-hidden="true" />
-            <strong>No player rows match this view</strong>
-            <span>Try another season, week range, team, position, or player name.</span>
+            <strong>No matching players</strong>
           </div>
         ) : (
           <div
@@ -1324,7 +1306,6 @@ function StatsResult({
       <section className={styles.sourceSection} aria-labelledby="source-title">
         <div className={styles.sectionHeading}>
           <div>
-            <p>Audit trail</p>
             <h2 id="source-title">Source health</h2>
           </div>
         </div>
@@ -1398,8 +1379,7 @@ function HonestGaps({ data }: { readonly data: StatsCenterResponse }) {
     <section className={styles.withheld} aria-labelledby="withheld-title">
       <div className={styles.sectionHeading}>
         <div>
-          <p>Honest gaps</p>
-          <h2 id="withheld-title">Not inferred from partial data</h2>
+          <h2 id="withheld-title">Unavailable metrics</h2>
         </div>
       </div>
       <div>

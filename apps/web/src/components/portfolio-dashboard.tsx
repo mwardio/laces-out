@@ -7,13 +7,11 @@ import {
   CalendarClock,
   Check,
   ChevronDown,
-  CircleGauge,
   ClipboardCheck,
   HeartPulse,
   Info,
   ListPlus,
   LockKeyhole,
-  RefreshCw,
   Repeat2,
   ShieldAlert,
   Target,
@@ -76,7 +74,6 @@ export function PortfolioDashboard({ afterOverview }: { readonly afterOverview?:
   const [leagueFilter, setLeagueFilter] = useState<LeagueFilter>("all");
   const [openDecision, setOpenDecision] = useState<string | null>(decisions[0]?.id ?? null);
   const [reviewed, setReviewed] = useState<ReadonlySet<string>>(new Set());
-  const [providerExpanded, setProviderExpanded] = useState<"Yahoo" | "ESPN" | null>(null);
 
   const visibleDecisions = useMemo(
     () =>
@@ -102,12 +99,7 @@ export function PortfolioDashboard({ afterOverview }: { readonly afterOverview?:
     <div className="dashboard-page">
       <section className="page-heading dashboard-heading">
         <div>
-          <p className="eyebrow">League overview</p>
-          <h1>Four leagues. One decision board.</h1>
-          <p className="page-subtitle">
-            Prioritize the lineup, waiver, and trade decisions that can change your week across
-            every league.
-          </p>
+          <h1>League overview</h1>
         </div>
         <div className="heading-actions">
           <span className="freshness-label">
@@ -125,7 +117,6 @@ export function PortfolioDashboard({ afterOverview }: { readonly afterOverview?:
           <div>
             <span>League portfolio</span>
             <strong>4 leagues</strong>
-            <small>2 auction · 2 snake</small>
           </div>
         </article>
         <article className="overview-stat">
@@ -135,7 +126,6 @@ export function PortfolioDashboard({ afterOverview }: { readonly afterOverview?:
           <div>
             <span>Weekly edge</span>
             <strong>+12.4 pts</strong>
-            <small>Across 4 lineup checks</small>
           </div>
         </article>
         <article className="overview-stat">
@@ -145,7 +135,6 @@ export function PortfolioDashboard({ afterOverview }: { readonly afterOverview?:
           <div>
             <span>Decisions waiting</span>
             <strong>{decisions.length - reviewed.size} open</strong>
-            <small>{reviewed.size} reviewed locally</small>
           </div>
         </article>
         <article className="overview-stat">
@@ -155,7 +144,6 @@ export function PortfolioDashboard({ afterOverview }: { readonly afterOverview?:
           <div>
             <span>Live data health</span>
             <strong>Not connected</strong>
-            <small>Demo UI only</small>
           </div>
         </article>
       </section>
@@ -341,7 +329,6 @@ export function PortfolioDashboard({ afterOverview }: { readonly afterOverview?:
               </div>
               <div className="win-ring-copy">
                 <strong>3 of 4 favored</strong>
-                <p>Illustrative probabilities based on the demo matchup projections.</p>
               </div>
             </div>
             <div className="mini-metrics">
@@ -367,15 +354,7 @@ export function PortfolioDashboard({ afterOverview }: { readonly afterOverview?:
           </section>
 
           <section className="panel draft-card" aria-labelledby="draft-card-title">
-            <span className="draft-card__flag">
-              <CircleGauge size={16} /> Practice room
-            </span>
-            <p className="eyebrow">Live draft assistant</p>
-            <h2 id="draft-card-title">Know your ceiling before the hammer drops.</h2>
-            <p>
-              Test dynamic auction values, room budgets, and snake availability in a safe local
-              sandbox.
-            </p>
+            <h2 id="draft-card-title">Draft Studio</h2>
             <div className="draft-card__metrics">
               <div>
                 <span>Demo budget</span>
@@ -391,7 +370,7 @@ export function PortfolioDashboard({ afterOverview }: { readonly afterOverview?:
               </div>
             </div>
             <Link className="button button--lime" href="/draft">
-              Enter draft studio <ArrowRight size={15} />
+              Open Draft Studio <ArrowRight size={15} />
             </Link>
           </section>
         </aside>
@@ -404,12 +383,7 @@ export function PortfolioDashboard({ afterOverview }: { readonly afterOverview?:
       <section className="data-section" id="data-health" aria-labelledby="connections-title">
         <div className="section-heading section-heading--connections">
           <div>
-            <p className="eyebrow">Connection center</p>
-            <h2 id="connections-title">Provider truth, in plain English</h2>
-            <p>
-              Connection modes stay explicit so an import is never mistaken for a live official
-              integration.
-            </p>
+            <h2 id="connections-title">Provider connections</h2>
           </div>
           <span className="read-only-badge">
             <LockKeyhole size={14} /> Read-only by design
@@ -443,35 +417,6 @@ export function PortfolioDashboard({ afterOverview }: { readonly afterOverview?:
                 <ShieldAlert size={14} /> Always-on access is encrypted and revocable
               </span>
             </div>
-            <button
-              className="button button--outline button--full"
-              type="button"
-              onClick={() => setProviderExpanded(providerExpanded === "ESPN" ? null : "ESPN")}
-            >
-              {providerExpanded === "ESPN" ? "Hide sync details" : "View sync details"}
-              <ChevronDown className={providerExpanded === "ESPN" ? "is-rotated" : ""} size={16} />
-            </button>
-            {providerExpanded === "ESPN" ? (
-              <div className="provider-detail provider-detail--stack">
-                <p>
-                  <Zap size={14} /> <strong>Automatic sync:</strong> the Chrome companion checks for
-                  requested work every five minutes while Chrome is running and keeps a six-hour
-                  full sweep. If your host offers it, the recommended encrypted authorization keeps
-                  refreshes running when Chrome is closed.
-                </p>
-                <p>
-                  <RefreshCw size={14} /> <strong>Truthful states:</strong> the live account shows
-                  deterministic examples such as “Refreshing directly from ESPN,” “Refresh queued ·
-                  waiting for a paired device,” “Up to date,” and “Open the paired browser and sign
-                  in to ESPN.” Cached data remains visible in every state.
-                </p>
-                <p>
-                  <ShieldAlert size={14} /> <strong>Credential boundary:</strong> Laces Out never
-                  collects the ESPN password. Device-only sync stays in Chrome; always-on mode sends
-                  only session authorization, stores it encrypted, and can be revoked at any time.
-                </p>
-              </div>
-            ) : null}
           </article>
 
           <article className="provider-card">
@@ -519,24 +464,6 @@ export function PortfolioDashboard({ afterOverview }: { readonly afterOverview?:
                 </>
               )}
             </div>
-            <button
-              className="button button--outline button--full"
-              type="button"
-              onClick={() => setProviderExpanded(providerExpanded === "Yahoo" ? null : "Yahoo")}
-            >
-              {providerExpanded === "Yahoo" ? "Hide sync details" : "View sync details"}
-              <ChevronDown className={providerExpanded === "Yahoo" ? "is-rotated" : ""} size={16} />
-            </button>
-            {providerExpanded === "Yahoo" ? (
-              <div className="provider-detail">
-                <Info size={15} />
-                <p>
-                  {yahooComingSoon
-                    ? "This tour is not a connected account. Yahoo sign-in is coming soon; when available, token exchange will stay server-side and refresh tokens will remain encrypted."
-                    : "This sample screen is not a connected account. After sign-in, League Sync can start Yahoo authorization. Token exchange stays server-side and refresh tokens are encrypted."}
-                </p>
-              </div>
-            ) : null}
           </article>
 
           <article className="provider-card provider-card--health">

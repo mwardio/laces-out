@@ -11,14 +11,10 @@
  * pins this module's known reason list against the canonical one so the two cannot silently drift.
  *
  * Parsing here is deliberately more forgiving than the server-side wire schema on two axes that grow
- * over time — `RosLeagueReadiness.reasons` and `.positions` — because an unrecognized-but-additive
- * value from a newer API is normal, expected API evolution, not corruption: an unknown reason string
- * is kept as an opaque string (rendered via a readable fallback, see `humanizeRosWithholdingReason`)
- * instead of failing the parse, and a malformed `positions` entry is dropped rather than rejecting the
- * league or the whole payload. This mirrors the module's own stated goal above — one degraded or
- * not-yet-locally-known fact must never blank the others. Top-level shape strictness (`ALLOWED_KEYS`
- * below) stays a hard rejection on purpose: it exists specifically to catch a server re-introducing the
- * removed collapsed `publication` verdict, a real regression class, not additive evolution.
+ * over time: `RosLeagueReadiness.reasons` and `.positions`. An unknown reason remains an opaque
+ * string, and a malformed position entry is dropped rather than rejecting the whole payload.
+ * Top-level shape strictness (`ALLOWED_KEYS` below) remains a hard rejection so a removed collapsed
+ * `publication` verdict cannot return unnoticed.
  */
 
 export const ROS_WITHHOLDING_REASONS = [
@@ -88,9 +84,8 @@ export interface RosLeagueReadiness {
   readonly leagueName: string | null;
   readonly state: "ready" | "withheld";
   /**
-   * Not a hard `RosWithholdingReason[]`: an unrecognized-but-additive value from a newer API is kept
-   * as an opaque string (see the module docblock) rather than failing the parse. Every currently-known
-   * value is still a `RosWithholdingReason`; `humanizeRosWithholdingReason` renders any string safely.
+   * Not a hard `RosWithholdingReason[]`: an additive value from a newer API remains an opaque string
+   * rather than failing the parse.
    */
   readonly reasons: readonly string[];
   readonly scoringProfile: RosScoringProfileIdentity | null;
@@ -426,80 +421,15 @@ export function parseRosReleaseStatus(value: unknown): RosReleaseStatus | null {
   };
 }
 
-const REASON_LABELS: Readonly<Record<RosWithholdingReason, string>> = {
-  "scoring-rules-unsupported":
-    "Your league's scoring rules could not be matched to any position at all.",
-  "no-admitted-scoring-profile":
-    "Your league's scoring rules are not one of the validated profiles.",
-  "incomplete-schedule": "The NFL schedule for the remaining weeks is not complete yet.",
-  "missing-candidate-pool": "The current NFL player pool has not been captured yet.",
-  "insufficient-candidate-inputs": "There are not enough scored inputs for your league yet.",
-  "non-converged-cell": "One or more position groups did not settle within tolerance.",
-  "stale-source": "The NFL source data is older than the freshness limit.",
-  "no-league-synced": "No league has been synced yet, so there is nothing to forecast for.",
-};
-
-/**
- * Turns an unrecognized reason code (e.g. one added to the API after this module was last updated)
- * into a readable-enough sentence instead of rendering `undefined`. Not pretty, but never blank.
- */
-function humanizeUnknownReason(code: string): string {
-  const words = code
-    .split(/[-_\s]+/u)
-    .map((word) => word.trim())
-    .filter((word) => word.length > 0);
-  if (words.length === 0) return "Your league has an unrecognized readiness issue.";
-  const sentence = words.join(" ");
-  return `${sentence.charAt(0).toUpperCase()}${sentence.slice(1)}.`;
-}
-
-/**
- * Accepts any string, not just a known `RosWithholdingReason`: `RosLeagueReadiness.reasons` is parsed
- * leniently (see the module docblock) so a reason the API added after this module was last updated
- * still renders, via `humanizeUnknownReason`, instead of the panel losing the whole payload.
- */
-export function humanizeRosWithholdingReason(reason: string): string {
-  return (
-    (REASON_LABELS as Readonly<Record<string, string>>)[reason] ?? humanizeUnknownReason(reason)
-  );
-}
-
-/** One position's compact readiness chip for one league. */
-export interface RosLeaguePositionChip {
-  readonly position: "QB" | "RB" | "WR" | "TE" | "K" | "DST";
-  readonly decision: "ready" | "withheld";
-  /** The position's first reason string, verbatim; null when there is nothing to explain. */
-  readonly title: string | null;
-}
-
-/** One league's per-position readiness, in `POSITION_GROUP_ORDER`. */
-export interface RosLeaguePositionSummary {
-  readonly leagueSeasonId: string | null;
-  /** Falls back to a shortened id only when the API did not send a name. */
-  readonly leagueLabel: string;
-  readonly positions: readonly RosLeaguePositionChip[];
-}
-
 export interface RosReleaseDescription {
-  /** Fact 1 and 2: the validated model and what scoring it covers. */
   readonly artifactHeadline: string;
   readonly supportedProfileSummary: string;
   readonly unsupportedProfileSummary: string | null;
-  /** Fact 3: the caller's own leagues. */
-  readonly leagueNotices: readonly string[];
-  readonly readyLeagueCount: number;
-  /** Fact 3, position-scoped: each league's own per-position readiness, for compact chip display. */
-  readonly leaguePositionSummaries: readonly RosLeaguePositionSummary[];
-  /** Fact 4: the live per-cell gate. */
   readonly cellSummary: string | null;
   readonly withheldCells: readonly string[];
-  /** Fact 5: what each league actually holds. */
   readonly publishedLeagueCount: number;
   readonly publishedPlayerCount: number;
   readonly retainedSetNotice: string | null;
-  /** Fact 6: the independent audit rail, described as itself and nothing more. */
-  readonly auditHeadline: string;
-  readonly auditDetail: string | null;
 }
 
 const POSITION_GROUP_ORDER = ["QB", "RB", "WR", "TE", "K", "DST"] as const;
@@ -514,11 +444,7 @@ export function leagueLabelFor(name: string | null, leagueSeasonId: string | nul
   return leagueSeasonId ? `League ${leagueSeasonId.slice(0, 8)}` : "League";
 }
 
-/**
- * Builds the panel's copy. Each field answers exactly one of the six facts; no field is computed
- * from another. In particular the audit headline never changes because of the artifact state, and
- * the artifact headline never changes because of the audit.
- */
+/** Builds the copy and counts used by the rest-of-season status panel. */
 export function describeRosRelease(status: RosReleaseStatus): RosReleaseDescription {
   const supported = status.scoringProfiles.supported;
   const artifact = status.admittedArtifacts.artifacts[0];
@@ -554,28 +480,6 @@ export function describeRosRelease(status: RosReleaseStatus): RosReleaseDescript
           .map((entry) => entry.profile.label)
           .join(", ")}`;
 
-  const leagueNotices = [
-    ...new Set(
-      status.leagueReadiness.flatMap((league) =>
-        league.reasons.map((reason) => humanizeRosWithholdingReason(reason)),
-      ),
-    ),
-  ];
-
-  // Omits a league reporting no positions at all (e.g. the no-league-synced placeholder entry,
-  // which always carries `positions: []`) — there is nothing to render a chip row for.
-  const leaguePositionSummaries: RosLeaguePositionSummary[] = status.leagueReadiness
-    .filter((league) => league.positions.length > 0)
-    .map((league) => ({
-      leagueSeasonId: league.leagueSeasonId,
-      leagueLabel: leagueLabelFor(league.leagueName, league.leagueSeasonId),
-      positions: league.positions.map((position) => ({
-        position: position.position,
-        decision: position.decision,
-        title: position.reasons[0] ?? null,
-      })),
-    }));
-
   const cells = status.cellGates.cells;
   const releasedCount = cells.filter((cell) => cell.decision === "released").length;
   const cellSummary =
@@ -591,30 +495,14 @@ export function describeRosRelease(status: RosReleaseStatus): RosReleaseDescript
     ? "Some positions did not clear the latest check, so your league keeps the last forecast that did."
     : null;
 
-  const auditHeadline =
-    status.shadowAudit.state === "recorded"
-      ? "Separate audit run, not a release signal"
-      : "No separate audit run recorded this season";
-  const auditDetail =
-    status.shadowAudit.latestRun === null
-      ? null
-      : `Recorded ${status.shadowAudit.latestRun.reasons.length} diagnostic${
-          status.shadowAudit.latestRun.reasons.length === 1 ? "" : "s"
-        }. This run audits the model on its own; it does not decide whether your league receives a forecast.`;
-
   return {
     artifactHeadline,
     supportedProfileSummary,
     unsupportedProfileSummary,
-    leagueNotices,
-    readyLeagueCount: status.leagueReadiness.filter((league) => league.state === "ready").length,
-    leaguePositionSummaries,
     cellSummary,
     withheldCells,
     publishedLeagueCount: status.publishedSets.length,
     publishedPlayerCount: status.publishedSets.reduce((sum, set) => sum + set.playerCount, 0),
     retainedSetNotice,
-    auditHeadline,
-    auditDetail,
   };
 }

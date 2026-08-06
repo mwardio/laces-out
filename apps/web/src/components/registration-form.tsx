@@ -14,6 +14,7 @@ import { useRouter } from "next/navigation";
 import { type FormEvent, useState } from "react";
 
 import { apiBaseUrl } from "../lib/api-client";
+import { AUTH_ERRORS, BACK_TO_SIGN_IN } from "../lib/copy";
 
 type RegistrationError =
   | "rejected"
@@ -28,13 +29,13 @@ type RegistrationError =
 
 const errorMessages: Record<Exclude<RegistrationError, null>, string> = {
   rejected: "We couldn’t create the account. Check every field and try again.",
-  "rate-limit": "Too many attempts. Wait ten minutes before trying again.",
+  "rate-limit": AUTH_ERRORS.rateLimit,
   unavailable: "Registration isn’t open on this deployment. Ask your Laces Out host for access.",
   network: "We couldn’t reach the server. Check your connection, then try again.",
-  timeout: "The server took too long to respond. Try again in a moment.",
+  timeout: `The server took too long to respond. ${AUTH_ERRORS.tryAgain}`,
   invalid: "Check each field. Passwords must be between 12 and 128 characters.",
   mismatch: "The two passwords don’t match.",
-  unknown: "Registration couldn’t be completed. Try again in a moment.",
+  unknown: `Registration couldn’t be completed. ${AUTH_ERRORS.tryAgain}`,
 };
 
 function classifyResponse(status: number): Exclude<RegistrationError, null> {
@@ -154,8 +155,7 @@ export function RegistrationForm() {
             <p className="eyebrow">Member account</p>
             <h1>Check your inbox</h1>
             <p>
-              We sent a confirmation link to <strong>{email.trim()}</strong>. Click it within 24
-              hours to activate your account. Until then, nobody can sign in to it.
+              Sent to <strong>{email.trim()}</strong>
             </p>
           </div>
         </div>
@@ -176,7 +176,7 @@ export function RegistrationForm() {
         </button>
         <div className="login-demo-route registration-signin-route">
           <span>{resendSent ? "Check your inbox, then come back." : "Already confirmed?"}</span>
-          <Link href="/login">Sign in</Link>
+          <Link href="/login">{BACK_TO_SIGN_IN}</Link>
         </div>
       </div>
     );
@@ -191,7 +191,6 @@ export function RegistrationForm() {
         <div>
           <p className="eyebrow">Member account</p>
           <h1>Create your account</h1>
-          <p>Bring your leagues into Laces Out. Your account remains your own.</p>
         </div>
       </div>
 
@@ -310,7 +309,7 @@ export function RegistrationForm() {
 
       <div className="login-demo-route registration-signin-route">
         <span>Already have an account?</span>
-        <Link href="/login">Sign in</Link>
+        <Link href="/login">{BACK_TO_SIGN_IN}</Link>
       </div>
     </form>
   );

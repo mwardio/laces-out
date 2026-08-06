@@ -1,7 +1,7 @@
 "use client";
 
 import { LoaderCircle, ShieldCheck } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef } from "react";
 
 import { apiBaseUrl } from "../lib/api-client";
 import { requestYahooNativeAuthorization } from "../lib/yahoo-native-connect";
@@ -11,8 +11,6 @@ import styles from "./yahoo-native-connect.module.css";
 export function YahooNativeConnect() {
   const started = useRef(false);
   const mounted = useRef(false);
-  const [status, setStatus] = useState("Opening Yahoo’s secure sign-in…");
-
   useEffect(() => {
     mounted.current = true;
     // React's development strict-effects pass must not create a second one-time OAuth state.
@@ -20,11 +18,6 @@ export function YahooNativeConnect() {
       started.current = true;
       void requestYahooNativeAuthorization(apiBaseUrl).then((navigation) => {
         if (!mounted.current) return;
-        setStatus(
-          navigation.kind === "authorization"
-            ? "Continuing to Yahoo…"
-            : "Returning to the Laces Out app…",
-        );
         window.location.replace(navigation.url);
       });
     }
@@ -43,7 +36,7 @@ export function YahooNativeConnect() {
         <h1>Connecting your league</h1>
         <p className={styles.status} role="status">
           <LoaderCircle className={styles.spinner} size={18} aria-hidden="true" />
-          {status}
+          Loading…
         </p>
         <p className={styles.security}>
           <ShieldCheck size={16} aria-hidden="true" />

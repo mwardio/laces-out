@@ -252,14 +252,14 @@ export function DataHealthPanel() {
               <RefreshCw size={14} />
             )}
             {draftMarketRefresh === "working"
-              ? "Requesting…"
+              ? "Checking…"
               : draftMarketRefresh === "queued"
-                ? "Draft-market check queued"
+                ? "Queued"
                 : draftMarketRefresh === "deduplicated"
-                  ? "Draft-market check already queued"
+                  ? "Already queued"
                   : draftMarketRefresh === "error"
-                    ? "Retry draft-market check"
-                    : "Check draft market"}
+                    ? "Retry"
+                    : "Check market"}
           </button>
         )}
 

@@ -34,6 +34,7 @@ import {
   demoAnalyticsSnapshot,
   demoLeaguePortfolio,
 } from "../lib/demo-contract-data";
+import { providerLabel, TOUR_BANNER } from "../lib/copy";
 import { AiCoachPanel } from "./ai-coach-panel";
 import { ReckoningRecapPanel } from "./reckoning-recap-panel";
 import styles from "./league-analytics-workbench.module.css";
@@ -88,12 +89,6 @@ function dateTime(value: string | null): string {
   }).format(new Date(value));
 }
 
-function providerLabel(value: string | null): string {
-  if (value === "espn") return "ESPN";
-  if (value === "yahoo") return "Yahoo";
-  return "League host";
-}
-
 function record(value: { wins: number; losses: number; ties: number }): string {
   return value.ties > 0
     ? `${value.wins}–${value.losses}–${value.ties}`
@@ -113,7 +108,7 @@ function Unavailable({
     <div className={styles.unavailable} role="status">
       <ShieldAlert size={19} aria-hidden="true" />
       <div>
-        <strong>{title} is waiting for real data</strong>
+        <strong>{title} unavailable</strong>
         <ul>
           {reasons.map((item) => (
             <li key={`${item.code}:${item.message}`}>{item.message}</li>
@@ -330,7 +325,6 @@ function AwardsSection({
       >
         <SectionHeader
           icon={<Award size={18} aria-hidden="true" />}
-          kicker="Final scores only"
           title="The Weekly Reckoning"
           tag="Awarded weekly"
           titleId="awards-title"
@@ -356,7 +350,6 @@ function AwardsSection({
     >
       <SectionHeader
         icon={<Award size={18} aria-hidden="true" />}
-        kicker="Final scores only"
         title="The Weekly Reckoning"
         tag={`Week ${section.week}`}
         titleId="awards-title"
@@ -450,8 +443,7 @@ function ScoreSection({ snapshot }: { readonly snapshot: LeagueAnalyticsSnapshot
       <section className={styles.panel} id="analytics-season" aria-labelledby="score-title">
         <SectionHeader
           icon={<BarChart3 size={18} aria-hidden="true" />}
-          kicker="Official results"
-          title="Season ledger"
+          title="Season results"
           tag="Stored scores only"
           titleId="score-title"
         />
@@ -469,15 +461,14 @@ function ScoreSection({ snapshot }: { readonly snapshot: LeagueAnalyticsSnapshot
     <section className={styles.panel} id="analytics-season" aria-labelledby="score-title">
       <SectionHeader
         icon={<BarChart3 size={18} aria-hidden="true" />}
-        kicker="Official results"
-        title="Season ledger"
+        title="Season results"
         tag={`${section.officialFinalMatchups} final matchups`}
         titleId="score-title"
       />
       <div
         className={`${styles.tableScroll} has-scroll-cue`}
         role="region"
-        aria-label="Season ledger; scroll horizontally to view all columns"
+        aria-label="Season results; scroll horizontally to view all columns"
         tabIndex={0}
       >
         <table className={styles.dataTable}>
@@ -580,14 +571,12 @@ function ScoreSection({ snapshot }: { readonly snapshot: LeagueAnalyticsSnapshot
 
 function SectionHeader({
   icon,
-  kicker,
   title,
   tag,
   titleId,
   action,
 }: {
   readonly icon: ReactNode;
-  readonly kicker: string;
   readonly title: string;
   readonly tag: string;
   readonly titleId: string;
@@ -598,7 +587,6 @@ function SectionHeader({
     <header className={styles.sectionHeader}>
       <span className={styles.sectionIcon}>{icon}</span>
       <div>
-        <p>{kicker}</p>
         <h2 id={titleId}>{title}</h2>
       </div>
       {action ? (
@@ -623,7 +611,6 @@ function PowerSection({ snapshot }: { readonly snapshot: LeagueAnalyticsSnapshot
     >
       <SectionHeader
         icon={<Trophy size={18} aria-hidden="true" />}
-        kicker="Availability weighted"
         title="Power board"
         tag="0–100 composite"
         titleId="power-title"
@@ -705,7 +692,6 @@ function PositionalSection({ snapshot }: { readonly snapshot: LeagueAnalyticsSna
     <section className={styles.panel} id="analytics-positions" aria-labelledby="position-title">
       <SectionHeader
         icon={<Target size={18} aria-hidden="true" />}
-        kicker="Projection backed"
         title="Positional map"
         tag="Dedicated starters"
         titleId="position-title"
@@ -756,8 +742,8 @@ function PositionalSection({ snapshot }: { readonly snapshot: LeagueAnalyticsSna
                           key={position}
                           title={
                             entry?.status === "available"
-                              ? `${decimal.format(entry.projectedPoints ?? 0)} projected points; rank ${entry.rank} of ${section.teams.length}`
-                              : `${entry?.projectedPlayerCount ?? 0} of ${entry?.rosterPlayerCount ?? 0} rostered players projected`
+                              ? `${decimal.format(entry.projectedPoints ?? 0)} pts · #${entry.rank ?? "—"}`
+                              : `${entry?.projectedPlayerCount ?? 0}/${entry?.rosterPlayerCount ?? 0} projected`
                           }
                         >
                           <strong>
@@ -806,7 +792,6 @@ function OpponentSection({ snapshot }: { readonly snapshot: LeagueAnalyticsSnaps
     >
       <SectionHeader
         icon={<Crosshair size={18} aria-hidden="true" />}
-        kicker="Current matchup"
         title="Opponent scout"
         tag={section.state === "available" ? `Week ${section.week}` : "Team specific"}
         titleId="scout-title"
@@ -899,7 +884,6 @@ function PlayoffOddsSection({ snapshot }: { readonly snapshot: LeagueAnalyticsSn
     <section className={styles.panel} id="analytics-playoffs" aria-labelledby="playoffs-title">
       <SectionHeader
         icon={<Percent size={18} aria-hidden="true" />}
-        kicker="Seeded simulation"
         title="Playoff odds"
         tag={
           section?.state === "available" ? `Top ${section.playoffTeamCount} qualify` : "Rule bound"
@@ -1077,8 +1061,7 @@ function AnalyticsQuickRead({ snapshot }: { readonly snapshot: LeagueAnalyticsSn
   return (
     <nav className={styles.quickRead} aria-label="Jump to league analytics">
       <div className={styles.quickReadHeader}>
-        <span>League in 10 seconds</span>
-        <small>Tap for the full read</small>
+        <span>League summary</span>
       </div>
       <a href="#analytics-opponent">
         <Crosshair size={16} aria-hidden="true" />
@@ -1246,8 +1229,7 @@ export function LeagueAnalyticsWorkbench() {
       <div className={styles.gate} role="status">
         <LoaderCircle className={styles.spin} size={20} aria-hidden="true" />
         <div>
-          <strong>Loading league access</strong>
-          <span>Checking synchronized seasons and team claims.</span>
+          <strong>Loading…</strong>
         </div>
       </div>
     );
@@ -1276,7 +1258,7 @@ export function LeagueAnalyticsWorkbench() {
         <div className={styles.sampleOffer} role="status">
           <span>Nothing below would be your data.</span>
           <button type="button" onClick={showSample}>
-            Show the sample locker room
+            Show sample data
           </button>
         </div>
       </div>
@@ -1287,8 +1269,8 @@ export function LeagueAnalyticsWorkbench() {
       <div className={styles.gate}>
         <Database size={20} aria-hidden="true" />
         <div>
-          <strong>No synchronized leagues yet</strong>
-          <span>Connect Yahoo or ESPN to create the first season ledger.</span>
+          <strong>No leagues yet</strong>
+          <span>Connect Yahoo or ESPN to continue.</span>
           <Link href="/connections">Open League Sync</Link>
         </div>
       </div>
@@ -1301,19 +1283,21 @@ export function LeagueAnalyticsWorkbench() {
         <div className={styles.demoNotice} role="status">
           <Info size={17} aria-hidden="true" />
           <span>
-            <strong>Locker room tour</strong>
-            Illustrative league metrics and opponent scouting. No live account data is shown.
+            <strong>{TOUR_BANNER.title}</strong>
+            {TOUR_BANNER.detail}
           </span>
         </div>
       ) : null}
       <header className={styles.hero}>
         <div>
-          <p>League intelligence</p>
+          {isDemo ? <p>League intelligence</p> : null}
           <h1>League Analytics</h1>
-          <span>
-            Read the whole room with official results, all-play context, disclosed power rankings,
-            roster construction, and the opponent directly in front of you.
-          </span>
+          {isDemo ? (
+            <span>
+              Read the whole room with official results, all-play context, disclosed power rankings,
+              roster construction, and the opponent directly in front of you.
+            </span>
+          ) : null}
         </div>
         <div className={styles.controls}>
           <label htmlFor="analytics-league">League</label>
@@ -1335,7 +1319,6 @@ export function LeagueAnalyticsWorkbench() {
             type="button"
             onClick={() => void loadAnalytics()}
             disabled={isDemo || analytics.state === "loading"}
-            title={isDemo ? "Sign in to refresh against your own league" : undefined}
           >
             <RefreshCw
               className={analytics.state === "loading" ? styles.spin : undefined}
@@ -1350,7 +1333,7 @@ export function LeagueAnalyticsWorkbench() {
       {analytics.state === "loading" || analytics.state === "idle" ? (
         <div className={styles.loadingState} role="status">
           <LoaderCircle className={styles.spin} size={18} aria-hidden="true" />
-          Rebuilding league context from stored facts…
+          Loading…
         </div>
       ) : analytics.state === "error" ? (
         <div className={styles.errorState} role="alert">

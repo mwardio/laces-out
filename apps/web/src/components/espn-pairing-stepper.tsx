@@ -10,7 +10,6 @@ import {
   PackageCheck,
   RefreshCw,
   Search,
-  ServerCog,
   TriangleAlert,
 } from "lucide-react";
 import { type FormEvent, useCallback, useEffect, useRef, useState } from "react";
@@ -308,19 +307,6 @@ export function EspnPairingStepper({
     setPairingError(null);
   }
 
-  const trustNote = (
-    <div className="bridge-readiness bridge-readiness--warning" role="note" id="bridge-api-note">
-      <ServerCog size={16} />
-      <div>
-        <strong>Your ESPN password is never collected</strong>
-        <span>
-          The companion reads your leagues in this browser and, with your confirmation, can enable
-          encrypted always-on refreshes. Everything is read-only and removable at any time.
-        </span>
-      </div>
-    </div>
-  );
-
   const manualFields = (open: boolean) => (
     <details
       className="bridge-manual-entry"
@@ -403,10 +389,7 @@ export function EspnPairingStepper({
             <PackageCheck size={16} />
             <div>
               <strong>Step 1 of 2 · Install the Chrome companion</strong>
-              <span>
-                It reads your private leagues in this browser — no ESPN password, read-only. This
-                page continues automatically once the extension is installed.
-              </span>
+              <span>This page continues automatically after installation.</span>
               <a
                 className="button button--outline button--small bridge-download"
                 href={chromeWebStoreUrl}
@@ -428,10 +411,7 @@ export function EspnPairingStepper({
               <span>2</span>
               <div>
                 <strong>Find your ESPN leagues</strong>
-                <small>
-                  The companion lists the leagues on your signed-in ESPN account — nothing to copy
-                  or type.
-                </small>
+                <small>Lists leagues on your signed-in ESPN account.</small>
               </div>
             </div>
             {discovery !== undefined &&
@@ -494,8 +474,8 @@ export function EspnPairingStepper({
               onClick={() => void runDiscovery()}
               disabled={discovering}
             >
-              {discovering ? <LoaderCircle className="spin" size={14} /> : <RefreshCw size={14} />}I
-              signed in — check again
+              {discovering ? <LoaderCircle className="spin" size={14} /> : <RefreshCw size={14} />}
+              Check again
             </button>
           ) : null}
         </div>
@@ -647,7 +627,6 @@ export function EspnPairingStepper({
 
       {step === "legacy-form" ? (
         <>
-          {trustNote}
           <ol className="bridge-steps">
             <li>
               <span>1</span>
@@ -680,11 +659,7 @@ export function EspnPairingStepper({
               </a>
             </li>
           </ol>
-          <form
-            className="bridge-pair-form"
-            onSubmit={(event) => void pairBridge(event)}
-            aria-describedby="bridge-api-note"
-          >
+          <form className="bridge-pair-form" onSubmit={(event) => void pairBridge(event)}>
             <div className="bridge-form-heading">
               <span>3</span>
               <div>

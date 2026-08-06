@@ -39,7 +39,7 @@ function supportingLine(dashboard: LeagueDashboard): string {
   const explanation = dashboard.teamClaim.explanation;
   return explanation.length <= EXPLANATION_LENGTH_LIMIT
     ? explanation
-    : "Pick your team to unlock roster-aware analysis.";
+    : "Pick your team for roster-aware analysis.";
 }
 
 export function TeamClaimCallout({ leagueId, dashboard, onClaimed }: TeamClaimCalloutProps) {

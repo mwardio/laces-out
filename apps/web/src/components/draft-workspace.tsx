@@ -15,7 +15,6 @@ import {
   Coins,
   Gavel,
   Info,
-  Keyboard,
   Minus,
   Pause,
   Play,
@@ -585,9 +584,6 @@ export function DraftWorkspace() {
             ) : null}
           </div>
           <div className="board-footer">
-            <span>
-              <Keyboard size={14} /> Click a row to inspect · queue is local
-            </span>
             <span>Rankings model: Demo baseline v0</span>
           </div>
         </section>
@@ -816,9 +812,7 @@ export function DraftWorkspace() {
                   </button>
                 ))
               ) : (
-                <p className="queue-empty">
-                  Bookmark players from the board to build a local queue.
-                </p>
+                <p className="queue-empty">Queue is empty.</p>
               )}
             </div>
           </section>

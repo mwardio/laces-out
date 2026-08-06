@@ -1,4 +1,4 @@
-import { Database, KeyRound, ShieldCheck, UserRoundCheck } from "lucide-react";
+import { Database, KeyRound, UserRoundCheck } from "lucide-react";
 import type { Metadata } from "next";
 import Link from "next/link";
 
@@ -55,18 +55,10 @@ export default function RegisterPage() {
             </span>
           </div>
         </div>
-
-        <p className="login-story__footnote">
-          <ShieldCheck size={13} /> Passwords are protected with Argon2id.
-        </p>
       </section>
 
       <section className="login-form-side register-form-side" aria-label="Create account">
         <RegistrationForm />
-        <p className="login-help">
-          Every account stays separate, including league connections, rankings, and AI provider
-          settings.
-        </p>
       </section>
     </main>
   );

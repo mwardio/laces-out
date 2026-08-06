@@ -49,6 +49,7 @@ import {
   type RankingList,
   type RankingVersion,
 } from "../lib/api-client";
+import { CONNECT_LEAGUE_FIRST, providerLabel } from "../lib/copy";
 import {
   analyzeAuctionBoard,
   buildAuctionNominationQueue,
@@ -184,12 +185,6 @@ function staleFor(lastSyncedAt: number | null): string {
   return `last update ${Math.round(seconds / 60)}m ago`;
 }
 
-function providerLabel(provider: string): string {
-  if (provider === "espn") return "ESPN";
-  if (provider === "yahoo") return "Yahoo";
-  return "Manual";
-}
-
 function eventLabel(event: DraftSessionSnapshot["events"][number]["event"]): string {
   switch (event.type) {
     case "SNAKE_PLAYER_SELECTED":
@@ -305,7 +300,7 @@ export function DraftSessionWorkspace() {
           rememberSession(parsed);
         }
         if (!options.quiet) {
-          setNotice(`Reconnected at event ${parsed.sequence}. Laces Out ledger is current.`);
+          setNotice(`Reconnected at event ${parsed.sequence}.`);
         }
         setLastSyncedAt(Date.now());
         setPollFailures(0);
@@ -950,9 +945,7 @@ export function DraftSessionWorkspace() {
       if (!parsed) throw new Error("The new draft session response was invalid.");
       rememberSession(parsed);
       setNotice(
-        parsed.transport === "espn-live"
-          ? "Shared draft room created and attached to the ESPN live feed. Picks arrive once a paired desktop browser opens the ESPN draft room."
-          : "Shared draft ledger created. Entries are recorded by hand here; no provider feed is attached to this room.",
+        parsed.transport === "espn-live" ? "ESPN draft room created." : "Draft room created.",
       );
     } catch (error) {
       setNotice(error instanceof Error ? error.message : "The draft session could not be created.");
@@ -986,7 +979,7 @@ export function DraftSessionWorkspace() {
       rememberSession(parsed.session);
       setNotice(
         parsed.idempotent
-          ? `Entry ${parsed.appendedSequences.join(", ")} was already safely recorded.`
+          ? `Event ${parsed.appendedSequences.join(", ")} was already recorded.`
           : `Recorded event ${parsed.appendedSequences.join(", ")}.`,
       );
     } catch (error) {
@@ -1035,11 +1028,11 @@ export function DraftSessionWorkspace() {
       setManualBackupOpen(false);
       setNotice(
         active
-          ? "Manual backup active. Provider picks are held for review until you return to provider sync."
+          ? "Manual backup active."
           : reconciliation === "keep-manual"
-            ? "Returned to provider sync. The held provider differences were discarded in favor of this ledger."
+            ? "Returned to provider sync with manual entries."
             : reconciliation === "accept-provider"
-              ? "Returned to provider sync. The held provider board was applied to this ledger."
+              ? "Returned to provider sync with its board."
               : "Returned to provider sync.",
       );
     } catch (error) {
@@ -1057,9 +1050,7 @@ export function DraftSessionWorkspace() {
       setSelectedTeamId(mockTeamId);
       setMockReplayEventId("");
       setShowMockSetup(false);
-      setNotice(
-        `Local mock started from room event ${session.sequence}. Nothing in this simulation is saved or sent to a fantasy provider.`,
-      );
+      setNotice(`Local mock started from event ${session.sequence}.`);
     } catch (error) {
       setNotice(error instanceof Error ? error.message : "The local mock could not start.");
     }
@@ -1085,11 +1076,9 @@ export function DraftSessionWorkspace() {
             : "Choose a player from the board to make your local nomination.",
         );
       } else if (next.stopReason === "COMPLETE") {
-        setNotice("Local mock complete. The shared room remains unchanged.");
+        setNotice("Local mock complete.");
       } else if (next.stopReason === "PLAYER_POOL_EXHAUSTED") {
-        setNotice(
-          "The local model ran out of legally rosterable players with the required board data.",
-        );
+        setNotice("No legally rosterable players remain.");
       } else {
         setNotice(`Advanced ${added || 0} local event${added === 1 ? "" : "s"}.`);
       }
@@ -1101,7 +1090,7 @@ export function DraftSessionWorkspace() {
   function stopLocalMock() {
     setLocalMock(null);
     setMockReplayEventId("");
-    setNotice("Local mock closed. The shared manual room was never changed.");
+    setNotice("Local mock closed.");
   }
 
   function replayMockFromEvent(eventId = mockReplayEventId) {
@@ -1182,7 +1171,7 @@ export function DraftSessionWorkspace() {
       setNotice(
         next.events.length === before
           ? "There is no active local mock event to undo."
-          : "Latest local mock event undone. The shared room remains unchanged.",
+          : "Latest local mock event undone.",
       );
       return;
     }
@@ -1199,7 +1188,7 @@ export function DraftSessionWorkspace() {
     url.searchParams.delete("session");
     window.history.replaceState({}, "", url);
     setSession(null);
-    setNotice("Session closed on this device. Its stored event ledger was not deleted.");
+    setNotice("Session closed on this device.");
   }
 
   async function copySessionLink() {
@@ -1208,7 +1197,7 @@ export function DraftSessionWorkspace() {
     url.searchParams.set("session", session.id);
     try {
       await navigator.clipboard.writeText(url.toString());
-      setNotice("Session link copied. League membership is still required to open it.");
+      setNotice("Session link copied.");
     } catch {
       setNotice(`Share this session ID: ${session.id}`);
     }
@@ -1304,7 +1293,6 @@ export function DraftSessionWorkspace() {
             <Link className="back-link" href="/app">
               <ArrowLeft size={16} /> Overview
             </Link>
-            <p className="eyebrow">Draft studio</p>
             <h1>Start or reopen a draft room.</h1>
             <p className="page-subtitle">
               {describeDraftSetupCapability(league?.season?.provider ?? null)}
@@ -1327,7 +1315,6 @@ export function DraftSessionWorkspace() {
           <section className="panel">
             <div className="panel-heading">
               <div>
-                <p className="eyebrow">New room</p>
                 <h2>Configure from a connected league</h2>
                 <p>Roster slots, teams, and the player pool are copied when you start.</p>
               </div>
@@ -1463,7 +1450,7 @@ export function DraftSessionWorkspace() {
               <div className="draft-session-empty">
                 <Users size={20} />
                 <strong>No synchronized league season is available.</strong>
-                <Link href="/connections">Connect a league first</Link>
+                <Link href="/connections">{CONNECT_LEAGUE_FIRST}</Link>
               </div>
             )}
           </section>
@@ -1471,7 +1458,6 @@ export function DraftSessionWorkspace() {
           <section className="panel">
             <div className="panel-heading">
               <div>
-                <p className="eyebrow">Reconnect</p>
                 <h2>Open an existing room</h2>
                 <p>Use the ID from this device or a league mate’s shared link.</p>
               </div>
@@ -1786,12 +1772,7 @@ export function DraftSessionWorkspace() {
           {manualBackup.choiceSummary ? (
             <p className="draft-manual-backup__choice">{manualBackup.choiceSummary}</p>
           ) : null}
-          {!manualBackup.authorized ? (
-            <p className="draft-session-permission">
-              <ShieldCheck size={14} /> You can follow this room, but only its owner or commissioner
-              can change backup mode.
-            </p>
-          ) : manualBackup.requiresChoice ? (
+          {manualBackup.authorized && manualBackup.requiresChoice ? (
             <div className="draft-manual-backup__actions">
               <button
                 className="button button--dark button--small"
@@ -1835,10 +1816,7 @@ export function DraftSessionWorkspace() {
             </strong>
             <span>{providerAuctionHighBidder?.name ?? "no high bidder reported"}</span>
           </div>
-          <p className="draft-live-auction__note">
-            Nomination state is observed live and is not written to the ledger. Only the completed
-            sale becomes a saved event.
-          </p>
+          <p className="draft-live-auction__note">Only completed sales are saved.</p>
         </section>
       ) : null}
 
@@ -1858,11 +1836,8 @@ export function DraftSessionWorkspace() {
                 {localMock ? "Local mock in progress" : "Fork this room locally"}
               </h2>
               <p>
-                Uses this room’s teams, roster rules, players, and current board. Synthetic events
-                stay in this browser memory and never enter the shared ledger.{" "}
-                {liveStatus.providerBacked
-                  ? `The ${liveStatus.providerName} feed keeps running underneath and is never sent anything.`
-                  : "Nothing here is sent to a fantasy provider."}
+                Uses this room’s teams, rules, players, and board. Synthetic events stay in this
+                browser and never enter the shared ledger or a fantasy provider.
               </p>
             </div>
           </div>
@@ -2389,8 +2364,8 @@ export function DraftSessionWorkspace() {
                   </ol>
                   <p className="draft-intel-note">
                     {activeTeamNextPick === null
-                      ? "Rank or ADP gets an explainable starter-need adjustment. No later pick remains for the selected advice team, so wait risk is not shown."
-                      : `Rank or ADP gets an explainable starter-need adjustment. Where ADP exists, wait risk is the conditional chance this still-available player reaches pick ${activeTeamNextPick}; source dispersion is used when available, with a conservative fallback otherwise.`}
+                      ? "Starter need adjusts rank or ADP. No later pick remains for this team."
+                      : `Starter need adjusts rank or ADP. Wait risk estimates whether the player reaches pick ${activeTeamNextPick}.`}
                   </p>
                   {draftMarket?.state === "available" ? (
                     <p className="draft-intel-note">
@@ -2416,10 +2391,7 @@ export function DraftSessionWorkspace() {
                   ) : null}
                   <div className="draft-model-gate">
                     <CircleAlert size={14} />
-                    <span>
-                      VBD remains off until a compatible season projection feed is available. Rank
-                      is never converted into invented fantasy points.
-                    </span>
+                    <span>VBD requires compatible season projections.</span>
                   </div>
                 </>
               ) : (
@@ -2502,10 +2474,7 @@ export function DraftSessionWorkspace() {
                       </li>
                     ))}
                   </ol>
-                  <p className="draft-intel-note">
-                    Uses only explicit board target prices versus AAV; players missing either field
-                    are omitted.
-                  </p>
+                  <p className="draft-intel-note">Uses board target prices and AAV.</p>
                 </>
               ) : (
                 <div className="draft-model-gate">
@@ -2609,14 +2578,11 @@ export function DraftSessionWorkspace() {
             )}
             {!canMutate && !localMock ? (
               <p className="draft-session-permission">
-                <ShieldCheck size={14} /> You can follow this room, but only its owner or
-                commissioner can record events.
+                <ShieldCheck size={14} /> Only owners and commissioners can record events.
               </p>
             ) : providerLocksManualEntry && !localMock ? (
               <p className="draft-session-permission">
-                <ShieldCheck size={14} /> The {liveStatus.providerName} feed is driving this room.
-                Activate manual backup first so provider and manual entries never interleave
-                silently.
+                <ShieldCheck size={14} /> Activate manual backup before recording manual entries.
               </p>
             ) : null}
             <button

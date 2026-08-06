@@ -94,17 +94,10 @@ export default function MethodologyPage() {
         <div className={styles.heading}>
           <p>Method and evidence</p>
           <h1>How the forecasts are built and validated</h1>
-          <span>
-            The model that publishes is backtested across {weeklySeasonCountWord} completed NFL
-            seasons and re-gated before every release.
-          </span>
         </div>
 
         <section className={styles.section}>
           <h2>How a forecast is made</h2>
-          <p className={styles.sectionNote}>
-            Six commitments govern both models. Everything after this section is what backs them.
-          </p>
           <div className={styles.pillars}>
             <div className={styles.pillar}>
               <h3>Scored in your league&rsquo;s terms</h3>
@@ -145,8 +138,7 @@ export default function MethodologyPage() {
               <h3>Per-cell release gates</h3>
               <p>
                 Every position and horizon is judged on its own evidence and released on its own. A
-                cell that does not clear publishes nothing at all, never a weaker number standing in
-                for a strong one.
+                cell that does not clear receives nothing rather than a weaker number.
               </p>
             </div>
             <div className={styles.pillar}>
@@ -184,14 +176,13 @@ export default function MethodologyPage() {
 
         <section className={styles.section}>
           <h2>Weekly forecasts</h2>
-          <p className={styles.sectionNote}>Single-week forecasts, gated per position.</p>
           <p>
-            Every sweep re-runs a locked backtest over {weeklySeasonCountWord} completed seasons
-            before anything is released. A richer contextual model is allowed to displace the
-            simpler recency baseline only when it beats it by a stated margin on enough completed
-            weeks; otherwise the baseline defends and keeps publishing. Sample floors, interval
-            coverage and bias are gated per position on every sweep, and a set that fails any of
-            them is not published.
+            The model that publishes is backtested across {weeklySeasonCountWord} completed NFL
+            seasons and re-gated before every release. A richer contextual model is allowed to
+            displace the simpler recency baseline only when it beats it by a stated margin on enough
+            completed weeks; otherwise the baseline defends and keeps publishing. Sample floors,
+            interval coverage and bias are gated per position on every sweep, and a set that fails
+            any of them is not published.
           </p>
           <div
             className={styles.tableWrap}
@@ -231,7 +222,6 @@ export default function MethodologyPage() {
 
         <section className={styles.section}>
           <h2>Rest-of-season forecasts</h2>
-          <p className={styles.sectionNote}>Gated per league and per position.</p>
 
           <aside className={styles.status}>
             <Info size={18} aria-hidden="true" />
@@ -241,9 +231,8 @@ export default function MethodologyPage() {
                 A league receives rest-of-season forecasts only when its scoring matches an admitted
                 evidence artifact that has cleared its gates, and its own inputs &mdash; a synced
                 league, the current NFL player pool, and a complete remaining-season window &mdash;
-                are in place. Any position or league that does not clear receives nothing rather
-                than a weaker number. The rail re-evaluates this hourly, and every run records what
-                it released and what it withheld, cell by cell.
+                are in place. The rail re-evaluates this hourly, and every run records what it
+                released and what it withheld.
               </p>
             </div>
           </aside>
@@ -258,10 +247,7 @@ export default function MethodologyPage() {
           <p>
             Because a forecast is only meaningful under the rules it is scored by, the replay is run
             once per scoring profile, currently {rosProfileCountWord} of them, and each grades at
-            least {rosMinimumForecasts} forecasts against realized outcomes. Release is decided per
-            position and horizon, not for the model as a whole: each cell has to clear its own
-            accuracy and interval-coverage gates on its own evidence, and a cell that does not is
-            withheld independently of the rest.
+            least {rosMinimumForecasts} forecasts against realized outcomes.
           </p>
         </section>
 

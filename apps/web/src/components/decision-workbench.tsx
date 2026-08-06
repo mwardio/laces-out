@@ -33,6 +33,7 @@ import {
   parseTradeEvaluationResponse,
   type LeagueListResponse,
 } from "../lib/api-client";
+import { compactDate, CONNECT_LEAGUE_FIRST, providerLabel, TOUR_BANNER } from "../lib/copy";
 import { projectionSourceAsOfText } from "../lib/projection-import-form";
 import { leagueIsUnclaimed } from "../lib/team-claim";
 import { useDefaultLeague } from "../lib/use-default-league";
@@ -70,22 +71,6 @@ const projectedPoints = new Intl.NumberFormat(undefined, {
   maximumFractionDigits: 1,
 });
 
-function providerLabel(provider: string | null): string {
-  if (provider === "espn") return "ESPN";
-  if (provider === "yahoo") return "Yahoo";
-  return "League host";
-}
-
-function compactDate(value: string | null): string {
-  if (!value) return "Not available";
-  return new Intl.DateTimeFormat(undefined, {
-    month: "short",
-    day: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-  }).format(new Date(value));
-}
-
 /**
  * The per-card execution affordance. It carries the shield and the section's own call to action,
  * but not the read-only disclaimer: the page states that once, in the provider-verification
@@ -93,14 +78,7 @@ function compactDate(value: string | null): string {
  * on one screen without learning anything new the second or third time.
  */
 function ExecutionLink({ execution }: { readonly execution: Execution }) {
-  if (!execution.url) {
-    return (
-      <div className={styles.readOnlyNote}>
-        <ShieldAlert size={15} aria-hidden="true" />
-        <span>{execution.label}</span>
-      </div>
-    );
-  }
+  if (!execution.url) return null;
   return (
     <a className={styles.executionLink} href={execution.url} target="_blank" rel="noreferrer">
       {execution.label}
@@ -170,10 +148,7 @@ function LineupSection({ snapshot }: { readonly snapshot: InSeasonDecisionSnapsh
               {section.changes.length === 0 ? (
                 <div className={styles.clearState}>
                   <CheckCircle2 size={17} aria-hidden="true" />
-                  <span>
-                    Your roster-rule and position-eligibility-valid lineup is already optimized for
-                    the selected projection set. Provider locks still require verification.
-                  </span>
+                  <span>Lineup is already optimal.</span>
                 </div>
               ) : (
                 <div className={styles.changeList}>
@@ -251,7 +226,7 @@ function WaiverSection({ snapshot }: { readonly snapshot: InSeasonDecisionSnapsh
           {section.recommendations.length === 0 ? (
             <div className={styles.clearState}>
               <CheckCircle2 size={17} aria-hidden="true" />
-              <span>No bounded add/drop pairing improves projected roster value.</span>
+              <span>No worthwhile add/drop move.</span>
             </div>
           ) : (
             <div className={styles.waiverList}>
@@ -740,7 +715,7 @@ function TradeGroup({
     <div className={styles.tradeGroup}>
       <h3>{title}</h3>
       {trades.length === 0 ? (
-        <p className={styles.emptyText}>No package cleared the modeled roster and value filters.</p>
+        <p className={styles.emptyText}>No qualifying trade.</p>
       ) : (
         <div className={styles.tradeGrid}>
           {trades.map((trade) => (
@@ -814,7 +789,6 @@ function DecisionQuickBoard({ snapshot }: { readonly snapshot: InSeasonDecisionS
     <nav className={styles.quickBoard} aria-label="Jump to this week's decision results">
       <div className={styles.quickBoardHeader}>
         <span>Today&apos;s board</span>
-        <small>Tap any read to jump straight there</small>
       </div>
       <a href="#decision-lineup">
         <span className={styles.quickBoardIcon}>
@@ -1033,7 +1007,6 @@ export function DecisionWorkbench() {
         <LoaderCircle className={styles.spin} size={21} aria-hidden="true" />
         <div>
           <strong>Loading decision desk</strong>
-          <span>Checking membership and synchronized league data.</span>
         </div>
       </div>
     );
@@ -1044,7 +1017,6 @@ export function DecisionWorkbench() {
         <ShieldAlert size={21} aria-hidden="true" />
         <div>
           <strong>Sign in to use the decision desk</strong>
-          <span>Recommendations are isolated to leagues where you are a member.</span>
           <Link className={styles.primaryLink} href="/login">
             Sign in
           </Link>
@@ -1058,7 +1030,6 @@ export function DecisionWorkbench() {
         <ShieldAlert size={21} aria-hidden="true" />
         <div>
           <strong>Decision desk unavailable</strong>
-          <span>{portfolio.message}</span>
         </div>
       </div>
     );
@@ -1068,8 +1039,7 @@ export function DecisionWorkbench() {
       <div className={styles.gate}>
         <ShieldAlert size={21} aria-hidden="true" />
         <div>
-          <strong>Connect a league first</strong>
-          <span>Real roster and league settings are required before any recommendation runs.</span>
+          <strong>{CONNECT_LEAGUE_FIRST}</strong>
           <Link className={styles.primaryLink} href="/connections">
             Open League Sync
           </Link>
@@ -1088,20 +1058,14 @@ export function DecisionWorkbench() {
         <div className={styles.demoNotice} role="status">
           <Info size={17} aria-hidden="true" />
           <span>
-            <strong>Locker room tour</strong>
-            Illustrative week-six recommendations. No live account data is shown.
+            <strong>{TOUR_BANNER.title}</strong>
+            {TOUR_BANNER.detail}
           </span>
         </div>
       ) : null}
       <header className={styles.hero}>
         <div>
-          <p className={styles.kicker}>Game-week decisions</p>
           <h1>Decision Desk</h1>
-          <p>
-            One clean read on lineups, waivers, and trades, calculated from your latest stored
-            league facts and a named projection set. Missing inputs stop the model; they never
-            become guesses.
-          </p>
         </div>
         <div className={styles.controls}>
           <label htmlFor="decision-league">League</label>
@@ -1153,7 +1117,7 @@ export function DecisionWorkbench() {
       {decision.state === "loading" || decision.state === "idle" ? (
         <div className={styles.analysisLoading} role="status">
           <LoaderCircle className={styles.spin} size={19} aria-hidden="true" />
-          <span>Reading the latest roster, rules, and projection provenance.</span>
+          <span>Loading…</span>
         </div>
       ) : decision.state === "error" ? (
         <div className={styles.analysisError} role="alert">
@@ -1203,8 +1167,8 @@ export function DecisionWorkbench() {
             <div>
               <ShieldAlert size={16} aria-hidden="true" />
               <span>
-                <small>Execution</small>
-                <strong>Read-only · apply on {providerLabel(snapshot.league.provider)}</strong>
+                <small>Provider</small>
+                <strong>{providerLabel(snapshot.league.provider)}</strong>
               </span>
             </div>
           </section>
@@ -1214,10 +1178,13 @@ export function DecisionWorkbench() {
             <div>
               <strong>Verify every lineup, waiver, and trade action at the provider</strong>
               <p>{snapshot.providerVerification.actionWarning}</p>
-              <span>
-                Complete lock coverage: unavailable · stored true-lock records honored:{" "}
-                {snapshot.providerVerification.storedLockedPlayerCount}
-              </span>
+              <details>
+                <summary>Lock coverage</summary>
+                <span>
+                  Complete coverage unavailable · stored locks honored:{" "}
+                  {snapshot.providerVerification.storedLockedPlayerCount}
+                </span>
+              </details>
             </div>
           </section>
 
@@ -1253,16 +1220,14 @@ export function DecisionWorkbench() {
             demo={isDemo}
           />
 
-          {/* Follows the board it reviews — "Pressure-test the board" above the
-              board offered a second opinion before the first one existed. */}
           <div className={styles.aiAnchor} id="decision-ai">
             <AiCoachPanel
               leagueId={selectedLeagueId}
               features={["start-sit", "waiver-scan", "trade-builder"]}
               demo={isDemo}
               eyebrow="AI decision review"
-              title="Pressure-test the board"
-              description="Get a plain-language second read without letting the model invent a lineup, waiver target, or trade package."
+              title="Review the board"
+              description="Explain the lineup, waiver, and trade calls."
             />
           </div>
         </>

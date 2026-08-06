@@ -58,6 +58,9 @@ const SPICE_LABELS: Readonly<Record<RecapSpiceLevel, string>> = {
   scorched: "Scorched · NSFW",
 };
 
+const RECAP_CONTENT_LIMITS =
+  "Slurs, protected traits, threats, and anything private remain off limits.";
+
 export interface ReckoningRecapPanelProps {
   readonly leagueId: string;
   readonly snapshot: LeagueAnalyticsSnapshot;
@@ -477,7 +480,6 @@ export function ReckoningRecapPanel({ leagueId, snapshot, demo }: ReckoningRecap
           <Megaphone size={18} aria-hidden="true" />
         </span>
         <div>
-          <p>Group-chat ready</p>
           <h2 id="reckoning-recap-title">The Recap</h2>
         </div>
         <span className={styles.sectionTag}>Week {selectedWeek}</span>
@@ -550,8 +552,7 @@ export function ReckoningRecapPanel({ leagueId, snapshot, demo }: ReckoningRecap
         {configuredSpiceLevel === "medium" ? (
           <p className={styles.notice}>
             Medium is uncensored and NSFW by design. Expect profanity, crude jokes, and
-            inappropriate locker-room humor. Slurs, protected traits, threats, and anything private
-            remain off limits.
+            inappropriate locker-room humor. {RECAP_CONTENT_LIMITS}
             {usesIncludedGrok
               ? " Included Grok is limited to one Medium recap per member per day."
               : ""}
@@ -559,8 +560,7 @@ export function ReckoningRecapPanel({ leagueId, snapshot, demo }: ReckoningRecap
         ) : configuredSpiceLevel === "scorched" ? (
           <p className={styles.notice}>
             Scorched is the uncensored, shock-and-awe roast. Fantasy personas, egos, league history,
-            decisions, and humiliating results are fair game. Slurs, protected traits, threats, and
-            anything private remain off limits.
+            decisions, and humiliating results are fair game. {RECAP_CONTENT_LIMITS}
             {usesIncludedGrok
               ? " Included Grok is limited to one Scorched recap per member per day."
               : ""}
@@ -619,7 +619,7 @@ export function ReckoningRecapPanel({ leagueId, snapshot, demo }: ReckoningRecap
               onClick={() => void copyRecap(stored.body)}
             >
               <Clipboard size={14} aria-hidden="true" />
-              {copied ? "Copied" : "Copy for the chat"}
+              {copied ? "Copied" : "Copy"}
             </button>
           ) : null}
           {noProvider ? (
@@ -644,8 +644,8 @@ export function ReckoningRecapPanel({ leagueId, snapshot, demo }: ReckoningRecap
             <summary>League Intel</summary>
             <p className={styles.muted}>
               {demo
-                ? "Sample commissioner notes the recap writer uses for voice, history, and rivalries. They never change a stat, a result, or an award."
-                : "Private commissioner notes the recap writer uses for voice, history, and rivalries. They never change a stat, a result, or an award. Only league owners and commissioners can view or edit them."}
+                ? "Sample notes for voice, history, and rivalries."
+                : "Private notes for voice, history, and rivalries. Owners and commissioners only."}
             </p>
             <ul className={styles.cardList}>
               {cards.cards.map((card) => {
@@ -659,7 +659,7 @@ export function ReckoningRecapPanel({ leagueId, snapshot, demo }: ReckoningRecap
                         <textarea
                           value={draft}
                           maxLength={PERSONA_CARD_MAX_LENGTH}
-                          placeholder="Rivalries, running bits, league history, what stings."
+                          placeholder="History, rivalries, running bits."
                           onChange={(event) =>
                             setDrafts((current) => ({
                               ...current,

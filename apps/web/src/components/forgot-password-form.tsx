@@ -5,16 +5,17 @@ import Link from "next/link";
 import { type FormEvent, useState } from "react";
 
 import { apiBaseUrl } from "../lib/api-client";
+import { AUTH_ERRORS, BACK_TO_SIGN_IN } from "../lib/copy";
 
 type RequestError = "rate-limit" | "unavailable" | "not-configured" | "invalid" | "unknown" | null;
 
 const errorMessages: Record<Exclude<RequestError, null>, string> = {
-  "rate-limit": "Too many requests. Wait a few minutes, then try again.",
-  unavailable: "The private API can’t be reached right now. Try again in a moment.",
+  "rate-limit": AUTH_ERRORS.rateLimit,
+  unavailable: AUTH_ERRORS.unavailable,
   "not-configured":
     "This deployment doesn’t send email. Ask the host to reset your password instead.",
   invalid: "Check the email address, then try again.",
-  unknown: "The request couldn’t be completed. Try again in a moment.",
+  unknown: `The request couldn’t be completed. ${AUTH_ERRORS.tryAgain}`,
 };
 
 function classifyResponse(status: number): Exclude<RequestError, null> {
@@ -75,15 +76,11 @@ export function ForgotPasswordForm() {
           <div>
             <p className="eyebrow">Password reset</p>
             <h1>Check your inbox</h1>
-            <p>
-              If an account exists for that address, a reset link is on its way. It works for 30
-              minutes; the newest link always replaces any earlier one.
-            </p>
           </div>
         </div>
         <div className="login-demo-route">
           <span>Remembered it after all?</span>
-          <Link href="/login">Back to sign in</Link>
+          <Link href="/login">{BACK_TO_SIGN_IN}</Link>
         </div>
       </div>
     );
@@ -98,7 +95,6 @@ export function ForgotPasswordForm() {
         <div>
           <p className="eyebrow">Password reset</p>
           <h1>Forgot your password?</h1>
-          <p>Enter your account email and we’ll send a link to set a new one.</p>
         </div>
       </div>
 
@@ -135,7 +131,7 @@ export function ForgotPasswordForm() {
 
       <div className="login-demo-route">
         <span>Remembered it after all?</span>
-        <Link href="/login">Back to sign in</Link>
+        <Link href="/login">{BACK_TO_SIGN_IN}</Link>
       </div>
     </form>
   );

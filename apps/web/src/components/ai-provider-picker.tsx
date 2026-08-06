@@ -145,7 +145,6 @@ export function AiProviderPicker({
           >
             <div className={styles.menuHeading}>
               <span>Choose provider</span>
-              <small>{options.length} providers</small>
             </div>
             {options.map((option) => {
               const meta = AI_PROVIDER_META[option.provider];

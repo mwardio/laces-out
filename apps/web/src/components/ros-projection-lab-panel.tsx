@@ -172,7 +172,6 @@ export function RosProjectionLabPanel() {
     <section className={styles.panel} id="rest-of-season" aria-labelledby="ros-lab-title">
       <div className={styles.header}>
         <div>
-          <p className={styles.kicker}>Rest-of-season forecast</p>
           <h2 id="ros-lab-title">Rest-of-season forecast status</h2>
           <p>
             Where each of your leagues stands on getting a rest-of-season forecast, and what is
@@ -273,10 +272,7 @@ function RosStatusBody({ status }: { readonly status: RosReleaseStatus }) {
       <div className={styles.section}>
         <h3>Leagues with a forecast</h3>
         {status.publishedSets.length === 0 ? (
-          <p className={styles.empty}>
-            None yet. The forecast is still being checked, and it waits until it passes rather than
-            publishing early.
-          </p>
+          <p className={styles.empty}>None yet.</p>
         ) : (
           <div className={styles.setList}>
             {status.publishedSets.map((set) => (

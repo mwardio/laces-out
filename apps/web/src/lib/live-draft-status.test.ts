@@ -319,7 +319,7 @@ describe("live draft display copy", () => {
       }),
     );
     expect(waiting.sourceRequirement).toContain("desktop Chrome");
-    expect(waiting.sourceRequirement).toContain("do not need");
+    expect(waiting.sourceRequirement).toContain("require");
     expect(describeLiveDraft(input()).sourceRequirement).toBeNull();
     expect(
       describeLiveDraft(
@@ -333,14 +333,14 @@ describe("live draft display copy", () => {
       input({ session: snakeSession({ transport: "manual", providerFeed: null }) }),
     );
     expect(manual.transportChip).toBe("Shared app ledger · no provider feed attached");
-    expect(manual.ledgerNote).toContain("No provider feed writes to this room.");
+    expect(manual.ledgerNote).toContain("saved for league members");
 
     const live = describeLiveDraft(input());
     expect(live.transportChip).toBe("ESPN live sync · read-only");
-    expect(live.ledgerNote).toContain("never writes anything back to ESPN");
+    expect(live.ledgerNote).toContain("saved here with their source");
 
     const mock = describeLiveDraft(input({ localMock: true }));
-    expect(mock.transportChip).toBe("Local memory only · nothing sent to a provider");
+    expect(mock.transportChip).toBe("Local memory only");
     expect(mock.ledgerNote).toContain("only in this browser tab");
     expect(mock.indicator).toBe("mock");
   });
@@ -483,7 +483,7 @@ describe("live status strip", () => {
   it("gives reconnect guidance only when someone can act on it", () => {
     expect(describeLiveDraft(input()).reconnectGuidance).toBeNull();
     expect(describeLiveDraft(input({ pollFailures: 1 })).reconnectGuidance).toContain(
-      "retrying automatically",
+      "Retrying automatically",
     );
     const stale = describeLiveDraft(input({ lastSyncedAt: NOW - 60_000 }));
     expect(stale.reconnectGuidance).toContain("paired desktop Chrome");
@@ -594,8 +594,8 @@ describe("mobile decision summary", () => {
 
 describe("draft setup capability copy", () => {
   it("names Yahoo's gap without promising anything", () => {
-    expect(describeDraftSetupCapability("yahoo")).toContain("not available yet");
-    expect(describeDraftSetupCapability(null)).toContain("No live-draft provider feed");
+    expect(describeDraftSetupCapability("yahoo")).toContain("not available");
+    expect(describeDraftSetupCapability(null)).toContain("No live draft feed");
   });
 
   // Guards the reason the ESPN branch is currently withheld: this function only sees the league's

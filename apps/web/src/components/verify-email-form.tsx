@@ -12,16 +12,17 @@ import Link from "next/link";
 import { type FormEvent, useEffect, useState } from "react";
 
 import { apiBaseUrl } from "../lib/api-client";
+import { AUTH_ERRORS, BACK_TO_SIGN_IN } from "../lib/copy";
 
 type VerifyError = "expired" | "rate-limit" | "unavailable" | "not-configured" | "unknown" | null;
 
 const errorMessages: Record<Exclude<VerifyError, null>, string> = {
   expired: "This confirmation link is invalid or has expired. Request a fresh one below.",
-  "rate-limit": "Too many attempts. Wait a few minutes, then try again.",
-  unavailable: "The private API can’t be reached right now. Try again in a moment.",
+  "rate-limit": AUTH_ERRORS.rateLimit,
+  unavailable: AUTH_ERRORS.unavailable,
   "not-configured":
     "This deployment doesn’t send email, so accounts activate immediately — just sign in.",
-  unknown: "Confirmation couldn’t be completed. Try again in a moment.",
+  unknown: `Confirmation couldn’t be completed. ${AUTH_ERRORS.tryAgain}`,
 };
 
 function classifyResponse(status: number): Exclude<VerifyError, null> {
@@ -148,7 +149,6 @@ export function VerifyEmailForm() {
           <div>
             <p className="eyebrow">Email confirmed</p>
             <h1>You’re ready to sign in</h1>
-            <p>Your account is active. Return to Laces Out and use your email and password.</p>
           </div>
         </div>
         <Link className="button button--lime login-submit" href="/login">
@@ -168,15 +168,10 @@ export function VerifyEmailForm() {
           <div>
             <p className="eyebrow">Email confirmation</p>
             <h1>Check your inbox</h1>
-            <p>
-              If a pending account exists for that address, a fresh confirmation link is on its way.
-              It works for 24 hours and replaces any earlier link.
-            </p>
           </div>
         </div>
         <div className="login-demo-route">
-          <span>Already confirmed?</span>
-          <Link href="/login">Back to sign in</Link>
+          <Link href="/login">{BACK_TO_SIGN_IN}</Link>
         </div>
       </div>
     );
@@ -192,10 +187,6 @@ export function VerifyEmailForm() {
           <div>
             <p className="eyebrow">Email confirmation</p>
             <h1>Need a new link?</h1>
-            <p>
-              Enter your account email and we’ll send a fresh confirmation link if the account is
-              still waiting on one.
-            </p>
           </div>
         </div>
       ) : null}
@@ -228,8 +219,7 @@ export function VerifyEmailForm() {
       </button>
       {!token ? (
         <div className="login-demo-route">
-          <span>Already confirmed?</span>
-          <Link href="/login">Back to sign in</Link>
+          <Link href="/login">{BACK_TO_SIGN_IN}</Link>
         </div>
       ) : null}
     </form>
@@ -246,9 +236,6 @@ export function VerifyEmailForm() {
         <div>
           <p className="eyebrow">Email confirmation</p>
           <h1>One click to go</h1>
-          <p>
-            Confirm this email address to activate your Laces Out account, then return to sign in.
-          </p>
         </div>
       </div>
 
@@ -275,8 +262,7 @@ export function VerifyEmailForm() {
       )}
 
       <div className="login-demo-route">
-        <span>Already confirmed?</span>
-        <Link href="/login">Back to sign in</Link>
+        <Link href="/login">{BACK_TO_SIGN_IN}</Link>
       </div>
     </div>
   );

@@ -293,15 +293,13 @@ export function PlayerProfile({ playerId }: { readonly playerId: string }) {
           <LoaderCircle className={styles.spin} size={20} aria-hidden="true" />
           <div>
             <strong>Reading this player&apos;s admitted rows</strong>
-            <span>Rebuilding the game log and window metrics.</span>
           </div>
         </div>
       ) : view.state === "missing" ? (
         <div className={styles.stateCard} role="alert">
           <ShieldAlert size={20} aria-hidden="true" />
           <div>
-            <strong>No player matches this link</strong>
-            <span>The identifier is valid but no player record carries it.</span>
+            <strong>Player not found</strong>
           </div>
         </div>
       ) : view.state === "error" ? (
@@ -345,7 +343,6 @@ function ProfileBody({ data }: { readonly data: StatsCenterPlayerDetailResponse 
       <section className={styles.panel} aria-labelledby="game-log-title">
         <div className={styles.panelHeading}>
           <div>
-            <p>Week by week</p>
             <h2 id="game-log-title">Game log</h2>
           </div>
           <span>
@@ -355,8 +352,7 @@ function ProfileBody({ data }: { readonly data: StatsCenterPlayerDetailResponse 
         {data.gameLog.length === 0 ? (
           <div className={styles.emptyState}>
             <CalendarOff size={22} aria-hidden="true" />
-            <strong>No admitted rows cover this window</strong>
-            <span>Try another season or a wider week range.</span>
+            <strong>No rows for this window</strong>
           </div>
         ) : (
           <div
@@ -403,16 +399,12 @@ function ProfileBody({ data }: { readonly data: StatsCenterPlayerDetailResponse 
             </table>
           </div>
         )}
-        <p className={styles.definition}>
-          A bye row appears only where the admitted schedule affirms the team had no game that week.
-          Weeks the schedule cannot vouch for are left out rather than guessed at.
-        </p>
+        <p className={styles.definition}>Bye weeks appear only when confirmed by schedule data.</p>
       </section>
 
       <section className={styles.panel} aria-labelledby="trend-title">
         <div className={styles.panelHeading}>
           <div>
-            <p>Recent form</p>
             <h2 id="trend-title">Trend</h2>
           </div>
           <span>
@@ -458,7 +450,6 @@ function ProfileBody({ data }: { readonly data: StatsCenterPlayerDetailResponse 
       <section className={styles.panel} aria-labelledby="boom-title">
         <div className={styles.panelHeading}>
           <div>
-            <p>Distribution</p>
             <h2 id="boom-title">Boom and bust</h2>
           </div>
           {summary.boomBust.threshold ? (
@@ -510,7 +501,6 @@ function ProfileBody({ data }: { readonly data: StatsCenterPlayerDetailResponse 
           <section className={styles.panel} aria-labelledby={`${familyKey}-title`} key={familyKey}>
             <div className={styles.panelHeading}>
               <div>
-                <p>{familyKey === "production" ? "Scored output" : "Derived efficiency"}</p>
                 <h2 id={`${familyKey}-title`}>
                   {familyKey === "production" ? "Production" : "Efficiency"}
                 </h2>
@@ -560,7 +550,6 @@ function ProfileBody({ data }: { readonly data: StatsCenterPlayerDetailResponse 
       <section className={styles.panel} aria-labelledby="profile-source-title">
         <div className={styles.panelHeading}>
           <div>
-            <p>Audit trail</p>
             <h2 id="profile-source-title">Source health</h2>
           </div>
         </div>

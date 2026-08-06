@@ -30,7 +30,6 @@ import styles from "./ai-coach-panel.module.css";
 interface FeatureMeta {
   readonly label: string;
   readonly shortLabel: string;
-  readonly description: string;
   readonly icon: LucideIcon;
   readonly promptLabel: string;
   readonly promptPlaceholder: string;
@@ -40,7 +39,6 @@ const FEATURES: Readonly<Record<AiFeatureName, FeatureMeta>> = {
   "weekly-brief": {
     label: "Weekly Briefing",
     shortLabel: "Weekly Brief",
-    description: "Your matchup, roster pressure points, and the one move that matters most.",
     icon: FileText,
     promptLabel: "Anything to account for?",
     promptPlaceholder: "Optional: I prefer floor over upside this week.",
@@ -48,7 +46,6 @@ const FEATURES: Readonly<Record<AiFeatureName, FeatureMeta>> = {
   "start-sit": {
     label: "Start / Sit Review",
     shortLabel: "Start / Sit",
-    description: "Clear calls, close decisions, and stored injury, bye, eligibility, or lock risk.",
     icon: ClipboardCheck,
     promptLabel: "Decision preference",
     promptPlaceholder: "Optional: favor ceiling in close calls.",
@@ -56,7 +53,6 @@ const FEATURES: Readonly<Record<AiFeatureName, FeatureMeta>> = {
   "waiver-scan": {
     label: "Waiver Wire Scan",
     shortLabel: "Waiver Scan",
-    description: "Only recommends an addition when it beats the player or spot it replaces.",
     icon: UserRoundPlus,
     promptLabel: "Roster preference",
     promptPlaceholder: "Optional: prioritize rest-of-season RB depth.",
@@ -64,7 +60,6 @@ const FEATURES: Readonly<Record<AiFeatureName, FeatureMeta>> = {
   "trade-builder": {
     label: "Trade Finder",
     shortLabel: "Trade Finder",
-    description: "Ranks legal packages, tests both teams' incentives, and drafts the best pitch.",
     icon: Scale,
     promptLabel: "What are you trying to improve?",
     promptPlaceholder: "Optional: improve TE without moving my top two receivers.",
@@ -72,7 +67,6 @@ const FEATURES: Readonly<Record<AiFeatureName, FeatureMeta>> = {
   "standings-prediction": {
     label: "Final Standings Forecast",
     shortLabel: "Season Forecast",
-    description: "Projected order, records, risers, fallers, and your playoff outlook.",
     icon: Trophy,
     promptLabel: "Forecast preference",
     promptPlaceholder: "Optional: emphasize roster strength over current record.",
@@ -80,7 +74,6 @@ const FEATURES: Readonly<Record<AiFeatureName, FeatureMeta>> = {
   "weekly-recap": {
     label: "Weekly Recap",
     shortLabel: "Recap",
-    description: "The week's awards written up for the group chat. Jokes optional, numbers real.",
     icon: Megaphone,
     promptLabel: "Anything to work in?",
     promptPlaceholder: "Optional: go easy on me, I already know about the bench.",
@@ -202,7 +195,7 @@ export function AiCoachPanel({
   features,
   demo = false,
   eyebrow = "AI coaching",
-  title = "Get the second read",
+  title = "AI review",
   description = "Deterministic league analysis sets the board. AI turns it into a clear recommendation.",
 }: AiCoachPanelProps) {
   const [selectedFeature, setSelectedFeature] = useState<AiFeatureName>(
@@ -222,7 +215,6 @@ export function AiCoachPanel({
     [providers],
   );
   const currentMeta = FEATURES[selectedFeature];
-  const CurrentIcon = currentMeta.icon;
 
   useEffect(() => {
     if (demo) return;
@@ -295,16 +287,9 @@ export function AiCoachPanel({
     >
       <header className={styles.header}>
         <div>
-          <p>{eyebrow}</p>
-          <h2 id={`ai-coach-${features.join("-")}`}>{title}</h2>
-          <span>{description}</span>
-        </div>
-        <div className={styles.fuelBadge}>
-          <Sparkles size={15} aria-hidden="true" />
-          <span>
-            <strong>Fueled by Gemini</strong>
-            <small>Included with your account</small>
-          </span>
+          {demo ? <p>{eyebrow}</p> : null}
+          <h2 id={`ai-coach-${features.join("-")}`}>{demo ? title : "AI review"}</h2>
+          {demo ? <span>{description}</span> : null}
         </div>
       </header>
 
@@ -327,7 +312,6 @@ export function AiCoachPanel({
               </span>
               <span>
                 <strong>{meta.shortLabel}</strong>
-                <small>{meta.description}</small>
               </span>
             </button>
           );
@@ -336,13 +320,6 @@ export function AiCoachPanel({
 
       <div className={styles.workArea}>
         <div className={styles.requestPane}>
-          <div className={styles.requestHeading}>
-            <CurrentIcon size={18} aria-hidden="true" />
-            <div>
-              <strong>{currentMeta.label}</strong>
-            </div>
-          </div>
-
           <label className={styles.instructions}>
             <span>{currentMeta.promptLabel}</span>
             <textarea
@@ -369,13 +346,7 @@ export function AiCoachPanel({
                   ))}
                 </select>
               </label>
-            ) : (
-              <span className={styles.providerLine}>
-                {demo || selectedProvider === "gemini"
-                  ? "Included Gemini"
-                  : PROVIDER_LABELS[selectedProvider]}
-              </span>
-            )}
+            ) : null}
             <button
               type="button"
               onClick={() => void generate()}
@@ -403,14 +374,12 @@ export function AiCoachPanel({
           {result.state === "idle" ? (
             <div className={styles.emptyResult}>
               <Sparkles size={19} aria-hidden="true" />
-              <strong>Ready when you are</strong>
-              <span>The review uses the latest saved league, decision, and analytics data.</span>
+              <strong>No review yet</strong>
             </div>
           ) : result.state === "loading" ? (
             <div className={styles.emptyResult}>
               <LoaderCircle className={styles.spin} size={20} aria-hidden="true" />
-              <strong>Reading the whole league</strong>
-              <span>Checking the recommendation against the deterministic board.</span>
+              <strong>Reviewing league data</strong>
             </div>
           ) : result.state === "error" ? (
             <div className={styles.errorResult} role="alert">
@@ -442,25 +411,26 @@ export function AiCoachPanel({
               <div className={styles.answerBody}>
                 <AiAnswerContent answer={result.result.answer} />
               </div>
-              <footer>
-                <p>
-                  Grounded in Laces Out’s own computed league data (overview, Decision Desk, and
-                  analytics), not the model’s outside knowledge.
-                </p>
-                {!demo && toolUseNote(result.result.toolUse) ? (
-                  <p className={styles.toolNote}>{toolUseNote(result.result.toolUse)}</p>
-                ) : null}
-                {!demo && toolProvenanceLines(result.result.toolUse).length > 0 ? (
-                  <ul className={styles.toolProvenance}>
-                    {toolProvenanceLines(result.result.toolUse).map((line) => (
-                      <li key={line}>{line}</li>
-                    ))}
-                  </ul>
-                ) : null}
-                {!demo && result.result.usage.outputTokens === 0 ? (
-                  <small>No model call needed</small>
-                ) : null}
-              </footer>
+              {!demo &&
+              (toolUseNote(result.result.toolUse) ||
+                toolProvenanceLines(result.result.toolUse).length > 0 ||
+                result.result.usage.outputTokens === 0) ? (
+                <footer>
+                  {!demo && toolUseNote(result.result.toolUse) ? (
+                    <p className={styles.toolNote}>{toolUseNote(result.result.toolUse)}</p>
+                  ) : null}
+                  {!demo && toolProvenanceLines(result.result.toolUse).length > 0 ? (
+                    <ul className={styles.toolProvenance}>
+                      {toolProvenanceLines(result.result.toolUse).map((line) => (
+                        <li key={line}>{line}</li>
+                      ))}
+                    </ul>
+                  ) : null}
+                  {!demo && result.result.usage.outputTokens === 0 ? (
+                    <small>No model call needed</small>
+                  ) : null}
+                </footer>
+              ) : null}
             </article>
           )}
         </div>

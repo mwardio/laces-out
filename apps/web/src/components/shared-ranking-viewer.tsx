@@ -153,7 +153,6 @@ export function SharedRankingViewer() {
     <div className="shared-ranking-page">
       <section className="page-heading shared-ranking-heading">
         <div>
-          <p className="eyebrow">Shared ranking snapshot</p>
           <h1>{board.list.name}</h1>
           <p className="page-subtitle">
             {board.list.description ?? "A private Laces Out ranking board."}

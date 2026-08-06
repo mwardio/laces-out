@@ -28,6 +28,7 @@ import {
 } from "../lib/api-client";
 import { shouldRequestEspnRefreshOnView } from "../lib/espn-refresh";
 import { LatestRequest } from "../lib/latest-request";
+import { providerLabel } from "../lib/copy";
 import { yahooComingSoon } from "../lib/public-site";
 import { loginUrlForCurrentPath } from "../lib/safe-return-to";
 import { DEMO_LEAGUE_ID } from "../lib/demo-contract-data";
@@ -62,12 +63,6 @@ type EspnRefreshUiState =
       readonly message: string;
       readonly current: EspnLeagueRefreshStatus | null;
     };
-
-function providerLabel(provider: string): string {
-  if (provider === "espn") return "ESPN";
-  if (provider === "yahoo") return "Yahoo";
-  return "Manual";
-}
 
 function roleLabel(role: string): string {
   return role.charAt(0).toUpperCase() + role.slice(1);
@@ -165,7 +160,7 @@ function MobileWeekAtGlance({ dashboard }: { readonly dashboard: LeagueDashboard
         </div>
       ) : (
         <p className="mobile-week-card__summary">
-          Claim your team to unlock lineup, waiver, trade, and opponent guidance.
+          Claim your team to see personalized recommendations.
         </p>
       )}
 
@@ -192,7 +187,6 @@ function LoadingDashboard() {
       <LoaderCircle className="spin" size={22} />
       <div>
         <strong>Loading your leagues</strong>
-        <span>Checking your session and synchronized data…</span>
       </div>
     </div>
   );
@@ -213,8 +207,8 @@ function PortfolioUnavailable({
         <CircleAlert size={16} />
         <span>
           {reason === "api-unavailable"
-            ? "Your leagues could not be loaded. They are still there — this is a connection problem, not a data loss."
-            : "The API returned a response this version could not read, so your leagues were withheld rather than guessed at."}
+            ? "Your leagues could not be loaded."
+            : "The saved league response could not be read."}
         </span>
         <button className="button button--outline button--small" type="button" onClick={retry}>
           <RefreshCw size={14} /> Try again
@@ -223,7 +217,7 @@ function PortfolioUnavailable({
       <div className="dashboard-mode-notice" role="status">
         <span>Nothing below is your data.</span>
         <button className="button button--small" type="button" onClick={showSample}>
-          Show the sample locker room
+          Show sample data
         </button>
       </div>
     </div>
@@ -237,10 +231,10 @@ function DemoFallback({
 }) {
   const message =
     reason === "signed-out"
-      ? "You are signed out. The locker room below uses sample league data."
+      ? "Signed out. Showing sample data."
       : reason === "api-unavailable"
-        ? "The live API could not be reached, so the locker room is showing its sample data."
-        : "The API response failed validation. Live data was withheld and sample data is shown.";
+        ? "API unavailable. Showing sample data."
+        : "Live data unavailable. Showing sample data.";
   return (
     <>
       <div className="dashboard-mode-notice dashboard-mode-notice--demo" role="status">
@@ -566,15 +560,7 @@ function LivePortfolio({ portfolio, reloadPortfolio }: LivePortfolioProps) {
     <div className="dashboard-page live-dashboard-page">
       <section className="page-heading dashboard-heading">
         <div>
-          <p className="eyebrow">Your league overview</p>
-          <h1>
-            {portfolio.leagues.length === 1
-              ? "1 connected league. One clear view."
-              : `${portfolio.leagues.length} connected leagues in one view.`}
-          </h1>
-          <p className="page-subtitle">
-            Fresh league and projection data power every lineup, waiver, and trade call.
-          </p>
+          <h1>Your leagues</h1>
         </div>
         <div className="heading-actions">
           {selectedEspnSeason ? (
@@ -629,14 +615,13 @@ function LivePortfolio({ portfolio, reloadPortfolio }: LivePortfolioProps) {
             type="button"
             onClick={() => void Promise.all([reloadPortfolio(), loadDashboard()])}
           >
-            <RefreshCw size={16} /> Reload saved data
+            <RefreshCw size={16} /> Reload
           </button>
           <button
             className="button button--dark"
             type="button"
             onClick={() => void checkPlayerCatalog()}
             disabled={sourceRefreshState === "working"}
-            title="Check shared NFL inputs and rerun managed forecasts when inputs change"
           >
             {sourceRefreshState === "working" ? (
               <LoaderCircle className="spin" size={16} />
@@ -648,14 +633,14 @@ function LivePortfolio({ portfolio, reloadPortfolio }: LivePortfolioProps) {
               <Database size={16} />
             )}
             {sourceRefreshState === "working"
-              ? "Requesting…"
+              ? "Checking…"
               : sourceRefreshState === "queued"
-                ? "Forecast input check queued"
+                ? "Queued"
                 : sourceRefreshState === "deduplicated"
-                  ? "Input check already queued"
+                  ? "Already queued"
                   : sourceRefreshState === "error"
-                    ? "Retry input check"
-                    : "Check forecast inputs"}
+                    ? "Retry"
+                    : "Check inputs"}
           </button>
           <span className="sr-only" role="status" aria-live="polite">
             {sourceRefreshState === "queued"
@@ -679,7 +664,6 @@ function LivePortfolio({ portfolio, reloadPortfolio }: LivePortfolioProps) {
           <div>
             <span>Accessible leagues</span>
             <strong>{portfolio.leagues.length}</strong>
-            <small>Visible only to this account</small>
           </div>
         </article>
         <article className="overview-stat">
@@ -691,7 +675,6 @@ function LivePortfolio({ portfolio, reloadPortfolio }: LivePortfolioProps) {
             <strong>
               {freshLeagues}/{portfolio.leagues.length} fresh
             </strong>
-            <small>Freshness follows each provider and season context</small>
           </div>
         </article>
         <article className="overview-stat">
@@ -703,7 +686,6 @@ function LivePortfolio({ portfolio, reloadPortfolio }: LivePortfolioProps) {
             <strong>
               {claimedLeagues}/{portfolio.leagues.length} claimed
             </strong>
-            <small>Required for personal recommendations</small>
           </div>
         </article>
         <article className="overview-stat">
@@ -729,7 +711,6 @@ function LivePortfolio({ portfolio, reloadPortfolio }: LivePortfolioProps) {
       <section className="section-block league-section" aria-labelledby="live-league-board-title">
         <div className="section-heading">
           <div>
-            <p className="eyebrow">League portfolio</p>
             <h2 id="live-league-board-title">Choose a league to inspect</h2>
           </div>
           <Link
@@ -850,7 +831,7 @@ function MemberWeekPanel({ dashboard }: { readonly dashboard: LeagueDashboard })
   if (context.state !== "available") {
     const message =
       context.state === "team-unclaimed"
-        ? "Claim your fantasy team below to unlock current-opponent context."
+        ? "Claim your team to see opponent context."
         : context.state === "week-unavailable"
           ? "The provider snapshot does not identify a current week yet."
           : "No matchup was stored for your claimed team this week. This may be a bye or a provider data gap.";
@@ -948,7 +929,6 @@ function WeeklyInsightsPanel({ dashboard }: { readonly dashboard: LeagueDashboar
     <section className="panel live-weekly-panel" aria-labelledby="live-weekly-title">
       <div className="panel-heading live-insights-heading">
         <div>
-          <p className="eyebrow">League-wide weekly stats</p>
           <h3 id="live-weekly-title">
             {insights.week ? `Week ${insights.week} league pulse` : "Current-week league pulse"}
           </h3>
@@ -995,14 +975,12 @@ function WeeklyInsightsPanel({ dashboard }: { readonly dashboard: LeagueDashboar
               <strong>
                 {scoreLabel(metrics.highestTeamScore)} / {scoreLabel(metrics.lowestTeamScore)}
               </strong>
-              <small>Current provider totals</small>
             </article>
             <article>
               <span>Closest / largest margin</span>
               <strong>
                 {scoreLabel(metrics.smallestScoreMargin)} / {scoreLabel(metrics.largestScoreMargin)}
               </strong>
-              <small>Among matchups with scores</small>
             </article>
           </div>
 
@@ -1054,7 +1032,7 @@ function WeeklyInsightsPanel({ dashboard }: { readonly dashboard: LeagueDashboar
                 <span>Provider totals</span>
               </div>
               {insights.scoreLeaders.length === 0 ? (
-                <p className="live-table-empty">Scores will appear after games begin.</p>
+                <p className="live-table-empty">No scores yet.</p>
               ) : (
                 <div className="live-table-scroll">
                   <table className="live-stats-table live-leader-table">
@@ -1113,7 +1091,6 @@ function StandingsPanel({ dashboard }: { readonly dashboard: LeagueDashboard }) 
     <section className="panel live-standings-panel" aria-labelledby="live-standings-title">
       <div className="panel-heading live-insights-heading">
         <div>
-          <p className="eyebrow">League table</p>
           <h3 id="live-standings-title">Current standings</h3>
           <p>
             {standings.asOfWeek
@@ -1126,7 +1103,7 @@ function StandingsPanel({ dashboard }: { readonly dashboard: LeagueDashboard }) 
         </span>
       </div>
       {standings.state === "unavailable" ? (
-        <p className="live-table-empty">No standings rows are stored for this league yet.</p>
+        <p className="live-table-empty">No standings yet.</p>
       ) : (
         <div className="live-table-scroll">
           <table className="live-stats-table">
@@ -1225,7 +1202,6 @@ function LeagueDetail({
     <section className="live-league-detail" aria-labelledby="live-league-detail-title">
       <div className="section-heading live-detail-heading">
         <div>
-          <p className="eyebrow">League details</p>
           <h2 id="live-league-detail-title">{dashboard.league.name}</h2>
           <p>
             {dashboard.season
@@ -1328,7 +1304,7 @@ function LeagueDetail({
                 {dashboard.teamClaim.mode === "provider-mapped"
                   ? "Confirm Yahoo team"
                   : claimedTeam
-                    ? "Switch self-asserted team"
+                    ? "Switch team"
                     : "Claim this team"}
               </button>
             </div>
@@ -1370,7 +1346,7 @@ function RosterGroup({
     <div className="live-roster-group">
       <h4>{label}</h4>
       {players.length === 0 ? (
-        <p>No stored players.</p>
+        <p>No roster yet.</p>
       ) : (
         players.map((player) => (
           <div className="live-roster-player" key={player.id}>

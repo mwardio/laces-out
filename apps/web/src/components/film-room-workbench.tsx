@@ -27,6 +27,7 @@ import {
   parseLeagueListResponse,
 } from "../lib/api-client";
 import { AI_PROVIDER_META as PROVIDERS, AI_PROVIDER_ORDER } from "../lib/ai-provider-meta";
+import { CONNECT_LEAGUE_FIRST, TOUR_BANNER } from "../lib/copy";
 import { DEMO_LEAGUE_ID } from "../lib/demo-contract-data";
 import { AiAnswerContent } from "./ai-answer-content";
 import { AiCoachPanel } from "./ai-coach-panel";
@@ -34,12 +35,12 @@ import { AiProviderPicker } from "./ai-provider-picker";
 import styles from "./film-room-workbench.module.css";
 
 const QUICK_QUESTIONS = [
-  "What are my three highest-leverage moves this week?",
-  "Explain my best waiver priorities and who I can drop.",
-  "Which realistic trade improves my weakest position?",
-  "Write a scouting report roasting my opponent's roster this week.",
-  "Write my victory speech — or my concession statement, whichever the projections support.",
-  "Which manager in this league should be most embarrassed this week? Use the numbers.",
+  "What are my top three moves?",
+  "Who should I add and drop?",
+  "Which trade improves my weakest position?",
+  "Roast my opponent using the numbers.",
+  "Write a victory or concession speech.",
+  "Who should be embarrassed this week?",
 ] as const;
 
 type LoadState =
@@ -78,8 +79,8 @@ function FilmRoomTour() {
       <div className={styles.tourNotice} role="status">
         <BrainCircuit size={17} />
         <span>
-          <strong>Locker room tour</strong>
-          Illustrative grounded answer. No provider request or API charge occurs in tour mode.
+          <strong>{TOUR_BANNER.title}</strong>
+          {TOUR_BANNER.detail}
         </span>
       </div>
       <header className={styles.hero}>
@@ -390,8 +391,7 @@ export function FilmRoomWorkbench() {
     return (
       <div className={styles.statePanel}>
         <LoaderCircle className={styles.spin} size={22} />
-        <strong>Opening the Film room</strong>
-        <span>Loading private provider settings and league access.</span>
+        <strong>Loading…</strong>
       </div>
     );
   }
@@ -421,47 +421,8 @@ export function FilmRoomWorkbench() {
   return (
     <div className={styles.page}>
       <header className={styles.hero}>
-        <div>
-          <p className={styles.kicker}>Private intelligence layer</p>
-          <h1>Film Room</h1>
-          <p>
-            Ask why a recommendation leads the board. Included Gemini works without setup; add an
-            OpenAI, Anthropic, Gemini, DeepSeek, Grok, or OpenRouter key only to choose the model
-            and use independent limits. No prompts or answers are stored.
-          </p>
-        </div>
-        <div className={styles.securityChip}>
-          <ShieldCheck size={18} />
-          <span>
-            <strong>Gemini included</strong>
-            <small>Personal keys stay optional</small>
-          </span>
-        </div>
+        <h1>Film Room</h1>
       </header>
-
-      <section className={styles.boundary} aria-label="AI trust boundaries">
-        <div>
-          <KeyRound size={18} />
-          <span>
-            <strong>Ready out of the box</strong>
-            <small>Gemini 3.6 Flash uses the included key.</small>
-          </span>
-        </div>
-        <div>
-          <BrainCircuit size={18} />
-          <span>
-            <strong>Grounded, not autonomous</strong>
-            <small>Models explain deterministic league recommendations.</small>
-          </span>
-        </div>
-        <div>
-          <Gauge size={18} />
-          <span>
-            <strong>Bring your own model</strong>
-            <small>Your key unlocks model choice.</small>
-          </span>
-        </div>
-      </section>
 
       {currentProvider?.available ? (
         <section className={styles.providerControl} aria-label="AI provider">
@@ -512,9 +473,7 @@ export function FilmRoomWorkbench() {
       >
         <div className={styles.panelHeader}>
           <div>
-            <p className={styles.eyebrow}>League-grounded analysis</p>
             <h2 id="analysis-heading">Ask the film room</h2>
-            <span>Overview, Decision Desk, and league analytics go in with every request.</span>
           </div>
         </div>
 
@@ -530,7 +489,7 @@ export function FilmRoomWorkbench() {
                 onChange={(event) => setSelectedLeagueId(event.target.value)}
                 disabled={!hasLeagues}
               >
-                {hasLeagues ? null : <option value="">Connect a league first</option>}
+                {hasLeagues ? null : <option value="">{CONNECT_LEAGUE_FIRST}</option>}
                 {load.leagues.leagues.map((league) => (
                   <option key={league.id} value={league.id}>
                     {league.name}
@@ -564,18 +523,12 @@ export function FilmRoomWorkbench() {
                 <KeyRound size={17} />
                 <span>Save a {providerMeta.name} API key to analyze this league.</span>
               </div>
-            ) : currentProvider.accessMode === "managed" ? (
-              <div className={`${styles.notice} ${styles.noticeSuccess}`} role="status">
-                <Check size={16} />
-                <span>Included Gemini is selected. No personal API key is required.</span>
-              </div>
             ) : null}
             {!hasLeagues ? (
               <div className={styles.inlineGate}>
                 <AlertCircle size={17} />
                 <span>
-                  <Link href="/connections">Connect Yahoo or ESPN</Link> before requesting league
-                  analysis.
+                  <Link href="/connections">{CONNECT_LEAGUE_FIRST}</Link>
                 </span>
               </div>
             ) : null}
@@ -605,8 +558,7 @@ export function FilmRoomWorkbench() {
             {analysisAction.state === "analyzing" ? (
               <div className={styles.emptyAnswer} aria-busy="true">
                 <LoaderCircle className={styles.spin} size={25} aria-hidden="true" />
-                <strong>Reading the whole league</strong>
-                <span>Checking the answer against the latest saved decisions and analytics.</span>
+                <strong>Reviewing league data</strong>
               </div>
             ) : analysis ? (
               <article className={styles.answer}>
@@ -626,10 +578,6 @@ export function FilmRoomWorkbench() {
                 <div className={styles.answerText}>
                   <AiAnswerContent answer={analysis.answer} />
                 </div>
-                {/* The grounding claim is made once per page. On Film Room that is the
-                    "Grounded, not autonomous" chip in the trust strip above, which is why this
-                    answer carries the shield marker instead of repeating the full sentence — the
-                    coaching panel below would otherwise state it a second time on one screen. */}
                 <footer className={styles.answerGrounding}>
                   <ShieldCheck size={13} aria-hidden="true" />
                   <span>Grounded in your league&rsquo;s computed data</span>
@@ -644,11 +592,7 @@ export function FilmRoomWorkbench() {
             ) : (
               <div className={styles.emptyAnswer}>
                 <BrainCircuit size={25} />
-                <strong>Your answer will land here</strong>
-                <span>
-                  Models receive bounded, current league data. They receive no provider credentials
-                  and no ability to change Yahoo or ESPN.
-                </span>
+                <strong>No analysis yet</strong>
               </div>
             )}
           </div>

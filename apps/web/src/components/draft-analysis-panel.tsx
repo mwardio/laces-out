@@ -198,7 +198,7 @@ function SnakeTeamCard({ team }: { readonly team: SnakeTeam }) {
       <RosterRow team={team} />
       <TeamStrength team={team} />
       {team.selections.length === 0 ? (
-        <p className={styles.empty}>No picks recorded for this team yet.</p>
+        <p className={styles.empty}>No picks yet.</p>
       ) : (
         // A scrollable region needs to be reachable by keyboard, not only by pointer.
         <div
@@ -351,7 +351,7 @@ function AuctionTeamCard({
       )}
 
       {team.purchases.length === 0 ? (
-        <p className={styles.empty}>No sales recorded for this team yet.</p>
+        <p className={styles.empty}>No sales yet.</p>
       ) : (
         <div
           className={`${styles.tableScroll} has-scroll-cue`}
@@ -497,11 +497,6 @@ export function DraftAnalysisPanel({ draftId, sequence, mode, enabled }: DraftAn
           <h2 id="draft-analysis-title">
             {analysis?.draftStatus === "COMPLETE" ? "Final draft report" : "In-progress read"}
           </h2>
-          <p className={styles.lede}>
-            {analysis?.draftStatus === "COMPLETE"
-              ? "Every recorded pick has been graded against the admitted market baseline and roster rules."
-              : "Teams may have unequal pick counts while the room is live, so this is a read on the board so far and not a final grade."}
-          </p>
         </div>
         {analysis === null ? null : (
           <span className={`${styles.badge} ${styles.badgeMode}`}>
@@ -510,12 +505,7 @@ export function DraftAnalysisPanel({ draftId, sequence, mode, enabled }: DraftAn
         )}
       </div>
 
-      {panel.state === "idle" ? (
-        <p className={styles.empty}>
-          The Practice Room runs entirely in this browser, so there is no recorded draft to report
-          on. Open a shared draft room to see the report.
-        </p>
-      ) : null}
+      {panel.state === "idle" ? <p className={styles.empty}>No shared draft to report.</p> : null}
 
       {panel.state === "loading" ? (
         <p className={styles.status} role="status">
@@ -583,11 +573,7 @@ export function DraftAnalysisPanel({ draftId, sequence, mode, enabled }: DraftAn
           ) : null}
 
           {hasRecordedActions ? null : (
-            <p className={styles.empty}>
-              Nothing has been recorded in this room yet. Roster construction below reflects the
-              league&rsquo;s slot rules, and grading begins with the first recorded{" "}
-              {mode === "AUCTION" ? "sale" : "pick"}.
-            </p>
+            <p className={styles.empty}>No {mode === "AUCTION" ? "sales" : "picks"} yet.</p>
           )}
 
           <div className={styles.teams}>

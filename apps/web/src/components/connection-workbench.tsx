@@ -402,22 +402,22 @@ export function ConnectionWorkbench() {
           : sync === "failed"
             ? {
                 tone: "warning",
-                text: "Yahoo connected, but the first league sync failed. Retry it below; reconnecting is not required.",
+                text: "Yahoo connected, but the first sync failed.",
               }
             : {
                 tone: "success",
-                text: "Yahoo authorization completed. Check the connection below before using roster data.",
+                text: "Yahoo connected.",
               }
         : status === "denied"
-          ? { tone: "warning", text: "Yahoo authorization was canceled. No connection was added." }
+          ? { tone: "warning", text: "Yahoo authorization was canceled." }
           : status === "unavailable"
             ? {
                 tone: "warning",
-                text: "Yahoo OAuth is not configured for this API process yet.",
+                text: "Yahoo sign-in is not configured.",
               }
             : {
                 tone: "error",
-                text: "Yahoo authorization could not be completed. No provider details were saved by this screen.",
+                text: "Yahoo authorization failed.",
               };
     if (status === "connected") setYahooState("done");
     setCallbackNotice(notice);
@@ -585,7 +585,7 @@ export function ConnectionWorkbench() {
       setYahooDisconnectCandidate(null);
       setYahooActionMessage({
         tone: "success",
-        text: "Stored Yahoo authorization removed. Previously synchronized league data remains available as last-known data; no Yahoo revocation request was made.",
+        text: "Yahoo authorization removed.",
       });
       await refreshYahooConnections();
     } catch (error) {
@@ -779,7 +779,7 @@ export function ConnectionWorkbench() {
           <h1>League Sync</h1>
           <p className="page-subtitle">
             {yahooComingSoon
-              ? "Keep ESPN leagues current with secure automatic refresh. Yahoo sign-in is coming soon."
+              ? "Keep ESPN leagues current with automatic refresh."
               : "Connect Yahoo with official sign-in or keep ESPN leagues current automatically."}
           </p>
         </div>
@@ -787,7 +787,7 @@ export function ConnectionWorkbench() {
           <ShieldCheck size={18} />
           <span>
             <strong>Read-only by default</strong>
-            <small>No lineup or transaction writes</small>
+            <small>No passwords or provider writes</small>
           </span>
         </div>
       </section>
@@ -814,7 +814,6 @@ export function ConnectionWorkbench() {
           <div className="connection-provider__head">
             <span className="connection-provider-logo connection-provider-logo--espn">E</span>
             <div>
-              <p className="eyebrow">Private-league sync · no password sharing</p>
               <h2>Connect ESPN</h2>
             </div>
             <span
@@ -823,10 +822,7 @@ export function ConnectionWorkbench() {
               {espnPanelState}
             </span>
           </div>
-          <p>
-            The Chrome companion finds the leagues on your signed-in ESPN account and keeps them
-            current — read-only, and your ESPN password is never collected.
-          </p>
+          <p>The Chrome companion finds and refreshes leagues from your signed-in ESPN account.</p>
 
           <EspnPairingStepper
             signedOut={signedOut}
@@ -891,10 +887,6 @@ export function ConnectionWorkbench() {
                       ? "Refreshes continue without Chrome"
                       : "Renew your ESPN sign-in"}
                   </strong>
-                  <p>
-                    Session authorization is encrypted on this server and restricted to read-only
-                    fantasy data. Your password is never stored.
-                  </p>
                   <small>
                     {activeEspnServerSession.leagues.length} linked{" "}
                     {activeEspnServerSession.leagues.length === 1 ? "league" : "leagues"}
@@ -940,11 +932,7 @@ export function ConnectionWorkbench() {
               <div className="espn-always-on-manager__body">
                 <div>
                   <strong>Keep synced when Chrome is closed</strong>
-                  <p>
-                    The recommended setup sends ESPN session authorization through the paired
-                    companion and stores it encrypted on your Laces Out server. It is used only for
-                    read-only league refreshes and can be removed here at any time.
-                  </p>
+                  <p>Keeps leagues current after Chrome closes.</p>
                 </div>
                 <button
                   className="button button--lime button--small"
@@ -1002,10 +990,7 @@ export function ConnectionWorkbench() {
             {espnLeagueStatusesState === "working" && espnLeagueStatuses.length === 0 ? (
               <p className="bridge-device-manager__empty">Checking league refresh health…</p>
             ) : espnLeagueStatuses.length === 0 ? (
-              <p className="bridge-device-manager__empty">
-                No ESPN league is connected yet. Use <strong>Find my ESPN leagues</strong> above and
-                they appear here after the first sync.
-              </p>
+              <p className="bridge-device-manager__empty">No ESPN leagues connected.</p>
             ) : (
               <ul className="bridge-device-list espn-refresh-list">
                 {espnLeagueStatuses.map((league) => {
@@ -1148,10 +1133,7 @@ export function ConnectionWorkbench() {
             {bridgeDevicesState === "working" && visibleBridgeDevices.length === 0 ? (
               <p className="bridge-device-manager__empty">Checking ESPN sync status…</p>
             ) : visibleBridgeDevices.length === 0 ? (
-              <p className="bridge-device-manager__empty">
-                No browser is paired yet. Connect one with <strong>Find my ESPN leagues</strong>{" "}
-                above; each paired browser is listed here.
-              </p>
+              <p className="bridge-device-manager__empty">No browsers paired.</p>
             ) : (
               <ul className="bridge-device-list">
                 {visibleBridgeDevices.map((device) => (
@@ -1235,9 +1217,7 @@ export function ConnectionWorkbench() {
                             ) : (
                               <Unplug size={14} />
                             )}
-                            {revokingDeviceId === device.deviceId
-                              ? "Revoking access…"
-                              : "Yes, revoke access"}
+                            {revokingDeviceId === device.deviceId ? "Revoking access…" : "Revoke"}
                           </button>
                         </div>
                       </div>
@@ -1253,9 +1233,7 @@ export function ConnectionWorkbench() {
           <div className="connection-provider__head">
             <span className="connection-provider-logo connection-provider-logo--yahoo">Y!</span>
             <div>
-              <p className="eyebrow">
-                {yahooComingSoon ? "Yahoo Fantasy · Coming soon" : "Official Yahoo sign-in"}
-              </p>
+              {!yahooComingSoon ? <p className="eyebrow">Official Yahoo sign-in</p> : null}
               <h2>Connect Yahoo</h2>
             </div>
             <span
@@ -1264,25 +1242,19 @@ export function ConnectionWorkbench() {
               {yahooPanelState}
             </span>
           </div>
-          <p>
-            {yahooComingSoon
-              ? "Yahoo sign-in and read-only league sync are coming soon."
-              : "Authorize Laces Out without sharing your Yahoo password. Tokens remain encrypted on the configured server, and synced league access is read-only."}
-          </p>
-          <ul className="connection-capabilities">
-            <li>
-              <Check size={14} />
-              {yahooComingSoon
-                ? "Private league and team discovery"
-                : "Connector path for private league and team discovery"}
-            </li>
-            <li>
-              <Check size={14} /> Read-only settings, rosters, standings, and scoreboards
-            </li>
-            <li>
-              <Check size={14} /> Server-side token exchange and encrypted token storage
-            </li>
-          </ul>
+          {!yahooComingSoon ? (
+            <>
+              <p>Sign in with Yahoo to discover and sync your leagues.</p>
+              <ul className="connection-capabilities">
+                <li>
+                  <Check size={14} /> Private league and team discovery
+                </li>
+                <li>
+                  <Check size={14} /> Encrypted token storage
+                </li>
+              </ul>
+            </>
+          ) : null}
           {!yahooComingSoon || yahooConnections.length > 0 ? (
             <div className="yahoo-connection-manager" aria-live="polite">
               <div className="yahoo-connection-manager__heading">
@@ -1312,11 +1284,7 @@ export function ConnectionWorkbench() {
               {yahooConnectionsState === "working" && yahooConnections.length === 0 ? (
                 <p className="yahoo-connection-manager__empty">Checking Yahoo connection status…</p>
               ) : yahooConnections.length === 0 ? (
-                <p className="yahoo-connection-manager__empty">
-                  {yahooComingSoon
-                    ? "Yahoo sign-in is coming soon. No action is needed here yet."
-                    : "No Yahoo account is connected yet. Select Connect Yahoo to begin."}
-                </p>
+                <p className="yahoo-connection-manager__empty">No Yahoo account connected.</p>
               ) : (
                 <ul className="yahoo-connection-list">
                   {yahooConnections.map((connection) => (
@@ -1470,15 +1438,7 @@ export function ConnectionWorkbench() {
                 </p>
               ) : null}
             </div>
-          ) : (
-            <div className="yahoo-coming-soon-note" role="status">
-              <ShieldCheck size={15} />
-              <span>
-                <strong>No setup needed yet.</strong> The connection button will appear here when
-                Yahoo sync opens.
-              </span>
-            </div>
-          )}
+          ) : null}
           {yahooError ? (
             <p className="connection-error" role="alert">
               <TriangleAlert size={14} />
@@ -1509,11 +1469,11 @@ export function ConnectionWorkbench() {
                   : "Connect Yahoo"}
             {yahooState !== "working" ? <ArrowRight size={15} /> : null}
           </button>
-          <small className="provider-attribution">
-            {yahooComingSoon
-              ? "Official Yahoo Fantasy attribution appears throughout the locker room once Yahoo sync is enabled."
-              : "Official Yahoo Fantasy attribution is displayed throughout the signed-in locker room."}
-          </small>
+          {!yahooComingSoon ? (
+            <small className="provider-attribution">
+              Official Yahoo Fantasy attribution is displayed throughout the signed-in locker room.
+            </small>
+          ) : null}
         </article>
       </section>
     </div>

@@ -7,7 +7,6 @@ import { describe, expect, it } from "vitest";
 import {
   ROS_WITHHOLDING_REASONS,
   describeRosRelease,
-  humanizeRosWithholdingReason,
   parseRosReleaseStatus,
   type RosReleaseStatus,
 } from "./ros-release-status";
@@ -92,20 +91,6 @@ const mixedStatus: RosReleaseStatus = {
   ],
 };
 
-const withheldStatus: RosReleaseStatus = {
-  ...admittedStatus,
-  leagueReadiness: [
-    {
-      leagueSeasonId: "league-2",
-      leagueName: "North Loop Auction",
-      state: "withheld",
-      reasons: ["no-admitted-scoring-profile", "incomplete-schedule"],
-      scoringProfile: null,
-      positions: [],
-    },
-  ],
-};
-
 describe("describeRosRelease", () => {
   it("never calls an admitted, release-capable artifact globally shadow-only", () => {
     const description = describeRosRelease({
@@ -123,7 +108,6 @@ describe("describeRosRelease", () => {
     });
 
     expect(description.artifactHeadline).toBe("Ready for Full PPR scoring");
-    expect(description.auditHeadline).toBe("Separate audit run, not a release signal");
     expect(JSON.stringify(description)).not.toMatch(/shadow|globally disabled|fail-closed/iu);
   });
 
@@ -155,35 +139,6 @@ describe("describeRosRelease", () => {
 
     expect(description.retainedSetNotice).toBeNull();
     expect(description.cellSummary).toBe("6 of 6 position groups released");
-  });
-
-  it("reports withheld leagues with plain-language reasons in a stable order", () => {
-    const description = describeRosRelease(withheldStatus);
-
-    expect(description.leagueNotices).toEqual([
-      "Your league's scoring rules are not one of the validated profiles.",
-      "The NFL schedule for the remaining weeks is not complete yet.",
-    ]);
-  });
-
-  it("says plainly when no league has been synced", () => {
-    const description = describeRosRelease({
-      ...admittedStatus,
-      leagueReadiness: [
-        {
-          leagueSeasonId: null,
-          leagueName: null,
-          state: "withheld",
-          reasons: ["no-league-synced"],
-          scoringProfile: null,
-          positions: [],
-        },
-      ],
-    });
-
-    expect(description.leagueNotices).toEqual([
-      "No league has been synced yet, so there is nothing to forecast for.",
-    ]);
   });
 
   it("names unsupported scoring profiles instead of implying full coverage", () => {
@@ -241,78 +196,6 @@ describe("describeRosRelease", () => {
     expect(description.artifactHeadline).toBe("Not ready for this season yet");
     expect(description.supportedProfileSummary).toBe("No scoring formats ready yet");
   });
-
-  it("summarizes a league's own per-position readiness, with a title only for withheld positions", () => {
-    const description = describeRosRelease({
-      ...admittedStatus,
-      leagueReadiness: [
-        {
-          leagueSeasonId: "league-9",
-          leagueName: "Daragely",
-          state: "withheld",
-          reasons: ["no-admitted-scoring-profile"],
-          scoringProfile: null,
-          positions: [
-            { position: "QB", decision: "ready", reasons: [] },
-            { position: "RB", decision: "ready", reasons: [] },
-            { position: "WR", decision: "ready", reasons: [] },
-            { position: "TE", decision: "ready", reasons: [] },
-            {
-              position: "K",
-              decision: "withheld",
-              reasons: ["position-unsupported", "No stored league scoring rules were available."],
-            },
-            {
-              position: "DST",
-              decision: "withheld",
-              reasons: ["scoring-profile-position-mismatch"],
-            },
-          ],
-        },
-      ],
-    });
-
-    expect(description.leaguePositionSummaries).toEqual([
-      {
-        leagueSeasonId: "league-9",
-        leagueLabel: "Daragely",
-        positions: [
-          { position: "QB", decision: "ready", title: null },
-          { position: "RB", decision: "ready", title: null },
-          { position: "WR", decision: "ready", title: null },
-          { position: "TE", decision: "ready", title: null },
-          { position: "K", decision: "withheld", title: "position-unsupported" },
-          { position: "DST", decision: "withheld", title: "scoring-profile-position-mismatch" },
-        ],
-      },
-    ]);
-  });
-
-  it("omits a league that reported no per-position readiness at all", () => {
-    // `admittedStatus`'s one league carries `positions: []` (an older payload shape, or the
-    // no-league-synced placeholder) — nothing to render a chip row for.
-    const description = describeRosRelease(admittedStatus);
-
-    expect(description.leaguePositionSummaries).toEqual([]);
-  });
-});
-
-describe("humanizeRosWithholdingReason", () => {
-  it("renders every structured reason as a sentence", () => {
-    for (const reason of ROS_WITHHOLDING_REASONS) {
-      const label = humanizeRosWithholdingReason(reason);
-      expect(label.endsWith(".")).toBe(true);
-      expect(label).not.toMatch(/shadow|fail-closed/iu);
-    }
-  });
-
-  it("renders a reason this module does not yet recognize instead of returning undefined", () => {
-    // Forward compatibility: a future additive reason the API emits before this module is updated
-    // for it must still render something readable, not `undefined` or an empty string.
-    const label = humanizeRosWithholdingReason("some-future-reason-not-yet-named");
-    expect(label).toBe("Some future reason not yet named.");
-    expect(label.endsWith(".")).toBe(true);
-  });
 });
 
 describe("reason list stays in sync with the canonical wire contract", () => {
@@ -369,11 +252,6 @@ describe("parseRosReleaseStatus", () => {
 
     // The whole payload (every other league, every other fact) is intact too, not just this league.
     expect(parsed?.admittedArtifacts.state).toBe("admitted");
-
-    const description = describeRosRelease(parsed!);
-    expect(description.leagueNotices).toEqual([
-      "Your league's scoring rules could not be matched to any position at all.",
-    ]);
   });
 
   it("does not blank the payload when a league reports a reason this module does not yet recognize", () => {
@@ -396,9 +274,6 @@ describe("parseRosReleaseStatus", () => {
     const parsed = parseRosReleaseStatus(JSON.parse(JSON.stringify(status)));
     expect(parsed).not.toBeNull();
     expect(parsed?.leagueReadiness[0]?.reasons).toEqual(["some-brand-new-reason-added-later"]);
-
-    const description = describeRosRelease(parsed!);
-    expect(description.leagueNotices).toEqual(["Some brand new reason added later."]);
   });
 
   it("drops a malformed position entry instead of rejecting the league or the payload", () => {

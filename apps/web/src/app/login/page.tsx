@@ -1,4 +1,4 @@
-import { Database, Eye, LockKeyhole, ShieldCheck } from "lucide-react";
+import { Database, Eye, ShieldCheck } from "lucide-react";
 import type { Metadata } from "next";
 import Link from "next/link";
 
@@ -23,7 +23,6 @@ export default function LoginPage() {
         </Link>
 
         <div className="login-story__copy">
-          <p className="eyebrow">Private by default</p>
           <h2 id="login-story-title">
             Every league.
             <br />
@@ -55,20 +54,10 @@ export default function LoginPage() {
             </span>
           </div>
         </div>
-
-        <p className="login-story__footnote">
-          <LockKeyhole size={13} /> Credentials are sent directly to your configured API over the
-          current connection.
-        </p>
       </section>
 
       <section className="login-form-side" aria-label="Account sign in">
         <LoginForm />
-        <p className="login-help">
-          Friends can register with the shared group code or accept an expiring personal invitation
-          link. If you forget your password, request a reset link by email; completing a reset signs
-          out every existing session.
-        </p>
       </section>
     </main>
   );

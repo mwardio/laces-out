@@ -35,6 +35,7 @@ import {
   parseProjectionSetList,
   type LeagueListResponse,
 } from "../lib/api-client";
+import { CONNECT_LEAGUE_FIRST, TOUR_BANNER } from "../lib/copy";
 import {
   LEAGUE_PROJECTION_IMPORT_HORIZON,
   localDateTimeMinuteValue,
@@ -106,9 +107,8 @@ function ProjectionTour() {
       <div className={styles.demoNotice} role="status">
         <Info size={17} aria-hidden="true" />
         <span>
-          <strong>Locker room tour</strong>
-          Illustrative forecast evidence, import, and match report. Nothing can be uploaded or saved
-          in tour mode.
+          <strong>{TOUR_BANNER.title}</strong>
+          {TOUR_BANNER.detail}
         </span>
       </div>
       <header className={styles.hero}>
@@ -646,7 +646,7 @@ export function ProjectionImportWorkbench() {
       <div className={styles.gate}>
         <Database size={22} aria-hidden="true" />
         <div>
-          <h1>Connect a league first</h1>
+          <h1>{CONNECT_LEAGUE_FIRST}</h1>
           <p>A Yahoo or ESPN league season establishes the scoring and privacy boundary.</p>
           <Link className={styles.primaryLink} href="/connections">
             Open League Sync
@@ -674,12 +674,7 @@ export function ProjectionImportWorkbench() {
     <div className={styles.page}>
       <header className={styles.hero}>
         <div>
-          <p className={styles.kicker}>Managed forecasts + custom inputs</p>
-          <h1>Use the weekly forecast, or bring your own.</h1>
-          <p>
-            The league-scored forecast rebuilds when verified inputs change. Your own CSV can
-            override that baseline after every player match passes validation.
-          </p>
+          <h1>Projection Lab</h1>
         </div>
         <label className={styles.leagueControl}>
           <span>League season</span>
@@ -734,12 +729,12 @@ export function ProjectionImportWorkbench() {
             </h2>
             <p>
               {sets.state === "loading" || sets.state === "idle"
-                ? "Reading the published forecast and its validation record."
+                ? "Loading…"
                 : sets.state === "error"
-                  ? "This is a connection problem, not a verdict on the model. Try again in a moment."
+                  ? "Try again in a moment."
                   : managedForecast
-                    ? "League scoring is applied after each position earns either the qualified model or the safer baseline. Input freshness and compute time stay separate."
-                    : "The forecast remains unavailable until required inputs, league scoring, coverage, and backtest gates pass."}
+                    ? "Scored for this league, with input and model checks attached."
+                    : "Unavailable until its inputs and quality checks pass."}
             </p>
           </div>
           <div className={styles.managedActions}>
@@ -827,26 +822,21 @@ export function ProjectionImportWorkbench() {
           <div className={styles.managedEmpty}>
             <Clock3 size={18} aria-hidden="true" />
             <div>
-              <p>No managed set is available for this league yet.</p>
+              <p>No managed forecast yet.</p>
               {managedStatus?.state === "withheld" && managedStatus.reasons.length > 0 ? (
                 <div>
-                  <p>The latest update was withheld. Any earlier forecast is inactive.</p>
+                  <p>The latest update was withheld.</p>
                   <ul>
                     {managedStatus.reasons.map((reason) => (
                       <li key={reason}>{reason}</li>
                     ))}
                   </ul>
                 </div>
-              ) : (
-                <p>A check never publishes a weaker forecast just to produce a newer timestamp.</p>
-              )}
+              ) : null}
             </div>
           </div>
         )}
-        <p className={styles.refreshFootnote}>
-          Input checks run in the background. A new set is published only when inputs change and the
-          quality gates pass; reload the page to read completed results.
-        </p>
+        <p className={styles.refreshFootnote}>Reload after background checks finish.</p>
       </section>
 
       <ProjectionPlayerBrowser
@@ -868,30 +858,6 @@ export function ProjectionImportWorkbench() {
         }
         listError={sets.state === "error" ? sets.message : undefined}
       />
-
-      <section className={styles.boundary} aria-label="Import privacy and matching rules">
-        <div>
-          <ShieldCheck size={18} aria-hidden="true" />
-          <span>
-            <strong>Private by default</strong>
-            Other members cannot read a private set.
-          </span>
-        </div>
-        <div>
-          <FileCheck2 size={18} aria-hidden="true" />
-          <span>
-            <strong>All-or-nothing matching</strong>
-            No unresolved or ambiguous row is silently skipped.
-          </span>
-        </div>
-        <div>
-          <Database size={18} aria-hidden="true" />
-          <span>
-            <strong>Provenance retained</strong>
-            Source as-of time, import time, checksums, and author stay attached.
-          </span>
-        </div>
-      </section>
 
       <div className={styles.workspace} id="custom-projections">
         <section className={styles.importPanel} aria-labelledby="projection-import-title">
@@ -1075,7 +1041,6 @@ export function ProjectionImportWorkbench() {
         <section className={styles.previewPanel} aria-labelledby="projection-preview-title">
           <header className={styles.panelHeader}>
             <div>
-              <p className={styles.kicker}>Before anything is saved</p>
               <h2 id="projection-preview-title">Match report</h2>
             </div>
             {preview ? (
@@ -1088,10 +1053,7 @@ export function ProjectionImportWorkbench() {
             <div className={styles.emptyPreview}>
               <FileCheck2 size={24} aria-hidden="true" />
               <strong>No preview yet</strong>
-              <p>
-                Required columns are player_id or player_name, plus mean_points. Floor, ceiling, and
-                confidence are optional.
-              </p>
+              <p>Required: player_id or player_name, and mean_points.</p>
             </div>
           ) : (
             <div className={styles.previewBody}>

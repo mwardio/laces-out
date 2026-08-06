@@ -188,7 +188,6 @@ export function ScheduleBoard({ embedded = false }: { readonly embedded?: boolea
           <LoaderCircle className={styles.spin} size={20} aria-hidden="true" />
           <div>
             <strong>Reading the admitted schedule</strong>
-            <span>Resolving matchups and affirmed bye weeks.</span>
           </div>
         </div>
       ) : view.state === "error" ? (
@@ -219,7 +218,7 @@ function ScheduleResult({ data }: { readonly data: ScheduleResponse }) {
         <div className={styles.warning} role="status">
           <ShieldAlert size={18} aria-hidden="true" />
           <div>
-            <strong>The schedule artifact is withheld</strong>
+            <strong>Schedule unavailable</strong>
             <span>{data.source.reason}</span>
           </div>
         </div>
@@ -287,7 +286,6 @@ function ScheduleResult({ data }: { readonly data: ScheduleResponse }) {
               </tbody>
             </table>
           </div>
-          <p className={styles.definition}>{data.definitions.bye}</p>
         </section>
       ) : null}
 
@@ -296,7 +294,6 @@ function ScheduleResult({ data }: { readonly data: ScheduleResponse }) {
           <CalendarOff size={20} aria-hidden="true" />
           <div>
             <strong>No games match this view</strong>
-            <span>Try another season, week, or team.</span>
           </div>
         </div>
       ) : (
@@ -304,7 +301,6 @@ function ScheduleResult({ data }: { readonly data: ScheduleResponse }) {
           <section className={styles.panel} aria-labelledby={`week-${week}-title`} key={week}>
             <div className={styles.panelHeading}>
               <div>
-                <p>Regular season</p>
                 <h2 id={`week-${week}-title`}>Week {week}</h2>
               </div>
               <span>
@@ -333,7 +329,6 @@ function ScheduleResult({ data }: { readonly data: ScheduleResponse }) {
       <section className={styles.panel} aria-labelledby="bye-title">
         <div className={styles.panelHeading}>
           <div>
-            <p>Affirmed byes</p>
             <h2 id="bye-title">Bye weeks</h2>
           </div>
           <span>{byeTeams.length} of 32 teams</span>
@@ -365,7 +360,6 @@ function ScheduleResult({ data }: { readonly data: ScheduleResponse }) {
       <section className={styles.panel} aria-labelledby="schedule-source-title">
         <div className={styles.panelHeading}>
           <div>
-            <p>Audit trail</p>
             <h2 id="schedule-source-title">Source health</h2>
           </div>
           <span className={`${styles.sourceState} ${styles[`sourceState--${data.source.state}`]}`}>

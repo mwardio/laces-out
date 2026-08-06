@@ -31,6 +31,7 @@ import {
   type PushDeviceStatus,
   type SessionUser,
 } from "../lib/api-client";
+import { CONNECT_LEAGUE_FIRST } from "../lib/copy";
 import { defaultClaimChoice, selectableClaimTeams } from "../lib/team-claim";
 import { AiProviderSettings } from "./ai-provider-settings";
 import { DataHealthPanel } from "./data-health-panel";
@@ -288,11 +289,7 @@ export function SettingsPanel() {
       setRemovalTargetId(null);
       setRemovalStatus({
         state: "saved",
-        message: removed.leagueDeleted
-          ? `${removed.leagueName} was removed and its unshared data was deleted.`
-          : removed.ownershipTransferred
-            ? `${removed.leagueName} was removed. Another member now owns the shared league.`
-            : `${removed.leagueName} was removed from your account.`,
+        message: `${removed.leagueName} was removed.`,
       });
     } catch (error) {
       setRemovalStatus({
@@ -398,9 +395,7 @@ export function SettingsPanel() {
       }
       setPreferenceStatus({
         state: "saved",
-        message: defaultLeagueId
-          ? "Overview and Decision Desk will open this league first."
-          : "No default league. Both surfaces fall back to your first league.",
+        message: defaultLeagueId ? "Default league saved." : "Default league cleared.",
       });
     } catch (error) {
       setPreferenceStatus({
@@ -446,7 +441,7 @@ export function SettingsPanel() {
       setConfirmPassword("");
       setPasswordStatus({
         state: "saved",
-        message: "Password changed. Your other devices were signed out; this one stays signed in.",
+        message: "Password changed.",
       });
     } catch (error) {
       setPasswordStatus({
@@ -637,7 +632,7 @@ export function SettingsPanel() {
         message:
           delivered > 0
             ? `Test alert sent to ${delivered} device${delivered === 1 ? "" : "s"}.`
-            : "No device accepted the test alert. Turn alerts on again on this device.",
+            : "No device accepted the test alert.",
       });
     } catch (error) {
       setPushStatus({
@@ -667,7 +662,6 @@ export function SettingsPanel() {
           <LoaderCircle className={styles.spin} size={20} aria-hidden="true" />
           <div>
             <strong>Loading your account</strong>
-            <span>Reading your session, leagues, and stored preferences.</span>
           </div>
         </div>
       ) : !user ? (
@@ -675,7 +669,6 @@ export function SettingsPanel() {
           <ShieldAlert size={20} aria-hidden="true" />
           <div>
             <strong>Sign in to manage your account</strong>
-            <span>Settings are only available to a signed-in member.</span>
           </div>
         </div>
       ) : (
@@ -683,7 +676,6 @@ export function SettingsPanel() {
           <section className={styles.panel} aria-labelledby="identity-title">
             <div className={styles.panelHeading}>
               <div>
-                <p>Identity</p>
                 <h2 id="identity-title">Who you are here</h2>
               </div>
             </div>
@@ -775,9 +767,7 @@ export function SettingsPanel() {
             </div>
             <form className={styles.form} onSubmit={savePreferences}>
               {leagues.length === 0 ? (
-                <p className={styles.note}>
-                  Connect a league first and it will appear here as a choice.
-                </p>
+                <p className={styles.note}>{CONNECT_LEAGUE_FIRST}</p>
               ) : (
                 <label>
                   <span>Open first</span>
@@ -827,9 +817,7 @@ export function SettingsPanel() {
               <UsersRound size={18} aria-hidden="true" />
             </div>
             {leagues.length === 0 ? (
-              <p className={styles.note}>
-                Connect a league first and it will appear here to claim a team.
-              </p>
+              <p className={styles.note}>{CONNECT_LEAGUE_FIRST}</p>
             ) : (
               <>
                 <p className={styles.panelIntro}>
@@ -1004,9 +992,7 @@ export function SettingsPanel() {
               <>
                 <div className={styles.form}>
                   <p className={styles.alertLead}>
-                    A heads-up before your first kickoff when a starter is ruled out, is on a bye,
-                    or a starting slot is empty. One alert a day ahead, then a final warning two
-                    hours out.
+                    Alerts for ruled-out starters, byes, and empty lineup slots.
                   </p>
                   <div className={styles.alertActions}>
                     <button type="button" onClick={enableAlerts} disabled={pushBusy}>
@@ -1066,10 +1052,8 @@ export function SettingsPanel() {
                 )}
 
                 <p className={styles.note}>
-                  Alerts are built from the last roster Laces Out synced for you, not a live read of
-                  your league — every alert says how old that roster is. A bye is only claimed where
-                  the admitted NFL schedule covers both the team and the week. On iPhone and iPad,
-                  add Laces Out to your Home Screen; iOS only delivers web push to an installed app.
+                  Alerts use your last synced roster and show its age. On iPhone and iPad, add Laces
+                  Out to your Home Screen first.
                 </p>
               </>
             )}
@@ -1086,10 +1070,8 @@ export function SettingsPanel() {
             </div>
             <div className={styles.dataAction}>
               <p>
-                Download a portable JSON copy of your identity, preferences, memberships, private
-                rankings and projections, activity, notification history, connection metadata, and
-                Film Room usage. Password hashes, tokens, push endpoints, and encrypted credentials
-                are never included.
+                Download your account data as JSON. Passwords, tokens, and encrypted credentials are
+                excluded.
               </p>
               <button
                 type="button"
@@ -1101,7 +1083,7 @@ export function SettingsPanel() {
                 ) : (
                   <Download size={15} aria-hidden="true" />
                 )}
-                Download my data
+                Download
               </button>
             </div>
             <StatusLine status={exportStatus} />
@@ -1119,28 +1101,16 @@ export function SettingsPanel() {
               <Trash2 size={18} aria-hidden="true" />
             </div>
             <div className={styles.deletionExplanation} id="delete-account-explanation">
-              <p>This permanently:</p>
               <ul>
                 <li>
-                  revokes every session, provider connection, API key, and notification device;
+                  Removes sessions, connections, keys, devices, preferences, private data, and
+                  memberships.
                 </li>
                 <li>
-                  deletes your preferences, private rankings, imports, shares, and memberships;
-                </li>
-                <li>
-                  transfers leagues with other members to another surviving member, preferring a
-                  commissioner and then a manager;
-                </li>
-                <li>
-                  deletes leagues where you are the only member and removes League Intel or recap
-                  text you created, while deterministic shared league facts stay available without
-                  your account attribution.
+                  Transfers shared leagues to another member or deletes leagues you alone own.
                 </li>
               </ul>
-              <p>
-                The live account cannot be recovered. Deleted records may remain in encrypted
-                backups until this deployment&apos;s backup rotation completes.
-              </p>
+              <p>This cannot be undone.</p>
             </div>
             <form
               className={styles.form}
@@ -1185,7 +1155,7 @@ export function SettingsPanel() {
                 ) : (
                   <Trash2 size={15} aria-hidden="true" />
                 )}
-                Permanently delete my account
+                Delete account
               </button>
             </form>
             <StatusLine status={deletionStatus} />

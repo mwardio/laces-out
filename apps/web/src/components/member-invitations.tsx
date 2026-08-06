@@ -120,7 +120,7 @@ export function MemberInvitations() {
             : response.status === 403
               ? "Only an administrator can create invitations."
               : response.status === 503
-                ? "Set a stable SESSION_SECRET and restart the API to enable invitations."
+                ? "Invitations are not configured on this server."
                 : "The invitation could not be created.";
         throw new Error(detail);
       }
@@ -167,7 +167,7 @@ export function MemberInvitations() {
       setCreated(null);
       setRevokeArmed(false);
       setState("idle");
-      setMessage("Invitation revoked. Its link can no longer be accepted.");
+      setMessage("Invitation revoked.");
     } catch {
       setState("error");
       setMessage("The invitation could not be revoked.");
@@ -179,38 +179,18 @@ export function MemberInvitations() {
       <div className="connections-page">
         <section className="page-heading connection-heading">
           <div>
-            <p className="eyebrow">Member access</p>
             <h1>
               {access === "checking"
                 ? "Checking administrator access…"
                 : "Administrator access required"}
             </h1>
-            <p className="page-subtitle">
-              {access === "checking"
-                ? "Confirming your session before invitation controls are shown."
-                : "Invitation controls are available only to the Laces Out host."}
-            </p>
           </div>
-          <div className="connection-security-chip">
-            <ShieldCheck size={18} />
-            <span>
-              <strong>Protected controls</strong>
-              <small>Administrator session required</small>
-            </span>
-          </div>
-        </section>
-        {access === "denied" ? (
-          <section className="member-registration-note" role="status">
-            <LockKeyhole size={18} />
-            <div>
-              <strong>This page is locked</strong>
-              <span>Sign in with an administrator account to manage invitations.</span>
-            </div>
+          {access === "denied" ? (
             <Link className="button button--dark button--small" href="/login">
               Sign in
             </Link>
-          </section>
-        ) : null}
+          ) : null}
+        </section>
       </div>
     );
   }
@@ -239,10 +219,7 @@ export function MemberInvitations() {
         <KeyRound size={18} />
         <div>
           <strong id="registration-access-title">Registration access</strong>
-          <span>
-            The registration page follows this deployment’s open or shared-code setting. One-time
-            invitation links work separately.
-          </span>
+          <span>Open registration and invitation links work independently.</span>
         </div>
         <Link className="button button--outline button--small" href="/register">
           Open registration
@@ -358,10 +335,7 @@ export function MemberInvitations() {
             {role === "admin" ? (
               <div className="member-role-warning" role="status">
                 <AlertCircle size={15} />
-                <span>
-                  <strong>Administrator access is powerful.</strong> This person will be able to
-                  create invitations and use other host-only controls.
-                </span>
+                <span>Administrators can manage invitations and host controls.</span>
               </div>
             ) : null}
             <button className="button button--lime button--full" disabled={state === "working"}>
@@ -370,7 +344,7 @@ export function MemberInvitations() {
               ) : (
                 <KeyRound size={16} />
               )}
-              {state === "working" ? "Creating…" : "Create one-time invitation"}
+              {state === "working" ? "Creating…" : "Create invitation"}
             </button>
           </form>
 
@@ -445,13 +419,6 @@ export function MemberInvitations() {
                       : "Revoke link"}
                 </button>
               </div>
-              <details className="invitation-security-detail">
-                <summary>How this link is protected</summary>
-                <small>
-                  Its one-time secret stays after <code>#</code>, outside HTTP request targets and
-                  referrers. Only a verification hash is stored.
-                </small>
-              </details>
             </div>
           ) : (
             <div className="bridge-readiness" role="note">

@@ -14,6 +14,7 @@ import { useRouter } from "next/navigation";
 import { type FormEvent, useEffect, useState } from "react";
 
 import { apiBaseUrl } from "../lib/api-client";
+import { BACK_TO_SIGN_IN } from "../lib/copy";
 
 interface InvitationInspection {
   readonly emailHint: string;
@@ -152,17 +153,7 @@ export function InvitationAcceptance() {
                   ? "This invitation can’t be opened"
                   : "Join the league room"}
           </h1>
-          <p>
-            {state === "loading"
-              ? "Checking the invitation securely…"
-              : state === "pending-confirmation"
-                ? "Your invitation and league access are saved. Confirm your email, then sign in."
-                : inspection
-                  ? `Invitation for ${inspection.emailHint}`
-                  : state === "error"
-                    ? "Invitation links expire and can only be used once."
-                    : "Ask the league administrator for a fresh invitation if needed."}
-          </p>
+          {inspection ? <p>Invitation for {inspection.emailHint}</p> : null}
         </div>
       </div>
 
@@ -229,13 +220,12 @@ export function InvitationAcceptance() {
               />
             </div>
           ) : (
-            <p className="login-help">
-              This email already has an account. If needed,{" "}
+            <div className="login-demo-route">
+              <span>Already have an account?</span>
               <Link href="/login" target="_blank" rel="noreferrer">
-                sign in
-              </Link>{" "}
-              in another tab, then return to accept with that session.
-            </p>
+                Sign in, then return
+              </Link>
+            </div>
           )}
 
           <button
@@ -263,23 +253,19 @@ export function InvitationAcceptance() {
           </Link>
           <div className="login-demo-route">
             <span>Already confirmed?</span>
-            <Link href="/login">Sign in</Link>
+            <Link href="/login">{BACK_TO_SIGN_IN}</Link>
           </div>
         </>
       ) : null}
 
       {state === "error" ? (
         <>
-          <p className="login-error-help">
-            Ask your league host for a fresh invitation link. You can look around in the meantime —
-            the tour needs no account.
-          </p>
           <Link className="button button--lime login-submit" href="/app">
             Tour the locker room <ArrowRight size={15} />
           </Link>
           <div className="login-demo-route">
             <span>Already have an account?</span>
-            <Link href="/login">Sign in</Link>
+            <Link href="/login">{BACK_TO_SIGN_IN}</Link>
           </div>
         </>
       ) : null}

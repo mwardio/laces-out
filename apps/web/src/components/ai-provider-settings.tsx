@@ -227,9 +227,7 @@ export function AiProviderSettings() {
       setMaxOutputTokens(String(parsed.maxOutputTokens));
       setSettingsAction({
         state: "success",
-        message: apiKey.trim()
-          ? "Key encrypted and settings saved. Run the connection test next."
-          : "Provider settings saved.",
+        message: apiKey.trim() ? "Key saved." : "Provider settings saved.",
       });
     } catch (error) {
       setSettingsAction({
@@ -251,7 +249,7 @@ export function AiProviderSettings() {
       }
       await loadProviders();
       setSelectedProvider(selectedProvider);
-      setSettingsAction({ state: "success", message: "Connection verified with a live request." });
+      setSettingsAction({ state: "success", message: "Connection verified." });
     } catch (error) {
       setSettingsAction({
         state: "error",
@@ -291,7 +289,6 @@ export function AiProviderSettings() {
         <LoaderCircle className={styles.spin} size={20} aria-hidden="true" />
         <div>
           <strong>Loading provider settings</strong>
-          <span>Reading your saved AI provider configuration.</span>
         </div>
       </div>
     );
@@ -303,7 +300,6 @@ export function AiProviderSettings() {
         <ShieldAlert size={20} aria-hidden="true" />
         <div>
           <strong>Sign in to manage AI provider settings</strong>
-          <span>Provider settings are only available to a signed-in member.</span>
         </div>
       </div>
     );
@@ -377,12 +373,7 @@ export function AiProviderSettings() {
           {currentProvider?.accessMode === "managed" ? (
             <div className={`${styles.notice} ${styles.noticeSuccess}`} role="status">
               <Check size={16} />
-              <span>
-                Included Gemini is ready now. Adding your own key is optional and will replace the
-                included model for your account until you remove it. Included calls use the
-                host&apos;s Google AI Studio free-tier project and Google&apos;s free-tier data
-                terms.
-              </span>
+              <span>Included Gemini is ready. Add a personal key to choose another model.</span>
             </div>
           ) : null}
           <label className={styles.field}>
@@ -439,7 +430,7 @@ export function AiProviderSettings() {
             </select>
             <small>
               {byokControlsEnabled
-                ? "Your key unlocks provider-specific model selection."
+                ? "Choose any supported model for this key."
                 : "The included model is fixed. Add your own key to choose another model."}
             </small>
           </label>
@@ -529,9 +520,9 @@ export function AiProviderSettings() {
                 <Save size={16} />
               )}
               {settingsAction.state === "saving"
-                ? "Saving securely"
+                ? "Saving…"
                 : settingsDirty
-                  ? "Save securely"
+                  ? "Save"
                   : "Settings saved"}
             </button>
             {settingsDirty ? (
@@ -582,9 +573,6 @@ export function AiProviderSettings() {
                   type="button"
                   onClick={() => void removeProvider()}
                   disabled={settingsBusy || settingsDirty}
-                  title={
-                    settingsDirty ? "Undo or save your changes before removing this key" : undefined
-                  }
                 >
                   {settingsAction.state === "deleting" ? (
                     <LoaderCircle className={styles.spin} size={14} />

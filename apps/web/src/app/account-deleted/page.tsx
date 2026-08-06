@@ -1,4 +1,4 @@
-import { ArrowLeft, CheckCircle2, LockKeyhole } from "lucide-react";
+import { ArrowLeft, CheckCircle2 } from "lucide-react";
 import type { Metadata } from "next";
 import Link from "next/link";
 
@@ -37,25 +37,11 @@ export default function AccountDeletedPage() {
         <aside className={styles.summary}>
           <CheckCircle2 size={20} aria-hidden="true" />
           <p>
-            Your sessions and account-private data have been removed from the live deployment. You
-            are signed out on every device.
+            Your account, sessions, and private data were removed; shared league facts may remain
+            for other members, and encrypted backups expire with this deployment&apos;s configured
+            rotation.
           </p>
         </aside>
-
-        <section>
-          <h2>What remains</h2>
-          <p>
-            Deterministic shared league facts remain available to surviving members without your
-            account attribution. League Intel and recap text you created was removed, and a league
-            where you were the only member was removed. Encrypted backups may retain deleted records
-            until this deployment&apos;s documented backup rotation completes.
-          </p>
-        </section>
-
-        <footer className={styles.footer}>
-          <LockKeyhole size={15} aria-hidden="true" />
-          <span>This deletion cannot be undone.</span>
-        </footer>
       </article>
     </main>
   );

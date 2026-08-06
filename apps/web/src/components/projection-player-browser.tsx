@@ -451,13 +451,7 @@ function ProjectionBoard({
     >
       <header className={styles.header}>
         <div>
-          <p className={styles.kicker}>Player projections</p>
-          <h2 id="projection-board-title">The numbers behind the next move.</h2>
-          <p>
-            {sample
-              ? "Illustrative rows for a sample league. These are not real forecasts and no live player data is shown."
-              : "Browse the league-scored forecasts you have access to — published Laces Out sets plus any custom sets shared with you or owned by you."}
-          </p>
+          <h2 id="projection-board-title">Player projections</h2>
         </div>
         <span className={styles.headerBadges}>
           {sample ? <span className={styles.sampleBadge}>Tour preview</span> : null}
@@ -531,14 +525,7 @@ function ProjectionBoard({
         <div className={styles.empty}>
           <BarChart3 size={21} aria-hidden="true" />
           <div>
-            <strong>
-              No {horizon === "week" ? "weekly" : "rest-of-season"} forecast is published yet.
-            </strong>
-            <p>
-              {horizon === "week"
-                ? "The next set appears after league scoring, source freshness, coverage, and model checks pass."
-                : "Rest-of-season values remain hidden until the release model clears every validation gate."}
-            </p>
+            <strong>No {horizon === "week" ? "weekly" : "rest-of-season"} forecast yet.</strong>
           </div>
         </div>
       ) : detail.state === "loading" || detail.state === "idle" ? (
@@ -556,10 +543,7 @@ function ProjectionBoard({
           {withheldNewerRun && horizon === "week" && resolvedSet?.origin === "laces-out" ? (
             <div className={styles.withheldNotice} role="status">
               <AlertTriangle size={15} aria-hidden="true" />
-              <span>
-                A newer model run did not clear its checks, so it was withheld. The rows below are
-                the last set that did pass — not the latest run.
-              </span>
+              <span>A newer run was withheld. Showing the last passing set.</span>
             </div>
           ) : null}
 

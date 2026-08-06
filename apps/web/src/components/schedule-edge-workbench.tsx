@@ -39,6 +39,7 @@ import {
   parseScheduleEdgeMatrixResponse,
   parseScheduleEdgeResponse,
 } from "../lib/api-client";
+import { compactDate, TOUR_BANNER } from "../lib/copy";
 import { DEMO_LEAGUE_ID, demoLeaguePortfolio } from "../lib/demo-contract-data";
 import {
   demoScheduleEdgeMatrixResponse,
@@ -115,16 +116,6 @@ function contextualHref(href: string, leagueId: string): Route {
   return `${url.pathname}${url.search}${url.hash}` as Route;
 }
 
-function compactDate(value: string | null): string {
-  if (!value) return "Not available";
-  return new Intl.DateTimeFormat(undefined, {
-    month: "short",
-    day: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-  }).format(new Date(value));
-}
-
 function kickoff(value: string | null): string {
   if (!value) return "Kickoff TBD";
   return new Intl.DateTimeFormat(undefined, {
@@ -189,7 +180,7 @@ function SectionHeader({
   id,
 }: {
   readonly icon: ReactNode;
-  readonly kicker: string;
+  readonly kicker?: string;
   readonly title: string;
   readonly detail?: string;
   readonly id: string;
@@ -198,7 +189,7 @@ function SectionHeader({
     <header className={styles.sectionHeader}>
       <span className={styles.sectionIcon}>{icon}</span>
       <span>
-        <small>{kicker}</small>
+        {kicker ? <small>{kicker}</small> : null}
         <h2 id={id}>{title}</h2>
       </span>
       {detail ? <span className={styles.sectionDetail}>{detail}</span> : null}
@@ -435,8 +426,7 @@ function FindingsSection({
     >
       <div className={styles.findingsHeading}>
         <span>
-          <small>Bye-week watch</small>
-          <h2 id="schedule-now-title">Roster gaps worth planning around.</h2>
+          <h2 id="schedule-now-title">Bye-week gaps</h2>
         </span>
         <span>{data.windows.selected.label}</span>
       </div>
@@ -489,12 +479,7 @@ function MatchupBadge({ player }: { readonly player: ScheduleEdgeRosterPlayer })
     return <span className={styles.matchupBadge}>Unavailable</span>;
   }
   return (
-    <span
-      className={styles.matchupBadge}
-      title="Percentile of adjusted, league-scored fantasy points historically allowed"
-    >
-      {percentile(player.matchup.percentile)} percentile
-    </span>
+    <span className={styles.matchupBadge}>{percentile(player.matchup.percentile)} percentile</span>
   );
 }
 
@@ -529,8 +514,7 @@ function RosterSection({
     <section className={styles.panel} id="schedule-roster" aria-labelledby="schedule-roster-title">
       <SectionHeader
         icon={<UserRound size={18} aria-hidden="true" />}
-        kicker="My roster"
-        title="Every player, in decision order"
+        title="Roster"
         detail={`${data.roster.length} players`}
         id="schedule-roster-title"
       />
@@ -656,8 +640,7 @@ function ByePressureSection({ data }: { readonly data: ScheduleEdgeResponse }) {
     <section className={styles.panel} id="schedule-byes" aria-labelledby="schedule-byes-title">
       <SectionHeader
         icon={<CalendarClock size={18} aria-hidden="true" />}
-        kicker="Bye pressure"
-        title="Can the roster still start?"
+        title="Bye pressure"
         detail={`${attention.length} to review`}
         id="schedule-byes-title"
       />
@@ -722,10 +705,7 @@ function PlayoffWindowSection({ data }: { readonly data: ScheduleEdgeResponse })
     >
       <SectionHeader
         icon={<Gauge size={18} aria-hidden="true" />}
-        kicker={
-          data.windows.playoff.source === "provider" ? "League playoff window" : "Late season"
-        }
-        title="How playoff opponents have scored"
+        title="Playoff window"
         detail={data.windows.playoff.label}
         id="schedule-playoffs-title"
       />
@@ -815,7 +795,7 @@ function MatrixSection({ state }: { readonly state: MatrixState }) {
         />
         <div className={styles.loadingState} role="status">
           <LoaderCircle className={styles.spin} size={19} aria-hidden="true" />
-          Comparing league-scored points allowed by team and position…
+          Loading…
         </div>
       </section>
     );
@@ -913,14 +893,6 @@ function MatrixSection({ state }: { readonly state: MatrixState }) {
           </button>
         </div>
       </div>
-      <div className={styles.percentileGuide}>
-        <Info size={15} aria-hidden="true" />
-        <span>
-          <strong>How to read it</strong>
-          100th means more league-scored points were allowed; 0th means fewer. Rows are ordered by
-          average allowance percentile. This describes prior games, not future outcomes.
-        </span>
-      </div>
       {visibleRows.length === 0 ? (
         <div className={styles.emptyState}>
           <Database size={20} aria-hidden="true" />
@@ -984,8 +956,7 @@ function QuickRead({ data }: { readonly data: ScheduleEdgeResponse }) {
   return (
     <nav className={styles.quickRead} aria-label="Jump to Matchup Outlook sections">
       <div className={styles.quickReadHeader}>
-        <span>Matchups in 10 seconds</span>
-        <small>Tap for the full read</small>
+        <span>Matchup summary</span>
       </div>
       <a href="#schedule-now">
         <CalendarCheck size={16} aria-hidden="true" />
@@ -1138,10 +1109,7 @@ function MethodDisclosure({
           <dl className={styles.definitions}>
             <div>
               <dt>Position percentile</dt>
-              <dd>
-                Ranks adjusted, league-scored fantasy points allowed against every admitted NFL
-                defense at the same position. Higher means more points were allowed historically.
-              </dd>
+              <dd>Higher percentiles mean more league-scored points were allowed historically.</dd>
             </div>
             <div>
               <dt>Window average</dt>
@@ -1374,19 +1342,21 @@ export function ScheduleEdgeWorkbench() {
         <div className={styles.demoNotice} role="status">
           <Info size={17} aria-hidden="true" />
           <span>
-            <strong>Locker room tour</strong>
-            The league analysis is illustrative. The official NFL schedule below uses public data.
+            <strong>{TOUR_BANNER.title}</strong>
+            {TOUR_BANNER.detail}
           </span>
         </div>
       ) : null}
 
       <header className={styles.hero}>
         <div>
-          <p>Roster-aware matchup intelligence</p>
+          {isDemo ? <p>Roster-aware matchup intelligence</p> : null}
           <h1>Matchup Outlook</h1>
-          <span>
-            See how upcoming opponents have scored—and where bye weeks could leave a roster hole.
-          </span>
+          {isDemo ? (
+            <span>
+              See how upcoming opponents have scored and where bye weeks could leave a roster hole.
+            </span>
+          ) : null}
         </div>
         {leagues.length > 0 ? (
           <div className={styles.leagueControls}>
@@ -1408,7 +1378,6 @@ export function ScheduleEdgeWorkbench() {
               type="button"
               disabled={isDemo || edge.state === "loading"}
               onClick={() => void loadEdge()}
-              title={isDemo ? "The tour uses a fixed analysis snapshot" : undefined}
             >
               <RefreshCw
                 className={edge.state === "loading" ? styles.spin : undefined}
@@ -1424,7 +1393,7 @@ export function ScheduleEdgeWorkbench() {
       {portfolio.state === "loading" ? (
         <div className={styles.loadingState} role="status">
           <LoaderCircle className={styles.spin} size={19} aria-hidden="true" />
-          Checking your synced leagues…
+          Loading…
         </div>
       ) : portfolio.state === "error" ? (
         <div className={styles.errorState} role="alert">
@@ -1439,8 +1408,7 @@ export function ScheduleEdgeWorkbench() {
           <Database size={20} aria-hidden="true" />
           <span>
             <strong>Connect a league to add your roster</strong>
-            The official schedule remains available below. A synced season unlocks lineup-aware bye
-            pressure and league-scored matchup context.
+            The official schedule is still available below.
           </span>
           <Link href="/connections">
             Open League Sync
@@ -1450,7 +1418,7 @@ export function ScheduleEdgeWorkbench() {
       ) : edge.state === "loading" || edge.state === "idle" ? (
         <div className={styles.loadingState} role="status">
           <LoaderCircle className={styles.spin} size={19} aria-hidden="true" />
-          Reading roster, scoring, schedule, and matchup support…
+          Loading…
         </div>
       ) : edge.state === "error" ? (
         <div className={styles.errorState} role="alert">

@@ -116,10 +116,7 @@ export function SessionControl({ showDemoChip = true }: { readonly showDemoChip?
   if (session.status === "offline") {
     return (
       <div className="session-control session-control--offline">
-        <span
-          className="session-offline-label"
-          title="The API could not be reached; demo data remains available"
-        >
+        <span className="session-offline-label">
           <CloudOff size={14} />
           <span>API offline · demo</span>
         </span>

@@ -6,6 +6,7 @@ import {
 } from "@laces-out/contracts";
 
 import { unfilledStarterSlots } from "./draft-board";
+import { providerLabel } from "./copy";
 
 /**
  * Draft Studio entry states from the live-sync plan (§16.1).
@@ -41,8 +42,10 @@ const DISCONNECTED_SECONDS = ESPN_LIVE_DRAFT_LIMITS.disconnectedMs / 1000;
  * make Laces Out read ESPN; some league member's desktop Chrome has to be holding the draft room.
  */
 const DESKTOP_SOURCE_REQUIREMENT =
-  "Live picks are read by a league member's desktop Chrome with the ESPN draft room open. " +
-  "You do not need that browser or the extension to follow this room.";
+  "Live picks require a league member's desktop Chrome with the ESPN draft room open.";
+
+const MANUAL_ENTRY_DETAIL =
+  "Manual entries are shared with the league. No provider feed is attached.";
 
 export interface LiveDraftStatusInput {
   readonly session: DraftSessionSnapshot;
@@ -126,10 +129,6 @@ export interface LiveDraftMobileSummary {
 
 function pluralize(count: number, singular: string, plural = `${singular}s`): string {
   return `${count} ${count === 1 ? singular : plural}`;
-}
-
-export function providerDisplayName(provider: string): string {
-  return provider === "espn" ? "ESPN" : provider === "yahoo" ? "Yahoo" : "Manual";
 }
 
 /**
@@ -307,23 +306,21 @@ function entryDetail(
   feed: EspnLiveDraftFeedStatus | null,
   input: LiveDraftStatusInput,
 ): string {
-  if (feed === null) {
-    return "Every entry in this room is typed by its owner or a commissioner and shared with the league. No provider feed is attached.";
-  }
-  const provider = providerDisplayName(feed.provider);
+  if (feed === null) return MANUAL_ENTRY_DETAIL;
+  const provider = providerLabel(feed.provider);
   switch (state) {
     case "ready":
-      return `A paired desktop browser has the ${provider} draft room open. Picks will appear here as ${provider} records them.`;
+      return `${provider} draft room is open in paired desktop Chrome.`;
     case "waiting":
-      return `No paired browser is reporting an ${provider} draft room yet. Open the draft room in the paired desktop Chrome and leave that tab open.`;
+      return `Open the ${provider} draft room in paired desktop Chrome.`;
     case "live":
-      return `${provider} picks are updating this room automatically. ${pluralize(feed.pickCount, "pick")} accepted so far.`;
+      return `${provider} is updating this room. ${pluralize(feed.pickCount, "pick")} accepted.`;
     case "paused":
-      return `${provider} has paused the draft. The board below is current as of the last accepted pick.`;
+      return `${provider} draft paused. The last accepted board is shown.`;
     case "stale":
       return input.pollFailures > 0
-        ? "This device cannot reach Laces Out, so the board below may be behind. Nothing has been lost; it will catch up when the connection returns."
-        : `No ${provider} update has been accepted recently. The board below is the last state Laces Out verified.`;
+        ? "This device cannot reach Laces Out. The board may be behind."
+        : `No ${provider} update has been accepted recently. The last verified board is shown.`;
     case "manual-backup":
       return feed.pendingReconciliation > 0
         ? `Provider picks are frozen. ${pluralize(feed.pendingReconciliation, "held " + provider + " update")} still differ from this ledger.`
@@ -333,7 +330,7 @@ function entryDetail(
     case "attention":
       return attentionDetail(feed);
     case "manual":
-      return "Every entry in this room is typed by its owner or a commissioner and shared with the league. No provider feed is attached.";
+      return MANUAL_ENTRY_DETAIL;
   }
 }
 
@@ -399,7 +396,7 @@ function manualBackupControls(
       choiceSummary: null,
     };
   }
-  const provider = providerDisplayName(feed.provider);
+  const provider = providerLabel(feed.provider);
   const pending = feed.pendingReconciliation;
   return {
     available: true,
@@ -425,9 +422,9 @@ function transportChip(
   feed: EspnLiveDraftFeedStatus | null,
   localMock: boolean,
 ): string {
-  if (localMock) return "Local memory only · nothing sent to a provider";
+  if (localMock) return "Local memory only";
   if (feed === null) return "Shared app ledger · no provider feed attached";
-  const provider = providerDisplayName(feed.provider);
+  const provider = providerLabel(feed.provider);
   if (state === "manual-backup") return `${provider} sync frozen · manual backup`;
   if (state === "stale" || state === "attention")
     return `${provider} live sync · read-only · needs a source`;
@@ -435,14 +432,12 @@ function transportChip(
 }
 
 function ledgerNote(feed: EspnLiveDraftFeedStatus | null, localMock: boolean): string {
-  if (localMock) {
-    return "Practice events exist only in this browser tab. They are not saved, shared, or sent to a fantasy provider.";
-  }
+  if (localMock) return "Practice events exist only in this browser tab.";
   if (feed === null) {
-    return "Every manual entry is saved and visible only to league members. No provider feed writes to this room.";
+    return "Manual entries are saved for league members.";
   }
-  const provider = providerDisplayName(feed.provider);
-  return `${provider} picks are observed by a paired browser and saved here alongside any manual entries; each row shows which one it came from. Laces Out never writes anything back to ${provider}.`;
+  const provider = providerLabel(feed.provider);
+  return `${provider} picks and manual entries are saved here with their source.`;
 }
 
 export function describeLiveDraft(input: LiveDraftStatusInput): LiveDraftStatus {
@@ -453,13 +448,13 @@ export function describeLiveDraft(input: LiveDraftStatusInput): LiveDraftStatus 
   const age = feed === null ? null : effectiveFeedAgeSeconds(feed, input.lastSyncedAt, input.now);
   const freshness = feed === null ? "missing" : liveDraftFreshness(age, feed.fresh);
   const freshnessLabel = feed === null ? "app ledger only" : formatFeedAge(age);
-  const providerName = feed === null ? "Laces Out" : providerDisplayName(feed.provider);
+  const providerName = feed === null ? "Laces Out" : providerLabel(feed.provider);
   const clientReconnecting = input.pollFailures > 0;
 
   const reconnectGuidance = clientReconnecting
-    ? "This device is retrying automatically. The board below is the last state Laces Out accepted."
+    ? "Retrying automatically. The last accepted board is shown."
     : entryState === "stale" || entryState === "waiting"
-      ? `Reopen or refocus the ${providerName} draft room in the paired desktop Chrome. Any authorized league member's paired browser can take over as the source.`
+      ? `Reopen or refocus the ${providerName} draft room in paired desktop Chrome.`
       : null;
 
   const sourceRequirement =
@@ -628,9 +623,9 @@ function defaultCaption(session: DraftSessionSnapshot): string {
  */
 export function describeDraftSetupCapability(provider: string | null): string {
   if (provider === "yahoo") {
-    return "Manual event entry is persistent and shared. Yahoo live-draft sync is not available yet.";
+    return "Manual entry only. Yahoo live draft sync is not available.";
   }
-  return "Manual event entry is persistent and shared. No live-draft provider feed is attached to this league.";
+  return "Manual entries are shared. No live draft feed is attached.";
 }
 
 /** Exported so the disconnected threshold is one number rather than three drifting literals. */
