@@ -1,0 +1,48 @@
+{
+  "projectId": "a40107a4-4fa6-488f-b43e-4249e68741ee",
+  "shape": "package",
+  "pkg": "@laces-out/web",
+  "globalName": "LacesOut",
+  "srcDir": "src/components",
+  "tsconfig": "tsconfig.json",
+  "cssEntry": "src/app/polish.css",
+  "docsDir": "../../../.design-sync/docs",
+  "readmeHeader": ".design-sync/conventions.md",
+  "extraEntries": [
+    "../../../.design-sync/ds-env.mjs",
+    "../../../.design-sync/ds-styles.mjs"
+  ],
+  "extraFonts": ["../../../.design-sync/fonts/sora.css"],
+  "componentSrcMap": {
+    "AiAnswerContent": "src/components/ai-answer-content.tsx",
+    "AiProviderPicker": "src/components/ai-provider-picker.tsx",
+    "DemoRankingsStudio": "src/components/demo-rankings-studio.tsx",
+    "DraftWorkspace": "src/components/draft-workspace.tsx",
+    "LacesOutMark": "src/components/laces-out-mark.tsx",
+    "PortfolioDashboard": "src/components/portfolio-dashboard.tsx",
+    "RouteLoading": "src/components/route-loading.tsx",
+    "TeamAvatar": "src/components/team-avatar.tsx",
+    "YahooAttribution": "src/components/yahoo-attribution.tsx",
+    "YahooNativeConnect": "src/components/yahoo-native-connect.tsx"
+  },
+  "overrides": {
+    "DraftWorkspace": { "cardMode": "column", "viewport": "1440x1320" },
+    "DemoRankingsStudio": { "viewport": "1440x1320" },
+    "PortfolioDashboard": { "cardMode": "column", "viewport": "1440x2000" },
+    "YahooAttribution": { "cardMode": "column" },
+    "TeamAvatar": { "cardMode": "column" },
+    "RouteLoading": { "cardMode": "column" }
+  },
+  "dtsPropsFor": {
+    "AiAnswerContent": "  /** Assistant answer text. Supports headings, ordered and unordered lists, block quotes, fenced code, and inline strong/emphasis/code/links. Inline source tags such as [League overview] are stripped before rendering. */\n  answer: string;",
+    "AiProviderPicker": "  options: readonly {\n    provider: \"openai\" | \"anthropic\" | \"gemini\" | \"deepseek\" | \"grok\" | \"openrouter\";\n    detail: string;\n    state?: \"ready\" | \"invalid\" | \"idle\";\n  }[];\n  value: \"openai\" | \"anthropic\" | \"gemini\" | \"deepseek\" | \"grok\" | \"openrouter\";\n  onChange: (provider: \"openai\" | \"anthropic\" | \"gemini\" | \"deepseek\" | \"grok\" | \"openrouter\") => void;\n  /** Visible field label. Defaults to \"AI provider\". */\n  label?: string;\n  disabled?: boolean;",
+    "DemoRankingsStudio": "  /* Takes no props — renders the bundled demo rankings dataset. */",
+    "DraftWorkspace": "  /* Takes no props — holds its own draft board state internally. */",
+    "LacesOutMark": "  /** Renders the smaller header variant. */\n  compact?: boolean;",
+    "PortfolioDashboard": "  /** Slot rendered directly beneath the overview row. */\n  afterOverview?: React.ReactNode;",
+    "RouteLoading": "  /* Takes no props — a centered route-transition spinner. */",
+    "TeamAvatar": "  teamName: string;\n  /** Provider-hosted logo. A missing or unreachable logo falls back to initials, never a broken image. */\n  logoUrl?: string | null;\n  /** Overrides the initials derived from teamName. First 3 characters are used. */\n  abbreviation?: string | null;\n  size?: \"small\" | \"medium\" | \"large\";\n  /** Draws the ring that marks the viewer's own team. */\n  highlight?: boolean;",
+    "YahooAttribution": "  /* Takes no props — the required Yahoo data-source attribution line. */",
+    "YahooNativeConnect": "  /* Takes no props — starts the Yahoo authorization handshake on click. */"
+  }
+}
