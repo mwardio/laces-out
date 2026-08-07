@@ -726,7 +726,11 @@
   letter-spacing: 0.02em;
 }
 
-.seasonSection,
+.seasonSection {
+  padding-top: 88px;
+  padding-bottom: 92px;
+}
+
 .weekSection {
   padding-top: 112px;
   padding-bottom: 118px;
@@ -1006,7 +1010,7 @@
 }
 
 .enginePanel {
-  padding: 24px;
+  padding: 22px;
   color: var(--ink-900);
   background: var(--paper-50);
   border: 1px solid #465148;
@@ -1136,7 +1140,7 @@
   grid-template-columns: 32px 22px minmax(0, 1fr);
   align-items: center;
   gap: 9px;
-  min-height: 62px;
+  min-height: 58px;
   border-bottom: 1px solid var(--ink-150);
 }
 
@@ -1175,8 +1179,8 @@
 }
 
 .engineOutput {
-  margin-top: 16px;
-  padding: 15px;
+  margin-top: 14px;
+  padding: 14px;
   color: #e9eeea;
   background: var(--ink-900);
   border: 1px solid #2e3a31;
@@ -1230,7 +1234,7 @@
 }
 
 .engineCadence {
-  margin-top: 14px;
+  margin-top: 12px;
   color: var(--ink-500);
   font-size: var(--text-10);
   line-height: 1.55;
@@ -1258,8 +1262,13 @@
 }
 
 .draftCopy h2 {
-  max-width: 520px;
-  font-size: clamp(36px, 4.5vw, 54px);
+  width: 580px;
+  max-width: none;
+  font-size: clamp(36px, 4.5vw, 52px);
+}
+
+.draftCopy h2 span {
+  display: block;
 }
 
 .draftCopy > p {
@@ -1461,7 +1470,7 @@
 
 .weekFeature {
   min-width: 0;
-  padding: 24px;
+  padding: 20px;
   background: var(--white);
   border: 1px solid var(--ink-150);
   border-radius: var(--radius-md);
@@ -1480,18 +1489,18 @@
 
 .weekFeature > span {
   display: block;
-  margin-top: 28px;
+  margin-top: 20px;
 }
 
 .weekFeature h3 {
-  min-height: 105px;
+  min-height: 76px;
   font-size: var(--text-20);
 }
 
 .rankPreview,
 .tradePreview,
 .queuePreview {
-  margin-top: 28px;
+  margin-top: 18px;
   padding: 13px;
   background: var(--paper-50);
   border: 1px solid var(--ink-150);
@@ -2196,6 +2205,11 @@
     gap: 48px;
   }
 
+  .draftCopy h2 {
+    width: auto;
+    max-width: 520px;
+  }
+
   .trustInner {
     gap: 62px;
   }
@@ -2461,11 +2475,15 @@
     padding-bottom: 28px;
   }
 
-  .seasonSection,
   .syncSection,
   .weekSection {
     padding-top: 78px;
     padding-bottom: 82px;
+  }
+
+  .seasonSection {
+    padding-top: 68px;
+    padding-bottom: 72px;
   }
 
   .sectionIntro h2,

@@ -98,7 +98,7 @@ const seasonFeatures = [
     number: "02",
     label: "Forecast + decision sweep",
     title: "Let Laces Out recalculate what matters.",
-    text: "Backtested weekly forecasts, legal-lineup bye checks, and fresh league inputs rerun lineup, waiver, trade, opponent, and portfolio analysis without asking you to rebuild the context.",
+    text: "Backtested weekly forecasts and fresh league inputs rerun lineup, waiver, trade, opponent, and portfolio analysis automatically.",
     icon: ScanLine,
   },
   {
@@ -427,10 +427,9 @@ export default function LandingPage() {
                     <span className={styles.connectionMode}>Automatic sync</span>
                   </div>
                   <p className={styles.providerDescription}>
-                    Pair the Chrome companion once. If your host offers it, the recommended
-                    always-on setup encrypts ESPN&apos;s session authorization so scheduled and
-                    mobile-requested refreshes keep working after Chrome closes. Your ESPN password
-                    is never collected.
+                    Pair the Chrome companion once. Always-on setup encrypts ESPN&apos;s session
+                    authorization so scheduled and mobile-requested refreshes keep working after
+                    Chrome closes. Your ESPN password is never collected.
                   </p>
                   <ul>
                     <li>
@@ -445,17 +444,6 @@ export default function LandingPage() {
                     </li>
                     <li>
                       <Check size={13} /> Availability, scoring, activity, and draft context
-                    </li>
-                    <li>
-                      <Check size={13} />{" "}
-                      <a
-                        href="https://chromewebstore.google.com/detail/hmilkmcjlkpnigcfnlfogeafacjpmkbj"
-                        target="_blank"
-                        rel="noreferrer"
-                      >
-                        Chrome extension
-                      </a>
-                      &nbsp;pairs with one click—no tokens to copy
                     </li>
                   </ul>
                 </article>
@@ -551,8 +539,7 @@ export default function LandingPage() {
                 <p className={styles.engineCadence}>
                   Shared player facts, weekly usage, and contextual ADP check daily. Weekly
                   forecasts run hourly, tighten to 10-minute checks near kickoff, and rebuild only
-                  from verified inputs. Every completed league sync or custom projection import
-                  reruns the decision picture with visible source and freshness details.
+                  from verified inputs.
                 </p>
               </div>
             </div>
@@ -573,9 +560,8 @@ export default function LandingPage() {
               <p className={styles.dataFeedDescription}>
                 Laces Out blends nflverse identity, usage, injuries, and production with draft
                 markets, Sleeper signals, and the current schedule into a backtested weekly forecast
-                scored for each league—every source and timestamp kept visible. Season-long
-                projections only publish when they pass reliability checks; no guesses dressed up as
-                data.
+                scored for each league. Season-long projections only publish when they pass
+                reliability checks; no guesses dressed up as data.
               </p>
               <ul className={styles.dataFeedChecks}>
                 <li>
@@ -595,7 +581,10 @@ export default function LandingPage() {
         <section className={styles.draftSection} id="draft-day">
           <div className={styles.draftCopy}>
             <p className={styles.sectionKicker}>Draft studio</p>
-            <h2>The room changes. Your plan recalculates.</h2>
+            <h2>
+              The room changes.
+              <span>Your plan recalculates.</span>
+            </h2>
             <p>
               As picks and bids land, Laces Out updates auction inflation, roster construction,
               position scarcity, and the next best value. Bring a custom board if you have one; the

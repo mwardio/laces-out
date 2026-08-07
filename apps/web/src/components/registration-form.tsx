@@ -152,7 +152,6 @@ export function RegistrationForm() {
             <MailCheck size={17} />
           </span>
           <div>
-            <p className="eyebrow">Member account</p>
             <h1>Check your inbox</h1>
             <p>
               Sent to <strong>{email.trim()}</strong>
@@ -189,7 +188,6 @@ export function RegistrationForm() {
           <KeyRound size={17} />
         </span>
         <div>
-          <p className="eyebrow">Member account</p>
           <h1>Create your account</h1>
         </div>
       </div>

@@ -89,7 +89,6 @@ export function LoginForm() {
           <LockKeyhole size={17} />
         </span>
         <div>
-          <p className="eyebrow">Member access</p>
           <h1>Welcome back</h1>
         </div>
       </div>
