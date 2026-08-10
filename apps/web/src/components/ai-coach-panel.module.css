@@ -80,6 +80,7 @@
     display: grid;
     min-width: 0;
     grid-template-columns: auto minmax(0, 1fr);
+    align-items: center;
     gap: 9px;
     padding: 14px 15px;
     color: var(--ink-600);
@@ -116,15 +117,10 @@
   }
 
   .featureGrid small {
-    display: -webkit-box;
-    overflow: hidden;
     margin-top: 3px;
+    color: var(--ink-500);
     font-size: var(--text-9);
     line-height: 1.35;
-    -webkit-box-orient: vertical;
-    /* At 2 lines every one of the five blurbs clipped mid-clause between ~1100px
-       and ~1700px, which reads as a render fault rather than concision. */
-    -webkit-line-clamp: 3;
   }
 
   .featureIcon {
@@ -465,15 +461,6 @@
 
     .demoPanel .requestPane {
       border-bottom: 0;
-    }
-  }
-
-  /* Phone width: the two-line clamp above still ellipsizes mid-word on the
-     narrowest phones, which reads as a render fault. Hide the description
-     and keep the title as the card's accessible name. */
-  @media (max-width: 820px) {
-    .featureGrid small {
-      display: none;
     }
   }
 

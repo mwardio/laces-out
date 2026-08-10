@@ -39,6 +39,7 @@ import { ChangeFeedPanel } from "./change-feed-panel";
 import { PortfolioDashboard } from "./portfolio-dashboard";
 import { TeamAvatar } from "./team-avatar";
 import { TeamClaimCallout } from "./team-claim-callout";
+import { TourBanner } from "./tour-banner";
 
 type PortfolioState =
   | { readonly status: "loading" }
@@ -224,23 +225,10 @@ function PortfolioUnavailable({
   );
 }
 
-function DemoFallback({
-  reason,
-}: {
-  reason: Extract<PortfolioState, { status: "demo" }>["reason"];
-}) {
-  const message =
-    reason === "signed-out"
-      ? "Signed out. Showing sample data."
-      : reason === "api-unavailable"
-        ? "API unavailable. Showing sample data."
-        : "Live data unavailable. Showing sample data.";
+function DemoFallback() {
   return (
-    <>
-      <div className="dashboard-mode-notice dashboard-mode-notice--demo" role="status">
-        <CircleAlert size={16} />
-        <span>{message}</span>
-      </div>
+    <div className="dashboard-tour">
+      <TourBanner />
       <PortfolioDashboard
         afterOverview={
           <AiCoachPanel
@@ -259,7 +247,7 @@ function DemoFallback({
           />
         }
       />
-    </>
+    </div>
   );
 }
 
@@ -268,7 +256,6 @@ function EmptyLivePortfolio() {
     <div className="dashboard-page">
       <section className="page-heading dashboard-heading">
         <div>
-          <p className="eyebrow">League overview</p>
           <h1>Connect your first league.</h1>
           <p className="page-subtitle">
             Your account is ready, but it does not have any synchronized leagues yet.
@@ -1420,7 +1407,7 @@ export function DashboardExperience() {
 
   const content = useMemo(() => {
     if (state.status === "loading") return <LoadingDashboard />;
-    if (state.status === "demo") return <DemoFallback reason={state.reason} />;
+    if (state.status === "demo") return <DemoFallback />;
     if (state.status === "unavailable") {
       return (
         <PortfolioUnavailable

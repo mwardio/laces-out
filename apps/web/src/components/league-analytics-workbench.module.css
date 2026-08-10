@@ -1,31 +1,4 @@
 @layer components {
-  .demoNotice {
-    display: grid;
-    grid-template-columns: auto minmax(0, 1fr);
-    align-items: center;
-    gap: var(--space-10);
-    padding: 10px 12px;
-    color: var(--ink-600);
-    background: var(--lime-100);
-    border: 1px solid var(--lime-200);
-    border-radius: var(--radius-sm);
-    font-size: var(--text-10);
-  }
-
-  .demoNotice > svg {
-    color: var(--green-600);
-  }
-
-  .demoNotice span,
-  .demoNotice strong {
-    display: block;
-  }
-
-  .demoNotice strong {
-    color: var(--ink-800);
-    font-size: var(--text-11);
-  }
-
   .page {
     display: grid;
     gap: 18px;
@@ -63,8 +36,12 @@
     /* Standardized to 38px (was clamp(30px, 4vw, 48px)). */
     font-size: 38px;
     font-weight: 700;
-    line-height: 0.98;
+    line-height: 1;
     letter-spacing: -0.048em;
+  }
+
+  .hero > div:first-child > h1:first-child {
+    margin-top: 0;
   }
 
   .hero > div:first-child > span {
@@ -1081,6 +1058,7 @@
     .hero {
       display: grid;
       align-items: start;
+      padding: 4px 0 5px;
     }
 
     /* The base rule used to shrink itself via clamp(30px, 4vw, 48px); now

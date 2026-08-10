@@ -15,7 +15,6 @@ import {
   Download,
   FileCheck2,
   FileSpreadsheet,
-  Info,
   LoaderCircle,
   LockKeyhole,
   RefreshCw,
@@ -35,7 +34,7 @@ import {
   parseProjectionSetList,
   type LeagueListResponse,
 } from "../lib/api-client";
-import { CONNECT_LEAGUE_FIRST, TOUR_BANNER } from "../lib/copy";
+import { CONNECT_LEAGUE_FIRST } from "../lib/copy";
 import {
   LEAGUE_PROJECTION_IMPORT_HORIZON,
   localDateTimeMinuteValue,
@@ -44,6 +43,7 @@ import {
 import { loginUrlForCurrentPath } from "../lib/safe-return-to";
 import { ProjectionPlayerBrowser, ProjectionPlayerTour } from "./projection-player-browser";
 import styles from "./projection-import-workbench.module.css";
+import { TourBanner } from "./tour-banner";
 
 const MAX_CSV_BYTES = 512 * 1024;
 const TEMPLATE = `player_id,player_name,mean_points,floor_points,ceiling_points,confidence\n,Tyreek Hill,18.4,12.1,27.8,0.82\n`;
@@ -104,21 +104,11 @@ function isAbortError(error: unknown): boolean {
 function ProjectionTour() {
   return (
     <div className={styles.page}>
-      <div className={styles.demoNotice} role="status">
-        <Info size={17} aria-hidden="true" />
-        <span>
-          <strong>{TOUR_BANNER.title}</strong>
-          {TOUR_BANNER.detail}
-        </span>
-      </div>
+      <TourBanner />
       <header className={styles.hero}>
         <div>
-          <p className={styles.kicker}>Managed forecasts + custom inputs</p>
-          <h1>Use the weekly forecast, or bring your own.</h1>
-          <p>
-            League-scored forecasts update as source inputs change. Custom sets keep their source
-            time, authorship, scope, and checksums.
-          </p>
+          <h1>Projection Lab</h1>
+          <p>League-scored weekly forecasts and your custom projection sets.</p>
         </div>
         <label className={styles.leagueControl}>
           <span>League season</span>
@@ -675,6 +665,7 @@ export function ProjectionImportWorkbench() {
       <header className={styles.hero}>
         <div>
           <h1>Projection Lab</h1>
+          <p>League-scored weekly forecasts and your custom projection sets.</p>
         </div>
         <label className={styles.leagueControl}>
           <span>League season</span>

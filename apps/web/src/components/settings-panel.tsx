@@ -651,7 +651,6 @@ export function SettingsPanel() {
     <div className={styles.page}>
       <header className={styles.hero}>
         <div>
-          <p>Your account</p>
           <h1>Settings</h1>
         </div>
         <UserRound size={34} strokeWidth={1.5} aria-hidden="true" />

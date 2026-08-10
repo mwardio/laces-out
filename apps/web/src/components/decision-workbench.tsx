@@ -15,7 +15,6 @@ import {
   Clock3,
   Database,
   Gauge,
-  Info,
   LoaderCircle,
   RefreshCw,
   Scale,
@@ -33,7 +32,7 @@ import {
   parseTradeEvaluationResponse,
   type LeagueListResponse,
 } from "../lib/api-client";
-import { compactDate, CONNECT_LEAGUE_FIRST, providerLabel, TOUR_BANNER } from "../lib/copy";
+import { compactDate, CONNECT_LEAGUE_FIRST, providerLabel } from "../lib/copy";
 import { projectionSourceAsOfText } from "../lib/projection-import-form";
 import { leagueIsUnclaimed } from "../lib/team-claim";
 import { useDefaultLeague } from "../lib/use-default-league";
@@ -44,6 +43,7 @@ import {
 } from "../lib/demo-contract-data";
 import { AiCoachPanel } from "./ai-coach-panel";
 import { TeamClaimCallout } from "./team-claim-callout";
+import { TourBanner } from "./tour-banner";
 import styles from "./decision-workbench.module.css";
 
 type PortfolioState =
@@ -1054,15 +1054,7 @@ export function DecisionWorkbench() {
       : null;
   return (
     <div className={styles.page}>
-      {isDemo ? (
-        <div className={styles.demoNotice} role="status">
-          <Info size={17} aria-hidden="true" />
-          <span>
-            <strong>{TOUR_BANNER.title}</strong>
-            {TOUR_BANNER.detail}
-          </span>
-        </div>
-      ) : null}
+      {isDemo ? <TourBanner /> : null}
       <header className={styles.hero}>
         <div>
           <h1>Decision Desk</h1>
@@ -1084,7 +1076,6 @@ export function DecisionWorkbench() {
             {portfolio.portfolio.leagues.map((league) => (
               <option value={league.id} key={league.id}>
                 {league.name}
-                {league.season ? ` · ${league.season.season}` : ""}
               </option>
             ))}
           </select>

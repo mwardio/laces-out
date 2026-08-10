@@ -30,6 +30,7 @@ import styles from "./ai-coach-panel.module.css";
 interface FeatureMeta {
   readonly label: string;
   readonly shortLabel: string;
+  readonly description: string;
   readonly icon: LucideIcon;
   readonly promptLabel: string;
   readonly promptPlaceholder: string;
@@ -39,6 +40,7 @@ const FEATURES: Readonly<Record<AiFeatureName, FeatureMeta>> = {
   "weekly-brief": {
     label: "Weekly Briefing",
     shortLabel: "Weekly Brief",
+    description: "Week at a glance",
     icon: FileText,
     promptLabel: "Anything to account for?",
     promptPlaceholder: "Optional: I prefer floor over upside this week.",
@@ -46,6 +48,7 @@ const FEATURES: Readonly<Record<AiFeatureName, FeatureMeta>> = {
   "start-sit": {
     label: "Start / Sit Review",
     shortLabel: "Start / Sit",
+    description: "Set the best lineup",
     icon: ClipboardCheck,
     promptLabel: "Decision preference",
     promptPlaceholder: "Optional: favor ceiling in close calls.",
@@ -53,6 +56,7 @@ const FEATURES: Readonly<Record<AiFeatureName, FeatureMeta>> = {
   "waiver-scan": {
     label: "Waiver Wire Scan",
     shortLabel: "Waiver Scan",
+    description: "Adds worth a drop",
     icon: UserRoundPlus,
     promptLabel: "Roster preference",
     promptPlaceholder: "Optional: prioritize rest-of-season RB depth.",
@@ -60,6 +64,7 @@ const FEATURES: Readonly<Record<AiFeatureName, FeatureMeta>> = {
   "trade-builder": {
     label: "Trade Finder",
     shortLabel: "Trade Finder",
+    description: "Deals worth sending",
     icon: Scale,
     promptLabel: "What are you trying to improve?",
     promptPlaceholder: "Optional: improve TE without moving my top two receivers.",
@@ -67,6 +72,7 @@ const FEATURES: Readonly<Record<AiFeatureName, FeatureMeta>> = {
   "standings-prediction": {
     label: "Final Standings Forecast",
     shortLabel: "Season Forecast",
+    description: "Playoff outlook",
     icon: Trophy,
     promptLabel: "Forecast preference",
     promptPlaceholder: "Optional: emphasize roster strength over current record.",
@@ -74,6 +80,7 @@ const FEATURES: Readonly<Record<AiFeatureName, FeatureMeta>> = {
   "weekly-recap": {
     label: "Weekly Recap",
     shortLabel: "Recap",
+    description: "Awards and damage",
     icon: Megaphone,
     promptLabel: "Anything to work in?",
     promptPlaceholder: "Optional: go easy on me, I already know about the bench.",
@@ -312,6 +319,7 @@ export function AiCoachPanel({
               </span>
               <span>
                 <strong>{meta.shortLabel}</strong>
+                <small>{meta.description}</small>
               </span>
             </button>
           );

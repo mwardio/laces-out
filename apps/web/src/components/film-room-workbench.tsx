@@ -10,7 +10,6 @@ import {
   AlertCircle,
   BrainCircuit,
   Check,
-  Gauge,
   KeyRound,
   LoaderCircle,
   Megaphone,
@@ -27,12 +26,13 @@ import {
   parseLeagueListResponse,
 } from "../lib/api-client";
 import { AI_PROVIDER_META as PROVIDERS, AI_PROVIDER_ORDER } from "../lib/ai-provider-meta";
-import { CONNECT_LEAGUE_FIRST, TOUR_BANNER } from "../lib/copy";
+import { CONNECT_LEAGUE_FIRST } from "../lib/copy";
 import { DEMO_LEAGUE_ID } from "../lib/demo-contract-data";
 import { AiAnswerContent } from "./ai-answer-content";
 import { AiCoachPanel } from "./ai-coach-panel";
 import { AiProviderPicker } from "./ai-provider-picker";
 import styles from "./film-room-workbench.module.css";
+import { TourBanner } from "./tour-banner";
 
 const QUICK_QUESTIONS = [
   "What are my top three moves?",
@@ -76,20 +76,13 @@ function FilmRoomTour() {
 
   return (
     <div className={styles.page}>
-      <div className={styles.tourNotice} role="status">
-        <BrainCircuit size={17} />
-        <span>
-          <strong>{TOUR_BANNER.title}</strong>
-          {TOUR_BANNER.detail}
-        </span>
-      </div>
+      <TourBanner />
       <header className={styles.hero}>
         <div>
-          <p className={styles.kicker}>Private intelligence layer</p>
           <h1>Film Room</h1>
           <p>
-            Ask why a recommendation leads the board. Included Gemini explains the deterministic
-            calls already calculated from your league, and a personal key remains optional.
+            Ask why a recommendation leads the board using the same league data behind your lineup,
+            waiver, and trade calls.
           </p>
         </div>
         <div className={styles.securityChip}>
@@ -100,29 +93,6 @@ function FilmRoomTour() {
           </span>
         </div>
       </header>
-      <section className={styles.boundary} aria-label="AI trust boundaries">
-        <div>
-          <KeyRound size={18} />
-          <span>
-            <strong>Ready out of the box</strong>
-            <small>Gemini 3.6 Flash is included after sign-in.</small>
-          </span>
-        </div>
-        <div>
-          <BrainCircuit size={18} />
-          <span>
-            <strong>Grounded, not autonomous</strong>
-            <small>Models explain the league engine&apos;s results.</small>
-          </span>
-        </div>
-        <div>
-          <Gauge size={18} />
-          <span>
-            <strong>Optional model choice</strong>
-            <small>Your key unlocks model choice.</small>
-          </span>
-        </div>
-      </section>
       <div className={styles.mainGrid}>
         <section className={`${styles.panel} ${styles.providerPanel}`}>
           <div className={styles.panelHeader}>

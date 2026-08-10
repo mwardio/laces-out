@@ -1874,16 +1874,8 @@
   border-radius: var(--radius-md);
 }
 
-.finalCta p {
-  color: var(--green-600);
-  font-size: var(--text-9);
-  font-weight: 800;
-  letter-spacing: 0.09em;
-  text-transform: uppercase;
-}
-
 .finalCta h2 {
-  margin-top: 5px;
+  margin-top: 0;
   font-size: clamp(30px, 4vw, 44px);
 }
 

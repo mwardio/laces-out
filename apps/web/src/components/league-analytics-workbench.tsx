@@ -11,7 +11,6 @@ import {
   BarChart3,
   Crosshair,
   Database,
-  Info,
   LoaderCircle,
   Percent,
   RefreshCw,
@@ -34,13 +33,14 @@ import {
   demoAnalyticsSnapshot,
   demoLeaguePortfolio,
 } from "../lib/demo-contract-data";
-import { providerLabel, TOUR_BANNER } from "../lib/copy";
+import { providerLabel } from "../lib/copy";
 import { AiCoachPanel } from "./ai-coach-panel";
 import { ReckoningRecapPanel } from "./reckoning-recap-panel";
 import styles from "./league-analytics-workbench.module.css";
 import { ShareCardButton, type ShareCardAward } from "./share-card-button";
 import { TeamAvatar } from "./team-avatar";
 import { TeamClaimCallout } from "./team-claim-callout";
+import { TourBanner } from "./tour-banner";
 
 type PortfolioState =
   | { readonly state: "loading" }
@@ -1279,18 +1279,9 @@ export function LeagueAnalyticsWorkbench() {
 
   return (
     <div className={styles.page}>
-      {isDemo ? (
-        <div className={styles.demoNotice} role="status">
-          <Info size={17} aria-hidden="true" />
-          <span>
-            <strong>{TOUR_BANNER.title}</strong>
-            {TOUR_BANNER.detail}
-          </span>
-        </div>
-      ) : null}
+      {isDemo ? <TourBanner /> : null}
       <header className={styles.hero}>
         <div>
-          {isDemo ? <p>League intelligence</p> : null}
           <h1>League Analytics</h1>
           {isDemo ? (
             <span>

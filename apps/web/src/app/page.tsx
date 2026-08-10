@@ -836,7 +836,6 @@ export default function LandingPage() {
               <Goal size={19} />
             </span>
             <div>
-              <p>Have the league code?</p>
               <h2>Your next good decision starts here.</h2>
             </div>
           </div>

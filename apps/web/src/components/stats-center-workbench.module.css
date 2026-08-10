@@ -9,7 +9,6 @@
     padding: 13px 30px 64px;
   }
 
-  .demoNotice,
   .warning,
   .stateCard {
     display: grid;
@@ -21,19 +20,6 @@
     border-radius: var(--radius-sm);
   }
 
-  .demoNotice {
-    color: var(--ink-600);
-    background: var(--lime-100);
-    border-color: var(--lime-200);
-    font-size: var(--text-11);
-  }
-
-  .demoNotice svg {
-    color: var(--green-600);
-  }
-
-  .demoNotice span,
-  .demoNotice strong,
   .warning span,
   .warning strong,
   .stateCard span,
@@ -41,7 +27,6 @@
     display: block;
   }
 
-  .demoNotice strong,
   .warning strong,
   .stateCard strong {
     margin-bottom: 2px;
@@ -54,7 +39,7 @@
     align-items: end;
     justify-content: space-between;
     gap: 28px;
-    padding: 8px 0 4px;
+    padding: 8px 0 5px;
   }
 
   .hero > div {
@@ -72,12 +57,12 @@
   }
 
   .hero h1 {
-    margin-top: 7px;
+    margin-top: 0;
     color: var(--ink-950);
     /* Standardized to 38px (was clamp(30px, 4vw, 48px)). */
     font-size: 38px;
     font-weight: 700;
-    line-height: 0.98;
+    line-height: 1;
     letter-spacing: -0.048em;
   }
 
@@ -748,12 +733,12 @@
     .page {
       gap: 14px;
       /* Top padding halved (was 18px). */
-      padding: 9px 12px 110px;
+      padding: 9px 14px 110px;
     }
 
     .hero {
       align-items: start;
-      padding-top: 4px;
+      padding: 4px 0 5px;
     }
 
     .hero h1 {
@@ -785,20 +770,19 @@
     }
 
     .metricTabs {
-      display: flex;
-      overflow-x: auto;
-      scroll-snap-type: x proximity;
-      scrollbar-width: none;
-    }
-
-    .metricTabs::-webkit-scrollbar {
-      display: none;
+      display: grid;
+      grid-template-columns: repeat(6, minmax(0, 1fr));
     }
 
     .metricTabs button {
-      min-width: 126px;
-      justify-content: flex-start;
-      scroll-snap-align: start;
+      min-width: 0;
+      grid-column: span 2;
+      justify-content: center;
+      padding-inline: 5px;
+    }
+
+    .metricTabs button:nth-last-child(-n + 2) {
+      grid-column: span 3;
     }
 
     .panelHeading,

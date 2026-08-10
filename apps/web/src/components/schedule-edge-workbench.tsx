@@ -22,7 +22,6 @@ import {
   Clock3,
   Database,
   Gauge,
-  Info,
   LoaderCircle,
   RefreshCw,
   ShieldAlert,
@@ -39,7 +38,7 @@ import {
   parseScheduleEdgeMatrixResponse,
   parseScheduleEdgeResponse,
 } from "../lib/api-client";
-import { compactDate, TOUR_BANNER } from "../lib/copy";
+import { compactDate } from "../lib/copy";
 import { DEMO_LEAGUE_ID, demoLeaguePortfolio } from "../lib/demo-contract-data";
 import {
   demoScheduleEdgeMatrixResponse,
@@ -48,6 +47,7 @@ import {
 import { useDefaultLeague } from "../lib/use-default-league";
 import { ScheduleBoard } from "./schedule-board";
 import { TeamClaimCallout } from "./team-claim-callout";
+import { TourBanner } from "./tour-banner";
 import styles from "./schedule-edge-workbench.module.css";
 
 type PortfolioState =
@@ -1338,19 +1338,10 @@ export function ScheduleEdgeWorkbench() {
 
   return (
     <div className={styles.page}>
-      {isDemo ? (
-        <div className={styles.demoNotice} role="status">
-          <Info size={17} aria-hidden="true" />
-          <span>
-            <strong>{TOUR_BANNER.title}</strong>
-            {TOUR_BANNER.detail}
-          </span>
-        </div>
-      ) : null}
+      {isDemo ? <TourBanner /> : null}
 
       <header className={styles.hero}>
         <div>
-          {isDemo ? <p>Roster-aware matchup intelligence</p> : null}
           <h1>Matchup Outlook</h1>
           {isDemo ? (
             <span>

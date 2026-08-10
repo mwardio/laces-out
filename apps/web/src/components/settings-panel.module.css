@@ -1,9 +1,9 @@
 @layer components {
   .page {
     display: grid;
-    gap: var(--space-16);
+    gap: 18px;
     max-width: 780px;
-    padding: 26px 26px 90px;
+    padding: 13px 26px 90px;
   }
 
   .hero {
@@ -22,17 +22,21 @@
   }
 
   .hero h1 {
-    margin-top: 6px;
+    margin-top: 7px;
     color: var(--ink-950);
     font-size: 38px;
     letter-spacing: -0.02em;
-    line-height: 1.05;
+    line-height: 1;
+  }
+
+  .hero > div:first-child > h1:first-child {
+    margin-top: 0;
   }
 
   .hero > div > span {
     display: block;
     max-width: 56ch;
-    margin-top: 8px;
+    margin-top: 13px;
     color: var(--ink-500);
     font-size: var(--text-12);
     line-height: 1.6;
@@ -625,11 +629,11 @@
   @media (max-width: 720px) {
     .page {
       gap: 14px;
-      padding: 18px 12px 110px;
+      padding: 9px 14px 110px;
     }
 
     .hero h1 {
-      font-size: 30px;
+      font-size: 34px;
     }
 
     .panelHeading {

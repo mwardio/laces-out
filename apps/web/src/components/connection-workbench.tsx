@@ -775,7 +775,6 @@ export function ConnectionWorkbench() {
 
       <section className="page-heading connection-heading">
         <div>
-          <p className="eyebrow">Provider access</p>
           <h1>League Sync</h1>
           <p className="page-subtitle">
             {yahooComingSoon

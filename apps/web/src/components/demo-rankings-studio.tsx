@@ -1,25 +1,18 @@
 "use client";
 
-import { Check, FileSpreadsheet, Info, ListPlus, Save, ShieldCheck } from "lucide-react";
+import { Check, FileSpreadsheet, ListPlus, Save, ShieldCheck } from "lucide-react";
 import Link from "next/link";
 
-import { TOUR_BANNER } from "../lib/copy";
 import { draftPlayers } from "../lib/demo-data";
+import { TourBanner } from "./tour-banner";
 
 export function DemoRankingsStudio() {
   return (
     <div className="rankings-page rankings-page--tour">
-      <div className="ranking-demo-notice" role="status">
-        <Info size={17} />
-        <span>
-          <strong>{TOUR_BANNER.title}</strong>
-          {TOUR_BANNER.detail}
-        </span>
-      </div>
+      <TourBanner />
 
       <section className="page-heading rankings-heading">
         <div>
-          <p className="eyebrow">Your board, your numbers</p>
           <h1>Rankings Studio</h1>
           <p className="page-subtitle">
             Blend rankings, ADP, auction prices, targets, and notes into one versioned cheat sheet.

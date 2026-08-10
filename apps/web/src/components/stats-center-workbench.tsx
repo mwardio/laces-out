@@ -14,7 +14,6 @@ import {
   ChartSpline,
   Database,
   ExternalLink,
-  Info,
   LoaderCircle,
   RefreshCw,
   Search,
@@ -25,7 +24,6 @@ import Link from "next/link";
 import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { apiBaseUrl, parseStatsCenterResponse } from "../lib/api-client";
-import { TOUR_BANNER } from "../lib/copy";
 import { NFL_TEAM_CHOICES } from "../lib/nfl-teams";
 import {
   dateTime,
@@ -39,6 +37,7 @@ import {
   weekCoverage,
 } from "./stats-formatting";
 import styles from "./stats-center-workbench.module.css";
+import { TourBanner } from "./tour-banner";
 
 type MetricFamily = "usage" | "production" | "efficiency" | "trend" | "all";
 
@@ -798,15 +797,7 @@ export function StatsCenterWorkbench() {
 
   return (
     <div className={styles.page}>
-      {view.state === "ready" && view.demo ? (
-        <div className={styles.demoNotice} role="status">
-          <Info size={17} aria-hidden="true" />
-          <span>
-            <strong>{TOUR_BANNER.title}</strong>
-            {TOUR_BANNER.detail}
-          </span>
-        </div>
-      ) : null}
+      {view.state === "ready" && view.demo ? <TourBanner /> : null}
 
       <header className={styles.hero}>
         <div>

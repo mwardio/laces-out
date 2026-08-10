@@ -99,7 +99,7 @@ export function PortfolioDashboard({ afterOverview }: { readonly afterOverview?:
     <div className="dashboard-page">
       <section className="page-heading dashboard-heading">
         <div>
-          <h1>League overview</h1>
+          <h1>League Overview</h1>
         </div>
         <div className="heading-actions">
           <span className="freshness-label">

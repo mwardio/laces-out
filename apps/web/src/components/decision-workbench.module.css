@@ -1,31 +1,4 @@
 @layer components {
-  .demoNotice {
-    display: grid;
-    grid-template-columns: auto minmax(0, 1fr);
-    align-items: center;
-    gap: var(--space-10);
-    padding: 10px 12px;
-    color: var(--ink-600);
-    background: var(--lime-100);
-    border: 1px solid var(--lime-200);
-    border-radius: var(--radius-sm);
-    font-size: var(--text-10);
-  }
-
-  .demoNotice > svg {
-    color: var(--green-600);
-  }
-
-  .demoNotice span,
-  .demoNotice strong {
-    display: block;
-  }
-
-  .demoNotice strong {
-    color: var(--ink-800);
-    font-size: var(--text-11);
-  }
-
   .page {
     display: grid;
     gap: 18px;
@@ -57,12 +30,12 @@
   }
 
   .hero h1 {
-    margin-top: 7px;
+    margin-top: 0;
     color: var(--ink-950);
     /* Standardized to 38px (was clamp(30px, 4vw, 48px)). */
     font-size: 38px;
     font-weight: 700;
-    line-height: 0.98;
+    line-height: 1;
     letter-spacing: -0.048em;
   }
 
@@ -283,6 +256,19 @@
     line-height: 1.55;
   }
 
+  .providerWarning details {
+    margin-top: 2px;
+  }
+
+  .providerWarning summary {
+    width: fit-content;
+    color: #745033;
+    font-size: var(--text-11);
+    font-weight: 650;
+    line-height: 1.45;
+    cursor: pointer;
+  }
+
   .providerWarning span {
     margin-top: 6px;
     color: #8a684c;
@@ -437,7 +423,7 @@
 
   .twoColumn {
     display: grid;
-    grid-template-columns: minmax(0, 1.2fr) minmax(300px, 0.8fr);
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .twoColumn > div {
@@ -476,6 +462,11 @@
   .waiverList {
     display: grid;
     gap: 7px;
+  }
+
+  .lineupList {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    column-gap: 18px;
   }
 
   .changeRow {
@@ -1011,7 +1002,7 @@
 
   @media (max-width: 820px) {
     .page {
-      gap: var(--space-12);
+      gap: 14px;
       /* Top padding halved (was 20px). */
       padding: 10px 14px 92px;
     }
@@ -1020,6 +1011,7 @@
       align-items: stretch;
       flex-direction: column;
       gap: 18px;
+      padding: 4px 0 5px;
     }
 
     /* The base rule used to shrink itself via clamp(30px, 4vw, 48px); now
@@ -1123,27 +1115,24 @@
     }
 
     .provenance {
-      display: flex;
-      overflow-x: auto;
-      scroll-snap-type: x mandatory;
-      scrollbar-width: none;
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      overflow: hidden;
     }
 
     .provenance > div,
     .provenance > div:nth-child(2) {
-      min-width: min(78vw, 290px);
-      flex: 0 0 min(78vw, 290px);
+      min-width: 0;
       border-right: 1px solid var(--ink-750);
-      border-bottom: 0;
-      scroll-snap-align: start;
+      border-bottom: 1px solid var(--ink-750);
     }
 
-    .provenance > div:last-child {
+    .provenance > div:nth-child(even) {
       border-right: 0;
     }
 
-    .provenance::-webkit-scrollbar {
-      display: none;
+    .provenance > div:nth-last-child(-n + 2) {
+      border-bottom: 0;
     }
 
     .section,
@@ -1196,6 +1185,10 @@
 
     .lineupList > div {
       grid-template-columns: 50px minmax(0, 1fr);
+    }
+
+    .lineupList {
+      grid-template-columns: 1fr;
     }
 
     .lineupList small {
