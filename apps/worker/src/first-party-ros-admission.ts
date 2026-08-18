@@ -21,6 +21,7 @@ import {
   firstPartyRosChampionPolicyIsPublicationReady,
   type FirstPartyRosChampionArtifactPayload,
 } from "./first-party-ros-publication.js";
+import { firstPartyRosReleaseValidationBlockers } from "./first-party-ros-validation-contract.js";
 
 const SHA256_PATTERN = /^[a-f0-9]{64}$/u;
 
@@ -137,11 +138,32 @@ export function validateFirstPartyRosAdmission(input: {
   }
   const report = input.report;
 
+  // Position-only replays are evidence inputs for composing a complete report, never admissible
+  // release artifacts by themselves. Older complete reports predate this explicit scope and remain
+  // accepted through the existing locked full-portfolio count checks.
+  if (report.validationScope !== undefined) {
+    if (!isObject(report.validationScope)) {
+      blockers.push("validation_scope_unreadable");
+    } else {
+      const scope = report.validationScope;
+      const positions = Array.isArray(scope.positions) ? scope.positions : [];
+      if (
+        scope.completePortfolio !== true ||
+        positions.length !== 6 ||
+        new Set(positions).size !== 6 ||
+        !["QB", "RB", "WR", "TE", "K", "DST"].every((position) => positions.includes(position))
+      ) {
+        blockers.push("validation_scope_not_complete_portfolio");
+      }
+    }
+  }
+
   const backtest = report.report;
   let cellBlockers: readonly string[] = [];
   if (!isObject(backtest)) {
     blockers.push("report_body_missing");
   } else {
+    blockers.push(...firstPartyRosReleaseValidationBlockers(backtest));
     if (!Array.isArray(backtest.blockers) || backtest.blockers.some((b) => typeof b !== "string")) {
       blockers.push("report_blockers_unreadable");
     } else {

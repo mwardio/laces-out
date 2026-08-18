@@ -3,8 +3,10 @@ import { describe, expect, it } from "vitest";
 import type { BridgeLiveDraftRequest, BridgeLiveDraftResponse } from "../protocol.js";
 import type { DraftRoomElement } from "./dom-adapter.js";
 import { ESPN_DRAFT_SELECTORS } from "./dom-adapter.js";
-import { validateEspnLiveDraftObservation } from "./dom-contract.js";
+import { espnLiveDraftDigestSource, validateEspnLiveDraftObservation } from "./dom-contract.js";
 import {
+  createLiveDraftPreflightController,
+  LIVE_DRAFT_STANDBY_PREFLIGHT_RETRY_MS,
   liveDraftSeasonBounds,
   overlayMessage,
   recognizeDraftRoomHref,
@@ -13,7 +15,7 @@ import {
 import type { EspnLiveDraftSnapshot } from "./observation.js";
 import type { LiveDraftMutationSource, LiveDraftTimers } from "./observer.js";
 import { createLiveDraftStatusOverlay, type OverlayNode } from "./status-overlay.js";
-import { defaultLiveDraftStatus } from "./uplink.js";
+import { defaultLiveDraftStatus, liveDraftActiveSessionTtlMs } from "./uplink.js";
 
 /**
  * Minimal invented draft room. Selector keys come from the exported table, so live validation can
@@ -77,21 +79,292 @@ const inertMutations: LiveDraftMutationSource = {
   stop: () => undefined,
 };
 
+const pairedDraftScope = { leagueId: "1234567", season: 2026 } as const;
+
 describe("draft route activation", () => {
   it("recognizes only a real ESPN football draft room", () => {
     expect(
       recognizeDraftRoomHref(
         "https://fantasy.espn.com/football/draft?leagueId=1234567&seasonId=2026",
       ),
-    ).toEqual({ leagueId: "1234567", season: 2026 });
+    ).toEqual(pairedDraftScope);
+    expect(
+      recognizeDraftRoomHref("https://fantasy.espn.com/football/draft?leagueId=1234567"),
+    ).toEqual({ leagueId: "1234567" });
     expect(
       recognizeDraftRoomHref("https://fantasy.espn.com/football/league/draftrecap"),
     ).toBeNull();
     expect(recognizeDraftRoomHref("https://laces.mward.io/draft")).toBeNull();
+    expect(recognizeDraftRoomHref("https://fantasy.espn.com/football/draft")).toBeNull();
+    expect(
+      recognizeDraftRoomHref("https://fantasy.espn.com/football/draft?leagueId=1234567&seasonId="),
+    ).toBeNull();
   });
 
   it("bounds recognized seasons to the wire contract's range", () => {
     expect(liveDraftSeasonBounds).toEqual({ minimum: 2019, maximum: 2100 });
+    expect(LIVE_DRAFT_STANDBY_PREFLIGHT_RETRY_MS).toBe(liveDraftActiveSessionTtlMs);
+  });
+
+  it("keeps one passive standby retry and activates exactly once after source failover", async () => {
+    const scheduled: { readonly handler: () => void; readonly delayMs: number }[] = [];
+    let sends = 0;
+    let activations = 0;
+    let sessionStops = 0;
+    const standbyStatus = {
+      ...defaultLiveDraftStatus,
+      scope: "in-scope" as const,
+      state: "standby" as const,
+    };
+    const controller = createLiveDraftPreflightController({
+      route: { leagueId: "1234567", season: 2026 },
+      pageSessionId: "3f8a1c62-9b4d-4a2e-8f1b-5c7d9e0a1b23",
+      timers: {
+        setTimeout: (handler, delayMs) => {
+          scheduled.splice(0, scheduled.length, { handler, delayMs });
+          return 1;
+        },
+        clearTimeout: () => {
+          scheduled.length = 0;
+        },
+      },
+      send: () => {
+        sends += 1;
+        return Promise.resolve(
+          sends === 1
+            ? { ok: false, status: standbyStatus, resolvedScope: pairedDraftScope }
+            : {
+                ok: true,
+                status: { ...standbyStatus, state: "observing" as const },
+                resolvedScope: pairedDraftScope,
+              },
+        );
+      },
+      activate: () => {
+        activations += 1;
+        return { stop: () => (sessionStops += 1) };
+      },
+    });
+
+    controller.start();
+    controller.start();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(sends).toBe(1);
+    expect(activations).toBe(0);
+    expect(scheduled).toHaveLength(1);
+    expect(scheduled[0]?.delayMs).toBe(LIVE_DRAFT_STANDBY_PREFLIGHT_RETRY_MS);
+
+    const retry = scheduled[0]?.handler;
+    scheduled.length = 0;
+    retry?.();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(sends).toBe(2);
+    expect(activations).toBe(1);
+    expect(controller.active).toBe(true);
+    expect(scheduled).toHaveLength(0);
+
+    controller.start();
+    expect(sends).toBe(2);
+    controller.stop();
+    expect(sessionStops).toBe(1);
+  });
+
+  it("cancels a standby retry and will not activate after the page leaves", async () => {
+    const scheduled: (() => void)[] = [];
+    let activations = 0;
+    const controller = createLiveDraftPreflightController({
+      route: { leagueId: "1234567", season: 2026 },
+      pageSessionId: "3f8a1c62-9b4d-4a2e-8f1b-5c7d9e0a1b23",
+      timers: {
+        setTimeout: (handler) => {
+          scheduled.splice(0, scheduled.length, handler);
+          return 1;
+        },
+        clearTimeout: () => {
+          scheduled.length = 0;
+        },
+      },
+      send: () =>
+        Promise.resolve({
+          ok: false,
+          resolvedScope: pairedDraftScope,
+          status: {
+            ...defaultLiveDraftStatus,
+            scope: "in-scope" as const,
+            state: "standby" as const,
+          },
+        }),
+      activate: () => {
+        activations += 1;
+        return { stop: () => undefined };
+      },
+    });
+    controller.start();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(scheduled).toHaveLength(1);
+    const retry = scheduled[0];
+    controller.stop();
+    retry?.();
+    await Promise.resolve();
+    expect(activations).toBe(0);
+  });
+
+  it("activates only from an explicit observing preflight response", async () => {
+    let activations = 0;
+    const controller = createLiveDraftPreflightController({
+      route: { leagueId: "1234567", season: 2026 },
+      pageSessionId: "3f8a1c62-9b4d-4a2e-8f1b-5c7d9e0a1b23",
+      timers: { setTimeout: () => 1, clearTimeout: () => undefined },
+      send: () =>
+        Promise.resolve({
+          ok: true,
+          resolvedScope: pairedDraftScope,
+          status: {
+            ...defaultLiveDraftStatus,
+            scope: "in-scope" as const,
+            state: "accepted" as const,
+          },
+        }),
+      activate: () => {
+        activations += 1;
+        return { stop: () => undefined };
+      },
+    });
+    controller.start();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(activations).toBe(0);
+    expect(controller.active).toBe(false);
+  });
+
+  it("uses only the exact scope returned for a seasonless paired preflight", async () => {
+    const sent: BridgeLiveDraftRequest[] = [];
+    const activated: { readonly leagueId: string; readonly season: number }[] = [];
+    const controller = createLiveDraftPreflightController({
+      route: { leagueId: "1234567" },
+      pageSessionId: "3f8a1c62-9b4d-4a2e-8f1b-5c7d9e0a1b23",
+      timers: { setTimeout: () => 1, clearTimeout: () => undefined },
+      send: (request) => {
+        sent.push(request);
+        return Promise.resolve({
+          ok: true,
+          resolvedScope: pairedDraftScope,
+          status: {
+            ...defaultLiveDraftStatus,
+            scope: "in-scope" as const,
+            state: "observing" as const,
+          },
+        });
+      },
+      activate: (scope) => {
+        activated.push(scope);
+        return { stop: () => undefined };
+      },
+    });
+
+    controller.start();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(sent).toEqual([
+      {
+        type: "GET_LIVE_DRAFT_STATUS",
+        leagueId: "1234567",
+        pageSessionId: "3f8a1c62-9b4d-4a2e-8f1b-5c7d9e0a1b23",
+      },
+    ]);
+    expect(activated).toEqual([pairedDraftScope]);
+    expect(controller.activeScope).toEqual(pairedDraftScope);
+  });
+
+  it("stays inert when preflight does not return one matching exact scope", async () => {
+    for (const resolvedScope of [null, { leagueId: "1234567", season: 2025 }]) {
+      let activations = 0;
+      const controller = createLiveDraftPreflightController({
+        route: { leagueId: "1234567" },
+        pageSessionId: "3f8a1c62-9b4d-4a2e-8f1b-5c7d9e0a1b23",
+        timers: { setTimeout: () => 1, clearTimeout: () => undefined },
+        send: () =>
+          Promise.resolve({
+            ok: resolvedScope !== null,
+            resolvedScope,
+            status: {
+              ...defaultLiveDraftStatus,
+              scope: resolvedScope === null ? "not-configured" : "in-scope",
+              state: "observing" as const,
+            },
+          }),
+        activate: () => {
+          activations += 1;
+          return { stop: () => undefined };
+        },
+      });
+      controller.start();
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(activations).toBe(resolvedScope === null ? 0 : 1);
+    }
+
+    let mismatchedActivations = 0;
+    const mismatched = createLiveDraftPreflightController({
+      route: pairedDraftScope,
+      pageSessionId: "3f8a1c62-9b4d-4a2e-8f1b-5c7d9e0a1b23",
+      timers: { setTimeout: () => 1, clearTimeout: () => undefined },
+      send: () =>
+        Promise.resolve({
+          ok: true,
+          resolvedScope: { leagueId: "1234567", season: 2025 },
+          status: {
+            ...defaultLiveDraftStatus,
+            scope: "in-scope" as const,
+            state: "observing" as const,
+          },
+        }),
+      activate: () => {
+        mismatchedActivations += 1;
+        return { stop: () => undefined };
+      },
+    });
+    mismatched.start();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(mismatchedActivations).toBe(0);
+  });
+
+  it("fails closed when an old or malformed worker response has no usable resolved scope", async () => {
+    const observingStatus = {
+      ...defaultLiveDraftStatus,
+      scope: "in-scope" as const,
+      state: "observing" as const,
+    };
+    const responses: readonly unknown[] = [
+      null,
+      { ok: true, status: observingStatus },
+      { ok: true, status: null, resolvedScope: pairedDraftScope },
+      { ok: true, status: observingStatus, resolvedScope: "not-an-object" },
+      { ok: true, status: observingStatus, resolvedScope: {} },
+    ];
+
+    for (const response of responses) {
+      let activations = 0;
+      const controller = createLiveDraftPreflightController({
+        route: { leagueId: "1234567" },
+        pageSessionId: "3f8a1c62-9b4d-4a2e-8f1b-5c7d9e0a1b23",
+        timers: { setTimeout: () => 1, clearTimeout: () => undefined },
+        send: () => Promise.resolve(response as BridgeLiveDraftResponse),
+        activate: () => {
+          activations += 1;
+          return { stop: () => undefined };
+        },
+      });
+      controller.start();
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(activations).toBe(0);
+      expect(controller.activeScope).toBeNull();
+    }
   });
 });
 
@@ -107,6 +380,40 @@ async function settle(sent: readonly BridgeLiveDraftRequest[]): Promise<void> {
 describe("live draft session", () => {
   function session(picks: readonly { sequence: string; player: string }[]) {
     const sent: BridgeLiveDraftRequest[] = [];
+    const sanitizedPicks = picks.map((pick) => ({
+      sequence: Number(pick.sequence),
+      round: 1,
+      roundPick: Number(pick.sequence),
+      keeper: false,
+      providerTeamId: "1",
+      teamName: "Ditka's Revenge",
+      providerPlayerId: "3139477",
+      playerName: pick.player,
+      proTeam: "KC",
+      position: "QB",
+      price: null,
+      nominatingProviderTeamId: null,
+    }));
+    const board = {
+      leagueId: "1234567",
+      season: 2026,
+      state: "live",
+      draftType: "snake",
+      expectedTeamCount: 12,
+      expectedRosterSize: 16,
+      pickOwnership: [],
+      picks: sanitizedPicks,
+    } as const;
+    const scanned: EspnLiveDraftSnapshot = {
+      ...board,
+      currentAuction: null,
+      completeness: {
+        contiguousThrough: sanitizedPicks.length,
+        duplicateSequences: 0,
+        unresolvedRows: 0,
+      },
+      digestSource: espnLiveDraftDigestSource(board),
+    };
     const handle = startLiveDraftSession({
       route: { leagueId: "1234567", season: 2026 },
       root: draftRoomFixture(picks),
@@ -114,11 +421,13 @@ describe("live draft session", () => {
       timers: inertTimers,
       mutations: inertMutations,
       now: () => new Date("2026-08-23T18:04:05.000Z"),
+      scan: () => ({ ok: true, snapshot: scanned }),
       send: (request) => {
         sent.push(request);
         return Promise.resolve<BridgeLiveDraftResponse>({
           ok: true,
           status: defaultLiveDraftStatus,
+          resolvedScope: null,
         });
       },
     });
@@ -166,6 +475,23 @@ describe("live draft session", () => {
     }
   });
 
+  it("fails closed without the injected replay seam while live selectors are unverified", () => {
+    const sent: BridgeLiveDraftRequest[] = [];
+    startLiveDraftSession({
+      route: { leagueId: "1234567", season: 2026 },
+      root: draftRoomFixture([{ sequence: "1", player: "Patrick Mahomes" }]),
+      pageSessionId: "3f8a1c62-9b4d-4a2e-8f1b-5c7d9e0a1b23",
+      timers: inertTimers,
+      mutations: inertMutations,
+      now: () => new Date("2026-08-23T18:04:05.000Z"),
+      send: (request) => {
+        sent.push(request);
+        return Promise.resolve({ ok: true, status: defaultLiveDraftStatus, resolvedScope: null });
+      },
+    });
+    expect(sent).toEqual([]);
+  });
+
   it("stops cleanly and removes the overlay", () => {
     const removals: string[] = [];
     const handle = startLiveDraftSession({
@@ -176,7 +502,11 @@ describe("live draft session", () => {
       mutations: inertMutations,
       now: () => new Date("2026-08-23T18:04:05.000Z"),
       send: () =>
-        Promise.resolve<BridgeLiveDraftResponse>({ ok: true, status: defaultLiveDraftStatus }),
+        Promise.resolve<BridgeLiveDraftResponse>({
+          ok: true,
+          status: defaultLiveDraftStatus,
+          resolvedScope: null,
+        }),
       overlay: {
         show: () => undefined,
         remove: () => removals.push("removed"),
@@ -206,9 +536,18 @@ describe("status overlay", () => {
   function overlayHarness() {
     const attributes: Record<string, string> = {};
     let removed = false;
+    let writes = 0;
     const node: OverlayNode = {
-      textContent: null,
+      get textContent() {
+        return attributes.text ?? null;
+      },
+      set textContent(value: string | null) {
+        writes += 1;
+        if (value === null) delete attributes.text;
+        else attributes.text = value;
+      },
       setAttribute: (name, value) => {
+        writes += 1;
         attributes[name] = value;
       },
       remove: () => {
@@ -232,6 +571,9 @@ describe("status overlay", () => {
       get removed() {
         return removed;
       },
+      get writes() {
+        return writes;
+      },
     };
   }
 
@@ -250,6 +592,17 @@ describe("status overlay", () => {
     const test = overlayHarness();
     test.overlay.show("attention", "x".repeat(500));
     expect(test.node.textContent).toHaveLength(120);
+  });
+
+  it("does not rewrite identical state inside the observed draft subtree", () => {
+    const test = overlayHarness();
+    test.overlay.show("attention", "Laces Out: cannot read this draft room.");
+    const firstWrites = test.writes;
+    test.overlay.show("attention", "Laces Out: cannot read this draft room.");
+    expect(test.writes).toBe(firstWrites);
+
+    test.overlay.show("synced", "Laces Out: cannot read this draft room.");
+    expect(test.writes).toBeGreaterThan(firstWrites);
   });
 
   it("is a no-op when there is nowhere to attach", () => {

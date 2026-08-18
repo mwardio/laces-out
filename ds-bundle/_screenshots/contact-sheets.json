@@ -1,0 +1,17 @@
+[
+  {
+    "sheet": 1,
+    "components": [
+      "AiAnswerContent",
+      "AiProviderPicker",
+      "DemoRankingsStudio",
+      "DraftWorkspace",
+      "LacesOutMark",
+      "PortfolioDashboard",
+      "RouteLoading",
+      "TeamAvatar",
+      "YahooAttribution",
+      "YahooNativeConnect"
+    ]
+  }
+]

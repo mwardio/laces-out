@@ -70,14 +70,19 @@ export function draftStreamBackoffMs(attempt: number): number {
  * guards the invalidation that asks for it.
  */
 export function draftStreamAdvances(
-  applied: { readonly sequence: number; readonly feedRevision: number } | null,
-  candidate: { readonly sequence: number; readonly feedRevision: number },
+  applied: DraftStreamCoordinate | null,
+  candidate: DraftStreamCoordinate,
 ): boolean {
   if (applied === null) return true;
   if (candidate.sequence > applied.sequence) return true;
   if (candidate.sequence < applied.sequence) return false;
+  // Current servers encode source generation plus page revision in this established numeric field,
+  // so it cannot rewind on reload/takeover. The comparison also remains compatible with an older
+  // revision-only server during a rolling deployment.
   return candidate.feedRevision > applied.feedRevision;
 }
+
+type DraftStreamCoordinate = Pick<DraftStreamInvalidation, "sequence" | "feedRevision">;
 
 /**
  * Parses one stream frame. Returns null for anything that is not a valid invalidation for this
@@ -107,7 +112,7 @@ export function subscribeToDraftStream(options: DraftStreamOptions): DraftStream
   let connection: DraftStreamConnection | null = null;
   let timer: number | null = null;
   let attempts = 0;
-  let applied: { readonly sequence: number; readonly feedRevision: number } | null = null;
+  let applied: DraftStreamCoordinate | null = null;
   let state: DraftStreamState = "connecting";
   let closed = false;
 
@@ -157,7 +162,7 @@ export function subscribeToDraftStream(options: DraftStreamOptions): DraftStream
         const invalidation = parseDraftStreamFrame(options.draftId, data);
         if (!invalidation) return;
         if (!draftStreamAdvances(applied, invalidation)) return;
-        applied = { sequence: invalidation.sequence, feedRevision: invalidation.feedRevision };
+        applied = invalidation;
         options.onInvalidate(invalidation);
       },
       onError: handleFailure,

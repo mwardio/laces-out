@@ -3,9 +3,13 @@ import { describe, expect, it } from "vitest";
 import {
   ESPN_DRAFT_LABELS,
   ESPN_DRAFT_ROUTES,
+  ESPN_DRAFT_SELECTOR_PROFILES,
   ESPN_DRAFT_SELECTORS,
+  evaluateEspnDraftSelectorAdmission,
   extractDraftRoom,
   recognizeEspnDraftRoute,
+  resolveEspnDraftState,
+  resolveEspnDraftType,
   resolveAll,
   resolveSingle,
   type DraftRoomElement,
@@ -166,21 +170,16 @@ describe("ESPN draft route recognition", () => {
 
   it("refuses a draft room with no league, a non-numeric league, or an out-of-range season", () => {
     // A public mock draft has no league ID, so it can never map to a paired Laces Out league.
-    expect(
-      recognizeEspnDraftRoute("https://fantasy.espn.com/football/draft?mockDraftId=99", bounds),
-    ).toBeNull();
-    expect(
-      recognizeEspnDraftRoute(
-        "https://fantasy.espn.com/football/draft?leagueId=abc&seasonId=2026",
-        bounds,
-      ),
-    ).toBeNull();
-    expect(
-      recognizeEspnDraftRoute(
-        "https://fantasy.espn.com/football/draft?leagueId=1234567&seasonId=1998",
-        bounds,
-      ),
-    ).toBeNull();
+    for (const href of [
+      "https://fantasy.espn.com/football/draft?mockDraftId=99",
+      "https://fantasy.espn.com/football/draft?leagueId=abc&seasonId=2026",
+      "https://fantasy.espn.com/football/draft?leagueId=123&leagueId=456&seasonId=2026",
+      "https://fantasy.espn.com/football/draft?leagueId=123&seasonId=2026&season=2025",
+      "https://fantasy.espn.com/football/draft?leagueId=123&seasonId=2026&seasonId=2026",
+      "https://fantasy.espn.com/football/draft?leagueId=1234567&seasonId=1998",
+    ]) {
+      expect(recognizeEspnDraftRoute(href, bounds)).toBeNull();
+    }
   });
 
   it("keeps the manifest match patterns scoped to the declared ESPN host", () => {
@@ -238,13 +237,70 @@ describe("ESPN draft selector resolution", () => {
     for (const family of Object.values(ESPN_DRAFT_SELECTORS)) {
       expect(family.verified).toBe(false);
     }
+    expect(ESPN_DRAFT_SELECTOR_PROFILES.auction.approved).toBe(false);
+    expect(ESPN_DRAFT_SELECTOR_PROFILES.snake.approved).toBe(false);
   });
 
-  it("prefers stable attributes over text in every candidate list", () => {
-    // Plan 8.2: data-testid, ids, and explicit data attributes first; text only as a fallback.
+  it("requires profile approval, complete semantics, and every actually used family", () => {
+    const verifiedFamily = { ...ESPN_DRAFT_SELECTORS.draftRoot, verified: true };
+    const unverifiedFamily = ESPN_DRAFT_SELECTORS.draftRoot;
+    expect(
+      evaluateEspnDraftSelectorAdmission({
+        profileApproved: true,
+        requiredSemanticsComplete: true,
+        usedFamilies: [verifiedFamily],
+      }),
+    ).toBe(true);
+    expect(
+      evaluateEspnDraftSelectorAdmission({
+        profileApproved: false,
+        requiredSemanticsComplete: true,
+        usedFamilies: [verifiedFamily],
+      }),
+    ).toBe(false);
+    expect(
+      evaluateEspnDraftSelectorAdmission({
+        profileApproved: true,
+        requiredSemanticsComplete: false,
+        usedFamilies: [verifiedFamily],
+      }),
+    ).toBe(false);
+    expect(
+      evaluateEspnDraftSelectorAdmission({
+        profileApproved: true,
+        requiredSemanticsComplete: true,
+        usedFamilies: [verifiedFamily, unverifiedFamily],
+      }),
+    ).toBe(false);
+  });
+
+  it("attributes semantic fallbacks to the family whose value was understood", () => {
+    expect(resolveEspnDraftState("new-provider-token", "draft paused", "live")).toEqual({
+      value: "paused",
+      selectorName: "draftStateLabel",
+    });
+    expect(resolveEspnDraftState("new-provider-token", "new label", "complete")).toEqual({
+      value: "complete",
+      selectorName: "draftCompleteMarker",
+    });
+    expect(resolveEspnDraftType("new-provider-token", "salary cap", "auction")).toEqual({
+      value: "auction",
+      selectorName: "draftTypeLabel",
+    });
+    expect(resolveEspnDraftType("new-provider-token", "new label", "auction")).toEqual({
+      value: "auction",
+      selectorName: "auctionStructure",
+    });
+  });
+
+  it("uses only stable attributes, IDs, or structural classes rather than rendered-text selectors", () => {
     for (const family of Object.values(ESPN_DRAFT_SELECTORS)) {
-      const first = family.candidates[0];
-      expect(first.startsWith("[data-") || first.startsWith("#")).toBe(true);
+      for (const candidate of family.candidates) {
+        expect(
+          candidate.startsWith("[data-") || candidate.startsWith("#") || candidate.startsWith("."),
+        ).toBe(true);
+        expect(candidate.toLowerCase()).not.toContain(":contains(");
+      }
     }
   });
 });
@@ -286,6 +342,76 @@ describe("ESPN draft room extraction", () => {
       position: "QB",
       ambiguousFields: [],
     });
+  });
+
+  it.each([
+    ["waiting", "draftWaitingMarker"],
+    ["live", "draftLiveMarker"],
+    ["paused", "draftPausedMarker"],
+    ["complete", "draftCompleteMarker"],
+  ] as const)(
+    "records official auction structural provenance in the %s state without approving it",
+    (state, stateFamily) => {
+      const roomMatches: Record<string, readonly FakeSpec[]> = {
+        [ESPN_DRAFT_SELECTORS[stateFamily].candidates[0]]: [{}],
+        [ESPN_DRAFT_SELECTORS.auctionStructure.candidates[0]]: [{}],
+        [ESPN_DRAFT_SELECTORS.budgetTeamRow.candidates[0]]: Array.from({ length: 12 }, () => ({})),
+      };
+      const extraction = extractDraftRoom(
+        fake({
+          matches: {
+            [ESPN_DRAFT_SELECTORS.draftRoot.candidates.at(-1)!]: [{ matches: roomMatches }],
+          },
+        }),
+      );
+
+      expect(extraction).toMatchObject({
+        recognized: true,
+        selectorsVerified: false,
+        structuralState: state,
+        structuralDraftType: "auction",
+        structuralTeamCount: 12,
+        selectorProfile: "auction",
+        selectorSemanticsComplete: true,
+      });
+      expect(extraction.selectorFamiliesUsed).toEqual(
+        expect.arrayContaining(["draftRoot", stateFamily, "auctionStructure", "budgetTeamRow"]),
+      );
+    },
+  );
+
+  it("tracks text-cell sequence and price fallbacks without crediting absent attribute families", () => {
+    const pickRow: FakeSpec = {
+      matches: {
+        [ESPN_DRAFT_SELECTORS.pickSequenceText.candidates[0]]: [textCell("1")],
+        [ESPN_DRAFT_SELECTORS.pickTeamName.candidates.at(-1)!]: [textCell("Team One")],
+        [ESPN_DRAFT_SELECTORS.pickPlayerName.candidates.at(-1)!]: [textCell("Player One")],
+        [ESPN_DRAFT_SELECTORS.pickPriceText.candidates[0]]: [textCell("$17")],
+      },
+    };
+    const extraction = extractDraftRoom(
+      fake({
+        matches: {
+          [ESPN_DRAFT_SELECTORS.draftRoot.candidates.at(-1)!]: [
+            {
+              matches: {
+                [ESPN_DRAFT_SELECTORS.draftLiveMarker.candidates[0]]: [{}],
+                [ESPN_DRAFT_SELECTORS.auctionStructure.candidates[0]]: [{}],
+                [ESPN_DRAFT_SELECTORS.budgetTeamRow.candidates[0]]: [{}, {}],
+                [ESPN_DRAFT_SELECTORS.pickRow.candidates.at(-1)!]: [pickRow],
+              },
+            },
+          ],
+        },
+      }),
+    );
+
+    expect(extraction.pickRows[0]).toMatchObject({ sequence: "1", price: "$17" });
+    expect(extraction.selectorFamiliesUsed).toEqual(
+      expect.arrayContaining(["pickSequenceText", "pickPriceText"]),
+    );
+    expect(extraction.selectorFamiliesUsed).not.toContain("pickSequence");
+    expect(extraction.selectorFamiliesUsed).not.toContain("pickPrice");
   });
 
   it("extracts keeper, traded pick ownership, and auction sale fields", () => {
@@ -420,13 +546,13 @@ describe("ESPN draft room extraction", () => {
           snakePickRow({
             sequence: "1",
             teamName: "Team",
-            playerName: "<script>alert(1)</script> ‮",
+            playerName: "<script>alert(1)</script>\u0000‮",
           }),
         ],
       }),
     );
     // The adapter never interprets markup; it hands the string on and the sanitizer drops the row.
-    expect(extraction.pickRows[0]?.playerName).toBe("<script>alert(1)</script> ‮");
+    expect(extraction.pickRows[0]?.playerName).toBe("<script>alert(1)</script>\u0000‮");
   });
 
   it("uses a label vocabulary that covers every draft state and both draft types", () => {

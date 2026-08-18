@@ -5,14 +5,19 @@ import pino from "pino";
 
 import { databaseFirstPartyRosCandidateProvider } from "./first-party-ros-candidate-provider.js";
 import { FirstPartyRosProjectionShadowService } from "./first-party-ros-projections.js";
+import { buildFirstPartyRosTargetsInWorker } from "./first-party-ros-worker-thread.js";
 import { registerQueues, registerRosProjectionWorker } from "./jobs.js";
 
 const environment = loadEnvironment();
 const database = createDatabase(environment.DATABASE_URL, 4);
 const logger = pino({ level: environment.LOG_LEVEL });
+const databaseCandidateProvider = databaseFirstPartyRosCandidateProvider({ database: database.db });
 const service = new FirstPartyRosProjectionShadowService({
   database: database.db,
-  candidateProvider: databaseFirstPartyRosCandidateProvider({ database: database.db }),
+  candidateProvider: {
+    sourceChecksum: (input) => databaseCandidateProvider.sourceChecksum(input),
+    buildTargets: buildFirstPartyRosTargetsInWorker,
+  },
 });
 const boss = new PgBoss({
   connectionString: environment.DATABASE_URL,

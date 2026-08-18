@@ -4,7 +4,17 @@ import globals from "globals";
 import tseslint from "typescript-eslint";
 
 export default tseslint.config(
-  { ignores: ["**/node_modules/**", "**/.next/**", "**/dist/**", "**/coverage/**"] },
+  {
+    ignores: [
+      "**/node_modules/**",
+      "**/.next/**",
+      "**/dist/**",
+      "**/coverage/**",
+      ".design-sync/.cache/**",
+      ".ds-sync/**",
+      "ds-bundle/**",
+    ],
+  },
   eslint.configs.recommended,
   ...tseslint.configs.recommendedTypeChecked.map((configuration) => ({
     ...configuration,

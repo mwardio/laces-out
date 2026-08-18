@@ -11,7 +11,13 @@
  * the server can hold rather than advance the board.
  */
 
-import { ESPN_DRAFT_LABELS, type RawDraftRoomExtraction, type RawPickRow } from "./dom-adapter.js";
+import {
+  ESPN_DRAFT_LABELS,
+  resolveEspnDraftState,
+  resolveEspnDraftType,
+  type RawDraftRoomExtraction,
+  type RawPickRow,
+} from "./dom-adapter.js";
 import {
   ESPN_LIVE_DRAFT_LIMITS,
   espnLiveDraftChecksum,
@@ -82,8 +88,38 @@ export function parseProviderPlayerId(value: string | null): string | null {
   return text !== null && /^-?\d{1,20}$/u.test(text) ? text : null;
 }
 
+export interface ParsedEspnAuctionBidLine {
+  readonly amount: number;
+  readonly teamName: string;
+}
+
+/** Parses the official bid-history rendering: `$<amount> <team full name>`. */
+export function parseEspnAuctionBidLine(value: string | null): ParsedEspnAuctionBidLine | null {
+  const text = normalizeDraftText(value, ESPN_LIVE_DRAFT_LIMITS.maximumTeamNameLength + 32);
+  if (text === null) return null;
+  const match = /^\$([0-9]{1,6}(?:,[0-9]{3})*)\s+(.+)$/u.exec(text);
+  if (match === null) return null;
+  const amount = parseDraftInteger(match[1] ?? null, 0, ESPN_LIVE_DRAFT_LIMITS.maximumPrice);
+  const teamName = normalizeDraftText(
+    match[2] ?? null,
+    ESPN_LIVE_DRAFT_LIMITS.maximumTeamNameLength,
+  );
+  return amount === null || teamName === null ? null : { amount, teamName };
+}
+
+/** Parses the official bidding-form rendering: `Current offer: $<amount>`. */
+export function parseEspnAuctionCurrentAmount(value: string | null): number | null {
+  const text = normalizeDraftText(value, 64);
+  if (text === null) return null;
+  const match = /^current offer:\s*\$([0-9]{1,6}(?:,[0-9]{3})*)$/iu.exec(text);
+  return match === null
+    ? null
+    : parseDraftInteger(match[1] ?? null, 0, ESPN_LIVE_DRAFT_LIMITS.maximumPrice);
+}
+
 export type EspnLiveDraftSnapshotFailure =
   | "not-a-draft-room"
+  | "selectors-unverified"
   | "draft-state-unknown"
   | "draft-type-unknown"
   | "team-count-unknown"
@@ -116,21 +152,19 @@ export interface EspnLiveDraftScope {
 }
 
 function resolveState(extraction: RawDraftRoomExtraction): EspnLiveDraftState | null {
-  const attribute = normalizeDraftLabel(extraction.stateAttribute);
-  const fromAttribute = attribute === null ? undefined : ESPN_DRAFT_LABELS.state[attribute];
-  if (fromAttribute !== undefined) return fromAttribute;
-  const label = normalizeDraftLabel(extraction.stateLabel);
-  const fromLabel = label === null ? undefined : ESPN_DRAFT_LABELS.state[label];
-  return fromLabel ?? null;
+  return resolveEspnDraftState(
+    extraction.stateAttribute,
+    extraction.stateLabel,
+    extraction.structuralState ?? null,
+  ).value;
 }
 
 function resolveDraftType(extraction: RawDraftRoomExtraction): EspnLiveDraftType | null {
-  const attribute = normalizeDraftLabel(extraction.draftTypeAttribute);
-  const fromAttribute = attribute === null ? undefined : ESPN_DRAFT_LABELS.draftType[attribute];
-  if (fromAttribute !== undefined) return fromAttribute;
-  const label = normalizeDraftLabel(extraction.draftTypeLabel);
-  const fromLabel = label === null ? undefined : ESPN_DRAFT_LABELS.draftType[label];
-  return fromLabel ?? null;
+  return resolveEspnDraftType(
+    extraction.draftTypeAttribute,
+    extraction.draftTypeLabel,
+    extraction.structuralDraftType ?? null,
+  ).value;
 }
 
 function resolveKeeper(label: string | null): boolean | null {
@@ -158,9 +192,9 @@ function sanitizePick(row: RawPickRow, draftType: EspnLiveDraftType): EspnLiveDr
   const keeper = resolveKeeper(row.keeperLabel);
   if (sequence === null || teamName === null || playerName === null || keeper === null) return null;
   const price = parseDraftInteger(row.price, 0, ESPN_LIVE_DRAFT_LIMITS.maximumPrice);
-  // A completed auction sale without a readable winning bid would corrupt every budget downstream,
-  // so it is held rather than published with a null price.
-  if (draftType === "auction" && !keeper && price === null) return null;
+  // Every auction acquisition consumes budget, including a keeper. Publishing a null keeper price
+  // would let older server paths silently treat it as $0 and overstate every downstream max bid.
+  if (draftType === "auction" && price === null) return null;
   return {
     sequence,
     round: parseDraftInteger(row.round, 1, ESPN_LIVE_DRAFT_LIMITS.maximumPicks),
@@ -294,11 +328,12 @@ function sanitizeOwnership(extraction: RawDraftRoomExtraction): {
 function sanitizeAuction(
   extraction: RawDraftRoomExtraction,
   draftType: EspnLiveDraftType,
+  reconciled: ReconciledPicks,
 ): EspnLiveDraftCurrentAuctionV1 | null {
   const panel = extraction.auction;
   if (panel === null || draftType !== "auction") return null;
   if (panel.ambiguousFields.length > 0) return null;
-  const nominationNumber = parseDraftInteger(
+  const explicitNominationNumber = parseDraftInteger(
     panel.nominationNumber,
     1,
     ESPN_LIVE_DRAFT_LIMITS.maximumPicks,
@@ -307,7 +342,43 @@ function sanitizeAuction(
     panel.playerName,
     ESPN_LIVE_DRAFT_LIMITS.maximumPlayerNameLength,
   );
+  const completedHistoryIsContiguous =
+    extraction.completedHistoryObserved === true &&
+    reconciled.unresolvedRows === 0 &&
+    reconciled.duplicateSequences === 0 &&
+    reconciled.contiguousThrough === reconciled.picks.length;
+  const derivedNominationNumber = completedHistoryIsContiguous ? reconciled.picks.length + 1 : null;
+  if (
+    explicitNominationNumber !== null &&
+    derivedNominationNumber !== null &&
+    explicitNominationNumber !== derivedNominationNumber
+  ) {
+    return null;
+  }
+  const nominationNumber =
+    explicitNominationNumber ??
+    (derivedNominationNumber !== null &&
+    derivedNominationNumber <= ESPN_LIVE_DRAFT_LIMITS.maximumPicks
+      ? derivedNominationNumber
+      : null);
   if (nominationNumber === null || playerName === null) return null;
+
+  const highBidLineText = panel.highBidLine ?? null;
+  const bidLine = highBidLineText === null ? null : parseEspnAuctionBidLine(highBidLineText);
+  if (highBidLineText !== null && bidLine === null) return null;
+  const explicitHighBid = parseDraftInteger(panel.highBid, 0, ESPN_LIVE_DRAFT_LIMITS.maximumPrice);
+  if (panel.highBid !== null && explicitHighBid === null) return null;
+  const currentAmountText = panel.currentAmount ?? null;
+  const currentAmount = parseEspnAuctionCurrentAmount(currentAmountText);
+  if (currentAmountText !== null && currentAmount === null) return null;
+  const acceptedAmounts = [explicitHighBid, bidLine?.amount ?? null].filter(
+    (amount): amount is number => amount !== null,
+  );
+  if (new Set(acceptedAmounts).size > 1) return null;
+  const acceptedHighBid = acceptedAmounts[0] ?? null;
+  if (currentAmount !== null && acceptedHighBid !== null && currentAmount !== acceptedHighBid) {
+    return null;
+  }
   return {
     nominationNumber,
     nominatingProviderTeamId: parseProviderTeamId(panel.nominatingTeamId),
@@ -316,7 +387,11 @@ function sanitizeAuction(
     proTeam: normalizeDraftText(panel.proTeam, ESPN_LIVE_DRAFT_LIMITS.maximumProTeamLength),
     position: normalizeDraftText(panel.position, ESPN_LIVE_DRAFT_LIMITS.maximumPositionLength),
     highBidProviderTeamId: parseProviderTeamId(panel.highBidTeamId),
-    highBid: parseDraftInteger(panel.highBid, 0, ESPN_LIVE_DRAFT_LIMITS.maximumPrice),
+    highBidTeamName: bidLine?.teamName ?? null,
+    // Static render code does not establish whether `.current-amount` is the accepted bid or the
+    // next/opening offer before a first bidder exists. It may corroborate accepted-bid evidence,
+    // but never creates an accepted high bid by itself.
+    highBid: acceptedHighBid,
   };
 }
 
@@ -330,7 +405,8 @@ export function buildEspnLiveDraftSnapshot(
   scope: EspnLiveDraftScope,
 ): EspnLiveDraftSnapshotResult {
   if (!extraction.recognized) return { ok: false, reason: "not-a-draft-room" };
-  if (extraction.pickRowOverflow || extraction.ownershipRowOverflow) {
+  if (!extraction.selectorsVerified) return { ok: false, reason: "selectors-unverified" };
+  if (extraction.pickRowOverflow || extraction.ownershipRowOverflow || extraction.teamRowOverflow) {
     return { ok: false, reason: "row-overflow" };
   }
   if (extraction.unresolvedFamilies.length > 0) return { ok: false, reason: "selectors-ambiguous" };
@@ -339,11 +415,26 @@ export function buildEspnLiveDraftSnapshot(
   if (state === null) return { ok: false, reason: "draft-state-unknown" };
   const draftType = resolveDraftType(extraction);
   if (draftType === null) return { ok: false, reason: "draft-type-unknown" };
-  const expectedTeamCount = parseDraftInteger(
+  const explicitTeamCount = parseDraftInteger(
     extraction.expectedTeamCountText,
     2,
     ESPN_LIVE_DRAFT_LIMITS.maximumTeams,
   );
+  const structuralTeamCount =
+    extraction.structuralTeamCount !== null &&
+    Number.isSafeInteger(extraction.structuralTeamCount) &&
+    extraction.structuralTeamCount >= 2 &&
+    extraction.structuralTeamCount <= ESPN_LIVE_DRAFT_LIMITS.maximumTeams
+      ? extraction.structuralTeamCount
+      : null;
+  if (
+    explicitTeamCount !== null &&
+    structuralTeamCount !== null &&
+    explicitTeamCount !== structuralTeamCount
+  ) {
+    return { ok: false, reason: "team-count-unknown" };
+  }
+  const expectedTeamCount = explicitTeamCount ?? structuralTeamCount;
   if (expectedTeamCount === null) return { ok: false, reason: "team-count-unknown" };
 
   const reconciled = reconcilePicks(extraction.pickRows, draftType);
@@ -372,7 +463,7 @@ export function buildEspnLiveDraftSnapshot(
     ),
     pickOwnership: ownership.ownership,
     picks: reconciled.picks,
-    currentAuction: sanitizeAuction(extraction, draftType),
+    currentAuction: sanitizeAuction(extraction, draftType, reconciled),
     completeness,
   };
   return { ok: true, snapshot: { ...snapshot, digestSource: espnLiveDraftDigestSource(snapshot) } };
@@ -422,6 +513,7 @@ export function transientAuctionSignature(snapshot: EspnLiveDraftSnapshot): stri
     auction.providerPlayerId,
     auction.playerName,
     auction.highBidProviderTeamId,
+    auction.highBidTeamName,
     auction.highBid,
   ]);
 }

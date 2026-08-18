@@ -1,0 +1,5 @@
+# Literal repository-relative paths only. Missing paths are ignored.
+# Symlinks are rejected rather than followed.
+coverage
+playwright-report
+test-results

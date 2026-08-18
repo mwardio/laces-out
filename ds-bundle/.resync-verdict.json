@@ -1,0 +1,67 @@
+{
+  "version": 2,
+  "ok": true,
+  "shape": "package",
+  "anchor": "not_provided",
+  "learningsUnmerged": [],
+  "stages": {
+    "build": {
+      "ok": true,
+      "exit": 0,
+      "skipped": null
+    },
+    "diff": {
+      "ok": true,
+      "exit": 0,
+      "skipped": null
+    },
+    "validate": {
+      "ok": true,
+      "exit": 0,
+      "skipped": null
+    },
+    "capture": {
+      "ok": true,
+      "exit": 0,
+      "skipped": null
+    }
+  },
+  "verification": {
+    "unchanged": [],
+    "changed": [],
+    "added": [
+      "AiAnswerContent",
+      "AiProviderPicker",
+      "DemoRankingsStudio",
+      "DraftWorkspace",
+      "LacesOutMark",
+      "PortfolioDashboard",
+      "RouteLoading",
+      "TeamAvatar",
+      "YahooAttribution",
+      "YahooNativeConnect"
+    ],
+    "removed": [],
+    "pendingGrade": [],
+    "canary": null
+  },
+  "upload": {
+    "any": true,
+    "components": [
+      "AiAnswerContent",
+      "AiProviderPicker",
+      "DemoRankingsStudio",
+      "DraftWorkspace",
+      "LacesOutMark",
+      "PortfolioDashboard",
+      "RouteLoading",
+      "TeamAvatar",
+      "YahooAttribution",
+      "YahooNativeConnect"
+    ],
+    "deletePaths": [],
+    "bundle": true,
+    "styling": true,
+    "aux": true
+  }
+}
