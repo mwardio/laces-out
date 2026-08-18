@@ -50,11 +50,20 @@ export type BridgeLiveDraftRequest =
       readonly transient: boolean;
     }
   | { readonly type: "LIVE_DRAFT_HEARTBEAT"; readonly heartbeat: unknown }
-  | { readonly type: "LIVE_DRAFT_PAGE_LEFT"; readonly leagueId: string; readonly season: number }
+  | {
+      readonly type: "LIVE_DRAFT_PAGE_LEFT";
+      readonly leagueId: string;
+      readonly season: number;
+      /** Extension-generated source identity; lets one tab leave without clearing another. */
+      readonly pageSessionId: string;
+    }
   | {
       readonly type: "GET_LIVE_DRAFT_STATUS";
       readonly leagueId?: string;
+      /** Omitted only when ESPN omitted it; the worker must resolve one exact paired season. */
       readonly season?: number;
+      /** Required for a content-script preflight; omitted only by the extension popup. */
+      readonly pageSessionId?: string;
     };
 
 export type BridgeRequest =
@@ -103,6 +112,13 @@ export interface BridgeServerSessionResponse {
 export interface BridgeLiveDraftResponse {
   readonly ok: boolean;
   readonly status: BridgeLiveDraftStatus;
+  /** Exact paired scope resolved by service-worker preflight; never inferred by the page. */
+  readonly resolvedScope: BridgeLiveDraftScope | null;
+}
+
+export interface BridgeLiveDraftScope {
+  readonly leagueId: string;
+  readonly season: number;
 }
 
 export interface BridgeResultSummary {

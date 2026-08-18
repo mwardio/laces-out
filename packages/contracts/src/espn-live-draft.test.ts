@@ -3,17 +3,76 @@ import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 
 import {
+  DRAFT_READ_TOKEN_LIMITS,
   ESPN_LIVE_DRAFT_LIMITS,
+  draftReadTokenClaimsSchema,
   espnLiveDraftDigestGolden,
   espnLiveDraftDigestSource,
   espnLiveDraftHeartbeatSchema,
   espnLiveDraftIngestRequestSchema,
   espnLiveDraftObservationSchema,
+  espnLiveDraftPulseResponseSchema,
   draftSessionSnapshotSchema,
   type EspnLiveDraftObservation,
 } from "./index.js";
 
 const PAGE_SESSION = "7f1a2b3c-4d5e-4f60-8a71-9b2c3d4e5f60";
+const USER_ID = "10000000-0000-4000-8000-000000000001";
+
+function draftReadClaims(overrides: Record<string, unknown> = {}) {
+  return {
+    version: 1,
+    userId: USER_ID,
+    leagues: [{ leagueId: "1234567", season: 2026 }],
+    permission: "espn-live-draft-pulse:read",
+    iat: 1_787_595_600,
+    exp: 1_787_599_200,
+    nonce: "abcdefghijklmnopqrstuv",
+    ...overrides,
+  };
+}
+
+describe("DraftRead capability claims", () => {
+  it("accepts only the versioned read permission and explicit bounded scopes", () => {
+    expect(draftReadTokenClaimsSchema.safeParse(draftReadClaims()).success).toBe(true);
+    expect(
+      draftReadTokenClaimsSchema.safeParse(
+        draftReadClaims({ permission: "espn-live-draft-pulse:write" }),
+      ).success,
+    ).toBe(false);
+    expect(draftReadTokenClaimsSchema.safeParse(draftReadClaims({ leagues: [] })).success).toBe(
+      false,
+    );
+    expect(draftReadTokenClaimsSchema.safeParse(draftReadClaims({ version: 2 })).success).toBe(
+      false,
+    );
+  });
+
+  it("rejects duplicate league-season scopes and unknown claims", () => {
+    const scope = { leagueId: "1234567", season: 2026 };
+    expect(
+      draftReadTokenClaimsSchema.safeParse(draftReadClaims({ leagues: [scope, scope] })).success,
+    ).toBe(false);
+    expect(
+      draftReadTokenClaimsSchema.safeParse(draftReadClaims({ administrator: true })).success,
+    ).toBe(false);
+  });
+
+  it("requires positive lifetimes no longer than twelve hours", () => {
+    const iat = 1_787_595_600;
+    expect(draftReadTokenClaimsSchema.safeParse(draftReadClaims({ iat, exp: iat })).success).toBe(
+      false,
+    );
+    expect(
+      draftReadTokenClaimsSchema.safeParse(
+        draftReadClaims({
+          iat,
+          exp: iat + DRAFT_READ_TOKEN_LIMITS.maximumLifetimeSeconds + 1,
+        }),
+      ).success,
+    ).toBe(false);
+  });
+});
 
 function observation(overrides: Record<string, unknown> = {}) {
   return {
@@ -88,10 +147,44 @@ describe("ESPN live draft observation contract", () => {
         proTeam: "KC",
         position: "QB",
         highBidProviderTeamId: "2",
+        highBidTeamName: "Finkle Is Einhorn",
         highBid: 40,
       },
     });
     expect(espnLiveDraftObservationSchema.safeParse(mixed).success).toBe(false);
+  });
+
+  it("defaults the backward-compatible high-bid team name and bounds new values", () => {
+    const legacyAuction = {
+      nominationNumber: 1,
+      nominatingProviderTeamId: null,
+      providerPlayerId: "3139477",
+      playerName: "Patrick Mahomes",
+      proTeam: "KC",
+      position: "QB",
+      highBidProviderTeamId: null,
+      highBid: 40,
+    };
+    const legacy = espnLiveDraftObservationSchema.safeParse(
+      observation({ draftType: "auction", currentAuction: legacyAuction }),
+    );
+    expect(legacy.success && legacy.data.currentAuction?.highBidTeamName).toBeNull();
+    expect(
+      espnLiveDraftObservationSchema.safeParse(
+        observation({
+          draftType: "auction",
+          currentAuction: { ...legacyAuction, highBidTeamName: "Finkle Is Einhorn" },
+        }),
+      ).success,
+    ).toBe(true);
+    expect(
+      espnLiveDraftObservationSchema.safeParse(
+        observation({
+          draftType: "auction",
+          currentAuction: { ...legacyAuction, highBidTeamName: "T".repeat(81) },
+        }),
+      ).success,
+    ).toBe(false);
   });
 
   it("refuses a completeness claim larger than the reported picks", () => {
@@ -174,6 +267,7 @@ describe("ESPN live draft canonical digest", () => {
         proTeam: "CIN",
         position: "WR",
         highBidProviderTeamId: "2",
+        highBidTeamName: "Finkle Is Einhorn",
         highBid: 57,
       },
     });
@@ -200,6 +294,125 @@ describe("ESPN live draft canonical digest", () => {
       .update(espnLiveDraftDigestSource(parsedObservation()), "utf8")
       .digest("hex");
     expect(digest).toMatch(/^[a-f0-9]{64}$/u);
+  });
+});
+
+describe("ESPN live draft pulse contract", () => {
+  const pulse = {
+    schemaVersion: 1,
+    provider: "espn",
+    providerLeagueId: "1234567",
+    season: 2026,
+    cursor: "1000005",
+    pageRevision: 4,
+    generatedAt: "2026-08-24T18:05:01.000Z",
+    observedAt: "2026-08-24T18:05:00.000Z",
+    lastReceivedAt: "2026-08-24T18:05:01.000Z",
+    fresh: true,
+    ageSeconds: 0,
+    feedState: "live",
+    manualBackupActive: false,
+    draft: {
+      id: "20000000-0000-4000-8000-000000000001",
+      sequence: 1,
+      persistedState: "live",
+      mode: "AUCTION",
+      minimumBid: 1,
+      complete: false,
+      teams: [
+        {
+          id: "40000000-0000-4000-8000-000000000001",
+          name: "Ditka's Revenge",
+          budget: 200,
+          spent: 42,
+          remainingBudget: 158,
+          openSlots: 1,
+          maximumBid: 158,
+          rosterPlayerIds: ["50000000-0000-4000-8000-000000000001"],
+          rosterPlayers: [
+            {
+              playerId: "50000000-0000-4000-8000-000000000001",
+              playerName: "Patrick Mahomes",
+              positions: ["QB"],
+            },
+          ],
+          rosterSlots: [
+            {
+              id: "qb-1",
+              type: "QB",
+              label: "QB",
+              kind: "STARTER",
+              eligiblePositions: ["QB"],
+            },
+          ],
+        },
+        {
+          id: "40000000-0000-4000-8000-000000000002",
+          name: "Finkle Is Einhorn",
+          budget: 200,
+          spent: 0,
+          remainingBudget: 200,
+          openSlots: 2,
+          maximumBid: 199,
+          rosterPlayerIds: [],
+          rosterPlayers: [],
+          rosterSlots: [
+            {
+              id: "qb-1",
+              type: "QB",
+              label: "QB",
+              kind: "STARTER",
+              eligiblePositions: ["QB"],
+            },
+          ],
+        },
+      ],
+      completedSales: [],
+    },
+    controlledTeamId: "40000000-0000-4000-8000-000000000001",
+    currentAuction: null,
+    auctionTransitions: {
+      sampling: "sampled",
+      maximumItems: 64,
+      observationsScanned: 0,
+      items: [],
+    },
+  };
+
+  it("carries bounded internal roster identities for advisory need analysis", () => {
+    const parsed = espnLiveDraftPulseResponseSchema.parse(pulse);
+    expect(parsed.draft.teams[0]?.rosterPlayers).toEqual([
+      {
+        playerId: "50000000-0000-4000-8000-000000000001",
+        playerName: "Patrick Mahomes",
+        positions: ["QB"],
+      },
+    ]);
+    expect(parsed.draft.teams[0]?.rosterSlots).toEqual([
+      {
+        id: "qb-1",
+        type: "QB",
+        label: "QB",
+        kind: "STARTER",
+        eligiblePositions: ["QB"],
+      },
+    ]);
+  });
+
+  it("rejects provider identity or unbounded roster data in compact roster entries", () => {
+    const withProviderIdentity = structuredClone(pulse);
+    Object.assign(withProviderIdentity.draft.teams[0]!.rosterPlayers[0]!, {
+      providerPlayerId: "3139477",
+    });
+    expect(espnLiveDraftPulseResponseSchema.safeParse(withProviderIdentity).success).toBe(false);
+
+    const oversized = structuredClone(pulse);
+    oversized.draft.teams[0]!.rosterPlayers = Array.from({ length: 101 }, () => ({
+      playerId: "50000000-0000-4000-8000-000000000001",
+      playerName: "Patrick Mahomes",
+      positions: ["QB"],
+    }));
+    expect(espnLiveDraftPulseResponseSchema.safeParse(oversized).success).toBe(false);
   });
 });
 

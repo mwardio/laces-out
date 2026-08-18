@@ -21,7 +21,9 @@
 import { createHash, randomUUID } from "node:crypto";
 
 import {
+  ESPN_LIVE_DRAFT_PULSE_LIMITS,
   ESPN_LIVE_DRAFT_LIMITS,
+  espnLiveDraftCurrentAuctionSchema,
   espnLiveDraftIssueCodeSchema,
   espnLiveDraftTransientAuctionSchema,
   type EspnLiveDraftFeedStatus,
@@ -103,6 +105,8 @@ import type {
   EspnLiveDraftRepository,
   LiveDraftDeviceScope,
   LiveDraftFeedRow,
+  LiveDraftPulseContext,
+  LiveDraftPulseScope,
   LiveDraftSessionContext,
   ManualBackupContext,
   SetManualBackupInput,
@@ -118,6 +122,7 @@ type DatabaseTransaction = Parameters<Parameters<Database["transaction"]>[0]>[0]
 const uuidSchema = z.string().uuid();
 const positiveIntegerSchema = z.number().int().positive().max(1_000_000);
 const nonNegativeIntegerSchema = z.number().int().min(0).max(1_000_000);
+const draftPersistedStateSchema = z.enum(["created", "live", "complete"]);
 
 /** Mirrors `tokenHash` in espn-bridge.ts. Bridge bearer material is only ever compared as a hash. */
 function tokenHash(token: string): string {
@@ -138,6 +143,18 @@ function isUniqueViolation(error: unknown): boolean {
     current = "cause" in current ? current.cause : undefined;
   }
   return false;
+}
+
+/**
+ * Aborts an observation transaction when the ledger changed after reconciliation planned its
+ * provider events. Throwing is intentional: returning from the transaction would commit the audit
+ * row (and any partial conflict-free inserts) even though the feed cursor must not advance.
+ */
+class LiveDraftLedgerFenceLost extends Error {
+  constructor(readonly sequence: number) {
+    super("Live draft ledger fence was lost");
+    this.name = "LiveDraftLedgerFenceLost";
+  }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -665,6 +682,103 @@ export function projectEspnLiveDraftFeedStatus(
   };
 }
 
+/** Pure half of the row-locked revision fence used by `commitObservation`. */
+export function liveDraftObservationCanAdvance(
+  current: {
+    readonly activeDeviceId: string | null;
+    readonly activePageSessionId: string | null;
+    readonly lastPageRevision: number | null;
+    readonly leaseGeneration: number;
+    readonly manualBackupActive: boolean;
+  },
+  candidate: {
+    readonly deviceId: string;
+    readonly pageSessionId: string;
+    readonly pageRevision: number;
+    readonly expectedLeaseGeneration: number;
+    readonly expectedManualBackupActive: boolean;
+  },
+): boolean {
+  return (
+    current.activeDeviceId === candidate.deviceId &&
+    current.activePageSessionId === candidate.pageSessionId &&
+    current.leaseGeneration === candidate.expectedLeaseGeneration &&
+    current.manualBackupActive === candidate.expectedManualBackupActive &&
+    (current.lastPageRevision === null || candidate.pageRevision > current.lastPageRevision)
+  );
+}
+
+/**
+ * One browser page owns an unexpired lease. A second tab shares the same paired device identity,
+ * so device equality alone is not authority to replace the active page and churn the pulse cursor.
+ */
+export function espnLiveDraftLeaseClaimPredicate(input: {
+  readonly feedId: string;
+  readonly deviceId: string;
+  readonly pageSessionId: string;
+  readonly expectedGeneration: number;
+  readonly now: Date;
+}): SQL {
+  const predicate = and(
+    eq(draftProviderFeeds.id, input.feedId),
+    eq(draftProviderFeeds.leaseGeneration, input.expectedGeneration),
+    or(
+      isNull(draftProviderFeeds.activeDeviceId),
+      and(
+        eq(draftProviderFeeds.activeDeviceId, input.deviceId),
+        eq(draftProviderFeeds.activePageSessionId, input.pageSessionId),
+      ),
+      isNull(draftProviderFeeds.leaseExpiresAt),
+      lte(draftProviderFeeds.leaseExpiresAt, input.now),
+    ),
+  );
+  if (!predicate) throw new Error("ESPN live draft lease predicate could not be constructed");
+  return predicate;
+}
+
+/** Atomic authority fence for a heartbeat: only the page holding this exact board may add life. */
+export function espnLiveDraftHeartbeatRenewalPredicate(input: {
+  readonly feedId: string;
+  readonly deviceId: string;
+  readonly pageSessionId: string;
+  readonly revision: number;
+  readonly lastChecksumSha256: string;
+}): SQL {
+  const predicate = and(
+    eq(draftProviderFeeds.id, input.feedId),
+    eq(draftProviderFeeds.activeDeviceId, input.deviceId),
+    eq(draftProviderFeeds.activePageSessionId, input.pageSessionId),
+    eq(draftProviderFeeds.lastPageRevision, input.revision),
+    eq(draftProviderFeeds.lastChecksum, input.lastChecksumSha256),
+  );
+  if (!predicate) throw new Error("ESPN live draft heartbeat predicate could not be constructed");
+  return predicate;
+}
+
+export function liveDraftHeartbeatMatchesFeed(
+  feed: { readonly lastPageRevision: number | null; readonly lastChecksum: string | null },
+  heartbeat: { readonly revision: number; readonly lastChecksumSha256: string | null },
+): heartbeat is { readonly revision: number; readonly lastChecksumSha256: string } {
+  return (
+    heartbeat.lastChecksumSha256 !== null &&
+    feed.lastPageRevision === heartbeat.revision &&
+    feed.lastChecksum === heartbeat.lastChecksumSha256
+  );
+}
+
+/** A league-global provider marker is never a substitute for this device user's explicit claim. */
+export function controlledTeamIdForPulse(
+  claimedFantasyTeamId: string | null | undefined,
+  configuredTeamIds: ReadonlySet<string>,
+): string | null | undefined {
+  // `undefined` means the membership row itself disappeared. That is an authorization failure,
+  // not merely a member who has not claimed a team yet.
+  if (claimedFantasyTeamId === undefined) return undefined;
+  return claimedFantasyTeamId !== null && configuredTeamIds.has(claimedFantasyTeamId)
+    ? claimedFantasyTeamId
+    : null;
+}
+
 /**
  * Builds the `drafts.settings` document for an ESPN-live session.
  *
@@ -779,6 +893,9 @@ const feedRowColumns = {
   leaseExpiresAt: draftProviderFeeds.leaseExpiresAt,
   leaseGeneration: draftProviderFeeds.leaseGeneration,
   lastChecksum: draftProviderFeeds.lastChecksum,
+  lastObservedAt: draftProviderFeeds.lastObservedAt,
+  lastReceivedAt: draftProviderFeeds.lastReceivedAt,
+  currentAuctionState: draftProviderFeeds.currentAuctionState,
   pendingDestructiveChecksum: draftProviderFeeds.pendingDestructiveChecksum,
   pendingDestructiveSeenCount: draftProviderFeeds.pendingDestructiveSeenCount,
   manualBackupActive: draftProviderFeeds.manualBackupActive,
@@ -795,10 +912,20 @@ type SelectedFeedRow = {
   readonly leaseExpiresAt: Date | null;
   readonly leaseGeneration: number;
   readonly lastChecksum: string | null;
+  readonly lastObservedAt: Date | null;
+  readonly lastReceivedAt: Date | null;
+  readonly currentAuctionState: Record<string, unknown> | null;
   readonly pendingDestructiveChecksum: string | null;
   readonly pendingDestructiveSeenCount: number;
   readonly manualBackupActive: boolean;
 };
+
+interface CachedPulseContext {
+  readonly version: string;
+  readonly session: LiveDraftSessionContext;
+  readonly persistedState: LiveDraftPulseContext["persistedState"];
+  readonly transitionObservations: LiveDraftPulseContext["transitionObservations"];
+}
 
 function liveDraftFeedRow(row: SelectedFeedRow): LiveDraftFeedRow {
   return {
@@ -811,6 +938,9 @@ function liveDraftFeedRow(row: SelectedFeedRow): LiveDraftFeedRow {
     leaseExpiresAt: row.leaseExpiresAt,
     leaseGeneration: row.leaseGeneration,
     lastChecksum: row.lastChecksum,
+    lastObservedAt: row.lastObservedAt,
+    lastReceivedAt: row.lastReceivedAt,
+    currentAuctionState: row.currentAuctionState,
     pendingDestructiveChecksum: row.pendingDestructiveChecksum,
     pendingDestructiveSeenCount: row.pendingDestructiveSeenCount,
     manualBackupActive: row.manualBackupActive,
@@ -821,6 +951,9 @@ const issueSummarySchema = z.object({
   unresolvedTeams: nonNegativeIntegerSchema.optional(),
   unresolvedPlayers: nonNegativeIntegerSchema.optional(),
 });
+
+/** Kept named so a unit test pins the hot poll to the JSON subfield, never the full snapshot. */
+export const espnLiveDraftPulseCurrentAuctionSql = sql<unknown>`${draftProviderObservations.normalizedPayload}->'currentAuction'`;
 
 /**
  * Provider snapshots validated but withheld since the ledger last moved.
@@ -839,6 +972,8 @@ export class DrizzleEspnLiveDraftRepository implements EspnLiveDraftRepository {
   readonly #database: Database;
   readonly #draftSessions: DrizzleDraftSessionRepository;
   readonly #now: () => Date;
+  /** Immutable session work is reused while the revision and ledger sequence are unchanged. */
+  readonly #pulseContextCache = new Map<string, CachedPulseContext>();
 
   constructor(database: Database, now: () => Date = () => new Date()) {
     this.#database = database;
@@ -859,6 +994,58 @@ export class DrizzleEspnLiveDraftRepository implements EspnLiveDraftRepository {
     deviceToken: string,
     providerLeagueId: string,
     season: number,
+  ): Promise<LiveDraftDeviceScope | undefined> {
+    return this.#authorizedDeviceScope(deviceToken, providerLeagueId, season, true);
+  }
+
+  async authorizePulseDevice(
+    deviceToken: string,
+    providerLeagueId: string,
+    season: number,
+  ): Promise<LiveDraftDeviceScope | undefined> {
+    return this.#authorizedDeviceScope(deviceToken, providerLeagueId, season, false);
+  }
+
+  async authorizePulseMember(
+    userId: string,
+    providerLeagueId: string,
+    season: number,
+  ): Promise<LiveDraftPulseScope | undefined> {
+    // This lookup is deliberately not cached. A capability only identifies the intended user and
+    // provider scope; the membership row remains the live source of authority for every read.
+    const [scope] = await this.#database
+      .select({
+        leagueSeasonId: leagueSeasons.id,
+        archived: leagues.archived,
+      })
+      .from(leagueMemberships)
+      .innerJoin(leagues, eq(leagues.id, leagueMemberships.leagueId))
+      .innerJoin(
+        leagueSeasons,
+        and(
+          eq(leagueSeasons.leagueId, leagues.id),
+          eq(leagueSeasons.provider, "espn"),
+          eq(leagueSeasons.externalKey, providerLeagueId),
+          eq(leagueSeasons.season, season),
+        ),
+      )
+      .where(eq(leagueMemberships.userId, userId))
+      .limit(1);
+    if (!scope || scope.archived) return undefined;
+
+    return {
+      userId,
+      leagueSeasonId: scope.leagueSeasonId,
+      providerLeagueId,
+      season,
+    };
+  }
+
+  async #authorizedDeviceScope(
+    deviceToken: string,
+    providerLeagueId: string,
+    season: number,
+    permitSeasonlessPairing: boolean,
   ): Promise<LiveDraftDeviceScope | undefined> {
     const now = this.#now();
     const [device] = await this.#database
@@ -903,7 +1090,9 @@ export class DrizzleEspnLiveDraftRepository implements EspnLiveDraftRepository {
         and(
           eq(bridgeDeviceLeagues.bridgeDeviceId, device.id),
           eq(bridgeDeviceLeagues.externalLeagueId, providerLeagueId),
-          or(isNull(bridgeDeviceLeagues.season), eq(bridgeDeviceLeagues.season, season)),
+          permitSeasonlessPairing
+            ? or(isNull(bridgeDeviceLeagues.season), eq(bridgeDeviceLeagues.season, season))
+            : eq(bridgeDeviceLeagues.season, season),
         ),
       )
       .limit(1);
@@ -938,6 +1127,159 @@ export class DrizzleEspnLiveDraftRepository implements EspnLiveDraftRepository {
   }
 
   /**
+   * Loads only normalized state needed by a scoped read-only live consumer. The audit projection omits the
+   * observation UUID, device, page session, checksum, issue payload, and complete stored document.
+   */
+  loadPulseContext(scope: LiveDraftPulseScope): Promise<LiveDraftPulseContext | undefined> {
+    return this.#loadPulseContext(scope, 2);
+  }
+
+  async #loadPulseContext(
+    scope: LiveDraftPulseScope,
+    retriesRemaining: number,
+  ): Promise<LiveDraftPulseContext | undefined> {
+    const feed = await this.#feedForLeagueSeason(scope.providerLeagueId, scope.season);
+    if (!feed || feed.leagueSeasonId !== scope.leagueSeasonId) return undefined;
+
+    // These are deliberately small index-backed reads. The expensive immutable configuration,
+    // ledger hydration, crosswalk, and sampled transition window are reused on heartbeat-only polls.
+    const [draftRows, sequenceRows, membershipRows] = await Promise.all([
+      this.#database
+        .select({ state: drafts.state, updatedAt: drafts.updatedAt })
+        .from(drafts)
+        .where(and(eq(drafts.id, feed.draftId), eq(drafts.leagueSeasonId, scope.leagueSeasonId)))
+        .limit(1),
+      this.#database
+        .select({ sequence: max(draftEvents.sequence) })
+        .from(draftEvents)
+        .where(eq(draftEvents.draftId, feed.draftId)),
+      this.#database
+        .select({
+          claimedFantasyTeamId: leagueMemberships.claimedFantasyTeamId,
+          archived: leagues.archived,
+        })
+        .from(leagueMemberships)
+        .innerJoin(leagueSeasons, eq(leagueMemberships.leagueId, leagueSeasons.leagueId))
+        .innerJoin(leagues, eq(leagues.id, leagueMemberships.leagueId))
+        .where(
+          and(
+            eq(leagueSeasons.id, scope.leagueSeasonId),
+            eq(leagueMemberships.userId, scope.userId),
+          ),
+        )
+        .limit(1),
+    ]);
+
+    const persistedState = draftPersistedStateSchema.safeParse(draftRows[0]?.state);
+    if (!persistedState.success) return undefined;
+    const draftUpdatedAt = draftRows[0]?.updatedAt;
+    if (!draftUpdatedAt) return undefined;
+    const ledgerSequence = sequenceRows[0]?.sequence ?? 0;
+    const version = [
+      feed.leaseGeneration,
+      feed.lastPageRevision ?? -1,
+      draftUpdatedAt.getTime(),
+      ledgerSequence,
+    ].join(":");
+
+    let cached = this.#pulseContextCache.get(feed.id);
+    if (!cached || cached.version !== version) {
+      const [session, observationRows] = await Promise.all([
+        this.#contextForFeed(feed),
+        this.#database
+          .select({
+            pageRevision: draftProviderObservations.pageRevision,
+            receivedAt: draftProviderObservations.receivedAt,
+            // PostgreSQL extracts only the small transient block. Pulling the full cumulative
+            // snapshot here would make each sub-second poll grow with every completed draft pick.
+            currentAuction: espnLiveDraftPulseCurrentAuctionSql,
+          })
+          .from(draftProviderObservations)
+          .where(
+            and(
+              eq(draftProviderObservations.feedId, feed.id),
+              inArray(draftProviderObservations.result, ["accepted", "idempotent"]),
+            ),
+          )
+          .orderBy(
+            desc(draftProviderObservations.receivedAt),
+            desc(draftProviderObservations.pageRevision),
+          )
+          .limit(ESPN_LIVE_DRAFT_PULSE_LIMITS.maximumObservationWindow),
+      ]);
+      if (!session) return undefined;
+      const transitionObservations = observationRows
+        .map((row) => {
+          const auction = espnLiveDraftCurrentAuctionSchema.safeParse(row.currentAuction);
+          if (!auction.success && row.currentAuction !== null) return undefined;
+          return {
+            pageRevision: row.pageRevision,
+            receivedAt: row.receivedAt,
+            currentAuction: auction.success ? auction.data : null,
+          };
+        })
+        .filter((row) => row !== undefined)
+        .reverse();
+      cached = {
+        version: [
+          feed.leaseGeneration,
+          feed.lastPageRevision ?? -1,
+          draftUpdatedAt.getTime(),
+          session.sequence,
+        ].join(":"),
+        session,
+        persistedState: persistedState.data,
+        transitionObservations,
+      };
+      this.#rememberPulseContext(feed.id, cached);
+    } else {
+      // Map insertion order is our tiny LRU; touching a hit prevents an active draft from eviction.
+      this.#pulseContextCache.delete(feed.id);
+      this.#pulseContextCache.set(feed.id, cached);
+    }
+
+    const configuredTeamIds = new Set(cached.session.config.teams.map((team) => String(team.id)));
+    if (membershipRows[0]?.archived !== false) return undefined;
+    const controlledTeamId = controlledTeamIdForPulse(
+      membershipRows[0]?.claimedFantasyTeamId,
+      configuredTeamIds,
+    );
+    // The member authorization lookup and this context projection are intentionally separate
+    // reads. Requiring the row again closes the revocation race before any pulse is returned.
+    if (controlledTeamId === undefined) return undefined;
+
+    // An observation can commit between the small feed read and the cached/context reads above.
+    // Verify the two monotonic coordinates and ledger sequence before assigning one cursor to the
+    // assembled advice. A heartbeat-only change is safe and its newer receipt time is adopted.
+    const [finalFeed, finalSequenceRows] = await Promise.all([
+      this.#feedForLeagueSeason(scope.providerLeagueId, scope.season),
+      this.#database
+        .select({ sequence: max(draftEvents.sequence) })
+        .from(draftEvents)
+        .where(eq(draftEvents.draftId, feed.draftId)),
+    ]);
+    if (!finalFeed || finalFeed.leagueSeasonId !== scope.leagueSeasonId) return undefined;
+    const finalSequence = finalSequenceRows[0]?.sequence ?? 0;
+    if (
+      finalFeed.leaseGeneration !== feed.leaseGeneration ||
+      finalFeed.lastPageRevision !== feed.lastPageRevision ||
+      finalSequence !== cached.session.sequence
+    ) {
+      this.#pulseContextCache.delete(feed.id);
+      return retriesRemaining > 0 ? this.#loadPulseContext(scope, retriesRemaining - 1) : undefined;
+    }
+
+    return {
+      ...cached.session,
+      // Heartbeats update receipt freshness without changing the immutable cached context.
+      feed: liveDraftFeedRow(finalFeed),
+      persistedState: cached.persistedState,
+      controlledTeamId,
+      transitionObservations: cached.transitionObservations,
+    };
+  }
+
+  /**
    * Acquires or renews the single source lease (plan §13).
    *
    * One conditional `UPDATE` decides the winner: two devices racing on the same expired lease
@@ -948,14 +1290,33 @@ export class DrizzleEspnLiveDraftRepository implements EspnLiveDraftRepository {
     readonly feedId: string;
     readonly deviceId: string;
     readonly pageSessionId: string;
+    readonly expectedGeneration: number;
     readonly expiresAt: Date;
     readonly now: Date;
-  }): Promise<{ readonly granted: boolean; readonly expiresAt: Date | null }> {
+  }): Promise<{
+    readonly granted: boolean;
+    readonly expiresAt: Date | null;
+    readonly generation: number;
+  }> {
     const [granted] = await this.#database
       .update(draftProviderFeeds)
       .set({
         activeDeviceId: input.deviceId,
         activePageSessionId: input.pageSessionId,
+        // Page revisions are scoped to one page session. Reset on a takeover before increasing the
+        // generation so the composite polling cursor stays monotonic when the new page starts at 0.
+        lastPageRevision: sql<number | null>`case
+          when ${draftProviderFeeds.activeDeviceId} = ${input.deviceId}
+           and ${draftProviderFeeds.activePageSessionId} = ${input.pageSessionId}
+          then ${draftProviderFeeds.lastPageRevision}
+          else null
+        end`,
+        currentAuctionState: sql<Record<string, unknown> | null>`case
+          when ${draftProviderFeeds.activeDeviceId} = ${input.deviceId}
+           and ${draftProviderFeeds.activePageSessionId} = ${input.pageSessionId}
+          then ${draftProviderFeeds.currentAuctionState}
+          else null
+        end`,
         leaseExpiresAt: input.expiresAt,
         // A takeover, or the same device reloading its page, is a new generation. A plain renewal
         // is not, so downstream consumers can tell "still the same source" from "source changed".
@@ -967,26 +1328,28 @@ export class DrizzleEspnLiveDraftRepository implements EspnLiveDraftRepository {
         end`,
         updatedAt: input.now,
       })
-      .where(
-        and(
-          eq(draftProviderFeeds.id, input.feedId),
-          or(
-            isNull(draftProviderFeeds.activeDeviceId),
-            eq(draftProviderFeeds.activeDeviceId, input.deviceId),
-            isNull(draftProviderFeeds.leaseExpiresAt),
-            lte(draftProviderFeeds.leaseExpiresAt, input.now),
-          ),
-        ),
-      )
-      .returning({ expiresAt: draftProviderFeeds.leaseExpiresAt });
-    if (granted) return { granted: true, expiresAt: granted.expiresAt };
+      .where(espnLiveDraftLeaseClaimPredicate(input))
+      .returning({
+        expiresAt: draftProviderFeeds.leaseExpiresAt,
+        generation: draftProviderFeeds.leaseGeneration,
+      });
+    if (granted) {
+      return { granted: true, expiresAt: granted.expiresAt, generation: granted.generation };
+    }
 
     const [holder] = await this.#database
-      .select({ expiresAt: draftProviderFeeds.leaseExpiresAt })
+      .select({
+        expiresAt: draftProviderFeeds.leaseExpiresAt,
+        generation: draftProviderFeeds.leaseGeneration,
+      })
       .from(draftProviderFeeds)
       .where(eq(draftProviderFeeds.id, input.feedId))
       .limit(1);
-    return { granted: false, expiresAt: holder?.expiresAt ?? null };
+    return {
+      granted: false,
+      expiresAt: holder?.expiresAt ?? null,
+      generation: holder?.generation ?? 0,
+    };
   }
 
   /**
@@ -995,80 +1358,138 @@ export class DrizzleEspnLiveDraftRepository implements EspnLiveDraftRepository {
    */
   async commitObservation(
     input: CommitProviderEventsInput,
-  ): Promise<{ readonly sequence: number }> {
+  ): Promise<{ readonly sequence: number; readonly committed: boolean }> {
     const { observation, now } = input;
-    return this.#database.transaction(async (transaction) => {
-      // Same lock the manual append path takes, so provider and human writes to one room serialize.
-      await transaction.execute(sql`select id from drafts where id = ${input.draftId} for update`);
+    try {
+      return await this.#database.transaction(async (transaction) => {
+        // Same lock the manual append path takes, so provider and human writes to one room serialize.
+        await transaction.execute(
+          sql`select id from drafts where id = ${input.draftId} for update`,
+        );
 
-      await transaction
-        .insert(draftProviderObservations)
-        .values({
-          feedId: input.feedId,
-          deviceId: input.deviceId,
-          pageSessionId: observation.pageSessionId,
-          pageRevision: observation.revision,
-          checksum: observation.checksumSha256,
-          providerState: observation.state,
-          pickCount: observation.picks.length,
-          capturedAt: new Date(observation.capturedAt),
-          receivedAt: now,
-          // Already sanitized and bounded by the strict observation contract.
-          normalizedPayload: jsonRecord(observation),
-          result: input.result,
-          issueSummary: {
-            issue: input.issue,
-            unresolvedTeams: input.unresolvedTeams,
-            unresolvedPlayers: input.unresolvedPlayers,
-            appended: input.append.length,
-          },
-        })
-        // A re-posted page revision is the same immutable observation, not a second one.
-        .onConflictDoNothing({
-          target: [
-            draftProviderObservations.feedId,
-            draftProviderObservations.pageSessionId,
-            draftProviderObservations.pageRevision,
-          ],
-        });
+        const [latestBeforeCommit] = await transaction
+          .select({ sequence: max(draftEvents.sequence) })
+          .from(draftEvents)
+          .where(eq(draftEvents.draftId, input.draftId));
+        const persistedSequence = latestBeforeCommit?.sequence ?? 0;
+        // Reconciliation planned every result kind—including idempotent and held observations—at
+        // one exact ledger sequence. A manual append that won the draft lock first invalidates the
+        // whole plan even when it contains no provider events.
+        if (persistedSequence !== input.expectedSequence) {
+          return { sequence: persistedSequence, committed: false };
+        }
 
-      const appendResult = await this.#appendProviderEvents(transaction, input);
+        // The service's early revision check is only a latency optimization. This row lock is the
+        // authority: two transient bids can share a board checksum and arrive out of order, and a
+        // superseded page must not overwrite the source that won the lease after this request began.
+        const [currentFeed] = await transaction
+          .select({
+            activeDeviceId: draftProviderFeeds.activeDeviceId,
+            activePageSessionId: draftProviderFeeds.activePageSessionId,
+            lastPageRevision: draftProviderFeeds.lastPageRevision,
+            leaseGeneration: draftProviderFeeds.leaseGeneration,
+            manualBackupActive: draftProviderFeeds.manualBackupActive,
+          })
+          .from(draftProviderFeeds)
+          .where(eq(draftProviderFeeds.id, input.feedId))
+          .limit(1)
+          .for("update");
+        if (
+          !currentFeed ||
+          !liveDraftObservationCanAdvance(currentFeed, {
+            deviceId: input.deviceId,
+            pageSessionId: observation.pageSessionId,
+            pageRevision: observation.revision,
+            expectedLeaseGeneration: input.expectedLeaseGeneration,
+            expectedManualBackupActive: input.expectedManualBackupActive,
+          })
+        ) {
+          return { sequence: persistedSequence, committed: false };
+        }
 
-      await transaction
-        .update(drafts)
-        .set({
-          state: input.feedState === "complete" ? "complete" : "live",
-          updatedAt: now,
-        })
-        .where(eq(drafts.id, input.draftId));
+        const insertedObservation = await transaction
+          .insert(draftProviderObservations)
+          .values({
+            feedId: input.feedId,
+            deviceId: input.deviceId,
+            pageSessionId: observation.pageSessionId,
+            pageRevision: observation.revision,
+            checksum: observation.checksumSha256,
+            providerState: observation.state,
+            pickCount: observation.picks.length,
+            capturedAt: new Date(observation.capturedAt),
+            receivedAt: now,
+            // Already sanitized and bounded by the strict observation contract.
+            normalizedPayload: jsonRecord(observation),
+            result: input.result,
+            issueSummary: {
+              issue: input.issue,
+              unresolvedTeams: input.unresolvedTeams,
+              unresolvedPlayers: input.unresolvedPlayers,
+              appended: input.append.length,
+            },
+          })
+          // A re-posted page revision is the same immutable observation, not a second one.
+          .onConflictDoNothing({
+            target: [
+              draftProviderObservations.feedId,
+              draftProviderObservations.pageSessionId,
+              draftProviderObservations.pageRevision,
+            ],
+          })
+          .returning({ id: draftProviderObservations.id });
+        if (insertedObservation.length === 0) {
+          return { sequence: persistedSequence, committed: false };
+        }
 
-      const accepted = input.result === "accepted" || input.result === "idempotent";
-      await transaction
-        .update(draftProviderFeeds)
-        .set({
-          state: input.feedState,
-          activePageSessionId: observation.pageSessionId,
-          lastPageRevision: observation.revision,
-          lastReceivedAt: now,
-          lastPickCount: observation.picks.length,
-          currentAuctionState:
-            input.transientAuction === null ? null : jsonRecord(input.transientAuction),
-          pendingDestructiveChecksum: input.pendingDestructiveChecksum,
-          pendingDestructiveSeenCount: input.pendingDestructiveSeenCount,
-          lastErrorCode: input.issue,
-          updatedAt: now,
-          ...(accepted
-            ? {
-                lastChecksum: observation.checksumSha256,
-                lastObservedAt: new Date(observation.capturedAt),
-              }
-            : {}),
-          ...(appendResult.appended ? { lastMaterialEventAt: now } : {}),
-        })
-        .where(eq(draftProviderFeeds.id, input.feedId));
+        const appendResult = await this.#appendProviderEvents(transaction, input);
+        if (input.append.length > 0 && !appendResult.appended) {
+          // Any inserts reported in appendResult are part of this transaction and will roll back;
+          // report the sequence durably present before the attempted append.
+          throw new LiveDraftLedgerFenceLost(persistedSequence);
+        }
 
-      return { sequence: appendResult.sequence };
-    });
+        await transaction
+          .update(drafts)
+          .set({
+            state: input.feedState === "complete" ? "complete" : "live",
+            updatedAt: now,
+          })
+          .where(eq(drafts.id, input.draftId));
+
+        const accepted = input.result === "accepted" || input.result === "idempotent";
+        await transaction
+          .update(draftProviderFeeds)
+          .set({
+            state: input.feedState,
+            activePageSessionId: observation.pageSessionId,
+            lastPageRevision: observation.revision,
+            lastReceivedAt: now,
+            lastPickCount: observation.picks.length,
+            currentAuctionState:
+              input.transientAuction === null ? null : jsonRecord(input.transientAuction),
+            pendingDestructiveChecksum: input.pendingDestructiveChecksum,
+            pendingDestructiveSeenCount: input.pendingDestructiveSeenCount,
+            lastErrorCode: input.issue,
+            updatedAt: now,
+            ...(accepted
+              ? {
+                  lastChecksum: observation.checksumSha256,
+                  lastObservedAt: new Date(observation.capturedAt),
+                }
+              : {}),
+            ...(appendResult.appended ? { lastMaterialEventAt: now } : {}),
+          })
+          .where(eq(draftProviderFeeds.id, input.feedId));
+
+        return { sequence: appendResult.sequence, committed: true };
+      });
+    } catch (error) {
+      if (error instanceof LiveDraftLedgerFenceLost) {
+        return { sequence: error.sequence, committed: false };
+      }
+      throw error;
+    }
   }
 
   /**
@@ -1081,11 +1502,18 @@ export class DrizzleEspnLiveDraftRepository implements EspnLiveDraftRepository {
   async recordHeartbeat(input: {
     readonly scope: LiveDraftDeviceScope;
     readonly pageSessionId: string;
+    readonly revision: number;
+    readonly lastChecksumSha256: string | null;
     readonly state: EspnLiveDraftObservation["state"];
     readonly now: Date;
   }): Promise<EspnLiveDraftFeedStatus | undefined> {
     const feed = await this.#feedForLeagueSeason(input.scope.providerLeagueId, input.scope.season);
     if (!feed) return undefined;
+    // A heartbeat cannot establish truth. Until a full observation supplies both coordinates,
+    // or if this sender is behind either one, it remains standby and cannot keep the feed fresh.
+    if (!liveDraftHeartbeatMatchesFeed(feed, input)) {
+      return undefined;
+    }
 
     const [renewed] = await this.#database
       .update(draftProviderFeeds)
@@ -1098,11 +1526,13 @@ export class DrizzleEspnLiveDraftRepository implements EspnLiveDraftRepository {
         ...(feed.state === "degraded" ? {} : { state: input.state }),
       })
       .where(
-        and(
-          eq(draftProviderFeeds.id, feed.id),
-          eq(draftProviderFeeds.activeDeviceId, input.scope.deviceId),
-          eq(draftProviderFeeds.activePageSessionId, input.pageSessionId),
-        ),
+        espnLiveDraftHeartbeatRenewalPredicate({
+          feedId: feed.id,
+          deviceId: input.scope.deviceId,
+          pageSessionId: input.pageSessionId,
+          revision: input.revision,
+          lastChecksumSha256: input.lastChecksumSha256,
+        }),
       )
       .returning({ id: draftProviderFeeds.id });
     if (!renewed) return undefined;
@@ -1219,6 +1649,11 @@ export class DrizzleEspnLiveDraftRepository implements EspnLiveDraftRepository {
         .update(draftProviderFeeds)
         .set({
           manualBackupActive: input.active,
+          // The read-only feed cursor must observe a freeze before another provider revision.
+          leaseGeneration: sql<number>`${draftProviderFeeds.leaseGeneration} + 1`,
+          // Never let a pre-freeze bid become actionable again merely because provider control was
+          // restored. Only a newer accepted observation may repopulate the transient auction.
+          currentAuctionState: null,
           pendingDestructiveChecksum: null,
           pendingDestructiveSeenCount: 0,
           updatedAt: input.now,
@@ -1227,6 +1662,16 @@ export class DrizzleEspnLiveDraftRepository implements EspnLiveDraftRepository {
         .returning({ id: draftProviderFeeds.id });
       return updated ? { status: "updated" } : { status: "not-found" };
     });
+  }
+
+  #rememberPulseContext(feedId: string, context: CachedPulseContext): void {
+    this.#pulseContextCache.delete(feedId);
+    this.#pulseContextCache.set(feedId, context);
+    while (this.#pulseContextCache.size > 16) {
+      const oldest = this.#pulseContextCache.keys().next().value;
+      if (oldest === undefined) break;
+      this.#pulseContextCache.delete(oldest);
+    }
   }
 
   async #feedForLeagueSeason(

@@ -37,6 +37,18 @@ const DEFAULT_PAGE_SIZE = 25;
 const MAX_DISCOVERY_PAGES = 40;
 const MAX_DISCOVERED_LEAGUES = 500;
 
+/** Yahoo rounds these yardage categories to whole scoring units when fractional points are off. */
+const YAHOO_FRACTIONAL_YARDAGE_STAT_IDS = new Set(["4", "9", "12", "14"]);
+
+export function yahooScoringOperation(
+  statId: string,
+  usesFractionalPoints: boolean | null | undefined,
+): "multiply" | "floor-groups" {
+  return usesFractionalPoints === false && YAHOO_FRACTIONAL_YARDAGE_STAT_IDS.has(statId)
+    ? "floor-groups"
+    : "multiply";
+}
+
 export interface YahooConnectionLeagueStatus {
   readonly leagueId: string;
   readonly leagueSeasonId: string;
@@ -714,7 +726,10 @@ export class DrizzleYahooSyncRepository implements YahooSyncRepository {
           bundle.league.settings.scoringRules.map((rule) => ({
             leagueSeasonId,
             statKey: rule.name ?? rule.statId,
-            operation: "multiply",
+            operation: yahooScoringOperation(
+              rule.statId,
+              bundle.league.settings.usesFractionalPoints,
+            ),
             points: String(rule.points),
             providerStatId: rule.statId,
           })),

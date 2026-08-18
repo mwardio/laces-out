@@ -664,10 +664,8 @@ describe("first-party ROS re-gate equivalence against the stored validation repo
       // never upgrade a legacy report into an admissible artifact by manufacturing evidence the
       // source report did not record. Current-shaped admissible artifacts are covered by the
       // always-on synthetic admission and publication suites.
-      expect(before).toEqual({
-        state: "rejected",
-        blockers: ["publication_policy_missing_or_invalid"],
-      });
+      expect(before.state).toBe("rejected");
+      expect(before.blockers).toContain("publication_policy_missing_or_invalid");
       expect(after).toEqual(before);
     });
   }

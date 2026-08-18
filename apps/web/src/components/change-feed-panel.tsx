@@ -179,7 +179,7 @@ export function ChangeFeedPanel({ leagueId }: ChangeFeedPanelProps) {
       ) : events.length === 0 ? (
         <div className={styles.state}>
           <BellRing size={18} aria-hidden="true" />
-          Nothing new since your last sync.
+          No recent league changes.
         </div>
       ) : (
         <div className={styles.list}>
