@@ -16,16 +16,15 @@ import { resolveRecipients, type RecipientMember } from "./recipients.js";
 import { emitChangeEvents, type ChangeEventDraft, type ChangeEventEmitResult } from "./writer.js";
 
 /**
- * Shared change-event producers for completed provider sync and roster change.
+ * Change-event producer for material roster changes discovered by a provider sync.
  *
- * Both run *after* the persister's transaction has committed, so the new roster snapshot and its
- * predecessor are both visible, and both are called inside a `try/catch` at their seam. A change
- * event is an observability surface; it must never turn a good sync into a 500.
+ * It runs *after* the persister's transaction has committed, so the new roster snapshot and its
+ * predecessor are both visible, and it is called inside a `try/catch` at the seam. A change event
+ * is an observability surface; it must never turn a good sync into a 500.
  *
- * Neither producer emits on every write. The sync producer returns early on any receipt state other
- * than `accepted`, and the roster producer compares the new snapshot's checksum with its
- * predecessor's and returns early when they match, enforcing the prior-run comparison before
- * emitting a change.
+ * Routine sync completion is already represented by provider freshness and is not member activity.
+ * This producer compares the new snapshot's checksum with its predecessor's and returns early when
+ * they match, enforcing the prior-run comparison before emitting a change.
  */
 
 const MAX_LEAGUE_MEMBERS = 64;
@@ -149,66 +148,6 @@ export function drizzleChangeEventProducers(database: Database): ChangeEventProd
   };
 }
 
-export async function emitLeagueSyncChangeEvents(
-  dependencies: ChangeEventProducerDependencies,
-  input: ProviderSyncChangeEventInput,
-): Promise<void> {
-  // A replayed artifact never reaches here — both persisters short-circuit to `unchanged` — and
-  // gating on the state is what keeps a re-sync from announcing itself.
-  if (input.state !== "accepted") return;
-  const members = await dependencies.repository.listLeagueMembers(
-    input.leagueId,
-    MAX_LEAGUE_MEMBERS,
-  );
-  if (members.length === 0) return;
-  const descriptor = await dependencies.repository.describeLeagueSeason(input.leagueSeasonId);
-  if (!descriptor) return;
-  const teams = await dependencies.repository.listSeasonTeams(
-    input.leagueSeasonId,
-    MAX_SEASON_TEAMS,
-  );
-
-  const recipients = resolveRecipients({
-    visibility: "league",
-    members,
-    affectedTeamId: null,
-    actorUserId: input.actorUserId,
-  });
-  if (recipients.length === 0) return;
-
-  await dependencies.emit(
-    [
-      {
-        source: "league-sync",
-        eventType: "league.sync.completed",
-        deduplicationKey: changeEventDeduplicationKey({
-          kind: "league.sync.completed",
-          provider: input.provider,
-          leagueSeasonId: input.leagueSeasonId,
-          artifactId: input.artifactId,
-        }),
-        aggregateType: "league-season",
-        aggregateId: input.leagueSeasonId,
-        leagueId: input.leagueId,
-        actorUserId: input.actorUserId,
-        visibility: "league",
-        severity: "info",
-        // Nothing about another member's roster: a league-visible payload stays league-shaped.
-        payload: {
-          v: CHANGE_EVENT_PAYLOAD_VERSION,
-          provider: input.provider,
-          season: descriptor.season,
-          week: descriptor.week,
-          teamCount: teams.length,
-        },
-        occurredAt: input.occurredAt,
-        recipientUserIds: recipients,
-      },
-    ],
-    input.occurredAt,
-  );
-}
-
 function namedPlayers(
   ids: readonly string[],
   namesById: ReadonlyMap<string, string>,
@@ -317,8 +256,8 @@ export async function emitRosterChangeEvents(
 }
 
 /**
- * Both producers at one seam, with the failure policy the seams need: a change-event failure is
- * logged and swallowed so an ingestion that already committed still reports success.
+ * The material-change producer at the provider-sync seam. Failures are logged and swallowed so an
+ * ingestion that already committed still reports success.
  */
 export async function emitProviderSyncChangeEvents(
   dependencies: ChangeEventProducerDependencies,
@@ -326,7 +265,6 @@ export async function emitProviderSyncChangeEvents(
   onError: (error: unknown) => void,
 ): Promise<void> {
   try {
-    await emitLeagueSyncChangeEvents(dependencies, input);
     await emitRosterChangeEvents(dependencies, input);
   } catch (error) {
     onError(error);

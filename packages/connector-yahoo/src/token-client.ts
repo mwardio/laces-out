@@ -1,6 +1,8 @@
 import { redactText } from "@laces-out/security";
 
 export const YAHOO_TOKEN_ENDPOINT = "https://api.login.yahoo.com/oauth2/get_token" as const;
+export const YAHOO_FANTASY_IDENTITY_ENDPOINT =
+  "https://fantasysports.yahooapis.com/fantasy/v2/users;use_login=1" as const;
 const MAX_TOKEN_RESPONSE_BYTES = 64 * 1024;
 
 export type FetchLike = (input: string | URL, init?: RequestInit) => Promise<Response>;
@@ -98,6 +100,16 @@ function parseTokenResponse(value: unknown): TokenResponseShape {
   return record as unknown as TokenResponseShape;
 }
 
+function parseFantasyIdentityResponse(xml: string): string {
+  const match = /<guid>\s*([A-Za-z0-9._~-]{1,255})\s*<\/guid>/u.exec(xml);
+  if (!match?.[1]) {
+    throw new YahooTokenClientError({
+      message: "Yahoo Fantasy user response did not contain a valid account identifier",
+    });
+  }
+  return match[1];
+}
+
 function validateClientOptions(options: YahooTokenClientOptions): void {
   if (options.clientId.trim() === "" || options.clientSecret.trim() === "") {
     throw new TypeError("Yahoo client ID and client secret are required");
@@ -172,22 +184,16 @@ export class YahooTokenClient {
 
   public async exchangeAuthorizationCode(input: {
     readonly code: string;
-    readonly codeVerifier: string;
     readonly signal?: AbortSignal;
   }): Promise<YahooInitialGrantResult> {
-    if (
-      input.code.trim() === "" ||
-      input.code.length > 4096 ||
-      !/^[A-Za-z0-9._~-]{43,128}$/u.test(input.codeVerifier)
-    ) {
-      throw new TypeError("Yahoo authorization code and PKCE verifier are required");
+    if (input.code.trim() === "" || input.code.length > 4096) {
+      throw new TypeError("Yahoo authorization code is required");
     }
     const response = await this.#requestToken(
       new URLSearchParams({
         grant_type: "authorization_code",
         redirect_uri: this.#redirectUri,
         code: input.code,
-        code_verifier: input.codeVerifier,
       }),
       input.signal,
     );
@@ -196,8 +202,12 @@ export class YahooTokenClient {
         message: "Yahoo authorization response omitted the required refresh token",
       });
     }
+    const tokenSet = this.#toTokenSet(response, response.refresh_token);
+    const yahooGuid =
+      tokenSet.yahooGuid ??
+      (await this.#resolveYahooFantasyGuid(tokenSet.accessToken, input.signal));
     return {
-      tokenSet: this.#toTokenSet(response, response.refresh_token),
+      tokenSet: { ...tokenSet, yahooGuid },
       credentialVersion: 1,
     };
   }
@@ -244,6 +254,37 @@ export class YahooTokenClient {
       yahooGuid: response.xoauth_yahoo_guid ?? null,
       scope: response.scope ?? null,
     };
+  }
+
+  async #resolveYahooFantasyGuid(accessToken: string, signal?: AbortSignal): Promise<string> {
+    let response: Response;
+    try {
+      const timeoutSignal = AbortSignal.timeout(this.#timeoutMs);
+      const requestSignal =
+        signal === undefined ? timeoutSignal : AbortSignal.any([signal, timeoutSignal]);
+      response = await this.#fetch(YAHOO_FANTASY_IDENTITY_ENDPOINT, {
+        method: "GET",
+        headers: { Accept: "application/xml", Authorization: `Bearer ${accessToken}` },
+        redirect: "error",
+        signal: requestSignal,
+      });
+    } catch {
+      throw new YahooTokenClientError({
+        message: "Yahoo account identity request failed",
+        retryable: true,
+      });
+    }
+
+    const text = await readBoundedTokenBody(response);
+    if (!response.ok) {
+      throw new YahooTokenClientError({
+        message: "Yahoo rejected the account identity request",
+        status: response.status,
+        oauthCode: "userinfo_failed",
+        retryable: response.status === 429 || response.status >= 500,
+      });
+    }
+    return parseFantasyIdentityResponse(text);
   }
 
   async #requestToken(body: URLSearchParams, signal?: AbortSignal): Promise<TokenResponseShape> {

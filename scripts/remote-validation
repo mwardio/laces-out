@@ -1,0 +1,467 @@
+#!/usr/bin/env bash
+
+set -Eeuo pipefail
+
+readonly SSH_ALIAS="laces-mini"
+readonly MINI_HOST="MackMini.local"
+readonly MINI_USER="laces-worker"
+readonly MINI_WORKER_ROOT="/Users/laces-worker/laces-worker"
+readonly MINI_WORKER_COMMAND="/usr/local/bin/laces-worker doctor"
+readonly EXPECTED_HOST_KEY_FINGERPRINT="SHA256:5rIKJRpEtSay/T3F44u9Mhg3KS6RgNyDj0Kfg6uGaIw"
+readonly EXPECTED_NODE_VERSION="v22.23.2"
+readonly EXPECTED_ARCHITECTURE="arm64"
+readonly PLATFORM_LABEL="Darwin/ARM64"
+readonly MAX_SNAPSHOT_FILE_BYTES=$((100 * 1024 * 1024))
+
+SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
+readonly SCRIPT_DIR
+REPO_ROOT=$(git -C "$SCRIPT_DIR/.." rev-parse --show-toplevel)
+readonly REPO_ROOT
+readonly REMOTE_WORKER="$SCRIPT_DIR/remote-validation-worker.sh"
+readonly ARTIFACT_CONFIG="$SCRIPT_DIR/remote-validation-artifacts.txt"
+readonly KNOWN_HOSTS_FILE="/home/mack/.ssh/laces_mini_known_hosts"
+readonly STATE_ROOT="${XDG_STATE_HOME:-/home/mack/.local/state}/laces-out/remote-validation"
+TEMP_DIR_TO_CLEAN=""
+
+cleanup_controller_temp() {
+  if [[ -n "$TEMP_DIR_TO_CLEAN" && -d "$TEMP_DIR_TO_CLEAN" ]]; then
+    rm -rf -- "$TEMP_DIR_TO_CLEAN"
+  fi
+}
+
+die() {
+  local message=$1
+  local status=${2:-1}
+  printf 'remote-validation: %s\n' "$message" >&2
+  exit "$status"
+}
+
+usage() {
+  cat <<'USAGE'
+Usage:
+  scripts/remote-validation doctor
+  scripts/remote-validation run -- <command> [arguments...]
+  scripts/remote-validation logs <job-id>
+  scripts/remote-validation artifacts <job-id>
+  scripts/remote-validation cleanup <job-id>
+
+Each run sends a filtered snapshot of the current tracked and non-ignored
+untracked working tree to a new disposable job on laces-mini. Results are
+Darwin/ARM64 only and are not evidence of x86-64 Linux compatibility.
+USAGE
+}
+
+require_command() {
+  command -v "$1" >/dev/null 2>&1 || die "required command is unavailable: $1" 69
+}
+
+validate_job_id() {
+  local job_id=$1
+  [[ "$job_id" =~ ^job-[0-9]{8}T[0-9]{6}Z-[0-9]+-[0-9a-f]{12}$ ]] ||
+    die "invalid job ID: $job_id" 64
+}
+
+job_state_dir() {
+  printf '%s/jobs/%s\n' "$STATE_ROOT" "$1"
+}
+
+check_pinned_host_key() {
+  local fingerprint
+
+  [[ -f "$KNOWN_HOSTS_FILE" && ! -L "$KNOWN_HOSTS_FILE" ]] ||
+    die "dedicated known-hosts file is missing or unsafe: $KNOWN_HOSTS_FILE" 78
+  fingerprint=$(ssh-keygen -E sha256 -lf "$KNOWN_HOSTS_FILE" |
+    awk '$3 == "laces-mini" { print $2; exit }')
+  [[ "$fingerprint" == "$EXPECTED_HOST_KEY_FINGERPRINT" ]] ||
+    die "pinned laces-mini host key does not match the expected fingerprint" 78
+}
+
+doctor_json() {
+  check_pinned_host_key
+  ssh "$SSH_ALIAS" "$MINI_WORKER_COMMAND"
+}
+
+validate_doctor_json() {
+  local doctor_output=$1
+
+  DOCTOR_OUTPUT="$doctor_output" node -e '
+    const doctor = JSON.parse(process.env.DOCTOR_OUTPUT);
+    const expected = {
+      hostname: "MackMini.local",
+      username: "laces-worker",
+      architecture: "arm64",
+      nodeVersion: "v22.23.2",
+      workerRoot: "/Users/laces-worker/laces-worker",
+    };
+    for (const [key, value] of Object.entries(expected)) {
+      if (doctor[key] !== value) {
+        console.error(`doctor mismatch for ${key}: expected ${value}, got ${doctor[key]}`);
+        process.exit(78);
+      }
+    }
+    if (typeof doctor.os !== "string" || !doctor.os.startsWith("macOS ")) {
+      console.error(`doctor reported an unexpected OS: ${doctor.os}`);
+      process.exit(78);
+    }
+    if (typeof doctor.availableMemoryBytes === "number" && doctor.availableMemoryBytes < 1073741824) {
+      console.error(
+        `warning: laces-mini currently reports only ${doctor.availableMemoryBytes} available memory bytes`,
+      );
+    }
+  '
+}
+
+doctor() {
+  local doctor_output
+
+  require_command node
+  if ! doctor_output=$(doctor_json); then
+    die "laces-mini doctor failed" 69
+  fi
+  validate_doctor_json "$doctor_output"
+  printf '[laces-mini %s] host key %s verified\n' \
+    "$PLATFORM_LABEL" "$EXPECTED_HOST_KEY_FINGERPRINT"
+  printf '%s\n' "$doctor_output"
+  printf '[laces-mini %s] ARM validation does not prove x86-64 Linux compatibility.\n' \
+    "$PLATFORM_LABEL"
+}
+
+doctor_quiet() {
+  local doctor_output
+
+  require_command node
+  if ! doctor_output=$(doctor_json); then
+    die "laces-mini doctor failed" 69
+  fi
+  validate_doctor_json "$doctor_output"
+}
+
+snapshot_path_is_excluded() {
+  local path=$1
+  local basename=${path##*/}
+
+  case "/$path/" in
+    */.git/* | */node_modules/* | */.next/* | */dist/* | */build/* | */out/* | \
+      */coverage/* | */playwright-report/* | */test-results/* | */reports/* | \
+      */.cache/* | */cache/* | */.npm/* | */.turbo/* | */.vite/* | */.vitest/* | \
+      */tmp/* | */.ds-sync/* | */ds-bundle/* | */.draft-copilot-secrets/* | \
+      */browser-data/* | */user-data/* | */playwright/.auth/* | */.auth/* | */.ssh/*)
+      return 0
+      ;;
+  esac
+
+  case "$basename" in
+    .env | .env.* | .npmrc | .netrc | .git-credentials | credentials.json | \
+      service-account*.json | *.pem | *.p12 | *.pfx | *.key | id_rsa | id_dsa | \
+      id_ecdsa | id_ed25519 | Cookies | 'Login Data' | 'Web Data' | History | \
+      storageState.json | *.log)
+      return 0
+      ;;
+  esac
+
+  return 1
+}
+
+create_snapshot() {
+  local temp_dir=$1
+  local job_id=$2
+  local manifest="$temp_dir/snapshot.manifest"
+  local excluded="$temp_dir/snapshot.excluded"
+  local archive="$temp_dir/snapshot.tar.gz"
+  local metadata="$temp_dir/metadata.env"
+  local path size snapshot_hash dirty_status
+  local file_count=0
+  local total_bytes=0
+
+  : >"$manifest"
+  : >"$excluded"
+
+  while IFS= read -r -d '' path; do
+    [[ "$path" != /* && "$path" != *$'\n'* && "$path" != *$'\r'* ]] ||
+      die "snapshot contains an unsafe path" 65
+    case "/$path/" in
+      */../*) die "snapshot contains parent traversal: $path" 65 ;;
+    esac
+
+    # A tracked deletion is represented by its absence from the snapshot.
+    [[ -e "$REPO_ROOT/$path" || -L "$REPO_ROOT/$path" ]] || continue
+
+    if snapshot_path_is_excluded "$path"; then
+      printf '%s\n' "$path" >>"$excluded"
+      continue
+    fi
+
+    [[ ! -L "$REPO_ROOT/$path" ]] ||
+      die "refusing to transfer symbolic link: $path" 65
+    [[ -f "$REPO_ROOT/$path" ]] ||
+      die "refusing to transfer non-regular file: $path" 65
+
+    size=$(stat -c '%s' -- "$REPO_ROOT/$path")
+    ((size <= MAX_SNAPSHOT_FILE_BYTES)) ||
+      die "file exceeds the 100 MiB snapshot safety limit: $path" 65
+    printf '%s\0' "$path" >>"$manifest"
+    ((file_count += 1))
+    ((total_bytes += size))
+  done < <(git -C "$REPO_ROOT" ls-files -z --cached --others --exclude-standard | sort -z -u)
+
+  ((file_count > 0)) || die "snapshot manifest is empty" 65
+  tar -C "$REPO_ROOT" --create --gzip --file "$archive" --null \
+    --verbatim-files-from --no-recursion --files-from "$manifest"
+  snapshot_hash=$(sha256sum "$archive" | awk '{print $1}')
+
+  if [[ -n $(git -C "$REPO_ROOT" status --porcelain --untracked-files=normal) ]]; then
+    dirty_status=true
+  else
+    dirty_status=false
+  fi
+
+  {
+    printf 'metadata_version=1\n'
+    printf 'job_id=%s\n' "$job_id"
+    printf 'source_host=dakoota\n'
+    printf 'source_repository=%s\n' "$REPO_ROOT"
+    printf 'local_commit=%s\n' "$(git -C "$REPO_ROOT" rev-parse HEAD)"
+    printf 'dirty=%s\n' "$dirty_status"
+    printf 'platform_label=%s\n' "$PLATFORM_LABEL"
+    printf 'expected_architecture=%s\n' "$EXPECTED_ARCHITECTURE"
+    printf 'expected_node_version=%s\n' "$EXPECTED_NODE_VERSION"
+    printf 'snapshot_file_count=%s\n' "$file_count"
+    printf 'snapshot_source_bytes=%s\n' "$total_bytes"
+    printf 'snapshot_sha256=%s\n' "$snapshot_hash"
+    printf 'created_at_utc=%s\n' "$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+  } >"$metadata"
+
+  printf '%s\n' "$file_count" >"$temp_dir/file-count"
+  printf '%s\n' "$total_bytes" >"$temp_dir/source-bytes"
+}
+
+remote_worker_action() {
+  local action=$1
+  local job_id=$2
+
+  ssh "$SSH_ALIAS" "/bin/bash -s -- $MINI_WORKER_ROOT $job_id $action" <"$REMOTE_WORKER"
+}
+
+validate_results_archive() {
+  local archive=$1
+  local member
+
+  while IFS= read -r member; do
+    [[ -n "$member" && "$member" != /* && "$member" != *$'\r'* ]] ||
+      die "unsafe results archive member" 65
+    case "/$member/" in
+      */../*) die "results archive contains parent traversal: $member" 65 ;;
+    esac
+    case "$member" in
+      logs | logs/* | metadata.env | result.env | artifacts.tar.gz) ;;
+      *) die "unexpected results archive member: $member" 65 ;;
+    esac
+  done < <(tar -tzf "$archive")
+}
+
+retrieve_results() {
+  local job_id=$1
+  local state_dir
+  local incoming
+
+  validate_job_id "$job_id"
+  state_dir=$(job_state_dir "$job_id")
+  mkdir -p -m 700 "$state_dir"
+  incoming="$state_dir/results.tar.gz.incoming"
+
+  scp -q "$SSH_ALIAS:$MINI_WORKER_ROOT/jobs/$job_id/results.tar.gz" "$incoming"
+  validate_results_archive "$incoming"
+  mv -f -- "$incoming" "$state_dir/results.tar.gz"
+  tar -xzf "$state_dir/results.tar.gz" -C "$state_dir" --no-same-owner
+}
+
+validate_artifacts_archive() {
+  local archive=$1
+  local member
+
+  while IFS= read -r member; do
+    [[ -n "$member" && "$member" != /* && "$member" != *$'\r'* ]] ||
+      die "unsafe artifact archive member" 65
+    case "/$member/" in
+      */../*) die "artifact archive contains parent traversal: $member" 65 ;;
+    esac
+  done < <(tar -tzf "$archive")
+}
+
+extract_artifacts() {
+  local state_dir=$1
+  local archive="$state_dir/artifacts.tar.gz"
+  local destination="$state_dir/artifacts"
+
+  [[ -f "$archive" ]] || die "artifact archive is unavailable" 66
+  validate_artifacts_archive "$archive"
+  mkdir -p -m 700 "$destination"
+  if [[ ! -e "$destination/.extracted" ]]; then
+    tar -xzf "$archive" -C "$destination" --no-same-owner
+    : >"$destination/.extracted"
+  fi
+}
+
+run_remote() {
+  local -a command_args=("$@")
+  local job_id random_suffix temp_dir state_dir
+  local file_count source_bytes remote_status=0 retrieve_status=0
+  local archive metadata argv_file
+
+  ((${#command_args[@]} > 0)) || die "run requires a command after --" 64
+  [[ -x "$REMOTE_WORKER" ]] || die "remote worker helper is missing or not executable" 66
+  [[ -f "$ARTIFACT_CONFIG" ]] || die "artifact configuration is missing" 66
+  require_command git
+  require_command ssh
+  require_command scp
+  require_command tar
+  require_command sha256sum
+  doctor_quiet
+
+  random_suffix=$(od -An -N6 -tx1 /dev/urandom | tr -d ' \n')
+  job_id="job-$(date -u +'%Y%m%dT%H%M%SZ')-$$-$random_suffix"
+  validate_job_id "$job_id"
+  temp_dir=$(mktemp -d "${TMPDIR:-/tmp}/laces-remote.XXXXXX")
+  chmod 700 "$temp_dir"
+  TEMP_DIR_TO_CLEAN=$temp_dir
+  trap cleanup_controller_temp EXIT
+
+  create_snapshot "$temp_dir" "$job_id"
+  archive="$temp_dir/snapshot.tar.gz"
+  metadata="$temp_dir/metadata.env"
+  argv_file="$temp_dir/command.argv"
+  : >"$argv_file"
+  printf '%s\0' "${command_args[@]}" >"$argv_file"
+
+  state_dir=$(job_state_dir "$job_id")
+  mkdir -p -m 700 "$state_dir"
+  cp -- "$temp_dir/snapshot.excluded" "$state_dir/snapshot.excluded"
+  cp -- "$metadata" "$state_dir/controller-metadata.env"
+  file_count=$(<"$temp_dir/file-count")
+  source_bytes=$(<"$temp_dir/source-bytes")
+
+  printf '[laces-mini %s] allocating %s\n' "$PLATFORM_LABEL" "$job_id"
+  remote_worker_action allocate "$job_id" >/dev/null
+
+  printf '[laces-mini %s] transferring %s files (%s source bytes)\n' \
+    "$PLATFORM_LABEL" "$file_count" "$source_bytes"
+  scp -q "$archive" "$argv_file" "$metadata" "$ARTIFACT_CONFIG" \
+    "$SSH_ALIAS:$MINI_WORKER_ROOT/jobs/$job_id/control/"
+
+  printf '[laces-mini %s] installing with npm ci and executing requested command\n' \
+    "$PLATFORM_LABEL"
+  set +e
+  remote_worker_action run "$job_id" 2>&1 | tee "$state_dir/stream.log"
+  remote_status=${PIPESTATUS[0]}
+  set -e
+
+  set +e
+  retrieve_results "$job_id"
+  retrieve_status=$?
+  set -e
+  if ((retrieve_status != 0)); then
+    printf 'remote-validation: unable to retrieve results for %s\n' "$job_id" >&2
+  else
+    set +e
+    extract_artifacts "$state_dir"
+    retrieve_status=$?
+    set -e
+  fi
+
+  printf '[laces-mini %s] JOB_ID=%s EXIT_STATUS=%s\n' \
+    "$PLATFORM_LABEL" "$job_id" "$remote_status"
+  printf '[laces-mini %s] local results: %s\n' "$PLATFORM_LABEL" "$state_dir"
+  printf '[laces-mini %s] ARM validation does not prove x86-64 Linux compatibility.\n' \
+    "$PLATFORM_LABEL"
+
+  if ((remote_status != 0)); then
+    return "$remote_status"
+  fi
+  return "$retrieve_status"
+}
+
+show_logs() {
+  local job_id=$1
+  local state_dir
+
+  validate_job_id "$job_id"
+  state_dir=$(job_state_dir "$job_id")
+  if [[ ! -f "$state_dir/logs/install.log" && ! -f "$state_dir/logs/command.log" ]]; then
+    retrieve_results "$job_id"
+  fi
+
+  printf '[laces-mini %s] logs for %s\n' "$PLATFORM_LABEL" "$job_id"
+  if [[ -f "$state_dir/logs/install.log" ]]; then
+    printf '%s\n' '--- npm ci ---'
+    cat -- "$state_dir/logs/install.log"
+  fi
+  if [[ -f "$state_dir/logs/command.log" ]]; then
+    printf '%s\n' '--- command ---'
+    cat -- "$state_dir/logs/command.log"
+  fi
+}
+
+show_artifacts() {
+  local job_id=$1
+  local state_dir
+
+  validate_job_id "$job_id"
+  state_dir=$(job_state_dir "$job_id")
+  if [[ ! -f "$state_dir/artifacts.tar.gz" ]]; then
+    retrieve_results "$job_id"
+  fi
+  extract_artifacts "$state_dir"
+
+  printf '[laces-mini %s] artifacts for %s: %s/artifacts\n' \
+    "$PLATFORM_LABEL" "$job_id" "$state_dir"
+  find "$state_dir/artifacts" -mindepth 1 ! -name .extracted -print | sort
+}
+
+cleanup_remote() {
+  local job_id=$1
+
+  validate_job_id "$job_id"
+  doctor_quiet
+  remote_worker_action cleanup "$job_id"
+  printf '[laces-mini %s] removed only remote job %s\n' "$PLATFORM_LABEL" "$job_id"
+  printf '[laces-mini %s] local logs and artifacts remain under %s\n' \
+    "$PLATFORM_LABEL" "$(job_state_dir "$job_id")"
+}
+
+main() {
+  local subcommand=${1:-}
+
+  case "$subcommand" in
+    doctor)
+      (($# == 1)) || die "doctor takes no arguments" 64
+      doctor
+      ;;
+    run)
+      shift
+      [[ ${1:-} == -- ]] || die "run syntax is: run -- <command> [arguments...]" 64
+      shift
+      run_remote "$@"
+      ;;
+    logs)
+      (($# == 2)) || die "logs requires one job ID" 64
+      show_logs "$2"
+      ;;
+    artifacts)
+      (($# == 2)) || die "artifacts requires one job ID" 64
+      show_artifacts "$2"
+      ;;
+    cleanup)
+      (($# == 2)) || die "cleanup requires one job ID" 64
+      cleanup_remote "$2"
+      ;;
+    -h | --help | help)
+      usage
+      ;;
+    *)
+      usage >&2
+      exit 64
+      ;;
+  esac
+}
+
+main "$@"

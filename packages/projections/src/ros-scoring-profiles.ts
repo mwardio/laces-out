@@ -22,6 +22,7 @@ export const ROS_SCORING_PROFILE_KEYS = [
   "standard",
   "espn-standard-2pt",
   "espn-standard-2pt-nxm",
+  "espn-ppr-yardage-bonus-6pt-pass",
 ] as const;
 
 export type RosScoringProfileKey = (typeof ROS_SCORING_PROFILE_KEYS)[number];
@@ -86,6 +87,7 @@ const LABELS: Readonly<Record<RosScoringProfileKey, string>> = {
   standard: "Standard (non-PPR)",
   "espn-standard-2pt": "Standard + 2-pt, split kicker brackets, XP-missed penalty",
   "espn-standard-2pt-nxm": "Standard + 2-pt, split kicker brackets, no XP-missed penalty",
+  "espn-ppr-yardage-bonus-6pt-pass": "Full PPR + yardage-game bonuses, 6-pt passing TD",
 };
 
 function finalizeEntry(
@@ -200,10 +202,34 @@ const ESPN_STANDARD_2PT_NXM_RULES: readonly ProjectionScoringProfile["rules"][nu
   ...ESPN_STANDARD_DST_RULES,
 ];
 
+/**
+ * Exact scoring shape observed in the ESPN league whose 300/400 passing-yard and 100/200
+ * rushing/receiving-yard game bonuses motivated the probability-component model. Its other
+ * differences from the no-XP-miss ESPN shape are Full PPR, six-point passing touchdowns, and a
+ * six-point 60-plus field-goal bracket. This profile is intentionally cataloged separately: code
+ * support alone must not let a league borrow evidence admitted under a merely similar profile.
+ */
+const ESPN_PPR_YARDAGE_BONUS_6PT_PASS_RULES: readonly ProjectionScoringProfile["rules"][number][] =
+  [
+    ...ESPN_STANDARD_2PT_NXM_RULES.filter(
+      (rule) => !["passing_touchdowns", "field_goals_made_60_plus"].includes(rule.statId),
+    ),
+    { statId: "passing_touchdowns", points: 6 },
+    { statId: "passing_yards_300_399_probability", points: 1 },
+    { statId: "passing_yards_400_plus_probability", points: 3 },
+    { statId: "rushing_yards_100_199_probability", points: 1 },
+    { statId: "rushing_yards_200_plus_probability", points: 3 },
+    { statId: "receptions", points: 1 },
+    { statId: "receiving_yards_100_199_probability", points: 1 },
+    { statId: "receiving_yards_200_plus_probability", points: 3 },
+    { statId: "field_goals_made_60_plus", points: 6 },
+  ];
+
 const CATALOG: readonly RosScoringProfileEntry[] = [
   ...(["full-ppr", "half-ppr", "standard"] as const).map(buildLegacyEntry),
   finalizeEntry("espn-standard-2pt", ESPN_STANDARD_2PT_RULES),
   finalizeEntry("espn-standard-2pt-nxm", ESPN_STANDARD_2PT_NXM_RULES),
+  finalizeEntry("espn-ppr-yardage-bonus-6pt-pass", ESPN_PPR_YARDAGE_BONUS_6PT_PASS_RULES),
 ];
 
 const BY_KEY = new Map<string, RosScoringProfileEntry>(

@@ -22,13 +22,14 @@ describe("rosScoringProfileCatalog", () => {
     ).toEqual(["full-ppr", "half-ppr", "standard"]);
   });
 
-  it("covers exactly five profiles, in fixed order — order is load bearing", () => {
+  it("covers every admitted profile shape in fixed order — order is load bearing", () => {
     expect([...ROS_SCORING_PROFILE_KEYS]).toEqual([
       "full-ppr",
       "half-ppr",
       "standard",
       "espn-standard-2pt",
       "espn-standard-2pt-nxm",
+      "espn-ppr-yardage-bonus-6pt-pass",
     ]);
     expect(rosScoringProfileCatalog().map((entry) => entry.key)).toEqual([
       ...ROS_SCORING_PROFILE_KEYS,
@@ -111,6 +112,7 @@ describe("rosScoringProfileCatalog", () => {
       "Standard (non-PPR)",
       "Standard + 2-pt, split kicker brackets, XP-missed penalty",
       "Standard + 2-pt, split kicker brackets, no XP-missed penalty",
+      "Full PPR + yardage-game bonuses, 6-pt passing TD",
     ]);
   });
 
@@ -297,6 +299,25 @@ describe("ESPN-shaped catalog entries", () => {
     rule("99:slot:16", "ESPN stat 99 override for D/ST", 1, { provider: "espn" }),
   ];
 
+  // League A is the no-XP-miss source shape plus Full PPR, six-point passing touchdowns, a
+  // six-point 60-plus field goal, and ESPN's mutually exclusive yardage-game categories.
+  const ESPN_PPR_YARDAGE_BONUS_6PT_PASS_SOURCE_ROWS: readonly StoredLeagueScoringRule[] = [
+    ...ESPN_STANDARD_2PT_NXM_SOURCE_ROWS.map((stored) =>
+      stored.providerStatId === "4"
+        ? { ...stored, points: 6 }
+        : stored.providerStatId === "201"
+          ? { ...stored, points: 6 }
+          : stored,
+    ),
+    rule("17", "17", 1, { provider: "espn" }),
+    rule("18", "18", 3, { provider: "espn" }),
+    rule("37", "37", 1, { provider: "espn" }),
+    rule("38", "38", 3, { provider: "espn" }),
+    rule("53", "53", 1, { provider: "espn" }),
+    rule("56", "56", 1, { provider: "espn" }),
+    rule("57", "57", 3, { provider: "espn" }),
+  ];
+
   /** The positions the ROS rail releases — the scope compared by per-cell identity. */
   const RAIL_POSITIONS = ["QB", "RB", "WR", "TE", "K", "DST"] as const;
 
@@ -315,6 +336,11 @@ describe("ESPN-shaped catalog entries", () => {
       key: "espn-standard-2pt-nxm" as const,
       rows: ESPN_STANDARD_2PT_NXM_SOURCE_ROWS,
       frozenDigest: "d0e49cad7fbbdf20552427d107bea2cd9a6c2f735b4d67745d5e5ca9e85832eb",
+    },
+    {
+      key: "espn-ppr-yardage-bonus-6pt-pass" as const,
+      rows: ESPN_PPR_YARDAGE_BONUS_6PT_PASS_SOURCE_ROWS,
+      frozenDigest: "e6c8565a7d77ef3678fe792b51868eadac7c60951ebc7309f508e1298db0c80a",
     },
   ])(
     "matches the $key source rows at every rail position, with its digest byte-frozen",
@@ -346,8 +372,12 @@ describe("ESPN-shaped catalog entries", () => {
     },
   );
 
-  it("carries no zero-point rules in either new entry", () => {
-    for (const key of ["espn-standard-2pt", "espn-standard-2pt-nxm"] as const) {
+  it("carries no zero-point rules in any ESPN-shaped entry", () => {
+    for (const key of [
+      "espn-standard-2pt",
+      "espn-standard-2pt-nxm",
+      "espn-ppr-yardage-bonus-6pt-pass",
+    ] as const) {
       for (const rule of rosScoringProfile(key).profile.rules) {
         expect(rule.points).not.toBe(0);
       }

@@ -54,6 +54,8 @@ export interface LiveDraftObserverTuning {
   /** Slow rescan retained after completion, in case a commissioner reopens the room. */
   readonly completedRescanIntervalMs: number;
   readonly heartbeatIntervalMs: number;
+  /** Unchanged healthy boards are periodically re-published to repair a lost upload or reset. */
+  readonly forcedObservationIntervalMs: number;
   readonly transientUploadsPerSecond: number;
 }
 
@@ -62,6 +64,7 @@ export const LIVE_DRAFT_OBSERVER_TUNING: LiveDraftObserverTuning = {
   rescanIntervalMs: 5_000,
   completedRescanIntervalMs: 30_000,
   heartbeatIntervalMs: ESPN_LIVE_DRAFT_LIMITS.heartbeatIntervalMs,
+  forcedObservationIntervalMs: ESPN_LIVE_DRAFT_LIMITS.freshWindowMs,
   transientUploadsPerSecond: ESPN_LIVE_DRAFT_LIMITS.transientUploadsPerSecond,
 };
 
@@ -92,6 +95,8 @@ function tuned(tuning: Partial<LiveDraftObserverTuning> | undefined): LiveDraftO
       tuning?.completedRescanIntervalMs ?? LIVE_DRAFT_OBSERVER_TUNING.completedRescanIntervalMs,
     heartbeatIntervalMs:
       tuning?.heartbeatIntervalMs ?? LIVE_DRAFT_OBSERVER_TUNING.heartbeatIntervalMs,
+    forcedObservationIntervalMs:
+      tuning?.forcedObservationIntervalMs ?? LIVE_DRAFT_OBSERVER_TUNING.forcedObservationIntervalMs,
     transientUploadsPerSecond:
       tuning?.transientUploadsPerSecond ?? LIVE_DRAFT_OBSERVER_TUNING.transientUploadsPerSecond,
   };
@@ -138,9 +143,15 @@ export function createLiveDraftObserver(options: LiveDraftObserverOptions): Live
 
   let running = false;
   let debounceHandle: number | null = null;
+  let transientTrailingHandle: number | null = null;
   let rescanHandle: number | null = null;
   let heartbeatHandle: number | null = null;
   let previous: EspnLiveDraftSnapshot | null = null;
+  // Liveness is earned by the latest successful scan, not merely by a timer still firing. If the
+  // DOM contract drifts mid-draft, suppressing heartbeats lets downstream advice expire instead of
+  // blessing the last readable bid forever.
+  let scanHealthy = false;
+  let lastPublishedAt = Number.NEGATIVE_INFINITY;
   let transientSignature = "none";
   let transientWindowStart = 0;
   let transientWindowCount = 0;
@@ -149,6 +160,13 @@ export function createLiveDraftObserver(options: LiveDraftObserverOptions): Live
     if (debounceHandle !== null) {
       timers.clearTimeout(debounceHandle);
       debounceHandle = null;
+    }
+  }
+
+  function clearTransientTrailing(): void {
+    if (transientTrailingHandle !== null) {
+      timers.clearTimeout(transientTrailingHandle);
+      transientTrailingHandle = null;
     }
   }
 
@@ -170,11 +188,38 @@ export function createLiveDraftObserver(options: LiveDraftObserverOptions): Live
     return true;
   }
 
+  function publishTransient(snapshot: EspnLiveDraftSnapshot): void {
+    transientSignature = transientAuctionSignature(snapshot);
+    previous = snapshot;
+    lastPublishedAt = timers.now();
+    sink.transientAuction(snapshot);
+  }
+
+  /**
+   * Preserve the newest throttled bid and publish it as soon as the current one-second window rolls
+   * over. Dropping the tail of a burst until the five-second reconciliation scan would make the
+   * quiet, final bid the least likely transition to arrive promptly.
+   */
+  function scheduleTrailingTransient(snapshot: EspnLiveDraftSnapshot): void {
+    previous = snapshot;
+    const remainingMs = Math.max(1, transientWindowStart + 1_000 - timers.now());
+    clearTransientTrailing();
+    transientTrailingHandle = timers.setTimeout(() => {
+      transientTrailingHandle = null;
+      if (!running || !scanHealthy) return;
+      if (!transientAllowed()) {
+        scheduleTrailingTransient(snapshot);
+        return;
+      }
+      publishTransient(snapshot);
+    }, remainingMs);
+  }
+
   function startHeartbeat(): void {
     if (heartbeatHandle !== null) return;
     heartbeatHandle = timers.setInterval(() => {
       const state = previous?.state;
-      if (state === "live" || state === "paused") sink.heartbeat(state);
+      if (scanHealthy && (state === "live" || state === "paused")) sink.heartbeat(state);
     }, tuning.heartbeatIntervalMs);
   }
 
@@ -199,23 +244,35 @@ export function createLiveDraftObserver(options: LiveDraftObserverOptions): Live
     clearDebounce();
     const result = scan();
     if (!result.ok) {
+      scanHealthy = false;
+      clearTransientTrailing();
       sink.failure(result.reason);
       return;
     }
+    scanHealthy = true;
     const snapshot = result.snapshot;
     if (previous !== null && snapshot.digestSource === previous.digestSource) {
       const signature = transientAuctionSignature(snapshot);
-      if (signature !== transientSignature && transientAllowed()) {
-        transientSignature = signature;
+      const recoveryDue = timers.now() - lastPublishedAt >= tuning.forcedObservationIntervalMs;
+      if (signature !== transientSignature || recoveryDue) {
+        if (transientAllowed()) {
+          clearTransientTrailing();
+          publishTransient(snapshot);
+        } else {
+          scheduleTrailingTransient(snapshot);
+        }
+      } else {
         previous = snapshot;
-        sink.transientAuction(snapshot);
+        clearTransientTrailing();
       }
       return;
     }
+    clearTransientTrailing();
     const classified =
       previous === null && reason === "reconnect" ? "reconnect" : classify(previous, snapshot);
     previous = snapshot;
     transientSignature = transientAuctionSignature(snapshot);
+    lastPublishedAt = timers.now();
     sink.snapshot(snapshot, classified);
     if (snapshot.state === "complete") settleCompleted();
   }
@@ -245,6 +302,7 @@ export function createLiveDraftObserver(options: LiveDraftObserverOptions): Live
       running = false;
       mutations.stop();
       clearDebounce();
+      clearTransientTrailing();
       rescanHandle = stopInterval(rescanHandle);
       heartbeatHandle = stopInterval(heartbeatHandle);
     },

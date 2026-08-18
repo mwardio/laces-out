@@ -6,6 +6,8 @@ interface WorkspaceWebpackConfig {
   };
 }
 
+const isMiniRemoteValidation = process.env.LACES_REMOTE_PLATFORM === "darwin-arm64";
+
 const nextConfig: NextConfig = {
   output: "standalone",
   reactStrictMode: true,
@@ -18,6 +20,7 @@ const nextConfig: NextConfig = {
   ],
   poweredByHeader: false,
   typedRoutes: true,
+  ...(isMiniRemoteValidation ? { experimental: { cpus: 2 } } : {}),
   webpack(config: WorkspaceWebpackConfig): WorkspaceWebpackConfig {
     // Workspace packages use NodeNext's emitted `.js` specifiers while their
     // development exports point at TypeScript source. Resolve both shapes so

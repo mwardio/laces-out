@@ -1,6 +1,7 @@
 import type { EspnLiveDraftPickOwnership } from "@laces-out/contracts";
 import { playerId, rosterSlotId, teamId, type RosterSlot } from "@laces-out/domain";
 import type { DraftConfig } from "@laces-out/engine-draft";
+import { PgDialect } from "drizzle-orm/pg-core";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -14,8 +15,14 @@ import {
 } from "./draft-session.js";
 import type { ProviderTeamCandidate } from "./espn-live-draft-identity.js";
 import {
+  controlledTeamIdForPulse,
+  espnLiveDraftHeartbeatRenewalPredicate,
+  espnLiveDraftLeaseClaimPredicate,
   espnLiveDraftSessionSettings,
+  espnLiveDraftPulseCurrentAuctionSql,
   espnPlayerCrosswalk,
+  liveDraftObservationCanAdvance,
+  liveDraftHeartbeatMatchesFeed,
   projectEspnLiveDraftFeedStatus,
   providerSnakePickOrder,
   type EspnLiveDraftFeedProjection,
@@ -153,6 +160,176 @@ describe("projectEspnLiveDraftFeedStatus", () => {
       ].sort(),
     );
     expect(JSON.stringify(status)).not.toMatch(/device|token|cookie|swid|espn_s2|lease/iu);
+  });
+});
+
+describe("liveDraftObservationCanAdvance", () => {
+  const current = {
+    activeDeviceId: "60000000-0000-4000-8000-000000000001",
+    activePageSessionId: "70000000-0000-4000-8000-000000000001",
+    lastPageRevision: 12,
+    leaseGeneration: 4,
+    manualBackupActive: false,
+  };
+
+  it("allows only a strictly newer revision from the row-locked active page", () => {
+    expect(
+      liveDraftObservationCanAdvance(current, {
+        deviceId: current.activeDeviceId,
+        pageSessionId: current.activePageSessionId,
+        pageRevision: 13,
+        expectedLeaseGeneration: 4,
+        expectedManualBackupActive: false,
+      }),
+    ).toBe(true);
+    for (const pageRevision of [11, 12]) {
+      expect(
+        liveDraftObservationCanAdvance(current, {
+          deviceId: current.activeDeviceId,
+          pageSessionId: current.activePageSessionId,
+          pageRevision,
+          expectedLeaseGeneration: 4,
+          expectedManualBackupActive: false,
+        }),
+      ).toBe(false);
+    }
+  });
+
+  it("rejects a delayed observation after another device or page takes the lease", () => {
+    expect(
+      liveDraftObservationCanAdvance(current, {
+        deviceId: "60000000-0000-4000-8000-000000000002",
+        pageSessionId: current.activePageSessionId,
+        pageRevision: 99,
+        expectedLeaseGeneration: 4,
+        expectedManualBackupActive: false,
+      }),
+    ).toBe(false);
+    expect(
+      liveDraftObservationCanAdvance(current, {
+        deviceId: current.activeDeviceId,
+        pageSessionId: "70000000-0000-4000-8000-000000000002",
+        pageRevision: 99,
+        expectedLeaseGeneration: 4,
+        expectedManualBackupActive: false,
+      }),
+    ).toBe(false);
+  });
+
+  it("rejects a request planned on the other side of a manual-backup toggle", () => {
+    expect(
+      liveDraftObservationCanAdvance(
+        { ...current, manualBackupActive: true },
+        {
+          deviceId: current.activeDeviceId,
+          pageSessionId: current.activePageSessionId,
+          pageRevision: 13,
+          expectedLeaseGeneration: 4,
+          expectedManualBackupActive: false,
+        },
+      ),
+    ).toBe(false);
+  });
+
+  it("rejects a delayed request after the feed generation advances and cycles back", () => {
+    expect(
+      liveDraftObservationCanAdvance(
+        { ...current, leaseGeneration: 6 },
+        {
+          deviceId: current.activeDeviceId,
+          pageSessionId: current.activePageSessionId,
+          pageRevision: 13,
+          expectedLeaseGeneration: 4,
+          expectedManualBackupActive: false,
+        },
+      ),
+    ).toBe(false);
+  });
+});
+
+describe("ESPN live draft lease authority", () => {
+  it("requires both device and page identity to renew an unexpired lease", () => {
+    const query = new PgDialect().sqlToQuery(
+      espnLiveDraftLeaseClaimPredicate({
+        feedId: "70000000-0000-4000-8000-000000000001",
+        deviceId: "60000000-0000-4000-8000-000000000001",
+        pageSessionId: "80000000-0000-4000-8000-000000000001",
+        expectedGeneration: 4,
+        now: NOW,
+      }),
+    ).sql;
+    expect(query).toMatch(
+      /active_device_id" = \$\d+ and "draft_provider_feeds"\."active_page_session_id" = \$\d+/u,
+    );
+    expect(query).not.toMatch(/or "draft_provider_feeds"\."active_device_id" = \$\d+ or/u);
+  });
+});
+
+describe("ESPN live draft heartbeat authority", () => {
+  it("does not let a stale or initial heartbeat manufacture freshness", () => {
+    const accepted = { lastPageRevision: 12, lastChecksum: "a".repeat(64) };
+    expect(
+      liveDraftHeartbeatMatchesFeed(accepted, {
+        revision: 12,
+        lastChecksumSha256: "a".repeat(64),
+      }),
+    ).toBe(true);
+    expect(
+      liveDraftHeartbeatMatchesFeed(accepted, {
+        revision: 11,
+        lastChecksumSha256: "a".repeat(64),
+      }),
+    ).toBe(false);
+    expect(
+      liveDraftHeartbeatMatchesFeed(accepted, {
+        revision: 12,
+        lastChecksumSha256: "b".repeat(64),
+      }),
+    ).toBe(false);
+    expect(
+      liveDraftHeartbeatMatchesFeed(
+        { lastPageRevision: null, lastChecksum: null },
+        { revision: 0, lastChecksumSha256: null },
+      ),
+    ).toBe(false);
+  });
+
+  it("atomically fences liveness by the exact active page revision and checksum", () => {
+    const query = new PgDialect().sqlToQuery(
+      espnLiveDraftHeartbeatRenewalPredicate({
+        feedId: "70000000-0000-4000-8000-000000000001",
+        deviceId: "60000000-0000-4000-8000-000000000001",
+        pageSessionId: "80000000-0000-4000-8000-000000000001",
+        revision: 12,
+        lastChecksumSha256: "a".repeat(64),
+      }),
+    ).sql;
+    expect(query).toContain('"draft_provider_feeds"."active_device_id" =');
+    expect(query).toContain('"draft_provider_feeds"."active_page_session_id" =');
+    expect(query).toContain('"draft_provider_feeds"."last_page_revision" =');
+    expect(query).toContain('"draft_provider_feeds"."last_checksum" =');
+  });
+});
+
+describe("live pulse observation projection", () => {
+  it("selects only currentAuction from cumulative observation JSON on the polling path", () => {
+    const query = new PgDialect().sqlToQuery(espnLiveDraftPulseCurrentAuctionSql).sql;
+    expect(query).toContain(`"draft_provider_observations"."normalized_payload"->'currentAuction'`);
+    expect(query.trim()).not.toBe(`"draft_provider_observations"."normalized_payload"`);
+  });
+});
+
+describe("controlledTeamIdForPulse", () => {
+  const configured = new Set([TEAM_A, TEAM_B]);
+
+  it("uses only this member's explicit in-draft team claim", () => {
+    expect(controlledTeamIdForPulse(TEAM_A, configured)).toBe(TEAM_A);
+    expect(controlledTeamIdForPulse(null, configured)).toBeNull();
+    expect(controlledTeamIdForPulse("40000000-0000-4000-8000-000000000099", configured)).toBeNull();
+  });
+
+  it("fails closed when the membership row disappears during a pulse read", () => {
+    expect(controlledTeamIdForPulse(undefined, configured)).toBeUndefined();
   });
 });
 

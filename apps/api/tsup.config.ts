@@ -1,7 +1,13 @@
 import { defineConfig } from "tsup";
 
 export default defineConfig({
-  entry: ["src/server.ts", "src/migrate.ts", "src/create-owner.ts", "src/reset-password.ts"],
+  entry: [
+    "src/server.ts",
+    "src/migrate.ts",
+    "src/create-owner.ts",
+    "src/reset-password.ts",
+    "src/mint-draft-read.ts",
+  ],
   format: ["esm"],
   platform: "node",
   target: "node22",
@@ -13,5 +19,5 @@ export default defineConfig({
   external: ["nodemailer"],
   // Workspace package exports point at TypeScript for local development. Bundle only those
   // packages so the production Node entrypoint never attempts to execute .ts files.
-  noExternal: [/^@fantasy\//u],
+  noExternal: [/^@laces-out\//u],
 });
