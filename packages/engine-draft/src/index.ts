@@ -3,6 +3,7 @@ export * from "./auction-values.js";
 export * from "./analyzer.js";
 export * from "./advisor.js";
 export * from "./availability.js";
+export * from "./live-auction-advisor.js";
 export * from "./reducer.js";
 export * from "./simulator.js";
 export * from "./snake.js";

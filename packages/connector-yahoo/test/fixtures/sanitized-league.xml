@@ -22,8 +22,8 @@
       </roster_positions>
       <stat_categories>
         <stats>
-          <stat><stat_id>4</stat_id><name>Passing Yards</name></stat>
-          <stat><stat_id>10</stat_id><name>Rushing Touchdowns</name></stat>
+          <stat><stat_id>4</stat_id><name>Passing Yards</name><position_type>O</position_type><stat_position_types><stat_position_type><position_type>O</position_type></stat_position_type></stat_position_types></stat>
+          <stat><stat_id>10</stat_id><name>Rushing Touchdowns</name><position_type>O</position_type><stat_position_types><stat_position_type><position_type>O</position_type></stat_position_type></stat_position_types></stat>
         </stats>
       </stat_categories>
       <stat_modifiers>
@@ -32,6 +32,8 @@
           <stat><stat_id>10</stat_id><value>6</value></stat>
         </stats>
       </stat_modifiers>
+      <uses_fractional_points>0</uses_fractional_points>
+      <uses_negative_points>1</uses_negative_points>
     </settings>
     <teams count="2">
       <team>

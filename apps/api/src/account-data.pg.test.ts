@@ -187,6 +187,8 @@ async function startDisposablePostgres(): Promise<DisposablePostgres> {
       "--rm",
       "--name",
       containerName,
+      "--tmpfs",
+      "/var/lib/postgresql/data",
       "-e",
       `POSTGRES_USER=${user}`,
       "-e",
@@ -235,7 +237,7 @@ async function startDisposablePostgres(): Promise<DisposablePostgres> {
   return {
     url,
     cleanup: () => {
-      execFileSync("docker", ["rm", "-f", containerName], { stdio: "ignore" });
+      execFileSync("docker", ["rm", "-f", "-v", containerName], { stdio: "ignore" });
     },
   };
 }

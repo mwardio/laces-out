@@ -4,7 +4,7 @@ import {
 } from "./first-party.js";
 import type { ProjectionScoringBonus, ProjectionScoringProfile } from "./scoring.js";
 
-export const LEAGUE_SCORING_NORMALIZATION_VERSION = "league-scoring-map-v2" as const;
+export const LEAGUE_SCORING_NORMALIZATION_VERSION = "league-scoring-map-v3" as const;
 
 export const LEAGUE_SCORING_MAP_PROVENANCE = {
   version: LEAGUE_SCORING_NORMALIZATION_VERSION,
@@ -316,23 +316,85 @@ const YAHOO_YARDS_ALLOWED_BUCKET_IDS = new Set([
   "81",
 ]);
 
-/** Direct, per-unit ESPN scoring IDs only. Bucket and per-N IDs are intentionally excluded. */
+const YAHOO_WHOLE_GROUP_DIVISORS = new Set([5, 10, 20, 25, 50, 100]);
+const YAHOO_WHOLE_GROUP_COMPONENT_BASES = new Set([
+  "passing_yards",
+  "rushing_yards",
+  "receiving_yards",
+]);
+
+function yahooWholeGroupRule(
+  statId: string,
+  pointsPerUnit: number,
+): { readonly statId: string; readonly points: number } | null {
+  // Multiplying an integer stat by an integer already produces a whole total, so Yahoo's
+  // fractional-points switch cannot change the result.
+  if (Number.isInteger(pointsPerUnit)) return { statId, points: pointsPerUnit };
+  if (pointsPerUnit <= 0 || !YAHOO_WHOLE_GROUP_COMPONENT_BASES.has(statId)) return null;
+  const reciprocal = 1 / pointsPerUnit;
+  const divisor = Math.round(reciprocal);
+  if (!YAHOO_WHOLE_GROUP_DIVISORS.has(divisor) || Math.abs(reciprocal - divisor) > 1e-9) {
+    return null;
+  }
+  return {
+    statId: `${statId}_per_${divisor}_units`,
+    points: Math.round(pointsPerUnit * divisor * 1e12) / 1e12,
+  };
+}
+
+/**
+ * ESPN scoring IDs with an exact projection component. The six yardage-game buckets map to
+ * calibrated expected-probability components rather than pretending a projected weekly mean is a
+ * realized threshold result.
+ */
 export const ESPN_PLAYER_SCORING_STAT_ID_MAP_V1: Readonly<Record<string, string>> = {
   "0": "passing_attempts",
   "1": "passing_completions",
   "3": "passing_yards",
   "4": "passing_touchdowns",
+  "5": "passing_yards_per_5_units",
+  "6": "passing_yards_per_10_units",
+  "7": "passing_yards_per_20_units",
+  "8": "passing_yards_per_25_units",
+  "9": "passing_yards_per_50_units",
+  "10": "passing_yards_per_100_units",
+  "11": "passing_completions_per_5_units",
+  "12": "passing_completions_per_10_units",
+  "13": "passing_incompletions_per_5_units",
+  "14": "passing_incompletions_per_10_units",
+  "17": "passing_yards_300_399_probability",
+  "18": "passing_yards_400_plus_probability",
   "19": "passing_two_point_conversions",
   "20": "passing_interceptions",
   "23": "carries",
   "24": "rushing_yards",
   "25": "rushing_touchdowns",
   "26": "rushing_two_point_conversions",
+  "27": "rushing_yards_per_5_units",
+  "28": "rushing_yards_per_10_units",
+  "29": "rushing_yards_per_20_units",
+  "30": "rushing_yards_per_25_units",
+  "31": "rushing_yards_per_50_units",
+  "32": "rushing_yards_per_100_units",
+  "33": "carries_per_5_units",
+  "34": "carries_per_10_units",
+  "37": "rushing_yards_100_199_probability",
+  "38": "rushing_yards_200_plus_probability",
   "41": "receptions",
   "42": "receiving_yards",
   "43": "receiving_touchdowns",
   "44": "receiving_two_point_conversions",
+  "47": "receiving_yards_per_5_units",
+  "48": "receiving_yards_per_10_units",
+  "49": "receiving_yards_per_20_units",
+  "50": "receiving_yards_per_25_units",
+  "51": "receiving_yards_per_50_units",
+  "52": "receiving_yards_per_100_units",
   "53": "receptions",
+  "54": "receptions_per_5_units",
+  "55": "receptions_per_10_units",
+  "56": "receiving_yards_100_199_probability",
+  "57": "receiving_yards_200_plus_probability",
   "58": "targets",
   "62": "two_point_conversions",
   "63": "fumble_recovery_touchdowns",
@@ -379,6 +441,10 @@ export const ESPN_PLAYER_SCORING_STAT_ID_MAP_V1: Readonly<Record<string, string>
   "105": "return_touchdowns",
   "114": "kickoff_return_yards",
   "115": "punt_return_yards",
+  "116": "kickoff_return_yards_per_10_units",
+  "117": "kickoff_return_yards_per_25_units",
+  "118": "punt_return_yards_per_10_units",
+  "119": "punt_return_yards_per_25_units",
   "120": "points_allowed",
   "121": "points_allowed_18_21_probability",
   "122": "points_allowed_22_27_probability",
@@ -441,56 +507,20 @@ const TEAM_DEFENSE_SCORING_COMPONENTS: ReadonlySet<string> = new Set(
 
 const ESPN_NONLINEAR_STAT_IDS = new Set([
   "2",
-  "5",
-  "6",
-  "7",
-  "8",
-  "9",
-  "10",
-  "11",
-  "12",
-  "13",
-  "14",
   "15",
   "16",
-  "17",
-  "18",
   "21",
   "22",
-  "27",
-  "28",
-  "29",
-  "30",
-  "31",
-  "32",
-  "33",
-  "34",
   "35",
   "36",
-  "37",
-  "38",
   "39",
   "40",
   "45",
   "46",
-  "47",
-  "48",
-  "49",
-  "50",
-  "51",
-  "52",
-  "54",
-  "55",
-  "56",
-  "57",
   "59",
   "60",
   "61",
   "100",
-  "116",
-  "117",
-  "118",
-  "119",
   "126",
   "137",
   "175",
@@ -512,49 +542,6 @@ const ESPN_NONLINEAR_STAT_IDS = new Set([
   "216",
   "217",
 ]);
-
-/**
- * Evidence-recorded ESPN nonlinear stat ID -> base scoring component. Used ONLY to narrow which
- * positions a `NONLINEAR_RULE` failure attributes to (vocabulary intersection with the base
- * component) — this never makes the rule scoreable, never populates `bonuses`, and never touches
- * scoring. Source of record for these six per-game yardage bonuses: community vocabulary and
- * cwendt94/espn-api `constant.py`, fetched 2026-07-28, with the supporting evidence recorded in
- * `docs/dst-stat-id-evidence-2026-07-29.md`. The yards-allowed bracket entries (128-136) left this
- * table on 2026-07-29 when those IDs became mapped `yards_allowed_*_probability` components; their
- * evidence is recorded in `docs/dst-yards-allowed-calibration-2026-07-29.md`. Do not extend without
- * recording evidence first — every ESPN nonlinear ID without an entry here stays pessimistically
- * attributed to all six positions.
- */
-const ESPN_NONLINEAR_STAT_ID_BASE_COMPONENTS: Readonly<Record<string, string>> = {
-  "17": "passing_yards",
-  "18": "passing_yards",
-  "37": "rushing_yards",
-  "38": "rushing_yards",
-  "56": "receiving_yards",
-  "57": "receiving_yards",
-};
-
-function nonlinearReasonForBaseComponent(baseComponent: string): string {
-  return `a per-game yardage bonus on ${baseComponent} that cannot be reconstructed from a projected weekly total`;
-}
-
-/**
- * An ESPN nonlinear ID with a recorded base-component entry narrows its `NONLINEAR_RULE` failure
- * to the positions whose vocabulary contains that component, via the same pessimistic
- * `attributedPositions` fallback every other attributed failure in this file uses (ALL positions
- * if the base component is somehow unowned). An ID without an entry keeps the pessimistic,
- * ALL-positions `NONLINEAR` mapping.
- */
-function nonlinearMapping(statId: string): UnsupportedMapping {
-  const baseComponent = ESPN_NONLINEAR_STAT_ID_BASE_COMPONENTS[statId];
-  if (!baseComponent) return NONLINEAR;
-  return {
-    kind: "unsupported",
-    code: "NONLINEAR_RULE",
-    reason: nonlinearReasonForBaseComponent(baseComponent),
-    positions: attributedPositions(baseComponent),
-  };
-}
 
 const ESPN_IGNORED_STAT_IDS = new Map<string, IgnoredMapping>([
   ...Array.from({ length: 37 }, (_, index) => String(index + 138)).map(
@@ -874,7 +861,7 @@ function mappingFromProviderId(
   }
   const playerStatId = ESPN_PLAYER_SCORING_STAT_ID_MAP_V1[normalized];
   if (playerStatId) return player(playerStatId);
-  if (ESPN_NONLINEAR_STAT_IDS.has(normalized)) return nonlinearMapping(normalized);
+  if (ESPN_NONLINEAR_STAT_IDS.has(normalized)) return NONLINEAR;
   if (ESPN_IDP_STAT_IDS.has(normalized)) return IDP_UNSUPPORTED;
   const unsupportedDefense = unsupportedDefenseMapping(normalized);
   if (unsupportedDefense) return unsupportedDefense;
@@ -1190,18 +1177,34 @@ export function normalizeLeagueScoringProfile(
         );
         continue;
       }
-      if (!available.has(mapping.statId)) {
+      const operation = normalizeName(row.operation).replace(/ /gu, "-");
+      const wholeGroupRule =
+        operation === "floor-groups"
+          ? yahooWholeGroupRule(mapping.statId, points)
+          : { statId: mapping.statId, points };
+      if (operation === "floor-groups" && wholeGroupRule === null) {
         fail(
           attributedPositions(mapping.statId),
+          "NONLINEAR_RULE",
+          `Rule ${rowIndex} (${ruleIdentity(row)}) uses Yahoo whole-group yardage rounding that this projection cannot price exactly.`,
+          rowIndex,
+          row,
+        );
+        continue;
+      }
+      const scoringStatId = wholeGroupRule?.statId ?? mapping.statId;
+      const scoringPoints = wholeGroupRule?.points ?? points;
+      if (!available.has(scoringStatId)) {
+        fail(
+          attributedPositions(scoringStatId),
           "COMPONENT_UNAVAILABLE",
-          `Rule ${rowIndex} requires projection component ${mapping.statId}, which this run does not provide.`,
+          `Rule ${rowIndex} requires projection component ${scoringStatId}, which this run does not provide.`,
           rowIndex,
           row,
         );
         continue;
       }
 
-      const operation = normalizeName(row.operation).replace(/ /gu, "-");
       const thresholdLow = decimal(row.thresholdLow);
       const thresholdHigh = decimal(row.thresholdHigh);
       const hasLow =
@@ -1219,15 +1222,15 @@ export function normalizeLeagueScoringProfile(
         continue;
       }
 
-      const entry = canonical.get(mapping.statId) ?? {
+      const entry = canonical.get(scoringStatId) ?? {
         points: null,
         bonuses: [],
         rowIndices: [],
       };
-      if (operation === "multiply") {
+      if (operation === "multiply" || operation === "floor-groups") {
         if (hasLow || hasHigh) {
           fail(
-            attributedPositions(mapping.statId),
+            attributedPositions(scoringStatId),
             "NONLINEAR_RULE",
             `Rule ${rowIndex} (${ruleIdentity(row)}) applies thresholds to a per-unit rule.`,
             rowIndex,
@@ -1236,24 +1239,24 @@ export function normalizeLeagueScoringProfile(
           continue;
         }
         if (entry.points !== null) {
-          if (entry.points === points) {
+          if (entry.points === scoringPoints) {
             entry.rowIndices.push(rowIndex);
-            canonical.set(mapping.statId, entry);
+            canonical.set(scoringStatId, entry);
             continue;
           }
           fail(
-            attributedPositions(mapping.statId),
+            attributedPositions(scoringStatId),
             "DUPLICATE_CANONICAL_RULE",
-            `Rules ${entry.rowIndices.join(", ")} and ${rowIndex} both score ${mapping.statId}.`,
+            `Rules ${entry.rowIndices.join(", ")} and ${rowIndex} both score ${scoringStatId}.`,
             rowIndex,
             row,
           );
           continue;
         }
-        entry.points = points;
+        entry.points = scoringPoints;
       } else if (operation === "bonus" || operation === "at-least-bonus") {
         fail(
-          attributedPositions(mapping.statId),
+          attributedPositions(scoringStatId),
           "NONLINEAR_RULE",
           `Rule ${rowIndex} (${ruleIdentity(row)}) is a threshold bonus; expected bonus points require a projected threshold probability.`,
           rowIndex,
@@ -1271,7 +1274,7 @@ export function normalizeLeagueScoringProfile(
         continue;
       }
       entry.rowIndices.push(rowIndex);
-      canonical.set(mapping.statId, entry);
+      canonical.set(scoringStatId, entry);
     }
   }
 

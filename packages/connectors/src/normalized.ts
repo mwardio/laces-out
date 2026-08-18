@@ -16,6 +16,8 @@ export interface NormalizedScoringRule {
   readonly statId: string;
   readonly name: string | null;
   readonly points: number;
+  /** Provider-declared position families eligible for this category, when supplied. */
+  readonly positionTypes?: readonly string[];
 }
 
 export interface NormalizedLeagueSettings {
@@ -25,6 +27,10 @@ export interface NormalizedLeagueSettings {
   readonly waiverType: WaiverType;
   readonly faabBudget: number | null;
   readonly playoffTeamCount: number | null;
+  /** Yahoo's yardage rounding mode. Null means the provider did not include the setting. */
+  readonly usesFractionalPoints?: boolean | null;
+  /** Whether negative yardage may reduce a Yahoo fantasy total. */
+  readonly usesNegativePoints?: boolean | null;
   readonly rosterSlots: readonly NormalizedRosterSlot[];
   readonly scoringRules: readonly NormalizedScoringRule[];
   /** Optional provider-observed operating rules used to guard recommendations and explain timing. */

@@ -844,6 +844,10 @@ export function buildFirstPartyRosRunPayload(input: {
     observedCoverages.length === 0
       ? 0.7
       : observedCoverages.reduce((sum, value) => sum + value, 0) / observedCoverages.length;
+  const minimumNominalCoverage =
+    releasingPolicies.length === 0
+      ? 0.7
+      : Math.min(...releasingPolicies.map(({ calibration }) => calibration.nominalCoverage));
   const evidenceChecksum =
     releasing[0]?.gate.evidenceChecksum ??
     createHash("sha256").update(input.artifact.artifactChecksum).digest("hex");
@@ -886,7 +890,9 @@ export function buildFirstPartyRosRunPayload(input: {
         heldOutSeasons: policy.globalSeasons,
         batches: policy.globalBatches,
         samples: policy.globalSamples,
-        nominalCoverage: 0.7,
+        // A release can mix standard 70% cells with conservative 80% tiered-D/ST cells. This
+        // summary reports the minimum target; each executable bucket above retains its exact one.
+        nominalCoverage: minimumNominalCoverage,
         empiricalCoverage,
         maximumAllowedCoverageError: 0.1,
       },

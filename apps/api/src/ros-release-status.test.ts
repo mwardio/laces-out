@@ -362,6 +362,7 @@ describe("deriveAdmittedArtifacts and deriveScoringProfileCoverage", () => {
       "Standard (non-PPR)",
       "Standard + 2-pt, split kicker brackets, XP-missed penalty",
       "Standard + 2-pt, split kicker brackets, no XP-missed penalty",
+      "Full PPR + yardage-game bonuses, 6-pt passing TD",
     ]);
     for (const entry of coverage.unsupported) {
       expect(entry.blockers).toEqual(["no_admitted_artifact"]);

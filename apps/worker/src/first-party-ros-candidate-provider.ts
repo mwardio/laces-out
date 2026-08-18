@@ -263,7 +263,7 @@ interface AcceptedCandidate {
  * builder; a player missing any usable piece is skipped and audited (never approximated), and a
  * league that produces no releasable candidate yields no target so the rail stays fail-closed.
  */
-export function buildFirstPartyRosLeagueTarget(input: {
+export interface FirstPartyRosLeagueTargetInput {
   readonly artifact: LoadedFirstPartyRosChampionArtifact;
   readonly leagueSeasonId: string;
   readonly scoringProfile: ProjectionScoringProfile;
@@ -294,7 +294,15 @@ export function buildFirstPartyRosLeagueTarget(input: {
    */
   readonly scenarioCount?: number;
   readonly convergenceReferenceScenarioCount?: number;
-}): FirstPartyRosLeagueTargetResult {
+}
+
+export type FirstPartyRosLeagueTargetBuilder = (
+  input: FirstPartyRosLeagueTargetInput,
+) => FirstPartyRosLeagueTargetResult | Promise<FirstPartyRosLeagueTargetResult>;
+
+export function buildFirstPartyRosLeagueTarget(
+  input: FirstPartyRosLeagueTargetInput,
+): FirstPartyRosLeagueTargetResult {
   const scoringProfileKey = projectionScoringProfileKey(input.scoringProfile);
   const window = {
     season: input.season,
@@ -530,6 +538,11 @@ export function databaseFirstPartyRosCandidateProvider(input: {
   readonly database: Database;
   readonly scenarioCount?: number;
   readonly convergenceReferenceScenarioCount?: number;
+  /**
+   * Production offloads the CPU-bound league simulation to a worker thread. Tests and small
+   * fixtures keep the direct deterministic builder unless they explicitly provide an override.
+   */
+  readonly buildLeagueTarget?: FirstPartyRosLeagueTargetBuilder;
 }): FirstPartyRosCandidateProvider {
   return {
     sourceChecksum: async ({ season, window }) => {
@@ -589,6 +602,7 @@ async function buildDatabaseFirstPartyRosTargets(
     readonly database: Database;
     readonly scenarioCount?: number;
     readonly convergenceReferenceScenarioCount?: number;
+    readonly buildLeagueTarget?: FirstPartyRosLeagueTargetBuilder;
   },
   context: FirstPartyRosCandidateContext,
 ): Promise<readonly FirstPartyRosPublicationTarget[]> {
@@ -1000,7 +1014,7 @@ async function buildDatabaseFirstPartyRosTargets(
       }
       continue;
     }
-    const result = buildFirstPartyRosLeagueTarget({
+    const result = await (options.buildLeagueTarget ?? buildFirstPartyRosLeagueTarget)({
       artifact,
       leagueSeasonId: league.leagueSeasonId,
       scoringProfile: league.profile,
