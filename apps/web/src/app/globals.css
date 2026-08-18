@@ -8374,8 +8374,8 @@
       min-width: 0;
       max-width: 100%;
       overflow-x: auto;
-      margin-inline: -14px;
-      padding: 2px 14px 10px;
+      margin-inline: 0;
+      padding: 2px 0 10px;
       scroll-snap-type: x mandatory;
       scrollbar-width: none;
     }
@@ -8712,6 +8712,15 @@
       font-size: var(--text-10);
       text-overflow: ellipsis;
       white-space: nowrap;
+    }
+  }
+
+  @media (max-width: 620px) {
+    /* Size cards from the content rail, not the viewport. This keeps the rail inside
+       its section and leaves a stable cue that another league is horizontally scrollable. */
+    .league-card {
+      min-width: 0;
+      flex: 0 0 calc(100% - 42px);
     }
   }
 

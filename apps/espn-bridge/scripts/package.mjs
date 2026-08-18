@@ -7,7 +7,9 @@ const scriptDirectory = dirname(fileURLToPath(import.meta.url));
 const bridgeDirectory = dirname(scriptDirectory);
 const distributionDirectory = join(bridgeDirectory, "dist");
 
-const target = process.env.BRIDGE_TARGET === "store" ? "store" : "dev";
+const target = ["store", "calibration"].includes(process.env.BRIDGE_TARGET)
+  ? process.env.BRIDGE_TARGET
+  : "dev";
 const { version } = JSON.parse(await readFile(join(bridgeDirectory, "package.json"), "utf8"));
 
 // Both archives are local, reproducible build artifacts. User installation is
@@ -18,7 +20,9 @@ const outputPath = join(
   outputDirectory,
   target === "store"
     ? `laces-out-espn-bridge-store-v${version}.zip`
-    : `laces-out-espn-bridge-v${version}.zip`,
+    : target === "calibration"
+      ? `laces-out-espn-bridge-calibration-v${version}.zip`
+      : `laces-out-espn-bridge-v${version}.zip`,
 );
 
 function localHeader(name, contents) {
@@ -62,6 +66,44 @@ function centralHeader(name, contents, localOffset) {
 const fileNames = (await readdir(distributionDirectory))
   .filter((name) => !name.endsWith(".map"))
   .sort();
+if (target === "calibration") {
+  const allowed = [
+    "calibration-content-script.global.js",
+    "icon-128.png",
+    "icon-16.png",
+    "icon-32.png",
+    "icon-48.png",
+    "manifest.json",
+  ].sort();
+  if (JSON.stringify(fileNames) !== JSON.stringify(allowed)) {
+    throw new Error("calibration package contains an unexpected executable or asset");
+  }
+  const calibrationBundle = await readFile(
+    join(distributionDirectory, "calibration-content-script.global.js"),
+    "utf8",
+  );
+  for (const forbidden of [
+    "fetch(",
+    "XMLHttpRequest",
+    "WebSocket",
+    "EventSource",
+    "WebTransport",
+    "RTCPeerConnection",
+    "navigator.sendBeacon",
+    "chrome.",
+    "document.cookie",
+    "localStorage",
+    "sessionStorage",
+    "indexedDB",
+    "caches.open(",
+    "innerHTML",
+    "outerHTML",
+  ]) {
+    if (calibrationBundle.includes(forbidden)) {
+      throw new Error(`calibration bundle contains forbidden capability: ${forbidden}`);
+    }
+  }
+}
 const localParts = [];
 const centralParts = [];
 let localOffset = 0;

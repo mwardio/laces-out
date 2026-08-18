@@ -10,7 +10,6 @@ import {
   normalizeLeagueScoringProfile,
   type LeagueScoringNormalizationResult,
   type LeagueScoringPosition,
-  type LeagueScoringUnsupportedReason,
   type StoredLeagueScoringRule,
 } from "./league-scoring.js";
 import { rosAvailableProjectionStatIds } from "./ros-scoring-profiles.js";
@@ -61,22 +60,6 @@ function reasonCodes(result: LeagueScoringNormalizationResult): readonly string[
   return result.state === "unavailable" ? result.reasons.map((item) => item.code) : [];
 }
 
-/** Strips a `":slot:<id>"` suffix so an override's reason can be traced to its base provider ID. */
-function baseProviderStatId(providerStatId: string | null): string {
-  return (providerStatId ?? "").replace(/:slot:\d+$/u, "");
-}
-
-/**
- * The numeric base provider stat IDs (sorted ascending, duplicates preserved) behind every reason
- * of `code` — proves each failure is traceable to a specific stat ID, not just a generic bucket.
- */
-function baseStatIdsOf(reasons: readonly LeagueScoringUnsupportedReason[], code: string): number[] {
-  return reasons
-    .filter((item) => item.code === code)
-    .map((item) => Number(baseProviderStatId(item.providerStatId)))
-    .sort((left, right) => left - right);
-}
-
 function supportFor(result: LeagueScoringNormalizationResult, position: LeagueScoringPosition) {
   const support = result.positions.find((item) => item.position === position);
   if (support === undefined) throw new Error(`No position support reported for ${position}`);
@@ -99,8 +82,8 @@ function positionReasonCodes(
 /**
  * Sanitized, faithful transcriptions of the three real synced ESPN leagues' `scoring_rules` rows
  * (provider stat IDs, operations, and points only — no league/team/member data). All three carry an
- * identical 27-row D/ST `:slot:16` override set; league A additionally carries 6 bare nonlinear
- * per-N-yard rules (17, 18, 37, 38, 56, 57) the other two leagues lack.
+ * identical 27-row D/ST `:slot:16` override set; league A additionally carries six mutually
+ * exclusive yardage-game bonus categories (17, 18, 37, 38, 56, 57) the other two leagues lack.
  */
 const ESPN_LEAGUE_A_ROWS: readonly StoredLeagueScoringRule[] = [
   rule("101", "101", 6, { provider: "espn" }),
@@ -374,6 +357,43 @@ describe("normalizeLeagueScoringProfile", () => {
     ).toBe(18);
   });
 
+  it("prices Yahoo whole-group yardage exactly when fractional points are disabled", () => {
+    const result = normalized([
+      rule("4", "Passing Yards", 0.04, { operation: "floor-groups" }),
+      rule("9", "Rushing Yards", 0.1, { operation: "floor-groups" }),
+      rule("12", "Receiving Yards", 0.1, { operation: "floor-groups" }),
+    ]);
+    expectAvailable(result);
+    expect(result.profile.rules).toEqual(
+      expect.arrayContaining([
+        { statId: "passing_yards_per_25_units", points: 1 },
+        { statId: "rushing_yards_per_10_units", points: 1 },
+        { statId: "receiving_yards_per_10_units", points: 1 },
+      ]),
+    );
+    expect(
+      scoreProjectionStatComponents(
+        {
+          passing_yards_per_25_units: 10.4,
+          rushing_yards_per_10_units: 5.2,
+          receiving_yards_per_10_units: 7.1,
+        },
+        result.profile,
+      ),
+    ).toBeCloseTo(22.7, 8);
+  });
+
+  it("fails closed on an unmodeled Yahoo whole-group divisor", () => {
+    const result = normalized([rule("4", "Passing Yards", 0.03, { operation: "floor-groups" })]);
+    expect(reasonCodes(result)).toEqual(["NONLINEAR_RULE"]);
+    expect(positionReasonCodes(result, "QB")).toEqual(["NONLINEAR_RULE"]);
+  });
+
+  it("fails closed on combined Yahoo return-yard groups rather than flooring split projections", () => {
+    const result = normalized([rule("14", "Return Yards", 0.04, { operation: "floor-groups" })]);
+    expect(reasonCodes(result)).toEqual(["NONLINEAR_RULE"]);
+  });
+
   it.each([
     ["standard", 0],
     ["half PPR", 0.5],
@@ -560,8 +580,8 @@ describe("normalizeLeagueScoringProfile", () => {
       code: "UNSUPPORTED_OPERATION",
     },
     {
-      name: "ESPN per-N yard category",
-      row: rule("5", "5", 1, { provider: "espn" }),
+      name: "ESPN long-play bonus",
+      row: rule("15", "15", 1, { provider: "espn" }),
       code: "NONLINEAR_RULE",
     },
     {
@@ -809,18 +829,17 @@ describe("normalizeLeagueScoringProfile", () => {
       ).toEqual(["POSITION_OVERRIDE"]);
     });
 
-    it("normalizes the sanitized real-league rule set espn-league-a to available with K and D/ST supported", () => {
-      // This whole league was previously `unavailable` because 17/18/37/38/56/57 were attributed
-      // pessimistically to all six positions. Base-component attribution now withholds QB/RB/WR/TE
-      // and leaves K. The mapped yards-allowed ladder (128-136) and de minimis zero criterion for
-      // 206/209 leave D/ST with no remaining reasons.
+    it("normalizes the sanitized real-league rule set espn-league-a with all positions supported", () => {
+      // This whole league was previously `unavailable` because 17/18/37/38/56/57 were treated as
+      // opaque nonlinear rules. Their calibrated probability components now preserve the league's
+      // exact expected yardage-game bonuses without guessing from a projected mean.
       const result = normalizeLeagueScoringProfile({
         id: "espn-league-a",
         rows: ESPN_LEAGUE_A_ROWS,
         availableStatIds: rosAvailableProjectionStatIds(),
       });
       expectAvailable(result);
-      expect(supportedPositions(result)).toEqual(["K", "DST"]);
+      expect(supportedPositions(result)).toEqual(LEAGUE_SCORING_POSITIONS);
 
       const dst = supportFor(result, "DST");
       expect(dst.supported).toBe(true);
@@ -839,8 +858,8 @@ describe("normalizeLeagueScoringProfile", () => {
    * Position-scoped support. The three-league fixtures are load-bearing evidence: leagues B and C
    * failed only on D/ST-scoped rules, so five positions became legitimately supported instead of
    * inheriting whole-league `unavailable`. With the de minimis zero criterion mapping 206/209, the
-   * last two D/ST blockers are gone and B and C support all six positions. League A's six bare ESPN
-   * per-N-yard bonuses still withhold QB/RB/WR/TE, so it lands on K + D/ST.
+   * last two D/ST blockers are gone and all three sanitized league shapes now support all six
+   * positions. League A's six yardage-game rules are covered separately above.
    */
   describe("position-scoped support", () => {
     it.each([
@@ -1126,101 +1145,38 @@ describe("normalizeLeagueScoringProfile", () => {
   });
 
   /**
-   * Evidence-recorded ESPN nonlinear stat ID attribution.
-   * `ESPN_NONLINEAR_STAT_ID_BASE_COMPONENTS` narrows a `NONLINEAR_RULE` failure to the positions
-   * whose vocabulary owns the ID's base component (never a hardcoded position list), instead of the
-   * pessimistic all-positions default every other nonlinear ID still gets.
+   * Evidence-recorded ESPN yardage-game scoring. Each provider category maps to a mutually
+   * exclusive expected-probability component emitted and backtested by the weekly model.
    */
-  describe("evidence-recorded nonlinear stat ID attribution", () => {
-    it("normalizes espn-league-a to available with K and D/ST supported, narrowing each yardage bonus to the positions whose vocabulary owns its base component", () => {
+  describe("evidence-recorded yardage-game probability scoring", () => {
+    it("normalizes espn-league-a with all six positions supported", () => {
       const result = normalizeLeagueScoringProfile({
         id: "espn-league-a",
         rows: ESPN_LEAGUE_A_ROWS,
         availableStatIds: rosAvailableProjectionStatIds(),
       });
       expectAvailable(result);
-      expect(supportedPositions(result)).toEqual(["K", "DST"]);
-
-      // QB: passing bonuses (17/18) AND rushing bonuses (37/38) — QB's vocabulary owns both.
-      expect(baseStatIdsOf(supportFor(result, "QB").reasons, "NONLINEAR_RULE")).toEqual([
-        17, 18, 37, 38,
-      ]);
-      // RB/WR/TE: rushing (37/38) and receiving (56/57) bonuses only — their vocabulary has no
-      // passing_yards, so the QB-only passing bonuses (17/18) never attribute here even though
-      // they are among espn-league-a's bare nonlinear rules.
-      for (const position of ["RB", "WR", "TE"] as const) {
-        const nonlinearIds = baseStatIdsOf(supportFor(result, position).reasons, "NONLINEAR_RULE");
-        expect(nonlinearIds).toEqual([37, 38, 56, 57]);
-        expect(nonlinearIds).not.toContain(17);
-        expect(nonlinearIds).not.toContain(18);
-      }
-      // K: none of the six bare bonuses attribute to K (its vocabulary has no yardage components).
-      expect(supportFor(result, "K").reasons).toEqual([]);
-      // D/ST is unaffected by this table's QB/RB/WR/TE entries. With the 128-136 ladder and
-      // de minimis 206/209 rules mapped, it has no reason left at all.
-      expect(supportFor(result, "DST").reasons).toEqual([]);
-
-      // Reason messages state the mechanism and stay traceable to the provider stat ID.
-      const qbReasons = supportFor(result, "QB").reasons;
-      expect(qbReasons.find((item) => item.providerStatId === "17")?.message).toContain(
-        "per-game yardage bonus on passing_yards",
+      expect(supportedPositions(result)).toEqual(LEAGUE_SCORING_POSITIONS);
+      expect(result.profile.rules).toEqual(
+        expect.arrayContaining([
+          { statId: "passing_yards_300_399_probability", points: 1 },
+          { statId: "passing_yards_400_plus_probability", points: 3 },
+          { statId: "rushing_yards_100_199_probability", points: 1 },
+          { statId: "rushing_yards_200_plus_probability", points: 3 },
+          { statId: "receiving_yards_100_199_probability", points: 1 },
+          { statId: "receiving_yards_200_plus_probability", points: 3 },
+        ]),
       );
-      expect(qbReasons.find((item) => item.providerStatId === "17")?.message).toContain(
-        "cannot be reconstructed from a projected weekly total",
-      );
-      expect(qbReasons.find((item) => item.providerStatId === "37")?.message).toContain(
-        "per-game yardage bonus on rushing_yards",
-      );
-      // Every D/ST row is an accepted rule now — both the mapped 128:slot:16 bracket override and
-      // the de minimis 206/209 pair — so D/ST carries no reason row at all.
-      const dstReasons = supportFor(result, "DST").reasons;
-      for (const providerStatId of ["128:slot:16", "206", "206:slot:16", "209", "209:slot:16"]) {
-        expect(
-          dstReasons.some((item) => item.providerStatId === providerStatId),
-          providerStatId,
-        ).toBe(false);
-      }
-
-      // Only rules a SUPPORTED position can score survive into the profile: K's kicking rules and
-      // D/ST's own, while passing/rushing/receiving-yardage rules (owned solely by the withheld
-      // QB/RB/WR/TE) still do not leak in.
-      expect([...result.profile.rules.map((item) => item.statId)].sort()).toEqual(
-        [
-          "defensive_blocked_kicks",
-          "defensive_fumble_recoveries",
-          "defensive_interceptions",
-          "defensive_sacks",
-          "defensive_safeties",
-          "defensive_touchdowns",
-          "defensive_two_point_returns",
-          "extra_points_made",
-          "field_goals_made_0_39",
-          "field_goals_made_40_49",
-          "field_goals_made_50_59",
-          "field_goals_made_60_plus",
-          "field_goals_missed",
-          "one_point_safeties",
-          "points_allowed_0_probability",
-          "points_allowed_14_17_probability",
-          "points_allowed_1_6_probability",
-          "points_allowed_28_34_probability",
-          "points_allowed_35_45_probability",
-          "points_allowed_46_plus_probability",
-          "points_allowed_7_13_probability",
-          "special_teams_touchdowns",
-          "yards_allowed_0_99_probability",
-          "yards_allowed_100_199_probability",
-          "yards_allowed_200_299_probability",
-          "yards_allowed_350_399_probability",
-          "yards_allowed_400_449_probability",
-          "yards_allowed_450_499_probability",
-          "yards_allowed_500_549_probability",
-          "yards_allowed_550_plus_probability",
-        ].sort(),
-      );
-      expect(result.profile.rules).not.toContainEqual(
-        expect.objectContaining({ statId: "passing_yards" }),
-      );
+      expect(
+        scoreProjectionStatComponents(
+          {
+            passing_yards: 350,
+            passing_yards_300_399_probability: 0.4,
+            passing_yards_400_plus_probability: 0.1,
+          },
+          result.profile,
+        ),
+      ).toBeCloseTo(14.7, 8);
     });
 
     it("keeps an ESPN nonlinear ID with no recorded base component pessimistically attributed to all six positions", () => {
@@ -1247,6 +1203,66 @@ describe("normalizeLeagueScoringProfile", () => {
         points: 5,
       });
       expect(positionReasonCodes(result, "RB")).toEqual(["NO_SUPPORTED_RULES"]);
+    });
+  });
+
+  describe("ESPN every-N whole-unit scoring", () => {
+    const mappings = [
+      ["5", "passing_yards_per_5_units"],
+      ["6", "passing_yards_per_10_units"],
+      ["7", "passing_yards_per_20_units"],
+      ["8", "passing_yards_per_25_units"],
+      ["9", "passing_yards_per_50_units"],
+      ["10", "passing_yards_per_100_units"],
+      ["11", "passing_completions_per_5_units"],
+      ["12", "passing_completions_per_10_units"],
+      ["13", "passing_incompletions_per_5_units"],
+      ["14", "passing_incompletions_per_10_units"],
+      ["27", "rushing_yards_per_5_units"],
+      ["28", "rushing_yards_per_10_units"],
+      ["29", "rushing_yards_per_20_units"],
+      ["30", "rushing_yards_per_25_units"],
+      ["31", "rushing_yards_per_50_units"],
+      ["32", "rushing_yards_per_100_units"],
+      ["33", "carries_per_5_units"],
+      ["34", "carries_per_10_units"],
+      ["47", "receiving_yards_per_5_units"],
+      ["48", "receiving_yards_per_10_units"],
+      ["49", "receiving_yards_per_20_units"],
+      ["50", "receiving_yards_per_25_units"],
+      ["51", "receiving_yards_per_50_units"],
+      ["52", "receiving_yards_per_100_units"],
+      ["54", "receptions_per_5_units"],
+      ["55", "receptions_per_10_units"],
+      ["116", "kickoff_return_yards_per_10_units"],
+      ["117", "kickoff_return_yards_per_25_units"],
+      ["118", "punt_return_yards_per_10_units"],
+      ["119", "punt_return_yards_per_25_units"],
+    ] as const;
+
+    it("maps all documented whole-group categories to learned floor-unit components", () => {
+      for (const [providerId, component] of mappings) {
+        expect(ESPN_PLAYER_SCORING_STAT_ID_MAP_V1[providerId]).toBe(component);
+      }
+    });
+
+    it("normalizes and scores the categories without flooring a projected mean", () => {
+      const result = normalized(
+        mappings.map(([providerId]) =>
+          rule(providerId, providerId, 1, {
+            provider: "espn",
+          }),
+        ),
+      );
+      expectAvailable(result);
+      expect(supportedPositions(result)).toEqual(["QB", "RB", "WR", "TE"]);
+      expect(result.profile.rules).toHaveLength(mappings.length);
+      expect(
+        scoreProjectionStatComponents(
+          Object.fromEntries(mappings.map(([, component]) => [component, 2])),
+          result.profile,
+        ),
+      ).toBe(mappings.length * 2);
     });
   });
 
@@ -1431,15 +1447,12 @@ describe("normalizeLeagueScoringProfile", () => {
 
     /**
      * Per-cell identity keeps the ROS rail publishing when a league's whole profile key moves. The
-     * flip moves it for all three leagues, so the load-bearing pin is that no
+     * flip moves it for leagues B and C, so the load-bearing pin is that no
      * SUPPORTED rail position's scoped key moved with it: D/ST-only components are outside every
      * QB/RB/WR/TE/K vocabulary, so their arrival cannot change what any rail position is scored on.
      *
-     * League A's QB/RB/WR/TE keys DO move, from `"[]"` to `special_teams_touchdowns` — that rule is
-     * shared with D/ST, so it stops being excluded once D/ST is supported. It is inert: those four
-     * positions are unsupported for league A before and after, and `matchFirstPartyRosPositions`
-     * withholds an unsupported position without ever comparing keys (and never reads `"[]"` as a
-     * match anyway).
+     * League A is intentionally outside this de-minimis regression because its yardage-game
+     * probability support changes those position keys for an independent, expected reason.
      */
     it("leaves every supported rail position's scoped scoring key byte-identical across the flip", () => {
       const preFlipSupportedKeys: Readonly<Record<string, Readonly<Record<string, string>>>> = {
@@ -1463,7 +1476,6 @@ describe("normalizeLeagueScoringProfile", () => {
       };
 
       for (const [name, rows] of [
-        ["espn-league-a", ESPN_LEAGUE_A_ROWS],
         ["espn-league-b", ESPN_LEAGUE_B_ROWS],
         ["espn-league-c", ESPN_LEAGUE_C_ROWS],
       ] as const) {

@@ -1,11 +1,13 @@
 import {
+  ESPN_EVERY_N_FLOOR_UNIT_COMPONENTS,
+  espnEveryNFloorUnitValue,
   projectionScoringProfileKey,
   scoreProjectionStatComponents,
   type ProjectionScoringProfile,
   type ProjectionStatComponents,
 } from "./scoring.js";
 
-export const FIRST_PARTY_PROJECTION_MODEL_VERSION = "laces-weekly-components-v8";
+export const FIRST_PARTY_PROJECTION_MODEL_VERSION = "laces-weekly-components-v9";
 
 export type FirstPartyProjectionPosition = "QB" | "RB" | "WR" | "TE" | "K";
 
@@ -388,15 +390,45 @@ export const FIRST_PARTY_CHAMPION_MINIMUM_IMPROVEMENT = 0.02;
 export const FIRST_PARTY_CHAMPION_MINIMUM_SAMPLES = 100;
 export const FIRST_PARTY_CHAMPION_MINIMUM_WEEK_BATCHES = 8;
 
+function everyNFloorUnitComponentsForSources(sources: readonly string[]): readonly string[] {
+  const allowed = new Set(sources);
+  return ESPN_EVERY_N_FLOOR_UNIT_COMPONENTS.filter(({ source }) => allowed.has(source)).map(
+    ({ component }) => component,
+  );
+}
+
+const QB_EVERY_N_FLOOR_UNIT_COMPONENTS = everyNFloorUnitComponentsForSources([
+  "passing_yards",
+  "passing_completions",
+  "passing_incompletions",
+  "rushing_yards",
+  "carries",
+  "kickoff_return_yards",
+  "punt_return_yards",
+]);
+const SKILL_EVERY_N_FLOOR_UNIT_COMPONENTS = everyNFloorUnitComponentsForSources([
+  "rushing_yards",
+  "carries",
+  "receiving_yards",
+  "receptions",
+  "kickoff_return_yards",
+  "punt_return_yards",
+]);
+
 const POSITION_COMPONENTS: Readonly<Record<FirstPartyProjectionPosition, readonly string[]>> = {
   QB: [
     "passing_attempts",
     "passing_completions",
     "passing_yards",
+    ...QB_EVERY_N_FLOOR_UNIT_COMPONENTS,
+    "passing_yards_300_399_probability",
+    "passing_yards_400_plus_probability",
     "passing_touchdowns",
     "passing_interceptions",
     "carries",
     "rushing_yards",
+    "rushing_yards_100_199_probability",
+    "rushing_yards_200_plus_probability",
     "rushing_touchdowns",
     "passing_two_point_conversions",
     "rushing_two_point_conversions",
@@ -413,10 +445,15 @@ const POSITION_COMPONENTS: Readonly<Record<FirstPartyProjectionPosition, readonl
   RB: [
     "carries",
     "rushing_yards",
+    "rushing_yards_100_199_probability",
+    "rushing_yards_200_plus_probability",
     "rushing_touchdowns",
     "targets",
     "receptions",
     "receiving_yards",
+    ...SKILL_EVERY_N_FLOOR_UNIT_COMPONENTS,
+    "receiving_yards_100_199_probability",
+    "receiving_yards_200_plus_probability",
     "receiving_touchdowns",
     "passing_two_point_conversions",
     "rushing_two_point_conversions",
@@ -434,9 +471,14 @@ const POSITION_COMPONENTS: Readonly<Record<FirstPartyProjectionPosition, readonl
     "targets",
     "receptions",
     "receiving_yards",
+    ...SKILL_EVERY_N_FLOOR_UNIT_COMPONENTS,
+    "receiving_yards_100_199_probability",
+    "receiving_yards_200_plus_probability",
     "receiving_touchdowns",
     "carries",
     "rushing_yards",
+    "rushing_yards_100_199_probability",
+    "rushing_yards_200_plus_probability",
     "rushing_touchdowns",
     "passing_two_point_conversions",
     "rushing_two_point_conversions",
@@ -454,9 +496,14 @@ const POSITION_COMPONENTS: Readonly<Record<FirstPartyProjectionPosition, readonl
     "targets",
     "receptions",
     "receiving_yards",
+    ...SKILL_EVERY_N_FLOOR_UNIT_COMPONENTS,
+    "receiving_yards_100_199_probability",
+    "receiving_yards_200_plus_probability",
     "receiving_touchdowns",
     "carries",
     "rushing_yards",
+    "rushing_yards_100_199_probability",
+    "rushing_yards_200_plus_probability",
     "rushing_touchdowns",
     "passing_two_point_conversions",
     "rushing_two_point_conversions",
@@ -492,14 +539,20 @@ const COMPONENT_CAPS: Readonly<Record<string, number>> = {
   passing_attempts: 70,
   passing_completions: 55,
   passing_yards: 600,
+  passing_yards_300_399_probability: 1,
+  passing_yards_400_plus_probability: 1,
   passing_touchdowns: 7,
   passing_interceptions: 6,
   carries: 45,
   rushing_yards: 350,
+  rushing_yards_100_199_probability: 1,
+  rushing_yards_200_plus_probability: 1,
   rushing_touchdowns: 5,
   targets: 25,
   receptions: 20,
   receiving_yards: 350,
+  receiving_yards_100_199_probability: 1,
+  receiving_yards_200_plus_probability: 1,
   receiving_touchdowns: 5,
   passing_two_point_conversions: 3,
   rushing_two_point_conversions: 3,
@@ -555,7 +608,34 @@ const COMPONENT_CAPS: Readonly<Record<string, number>> = {
   yards_allowed_450_499_probability: 1,
   yards_allowed_500_549_probability: 1,
   yards_allowed_550_plus_probability: 1,
+  ...Object.fromEntries(
+    ESPN_EVERY_N_FLOOR_UNIT_COMPONENTS.map(({ component, source, divisor }) => {
+      const sourceCap =
+        source === "passing_yards"
+          ? 600
+          : source === "passing_completions"
+            ? 55
+            : source === "passing_incompletions"
+              ? 70
+              : source === "rushing_yards" || source === "receiving_yards"
+                ? 350
+                : source === "carries"
+                  ? 45
+                  : source === "receptions"
+                    ? 20
+                    : source === "kickoff_return_yards"
+                      ? 500
+                      : 350;
+      return [component, Math.floor(sourceCap / divisor)];
+    }),
+  ),
 };
+
+const MUTUALLY_EXCLUSIVE_YARDAGE_PROBABILITY_PAIRS = [
+  ["passing_yards_300_399_probability", "passing_yards_400_plus_probability"],
+  ["rushing_yards_100_199_probability", "rushing_yards_200_plus_probability"],
+  ["receiving_yards_100_199_probability", "receiving_yards_200_plus_probability"],
+] as const;
 
 const COMMON_TEAM_DEFENSE_POINTS_ALLOWED_BUCKETS = [
   { component: "points_allowed_0_probability", minimum: 0, maximum: 0 },
@@ -1037,8 +1117,18 @@ function recencyWeight(
 }
 
 function componentValue(row: FirstPartyWeeklyStatLine, component: string): number | undefined {
+  const thresholdIndicator = (
+    baseComponent: string,
+    lower: number,
+    upper?: number,
+  ): number | undefined => {
+    const base = row.components[baseComponent];
+    if (base === undefined || !Number.isFinite(base) || base < 0) return undefined;
+    return base >= lower && (upper === undefined || base < upper) ? 1 : 0;
+  };
   const value =
     row.components[component] ??
+    espnEveryNFloorUnitValue(row.components, component) ??
     (component === "two_point_conversions"
       ? (row.components.passing_two_point_conversions ?? 0) +
         (row.components.rushing_two_point_conversions ?? 0) +
@@ -1054,7 +1144,19 @@ function componentValue(row: FirstPartyWeeklyStatLine, component: string): numbe
             : component === "field_goals_made_50_plus"
               ? (row.components.field_goals_made_50_59 ?? 0) +
                 (row.components.field_goals_made_60_plus ?? 0)
-              : undefined);
+              : component === "passing_yards_300_399_probability"
+                ? thresholdIndicator("passing_yards", 300, 400)
+                : component === "passing_yards_400_plus_probability"
+                  ? thresholdIndicator("passing_yards", 400)
+                  : component === "rushing_yards_100_199_probability"
+                    ? thresholdIndicator("rushing_yards", 100, 200)
+                    : component === "rushing_yards_200_plus_probability"
+                      ? thresholdIndicator("rushing_yards", 200)
+                      : component === "receiving_yards_100_199_probability"
+                        ? thresholdIndicator("receiving_yards", 100, 200)
+                        : component === "receiving_yards_200_plus_probability"
+                          ? thresholdIndicator("receiving_yards", 200)
+                          : undefined);
   return value === undefined || !Number.isFinite(value) || value < 0 ? undefined : value;
 }
 
@@ -1370,6 +1472,17 @@ function normalizeComponentRelationships(
   components: Record<string, number>,
   position: FirstPartyProjectionPosition,
 ): void {
+  // Each pair represents mutually exclusive ESPN yardage-game buckets. The component models are
+  // fitted independently, so gently renormalize only when their expected probabilities would
+  // otherwise exceed one; this preserves their ratio without inventing impossible expected bonus
+  // mass.
+  for (const [lowerBucket, upperBucket] of MUTUALLY_EXCLUSIVE_YARDAGE_PROBABILITY_PAIRS) {
+    if (components[lowerBucket] === undefined || components[upperBucket] === undefined) continue;
+    const total = components[lowerBucket] + components[upperBucket];
+    if (total <= 1) continue;
+    components[lowerBucket] /= total;
+    components[upperBucket] /= total;
+  }
   if (position !== "K") {
     components.two_point_conversions =
       (components.passing_two_point_conversions ?? 0) +
@@ -1389,6 +1502,18 @@ function normalizeComponentRelationships(
     if (position !== "K") {
       components.receptions = Math.min(components.receptions ?? 0, components.targets ?? 0);
     }
+  }
+  // A learned whole-group expectation cannot exceed the corresponding raw-stat expectation divided
+  // by N (`floor(x / N) <= x / N`). Keep each independently fitted component inside that exact
+  // bound while preserving the learned expectation below it.
+  for (const { component, source, divisor } of ESPN_EVERY_N_FLOOR_UNIT_COMPONENTS) {
+    if (components[component] === undefined) continue;
+    const sourceValue =
+      source === "passing_incompletions"
+        ? Math.max(0, (components.passing_attempts ?? 0) - (components.passing_completions ?? 0))
+        : components[source];
+    if (sourceValue === undefined) continue;
+    components[component] = Math.min(components[component], sourceValue / divisor);
   }
   if (position === "K") {
     const distanceMakes =
@@ -1433,6 +1558,30 @@ function normalizeComponentRelationships(
       0,
       (components.extra_points_attempted ?? 0) - (components.extra_points_made ?? 0),
     );
+  }
+}
+
+/**
+ * Keeps an upper interval jointly possible without moving either endpoint below its center. The
+ * independently fitted component intervals can each expand toward one even though the two events
+ * cannot happen together, so only their shared remaining probability mass is distributed across
+ * the requested expansion.
+ */
+function normalizeProbabilityCeilings(
+  center: ProjectionStatComponents,
+  ceiling: Record<string, number>,
+): void {
+  for (const [lowerBucket, upperBucket] of MUTUALLY_EXCLUSIVE_YARDAGE_PROBABILITY_PAIRS) {
+    if (center[lowerBucket] === undefined || center[upperBucket] === undefined) continue;
+    const lowerCenter = center[lowerBucket];
+    const upperCenter = center[upperBucket];
+    const lowerExcess = Math.max(0, (ceiling[lowerBucket] ?? lowerCenter) - lowerCenter);
+    const upperExcess = Math.max(0, (ceiling[upperBucket] ?? upperCenter) - upperCenter);
+    const excess = lowerExcess + upperExcess;
+    const available = Math.max(0, 1 - lowerCenter - upperCenter);
+    const scale = excess > available && excess > 0 ? available / excess : 1;
+    ceiling[lowerBucket] = lowerCenter + lowerExcess * scale;
+    ceiling[upperBucket] = upperCenter + upperExcess * scale;
   }
 }
 
@@ -1740,6 +1889,7 @@ export function projectFirstPartyWeeklyComponents(
       normalizedCenter[component] ?? 0,
     );
   }
+  normalizeProbabilityCeilings(normalizedCenter, normalizedCeiling);
   const recentPlayerGames = playerRows.filter(
     (row) => ordinal(target.season, target.week) - ordinal(row.season, row.week) <= 8,
   ).length;
@@ -2014,6 +2164,7 @@ export function projectFirstPartyRecencyBaselineComponents(
       center[component] ?? 0,
     );
   }
+  normalizeProbabilityCeilings(center, normalizedCeiling);
   const recentPlayerGames = playerRows.filter(
     (row) => ordinal(target.season, target.week) - ordinal(row.season, row.week) <= 8,
   ).length;

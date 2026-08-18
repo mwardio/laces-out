@@ -172,9 +172,10 @@ automatically.
 
 Two limitations are load-bearing and must not be papered over:
 
-1. **The DOM selectors are provisional.** The live DOM contract requires an authenticated ESPN
-   draft room and has not been validated. Until it is, the adapter's selector table is unverified
-   and the feature must stay flagged off.
+1. **The DOM selectors are provisional.** The local calibration build can gather sanitized,
+   structural evidence from a salary-cap mock room without a disposable league, but the current
+   selector table has not yet passed that review. Until it does, the adapter remains unverified and
+   the feature stays flagged off. See `docs/espn-live-draft-calibration.md`.
 2. **Late join may be bounded by virtualized rendering.** If ESPN renders only visible rows, a
    bridge that joins mid-draft may not be able to reconstruct earlier picks. Validation must either
    disprove this or the "bridge must be present from the start" limitation gets documented in the
@@ -182,9 +183,10 @@ Two limitations are load-bearing and must not be papered over:
 
 ### Live draft release gate
 
-`ESPN_LIVE_DRAFT_SYNC` remains off by default until all of the following are demonstrated against
-authenticated disposable leagues. ESPN's public mock lobby is insufficient because it exposes no
-paired league ID.
+`ESPN_LIVE_DRAFT_SYNC` remains off by default until the selector shapes are demonstrated in an
+authenticated salary-cap mock room and the remaining end-to-end behaviors are demonstrated with a
+paired league. A mock room is sufficient for local selector calibration, but cannot validate
+identity reconciliation or upload behavior because its ephemeral room is not a configured pairing.
 
 - A complete snake draft and salary-cap draft reproduce every pick, owner, keeper, winning bid,
   pause/resume transition, and final state.

@@ -550,49 +550,6 @@ function LivePortfolio({ portfolio, reloadPortfolio }: LivePortfolioProps) {
           <h1>Your leagues</h1>
         </div>
         <div className="heading-actions">
-          {selectedEspnSeason ? (
-            <>
-              <span
-                className="freshness-label"
-                role="status"
-                title={
-                  refreshStatus
-                    ? refreshStatus.artifacts
-                        .map((artifact) => `${artifact.family}: ${artifact.state}`)
-                        .join(" · ")
-                    : undefined
-                }
-              >
-                <FreshnessDot
-                  state={
-                    refreshStatus?.current
-                      ? "fresh"
-                      : refreshStatus?.artifacts.some((artifact) => artifact.state === "missing")
-                        ? "missing"
-                        : "stale"
-                  }
-                />
-                {espnRefreshState.status === "working" && !refreshStatus
-                  ? "Checking ESPN freshness…"
-                  : espnRefreshState.status === "error" && !refreshStatus
-                    ? espnRefreshState.message
-                    : (refreshStatus?.display.label ?? "ESPN refresh status pending")}
-              </span>
-              <button
-                className="button button--outline"
-                type="button"
-                onClick={() => void requestEspnRefresh()}
-                disabled={espnRefreshState.status === "working"}
-              >
-                {espnRefreshState.status === "working" ? (
-                  <LoaderCircle className="spin" size={16} />
-                ) : (
-                  <RefreshCw size={16} />
-                )}
-                Refresh league
-              </button>
-            </>
-          ) : null}
           <span className="freshness-label">
             <span className="freshness-dot" />
             Updated {new Date(portfolio.generatedAt).toLocaleTimeString()}
@@ -602,7 +559,7 @@ function LivePortfolio({ portfolio, reloadPortfolio }: LivePortfolioProps) {
             type="button"
             onClick={() => void Promise.all([reloadPortfolio(), loadDashboard()])}
           >
-            <RefreshCw size={16} /> Reload
+            <RefreshCw size={16} /> Reload overview
           </button>
           <button
             className="button button--dark"

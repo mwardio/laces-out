@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import { createPkceChallenge, createYahooAuthorizationRequest, verifyOAuthState } from "./oauth.js";
+import { createYahooAuthorizationRequest, verifyOAuthState } from "./oauth.js";
 
 describe("Yahoo authorization request", () => {
-  it("builds authorization code + S256 PKCE parameters and hashed state", () => {
+  it("builds Yahoo's confidential-client authorization code request with hashed state", () => {
     let call = 0;
     const request = createYahooAuthorizationRequest({
       clientId: "client-id",
@@ -20,8 +20,10 @@ describe("Yahoo authorization request", () => {
     expect(url.origin + url.pathname).toBe("https://api.login.yahoo.com/oauth2/request_auth");
     expect(url.searchParams.get("response_type")).toBe("code");
     expect(url.searchParams.get("state")).toBe(request.state);
-    expect(url.searchParams.get("code_challenge_method")).toBe("S256");
-    expect(url.searchParams.get("code_challenge")).toBe(createPkceChallenge(request.codeVerifier));
+    expect(url.searchParams.has("code_challenge_method")).toBe(false);
+    expect(url.searchParams.has("code_challenge")).toBe(false);
+    expect(url.searchParams.get("scope")).toBe("openid fspt-r");
+    expect(url.searchParams.get("nonce")).toBe(request.codeVerifier);
     expect(request.stateHash).not.toBe(request.state);
     expect(request.expiresAt).toBe("2026-07-16T12:10:00.000Z");
   });

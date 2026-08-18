@@ -349,6 +349,19 @@ Release remains artifact-gated: each position/horizon cell requires the configur
 block, row, coverage, availability, convergence, and calibration evidence; sparse or mismatched
 cells remain withheld without replacing a prior good result.
 
+Historical ROS validation is model-release maintenance, not a nightly task. Run the locked release
+replay with `npm run ros:validate:release -w @laces-out/worker`. It always uses eight players per
+position, a 6,000-forecast cap, complete source lineage, no more than three concurrent profiles, and
+atomic per-profile reports under `reports/`. Restarting with the same `ROS_VALIDATION_RUN_ID` skips
+completed current-model reports. Admission independently rejects a report below that evidence
+contract, even if an individual undersized replay happens to clear its statistical gates.
+
+Deploy a new ROS model without a forecast gap in this order: finish the locked replay, dry-run and
+admit every intended profile while the old worker remains live, then rebuild the worker and ROS
+worker. The old model's artifacts and published sets remain authoritative until the new artifacts
+exist; a failed candidate never deletes or overwrites them. Ordinary nightly refreshes then consume
+the admitted artifacts automatically and require no validation rerun.
+
 The current rest-of-season rail uses model `laces-ros-distribution-v7`. Each current profile replay
 grades 3,264 forecasts across 68 batches and converges all 144 release/reference diagnostics. The
 three generic profiles have clean gate-only re-evaluations admitted under the current availability
@@ -647,15 +660,18 @@ What actually sends, and when:
 
 ## Change events
 
-The change feed is on for every deployment and needs no configuration. Four producers write to
+The change feed is on for every deployment and needs no configuration. Three producers write to
 `change_events`, and each one compares prior against next before it writes anything:
 
 | Producer         | Fires when                                                                  | Visibility                      |
 | ---------------- | --------------------------------------------------------------------------- | ------------------------------- |
-| `league-sync`    | a provider sync is _accepted_ (an unchanged replay never reaches the emit)  | `league` — current members      |
 | `roster-diff`    | a team's new roster checksum differs from its previous snapshot's           | `league` — current members      |
 | `injury-report`  | an admitted injury observation's `state_key` differs from the prior one     | `private` — rostering members   |
 | `decision-delta` | a newly written `recommendation_runs` row differs materially from the prior | `private` — the claiming member |
+
+Routine provider-sync completion is represented by the freshness status on league surfaces, not by
+a feed item. Historical `league.sync.completed` rows remain in the append-only ledger for audit and
+account export compatibility, but the feed and unread count exclude them.
 
 `change_events` is **append-only at the database level** (`change_events_append_only_trigger`, from
 migration `0003`): both `UPDATE` and `DELETE` raise. That is deliberate — an event ledger that can be
@@ -940,6 +956,91 @@ extension compatibility, production web/API builds, and the sanitized live matri
 provider note. It must run away from the live database and only after resource-intensive host work
 has finished.
 
+### DraftRead live-pulse consumers
+
+`DraftRead` lets a local or separately operated analysis process follow the normalized Laces Out
+live-draft pulse without receiving an application session or a bridge-device credential. Its only
+authorized request is:
+
+```text
+GET /v1/bridge/espn/live-draft/latest?leagueId=<numeric-id>&season=<year>
+Authorization: DraftRead <capability>
+```
+
+The query is strict: it accepts only `leagueId` and `season`, and both must equal one of the signed
+league-season scopes. The route returns the bounded schema-versioned pulse with feed freshness,
+cursor, draft state, normalized teams/rosters, completed sales, current auction, and sampled auction
+transitions. It never returns the capability, source device/page identifiers, raw observation, or
+provider player IDs. Responses are `no-store`, and the route is outside browser CORS. A consumer
+should read the credential from a private file at startup, construct the header in memory, and
+never put the token in a URL, command argument, environment file, log, telemetry field, or browser
+store.
+
+Prerequisites are a migrated/rebuilt API image, a healthy running PostgreSQL service, an existing
+non-archived ESPN league season, and current membership for the intended user. The live-draft
+release gate still applies: `ESPN_LIVE_DRAFT_SYNC` defaults to `false`, and the pulse route remains
+unavailable until an operator has completed that gate, set the flag to `true`, and restarted the
+API. Enabling `DraftRead` does not weaken the gate and does not enable any provider or draft write.
+
+Mint the shortest useful capability from the reviewed API image. This example uses a fresh private
+host directory and a one-hour lifetime; the container inherits `DATABASE_URL` and `SESSION_SECRET`
+from the existing Compose service without copying either secret into the command:
+
+```bash
+draft_read_dir="$(mktemp -d)"
+chmod 700 "$draft_read_dir"
+
+docker compose run --rm --no-deps \
+  --user "$(id -u):$(id -g)" \
+  --volume "$draft_read_dir:/run/draft-read" \
+  -e DRAFT_READ_LEAGUES='[{"leagueId":"<numeric-espn-league-id>","season":<year>}]' \
+  -e DRAFT_READ_TTL_SECONDS=3600 \
+  -e DRAFT_READ_TOKEN_FILE=/run/draft-read/capability.token \
+  api node apps/api/dist/mint-draft-read.js
+
+printf 'Credential directory: %s\n' "$draft_read_dir"
+```
+
+`DRAFT_READ_LEAGUES` accepts 1–32 unique exact scopes. The TTL defaults to 3,600 seconds and must be
+between one second and 43,200 seconds (12 hours). When exactly one current member belongs to every
+requested scope, the provisioner resolves that user. If the intersection is empty or ambiguous,
+repeat the command with `-e DRAFT_READ_USER_ID='<member-uuid>'`; the supplied member must currently
+belong to every scope. The output path must be absolute and absent. The command creates it
+exclusively with mode `0600`, refuses to overwrite an existing file, and prints only the expiry on
+success or one redacted failure message. Use a new protected directory for a replacement rather
+than weakening the exclusive-create check.
+
+Each request revalidates the signed HMAC, issue/expiry times, exact scope, and current membership;
+membership is checked a second time while the pulse is projected. Expected results are:
+
+- `200`: a strict normalized pulse; use `cursor` to detect a change and `fresh`, `ageSeconds`,
+  `feedState`, and `manualBackupActive` to decide whether it is safe to act on;
+- `401`: malformed, tampered, not-yet-valid, or expired capability;
+- `403`: requested scope is absent from the capability or current membership is rejected before
+  pulse loading;
+- `404`: initial authorization passed but no current pulse projection is available; and
+- `503`: live-draft sync is disabled or unavailable.
+
+The route allows 960 requests per minute per valid capability nonce, shared by every process using
+that file. Invalid `DraftRead` values share a separate 60-request-per-minute source-IP bucket.
+Bridge readers retain a 960-request-per-minute bucket per credential and pass through an earlier
+Bridge-only 1,920-request-per-minute source-IP ceiling; this preserves two full-rate paired devices
+behind one source while bounding bucket allocation from rotating random Bridge strings. `DraftRead`
+requests do not consume that Bridge-only ceiling. A 500 ms poll cadence therefore leaves
+substantial reconnect/status headroom for one consumer; do not spin on an error, and back off on
+`429` using `Retry-After`. A successful poll is not proof of fresh provider data: preserve the last
+known state, but suppress time-sensitive advice whenever the pulse reports stale, held,
+manual-backup, or otherwise unsafe state.
+
+Stop the consumer and remove every copy of the credential when the activity ends. Because tokens
+are stateless, deleting the original file is local containment, not server-side per-token
+revocation; an undiscovered copy remains usable until its short expiry while membership remains
+active. Removing that member from the league or archiving the league revokes access on the next
+read. For a live-draft incident, set `ESPN_LIVE_DRAFT_SYNC=false` and restart the API; this stops
+both pulse reads and new provider observations while preserving accepted state. Rotate
+`SESSION_SECRET` only for deployment-wide emergency invalidation, because that also changes other
+capabilities derived from the same root secret.
+
 ### Other provider gates
 
 - Yahoo access may be enabled after the operator completes the current provider terms,
@@ -949,9 +1050,11 @@ has finished.
   review, and a signed build. It is the web private-league path; a compatible native client may
   establish the same encrypted always-on authorization through ESPN-hosted sign-in.
 - ESPN live draft sync stays behind `ESPN_LIVE_DRAFT_SYNC=false` until the
-  [live draft release gate](./provider-notes/espn.md#live-draft-release-gate) passes against
-  disposable snake and salary-cap leagues. The DOM adapter's selector table is unverified until
-  then, and landing-page copy may not claim the capability before that gate.
+  [live draft release gate](./provider-notes/espn.md#live-draft-release-gate) passes. An
+  authenticated salary-cap mock may supply the sanitized selector/state evidence for the auction
+  profile without creating a disposable league, but calibration alone does not prove paired-room
+  identity, history, reconnect, or end-to-end feed behavior. Each unvalidated draft-mode profile
+  remains disabled, and landing-page copy may not claim the capability before its gate passes.
 - Neither gate enables provider writes. Lineup, waiver, and trade changes remain recommendation-only
   until separately approved, implemented, and shadow-validated.
 

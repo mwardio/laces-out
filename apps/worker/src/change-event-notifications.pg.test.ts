@@ -71,6 +71,8 @@ async function startDisposablePostgres(): Promise<DisposablePostgres> {
       "--rm",
       "--name",
       containerName,
+      "--tmpfs",
+      "/var/lib/postgresql/data",
       "-e",
       `POSTGRES_USER=${user}`,
       "-e",
@@ -191,7 +193,9 @@ describe.skipIf(!dockerAvailable)(
       await handle?.close();
       if (container?.containerName) {
         try {
-          execFileSync("docker", ["rm", "-f", container.containerName], { stdio: "ignore" });
+          execFileSync("docker", ["rm", "-f", "-v", container.containerName], {
+            stdio: "ignore",
+          });
         } catch {
           // Best-effort; the container was started with --rm.
         }

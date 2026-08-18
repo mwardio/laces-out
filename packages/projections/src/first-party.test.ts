@@ -441,6 +441,20 @@ describe("first-party component projection", () => {
           projection.components.targets ?? 0,
         );
       }
+      for (const [lowerBucket, upperBucket] of [
+        ["passing_yards_300_399_probability", "passing_yards_400_plus_probability"],
+        ["rushing_yards_100_199_probability", "rushing_yards_200_plus_probability"],
+        ["receiving_yards_100_199_probability", "receiving_yards_200_plus_probability"],
+      ] as const) {
+        if (projection.components[lowerBucket] === undefined) continue;
+        for (const values of [
+          projection.floorComponents,
+          projection.components,
+          projection.ceilingComponents,
+        ]) {
+          expect(values[lowerBucket]! + values[upperBucket]!).toBeLessThanOrEqual(1 + 1e-10);
+        }
+      }
     }
   });
 
@@ -1385,6 +1399,15 @@ describe("first-party rolling backtest", () => {
     expect(questionable.ceilingComponents.receiving_yards).toBeGreaterThanOrEqual(
       questionable.components.receiving_yards ?? 0,
     );
+    for (const [lowerBucket, upperBucket] of [
+      ["rushing_yards_100_199_probability", "rushing_yards_200_plus_probability"],
+      ["receiving_yards_100_199_probability", "receiving_yards_200_plus_probability"],
+    ] as const) {
+      expect(
+        (questionable.ceilingComponents[lowerBucket] ?? 0) +
+          (questionable.ceilingComponents[upperBucket] ?? 0),
+      ).toBeLessThanOrEqual(1 + 1e-10);
+    }
   });
 
   it("rejects stale-version and same-week calibration artifacts", () => {

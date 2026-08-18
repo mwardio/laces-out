@@ -36,6 +36,8 @@ const DEFAULT_PAGE_SIZE = 20;
 const MAX_PAGE_SIZE = 50;
 /** Caps the unread scan so an unbounded backlog cannot produce an unbounded count query. */
 const MAX_UNREAD_COUNT = 999;
+/** Historical sync receipts stay append-only, but routine freshness updates are not feed items. */
+const ROUTINE_SYNC_EVENT_TYPE = "league.sync.completed";
 
 export interface ChangeEventFeedQuery {
   readonly limit: number | null;
@@ -151,6 +153,7 @@ export class DrizzleChangeEventRepository implements ChangeEventRepository {
         left join change_event_receipts r
                on r.event_id = e.id and r.user_id = ${userId}::uuid
        where e.occurred_at > ${query.retentionFloor.toISOString()}::timestamptz
+         and e.event_type <> ${ROUTINE_SYNC_EVENT_TYPE}
          and r.dismissed_at is null
          and (
                e.visibility = 'global'
@@ -185,6 +188,7 @@ export class DrizzleChangeEventRepository implements ChangeEventRepository {
           left join change_event_receipts r
                  on r.event_id = e.id and r.user_id = ${userId}::uuid
          where e.occurred_at > ${retentionFloor.toISOString()}::timestamptz
+           and e.event_type <> ${ROUTINE_SYNC_EVENT_TYPE}
            and r.read_at is null
            and r.dismissed_at is null
            and (

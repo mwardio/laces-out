@@ -3,6 +3,7 @@ import {
   projectionScoringRulesFromProfileKey,
 } from "./scoring-position-keys.js";
 import {
+  ESPN_EVERY_N_FLOOR_UNIT_COMPONENTS,
   projectionScoringProfileKey,
   scoreProjectionStatComponents,
   validateProjectionScoringProfile,
@@ -10,7 +11,7 @@ import {
   type ProjectionStatComponents,
 } from "./scoring.js";
 
-export const FIRST_PARTY_ROS_MODEL_VERSION = "laces-ros-distribution-v7";
+export const FIRST_PARTY_ROS_MODEL_VERSION = "laces-ros-distribution-v8";
 /**
  * Frozen seed-stream lineage, deliberately decoupled from the model version as of v7: the v7
  * change is kicker-branch-only, and reseeding non-kicker positions would falsify the isolation
@@ -820,6 +821,11 @@ const FIELD_GOAL_DISTANCE_MAKES = [
   "field_goals_made_50_59",
   "field_goals_made_60_plus",
 ] as const;
+const MUTUALLY_EXCLUSIVE_YARDAGE_PROBABILITY_PAIRS = [
+  ["passing_yards_300_399_probability", "passing_yards_400_plus_probability"],
+  ["rushing_yards_100_199_probability", "rushing_yards_200_plus_probability"],
+  ["receiving_yards_100_199_probability", "receiving_yards_200_plus_probability"],
+] as const;
 
 function hasComponents(components: ProjectionStatComponents, keys: readonly string[]): boolean {
   return keys.every((key) => components[key] !== undefined);
@@ -859,12 +865,41 @@ function validateFootballComponentInvariants(
   components: ProjectionStatComponents,
   label: string,
 ): void {
+  for (const [lowerBucket, upperBucket] of MUTUALLY_EXCLUSIVE_YARDAGE_PROBABILITY_PAIRS) {
+    const lower = components[lowerBucket];
+    const upper = components[upperBucket];
+    if (lower === undefined && upper === undefined) continue;
+    if (lower === undefined || upper === undefined) {
+      throw new RangeError(`${label} requires both ${lowerBucket} and ${upperBucket}`);
+    }
+    if (lower > 1 || upper > 1 || lower + upper > 1 + FOOTBALL_INVARIANT_TOLERANCE) {
+      throw new RangeError(
+        `${label} requires ${lowerBucket} and ${upperBucket} to be mutually exclusive probabilities`,
+      );
+    }
+  }
   assertOrderedComponents(components, "passing_completions", "passing_attempts", label);
   assertOrderedComponents(components, "passing_interceptions", "passing_attempts", label);
   assertOrderedComponents(components, "receptions", "targets", label);
   assertOrderedComponents(components, "field_goals_made", "field_goals_attempted", label);
   assertOrderedComponents(components, "extra_points_made", "extra_points_attempted", label);
   assertOrderedComponents(components, "fumbles_lost", "fumbles", label);
+  for (const { component, source, divisor } of ESPN_EVERY_N_FLOOR_UNIT_COMPONENTS) {
+    const floorUnits = components[component];
+    if (floorUnits === undefined) continue;
+    const sourceValue =
+      source === "passing_incompletions"
+        ? components.passing_attempts !== undefined && components.passing_completions !== undefined
+          ? Math.max(0, components.passing_attempts - components.passing_completions)
+          : undefined
+        : components[source];
+    if (sourceValue === undefined) {
+      throw new RangeError(`${label} requires ${source} when ${component} is present`);
+    }
+    if (floorUnits > sourceValue / divisor + FOOTBALL_INVARIANT_TOLERANCE) {
+      throw new RangeError(`${label} requires ${component} not to exceed ${source} / ${divisor}`);
+    }
+  }
   assertDifferenceIdentity(
     components,
     "field_goals_attempted",
@@ -890,10 +925,27 @@ function setAggregateWhenComplete(
   components[aggregate] = parts.reduce((sum, part) => sum + components[part]!, 0);
 }
 
+function enforceMutuallyExclusiveProbabilityPair(
+  components: Record<string, number>,
+  lowerBucket: string,
+  upperBucket: string,
+): void {
+  if (components[lowerBucket] === undefined || components[upperBucket] === undefined) return;
+  components[lowerBucket] = clamp(components[lowerBucket], 0, 1);
+  components[upperBucket] = clamp(components[upperBucket], 0, 1);
+  const total = components[lowerBucket] + components[upperBucket];
+  if (total <= 1) return;
+  components[lowerBucket] /= total;
+  components[upperBucket] /= total;
+}
+
 /** Restores supported football identities after independently shocked raw components. */
 function enforceFootballComponentInvariants(
   components: Record<string, number>,
 ): Record<string, number> {
+  for (const [lowerBucket, upperBucket] of MUTUALLY_EXCLUSIVE_YARDAGE_PROBABILITY_PAIRS) {
+    enforceMutuallyExclusiveProbabilityPair(components, lowerBucket, upperBucket);
+  }
   if (components.passing_attempts !== undefined) {
     if (components.passing_completions !== undefined) {
       components.passing_completions = Math.min(
@@ -910,6 +962,17 @@ function enforceFootballComponentInvariants(
   }
   if (components.targets !== undefined && components.receptions !== undefined) {
     components.receptions = Math.min(components.receptions, components.targets);
+  }
+  for (const { component, source, divisor } of ESPN_EVERY_N_FLOOR_UNIT_COMPONENTS) {
+    if (components[component] === undefined) continue;
+    const sourceValue =
+      source === "passing_incompletions"
+        ? components.passing_attempts !== undefined && components.passing_completions !== undefined
+          ? Math.max(0, components.passing_attempts - components.passing_completions)
+          : undefined
+        : components[source];
+    if (sourceValue === undefined) continue;
+    components[component] = Math.min(components[component], sourceValue / divisor);
   }
   if (components.fumbles !== undefined && components.fumbles_lost !== undefined) {
     components.fumbles_lost = Math.min(components.fumbles_lost, components.fumbles);
@@ -1938,7 +2001,7 @@ export interface FirstPartyRosIntervalCalibrationArtifact {
   readonly position: FirstPartyRosPosition;
   readonly bucket: FirstPartyRosRemainingWeeksBucket;
   readonly evidenceIdentity: FirstPartyRosEvidenceIdentity | null;
-  readonly nominalCoverage: 0.7;
+  readonly nominalCoverage: 0.7 | 0.8 | 0.85;
   readonly lowerQuantile: 0.15;
   readonly upperQuantile: 0.85;
   /** Symmetric nonnegative CQR expansion learned from season/cutoff block maxima. */
@@ -1950,6 +2013,44 @@ export interface FirstPartyRosIntervalCalibrationArtifact {
   readonly samples: number;
   readonly evidenceChecksum: string | null;
   readonly artifactChecksum: string | null;
+}
+
+/**
+ * Some scoring shapes need a more conservative simultaneous interval than the established 70%
+ * default. Tiered yards-allowed scoring makes D/ST totals materially more discrete and correlated,
+ * so those cells use 80%. Long-horizon TE outcomes already carry the most role churn; adding
+ * yardage-game bonuses introduces another discrete tail, so those cells use 85%. These are
+ * scoring-shape rules rather than catalog-name exceptions, which gives equivalent custom ESPN
+ * profiles the same treatment.
+ */
+export function firstPartyRosNominalIntervalCoverage(
+  position: FirstPartyRosPosition,
+  bucket: FirstPartyRosRemainingWeeksBucket,
+  evidenceIdentity: FirstPartyRosEvidenceIdentity | null,
+): 0.7 | 0.8 | 0.85 {
+  if (evidenceIdentity === null) return 0.7;
+  try {
+    const rules = projectionScoringRulesFromProfileKey(evidenceIdentity.scoringProfileKey);
+    if (
+      position === "TE" &&
+      bucket === "nine-plus" &&
+      rules.some(
+        (rule) =>
+          rule.statId === "receiving_yards_100_199_probability" ||
+          rule.statId === "receiving_yards_200_plus_probability",
+      )
+    ) {
+      return 0.85;
+    }
+    if (position === "DST" && rules.some((rule) => rule.statId.startsWith("yards_allowed_"))) {
+      return 0.8;
+    }
+    return 0.7;
+  } catch {
+    // Invalid evidence identities are rejected by the artifact validator. Keep this helper total so
+    // malformed stored data fails closed instead of taking down a league-wide publication sweep.
+    return 0.7;
+  }
 }
 
 export interface FirstPartyRosCalibratedInterval {
@@ -2397,7 +2498,12 @@ function intervalCalibrationArtifactIsValid(
   return (
     artifact.state === "calibrated" &&
     artifact.calibrationVersion === FIRST_PARTY_ROS_INTERVAL_CALIBRATION_VERSION &&
-    artifact.nominalCoverage === 0.7 &&
+    artifact.nominalCoverage ===
+      firstPartyRosNominalIntervalCoverage(
+        artifact.position,
+        artifact.bucket,
+        artifact.evidenceIdentity,
+      ) &&
     artifact.lowerQuantile === 0.15 &&
     artifact.upperQuantile === 0.85 &&
     Number.isFinite(artifact.adjustmentPoints) &&
@@ -2432,6 +2538,7 @@ function buildIntervalCalibrationArtifact(
   evidenceChecksum: string | null,
 ): FirstPartyRosIntervalCalibrationArtifact {
   const scores = calibrationBlockScores(evidence.records, strategy);
+  const nominalCoverage = firstPartyRosNominalIntervalCoverage(position, bucket, evidenceIdentity);
   const trainedThroughSeason =
     evidence.seasons.size === 0 ? null : Math.max(...evidence.seasons.values());
   if (!enoughEvidence || evidenceIdentity === null || evidenceChecksum === null) {
@@ -2442,7 +2549,7 @@ function buildIntervalCalibrationArtifact(
       position,
       bucket,
       evidenceIdentity,
-      nominalCoverage: 0.7,
+      nominalCoverage,
       lowerQuantile: 0.15,
       upperQuantile: 0.85,
       adjustmentPoints: 0,
@@ -2455,11 +2562,11 @@ function buildIntervalCalibrationArtifact(
       artifactChecksum: null,
     };
   }
-  // Split-conformal finite-sample rank ceil((n+1)*(1-alpha)), alpha=.30. Evidence gates ensure
-  // enough blocks that this rank exists. Scores are nonnegative, so calibration never narrows or
-  // reverses the candidate interval.
+  // Split-conformal finite-sample rank ceil((n+1)*coverage). Evidence gates ensure enough blocks
+  // that this rank exists. Scores are nonnegative, so calibration never narrows or reverses the
+  // candidate interval.
   const orderedScores = [...scores].sort((left, right) => left - right);
-  const rank = Math.ceil((orderedScores.length + 1) * 0.7);
+  const rank = Math.ceil((orderedScores.length + 1) * nominalCoverage);
   if (rank < 1 || rank > orderedScores.length) {
     return {
       state: "not-calibrated",
@@ -2468,7 +2575,7 @@ function buildIntervalCalibrationArtifact(
       position,
       bucket,
       evidenceIdentity,
-      nominalCoverage: 0.7,
+      nominalCoverage,
       lowerQuantile: 0.15,
       upperQuantile: 0.85,
       adjustmentPoints: 0,
@@ -2491,7 +2598,7 @@ function buildIntervalCalibrationArtifact(
     position,
     bucket,
     evidenceIdentity,
-    nominalCoverage: 0.7,
+    nominalCoverage,
     lowerQuantile: 0.15,
     upperQuantile: 0.85,
     adjustmentPoints,

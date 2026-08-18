@@ -1,0 +1,106 @@
+{
+  "global": "LacesOut",
+  "pkg": "@laces-out/web",
+  "pkgDir": "/home/mack/projects/laces-out/node_modules/@laces-out/web",
+  "extraEntries": [
+    "../../../.design-sync/ds-env.mjs",
+    "../../../.design-sync/ds-styles.mjs"
+  ],
+  "exported": [
+    "AiAnswerContent",
+    "AiProviderPicker",
+    "DemoRankingsStudio",
+    "DraftWorkspace",
+    "LacesOutMark",
+    "PortfolioDashboard",
+    "RouteLoading",
+    "TeamAvatar",
+    "YahooAttribution",
+    "YahooNativeConnect"
+  ],
+  "storybookStatic": null,
+  "keyRecipe": 7,
+  "cfgSliceGlobal": "d25b1543c4011b8ae54388e0576aaa5f1d2906a84c86a72e1e57434082ebbdbe",
+  "components": [
+    {
+      "name": "AiAnswerContent",
+      "group": "data-display",
+      "srcSha": null,
+      "sourceKey": "2664157f91799f1f",
+      "cfgSlice": "5ff899b099eb6923833804cda955efdd69101524bec86f67dac5537cd81802e8",
+      "stories": []
+    },
+    {
+      "name": "AiProviderPicker",
+      "group": "forms",
+      "srcSha": null,
+      "sourceKey": "8bdca63903064aab",
+      "cfgSlice": "5ff899b099eb6923833804cda955efdd69101524bec86f67dac5537cd81802e8",
+      "stories": []
+    },
+    {
+      "name": "DemoRankingsStudio",
+      "group": "workspaces",
+      "srcSha": null,
+      "sourceKey": "060986e59c812f20",
+      "cfgSlice": "dadd0cc422aa25f47595597b1f731a645f7653ccb6846307736e17cbb3510bd3",
+      "stories": []
+    },
+    {
+      "name": "DraftWorkspace",
+      "group": "workspaces",
+      "srcSha": null,
+      "sourceKey": "daf640159330bb30",
+      "cfgSlice": "dadd0cc422aa25f47595597b1f731a645f7653ccb6846307736e17cbb3510bd3",
+      "stories": []
+    },
+    {
+      "name": "LacesOutMark",
+      "group": "brand",
+      "srcSha": null,
+      "sourceKey": "065b8d3d3c9e8521",
+      "cfgSlice": "5ff899b099eb6923833804cda955efdd69101524bec86f67dac5537cd81802e8",
+      "stories": []
+    },
+    {
+      "name": "PortfolioDashboard",
+      "group": "workspaces",
+      "srcSha": null,
+      "sourceKey": "cb58a98f569a1f70",
+      "cfgSlice": "c3632f273295757a58de80517b3a28a69e8427108dcaac97479f9204eee849bf",
+      "stories": []
+    },
+    {
+      "name": "RouteLoading",
+      "group": "feedback",
+      "srcSha": null,
+      "sourceKey": "45c42b36a5b61f47",
+      "cfgSlice": "5ff899b099eb6923833804cda955efdd69101524bec86f67dac5537cd81802e8",
+      "stories": []
+    },
+    {
+      "name": "TeamAvatar",
+      "group": "data-display",
+      "srcSha": null,
+      "sourceKey": "28897e3d652cbef6",
+      "cfgSlice": "5ff899b099eb6923833804cda955efdd69101524bec86f67dac5537cd81802e8",
+      "stories": []
+    },
+    {
+      "name": "YahooAttribution",
+      "group": "brand",
+      "srcSha": null,
+      "sourceKey": "e7138aa5b3e83c10",
+      "cfgSlice": "5ff899b099eb6923833804cda955efdd69101524bec86f67dac5537cd81802e8",
+      "stories": []
+    },
+    {
+      "name": "YahooNativeConnect",
+      "group": "forms",
+      "srcSha": null,
+      "sourceKey": "77b4ba92a7a5f0fa",
+      "cfgSlice": "5ff899b099eb6923833804cda955efdd69101524bec86f67dac5537cd81802e8",
+      "stories": []
+    }
+  ]
+}

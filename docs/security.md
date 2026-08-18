@@ -17,9 +17,9 @@ This application will hold access to real fantasy accounts. Treat it like a smal
 
 ## Controls
 
-- Yahoo uses server-side Authorization Code + S256 PKCE. OAuth state is random, hashed,
-  member-bound, expires quickly, and is consumed once. Its closed completion mode is stored beside
-  that binding; a provider denial must claim the same state before a native callback is selected.
+- Yahoo uses its documented confidential-client Authorization Code flow. OAuth state is random,
+  hashed, member-bound, expires quickly, and is consumed once. Its closed completion mode is stored
+  beside that binding; a provider denial must claim the same state before a native callback is selected.
   Native completion uses only fixed, credential-free `lacesout://connections/yahoo?status=…`
   callbacks and never accepts a callback URL from a client.
 - Credential envelopes use AES-256-GCM with a fresh nonce, authenticated context, explicit key version, and no key in the database.
@@ -205,6 +205,42 @@ one internal team and player, holding rather than guessing otherwise. Provider-s
 carry `source = 'espn'` under a database check constraint so a provider fact and a manually entered
 fact stay distinguishable forever, and the reconciler will not revert a manual event.
 `ESPN_LIVE_DRAFT_SYNC` gates ingest entirely and is the kill switch.
+
+`DraftRead` is a separate output-only capability for consumers of the normalized live-draft pulse.
+It is accepted only as the exact, case-sensitive `Authorization: DraftRead <capability>` scheme on
+`GET /v1/bridge/espn/live-draft/latest`; presenting that scheme to any other route is rejected
+before a handler can run. It grants no session, bridge-device, ingest, draft-event, provider-read,
+or provider-write authority, and the polling route is not exposed through browser CORS. Versioned
+claims contain one literal read permission, the intended user, 1–32 exact ESPN league-season pairs,
+issued/expiry times, and a 128-bit nonce. Their HMAC-SHA-256 signing key and signed-message domain
+are independently derived from `SESSION_SECRET`; verification uses canonical base64url decoding,
+strict bounded parsing, and a fixed-length timing-safe signature comparison. A capability lasts no
+more than 12 hours and is rejected before its issue time or at its expiry.
+
+A valid signature is identification, not durable authorization. The query must match an embedded
+league-season scope, and the API checks the named member's current membership in that exact,
+non-archived ESPN league before loading a pulse. It reads the membership again while assembling the
+bounded response, closing a concurrent-removal race before anything is returned. The response is a
+strict normalized projection and omits the source device, page session, observation identifier,
+checksum, issue payload, stored observation document, and provider player identifiers. Authorization
+headers are redacted from application logs. Valid capabilities receive separate nonce-scoped
+960-request-per-minute buckets; malformed, forged, and expired `DraftRead` values share a
+60-request-per-minute source-IP bucket so random token rotation cannot evade throttling. Bridge
+readers retain their 960-request-per-minute credential buckets, preceded by a Bridge-only
+1,920-request-per-minute source-IP ceiling. The earlier source guard bounds both traffic and
+credential-bucket allocation when a caller rotates syntactically valid random Bridge values;
+`DraftRead` traffic is not charged to that Bridge-only ceiling.
+
+The one-shot provisioner checks current membership before minting, does not persist the capability
+or its digest, writes only to a new absolute path with mode `0600`, and reports only success/failure
+plus expiry. Treat that file as a bearer credential: keep it out of source control, `.env` files,
+URLs, browser storage, command arguments, logs, and backups, and use a lifetime no longer than the
+consumer needs. Removing a local file prevents that copy from being reused but does not revoke
+copies. Expiry is the normal per-capability revocation boundary; removing the membership or
+archiving the league removes access immediately. `ESPN_LIVE_DRAFT_SYNC=false` disables all live
+ingest and pulse reads. Rotating `SESSION_SECRET` invalidates every outstanding `DraftRead`
+capability, but it also changes other domain-separated application capabilities and must be treated
+as a coordinated deployment-wide secret rotation.
 
 The companion's external-message surface is reachable only from origins in its
 `externally_connectable` allowlist (the two published Laces Out domains in the store build).

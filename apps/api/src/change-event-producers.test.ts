@@ -3,7 +3,6 @@ import { describe, expect, it, vi } from "vitest";
 import type { ChangeEventDraft, ChangeEventEmitResult } from "@laces-out/change-events";
 
 import {
-  emitLeagueSyncChangeEvents,
   emitProviderSyncChangeEvents,
   emitRosterChangeEvents,
   type ChangeEventProducerRepository,
@@ -47,62 +46,6 @@ function repository(
     ...overrides,
   };
 }
-
-describe("emitLeagueSyncChangeEvents", () => {
-  it("emits one league-visible event for an accepted sync", async () => {
-    const emit = vi.fn<EmitCall>(() =>
-      Promise.resolve({ inserted: 1, duplicates: 0, receiptsCreated: 2 }),
-    );
-
-    await emitLeagueSyncChangeEvents({ repository: repository(), emit }, input);
-
-    expect(emit).toHaveBeenCalledTimes(1);
-    const [drafts] = emit.mock.calls[0]!;
-    expect(drafts).toHaveLength(1);
-    expect(drafts[0]).toMatchObject({
-      source: "league-sync",
-      eventType: "league.sync.completed",
-      aggregateType: "league-season",
-      aggregateId: SEASON_ID,
-      leagueId: LEAGUE_ID,
-      actorUserId: OWNER,
-      visibility: "league",
-      severity: "info",
-      recipientUserIds: [OWNER, MANAGER],
-    });
-    expect(drafts[0]!.deduplicationKey).toMatch(/^league\.sync\.completed:[a-f0-9]{64}$/u);
-    // The payload names nothing about another member's roster.
-    expect(drafts[0]!.payload).toEqual({
-      v: 1,
-      provider: "espn",
-      season: 2026,
-      week: 4,
-      teamCount: 1,
-    });
-  });
-
-  it("emits nothing when the persister reported an unchanged snapshot", async () => {
-    const emit = vi.fn();
-
-    await emitLeagueSyncChangeEvents(
-      { repository: repository(), emit },
-      { ...input, provider: "yahoo", state: "unchanged" },
-    );
-
-    expect(emit).not.toHaveBeenCalled();
-  });
-
-  it("emits nothing when the league has no members left", async () => {
-    const emit = vi.fn();
-
-    await emitLeagueSyncChangeEvents(
-      { repository: repository({ listLeagueMembers: () => Promise.resolve([]) }), emit },
-      input,
-    );
-
-    expect(emit).not.toHaveBeenCalled();
-  });
-});
 
 function rosterRepository(
   pair: readonly { readonly id: string }[],
@@ -192,6 +135,16 @@ describe("emitRosterChangeEvents", () => {
 });
 
 describe("emitProviderSyncChangeEvents", () => {
+  it("does not turn a routine accepted sync into member activity", async () => {
+    const emit = vi.fn();
+    const onError = vi.fn();
+
+    await emitProviderSyncChangeEvents({ repository: repository(), emit }, input, onError);
+
+    expect(emit).not.toHaveBeenCalled();
+    expect(onError).not.toHaveBeenCalled();
+  });
+
   it("swallows a failure so a committed ingestion still reports success", async () => {
     const onError = vi.fn();
 

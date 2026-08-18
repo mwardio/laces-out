@@ -65,6 +65,34 @@ function internalPosition(position: FfcAdpPlayer["position"]): string {
   return position;
 }
 
+function normalizedPosition(position: string): string {
+  const normalized = position.trim().toUpperCase();
+  if (["DEF", "DST", "D/ST"].includes(normalized)) return "DST";
+  if (normalized === "PK") return "K";
+  return normalized;
+}
+
+function normalizedTeam(team?: string | null): string {
+  const normalized = team?.trim().toUpperCase() ?? "";
+  const aliases: Readonly<Record<string, string>> = {
+    JAC: "JAX",
+    LAR: "LA",
+    OAK: "LV",
+    SD: "LAC",
+    WSH: "WAS",
+  };
+  return aliases[normalized] ?? normalized;
+}
+
+function normalizedName(name: string): string {
+  return name
+    .normalize("NFKD")
+    .replace(/\p{M}+/gu, "")
+    .trim()
+    .toLocaleLowerCase("en-US")
+    .replace(/\s+(?:jr|sr|ii|iii|iv|v)\.?$/iu, "");
+}
+
 /** Exported so a test can prove every admitted context resolves a registered threshold. */
 export function ffcAdpSourceKey(context: FfcAdpContext): string {
   const position = context.position ? `.${context.position.toLowerCase()}` : "";
@@ -176,8 +204,11 @@ async function recordFailure(
 }
 
 function identityKey(name: string, position: string, team?: string): string {
-  const normalizedName = name.normalize("NFKC").trim().toLocaleLowerCase("en-US");
-  return `${normalizedName}|${position.trim().toUpperCase()}|${team?.trim().toUpperCase() ?? ""}`;
+  return `${normalizedName(name)}|${normalizedPosition(position)}|${normalizedTeam(team)}`;
+}
+
+function nameTeamKey(name: string, team?: string | null): string {
+  return `${normalizedName(name)}|${normalizedTeam(team)}`;
 }
 
 export function buildUniqueFfcIdentity(
@@ -190,6 +221,8 @@ export function buildUniqueFfcIdentity(
 ): {
   readonly teamAware: ReadonlyMap<string, string>;
   readonly namePosition: ReadonlyMap<string, string>;
+  readonly nameTeam: ReadonlyMap<string, string>;
+  readonly defenseByTeam: ReadonlyMap<string, string>;
 } {
   function uniqueMap(keys: (row: (typeof rows)[number]) => readonly string[]) {
     const candidates = new Map<string, string | null>();
@@ -206,6 +239,18 @@ export function buildUniqueFfcIdentity(
       row.nflTeam ? [identityKey(row.fullName, row.primaryPosition, row.nflTeam)] : [],
     ),
     namePosition: uniqueMap((row) => [identityKey(row.fullName, row.primaryPosition)]),
+    // Final fallback for a uniquely named player on one NFL club whose real-world role and fantasy
+    // eligibility disagree (currently Travis Hunter: canonical CB, FFC WR). Collisions are removed
+    // by uniqueMap, so this never chooses between two same-name records.
+    nameTeam: uniqueMap((row) => (row.nflTeam ? [nameTeamKey(row.fullName, row.nflTeam)] : [])),
+    // A fantasy defense is the NFL club, not a person. FFC names it "Seattle Defense" while the
+    // canonical projection catalog names it "SEA D/ST", so name matching can never work. Team is
+    // the stable identity and aliases normalize nflverse's LA to FFC's LAR (plus legacy codes).
+    defenseByTeam: uniqueMap((row) =>
+      normalizedPosition(row.primaryPosition) === "DST" && row.nflTeam
+        ? [normalizedTeam(row.nflTeam)]
+        : [],
+    ),
   };
 }
 
@@ -237,11 +282,19 @@ function resolvePlayer(
   const external = identity.external.get(player.ffcPlayerId);
   if (external) return { playerId: external, confidence: "0.9500" };
   const position = internalPosition(player.position);
+  if (position === "DST") {
+    return {
+      playerId: identity.defenseByTeam.get(normalizedTeam(player.nflTeam)) ?? null,
+      confidence: "0.9000",
+    };
+  }
   const teamAware = identity.teamAware.get(identityKey(player.name, position, player.nflTeam));
   if (teamAware) return { playerId: teamAware, confidence: "0.8500" };
+  const namePosition = identity.namePosition.get(identityKey(player.name, position));
+  if (namePosition) return { playerId: namePosition, confidence: "0.7500" };
   return {
-    playerId: identity.namePosition.get(identityKey(player.name, position)) ?? null,
-    confidence: "0.7500",
+    playerId: identity.nameTeam.get(nameTeamKey(player.name, player.nflTeam)) ?? null,
+    confidence: "0.6500",
   };
 }
 
@@ -404,6 +457,9 @@ export class FfcAdpRefresher {
                 },
               })),
             )
+            // Automated observations are append-only by database trigger. Matcher improvements
+            // therefore take effect on the next new upstream as-of date; a same-date replay keeps
+            // the original evidence intact instead of mutating its canonical identity link.
             .onConflictDoNothing()
             .returning({ id: adpObservations.id });
           rowsWritten += inserted.length;

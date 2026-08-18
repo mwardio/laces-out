@@ -37,6 +37,8 @@ describe("Yahoo XML normalization", () => {
         auctionBudget: 200,
         waiverType: "faab",
         faabBudget: 100,
+        usesFractionalPoints: false,
+        usesNegativePoints: true,
       },
     });
     expect(bundle.league.settings.rosterSlots).toEqual([
@@ -48,6 +50,7 @@ describe("Yahoo XML normalization", () => {
       statId: "4",
       name: "Passing Yards",
       points: 0.04,
+      positionTypes: ["O"],
     });
     expect(bundle.teams).toHaveLength(2);
     expect(bundle.teams[0]).toMatchObject({

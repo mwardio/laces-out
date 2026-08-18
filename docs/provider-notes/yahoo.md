@@ -9,15 +9,16 @@ fantasy resources. Private league data is authorized with OAuth. Yahoo reviews F
 applications separately; a general Yahoo application or OAuth key does not by itself establish
 Fantasy API access.
 
-The implemented authorization path is Authorization Code + S256 PKCE:
+The implemented authorization path is Yahoo's confidential-client Authorization Code flow:
 
-1. Generate independent 256-bit random `state` and PKCE verifier values.
-2. Store only the SHA-256 state digest. Encrypt the verifier in the short-lived, single-use OAuth
-   transaction.
+1. Generate a 256-bit random `state` value and a separate encrypted transaction sentinel.
+2. Store only the SHA-256 state digest. Encrypt the sentinel in the short-lived, single-use OAuth
+   transaction so an altered row fails closed.
 3. Redirect to `https://api.login.yahoo.com/oauth2/request_auth` with the exact registered
-   redirect URI, `response_type=code`, state, `code_challenge`, and `code_challenge_method=S256`.
+   redirect URI, `response_type=code`, and one-time state. Yahoo's documented confidential-client
+   flow uses the client secret at token exchange and does not accept PKCE parameters.
 4. On callback, check expiry and the state digest before exchanging the code server-side.
-5. POST the code, exact redirect URI, and `code_verifier` to
+5. POST the code and exact redirect URI with confidential-client authentication to
    `https://api.login.yahoo.com/oauth2/get_token`. Do not send Yahoo tokens to browser storage.
 
 Yahoo documents an approximately one-hour access-token lifetime. More importantly, Yahoo may
@@ -44,6 +45,13 @@ ID is retained only as a secondary provider field. The XML parser:
 - validates well-formedness;
 - parses the minimal league, settings, roster-position, scoring-modifier, team, manager, and
   roster-player surface into the normalized sync contract.
+
+League settings also retain Yahoo's declared scoring-category position families and its
+fractional/negative-points switches. When fractional scoring is disabled, conventional passing,
+rushing, and receiving yardage modifiers are normalized to exact whole-group components for the
+common 5/10/20/25/50/100-yard divisors. Unsupported divisors, combined return-yard grouping, and
+threshold bonuses remain fail-closed rather than approximating bucket behavior. Bonus support
+requires a sanitized approved-account settings fixture that proves Yahoo's exact bonus payload.
 
 No numeric quota is assumed. The production `YahooFantasyReadClient` now applies a configurable
 request timeout, a 5 MiB maximum XML limit by default, a four-request concurrency limit by default,
@@ -173,7 +181,7 @@ implemented or implied.
 - [Yahoo Fantasy API developer portal](https://sports.yahoo.com/developer/)
 - [Yahoo Fantasy Sports API guide](https://developer.yahoo.com/fantasysports/guide/)
 - [Yahoo server-side authorization-code flow](https://developer.yahoo.com/oauth2/guide/flows_authcode/)
-- [Sign In with Yahoo integration guide (PKCE and token parameters)](https://developer.yahoo.com/sign-in-with-yahoo/)
+- [Yahoo server-side Authorization Code flow](https://developer.yahoo.com/oauth2/guide/flows_authcode/)
 - [Yahoo OAuth API request guidance](https://developer.yahoo.com/oauth2/guide/apirequests/)
 - [Yahoo Fantasy Sports APIs terms](https://legal.yahoo.com/us/en/yahoo/terms/product-atos/fantasysportsapi/index.html)
 

@@ -711,6 +711,44 @@ describe("first-party ROS shadow service publication rail", () => {
     expect(String(metadata.diagnostics)).toContain("ros_artifact_arbitration_skipped_targets");
   });
 
+  it("builds independent admitted scoring profiles concurrently", async () => {
+    const alternateProfile = rosScoringProfile("standard");
+    const alternateArtifact = artifactRow({
+      scoringProfileKey: alternateProfile.scoringProfileKey,
+      policy: releasingPolicy(alternateProfile.scoringProfileKey),
+    });
+    const harness = new Harness({ artifacts: [artifactRow(), alternateArtifact] });
+    let activeBuilds = 0;
+    let maximumActiveBuilds = 0;
+    let releaseBuilds: (() => void) | undefined;
+    const bothStarted = new Promise<void>((resolve) => {
+      releaseBuilds = resolve;
+    });
+    const provider: FirstPartyRosCandidateProvider = {
+      async sourceChecksum() {
+        return "9".repeat(64);
+      },
+      async buildTargets() {
+        activeBuilds += 1;
+        maximumActiveBuilds = Math.max(maximumActiveBuilds, activeBuilds);
+        if (activeBuilds === 2) releaseBuilds?.();
+        await bothStarted;
+        activeBuilds -= 1;
+        return [];
+      },
+    };
+    const service = new FirstPartyRosProjectionShadowService({
+      database: harness.database,
+      now: () => now,
+      candidateProvider: provider,
+    });
+
+    await service.refreshProjections(job, context);
+
+    expect(maximumActiveBuilds).toBe(2);
+    expect(harness.countInserts(projectionSets)).toBe(0);
+  });
+
   it("withholds and preserves the prior good set on a scoring-profile mismatch", async () => {
     const target = { ...baseTarget(), leagueScoringProfileKey: "different-profile:v1" };
     const harness = new Harness({ artifact: artifactRow() });

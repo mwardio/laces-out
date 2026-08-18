@@ -857,7 +857,7 @@ const espnLiveDraftPickOwnershipSchema = z
   .strict();
 export type EspnLiveDraftPickOwnership = z.infer<typeof espnLiveDraftPickOwnershipSchema>;
 
-const espnLiveDraftCurrentAuctionSchema = z
+export const espnLiveDraftCurrentAuctionSchema = z
   .object({
     nominationNumber: z.number().int().min(1).max(ESPN_LIVE_DRAFT_LIMITS.maximumPicks),
     nominatingProviderTeamId: espnProviderTeamIdSchema.nullable(),
@@ -866,6 +866,10 @@ const espnLiveDraftCurrentAuctionSchema = z
     proTeam: espnLiveDraftText(12).nullable(),
     position: espnLiveDraftText(12).nullable(),
     highBidProviderTeamId: espnProviderTeamIdSchema.nullable(),
+    /** Backward-compatible V1 addition; old stored/request payloads parse to null. */
+    highBidTeamName: espnLiveDraftText(ESPN_LIVE_DRAFT_LIMITS.maximumTeamNameLength)
+      .nullable()
+      .default(null),
     highBid: z.number().int().min(0).max(ESPN_LIVE_DRAFT_LIMITS.maximumPrice).nullable(),
   })
   .strict();
@@ -1051,6 +1055,12 @@ export const espnLiveDraftFeedStateSchema = z.enum([
 export type EspnLiveDraftFeedState = z.infer<typeof espnLiveDraftFeedStateSchema>;
 
 /**
+ * Opaque, generation-aware coordinate for one accepted provider frame. Unlike a page revision,
+ * this remains monotonic when the active ESPN tab reloads or another paired source takes over.
+ */
+export const espnLiveDraftFeedCursorSchema = z.string().regex(/^(0|[1-9]\d{0,19})$/u);
+
+/**
  * Bounded reasons an observation did not advance the board. Kept as an enum so logs and metrics
  * never carry free text lifted from a provider page.
  */
@@ -1088,6 +1098,7 @@ export const espnLiveDraftIngestResponseSchema = z
     unresolvedPlayers: z.number().int().min(0),
     issueCode: espnLiveDraftIssueCodeSchema.nullable(),
     sourceLeaseExpiresAt: z.iso.datetime().nullable(),
+    feedCursor: espnLiveDraftFeedCursorSchema.nullable(),
   })
   .strict();
 export type EspnLiveDraftIngestResponse = z.infer<typeof espnLiveDraftIngestResponseSchema>;
@@ -1098,14 +1109,14 @@ export type EspnLiveDraftIngestResponse = z.infer<typeof espnLiveDraftIngestResp
  */
 export const espnLiveDraftTransientAuctionSchema = z
   .object({
-    nominationNumber: z.number().int().min(1),
+    nominationNumber: z.number().int().min(1).max(ESPN_LIVE_DRAFT_LIMITS.maximumPicks),
     nominatingTeamId: z.string().uuid().nullable(),
     playerId: z.string().uuid().nullable(),
     playerName: espnLiveDraftText(ESPN_LIVE_DRAFT_LIMITS.maximumPlayerNameLength),
     proTeam: espnLiveDraftText(12).nullable(),
     position: espnLiveDraftText(12).nullable(),
     highBidTeamId: z.string().uuid().nullable(),
-    highBid: z.number().int().min(0).nullable(),
+    highBid: z.number().int().min(0).max(ESPN_LIVE_DRAFT_LIMITS.maximumPrice).nullable(),
     observedAt: z.iso.datetime(),
   })
   .strict();
@@ -1142,6 +1153,219 @@ export const espnLiveDraftFeedStatusSchema = z
 export type EspnLiveDraftFeedStatus = z.infer<typeof espnLiveDraftFeedStatusSchema>;
 
 /**
+ * The bridge-authenticated live pulse is intentionally smaller than a draft-session snapshot.
+ * These bounds keep a latency-sensitive read-only client useful during a fast auction without turning
+ * the endpoint into an export of the stored provider observation log.
+ */
+export const ESPN_LIVE_DRAFT_PULSE_LIMITS = {
+  maximumTransitionItems: 64,
+  maximumObservationWindow: 256,
+  maximumRosterSlotsPerTeam: 100,
+} as const;
+
+/**
+ * Limits for the short-lived, read-only capability that can consume one or more ESPN live-draft
+ * pulses. A capability never grants ingest or any other bridge operation, and it never carries a
+ * wildcard league scope.
+ */
+export const DRAFT_READ_TOKEN_LIMITS = {
+  maximumLeagueScopes: 32,
+  maximumLifetimeSeconds: 12 * 60 * 60,
+  nonceBytes: 16,
+  maximumTokenCharacters: 4_096,
+} as const;
+
+export const draftReadPermissionSchema = z.literal("espn-live-draft-pulse:read");
+export type DraftReadPermission = z.infer<typeof draftReadPermissionSchema>;
+
+export const draftReadLeagueScopeSchema = z
+  .object({
+    leagueId: espnProviderTeamIdSchema,
+    season: z.number().int().min(2019).max(2100),
+  })
+  .strict();
+export type DraftReadLeagueScope = z.infer<typeof draftReadLeagueScopeSchema>;
+
+/**
+ * Signed payload for a DraftRead capability. Epoch seconds keep the serialized token compact.
+ * Strict parsing, finite bounds, and duplicate rejection make every permitted league-season pair
+ * explicit and prevent ambiguous scope interpretation across consumers.
+ */
+export const draftReadTokenClaimsSchema = z
+  .object({
+    version: z.literal(1),
+    userId: z.string().uuid(),
+    leagues: z
+      .array(draftReadLeagueScopeSchema)
+      .min(1)
+      .max(DRAFT_READ_TOKEN_LIMITS.maximumLeagueScopes),
+    permission: draftReadPermissionSchema,
+    iat: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
+    exp: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
+    /** 128 random bits, encoded without padding as 22 base64url characters. */
+    nonce: z.string().regex(/^[A-Za-z0-9_-]{22}$/u),
+  })
+  .strict()
+  .superRefine((claims, context) => {
+    if (claims.exp <= claims.iat) {
+      context.addIssue({
+        code: "custom",
+        path: ["exp"],
+        message: "must be later than iat",
+      });
+    } else if (claims.exp - claims.iat > DRAFT_READ_TOKEN_LIMITS.maximumLifetimeSeconds) {
+      context.addIssue({
+        code: "custom",
+        path: ["exp"],
+        message: "capability lifetime exceeds the maximum",
+      });
+    }
+
+    const uniqueScopes = new Set(
+      claims.leagues.map((scope) => `${scope.leagueId}\u0000${scope.season}`),
+    );
+    if (uniqueScopes.size !== claims.leagues.length) {
+      context.addIssue({
+        code: "custom",
+        path: ["leagues"],
+        message: "league-season scopes must be unique",
+      });
+    }
+  });
+export type DraftReadTokenClaims = z.infer<typeof draftReadTokenClaimsSchema>;
+
+const espnLiveDraftPulseRosterSlotSchema = z
+  .object({
+    id: espnLiveDraftText(200),
+    type: z.enum(ROSTER_SLOT_TYPES),
+    label: espnLiveDraftText(100),
+    kind: z.enum(["STARTER", "BENCH", "INJURED_RESERVE", "TAXI"]),
+    eligiblePositions: z.array(z.enum(NFL_POSITIONS)).min(1).max(NFL_POSITIONS.length),
+  })
+  .strict();
+
+const espnLiveDraftPulseRosterPlayerSchema = z
+  .object({
+    playerId: z.string().uuid(),
+    playerName: espnLiveDraftText(ESPN_LIVE_DRAFT_LIMITS.maximumPlayerNameLength),
+    positions: z.array(z.enum(NFL_POSITIONS)).min(1).max(NFL_POSITIONS.length),
+  })
+  .strict();
+
+const espnLiveDraftPulseTeamSchema = z
+  .object({
+    id: z.string().uuid(),
+    name: espnLiveDraftText(ESPN_LIVE_DRAFT_LIMITS.maximumTeamNameLength),
+    budget: z.number().int().min(0).max(1_000_000).nullable(),
+    spent: z.number().int().min(0).max(1_000_000).nullable(),
+    remainingBudget: z.number().int().min(0).max(1_000_000).nullable(),
+    openSlots: z.number().int().min(0).max(ESPN_LIVE_DRAFT_PULSE_LIMITS.maximumRosterSlotsPerTeam),
+    maximumBid: z.number().int().min(0).max(1_000_000).nullable(),
+    rosterPlayerIds: z
+      .array(z.string().uuid())
+      .max(ESPN_LIVE_DRAFT_PULSE_LIMITS.maximumRosterSlotsPerTeam),
+    /** Compact internal identities let recommendation surfaces derive positional needs. */
+    rosterPlayers: z
+      .array(espnLiveDraftPulseRosterPlayerSchema)
+      .max(ESPN_LIVE_DRAFT_PULSE_LIMITS.maximumRosterSlotsPerTeam),
+    rosterSlots: z
+      .array(espnLiveDraftPulseRosterSlotSchema)
+      .max(ESPN_LIVE_DRAFT_PULSE_LIMITS.maximumRosterSlotsPerTeam),
+  })
+  .strict();
+
+const espnLiveDraftPulseCompletedSaleSchema = z
+  .object({
+    sequence: z.number().int().min(1).max(1_000_000),
+    playerId: z.string().uuid(),
+    playerName: espnLiveDraftText(ESPN_LIVE_DRAFT_LIMITS.maximumPlayerNameLength),
+    positions: z.array(z.enum(NFL_POSITIONS)).min(1).max(NFL_POSITIONS.length),
+    teamId: z.string().uuid(),
+    teamName: espnLiveDraftText(ESPN_LIVE_DRAFT_LIMITS.maximumTeamNameLength),
+    price: z.number().int().min(0).max(ESPN_LIVE_DRAFT_LIMITS.maximumPrice),
+  })
+  .strict();
+
+const espnLiveDraftPulseTransitionSchema = espnLiveDraftTransientAuctionSchema
+  .extend({
+    pageRevision: z.number().int().min(0).max(1_000_000),
+  })
+  .strict();
+
+const espnLiveDraftPulseCurrentAuctionSchema = espnLiveDraftTransientAuctionSchema
+  .extend({
+    /** Exact internal eligibility positions when the nominated player resolves. */
+    playerPositions: z.array(z.enum(NFL_POSITIONS)).min(1).max(NFL_POSITIONS.length).nullable(),
+    /** ESPN's minimum allowable next offer: the configured minimum or current offer plus $1. */
+    nextBid: z.number().int().min(1).max(ESPN_LIVE_DRAFT_LIMITS.maximumPrice).nullable(),
+    nextBidSource: z.literal("ESPN_MINIMUM_INCREMENT").nullable(),
+    /** Null until both the controlled roster and current player resolve internally. */
+    rosterFit: z.boolean().nullable(),
+    /** Joined strategy/market data may supply this later; the provider feed never invents it. */
+    marketInflationFactor: z.number().min(0).max(1_000).nullable(),
+  })
+  .strict();
+
+/**
+ * Read-only, device-scoped draft state for deterministic math plus advisory views.
+ *
+ * The cursor is an opaque, non-negative decimal integer. It composes source generation and page
+ * revision so a transient bid advances it even when the durable draft-event sequence does not.
+ * Every identity below is internal except the explicitly named `providerLeagueId` scope.
+ */
+export const espnLiveDraftPulseResponseSchema = z
+  .object({
+    schemaVersion: z.literal(1),
+    provider: z.literal("espn"),
+    providerLeagueId: espnProviderTeamIdSchema,
+    season: z.number().int().min(2019).max(2100),
+    cursor: espnLiveDraftFeedCursorSchema,
+    pageRevision: z.number().int().min(0).max(1_000_000).nullable(),
+    generatedAt: z.iso.datetime(),
+    observedAt: z.iso.datetime().nullable(),
+    lastReceivedAt: z.iso.datetime().nullable(),
+    fresh: z.boolean(),
+    ageSeconds: z.number().min(0).max(Number.MAX_SAFE_INTEGER).nullable(),
+    feedState: espnLiveDraftFeedStateSchema,
+    manualBackupActive: z.boolean(),
+    draft: z
+      .object({
+        id: z.string().uuid(),
+        sequence: z.number().int().min(0).max(1_000_000),
+        persistedState: z.enum(["created", "live", "complete"]),
+        mode: z.enum(["SNAKE", "AUCTION"]),
+        minimumBid: z.number().int().min(0).max(1_000_000).nullable(),
+        complete: z.boolean(),
+        teams: z
+          .array(espnLiveDraftPulseTeamSchema)
+          .min(2)
+          .max(ESPN_LIVE_DRAFT_LIMITS.maximumTeams),
+        completedSales: z
+          .array(espnLiveDraftPulseCompletedSaleSchema)
+          .max(ESPN_LIVE_DRAFT_LIMITS.maximumPicks),
+      })
+      .strict(),
+    controlledTeamId: z.string().uuid().nullable(),
+    currentAuction: espnLiveDraftPulseCurrentAuctionSchema.nullable(),
+    auctionTransitions: z
+      .object({
+        sampling: z.literal("sampled"),
+        maximumItems: z.literal(ESPN_LIVE_DRAFT_PULSE_LIMITS.maximumTransitionItems),
+        observationsScanned: z
+          .number()
+          .int()
+          .min(0)
+          .max(ESPN_LIVE_DRAFT_PULSE_LIMITS.maximumObservationWindow),
+        items: z
+          .array(espnLiveDraftPulseTransitionSchema)
+          .max(ESPN_LIVE_DRAFT_PULSE_LIMITS.maximumTransitionItems),
+      })
+      .strict(),
+  })
+  .strict();
+export type EspnLiveDraftPulseResponse = z.infer<typeof espnLiveDraftPulseResponseSchema>;
+
+/**
  * Stream payload. Carries only enough to invalidate a cached session, so there is exactly one
  * canonical response contract for draft state and reconnect stays trivial.
  */
@@ -1149,6 +1373,7 @@ export const draftStreamInvalidationSchema = z
   .object({
     draftId: z.string().uuid(),
     sequence: z.number().int().min(0),
+    /** Generation plus page revision, encoded as a safe integer for wire compatibility. */
     feedRevision: z.number().int().min(0),
     occurredAt: z.iso.datetime(),
   })

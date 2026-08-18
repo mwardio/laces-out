@@ -28,6 +28,29 @@ describe("FFC ADP worker integration helpers", () => {
     expect(identity.namePosition.get("unique player|RB|")).toBe("three");
   });
 
+  it("normalizes source suffixes, diacritics, and defenses for subsequent append-only snapshots", () => {
+    const identity = buildUniqueFfcIdentity([
+      { id: "cook", fullName: "James Cook III", primaryPosition: "RB", nflTeam: "BUF" },
+      { id: "kicker", fullName: "Eddy Piñeiro", primaryPosition: "PK", nflTeam: "SF" },
+      { id: "rams", fullName: "LA D/ST", primaryPosition: "D/ST", nflTeam: "LAR" },
+    ]);
+
+    expect(identity.teamAware.get("james cook|RB|BUF")).toBe("cook");
+    expect(identity.teamAware.get("eddy pineiro|K|SF")).toBe("kicker");
+    expect(identity.defenseByTeam.get("LA")).toBe("rams");
+  });
+
+  it("offers a unique name-team fallback for dual-role players and quarantines collisions", () => {
+    const identity = buildUniqueFfcIdentity([
+      { id: "hunter", fullName: "Travis Hunter", primaryPosition: "CB", nflTeam: "JAX" },
+      { id: "first-smith", fullName: "Alex Smith", primaryPosition: "QB", nflTeam: "KC" },
+      { id: "second-smith", fullName: "Alex Smith", primaryPosition: "TE", nflTeam: "KC" },
+    ]);
+
+    expect(identity.nameTeam.get("travis hunter|JAX")).toBe("hunter");
+    expect(identity.nameTeam.has("alex smith|KC")).toBe(false);
+  });
+
   it("keys every admitted context onto its registered match-rate threshold", () => {
     for (const context of defaultFfcAdpContexts(2026)) {
       const threshold = sourceMatchRateThreshold(ffcAdpSourceKey(context));

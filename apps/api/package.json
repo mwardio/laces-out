@@ -9,6 +9,7 @@
     "start": "node dist/server.js",
     "owner:create": "tsx src/create-owner.ts",
     "password:reset": "tsx src/reset-password.ts",
+    "draft-read:mint": "node dist/mint-draft-read.js",
     "bridge:smoke": "tsx scripts/espn-bridge-smoke.ts",
     "yahoo:smoke": "tsx scripts/yahoo-sync-smoke.ts",
     "invitation:smoke": "tsx scripts/invitation-smoke.ts",

@@ -17,7 +17,7 @@ function invalidation(overrides: Partial<DraftStreamInvalidation> = {}): DraftSt
   return {
     draftId: DRAFT_ID,
     sequence: 12,
-    feedRevision: 4,
+    feedRevision: 1_000_005,
     occurredAt: "2026-08-24T18:00:00.000Z",
     ...overrides,
   };
@@ -91,7 +91,7 @@ describe("draft stream backoff", () => {
 });
 
 describe("draft stream monotonicity", () => {
-  it("advances only on a strictly newer sequence or feed revision", () => {
+  it("preserves revision-only ordering for legacy stream frames", () => {
     expect(draftStreamAdvances(null, { sequence: 0, feedRevision: 0 })).toBe(true);
     const applied = { sequence: 12, feedRevision: 4 };
     expect(draftStreamAdvances(applied, { sequence: 13, feedRevision: 0 })).toBe(true);
@@ -99,6 +99,22 @@ describe("draft stream monotonicity", () => {
     expect(draftStreamAdvances(applied, { sequence: 12, feedRevision: 4 })).toBe(false);
     expect(draftStreamAdvances(applied, { sequence: 12, feedRevision: 3 })).toBe(false);
     expect(draftStreamAdvances(applied, { sequence: 11, feedRevision: 99 })).toBe(false);
+  });
+
+  it("advances across a page reload or source takeover even when the revision resets", () => {
+    const beforeReload = { sequence: 12, feedRevision: 1_000_031 };
+    const afterReload = { sequence: 12, feedRevision: 2_000_002 };
+
+    expect(draftStreamAdvances(beforeReload, afterReload)).toBe(true);
+    expect(draftStreamAdvances(afterReload, beforeReload)).toBe(false);
+  });
+
+  it("supports a rolling upgrade without accepting delayed legacy frames afterward", () => {
+    const legacy = { sequence: 12, feedRevision: 30 };
+    const current = { sequence: 12, feedRevision: 2_000_002 };
+
+    expect(draftStreamAdvances(legacy, current)).toBe(true);
+    expect(draftStreamAdvances(current, legacy)).toBe(false);
   });
 });
 
@@ -148,6 +164,16 @@ describe("draft stream subscription", () => {
       [12, 5],
       [13, 0],
     ]);
+  });
+
+  it("emits a same-sequence takeover after its page revision resets", () => {
+    const { stream, received } = harness();
+    stream.handlers?.onOpen();
+    stream.handlers?.onMessage(JSON.stringify(invalidation({ feedRevision: 1_000_031 })));
+    stream.handlers?.onMessage(JSON.stringify(invalidation({ feedRevision: 2_000_002 })));
+    stream.handlers?.onMessage(JSON.stringify(invalidation({ feedRevision: 1_000_032 })));
+
+    expect(received.map((item) => item.feedRevision)).toEqual([1_000_031, 2_000_002]);
   });
 
   it("never reloads on a frame for another room or a malformed frame", () => {

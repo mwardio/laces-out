@@ -132,12 +132,18 @@ export function createYahooAuthorizationRequest(
   url.searchParams.set("redirect_uri", options.redirectUri);
   url.searchParams.set("response_type", "code");
   url.searchParams.set("state", state);
-  url.searchParams.set("code_challenge", codeChallenge);
-  url.searchParams.set("code_challenge_method", "S256");
+  // Yahoo's documented confidential-client authorization-code flow does not support PKCE.
+  // Keep the encrypted verifier in the local one-time transaction for backward-compatible
+  // persistence, but do not send unsupported challenge parameters to Yahoo.
   url.searchParams.set("language", options.language ?? "en-us");
   if (options.scopes !== undefined && options.scopes.length > 0) {
     const scopes = [...new Set(options.scopes.map((scope) => scope.trim()).filter(Boolean))];
-    if (scopes.length > 0) url.searchParams.set("scope", scopes.join(" "));
+    if (scopes.length > 0) {
+      url.searchParams.set("scope", scopes.join(" "));
+      // Yahoo requires a nonce for OpenID Connect authorization requests. The verifier is
+      // already random, encrypted with this one-time transaction, and never exposed in logs.
+      if (scopes.includes("openid")) url.searchParams.set("nonce", codeVerifier);
+    }
   }
 
   return Object.freeze({

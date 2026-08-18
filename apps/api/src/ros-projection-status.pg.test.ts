@@ -97,6 +97,8 @@ async function startDisposablePostgres(): Promise<DisposablePostgres> {
       "--rm",
       "--name",
       containerName,
+      "--tmpfs",
+      "/var/lib/postgresql/data",
       "-e",
       `POSTGRES_USER=${user}`,
       "-e",
@@ -589,7 +591,9 @@ describe.skipIf(!dockerAvailable)(
     afterAll(async () => {
       await handle?.close().catch(() => {});
       if (container) {
-        execFileSync("docker", ["rm", "-f", container.containerName], { stdio: "ignore" });
+        execFileSync("docker", ["rm", "-f", "-v", container.containerName], {
+          stdio: "ignore",
+        });
       }
     });
 
@@ -618,6 +622,7 @@ describe.skipIf(!dockerAvailable)(
         "laces-out-historical-ros-standard",
         "laces-out-historical-ros-espn-standard-2pt",
         "laces-out-historical-ros-espn-standard-2pt-nxm",
+        "laces-out-historical-ros-espn-ppr-yardage-bonus-6pt-pass",
       ]);
       for (const entry of status.scoringProfiles.unsupported) {
         expect(entry.blockers).toEqual(["no_admitted_artifact"]);
@@ -636,6 +641,7 @@ describe.skipIf(!dockerAvailable)(
           "ros-validation-v9-espn-standard-2pt-n8-2026-08-03",
         "laces-out-historical-ros-espn-standard-2pt-nxm":
           "ros-validation-v9-espn-standard-2pt-nxm-n8-2026-08-03",
+        "laces-out-historical-ros-espn-ppr-yardage-bonus-6pt-pass": null,
       });
     });
 

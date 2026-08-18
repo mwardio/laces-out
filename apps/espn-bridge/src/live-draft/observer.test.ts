@@ -213,11 +213,22 @@ describe("live draft observer", () => {
     expect(test.snapshots).toEqual(["attach", "completed-pick"]);
   });
 
-  it("says nothing when a rescan finds an unchanged board", () => {
+  it("does not republish an unchanged board before the bounded recovery interval", () => {
     const test = harness(oneSnapshot(snapshot({ picks: [{}] })));
     test.observer.start();
-    test.clock.advance(LIVE_DRAFT_OBSERVER_TUNING.rescanIntervalMs * 3);
+    test.clock.advance(LIVE_DRAFT_OBSERVER_TUNING.forcedObservationIntervalMs - 1);
     expect(test.snapshots).toEqual(["attach"]);
+    expect(test.transients).toEqual([]);
+  });
+
+  it("periodically republishes an unchanged healthy board to repair lost server state", () => {
+    const test = harness(oneSnapshot(snapshot({ picks: [{}] })));
+    test.observer.start();
+    test.clock.advance(LIVE_DRAFT_OBSERVER_TUNING.forcedObservationIntervalMs);
+    expect(test.snapshots).toEqual(["attach"]);
+    expect(test.transients).toHaveLength(1);
+    test.clock.advance(LIVE_DRAFT_OBSERVER_TUNING.forcedObservationIntervalMs);
+    expect(test.transients).toHaveLength(2);
   });
 
   it("labels a completed auction sale distinctly from a snake pick", () => {
@@ -280,7 +291,7 @@ describe("live draft observer", () => {
     expect(test.scans).toBeGreaterThan(scansAtCompletion);
   });
 
-  it("bounds transient auction updates to two per second", () => {
+  it("bounds transient auction updates and publishes the latest throttled bid on the trailing edge", () => {
     const nomination = (highBid: number): EspnLiveDraftCurrentAuctionV1 => ({
       nominationNumber: 4,
       nominatingProviderTeamId: "2",
@@ -289,6 +300,7 @@ describe("live draft observer", () => {
       proTeam: "DAL",
       position: "WR",
       highBidProviderTeamId: "9",
+      highBidTeamName: "Team Nine",
       highBid,
     });
     const bidding = (highBid: number) =>
@@ -307,12 +319,49 @@ describe("live draft observer", () => {
     expect(test.transients).toHaveLength(2);
     expect(test.snapshots).toEqual(["attach"]);
 
-    // The next second opens a fresh allowance.
-    test.clock.advance(1_000);
+    // No additional DOM mutation is required: the quiet final bid in the burst lands when the
+    // current one-second window rolls over rather than waiting for the five-second full rescan.
+    test.clock.advance(999);
+    expect(test.transients).toHaveLength(2);
+    test.clock.advance(1);
+    expect(test.transients).toHaveLength(3);
+    expect(test.transients.at(-1)?.currentAuction?.highBid).toBe(14);
+
+    // The new window still has room for a subsequent real bid.
     test.board = oneSnapshot(bidding(20));
     test.observer.evaluate("rescan");
-    expect(test.transients).toHaveLength(3);
+    expect(test.transients).toHaveLength(4);
     expect(test.transients.at(-1)?.currentAuction?.highBid).toBe(20);
+  });
+
+  it("cancels a throttled trailing bid when scanning becomes unhealthy", () => {
+    const bidding = (highBid: number) =>
+      snapshot({
+        draftType: "auction",
+        currentAuction: {
+          nominationNumber: 4,
+          nominatingProviderTeamId: "2",
+          providerPlayerId: "4241389",
+          playerName: "CeeDee Lamb",
+          proTeam: "DAL",
+          position: "WR",
+          highBidProviderTeamId: "9",
+          highBidTeamName: "Team Nine",
+          highBid,
+        },
+      });
+    const test = harness(oneSnapshot(bidding(10)));
+    test.observer.start();
+    for (const bid of [11, 12, 13]) {
+      test.board = oneSnapshot(bidding(bid));
+      test.observer.evaluate("rescan");
+    }
+    expect(test.transients).toHaveLength(2);
+
+    test.board = { ok: false, reason: "selectors-unverified" };
+    test.observer.evaluate("rescan");
+    test.clock.advance(1_000);
+    expect(test.transients).toHaveLength(2);
   });
 
   it("reports a failed scan without publishing anything and keeps the last good board", () => {
@@ -324,6 +373,20 @@ describe("live draft observer", () => {
     expect(test.failures).toEqual(["draft-state-unknown"]);
     expect(test.snapshots).toEqual(["attach"]);
     expect(test.observer.lastDigestSource).toBe(good);
+  });
+
+  it("suppresses liveness heartbeats after a scan failure until scanning recovers", () => {
+    const test = harness(oneSnapshot(snapshot({ picks: [{}] })));
+    test.observer.start();
+
+    test.board = { ok: false, reason: "selectors-unverified" };
+    test.clock.advance(LIVE_DRAFT_OBSERVER_TUNING.heartbeatIntervalMs * 2);
+    expect(test.failures).toEqual(["selectors-unverified", "selectors-unverified"]);
+    expect(test.heartbeats).toEqual([]);
+
+    test.board = oneSnapshot(snapshot({ picks: [{}] }));
+    test.clock.advance(LIVE_DRAFT_OBSERVER_TUNING.rescanIntervalMs);
+    expect(test.heartbeats).toEqual(["live"]);
   });
 
   it("stops every timer and detaches the mutation source on stop", () => {

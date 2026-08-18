@@ -1,5 +1,8 @@
 import { loadEnvironment } from "@laces-out/config";
-import { drizzleChangeEventProducers, emitProviderSyncChangeEvents } from "@laces-out/change-events";
+import {
+  drizzleChangeEventProducers,
+  emitProviderSyncChangeEvents,
+} from "@laces-out/change-events";
 import { createDatabase } from "@laces-out/db";
 import { createSmtpEmailTransport } from "@laces-out/email";
 import { DrizzleInSeasonDecisionRepository, InSeasonDecisionService } from "@laces-out/decisions";

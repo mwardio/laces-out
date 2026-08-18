@@ -717,17 +717,21 @@ export class FirstPartyRosProjectionShadowService implements ProjectionRefreshSe
       // always reported a stale snapshot as withheld; enforce the same fact on the write path so a
       // stale-but-checksummed roster can never mint a new ROS set while the UI says it is unready.
       if (gateInputs.scheduleFresh && gateInputs.candidateSourceFresh) {
-        for (const artifact of artifacts) {
-          const attempt = await this.#attemptPublication({
-            artifact,
-            artifacts,
-            managedSourceId: managed.id,
-            season: job.season,
-            window,
-            sourceAsOf,
-            now,
-            context,
-          });
+        const attempts = await Promise.all(
+          artifacts.map((artifact) =>
+            this.#attemptPublication({
+              artifact,
+              artifacts,
+              managedSourceId: managed.id,
+              season: job.season,
+              window,
+              sourceAsOf,
+              now,
+              context,
+            }),
+          ),
+        );
+        for (const attempt of attempts) {
           published += attempt.published;
           artifactInvalid = artifactInvalid || attempt.artifactInvalid;
           arbitrationSkippedTargets += attempt.arbitrationSkippedTargets;

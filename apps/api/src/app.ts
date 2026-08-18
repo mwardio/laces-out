@@ -23,6 +23,7 @@ import {
   espnRefreshAgentPollResponseSchema,
   espnLiveDraftIngestRequestSchema,
   espnLiveDraftIngestResponseSchema,
+  espnLiveDraftPulseResponseSchema,
   espnSessionConnectionListSchema,
   espnSessionGrantRequestSchema,
   espnSessionGrantResponseSchema,
@@ -46,6 +47,7 @@ import {
   type EspnRefreshAgentPollResponse,
   type EspnLiveDraftIngestRequest,
   type EspnLiveDraftIngestResponse,
+  type EspnLiveDraftPulseResponse,
   type EspnSessionConnectionList,
   type EspnSessionGrantRequest,
   type EspnSessionGrantResponse,
@@ -104,6 +106,11 @@ import {
   type ChangeEventProducerDependencies,
 } from "./change-event-producers.js";
 import { type DataQualityPort, registerDataQualityRoutes } from "./data-quality-routes.js";
+import {
+  draftReadClaimsPermit,
+  draftReadTokenFromAuthorization,
+  verifyDraftReadToken,
+} from "./draft-read.js";
 import type { RefreshAuthorizationPort } from "./refresh-authorization.js";
 import { type RegistrationPort, registerRegistrationRoutes } from "./registration-routes.js";
 import { type PasswordResetPort, registerPasswordResetRoutes } from "./password-reset-routes.js";
@@ -261,6 +268,16 @@ export interface EspnLiveDraftPort {
     deviceToken: string,
     request: EspnLiveDraftIngestRequest,
   ): Promise<EspnLiveDraftIngestResponse>;
+  latest(
+    deviceToken: string,
+    providerLeagueId: string,
+    season: number,
+  ): Promise<EspnLiveDraftPulseResponse>;
+  latestForMember(
+    userId: string,
+    providerLeagueId: string,
+    season: number,
+  ): Promise<EspnLiveDraftPulseResponse>;
 }
 
 export interface EspnSessionConnectionPort {
@@ -524,6 +541,44 @@ function bridgeDeviceRateLimitKey(request: FastifyRequest, operation: string): s
   return `espn-device:${operation}:${digest}`;
 }
 
+function liveDraftReadRateLimitKey(
+  request: FastifyRequest,
+  sessionSecret: string | undefined,
+): string {
+  const authorization = request.headers.authorization;
+  const bridgeToken = /^Bridge ([A-Za-z0-9._~-]{32,512})$/u.exec(authorization ?? "")?.[1];
+  const draftReadToken = draftReadTokenFromAuthorization(authorization);
+  const draftReadClaims =
+    draftReadToken && sessionSecret
+      ? verifyDraftReadToken(sessionSecret, draftReadToken)
+      : undefined;
+  // A valid capability receives its own bucket. Invalid strings share an IP bucket so rotating
+  // random token material cannot rotate the rate limit along with it.
+  const identity =
+    bridgeToken ??
+    (draftReadClaims
+      ? `draft-read:${draftReadClaims.userId}:${draftReadClaims.nonce}`
+      : `invalid:${request.ip}`);
+  const digest = createHash("sha256").update(identity, "utf8").digest("base64url");
+  return `espn-device:live-draft-read:${digest}`;
+}
+
+const liveDraftBridgeSourceIpRateLimitMax = 1_920;
+
+function isSyntacticallyValidBridgeAuthorization(authorization: string | undefined): boolean {
+  return /^Bridge [A-Za-z0-9._~-]{32,512}$/u.test(authorization ?? "");
+}
+
+function isEspnLiveDraftPulseNotFound(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    "code" in error &&
+    error.code === "NOT_FOUND" &&
+    "statusCode" in error &&
+    error.statusCode === 404
+  );
+}
+
 export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyInstance> {
   const environment = options.environment ?? loadEnvironment();
   const browserHandoffs =
@@ -631,6 +686,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     "/v1/bridge/espn/snapshots",
     "/v1/bridge/espn/supplemental",
     "/v1/bridge/espn/live-draft",
+    "/v1/bridge/espn/live-draft/latest",
     "/v1/bridge/espn/session-grants",
     "/v1/bridge/espn/refresh-requests/poll",
   ];
@@ -688,6 +744,16 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     keyGenerator: (request) =>
       `espn-member-refresh:${request.currentUser?.id ?? `anonymous:${request.ip}`}:${requestPathForLog(request.url)}`,
   });
+  const invalidDraftReadRateLimit = app.createRateLimit({
+    max: 60,
+    timeWindow: "1 minute",
+    keyGenerator: (request) => `draft-read-invalid:${request.ip}`,
+  });
+  const liveDraftBridgeSourceIpRateLimit = app.createRateLimit({
+    max: liveDraftBridgeSourceIpRateLimitMax,
+    timeWindow: "1 minute",
+    keyGenerator: (request) => `espn-device:live-draft-read-source:${request.ip}`,
+  });
 
   app.addHook("onSend", async (request, reply, payload) => {
     void reply.header("x-request-id", request.id);
@@ -721,6 +787,17 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   ]);
   app.addHook("onRequest", async (request, reply) => {
     const requestPath = request.url.split("?", 1)[0] ?? request.url;
+    const draftReadPresented = request.headers.authorization?.startsWith("DraftRead ") ?? false;
+    const isDraftReadPulseRequest =
+      request.method === "GET" && requestPath === "/v1/bridge/espn/live-draft/latest";
+    if (draftReadPresented && !isDraftReadPulseRequest) {
+      return reply.code(401).type("application/problem+json").send({
+        type: "https://fantasy.local/problems/draft-read-unauthorized",
+        title: "DraftRead authorization is not valid for this route",
+        status: 401,
+        correlationId: request.id,
+      });
+    }
     const isBridgeSnapshot = isEspnBridgeDevicePath(requestPath);
     const isBridgeCredentialExchange = requestPath === espnBridgePairingRedeemPath;
     const isBrowserHandoffStage = requestPath === browserHandoffStagePath;
@@ -1614,6 +1691,166 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     },
   );
 
+  const espnLiveDraftPulseQuerySchema = z
+    .object({
+      leagueId: z.string().regex(/^\d{1,20}$/u),
+      season: z.coerce.number().int().min(2019).max(2100),
+    })
+    .strict();
+
+  app.get(
+    "/v1/bridge/espn/live-draft/latest",
+    {
+      // This guard deliberately runs before the credential-keyed limiter below. Otherwise a
+      // caller could rotate well-formed random Bridge strings and make the limiter allocate a new
+      // bucket for every request even after the source IP should have been stopped. Two devices
+      // behind one source can each retain the established 960/minute credential allowance.
+      onRequest: async (request, reply) => {
+        if (!isSyntacticallyValidBridgeAuthorization(request.headers.authorization)) return;
+        const limit = await liveDraftBridgeSourceIpRateLimit(request);
+        if (limit.isAllowed) return;
+        void reply.header("x-ratelimit-limit", limit.max);
+        void reply.header("x-ratelimit-remaining", limit.remaining);
+        void reply.header("x-ratelimit-reset", limit.ttlInSeconds);
+        if (!limit.isExceeded) return;
+        void reply.header("retry-after", limit.ttlInSeconds);
+        return reply.code(429).type("application/problem+json").send({
+          type: "https://fantasy.local/problems/rate-limit",
+          title: "Too many requests",
+          status: 429,
+          detail: "Try again later.",
+          correlationId: request.id,
+        });
+      },
+      config: {
+        rateLimit: {
+          // Per valid bridge/capability credential: several 500 ms read-only viewers can follow
+          // scoped live rooms concurrently, with headroom for reconnect and status reads.
+          max: 960,
+          timeWindow: "1 minute",
+          // Keep the Bridge source-IP ceiling ahead of this credential-keyed allocation.
+          hook: "preHandler",
+          keyGenerator: (request) => liveDraftReadRateLimitKey(request, environment.SESSION_SECRET),
+        },
+      },
+      preHandler: async (request, reply) => {
+        const authorization = request.headers.authorization;
+        if (!authorization?.startsWith("DraftRead ")) return;
+        const token = draftReadTokenFromAuthorization(authorization);
+        if (
+          token &&
+          environment.SESSION_SECRET &&
+          verifyDraftReadToken(environment.SESSION_SECRET, token)
+        ) {
+          return;
+        }
+        const limit = await invalidDraftReadRateLimit(request);
+        if (limit.isAllowed) return;
+        void reply.header("x-ratelimit-limit", limit.max);
+        void reply.header("x-ratelimit-remaining", limit.remaining);
+        void reply.header("x-ratelimit-reset", limit.ttlInSeconds);
+        if (!limit.isExceeded) return;
+        void reply.header("retry-after", limit.ttlInSeconds);
+        return reply.code(429).type("application/problem+json").send({
+          type: "https://fantasy.local/problems/rate-limit",
+          title: "Too many requests",
+          status: 429,
+          detail: "Try again later.",
+          correlationId: request.id,
+        });
+      },
+    },
+    async (request, reply) => {
+      if (!options.espnLiveDraft) {
+        return reply.code(503).type("application/problem+json").send({
+          type: "https://fantasy.local/problems/espn-live-draft-unavailable",
+          title: "ESPN live draft sync is not enabled",
+          status: 503,
+          correlationId: request.id,
+        });
+      }
+      const authorization = request.headers.authorization;
+      const bridgeToken = /^Bridge ([A-Za-z0-9._~-]{32,512})$/u.exec(authorization ?? "")?.[1];
+      const draftReadToken = draftReadTokenFromAuthorization(authorization);
+      if (!bridgeToken && !draftReadToken) {
+        return reply.code(401).type("application/problem+json").send({
+          type: "https://fantasy.local/problems/bridge-unauthorized",
+          title: "Valid bridge or DraftRead authorization is required",
+          status: 401,
+          correlationId: request.id,
+        });
+      }
+      const query = espnLiveDraftPulseQuerySchema.parse(request.query);
+      const claims =
+        draftReadToken && environment.SESSION_SECRET
+          ? verifyDraftReadToken(environment.SESSION_SECRET, draftReadToken)
+          : undefined;
+      if (draftReadToken && !claims) {
+        return reply.code(401).type("application/problem+json").send({
+          type: "https://fantasy.local/problems/draft-read-unauthorized",
+          title: "Valid DraftRead authorization is required",
+          status: 401,
+          correlationId: request.id,
+        });
+      }
+      if (claims && !draftReadClaimsPermit(claims, query.leagueId, query.season)) {
+        return reply.code(403).type("application/problem+json").send({
+          type: "https://fantasy.local/problems/draft-read-forbidden",
+          title: "DraftRead authorization does not permit this league season",
+          status: 403,
+          correlationId: request.id,
+        });
+      }
+      let untrustedResult: EspnLiveDraftPulseResponse;
+      try {
+        if (claims) {
+          untrustedResult = await options.espnLiveDraft.latestForMember(
+            claims.userId,
+            query.leagueId,
+            query.season,
+          );
+        } else if (bridgeToken) {
+          untrustedResult = await options.espnLiveDraft.latest(
+            bridgeToken,
+            query.leagueId,
+            query.season,
+          );
+        } else {
+          throw new Error("Live draft authorization invariant failed");
+        }
+      } catch (error) {
+        if (claims && isEspnLiveDraftPulseNotFound(error)) {
+          return reply
+            .code(404)
+            .type("application/problem+json")
+            .send({
+              type: "https://fantasy.local/problems/espn-live-draft-pulse-not-found",
+              title: "No live draft pulse is available yet",
+              status: 404,
+              instance: requestPathForLog(request.url),
+              correlationId: request.id,
+            });
+        }
+        throw error;
+      }
+      const result = espnLiveDraftPulseResponseSchema.parse(untrustedResult);
+      request.log.debug(
+        {
+          provider: "espn",
+          operation: "live-draft-pulse",
+          providerLeagueId: query.leagueId,
+          season: query.season,
+          cursor: result.cursor,
+          draftId: result.draft.id,
+          draftSequence: result.draft.sequence,
+          feedState: result.feedState,
+        },
+        "espn live draft pulse read",
+      );
+      return result;
+    },
+  );
+
   app.post(
     "/v1/bridge/espn/live-draft",
     {
@@ -1653,11 +1890,23 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
       );
       // Published only after the write has committed, so a viewer that reacts immediately reads
       // the state this observation produced rather than the one before it.
-      if (result.status === "accepted" && result.draftId !== null) {
+      // A transient nomination/bid update is intentionally `idempotent` against the durable
+      // event ledger, but its feed revision still changed. Wake stream consumers for both kinds
+      // so they do not fall back to a multi-second poll during a bidding war.
+      // Keep the established numeric field on the wire for already-loaded strict web clients, but
+      // populate it with the generation-aware pulse cursor rather than the page-local revision.
+      const streamFeedRevision = result.feedCursor === null ? null : Number(result.feedCursor);
+      if (
+        (result.status === "accepted" || result.status === "idempotent") &&
+        result.draftId !== null &&
+        result.serverSequence !== null &&
+        streamFeedRevision !== null &&
+        Number.isSafeInteger(streamFeedRevision)
+      ) {
         draftStream.publish({
           draftId: result.draftId,
-          sequence: result.serverSequence ?? 0,
-          feedRevision: observation.revision,
+          sequence: result.serverSequence,
+          feedRevision: streamFeedRevision,
           occurredAt: new Date().toISOString(),
         });
       }
@@ -1730,6 +1979,11 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
       }
       try {
         const completion = await options.yahooConnection.deny(request.currentUser.id, query.state);
+        const providerErrorCode =
+          query.error && /^[A-Za-z0-9._-]{1,64}$/u.test(query.error)
+            ? query.error
+            : "provider_error";
+        request.log.warn({ providerErrorCode }, "Yahoo authorization provider returned an error");
         // Preserve the established browser behavior while giving a verified native flow a bounded,
         // useful outcome. The provider's arbitrary error text is never copied to either callback.
         const status =
@@ -1804,7 +2058,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     } catch (error) {
       if (error instanceof YahooConnectionCallbackError) {
         request.log.warn(
-          { callbackOutcome: error.outcome },
+          { callbackOutcome: error.outcome, callbackDiagnosticCode: error.diagnosticCode },
           "Yahoo authorization callback did not complete",
         );
         return yahooCompletionRedirect(reply, environment, error.completion, error.outcome);

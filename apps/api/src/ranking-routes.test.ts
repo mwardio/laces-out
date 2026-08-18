@@ -1,5 +1,9 @@
 import { loadEnvironment } from "@laces-out/config";
-import { RANKING_SCHEMA_VERSION, createRankingList, createRankingVersion } from "@laces-out/rankings";
+import {
+  RANKING_SCHEMA_VERSION,
+  createRankingList,
+  createRankingVersion,
+} from "@laces-out/rankings";
 import { describe, expect, it, vi } from "vitest";
 
 import { buildApp } from "./app.js";

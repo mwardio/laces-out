@@ -453,12 +453,13 @@
   }
 
   .quickQuestions button {
-    padding: 6px 8px;
+    padding: 4px 10px;
     color: var(--ink-600);
     background: var(--paper-50);
     border: 1px solid var(--ink-150);
     border-radius: 999px;
     font-size: var(--text-9);
+    line-height: 1.25;
   }
 
   .quickQuestions button:hover {
@@ -716,6 +717,23 @@
       align-items: flex-start;
       flex-direction: column;
     }
+
+    .quickQuestions {
+      flex-wrap: nowrap;
+      overflow-x: auto;
+      padding-bottom: 2px;
+      overscroll-behavior-inline: contain;
+      scrollbar-width: none;
+    }
+
+    .quickQuestions::-webkit-scrollbar {
+      display: none;
+    }
+
+    .quickQuestions button {
+      flex: 0 0 auto;
+      white-space: nowrap;
+    }
   }
 
   @media (max-width: 430px) {
@@ -790,5 +808,12 @@
     font-weight: 700;
     text-decoration: underline;
     white-space: nowrap;
+  }
+}
+
+@layer polish {
+  /* Suggested questions are secondary chips, not full-size form actions. */
+  .analysisForm .quickQuestions button {
+    min-height: 32px;
   }
 }

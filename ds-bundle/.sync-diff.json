@@ -1,0 +1,41 @@
+{
+  "styleChanged": false,
+  "anchorUsed": false,
+  "anchorReason": "not_provided",
+  "keyedBy": "renderHashes",
+  "unchanged": [],
+  "changed": [],
+  "added": [
+    "AiAnswerContent",
+    "AiProviderPicker",
+    "DemoRankingsStudio",
+    "DraftWorkspace",
+    "LacesOutMark",
+    "PortfolioDashboard",
+    "RouteLoading",
+    "TeamAvatar",
+    "YahooAttribution",
+    "YahooNativeConnect"
+  ],
+  "removed": [],
+  "renderChurned": [],
+  "upload": {
+    "any": true,
+    "components": [
+      "AiAnswerContent",
+      "AiProviderPicker",
+      "DemoRankingsStudio",
+      "DraftWorkspace",
+      "LacesOutMark",
+      "PortfolioDashboard",
+      "RouteLoading",
+      "TeamAvatar",
+      "YahooAttribution",
+      "YahooNativeConnect"
+    ],
+    "deletePaths": [],
+    "bundle": true,
+    "styling": true,
+    "aux": true
+  }
+}

@@ -283,7 +283,14 @@ export async function registerWorkers(
       }
       if (job.data.scope === "adp-data") {
         const refreshAdpData = requireService(services.refreshAdpData, "Draft-market ADP adapter");
-        const sourceResults = await refreshAdpData(job.data.reason === "user");
+        // The source records their next check from the upstream response timestamp, including
+        // seconds. A cron tick at 05:47:00 can therefore arrive just before yesterday's
+        // 05:47:57 due time and skip every context for another day. The one intentional daily
+        // sweep is authoritative, so make it independent of that sub-minute boundary. Startup
+        // recovery still respects `nextCheckAt` and avoids a duplicate fetch after a restart.
+        const sourceResults = await refreshAdpData(
+          job.data.reason === "user" || job.data.reason === "daily",
+        );
         logger.info(
           {
             jobId: job.id,

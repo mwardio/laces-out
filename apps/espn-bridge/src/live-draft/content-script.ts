@@ -40,7 +40,12 @@ import {
   type OverlayHost,
   type OverlayTone,
 } from "./status-overlay.js";
-import type { BridgeLiveDraftRequest, BridgeLiveDraftResponse } from "../protocol.js";
+import { recognizeLiveDraftPageRoute, type LiveDraftPageRoute } from "./uplink.js";
+import type {
+  BridgeLiveDraftRequest,
+  BridgeLiveDraftResponse,
+  BridgeLiveDraftScope,
+} from "../protocol.js";
 
 export { recognizeEspnDraftRoute };
 
@@ -50,8 +55,8 @@ export const liveDraftSeasonBounds = {
   maximum: ESPN_LIVE_DRAFT_LIMITS.maximumSeason,
 } as const;
 
-export function recognizeDraftRoomHref(href: string): EspnDraftRoute | null {
-  return recognizeEspnDraftRoute(href, liveDraftSeasonBounds);
+export function recognizeDraftRoomHref(href: string): LiveDraftPageRoute | null {
+  return recognizeLiveDraftPageRoute(href, liveDraftSeasonBounds);
 }
 
 const OVERLAY_TONE: Readonly<Record<LiveDraftSnapshotReason, OverlayTone>> = {
@@ -124,6 +129,131 @@ function send(request: BridgeLiveDraftRequest): Promise<BridgeLiveDraftResponse>
   return chrome.runtime.sendMessage(request);
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isBridgeLiveDraftScope(value: unknown): value is BridgeLiveDraftScope {
+  return (
+    isRecord(value) &&
+    typeof value.leagueId === "string" &&
+    /^\d{1,20}$/u.test(value.leagueId) &&
+    typeof value.season === "number" &&
+    Number.isSafeInteger(value.season) &&
+    value.season >= liveDraftSeasonBounds.minimum &&
+    value.season <= liveDraftSeasonBounds.maximum
+  );
+}
+
+export const LIVE_DRAFT_STANDBY_PREFLIGHT_RETRY_MS = ESPN_LIVE_DRAFT_LIMITS.failoverEligibleMs;
+
+export interface LiveDraftPreflightController {
+  start(): void;
+  stop(): void;
+  readonly active: boolean;
+  readonly activeScope: BridgeLiveDraftScope | null;
+}
+
+/**
+ * Keeps an in-scope standby tab passive while another page owns the source, then retries at the
+ * same bounded cadence as the browser/server lease. Exactly one timeout and one activation may
+ * exist, so a reload can take over after expiry without ever creating duplicate DOM observers.
+ */
+export function createLiveDraftPreflightController(options: {
+  readonly route: LiveDraftPageRoute;
+  readonly pageSessionId: string;
+  readonly timers: Pick<LiveDraftTimers, "setTimeout" | "clearTimeout">;
+  readonly send: (request: BridgeLiveDraftRequest) => Promise<BridgeLiveDraftResponse>;
+  readonly activate: (scope: BridgeLiveDraftScope) => { stop(): void };
+  readonly retryMs?: number;
+}): LiveDraftPreflightController {
+  const retryMs = options.retryMs ?? LIVE_DRAFT_STANDBY_PREFLIGHT_RETRY_MS;
+  if (!Number.isSafeInteger(retryMs) || retryMs <= 0) {
+    throw new RangeError("Live draft standby retry must be a positive whole number");
+  }
+
+  let stopped = false;
+  let inFlight = false;
+  let retryHandle: number | null = null;
+  let activeSession: { stop(): void } | null = null;
+  let activeScope: BridgeLiveDraftScope | null = null;
+
+  const scheduleRetry = (): void => {
+    if (stopped || activeSession !== null || retryHandle !== null) return;
+    retryHandle = options.timers.setTimeout(() => {
+      retryHandle = null;
+      void attempt();
+    }, retryMs);
+  };
+
+  const attempt = async (): Promise<void> => {
+    if (stopped || activeSession !== null || inFlight) return;
+    inFlight = true;
+    let response: BridgeLiveDraftResponse;
+    try {
+      response = await options.send({
+        type: "GET_LIVE_DRAFT_STATUS",
+        leagueId: options.route.leagueId,
+        ...(options.route.season === undefined ? {} : { season: options.route.season }),
+        pageSessionId: options.pageSessionId,
+      });
+    } catch {
+      inFlight = false;
+      scheduleRetry();
+      return;
+    }
+    inFlight = false;
+    if (stopped || activeSession !== null) return;
+    const responseValue: unknown = response;
+    if (!isRecord(responseValue) || !isRecord(responseValue.status)) return;
+    const statusValue = responseValue.status;
+    const resolvedScope = responseValue.resolvedScope;
+    const resolvedMatchesRoute =
+      isBridgeLiveDraftScope(resolvedScope) &&
+      resolvedScope.leagueId === options.route.leagueId &&
+      (options.route.season === undefined || resolvedScope.season === options.route.season);
+    if (
+      resolvedMatchesRoute &&
+      responseValue.ok === true &&
+      statusValue.scope === "in-scope" &&
+      statusValue.state === "observing"
+    ) {
+      activeScope = resolvedScope;
+      activeSession = options.activate(resolvedScope);
+      return;
+    }
+    if (
+      resolvedMatchesRoute &&
+      statusValue.scope === "in-scope" &&
+      statusValue.state === "standby"
+    ) {
+      scheduleRetry();
+    }
+  };
+
+  return {
+    start(): void {
+      if (stopped || activeSession !== null || inFlight || retryHandle !== null) return;
+      void attempt();
+    },
+    stop(): void {
+      if (stopped) return;
+      stopped = true;
+      if (retryHandle !== null) options.timers.clearTimeout(retryHandle);
+      retryHandle = null;
+      activeSession?.stop();
+      activeSession = null;
+      activeScope = null;
+    },
+    get active(): boolean {
+      return activeSession !== null;
+    },
+    get activeScope(): BridgeLiveDraftScope | null {
+      return activeScope;
+    },
+  };
+}
+
 /**
  * Starts observing one recognized draft room.
  *
@@ -139,16 +269,21 @@ export function startLiveDraftSession(options: {
   readonly mutations: LiveDraftMutationSource;
   readonly now: () => Date;
   readonly send: (request: BridgeLiveDraftRequest) => Promise<BridgeLiveDraftResponse>;
+  /** Test/replay seam; production always reads through the fail-closed DOM adapter below. */
+  readonly scan?: () => EspnLiveDraftSnapshotResult;
   readonly overlay?: { show(tone: OverlayTone, message: string): void; remove(): void };
 }): { stop(): void } {
   let revision = 0;
+  let lastDispatchedRevision = 0;
   let lastChecksum: string | null = null;
 
-  const scan = (): EspnLiveDraftSnapshotResult =>
-    buildEspnLiveDraftSnapshot(extractDraftRoom(options.root), {
-      leagueId: options.route.leagueId,
-      season: options.route.season,
-    });
+  const scan =
+    options.scan ??
+    (() =>
+      buildEspnLiveDraftSnapshot(extractDraftRoom(options.root), {
+        leagueId: options.route.leagueId,
+        season: options.route.season,
+      }));
 
   const publish = (snapshot: EspnLiveDraftSnapshot, transient: boolean): void => {
     revision += 1;
@@ -158,6 +293,10 @@ export function startLiveDraftSession(options: {
       capturedAt: options.now().toISOString(),
     })
       .then(async (observation) => {
+        // SHA-256 work is asynchronous. A large older board must not finish after and overwrite a
+        // newer transient revision in the worker's replace-latest queue or heartbeat watermark.
+        if (observation.revision <= lastDispatchedRevision) return;
+        lastDispatchedRevision = observation.revision;
         lastChecksum = observation.checksumSha256;
         await options.send({ type: "LIVE_DRAFT_OBSERVATION", observation, transient });
       })
@@ -212,36 +351,39 @@ export function startLiveDraftSession(options: {
   };
 }
 
-async function bootstrap(): Promise<void> {
+function bootstrap(): void {
   const route = recognizeDraftRoomHref(globalThis.location.href);
   if (route === null) return;
+  const pageSessionId = crypto.randomUUID();
 
-  // Ask before observing: the service worker holds the configuration and answers only with a
-  // bounded status. Nothing about the pairing, and certainly not the device token, is exposed here.
-  const preflight = await send({
-    type: "GET_LIVE_DRAFT_STATUS",
-    leagueId: route.leagueId,
-    season: route.season,
-  });
-  if (preflight.status.scope !== "in-scope") return;
-
-  const session = startLiveDraftSession({
+  const preflight = createLiveDraftPreflightController({
     route,
-    root: document.documentElement,
-    pageSessionId: crypto.randomUUID(),
+    pageSessionId,
     timers: browserTimers,
-    mutations: browserMutationSource(document.documentElement),
-    now: () => new Date(),
     send,
-    overlay: createLiveDraftStatusOverlay(browserOverlayHost),
+    activate: (resolvedScope) =>
+      startLiveDraftSession({
+        route: resolvedScope,
+        root: document.documentElement,
+        pageSessionId,
+        timers: browserTimers,
+        mutations: browserMutationSource(document.documentElement),
+        now: () => new Date(),
+        send,
+        overlay: createLiveDraftStatusOverlay(browserOverlayHost),
+      }),
   });
+  preflight.start();
 
   globalThis.addEventListener("pagehide", () => {
-    session.stop();
+    const activeScope = preflight.activeScope;
+    preflight.stop();
+    if (activeScope === null) return;
     void send({
       type: "LIVE_DRAFT_PAGE_LEFT",
-      leagueId: route.leagueId,
-      season: route.season,
+      leagueId: activeScope.leagueId,
+      season: activeScope.season,
+      pageSessionId,
     }).catch(() => {
       // The tab is going away; the server lease expires on its own if this never lands.
     });
@@ -255,5 +397,5 @@ if (
   typeof chrome !== "undefined" &&
   typeof chrome.runtime?.id === "string"
 ) {
-  void bootstrap();
+  bootstrap();
 }

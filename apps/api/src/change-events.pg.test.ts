@@ -78,6 +78,8 @@ async function startDisposablePostgres(): Promise<DisposablePostgres> {
       "--rm",
       "--name",
       containerName,
+      "--tmpfs",
+      "/var/lib/postgresql/data",
       "-e",
       `POSTGRES_USER=${user}`,
       "-e",
@@ -190,6 +192,23 @@ function leagueDraft(overrides: Partial<ChangeEventDraft> = {}): ChangeEventDraf
   return { ...privateDraft(overrides), visibility: "league", severity: "info", ...overrides };
 }
 
+function routineSyncDraft(): ChangeEventDraft {
+  return {
+    source: "league-sync",
+    eventType: "league.sync.completed",
+    deduplicationKey: uniqueKey("league.sync.completed"),
+    aggregateType: "league-season",
+    aggregateId: leagueId,
+    leagueId,
+    actorUserId: ownerId,
+    visibility: "league",
+    severity: "info",
+    payload: { v: 1, provider: "espn", season: 2031, week: 4, teamCount: 12 },
+    occurredAt: NOW,
+    recipientUserIds: [ownerId],
+  };
+}
+
 const feedQuery: ChangeEventRepositoryQuery = {
   limit: 20,
   leagueId: null,
@@ -254,7 +273,9 @@ describe.skipIf(!dockerAvailable)("change-event feed isolation against real Post
     await handle?.close();
     if (container?.containerName) {
       try {
-        execFileSync("docker", ["rm", "-f", container.containerName], { stdio: "ignore" });
+        execFileSync("docker", ["rm", "-f", "-v", container.containerName], {
+          stdio: "ignore",
+        });
       } catch {
         // Best-effort; the container was started with --rm.
       }
@@ -298,6 +319,20 @@ describe.skipIf(!dockerAvailable)("change-event feed isolation against real Post
     expect(
       await repository.findVisibleEvent(outsiderId, eventId, feedQuery.retentionFloor),
     ).toBeUndefined();
+  });
+
+  it("keeps historical routine sync receipts out of the feed and unread badge", async () => {
+    const unreadBefore = await repository.countUnread(ownerId, null, feedQuery.retentionFloor);
+    const draft = routineSyncDraft();
+    await emitChangeEvents(db, [draft], NOW);
+    const eventId = await latestEventId(draft);
+
+    expect(
+      (await repository.listVisibleEvents(ownerId, feedQuery)).map((row) => row.id),
+    ).not.toContain(eventId);
+    expect(await repository.countUnread(ownerId, null, feedQuery.retentionFloor)).toBe(
+      unreadBefore,
+    );
   });
 
   it("stops showing a league event to a removed member", async () => {

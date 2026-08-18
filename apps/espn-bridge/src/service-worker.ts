@@ -19,6 +19,7 @@ import {
   type BridgeLeagueResult,
   type BridgeLiveDraftRequest,
   type BridgeLiveDraftResponse,
+  type BridgeLiveDraftScope,
   type BridgePairingOfferResponse,
   type BridgePingResponse,
   type BridgeRequest,
@@ -52,15 +53,28 @@ import {
 } from "./live-draft/dom-contract.js";
 import {
   LiveDraftUploadQueue,
-  classifyUploadStatus,
+  claimLiveDraftPageSession,
+  classifyLiveDraftIngestResponse,
+  createLiveDraftRequestDeadline,
   defaultLiveDraftStatus,
+  liveDraftActiveSessionStorageKey,
+  liveDraftActiveSessionTtlMs,
   liveDraftIngestPath,
+  LIVE_DRAFT_MAXIMUM_RESPONSE_BYTES,
   liveDraftPendingStorageKey,
+  liveDraftResponseExpectation,
+  liveDraftRetainedObservationDisposition,
   liveDraftStatusStorageKey,
+  resolveLiveDraftPageScope,
+  sameLiveDraftPageSession,
+  validLiveDraftPageSessionId,
   validateLiveDraftScope,
   validateLiveDraftSender,
+  validateStoredLiveDraftPageSession,
   validateStoredLiveDraftStatus,
   type BridgeLiveDraftStatus,
+  type LiveDraftPageSession,
+  type LiveDraftPageSessionClaim,
   type LiveDraftUploadOutcome,
 } from "./live-draft/uplink.js";
 import {
@@ -1166,9 +1180,194 @@ async function setLiveDraftStatus(
   return status;
 }
 
+let liveDraftSessionTail: Promise<void> = Promise.resolve();
+
+/** Serializes session-storage decisions across overlapping messages and queue callbacks. */
+function withLiveDraftSessionLock<Result>(operation: () => Promise<Result>): Promise<Result> {
+  const result = liveDraftSessionTail.then(operation, operation);
+  liveDraftSessionTail = result.then(
+    () => undefined,
+    () => undefined,
+  );
+  return result;
+}
+
+function pageSessionFor(
+  route: { readonly leagueId: string; readonly season: number },
+  pageSessionId: string,
+  sender: chrome.runtime.MessageSender,
+): LiveDraftPageSession | null {
+  const tabId = sender.tab?.id;
+  return typeof tabId === "number" && validLiveDraftPageSessionId(pageSessionId)
+    ? { ...route, pageSessionId, tabId }
+    : null;
+}
+
+function activeMatchesObservation(
+  active: ReturnType<typeof validateStoredLiveDraftPageSession>,
+  observation: EspnLiveDraftObservationV1,
+  nowMs: number,
+): boolean {
+  if (active === null) return false;
+  const ageMs = nowMs - active.lastSeenAtMs;
+  return (
+    !active.departed &&
+    ageMs >= 0 &&
+    ageMs < liveDraftActiveSessionTtlMs &&
+    active.leagueId === observation.leagueId &&
+    active.season === observation.season &&
+    active.pageSessionId === observation.pageSessionId
+  );
+}
+
+async function storedActiveLiveDraftSession() {
+  const stored = await chrome.storage.session.get(liveDraftActiveSessionStorageKey);
+  return validateStoredLiveDraftPageSession(stored[liveDraftActiveSessionStorageKey]);
+}
+
+async function removePendingObservationForSession(pageSessionId: string): Promise<void> {
+  const stored = await chrome.storage.local.get(liveDraftPendingStorageKey);
+  try {
+    const pending = validateEspnLiveDraftObservation(stored[liveDraftPendingStorageKey]);
+    if (pending.pageSessionId === pageSessionId) {
+      await chrome.storage.local.remove(liveDraftPendingStorageKey);
+    }
+  } catch {
+    if (stored[liveDraftPendingStorageKey] !== undefined) {
+      await chrome.storage.local.remove(liveDraftPendingStorageKey);
+    }
+  }
+}
+
+async function claimActiveLiveDraftSession(
+  candidate: LiveDraftPageSession,
+): Promise<LiveDraftPageSessionClaim> {
+  return withLiveDraftSessionLock(async () => {
+    const current = await storedActiveLiveDraftSession();
+    const claim = claimLiveDraftPageSession(current, candidate, Date.now());
+    if (claim.outcome === "standby") return claim;
+    await chrome.storage.session.set({ [liveDraftActiveSessionStorageKey]: claim.active });
+    if (claim.replaced !== null) {
+      liveDraftQueue.clearSession(claim.replaced.pageSessionId);
+      await removePendingObservationForSession(claim.replaced.pageSessionId);
+    }
+    return claim;
+  });
+}
+
+/** Stops local work for the matching page without shortening the server-aligned failover TTL. */
+async function departActiveLiveDraftSession(candidate: LiveDraftPageSession): Promise<boolean> {
+  return withLiveDraftSessionLock(async () => {
+    const active = await storedActiveLiveDraftSession();
+    if (active === null || !sameLiveDraftPageSession(active, candidate)) return false;
+    await chrome.storage.session.set({
+      [liveDraftActiveSessionStorageKey]: { ...active, departed: true },
+    });
+    liveDraftQueue.clearSession(candidate.pageSessionId);
+    await removePendingObservationForSession(candidate.pageSessionId);
+    return true;
+  });
+}
+
+/**
+ * Retains the newest revision from the active page. The persisted copy repairs a queue abandonment
+ * on the next heartbeat and survives a service-worker eviction.
+ */
+async function retainLatestActiveObservation(
+  observation: EspnLiveDraftObservationV1,
+): Promise<"retained" | "older" | "standby"> {
+  return withLiveDraftSessionLock(async () => {
+    const active = await storedActiveLiveDraftSession();
+    if (!activeMatchesObservation(active, observation, Date.now())) return "standby";
+    const stored = await chrome.storage.local.get(liveDraftPendingStorageKey);
+    try {
+      const pending = validateEspnLiveDraftObservation(stored[liveDraftPendingStorageKey]);
+      if (
+        pending.pageSessionId === observation.pageSessionId &&
+        pending.revision >= observation.revision
+      ) {
+        return "older";
+      }
+    } catch {
+      // A malformed retained value is replaced atomically by this validated observation.
+    }
+    await chrome.storage.local.set({ [liveDraftPendingStorageKey]: observation });
+    return "retained";
+  });
+}
+
+async function pendingObservationForActiveSession(
+  source: Pick<EspnLiveDraftObservationV1, "leagueId" | "season" | "pageSessionId">,
+): Promise<EspnLiveDraftObservationV1 | null> {
+  return withLiveDraftSessionLock(async () => {
+    const active = await storedActiveLiveDraftSession();
+    const stored = await chrome.storage.local.get(liveDraftPendingStorageKey);
+    let pending: EspnLiveDraftObservationV1;
+    try {
+      pending = validateEspnLiveDraftObservation(stored[liveDraftPendingStorageKey]);
+    } catch {
+      if (stored[liveDraftPendingStorageKey] !== undefined) {
+        await chrome.storage.local.remove(liveDraftPendingStorageKey);
+      }
+      return null;
+    }
+    if (
+      !activeMatchesObservation(active, pending, Date.now()) ||
+      pending.leagueId !== source.leagueId ||
+      pending.season !== source.season ||
+      pending.pageSessionId !== source.pageSessionId
+    ) {
+      return null;
+    }
+    return pending;
+  });
+}
+
+async function removePendingObservationIfCurrent(
+  observation: EspnLiveDraftObservationV1,
+): Promise<void> {
+  const stored = await chrome.storage.local.get(liveDraftPendingStorageKey);
+  try {
+    const pending = validateEspnLiveDraftObservation(stored[liveDraftPendingStorageKey]);
+    if (
+      pending.leagueId === observation.leagueId &&
+      pending.season === observation.season &&
+      pending.pageSessionId === observation.pageSessionId &&
+      pending.revision === observation.revision &&
+      pending.checksumSha256 === observation.checksumSha256
+    ) {
+      await chrome.storage.local.remove(liveDraftPendingStorageKey);
+    }
+  } catch {
+    // A later valid observation must not be removed because an older event could not parse it.
+  }
+}
+
+function standbyLiveDraftReply(
+  status: BridgeLiveDraftStatus,
+  resolvedScope: BridgeLiveDraftScope | null = null,
+): BridgeLiveDraftResponse {
+  return liveDraftReply(
+    {
+      ...status,
+      scope: "in-scope",
+      state: "standby",
+      message: "Another ESPN draft tab is the active read-only source; waiting for failover.",
+      ...(resolvedScope === null
+        ? {}
+        : { leagueId: resolvedScope.leagueId, season: resolvedScope.season }),
+    },
+    false,
+    resolvedScope,
+  );
+}
+
 async function uploadLiveDraft(body: string): Promise<LiveDraftUploadOutcome> {
   const configuration = await getConfiguration();
   if (!configuration) return { kind: "unauthorized" };
+  const expectation = liveDraftResponseExpectation(body);
+  if (expectation === null) return { kind: "retry" };
+  const deadline = createLiveDraftRequestDeadline();
   try {
     const response = await fetch(`${configuration.apiBaseUrl}${liveDraftIngestPath}`, {
       method: "POST",
@@ -1181,69 +1380,113 @@ async function uploadLiveDraft(body: string): Promise<LiveDraftUploadOutcome> {
       cache: "no-store",
       credentials: "omit",
       redirect: "error",
+      signal: deadline.signal,
     });
-    return classifyUploadStatus(response.status);
+    if (response.status < 200 || response.status >= 300) {
+      return classifyLiveDraftIngestResponse(response.status, undefined, expectation);
+    }
+    const responseText = await readBoundedText(response, LIVE_DRAFT_MAXIMUM_RESPONSE_BYTES);
+    return classifyLiveDraftIngestResponse(response.status, JSON.parse(responseText), expectation);
   } catch {
     // Laces Out unreachable: retry with backoff rather than dropping the board.
     return { kind: "retry" };
+  } finally {
+    deadline.clear();
   }
 }
 
 const uploadMessages: Readonly<Record<LiveDraftUploadOutcome["kind"], string>> = {
   accepted: "Live draft sync is current.",
+  standby: "Another source currently owns this live draft; this board is retained for failover.",
+  held: "Laces Out held this draft update for review instead of applying it.",
   rejected: "Laces Out could not accept the observed draft state.",
   unauthorized: "Laces Out pairing was rejected. Create a new bridge device token.",
   retry: "Laces Out is unreachable; retrying.",
 };
+
+function liveDraftStatusStateForUpload(
+  outcome: LiveDraftUploadOutcome,
+  draftState: BridgeLiveDraftStatus["draftState"],
+): BridgeLiveDraftStatus["state"] {
+  switch (outcome.kind) {
+    case "accepted":
+      return draftState === "complete" ? "complete" : "accepted";
+    case "standby":
+      return "standby";
+    case "held":
+      return "held";
+    case "rejected":
+      return "rejected";
+    case "unauthorized":
+      return "unauthorized";
+    case "retry":
+      return "offline";
+  }
+}
+
+function heartbeatPreservesBoardOutcome(
+  previous: BridgeLiveDraftStatus,
+  outcome: LiveDraftUploadOutcome,
+): boolean {
+  // A heartbeat can answer standby simply because the latest held/rejected checksum never became
+  // the feed checksum, and a transport retry is likewise not a new board decision. Keep the
+  // actionable semantic result visible until a newer observation is evaluated.
+  return (
+    (previous.state === "held" || previous.state === "rejected") &&
+    (outcome.kind === "accepted" || outcome.kind === "standby" || outcome.kind === "retry")
+  );
+}
 
 const liveDraftQueue = new LiveDraftUploadQueue({
   transport: uploadLiveDraft,
   sleep: (delayMs) => new Promise((resolve) => setTimeout(resolve, delayMs)),
   random: () => Math.random(),
   onEvent: (event) => {
-    void (async () => {
+    void withLiveDraftSessionLock(async () => {
+      const active = await storedActiveLiveDraftSession();
+      if (!activeMatchesObservation(active, event.observation, Date.now())) return;
       if (event.kind === "retrying") {
         await setLiveDraftStatus({ state: "offline", message: uploadMessages.retry });
         return;
       }
       if (event.kind === "abandoned" || event.kind === "oversized") {
+        if (event.kind === "oversized") {
+          await removePendingObservationIfCurrent(event.observation);
+        }
         const previous = await getLiveDraftStatus();
         await setLiveDraftStatus({
           state: "error",
           message:
             event.kind === "oversized"
               ? "The observed draft board exceeded the safety limit and was discarded."
-              : "Laces Out did not accept the latest draft update; retrying on the next change.",
+              : "Laces Out did not accept the latest draft update; retained state will retry.",
           consecutiveFailures: previous.consecutiveFailures + 1,
           queuedSnapshot: liveDraftQueue.queued.snapshot,
         });
         return;
       }
       const accepted = event.outcome.kind === "accepted";
-      if (accepted && event.slot === "snapshot") {
-        await chrome.storage.local.remove(liveDraftPendingStorageKey);
-      }
+      const retained = liveDraftRetainedObservationDisposition(event.outcome) === "retain";
+      if (!retained) await removePendingObservationIfCurrent(event.observation);
       const previous = await getLiveDraftStatus();
       await setLiveDraftStatus({
-        state:
-          event.outcome.kind === "accepted"
-            ? previous.draftState === "complete"
-              ? "complete"
-              : "accepted"
-            : event.outcome.kind === "unauthorized"
-              ? "unauthorized"
-              : "rejected",
+        state: liveDraftStatusStateForUpload(event.outcome, previous.draftState),
         message: uploadMessages[event.outcome.kind],
         lastAcceptedAt: accepted ? new Date().toISOString() : previous.lastAcceptedAt,
-        consecutiveFailures: accepted ? 0 : previous.consecutiveFailures + 1,
-        queuedSnapshot: liveDraftQueue.queued.snapshot,
+        consecutiveFailures:
+          accepted || event.outcome.kind === "standby" ? 0 : previous.consecutiveFailures + 1,
+        queuedSnapshot: retained || liveDraftQueue.queued.snapshot,
       });
-    })();
+    });
   },
 });
 
-function liveDraftReply(status: BridgeLiveDraftStatus, ok = true): BridgeLiveDraftResponse {
-  return { ok, status };
+function liveDraftReply(
+  status: BridgeLiveDraftStatus,
+  ok = true,
+  resolvedScope: BridgeLiveDraftScope | null = null,
+): BridgeLiveDraftResponse {
+  return { ok, status, resolvedScope };
 }
 
 async function rejectLiveDraft(message: string): Promise<BridgeLiveDraftResponse> {
@@ -1293,32 +1536,59 @@ async function handleLiveDraftRequest(
   } catch {
     configuration = undefined;
   }
+  const routeResolution = resolveLiveDraftPageScope(
+    route,
+    configuration === undefined ? [] : [configuration],
+  );
 
   if (request.type === "GET_LIVE_DRAFT_STATUS") {
-    const claimed =
-      typeof request.leagueId === "string" && typeof request.season === "number"
-        ? { leagueId: request.leagueId, season: request.season }
-        : { leagueId: route.leagueId, season: route.season };
-    const scope = validateLiveDraftScope(claimed, route, configuration);
     const current = await getLiveDraftStatus();
-    return liveDraftReply(
-      await setLiveDraftStatus({
-        scope: scope.ok ? "in-scope" : configuration ? "out-of-scope" : "not-configured",
-        state: scope.ok ? (current.state === "idle" ? "observing" : current.state) : "idle",
-        message: scope.ok
-          ? "Following this ESPN draft room."
-          : configuration
+    const requestMatchesScope =
+      routeResolution.ok &&
+      (request.leagueId === undefined || request.leagueId === routeResolution.scope.leagueId) &&
+      (request.season === undefined || request.season === routeResolution.scope.season);
+    if (!requestMatchesScope || !routeResolution.ok) {
+      return liveDraftReply(
+        await setLiveDraftStatus({
+          scope: configuration ? "out-of-scope" : "not-configured",
+          state: "idle",
+          message: configuration
             ? "This ESPN league is not paired with Laces Out on this browser."
             : "Pair this bridge with Laces Out to follow a draft.",
-        leagueId: claimed.leagueId,
-        season: claimed.season,
+          leagueId: route.leagueId,
+          season: route.season ?? null,
+        }),
+        false,
+      );
+    }
+    const resolvedScope = routeResolution.scope;
+    const page = pageSessionFor(resolvedScope, request.pageSessionId ?? "", sender);
+    if (page === null) return rejectLiveDraft("A live draft page session identifier is required.");
+    const claim = await claimActiveLiveDraftSession(page);
+    if (claim.outcome === "standby") return standbyLiveDraftReply(current, resolvedScope);
+    return liveDraftReply(
+      await setLiveDraftStatus({
+        scope: "in-scope",
+        state: "observing",
+        message: "Following this ESPN draft room.",
+        leagueId: resolvedScope.leagueId,
+        season: resolvedScope.season,
       }),
-      scope.ok,
+      true,
+      resolvedScope,
     );
   }
 
   if (request.type === "LIVE_DRAFT_PAGE_LEFT") {
-    liveDraftQueue.clear();
+    const scope = validateLiveDraftScope(request, route, configuration);
+    if (!scope.ok || !routeResolution.ok) {
+      return rejectLiveDraft("This ESPN league is outside the paired bridge scope.");
+    }
+    const page = pageSessionFor(routeResolution.scope, request.pageSessionId, sender);
+    if (page === null) return rejectLiveDraft("A malformed live draft page session was refused.");
+    if (!(await departActiveLiveDraftSession(page))) {
+      return standbyLiveDraftReply(await getLiveDraftStatus(), routeResolution.scope);
+    }
     return liveDraftReply(
       await setLiveDraftStatus({
         state: "idle",
@@ -1336,14 +1606,52 @@ async function handleLiveDraftRequest(
       return rejectLiveDraft("A malformed live draft heartbeat was discarded.");
     }
     const scope = validateLiveDraftScope(heartbeat, route, configuration);
-    if (!scope.ok) return rejectLiveDraft("This ESPN league is outside the paired bridge scope.");
-    await uploadLiveDraft(JSON.stringify(heartbeat));
+    if (!scope.ok || !routeResolution.ok) {
+      return rejectLiveDraft("This ESPN league is outside the paired bridge scope.");
+    }
+    const page = pageSessionFor(routeResolution.scope, heartbeat.pageSessionId, sender);
+    if (page === null) return rejectLiveDraft("A malformed live draft page session was refused.");
+    const claim = await claimActiveLiveDraftSession(page);
+    if (claim.outcome === "standby") {
+      return standbyLiveDraftReply(await getLiveDraftStatus(), routeResolution.scope);
+    }
+
+    // Repair an abandoned or worker-interrupted observation before asking the server to renew
+    // freshness. Its revision/checksum fence refuses the heartbeat until this exact state lands.
+    const pending = await pendingObservationForActiveSession(heartbeat);
+    if (pending !== null) {
+      await liveDraftQueue.submit(pending, "snapshot");
+      // A bounded queue retry can span most of the local lease. Confirm this page still owns the
+      // source before its trailing heartbeat can renew a lease after another tab took over.
+      const renewed = await claimActiveLiveDraftSession(page);
+      if (renewed.outcome === "standby") {
+        return standbyLiveDraftReply(await getLiveDraftStatus(), routeResolution.scope);
+      }
+    }
+    const outcome = await uploadLiveDraft(JSON.stringify(heartbeat));
+    const previous = await getLiveDraftStatus();
+    const accepted = outcome.kind === "accepted";
+    const retained = liveDraftRetainedObservationDisposition(outcome) === "retain";
+    const preserveBoardOutcome = heartbeatPreservesBoardOutcome(previous, outcome);
     return liveDraftReply(
       await setLiveDraftStatus({
         scope: "in-scope",
+        state: preserveBoardOutcome
+          ? previous.state
+          : liveDraftStatusStateForUpload(outcome, heartbeat.state),
+        message: preserveBoardOutcome ? previous.message : uploadMessages[outcome.kind],
         draftState: heartbeat.state,
         lastObservedAt: heartbeat.capturedAt,
+        lastAcceptedAt:
+          accepted && !preserveBoardOutcome ? new Date().toISOString() : previous.lastAcceptedAt,
+        consecutiveFailures: preserveBoardOutcome
+          ? previous.consecutiveFailures
+          : accepted || outcome.kind === "standby"
+            ? 0
+            : previous.consecutiveFailures + 1,
+        queuedSnapshot: retained && pending !== null,
       }),
+      accepted,
     );
   }
 
@@ -1354,14 +1662,27 @@ async function handleLiveDraftRequest(
     return rejectLiveDraft("A malformed live draft observation was discarded.");
   }
   const scope = validateLiveDraftScope(observation, route, configuration);
-  if (!scope.ok) return rejectLiveDraft("This ESPN league is outside the paired bridge scope.");
+  if (!scope.ok || !routeResolution.ok) {
+    return rejectLiveDraft("This ESPN league is outside the paired bridge scope.");
+  }
   if (!(await checksumMatches(observation))) {
     return rejectLiveDraft("A live draft observation failed its checksum and was discarded.");
   }
+  const page = pageSessionFor(routeResolution.scope, observation.pageSessionId, sender);
+  if (page === null) return rejectLiveDraft("A malformed live draft page session was refused.");
+  const claim = await claimActiveLiveDraftSession(page);
+  if (claim.outcome === "standby") {
+    return standbyLiveDraftReply(await getLiveDraftStatus(), routeResolution.scope);
+  }
 
-  // Only the latest snapshot is retained. An unsent older one is superseded, never replayed.
-  if (!request.transient) {
-    await chrome.storage.local.set({ [liveDraftPendingStorageKey]: observation });
+  // Both durable and transient revisions are retained. Otherwise a lost high-bid update could be
+  // masked by later heartbeats while only the older server-side bid remained actionable.
+  const retained = await retainLatestActiveObservation(observation);
+  if (retained === "standby") {
+    return standbyLiveDraftReply(await getLiveDraftStatus(), routeResolution.scope);
+  }
+  if (retained === "older") {
+    return liveDraftReply(await getLiveDraftStatus());
   }
   void liveDraftQueue.submit(observation, request.transient ? "transient" : "snapshot");
   return liveDraftReply(
@@ -1386,8 +1707,15 @@ async function restoreLiveDraftQueue(): Promise<void> {
   if (stored[liveDraftPendingStorageKey] === undefined) return;
   try {
     const observation = validateEspnLiveDraftObservation(stored[liveDraftPendingStorageKey]);
-    if (await checksumMatches(observation)) void liveDraftQueue.submit(observation, "snapshot");
-    else await chrome.storage.local.remove(liveDraftPendingStorageKey);
+    const active = await storedActiveLiveDraftSession();
+    if (
+      activeMatchesObservation(active, observation, Date.now()) &&
+      (await checksumMatches(observation))
+    ) {
+      void liveDraftQueue.submit(observation, "snapshot");
+    } else {
+      await chrome.storage.local.remove(liveDraftPendingStorageKey);
+    }
   } catch {
     await chrome.storage.local.remove(liveDraftPendingStorageKey);
   }
@@ -1412,7 +1740,11 @@ async function handleRequest(
       maintenanceStorageKey,
       serverSessionStatusStorageKey,
       serverSessionPendingStorageKey,
+      liveDraftStatusStorageKey,
+      liveDraftPendingStorageKey,
     ]);
+    await chrome.storage.session.remove(liveDraftActiveSessionStorageKey);
+    liveDraftQueue.clear();
     await chrome.alarms.clear(syncAlarmName);
     void clearPairingNudge();
     return { ok: true, status: DEFAULT_STATUS };
@@ -1595,6 +1927,7 @@ chrome.runtime.onMessage.addListener(
         .catch(() => {
           sendResponse({
             ok: false,
+            resolvedScope: null,
             status: {
               ...defaultLiveDraftStatus,
               state: "error",

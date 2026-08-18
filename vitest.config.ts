@@ -2,6 +2,7 @@ import { defineConfig } from "vitest/config";
 import { fileURLToPath } from "node:url";
 
 const workspacePackages = fileURLToPath(new URL("./packages", import.meta.url));
+const isMiniRemoteValidation = process.env.LACES_REMOTE_PLATFORM === "darwin-arm64";
 
 export default defineConfig({
   resolve: {
@@ -18,6 +19,7 @@ export default defineConfig({
   },
   test: {
     include: ["packages/**/*.test.ts", "apps/**/*.test.ts"],
+    ...(isMiniRemoteValidation ? { maxWorkers: 2 } : {}),
     coverage: {
       provider: "v8",
       reporter: ["text", "html", "lcov"],

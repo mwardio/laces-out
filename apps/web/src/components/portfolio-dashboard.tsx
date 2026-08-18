@@ -433,7 +433,7 @@ export function PortfolioDashboard({ afterOverview }: { readonly afterOverview?:
             <p className="provider-description">
               {yahooComingSoon
                 ? "Yahoo sign-in and read-only league sync are coming soon."
-                : "Yahoo sign-in uses the official Authorization Code + PKCE flow. With approved Fantasy API credentials configured, leagues are discovered automatically and settings, team, roster, standings, and scoreboard data sync read-only."}
+                : "Yahoo sign-in uses its official server-side authorization flow. Leagues are discovered automatically, then settings, teams, rosters, standings, and scoreboard data sync read-only."}
             </p>
             {/* These were ungated, so the card read "Coming soon" directly above
                 a green check claiming the sync was already there. */}

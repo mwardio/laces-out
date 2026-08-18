@@ -13,12 +13,14 @@ import {
   ROS_SCORING_PROFILE_KEYS,
   isRosScoringProfileKey,
   rosScoringProfile,
+  type FirstPartyRosPosition,
   type RosScoringProfileEntry,
 } from "@laces-out/projections";
 
 import {
   buildHistoricalRosBacktest,
   historicalRosBucket,
+  HISTORICAL_ROS_SUPPORTED_POSITIONS,
 } from "../src/first-party-ros-backtest.js";
 import {
   buildFirstPartyPlayerHistory,
@@ -31,6 +33,10 @@ import {
   type ProjectionWeeklyFact,
 } from "../src/first-party-projection-inputs.js";
 import { firstPartyRosChampionPolicyChecksum } from "../src/first-party-ros-publication.js";
+import {
+  FIRST_PARTY_ROS_RELEASE_MAXIMUM_FORECASTS,
+  FIRST_PARTY_ROS_RELEASE_PLAYERS_PER_POSITION,
+} from "../src/first-party-ros-validation-contract.js";
 import {
   ROS_COVERAGE_POSITIONS,
   auditHistoricalRosCoverage,
@@ -62,6 +68,30 @@ function integerList(name: string, fallback: string): readonly number[] {
     throw new Error(`${name} must contain comma-separated integers`);
   }
   return [...new Set(values)].sort((left, right) => left - right);
+}
+
+function positionListOption(): readonly FirstPartyRosPosition[] | undefined {
+  const raw = process.argv.find((argument) => argument.startsWith("--positions="));
+  if (raw === undefined) return undefined;
+  const positions = raw
+    .slice("--positions=".length)
+    .split(",")
+    .map((position) => position.trim().toUpperCase());
+  if (positions.length === 0) {
+    throw new Error(
+      `--positions must contain values from ${HISTORICAL_ROS_SUPPORTED_POSITIONS.join(", ")}`,
+    );
+  }
+  if (
+    positions.some(
+      (position) => !HISTORICAL_ROS_SUPPORTED_POSITIONS.includes(position as FirstPartyRosPosition),
+    )
+  ) {
+    throw new Error(
+      `--positions must contain values from ${HISTORICAL_ROS_SUPPORTED_POSITIONS.join(", ")}`,
+    );
+  }
+  return [...new Set(positions as FirstPartyRosPosition[])].sort();
 }
 
 /**
@@ -102,13 +132,19 @@ async function main(): Promise<void> {
   const seasons = integerList("--seasons", "2019,2020,2021,2022,2023,2024,2025");
   const heldOutSeasons = integerList("--holdouts", "2022,2023,2024,2025");
   const asOfWeeks = integerList("--cutoffs", "1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17");
-  // Five deterministic quantile-stratified players per position/cutoff (selection quantiles
-  // 0/25/50/75/100 of the recent-production ranking, declared before any result inspection) put
-  // every 2025 walk-forward cell above the 18-row evidence floor; the forecast cap stays above
-  // the full 4-season corpus (5 players x 6 positions x 17 cutoffs x 4 seasons = 2,040) so the
-  // run can never truncate silently.
-  const playersPerPosition = integerOption("--players-per-position", 5);
-  const maximumForecasts = integerOption("--max-forecasts", 3_000);
+  const positions = positionListOption();
+  // Eight deterministic quantile-stratified players per position/cutoff is the locked release
+  // replay. Smaller values remain available explicitly for local exploration, but admission rejects
+  // them. The default must therefore be the publication-grade configuration, never the cheaper
+  // exploratory configuration that once produced a false K coverage regression.
+  const playersPerPosition = integerOption(
+    "--players-per-position",
+    FIRST_PARTY_ROS_RELEASE_PLAYERS_PER_POSITION,
+  );
+  const maximumForecasts = integerOption(
+    "--max-forecasts",
+    FIRST_PARTY_ROS_RELEASE_MAXIMUM_FORECASTS,
+  );
   if (heldOutSeasons.length < 3) {
     throw new Error("Historical ROS validation requires at least three holdouts");
   }
@@ -308,6 +344,10 @@ async function main(): Promise<void> {
   if (coverage.state !== "qualified") {
     const output = {
       validationMode: "read-only-first-party-ros-backtest",
+      validationScope: {
+        positions: positions ?? HISTORICAL_ROS_SUPPORTED_POSITIONS,
+        completePortfolio: positions === undefined,
+      },
       generatedAt: new Date().toISOString(),
       elapsedSeconds: (Date.now() - startedAt) / 1_000,
       state: "blocked-before-modeling",
@@ -339,7 +379,7 @@ async function main(): Promise<void> {
   const history = buildFirstPartyPlayerHistory(weekly, snaps, rosters, schedules, injuries);
   const defenseHistory = buildFirstPartyDefenseHistory(teamWeekly, schedules);
   process.stderr.write(
-    `Building paired forecasts (${playersPerPosition}/position/cutoff, max ${maximumForecasts})...\n`,
+    `Building paired forecasts (${playersPerPosition}/position/cutoff, max ${maximumForecasts}${positions === undefined ? "" : `, positions ${positions.join(",")}`})...\n`,
   );
   let phaseStartedAt = Date.now();
   const result = buildHistoricalRosBacktest({
@@ -360,6 +400,7 @@ async function main(): Promise<void> {
     options: {
       heldOutSeasons,
       asOfWeeks,
+      ...(positions === undefined ? {} : { positions }),
       playersPerPosition,
       maximumForecasts,
       minimumPortfolioForecasts: 300,
@@ -402,6 +443,10 @@ async function main(): Promise<void> {
   });
   const output = {
     validationMode: "read-only-first-party-ros-backtest",
+    validationScope: {
+      positions: positions ?? HISTORICAL_ROS_SUPPORTED_POSITIONS,
+      completePortfolio: positions === undefined,
+    },
     generatedAt: new Date().toISOString(),
     elapsedSeconds: (Date.now() - startedAt) / 1_000,
     noDatabaseWrites: true,
@@ -523,6 +568,27 @@ async function main(): Promise<void> {
     // their checksums. `champion` above remains the concise human-audit summary; it must never be
     // cast back into this richer runtime contract.
     publicationPolicy: result.champion.livePolicy,
+    diagnostics: process.argv.includes("--diagnostics")
+      ? {
+          seasonPolicies: result.champion.seasonPolicies.map((audit) => ({
+            season: audit.season,
+            evidenceThroughSeason: audit.evidenceThroughSeason,
+            choices: audit.policy.choices
+              .filter((choice) => positions === undefined || positions.includes(choice.position))
+              .map((choice) => ({
+                position: choice.position,
+                bucket: choice.bucket,
+                strategy: choice.strategy,
+                reason: choice.reason,
+                contextualCalibration: choice.intervalCalibrationArtifacts.contextual,
+                recencyCalibration: choice.intervalCalibrationArtifacts.recency,
+              })),
+          })),
+          selected: result.champion.selected.filter(
+            (row) => positions === undefined || positions.includes(row.position),
+          ),
+        }
+      : undefined,
     sources: process.argv.includes("--full") ? sourceAudit : undefined,
   };
   process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);

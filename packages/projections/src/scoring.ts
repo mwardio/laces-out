@@ -23,6 +23,100 @@ export interface ProjectionScoringProfile {
 
 export type ProjectionStatComponents = Readonly<Record<string, number>>;
 
+/**
+ * ESPN's "every N" categories score whole groups rather than a fractional share of the raw stat.
+ * Each component below is therefore the realized `floor(stat / divisor)` count in historical
+ * data. The projection model learns the expected count directly; callers must never approximate
+ * it by flooring a projected mean.
+ */
+export const ESPN_EVERY_N_FLOOR_UNIT_COMPONENTS = [
+  ...[5, 10, 20, 25, 50, 100].map((divisor) => ({
+    component: `passing_yards_per_${divisor}_units`,
+    source: "passing_yards",
+    divisor,
+  })),
+  ...[5, 10].map((divisor) => ({
+    component: `passing_completions_per_${divisor}_units`,
+    source: "passing_completions",
+    divisor,
+  })),
+  ...[5, 10].map((divisor) => ({
+    component: `passing_incompletions_per_${divisor}_units`,
+    source: "passing_incompletions",
+    divisor,
+  })),
+  ...[5, 10, 20, 25, 50, 100].map((divisor) => ({
+    component: `rushing_yards_per_${divisor}_units`,
+    source: "rushing_yards",
+    divisor,
+  })),
+  ...[5, 10].map((divisor) => ({
+    component: `carries_per_${divisor}_units`,
+    source: "carries",
+    divisor,
+  })),
+  ...[5, 10, 20, 25, 50, 100].map((divisor) => ({
+    component: `receiving_yards_per_${divisor}_units`,
+    source: "receiving_yards",
+    divisor,
+  })),
+  ...[5, 10].map((divisor) => ({
+    component: `receptions_per_${divisor}_units`,
+    source: "receptions",
+    divisor,
+  })),
+  ...[10, 25].map((divisor) => ({
+    component: `kickoff_return_yards_per_${divisor}_units`,
+    source: "kickoff_return_yards",
+    divisor,
+  })),
+  ...[10, 25].map((divisor) => ({
+    component: `punt_return_yards_per_${divisor}_units`,
+    source: "punt_return_yards",
+    divisor,
+  })),
+] as const;
+
+export type EspnEveryNFloorUnitComponent = (typeof ESPN_EVERY_N_FLOOR_UNIT_COMPONENTS)[number];
+
+const ESPN_EVERY_N_FLOOR_UNIT_COMPONENT_BY_NAME = new Map(
+  ESPN_EVERY_N_FLOOR_UNIT_COMPONENTS.map((definition) => [definition.component, definition]),
+);
+
+function rawEveryNSourceValue(
+  components: ProjectionStatComponents,
+  source: string,
+): number | undefined {
+  if (source === "passing_incompletions") {
+    const attempts = components.passing_attempts;
+    const completions = components.passing_completions;
+    if (
+      attempts === undefined ||
+      completions === undefined ||
+      !Number.isFinite(attempts) ||
+      !Number.isFinite(completions) ||
+      attempts < 0 ||
+      completions < 0
+    ) {
+      return undefined;
+    }
+    return Math.max(0, attempts - completions);
+  }
+  const value = components[source];
+  return value !== undefined && Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+
+/** Returns an exact historical whole-group count for one supported ESPN every-N component. */
+export function espnEveryNFloorUnitValue(
+  components: ProjectionStatComponents,
+  component: string,
+): number | undefined {
+  const definition = ESPN_EVERY_N_FLOOR_UNIT_COMPONENT_BY_NAME.get(component);
+  if (definition === undefined) return undefined;
+  const source = rawEveryNSourceValue(components, definition.source);
+  return source === undefined ? undefined : Math.floor(source / definition.divisor);
+}
+
 function finiteNonnegativeComponent(components: ProjectionStatComponents, key: string): number {
   const value = components[key];
   return value !== undefined && Number.isFinite(value) && value >= 0 ? value : 0;
@@ -35,8 +129,29 @@ function finiteNonnegativeComponent(components: ProjectionStatComponents, key: s
 export function normalizeHistoricalPlayerStatComponents(
   components: ProjectionStatComponents,
 ): ProjectionStatComponents {
+  const passingYards = finiteNonnegativeComponent(components, "passing_yards");
+  const rushingYards = finiteNonnegativeComponent(components, "rushing_yards");
+  const receivingYards = finiteNonnegativeComponent(components, "receiving_yards");
+  const everyNFloorUnits = Object.fromEntries(
+    ESPN_EVERY_N_FLOOR_UNIT_COMPONENTS.map(({ component }) => [
+      component,
+      espnEveryNFloorUnitValue(components, component) ?? 0,
+    ]),
+  );
   return {
     ...components,
+    ...everyNFloorUnits,
+    // ESPN exposes these as mutually exclusive per-game scoring categories. An NFL player has at
+    // most one game in a fantasy week, so the realized historical component is an exact 0/1
+    // indicator. The weekly projection model learns its expectation as a calibrated probability;
+    // scoring that probability by the league's configured bonus is therefore an expected-points
+    // calculation, not the unsafe `projected mean >= threshold` shortcut.
+    passing_yards_300_399_probability: passingYards >= 300 && passingYards < 400 ? 1 : 0,
+    passing_yards_400_plus_probability: passingYards >= 400 ? 1 : 0,
+    rushing_yards_100_199_probability: rushingYards >= 100 && rushingYards < 200 ? 1 : 0,
+    rushing_yards_200_plus_probability: rushingYards >= 200 ? 1 : 0,
+    receiving_yards_100_199_probability: receivingYards >= 100 && receivingYards < 200 ? 1 : 0,
+    receiving_yards_200_plus_probability: receivingYards >= 200 ? 1 : 0,
     fumbles_lost: finiteNonnegativeComponent(components, "fumbles_lost_total"),
     turnovers:
       finiteNonnegativeComponent(components, "passing_interceptions") +

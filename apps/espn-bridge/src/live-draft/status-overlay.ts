@@ -56,9 +56,16 @@ const TONE_BACKGROUND: Readonly<Record<OverlayTone, string>> = {
 /** Creates the badge lazily; a host with nowhere to attach (a detached document) is a no-op. */
 export function createLiveDraftStatusOverlay(host: OverlayHost): LiveDraftStatusOverlay {
   let node: OverlayNode | null = null;
+  let lastTone: OverlayTone | null = null;
+  let lastMessage: string | null = null;
 
   return {
     show(tone, message): void {
+      const boundedMessage = message.slice(0, 120);
+      // The badge lives inside the subtree watched by the draft MutationObserver. Rewriting an
+      // unchanged badge would manufacture another mutation and can otherwise turn a failed scan
+      // into a self-sustaining rescan loop.
+      if (node !== null && tone === lastTone && boundedMessage === lastMessage) return;
       if (node === null) {
         node = host.attach();
         if (node === null) return;
@@ -67,11 +74,15 @@ export function createLiveDraftStatusOverlay(host: OverlayHost): LiveDraftStatus
         node.setAttribute("data-laces-out-live-draft", "status");
       }
       node.setAttribute("style", `${OVERLAY_STYLE};background:${TONE_BACKGROUND[tone]}`);
-      node.textContent = message.slice(0, 120);
+      node.textContent = boundedMessage;
+      lastTone = tone;
+      lastMessage = boundedMessage;
     },
     remove(): void {
       node?.remove();
       node = null;
+      lastTone = null;
+      lastMessage = null;
     },
   };
 }

@@ -354,7 +354,7 @@ describe("typed worker service dispatch", () => {
     expect(info).not.toHaveBeenCalled();
   });
 
-  it("dispatches player, market, and ADP refreshes with user-forced checks", async () => {
+  it("forces user and daily ADP checks while startup recovery respects source due times", async () => {
     const refreshPlayerData = vi.fn(() =>
       Promise.resolve({
         nflverse: { state: "updated", rowsRead: 10, rowsWritten: 9, rowsRejected: 1 },
@@ -390,14 +390,28 @@ describe("typed worker service dispatch", () => {
       reason: "startup-recovery",
       requestedAt: "2026-07-21T12:00:00.000Z",
     };
+    const dailyAdp: DataRefreshJob = {
+      requestedBy: "system",
+      scope: "adp-data",
+      reason: "daily",
+      requestedAt: "scheduled",
+    };
+    const userAdp: DataRefreshJob = {
+      requestedBy: "user-1",
+      scope: "adp-data",
+      reason: "user",
+      requestedAt: "2026-07-21T12:00:00.000Z",
+    };
     await run(harness.handlers, queueNames.dataRefresh, job(queueNames.dataRefresh, player));
     await run(harness.handlers, queueNames.dataRefresh, job(queueNames.dataRefresh, market));
     await run(harness.handlers, queueNames.dataRefresh, job(queueNames.dataRefresh, adp));
+    await run(harness.handlers, queueNames.dataRefresh, job(queueNames.dataRefresh, dailyAdp));
+    await run(harness.handlers, queueNames.dataRefresh, job(queueNames.dataRefresh, userAdp));
 
     expect(refreshPlayerData).toHaveBeenCalledWith(true);
     expect(refreshMarketData).toHaveBeenCalledWith(false);
-    expect(refreshAdpData).toHaveBeenCalledWith(false);
-    expect(info).toHaveBeenCalledTimes(3);
+    expect(refreshAdpData.mock.calls).toEqual([[false], [true], [true]]);
+    expect(info).toHaveBeenCalledTimes(5);
   });
 
   it("fails closed when an ADP refresh is queued without its adapter", async () => {

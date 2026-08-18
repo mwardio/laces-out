@@ -5,12 +5,53 @@ import { access, copyFile, readFile, writeFile } from "node:fs/promises";
 // instances, while externally initiated one-click offers remain pinned to the
 // official hosted origins. The API base URL is user-approved at runtime and is
 // never baked into compiled code.
-const target = process.env.BRIDGE_TARGET === "store" ? "store" : "dev";
+const target = ["store", "calibration"].includes(process.env.BRIDGE_TARGET)
+  ? process.env.BRIDGE_TARGET
+  : "dev";
 // Both origins front the same deployment; pairing is offered from either, and
 // the popup follows whichever origin the device actually paired against.
 const PRODUCTION_ORIGINS = ["https://laces.mward.io", "https://lacesout.app"];
 
 const manifest = JSON.parse(await readFile(new URL("../manifest.json", import.meta.url), "utf8"));
+
+if (target === "calibration") {
+  // Calibration is an explicit unpacked/local build. Enforce that boundary in the artifact: no
+  // worker, pairing, cookie/storage permission, popup, optional hosts, or upload-capable content
+  // script survives. The remaining script writes only a sanitized report to local DevTools.
+  manifest.name = `${manifest.name} (Local Calibration)`;
+  manifest.description = "Local-only structural calibration for an ESPN Fantasy draft room.";
+  delete manifest.key;
+  delete manifest.permissions;
+  delete manifest.host_permissions;
+  delete manifest.optional_host_permissions;
+  delete manifest.externally_connectable;
+  delete manifest.background;
+  delete manifest.action;
+  delete manifest.content_security_policy;
+  manifest.content_scripts = [
+    {
+      matches: ["https://fantasy.espn.com/football/draft*"],
+      js: ["calibration-content-script.global.js"],
+      run_at: "document_idle",
+      all_frames: false,
+    },
+  ];
+
+  for (const forbidden of [
+    "key",
+    "permissions",
+    "host_permissions",
+    "optional_host_permissions",
+    "externally_connectable",
+    "background",
+    "action",
+    "content_security_policy",
+  ]) {
+    if (forbidden in manifest) {
+      throw new Error(`calibration manifest must not contain ${forbidden}`);
+    }
+  }
+}
 
 if (target === "store") {
   // Store uploads must not carry a `key`; the Chrome Web Store assigns the
@@ -39,8 +80,9 @@ const REQUIRED_HOST_PERMISSIONS = [
   "https://fan.api.espn.com/*",
 ];
 if (
+  target !== "calibration" &&
   JSON.stringify([...(manifest.host_permissions ?? [])].sort()) !==
-  JSON.stringify([...REQUIRED_HOST_PERMISSIONS].sort())
+    JSON.stringify([...REQUIRED_HOST_PERMISSIONS].sort())
 ) {
   throw new Error("manifest.json host_permissions must be exactly the three ESPN hosts");
 }
@@ -73,14 +115,18 @@ await Promise.all([
     new URL("../dist/manifest.json", import.meta.url),
     `${JSON.stringify(manifest, null, 2)}\n`,
   ),
-  copyFile(
-    new URL("../src/popup.html", import.meta.url),
-    new URL("../dist/popup.html", import.meta.url),
-  ),
-  copyFile(
-    new URL("../src/popup.css", import.meta.url),
-    new URL("../dist/popup.css", import.meta.url),
-  ),
+  ...(target === "calibration"
+    ? []
+    : [
+        copyFile(
+          new URL("../src/popup.html", import.meta.url),
+          new URL("../dist/popup.html", import.meta.url),
+        ),
+        copyFile(
+          new URL("../src/popup.css", import.meta.url),
+          new URL("../dist/popup.css", import.meta.url),
+        ),
+      ]),
   ...[16, 32, 48, 128].map((size) =>
     copyFile(
       new URL(`../assets/icon-${size}.png`, import.meta.url),

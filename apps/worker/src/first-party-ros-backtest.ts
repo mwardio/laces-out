@@ -107,6 +107,8 @@ const inactiveStatuses = new Set<FirstPartyPlayerStatus>([
 export interface HistoricalRosBacktestOptions {
   readonly heldOutSeasons: readonly number[];
   readonly asOfWeeks?: readonly number[];
+  /** Optional diagnostic slice. Release validation omits this and evaluates every position. */
+  readonly positions?: readonly FirstPartyRosPosition[];
   readonly playersPerPosition?: number;
   readonly maximumForecasts?: number;
   readonly minimumPortfolioForecasts?: number;
@@ -287,6 +289,7 @@ export function historicalRosCalibrationBlockers(
 interface ResolvedOptions {
   readonly heldOutSeasons: readonly number[];
   readonly asOfWeeks: readonly number[];
+  readonly positions: readonly FirstPartyRosPosition[];
   readonly playersPerPosition: number;
   readonly maximumForecasts: number;
   readonly minimumPortfolioForecasts: number;
@@ -370,9 +373,17 @@ function resolveOptions(options: HistoricalRosBacktestOptions): ResolvedOptions 
   if (asOfWeeks.length === 0 || asOfWeeks.some((week) => week < 1 || week > 17)) {
     throw new RangeError("Historical ROS cutoffs must be between Weeks 1 and 17");
   }
+  const positions = [...new Set(options.positions ?? HISTORICAL_ROS_SUPPORTED_POSITIONS)].sort();
+  if (
+    positions.length === 0 ||
+    positions.some((position) => !HISTORICAL_ROS_SUPPORTED_POSITIONS.includes(position))
+  ) {
+    throw new RangeError("Historical ROS positions must contain supported positions");
+  }
   const resolved = {
     heldOutSeasons,
     asOfWeeks,
+    positions,
     playersPerPosition: options.playersPerPosition ?? 5,
     maximumForecasts: options.maximumForecasts ?? 3_000,
     minimumPortfolioForecasts: options.minimumPortfolioForecasts ?? 300,
@@ -383,7 +394,7 @@ function resolveOptions(options: HistoricalRosBacktestOptions): ResolvedOptions 
     minimumCellSeasons: options.minimumCellSeasons ?? 3,
   };
   for (const [label, value] of Object.entries(resolved).filter(
-    ([key]) => key !== "heldOutSeasons" && key !== "asOfWeeks",
+    ([key]) => key !== "heldOutSeasons" && key !== "asOfWeeks" && key !== "positions",
   )) {
     if (!Number.isSafeInteger(value) || (value as number) <= 0) {
       throw new RangeError(`${label} must be a positive integer`);
@@ -2182,6 +2193,9 @@ export function buildHistoricalRosBacktest(
   input: HistoricalRosBacktestInput,
 ): HistoricalRosBacktestResult {
   const options = resolveOptions(input.options);
+  const includedPositions = new Set(options.positions);
+  const includesPlayers = options.positions.some((position) => position !== "DST");
+  const includesDefense = includedPositions.has("DST");
   const qualifiedSeasons = new Set(input.coverage.fullyHeldOutSeasons);
   const drafts: HistoricalRosDraft[] = [];
   const kickerFamilyAudits: Array<HistoricalRosBacktestReport["kickerFamilyAudit"][number]> = [];
@@ -2193,41 +2207,50 @@ export function buildHistoricalRosBacktest(
   for (const season of options.heldOutSeasons) {
     if (!qualifiedSeasons.has(season)) continue;
     const training = historicalRosTrainingRows(input.history, season);
-    if (training.length === 0) continue;
-    const weeklyBacktest = runFirstPartyProjectionBacktest(training);
-    const calibration = weeklyBacktest.calibration;
+    if (includesPlayers && training.length === 0) continue;
+    const weeklyBacktest = includesPlayers ? runFirstPartyProjectionBacktest(training) : null;
     const defenseTraining = historicalRosDefenseTrainingRows(input.defenseHistory, season);
-    if (defenseTraining.length === 0) continue;
-    const defenseCalibration = runFirstPartyTeamDefenseBacktest(defenseTraining).calibration;
-    const availabilityCalibration = calibrateHistoricalRosAvailability(
-      training,
-      input.schedules,
-      input.scoringProfile,
-    );
-    const roleCalibration = calibrateHistoricalRosRole(
-      training,
-      input.schedules,
-      input.scoringProfile,
-      weeklyBacktest.predictions,
-    );
-    const kickerCalibration = calibrateHistoricalRosKicker(
-      training,
-      input.schedules,
-      input.scoringProfile,
-      weeklyBacktest.predictions,
-    );
-    kickerFamilyAudits.push({
-      season,
-      dispersion: kickerCalibration.dispersionAudit,
-      state: kickerCalibration.familyAudit,
-      fitted: {
-        fgEventDispersion: kickerCalibration.fgEventDispersion,
-        xpDispersion: kickerCalibration.xpDispersion,
-        recordedMissRatio: kickerCalibration.recordedMissRatio,
-        centerVolatility: kickerCalibration.centerVolatility,
-        evidence: kickerCalibration.evidence,
-      },
-    });
+    if (includesDefense && defenseTraining.length === 0) continue;
+    const defenseCalibration = includesDefense
+      ? runFirstPartyTeamDefenseBacktest(defenseTraining).calibration
+      : null;
+    const playerCalibration =
+      weeklyBacktest === null
+        ? null
+        : {
+            weekly: weeklyBacktest.calibration,
+            availability: calibrateHistoricalRosAvailability(
+              training,
+              input.schedules,
+              input.scoringProfile,
+            ),
+            role: calibrateHistoricalRosRole(
+              training,
+              input.schedules,
+              input.scoringProfile,
+              weeklyBacktest.predictions,
+            ),
+            kicker: calibrateHistoricalRosKicker(
+              training,
+              input.schedules,
+              input.scoringProfile,
+              weeklyBacktest.predictions,
+            ),
+          };
+    if (playerCalibration !== null) {
+      kickerFamilyAudits.push({
+        season,
+        dispersion: playerCalibration.kicker.dispersionAudit,
+        state: playerCalibration.kicker.familyAudit,
+        fitted: {
+          fgEventDispersion: playerCalibration.kicker.fgEventDispersion,
+          xpDispersion: playerCalibration.kicker.xpDispersion,
+          recordedMissRatio: playerCalibration.kicker.recordedMissRatio,
+          centerVolatility: playerCalibration.kicker.centerVolatility,
+          evidence: playerCalibration.kicker.evidence,
+        },
+      });
+    }
     input.onProgress?.({
       stage: "season-calibration-ready",
       season,
@@ -2239,60 +2262,64 @@ export function buildHistoricalRosBacktest(
         (week) => week.asOfWeek === asOfWeek && week.complete,
       );
       if (!coverageWeek) continue;
-      const features = historicalRosFeatureRows(input.history, season, asOfWeek);
-      const defenseFeatures = historicalRosDefenseFeatureRows(
-        input.defenseHistory,
-        season,
-        asOfWeek,
-      );
-      const players = selectHistoricalRosPlayers({
-        history: features,
-        rosters: input.rosters,
-        season,
-        asOfWeek,
-        scoringProfile: input.scoringProfile,
-        playersPerPosition: options.playersPerPosition,
-      });
-      for (const player of players) {
-        if (drafts.length >= options.maximumForecasts) break;
-        const draft = createDraft({
-          player,
+      if (playerCalibration !== null) {
+        const features = historicalRosFeatureRows(input.history, season, asOfWeek);
+        const players = selectHistoricalRosPlayers({
+          history: features,
+          rosters: input.rosters,
           season,
           asOfWeek,
-          featureHistory: features,
-          outcomeHistory: input.history,
-          calibration,
-          availabilityCalibration,
-          roleCalibration,
-          kickerCalibration,
-          injuries: input.injuries,
-          schedules: input.schedules,
           scoringProfile: input.scoringProfile,
-        });
-        if (draft) drafts.push(draft);
-        else skippedForecasts += 1;
+          playersPerPosition: options.playersPerPosition,
+        }).filter((player) => includedPositions.has(player.position));
+        for (const player of players) {
+          if (drafts.length >= options.maximumForecasts) break;
+          const draft = createDraft({
+            player,
+            season,
+            asOfWeek,
+            featureHistory: features,
+            outcomeHistory: input.history,
+            calibration: playerCalibration.weekly,
+            availabilityCalibration: playerCalibration.availability,
+            roleCalibration: playerCalibration.role,
+            kickerCalibration: playerCalibration.kicker,
+            injuries: input.injuries,
+            schedules: input.schedules,
+            scoringProfile: input.scoringProfile,
+          });
+          if (draft) drafts.push(draft);
+          else skippedForecasts += 1;
+        }
       }
-      const defenses = selectHistoricalRosDefenses({
-        history: historicalRosDefenseFeatureRows(defenseOutcomeHistory, season, asOfWeek),
-        season,
-        asOfWeek,
-        scoringProfile: input.scoringProfile,
-        teams: options.playersPerPosition,
-      });
-      for (const defense of defenses) {
-        if (drafts.length >= options.maximumForecasts) break;
-        const draft = createDefenseDraft({
-          defense,
+      if (defenseCalibration !== null) {
+        const defenseFeatures = historicalRosDefenseFeatureRows(
+          input.defenseHistory,
           season,
           asOfWeek,
-          featureHistory: defenseFeatures,
-          outcomeHistory: defenseOutcomeHistory,
-          calibration: defenseCalibration,
-          schedules: input.schedules,
+        );
+        const defenses = selectHistoricalRosDefenses({
+          history: historicalRosDefenseFeatureRows(defenseOutcomeHistory, season, asOfWeek),
+          season,
+          asOfWeek,
           scoringProfile: input.scoringProfile,
+          teams: options.playersPerPosition,
         });
-        if (draft) drafts.push(draft);
-        else skippedForecasts += 1;
+        for (const defense of defenses) {
+          if (drafts.length >= options.maximumForecasts) break;
+          const draft = createDefenseDraft({
+            defense,
+            season,
+            asOfWeek,
+            featureHistory: defenseFeatures,
+            outcomeHistory: defenseOutcomeHistory,
+            calibration: defenseCalibration,
+            schedules: input.schedules,
+            scoringProfile: input.scoringProfile,
+          });
+          if (draft) drafts.push(draft);
+          else skippedForecasts += 1;
+        }
       }
     }
     input.onProgress?.({ stage: "season-forecasts-ready", season, forecasts: drafts.length });
