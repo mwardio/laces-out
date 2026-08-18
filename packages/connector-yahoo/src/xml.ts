@@ -43,6 +43,7 @@ const REPEATED_YAHOO_ELEMENTS = new Set([
   "player",
   "roster_position",
   "stat",
+  "stat_position_type",
   "team_logo",
   "matchup",
 ]);
@@ -120,6 +121,13 @@ function numeric(value: unknown): number | null {
 
 function truthy(value: unknown): boolean {
   return ["1", "true", "yes"].includes(text(value)?.toLowerCase() ?? "");
+}
+
+function booleanSetting(value: unknown): boolean | null {
+  const normalized = text(value)?.toLowerCase();
+  if (["1", "true", "yes"].includes(normalized ?? "")) return true;
+  if (["0", "false", "no"].includes(normalized ?? "")) return false;
+  return null;
 }
 
 function firstRecord(value: unknown): XmlRecord | null {
@@ -280,13 +288,26 @@ function normalizeRosterSlots(settings: XmlRecord): NormalizedRosterSlot[] {
 
 function normalizeScoring(settings: XmlRecord): NormalizedScoringRule[] {
   const categories = child(child(settings, "stat_categories"), "stats")?.stat;
-  const categoryNames = new Map<string, string>();
+  const categoryMetadata = new Map<
+    string,
+    { readonly name: string | null; readonly positionTypes: readonly string[] }
+  >();
   for (const candidate of asArray(categories)) {
     const record = asRecord(candidate);
     if (record === null) continue;
     const statId = text(record.stat_id);
     const name = text(record.name);
-    if (statId !== null && name !== null) categoryNames.set(statId, name);
+    if (statId === null) continue;
+    const positionTypes = new Set<string>();
+    const directPositionType = text(record.position_type);
+    if (directPositionType !== null) positionTypes.add(directPositionType);
+    for (const positionCandidate of asArray(
+      child(record, "stat_position_types")?.stat_position_type,
+    )) {
+      const positionType = text(asRecord(positionCandidate)?.position_type);
+      if (positionType !== null) positionTypes.add(positionType);
+    }
+    categoryMetadata.set(statId, { name, positionTypes: [...positionTypes] });
   }
 
   const modifiers = child(child(settings, "stat_modifiers"), "stats")?.stat;
@@ -296,7 +317,17 @@ function normalizeScoring(settings: XmlRecord): NormalizedScoringRule[] {
     const statId = text(record.stat_id);
     const points = numeric(record.value);
     if (statId === null || points === null) return [];
-    return [{ statId, name: categoryNames.get(statId) ?? null, points }];
+    const metadata = categoryMetadata.get(statId);
+    return [
+      {
+        statId,
+        name: metadata?.name ?? null,
+        points,
+        ...(metadata && metadata.positionTypes.length > 0
+          ? { positionTypes: metadata.positionTypes }
+          : {}),
+      },
+    ];
   });
 }
 
@@ -309,6 +340,8 @@ function normalizeSettings(league: XmlRecord): NormalizedLeagueSettings {
     waiverType: normalizeWaiverType(settings),
     faabBudget: numeric(settings.waiver_budget),
     playoffTeamCount: integer(settings.num_playoff_teams),
+    usesFractionalPoints: booleanSetting(settings.uses_fractional_points),
+    usesNegativePoints: booleanSetting(settings.uses_negative_points),
     rosterSlots: normalizeRosterSlots(settings),
     scoringRules: normalizeScoring(settings),
   };

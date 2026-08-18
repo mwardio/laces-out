@@ -61,10 +61,13 @@ export class YahooConnectionError extends Error {
 export class YahooConnectionCallbackError extends Error {
   readonly outcome: "unavailable" | "failed";
   readonly completion: YahooConnectionCompletionTarget;
+  /** Secret-safe category for operator diagnostics. Never contains provider response text. */
+  readonly diagnosticCode: string;
 
   constructor(
     outcome: YahooConnectionCallbackError["outcome"],
     completion: YahooConnectionCompletionTarget,
+    diagnosticCode = "unexpected",
   ) {
     super(
       outcome === "unavailable"
@@ -74,6 +77,7 @@ export class YahooConnectionCallbackError extends Error {
     this.name = "YahooConnectionCallbackError";
     this.outcome = outcome;
     this.completion = completion;
+    this.diagnosticCode = diagnosticCode;
   }
 }
 
@@ -91,6 +95,17 @@ function assertReturnMode(returnMode: string): asserts returnMode is YahooReturn
 
 function callbackFailureOutcome(error: unknown): YahooConnectionCallbackError["outcome"] {
   return error instanceof YahooTokenClientError && error.retryable ? "unavailable" : "failed";
+}
+
+function callbackDiagnosticCode(error: unknown): string {
+  if (error instanceof YahooTokenClientError) {
+    const status = error.status ?? "none";
+    const oauthCode = error.oauthCode ?? "contract";
+    return `token-${status}-${oauthCode}`;
+  }
+  if (error instanceof YahooConnectionError) return `connection-${error.code.toLowerCase()}`;
+  if (error instanceof TypeError) return "local-contract";
+  return "persistence-or-unexpected";
 }
 
 function pkcePurpose(userId: string, stateHash: string): string {
@@ -244,12 +259,13 @@ export class YahooConnectionService {
     const state = await this.#claimState(userId, input.state);
     const completion = this.#completionTarget(state);
     try {
-      const pkce = decryptCredential<StoredPkce>(state.encryptedPkceVerifier, this.#key, {
+      // Authenticate the encrypted local transaction context before spending the one-time code.
+      // Yahoo's confidential-client flow itself uses the client secret and does not accept PKCE.
+      decryptCredential<StoredPkce>(state.encryptedPkceVerifier, this.#key, {
         expectedPurpose: pkcePurpose(userId, state.stateHash),
       });
       const grant = await this.#tokenClient.exchangeAuthorizationCode({
         code: input.code,
-        codeVerifier: pkce.codeVerifier,
       });
       const yahooGuid = grant.tokenSet.yahooGuid;
       if (!yahooGuid) {
@@ -307,7 +323,11 @@ export class YahooConnectionService {
       if (!connection) throw new Error("Yahoo connection could not be stored");
       return { connectionId: connection.id, ...completion };
     } catch (error) {
-      throw new YahooConnectionCallbackError(callbackFailureOutcome(error), completion);
+      throw new YahooConnectionCallbackError(
+        callbackFailureOutcome(error),
+        completion,
+        callbackDiagnosticCode(error),
+      );
     }
   }
 

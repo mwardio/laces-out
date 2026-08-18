@@ -18,6 +18,12 @@ import {
   firstPartyRosChampionArtifactIsValid,
   firstPartyRosChampionPolicyChecksum,
 } from "./first-party-ros-publication.js";
+import {
+  FIRST_PARTY_ROS_RELEASE_MAXIMUM_FORECASTS,
+  FIRST_PARTY_ROS_RELEASE_MINIMUM_BATCHES,
+  FIRST_PARTY_ROS_RELEASE_MINIMUM_FORECASTS,
+  FIRST_PARTY_ROS_RELEASE_PLAYERS_PER_POSITION,
+} from "./first-party-ros-validation-contract.js";
 
 const constants = firstPartyRosAdmissionConstants();
 
@@ -108,6 +114,11 @@ function validReport(overrides: {
     report: {
       state: "evidence-ready",
       blockers: [],
+      seasons: [2022, 2023, 2024, 2025],
+      playersPerPosition: FIRST_PARTY_ROS_RELEASE_PLAYERS_PER_POSITION,
+      maximumForecasts: FIRST_PARTY_ROS_RELEASE_MAXIMUM_FORECASTS,
+      forecasts: FIRST_PARTY_ROS_RELEASE_MINIMUM_FORECASTS,
+      batches: FIRST_PARTY_ROS_RELEASE_MINIMUM_BATCHES,
       availabilityCalibrationVersion: constants.availabilityCalibrationVersion,
       roleCalibrationVersion: constants.roleCalibrationVersion,
       kickerCalibrationVersion: constants.kickerCalibrationVersion,
@@ -178,6 +189,43 @@ describe("validateFirstPartyRosAdmission", () => {
         artifactChecksum: result.artifactChecksum,
       }),
     ).toBe(true);
+  });
+
+  it("admits the smaller valid ESPN-shaped N=8 release population", () => {
+    const result = validateFirstPartyRosAdmission({
+      report: validReport({
+        reportOverrides: { forecasts: 2_965 },
+      }),
+      evidenceThroughSeason: 2025,
+      constants,
+    });
+    expect(result.state).toBe("admissible");
+  });
+
+  it("rejects a position-only validation slice even when its summary counts are forged upward", () => {
+    const report = validReport({});
+    report.validationScope = { positions: ["TE"], completePortfolio: false };
+    const result = validateFirstPartyRosAdmission({
+      report,
+      evidenceThroughSeason: 2025,
+      constants,
+    });
+    expect(result.state).toBe("rejected");
+    expect(result.blockers).toContain("validation_scope_not_complete_portfolio");
+  });
+
+  it("admits an explicitly complete six-position validation scope", () => {
+    const report = validReport({});
+    report.validationScope = {
+      positions: ["QB", "RB", "WR", "TE", "K", "DST"],
+      completePortfolio: true,
+    };
+    const result = validateFirstPartyRosAdmission({
+      report,
+      evidenceThroughSeason: 2025,
+      constants,
+    });
+    expect(result.state).toBe("admissible");
   });
 
   it("rejects the concise champion summary when the executable publication policy is absent", () => {
@@ -251,6 +299,29 @@ describe("validateFirstPartyRosAdmission", () => {
     });
     expect(result.state).toBe("rejected");
     expect(result.blockers).toContain("report_global_blockers_present");
+  });
+
+  it("rejects an otherwise clean report produced by an undersized exploratory replay", () => {
+    const result = validateFirstPartyRosAdmission({
+      report: validReport({
+        reportOverrides: {
+          playersPerPosition: 5,
+          maximumForecasts: 3_000,
+          forecasts: 2_040,
+        },
+      }),
+      evidenceThroughSeason: 2025,
+      constants,
+    });
+
+    expect(result.state).toBe("rejected");
+    expect(result.blockers).toEqual(
+      expect.arrayContaining([
+        "release_validation_players_per_position_below_minimum",
+        "release_validation_forecast_cap_below_minimum",
+        "release_validation_forecasts_below_minimum",
+      ]),
+    );
   });
 
   it("admits through per-cell blockers, surfacing them for the release gate to withhold", () => {

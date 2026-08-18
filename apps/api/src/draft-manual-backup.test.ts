@@ -162,16 +162,24 @@ class FakeRepository implements EspnLiveDraftRepository {
     return Promise.resolve(undefined);
   }
 
+  authorizePulseDevice(): Promise<undefined> {
+    return Promise.resolve(undefined);
+  }
+
+  authorizePulseMember(): Promise<undefined> {
+    return Promise.resolve(undefined);
+  }
+
   loadSessionContext(): Promise<undefined> {
     return Promise.resolve(undefined);
   }
 
-  claimLease(): Promise<{ granted: boolean; expiresAt: Date | null }> {
-    return Promise.resolve({ granted: false, expiresAt: null });
+  claimLease(): Promise<{ granted: boolean; expiresAt: Date | null; generation: number }> {
+    return Promise.resolve({ granted: false, expiresAt: null, generation: 0 });
   }
 
-  commitObservation(): Promise<{ sequence: number }> {
-    return Promise.resolve({ sequence: 0 });
+  commitObservation(): Promise<{ sequence: number; committed: boolean }> {
+    return Promise.resolve({ sequence: 0, committed: false });
   }
 
   recordHeartbeat(): Promise<undefined> {
@@ -179,6 +187,10 @@ class FakeRepository implements EspnLiveDraftRepository {
   }
 
   loadFeedStatus(): Promise<undefined> {
+    return Promise.resolve(undefined);
+  }
+
+  loadPulseContext(): Promise<undefined> {
     return Promise.resolve(undefined);
   }
 }

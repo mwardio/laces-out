@@ -11,6 +11,7 @@ import {
   FIRST_PARTY_ROS_SEED_VERSION,
   applyFirstPartyRosIntervalCalibration,
   firstPartyRosAvailabilityEvidenceOfExcessMae,
+  firstPartyRosNominalIntervalCoverage,
   diagnoseFirstPartyRosConvergence,
   evaluateFirstPartyRosChampionPolicy,
   evaluateFirstPartyRosReleaseGate,
@@ -374,6 +375,10 @@ describe("first-party ROS distribution", () => {
       passing_attempts: 10,
       passing_completions: 8,
       passing_interceptions: 1,
+      passing_yards: 300,
+      passing_yards_per_5_units: 60,
+      passing_yards_300_399_probability: 0.7,
+      passing_yards_400_plus_probability: 0.2,
       targets: 10,
       receptions: 8,
       fumbles: 2,
@@ -395,6 +400,7 @@ describe("first-party ROS distribution", () => {
     };
     const parents = new Set([
       "passing_attempts",
+      "passing_yards",
       "targets",
       "fumbles",
       "field_goals_attempted",
@@ -446,6 +452,14 @@ describe("first-party ROS distribution", () => {
 
     expect(expected.passing_completions).toBeLessThanOrEqual(expected.passing_attempts!);
     expect(expected.passing_interceptions).toBeLessThanOrEqual(expected.passing_attempts!);
+    expect(expected.passing_yards_per_5_units).toBeLessThanOrEqual(
+      expected.passing_yards! / 5 + 1e-10,
+    );
+    expect(expected.passing_yards_300_399_probability).toBeLessThanOrEqual(1);
+    expect(expected.passing_yards_400_plus_probability).toBeLessThanOrEqual(1);
+    expect(
+      expected.passing_yards_300_399_probability! + expected.passing_yards_400_plus_probability!,
+    ).toBeLessThanOrEqual(1 + 1e-10);
     expect(expected.receptions).toBeLessThanOrEqual(expected.targets!);
     expect(expected.fumbles_lost).toBeLessThanOrEqual(expected.fumbles!);
     expect(expected.field_goals_made).toBeLessThanOrEqual(expected.field_goals_attempted!);
@@ -467,6 +481,65 @@ describe("first-party ROS distribution", () => {
       expected.field_goals_made_50_59! + expected.field_goals_made_60_plus!,
       10,
     );
+  });
+
+  it("rejects an impossible weekly yardage-game probability pair", () => {
+    const invalidWeek = week(100, 5);
+    expect(() =>
+      projectFirstPartyRestOfSeason(
+        projectionInput({
+          windowEndWeek: 5,
+          weeks: [
+            {
+              ...invalidWeek,
+              contextualComponents: {
+                ...invalidWeek.contextualComponents,
+                receiving_yards_100_199_probability: 0.8,
+                receiving_yards_200_plus_probability: 0.4,
+              },
+              recencyComponents: {
+                ...invalidWeek.recencyComponents,
+                receiving_yards_100_199_probability: 0.8,
+                receiving_yards_200_plus_probability: 0.4,
+              },
+              componentElasticities: {
+                ...invalidWeek.componentElasticities,
+                receiving_yards_100_199_probability: { role: 1, production: 1 },
+                receiving_yards_200_plus_probability: { role: 1, production: 1 },
+              },
+            },
+          ],
+        }),
+      ),
+    ).toThrow(/mutually exclusive probabilities/iu);
+  });
+
+  it("rejects an every-N expectation that exceeds its raw-stat bound", () => {
+    const invalidWeek = week(20, 5);
+    expect(() =>
+      projectFirstPartyRestOfSeason(
+        projectionInput({
+          windowEndWeek: 5,
+          weeks: [
+            {
+              ...invalidWeek,
+              contextualComponents: {
+                ...invalidWeek.contextualComponents,
+                receiving_yards_per_5_units: 5,
+              },
+              recencyComponents: {
+                ...invalidWeek.recencyComponents,
+                receiving_yards_per_5_units: 5,
+              },
+              componentElasticities: {
+                ...invalidWeek.componentElasticities,
+                receiving_yards_per_5_units: { role: 1, production: 1 },
+              },
+            },
+          ],
+        }),
+      ),
+    ).toThrow(/receiving_yards_per_5_units not to exceed receiving_yards \/ 5/iu);
   });
 
   it("produces a deterministic release-vs-reference convergence diagnostic", () => {
@@ -650,7 +723,7 @@ function kickerInput(
   };
 }
 
-describe("first-party ROS kicker count process (model v7)", () => {
+describe("first-party ROS kicker count process (model v8)", () => {
   it("requires the kicker process input for position K and rejects it elsewhere", () => {
     expect(() => {
       const { kicker, ...withoutKicker } = kickerInput();
@@ -663,7 +736,7 @@ describe("first-party ROS kicker count process (model v7)", () => {
   });
 
   it("keeps the model and seed version constants split with the v6 seed lineage", () => {
-    expect(FIRST_PARTY_ROS_MODEL_VERSION).toBe("laces-ros-distribution-v7");
+    expect(FIRST_PARTY_ROS_MODEL_VERSION).toBe("laces-ros-distribution-v8");
     expect(FIRST_PARTY_ROS_SEED_VERSION).toBe("laces-ros-distribution-v6");
   });
 
@@ -671,7 +744,7 @@ describe("first-party ROS kicker count process (model v7)", () => {
     const first = projectFirstPartyRestOfSeason(kickerInput());
     const second = projectFirstPartyRestOfSeason(kickerInput());
     expect(second).toEqual(first);
-    expect(first.provenance.modelVersion).toBe("laces-ros-distribution-v7");
+    expect(first.provenance.modelVersion).toBe("laces-ros-distribution-v8");
   });
 
   it("keeps every simulated kicker week on the exact scoring lattice", () => {
@@ -885,7 +958,7 @@ describe("first-party ROS kicker count process (model v7)", () => {
   });
 });
 
-describe("non-kicker byte identity across the v7 bump", () => {
+describe("non-kicker byte identity across the v8 bump", () => {
   it("reproduces the v6 golden WR projection byte-for-byte", async () => {
     const { readFileSync } = await import("node:fs");
     const golden = JSON.parse(
@@ -901,7 +974,7 @@ describe("non-kicker byte identity across the v7 bump", () => {
     const { modelVersion: goldenModel, ...goldenProvRest } = goldenProvenance;
     const { modelVersion: currentModel, ...currentProvRest } = currentProvenance;
     expect(goldenModel).toBe("laces-ros-distribution-v6");
-    expect(currentModel).toBe("laces-ros-distribution-v7");
+    expect(currentModel).toBe("laces-ros-distribution-v8");
     expect(currentProvRest).toEqual(goldenProvRest);
   });
 });
@@ -963,6 +1036,58 @@ function heldOutForecast(
 }
 
 describe("season-locked ROS champion policy", () => {
+  it("uses conservative simultaneous targets only for the matching nonlinear scoring shapes", () => {
+    const identity = {
+      contextualModelVersion: "contextual-v1",
+      recencyModelVersion: "recency-v1",
+      scoringProfileKey: projectionScoringProfileKey({
+        id: "espn-tiered-defense",
+        rules: [
+          { statId: "defensive_sacks", points: 1 },
+          { statId: "points_allowed_0_probability", points: 5 },
+          { statId: "yards_allowed_350_399_probability", points: -1 },
+        ],
+      }),
+      intervalMethodVersion: "simulation-p15-p85-v1",
+    };
+    const legacyIdentity = {
+      ...identity,
+      scoringProfileKey: projectionScoringProfileKey({
+        id: "legacy-defense",
+        rules: [
+          { statId: "defensive_sacks", points: 1 },
+          { statId: "points_allowed_0_probability", points: 10 },
+        ],
+      }),
+    };
+    const bonusIdentity = {
+      ...identity,
+      scoringProfileKey: projectionScoringProfileKey({
+        id: "yardage-game-bonus",
+        rules: [
+          { statId: "receptions", points: 1 },
+          { statId: "receiving_yards", points: 0.1 },
+          { statId: "receiving_yards_100_199_probability", points: 1 },
+          { statId: "receiving_yards_200_plus_probability", points: 3 },
+        ],
+      }),
+    };
+
+    expect(firstPartyRosNominalIntervalCoverage("DST", "five-to-eight", identity)).toBe(0.8);
+    expect(firstPartyRosNominalIntervalCoverage("DST", "five-to-eight", legacyIdentity)).toBe(0.7);
+    expect(firstPartyRosNominalIntervalCoverage("TE", "nine-plus", bonusIdentity)).toBe(0.85);
+    expect(firstPartyRosNominalIntervalCoverage("TE", "five-to-eight", bonusIdentity)).toBe(0.7);
+    expect(firstPartyRosNominalIntervalCoverage("WR", "nine-plus", bonusIdentity)).toBe(0.7);
+    expect(firstPartyRosNominalIntervalCoverage("WR", "nine-plus", identity)).toBe(0.7);
+    expect(firstPartyRosNominalIntervalCoverage("DST", "five-to-eight", null)).toBe(0.7);
+    expect(
+      firstPartyRosNominalIntervalCoverage("DST", "five-to-eight", {
+        ...identity,
+        scoringProfileKey: "not canonical JSON",
+      }),
+    ).toBe(0.7);
+  });
+
   it("defends recency and never lets current-season outcomes calibrate themselves", () => {
     const evaluation = evaluateFirstPartyRosChampionPolicy(
       [2023, 2024].map((season) => ({

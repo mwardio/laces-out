@@ -11,6 +11,8 @@
     "projections:validate": "tsx scripts/validate-first-party-projections.ts",
     "schedule-edge:validate": "tsx scripts/validate-schedule-edge.ts",
     "ros:validate": "tsx scripts/validate-first-party-ros.ts",
+    "ros:validate:release": "bash ../../scripts/run-ros-release-validation.sh",
+    "ros:compose": "tsx scripts/compose-first-party-ros.ts",
     "ros:admit": "tsx scripts/admit-first-party-ros.ts",
     "ros:regate": "tsx scripts/regate-first-party-ros.ts",
     "ros:coverage": "tsx scripts/validate-ros-data-coverage.ts"

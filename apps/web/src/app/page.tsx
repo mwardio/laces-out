@@ -466,7 +466,7 @@ export default function LandingPage() {
                   <p className={styles.providerDescription}>
                     {yahooComingSoon
                       ? "Yahoo sign-in and read-only league sync are coming soon."
-                      : "Authorize on Yahoo with OAuth and PKCE. Encrypted tokens remain server-side; your Yahoo password never passes through Laces Out."}
+                      : "Authorize directly on Yahoo. Encrypted tokens remain server-side; your Yahoo password never passes through Laces Out."}
                   </p>
                   <ul>
                     <li>

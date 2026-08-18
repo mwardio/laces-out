@@ -1,6 +1,9 @@
 import { createHash } from "node:crypto";
 
-import { inSeasonDecisionSnapshotSchema, tradeEvaluationResponseSchema } from "@laces-out/contracts";
+import {
+  inSeasonDecisionSnapshotSchema,
+  tradeEvaluationResponseSchema,
+} from "@laces-out/contracts";
 import {
   playerId,
   rosterSlotId,

@@ -6,6 +6,8 @@ import {
   projectionScoringRulesFromProfileKey,
 } from "./scoring-position-keys.js";
 import {
+  ESPN_EVERY_N_FLOOR_UNIT_COMPONENTS,
+  espnEveryNFloorUnitValue,
   normalizeHistoricalPlayerStatComponents,
   projectionScoringProfileKey,
   projectionScoringProfilesAreCompatible,
@@ -19,6 +21,9 @@ describe("normalizeHistoricalPlayerStatComponents", () => {
     expect(
       normalizeHistoricalPlayerStatComponents({
         receptions: 4,
+        passing_yards: 405,
+        rushing_yards: 145,
+        receiving_yards: 205,
         fumbles_lost_total: 1,
         passing_interceptions: 2,
         passing_two_point_conversions: 1,
@@ -30,12 +35,61 @@ describe("normalizeHistoricalPlayerStatComponents", () => {
       }),
     ).toMatchObject({
       receptions: 4,
+      passing_yards_300_399_probability: 0,
+      passing_yards_400_plus_probability: 1,
+      rushing_yards_100_199_probability: 1,
+      rushing_yards_200_plus_probability: 0,
+      receiving_yards_100_199_probability: 0,
+      receiving_yards_200_plus_probability: 1,
       fumbles_lost: 1,
       turnovers: 3,
       two_point_conversions: 4,
       return_yards: 50,
       return_touchdowns: 1,
     });
+  });
+
+  it("derives mutually exclusive ESPN yardage-game indicators at exact boundaries", () => {
+    expect(
+      normalizeHistoricalPlayerStatComponents({
+        passing_yards: 399.99,
+        rushing_yards: 200,
+        receiving_yards: 100,
+      }),
+    ).toMatchObject({
+      passing_yards_300_399_probability: 1,
+      passing_yards_400_plus_probability: 0,
+      rushing_yards_100_199_probability: 0,
+      rushing_yards_200_plus_probability: 1,
+      receiving_yards_100_199_probability: 1,
+      receiving_yards_200_plus_probability: 0,
+    });
+  });
+
+  it("derives exact whole-unit counts for every supported ESPN every-N category", () => {
+    const historical = {
+      passing_attempts: 47,
+      passing_completions: 31,
+      passing_yards: 287,
+      carries: 17,
+      rushing_yards: 143,
+      receptions: 9,
+      receiving_yards: 126,
+      kickoff_return_yards: 64,
+      punt_return_yards: 29,
+    };
+    const normalized = normalizeHistoricalPlayerStatComponents(historical);
+
+    for (const { component, source, divisor } of ESPN_EVERY_N_FLOOR_UNIT_COMPONENTS) {
+      const raw =
+        source === "passing_incompletions"
+          ? historical.passing_attempts - historical.passing_completions
+          : historical[source as keyof typeof historical];
+      expect(normalized[component], component).toBe(Math.floor(raw / divisor));
+      expect(espnEveryNFloorUnitValue(historical, component), component).toBe(
+        Math.floor(raw / divisor),
+      );
+    }
   });
 
   it("treats absent or non-finite aggregate inputs as zero", () => {

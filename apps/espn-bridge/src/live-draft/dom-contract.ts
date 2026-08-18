@@ -73,6 +73,8 @@ export interface EspnLiveDraftCurrentAuctionV1 {
   readonly proTeam: string | null;
   readonly position: string | null;
   readonly highBidProviderTeamId: string | null;
+  /** Full rendered fantasy-team name when ESPN exposes no team ID in bid history. */
+  readonly highBidTeamName: string | null;
   readonly highBid: number | null;
 }
 
@@ -369,6 +371,15 @@ export function validateEspnLiveDraftCurrentAuction(value: unknown): EspnLiveDra
       "Nominated position",
     ),
     highBidProviderTeamId: providerTeamId(value.highBidProviderTeamId, "High bid team ID"),
+    // Missing is accepted for observations produced before this backward-compatible V1 addition.
+    highBidTeamName:
+      value.highBidTeamName === undefined
+        ? null
+        : nullableText(
+            value.highBidTeamName,
+            ESPN_LIVE_DRAFT_LIMITS.maximumTeamNameLength,
+            "High bid team name",
+          ),
     highBid: nullableInteger(value.highBid, 0, ESPN_LIVE_DRAFT_LIMITS.maximumPrice, "High bid"),
   };
 }
