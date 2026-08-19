@@ -2371,8 +2371,17 @@
 
   .live-league-detail {
     display: grid;
+    width: 100%;
+    min-width: 0;
+    /* Wide standings tables scroll inside their card; they must not size the dashboard track. */
+    grid-template-columns: minmax(0, 1fr);
     gap: 1rem;
     margin-top: 1.25rem;
+  }
+
+  .live-league-detail > *,
+  .live-weekly-columns > * {
+    min-width: 0;
   }
 
   .live-detail-heading p {
@@ -2656,6 +2665,9 @@
   }
 
   .live-table-scroll {
+    width: 100%;
+    min-width: 0;
+    max-width: 100%;
     overflow-x: auto;
     border: 1px solid var(--line);
     border-radius: 0.65rem;
@@ -3014,7 +3026,7 @@
     .live-detail-columns,
     .live-weekly-columns,
     .live-opponent-panel {
-      grid-template-columns: 1fr;
+      grid-template-columns: minmax(0, 1fr);
     }
 
     .live-opponent-status {
