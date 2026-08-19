@@ -636,7 +636,7 @@ export class DrizzleEspnRefreshRepository implements EspnRefreshRepository {
         and(
           eq(providerLeagueLinks.leagueSeasonId, leagueSeasonId),
           eq(providerConnections.provider, "espn"),
-          eq(providerConnections.health, "healthy"),
+          inArray(providerConnections.health, ["healthy", "degraded"]),
           isNotNull(providerConnections.encryptedCredential),
           or(
             isNull(providerConnections.circuitOpenUntil),
@@ -645,8 +645,10 @@ export class DrizzleEspnRefreshRepository implements EspnRefreshRepository {
         ),
       )
       .orderBy(
+        sql`case when ${providerConnections.health} = 'healthy' then 0 else 1 end`,
         sql`case when ${providerConnections.id} = ${row.preferredConnectionId} then 0 else 1 end`,
         asc(providerConnections.createdAt),
+        asc(providerConnections.id),
       )
       .limit(1);
 

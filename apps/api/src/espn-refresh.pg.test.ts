@@ -18,6 +18,8 @@ import {
   espnRefreshAttempts,
   leagueSeasons,
   leagues,
+  providerConnections,
+  providerLeagueLinks,
   refreshRequests,
   users,
   type Database,
@@ -144,6 +146,7 @@ const QUEUED_REQUEST_ID = "40000000-0000-4000-8000-000000000001";
 const PROCESSING_REQUEST_ID = "40000000-0000-4000-8000-000000000002";
 const LIVE_REQUEST_ID = "40000000-0000-4000-8000-000000000003";
 const DEVICE_ID = "50000000-0000-4000-8000-000000000001";
+const DEGRADED_CONNECTION_ID = "60000000-0000-4000-8000-000000000001";
 const DEVICE_TOKEN = `lo_espn_${"a".repeat(43)}`;
 const COOKIE = `fantasy_session=${"s".repeat(32)}`;
 const EXPIRED_DETAIL = "No authorized sync path fulfilled this request before it expired.";
@@ -275,6 +278,25 @@ describe.skipIf(!dockerAvailable)(
           draftType: "snake",
         },
       ]);
+      await db.insert(providerConnections).values({
+        id: DEGRADED_CONNECTION_ID,
+        userId: MEMBER_ID,
+        provider: "espn",
+        externalAccountId: "espn-session-member",
+        encryptedCredential: { version: 1, ciphertext: "sanitized-test-envelope" },
+        capabilities: { authentication: ["server-session-cookie"] },
+        health: "degraded",
+        consecutiveFailures: 5,
+        circuitOpenUntil: new Date(NOW.getTime() - 60_000),
+      });
+      await db.insert(providerLeagueLinks).values({
+        connectionId: DEGRADED_CONNECTION_ID,
+        leagueSeasonId: QUEUED_SEASON_ID,
+      });
+      await db
+        .update(leagueSeasons)
+        .set({ connectionId: DEGRADED_CONNECTION_ID })
+        .where(eq(leagueSeasons.id, QUEUED_SEASON_ID));
       await db.insert(espnLeagueSyncStates).values({
         leagueSeasonId: QUEUED_SEASON_ID,
         artifactFreshness: { core: "2031-09-19T10:00:00.000+00:00" },
@@ -301,6 +323,14 @@ describe.skipIf(!dockerAvailable)(
 
     beforeEach(async () => {
       await db.delete(refreshRequests);
+      await db
+        .update(providerConnections)
+        .set({
+          health: "degraded",
+          consecutiveFailures: 5,
+          circuitOpenUntil: new Date(NOW.getTime() - 60_000),
+        })
+        .where(eq(providerConnections.id, DEGRADED_CONNECTION_ID));
       await db
         .update(bridgeDevices)
         .set({ lastSeenAt: new Date(NOW.getTime() - 60_000) })
@@ -393,6 +423,24 @@ describe.skipIf(!dockerAvailable)(
         .from(refreshRequests)
         .where(eq(refreshRequests.id, QUEUED_REQUEST_ID));
       expect(cancelledTwice).toEqual(cancelledOnce);
+    });
+
+    it("offers a cooled degraded server session but still blocks an open circuit", async () => {
+      await expect(
+        repository.inspectMemberTarget(MEMBER_ID, QUEUED_SEASON_ID, NOW),
+      ).resolves.toMatchObject({
+        serverSessionConnectionId: DEGRADED_CONNECTION_ID,
+      });
+
+      await db
+        .update(providerConnections)
+        .set({ circuitOpenUntil: new Date(NOW.getTime() + 60_000) })
+        .where(eq(providerConnections.id, DEGRADED_CONNECTION_ID));
+      await expect(
+        repository.inspectMemberTarget(MEMBER_ID, QUEUED_SEASON_ID, NOW),
+      ).resolves.toMatchObject({
+        serverSessionConnectionId: null,
+      });
     });
 
     it("serves the authenticated status route when an expired request exists", async () => {

@@ -1,7 +1,7 @@
 "use client";
 
 import { AlertCircle, BellRing, Check, LoaderCircle, RefreshCw, X } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 
 import {
   absoluteApiOrigin,
@@ -35,6 +35,8 @@ const SEVERITY_CLASS: Readonly<Record<ChangeEvent["severity"], string>> = {
   critical: styles.severityCritical ?? "",
 };
 
+const COLLAPSED_EVENT_COUNT = 4;
+
 function relativeTime(iso: string, now: number): string {
   const elapsed = now - Date.parse(iso);
   if (!Number.isFinite(elapsed)) return "";
@@ -53,6 +55,8 @@ export interface ChangeFeedPanelProps {
 export function ChangeFeedPanel({ leagueId }: ChangeFeedPanelProps) {
   const [state, setState] = useState<FeedState>({ status: "loading" });
   const [pendingEventId, setPendingEventId] = useState<string | null>(null);
+  const [expanded, setExpanded] = useState(false);
+  const overflowId = useId();
   const request = useRef(new LatestRequest());
   const controller = useRef<AbortController | null>(null);
   const renderedAt = useMemo(() => Date.now(), [state]);
@@ -95,6 +99,7 @@ export function ChangeFeedPanel({ leagueId }: ChangeFeedPanelProps) {
   }, [leagueId]);
 
   useEffect(() => {
+    setExpanded(false);
     setState({ status: "loading" });
     void load();
     return () => controller.current?.abort();
@@ -131,6 +136,55 @@ export function ChangeFeedPanel({ leagueId }: ChangeFeedPanelProps) {
 
   const events = state.status === "ready" ? prioritizeChangeEvents(state.feed.events) : [];
   const unreadCount = state.status === "ready" ? state.feed.unreadCount : 0;
+  const hasAdditionalEvents = state.status === "ready" && state.feed.nextCursor !== null;
+
+  const renderEvent = (entry: ChangeEvent) => (
+    <article
+      className={`${styles.row}${entry.state === "read" ? ` ${styles.rowRead}` : ""}`}
+      key={entry.id}
+    >
+      <span className={`${styles.severity} ${SEVERITY_CLASS[entry.severity]}`} aria-hidden="true" />
+      <div className={styles.body}>
+        <p className={styles.headline}>{entry.headline}</p>
+        {entry.detail ? <p className={styles.detail}>{entry.detail}</p> : null}
+        <div className={styles.meta}>
+          <span className={styles.time}>{relativeTime(entry.occurredAt, renderedAt)}</span>
+          <div className={styles.actions}>
+            {entry.state === "unread" ? (
+              <button
+                className={styles.action}
+                type="button"
+                onClick={() => void mutate(entry.id, "read")}
+                disabled={pendingEventId === entry.id}
+                aria-label={`Mark read: ${entry.headline}`}
+              >
+                {pendingEventId === entry.id ? (
+                  <LoaderCircle className={styles.spin} size={12} aria-hidden="true" />
+                ) : (
+                  <Check size={12} aria-hidden="true" />
+                )}
+                Mark read
+              </button>
+            ) : null}
+            <button
+              className={styles.action}
+              type="button"
+              onClick={() => void mutate(entry.id, "dismiss")}
+              disabled={pendingEventId === entry.id}
+              aria-label={`Dismiss: ${entry.headline}`}
+            >
+              {pendingEventId === entry.id ? (
+                <LoaderCircle className={styles.spin} size={12} aria-hidden="true" />
+              ) : (
+                <X size={12} aria-hidden="true" />
+              )}
+              Dismiss
+            </button>
+          </div>
+        </div>
+      </div>
+    </article>
+  );
 
   return (
     <section className={styles.panel} aria-labelledby="change-feed-title">
@@ -183,56 +237,24 @@ export function ChangeFeedPanel({ leagueId }: ChangeFeedPanelProps) {
         </div>
       ) : (
         <div className={styles.list}>
-          {events.map((entry) => (
-            <article
-              className={`${styles.row}${entry.state === "read" ? ` ${styles.rowRead}` : ""}`}
-              key={entry.id}
+          {events.slice(0, COLLAPSED_EVENT_COUNT).map(renderEvent)}
+          <div className={styles.overflow} id={overflowId} hidden={!expanded}>
+            {events.slice(COLLAPSED_EVENT_COUNT).map(renderEvent)}
+          </div>
+          {hasAdditionalEvents ? (
+            <p className={styles.limitNote}>Loaded the {events.length} most recent updates.</p>
+          ) : null}
+          {events.length > COLLAPSED_EVENT_COUNT ? (
+            <button
+              aria-controls={overflowId}
+              aria-expanded={expanded}
+              className={styles.more}
+              type="button"
+              onClick={() => setExpanded((current) => !current)}
             >
-              <span
-                className={`${styles.severity} ${SEVERITY_CLASS[entry.severity]}`}
-                aria-hidden="true"
-              />
-              <div className={styles.body}>
-                <p className={styles.headline}>{entry.headline}</p>
-                {entry.detail ? <p className={styles.detail}>{entry.detail}</p> : null}
-                <div className={styles.meta}>
-                  <span className={styles.time}>{relativeTime(entry.occurredAt, renderedAt)}</span>
-                  <div className={styles.actions}>
-                    {entry.state === "unread" ? (
-                      <button
-                        className={styles.action}
-                        type="button"
-                        onClick={() => void mutate(entry.id, "read")}
-                        disabled={pendingEventId === entry.id}
-                        aria-label={`Mark read: ${entry.headline}`}
-                      >
-                        {pendingEventId === entry.id ? (
-                          <LoaderCircle className={styles.spin} size={12} aria-hidden="true" />
-                        ) : (
-                          <Check size={12} aria-hidden="true" />
-                        )}
-                        Mark read
-                      </button>
-                    ) : null}
-                    <button
-                      className={styles.action}
-                      type="button"
-                      onClick={() => void mutate(entry.id, "dismiss")}
-                      disabled={pendingEventId === entry.id}
-                      aria-label={`Dismiss: ${entry.headline}`}
-                    >
-                      {pendingEventId === entry.id ? (
-                        <LoaderCircle className={styles.spin} size={12} aria-hidden="true" />
-                      ) : (
-                        <X size={12} aria-hidden="true" />
-                      )}
-                      Dismiss
-                    </button>
-                  </div>
-                </div>
-              </div>
-            </article>
-          ))}
+              {expanded ? "Show fewer updates" : "Show more updates"}
+            </button>
+          ) : null}
         </div>
       )}
     </section>

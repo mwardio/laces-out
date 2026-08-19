@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 
 const apiPort = 41_073;
@@ -7,7 +8,8 @@ const webPort = 41_074;
 const maximumOutputCharacters = 16_000;
 const repositoryRoot = fileURLToPath(new URL("..", import.meta.url));
 const webRoot = fileURLToPath(new URL("../apps/web", import.meta.url));
-const nextBinary = fileURLToPath(new URL("../node_modules/next/dist/bin/next", import.meta.url));
+const webRequire = createRequire(new URL("../apps/web/package.json", import.meta.url));
+const nextBinary = webRequire.resolve("next/dist/bin/next");
 
 function startNode(arguments_, extraEnvironment = {}, workingDirectory = repositoryRoot) {
   const child = spawn(process.execPath, arguments_, {
@@ -38,7 +40,7 @@ async function waitForHttp(url, processState) {
   const deadline = Date.now() + 15_000;
   while (Date.now() < deadline) {
     if (processState.child.exitCode !== null) {
-      throw new Error(`API exited before readiness:\n${processState.output()}`);
+      throw new Error(`Process exited before readiness:\n${processState.output()}`);
     }
     try {
       const response = await fetch(url, { signal: AbortSignal.timeout(1_000) });
@@ -48,7 +50,7 @@ async function waitForHttp(url, processState) {
     }
     await new Promise((resolve) => setTimeout(resolve, 150));
   }
-  throw new Error(`API did not become ready:\n${processState.output()}`);
+  throw new Error(`Process did not become ready:\n${processState.output()}`);
 }
 
 async function waitForText(processState, expected) {
@@ -105,7 +107,7 @@ try {
   const scheduleResponse = await waitForHttp(`http://127.0.0.1:${webPort}/schedule`, web);
   const scheduleHtml = await scheduleResponse.text();
   assert.match(scheduleHtml, /Matchup Outlook/u);
-  assert.match(scheduleHtml, /See how upcoming opponents have scored/u);
+  assert.match(scheduleHtml, /Roster \+ bye outlook/u);
 
   const inviteResponse = await waitForHttp(`http://127.0.0.1:${webPort}/invite`, web);
   const inviteHtml = await inviteResponse.text();

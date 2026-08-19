@@ -3,6 +3,7 @@ import Link from "next/link";
 import type { ReactNode } from "react";
 
 import { LacesOutMark } from "../components/laces-out-mark";
+import { publicAppStoreUrl } from "../lib/public-site";
 
 import { ContactEasterEgg } from "./contact-easter-egg";
 import styles from "./landing.module.css";
@@ -66,11 +67,12 @@ export function PublicSiteFooter() {
           </span>
         </Link>
         <p>Connected leagues. Automatic analysis. Better Sundays.</p>
-        <nav aria-label="Legal and account links">
+        <nav aria-label="Footer navigation">
           <Link href="/methodology">Methodology</Link>
           <Link href="/privacy">Privacy</Link>
           <Link href="/terms">Terms</Link>
           <ContactEasterEgg />
+          <a href={publicAppStoreUrl}>App Store</a>
           <Link href="/login">Sign In</Link>
           <a
             className={styles.footerGithub}
@@ -87,7 +89,7 @@ export function PublicSiteFooter() {
         </nav>
       </div>
       <div className={styles.footerBottom}>
-        <span>© 2026 Laces Out. Private beta.</span>
+        <span>© 2026 Laces Out.</span>
         <span>
           Independent and non-commercial. Not affiliated with or endorsed by Yahoo or ESPN.
         </span>

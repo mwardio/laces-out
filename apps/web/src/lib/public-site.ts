@@ -8,6 +8,9 @@ function configuredContactEmail(): string | null {
 
 export const publicContactEmail = configuredContactEmail();
 
+export const publicAppStoreId = "6796755232";
+export const publicAppStoreUrl = "https://apps.apple.com/us/app/laces-out-fantasy/id6796755232";
+
 export const yahooComingSoon =
   process.env.NEXT_PUBLIC_YAHOO_ACCESS_STATUS?.trim().toLowerCase() !== "available";
 

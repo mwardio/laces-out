@@ -6,11 +6,20 @@ export type YahooNativeConnectNavigation =
 
 type FetchLike = (input: string | URL, init?: RequestInit) => Promise<Response>;
 
+interface YahooNativeAuthorizationOptions {
+  readonly enabled?: boolean;
+  readonly fetcher?: FetchLike;
+}
+
 /** Starts only the server-owned iOS mode; no callback or return URL is accepted from this page. */
 export async function requestYahooNativeAuthorization(
   apiBaseUrl: string,
-  fetcher: FetchLike = fetch,
+  options: YahooNativeAuthorizationOptions = {},
 ): Promise<YahooNativeConnectNavigation> {
+  if (options.enabled === false) {
+    return { kind: "completion", url: YAHOO_IOS_COMPLETION_URLS.unavailable };
+  }
+  const fetcher = options.fetcher ?? fetch;
   let response: Response;
   try {
     response = await fetcher(`${apiBaseUrl}/v1/connections/yahoo/authorize`, {

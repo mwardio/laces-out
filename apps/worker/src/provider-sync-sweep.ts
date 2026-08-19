@@ -412,6 +412,7 @@ export class DrizzleProviderSyncSweepTargetReader implements ProviderSyncSweepTa
           row_number() over (
             partition by ${leagueSeasons.id}
             order by
+              case when ${providerConnections.health} = 'healthy' then 0 else 1 end,
               case when ${providerConnections.id} = ${leagueSeasons.connectionId} then 0 else 1 end,
               ${providerConnections.createdAt},
               ${providerConnections.id}
@@ -429,7 +430,7 @@ export class DrizzleProviderSyncSweepTargetReader implements ProviderSyncSweepTa
         where ${leagueSeasons.provider} = 'espn'
           and ${providerConnections.provider} = 'espn'
           and ${leagues.archived} = false
-          and ${providerConnections.health} = 'healthy'
+          and ${providerConnections.health} in ('healthy', 'degraded')
           and ${providerConnections.encryptedCredential} is not null
           and (
             ${providerConnections.circuitOpenUntil} is null

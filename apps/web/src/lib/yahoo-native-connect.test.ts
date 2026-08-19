@@ -17,7 +17,7 @@ describe("Yahoo native connect landing", () => {
       );
 
     await expect(
-      requestYahooNativeAuthorization("https://self-host.example", fetcher),
+      requestYahooNativeAuthorization("https://self-host.example", { fetcher }),
     ).resolves.toEqual({
       kind: "authorization",
       url: "https://api.login.yahoo.com/oauth2/request_auth?state=opaque",
@@ -39,26 +39,41 @@ describe("Yahoo native connect landing", () => {
 
   it("returns only fixed credential-free callbacks for unavailable and invalid starts", async () => {
     await expect(
-      requestYahooNativeAuthorization("", () =>
-        Promise.resolve(new Response(null, { status: 503 })),
-      ),
+      requestYahooNativeAuthorization("", {
+        fetcher: () => Promise.resolve(new Response(null, { status: 503 })),
+      }),
     ).resolves.toEqual({
       kind: "completion",
       url: "lacesout://connections/yahoo?status=unavailable",
     });
     await expect(
-      requestYahooNativeAuthorization("", () =>
-        Promise.resolve(new Response('{"authorizationUrl":"not a url"}', { status: 200 })),
-      ),
+      requestYahooNativeAuthorization("", {
+        fetcher: () =>
+          Promise.resolve(new Response('{"authorizationUrl":"not a url"}', { status: 200 })),
+      }),
     ).resolves.toEqual({
       kind: "completion",
       url: "lacesout://connections/yahoo?status=failed",
     });
     await expect(
-      requestYahooNativeAuthorization("", () => Promise.reject(new Error("offline"))),
+      requestYahooNativeAuthorization("", {
+        fetcher: () => Promise.reject(new Error("offline")),
+      }),
     ).resolves.toEqual({
       kind: "completion",
       url: "lacesout://connections/yahoo?status=unavailable",
     });
+  });
+
+  it("returns unavailable without requesting OAuth when Yahoo access is disabled", async () => {
+    const fetcher = vi.fn<(input: string | URL, init?: RequestInit) => Promise<Response>>();
+
+    await expect(
+      requestYahooNativeAuthorization("https://self-host.example", { enabled: false, fetcher }),
+    ).resolves.toEqual({
+      kind: "completion",
+      url: "lacesout://connections/yahoo?status=unavailable",
+    });
+    expect(fetcher).not.toHaveBeenCalled();
   });
 });

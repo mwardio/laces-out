@@ -577,22 +577,22 @@ function LivePortfolio({ portfolio, reloadPortfolio }: LivePortfolioProps) {
               <Database size={16} />
             )}
             {sourceRefreshState === "working"
-              ? "Checking…"
+              ? "Updating…"
               : sourceRefreshState === "queued"
                 ? "Queued"
                 : sourceRefreshState === "deduplicated"
                   ? "Already queued"
                   : sourceRefreshState === "error"
                     ? "Retry"
-                    : "Check inputs"}
+                    : "Update player data"}
           </button>
           <span className="sr-only" role="status" aria-live="polite">
             {sourceRefreshState === "queued"
-              ? "Forecast input check queued."
+              ? "Player data update queued."
               : sourceRefreshState === "deduplicated"
-                ? "A recent forecast input check is already queued."
+                ? "A recent player data update is already queued."
                 : sourceRefreshState === "error"
-                  ? "Forecast input check could not be queued."
+                  ? "Player data update could not be queued."
                   : ""}
           </span>
         </div>

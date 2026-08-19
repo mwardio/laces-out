@@ -3,7 +3,7 @@ import { Sora } from "next/font/google";
 import type { ReactNode } from "react";
 
 import { FinkleCode } from "../components/finkle-code";
-import { publicSiteUrl } from "../lib/public-site";
+import { publicAppStoreId, publicSiteUrl } from "../lib/public-site";
 
 import "./globals.css";
 import "./polish.css";
@@ -31,6 +31,9 @@ export const metadata: Metadata = {
     capable: true,
     statusBarStyle: "default",
     title: "Laces Out",
+  },
+  itunes: {
+    appId: publicAppStoreId,
   },
   formatDetection: {
     telephone: false,

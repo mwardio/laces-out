@@ -21,6 +21,7 @@ import {
   type ConnectionHealth,
   type Database,
 } from "@laces-out/db";
+import { eq } from "drizzle-orm";
 import { migrate } from "drizzle-orm/postgres-js/migrator";
 import postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -138,6 +139,7 @@ const CONNECTION_REAUTHORIZE = id(105);
 const CONNECTION_CIRCUIT = id(106);
 const CONNECTION_COOLED = id(107);
 const CONNECTION_OUTSIDER = id(108);
+const CONNECTION_ESPN_DEGRADED = id(109);
 
 const SEASONS = {
   activeDue: id(201),
@@ -156,6 +158,7 @@ const SEASONS = {
   outsiderLink: id(214),
   accountIsolation: id(215),
   deterministic: id(216),
+  espnDegraded: id(217),
 } as const;
 
 function boundaryFreshness(
@@ -294,6 +297,19 @@ describe.skipIf(!dockerAvailable)("Yahoo provider sweep against real PostgreSQL"
       circuitOpenUntil: new Date(NOW.getTime() - 1_000),
     });
     await addConnection({ id: CONNECTION_OUTSIDER, userId: USER_OUTSIDER });
+    await db.insert(providerConnections).values({
+      id: CONNECTION_ESPN_DEGRADED,
+      userId: USER_OWNER,
+      provider: "espn",
+      externalAccountId: "espn-degraded-account",
+      encryptedCredential: { version: 1, ciphertext: "sanitized-test-envelope" },
+      capabilities: { authentication: ["server-session-cookie"] },
+      health: "degraded",
+      consecutiveFailures: 5,
+      circuitOpenUntil: new Date(NOW.getTime() - 1_000),
+      createdAt: new Date("2026-01-01T00:00:00.000Z"),
+      updatedAt: NOW,
+    });
 
     await addSeason({
       id: SEASONS.activeDue,
@@ -390,6 +406,37 @@ describe.skipIf(!dockerAvailable)("Yahoo provider sweep against real PostgreSQL"
       linkedConnectionIds: [CONNECTION_DEGRADED, CONNECTION_PRIMARY, CONNECTION_FALLBACK],
       additionalMemberIds: [USER_FALLBACK],
     });
+    const espnLeagueId = id(1_000 + Number(SEASONS.espnDegraded.slice(-3)));
+    await db.insert(leagues).values({
+      id: espnLeagueId,
+      ownerUserId: USER_OWNER,
+      name: "ESPN degraded recovery league",
+    });
+    await db.insert(leagueSeasons).values({
+      id: SEASONS.espnDegraded,
+      leagueId: espnLeagueId,
+      connectionId: CONNECTION_ESPN_DEGRADED,
+      provider: "espn",
+      externalKey: "espn-degraded-league",
+      season: 2026,
+      status: "active",
+      teamCount: 12,
+      draftType: "snake",
+      lastSyncedAt: new Date(NOW.getTime() - 24 * 60 * 60 * 1_000),
+      createdAt: new Date("2026-01-01T00:00:00.000Z"),
+      updatedAt: NOW,
+    });
+    await db
+      .insert(leagueMemberships)
+      .values({ leagueId: espnLeagueId, userId: USER_OWNER, role: "owner" })
+      .onConflictDoNothing({
+        target: [leagueMemberships.leagueId, leagueMemberships.userId],
+      });
+    await db.insert(providerLeagueLinks).values({
+      connectionId: CONNECTION_ESPN_DEGRADED,
+      leagueSeasonId: SEASONS.espnDegraded,
+      lastSyncedAt: new Date(NOW.getTime() - 24 * 60 * 60 * 1_000),
+    });
   }, 90_000);
 
   afterAll(async () => {
@@ -448,6 +495,24 @@ describe.skipIf(!dockerAvailable)("Yahoo provider sweep against real PostgreSQL"
     );
     expect(first?.connectionId).toBe(CONNECTION_FALLBACK);
     expect(second).toEqual(first);
+  });
+
+  it("retries a cooled degraded ESPN server session", async () => {
+    const cooled = await sweepTargets.listDueEspnSessions(NOW, 100);
+    expect(cooled).toContainEqual(
+      expect.objectContaining({
+        leagueSeasonId: SEASONS.espnDegraded,
+        connectionId: CONNECTION_ESPN_DEGRADED,
+      }),
+    );
+
+    await db
+      .update(providerConnections)
+      .set({ circuitOpenUntil: new Date(NOW.getTime() + 60_000) })
+      .where(eq(providerConnections.id, CONNECTION_ESPN_DEGRADED));
+    await expect(sweepTargets.listDueEspnSessions(NOW, 100)).resolves.not.toContainEqual(
+      expect.objectContaining({ leagueSeasonId: SEASONS.espnDegraded }),
+    );
   });
 
   it("rejects unlinked accounts and linked accounts whose owner is not a league member", async () => {

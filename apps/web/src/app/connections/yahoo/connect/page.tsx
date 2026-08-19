@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 
 import { YahooNativeConnect } from "../../../../components/yahoo-native-connect";
+import { yahooComingSoon } from "../../../../lib/public-site";
 
 export const metadata: Metadata = {
   title: "Connect Yahoo",
@@ -9,5 +10,5 @@ export const metadata: Metadata = {
 };
 
 export default function YahooNativeConnectPage() {
-  return <YahooNativeConnect />;
+  return <YahooNativeConnect enabled={!yahooComingSoon} />;
 }

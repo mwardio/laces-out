@@ -20,6 +20,7 @@ import {
   ScanLine,
   ShieldCheck,
   SlidersHorizontal,
+  Smartphone,
   Goal,
   TrendingUp,
   Workflow,
@@ -28,7 +29,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 
 import { LacesOutMark } from "../components/laces-out-mark";
-import { yahooComingSoon } from "../lib/public-site";
+import { publicAppStoreUrl, yahooComingSoon } from "../lib/public-site";
 
 import styles from "./landing.module.css";
 import { PublicSiteFooter, PublicSiteHeader } from "./public-site-chrome";
@@ -74,9 +75,10 @@ const applicationSchema = {
   "@type": "SoftwareApplication",
   name: "Laces Out",
   applicationCategory: "SportsApplication",
-  operatingSystem: "Web",
+  operatingSystem: "Web, iOS",
   description:
     "Self-hosted fantasy football software that syncs leagues, builds weekly forecasts, and automates draft, lineup, waiver, trade, and opponent analysis.",
+  downloadUrl: publicAppStoreUrl,
   offers: {
     "@type": "Offer",
     price: "0",
@@ -205,6 +207,9 @@ export default function LandingPage() {
                 <Link className={styles.secondaryButton} href="/app">
                   Tour the locker room <ChevronRight size={16} />
                 </Link>
+                <a className={styles.secondaryButton} href={publicAppStoreUrl}>
+                  Get the iPhone app <Smartphone size={16} />
+                </a>
               </div>
               <div className={styles.heroProof} aria-label="Product availability">
                 <span>
@@ -846,6 +851,9 @@ export default function LandingPage() {
             <Link className={styles.secondaryButton} href="/login">
               Sign In
             </Link>
+            <a className={styles.secondaryButton} href={publicAppStoreUrl}>
+              App Store <Smartphone size={16} />
+            </a>
           </div>
         </section>
       </div>
