@@ -99,7 +99,7 @@ Only an active, agent-capable Chrome or iOS device owned by that member may crea
 envelope. The resulting
 provider connection is linked only to ESPN league seasons already inside that device's explicit
 scope and for which the member still has league membership; the grant cannot create a league,
-claim a team, or widen membership.
+select a team, or widen membership.
 
 API and worker reads construct only the fixed `lm-api-reads.fantasy.espn.com` HTTPS route from the
 stored numeric league ID and season. They use GET, refuse redirects, allowlist views and filters,
@@ -109,6 +109,14 @@ independently. Active current-season leagues are checked about every 30 minutes;
 offseason leagues about every six hours, with stable jitter. Opening a stale league can enqueue the
 same server-side read immediately, including from mobile, without requiring the desktop browser to
 be awake.
+
+For an authenticated server-session core read, the normalizer compares the session's SWID with the
+exact ESPN owner IDs returned for that league. Exactly one matching team is stored on the member's
+provider-to-league link and automatically fills an otherwise empty team selection. Zero or multiple
+matches clear the provider mapping and fall back to manual resolution; an existing or conflicting
+selection is never overwritten. The SWID itself remains only in the encrypted credential context
+and is not copied into normalized artifacts, warnings, or logs. Browser-local and public reads have
+no authenticated member context and therefore cannot perform this mapping.
 
 The connection is visible and revocable in **League Sync**. A 401 or 403 marks it as needing ESPN
 sign-in again and stops scheduled reads until the member explicitly renews it. Disconnecting

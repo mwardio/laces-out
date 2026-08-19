@@ -86,6 +86,15 @@ export interface EspnSessionCredentialPort {
   ): Promise<void>;
 }
 
+/**
+ * The season ids are an internal post-commit handoff to the API queue seam. The public grant
+ * schema intentionally does not include them, so provider linkage cannot leak into the native
+ * response contract.
+ */
+export interface EspnSessionGrantReceipt extends EspnSessionGrantResponse {
+  readonly linkedLeagueSeasonIds: readonly string[];
+}
+
 export class EspnSessionConnectionService implements EspnSessionCredentialPort {
   readonly #database: Database;
   readonly #key: CredentialKey;
@@ -108,7 +117,7 @@ export class EspnSessionConnectionService implements EspnSessionCredentialPort {
     deviceToken: string,
     input: EspnSessionGrantRequest,
     correlationId: string,
-  ): Promise<EspnSessionGrantResponse> {
+  ): Promise<EspnSessionGrantReceipt> {
     if (!this.#enabled) {
       throw new EspnSessionConnectionError(
         "UNAVAILABLE",
@@ -240,6 +249,9 @@ export class EspnSessionConnectionService implements EspnSessionCredentialPort {
           ),
         )
         .where(eq(bridgeDeviceLeagues.bridgeDeviceId, device.id));
+      const linkedLeagueSeasonIds = [
+        ...new Set(scopedSeasons.map((season) => season.leagueSeasonId)),
+      ];
       if (scopedSeasons.length > 0) {
         await transaction
           .insert(providerLeagueLinks)
@@ -279,7 +291,7 @@ export class EspnSessionConnectionService implements EspnSessionCredentialPort {
           readOnly: true,
           encryptedAtRest: true,
           grantClientKind: device.clientKind,
-          linkedLeagueSeasonCount: scopedSeasons.length,
+          linkedLeagueSeasonCount: linkedLeagueSeasonIds.length,
         },
         occurredAt: now,
       });
@@ -287,7 +299,8 @@ export class EspnSessionConnectionService implements EspnSessionCredentialPort {
       return {
         connectionId: connection.id,
         state: "healthy" as const,
-        linkedLeagueCount: scopedSeasons.length,
+        linkedLeagueCount: linkedLeagueSeasonIds.length,
+        linkedLeagueSeasonIds,
       };
     });
   }

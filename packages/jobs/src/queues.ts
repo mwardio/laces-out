@@ -41,7 +41,8 @@ export interface LeagueSyncJob {
   readonly mode?: "connection" | "server-direct";
   readonly connectionId?: string;
   readonly leagueSeasonId: string;
-  readonly reason: "scheduled" | "manual" | "draft" | "stale-on-view" | "provider-sweep";
+  readonly reason:
+    "scheduled" | "manual" | "draft" | "stale-on-view" | "provider-sweep" | "identity-bootstrap";
   readonly refreshRequestId?: string;
   readonly probe?: boolean;
 }
@@ -376,15 +377,25 @@ function assertNonEmpty(value: unknown, name: string): asserts value is string {
 export function assertLeagueSyncJob(job: LeagueSyncJob): void {
   assertNonEmpty(job.leagueSeasonId, "leagueSeasonId");
   if (
-    !(["scheduled", "manual", "draft", "stale-on-view", "provider-sweep"] as const).includes(
-      job.reason,
-    )
+    !(
+      [
+        "scheduled",
+        "manual",
+        "draft",
+        "stale-on-view",
+        "provider-sweep",
+        "identity-bootstrap",
+      ] as const
+    ).includes(job.reason)
   ) {
     throw new Error("Invalid worker job: unsupported league sync reason");
   }
   const mode = job.mode ?? "connection";
   if (mode !== "connection" && mode !== "server-direct") {
     throw new Error("Invalid worker job: unsupported league sync mode");
+  }
+  if (job.reason === "identity-bootstrap" && mode !== "connection") {
+    throw new Error("Invalid worker job: identity bootstrap requires connection mode");
   }
   if (mode === "connection") {
     assertNonEmpty(job.connectionId, "connectionId");

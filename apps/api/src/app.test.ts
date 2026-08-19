@@ -131,6 +131,7 @@ function bridgeAccepting(state: "accepted" | "unchanged") {
         state,
         receivedAt: "2026-07-16T22:00:00.000Z",
         leagueSeasonId: "00000000-0000-4000-8000-0000000000aa",
+        connectionId: "00000000-0000-4000-8000-0000000000bb",
       }),
     revokeDevice: () => Promise.reject(new Error("not used")),
   };
@@ -538,7 +539,10 @@ describe("API", () => {
         claimTeam: (userId, requestedLeagueId, requestedTeamId) => {
           claims.push({ userId, requestedLeagueId, requestedTeamId });
           return Promise.reject(
-            new LeagueDashboardError("TEAM_TAKEN", "That fantasy team is already claimed"),
+            new LeagueDashboardError(
+              "TEAM_TAKEN",
+              "That fantasy team is already assigned to another member",
+            ),
           );
         },
       },
@@ -553,7 +557,7 @@ describe("API", () => {
     expect(response.statusCode).toBe(409);
     expect(response.json()).toMatchObject({
       status: 409,
-      detail: "That fantasy team is already claimed",
+      detail: "That fantasy team is already assigned to another member",
     });
     expect(claims).toEqual([
       {
@@ -1463,6 +1467,7 @@ describe("API", () => {
   it("accepts an authenticated ESPN bridge snapshot without an application cookie", async () => {
     const snapshots: unknown[] = [];
     const projectionRefreshes: unknown[] = [];
+    const identityBootstraps: unknown[] = [];
     const app = await buildApp({
       environment: loadEnvironment({ NODE_ENV: "test" }),
       logger: false,
@@ -1475,6 +1480,8 @@ describe("API", () => {
             receiptId: "00000000-0000-4000-8000-000000000020",
             state: "accepted" as const,
             receivedAt: "2026-07-16T22:00:00.000Z",
+            leagueSeasonId: "00000000-0000-4000-8000-0000000000aa",
+            connectionId: "00000000-0000-4000-8000-0000000000bb",
           });
         },
         revokeDevice: () => Promise.reject(new Error("not used")),
@@ -1482,6 +1489,10 @@ describe("API", () => {
       enqueueProjectionRefresh: (request) => {
         projectionRefreshes.push(request);
         return Promise.resolve("projection-job");
+      },
+      enqueueEspnIdentityBootstrap: (request) => {
+        identityBootstraps.push(request);
+        return Promise.resolve("identity-bootstrap-job");
       },
     });
     const response = await app.inject({
@@ -1503,6 +1514,17 @@ describe("API", () => {
       },
     });
     expect(response.statusCode).toBe(202);
+    expect(response.json()).toEqual({
+      receiptId: "00000000-0000-4000-8000-000000000020",
+      state: "accepted",
+      receivedAt: "2026-07-16T22:00:00.000Z",
+    });
+    expect(identityBootstraps).toEqual([
+      {
+        connectionId: "00000000-0000-4000-8000-0000000000bb",
+        leagueSeasonId: "00000000-0000-4000-8000-0000000000aa",
+      },
+    ]);
     expect(projectionRefreshes).toEqual([
       expect.objectContaining({ season: 2026, reason: "league-sync" }),
     ]);
@@ -1735,6 +1757,7 @@ describe("API", () => {
 
   it("enqueues no recomputation when a duplicate ESPN payload is unchanged", async () => {
     const recomputes: unknown[] = [];
+    const identityBootstraps: unknown[] = [];
     const app = await buildApp({
       environment: loadEnvironment({ NODE_ENV: "test" }),
       logger: false,
@@ -1742,6 +1765,10 @@ describe("API", () => {
       enqueueRecommendationRecompute: (request) => {
         recomputes.push(request);
         return Promise.resolve("recompute-job");
+      },
+      enqueueEspnIdentityBootstrap: (request) => {
+        identityBootstraps.push(request);
+        return Promise.resolve("identity-bootstrap-job");
       },
     });
 
@@ -1751,6 +1778,12 @@ describe("API", () => {
     // structurally incapable of producing a duplicate recommendation run.
     expect(response.statusCode).toBe(200);
     expect(recomputes).toEqual([]);
+    expect(identityBootstraps).toEqual([
+      {
+        connectionId: "00000000-0000-4000-8000-0000000000bb",
+        leagueSeasonId: "00000000-0000-4000-8000-0000000000aa",
+      },
+    ]);
     await app.close();
   });
 
@@ -1765,6 +1798,26 @@ describe("API", () => {
     const response = await app.inject(bridgeSnapshotRequest());
 
     expect(response.statusCode).toBe(202);
+    await app.close();
+  });
+
+  it("still accepts the snapshot when the identity bootstrap enqueue fails", async () => {
+    let enqueueCalls = 0;
+    const enqueueEspnIdentityBootstrap = () => {
+      enqueueCalls += 1;
+      return Promise.reject(new Error("queue unavailable"));
+    };
+    const app = await buildApp({
+      environment: loadEnvironment({ NODE_ENV: "test" }),
+      logger: false,
+      espnBridge: bridgeAccepting("accepted"),
+      enqueueEspnIdentityBootstrap,
+    });
+
+    const response = await app.inject(bridgeSnapshotRequest());
+
+    expect(response.statusCode).toBe(202);
+    expect(enqueueCalls).toBe(1);
     await app.close();
   });
 

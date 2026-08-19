@@ -56,6 +56,40 @@ describe("shared queue dispatch contract", () => {
     );
   });
 
+  it("deduplicates immediate identity bootstrap through the connection-season singleton", async () => {
+    const { boss, send } = sendHarness();
+
+    await enqueueLeagueSync(boss, {
+      mode: "connection",
+      connectionId: "connection-1",
+      leagueSeasonId: "league-1",
+      reason: "identity-bootstrap",
+    });
+
+    expect(send).toHaveBeenCalledWith(
+      queueNames.syncLeague,
+      expect.objectContaining({ mode: "connection", reason: "identity-bootstrap" }),
+      expect.objectContaining({
+        group: { id: "league-season:league-1" },
+        singletonKey: "league-sync:connection-1:league-1",
+        singletonSeconds: 60,
+      }),
+    );
+  });
+
+  it("rejects identity bootstrap on the unauthenticated server-direct path", () => {
+    const { boss, send } = sendHarness();
+
+    expect(() =>
+      enqueueLeagueSync(boss, {
+        mode: "server-direct",
+        leagueSeasonId: "league-1",
+        reason: "identity-bootstrap",
+      }),
+    ).toThrow("identity bootstrap requires connection mode");
+    expect(send).not.toHaveBeenCalled();
+  });
+
   it("serializes server-direct reads with the same league group and a mode-specific singleton", async () => {
     const { boss, send } = sendHarness();
 

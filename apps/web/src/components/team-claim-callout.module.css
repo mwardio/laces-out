@@ -33,58 +33,21 @@
     white-space: nowrap;
   }
 
-  .controls {
-    display: flex;
-    flex: 0 0 auto;
-    align-items: center;
-    gap: var(--space-8);
-  }
-
-  /* Height, border-radius, and font-size are intentionally left unset: `.app-shell :is(input,
-     select, textarea)` in polish.css — the last @layer in the cascade — already normalizes every
-     select in the app to those values, and a value set here would just lose to it silently. */
-  .controls select {
-    max-width: 220px;
-    padding: 0 8px;
-    color: var(--ink-900);
-    background: var(--white);
-    border: 1px solid var(--ink-200);
-  }
-
-  .controls button {
+  .settingsLink {
     display: inline-flex;
     flex: 0 0 auto;
     align-items: center;
-    gap: var(--space-6);
+    gap: 4px;
+    color: var(--ink-700);
+    font-size: var(--text-12);
+    font-weight: 750;
+    text-decoration: none;
     white-space: nowrap;
   }
 
-  .savedLine,
-  .errorLine {
-    display: flex;
-    flex: 1 1 100%;
-    align-items: center;
-    gap: var(--space-6);
-    margin: 0;
-    font-size: var(--text-12);
-  }
-
-  .savedLine {
-    color: var(--green-600);
-  }
-
-  .errorLine {
-    color: var(--red-600);
-  }
-
-  .spin {
-    animation: team-claim-callout-spin 0.85s linear infinite;
-  }
-
-  @keyframes team-claim-callout-spin {
-    to {
-      transform: rotate(360deg);
-    }
+  .settingsLink:hover {
+    color: var(--ink-900);
+    text-decoration: underline;
   }
 
   @media (max-width: 820px) {
@@ -93,17 +56,8 @@
       flex-direction: column;
     }
 
-    .controls {
-      flex-wrap: wrap;
-    }
-
-    .controls select {
-      max-width: none;
-      flex: 1 1 auto;
-    }
-
-    .controls button {
-      flex: 0 0 auto;
+    .settingsLink {
+      align-self: flex-start;
     }
   }
 }

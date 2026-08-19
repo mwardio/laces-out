@@ -1098,11 +1098,7 @@ export function DecisionWorkbench() {
       </header>
 
       {!isDemo && liveDashboard && leagueIsUnclaimed(liveDashboard) ? (
-        <TeamClaimCallout
-          leagueId={selectedLeagueId}
-          dashboard={liveDashboard}
-          onClaimed={() => void loadLiveDashboard()}
-        />
+        <TeamClaimCallout leagueId={selectedLeagueId} dashboard={liveDashboard} />
       ) : null}
 
       {decision.state === "loading" || decision.state === "idle" ? (

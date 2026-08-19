@@ -52,6 +52,7 @@ function connectionHarness() {
     connectionId,
     state: "healthy" as const,
     linkedLeagueCount: 1,
+    linkedLeagueSeasonIds: [leagueSeasonId],
   }));
   const disconnectConnection = vi.fn(async () => true);
   const port: EspnSessionConnectionPort = {
@@ -87,10 +88,12 @@ function connectionHarness() {
 describe("ESPN server-session routes", () => {
   it("accepts a fresh authorization only through an active bridge credential boundary", async () => {
     const { port, grantFromBridge } = connectionHarness();
+    const enqueueEspnIdentityBootstrap = vi.fn(async () => "identity-bootstrap-job");
     const app = await buildApp({
       environment: environment(),
       authService: authService(),
       espnSessionConnections: port,
+      enqueueEspnIdentityBootstrap,
       requireAuthentication: true,
       logger: false,
     });
@@ -116,6 +119,42 @@ describe("ESPN server-session routes", () => {
     expect(accepted.statusCode).toBe(201);
     expect(accepted.json()).toEqual({ connectionId, state: "healthy", linkedLeagueCount: 1 });
     expect(grantFromBridge).toHaveBeenCalledWith(deviceToken, body, expect.any(String));
+    expect(enqueueEspnIdentityBootstrap).toHaveBeenCalledOnce();
+    expect(enqueueEspnIdentityBootstrap).toHaveBeenCalledWith({
+      connectionId,
+      leagueSeasonId,
+    });
+    await app.close();
+  });
+
+  it("keeps a committed session grant successful when identity bootstrap enqueue fails", async () => {
+    const { port } = connectionHarness();
+    const enqueueEspnIdentityBootstrap = vi.fn(async () => {
+      throw new Error("queue unavailable");
+    });
+    const app = await buildApp({
+      environment: environment(),
+      authService: authService(),
+      espnSessionConnections: port,
+      enqueueEspnIdentityBootstrap,
+      requireAuthentication: true,
+      logger: false,
+    });
+
+    const accepted = await app.inject({
+      method: "POST",
+      url: "/v1/bridge/espn/session-grants",
+      headers: { authorization: `Bridge ${deviceToken}` },
+      payload: {
+        swid: "{123e4567-e89b-42d3-a456-426614174000}",
+        espnS2: "session-value-that-is-long-enough-for-validation",
+        capturedAt: "2026-09-24T15:00:00.000Z",
+      },
+    });
+
+    expect(accepted.statusCode).toBe(201);
+    expect(accepted.json()).toEqual({ connectionId, state: "healthy", linkedLeagueCount: 1 });
+    expect(enqueueEspnIdentityBootstrap).toHaveBeenCalledOnce();
     await app.close();
   });
 

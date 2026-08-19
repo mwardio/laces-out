@@ -3,6 +3,7 @@
 import {
   BellRing,
   CheckCircle2,
+  CircleAlert,
   Download,
   KeyRound,
   LoaderCircle,
@@ -31,8 +32,12 @@ import {
   type PushDeviceStatus,
   type SessionUser,
 } from "../lib/api-client";
-import { CONNECT_LEAGUE_FIRST } from "../lib/copy";
-import { defaultClaimChoice, selectableClaimTeams } from "../lib/team-claim";
+import { CONNECT_LEAGUE_FIRST, providerLabel } from "../lib/copy";
+import {
+  providerMappedTeamState,
+  selectableClaimTeams,
+  settingsTeamChoice,
+} from "../lib/team-claim";
 import { AiProviderSettings } from "./ai-provider-settings";
 import { DataHealthPanel } from "./data-health-panel";
 import styles from "./settings-panel.module.css";
@@ -208,7 +213,10 @@ export function SettingsPanel() {
         ...current,
         [leagueId]: { status: "ready", dashboard: parsed },
       }));
-      setTeamChoices((current) => ({ ...current, [leagueId]: defaultClaimChoice(parsed) }));
+      setTeamChoices((current) => ({
+        ...current,
+        [leagueId]: settingsTeamChoice(parsed),
+      }));
     } catch {
       setTeamRows((current) => ({ ...current, [leagueId]: { status: "unavailable" } }));
     }
@@ -239,7 +247,7 @@ export function SettingsPanel() {
       }
       setTeamSaves((current) => ({
         ...current,
-        [leagueId]: { state: "saved", message: "Team claim saved." },
+        [leagueId]: { state: "saved", message: "Team selection saved." },
       }));
       await loadTeamRow(leagueId);
     } catch (error) {
@@ -807,7 +815,7 @@ export function SettingsPanel() {
             <StatusLine status={preferenceStatus} />
           </section>
 
-          <section className={styles.panel} aria-labelledby="teams-title">
+          <section className={styles.panel} id="teams" aria-labelledby="teams-title">
             <div className={styles.panelHeading}>
               <div>
                 <p>Leagues</p>
@@ -820,7 +828,8 @@ export function SettingsPanel() {
             ) : (
               <>
                 <p className={styles.panelIntro}>
-                  Which team is yours in each league. Powers roster-aware analysis.
+                  Provider matches are automatic. If a provider cannot identify your team, choose it
+                  here for roster-aware analysis.
                 </p>
                 <ul className={styles.teamList}>
                   {leagues.map((league) => (
@@ -1192,7 +1201,7 @@ function TeamRow({ leagueName, row, choice, save, onChoiceChange, onSave }: Team
     );
   }
 
-  if (row.status === "unavailable" || row.dashboard.teamClaim.mode === "unavailable") {
+  if (row.status === "unavailable") {
     return (
       <li className={styles.teamRow}>
         <span className={styles.teamRowName}>{leagueName}</span>
@@ -1201,7 +1210,53 @@ function TeamRow({ leagueName, row, choice, save, onChoiceChange, onSave }: Team
     );
   }
 
+  if (row.dashboard.teamClaim.mode === "unavailable") {
+    return (
+      <li className={styles.teamRow}>
+        <span className={styles.teamRowName}>{leagueName}</span>
+        <span className={styles.teamRowNote}>
+          <CircleAlert size={14} aria-hidden="true" /> {row.dashboard.teamClaim.explanation}
+        </span>
+      </li>
+    );
+  }
+
   const { dashboard } = row;
+  const claimedTeamId = dashboard.membership.claimedFantasyTeamId;
+  if (dashboard.teamClaim.mode === "provider-mapped") {
+    const provider = providerLabel(dashboard.teamClaim.provider);
+    const matchState = providerMappedTeamState(dashboard);
+    const matchConflict = matchState === "conflict";
+    return (
+      <li className={styles.teamRow}>
+        <span className={styles.teamRowName}>{leagueName}</span>
+        <div className={styles.teamRowControls}>
+          <span className={styles.teamRowNote}>
+            {matchConflict ? (
+              <CircleAlert size={14} aria-hidden="true" />
+            ) : (
+              <CheckCircle2 size={14} aria-hidden="true" />
+            )}
+            {matchConflict
+              ? `${provider} matched ${dashboard.teamClaim.claimableTeamName}, but it is already assigned to another member.`
+              : `${provider} matched · ${dashboard.teamClaim.claimableTeamName}`}
+          </span>
+          {matchState === "available" ? (
+            <button type="button" disabled={save.state === "saving"} onClick={onSave}>
+              {save.state === "saving" ? (
+                <LoaderCircle className={styles.spin} size={14} aria-hidden="true" />
+              ) : (
+                <CheckCircle2 size={14} aria-hidden="true" />
+              )}
+              Use matched team
+            </button>
+          ) : null}
+        </div>
+        <StatusLine status={save} />
+      </li>
+    );
+  }
+
   const teams = selectableClaimTeams(dashboard);
   if (teams.length === 0) {
     return (
@@ -1211,12 +1266,6 @@ function TeamRow({ leagueName, row, choice, save, onChoiceChange, onSave }: Team
       </li>
     );
   }
-
-  const claimedTeamId = dashboard.membership.claimedFantasyTeamId;
-  const buttonLabel =
-    claimedTeamId === null && dashboard.teamClaim.mode === "provider-mapped"
-      ? "Confirm team"
-      : "Save";
 
   return (
     <li className={styles.teamRow}>
@@ -1247,7 +1296,7 @@ function TeamRow({ leagueName, row, choice, save, onChoiceChange, onSave }: Team
           ) : (
             <CheckCircle2 size={14} aria-hidden="true" />
           )}
-          {buttonLabel}
+          Save
         </button>
       </div>
       <StatusLine status={save} />

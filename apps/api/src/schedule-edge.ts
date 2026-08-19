@@ -1363,7 +1363,7 @@ async function loadProjectionContext(
       availability: availability(
         "unavailable",
         rosterPlayerIds.length === 0
-          ? "A claimed roster is required before projection context can be loaded."
+          ? "A selected roster is required before projection context can be loaded."
           : "The current league week is not available.",
       ),
     };
@@ -1438,12 +1438,12 @@ async function loadProjectionContext(
         : projectedPlayers === 0
           ? availability(
               "unavailable",
-              "The selected projection sets contain no rows for the claimed roster.",
+              "The selected projection sets contain no rows for this roster.",
             )
           : projectedPlayers < rosterPlayerIds.length
             ? availability(
                 "partial",
-                "Projection context is missing for one or more claimed-roster players.",
+                "Projection context is missing for one or more roster players.",
               )
             : validSources < selectedSets.length
               ? availability("partial", "Only one projection horizon cleared provenance checks.")
@@ -2002,11 +2002,11 @@ function rosterAvailability(
   if (!claimedTeam) {
     return availability(
       "unavailable",
-      "Claim your fantasy team to see a personalized roster outlook.",
+      "Select your fantasy team in Settings to see a personalized roster outlook.",
     );
   }
   if (!snapshot) {
-    return availability("unavailable", "The claimed team has no synchronized roster snapshot.");
+    return availability("unavailable", "The selected team has no synchronized roster snapshot.");
   }
   if (limited) {
     return availability(
@@ -2034,7 +2034,7 @@ function byeAvailability(
   if (!claimedTeam) {
     return availability(
       "unavailable",
-      "Claim your fantasy team to check bye-week lineup coverage.",
+      "Select your fantasy team in Settings to check bye-week lineup coverage.",
     );
   }
   if (!slots) {

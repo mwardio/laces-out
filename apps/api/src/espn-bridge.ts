@@ -512,6 +512,8 @@ export class EspnBridgeService {
     readonly receivedAt: string;
     /** Reported so the route can queue downstream work for the league season that actually changed. */
     readonly leagueSeasonId: string;
+    /** Internal only: present when this bridge device already holds an encrypted server session. */
+    readonly connectionId?: string;
   }> {
     const now = this.#now();
     const [device] = await this.#database
@@ -595,6 +597,7 @@ export class EspnBridgeService {
       state: receipt.state,
       receivedAt: now.toISOString(),
       leagueSeasonId: receipt.leagueSeasonId,
+      ...(device.connectionId ? { connectionId: device.connectionId } : {}),
     };
   }
 

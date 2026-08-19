@@ -375,6 +375,17 @@ const app = await buildApp({
     }),
   enqueueProjectionRefresh: async ({ season }) =>
     enqueueProjectionRefresh(jobs, { season, horizon: "weekly", reason: "on-demand" }),
+  ...(environment.ESPN_SERVER_SESSION_SYNC_ENABLED && espnSessionConnections
+    ? {
+        enqueueEspnIdentityBootstrap: async ({ connectionId, leagueSeasonId }) =>
+          enqueueLeagueSync(jobs, {
+            mode: "connection",
+            connectionId,
+            leagueSeasonId,
+            reason: "identity-bootstrap",
+          }),
+      }
+    : {}),
   enqueueRecommendationRecompute: async ({ leagueSeasonId, kinds }) =>
     enqueueRecommendationRecompute(jobs, { leagueSeasonId, kinds }),
 });

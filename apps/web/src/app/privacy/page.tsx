@@ -65,7 +65,7 @@ export default function PrivacyPage() {
             </li>
             <li>
               Fantasy league settings, teams, rosters, standings, matchups, draft events, and the
-              team you claim in each league.
+              team associated with your account in each league.
             </li>
             <li>
               Your rankings, auction values, notes, shares, and recommendation inputs or feedback.

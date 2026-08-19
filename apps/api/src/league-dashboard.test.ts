@@ -343,7 +343,100 @@ describe("LeagueDashboardService", () => {
     expect(leagueDashboardSchema.safeParse(result).success).toBe(true);
   });
 
-  it("exposes only the exact provider-mapped Yahoo team as claimable", async () => {
+  it.each(["espn", "yahoo"] as const)(
+    "exposes only the exact provider-mapped %s team as claimable",
+    async (provider) => {
+      const listProviderTeamMappings = vi.fn(
+        (requestedUserId: string, requestedSeasonId: string, requestedProvider: "espn" | "yahoo") =>
+          Promise.resolve(
+            requestedUserId === userId &&
+              requestedSeasonId === seasonId &&
+              requestedProvider === provider
+              ? [
+                  {
+                    externalKey: `${provider}:team:1`,
+                    teamId,
+                    teamName: "Tech Gurus",
+                  },
+                ]
+              : [],
+          ),
+      );
+      const service = new LeagueDashboardService(
+        fakeRepository({
+          findMembership: () =>
+            Promise.resolve({
+              ...membership(),
+              claimedFantasyTeamId: null,
+              claimedTeamName: null,
+              claimedAt: null,
+            }),
+          listSeasons: () => Promise.resolve([{ ...season(), provider }]),
+          listTeams: () =>
+            Promise.resolve([
+              {
+                id: teamId,
+                name: "Tech Gurus",
+                abbreviation: "TG",
+                logoUrl: null,
+                managerDisplayName: "Mack",
+                faabRemaining: 83,
+                waiverPriority: 4,
+              },
+              {
+                id: otherTeamId,
+                name: "Sunday Scaries",
+                abbreviation: "SS",
+                logoUrl: null,
+                managerDisplayName: "Friend",
+                faabRemaining: 90,
+                waiverPriority: 2,
+              },
+            ]),
+          listProviderTeamMappings,
+        }),
+        () => now,
+      );
+
+      const result = await service.getDashboard(userId, leagueId);
+
+      expect(result).toMatchObject({
+        teamClaim: {
+          mode: "provider-mapped",
+          provider,
+          claimableTeamId: teamId,
+          claimableTeamName: "Tech Gurus",
+        },
+        overview: { availableTeamClaims: 1 },
+        teams: [
+          { id: teamId, claimStatus: "available" },
+          { id: otherTeamId, claimStatus: "not-claimable" },
+        ],
+      });
+      expect(listProviderTeamMappings).toHaveBeenCalledWith(userId, seasonId, provider);
+      expect(leagueDashboardSchema.safeParse(result).success).toBe(true);
+    },
+  );
+
+  it.each([
+    ["ESPN with no mapping", "espn", [], "self-asserted"],
+    [
+      "ESPN with multiple mappings",
+      "espn",
+      [
+        { externalKey: "espn:team:1", teamId, teamName: "Tech Gurus" },
+        { externalKey: "espn:team:2", teamId: otherTeamId, teamName: "Sunday Scaries" },
+      ],
+      "self-asserted",
+    ],
+    [
+      "ESPN with a stale unresolved mapping",
+      "espn",
+      [{ externalKey: "espn:team:old", teamId: null, teamName: null }],
+      "self-asserted",
+    ],
+    ["Yahoo with no mapping", "yahoo", [], "unavailable"],
+  ] as const)("uses the safe identity fallback for %s", async (_, provider, mappings, mode) => {
     const service = new LeagueDashboardService(
       fakeRepository({
         findMembership: () =>
@@ -353,7 +446,29 @@ describe("LeagueDashboardService", () => {
             claimedTeamName: null,
             claimedAt: null,
           }),
-        listSeasons: () => Promise.resolve([{ ...season(), provider: "yahoo" as const }]),
+        listSeasons: () => Promise.resolve([{ ...season(), provider }]),
+        listProviderTeamMappings: () => Promise.resolve(mappings),
+      }),
+      () => now,
+    );
+
+    const result = await service.getDashboard(userId, leagueId);
+
+    expect(result?.teamClaim).toMatchObject({ mode, provider });
+    expect(leagueDashboardSchema.safeParse(result).success).toBe(true);
+  });
+
+  it("suppresses a provider-mapped action when the exact team belongs to another member", async () => {
+    const service = new LeagueDashboardService(
+      fakeRepository({
+        findMembership: () =>
+          Promise.resolve({
+            ...membership(),
+            claimedFantasyTeamId: null,
+            claimedTeamName: null,
+            claimedAt: null,
+          }),
+        listSeasons: () => Promise.resolve([season()]),
         listTeams: () =>
           Promise.resolve([
             {
@@ -365,28 +480,16 @@ describe("LeagueDashboardService", () => {
               faabRemaining: 83,
               waiverPriority: 4,
             },
+          ]),
+        listProviderTeamMappings: () =>
+          Promise.resolve([
             {
-              id: otherTeamId,
-              name: "Sunday Scaries",
-              abbreviation: "SS",
-              logoUrl: null,
-              managerDisplayName: "Friend",
-              faabRemaining: 90,
-              waiverPriority: 2,
+              externalKey: "espn:team:1",
+              teamId,
+              teamName: "Tech Gurus",
             },
           ]),
-        listProviderTeamMappings: (requestedUserId, requestedSeasonId) =>
-          Promise.resolve(
-            requestedUserId === userId && requestedSeasonId === seasonId
-              ? [
-                  {
-                    externalKey: "449.l.12345.t.1",
-                    teamId,
-                    teamName: "Tech Gurus",
-                  },
-                ]
-              : [],
-          ),
+        listClaimedTeamIds: () => Promise.resolve([teamId]),
       }),
       () => now,
     );
@@ -395,16 +498,14 @@ describe("LeagueDashboardService", () => {
 
     expect(result).toMatchObject({
       teamClaim: {
-        mode: "provider-mapped",
-        provider: "yahoo",
-        claimableTeamId: teamId,
-        claimableTeamName: "Tech Gurus",
+        mode: "unavailable",
+        provider: "espn",
+        claimableTeamId: null,
+        claimableTeamName: null,
+        explanation: "Tech Gurus is already assigned to another member.",
       },
-      overview: { availableTeamClaims: 1 },
-      teams: [
-        { id: teamId, claimStatus: "available" },
-        { id: otherTeamId, claimStatus: "not-claimable" },
-      ],
+      overview: { availableTeamClaims: 0 },
+      teams: [{ id: teamId, claimStatus: "taken" }],
     });
     expect(leagueDashboardSchema.safeParse(result).success).toBe(true);
   });

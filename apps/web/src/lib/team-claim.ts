@@ -22,9 +22,8 @@ export function leagueIsUnclaimed(dashboard: LeagueDashboard): boolean {
 }
 
 /**
- * Teams a member could pick for the claim `<select>`: their own already-claimed team (so a
- * provider-mapped confirmation still shows the target) plus every team nobody else has claimed.
- * Mirrors the filter the Overview "Your team identity" panel has always used.
+ * Teams a member could pick for the manual fallback in Settings: their own already-claimed team
+ * plus every team nobody else has claimed. Provider-mapped identities do not use this selector.
  */
 export function selectableClaimTeams(dashboard: LeagueDashboard): readonly LeagueTeamSnapshot[] {
   return dashboard.teams.filter(
@@ -33,10 +32,8 @@ export function selectableClaimTeams(dashboard: LeagueDashboard): readonly Leagu
 }
 
 /**
- * The team id to preselect in the claim `<select>`, in precedence order: an existing claim, then a
- * provider's own mapping (Yahoo tells us which team is the signed-in member's), then the first
- * unclaimed team, then nothing. Mirrors the precedence `LivePortfolio.loadDashboard` has always
- * applied in `dashboard-experience.tsx`.
+ * The team id to preselect in Settings, in precedence order: an existing claim, then an exact
+ * provider mapping, then the first unclaimed team, then nothing.
  */
 export function defaultClaimChoice(dashboard: LeagueDashboard): string {
   return (
@@ -47,19 +44,62 @@ export function defaultClaimChoice(dashboard: LeagueDashboard): string {
   );
 }
 
-export type ClaimCalloutMode = "hidden" | "confirm-provider" | "choose";
+/** Settings repairs an exact provider mismatch toward the provider target, never another team. */
+export function settingsTeamChoice(dashboard: LeagueDashboard): string {
+  return dashboard.teamClaim.mode === "provider-mapped"
+    ? dashboard.teamClaim.claimableTeamId
+    : defaultClaimChoice(dashboard);
+}
+
+export type ProviderMappedTeamState = "not-mapped" | "matched" | "available" | "conflict";
+
+/**
+ * Whether the provider's exact team match is already applied, can be applied, or belongs to a
+ * different member. Keeping this decision here prevents Overview and Settings from disagreeing.
+ */
+export function providerMappedTeamState(dashboard: LeagueDashboard): ProviderMappedTeamState {
+  if (dashboard.teamClaim.mode !== "provider-mapped") return "not-mapped";
+
+  const mappedTeam = dashboard.teams.find(
+    (team) => team.id === dashboard.teamClaim.claimableTeamId,
+  );
+  if (
+    dashboard.membership.claimedFantasyTeamId === dashboard.teamClaim.claimableTeamId ||
+    mappedTeam?.claimStatus === "current-user"
+  ) {
+    return "matched";
+  }
+  return mappedTeam?.claimStatus === "taken" ? "conflict" : "available";
+}
+
+/** The only team safe to present as the member's own in the Overview identity panel. */
+export function resolvedMemberTeam(dashboard: LeagueDashboard): LeagueTeamSnapshot | undefined {
+  const selectedTeam = dashboard.teams.find(
+    (team) =>
+      team.claimStatus === "current-user" || team.id === dashboard.membership.claimedFantasyTeamId,
+  );
+  if (selectedTeam) return selectedTeam;
+  if (dashboard.teamClaim.mode !== "provider-mapped") return undefined;
+
+  const mappedTeam = dashboard.teams.find(
+    (team) => team.id === dashboard.teamClaim.claimableTeamId,
+  );
+  return mappedTeam?.claimStatus === "taken" ? undefined : mappedTeam;
+}
+
+export type ClaimCalloutMode = "hidden" | "choose";
 
 /**
  * What (if anything) the shared claim callout should render for this dashboard:
  * - `"hidden"`: already claimed, the provider marked the claim `"unavailable"`, or there is nothing
  *   selectable to claim.
- * - `"confirm-provider"`: the provider (Yahoo) already mapped a team to this member; the callout only
- *   needs a confirmation, not a real choice.
- * - `"choose"`: a self-asserted claim — the member picks their team from the selectable list.
+ * - `"choose"`: provider identity is unresolved, so the member is directed to the manual fallback
+ *   in Settings.
  */
 export function claimCalloutMode(dashboard: LeagueDashboard): ClaimCalloutMode {
   if (!leagueIsUnclaimed(dashboard)) return "hidden";
   if (dashboard.teamClaim.mode === "unavailable") return "hidden";
+  if (dashboard.teamClaim.mode === "provider-mapped") return "hidden";
   if (selectableClaimTeams(dashboard).length === 0) return "hidden";
-  return dashboard.teamClaim.mode === "provider-mapped" ? "confirm-provider" : "choose";
+  return "choose";
 }

@@ -17,6 +17,7 @@ import {
   matchupSnapshots,
   playerExternalIds,
   players,
+  providerConnections,
   providerLeagueLinks,
   rosterEntries,
   rosterSlotRules,
@@ -200,6 +201,29 @@ export function trustedEspnPlayerId(
 }
 
 /**
+ * Only an encrypted server session supplies authenticated ESPN member context to the normalizer.
+ * Browser and public snapshots must never turn a payload-level team marker into account identity.
+ */
+export function espnServerSessionCurrentTeamExternalKey(input: {
+  readonly authority: EspnSyncAuthority;
+  readonly bundle: LeagueSyncBundle;
+  readonly kind: PersistEspnSyncInput["kind"];
+}): string | null {
+  if (
+    input.authority.mode !== "server-session" ||
+    input.kind !== "espn-session" ||
+    input.bundle.provenance.mode !== "server-session"
+  ) {
+    return null;
+  }
+  const currentUserTeams = input.bundle.teams.filter((team) => team.isCurrentUser);
+  if (currentUserTeams.length > 1) {
+    throw new Error("ESPN server-session snapshot identified multiple current-user teams");
+  }
+  return currentUserTeams[0]?.externalId ?? null;
+}
+
+/**
  * The shared player table currently backs roster foreign keys. Self-asserted fields are retained
  * only on a league-season-scoped observation row, which catalog queries must exclude.
  */
@@ -261,6 +285,15 @@ function slotEligibility(slotCode: string): string[] {
 
 type EspnPersistenceTransaction = Parameters<Parameters<Database["transaction"]>[0]>[0];
 
+function databaseErrorCode(error: unknown): string | undefined {
+  let cursor: unknown = error;
+  for (let depth = 0; depth < 6 && cursor && typeof cursor === "object"; depth += 1) {
+    if ("code" in cursor && typeof cursor.code === "string") return cursor.code;
+    cursor = "cause" in cursor ? cursor.cause : undefined;
+  }
+  return undefined;
+}
+
 function fulfillmentMode(authority: EspnSyncAuthority): EspnRefreshFulfillmentMode {
   if (authority.mode === "server-direct") return "server-direct";
   if (authority.mode === "server-session") return "server-session";
@@ -298,6 +331,95 @@ async function linkCapturedBridgeConnection(
     .update(leagueSeasons)
     .set({ connectionId: device.connectionId, updatedAt: now })
     .where(and(eq(leagueSeasons.id, leagueSeasonId), isNull(leagueSeasons.connectionId)));
+}
+
+/**
+ * Persists only the connector's exact active-member/team match. The authorization link and mapped
+ * team must already exist for this actor and season; provider data can never create new scope here.
+ * A concurrent or historical claim wins without invalidating the otherwise valid read sync.
+ */
+async function persistServerSessionTeamIdentity(
+  transaction: EspnPersistenceTransaction,
+  input: PersistEspnSyncInput,
+  leagueId: string,
+  leagueSeasonId: string,
+): Promise<void> {
+  const currentUserTeamExternalKey = espnServerSessionCurrentTeamExternalKey(input);
+  if (input.authority.mode !== "server-session") return;
+  const { actorUserId, connectionId } = input.authority;
+
+  const [authorizedLink] = await transaction
+    .select({ connectionId: providerLeagueLinks.connectionId })
+    .from(providerLeagueLinks)
+    .innerJoin(providerConnections, eq(providerConnections.id, providerLeagueLinks.connectionId))
+    .where(
+      and(
+        eq(providerLeagueLinks.connectionId, connectionId),
+        eq(providerLeagueLinks.leagueSeasonId, leagueSeasonId),
+        eq(providerConnections.userId, actorUserId),
+        eq(providerConnections.provider, "espn"),
+      ),
+    )
+    .limit(1);
+  if (!authorizedLink) {
+    throw new Error("ESPN server-session identity did not match an authorized provider link");
+  }
+
+  const [mappedTeam] = currentUserTeamExternalKey
+    ? await transaction
+        .select({ id: fantasyTeams.id })
+        .from(fantasyTeams)
+        .where(
+          and(
+            eq(fantasyTeams.leagueSeasonId, leagueSeasonId),
+            eq(fantasyTeams.externalKey, currentUserTeamExternalKey),
+          ),
+        )
+        .limit(1)
+    : [];
+  // A missing or unmatched active-member result clears stale provider identity. The existing
+  // membership claim is deliberately left alone; provider refreshes never overwrite a claim.
+  const verifiedExternalKey = mappedTeam ? currentUserTeamExternalKey : null;
+
+  const updatedLinks = await transaction
+    .update(providerLeagueLinks)
+    .set({
+      currentUserTeamExternalKey: verifiedExternalKey,
+      lastSyncedAt: input.effectiveAt,
+      updatedAt: input.now,
+    })
+    .where(
+      and(
+        eq(providerLeagueLinks.connectionId, connectionId),
+        eq(providerLeagueLinks.leagueSeasonId, leagueSeasonId),
+      ),
+    )
+    .returning({ connectionId: providerLeagueLinks.connectionId });
+  if (updatedLinks.length !== 1) {
+    throw new Error("ESPN server-session provider link changed during identity persistence");
+  }
+  if (!mappedTeam) return;
+
+  try {
+    await transaction.transaction(async (savepoint) => {
+      await savepoint
+        .update(leagueMemberships)
+        .set({
+          claimedFantasyTeamId: mappedTeam.id,
+          claimedAt: input.now,
+          updatedAt: input.now,
+        })
+        .where(
+          and(
+            eq(leagueMemberships.leagueId, leagueId),
+            eq(leagueMemberships.userId, actorUserId),
+            isNull(leagueMemberships.claimedFantasyTeamId),
+          ),
+        );
+    });
+  } catch (error) {
+    if (databaseErrorCode(error) !== "23505") throw error;
+  }
 }
 
 /**
@@ -849,6 +971,7 @@ export class DrizzleEspnSyncPersistence {
           .update(leagueSeasons)
           .set({ lastSyncedAt: effectiveAt, updatedAt: now })
           .where(eq(leagueSeasons.id, season.id));
+        await persistServerSessionTeamIdentity(transaction, input, season.leagueId, season.id);
         if (authority.mode === "bridge") {
           // An unchanged provider artifact is still proof of league access. Grant membership before
           // linking the device so the database ownership trigger can enforce the same ordering used
@@ -1184,6 +1307,8 @@ export class DrizzleEspnSyncPersistence {
         if (rows.length > 0) await transaction.insert(weeklyMatchups).values(rows);
         recordsWritten += 1 + rows.length;
       }
+
+      await persistServerSessionTeamIdentity(transaction, input, leagueId, leagueSeasonId);
 
       await transaction
         .update(syncRuns)

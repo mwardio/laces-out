@@ -230,7 +230,7 @@ export const teamClaimPolicySchema = z.discriminatedUnion("mode", [
   z
     .object({
       mode: z.literal("provider-mapped"),
-      provider: z.literal("yahoo"),
+      provider: z.enum(["espn", "yahoo"]),
       claimableTeamId: z.string().uuid(),
       claimableTeamName: z.string().min(1),
       explanation: z.string().min(1),

@@ -32,13 +32,12 @@ import { providerLabel } from "../lib/copy";
 import { yahooComingSoon } from "../lib/public-site";
 import { loginUrlForCurrentPath } from "../lib/safe-return-to";
 import { DEMO_LEAGUE_ID } from "../lib/demo-contract-data";
-import { leagueIsUnclaimed } from "../lib/team-claim";
+import { leagueIsUnclaimed, providerMappedTeamState, resolvedMemberTeam } from "../lib/team-claim";
 import { useDefaultLeague } from "../lib/use-default-league";
 import { AiCoachPanel } from "./ai-coach-panel";
 import { ChangeFeedPanel } from "./change-feed-panel";
 import { PortfolioDashboard } from "./portfolio-dashboard";
 import { TeamAvatar } from "./team-avatar";
-import { TeamClaimCallout } from "./team-claim-callout";
 import { TourBanner } from "./tour-banner";
 
 type PortfolioState =
@@ -130,7 +129,7 @@ function MobileWeekAtGlance({ dashboard }: { readonly dashboard: LeagueDashboard
           </h2>
         </div>
         <span className="mobile-week-card__state">
-          {matchupAvailable ? memberScoreStateLabel(context.scoreState) : "Claim team"}
+          {matchupAvailable ? memberScoreStateLabel(context.scoreState) : "Select team"}
         </span>
       </div>
 
@@ -161,7 +160,7 @@ function MobileWeekAtGlance({ dashboard }: { readonly dashboard: LeagueDashboard
         </div>
       ) : (
         <p className="mobile-week-card__summary">
-          Claim your team to see personalized recommendations.
+          Select your team in Settings to see personalized recommendations.
         </p>
       )}
 
@@ -303,9 +302,6 @@ function LivePortfolio({ portfolio, reloadPortfolio }: LivePortfolioProps) {
     setSelectedLeagueId(preferred ?? portfolio.leagues[0]?.id ?? "");
   }, [defaultLeagueId, portfolio.leagues, preferenceLoaded]);
   const [dashboardState, setDashboardState] = useState<DashboardState>({ status: "loading" });
-  const [claimChoice, setClaimChoice] = useState("");
-  const [claimState, setClaimState] = useState<"idle" | "saving" | "saved" | "error">("idle");
-  const [claimMessage, setClaimMessage] = useState("");
   const [sourceRefreshState, setSourceRefreshState] = useState<
     "idle" | "working" | "queued" | "deduplicated" | "error"
   >("idle");
@@ -340,14 +336,6 @@ function LivePortfolio({ portfolio, reloadPortfolio }: LivePortfolioProps) {
       if (!dashboard) throw new Error("The live dashboard response was invalid.");
       if (controller.signal.aborted || dashboardRequest.current !== controller) return;
       setDashboardState({ status: "ready", dashboard });
-      setClaimChoice(
-        dashboard.membership.claimedFantasyTeamId ??
-          (dashboard.teamClaim.mode === "provider-mapped"
-            ? dashboard.teamClaim.claimableTeamId
-            : null) ??
-          dashboard.teams.find((team) => team.claimStatus === "available")?.id ??
-          "",
-      );
     } catch (error) {
       if (controller.signal.aborted || dashboardRequest.current !== controller) return;
       setDashboardState({
@@ -488,35 +476,6 @@ function LivePortfolio({ portfolio, reloadPortfolio }: LivePortfolioProps) {
     portfolio.leagues.flatMap((league) => (league.season ? [league.season.provider] : [])),
   );
 
-  async function claimTeam() {
-    if (!claimChoice || !currentDashboard) return;
-    setClaimState("saving");
-    setClaimMessage("");
-    try {
-      const response = await fetch(
-        `${apiBaseUrl}/v1/leagues/${encodeURIComponent(currentDashboard.league.id)}/team-claim`,
-        {
-          method: "POST",
-          credentials: "include",
-          headers: { Accept: "application/json", "Content-Type": "application/json" },
-          body: JSON.stringify({ teamId: claimChoice }),
-        },
-      );
-      if (!response.ok) {
-        const problem = (await response.json().catch(() => null)) as { detail?: unknown } | null;
-        throw new Error(
-          typeof problem?.detail === "string" ? problem.detail : "That team could not be claimed.",
-        );
-      }
-      setClaimState("saved");
-      setClaimMessage("Team claim saved.");
-      await Promise.all([loadDashboard(), reloadPortfolio()]);
-    } catch (error) {
-      setClaimState("error");
-      setClaimMessage(error instanceof Error ? error.message : "That team could not be claimed.");
-    }
-  }
-
   async function checkPlayerCatalog() {
     if (sourceRefreshState === "working") return;
     setSourceRefreshState("working");
@@ -628,7 +587,7 @@ function LivePortfolio({ portfolio, reloadPortfolio }: LivePortfolioProps) {
           <div>
             <span>Team identities</span>
             <strong>
-              {claimedLeagues}/{portfolio.leagues.length} claimed
+              {claimedLeagues}/{portfolio.leagues.length} set
             </strong>
           </div>
         </article>
@@ -681,8 +640,6 @@ function LivePortfolio({ portfolio, reloadPortfolio }: LivePortfolioProps) {
                     setDashboardState({ status: "loading" });
                   }
                   setSelectedLeagueId(league.id);
-                  setClaimState("idle");
-                  setClaimMessage("");
                 }}
               >
                 <div className="league-card__top">
@@ -746,15 +703,7 @@ function LivePortfolio({ portfolio, reloadPortfolio }: LivePortfolioProps) {
           </button>
         </section>
       ) : (
-        <LeagueDetail
-          dashboard={dashboardState.dashboard}
-          claimChoice={claimChoice}
-          setClaimChoice={setClaimChoice}
-          claimState={claimState}
-          claimMessage={claimMessage}
-          claimTeam={() => void claimTeam()}
-          onTeamClaimed={() => void Promise.all([loadDashboard(), reloadPortfolio()])}
-        />
+        <LeagueDetail dashboard={dashboardState.dashboard} />
       )}
     </div>
   );
@@ -762,12 +711,6 @@ function LivePortfolio({ portfolio, reloadPortfolio }: LivePortfolioProps) {
 
 interface LeagueDetailProps {
   readonly dashboard: LeagueDashboard;
-  readonly claimChoice: string;
-  readonly setClaimChoice: (teamId: string) => void;
-  readonly claimState: "idle" | "saving" | "saved" | "error";
-  readonly claimMessage: string;
-  readonly claimTeam: () => void;
-  readonly onTeamClaimed: () => void;
 }
 
 function MemberWeekPanel({ dashboard }: { readonly dashboard: LeagueDashboard }) {
@@ -775,10 +718,10 @@ function MemberWeekPanel({ dashboard }: { readonly dashboard: LeagueDashboard })
   if (context.state !== "available") {
     const message =
       context.state === "team-unclaimed"
-        ? "Claim your team to see opponent context."
+        ? "Select your team in Settings to see opponent context."
         : context.state === "week-unavailable"
           ? "The provider snapshot does not identify a current week yet."
-          : "No matchup was stored for your claimed team this week. This may be a bye or a provider data gap.";
+          : "No matchup was stored for your team this week. This may be a bye or a provider data gap.";
     return (
       <section className="panel live-opponent-panel live-opponent-panel--empty">
         <div>
@@ -1109,35 +1052,29 @@ function StandingsPanel({ dashboard }: { readonly dashboard: LeagueDashboard }) 
   );
 }
 
-function LeagueDetail({
-  dashboard,
-  claimChoice,
-  setClaimChoice,
-  claimState,
-  claimMessage,
-  claimTeam,
-  onTeamClaimed,
-}: LeagueDetailProps) {
+function LeagueDetail({ dashboard }: LeagueDetailProps) {
   const claimedTeam = dashboard.teams.find((team) => team.claimStatus === "current-user");
-  const selectableTeams = dashboard.teams.filter(
-    (team) => team.claimStatus === "current-user" || team.claimStatus === "available",
-  );
   const unclaimed = leagueIsUnclaimed(dashboard);
   const claimHeading = claimedTeam
     ? claimedTeam.name
     : dashboard.teamClaim.mode === "provider-mapped"
-      ? "Confirm your Yahoo team"
+      ? dashboard.teamClaim.claimableTeamName
       : dashboard.teamClaim.mode === "unavailable"
         ? "Team identity unavailable"
-        : "Claim your team";
+        : "Team not selected";
+  const providerMatchState = providerMappedTeamState(dashboard);
+  const providerMatchConflict = providerMatchState === "conflict";
   const claimBadge =
     dashboard.teamClaim.mode === "provider-mapped"
-      ? "Yahoo mapped"
+      ? providerMatchConflict
+        ? "Team match conflict"
+        : providerMatchState === "matched"
+          ? `${providerLabel(dashboard.teamClaim.provider)} matched`
+          : `${providerLabel(dashboard.teamClaim.provider)} match found`
       : dashboard.teamClaim.mode === "self-asserted"
-        ? "Self-asserted"
-        : "Claim retained";
-  const selectedTeam =
-    claimedTeam ?? dashboard.teams.find((team) => team.id === claimChoice) ?? dashboard.teams[0];
+        ? "Selected manually"
+        : "Team selected";
+  const selectedTeam = resolvedMemberTeam(dashboard);
   const roster = selectedTeam?.latestRoster?.players ?? [];
   const starters = roster.filter((player) => player.isStarter);
   const bench = roster.filter((player) => !player.isStarter);
@@ -1167,14 +1104,6 @@ function LeagueDetail({
             </p>
           ))}
         </div>
-      ) : null}
-
-      {unclaimed ? (
-        <TeamClaimCallout
-          leagueId={dashboard.league.id}
-          dashboard={dashboard}
-          onClaimed={onTeamClaimed}
-        />
       ) : null}
 
       <div className="live-overview-grid">
@@ -1212,67 +1141,56 @@ function LeagueDetail({
               <p className="eyebrow">Your team identity</p>
               <h3>{claimHeading}</h3>
             </div>
-            {claimedTeam ? (
-              <span className="status-chip status-chip--live">
-                <CheckCircle2 size={13} /> {claimBadge}
+            {claimedTeam || dashboard.teamClaim.mode === "provider-mapped" ? (
+              <span
+                className={`status-chip ${
+                  providerMatchConflict ? "status-chip--warning" : "status-chip--live"
+                }`}
+              >
+                {providerMatchConflict ? (
+                  <CircleAlert size={13} aria-hidden="true" />
+                ) : (
+                  <CheckCircle2 size={13} aria-hidden="true" />
+                )}{" "}
+                {claimBadge}
               </span>
             ) : null}
           </div>
           <p className="live-claim-explainer">{dashboard.teamClaim.explanation}</p>
-          {/* Unclaimed leagues get exactly one claim form: the TeamClaimCallout above. This
-              panel's own form only reappears once a team is claimed, for the switch flow. */}
-          {!unclaimed && selectableTeams.length > 0 ? (
-            <div className="live-claim-form">
-              <label htmlFor="team-claim">Fantasy team</label>
-              <select
-                id="team-claim"
-                value={claimChoice}
-                onChange={(event) => setClaimChoice(event.target.value)}
-              >
-                {selectableTeams.map((team) => (
-                  <option value={team.id} key={team.id}>
-                    {team.name}
-                    {team.managerDisplayName ? ` · ${team.managerDisplayName}` : ""}
-                  </option>
-                ))}
-              </select>
-              <button
-                className="button button--dark"
-                type="button"
-                disabled={
-                  !claimChoice || claimState === "saving" || claimChoice === claimedTeam?.id
-                }
-                onClick={claimTeam}
-              >
-                {claimState === "saving" ? <LoaderCircle className="spin" size={15} /> : null}
-                {dashboard.teamClaim.mode === "provider-mapped"
-                  ? "Confirm Yahoo team"
-                  : claimedTeam
-                    ? "Switch team"
-                    : "Claim this team"}
-              </button>
+          {selectedTeam ? (
+            <>
+              <div className="live-roster-meta">
+                <span>FAAB: {selectedTeam.faabRemaining ?? "—"}</span>
+                <span>Waiver priority: {selectedTeam.waiverPriority ?? "—"}</span>
+                <span>
+                  Roster as of{" "}
+                  {selectedTeam.latestRoster?.effectiveAt
+                    ? new Date(selectedTeam.latestRoster.effectiveAt).toLocaleString()
+                    : "—"}
+                </span>
+              </div>
+              <div className="live-roster-columns">
+                <RosterGroup label="Starters" players={starters} />
+                <RosterGroup label="Bench / reserve" players={bench} />
+              </div>
+            </>
+          ) : (
+            <div className="live-team-empty">
+              <p>
+                {providerMatchConflict
+                  ? "This provider-matched team is already assigned to another member."
+                  : unclaimed && dashboard.teamClaim.mode === "self-asserted"
+                    ? "Select your team to see its FAAB, waiver position, and roster here."
+                    : "Your team cannot be shown until the provider identity is resolved."}
+              </p>
+              <Link className="live-team-settings-link" href="/settings#teams">
+                {unclaimed && dashboard.teamClaim.mode === "self-asserted"
+                  ? "Select team in Settings"
+                  : "Review team identity in Settings"}{" "}
+                <ArrowRight size={13} aria-hidden="true" />
+              </Link>
             </div>
-          ) : null}
-          {claimMessage ? (
-            <p className={`live-claim-message live-claim-message--${claimState}`} role="status">
-              {claimMessage}
-            </p>
-          ) : null}
-
-          <div className="live-roster-meta">
-            <span>FAAB: {selectedTeam?.faabRemaining ?? "—"}</span>
-            <span>Waiver priority: {selectedTeam?.waiverPriority ?? "—"}</span>
-            <span>
-              Roster as of{" "}
-              {selectedTeam?.latestRoster?.effectiveAt
-                ? new Date(selectedTeam.latestRoster.effectiveAt).toLocaleString()
-                : "—"}
-            </span>
-          </div>
-          <div className="live-roster-columns">
-            <RosterGroup label="Starters" players={starters} />
-            <RosterGroup label="Bench / reserve" players={bench} />
-          </div>
+          )}
         </section>
       </div>
     </section>

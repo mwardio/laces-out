@@ -189,7 +189,12 @@ export class EspnSessionSyncService {
     };
     let coreReceipt;
     try {
-      const bundle = normalizeEspnWebClientSnapshot(coreEnvelope);
+      // The SWID is the authenticated ESPN member identity for this encrypted server session.
+      // It is supplied only as normalizer context: the connector may mark one exact owner-matched
+      // team as current, but the credential itself never enters the normalized bundle or storage.
+      const bundle = normalizeEspnWebClientSnapshot(coreEnvelope, {
+        activeMemberId: credential.swid,
+      });
       coreReceipt = await this.#persistence.persist({
         authority,
         bundle,

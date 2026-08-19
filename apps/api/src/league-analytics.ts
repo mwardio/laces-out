@@ -1372,13 +1372,16 @@ function buildOpponentAnalytics(input: {
 }): LeagueOpponentScoutSection {
   if (!input.claimedTeamId) {
     return unavailable(
-      reason("TEAM_UNCLAIMED", "Claim your fantasy team to receive a current-opponent scout."),
+      reason(
+        "TEAM_UNCLAIMED",
+        "Select your fantasy team in Settings to receive a current-opponent scout.",
+      ),
     );
   }
   const subject = input.teams.find((team) => team.id === input.claimedTeamId);
   if (!subject) {
     return unavailable(
-      reason("TEAM_UNCLAIMED", "The claimed team is not part of the latest league season."),
+      reason("TEAM_UNCLAIMED", "The selected team is not part of the latest league season."),
     );
   }
   if (input.currentWeek === null) {

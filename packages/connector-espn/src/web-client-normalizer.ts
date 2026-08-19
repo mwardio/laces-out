@@ -828,6 +828,11 @@ export interface NormalizeEspnWebClientSnapshotOptions {
   readonly capturedAt?: string;
   readonly endpoint?: string | null;
   readonly checksumSha256?: string | null;
+  /**
+   * The authenticated ESPN member identifier, normally the SWID captured by a server-session
+   * connection. It is used only for an exact team-owner match and is never copied into warnings.
+   */
+  readonly activeMemberId?: string | null;
 }
 
 interface ReadInputResult {
@@ -908,6 +913,18 @@ function sanitizedIssues(
         ? issue.message
         : `Value did not match the expected ESPN web-client v${ESPN_WEB_CLIENT_CONTRACT_VERSION} shape`,
   }));
+}
+
+function activeMemberIdFromOptions(options: NormalizeEspnWebClientSnapshotOptions): string | null {
+  const result = z.union([memberIdSchema, z.null()]).optional().safeParse(options.activeMemberId);
+  if (!result.success) {
+    throw new EspnWebClientNormalizationError({
+      code: "INVALID_METADATA",
+      message: "ESPN active-member metadata is invalid",
+      issues: sanitizedIssues(result.error, "INVALID_METADATA"),
+    });
+  }
+  return result.data ?? null;
 }
 
 function validateEndpoint(endpoint: string, leagueId: string, season: number): void {
@@ -1162,6 +1179,59 @@ function normalizeTeam(
   };
 }
 
+const canonicalEspnMemberGuidPattern =
+  /^(?:\{([0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})\}|([0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}))$/iu;
+
+/**
+ * ESPN has emitted the same member GUID with different hex casing, and SWID conventionally wraps
+ * it in braces. Canonicalize only that understood representation; opaque member IDs retain exact
+ * case and punctuation so this never becomes a fuzzy manager-name match.
+ */
+function canonicalEspnMemberId(value: string): string {
+  const match = canonicalEspnMemberGuidPattern.exec(value);
+  return (match?.[1] ?? match?.[2])?.toLowerCase() ?? value;
+}
+
+function identifyCurrentUserTeam(
+  teams: readonly NormalizedTeam[],
+  activeMemberId: string | null,
+): { readonly teams: readonly NormalizedTeam[]; readonly warning: string | null } {
+  if (activeMemberId === null) {
+    return {
+      teams,
+      warning:
+        "The snapshot does not identify the active ESPN member, so isCurrentUser is false for every team.",
+    };
+  }
+
+  const canonicalActiveMemberId = canonicalEspnMemberId(activeMemberId);
+  const matches = teams.filter((team) =>
+    team.managers.some(
+      (manager) =>
+        manager.externalId !== null &&
+        canonicalEspnMemberId(manager.externalId) === canonicalActiveMemberId,
+    ),
+  );
+  if (matches.length !== 1) {
+    return {
+      teams,
+      warning:
+        matches.length === 0
+          ? "The active ESPN member did not match a team owner, so isCurrentUser is false for every team."
+          : "The active ESPN member matched multiple team owners, so isCurrentUser is false for every team.",
+    };
+  }
+
+  const currentUserTeamId = matches[0]?.externalId;
+  return {
+    teams: teams.map((team) => ({
+      ...team,
+      isCurrentUser: team.externalId === currentUserTeamId,
+    })),
+    warning: null,
+  };
+}
+
 function normalizedLimit(value: number | undefined): number | null {
   return value === undefined || value < 0 ? null : value;
 }
@@ -1408,6 +1478,7 @@ export function normalizeEspnWebClientSnapshot(
   options: NormalizeEspnWebClientSnapshotOptions = {},
 ): LeagueSyncBundle {
   const source = sourceFromInput(readBoundedInput(input), options);
+  const activeMemberId = activeMemberIdFromOptions(options);
   const payloadResult = espnWebClientPayloadV1Schema.safeParse(source.payload);
   if (!payloadResult.success) {
     throw new EspnWebClientNormalizationError({
@@ -1439,10 +1510,22 @@ export function normalizeEspnWebClientSnapshot(
   const members = new Map(payload.members.map((member) => [member.id, member]));
   const acquisitionSettings = payload.settings.acquisitionSettings;
   const scoringRules = normalizeScoringRules(payload.settings.scoringSettings.scoringItems);
+  const leagueId = payload.id;
+  const season = payload.seasonId;
+  const normalizedTeams = payload.teams.map((team) =>
+    normalizeTeam(
+      team,
+      members,
+      leagueId,
+      season,
+      acquisitionSettings.isUsingAcquisitionBudget ? acquisitionSettings.acquisitionBudget : null,
+    ),
+  );
+  const currentUserTeam = identifyCurrentUserTeam(normalizedTeams, activeMemberId);
   const warnings = [
     "ESPN web-client contract v1 is unofficial and can drift; requested settings, team, roster, standings, and matchup shapes were validated before normalization.",
-    "This parser performs no network requests and receives no ESPN cookies or credentials.",
-    "The snapshot does not identify the active ESPN member, so isCurrentUser is false for every team.",
+    "This parser performs no network requests; provider access and session-secret handling remain outside normalization.",
+    ...(currentUserTeam.warning ? [currentUserTeam.warning] : []),
   ];
   if (payload.members.some((member) => member.isLeagueManager === undefined)) {
     warnings.push(
@@ -1475,8 +1558,6 @@ export function normalizeEspnWebClientSnapshot(
     );
   }
 
-  const leagueId = payload.id;
-  const season = payload.seasonId;
   const standings = normalizeStandings(payload);
   const matchups = normalizeMatchups(payload);
   return {
@@ -1517,15 +1598,7 @@ export function normalizeEspnWebClientSnapshot(
         operationalRules: operationalRules(payload.settings),
       },
     },
-    teams: payload.teams.map((team) =>
-      normalizeTeam(
-        team,
-        members,
-        leagueId,
-        season,
-        acquisitionSettings.isUsingAcquisitionBudget ? acquisitionSettings.acquisitionBudget : null,
-      ),
-    ),
+    teams: currentUserTeam.teams,
     ...(standings === undefined ? {} : { standings }),
     ...(matchups === undefined ? {} : { matchups }),
     provenance: {

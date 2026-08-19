@@ -791,7 +791,9 @@ restore access controls, account export exclusion, and member disconnect. Treat 
 backup containing a provider credential envelope as credential-bearing. Canary one account, verify
 an accepted and unchanged sync, force a 401/403 to verify **reauthorization required**, renew from
 the paired client, and remove the connection from League Sync. Neither enabling nor deleting this
-connection may create a league, membership, or team claim.
+connection may create a league or membership. A later authenticated core sync may fill an
+empty team selection only when the session SWID matches exactly one ESPN team owner; it must not
+overwrite an existing or conflicting selection.
 
 Safe rollout order:
 

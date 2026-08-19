@@ -105,12 +105,12 @@ This application will hold access to real fantasy accounts. Treat it like a smal
   and provider availability. Weekly Reckoning additionally requires the current provider, week, and
   exact Mild tone to match the prepared request, which the server rechecks before generation. A
   changed recap binding fails closed.
-- Every league read and team claim is membership-scoped; private rankings, notes, credentials, and
-  recommendation settings are user-owned unless explicitly shared. Yahoo claims additionally
-  require the exact, unambiguous current-user team key stored on that authenticated user's own
-  provider-to-league link. ESPN bridge team claims remain visibly self-asserted because those
-  sources do not safely identify the signed-in manager. A claim conflict never authorizes a sync
-  job to replace historical ownership.
+- Every league read and team selection is membership-scoped; private rankings, notes, credentials,
+  and recommendation settings are user-owned unless explicitly shared. Yahoo and authenticated
+  ESPN server-session mappings require one exact current-user team key stored on that user's own
+  provider-to-league link. ESPN bridge and public snapshots remain visibly self-asserted because
+  those sources do not safely identify the signed-in manager. A missing or ambiguous mapping fails
+  closed, and a conflict never authorizes a sync job to replace historical ownership.
 - Operator-managed Gemini and OpenRouter keys are read only from the API server's `GEMINI_API_KEY`
   and `OPENROUTER_API_KEY` environment values. They are never compiled into the web image, returned
   by an endpoint, or persisted in PostgreSQL. Film Room member keys are write-only through

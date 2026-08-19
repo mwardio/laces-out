@@ -1337,7 +1337,7 @@ export function LeagueAnalyticsWorkbench() {
             analytics.snapshot.power.state === "available" &&
             analytics.snapshot.power.rankings.some((ranking) => ranking.team.isCurrentUser)
           ) ? (
-            <TeamClaimCallout leagueId={leagueId} onClaimed={() => void loadAnalytics()} />
+            <TeamClaimCallout leagueId={leagueId} />
           ) : null}
           <div className={styles.snapshotTitle}>
             <div>
@@ -1350,7 +1350,7 @@ export function LeagueAnalyticsWorkbench() {
             </div>
             <span>
               Generated {dateTime(analytics.snapshot.generatedAt)} ·{" "}
-              {analytics.snapshot.membership.claimedTeamName ?? "No team claimed"}
+              {analytics.snapshot.membership.claimedTeamName ?? "No team selected"}
             </span>
           </div>
           <AnalyticsQuickRead snapshot={analytics.snapshot} />

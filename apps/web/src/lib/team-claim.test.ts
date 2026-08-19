@@ -5,7 +5,10 @@ import {
   claimCalloutMode,
   defaultClaimChoice,
   leagueIsUnclaimed,
+  providerMappedTeamState,
+  resolvedMemberTeam,
   selectableClaimTeams,
+  settingsTeamChoice,
 } from "./team-claim";
 
 const freshness = { state: "fresh", observedAt: null, label: "Fresh" } as const;
@@ -206,25 +209,130 @@ describe("defaultClaimChoice", () => {
   });
 });
 
+describe("settingsTeamChoice", () => {
+  it("targets an exact provider match when an older selection differs", () => {
+    const dash = dashboard({
+      membership: {
+        role: "manager",
+        claimedFantasyTeamId: "team-a",
+        claimedTeamName: "Team One",
+        claimedAt: "2026-07-01T00:00:00.000Z",
+      },
+      teamClaim: {
+        mode: "provider-mapped",
+        provider: "espn",
+        claimableTeamId: "team-b",
+        claimableTeamName: "Team Two",
+        explanation: "ESPN matched Team Two.",
+      },
+      teams: [
+        team({ id: "team-a", claimStatus: "current-user" }),
+        team({ id: "team-b", claimStatus: "available" }),
+      ],
+    });
+
+    expect(settingsTeamChoice(dash)).toBe("team-b");
+  });
+});
+
+describe("providerMappedTeamState", () => {
+  it("marks a provider target assigned to another member as a conflict", () => {
+    const dash = dashboard({
+      teamClaim: {
+        mode: "provider-mapped",
+        provider: "espn",
+        claimableTeamId: "team-b",
+        claimableTeamName: "Team Two",
+        explanation: "ESPN matched Team Two.",
+      },
+      teams: [team({ id: "team-b", claimStatus: "taken" })],
+    });
+
+    expect(providerMappedTeamState(dash)).toBe("conflict");
+  });
+
+  it("marks the current member's provider target as matched", () => {
+    const dash = dashboard({
+      membership: {
+        role: "manager",
+        claimedFantasyTeamId: "team-b",
+        claimedTeamName: "Team Two",
+        claimedAt: "2026-07-01T00:00:00.000Z",
+      },
+      teamClaim: {
+        mode: "provider-mapped",
+        provider: "yahoo",
+        claimableTeamId: "team-b",
+        claimableTeamName: "Team Two",
+        explanation: "Yahoo matched Team Two.",
+      },
+      teams: [team({ id: "team-b", claimStatus: "current-user" })],
+    });
+
+    expect(providerMappedTeamState(dash)).toBe("matched");
+  });
+});
+
+describe("resolvedMemberTeam", () => {
+  it("does not present the first league team as the member's team when identity is unresolved", () => {
+    const firstTeam = team({ id: "team-a", claimStatus: "available" });
+    expect(resolvedMemberTeam(dashboard({ teams: [firstTeam] }))).toBeUndefined();
+  });
+
+  it("uses a non-conflicting exact provider match", () => {
+    const mappedTeam = team({ id: "team-b", claimStatus: "available" });
+    const dash = dashboard({
+      teamClaim: {
+        mode: "provider-mapped",
+        provider: "espn",
+        claimableTeamId: "team-b",
+        claimableTeamName: "Team Two",
+        explanation: "ESPN matched Team Two.",
+      },
+      teams: [team({ id: "team-a", claimStatus: "not-claimable" }), mappedTeam],
+    });
+
+    expect(resolvedMemberTeam(dash)).toBe(mappedTeam);
+  });
+
+  it("does not present a provider match assigned to another member as the member's team", () => {
+    const dash = dashboard({
+      teamClaim: {
+        mode: "provider-mapped",
+        provider: "yahoo",
+        claimableTeamId: "team-b",
+        claimableTeamName: "Team Two",
+        explanation: "Yahoo matched Team Two.",
+      },
+      teams: [team({ id: "team-b", claimStatus: "taken" })],
+    });
+
+    expect(resolvedMemberTeam(dash)).toBeUndefined();
+  });
+});
+
 describe("claimCalloutMode", () => {
   it("is 'choose' for a self-asserted unclaimed league", () => {
     const dash = dashboard({ teams: [team({ id: "team-a", claimStatus: "available" })] });
     expect(claimCalloutMode(dash)).toBe("choose");
   });
 
-  it("is 'confirm-provider' for a provider-mapped unclaimed league", () => {
-    const dash = dashboard({
-      teamClaim: {
-        mode: "provider-mapped",
-        provider: "yahoo",
-        claimableTeamId: "team-a",
-        claimableTeamName: "Team One",
-        explanation: "Yahoo says this is your team.",
-      },
-      teams: [team({ id: "team-a", claimStatus: "available" })],
-    });
-    expect(claimCalloutMode(dash)).toBe("confirm-provider");
-  });
+  it.each(["espn", "yahoo"] as const)(
+    "is 'hidden' for a provider-mapped unclaimed %s league",
+    (provider) => {
+      const dash = dashboard({
+        teamClaim: {
+          mode: "provider-mapped",
+          provider,
+          claimableTeamId: "team-a",
+          claimableTeamName: "Team One",
+          explanation: `${provider} says this is your team.`,
+        },
+        teams: [team({ id: "team-a", claimStatus: "available" })],
+      });
+      expect(claimCalloutMode(dash)).toBe("hidden");
+    },
+  );
 
   it("preselects the provider-mapped team via defaultClaimChoice", () => {
     const dash = dashboard({

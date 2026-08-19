@@ -66,6 +66,7 @@ interface FixtureEnvelope {
       id: string;
       logo?: string | null;
       owners: string[];
+      primaryOwner?: string | null;
       playoffSeed?: number;
       waiverRank?: number;
       transactionCounter?: { acquisitionBudgetSpent?: number };
@@ -299,6 +300,44 @@ describe("ESPN web-client snapshot normalizer", () => {
       displayName: "Avery Example",
       fullName: null,
     });
+  });
+
+  it("identifies exactly one current-user team from the active ESPN member GUID", () => {
+    const value = parsedFixture();
+    const ownerId = "{123E4567-E89B-42D3-A456-426614174000}";
+    value.payload.members[0]!.id = ownerId;
+    value.payload.teams[0]!.owners = [ownerId];
+    value.payload.teams[0]!.primaryOwner = ownerId;
+
+    const bundle = normalizeEspnWebClientSnapshot(value, {
+      // SWID casing and conventional braces do not change the underlying ESPN member GUID.
+      activeMemberId: "123e4567-e89b-42d3-a456-426614174000",
+    });
+
+    expect(bundle.teams.map((team) => team.isCurrentUser)).toEqual([true, false]);
+    expect(bundle.warnings.join(" ")).not.toContain("isCurrentUser is false");
+  });
+
+  it("fails closed without leaking an unmatched active ESPN member ID", () => {
+    const activeMemberId = "private-current-member-not-in-this-league";
+    const bundle = normalizeEspnWebClientSnapshot(parsedFixture(), { activeMemberId });
+
+    expect(bundle.teams.every((team) => !team.isCurrentUser)).toBe(true);
+    expect(bundle.warnings.join(" ")).toContain("did not match a team owner");
+    expect(bundle.warnings.join(" ")).not.toContain(activeMemberId);
+  });
+
+  it("fails closed without leaking an active ESPN member ID that owns multiple teams", () => {
+    const value = parsedFixture();
+    const activeMemberId = value.payload.members[0]!.id;
+    value.payload.teams[1]!.owners = [activeMemberId];
+    value.payload.teams[1]!.primaryOwner = activeMemberId;
+
+    const bundle = normalizeEspnWebClientSnapshot(value, { activeMemberId });
+
+    expect(bundle.teams.every((team) => !team.isCurrentUser)).toBe(true);
+    expect(bundle.warnings.join(" ")).toContain("matched multiple team owners");
+    expect(bundle.warnings.join(" ")).not.toContain(activeMemberId);
   });
 
   it("preserves 20-digit provider team IDs across teams, standings, and matchup sides", () => {

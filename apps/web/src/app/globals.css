@@ -2394,6 +2394,14 @@
     color: #285722;
   }
 
+  .status-chip--warning {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    background: #fff2d6;
+    color: #714b04;
+  }
+
   .live-notice-list {
     display: grid;
     gap: 0.5rem;
@@ -2789,40 +2797,35 @@
     line-height: 1.5;
   }
 
-  .live-claim-form {
-    display: grid;
-    grid-template-columns: minmax(8rem, 1fr) auto;
-    gap: 0.45rem 0.7rem;
-    padding: 0.8rem;
-    border-radius: 0.7rem;
-    background: #f4f6f2;
-  }
-
-  .live-claim-form label {
-    grid-column: 1 / -1;
-    font-size: 0.75rem;
-    font-weight: 700;
-  }
-
-  .live-claim-form select {
-    min-width: 0;
-    padding: 0.65rem 0.7rem;
-    border: 1px solid var(--line);
-    border-radius: 0.5rem;
-    background: white;
-  }
-
-  .live-claim-message {
-    margin: 0.55rem 0 0;
+  .live-team-settings-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    color: var(--ink-700);
     font-size: 0.8rem;
+    font-weight: 750;
+    text-decoration: none;
   }
 
-  .live-claim-message--saved {
-    color: #28702f;
+  .live-team-settings-link:hover {
+    color: var(--ink-900);
+    text-decoration: underline;
   }
 
-  .live-claim-message--error {
-    color: #a72e22;
+  .live-team-empty {
+    display: grid;
+    gap: 0.55rem;
+    padding: 0.85rem;
+    border: 1px dashed var(--line);
+    border-radius: 0.65rem;
+    background: #f8faf6;
+  }
+
+  .live-team-empty p {
+    margin: 0;
+    color: var(--muted);
+    font-size: 0.8rem;
+    line-height: 1.5;
   }
 
   .live-roster-meta {
@@ -3163,7 +3166,6 @@
 
     .live-overview-grid,
     .live-roster-columns,
-    .live-claim-form,
     .live-weekly-metrics,
     .live-scoreboard-grid,
     .live-opponent-score {

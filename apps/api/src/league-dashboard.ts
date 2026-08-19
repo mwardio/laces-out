@@ -184,6 +184,7 @@ export interface LeagueDashboardRepository {
   listProviderTeamMappings(
     userId: string,
     leagueSeasonId: string,
+    provider: Extract<Provider, "espn" | "yahoo">,
   ): Promise<readonly ProviderTeamMappingRow[]>;
   listLatestRosterCandidates(leagueSeasonId: string): Promise<readonly RosterSnapshotRow[]>;
   listRosterEntries(snapshotIds: readonly string[]): Promise<readonly RosterEntryRow[]>;
@@ -207,6 +208,24 @@ function isUniqueViolation(error: unknown): boolean {
     "code" in error &&
     (error as { readonly code?: unknown }).code === "23505"
   );
+}
+
+function exactProviderTeamMapping(
+  mappings: readonly ProviderTeamMappingRow[],
+): { readonly teamId: string; readonly teamName: string } | null {
+  const externalKeys = new Set(
+    mappings.flatMap((mapping) => (mapping.externalKey ? [mapping.externalKey] : [])),
+  );
+  const mappedTeams = new Map(
+    mappings.flatMap((mapping) =>
+      mapping.externalKey && mapping.teamId && mapping.teamName
+        ? [[mapping.teamId, mapping.teamName] as const]
+        : [],
+    ),
+  );
+  if (externalKeys.size !== 1 || mappedTeams.size !== 1) return null;
+  const [mapped] = [...mappedTeams];
+  return mapped ? { teamId: mapped[0], teamName: mapped[1] } : null;
 }
 
 export class DrizzleLeagueDashboardRepository implements LeagueDashboardRepository {
@@ -295,6 +314,7 @@ export class DrizzleLeagueDashboardRepository implements LeagueDashboardReposito
   async listProviderTeamMappings(
     userId: string,
     leagueSeasonId: string,
+    provider: Extract<Provider, "espn" | "yahoo">,
   ): Promise<readonly ProviderTeamMappingRow[]> {
     return this.#database
       .select({
@@ -315,7 +335,7 @@ export class DrizzleLeagueDashboardRepository implements LeagueDashboardReposito
         and(
           eq(providerLeagueLinks.leagueSeasonId, leagueSeasonId),
           eq(providerConnections.userId, userId),
-          eq(providerConnections.provider, "yahoo"),
+          eq(providerConnections.provider, provider),
         ),
       );
   }
@@ -510,32 +530,41 @@ export class DrizzleLeagueDashboardRepository implements LeagueDashboardReposito
           .select({
             id: fantasyTeams.id,
             name: fantasyTeams.name,
-            externalKey: fantasyTeams.externalKey,
           })
           .from(fantasyTeams)
           .where(and(eq(fantasyTeams.id, teamId), eq(fantasyTeams.leagueSeasonId, season.id)))
           .limit(1);
         if (!team) return { state: "invalid-team" } as const;
 
-        if (season.provider === "yahoo") {
+        if (season.provider === "espn" || season.provider === "yahoo") {
           const mappingRows = await transaction
-            .select({ externalKey: providerLeagueLinks.currentUserTeamExternalKey })
+            .select({
+              externalKey: providerLeagueLinks.currentUserTeamExternalKey,
+              teamId: fantasyTeams.id,
+              teamName: fantasyTeams.name,
+            })
             .from(providerLeagueLinks)
             .innerJoin(
               providerConnections,
               eq(providerConnections.id, providerLeagueLinks.connectionId),
             )
+            .leftJoin(
+              fantasyTeams,
+              and(
+                eq(fantasyTeams.leagueSeasonId, providerLeagueLinks.leagueSeasonId),
+                eq(fantasyTeams.externalKey, providerLeagueLinks.currentUserTeamExternalKey),
+              ),
+            )
             .where(
               and(
                 eq(providerLeagueLinks.leagueSeasonId, season.id),
                 eq(providerConnections.userId, userId),
-                eq(providerConnections.provider, "yahoo"),
+                eq(providerConnections.provider, season.provider),
               ),
             );
-          const mappedKeys = new Set(
-            mappingRows.flatMap((row) => (row.externalKey ? [row.externalKey] : [])),
-          );
-          if (mappedKeys.size !== 1 || !mappedKeys.has(team.externalKey)) {
+          const exactMapping = exactProviderTeamMapping(mappingRows);
+          const mappingIsRequired = season.provider === "yahoo" || exactMapping !== null;
+          if (mappingIsRequired && exactMapping?.teamId !== team.id) {
             return { state: "provider-mismatch" } as const;
           }
         }
@@ -626,16 +655,6 @@ function teamClaimPolicy(
   provider: Provider | null,
   mappings: readonly ProviderTeamMappingRow[],
 ): TeamClaimPolicy {
-  if (provider === "espn") {
-    return {
-      mode: "self-asserted",
-      provider,
-      claimableTeamId: null,
-      claimableTeamName: null,
-      explanation:
-        "ESPN snapshots do not verify which manager is signed in. Select your own team; this identity is self-asserted in Laces Out.",
-    };
-  }
   if (provider === "manual") {
     return {
       mode: "self-asserted",
@@ -643,31 +662,29 @@ function teamClaimPolicy(
       claimableTeamId: null,
       claimableTeamName: null,
       explanation:
-        "This league has no provider account mapping. Select your own team; this identity is self-asserted in Laces Out.",
+        "Laces Out cannot match a provider account for this league. Select your team in Settings.",
     };
   }
-  if (provider === "yahoo") {
-    const externalKeys = new Set(
-      mappings.flatMap((mapping) => (mapping.externalKey ? [mapping.externalKey] : [])),
-    );
-    const mappedTeams = new Map(
-      mappings.flatMap((mapping) =>
-        mapping.externalKey && mapping.teamId && mapping.teamName
-          ? [[mapping.teamId, mapping.teamName] as const]
-          : [],
-      ),
-    );
-    if (externalKeys.size === 1 && mappedTeams.size === 1) {
-      const [mapped] = [...mappedTeams];
-      if (mapped) {
-        return {
-          mode: "provider-mapped",
-          provider,
-          claimableTeamId: mapped[0],
-          claimableTeamName: mapped[1],
-          explanation: `Yahoo identifies ${mapped[1]} as the team owned by this connected account. Only that mapped team can be claimed.`,
-        };
-      }
+  if (provider === "espn" || provider === "yahoo") {
+    const mapped = exactProviderTeamMapping(mappings);
+    if (mapped) {
+      return {
+        mode: "provider-mapped",
+        provider,
+        claimableTeamId: mapped.teamId,
+        claimableTeamName: mapped.teamName,
+        explanation: `${provider === "espn" ? "ESPN" : "Yahoo"} identifies ${mapped.teamName} as the team owned by this connected account.`,
+      };
+    }
+    if (provider === "espn") {
+      return {
+        mode: "self-asserted",
+        provider,
+        claimableTeamId: null,
+        claimableTeamName: null,
+        explanation:
+          "ESPN did not return one exact team for this connected account. Select your own team in Settings.",
+      };
     }
     return {
       mode: "unavailable",
@@ -675,7 +692,7 @@ function teamClaimPolicy(
       claimableTeamId: null,
       claimableTeamName: null,
       explanation:
-        "Yahoo did not return one unambiguous current-user team for this connected account. Refresh the Yahoo league before claiming a team.",
+        "Yahoo did not return one unambiguous current-user team for this connected account. Refresh the Yahoo league before selecting a team.",
     };
   }
   return {
@@ -683,7 +700,7 @@ function teamClaimPolicy(
     provider: null,
     claimableTeamId: null,
     claimableTeamName: null,
-    explanation: "Sync a provider season before claiming a fantasy team.",
+    explanation: "Sync a provider season before selecting a fantasy team.",
   };
 }
 
@@ -1085,11 +1102,24 @@ export class LeagueDashboardService {
       this.#repository.findLatestSyncRun(season.id),
       this.#repository.findLatestStandingsSnapshot(season.id),
       this.#repository.findLatestMatchupSnapshot(season.id),
-      season.provider === "yahoo"
-        ? this.#repository.listProviderTeamMappings(userId, season.id)
+      season.provider === "espn" || season.provider === "yahoo"
+        ? this.#repository.listProviderTeamMappings(userId, season.id, season.provider)
         : Promise.resolve([]),
     ]);
-    const claimPolicy = teamClaimPolicy(season.provider, providerTeamMappings);
+    const providerPolicy = teamClaimPolicy(season.provider, providerTeamMappings);
+    const claimed = new Set(claimedTeamIds);
+    const claimPolicy: TeamClaimPolicy =
+      providerPolicy.mode === "provider-mapped" &&
+      membership.claimedFantasyTeamId !== providerPolicy.claimableTeamId &&
+      claimed.has(providerPolicy.claimableTeamId)
+        ? {
+            mode: "unavailable",
+            provider: providerPolicy.provider,
+            claimableTeamId: null,
+            claimableTeamName: null,
+            explanation: `${providerPolicy.claimableTeamName} is already assigned to another member.`,
+          }
+        : providerPolicy;
     const latestSnapshotByTeam = new Map<string, RosterSnapshotRow>();
     for (const snapshot of snapshots) {
       if (!latestSnapshotByTeam.has(snapshot.teamId)) {
@@ -1113,7 +1143,6 @@ export class LeagueDashboardService {
       entriesBySnapshot.set(entry.snapshotId, bucket);
     }
 
-    const claimed = new Set(claimedTeamIds);
     const teamSnapshots: LeagueTeamSnapshot[] = teams.map((team) => {
       const snapshot = latestSnapshotByTeam.get(team.id);
       const roster = snapshot ? (entriesBySnapshot.get(snapshot.id) ?? []) : [];
@@ -1198,7 +1227,7 @@ export class LeagueDashboardService {
     }
     if (memberWeek.state === "matchup-unavailable") {
       notices.push(
-        "No current-week matchup was found for your claimed team; this may be a bye or a provider data gap.",
+        "No current-week matchup was found for your team; this may be a bye or a provider data gap.",
       );
     }
 
@@ -1252,10 +1281,13 @@ export class LeagueDashboardService {
       case "provider-mismatch":
         throw new LeagueDashboardError(
           "TEAM_NOT_CLAIMABLE",
-          "Yahoo maps this connected account to a different fantasy team",
+          "This connected provider account maps to a different fantasy team",
         );
       case "taken":
-        throw new LeagueDashboardError("TEAM_TAKEN", "That fantasy team is already claimed");
+        throw new LeagueDashboardError(
+          "TEAM_TAKEN",
+          "That fantasy team is already assigned to another member",
+        );
       case "claimed":
         return {
           leagueId,

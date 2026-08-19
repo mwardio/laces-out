@@ -228,6 +228,8 @@ export interface EspnBridgePort {
      * in, rather than re-deriving one from the untrusted external league id.
      */
     readonly leagueSeasonId?: string;
+    /** Internal only — paired with `leagueSeasonId` to trigger trusted identity bootstrap. */
+    readonly connectionId?: string;
   }>;
   acceptSupplementalSnapshot?(
     deviceToken: string,
@@ -285,7 +287,12 @@ export interface EspnSessionConnectionPort {
     deviceToken: string,
     input: EspnSessionGrantRequest,
     correlationId: string,
-  ): Promise<EspnSessionGrantResponse>;
+  ): Promise<
+    EspnSessionGrantResponse & {
+      /** Internal only — stripped before the grant receipt is returned to the native client. */
+      readonly linkedLeagueSeasonIds?: readonly string[];
+    }
+  >;
   listConnections(userId: string): Promise<EspnSessionConnectionList>;
   disconnectConnection(
     userId: string,
@@ -368,6 +375,14 @@ export interface BuildAppOptions {
     readonly requestedAt: Date;
   }) => Promise<string | null>;
   /**
+   * Runs a stored ESPN session immediately after credential/league linkage. The shared queue
+   * helper applies exact connection-season singleton deduplication.
+   */
+  readonly enqueueEspnIdentityBootstrap?: (request: {
+    readonly connectionId: string;
+    readonly leagueSeasonId: string;
+  }) => Promise<string | null>;
+  /**
    * Queued after a provider ingestion that actually changed something. A duplicate payload returns
    * `state: "unchanged"` and enqueues nothing, which is what keeps one ingestion to one run.
    */
@@ -421,6 +436,36 @@ async function enqueueRecomputeAfterIngestion(
       { err: error, leagueSeasonId },
       "provider ingestion succeeded but recommendation recompute enqueue failed",
     );
+  }
+}
+
+/**
+ * Credential/link persistence has already committed by the time this runs. A queue outage must
+ * therefore be observable but cannot turn a valid grant or bridge upload into a client retry.
+ */
+async function enqueueEspnIdentityBootstraps(
+  options: BuildAppOptions,
+  targets: readonly { readonly connectionId: string; readonly leagueSeasonId: string }[],
+  request: FastifyRequest,
+): Promise<void> {
+  if (!options.enqueueEspnIdentityBootstrap) return;
+  const seen = new Set<string>();
+  for (const target of targets) {
+    const key = `${target.connectionId}:${target.leagueSeasonId}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    try {
+      await options.enqueueEspnIdentityBootstrap(target);
+    } catch (error) {
+      request.log.warn(
+        {
+          err: error,
+          connectionId: target.connectionId,
+          leagueSeasonId: target.leagueSeasonId,
+        },
+        "ESPN session was linked but identity bootstrap enqueue failed",
+      );
+    }
   }
 }
 
@@ -1484,8 +1529,25 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
         });
       }
       const input = espnSessionGrantRequestSchema.parse(request.body);
-      const result = espnSessionGrantResponseSchema.parse(
-        await options.espnSessionConnections.grantFromBridge(match[1], input, request.id),
+      const granted = await options.espnSessionConnections.grantFromBridge(
+        match[1],
+        input,
+        request.id,
+      );
+      // Parse a public projection: the strict native response schema must never see or expose the
+      // internal league-season ids used for the post-commit queue handoff.
+      const result = espnSessionGrantResponseSchema.parse({
+        connectionId: granted.connectionId,
+        state: granted.state,
+        linkedLeagueCount: granted.linkedLeagueCount,
+      });
+      await enqueueEspnIdentityBootstraps(
+        options,
+        (granted.linkedLeagueSeasonIds ?? []).map((leagueSeasonId) => ({
+          connectionId: granted.connectionId,
+          leagueSeasonId,
+        })),
+        request,
       );
       request.log.info(
         {
@@ -1534,6 +1596,18 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
       const snapshot = espnBridgeSnapshotSchema.parse(request.body);
       const accepted = await options.espnBridge.acceptSnapshot(match[1], snapshot);
       const receipt = espnBridgeReceiptSchema.parse(accepted);
+      if (accepted.connectionId && accepted.leagueSeasonId) {
+        await enqueueEspnIdentityBootstraps(
+          options,
+          [
+            {
+              connectionId: accepted.connectionId,
+              leagueSeasonId: accepted.leagueSeasonId,
+            },
+          ],
+          request,
+        );
+      }
       if (receipt.state === "accepted") {
         await enqueueRecomputeAfterIngestion(options, accepted.leagueSeasonId, request);
       }

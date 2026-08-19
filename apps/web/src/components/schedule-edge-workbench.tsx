@@ -375,7 +375,7 @@ function SnapshotContext({
         <UserRound size={15} aria-hidden="true" />
         <span>
           <small>Team</small>
-          <strong>{data.league.claimedTeam?.name ?? "No team claimed"}</strong>
+          <strong>{data.league.claimedTeam?.name ?? "No team selected"}</strong>
         </span>
       </div>
       <div>
@@ -523,12 +523,12 @@ function RosterSection({
         <div className={styles.emptyState}>
           <Database size={20} aria-hidden="true" />
           <span>
-            <strong>No claimed roster is available</strong>
+            <strong>No selected roster is available</strong>
             <small>
-              Claim your team in League Sync to add personalized schedule and bye context.
+              Select your team in Settings to add personalized schedule and bye context.
             </small>
           </span>
-          <Link href="/connections">Open League Sync</Link>
+          <Link href="/settings#teams">Open Settings</Link>
         </div>
       ) : (
         <div className={styles.rosterList}>
@@ -1426,7 +1426,7 @@ export function ScheduleEdgeWorkbench() {
           <QuickRead data={readyData} />
           <FindingsSection data={readyData} demo={isDemo} />
           {!isDemo && readyData.league.claimedTeam === null ? (
-            <TeamClaimCallout leagueId={selectedLeagueId} onClaimed={() => void loadEdge()} />
+            <TeamClaimCallout leagueId={selectedLeagueId} />
           ) : null}
           <div className={styles.primaryGrid}>
             <RosterSection data={readyData} demo={isDemo} />
