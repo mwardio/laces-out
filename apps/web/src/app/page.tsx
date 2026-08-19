@@ -207,9 +207,6 @@ export default function LandingPage() {
                 <Link className={styles.secondaryButton} href="/app">
                   Tour the locker room <ChevronRight size={16} />
                 </Link>
-                <a className={styles.secondaryButton} href={publicAppStoreUrl}>
-                  Get the iPhone app <Smartphone size={16} />
-                </a>
               </div>
               <div className={styles.heroProof} aria-label="Product availability">
                 <span>
