@@ -17,10 +17,10 @@ const standingsSnapshotId = "00000000-0000-4000-8000-000000000108";
 const matchupSnapshotId = "00000000-0000-4000-8000-000000000109";
 const matchupId = "00000000-0000-4000-8000-000000000110";
 
-function membership() {
+function membership(role: "owner" | "commissioner" | "member" = "member") {
   return {
     membershipId: "00000000-0000-4000-8000-000000000107",
-    role: "manager" as const,
+    role,
     claimedFantasyTeamId: teamId,
     claimedTeamName: "Tech Gurus",
     claimedAt: new Date("2026-07-16T21:30:00.000Z"),
@@ -96,10 +96,25 @@ describe("LeagueDashboardService", () => {
     expect(result.leagues).toHaveLength(1);
     expect(result.leagues[0]).toMatchObject({
       id: leagueId,
-      membership: { claimedFantasyTeamId: teamId },
+      membership: { role: "member", claimedFantasyTeamId: teamId },
       season: { provider: "espn", providerFreshness: { state: "fresh" } },
     });
   });
+
+  it.each(["owner", "commissioner"] as const)(
+    "serializes the internal %s role as commissioner access",
+    async (role) => {
+      const service = new LeagueDashboardService(
+        fakeRepository({ listMemberships: () => Promise.resolve([membership(role)]) }),
+        () => now,
+      );
+
+      const result = await service.listLeagues(userId);
+
+      expect(result.leagues[0]?.membership.role).toBe("commissioner");
+      expect(JSON.stringify(result)).not.toMatch(/\b(owner|manager|viewer)\b/u);
+    },
+  );
 
   it("stops before league data reads when the user is not a member", async () => {
     const listSeasons = vi.fn(() => Promise.resolve([season()]));

@@ -1053,7 +1053,7 @@ export class EspnLiveDraftService {
     if (!mayMutate(context.accessRole)) {
       throw new DraftSessionError(
         "DRAFT_FORBIDDEN",
-        "Only a league owner or commissioner can change manual backup mode.",
+        "Only a league commissioner can change manual backup mode.",
       );
     }
     if (context.archived) {

@@ -37,7 +37,7 @@ import { and, asc, eq, inArray, ne, or, sql } from "drizzle-orm";
 import { verifyOwnerPassword } from "./auth.js";
 
 export interface PortableAccountExport {
-  readonly schemaVersion: 1;
+  readonly schemaVersion: 2;
   readonly exportedAt: string;
   readonly account: {
     readonly id: string;
@@ -611,7 +611,7 @@ export class DrizzleAccountDataRepository implements AccountDataPort {
             .where(inArray(rankingEntries.versionId, rankingVersionIds));
 
     return {
-      schemaVersion: 1,
+      schemaVersion: 2,
       exportedAt: this.#now().toISOString(),
       account,
       data: {
@@ -727,9 +727,8 @@ export class DrizzleAccountDataRepository implements AccountDataPort {
                 asc(leagueMemberships.leagueId),
                 sql`case ${leagueMemberships.role}
                   when 'commissioner' then 0
-                  when 'manager' then 1
-                  when 'viewer' then 2
-                  else 3
+                  when 'member' then 1
+                  else 2
                 end`,
                 asc(leagueMemberships.joinedAt),
                 asc(leagueMemberships.id),

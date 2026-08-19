@@ -21,18 +21,18 @@ describe("ESPN refresh membership policy", () => {
     ).toEqual({ membershipGrant: "owner" });
   });
 
-  it("adds a successful new connector to an existing shared league as a manager", () => {
+  it("adds a successful new connector to an existing shared league as a member", () => {
     expect(
       espnRefreshPolicy({
         createdLeague: false,
         actorIsAnchoredOwner: false,
         existingMembershipRole: null,
       }),
-    ).toEqual({ membershipGrant: "manager" });
+    ).toEqual({ membershipGrant: "member" });
   });
 
   it("lets every existing member refresh without changing their role", () => {
-    for (const existingMembershipRole of ["owner", "commissioner", "manager", "viewer"] as const) {
+    for (const existingMembershipRole of ["owner", "commissioner", "member"] as const) {
       expect(
         espnRefreshPolicy({
           createdLeague: false,

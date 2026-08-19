@@ -235,7 +235,7 @@ try {
     assert.equal(memberReceipt.receiptId, firstReceipt.receiptId);
     assert.equal(
       connectedMembership?.role,
-      "manager",
+      "member",
       "a successful provider connection must join the existing shared league",
     );
 

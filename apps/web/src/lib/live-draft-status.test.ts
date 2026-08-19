@@ -54,7 +54,7 @@ function snakeSession(overrides: Partial<DraftSessionSnapshot> = {}): DraftSessi
     leagueSeasonId: "66666666-6666-4666-8666-666666666666",
     transport: "espn-live",
     providerPolling: true,
-    accessRole: "owner",
+    accessRole: "commissioner",
     sequence: 14,
     persistedState: "live",
     config: {
@@ -499,17 +499,15 @@ describe("manual backup controls", () => {
     expect(status.manualBackup.requiresChoice).toBe(false);
   });
 
-  it("authorizes only owners and commissioners", () => {
-    for (const role of ["owner", "commissioner"] as const) {
-      const session = snakeSession({ accessRole: role });
-      expect(describeLiveDraft(input({ session })).manualBackup.authorized).toBe(true);
-    }
-    for (const role of ["manager", "viewer"] as const) {
-      const session = snakeSession({ accessRole: role });
-      const controls = describeLiveDraft(input({ session })).manualBackup;
-      expect(controls.authorized).toBe(false);
-      expect(controls.available).toBe(true);
-    }
+  it("authorizes only commissioners", () => {
+    const commissionerSession = snakeSession({ accessRole: "commissioner" });
+    expect(describeLiveDraft(input({ session: commissionerSession })).manualBackup.authorized).toBe(
+      true,
+    );
+    const session = snakeSession({ accessRole: "member" });
+    const controls = describeLiveDraft(input({ session })).manualBackup;
+    expect(controls.authorized).toBe(false);
+    expect(controls.available).toBe(true);
   });
 
   it("counts held provider snapshots and demands an explicit choice to return", () => {

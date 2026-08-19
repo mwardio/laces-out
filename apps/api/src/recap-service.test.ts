@@ -33,7 +33,7 @@ const AWARDS_UNAVAILABLE = {
 };
 
 class FakeRepository implements RecapRepository {
-  membership: RecapMembershipRow | undefined = { role: "manager", claimedFantasyTeamId: TEAM_ID };
+  membership: RecapMembershipRow | undefined = { role: "member", claimedFantasyTeamId: TEAM_ID };
   season: { id: string } | undefined = { id: SEASON_ID };
   teams = [
     { id: TEAM_ID, name: "Budget Ballers" },
@@ -288,17 +288,6 @@ describe("recap generation", () => {
     await expect(service.generate(USER_ID, LEAGUE_ID, { week: 5 })).resolves.toBeUndefined();
   });
 
-  it("refuses viewers before touching the AI", async () => {
-    const repository = new FakeRepository();
-    repository.membership = { role: "viewer", claimedFantasyTeamId: null };
-    const { service, ai } = fixture({ repository });
-
-    await expect(service.generate(USER_ID, LEAGUE_ID, { week: 5 })).resolves.toEqual({
-      state: "forbidden",
-    });
-    expect(ai.generateFeature).not.toHaveBeenCalled();
-  });
-
   it("reports unconfigured when no AI service is wired", async () => {
     const repository = new FakeRepository();
     const service = new RecapService({
@@ -549,7 +538,7 @@ describe("persona cards", () => {
     await expect(service.listPersonaCards(USER_ID, LEAGUE_ID)).resolves.toBeUndefined();
   });
 
-  it("keeps League Intel private from regular managers", async () => {
+  it("keeps League Intel private from members", async () => {
     const { service } = fixture();
 
     await expect(service.listPersonaCards(USER_ID, LEAGUE_ID)).resolves.toEqual({
@@ -592,7 +581,7 @@ describe("persona cards", () => {
     ]);
   });
 
-  it("keeps League Intel writes private from regular managers", async () => {
+  it("keeps League Intel writes private from members", async () => {
     const { service, repository } = fixture();
 
     await expect(
@@ -636,7 +625,7 @@ describe("persona cards", () => {
     ).resolves.toEqual({ state: "unknown-team" });
   });
 
-  it("lets an owner clear any card and refuses a regular manager", async () => {
+  it("lets an owner clear any card and refuses a member", async () => {
     const repository = new FakeRepository();
     repository.cards = [
       {

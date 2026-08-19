@@ -234,7 +234,7 @@ describe.skipIf(!dockerAvailable)("Yahoo provider sweep against real PostgreSQL"
         ...(input.additionalMemberIds ?? []).map((userId) => ({
           leagueId,
           userId,
-          role: "manager" as const,
+          role: "member" as const,
         })),
       ])
       // Current migrations create the owner membership from the leagues row. Keeping this insert

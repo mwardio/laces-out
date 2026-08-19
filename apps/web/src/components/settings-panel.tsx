@@ -136,10 +136,8 @@ function membershipRoleLabel(
   role: LeagueListResponse["leagues"][number]["membership"]["role"],
 ): string {
   const labels: Record<typeof role, string> = {
-    owner: "Owner",
     commissioner: "Commissioner",
-    manager: "Manager",
-    viewer: "Viewer",
+    member: "Member",
   };
   return labels[role];
 }

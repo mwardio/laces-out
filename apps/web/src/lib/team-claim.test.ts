@@ -34,7 +34,7 @@ function dashboard(overrides: Partial<LeagueDashboard> = {}): LeagueDashboard {
     generatedAt: "2026-07-28T00:00:00.000Z",
     league: { id: "00000000-0000-0000-0000-0000000000aa", name: "Test League", archived: false },
     membership: {
-      role: "manager",
+      role: "member",
       claimedFantasyTeamId: null,
       claimedTeamName: null,
       claimedAt: null,
@@ -130,7 +130,7 @@ describe("leagueIsUnclaimed", () => {
   it("is false once membership.claimedFantasyTeamId is set", () => {
     const dash = dashboard({
       membership: {
-        role: "manager",
+        role: "member",
         claimedFantasyTeamId: "team-a",
         claimedTeamName: "Team One",
         claimedAt: "2026-07-01T00:00:00.000Z",
@@ -159,7 +159,7 @@ describe("defaultClaimChoice", () => {
   it("prefers the membership's claimed team id above all else", () => {
     const dash = dashboard({
       membership: {
-        role: "manager",
+        role: "member",
         claimedFantasyTeamId: "team-a",
         claimedTeamName: "Team One",
         claimedAt: "2026-07-01T00:00:00.000Z",
@@ -213,7 +213,7 @@ describe("settingsTeamChoice", () => {
   it("targets an exact provider match when an older selection differs", () => {
     const dash = dashboard({
       membership: {
-        role: "manager",
+        role: "member",
         claimedFantasyTeamId: "team-a",
         claimedTeamName: "Team One",
         claimedAt: "2026-07-01T00:00:00.000Z",
@@ -254,7 +254,7 @@ describe("providerMappedTeamState", () => {
   it("marks the current member's provider target as matched", () => {
     const dash = dashboard({
       membership: {
-        role: "manager",
+        role: "member",
         claimedFantasyTeamId: "team-b",
         claimedTeamName: "Team Two",
         claimedAt: "2026-07-01T00:00:00.000Z",
@@ -351,7 +351,7 @@ describe("claimCalloutMode", () => {
   it("is 'hidden' once a team is already claimed", () => {
     const dash = dashboard({
       membership: {
-        role: "manager",
+        role: "member",
         claimedFantasyTeamId: "team-a",
         claimedTeamName: "Team One",
         claimedAt: "2026-07-01T00:00:00.000Z",

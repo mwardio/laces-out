@@ -45,7 +45,7 @@ function snakeSession(): DraftSessionSnapshot {
     transport: "manual",
     providerPolling: false,
     providerFeed: null,
-    accessRole: "owner",
+    accessRole: "commissioner",
     sequence: 0,
     persistedState: "created",
     config: {

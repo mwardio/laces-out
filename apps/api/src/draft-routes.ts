@@ -19,6 +19,7 @@ import { z } from "zod";
 
 import { DraftSessionError } from "./draft-session.js";
 import { serverSentEvent, type DraftStreamHub } from "./draft-stream.js";
+import { publicLeagueAccessRole, type StoredLeagueAccessRole } from "./public-league-access.js";
 
 /** Keeps proxies and browsers from dropping an idle stream between draft picks. */
 const streamKeepAliveMs = 20_000;
@@ -122,8 +123,20 @@ function rethrowUnknown(error: unknown): never {
     : new Error("Unknown draft request failure", { cause: error });
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function publicDraftSession(value: unknown): unknown {
+  if (!isRecord(value) || typeof value.accessRole !== "string") return value;
+  return {
+    ...value,
+    accessRole: publicLeagueAccessRole(value.accessRole as StoredLeagueAccessRole),
+  };
+}
+
 function validatedSession(value: unknown) {
-  const result = draftSessionSnapshotSchema.safeParse(value);
+  const result = draftSessionSnapshotSchema.safeParse(publicDraftSession(value));
   if (!result.success) {
     throw new Error("Draft session service returned an invalid response", {
       cause: result.error,
@@ -143,7 +156,10 @@ function validatedAnalysis(value: unknown) {
 }
 
 function validatedMutation(value: unknown) {
-  const result = draftMutationResponseSchema.safeParse(value);
+  const serialized = isRecord(value)
+    ? { ...value, session: publicDraftSession(value.session) }
+    : value;
+  const result = draftMutationResponseSchema.safeParse(serialized);
   if (!result.success) {
     throw new Error("Draft session service returned an invalid mutation response", {
       cause: result.error,

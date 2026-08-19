@@ -61,7 +61,7 @@ async function appWith(
 
 function exportFixture(): PortableAccountExport {
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     exportedAt: "2031-01-02T03:04:05.000Z",
     account: {
       id: USER_ID,
@@ -124,7 +124,7 @@ describe("account portability and deletion", () => {
     );
     expect(result.headers["cache-control"]).toBe("no-store");
     expect(result.json()).toMatchObject({
-      schemaVersion: 1,
+      schemaVersion: 2,
       account: { id: USER_ID, email: "member@example.com" },
     });
     expect(exportData).toHaveBeenCalledWith(USER_ID);

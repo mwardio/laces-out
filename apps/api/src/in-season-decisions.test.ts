@@ -57,7 +57,7 @@ const playerIds = {
 const membership: DecisionMembershipRow = {
   leagueId: LEAGUE_ID,
   leagueName: "Fourth and Long",
-  role: "manager",
+  role: "member",
   claimedFantasyTeamId: TEAM_A_ID,
 };
 

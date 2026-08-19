@@ -40,6 +40,7 @@ import { and, asc, desc, eq, gte, inArray, isNull, or, sql } from "drizzle-orm";
 
 import { leagueScopedPlayerCatalogFilter } from "./espn-sync-persistence.js";
 import { projectionTimestampProvenance } from "./projection-provenance.js";
+import { publicLeagueAccessRole } from "./public-league-access.js";
 
 const MAX_ACCESSIBLE_SETS = 100;
 const MAX_RESOLVER_PLAYERS = 30_000;
@@ -989,7 +990,7 @@ export class ProjectionImportService {
         provider: scope.provider,
         season: scope.season,
         currentWeek: scope.currentWeek,
-        membershipRole: scope.membershipRole,
+        membershipRole: publicLeagueAccessRole(scope.membershipRole),
         canShareLeague: canShareLeague(scope),
       },
       managedForecastStatus: newerWithheldRun
@@ -1208,7 +1209,7 @@ export class ProjectionImportService {
       throw new ProjectionImportRequestError(
         403,
         "forbidden",
-        "Only a league owner or commissioner can publish league projections",
+        "Only a league commissioner can publish league projections",
       );
     }
     return metadata;

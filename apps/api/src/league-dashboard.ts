@@ -39,6 +39,8 @@ import {
 import { and, asc, desc, eq, inArray } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 
+import { publicLeagueAccessRole } from "./public-league-access.js";
+
 interface MembershipRow {
   readonly membershipId: string;
   readonly role: LeagueMembershipRole;
@@ -629,7 +631,7 @@ function nonnegativeMetadataInteger(value: unknown): number | null {
 
 function membershipSummary(row: MembershipRow): LeagueMembershipSummary {
   return {
-    role: row.role,
+    role: publicLeagueAccessRole(row.role),
     claimedFantasyTeamId: row.claimedFantasyTeamId,
     claimedTeamName: row.claimedTeamName,
     claimedAt: row.claimedAt?.toISOString() ?? null,

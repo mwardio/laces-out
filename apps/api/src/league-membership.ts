@@ -30,9 +30,8 @@ export type RemoveLeagueResult =
 
 function successorRoleOrder(role: LeagueMembershipRole): number {
   if (role === "commissioner") return 0;
-  if (role === "manager") return 1;
-  if (role === "viewer") return 2;
-  return 3;
+  if (role === "member") return 1;
+  return 2;
 }
 
 /**

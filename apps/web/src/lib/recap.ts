@@ -50,12 +50,12 @@ export function recapByline(recap: WeeklyRecap): string {
 }
 
 export interface RecapMembershipView {
-  readonly role: "owner" | "commissioner" | "manager" | "viewer";
+  readonly role: "member" | "commissioner";
   readonly claimedTeamId: string | null;
 }
 
 export function canManageLeagueIntel(membership: RecapMembershipView): boolean {
-  return membership.role === "owner" || membership.role === "commissioner";
+  return membership.role === "commissioner";
 }
 
 export function canEditSpice(membership: RecapMembershipView): boolean {
@@ -63,7 +63,7 @@ export function canEditSpice(membership: RecapMembershipView): boolean {
 }
 
 export function canGenerateRecap(membership: RecapMembershipView): boolean {
-  return membership.role !== "viewer";
+  return membership.role === "member" || membership.role === "commissioner";
 }
 
 export function awardableWeek(section: LeagueWeeklyAwardsSection): number | null {

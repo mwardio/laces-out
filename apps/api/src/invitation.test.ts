@@ -42,7 +42,7 @@ interface MemoryUser {
 }
 
 function roleRank(role: LeagueMembershipRole): number {
-  return { viewer: 0, manager: 1, commissioner: 2, owner: 3 }[role];
+  return { member: 0, commissioner: 1, owner: 2 }[role];
 }
 
 class MemoryInvitationRepository implements InvitationRepository {
@@ -259,12 +259,12 @@ describe("InvitationService", () => {
     const created = await invitations.create({
       invitedByUserId: ADMIN_ID,
       email: "  FRIEND@Example.com ",
-      scope: { leagueId: LEAGUE_ID, leagueRole: "manager" },
+      scope: { leagueId: LEAGUE_ID, leagueRole: "member" },
     });
 
     expect(created.token).toHaveLength(43);
     expect(created.email).toBe("friend@example.com");
-    expect(created.scope).toEqual({ leagueId: LEAGUE_ID, leagueRole: "manager" });
+    expect(created.scope).toEqual({ leagueId: LEAGUE_ID, leagueRole: "member" });
     expect([...repository.invitations.keys()]).not.toContain(created.token);
     expect(JSON.stringify([...repository.invitations.values()])).not.toContain(created.token);
 
@@ -274,7 +274,7 @@ describe("InvitationService", () => {
       scope: {
         leagueId: LEAGUE_ID,
         leagueName: "League of Extraordinary Friends",
-        leagueRole: "manager",
+        leagueRole: "member",
       },
     });
   });
@@ -295,20 +295,82 @@ describe("InvitationService", () => {
     const first = await invitations.create({
       invitedByUserId: ADMIN_ID,
       email: "friend@example.com",
-      scope: { leagueId: LEAGUE_ID, leagueRole: "viewer" },
+      scope: { leagueId: LEAGUE_ID, leagueRole: "member" },
     });
     const second = await invitations.create({
       invitedByUserId: ADMIN_ID,
       email: "friend@example.com",
-      scope: { leagueId: LEAGUE_ID, leagueRole: "manager" },
+      scope: { leagueId: LEAGUE_ID, leagueRole: "commissioner" },
     });
 
     await expect(invitations.inspect(first.token)).rejects.toMatchObject({
       code: "INVITATION_UNAVAILABLE",
     });
     await expect(invitations.inspect(second.token)).resolves.toMatchObject({
-      scope: { leagueRole: "manager" },
+      scope: { leagueRole: "commissioner" },
     });
+  });
+
+  it("rejects removed legacy league roles", async () => {
+    const invitations = service(new MemoryInvitationRepository());
+    await expect(
+      invitations.create({
+        invitedByUserId: ADMIN_ID,
+        email: "legacy-role@example.com",
+        scope: {
+          leagueId: LEAGUE_ID,
+          leagueRole: "manager" as InvitableLeagueRole,
+        },
+      }),
+    ).rejects.toMatchObject({ code: "INVITATION_INVALID_INPUT" });
+  });
+
+  it("upgrades members to commissioner without downgrading commissioner or owner memberships", async () => {
+    const repository = new MemoryInvitationRepository();
+    repository.users.set(MEMBER_ID, {
+      id: MEMBER_ID,
+      email: "member@example.com",
+      displayName: "Existing Member",
+      passwordHash: "existing-password-hash",
+      role: "member",
+    });
+    repository.users.set(OTHER_ID, {
+      id: OTHER_ID,
+      email: "owner@example.com",
+      displayName: "Existing Owner",
+      passwordHash: "existing-password-hash",
+      role: "member",
+    });
+    repository.memberships.set(`${LEAGUE_ID}:${MEMBER_ID}`, "member");
+    repository.memberships.set(`${LEAGUE_ID}:${OTHER_ID}`, "owner");
+    const invitations = service(repository);
+
+    const commissionerInvite = await invitations.create({
+      invitedByUserId: ADMIN_ID,
+      email: "member@example.com",
+      scope: { leagueId: LEAGUE_ID, leagueRole: "commissioner" },
+    });
+    await expect(
+      invitations.accept({ token: commissionerInvite.token, authenticatedUserId: MEMBER_ID }),
+    ).resolves.toMatchObject({ membership: { role: "commissioner" } });
+
+    const memberInvite = await invitations.create({
+      invitedByUserId: ADMIN_ID,
+      email: "member@example.com",
+      scope: { leagueId: LEAGUE_ID, leagueRole: "member" },
+    });
+    await expect(
+      invitations.accept({ token: memberInvite.token, authenticatedUserId: MEMBER_ID }),
+    ).resolves.toMatchObject({ membership: { role: "commissioner" } });
+
+    const ownerInvite = await invitations.create({
+      invitedByUserId: ADMIN_ID,
+      email: "owner@example.com",
+      scope: { leagueId: LEAGUE_ID, leagueRole: "commissioner" },
+    });
+    await expect(
+      invitations.accept({ token: ownerInvite.token, authenticatedUserId: OTHER_ID }),
+    ).resolves.toMatchObject({ membership: { role: "owner" } });
   });
 
   it("accepts once, creates a normalized-email user with Argon2id, and grants membership", async () => {
@@ -317,7 +379,7 @@ describe("InvitationService", () => {
     const created = await invitations.create({
       invitedByUserId: ADMIN_ID,
       email: "new.friend@example.com",
-      scope: { leagueId: LEAGUE_ID, leagueRole: "manager" },
+      scope: { leagueId: LEAGUE_ID, leagueRole: "member" },
     });
     const acceptance = await invitations.accept({
       token: created.token,
@@ -331,7 +393,7 @@ describe("InvitationService", () => {
       email: "new.friend@example.com",
       displayName: "New Friend",
     });
-    expect(acceptance.membership).toEqual({ leagueId: LEAGUE_ID, role: "manager" });
+    expect(acceptance.membership).toEqual({ leagueId: LEAGUE_ID, role: "member" });
     const persistedUser = repository.findUserByEmail("NEW.FRIEND@example.com");
     expect(persistedUser?.passwordHash).not.toBe("a long unique password");
     expect(await verify(persistedUser?.passwordHash ?? "", "a long unique password")).toBe(true);
@@ -360,7 +422,7 @@ describe("InvitationService", () => {
     const created = await invitations.create({
       invitedByUserId: ADMIN_ID,
       email: "new.friend@example.com",
-      scope: { leagueId: LEAGUE_ID, leagueRole: "manager" },
+      scope: { leagueId: LEAGUE_ID, leagueRole: "member" },
     });
 
     const acceptance = await invitations.accept({
@@ -372,7 +434,7 @@ describe("InvitationService", () => {
     expect(acceptance).toMatchObject({
       createdUser: true,
       verificationRequired: true,
-      membership: { leagueId: LEAGUE_ID, role: "manager" },
+      membership: { leagueId: LEAGUE_ID, role: "member" },
     });
     expect(repository.verificationTokens.get(hashSessionToken(verificationToken))).toEqual({
       userId: acceptance.user.id,
@@ -405,7 +467,7 @@ describe("InvitationService", () => {
     const created = await invitations.create({
       invitedByUserId: ADMIN_ID,
       email: "delivery.failure@example.com",
-      scope: { leagueId: LEAGUE_ID, leagueRole: "viewer" },
+      scope: { leagueId: LEAGUE_ID, leagueRole: "member" },
     });
 
     const acceptance = await invitations.accept({
@@ -416,7 +478,7 @@ describe("InvitationService", () => {
 
     expect(acceptance).toMatchObject({
       verificationRequired: true,
-      membership: { leagueId: LEAGUE_ID, role: "viewer" },
+      membership: { leagueId: LEAGUE_ID, role: "member" },
     });
     expect(repository.verificationTokens.size).toBe(1);
     expect(deliveryErrors).toHaveLength(1);
@@ -438,7 +500,7 @@ describe("InvitationService", () => {
     const created = await invitations.create({
       invitedByUserId: ADMIN_ID,
       email: "MEMBER@example.com",
-      scope: { leagueId: LEAGUE_ID, leagueRole: "viewer" },
+      scope: { leagueId: LEAGUE_ID, leagueRole: "member" },
     });
     await expect(invitations.inspect(created.token)).resolves.toMatchObject({
       requiresAuthentication: true,

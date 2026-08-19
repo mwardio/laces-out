@@ -266,7 +266,7 @@ describe.skipIf(!dockerAvailable)("change-event feed isolation against real Post
     // `change_events` is append-only, so each test uses fresh deduplication keys rather than
     // truncating the ledger.
     await db.delete(leagueMemberships).where(eq(leagueMemberships.userId, managerId));
-    await db.insert(leagueMemberships).values({ leagueId, userId: managerId, role: "manager" });
+    await db.insert(leagueMemberships).values({ leagueId, userId: managerId, role: "member" });
   });
 
   afterAll(async () => {

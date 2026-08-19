@@ -38,7 +38,7 @@ const NOW = new Date("2026-09-16T12:00:00.000Z");
 const membership: AnalyticsMembershipRow = {
   leagueId: LEAGUE_ID,
   leagueName: "Laces Out League",
-  role: "manager",
+  role: "member",
   claimedFantasyTeamId: TEAM_A,
   claimedTeamName: "The Isotoners",
 };
@@ -403,6 +403,19 @@ describe("league analytics data preparation", () => {
 });
 
 describe("LeagueAnalyticsService", () => {
+  it("serializes internal ownership as commissioner access", async () => {
+    const repository = new FakeRepository();
+    repository.membership = { ...membership, role: "owner" };
+    const service = new LeagueAnalyticsService(repository, () => NOW);
+
+    const snapshot = leagueAnalyticsSnapshotSchema.parse(
+      await service.getSnapshot(USER_ID, LEAGUE_ID),
+    );
+
+    expect(snapshot.membership.role).toBe("commissioner");
+    expect(JSON.stringify(snapshot)).not.toMatch(/\b(owner|manager|viewer)\b/u);
+  });
+
   it("isolates every downstream read behind authenticated league membership", async () => {
     const repository = new FakeRepository();
     const service = new LeagueAnalyticsService(repository, () => NOW);

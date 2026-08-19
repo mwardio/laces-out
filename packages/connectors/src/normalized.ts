@@ -102,6 +102,12 @@ export interface NormalizedTeam {
   readonly url: string | null;
   readonly logoUrl: string | null;
   readonly isCurrentUser: boolean;
+  /**
+   * Whether the exactly authenticated provider member is a league commissioner. This is distinct
+   * from asking whether any co-manager of the team is a commissioner. Null or absence means the
+   * connector did not have trustworthy authenticated-member context.
+   */
+  readonly currentUserIsCommissioner?: boolean | null;
   /** Null means the provider did not expose a trustworthy current value. */
   readonly faabRemaining?: number | null;
   /** One-based provider waiver priority when available. */

@@ -94,7 +94,7 @@ function leagueListFixture() {
         name: "Friends League",
         archived: false,
         membership: {
-          role: "manager" as const,
+          role: "member" as const,
           claimedFantasyTeamId: null,
           claimedTeamName: null,
           claimedAt: null,
@@ -1654,6 +1654,41 @@ describe("API", () => {
     await app.close();
   });
 
+  it("normalizes stale invitation role requests before they reach persistence", async () => {
+    const scopes: unknown[] = [];
+    const port = invitationPort();
+    const app = await buildApp({
+      environment: loadEnvironment({ NODE_ENV: "test" }),
+      logger: false,
+      requireAuthentication: true,
+      authService: authenticatedService("admin"),
+      invitations: {
+        ...port,
+        create: (input) => {
+          scopes.push(input.scope);
+          return port.create();
+        },
+      },
+    });
+
+    for (const leagueRole of ["manager", "viewer", "member", "commissioner"]) {
+      const response = await app.inject({
+        method: "POST",
+        url: "/v1/admin/invitations",
+        headers: { cookie: authenticatedCookie },
+        payload: { email: "friend@example.com", leagueId, leagueRole },
+      });
+      expect(response.statusCode).toBe(201);
+    }
+    expect(scopes).toEqual([
+      { leagueId, leagueRole: "member" },
+      { leagueId, leagueRole: "member" },
+      { leagueId, leagueRole: "member" },
+      { leagueId, leagueRole: "commissioner" },
+    ]);
+    await app.close();
+  });
+
   it("allows public capability inspection and acceptance without making admin routes public", async () => {
     const app = await buildApp({
       environment: loadEnvironment({ NODE_ENV: "test" }),
@@ -1691,6 +1726,41 @@ describe("API", () => {
     await app.close();
   });
 
+  it("serializes an internal owner as commissioner when an invitation is accepted", async () => {
+    const port = invitationPort();
+    const app = await buildApp({
+      environment: loadEnvironment({ NODE_ENV: "test" }),
+      logger: false,
+      invitations: {
+        ...port,
+        accept: () =>
+          Promise.resolve({
+            invitationId: "00000000-0000-4000-8000-000000000201",
+            user: {
+              id: "00000000-0000-4000-8000-000000000202",
+              email: "friend@example.com",
+              displayName: "Fantasy Friend",
+            },
+            createdUser: false,
+            verificationRequired: false,
+            membership: { leagueId, role: "owner" as const },
+          }),
+      },
+    });
+
+    const acceptance = await app.inject({
+      method: "POST",
+      url: "/v1/invitations/accept",
+      payload: { token: invitationToken },
+    });
+
+    expect(acceptance.statusCode).toBe(200);
+    const acceptanceBody: unknown = acceptance.json();
+    expect(acceptanceBody).toMatchObject({ membership: { leagueId, role: "commissioner" } });
+    expect(JSON.stringify(acceptanceBody)).not.toMatch(/"(?:owner|manager|viewer)"/u);
+    await app.close();
+  });
+
   it("preserves an accepted invitation while requiring confirmation before login", async () => {
     const port = invitationPort();
     const app = await buildApp({
@@ -1709,7 +1779,7 @@ describe("API", () => {
             },
             createdUser: true,
             verificationRequired: true,
-            membership: { leagueId, role: "manager" as const },
+            membership: { leagueId, role: "member" as const },
           }),
       },
     });

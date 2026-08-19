@@ -354,6 +354,10 @@ export class EspnSessionReadClient {
       "mRoster",
       "mStandings",
       "mMatchup",
+      // ESPN's current mTeam response omits members[].isLeagueManager. mNav restores that flag in
+      // the same bounded core read so an authenticated member can be promoted without a name or
+      // co-manager inference.
+      "mNav",
     ]);
     const corePayload = await this.#read(coreEndpoint, credential, null, input.signal);
     const capturedAt = this.#now().toISOString();

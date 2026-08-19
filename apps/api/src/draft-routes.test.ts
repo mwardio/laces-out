@@ -29,7 +29,11 @@ const rosterSlot = {
   eligiblePositions: ["QB" as const],
 };
 
-const snapshot: DraftSessionSnapshot = {
+type StoredDraftSessionSnapshot = Omit<DraftSessionSnapshot, "accessRole"> & {
+  readonly accessRole: "owner";
+};
+
+const snapshot: StoredDraftSessionSnapshot = {
   id: DRAFT_ID,
   leagueSeasonId: LEAGUE_SEASON_ID,
   transport: "manual",
@@ -65,7 +69,9 @@ const snapshot: DraftSessionSnapshot = {
   updatedAt: NOW,
 };
 
-const mutation: DraftMutationResponse = {
+const mutation: Omit<DraftMutationResponse, "session"> & {
+  readonly session: StoredDraftSessionSnapshot;
+} = {
   idempotent: false,
   appendedSequences: [1],
   session: { ...snapshot, sequence: 1, persistedState: "live" },
@@ -179,7 +185,12 @@ describe("draft session routes", () => {
       headers: { cookie: COOKIE },
     });
     expect(response.statusCode).toBe(200);
-    expect(response.json()).toMatchObject({ id: DRAFT_ID, accessRole: "owner", sequence: 0 });
+    expect(response.json()).toMatchObject({
+      id: DRAFT_ID,
+      accessRole: "commissioner",
+      sequence: 0,
+    });
+    expect(response.body).not.toMatch(/\b(owner|manager|viewer)\b/u);
     expect(getSession).toHaveBeenCalledWith(USER_ID, DRAFT_ID);
     await app.close();
   });
@@ -214,7 +225,12 @@ describe("draft session routes", () => {
       payload,
     });
     expect(response.statusCode).toBe(201);
-    expect(response.json()).toMatchObject({ idempotent: false, appendedSequences: [1] });
+    expect(response.json()).toMatchObject({
+      idempotent: false,
+      appendedSequences: [1],
+      session: { accessRole: "commissioner" },
+    });
+    expect(response.body).not.toMatch(/\b(owner|manager|viewer)\b/u);
     expect(appendEvent).toHaveBeenCalledWith(USER_ID, DRAFT_ID, payload);
 
     const retry = await app.inject({

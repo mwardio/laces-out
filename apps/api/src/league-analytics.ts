@@ -58,6 +58,7 @@ import {
   type PlayoffOddsTeamRow,
 } from "./playoff-odds.js";
 import { projectionTimestampProvenance } from "./projection-provenance.js";
+import { publicLeagueAccessRole } from "./public-league-access.js";
 
 export const LEAGUE_ANALYTICS_LIMITS = {
   teams: 32,
@@ -1708,7 +1709,7 @@ export class LeagueAnalyticsService {
         provider: season.provider,
       },
       membership: {
-        role: membership.role,
+        role: publicLeagueAccessRole(membership.role),
         claimedTeamId: membership.claimedFantasyTeamId,
         claimedTeamName: membership.claimedTeamName,
       },
@@ -1778,7 +1779,7 @@ export class LeagueAnalyticsService {
         provider: null,
       },
       membership: {
-        role: membership.role,
+        role: publicLeagueAccessRole(membership.role),
         claimedTeamId: membership.claimedFantasyTeamId,
         claimedTeamName: membership.claimedTeamName,
       },
@@ -1825,7 +1826,7 @@ export class LeagueAnalyticsService {
         provider: season.provider,
       },
       membership: {
-        role: membership.role,
+        role: publicLeagueAccessRole(membership.role),
         claimedTeamId: membership.claimedFantasyTeamId,
         claimedTeamName: membership.claimedTeamName,
       },

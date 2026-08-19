@@ -109,8 +109,11 @@ This application will hold access to real fantasy accounts. Treat it like a smal
   and recommendation settings are user-owned unless explicitly shared. Yahoo and authenticated
   ESPN server-session mappings require one exact current-user team key stored on that user's own
   provider-to-league link. ESPN bridge and public snapshots remain visibly self-asserted because
-  those sources do not safely identify the signed-in manager. A missing or ambiguous mapping fails
-  closed, and a conflict never authorizes a sync job to replace historical ownership.
+  those sources do not safely identify the signed-in member. A missing or ambiguous mapping fails
+  closed, and a conflict never authorizes a sync job to replace historical ownership. Only an
+  authenticated ESPN server-session read may use the exact SWID-matched member's League Manager
+  flag to promote that member to commissioner; co-manager flags never count, and false or missing
+  provider flags never demote an existing commissioner or owner.
 - Operator-managed Gemini and OpenRouter keys are read only from the API server's `GEMINI_API_KEY`
   and `OPENROUTER_API_KEY` environment values. They are never compiled into the web image, returned
   by an endpoint, or persisted in PostgreSQL. Film Room member keys are write-only through
@@ -158,7 +161,7 @@ preference.
 
 The first accepted device snapshot may create a new league owned by that authenticated device user;
 a later successfully validated provider connection automatically joins the existing shared league
-as manager unless that member previously removed the exact provider season. League removal records
+as a member unless that member previously removed the exact provider season. League removal records
 that exclusion, detaches the member's provider links and bridge scopes, and prevents a stale or
 background sync from silently recreating membership. A fresh explicit pairing can restore it. In
 contrast, a server-direct read is authorized only for one existing ESPN league

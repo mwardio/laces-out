@@ -132,8 +132,8 @@ class MemoryDraftRepository implements DraftSessionRepository {
   readonly roles = new Map<string, LeagueMembershipRole>([
     [ownerId, "owner"],
     [commissionerId, "commissioner"],
-    [managerId, "manager"],
-    [viewerId, "viewer"],
+    [managerId, "member"],
+    [viewerId, "member"],
   ]);
   readonly drafts = new Map<string, StoredDraft>();
   readonly events = new Map<string, StoredDraftEvent[]>();
@@ -284,7 +284,7 @@ describe("DraftSessionService", () => {
     expect(created.config.players.map((player) => player.id)).not.toContain(playerE);
 
     const viewerRead = await service.getSession(viewerId, created.id);
-    expect(viewerRead.accessRole).toBe("viewer");
+    expect(viewerRead.accessRole).toBe("member");
     await expect(
       service.appendEvent(viewerId, created.id, {
         expectedSequence: 0,

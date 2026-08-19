@@ -700,7 +700,7 @@ export class DrizzleYahooSyncRepository implements YahooSyncRepository {
 
       await transaction
         .insert(leagueMemberships)
-        .values({ leagueId, userId, role: createdLeague ? "owner" : "manager" })
+        .values({ leagueId, userId, role: createdLeague ? "owner" : "member" })
         .onConflictDoNothing({ target: [leagueMemberships.leagueId, leagueMemberships.userId] });
 
       await transaction

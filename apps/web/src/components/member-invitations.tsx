@@ -16,6 +16,7 @@ import Link from "next/link";
 import { type FormEvent, useEffect, useState } from "react";
 
 import { apiBaseUrl, parseAuthenticatedSession } from "../lib/api-client";
+import { FRIEND_INVITATION_LEAGUE_ROLES, friendInvitationRequest } from "../lib/invitation-access";
 
 interface LeagueOption {
   readonly id: string;
@@ -26,10 +27,10 @@ interface CreatedInvitation {
   readonly id: string;
   readonly invitationUrl: string;
   readonly email: string;
-  readonly role: "member" | "admin";
+  readonly role: "member";
   readonly scope: {
     readonly leagueId: string;
-    readonly leagueRole: "commissioner" | "manager" | "viewer";
+    readonly leagueRole: "member" | "commissioner";
   } | null;
   readonly expiresAt: string;
 }
@@ -39,9 +40,8 @@ export function MemberInvitations() {
   const [leagues, setLeagues] = useState<readonly LeagueOption[]>([]);
   const [leaguesState, setLeaguesState] = useState<"idle" | "loading" | "ready" | "error">("idle");
   const [email, setEmail] = useState("");
-  const [role, setRole] = useState<"member" | "admin">("member");
   const [leagueId, setLeagueId] = useState("");
-  const [leagueRole, setLeagueRole] = useState<"commissioner" | "manager" | "viewer">("manager");
+  const [leagueRole, setLeagueRole] = useState<"member" | "commissioner">("member");
   const [expiresInDays, setExpiresInDays] = useState("7");
   const [created, setCreated] = useState<CreatedInvitation | null>(null);
   const [state, setState] = useState<"idle" | "working" | "error">("idle");
@@ -106,12 +106,9 @@ export function MemberInvitations() {
         method: "POST",
         credentials: "include",
         headers: { Accept: "application/json", "Content-Type": "application/json" },
-        body: JSON.stringify({
-          email: email.trim(),
-          role,
-          expiresInDays: days,
-          ...(leagueId ? { leagueId, leagueRole } : {}),
-        }),
+        body: JSON.stringify(
+          friendInvitationRequest({ email, leagueId, leagueRole, expiresInDays: days }),
+        ),
       });
       if (!response.ok) {
         const detail =
@@ -127,9 +124,8 @@ export function MemberInvitations() {
       const invitation = (await response.json()) as CreatedInvitation;
       setCreated(invitation);
       setEmail("");
-      setRole("member");
       setLeagueId("");
-      setLeagueRole("manager");
+      setLeagueRole("member");
       setState("idle");
     } catch (error) {
       setState("error");
@@ -258,23 +254,6 @@ export function MemberInvitations() {
                 />
                 <small>The invitation works only for this email address.</small>
               </label>
-              <label htmlFor="invite-account-role">
-                Account role
-                <select
-                  id="invite-account-role"
-                  value={role}
-                  onChange={(event) => {
-                    setRole(event.target.value as "member" | "admin");
-                    setMessage(null);
-                  }}
-                >
-                  <option value="member">Member (standard access)</option>
-                  <option value="admin">Administrator (full control)</option>
-                </select>
-                <small>
-                  Use Member unless this person should manage invitations and host settings.
-                </small>
-              </label>
               <label htmlFor="invite-league">
                 League access
                 <select
@@ -308,14 +287,21 @@ export function MemberInvitations() {
                   id="invite-league-role"
                   value={leagueRole}
                   onChange={(event) =>
-                    setLeagueRole(event.target.value as "commissioner" | "manager" | "viewer")
+                    setLeagueRole(event.target.value as "member" | "commissioner")
                   }
                   disabled={!leagueId}
                 >
-                  <option value="viewer">Viewer</option>
-                  <option value="manager">Manager</option>
-                  <option value="commissioner">Commissioner</option>
+                  {FRIEND_INVITATION_LEAGUE_ROLES.map((option) => (
+                    <option value={option.value} key={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
                 </select>
+                <small>
+                  {leagueRole === "commissioner"
+                    ? "Can manage shared draft tools, League Intel, and recap settings."
+                    : "Can use league and personal tools without changing shared league settings."}
+                </small>
               </label>
               <label htmlFor="invite-expiry">
                 Expires in
@@ -332,12 +318,6 @@ export function MemberInvitations() {
                 </select>
               </label>
             </div>
-            {role === "admin" ? (
-              <div className="member-role-warning" role="status">
-                <AlertCircle size={15} />
-                <span>Administrators can manage invitations and host controls.</span>
-              </div>
-            ) : null}
             <button className="button button--lime button--full" disabled={state === "working"}>
               {state === "working" ? (
                 <LoaderCircle className="spin" size={16} />

@@ -1476,7 +1476,7 @@ export class DraftSessionService {
     if (!mayMutate(source.accessRole)) {
       throw new DraftSessionError(
         "DRAFT_FORBIDDEN",
-        "Only a league owner or commissioner can create a shared draft session.",
+        "Only a league commissioner can create a shared draft session.",
       );
     }
     if (source.archived) {
@@ -1604,7 +1604,7 @@ export class DraftSessionService {
       case "forbidden":
         throw new DraftSessionError(
           "DRAFT_FORBIDDEN",
-          "Only a league owner or commissioner can create a shared draft session.",
+          "Only a league commissioner can create a shared draft session.",
         );
       case "archived":
         throw new DraftSessionError(
@@ -1873,7 +1873,7 @@ export class DraftSessionService {
     if (!mayMutate(session.accessRole)) {
       throw new DraftSessionError(
         "DRAFT_FORBIDDEN",
-        "Only a league owner or commissioner can record shared draft events.",
+        "Only a league commissioner can record shared draft events.",
       );
     }
   }
@@ -1918,7 +1918,7 @@ export class DraftSessionService {
       case "forbidden":
         throw new DraftSessionError(
           "DRAFT_FORBIDDEN",
-          "Only a league owner or commissioner can record shared draft events.",
+          "Only a league commissioner can record shared draft events.",
         );
       case "archived":
         throw new DraftSessionError(

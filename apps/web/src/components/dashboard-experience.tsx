@@ -68,6 +68,12 @@ function roleLabel(role: string): string {
   return role.charAt(0).toUpperCase() + role.slice(1);
 }
 
+function leagueAccessLabel(
+  role: LeagueListResponse["leagues"][number]["membership"]["role"],
+): string {
+  return role === "commissioner" ? "Commissioner" : "Member";
+}
+
 function scoreLabel(score: number | null): string {
   if (score === null) return "—";
   return new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 }).format(score);
@@ -660,7 +666,7 @@ function LivePortfolio({ portfolio, reloadPortfolio }: LivePortfolioProps) {
                   <span>{league.name}</span>
                   <strong>{league.membership.claimedTeamName ?? "Choose your team"}</strong>
                   <small>
-                    {roleLabel(league.membership.role)}
+                    {leagueAccessLabel(league.membership.role)}
                     {season ? ` · ${season.season} · ${season.teamCount} teams` : " · setup needed"}
                   </small>
                 </div>

@@ -71,7 +71,7 @@ const listResponse: ProjectionSetListResponse = {
     provider: "espn",
     season: 2026,
     currentWeek: 2,
-    membershipRole: "manager",
+    membershipRole: "member",
     canShareLeague: false,
   },
   managedForecastStatus: {

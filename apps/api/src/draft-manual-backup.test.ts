@@ -1,5 +1,9 @@
 import { loadEnvironment } from "@laces-out/config";
-import type { DraftSessionSnapshot, EspnLiveDraftFeedStatus } from "@laces-out/contracts";
+import type {
+  DraftSessionSnapshot,
+  EspnLiveDraftFeedStatus,
+  LeagueAccessRole,
+} from "@laces-out/contracts";
 import type { LeagueMembershipRole } from "@laces-out/db";
 import { describe, expect, it } from "vitest";
 
@@ -56,7 +60,7 @@ const rosterSlot = {
   eligiblePositions: ["QB" as const],
 };
 
-function snapshot(feed: EspnLiveDraftFeedStatus, accessRole: LeagueMembershipRole = "owner") {
+function snapshot(feed: EspnLiveDraftFeedStatus, accessRole: LeagueAccessRole = "commissioner") {
   return {
     id: DRAFT_ID,
     leagueSeasonId: LEAGUE_SEASON_ID,
@@ -201,7 +205,7 @@ async function manualBackupApp(repository: FakeRepository, configured = true) {
       Promise.resolve(
         snapshot(
           feedStatus(repository.manualBackupActive, repository.pendingReconciliation),
-          repository.accessRole ?? "owner",
+          repository.accessRole === "owner" ? "commissioner" : (repository.accessRole ?? "member"),
         ),
       ),
   } as unknown as DraftSessionPort;
@@ -272,23 +276,21 @@ describe("manual backup route", () => {
     await app.close();
   });
 
-  it("refuses a manager or viewer and answers a stranger with 404", async () => {
-    for (const role of ["manager", "viewer"] as const) {
-      const repository = new FakeRepository();
-      repository.accessRole = role;
-      const app = await manualBackupApp(repository);
-      const response = await app.inject({
-        method: "POST",
-        url: `/v1/drafts/${DRAFT_ID}/manual-backup`,
-        headers: { cookie: COOKIE },
-        payload: body(),
-      });
-      expect(response.statusCode).toBe(403);
-      expect(response.json()).toMatchObject({ code: "DRAFT_FORBIDDEN" });
-      expect(repository.updates).toHaveLength(0);
-      expect(repository.manualBackupActive).toBe(false);
-      await app.close();
-    }
+  it("refuses a member and answers a stranger with 404", async () => {
+    const memberRepository = new FakeRepository();
+    memberRepository.accessRole = "member";
+    const memberApp = await manualBackupApp(memberRepository);
+    const memberResponse = await memberApp.inject({
+      method: "POST",
+      url: `/v1/drafts/${DRAFT_ID}/manual-backup`,
+      headers: { cookie: COOKIE },
+      payload: body(),
+    });
+    expect(memberResponse.statusCode).toBe(403);
+    expect(memberResponse.json()).toMatchObject({ code: "DRAFT_FORBIDDEN" });
+    expect(memberRepository.updates).toHaveLength(0);
+    expect(memberRepository.manualBackupActive).toBe(false);
+    await memberApp.close();
 
     // No role at all must not be distinguishable from a draft that does not exist.
     const repository = new FakeRepository();

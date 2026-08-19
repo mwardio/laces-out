@@ -823,7 +823,7 @@ export function DraftSessionWorkspace() {
 
   const selectedPlayer = session?.config.players.find((player) => player.id === selectedPlayerId);
   const selectedBoardRow = boardRows.find((row) => row.player.id === selectedPlayerId);
-  const canMutate = session?.accessRole === "owner" || session?.accessRole === "commissioner";
+  const canMutate = session?.accessRole === "commissioner";
   // Provider and manual control must never interleave invisibly (§16.5): typing a pick into a
   // room a live feed is still driving is how duplicates get made. Manual backup is the door.
   const providerLocksManualEntry =
@@ -1284,8 +1284,7 @@ export function DraftSessionWorkspace() {
 
   if (!session) {
     const league = portfolio?.leagues.find((item) => item.id === selectedLeagueId);
-    const mayCreate =
-      league?.membership.role === "owner" || league?.membership.role === "commissioner";
+    const mayCreate = league?.membership.role === "commissioner";
     return (
       <div className="draft-page draft-session-setup">
         <header className="page-heading">
@@ -1422,8 +1421,8 @@ export function DraftSessionWorkspace() {
                 )}
                 {!mayCreate ? (
                   <p className="draft-session-permission">
-                    <ShieldCheck size={14} /> Only the league owner or a commissioner can create the
-                    shared room. Members can reopen one by ID.
+                    <ShieldCheck size={14} /> Only a league commissioner can create the shared room.
+                    Members can reopen one by ID.
                   </p>
                 ) : null}
                 <button
@@ -2578,7 +2577,7 @@ export function DraftSessionWorkspace() {
             )}
             {!canMutate && !localMock ? (
               <p className="draft-session-permission">
-                <ShieldCheck size={14} /> Only owners and commissioners can record events.
+                <ShieldCheck size={14} /> Only commissioners can record events.
               </p>
             ) : providerLocksManualEntry && !localMock ? (
               <p className="draft-session-permission">

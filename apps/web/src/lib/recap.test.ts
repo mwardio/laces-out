@@ -90,21 +90,17 @@ describe("recap helpers", () => {
     expect(recapByline({ ...RECAP, spiceLevel: "mild" })).toContain("Mild");
   });
 
-  it("restricts League Intel to league owners and commissioners", () => {
-    expect(canManageLeagueIntel({ role: "manager", claimedTeamId: TEAM_ID })).toBe(false);
-    expect(canManageLeagueIntel({ role: "manager", claimedTeamId: null })).toBe(false);
+  it("restricts League Intel to commissioners", () => {
+    expect(canManageLeagueIntel({ role: "member", claimedTeamId: TEAM_ID })).toBe(false);
+    expect(canManageLeagueIntel({ role: "member", claimedTeamId: null })).toBe(false);
     expect(canManageLeagueIntel({ role: "commissioner", claimedTeamId: null })).toBe(true);
-    expect(canManageLeagueIntel({ role: "owner", claimedTeamId: null })).toBe(true);
-    expect(canManageLeagueIntel({ role: "viewer", claimedTeamId: null })).toBe(false);
-    expect(canManageLeagueIntel({ role: "viewer", claimedTeamId: TEAM_ID })).toBe(false);
   });
 
   it("gates spice and generation by role", () => {
-    expect(canEditSpice({ role: "owner", claimedTeamId: null })).toBe(true);
     expect(canEditSpice({ role: "commissioner", claimedTeamId: null })).toBe(true);
-    expect(canEditSpice({ role: "manager", claimedTeamId: null })).toBe(false);
-    expect(canGenerateRecap({ role: "manager", claimedTeamId: null })).toBe(true);
-    expect(canGenerateRecap({ role: "viewer", claimedTeamId: null })).toBe(false);
+    expect(canEditSpice({ role: "member", claimedTeamId: null })).toBe(false);
+    expect(canGenerateRecap({ role: "member", claimedTeamId: null })).toBe(true);
+    expect(canGenerateRecap({ role: "commissioner", claimedTeamId: null })).toBe(true);
   });
 
   it("reads the awardable week and unavailable reasons from the awards section", () => {

@@ -560,7 +560,6 @@ export class RecapService {
   ): Promise<RecapGenerateResult | undefined> {
     const membership = await this.#repository.findMembership(userId, leagueId);
     if (!membership) return undefined;
-    if (membership.role === "viewer") return { state: "forbidden" };
     const ai = this.#ai;
     if (!ai) return { state: "unconfigured" };
     const season = await this.#repository.findLatestSeason(leagueId);

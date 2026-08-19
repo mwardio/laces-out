@@ -33,7 +33,7 @@ fixed `gemini-3.6-flash` model. An ordinary Film Room request sends the member's
 instructions plus a bounded snapshot of that member's authorized league overview, Decision Desk,
 and league analytics to Google Gemini. When the operator configures `OPENROUTER_API_KEY`, included
 Medium and Scorched Weekly Reckoning generations instead send bounded league context and the
-league's manager-written League Intel notes to `x-ai/grok-4.3` through OpenRouter. Mild recaps and
+league's commissioner-written League Intel notes to `x-ai/grok-4.3` through OpenRouter. Mild recaps and
 deployments without that key use Gemini. Google's free-tier terms currently state that submitted
 content may be used to improve its products. Laces Out stores provider/model settings and a usage
 ledger containing token counts, status, timing, access mode, and a keyed provider-request
@@ -47,8 +47,8 @@ level in force when it was written; changing the league's tone later never relab
 recap. A generation that fails, times out, or is refused by the provider is not stored at all and
 leaves the previous recap in place.
 
-League Intel (per-team persona notes) is owner- or commissioner-written style and lore material:
-rivalries, running bits, and league history. Only league owners and commissioners can view, edit,
+League Intel (per-team persona notes) is commissioner-written style and lore material:
+rivalries, running bits, and league history. Only league commissioners can view, edit,
 or clear the notes. They are sent to the selected AI provider only when a recap is generated and
 are never treated as evidence about a game. The recap's tone level is a single league-wide setting
 chosen by a commissioner and is disclosed in the recap section to every member. Mild stays clean;
@@ -164,7 +164,7 @@ confirmation phrase shown in the UI. In one database transaction it:
   request, activity receipt, and membership owned by the account;
 - removes every invitation created by, accepted by, or addressed to the account email;
 - transfers each shared league the member owns to a surviving member, preferring commissioner,
-  manager, then viewer and using join order as a deterministic tie-break; a sole-member league and
+  then member and using join order as a deterministic tie-break; a sole-member league and
   its dependent league facts are deleted instead;
 - preserves league-visible member projections by removing creator attribution before the account
   cascade, while private projections are deleted; user identifiers embedded in surviving shared

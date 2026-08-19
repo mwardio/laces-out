@@ -381,33 +381,61 @@ try {
     "cross-league fantasy team claim",
     () => sql`
     insert into league_memberships (league_id, user_id, role, claimed_fantasy_team_id)
-    values (${leagueId}, ${friendId}, 'manager', ${otherTeamId})
+    values (${leagueId}, ${friendId}, 'member', ${otherTeamId})
   `,
   );
-  await sql`
+  for (const legacyRole of ["manager", "viewer"] as const) {
+    await expectDatabaseRejection(
+      `legacy ${legacyRole} league membership role`,
+      () => sql`
+        insert into league_memberships (league_id, user_id, role)
+        values (${leagueId}, ${friendId}, ${legacyRole})
+      `,
+    );
+  }
+  const [defaultMembership] = await sql`
     insert into league_memberships (
-      league_id, user_id, role, claimed_fantasy_team_id, claimed_at
-    ) values (${leagueId}, ${friendId}, 'manager', ${teamId}, now())
+      league_id, user_id, claimed_fantasy_team_id, claimed_at
+    ) values (${leagueId}, ${friendId}, ${teamId}, now())
+    returning role
   `;
+  assert.equal(defaultMembership?.role, "member", "league membership default was not member");
   await expectDatabaseRejection(
     "duplicate fantasy team claim",
     () => sql`
     insert into league_memberships (league_id, user_id, role, claimed_fantasy_team_id)
-    values (${leagueId}, ${outsiderId}, 'viewer', ${teamId})
+    values (${leagueId}, ${outsiderId}, 'member', ${teamId})
   `,
   );
 
   const tokenHash = "t".repeat(64);
   const [invitation] = await sql`
     insert into invitations (
-      token_hash, email, email_hash, invited_by_user_id, role, expires_at
+      token_hash, email, email_hash, invited_by_user_id, role,
+      league_id, league_role, expires_at
     ) values (
       ${tokenHash}, ${`invitee-${suffix}@example.test`}, ${"e".repeat(64)},
-      ${ownerId}, 'member', now() + interval '1 day'
+      ${ownerId}, 'member', ${leagueId}, 'member', now() + interval '1 day'
     )
     returning id
   `;
   const invitationId = requiredString(invitation?.id, "invitation id");
+  for (const legacyRole of ["manager", "viewer"] as const) {
+    await expectDatabaseRejection(
+      `legacy ${legacyRole} invitation league role`,
+      () => sql`
+        insert into invitations (
+          token_hash, email, email_hash, invited_by_user_id,
+          league_id, league_role, expires_at
+        ) values (
+          ${`${legacyRole}-${tokenHash}`},
+          ${`${legacyRole}-invitee-${suffix}@example.test`},
+          ${`${legacyRole}-${"e".repeat(64)}`},
+          ${ownerId}, ${leagueId}, ${legacyRole}, now() + interval '1 day'
+        )
+      `,
+    );
+  }
   await sql`
     update invitations
     set accepted_at = now(), accepted_by_user_id = ${friendId}

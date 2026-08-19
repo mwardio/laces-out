@@ -245,6 +245,7 @@ async function startDisposablePostgres(): Promise<DisposablePostgres> {
 const NOW = new Date("2031-11-08T14:30:00.000Z");
 const deletingUserId = "10000000-0000-4000-8000-0000000000d1";
 const successorUserId = "10000000-0000-4000-8000-0000000000d2";
+const fallbackMemberUserId = "10000000-0000-4000-8000-0000000000d3";
 const sharedLeagueId = "20000000-0000-4000-8000-0000000000d1";
 const soloLeagueId = "20000000-0000-4000-8000-0000000000d2";
 const sharedSeasonId = "30000000-0000-4000-8000-0000000000d1";
@@ -308,6 +309,11 @@ describe.skipIf(!postgresAvailable)("account data repository against real Postgr
         displayName: "Successor",
       },
       {
+        id: fallbackMemberUserId,
+        email: "fallback-member@example.test",
+        displayName: "Fallback Member",
+      },
+      {
         id: nativeYahooUserId,
         email: "native-yahoo@example.test",
         displayName: "Native Yahoo",
@@ -331,11 +337,20 @@ describe.skipIf(!postgresAvailable)("account data repository against real Postgr
       { id: sharedLeagueId, ownerUserId: deletingUserId, name: "Shared League" },
       { id: soloLeagueId, ownerUserId: deletingUserId, name: "Private League" },
     ]);
-    await db.insert(leagueMemberships).values({
-      leagueId: sharedLeagueId,
-      userId: successorUserId,
-      role: "commissioner",
-    });
+    await db.insert(leagueMemberships).values([
+      {
+        leagueId: sharedLeagueId,
+        userId: successorUserId,
+        role: "commissioner",
+        joinedAt: new Date("2031-01-02T00:00:00.000Z"),
+      },
+      {
+        leagueId: sharedLeagueId,
+        userId: fallbackMemberUserId,
+        role: "member",
+        joinedAt: new Date("2031-01-01T00:00:00.000Z"),
+      },
+    ]);
     await db.insert(leagueSeasons).values({
       id: sharedSeasonId,
       leagueId: sharedLeagueId,
@@ -648,7 +663,7 @@ describe.skipIf(!postgresAvailable)("account data repository against real Postgr
   it("exports portable member data through explicit secret-free allowlists", async () => {
     const exported = await repository.exportData(deletingUserId);
     expect(exported).toMatchObject({
-      schemaVersion: 1,
+      schemaVersion: 2,
       exportedAt: NOW.toISOString(),
       account: { email: "departing@example.test", displayName: "Departing Manager" },
       data: {
@@ -888,7 +903,7 @@ describe.skipIf(!postgresAvailable)("account data repository against real Postgr
       emailHash: "INVITATION_LOCK_ORDER_EMAIL_HASH_1234567890",
       invitedByUserId: invitationRaceOwnerId,
       leagueId: invitationRaceLeagueId,
-      leagueRole: "manager",
+      leagueRole: "member",
       expiresAt: new Date("2032-01-01T00:00:00.000Z"),
     });
 
@@ -1129,6 +1144,17 @@ describe.skipIf(!postgresAvailable)("account data repository against real Postgr
           ),
         ),
     ).toEqual([{ role: "owner" }]);
+    expect(
+      await db
+        .select({ role: leagueMemberships.role })
+        .from(leagueMemberships)
+        .where(
+          and(
+            eq(leagueMemberships.leagueId, sharedLeagueId),
+            eq(leagueMemberships.userId, fallbackMemberUserId),
+          ),
+        ),
+    ).toEqual([{ role: "member" }]);
     expect(
       await db.select().from(leagueSeasons).where(eq(leagueSeasons.id, sharedSeasonId)),
     ).toEqual([expect.objectContaining({ connectionId: null })]);
@@ -1570,6 +1596,7 @@ describe.skipIf(!postgresAvailable)("account data repository against real Postgr
   it("atomically leaves a shared league, transfers ownership, and detaches only that member's sync", async () => {
     const ownerId = randomUUID();
     const successorId = randomUUID();
+    const fallbackMemberId = randomUUID();
     const leagueId = randomUUID();
     const seasonId = randomUUID();
     const ownerConnectionId = randomUUID();
@@ -1585,6 +1612,11 @@ describe.skipIf(!postgresAvailable)("account data repository against real Postgr
         id: successorId,
         email: `${successorId}@example.test`,
         displayName: "Remaining commissioner",
+      },
+      {
+        id: fallbackMemberId,
+        email: `${fallbackMemberId}@example.test`,
+        displayName: "Earlier regular member",
       },
     ]);
     await db.insert(providerConnections).values([
@@ -1604,11 +1636,20 @@ describe.skipIf(!postgresAvailable)("account data repository against real Postgr
       },
     ]);
     await db.insert(leagues).values({ id: leagueId, ownerUserId: ownerId, name: "Shared Removal" });
-    await db.insert(leagueMemberships).values({
-      leagueId,
-      userId: successorId,
-      role: "commissioner",
-    });
+    await db.insert(leagueMemberships).values([
+      {
+        leagueId,
+        userId: successorId,
+        role: "commissioner",
+        joinedAt: new Date("2031-01-02T00:00:00.000Z"),
+      },
+      {
+        leagueId,
+        userId: fallbackMemberId,
+        role: "member",
+        joinedAt: new Date("2031-01-01T00:00:00.000Z"),
+      },
+    ]);
     await db.insert(leagueSeasons).values({
       id: seasonId,
       leagueId,
@@ -1658,12 +1699,17 @@ describe.skipIf(!postgresAvailable)("account data repository against real Postgr
         .from(leagues)
         .where(eq(leagues.id, leagueId)),
     ).toEqual([{ ownerUserId: successorId }]);
-    expect(
-      await db
-        .select({ userId: leagueMemberships.userId, role: leagueMemberships.role })
-        .from(leagueMemberships)
-        .where(eq(leagueMemberships.leagueId, leagueId)),
-    ).toEqual([{ userId: successorId, role: "owner" }]);
+    const remainingMemberships = await db
+      .select({ userId: leagueMemberships.userId, role: leagueMemberships.role })
+      .from(leagueMemberships)
+      .where(eq(leagueMemberships.leagueId, leagueId));
+    expect(remainingMemberships).toHaveLength(2);
+    expect(remainingMemberships).toEqual(
+      expect.arrayContaining([
+        { userId: successorId, role: "owner" },
+        { userId: fallbackMemberId, role: "member" },
+      ]),
+    );
     expect(
       await db
         .select({ connectionId: providerLeagueLinks.connectionId })
@@ -1697,6 +1743,74 @@ describe.skipIf(!postgresAvailable)("account data repository against real Postgr
         .from(leagueSyncExclusions)
         .where(eq(leagueSyncExclusions.userId, ownerId)),
     ).toEqual([{ provider: "espn", externalKey: "24681012" }]);
+  });
+
+  it("upgrades invitation membership without downgrading commissioner or owner roles", async () => {
+    const inviterId = randomUUID();
+    const ownerId = randomUUID();
+    const commissionerId = randomUUID();
+    const memberId = randomUUID();
+    const leagueId = randomUUID();
+    await db.insert(users).values([
+      {
+        id: inviterId,
+        email: `${inviterId}@example.test`,
+        displayName: "Invitation Administrator",
+        role: "admin",
+      },
+      { id: ownerId, email: `${ownerId}@example.test`, displayName: "League Owner" },
+      {
+        id: commissionerId,
+        email: `${commissionerId}@example.test`,
+        displayName: "Existing Commissioner",
+      },
+      { id: memberId, email: `${memberId}@example.test`, displayName: "Existing Member" },
+    ]);
+    await db.insert(leagues).values({ id: leagueId, ownerUserId: ownerId, name: "Role Upgrades" });
+    await db.insert(leagueMemberships).values([
+      { leagueId, userId: commissionerId, role: "commissioner" },
+      { leagueId, userId: memberId, role: "member" },
+    ]);
+    const invitationsToAccept = [
+      { userId: memberId, invitedRole: "commissioner" as const },
+      { userId: commissionerId, invitedRole: "member" as const },
+      { userId: ownerId, invitedRole: "commissioner" as const },
+    ];
+    const invitationRows = invitationsToAccept.map((entry) => ({
+      id: randomUUID(),
+      tokenHash: `role-upgrade-${randomUUID()}`,
+      email: `${entry.userId}@example.test`,
+      emailHash: `role-upgrade-email-${randomUUID()}`,
+      invitedByUserId: inviterId,
+      leagueId,
+      leagueRole: entry.invitedRole,
+      expiresAt: new Date("2032-01-01T00:00:00.000Z"),
+    }));
+    await db.insert(invitations).values(invitationRows);
+    const invitationRepository = new DrizzleInvitationRepository(db);
+
+    const results = await Promise.all(
+      invitationsToAccept.map((entry, index) =>
+        invitationRepository.accept({
+          tokenHash: invitationRows[index]?.tokenHash ?? "missing-token-hash",
+          identity: { kind: "existing_user", userId: entry.userId },
+          now: NOW,
+        }),
+      ),
+    );
+
+    expect(results[0]).toMatchObject({
+      status: "accepted",
+      acceptance: { membership: { leagueId, role: "commissioner" } },
+    });
+    expect(results[1]).toMatchObject({
+      status: "accepted",
+      acceptance: { membership: { leagueId, role: "commissioner" } },
+    });
+    expect(results[2]).toMatchObject({
+      status: "accepted",
+      acceptance: { membership: { leagueId, role: "owner" } },
+    });
   });
 
   it("deletes a sole-member league but retains the provider exclusion", async () => {

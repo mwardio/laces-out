@@ -4,6 +4,7 @@ import type {
   NormalizedRosterPlayer,
 } from "@laces-out/connectors";
 import {
+  auditEvents,
   bridgeDeviceLeagues,
   bridgeDevices,
   espnLeagueSyncStates,
@@ -168,7 +169,7 @@ export function espnArtifactChecksumNeedsCanonicalization(input: {
 
 /**
  * A successful provider connection is the league-join mechanism. The first bridge import
- * bootstraps an owner membership, a later connector joins as a manager, and existing members keep
+ * bootstraps an owner membership, a later connector joins as a member, and existing members keep
  * their role. Merely configuring a league ID grants nothing; this policy runs only after the bridge
  * token, scope, freshness, checksum, and strict ESPN payload have all been validated.
  */
@@ -176,11 +177,11 @@ export function espnRefreshPolicy(input: {
   readonly createdLeague: boolean;
   readonly actorIsAnchoredOwner: boolean;
   readonly existingMembershipRole: LeagueMembershipRole | null;
-}): { readonly membershipGrant: "owner" | "manager" | null } {
+}): { readonly membershipGrant: "owner" | "member" | null } {
   if (input.createdLeague || input.actorIsAnchoredOwner) {
     return { membershipGrant: "owner" };
   }
-  return { membershipGrant: input.existingMembershipRole === null ? "manager" : null };
+  return { membershipGrant: input.existingMembershipRole === null ? "member" : null };
 }
 
 /** Self-asserted provider observations are isolated to one internal league season. */
@@ -209,18 +210,45 @@ export function espnServerSessionCurrentTeamExternalKey(input: {
   readonly bundle: LeagueSyncBundle;
   readonly kind: PersistEspnSyncInput["kind"];
 }): string | null {
+  return espnServerSessionCurrentIdentity(input).teamExternalKey;
+}
+
+export interface EspnServerSessionCurrentIdentity {
+  readonly teamExternalKey: string | null;
+  readonly isCommissioner: boolean | null;
+}
+
+/**
+ * Returns only identity derived from the authenticated server-session path. The commissioner bit is
+ * attached to the exact active ESPN member by the connector; it must never be inferred from a
+ * co-manager on the same team.
+ */
+export function espnServerSessionCurrentIdentity(input: {
+  readonly authority: EspnSyncAuthority;
+  readonly bundle: LeagueSyncBundle;
+  readonly kind: PersistEspnSyncInput["kind"];
+}): EspnServerSessionCurrentIdentity {
   if (
     input.authority.mode !== "server-session" ||
     input.kind !== "espn-session" ||
     input.bundle.provenance.mode !== "server-session"
   ) {
-    return null;
+    return { teamExternalKey: null, isCommissioner: null };
   }
   const currentUserTeams = input.bundle.teams.filter((team) => team.isCurrentUser);
   if (currentUserTeams.length > 1) {
     throw new Error("ESPN server-session snapshot identified multiple current-user teams");
   }
-  return currentUserTeams[0]?.externalId ?? null;
+  const currentUserTeam = currentUserTeams[0];
+  return {
+    teamExternalKey: currentUserTeam?.externalId ?? null,
+    isCommissioner:
+      currentUserTeam?.currentUserIsCommissioner === true
+        ? true
+        : currentUserTeam?.currentUserIsCommissioner === false
+          ? false
+          : null,
+  };
 }
 
 /**
@@ -344,7 +372,8 @@ async function persistServerSessionTeamIdentity(
   leagueId: string,
   leagueSeasonId: string,
 ): Promise<void> {
-  const currentUserTeamExternalKey = espnServerSessionCurrentTeamExternalKey(input);
+  const currentUserIdentity = espnServerSessionCurrentIdentity(input);
+  const currentUserTeamExternalKey = currentUserIdentity.teamExternalKey;
   if (input.authority.mode !== "server-session") return;
   const { actorUserId, connectionId } = input.authority;
 
@@ -399,6 +428,42 @@ async function persistServerSessionTeamIdentity(
     throw new Error("ESPN server-session provider link changed during identity persistence");
   }
   if (!mappedTeam) return;
+
+  // Provider authority may only add commissioner capability. A false or missing flag never
+  // demotes a member, and the canonical owner role is never replaced.
+  if (currentUserIdentity.isCommissioner) {
+    const promotedMemberships = await transaction
+      .update(leagueMemberships)
+      .set({ role: "commissioner", updatedAt: input.now })
+      .where(
+        and(
+          eq(leagueMemberships.leagueId, leagueId),
+          eq(leagueMemberships.userId, actorUserId),
+          eq(leagueMemberships.role, "member"),
+        ),
+      )
+      .returning({ id: leagueMemberships.id });
+    if (promotedMemberships.length > 1) {
+      throw new Error("ESPN League Manager promotion matched multiple memberships");
+    }
+    const promotedMembership = promotedMemberships[0];
+    if (promotedMembership) {
+      await transaction.insert(auditEvents).values({
+        userId: actorUserId,
+        action: "espn.membership.commissioner_promoted",
+        targetType: "league_membership",
+        targetId: promotedMembership.id,
+        correlationId: input.idempotencyKey.slice(0, 128) || "espn-session-commissioner-promotion",
+        metadata: {
+          provider: "espn",
+          signal: "league-manager",
+          previousRole: "member",
+          role: "commissioner",
+        },
+        occurredAt: input.now,
+      });
+    }
+  }
 
   try {
     await transaction.transaction(async (savepoint) => {

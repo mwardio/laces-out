@@ -202,7 +202,7 @@ describe.skipIf(!dockerAvailable)("recap repository against real PostgreSQL", ()
     // seeded here.
     await db
       .insert(leagueMemberships)
-      .values({ leagueId, userId: managerId, role: "manager", claimedFantasyTeamId: teamId });
+      .values({ leagueId, userId: managerId, role: "member", claimedFantasyTeamId: teamId });
   }, 90_000);
 
   beforeEach(async () => {
@@ -532,7 +532,7 @@ describe.skipIf(!dockerAvailable)("recap repository against real PostgreSQL", ()
 
       await expect(repository.getSpiceLevel(leagueId)).resolves.toBe("mild");
       await expect(repository.findMembership(managerId, leagueId)).resolves.toEqual({
-        role: "manager",
+        role: "member",
         claimedFantasyTeamId: teamId,
       });
       await expect(repository.findLatestSeason(leagueId)).resolves.toEqual({ id: seasonId });

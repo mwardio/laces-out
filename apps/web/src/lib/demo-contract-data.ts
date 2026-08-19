@@ -23,7 +23,7 @@ export const demoLeaguePortfolio: LeagueListResponse = {
       name: "North Loop Auction",
       archived: false,
       membership: {
-        role: "manager",
+        role: "member",
         claimedFantasyTeamId: USER_TEAM_ID,
         claimedTeamName: "Budget Ballers",
         claimedAt: "2026-08-20T14:00:00.000Z",
@@ -276,7 +276,7 @@ export const demoAnalyticsSnapshot: LeagueAnalyticsSnapshot = {
     provider: "espn",
   },
   membership: {
-    role: "manager",
+    role: "member",
     claimedTeamId: USER_TEAM_ID,
     claimedTeamName: "Budget Ballers",
   },

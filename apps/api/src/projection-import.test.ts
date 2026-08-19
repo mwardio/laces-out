@@ -31,7 +31,7 @@ const scope: ProjectionLeagueScope = {
   provider: "espn",
   season: 2026,
   currentWeek: 2,
-  membershipRole: "manager",
+  membershipRole: "member",
   applicationRole: "member",
 };
 
@@ -156,6 +156,17 @@ function request(csv: string, visibility: "private" | "league" = "private") {
 }
 
 describe("ProjectionImportService", () => {
+  it("serializes internal ownership as commissioner access", async () => {
+    const repository = new FakeRepository();
+    repository.scope = { ...scope, membershipRole: "owner" };
+    const service = new ProjectionImportService(repository, () => NOW);
+
+    const response = projectionSetListResponseSchema.parse(await service.list(USER_ID, SEASON_ID));
+
+    expect(response.league.membershipRole).toBe("commissioner");
+    expect(JSON.stringify(response)).not.toMatch(/\b(owner|manager|viewer)\b/u);
+  });
+
   it("previews a bounded CSV with exact canonical-ID and exact-name resolution", async () => {
     const repository = new FakeRepository();
     const service = new ProjectionImportService(repository, () => NOW);

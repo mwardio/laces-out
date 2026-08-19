@@ -59,7 +59,7 @@ surfaces retained per-league results plus an aggregate full-success, partial-fai
 pairing-rejected, or failed state. The server independently authorizes every uploaded league ID;
 being present in the browser configuration alone grants nothing. A first accepted snapshot may
 create a new internal league owned by the device's authenticated Laces Out user. A later successful
-provider connection automatically joins that shared league as manager; no separate league approval
+provider connection automatically joins that shared league as a member; no separate league approval
 is required. Existing roles are preserved, and every joined role may refresh shared provider
 observations. Snapshots older than the current canonical observation are rejected.
 
@@ -110,13 +110,17 @@ offseason leagues about every six hours, with stable jitter. Opening a stale lea
 same server-side read immediately, including from mobile, without requiring the desktop browser to
 be awake.
 
-For an authenticated server-session core read, the normalizer compares the session's SWID with the
-exact ESPN owner IDs returned for that league. Exactly one matching team is stored on the member's
-provider-to-league link and automatically fills an otherwise empty team selection. Zero or multiple
-matches clear the provider mapping and fall back to manual resolution; an existing or conflicting
-selection is never overwritten. The SWID itself remains only in the encrypted credential context
-and is not copied into normalized artifacts, warnings, or logs. Browser-local and public reads have
-no authenticated member context and therefore cannot perform this mapping.
+For an authenticated server-session core read, the fixed `mNav` view supplies ESPN's
+`members[].isLeagueManager` flag and the normalizer compares the session's SWID with the exact ESPN
+member and owner IDs returned for that league. Exactly one matching team is stored on the member's
+provider-to-league link and automatically fills an otherwise empty team selection. When that exact
+authenticated member is also marked as a League Manager, an ordinary league membership is promoted
+to commissioner. A commissioner or owner is never demoted when ESPN reports false or omits the
+flag, and another co-manager's flag is never used. Zero or multiple identity matches clear the
+provider mapping and fall back to manual resolution; an existing or conflicting selection is never
+overwritten. The SWID itself remains only in the encrypted credential context and is not copied
+into normalized artifacts, warnings, or logs. Browser-local and public reads have no authenticated
+member context and therefore cannot perform this mapping or role promotion.
 
 The connection is visible and revocable in **League Sync**. A 401 or 403 marks it as needing ESPN
 sign-in again and stops scheduled reads until the member explicitly renews it. Disconnecting
@@ -202,7 +206,7 @@ identity reconciliation or upload behavior because its ephemeral room is not a c
   exactly-once event ledger. Completed `mDraftDetail` results reconcile with that ledger.
 - Unknown or ambiguous players and teams hold the board instead of being guessed. Schema drift,
   malformed DOM, and lost browser state preserve the last good board and expose manual backup.
-- A mobile viewer receives the same accepted state; normal provider-to-app latency is at most five
+- A mobile member receives the same accepted state; normal provider-to-app latency is at most five
   seconds at p95 and accepted-state recommendation recalculation remains below 500 ms.
 - No ESPN password, cookie, `SWID`, `espn_s2`, draft token, WebSocket URL or frame, chat, page
   storage, or raw HTML reaches Laces Out.

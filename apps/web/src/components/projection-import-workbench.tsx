@@ -969,7 +969,7 @@ export function ProjectionImportWorkbench() {
                   <small>
                     {canShare
                       ? "League members can use it in their decision desk."
-                      : "Owner or commissioner permission required."}
+                      : "Commissioner permission required."}
                   </small>
                 </span>
               </label>

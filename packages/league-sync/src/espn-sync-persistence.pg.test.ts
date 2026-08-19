@@ -12,6 +12,7 @@ import { fileURLToPath } from "node:url";
 
 import type { LeagueSyncBundle, NormalizedTeam } from "@laces-out/connectors";
 import {
+  auditEvents,
   createDatabase,
   fantasyTeams,
   leagueMemberships,
@@ -150,6 +151,7 @@ function team(
   providerLeagueId: string,
   providerTeamId: string,
   isCurrentUser: boolean,
+  currentUserIsCommissioner: boolean | null | undefined,
 ): NormalizedTeam {
   const externalId = `espn:${SEASON}:${providerLeagueId}:team:${providerTeamId}`;
   return {
@@ -160,6 +162,9 @@ function team(
     url: null,
     logoUrl: null,
     isCurrentUser,
+    ...(isCurrentUser && currentUserIsCommissioner !== undefined
+      ? { currentUserIsCommissioner }
+      : {}),
     managers: [],
     roster: [],
   };
@@ -168,6 +173,7 @@ function team(
 function bundle(
   providerLeagueId: string,
   currentProviderTeamId: "1" | "2" | null,
+  currentUserIsCommissioner?: boolean | null,
 ): LeagueSyncBundle {
   return {
     schemaVersion: 1,
@@ -192,7 +198,12 @@ function bundle(
       },
     },
     teams: ["1", "2"].map((providerTeamId) =>
-      team(providerLeagueId, providerTeamId, currentProviderTeamId === providerTeamId),
+      team(
+        providerLeagueId,
+        providerTeamId,
+        currentProviderTeamId === providerTeamId,
+        currentUserIsCommissioner,
+      ),
     ),
     provenance: {
       mode: "server-session",
@@ -234,6 +245,7 @@ describe.skipIf(!dockerAvailable)("ESPN server-session identity against real Pos
 
   async function createScenario(
     currentUserTeamExternalKey: string | null = null,
+    actorRole: "owner" | "member" = "owner",
   ): Promise<Scenario> {
     scenarioCounter += 1;
     const actorUserId = randomUUID();
@@ -241,12 +253,24 @@ describe.skipIf(!dockerAvailable)("ESPN server-session identity against real Pos
     const leagueId = randomUUID();
     const leagueSeasonId = randomUUID();
     const providerLeagueId = String(scenarioCounter);
+    const ownerUserId = actorRole === "owner" ? actorUserId : randomUUID();
 
-    await db.insert(users).values({
-      id: actorUserId,
-      email: `espn-identity-${providerLeagueId}@example.test`,
-      displayName: `ESPN User ${providerLeagueId}`,
-    });
+    await db.insert(users).values([
+      {
+        id: actorUserId,
+        email: `espn-identity-${providerLeagueId}@example.test`,
+        displayName: `ESPN User ${providerLeagueId}`,
+      },
+      ...(ownerUserId === actorUserId
+        ? []
+        : [
+            {
+              id: ownerUserId,
+              email: `espn-owner-${providerLeagueId}@example.test`,
+              displayName: `ESPN Owner ${providerLeagueId}`,
+            },
+          ]),
+    ]);
     await db.insert(providerConnections).values({
       id: connectionId,
       userId: actorUserId,
@@ -258,9 +282,16 @@ describe.skipIf(!dockerAvailable)("ESPN server-session identity against real Pos
     });
     await db.insert(leagues).values({
       id: leagueId,
-      ownerUserId: actorUserId,
+      ownerUserId,
       name: `ESPN League ${providerLeagueId}`,
     });
+    if (actorRole === "member") {
+      await db.insert(leagueMemberships).values({
+        leagueId,
+        userId: actorUserId,
+        role: "member",
+      });
+    }
     await db.insert(leagueSeasons).values({
       id: leagueSeasonId,
       leagueId,
@@ -317,6 +348,7 @@ describe.skipIf(!dockerAvailable)("ESPN server-session identity against real Pos
       .select({
         claimedFantasyTeamId: leagueMemberships.claimedFantasyTeamId,
         claimedAt: leagueMemberships.claimedAt,
+        role: leagueMemberships.role,
       })
       .from(leagueMemberships)
       .where(
@@ -356,12 +388,12 @@ describe.skipIf(!dockerAvailable)("ESPN server-session identity against real Pos
     }
   });
 
-  it("stores the exact verified mapping and auto-claims an unclaimed actor membership", async () => {
-    const scenario = await createScenario();
+  it("stores the exact mapping, auto-claims, and promotes an authenticated league manager", async () => {
+    const scenario = await createScenario(null, "member");
     const teamOneExternalKey = `espn:${SEASON}:${scenario.providerLeagueId}:team:1`;
 
     const receipt = await persistence.persist(
-      persistenceInput(scenario, bundle(scenario.providerLeagueId, "1"), FIRST_CAPTURE),
+      persistenceInput(scenario, bundle(scenario.providerLeagueId, "1", true), FIRST_CAPTURE),
     );
 
     expect(receipt.state).toBe("accepted");
@@ -371,10 +403,40 @@ describe.skipIf(!dockerAvailable)("ESPN server-session identity against real Pos
     expect(state.link.lastSyncedAt).toEqual(FIRST_CAPTURE);
     expect(state.membership.claimedFantasyTeamId).toBe(teamOne.id);
     expect(state.membership.claimedAt).toEqual(new Date(FIRST_CAPTURE.getTime() + 1_000));
+    expect(state.membership.role).toBe("commissioner");
+
+    await persistence.persist(
+      persistenceInput(scenario, bundle(scenario.providerLeagueId, "1", true), SECOND_CAPTURE),
+    );
+    const promotionEvents = await db
+      .select({
+        action: auditEvents.action,
+        targetType: auditEvents.targetType,
+        metadata: auditEvents.metadata,
+      })
+      .from(auditEvents)
+      .where(
+        and(
+          eq(auditEvents.userId, scenario.actorUserId),
+          eq(auditEvents.action, "espn.membership.commissioner_promoted"),
+        ),
+      );
+    expect(promotionEvents).toEqual([
+      {
+        action: "espn.membership.commissioner_promoted",
+        targetType: "league_membership",
+        metadata: {
+          provider: "espn",
+          signal: "league-manager",
+          previousRole: "member",
+          role: "commissioner",
+        },
+      },
+    ]);
   });
 
-  it("clears a stale mapping on zero matches and backfills identity on an unchanged sync", async () => {
-    const scenario = await createScenario("espn:2031:stale:team:99");
+  it("clears a stale mapping and backfills identity plus role on an unchanged sync", async () => {
+    const scenario = await createScenario("espn:2031:stale:team:99", "member");
 
     const firstReceipt = await persistence.persist(
       persistenceInput(scenario, bundle(scenario.providerLeagueId, null), FIRST_CAPTURE),
@@ -382,9 +444,10 @@ describe.skipIf(!dockerAvailable)("ESPN server-session identity against real Pos
     expect(firstReceipt.state).toBe("accepted");
     expect((await identityState(scenario)).link.currentUserTeamExternalKey).toBeNull();
     expect((await identityState(scenario)).membership.claimedFantasyTeamId).toBeNull();
+    expect((await identityState(scenario)).membership.role).toBe("member");
 
     const secondReceipt = await persistence.persist(
-      persistenceInput(scenario, bundle(scenario.providerLeagueId, "2"), SECOND_CAPTURE),
+      persistenceInput(scenario, bundle(scenario.providerLeagueId, "2", true), SECOND_CAPTURE),
     );
 
     expect(secondReceipt.state).toBe("unchanged");
@@ -394,6 +457,99 @@ describe.skipIf(!dockerAvailable)("ESPN server-session identity against real Pos
     expect(state.link.currentUserTeamExternalKey).toBe(teamTwo.externalKey);
     expect(state.link.lastSyncedAt).toEqual(SECOND_CAPTURE);
     expect(state.membership.claimedFantasyTeamId).toBe(teamTwo.id);
+    expect(state.membership.role).toBe("commissioner");
+  });
+
+  it.each([
+    ["false", false],
+    ["missing", null],
+  ] as const)("keeps an ordinary member ordinary when the flag is %s", async (_label, flag) => {
+    const scenario = await createScenario(null, "member");
+
+    await persistence.persist(
+      persistenceInput(scenario, bundle(scenario.providerLeagueId, "1", flag), FIRST_CAPTURE),
+    );
+
+    expect((await identityState(scenario)).membership.role).toBe("member");
+  });
+
+  it.each([
+    ["false", false],
+    ["missing", null],
+  ] as const)(
+    "never demotes an existing commissioner when the flag is %s",
+    async (_label, flag) => {
+      const scenario = await createScenario(null, "member");
+      await db
+        .update(leagueMemberships)
+        .set({ role: "commissioner" })
+        .where(
+          and(
+            eq(leagueMemberships.leagueId, scenario.leagueId),
+            eq(leagueMemberships.userId, scenario.actorUserId),
+          ),
+        );
+
+      await persistence.persist(
+        persistenceInput(scenario, bundle(scenario.providerLeagueId, "1", flag), FIRST_CAPTURE),
+      );
+
+      expect((await identityState(scenario)).membership.role).toBe("commissioner");
+    },
+  );
+
+  it("never replaces the canonical owner role", async () => {
+    const scenario = await createScenario();
+
+    await persistence.persist(
+      persistenceInput(scenario, bundle(scenario.providerLeagueId, "1", true), FIRST_CAPTURE),
+    );
+
+    expect((await identityState(scenario)).membership.role).toBe("owner");
+  });
+
+  it("rejects a commissioner signal from an actor who does not own the provider link", async () => {
+    const scenario = await createScenario(null, "member");
+    const unauthorizedUserId = randomUUID();
+    await db.insert(users).values({
+      id: unauthorizedUserId,
+      email: `espn-unauthorized-${scenario.providerLeagueId}@example.test`,
+      displayName: "Unauthorized ESPN User",
+    });
+    await db.insert(leagueMemberships).values({
+      leagueId: scenario.leagueId,
+      userId: unauthorizedUserId,
+      role: "member",
+    });
+    const input = persistenceInput(
+      scenario,
+      bundle(scenario.providerLeagueId, "1", true),
+      FIRST_CAPTURE,
+    );
+
+    await expect(
+      persistence.persist({
+        ...input,
+        authority: {
+          mode: "server-session",
+          actorUserId: unauthorizedUserId,
+          connectionId: scenario.connectionId,
+          leagueSeasonId: scenario.leagueSeasonId,
+        },
+      }),
+    ).rejects.toThrow("authorized provider link");
+
+    const [membership] = await db
+      .select({ role: leagueMemberships.role })
+      .from(leagueMemberships)
+      .where(
+        and(
+          eq(leagueMemberships.leagueId, scenario.leagueId),
+          eq(leagueMemberships.userId, unauthorizedUserId),
+        ),
+      )
+      .limit(1);
+    expect(membership?.role).toBe("member");
   });
 
   it("keeps a taken mapped team conflict from failing the otherwise valid sync", async () => {
@@ -411,7 +567,7 @@ describe.skipIf(!dockerAvailable)("ESPN server-session identity against real Pos
     await db.insert(leagueMemberships).values({
       leagueId: scenario.leagueId,
       userId: otherUserId,
-      role: "manager",
+      role: "member",
       claimedFantasyTeamId: teamOne.id,
       claimedAt: FIRST_CAPTURE,
     });

@@ -27,7 +27,7 @@ const snapshot: LeagueAnalyticsSnapshot = {
     provider: null,
   },
   membership: {
-    role: "manager",
+    role: "member",
     claimedTeamId: null,
     claimedTeamName: null,
   },

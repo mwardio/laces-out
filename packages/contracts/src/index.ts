@@ -143,10 +143,18 @@ export const connectionSummarySchema = z.object({
 });
 export type ConnectionSummary = z.infer<typeof connectionSummarySchema>;
 
-export const leagueMembershipRoleSchema = z.enum(["owner", "commissioner", "manager", "viewer"]);
+/**
+ * Public league access deliberately has only two levels. Database ownership remains an internal
+ * lifecycle concern and is serialized as commissioner access at every API boundary.
+ */
+export const leagueAccessRoleSchema = z.enum(["member", "commissioner"]);
+export type LeagueAccessRole = z.infer<typeof leagueAccessRoleSchema>;
+
+/** @deprecated Use leagueAccessRoleSchema; retained as a source-compatible public alias. */
+export const leagueMembershipRoleSchema = leagueAccessRoleSchema;
 
 export const leagueMembershipSummarySchema = z.object({
-  role: leagueMembershipRoleSchema,
+  role: leagueAccessRoleSchema,
   claimedFantasyTeamId: z.string().uuid().nullable(),
   claimedTeamName: z.string().nullable(),
   claimedAt: z.iso.datetime().nullable(),
@@ -1695,7 +1703,7 @@ export const draftSessionSnapshotSchema = z
     transport: draftTransportSchema,
     /** True only while a provider feed is actually supplying this room. */
     providerPolling: z.boolean(),
-    accessRole: leagueMembershipRoleSchema,
+    accessRole: leagueAccessRoleSchema,
     sequence: draftSequenceSchema,
     persistedState: z.enum(["created", "live", "complete"]),
     config: draftConfigSchema,
@@ -2164,7 +2172,7 @@ export const projectionSetListResponseSchema = z
         provider: providerSchema,
         season: z.number().int().min(2000).max(2100),
         currentWeek: z.number().int().min(1).max(18).nullable(),
-        membershipRole: leagueMembershipRoleSchema,
+        membershipRole: leagueAccessRoleSchema,
         canShareLeague: z.boolean(),
       })
       .strict(),
@@ -2586,7 +2594,7 @@ export const leagueAnalyticsSnapshotSchema = z
       .strict(),
     membership: z
       .object({
-        role: leagueMembershipRoleSchema,
+        role: leagueAccessRoleSchema,
         claimedTeamId: z.string().uuid().nullable(),
         claimedTeamName: z.string().min(1).max(200).nullable(),
       })

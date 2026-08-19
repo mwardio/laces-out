@@ -11,15 +11,17 @@ import type {
   InvitationInspection,
   InvitationScope,
 } from "./invitation.js";
+import { publicLeagueAccessRole } from "./public-league-access.js";
 
 const capabilitySchema = z.string().regex(/^[A-Za-z0-9_-]{43}$/u);
 const capabilityBodySchema = z.object({ token: capabilitySchema }).strict();
+const requestedLeagueRoleSchema = z.enum(["commissioner", "member", "manager", "viewer"]);
 const createBodySchema = z
   .object({
     email: z.email().max(254),
     role: z.enum(["member", "admin"]).default("member"),
     leagueId: z.string().uuid().optional(),
-    leagueRole: z.enum(["commissioner", "manager", "viewer"]).optional(),
+    leagueRole: requestedLeagueRoleSchema.optional(),
     expiresInDays: z.number().int().min(1).max(30).default(7),
   })
   .strict()
@@ -34,6 +36,12 @@ const acceptBodySchema = z
   })
   .strict();
 const invitationIdParamsSchema = z.object({ invitationId: z.string().uuid() }).strict();
+
+function canonicalLeagueRole(
+  role: z.infer<typeof requestedLeagueRoleSchema>,
+): InvitationScope["leagueRole"] {
+  return role === "commissioner" ? "commissioner" : "member";
+}
 
 export interface InvitationPort {
   create(input: {
@@ -97,7 +105,12 @@ export function registerInvitationRoutes(
       email: input.email,
       role: input.role,
       ...(input.leagueId && input.leagueRole
-        ? { scope: { leagueId: input.leagueId, leagueRole: input.leagueRole } }
+        ? {
+            scope: {
+              leagueId: input.leagueId,
+              leagueRole: canonicalLeagueRole(input.leagueRole),
+            },
+          }
         : {}),
       expiresAt: new Date(Date.now() + input.expiresInDays * 24 * 60 * 60 * 1000),
     });
@@ -171,7 +184,12 @@ export function registerInvitationRoutes(
         invitationId: acceptance.invitationId,
         user: acceptance.user,
         createdUser: acceptance.createdUser,
-        membership: acceptance.membership,
+        membership: acceptance.membership
+          ? {
+              ...acceptance.membership,
+              role: publicLeagueAccessRole(acceptance.membership.role),
+            }
+          : null,
         sessionEstablished,
       };
     },

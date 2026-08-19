@@ -10,7 +10,7 @@ export interface LeagueSummary {
   teamName: string;
   provider: Provider;
   format: DraftFormat;
-  role: "Commissioner" | "Manager";
+  role: "Commissioner" | "Member";
   accent: "lime" | "blue" | "orange" | "violet";
   record: string;
   place: string;
@@ -110,7 +110,7 @@ export const leagues: readonly LeagueSummary[] = [
     teamName: "Budget Ballers",
     provider: "ESPN",
     format: "Auction",
-    role: "Manager",
+    role: "Member",
     accent: "blue",
     record: "9–4",
     place: "2nd of 10",
@@ -128,7 +128,7 @@ export const leagues: readonly LeagueSummary[] = [
     teamName: "Red Zone Radio",
     provider: "Yahoo",
     format: "Snake",
-    role: "Manager",
+    role: "Member",
     accent: "orange",
     record: "7–6",
     place: "5th of 12",
@@ -146,7 +146,7 @@ export const leagues: readonly LeagueSummary[] = [
     teamName: "Ship It Sundays",
     provider: "ESPN",
     format: "Snake",
-    role: "Manager",
+    role: "Member",
     accent: "violet",
     record: "10–3",
     place: "1st of 10",

@@ -39,9 +39,7 @@ function membershipRoleUpgrade(invitedRole: InvitableLeagueRole): SQL {
   switch (invitedRole) {
     case "commissioner":
       return sql`case when ${leagueMemberships.role} = 'owner' then 'owner' else 'commissioner' end`;
-    case "manager":
-      return sql`case when ${leagueMemberships.role} in ('owner', 'commissioner') then ${leagueMemberships.role} else 'manager' end`;
-    case "viewer":
+    case "member":
       return sql`${leagueMemberships.role}`;
   }
 }

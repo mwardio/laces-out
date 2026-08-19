@@ -23,7 +23,7 @@ export type ProviderName = "yahoo" | "espn" | "manual";
 export type SyncedProviderName = Exclude<ProviderName, "manual">;
 export type ConnectionHealth = "pending" | "healthy" | "degraded" | "reauthorize" | "disabled";
 export type ApplicationRole = "member" | "admin";
-export type LeagueMembershipRole = "owner" | "commissioner" | "manager" | "viewer";
+export type LeagueMembershipRole = "owner" | "commissioner" | "member";
 export type RecapSpiceLevel = "mild" | "medium" | "scorched";
 export type RankingListKind = "rankings" | "adp" | "auction-values" | "cheat-sheet";
 export type RankingVisibility = "private" | "league" | "shared-link";
@@ -554,7 +554,7 @@ export const invitations = pgTable(
     check("invitations_role_check", sql`${table.role} in ('member', 'admin')`),
     check(
       "invitations_league_role_check",
-      sql`${table.leagueRole} is null or ${table.leagueRole} in ('commissioner', 'manager', 'viewer')`,
+      sql`${table.leagueRole} is null or ${table.leagueRole} in ('commissioner', 'member')`,
     ),
     check(
       "invitations_league_scope_check",
@@ -845,7 +845,7 @@ export const leagueMemberships = pgTable(
     userId: uuid("user_id")
       .notNull()
       .references(() => users.id, { onDelete: "cascade" }),
-    role: text("role").$type<LeagueMembershipRole>().notNull().default("manager"),
+    role: text("role").$type<LeagueMembershipRole>().notNull().default("member"),
     claimedFantasyTeamId: uuid("claimed_fantasy_team_id").references(() => fantasyTeams.id, {
       onDelete: "set null",
     }),
@@ -869,7 +869,7 @@ export const leagueMemberships = pgTable(
     index("league_memberships_inviter_idx").on(table.invitedByUserId),
     check(
       "league_memberships_role_check",
-      sql`${table.role} in ('owner', 'commissioner', 'manager', 'viewer')`,
+      sql`${table.role} in ('owner', 'commissioner', 'member')`,
     ),
     check(
       "league_memberships_claimed_at_check",

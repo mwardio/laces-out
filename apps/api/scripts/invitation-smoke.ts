@@ -62,7 +62,7 @@ try {
     const created = await service.create({
       invitedByUserId: administrator.id,
       email: "invite-friend-smoke@fourthdown.local",
-      scope: { leagueId: league.id, leagueRole: "manager" },
+      scope: { leagueId: league.id, leagueRole: "member" },
     });
     const inspection = await service.inspect(created.token);
     assert.equal(inspection.requiresAuthentication, false);
@@ -89,7 +89,7 @@ try {
         ),
       )
       .limit(1);
-    assert.equal(membership?.role, "manager");
+    assert.equal(membership?.role, "member");
 
     let consumedOnce = false;
     try {

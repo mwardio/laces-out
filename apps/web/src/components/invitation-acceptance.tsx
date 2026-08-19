@@ -15,13 +15,14 @@ import { type FormEvent, useEffect, useState } from "react";
 
 import { apiBaseUrl } from "../lib/api-client";
 import { BACK_TO_SIGN_IN } from "../lib/copy";
+import { leagueAccessLabel } from "../lib/invitation-access";
 
 interface InvitationInspection {
   readonly emailHint: string;
   readonly role: "member" | "admin";
   readonly scope: {
     readonly leagueName: string | null;
-    readonly leagueRole: "commissioner" | "manager" | "viewer";
+    readonly leagueRole: "member" | "commissioner";
   } | null;
   readonly expiresAt: string;
   readonly requiresAuthentication: boolean;
@@ -176,7 +177,7 @@ export function InvitationAcceptance() {
             <LockKeyhole size={16} />
             <span>
               {inspection.scope
-                ? `${inspection.scope.leagueRole} access to ${inspection.scope.leagueName ?? "the invited league"}`
+                ? `${leagueAccessLabel(inspection.scope.leagueRole)} access to ${inspection.scope.leagueName ?? "the invited league"}`
                 : `${inspection.role} access to this private locker room`}
               {`. Expires ${new Date(inspection.expiresAt).toLocaleString()}.`}
             </span>

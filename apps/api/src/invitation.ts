@@ -339,7 +339,7 @@ export class InvitationService {
     }
     if (input.scope) {
       assertIdentifier(input.scope.leagueId);
-      if (!(["commissioner", "manager", "viewer"] as const).includes(input.scope.leagueRole)) {
+      if (!(["commissioner", "member"] as const).includes(input.scope.leagueRole)) {
         throw new InvitationError("INVITATION_INVALID_INPUT");
       }
     }

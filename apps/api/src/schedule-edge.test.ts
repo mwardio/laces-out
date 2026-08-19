@@ -224,7 +224,7 @@ function repository(): ScheduleEdgeRepository {
           ? {
               leagueId: LEAGUE_ID,
               leagueName: "Test League",
-              role: "manager",
+              role: "member",
               claimedFantasyTeamId: TEAM_ID,
             }
           : undefined,

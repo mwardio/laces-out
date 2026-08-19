@@ -82,7 +82,7 @@ export interface ManualBackupControls {
   /** Only a provider-backed room can freeze provider application. */
   readonly available: boolean;
   readonly active: boolean;
-  /** Manual overrides change shared state, so they stay owner/commissioner only (§5.3). */
+  /** Manual overrides change shared state, so they stay commissioner-only (§5.3). */
   readonly authorized: boolean;
   readonly pendingReconciliation: number;
   readonly summary: string;
@@ -382,7 +382,7 @@ function manualBackupControls(
   session: DraftSessionSnapshot,
   feed: EspnLiveDraftFeedStatus | null,
 ): ManualBackupControls {
-  const authorized = session.accessRole === "owner" || session.accessRole === "commissioner";
+  const authorized = session.accessRole === "commissioner";
   if (feed === null) {
     return {
       available: false,
@@ -405,7 +405,7 @@ function manualBackupControls(
     pendingReconciliation: pending,
     summary: feed.manualBackupActive
       ? `${provider} updates are still being validated and counted, but none are applied while manual backup is on.`
-      : `Freezes ${provider} picks so an owner or commissioner can keep the board moving by hand.`,
+      : `Freezes ${provider} picks so a commissioner can keep the board moving by hand.`,
     activateLabel: "Activate manual backup",
     returnLabel:
       pending > 0 ? `Review ${pluralize(pending, "difference")}` : `Return to ${provider} sync`,

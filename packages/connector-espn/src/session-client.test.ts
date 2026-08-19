@@ -24,6 +24,16 @@ describe("ESPN server-session read client", () => {
       expect(new Headers(init?.headers).get("cookie")).toBe(
         `SWID=${credential.swid}; espn_s2=${credential.espnS2}`,
       );
+      if (fetch.mock.calls.length === 1) {
+        expect(url.searchParams.getAll("view")).toEqual([
+          "mSettings",
+          "mTeam",
+          "mRoster",
+          "mStandings",
+          "mMatchup",
+          "mNav",
+        ]);
+      }
       if (new Headers(init?.headers).get("x-fantasy-filter")?.includes("WAIVERS")) {
         return jsonResponse({ error: "temporary" }, 500);
       }

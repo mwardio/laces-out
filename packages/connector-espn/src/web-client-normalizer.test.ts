@@ -315,7 +315,39 @@ describe("ESPN web-client snapshot normalizer", () => {
     });
 
     expect(bundle.teams.map((team) => team.isCurrentUser)).toEqual([true, false]);
+    expect(bundle.teams.map((team) => team.currentUserIsCommissioner)).toEqual([true, null]);
     expect(bundle.warnings.join(" ")).not.toContain("isCurrentUser is false");
+  });
+
+  it("binds the league-manager flag to the exact active member, not a co-manager", () => {
+    const value = parsedFixture();
+    const activeMember = value.payload.members[0]!;
+    const leagueManager = value.payload.members[1]!;
+    activeMember.isLeagueManager = false;
+    leagueManager.isLeagueManager = true;
+    value.payload.teams[0]!.owners = [activeMember.id, leagueManager.id];
+    value.payload.teams[0]!.primaryOwner = activeMember.id;
+
+    const bundle = normalizeEspnWebClientSnapshot(value, { activeMemberId: activeMember.id });
+
+    expect(bundle.teams[0]).toMatchObject({
+      isCurrentUser: true,
+      currentUserIsCommissioner: false,
+      managers: [{ isCommissioner: false }, { isCommissioner: true }],
+    });
+  });
+
+  it("keeps an omitted active-member league-manager flag unknown", () => {
+    const value = parsedFixture();
+    const activeMember = value.payload.members[0]!;
+    delete activeMember.isLeagueManager;
+
+    const bundle = normalizeEspnWebClientSnapshot(value, { activeMemberId: activeMember.id });
+
+    expect(bundle.teams[0]).toMatchObject({
+      isCurrentUser: true,
+      currentUserIsCommissioner: null,
+    });
   });
 
   it("fails closed without leaking an unmatched active ESPN member ID", () => {
@@ -338,6 +370,26 @@ describe("ESPN web-client snapshot normalizer", () => {
     expect(bundle.teams.every((team) => !team.isCurrentUser)).toBe(true);
     expect(bundle.warnings.join(" ")).toContain("matched multiple team owners");
     expect(bundle.warnings.join(" ")).not.toContain(activeMemberId);
+  });
+
+  it("fails closed when two raw member IDs canonicalize to the active SWID", () => {
+    const value = parsedFixture();
+    const bracedMemberId = "{123E4567-E89B-42D3-A456-426614174000}";
+    const unbracedMemberId = "123e4567-e89b-42d3-a456-426614174000";
+    value.payload.members[0]!.id = bracedMemberId;
+    value.payload.members[1]!.id = unbracedMemberId;
+    value.payload.teams[0]!.owners = [bracedMemberId];
+    value.payload.teams[0]!.primaryOwner = bracedMemberId;
+    value.payload.teams[1]!.owners = [unbracedMemberId];
+    value.payload.teams[1]!.primaryOwner = unbracedMemberId;
+
+    const bundle = normalizeEspnWebClientSnapshot(value, { activeMemberId: unbracedMemberId });
+
+    expect(bundle.teams.every((team) => !team.isCurrentUser)).toBe(true);
+    expect(bundle.teams.every((team) => team.currentUserIsCommissioner === null)).toBe(true);
+    expect(bundle.warnings.join(" ")).toContain("matched multiple league members");
+    expect(bundle.warnings.join(" ")).not.toContain(unbracedMemberId);
+    expect(bundle.warnings.join(" ")).not.toContain(bracedMemberId);
   });
 
   it("preserves 20-digit provider team IDs across teams, standings, and matchup sides", () => {
@@ -432,6 +484,10 @@ describe("ESPN web-client snapshot normalizer", () => {
   });
 
   it("rejects endpoint drift and envelope/payload identity mismatches", () => {
+    const authenticatedViews = parsedFixture();
+    authenticatedViews.endpoint += "&view=mNav";
+    expect(() => normalizeEspnWebClientSnapshot(authenticatedViews)).not.toThrow();
+
     const missingView = parsedFixture();
     missingView.endpoint = missingView.endpoint.replace("&view=mRoster", "");
     expect(captureError(missingView)).toMatchObject({ code: "INVALID_ENVELOPE" });

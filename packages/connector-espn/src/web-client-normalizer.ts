@@ -27,7 +27,9 @@ export const MAX_ESPN_WEB_CLIENT_SNAPSHOT_BYTES = 5 * 1024 * 1024;
 
 const ESPN_READ_ORIGIN = "https://lm-api-reads.fantasy.espn.com";
 const REQUIRED_VIEWS = ["mSettings", "mTeam", "mRoster"] as const;
-const ALLOWED_VIEWS = new Set([...REQUIRED_VIEWS, "mStandings", "mMatchup"]);
+// mNav is optional because already-released bridge clients do not request it. Authenticated
+// server-session reads add it to obtain members[].isLeagueManager without breaking those clients.
+const ALLOWED_VIEWS = new Set([...REQUIRED_VIEWS, "mStandings", "mMatchup", "mNav"]);
 const ENVELOPE_DISCRIMINATORS = new Set([
   "schemaVersion",
   "provider",
@@ -1194,17 +1196,31 @@ function canonicalEspnMemberId(value: string): string {
 
 function identifyCurrentUserTeam(
   teams: readonly NormalizedTeam[],
+  members: readonly EspnWebClientPayloadV1["members"][number][],
   activeMemberId: string | null,
 ): { readonly teams: readonly NormalizedTeam[]; readonly warning: string | null } {
   if (activeMemberId === null) {
     return {
-      teams,
+      teams: teams.map((team) => ({ ...team, currentUserIsCommissioner: null })),
       warning:
         "The snapshot does not identify the active ESPN member, so isCurrentUser is false for every team.",
     };
   }
 
   const canonicalActiveMemberId = canonicalEspnMemberId(activeMemberId);
+  const matchingMembers = members.filter(
+    (member) => canonicalEspnMemberId(member.id) === canonicalActiveMemberId,
+  );
+  if (matchingMembers.length !== 1) {
+    return {
+      teams: teams.map((team) => ({ ...team, currentUserIsCommissioner: null })),
+      warning:
+        matchingMembers.length === 0
+          ? "The active ESPN member did not match a team owner, so isCurrentUser is false for every team."
+          : "The active ESPN member matched multiple league members, so isCurrentUser is false for every team.",
+    };
+  }
+
   const matches = teams.filter((team) =>
     team.managers.some(
       (manager) =>
@@ -1214,7 +1230,7 @@ function identifyCurrentUserTeam(
   );
   if (matches.length !== 1) {
     return {
-      teams,
+      teams: teams.map((team) => ({ ...team, currentUserIsCommissioner: null })),
       warning:
         matches.length === 0
           ? "The active ESPN member did not match a team owner, so isCurrentUser is false for every team."
@@ -1223,10 +1239,13 @@ function identifyCurrentUserTeam(
   }
 
   const currentUserTeamId = matches[0]?.externalId;
+  const currentUserIsCommissioner = matchingMembers[0]?.isLeagueManager ?? null;
   return {
     teams: teams.map((team) => ({
       ...team,
       isCurrentUser: team.externalId === currentUserTeamId,
+      currentUserIsCommissioner:
+        team.externalId === currentUserTeamId ? currentUserIsCommissioner : null,
     })),
     warning: null,
   };
@@ -1521,7 +1540,7 @@ export function normalizeEspnWebClientSnapshot(
       acquisitionSettings.isUsingAcquisitionBudget ? acquisitionSettings.acquisitionBudget : null,
     ),
   );
-  const currentUserTeam = identifyCurrentUserTeam(normalizedTeams, activeMemberId);
+  const currentUserTeam = identifyCurrentUserTeam(normalizedTeams, payload.members, activeMemberId);
   const warnings = [
     "ESPN web-client contract v1 is unofficial and can drift; requested settings, team, roster, standings, and matchup shapes were validated before normalization.",
     "This parser performs no network requests; provider access and session-secret handling remain outside normalization.",

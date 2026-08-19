@@ -645,7 +645,7 @@ export function ReckoningRecapPanel({ leagueId, snapshot, demo }: ReckoningRecap
             <p className={styles.muted}>
               {demo
                 ? "Sample notes for voice, history, and rivalries."
-                : "Private notes for voice, history, and rivalries. Owners and commissioners only."}
+                : "Private notes for voice, history, and rivalries. Commissioners only."}
             </p>
             <ul className={styles.cardList}>
               {cards.cards.map((card) => {
