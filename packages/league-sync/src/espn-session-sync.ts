@@ -1,6 +1,7 @@
 import {
   EspnSessionReadClient,
   EspnSessionReadError,
+  normalizeEspnNavigationManagerAuthority,
   normalizeEspnSupplementalSnapshot,
   normalizeEspnWebClientSnapshot,
   type EspnSessionArtifact,
@@ -67,6 +68,7 @@ export interface EspnSessionTarget {
 
 export interface EspnSessionReadPort {
   fetchCore(input: EspnSessionLeagueRequest): Promise<EspnSessionArtifact>;
+  fetchNavigation(input: EspnSessionLeagueRequest): Promise<EspnSessionArtifact>;
   fetchSupplemental(input: {
     readonly credential: EspnSessionLeagueRequest["credential"];
     readonly core: EspnSessionArtifact;
@@ -115,6 +117,7 @@ export interface EspnSessionSyncOperationalEvent {
     | "target-resolution"
     | "credential-load"
     | "core-read"
+    | "navigation-read"
     | "core-admission-persist"
     | "supplemental-read"
     | "supplemental-admission-persist"
@@ -280,41 +283,56 @@ export class EspnSessionSyncService {
       leagueSeasonId,
       outcome: "succeeded",
     });
-    let core: EspnSessionArtifact;
     const coreReadStartedAt = this.#monotonicNow();
-    try {
-      core = await this.#client.fetchCore({
-        credential,
-        leagueId: target.externalLeagueId,
-        season: target.season,
-        ...(signal ? { signal } : {}),
-      });
-    } catch (error) {
-      this.#emit("core-read", coreReadStartedAt, {
-        connectionId,
-        leagueSeasonId,
-        outcome: "failed",
-      });
-      signal?.throwIfAborted();
-      if (error instanceof EspnSessionReadError && error.code === "AUTHORIZATION_EXPIRED") {
-        await this.#credentials.markReauthorizationRequired(
-          userId,
-          connectionId,
-          "ESPN_SESSION_EXPIRED",
-        );
-        throw new EspnSessionSyncError("REAUTHORIZATION_REQUIRED", "ESPN sign-in must be renewed");
-      }
-      throw new EspnSessionSyncError(
-        "PROVIDER_READ_FAILED",
-        "ESPN league data could not be read",
-        error instanceof EspnSessionReadError ? error.retryable : true,
-      );
-    }
+    const navigationReadStartedAt = this.#monotonicNow();
+    const request = {
+      credential,
+      leagueId: target.externalLeagueId,
+      season: target.season,
+      ...(signal ? { signal } : {}),
+    };
+    const [coreResult, navigationResult] = await Promise.allSettled([
+      this.#client.fetchCore(request),
+      this.#client.fetchNavigation(request),
+    ]);
     this.#emit("core-read", coreReadStartedAt, {
       connectionId,
       leagueSeasonId,
-      outcome: "succeeded",
+      outcome: coreResult.status === "fulfilled" ? "succeeded" : "failed",
     });
+    this.#emit("navigation-read", navigationReadStartedAt, {
+      connectionId,
+      leagueSeasonId,
+      outcome: navigationResult.status === "fulfilled" ? "succeeded" : "failed",
+    });
+    signal?.throwIfAborted();
+
+    const failures = [coreResult, navigationResult].flatMap((result) =>
+      result.status === "rejected" ? [result.reason as unknown] : [],
+    );
+    const authorizationExpired = failures.some(
+      (error) => error instanceof EspnSessionReadError && error.code === "AUTHORIZATION_EXPIRED",
+    );
+    if (authorizationExpired) {
+      await this.#credentials.markReauthorizationRequired(
+        userId,
+        connectionId,
+        "ESPN_SESSION_EXPIRED",
+      );
+      throw new EspnSessionSyncError("REAUTHORIZATION_REQUIRED", "ESPN sign-in must be renewed");
+    }
+    if (coreResult.status === "rejected" || navigationResult.status === "rejected") {
+      const providerError = failures.find(
+        (error): error is EspnSessionReadError => error instanceof EspnSessionReadError,
+      );
+      throw new EspnSessionSyncError(
+        "PROVIDER_READ_FAILED",
+        "ESPN league data could not be read",
+        providerError?.retryable ?? true,
+      );
+    }
+    const core = coreResult.value;
+    const navigation = navigationResult.value;
     // This is the last caller-cancellable point. Persistence is the durable no-cancel boundary.
     signal?.throwIfAborted();
 
@@ -343,14 +361,22 @@ export class EspnSessionSyncService {
       // The SWID is the authenticated ESPN member identity for this encrypted server session.
       // It is supplied only as normalizer context: the connector may mark one exact owner-matched
       // team as current, but the credential itself never enters the normalized bundle or storage.
+      const activeMemberManagerAuthority = normalizeEspnNavigationManagerAuthority(
+        navigation,
+        credential.swid,
+      );
       const bundle = normalizeEspnWebClientSnapshot(coreEnvelope, {
         activeMemberId: credential.swid,
+        activeMemberManagerAuthority,
       });
       coreReceipt = await this.#persistence.persist({
         authority,
         bundle,
         checksumSha256: core.checksumSha256,
         effectiveAt: new Date(core.capturedAt),
+        // Keep core admission identity stable. Persistence deliberately re-evaluates authenticated
+        // member evidence on an unchanged core checksum, so an mNav-only authority change updates
+        // the provider link without duplicating roster/standings snapshots.
         idempotencyKey: `espn-session:${connectionId}:${target.externalLeagueId}:${target.season}:core:${core.checksumSha256}`,
         kind: "espn-session",
         now: this.#now(),

@@ -19,35 +19,34 @@ describe("ESPN server-session read client", () => {
   it("uses only the fixed read origin, scopes the cookie header, and isolates supplemental drift", async () => {
     const fetch = vi.fn(async (input: string | URL, init?: RequestInit) => {
       const url = new URL(input);
+      const views = url.searchParams.getAll("view");
+      const headers = new Headers(init?.headers);
       expect(url.origin).toBe("https://lm-api-reads.fantasy.espn.com");
       expect(init?.method).toBe("GET");
-      expect(new Headers(init?.headers).get("cookie")).toBe(
-        `SWID=${credential.swid}; espn_s2=${credential.espnS2}`,
-      );
-      if (fetch.mock.calls.length === 1) {
-        expect(url.searchParams.getAll("view")).toEqual([
-          "mSettings",
-          "mTeam",
-          "mRoster",
-          "mStandings",
-          "mMatchup",
-          "mNav",
-        ]);
+      expect(init?.credentials).toBe("omit");
+      expect(init?.redirect).toBe("error");
+      expect(init?.cache).toBe("no-store");
+      expect(headers.get("cookie")).toBe(`SWID=${credential.swid}; espn_s2=${credential.espnS2}`);
+      if (views.includes("mSettings")) {
+        expect(views).toEqual(["mSettings", "mTeam", "mRoster", "mStandings", "mMatchup"]);
+        expect([...headers.keys()].sort()).toEqual(["accept", "cookie"]);
+        return jsonResponse({
+          id: 123456789,
+          seasonId: 2026,
+          scoringPeriodId: 3,
+          settings: { scheduleSettings: { matchupPeriods: { 3: [3] } } },
+          teams: [],
+        });
       }
-      if (new Headers(init?.headers).get("x-fantasy-filter")?.includes("WAIVERS")) {
+      if (views.includes("mNav")) {
+        expect(views).toEqual(["mNav"]);
+        expect([...headers.keys()].sort()).toEqual(["accept", "cookie"]);
+        return jsonResponse({ id: 123456789, seasonId: 2026, members: [] });
+      }
+      if (headers.get("x-fantasy-filter")?.includes("WAIVERS")) {
         return jsonResponse({ error: "temporary" }, 500);
       }
-      return jsonResponse(
-        fetch.mock.calls.length === 1
-          ? {
-              id: 123456789,
-              seasonId: 2026,
-              scoringPeriodId: 3,
-              settings: { scheduleSettings: { matchupPeriods: { 3: [3] } } },
-              teams: [],
-            }
-          : { ok: true },
-      );
+      return jsonResponse({ ok: true });
     });
     const client = new EspnSessionReadClient({
       fetch,
@@ -60,8 +59,9 @@ describe("ESPN server-session read client", () => {
       season: 2026,
     });
 
-    expect(fetch).toHaveBeenCalledTimes(6);
+    expect(fetch).toHaveBeenCalledTimes(7);
     expect(result.core).toMatchObject({ leagueId: "123456789", season: 2026 });
+    expect(result.navigation.endpoint.endsWith("?view=mNav")).toBe(true);
     expect(result.supplemental).toHaveLength(4);
     expect(result.supplementalFailures).toEqual([
       { kind: "available-waivers", code: "UPSTREAM_ERROR" },
@@ -83,23 +83,28 @@ describe("ESPN server-session read client", () => {
   });
 
   it("does not downgrade supplemental authentication expiry to best-effort drift", async () => {
-    const fetch = vi.fn(async () =>
-      fetch.mock.calls.length === 1
-        ? jsonResponse({
-            id: 123456789,
-            seasonId: 2026,
-            scoringPeriodId: 3,
-            settings: { scheduleSettings: { matchupPeriods: { 3: [3] } } },
-            teams: [],
-          })
-        : jsonResponse({ error: "denied" }, 401),
-    );
+    const fetch = vi.fn(async (input: string | URL) => {
+      const views = new URL(input).searchParams.getAll("view");
+      if (views.includes("mSettings")) {
+        return jsonResponse({
+          id: 123456789,
+          seasonId: 2026,
+          scoringPeriodId: 3,
+          settings: { scheduleSettings: { matchupPeriods: { 3: [3] } } },
+          teams: [],
+        });
+      }
+      if (views.includes("mNav")) {
+        return jsonResponse({ id: 123456789, seasonId: 2026, members: [] });
+      }
+      return jsonResponse({ error: "denied" }, 401);
+    });
     const client = new EspnSessionReadClient({ fetch });
 
     await expect(
       client.fetchLeague({ credential, leagueId: "123456789", season: 2026 }),
     ).rejects.toMatchObject({ code: "AUTHORIZATION_EXPIRED" });
-    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(fetch).toHaveBeenCalledTimes(3);
   });
 
   it("preserves caller cancellation while classifying an independent timeout as retryable", async () => {
@@ -138,6 +143,9 @@ describe("ESPN server-session read client", () => {
     const client = new EspnSessionReadClient({ fetch });
     await expect(
       client.fetchLeague({ credential, leagueId: "../../users", season: 2026 }),
+    ).rejects.toMatchObject({ code: "INVALID_REQUEST" });
+    await expect(
+      client.fetchNavigation({ credential, leagueId: "123456789", season: 1999 }),
     ).rejects.toMatchObject({ code: "INVALID_REQUEST" });
     expect(fetch).not.toHaveBeenCalled();
   });

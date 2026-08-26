@@ -29,9 +29,33 @@ function corePayload(): unknown {
   };
   const activeMemberId = swid.slice(1, -1);
   fixture.payload.members[0]!.id = activeMemberId;
+  Object.assign(fixture.payload.members[0]!, { isLeagueManager: false });
   fixture.payload.teams[0]!.owners = [activeMemberId];
   fixture.payload.teams[0]!.primaryOwner = activeMemberId;
   return fixture.payload;
+}
+
+function navigationArtifact() {
+  return {
+    leagueId: externalLeagueId,
+    season: 2026,
+    endpoint:
+      `https://lm-api-reads.fantasy.espn.com/apis/v3/games/ffl/seasons/2026/segments/0/leagues/${externalLeagueId}` +
+      "?view=mNav",
+    capturedAt,
+    checksumSha256: "b".repeat(64),
+    payload: {
+      id: externalLeagueId,
+      seasonId: 2026,
+      members: [
+        {
+          id: swid.slice(1, -1),
+          isLeagueManager: false,
+          isLeagueCreator: true,
+        },
+      ],
+    },
+  };
 }
 
 function syncFixture() {
@@ -46,23 +70,29 @@ function syncFixture() {
     markReauthorizationRequired: vi.fn(() => Promise.resolve()),
   };
   const persistence = {
-    persist: vi.fn(async (input: { readonly bundle: LeagueSyncBundle }) => {
-      expect(input.bundle.teams.filter((team) => team.isCurrentUser)).toEqual([
-        expect.objectContaining({
-          providerTeamId: "101",
-          currentUserIsCommissioner: true,
-        }),
-      ]);
-      identityVisible = true;
-      return {
-        receiptId: "core-run-1",
-        leagueId,
-        leagueSeasonId,
-        recordsWritten: 12,
-        state: "accepted" as const,
-        identityChanged: true,
-      };
-    }),
+    persist: vi.fn(
+      async (input: {
+        readonly bundle: LeagueSyncBundle;
+        readonly checksumSha256: string;
+        readonly idempotencyKey: string;
+      }) => {
+        expect(input.bundle.teams.filter((team) => team.isCurrentUser)).toEqual([
+          expect.objectContaining({
+            providerTeamId: "101",
+            currentUserIsCommissioner: true,
+          }),
+        ]);
+        identityVisible = true;
+        return {
+          receiptId: "core-run-1",
+          leagueId,
+          leagueSeasonId,
+          recordsWritten: 12,
+          state: "accepted" as const,
+          identityChanged: true,
+        };
+      },
+    ),
     persistSupplemental: vi.fn(),
   };
   const client = {
@@ -72,12 +102,13 @@ function syncFixture() {
         season: 2026,
         endpoint:
           `https://lm-api-reads.fantasy.espn.com/apis/v3/games/ffl/seasons/2026/segments/0/leagues/${externalLeagueId}` +
-          "?view=mSettings&view=mTeam&view=mRoster&view=mStandings&view=mMatchup&view=mNav",
+          "?view=mSettings&view=mTeam&view=mRoster&view=mStandings&view=mMatchup",
         capturedAt,
         checksumSha256: "a".repeat(64),
         payload: corePayload(),
       }),
     ),
+    fetchNavigation: vi.fn(() => Promise.resolve(navigationArtifact())),
     fetchSupplemental: vi.fn(async () => {
       await supplemental;
       throw new Error(`raw upstream data ${swid} ${espnS2}`);
@@ -131,6 +162,7 @@ describe("EspnSessionSyncService staged identity persistence", () => {
     expect(fixture.findTarget).toHaveBeenCalledTimes(1);
     expect(fixture.credentials.getSession).toHaveBeenCalledTimes(1);
     expect(fixture.client.fetchCore).toHaveBeenCalledTimes(1);
+    expect(fixture.client.fetchNavigation).toHaveBeenCalledTimes(1);
     expect(fixture.persistence.persist).toHaveBeenCalledTimes(1);
     expect(fixture.client.fetchSupplemental).not.toHaveBeenCalled();
     expect(fixture.persistence.persistSupplemental).not.toHaveBeenCalled();
@@ -155,6 +187,7 @@ describe("EspnSessionSyncService staged identity persistence", () => {
     expect(fixture.findTarget).toHaveBeenCalledTimes(1);
     expect(fixture.credentials.getSession).toHaveBeenCalledTimes(1);
     expect(fixture.client.fetchCore).toHaveBeenCalledTimes(1);
+    expect(fixture.client.fetchNavigation).toHaveBeenCalledTimes(1);
     expect(fixture.events).toContainEqual(
       expect.objectContaining({
         event: "espn-session-stage-duration",
@@ -214,6 +247,49 @@ describe("EspnSessionSyncService staged identity persistence", () => {
     expect(fixture.persistence.persistSupplemental).not.toHaveBeenCalled();
   });
 
+  it("marks reauthorization when the dedicated navigation read proves the session expired", async () => {
+    const fixture = syncFixture();
+    fixture.client.fetchNavigation.mockRejectedValueOnce(
+      new EspnSessionReadError({
+        code: "AUTHORIZATION_EXPIRED",
+        message: "ESPN sign-in must be renewed",
+      }),
+    );
+
+    await expect(
+      fixture.service.syncIdentity(userId, connectionId, leagueSeasonId),
+    ).rejects.toMatchObject({ code: "REAUTHORIZATION_REQUIRED" });
+    expect(fixture.credentials.markReauthorizationRequired).toHaveBeenCalledWith(
+      userId,
+      connectionId,
+      "ESPN_SESSION_EXPIRED",
+    );
+    expect(fixture.persistence.persist).not.toHaveBeenCalled();
+    expect(fixture.events).toContainEqual(
+      expect.objectContaining({ stage: "navigation-read", outcome: "failed" }),
+    );
+    expect(JSON.stringify(fixture.events)).not.toContain(swid);
+    expect(JSON.stringify(fixture.events)).not.toContain(espnS2);
+  });
+
+  it("preserves last-good identity when the dedicated navigation read fails", async () => {
+    const fixture = syncFixture();
+    fixture.client.fetchNavigation.mockRejectedValueOnce(
+      new EspnSessionReadError({
+        code: "UPSTREAM_ERROR",
+        message: `sanitized upstream failure ${swid} ${espnS2}`,
+        retryable: true,
+      }),
+    );
+
+    await expect(
+      fixture.service.syncIdentity(userId, connectionId, leagueSeasonId),
+    ).rejects.toMatchObject({ code: "PROVIDER_READ_FAILED", retryable: true });
+    expect(fixture.persistence.persist).not.toHaveBeenCalled();
+    expect(JSON.stringify(fixture.events)).not.toContain(swid);
+    expect(JSON.stringify(fixture.events)).not.toContain(espnS2);
+  });
+
   it("does not claim reauthorization when its durable state write fails", async () => {
     const fixture = syncFixture();
     fixture.client.fetchSupplemental.mockRejectedValueOnce(
@@ -258,6 +334,67 @@ describe("EspnSessionSyncService staged identity persistence", () => {
     ).rejects.toBe(cancellation);
     expect(fixture.persistence.persist).not.toHaveBeenCalled();
     expect(fixture.credentials.markReauthorizationRequired).not.toHaveBeenCalled();
+  });
+
+  it("re-evaluates navigation authority without changing core admission identity", async () => {
+    const fixture = syncFixture();
+    const navigationBase = navigationArtifact();
+    fixture.client.fetchNavigation.mockReset();
+    fixture.client.fetchNavigation
+      .mockResolvedValueOnce({
+        ...navigationBase,
+        checksumSha256: "b".repeat(64),
+        payload: {
+          id: externalLeagueId,
+          seasonId: 2026,
+          members: [
+            {
+              id: swid.slice(1, -1),
+              isLeagueManager: false,
+              isLeagueCreator: false,
+            },
+          ],
+        },
+      })
+      .mockResolvedValueOnce({
+        ...navigationBase,
+        capturedAt: "2026-09-24T14:31:00.000Z",
+        checksumSha256: "c".repeat(64),
+        payload: {
+          id: externalLeagueId,
+          seasonId: 2026,
+          members: [
+            {
+              id: swid.slice(1, -1),
+              isLeagueManager: true,
+              isLeagueCreator: false,
+            },
+          ],
+        },
+      });
+    fixture.persistence.persist.mockImplementation(async () => ({
+      receiptId: "core-run-1",
+      leagueId,
+      leagueSeasonId,
+      recordsWritten: 12,
+      state: "accepted" as const,
+      identityChanged: true,
+    }));
+
+    await fixture.service.syncIdentity(userId, connectionId, leagueSeasonId);
+    await fixture.service.syncIdentity(userId, connectionId, leagueSeasonId);
+
+    const first = fixture.persistence.persist.mock.calls[0]?.[0];
+    const second = fixture.persistence.persist.mock.calls[1]?.[0];
+    expect(first?.checksumSha256).toBe("a".repeat(64));
+    expect(second?.checksumSha256).toBe(first?.checksumSha256);
+    expect(second?.idempotencyKey).toBe(first?.idempotencyKey);
+    expect(first?.bundle.teams.find((team) => team.isCurrentUser)?.currentUserIsCommissioner).toBe(
+      false,
+    );
+    expect(second?.bundle.teams.find((team) => team.isCurrentUser)?.currentUserIsCommissioner).toBe(
+      true,
+    );
   });
 
   it("treats the durable core receipt as a no-cancel boundary", async () => {

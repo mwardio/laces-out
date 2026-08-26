@@ -337,6 +337,47 @@ describe("ESPN web-client snapshot normalizer", () => {
     });
   });
 
+  it("uses separately validated active-member authority without weakening the exact team join", () => {
+    const value = parsedFixture();
+    const activeMember = value.payload.members[0]!;
+    activeMember.isLeagueManager = false;
+
+    const promoted = normalizeEspnWebClientSnapshot(value, {
+      activeMemberId: activeMember.id,
+      activeMemberManagerAuthority: true,
+    });
+    expect(promoted.teams[0]).toMatchObject({
+      isCurrentUser: true,
+      currentUserIsCommissioner: true,
+    });
+
+    activeMember.isLeagueManager = true;
+    const explicitlyFalse = normalizeEspnWebClientSnapshot(value, {
+      activeMemberId: activeMember.id,
+      activeMemberManagerAuthority: false,
+    });
+    expect(explicitlyFalse.teams[0]).toMatchObject({
+      isCurrentUser: true,
+      currentUserIsCommissioner: false,
+    });
+
+    const unknown = normalizeEspnWebClientSnapshot(value, {
+      activeMemberId: activeMember.id,
+      activeMemberManagerAuthority: null,
+    });
+    expect(unknown.teams[0]).toMatchObject({
+      isCurrentUser: true,
+      currentUserIsCommissioner: null,
+    });
+
+    const unmatched = normalizeEspnWebClientSnapshot(value, {
+      activeMemberId: "private-current-member-not-in-this-league",
+      activeMemberManagerAuthority: true,
+    });
+    expect(unmatched.teams.every((team) => !team.isCurrentUser)).toBe(true);
+    expect(unmatched.teams.every((team) => team.currentUserIsCommissioner === null)).toBe(true);
+  });
+
   it("keeps an omitted active-member league-manager flag unknown", () => {
     const value = parsedFixture();
     const activeMember = value.payload.members[0]!;

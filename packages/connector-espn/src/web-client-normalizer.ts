@@ -835,6 +835,11 @@ export interface NormalizeEspnWebClientSnapshotOptions {
    * connection. It is used only for an exact team-owner match and is never copied into warnings.
    */
   readonly activeMemberId?: string | null;
+  /**
+   * Exact-member authority resolved from a separately validated authenticated navigation read.
+   * Presence is significant: an explicit null is fail-closed and overrides any inline core flag.
+   */
+  readonly activeMemberManagerAuthority?: boolean | null;
 }
 
 interface ReadInputResult {
@@ -927,6 +932,28 @@ function activeMemberIdFromOptions(options: NormalizeEspnWebClientSnapshotOption
     });
   }
   return result.data ?? null;
+}
+
+interface ActiveMemberManagerAuthorityOverride {
+  readonly provided: boolean;
+  readonly value: boolean | null;
+}
+
+function activeMemberManagerAuthorityFromOptions(
+  options: NormalizeEspnWebClientSnapshotOptions,
+): ActiveMemberManagerAuthorityOverride {
+  if (!Object.hasOwn(options, "activeMemberManagerAuthority")) {
+    return { provided: false, value: null };
+  }
+  const result = z.union([z.boolean(), z.null()]).safeParse(options.activeMemberManagerAuthority);
+  if (!result.success) {
+    throw new EspnWebClientNormalizationError({
+      code: "INVALID_METADATA",
+      message: "ESPN active-member manager authority is invalid",
+      issues: sanitizedIssues(result.error, "INVALID_METADATA"),
+    });
+  }
+  return { provided: true, value: result.data };
 }
 
 function validateEndpoint(endpoint: string, leagueId: string, season: number): void {
@@ -1189,7 +1216,7 @@ const canonicalEspnMemberGuidPattern =
  * it in braces. Canonicalize only that understood representation; opaque member IDs retain exact
  * case and punctuation so this never becomes a fuzzy manager-name match.
  */
-function canonicalEspnMemberId(value: string): string {
+export function canonicalEspnMemberId(value: string): string {
   const match = canonicalEspnMemberGuidPattern.exec(value);
   return (match?.[1] ?? match?.[2])?.toLowerCase() ?? value;
 }
@@ -1198,6 +1225,7 @@ function identifyCurrentUserTeam(
   teams: readonly NormalizedTeam[],
   members: readonly EspnWebClientPayloadV1["members"][number][],
   activeMemberId: string | null,
+  managerAuthorityOverride: ActiveMemberManagerAuthorityOverride,
 ): { readonly teams: readonly NormalizedTeam[]; readonly warning: string | null } {
   if (activeMemberId === null) {
     return {
@@ -1239,7 +1267,9 @@ function identifyCurrentUserTeam(
   }
 
   const currentUserTeamId = matches[0]?.externalId;
-  const currentUserIsCommissioner = matchingMembers[0]?.isLeagueManager ?? null;
+  const currentUserIsCommissioner = managerAuthorityOverride.provided
+    ? managerAuthorityOverride.value
+    : (matchingMembers[0]?.isLeagueManager ?? null);
   return {
     teams: teams.map((team) => ({
       ...team,
@@ -1498,6 +1528,7 @@ export function normalizeEspnWebClientSnapshot(
 ): LeagueSyncBundle {
   const source = sourceFromInput(readBoundedInput(input), options);
   const activeMemberId = activeMemberIdFromOptions(options);
+  const activeMemberManagerAuthority = activeMemberManagerAuthorityFromOptions(options);
   const payloadResult = espnWebClientPayloadV1Schema.safeParse(source.payload);
   if (!payloadResult.success) {
     throw new EspnWebClientNormalizationError({
@@ -1540,7 +1571,12 @@ export function normalizeEspnWebClientSnapshot(
       acquisitionSettings.isUsingAcquisitionBudget ? acquisitionSettings.acquisitionBudget : null,
     ),
   );
-  const currentUserTeam = identifyCurrentUserTeam(normalizedTeams, payload.members, activeMemberId);
+  const currentUserTeam = identifyCurrentUserTeam(
+    normalizedTeams,
+    payload.members,
+    activeMemberId,
+    activeMemberManagerAuthority,
+  );
   const warnings = [
     "ESPN web-client contract v1 is unofficial and can drift; requested settings, team, roster, standings, and matchup shapes were validated before normalization.",
     "This parser performs no network requests; provider access and session-secret handling remain outside normalization.",

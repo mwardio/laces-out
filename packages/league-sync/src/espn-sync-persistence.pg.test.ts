@@ -22,6 +22,8 @@ import {
   leagueSeasons,
   providerConnections,
   providerLeagueLinks,
+  rosterSnapshots,
+  syncRuns,
   users,
   type Database,
 } from "@laces-out/db";
@@ -724,6 +726,45 @@ describe.skipIf(!dockerAvailable)("ESPN server-session identity against real Pos
         },
       },
     ]);
+  });
+
+  it("reuses one exact core admission while applying changed navigation authority", async () => {
+    const scenario = await createScenario(null, "member");
+    const idempotencyKey = `espn-identity-test:stable-core:${randomUUID()}`;
+    const firstInput = {
+      ...persistenceInput(scenario, bundle(scenario.providerLeagueId, "1", false), FIRST_CAPTURE),
+      idempotencyKey,
+    };
+    const firstReceipt = await persistence.persist(firstInput);
+    expect(firstReceipt).toMatchObject({ state: "accepted", identityChanged: true });
+
+    const snapshotCount = async () => {
+      const [row] = await db
+        .select({ count: sql<number>`count(*)::int` })
+        .from(rosterSnapshots)
+        .innerJoin(fantasyTeams, eq(fantasyTeams.id, rosterSnapshots.teamId))
+        .where(eq(fantasyTeams.leagueSeasonId, scenario.leagueSeasonId));
+      return row?.count ?? 0;
+    };
+    const firstSnapshotCount = await snapshotCount();
+
+    const secondReceipt = await persistence.persist({
+      ...persistenceInput(scenario, bundle(scenario.providerLeagueId, "1", true), SECOND_CAPTURE),
+      idempotencyKey,
+    });
+
+    expect(secondReceipt).toMatchObject({ state: "unchanged", identityChanged: true });
+    expect(secondReceipt.receiptId).toBe(firstReceipt.receiptId);
+    expect(await snapshotCount()).toBe(firstSnapshotCount);
+    const [runCount] = await db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(syncRuns)
+      .where(eq(syncRuns.idempotencyKey, idempotencyKey));
+    expect(runCount?.count).toBe(1);
+    const state = await identityState(scenario);
+    expect(state.link.providerCommissioner).toBe(true);
+    expect(state.link.providerCommissionerObservedAt).toEqual(SECOND_CAPTURE);
+    expect(state.membership.role).toBe("member");
   });
 
   it("clears a stale mapping and backfills identity plus evidence on an unchanged sync", async () => {

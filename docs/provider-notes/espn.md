@@ -110,17 +110,21 @@ offseason leagues about every six hours, with stable jitter. Opening a stale lea
 same server-side read immediately, including from mobile, without requiring the desktop browser to
 be awake.
 
-For an authenticated server-session core read, the fixed `mNav` view supplies ESPN's
-`members[].isLeagueManager` flag and the normalizer compares the session's SWID with the exact ESPN
+For an authenticated server-session identity read, the league core and a dedicated fixed `mNav`
+request are fetched independently; ESPN does not guarantee that a composite response merges
+navigation authority into the core member array. The navigation artifact is admitted only for the
+same numeric league and season, then the normalizer compares the session's SWID with the exact ESPN
 member and owner IDs returned for that league. Exactly one matching team is stored on the member's
-provider-to-league link and automatically fills an otherwise empty team selection. When that exact
-authenticated member is also marked as a League Manager, an ordinary league membership is promoted
-to commissioner. A commissioner or owner is never demoted when ESPN reports false or omits the
-flag, and another co-manager's flag is never used. Zero or multiple identity matches clear the
-provider mapping and fall back to manual resolution; an existing or conflicting selection is never
-overwritten. The SWID itself remains only in the encrypted credential context and is not copied
-into normalized artifacts, warnings, or logs. Browser-local and public reads have no authenticated
-member context and therefore cannot perform this mapping or role promotion.
+provider-to-league link and automatically fills an otherwise empty team selection. That exact
+authenticated member is treated as a provider League Manager only when an explicit member-scoped
+`isLeagueManager`, `isLeagueCreator`, or (when present) `isLeagueAdmin` flag is true. False requires
+both stable base flags to be explicitly false; missing or ambiguous evidence remains unknown. A
+commissioner or owner is never demoted by this evidence, and another co-manager's flag is never
+used. Zero or multiple identity matches clear the provider mapping and fall back to manual
+resolution; an existing or conflicting selection is never overwritten. The SWID itself remains
+only in the encrypted credential context and is not copied into normalized artifacts, warnings, or
+logs. Browser-local and public reads have no authenticated member context and therefore cannot
+perform this mapping or role promotion.
 
 The connection is visible and revocable in **League Sync**. A 401 or 403 marks it as needing ESPN
 sign-in again and stops scheduled reads until the member explicitly renews it. Disconnecting

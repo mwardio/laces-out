@@ -50,6 +50,7 @@ export interface EspnSessionSupplementalArtifact extends EspnSessionArtifact {
 
 export interface EspnSessionLeagueArtifacts {
   readonly core: EspnSessionArtifact;
+  readonly navigation: EspnSessionArtifact;
   readonly supplemental: readonly EspnSessionSupplementalArtifact[];
   readonly supplementalFailures: readonly {
     readonly kind: EspnSessionSupplementalKind;
@@ -57,7 +58,10 @@ export interface EspnSessionLeagueArtifacts {
   }[];
 }
 
-export type EspnSessionSupplementalArtifacts = Omit<EspnSessionLeagueArtifacts, "core">;
+export type EspnSessionSupplementalArtifacts = Pick<
+  EspnSessionLeagueArtifacts,
+  "supplemental" | "supplementalFailures"
+>;
 
 export interface EspnSessionLeagueRequest {
   readonly credential: EspnSessionCredential;
@@ -371,10 +375,6 @@ export class EspnSessionReadClient {
       "mRoster",
       "mStandings",
       "mMatchup",
-      // ESPN's current mTeam response omits members[].isLeagueManager. mNav restores that flag in
-      // the same bounded core read so an authenticated member can be promoted without a name or
-      // co-manager inference.
-      "mNav",
     ]);
     const corePayload = await this.#read(coreEndpoint, request.credential, null, request.signal);
     const capturedAt = this.#now().toISOString();
@@ -385,6 +385,26 @@ export class EspnSessionReadClient {
       capturedAt,
       checksumSha256: canonicalEspnPayloadChecksumV1(corePayload),
       payload: corePayload,
+    };
+  }
+
+  /**
+   * Reads the narrow member-navigation view independently from the league core. ESPN does not
+   * guarantee that a multi-view response merges mNav member authority into the core members array,
+   * so callers must validate this artifact separately before joining it to an authenticated member.
+   */
+  async fetchNavigation(input: EspnSessionLeagueRequest): Promise<EspnSessionArtifact> {
+    const request = this.#validatedRequest(input);
+    const endpoint = requestEndpoint(request.season, request.leagueId, ["mNav"]);
+    const payload = await this.#read(endpoint, request.credential, null, request.signal);
+    const capturedAt = this.#now().toISOString();
+    return {
+      leagueId: request.leagueId,
+      season: request.season,
+      endpoint: endpoint.toString(),
+      capturedAt,
+      checksumSha256: canonicalEspnPayloadChecksumV1(payload),
+      payload,
     };
   }
 
@@ -445,12 +465,15 @@ export class EspnSessionReadClient {
 
   /** Compatibility helper for callers that still want the complete staged result at once. */
   async fetchLeague(input: EspnSessionLeagueRequest): Promise<EspnSessionLeagueArtifacts> {
-    const core = await this.fetchCore(input);
+    const [core, navigation] = await Promise.all([
+      this.fetchCore(input),
+      this.fetchNavigation(input),
+    ]);
     const supplemental = await this.fetchSupplemental({
       credential: input.credential,
       core,
       ...(input.signal ? { signal: input.signal } : {}),
     });
-    return { core, ...supplemental };
+    return { core, navigation, ...supplemental };
   }
 }
