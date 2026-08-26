@@ -32,6 +32,8 @@ const scope: ProjectionLeagueScope = {
   season: 2026,
   currentWeek: 2,
   membershipRole: "member",
+  explicitCommissioner: false,
+  providerCommissioner: false,
   applicationRole: "member",
 };
 
@@ -156,15 +158,27 @@ function request(csv: string, visibility: "private" | "league" = "private") {
 }
 
 describe("ProjectionImportService", () => {
-  it("serializes internal ownership as commissioner access", async () => {
+  it("serializes mere internal ownership as member access", async () => {
     const repository = new FakeRepository();
     repository.scope = { ...scope, membershipRole: "owner" };
     const service = new ProjectionImportService(repository, () => NOW);
 
     const response = projectionSetListResponseSchema.parse(await service.list(USER_ID, SEASON_ID));
 
-    expect(response.league.membershipRole).toBe("commissioner");
+    expect(response.league.membershipRole).toBe("member");
+    expect(response.league.canShareLeague).toBe(false);
     expect(JSON.stringify(response)).not.toMatch(/\b(owner|manager|viewer)\b/u);
+  });
+
+  it("serializes exact provider commissioner evidence without changing membership role", async () => {
+    const repository = new FakeRepository();
+    repository.scope = { ...scope, membershipRole: "owner", providerCommissioner: true };
+    const service = new ProjectionImportService(repository, () => NOW);
+
+    const response = projectionSetListResponseSchema.parse(await service.list(USER_ID, SEASON_ID));
+
+    expect(response.league.membershipRole).toBe("commissioner");
+    expect(response.league.canShareLeague).toBe(true);
   });
 
   it("previews a bounded CSV with exact canonical-ID and exact-name resolution", async () => {
@@ -215,7 +229,7 @@ describe("ProjectionImportService", () => {
     expect(repository.resolverCalls).toBe(0);
   });
 
-  it("requires owner, commissioner, or application-admin authority before shared preview work", async () => {
+  it("requires explicit, provider, or application-admin commissioner authority before shared preview work", async () => {
     const repository = new FakeRepository();
     const service = new ProjectionImportService(repository, () => NOW);
 
@@ -228,7 +242,34 @@ describe("ProjectionImportService", () => {
     ).rejects.toMatchObject({ statusCode: 403, code: "forbidden" });
     expect(repository.resolverCalls).toBe(0);
 
+    repository.scope = { ...scope, membershipRole: "owner" };
+    await expect(
+      service.preview(
+        USER_ID,
+        SEASON_ID,
+        request("player_name,mean_points\nExact Runner,18", "league"),
+      ),
+    ).rejects.toMatchObject({ statusCode: 403, code: "forbidden" });
+
     repository.scope = { ...scope, membershipRole: "commissioner" };
+    await expect(
+      service.preview(
+        USER_ID,
+        SEASON_ID,
+        request("player_name,mean_points\nExact Runner,18", "league"),
+      ),
+    ).resolves.toMatchObject({ canCommit: true, visibility: "league" });
+
+    repository.scope = { ...scope, membershipRole: "owner", providerCommissioner: true };
+    await expect(
+      service.preview(
+        USER_ID,
+        SEASON_ID,
+        request("player_name,mean_points\nExact Runner,18", "league"),
+      ),
+    ).resolves.toMatchObject({ canCommit: true, visibility: "league" });
+
+    repository.scope = { ...scope, membershipRole: "owner", explicitCommissioner: true };
     await expect(
       service.preview(
         USER_ID,

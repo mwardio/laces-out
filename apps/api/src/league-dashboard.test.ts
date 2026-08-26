@@ -101,20 +101,34 @@ describe("LeagueDashboardService", () => {
     });
   });
 
-  it.each(["owner", "commissioner"] as const)(
-    "serializes the internal %s role as commissioner access",
-    async (role) => {
-      const service = new LeagueDashboardService(
-        fakeRepository({ listMemberships: () => Promise.resolve([membership(role)]) }),
-        () => now,
-      );
+  it("does not serialize a mere internal owner as commissioner", async () => {
+    const service = new LeagueDashboardService(
+      fakeRepository({ listMemberships: () => Promise.resolve([membership("owner")]) }),
+      () => now,
+    );
 
-      const result = await service.listLeagues(userId);
+    const result = await service.listLeagues(userId);
 
-      expect(result.leagues[0]?.membership.role).toBe("commissioner");
-      expect(JSON.stringify(result)).not.toMatch(/\b(owner|manager|viewer)\b/u);
-    },
-  );
+    expect(result.leagues[0]?.membership.role).toBe("member");
+    expect(JSON.stringify(result)).not.toMatch(/\b(owner|manager|viewer)\b/u);
+  });
+
+  it.each([
+    { role: "commissioner" as const },
+    { role: "owner" as const, explicitCommissioner: true },
+    { role: "owner" as const, providerCommissioner: true },
+  ])("serializes durable commissioner authority", async (authority) => {
+    const service = new LeagueDashboardService(
+      fakeRepository({
+        listMemberships: () => Promise.resolve([{ ...membership(authority.role), ...authority }]),
+      }),
+      () => now,
+    );
+
+    const result = await service.listLeagues(userId);
+
+    expect(result.leagues[0]?.membership.role).toBe("commissioner");
+  });
 
   it("stops before league data reads when the user is not a member", async () => {
     const listSeasons = vi.fn(() => Promise.resolve([season()]));

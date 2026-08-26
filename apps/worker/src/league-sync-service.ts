@@ -113,6 +113,12 @@ export type LeagueSyncOperationalEvent =
       readonly provider: "yahoo" | "espn";
       readonly connectionId: string;
       readonly leagueSeasonId: string;
+    }
+  | {
+      readonly event: "circuit-success-failed";
+      readonly provider: "yahoo" | "espn";
+      readonly connectionId: string;
+      readonly leagueSeasonId: string;
     };
 
 function abortIfCancelled(context: WorkerJobContext): void {
@@ -272,18 +278,28 @@ export class LeagueSyncService implements LeagueSyncServicePort {
     try {
       receipt =
         target.provider === "espn"
-          ? await (providerSync as EspnSessionSyncPort).syncLeague(
-              target.userId,
-              connectionId,
-              job.leagueSeasonId,
-              context.signal,
-            )
+          ? job.reason === "identity-bootstrap"
+            ? await (providerSync as EspnSessionSyncPort).syncIdentity(
+                target.userId,
+                connectionId,
+                job.leagueSeasonId,
+                context.signal,
+              )
+            : await (providerSync as EspnSessionSyncPort).syncLeague(
+                target.userId,
+                connectionId,
+                job.leagueSeasonId,
+                context.signal,
+              )
           : await (providerSync as YahooSyncPort).syncLeague(
               target.userId,
               connectionId,
               target.externalKey,
             );
     } catch (error) {
+      // Caller cancellation is queue shutdown control flow, not a provider/circuit failure. Internal
+      // provider timeouts do not abort this signal and retain their retryable failure behavior.
+      abortIfCancelled(context);
       if (target.provider === "espn" && failureCode(error) === "REAUTHORIZATION_REQUIRED") {
         this.#emit({
           event: "reauthorization-required",
@@ -318,17 +334,11 @@ export class LeagueSyncService implements LeagueSyncServicePort {
       throw error;
     }
 
-    abortIfCancelled(context);
-    await this.#circuit.recordSuccess(connectionId, this.#now());
-    this.#emit({
-      event: "sync-completed",
-      provider: target.provider === "espn" ? "espn" : "yahoo",
-      connectionId,
-      leagueSeasonId: receipt.leagueSeasonId,
-      state: receipt.state,
-      recordsWritten: receipt.recordsWritten,
-    });
-    if (receipt.state === "accepted") {
+    // Receipt resolution is the durable no-cancel boundary. Run the durable follow-up before
+    // noncritical circuit bookkeeping so a bookkeeping outage cannot strand recomputation.
+    const espnReceipt =
+      target.provider === "espn" ? (receipt as EspnSessionSyncReceipt) : undefined;
+    if (receipt.state === "accepted" || espnReceipt?.identityChanged === true) {
       try {
         if (target.provider === "espn") {
           await this.#afterEspnCommit?.(receipt as EspnSessionSyncReceipt);
@@ -346,6 +356,35 @@ export class LeagueSyncService implements LeagueSyncServicePort {
           leagueSeasonId: receipt.leagueSeasonId,
         });
       }
+    }
+    try {
+      await this.#circuit.recordSuccess(connectionId, this.#now());
+    } catch {
+      // A committed provider artifact must not be retried for circuit bookkeeping. The event is
+      // intentionally closed and never includes the thrown error or credential material.
+      this.#emit({
+        event: "circuit-success-failed",
+        provider: target.provider === "espn" ? "espn" : "yahoo",
+        connectionId,
+        leagueSeasonId: receipt.leagueSeasonId,
+      });
+    }
+    this.#emit({
+      event: "sync-completed",
+      provider: target.provider === "espn" ? "espn" : "yahoo",
+      connectionId,
+      leagueSeasonId: receipt.leagueSeasonId,
+      state: receipt.state,
+      recordsWritten: receipt.recordsWritten,
+    });
+    if (espnReceipt?.reauthorizationRequired === true) {
+      this.#emit({
+        event: "reauthorization-required",
+        provider: "espn",
+        connectionId,
+        leagueSeasonId: job.leagueSeasonId,
+      });
+      return { state: "reauthorization-required", connectionId };
     }
     return receipt.state === "accepted"
       ? {
@@ -422,11 +461,23 @@ export class DrizzleConnectionCircuitStore implements ConnectionCircuitStore {
         consecutiveFailures: 0,
         circuitOpenUntil: null,
         lastSuccessfulAt: at,
-        lastErrorCode: null,
-        lastErrorDetail: null,
-        // A connection that just synced is healthy again. `degraded` is otherwise a one-way door:
-        // its only other writer sets it on the first error and never clears it.
-        health: "healthy",
+        lastErrorCode: sql<string | null>`case
+          when ${providerConnections.health} in ('reauthorize', 'disabled')
+            then ${providerConnections.lastErrorCode}
+          else null
+        end`,
+        lastErrorDetail: sql<string | null>`case
+          when ${providerConnections.health} in ('reauthorize', 'disabled')
+            then ${providerConnections.lastErrorDetail}
+          else null
+        end`,
+        // A successful durable receipt clears circuit degradation, but cannot undo a terminal
+        // reauthorization/disabled decision made by the credential boundary during the same sync.
+        health: sql<ConnectionHealth>`case
+          when ${providerConnections.health} in ('reauthorize', 'disabled')
+            then ${providerConnections.health}
+          else 'healthy'
+        end`,
         updatedAt: at,
       })
       .where(eq(providerConnections.id, connectionId));

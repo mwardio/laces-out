@@ -4,6 +4,8 @@ import type { LeagueMembershipRole } from "@laces-out/db";
 
 import {
   DraftSessionService,
+  effectiveRole,
+  mayMutate,
   type AppendStoredEventsResult,
   type CreateDraftSessionInput,
   type CreateStoredDraftResult,
@@ -47,7 +49,7 @@ function leagueSource(
     teamCount: 2,
     settings: options.settings ?? {},
     archived: options.archived ?? false,
-    accessRole: "owner",
+    accessRole: "commissioner",
     teams: [
       { id: teamA, externalKey: "alpha", name: "Alpha" },
       { id: teamB, externalKey: "bravo", name: "Bravo" },
@@ -130,7 +132,7 @@ function leagueSource(
 
 class MemoryDraftRepository implements DraftSessionRepository {
   readonly roles = new Map<string, LeagueMembershipRole>([
-    [ownerId, "owner"],
+    [ownerId, "commissioner"],
     [commissionerId, "commissioner"],
     [managerId, "member"],
     [viewerId, "member"],
@@ -250,6 +252,14 @@ function snakeCreateInput(): CreateDraftSessionInput {
 }
 
 describe("DraftSessionService", () => {
+  it("does not grant shared draft mutations from canonical ownership alone", () => {
+    const ownerRole = effectiveRole(ownerId, ownerId, "owner");
+    expect(ownerRole).toBe("member");
+    expect(mayMutate(ownerRole!)).toBe(false);
+    expect(mayMutate(effectiveRole(ownerId, ownerId, "owner", true)!)).toBe(true);
+    expect(mayMutate(effectiveRole(ownerId, ownerId, "owner", false, true)!)).toBe(true);
+  });
+
   it("snapshots snake settings and enforces league-scoped read/write authorization", async () => {
     const repository = new MemoryDraftRepository();
     const service = new DraftSessionService(repository, () => clock);
@@ -266,7 +276,7 @@ describe("DraftSessionService", () => {
     expect(created).toMatchObject({
       transport: "manual",
       providerPolling: false,
-      accessRole: "owner",
+      accessRole: "commissioner",
       sequence: 0,
       persistedState: "created",
       state: {

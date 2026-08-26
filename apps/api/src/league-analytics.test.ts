@@ -403,7 +403,7 @@ describe("league analytics data preparation", () => {
 });
 
 describe("LeagueAnalyticsService", () => {
-  it("serializes internal ownership as commissioner access", async () => {
+  it("serializes mere internal ownership as member access", async () => {
     const repository = new FakeRepository();
     repository.membership = { ...membership, role: "owner" };
     const service = new LeagueAnalyticsService(repository, () => NOW);
@@ -412,8 +412,20 @@ describe("LeagueAnalyticsService", () => {
       await service.getSnapshot(USER_ID, LEAGUE_ID),
     );
 
-    expect(snapshot.membership.role).toBe("commissioner");
+    expect(snapshot.membership.role).toBe("member");
     expect(JSON.stringify(snapshot)).not.toMatch(/\b(owner|manager|viewer)\b/u);
+  });
+
+  it("serializes exact provider commissioner evidence as commissioner access", async () => {
+    const repository = new FakeRepository();
+    repository.membership = { ...membership, role: "owner", providerCommissioner: true };
+    const service = new LeagueAnalyticsService(repository, () => NOW);
+
+    const snapshot = leagueAnalyticsSnapshotSchema.parse(
+      await service.getSnapshot(USER_ID, LEAGUE_ID),
+    );
+
+    expect(snapshot.membership.role).toBe("commissioner");
   });
 
   it("isolates every downstream read behind authenticated league membership", async () => {

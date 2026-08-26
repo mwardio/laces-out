@@ -47,6 +47,10 @@ import { and, asc, eq, gte, inArray, isNull, max, or, sql } from "drizzle-orm";
 import { z } from "zod";
 
 import { leagueScopedPlayerCatalogFilter } from "./espn-sync-persistence.js";
+import {
+  providerCommissionerAuthoritySql,
+  publicLeagueAccessRole,
+} from "./public-league-access.js";
 
 const uuidSchema = z.string().uuid();
 const idempotencyKeySchema = z.string().trim().min(8).max(200);
@@ -502,13 +506,22 @@ export function effectiveRole(
   ownerUserId: string,
   requestedUserId: string,
   membershipRole: LeagueMembershipRole | null,
+  explicitCommissioner = false,
+  providerCommissioner = false,
 ): LeagueMembershipRole | undefined {
-  return ownerUserId === requestedUserId ? "owner" : (membershipRole ?? undefined);
+  const storedRole = membershipRole ?? (ownerUserId === requestedUserId ? "owner" : undefined);
+  return storedRole === undefined
+    ? undefined
+    : publicLeagueAccessRole({
+        role: storedRole,
+        explicitCommissioner,
+        providerCommissioner,
+      });
 }
 
-/** Shared-state writes belong to the people accountable for the league, not to every member. */
+/** Shared-state writes require product commissioner authority, not canonical record ownership. */
 export function mayMutate(role: LeagueMembershipRole): boolean {
-  return role === "owner" || role === "commissioner";
+  return role === "commissioner";
 }
 
 function isUniqueViolation(error: unknown): boolean {
@@ -601,6 +614,8 @@ export class DrizzleDraftSessionRepository implements DraftSessionRepository {
         teamCount: leagueSeasons.teamCount,
         settings: leagueSeasons.settings,
         membershipRole: leagueMemberships.role,
+        explicitCommissioner: leagueMemberships.explicitCommissioner,
+        providerCommissioner: providerCommissionerAuthoritySql(userId, leagueSeasons.id),
       })
       .from(leagueSeasons)
       .innerJoin(leagues, eq(leagueSeasons.leagueId, leagues.id))
@@ -611,7 +626,13 @@ export class DrizzleDraftSessionRepository implements DraftSessionRepository {
       .where(eq(leagueSeasons.id, leagueSeasonId))
       .limit(1);
     if (!scope) return undefined;
-    const accessRole = effectiveRole(scope.ownerUserId, userId, scope.membershipRole);
+    const accessRole = effectiveRole(
+      scope.ownerUserId,
+      userId,
+      scope.membershipRole,
+      scope.explicitCommissioner ?? false,
+      scope.providerCommissioner,
+    );
     if (accessRole === undefined) return undefined;
 
     const [teamRows, rosterRows, playerRows] = await Promise.all([
@@ -681,6 +702,11 @@ export class DrizzleDraftSessionRepository implements DraftSessionRepository {
           ownerUserId: leagues.ownerUserId,
           archived: leagues.archived,
           membershipRole: leagueMemberships.role,
+          explicitCommissioner: leagueMemberships.explicitCommissioner,
+          providerCommissioner: providerCommissionerAuthoritySql(
+            input.actorUserId,
+            leagueSeasons.id,
+          ),
         })
         .from(leagueSeasons)
         .innerJoin(leagues, eq(leagueSeasons.leagueId, leagues.id))
@@ -694,7 +720,13 @@ export class DrizzleDraftSessionRepository implements DraftSessionRepository {
         .where(eq(leagueSeasons.id, input.leagueSeasonId))
         .limit(1);
       if (!scope) return { status: "not-found" };
-      const accessRole = effectiveRole(scope.ownerUserId, input.actorUserId, scope.membershipRole);
+      const accessRole = effectiveRole(
+        scope.ownerUserId,
+        input.actorUserId,
+        scope.membershipRole,
+        scope.explicitCommissioner ?? false,
+        scope.providerCommissioner,
+      );
       if (accessRole === undefined) return { status: "not-found" };
       if (!mayMutate(accessRole)) return { status: "forbidden" };
       if (scope.archived) return { status: "archived" };
@@ -725,6 +757,8 @@ export class DrizzleDraftSessionRepository implements DraftSessionRepository {
         ownerUserId: leagues.ownerUserId,
         archived: leagues.archived,
         membershipRole: leagueMemberships.role,
+        explicitCommissioner: leagueMemberships.explicitCommissioner,
+        providerCommissioner: providerCommissionerAuthoritySql(userId, leagueSeasons.id),
       })
       .from(drafts)
       .innerJoin(leagueSeasons, eq(drafts.leagueSeasonId, leagueSeasons.id))
@@ -736,7 +770,13 @@ export class DrizzleDraftSessionRepository implements DraftSessionRepository {
       .where(eq(drafts.id, draftId))
       .limit(1);
     if (!row) return undefined;
-    const accessRole = effectiveRole(row.ownerUserId, userId, row.membershipRole);
+    const accessRole = effectiveRole(
+      row.ownerUserId,
+      userId,
+      row.membershipRole,
+      row.explicitCommissioner ?? false,
+      row.providerCommissioner,
+    );
     return accessRole === undefined
       ? undefined
       : storedDraftFromRow(row.draft, accessRole, row.archived);
@@ -782,6 +822,8 @@ export class DrizzleDraftSessionRepository implements DraftSessionRepository {
         ownerUserId: leagues.ownerUserId,
         archived: leagues.archived,
         membershipRole: leagueMemberships.role,
+        explicitCommissioner: leagueMemberships.explicitCommissioner,
+        providerCommissioner: providerCommissionerAuthoritySql(input.actorUserId, leagueSeasons.id),
       })
       .from(drafts)
       .innerJoin(leagueSeasons, eq(drafts.leagueSeasonId, leagueSeasons.id))
@@ -796,7 +838,13 @@ export class DrizzleDraftSessionRepository implements DraftSessionRepository {
       .where(eq(drafts.id, input.draftId))
       .limit(1);
     if (!scope) return { status: "not-found" };
-    const accessRole = effectiveRole(scope.ownerUserId, input.actorUserId, scope.membershipRole);
+    const accessRole = effectiveRole(
+      scope.ownerUserId,
+      input.actorUserId,
+      scope.membershipRole,
+      scope.explicitCommissioner ?? false,
+      scope.providerCommissioner,
+    );
     if (accessRole === undefined) return { status: "not-found" };
     if (!mayMutate(accessRole)) return { status: "forbidden" };
     if (scope.archived) return { status: "archived" };

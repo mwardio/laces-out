@@ -70,6 +70,8 @@ export interface AcceptedInvitationRecord {
   readonly membership: {
     readonly leagueId: string;
     readonly role: LeagueMembershipRole;
+    /** Internal authority source; never serialized as a public response field. */
+    readonly explicitCommissioner: boolean;
   } | null;
 }
 

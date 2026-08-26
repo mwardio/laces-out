@@ -126,7 +126,7 @@ function authenticatedService(): AuthService {
  * the session the route reads back.
  */
 class FakeRepository implements EspnLiveDraftRepository {
-  accessRole: LeagueMembershipRole | undefined = "owner";
+  accessRole: LeagueMembershipRole | undefined = "commissioner";
   archived = false;
   feedId: string | null = FEED_ID;
   manualBackupActive = false;
@@ -205,7 +205,7 @@ async function manualBackupApp(repository: FakeRepository, configured = true) {
       Promise.resolve(
         snapshot(
           feedStatus(repository.manualBackupActive, repository.pendingReconciliation),
-          repository.accessRole === "owner" ? "commissioner" : (repository.accessRole ?? "member"),
+          repository.accessRole === "commissioner" ? "commissioner" : "member",
         ),
       ),
   } as unknown as DraftSessionPort;
@@ -231,7 +231,7 @@ function body(overrides: Readonly<Record<string, unknown>> = {}) {
 }
 
 describe("manual backup route", () => {
-  it("freezes and resumes provider control for a league owner", async () => {
+  it("freezes and resumes provider control for a commissioner", async () => {
     const repository = new FakeRepository();
     const app = await manualBackupApp(repository);
 
@@ -260,9 +260,9 @@ describe("manual backup route", () => {
     await app.close();
   });
 
-  it("lets a commissioner change shared backup mode", async () => {
+  it("refuses a canonical owner without commissioner authority", async () => {
     const repository = new FakeRepository();
-    repository.accessRole = "commissioner";
+    repository.accessRole = "owner";
     const app = await manualBackupApp(repository);
 
     const response = await app.inject({
@@ -271,8 +271,10 @@ describe("manual backup route", () => {
       headers: { cookie: COOKIE },
       payload: body(),
     });
-    expect(response.statusCode).toBe(200);
-    expect(repository.manualBackupActive).toBe(true);
+    expect(response.statusCode).toBe(403);
+    expect(response.json()).toMatchObject({ code: "DRAFT_FORBIDDEN" });
+    expect(repository.manualBackupActive).toBe(false);
+    expect(repository.updates).toHaveLength(0);
     await app.close();
   });
 

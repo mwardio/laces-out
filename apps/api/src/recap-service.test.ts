@@ -548,7 +548,11 @@ describe("persona cards", () => {
 
   it("lists one entry per team with null bodies for cardless teams", async () => {
     const repository = new FakeRepository();
-    repository.membership = { role: "owner", claimedFantasyTeamId: TEAM_ID };
+    repository.membership = {
+      role: "owner",
+      explicitCommissioner: true,
+      claimedFantasyTeamId: TEAM_ID,
+    };
     repository.cards = [
       {
         fantasyTeamId: TEAM_ID,
@@ -595,7 +599,11 @@ describe("persona cards", () => {
 
   it("reports the updater the repository read back rather than a browser guess", async () => {
     const repository = new FakeRepository();
-    repository.membership = { role: "owner", claimedFantasyTeamId: TEAM_ID };
+    repository.membership = {
+      role: "owner",
+      providerCommissioner: true,
+      claimedFantasyTeamId: TEAM_ID,
+    };
     const { service } = fixture({ repository });
 
     const saved = await service.savePersonaCard(USER_ID, LEAGUE_ID, TEAM_ID, "Fears kickers.");
@@ -625,7 +633,7 @@ describe("persona cards", () => {
     ).resolves.toEqual({ state: "unknown-team" });
   });
 
-  it("lets an owner clear any card and refuses a member", async () => {
+  it("lets an explicitly granted owner clear a card and refuses a mere owner", async () => {
     const repository = new FakeRepository();
     repository.cards = [
       {
@@ -644,6 +652,14 @@ describe("persona cards", () => {
     expect(repository.deletedCards).toEqual([]);
 
     repository.membership = { role: "owner", claimedFantasyTeamId: null };
+    await expect(service.deletePersonaCard(USER_ID, LEAGUE_ID, OTHER_TEAM_ID)).resolves.toEqual({
+      state: "forbidden",
+    });
+    repository.membership = {
+      role: "owner",
+      explicitCommissioner: true,
+      claimedFantasyTeamId: null,
+    };
     await expect(service.deletePersonaCard(USER_ID, LEAGUE_ID, OTHER_TEAM_ID)).resolves.toEqual({
       state: "deleted",
     });
@@ -666,13 +682,21 @@ describe("persona cards", () => {
 });
 
 describe("recap settings", () => {
-  it("restricts the spice dial to owner and commissioner roles", async () => {
+  it("restricts the spice dial to explicit or provider commissioner authority", async () => {
     const { service, repository } = fixture();
 
     await expect(service.saveSettings(USER_ID, LEAGUE_ID, "scorched")).resolves.toEqual({
       state: "forbidden",
     });
     repository.membership = { role: "owner", claimedFantasyTeamId: null };
+    await expect(service.saveSettings(USER_ID, LEAGUE_ID, "scorched")).resolves.toEqual({
+      state: "forbidden",
+    });
+    repository.membership = {
+      role: "owner",
+      providerCommissioner: true,
+      claimedFantasyTeamId: null,
+    };
     await expect(service.saveSettings(USER_ID, LEAGUE_ID, "scorched")).resolves.toEqual({
       state: "saved",
       settings: { leagueId: LEAGUE_ID, spiceLevel: "scorched" },

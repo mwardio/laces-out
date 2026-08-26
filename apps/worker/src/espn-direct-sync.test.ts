@@ -152,6 +152,7 @@ describe("ESPN server-direct sync", () => {
         leagueSeasonId: LEAGUE_SEASON_ID,
         recordsWritten: 24,
         state: "accepted" as const,
+        identityChanged: false,
       })),
     };
     const afterCommit = vi.fn(async () => undefined);

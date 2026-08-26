@@ -252,6 +252,7 @@ function observation(overrides: Partial<EspnLiveDraftObservation> = {}): EspnLiv
 }
 
 class FakeRepository implements EspnLiveDraftRepository {
+  manualBackupAccessRole: ManualBackupContext["accessRole"] = "commissioner";
   context: LiveDraftSessionContext | undefined;
   leaseGranted = true;
   claimedLeaseGeneration: number | undefined;
@@ -365,7 +366,7 @@ class FakeRepository implements EspnLiveDraftRepository {
     if (!this.context) return Promise.resolve(undefined);
     return Promise.resolve({
       feedId: this.context.feed.id,
-      accessRole: "owner",
+      accessRole: this.manualBackupAccessRole,
       archived: false,
       manualBackupActive: this.context.feed.manualBackupActive,
       sequence: this.context.sequence,
@@ -950,6 +951,13 @@ describe("manual backup mode", () => {
 
     const resumed = await live.ingest(DEVICE_TOKEN, observation());
     expect(resumed.status).toBe("accepted");
+  });
+
+  it("refuses a canonical owner without commissioner authority", async () => {
+    repository.manualBackupAccessRole = "owner";
+    await expect(
+      service().setManualBackup(scope.userId, DRAFT_ID, { ...toggle, active: true }),
+    ).rejects.toMatchObject({ code: "DRAFT_FORBIDDEN", statusCode: 403 });
   });
 
   it("demands a choice before unfreezing a room with held snapshots", async () => {

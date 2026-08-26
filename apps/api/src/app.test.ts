@@ -1726,7 +1726,7 @@ describe("API", () => {
     await app.close();
   });
 
-  it("serializes an internal owner as commissioner when an invitation is accepted", async () => {
+  it("serializes an explicitly granted internal owner as commissioner on invitation acceptance", async () => {
     const port = invitationPort();
     const app = await buildApp({
       environment: loadEnvironment({ NODE_ENV: "test" }),
@@ -1743,7 +1743,7 @@ describe("API", () => {
             },
             createdUser: false,
             verificationRequired: false,
-            membership: { leagueId, role: "owner" as const },
+            membership: { leagueId, role: "owner" as const, explicitCommissioner: true },
           }),
       },
     });
@@ -1758,6 +1758,39 @@ describe("API", () => {
     const acceptanceBody: unknown = acceptance.json();
     expect(acceptanceBody).toMatchObject({ membership: { leagueId, role: "commissioner" } });
     expect(JSON.stringify(acceptanceBody)).not.toMatch(/"(?:owner|manager|viewer)"/u);
+    await app.close();
+  });
+
+  it("serializes a mere internal owner as a public member", async () => {
+    const port = invitationPort();
+    const app = await buildApp({
+      environment: loadEnvironment({ NODE_ENV: "test" }),
+      logger: false,
+      invitations: {
+        ...port,
+        accept: () =>
+          Promise.resolve({
+            invitationId: "00000000-0000-4000-8000-000000000203",
+            user: {
+              id: "00000000-0000-4000-8000-000000000204",
+              email: "importer@example.com",
+              displayName: "First Importer",
+            },
+            createdUser: false,
+            verificationRequired: false,
+            membership: { leagueId, role: "owner" as const, explicitCommissioner: false },
+          }),
+      },
+    });
+
+    const acceptance = await app.inject({
+      method: "POST",
+      url: "/v1/invitations/accept",
+      payload: { token: invitationToken },
+    });
+
+    expect(acceptance.statusCode).toBe(200);
+    expect(acceptance.json()).toMatchObject({ membership: { leagueId, role: "member" } });
     await app.close();
   });
 
@@ -1779,7 +1812,7 @@ describe("API", () => {
             },
             createdUser: true,
             verificationRequired: true,
-            membership: { leagueId, role: "member" as const },
+            membership: { leagueId, role: "member" as const, explicitCommissioner: false },
           }),
       },
     });

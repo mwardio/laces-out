@@ -57,6 +57,15 @@ export interface EspnSessionLeagueArtifacts {
   }[];
 }
 
+export type EspnSessionSupplementalArtifacts = Omit<EspnSessionLeagueArtifacts, "core">;
+
+export interface EspnSessionLeagueRequest {
+  readonly credential: EspnSessionCredential;
+  readonly leagueId: string;
+  readonly season: number;
+  readonly signal?: AbortSignal;
+}
+
 export class EspnSessionReadError extends Error {
   readonly code:
     | "INVALID_REQUEST"
@@ -287,6 +296,7 @@ export class EspnSessionReadClient {
     filter: Record<string, unknown> | null,
     signal?: AbortSignal,
   ): Promise<unknown> {
+    signal?.throwIfAborted();
     const timeout = AbortSignal.timeout(this.#timeoutMs);
     const requestSignal = signal ? AbortSignal.any([signal, timeout]) : timeout;
     let response: Response;
@@ -304,6 +314,9 @@ export class EspnSessionReadClient {
         signal: requestSignal,
       });
     } catch {
+      // A caller-owned cancellation is control flow, not a provider fault. The independent timeout
+      // signal still becomes a retryable upstream failure.
+      signal?.throwIfAborted();
       throw new EspnSessionReadError({
         code: "UPSTREAM_ERROR",
         message: "ESPN could not be reached",
@@ -332,22 +345,26 @@ export class EspnSessionReadClient {
         retryable: response.status === 429 || response.status >= 500,
       });
     }
-    return readBoundedJson(response);
+    try {
+      return await readBoundedJson(response);
+    } catch (error) {
+      signal?.throwIfAborted();
+      throw error;
+    }
   }
 
-  async fetchLeague(input: {
-    readonly credential: EspnSessionCredential;
-    readonly leagueId: string;
-    readonly season: number;
-    readonly signal?: AbortSignal;
-  }): Promise<EspnSessionLeagueArtifacts> {
+  #validatedRequest(input: EspnSessionLeagueRequest): EspnSessionLeagueRequest {
     if (!/^\d{1,20}$/u.test(input.leagueId) || input.season < 2000 || input.season > 2100) {
       throw new EspnSessionReadError({
         code: "INVALID_REQUEST",
         message: "ESPN league scope is invalid",
       });
     }
-    const credential = normalizedCredential(input.credential);
+    return { ...input, credential: normalizedCredential(input.credential) };
+  }
+
+  async fetchCore(input: EspnSessionLeagueRequest): Promise<EspnSessionArtifact> {
+    const request = this.#validatedRequest(input);
     const coreEndpoint = requestEndpoint(input.season, input.leagueId, [
       "mSettings",
       "mTeam",
@@ -359,9 +376,9 @@ export class EspnSessionReadClient {
       // co-manager inference.
       "mNav",
     ]);
-    const corePayload = await this.#read(coreEndpoint, credential, null, input.signal);
+    const corePayload = await this.#read(coreEndpoint, request.credential, null, request.signal);
     const capturedAt = this.#now().toISOString();
-    const core: EspnSessionArtifact = {
+    return {
       leagueId: input.leagueId,
       season: input.season,
       endpoint: coreEndpoint.toString(),
@@ -369,40 +386,71 @@ export class EspnSessionReadClient {
       checksumSha256: canonicalEspnPayloadChecksumV1(corePayload),
       payload: corePayload,
     };
+  }
 
+  async fetchSupplemental(input: {
+    readonly credential: EspnSessionCredential;
+    readonly core: EspnSessionArtifact;
+    readonly signal?: AbortSignal;
+  }): Promise<EspnSessionSupplementalArtifacts> {
+    const request = this.#validatedRequest({
+      credential: input.credential,
+      leagueId: input.core.leagueId,
+      season: input.core.season,
+      ...(input.signal ? { signal: input.signal } : {}),
+    });
     const supplemental: EspnSessionSupplementalArtifact[] = [];
     const supplementalFailures: Array<{
       kind: EspnSessionSupplementalKind;
       code: EspnSessionReadError["code"];
     }> = [];
-    for (const request of supplementalRequests(corePayload)) {
-      const endpoint = requestEndpoint(input.season, input.leagueId, request.views);
-      if (request.week !== null) endpoint.searchParams.set("scoringPeriodId", String(request.week));
+    for (const supplementalRequest of supplementalRequests(input.core.payload)) {
+      const endpoint = requestEndpoint(request.season, request.leagueId, supplementalRequest.views);
+      if (supplementalRequest.week !== null) {
+        endpoint.searchParams.set("scoringPeriodId", String(supplementalRequest.week));
+      }
       try {
-        const payload = await this.#read(endpoint, credential, request.filter, input.signal);
+        const payload = await this.#read(
+          endpoint,
+          request.credential,
+          supplementalRequest.filter,
+          request.signal,
+        );
         supplemental.push({
-          leagueId: input.leagueId,
-          season: input.season,
+          leagueId: request.leagueId,
+          season: request.season,
           endpoint: endpoint.toString(),
           capturedAt: this.#now().toISOString(),
           checksumSha256: canonicalEspnPayloadChecksumV1(payload),
           payload,
-          kind: request.kind,
-          week: request.week,
-          ...(request.matchupPeriodId === undefined
+          kind: supplementalRequest.kind,
+          week: supplementalRequest.week,
+          ...(supplementalRequest.matchupPeriodId === undefined
             ? {}
-            : { matchupPeriodId: request.matchupPeriodId }),
+            : { matchupPeriodId: supplementalRequest.matchupPeriodId }),
         });
       } catch (error) {
+        request.signal?.throwIfAborted();
         if (error instanceof EspnSessionReadError && error.code === "AUTHORIZATION_EXPIRED") {
           throw error;
         }
         supplementalFailures.push({
-          kind: request.kind,
+          kind: supplementalRequest.kind,
           code: error instanceof EspnSessionReadError ? error.code : "UPSTREAM_ERROR",
         });
       }
     }
-    return { core, supplemental, supplementalFailures };
+    return { supplemental, supplementalFailures };
+  }
+
+  /** Compatibility helper for callers that still want the complete staged result at once. */
+  async fetchLeague(input: EspnSessionLeagueRequest): Promise<EspnSessionLeagueArtifacts> {
+    const core = await this.fetchCore(input);
+    const supplemental = await this.fetchSupplemental({
+      credential: input.credential,
+      core,
+      ...(input.signal ? { signal: input.signal } : {}),
+    });
+    return { core, ...supplemental };
   }
 }

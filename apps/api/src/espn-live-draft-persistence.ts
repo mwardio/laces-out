@@ -116,6 +116,7 @@ import {
   ESPN_SELF_ASSERTED_PLAYER_SOURCE,
   espnSelfAssertedPlayerKey,
 } from "./espn-sync-persistence.js";
+import { providerCommissionerAuthoritySql } from "./public-league-access.js";
 
 type DatabaseTransaction = Parameters<Parameters<Database["transaction"]>[0]>[0];
 
@@ -1567,6 +1568,8 @@ export class DrizzleEspnLiveDraftRepository implements EspnLiveDraftRepository {
         ownerUserId: leagues.ownerUserId,
         archived: leagues.archived,
         membershipRole: leagueMemberships.role,
+        explicitCommissioner: leagueMemberships.explicitCommissioner,
+        providerCommissioner: providerCommissionerAuthoritySql(actorUserId, leagueSeasons.id),
         feedId: draftProviderFeeds.id,
         manualBackupActive: draftProviderFeeds.manualBackupActive,
         lastMaterialEventAt: draftProviderFeeds.lastMaterialEventAt,
@@ -1583,7 +1586,13 @@ export class DrizzleEspnLiveDraftRepository implements EspnLiveDraftRepository {
       .where(eq(drafts.id, draftId))
       .limit(1);
     if (!row) return undefined;
-    const accessRole = effectiveRole(row.ownerUserId, actorUserId, row.membershipRole);
+    const accessRole = effectiveRole(
+      row.ownerUserId,
+      actorUserId,
+      row.membershipRole,
+      row.explicitCommissioner ?? false,
+      row.providerCommissioner,
+    );
     if (accessRole === undefined) return undefined;
 
     const [latest] = await this.#database

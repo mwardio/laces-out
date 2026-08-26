@@ -21,6 +21,8 @@ import {
   leagueMemberships,
   leagueSeasons,
   leagues,
+  providerConnections,
+  providerLeagueLinks,
   recapGenerationGuards,
   recapPersonaCards,
   users,
@@ -533,9 +535,165 @@ describe.skipIf(!dockerAvailable)("recap repository against real PostgreSQL", ()
       await expect(repository.getSpiceLevel(leagueId)).resolves.toBe("mild");
       await expect(repository.findMembership(managerId, leagueId)).resolves.toEqual({
         role: "member",
+        explicitCommissioner: false,
+        providerCommissioner: false,
         claimedFantasyTeamId: teamId,
       });
       await expect(repository.findLatestSeason(leagueId)).resolves.toEqual({ id: seasonId });
+    });
+
+    it("resolves exact provider commissioner evidence independently from canonical ownership", async () => {
+      const providerOwnerId = randomUUID();
+      const providerLeagueId = randomUUID();
+      const providerSeasonId = randomUUID();
+      const connectionId = randomUUID();
+      const externalLeagueKey = String(Date.now());
+      await db.insert(users).values({
+        id: providerOwnerId,
+        email: `${providerOwnerId}@example.test`,
+        displayName: "Provider Owner",
+      });
+      await db.insert(providerConnections).values({
+        id: connectionId,
+        userId: providerOwnerId,
+        provider: "espn",
+        externalAccountId: `espn-${providerOwnerId}`,
+      });
+      await db.insert(leagues).values({
+        id: providerLeagueId,
+        ownerUserId: providerOwnerId,
+        name: "Provider Authority League",
+      });
+      await db.insert(leagueSeasons).values({
+        id: providerSeasonId,
+        leagueId: providerLeagueId,
+        provider: "espn",
+        externalKey: externalLeagueKey,
+        season: 2031,
+        teamCount: 2,
+        draftType: "snake",
+      });
+      await db.insert(providerLeagueLinks).values({
+        connectionId,
+        leagueSeasonId: providerSeasonId,
+        currentUserTeamExternalKey: `espn:2031:${externalLeagueKey}:team:1`,
+        providerCommissioner: true,
+        providerCommissionerObservedAt: NOW,
+      });
+
+      await expect(
+        repository.findMembership(providerOwnerId, providerLeagueId),
+      ).resolves.toMatchObject({
+        role: "owner",
+        explicitCommissioner: false,
+        providerCommissioner: true,
+      });
+
+      await db
+        .update(providerLeagueLinks)
+        .set({ providerCommissioner: false, providerCommissionerObservedAt: NOW })
+        .where(
+          and(
+            eq(providerLeagueLinks.connectionId, connectionId),
+            eq(providerLeagueLinks.leagueSeasonId, providerSeasonId),
+          ),
+        );
+      await expect(
+        repository.findMembership(providerOwnerId, providerLeagueId),
+      ).resolves.toMatchObject({ providerCommissioner: false, explicitCommissioner: false });
+
+      // Even a corrupted cross-provider link cannot become authority for this ESPN season.
+      await db
+        .update(providerLeagueLinks)
+        .set({ providerCommissioner: true, providerCommissionerObservedAt: NOW })
+        .where(
+          and(
+            eq(providerLeagueLinks.connectionId, connectionId),
+            eq(providerLeagueLinks.leagueSeasonId, providerSeasonId),
+          ),
+        );
+      await db
+        .update(providerConnections)
+        .set({ provider: "yahoo" })
+        .where(eq(providerConnections.id, connectionId));
+      await expect(
+        repository.findMembership(providerOwnerId, providerLeagueId),
+      ).resolves.toMatchObject({ providerCommissioner: false, explicitCommissioner: false });
+    });
+
+    it("keeps canonical ownership transfer invariants without inventing commissioner authority", async () => {
+      const ownerId = randomUUID();
+      const successorId = randomUUID();
+      const transferLeagueId = randomUUID();
+      await db.insert(users).values([
+        { id: ownerId, email: `${ownerId}@example.test`, displayName: "Original Owner" },
+        { id: successorId, email: `${successorId}@example.test`, displayName: "Successor" },
+      ]);
+      await db.insert(leagues).values({
+        id: transferLeagueId,
+        ownerUserId: ownerId,
+        name: "Ownership Transfer",
+      });
+      await db.insert(leagueMemberships).values({
+        leagueId: transferLeagueId,
+        userId: successorId,
+        role: "member",
+      });
+
+      await db
+        .update(leagues)
+        .set({ ownerUserId: successorId })
+        .where(eq(leagues.id, transferLeagueId));
+      await expect(
+        db
+          .select({ role: leagueMemberships.role })
+          .from(leagueMemberships)
+          .where(
+            and(
+              eq(leagueMemberships.leagueId, transferLeagueId),
+              eq(leagueMemberships.userId, ownerId),
+            ),
+          ),
+      ).resolves.toEqual([{ role: "member" }]);
+
+      await db
+        .update(leagueMemberships)
+        .set({ explicitCommissioner: true })
+        .where(
+          and(
+            eq(leagueMemberships.leagueId, transferLeagueId),
+            eq(leagueMemberships.userId, successorId),
+          ),
+        );
+      await db
+        .update(leagues)
+        .set({ ownerUserId: ownerId })
+        .where(eq(leagues.id, transferLeagueId));
+      await expect(
+        db
+          .select({
+            role: leagueMemberships.role,
+            explicit: leagueMemberships.explicitCommissioner,
+          })
+          .from(leagueMemberships)
+          .where(
+            and(
+              eq(leagueMemberships.leagueId, transferLeagueId),
+              eq(leagueMemberships.userId, successorId),
+            ),
+          ),
+      ).resolves.toEqual([{ role: "commissioner", explicit: true }]);
+      await expect(
+        db
+          .select({ role: leagueMemberships.role })
+          .from(leagueMemberships)
+          .where(
+            and(
+              eq(leagueMemberships.leagueId, transferLeagueId),
+              eq(leagueMemberships.userId, ownerId),
+            ),
+          ),
+      ).resolves.toEqual([{ role: "owner" }]);
     });
 
     it("rejects a spice level outside the enum at the database", async () => {

@@ -187,7 +187,7 @@ describe("draft session routes", () => {
     expect(response.statusCode).toBe(200);
     expect(response.json()).toMatchObject({
       id: DRAFT_ID,
-      accessRole: "commissioner",
+      accessRole: "member",
       sequence: 0,
     });
     expect(response.body).not.toMatch(/\b(owner|manager|viewer)\b/u);
@@ -228,7 +228,7 @@ describe("draft session routes", () => {
     expect(response.json()).toMatchObject({
       idempotent: false,
       appendedSequences: [1],
-      session: { accessRole: "commissioner" },
+      session: { accessRole: "member" },
     });
     expect(response.body).not.toMatch(/\b(owner|manager|viewer)\b/u);
     expect(appendEvent).toHaveBeenCalledWith(USER_ID, DRAFT_ID, payload);

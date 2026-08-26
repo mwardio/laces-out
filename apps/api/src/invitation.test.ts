@@ -172,8 +172,11 @@ class MemoryInvitationRepository implements InvitationRepository {
       if (invitation.role === "admin") user.role = "admin";
       invitation.acceptedAt = input.now;
 
-      let membership: { readonly leagueId: string; readonly role: LeagueMembershipRole } | null =
-        null;
+      let membership: {
+        readonly leagueId: string;
+        readonly role: LeagueMembershipRole;
+        readonly explicitCommissioner: boolean;
+      } | null = null;
       if (invitation.leagueId && invitation.leagueRole) {
         const key = `${invitation.leagueId}:${user.id}`;
         const existingRole = this.memberships.get(key);
@@ -182,7 +185,12 @@ class MemoryInvitationRepository implements InvitationRepository {
             ? existingRole
             : invitation.leagueRole;
         this.memberships.set(key, persistedRole);
-        membership = { leagueId: invitation.leagueId, role: persistedRole };
+        membership = {
+          leagueId: invitation.leagueId,
+          role: persistedRole,
+          explicitCommissioner:
+            invitation.leagueRole === "commissioner" || persistedRole === "commissioner",
+        };
       }
       return {
         status: "accepted",
@@ -370,7 +378,9 @@ describe("InvitationService", () => {
     });
     await expect(
       invitations.accept({ token: ownerInvite.token, authenticatedUserId: OTHER_ID }),
-    ).resolves.toMatchObject({ membership: { role: "owner" } });
+    ).resolves.toMatchObject({
+      membership: { role: "owner", explicitCommissioner: true },
+    });
   });
 
   it("accepts once, creates a normalized-email user with Argon2id, and grants membership", async () => {
@@ -393,7 +403,11 @@ describe("InvitationService", () => {
       email: "new.friend@example.com",
       displayName: "New Friend",
     });
-    expect(acceptance.membership).toEqual({ leagueId: LEAGUE_ID, role: "member" });
+    expect(acceptance.membership).toEqual({
+      leagueId: LEAGUE_ID,
+      role: "member",
+      explicitCommissioner: false,
+    });
     const persistedUser = repository.findUserByEmail("NEW.FRIEND@example.com");
     expect(persistedUser?.passwordHash).not.toBe("a long unique password");
     expect(await verify(persistedUser?.passwordHash ?? "", "a long unique password")).toBe(true);

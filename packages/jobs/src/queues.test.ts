@@ -56,7 +56,7 @@ describe("shared queue dispatch contract", () => {
     );
   });
 
-  it("deduplicates immediate identity bootstrap through the connection-season singleton", async () => {
+  it("deduplicates identity bootstrap independently from full connection refreshes", async () => {
     const { boss, send } = sendHarness();
 
     await enqueueLeagueSync(boss, {
@@ -65,16 +65,34 @@ describe("shared queue dispatch contract", () => {
       leagueSeasonId: "league-1",
       reason: "identity-bootstrap",
     });
+    for (const reason of ["manual", "scheduled", "stale-on-view", "draft"] as const) {
+      await enqueueLeagueSync(boss, {
+        mode: "connection",
+        connectionId: "connection-1",
+        leagueSeasonId: "league-1",
+        reason,
+      });
+    }
 
-    expect(send).toHaveBeenCalledWith(
-      queueNames.syncLeague,
-      expect.objectContaining({ mode: "connection", reason: "identity-bootstrap" }),
-      expect.objectContaining({
+    const calls = send.mock.calls as unknown as Array<
+      [queue: string, payload: unknown, options: unknown]
+    >;
+    expect(calls.map((call) => call[2])).toEqual([
+      {
+        group: { id: "league-season:league-1" },
+        singletonKey: "league-sync:identity-bootstrap:connection-1:league-1",
+        singletonSeconds: 60,
+      },
+      ...Array.from({ length: 4 }, () => ({
         group: { id: "league-season:league-1" },
         singletonKey: "league-sync:connection-1:league-1",
         singletonSeconds: 60,
-      }),
-    );
+      })),
+    ]);
+    expect(calls[0]?.[1]).toMatchObject({
+      mode: "connection",
+      reason: "identity-bootstrap",
+    });
   });
 
   it("rejects identity bootstrap on the unauthenticated server-direct path", () => {

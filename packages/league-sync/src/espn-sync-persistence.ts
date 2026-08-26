@@ -76,6 +76,8 @@ export interface PersistEspnSyncReceipt {
   readonly leagueSeasonId: string;
   readonly recordsWritten: number;
   readonly state: "accepted" | "unchanged";
+  /** Internal post-commit signal; freshness timestamps alone never set it. */
+  readonly identityChanged: boolean;
 }
 
 export interface PersistEspnSupplementalInput {
@@ -371,14 +373,18 @@ async function persistServerSessionTeamIdentity(
   input: PersistEspnSyncInput,
   leagueId: string,
   leagueSeasonId: string,
-): Promise<void> {
+): Promise<boolean> {
   const currentUserIdentity = espnServerSessionCurrentIdentity(input);
   const currentUserTeamExternalKey = currentUserIdentity.teamExternalKey;
-  if (input.authority.mode !== "server-session") return;
+  if (input.authority.mode !== "server-session") return false;
   const { actorUserId, connectionId } = input.authority;
 
   const [authorizedLink] = await transaction
-    .select({ connectionId: providerLeagueLinks.connectionId })
+    .select({
+      connectionId: providerLeagueLinks.connectionId,
+      currentUserTeamExternalKey: providerLeagueLinks.currentUserTeamExternalKey,
+      providerCommissioner: providerLeagueLinks.providerCommissioner,
+    })
     .from(providerLeagueLinks)
     .innerJoin(providerConnections, eq(providerConnections.id, providerLeagueLinks.connectionId))
     .where(
@@ -409,11 +415,17 @@ async function persistServerSessionTeamIdentity(
   // A missing or unmatched active-member result clears stale provider identity. The existing
   // membership claim is deliberately left alone; provider refreshes never overwrite a claim.
   const verifiedExternalKey = mappedTeam ? currentUserTeamExternalKey : null;
+  const providerCommissioner = mappedTeam ? currentUserIdentity.isCommissioner : null;
+  let identityChanged =
+    authorizedLink.currentUserTeamExternalKey !== verifiedExternalKey ||
+    authorizedLink.providerCommissioner !== providerCommissioner;
 
   const updatedLinks = await transaction
     .update(providerLeagueLinks)
     .set({
       currentUserTeamExternalKey: verifiedExternalKey,
+      providerCommissioner,
+      providerCommissionerObservedAt: providerCommissioner === null ? null : input.effectiveAt,
       lastSyncedAt: input.effectiveAt,
       updatedAt: input.now,
     })
@@ -427,47 +439,27 @@ async function persistServerSessionTeamIdentity(
   if (updatedLinks.length !== 1) {
     throw new Error("ESPN server-session provider link changed during identity persistence");
   }
-  if (!mappedTeam) return;
-
-  // Provider authority may only add commissioner capability. A false or missing flag never
-  // demotes a member, and the canonical owner role is never replaced.
-  if (currentUserIdentity.isCommissioner) {
-    const promotedMemberships = await transaction
-      .update(leagueMemberships)
-      .set({ role: "commissioner", updatedAt: input.now })
-      .where(
-        and(
-          eq(leagueMemberships.leagueId, leagueId),
-          eq(leagueMemberships.userId, actorUserId),
-          eq(leagueMemberships.role, "member"),
-        ),
-      )
-      .returning({ id: leagueMemberships.id });
-    if (promotedMemberships.length > 1) {
-      throw new Error("ESPN League Manager promotion matched multiple memberships");
-    }
-    const promotedMembership = promotedMemberships[0];
-    if (promotedMembership) {
-      await transaction.insert(auditEvents).values({
-        userId: actorUserId,
-        action: "espn.membership.commissioner_promoted",
-        targetType: "league_membership",
-        targetId: promotedMembership.id,
-        correlationId: input.idempotencyKey.slice(0, 128) || "espn-session-commissioner-promotion",
-        metadata: {
-          provider: "espn",
-          signal: "league-manager",
-          previousRole: "member",
-          role: "commissioner",
-        },
-        occurredAt: input.now,
-      });
-    }
+  if (authorizedLink.providerCommissioner !== providerCommissioner) {
+    await transaction.insert(auditEvents).values({
+      userId: actorUserId,
+      action: "espn.membership.provider_commissioner_evidence_updated",
+      targetType: "provider_league_link",
+      targetId: `${connectionId}:${leagueSeasonId}`,
+      correlationId: input.idempotencyKey.slice(0, 128) || "espn-session-commissioner-evidence",
+      metadata: {
+        provider: "espn",
+        signal: "league-manager",
+        previous: authorizedLink.providerCommissioner,
+        current: providerCommissioner,
+      },
+      occurredAt: input.now,
+    });
   }
+  if (!mappedTeam) return identityChanged;
 
   try {
-    await transaction.transaction(async (savepoint) => {
-      await savepoint
+    const claimChanged = await transaction.transaction(async (savepoint) => {
+      const claimedMemberships = await savepoint
         .update(leagueMemberships)
         .set({
           claimedFantasyTeamId: mappedTeam.id,
@@ -480,11 +472,18 @@ async function persistServerSessionTeamIdentity(
             eq(leagueMemberships.userId, actorUserId),
             isNull(leagueMemberships.claimedFantasyTeamId),
           ),
-        );
+        )
+        .returning({ id: leagueMemberships.id });
+      if (claimedMemberships.length > 1) {
+        throw new Error("ESPN team identity claim matched multiple memberships");
+      }
+      return claimedMemberships.length === 1;
     });
+    identityChanged ||= claimChanged;
   } catch (error) {
     if (databaseErrorCode(error) !== "23505") throw error;
   }
+  return identityChanged;
 }
 
 /**
@@ -1036,7 +1035,12 @@ export class DrizzleEspnSyncPersistence {
           .update(leagueSeasons)
           .set({ lastSyncedAt: effectiveAt, updatedAt: now })
           .where(eq(leagueSeasons.id, season.id));
-        await persistServerSessionTeamIdentity(transaction, input, season.leagueId, season.id);
+        const identityChanged = await persistServerSessionTeamIdentity(
+          transaction,
+          input,
+          season.leagueId,
+          season.id,
+        );
         if (authority.mode === "bridge") {
           // An unchanged provider artifact is still proof of league access. Grant membership before
           // linking the device so the database ownership trigger can enforce the same ordering used
@@ -1067,6 +1071,7 @@ export class DrizzleEspnSyncPersistence {
           leagueSeasonId: season.id,
           recordsWritten: prior.recordsWritten,
           state: "unchanged",
+          identityChanged,
         };
       }
 
@@ -1373,7 +1378,12 @@ export class DrizzleEspnSyncPersistence {
         recordsWritten += 1 + rows.length;
       }
 
-      await persistServerSessionTeamIdentity(transaction, input, leagueId, leagueSeasonId);
+      const identityChanged = await persistServerSessionTeamIdentity(
+        transaction,
+        input,
+        leagueId,
+        leagueSeasonId,
+      );
 
       await transaction
         .update(syncRuns)
@@ -1407,6 +1417,7 @@ export class DrizzleEspnSyncPersistence {
         leagueSeasonId,
         recordsWritten,
         state: "accepted" as const,
+        identityChanged,
       };
     });
   }

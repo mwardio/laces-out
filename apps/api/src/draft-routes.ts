@@ -131,7 +131,7 @@ function publicDraftSession(value: unknown): unknown {
   if (!isRecord(value) || typeof value.accessRole !== "string") return value;
   return {
     ...value,
-    accessRole: publicLeagueAccessRole(value.accessRole as StoredLeagueAccessRole),
+    accessRole: publicLeagueAccessRole({ role: value.accessRole as StoredLeagueAccessRole }),
   };
 }
 
@@ -310,9 +310,10 @@ export function registerDraftRoutes(app: FastifyInstance, options: DraftRouteOpt
   /**
    * Freezes or resumes provider application for a shared room (plan §7.3, §16.5).
    *
-   * A normal cookie-authenticated draft mutation, not a bridge upload: only a league owner or
-   * commissioner may change what every viewer sees. It appends nothing, so the answer is the
-   * session snapshot itself rather than a mutation envelope with an empty sequence list.
+   * A normal cookie-authenticated draft mutation, not a bridge upload: only someone with explicit
+   * or provider-derived commissioner authority may change what every viewer sees. It appends
+   * nothing, so the answer is the session snapshot rather than a mutation envelope with an empty
+   * sequence list.
    */
   app.post("/v1/drafts/:draftId/manual-backup", async (request, reply) => {
     const user = authenticatedUser(request, reply);

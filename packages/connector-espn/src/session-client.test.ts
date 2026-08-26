@@ -82,6 +82,57 @@ describe("ESPN server-session read client", () => {
     } satisfies Partial<EspnSessionReadError>);
   });
 
+  it("does not downgrade supplemental authentication expiry to best-effort drift", async () => {
+    const fetch = vi.fn(async () =>
+      fetch.mock.calls.length === 1
+        ? jsonResponse({
+            id: 123456789,
+            seasonId: 2026,
+            scoringPeriodId: 3,
+            settings: { scheduleSettings: { matchupPeriods: { 3: [3] } } },
+            teams: [],
+          })
+        : jsonResponse({ error: "denied" }, 401),
+    );
+    const client = new EspnSessionReadClient({ fetch });
+
+    await expect(
+      client.fetchLeague({ credential, leagueId: "123456789", season: 2026 }),
+    ).rejects.toMatchObject({ code: "AUTHORIZATION_EXPIRED" });
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it("preserves caller cancellation while classifying an independent timeout as retryable", async () => {
+    const cancelled = new DOMException("worker shutdown", "AbortError");
+    const controller = new AbortController();
+    controller.abort(cancelled);
+    const cancelledFetch = vi.fn();
+    const cancelledClient = new EspnSessionReadClient({ fetch: cancelledFetch });
+
+    await expect(
+      cancelledClient.fetchCore({
+        credential,
+        leagueId: "123456789",
+        season: 2026,
+        signal: controller.signal,
+      }),
+    ).rejects.toBe(cancelled);
+    expect(cancelledFetch).not.toHaveBeenCalled();
+
+    const timeoutClient = new EspnSessionReadClient({
+      timeoutMs: 500,
+      fetch: (_input, init) =>
+        new Promise((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () => reject(new Error("request timed out")), {
+            once: true,
+          });
+        }),
+    });
+    await expect(
+      timeoutClient.fetchCore({ credential, leagueId: "123456789", season: 2026 }),
+    ).rejects.toMatchObject({ code: "UPSTREAM_ERROR", retryable: true });
+  });
+
   it("rejects caller-controlled league scope before making a request", async () => {
     const fetch = vi.fn();
     const client = new EspnSessionReadClient({ fetch });

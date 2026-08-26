@@ -342,6 +342,7 @@ describe.skipIf(!postgresAvailable)("account data repository against real Postgr
         leagueId: sharedLeagueId,
         userId: successorUserId,
         role: "commissioner",
+        explicitCommissioner: true,
         joinedAt: new Date("2031-01-02T00:00:00.000Z"),
       },
       {
@@ -1022,8 +1023,18 @@ describe.skipIf(!postgresAvailable)("account data repository against real Postgr
       { id: crossLeagueBId, ownerUserId: crossOwnerBId, name: "Cross League B" },
     ]);
     await db.insert(leagueMemberships).values([
-      { leagueId: crossLeagueAId, userId: crossOwnerBId, role: "commissioner" },
-      { leagueId: crossLeagueBId, userId: crossOwnerAId, role: "commissioner" },
+      {
+        leagueId: crossLeagueAId,
+        userId: crossOwnerBId,
+        role: "commissioner",
+        explicitCommissioner: true,
+      },
+      {
+        leagueId: crossLeagueBId,
+        userId: crossOwnerAId,
+        role: "commissioner",
+        explicitCommissioner: true,
+      },
     ]);
 
     const control = postgres(container.url, { max: 1, prepare: false });
@@ -1641,6 +1652,7 @@ describe.skipIf(!postgresAvailable)("account data repository against real Postgr
         leagueId,
         userId: successorId,
         role: "commissioner",
+        explicitCommissioner: true,
         joinedAt: new Date("2031-01-02T00:00:00.000Z"),
       },
       {
@@ -1768,7 +1780,12 @@ describe.skipIf(!postgresAvailable)("account data repository against real Postgr
     ]);
     await db.insert(leagues).values({ id: leagueId, ownerUserId: ownerId, name: "Role Upgrades" });
     await db.insert(leagueMemberships).values([
-      { leagueId, userId: commissionerId, role: "commissioner" },
+      {
+        leagueId,
+        userId: commissionerId,
+        role: "commissioner",
+        explicitCommissioner: true,
+      },
       { leagueId, userId: memberId, role: "member" },
     ]);
     const invitationsToAccept = [
@@ -1801,7 +1818,9 @@ describe.skipIf(!postgresAvailable)("account data repository against real Postgr
 
     expect(results[0]).toMatchObject({
       status: "accepted",
-      acceptance: { membership: { leagueId, role: "commissioner" } },
+      acceptance: {
+        membership: { leagueId, role: "commissioner", explicitCommissioner: true },
+      },
     });
     expect(results[1]).toMatchObject({
       status: "accepted",
@@ -1809,7 +1828,7 @@ describe.skipIf(!postgresAvailable)("account data repository against real Postgr
     });
     expect(results[2]).toMatchObject({
       status: "accepted",
-      acceptance: { membership: { leagueId, role: "owner" } },
+      acceptance: { membership: { leagueId, role: "owner", explicitCommissioner: true } },
     });
   });
 

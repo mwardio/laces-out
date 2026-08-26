@@ -269,7 +269,9 @@ export function enqueueLeagueSync(boss: PgBoss, job: LeagueSyncJob): Promise<str
       ? `league-sync:server-direct:${job.leagueSeasonId}`
       : job.reason === "provider-sweep"
         ? `league-sync:provider-sweep:${job.leagueSeasonId}`
-        : `league-sync:${job.connectionId ?? "missing"}:${job.leagueSeasonId}`;
+        : job.reason === "identity-bootstrap"
+          ? `league-sync:identity-bootstrap:${job.connectionId ?? "missing"}:${job.leagueSeasonId}`
+          : `league-sync:${job.connectionId ?? "missing"}:${job.leagueSeasonId}`;
   return boss.send(
     queueNames.syncLeague,
     job,

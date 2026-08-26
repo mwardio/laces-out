@@ -366,6 +366,7 @@ export class DrizzleInvitationRepository implements InvitationRepository {
         let membership: {
           readonly leagueId: string;
           readonly role: "owner" | InvitableLeagueRole;
+          readonly explicitCommissioner: boolean;
         } | null = null;
         if (invitation.leagueId && invitation.leagueRole) {
           await transaction
@@ -374,6 +375,7 @@ export class DrizzleInvitationRepository implements InvitationRepository {
               leagueId: invitation.leagueId,
               userId: acceptedUser.id,
               role: invitation.leagueRole,
+              explicitCommissioner: invitation.leagueRole === "commissioner",
               invitedByUserId: invitation.invitedByUserId,
               joinedAt: input.now,
               updatedAt: input.now,
@@ -382,12 +384,20 @@ export class DrizzleInvitationRepository implements InvitationRepository {
               target: [leagueMemberships.leagueId, leagueMemberships.userId],
               set: {
                 role: membershipRoleUpgrade(invitation.leagueRole),
+                explicitCommissioner:
+                  invitation.leagueRole === "commissioner"
+                    ? true
+                    : leagueMemberships.explicitCommissioner,
                 invitedByUserId: invitation.invitedByUserId,
                 updatedAt: input.now,
               },
             });
           const [persistedMembership] = await transaction
-            .select({ leagueId: leagueMemberships.leagueId, role: leagueMemberships.role })
+            .select({
+              leagueId: leagueMemberships.leagueId,
+              role: leagueMemberships.role,
+              explicitCommissioner: leagueMemberships.explicitCommissioner,
+            })
             .from(leagueMemberships)
             .where(
               and(

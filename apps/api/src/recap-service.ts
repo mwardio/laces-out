@@ -26,6 +26,10 @@ import { z } from "zod";
 
 import type { AiAnalyticsSnapshotPort, RecapPromptInputs, RecapPromptPort } from "./ai-service.js";
 import { mayMutate } from "./draft-session.js";
+import {
+  latestProviderCommissionerAuthoritySql,
+  publicLeagueAccessRole,
+} from "./public-league-access.js";
 
 /** League-wide pause after a successful generation, so a reroll war cannot thrash the recap. */
 export const RECAP_COOLDOWN_SECONDS = 45;
@@ -38,6 +42,8 @@ export const RECAP_LEASE_SECONDS = 120;
 
 export interface RecapMembershipRow {
   readonly role: LeagueMembershipRole;
+  readonly explicitCommissioner?: boolean;
+  readonly providerCommissioner?: boolean;
   readonly claimedFantasyTeamId: string | null;
 }
 
@@ -199,6 +205,16 @@ function retryAfter(deadline: Date, now: Date): number {
   return Math.max(1, Math.ceil((deadline.getTime() - now.getTime()) / 1_000));
 }
 
+function mayManageMembership(membership: RecapMembershipRow): boolean {
+  return mayMutate(
+    publicLeagueAccessRole({
+      role: membership.role,
+      explicitCommissioner: membership.explicitCommissioner,
+      providerCommissioner: membership.providerCommissioner,
+    }),
+  );
+}
+
 export class DrizzleRecapRepository implements RecapRepository, RecapPromptPort {
   readonly #database: Database;
 
@@ -210,6 +226,11 @@ export class DrizzleRecapRepository implements RecapRepository, RecapPromptPort 
     const [row] = await this.#database
       .select({
         role: leagueMemberships.role,
+        explicitCommissioner: leagueMemberships.explicitCommissioner,
+        providerCommissioner: latestProviderCommissionerAuthoritySql(
+          userId,
+          leagueMemberships.leagueId,
+        ),
         claimedFantasyTeamId: leagueMemberships.claimedFantasyTeamId,
       })
       .from(leagueMemberships)
@@ -648,7 +669,7 @@ export class RecapService {
   ): Promise<RecapPersonaCardListResult | undefined> {
     const membership = await this.#repository.findMembership(userId, leagueId);
     if (!membership) return undefined;
-    if (!mayMutate(membership.role)) return { state: "forbidden" };
+    if (!mayManageMembership(membership)) return { state: "forbidden" };
     const season = await this.#repository.findLatestSeason(leagueId);
     if (!season) return { state: "listed", list: { leagueId, cards: [] } };
     const [teams, cards] = await Promise.all([
@@ -721,7 +742,7 @@ export class RecapService {
   ): Promise<RecapSettingsSaveResult | undefined> {
     const membership = await this.#repository.findMembership(userId, leagueId);
     if (!membership) return undefined;
-    if (!mayMutate(membership.role)) return { state: "forbidden" };
+    if (!mayManageMembership(membership)) return { state: "forbidden" };
     await this.#repository.saveSpiceLevel(leagueId, spiceLevel);
     return { state: "saved", settings: { leagueId, spiceLevel } };
   }
@@ -739,7 +760,7 @@ export class RecapService {
   > {
     const membership = await this.#repository.findMembership(userId, leagueId);
     if (!membership) return undefined;
-    if (!mayMutate(membership.role)) return { state: "forbidden" };
+    if (!mayManageMembership(membership)) return { state: "forbidden" };
     const season = await this.#repository.findLatestSeason(leagueId);
     if (!season) return { state: "unknown-team" };
     const teams = await this.#repository.listTeams(season.id);

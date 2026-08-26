@@ -1,9 +1,17 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { YahooSyncError, type YahooSyncReceipt } from "@laces-out/league-sync";
+import {
+  YahooSyncError,
+  type EspnSessionSyncReceipt,
+  type YahooSyncReceipt,
+} from "@laces-out/league-sync";
 
 import type { LeagueSyncJob } from "./jobs.js";
-import { LeagueSyncService, type LeagueSyncTarget } from "./league-sync-service.js";
+import {
+  LeagueSyncService,
+  type LeagueSyncOperationalEvent,
+  type LeagueSyncTarget,
+} from "./league-sync-service.js";
 
 const now = new Date("2026-09-10T12:00:00.000Z");
 
@@ -74,6 +82,24 @@ function yahooReceipt(state: "accepted" | "unchanged" = "accepted"): YahooSyncRe
   };
 }
 
+function espnReceipt(overrides: Partial<EspnSessionSyncReceipt> = {}): EspnSessionSyncReceipt {
+  return {
+    state: "accepted",
+    syncRunId: "espn-session-run-1",
+    leagueId: "league-1",
+    leagueSeasonId: "league-season-1",
+    externalLeagueKey: "1234567",
+    season: 2026,
+    recordsWritten: 18,
+    syncedAt: now.toISOString(),
+    supplementalAccepted: 0,
+    supplementalFailed: 0,
+    identityChanged: false,
+    reauthorizationRequired: false,
+    ...overrides,
+  };
+}
+
 describe("LeagueSyncService", () => {
   it("refreshes a manual Yahoo league through the shared service without an automation flag", async () => {
     const syncLeague = vi.fn(() =>
@@ -96,7 +122,7 @@ describe("LeagueSyncService", () => {
 
   it("runs post-commit work only for accepted Yahoo artifacts", async () => {
     const afterYahooCommit = vi.fn(() => Promise.resolve());
-    const observe = vi.fn();
+    const observe = vi.fn<(event: LeagueSyncOperationalEvent) => void>();
     const accepted = new LeagueSyncService({
       targets: reader(),
       yahooSync: { syncLeague: () => Promise.resolve(yahooReceipt("accepted")) } as never,
@@ -194,13 +220,14 @@ describe("LeagueSyncService", () => {
         recordsWritten: 18,
       }),
     );
+    const syncIdentity = vi.fn(() => Promise.reject(new Error("must not be called")));
     const service = new LeagueSyncService({
       targets: reader({
         provider: "espn",
         externalKey: "1234567",
         connectionCapabilities: { authentication: ["server-session-cookie"] },
       }),
-      espnSessionSync: { syncLeague } as never,
+      espnSessionSync: { syncIdentity, syncLeague } as never,
       circuit: circuitStore(),
       now: () => now,
     });
@@ -216,6 +243,234 @@ describe("LeagueSyncService", () => {
       "league-season-1",
       expect.any(AbortSignal),
     );
+    expect(syncIdentity).not.toHaveBeenCalled();
+  });
+
+  it("settles identity bootstrap without entering blocked supplemental work and runs after-commit", async () => {
+    const afterEspnCommit = vi.fn(() => Promise.resolve());
+    const receipt = espnReceipt({
+      syncRunId: "espn-session-identity-run",
+      identityChanged: true,
+    });
+    const blockedSupplemental = new Promise<typeof receipt>(() => undefined);
+    const syncLeague = vi.fn(() => blockedSupplemental);
+    const syncIdentity = vi.fn(() => Promise.resolve(receipt));
+    const circuit = circuitStore();
+    const service = new LeagueSyncService({
+      targets: reader({
+        provider: "espn",
+        externalKey: "1234567",
+        connectionCapabilities: { authentication: ["server-session-cookie"] },
+      }),
+      espnSessionSync: { syncIdentity, syncLeague },
+      circuit,
+      afterEspnCommit,
+      now: () => now,
+    });
+
+    await expect(
+      service.runLeagueSync(job({ reason: "identity-bootstrap" }), context()),
+    ).resolves.toMatchObject({ state: "synced", syncRunId: receipt.syncRunId });
+    expect(syncIdentity).toHaveBeenCalledWith(
+      "user-1",
+      "connection-1",
+      "league-season-1",
+      expect.any(AbortSignal),
+    );
+    expect(syncLeague).not.toHaveBeenCalled();
+    expect(circuit.recordSuccess).toHaveBeenCalledWith("connection-1", now);
+    expect(afterEspnCommit).toHaveBeenCalledWith(receipt);
+  });
+
+  it("runs ESPN post-commit for identity changes on unchanged core receipts only", async () => {
+    const afterEspnCommit = vi.fn(() => Promise.resolve());
+    const changedReceipt = espnReceipt({
+      state: "unchanged",
+      recordsWritten: 0,
+      identityChanged: true,
+    });
+    const unchangedReceipt = espnReceipt({
+      state: "unchanged",
+      recordsWritten: 0,
+      identityChanged: false,
+    });
+    const syncLeague = vi
+      .fn<() => Promise<EspnSessionSyncReceipt>>()
+      .mockResolvedValueOnce(changedReceipt)
+      .mockResolvedValueOnce(unchangedReceipt);
+    const service = new LeagueSyncService({
+      targets: reader({
+        provider: "espn",
+        externalKey: "1234567",
+        connectionCapabilities: { authentication: ["server-session-cookie"] },
+      }),
+      espnSessionSync: {
+        syncIdentity: () => Promise.reject(new Error("must not be called")),
+        syncLeague,
+      },
+      circuit: circuitStore(),
+      afterEspnCommit,
+      now: () => now,
+    });
+
+    await expect(service.runLeagueSync(job(), context())).resolves.toEqual({
+      state: "unchanged",
+      syncRunId: changedReceipt.syncRunId,
+    });
+    expect(afterEspnCommit).toHaveBeenCalledWith(changedReceipt);
+
+    afterEspnCommit.mockClear();
+    await expect(service.runLeagueSync(job(), context())).resolves.toMatchObject({
+      state: "unchanged",
+    });
+    expect(afterEspnCommit).not.toHaveBeenCalled();
+  });
+
+  it("finalizes a durable core before reporting supplemental reauthorization", async () => {
+    const receipt = espnReceipt({ reauthorizationRequired: true, supplementalFailed: 1 });
+    const afterEspnCommit = vi.fn(() => Promise.resolve());
+    const observe = vi.fn<(event: LeagueSyncOperationalEvent) => void>();
+    const circuit = circuitStore();
+    const service = new LeagueSyncService({
+      targets: reader({
+        provider: "espn",
+        externalKey: "1234567",
+        connectionCapabilities: { authentication: ["server-session-cookie"] },
+      }),
+      espnSessionSync: {
+        syncIdentity: () => Promise.reject(new Error("must not be called")),
+        syncLeague: () => Promise.resolve(receipt),
+      },
+      circuit,
+      afterEspnCommit,
+      observe,
+      now: () => now,
+    });
+
+    await expect(service.runLeagueSync(job(), context())).resolves.toEqual({
+      state: "reauthorization-required",
+      connectionId: "connection-1",
+    });
+    expect(circuit.recordSuccess).toHaveBeenCalledWith("connection-1", now);
+    expect(circuit.recordFailure).not.toHaveBeenCalled();
+    expect(afterEspnCommit).toHaveBeenCalledWith(receipt);
+    expect(observe.mock.calls.map(([event]) => event.event)).toEqual([
+      "sync-completed",
+      "reauthorization-required",
+    ]);
+  });
+
+  it("runs post-commit before containing a circuit-success bookkeeping failure", async () => {
+    const receipt = espnReceipt();
+    const order: string[] = [];
+    const circuit = circuitStore();
+    circuit.recordSuccess.mockImplementation(() => {
+      order.push("circuit-success");
+      return Promise.reject(
+        new Error("circuit store unavailable SWID=secret; espn_s2=secret-cookie"),
+      );
+    });
+    const afterEspnCommit = vi.fn(() => {
+      order.push("after-commit");
+      return Promise.resolve();
+    });
+    const observe = vi.fn<(event: LeagueSyncOperationalEvent) => void>();
+    const service = new LeagueSyncService({
+      targets: reader({
+        provider: "espn",
+        externalKey: "1234567",
+        connectionCapabilities: { authentication: ["server-session-cookie"] },
+      }),
+      espnSessionSync: {
+        syncIdentity: () => Promise.reject(new Error("must not be called")),
+        syncLeague: () => Promise.resolve(receipt),
+      },
+      circuit,
+      afterEspnCommit,
+      observe,
+      now: () => now,
+    });
+
+    await expect(service.runLeagueSync(job(), context())).resolves.toEqual({
+      state: "synced",
+      recordsWritten: receipt.recordsWritten,
+      syncRunId: receipt.syncRunId,
+    });
+    expect(order).toEqual(["after-commit", "circuit-success"]);
+    expect(afterEspnCommit).toHaveBeenCalledWith(receipt);
+    expect(circuit.recordFailure).not.toHaveBeenCalled();
+    expect(observe).toHaveBeenCalledWith({
+      event: "circuit-success-failed",
+      provider: "espn",
+      connectionId: "connection-1",
+      leagueSeasonId: "league-season-1",
+    });
+    expect(JSON.stringify(observe.mock.calls)).not.toContain("SWID");
+    expect(JSON.stringify(observe.mock.calls)).not.toContain("espn_s2");
+  });
+
+  it("keeps pre-persistence caller cancellation out of provider circuit failures", async () => {
+    const controller = new AbortController();
+    const circuit = circuitStore();
+    const afterEspnCommit = vi.fn(() => Promise.resolve());
+    const service = new LeagueSyncService({
+      targets: reader({
+        provider: "espn",
+        externalKey: "1234567",
+        connectionCapabilities: { authentication: ["server-session-cookie"] },
+      }),
+      espnSessionSync: {
+        syncIdentity: () => Promise.reject(new Error("must not be called")),
+        syncLeague: () => {
+          const cancellation = new DOMException("worker shutdown", "AbortError");
+          controller.abort(cancellation);
+          return Promise.reject(cancellation);
+        },
+      },
+      circuit,
+      afterEspnCommit,
+      now: () => now,
+    });
+
+    await expect(service.runLeagueSync(job(), context(controller.signal))).rejects.toThrow(
+      "League sync was aborted during shutdown",
+    );
+    expect(circuit.recordFailure).not.toHaveBeenCalled();
+    expect(circuit.recordSuccess).not.toHaveBeenCalled();
+    expect(afterEspnCommit).not.toHaveBeenCalled();
+  });
+
+  it("finishes circuit success and post-commit after a durable receipt despite cancellation", async () => {
+    const controller = new AbortController();
+    const receipt = espnReceipt();
+    const circuit = circuitStore();
+    const afterEspnCommit = vi.fn(() => Promise.resolve());
+    const service = new LeagueSyncService({
+      targets: reader({
+        provider: "espn",
+        externalKey: "1234567",
+        connectionCapabilities: { authentication: ["server-session-cookie"] },
+      }),
+      espnSessionSync: {
+        syncIdentity: () => Promise.reject(new Error("must not be called")),
+        syncLeague: () => {
+          controller.abort(new DOMException("worker shutdown", "AbortError"));
+          return Promise.resolve(receipt);
+        },
+      },
+      circuit,
+      afterEspnCommit,
+      now: () => now,
+    });
+
+    await expect(service.runLeagueSync(job(), context(controller.signal))).resolves.toEqual({
+      state: "synced",
+      recordsWritten: receipt.recordsWritten,
+      syncRunId: receipt.syncRunId,
+    });
+    expect(circuit.recordSuccess).toHaveBeenCalledWith("connection-1", now);
+    expect(circuit.recordFailure).not.toHaveBeenCalled();
+    expect(afterEspnCommit).toHaveBeenCalledWith(receipt);
   });
 
   it("routes an explicit ESPN server-direct job without resolving a user connection", async () => {

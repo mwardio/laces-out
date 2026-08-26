@@ -145,7 +145,7 @@ export type ConnectionSummary = z.infer<typeof connectionSummarySchema>;
 
 /**
  * Public league access deliberately has only two levels. Database ownership remains an internal
- * lifecycle concern and is serialized as commissioner access at every API boundary.
+ * lifecycle concern; commissioner means an explicit Laces Out grant or exact provider evidence.
  */
 export const leagueAccessRoleSchema = z.enum(["member", "commissioner"]);
 export type LeagueAccessRole = z.infer<typeof leagueAccessRoleSchema>;

@@ -40,7 +40,11 @@ import { and, asc, desc, eq, gte, inArray, isNull, or, sql } from "drizzle-orm";
 
 import { leagueScopedPlayerCatalogFilter } from "./espn-sync-persistence.js";
 import { projectionTimestampProvenance } from "./projection-provenance.js";
-import { publicLeagueAccessRole } from "./public-league-access.js";
+import {
+  hasCommissionerAuthority,
+  providerCommissionerAuthoritySql,
+  publicLeagueAccessRole,
+} from "./public-league-access.js";
 
 const MAX_ACCESSIBLE_SETS = 100;
 const MAX_RESOLVER_PLAYERS = 30_000;
@@ -58,6 +62,8 @@ export interface ProjectionLeagueScope {
   readonly season: number;
   readonly currentWeek: number | null;
   readonly membershipRole: LeagueMembershipRole;
+  readonly explicitCommissioner?: boolean;
+  readonly providerCommissioner?: boolean;
   readonly applicationRole: ApplicationRole;
 }
 
@@ -368,6 +374,8 @@ export class DrizzleProjectionImportRepository implements ProjectionImportReposi
         season: leagueSeasons.season,
         currentWeek: leagueSeasons.currentWeek,
         membershipRole: leagueMemberships.role,
+        explicitCommissioner: leagueMemberships.explicitCommissioner,
+        providerCommissioner: providerCommissionerAuthoritySql(actorUserId, leagueSeasons.id),
         applicationRole: users.role,
       })
       .from(leagueSeasons)
@@ -561,6 +569,11 @@ export class DrizzleProjectionImportRepository implements ProjectionImportReposi
         .select({
           season: leagueSeasons.season,
           membershipRole: leagueMemberships.role,
+          explicitCommissioner: leagueMemberships.explicitCommissioner,
+          providerCommissioner: providerCommissionerAuthoritySql(
+            input.actorUserId,
+            leagueSeasons.id,
+          ),
           applicationRole: users.role,
         })
         .from(leagueSeasons)
@@ -587,8 +600,11 @@ export class DrizzleProjectionImportRepository implements ProjectionImportReposi
       if (
         input.visibility === "league" &&
         authorization.applicationRole !== "admin" &&
-        authorization.membershipRole !== "owner" &&
-        authorization.membershipRole !== "commissioner"
+        !hasCommissionerAuthority({
+          role: authorization.membershipRole,
+          explicitCommissioner: authorization.explicitCommissioner,
+          providerCommissioner: authorization.providerCommissioner,
+        })
       ) {
         throw new ProjectionImportRequestError(
           403,
@@ -810,8 +826,11 @@ function resolverFor(playersToResolve: readonly ProjectionResolverPlayer[]) {
 function canShareLeague(scope: ProjectionLeagueScope): boolean {
   return (
     scope.applicationRole === "admin" ||
-    scope.membershipRole === "owner" ||
-    scope.membershipRole === "commissioner"
+    hasCommissionerAuthority({
+      role: scope.membershipRole,
+      explicitCommissioner: scope.explicitCommissioner,
+      providerCommissioner: scope.providerCommissioner,
+    })
   );
 }
 
@@ -990,7 +1009,11 @@ export class ProjectionImportService {
         provider: scope.provider,
         season: scope.season,
         currentWeek: scope.currentWeek,
-        membershipRole: publicLeagueAccessRole(scope.membershipRole),
+        membershipRole: publicLeagueAccessRole({
+          role: scope.membershipRole,
+          explicitCommissioner: scope.explicitCommissioner,
+          providerCommissioner: scope.providerCommissioner,
+        }),
         canShareLeague: canShareLeague(scope),
       },
       managedForecastStatus: newerWithheldRun

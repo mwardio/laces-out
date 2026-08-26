@@ -39,11 +39,16 @@ import {
 import { and, asc, desc, eq, inArray } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 
-import { publicLeagueAccessRole } from "./public-league-access.js";
+import {
+  latestProviderCommissionerAuthoritySql,
+  publicLeagueAccessRole,
+} from "./public-league-access.js";
 
 interface MembershipRow {
   readonly membershipId: string;
   readonly role: LeagueMembershipRole;
+  readonly explicitCommissioner?: boolean;
+  readonly providerCommissioner?: boolean;
   readonly claimedFantasyTeamId: string | null;
   readonly claimedTeamName: string | null;
   readonly claimedAt: Date | null;
@@ -242,6 +247,8 @@ export class DrizzleLeagueDashboardRepository implements LeagueDashboardReposito
       .select({
         membershipId: leagueMemberships.id,
         role: leagueMemberships.role,
+        explicitCommissioner: leagueMemberships.explicitCommissioner,
+        providerCommissioner: latestProviderCommissionerAuthoritySql(userId, leagues.id),
         claimedFantasyTeamId: leagueMemberships.claimedFantasyTeamId,
         claimedTeamName: fantasyTeams.name,
         claimedAt: leagueMemberships.claimedAt,
@@ -282,6 +289,8 @@ export class DrizzleLeagueDashboardRepository implements LeagueDashboardReposito
       .select({
         membershipId: leagueMemberships.id,
         role: leagueMemberships.role,
+        explicitCommissioner: leagueMemberships.explicitCommissioner,
+        providerCommissioner: latestProviderCommissionerAuthoritySql(userId, leagues.id),
         claimedFantasyTeamId: leagueMemberships.claimedFantasyTeamId,
         claimedTeamName: fantasyTeams.name,
         claimedAt: leagueMemberships.claimedAt,
@@ -631,7 +640,11 @@ function nonnegativeMetadataInteger(value: unknown): number | null {
 
 function membershipSummary(row: MembershipRow): LeagueMembershipSummary {
   return {
-    role: publicLeagueAccessRole(row.role),
+    role: publicLeagueAccessRole({
+      role: row.role,
+      explicitCommissioner: row.explicitCommissioner,
+      providerCommissioner: row.providerCommissioner,
+    }),
     claimedFantasyTeamId: row.claimedFantasyTeamId,
     claimedTeamName: row.claimedTeamName,
     claimedAt: row.claimedAt?.toISOString() ?? null,

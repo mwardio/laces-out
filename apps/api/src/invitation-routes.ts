@@ -186,8 +186,11 @@ export function registerInvitationRoutes(
         createdUser: acceptance.createdUser,
         membership: acceptance.membership
           ? {
-              ...acceptance.membership,
-              role: publicLeagueAccessRole(acceptance.membership.role),
+              leagueId: acceptance.membership.leagueId,
+              role: publicLeagueAccessRole({
+                role: acceptance.membership.role,
+                explicitCommissioner: acceptance.membership.explicitCommissioner,
+              }),
             }
           : null,
         sessionEstablished,

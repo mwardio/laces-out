@@ -166,6 +166,13 @@ const espnSessionSync =
     ? new EspnSessionSyncService({
         database: database.db,
         credentials: espnSessionConnection,
+        observe: (event) => {
+          if (event.outcome === "failed") {
+            logger.warn(event, "ESPN session sync stage failed");
+          } else {
+            logger.info(event, "ESPN session sync stage completed");
+          }
+        },
       })
     : undefined;
 const providerSyncChangeEvents = drizzleChangeEventProducers(database.db);
@@ -304,7 +311,11 @@ const leagueSyncService = new LeagueSyncService({
     }
   },
   observe: (event) => {
-    if (event.event === "sync-failed" || event.event === "after-commit-failed") {
+    if (
+      event.event === "sync-failed" ||
+      event.event === "after-commit-failed" ||
+      event.event === "circuit-success-failed"
+    ) {
       logger.warn(event, "provider league sync operational event");
     } else {
       logger.info(event, "provider league sync operational event");

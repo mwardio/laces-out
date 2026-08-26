@@ -7,6 +7,8 @@
  */
 import { execFileSync } from "node:child_process";
 import { randomBytes, randomUUID } from "node:crypto";
+import { copyFile, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -23,7 +25,7 @@ import {
   users,
   type Database,
 } from "@laces-out/db";
-import { and, eq } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { migrate } from "drizzle-orm/postgres-js/migrator";
 import postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -51,6 +53,28 @@ const migrationsFolder = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   "../../db/migrations",
 );
+
+async function migrationsThrough(index: number): Promise<string> {
+  const temporaryFolder = await mkdtemp(path.join(tmpdir(), "laces-out-migrations-"));
+  const metadataFolder = path.join(temporaryFolder, "meta");
+  await mkdir(metadataFolder);
+  const journalPath = path.join(migrationsFolder, "meta", "_journal.json");
+  const journal = JSON.parse(await readFile(journalPath, "utf8")) as {
+    entries: Array<{ idx: number }>;
+  };
+  journal.entries = journal.entries.filter((entry) => entry.idx <= index);
+  await writeFile(
+    path.join(metadataFolder, "_journal.json"),
+    `${JSON.stringify(journal, null, 2)}\n`,
+    "utf8",
+  );
+  for (const filename of await readdir(migrationsFolder)) {
+    const migrationIndex = /^(\d{4})_.+\.sql$/u.exec(filename)?.[1];
+    if (!migrationIndex || Number(migrationIndex) > index) continue;
+    await copyFile(path.join(migrationsFolder, filename), path.join(temporaryFolder, filename));
+  }
+  return temporaryFolder;
+}
 
 interface DisposablePostgres {
   readonly containerName: string;
@@ -241,6 +265,21 @@ describe.skipIf(!dockerAvailable)("ESPN server-session identity against real Pos
   let handle: ReturnType<typeof createDatabase>;
   let db: Database;
   let persistence: DrizzleEspnSyncPersistence;
+  type LegacyMembershipState = {
+    explicitCommissioner: boolean;
+    role: "owner" | "commissioner" | "member";
+  };
+  let legacyMigrationState:
+    | {
+        acceptedInvitationMember: LegacyMembershipState;
+        malformedAudit: LegacyMembershipState;
+        invitationGrant: LegacyMembershipState;
+        manualGrant: LegacyMembershipState;
+        ownerInvitationGrant: LegacyMembershipState;
+        providerOnly: LegacyMembershipState;
+        touchedAfterPromotion: LegacyMembershipState;
+      }
+    | undefined;
   let scenarioCounter = 10_000;
 
   async function createScenario(
@@ -334,6 +373,8 @@ describe.skipIf(!dockerAvailable)("ESPN server-session identity against real Pos
     const [link] = await db
       .select({
         currentUserTeamExternalKey: providerLeagueLinks.currentUserTeamExternalKey,
+        providerCommissioner: providerLeagueLinks.providerCommissioner,
+        providerCommissionerObservedAt: providerLeagueLinks.providerCommissionerObservedAt,
         lastSyncedAt: providerLeagueLinks.lastSyncedAt,
       })
       .from(providerLeagueLinks)
@@ -349,6 +390,7 @@ describe.skipIf(!dockerAvailable)("ESPN server-session identity against real Pos
         claimedFantasyTeamId: leagueMemberships.claimedFantasyTeamId,
         claimedAt: leagueMemberships.claimedAt,
         role: leagueMemberships.role,
+        explicitCommissioner: leagueMemberships.explicitCommissioner,
       })
       .from(leagueMemberships)
       .where(
@@ -366,7 +408,161 @@ describe.skipIf(!dockerAvailable)("ESPN server-session identity against real Pos
     container = await startDisposablePostgres();
     const migrationHandle = createDatabase(container.url, 1);
     try {
+      const partialMigrations = await migrationsThrough(39);
+      try {
+        await migrate(migrationHandle.db, { migrationsFolder: partialMigrations });
+      } finally {
+        await rm(partialMigrations, { recursive: true, force: true });
+      }
+
+      const historicalAt = "2031-08-31T18:00:00.000Z";
+      const laterGrantAt = "2031-09-01T18:00:00.000Z";
+      const ownerUserId = randomUUID();
+      const acceptedInvitationMemberUserId = randomUUID();
+      const providerOnlyUserId = randomUUID();
+      const manualGrantUserId = randomUUID();
+      const invitationGrantUserId = randomUUID();
+      const touchedAfterPromotionUserId = randomUUID();
+      const malformedAuditUserId = randomUUID();
+      const legacyLeagueId = randomUUID();
+      const acceptedInvitationMemberMembershipId = randomUUID();
+      const providerOnlyMembershipId = randomUUID();
+      const manualGrantMembershipId = randomUUID();
+      const invitationGrantMembershipId = randomUUID();
+      const touchedMembershipId = randomUUID();
+      const malformedMembershipId = randomUUID();
+      await migrationHandle.db.execute(sql`
+        insert into users (id, email, display_name) values
+          (${ownerUserId}, ${`${ownerUserId}@example.test`}, 'Legacy Owner'),
+          (${acceptedInvitationMemberUserId}, ${`${acceptedInvitationMemberUserId}@example.test`}, 'Previously Invited Member'),
+          (${providerOnlyUserId}, ${`${providerOnlyUserId}@example.test`}, 'Provider Only'),
+          (${manualGrantUserId}, ${`${manualGrantUserId}@example.test`}, 'Manual Commissioner'),
+          (${invitationGrantUserId}, ${`${invitationGrantUserId}@example.test`}, 'Invited Commissioner'),
+          (${touchedAfterPromotionUserId}, ${`${touchedAfterPromotionUserId}@example.test`}, 'Later Grant'),
+          (${malformedAuditUserId}, ${`${malformedAuditUserId}@example.test`}, 'Malformed Audit')
+      `);
+      await migrationHandle.db.execute(sql`
+        insert into leagues (id, user_id, name)
+        values (${legacyLeagueId}, ${ownerUserId}, 'Legacy Commissioner Migration')
+      `);
+      await migrationHandle.db.execute(sql`
+        insert into league_memberships (id, league_id, user_id, role, updated_at) values
+          (${acceptedInvitationMemberMembershipId}, ${legacyLeagueId}, ${acceptedInvitationMemberUserId}, 'member', ${laterGrantAt}),
+          (${providerOnlyMembershipId}, ${legacyLeagueId}, ${providerOnlyUserId}, 'commissioner', ${historicalAt}),
+          (${manualGrantMembershipId}, ${legacyLeagueId}, ${manualGrantUserId}, 'commissioner', ${historicalAt}),
+          (${touchedMembershipId}, ${legacyLeagueId}, ${touchedAfterPromotionUserId}, 'commissioner', ${laterGrantAt}),
+          (${malformedMembershipId}, ${legacyLeagueId}, ${malformedAuditUserId}, 'commissioner', ${historicalAt})
+      `);
+      await migrationHandle.db.execute(sql`
+        insert into invitations (
+          token_hash, email, email_hash, invited_by_user_id, league_id, league_role,
+          expires_at, accepted_at, accepted_by_user_id
+        ) values
+          (
+            ${"a".repeat(64)}, ${`${invitationGrantUserId}@example.test`}, ${"b".repeat(64)},
+            ${ownerUserId}, ${legacyLeagueId}, 'commissioner', '2032-01-01T00:00:00.000Z',
+            ${historicalAt}, ${invitationGrantUserId}
+          ),
+          (
+            ${"c".repeat(64)}, ${`${ownerUserId}@example.test`}, ${"d".repeat(64)},
+            ${ownerUserId}, ${legacyLeagueId}, 'commissioner', '2032-01-01T00:00:00.000Z',
+            ${historicalAt}, ${ownerUserId}
+          ),
+          (
+            ${"e".repeat(64)}, ${`${acceptedInvitationMemberUserId}@example.test`}, ${"f".repeat(64)},
+            ${ownerUserId}, ${legacyLeagueId}, 'commissioner', '2032-01-01T00:00:00.000Z',
+            ${historicalAt}, ${acceptedInvitationMemberUserId}
+          )
+      `);
+      await migrationHandle.db.execute(sql`
+        insert into league_memberships (
+          id, league_id, user_id, role, invited_by_user_id, updated_at
+        ) values (
+          ${invitationGrantMembershipId}, ${legacyLeagueId}, ${invitationGrantUserId},
+          'commissioner', ${ownerUserId}, ${historicalAt}
+        )
+      `);
+      await migrationHandle.db.execute(sql`
+        insert into audit_events (
+          user_id, action, target_type, target_id, correlation_id, metadata, occurred_at
+        ) values
+          (
+            ${providerOnlyUserId}, 'espn.membership.commissioner_promoted',
+            'league_membership', ${providerOnlyMembershipId}, 'legacy-provider-only',
+            ${JSON.stringify({
+              provider: "espn",
+              signal: "league-manager",
+              previousRole: "member",
+              role: "commissioner",
+            })}::jsonb, ${historicalAt}
+          ),
+          (
+            ${touchedAfterPromotionUserId}, 'espn.membership.commissioner_promoted',
+            'league_membership', ${touchedMembershipId}, 'legacy-later-grant',
+            ${JSON.stringify({
+              provider: "espn",
+              signal: "league-manager",
+              previousRole: "member",
+              role: "commissioner",
+            })}::jsonb, ${historicalAt}
+          ),
+          (
+            ${invitationGrantUserId}, 'espn.membership.commissioner_promoted',
+            'league_membership', ${invitationGrantMembershipId}, 'legacy-invitation-grant',
+            ${JSON.stringify({
+              provider: "espn",
+              signal: "league-manager",
+              previousRole: "member",
+              role: "commissioner",
+            })}::jsonb, ${historicalAt}
+          ),
+          (
+            ${malformedAuditUserId}, 'espn.membership.commissioner_promoted',
+            'league_membership', ${malformedMembershipId}, 'legacy-malformed',
+            ${JSON.stringify({
+              provider: "espn",
+              signal: "unrelated-inference",
+              previousRole: "member",
+              role: "commissioner",
+            })}::jsonb, ${historicalAt}
+          )
+      `);
       await migrate(migrationHandle.db, { migrationsFolder });
+      const migratedMemberships = await migrationHandle.db
+        .select({
+          explicitCommissioner: leagueMemberships.explicitCommissioner,
+          role: leagueMemberships.role,
+          userId: leagueMemberships.userId,
+        })
+        .from(leagueMemberships)
+        .where(
+          inArray(leagueMemberships.userId, [
+            acceptedInvitationMemberUserId,
+            providerOnlyUserId,
+            manualGrantUserId,
+            invitationGrantUserId,
+            touchedAfterPromotionUserId,
+            malformedAuditUserId,
+            ownerUserId,
+          ]),
+        );
+      const byUserId = new Map(
+        migratedMemberships.map(({ userId, ...state }) => [userId, state] as const),
+      );
+      const stateFor = (userId: string): LegacyMembershipState => {
+        const state = byUserId.get(userId);
+        if (!state) throw new Error(`Missing migrated legacy membership ${userId}`);
+        return state;
+      };
+      legacyMigrationState = {
+        acceptedInvitationMember: stateFor(acceptedInvitationMemberUserId),
+        malformedAudit: stateFor(malformedAuditUserId),
+        invitationGrant: stateFor(invitationGrantUserId),
+        manualGrant: stateFor(manualGrantUserId),
+        ownerInvitationGrant: stateFor(ownerUserId),
+        providerOnly: stateFor(providerOnlyUserId),
+        touchedAfterPromotion: stateFor(touchedAfterPromotionUserId),
+      };
     } finally {
       await migrationHandle.close();
     }
@@ -388,7 +584,96 @@ describe.skipIf(!dockerAvailable)("ESPN server-session identity against real Pos
     }
   });
 
-  it("stores the exact mapping, auto-claims, and promotes an authenticated league manager", async () => {
+  it("migrates exact provider promotions while retaining durable or unclassified grants", () => {
+    expect(legacyMigrationState).toEqual({
+      acceptedInvitationMember: { role: "commissioner", explicitCommissioner: true },
+      malformedAudit: { role: "commissioner", explicitCommissioner: true },
+      invitationGrant: { role: "commissioner", explicitCommissioner: true },
+      manualGrant: { role: "commissioner", explicitCommissioner: true },
+      ownerInvitationGrant: { role: "owner", explicitCommissioner: true },
+      providerOnly: { role: "member", explicitCommissioner: false },
+      touchedAfterPromotion: { role: "member", explicitCommissioner: false },
+    });
+  });
+
+  it("enforces commissioner evidence and explicit-role invariants while preserving owner grants", async () => {
+    const memberScenario = await createScenario(null, "member");
+
+    await expect(
+      db
+        .update(providerLeagueLinks)
+        .set({ providerCommissioner: true, providerCommissionerObservedAt: FIRST_CAPTURE })
+        .where(
+          and(
+            eq(providerLeagueLinks.connectionId, memberScenario.connectionId),
+            eq(providerLeagueLinks.leagueSeasonId, memberScenario.leagueSeasonId),
+          ),
+        ),
+    ).rejects.toThrow();
+    await expect(
+      db
+        .update(leagueMemberships)
+        .set({ role: "commissioner" })
+        .where(
+          and(
+            eq(leagueMemberships.leagueId, memberScenario.leagueId),
+            eq(leagueMemberships.userId, memberScenario.actorUserId),
+          ),
+        ),
+    ).rejects.toThrow();
+    await expect(
+      db
+        .update(leagueMemberships)
+        .set({ explicitCommissioner: true })
+        .where(
+          and(
+            eq(leagueMemberships.leagueId, memberScenario.leagueId),
+            eq(leagueMemberships.userId, memberScenario.actorUserId),
+          ),
+        ),
+    ).rejects.toThrow();
+
+    const currentUserTeamExternalKey = `espn:${SEASON}:${memberScenario.providerLeagueId}:team:1`;
+    await db
+      .update(providerLeagueLinks)
+      .set({
+        currentUserTeamExternalKey,
+        providerCommissioner: false,
+        providerCommissionerObservedAt: FIRST_CAPTURE,
+      })
+      .where(
+        and(
+          eq(providerLeagueLinks.connectionId, memberScenario.connectionId),
+          eq(providerLeagueLinks.leagueSeasonId, memberScenario.leagueSeasonId),
+        ),
+      );
+    await db
+      .update(leagueMemberships)
+      .set({ role: "commissioner", explicitCommissioner: true })
+      .where(
+        and(
+          eq(leagueMemberships.leagueId, memberScenario.leagueId),
+          eq(leagueMemberships.userId, memberScenario.actorUserId),
+        ),
+      );
+
+    const ownerScenario = await createScenario();
+    await db
+      .update(leagueMemberships)
+      .set({ explicitCommissioner: true })
+      .where(
+        and(
+          eq(leagueMemberships.leagueId, ownerScenario.leagueId),
+          eq(leagueMemberships.userId, ownerScenario.actorUserId),
+        ),
+      );
+    expect((await identityState(ownerScenario)).membership).toMatchObject({
+      role: "owner",
+      explicitCommissioner: true,
+    });
+  });
+
+  it("stores exact mapping, auto-claim, and provider commissioner evidence without replacing role", async () => {
     const scenario = await createScenario(null, "member");
     const teamOneExternalKey = `espn:${SEASON}:${scenario.providerLeagueId}:team:1`;
 
@@ -396,21 +681,26 @@ describe.skipIf(!dockerAvailable)("ESPN server-session identity against real Pos
       persistenceInput(scenario, bundle(scenario.providerLeagueId, "1", true), FIRST_CAPTURE),
     );
 
-    expect(receipt.state).toBe("accepted");
+    expect(receipt).toMatchObject({ state: "accepted", identityChanged: true });
     const teamOne = await storedTeam(scenario, "1");
     const state = await identityState(scenario);
     expect(state.link.currentUserTeamExternalKey).toBe(teamOneExternalKey);
+    expect(state.link.providerCommissioner).toBe(true);
+    expect(state.link.providerCommissionerObservedAt).toEqual(FIRST_CAPTURE);
     expect(state.link.lastSyncedAt).toEqual(FIRST_CAPTURE);
     expect(state.membership.claimedFantasyTeamId).toBe(teamOne.id);
     expect(state.membership.claimedAt).toEqual(new Date(FIRST_CAPTURE.getTime() + 1_000));
-    expect(state.membership.role).toBe("commissioner");
+    expect(state.membership.role).toBe("member");
+    expect(state.membership.explicitCommissioner).toBe(false);
 
-    await persistence.persist(
+    const unchangedReceipt = await persistence.persist(
       persistenceInput(scenario, bundle(scenario.providerLeagueId, "1", true), SECOND_CAPTURE),
     );
-    const promotionEvents = await db
+    expect(unchangedReceipt).toMatchObject({ state: "unchanged", identityChanged: false });
+    const evidenceEvents = await db
       .select({
         action: auditEvents.action,
+        targetId: auditEvents.targetId,
         targetType: auditEvents.targetType,
         metadata: auditEvents.metadata,
       })
@@ -418,31 +708,33 @@ describe.skipIf(!dockerAvailable)("ESPN server-session identity against real Pos
       .where(
         and(
           eq(auditEvents.userId, scenario.actorUserId),
-          eq(auditEvents.action, "espn.membership.commissioner_promoted"),
+          eq(auditEvents.action, "espn.membership.provider_commissioner_evidence_updated"),
         ),
       );
-    expect(promotionEvents).toEqual([
+    expect(evidenceEvents).toEqual([
       {
-        action: "espn.membership.commissioner_promoted",
-        targetType: "league_membership",
+        action: "espn.membership.provider_commissioner_evidence_updated",
+        targetId: `${scenario.connectionId}:${scenario.leagueSeasonId}`,
+        targetType: "provider_league_link",
         metadata: {
           provider: "espn",
           signal: "league-manager",
-          previousRole: "member",
-          role: "commissioner",
+          previous: null,
+          current: true,
         },
       },
     ]);
   });
 
-  it("clears a stale mapping and backfills identity plus role on an unchanged sync", async () => {
+  it("clears a stale mapping and backfills identity plus evidence on an unchanged sync", async () => {
     const scenario = await createScenario("espn:2031:stale:team:99", "member");
 
     const firstReceipt = await persistence.persist(
       persistenceInput(scenario, bundle(scenario.providerLeagueId, null), FIRST_CAPTURE),
     );
-    expect(firstReceipt.state).toBe("accepted");
+    expect(firstReceipt).toMatchObject({ state: "accepted", identityChanged: true });
     expect((await identityState(scenario)).link.currentUserTeamExternalKey).toBeNull();
+    expect((await identityState(scenario)).link.providerCommissioner).toBeNull();
     expect((await identityState(scenario)).membership.claimedFantasyTeamId).toBeNull();
     expect((await identityState(scenario)).membership.role).toBe("member");
 
@@ -450,14 +742,44 @@ describe.skipIf(!dockerAvailable)("ESPN server-session identity against real Pos
       persistenceInput(scenario, bundle(scenario.providerLeagueId, "2", true), SECOND_CAPTURE),
     );
 
-    expect(secondReceipt.state).toBe("unchanged");
+    expect(secondReceipt).toMatchObject({ state: "unchanged", identityChanged: true });
     expect(secondReceipt.receiptId).toBe(firstReceipt.receiptId);
     const teamTwo = await storedTeam(scenario, "2");
     const state = await identityState(scenario);
     expect(state.link.currentUserTeamExternalKey).toBe(teamTwo.externalKey);
+    expect(state.link.providerCommissioner).toBe(true);
+    expect(state.link.providerCommissionerObservedAt).toEqual(SECOND_CAPTURE);
     expect(state.link.lastSyncedAt).toEqual(SECOND_CAPTURE);
     expect(state.membership.claimedFantasyTeamId).toBe(teamTwo.id);
-    expect(state.membership.role).toBe("commissioner");
+    expect(state.membership.role).toBe("member");
+  });
+
+  it("reports a newly won claim without treating later freshness timestamps as identity changes", async () => {
+    const scenario = await createScenario(null, "member");
+    const currentUserTeamExternalKey = `espn:${SEASON}:${scenario.providerLeagueId}:team:1`;
+    await db
+      .update(providerLeagueLinks)
+      .set({ currentUserTeamExternalKey })
+      .where(
+        and(
+          eq(providerLeagueLinks.connectionId, scenario.connectionId),
+          eq(providerLeagueLinks.leagueSeasonId, scenario.leagueSeasonId),
+        ),
+      );
+
+    const claimedReceipt = await persistence.persist(
+      persistenceInput(scenario, bundle(scenario.providerLeagueId, "1"), FIRST_CAPTURE),
+    );
+    expect(claimedReceipt).toMatchObject({ state: "accepted", identityChanged: true });
+    expect((await identityState(scenario)).membership.claimedFantasyTeamId).not.toBeNull();
+
+    const freshnessOnlyReceipt = await persistence.persist(
+      persistenceInput(scenario, bundle(scenario.providerLeagueId, "1"), SECOND_CAPTURE),
+    );
+    expect(freshnessOnlyReceipt).toMatchObject({
+      state: "unchanged",
+      identityChanged: false,
+    });
   });
 
   it.each([
@@ -470,7 +792,10 @@ describe.skipIf(!dockerAvailable)("ESPN server-session identity against real Pos
       persistenceInput(scenario, bundle(scenario.providerLeagueId, "1", flag), FIRST_CAPTURE),
     );
 
-    expect((await identityState(scenario)).membership.role).toBe("member");
+    const state = await identityState(scenario);
+    expect(state.membership.role).toBe("member");
+    expect(state.link.providerCommissioner).toBe(flag);
+    expect(state.link.providerCommissionerObservedAt).toEqual(flag === null ? null : FIRST_CAPTURE);
   });
 
   it.each([
@@ -482,7 +807,7 @@ describe.skipIf(!dockerAvailable)("ESPN server-session identity against real Pos
       const scenario = await createScenario(null, "member");
       await db
         .update(leagueMemberships)
-        .set({ role: "commissioner" })
+        .set({ role: "commissioner", explicitCommissioner: true })
         .where(
           and(
             eq(leagueMemberships.leagueId, scenario.leagueId),
@@ -494,9 +819,29 @@ describe.skipIf(!dockerAvailable)("ESPN server-session identity against real Pos
         persistenceInput(scenario, bundle(scenario.providerLeagueId, "1", flag), FIRST_CAPTURE),
       );
 
-      expect((await identityState(scenario)).membership.role).toBe("commissioner");
+      expect((await identityState(scenario)).membership).toMatchObject({
+        role: "commissioner",
+        explicitCommissioner: true,
+      });
     },
   );
+
+  it("lets a later exact false remove only provider-derived commissioner authority", async () => {
+    const scenario = await createScenario(null, "member");
+
+    await persistence.persist(
+      persistenceInput(scenario, bundle(scenario.providerLeagueId, "1", true), FIRST_CAPTURE),
+    );
+    await persistence.persist(
+      persistenceInput(scenario, bundle(scenario.providerLeagueId, "1", false), SECOND_CAPTURE),
+    );
+
+    const state = await identityState(scenario);
+    expect(state.link.providerCommissioner).toBe(false);
+    expect(state.link.providerCommissionerObservedAt).toEqual(SECOND_CAPTURE);
+    expect(state.membership.role).toBe("member");
+    expect(state.membership.explicitCommissioner).toBe(false);
+  });
 
   it("never replaces the canonical owner role", async () => {
     const scenario = await createScenario();
@@ -505,7 +850,10 @@ describe.skipIf(!dockerAvailable)("ESPN server-session identity against real Pos
       persistenceInput(scenario, bundle(scenario.providerLeagueId, "1", true), FIRST_CAPTURE),
     );
 
-    expect((await identityState(scenario)).membership.role).toBe("owner");
+    const state = await identityState(scenario);
+    expect(state.membership.role).toBe("owner");
+    expect(state.membership.explicitCommissioner).toBe(false);
+    expect(state.link.providerCommissioner).toBe(true);
   });
 
   it("rejects a commissioner signal from an actor who does not own the provider link", async () => {

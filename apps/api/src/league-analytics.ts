@@ -58,7 +58,10 @@ import {
   type PlayoffOddsTeamRow,
 } from "./playoff-odds.js";
 import { projectionTimestampProvenance } from "./projection-provenance.js";
-import { publicLeagueAccessRole } from "./public-league-access.js";
+import {
+  latestProviderCommissionerAuthoritySql,
+  publicLeagueAccessRole,
+} from "./public-league-access.js";
 
 export const LEAGUE_ANALYTICS_LIMITS = {
   teams: 32,
@@ -133,6 +136,8 @@ export interface AnalyticsMembershipRow {
   readonly leagueId: string;
   readonly leagueName: string;
   readonly role: LeagueMembershipRole;
+  readonly explicitCommissioner?: boolean;
+  readonly providerCommissioner?: boolean;
   readonly claimedFantasyTeamId: string | null;
   readonly claimedTeamName: string | null;
 }
@@ -262,6 +267,8 @@ export class DrizzleLeagueAnalyticsRepository implements LeagueAnalyticsReposito
         leagueId: leagues.id,
         leagueName: leagues.name,
         role: leagueMemberships.role,
+        explicitCommissioner: leagueMemberships.explicitCommissioner,
+        providerCommissioner: latestProviderCommissionerAuthoritySql(userId, leagues.id),
         claimedFantasyTeamId: leagueMemberships.claimedFantasyTeamId,
         claimedTeamName: fantasyTeams.name,
       })
@@ -1709,7 +1716,11 @@ export class LeagueAnalyticsService {
         provider: season.provider,
       },
       membership: {
-        role: publicLeagueAccessRole(membership.role),
+        role: publicLeagueAccessRole({
+          role: membership.role,
+          explicitCommissioner: membership.explicitCommissioner,
+          providerCommissioner: membership.providerCommissioner,
+        }),
         claimedTeamId: membership.claimedFantasyTeamId,
         claimedTeamName: membership.claimedTeamName,
       },
@@ -1779,7 +1790,11 @@ export class LeagueAnalyticsService {
         provider: null,
       },
       membership: {
-        role: publicLeagueAccessRole(membership.role),
+        role: publicLeagueAccessRole({
+          role: membership.role,
+          explicitCommissioner: membership.explicitCommissioner,
+          providerCommissioner: membership.providerCommissioner,
+        }),
         claimedTeamId: membership.claimedFantasyTeamId,
         claimedTeamName: membership.claimedTeamName,
       },
@@ -1826,7 +1841,11 @@ export class LeagueAnalyticsService {
         provider: season.provider,
       },
       membership: {
-        role: publicLeagueAccessRole(membership.role),
+        role: publicLeagueAccessRole({
+          role: membership.role,
+          explicitCommissioner: membership.explicitCommissioner,
+          providerCommissioner: membership.providerCommissioner,
+        }),
         claimedTeamId: membership.claimedFantasyTeamId,
         claimedTeamName: membership.claimedTeamName,
       },

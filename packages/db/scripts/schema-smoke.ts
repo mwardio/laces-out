@@ -148,7 +148,8 @@ try {
     where table_schema = 'public'
       and table_name in (
         'bridge_devices', 'browser_handoff_tokens', 'provider_connections',
-        'recommendation_runs', 'refresh_requests', 'oauth_states', 'users'
+        'provider_league_links', 'league_memberships', 'recommendation_runs',
+        'refresh_requests', 'oauth_states', 'users'
       )
   `;
   const columnNames = new Set(columnRows.map((row) => `${row.table_name}.${row.column_name}`));
@@ -161,6 +162,9 @@ try {
     "provider_connections.consecutive_failures",
     "provider_connections.circuit_open_until",
     "provider_connections.last_error_detail",
+    "provider_league_links.provider_commissioner",
+    "provider_league_links.provider_commissioner_observed_at",
+    "league_memberships.explicit_commissioner",
     "recommendation_runs.fantasy_team_id",
     "refresh_requests.expires_at",
     "refresh_requests.minimum_capture_at",
@@ -170,6 +174,29 @@ try {
     "users.email_verified_at",
   ]) {
     assert.ok(columnNames.has(column), `missing migrated column ${column}`);
+  }
+
+  const commissionerConstraintRows = await sql`
+    select conname
+    from pg_catalog.pg_constraint
+    where conname in (
+      'league_memberships_explicit_commissioner_role_check',
+      'provider_league_links_commissioner_identity_check',
+      'provider_league_links_commissioner_observation_check'
+    )
+  `;
+  const commissionerConstraintNames = new Set(
+    commissionerConstraintRows.map((row) => String(row.conname)),
+  );
+  for (const constraintName of [
+    "league_memberships_explicit_commissioner_role_check",
+    "provider_league_links_commissioner_identity_check",
+    "provider_league_links_commissioner_observation_check",
+  ]) {
+    assert.ok(
+      commissionerConstraintNames.has(constraintName),
+      `missing commissioner invariant ${constraintName}`,
+    );
   }
 
   const indexRows = await sql`
@@ -400,6 +427,22 @@ try {
     returning role
   `;
   assert.equal(defaultMembership?.role, "member", "league membership default was not member");
+  await expectDatabaseRejection(
+    "commissioner role without explicit evidence",
+    () => sql`
+      update league_memberships
+      set role = 'commissioner'
+      where league_id = ${leagueId} and user_id = ${friendId}
+    `,
+  );
+  await expectDatabaseRejection(
+    "explicit commissioner evidence on a member role",
+    () => sql`
+      update league_memberships
+      set explicit_commissioner = true
+      where league_id = ${leagueId} and user_id = ${friendId}
+    `,
+  );
   await expectDatabaseRejection(
     "duplicate fantasy team claim",
     () => sql`
@@ -1685,6 +1728,37 @@ try {
     returning id
   `;
   const espnSeasonId = requiredString(espnSeason?.id, "ESPN league season id");
+  const [espnConnection] = await sql`
+    insert into provider_connections (user_id, provider, external_account_id)
+    values (${ownerId}, 'espn', ${`espn-account-${suffix}`})
+    returning id
+  `;
+  const espnConnectionId = requiredString(espnConnection?.id, "ESPN provider connection id");
+  await expectDatabaseRejection(
+    "provider commissioner evidence without exact team identity",
+    () => sql`
+      insert into provider_league_links (
+        connection_id, league_season_id, provider_commissioner,
+        provider_commissioner_observed_at
+      ) values (${espnConnectionId}, ${espnSeasonId}, true, now())
+    `,
+  );
+  await sql`
+    insert into provider_league_links (
+      connection_id, league_season_id, current_user_team_external_key,
+      provider_commissioner, provider_commissioner_observed_at
+    ) values (
+      ${espnConnectionId}, ${espnSeasonId}, ${`espn:2026:123456789:team:1`}, false, now()
+    )
+  `;
+  await expectDatabaseRejection(
+    "provider commissioner evidence detached from exact team identity",
+    () => sql`
+      update provider_league_links
+      set current_user_team_external_key = null
+      where connection_id = ${espnConnectionId} and league_season_id = ${espnSeasonId}
+    `,
+  );
   await sql`
     update bridge_device_leagues set league_id = ${leagueId} where id = ${bridgeGrantId}
   `;
@@ -2005,7 +2079,39 @@ try {
     transferredMemberships.map((row) => [String(row.user_id), String(row.role)]),
   );
   assert.equal(transferredRoles.get(friendId), "owner", "new owner was not promoted");
-  assert.equal(transferredRoles.get(ownerId), "commissioner", "old owner was not demoted");
+  assert.equal(
+    transferredRoles.get(ownerId),
+    "member",
+    "old owner retained commissioner authority without an explicit grant",
+  );
+
+  await sql`
+    update league_memberships
+    set explicit_commissioner = true
+    where league_id = ${leagueId} and user_id = ${friendId}
+  `;
+  await sql`update leagues set user_id = ${ownerId} where id = ${leagueId}`;
+  const explicitlyGrantedTransfer = await sql`
+    select user_id, role, explicit_commissioner
+    from league_memberships
+    where league_id = ${leagueId}
+  `;
+  const explicitlyGrantedRoles = new Map(
+    explicitlyGrantedTransfer.map((row) => [
+      String(row.user_id),
+      { role: String(row.role), explicit: row.explicit_commissioner === true },
+    ]),
+  );
+  assert.deepEqual(
+    explicitlyGrantedRoles.get(friendId),
+    { role: "commissioner", explicit: true },
+    "old owner lost an explicit commissioner grant during transfer",
+  );
+  assert.equal(
+    explicitlyGrantedRoles.get(ownerId)?.role,
+    "owner",
+    "canonical ownership did not transfer back",
+  );
   await expectDatabaseRejection(
     "direct owner membership creation",
     () => sql`

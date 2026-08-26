@@ -733,6 +733,13 @@ export const providerLeagueLinks = pgTable(
       .notNull()
       .references(() => leagueSeasons.id, { onDelete: "cascade" }),
     currentUserTeamExternalKey: text("current_user_team_external_key"),
+    // Exact provider-derived product authority for this user-owned connection and provider
+    // season. Null means unknown, false is an explicit negative observation, and true is accepted
+    // only from an authenticated provider identity path. Internal league ownership never writes it.
+    providerCommissioner: boolean("provider_commissioner"),
+    providerCommissionerObservedAt: timestamp("provider_commissioner_observed_at", {
+      withTimezone: true,
+    }),
     discoveredAt: timestamp("discovered_at", { withTimezone: true }).notNull().defaultNow(),
     lastSyncedAt: timestamp("last_synced_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
@@ -744,6 +751,14 @@ export const providerLeagueLinks = pgTable(
     check(
       "provider_league_links_current_team_check",
       sql`${table.currentUserTeamExternalKey} is null or char_length(btrim(${table.currentUserTeamExternalKey})) > 0`,
+    ),
+    check(
+      "provider_league_links_commissioner_observation_check",
+      sql`(${table.providerCommissioner} is null) = (${table.providerCommissionerObservedAt} is null)`,
+    ),
+    check(
+      "provider_league_links_commissioner_identity_check",
+      sql`${table.providerCommissioner} is null or ${table.currentUserTeamExternalKey} is not null`,
     ),
   ],
 );
@@ -846,6 +861,9 @@ export const leagueMemberships = pgTable(
       .notNull()
       .references(() => users.id, { onDelete: "cascade" }),
     role: text("role").$type<LeagueMembershipRole>().notNull().default("member"),
+    // Explicit Laces Out commissioner authority is separate from the canonical owner role. The
+    // flag matters when an owner accepts a commissioner grant without replacing lifecycle role.
+    explicitCommissioner: boolean("explicit_commissioner").notNull().default(false),
     claimedFantasyTeamId: uuid("claimed_fantasy_team_id").references(() => fantasyTeams.id, {
       onDelete: "set null",
     }),
@@ -874,6 +892,10 @@ export const leagueMemberships = pgTable(
     check(
       "league_memberships_claimed_at_check",
       sql`${table.claimedAt} is null or ${table.claimedFantasyTeamId} is not null`,
+    ),
+    check(
+      "league_memberships_explicit_commissioner_role_check",
+      sql`${table.role} = 'owner' or ${table.explicitCommissioner} = (${table.role} = 'commissioner')`,
     ),
   ],
 );

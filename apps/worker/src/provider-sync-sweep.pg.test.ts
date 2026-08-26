@@ -21,12 +21,15 @@ import {
   type ConnectionHealth,
   type Database,
 } from "@laces-out/db";
-import { eq } from "drizzle-orm";
+import { eq, inArray } from "drizzle-orm";
 import { migrate } from "drizzle-orm/postgres-js/migrator";
 import postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { DrizzleLeagueSyncTargetReader } from "./league-sync-service.js";
+import {
+  DrizzleConnectionCircuitStore,
+  DrizzleLeagueSyncTargetReader,
+} from "./league-sync-service.js";
 import {
   DrizzleProviderSyncSweepTargetReader,
   YAHOO_ACTIVE_SYNC_INTERVAL_MS,
@@ -140,6 +143,9 @@ const CONNECTION_CIRCUIT = id(106);
 const CONNECTION_COOLED = id(107);
 const CONNECTION_OUTSIDER = id(108);
 const CONNECTION_ESPN_DEGRADED = id(109);
+const CONNECTION_SUCCESS_REAUTHORIZE = id(110);
+const CONNECTION_SUCCESS_DISABLED = id(111);
+const CONNECTION_SUCCESS_DEGRADED = id(112);
 
 const SEASONS = {
   activeDue: id(201),
@@ -310,6 +316,40 @@ describe.skipIf(!dockerAvailable)("Yahoo provider sweep against real PostgreSQL"
       createdAt: new Date("2026-01-01T00:00:00.000Z"),
       updatedAt: NOW,
     });
+    await db.insert(providerConnections).values(
+      [
+        {
+          id: CONNECTION_SUCCESS_REAUTHORIZE,
+          health: "reauthorize" as const,
+          lastErrorCode: "ESPN_SESSION_EXPIRED",
+          lastErrorDetail: "ESPN sign-in must be renewed.",
+        },
+        {
+          id: CONNECTION_SUCCESS_DISABLED,
+          health: "disabled" as const,
+          lastErrorCode: "CONNECTION_DISABLED",
+          lastErrorDetail: "Connection was disabled by its owner.",
+        },
+        {
+          id: CONNECTION_SUCCESS_DEGRADED,
+          health: "degraded" as const,
+          lastErrorCode: "UPSTREAM_ERROR",
+          lastErrorDetail: "Provider read failed.",
+        },
+      ].map((connection) => ({
+        ...connection,
+        userId: USER_OWNER,
+        provider: "espn" as const,
+        externalAccountId: `success-state-${connection.id}`,
+        encryptedCredential: { version: 1, ciphertext: "sanitized-test-envelope" },
+        capabilities: { authentication: ["server-session-cookie"] },
+        lastErrorAt: new Date("2026-09-24T14:00:00.000Z"),
+        consecutiveFailures: 5,
+        circuitOpenUntil: new Date("2026-09-24T16:00:00.000Z"),
+        createdAt: new Date("2026-01-01T00:00:00.000Z"),
+        updatedAt: new Date("2026-09-24T14:00:00.000Z"),
+      })),
+    );
 
     await addSeason({
       id: SEASONS.activeDue,
@@ -540,5 +580,61 @@ describe.skipIf(!dockerAvailable)("Yahoo provider sweep against real PostgreSQL"
         leagueSeasonId: SEASONS.sharedFallback,
       }),
     ).resolves.toBeUndefined();
+  });
+
+  it("preserves terminal connection reasons while clearing successful circuit bookkeeping", async () => {
+    const circuit = new DrizzleConnectionCircuitStore(db);
+    for (const connectionId of [
+      CONNECTION_SUCCESS_REAUTHORIZE,
+      CONNECTION_SUCCESS_DISABLED,
+      CONNECTION_SUCCESS_DEGRADED,
+    ]) {
+      await circuit.recordSuccess(connectionId, NOW);
+    }
+
+    const rows = await db
+      .select({
+        id: providerConnections.id,
+        health: providerConnections.health,
+        lastErrorCode: providerConnections.lastErrorCode,
+        lastErrorDetail: providerConnections.lastErrorDetail,
+        lastSuccessfulAt: providerConnections.lastSuccessfulAt,
+        consecutiveFailures: providerConnections.consecutiveFailures,
+        circuitOpenUntil: providerConnections.circuitOpenUntil,
+      })
+      .from(providerConnections)
+      .where(
+        inArray(providerConnections.id, [
+          CONNECTION_SUCCESS_REAUTHORIZE,
+          CONNECTION_SUCCESS_DISABLED,
+          CONNECTION_SUCCESS_DEGRADED,
+        ]),
+      );
+    const byId = new Map(rows.map(({ id: connectionId, ...state }) => [connectionId, state]));
+
+    expect(byId.get(CONNECTION_SUCCESS_REAUTHORIZE)).toEqual({
+      health: "reauthorize",
+      lastErrorCode: "ESPN_SESSION_EXPIRED",
+      lastErrorDetail: "ESPN sign-in must be renewed.",
+      lastSuccessfulAt: NOW,
+      consecutiveFailures: 0,
+      circuitOpenUntil: null,
+    });
+    expect(byId.get(CONNECTION_SUCCESS_DISABLED)).toEqual({
+      health: "disabled",
+      lastErrorCode: "CONNECTION_DISABLED",
+      lastErrorDetail: "Connection was disabled by its owner.",
+      lastSuccessfulAt: NOW,
+      consecutiveFailures: 0,
+      circuitOpenUntil: null,
+    });
+    expect(byId.get(CONNECTION_SUCCESS_DEGRADED)).toEqual({
+      health: "healthy",
+      lastErrorCode: null,
+      lastErrorDetail: null,
+      lastSuccessfulAt: NOW,
+      consecutiveFailures: 0,
+      circuitOpenUntil: null,
+    });
   });
 });
