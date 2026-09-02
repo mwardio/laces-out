@@ -1,8 +1,8 @@
 import { redactText } from "@laces-out/security";
 
 export const YAHOO_TOKEN_ENDPOINT = "https://api.login.yahoo.com/oauth2/get_token" as const;
-export const YAHOO_FANTASY_IDENTITY_ENDPOINT =
-  "https://fantasysports.yahooapis.com/fantasy/v2/users;use_login=1" as const;
+export const YAHOO_OPENID_USERINFO_ENDPOINT =
+  "https://api.login.yahoo.com/openid/v1/userinfo" as const;
 const MAX_TOKEN_RESPONSE_BYTES = 64 * 1024;
 
 export type FetchLike = (input: string | URL, init?: RequestInit) => Promise<Response>;
@@ -100,14 +100,20 @@ function parseTokenResponse(value: unknown): TokenResponseShape {
   return record as unknown as TokenResponseShape;
 }
 
-function parseFantasyIdentityResponse(xml: string): string {
-  const match = /<guid>\s*([A-Za-z0-9._~-]{1,255})\s*<\/guid>/u.exec(xml);
-  if (!match?.[1]) {
+function parseOpenIdIdentityResponse(text: string): string {
+  let value: unknown;
+  try {
+    value = JSON.parse(text);
+  } catch {
+    throw new YahooTokenClientError({ message: "Yahoo user identity response was not JSON" });
+  }
+  const subject = asRecord(value)?.sub;
+  if (typeof subject !== "string" || !/^[A-Za-z0-9._~-]{1,255}$/u.test(subject)) {
     throw new YahooTokenClientError({
-      message: "Yahoo Fantasy user response did not contain a valid account identifier",
+      message: "Yahoo user identity response did not contain a valid account identifier",
     });
   }
-  return match[1];
+  return subject;
 }
 
 function validateClientOptions(options: YahooTokenClientOptions): void {
@@ -205,7 +211,7 @@ export class YahooTokenClient {
     const tokenSet = this.#toTokenSet(response, response.refresh_token);
     const yahooGuid =
       tokenSet.yahooGuid ??
-      (await this.#resolveYahooFantasyGuid(tokenSet.accessToken, input.signal));
+      (await this.#resolveYahooOpenIdSubject(tokenSet.accessToken, input.signal));
     return {
       tokenSet: { ...tokenSet, yahooGuid },
       credentialVersion: 1,
@@ -256,21 +262,21 @@ export class YahooTokenClient {
     };
   }
 
-  async #resolveYahooFantasyGuid(accessToken: string, signal?: AbortSignal): Promise<string> {
+  async #resolveYahooOpenIdSubject(accessToken: string, signal?: AbortSignal): Promise<string> {
     let response: Response;
     try {
       const timeoutSignal = AbortSignal.timeout(this.#timeoutMs);
       const requestSignal =
         signal === undefined ? timeoutSignal : AbortSignal.any([signal, timeoutSignal]);
-      response = await this.#fetch(YAHOO_FANTASY_IDENTITY_ENDPOINT, {
+      response = await this.#fetch(YAHOO_OPENID_USERINFO_ENDPOINT, {
         method: "GET",
-        headers: { Accept: "application/xml", Authorization: `Bearer ${accessToken}` },
+        headers: { Accept: "application/json", Authorization: `Bearer ${accessToken}` },
         redirect: "error",
         signal: requestSignal,
       });
     } catch {
       throw new YahooTokenClientError({
-        message: "Yahoo account identity request failed",
+        message: "Yahoo OpenID identity request failed",
         retryable: true,
       });
     }
@@ -278,13 +284,13 @@ export class YahooTokenClient {
     const text = await readBoundedTokenBody(response);
     if (!response.ok) {
       throw new YahooTokenClientError({
-        message: "Yahoo rejected the account identity request",
+        message: "Yahoo rejected the OpenID identity request",
         status: response.status,
         oauthCode: "userinfo_failed",
         retryable: response.status === 429 || response.status >= 500,
       });
     }
-    return parseFantasyIdentityResponse(text);
+    return parseOpenIdIdentityResponse(text);
   }
 
   async #requestToken(body: URLSearchParams, signal?: AbortSignal): Promise<TokenResponseShape> {

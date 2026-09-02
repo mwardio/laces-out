@@ -76,7 +76,7 @@ describe("YahooTokenClient", () => {
     });
   });
 
-  it("resolves the Fantasy user GUID when Yahoo omits its deprecated token field", async () => {
+  it("resolves the OpenID subject when Yahoo omits its deprecated GUID token field", async () => {
     const fetchMock = vi
       .fn<(input: string | URL, init?: RequestInit) => Promise<Response>>()
       .mockResolvedValueOnce(
@@ -91,10 +91,10 @@ describe("YahooTokenClient", () => {
         ),
       )
       .mockResolvedValueOnce(
-        new Response(
-          '<?xml version="1.0"?><fantasy_content><users><user><guid>stable-yahoo-guid</guid></user></users></fantasy_content>',
-          { status: 200, headers: { "content-type": "application/xml" } },
-        ),
+        new Response(JSON.stringify({ sub: "stable-yahoo-guid" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
       );
     const client = new YahooTokenClient({
       clientId: "client-id",
@@ -107,9 +107,10 @@ describe("YahooTokenClient", () => {
 
     expect(result.tokenSet.yahooGuid).toBe("stable-yahoo-guid");
     expect(String(fetchMock.mock.calls[1]?.[0])).toBe(
-      "https://fantasysports.yahooapis.com/fantasy/v2/users;use_login=1",
+      "https://api.login.yahoo.com/openid/v1/userinfo",
     );
     const headers = new Headers(fetchMock.mock.calls[1]?.[1]?.headers);
     expect(headers.get("Authorization")).toBe("Bearer access-token-value");
+    expect(headers.get("Accept")).toBe("application/json");
   });
 });
