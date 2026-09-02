@@ -1438,9 +1438,11 @@ describe.skipIf(!postgresAvailable)("account data repository against real Postgr
     if (!state || !expiringState || !browserState) {
       throw new Error("Expected Yahoo authorization state");
     }
-    expect(new URL(started.authorizationUrl).searchParams.get("redirect_uri")).toBe(
+    const startedUrl = new URL(started.authorizationUrl);
+    expect(startedUrl.searchParams.get("redirect_uri")).toBe(
       "https://self-host.example/v1/connections/yahoo/callback",
     );
+    expect(startedUrl.searchParams.get("scope")).toBe("fspt-r");
 
     const [stored] = await db
       .select()

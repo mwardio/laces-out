@@ -156,6 +156,10 @@ export class YahooConnectionService {
     const request = createYahooAuthorizationRequest({
       clientId: this.#clientId,
       redirectUri: this.#redirectUri,
+      // Yahoo issues a token for the scopes requested by the authorization URL. The app-level
+      // Fantasy permission alone is not enough: omitting fspt-r can complete login successfully
+      // and then produce a 403 on the first Fantasy API read.
+      scopes: ["fspt-r"],
       now: this.#now,
     });
     const encryptedPkceVerifier = encryptCredential(
