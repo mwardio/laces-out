@@ -3,6 +3,7 @@ import {
   evaluateConnectionCircuit,
   nextCircuitOpenUntil,
   connectionSupportsServerRefresh,
+  EspnSessionSyncError,
   type EspnDirectSyncPort,
   type EspnSessionSyncPort,
   type EspnSessionSyncReceipt,
@@ -14,13 +15,15 @@ import {
   leagueMemberships,
   leagues,
   leagueSeasons,
+  espnRefreshAttempts,
   providerConnections,
   providerLeagueLinks,
+  refreshRequests,
   type ConnectionHealth,
   type Database,
   type ProviderName,
 } from "@laces-out/db";
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, inArray, isNull, sql } from "drizzle-orm";
 
 import type {
   LeagueSyncJob,
@@ -46,6 +49,7 @@ export type LeagueSyncOutcome =
   | { readonly state: "provider-unconfigured"; readonly provider: ProviderName }
   | { readonly state: "reauthorization-required"; readonly connectionId: string }
   | { readonly state: "circuit-open"; readonly retryAfterSeconds: number }
+  | { readonly state: "provider-rejected"; readonly provider: "espn"; readonly errorCode: string }
   | { readonly state: "target-missing" };
 
 export interface LeagueSyncTarget {
@@ -66,13 +70,36 @@ export interface LeagueSyncTargetReader {
 }
 
 export interface ConnectionCircuitStore {
-  recordSuccess(connectionId: string, at: Date): Promise<void>;
-  recordFailure(input: {
+  recordSuccess(input: {
+    readonly provider: "yahoo" | "espn";
     readonly connectionId: string;
+    readonly leagueSeasonId: string;
+    readonly at: Date;
+  }): Promise<void>;
+  recordFailure(input: {
+    readonly provider: "yahoo" | "espn";
+    readonly connectionId: string;
+    readonly leagueSeasonId: string;
     readonly at: Date;
     readonly errorCode: string;
     readonly errorDetail: string;
   }): Promise<{ readonly state: "closed" | "open"; readonly consecutiveFailures: number }>;
+}
+
+export interface EspnSessionAttemptStore {
+  recordStarted(input: {
+    readonly refreshRequestId: string;
+    readonly leagueSeasonId: string;
+    readonly at: Date;
+  }): Promise<void>;
+  recordFailure(input: {
+    readonly refreshRequestId: string;
+    readonly leagueSeasonId: string;
+    readonly errorCode: string;
+    readonly errorDetail: string;
+    readonly retryable: boolean;
+    readonly at: Date;
+  }): Promise<void>;
 }
 
 export type LeagueSyncOperationalEvent =
@@ -119,6 +146,13 @@ export type LeagueSyncOperationalEvent =
       readonly provider: "yahoo" | "espn";
       readonly connectionId: string;
       readonly leagueSeasonId: string;
+    }
+  | {
+      readonly event: "refresh-attempt-bookkeeping-failed";
+      readonly provider: "espn";
+      readonly connectionId: string;
+      readonly leagueSeasonId: string;
+      readonly phase: "started" | "failed";
     };
 
 function abortIfCancelled(context: WorkerJobContext): void {
@@ -144,6 +178,7 @@ export class LeagueSyncService implements LeagueSyncServicePort {
   readonly #espnSessionSync: EspnSessionSyncPort | undefined;
   readonly #espnDirect: EspnDirectSyncPort | undefined;
   readonly #circuit: ConnectionCircuitStore;
+  readonly #espnSessionAttempts: EspnSessionAttemptStore | undefined;
   readonly #afterYahooCommit: ((receipt: YahooSyncReceipt) => Promise<void>) | undefined;
   readonly #afterEspnCommit: ((receipt: EspnSessionSyncReceipt) => Promise<void>) | undefined;
   readonly #observe: ((event: LeagueSyncOperationalEvent) => void) | undefined;
@@ -155,6 +190,7 @@ export class LeagueSyncService implements LeagueSyncServicePort {
     readonly espnSessionSync?: EspnSessionSyncPort;
     readonly espnDirect?: EspnDirectSyncPort;
     readonly circuit: ConnectionCircuitStore;
+    readonly espnSessionAttempts?: EspnSessionAttemptStore;
     readonly afterYahooCommit?: (receipt: YahooSyncReceipt) => Promise<void>;
     readonly afterEspnCommit?: (receipt: EspnSessionSyncReceipt) => Promise<void>;
     readonly observe?: (event: LeagueSyncOperationalEvent) => void;
@@ -165,6 +201,7 @@ export class LeagueSyncService implements LeagueSyncServicePort {
     this.#espnSessionSync = input.espnSessionSync;
     this.#espnDirect = input.espnDirect;
     this.#circuit = input.circuit;
+    this.#espnSessionAttempts = input.espnSessionAttempts;
     this.#afterYahooCommit = input.afterYahooCommit;
     this.#afterEspnCommit = input.afterEspnCommit;
     this.#observe = input.observe;
@@ -238,6 +275,32 @@ export class LeagueSyncService implements LeagueSyncServicePort {
     }
 
     if (target.connectionHealth === "reauthorize" || target.connectionHealth === "disabled") {
+      if (target.provider === "espn" && job.refreshRequestId && this.#espnSessionAttempts) {
+        try {
+          await this.#espnSessionAttempts.recordFailure({
+            refreshRequestId: job.refreshRequestId,
+            leagueSeasonId: job.leagueSeasonId,
+            errorCode:
+              target.connectionHealth === "reauthorize"
+                ? "REAUTHORIZATION_REQUIRED"
+                : "CONNECTION_DISABLED",
+            errorDetail:
+              target.connectionHealth === "reauthorize"
+                ? "ESPN sign-in must be renewed."
+                : "Always-on ESPN sync is disabled.",
+            retryable: false,
+            at: this.#now(),
+          });
+        } catch {
+          this.#emit({
+            event: "refresh-attempt-bookkeeping-failed",
+            provider: "espn",
+            connectionId,
+            leagueSeasonId: job.leagueSeasonId,
+            phase: "failed",
+          });
+        }
+      }
       // Terminal, not retryable: no amount of backoff produces a valid credential.
       this.#emit({
         event: "reauthorization-required",
@@ -254,6 +317,26 @@ export class LeagueSyncService implements LeagueSyncServicePort {
       now: this.#now(),
     });
     if (circuit.state === "open") {
+      if (target.provider === "espn" && job.refreshRequestId && this.#espnSessionAttempts) {
+        try {
+          await this.#espnSessionAttempts.recordFailure({
+            refreshRequestId: job.refreshRequestId,
+            leagueSeasonId: job.leagueSeasonId,
+            errorCode: "CIRCUIT_COOLDOWN",
+            errorDetail: "Automatic ESPN refresh is cooling down before its next retry.",
+            retryable: true,
+            at: this.#now(),
+          });
+        } catch {
+          this.#emit({
+            event: "refresh-attempt-bookkeeping-failed",
+            provider: "espn",
+            connectionId,
+            leagueSeasonId: job.leagueSeasonId,
+            phase: "failed",
+          });
+        }
+      }
       this.#emit({
         event: "circuit-cooldown",
         provider: target.provider === "espn" ? "espn" : "yahoo",
@@ -275,6 +358,23 @@ export class LeagueSyncService implements LeagueSyncServicePort {
     }
 
     let receipt: YahooSyncReceipt | EspnSessionSyncReceipt;
+    if (target.provider === "espn" && job.refreshRequestId && this.#espnSessionAttempts) {
+      try {
+        await this.#espnSessionAttempts.recordStarted({
+          refreshRequestId: job.refreshRequestId,
+          leagueSeasonId: job.leagueSeasonId,
+          at: this.#now(),
+        });
+      } catch {
+        this.#emit({
+          event: "refresh-attempt-bookkeeping-failed",
+          provider: "espn",
+          connectionId,
+          leagueSeasonId: job.leagueSeasonId,
+          phase: "started",
+        });
+      }
+    }
     try {
       receipt =
         target.provider === "espn"
@@ -300,7 +400,32 @@ export class LeagueSyncService implements LeagueSyncServicePort {
       // Caller cancellation is queue shutdown control flow, not a provider/circuit failure. Internal
       // provider timeouts do not abort this signal and retain their retryable failure behavior.
       abortIfCancelled(context);
-      if (target.provider === "espn" && failureCode(error) === "REAUTHORIZATION_REQUIRED") {
+      const errorCode = failureCode(error);
+      const errorDetail = failureDetail(error);
+      const reauthorizationRequired =
+        target.provider === "espn" && errorCode === "REAUTHORIZATION_REQUIRED";
+      if (target.provider === "espn" && job.refreshRequestId && this.#espnSessionAttempts) {
+        try {
+          await this.#espnSessionAttempts.recordFailure({
+            refreshRequestId: job.refreshRequestId,
+            leagueSeasonId: job.leagueSeasonId,
+            errorCode,
+            errorDetail,
+            retryable:
+              !reauthorizationRequired && error instanceof EspnSessionSyncError && error.retryable,
+            at: this.#now(),
+          });
+        } catch {
+          this.#emit({
+            event: "refresh-attempt-bookkeeping-failed",
+            provider: "espn",
+            connectionId,
+            leagueSeasonId: job.leagueSeasonId,
+            phase: "failed",
+          });
+        }
+      }
+      if (reauthorizationRequired) {
         this.#emit({
           event: "reauthorization-required",
           provider: "espn",
@@ -310,17 +435,19 @@ export class LeagueSyncService implements LeagueSyncServicePort {
         return { state: "reauthorization-required", connectionId };
       }
       const circuitFailure = await this.#circuit.recordFailure({
+        provider: target.provider === "espn" ? "espn" : "yahoo",
         connectionId,
+        leagueSeasonId: job.leagueSeasonId,
         at: this.#now(),
-        errorCode: failureCode(error),
-        errorDetail: failureDetail(error),
+        errorCode,
+        errorDetail,
       });
       this.#emit({
         event: "sync-failed",
         provider: target.provider === "espn" ? "espn" : "yahoo",
         connectionId,
         leagueSeasonId: job.leagueSeasonId,
-        errorCode: failureCode(error),
+        errorCode,
         throttled: error instanceof YahooSyncError && error.throttled,
         retryAfterSeconds:
           error instanceof YahooSyncError && error.retryAfterMs !== null
@@ -329,6 +456,9 @@ export class LeagueSyncService implements LeagueSyncServicePort {
         circuitState: circuitFailure.state,
         consecutiveFailures: circuitFailure.consecutiveFailures,
       });
+      if (target.provider === "espn" && error instanceof EspnSessionSyncError && !error.retryable) {
+        return { state: "provider-rejected", provider: "espn", errorCode: error.code };
+      }
       // Rethrown so pg-boss consumes one of `league-sync`'s five retries with exponential backoff
       // and, once exhausted, lands the job in `league-sync-dead-letter`.
       throw error;
@@ -358,7 +488,12 @@ export class LeagueSyncService implements LeagueSyncServicePort {
       }
     }
     try {
-      await this.#circuit.recordSuccess(connectionId, this.#now());
+      await this.#circuit.recordSuccess({
+        provider: target.provider === "espn" ? "espn" : "yahoo",
+        connectionId,
+        leagueSeasonId: job.leagueSeasonId,
+        at: this.#now(),
+      });
     } catch {
       // A committed provider artifact must not be retried for circuit bookkeeping. The event is
       // intentionally closed and never includes the thrown error or credential material.
@@ -396,6 +531,118 @@ export class LeagueSyncService implements LeagueSyncServicePort {
   }
 }
 
+/** Durable status for member-triggered always-on refreshes; provider sweeps need no attempt row. */
+export class DrizzleEspnSessionAttemptStore implements EspnSessionAttemptStore {
+  readonly #database: Database;
+
+  constructor(database: Database) {
+    this.#database = database;
+  }
+
+  async recordStarted(input: {
+    readonly refreshRequestId: string;
+    readonly leagueSeasonId: string;
+    readonly at: Date;
+  }): Promise<void> {
+    await this.#database.transaction(async (transaction) => {
+      const [request] = await transaction
+        .select({ id: refreshRequests.id })
+        .from(refreshRequests)
+        .where(
+          and(
+            eq(refreshRequests.id, input.refreshRequestId),
+            eq(refreshRequests.leagueSeasonId, input.leagueSeasonId),
+            eq(refreshRequests.kind, "league"),
+            inArray(refreshRequests.state, ["queued", "processing"]),
+          ),
+        )
+        .limit(1);
+      if (!request) return;
+      await transaction.insert(espnRefreshAttempts).values({
+        refreshRequestId: request.id,
+        mode: "server-session",
+        state: "started",
+        startedAt: input.at,
+      });
+      await transaction
+        .update(refreshRequests)
+        .set({
+          state: "processing",
+          fulfillmentMode: "server-session",
+          startedAt: sql`coalesce(${refreshRequests.startedAt}, ${input.at.toISOString()}::timestamptz)`,
+        })
+        .where(eq(refreshRequests.id, request.id));
+    });
+  }
+
+  async recordFailure(input: {
+    readonly refreshRequestId: string;
+    readonly leagueSeasonId: string;
+    readonly errorCode: string;
+    readonly errorDetail: string;
+    readonly retryable: boolean;
+    readonly at: Date;
+  }): Promise<void> {
+    await this.#database.transaction(async (transaction) => {
+      const [request] = await transaction
+        .select({ id: refreshRequests.id, state: refreshRequests.state })
+        .from(refreshRequests)
+        .where(
+          and(
+            eq(refreshRequests.id, input.refreshRequestId),
+            eq(refreshRequests.leagueSeasonId, input.leagueSeasonId),
+            eq(refreshRequests.kind, "league"),
+            inArray(refreshRequests.state, ["queued", "processing"]),
+          ),
+        )
+        .limit(1);
+      if (!request) return;
+      const state = input.retryable ? "retryable-error" : "rejected";
+      const completed = await transaction
+        .update(espnRefreshAttempts)
+        .set({
+          state,
+          errorCode: input.errorCode.slice(0, 64),
+          errorDetail: input.errorDetail.slice(0, 500),
+          finishedAt: input.at,
+        })
+        .where(
+          and(
+            eq(espnRefreshAttempts.refreshRequestId, request.id),
+            eq(espnRefreshAttempts.mode, "server-session"),
+            isNull(espnRefreshAttempts.bridgeDeviceId),
+            inArray(espnRefreshAttempts.state, ["offered", "started"]),
+          ),
+        )
+        .returning({ id: espnRefreshAttempts.id });
+      if (completed.length === 0) {
+        await transaction.insert(espnRefreshAttempts).values({
+          refreshRequestId: request.id,
+          mode: "server-session",
+          state,
+          errorCode: input.errorCode.slice(0, 64),
+          errorDetail: input.errorDetail.slice(0, 500),
+          startedAt: input.at,
+          finishedAt: input.at,
+        });
+      }
+      if (!input.retryable) {
+        await transaction
+          .update(refreshRequests)
+          .set({
+            state: "failed",
+            fulfillmentMode: "server-session",
+            startedAt: sql`coalesce(${refreshRequests.startedAt}, ${input.at.toISOString()}::timestamptz)`,
+            finishedAt: input.at,
+            errorCode: input.errorCode.slice(0, 64),
+            errorDetail: input.errorDetail.slice(0, 500),
+          })
+          .where(eq(refreshRequests.id, request.id));
+      }
+    });
+  }
+}
+
 /** Resolves the sync target through exact provider-link provenance and league membership. */
 export class DrizzleLeagueSyncTargetReader implements LeagueSyncTargetReader {
   readonly #database: Database;
@@ -415,8 +662,10 @@ export class DrizzleLeagueSyncTargetReader implements LeagueSyncTargetReader {
         externalKey: leagueSeasons.externalKey,
         connectionCapabilities: providerConnections.capabilities,
         connectionHealth: providerConnections.health,
-        consecutiveFailures: providerConnections.consecutiveFailures,
-        circuitOpenUntil: providerConnections.circuitOpenUntil,
+        connectionConsecutiveFailures: providerConnections.consecutiveFailures,
+        connectionCircuitOpenUntil: providerConnections.circuitOpenUntil,
+        leagueConsecutiveFailures: providerLeagueLinks.consecutiveFailures,
+        leagueCircuitOpenUntil: providerLeagueLinks.circuitOpenUntil,
       })
       .from(providerLeagueLinks)
       .innerJoin(leagueSeasons, eq(leagueSeasons.id, providerLeagueLinks.leagueSeasonId))
@@ -438,14 +687,25 @@ export class DrizzleLeagueSyncTargetReader implements LeagueSyncTargetReader {
         ),
       )
       .limit(1);
-    return row;
+    if (!row) return undefined;
+    return {
+      userId: row.userId,
+      provider: row.provider,
+      externalKey: row.externalKey,
+      connectionCapabilities: row.connectionCapabilities,
+      connectionHealth: row.connectionHealth,
+      consecutiveFailures:
+        row.provider === "espn" ? row.leagueConsecutiveFailures : row.connectionConsecutiveFailures,
+      circuitOpenUntil:
+        row.provider === "espn" ? row.leagueCircuitOpenUntil : row.connectionCircuitOpenUntil,
+    };
   }
 }
 
 /**
- * Writes circuit state to the one `provider_connections` row. Nothing else reads these columns, so
- * an open circuit cannot reach another connection, another provider, another league's analysis, or
- * the `recommendation-recompute` queue.
+ * Yahoo OAuth failures remain connection-scoped. ESPN session reads are league-scoped because one
+ * league can legitimately expose a provider shape that another league on the same login does not.
+ * This keeps a malformed ESPN roster from pausing unrelated leagues while preserving backoff.
  */
 export class DrizzleConnectionCircuitStore implements ConnectionCircuitStore {
   readonly #database: Database;
@@ -454,13 +714,37 @@ export class DrizzleConnectionCircuitStore implements ConnectionCircuitStore {
     this.#database = database;
   }
 
-  async recordSuccess(connectionId: string, at: Date): Promise<void> {
+  async recordSuccess(input: {
+    readonly provider: "yahoo" | "espn";
+    readonly connectionId: string;
+    readonly leagueSeasonId: string;
+    readonly at: Date;
+  }): Promise<void> {
+    if (input.provider === "espn") {
+      await this.#database
+        .update(providerLeagueLinks)
+        .set({
+          consecutiveFailures: 0,
+          circuitOpenUntil: null,
+          lastErrorCode: null,
+          lastErrorAt: null,
+          lastErrorDetail: null,
+          updatedAt: input.at,
+        })
+        .where(
+          and(
+            eq(providerLeagueLinks.connectionId, input.connectionId),
+            eq(providerLeagueLinks.leagueSeasonId, input.leagueSeasonId),
+          ),
+        );
+    }
     await this.#database
       .update(providerConnections)
       .set({
+        // Also clear legacy ESPN connection-wide cooldowns written by pre-league-scoped workers.
         consecutiveFailures: 0,
         circuitOpenUntil: null,
-        lastSuccessfulAt: at,
+        lastSuccessfulAt: input.at,
         lastErrorCode: sql<string | null>`case
           when ${providerConnections.health} in ('reauthorize', 'disabled')
             then ${providerConnections.lastErrorCode}
@@ -478,38 +762,71 @@ export class DrizzleConnectionCircuitStore implements ConnectionCircuitStore {
             then ${providerConnections.health}
           else 'healthy'
         end`,
-        updatedAt: at,
+        updatedAt: input.at,
       })
-      .where(eq(providerConnections.id, connectionId));
+      .where(eq(providerConnections.id, input.connectionId));
   }
 
   async recordFailure(input: {
+    readonly provider: "yahoo" | "espn";
     readonly connectionId: string;
+    readonly leagueSeasonId: string;
     readonly at: Date;
     readonly errorCode: string;
     readonly errorDetail: string;
   }): Promise<{ readonly state: "closed" | "open"; readonly consecutiveFailures: number }> {
-    // Incremented in the statement so two workers failing the same connection cannot both read the
-    // same prior count and lose one failure.
-    const [row] = await this.#database
-      .update(providerConnections)
-      .set({
-        consecutiveFailures: sql`${providerConnections.consecutiveFailures} + 1`,
-        lastErrorAt: input.at,
-        lastErrorCode: input.errorCode,
-        lastErrorDetail: input.errorDetail,
-        health: "degraded",
-        updatedAt: input.at,
-      })
-      .where(eq(providerConnections.id, input.connectionId))
-      .returning({ consecutiveFailures: providerConnections.consecutiveFailures });
+    // Incremented in the statement so two workers failing the same circuit target cannot both read
+    // the same prior count and lose one failure.
+    const [row] =
+      input.provider === "espn"
+        ? await this.#database
+            .update(providerLeagueLinks)
+            .set({
+              consecutiveFailures: sql`${providerLeagueLinks.consecutiveFailures} + 1`,
+              lastErrorAt: input.at,
+              lastErrorCode: input.errorCode,
+              lastErrorDetail: input.errorDetail,
+              updatedAt: input.at,
+            })
+            .where(
+              and(
+                eq(providerLeagueLinks.connectionId, input.connectionId),
+                eq(providerLeagueLinks.leagueSeasonId, input.leagueSeasonId),
+              ),
+            )
+            .returning({ consecutiveFailures: providerLeagueLinks.consecutiveFailures })
+        : await this.#database
+            .update(providerConnections)
+            .set({
+              consecutiveFailures: sql`${providerConnections.consecutiveFailures} + 1`,
+              lastErrorAt: input.at,
+              lastErrorCode: input.errorCode,
+              lastErrorDetail: input.errorDetail,
+              health: "degraded",
+              updatedAt: input.at,
+            })
+            .where(eq(providerConnections.id, input.connectionId))
+            .returning({ consecutiveFailures: providerConnections.consecutiveFailures });
+    if (!row) throw new Error("Provider sync circuit target disappeared");
     const consecutiveFailures = row?.consecutiveFailures ?? 0;
     const openUntil = nextCircuitOpenUntil({ consecutiveFailures, now: input.at });
     if (openUntil) {
-      await this.#database
-        .update(providerConnections)
-        .set({ circuitOpenUntil: openUntil })
-        .where(eq(providerConnections.id, input.connectionId));
+      if (input.provider === "espn") {
+        await this.#database
+          .update(providerLeagueLinks)
+          .set({ circuitOpenUntil: openUntil })
+          .where(
+            and(
+              eq(providerLeagueLinks.connectionId, input.connectionId),
+              eq(providerLeagueLinks.leagueSeasonId, input.leagueSeasonId),
+            ),
+          );
+      } else {
+        await this.#database
+          .update(providerConnections)
+          .set({ circuitOpenUntil: openUntil })
+          .where(eq(providerConnections.id, input.connectionId));
+      }
     }
     return {
       state: consecutiveFailures >= CONNECTION_CIRCUIT_FAILURE_THRESHOLD ? "open" : "closed",

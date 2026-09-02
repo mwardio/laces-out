@@ -150,6 +150,7 @@ export interface EspnRefreshCoordinatorOptions {
   readonly enqueueSession?: (input: {
     readonly connectionId: string;
     readonly leagueSeasonId: string;
+    readonly refreshRequestId: string;
   }) => Promise<string | null>;
 }
 
@@ -223,9 +224,27 @@ function displayStatus(input: {
     return { code: "up-to-date", label: "Up to date", actionRequired: false };
   }
 
+  if (target.request?.state === "failed") {
+    return {
+      code: "last-good",
+      label:
+        target.latestAttempt?.errorCode === "SCHEMA_DRIFT"
+          ? "ESPN changed this league's data format · showing saved data"
+          : "The latest automatic refresh failed · showing saved data",
+      actionRequired: true,
+    };
+  }
+
   const live = target.request?.state === "queued" || target.request?.state === "processing";
   if (live) {
     const attempt = target.latestAttempt;
+    if (attempt?.mode === "server-session" && attempt.state === "retryable-error") {
+      return {
+        code: "refreshing-direct",
+        label: "Automatic ESPN refresh hit a temporary error · retrying",
+        actionRequired: false,
+      };
+    }
     if (attempt?.state === "login-required") {
       return {
         code: "login-required",
@@ -359,6 +378,7 @@ export class EspnRefreshCoordinator {
       await this.#enqueueSession({
         connectionId: target.serverSessionConnectionId,
         leagueSeasonId,
+        refreshRequestId: request.id,
       });
     } else if (directAvailable && this.#enqueueDirect) {
       await this.#enqueueDirect({ leagueSeasonId, refreshRequestId: request.id });
@@ -639,8 +659,8 @@ export class DrizzleEspnRefreshRepository implements EspnRefreshRepository {
           inArray(providerConnections.health, ["healthy", "degraded"]),
           isNotNull(providerConnections.encryptedCredential),
           or(
-            isNull(providerConnections.circuitOpenUntil),
-            lte(providerConnections.circuitOpenUntil, now),
+            isNull(providerLeagueLinks.circuitOpenUntil),
+            lte(providerLeagueLinks.circuitOpenUntil, now),
           ),
         ),
       )

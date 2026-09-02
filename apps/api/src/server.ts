@@ -309,11 +309,12 @@ const espnRefresh = new EspnRefreshCoordinator(new DrizzleEspnRefreshRepository(
     }),
   ...(environment.ESPN_SERVER_SESSION_SYNC_ENABLED && espnSessionConnections
     ? {
-        enqueueSession: ({ connectionId, leagueSeasonId }) =>
+        enqueueSession: ({ connectionId, leagueSeasonId, refreshRequestId }) =>
           enqueueLeagueSync(jobs, {
             mode: "connection",
             connectionId,
             leagueSeasonId,
+            refreshRequestId,
             reason: "stale-on-view",
           }),
       }

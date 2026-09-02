@@ -594,7 +594,7 @@ async function recordAcceptedArtifact(
         fulfillmentMode: mode,
         fulfilledByBridgeDeviceId:
           input.authority.mode === "bridge" ? input.authority.bridgeDeviceId : null,
-        startedAt: sql`coalesce(${refreshRequests.startedAt}, ${input.now})`,
+        startedAt: sql`coalesce(${refreshRequests.startedAt}, ${input.now.toISOString()}::timestamptz)`,
         finishedAt: input.now,
         resultSyncRunId: input.receiptId,
         errorCode: null,

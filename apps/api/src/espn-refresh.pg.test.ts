@@ -332,6 +332,10 @@ describe.skipIf(!dockerAvailable)(
         })
         .where(eq(providerConnections.id, DEGRADED_CONNECTION_ID));
       await db
+        .update(providerLeagueLinks)
+        .set({ consecutiveFailures: 0, circuitOpenUntil: null })
+        .where(eq(providerLeagueLinks.connectionId, DEGRADED_CONNECTION_ID));
+      await db
         .update(bridgeDevices)
         .set({ lastSeenAt: new Date(NOW.getTime() - 60_000) })
         .where(eq(bridgeDevices.id, DEVICE_ID));
@@ -425,7 +429,7 @@ describe.skipIf(!dockerAvailable)(
       expect(cancelledTwice).toEqual(cancelledOnce);
     });
 
-    it("offers a cooled degraded server session but still blocks an open circuit", async () => {
+    it("offers a cooled degraded server session but still blocks its league circuit", async () => {
       await expect(
         repository.inspectMemberTarget(MEMBER_ID, QUEUED_SEASON_ID, NOW),
       ).resolves.toMatchObject({
@@ -433,9 +437,9 @@ describe.skipIf(!dockerAvailable)(
       });
 
       await db
-        .update(providerConnections)
-        .set({ circuitOpenUntil: new Date(NOW.getTime() + 60_000) })
-        .where(eq(providerConnections.id, DEGRADED_CONNECTION_ID));
+        .update(providerLeagueLinks)
+        .set({ consecutiveFailures: 5, circuitOpenUntil: new Date(NOW.getTime() + 60_000) })
+        .where(eq(providerLeagueLinks.connectionId, DEGRADED_CONNECTION_ID));
       await expect(
         repository.inspectMemberTarget(MEMBER_ID, QUEUED_SEASON_ID, NOW),
       ).resolves.toMatchObject({

@@ -415,7 +415,10 @@ const rosterEntrySchema = z
             defaultPositionId: z.number().int().min(0).max(100),
             eligibleSlots: z.array(usableLineupSlotIdSchema).min(1).max(26),
             proTeamId: proTeamIdSchema,
-            injuryStatus: z.union([nonEmptyTextSchema(64), z.null()]),
+            // ESPN omits injuryStatus for otherwise valid roster entries (most visibly D/ST),
+            // while player entries with an explicit state send either text or null. Absence is the
+            // same provider fact as null; rejecting the whole league here strands every roster.
+            injuryStatus: z.union([nonEmptyTextSchema(64), z.null()]).optional(),
           })
           .passthrough(),
       })
@@ -1163,7 +1166,7 @@ function normalizePlayer(
     lineupSlot: lineupSlotName(entry.lineupSlotId),
     proTeamAbbreviation:
       PRO_TEAM_ABBREVIATIONS[player.proTeamId as keyof typeof PRO_TEAM_ABBREVIATIONS],
-    status: player.injuryStatus,
+    status: player.injuryStatus ?? null,
   };
 }
 

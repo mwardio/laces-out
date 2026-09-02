@@ -2,13 +2,12 @@ import type { AuthenticationCapability } from "@laces-out/connectors";
 import type { ProviderName } from "@laces-out/db";
 
 /**
- * A connection-scoped circuit breaker.
+ * A server-refresh circuit breaker whose storage scope is chosen by the caller.
  *
- * Repeated failure opens a circuit without taking down unrelated analysis. The state lives on the
- * `provider_connections` row and nothing else reads it,
- * so an open circuit for one connection is structurally incapable of affecting another connection,
- * another provider, another league's analysis, the `recommendation-recompute` queue, or any
- * `data_sources`-gated projection work.
+ * Yahoo stores it on a provider connection; ESPN stores it on the exact provider/league link.
+ * Repeated failure therefore opens a circuit without taking down unrelated analysis, another
+ * provider, another ESPN league, the `recommendation-recompute` queue, or any `data_sources`-gated
+ * projection work.
  *
  * Both functions are pure: no clock, no database, no `Math.random`.
  */
@@ -87,8 +86,8 @@ export interface CircuitCooldownInput {
 
 /**
  * Deliberately shorter and independently derived from the six duplicated `data_sources` backoff
- * formulas: a provider connection recovers on a user action (re-authorize, repair the league) far
- * sooner than a vendor data release lands, so an hour is the right ceiling rather than a day.
+ * formulas: a provider sync recovers on a user action (re-authorize, repair the league) far sooner
+ * than a vendor data release lands, so an hour is the right ceiling rather than a day.
  */
 export function nextCircuitOpenUntil(input: CircuitCooldownInput): Date | null {
   if (input.consecutiveFailures < CONNECTION_CIRCUIT_FAILURE_THRESHOLD) return null;

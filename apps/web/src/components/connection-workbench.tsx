@@ -194,6 +194,36 @@ function espnDirectStateLabel(status: EspnLeagueRefreshStatus): string {
   return "Evidence not approved";
 }
 
+function espnServerSessionHealthLabel(connection: EspnServerSessionConnection): string {
+  switch (connection.health) {
+    case "healthy":
+      return "Enabled";
+    case "reauthorize":
+      return "Reconnect required";
+    case "degraded":
+      return "Retrying";
+    case "pending":
+      return "Starting";
+    default:
+      return "Disabled";
+  }
+}
+
+function espnServerSessionHeading(connection: EspnServerSessionConnection): string {
+  switch (connection.health) {
+    case "healthy":
+      return "Refreshes continue without Chrome";
+    case "reauthorize":
+      return "Renew your ESPN sign-in";
+    case "degraded":
+      return "An ESPN league refresh needs attention";
+    case "pending":
+      return "Finishing always-on ESPN setup";
+    default:
+      return "Always-on ESPN sync is disabled";
+  }
+}
+
 export function ConnectionWorkbench() {
   const [bridgeDevices, setBridgeDevices] = useState<readonly BridgeDevice[]>([]);
   const [bridgeDevicesState, setBridgeDevicesState] = useState<RequestState>("working");
@@ -870,9 +900,7 @@ export function ConnectionWorkbench() {
                 {espnServerSessionsState === "working"
                   ? "Checking"
                   : activeEspnServerSession
-                    ? activeEspnServerSession.health === "healthy"
-                      ? "Enabled"
-                      : "Needs attention"
+                    ? espnServerSessionHealthLabel(activeEspnServerSession)
                     : espnServerSessionsAvailable
                       ? "Recommended"
                       : "Host disabled"}
@@ -881,11 +909,7 @@ export function ConnectionWorkbench() {
             {activeEspnServerSession ? (
               <div className="espn-always-on-manager__body">
                 <div>
-                  <strong>
-                    {activeEspnServerSession.health === "healthy"
-                      ? "Refreshes continue without Chrome"
-                      : "Renew your ESPN sign-in"}
-                  </strong>
+                  <strong>{espnServerSessionHeading(activeEspnServerSession)}</strong>
                   <small>
                     {activeEspnServerSession.leagues.length} linked{" "}
                     {activeEspnServerSession.leagues.length === 1 ? "league" : "leagues"}
@@ -893,6 +917,12 @@ export function ConnectionWorkbench() {
                       ? ` · ${formatBridgeTime(activeEspnServerSession.lastSuccessfulAt)}`
                       : " · awaiting first unattended refresh"}
                   </small>
+                  {activeEspnServerSession.health === "degraded" ? (
+                    <p>
+                      Saved league data remains available while Laces Out retries the affected
+                      league.
+                    </p>
+                  ) : null}
                 </div>
                 <div className="espn-always-on-manager__actions">
                   {activeEspnServerSession.health === "reauthorize" ? (
@@ -997,6 +1027,19 @@ export function ConnectionWorkbench() {
                     (artifact) => artifact.family === "core",
                   );
                   const requestState = league.status.request?.state ?? "none";
+                  const requestIsLive = requestState === "queued" || requestState === "processing";
+                  const requestButtonLabel =
+                    refreshingEspnLeagueSeasonId === league.leagueSeasonId
+                      ? "Requesting…"
+                      : requestState === "processing"
+                        ? "Refreshing…"
+                        : requestState === "queued"
+                          ? "Refresh queued"
+                          : league.status.current
+                            ? "Up to date"
+                            : requestState === "failed"
+                              ? "Try refresh again"
+                              : "Refresh league";
                   const hasAlwaysOnSync = espnServerSessions.some(
                     (connection) =>
                       connection.health !== "disabled" &&
@@ -1021,16 +1064,18 @@ export function ConnectionWorkbench() {
                         className="button button--outline button--small"
                         type="button"
                         onClick={() => void requestEspnLeagueRefresh(league.leagueSeasonId)}
-                        disabled={refreshingEspnLeagueSeasonId !== null}
+                        disabled={
+                          refreshingEspnLeagueSeasonId !== null ||
+                          requestIsLive ||
+                          league.status.current
+                        }
                       >
                         {refreshingEspnLeagueSeasonId === league.leagueSeasonId ? (
                           <LoaderCircle className="spin" size={14} />
                         ) : (
                           <RefreshCw size={14} />
                         )}
-                        {refreshingEspnLeagueSeasonId === league.leagueSeasonId
-                          ? "Requesting…"
-                          : "Refresh league"}
+                        {requestButtonLabel}
                       </button>
                       <dl className="espn-refresh-list__facts">
                         <div>

@@ -433,8 +433,8 @@ export class DrizzleProviderSyncSweepTargetReader implements ProviderSyncSweepTa
           and ${providerConnections.health} in ('healthy', 'degraded')
           and ${providerConnections.encryptedCredential} is not null
           and (
-            ${providerConnections.circuitOpenUntil} is null
-            or ${providerConnections.circuitOpenUntil} <= ${nowIso}::timestamptz
+            ${providerLeagueLinks.circuitOpenUntil} is null
+            or ${providerLeagueLinks.circuitOpenUntil} <= ${nowIso}::timestamptz
           )
           and (
             (${leagueSeasons.status} = 'active' and ${leagueSeasons.season} = ${activeSeason})

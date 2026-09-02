@@ -288,6 +288,13 @@
       "when": 1787746434263,
       "tag": "0040_familiar_talisman",
       "breakpoints": true
+    },
+    {
+      "idx": 41,
+      "version": "7",
+      "when": 1788379039347,
+      "tag": "0041_volatile_firedrake",
+      "breakpoints": true
     }
   ]
 }

@@ -740,6 +740,13 @@ export const providerLeagueLinks = pgTable(
     providerCommissionerObservedAt: timestamp("provider_commissioner_observed_at", {
       withTimezone: true,
     }),
+    // Server-session failures are scoped to this exact connection/season pair. One league with
+    // provider schema drift must not pause every other league authorized by the same ESPN login.
+    lastErrorCode: text("last_error_code"),
+    lastErrorAt: timestamp("last_error_at", { withTimezone: true }),
+    lastErrorDetail: text("last_error_detail"),
+    consecutiveFailures: integer("consecutive_failures").notNull().default(0),
+    circuitOpenUntil: timestamp("circuit_open_until", { withTimezone: true }),
     discoveredAt: timestamp("discovered_at", { withTimezone: true }).notNull().defaultNow(),
     lastSyncedAt: timestamp("last_synced_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
@@ -748,6 +755,12 @@ export const providerLeagueLinks = pgTable(
   (table) => [
     primaryKey({ columns: [table.connectionId, table.leagueSeasonId] }),
     index("provider_league_links_season_idx").on(table.leagueSeasonId),
+    index("provider_league_links_sync_circuit_idx").on(table.connectionId, table.circuitOpenUntil),
+    check("provider_league_links_failures_check", sql`${table.consecutiveFailures} >= 0`),
+    check(
+      "provider_league_links_error_bounds_check",
+      sql`(${table.lastErrorCode} is null or char_length(${table.lastErrorCode}) <= 64) and (${table.lastErrorDetail} is null or char_length(${table.lastErrorDetail}) <= 500)`,
+    ),
     check(
       "provider_league_links_current_team_check",
       sql`${table.currentUserTeamExternalKey} is null or char_length(btrim(${table.currentUserTeamExternalKey})) > 0`,

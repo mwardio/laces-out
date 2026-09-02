@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  EspnSessionSyncError,
   YahooSyncError,
   type EspnSessionSyncReceipt,
   type YahooSyncReceipt,
@@ -117,7 +118,12 @@ describe("LeagueSyncService", () => {
 
     expect(syncLeague).toHaveBeenCalledWith("user-1", "connection-1", "nfl.l.12345");
     expect(outcome).toEqual({ state: "synced", recordsWritten: 42, syncRunId: "run-1" });
-    expect(circuit.recordSuccess).toHaveBeenCalledWith("connection-1", now);
+    expect(circuit.recordSuccess).toHaveBeenCalledWith({
+      provider: "yahoo",
+      connectionId: "connection-1",
+      leagueSeasonId: "league-season-1",
+      at: now,
+    });
   });
 
   it("runs post-commit work only for accepted Yahoo artifacts", async () => {
@@ -278,7 +284,12 @@ describe("LeagueSyncService", () => {
       expect.any(AbortSignal),
     );
     expect(syncLeague).not.toHaveBeenCalled();
-    expect(circuit.recordSuccess).toHaveBeenCalledWith("connection-1", now);
+    expect(circuit.recordSuccess).toHaveBeenCalledWith({
+      provider: "espn",
+      connectionId: "connection-1",
+      leagueSeasonId: "league-season-1",
+      at: now,
+    });
     expect(afterEspnCommit).toHaveBeenCalledWith(receipt);
   });
 
@@ -351,7 +362,12 @@ describe("LeagueSyncService", () => {
       state: "reauthorization-required",
       connectionId: "connection-1",
     });
-    expect(circuit.recordSuccess).toHaveBeenCalledWith("connection-1", now);
+    expect(circuit.recordSuccess).toHaveBeenCalledWith({
+      provider: "espn",
+      connectionId: "connection-1",
+      leagueSeasonId: "league-season-1",
+      at: now,
+    });
     expect(circuit.recordFailure).not.toHaveBeenCalled();
     expect(afterEspnCommit).toHaveBeenCalledWith(receipt);
     expect(observe.mock.calls.map(([event]) => event.event)).toEqual([
@@ -468,7 +484,12 @@ describe("LeagueSyncService", () => {
       recordsWritten: receipt.recordsWritten,
       syncRunId: receipt.syncRunId,
     });
-    expect(circuit.recordSuccess).toHaveBeenCalledWith("connection-1", now);
+    expect(circuit.recordSuccess).toHaveBeenCalledWith({
+      provider: "espn",
+      connectionId: "connection-1",
+      leagueSeasonId: "league-season-1",
+      at: now,
+    });
     expect(circuit.recordFailure).not.toHaveBeenCalled();
     expect(afterEspnCommit).toHaveBeenCalledWith(receipt);
   });
@@ -554,6 +575,42 @@ describe("LeagueSyncService", () => {
     });
   });
 
+  it("keeps a member ESPN refresh actionable while its league circuit cools down", async () => {
+    const espnSessionAttempts = {
+      recordStarted: vi.fn(() => Promise.resolve()),
+      recordFailure: vi.fn(() => Promise.resolve()),
+    };
+    const service = new LeagueSyncService({
+      targets: reader({
+        provider: "espn",
+        externalKey: "1234567",
+        connectionCapabilities: { authentication: ["server-session-cookie"] },
+        consecutiveFailures: 5,
+        circuitOpenUntil: new Date(now.getTime() + 90_000),
+      }),
+      espnSessionSync: {
+        syncIdentity: () => Promise.reject(new Error("must not be called")),
+        syncLeague: () => Promise.reject(new Error("must not be called")),
+      },
+      espnSessionAttempts,
+      circuit: circuitStore(),
+      now: () => now,
+    });
+
+    await expect(
+      service.runLeagueSync(job({ refreshRequestId: "refresh-1" }), context()),
+    ).resolves.toEqual({ state: "circuit-open", retryAfterSeconds: 90 });
+    expect(espnSessionAttempts.recordStarted).not.toHaveBeenCalled();
+    expect(espnSessionAttempts.recordFailure).toHaveBeenCalledWith({
+      refreshRequestId: "refresh-1",
+      leagueSeasonId: "league-season-1",
+      errorCode: "CIRCUIT_COOLDOWN",
+      errorDetail: "Automatic ESPN refresh is cooling down before its next retry.",
+      retryable: true,
+      at: now,
+    });
+  });
+
   it("resumes once the cooldown elapses without any manual intervention", async () => {
     const syncLeague = vi.fn(() =>
       Promise.resolve({ syncRunId: "run-9", state: "accepted" as const, recordsWritten: 3 }),
@@ -585,8 +642,109 @@ describe("LeagueSyncService", () => {
 
     await expect(service.runLeagueSync(job(), context())).rejects.toBe(failure);
     expect(circuit.recordFailure).toHaveBeenCalledWith(
-      expect.objectContaining({ connectionId: "connection-1", at: now }),
+      expect.objectContaining({
+        provider: "yahoo",
+        connectionId: "connection-1",
+        leagueSeasonId: "league-season-1",
+        at: now,
+      }),
     );
+  });
+
+  it("records deterministic ESPN drift against one league without retrying the queue job", async () => {
+    const failure = new EspnSessionSyncError(
+      "SCHEMA_DRIFT",
+      "ESPN league data no longer matches the supported format",
+    );
+    const circuit = circuitStore();
+    const espnSessionAttempts = {
+      recordStarted: vi.fn(() => Promise.resolve()),
+      recordFailure: vi.fn(() => Promise.resolve()),
+    };
+    const service = new LeagueSyncService({
+      targets: reader({
+        provider: "espn",
+        externalKey: "1234567",
+        connectionCapabilities: { authentication: ["server-session-cookie"] },
+      }),
+      espnSessionSync: {
+        syncIdentity: () => Promise.reject(new Error("must not be called")),
+        syncLeague: () => Promise.reject(failure),
+      },
+      espnSessionAttempts,
+      circuit,
+      now: () => now,
+    });
+
+    await expect(
+      service.runLeagueSync(job({ refreshRequestId: "refresh-1" }), context()),
+    ).resolves.toEqual({
+      state: "provider-rejected",
+      provider: "espn",
+      errorCode: "SCHEMA_DRIFT",
+    });
+    expect(espnSessionAttempts.recordStarted).toHaveBeenCalledWith({
+      refreshRequestId: "refresh-1",
+      leagueSeasonId: "league-season-1",
+      at: now,
+    });
+    expect(espnSessionAttempts.recordFailure).toHaveBeenCalledWith({
+      refreshRequestId: "refresh-1",
+      leagueSeasonId: "league-season-1",
+      errorCode: "SCHEMA_DRIFT",
+      errorDetail: "ESPN league data no longer matches the supported format",
+      retryable: false,
+      at: now,
+    });
+    expect(circuit.recordFailure).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "espn",
+        connectionId: "connection-1",
+        leagueSeasonId: "league-season-1",
+      }),
+    );
+  });
+
+  it("finishes a member refresh when ESPN proves reauthorization is required", async () => {
+    const failure = new EspnSessionSyncError(
+      "REAUTHORIZATION_REQUIRED",
+      "ESPN sign-in must be renewed",
+    );
+    const circuit = circuitStore();
+    const espnSessionAttempts = {
+      recordStarted: vi.fn(() => Promise.resolve()),
+      recordFailure: vi.fn(() => Promise.resolve()),
+    };
+    const service = new LeagueSyncService({
+      targets: reader({
+        provider: "espn",
+        externalKey: "1234567",
+        connectionCapabilities: { authentication: ["server-session-cookie"] },
+      }),
+      espnSessionSync: {
+        syncIdentity: () => Promise.reject(new Error("must not be called")),
+        syncLeague: () => Promise.reject(failure),
+      },
+      espnSessionAttempts,
+      circuit,
+      now: () => now,
+    });
+
+    await expect(
+      service.runLeagueSync(job({ refreshRequestId: "refresh-1" }), context()),
+    ).resolves.toEqual({
+      state: "reauthorization-required",
+      connectionId: "connection-1",
+    });
+    expect(espnSessionAttempts.recordFailure).toHaveBeenCalledWith({
+      refreshRequestId: "refresh-1",
+      leagueSeasonId: "league-season-1",
+      errorCode: "REAUTHORIZATION_REQUIRED",
+      errorDetail: "ESPN sign-in must be renewed",
+      retryable: false,
+      at: now,
+    });
+    expect(circuit.recordFailure).not.toHaveBeenCalled();
   });
 
   it("reports sanitized Yahoo throttling and Retry-After metadata while preserving retries", async () => {

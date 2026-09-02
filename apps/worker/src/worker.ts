@@ -30,6 +30,7 @@ import {
 import { createEspnDirectSyncService } from "./espn-direct-sync.js";
 import {
   DrizzleConnectionCircuitStore,
+  DrizzleEspnSessionAttemptStore,
   DrizzleLeagueSyncTargetReader,
   LeagueSyncService,
 } from "./league-sync-service.js";
@@ -229,6 +230,7 @@ const espnDirectSync = createEspnDirectSyncService({
 const leagueSyncService = new LeagueSyncService({
   targets: new DrizzleLeagueSyncTargetReader(database.db),
   circuit: new DrizzleConnectionCircuitStore(database.db),
+  espnSessionAttempts: new DrizzleEspnSessionAttemptStore(database.db),
   espnDirect: espnDirectSync,
   ...(espnSessionSync ? { espnSessionSync } : {}),
   ...(yahooSync ? { yahooSync } : {}),

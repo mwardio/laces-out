@@ -173,6 +173,36 @@ describe("ESPN refresh coordinator", () => {
     expect(status.display.code).toBe("refreshing-direct");
   });
 
+  it("ties an always-on ESPN job to the member refresh request", async () => {
+    const harness = repositoryHarness(
+      target({
+        artifactFreshness: {
+          ...target().artifactFreshness,
+          core: new Date(NOW.getTime() - 31 * 60_000).toISOString(),
+        },
+        serverSessionConnectionId: "50000000-0000-4000-8000-000000000001",
+      }),
+    );
+    const enqueueSession = vi.fn(async () => "job-1");
+    const coordinator = new EspnRefreshCoordinator(
+      harness.repository,
+      { directEnabled: true, enqueueSession },
+      () => NOW,
+    );
+
+    const status = await coordinator.requestRefresh(USER_ID, LEAGUE_SEASON_ID);
+
+    expect(harness.createOrGetRequest).toHaveBeenCalledWith(
+      expect.objectContaining({ fulfillmentMode: "server-session" }),
+    );
+    expect(enqueueSession).toHaveBeenCalledWith({
+      connectionId: "50000000-0000-4000-8000-000000000001",
+      leagueSeasonId: LEAGUE_SEASON_ID,
+      refreshRequestId: REQUEST_ID,
+    });
+    expect(status.display.code).toBe("refreshing-direct");
+  });
+
   it("does not bypass an open direct circuit", async () => {
     const harness = repositoryHarness(
       target({
@@ -233,6 +263,78 @@ describe("ESPN refresh coordinator", () => {
       code: "queued-no-agent",
       label: "Core checked · waiting for an authorized sync device",
       actionRequired: true,
+    });
+  });
+
+  it("describes a rejected always-on refresh as failed instead of still refreshing", async () => {
+    const request = storedRequest({ state: "failed", fulfillmentMode: "server-session" });
+    const harness = repositoryHarness(
+      target({
+        artifactFreshness: {
+          ...target().artifactFreshness,
+          core: new Date(NOW.getTime() - 31 * 60_000).toISOString(),
+        },
+        request,
+        latestAttempt: {
+          mode: "server-session",
+          state: "rejected",
+          deviceName: null,
+          deviceUserId: null,
+          clientKind: null,
+          errorCode: "SCHEMA_DRIFT",
+          startedAt: NOW,
+          finishedAt: NOW,
+        },
+      }),
+    );
+    const coordinator = new EspnRefreshCoordinator(
+      harness.repository,
+      { directEnabled: true },
+      () => NOW,
+    );
+
+    await expect(coordinator.getStatus(USER_ID, LEAGUE_SEASON_ID)).resolves.toMatchObject({
+      display: {
+        code: "last-good",
+        label: "ESPN changed this league's data format · showing saved data",
+        actionRequired: true,
+      },
+    });
+  });
+
+  it("shows an automatic retry instead of asking for a paired device", async () => {
+    const request = storedRequest({ state: "processing", fulfillmentMode: "server-session" });
+    const harness = repositoryHarness(
+      target({
+        artifactFreshness: {
+          ...target().artifactFreshness,
+          core: new Date(NOW.getTime() - 31 * 60_000).toISOString(),
+        },
+        request,
+        latestAttempt: {
+          mode: "server-session",
+          state: "retryable-error",
+          deviceName: null,
+          deviceUserId: null,
+          clientKind: null,
+          errorCode: "PROVIDER_READ_FAILED",
+          startedAt: NOW,
+          finishedAt: NOW,
+        },
+      }),
+    );
+    const coordinator = new EspnRefreshCoordinator(
+      harness.repository,
+      { directEnabled: true },
+      () => NOW,
+    );
+
+    await expect(coordinator.getStatus(USER_ID, LEAGUE_SEASON_ID)).resolves.toMatchObject({
+      display: {
+        code: "refreshing-direct",
+        label: "Automatic ESPN refresh hit a temporary error · retrying",
+        actionRequired: false,
+      },
     });
   });
 

@@ -15,8 +15,10 @@ import {
   leagueMemberships,
   leagues,
   leagueSeasons,
+  espnRefreshAttempts,
   providerConnections,
   providerLeagueLinks,
+  refreshRequests,
   users,
   type ConnectionHealth,
   type Database,
@@ -28,6 +30,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import {
   DrizzleConnectionCircuitStore,
+  DrizzleEspnSessionAttemptStore,
   DrizzleLeagueSyncTargetReader,
 } from "./league-sync-service.js";
 import {
@@ -146,6 +149,7 @@ const CONNECTION_ESPN_DEGRADED = id(109);
 const CONNECTION_SUCCESS_REAUTHORIZE = id(110);
 const CONNECTION_SUCCESS_DISABLED = id(111);
 const CONNECTION_SUCCESS_DEGRADED = id(112);
+const ESPN_REFRESH_REQUEST = id(301);
 
 const SEASONS = {
   activeDue: id(201),
@@ -537,7 +541,7 @@ describe.skipIf(!dockerAvailable)("Yahoo provider sweep against real PostgreSQL"
     expect(second).toEqual(first);
   });
 
-  it("retries a cooled degraded ESPN server session", async () => {
+  it("scopes an ESPN server-session cooldown to its provider league link", async () => {
     const cooled = await sweepTargets.listDueEspnSessions(NOW, 100);
     expect(cooled).toContainEqual(
       expect.objectContaining({
@@ -550,9 +554,133 @@ describe.skipIf(!dockerAvailable)("Yahoo provider sweep against real PostgreSQL"
       .update(providerConnections)
       .set({ circuitOpenUntil: new Date(NOW.getTime() + 60_000) })
       .where(eq(providerConnections.id, CONNECTION_ESPN_DEGRADED));
+    await expect(sweepTargets.listDueEspnSessions(NOW, 100)).resolves.toContainEqual(
+      expect.objectContaining({ leagueSeasonId: SEASONS.espnDegraded }),
+    );
+    await db
+      .update(providerLeagueLinks)
+      .set({ consecutiveFailures: 5, circuitOpenUntil: new Date(NOW.getTime() + 60_000) })
+      .where(eq(providerLeagueLinks.leagueSeasonId, SEASONS.espnDegraded));
     await expect(sweepTargets.listDueEspnSessions(NOW, 100)).resolves.not.toContainEqual(
       expect.objectContaining({ leagueSeasonId: SEASONS.espnDegraded }),
     );
+  });
+
+  it("records ESPN failures on the league link without degrading its sibling connection", async () => {
+    const circuit = new DrizzleConnectionCircuitStore(db);
+    await db
+      .update(providerConnections)
+      .set({
+        health: "healthy",
+        consecutiveFailures: 0,
+        circuitOpenUntil: null,
+        lastErrorCode: null,
+        lastErrorAt: null,
+        lastErrorDetail: null,
+      })
+      .where(eq(providerConnections.id, CONNECTION_ESPN_DEGRADED));
+    await db
+      .update(providerLeagueLinks)
+      .set({
+        consecutiveFailures: 0,
+        circuitOpenUntil: null,
+        lastErrorCode: null,
+        lastErrorAt: null,
+        lastErrorDetail: null,
+      })
+      .where(eq(providerLeagueLinks.leagueSeasonId, SEASONS.espnDegraded));
+
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      await circuit.recordFailure({
+        provider: "espn",
+        connectionId: CONNECTION_ESPN_DEGRADED,
+        leagueSeasonId: SEASONS.espnDegraded,
+        errorCode: "SCHEMA_DRIFT",
+        errorDetail: "ESPN league data no longer matches the supported format",
+        at: NOW,
+      });
+    }
+
+    const [connection] = await db
+      .select({
+        health: providerConnections.health,
+        consecutiveFailures: providerConnections.consecutiveFailures,
+        circuitOpenUntil: providerConnections.circuitOpenUntil,
+      })
+      .from(providerConnections)
+      .where(eq(providerConnections.id, CONNECTION_ESPN_DEGRADED));
+    const [link] = await db
+      .select({
+        lastErrorCode: providerLeagueLinks.lastErrorCode,
+        consecutiveFailures: providerLeagueLinks.consecutiveFailures,
+        circuitOpenUntil: providerLeagueLinks.circuitOpenUntil,
+      })
+      .from(providerLeagueLinks)
+      .where(eq(providerLeagueLinks.leagueSeasonId, SEASONS.espnDegraded));
+
+    expect(connection).toEqual({
+      health: "healthy",
+      consecutiveFailures: 0,
+      circuitOpenUntil: null,
+    });
+    expect(link).toMatchObject({
+      lastErrorCode: "SCHEMA_DRIFT",
+      consecutiveFailures: 5,
+      circuitOpenUntil: new Date(NOW.getTime() + 60_000),
+    });
+  });
+
+  it("records an actionable server-session attempt for a member refresh", async () => {
+    await db.delete(refreshRequests).where(eq(refreshRequests.id, ESPN_REFRESH_REQUEST));
+    await db.insert(refreshRequests).values({
+      id: ESPN_REFRESH_REQUEST,
+      requestedByUserId: USER_OWNER,
+      leagueSeasonId: SEASONS.espnDegraded,
+      kind: "league",
+      state: "queued",
+      idempotencyKey: "espn-session-attempt-test",
+      notBefore: NOW,
+      expiresAt: new Date(NOW.getTime() + 60_000),
+      minimumCaptureAt: NOW,
+      requiredArtifacts: ["core"],
+    });
+    const attempts = new DrizzleEspnSessionAttemptStore(db);
+
+    await attempts.recordStarted({
+      refreshRequestId: ESPN_REFRESH_REQUEST,
+      leagueSeasonId: SEASONS.espnDegraded,
+      at: NOW,
+    });
+    await attempts.recordFailure({
+      refreshRequestId: ESPN_REFRESH_REQUEST,
+      leagueSeasonId: SEASONS.espnDegraded,
+      errorCode: "SCHEMA_DRIFT",
+      errorDetail: "ESPN league data no longer matches the supported format",
+      retryable: false,
+      at: new Date(NOW.getTime() + 1_000),
+    });
+
+    const [request] = await db
+      .select()
+      .from(refreshRequests)
+      .where(eq(refreshRequests.id, ESPN_REFRESH_REQUEST));
+    const [attempt] = await db
+      .select()
+      .from(espnRefreshAttempts)
+      .where(eq(espnRefreshAttempts.refreshRequestId, ESPN_REFRESH_REQUEST));
+    expect(request).toMatchObject({
+      state: "failed",
+      fulfillmentMode: "server-session",
+      startedAt: NOW,
+      errorCode: "SCHEMA_DRIFT",
+    });
+    expect(attempt).toMatchObject({
+      mode: "server-session",
+      state: "rejected",
+      errorCode: "SCHEMA_DRIFT",
+      startedAt: NOW,
+      finishedAt: new Date(NOW.getTime() + 1_000),
+    });
   });
 
   it("rejects unlinked accounts and linked accounts whose owner is not a league member", async () => {
@@ -589,7 +717,12 @@ describe.skipIf(!dockerAvailable)("Yahoo provider sweep against real PostgreSQL"
       CONNECTION_SUCCESS_DISABLED,
       CONNECTION_SUCCESS_DEGRADED,
     ]) {
-      await circuit.recordSuccess(connectionId, NOW);
+      await circuit.recordSuccess({
+        provider: "espn",
+        connectionId,
+        leagueSeasonId: SEASONS.espnDegraded,
+        at: NOW,
+      });
     }
 
     const rows = await db

@@ -290,6 +290,54 @@ describe("EspnSessionSyncService staged identity persistence", () => {
     expect(JSON.stringify(fixture.events)).not.toContain(espnS2);
   });
 
+  it("reports provider schema drift separately from durable persistence failure", async () => {
+    const fixture = syncFixture();
+    const payload = corePayload() as {
+      settings: { draftSettings: { type: string } };
+    };
+    payload.settings.draftSettings.type = "unsupported-draft-shape";
+    fixture.client.fetchCore.mockResolvedValueOnce({
+      leagueId: externalLeagueId,
+      season: 2026,
+      endpoint:
+        `https://lm-api-reads.fantasy.espn.com/apis/v3/games/ffl/seasons/2026/segments/0/leagues/${externalLeagueId}` +
+        "?view=mSettings&view=mTeam&view=mRoster&view=mStandings&view=mMatchup",
+      capturedAt,
+      checksumSha256: "c".repeat(64),
+      payload,
+    });
+
+    await expect(
+      fixture.service.syncIdentity(userId, connectionId, leagueSeasonId),
+    ).rejects.toMatchObject({
+      code: "SCHEMA_DRIFT",
+      message: "ESPN league data no longer matches the supported format",
+      retryable: false,
+    });
+    expect(fixture.persistence.persist).not.toHaveBeenCalled();
+    expect(fixture.events).toContainEqual(
+      expect.objectContaining({ stage: "core-normalization", outcome: "failed" }),
+    );
+    expect(fixture.events).not.toContainEqual(
+      expect.objectContaining({ stage: "core-admission-persist" }),
+    );
+  });
+
+  it("keeps durable write failures classified as persistence failures", async () => {
+    const fixture = syncFixture();
+    fixture.persistence.persist.mockRejectedValueOnce(new Error("database write failed"));
+
+    await expect(
+      fixture.service.syncIdentity(userId, connectionId, leagueSeasonId),
+    ).rejects.toMatchObject({ code: "PERSISTENCE_FAILED", retryable: true });
+    expect(fixture.events).toContainEqual(
+      expect.objectContaining({ stage: "core-normalization", outcome: "succeeded" }),
+    );
+    expect(fixture.events).toContainEqual(
+      expect.objectContaining({ stage: "core-admission-persist", outcome: "failed" }),
+    );
+  });
+
   it("does not claim reauthorization when its durable state write fails", async () => {
     const fixture = syncFixture();
     fixture.client.fetchSupplemental.mockRejectedValueOnce(

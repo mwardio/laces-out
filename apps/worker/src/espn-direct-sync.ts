@@ -399,7 +399,7 @@ export class DrizzleEspnDirectStateRepository implements EspnDirectStateReposito
         .set({
           state: "processing",
           fulfillmentMode: "server-direct",
-          startedAt: sql`coalesce(${refreshRequests.startedAt}, ${input.now})`,
+          startedAt: sql`coalesce(${refreshRequests.startedAt}, ${input.now.toISOString()}::timestamptz)`,
         })
         .where(eq(refreshRequests.id, request.id));
     }

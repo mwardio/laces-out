@@ -1,6 +1,7 @@
 import {
   EspnSessionReadClient,
   EspnSessionReadError,
+  EspnWebClientNormalizationError,
   normalizeEspnNavigationManagerAuthority,
   normalizeEspnSupplementalSnapshot,
   normalizeEspnWebClientSnapshot,
@@ -48,6 +49,7 @@ export class EspnSessionSyncError extends Error {
     | "CONNECTION_NOT_FOUND"
     | "REAUTHORIZATION_REQUIRED"
     | "PROVIDER_READ_FAILED"
+    | "SCHEMA_DRIFT"
     | "PERSISTENCE_FAILED";
   readonly retryable: boolean;
 
@@ -118,6 +120,7 @@ export interface EspnSessionSyncOperationalEvent {
     | "credential-load"
     | "core-read"
     | "navigation-read"
+    | "core-normalization"
     | "core-admission-persist"
     | "supplemental-read"
     | "supplemental-admission-persist"
@@ -355,8 +358,8 @@ export class EspnSessionSyncService {
       checksumAlgorithm: "canonical-json-v1-sha256" as const,
       payload: core.payload,
     };
-    let coreReceipt;
-    const corePersistStartedAt = this.#monotonicNow();
+    const coreNormalizationStartedAt = this.#monotonicNow();
+    let bundle: LeagueSyncBundle;
     try {
       // The SWID is the authenticated ESPN member identity for this encrypted server session.
       // It is supplied only as normalizer context: the connector may mark one exact owner-matched
@@ -365,10 +368,33 @@ export class EspnSessionSyncService {
         navigation,
         credential.swid,
       );
-      const bundle = normalizeEspnWebClientSnapshot(coreEnvelope, {
+      bundle = normalizeEspnWebClientSnapshot(coreEnvelope, {
         activeMemberId: credential.swid,
         activeMemberManagerAuthority,
       });
+    } catch (error) {
+      this.#emit("core-normalization", coreNormalizationStartedAt, {
+        connectionId,
+        leagueSeasonId,
+        outcome: "failed",
+      });
+      if (error instanceof EspnWebClientNormalizationError) {
+        throw new EspnSessionSyncError(
+          "SCHEMA_DRIFT",
+          "ESPN league data no longer matches the supported format",
+        );
+      }
+      throw error;
+    }
+    this.#emit("core-normalization", coreNormalizationStartedAt, {
+      connectionId,
+      leagueSeasonId,
+      outcome: "succeeded",
+    });
+
+    let coreReceipt;
+    const corePersistStartedAt = this.#monotonicNow();
+    try {
       coreReceipt = await this.#persistence.persist({
         authority,
         bundle,
@@ -390,6 +416,7 @@ export class EspnSessionSyncService {
       throw new EspnSessionSyncError(
         "PERSISTENCE_FAILED",
         "ESPN league data could not be committed",
+        true,
       );
     }
     this.#emit("core-admission-persist", corePersistStartedAt, {

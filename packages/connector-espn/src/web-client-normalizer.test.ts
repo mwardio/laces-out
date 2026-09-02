@@ -36,6 +36,7 @@ interface FixtureRosterEntry {
       id: string;
       eligibleSlots: number[];
       fullName?: string;
+      injuryStatus?: string | null;
     };
   };
 }
@@ -252,6 +253,16 @@ describe("ESPN web-client snapshot normalizer", () => {
       away: { score: null },
     });
     expect(bundle.warnings.join(" ")).toContain("isCurrentUser");
+  });
+
+  it("normalizes an omitted roster injury status as null", () => {
+    const value = parsedFixture();
+    const entry = value.payload.teams[0]!.roster.entries[0]!;
+    delete entry.playerPoolEntry.player.injuryStatus;
+
+    const bundle = normalizeEspnWebClientSnapshot(value);
+
+    expect(bundle.teams[0]!.roster[0]!.status).toBeNull();
   });
 
   it("accepts current preseason manager, seed, and legacy-logo variants safely", () => {

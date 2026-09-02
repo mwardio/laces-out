@@ -539,6 +539,84 @@ describe("ESPN supplemental snapshot normalizer", () => {
     },
   );
 
+  it("normalizes an omitted draft completion time as unknown", () => {
+    const payload = draftPayload("SNAKE");
+    delete (payload.draftDetail as Record<string, unknown>).completeDate;
+
+    const result = normalizeEspnSupplementalSnapshot(
+      envelope({
+        kind: "completed-draft",
+        week: null,
+        views: ["mDraftDetail"],
+        payload,
+      }),
+    );
+
+    expect(result).toMatchObject({
+      kind: "completed-draft",
+      state: "complete",
+      completedAt: null,
+    });
+  });
+
+  it("omits ESPN's empty auction placeholders before a draft starts", () => {
+    const payload = draftPayload("AUCTION");
+    const draftDetail = payload.draftDetail as {
+      drafted: boolean;
+      inProgress: boolean;
+      picks: Array<Record<string, unknown>>;
+    };
+    draftDetail.drafted = false;
+    draftDetail.inProgress = false;
+    draftDetail.picks[0] = {
+      ...draftDetail.picks[0],
+      teamId: -1,
+      playerId: -1,
+      bidAmount: 0,
+      keeper: false,
+    };
+
+    const result = normalizeEspnSupplementalSnapshot(
+      envelope({
+        kind: "completed-draft",
+        week: null,
+        views: ["mDraftDetail"],
+        payload,
+      }),
+    );
+
+    expect(result).toMatchObject({
+      kind: "completed-draft",
+      state: "in-progress",
+      picks: [],
+    });
+  });
+
+  it("rejects an assigned draft player with ESPN's unassigned team sentinel", () => {
+    const payload = draftPayload("AUCTION");
+    const draftDetail = payload.draftDetail as { picks: Array<Record<string, unknown>> };
+    draftDetail.picks[0] = { ...draftDetail.picks[0], teamId: -1 };
+
+    expect(
+      captureError(
+        envelope({
+          kind: "completed-draft",
+          week: null,
+          views: ["mDraftDetail"],
+          payload,
+        }),
+      ),
+    ).toMatchObject({
+      code: "SCHEMA_DRIFT",
+      issues: [
+        expect.objectContaining({
+          path: "draftDetail.picks.0.teamId",
+          message: "unassigned draft slots must remain empty placeholders",
+        }),
+      ],
+    });
+  });
+
   it("fails closed on endpoint, checksum, and provider-enum drift", () => {
     const payload = { players: [availablePlayer(5001, "FREEAGENT")] };
     const wrongView = envelope({

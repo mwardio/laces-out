@@ -375,7 +375,13 @@ const draftPickSchema = z
     playerId: providerPlayerIdSchema,
     roundId: z.number().int().min(1).max(1_000),
     roundPickNumber: z.number().int().min(1).max(1_000),
-    teamId: providerIdSchema,
+    // ESPN fills a not-yet-started auction draft with future pick placeholders. Those rows carry
+    // teamId/playerId -1 and a zero bid; they are schedule slots, not drafted players. Preserve the
+    // sentinel through validation so normalization can omit it without confusing it with a real
+    // negative D/ST player id.
+    teamId: z
+      .union([providerIdSchema, z.literal(-1), z.literal("-1")])
+      .transform((value) => String(value)),
   })
   .passthrough();
 
@@ -395,7 +401,10 @@ const completedDraftPayloadSchema = z
       .passthrough(),
     draftDetail: z
       .object({
-        completeDate: epochMillisecondsSchema.nullable(),
+        // Some valid ESPN draft results omit completeDate even after `drafted` becomes true. The
+        // boolean state and picks remain authoritative; absence means the completion time is
+        // unknown, not that the whole draft artifact is malformed.
+        completeDate: epochMillisecondsSchema.nullable().optional(),
         drafted: z.boolean(),
         inProgress: z.boolean(),
         picks: z.array(draftPickSchema).max(5_000),
@@ -422,6 +431,16 @@ const completedDraftPayloadSchema = z
         });
       }
       sequences.add(pick.overallPickNumber);
+      if (pick.teamId === "-1") {
+        if (pick.playerId !== "-1" || pick.bidAmount !== 0 || pick.keeper) {
+          context.addIssue({
+            code: "custom",
+            path: ["draftDetail", "picks", index, "teamId"],
+            message: "unassigned draft slots must remain empty placeholders",
+          });
+        }
+        continue;
+      }
       if (pick.teamId === "0") {
         context.addIssue({
           code: "custom",
@@ -897,7 +916,8 @@ function normalizeCompletedDraft(
     });
   }
   const draftType = payload.settings.draftSettings.type === "AUCTION" ? "auction" : "snake";
-  const picks: NormalizedCompletedDraftPick[] = [...payload.draftDetail.picks]
+  const picks: NormalizedCompletedDraftPick[] = payload.draftDetail.picks
+    .filter((pick) => pick.teamId !== "-1")
     .sort((left, right) => left.overallPickNumber - right.overallPickNumber)
     .map((pick) => {
       const nomination = optionalTeamId(envelope, pick.nominatingTeamId);
