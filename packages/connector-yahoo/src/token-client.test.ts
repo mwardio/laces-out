@@ -2,6 +2,8 @@ import { describe, expect, it, vi } from "vitest";
 
 import { YahooTokenClient } from "./token-client.js";
 
+const EXPECTED_NONCE = "n".repeat(43);
+
 describe("YahooTokenClient", () => {
   it("exchanges a code through Yahoo's confidential-client flow", async () => {
     let requestedInput: string | URL | undefined;
@@ -32,6 +34,7 @@ describe("YahooTokenClient", () => {
 
     const result = await client.exchangeAuthorizationCode({
       code: "authorization-code",
+      expectedNonce: EXPECTED_NONCE,
     });
 
     expect(result.credentialVersion).toBe(1);
@@ -103,7 +106,10 @@ describe("YahooTokenClient", () => {
       fetch: fetchMock,
     });
 
-    const result = await client.exchangeAuthorizationCode({ code: "authorization-code" });
+    const result = await client.exchangeAuthorizationCode({
+      code: "authorization-code",
+      expectedNonce: EXPECTED_NONCE,
+    });
 
     expect(result.tokenSet.yahooGuid).toBe("stable-yahoo-guid");
     expect(String(fetchMock.mock.calls[1]?.[0])).toBe(
@@ -112,5 +118,43 @@ describe("YahooTokenClient", () => {
     const headers = new Headers(fetchMock.mock.calls[1]?.[1]?.headers);
     expect(headers.get("Authorization")).toBe("Bearer access-token-value");
     expect(headers.get("Accept")).toBe("application/json");
+  });
+
+  it("verifies the returned ID token before using its OpenID subject", async () => {
+    const fetchMock = vi.fn(() =>
+      Promise.resolve(
+        new Response(
+          JSON.stringify({
+            access_token: "access-token-value",
+            refresh_token: "refresh-token-value",
+            token_type: "bearer",
+            expires_in: 3600,
+            id_token: "signed.yahoo.id-token",
+          }),
+          { status: 200 },
+        ),
+      ),
+    );
+    const idTokenVerifier = vi.fn(() => Promise.resolve("stable-yahoo-guid"));
+    const client = new YahooTokenClient({
+      clientId: "client-id",
+      clientSecret: "client-secret",
+      redirectUri: "https://fantasy.example.test/callback",
+      fetch: fetchMock,
+      idTokenVerifier,
+    });
+
+    const result = await client.exchangeAuthorizationCode({
+      code: "authorization-code",
+      expectedNonce: EXPECTED_NONCE,
+    });
+
+    expect(result.tokenSet.yahooGuid).toBe("stable-yahoo-guid");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(idTokenVerifier).toHaveBeenCalledWith({
+      idToken: "signed.yahoo.id-token",
+      clientId: "client-id",
+      expectedNonce: EXPECTED_NONCE,
+    });
   });
 });

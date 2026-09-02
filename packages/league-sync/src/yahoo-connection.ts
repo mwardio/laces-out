@@ -266,11 +266,12 @@ export class YahooConnectionService {
     try {
       // Authenticate the encrypted local transaction context before spending the one-time code.
       // Yahoo's confidential-client flow itself uses the client secret and does not accept PKCE.
-      decryptCredential<StoredPkce>(state.encryptedPkceVerifier, this.#key, {
+      const storedPkce = decryptCredential<StoredPkce>(state.encryptedPkceVerifier, this.#key, {
         expectedPurpose: pkcePurpose(userId, state.stateHash),
       });
       const grant = await this.#tokenClient.exchangeAuthorizationCode({
         code: input.code,
+        expectedNonce: storedPkce.codeVerifier,
       });
       const yahooGuid = grant.tokenSet.yahooGuid;
       if (!yahooGuid) {

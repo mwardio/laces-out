@@ -1,9 +1,20 @@
 import { redactText } from "@laces-out/security";
+import { createRemoteJWKSet, jwtVerify } from "jose";
 
 export const YAHOO_TOKEN_ENDPOINT = "https://api.login.yahoo.com/oauth2/get_token" as const;
 export const YAHOO_OPENID_USERINFO_ENDPOINT =
   "https://api.login.yahoo.com/openid/v1/userinfo" as const;
+export const YAHOO_OPENID_JWKS_ENDPOINT = "https://api.login.yahoo.com/openid/v1/certs" as const;
+const YAHOO_OPENID_ISSUER = "https://api.login.yahoo.com" as const;
 const MAX_TOKEN_RESPONSE_BYTES = 64 * 1024;
+const OAUTH_NONCE_PATTERN = /^[A-Za-z0-9._~-]{43,128}$/u;
+const YAHOO_ACCOUNT_ID_PATTERN = /^[A-Za-z0-9._~-]{1,255}$/u;
+
+const yahooOpenIdKeys = createRemoteJWKSet(new URL(YAHOO_OPENID_JWKS_ENDPOINT), {
+  timeoutDuration: 10_000,
+  cooldownDuration: 30_000,
+  cacheMaxAge: 10 * 60 * 1000,
+});
 
 export type FetchLike = (input: string | URL, init?: RequestInit) => Promise<Response>;
 
@@ -14,7 +25,17 @@ export interface YahooTokenClientOptions {
   readonly fetch?: FetchLike;
   readonly now?: () => Date;
   readonly timeoutMs?: number;
+  /** Test seam for the otherwise network-backed Yahoo OpenID signature verifier. */
+  readonly idTokenVerifier?: YahooIdTokenVerifier;
 }
+
+export interface YahooIdTokenVerificationInput {
+  readonly idToken: string;
+  readonly clientId: string;
+  readonly expectedNonce: string;
+}
+
+export type YahooIdTokenVerifier = (input: YahooIdTokenVerificationInput) => Promise<string>;
 
 export interface YahooTokenSet {
   readonly accessToken: string;
@@ -66,6 +87,7 @@ interface TokenResponseShape {
   readonly refresh_token?: string;
   readonly token_type: string;
   readonly expires_in: number;
+  readonly id_token?: string;
   readonly xoauth_yahoo_guid?: string;
   readonly scope?: string;
 }
@@ -92,6 +114,8 @@ function parseTokenResponse(value: unknown): TokenResponseShape {
     !Number.isSafeInteger(record.expires_in) ||
     record.expires_in <= 0 ||
     record.expires_in > 24 * 60 * 60 ||
+    (record.id_token !== undefined &&
+      (typeof record.id_token !== "string" || record.id_token.length > 16 * 1024)) ||
     (record.xoauth_yahoo_guid !== undefined && typeof record.xoauth_yahoo_guid !== "string") ||
     (record.scope !== undefined && typeof record.scope !== "string")
   ) {
@@ -108,12 +132,44 @@ function parseOpenIdIdentityResponse(text: string): string {
     throw new YahooTokenClientError({ message: "Yahoo user identity response was not JSON" });
   }
   const subject = asRecord(value)?.sub;
-  if (typeof subject !== "string" || !/^[A-Za-z0-9._~-]{1,255}$/u.test(subject)) {
+  if (typeof subject !== "string" || !YAHOO_ACCOUNT_ID_PATTERN.test(subject)) {
     throw new YahooTokenClientError({
       message: "Yahoo user identity response did not contain a valid account identifier",
     });
   }
   return subject;
+}
+
+async function verifyYahooIdToken(input: YahooIdTokenVerificationInput): Promise<string> {
+  try {
+    const { payload } = await jwtVerify(input.idToken, yahooOpenIdKeys, {
+      algorithms: ["ES256"],
+      issuer: YAHOO_OPENID_ISSUER,
+      audience: input.clientId,
+    });
+    if (
+      typeof payload.exp !== "number" ||
+      typeof payload.iat !== "number" ||
+      typeof payload.nonce !== "string" ||
+      payload.nonce !== input.expectedNonce ||
+      typeof payload.sub !== "string" ||
+      !YAHOO_ACCOUNT_ID_PATTERN.test(payload.sub)
+    ) {
+      throw new YahooTokenClientError({
+        message: "Yahoo ID token claims did not match the authorization request",
+        oauthCode: "id_token_claims_invalid",
+      });
+    }
+    return payload.sub;
+  } catch (error) {
+    if (error instanceof YahooTokenClientError) throw error;
+    const errorCode = asRecord(error)?.code;
+    throw new YahooTokenClientError({
+      message: "Yahoo ID token could not be verified",
+      oauthCode: "id_token_invalid",
+      retryable: errorCode === "ERR_JWKS_TIMEOUT",
+    });
+  }
 }
 
 function validateClientOptions(options: YahooTokenClientOptions): void {
@@ -170,6 +226,7 @@ export class YahooTokenClient {
   readonly #fetch: FetchLike;
   readonly #now: () => Date;
   readonly #timeoutMs: number;
+  readonly #idTokenVerifier: YahooIdTokenVerifier;
 
   public constructor(options: YahooTokenClientOptions) {
     validateClientOptions(options);
@@ -179,6 +236,7 @@ export class YahooTokenClient {
     this.#fetch = options.fetch ?? globalThis.fetch;
     this.#now = options.now ?? (() => new Date());
     this.#timeoutMs = options.timeoutMs ?? 10_000;
+    this.#idTokenVerifier = options.idTokenVerifier ?? verifyYahooIdToken;
     if (
       !Number.isSafeInteger(this.#timeoutMs) ||
       this.#timeoutMs < 500 ||
@@ -190,10 +248,14 @@ export class YahooTokenClient {
 
   public async exchangeAuthorizationCode(input: {
     readonly code: string;
+    readonly expectedNonce: string;
     readonly signal?: AbortSignal;
   }): Promise<YahooInitialGrantResult> {
     if (input.code.trim() === "" || input.code.length > 4096) {
       throw new TypeError("Yahoo authorization code is required");
+    }
+    if (!OAUTH_NONCE_PATTERN.test(input.expectedNonce)) {
+      throw new TypeError("Yahoo authorization nonce is invalid");
     }
     const response = await this.#requestToken(
       new URLSearchParams({
@@ -211,7 +273,13 @@ export class YahooTokenClient {
     const tokenSet = this.#toTokenSet(response, response.refresh_token);
     const yahooGuid =
       tokenSet.yahooGuid ??
-      (await this.#resolveYahooOpenIdSubject(tokenSet.accessToken, input.signal));
+      (response.id_token !== undefined
+        ? await this.#idTokenVerifier({
+            idToken: response.id_token,
+            clientId: this.#clientId,
+            expectedNonce: input.expectedNonce,
+          })
+        : await this.#resolveYahooOpenIdSubject(tokenSet.accessToken, input.signal));
     return {
       tokenSet: { ...tokenSet, yahooGuid },
       credentialVersion: 1,
