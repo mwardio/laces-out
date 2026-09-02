@@ -9,6 +9,7 @@ describe("Yahoo authorization request", () => {
       clientId: "client-id",
       redirectUri: "https://fantasy.example.test/oauth/yahoo/callback",
       scopes: ["openid", "fspt-r"],
+      prompt: "consent",
       now: () => new Date("2026-07-16T12:00:00.000Z"),
       randomBytes: (size) => {
         call += 1;
@@ -24,6 +25,7 @@ describe("Yahoo authorization request", () => {
     expect(url.searchParams.has("code_challenge")).toBe(false);
     expect(url.searchParams.get("scope")).toBe("openid fspt-r");
     expect(url.searchParams.get("nonce")).toBe(request.codeVerifier);
+    expect(url.searchParams.get("prompt")).toBe("consent");
     expect(request.stateHash).not.toBe(request.state);
     expect(request.expiresAt).toBe("2026-07-16T12:10:00.000Z");
   });

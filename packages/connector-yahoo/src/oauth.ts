@@ -10,6 +10,7 @@ export interface YahooAuthorizationRequestOptions {
   readonly clientId: string;
   readonly redirectUri: string;
   readonly scopes?: readonly string[];
+  readonly prompt?: "consent" | "login";
   readonly language?: string;
   readonly ttlMs?: number;
   readonly now?: () => Date;
@@ -136,6 +137,7 @@ export function createYahooAuthorizationRequest(
   // Keep the encrypted verifier in the local one-time transaction for backward-compatible
   // persistence, but do not send unsupported challenge parameters to Yahoo.
   url.searchParams.set("language", options.language ?? "en-us");
+  if (options.prompt !== undefined) url.searchParams.set("prompt", options.prompt);
   if (options.scopes !== undefined && options.scopes.length > 0) {
     const scopes = [...new Set(options.scopes.map((scope) => scope.trim()).filter(Boolean))];
     if (scopes.length > 0) {

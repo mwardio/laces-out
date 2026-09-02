@@ -1442,7 +1442,8 @@ describe.skipIf(!postgresAvailable)("account data repository against real Postgr
     expect(startedUrl.searchParams.get("redirect_uri")).toBe(
       "https://self-host.example/v1/connections/yahoo/callback",
     );
-    expect(startedUrl.searchParams.get("scope")).toBe("fspt-r");
+    expect(startedUrl.searchParams.get("scope")).toBe("openid fspt-r");
+    expect(startedUrl.searchParams.get("prompt")).toBe("consent");
 
     const [stored] = await db
       .select()
