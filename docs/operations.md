@@ -177,8 +177,8 @@ power a differently hosted web origin. Split-host operators must route both surf
 canonical HTTPS gateway; until then `/health/ready` omits `authenticated-browser-handoff` and the
 creation endpoint returns `503`.
 
-Native Yahoo setup advertises `yahoo-native-connect-v1` only when this handoff and the Yahoo OAuth
-configuration are both available. The app may request only the exact
+Native Yahoo setup advertises `yahoo-native-connect-v1` only when this handoff, the Yahoo OAuth
+configuration, and `NEXT_PUBLIC_YAHOO_ACCESS_STATUS=available` are all present. The app may request only the exact
 `/connections/yahoo/connect` destination. Yahoo still owns sign-in and consent; the native callback
 receives one fixed completion status and no Yahoo code, token, or credential.
 
@@ -717,11 +717,14 @@ not prerequisites the current runbook silently assumes are already installed.
 
 ### Yahoo unattended league refresh
 
-Yahoo automation is a separate, fail-closed operator choice. `YAHOO_AUTOMATED_SYNC_ENABLED=false`
-is the default and leaves Yahoo OAuth, discovery, manual league refresh, and ESPN behavior intact.
-Enabling it requires `YAHOO_CLIENT_ID`, `YAHOO_CLIENT_SECRET`, `CREDENTIAL_ENCRYPTION_KEY`, and the
-deployment's exact `YAHOO_REDIRECT_URI`; incomplete configuration prevents the process from
-starting instead of advertising a promise it cannot perform.
+Yahoo has two fail-closed operator choices. `NEXT_PUBLIC_YAHOO_ACCESS_STATUS=pending` is the master
+release gate: credentials may be stored, but web and native entry points, OAuth, manual sync, and
+automation all remain unavailable. Setting it to `available` requires `YAHOO_CLIENT_ID`,
+`YAHOO_CLIENT_SECRET`, `CREDENTIAL_ENCRYPTION_KEY`, and the deployment's exact
+`YAHOO_REDIRECT_URI`. `YAHOO_AUTOMATED_SYNC_ENABLED=false` remains the independent unattended-read
+default; when the master gate is available, it leaves OAuth, discovery, manual league refresh, and
+ESPN behavior intact. Incomplete or contradictory configuration prevents the process from starting
+instead of advertising a promise it cannot perform.
 
 The provider-neutral `provider-sync-sweep` wakes every five minutes. Yahoo targets are due every
 30 minutes for an active current-season league and every six hours for preseason/offseason, plus a
@@ -733,11 +736,13 @@ qualifies. There is no 15-minute live/near-lock cadence in this release.
 
 Safe rollout and rollback:
 
-1. Deploy API and worker code with the flag false. No database migration is required. On schedule
-   registration the API idempotently removes the legacy `espn-provider-sync-sweep` key and writes
-   the provider-neutral key, preventing duplicate cron rows after an upgrade.
-2. Confirm manual Yahoo sync and ESPN refresh still behave normally, and `/health/ready` does not
-   include `yahoo-automated-sync`.
+1. Store the approved credentials while keeping `NEXT_PUBLIC_YAHOO_ACCESS_STATUS=pending` and
+   `YAHOO_AUTOMATED_SYNC_ENABLED=false`. Rebuild/restart and confirm `/health/ready` omits both Yahoo
+   capabilities; credentials alone must not expose a connection flow.
+2. Confirm Yahoo accepts the exact configured callback. Set
+   `NEXT_PUBLIC_YAHOO_ACCESS_STATUS=available`, rebuild the web image, restart API and worker, and
+   complete one real-account OAuth, discovery, and manual-sync canary. Readiness should include
+   `yahoo-native-connect-v1` but not `yahoo-automated-sync`.
 3. Set `YAHOO_AUTOMATED_SYNC_ENABLED=true` for both API and worker (the bundled compose passes the
    same value to both), restart them through the normal process, and confirm `/health/ready` now
    includes `yahoo-automated-sync`.
@@ -747,8 +752,10 @@ Safe rollout and rollback:
    throttling state, and accepted/unchanged counts—never tokens, authorization codes, cookies,
    headers, or provider bodies. Inspect `league-sync-dead-letter` and
    `provider-sync-sweep-dead-letter` for exhausted work.
-5. To stop unattended Yahoo traffic, set the flag false and restart API and worker. Manual Yahoo
-   refresh and ESPN schedules remain available; no connection deletion or data rollback is needed.
+5. To stop unattended Yahoo traffic, set the automation flag false and restart API and worker;
+   manual Yahoo refresh remains available. To hide and disable every Yahoo entry point while
+   retaining encrypted credentials, return the access status to `pending`, rebuild web, and restart
+   API and worker. Neither rollback requires connection deletion or data rollback.
 
 ### ESPN automated refresh
 
@@ -1049,7 +1056,8 @@ capabilities derived from the same root secret.
 
 - Yahoo access may be enabled after the operator completes the current provider terms,
   approved-application configuration, and real-account contract-validation checklist. Set
-  `NEXT_PUBLIC_YAHOO_ACCESS_STATUS=available` only when the OAuth credentials are ready.
+  `NEXT_PUBLIC_YAHOO_ACCESS_STATUS=available` only when the OAuth credentials and exact callback
+  have passed a live authorization canary. API and worker honor this same public release gate.
 - ESPN companion distribution requires sanctioned private-league validation, terms and store-policy
   review, and a signed build. It is the web private-league path; a compatible native client may
   establish the same encrypted always-on authorization through ESPN-hosted sign-in.

@@ -263,7 +263,10 @@ const passwordReset = emailTransport
     })
   : undefined;
 const yahooConnection =
-  environment.YAHOO_CLIENT_ID && environment.YAHOO_CLIENT_SECRET && credentialKey
+  environment.NEXT_PUBLIC_YAHOO_ACCESS_STATUS === "available" &&
+  environment.YAHOO_CLIENT_ID &&
+  environment.YAHOO_CLIENT_SECRET &&
+  credentialKey
     ? new YahooConnectionService({
         database: database.db,
         credentialKey,

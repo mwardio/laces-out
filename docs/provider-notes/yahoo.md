@@ -123,6 +123,9 @@ gates are recorded. This is an engineering release condition, not legal advice.
    `https://your-host.example/v1/connections/yahoo/callback`. Use HTTPS outside local loopback development.
 3. Supply the server process with `YAHOO_CLIENT_ID`, `YAHOO_CLIENT_SECRET`, and the exact callback
    URI. The client secret never belongs in `NEXT_PUBLIC_*` variables or browser code.
+   Keep `NEXT_PUBLIC_YAHOO_ACCESS_STATUS=pending` while staging them; credentials alone do not
+   enable OAuth or advertise native Yahoo support. Set it to `available` only after Yahoo accepts
+   the exact callback and a real-account authorization canary succeeds.
 4. Generate a random 32-byte credential key and encode it explicitly, for example
    `CREDENTIAL_ENCRYPTION_KEY=base64:$(openssl rand -base64 32)`. Store it in a secret manager or
    protected local environment, not Git. Assign a key ID so rotation can keep old decryption keys
@@ -155,7 +158,11 @@ gates are recorded. This is an engineering release condition, not legal advice.
   protected by a PostgreSQL row lock spanning the exchange and a credential-version CAS update.
 - Multiple friends may authorize the same league. A many-to-many provenance link preserves each
   account's access and current-user team key while the normalized league snapshot is shared.
-- `YAHOO_AUTOMATED_SYNC_ENABLED` independently gates unattended refresh. The five-minute provider
+- `NEXT_PUBLIC_YAHOO_ACCESS_STATUS` is the shared web/API/worker release gate. `pending` keeps all
+  Yahoo entry points off even when credentials are stored; `available` requires the complete
+  encrypted server configuration.
+- `YAHOO_AUTOMATED_SYNC_ENABLED` independently gates unattended refresh after that release gate is
+  available. The five-minute provider
   sweep selects only active, non-archived seasons with an exact healthy provider link and live
   league membership. It prefers the season's linked healthy connection, then deterministically
   chooses a linked healthy member fallback without crossing account or user boundaries.

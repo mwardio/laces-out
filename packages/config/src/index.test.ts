@@ -16,6 +16,7 @@ describe("loadEnvironment", () => {
     expect(environment.REGISTRATION_OPEN).toBe(false);
     expect(environment.REGISTRATION_INVITE_CODE).toBeUndefined();
     expect(environment.ESPN_PUBLIC_DIRECT_SYNC_ENABLED).toBe(false);
+    expect(environment.NEXT_PUBLIC_YAHOO_ACCESS_STATUS).toBe("pending");
     expect(environment.YAHOO_AUTOMATED_SYNC_ENABLED).toBe(false);
     expect(environment.EMAIL_VERIFICATION_ENABLED).toBe(false);
   });
@@ -170,20 +171,36 @@ describe("loadEnvironment", () => {
     ).toBeUndefined();
   });
 
-  it("keeps Yahoo automation separate, fail-closed, and fully configured", () => {
+  it("keeps Yahoo access and automation separate, fail-closed, and fully configured", () => {
     expect(
       loadEnvironment({ YAHOO_AUTOMATED_SYNC_ENABLED: "0" }).YAHOO_AUTOMATED_SYNC_ENABLED,
     ).toBe(false);
     expect(() => loadEnvironment({ YAHOO_AUTOMATED_SYNC_ENABLED: "true" })).toThrow(
-      "YAHOO_AUTOMATED_SYNC_ENABLED requires complete Yahoo server configuration",
+      "YAHOO_AUTOMATED_SYNC_ENABLED requires Yahoo access to be available",
     );
 
-    const environment = loadEnvironment({
-      YAHOO_AUTOMATED_SYNC_ENABLED: "true",
+    const credentials = {
       YAHOO_CLIENT_ID: "client-id",
       YAHOO_CLIENT_SECRET: "client-secret",
       CREDENTIAL_ENCRYPTION_KEY: "base64:MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=",
+    };
+    expect(loadEnvironment(credentials).NEXT_PUBLIC_YAHOO_ACCESS_STATUS).toBe("pending");
+    expect(() =>
+      loadEnvironment({
+        ...credentials,
+        YAHOO_AUTOMATED_SYNC_ENABLED: "true",
+      }),
+    ).toThrow("YAHOO_AUTOMATED_SYNC_ENABLED requires Yahoo access to be available");
+    expect(() => loadEnvironment({ NEXT_PUBLIC_YAHOO_ACCESS_STATUS: "available" })).toThrow(
+      "requires complete Yahoo server configuration",
+    );
+
+    const environment = loadEnvironment({
+      NEXT_PUBLIC_YAHOO_ACCESS_STATUS: "available",
+      YAHOO_AUTOMATED_SYNC_ENABLED: "true",
+      ...credentials,
     });
+    expect(environment.NEXT_PUBLIC_YAHOO_ACCESS_STATUS).toBe("available");
     expect(environment.YAHOO_AUTOMATED_SYNC_ENABLED).toBe(true);
   });
 

@@ -556,7 +556,13 @@ describe("browser handoff routes", () => {
 
   it("advertises Yahoo native connect only when the complete deployment flow is available", async () => {
     const complete: BuildAppOptions = {
-      environment: loadEnvironment({ NODE_ENV: "test" }),
+      environment: loadEnvironment({
+        NODE_ENV: "test",
+        NEXT_PUBLIC_YAHOO_ACCESS_STATUS: "available",
+        YAHOO_CLIENT_ID: "client-id",
+        YAHOO_CLIENT_SECRET: "client-secret",
+        CREDENTIAL_ENCRYPTION_KEY: "base64:MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=",
+      }),
       logger: false,
       authService: new AuthService(authRepository()),
       browserHandoffs: handoffPort(),
@@ -593,6 +599,7 @@ describe("browser handoff routes", () => {
   it("advertises Yahoo automation only when its flag, services, worker, and schedule are available", async () => {
     const enabledEnvironment = loadEnvironment({
       NODE_ENV: "test",
+      NEXT_PUBLIC_YAHOO_ACCESS_STATUS: "available",
       YAHOO_AUTOMATED_SYNC_ENABLED: "true",
       YAHOO_CLIENT_ID: "client-id",
       YAHOO_CLIENT_SECRET: "client-secret",

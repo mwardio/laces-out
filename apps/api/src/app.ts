@@ -626,6 +626,9 @@ function isEspnLiveDraftPulseNotFound(error: unknown): boolean {
 
 export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyInstance> {
   const environment = options.environment ?? loadEnvironment();
+  const yahooAccessAvailable = environment.NEXT_PUBLIC_YAHOO_ACCESS_STATUS === "available";
+  const yahooConnection = yahooAccessAvailable ? options.yahooConnection : undefined;
+  const yahooSync = yahooAccessAvailable ? options.yahooSync : undefined;
   const browserHandoffs =
     options.browserHandoffs &&
     browserHandoffOriginsCompatible(environment.API_URL, environment.WEB_URL)
@@ -645,16 +648,16 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   if (
     browserHandoffs &&
     options.authService &&
-    options.yahooConnection &&
-    options.yahooSync &&
+    yahooConnection &&
+    yahooSync &&
     options.yahooNativeConnectLandingAvailable === true
   ) {
     mobileCapabilities.push("yahoo-native-connect-v1");
   }
   if (
     environment.YAHOO_AUTOMATED_SYNC_ENABLED &&
-    options.yahooConnection &&
-    options.yahooSync &&
+    yahooConnection &&
+    yahooSync &&
     options.yahooAutomatedSyncAvailable === true
   ) {
     mobileCapabilities.push("yahoo-automated-sync");
@@ -1070,7 +1073,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     ...(options.rosProjectionStatus ? { rosProjectionStatus: options.rosProjectionStatus } : {}),
   });
   registerYahooRoutes(app, {
-    ...(options.yahooSync ? { yahooSync: options.yahooSync } : {}),
+    ...(yahooSync ? { yahooSync } : {}),
     ...(options.changeEventProducers ? { changeEventProducers: options.changeEventProducers } : {}),
     ...(options.enqueueRecommendationRecompute
       ? { enqueueRecommendationRecompute: options.enqueueRecommendationRecompute }
@@ -2009,7 +2012,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
         correlationId: request.id,
       });
     }
-    if (!options.yahooConnection) {
+    if (!yahooConnection) {
       return reply.code(503).type("application/problem+json").send({
         type: "https://fantasy.local/problems/yahoo-unavailable",
         title: "Yahoo connection is not configured",
@@ -2019,7 +2022,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     }
     const input = yahooAuthorizeRequestSchema.parse(request.body ?? {});
     return yahooAuthorizeResponseSchema.parse(
-      await options.yahooConnection.start(request.currentUser.id, input),
+      await yahooConnection.start(request.currentUser.id, input),
     );
   });
 
@@ -2038,7 +2041,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
       });
     }
     const query = yahooCallbackSchema.parse(request.query);
-    if (!options.yahooConnection) {
+    if (!yahooConnection) {
       return redirectYahooWithoutReferrer(
         reply,
         browserYahooCompletionUrl(environment.WEB_URL, "unavailable"),
@@ -2052,7 +2055,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
         );
       }
       try {
-        const completion = await options.yahooConnection.deny(request.currentUser.id, query.state);
+        const completion = await yahooConnection.deny(request.currentUser.id, query.state);
         const providerErrorCode =
           query.error && /^[A-Za-z0-9._-]{1,64}$/u.test(query.error)
             ? query.error
@@ -2084,14 +2087,14 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
       );
     }
     try {
-      const result = await options.yahooConnection.complete(request.currentUser.id, {
+      const result = await yahooConnection.complete(request.currentUser.id, {
         code: query.code,
         state: query.state,
       });
       let sync: "complete" | "failed" | undefined;
-      if (options.yahooSync) {
+      if (yahooSync) {
         try {
-          const discovery = await options.yahooSync.discoverAndSync(
+          const discovery = await yahooSync.discoverAndSync(
             request.currentUser.id,
             result.connectionId,
             { restoreRemoved: true },

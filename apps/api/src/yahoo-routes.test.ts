@@ -10,6 +10,17 @@ const USER_ID = "10000000-0000-4000-8000-000000000001";
 const CONNECTION_ID = "20000000-0000-4000-8000-000000000001";
 const COOKIE = `fantasy_session=${"s".repeat(32)}`;
 
+function yahooEnvironment(overrides: Readonly<Record<string, string | undefined>> = {}) {
+  return loadEnvironment({
+    NODE_ENV: "test",
+    NEXT_PUBLIC_YAHOO_ACCESS_STATUS: "available",
+    YAHOO_CLIENT_ID: "client-id",
+    YAHOO_CLIENT_SECRET: "client-secret",
+    CREDENTIAL_ENCRYPTION_KEY: "base64:MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=",
+    ...overrides,
+  });
+}
+
 function authService(): AuthService {
   const repository: AuthRepository = {
     findUserByEmail: () => Promise.resolve(undefined),
@@ -68,10 +79,45 @@ function yahooConnection(overrides: Partial<YahooConnectionPort> = {}): YahooCon
 }
 
 describe("Yahoo sync routes", () => {
+  it("keeps Yahoo routes fail-closed while the shared release gate is pending", async () => {
+    const listConnections = vi.fn<YahooSyncPort["listConnections"]>(() => Promise.resolve([]));
+    const start = vi.fn<YahooConnectionPort["start"]>(() =>
+      Promise.reject(new Error("release gate failed")),
+    );
+    const app = await buildApp({
+      environment: loadEnvironment({
+        NODE_ENV: "test",
+        YAHOO_CLIENT_ID: "client-id",
+        YAHOO_CLIENT_SECRET: "client-secret",
+        CREDENTIAL_ENCRYPTION_KEY: "base64:MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=",
+      }),
+      logger: false,
+      requireAuthentication: true,
+      authService: authService(),
+      yahooConnection: yahooConnection({ start }),
+      yahooSync: yahooSync({ listConnections }),
+    });
+
+    const headers = { cookie: COOKIE };
+    const status = await app.inject({ method: "GET", url: "/v1/connections/yahoo", headers });
+    const authorize = await app.inject({
+      method: "POST",
+      url: "/v1/connections/yahoo/authorize",
+      headers,
+      payload: { returnMode: "browser" },
+    });
+
+    expect(status.statusCode).toBe(503);
+    expect(authorize.statusCode).toBe(503);
+    expect(listConnections).not.toHaveBeenCalled();
+    expect(start).not.toHaveBeenCalled();
+    await app.close();
+  });
+
   it("idempotently removes a Yahoo connection only through the authenticated actor", async () => {
     const disconnectConnection = vi.fn(() => Promise.resolve());
     const app = await buildApp({
-      environment: loadEnvironment({ NODE_ENV: "test" }),
+      environment: yahooEnvironment(),
       logger: false,
       requireAuthentication: true,
       authService: authService(),
@@ -106,7 +152,7 @@ describe("Yahoo sync routes", () => {
 
   it("returns a sanitized problem when local Yahoo credential removal fails", async () => {
     const app = await buildApp({
-      environment: loadEnvironment({ NODE_ENV: "test" }),
+      environment: yahooEnvironment(),
       logger: false,
       requireAuthentication: true,
       authService: authService(),
@@ -150,7 +196,7 @@ describe("Yahoo sync routes", () => {
       ]),
     );
     const app = await buildApp({
-      environment: loadEnvironment({ NODE_ENV: "test" }),
+      environment: yahooEnvironment(),
       logger: false,
       requireAuthentication: true,
       authService: authService(),
@@ -176,7 +222,7 @@ describe("Yahoo sync routes", () => {
     const syncLeague = vi.fn(yahooSync().syncLeague);
     const enqueueProjectionRefresh = vi.fn(() => Promise.resolve("projection-job"));
     const app = await buildApp({
-      environment: loadEnvironment({ NODE_ENV: "test" }),
+      environment: yahooEnvironment(),
       logger: false,
       requireAuthentication: true,
       authService: authService(),
@@ -207,7 +253,7 @@ describe("Yahoo sync routes", () => {
 
   it("returns a membership-safe not-found response for an unowned connection", async () => {
     const app = await buildApp({
-      environment: loadEnvironment({ NODE_ENV: "test" }),
+      environment: yahooEnvironment(),
       logger: false,
       requireAuthentication: true,
       authService: authService(),
@@ -231,7 +277,7 @@ describe("Yahoo sync routes", () => {
 
   it("limits discovery requests to eight per minute", async () => {
     const app = await buildApp({
-      environment: loadEnvironment({ NODE_ENV: "test" }),
+      environment: yahooEnvironment(),
       logger: false,
       requireAuthentication: true,
       authService: authService(),
@@ -258,7 +304,7 @@ describe("Yahoo sync routes", () => {
 
   it("limits league sync requests to ten per minute", async () => {
     const app = await buildApp({
-      environment: loadEnvironment({ NODE_ENV: "test" }),
+      environment: yahooEnvironment(),
       logger: false,
       requireAuthentication: true,
       authService: authService(),
@@ -298,8 +344,7 @@ describe("Yahoo sync routes", () => {
       complete,
     };
     const app = await buildApp({
-      environment: loadEnvironment({
-        NODE_ENV: "test",
+      environment: yahooEnvironment({
         WEB_URL: "https://laces.example",
       }),
       logger: false,
@@ -332,7 +377,7 @@ describe("Yahoo sync routes", () => {
       }),
     );
     const app = await buildApp({
-      environment: loadEnvironment({ NODE_ENV: "test" }),
+      environment: yahooEnvironment(),
       logger: false,
       requireAuthentication: true,
       authService: authService(),
@@ -379,8 +424,7 @@ describe("Yahoo sync routes", () => {
       }),
     );
     const app = await buildApp({
-      environment: loadEnvironment({
-        NODE_ENV: "test",
+      environment: yahooEnvironment({
         WEB_URL: "https://self-host.example",
       }),
       logger: false,
@@ -428,7 +472,7 @@ describe("Yahoo sync routes", () => {
       })
       .mockRejectedValueOnce(new Error("STATE_REPLAYED"));
     const app = await buildApp({
-      environment: loadEnvironment({ NODE_ENV: "test" }),
+      environment: yahooEnvironment(),
       logger: false,
       requireAuthentication: true,
       authService: authService(),
@@ -466,7 +510,7 @@ describe("Yahoo sync routes", () => {
         Promise.resolve({ returnMode: "ios-app", returnTo: "/connections" }),
       );
       const app = await buildApp({
-        environment: loadEnvironment({ NODE_ENV: "test" }),
+        environment: yahooEnvironment(),
         logger: false,
         requireAuthentication: true,
         authService: authService(),
@@ -490,7 +534,7 @@ describe("Yahoo sync routes", () => {
 
   it("preserves the existing browser denial fallback for non-code provider outcomes", async () => {
     const app = await buildApp({
-      environment: loadEnvironment({ NODE_ENV: "test" }),
+      environment: yahooEnvironment(),
       logger: false,
       requireAuthentication: true,
       authService: authService(),
@@ -515,7 +559,7 @@ describe("Yahoo sync routes", () => {
       Promise.reject(new Error("invalid, expired, malformed, or wrong-user state")),
     );
     const app = await buildApp({
-      environment: loadEnvironment({ NODE_ENV: "test" }),
+      environment: yahooEnvironment(),
       logger: false,
       requireAuthentication: true,
       authService: authService(),
@@ -554,7 +598,7 @@ describe("Yahoo sync routes", () => {
         returnTo: "https://attacker.example/ignored",
       };
       const app = await buildApp({
-        environment: loadEnvironment({ NODE_ENV: "test" }),
+        environment: yahooEnvironment(),
         logger: false,
         requireAuthentication: true,
         authService: authService(),
@@ -579,7 +623,7 @@ describe("Yahoo sync routes", () => {
       Promise.reject(new Error("provider payload is unavailable")),
     );
     const app = await buildApp({
-      environment: loadEnvironment({ NODE_ENV: "test" }),
+      environment: yahooEnvironment(),
       logger: false,
       requireAuthentication: true,
       authService: authService(),
@@ -608,7 +652,7 @@ describe("Yahoo sync routes", () => {
   it("recomputes recommendations for an accepted Yahoo league sync", async () => {
     const enqueueRecommendationRecompute = vi.fn(() => Promise.resolve("recompute-job"));
     const app = await buildApp({
-      environment: loadEnvironment({ NODE_ENV: "test" }),
+      environment: yahooEnvironment(),
       logger: false,
       requireAuthentication: true,
       authService: authService(),
@@ -636,7 +680,7 @@ describe("Yahoo sync routes", () => {
   it("enqueues no recomputation for an unchanged Yahoo payload", async () => {
     const enqueueRecommendationRecompute = vi.fn(() => Promise.resolve("recompute-job"));
     const app = await buildApp({
-      environment: loadEnvironment({ NODE_ENV: "test" }),
+      environment: yahooEnvironment(),
       logger: false,
       requireAuthentication: true,
       authService: authService(),
@@ -680,7 +724,7 @@ describe("Yahoo sync routes", () => {
       syncedAt: "2026-07-16T12:00:00.000Z",
     });
     const app = await buildApp({
-      environment: loadEnvironment({ NODE_ENV: "test" }),
+      environment: yahooEnvironment(),
       logger: false,
       requireAuthentication: true,
       authService: authService(),

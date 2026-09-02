@@ -44,6 +44,16 @@ function productionEnvironment(additionalWebOrigins?: string) {
   });
 }
 
+function yahooTestEnvironment() {
+  return loadEnvironment({
+    NODE_ENV: "test",
+    NEXT_PUBLIC_YAHOO_ACCESS_STATUS: "available",
+    YAHOO_CLIENT_ID: "client-id",
+    YAHOO_CLIENT_SECRET: "client-secret",
+    CREDENTIAL_ENCRYPTION_KEY: "base64:MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=",
+  });
+}
+
 const authenticatedCookie = `fantasy_session=${testSessionToken}`;
 const leagueId = "00000000-0000-4000-8000-000000000101";
 const teamId = "00000000-0000-4000-8000-000000000102";
@@ -1111,7 +1121,7 @@ describe("API", () => {
   it("starts a user-bound Yahoo authorization flow", async () => {
     const calls: unknown[] = [];
     const app = await buildApp({
-      environment: loadEnvironment({ NODE_ENV: "test" }),
+      environment: yahooTestEnvironment(),
       logger: false,
       requireAuthentication: true,
       authService: authenticatedService(),
@@ -1148,7 +1158,7 @@ describe("API", () => {
 
   it("rejects a cross-origin Yahoo return path", async () => {
     const app = await buildApp({
-      environment: loadEnvironment({ NODE_ENV: "test" }),
+      environment: yahooTestEnvironment(),
       logger: false,
       requireAuthentication: true,
       authService: authenticatedService(),
@@ -1171,7 +1181,7 @@ describe("API", () => {
 
   it("completes Yahoo authorization with a same-origin redirect", async () => {
     const app = await buildApp({
-      environment: loadEnvironment({ NODE_ENV: "test" }),
+      environment: yahooTestEnvironment(),
       logger: false,
       requireAuthentication: true,
       authService: authenticatedService(),

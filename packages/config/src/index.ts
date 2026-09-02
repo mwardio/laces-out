@@ -54,8 +54,15 @@ const environmentSchema = z.object({
   YAHOO_CLIENT_SECRET: z.preprocess(blankToUndefined, z.string().min(1).optional()),
   YAHOO_REDIRECT_URI: z.url().default("http://localhost:4000/v1/connections/yahoo/callback"),
   /**
+   * Shared Yahoo release gate. The value is public by design, but the API and worker also honor it
+   * so storing credentials cannot silently advertise or activate a provider that the web UI still
+   * marks pending.
+   */
+  NEXT_PUBLIC_YAHOO_ACCESS_STATUS: z.enum(["pending", "available"]).default("pending"),
+  /**
    * Dedicated unattended-read kill switch. Manual Yahoo authorization and refresh remain available
-   * when this is false; true is rejected unless the server-held Yahoo credential path is complete.
+   * when this is false, provided the shared Yahoo release gate is available. True is rejected unless
+   * the server-held Yahoo credential path is complete and the release gate is open.
    */
   YAHOO_AUTOMATED_SYNC_ENABLED: booleanFlag,
   /**
@@ -264,6 +271,7 @@ export function loadEnvironment(
   }
 
   const yahooWasRequested = Boolean(parsed.data.YAHOO_CLIENT_ID || parsed.data.YAHOO_CLIENT_SECRET);
+  const yahooAccessAvailable = parsed.data.NEXT_PUBLIC_YAHOO_ACCESS_STATUS === "available";
   if (
     yahooWasRequested &&
     (!parsed.data.YAHOO_CLIENT_ID ||
@@ -275,12 +283,25 @@ export function loadEnvironment(
     );
   }
   if (
-    parsed.data.YAHOO_AUTOMATED_SYNC_ENABLED &&
+    yahooAccessAvailable &&
     (!parsed.data.YAHOO_CLIENT_ID ||
       !parsed.data.YAHOO_CLIENT_SECRET ||
       !parsed.data.CREDENTIAL_ENCRYPTION_KEY)
   ) {
-    throw new Error("YAHOO_AUTOMATED_SYNC_ENABLED requires complete Yahoo server configuration");
+    throw new Error(
+      "NEXT_PUBLIC_YAHOO_ACCESS_STATUS=available requires complete Yahoo server configuration",
+    );
+  }
+  if (
+    parsed.data.YAHOO_AUTOMATED_SYNC_ENABLED &&
+    (!yahooAccessAvailable ||
+      !parsed.data.YAHOO_CLIENT_ID ||
+      !parsed.data.YAHOO_CLIENT_SECRET ||
+      !parsed.data.CREDENTIAL_ENCRYPTION_KEY)
+  ) {
+    throw new Error(
+      "YAHOO_AUTOMATED_SYNC_ENABLED requires Yahoo access to be available with complete server configuration",
+    );
   }
   if (parsed.data.ESPN_SERVER_SESSION_SYNC_ENABLED && !parsed.data.CREDENTIAL_ENCRYPTION_KEY) {
     throw new Error("ESPN_SERVER_SESSION_SYNC_ENABLED requires CREDENTIAL_ENCRYPTION_KEY");

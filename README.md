@@ -151,7 +151,7 @@ settings are in [.env.example](./.env.example).
 | `SMTP_HOST` / `SMTP_USER` / `EMAIL_FROM`  | Account email: confirmation, password reset, nudge    |
 | `EMAIL_VERIFICATION_ENABLED`              | Confirm-first registration after SMTP validation      |
 | `YAHOO_CLIENT_ID` / `YAHOO_CLIENT_SECRET` | Yahoo OAuth when enabled                              |
-| `NEXT_PUBLIC_YAHOO_ACCESS_STATUS`         | Set to `available` when Yahoo OAuth is ready          |
+| `NEXT_PUBLIC_YAHOO_ACCESS_STATUS`         | Shared web/API Yahoo release gate; defaults `pending` |
 | `YAHOO_AUTOMATED_SYNC_ENABLED`            | Unattended Yahoo reads; defaults `false`              |
 | `ESPN_PUBLIC_DIRECT_SYNC_ENABLED`         | Evidence-gated anonymous ESPN reads; defaults `false` |
 | `ESPN_SERVER_SESSION_SYNC_ENABLED`        | Opt-in encrypted ESPN session reads; defaults `false` |
