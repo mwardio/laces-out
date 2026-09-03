@@ -16,6 +16,20 @@ export interface ProjectionTimestampProvenance {
 }
 
 /**
+ * Managed first-party projections are freshly computed artifacts whose oldest
+ * historical input can be much older than the model run itself. Preserve that
+ * input timestamp in provenance, but judge the generated set's freshness from
+ * when the set was created. Imported/provider projections still use their
+ * verified source timestamp.
+ */
+export function projectionFreshnessObservedAt(
+  row: ProjectionTimestampRow,
+  provenance: ProjectionTimestampProvenance = projectionTimestampProvenance(row),
+): Date | null {
+  return row.source === "laces-out-first-party" ? row.createdAt : provenance.sourceObservedAt;
+}
+
+/**
  * `fetchedAt` historically meant import time for user CSV rows. Only schema-v2
  * rows that bind a valid source timestamp into metadata and the persisted
  * column may claim source freshness. Provider-managed sets retain their

@@ -130,6 +130,45 @@ describe("shared queue dispatch contract", () => {
     );
   });
 
+  it("accepts a refresh request id on an authenticated server-session sync", async () => {
+    const { boss, send } = sendHarness();
+
+    await enqueueLeagueSync(boss, {
+      mode: "connection",
+      connectionId: "connection-1",
+      leagueSeasonId: "league-1",
+      refreshRequestId: "refresh-1",
+      reason: "stale-on-view",
+    });
+
+    expect(send).toHaveBeenCalledWith(
+      queueNames.syncLeague,
+      expect.objectContaining({
+        connectionId: "connection-1",
+        refreshRequestId: "refresh-1",
+      }),
+      expect.objectContaining({
+        group: { id: "league-season:league-1" },
+        singletonKey: "league-sync:connection-1:league-1",
+      }),
+    );
+  });
+
+  it("keeps direct probes off authenticated connection jobs", () => {
+    const { boss, send } = sendHarness();
+
+    expect(() =>
+      enqueueLeagueSync(boss, {
+        mode: "connection",
+        connectionId: "connection-1",
+        leagueSeasonId: "league-1",
+        reason: "stale-on-view",
+        probe: false,
+      }),
+    ).toThrow("probe requires server-direct mode");
+    expect(send).not.toHaveBeenCalled();
+  });
+
   it("deduplicates automated Yahoo fallbacks per league even when selection changes connection", async () => {
     const { boss, send } = sendHarness();
 

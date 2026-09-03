@@ -2434,6 +2434,68 @@ const leagueOpponentMetricSchema = z
   })
   .strict();
 
+const leagueOpponentTeamProjectionSchema = z
+  .object({
+    projectedPoints: z.number().finite().nullable(),
+    starterCount: z.number().int().nonnegative(),
+    projectedStarterCount: z.number().int().nonnegative(),
+    rosterPlayerCount: z.number().int().nonnegative(),
+    projectedPlayerCount: z.number().int().nonnegative(),
+  })
+  .strict();
+
+const leagueOpponentPlayerProjectionSchema = z
+  .object({
+    playerId: z.string().uuid(),
+    name: z.string().min(1).max(200),
+    primaryPosition: z.string().min(1).max(20),
+    nflTeam: z.string().min(1).max(12).nullable(),
+    status: z.string().min(1).max(80).nullable(),
+    slotCode: z.string().min(1).max(40),
+    isStarter: z.boolean(),
+    projectedPoints: z.number().finite().nullable(),
+  })
+  .strict();
+
+const leagueOpponentPositionTeamSchema = z
+  .object({
+    status: z.enum(["available", "missing"]),
+    projectedPoints: z.number().finite().nullable(),
+    strengthPercentile: z.number().min(0).max(100).nullable(),
+    rank: z.number().int().positive().nullable(),
+    starterCount: z.number().int().positive(),
+    rosterPlayerCount: z.number().int().nonnegative(),
+    projectedPlayerCount: z.number().int().nonnegative(),
+  })
+  .strict();
+
+const leagueOpponentPositionBreakdownSchema = z
+  .object({
+    position: z.enum(NFL_POSITIONS),
+    leagueMean: z.number().finite().nullable(),
+    subject: leagueOpponentPositionTeamSchema,
+    opponent: leagueOpponentPositionTeamSchema,
+    edgeOwner: z.enum(["subject", "opponent", "even", "unknown"]),
+  })
+  .strict();
+
+const leagueOpponentMatchupSchema = z
+  .object({
+    id: z.string().min(1).max(200),
+    matchupStatus: z.enum(["scheduled", "in-progress", "final"]),
+    subject: leagueAnalyticsTeamSchema,
+    opponent: leagueAnalyticsTeamSchema,
+    subjectProjection: leagueOpponentTeamProjectionSchema,
+    opponentProjection: leagueOpponentTeamProjectionSchema,
+    subjectPlayers: z.array(leagueOpponentPlayerProjectionSchema).max(64),
+    opponentPlayers: z.array(leagueOpponentPlayerProjectionSchema).max(64),
+    positionalBreakdown: z.array(leagueOpponentPositionBreakdownSchema).max(10),
+    metrics: z.array(leagueOpponentMetricSchema).max(12),
+    subjectAdvantages: z.array(z.string().min(1).max(80)).max(12),
+    opponentAdvantages: z.array(z.string().min(1).max(80)).max(12),
+  })
+  .strict();
+
 export const leagueOpponentScoutSectionSchema = z.discriminatedUnion("state", [
   leagueAnalyticsUnavailableSectionSchema,
   z
@@ -2446,6 +2508,8 @@ export const leagueOpponentScoutSectionSchema = z.discriminatedUnion("state", [
       metrics: z.array(leagueOpponentMetricSchema).max(12),
       subjectAdvantages: z.array(z.string().min(1).max(80)).max(12),
       opponentAdvantages: z.array(z.string().min(1).max(80)).max(12),
+      defaultMatchupId: z.string().min(1).max(200),
+      matchups: z.array(leagueOpponentMatchupSchema).min(1).max(16),
       definition: z.string().min(1).max(1_000),
     })
     .strict(),

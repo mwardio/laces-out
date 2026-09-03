@@ -36,6 +36,10 @@ import { leagueIsUnclaimed, providerMappedTeamState, resolvedMemberTeam } from "
 import { useDefaultLeague } from "../lib/use-default-league";
 import { AiCoachPanel } from "./ai-coach-panel";
 import { ChangeFeedPanel } from "./change-feed-panel";
+import {
+  providerForSelectedLeague,
+  useFantasyProviderAttribution,
+} from "./fantasy-provider-attribution";
 import { PortfolioDashboard } from "./portfolio-dashboard";
 import { TeamAvatar } from "./team-avatar";
 import { TourBanner } from "./tour-banner";
@@ -317,6 +321,7 @@ function LivePortfolio({ portfolio, reloadPortfolio }: LivePortfolioProps) {
     status: "idle",
   });
   const selectedSummary = portfolio.leagues.find((league) => league.id === selectedLeagueId);
+  useFantasyProviderAttribution(providerForSelectedLeague(portfolio.leagues, selectedLeagueId));
   const selectedEspnSeason =
     selectedSummary?.season?.provider === "espn" ? selectedSummary.season : null;
 

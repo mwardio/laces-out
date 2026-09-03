@@ -6,7 +6,7 @@
     <team>
       <team_key>449.l.12345.t.1</team_key><team_id>1</team_id><name>North Stars</name>
       <team_abbr>NTH</team_abbr><is_owned_by_current_login>1</is_owned_by_current_login>
-      <managers><manager><manager_id>1001</manager_id><nickname>Sanitized Manager</nickname><is_commissioner>1</is_commissioner></manager></managers>
+      <managers><manager><manager_id>1001</manager_id><nickname>Sanitized Manager</nickname><is_current_login>1</is_current_login><is_commissioner>1</is_commissioner></manager></managers>
     </team>
     <team>
       <team_key>449.l.12345.t.2</team_key><team_id>2</team_id><name>South Stars</name>

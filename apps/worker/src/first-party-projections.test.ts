@@ -17,6 +17,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildFirstPartyLeaguePublications,
   canonicalProjectionPlayerId,
+  effectiveFirstPartyProjectionPositions,
   firstPartyAvailableProjectionComponents,
   firstPartyDefensePlayerId,
   firstPartyStatusForKickoff,
@@ -558,7 +559,30 @@ describe("first-party projection publication policy", () => {
     expect(bears).toBe(firstPartyDefensePlayerId(" CHI "));
     expect(bears).toMatch(/^[a-f0-9]{8}-[a-f0-9]{4}-8[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/u);
     expect(bears).not.toBe(firstPartyDefensePlayerId("GB"));
+    expect(firstPartyDefensePlayerId("LA")).toBe(firstPartyDefensePlayerId("LAR"));
     expect(() => firstPartyDefensePlayerId("Chicago")).toThrow(/team code/u);
+  });
+
+  it("uses unambiguous current weekly-roster roles for two-way fantasy players", () => {
+    const positions = effectiveFirstPartyProjectionPositions(
+      [
+        { id: "hunter", primaryPosition: "CB" },
+        { id: "ordinary", primaryPosition: "RB" },
+        { id: "conflict", primaryPosition: "TE" },
+      ],
+      [
+        { playerId: "hunter", season: 2025, week: 18, position: "CB" },
+        { playerId: "hunter", season: 2026, week: 1, position: "WR" },
+        { playerId: "hunter", season: 2026, week: 1, position: "WR" },
+        { playerId: "conflict", season: 2026, week: 1, position: "WR" },
+        { playerId: "conflict", season: 2026, week: 1, position: "TE" },
+      ],
+      2026,
+    );
+
+    expect(positions.get("hunter")).toBe("WR");
+    expect(positions.get("ordinary")).toBe("RB");
+    expect(positions.get("conflict")).toBe("TE");
   });
 });
 
@@ -1237,6 +1261,19 @@ describe("published backtest MAE reflects only the league's supported positions"
  * for any league that rosters a kicker — these tests exist to make that mutation fail.
  */
 describe("weekly league publication against a rostered league", () => {
+  it("accepts a rostered two-way player when a supported projection exists for that identity", () => {
+    const plan = planPublications({
+      rules: GARAGELY_SHAPED_RULES,
+      rosters: FULL_ROSTER.map((entry) =>
+        entry.playerId === "player-wr" ? { ...entry, primaryPosition: "CB" } : entry,
+      ),
+    });
+
+    expect(plan.publications).toHaveLength(1);
+    expect(plan.publications[0]?.rows.map((row) => row.playerId)).toContain("player-wr");
+    expect(plan.withheld.some((entry) => entry.scope === "league")).toBe(false);
+  });
+
   it("keeps publishing when a rostered position is withheld, instead of reporting a roster gap", () => {
     const plan = planPublications({
       rules: GARAGELY_SHAPED_RULES,

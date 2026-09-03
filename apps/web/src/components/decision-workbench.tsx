@@ -12,7 +12,6 @@ import {
   BrainCircuit,
   CheckCircle2,
   ClipboardCheck,
-  Clock3,
   Database,
   Gauge,
   LoaderCircle,
@@ -42,6 +41,10 @@ import {
   demoLeaguePortfolio,
 } from "../lib/demo-contract-data";
 import { AiCoachPanel } from "./ai-coach-panel";
+import {
+  providerForSelectedLeague,
+  useFantasyProviderAttribution,
+} from "./fantasy-provider-attribution";
 import { TeamClaimCallout } from "./team-claim-callout";
 import { TourBanner } from "./tour-banner";
 import styles from "./decision-workbench.module.css";
@@ -858,6 +861,11 @@ export function DecisionWorkbench() {
   const decisionRequest = useRef<AbortController | null>(null);
   const dashboardRequest = useRef<AbortController | null>(null);
   const { defaultLeagueId, loaded: preferenceLoaded } = useDefaultLeague();
+  useFantasyProviderAttribution(
+    portfolio.state === "ready"
+      ? providerForSelectedLeague(portfolio.portfolio.leagues, selectedLeagueId)
+      : null,
+  );
 
   useEffect(() => {
     // Wait for the stored default so the first league read is the one the member wants.
@@ -1116,17 +1124,6 @@ export function DecisionWorkbench() {
           <DecisionQuickBoard snapshot={snapshot} />
 
           <section className={styles.provenance} aria-label="Recommendation provenance">
-            <div>
-              <Clock3 size={16} aria-hidden="true" />
-              <span>
-                <small>Projection source</small>
-                <strong>
-                  {snapshot.provenance.projectionSet
-                    ? `${snapshot.provenance.projectionSet.source} · ${snapshot.provenance.projectionSet.version}`
-                    : "No compatible set"}
-                </strong>
-              </span>
-            </div>
             <div>
               <Gauge size={16} aria-hidden="true" />
               <span>

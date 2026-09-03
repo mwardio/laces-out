@@ -107,9 +107,11 @@ efficiency, matchup, and trade metrics, with bounded drill-downs—not a single 
 dump. Every Yahoo-backed surface must include the portal's current required “Fantasy data provided
 by Yahoo Fantasy” attribution, link, and unmodified official logo treatment.
 
-The authenticated Laces Out app shell implements that treatment globally. Its checked-in mark is
-the official `Yahoo_Fantasy.svg` asset published by Yahoo's Fantasy API portal; it is not a traced,
-redrawn, or generated substitute.
+The authenticated Laces Out app shell implements that treatment whenever the workspace's active
+league is Yahoo-backed. It follows in-place league selection changes and stays hidden for ESPN,
+manual, mixed-list, and provider-independent views. Its checked-in mark is the official
+`Yahoo_Fantasy.svg` asset published by Yahoo's Fantasy API portal; it is not a traced, redrawn, or
+generated substitute.
 
 Yahoo's executed access agreement may add or supersede published requirements. Before enabling
 Yahoo on a deployment, recheck that agreement, confirm retention and multi-user display rules,
@@ -137,7 +139,8 @@ gates are recorded. This is an engineering release condition, not legal advice.
    fixtures and run authenticated contract tests before enabling real league sync or draft
    polling. In particular, verify the `draftresults` auction cost fields and the chained
    league-team-roster path against the approved application.
-7. Verify the globally rendered Yahoo attribution and official mark remain present after any shell
+7. Verify the Yahoo attribution and official mark remain present on every Yahoo-backed workspace,
+   follow the active league when it changes, and remain hidden on non-Yahoo views after any shell
    or navigation redesign.
 
 ## Implemented read-sync lifecycle
@@ -172,9 +175,15 @@ gates are recorded. This is an engineering release condition, not legal advice.
 - Automated jobs use the same serialized `league-sync` queue, token-rotation lock, circuit breaker,
   parser, and atomic persistence as manual refresh. Disabling automation does not disable OAuth or
   either manual Yahoo refresh endpoint.
+- Discovery defers a newly created league until Yahoo reports at least two joined teams, without
+  blocking the member's playable leagues. A wholly unranked, scoreless preseason standings table
+  is omitted rather than assigned invented ranks, and Yahoo's `0.00` scheduled-score placeholders
+  are stored as unscored matchups.
 - Yahoo team claims are provider-mapped, not self-asserted. The claim endpoint checks the
   authenticated user's own connection-to-league link and accepts only its exact, unambiguous
   current-user team key. It cannot use another member's connection or claim a different team.
+- Yahoo commissioner authority is accepted only from the manager Yahoo marks as the current login;
+  a commissioner co-managing the same team cannot grant that authority to another manager.
 - An unclaimed membership is automatically bound to that exact team after a successful sync when
   the mapping is unambiguous and the team is free. Existing historical claims are never replaced;
   a uniqueness conflict leaves the official read sync successful and the claim unavailable for

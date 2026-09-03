@@ -31,6 +31,10 @@ import { DEMO_LEAGUE_ID } from "../lib/demo-contract-data";
 import { AiAnswerContent } from "./ai-answer-content";
 import { AiCoachPanel } from "./ai-coach-panel";
 import { AiProviderPicker } from "./ai-provider-picker";
+import {
+  providerForSelectedLeague,
+  useFantasyProviderAttribution,
+} from "./fantasy-provider-attribution";
 import styles from "./film-room-workbench.module.css";
 import { TourBanner } from "./tour-banner";
 
@@ -252,6 +256,11 @@ export function FilmRoomWorkbench() {
   const [question, setQuestion] = useState<string>(QUICK_QUESTIONS[0]);
   const [analysisAction, setAnalysisAction] = useState<ActionState>({ state: "idle" });
   const [analysis, setAnalysis] = useState<AiAnalysisResponse | null>(null);
+  useFantasyProviderAttribution(
+    load.state === "ready"
+      ? providerForSelectedLeague(load.leagues.leagues, selectedLeagueId)
+      : null,
+  );
 
   const loadData = useCallback(async () => {
     setLoad({ state: "loading" });

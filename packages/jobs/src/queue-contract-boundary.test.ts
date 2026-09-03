@@ -29,6 +29,7 @@ const queueConfigurationKeys = [
   "deleteAfterSeconds",
   "deadLetter",
   "warningQueueSize",
+  "heartbeatSeconds",
 ] as const;
 
 /** pg-boss `SendOptions` serialization keys. Any of these in an app is a second singleton key. */

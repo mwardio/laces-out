@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import { projectionTimestampProvenance } from "./projection-provenance.js";
+import {
+  projectionFreshnessObservedAt,
+  projectionTimestampProvenance,
+} from "./projection-provenance.js";
 
 const SOURCE_TIME = new Date("2026-09-15T10:00:00.000Z");
 const IMPORT_TIME = new Date("2026-09-15T11:00:00.000Z");
@@ -66,5 +69,31 @@ describe("projectionTimestampProvenance", () => {
       sourceObservedAtStatus: "verified",
       importedAt: IMPORT_TIME,
     });
+  });
+
+  it("judges first-party model freshness from generation time without hiding input provenance", () => {
+    const oldInputTime = new Date("2026-08-17T15:53:54.229Z");
+    const generatedAt = new Date("2026-09-02T23:09:12.814Z");
+    const row = {
+      source: "laces-out-first-party",
+      fetchedAt: oldInputTime,
+      createdAt: generatedAt,
+      metadata: { sourceAsOf: oldInputTime.toISOString() },
+    };
+    const provenance = projectionTimestampProvenance(row);
+
+    expect(provenance.sourceObservedAt).toEqual(oldInputTime);
+    expect(projectionFreshnessObservedAt(row, provenance)).toEqual(generatedAt);
+  });
+
+  it("continues to judge imported projections from verified source time", () => {
+    const row = {
+      source: "trusted-weekly-model",
+      fetchedAt: SOURCE_TIME,
+      createdAt: IMPORT_TIME,
+      metadata: {},
+    };
+
+    expect(projectionFreshnessObservedAt(row)).toEqual(SOURCE_TIME);
   });
 });

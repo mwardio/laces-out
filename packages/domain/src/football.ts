@@ -39,6 +39,15 @@ export const NFL_TEAMS = [
 
 export type NflTeam = (typeof NFL_TEAMS)[number];
 
+/**
+ * Converts source/provider aliases into the team-code vocabulary used by Laces Out contracts.
+ * nflverse still emits `LA` for the Rams while fantasy providers use `LAR`.
+ */
+export function canonicalNflTeamCode(team: string): string {
+  const normalized = team.trim().toUpperCase();
+  return normalized === "LA" ? "LAR" : normalized;
+}
+
 export const PLAYER_STATUSES = [
   "ACTIVE",
   "QUESTIONABLE",

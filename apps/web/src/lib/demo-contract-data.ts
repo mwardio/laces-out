@@ -266,6 +266,108 @@ const positionalPercentiles = [
   [71, 38, 49, 89],
 ] as const;
 
+const demoOpponentMetrics = [
+  {
+    id: "projected-lineup-points",
+    label: "Projected lineup",
+    definition: "Sum of sample current-starter projections.",
+    unit: "pts",
+    subjectValue: 44.5,
+    opponentValue: 41.7,
+    leagueAverage: 43.1,
+    subjectAdvantage: 2.8,
+    edgeOwner: "subject" as const,
+  },
+  {
+    id: "season-average",
+    label: "Season average",
+    definition: "Official sample points per scoring week.",
+    unit: "pts",
+    subjectValue: 125.7,
+    opponentValue: 120.2,
+    leagueAverage: 116.4,
+    subjectAdvantage: 5.5,
+    edgeOwner: "subject" as const,
+  },
+  {
+    id: "power-score",
+    label: "Power score",
+    definition: "Availability-weighted composite on a 0–100 scale.",
+    unit: null,
+    subjectValue: 88.7,
+    opponentValue: 78.3,
+    leagueAverage: 75.4,
+    subjectAdvantage: 10.4,
+    edgeOwner: "subject" as const,
+  },
+] as const;
+
+const demoSubjectPlayers = [
+  {
+    playerId: "74000000-0000-4000-8000-000000000001",
+    name: "Lamar Jackson",
+    primaryPosition: "QB",
+    nflTeam: "BAL",
+    status: "ACTIVE",
+    slotCode: "QB",
+    isStarter: true,
+    projectedPoints: 24.8,
+  },
+  {
+    playerId: "74000000-0000-4000-8000-000000000002",
+    name: "Bijan Robinson",
+    primaryPosition: "RB",
+    nflTeam: "ATL",
+    status: "ACTIVE",
+    slotCode: "RB",
+    isStarter: true,
+    projectedPoints: 19.7,
+  },
+  {
+    playerId: "74000000-0000-4000-8000-000000000003",
+    name: "Bench Sample",
+    primaryPosition: "WR",
+    nflTeam: "DET",
+    status: "ACTIVE",
+    slotCode: "BN",
+    isStarter: false,
+    projectedPoints: 10.2,
+  },
+] as const;
+
+const demoOpponentPlayers = [
+  {
+    playerId: "74000000-0000-4000-8000-000000000004",
+    name: "Josh Allen",
+    primaryPosition: "QB",
+    nflTeam: "BUF",
+    status: "ACTIVE",
+    slotCode: "QB",
+    isStarter: true,
+    projectedPoints: 23.9,
+  },
+  {
+    playerId: "74000000-0000-4000-8000-000000000005",
+    name: "Breece Hall",
+    primaryPosition: "RB",
+    nflTeam: "NYJ",
+    status: "ACTIVE",
+    slotCode: "RB",
+    isStarter: true,
+    projectedPoints: 17.8,
+  },
+  {
+    playerId: "74000000-0000-4000-8000-000000000006",
+    name: "Bench Example",
+    primaryPosition: "TE",
+    nflTeam: "KC",
+    status: "ACTIVE",
+    slotCode: "BN",
+    isStarter: false,
+    projectedPoints: 9.6,
+  },
+] as const;
+
 export const demoAnalyticsSnapshot: LeagueAnalyticsSnapshot = {
   generatedAt: GENERATED_AT,
   league: {
@@ -421,43 +523,78 @@ export const demoAnalyticsSnapshot: LeagueAnalyticsSnapshot = {
     matchupStatus: "scheduled",
     subject: analyticsTeams[0],
     opponent: analyticsTeams[1],
-    metrics: [
-      {
-        id: "projected-starters",
-        label: "Projected starters",
-        definition: "Sum of sample optimal-starter projections.",
-        unit: "pts",
-        subjectValue: 115.4,
-        opponentValue: 111.2,
-        leagueAverage: 109.8,
-        subjectAdvantage: 4.2,
-        edgeOwner: "subject",
-      },
-      {
-        id: "season-average",
-        label: "Season average",
-        definition: "Official sample points per scoring week.",
-        unit: "pts",
-        subjectValue: 125.7,
-        opponentValue: 120.2,
-        leagueAverage: 116.4,
-        subjectAdvantage: 5.5,
-        edgeOwner: "subject",
-      },
-      {
-        id: "power-score",
-        label: "Power score",
-        definition: "Availability-weighted composite on a 0–100 scale.",
-        unit: null,
-        subjectValue: 88.7,
-        opponentValue: 78.3,
-        leagueAverage: 75.4,
-        subjectAdvantage: 10.4,
-        edgeOwner: "subject",
-      },
-    ],
+    metrics: [...demoOpponentMetrics],
     subjectAdvantages: ["QB", "RB", "projection coverage"],
     opponentAdvantages: ["WR depth"],
+    defaultMatchupId: "week-6-game-1",
+    matchups: [
+      {
+        id: "week-6-game-1",
+        matchupStatus: "scheduled",
+        subject: analyticsTeams[0],
+        opponent: analyticsTeams[1],
+        subjectProjection: {
+          projectedPoints: 44.5,
+          starterCount: 2,
+          projectedStarterCount: 2,
+          rosterPlayerCount: 3,
+          projectedPlayerCount: 3,
+        },
+        opponentProjection: {
+          projectedPoints: 41.7,
+          starterCount: 2,
+          projectedStarterCount: 2,
+          rosterPlayerCount: 3,
+          projectedPlayerCount: 3,
+        },
+        subjectPlayers: [...demoSubjectPlayers],
+        opponentPlayers: [...demoOpponentPlayers],
+        positionalBreakdown: positions.map((position, positionIndex) => {
+          const subjectPercentile: number = positionalPercentiles[0][positionIndex]!;
+          const opponentPercentile: number = positionalPercentiles[1][positionIndex]!;
+          const starterCount = position === "RB" || position === "WR" ? 2 : 1;
+          return {
+            position,
+            leagueMean: 18,
+            subject: {
+              status: "available" as const,
+              projectedPoints: 20 - positionIndex * 2,
+              strengthPercentile: subjectPercentile,
+              rank:
+                [...positionalPercentiles]
+                  .map((values): number => values[positionIndex]!)
+                  .sort((left, right) => right - left)
+                  .indexOf(subjectPercentile) + 1,
+              starterCount,
+              rosterPlayerCount: starterCount * 2,
+              projectedPlayerCount: starterCount * 2,
+            },
+            opponent: {
+              status: "available" as const,
+              projectedPoints: 21 - positionIndex * 2,
+              strengthPercentile: opponentPercentile,
+              rank:
+                [...positionalPercentiles]
+                  .map((values): number => values[positionIndex]!)
+                  .sort((left, right) => right - left)
+                  .indexOf(opponentPercentile) + 1,
+              starterCount,
+              rosterPlayerCount: starterCount * 2,
+              projectedPlayerCount: starterCount * 2,
+            },
+            edgeOwner:
+              subjectPercentile === opponentPercentile
+                ? ("even" as const)
+                : subjectPercentile > opponentPercentile
+                  ? ("subject" as const)
+                  : ("opponent" as const),
+          };
+        }),
+        metrics: [...demoOpponentMetrics],
+        subjectAdvantages: ["QB", "RB", "projection coverage"],
+        opponentAdvantages: ["WR depth"],
+      },
+    ],
     definition: "Tour matchup metrics use illustrative league and projection snapshots.",
   },
   weeklyAwards: {

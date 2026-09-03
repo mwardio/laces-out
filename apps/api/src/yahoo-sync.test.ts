@@ -1,6 +1,10 @@
 import { readFileSync } from "node:fs";
 
-import { YahooReadClientError, type YahooXmlArtifact } from "@laces-out/connector-yahoo";
+import {
+  YahooReadClientError,
+  YahooXmlError,
+  type YahooXmlArtifact,
+} from "@laces-out/connector-yahoo";
 import type { LeagueSyncBundle } from "@laces-out/connectors";
 import { describe, expect, it, vi } from "vitest";
 
@@ -72,6 +76,7 @@ function repository(overrides: Partial<YahooSyncRepository> = {}): YahooSyncRepo
     clearLeagueExclusions: () => Promise.resolve(),
     persistBundle: (_userId, _connectionId, bundle) => Promise.resolve(receipt(bundle)),
     markFailure: () => Promise.resolve(),
+    markDiscoverySuccess: () => Promise.resolve(),
     ...overrides,
   };
 }
@@ -239,6 +244,45 @@ describe("YahooSyncService", () => {
     ).resolves.toMatchObject({ syncs: [{ externalLeagueKey: "449.l.12345" }] });
     expect(clearLeagueExclusions).toHaveBeenCalledWith(USER_ID);
     expect(persistBundle).toHaveBeenCalledTimes(1);
+  });
+
+  it("syncs playable leagues while leaving a one-team Yahoo league for later discovery", async () => {
+    const twoLeagues = fixture("sanitized-user-leagues-page-1.xml").replace(
+      "</leagues>",
+      `<league><league_key>449.l.67890</league_key><league_id>67890</league_id><name>Not Ready Yet</name><season>2026</season></league></leagues>`,
+    );
+    const baseClient = readPort();
+    const persistBundle = vi.fn(
+      (_userId: string, _connectionId: string, bundle: LeagueSyncBundle) =>
+        Promise.resolve(receipt(bundle)),
+    );
+    const markFailure = vi.fn(() => Promise.resolve());
+    const markDiscoverySuccess = vi.fn(() => Promise.resolve());
+    const service = new YahooSyncService({
+      repository: repository({ persistBundle, markFailure, markDiscoverySuccess }),
+      tokens: tokens(),
+      client: readPort({
+        getUserLeagues: () => Promise.resolve(artifact(twoLeagues)),
+        getLeagueTeams: (request, leagueKey) =>
+          leagueKey === "449.l.67890"
+            ? Promise.reject(
+                new YahooXmlError(
+                  "LEAGUE_NOT_READY",
+                  "Yahoo league is not ready to sync until another team joins",
+                ),
+              )
+            : baseClient.getLeagueTeams(request, leagueKey),
+      }),
+      now: () => NOW,
+    });
+
+    await expect(service.discoverAndSync(USER_ID, CONNECTION_ID)).resolves.toMatchObject({
+      discovered: [{ externalId: "449.l.12345" }, { externalId: "449.l.67890" }],
+      syncs: [{ externalLeagueKey: "449.l.12345" }],
+    });
+    expect(persistBundle).toHaveBeenCalledTimes(1);
+    expect(markFailure).not.toHaveBeenCalled();
+    expect(markDiscoverySuccess).toHaveBeenCalledWith(USER_ID, CONNECTION_ID, NOW);
   });
 
   it("rejects an explicit sync for a removed league without touching Yahoo or connection health", async () => {

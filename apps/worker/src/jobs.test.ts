@@ -16,7 +16,10 @@ import {
   registerSchedules,
   registerWorkers,
   DAILY_PROJECTION_REFRESH_SINGLETON_SECONDS,
+  SEASON_PROJECTION_REFRESH_HEARTBEAT_SECONDS,
   SEASON_PROJECTION_REFRESH_EXPIRE_SECONDS,
+  WEEKLY_PROJECTION_REFRESH_HEARTBEAT_SECONDS,
+  WEEKLY_PROJECTION_REFRESH_EXPIRE_SECONDS,
   type DataHealthJob,
   type DataRefreshJob,
   type LeagueSyncJob,
@@ -90,12 +93,14 @@ describe("worker queue reliability", () => {
         refreshProjections: {
           retryLimit: 4,
           retryDelayMax: 1_800,
-          expireInSeconds: SEASON_PROJECTION_REFRESH_EXPIRE_SECONDS,
+          expireInSeconds: WEEKLY_PROJECTION_REFRESH_EXPIRE_SECONDS,
+          heartbeatSeconds: WEEKLY_PROJECTION_REFRESH_HEARTBEAT_SECONDS,
         },
         refreshRosProjections: {
           retryLimit: 4,
           retryDelayMax: 1_800,
           expireInSeconds: SEASON_PROJECTION_REFRESH_EXPIRE_SECONDS,
+          heartbeatSeconds: SEASON_PROJECTION_REFRESH_HEARTBEAT_SECONDS,
         },
         recomputeRecommendations: { retryLimit: 3, retryDelayMax: 300, expireInSeconds: 900 },
         dataHealth: { retryLimit: 2, retryDelayMax: 300, expireInSeconds: 300 },
@@ -112,6 +117,11 @@ describe("worker queue reliability", () => {
           retryDelayMax: limits.retryDelayMax,
           expireInSeconds: limits.expireInSeconds,
           deadLetter: deadLetterQueueNames[key as keyof typeof deadLetterQueueNames],
+          ...(key === "refreshProjections"
+            ? { heartbeatSeconds: WEEKLY_PROJECTION_REFRESH_HEARTBEAT_SECONDS }
+            : key === "refreshRosProjections"
+              ? { heartbeatSeconds: SEASON_PROJECTION_REFRESH_HEARTBEAT_SECONDS }
+              : {}),
         }),
       );
       expect(updateQueue).toHaveBeenCalledWith(

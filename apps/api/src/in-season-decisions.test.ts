@@ -332,6 +332,83 @@ describe("InSeasonDecisionService", () => {
     }
   });
 
+  it.each([
+    { provider: "espn" as const, defenseCode: "D/ST" },
+    { provider: "yahoo" as const, defenseCode: "DEF" },
+  ])(
+    "maps $provider provider reserve and defense slot labels",
+    async ({ provider, defenseCode }) => {
+      const repository = new FakeRepository();
+      const defensePlayerId = "70000000-0000-4000-8000-000000000008";
+      repository.season = {
+        ...season,
+        provider,
+        externalKey: provider === "yahoo" ? "470.l.123" : season.externalKey,
+      };
+      repository.slotRules = [
+        ...slotRules.map((rule) =>
+          rule.slotCode === "BN" ? { ...rule, eligiblePositions: ["BN"] } : rule,
+        ),
+        {
+          id: "80000000-0000-4000-8000-000000000004",
+          slotCode: defenseCode,
+          count: 1,
+          eligiblePositions: [defenseCode],
+          isStarter: true,
+        },
+        {
+          id: "80000000-0000-4000-8000-000000000005",
+          slotCode: "IR",
+          count: 1,
+          eligiblePositions: ["IR"],
+          isStarter: false,
+        },
+      ];
+      repository.rosterRows = [
+        ...rosterRows,
+        {
+          snapshotId: SNAPSHOT_A_ID,
+          playerId: defensePlayerId,
+          name: "Miami D/ST",
+          primaryPosition: defenseCode,
+          eligiblePositions: [defenseCode, "BN", "IR"],
+          nflTeam: "MIA",
+          status: "ACTIVE",
+          slotCode: defenseCode,
+          isStarter: true,
+          locked: false,
+        },
+      ];
+      repository.projectionRows = [
+        ...projectionRows,
+        {
+          playerId: defensePlayerId,
+          name: "Miami D/ST",
+          primaryPosition: defenseCode,
+          eligiblePositions: [defenseCode],
+          nflTeam: "MIA",
+          status: "ACTIVE",
+          meanPoints: "8",
+          floorPoints: "3",
+          ceilingPoints: "14",
+        },
+      ];
+
+      const snapshot = await new InSeasonDecisionService(repository, () => NOW).getSnapshot(
+        USER_ID,
+        LEAGUE_ID,
+      );
+
+      expect(snapshot?.lineup.state).toBe("available");
+      expect(snapshot?.waivers.state).toBe("available");
+      expect(snapshot?.trades.state).toBe("available");
+      expect(snapshot?.coverage).toMatchObject({
+        claimedRosterPlayers: 4,
+        claimedRosterProjected: 4,
+      });
+    },
+  );
+
   it("returns structured unavailability instead of using roster facts as projections", async () => {
     const repository = new FakeRepository();
     repository.projectionSets = [];
@@ -419,6 +496,36 @@ describe("InSeasonDecisionService", () => {
         "managed weekly projections are withheld",
       );
     }
+  });
+
+  it("reports a newly generated first-party set as fresh while retaining its older input time", async () => {
+    const repository = new FakeRepository();
+    const sourceObservedAt = new Date("2026-08-17T15:53:54.229Z");
+    repository.projectionSets = [
+      {
+        ...projectionSet,
+        source: "laces-out-first-party",
+        fetchedAt: sourceObservedAt,
+        createdAt: new Date("2026-09-15T11:00:00.000Z"),
+        metadata: { sourceAsOf: sourceObservedAt.toISOString() },
+      },
+    ];
+
+    const snapshot = await new InSeasonDecisionService(repository, () => NOW).getSnapshot(
+      USER_ID,
+      LEAGUE_ID,
+    );
+
+    expect(snapshot?.provenance.projectionSet).toMatchObject({
+      sourceObservedAt: sourceObservedAt.toISOString(),
+      sourceObservedAtStatus: "verified",
+      importedAt: "2026-09-15T11:00:00.000Z",
+    });
+    expect(snapshot?.provenance.projectionFreshness).toEqual({
+      state: "fresh",
+      observedAt: "2026-09-15T11:00:00.000Z",
+      label: "Updated 1h ago",
+    });
   });
 
   // Regression for review Finding 1: a compatible managed set that genuinely exists but loses

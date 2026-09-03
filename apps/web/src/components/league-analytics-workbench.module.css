@@ -105,9 +105,11 @@
 
   .controls select:focus-visible,
   .controls button:focus-visible,
+  .matchupPicker select:focus-visible,
   .gate a:focus-visible,
   .unavailable a:focus-visible,
   .provenance summary:focus-visible,
+  .projectionRoster summary:focus-visible,
   .definitions summary:focus-visible {
     outline: 3px solid var(--focus-ring-soft);
     outline-offset: 2px;
@@ -265,12 +267,12 @@
   }
 
   .powerPanel {
-    grid-column: 1;
-    grid-row: 1;
+    grid-column: 1 / -1;
+    grid-row: 2;
   }
 
   .opponentPanel {
-    grid-column: 2;
+    grid-column: 1 / -1;
     grid-row: 1;
   }
 
@@ -787,6 +789,14 @@
     margin-top: 3px;
   }
 
+  .profileCell span[data-direction="up"] {
+    color: #365d2d;
+  }
+
+  .profileCell span[data-direction="down"] {
+    color: #845044;
+  }
+
   .methodNote {
     padding: 12px 16px;
     color: var(--ink-500);
@@ -796,45 +806,141 @@
     line-height: 1.55;
   }
 
-  .matchupHeader {
+  .matchupPicker {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
-    gap: 15px;
-    align-items: end;
-    padding: 18px;
+    gap: var(--space-6);
+    padding: 13px 16px;
+    background: var(--paper-50);
     border-bottom: 1px solid var(--ink-100);
   }
 
-  .matchupHeader > div:last-child {
-    text-align: right;
-  }
-
-  .matchupHeader small,
-  .matchupHeader strong {
-    display: block;
-  }
-
-  .matchupHeader small {
-    color: var(--ink-500);
+  .matchupPicker label {
+    color: var(--ink-600);
     font-size: var(--text-9);
-    letter-spacing: 0.05em;
+    font-weight: 800;
+    letter-spacing: 0.07em;
     text-transform: uppercase;
   }
 
-  .matchupHeader strong {
+  .matchupPicker select {
+    width: 100%;
+    min-height: 40px;
+    padding: 0 34px 0 11px;
+    color: var(--ink-900);
+    background: var(--white);
+    border: 1px solid var(--ink-200);
+    border-radius: var(--radius-sm);
+    font-size: var(--text-12);
+  }
+
+  .matchupScoreboard {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+    gap: 18px;
+    align-items: stretch;
+    padding: 18px 16px;
+    border-bottom: 1px solid var(--ink-100);
+  }
+
+  .matchupScoreboard > article {
+    display: flex;
+    min-width: 0;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-16);
+  }
+
+  .matchupScoreboard > article:last-child {
+    text-align: right;
+  }
+
+  .scoutTeamIdentity {
+    display: flex;
+    min-width: 0;
+    align-items: center;
+    gap: var(--space-10);
+  }
+
+  .scoutTeamIdentity > span,
+  .scoutTeamIdentity small,
+  .scoutTeamIdentity strong,
+  .teamProjectionTotal small,
+  .teamProjectionTotal strong,
+  .teamProjectionTotal span {
+    display: block;
+    min-width: 0;
+  }
+
+  .scoutTeamIdentity small {
     overflow: hidden;
-    margin-top: 3px;
+    color: var(--ink-500);
+    font-size: var(--text-9);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .scoutTeamIdentity strong {
+    display: block;
+    overflow: hidden;
+    margin-top: 2px;
     color: var(--ink-950);
     font-size: var(--text-15);
     text-overflow: ellipsis;
     white-space: nowrap;
   }
 
-  .matchupHeader > span {
+  .teamProjectionTotal {
+    flex: 0 0 auto;
+    text-align: right;
+  }
+
+  .matchupScoreboard > article:last-child .teamProjectionTotal {
+    order: -1;
+    text-align: left;
+  }
+
+  .teamProjectionTotal small {
+    color: var(--ink-500);
+    font-size: var(--text-8);
+    font-weight: 750;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+  }
+
+  .teamProjectionTotal strong {
+    margin-top: 2px;
+    color: var(--ink-950);
+    font-size: var(--text-24);
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -0.03em;
+  }
+
+  .teamProjectionTotal span {
+    margin-top: 1px;
+    color: var(--ink-500);
+    font-size: var(--text-8);
+  }
+
+  .matchupVersus {
+    display: grid;
+    align-content: center;
+    justify-items: center;
     color: var(--ink-400);
-    font-size: var(--text-10);
+    text-align: center;
+  }
+
+  .matchupVersus strong {
+    color: var(--ink-400);
+    font-size: var(--text-12);
     font-weight: 800;
     text-transform: uppercase;
+  }
+
+  .matchupVersus span {
+    margin-top: 3px;
+    font-size: var(--text-8);
+    text-transform: capitalize;
+    white-space: nowrap;
   }
 
   .scoutMetrics {
@@ -843,7 +949,7 @@
 
   .scoutMetrics > div {
     display: grid;
-    grid-template-columns: minmax(110px, 1.3fr) 55px minmax(84px, 0.8fr) 55px;
+    grid-template-columns: minmax(110px, 1fr) 55px 106px 55px;
     gap: var(--space-8);
     align-items: center;
     padding: 10px 16px;
@@ -866,6 +972,7 @@
   }
 
   .metricEdge {
+    width: 100%;
     justify-self: center;
     padding: 4px 6px;
     color: var(--ink-500);
@@ -874,6 +981,7 @@
     border-radius: 999px;
     font-size: var(--text-8);
     font-weight: 750;
+    text-align: center;
     white-space: nowrap;
   }
 
@@ -887,6 +995,253 @@
     color: #845044;
     background: #f7ebe7;
     border-color: #ead4cd;
+  }
+
+  .scoutDetailSection {
+    border-top: 1px solid var(--ink-150);
+  }
+
+  .scoutDetailSection > header {
+    display: flex;
+    align-items: end;
+    justify-content: space-between;
+    gap: var(--space-16);
+    padding: 15px 16px 11px;
+    background: var(--paper-50);
+  }
+
+  .scoutDetailSection h3 {
+    color: var(--ink-950);
+    font-size: var(--text-14);
+    letter-spacing: -0.015em;
+  }
+
+  .scoutDetailSection header p {
+    margin-top: 3px;
+    color: var(--ink-500);
+    font-size: var(--text-9);
+  }
+
+  .scoutEmpty {
+    padding: 18px 16px;
+    color: var(--ink-500);
+    font-size: var(--text-11);
+  }
+
+  .positionComparison {
+    display: grid;
+  }
+
+  .positionComparisonHeader,
+  .positionComparisonRow {
+    display: grid;
+    grid-template-columns: 52px minmax(130px, 1fr) 72px minmax(130px, 1fr);
+    gap: var(--space-10);
+    align-items: center;
+    padding: 10px 16px;
+  }
+
+  .positionComparisonHeader {
+    color: var(--ink-500);
+    background: var(--white);
+    border-bottom: 1px solid var(--ink-150);
+    font-size: var(--text-8);
+    font-weight: 800;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+
+  .positionComparisonHeader > span:nth-child(n + 2),
+  .positionComparisonRow > span {
+    text-align: right;
+  }
+
+  .positionComparisonRow {
+    border-bottom: 1px solid var(--ink-100);
+    font-size: var(--text-10);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .positionComparisonRow:last-child {
+    border-bottom: 0;
+  }
+
+  .positionComparisonRow > strong {
+    color: var(--ink-800);
+  }
+
+  .positionComparisonRow > span:not(.positionLeagueMean) {
+    padding: 7px 9px;
+    border: 1px solid transparent;
+    border-radius: var(--radius-sm);
+  }
+
+  .positionComparisonRow > span[data-edge="winner"] {
+    color: #365d2d;
+    background: #eef5e9;
+    border-color: #dbe8d4;
+  }
+
+  .positionComparisonRow span strong,
+  .positionComparisonRow span small {
+    display: block;
+  }
+
+  .positionComparisonRow span strong {
+    color: var(--ink-950);
+  }
+
+  .positionComparisonRow span small {
+    margin-top: 2px;
+    color: var(--ink-500);
+    font-size: var(--text-8);
+  }
+
+  .positionLeagueMean {
+    color: var(--ink-500);
+    font-size: var(--text-9);
+  }
+
+  .projectionRosters {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: var(--space-12);
+    padding: 0 16px 16px;
+    background: var(--paper-50);
+  }
+
+  .projectionRoster {
+    overflow: hidden;
+    background: var(--white);
+    border: 1px solid var(--ink-150);
+    border-radius: var(--radius-sm);
+  }
+
+  .projectionRoster summary {
+    display: flex;
+    min-height: 58px;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-12);
+    padding: 10px 12px;
+    cursor: pointer;
+    list-style: none;
+  }
+
+  .projectionRoster summary::-webkit-details-marker {
+    display: none;
+  }
+
+  .projectionRoster summary > span,
+  .projectionRoster summary > span > strong,
+  .projectionRoster summary small {
+    display: block;
+    min-width: 0;
+  }
+
+  .projectionRoster summary > span {
+    overflow: hidden;
+  }
+
+  .projectionRoster summary > span > strong {
+    overflow: hidden;
+    color: var(--ink-950);
+    font-size: var(--text-12);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .projectionRoster summary small {
+    margin-top: 2px;
+    color: var(--ink-500);
+    font-size: var(--text-8);
+  }
+
+  .projectionRoster summary > .rosterSummaryTotal {
+    display: inline-flex;
+    flex: 0 0 auto;
+    align-items: center;
+    gap: var(--space-6);
+  }
+
+  .rosterSummaryTotal strong {
+    color: var(--ink-950);
+    font-size: var(--text-14);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .rosterSummaryTotal svg {
+    color: var(--ink-400);
+    transition: transform 160ms ease;
+  }
+
+  .projectionRoster[open] .rosterSummaryTotal svg {
+    transform: rotate(180deg);
+  }
+
+  .projectionRosterBody {
+    border-top: 1px solid var(--ink-150);
+  }
+
+  .projectionRosterBody > p {
+    padding: 16px 12px;
+    color: var(--ink-500);
+    font-size: var(--text-10);
+  }
+
+  .projectionRosterBody section + section {
+    border-top: 1px solid var(--ink-150);
+  }
+
+  .projectionRosterBody h4 {
+    padding: 7px 10px;
+    color: var(--ink-500);
+    background: var(--paper-50);
+    font-size: var(--text-8);
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
+  }
+
+  .projectionRosterBody li {
+    display: flex;
+    min-width: 0;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-10);
+    padding: 8px 10px;
+    border-top: 1px solid var(--ink-100);
+  }
+
+  .projectionRosterBody li > span,
+  .projectionRosterBody li strong,
+  .projectionRosterBody li small {
+    display: block;
+    min-width: 0;
+  }
+
+  .projectionRosterBody li > span {
+    overflow: hidden;
+  }
+
+  .projectionRosterBody li > span > strong {
+    overflow: hidden;
+    color: var(--ink-900);
+    font-size: var(--text-10);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .projectionRosterBody li small {
+    margin-top: 2px;
+    color: var(--ink-500);
+    font-size: var(--text-8);
+  }
+
+  .playerProjection {
+    flex: 0 0 auto;
+    color: var(--ink-950);
+    font-size: var(--text-11);
+    font-variant-numeric: tabular-nums;
   }
 
   .unavailable {
@@ -1221,7 +1576,72 @@
     }
 
     .scoutMetrics > div {
-      grid-template-columns: minmax(92px, 1fr) 48px 74px 48px;
+      grid-template-columns: minmax(0, 1fr) 42px 94px 42px;
+      gap: var(--space-6);
+      padding-inline: 12px;
+    }
+
+    .matchupPicker {
+      padding-inline: 12px;
+    }
+
+    .matchupScoreboard {
+      gap: var(--space-6);
+      padding: 14px 12px;
+    }
+
+    .matchupScoreboard > article {
+      display: grid;
+      align-content: start;
+      gap: var(--space-8);
+    }
+
+    .matchupScoreboard > article:last-child .teamProjectionTotal {
+      order: initial;
+      text-align: right;
+    }
+
+    .scoutTeamIdentity {
+      align-items: start;
+    }
+
+    .scoutTeamIdentity strong {
+      font-size: var(--text-11);
+      white-space: normal;
+    }
+
+    .teamProjectionTotal {
+      text-align: left;
+    }
+
+    .teamProjectionTotal strong {
+      font-size: var(--text-20);
+    }
+
+    .teamProjectionTotal span {
+      line-height: 1.3;
+    }
+
+    .positionComparisonHeader,
+    .positionComparisonRow {
+      grid-template-columns: 34px minmax(78px, 1fr) 38px minmax(78px, 1fr);
+      gap: var(--space-6);
+      padding-inline: 10px;
+    }
+
+    .positionComparisonHeader > span:nth-child(2),
+    .positionComparisonHeader > span:nth-child(4) {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .positionComparisonRow > span:not(.positionLeagueMean) {
+      padding-inline: 5px;
+    }
+
+    .projectionRosters {
+      grid-template-columns: 1fr;
       padding-inline: 12px;
     }
   }
@@ -1229,6 +1649,10 @@
   @media (prefers-reduced-motion: reduce) {
     .spin {
       animation: none;
+    }
+
+    .rosterSummaryTotal svg {
+      transition: none;
     }
   }
 }

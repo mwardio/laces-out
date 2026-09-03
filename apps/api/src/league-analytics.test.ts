@@ -253,8 +253,26 @@ const rosterSnapshots: readonly AnalyticsRosterSnapshotRow[] = [
 ];
 
 const rosterEntries: readonly AnalyticsRosterEntryRow[] = [
-  { snapshotId: SNAPSHOT_A, playerId: PLAYER_A, primaryPosition: "QB" },
-  { snapshotId: SNAPSHOT_B, playerId: PLAYER_B, primaryPosition: "QB" },
+  {
+    snapshotId: SNAPSHOT_A,
+    playerId: PLAYER_A,
+    name: "Avery Arm",
+    primaryPosition: "QB",
+    nflTeam: "MIA",
+    status: "ACTIVE",
+    slotCode: "QB",
+    isStarter: true,
+  },
+  {
+    snapshotId: SNAPSHOT_B,
+    playerId: PLAYER_B,
+    name: "Blake Bomb",
+    primaryPosition: "QB",
+    nflTeam: "BUF",
+    status: "ACTIVE",
+    slotCode: "QB",
+    isStarter: true,
+  },
 ];
 
 function projectionSet(input: {
@@ -324,6 +342,8 @@ class FakeRepository implements LeagueAnalyticsRepository {
   observations: readonly AnalyticsMatchupObservationRow[] = observations;
   projectionCandidates: readonly AnalyticsProjectionSetRow[] = projectionCandidates;
   projectionRows: readonly AnalyticsProjectionRow[] = projectionRows;
+  rosterSnapshots: readonly AnalyticsRosterSnapshotRow[] = rosterSnapshots;
+  rosterEntries: readonly AnalyticsRosterEntryRow[] = rosterEntries;
   downstreamReads = 0;
 
   findMembership(userId: string, leagueId: string) {
@@ -349,12 +369,12 @@ class FakeRepository implements LeagueAnalyticsRepository {
   }
   listLatestRosterSnapshots(_leagueSeasonId: string, limit: number) {
     this.downstreamReads += 1;
-    return Promise.resolve(rosterSnapshots.slice(0, limit));
+    return Promise.resolve(this.rosterSnapshots.slice(0, limit));
   }
   listRosterEntries(snapshotIds: readonly string[], limit: number) {
     this.downstreamReads += 1;
     return Promise.resolve(
-      rosterEntries.filter((row) => snapshotIds.includes(row.snapshotId)).slice(0, limit),
+      this.rosterEntries.filter((row) => snapshotIds.includes(row.snapshotId)).slice(0, limit),
     );
   }
   listProjectionSetCandidates(
@@ -482,6 +502,137 @@ describe("LeagueAnalyticsService", () => {
       week: 2,
       subject: { id: TEAM_A },
       opponent: { id: TEAM_B },
+      defaultMatchupId: "week-2-game-1",
+    });
+    if (parsed.opponentScout.state === "available") {
+      expect(parsed.opponentScout.matchups).toHaveLength(1);
+      expect(parsed.opponentScout.matchups[0]).toMatchObject({
+        id: "week-2-game-1",
+        subjectProjection: {
+          projectedPoints: 24,
+          starterCount: 1,
+          projectedStarterCount: 1,
+        },
+        opponentProjection: {
+          projectedPoints: 18,
+          starterCount: 1,
+          projectedStarterCount: 1,
+        },
+        subjectPlayers: [
+          {
+            playerId: PLAYER_A,
+            name: "Avery Arm",
+            primaryPosition: "QB",
+            projectedPoints: 24,
+          },
+        ],
+        positionalBreakdown: [
+          {
+            position: "QB",
+            subject: { projectedPoints: 24, rank: 1 },
+            opponent: { projectedPoints: 18, rank: 2 },
+            edgeOwner: "subject",
+          },
+        ],
+      });
+      expect(parsed.opponentScout.matchups[0]?.metrics[0]).toMatchObject({
+        id: "projected-lineup-points",
+        subjectValue: 24,
+        opponentValue: 18,
+        edgeOwner: "subject",
+      });
+    }
+  });
+
+  it("publishes every current matchup even when the member has not selected a team", async () => {
+    const repository = new FakeRepository();
+    const snapshotC = "50000000-0000-4000-8000-000000000003";
+    const snapshotD = "50000000-0000-4000-8000-000000000004";
+    const playerC = "60000000-0000-4000-8000-000000000003";
+    const playerD = "60000000-0000-4000-8000-000000000004";
+    repository.membership = {
+      ...membership,
+      claimedFantasyTeamId: null,
+      claimedTeamName: null,
+    };
+    repository.teams = playoffTeams;
+    repository.observations = withRemainingSchedule;
+    repository.rosterSnapshots = [
+      ...rosterSnapshots,
+      { id: snapshotC, teamId: TEAM_C, effectiveAt: NOW },
+      { id: snapshotD, teamId: TEAM_D, effectiveAt: NOW },
+    ];
+    repository.rosterEntries = [
+      ...rosterEntries,
+      {
+        snapshotId: snapshotC,
+        playerId: playerC,
+        name: "Casey Cannon",
+        primaryPosition: "QB",
+        nflTeam: "LAR",
+        status: "ACTIVE",
+        slotCode: "QB",
+        isStarter: true,
+      },
+      {
+        snapshotId: snapshotD,
+        playerId: playerD,
+        name: "Drew Deep",
+        primaryPosition: "QB",
+        nflTeam: "SEA",
+        status: "ACTIVE",
+        slotCode: "QB",
+        isStarter: true,
+      },
+    ];
+    repository.projectionRows = [
+      ...projectionRows,
+      { playerId: playerC, meanPoints: "21.5" },
+      { playerId: playerD, meanPoints: "20.25" },
+    ];
+
+    const snapshot = leagueAnalyticsSnapshotSchema.parse(
+      await new LeagueAnalyticsService(repository, () => NOW).getSnapshot(USER_ID, LEAGUE_ID),
+    );
+
+    expect(snapshot.opponentScout.state).toBe("available");
+    if (snapshot.opponentScout.state !== "available") return;
+    expect(snapshot.opponentScout.matchups.map((matchup) => matchup.id)).toEqual([
+      "week-2-game-1",
+      "week-2-game-2",
+    ]);
+    expect(snapshot.opponentScout.matchups[1]).toMatchObject({
+      subject: { id: TEAM_D, isCurrentUser: false },
+      opponent: { id: TEAM_C, isCurrentUser: false },
+      subjectProjection: { projectedPoints: 20.25 },
+      opponentProjection: { projectedPoints: 21.5 },
+      subjectPlayers: [{ playerId: playerD, projectedPoints: 20.25 }],
+      opponentPlayers: [{ playerId: playerC, projectedPoints: 21.5 }],
+    });
+  });
+
+  it("withholds a team total instead of presenting a partial starting-lineup projection", async () => {
+    const repository = new FakeRepository();
+    repository.projectionRows = projectionRows.filter((row) => row.playerId !== PLAYER_A);
+
+    const snapshot = leagueAnalyticsSnapshotSchema.parse(
+      await new LeagueAnalyticsService(repository, () => NOW).getSnapshot(USER_ID, LEAGUE_ID),
+    );
+
+    expect(snapshot.opponentScout.state).toBe("available");
+    if (snapshot.opponentScout.state !== "available") return;
+    expect(snapshot.opponentScout.matchups[0]).toMatchObject({
+      subjectProjection: {
+        projectedPoints: null,
+        starterCount: 1,
+        projectedStarterCount: 0,
+      },
+      subjectPlayers: [{ playerId: PLAYER_A, projectedPoints: null }],
+    });
+    expect(snapshot.opponentScout.matchups[0]?.metrics[0]).toMatchObject({
+      id: "projected-lineup-points",
+      subjectValue: null,
+      edgeOwner: "unknown",
     });
   });
 

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   assignPlayersToRosterSlots,
+  canonicalNflTeamCode,
   createProjection,
   createRosterSlots,
   isPlayerEligibleForSlot,
@@ -67,5 +68,13 @@ describe("domain value validation", () => {
         ceiling: 20,
       }),
     ).toThrow(/floor <= mean <= ceiling/);
+  });
+});
+
+describe("NFL team identity", () => {
+  it("normalizes nflverse's Rams alias into the app's canonical code", () => {
+    expect(canonicalNflTeamCode("LA")).toBe("LAR");
+    expect(canonicalNflTeamCode(" lar ")).toBe("LAR");
+    expect(canonicalNflTeamCode("DET")).toBe("DET");
   });
 });

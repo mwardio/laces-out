@@ -41,6 +41,7 @@ import {
   sourceObservedAtIso,
 } from "../lib/projection-import-form";
 import { loginUrlForCurrentPath } from "../lib/safe-return-to";
+import { useFantasyProviderAttribution } from "./fantasy-provider-attribution";
 import { ProjectionPlayerBrowser, ProjectionPlayerTour } from "./projection-player-browser";
 import styles from "./projection-import-workbench.module.css";
 import { TourBanner } from "./tour-banner";
@@ -382,6 +383,7 @@ export function ProjectionImportWorkbench() {
         : undefined,
     [portfolio, selectedSeasonId],
   );
+  useFantasyProviderAttribution(selectedPortfolioLeague?.season?.provider ?? null);
 
   const loadSets = useCallback(async () => {
     setsAbortRef.current?.abort();

@@ -23,7 +23,7 @@ import {
   teamWeeklyStatObservations,
   type Database,
 } from "@laces-out/db";
-import { isArchivedNflverseSource } from "@laces-out/domain";
+import { canonicalNflTeamCode, isArchivedNflverseSource } from "@laces-out/domain";
 import {
   FIRST_PARTY_CHAMPION_MINIMUM_IMPROVEMENT,
   FIRST_PARTY_CHAMPION_MINIMUM_SAMPLES,
@@ -87,8 +87,9 @@ export const FIRST_PARTY_PROJECTION_SET_SOURCE = "laces-out-first-party";
 
 const projectionCheckIntervalMinutes = 60;
 const historySeasonCount = 4;
-// v5 adds lock-safe raw publication, exact completeness accounting, and source-availability gates.
-const sourceSchemaVersion = 5;
+// v6 also canonicalizes nflverse team aliases and admits current offensive role evidence for
+// two-way players without rewriting the underlying source observations.
+const sourceSchemaVersion = 6;
 const championPolicyVersion = "walk-forward-mae-v1";
 const chunkSize = 500;
 const supportedPositions = ["QB", "RB", "WR", "TE", "K"] as const;
@@ -316,7 +317,7 @@ function sha256(value: string): string {
 
 /** Stable app-owned UUID for an NFL team-defense entity; it never aliases provider player IDs. */
 export function firstPartyDefensePlayerId(team: string): string {
-  const normalized = team.trim().toUpperCase();
+  const normalized = canonicalNflTeamCode(team);
   if (!/^[A-Z]{2,4}$/u.test(normalized)) {
     throw new TypeError("NFL team code must contain two to four uppercase letters");
   }
@@ -339,7 +340,71 @@ function numeric(value: string | number): number {
 
 function upper(value: string | null | undefined): string | null {
   const normalized = value?.trim().toUpperCase();
-  return normalized ? normalized : null;
+  return normalized ? canonicalNflTeamCode(normalized) : null;
+}
+
+interface ProjectionPositionEvidence {
+  readonly playerId: string | null;
+  readonly season: number;
+  readonly week: number;
+  readonly position: string;
+}
+
+function supportedProjectionPosition(position: string): string | undefined {
+  const normalized = position.trim().toUpperCase() === "PK" ? "K" : position.trim().toUpperCase();
+  return firstPartyProjectionPositionIsSupported(normalized) ? normalized : undefined;
+}
+
+function observedProjectionPositionByPlayerWeek(
+  evidence: readonly ProjectionPositionEvidence[],
+): ReadonlyMap<string, string> {
+  const candidates = new Map<string, Set<string>>();
+  for (const row of evidence) {
+    if (!row.playerId) continue;
+    const position = supportedProjectionPosition(row.position);
+    if (!position) continue;
+    const key = `${row.playerId}:${row.season}:${row.week}`;
+    const positions = candidates.get(key) ?? new Set<string>();
+    positions.add(position);
+    candidates.set(key, positions);
+  }
+  return new Map(
+    [...candidates].flatMap(([key, positions]) =>
+      positions.size === 1 ? ([[key, [...positions][0]!]] as const) : [],
+    ),
+  );
+}
+
+/**
+ * Resolves the current fantasy projection role from admitted weekly-roster facts. The player
+ * catalog describes an NFL roster role, which can differ for a two-way fantasy player (for
+ * example, a catalog CB whose weekly offensive role is WR). Conflicting same-week evidence never
+ * overrides the catalog.
+ */
+export function effectiveFirstPartyProjectionPositions(
+  playersToResolve: readonly Pick<PlayerRow, "id" | "primaryPosition">[],
+  evidence: readonly ProjectionPositionEvidence[],
+  season: number,
+): ReadonlyMap<string, string> {
+  const latest = new Map<string, { week: number; positions: Set<string> }>();
+  for (const row of evidence) {
+    if (!row.playerId || row.season !== season) continue;
+    const position = supportedProjectionPosition(row.position);
+    if (!position) continue;
+    const current = latest.get(row.playerId);
+    if (!current || row.week > current.week) {
+      latest.set(row.playerId, { week: row.week, positions: new Set([position]) });
+    } else if (row.week === current.week) {
+      current.positions.add(position);
+    }
+  }
+  return new Map(
+    playersToResolve.map((player) => {
+      const observed = latest.get(player.id)?.positions;
+      const position = observed?.size === 1 ? [...observed][0]! : player.primaryPosition;
+      return [player.id, position] as const;
+    }),
+  );
 }
 
 function playerIdentityKey(
@@ -1646,7 +1711,7 @@ export class FirstPartyProjectionService implements ProjectionRefreshService {
       this.#database
         .select({
           playerId: playerWeeklyStatObservations.playerId,
-          position: players.primaryPosition,
+          catalogPosition: players.primaryPosition,
           season: playerWeeklyStatObservations.season,
           week: playerWeeklyStatObservations.week,
           gameId: playerWeeklyStatObservations.gameId,
@@ -1667,7 +1732,7 @@ export class FirstPartyProjectionService implements ProjectionRefreshService {
       this.#database
         .select({
           playerId: playerWeeklyRosterObservations.playerId,
-          position: players.primaryPosition,
+          position: playerWeeklyRosterObservations.position,
           season: playerWeeklyRosterObservations.season,
           week: playerWeeklyRosterObservations.week,
           team: playerWeeklyRosterObservations.team,
@@ -1696,7 +1761,7 @@ export class FirstPartyProjectionService implements ProjectionRefreshService {
       this.#database
         .select({
           playerId: playerSnapCountObservations.playerId,
-          position: players.primaryPosition,
+          catalogPosition: players.primaryPosition,
           season: playerSnapCountObservations.season,
           week: playerSnapCountObservations.week,
           gameId: playerSnapCountObservations.gameId,
@@ -1786,6 +1851,28 @@ export class FirstPartyProjectionService implements ProjectionRefreshService {
         .where(eq(leagueSeasons.season, season)),
     ]);
 
+    const observedPositionByPlayerWeek = observedProjectionPositionByPlayerWeek(rosterRows);
+    const effectivePositionByPlayer = effectiveFirstPartyProjectionPositions(
+      playerRows,
+      rosterRows,
+      season,
+    );
+    const effectivePlayerRows = playerRows.map((player): PlayerRow => ({
+      ...player,
+      nflTeam: player.nflTeam ? canonicalNflTeamCode(player.nflTeam) : null,
+      primaryPosition: effectivePositionByPlayer.get(player.id) ?? player.primaryPosition,
+    }));
+    const normalizedScheduleRows = scheduleRows.map((row): ProjectionScheduleFact => ({
+      ...row,
+      awayTeam: canonicalNflTeamCode(row.awayTeam),
+      homeTeam: canonicalNflTeamCode(row.homeTeam),
+    }));
+    const normalizedTeamRows = teamRows.map((row): ProjectionTeamWeekFact => ({
+      ...row,
+      team: canonicalNflTeamCode(row.team),
+      opponentTeam: canonicalNflTeamCode(row.opponentTeam),
+    }));
+
     const sleeper = selectedByKey.get("sleeper.players");
     const statusRows = sleeper
       ? await this.#database
@@ -1825,7 +1912,7 @@ export class FirstPartyProjectionService implements ProjectionRefreshService {
         row.practice,
       ]);
     }
-    const currentStatusWeek = projectionStatusWeek(scheduleRows, season, now);
+    const currentStatusWeek = projectionStatusWeek(normalizedScheduleRows, season, now);
     if (currentStatusWeek !== undefined) {
       for (const row of injuryRows) {
         if (!row.playerId || row.season !== season || row.week !== currentStatusWeek) continue;
@@ -1837,8 +1924,14 @@ export class FirstPartyProjectionService implements ProjectionRefreshService {
       }
     }
 
-    const defensePlayerRows = await this.#ensureDefensePlayers(scheduleRows, season, now);
-    const rosters = await this.#loadLatestRosters(leagueRows);
+    const defensePlayerRows = await this.#ensureDefensePlayers(normalizedScheduleRows, season, now);
+    const rosters = (await this.#loadLatestRosters(leagueRows)).map(
+      (roster): LeagueRosterPlayer => ({
+        ...roster,
+        primaryPosition: effectivePositionByPlayer.get(roster.playerId) ?? roster.primaryPosition,
+        nflTeam: roster.nflTeam ? canonicalNflTeamCode(roster.nflTeam) : null,
+      }),
+    );
     const rosterScopes = new Map<string, Set<string>>();
     for (const roster of rosters) {
       const scopes = rosterScopes.get(roster.playerId) ?? new Set<string>();
@@ -1854,7 +1947,9 @@ export class FirstPartyProjectionService implements ProjectionRefreshService {
       ),
     );
     const canonicalPlayerByGsis = new Map(
-      playerRows.flatMap((player) => (player.gsisId ? [[player.gsisId, player.id] as const] : [])),
+      effectivePlayerRows.flatMap((player) =>
+        player.gsisId ? [[player.gsisId, player.id] as const] : [],
+      ),
     );
     const canonicalMatchByPlayer = new Map<string, string>();
     for (const row of statusRows) {
@@ -1897,7 +1992,7 @@ export class FirstPartyProjectionService implements ProjectionRefreshService {
       }
     }
     const leagueSeasonScopesByPlayer = new Map<string, readonly string[]>();
-    for (const player of playerRows) {
+    for (const player of effectivePlayerRows) {
       if (player.gsisId) continue;
       const rostered = rosterScopes.get(player.id) ?? new Set<string>();
       const asserted = espnOwnerScopes.get(player.id);
@@ -1912,12 +2007,14 @@ export class FirstPartyProjectionService implements ProjectionRefreshService {
           ? [
               {
                 playerId: row.playerId,
-                position: row.position,
+                position:
+                  observedPositionByPlayerWeek.get(`${row.playerId}:${row.season}:${row.week}`) ??
+                  row.catalogPosition,
                 season: row.season,
                 week: row.week,
                 gameId: row.gameId,
-                team: row.team,
-                opponentTeam: row.opponentTeam,
+                team: canonicalNflTeamCode(row.team),
+                opponentTeam: canonicalNflTeamCode(row.opponentTeam),
                 components: row.components,
                 advanced: row.advanced,
               },
@@ -1929,12 +2026,14 @@ export class FirstPartyProjectionService implements ProjectionRefreshService {
           ? [
               {
                 playerId: row.playerId,
-                position: row.position,
+                position:
+                  observedPositionByPlayerWeek.get(`${row.playerId}:${row.season}:${row.week}`) ??
+                  row.catalogPosition,
                 season: row.season,
                 week: row.week,
                 gameId: row.gameId,
-                team: row.team,
-                opponentTeam: row.opponentTeam,
+                team: canonicalNflTeamCode(row.team),
+                opponentTeam: canonicalNflTeamCode(row.opponentTeam),
                 offenseShare: numeric(row.offenseShare),
                 specialTeamsShare: numeric(row.specialTeamsShare),
               },
@@ -1949,7 +2048,7 @@ export class FirstPartyProjectionService implements ProjectionRefreshService {
                 position: row.position,
                 season: row.season,
                 week: row.week,
-                team: row.team,
+                team: canonicalNflTeamCode(row.team),
                 status: row.status,
               },
             ]
@@ -1968,10 +2067,10 @@ export class FirstPartyProjectionService implements ProjectionRefreshService {
             ]
           : [],
       ),
-      teamWeekly: teamRows satisfies readonly ProjectionTeamWeekFact[],
-      schedules: scheduleRows satisfies readonly ProjectionScheduleFact[],
+      teamWeekly: normalizedTeamRows,
+      schedules: normalizedScheduleRows,
       playerRows: [
-        ...playerRows.filter(
+        ...effectivePlayerRows.filter(
           (player) => !defensePlayerRows.some((defense) => defense.id === player.id),
         ),
         ...defensePlayerRows,
@@ -1994,7 +2093,10 @@ export class FirstPartyProjectionService implements ProjectionRefreshService {
       ...new Set(
         schedules
           .filter((game) => game.season === season)
-          .flatMap((game) => [game.awayTeam.toUpperCase(), game.homeTeam.toUpperCase()]),
+          .flatMap((game) => [
+            canonicalNflTeamCode(game.awayTeam),
+            canonicalNflTeamCode(game.homeTeam),
+          ]),
       ),
     ].sort();
     if (teams.length !== 32) {
@@ -2299,7 +2401,7 @@ export class FirstPartyProjectionService implements ProjectionRefreshService {
           .flatMap((game) => [game.awayTeam, game.homeTeam]),
       ),
     ]
-      .map((team) => team.toUpperCase())
+      .map(canonicalNflTeamCode)
       .sort();
     const publishedDefenses: PublishedDefense[] = allTeams.map((team) => {
       const matchup = matchups.get(team);
@@ -2572,14 +2674,16 @@ export class FirstPartyProjectionService implements ProjectionRefreshService {
         game.status ?? (game.awayScore !== null && game.homeScore !== null ? "final" : "scheduled");
       if (status === "cancelled") continue;
       const final = projectionGameIsConservativelyFinal({ ...game, status }, now);
-      result.set(game.awayTeam.toUpperCase(), {
-        opponent: game.homeTeam.toUpperCase(),
+      const awayTeam = canonicalNflTeamCode(game.awayTeam);
+      const homeTeam = canonicalNflTeamCode(game.homeTeam);
+      result.set(awayTeam, {
+        opponent: homeTeam,
         kickoffAt: game.kickoffAt ?? null,
         final,
         status,
       });
-      result.set(game.homeTeam.toUpperCase(), {
-        opponent: game.awayTeam.toUpperCase(),
+      result.set(homeTeam, {
+        opponent: awayTeam,
         kickoffAt: game.kickoffAt ?? null,
         final,
         status,
@@ -2758,7 +2862,9 @@ export function buildFirstPartyLeaguePublications(input: {
     rows.push(player);
     rosterByLeague.set(player.leagueSeasonId, rows);
   }
-  const defenseByTeam = new Map(input.publishedDefenses.map((defense) => [defense.team, defense]));
+  const defenseByTeam = new Map(
+    input.publishedDefenses.map((defense) => [canonicalNflTeamCode(defense.team), defense]),
+  );
   const canonicalDefensePlayers = input.players.filter((player) => {
     const team = upper(player.nflTeam);
     return (
@@ -2922,14 +3028,14 @@ export function buildFirstPartyLeaguePublications(input: {
         ? []
         : leagueRoster.filter((rosterPlayer) => {
             if (isDefensePosition(rosterPlayer.primaryPosition)) {
-              return (
-                !rosterPlayer.nflTeam || !defenseByTeam.has(rosterPlayer.nflTeam.toUpperCase())
-              );
+              const team = upper(rosterPlayer.nflTeam);
+              return !team || !defenseByTeam.has(team);
             }
-            return (
-              !firstPartyProjectionPositionIsSupported(rosterPlayer.primaryPosition) ||
-              !playerById.has(rosterPlayer.playerId)
-            );
+            // A trusted current weekly-roster fact can supply a supported offensive projection
+            // role even when the canonical NFL catalog describes a two-way player's defensive
+            // role. Presence in `playerById` is the actual coverage proof; re-checking the stale
+            // catalog label here incorrectly withheld the entire league.
+            return !playerById.has(rosterPlayer.playerId);
           });
     if (rosterGaps.length > 0) {
       const snapshotsIncomplete = rosterGaps.some((player) =>

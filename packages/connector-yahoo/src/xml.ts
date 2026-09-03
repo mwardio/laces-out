@@ -22,10 +22,11 @@ import { XMLParser, XMLValidator } from "fast-xml-parser";
 export const MAX_YAHOO_XML_BYTES = 5 * 1024 * 1024;
 
 export class YahooXmlError extends Error {
-  public readonly code: "TOO_LARGE" | "UNSAFE_XML" | "INVALID_XML" | "INVALID_CONTRACT";
+  public readonly code:
+    "TOO_LARGE" | "UNSAFE_XML" | "INVALID_XML" | "INVALID_CONTRACT" | "LEAGUE_NOT_READY";
 
   public constructor(
-    code: "TOO_LARGE" | "UNSAFE_XML" | "INVALID_XML" | "INVALID_CONTRACT",
+    code: "TOO_LARGE" | "UNSAFE_XML" | "INVALID_XML" | "INVALID_CONTRACT" | "LEAGUE_NOT_READY",
     message: string,
   ) {
     super(message);
@@ -406,13 +407,24 @@ function normalizeTeam(team: XmlRecord, warnings: string[]): NormalizedTeam | nu
     warnings.push("Skipped a Yahoo team missing team_key, team_id, or name");
     return null;
   }
-  const managers = asArray(child(team, "managers")?.manager).flatMap(
-    (candidate): NormalizedManager[] => {
-      const record = asRecord(candidate);
-      const normalized = record === null ? null : normalizeManager(record);
-      return normalized === null ? [] : [normalized];
-    },
-  );
+  const managerRecords = asArray(child(team, "managers")?.manager)
+    .map(asRecord)
+    .filter((candidate): candidate is XmlRecord => candidate !== null);
+  const managers = managerRecords.flatMap((record): NormalizedManager[] => {
+    const normalized = normalizeManager(record);
+    return normalized === null ? [] : [normalized];
+  });
+  const isCurrentUser = truthy(team.is_owned_by_current_login);
+  const currentLoginManagers = managerRecords.filter((manager) => truthy(manager.is_current_login));
+  const currentUserIsCommissioner =
+    isCurrentUser && currentLoginManagers.length === 1
+      ? truthy(currentLoginManagers[0]?.is_commissioner)
+      : null;
+  if (isCurrentUser && currentLoginManagers.length !== 1) {
+    warnings.push(
+      `Yahoo did not identify exactly one current manager on team ${externalId}; commissioner authority was not inferred`,
+    );
+  }
   const roster = child(team, "roster");
   const players = asArray(child(roster, "players")?.player).flatMap(
     (candidate): NormalizedRosterPlayer[] => {
@@ -435,7 +447,8 @@ function normalizeTeam(team: XmlRecord, warnings: string[]): NormalizedTeam | nu
     abbreviation: text(team.team_abbr),
     url: text(team.url),
     logoUrl: text(logo?.url),
-    isCurrentUser: truthy(team.is_owned_by_current_login),
+    isCurrentUser,
+    currentUserIsCommissioner,
     managers,
     roster: players,
   };
@@ -507,12 +520,17 @@ function positive(value: unknown, label: string): number {
   return parsed;
 }
 
-function normalizeStandings(league: XmlRecord): NormalizedStandingsSnapshot {
+function normalizeStandings(
+  league: XmlRecord,
+  warnings: string[],
+): NormalizedStandingsSnapshot | undefined {
   const standings = child(league, "standings");
   if (standings === null) {
     throw new YahooXmlError("INVALID_CONTRACT", "Yahoo standings response omitted standings");
   }
-  const entries: NormalizedStandingEntry[] = [];
+  const unresolvedEntries: (Omit<NormalizedStandingEntry, "rank"> & {
+    readonly rank: number | null;
+  })[] = [];
   for (const candidate of asArray(child(standings, "teams")?.team)) {
     const team = asRecord(candidate);
     if (team === null) continue;
@@ -534,10 +552,16 @@ function normalizeStandings(league: XmlRecord): NormalizedStandingsSnapshot {
     if (playoffSeed !== null && playoffSeed < 1) {
       throw new YahooXmlError("INVALID_CONTRACT", "Yahoo returned invalid playoff seed");
     }
-    entries.push({
+    const rawRank = integer(teamStandings.rank);
+    if (rawRank !== null && rawRank < 0) {
+      throw new YahooXmlError("INVALID_CONTRACT", "Yahoo returned invalid standings rank");
+    }
+    unresolvedEntries.push({
       teamExternalId,
       providerTeamId,
-      rank: positive(teamStandings.rank, "standings rank"),
+      // Yahoo represents an unranked preseason table as either an empty element or zero. Neither
+      // is a real standing, so retain it as missing until the complete table can be assessed.
+      rank: rawRank === 0 ? null : rawRank,
       playoffSeed,
       wins: nonNegativeInteger(totals.wins, "standings wins"),
       losses: nonNegativeInteger(totals.losses, "standings losses"),
@@ -549,7 +573,38 @@ function normalizeStandings(league: XmlRecord): NormalizedStandingsSnapshot {
         streakType === "none" ? 0 : nonNegativeInteger(streak?.value, "standings streak"),
     });
   }
-  if (entries.length < 2 || new Set(entries.map((entry) => entry.rank)).size !== entries.length) {
+  if (unresolvedEntries.length < 2) {
+    throw new YahooXmlError("INVALID_CONTRACT", "Yahoo standings were incomplete or duplicated");
+  }
+
+  const entriesWithMissingRank = unresolvedEntries.filter((entry) => entry.rank === null);
+  if (entriesWithMissingRank.length > 0) {
+    const whollyUnrankedPreseasonTable =
+      entriesWithMissingRank.length === unresolvedEntries.length &&
+      unresolvedEntries.every(
+        (entry) =>
+          entry.wins === 0 &&
+          entry.losses === 0 &&
+          entry.ties === 0 &&
+          entry.pointsFor === 0 &&
+          entry.pointsAgainst === 0 &&
+          entry.streakType === "none" &&
+          entry.streakLength === 0,
+      );
+    if (!whollyUnrankedPreseasonTable) {
+      throw new YahooXmlError("INVALID_CONTRACT", "Yahoo returned invalid standings rank");
+    }
+    warnings.push("Yahoo has not ranked its preseason standings; no standings snapshot was stored");
+    return undefined;
+  }
+
+  const entries = unresolvedEntries.map((entry): NormalizedStandingEntry => {
+    if (entry.rank === null) {
+      throw new YahooXmlError("INVALID_CONTRACT", "Yahoo returned invalid standings rank");
+    }
+    return { ...entry, rank: entry.rank };
+  });
+  if (new Set(entries.map((entry) => entry.rank)).size !== entries.length) {
     throw new YahooXmlError("INVALID_CONTRACT", "Yahoo standings were incomplete or duplicated");
   }
   return { asOfWeek: integer(league.current_week), entries };
@@ -583,13 +638,18 @@ function matchupTeam(team: XmlRecord): {
   };
 }
 
-function normalizeMatchups(league: XmlRecord, leagueKey: string): NormalizedMatchupSnapshot {
+function normalizeMatchups(
+  league: XmlRecord,
+  leagueKey: string,
+  warnings: string[],
+): NormalizedMatchupSnapshot {
   const scoreboard = child(league, "scoreboard");
   if (scoreboard === null) {
     throw new YahooXmlError("INVALID_CONTRACT", "Yahoo scoreboard response omitted scoreboard");
   }
   const asOfWeek = integer(scoreboard.week) ?? integer(league.current_week);
   const matchups: NormalizedWeeklyMatchup[] = [];
+  let sawScheduledZeroScore = false;
   let index = 0;
   for (const candidate of asArray(child(scoreboard, "matchups")?.matchup)) {
     const matchup = asRecord(candidate);
@@ -614,7 +674,10 @@ function normalizeMatchups(league: XmlRecord, leagueKey: string): NormalizedMatc
     const winnerTeamExternalId = text(matchup.winner_team_key);
     const hasOutcome = tied || winnerTeamExternalId !== null;
     const status = matchupStatus(matchup.status, hasOutcome);
-    if (status === "scheduled" && (home.score !== null || away.score !== null)) {
+    if (
+      status === "scheduled" &&
+      ((home.score !== null && home.score !== 0) || (away.score !== null && away.score !== 0))
+    ) {
       throw new YahooXmlError(
         "INVALID_CONTRACT",
         "Yahoo scheduled matchup unexpectedly included scores",
@@ -631,19 +694,25 @@ function normalizeMatchups(league: XmlRecord, leagueKey: string): NormalizedMatc
       throw new YahooXmlError("INVALID_CONTRACT", "Yahoo matchup outcome was inconsistent");
     }
     const providerMatchupId = text(matchup.matchup_id) ?? `${week}-${index}`;
+    if (status === "scheduled" && (home.score === 0 || away.score === 0)) {
+      sawScheduledZeroScore = true;
+    }
     matchups.push({
       externalId: `${leagueKey}.w.${week}.m.${providerMatchupId}`,
       providerMatchupId,
       week,
       status,
-      home,
-      away,
+      home: status === "scheduled" ? { ...home, score: null } : home,
+      away: status === "scheduled" ? { ...away, score: null } : away,
       winnerTeamExternalId: status === "final" ? winnerTeamExternalId : null,
       tied: status === "final" ? tied : false,
     });
   }
   if (matchups.length < 1) {
     throw new YahooXmlError("INVALID_CONTRACT", "Yahoo scoreboard contained no matchups");
+  }
+  if (sawScheduledZeroScore) {
+    warnings.push("Yahoo's scheduled matchup score placeholders were stored as unscored");
   }
   return { asOfWeek, matchups };
 }
@@ -676,28 +745,40 @@ export function parseYahooLeagueSyncArtifacts(input: YahooLeagueSyncArtifacts): 
   }
 
   const warnings: string[] = [];
+  const normalizedTeams = normalizeTeams(teamsLeague, warnings);
+  const settings = normalizeSettings(settingsLeague);
+  if (settings.teamCount === 1 && normalizedTeams.length === 1) {
+    throw new YahooXmlError(
+      "LEAGUE_NOT_READY",
+      "Yahoo league is not ready to sync until another team joins",
+    );
+  }
+  if (
+    normalizedTeams.length < 2 ||
+    normalizedTeams.length !== new Set(normalizedTeams.map((team) => team.externalId)).size
+  ) {
+    throw new YahooXmlError("INVALID_CONTRACT", "Yahoo team resource was incomplete or duplicated");
+  }
+
   const rosterMap = rosterByTeam(rostersLeague, warnings);
-  const teams = normalizeTeams(teamsLeague, warnings).map((team) => ({
+  const teams = normalizedTeams.map((team) => ({
     ...team,
     roster: rosterMap.get(team.externalId) ?? [],
   }));
-  if (teams.length < 2 || teams.length !== new Set(teams.map((team) => team.externalId)).size) {
-    throw new YahooXmlError("INVALID_CONTRACT", "Yahoo team resource was incomplete or duplicated");
-  }
   if (rosterMap.size !== teams.length || teams.some((team) => !rosterMap.has(team.externalId))) {
     throw new YahooXmlError("INVALID_CONTRACT", "Yahoo rosters did not match the league teams");
   }
 
-  const settings = normalizeSettings(settingsLeague);
   if (settings.teamCount !== teams.length) {
     throw new YahooXmlError("INVALID_CONTRACT", "Yahoo team count did not match the team resource");
   }
-  const standings = normalizeStandings(standingsLeague);
-  const matchups = normalizeMatchups(matchupsLeague, reference.externalId);
+  const standings = normalizeStandings(standingsLeague, warnings);
+  const matchups = normalizeMatchups(matchupsLeague, reference.externalId, warnings);
   const knownTeams = new Set(teams.map((team) => team.externalId));
   if (
-    standings.entries.length !== teams.length ||
-    standings.entries.some((entry) => !knownTeams.has(entry.teamExternalId)) ||
+    (standings !== undefined &&
+      (standings.entries.length !== teams.length ||
+        standings.entries.some((entry) => !knownTeams.has(entry.teamExternalId)))) ||
     matchups.matchups.some(
       (matchup) =>
         !knownTeams.has(matchup.home.teamExternalId) ||
@@ -734,7 +815,7 @@ export function parseYahooLeagueSyncArtifacts(input: YahooLeagueSyncArtifacts): 
       settings,
     },
     teams,
-    standings,
+    ...(standings === undefined ? {} : { standings }),
     matchups,
     provenance: {
       mode: "official-api",

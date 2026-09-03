@@ -57,6 +57,7 @@ describe("Yahoo XML normalization", () => {
       externalId: "449.l.12345.t.1",
       providerTeamId: "1",
       isCurrentUser: true,
+      currentUserIsCommissioner: true,
       managers: [{ externalId: "1001", displayName: "Sanitized Manager", isCommissioner: true }],
       roster: [
         {
@@ -68,6 +69,29 @@ describe("Yahoo XML normalization", () => {
       ],
     });
     expect(bundle.provenance.artifactChecksumSha256).toMatch(/^[a-f0-9]{64}$/u);
+  });
+
+  it("does not inherit commissioner authority from another Yahoo co-manager", () => {
+    const coManagedLeague = fixture.replace(
+      `<manager_id>1001</manager_id>
+            <nickname>Sanitized Manager</nickname>
+            <is_current_login>1</is_current_login>
+            <is_commissioner>1</is_commissioner>`,
+      `<manager_id>1001</manager_id>
+            <nickname>Sanitized Manager</nickname>
+            <is_current_login>1</is_current_login>
+          </manager>
+          <manager>
+            <manager_id>1003</manager_id>
+            <nickname>Commissioner Co-manager</nickname>
+            <is_commissioner>1</is_commissioner>`,
+    );
+
+    const bundle = parseYahooLeagueXml(coManagedLeague);
+    const currentTeam = bundle.teams.find((team) => team.isCurrentUser);
+
+    expect(currentTeam?.currentUserIsCommissioner).toBe(false);
+    expect(currentTeam?.managers.some((manager) => manager.isCommissioner)).toBe(true);
   });
 
   it("rejects doctype/entity payloads before parsing", () => {
@@ -136,6 +160,88 @@ describe("Yahoo XML normalization", () => {
       away: { score: 101.4 },
     });
     expect(bundle.provenance.artifactChecksumSha256).toMatch(/^[a-f0-9]{64}$/u);
+  });
+
+  it("omits Yahoo's wholly unranked preseason standings instead of inventing ranks", () => {
+    const preseasonStandings = fixtureNamed("sanitized-standings.xml")
+      .replace("<rank>1</rank>", "<rank></rank>")
+      .replace("<rank>2</rank>", "<rank>0</rank>")
+      .replaceAll(/<playoff_seed>\d+<\/playoff_seed>/gu, "")
+      .replaceAll(/<wins>\d+<\/wins>/gu, "<wins>0</wins>")
+      .replaceAll(/<losses>\d+<\/losses>/gu, "<losses>0</losses>")
+      .replaceAll(/<ties>\d+<\/ties>/gu, "<ties>0</ties>")
+      .replaceAll(/<points_for>[\d.]+<\/points_for>/gu, "<points_for>0</points_for>")
+      .replaceAll(
+        /<points_against>[\d.]+<\/points_against>/gu,
+        "<points_against>0</points_against>",
+      )
+      .replaceAll(/<streak>[\s\S]*?<\/streak>/gu, "");
+
+    const bundle = parseYahooLeagueSyncArtifacts({
+      settingsXml: fixtureNamed("sanitized-settings.xml"),
+      teamsXml: fixtureNamed("sanitized-teams.xml"),
+      rostersXml: fixtureNamed("sanitized-rosters.xml"),
+      standingsXml: preseasonStandings,
+      matchupsXml: fixtureNamed("sanitized-scoreboard.xml"),
+      fetchedAt: new Date("2026-09-02T21:00:00.000Z"),
+      endpoint: "https://fantasysports.yahooapis.com/fantasy/v2/league/449.l.12345",
+    });
+
+    expect(bundle.standings).toBeUndefined();
+    expect(bundle.warnings).toContain(
+      "Yahoo has not ranked its preseason standings; no standings snapshot was stored",
+    );
+  });
+
+  it("treats Yahoo's zero preseason matchup scores as unplayed placeholders", () => {
+    const preseasonScoreboard = fixtureNamed("sanitized-scoreboard.xml")
+      .replace("<status>postevent</status>", "<status>preevent</status>")
+      .replace("<winner_team_key>449.l.12345.t.1</winner_team_key>", "")
+      .replace("<total>112.6</total>", "<total>0.00</total>")
+      .replace("<total>101.4</total>", "<total>0.00</total>");
+
+    const bundle = parseYahooLeagueSyncArtifacts({
+      settingsXml: fixtureNamed("sanitized-settings.xml"),
+      teamsXml: fixtureNamed("sanitized-teams.xml"),
+      rostersXml: fixtureNamed("sanitized-rosters.xml"),
+      standingsXml: fixtureNamed("sanitized-standings.xml"),
+      matchupsXml: preseasonScoreboard,
+      fetchedAt: new Date("2026-09-02T21:00:00.000Z"),
+      endpoint: "https://fantasysports.yahooapis.com/fantasy/v2/league/449.l.12345",
+    });
+
+    expect(bundle.matchups?.matchups[0]).toMatchObject({
+      status: "scheduled",
+      home: { score: null },
+      away: { score: null },
+      winnerTeamExternalId: null,
+    });
+    expect(bundle.warnings).toContain(
+      "Yahoo's scheduled matchup score placeholders were stored as unscored",
+    );
+  });
+
+  it("distinguishes a newly created one-team league from malformed team data", () => {
+    const oneTeamSettings = fixtureNamed("sanitized-settings.xml").replace(
+      "<num_teams>2</num_teams>",
+      "<num_teams>1</num_teams>",
+    );
+    const oneTeamTeams = fixtureNamed("sanitized-teams.xml").replace(
+      /\s*<team>\s*<team_key>449\.l\.12345\.t\.2<\/team_key>[\s\S]*?<\/team>\s*/u,
+      "",
+    );
+
+    expect(() =>
+      parseYahooLeagueSyncArtifacts({
+        settingsXml: oneTeamSettings,
+        teamsXml: oneTeamTeams,
+        rostersXml: fixtureNamed("sanitized-rosters.xml"),
+        standingsXml: fixtureNamed("sanitized-standings.xml"),
+        matchupsXml: fixtureNamed("sanitized-scoreboard.xml"),
+        fetchedAt: new Date("2026-09-02T21:00:00.000Z"),
+        endpoint: "https://fantasysports.yahooapis.com/fantasy/v2/league/449.l.12345",
+      }),
+    ).toThrowError(expect.objectContaining({ code: "LEAGUE_NOT_READY" }));
   });
 
   it("fails closed when a weekly artifact belongs to another league", () => {

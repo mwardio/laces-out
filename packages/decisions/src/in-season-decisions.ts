@@ -21,6 +21,7 @@ import {
   playerMarketObservations,
   playerExternalIds,
   playerProjections,
+  playerWeeklyRosterObservations,
   players,
   projectionSets,
   rosterEntries,
@@ -34,6 +35,8 @@ import {
   NFL_POSITIONS,
   NFL_TEAMS,
   PLAYER_STATUSES,
+  canonicalNflTeamCode,
+  defaultEligibility,
   isPlayerEligibleForSlot,
   playerId,
   projectionFor,
@@ -58,14 +61,29 @@ import {
   type TradePackage,
 } from "@laces-out/engine-trade";
 import { evaluateWaiverMoves, recommendFaabBid } from "@laces-out/engine-waiver";
-import { and, asc, count, desc, eq, inArray, like, ne, or, sql } from "drizzle-orm";
+import {
+  and,
+  asc,
+  count,
+  desc,
+  eq,
+  inArray,
+  like,
+  ne,
+  or,
+  sql,
+  type SQLWrapper,
+} from "drizzle-orm";
 
 import {
   currentManagedProjectionProfile,
   currentManagedProjectionProfileKey,
   type ManagedProjectionProfile,
 } from "./managed-projection-profile.js";
-import { projectionTimestampProvenance } from "./projection-provenance.js";
+import {
+  projectionFreshnessObservedAt,
+  projectionTimestampProvenance,
+} from "./projection-provenance.js";
 import {
   RECOMMENDATION_ALGORITHM_VERSION,
   recommendationInputChecksum,
@@ -244,6 +262,34 @@ export interface InSeasonDecisionRepository {
   findManagedProjectionProfile?(leagueSeasonId: string): Promise<ManagedProjectionProfile>;
 }
 
+/**
+ * The canonical NFL catalog can describe a two-way player's defensive roster role even though
+ * admitted weekly facts describe the offensive role that fantasy projections use. Prefer the
+ * latest admitted offensive position in the read's own season/week; provider eligibility is
+ * retained alongside it.
+ */
+function latestFantasyPosition(season: SQLWrapper, week: SQLWrapper) {
+  return sql<string | null>`(
+    select case
+      when upper(btrim(${playerWeeklyRosterObservations.position})) = 'PK' then 'K'
+      else upper(btrim(${playerWeeklyRosterObservations.position}))
+    end
+    from ${playerWeeklyRosterObservations}
+    inner join ${dataSources}
+      on ${dataSources.id} = ${playerWeeklyRosterObservations.sourceId}
+    where ${playerWeeklyRosterObservations.playerId} = ${players.id}
+      and ${playerWeeklyRosterObservations.season} = ${season}
+      and ${playerWeeklyRosterObservations.week} <= coalesce(${week}, 25)
+      and ${playerWeeklyRosterObservations.inputChecksum} = ${dataSources.lastChecksum}
+      and upper(btrim(${playerWeeklyRosterObservations.position})) in ('QB', 'RB', 'WR', 'TE', 'K', 'PK')
+    order by
+      ${playerWeeklyRosterObservations.week} desc,
+      ${playerWeeklyRosterObservations.fetchedAt} desc,
+      ${playerWeeklyRosterObservations.id} desc
+    limit 1
+  )`;
+}
+
 export class DrizzleInSeasonDecisionRepository implements InSeasonDecisionRepository {
   readonly #database: Database;
 
@@ -338,12 +384,13 @@ export class DrizzleInSeasonDecisionRepository implements InSeasonDecisionReposi
     limit: number,
   ): Promise<readonly DecisionRosterEntryRow[]> {
     if (snapshotIds.length === 0) return Promise.resolve([]);
+    const observedPosition = latestFantasyPosition(rosterSnapshots.season, rosterSnapshots.week);
     return this.#database
       .select({
         snapshotId: rosterEntries.snapshotId,
         playerId: players.id,
         name: players.fullName,
-        primaryPosition: players.primaryPosition,
+        primaryPosition: sql<string>`coalesce(${observedPosition}, ${players.primaryPosition})`,
         eligiblePositions: players.eligiblePositions,
         nflTeam: players.nflTeam,
         status: players.status,
@@ -352,6 +399,7 @@ export class DrizzleInSeasonDecisionRepository implements InSeasonDecisionReposi
         locked: rosterEntries.locked,
       })
       .from(rosterEntries)
+      .innerJoin(rosterSnapshots, eq(rosterEntries.snapshotId, rosterSnapshots.id))
       .innerJoin(players, eq(rosterEntries.playerId, players.id))
       .where(inArray(rosterEntries.snapshotId, [...snapshotIds]))
       .orderBy(asc(rosterEntries.snapshotId), desc(rosterEntries.isStarter), asc(players.fullName))
@@ -551,11 +599,12 @@ export class DrizzleInSeasonDecisionRepository implements InSeasonDecisionReposi
   }
 
   #projectionPlayerQuery() {
+    const observedPosition = latestFantasyPosition(projectionSets.season, projectionSets.week);
     return this.#database
       .select({
         playerId: players.id,
         name: players.fullName,
-        primaryPosition: players.primaryPosition,
+        primaryPosition: sql<string>`coalesce(${observedPosition}, ${players.primaryPosition})`,
         eligiblePositions: players.eligiblePositions,
         nflTeam: players.nflTeam,
         status: players.status,
@@ -564,6 +613,7 @@ export class DrizzleInSeasonDecisionRepository implements InSeasonDecisionReposi
         ceilingPoints: playerProjections.ceilingPoints,
       })
       .from(playerProjections)
+      .innerJoin(projectionSets, eq(playerProjections.projectionSetId, projectionSets.id))
       .innerJoin(players, eq(playerProjections.playerId, players.id));
   }
 }
@@ -751,10 +801,32 @@ function normalizedCode(code: string): string {
   return code.trim().toUpperCase().replaceAll(" ", "");
 }
 
+const providerPositionAliases: Readonly<Record<string, Position>> = {
+  "D/ST": "DST",
+  DEF: "DST",
+  PK: "K",
+  DE: "DL",
+  DT: "DL",
+  NT: "DL",
+  CB: "DB",
+  S: "DB",
+  FS: "DB",
+  SS: "DB",
+  ILB: "LB",
+  MLB: "LB",
+  OLB: "LB",
+};
+
+function toPosition(value: string): Position | undefined {
+  const normalized = value.trim().toUpperCase();
+  if (positionSet.has(normalized)) return normalized as Position;
+  return providerPositionAliases[normalized];
+}
+
 function toPositions(primary: string, eligible: readonly string[]): readonly Position[] {
   const values = [...eligible, primary]
-    .map((value) => value.trim().toUpperCase())
-    .filter((value): value is Position => positionSet.has(value));
+    .map(toPosition)
+    .filter((value): value is Position => value !== undefined);
   return [...new Set(values)];
 }
 
@@ -768,7 +840,7 @@ function toPlayer(input: {
 }): Player | undefined {
   const positions = toPositions(input.primaryPosition, input.eligiblePositions);
   if (positions.length === 0) return undefined;
-  const nflTeam = input.nflTeam?.trim().toUpperCase();
+  const nflTeam = input.nflTeam ? canonicalNflTeamCode(input.nflTeam) : undefined;
   const status = input.status?.trim().toUpperCase();
   return {
     id: playerId(input.playerId),
@@ -1017,9 +1089,14 @@ function expandSlots(rows: readonly DecisionSlotRuleRow[]): readonly ExpandedSlo
   const slots: ExpandedSlot[] = [];
   for (const row of rows) {
     if (!Number.isSafeInteger(row.count) || row.count < 0) return undefined;
-    const positions = toPositions("", row.eligiblePositions);
-    const type = slotType(row, positions);
-    if (!type || positions.length === 0) return undefined;
+    const providerPositions = toPositions("", row.eligiblePositions);
+    const type = slotType(row, providerPositions);
+    if (!type) return undefined;
+    // ESPN and Yahoo describe reserve slots with labels such as BN/IR instead of a list of player
+    // positions. Once the slot type itself is known, its domain default is the safe eligibility
+    // set; treating the provider label as an unknown player position made every ordinary league
+    // fail roster-rule validation.
+    const positions = providerPositions.length > 0 ? providerPositions : defaultEligibility(type);
     for (let index = 1; index <= row.count; index += 1) {
       slots.push({
         id: rosterSlotId(`${row.id}:${index}`),
@@ -1605,7 +1682,9 @@ export class InSeasonDecisionService {
             }
           : null,
         projectionFreshness: freshness(
-          projectionTimestamps?.sourceObservedAt ?? null,
+          projectionSet
+            ? projectionFreshnessObservedAt(projectionSet, projectionTimestamps ?? undefined)
+            : null,
           now,
           projectionSet ? "Projection source time missing / unverified" : "No projection set",
         ),

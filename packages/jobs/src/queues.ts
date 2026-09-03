@@ -109,8 +109,18 @@ export interface EmailSweepJob {
 type QueueConfiguration = Omit<Queue, "name" | "partition" | "policy">;
 
 const DAY_SECONDS = 86_400;
+/** Weekly orchestration is bounded; the multi-hour ROS simulation has its own isolated queue. */
+export const WEEKLY_PROJECTION_REFRESH_EXPIRE_SECONDS = 45 * 60;
+/**
+ * Cold model training has reached 23 minutes in production and is CPU-bound, so its event loop
+ * cannot emit short heartbeats. Thirty minutes still detects an abandoned worker far sooner than
+ * the former eight-hour timeout without misclassifying legitimate cold starts.
+ */
+export const WEEKLY_PROJECTION_REFRESH_HEARTBEAT_SECONDS = 30 * 60;
 /** Full-universe ROS simulations are intentionally allowed more time than ordinary queue work. */
 export const SEASON_PROJECTION_REFRESH_EXPIRE_SECONDS = 8 * 60 * 60;
+/** ROS work is long-running, but a dead ROS process should still be detected independently. */
+export const SEASON_PROJECTION_REFRESH_HEARTBEAT_SECONDS = 5 * 60;
 /** Suppress a repeated 01:30 during DST fallback without skipping the next 23-hour spring run. */
 export const DAILY_PROJECTION_REFRESH_SINGLETON_SECONDS = 20 * 60 * 60;
 const queueConfigurations: Readonly<Record<keyof typeof queueNames, QueueConfiguration>> = {
@@ -130,7 +140,8 @@ const queueConfigurations: Readonly<Record<keyof typeof queueNames, QueueConfigu
     retryDelay: 60,
     retryBackoff: true,
     retryDelayMax: 30 * 60,
-    expireInSeconds: SEASON_PROJECTION_REFRESH_EXPIRE_SECONDS,
+    expireInSeconds: WEEKLY_PROJECTION_REFRESH_EXPIRE_SECONDS,
+    heartbeatSeconds: WEEKLY_PROJECTION_REFRESH_HEARTBEAT_SECONDS,
     retentionSeconds: 14 * DAY_SECONDS,
     deleteAfterSeconds: 7 * DAY_SECONDS,
     deadLetter: deadLetterQueueNames.refreshProjections,
@@ -142,6 +153,7 @@ const queueConfigurations: Readonly<Record<keyof typeof queueNames, QueueConfigu
     retryBackoff: true,
     retryDelayMax: 30 * 60,
     expireInSeconds: SEASON_PROJECTION_REFRESH_EXPIRE_SECONDS,
+    heartbeatSeconds: SEASON_PROJECTION_REFRESH_HEARTBEAT_SECONDS,
     retentionSeconds: 14 * DAY_SECONDS,
     deleteAfterSeconds: 7 * DAY_SECONDS,
     deadLetter: deadLetterQueueNames.refreshRosProjections,
@@ -401,8 +413,11 @@ export function assertLeagueSyncJob(job: LeagueSyncJob): void {
   }
   if (mode === "connection") {
     assertNonEmpty(job.connectionId, "connectionId");
-    if (job.refreshRequestId !== undefined || job.probe !== undefined) {
-      throw new Error("Invalid worker job: direct fields require server-direct mode");
+    if (job.refreshRequestId !== undefined) {
+      assertNonEmpty(job.refreshRequestId, "refreshRequestId");
+    }
+    if (job.probe !== undefined) {
+      throw new Error("Invalid worker job: probe requires server-direct mode");
     }
     return;
   }

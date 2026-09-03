@@ -45,6 +45,10 @@ import {
   demoScheduleEdgeResponse,
 } from "../lib/demo-schedule-edge";
 import { useDefaultLeague } from "../lib/use-default-league";
+import {
+  providerForSelectedLeague,
+  useFantasyProviderAttribution,
+} from "./fantasy-provider-attribution";
 import { ScheduleBoard } from "./schedule-board";
 import { TeamClaimCallout } from "./team-claim-callout";
 import { TourBanner } from "./tour-banner";
@@ -1148,6 +1152,11 @@ export function ScheduleEdgeWorkbench() {
   const edgeRequest = useRef<AbortController | null>(null);
   const matrixRequest = useRef<AbortController | null>(null);
   const { defaultLeagueId, loaded: preferenceLoaded } = useDefaultLeague();
+  useFantasyProviderAttribution(
+    portfolio.state === "ready"
+      ? providerForSelectedLeague(portfolio.portfolio.leagues, selectedLeagueId)
+      : null,
+  );
 
   useEffect(() => {
     if (!preferenceLoaded) return;

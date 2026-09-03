@@ -71,6 +71,10 @@ import {
   describeMobileDecision,
 } from "../lib/live-draft-status";
 import {
+  providerForSelectedLeague,
+  useFantasyProviderAttribution,
+} from "./fantasy-provider-attribution";
+import {
   advanceLocalDraftMock,
   createLocalDraftMock,
   draftMockAvailability,
@@ -264,6 +268,14 @@ export function DraftSessionWorkspace() {
   // Freshness has to keep ageing while the poll is failing, otherwise a dead feed
   // sits on "updated 2s ago" for as long as nothing new arrives.
   const [clockMs, setClockMs] = useState(() => Date.now());
+  const attributionLeagueId =
+    session === null
+      ? selectedLeagueId
+      : (portfolio?.leagues.find((league) => league.season?.id === session.leagueSeasonId)?.id ??
+        "");
+  useFantasyProviderAttribution(
+    providerForSelectedLeague(portfolio?.leagues ?? [], attributionLeagueId),
+  );
 
   const rememberSession = useCallback((next: DraftSessionSnapshot) => {
     localStorage.setItem(`laces-out:last-draft-session:${accountId.current}`, next.id);

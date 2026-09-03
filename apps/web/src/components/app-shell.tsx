@@ -1,5 +1,6 @@
 "use client";
 
+import type { Provider } from "@laces-out/contracts";
 import {
   ArrowUpRight,
   BarChart3,
@@ -20,8 +21,11 @@ import Link from "next/link";
 import { type ReactNode, useEffect, useRef, useState } from "react";
 
 import { apiBaseUrl, parseAuthenticatedSession } from "../lib/api-client";
-import { subscribeToYahooConnectionState } from "../lib/provider-connection-events";
 import { yahooComingSoon } from "../lib/public-site";
+import {
+  FantasyProviderAttributionBoundary,
+  shouldShowYahooAttribution,
+} from "./fantasy-provider-attribution";
 import { LacesOutMark } from "./laces-out-mark";
 import { ScrollCues } from "./scroll-cues";
 import { SessionControl } from "./session-control";
@@ -136,7 +140,7 @@ export function AppShell({
 }: AppShellProps) {
   const [isAdmin, setIsAdmin] = useState(false);
   const [isSignedIn, setIsSignedIn] = useState(false);
-  const [hasYahooConnection, setHasYahooConnection] = useState(false);
+  const [activeFantasyProvider, setActiveFantasyProvider] = useState<Provider | null>(null);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const mobileMenuTriggerRef = useRef<HTMLButtonElement>(null);
   const mobileMenuCloseRef = useRef<HTMLButtonElement>(null);
@@ -161,23 +165,10 @@ export function AppShell({
         const session = response.ok ? parseAuthenticatedSession(await response.json()) : null;
         setIsAdmin(session?.user.role === "admin");
         setIsSignedIn(session !== null);
-        setHasYahooConnection(false);
-
-        if (session === null || yahooComingSoon) return;
-        const yahooResponse = await fetch(`${apiBaseUrl}/v1/connections/yahoo`, {
-          credentials: "include",
-          headers: { Accept: "application/json" },
-          cache: "no-store",
-          signal: controller.signal,
-        });
-        if (!yahooResponse.ok) return;
-        const body = (await yahooResponse.json()) as { connections?: unknown };
-        setHasYahooConnection(Array.isArray(body.connections) && body.connections.length > 0);
       } catch {
         if (!controller.signal.aborted) {
           setIsAdmin(false);
           setIsSignedIn(false);
-          setHasYahooConnection(false);
         }
       }
     }
@@ -185,8 +176,6 @@ export function AppShell({
     void loadSession();
     return () => controller.abort();
   }, []);
-
-  useEffect(() => subscribeToYahooConnectionState(setHasYahooConnection), []);
 
   // Registration only. It installs the handler that shows a notification the member has already
   // opted into; permission is requested from the Settings toggle and nowhere else.
@@ -340,8 +329,10 @@ export function AppShell({
         </header>
 
         <main id="main-content" className="main-content">
-          {children}
-          {hasYahooConnection ? (
+          <FantasyProviderAttributionBoundary onProviderChange={setActiveFantasyProvider}>
+            {children}
+          </FantasyProviderAttributionBoundary>
+          {shouldShowYahooAttribution(activeFantasyProvider) ? (
             <footer className="provider-footer" aria-label="Data provider attribution">
               <YahooAttribution />
             </footer>

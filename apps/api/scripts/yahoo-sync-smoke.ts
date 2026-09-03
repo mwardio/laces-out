@@ -25,6 +25,7 @@ interface SmokeResult {
   readonly friendState: "accepted" | "unchanged";
   readonly memberships: number;
   readonly connectionLinks: number;
+  readonly providerCommissionerMapped: true;
   readonly isolatedStatus: true;
   readonly ownerAutoClaimed: true;
   readonly wrongYahooTeamDenied: true;
@@ -128,6 +129,20 @@ try {
       .where(eq(providerLeagueLinks.leagueSeasonId, first.leagueSeasonId));
     assert.equal(Number(membershipTotal?.value ?? 0), 2);
     assert.equal(Number(linkTotal?.value ?? 0), 2);
+    const linkRows = await smokeDatabase
+      .select({
+        providerCommissioner: providerLeagueLinks.providerCommissioner,
+        observedAt: providerLeagueLinks.providerCommissionerObservedAt,
+      })
+      .from(providerLeagueLinks)
+      .where(eq(providerLeagueLinks.leagueSeasonId, first.leagueSeasonId));
+    assert.ok(
+      linkRows.every(
+        (link) =>
+          link.providerCommissioner === true && link.observedAt?.getTime() === fetchedAt.getTime(),
+      ),
+      "Yahoo commissioner evidence must be scoped to each authenticated provider link",
+    );
 
     const mappedExternalKey = bundle.teams.find((team) => team.isCurrentUser)?.externalId;
     assert.ok(mappedExternalKey, "Yahoo fixture must identify one current-user team");
@@ -204,6 +219,7 @@ try {
       friendState: friendFirst.state,
       memberships: Number(membershipTotal?.value ?? 0),
       connectionLinks: Number(linkTotal?.value ?? 0),
+      providerCommissionerMapped: true,
       isolatedStatus: true,
       ownerAutoClaimed: true,
       wrongYahooTeamDenied: true,

@@ -9,6 +9,7 @@ import type {
 import {
   Award,
   BarChart3,
+  ChevronDown,
   Crosshair,
   Database,
   LoaderCircle,
@@ -35,6 +36,10 @@ import {
 } from "../lib/demo-contract-data";
 import { providerLabel } from "../lib/copy";
 import { AiCoachPanel } from "./ai-coach-panel";
+import {
+  providerForSelectedLeague,
+  useFantasyProviderAttribution,
+} from "./fantasy-provider-attribution";
 import { ReckoningRecapPanel } from "./reckoning-recap-panel";
 import styles from "./league-analytics-workbench.module.css";
 import { ShareCardButton, type ShareCardAward } from "./share-card-button";
@@ -53,6 +58,12 @@ type AnalyticsState =
   | { readonly state: "loading" }
   | { readonly state: "error"; readonly message: string }
   | { readonly state: "ready"; readonly snapshot: LeagueAnalyticsSnapshot };
+
+type AvailableOpponentScout = Extract<
+  LeagueAnalyticsSnapshot["opponentScout"],
+  { state: "available" }
+>;
+type OpponentScoutMatchup = AvailableOpponentScout["matchups"][number];
 
 const decimal = new Intl.NumberFormat(undefined, {
   minimumFractionDigits: 1,
@@ -756,12 +767,29 @@ function PositionalSection({ snapshot }: { readonly snapshot: LeagueAnalyticsSna
                         </td>
                       );
                     })}
-                    <td className={styles.profileCell}>
-                      <span>
-                        Up {team.strengths.length > 0 ? team.strengths.join(" / ") : "even"}
+                    <td
+                      className={styles.profileCell}
+                      aria-label={`${
+                        team.strengths.length > 0
+                          ? `Stronger positions: ${team.strengths.join(", ")}`
+                          : "No standout stronger positions"
+                      }. ${
+                        team.weaknesses.length > 0
+                          ? `Weaker positions: ${team.weaknesses.join(", ")}`
+                          : "No standout weaker positions"
+                      }.`}
+                    >
+                      <span
+                        aria-hidden="true"
+                        data-direction={team.strengths.length > 0 ? "up" : "neutral"}
+                      >
+                        {team.strengths.length > 0 ? `↑ ${team.strengths.join(" / ")}` : "—"}
                       </span>
-                      <span>
-                        Down {team.weaknesses.length > 0 ? team.weaknesses.join(" / ") : "even"}
+                      <span
+                        aria-hidden="true"
+                        data-direction={team.weaknesses.length > 0 ? "down" : "neutral"}
+                      >
+                        {team.weaknesses.length > 0 ? `↓ ${team.weaknesses.join(" / ")}` : "—"}
                       </span>
                     </td>
                   </tr>
@@ -782,8 +810,88 @@ function metricValue(value: number | null, unit: string | null): string {
   return decimal.format(value);
 }
 
+function projectionCoverage(projection: OpponentScoutMatchup["subjectProjection"]): string {
+  if (projection.starterCount === 0) return "No starting lineup stored";
+  if (projection.projectedStarterCount === projection.starterCount) {
+    return `${projection.starterCount} starters projected`;
+  }
+  return `${projection.projectedStarterCount}/${projection.starterCount} starters projected`;
+}
+
+function ProjectionRoster({
+  team,
+  projection,
+  players,
+}: {
+  readonly team: LeagueAnalyticsTeam;
+  readonly projection: OpponentScoutMatchup["subjectProjection"];
+  readonly players: OpponentScoutMatchup["subjectPlayers"];
+}) {
+  const groups = [
+    { label: "Starters", players: players.filter((player) => player.isStarter) },
+    { label: "Bench", players: players.filter((player) => !player.isStarter) },
+  ].filter((group) => group.players.length > 0);
+
+  return (
+    <details className={styles.projectionRoster}>
+      <summary>
+        <span>
+          <strong>
+            {team.name}
+            {team.isCurrentUser ? <span className={styles.youLabel}>You</span> : null}
+          </strong>
+          <small>{projectionCoverage(projection)}</small>
+        </span>
+        <span className={styles.rosterSummaryTotal}>
+          <strong>
+            {projection.projectedPoints === null
+              ? "—"
+              : `${decimal.format(projection.projectedPoints)} pts`}
+          </strong>
+          <ChevronDown size={15} aria-hidden="true" />
+        </span>
+      </summary>
+      <div className={styles.projectionRosterBody}>
+        {groups.length === 0 ? (
+          <p>No current roster is stored for this team.</p>
+        ) : (
+          groups.map((group) => (
+            <section key={group.label} aria-label={`${team.name} ${group.label.toLowerCase()}`}>
+              <h4>{group.label}</h4>
+              <ul>
+                {group.players.map((player) => (
+                  <li key={player.playerId}>
+                    <span>
+                      <strong>{player.name}</strong>
+                      <small>
+                        {player.primaryPosition}
+                        {player.nflTeam ? ` · ${player.nflTeam}` : ""} · {player.slotCode}
+                      </small>
+                    </span>
+                    <strong className={styles.playerProjection}>
+                      {player.projectedPoints === null
+                        ? "—"
+                        : `${decimal.format(player.projectedPoints)} pts`}
+                    </strong>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          ))
+        )}
+      </div>
+    </details>
+  );
+}
+
 function OpponentSection({ snapshot }: { readonly snapshot: LeagueAnalyticsSnapshot }) {
   const section = snapshot.opponentScout;
+  const matchups = section.state === "available" ? section.matchups : [];
+  const defaultMatchupId = section.state === "available" ? section.defaultMatchupId : "";
+  const [selectedMatchupId, setSelectedMatchupId] = useState(defaultMatchupId);
+  const selectedMatchup =
+    matchups.find((matchup) => matchup.id === selectedMatchupId) ?? matchups[0];
+
   return (
     <section
       className={`${styles.panel} ${styles.opponentPanel}`}
@@ -792,35 +900,120 @@ function OpponentSection({ snapshot }: { readonly snapshot: LeagueAnalyticsSnaps
     >
       <SectionHeader
         icon={<Crosshair size={18} aria-hidden="true" />}
-        title="Opponent scout"
-        tag={section.state === "available" ? `Week ${section.week}` : "Team specific"}
+        title="Matchup scout"
+        tag={section.state === "available" ? `Week ${section.week}` : "League matchups"}
         titleId="scout-title"
       />
       {section.state === "unavailable" ? (
-        <Unavailable title="Opponent scout" reasons={section.reasons} />
-      ) : (
+        <Unavailable title="Matchup scout" reasons={section.reasons} />
+      ) : selectedMatchup ? (
         <>
-          <div className={styles.matchupHeader}>
-            <div>
-              <small>Your team</small>
-              <strong>{section.subject.name}</strong>
+          {matchups.length > 1 ? (
+            <div className={styles.matchupPicker}>
+              <label htmlFor="analytics-matchup">Current matchup</label>
+              <select
+                id="analytics-matchup"
+                value={selectedMatchup.id}
+                onChange={(event) => setSelectedMatchupId(event.target.value)}
+              >
+                {matchups.map((matchup) => (
+                  <option value={matchup.id} key={matchup.id}>
+                    {matchup.subject.name} vs {matchup.opponent.name}
+                  </option>
+                ))}
+              </select>
             </div>
-            <span>vs</span>
-            <div>
-              <small>{section.matchupStatus}</small>
-              <strong>{section.opponent.name}</strong>
+          ) : null}
+          <div className={styles.matchupScoreboard}>
+            <article>
+              <div className={styles.scoutTeamIdentity}>
+                <TeamAvatar
+                  teamName={selectedMatchup.subject.name}
+                  logoUrl={selectedMatchup.subject.logoUrl}
+                  abbreviation={selectedMatchup.subject.abbreviation}
+                  size="large"
+                  highlight={selectedMatchup.subject.isCurrentUser}
+                />
+                <span>
+                  <small>
+                    {selectedMatchup.subject.managerDisplayName ?? "Manager unavailable"}
+                  </small>
+                  <strong>
+                    {selectedMatchup.subject.name}
+                    {selectedMatchup.subject.isCurrentUser ? (
+                      <span className={styles.youLabel}>You</span>
+                    ) : null}
+                  </strong>
+                </span>
+              </div>
+              <div className={styles.teamProjectionTotal}>
+                <small>Projected starters</small>
+                <strong>
+                  {selectedMatchup.subjectProjection.projectedPoints === null
+                    ? "—"
+                    : decimal.format(selectedMatchup.subjectProjection.projectedPoints)}
+                </strong>
+                <span>{projectionCoverage(selectedMatchup.subjectProjection)}</span>
+              </div>
+            </article>
+            <div className={styles.matchupVersus}>
+              <strong>vs</strong>
+              <span>{selectedMatchup.matchupStatus.replace("-", " ")}</span>
             </div>
+            <article>
+              <div className={styles.scoutTeamIdentity}>
+                <TeamAvatar
+                  teamName={selectedMatchup.opponent.name}
+                  logoUrl={selectedMatchup.opponent.logoUrl}
+                  abbreviation={selectedMatchup.opponent.abbreviation}
+                  size="large"
+                  highlight={selectedMatchup.opponent.isCurrentUser}
+                />
+                <span>
+                  <small>
+                    {selectedMatchup.opponent.managerDisplayName ?? "Manager unavailable"}
+                  </small>
+                  <strong>
+                    {selectedMatchup.opponent.name}
+                    {selectedMatchup.opponent.isCurrentUser ? (
+                      <span className={styles.youLabel}>You</span>
+                    ) : null}
+                  </strong>
+                </span>
+              </div>
+              <div className={styles.teamProjectionTotal}>
+                <small>Projected starters</small>
+                <strong>
+                  {selectedMatchup.opponentProjection.projectedPoints === null
+                    ? "—"
+                    : decimal.format(selectedMatchup.opponentProjection.projectedPoints)}
+                </strong>
+                <span>{projectionCoverage(selectedMatchup.opponentProjection)}</span>
+              </div>
+            </article>
           </div>
           <div className={styles.scoutMetrics}>
-            {section.metrics.map((metric) => (
+            {selectedMatchup.metrics.map((metric) => (
               <div key={metric.id} title={metric.definition}>
                 <span>{metric.label}</span>
                 <strong>{metricValue(metric.subjectValue, metric.unit)}</strong>
-                <span className={styles.metricEdge} data-edge={metric.edgeOwner}>
+                <span
+                  className={styles.metricEdge}
+                  data-edge={metric.edgeOwner}
+                  aria-label={
+                    metric.edgeOwner === "subject"
+                      ? `${selectedMatchup.subject.name} edge`
+                      : metric.edgeOwner === "opponent"
+                        ? `${selectedMatchup.opponent.name} edge`
+                        : metric.edgeOwner === "even"
+                          ? "Even"
+                          : "Not enough data"
+                  }
+                >
                   {metric.edgeOwner === "subject"
-                    ? "Your edge"
+                    ? "← Edge"
                     : metric.edgeOwner === "opponent"
-                      ? "Opponent edge"
+                      ? "Edge →"
                       : metric.edgeOwner === "even"
                         ? "Even"
                         : "Not enough data"}
@@ -829,9 +1022,91 @@ function OpponentSection({ snapshot }: { readonly snapshot: LeagueAnalyticsSnaps
               </div>
             ))}
           </div>
+          <div className={styles.scoutDetailSection}>
+            <header>
+              <div>
+                <h3>Positional strength</h3>
+                <p>Dedicated-starter projections compared across the league.</p>
+              </div>
+            </header>
+            {selectedMatchup.positionalBreakdown.length === 0 ? (
+              <p className={styles.scoutEmpty}>Positional projections are not available yet.</p>
+            ) : (
+              <div
+                className={styles.positionComparison}
+                role="table"
+                aria-label="Positional strength comparison"
+              >
+                <div className={styles.positionComparisonHeader} role="row">
+                  <span role="columnheader">Pos</span>
+                  <span role="columnheader">{selectedMatchup.subject.name}</span>
+                  <span role="columnheader">Avg</span>
+                  <span role="columnheader">{selectedMatchup.opponent.name}</span>
+                </div>
+                {selectedMatchup.positionalBreakdown.map((position) => (
+                  <div className={styles.positionComparisonRow} role="row" key={position.position}>
+                    <strong role="rowheader">{position.position}</strong>
+                    <span
+                      role="cell"
+                      data-edge={position.edgeOwner === "subject" ? "winner" : undefined}
+                    >
+                      <strong>
+                        {position.subject.projectedPoints === null
+                          ? "—"
+                          : `${decimal.format(position.subject.projectedPoints)} pts`}
+                      </strong>
+                      <small>
+                        {position.subject.rank === null
+                          ? "No rank"
+                          : `#${position.subject.rank} · ${decimal.format(position.subject.strengthPercentile ?? 0)} pct`}
+                      </small>
+                    </span>
+                    <span role="cell" className={styles.positionLeagueMean}>
+                      {position.leagueMean === null ? "—" : decimal.format(position.leagueMean)}
+                    </span>
+                    <span
+                      role="cell"
+                      data-edge={position.edgeOwner === "opponent" ? "winner" : undefined}
+                    >
+                      <strong>
+                        {position.opponent.projectedPoints === null
+                          ? "—"
+                          : `${decimal.format(position.opponent.projectedPoints)} pts`}
+                      </strong>
+                      <small>
+                        {position.opponent.rank === null
+                          ? "No rank"
+                          : `#${position.opponent.rank} · ${decimal.format(position.opponent.strengthPercentile ?? 0)} pct`}
+                      </small>
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+          <div className={styles.scoutDetailSection}>
+            <header>
+              <div>
+                <h3>Player projections</h3>
+                <p>Every stored roster player, split between starters and bench.</p>
+              </div>
+            </header>
+            <div className={styles.projectionRosters}>
+              <ProjectionRoster
+                team={selectedMatchup.subject}
+                projection={selectedMatchup.subjectProjection}
+                players={selectedMatchup.subjectPlayers}
+              />
+              <ProjectionRoster
+                team={selectedMatchup.opponent}
+                projection={selectedMatchup.opponentProjection}
+                players={selectedMatchup.opponentPlayers}
+              />
+            </div>
+          </div>
           <p className={styles.methodNote}>{section.definition}</p>
         </>
-      )}
+      ) : null}
     </section>
   );
 }
@@ -1046,7 +1321,11 @@ function AnalyticsQuickRead({ snapshot }: { readonly snapshot: LeagueAnalyticsSn
     snapshot.power.state === "available"
       ? snapshot.power.rankings.find((item) => item.team.isCurrentUser)
       : null;
-  const opponent = snapshot.opponentScout.state === "available" ? snapshot.opponentScout : null;
+  const scout = snapshot.opponentScout.state === "available" ? snapshot.opponentScout : null;
+  const featuredMatchup =
+    scout?.matchups.find(
+      (matchup) => matchup.subject.isCurrentUser || matchup.opponent.isCurrentUser,
+    ) ?? scout?.matchups[0];
   const currentScore =
     snapshot.scores.state === "available"
       ? snapshot.scores.teams.find((item) => item.team.isCurrentUser)
@@ -1056,7 +1335,7 @@ function AnalyticsQuickRead({ snapshot }: { readonly snapshot: LeagueAnalyticsSn
       ? snapshot.positional.teams.find((item) => item.team.isCurrentUser)
       : null;
   const favorableEdges =
-    opponent?.metrics.filter((metric) => metric.edgeOwner === "subject").length ?? 0;
+    featuredMatchup?.metrics.filter((metric) => metric.edgeOwner === "subject").length ?? 0;
 
   return (
     <nav className={styles.quickRead} aria-label="Jump to league analytics">
@@ -1066,11 +1345,13 @@ function AnalyticsQuickRead({ snapshot }: { readonly snapshot: LeagueAnalyticsSn
       <a href="#analytics-opponent">
         <Crosshair size={16} aria-hidden="true" />
         <span>
-          <small>Opponent</small>
+          <small>{featuredMatchup?.subject.isCurrentUser ? "Opponent" : "Matchup"}</small>
           <strong>
-            {opponent
-              ? `${favorableEdges} ${favorableEdges === 1 ? "edge" : "edges"} vs ${opponent.opponent.name}`
-              : "Waiting for matchup"}
+            {featuredMatchup?.subject.isCurrentUser
+              ? `${favorableEdges} ${favorableEdges === 1 ? "edge" : "edges"} vs ${featuredMatchup.opponent.name}`
+              : featuredMatchup
+                ? `${featuredMatchup.subject.name} vs ${featuredMatchup.opponent.name}`
+                : "Waiting for matchup"}
           </strong>
         </span>
       </a>
@@ -1085,17 +1366,6 @@ function AnalyticsQuickRead({ snapshot }: { readonly snapshot: LeagueAnalyticsSn
           </strong>
         </span>
       </a>
-      <a href="#analytics-season">
-        <BarChart3 size={16} aria-hidden="true" />
-        <span>
-          <small>Season</small>
-          <strong>
-            {currentScore
-              ? `${record(currentScore.actualRecord)} · ${decimal.format(currentScore.expectedWins)} xW`
-              : "No ledger yet"}
-          </strong>
-        </span>
-      </a>
       <a href="#analytics-positions">
         <Target size={16} aria-hidden="true" />
         <span>
@@ -1104,6 +1374,17 @@ function AnalyticsQuickRead({ snapshot }: { readonly snapshot: LeagueAnalyticsSn
             {currentPositions?.strengths.length
               ? `Strong at ${currentPositions.strengths.slice(0, 2).join(" / ")}`
               : "Even profile"}
+          </strong>
+        </span>
+      </a>
+      <a href="#analytics-season">
+        <BarChart3 size={16} aria-hidden="true" />
+        <span>
+          <small>Season</small>
+          <strong>
+            {currentScore
+              ? `${record(currentScore.actualRecord)} · ${decimal.format(currentScore.expectedWins)} xW`
+              : "No ledger yet"}
           </strong>
         </span>
       </a>
@@ -1117,6 +1398,11 @@ export function LeagueAnalyticsWorkbench() {
   const [analytics, setAnalytics] = useState<AnalyticsState>({ state: "idle" });
   const [isDemo, setIsDemo] = useState(false);
   const analyticsRequest = useRef<AbortController | null>(null);
+  useFantasyProviderAttribution(
+    portfolio.state === "ready"
+      ? providerForSelectedLeague(portfolio.portfolio.leagues, leagueId)
+      : null,
+  );
 
   /** Opt in to the labeled tour after a failed load, matching the Overview page's offer. */
   const showSample = useCallback(() => {
@@ -1370,8 +1656,8 @@ export function LeagueAnalyticsWorkbench() {
             <PowerSection snapshot={analytics.snapshot} />
           </div>
           <PlayoffOddsSection snapshot={analytics.snapshot} />
-          <ScoreSection snapshot={analytics.snapshot} />
           <PositionalSection snapshot={analytics.snapshot} />
+          <ScoreSection snapshot={analytics.snapshot} />
         </>
       )}
     </div>

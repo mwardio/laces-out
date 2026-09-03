@@ -28,7 +28,6 @@ import {
   type EspnSessionConnectionList,
 } from "../lib/api-client";
 import { sendServerSessionOffer } from "../lib/bridge-extension";
-import { publishYahooConnectionState } from "../lib/provider-connection-events";
 import { yahooComingSoon } from "../lib/public-site";
 import { loginUrlForCurrentPath } from "../lib/safe-return-to";
 import { EspnPairingStepper } from "./espn-pairing-stepper";
@@ -297,7 +296,6 @@ export function ConnectionWorkbench() {
       if (response.status === 401) {
         setYahooConnectionsState("idle");
         setSignedOut(true);
-        publishYahooConnectionState(false);
         return;
       }
       if (!response.ok) {
@@ -314,7 +312,6 @@ export function ConnectionWorkbench() {
       setYahooConnections(body.connections);
       setYahooConnectionsState("done");
       setYahooState(body.connections.length > 0 ? "done" : "idle");
-      publishYahooConnectionState(body.connections.length > 0);
     } catch (error) {
       setYahooConnectionsState("error");
       setYahooConnectionsError(

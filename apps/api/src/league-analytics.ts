@@ -13,12 +13,14 @@ import type {
 } from "@laces-out/contracts";
 import { parseLeagueRules } from "@laces-out/contracts";
 import {
+  dataSources,
   fantasyTeams,
   leagueMemberships,
   leagues,
   leagueSeasons,
   matchupSnapshots,
   playerProjections,
+  playerWeeklyRosterObservations,
   players,
   projectionSets,
   rosterEntries,
@@ -32,6 +34,7 @@ import {
   type ProviderName,
   type WeeklyMatchupStatus,
 } from "@laces-out/db";
+import { canonicalNflTeamCode } from "@laces-out/domain";
 import {
   analyzeLeagueSeason,
   analyzePositionalStrength,
@@ -45,7 +48,7 @@ import {
   type PlayoffOddsResult,
   type PowerFactorDefinition,
 } from "@laces-out/league-analytics";
-import { and, asc, desc, eq, inArray, ne, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, ne, or, sql, type SQLWrapper } from "drizzle-orm";
 
 import {
   currentManagedProjectionProfile,
@@ -57,7 +60,10 @@ import {
   type PlayoffOddsMatchupRow,
   type PlayoffOddsTeamRow,
 } from "./playoff-odds.js";
-import { projectionTimestampProvenance } from "./projection-provenance.js";
+import {
+  projectionFreshnessObservedAt,
+  projectionTimestampProvenance,
+} from "./projection-provenance.js";
 import {
   latestProviderCommissionerAuthoritySql,
   publicLeagueAccessRole,
@@ -96,6 +102,31 @@ const PLAYOFF_FORECAST_BASIS = {
 const CANONICAL_POSITIONS = ["QB", "RB", "WR", "TE", "K", "DST", "DL", "LB", "DB", "IDP"] as const;
 type CanonicalPosition = (typeof CANONICAL_POSITIONS)[number];
 const CANONICAL_POSITION_SET = new Set<string>(CANONICAL_POSITIONS);
+const POSITION_ALIASES: Readonly<Record<string, CanonicalPosition>> = {
+  "D/ST": "DST",
+  DEF: "DST",
+  PK: "K",
+  DE: "DL",
+  DT: "DL",
+  NT: "DL",
+  CB: "DB",
+  S: "DB",
+  FS: "DB",
+  SS: "DB",
+  ILB: "LB",
+  MLB: "LB",
+  OLB: "LB",
+};
+
+function canonicalAnalyticsPosition(value: string): CanonicalPosition | null {
+  const normalized = value.trim().toUpperCase();
+  const aliased = POSITION_ALIASES[normalized] ?? normalized;
+  return CANONICAL_POSITION_SET.has(aliased) ? (aliased as CanonicalPosition) : null;
+}
+
+function displayAnalyticsPosition(value: string): string {
+  return canonicalAnalyticsPosition(value) ?? value.trim().toUpperCase();
+}
 
 const POWER_FACTORS = {
   actual: {
@@ -190,7 +221,12 @@ export interface AnalyticsRosterSnapshotRow {
 export interface AnalyticsRosterEntryRow {
   readonly snapshotId: string;
   readonly playerId: string;
+  readonly name: string;
   readonly primaryPosition: string;
+  readonly nflTeam: string | null;
+  readonly status: string | null;
+  readonly slotCode: string;
+  readonly isStarter: boolean;
 }
 
 export interface AnalyticsProjectionSetRow {
@@ -249,6 +285,29 @@ export interface LeagueAnalyticsRepository {
    * silent. Optional so existing repository implementations and test doubles are unaffected.
    */
   findManagedProjectionProfile?(leagueSeasonId: string): Promise<ManagedProjectionProfile>;
+}
+
+/** Prefer admitted fantasy usage for two-way players while retaining catalog positions as fallback. */
+function latestFantasyPosition(season: SQLWrapper, week: SQLWrapper) {
+  return sql<string | null>`(
+    select case
+      when upper(btrim(${playerWeeklyRosterObservations.position})) = 'PK' then 'K'
+      else upper(btrim(${playerWeeklyRosterObservations.position}))
+    end
+    from ${playerWeeklyRosterObservations}
+    inner join ${dataSources}
+      on ${dataSources.id} = ${playerWeeklyRosterObservations.sourceId}
+    where ${playerWeeklyRosterObservations.playerId} = ${players.id}
+      and ${playerWeeklyRosterObservations.season} = ${season}
+      and ${playerWeeklyRosterObservations.week} <= coalesce(${week}, 25)
+      and ${playerWeeklyRosterObservations.inputChecksum} = ${dataSources.lastChecksum}
+      and upper(btrim(${playerWeeklyRosterObservations.position})) in ('QB', 'RB', 'WR', 'TE', 'K', 'PK')
+    order by
+      ${playerWeeklyRosterObservations.week} desc,
+      ${playerWeeklyRosterObservations.fetchedAt} desc,
+      ${playerWeeklyRosterObservations.id} desc
+    limit 1
+  )`;
 }
 
 export class DrizzleLeagueAnalyticsRepository implements LeagueAnalyticsRepository {
@@ -381,12 +440,27 @@ export class DrizzleLeagueAnalyticsRepository implements LeagueAnalyticsReposito
       .select({
         snapshotId: rosterEntries.snapshotId,
         playerId: rosterEntries.playerId,
-        primaryPosition: players.primaryPosition,
+        name: players.fullName,
+        primaryPosition: sql<string>`coalesce(
+          ${latestFantasyPosition(rosterSnapshots.season, rosterSnapshots.week)},
+          upper(btrim(${players.primaryPosition}))
+        )`,
+        nflTeam: players.nflTeam,
+        status: players.status,
+        slotCode: rosterEntries.slotCode,
+        isStarter: rosterEntries.isStarter,
       })
       .from(rosterEntries)
+      .innerJoin(rosterSnapshots, eq(rosterEntries.snapshotId, rosterSnapshots.id))
       .innerJoin(players, eq(rosterEntries.playerId, players.id))
       .where(inArray(rosterEntries.snapshotId, [...snapshotIds]))
-      .orderBy(asc(rosterEntries.snapshotId), asc(players.primaryPosition), asc(players.id))
+      .orderBy(
+        asc(rosterEntries.snapshotId),
+        desc(rosterEntries.isStarter),
+        asc(rosterEntries.slotCode),
+        asc(players.fullName),
+        asc(players.id),
+      )
       .limit(limit);
   }
 
@@ -739,10 +813,16 @@ function dedicatedStarterCounts(
   const counts = new Map<CanonicalPosition, number>();
   for (const row of rows) {
     if (!row.isStarter || row.count <= 0) continue;
-    const eligible = [...new Set(row.eligiblePositions.map((item) => item.toUpperCase()))];
+    const eligible = [
+      ...new Set(
+        row.eligiblePositions
+          .map(canonicalAnalyticsPosition)
+          .filter((position): position is CanonicalPosition => position !== null),
+      ),
+    ];
     const [only] = eligible;
-    if (eligible.length !== 1 || !only || !CANONICAL_POSITION_SET.has(only)) continue;
-    const position = only as CanonicalPosition;
+    if (eligible.length !== 1 || !only) continue;
+    const position = only;
     counts.set(position, (counts.get(position) ?? 0) + row.count);
   }
   return counts;
@@ -870,7 +950,9 @@ function buildPositionalAnalytics(input: {
   for (const team of input.teams) {
     const entries = entriesByTeam.get(team.id) ?? [];
     for (const position of positions) {
-      const roster = entries.filter((entry) => entry.primaryPosition.toUpperCase() === position);
+      const roster = entries.filter(
+        (entry) => canonicalAnalyticsPosition(entry.primaryPosition) === position,
+      );
       const projected = roster.flatMap((entry) => {
         const points = projectionByPlayer.get(entry.playerId);
         return points === undefined ? [] : [points];
@@ -1369,29 +1451,21 @@ function buildPlayoffOdds(input: {
   };
 }
 
+type AvailableOpponentScout = Extract<LeagueOpponentScoutSection, { state: "available" }>;
+type OpponentScoutMatchup = AvailableOpponentScout["matchups"][number];
+
 function buildOpponentAnalytics(input: {
   readonly teams: readonly AnalyticsTeamRow[];
   readonly claimedTeamId: string | null;
   readonly currentWeek: number | null;
   readonly matchups: readonly AnalyticsMatchupObservationRow[];
+  readonly snapshots: readonly AnalyticsRosterSnapshotRow[];
+  readonly rosterEntries: readonly AnalyticsRosterEntryRow[];
+  readonly projectionRows: readonly AnalyticsProjectionRow[];
   readonly scores: BuiltScoreAnalytics;
   readonly positional: BuiltPositionalAnalytics;
   readonly power: LeaguePowerAnalyticsSection;
 }): LeagueOpponentScoutSection {
-  if (!input.claimedTeamId) {
-    return unavailable(
-      reason(
-        "TEAM_UNCLAIMED",
-        "Select your fantasy team in Settings to receive a current-opponent scout.",
-      ),
-    );
-  }
-  const subject = input.teams.find((team) => team.id === input.claimedTeamId);
-  if (!subject) {
-    return unavailable(
-      reason("TEAM_UNCLAIMED", "The selected team is not part of the latest league season."),
-    );
-  }
   if (input.currentWeek === null) {
     return unavailable(
       reason(
@@ -1400,35 +1474,101 @@ function buildOpponentAnalytics(input: {
       ),
     );
   }
-  const matchup = input.matchups
+  const teamById = new Map(input.teams.map((team) => [team.id, team]));
+  const currentMatchups = input.matchups
     .filter(
       (row) =>
         row.week === input.currentWeek &&
-        (row.homeTeamId === subject.id || row.awayTeamId === subject.id),
+        teamById.has(row.homeTeamId) &&
+        teamById.has(row.awayTeamId),
     )
     .sort(
       (left, right) =>
+        Number(
+          input.claimedTeamId !== null &&
+            (right.homeTeamId === input.claimedTeamId || right.awayTeamId === input.claimedTeamId),
+        ) -
+          Number(
+            input.claimedTeamId !== null &&
+              (left.homeTeamId === input.claimedTeamId || left.awayTeamId === input.claimedTeamId),
+          ) ||
         left.providerMatchupId.localeCompare(right.providerMatchupId) ||
         left.matchupId.localeCompare(right.matchupId),
-    )[0];
-  if (!matchup) {
+    );
+  if (currentMatchups.length === 0) {
     return unavailable(
-      reason("OPPONENT_MISSING", `No Week ${input.currentWeek} matchup is stored for your team.`),
+      reason(
+        "OPPONENT_MISSING",
+        `No Week ${input.currentWeek} matchups are stored for this league.`,
+      ),
     );
   }
-  const opponentId = matchup.homeTeamId === subject.id ? matchup.awayTeamId : matchup.homeTeamId;
-  const opponent = input.teams.find((team) => team.id === opponentId);
-  if (!opponent) {
-    return unavailable(
-      reason("OPPONENT_MISSING", "The stored current matchup references an unknown opponent."),
-    );
+
+  const snapshotTeam = new Map(input.snapshots.map((snapshot) => [snapshot.id, snapshot.teamId]));
+  const entriesByTeam = new Map<string, AnalyticsRosterEntryRow[]>();
+  for (const entry of input.rosterEntries) {
+    const teamId = snapshotTeam.get(entry.snapshotId);
+    if (!teamId) continue;
+    entriesByTeam.set(teamId, [...(entriesByTeam.get(teamId) ?? []), entry]);
   }
+  const projectionByPlayer = new Map(
+    input.projectionRows.flatMap((row) => {
+      const points = numberOrNull(row.meanPoints);
+      return points === null ? [] : [[row.playerId, points] as const];
+    }),
+  );
+  const projectionDetailsByTeam = new Map(
+    input.teams.map((team) => {
+      const entries = entriesByTeam.get(team.id) ?? [];
+      const players = entries
+        .map((entry) => {
+          const nflTeam = entry.nflTeam ? canonicalNflTeamCode(entry.nflTeam) : "";
+          return {
+            playerId: entry.playerId,
+            name: entry.name.trim().slice(0, 200),
+            primaryPosition: displayAnalyticsPosition(entry.primaryPosition).slice(0, 20),
+            nflTeam: nflTeam ? nflTeam.slice(0, 12) : null,
+            status: entry.status?.trim().slice(0, 80) || null,
+            slotCode: entry.slotCode.trim().slice(0, 40),
+            isStarter: entry.isStarter,
+            projectedPoints: projectionByPlayer.get(entry.playerId) ?? null,
+          };
+        })
+        .sort(
+          (left, right) =>
+            Number(right.isStarter) - Number(left.isStarter) ||
+            left.slotCode.localeCompare(right.slotCode) ||
+            (right.projectedPoints ?? -Infinity) - (left.projectedPoints ?? -Infinity) ||
+            left.name.localeCompare(right.name) ||
+            left.playerId.localeCompare(right.playerId),
+        );
+      const starters = players.filter((player) => player.isStarter);
+      const projectedStarters = starters.filter((player) => player.projectedPoints !== null);
+      return [
+        team.id,
+        {
+          projection: {
+            projectedPoints:
+              starters.length > 0 && projectedStarters.length === starters.length
+                ? projectedStarters.reduce((sum, player) => sum + (player.projectedPoints ?? 0), 0)
+                : null,
+            starterCount: starters.length,
+            projectedStarterCount: projectedStarters.length,
+            rosterPlayerCount: players.length,
+            projectedPlayerCount: players.filter((player) => player.projectedPoints !== null)
+              .length,
+          },
+          players: players.slice(0, 64),
+        },
+      ] as const;
+    }),
+  );
   const scoreTeams = input.scores.section.state === "available" ? input.scores.section.teams : [];
-  const subjectScore = scoreTeams.find((team) => team.team.id === subject.id);
-  const opponentScore = scoreTeams.find((team) => team.team.id === opponent.id);
   const powerTeams = input.power.state === "available" ? input.power.rankings : [];
-  const subjectPower = powerTeams.find((team) => team.team.id === subject.id)?.score ?? null;
-  const opponentPower = powerTeams.find((team) => team.team.id === opponent.id)?.score ?? null;
+  const positionalSection =
+    input.positional.section.state === "available" ? input.positional.section : null;
+  const positionalTeams = positionalSection?.teams ?? [];
+  const positionalByTeam = new Map(positionalTeams.map((team) => [team.team.id, team]));
   const scoreMetric = (
     id: string,
     label: string,
@@ -1446,78 +1586,198 @@ function buildOpponentAnalytics(input: {
     leagueAverage: average(peers),
     ...(unit ? { unit } : {}),
   });
-  const metrics = [
-    scoreMetric(
-      "points-for-per-week",
-      "Points per scored week",
-      "Average official points across weeks with a stored score.",
-      subjectScore?.pointsFor.average ?? null,
-      opponentScore?.pointsFor.average ?? null,
-      scoreTeams.map((team) => team.pointsFor.average),
-      "pts",
-    ),
-    scoreMetric(
-      "actual-win-percentage",
-      "Actual win percentage",
-      "Wins plus half-ties divided by completed head-to-head matchups.",
-      subjectScore?.actualRecord.winPercentage ?? null,
-      opponentScore?.actualRecord.winPercentage ?? null,
-      scoreTeams.map((team) => team.actualRecord.winPercentage),
-      "%",
-    ),
-    scoreMetric(
-      "all-play-win-percentage",
-      "All-play win percentage",
-      "Wins plus half-ties across weekly comparisons with every scored league peer.",
-      subjectScore?.allPlay.winPercentage ?? null,
-      opponentScore?.allPlay.winPercentage ?? null,
-      scoreTeams.map((team) => team.allPlay.winPercentage),
-      "%",
-    ),
-    scoreMetric(
-      "power-score",
-      "Power score",
-      "The disclosed, availability-weighted league power composite.",
-      subjectPower,
-      opponentPower,
-      powerTeams.map((team) => team.score),
-      "/100",
-    ),
-    scoreMetric(
-      "positional-strength-percentile",
-      "Positional strength",
-      "Average percentile across projection-backed dedicated positions.",
-      input.positional.averageByTeam.get(subject.id) ?? null,
-      input.positional.averageByTeam.get(opponent.id) ?? null,
-      [...input.positional.averageByTeam.values()],
-      "pctile",
-    ),
-  ];
-  const scout = buildOpponentScout({
-    subjectTeamId: subject.id,
-    opponentTeamId: opponent.id,
-    metrics,
+  const matchups = currentMatchups.flatMap((matchup): OpponentScoutMatchup[] => {
+    const claimedIsAway = matchup.awayTeamId === input.claimedTeamId;
+    const subjectId = claimedIsAway ? matchup.awayTeamId : matchup.homeTeamId;
+    const opponentId = claimedIsAway ? matchup.homeTeamId : matchup.awayTeamId;
+    const subject = teamById.get(subjectId);
+    const opponent = teamById.get(opponentId);
+    if (!subject || !opponent) return [];
+    const subjectScore = scoreTeams.find((team) => team.team.id === subject.id);
+    const opponentScore = scoreTeams.find((team) => team.team.id === opponent.id);
+    const subjectPower = powerTeams.find((team) => team.team.id === subject.id)?.score ?? null;
+    const opponentPower = powerTeams.find((team) => team.team.id === opponent.id)?.score ?? null;
+    const subjectProjection = projectionDetailsByTeam.get(subject.id) ?? {
+      projection: {
+        projectedPoints: null,
+        starterCount: 0,
+        projectedStarterCount: 0,
+        rosterPlayerCount: 0,
+        projectedPlayerCount: 0,
+      },
+      players: [],
+    };
+    const opponentProjection = projectionDetailsByTeam.get(opponent.id) ?? {
+      projection: {
+        projectedPoints: null,
+        starterCount: 0,
+        projectedStarterCount: 0,
+        rosterPlayerCount: 0,
+        projectedPlayerCount: 0,
+      },
+      players: [],
+    };
+    const metrics = [
+      scoreMetric(
+        "projected-lineup-points",
+        "Projected lineup",
+        "Sum of mean weekly projections for every player currently in a starting slot. A total is withheld if any starter lacks a projection.",
+        subjectProjection.projection.projectedPoints,
+        opponentProjection.projection.projectedPoints,
+        [...projectionDetailsByTeam.values()].map((team) => team.projection.projectedPoints),
+        "pts",
+      ),
+      scoreMetric(
+        "points-for-per-week",
+        "Points per scored week",
+        "Average official points across weeks with a stored score.",
+        subjectScore?.pointsFor.average ?? null,
+        opponentScore?.pointsFor.average ?? null,
+        scoreTeams.map((team) => team.pointsFor.average),
+        "pts",
+      ),
+      scoreMetric(
+        "actual-win-percentage",
+        "Actual win percentage",
+        "Wins plus half-ties divided by completed head-to-head matchups.",
+        subjectScore?.actualRecord.winPercentage ?? null,
+        opponentScore?.actualRecord.winPercentage ?? null,
+        scoreTeams.map((team) => team.actualRecord.winPercentage),
+        "%",
+      ),
+      scoreMetric(
+        "all-play-win-percentage",
+        "All-play win percentage",
+        "Wins plus half-ties across weekly comparisons with every scored league peer.",
+        subjectScore?.allPlay.winPercentage ?? null,
+        opponentScore?.allPlay.winPercentage ?? null,
+        scoreTeams.map((team) => team.allPlay.winPercentage),
+        "%",
+      ),
+      scoreMetric(
+        "power-score",
+        "Power score",
+        "The disclosed, availability-weighted league power composite.",
+        subjectPower,
+        opponentPower,
+        powerTeams.map((team) => team.score),
+        "/100",
+      ),
+      scoreMetric(
+        "positional-strength-percentile",
+        "Positional strength",
+        "Average percentile across projection-backed dedicated positions.",
+        input.positional.averageByTeam.get(subject.id) ?? null,
+        input.positional.averageByTeam.get(opponent.id) ?? null,
+        [...input.positional.averageByTeam.values()],
+        "pctile",
+      ),
+    ];
+    const scout = buildOpponentScout({
+      subjectTeamId: subject.id,
+      opponentTeamId: opponent.id,
+      metrics,
+    });
+    const subjectPositions = positionalByTeam.get(subject.id);
+    const opponentPositions = positionalByTeam.get(opponent.id);
+    const positionalBreakdown = positionalSection
+      ? positionalSection.positions.map((position) => {
+          const missing = {
+            status: "missing" as const,
+            projectedPoints: null,
+            strengthPercentile: null,
+            rank: null,
+            starterCount: positionalSection.basis.starterCounts[position] ?? 1,
+            rosterPlayerCount: 0,
+            projectedPlayerCount: 0,
+          };
+          const project = (
+            entry: NonNullable<typeof subjectPositions>["entries"][number] | undefined,
+          ) =>
+            entry
+              ? {
+                  status: entry.status,
+                  projectedPoints: entry.projectedPoints,
+                  strengthPercentile: entry.strengthPercentile,
+                  rank: entry.rank,
+                  starterCount: entry.starterCount,
+                  rosterPlayerCount: entry.rosterPlayerCount,
+                  projectedPlayerCount: entry.projectedPlayerCount,
+                }
+              : missing;
+          const subjectEntry = subjectPositions?.entries.find(
+            (entry) => entry.position === position,
+          );
+          const opponentEntry = opponentPositions?.entries.find(
+            (entry) => entry.position === position,
+          );
+          const subjectPosition = project(subjectEntry);
+          const opponentPosition = project(opponentEntry);
+          const subjectPercentile = subjectPosition.strengthPercentile;
+          const opponentPercentile = opponentPosition.strengthPercentile;
+          const edgeOwner =
+            subjectPercentile === null || opponentPercentile === null
+              ? ("unknown" as const)
+              : Math.abs(subjectPercentile - opponentPercentile) <= 0.000_001
+                ? ("even" as const)
+                : subjectPercentile > opponentPercentile
+                  ? ("subject" as const)
+                  : ("opponent" as const);
+          return {
+            position,
+            leagueMean: subjectEntry?.leagueMean ?? opponentEntry?.leagueMean ?? null,
+            subject: subjectPosition,
+            opponent: opponentPosition,
+            edgeOwner,
+          };
+        })
+      : [];
+    return [
+      {
+        id: matchup.providerMatchupId,
+        matchupStatus: matchup.status,
+        subject: identity(subject, input.claimedTeamId),
+        opponent: identity(opponent, input.claimedTeamId),
+        subjectProjection: subjectProjection.projection,
+        opponentProjection: opponentProjection.projection,
+        subjectPlayers: subjectProjection.players,
+        opponentPlayers: opponentProjection.players,
+        positionalBreakdown,
+        metrics: scout.metrics.map((metric) => ({
+          id: metric.id,
+          label: metric.label,
+          definition: metric.definition,
+          unit: metric.unit,
+          subjectValue: metric.subjectValue,
+          opponentValue: metric.opponentValue,
+          leagueAverage: metric.leagueAverage,
+          subjectAdvantage: metric.subjectAdvantage,
+          edgeOwner: metric.edgeOwner,
+        })),
+        subjectAdvantages: [...scout.subjectAdvantages],
+        opponentAdvantages: [...scout.opponentAdvantages],
+      },
+    ];
   });
+  const [defaultMatchup] = matchups;
+  if (!defaultMatchup) {
+    return unavailable(
+      reason("OPPONENT_MISSING", "The stored current matchups reference unknown teams."),
+    );
+  }
   return {
     state: "available",
     week: input.currentWeek,
-    matchupStatus: matchup.status,
-    subject: identity(subject, input.claimedTeamId),
-    opponent: identity(opponent, input.claimedTeamId),
-    metrics: scout.metrics.map((metric) => ({
-      id: metric.id,
-      label: metric.label,
-      definition: metric.definition,
-      unit: metric.unit,
-      subjectValue: metric.subjectValue,
-      opponentValue: metric.opponentValue,
-      leagueAverage: metric.leagueAverage,
-      subjectAdvantage: metric.subjectAdvantage,
-      edgeOwner: metric.edgeOwner,
-    })),
-    subjectAdvantages: [...scout.subjectAdvantages],
-    opponentAdvantages: [...scout.opponentAdvantages],
-    definition: scout.definition,
+    matchupStatus: defaultMatchup.matchupStatus,
+    subject: defaultMatchup.subject,
+    opponent: defaultMatchup.opponent,
+    metrics: defaultMatchup.metrics,
+    subjectAdvantages: defaultMatchup.subjectAdvantages,
+    opponentAdvantages: defaultMatchup.opponentAdvantages,
+    defaultMatchupId: defaultMatchup.id,
+    matchups,
+    definition:
+      "A current-week comparison of any league matchup using stored official results, current starting-lineup projections, power scores, and projection-backed positional strength. Player and team totals use the same accessible weekly projection set.",
   };
 }
 
@@ -1696,6 +1956,9 @@ export class LeagueAnalyticsService {
       claimedTeamId: membership.claimedFantasyTeamId,
       currentWeek: season.currentWeek,
       matchups,
+      snapshots,
+      rosterEntries: boundedRosterEntries,
+      projectionRows: boundedProjectionRows,
       scores,
       positional,
       power,
@@ -1749,7 +2012,9 @@ export class LeagueAnalyticsService {
             }
           : null,
         projectionFreshness: freshness(
-          projectionTimestamps?.sourceObservedAt ?? null,
+          projectionSet
+            ? projectionFreshnessObservedAt(projectionSet, projectionTimestamps ?? undefined)
+            : null,
           now,
           "projection source",
           24,

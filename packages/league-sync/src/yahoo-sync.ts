@@ -3,6 +3,7 @@ import {
   parseYahooLeagueSyncArtifacts,
   YahooFantasyReadClient,
   YahooReadClientError,
+  YahooXmlError,
   type YahooXmlArtifact,
 } from "@laces-out/connector-yahoo";
 import type { ExternalLeagueRef, LeagueSyncBundle } from "@laces-out/connectors";
@@ -159,6 +160,7 @@ export interface YahooSyncRepository {
     bundle: LeagueSyncBundle,
   ): Promise<YahooSyncReceipt>;
   markFailure(userId: string, connectionId: string, errorCode: string, at: Date): Promise<void>;
+  markDiscoverySuccess(userId: string, connectionId: string, at: Date): Promise<void>;
 }
 
 export interface YahooAccessTokenPort {
@@ -455,6 +457,28 @@ export class DrizzleYahooSyncRepository implements YahooSyncRepository {
       );
   }
 
+  async markDiscoverySuccess(userId: string, connectionId: string, at: Date): Promise<void> {
+    await this.#database
+      .update(providerConnections)
+      .set({
+        health: "healthy",
+        lastSuccessfulAt: at,
+        lastErrorCode: null,
+        lastErrorAt: null,
+        lastErrorDetail: null,
+        consecutiveFailures: 0,
+        circuitOpenUntil: null,
+        updatedAt: at,
+      })
+      .where(
+        and(
+          eq(providerConnections.id, connectionId),
+          eq(providerConnections.userId, userId),
+          eq(providerConnections.provider, "yahoo"),
+        ),
+      );
+  }
+
   async persistBundle(
     userId: string,
     connectionId: string,
@@ -477,6 +501,8 @@ export class DrizzleYahooSyncRepository implements YahooSyncRepository {
     if (currentUserTeams.length > 1) {
       throw new Error("Yahoo marked more than one team as owned by the current login");
     }
+    const currentUserTeam = currentUserTeams[0];
+    const providerCommissioner = currentUserTeam?.currentUserIsCommissioner ?? null;
 
     return this.#database.transaction(async (transaction) => {
       const [connection] = await transaction
@@ -517,6 +543,56 @@ export class DrizzleYahooSyncRepository implements YahooSyncRepository {
       await transaction.execute(
         sql`select pg_advisory_xact_lock(hashtextextended(${`yahoo:${bundle.league.externalId}:${bundle.league.season}`}, 0))`,
       );
+      const persistProviderLink = async (leagueSeasonId: string): Promise<void> => {
+        const [previousLink] = await transaction
+          .select({ providerCommissioner: providerLeagueLinks.providerCommissioner })
+          .from(providerLeagueLinks)
+          .where(
+            and(
+              eq(providerLeagueLinks.connectionId, connectionId),
+              eq(providerLeagueLinks.leagueSeasonId, leagueSeasonId),
+            ),
+          )
+          .limit(1);
+        await transaction
+          .insert(providerLeagueLinks)
+          .values({
+            connectionId,
+            leagueSeasonId,
+            currentUserTeamExternalKey: currentUserTeam?.externalId ?? null,
+            providerCommissioner,
+            providerCommissionerObservedAt: providerCommissioner === null ? null : fetchedAt,
+            lastSyncedAt: fetchedAt,
+          })
+          .onConflictDoUpdate({
+            target: [providerLeagueLinks.connectionId, providerLeagueLinks.leagueSeasonId],
+            set: {
+              currentUserTeamExternalKey: currentUserTeam?.externalId ?? null,
+              providerCommissioner,
+              providerCommissionerObservedAt: providerCommissioner === null ? null : fetchedAt,
+              lastSyncedAt: fetchedAt,
+              updatedAt: now,
+            },
+          });
+
+        const previousCommissioner = previousLink?.providerCommissioner ?? null;
+        if (previousCommissioner !== providerCommissioner) {
+          await transaction.insert(auditEvents).values({
+            userId,
+            action: "yahoo.membership.provider_commissioner_evidence_updated",
+            targetType: "provider_league_link",
+            targetId: `${connectionId}:${leagueSeasonId}`,
+            correlationId: idempotencyKey.slice(0, 128) || "yahoo-official-commissioner-evidence",
+            metadata: {
+              provider: "yahoo",
+              signal: "league-manager",
+              previous: previousCommissioner,
+              current: providerCommissioner,
+            },
+            occurredAt: now,
+          });
+        }
+      };
       const [prior] = await transaction
         .select({
           id: syncRuns.id,
@@ -537,24 +613,8 @@ export class DrizzleYahooSyncRepository implements YahooSyncRepository {
           .update(leagueSeasons)
           .set({ lastSyncedAt: fetchedAt, updatedAt: now })
           .where(eq(leagueSeasons.id, season.id));
-        await transaction
-          .insert(providerLeagueLinks)
-          .values({
-            connectionId,
-            leagueSeasonId: season.id,
-            currentUserTeamExternalKey:
-              bundle.teams.find((team) => team.isCurrentUser)?.externalId ?? null,
-            lastSyncedAt: fetchedAt,
-          })
-          .onConflictDoUpdate({
-            target: [providerLeagueLinks.connectionId, providerLeagueLinks.leagueSeasonId],
-            set: {
-              currentUserTeamExternalKey: currentUserTeams[0]?.externalId ?? null,
-              lastSyncedAt: fetchedAt,
-              updatedAt: now,
-            },
-          });
-        const mappedExternalKey = currentUserTeams[0]?.externalId;
+        await persistProviderLink(season.id);
+        const mappedExternalKey = currentUserTeam?.externalId;
         if (mappedExternalKey) {
           const [mappedTeam] = await transaction
             .select({ id: fantasyTeams.id })
@@ -703,22 +763,7 @@ export class DrizzleYahooSyncRepository implements YahooSyncRepository {
         .values({ leagueId, userId, role: createdLeague ? "owner" : "member" })
         .onConflictDoNothing({ target: [leagueMemberships.leagueId, leagueMemberships.userId] });
 
-      await transaction
-        .insert(providerLeagueLinks)
-        .values({
-          connectionId,
-          leagueSeasonId,
-          currentUserTeamExternalKey: currentUserTeams[0]?.externalId ?? null,
-          lastSyncedAt: fetchedAt,
-        })
-        .onConflictDoUpdate({
-          target: [providerLeagueLinks.connectionId, providerLeagueLinks.leagueSeasonId],
-          set: {
-            currentUserTeamExternalKey: currentUserTeams[0]?.externalId ?? null,
-            lastSyncedAt: fetchedAt,
-            updatedAt: now,
-          },
-        });
+      await persistProviderLink(leagueSeasonId);
 
       await transaction.delete(scoringRules).where(eq(scoringRules.leagueSeasonId, leagueSeasonId));
       if (bundle.league.settings.scoringRules.length > 0) {
@@ -858,9 +903,7 @@ export class DrizzleYahooSyncRepository implements YahooSyncRepository {
         recordsWritten += 2 + entries.length;
       }
 
-      const mappedTeamId = currentUserTeams[0]
-        ? teamIds.get(currentUserTeams[0].externalId)
-        : undefined;
+      const mappedTeamId = currentUserTeam ? teamIds.get(currentUserTeam.externalId) : undefined;
       if (mappedTeamId) {
         const [conflict] = await transaction
           .select({ userId: leagueMemberships.userId })
@@ -1064,8 +1107,18 @@ export class YahooSyncService {
       );
       const syncs: YahooSyncReceipt[] = [];
       for (const league of eligible) {
-        syncs.push(await this.#syncLeague(userId, connectionId, league.externalId, league));
+        try {
+          syncs.push(await this.#syncLeague(userId, connectionId, league.externalId, league));
+        } catch (error) {
+          // Yahoo exposes newly created leagues to discovery before a second team has joined.
+          // They are not persistable league seasons yet and must not block the member's playable
+          // leagues from syncing. A later discovery will pick them up once Yahoo reports a real
+          // multi-team league.
+          if (error instanceof YahooXmlError && error.code === "LEAGUE_NOT_READY") continue;
+          throw error;
+        }
       }
+      await this.#repository.markDiscoverySuccess(userId, connectionId, this.#now());
       return {
         connectionId,
         discovered: eligible,
