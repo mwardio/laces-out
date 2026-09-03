@@ -216,6 +216,48 @@ describe("EspnSessionSyncService staged identity persistence", () => {
     expect(JSON.stringify(fixture.events)).not.toContain(espnS2);
   });
 
+  it("reports only closed database metadata for a supplemental persistence failure", async () => {
+    const fixture = syncFixture();
+    fixture.client.fetchSupplemental.mockResolvedValueOnce({
+      supplemental: [
+        {
+          kind: "available-waivers",
+          leagueId: externalLeagueId,
+          season: 2026,
+          week: 1,
+          capturedAt,
+          endpoint:
+            `https://lm-api-reads.fantasy.espn.com/apis/v3/games/ffl/seasons/2026/segments/0/leagues/${externalLeagueId}` +
+            "?view=kona_player_info&scoringPeriodId=1",
+          checksumSha256: "25542d0b306226e44235e66924d332ab9351e868a73d9ea24f67ddca7954610c",
+          payload: { players: [] },
+        },
+      ],
+      supplementalFailures: [],
+    } as never);
+    const databaseCause = Object.assign(new Error(`private value ${swid}`), {
+      code: "23505",
+      table: "sync_runs",
+      constraint: "sync_runs_idempotency_unique",
+    });
+    fixture.persistence.persistSupplemental.mockRejectedValueOnce(
+      Object.assign(new Error(`query params ${espnS2}`), { cause: databaseCause }),
+    );
+
+    const receipt = await fixture.service.syncLeague(userId, connectionId, leagueSeasonId);
+
+    expect(receipt.supplementalFailures).toEqual([
+      {
+        kind: "available-waivers",
+        code: "PERSISTENCE_FAILED",
+        diagnostic: "code=23505 table=sync_runs constraint=sync_runs_idempotency_unique",
+        retryable: true,
+      },
+    ]);
+    expect(JSON.stringify(receipt)).not.toContain(swid);
+    expect(JSON.stringify(receipt)).not.toContain(espnS2);
+  });
+
   it("marks reauthorization when a supplemental read proves the session expired", async () => {
     const fixture = syncFixture();
     fixture.client.fetchSupplemental.mockRejectedValueOnce(

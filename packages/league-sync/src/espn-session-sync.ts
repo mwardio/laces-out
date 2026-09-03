@@ -155,6 +155,31 @@ function readFailureIsRetryable(code: EspnSessionReadError["code"]): boolean {
   return code === "UPSTREAM_ERROR" || code === "INVALID_RESPONSE";
 }
 
+const SAFE_DATABASE_METADATA_FIELDS = ["code", "schema", "table", "column", "constraint"] as const;
+
+/**
+ * Returns only closed database/error metadata. Query text and messages are deliberately excluded:
+ * Drizzle query errors may embed the normalized artifact in their parameter list.
+ */
+function safeAdmissionDiagnostic(error: unknown): string | undefined {
+  const parts: string[] = [];
+  let cursor: unknown = error;
+  for (let depth = 0; depth < 6 && cursor && typeof cursor === "object"; depth += 1) {
+    const record = cursor as Record<string, unknown>;
+    const name = typeof record.name === "string" ? record.name : undefined;
+    if (name && /^[A-Za-z][A-Za-z0-9]*Error$/u.test(name)) parts.push(`name=${name}`);
+    for (const field of SAFE_DATABASE_METADATA_FIELDS) {
+      const value = record[field];
+      if (typeof value === "string" && /^[A-Za-z0-9_.-]{1,96}$/u.test(value)) {
+        parts.push(`${field}=${value}`);
+      }
+    }
+    cursor = record.cause;
+  }
+  const diagnostic = [...new Set(parts)].join(" ");
+  return diagnostic || undefined;
+}
+
 function admissionFailure(
   kind: EspnSessionSupplementalKind,
   error: unknown,
@@ -174,7 +199,13 @@ function admissionFailure(
   if (error instanceof EspnSyncPersistenceError) {
     return { kind, code: "STALE_SNAPSHOT", retryable: true };
   }
-  return { kind, code: "PERSISTENCE_FAILED", retryable: true };
+  const diagnostic = safeAdmissionDiagnostic(error);
+  return {
+    kind,
+    code: "PERSISTENCE_FAILED",
+    ...(diagnostic ? { diagnostic } : {}),
+    retryable: true,
+  };
 }
 
 function supplementalEnvelope(artifact: EspnSessionSupplementalArtifact) {
