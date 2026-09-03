@@ -521,6 +521,40 @@ export class LeagueSyncService implements LeagueSyncServicePort {
       });
       return { state: "reauthorization-required", connectionId };
     }
+    if (
+      target.provider === "espn" &&
+      job.refreshRequestId &&
+      this.#espnSessionAttempts &&
+      espnReceipt?.supplementalFailures.length
+    ) {
+      const failure =
+        espnReceipt.supplementalFailures.find((candidate) => !candidate.retryable) ??
+        espnReceipt.supplementalFailures[0]!;
+      try {
+        await this.#espnSessionAttempts.recordFailure({
+          refreshRequestId: job.refreshRequestId,
+          leagueSeasonId: job.leagueSeasonId,
+          errorCode: failure.code,
+          errorDetail:
+            failure.kind === null
+              ? "One or more ESPN supplemental reads did not complete."
+              : `The ${failure.kind} ESPN artifact did not complete.`,
+          // This queue job has already committed its valid artifacts and will be acknowledged.
+          // Scheduled provider sweeps still retry the failed artifact, but this member request is
+          // no longer actively running and must not remain `processing` for its full 24-hour TTL.
+          retryable: false,
+          at: this.#now(),
+        });
+      } catch {
+        this.#emit({
+          event: "refresh-attempt-bookkeeping-failed",
+          provider: "espn",
+          connectionId,
+          leagueSeasonId: job.leagueSeasonId,
+          phase: "failed",
+        });
+      }
+    }
     return receipt.state === "accepted"
       ? {
           state: "synced",

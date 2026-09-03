@@ -154,6 +154,7 @@ describe("EspnSessionSyncService staged identity persistence", () => {
       recordsWritten: 12,
       supplementalAccepted: 0,
       supplementalFailed: 0,
+      supplementalFailures: [],
       identityChanged: true,
       reauthorizationRequired: false,
     });

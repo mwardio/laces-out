@@ -95,6 +95,7 @@ function espnReceipt(overrides: Partial<EspnSessionSyncReceipt> = {}): EspnSessi
     syncedAt: now.toISOString(),
     supplementalAccepted: 0,
     supplementalFailed: 0,
+    supplementalFailures: [],
     identityChanged: false,
     reauthorizationRequired: false,
     ...overrides,
@@ -338,7 +339,11 @@ describe("LeagueSyncService", () => {
   });
 
   it("finalizes a durable core before reporting supplemental reauthorization", async () => {
-    const receipt = espnReceipt({ reauthorizationRequired: true, supplementalFailed: 1 });
+    const receipt = espnReceipt({
+      reauthorizationRequired: true,
+      supplementalFailed: 1,
+      supplementalFailures: [{ kind: null, code: "AUTHORIZATION_EXPIRED", retryable: false }],
+    });
     const afterEspnCommit = vi.fn(() => Promise.resolve());
     const observe = vi.fn<(event: LeagueSyncOperationalEvent) => void>();
     const circuit = circuitStore();
@@ -374,6 +379,43 @@ describe("LeagueSyncService", () => {
       "sync-completed",
       "reauthorization-required",
     ]);
+  });
+
+  it("settles a member refresh when a supplemental artifact is rejected", async () => {
+    const receipt = espnReceipt({
+      supplementalFailed: 1,
+      supplementalFailures: [{ kind: "available-waivers", code: "SCHEMA_DRIFT", retryable: false }],
+    });
+    const espnSessionAttempts = {
+      recordStarted: vi.fn(() => Promise.resolve()),
+      recordFailure: vi.fn(() => Promise.resolve()),
+    };
+    const service = new LeagueSyncService({
+      targets: reader({
+        provider: "espn",
+        externalKey: "1234567",
+        connectionCapabilities: { authentication: ["server-session-cookie"] },
+      }),
+      espnSessionSync: {
+        syncIdentity: () => Promise.reject(new Error("must not be called")),
+        syncLeague: () => Promise.resolve(receipt),
+      },
+      espnSessionAttempts,
+      circuit: circuitStore(),
+      now: () => now,
+    });
+
+    await expect(
+      service.runLeagueSync(job({ refreshRequestId: "refresh-1" }), context()),
+    ).resolves.toMatchObject({ state: "synced" });
+    expect(espnSessionAttempts.recordFailure).toHaveBeenCalledWith({
+      refreshRequestId: "refresh-1",
+      leagueSeasonId: "league-season-1",
+      errorCode: "SCHEMA_DRIFT",
+      errorDetail: "The available-waivers ESPN artifact did not complete.",
+      retryable: false,
+      at: now,
+    });
   });
 
   it("runs post-commit before containing a circuit-success bookkeeping failure", async () => {

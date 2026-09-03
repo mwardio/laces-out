@@ -1,4 +1,5 @@
 import {
+  EspnSupplementalNormalizationError,
   EspnSessionReadClient,
   EspnSessionReadError,
   EspnWebClientNormalizationError,
@@ -9,6 +10,7 @@ import {
   type EspnSessionLeagueRequest,
   type EspnSessionSupplementalArtifacts,
   type EspnSessionSupplementalArtifact,
+  type EspnSessionSupplementalKind,
 } from "@laces-out/connector-espn";
 import type { LeagueSupplementalBundle, LeagueSyncBundle } from "@laces-out/connectors";
 import {
@@ -23,9 +25,22 @@ import { and, eq } from "drizzle-orm";
 import type { EspnSessionCredentialPort } from "./espn-session-connection.js";
 import {
   DrizzleEspnSyncPersistence,
+  EspnSyncPersistenceError,
   type PersistEspnSupplementalReceipt,
   type PersistEspnSyncReceipt,
 } from "./espn-sync-persistence.js";
+
+export interface EspnSessionSupplementalFailure {
+  readonly kind: EspnSessionSupplementalKind | null;
+  readonly code:
+    | EspnSessionReadError["code"]
+    | "SCHEMA_DRIFT"
+    | "STALE_SNAPSHOT"
+    | "PERSISTENCE_FAILED"
+    | "SUPPLEMENTAL_READ_FAILED";
+  readonly diagnostic?: string;
+  readonly retryable: boolean;
+}
 
 export interface EspnSessionSyncReceipt {
   readonly syncRunId: string;
@@ -38,6 +53,8 @@ export interface EspnSessionSyncReceipt {
   readonly syncedAt: string;
   readonly supplementalAccepted: number;
   readonly supplementalFailed: number;
+  /** Closed, credential-free failure details used to settle member refresh requests honestly. */
+  readonly supplementalFailures: readonly EspnSessionSupplementalFailure[];
   /** Internal durable-change signal used to run post-commit work on an unchanged core. */
   readonly identityChanged: boolean;
   /** Internal terminal-health signal discovered only after the core became durable. */
@@ -131,6 +148,33 @@ export interface EspnSessionSyncOperationalEvent {
   readonly outcome: "succeeded" | "failed";
   readonly supplementalAccepted?: number;
   readonly supplementalFailed?: number;
+  readonly supplementalFailures?: readonly EspnSessionSupplementalFailure[];
+}
+
+function readFailureIsRetryable(code: EspnSessionReadError["code"]): boolean {
+  return code === "UPSTREAM_ERROR" || code === "INVALID_RESPONSE";
+}
+
+function admissionFailure(
+  kind: EspnSessionSupplementalKind,
+  error: unknown,
+): EspnSessionSupplementalFailure {
+  if (error instanceof EspnSupplementalNormalizationError) {
+    const issue = error.issues[0];
+    const diagnostic = issue
+      ? `${error.message} (${issue.path || "payload"}: ${issue.message})`
+      : error.message;
+    return {
+      kind,
+      code: "SCHEMA_DRIFT",
+      diagnostic: diagnostic.slice(0, 240),
+      retryable: false,
+    };
+  }
+  if (error instanceof EspnSyncPersistenceError) {
+    return { kind, code: "STALE_SNAPSHOT", retryable: true };
+  }
+  return { kind, code: "PERSISTENCE_FAILED", retryable: true };
 }
 
 function supplementalEnvelope(artifact: EspnSessionSupplementalArtifact) {
@@ -441,6 +485,7 @@ export class EspnSessionSyncService {
         syncedAt: core.capturedAt,
         supplementalAccepted: 0,
         supplementalFailed: 0,
+        supplementalFailures: [],
         identityChanged: coreReceipt.identityChanged,
         reauthorizationRequired: false,
       },
@@ -476,6 +521,7 @@ export class EspnSessionSyncService {
     const supplementalReadStartedAt = this.#monotonicNow();
     let artifacts: EspnSessionSupplementalArtifacts;
     let supplementalReadFailures = 0;
+    const supplementalFailures: EspnSessionSupplementalFailure[] = [];
     let reauthorizationRequired = false;
     try {
       artifacts = await this.#client.fetchSupplemental({
@@ -489,7 +535,19 @@ export class EspnSessionSyncService {
         outcome: "succeeded",
         supplementalAccepted: artifacts.supplemental.length,
         supplementalFailed: artifacts.supplementalFailures.length,
+        supplementalFailures: artifacts.supplementalFailures.map((failure) => ({
+          kind: failure.kind,
+          code: failure.code,
+          retryable: readFailureIsRetryable(failure.code),
+        })),
       });
+      supplementalFailures.push(
+        ...artifacts.supplementalFailures.map((failure) => ({
+          kind: failure.kind,
+          code: failure.code,
+          retryable: readFailureIsRetryable(failure.code),
+        })),
+      );
     } catch (error) {
       if (error instanceof EspnSessionReadError && error.code === "AUTHORIZATION_EXPIRED") {
         this.#emit("supplemental-read", supplementalReadStartedAt, {
@@ -523,11 +581,21 @@ export class EspnSessionSyncService {
         }
         artifacts = { supplemental: [], supplementalFailures: [] };
         supplementalReadFailures = 1;
+        supplementalFailures.push({
+          kind: null,
+          code: "AUTHORIZATION_EXPIRED",
+          retryable: false,
+        });
       } else {
         // The admitted core is already durable. An unexpected supplemental orchestration failure
         // is closed as one failed best-effort stage and never rolls back or retries core identity.
         artifacts = { supplemental: [], supplementalFailures: [] };
         supplementalReadFailures = 1;
+        supplementalFailures.push({
+          kind: null,
+          code: "SUPPLEMENTAL_READ_FAILED",
+          retryable: true,
+        });
         this.#emit("supplemental-read", supplementalReadStartedAt, {
           connectionId,
           leagueSeasonId,
@@ -556,11 +624,12 @@ export class EspnSessionSyncService {
         });
         supplementalAccepted += 1;
         recordsWritten += receipt.recordsWritten;
-      } catch {
+      } catch (error) {
         // Each undocumented supplemental view is admitted independently. A drift in transactions
         // cannot roll back a valid roster or erase the last good waiver snapshot.
         supplementalFailed += 1;
         supplementalPersistenceFailed += 1;
+        supplementalFailures.push(admissionFailure(artifact.kind, error));
       }
     }
     this.#emit("supplemental-admission-persist", supplementalPersistStartedAt, {
@@ -569,6 +638,7 @@ export class EspnSessionSyncService {
       outcome: supplementalPersistenceFailed === 0 ? "succeeded" : "failed",
       supplementalAccepted,
       supplementalFailed: supplementalPersistenceFailed,
+      supplementalFailures: supplementalFailures.filter((failure) => failure.kind !== null),
     });
 
     return {
@@ -576,6 +646,7 @@ export class EspnSessionSyncService {
       recordsWritten,
       supplementalAccepted,
       supplementalFailed,
+      supplementalFailures,
       reauthorizationRequired,
     };
   }
