@@ -246,6 +246,9 @@ describe("EspnSessionSyncService staged identity persistence", () => {
 
     const receipt = await fixture.service.syncLeague(userId, connectionId, leagueSeasonId);
 
+    const supplementalInput = fixture.persistence.persistSupplemental.mock
+      .calls[0]?.[0] as unknown as { readonly idempotencyKey: string } | undefined;
+    expect(supplementalInput?.idempotencyKey).toContain(`:${capturedAt}`);
     expect(receipt.supplementalFailures).toEqual([
       {
         kind: "available-waivers",

@@ -650,7 +650,10 @@ export class EspnSessionSyncService {
           bundle,
           checksumSha256: artifact.checksumSha256,
           effectiveAt: new Date(artifact.capturedAt),
-          idempotencyKey: `espn-session:${connectionId}:${target.externalLeagueId}:${target.season}:${artifact.kind}:${artifact.checksumSha256}`,
+          // A provider pool may legitimately return to an earlier checksum (A -> B -> A). Keep
+          // admission identity tied to the exact capture, as bridge snapshots already do, so that
+          // a historical receipt cannot collide with the newly current state.
+          idempotencyKey: `espn-session:${connectionId}:${target.externalLeagueId}:${target.season}:${artifact.kind}:${artifact.checksumSha256}:${artifact.capturedAt}`,
           now: this.#now(),
         });
         supplementalAccepted += 1;
