@@ -1,0 +1,305 @@
+{
+  "schemaVersion": "schedule-edge-v2-preregistration-v1",
+  "protocol": {
+    "id": "schedule-edge-v2-preregistration-2026-09-03",
+    "candidateId": "weekly-recency-residual-defense-equal-v1",
+    "registeredOn": "2026-09-03",
+    "purpose": "Evaluate whether an opponent-specific defense residual adds honest directional Schedule Edge signal beyond the admitted weekly recency-only player expectation.",
+    "releaseBoundary": {
+      "scheduleEdgeOnly": true,
+      "rosReleaseArtifact": "laces-ros-distribution-v8",
+      "rosAdmissionIsNotScheduleEdgeEvidence": true,
+      "rerunRosReleaseGate": false,
+      "changeRosReleaseGate": false,
+      "changePublicApiEnum": false,
+      "addPublicEndpoint": false,
+      "defaultBeforeAdmission": "descriptive-only"
+    },
+    "evidenceInventory": {
+      "repositoryCommitAtRegistration": "5bf3b2b8a826cb7f0e957e7f5075c5d66fb7b2df",
+      "files": [
+        {
+          "path": "docs/schedule-edge-validation-2026-07-27.json",
+          "sha256": "d76e37094e8b833a4d52ffb1ad32f99e15f231973c48020fc687a5a9d1c80534",
+          "role": "Prior Schedule Edge v1 policy, source identity, and fold audit; not transferable validation for this candidate.",
+          "embeddedFullDiagnosticSha256": "bd13d3899892a0be8685ff07432cc5b46d85049deb34488b7f267d416390e9ec"
+        },
+        {
+          "path": "reports/weekly-validation-v9-2026-08-12.json",
+          "sha256": "0efef421110068ff16502191c7674a5515e4aab14305c4232f39da1f3d2f860f",
+          "role": "Weekly model and admitted champion-policy identity; not Schedule Edge outcome evidence.",
+          "modelVersion": "laces-weekly-components-v9"
+        },
+        {
+          "path": "reports/ros-release-laces-ros-distribution-v8-20260813-n8/standard.json",
+          "sha256": "97d3ef402784b2be2388fa1446e604bba4f2c8faf6300d352026c5890e19bd2d",
+          "role": "Standard-scoring ROS input and policy provenance only; not Schedule Edge outcome evidence.",
+          "modelVersion": "laces-ros-distribution-v8"
+        },
+        {
+          "path": "reports/ros-release-laces-ros-distribution-v8-20260813-n8/half-ppr.json",
+          "sha256": "e51b50312e0a3b1ae76e6ada8feff3620ce3737f5c759a5d4f07e28aa6d11ae3",
+          "role": "Half-PPR ROS input and policy provenance only; not Schedule Edge outcome evidence.",
+          "modelVersion": "laces-ros-distribution-v8"
+        },
+        {
+          "path": "reports/ros-release-laces-ros-distribution-v8-20260813-n8/full-ppr.json",
+          "sha256": "d43c94a7a9996a3fe33f310ce0c9d87cb889b83b5b25398ce299f265fb05bc22",
+          "role": "Full-PPR ROS input and policy provenance only; not Schedule Edge outcome evidence.",
+          "modelVersion": "laces-ros-distribution-v8"
+        }
+      ],
+      "sourceRule": "The evaluator must record exact admitted source checksums and normalized row counts. Any source drift creates a new evidence identity and must be disclosed before outcomes are evaluated.",
+      "reportAvailability": "Files under reports/ are local audit inputs and are not committed release artifacts; a replay must supply byte-identical files or record a new preregistered evidence identity."
+    },
+    "positions": ["QB", "RB", "WR", "TE"],
+    "scoringProfiles": [
+      {
+        "id": "standard",
+        "receptionPoints": 0,
+        "rules": {
+          "passingYards": 0.04,
+          "passingTouchdowns": 4,
+          "passingInterceptions": -2,
+          "rushingYards": 0.1,
+          "rushingTouchdowns": 6,
+          "receivingYards": 0.1,
+          "receivingTouchdowns": 6,
+          "fumblesLost": -2,
+          "twoPointConversions": 2,
+          "returnTouchdowns": 6
+        }
+      },
+      {
+        "id": "half-ppr",
+        "receptionPoints": 0.5,
+        "rules": {
+          "passingYards": 0.04,
+          "passingTouchdowns": 4,
+          "passingInterceptions": -2,
+          "rushingYards": 0.1,
+          "rushingTouchdowns": 6,
+          "receivingYards": 0.1,
+          "receivingTouchdowns": 6,
+          "fumblesLost": -2,
+          "twoPointConversions": 2,
+          "returnTouchdowns": 6
+        }
+      },
+      {
+        "id": "full-ppr",
+        "receptionPoints": 1,
+        "rules": {
+          "passingYards": 0.04,
+          "passingTouchdowns": 4,
+          "passingInterceptions": -2,
+          "rushingYards": 0.1,
+          "rushingTouchdowns": 6,
+          "receivingYards": 0.1,
+          "receivingTouchdowns": 6,
+          "fumblesLost": -2,
+          "twoPointConversions": 2,
+          "returnTouchdowns": 6
+        }
+      }
+    ],
+    "folds": {
+      "historicalTraining": {
+        "seasons": [2019, 2020, 2021],
+        "outcomeUse": "Prior-only fitting and warm-up; no gate result."
+      },
+      "selectionAndDevelopment": {
+        "seasons": [2022, 2023, 2024],
+        "outcomeUse": "Candidate selection, implementation audit, and threshold qualification. The candidate and thresholds in this document may not be tuned after this fold is opened."
+      },
+      "retrospectiveDiagnostic": {
+        "seasons": [2025],
+        "admissible": false,
+        "outcomeUse": "One-shot retrospective diagnostic only. These outcomes were already inspected by Schedule Edge v1 and weekly/ROS development and cannot confirm or admit this v2 candidate."
+      },
+      "prospectiveConfirmation": {
+        "seasons": [2026],
+        "admissible": true,
+        "openAfter": "The 2026 regular season is complete, final outcome sources are admitted, and every included row has a retained pre-outcome actual-opponent forecast and neutral counterfactual with matching input identities.",
+        "oneShot": true,
+        "outcomeUse": "The only confirmation fold that may authorize directional labels under this protocol."
+      }
+    },
+    "leakagePolicy": {
+      "weeklyBatchLock": "Every target prediction uses inputs and point-center calibration strictly before the target season/week. All games in one NFL week are locked before any target-week outcome is added.",
+      "neutralExpectation": "Score the admitted laces-weekly-components-v9 recency-only strategy under the target scoring profile, including its strictly-prior walk-forward point-center calibration.",
+      "targetOutcomeUse": "Evaluation only after both target forecasts are immutable.",
+      "futureRosterUse": false,
+      "futureInjuryUse": false,
+      "futureSeasonUse": false,
+      "confirmationSeal": "No 2026 actual outcome may be joined, summarized, or inspected until the prospective-confirmation eligibility manifest and all paired forecast rows are checksummed and sealed."
+    },
+    "candidate": {
+      "estimator": "weekly-recency-residual-defense-equal",
+      "weeklyBaselineStrategy": "recency-only",
+      "weeklyModelVersion": "laces-weekly-components-v9",
+      "defenseGameWeighting": "equal",
+      "defenseShrinkageGames": 4,
+      "priorSeasonPseudoGames": 4,
+      "allowPriorOnlyLabels": false,
+      "minimumCurrentSeasonGamesForLabel": 6,
+      "minimumPointDifferentialByPosition": {
+        "QB": 1.5,
+        "RB": 1,
+        "WR": 1,
+        "TE": 0.75
+      },
+      "percentileCutoffs": {
+        "difficultMaximum": 33,
+        "favorableMinimum": 67
+      },
+      "rowComputation": {
+        "neutralExpectedPoints": "N_i = strictly-prior, point-center-calibrated weekly recency-only expected fantasy points for player-game i.",
+        "actualResidual": "R_i = actual fantasy points for player-game i minus N_i.",
+        "clusterKey": ["season", "week", "gameId", "offenseTeam", "defenseTeam", "position"],
+        "clusterValue": "Arithmetic mean of eligible R_i values in the cluster. A cluster, not a player row, is the evaluation sample.",
+        "defenseEstimate": "For each target week and position, calculate each defense's mean prior cluster residual using equal game weights. Blend the current-season defense mean with the immediately prior season using four prior-season pseudo-games, then shrink it toward the matching position-wide residual mean using four defense-shrinkage games.",
+        "pointDifferential": "The shrunk defense residual minus the matching position-wide residual mean. Positive is easier for the offense; negative is harder.",
+        "actualOpponentExpectedPoints": "A_i = N_i plus the target opponent's strictly-prior point differential.",
+        "percentile": "Within-position midrank percentile of the target opponent's strictly-prior shrunk defense residual; higher is easier for the offense.",
+        "outcomeForRankAndBuckets": "The target cluster's actual residual relative to its neutral expectation."
+      },
+      "labelRule": {
+        "difficult": "percentile <= 33 and pointDifferential <= -minimumPointDifferentialByPosition[position]",
+        "favorable": "percentile >= 67 and pointDifferential >= minimumPointDifferentialByPosition[position]",
+        "neutral": "eligible and neither directional rule is true",
+        "unavailable": "any eligibility or support rule is false"
+      }
+    },
+    "eligibility": {
+      "determinedWithoutTargetOutcome": true,
+      "playerRowRequirements": [
+        "A unique supported position is available.",
+        "The admitted schedule identifies one target game and actual opponent.",
+        "The player belongs to the prior-only fantasy-relevant weekly backtest cohort.",
+        "The neutral recency-only expectation is finite and its input fingerprint is retained.",
+        "The actual-opponent expectation is finite and its input fingerprint is retained.",
+        "The two expectations share player, season, week, scoring-profile, source, calibration, and model-policy identities; opponent context is the only matchup-specific addition.",
+        "The defense estimate has at least six current-season strictly-prior games; prior-only labels are forbidden."
+      ],
+      "requiredRetainedFields": [
+        "season",
+        "week",
+        "gameId",
+        "playerId",
+        "offenseTeam",
+        "defenseTeam",
+        "position",
+        "scoringProfileId",
+        "neutralExpectedPoints",
+        "actualOpponentExpectedPoints",
+        "pointDifferential",
+        "percentile",
+        "label",
+        "currentDefenseGames",
+        "neutralInputFingerprint",
+        "actualOpponentInputFingerprint",
+        "sourceManifestChecksum",
+        "policyVersion"
+      ],
+      "confirmationPrecondition": "Row-level actual-opponent and neutral-counterfactual forecast evidence must exist, be immutable, and have a verified checksum before any prospective-confirmation outcome is opened.",
+      "missingDataPolicy": "Missing, ambiguous, unmatched, late-generated, or non-finite rows are unavailable, never zero-filled and never treated as neutral.",
+      "sampleUnit": "season/week/game/offense/defense/position cluster"
+    },
+    "metrics": {
+      "rankCorrelation": "Spearman correlation between cluster point differential and cluster actual residual.",
+      "bucketMeans": "Arithmetic mean cluster actual residual in difficult, neutral, and favorable label buckets.",
+      "favorableMinusDifficult": "Favorable bucket mean minus difficult bucket mean.",
+      "orderedSeason": "difficult bucket mean < neutral bucket mean < favorable bucket mean, with every bucket nonempty.",
+      "neutralMae": "Mean absolute error of neutralExpectedPoints against actual points over the same eligible player rows.",
+      "actualOpponentMae": "Mean absolute error of actualOpponentExpectedPoints against actual points over the same eligible player rows.",
+      "maeNoWorse": "actualOpponentMae <= neutralMae"
+    },
+    "gates": {
+      "selectionAndDevelopment": {
+        "minimumEligibleClustersPerPositionProfile": 300,
+        "minimumDirectionalClustersPerPositionProfile": 80,
+        "minimumDifficultClustersPerPositionProfile": 30,
+        "minimumFavorableClustersPerPositionProfile": 30,
+        "minimumRankCorrelation": 0.02,
+        "minimumFavorableMinusDifficultPoints": 0.35,
+        "rankCorrelationOneSidedLowerConfidenceBoundGreaterThan": 0,
+        "spreadOneSidedLowerConfidenceBoundGreaterThan": 0,
+        "orderedSeasonsRequired": 3,
+        "evaluatedSeasons": 3,
+        "maeNoWorseRequired": true
+      },
+      "prospectiveConfirmation": {
+        "minimumEligibleClustersPerPositionProfile": 100,
+        "minimumDirectionalClustersPerPositionProfile": 30,
+        "minimumDifficultClustersPerPositionProfile": 10,
+        "minimumFavorableClustersPerPositionProfile": 10,
+        "minimumRankCorrelation": 0.02,
+        "minimumFavorableMinusDifficultPoints": 0.35,
+        "rankCorrelationOneSidedLowerConfidenceBoundGreaterThan": 0,
+        "spreadOneSidedLowerConfidenceBoundGreaterThan": 0,
+        "orderedSeasonsRequired": 1,
+        "evaluatedSeasons": 1,
+        "maeNoWorseRequired": true
+      },
+      "profileRule": "A position must pass every gate independently under standard, half-PPR, and full-PPR scoring.",
+      "foldRule": "A position must pass selection/development and prospective confirmation independently. The 2025 diagnostic and any combined full-window result cannot rescue a failed admissible fold.",
+      "failureRule": "A null, non-finite, degenerate, missing, or below-threshold statistic fails closed. Thresholds may not be weakened after an outcome fold is inspected."
+    },
+    "bootstrap": {
+      "version": "schedule-edge-season-week-block-bootstrap-v1",
+      "replicates": 10000,
+      "confidence": 0.95,
+      "tail": "one-sided-lower",
+      "block": "season-week",
+      "resampling": "Within each evaluated season, sample that season's observed week blocks with replacement until the original number of observed week blocks is reached; include every eligible cluster from each sampled block, then concatenate seasons.",
+      "baseSeed": "schedule-edge-v2-preregistration-2026-09-03",
+      "seedDerivation": "Take the first eight hexadecimal characters of SHA-256(baseSeed + '|' + fold + '|' + position + '|' + scoringProfileId + '|' + metric), interpret as an unsigned 32-bit big-endian integer, and initialize mulberry32-v1.",
+      "quantile": "R type 7 empirical quantile at probability 0.05 over the 10,000 finite replicate statistics.",
+      "degenerateReplicatePolicy": "Any cell with fewer than 9,500 finite replicate statistics fails.",
+      "confirmationMultiplicity": {
+        "method": "Holm step-down",
+        "familyWiseAlpha": 0.05,
+        "tests": 24,
+        "family": "Four positions times three scoring profiles times two metrics: rank correlation and favorable-minus-difficult spread.",
+        "bootstrapPValue": "(1 + number of finite replicate statistics <= 0) / (1 + number of finite replicate statistics)",
+        "passRule": "Each metric must have an unadjusted one-sided 95% lower bound above zero and a Holm-adjusted p-value <= 0.05. A position passes only when all six of its confirmation metric tests pass."
+      }
+    },
+    "artifacts": {
+      "preregistrationMustPrecedeEvaluation": true,
+      "selectionArtifactRequired": true,
+      "retrospectiveDiagnosticArtifactSeparate": true,
+      "prospectiveForecastManifestRequired": true,
+      "prospectiveConfirmationArtifactRequired": true,
+      "eachArtifactMustInclude": [
+        "protocolChecksumSha256",
+        "source checksums and row counts",
+        "model and scoring-profile identities",
+        "fold",
+        "cell metrics and confidence bounds",
+        "position/profile gate reasons",
+        "row-evidence checksum",
+        "artifact checksum"
+      ],
+      "promotionRule": "Directional labels may be enabled only for positions listed as passing in both the immutable selection artifact and the one-shot prospective 2026 confirmation artifact under all three profiles.",
+      "protocolChangeRule": "Changing the candidate, cohort, folds, thresholds, bootstrap, multiplicity method, or evidence eligibility after inspecting an outcome creates a new protocol version and requires a new future prospective confirmation season."
+    },
+    "execution": {
+      "evaluationIsReadOnly": true,
+      "permittedScope": "A dedicated Schedule Edge v2 evaluator may read admitted weekly/ROS inputs and write only new checksummed Schedule Edge evaluation artifacts.",
+      "forbiddenRosOperations": [
+        "run ROS release validation",
+        "re-gate a ROS report",
+        "admit or replace a ROS champion artifact",
+        "change ROS thresholds, folds, policies, or model selection"
+      ]
+    }
+  },
+  "integrity": {
+    "algorithm": "sha256",
+    "scope": "/protocol",
+    "canonicalization": "UTF-8 bytes of `jq -jSc '.protocol' docs/schedule-edge-v2-preregistration-2026-09-03.json` with no trailing newline",
+    "protocolChecksumSha256": "045f62bc2c2d1f816f8785e05967ff7ad8cb847053bba0b8666534e70c84bff0"
+  }
+}
