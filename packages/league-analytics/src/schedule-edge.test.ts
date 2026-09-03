@@ -557,7 +557,22 @@ describe("calculateScheduleEdgeDefenseRatings", () => {
       policy: { ...policy, labelsEnabled: false },
     });
     expect(result.ratings.every((rating) => rating.label === "unavailable")).toBe(true);
-    expect(result.ratings.every((rating) => rating.reason?.includes("disabled"))).toBe(true);
+    expect(result.ratings.every((rating) => rating.percentile !== null)).toBe(true);
+    expect(result.ratings.every((rating) => rating.reason === null)).toBe(true);
+  });
+
+  it("uses reasons for incomplete label support rather than global release policy", () => {
+    const result = calculateScheduleEdgeDefenseRatings({
+      targetSeason: 2025,
+      throughWeek: 2,
+      totals: totals(ratingRows),
+      policy: { ...policy, minimumCurrentSeasonGamesForLabel: 3 },
+    });
+    expect(result.ratings.every((rating) => rating.percentile !== null)).toBe(true);
+    expect(result.ratings.every((rating) => rating.label === "unavailable")).toBe(true);
+    expect(result.ratings.every((rating) => rating.reason?.includes("support threshold"))).toBe(
+      true,
+    );
   });
 
   it("is deterministic under game-position input order", () => {

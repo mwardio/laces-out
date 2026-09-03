@@ -159,6 +159,90 @@ describe("Schedule Edge contracts", () => {
     ).toBe(true);
   });
 
+  it("accepts numeric matchup and projection context with neutral descriptive reasons", () => {
+    const strength = {
+      state: "available",
+      averagePercentile: 80,
+      rank: 2,
+      teamsRanked: 32,
+      favorableWeeks: 0,
+      neutralWeeks: 0,
+      difficultWeeks: 0,
+      byeWeeks: 0,
+      unknownWeeks: 0,
+      confidence: "high",
+      weeks: [
+        {
+          week: 6,
+          state: "game",
+          opponent: "BUF",
+          percentile: 80,
+          label: "unavailable",
+          confidence: "high",
+          reason: null,
+        },
+      ],
+      reason: null,
+    } as const;
+    const rosterPlayer = {
+      playerId: "00000000-0000-4000-8000-000000000004",
+      name: "Sample Player",
+      primaryPosition: "QB",
+      eligiblePositions: ["QB"],
+      nflTeam: "MIA",
+      status: "ACTIVE",
+      isLikelyStarter: true,
+      currentSlot: "QB",
+      next: {
+        week: 6,
+        state: "game",
+        opponent: "BUF",
+        kickoffAt: null,
+        reason: null,
+      },
+      matchup: {
+        state: "available",
+        percentile: 80,
+        label: "unavailable",
+        confidence: "high",
+        rawPointsAllowed: 22,
+        adjustedPointsAllowed: 21,
+        leagueAveragePoints: 18,
+        pointDifferential: 3,
+        currentGames: 6,
+        priorGames: 8,
+        incompleteGames: 0,
+        reason: null,
+      },
+      selectedWindow: strength,
+      playoffWindow: strength,
+      projection: {
+        weeklyPoints: 19.5,
+        rosPoints: 188.25,
+        source: "laces-out-first-party",
+        sourceObservedAt: "2026-07-27T15:00:00.000Z",
+      },
+    } as const;
+
+    const member = scheduleEdgeResponseSchema.parse({
+      ...memberFixture(),
+      roster: [rosterPlayer],
+    });
+    const matrix = scheduleEdgeMatrixResponseSchema.parse({
+      ...matrixFixture(),
+      teams: [
+        {
+          team: "MIA",
+          positions: [{ position: "QB", selectedWindow: strength, playoffWindow: strength }],
+        },
+      ],
+    });
+    expect(member.roster[0]?.matchup.percentile).toBe(80);
+    expect(member.roster[0]?.projection?.weeklyPoints).toBe(19.5);
+    expect(member.roster[0]?.selectedWindow.reason).toBeNull();
+    expect(matrix.teams[0]?.positions[0]?.playoffWindow.weeks[0]?.reason).toBeNull();
+  });
+
   it("rejects directional language from descriptive-only responses", () => {
     const member = memberFixture();
     const directionalStrength = {

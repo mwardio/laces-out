@@ -168,6 +168,17 @@ const currentSchedule: ScheduleEdgeScheduleRow[] = [
   },
 ];
 
+const scheduleWithPlayoffGames: readonly ScheduleEdgeScheduleRow[] = [
+  ...currentSchedule,
+  ...[15, 16, 17].map((week): ScheduleEdgeScheduleRow => ({
+    ...currentSchedule[1]!,
+    gameId: `2026-${week}-MIA-BUF`,
+    week,
+    gameDate: `2026-12-${week}`,
+    kickoffAt: new Date(`2026-12-${week}T18:00:00.000Z`),
+  })),
+];
+
 function finalGame(season: number): ScheduleEdgeScheduleRow {
   return {
     ...currentSchedule[0]!,
@@ -511,6 +522,143 @@ describe("ScheduleEdgeService", () => {
     expect(linkedFindings.length).toBeGreaterThan(0);
     expect(linkedFindings.every((finding) => finding.href?.startsWith("/decisions?league="))).toBe(
       true,
+    );
+  });
+
+  it("preserves numeric context without repeating the descriptive release policy as a reason", async () => {
+    const base = repository();
+    const service = new ScheduleEdgeService(
+      {
+        ...base,
+        findSource: async (key) => {
+          const row = await base.findSource(key);
+          return key === "nflverse.schedules.2026" && row
+            ? { ...row, metadata: { ...row.metadata, coveredWeeks: "1,2,3,4,5,6,15,16,17" } }
+            : row;
+        },
+        listScheduleGames: (_sourceId, _checksum, season) =>
+          Promise.resolve(season === 2026 ? scheduleWithPlayoffGames : [finalGame(2025)]),
+      },
+      () => new Date("2026-09-16T12:00:00.000Z"),
+    );
+
+    const response = await service.getRosterEdge(
+      "10000000-0000-4000-8000-000000000001",
+      LEAGUE_ID,
+      {
+        startWeek: 3,
+        endWeek: 5,
+        playoffStartWeek: 15,
+        playoffEndWeek: 17,
+      },
+    );
+
+    expect(() => scheduleEdgeResponseSchema.parse(response)).not.toThrow();
+    const player = response?.roster.find((entry) => entry.playerId === BACKUP_ID);
+    expect(player?.matchup).toMatchObject({
+      state: "available",
+      label: "unavailable",
+      reason: null,
+    });
+    expect(player?.matchup.percentile).toEqual(expect.any(Number));
+    expect(player?.matchup.rawPointsAllowed).toEqual(expect.any(Number));
+    expect(player?.matchup.adjustedPointsAllowed).toEqual(expect.any(Number));
+    for (const window of [player?.selectedWindow, player?.playoffWindow]) {
+      expect(window).toMatchObject({
+        state: "available",
+        favorableWeeks: 0,
+        neutralWeeks: 0,
+        difficultWeeks: 0,
+        reason: null,
+      });
+      expect(window?.averagePercentile).toEqual(expect.any(Number));
+      expect(
+        window?.weeks.every(
+          (week) =>
+            week.percentile !== null && week.label === "unavailable" && week.reason === null,
+        ),
+      ).toBe(true);
+    }
+    expect(
+      response?.roster.find((entry) => entry.playerId === PLAYER_ID)?.projection,
+    ).toMatchObject({ weeklyPoints: 18.5 });
+  });
+
+  it("reports complete historical matchup context as available even while labels are descriptive", async () => {
+    const base = repository();
+    const completeStats = (season: number): ScheduleEdgeWeeklyStatRow[] =>
+      (["MIA", "NE"] as const).flatMap((team, teamIndex) =>
+        (["QB", "RB", "WR", "TE"] as const).map((position, positionIndex) => ({
+          externalPlayerId: `${season}:${team.toLowerCase()}-${position.toLowerCase()}`,
+          playerId: `60000000-0000-4000-8000-${String(
+            season * 100 + teamIndex * 10 + positionIndex,
+          ).padStart(12, "0")}`,
+          season,
+          week: 1,
+          gameId: `${season}-01-MIA-NE`,
+          team,
+          opponentTeam: team === "MIA" ? "NE" : "MIA",
+          components:
+            position === "QB"
+              ? { passing_yards: 220 + positionIndex }
+              : position === "RB"
+                ? { rushing_yards: 70 + positionIndex }
+                : { receiving_yards: 60 + positionIndex },
+        })),
+      );
+    const service = new ScheduleEdgeService(
+      {
+        ...base,
+        listWeeklyStats: (_sourceId, _checksum, season) => Promise.resolve(completeStats(season)),
+        listWeeklyRosters: (_sourceId, _checksum, season) =>
+          Promise.resolve(
+            completeStats(season).map((row) => ({
+              externalPlayerId: row.externalPlayerId,
+              playerId: row.playerId,
+              season,
+              week: row.week,
+              team: row.team,
+              position: row.externalPlayerId.split("-").at(-1)?.toUpperCase() ?? "",
+              rosterStatus: "ACT",
+              statusDescription: null,
+            })),
+          ),
+      },
+      () => new Date("2026-09-16T12:00:00.000Z"),
+    );
+
+    const response = await service.getMatrix("10000000-0000-4000-8000-000000000001", LEAGUE_ID, {
+      startWeek: 3,
+      endWeek: 6,
+      playoffStartWeek: null,
+      playoffEndWeek: null,
+    });
+
+    expect(() => scheduleEdgeMatrixResponseSchema.parse(response)).not.toThrow();
+    expect(response?.algorithm.validationStatus).toBe("descriptive-only");
+    expect(response?.availability.matchups).toEqual({ state: "available", reason: null });
+  });
+
+  it("keeps ignored zero-point scoring provenance out of the public warnings", async () => {
+    const base = repository();
+    const service = new ScheduleEdgeService(
+      {
+        ...base,
+        listScoringRules: () =>
+          Promise.resolve([...garagelyShapedScoringRules(), espnRule("9999", "0")]),
+      },
+      () => new Date("2026-09-16T12:00:00.000Z"),
+    );
+
+    const response = await service.getRosterEdge(
+      "10000000-0000-4000-8000-000000000001",
+      LEAGUE_ID,
+      { startWeek: 3, endWeek: 6, playoffStartWeek: null, playoffEndWeek: null },
+    );
+
+    expect(() => scheduleEdgeResponseSchema.parse(response)).not.toThrow();
+    expect(response?.scoring.warnings).not.toContain(
+      "Zero-point rules were retained as ignored provenance and do not affect scoring.",
     );
   });
 

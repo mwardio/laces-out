@@ -44,6 +44,7 @@ import {
   demoScheduleEdgeMatrixResponse,
   demoScheduleEdgeResponse,
 } from "../lib/demo-schedule-edge";
+import { scheduleEdgeEvidenceUseLabel } from "../lib/schedule-edge-presentation";
 import { useDefaultLeague } from "../lib/use-default-league";
 import {
   providerForSelectedLeague,
@@ -386,7 +387,7 @@ function SnapshotContext({
         <Gauge size={15} aria-hidden="true" />
         <span>
           <small>Evidence use</small>
-          <strong>{labelText(data.algorithm.validationStatus)}</strong>
+          <strong>{scheduleEdgeEvidenceUseLabel(data.algorithm.validationStatus)}</strong>
         </span>
       </div>
       <div>

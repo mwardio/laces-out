@@ -35,7 +35,7 @@ function matchup(percentile: number, confidence: Confidence = "high"): ScheduleE
     currentGames: confidence === "low" ? 3 : 5,
     priorGames: confidence === "high" ? 0 : 8,
     incompleteGames: 0,
-    reason: "Directional labels remain withheld; the percentile is descriptive context.",
+    reason: null,
   };
 }
 
@@ -70,7 +70,7 @@ function strength(
       percentile,
       label: "unavailable" as const,
       confidence: options.confidence ?? ("high" as const),
-      reason: "Directional labels remain withheld; the percentile is descriptive context.",
+      reason: null,
     };
   });
   return {

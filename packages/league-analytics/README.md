@@ -39,6 +39,10 @@ adjusted points allowed, percentiles, point differentials, coverage, and confide
 not promote those values into directional matchup claims or projection adjustments. The pinned
 validation inputs and checksums are recorded in
 [`docs/schedule-edge-validation-2026-07-27.json`](../../docs/schedule-edge-validation-2026-07-27.json).
+The next candidate's folds and thresholds are locked separately in the
+[Schedule Edge v2 preregistration](../../docs/schedule-edge-v2-preregistration-2026-09-03.json), and
+the [September 3 investigation](../../docs/schedule-edge-investigation-2026-09-03.md) records the
+v1 replay, currently available model evidence, and prospective-confirmation blocker.
 
 Roster outlook joins that descriptive context to the claimed roster and separately checks bye-week
 lineup feasibility with the deterministic slot-assignment engine. It returns Covered, Thin, Gap,

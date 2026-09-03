@@ -855,7 +855,9 @@ function managedProjectionsWithheldReason(profile: ManagedProjectionProfile): st
 }
 
 function scoringWarnings(result: LeagueScoringNormalizationResult): string[] {
-  const warnings = result.warnings.map((warning) => boundedText(warning.message, 500));
+  const warnings = result.warnings
+    .filter((warning) => warning.code !== "IGNORED_ZERO_POINT_RULE")
+    .map((warning) => boundedText(warning.message, 500));
   if (result.state === "unavailable") {
     warnings.push(...result.reasons.map((reason) => boundedText(reason.message, 500)));
   }
@@ -1578,8 +1580,6 @@ function strengthContract(
     (candidate) => candidate.position === entry.position && candidate.averagePercentile !== null,
   ).length;
   const labelsEnabled = directionalLabelsEnabled(entry.position);
-  const withheldReason =
-    "Directional labels remain withheld because this position has not cleared the historical validation gate.";
   return {
     state:
       entry.averagePercentile === null
@@ -1603,19 +1603,13 @@ function strengthContract(
       percentile: week.percentile,
       label: labelsEnabled ? week.label : "unavailable",
       confidence: week.confidence,
-      reason: week.reason
-        ? boundedText(week.reason, 700)
-        : !labelsEnabled && week.percentile !== null
-          ? withheldReason
-          : null,
+      reason: week.reason ? boundedText(week.reason, 700) : null,
     })),
     reason: entry.reason
       ? boundedText(entry.reason, 700)
       : entry.unknownWeeks > 0
         ? "One or more weeks lack complete schedule or matchup evidence."
-        : !labelsEnabled && entry.averagePercentile !== null
-          ? withheldReason
-          : null,
+        : null,
   };
 }
 
@@ -1640,11 +1634,7 @@ function ratingContract(
     currentGames: rating.currentGames,
     priorGames: rating.priorGames,
     incompleteGames: rating.incompleteGames,
-    reason: rating.reason
-      ? boundedText(rating.reason, 700)
-      : labelsEnabled
-        ? null
-        : "Directional labels remain withheld because this position has not cleared the historical validation gate.",
+    reason: rating.reason ? boundedText(rating.reason, 700) : null,
   };
 }
 
@@ -1946,19 +1936,15 @@ function matchupAvailability(
   }
   const withheld = SUPPORTED_POSITIONS.filter((position) => !supported.includes(position));
   const positionsReason = withheld.length > 0 ? withheldPositionsReason(scoring, withheld) : null;
-  if (releaseHasDirectionalLabels()) {
+  if (analysis.incompleteSlices > 0) {
     return availability(
       "partial",
-      analysis.incompleteSlices > 0
-        ? "Some game-position observations were withheld because their evidence was incomplete."
-        : positionsReason,
+      "Some game-position observations were withheld because their evidence was incomplete.",
     );
   }
-  return availability(
-    "partial",
-    positionsReason ??
-      "League-scored values are available, but directional labels remain disabled until historical validation admits a production policy.",
-  );
+  return positionsReason
+    ? availability("partial", positionsReason)
+    : availability("available", null);
 }
 
 function validationStatus(

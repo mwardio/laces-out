@@ -1020,11 +1020,12 @@ export function calculateScheduleEdgeDefenseRatings(
         )
         .map((candidate) => candidate.adjustedPointsPerGame as number);
       const percentile = strengthPercentile(rating.adjustedPointsPerGame, peers, true);
-      const labelEligible =
-        input.policy.labelsEnabled &&
-        input.policy.validatedPositions.includes(rating.position) &&
-        (rating.currentGames >= input.policy.minimumCurrentSeasonGamesForLabel ||
-          (rating.currentGames === 0 && input.policy.allowPriorOnlyLabels));
+      const positionValidated =
+        input.policy.labelsEnabled && input.policy.validatedPositions.includes(rating.position);
+      const supportThresholdMet =
+        rating.currentGames >= input.policy.minimumCurrentSeasonGamesForLabel ||
+        (rating.currentGames === 0 && input.policy.allowPriorOnlyLabels);
+      const labelEligible = positionValidated && supportThresholdMet;
       const minimum = input.policy.minimumPointDifferentialByPosition[rating.position];
       const label: ScheduleEdgeMatchupLabel = !labelEligible
         ? "unavailable"
@@ -1037,13 +1038,12 @@ export function calculateScheduleEdgeDefenseRatings(
         ...rating,
         percentile,
         label,
-        reason: labelEligible
-          ? null
-          : input.policy.labelsEnabled
-            ? input.policy.validatedPositions.includes(rating.position)
-              ? "The versioned policy's current-season support threshold has not been met."
-              : `${rating.position} has not cleared the historical validation gate for directional language.`
-            : "Predictive labels remain disabled until historical evaluation admits a policy.",
+        // `reason` describes missing or incomplete evidence, not the release policy. The
+        // versioned validation state is published once at the response-algorithm boundary.
+        reason:
+          positionValidated && !supportThresholdMet
+            ? "The versioned policy's current-season support threshold has not been met."
+            : null,
       };
     })
     .sort(

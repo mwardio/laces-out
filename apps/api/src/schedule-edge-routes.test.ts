@@ -59,6 +59,71 @@ const memberResponse: ScheduleEdgeResponse = {
   definitions,
 };
 
+const descriptiveStrength: ScheduleEdgeResponse["roster"][number]["selectedWindow"] = {
+  state: "available",
+  averagePercentile: 75,
+  rank: 4,
+  teamsRanked: 32,
+  favorableWeeks: 0,
+  neutralWeeks: 0,
+  difficultWeeks: 0,
+  byeWeeks: 0,
+  unknownWeeks: 0,
+  confidence: "medium",
+  weeks: [
+    {
+      week: 3,
+      state: "game",
+      opponent: "BUF",
+      percentile: 75,
+      label: "unavailable",
+      confidence: "medium",
+      reason: null,
+    },
+  ],
+  reason: null,
+};
+
+const descriptivePlayer: ScheduleEdgeResponse["roster"][number] = {
+  playerId: "60000000-0000-4000-8000-000000000001",
+  name: "Sample Quarterback",
+  primaryPosition: "QB",
+  eligiblePositions: ["QB"],
+  nflTeam: "MIA",
+  status: "ACTIVE",
+  isLikelyStarter: true,
+  currentSlot: "QB",
+  next: {
+    week: 3,
+    state: "game",
+    opponent: "BUF",
+    kickoffAt: null,
+    reason: null,
+  },
+  matchup: {
+    state: "available",
+    percentile: 75,
+    label: "unavailable",
+    confidence: "medium",
+    rawPointsAllowed: 21.5,
+    adjustedPointsAllowed: 20.75,
+    leagueAveragePoints: 18.25,
+    pointDifferential: 2.5,
+    currentGames: 5,
+    priorGames: 8,
+    incompleteGames: 0,
+    reason: null,
+  },
+  selectedWindow: descriptiveStrength,
+  playoffWindow: descriptiveStrength,
+  projection: {
+    weeklyPoints: 19.25,
+    rosPoints: 201.5,
+    source: "laces-out-first-party",
+    sourceObservedAt: NOW,
+  },
+};
+
 const matrixResponse: ScheduleEdgeMatrixResponse = {
   generatedAt: NOW,
   algorithm: {
@@ -140,6 +205,43 @@ describe("schedule edge routes", () => {
       endWeek: 8,
       playoffStartWeek: 15,
       playoffEndWeek: 17,
+    });
+    await app.close();
+  });
+
+  it("serializes descriptive numeric context without manufacturing reason text", async () => {
+    const app = await buildApp({
+      environment: loadEnvironment({ NODE_ENV: "test" }),
+      logger: false,
+      requireAuthentication: true,
+      authService: authenticatedService(),
+      scheduleEdge: {
+        getRosterEdge: () => Promise.resolve({ ...memberResponse, roster: [descriptivePlayer] }),
+        getMatrix: () => Promise.resolve(matrixResponse),
+      },
+    });
+
+    const response = await app.inject({
+      method: "GET",
+      url: `/v1/leagues/${LEAGUE_ID}/schedule-edge`,
+      headers: { cookie: COOKIE },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      algorithm: { validationStatus: "descriptive-only" },
+      roster: [
+        {
+          matchup: { percentile: 75, adjustedPointsAllowed: 20.75, reason: null },
+          selectedWindow: {
+            averagePercentile: 75,
+            reason: null,
+            weeks: [{ percentile: 75, reason: null }],
+          },
+          playoffWindow: { averagePercentile: 75, reason: null },
+          projection: { weeklyPoints: 19.25, rosPoints: 201.5 },
+        },
+      ],
     });
     await app.close();
   });
