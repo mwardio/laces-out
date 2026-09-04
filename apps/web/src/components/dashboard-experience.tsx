@@ -176,14 +176,26 @@ function MobileWeekAtGlance({ dashboard }: { readonly dashboard: LeagueDashboard
 
       {matchupAvailable ? (
         <nav className="mobile-week-card__actions" aria-label="This week shortcuts">
-          <Link href={`/decisions?${leagueQuery}#decision-lineup`}>
-            Set lineup <ArrowRight size={13} />
+          <Link href={`/decisions?${leagueQuery}#decision-lineup`} aria-label="Optimize lineup">
+            <span className="mobile-week-card__action-label" aria-hidden="true">
+              <span>Optimize</span>
+              <span>lineup</span>
+            </span>
+            <ArrowRight size={13} aria-hidden="true" />
           </Link>
-          <Link href={`/analytics?${leagueQuery}#analytics-opponent`}>
-            Scout opponent <ArrowRight size={13} />
+          <Link href={`/analytics?${leagueQuery}#analytics-opponent`} aria-label="Scout opponent">
+            <span className="mobile-week-card__action-label" aria-hidden="true">
+              <span>Scout</span>
+              <span>opponent</span>
+            </span>
+            <ArrowRight size={13} aria-hidden="true" />
           </Link>
-          <Link href={`/analytics?${leagueQuery}#analytics-season`}>
-            League pulse <ArrowRight size={13} />
+          <Link href={`/analytics?${leagueQuery}#analytics-season`} aria-label="League pulse">
+            <span className="mobile-week-card__action-label" aria-hidden="true">
+              <span>League</span>
+              <span>pulse</span>
+            </span>
+            <ArrowRight size={13} aria-hidden="true" />
           </Link>
         </nav>
       ) : null}

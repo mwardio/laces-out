@@ -1849,7 +1849,7 @@ const faabRangeSchema = z
 const waiverMoveDecisionSchema = z
   .object({
     add: decisionPlayerSchema,
-    drop: decisionPlayerSchema.nullable(),
+    drop: decisionPlayerSchema,
     weightedGain: z.number().finite(),
     lineupGain: z.number().finite(),
     faab: faabRangeSchema.nullable(),

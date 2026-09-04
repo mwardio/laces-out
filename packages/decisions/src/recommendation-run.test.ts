@@ -57,7 +57,7 @@ describe("recommendationInputChecksum", () => {
 
   it("changes when the algorithm version changes so an upgrade cannot replay a stale run", () => {
     expect(
-      recommendationInputChecksum({ ...base, algorithmVersion: "in-season-decisions-v2" }),
+      recommendationInputChecksum({ ...base, algorithmVersion: "in-season-decisions-v1" }),
     ).not.toBe(recommendationInputChecksum(base));
   });
 

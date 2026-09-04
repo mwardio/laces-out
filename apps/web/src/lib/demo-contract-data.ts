@@ -120,7 +120,7 @@ export const demoDecisionSnapshot: InSeasonDecisionSnapshot = {
   },
   team: { id: USER_TEAM_ID, name: "Budget Ballers", faabRemaining: 67 },
   provenance: {
-    algorithmVersion: "in-season-decisions-v1",
+    algorithmVersion: "in-season-decisions-v2",
     // Sample data, so a sample digest: the tour must never look like a reproducible real run.
     inputChecksum: "d".repeat(64),
     leagueLastSyncedAt: GENERATED_AT,

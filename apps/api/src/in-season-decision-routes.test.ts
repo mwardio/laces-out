@@ -1,5 +1,9 @@
 import { loadEnvironment } from "@laces-out/config";
-import type { InSeasonDecisionSnapshot, TradeEvaluationResponse } from "@laces-out/contracts";
+import {
+  inSeasonDecisionSnapshotSchema,
+  type InSeasonDecisionSnapshot,
+  type TradeEvaluationResponse,
+} from "@laces-out/contracts";
 import { describe, expect, it, vi } from "vitest";
 
 import { buildApp } from "./app.js";
@@ -58,6 +62,52 @@ const unavailableSnapshot: InSeasonDecisionSnapshot = {
   trades: {
     state: "unavailable",
     reasons: [{ code: "TEAM_UNCLAIMED", message: "Claim your fantasy team first." }],
+  },
+};
+
+const availableWaiverSnapshot: InSeasonDecisionSnapshot = {
+  ...unavailableSnapshot,
+  team: {
+    id: "40000000-0000-4000-8000-000000000001",
+    name: "The Snowflakes",
+    faabRemaining: 82,
+  },
+  waivers: {
+    state: "available",
+    candidateCount: 24,
+    evaluatedMoveCount: 312,
+    recommendations: [
+      {
+        add: {
+          id: "70000000-0000-4000-8000-000000000001",
+          name: "Incoming Player",
+          positions: ["WR"],
+          nflTeam: "CHI",
+          status: "ACTIVE",
+          projectedPoints: 12.4,
+        },
+        drop: {
+          id: "70000000-0000-4000-8000-000000000002",
+          name: "Outgoing Player",
+          positions: ["WR"],
+          nflTeam: "DET",
+          status: "ACTIVE",
+          projectedPoints: 8.1,
+        },
+        weightedGain: 3.49,
+        lineupGain: 1.2,
+        faab: null,
+        market: null,
+        rationale: "Incoming Player for Outgoing Player improves the modeled roster.",
+      },
+    ],
+    execution: {
+      mode: "provider-required",
+      provider: "espn",
+      label: "Open ESPN to verify and apply manually",
+      url: "https://fantasy.espn.com/football/league?leagueId=24681012",
+    },
+    notes: [],
   },
 };
 
@@ -138,6 +188,37 @@ describe("in-season decision route", () => {
     });
     expect(response.statusCode).toBe(404);
     expect(response.json()).toMatchObject({ title: "League not found" });
+    await app.close();
+  });
+
+  it("serializes the modeled drop and transaction-aware gains", async () => {
+    const decisions: InSeasonDecisionPort = {
+      getSnapshot: () => Promise.resolve(availableWaiverSnapshot),
+      evaluateBuiltTrade: () => Promise.resolve({ outcome: "not-found" as const }),
+    };
+    const app = await buildApp({
+      environment: loadEnvironment({ NODE_ENV: "test" }),
+      logger: false,
+      requireAuthentication: true,
+      authService: authenticatedService(),
+      decisions,
+    });
+
+    const response = await app.inject({
+      method: "GET",
+      url: `/v1/leagues/${LEAGUE_ID}/decisions`,
+      headers: { cookie: COOKIE },
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = inSeasonDecisionSnapshotSchema.parse(response.json());
+    if (body.waivers.state !== "available") throw new Error("expected available waivers");
+    expect(body.waivers.recommendations[0]).toMatchObject({
+      add: { name: "Incoming Player", projectedPoints: 12.4 },
+      drop: { name: "Outgoing Player", projectedPoints: 8.1 },
+      weightedGain: 3.49,
+      lineupGain: 1.2,
+    });
     await app.close();
   });
 });

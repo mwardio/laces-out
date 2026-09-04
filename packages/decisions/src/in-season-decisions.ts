@@ -1032,7 +1032,7 @@ function slotType(
 ): RosterSlotType | undefined {
   const code = normalizedCode(row.slotCode);
   if (!row.isStarter) {
-    if (["IR", "IR+", "IL", "IL+", "RES", "RESERVE"].includes(code)) return "IR";
+    if (["IR", "IR+", "IL", "IL+", "RES", "RESERVE", "NA"].includes(code)) return "IR";
     if (["TAXI", "TS"].includes(code)) return "TAXI";
     return "BENCH";
   }
@@ -1140,6 +1140,76 @@ function currentAssignments(
     assignments.push({ playerId: player.id, slotId: slot.id });
   }
   return assignments;
+}
+
+function currentLineupLocks(
+  entries: readonly DecisionRosterEntryRow[],
+  playerById: ReadonlyMap<string, Player>,
+  assignments: readonly { readonly playerId: PlayerId; readonly slotId: RosterSlot["id"] }[],
+): readonly LineupLock[] {
+  const assignmentByPlayer = new Map(
+    assignments.map((assignment) => [assignment.playerId, assignment]),
+  );
+  return entries.flatMap((entry): readonly LineupLock[] => {
+    if (!entry.locked) return [];
+    const player = playerById.get(entry.playerId);
+    if (!player) return [];
+    const assignment = assignmentByPlayer.get(player.id);
+    return [
+      assignment
+        ? { playerId: player.id, kind: "STARTER", slotId: assignment.slotId }
+        : { playerId: player.id, kind: "BENCH" },
+    ];
+  });
+}
+
+interface WaiverRosterModel {
+  readonly roster: readonly Player[];
+  readonly rosterCapacity: number;
+  readonly rosterSlots: readonly ExpandedSlot[];
+  readonly protectedPlayerIds: readonly PlayerId[];
+}
+
+/**
+ * Models an ordinary waiver acquisition against only the active starter/bench roster. Empty
+ * IR/taxi slots are not active-roster openings, and their occupants remain outside both waiver
+ * valuation and legality. The engine's generic slot matcher is intentionally position-only, so
+ * including special slots would otherwise let it activate a stashed player and place the incoming
+ * player on IR without verifying either move with the provider.
+ */
+function waiverRosterModel(
+  roster: readonly Player[],
+  entries: readonly DecisionRosterEntryRow[],
+  slots: readonly ExpandedSlot[],
+): WaiverRosterModel {
+  const modeledPlayerIds = new Set<string>(roster.map((player) => player.id));
+  const specialSlotCodes = new Set(
+    slots
+      .filter((slot) => slot.kind === "INJURED_RESERVE" || slot.kind === "TAXI")
+      .map((slot) => slot.sourceCode),
+  );
+  const specialPlayerIds = new Set(
+    entries
+      .filter((entry) => specialSlotCodes.has(normalizedCode(entry.slotCode)))
+      .map((entry) => entry.playerId),
+  );
+  const ordinaryRoster = roster.filter((player) => !specialPlayerIds.has(player.id));
+  const ordinarySlots = slots.filter((slot) => slot.kind === "STARTER" || slot.kind === "BENCH");
+  const protectedPlayerIds = entries
+    .filter(
+      (entry) =>
+        modeledPlayerIds.has(entry.playerId) &&
+        entry.locked &&
+        !specialPlayerIds.has(entry.playerId),
+    )
+    .map((entry) => playerId(entry.playerId));
+
+  return {
+    roster: ordinaryRoster,
+    rosterCapacity: ordinarySlots.length,
+    rosterSlots: ordinarySlots,
+    protectedPlayerIds,
+  };
 }
 
 function combinations<T>(values: readonly T[], countToChoose: number): readonly (readonly T[])[] {
@@ -1837,8 +1907,13 @@ export class InSeasonDecisionService {
         entry.locked &&
         !mappedCurrentAssignments.some((assignment) => assignment.playerId === entry.playerId),
     );
+    const lineupMappingComplete =
+      mappedCurrentAssignments.length === currentStarters.length && !unmappedLockedStarter;
+    const locks = lineupMappingComplete
+      ? currentLineupLocks(claimedRosterRows, rosterPlayerById, mappedCurrentAssignments)
+      : [];
     let lineup: InSeasonDecisionSnapshot["lineup"];
-    if (mappedCurrentAssignments.length !== currentStarters.length || unmappedLockedStarter) {
+    if (!lineupMappingComplete) {
       lineup = unavailable([
         reason(
           "SLOT_RULES_UNSUPPORTED",
@@ -1846,21 +1921,6 @@ export class InSeasonDecisionService {
         ),
       ]);
     } else {
-      const assignmentByPlayer = new Map(
-        mappedCurrentAssignments.map((assignment) => [assignment.playerId, assignment]),
-      );
-      const locks: LineupLock[] = [];
-      for (const entry of claimedRosterRows) {
-        if (!entry.locked) continue;
-        const player = rosterPlayerById.get(entry.playerId);
-        if (!player) continue;
-        const assignment = assignmentByPlayer.get(player.id);
-        locks.push(
-          assignment
-            ? { playerId: player.id, kind: "STARTER", slotId: assignment.slotId }
-            : { playerId: player.id, kind: "BENCH" },
-        );
-      }
       const result = optimizeLineup({
         players: userRoster,
         slots: starterSlots,
@@ -1971,24 +2031,32 @@ export class InSeasonDecisionService {
             1,
             ...marketRows.filter((signal) => signal.signal === "add").map((signal) => signal.count),
           );
+          const waiverRoster = waiverRosterModel(userRoster, claimedRosterRows, slots);
+          const waiverPlayerIds = new Set(waiverRoster.roster.map((player) => player.id));
           const result = evaluateWaiverMoves({
-            roster: userRoster,
+            roster: waiverRoster.roster,
             candidates,
             starterSlots,
-            rosterCapacity: slots.length,
-            rosterSlots: slots,
+            rosterCapacity: waiverRoster.rosterCapacity,
+            rosterSlots: waiverRoster.rosterSlots,
             horizons: [{ id: projectionSet.id, label: projectionSet.horizon, weight: 1 }],
             projectionsByHorizon: { [projectionSet.id]: projectionById },
-            protectedPlayerIds: claimedRosterRows
-              .filter((entry) => entry.locked)
-              .map((entry) => playerId(entry.playerId)),
+            protectedPlayerIds: waiverRoster.protectedPlayerIds,
+            requireDrop: true,
+            lineupLocks: locks.filter((lock) => waiverPlayerIds.has(lock.playerId)),
           });
           const recommendations = result.recommendations
             .filter((move) => move.improvesRoster)
             .slice(0, 8)
             .map((move, index) => {
               const add = allPlayerById.get(move.addPlayerId)!;
-              const drop = move.dropPlayerId ? allPlayerById.get(move.dropPlayerId) : undefined;
+              if (move.dropPlayerId === null) {
+                throw new Error("Decision Desk waiver recommendations require a modeled drop");
+              }
+              const drop = allPlayerById.get(move.dropPlayerId);
+              if (!drop) {
+                throw new Error("The modeled waiver drop is missing from the current roster");
+              }
               const positionPeers = candidates.filter((candidate) =>
                 candidate.positions.some((position) => add.positions.includes(position)),
               ).length;
@@ -2011,7 +2079,7 @@ export class InSeasonDecisionService {
                     });
               return {
                 add: decisionPlayer(add, projectionById),
-                drop: drop ? decisionPlayer(drop, projectionById) : null,
+                drop: decisionPlayer(drop, projectionById),
                 weightedGain: rounded(move.weightedDelta),
                 lineupGain: rounded(move.horizonDeltas[0]?.lineupDelta ?? 0),
                 faab: bid

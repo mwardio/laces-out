@@ -1,5 +1,6 @@
 import {
   assignPlayersToRosterSlots,
+  isPlayerEligibleForSlot,
   projectionFor,
   type Player,
   type PlayerId,
@@ -10,6 +11,7 @@ import {
 import {
   optimizeLineup,
   type LineupChange,
+  type LineupLock,
   type LineupOptimizationResult,
 } from "@laces-out/engine-lineup";
 
@@ -31,6 +33,10 @@ export interface EvaluateWaiversInput {
   readonly horizons: readonly WaiverHorizon[];
   readonly projectionsByHorizon: Readonly<Record<string, ProjectionLookup | undefined>>;
   readonly protectedPlayerIds?: readonly PlayerId[];
+  /** Require a modeled outgoing player even when the roster has unused capacity. */
+  readonly requireDrop?: boolean;
+  /** Known provider locks that must remain fixed in before/after lineup optimization. */
+  readonly lineupLocks?: readonly LineupLock[];
   /** Marginal weight assigned to legal bench depth. Defaults to 0.1. */
   readonly benchValueWeight?: number;
 }
@@ -95,6 +101,7 @@ function calculateRosterValue(
   projections: ProjectionLookup,
   metric: ProjectionMetric,
   benchValueWeight: number,
+  locks: readonly LineupLock[] = [],
   currentAssignments: readonly {
     readonly playerId: PlayerId;
     readonly slotId: RosterSlot["id"];
@@ -105,6 +112,7 @@ function calculateRosterValue(
     slots: starterSlots,
     projections,
     metric,
+    locks,
     currentAssignments,
   });
   const benchDepthPoints = lineup.benchPlayerIds.reduce((sum, id) => {
@@ -117,6 +125,40 @@ function calculateRosterValue(
     totalValue: lineup.projectedPoints + benchDepthPoints * benchValueWeight,
     lineup,
   };
+}
+
+/**
+ * Verifies that the optimizer's chosen starters and the remaining players form one legal full-
+ * roster assignment. The lineup optimizer intentionally ignores non-starter slots, while the
+ * generic roster matcher does not know about fixed lineup locks; checking the residual bench here
+ * prevents those two individually feasible assignments from contradicting each other.
+ */
+function optimizedLineupFitsRosterSlots(
+  roster: readonly Player[],
+  value: WaiverRosterValue,
+  rosterSlots: readonly RosterSlot[],
+): boolean {
+  const playerById = new Map(roster.map((player) => [player.id, player]));
+  const slotById = new Map(rosterSlots.map((slot) => [slot.id, slot]));
+  const starterPlayerIds = new Set<PlayerId>();
+  for (const assignment of value.lineup.assignments) {
+    const player = playerById.get(assignment.playerId);
+    const slot = slotById.get(assignment.slotId);
+    if (
+      player === undefined ||
+      slot === undefined ||
+      slot.kind !== "STARTER" ||
+      starterPlayerIds.has(player.id) ||
+      !isPlayerEligibleForSlot(player, slot)
+    ) {
+      return false;
+    }
+    starterPlayerIds.add(player.id);
+  }
+
+  const benchPlayers = roster.filter((player) => !starterPlayerIds.has(player.id));
+  const nonStarterSlots = rosterSlots.filter((slot) => slot.kind !== "STARTER");
+  return assignPlayersToRosterSlots(benchPlayers, nonStarterSlots).feasible;
 }
 
 function moveSignature(move: WaiverMoveEvaluation): string {
@@ -179,18 +221,23 @@ export function evaluateWaiverMoves(input: EvaluateWaiversInput): WaiverEvaluati
       input.projectionsByHorizon[horizon.id]!,
       horizon.metric ?? "mean",
       benchValueWeight,
+      input.lineupLocks,
     );
   }
 
-  const protectedIds = new Set(input.protectedPlayerIds ?? []);
-  const requiresDrop = input.roster.length >= rosterCapacity;
+  const protectedIds = new Set([
+    ...(input.protectedPlayerIds ?? []),
+    ...(input.lineupLocks ?? []).map((lock) => lock.playerId),
+  ]);
+  const hasLineupLocks = (input.lineupLocks?.length ?? 0) > 0;
+  const requiresDrop = input.requireDrop === true || input.roster.length >= rosterCapacity;
   const dropOptions: readonly (Player | null)[] = requiresDrop
     ? input.roster.filter((player) => !protectedIds.has(player.id))
     : [null];
   if (requiresDrop && dropOptions.length === 0) {
     diagnostics.push({
       code: "NO_DROPPABLE_PLAYER",
-      message: "The roster is full and every player is protected",
+      message: "A drop is required and every player is protected",
     });
   }
 
@@ -235,6 +282,7 @@ export function evaluateWaiverMoves(input: EvaluateWaiversInput): WaiverEvaluati
           projections,
           metric,
           benchValueWeight,
+          input.lineupLocks,
           before.lineup.assignments,
         );
         const lineupDelta = after.lineupPoints - before.lineupPoints;
@@ -253,6 +301,26 @@ export function evaluateWaiverMoves(input: EvaluateWaiversInput): WaiverEvaluati
           lineupChanges: after.lineup.changes,
         };
       });
+      const incompleteLockedLineup =
+        hasLineupLocks && horizonDeltas.some((horizon) => !horizon.after.lineup.feasible);
+      const rosterSlots = input.rosterSlots;
+      const violatesFullRosterSlots =
+        rosterSlots !== undefined &&
+        horizonDeltas.some(
+          (horizon) =>
+            (horizon.before.lineup.feasible &&
+              !optimizedLineupFitsRosterSlots(input.roster, horizon.before, rosterSlots)) ||
+            (horizon.after.lineup.feasible &&
+              !optimizedLineupFitsRosterSlots(resultingRoster, horizon.after, rosterSlots)),
+        );
+      if (incompleteLockedLineup || violatesFullRosterSlots) {
+        diagnostics.push({
+          code: "ILLEGAL_RESULTING_ROSTER",
+          message: `Adding ${candidate.id} and dropping ${drop?.id ?? "nobody"} cannot preserve a complete legal roster assignment${hasLineupLocks ? " under the stored locks" : ""}`,
+          playerId: candidate.id,
+        });
+        continue;
+      }
       const strongest = [...horizonDeltas].sort(
         (left, right) =>
           Math.abs(right.weight * right.totalDelta) - Math.abs(left.weight * left.totalDelta),

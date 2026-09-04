@@ -624,7 +624,7 @@ Recommend only players and slot changes present in the Decision Desk lineup resu
   "waiver-scan": {
     title: "Waiver wire scan",
     instructions: `Apply a strict worth-the-drop standard.
-Recommend only add/drop pairs present in Decision Desk waiver recommendations. Never name an unlisted free agent and never recommend an add without its modeled drop or open roster spot.
+Recommend only add/drop pairs present in Decision Desk waiver recommendations. Never name an unlisted free agent and never recommend an add without its modeled drop.
 For each worthwhile move, compare the incoming player with the outgoing player, cite weighted roster gain and lineup gain when supplied, and distinguish immediate help from depth.
 If the recommendation list is empty, say there are no worthwhile waiver additions right now and recommend holding the roster. Do not manufacture an action for the sake of having one.`,
   },

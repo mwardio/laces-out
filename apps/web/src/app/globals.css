@@ -3154,6 +3154,11 @@
       text-align: center;
     }
 
+    .mobile-week-card__action-label {
+      display: grid;
+      line-height: 1.2;
+    }
+
     .dashboard-mode-notice,
     .live-empty-panel {
       align-items: flex-start;

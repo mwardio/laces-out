@@ -333,11 +333,13 @@ describe("InSeasonDecisionService", () => {
   });
 
   it.each([
-    { provider: "espn" as const, defenseCode: "D/ST" },
-    { provider: "yahoo" as const, defenseCode: "DEF" },
+    { provider: "espn" as const, defenseCode: "D/ST", reserveCode: "IR" },
+    { provider: "yahoo" as const, defenseCode: "DEF", reserveCode: "IR+" },
+    { provider: "yahoo" as const, defenseCode: "DEF", reserveCode: "IL" },
+    { provider: "yahoo" as const, defenseCode: "DEF", reserveCode: "NA" },
   ])(
-    "maps $provider provider reserve and defense slot labels",
-    async ({ provider, defenseCode }) => {
+    "maps $provider $reserveCode reserve and defense slot labels without inventing waiver capacity",
+    async ({ provider, defenseCode, reserveCode }) => {
       const repository = new FakeRepository();
       const defensePlayerId = "70000000-0000-4000-8000-000000000008";
       repository.season = {
@@ -358,9 +360,9 @@ describe("InSeasonDecisionService", () => {
         },
         {
           id: "80000000-0000-4000-8000-000000000005",
-          slotCode: "IR",
+          slotCode: reserveCode,
           count: 1,
-          eligiblePositions: ["IR"],
+          eligiblePositions: [reserveCode],
           isStarter: false,
         },
       ];
@@ -406,8 +408,116 @@ describe("InSeasonDecisionService", () => {
         claimedRosterPlayers: 4,
         claimedRosterProjected: 4,
       });
+      if (snapshot?.waivers.state !== "available") throw new Error("expected available waivers");
+      expect(snapshot.waivers.recommendations.length).toBeGreaterThan(0);
+      expect(snapshot.waivers.recommendations.every((move) => move.drop !== null)).toBe(true);
+      expect(snapshot.waivers.recommendations[0]).toMatchObject({
+        add: { name: "Free Arm" },
+        drop: { name: "Low Arm" },
+        weightedGain: 20,
+        lineupGain: 20,
+      });
+      expect(snapshot.waivers.recommendations[0]?.rationale).toContain("Free Arm for Low Arm");
+      expect(snapshot.waivers.recommendations[0]?.rationale).not.toContain("open roster spot");
+      expect(snapshot.waivers.evaluatedMoveCount).toBeGreaterThan(snapshot.waivers.candidateCount);
     },
   );
+
+  it("keeps injured-reserve occupants outside active-roster waiver legality", async () => {
+    const repository = new FakeRepository();
+    const injuredPlayerId = "70000000-0000-4000-8000-000000000008";
+    const freeReceiverId = "70000000-0000-4000-8000-000000000009";
+    repository.slotRules = [
+      ...slotRules.filter((rule) => rule.slotCode !== "BN"),
+      {
+        id: "80000000-0000-4000-8000-000000000004",
+        slotCode: "IR",
+        count: 1,
+        eligiblePositions: ["IR"],
+        isStarter: false,
+      },
+    ];
+    repository.rosterRows = [
+      ...rosterRows.filter((row) => row.playerId !== playerIds.aRbTwo),
+      {
+        ...rosterEntry(SNAPSHOT_A_ID, injuredPlayerId, "Injured Stash", "RB", "IR", false),
+        status: "IR",
+      },
+    ];
+    repository.projectionRows = [
+      ...projectionRows,
+      {
+        playerId: injuredPlayerId,
+        name: "Injured Stash",
+        primaryPosition: "RB",
+        eligiblePositions: ["RB"],
+        nflTeam: "MIA",
+        status: "IR",
+        meanPoints: "0",
+        floorPoints: "0",
+        ceilingPoints: "0",
+      },
+      {
+        playerId: freeReceiverId,
+        name: "Free Receiver",
+        primaryPosition: "WR",
+        eligiblePositions: ["WR"],
+        nflTeam: "CHI",
+        status: "ACTIVE",
+        meanPoints: "100",
+        floorPoints: "90",
+        ceilingPoints: "110",
+      },
+    ];
+
+    const snapshot = await new InSeasonDecisionService(repository, () => NOW).getSnapshot(
+      USER_ID,
+      LEAGUE_ID,
+    );
+
+    if (snapshot?.waivers.state !== "available") throw new Error("expected available waivers");
+    expect(snapshot.waivers.recommendations.length).toBeGreaterThan(0);
+    expect(snapshot.waivers.recommendations.every((move) => move.add.id !== freeReceiverId)).toBe(
+      true,
+    );
+    expect(snapshot.waivers.recommendations.every((move) => move.drop.id !== injuredPlayerId)).toBe(
+      true,
+    );
+    expect(snapshot.waivers.recommendations[0]).toMatchObject({
+      add: { name: "Free Arm" },
+      drop: { name: "Low Arm" },
+      weightedGain: 20,
+      lineupGain: 20,
+    });
+  });
+
+  it("still models the suggested drop when an ordinary roster slot is open", async () => {
+    const repository = new FakeRepository();
+    repository.slotRules = [
+      ...slotRules,
+      {
+        id: "80000000-0000-4000-8000-000000000004",
+        slotCode: "BN",
+        count: 1,
+        eligiblePositions: ["QB", "RB", "WR", "TE", "K", "DST"],
+        isStarter: false,
+      },
+    ];
+
+    const snapshot = await new InSeasonDecisionService(repository, () => NOW).getSnapshot(
+      USER_ID,
+      LEAGUE_ID,
+    );
+
+    if (snapshot?.waivers.state !== "available") throw new Error("expected available waivers");
+    expect(snapshot.waivers.recommendations[0]).toMatchObject({
+      add: { name: "Free Arm" },
+      drop: { name: "Low Arm" },
+      weightedGain: 20,
+      lineupGain: 20,
+    });
+    expect(snapshot.waivers.recommendations[0]?.rationale).not.toContain("open roster spot");
+  });
 
   it("returns structured unavailability instead of using roster facts as projections", async () => {
     const repository = new FakeRepository();
@@ -660,6 +770,13 @@ describe("InSeasonDecisionService", () => {
       ).toMatchObject({ locked: true });
       expect(snapshot.lineup.notes.join(" ")).toContain("complete provider lock coverage");
     }
+    if (snapshot?.waivers.state !== "available") throw new Error("expected available waivers");
+    expect(snapshot.waivers.recommendations[0]).toMatchObject({
+      add: { name: "Free Arm" },
+      drop: { name: "Lead Back" },
+      weightedGain: 1,
+      lineupGain: 0,
+    });
   });
 
   it("builds Yahoo deep links from numeric and alphabetic game prefixes", async () => {
@@ -823,7 +940,7 @@ describe("InSeasonDecisionSnapshot ADR 0003 provenance", () => {
 });
 
 // Frozen by Task 3.1. Any change here means a refactor altered snapshot output.
-const SNAPSHOT_FINGERPRINT = "cf65116d0f53bdc556dd5eb9c402cd5f040a66e2a2bda432dfb0f863ffe14386";
+const SNAPSHOT_FINGERPRINT = "a1b7ecffa50f07e33ecbc61029943cc8a433d327e5d8aec47ac94343646b2c2a";
 /**
  * The same fixture's fingerprint before the snapshot carried ADR 0003 provenance. Stripping the two
  * fields it gained has to reproduce this byte for byte: adding provenance may not move anything else.

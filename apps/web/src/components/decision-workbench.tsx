@@ -11,6 +11,7 @@ import {
   ArrowUpRight,
   BrainCircuit,
   CheckCircle2,
+  ChevronDown,
   ClipboardCheck,
   Database,
   Gauge,
@@ -35,6 +36,7 @@ import { compactDate, CONNECT_LEAGUE_FIRST, providerLabel } from "../lib/copy";
 import { projectionSourceAsOfText } from "../lib/projection-import-form";
 import { leagueIsUnclaimed } from "../lib/team-claim";
 import { useDefaultLeague } from "../lib/use-default-league";
+import { visibleWaiverNotes } from "../lib/waiver-presentation";
 import {
   DEMO_LEAGUE_ID,
   demoDecisionSnapshot,
@@ -202,6 +204,7 @@ function LineupSection({ snapshot }: { readonly snapshot: InSeasonDecisionSnapsh
 
 function WaiverSection({ snapshot }: { readonly snapshot: InSeasonDecisionSnapshot }) {
   const section = snapshot.waivers;
+  const notes = section.state === "available" ? visibleWaiverNotes(section.notes) : [];
   return (
     <section className={styles.section} id="decision-waivers" aria-labelledby="waivers-title">
       <header className={styles.sectionHeader}>
@@ -234,10 +237,7 @@ function WaiverSection({ snapshot }: { readonly snapshot: InSeasonDecisionSnapsh
           ) : (
             <div className={styles.waiverList}>
               {section.recommendations.map((move) => (
-                <article
-                  className={styles.waiverRow}
-                  key={`${move.add.id}:${move.drop?.id ?? "open"}`}
-                >
+                <article className={styles.waiverRow} key={`${move.add.id}:${move.drop.id}`}>
                   <div className={styles.playerMove}>
                     <span>Add</span>
                     <strong>{move.add.name}</strong>
@@ -248,11 +248,10 @@ function WaiverSection({ snapshot }: { readonly snapshot: InSeasonDecisionSnapsh
                   </div>
                   <div className={styles.playerMove}>
                     <span>Drop</span>
-                    <strong>{move.drop?.name ?? "Open roster spot"}</strong>
+                    <strong>{move.drop.name}</strong>
                     <small>
-                      {move.drop
-                        ? `${move.drop.positions.join("/")} · ${projectedPoints.format(move.drop.projectedPoints)}`
-                        : "No corresponding drop"}
+                      {move.drop.positions.join("/")} ·{" "}
+                      {projectedPoints.format(move.drop.projectedPoints)}
                     </small>
                   </div>
                   <div className={styles.moveValue}>
@@ -274,7 +273,7 @@ function WaiverSection({ snapshot }: { readonly snapshot: InSeasonDecisionSnapsh
               ))}
             </div>
           )}
-          <p className={styles.methodNote}>{section.notes.join(" ")}</p>
+          {notes.length > 0 ? <p className={styles.methodNote}>{notes.join(" ")}</p> : null}
           <ExecutionLink execution={section.execution} />
         </>
       )}
@@ -838,13 +837,13 @@ function DecisionQuickBoard({ snapshot }: { readonly snapshot: InSeasonDecisionS
           </strong>
         </span>
       </a>
-      <a href="#decision-ai">
+      <a className={styles.quickBoardAiReview} href="#decision-ai">
         <span className={styles.quickBoardIcon}>
           <BrainCircuit size={16} aria-hidden="true" />
         </span>
         <span>
           <small>AI review</small>
-          <strong>Explain the close calls</strong>
+          <strong>Explain the calls</strong>
         </span>
       </a>
     </nav>
@@ -1157,20 +1156,21 @@ export function DecisionWorkbench() {
             </div>
           </section>
 
-          <section className={styles.providerWarning} aria-label="Provider verification required">
-            <ShieldAlert size={19} aria-hidden="true" />
-            <div>
+          <details className={styles.providerWarning}>
+            <summary>
+              <ShieldAlert size={19} aria-hidden="true" />
               <strong>Verify every lineup, waiver, and trade action at the provider</strong>
+              <ChevronDown size={18} aria-hidden="true" />
+            </summary>
+            <div className={styles.providerWarningDetails}>
               <p>{snapshot.providerVerification.actionWarning}</p>
-              <details>
-                <summary>Lock coverage</summary>
-                <span>
-                  Complete coverage unavailable · stored locks honored:{" "}
-                  {snapshot.providerVerification.storedLockedPlayerCount}
-                </span>
-              </details>
+              <span>
+                <b>Lock coverage</b>
+                Complete coverage unavailable · stored locks honored:{" "}
+                {snapshot.providerVerification.storedLockedPlayerCount}
+              </span>
             </div>
-          </section>
+          </details>
 
           <div className={styles.sourceLine}>
             <span>
