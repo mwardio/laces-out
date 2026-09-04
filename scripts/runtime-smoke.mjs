@@ -99,6 +99,33 @@ try {
   assert.match(landingHtml, /Connect your leagues/u);
   assert.match(landingHtml, /Create your account/u);
 
+  const landingV2Response = await waitForHttp(`http://127.0.0.1:${webPort}/landing_v2`, web);
+  const landingV2Html = await landingV2Response.text();
+  assert.match(landingV2Html, /Connect your leagues/u);
+  assert.match(landingV2Html, /Fresh league data/u);
+  assert.match(landingV2Html, /Ask the Film Room why/u);
+  assert.match(landingV2Html, /noindex/u);
+  if (process.env.NEXT_PUBLIC_YAHOO_ACCESS_STATUS?.trim().toLowerCase() === "available") {
+    assert.match(landingV2Html, /Yahoo \+ ESPN/u);
+    assert.doesNotMatch(landingV2Html, /Yahoo sync is next on the roadmap/u);
+  } else {
+    assert.match(landingV2Html, /Yahoo sync is next on the roadmap/u);
+  }
+  const landingV2SocialImageUrl = landingV2Html.match(
+    /<meta property="og:image" content="([^"]+)"/u,
+  )?.[1];
+  assert.ok(landingV2SocialImageUrl);
+  const landingV2SocialImagePath = new URL(landingV2SocialImageUrl);
+  const landingV2SocialImageResponse = await waitForHttp(
+    `http://127.0.0.1:${webPort}${landingV2SocialImagePath.pathname}${landingV2SocialImagePath.search}`,
+    web,
+  );
+  assert.equal(landingV2SocialImageResponse.headers.get("content-type"), "image/png");
+  const landingV2SocialImage = Buffer.from(await landingV2SocialImageResponse.arrayBuffer());
+  assert.deepEqual([...landingV2SocialImage.subarray(0, 8)], [137, 80, 78, 71, 13, 10, 26, 10]);
+  assert.equal(landingV2SocialImage.readUInt32BE(16), 1200);
+  assert.equal(landingV2SocialImage.readUInt32BE(20), 630);
+
   const workspaceResponse = await waitForHttp(`http://127.0.0.1:${webPort}/app`, web);
   const workspaceHtml = await workspaceResponse.text();
   assert.match(workspaceHtml, /Laces Out/u);
@@ -118,5 +145,5 @@ try {
 }
 
 process.stdout.write(
-  `${JSON.stringify({ apiLive: true, apiReady: true, workerStarted: true, landingStarted: true, workspaceStarted: true, scheduleStarted: true })}\n`,
+  `${JSON.stringify({ apiLive: true, apiReady: true, workerStarted: true, landingStarted: true, landingV2Started: true, landingV2SocialImageStarted: true, workspaceStarted: true, scheduleStarted: true })}\n`,
 );
