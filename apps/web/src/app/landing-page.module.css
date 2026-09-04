@@ -1,3 +1,4 @@
+/* Canonical Laces Out marketing page. */
 .page {
   --landing-h2: clamp(32px, 3.2vw, 42px);
   min-width: 320px;
@@ -61,7 +62,6 @@
 .siteHeader :is(a, button):focus-visible,
 .hero :is(a, button):focus-visible,
 .syncSection :is(a, button):focus-visible,
-.midCta :is(a, button):focus-visible,
 .aiSection :is(a, button):focus-visible {
   outline-color: var(--lime-300);
 }
@@ -255,11 +255,11 @@
 
 .productPreview {
   overflow: hidden;
-  color: #edf1ed;
-  background: var(--ink-900);
-  border: 1px solid #2d382f;
+  color: var(--ink-900);
+  background: var(--paper-50);
+  border: 1px solid var(--ink-300);
   border-radius: var(--radius-lg);
-  box-shadow: 0 30px 70px rgb(0 0 0 / 30%);
+  box-shadow: 0 30px 70px rgb(0 0 0 / 34%);
 }
 
 .previewTopbar {
@@ -269,7 +269,8 @@
   justify-content: space-between;
   gap: var(--space-16);
   padding: 0 20px;
-  color: #93a097;
+  color: #edf1ed;
+  background: var(--ink-900);
   border-bottom: 1px solid #2d382f;
 }
 
@@ -298,11 +299,11 @@
 
 .previewHeading {
   padding-bottom: 20px;
-  border-bottom: 1px solid #2d382f;
+  border-bottom: 1px solid var(--ink-150);
 }
 
 .previewHeading p {
-  color: var(--lime-300);
+  color: var(--green-600);
   font-size: var(--text-11);
   font-weight: 750;
   letter-spacing: 0.08em;
@@ -312,7 +313,7 @@
 .previewHeading h2 {
   max-width: 390px;
   margin-top: 6px;
-  color: #f5f7f4;
+  color: var(--ink-950);
   font-family: var(--font-brand), var(--font-sans);
   font-size: 24px;
   font-weight: 700;
@@ -331,8 +332,8 @@
 .lineupCard {
   min-width: 0;
   padding: 15px;
-  background: #1b251d;
-  border: 1px solid #2d382f;
+  background: var(--white);
+  border: 1px solid var(--ink-150);
   border-radius: var(--radius-md);
 }
 
@@ -342,7 +343,7 @@
   align-items: center;
   justify-content: space-between;
   gap: var(--space-8);
-  color: #93a097;
+  color: var(--ink-500);
   font-size: var(--text-11);
   font-weight: 750;
   letter-spacing: 0.055em;
@@ -352,8 +353,8 @@
 
 .edgeLabel {
   padding: 4px 6px;
-  color: var(--lime-300);
-  background: #1e2b21;
+  color: var(--green-700);
+  background: var(--lime-100);
   border-radius: var(--radius-xs);
   font-size: var(--text-11);
   letter-spacing: 0;
@@ -402,15 +403,15 @@
 }
 
 .teamMonogramMuted {
-  color: #c8d0ca;
-  background: #2a352c;
+  color: var(--ink-600);
+  background: var(--ink-100);
 }
 
 .projectionTrack {
   height: 4px;
   margin-top: 13px;
   overflow: hidden;
-  background: #2a352c;
+  background: var(--ink-150);
   border-radius: 999px;
 }
 
@@ -418,7 +419,7 @@
   display: block;
   width: 73%;
   height: 100%;
-  background: var(--lime-300);
+  background: var(--lime-500);
   border-radius: inherit;
 }
 
@@ -435,8 +436,8 @@
   width: 36px;
   height: 36px;
   place-items: center;
-  color: var(--lime-300);
-  background: #1e2b21;
+  color: var(--green-700);
+  background: var(--lime-100);
   border-radius: var(--radius-sm);
   font-size: var(--text-11);
   font-weight: 800;
@@ -460,7 +461,7 @@
 
 .swapCall small {
   margin-top: 2px;
-  color: #93a097;
+  color: var(--ink-500);
   font-size: var(--text-11);
 }
 
@@ -468,7 +469,7 @@
   grid-row: 2;
   grid-column: 2;
   justify-self: end;
-  color: var(--lime-300);
+  color: var(--green-700);
   font-size: var(--text-16);
 }
 
@@ -1180,14 +1181,6 @@
   flex: 0 0 auto;
 }
 
-.midCta {
-  margin-bottom: 82px;
-  color: #f4f6f3;
-  background: var(--ink-950);
-  border-radius: var(--radius-lg);
-  box-shadow: 0 18px 44px rgb(16 23 18 / 15%);
-}
-
 .aiSection {
   padding: 80px 0;
   color: #edf1ed;
@@ -1338,6 +1331,13 @@
   border-color: var(--ink-300);
 }
 
+@media (max-width: 1120px) {
+  .finalCta {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}
+
 @media (max-width: 1040px) {
   .primaryNav {
     display: none;
@@ -1460,6 +1460,19 @@
   .ctaBand {
     align-items: flex-start;
     flex-direction: column;
+  }
+}
+
+@media (max-width: 640px) {
+  .finalCta .ctaActions {
+    width: 100%;
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .finalCta .ctaActions a {
+    width: 100%;
+    min-height: 44px;
   }
 }
 
@@ -1641,10 +1654,6 @@
 
   .ctaBand h2 {
     font-size: 28px;
-  }
-
-  .midCta {
-    margin-bottom: 70px;
   }
 
   .aiDisclosure {

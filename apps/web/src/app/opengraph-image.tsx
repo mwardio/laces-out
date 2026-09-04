@@ -3,7 +3,7 @@ import { join } from "node:path";
 
 import { ImageResponse } from "next/og";
 
-import { yahooComingSoon } from "../../lib/public-site";
+import { yahooComingSoon } from "../lib/public-site";
 
 export const alt = "Laces Out: Connect your leagues. Get the next move.";
 export const size = { width: 1200, height: 630 };
@@ -19,7 +19,7 @@ function emittedAssetPath(asset: string | URL): string {
   return join(webProjectDirectory, ".next", "server", "chunks", relativePath);
 }
 
-const soraBold = readFile(emittedAssetPath(new URL("../fonts/Sora-Bold.ttf", import.meta.url)));
+const soraBold = readFile(emittedAssetPath(new URL("./fonts/Sora-Bold.ttf", import.meta.url)));
 const markSource = readFile(
   join(webProjectDirectory, "public", "brand", "laces-out-playbook-mark.png"),
 ).then((data) => Uint8Array.from(data).buffer);
@@ -91,9 +91,11 @@ export default async function OpenGraphImage() {
           fontSize: 20,
         }}
       >
-        <div style={{ display: "flex" }}>{yahooComingSoon ? "ESPN" : "Yahoo + ESPN"}</div>
+        <div style={{ display: "flex" }}>
+          {yahooComingSoon ? "ESPN syncing" : "ESPN & Yahoo syncing"}
+        </div>
         <div style={{ display: "flex", color: "#566159" }}>•</div>
-        <div style={{ display: "flex" }}>Web + iPhone</div>
+        <div style={{ display: "flex" }}>Access on web + iOS</div>
         <div style={{ display: "flex", color: "#566159" }}>•</div>
         <div style={{ display: "flex" }}>Backtested across 4 NFL seasons</div>
       </div>

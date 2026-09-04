@@ -21,6 +21,25 @@ const nextConfig: NextConfig = {
   poweredByHeader: false,
   typedRoutes: true,
   ...(isMiniRemoteValidation ? { experimental: { cpus: 2 } } : {}),
+  redirects() {
+    return Promise.resolve([
+      {
+        source: "/opengraph-image.jpg",
+        destination: "/opengraph-image",
+        permanent: true,
+      },
+      {
+        source: "/landing_v2/opengraph-image",
+        destination: "/opengraph-image",
+        permanent: true,
+      },
+      {
+        source: "/landing_v2",
+        destination: "/",
+        permanent: true,
+      },
+    ]);
+  },
   webpack(config: WorkspaceWebpackConfig): WorkspaceWebpackConfig {
     // Workspace packages use NodeNext's emitted `.js` specifiers while their
     // development exports point at TypeScript source. Resolve both shapes so

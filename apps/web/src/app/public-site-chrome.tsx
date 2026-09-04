@@ -6,7 +6,7 @@ import { LacesOutMark } from "../components/laces-out-mark";
 import { publicAppStoreUrl } from "../lib/public-site";
 
 import { ContactEasterEgg } from "./contact-easter-egg";
-import styles from "./landing.module.css";
+import styles from "./public-site-chrome.module.css";
 
 export function PublicSiteHeader({
   showNavigation = true,
@@ -35,11 +35,11 @@ export function PublicSiteHeader({
 
         {showNavigation ? (
           <nav className={styles.primaryNav} aria-label="Public site navigation">
-            <a href="/#product">How It Works</a>
+            <a href="/#how-it-works">How It Works</a>
             <a href="/#sync">Sync</a>
             <a href="/#draft-day">Draft Day</a>
             <a href="/#in-season">In Season</a>
-            <a href="/#trust">Trust</a>
+            <a href="/#privacy">Privacy</a>
           </nav>
         ) : null}
 

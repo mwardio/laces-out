@@ -262,7 +262,7 @@ export function InvitationAcceptance() {
       {state === "error" ? (
         <>
           <Link className="button button--lime login-submit" href="/app">
-            Tour the locker room <ArrowRight size={15} />
+            See a sample week <ArrowRight size={15} />
           </Link>
           <div className="login-demo-route">
             <span>Already have an account?</span>

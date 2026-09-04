@@ -4,7 +4,7 @@ import { ArrowRight, BadgeCheck, CircleHelp, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 import { requestFinkleKick } from "../lib/finkle-kick";
-import styles from "./landing.module.css";
+import styles from "./public-site-chrome.module.css";
 
 export function ContactEasterEgg() {
   const dialogRef = useRef<HTMLDialogElement>(null);

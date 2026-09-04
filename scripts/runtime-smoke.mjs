@@ -10,6 +10,12 @@ const repositoryRoot = fileURLToPath(new URL("..", import.meta.url));
 const webRoot = fileURLToPath(new URL("../apps/web", import.meta.url));
 const webRequire = createRequire(new URL("../apps/web/package.json", import.meta.url));
 const nextBinary = webRequire.resolve("next/dist/bin/next");
+const expectedCanonicalUrl = new URL(
+  "/",
+  process.env.NEXT_PUBLIC_SITE_URL?.trim() || "http://localhost:3000",
+)
+  .toString()
+  .replace(/\/$/u, "");
 
 function startNode(arguments_, extraEnvironment = {}, workingDirectory = repositoryRoot) {
   const child = spawn(process.execPath, arguments_, {
@@ -94,37 +100,54 @@ const web = startNode(
 try {
   const landingResponse = await waitForHttp(`http://127.0.0.1:${webPort}/`, web);
   const landingHtml = await landingResponse.text();
-  // Assert on the hero headline, which is what proves the page server-rendered its own copy.
-  // This drifted once already: the "Know the room" hero was replaced without updating the smoke.
   assert.match(landingHtml, /Connect your leagues/u);
   assert.match(landingHtml, /Create your account/u);
-
-  const landingV2Response = await waitForHttp(`http://127.0.0.1:${webPort}/landing_v2`, web);
-  const landingV2Html = await landingV2Response.text();
-  assert.match(landingV2Html, /Connect your leagues/u);
-  assert.match(landingV2Html, /Fresh league data/u);
-  assert.match(landingV2Html, /Ask the Film Room why/u);
-  assert.match(landingV2Html, /noindex/u);
+  assert.match(landingHtml, /Fresh league data/u);
+  assert.match(landingHtml, /Ask the Film Room why/u);
+  assert.match(landingHtml, /application\/ld\+json/u);
+  assert.doesNotMatch(landingHtml, /Automated league brief/u);
+  assert.ok(landingHtml.includes(`<link rel="canonical" href="${expectedCanonicalUrl}"`));
+  assert.doesNotMatch(landingHtml, /noindex/u);
   if (process.env.NEXT_PUBLIC_YAHOO_ACCESS_STATUS?.trim().toLowerCase() === "available") {
-    assert.match(landingV2Html, /Yahoo \+ ESPN/u);
-    assert.doesNotMatch(landingV2Html, /Yahoo sync is next on the roadmap/u);
+    assert.match(landingHtml, /ESPN &amp; Yahoo syncing/u);
+    assert.doesNotMatch(landingHtml, /Yahoo sync is next on the roadmap/u);
   } else {
-    assert.match(landingV2Html, /Yahoo sync is next on the roadmap/u);
+    assert.match(landingHtml, /ESPN syncing/u);
+    assert.match(landingHtml, /Yahoo sync is next on the roadmap/u);
   }
-  const landingV2SocialImageUrl = landingV2Html.match(
+  const landingSocialImageUrl = landingHtml.match(
     /<meta property="og:image" content="([^"]+)"/u,
   )?.[1];
-  assert.ok(landingV2SocialImageUrl);
-  const landingV2SocialImagePath = new URL(landingV2SocialImageUrl);
-  const landingV2SocialImageResponse = await waitForHttp(
-    `http://127.0.0.1:${webPort}${landingV2SocialImagePath.pathname}${landingV2SocialImagePath.search}`,
+  assert.ok(landingSocialImageUrl);
+  const landingSocialImagePath = new URL(landingSocialImageUrl);
+  const landingSocialImageResponse = await waitForHttp(
+    `http://127.0.0.1:${webPort}${landingSocialImagePath.pathname}${landingSocialImagePath.search}`,
     web,
   );
-  assert.equal(landingV2SocialImageResponse.headers.get("content-type"), "image/png");
-  const landingV2SocialImage = Buffer.from(await landingV2SocialImageResponse.arrayBuffer());
-  assert.deepEqual([...landingV2SocialImage.subarray(0, 8)], [137, 80, 78, 71, 13, 10, 26, 10]);
-  assert.equal(landingV2SocialImage.readUInt32BE(16), 1200);
-  assert.equal(landingV2SocialImage.readUInt32BE(20), 630);
+  assert.equal(landingSocialImageResponse.headers.get("content-type"), "image/png");
+  const landingSocialImage = Buffer.from(await landingSocialImageResponse.arrayBuffer());
+  assert.deepEqual([...landingSocialImage.subarray(0, 8)], [137, 80, 78, 71, 13, 10, 26, 10]);
+  assert.equal(landingSocialImage.readUInt32BE(16), 1200);
+  assert.equal(landingSocialImage.readUInt32BE(20), 630);
+
+  const landingV2Redirect = await fetch(`http://127.0.0.1:${webPort}/landing_v2`, {
+    redirect: "manual",
+  });
+  assert.equal(landingV2Redirect.status, 308);
+  assert.equal(landingV2Redirect.headers.get("location"), "/");
+
+  const landingV2SocialImageRedirect = await fetch(
+    `http://127.0.0.1:${webPort}/landing_v2/opengraph-image`,
+    { redirect: "manual" },
+  );
+  assert.equal(landingV2SocialImageRedirect.status, 308);
+  assert.equal(landingV2SocialImageRedirect.headers.get("location"), "/opengraph-image");
+
+  const legacySocialImageRedirect = await fetch(`http://127.0.0.1:${webPort}/opengraph-image.jpg`, {
+    redirect: "manual",
+  });
+  assert.equal(legacySocialImageRedirect.status, 308);
+  assert.equal(legacySocialImageRedirect.headers.get("location"), "/opengraph-image");
 
   const workspaceResponse = await waitForHttp(`http://127.0.0.1:${webPort}/app`, web);
   const workspaceHtml = await workspaceResponse.text();
@@ -145,5 +168,5 @@ try {
 }
 
 process.stdout.write(
-  `${JSON.stringify({ apiLive: true, apiReady: true, workerStarted: true, landingStarted: true, landingV2Started: true, landingV2SocialImageStarted: true, workspaceStarted: true, scheduleStarted: true })}\n`,
+  `${JSON.stringify({ apiLive: true, apiReady: true, workerStarted: true, officialLandingStarted: true, landingRedirectStarted: true, landingSocialImageStarted: true, workspaceStarted: true, scheduleStarted: true })}\n`,
 );

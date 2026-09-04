@@ -1,64 +1,49 @@
 import {
   ArrowRight,
   BarChart3,
-  BookOpenCheck,
   BrainCircuit,
   Cable,
   Check,
   ChevronRight,
   CircleDollarSign,
-  ClipboardCheck,
-  Clock3,
-  Database,
   Eye,
   Gauge,
+  Goal,
   KeyRound,
   LineChart,
   LockKeyhole,
   RefreshCw,
   Scale,
-  ScanLine,
   ShieldCheck,
   SlidersHorizontal,
   Smartphone,
-  Goal,
-  TrendingUp,
-  Workflow,
 } from "lucide-react";
 import type { Metadata } from "next";
 import Link from "next/link";
 
 import { LacesOutMark } from "../components/laces-out-mark";
 import { publicAppStoreUrl, yahooComingSoon } from "../lib/public-site";
+import { PublicSiteFooter } from "./public-site-chrome";
 
-import styles from "./landing.module.css";
-import { PublicSiteFooter, PublicSiteHeader } from "./public-site-chrome";
+import styles from "./landing-page.module.css";
 
 export const revalidate = 3600;
-
-const socialPreview = {
-  url: "/opengraph-image.jpg",
-  width: 1733,
-  height: 908,
-  alt: "Laces Out: Finkle is Einhorn!",
-} as const;
 
 export const metadata: Metadata = {
   title: "Laces Out: Automated Fantasy Football Intelligence",
   description: yahooComingSoon
-    ? "Sync your ESPN league for built-in weekly forecasts and automated draft, lineup, waiver, trade, and opponent analysis."
-    : "Connect Yahoo and ESPN leagues for built-in weekly forecasts and automated draft, lineup, waiver, trade, and opponent analysis.",
+    ? "Sync your ESPN league for fresh forecasts and ranked fantasy football decisions."
+    : "Connect Yahoo and ESPN leagues for fresh forecasts and ranked fantasy football decisions.",
   alternates: { canonical: "/" },
   robots: { index: true, follow: true },
   openGraph: {
     type: "website",
     title: "Laces Out: Connect your leagues. Get the next move.",
     description: yahooComingSoon
-      ? "A private fantasy football locker room with ESPN sync, backtested weekly forecasts, and automated decision analysis."
-      : "A private fantasy football locker room that turns fresh Yahoo and ESPN league data into forecasts and prioritized decisions.",
+      ? "A private fantasy football locker room with ESPN sync, backtested weekly forecasts, and ranked decisions."
+      : "A private fantasy football locker room that turns fresh Yahoo and ESPN league data into forecasts and ranked decisions.",
     siteName: "Laces Out",
     url: "/",
-    images: [socialPreview],
   },
   twitter: {
     card: "summary_large_image",
@@ -66,7 +51,6 @@ export const metadata: Metadata = {
     description: yahooComingSoon
       ? "ESPN league sync, built-in weekly forecasts, and automatic league-aware decision analysis."
       : "Yahoo and ESPN sync with built-in weekly forecasts and automatic, league-aware decision analysis.",
-    images: [socialPreview],
   },
 };
 
@@ -77,7 +61,7 @@ const applicationSchema = {
   applicationCategory: "SportsApplication",
   operatingSystem: "Web, iOS",
   description:
-    "Self-hosted fantasy football software that syncs leagues, builds weekly forecasts, and automates draft, lineup, waiver, trade, and opponent analysis.",
+    "Fantasy football software that syncs leagues, builds weekly forecasts, and automates draft, lineup, waiver, trade, and opponent analysis.",
   downloadUrl: publicAppStoreUrl,
   offers: {
     "@type": "Offer",
@@ -86,56 +70,29 @@ const applicationSchema = {
   },
 };
 
-const seasonFeatures = [
+const howItWorks = [
   {
     number: "01",
     label: "Connect your leagues",
-    title: "Bring every team into one live picture.",
+    title: "Bring every team together.",
     text: yahooComingSoon
-      ? "Sync ESPN with the Chrome companion or an operator-verified public read and pull in settings, rosters, standings, matchups, and the team that is actually yours."
-      : "Link Yahoo or sync ESPN to pull league settings, rosters, standings, matchups, and the team that is actually yours.",
+      ? "Pair ESPN through the Chrome companion. Laces Out pulls settings, rosters, standings, and matchups, and knows which team is yours."
+      : "Link Yahoo with one sign-in, or pair ESPN through the Chrome companion. Laces Out pulls settings, rosters, standings, and matchups, and knows which team is yours.",
     icon: Cable,
   },
   {
     number: "02",
     label: "Forecast + decision sweep",
-    title: "Let Laces Out recalculate what matters.",
-    text: "Backtested weekly forecasts and fresh league inputs rerun lineup, waiver, trade, opponent, and portfolio analysis automatically.",
-    icon: ScanLine,
+    title: "Recalculate what matters.",
+    text: "Backtested weekly forecasts and fresh league inputs rerun lineup, waiver, trade, and opponent analysis automatically, then rank every call by expected impact, confidence, and urgency.",
+    icon: BarChart3,
   },
   {
     number: "03",
     label: "Add your edge",
-    title: "Tune the engine to the way you play.",
-    text: "Optional rankings, ADP, custom projections, auction values, and cheat sheets sharpen the built-in forecast. They enhance the automation; they do not power it.",
+    title: "Make it yours.",
+    text: "Optional rankings, ADP, custom projections, auction values, and cheat sheets sharpen the built-in forecast.",
     icon: SlidersHorizontal,
-  },
-] as const;
-
-const automationSteps = [
-  {
-    number: "01",
-    title: "Sync",
-    text: "Capture league settings, teams, rosters, standings, and matchups.",
-    icon: Cable,
-  },
-  {
-    number: "02",
-    title: "Normalize",
-    text: "League data and NFL-wide signals stay cleanly separated, so nothing gets mixed up or mislabeled.",
-    icon: Database,
-  },
-  {
-    number: "03",
-    title: "Analyze",
-    text: "Recompute lineups, waivers, trades, opponents, and roster strength.",
-    icon: BarChart3,
-  },
-  {
-    number: "04",
-    title: "Prioritize",
-    text: "Rank the calls by expected impact, confidence, urgency, and freshness.",
-    icon: ClipboardCheck,
   },
 ] as const;
 
@@ -143,17 +100,17 @@ const aiFeatures = [
   {
     icon: BrainCircuit,
     title: "Gemini included",
-    text: "Every signed-in member starts with Gemini 3.6 Flash analysis. No provider setup or personal API key is required.",
+    text: "No provider setup.",
   },
   {
     icon: KeyRound,
     title: "Bring your own model",
-    text: "Add an OpenAI, Anthropic, Gemini, DeepSeek, Grok, or OpenRouter key to choose the model and use limits independent from the included allowance.",
+    text: "Choose your preferred model.",
   },
   {
-    icon: BookOpenCheck,
+    icon: ShieldCheck,
     title: "Explain with receipts",
-    text: "The Film Room receives current league snapshots and deterministic recommendations, then labels the Laces Out sources behind its answer.",
+    text: "Answers cite the underlying data.",
   },
 ] as const;
 
@@ -161,88 +118,185 @@ const trustPoints = [
   {
     icon: Eye,
     title: "Read-only by default",
-    text: "Laces Out recommends. You remain in control of every provider-side move.",
+    text: "You approve every provider-side move.",
   },
   {
     icon: LockKeyhole,
     title: "Private connections",
-    text: "Yahoo authorization and optional always-on ESPN access are encrypted server-side. Provider passwords are never collected.",
+    text: "Connections are encrypted. Provider passwords are never collected.",
   },
   {
-    icon: Database,
+    icon: LineChart,
     title: "Source-aware data",
-    text: "League syncs, nflverse identity and usage data, contextual draft markets, Sleeper signals, and Laces Out forecasts keep separate timestamps and provenance.",
+    text: "Every number shows where it came from and when it was last updated.",
   },
 ] as const;
 
+function LandingHeader() {
+  return (
+    <header className={styles.siteHeader}>
+      <div className={styles.headerInner}>
+        <Link className={styles.brand} href="/" aria-label="Laces Out home">
+          <LacesOutMark />
+          <strong>Laces Out</strong>
+        </Link>
+
+        <nav className={styles.primaryNav} aria-label="Landing page navigation">
+          <a href="#how-it-works">How It Works</a>
+          <a href="#sync">Sync</a>
+          <a href="#draft-day">Draft Day</a>
+          <a href="#in-season">In Season</a>
+          <a href="#privacy">Privacy</a>
+        </nav>
+
+        <div className={styles.headerActions}>
+          <Link className={styles.signInButton} href="/login">
+            Sign In
+          </Link>
+          <Link className={styles.headerCta} href="/register">
+            Join <ArrowRight aria-hidden="true" size={14} />
+          </Link>
+        </div>
+      </div>
+    </header>
+  );
+}
+
+function YahooProviderCard() {
+  return (
+    <article className={styles.providerCard}>
+      <div className={styles.providerCardHead}>
+        <div className={styles.providerIdentity}>
+          <span className={`${styles.providerBadge} ${styles.yahooBadge}`}>Yahoo</span>
+          <div>
+            <p>League connection</p>
+            <h3>Yahoo Fantasy</h3>
+          </div>
+        </div>
+        <span className={styles.connectionMode}>Official sign-in</span>
+      </div>
+      <p className={styles.providerDescription}>
+        Sign in on Yahoo itself. Laces Out keeps an encrypted read-only token, never your password.
+      </p>
+      <ul>
+        <li>
+          <Check aria-hidden="true" size={14} /> Settings, teams, rosters, standings, and matchups
+        </li>
+        <li>
+          <RefreshCw aria-hidden="true" size={14} /> Refreshes on link and on request
+        </li>
+        <li>
+          <Check aria-hidden="true" size={14} /> Read-only: Laces Out never edits your Yahoo roster
+        </li>
+      </ul>
+    </article>
+  );
+}
+
+function EspnProviderCard() {
+  return (
+    <article className={styles.providerCard}>
+      <div className={styles.providerCardHead}>
+        <div className={styles.providerIdentity}>
+          <span className={`${styles.providerBadge} ${styles.espnBadge}`}>ESPN</span>
+          <div>
+            <p>League connection</p>
+            <h3>ESPN Fantasy</h3>
+          </div>
+        </div>
+        <span className={styles.connectionMode}>Automatic sync</span>
+      </div>
+      <p className={styles.providerDescription}>
+        Pair the Chrome companion once. Laces Out keeps your league synced on a schedule, even after
+        Chrome closes, and never sees your ESPN password.
+      </p>
+      <ul>
+        <li>
+          <Check aria-hidden="true" size={14} /> Private multi-league sync
+        </li>
+        <li>
+          <RefreshCw aria-hidden="true" size={14} /> Refreshes within five minutes when you ask
+        </li>
+        <li>
+          <Check aria-hidden="true" size={14} /> Availability, scoring, activity, and draft context
+        </li>
+      </ul>
+    </article>
+  );
+}
+
+function YahooRoadmapCard() {
+  return (
+    <aside className={styles.providerPending} aria-label="Yahoo Fantasy availability">
+      <div>
+        <span className={`${styles.providerBadge} ${styles.yahooBadge}`}>Yahoo</span>
+        <span className={`${styles.connectionMode} ${styles.connectionModePending}`}>
+          Coming soon
+        </span>
+      </div>
+      <h3>Yahoo Fantasy</h3>
+      <p>Yahoo sync is next on the roadmap.</p>
+    </aside>
+  );
+}
+
 export default function LandingPage() {
   return (
-    <main className={styles.page}>
+    <div className={styles.page}>
       <a className={styles.skipLink} href="#main-content">
         Skip to content
       </a>
 
-      <PublicSiteHeader />
+      <LandingHeader />
 
-      <div id="main-content">
+      <main id="main-content">
         <section className={styles.hero}>
-          <div className={styles.heroFieldLine} aria-hidden="true" />
           <div className={styles.heroInner}>
             <div className={styles.heroCopy}>
-              <p className={styles.kicker}>
-                <Workflow size={14} /> Automated, league-aware fantasy intelligence
-              </p>
               <h1>
                 Connect your leagues.
                 <span>Get the next move.</span>
               </h1>
               <p className={styles.heroLead}>
-                Laces Out builds its own weekly forecast and keeps scanning lineups, waivers,
-                trades, opponents, and draft rooms, then surfaces the moves worth making.
+                Every time your {yahooComingSoon ? "ESPN" : "Yahoo or ESPN"} league changes, Laces
+                Out reruns the lineup, waiver, and trade math and ranks the calls by the points at
+                stake. It never touches your roster, never asks for your password, and never shows
+                you an ad.
               </p>
               <div className={styles.heroActions}>
                 <Link className={styles.primaryButton} href="/register">
-                  Create your account <ArrowRight size={16} />
+                  Create your account <ArrowRight aria-hidden="true" size={16} />
                 </Link>
                 <Link className={styles.secondaryButton} href="/app">
-                  Tour the locker room <ChevronRight size={16} />
+                  See a sample week <ChevronRight aria-hidden="true" size={16} />
                 </Link>
               </div>
               <div className={styles.heroProof} aria-label="Product availability">
                 <span>
-                  <Check size={13} />
-                  {yahooComingSoon ? " ESPN league sync" : " Yahoo + ESPN league sync"}
+                  <Check aria-hidden="true" size={14} />
+                  {yahooComingSoon ? "ESPN syncing" : "ESPN & Yahoo syncing"}
                 </span>
                 <span>
-                  <Check size={13} /> Backtested weekly forecasts
+                  <Check aria-hidden="true" size={14} /> Access on web + iOS
                 </span>
                 <span>
-                  <RefreshCw size={13} /> Fresh right up to kickoff
-                </span>
-                <span>
-                  <BrainCircuit size={13} /> Gemini coaching included
+                  <Check aria-hidden="true" size={14} /> Backtested across 4 NFL seasons
                 </span>
               </div>
             </div>
 
             <div className={styles.productPreview} aria-label="Illustrative Laces Out dashboard">
               <div className={styles.previewTopbar}>
-                <span className={styles.previewBrand}>
-                  <LacesOutMark compact />
-                  <strong>Automated league brief</strong>
+                <span className={styles.freshness}>
+                  <RefreshCw aria-hidden="true" size={13} /> Analysis refreshed 8 min ago
                 </span>
                 <span className={styles.sampleFlag}>Sample league · Week 8</span>
               </div>
 
               <div className={styles.previewBody}>
                 <div className={styles.previewHeading}>
-                  <div>
-                    <p>North Loop Dynasty</p>
-                    <h2>Three calls changed since the last sync.</h2>
-                  </div>
-                  <span className={styles.freshness}>
-                    <RefreshCw size={12} /> Analysis refreshed 8 min ago
-                  </span>
+                  <p>North Loop Dynasty</p>
+                  <h2>Three calls changed since the last sync.</h2>
                 </div>
 
                 <div className={styles.previewScoreRow}>
@@ -254,26 +308,20 @@ export default function LandingPage() {
                     <div className={styles.matchupTeams}>
                       <div>
                         <span className={styles.teamMonogram}>LO</span>
-                        <span>
-                          <strong>Laces Out</strong>
-                          <small>Projected</small>
-                        </span>
+                        <strong>Laces Out</strong>
                       </div>
                       <strong>126.8</strong>
                     </div>
                     <div className={styles.matchupTeams}>
                       <div>
                         <span className={`${styles.teamMonogram} ${styles.teamMonogramMuted}`}>
-                          RW
+                          FR
                         </span>
-                        <span>
-                          <strong>Roster Weather</strong>
-                          <small>Projected</small>
-                        </span>
+                        <strong>Finkle&rsquo;s Revenge</strong>
                       </div>
                       <strong>121.4</strong>
                     </div>
-                    <div className={styles.projectionTrack}>
+                    <div className={styles.projectionTrack} aria-hidden="true">
                       <span />
                     </div>
                   </article>
@@ -281,7 +329,7 @@ export default function LandingPage() {
                   <article className={styles.lineupCard}>
                     <div className={styles.cardLabel}>
                       <span>Best lineup move</span>
-                      <Gauge size={15} />
+                      <Gauge aria-hidden="true" size={16} />
                     </div>
                     <div className={styles.swapCall}>
                       <span>FLEX</span>
@@ -291,62 +339,13 @@ export default function LandingPage() {
                       </div>
                       <strong>+3.7</strong>
                     </div>
-                    <p>Built-in forecast scored to this league’s settings.</p>
                   </article>
-                </div>
-
-                <div className={styles.decisionList}>
-                  <div className={styles.decisionListHead}>
-                    <span>Decision Desk</span>
-                    <span>Why now</span>
-                    <span>Edge</span>
-                  </div>
-                  <div className={styles.decisionRow}>
-                    <span className={styles.decisionIcon}>
-                      <TrendingUp size={14} />
-                    </span>
-                    <span>
-                      <strong>Waiver priority</strong>
-                      <small>Add M. Wilson · WR</small>
-                    </span>
-                    <span>Clears drop threshold</span>
-                    <strong>8.4</strong>
-                  </div>
-                  <div className={styles.decisionRow}>
-                    <span className={styles.decisionIcon}>
-                      <Scale size={14} />
-                    </span>
-                    <span>
-                      <strong>Trade fit</strong>
-                      <small>Target Harbor Lights</small>
-                    </span>
-                    <span>RB surplus / WR need</span>
-                    <strong>A−</strong>
-                  </div>
-                  <div className={styles.decisionRow}>
-                    <span className={styles.decisionIcon}>
-                      <Clock3 size={14} />
-                    </span>
-                    <span>
-                      <strong>Opponent watch</strong>
-                      <small>Sunday night pivot</small>
-                    </span>
-                    <span>Questionable starter</span>
-                    <strong>SNF</strong>
-                  </div>
                 </div>
               </div>
             </div>
           </div>
         </section>
 
-        {/* Backtest-rigor strip: per-validation-run figures only (never lifetime totals — replays
-            over the same held-out seasons would double-count evidence). Sources: 3,264 paired
-            forecasts and 4 held-out seasons per official replay (reports/ros-validation-v8-*-n8-*,
-            .report.forecasts and .coverage.fullyHeldOutSeasons; identical in all three scoring
-            profiles), 12,288 release paths per projection (FIRST_PARTY_ROS_DEFAULT_SCENARIOS).
-            The forecast count rose from the earlier replay because the sample widened to 8 players
-            per position and cutoff — it is still one run's total, not a sum across runs. */}
         <section className={styles.signalBar} aria-label="How the forecasts are validated">
           <div className={styles.signalInner}>
             <span>
@@ -361,36 +360,31 @@ export default function LandingPage() {
               <strong>12K+</strong> simulations per projection
             </span>
             <i aria-hidden="true" />
-            <Link className={styles.signalLink} href="/methodology">
-              If it isn&rsquo;t proven, it isn&rsquo;t published
+            <Link className={styles.signalButton} href="/methodology">
+              See the methodology
             </Link>
           </div>
         </section>
 
-        <section className={styles.seasonSection} id="product">
+        <section className={styles.howSection} id="how-it-works">
           <div className={styles.sectionIntro}>
             <div>
-              <p className={styles.sectionKicker}>The operating loop</p>
+              <p className={styles.sectionKicker}>How it works</p>
               <h2>
                 New data in.
                 <span>Better decisions out.</span>
               </h2>
             </div>
-            <p>
-              Every successful sync, forecast input change, or custom projection import refreshes
-              the decision picture. Custom boards and values can make it more personal, but the loop
-              starts working from your connected league data.
-            </p>
           </div>
 
-          <div className={styles.seasonGrid}>
-            {seasonFeatures.map((feature) => {
+          <div className={styles.howGrid}>
+            {howItWorks.map((feature) => {
               const Icon = feature.icon;
               return (
-                <article key={feature.number} className={styles.seasonCard}>
+                <article key={feature.number} className={styles.howCard}>
                   <div className={styles.cardNumber}>
                     <span>{feature.number}</span>
-                    <Icon size={18} />
+                    <Icon aria-hidden="true" size={18} />
                   </div>
                   <p>{feature.label}</p>
                   <h3>{feature.title}</h3>
@@ -405,178 +399,35 @@ export default function LandingPage() {
           <div className={styles.syncInner}>
             <div className={styles.syncIntro}>
               <div>
-                <p className={styles.sectionKicker}>League sync + automation</p>
+                <p className={styles.sectionKicker}>League sync</p>
                 <h2>Fresh league data. Your password stays put.</h2>
               </div>
-              <p>
-                {yahooComingSoon
-                  ? "ESPN league data lands in a source-aware league model. Once a fresh sync arrives, Laces Out handles the comparison work and rebuilds the calls that matter to each manager."
-                  : "Yahoo and ESPN take different paths in, then land in the same source-aware league model. Once fresh data arrives, Laces Out handles the comparison work and rebuilds the calls that matter to each manager."}
-              </p>
-            </div>
-
-            <div className={styles.syncGrid}>
-              <div className={styles.providerStack} aria-label="Supported league connections">
-                <article className={styles.providerCard}>
-                  <div className={styles.providerCardHead}>
-                    <div className={styles.providerIdentity}>
-                      <span className={`${styles.providerBadge} ${styles.espnBadge}`}>ESPN</span>
-                      <div>
-                        <p>League connection</p>
-                        <h3>ESPN Fantasy</h3>
-                      </div>
-                    </div>
-                    <span className={styles.connectionMode}>Automatic sync</span>
-                  </div>
-                  <p className={styles.providerDescription}>
-                    Pair the Chrome companion once. Always-on setup encrypts ESPN&apos;s session
-                    authorization so scheduled and mobile-requested refreshes keep working after
-                    Chrome closes. Your ESPN password is never collected.
-                  </p>
-                  <ul>
-                    <li>
-                      <Check size={13} /> Private multi-league sync
-                    </li>
-                    <li>
-                      <RefreshCw size={13} /> Five-minute request checks with a six-hour safety
-                      sweep
-                    </li>
-                    <li>
-                      <Check size={13} /> Encrypted always-on refresh
-                    </li>
-                    <li>
-                      <Check size={13} /> Availability, scoring, activity, and draft context
-                    </li>
-                  </ul>
-                </article>
-
-                <article className={styles.providerCard}>
-                  <div className={styles.providerCardHead}>
-                    <div className={styles.providerIdentity}>
-                      <span className={`${styles.providerBadge} ${styles.yahooBadge}`}>Yahoo</span>
-                      <div>
-                        <p>League connection</p>
-                        <h3>Yahoo Fantasy</h3>
-                      </div>
-                    </div>
-                    <span
-                      className={`${styles.connectionMode}${yahooComingSoon ? ` ${styles.connectionModePending}` : ""}`}
-                    >
-                      {yahooComingSoon ? "Coming soon" : "Official authorization"}
-                    </span>
-                  </div>
-                  <p className={styles.providerDescription}>
-                    {yahooComingSoon
-                      ? "Yahoo sign-in and read-only league sync are coming soon."
-                      : "Authorize directly on Yahoo. Encrypted tokens remain server-side; your Yahoo password never passes through Laces Out."}
-                  </p>
-                  <ul>
-                    <li>
-                      <Check size={13} /> Settings, teams, rosters, standings, and matchups
-                    </li>
-                    <li>
-                      {yahooComingSoon ? (
-                        <>
-                          <Clock3 size={13} /> Yahoo league sync coming soon
-                        </>
-                      ) : (
-                        <>
-                          <RefreshCw size={13} /> Refresh when linked or whenever you request it
-                        </>
-                      )}
-                    </li>
-                  </ul>
-                </article>
-              </div>
-
-              <div className={styles.enginePanel} aria-label="Automated decision analysis flow">
-                <div className={styles.engineHeader}>
-                  <span>
-                    <Workflow size={17} /> Automatic decision sweep
-                  </span>
-                  <span className={styles.engineState}>
-                    <i /> Runs when fresh data lands
-                  </span>
-                </div>
-
-                <ol className={styles.engineSteps}>
-                  {automationSteps.map((step) => {
-                    const Icon = step.icon;
-                    return (
-                      <li key={step.number}>
-                        <span className={styles.engineStepIcon}>
-                          <Icon size={15} />
-                        </span>
-                        <span className={styles.engineStepNumber}>{step.number}</span>
-                        <div>
-                          <strong>{step.title}</strong>
-                          <p>{step.text}</p>
-                        </div>
-                      </li>
-                    );
-                  })}
-                </ol>
-
-                <div className={styles.engineOutput}>
-                  <div className={styles.engineOutputHead}>
-                    <span>
-                      <ScanLine size={15} /> Latest sweep
-                    </span>
-                    <strong>3 calls changed</strong>
-                  </div>
-                  <div>
-                    <span>Lineup edge found</span>
-                    <strong>+3.7 pts</strong>
-                  </div>
-                  <div>
-                    <span>Waiver target emerged</span>
-                    <strong>High impact</strong>
-                  </div>
-                  <div>
-                    <span>Mutual trade fit improved</span>
-                    <strong>86 / 100</strong>
-                  </div>
-                </div>
-
-                <p className={styles.engineCadence}>
-                  Shared player facts, weekly usage, and contextual ADP check daily. Weekly
-                  forecasts run hourly, tighten to 10-minute checks near kickoff, and rebuild only
-                  from verified inputs.
+              <div>
+                <p>
+                  {yahooComingSoon
+                    ? "ESPN pairs through a Chrome companion. Laces Out holds a read-only connection, never your password, and rebuilds your calls whenever fresh data lands."
+                    : "Yahoo signs you in on Yahoo. ESPN pairs through a Chrome companion. Either way Laces Out holds a read-only connection, never your password, and rebuilds your calls whenever fresh data lands."}
+                </p>
+                <p className={styles.syncCadence}>
+                  <RefreshCw aria-hidden="true" size={14} /> Forecasts refresh hourly, and every 10
+                  minutes near kickoff.
                 </p>
               </div>
             </div>
 
-            {/* Shared NFL data is not a per-provider connection, so it reads as a band under
-                both columns rather than as a third card in the provider stack — which also
-                keeps the two columns from ending at ragged heights. */}
-            <aside className={styles.dataFeedBand} aria-label="Shared NFL data sources">
-              <div className={styles.dataFeedIntro}>
-                <span className={styles.dataFeedBadge}>
-                  <Database size={15} />
-                </span>
-                <div>
-                  <p>Shared NFL intelligence</p>
-                  <h3>More than one data feed</h3>
-                </div>
-              </div>
-              <p className={styles.dataFeedDescription}>
-                Laces Out blends nflverse identity, usage, injuries, and production with draft
-                markets, Sleeper signals, and the current schedule into a backtested weekly forecast
-                scored for each league. Season-long projections only publish when they pass
-                reliability checks; no guesses dressed up as data.
-              </p>
-              <ul className={styles.dataFeedChecks}>
-                <li>
-                  <RefreshCw size={13} /> Daily identity, usage, status, and draft-market checks
-                </li>
-                <li>
-                  <TrendingUp size={13} /> Hourly waiver-market momentum
-                </li>
-                <li>
-                  <LineChart size={13} /> Availability-aware rest-of-season ranges
-                </li>
-              </ul>
-            </aside>
+            <div className={styles.providerGrid}>
+              {yahooComingSoon ? (
+                <>
+                  <EspnProviderCard />
+                  <YahooRoadmapCard />
+                </>
+              ) : (
+                <>
+                  <YahooProviderCard />
+                  <EspnProviderCard />
+                </>
+              )}
+            </div>
           </div>
         </section>
 
@@ -588,23 +439,22 @@ export default function LandingPage() {
               <span>Your plan recalculates.</span>
             </h2>
             <p>
-              As picks and bids land, Laces Out updates auction inflation, roster construction,
-              position scarcity, and the next best value. Bring a custom board if you have one; the
-              live assistant remains useful if you don’t.
+              Every pick or bid recalculates inflation, roster construction, scarcity, and your next
+              best value. Add a custom board if you have one.
             </p>
             <ul>
               <li>
-                <Check size={14} /> Live inflation, scarcity, and max-bid recalculation
+                <Check aria-hidden="true" size={14} /> Live inflation and max bids
               </li>
               <li>
-                <Check size={14} /> Seeded snake and auction practice with undo and replay
+                <Check aria-hidden="true" size={14} /> Snake and auction practice
               </li>
               <li>
-                <Check size={14} /> Contextual ADP, wait risk, custom rankings, and salary overlays
+                <Check aria-hidden="true" size={14} /> ADP, wait risk, and rankings
               </li>
             </ul>
-            <Link href="/app" className={styles.inlineLink}>
-              Tour the locker room <ArrowRight size={15} />
+            <Link href="/draft" className={styles.inlineLink}>
+              Try the draft studio <ArrowRight aria-hidden="true" size={15} />
             </Link>
           </div>
 
@@ -615,7 +465,7 @@ export default function LandingPage() {
                 <strong>North Loop Auction</strong>
               </div>
               <span className={styles.livePill}>
-                <i /> Live room
+                <i aria-hidden="true" /> Live room
               </span>
             </div>
             <div className={styles.nomination}>
@@ -649,7 +499,7 @@ export default function LandingPage() {
             </div>
             <div className={styles.boardFooter}>
               <span>
-                <CircleDollarSign size={14} /> $119 budget · 8 slots open
+                <CircleDollarSign aria-hidden="true" size={15} /> $119 budget · 8 slots open
               </span>
               <span>Value remaining: $132</span>
             </div>
@@ -659,19 +509,19 @@ export default function LandingPage() {
         <section className={styles.weekSection} id="in-season">
           <div className={styles.sectionIntro}>
             <div>
-              <p className={styles.sectionKicker}>The weekly automation layer</p>
-              <h2>The league changes. Your decision queue changes with it.</h2>
+              <p className={styles.sectionKicker}>In season</p>
+              <h2>One ranked queue for the whole week.</h2>
             </div>
             <p>
-              Laces Out checks your roster, every available player, every trade partner, and the
-              current opponent together—then sorts the useful calls above the noise.
+              Laces Out checks your roster, every free agent, every trade partner, and this
+              week&rsquo;s opponent, then sorts the useful calls above the noise.
             </p>
           </div>
 
           <div className={styles.weekGrid}>
             <article className={styles.weekFeature}>
               <div className={styles.featureIcon}>
-                <BarChart3 size={19} />
+                <BarChart3 aria-hidden="true" size={19} />
               </div>
               <span>League Analytics</span>
               <h3>See strength, luck, depth, and schedule pressure across every roster.</h3>
@@ -691,7 +541,7 @@ export default function LandingPage() {
                 </div>
                 <div>
                   <b>3</b>
-                  <span>Roster Weather</span>
+                  <span>Finkle&rsquo;s Revenge</span>
                   <i style={{ width: "70%" }} />
                   <strong>80.6</strong>
                 </div>
@@ -700,17 +550,17 @@ export default function LandingPage() {
 
             <article className={styles.weekFeature}>
               <div className={styles.featureIcon}>
-                <Scale size={19} />
+                <Scale aria-hidden="true" size={19} />
               </div>
               <span>Trade finder</span>
-              <h3>Find the deals that create value—and the ones both managers might accept.</h3>
+              <h3>Find the deals that create value and the ones both managers might accept.</h3>
               <div className={styles.tradePreview}>
                 <div>
                   <small>You send</small>
                   <strong>D. Swift</strong>
                   <span>RB · depth surplus</span>
                 </div>
-                <ArrowRight size={18} />
+                <ArrowRight aria-hidden="true" size={18} />
                 <div>
                   <small>You receive</small>
                   <strong>D. Smith</strong>
@@ -725,7 +575,7 @@ export default function LandingPage() {
 
             <article className={styles.weekFeature}>
               <div className={styles.featureIcon}>
-                <LineChart size={19} />
+                <LineChart aria-hidden="true" size={19} />
               </div>
               <span>Decision Desk</span>
               <h3>Rank lineup and waiver moves by expected impact, confidence, and urgency.</h3>
@@ -754,16 +604,12 @@ export default function LandingPage() {
         <section className={styles.aiSection} id="ai-research">
           <div className={styles.aiInner}>
             <div className={styles.aiHeading}>
-              <div className={styles.roadmapBadge}>
-                <BrainCircuit size={14} /> Optional layer · Available now
-              </div>
-              <p className={styles.sectionKicker}>Gemini included · Add your own model anytime</p>
-              <h2>Fueled by Gemini. Bring another model when you want.</h2>
+              <p className={styles.sectionKicker}>Film Room</p>
+              <h2>Ask the Film Room why.</h2>
               <p>
-                Film Room works as soon as you sign in, using Gemini 3.6 Flash through the Laces Out
-                account. Every request combines synced league facts, the Decision Desk, and league
-                analytics so the answer explains the actual board instead of guessing from a generic
-                prompt.
+                Included Gemini, or your own OpenAI, Anthropic, DeepSeek, Grok, or OpenRouter key.
+                Every answer is built from your synced league and cites the Laces Out data behind
+                it.
               </p>
             </div>
 
@@ -772,45 +618,45 @@ export default function LandingPage() {
                 const Icon = feature.icon;
                 return (
                   <article key={feature.title}>
-                    <Icon size={18} />
-                    <h3>{feature.title}</h3>
-                    <p>{feature.text}</p>
+                    <Icon aria-hidden="true" size={19} />
+                    <div>
+                      <h3>{feature.title}</h3>
+                      <p>{feature.text}</p>
+                    </div>
                   </article>
                 );
               })}
             </div>
 
             <div className={styles.aiDisclosure}>
-              <ShieldCheck size={16} />
+              <ShieldCheck aria-hidden="true" size={17} />
               <p>
-                Laces Out does not retain prompts or answers — except the Weekly Reckoning recap
-                your league asks for, which is saved for the league — and models cannot execute
-                Yahoo or ESPN changes. Included calls are routed through Google AI Studio courtesy
-                of Laces Out.
+                Prompts and answers aren&rsquo;t stored, except the Weekly Reckoning recap your
+                league opts into. Models can&rsquo;t change your Yahoo or ESPN roster.
               </p>
-              <Link className={styles.aiCta} href="/film-room">
-                Open Film Room <ArrowRight size={14} />
+              <Link className={styles.primaryButton} href="/film-room">
+                Open Film Room <ArrowRight aria-hidden="true" size={15} />
               </Link>
             </div>
           </div>
         </section>
 
-        <section className={styles.trustSection} id="trust">
+        <section className={styles.trustSection} id="privacy">
           <div className={styles.trustInner}>
             <div className={styles.trustHeading}>
               <p className={styles.sectionKicker}>Built for friends, not ad inventory</p>
-              <h2>Your leagues are the product context. They are not the product.</h2>
-              <p>
-                Laces Out is a private, non-commercial project. No behavioral advertising, no data
-                brokerage, and no pretending uncertain provider data is fresher than it is.
-              </p>
+              <h2>No fees. No ads. No roster moves without you.</h2>
+              <p>Your league stays private.</p>
+              <Link href="/privacy" className={styles.inlineLink}>
+                Read the privacy policy <ChevronRight aria-hidden="true" size={15} />
+              </Link>
             </div>
             <div className={styles.trustGrid}>
               {trustPoints.map((point) => {
                 const Icon = point.icon;
                 return (
                   <article key={point.title}>
-                    <Icon size={18} />
+                    <Icon aria-hidden="true" size={19} />
                     <div>
                       <h3>{point.title}</h3>
                       <p>{point.text}</p>
@@ -819,41 +665,29 @@ export default function LandingPage() {
                 );
               })}
             </div>
-            <div className={styles.providerNote}>
-              <Cable size={18} />
-              <p>
-                Provider connections are read-only today. Laces Out recommends the move and keeps
-                the evidence visible; you decide whether to make the change in Yahoo or ESPN.
-              </p>
-              <Link href="/privacy">
-                Read the privacy policy <ChevronRight size={14} />
-              </Link>
-            </div>
           </div>
         </section>
 
-        <section className={styles.finalCta}>
-          <div>
-            <span className={styles.ctaIcon}>
-              <Goal size={19} />
+        <section className={`${styles.ctaBand} ${styles.finalCta}`}>
+          <div className={styles.ctaTitle}>
+            <span>
+              <Goal aria-hidden="true" size={20} />
             </span>
-            <div>
-              <h2>Your next good decision starts here.</h2>
-            </div>
+            <h2>Your league&rsquo;s next call is waiting.</h2>
           </div>
-          <div className={styles.finalActions}>
-            <Link className={styles.primaryButton} href="/register">
-              Join Laces Out <ArrowRight size={16} />
+          <div className={styles.ctaActions}>
+            <Link className={styles.secondaryButton} href="/app">
+              See a sample week <ChevronRight aria-hidden="true" size={16} />
             </Link>
-            <Link className={styles.secondaryButton} href="/login">
-              Sign In
+            <Link className={styles.primaryButton} href="/register">
+              Join Laces Out <ArrowRight aria-hidden="true" size={16} />
             </Link>
             <a className={styles.secondaryButton} href={publicAppStoreUrl}>
-              App Store <Smartphone size={16} />
+              Get the iPhone app <Smartphone aria-hidden="true" size={16} />
             </a>
           </div>
         </section>
-      </div>
+      </main>
 
       <PublicSiteFooter />
 
@@ -863,6 +697,6 @@ export default function LandingPage() {
           __html: JSON.stringify(applicationSchema).replaceAll("<", "\\u003c"),
         }}
       />
-    </main>
+    </div>
   );
 }
