@@ -1632,6 +1632,7 @@
 
   .signalInner {
     grid-template-columns: 1fr;
+    font-size: var(--text-12);
   }
 
   .signalButton {
