@@ -76,8 +76,8 @@ const howItWorks = [
     label: "Connect your leagues",
     title: "Bring every team together.",
     text: yahooComingSoon
-      ? "Pair ESPN through the Chrome companion. Laces Out pulls settings, rosters, standings, and matchups, and knows which team is yours."
-      : "Link Yahoo with one sign-in, or pair ESPN through the Chrome companion. Laces Out pulls settings, rosters, standings, and matchups, and knows which team is yours.",
+      ? "Connect ESPN through the Chrome companion or iOS app. Laces Out pulls settings, rosters, standings, and matchups, and knows which team is yours."
+      : "Link Yahoo with one sign-in, or connect ESPN through the Chrome companion or iOS app. Laces Out pulls settings, rosters, standings, and matchups, and knows which team is yours.",
     icon: Cable,
   },
   {
@@ -207,8 +207,8 @@ function EspnProviderCard() {
         <span className={styles.connectionMode}>Automatic sync</span>
       </div>
       <p className={styles.providerDescription}>
-        Pair the Chrome companion once. Laces Out keeps your league synced on a schedule, even after
-        Chrome closes, and never sees your ESPN password.
+        Connect ESPN through the Chrome companion or iOS app. Laces Out keeps your league synced on
+        a schedule and never sees your ESPN password.
       </p>
       <ul>
         <li>
@@ -419,8 +419,8 @@ export default function LandingPage() {
               <div>
                 <p>
                   {yahooComingSoon
-                    ? "ESPN pairs through a Chrome companion. Laces Out holds a read-only connection, never your password, and rebuilds your calls whenever fresh data lands."
-                    : "Yahoo signs you in on Yahoo. ESPN pairs through a Chrome companion. Either way Laces Out holds a read-only connection, never your password, and rebuilds your calls whenever fresh data lands."}
+                    ? "ESPN connects through the Chrome companion or iOS app. Laces Out holds a read-only connection, never your password, and rebuilds your calls whenever fresh data lands."
+                    : "Yahoo signs you in on Yahoo. ESPN connects through the Chrome companion or iOS app. Either way, Laces Out holds a read-only connection, never your password, and rebuilds your calls whenever fresh data lands."}
                 </p>
                 <p className={styles.syncCadence}>
                   <RefreshCw aria-hidden="true" size={14} /> Forecasts refresh hourly, and every 10
