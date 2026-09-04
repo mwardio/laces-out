@@ -111,6 +111,8 @@ try {
   assert.match(landingHtml, /Drop T\. Benson/u);
   assert.match(landingHtml, /Chrome companion or iOS app/u);
   assert.doesNotMatch(landingHtml, /Chrome companion\./u);
+  assert.match(landingHtml, /Upload a CSV for your eyes only/u);
+  assert.match(landingHtml, /share it with your entire league/u);
   assert.match(landingHtml, /application\/ld\+json/u);
   assert.doesNotMatch(landingHtml, /Automated league brief/u);
   assert.ok(landingHtml.includes(`<link rel="canonical" href="${expectedCanonicalUrl}"`));

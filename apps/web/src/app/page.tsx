@@ -91,7 +91,7 @@ const howItWorks = [
     number: "03",
     label: "Add your edge",
     title: "Make it yours.",
-    text: "Optional rankings, ADP, custom projections, auction values, and cheat sheets sharpen the built-in forecast.",
+    text: "Optional rankings, ADP, custom projections, auction values, and cheat sheets sharpen the built-in forecast. Upload a CSV for your eyes only, or share it with your entire league.",
     icon: SlidersHorizontal,
   },
 ] as const;
