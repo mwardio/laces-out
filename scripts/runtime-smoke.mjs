@@ -104,6 +104,11 @@ try {
   assert.match(landingHtml, /Create your account/u);
   assert.match(landingHtml, /Fresh league data/u);
   assert.match(landingHtml, /Ask the Film Room why/u);
+  assert.match(landingHtml, /It never touches your roster or asks for your password/u);
+  assert.doesNotMatch(landingHtml, /never shows you an ad/u);
+  assert.match(landingHtml, /Waiver move/u);
+  assert.match(landingHtml, /Add M\. Wilson/u);
+  assert.match(landingHtml, /Drop T\. Benson/u);
   assert.match(landingHtml, /application\/ld\+json/u);
   assert.doesNotMatch(landingHtml, /Automated league brief/u);
   assert.ok(landingHtml.includes(`<link rel="canonical" href="${expectedCanonicalUrl}"`));

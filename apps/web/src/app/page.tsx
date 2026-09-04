@@ -260,8 +260,7 @@ export default function LandingPage() {
               <p className={styles.heroLead}>
                 Every time your {yahooComingSoon ? "ESPN" : "Yahoo or ESPN"} league changes, Laces
                 Out reruns the lineup, waiver, and trade math and ranks the calls by the points at
-                stake. It never touches your roster, never asks for your password, and never shows
-                you an ad.
+                stake. It never touches your roster or asks for your password.
               </p>
               <div className={styles.heroActions}>
                 <Link className={styles.primaryButton} href="/register">
@@ -303,7 +302,7 @@ export default function LandingPage() {
                   <article className={styles.matchupCard}>
                     <div className={styles.cardLabel}>
                       <span>Current matchup</span>
-                      <span className={styles.edgeLabel}>+5.4 edge</span>
+                      <span className={styles.edgeLabel}>+5.4 pts</span>
                     </div>
                     <div className={styles.matchupTeams}>
                       <div>
@@ -337,10 +336,25 @@ export default function LandingPage() {
                         <strong>Start J. Reed</strong>
                         <small>over T. Benson</small>
                       </div>
-                      <strong>+3.7</strong>
+                      <strong>+3.7 pts</strong>
                     </div>
                   </article>
                 </div>
+
+                <article className={styles.waiverCard}>
+                  <div>
+                    <p className={styles.waiverLabel}>Waiver move</p>
+                    <p className={styles.waiverPlayers}>
+                      <strong>Add M. Wilson</strong>
+                      <span aria-hidden="true">→</span>
+                      <strong>Drop T. Benson</strong>
+                    </p>
+                  </div>
+                  <div className={styles.waiverImpact}>
+                    <span>Roster gain</span>
+                    <strong>+2.1 pts</strong>
+                  </div>
+                </article>
               </div>
             </div>
           </div>

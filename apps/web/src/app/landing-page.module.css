@@ -184,7 +184,7 @@
 
 .heroInner {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 460px;
+  grid-template-columns: minmax(0, 1fr) 480px;
   align-items: center;
   gap: clamp(42px, 5vw, 72px);
 }
@@ -473,6 +473,66 @@
   font-size: var(--text-16);
 }
 
+.waiverCard {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-16);
+  margin-top: var(--space-12);
+  padding: 13px 15px;
+  background: var(--white);
+  border: 1px solid var(--ink-150);
+  border-radius: var(--radius-md);
+}
+
+.waiverLabel,
+.waiverImpact span {
+  color: var(--ink-500);
+  font-size: var(--text-11);
+  font-weight: 750;
+  letter-spacing: 0.055em;
+  line-height: 1.2;
+  text-transform: uppercase;
+}
+
+.waiverPlayers {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 7px;
+  margin-top: 5px;
+  color: var(--ink-900);
+  font-size: var(--text-12);
+}
+
+.waiverPlayers strong {
+  font-weight: 750;
+}
+
+.waiverPlayers span {
+  color: var(--ink-400);
+}
+
+.waiverImpact {
+  min-width: 84px;
+  padding-left: 14px;
+  text-align: right;
+  border-left: 1px solid var(--ink-150);
+}
+
+.waiverImpact span,
+.waiverImpact strong {
+  display: block;
+}
+
+.waiverImpact strong {
+  margin-top: 4px;
+  color: var(--green-700);
+  font-size: var(--text-16);
+}
+
 .signalBar {
   background: var(--white);
   border-bottom: 1px solid var(--ink-150);
@@ -485,7 +545,7 @@
   justify-content: space-between;
   gap: var(--space-16);
   color: var(--ink-600);
-  font-size: var(--text-12);
+  font-size: var(--text-14);
 }
 
 .signalInner span {
@@ -1303,6 +1363,13 @@
   padding-top: 38px;
   padding-bottom: 38px;
   border-top: 1px solid var(--ink-200);
+}
+
+@media (min-width: 821px) {
+  .finalCta {
+    padding-top: 48px;
+    padding-bottom: 48px;
+  }
 }
 
 .ctaTitle {
