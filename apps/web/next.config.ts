@@ -28,16 +28,6 @@ const nextConfig: NextConfig = {
         destination: "/opengraph-image",
         permanent: true,
       },
-      {
-        source: "/landing_v2/opengraph-image",
-        destination: "/opengraph-image",
-        permanent: true,
-      },
-      {
-        source: "/landing_v2",
-        destination: "/",
-        permanent: true,
-      },
     ]);
   },
   webpack(config: WorkspaceWebpackConfig): WorkspaceWebpackConfig {

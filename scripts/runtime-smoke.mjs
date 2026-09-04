@@ -130,19 +130,6 @@ try {
   assert.equal(landingSocialImage.readUInt32BE(16), 1200);
   assert.equal(landingSocialImage.readUInt32BE(20), 630);
 
-  const landingV2Redirect = await fetch(`http://127.0.0.1:${webPort}/landing_v2`, {
-    redirect: "manual",
-  });
-  assert.equal(landingV2Redirect.status, 308);
-  assert.equal(landingV2Redirect.headers.get("location"), "/");
-
-  const landingV2SocialImageRedirect = await fetch(
-    `http://127.0.0.1:${webPort}/landing_v2/opengraph-image`,
-    { redirect: "manual" },
-  );
-  assert.equal(landingV2SocialImageRedirect.status, 308);
-  assert.equal(landingV2SocialImageRedirect.headers.get("location"), "/opengraph-image");
-
   const legacySocialImageRedirect = await fetch(`http://127.0.0.1:${webPort}/opengraph-image.jpg`, {
     redirect: "manual",
   });
@@ -168,5 +155,5 @@ try {
 }
 
 process.stdout.write(
-  `${JSON.stringify({ apiLive: true, apiReady: true, workerStarted: true, officialLandingStarted: true, landingRedirectStarted: true, landingSocialImageStarted: true, workspaceStarted: true, scheduleStarted: true })}\n`,
+  `${JSON.stringify({ apiLive: true, apiReady: true, workerStarted: true, officialLandingStarted: true, landingSocialImageStarted: true, workspaceStarted: true, scheduleStarted: true })}\n`,
 );
