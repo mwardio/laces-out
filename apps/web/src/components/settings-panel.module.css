@@ -465,9 +465,9 @@
   }
 
   /* min-height/border-radius/font-size are left to `.app-shell :is(input, select, textarea)` and
-     `.app-shell button` in polish.css — the last @layer in the app's cascade — which already
-     normalize every select and button to those values; declaring conflicting ones here would just
-     lose to them silently. */
+     `.app-shell button` in product.css (polish layer) — the last @layer in the app's cascade —
+     which already normalize every select and button to those values; declaring conflicting ones
+     here would just lose to them silently. */
   .teamRowControls select {
     max-width: 220px;
     padding: 0 8px;

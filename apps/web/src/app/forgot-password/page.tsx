@@ -3,6 +3,8 @@ import type { Metadata } from "next";
 import { ForgotPasswordForm } from "../../components/forgot-password-form";
 import { PublicAccountShell } from "../public-site-chrome";
 
+import "../product.css";
+
 export const metadata: Metadata = {
   title: "Forgot Password",
   description: "Request a Laces Out password reset link.",

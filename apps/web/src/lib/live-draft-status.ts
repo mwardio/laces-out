@@ -30,7 +30,7 @@ export type LiveDraftEntryState =
 
 export type LiveDraftTone = "neutral" | "live" | "warning" | "critical";
 
-/** Matches the existing `live-freshness-dot--*` vocabulary in globals.css. */
+/** Matches the existing `live-freshness-dot--*` vocabulary in product.css. */
 export type LiveDraftFreshness = "fresh" | "aging" | "stale" | "missing";
 
 /** Matches the existing `connection-indicator__dot--*` modifiers in the draft header. */

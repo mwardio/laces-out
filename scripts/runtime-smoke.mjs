@@ -150,6 +150,37 @@ try {
   assert.match(workspaceHtml, /Laces Out/u);
   assert.match(workspaceHtml, /Overview/u);
 
+  // 4.1 guard: the landing route must ship base.css only — no signed-in product CSS.
+  const landingStylesheets = [
+    ...landingHtml.matchAll(/<link rel="stylesheet" href="([^"]+)"/gu),
+  ].map((match) => match[1]);
+  // 2 is what Next's current chunk grouping emits, not a requirement. Turning on
+  // `experimental.cssChunking` — the accepted follow-up for the `/analytics` regrouping — is expected
+  // to trip this; re-derive the expectation from the built HTML rather than loosening the assert.
+  assert.equal(landingStylesheets.length, 2);
+  const productOnlySelectors = [".draft-board", ".ranking-studio", ".login-form", ".bottom-nav"];
+  for (const href of landingStylesheets) {
+    const stylesheet = await (await waitForHttp(`http://127.0.0.1:${webPort}${href}`, web)).text();
+    for (const selector of productOnlySelectors) {
+      assert.ok(
+        !stylesheet.includes(selector),
+        `${href} ships product-only CSS (${selector}); it belongs in apps/web/src/app/product.css`,
+      );
+    }
+  }
+  const workspaceStylesheets = [
+    ...workspaceHtml.matchAll(/<link rel="stylesheet" href="([^"]+)"/gu),
+  ].map((match) => match[1]);
+  // Same caveat: that both routes lead with the same sheet is today's chunk grouping, not a rule.
+  // `experimental.cssChunking` is expected to trip this too; re-derive it from the built HTML.
+  assert.equal(workspaceStylesheets[0], landingStylesheets[0]);
+  const workspaceCss = await Promise.all(
+    workspaceStylesheets.map(async (href) =>
+      (await waitForHttp(`http://127.0.0.1:${webPort}${href}`, web)).text(),
+    ),
+  );
+  assert.ok(workspaceCss.some((stylesheet) => stylesheet.includes(".draft-board")));
+
   const scheduleResponse = await waitForHttp(`http://127.0.0.1:${webPort}/schedule`, web);
   const scheduleHtml = await scheduleResponse.text();
   assert.match(scheduleHtml, /Matchup Outlook/u);

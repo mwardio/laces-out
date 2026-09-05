@@ -5,8 +5,7 @@ import type { ReactNode } from "react";
 import { FinkleCode } from "../components/finkle-code";
 import { publicAppStoreId, publicSiteUrl } from "../lib/public-site";
 
-import "./globals.css";
-import "./polish.css";
+import "./base.css";
 
 const brandFont = Sora({
   subsets: ["latin"],

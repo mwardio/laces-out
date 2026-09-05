@@ -52,8 +52,8 @@
     max-width: 690px;
     margin-top: 13px;
     color: var(--ink-600);
-    /* Standardized to 12px (was 13px). Note: polish.css's ".app-shell p"
-       rule (@layer polish) already forces 12px here regardless, since this
+    /* Standardized to 12px (was 13px). Note: product.css (polish layer)'s
+       ".app-shell p" rule already forces 12px here regardless, since this
        is a <p> — this value only matters if that catch-all ever changes. */
     font-size: var(--text-12);
     line-height: 1.6;

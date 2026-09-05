@@ -4,6 +4,8 @@ import Link from "next/link";
 import { InvitationAcceptance } from "../../components/invitation-acceptance";
 import { LacesOutMark } from "../../components/laces-out-mark";
 
+import "../product.css";
+
 export const metadata: Metadata = {
   title: "Accept Invitation",
   description: "Join a private Laces Out fantasy locker room.",

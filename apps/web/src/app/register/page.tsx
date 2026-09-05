@@ -5,6 +5,8 @@ import Link from "next/link";
 import { LacesOutMark } from "../../components/laces-out-mark";
 import { RegistrationForm } from "../../components/registration-form";
 
+import "../product.css";
+
 export const metadata: Metadata = {
   title: "Create Account",
   description: "Create a Laces Out account.",

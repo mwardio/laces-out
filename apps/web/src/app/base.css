@@ -1,0 +1,518 @@
+/*
+ * Base stylesheet: what the root layout ships on every route.
+ *
+ * Design tokens, resets, and the few global classes the public and error
+ * surfaces render (.brand-mark, .not-found-*, .eyebrow, .button, .sr-only).
+ * Signed-in product styles live in ./product.css, which only the routes that
+ * render them import — keep it that way: a product-only selector landing here
+ * ships ~24 KB gzip of dead CSS to the landing page, and the CSS leak check in
+ * scripts/runtime-smoke.mjs fails when one does.
+ */
+
+@layer reset, base, components, utilities, polish;
+
+@layer reset {
+  *,
+  *::before,
+  *::after {
+    box-sizing: border-box;
+  }
+
+  html {
+    scroll-behavior: smooth;
+    /* iOS Safari inflates text in single-column blocks on rotation without
+       this; 100% keeps rendered sizes stable while leaving user zoom alone. */
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
+  }
+
+  body,
+  h1,
+  h2,
+  h3,
+  p {
+    margin: 0;
+  }
+
+  button,
+  input,
+  select {
+    font: inherit;
+  }
+
+  button,
+  a {
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  img,
+  svg {
+    display: block;
+  }
+
+  table {
+    border-collapse: collapse;
+  }
+}
+
+@layer base {
+  :root {
+    color-scheme: light;
+    --ink-950: #101712;
+    --ink-900: #162019;
+    --ink-850: #1c2820;
+    --ink-800: #253229;
+    --ink-750: #344039;
+    --ink-700: #3d4a41;
+    --ink-600: #566159;
+    --ink-550: #5b665e;
+    --ink-500: #606b63;
+    --ink-400: #646f67;
+    --ink-300: #b5bbb5;
+    --ink-250: #c3c8c2;
+    --ink-200: #d0d5cf;
+    --ink-150: #dde1db;
+    --ink-100: #e9ece6;
+    --ink-025: rgb(16 23 18 / 2%);
+    --paper-100: #f3f2ec;
+    --paper-50: #f9f8f4;
+    --paper-25: #fbfcfa;
+    --white: #ffffff;
+    --lime-700: #5e7a20;
+    --lime-600: #73952c;
+    --lime-500: #8eb13d;
+    --lime-400: #a8cf53;
+    --lime-300: #c5e878;
+    --lime-200: #cfddae;
+    --lime-100: #edf5d9;
+    --blue-600: #426a78;
+    --blue-500: #5f8998;
+    --blue-100: #e1edf0;
+    --orange-600: #a65735;
+    --orange-500: #c96d42;
+    --orange-100: #f6e7dc;
+    --violet-600: #42776e;
+    --violet-100: #e1efeb;
+    --red-600: #a43e3a;
+    --red-100: #f7e3e0;
+    --green-700: #2c5f4a;
+    --green-600: #347158;
+    --green-500: #47876c;
+    --green-100: #e0efe7;
+    --fern-600: #547148;
+    --fern-500: #66845a;
+    /* Semantic aliases: components reference these; the raw ramp above stays
+       the single source of the actual values. */
+    --surface: var(--white);
+    --muted: var(--ink-500);
+    --line: var(--ink-150);
+    /* One focus identity: solid teal ring for keyboard focus, translucent
+       green ring on workbench regions, blue glow reserved for text inputs. */
+    --focus-ring: #33705a;
+    --focus-ring-soft: rgb(90 126 73 / 28%);
+    --focus-glow: rgb(76 150 211 / 12%);
+    --focus-glow-strong: rgb(76 150 211 / 20%);
+    --provider-openai: #39715d;
+    --provider-anthropic: #b06442;
+    --provider-gemini: #4d72aa;
+    --provider-deepseek: #315fa8;
+    --provider-grok: #33383d;
+    --provider-openrouter: #765c91;
+    --sidebar-width: 232px;
+    /* Desktop app-page top bar. Mobile (<=820px) overrides this independently
+       below and must stay untouched by this value. */
+    --topbar-height: 48px;
+    --radius-xs: 5px;
+    --radius-sm: 8px;
+    --radius-md: 10px;
+    --radius-lg: 12px;
+    --shadow-card: 0 1px 2px rgb(16 23 18 / 4%);
+    --shadow-hover: 0 10px 28px rgb(16 26 19 / 7%);
+    --shadow-raised: 0 16px 36px rgb(16 23 18 / 15%);
+    /* Type scale in rem (named by their px size at the browser default) so
+       member text-size preferences actually scale the app. */
+    --text-8: 0.5rem;
+    --text-9: 0.5625rem;
+    --text-10: 0.625rem;
+    --text-11: 0.6875rem;
+    --text-12: 0.75rem;
+    --text-13: 0.8125rem;
+    --text-14: 0.875rem;
+    --text-15: 0.9375rem;
+    --text-16: 1rem;
+    --text-18: 1.125rem;
+    --text-20: 1.25rem;
+    --text-24: 1.5rem;
+    --space-4: 4px;
+    --space-6: 6px;
+    --space-8: 8px;
+    --space-10: 10px;
+    --space-12: 12px;
+    --space-16: 16px;
+    --space-20: 20px;
+    --space-24: 24px;
+    --space-32: 32px;
+    --font-sans: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    --font-mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  }
+
+  body {
+    min-width: 320px;
+    min-height: 100vh;
+    min-height: 100dvh;
+    color: var(--ink-900);
+    background: var(--paper-100);
+    font-family: var(--font-sans);
+    font-size: var(--text-14);
+    line-height: 1.45;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  a {
+    color: inherit;
+    text-decoration: none;
+  }
+
+  button {
+    color: inherit;
+  }
+
+  button:not(:disabled),
+  a {
+    cursor: pointer;
+  }
+
+  button:disabled {
+    cursor: not-allowed;
+    opacity: 0.54;
+  }
+
+  ::selection {
+    color: var(--ink-950);
+    background: var(--lime-300);
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--focus-ring);
+    outline-offset: 2px;
+  }
+}
+
+@layer components {
+  .sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+  }
+
+  .brand-mark {
+    position: relative;
+    display: grid;
+    width: 38px;
+    height: 38px;
+    flex: 0 0 auto;
+    place-items: center;
+    color: var(--ink-950);
+    background: var(--lime-300);
+    border-radius: var(--radius-md) var(--radius-md) var(--radius-md) var(--radius-xs);
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.25);
+  }
+
+  .brand-mark > span {
+    font-size: 22px;
+    font-weight: 700;
+    letter-spacing: -0.08em;
+    transform: translateX(-1px);
+  }
+
+  .brand-mark > svg {
+    position: absolute;
+    right: 4px;
+    top: 4px;
+    color: var(--orange-600);
+  }
+
+  .brand-mark--small {
+    width: 30px;
+    height: 30px;
+    border-radius: var(--radius-sm) var(--radius-sm) var(--radius-sm) 3px;
+  }
+
+  .brand-mark--small > span {
+    font-size: 17px;
+  }
+
+  .nav-label,
+  .eyebrow {
+    color: var(--ink-500);
+    font-size: var(--text-10);
+    font-weight: 800;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+  }
+
+  .button {
+    display: inline-flex;
+    min-height: 38px;
+    align-items: center;
+    justify-content: center;
+    gap: var(--space-8);
+    padding: 0 14px;
+    border: 1px solid transparent;
+    border-radius: var(--radius-sm);
+    font-size: var(--text-11);
+    font-weight: 800;
+    transition:
+      transform 0.15s ease,
+      box-shadow 0.15s ease,
+      background 0.15s ease;
+  }
+
+  .button:hover:not(:disabled) {
+    transform: translateY(-1px);
+  }
+
+  .button--dark {
+    color: white;
+    background: var(--ink-900);
+    border-color: var(--ink-900);
+    box-shadow: 0 4px 13px rgba(13, 20, 16, 0.12);
+  }
+
+  .button--dark:hover {
+    background: var(--ink-800);
+  }
+}
+
+@layer utilities {
+  @media (max-width: 960px) {
+    :root {
+      --sidebar-width: 196px;
+    }
+  }
+
+  @media (max-width: 820px) {
+    :root {
+      --topbar-height: 56px;
+    }
+
+    body {
+      padding-bottom: 68px;
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      scroll-behavior: auto !important;
+      transition-duration: 0.01ms !important;
+      animation-duration: 0.01ms !important;
+    }
+  }
+}
+
+/*
+ * Laces Out visual system
+ *
+ * This final cascade is intentionally flat and editorial: warm paper, dark field ink, crisp rules,
+ * compact data typography, and a single turf accent. It also normalizes legacy feature styles that
+ * arrived at different points in the build without coupling their behavior to this design pass.
+ */
+
+@layer polish {
+  body {
+    background: var(--paper-100);
+    font-family: var(--font-sans);
+    font-size: var(--text-14);
+    font-variant-numeric: tabular-nums lining-nums;
+    line-height: 1.5;
+  }
+
+  :where(.app-shell, .login-page, .not-found-page) {
+    color: var(--ink-900);
+    font-family: var(--font-sans);
+    font-size: var(--text-14);
+    font-variant-numeric: tabular-nums lining-nums;
+  }
+
+  :where(.app-shell, .login-page, .not-found-page) :is(button, input, select, textarea) {
+    font-family: inherit;
+  }
+
+  :where(.app-shell, .login-page, .not-found-page)
+    :is(a[href], button, input, select, textarea, summary, [tabindex]):focus-visible {
+    outline: 2px solid var(--focus-ring);
+    outline-offset: 3px;
+  }
+
+  /* Brand */
+
+  .brand-mark {
+    position: relative;
+    display: block;
+    width: 38px;
+    height: 38px;
+    flex: 0 0 auto;
+    touch-action: manipulation;
+    user-select: none;
+    /* The 1024px master stays for docs/social; the header renders at 38px,
+       so it ships a 96px WebP (4.9 KB vs 650 KB). */
+    background: url("/brand/laces-out-playbook-mark-96.webp") center / contain no-repeat;
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
+  }
+
+  .brand-mark--small {
+    width: 31px;
+    height: 31px;
+  }
+
+  .nav-label,
+  .eyebrow {
+    font-size: var(--text-10);
+    font-weight: 700;
+    letter-spacing: 0.095em;
+  }
+
+  .button {
+    min-height: 40px;
+    padding: 0 14px;
+    border-radius: var(--radius-sm);
+    font-size: var(--text-12);
+    font-weight: 700;
+    box-shadow: none;
+  }
+
+  .button:hover:not(:disabled) {
+    transform: none;
+  }
+
+  .button--dark {
+    background: var(--ink-900);
+    border-color: var(--ink-900);
+    box-shadow: none;
+  }
+
+  /* 404 */
+
+  .not-found-page {
+    display: grid;
+    min-height: 100vh;
+    min-height: 100dvh;
+    place-items: center;
+    padding: 24px;
+    background: var(--paper-100);
+  }
+
+  .not-found-card {
+    position: relative;
+    display: grid;
+    overflow: hidden;
+    width: min(100%, 520px);
+    justify-items: start;
+    padding: 34px;
+    background: var(--white);
+    border: 1px solid var(--ink-150);
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow-card);
+  }
+
+  .not-found-card .eyebrow {
+    margin-top: 26px;
+  }
+
+  .not-found-card h1 {
+    margin-top: 5px;
+    font-size: clamp(32px, 7vw, 48px);
+    line-height: 1;
+    letter-spacing: -0.04em;
+  }
+
+  .not-found-card > p:not(.eyebrow) {
+    max-width: 360px;
+    margin: 14px 0 24px;
+    color: var(--ink-600);
+    font-size: var(--text-13);
+  }
+
+  .not-found-goal {
+    position: absolute;
+    right: 28px;
+    bottom: 25px;
+    color: var(--ink-200);
+  }
+
+  .not-found-easter-egg {
+    width: 100%;
+    margin-top: 22px;
+    padding-top: 15px;
+    border-top: 1px solid var(--ink-150);
+  }
+
+  .not-found-easter-egg summary {
+    width: max-content;
+    color: var(--ink-500);
+    cursor: pointer;
+    font-size: var(--text-11);
+    font-weight: 650;
+  }
+
+  .not-found-easter-egg blockquote {
+    max-width: 390px;
+    margin: 14px 0 5px;
+    color: var(--ink-800);
+    font-size: var(--text-13);
+    font-style: italic;
+    line-height: 1.5;
+  }
+
+  .not-found-easter-egg cite {
+    color: var(--ink-500);
+    font-size: var(--text-10);
+    font-style: normal;
+  }
+
+  @media (max-width: 820px) {
+    body {
+      padding-bottom: calc(68px + env(safe-area-inset-bottom));
+    }
+
+    /* Also emitted verbatim in ./product.css. base.css loads first, so this mobile tap-target
+       floor has to repeat after the product rules it overrides (.button--small,
+       .queue-button, .position-tabs button). Keep the two copies identical. */
+    .button,
+    .icon-button,
+    .position-tabs button,
+    .queue-button {
+      min-height: 44px;
+    }
+  }
+
+  @media (max-width: 560px) {
+    .not-found-card {
+      padding: 26px;
+    }
+
+    .not-found-goal {
+      display: none;
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .app-shell *,
+    .login-page *,
+    .not-found-page * {
+      scroll-behavior: auto !important;
+      transition-duration: 0.01ms !important;
+    }
+  }
+}

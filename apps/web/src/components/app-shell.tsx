@@ -31,6 +31,8 @@ import { ScrollCues } from "./scroll-cues";
 import { SessionControl } from "./session-control";
 import { YahooAttribution } from "./yahoo-attribution";
 
+import "../app/product.css";
+
 type AppSection =
   | "analytics"
   | "ai"

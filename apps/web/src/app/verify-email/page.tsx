@@ -3,6 +3,8 @@ import type { Metadata } from "next";
 import { VerifyEmailForm } from "../../components/verify-email-form";
 import { PublicAccountShell } from "../public-site-chrome";
 
+import "../product.css";
+
 export const metadata: Metadata = {
   title: "Confirm Email",
   description: "Confirm your email to activate your Laces Out account.",
