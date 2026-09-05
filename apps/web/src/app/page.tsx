@@ -697,7 +697,7 @@ export default function LandingPage() {
               Join Laces Out <ArrowRight aria-hidden="true" size={16} />
             </Link>
             <a className={styles.secondaryButton} href={publicAppStoreUrl}>
-              Get the iPhone app <Smartphone aria-hidden="true" size={16} />
+              Get the iOS app <Smartphone aria-hidden="true" size={16} />
             </a>
           </div>
         </section>
