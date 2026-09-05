@@ -3,6 +3,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 
 import { LacesOutMark } from "../../components/laces-out-mark";
+import { publicPageOpenGraph } from "../../lib/public-pages";
 import { publicContactEmail } from "../../lib/public-site";
 
 import styles from "../privacy/privacy.module.css";
@@ -12,6 +13,7 @@ export const metadata: Metadata = {
   description: "Terms for using this private, non-commercial Laces Out deployment.",
   alternates: { canonical: "/terms" },
   robots: { index: true, follow: true },
+  openGraph: publicPageOpenGraph("/terms"),
 };
 
 export default function TermsPage() {

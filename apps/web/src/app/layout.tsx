@@ -3,7 +3,13 @@ import { Sora } from "next/font/google";
 import type { ReactNode } from "react";
 
 import { FinkleCode } from "../components/finkle-code";
-import { publicAppStoreId, publicSiteUrl } from "../lib/public-site";
+import { siteOpenGraph } from "../lib/public-pages";
+import {
+  bingSiteVerification,
+  googleSiteVerification,
+  publicAppStoreId,
+  publicSiteUrl,
+} from "../lib/public-site";
 
 import "./base.css";
 
@@ -12,6 +18,19 @@ const brandFont = Sora({
   display: "swap",
   variable: "--font-brand",
 });
+
+/**
+ * Search-console ownership tags, omitted entirely when no token is configured. DNS TXT verification
+ * is the recommended route; these env hooks are the fallback for deployments that cannot edit DNS.
+ */
+function siteVerification(): NonNullable<Metadata["verification"]> | null {
+  const verification: NonNullable<Metadata["verification"]> = {};
+  if (googleSiteVerification) verification.google = googleSiteVerification;
+  if (bingSiteVerification) verification.other = { "msvalidate.01": bingSiteVerification };
+  return Object.keys(verification).length > 0 ? verification : null;
+}
+
+const verification = siteVerification();
 
 export const metadata: Metadata = {
   metadataBase: publicSiteUrl,
@@ -26,6 +45,10 @@ export const metadata: Metadata = {
   category: "sports",
   keywords: ["fantasy football", "draft assistant", "lineup", "waivers", "trades"],
   robots: { index: false, follow: false },
+  // Next replaces this object wholesale for any route that declares its own `openGraph`, so the
+  // public pages restate these defaults; declaring them here covers the routes that declare none.
+  openGraph: siteOpenGraph,
+  ...(verification ? { verification } : {}),
   appleWebApp: {
     capable: true,
     statusBarStyle: "default",

@@ -17,6 +17,81 @@ const expectedCanonicalUrl = new URL(
   .toString()
   .replace(/\/$/u, "");
 
+/**
+ * Robots rules, parsed from the served `robots.txt` and evaluated the way Google and Bing document:
+ * the longest matching pattern wins, `*` matches any run of characters, a trailing `$` anchors the
+ * end of the path, Allow wins a tie, and an unmatched path is crawlable.
+ *
+ * `apps/web/src/app/robots.test.ts` runs the same evaluation over the rules the route returns. The
+ * duplication is deliberate: this Node build has no TypeScript support, so a `.mjs` script cannot
+ * import the evaluator from there.
+ */
+function parseRobotsRules(text, userAgent = "*") {
+  const rules = [];
+  let inGroup = false;
+  for (const rawLine of text.split(/\r?\n/u)) {
+    const line = rawLine.split("#")[0].trim();
+    if (!line) continue;
+    const separator = line.indexOf(":");
+    if (separator === -1) continue;
+    const field = line.slice(0, separator).trim().toLowerCase();
+    const value = line.slice(separator + 1).trim();
+    if (field === "user-agent") {
+      inGroup = value === userAgent;
+    } else if (inGroup && field === "allow" && value) {
+      rules.push({ pattern: value, allow: true });
+    } else if (inGroup && field === "disallow" && value) {
+      rules.push({ pattern: value, allow: false });
+    }
+  }
+  return rules;
+}
+
+function matchesRobotsPattern(pattern, path) {
+  const anchored = pattern.endsWith("$");
+  const literal = anchored ? pattern.slice(0, -1) : pattern;
+  const source = literal
+    .split("*")
+    .map((segment) => segment.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&"))
+    .join(".*");
+  return new RegExp(`^${source}${anchored ? "$" : ""}`, "u").test(path);
+}
+
+function isCrawlable(rules, path) {
+  let winner;
+  for (const rule of rules) {
+    if (!matchesRobotsPattern(rule.pattern, path)) continue;
+    if (
+      !winner ||
+      rule.pattern.length > winner.pattern.length ||
+      (rule.pattern.length === winner.pattern.length && rule.allow)
+    ) {
+      winner = rule;
+    }
+  }
+  return winner ? winner.allow : true;
+}
+
+/** Every same-origin asset the served landing HTML asks a browser (or a crawler) to fetch. */
+function referencedAssetPaths(html) {
+  const paths = new Set();
+  const add = (value) => {
+    if (!value) return;
+    if (value.startsWith("/")) {
+      paths.add(value);
+      return;
+    }
+    if (!value.startsWith("http")) return;
+    const url = new URL(value);
+    paths.add(`${url.pathname}${url.search}`);
+  };
+  for (const [, href] of html.matchAll(/<link\b[^>]*\bhref="([^"]+)"/gu)) add(href);
+  for (const [, source] of html.matchAll(/<script\b[^>]*\bsrc="([^"]+)"/gu)) add(source);
+  for (const [, content] of html.matchAll(/<meta property="og:image" content="([^"]+)"/gu))
+    add(content);
+  return [...paths];
+}
+
 function startNode(arguments_, extraEnvironment = {}, workingDirectory = repositoryRoot) {
   const child = spawn(process.execPath, arguments_, {
     cwd: workingDirectory,
@@ -117,6 +192,62 @@ try {
   assert.doesNotMatch(landingHtml, /Automated league brief/u);
   assert.ok(landingHtml.includes(`<link rel="canonical" href="${expectedCanonicalUrl}"`));
   assert.doesNotMatch(landingHtml, /noindex/u);
+  assert.match(landingHtml, /<meta property="og:site_name" content="Laces Out"\/>/u);
+  assert.match(landingHtml, /<meta property="og:locale" content="en_US"\/>/u);
+
+  // The landing canonical, its og:url, and the sitemap's root entry must all be the same string.
+  const landingSocialUrl = landingHtml.match(/<meta property="og:url" content="([^"]+)"/u)?.[1];
+  assert.equal(landingSocialUrl, expectedCanonicalUrl);
+  const sitemapResponse = await waitForHttp(`http://127.0.0.1:${webPort}/sitemap.xml`, web);
+  const sitemapXml = await sitemapResponse.text();
+  const sitemapLocations = [...sitemapXml.matchAll(/<loc>([^<]+)<\/loc>/gu)].map(([, loc]) => loc);
+  assert.equal(sitemapLocations[0], expectedCanonicalUrl);
+  // 4 is the size of the public page registry (apps/web/src/lib/public-pages.ts); the list below is
+  // inclusion-only, so without this count a page added to the registry would go unchecked here.
+  assert.equal(sitemapLocations.length, 4);
+  for (const path of ["/privacy", "/terms", "/methodology"]) {
+    assert.ok(
+      sitemapLocations.includes(`${expectedCanonicalUrl}${path}`),
+      `sitemap missing ${path}`,
+    );
+  }
+
+  // Googlebot must be able to fetch everything the landing page renders with.
+  const robotsResponse = await waitForHttp(`http://127.0.0.1:${webPort}/robots.txt`, web);
+  const robotsRules = parseRobotsRules(await robotsResponse.text());
+  assert.ok(robotsRules.length > 0, "robots.txt declared no rules for *");
+  const landingAssetPaths = referencedAssetPaths(landingHtml);
+  for (const expected of [
+    /^\/_next\/static\/css\//u,
+    /^\/_next\/static\/chunks\//u,
+    /\.woff2$/u,
+    /^\/opengraph-image/u,
+    /^\/icon\.png/u,
+    /^\/apple-icon\.png/u,
+    /^\/manifest\.webmanifest/u,
+  ]) {
+    assert.ok(
+      landingAssetPaths.some((path) => expected.test(path)),
+      `landing HTML referenced no asset matching ${expected}`,
+    );
+  }
+  for (const path of landingAssetPaths) {
+    assert.ok(isCrawlable(robotsRules, path), `robots.txt blocks ${path}`);
+  }
+  for (const path of ["/app", "/draft", "/settings", "/api/anything", "/_next/image?url=x"]) {
+    assert.ok(!isCrawlable(robotsRules, path), `robots.txt exposes ${path}`);
+  }
+
+  // One JSON-LD graph naming the three entities the landing page publishes.
+  const landingJsonLd = landingHtml.match(
+    /<script type="application\/ld\+json">(.*?)<\/script>/su,
+  )?.[1];
+  assert.ok(landingJsonLd, "landing HTML carried no JSON-LD block");
+  const landingGraph = JSON.parse(landingJsonLd);
+  assert.deepEqual(
+    landingGraph["@graph"].map((node) => node["@type"]),
+    ["Organization", "WebSite", "SoftwareApplication"],
+  );
   if (process.env.NEXT_PUBLIC_YAHOO_ACCESS_STATUS?.trim().toLowerCase() === "available") {
     assert.match(landingHtml, /ESPN &amp; Yahoo syncing/u);
     assert.doesNotMatch(landingHtml, /Yahoo sync is next on the roadmap/u);
@@ -195,5 +326,5 @@ try {
 }
 
 process.stdout.write(
-  `${JSON.stringify({ apiLive: true, apiReady: true, workerStarted: true, officialLandingStarted: true, landingSocialImageStarted: true, workspaceStarted: true, scheduleStarted: true })}\n`,
+  `${JSON.stringify({ apiLive: true, apiReady: true, workerStarted: true, officialLandingStarted: true, landingSocialImageStarted: true, landingAssetsCrawlable: true, landingRootUrlConsistent: true, landingStructuredDataParsed: true, workspaceStarted: true, scheduleStarted: true })}\n`,
 );

@@ -4,6 +4,7 @@ import Link from "next/link";
 import type { ReactNode } from "react";
 
 import { LacesOutMark } from "../../components/laces-out-mark";
+import { publicPageOpenGraph } from "../../lib/public-pages";
 
 import {
   ROS_COUNT_WORDS,
@@ -59,6 +60,7 @@ export const metadata: Metadata = {
     "How Laces Out builds and validates its weekly and rest-of-season forecasts, and what it withholds when the evidence is not there.",
   alternates: { canonical: "/methodology" },
   robots: { index: true, follow: true },
+  openGraph: publicPageOpenGraph("/methodology"),
 };
 
 /**

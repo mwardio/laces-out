@@ -17,6 +17,23 @@ export const yahooComingSoon =
 export const cloudflareWebAnalyticsEnabled =
   process.env.NEXT_PUBLIC_CLOUDFLARE_ANALYTICS?.trim().toLowerCase() === "enabled";
 
+function configuredVerificationToken(value: string | undefined): string | null {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : null;
+}
+
+/**
+ * Search-console ownership tokens. DNS TXT verification is the first choice; these are the fallback
+ * for deployments that cannot edit DNS, and the meta tag renders only when the token is set.
+ */
+export const googleSiteVerification = configuredVerificationToken(
+  process.env.NEXT_PUBLIC_GOOGLE_SITE_VERIFICATION,
+);
+
+export const bingSiteVerification = configuredVerificationToken(
+  process.env.NEXT_PUBLIC_BING_SITE_VERIFICATION,
+);
+
 function configuredSiteUrl(): URL {
   try {
     return new URL(process.env.NEXT_PUBLIC_SITE_URL?.trim() || fallbackSiteUrl);

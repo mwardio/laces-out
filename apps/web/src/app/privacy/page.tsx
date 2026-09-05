@@ -3,6 +3,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 
 import { LacesOutMark } from "../../components/laces-out-mark";
+import { publicPageOpenGraph } from "../../lib/public-pages";
 import { cloudflareWebAnalyticsEnabled, publicContactEmail } from "../../lib/public-site";
 
 import styles from "./privacy.module.css";
@@ -10,7 +11,9 @@ import styles from "./privacy.module.css";
 export const metadata: Metadata = {
   title: "Privacy",
   description: "How Laces Out handles account, fantasy league, notification, and AI data.",
-  robots: { index: true, follow: false },
+  alternates: { canonical: "/privacy" },
+  robots: { index: true, follow: true },
+  openGraph: publicPageOpenGraph("/privacy"),
 };
 
 export default function PrivacyPage() {

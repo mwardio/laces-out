@@ -22,7 +22,9 @@ import type { Metadata } from "next";
 import Link from "next/link";
 
 import { LacesOutMark } from "../components/laces-out-mark";
+import { siteOpenGraph } from "../lib/public-pages";
 import { publicAppStoreUrl, yahooComingSoon } from "../lib/public-site";
+import { landingStructuredDataJson } from "../lib/structured-data";
 import { PublicSiteFooter } from "./public-site-chrome";
 
 import styles from "./landing-page.module.css";
@@ -37,12 +39,11 @@ export const metadata: Metadata = {
   alternates: { canonical: "/" },
   robots: { index: true, follow: true },
   openGraph: {
-    type: "website",
+    ...siteOpenGraph,
     title: "Laces Out: Connect your leagues. Get the next move.",
     description: yahooComingSoon
       ? "A private fantasy football locker room with ESPN sync, backtested weekly forecasts, and ranked decisions."
       : "A private fantasy football locker room that turns fresh Yahoo and ESPN league data into forecasts and ranked decisions.",
-    siteName: "Laces Out",
     url: "/",
   },
   twitter: {
@@ -51,22 +52,6 @@ export const metadata: Metadata = {
     description: yahooComingSoon
       ? "ESPN league sync, built-in weekly forecasts, and automatic league-aware decision analysis."
       : "Yahoo and ESPN sync with built-in weekly forecasts and automatic, league-aware decision analysis.",
-  },
-};
-
-const applicationSchema = {
-  "@context": "https://schema.org",
-  "@type": "SoftwareApplication",
-  name: "Laces Out",
-  applicationCategory: "SportsApplication",
-  operatingSystem: "Web, iOS",
-  description:
-    "Fantasy football software that syncs leagues, builds weekly forecasts, and automates draft, lineup, waiver, trade, and opponent analysis.",
-  downloadUrl: publicAppStoreUrl,
-  offers: {
-    "@type": "Offer",
-    price: "0",
-    priceCurrency: "USD",
   },
 };
 
@@ -707,9 +692,7 @@ export default function LandingPage() {
 
       <script
         type="application/ld+json"
-        dangerouslySetInnerHTML={{
-          __html: JSON.stringify(applicationSchema).replaceAll("<", "\\u003c"),
-        }}
+        dangerouslySetInnerHTML={{ __html: landingStructuredDataJson }}
       />
     </div>
   );
