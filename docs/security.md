@@ -36,6 +36,16 @@ This application will hold access to real fantasy accounts. Treat it like a smal
   same-site. OIDC, passkeys, and MFA are not implemented.
 - The production-shaped Compose path terminates HTTPS at Caddy, which supplies HSTS and CSP; the API
   enforces mutation-origin checks and rate limits. Plain HTTP is a loopback development mode only.
+- The gateway CSP is written once in the `Caddyfile` and selected by
+  `NEXT_PUBLIC_CLOUDFLARE_ANALYTICS`, the same flag the web build uses for the `/privacy`
+  disclosure, so the two cannot drift apart. `enabled` adds `https://static.cloudflareinsights.com`
+  to `script-src` and `https://cloudflareinsights.com` to `connect-src`; `disabled` adds nothing and
+  produces the byte-identical default policy. The flag still injects no beacon — a hosting layer
+  does — and any other value stops the gateway with a Caddy validation error. A deployment fronted
+  by its own proxy instead of the bundled gateway must mirror this policy there.
+- Gateway edge caching is limited to `/opengraph-image*`, `/robots.txt`, `/sitemap.xml`, and
+  `/manifest.webmanifest`. Every other response keeps the application's own cache directives, so no
+  authenticated response becomes publicly cacheable.
 - Provider writes are capability-disabled. A future write needs a preview, confirmation, idempotency, receipt, audit event, and reconciliation.
 - Canonical ESPN recovery and projection imports validate bounded artifacts and persist normalized
   records/provenance rather than raw credentials or projection CSV. Any future raw-artifact

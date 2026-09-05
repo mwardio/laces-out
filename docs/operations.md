@@ -38,6 +38,111 @@ Production startup rejects copied `replace-with-...` placeholders and the Compos
 default `fantasy` password. This is intentional: fill in every secret before expecting the stack to
 become healthy.
 
+## Search presence
+
+Set `PUBLIC_URL` to the canonical HTTPS origin: the exact host you want indexed, no trailing slash.
+Compose passes it to the web build as `NEXT_PUBLIC_SITE_URL`, so canonical links, `/sitemap.xml`,
+`/robots.txt`, and the social image URL only follow a change after
+`docker compose up --build -d --wait`. Changing it without rebuilding leaves the previous origin in
+every emitted URL.
+
+Verify ownership once per property:
+
+- Google Search Console and Bing Webmaster Tools both accept DNS TXT verification. Prefer it: it
+  survives rebuilds, covers subdomains, and needs no application change.
+- The fallback is the meta tag pair `NEXT_PUBLIC_GOOGLE_SITE_VERIFICATION` and
+  `NEXT_PUBLIC_BING_SITE_VERIFICATION`. Each renders only when set, and both are build args:
+  rebuild the images after changing either. Bing can also import an already verified Google
+  property.
+- Submit `https://<canonical-host>/sitemap.xml` in both tools.
+- After the first crawl, read "Page indexing" for unexpected exclusions and "Core Web Vitals" for
+  field data. Field data needs weeks of real traffic; an empty report means not enough data, not a
+  failure.
+
+### Structured data
+
+`apps/web/src/lib/structured-data.ts` describes the product and the organization for entity
+understanding. It claims no rich result on purpose: there is no `aggregateRating`, so no
+star-rating or review snippet should be expected in search.
+
+Re-run both validators after any change to that file and record the outcome here.
+
+| Date | Change                  | Rich Results Test | Schema.org validator |
+| ---- | ----------------------- | ----------------- | -------------------- |
+| —    | Initial structured data | not yet run       | not yet run          |
+
+- Rich Results Test: <https://search.google.com/test/rich-results>
+- Schema.org validator: <https://validator.schema.org/>
+
+### Edge behavior
+
+The bundled Caddy gateway owns three search-visible behaviors. A deployment that runs the stack
+without the `gateway` service — a host-level reverse proxy fronting the app directly — must mirror
+all three in that proxy:
+
+- `WWW_REDIRECT=on` adds a permanent redirect from `www.<SITE_ADDRESS>` to the canonical host. It
+  applies only with a hostname `SITE_ADDRESS` (not `:80`) and only when DNS answers for `www.`.
+  Caddy already redirects HTTP to HTTPS for hostname site addresses. With `SITE_ADDRESS=:80` the
+  flag still validates but builds a broken `https://:80/…` redirect, so leave it `off` there.
+- Metadata caching replaces the application's `max-age=0, must-revalidate`: `/opengraph-image*`
+  gets `public, max-age=86400, stale-while-revalidate=604800`, and `/robots.txt`, `/sitemap.xml`,
+  and `/manifest.webmanifest` get `public, max-age=3600`. The landing page's social image URL
+  carries a content hash, so a day of caching is safe.
+- `NEXT_PUBLIC_CLOUDFLARE_ANALYTICS` selects the gateway CSP and the `/privacy` copy from one flag.
+  `enabled` adds `https://static.cloudflareinsights.com` to `script-src` and
+  `https://cloudflareinsights.com` to `connect-src`. Any value other than `enabled` or `disabled`
+  fails Caddy validation and the gateway will not start.
+
+Validate a `Caddyfile` change without touching the running stack:
+
+```bash
+docker run --rm -v "$PWD/Caddyfile:/etc/caddy/Caddyfile:ro" \
+  -e SITE_ADDRESS=laces.example.com \
+  -e WWW_REDIRECT=on \
+  -e NEXT_PUBLIC_CLOUDFLARE_ANALYTICS=enabled \
+  caddy:2-alpine caddy validate --config /etc/caddy/Caddyfile
+```
+
+### IndexNow (optional)
+
+IndexNow tells Bing and other participating engines about a changed URL immediately.
+
+1. Generate a key of 8-128 hexadecimal characters and save it as `apps/web/public/<key>.txt`
+   containing exactly that key. It is served at `https://<canonical-host>/<key>.txt` after the next
+   image build.
+2. Add `/<key>.txt` to the crawlable asset list in `apps/web/src/app/robots.ts`. `robots.txt` is an
+   allowlist over a blanket `Disallow: /`, so without this the key file is disallowed and
+   verification fails.
+3. Ping after each deploy:
+
+```bash
+curl --fail --silent --show-error \
+  "https://api.indexnow.org/indexnow?url=https://laces.example.com/&key=<key>"
+```
+
+Skip it if a public key file is unwelcome; the submitted sitemap is sufficient on its own.
+
+### Lighthouse audit
+
+`npm run audit:seo` builds the web app, starts the standalone server on a loopback port, and runs
+Lighthouse against `/` for the SEO, best-practices, and performance categories on the mobile
+preset. It fails when the SEO score is below 0.95 or LCP is above 2.5 s. It needs a local Chrome or
+Chromium:
+
+```bash
+CHROME_PATH=/usr/bin/chromium npm run audit:seo
+```
+
+The audit build overrides `NEXT_PUBLIC_SITE_URL` with the loopback origin it serves from, so the
+canonical URL matches what Lighthouse fetches; the non-HTTPS origin warning during that build is
+expected. `npm run audit:seo -- --skip-build` reuses an existing `apps/web/.next` build instead,
+which only passes the canonical audit if that build already used the same origin. The audit stays
+out of `npm run check` because it builds the app and launches a browser.
+`node scripts/css-usage.mjs <stylesheet> <html>` estimates how much of a built stylesheet the page
+never uses by asking whether each rule's selectors could match the document — approximate, since it
+reads selector presence rather than runtime coverage — and is worth a run after touching
+`apps/web/src/app/base.css`.
+
 ## Operator automation
 
 For an always-on deployment, monitor both the public readiness endpoint and a worker heartbeat

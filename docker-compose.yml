@@ -77,6 +77,8 @@ services:
         NEXT_PUBLIC_CLOUDFLARE_ANALYTICS: ${NEXT_PUBLIC_CLOUDFLARE_ANALYTICS:-disabled}
         NEXT_PUBLIC_REGISTRATION_OPEN: ${REGISTRATION_OPEN:-false}
         NEXT_PUBLIC_YAHOO_ACCESS_STATUS: ${NEXT_PUBLIC_YAHOO_ACCESS_STATUS:-pending}
+        NEXT_PUBLIC_GOOGLE_SITE_VERIFICATION: ${NEXT_PUBLIC_GOOGLE_SITE_VERIFICATION:-}
+        NEXT_PUBLIC_BING_SITE_VERIFICATION: ${NEXT_PUBLIC_BING_SITE_VERIFICATION:-}
     environment: *app-environment
     depends_on:
       postgres:
@@ -100,6 +102,8 @@ services:
         NEXT_PUBLIC_CLOUDFLARE_ANALYTICS: ${NEXT_PUBLIC_CLOUDFLARE_ANALYTICS:-disabled}
         NEXT_PUBLIC_REGISTRATION_OPEN: ${REGISTRATION_OPEN:-false}
         NEXT_PUBLIC_YAHOO_ACCESS_STATUS: ${NEXT_PUBLIC_YAHOO_ACCESS_STATUS:-pending}
+        NEXT_PUBLIC_GOOGLE_SITE_VERIFICATION: ${NEXT_PUBLIC_GOOGLE_SITE_VERIFICATION:-}
+        NEXT_PUBLIC_BING_SITE_VERIFICATION: ${NEXT_PUBLIC_BING_SITE_VERIFICATION:-}
     environment:
       <<: [*app-environment, *email-environment]
       # Extra browser origins served by the same gateway, comma separated. WEB_URL stays canonical
@@ -151,6 +155,8 @@ services:
         NEXT_PUBLIC_CLOUDFLARE_ANALYTICS: ${NEXT_PUBLIC_CLOUDFLARE_ANALYTICS:-disabled}
         NEXT_PUBLIC_REGISTRATION_OPEN: ${REGISTRATION_OPEN:-false}
         NEXT_PUBLIC_YAHOO_ACCESS_STATUS: ${NEXT_PUBLIC_YAHOO_ACCESS_STATUS:-pending}
+        NEXT_PUBLIC_GOOGLE_SITE_VERIFICATION: ${NEXT_PUBLIC_GOOGLE_SITE_VERIFICATION:-}
+        NEXT_PUBLIC_BING_SITE_VERIFICATION: ${NEXT_PUBLIC_BING_SITE_VERIFICATION:-}
     environment:
       <<: [*app-environment, *email-environment]
     depends_on:
@@ -176,6 +182,8 @@ services:
         NEXT_PUBLIC_CLOUDFLARE_ANALYTICS: ${NEXT_PUBLIC_CLOUDFLARE_ANALYTICS:-disabled}
         NEXT_PUBLIC_REGISTRATION_OPEN: ${REGISTRATION_OPEN:-false}
         NEXT_PUBLIC_YAHOO_ACCESS_STATUS: ${NEXT_PUBLIC_YAHOO_ACCESS_STATUS:-pending}
+        NEXT_PUBLIC_GOOGLE_SITE_VERIFICATION: ${NEXT_PUBLIC_GOOGLE_SITE_VERIFICATION:-}
+        NEXT_PUBLIC_BING_SITE_VERIFICATION: ${NEXT_PUBLIC_BING_SITE_VERIFICATION:-}
     command: ["node", "apps/worker/dist/ros-worker.js"]
     environment: *app-environment
     depends_on:
@@ -203,6 +211,8 @@ services:
         NEXT_PUBLIC_CLOUDFLARE_ANALYTICS: ${NEXT_PUBLIC_CLOUDFLARE_ANALYTICS:-disabled}
         NEXT_PUBLIC_REGISTRATION_OPEN: ${REGISTRATION_OPEN:-false}
         NEXT_PUBLIC_YAHOO_ACCESS_STATUS: ${NEXT_PUBLIC_YAHOO_ACCESS_STATUS:-pending}
+        NEXT_PUBLIC_GOOGLE_SITE_VERIFICATION: ${NEXT_PUBLIC_GOOGLE_SITE_VERIFICATION:-}
+        NEXT_PUBLIC_BING_SITE_VERIFICATION: ${NEXT_PUBLIC_BING_SITE_VERIFICATION:-}
     environment:
       NODE_ENV: production
       HOSTNAME: 0.0.0.0
@@ -234,6 +244,12 @@ services:
     image: caddy:2-alpine
     environment:
       SITE_ADDRESS: ${SITE_ADDRESS:-:80}
+      # Same flag as the web build arg above, so the /privacy disclosure and the gateway CSP can
+      # never disagree. Only enabled/disabled are valid; anything else fails Caddy validation.
+      NEXT_PUBLIC_CLOUDFLARE_ANALYTICS: ${NEXT_PUBLIC_CLOUDFLARE_ANALYTICS:-disabled}
+      # on adds the www.<SITE_ADDRESS> canonical redirect. Needs a hostname SITE_ADDRESS and DNS
+      # that answers for www.; only on/off are valid.
+      WWW_REDIRECT: ${WWW_REDIRECT:-off}
     ports:
       - "${GATEWAY_BIND_ADDRESS:-0.0.0.0}:${APP_PORT:-3000}:80"
       - "${GATEWAY_BIND_ADDRESS:-0.0.0.0}:${HTTPS_PORT:-3443}:443"
