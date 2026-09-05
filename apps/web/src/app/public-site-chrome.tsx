@@ -72,7 +72,7 @@ export function PublicSiteFooter() {
           <Link href="/privacy">Privacy</Link>
           <Link href="/terms">Terms</Link>
           <ContactEasterEgg />
-          <a href={publicAppStoreUrl}>App Store</a>
+          <a href={publicAppStoreUrl}>iOS app</a>
           <Link href="/login">Sign In</Link>
           <a
             className={styles.footerGithub}
