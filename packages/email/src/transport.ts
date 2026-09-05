@@ -23,7 +23,7 @@ export interface SmtpConfiguration {
   readonly port: number;
   readonly user: string;
   readonly password: string;
-  /** RFC 5322 From value, e.g. `Laces Out <noreply@lacesout.app>`. */
+  /** RFC 5322 From value, e.g. `Laces Out <accounts@lacesout.app>`. */
   readonly from: string;
 }
 

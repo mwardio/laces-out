@@ -17,7 +17,7 @@ const configuration = {
   port: 587,
   user: "operator@icloud.com",
   password: "app-specific-password",
-  from: "Laces Out <noreply@lacesout.app>",
+  from: "Laces Out <accounts@lacesout.app>",
 };
 
 const message = {

@@ -301,11 +301,11 @@ describe("loadEnvironment", () => {
       SMTP_HOST: "smtp.mail.me.com",
       SMTP_USER: "operator@icloud.com",
       SMTP_PASSWORD: "app-specific-password",
-      EMAIL_FROM: "Laces Out <noreply@lacesout.app>",
+      EMAIL_FROM: "Laces Out <accounts@lacesout.app>",
     };
     const environment = loadEnvironment(complete);
     expect(environment.SMTP_HOST).toBe("smtp.mail.me.com");
-    expect(environment.EMAIL_FROM).toBe("Laces Out <noreply@lacesout.app>");
+    expect(environment.EMAIL_FROM).toBe("Laces Out <accounts@lacesout.app>");
     expect(() => loadEnvironment({ SMTP_HOST: complete.SMTP_HOST })).toThrow(
       "Outbound email requires SMTP_HOST, SMTP_USER, SMTP_PASSWORD, and EMAIL_FROM together",
     );
@@ -319,7 +319,7 @@ describe("loadEnvironment", () => {
       SMTP_HOST: "smtp.mail.me.com",
       SMTP_USER: "operator@icloud.com",
       SMTP_PASSWORD: "app-specific-password",
-      EMAIL_FROM: "Laces Out <noreply@lacesout.app>",
+      EMAIL_FROM: "Laces Out <accounts@lacesout.app>",
       EMAIL_VERIFICATION_ENABLED: "true",
     };
     expect(loadEnvironment(complete).EMAIL_VERIFICATION_ENABLED).toBe(true);
@@ -334,8 +334,8 @@ describe("loadEnvironment", () => {
       SMTP_USER: "operator@icloud.com",
       SMTP_PASSWORD: "app-specific-password",
     };
-    expect(loadEnvironment({ ...base, EMAIL_FROM: "noreply@lacesout.app" }).EMAIL_FROM).toBe(
-      "noreply@lacesout.app",
+    expect(loadEnvironment({ ...base, EMAIL_FROM: "accounts@lacesout.app" }).EMAIL_FROM).toBe(
+      "accounts@lacesout.app",
     );
     expect(() => loadEnvironment({ ...base, EMAIL_FROM: "not-an-address" })).toThrow();
     expect(() => loadEnvironment({ ...base, EMAIL_FROM: "Laces Out <not-an-address>" })).toThrow();
@@ -352,7 +352,7 @@ describe("loadEnvironment", () => {
         SMTP_HOST: "smtp.mail.me.com",
         SMTP_USER: "operator@icloud.com",
         SMTP_PASSWORD: "replace-with-app-specific-password",
-        EMAIL_FROM: "noreply@lacesout.app",
+        EMAIL_FROM: "accounts@lacesout.app",
       }),
     ).toThrow("Unsafe production placeholder configuration: SMTP_PASSWORD");
   });

@@ -721,7 +721,7 @@ SMTP_HOST=smtp.resend.com         # any TLS SMTP submission service
 SMTP_PORT=587                     # default; 465 switches to implicit TLS
 SMTP_USER=resend                  # the account that authenticates the send
 SMTP_PASSWORD=<sending API key>
-EMAIL_FROM="Laces Out <noreply@lacesout.app>"
+EMAIL_FROM="Laces Out <accounts@lacesout.app>"
 EMAIL_VERIFICATION_ENABLED=false # enable only after SMTP and client compatibility smoke tests
 ```
 
