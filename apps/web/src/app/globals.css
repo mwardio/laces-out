@@ -300,6 +300,46 @@
     gap: var(--space-10);
   }
 
+  .draft-session-yahoo-assist {
+    padding: 11px !important;
+    background: var(--paper-50);
+    border: 1px solid var(--ink-150) !important;
+    border-radius: var(--radius-sm);
+  }
+
+  .draft-session-yahoo-assist label {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--space-8);
+    cursor: pointer;
+  }
+
+  .draft-session-yahoo-assist input[type="checkbox"] {
+    width: 16px;
+    height: 16px;
+    flex: 0 0 auto;
+    margin: 2px 0 0;
+    accent-color: var(--green-500);
+  }
+
+  .draft-session-yahoo-assist label > span {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+    gap: var(--space-4);
+    color: var(--ink-900);
+    font-size: var(--text-12);
+    letter-spacing: 0;
+    text-transform: none;
+  }
+
+  .draft-session-yahoo-assist small {
+    color: var(--ink-500);
+    font-size: var(--text-11);
+    font-weight: 500;
+    line-height: 1.45;
+  }
+
   .draft-session-order {
     display: grid;
     gap: var(--space-6);

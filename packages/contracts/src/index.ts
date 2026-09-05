@@ -1160,6 +1160,72 @@ export const espnLiveDraftFeedStatusSchema = z
   .strict();
 export type EspnLiveDraftFeedStatus = z.infer<typeof espnLiveDraftFeedStatusSchema>;
 
+/** Bounded reasons a Yahoo cumulative draft-result read was held instead of changing a room. */
+export const yahooDraftIssueCodeSchema = z.enum([
+  "INCOMPLETE_SNAPSHOT",
+  "UNRESOLVED_TEAM",
+  "UNRESOLVED_PLAYER",
+  "PICK_SEQUENCE_GAP",
+  "DRAFT_TYPE_MISMATCH",
+  "TEAM_COUNT_MISMATCH",
+  "KEEPER_SCOPE_UNVALIDATED",
+  "SNAKE_COST_PRESENT",
+  "AUCTION_COST_MISSING",
+  "AUCTION_COST_INVALID",
+  "HISTORY_DIVERGED",
+  "HISTORY_TRUNCATED",
+  "REDUCER_INVARIANT",
+  "PROVIDER_UNAVAILABLE",
+  "POLL_FAILED",
+  "RELEASE_SHADOW_ONLY",
+  "CONCURRENT_LEDGER_CHANGE",
+  "COMPLETED_COUNT_MISMATCH",
+  "PROVIDER_STATUS_UNSUPPORTED",
+]);
+export type YahooDraftIssueCode = z.infer<typeof yahooDraftIssueCodeSchema>;
+
+/** Public status for the official Yahoo cumulative draft-results poller. */
+export const yahooDraftFeedStatusSchema = z
+  .object({
+    provider: z.literal("yahoo"),
+    state: z.enum(["waiting", "live", "stale", "complete", "degraded"]),
+    providerLeagueId: z.string().regex(/^(?:[a-z][a-z0-9-]{0,15}|[0-9]{1,10})\.l\.[0-9]{1,20}$/u),
+    season: z.number().int().min(2019).max(2100),
+    fresh: z.boolean(),
+    ageSeconds: z.number().min(0).nullable(),
+    lastAcceptedAt: z.iso.datetime().nullable(),
+    lastMaterialEventAt: z.iso.datetime().nullable(),
+    pickCount: z.number().int().min(0),
+    unresolvedTeams: z.number().int().min(0),
+    unresolvedPlayers: z.number().int().min(0),
+    manualBackupActive: z.literal(false),
+    pendingReconciliation: z.literal(0),
+    standbySources: z.literal(0),
+    verification: z.enum(["pending", "verified", "mismatched"]),
+    lastIssueCode: yahooDraftIssueCodeSchema.nullable(),
+    currentAuction: z.null(),
+    applicationMode: z.enum(["shadow", "append"]),
+    releaseState: z.enum(["shadow-only", "append-beta"]),
+    pollIntervalSeconds: z.number().int().min(15).max(900),
+  })
+  .strict()
+  .superRefine((value, context) => {
+    if ((value.applicationMode === "append") !== (value.releaseState === "append-beta")) {
+      context.addIssue({
+        code: "custom",
+        path: ["releaseState"],
+        message: "Yahoo draft application and release states must agree",
+      });
+    }
+  });
+export type YahooDraftFeedStatus = z.infer<typeof yahooDraftFeedStatusSchema>;
+
+export const draftProviderFeedStatusSchema = z.discriminatedUnion("provider", [
+  espnLiveDraftFeedStatusSchema,
+  yahooDraftFeedStatusSchema,
+]);
+export type DraftProviderFeedStatus = z.infer<typeof draftProviderFeedStatusSchema>;
+
 /**
  * The bridge-authenticated live pulse is intentionally smaller than a draft-session snapshot.
  * These bounds keep a latency-sensitive read-only client useful during a fast auction without turning
@@ -1465,13 +1531,28 @@ export type DraftManualAction = z.infer<typeof draftManualActionSchema>;
 export const draftSessionCreateRequestSchema = z
   .object({
     leagueSeasonId: draftUuidSchema,
+    /** Explicit opt-in; omitted sessions remain the existing fully manual room. */
+    providerAssist: z.literal("yahoo").optional(),
+    /** Commissioner attestation that keeps this beta inside its validated standard-draft scope. */
+    yahooScopeConfirmation: z.literal("no-keepers-or-traded-picks").optional(),
     mode: z.enum(["snake", "auction"]).optional(),
     teamOrder: z.array(z.string().trim().min(1).max(200)).min(2).optional(),
     thirdRoundReversal: z.boolean().optional(),
     budgetPerTeam: draftPositiveIntegerSchema.optional(),
     minimumBid: draftPositiveIntegerSchema.optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((value, context) => {
+    const assisted = value.providerAssist === "yahoo";
+    const confirmed = value.yahooScopeConfirmation === "no-keepers-or-traded-picks";
+    if (assisted !== confirmed) {
+      context.addIssue({
+        code: "custom",
+        path: assisted ? ["yahooScopeConfirmation"] : ["providerAssist"],
+        message: "Yahoo assistance requires the standard-draft scope confirmation",
+      });
+    }
+  });
 export type DraftSessionCreateRequest = z.infer<typeof draftSessionCreateRequestSchema>;
 
 export const draftEventAppendRequestSchema = z
@@ -1689,11 +1770,11 @@ const draftStateSchema = z
   })
   .strict();
 
-export const draftTransportSchema = z.enum(["manual", "espn-live"]);
+export const draftTransportSchema = z.enum(["manual", "espn-live", "yahoo-assisted"]);
 export type DraftTransport = z.infer<typeof draftTransportSchema>;
 
 /** Provenance travels with every event so provider facts stay distinguishable from manual ones. */
-export const draftEventSourceSchema = z.enum(["manual", "espn"]);
+export const draftEventSourceSchema = z.enum(["manual", "espn", "yahoo"]);
 export type DraftEventSource = z.infer<typeof draftEventSourceSchema>;
 
 export const draftSessionSnapshotSchema = z
@@ -1720,16 +1801,38 @@ export const draftSessionSnapshotSchema = z
         })
         .strict(),
     ),
-    /** Null for a manual room. Present whenever an ESPN feed is attached, healthy or not. */
-    providerFeed: espnLiveDraftFeedStatusSchema.nullable(),
+    /** Null for a manual room. Present whenever a provider feed is attached, healthy or not. */
+    providerFeed: draftProviderFeedStatusSchema.nullable(),
     createdAt: z.iso.datetime(),
     updatedAt: z.iso.datetime(),
   })
   .strict()
-  .refine(
-    (session) => session.transport !== "manual" || session.providerFeed === null,
-    "a manual draft session cannot carry a provider feed",
-  );
+  .superRefine((session, context) => {
+    if (session.transport === "manual") {
+      if (session.providerFeed !== null) {
+        context.addIssue({
+          code: "custom",
+          path: ["providerFeed"],
+          message: "a manual draft session cannot carry a provider feed",
+        });
+      }
+      return;
+    }
+    if (session.transport === "yahoo-assisted" && session.providerFeed?.provider !== "yahoo") {
+      context.addIssue({
+        code: "custom",
+        path: ["providerFeed"],
+        message: "a Yahoo-assisted draft session requires a Yahoo provider feed",
+      });
+    }
+    if (session.transport === "espn-live" && session.providerFeed?.provider === "yahoo") {
+      context.addIssue({
+        code: "custom",
+        path: ["providerFeed"],
+        message: "an ESPN-live draft session cannot carry a Yahoo provider feed",
+      });
+    }
+  });
 export type DraftSessionSnapshot = z.infer<typeof draftSessionSnapshotSchema>;
 
 const draftMarketSourceSchema = z
@@ -3783,6 +3886,7 @@ export const mobileCapabilitySchema = z.enum([
   "league-removal-v1",
   "weekly-reckoning",
   "yahoo-automated-sync",
+  "yahoo-assisted-draft-v1",
   "yahoo-native-connect-v1",
 ]);
 export type MobileCapability = z.infer<typeof mobileCapabilitySchema>;

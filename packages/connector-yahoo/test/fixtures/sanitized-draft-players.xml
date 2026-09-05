@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<fantasy_content refresh_rate="60" xmlns="http://fantasysports.yahooapis.com/fantasy/v2/base.rng">
+  <league>
+    <league_key>449.l.12345</league_key>
+    <league_id>12345</league_id>
+    <name>Sanitized Auction League</name>
+    <draft_status>drafting</draft_status>
+    <players count="3">
+      <player>
+        <player_key>449.p.9001</player_key>
+        <player_id>9001</player_id>
+        <name><full>Example Quarterback</full></name>
+        <editorial_team_abbr>Buf</editorial_team_abbr>
+        <display_position>QB</display_position>
+        <primary_position>QB</primary_position>
+        <eligible_positions><position>QB</position></eligible_positions>
+      </player>
+      <player>
+        <player_key>449.p.9002</player_key>
+        <player_id>9002</player_id>
+        <name><full>Example Receiver</full></name>
+        <editorial_team_abbr>Sea</editorial_team_abbr>
+        <display_position>WR</display_position>
+        <primary_position>WR</primary_position>
+        <eligible_positions>
+          <position>WR</position>
+          <position>W/R/T</position>
+        </eligible_positions>
+      </player>
+      <player>
+        <player_key>449.p.9003</player_key>
+        <player_id>9003</player_id>
+        <name><full>Example Running Back</full></name>
+        <editorial_team_abbr>Det</editorial_team_abbr>
+        <display_position>RB</display_position>
+        <primary_position>RB</primary_position>
+        <eligible_positions>
+          <position>RB</position>
+          <position>W/R/T</position>
+        </eligible_positions>
+      </player>
+    </players>
+  </league>
+</fantasy_content>

@@ -5,7 +5,8 @@ import { DraftSessionWorkspace } from "../../components/draft-session-workspace"
 
 export const metadata: Metadata = {
   title: "Draft Studio",
-  description: "Persistent manual auction and snake draft rooms for synchronized leagues.",
+  description:
+    "Shared manual auction and snake draft rooms, with optional read-only Yahoo-assisted checks.",
 };
 
 export default function DraftPage() {

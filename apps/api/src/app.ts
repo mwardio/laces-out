@@ -76,6 +76,7 @@ import {
   type DraftAnalysisPort,
   type DraftManualBackupPort,
   type DraftMarketPort,
+  type DraftProviderRefreshPort,
   type DraftSessionPort,
   registerDraftRoutes,
 } from "./draft-routes.js";
@@ -325,6 +326,7 @@ export interface BuildAppOptions {
   readonly draftSessions?: DraftSessionPort;
   readonly draftMarket?: DraftMarketPort;
   readonly draftAnalysis?: DraftAnalysisPort;
+  readonly draftProviderRefresh?: DraftProviderRefreshPort;
   readonly draftManualBackup?: DraftManualBackupPort;
   readonly espnBridge?: EspnBridgePort;
   readonly espnRefresh?: EspnRefreshPort;
@@ -661,6 +663,9 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     options.yahooAutomatedSyncAvailable === true
   ) {
     mobileCapabilities.push("yahoo-automated-sync");
+  }
+  if (options.draftProviderRefresh && options.draftSessions) {
+    mobileCapabilities.push("yahoo-assisted-draft-v1");
   }
   if (environment.ESPN_SERVER_SESSION_SYNC_ENABLED && options.espnSessionConnections) {
     mobileCapabilities.push("espn-native-session-grant-v1");
@@ -1027,6 +1032,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     ...(options.draftSessions ? { draftSessions: options.draftSessions } : {}),
     ...(options.draftMarket ? { draftMarket: options.draftMarket } : {}),
     ...(options.draftAnalysis ? { draftAnalysis: options.draftAnalysis } : {}),
+    ...(options.draftProviderRefresh ? { draftProviderRefresh: options.draftProviderRefresh } : {}),
     ...(options.draftManualBackup ? { draftManualBackup: options.draftManualBackup } : {}),
     draftStream,
   });

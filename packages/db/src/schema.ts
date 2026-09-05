@@ -32,12 +32,38 @@ export type ImportRunState = "queued" | "processing" | "succeeded" | "failed" | 
 export type RefreshRequestState = "queued" | "processing" | "succeeded" | "failed" | "cancelled";
 export type RefreshRequestKind =
   "player_catalog" | "rankings" | "projections" | "injuries" | "league" | "all";
-export type DraftEventSource = "manual" | "espn";
+export type DraftEventSource = "manual" | "espn" | "yahoo";
 export type DraftProviderFeedState =
   "waiting" | "live" | "paused" | "stale" | "complete" | "degraded";
 export type DraftProviderFeedVerification = "pending" | "verified" | "mismatched";
 export type DraftProviderObservationResult =
   "accepted" | "idempotent" | "standby" | "held" | "rejected";
+export type YahooDraftPollMode = "shadow" | "append";
+export type YahooDraftPollState =
+  "waiting" | "drafting" | "complete" | "delayed" | "attention" | "disabled";
+export type YahooDraftPollVerification = "pending" | "verified" | "mismatched";
+export type YahooDraftPollIssueCode =
+  | "INCOMPLETE_SNAPSHOT"
+  | "UNRESOLVED_TEAM"
+  | "UNRESOLVED_PLAYER"
+  | "PICK_SEQUENCE_GAP"
+  | "DRAFT_TYPE_MISMATCH"
+  | "TEAM_COUNT_MISMATCH"
+  | "KEEPER_SCOPE_UNVALIDATED"
+  | "SNAKE_COST_PRESENT"
+  | "AUCTION_COST_MISSING"
+  | "AUCTION_COST_INVALID"
+  | "HISTORY_DIVERGED"
+  | "HISTORY_TRUNCATED"
+  | "REDUCER_INVARIANT"
+  | "PROVIDER_UNAVAILABLE"
+  | "POLL_FAILED"
+  | "RELEASE_SHADOW_ONLY"
+  | "CONCURRENT_LEDGER_CHANGE"
+  | "COMPLETED_COUNT_MISMATCH"
+  | "PROVIDER_STATUS_UNSUPPORTED";
+export type YahooDraftPollObservationResult =
+  "appended" | "confirmed" | "idempotent" | "shadow" | "held" | "failed";
 export type AiProviderName = "openai" | "anthropic" | "gemini" | "deepseek" | "grok" | "openrouter";
 export type AiCredentialStatus = "active" | "invalid" | "revoked";
 export type StandingStreakType = "win" | "loss" | "tie" | "none";
@@ -313,8 +339,8 @@ export const providerConnections = pgTable(
     lastErrorDetail: text("last_error_detail"),
     // Connection-scoped circuit state, named to mirror `data_sources`. `health` records what a user
     // must do about a connection; these record whether the worker should stop calling it for a
-    // while. Nothing outside league sync reads them, so an open circuit is structurally incapable
-    // of affecting another connection or any unrelated analysis.
+    // while. League sync and Yahoo draft reads share this connection-scoped signal, so an open
+    // circuit is structurally incapable of affecting another connection or unrelated analysis.
     consecutiveFailures: integer("consecutive_failures").notNull().default(0),
     circuitOpenUntil: timestamp("circuit_open_until", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
@@ -2971,7 +2997,145 @@ export const draftEvents = pgTable(
     primaryKey({ columns: [table.draftId, table.sequence] }),
     uniqueIndex("draft_events_idempotency_unique").on(table.draftId, table.idempotencyKey),
     // Provenance is now load-bearing: a provider fact and a manual fact must stay distinguishable.
-    check("draft_events_source_check", sql`${table.source} in ('manual', 'espn')`),
+    check("draft_events_source_check", sql`${table.source} in ('manual', 'espn', 'yahoo')`),
+  ],
+);
+
+/**
+ * Server-side Yahoo draft polling state.
+ *
+ * This is deliberately separate from `draftProviderFeeds`: that table's leases and revisions
+ * describe an ESPN browser page. Yahoo is an official cumulative API read with a much slower
+ * cadence, can collect shadow evidence before a Laces Out room exists, and never stores OAuth
+ * material or raw XML here.
+ */
+export const yahooDraftPollFeeds = pgTable(
+  "yahoo_draft_poll_feeds",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    leagueSeasonId: uuid("league_season_id")
+      .notNull()
+      .references(() => leagueSeasons.id, { onDelete: "cascade" }),
+    draftId: uuid("draft_id").references(() => drafts.id, { onDelete: "cascade" }),
+    providerLeagueKey: text("provider_league_key").notNull(),
+    season: integer("season").notNull(),
+    format: text("format").$type<"snake" | "auction">().notNull(),
+    applicationMode: text("application_mode").$type<YahooDraftPollMode>().notNull(),
+    releaseArtifactChecksum: text("release_artifact_checksum").notNull(),
+    standardScopeConfirmed: boolean("standard_scope_confirmed").notNull().default(false),
+    state: text("state").$type<YahooDraftPollState>().notNull().default("waiting"),
+    pollGeneration: integer("poll_generation").notNull().default(0),
+    pollLeaseExpiresAt: timestamp("poll_lease_expires_at", { withTimezone: true }),
+    nextPollAt: timestamp("next_poll_at", { withTimezone: true }).notNull().defaultNow(),
+    lastChecksum: text("last_checksum"),
+    lastProviderStatus: text("last_provider_status"),
+    lastDeclaredCount: integer("last_declared_count"),
+    lastObservedCount: integer("last_observed_count").notNull().default(0),
+    lastCheckedAt: timestamp("last_checked_at", { withTimezone: true }),
+    lastSuccessfulAt: timestamp("last_successful_at", { withTimezone: true }),
+    lastChangedAt: timestamp("last_changed_at", { withTimezone: true }),
+    lastMaterialEventAt: timestamp("last_material_event_at", { withTimezone: true }),
+    consecutiveFailures: integer("consecutive_failures").notNull().default(0),
+    unresolvedTeams: integer("unresolved_teams").notNull().default(0),
+    unresolvedPlayers: integer("unresolved_players").notNull().default(0),
+    verification: text("verification")
+      .$type<YahooDraftPollVerification>()
+      .notNull()
+      .default("pending"),
+    lastIssueCode: text("last_issue_code").$type<YahooDraftPollIssueCode>(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("yahoo_draft_poll_feeds_season_unique").on(table.leagueSeasonId),
+    uniqueIndex("yahoo_draft_poll_feeds_draft_unique").on(table.draftId),
+    index("yahoo_draft_poll_feeds_due_idx").on(table.state, table.nextPollAt),
+    check(
+      "yahoo_draft_poll_feeds_key_check",
+      sql`${table.providerLeagueKey} ~ '^(?:[a-z][a-z0-9-]{0,15}|[0-9]{1,10})\\.l\\.[0-9]{1,20}$'`,
+    ),
+    check("yahoo_draft_poll_feeds_season_check", sql`${table.season} between 2019 and 2100`),
+    check("yahoo_draft_poll_feeds_format_check", sql`${table.format} in ('snake', 'auction')`),
+    check(
+      "yahoo_draft_poll_feeds_mode_check",
+      sql`${table.applicationMode} in ('shadow', 'append')`,
+    ),
+    check(
+      "yahoo_draft_poll_feeds_state_check",
+      sql`${table.state} in ('waiting', 'drafting', 'complete', 'delayed', 'attention', 'disabled')`,
+    ),
+    check(
+      "yahoo_draft_poll_feeds_verification_check",
+      sql`${table.verification} in ('pending', 'verified', 'mismatched')`,
+    ),
+    check(
+      "yahoo_draft_poll_feeds_counts_check",
+      sql`${table.pollGeneration} >= 0 and ${table.lastObservedCount} >= 0 and ${table.consecutiveFailures} >= 0 and ${table.unresolvedTeams} >= 0 and ${table.unresolvedPlayers} >= 0 and (${table.lastDeclaredCount} is null or ${table.lastDeclaredCount} >= 0)`,
+    ),
+    check(
+      "yahoo_draft_poll_feeds_checksum_check",
+      sql`${table.releaseArtifactChecksum} ~ '^[a-f0-9]{64}$' and (${table.lastChecksum} is null or ${table.lastChecksum} ~ '^[a-f0-9]{64}$')`,
+    ),
+    check(
+      "yahoo_draft_poll_feeds_issue_check",
+      sql`${table.lastIssueCode} is null or ${table.lastIssueCode} in ('INCOMPLETE_SNAPSHOT', 'UNRESOLVED_TEAM', 'UNRESOLVED_PLAYER', 'PICK_SEQUENCE_GAP', 'DRAFT_TYPE_MISMATCH', 'TEAM_COUNT_MISMATCH', 'KEEPER_SCOPE_UNVALIDATED', 'SNAKE_COST_PRESENT', 'AUCTION_COST_MISSING', 'AUCTION_COST_INVALID', 'HISTORY_DIVERGED', 'HISTORY_TRUNCATED', 'REDUCER_INVARIANT', 'PROVIDER_UNAVAILABLE', 'POLL_FAILED', 'RELEASE_SHADOW_ONLY', 'CONCURRENT_LEDGER_CHANGE', 'COMPLETED_COUNT_MISMATCH', 'PROVIDER_STATUS_UNSUPPORTED')`,
+    ),
+    check(
+      "yahoo_draft_poll_feeds_append_room_check",
+      sql`${table.applicationMode} <> 'append' or ${table.draftId} is not null`,
+    ),
+  ],
+);
+
+/** Immutable, sanitized evidence from changed Yahoo cumulative draft-result reads. */
+export const yahooDraftPollObservations = pgTable(
+  "yahoo_draft_poll_observations",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    feedId: uuid("feed_id")
+      .notNull()
+      .references(() => yahooDraftPollFeeds.id, { onDelete: "cascade" }),
+    connectionId: uuid("connection_id").references(() => providerConnections.id, {
+      onDelete: "set null",
+    }),
+    pollGeneration: integer("poll_generation").notNull(),
+    checkedAt: timestamp("checked_at", { withTimezone: true }).notNull(),
+    providerStatus: text("provider_status").notNull(),
+    declaredCount: integer("declared_count"),
+    observedCount: integer("observed_count").notNull(),
+    checksum: text("checksum").notNull(),
+    normalizedPayload: jsonb("normalized_payload").$type<Record<string, unknown>>().notNull(),
+    result: text("result").$type<YahooDraftPollObservationResult>().notNull(),
+    issueCode: text("issue_code").$type<YahooDraftPollIssueCode>(),
+    appliedEvents: integer("applied_events").notNull().default(0),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("yahoo_draft_poll_observations_generation_unique").on(
+      table.feedId,
+      table.pollGeneration,
+    ),
+    index("yahoo_draft_poll_observations_feed_idx").on(table.feedId, table.checkedAt),
+    check(
+      "yahoo_draft_poll_observations_result_check",
+      sql`${table.result} in ('appended', 'confirmed', 'idempotent', 'shadow', 'held', 'failed')`,
+    ),
+    check(
+      "yahoo_draft_poll_observations_counts_check",
+      sql`${table.pollGeneration} > 0 and ${table.observedCount} >= 0 and ${table.appliedEvents} >= 0 and (${table.declaredCount} is null or ${table.declaredCount} >= 0)`,
+    ),
+    check(
+      "yahoo_draft_poll_observations_checksum_check",
+      sql`${table.checksum} ~ '^[a-f0-9]{64}$'`,
+    ),
+    check(
+      "yahoo_draft_poll_observations_shape_check",
+      sql`jsonb_typeof(${table.normalizedPayload}) = 'object'`,
+    ),
+    check(
+      "yahoo_draft_poll_observations_issue_check",
+      sql`${table.issueCode} is null or ${table.issueCode} in ('INCOMPLETE_SNAPSHOT', 'UNRESOLVED_TEAM', 'UNRESOLVED_PLAYER', 'PICK_SEQUENCE_GAP', 'DRAFT_TYPE_MISMATCH', 'TEAM_COUNT_MISMATCH', 'KEEPER_SCOPE_UNVALIDATED', 'SNAKE_COST_PRESENT', 'AUCTION_COST_MISSING', 'AUCTION_COST_INVALID', 'HISTORY_DIVERGED', 'HISTORY_TRUNCATED', 'REDUCER_INVARIANT', 'PROVIDER_UNAVAILABLE', 'POLL_FAILED', 'RELEASE_SHADOW_ONLY', 'CONCURRENT_LEDGER_CHANGE', 'COMPLETED_COUNT_MISMATCH', 'PROVIDER_STATUS_UNSUPPORTED')`,
+    ),
   ],
 );
 

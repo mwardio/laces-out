@@ -48,6 +48,10 @@ export interface DraftAnalysisPort {
   getAnalysis(userId: string, draftId: string): Promise<unknown>;
 }
 
+export interface DraftProviderRefreshPort {
+  refresh(userId: string, draftId: string): Promise<unknown>;
+}
+
 /**
  * Manual backup control, supplied by the ESPN live draft service.
  *
@@ -66,6 +70,7 @@ export interface DraftRouteOptions {
   readonly draftSessions?: DraftSessionPort;
   readonly draftMarket?: DraftMarketPort;
   readonly draftAnalysis?: DraftAnalysisPort;
+  readonly draftProviderRefresh?: DraftProviderRefreshPort;
   readonly draftManualBackup?: DraftManualBackupPort;
   readonly draftStream?: DraftStreamHub;
 }
@@ -237,6 +242,20 @@ export function registerDraftRoutes(app: FastifyInstance, options: DraftRouteOpt
     const { draftId } = draftPathSchema.parse(request.params);
     try {
       return validatedSession(await options.draftSessions.getSession(user.id, draftId));
+    } catch (error) {
+      return sendDraftError(error, request, reply) ?? rethrowUnknown(error);
+    }
+  });
+
+  app.post("/v1/drafts/:draftId/provider-refresh", async (request, reply) => {
+    const user = authenticatedUser(request, reply);
+    if (!user) return reply;
+    if (!options.draftSessions || !options.draftProviderRefresh) {
+      return reply.code(503).send(unavailable(request.id));
+    }
+    const { draftId } = draftPathSchema.parse(request.params);
+    try {
+      return validatedSession(await options.draftProviderRefresh.refresh(user.id, draftId));
     } catch (error) {
       return sendDraftError(error, request, reply) ?? rethrowUnknown(error);
     }

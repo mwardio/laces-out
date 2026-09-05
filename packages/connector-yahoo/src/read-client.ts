@@ -3,7 +3,13 @@ import { createHash } from "node:crypto";
 import type { LeagueSyncBundle } from "@laces-out/connectors";
 import { redactText } from "@laces-out/security";
 
-import { MAX_YAHOO_XML_BYTES, parseYahooLeagueXml, parseYahooXml, YahooXmlError } from "./xml.js";
+import {
+  MAX_YAHOO_DRAFT_PLAYER_KEYS,
+  MAX_YAHOO_XML_BYTES,
+  parseYahooLeagueXml,
+  parseYahooXml,
+  YahooXmlError,
+} from "./xml.js";
 
 export const YAHOO_FANTASY_API_ORIGIN = "https://fantasysports.yahooapis.com" as const;
 export const YAHOO_FANTASY_API_PREFIX = "/fantasy/v2" as const;
@@ -12,6 +18,8 @@ const DEFAULT_TIMEOUT_MS = 10_000;
 const DEFAULT_MAX_CONCURRENT_REQUESTS = 4;
 const DEFAULT_COLLECTION_PAGE_SIZE = 25;
 const MAX_COLLECTION_PAGE_SIZE = 100;
+/** Caps provider-directed cooldowns so malformed or extreme headers cannot overflow schedulers. */
+export const MAX_YAHOO_RETRY_AFTER_MS = 15 * 60 * 1_000;
 
 export type YahooReadClientErrorCode =
   | "ABORTED"
@@ -258,6 +266,25 @@ function teamKey(value: string): string {
   return value;
 }
 
+function playerKey(value: string): string {
+  if (!/^(?:[a-z][a-z0-9-]{0,15}|[0-9]{1,10})\.p\.[0-9]{1,20}$/u.test(value)) {
+    throw new TypeError("Invalid Yahoo player key");
+  }
+  return value;
+}
+
+function gameScopeFromLeagueKey(value: string): string {
+  const separator = value.indexOf(".l.");
+  if (separator < 1) throw new TypeError("Invalid Yahoo league key");
+  return value.slice(0, separator);
+}
+
+function gameScopeFromPlayerKey(value: string): string {
+  const separator = value.indexOf(".p.");
+  if (separator < 1) throw new TypeError("Invalid Yahoo player key");
+  return value.slice(0, separator);
+}
+
 function encoded(value: string | number): string {
   return encodeURIComponent(String(value));
 }
@@ -325,11 +352,13 @@ function retryAfterMs(value: string | null, now: Date): number | null {
   const trimmed = value.trim();
   if (/^[0-9]+$/u.test(trimmed)) {
     const seconds = Number(trimmed);
-    const milliseconds = seconds * 1000;
-    return Number.isSafeInteger(milliseconds) ? milliseconds : null;
+    if (seconds >= MAX_YAHOO_RETRY_AFTER_MS / 1_000) return MAX_YAHOO_RETRY_AFTER_MS;
+    return Number.isSafeInteger(seconds) ? seconds * 1_000 : null;
   }
   const timestamp = Date.parse(trimmed);
-  return Number.isFinite(timestamp) ? Math.max(0, timestamp - now.getTime()) : null;
+  return Number.isFinite(timestamp)
+    ? Math.min(MAX_YAHOO_RETRY_AFTER_MS, Math.max(0, timestamp - now.getTime()))
+    : null;
 }
 
 async function discardBody(response: Response): Promise<void> {
@@ -637,6 +666,29 @@ export class YahooFantasyReadClient {
       ),
     ]);
     return this.#leagueResource(request, yahooLeagueKey, withParameters("players", parameters));
+  }
+
+  /** Resolve a small exact set of players without scanning Yahoo's paginated player pool. */
+  public getLeaguePlayersByKeys(
+    request: YahooReadRequest,
+    yahooLeagueKey: string,
+    yahooPlayerKeys: readonly string[],
+  ): Promise<YahooXmlArtifact> {
+    const validatedLeagueKey = leagueKey(yahooLeagueKey);
+    const validatedPlayerKeys = uniqueList(
+      yahooPlayerKeys,
+      "Yahoo player keys",
+      MAX_YAHOO_DRAFT_PLAYER_KEYS,
+    ).map(playerKey);
+    const gameScope = gameScopeFromLeagueKey(validatedLeagueKey);
+    if (validatedPlayerKeys.some((key) => gameScopeFromPlayerKey(key) !== gameScope)) {
+      throw new TypeError("Yahoo player keys must belong to the league's game");
+    }
+    return this.#leagueResource(
+      request,
+      validatedLeagueKey,
+      withParameters("players", [["player_keys", listValue(validatedPlayerKeys)]]),
+    );
   }
 
   public getLeagueDraftResults(

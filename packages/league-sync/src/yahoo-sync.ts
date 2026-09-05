@@ -1,4 +1,5 @@
 import {
+  MAX_YAHOO_RETRY_AFTER_MS,
   parseYahooLeaguePageXml,
   parseYahooLeagueSyncArtifacts,
   YahooFantasyReadClient,
@@ -37,6 +38,7 @@ import { YahooConnectionError } from "./yahoo-connection.js";
 const DEFAULT_PAGE_SIZE = 25;
 const MAX_DISCOVERY_PAGES = 40;
 const MAX_DISCOVERED_LEAGUES = 500;
+const DEFAULT_THROTTLE_RETRY_AFTER_MS = 60 * 1_000;
 
 /** Yahoo rounds these yardage categories to whole scoring units when fractional points are off. */
 const YAHOO_FRACTIONAL_YARDAGE_STAT_IDS = new Set(["4", "9", "12", "14"]);
@@ -100,10 +102,11 @@ export class YahooSyncError extends Error {
     | "PROVIDER_READ_FAILED"
     | "PERSISTENCE_FAILED";
   readonly statusCode: number;
-  /** Closed, sanitized retry metadata retained for worker scheduling/telemetry only. */
+  /** Closed, sanitized retry metadata used for scheduling, telemetry, and Retry-After headers. */
   readonly retryable: boolean;
   readonly retryAfterMs: number | null;
   readonly throttled: boolean;
+  readonly cooldown: boolean;
 
   constructor(
     code: YahooSyncError["code"],
@@ -112,6 +115,7 @@ export class YahooSyncError extends Error {
       readonly retryable?: boolean;
       readonly retryAfterMs?: number | null;
       readonly throttled?: boolean;
+      readonly cooldown?: boolean;
     } = {},
   ) {
     super(message);
@@ -120,6 +124,7 @@ export class YahooSyncError extends Error {
     this.retryable = options.retryable ?? false;
     this.retryAfterMs = options.retryAfterMs ?? null;
     this.throttled = options.throttled ?? false;
+    this.cooldown = options.cooldown ?? false;
     this.statusCode =
       code === "CONNECTION_NOT_FOUND"
         ? 404
@@ -129,13 +134,19 @@ export class YahooSyncError extends Error {
             ? 422
             : code === "LOCAL_DISCONNECT_FAILED"
               ? 500
-              : 502;
+              : code === "PROVIDER_READ_FAILED" && this.throttled
+                ? 429
+                : code === "PROVIDER_READ_FAILED" && this.cooldown
+                  ? 503
+                  : 502;
   }
 }
 
 interface OwnedConnection {
   readonly id: string;
   readonly health: ConnectionHealth;
+  readonly circuitOpenUntil: Date | null;
+  readonly lastErrorCode: string | null;
 }
 
 export interface YahooSyncRepository {
@@ -159,7 +170,13 @@ export interface YahooSyncRepository {
     connectionId: string,
     bundle: LeagueSyncBundle,
   ): Promise<YahooSyncReceipt>;
-  markFailure(userId: string, connectionId: string, errorCode: string, at: Date): Promise<void>;
+  markFailure(
+    userId: string,
+    connectionId: string,
+    errorCode: string,
+    at: Date,
+    options?: { readonly cooldownUntil: Date },
+  ): Promise<void>;
   markDiscoverySuccess(userId: string, connectionId: string, at: Date): Promise<void>;
 }
 
@@ -236,22 +253,57 @@ function failureCode(error: unknown): string {
   return "yahoo_sync_failed";
 }
 
+function boundedRetryAfterMs(value: number | null | undefined): number | null {
+  if (value === null || value === undefined || !Number.isFinite(value) || value < 0) return null;
+  return Math.ceil(Math.min(value, MAX_YAHOO_RETRY_AFTER_MS) / 1_000) * 1_000;
+}
+
 function clientFacingSyncError(error: unknown): YahooSyncError {
   if (error instanceof YahooSyncError) return error;
   if (error instanceof YahooReadClientError) {
+    const throttled = error.code === "RATE_LIMITED";
+    const parsedRetryAfterMs = boundedRetryAfterMs(error.retryAfterMs);
     return new YahooSyncError(
       "PROVIDER_READ_FAILED",
       "Yahoo did not return a valid, complete league response",
       {
         retryable: error.retryable,
-        retryAfterMs: error.retryAfterMs,
-        throttled: error.code === "RATE_LIMITED",
+        retryAfterMs:
+          throttled && (!parsedRetryAfterMs || parsedRetryAfterMs <= 0)
+            ? DEFAULT_THROTTLE_RETRY_AFTER_MS
+            : parsedRetryAfterMs,
+        throttled,
+        cooldown: throttled,
       },
     );
   }
   return new YahooSyncError(
     "PROVIDER_READ_FAILED",
     "Yahoo did not return a valid, complete league response",
+  );
+}
+
+function connectionCooldownError(
+  connection: OwnedConnection,
+  at: Date,
+): YahooSyncError | undefined {
+  if (connection.circuitOpenUntil === null) return undefined;
+  const remainingMs = connection.circuitOpenUntil.getTime() - at.getTime();
+  if (!Number.isFinite(remainingMs) || remainingMs <= 0) return undefined;
+  const throttled =
+    connection.lastErrorCode === "read_rate_limited" ||
+    connection.lastErrorCode === "YAHOO_DRAFT_RATE_LIMITED";
+  return new YahooSyncError(
+    "PROVIDER_READ_FAILED",
+    throttled
+      ? "Yahoo is temporarily limiting requests. Try again shortly."
+      : "Yahoo sync is temporarily cooling down. Try again shortly.",
+    {
+      retryable: true,
+      retryAfterMs: Math.ceil(Math.min(remainingMs, MAX_YAHOO_RETRY_AFTER_MS) / 1_000) * 1_000,
+      throttled,
+      cooldown: true,
+    },
   );
 }
 
@@ -269,7 +321,12 @@ export class DrizzleYahooSyncRepository implements YahooSyncRepository {
     connectionId: string,
   ): Promise<OwnedConnection | undefined> {
     const [connection] = await this.#database
-      .select({ id: providerConnections.id, health: providerConnections.health })
+      .select({
+        id: providerConnections.id,
+        health: providerConnections.health,
+        circuitOpenUntil: providerConnections.circuitOpenUntil,
+        lastErrorCode: providerConnections.lastErrorCode,
+      })
       .from(providerConnections)
       .where(
         and(
@@ -439,14 +496,36 @@ export class DrizzleYahooSyncRepository implements YahooSyncRepository {
     connectionId: string,
     errorCode: string,
     at: Date,
+    options: { readonly cooldownUntil: Date } | undefined = undefined,
   ): Promise<void> {
+    const cooldownUntilIso = options?.cooldownUntil.toISOString();
     await this.#database
       .update(providerConnections)
       .set({
-        health: sql<ConnectionHealth>`case when ${providerConnections.health} = 'reauthorize' then 'reauthorize' else 'degraded' end`,
+        health: options
+          ? sql<ConnectionHealth>`case
+              when ${providerConnections.health} in ('reauthorize', 'disabled')
+                then ${providerConnections.health}
+              else 'healthy'
+            end`
+          : sql<ConnectionHealth>`case
+              when ${providerConnections.health} in ('reauthorize', 'disabled')
+                then ${providerConnections.health}
+              else 'degraded'
+            end`,
         lastErrorCode: errorCode.slice(0, 120),
         lastErrorAt: at,
         updatedAt: at,
+        ...(cooldownUntilIso
+          ? {
+              circuitOpenUntil: sql<Date>`case
+                when ${providerConnections.circuitOpenUntil} is null
+                  or ${providerConnections.circuitOpenUntil} < ${cooldownUntilIso}::timestamptz
+                then ${cooldownUntilIso}::timestamptz
+                else ${providerConnections.circuitOpenUntil}
+              end`,
+            }
+          : {}),
       })
       .where(
         and(
@@ -1095,6 +1174,8 @@ export class YahooSyncService {
     if (!connection) {
       throw new YahooSyncError("CONNECTION_NOT_FOUND", "Yahoo connection was not found");
     }
+    const cooldownError = connectionCooldownError(connection, this.#now());
+    if (cooldownError) throw cooldownError;
     try {
       if (options.restoreRemoved) await this.#repository.clearLeagueExclusions(userId);
       const discovered = await this.#discover(userId, connectionId);
@@ -1126,8 +1207,18 @@ export class YahooSyncService {
         generatedAt: this.#now().toISOString(),
       };
     } catch (error) {
-      await this.#repository.markFailure(userId, connectionId, failureCode(error), this.#now());
-      throw clientFacingSyncError(error);
+      const syncError = clientFacingSyncError(error);
+      const failedAt = this.#now();
+      if (syncError.throttled) {
+        await this.#repository.markFailure(userId, connectionId, failureCode(error), failedAt, {
+          cooldownUntil: new Date(
+            failedAt.getTime() + (syncError.retryAfterMs ?? DEFAULT_THROTTLE_RETRY_AFTER_MS),
+          ),
+        });
+      } else {
+        await this.#repository.markFailure(userId, connectionId, failureCode(error), failedAt);
+      }
+      throw syncError;
     }
   }
 
@@ -1143,6 +1234,8 @@ export class YahooSyncService {
     if (!/^(?:[a-z][a-z0-9-]{0,15}|[0-9]{1,10})\.l\.[0-9]{1,20}$/u.test(leagueKey)) {
       throw new TypeError("Yahoo league key is invalid");
     }
+    const cooldownError = connectionCooldownError(connection, this.#now());
+    if (cooldownError) throw cooldownError;
     const exclusions = await this.#repository.listLeagueExclusions(userId);
     if (exclusions.some((league) => league.externalKey === leagueKey)) {
       throw new YahooSyncError(
@@ -1153,8 +1246,18 @@ export class YahooSyncService {
     try {
       return await this.#syncLeague(userId, connectionId, leagueKey);
     } catch (error) {
-      await this.#repository.markFailure(userId, connectionId, failureCode(error), this.#now());
-      throw clientFacingSyncError(error);
+      const syncError = clientFacingSyncError(error);
+      const failedAt = this.#now();
+      if (syncError.throttled) {
+        await this.#repository.markFailure(userId, connectionId, failureCode(error), failedAt, {
+          cooldownUntil: new Date(
+            failedAt.getTime() + (syncError.retryAfterMs ?? DEFAULT_THROTTLE_RETRY_AFTER_MS),
+          ),
+        });
+      } else {
+        await this.#repository.markFailure(userId, connectionId, failureCode(error), failedAt);
+      }
+      throw syncError;
     }
   }
 

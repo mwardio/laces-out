@@ -12,7 +12,7 @@ export const YAHOO_CAPABILITIES = defineProviderCapabilities({
     matchups: true,
     transactions: false,
     availablePlayers: false,
-    draft: "none",
+    draft: "polling-unverified",
   },
   write: {
     lineup: false,
@@ -23,7 +23,7 @@ export const YAHOO_CAPABILITIES = defineProviderCapabilities({
   caveats: [
     "Fantasy API application approval is required.",
     "Initial integration is read-only.",
-    "Transactions, available-player reads, and draft polling are not enabled in the application.",
-    "Draft polling latency and auction result fields require an approved-app contract test before enablement.",
+    "Transactions and available-player reads are not enabled in the application.",
+    "Draft results are official cumulative reads, not a push or websocket feed; product admission remains format-specific.",
   ],
 });

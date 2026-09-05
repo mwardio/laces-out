@@ -1,6 +1,7 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 
+import { MAX_YAHOO_RETRY_AFTER_MS } from "@laces-out/connector-yahoo";
 import type { RecommendationKind } from "@laces-out/jobs";
 
 import {
@@ -123,6 +124,7 @@ const leaguePathSchema = z
     leagueKey: z.string().regex(/^(?:[a-z][a-z0-9-]{0,15}|[0-9]{1,10})\.l\.[0-9]{1,20}$/u),
   })
   .strict();
+const MAX_PUBLIC_RETRY_AFTER_SECONDS = MAX_YAHOO_RETRY_AFTER_MS / 1_000;
 
 function authenticatedUser(request: FastifyRequest, reply: FastifyReply) {
   if (request.currentUser) return request.currentUser;
@@ -150,6 +152,22 @@ function sendYahooError(
   reply: FastifyReply,
 ): FastifyReply | undefined {
   if (!(error instanceof YahooSyncError)) return undefined;
+  if (
+    (error.throttled || error.cooldown) &&
+    error.retryAfterMs !== null &&
+    Number.isFinite(error.retryAfterMs) &&
+    error.retryAfterMs > 0
+  ) {
+    void reply.header(
+      "retry-after",
+      String(
+        Math.min(
+          MAX_PUBLIC_RETRY_AFTER_SECONDS,
+          Math.max(1, Math.ceil(error.retryAfterMs / 1_000)),
+        ),
+      ),
+    );
+  }
   return reply
     .code(error.statusCode)
     .type("application/problem+json")

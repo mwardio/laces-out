@@ -412,6 +412,30 @@ describe("API", () => {
     await app.close();
   });
 
+  it("advertises Yahoo draft assistance only when the session and refresh services are installed", async () => {
+    const absent = await buildApp({
+      environment: loadEnvironment({ NODE_ENV: "test" }),
+      logger: false,
+    });
+    const present = await buildApp({
+      environment: loadEnvironment({ NODE_ENV: "test" }),
+      logger: false,
+      draftSessions: {} as never,
+      draftProviderRefresh: { refresh: () => Promise.resolve({}) },
+    });
+
+    const absentHealth = healthResponseSchema.parse(
+      (await absent.inject({ method: "GET", url: "/health/live" })).json(),
+    );
+    const presentHealth = healthResponseSchema.parse(
+      (await present.inject({ method: "GET", url: "/health/live" })).json(),
+    );
+    expect(absentHealth.mobileCapabilities).not.toContain("yahoo-assisted-draft-v1");
+    expect(presentHealth.mobileCapabilities).toContain("yahoo-assisted-draft-v1");
+    await absent.close();
+    await present.close();
+  });
+
   it("publishes the native compatibility declaration on readiness", async () => {
     const app = await buildApp({
       environment: loadEnvironment({ NODE_ENV: "test" }),

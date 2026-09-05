@@ -67,7 +67,12 @@ function repository(overrides: Partial<YahooSyncRepository> = {}): YahooSyncRepo
     findOwnedConnection: (userId, connectionId) =>
       Promise.resolve(
         userId === USER_ID && connectionId === CONNECTION_ID
-          ? { id: CONNECTION_ID, health: "healthy" as const }
+          ? {
+              id: CONNECTION_ID,
+              health: "healthy" as const,
+              circuitOpenUntil: null,
+              lastErrorCode: null,
+            }
           : undefined,
       ),
     listConnectionStatus: () => Promise.resolve([]),
@@ -364,6 +369,108 @@ describe("YahooSyncService", () => {
     expect(getUserLeagues).not.toHaveBeenCalled();
   });
 
+  it("blocks discovery on the shared connection cooldown without extending the failure", async () => {
+    const getAccessToken = vi.fn(() => Promise.resolve("must-not-be-used"));
+    const getUserLeagues = vi.fn<YahooReadPort["getUserLeagues"]>();
+    const clearLeagueExclusions = vi.fn(() => Promise.resolve());
+    const markFailure = vi.fn(() => Promise.resolve());
+    const service = new YahooSyncService({
+      repository: repository({
+        findOwnedConnection: () =>
+          Promise.resolve({
+            id: CONNECTION_ID,
+            health: "degraded",
+            circuitOpenUntil: new Date(NOW.getTime() + 60 * 60 * 1_000),
+            lastErrorCode: "YAHOO_DRAFT_RATE_LIMITED",
+          }),
+        clearLeagueExclusions,
+        markFailure,
+      }),
+      tokens: tokens({ getAccessToken }),
+      client: readPort({ getUserLeagues }),
+      now: () => NOW,
+    });
+
+    await expect(
+      service.discoverAndSync(USER_ID, CONNECTION_ID, { restoreRemoved: true }),
+    ).rejects.toMatchObject({
+      code: "PROVIDER_READ_FAILED",
+      statusCode: 429,
+      retryable: true,
+      retryAfterMs: 15 * 60 * 1_000,
+      throttled: true,
+      message: "Yahoo is temporarily limiting requests. Try again shortly.",
+    });
+    expect(clearLeagueExclusions).not.toHaveBeenCalled();
+    expect(getAccessToken).not.toHaveBeenCalled();
+    expect(getUserLeagues).not.toHaveBeenCalled();
+    expect(markFailure).not.toHaveBeenCalled();
+  });
+
+  it("blocks a league sync on the shared connection cooldown before any provider read", async () => {
+    const getAccessToken = vi.fn(() => Promise.resolve("must-not-be-used"));
+    const getLeagueSettings = vi.fn<YahooReadPort["getLeagueSettings"]>();
+    const listLeagueExclusions = vi.fn(() => Promise.resolve([]));
+    const markFailure = vi.fn(() => Promise.resolve());
+    const service = new YahooSyncService({
+      repository: repository({
+        findOwnedConnection: () =>
+          Promise.resolve({
+            id: CONNECTION_ID,
+            health: "degraded",
+            circuitOpenUntil: new Date(NOW.getTime() + 45_001),
+            lastErrorCode: "read_rate_limited",
+          }),
+        listLeagueExclusions,
+        markFailure,
+      }),
+      tokens: tokens({ getAccessToken }),
+      client: readPort({ getLeagueSettings }),
+      now: () => NOW,
+    });
+
+    await expect(service.syncLeague(USER_ID, CONNECTION_ID, "449.l.12345")).rejects.toMatchObject({
+      code: "PROVIDER_READ_FAILED",
+      statusCode: 429,
+      retryable: true,
+      retryAfterMs: 46_000,
+      throttled: true,
+    });
+    expect(listLeagueExclusions).not.toHaveBeenCalled();
+    expect(getAccessToken).not.toHaveBeenCalled();
+    expect(getLeagueSettings).not.toHaveBeenCalled();
+    expect(markFailure).not.toHaveBeenCalled();
+  });
+
+  it("does not misreport a non-throttle connection circuit as Yahoo rate limiting", async () => {
+    const getAccessToken = vi.fn(() => Promise.resolve("must-not-be-used"));
+    const service = new YahooSyncService({
+      repository: repository({
+        findOwnedConnection: () =>
+          Promise.resolve({
+            id: CONNECTION_ID,
+            health: "degraded",
+            circuitOpenUntil: new Date(NOW.getTime() + 30_000),
+            lastErrorCode: "read_network",
+          }),
+      }),
+      tokens: tokens({ getAccessToken }),
+      client: readPort(),
+      now: () => NOW,
+    });
+
+    await expect(service.syncLeague(USER_ID, CONNECTION_ID, "449.l.12345")).rejects.toMatchObject({
+      code: "PROVIDER_READ_FAILED",
+      statusCode: 503,
+      retryable: true,
+      retryAfterMs: 30_000,
+      throttled: false,
+      cooldown: true,
+      message: "Yahoo sync is temporarily cooling down. Try again shortly.",
+    });
+    expect(getAccessToken).not.toHaveBeenCalled();
+  });
+
   it("records a bounded connection health error when provider discovery fails", async () => {
     const markFailure = vi.fn(() => Promise.resolve());
     const persistBundle = vi.fn<YahooSyncRepository["persistBundle"]>();
@@ -378,7 +485,7 @@ describe("YahooSyncService", () => {
               message: "rate limited",
               status: 429,
               retryable: true,
-              retryAfterMs: 7_000,
+              retryAfterMs: 60 * 60 * 1_000,
             }),
           ),
       }),
@@ -387,11 +494,14 @@ describe("YahooSyncService", () => {
 
     await expect(service.discoverAndSync(USER_ID, CONNECTION_ID)).rejects.toMatchObject({
       code: "PROVIDER_READ_FAILED",
+      statusCode: 429,
       retryable: true,
-      retryAfterMs: 7_000,
+      retryAfterMs: 15 * 60 * 1_000,
       throttled: true,
     });
-    expect(markFailure).toHaveBeenCalledWith(USER_ID, CONNECTION_ID, "read_rate_limited", NOW);
+    expect(markFailure).toHaveBeenCalledWith(USER_ID, CONNECTION_ID, "read_rate_limited", NOW, {
+      cooldownUntil: new Date(NOW.getTime() + 15 * 60 * 1_000),
+    });
     expect(persistBundle).not.toHaveBeenCalled();
   });
 

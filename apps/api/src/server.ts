@@ -70,6 +70,7 @@ import { DrizzleScheduleEdgeRepository, ScheduleEdgeService } from "./schedule-e
 import { DataQualityService, DrizzleDataQualityRepository } from "./data-quality.js";
 import { DrizzleStatsCenterRepository, StatsCenterService } from "./stats-center.js";
 import { YahooConnectionService } from "./yahoo-connection.js";
+import { DrizzleYahooDraftPollRepository, YahooDraftPollService } from "./yahoo-draft-service.js";
 import { DrizzleYahooSyncRepository, YahooSyncService } from "./yahoo-sync.js";
 
 const environment = loadEnvironment();
@@ -77,6 +78,19 @@ const database = createDatabase(environment.DATABASE_URL);
 const credentialKey = environment.CREDENTIAL_ENCRYPTION_KEY
   ? parseCredentialKey(environment.CREDENTIAL_ENCRYPTION_KEY)
   : undefined;
+const yahooConnection =
+  environment.NEXT_PUBLIC_YAHOO_ACCESS_STATUS === "available" &&
+  environment.YAHOO_CLIENT_ID &&
+  environment.YAHOO_CLIENT_SECRET &&
+  credentialKey
+    ? new YahooConnectionService({
+        database: database.db,
+        credentialKey,
+        clientId: environment.YAHOO_CLIENT_ID,
+        clientSecret: environment.YAHOO_CLIENT_SECRET,
+        redirectUri: environment.YAHOO_REDIRECT_URI,
+      })
+    : undefined;
 const authService = new AuthService(new DrizzleAuthRepository(database.db));
 const accountData = new DrizzleAccountDataRepository(database.db);
 const browserHandoffs = new BrowserHandoffService(
@@ -84,8 +98,18 @@ const browserHandoffs = new BrowserHandoffService(
   environment.API_URL,
 );
 const espnLiveDraftRepository = new DrizzleEspnLiveDraftRepository(database.db);
+const yahooDraftRepository = new DrizzleYahooDraftPollRepository(database.db);
 const draftSessions = new DraftSessionService(
-  new DrizzleDraftSessionRepository(database.db, espnLiveDraftRepository),
+  new DrizzleDraftSessionRepository(database.db, {
+    loadFeedStatus: async (draftId) =>
+      (await espnLiveDraftRepository.loadFeedStatus(draftId)) ??
+      yahooDraftRepository.loadFeedStatus(draftId),
+  }),
+  () => new Date(),
+  {
+    yahooDraftAssistEnabled:
+      environment.YAHOO_AUTOMATED_SYNC_ENABLED && yahooConnection !== undefined,
+  },
 );
 const draftMarket = new DraftMarketService(database.db);
 const draftAnalysis = new DraftAnalysisService(
@@ -262,25 +286,20 @@ const passwordReset = emailTransport
       webUrl: environment.WEB_URL,
     })
   : undefined;
-const yahooConnection =
-  environment.NEXT_PUBLIC_YAHOO_ACCESS_STATUS === "available" &&
-  environment.YAHOO_CLIENT_ID &&
-  environment.YAHOO_CLIENT_SECRET &&
-  credentialKey
-    ? new YahooConnectionService({
-        database: database.db,
-        credentialKey,
-        clientId: environment.YAHOO_CLIENT_ID,
-        clientSecret: environment.YAHOO_CLIENT_SECRET,
-        redirectUri: environment.YAHOO_REDIRECT_URI,
-      })
-    : undefined;
 const yahooSync = yahooConnection
   ? new YahooSyncService({
       repository: new DrizzleYahooSyncRepository(database.db),
       tokens: yahooConnection,
     })
   : undefined;
+const yahooDraftPoll =
+  environment.YAHOO_AUTOMATED_SYNC_ENABLED && yahooConnection
+    ? new YahooDraftPollService({
+        repository: yahooDraftRepository,
+        sessions: draftSessions,
+        tokens: yahooConnection,
+      })
+    : undefined;
 const jobs = new PgBoss({
   connectionString: environment.DATABASE_URL,
   application_name: "fantasy-api-jobs",
@@ -328,6 +347,7 @@ const app = await buildApp({
   draftSessions,
   draftMarket,
   draftAnalysis,
+  ...(yahooDraftPoll ? { draftProviderRefresh: yahooDraftPoll } : {}),
   // Same service, two doors: bridge-authenticated ingest and the cookie-authenticated freeze.
   draftManualBackup: espnLiveDraft,
   espnBridge,

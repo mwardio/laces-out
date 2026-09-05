@@ -65,6 +65,7 @@ describe("YahooFantasyReadClient resource paths", () => {
       start: 25,
       count: 10,
     });
+    await client.getLeaguePlayersByKeys(auth, leagueKey, ["449.p.9001", "449.p.9002"]);
     await client.getLeagueDraftResults(auth, leagueKey);
 
     expect(calls.map(({ url }) => url)).toEqual([
@@ -77,6 +78,7 @@ describe("YahooFantasyReadClient resource paths", () => {
       "https://fantasysports.yahooapis.com/fantasy/v2/league/449.l.12345/standings",
       "https://fantasysports.yahooapis.com/fantasy/v2/league/449.l.12345/transactions;types=add,trade;team_key=449.l.12345.t.1;count=10",
       "https://fantasysports.yahooapis.com/fantasy/v2/league/449.l.12345/players;status=FA;position=W%2FR%2FT;search=Example%20Player;sort=PTS;sort_type=week;sort_week=4;start=25;count=10",
+      "https://fantasysports.yahooapis.com/fantasy/v2/league/449.l.12345/players;player_keys=449.p.9001,449.p.9002",
       "https://fantasysports.yahooapis.com/fantasy/v2/league/449.l.12345/draftresults",
     ]);
     for (const call of calls) {
@@ -106,6 +108,23 @@ describe("YahooFantasyReadClient resource paths", () => {
     );
     expect(() => client.getUserLeagues(auth, { gameKeys: ["nfl/leagues"] })).toThrow(TypeError);
     expect(() => client.getUserLeagues(auth, { count: 101 })).toThrow(TypeError);
+    expect(() => client.getLeaguePlayersByKeys(auth, leagueKey, [])).toThrow(TypeError);
+    expect(() =>
+      client.getLeaguePlayersByKeys(auth, leagueKey, ["449.p.9001", "449.p.9001"]),
+    ).toThrow(TypeError);
+    expect(() =>
+      client.getLeaguePlayersByKeys(auth, leagueKey, ["449.p.9001", "450.p.9002"]),
+    ).toThrow(TypeError);
+    expect(() => client.getLeaguePlayersByKeys(auth, leagueKey, ["449.p.9001/ownership"])).toThrow(
+      TypeError,
+    );
+    expect(() =>
+      client.getLeaguePlayersByKeys(
+        auth,
+        leagueKey,
+        Array.from({ length: 26 }, (_, index) => `449.p.${index + 1}`),
+      ),
+    ).toThrow(TypeError);
     expect(() =>
       client.getLeagueTransactions(auth, leagueKey, {
         types: ["add;type=waiver" as "add"],
@@ -315,6 +334,22 @@ describe("YahooFantasyReadClient transport policy", () => {
       code: "UPSTREAM_ERROR",
       retryable: true,
       retryAfterMs: 11_000,
+    });
+
+    const extreme = new YahooFantasyReadClient({
+      now,
+      fetch: () =>
+        Promise.resolve(
+          new Response(null, {
+            status: 429,
+            headers: { "retry-after": String(Number.MAX_SAFE_INTEGER) },
+          }),
+        ),
+    });
+    await expect(extreme.getLeagueTeams(auth, leagueKey)).rejects.toMatchObject({
+      code: "RATE_LIMITED",
+      retryable: true,
+      retryAfterMs: 15 * 60 * 1_000,
     });
   });
 

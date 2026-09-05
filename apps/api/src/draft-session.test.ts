@@ -17,6 +17,10 @@ import {
   type StoredDraftEvent,
 } from "./draft-session.js";
 import type { DraftSessionError } from "./draft-session.js";
+import {
+  YAHOO_DRAFT_PREREGISTRATION_CHECKSUM,
+  yahooDraftApplicationMode,
+} from "./yahoo-draft-release.js";
 
 const ownerId = "00000000-0000-4000-8000-000000000001";
 const commissionerId = "00000000-0000-4000-8000-000000000002";
@@ -39,12 +43,16 @@ function leagueSource(
     readonly draftType?: string;
     readonly settings?: Readonly<Record<string, unknown>>;
     readonly archived?: boolean;
+    readonly provider?: LeagueDraftSource["provider"];
+    readonly externalKey?: string;
   } = {},
 ): LeagueDraftSource {
   return {
     leagueId,
     leagueSeasonId: seasonId,
-    provider: "manual",
+    externalKey: options.externalKey ?? "manual-league",
+    season: 2026,
+    provider: options.provider ?? "manual",
     draftType: options.draftType ?? "snake",
     teamCount: 2,
     settings: options.settings ?? {},
@@ -139,6 +147,7 @@ class MemoryDraftRepository implements DraftSessionRepository {
   ]);
   readonly drafts = new Map<string, StoredDraft>();
   readonly events = new Map<string, StoredDraftEvent[]>();
+  readonly createdInputs: NewStoredDraft[] = [];
 
   constructor(readonly source: LeagueDraftSource = leagueSource()) {}
 
@@ -162,6 +171,7 @@ class MemoryDraftRepository implements DraftSessionRepository {
       return Promise.resolve({ status: "forbidden" });
     }
     if (this.source.archived) return Promise.resolve({ status: "archived" });
+    this.createdInputs.push(input);
     const draft: StoredDraft = {
       id: input.id,
       leagueSeasonId: input.leagueSeasonId,
@@ -307,6 +317,149 @@ describe("DraftSessionService", () => {
         },
       }),
     ).rejects.toMatchObject({ code: "DRAFT_FORBIDDEN" } satisfies Partial<DraftSessionError>);
+  });
+
+  it("requires an enabled Yahoo league opt-in and persists a format-scoped feed intent", async () => {
+    const yahooSource = leagueSource({
+      provider: "yahoo",
+      externalKey: "449.l.12345",
+    });
+    const disabledRepository = new MemoryDraftRepository(yahooSource);
+    await expect(
+      new DraftSessionService(disabledRepository, () => clock).createSession(ownerId, {
+        ...snakeCreateInput(),
+        providerAssist: "yahoo",
+        yahooScopeConfirmation: "no-keepers-or-traded-picks",
+      }),
+    ).rejects.toMatchObject({
+      code: "DRAFT_CONFIG_INVALID",
+      message: "Yahoo-assisted draft checks are not enabled on this server.",
+    } satisfies Partial<DraftSessionError>);
+    expect(disabledRepository.createdInputs).toHaveLength(0);
+
+    const nonYahooRepository = new MemoryDraftRepository();
+    await expect(
+      new DraftSessionService(nonYahooRepository, () => clock, {
+        yahooDraftAssistEnabled: true,
+      }).createSession(ownerId, {
+        ...snakeCreateInput(),
+        providerAssist: "yahoo",
+        yahooScopeConfirmation: "no-keepers-or-traded-picks",
+      }),
+    ).rejects.toMatchObject({
+      code: "DRAFT_CONFIG_INVALID",
+      message: "Yahoo-assisted draft checks require a synchronized Yahoo league.",
+    } satisfies Partial<DraftSessionError>);
+    expect(nonYahooRepository.createdInputs).toHaveLength(0);
+
+    const repository = new MemoryDraftRepository(yahooSource);
+    const created = await new DraftSessionService(repository, () => clock, {
+      yahooDraftAssistEnabled: true,
+    }).createSession(ownerId, {
+      ...snakeCreateInput(),
+      providerAssist: "yahoo",
+      yahooScopeConfirmation: "no-keepers-or-traded-picks",
+    });
+
+    expect(created).toMatchObject({
+      transport: "yahoo-assisted",
+      // No provider status source is installed in this in-memory repository, so public liveness
+      // remains false even though the immutable room intent enables polling.
+      providerPolling: false,
+    });
+    expect(repository.createdInputs).toHaveLength(1);
+    expect(repository.createdInputs[0]).toMatchObject({
+      leagueSeasonId: seasonId,
+      settings: {
+        transport: "yahoo-assisted",
+        providerPolling: true,
+        source: {
+          yahooScopeConfirmation: "no-keepers-or-traded-picks",
+          yahooScopeConfirmedByUserId: ownerId,
+          yahooScopeConfirmedAt: clock.toISOString(),
+        },
+      },
+      yahooFeed: {
+        providerLeagueKey: "449.l.12345",
+        standardScopeConfirmed: true,
+        season: 2026,
+        format: "snake",
+        applicationMode: yahooDraftApplicationMode("snake"),
+        releaseArtifactChecksum: YAHOO_DRAFT_PREREGISTRATION_CHECKSUM,
+      },
+    });
+  });
+
+  it("keeps Yahoo assistance inside its registered snake and auction configuration scope", async () => {
+    const assistedInput = {
+      leagueSeasonId: seasonId,
+      providerAssist: "yahoo" as const,
+      yahooScopeConfirmation: "no-keepers-or-traded-picks" as const,
+    };
+    const reversalRepository = new MemoryDraftRepository(
+      leagueSource({
+        provider: "yahoo",
+        externalKey: "449.l.12345",
+        settings: { thirdRoundReversal: true },
+      }),
+    );
+    await expect(
+      new DraftSessionService(reversalRepository, () => clock, {
+        yahooDraftAssistEnabled: true,
+      }).createSession(ownerId, { ...assistedInput, teamOrder: ["alpha", "bravo"] }),
+    ).rejects.toMatchObject({
+      code: "DRAFT_CONFIG_INVALID",
+      message: "Yahoo-assisted checks do not yet support third-round reversal drafts.",
+    } satisfies Partial<DraftSessionError>);
+
+    const auctionSource = leagueSource({
+      provider: "yahoo",
+      externalKey: "449.l.12345",
+      draftType: "auction",
+      settings: { auctionBudget: 200 },
+    });
+    for (const conflicting of [
+      { budgetPerTeam: 250, minimumBid: 1 },
+      { budgetPerTeam: 200, minimumBid: 2 },
+    ]) {
+      const repository = new MemoryDraftRepository(auctionSource);
+      await expect(
+        new DraftSessionService(repository, () => clock, {
+          yahooDraftAssistEnabled: true,
+        }).createSession(ownerId, { ...assistedInput, mode: "auction", ...conflicting }),
+      ).rejects.toMatchObject({
+        code: "DRAFT_CONFIG_INVALID",
+      } satisfies Partial<DraftSessionError>);
+      expect(repository.createdInputs).toHaveLength(0);
+    }
+
+    const missingBudgetRepository = new MemoryDraftRepository(
+      leagueSource({ provider: "yahoo", externalKey: "449.l.12345", draftType: "auction" }),
+    );
+    await expect(
+      new DraftSessionService(missingBudgetRepository, () => clock, {
+        yahooDraftAssistEnabled: true,
+      }).createSession(ownerId, { ...assistedInput, mode: "auction", minimumBid: 1 }),
+    ).rejects.toMatchObject({
+      code: "DRAFT_CONFIG_INVALID",
+      message: "Yahoo-assisted auction checks require a synchronized Yahoo draft budget.",
+    } satisfies Partial<DraftSessionError>);
+
+    const matchingRepository = new MemoryDraftRepository(auctionSource);
+    const matching = await new DraftSessionService(matchingRepository, () => clock, {
+      yahooDraftAssistEnabled: true,
+    }).createSession(ownerId, {
+      ...assistedInput,
+      mode: "auction",
+      budgetPerTeam: 200,
+      minimumBid: 1,
+    });
+    expect(matching.config).toMatchObject({ mode: "AUCTION", minimumBid: 1 });
+    expect(matchingRepository.createdInputs[0]).toMatchObject({
+      budgetPerTeam: 200,
+      minimumBid: 1,
+      yahooFeed: { format: "auction" },
+    });
   });
 
   it("orders snake picks, blocks duplicates, and makes retries safe under optimistic concurrency", async () => {

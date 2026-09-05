@@ -7,6 +7,7 @@ export default defineConfig({
     "src/create-owner.ts",
     "src/reset-password.ts",
     "src/mint-draft-read.ts",
+    "scripts/yahoo-draft-audit.ts",
   ],
   format: ["esm"],
   platform: "node",

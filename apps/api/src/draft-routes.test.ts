@@ -77,6 +77,34 @@ const mutation: Omit<DraftMutationResponse, "session"> & {
   session: { ...snapshot, sequence: 1, persistedState: "live" },
 };
 
+const yahooSnapshot: StoredDraftSessionSnapshot = {
+  ...snapshot,
+  transport: "yahoo-assisted",
+  providerPolling: true,
+  providerFeed: {
+    provider: "yahoo",
+    state: "live",
+    providerLeagueId: "449.l.12345",
+    season: 2026,
+    fresh: true,
+    ageSeconds: 8,
+    lastAcceptedAt: NOW,
+    lastMaterialEventAt: null,
+    pickCount: 0,
+    unresolvedTeams: 0,
+    unresolvedPlayers: 0,
+    manualBackupActive: false,
+    pendingReconciliation: 0,
+    standbySources: 0,
+    verification: "pending",
+    lastIssueCode: null,
+    currentAuction: null,
+    applicationMode: "shadow",
+    releaseState: "shadow-only",
+    pollIntervalSeconds: 60,
+  },
+};
+
 function authenticatedService(): AuthService {
   const repository: AuthRepository = {
     findUserByEmail: () => Promise.resolve(undefined),
@@ -165,6 +193,101 @@ describe("draft session routes", () => {
     expect(createSession).toHaveBeenCalledWith(USER_ID, {
       leagueSeasonId: LEAGUE_SEASON_ID,
       teamOrder: [TEAM_A_ID, TEAM_B_ID],
+    });
+    await app.close();
+  });
+
+  it("authenticates and coalesces Yahoo refreshes behind the provider service", async () => {
+    const refresh = vi.fn(() => Promise.resolve(yahooSnapshot));
+    const app = await buildApp({
+      environment: loadEnvironment({ NODE_ENV: "test" }),
+      logger: false,
+      requireAuthentication: true,
+      authService: authenticatedService(),
+      draftSessions: draftPort({}),
+      draftProviderRefresh: { refresh },
+    });
+
+    const denied = await app.inject({
+      method: "POST",
+      url: `/v1/drafts/${DRAFT_ID}/provider-refresh`,
+    });
+    expect(denied.statusCode).toBe(401);
+    expect(refresh).not.toHaveBeenCalled();
+
+    const response = await app.inject({
+      method: "POST",
+      url: `/v1/drafts/${DRAFT_ID}/provider-refresh`,
+      headers: { cookie: COOKIE },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      id: DRAFT_ID,
+      accessRole: "member",
+      transport: "yahoo-assisted",
+      providerPolling: true,
+      providerFeed: {
+        provider: "yahoo",
+        applicationMode: "shadow",
+        releaseState: "shadow-only",
+      },
+    });
+    expect(refresh).toHaveBeenCalledOnce();
+    expect(refresh).toHaveBeenCalledWith(USER_ID, DRAFT_ID);
+    await app.close();
+  });
+
+  it("reports an unavailable refresh service without invoking the draft session port", async () => {
+    const getSession = vi.fn(() => Promise.resolve(yahooSnapshot));
+    const app = await buildApp({
+      environment: loadEnvironment({ NODE_ENV: "test" }),
+      logger: false,
+      requireAuthentication: true,
+      authService: authenticatedService(),
+      draftSessions: draftPort({ getSession }),
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: `/v1/drafts/${DRAFT_ID}/provider-refresh`,
+      headers: { cookie: COOKIE },
+    });
+    expect(response.statusCode).toBe(503);
+    expect(response.json()).toMatchObject({
+      type: "https://fantasy.local/problems/drafts-unavailable",
+      title: "Draft sessions are not configured",
+      status: 503,
+    });
+    expect(getSession).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it("preserves the bounded draft error contract from provider refresh authorization", async () => {
+    const refresh = vi.fn(() =>
+      Promise.reject(new DraftSessionError("DRAFT_NOT_FOUND", "Draft room was not found.")),
+    );
+    const app = await buildApp({
+      environment: loadEnvironment({ NODE_ENV: "test" }),
+      logger: false,
+      requireAuthentication: true,
+      authService: authenticatedService(),
+      draftSessions: draftPort({}),
+      draftProviderRefresh: { refresh },
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: `/v1/drafts/${DRAFT_ID}/provider-refresh`,
+      headers: { cookie: COOKIE },
+    });
+    expect(response.statusCode).toBe(404);
+    expect(response.headers["content-type"]).toContain("application/problem+json");
+    expect(response.json()).toMatchObject({
+      type: "https://fantasy.local/problems/draft-not-found",
+      title: "Draft request failed",
+      status: 404,
+      detail: "Draft room was not found.",
+      code: "DRAFT_NOT_FOUND",
     });
     await app.close();
   });

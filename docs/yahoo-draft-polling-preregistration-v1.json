@@ -1,0 +1,191 @@
+{
+  "schemaVersion": 1,
+  "protocol": "yahoo-draft-polling-v1",
+  "registeredAt": "2026-09-05T00:00:00.000Z",
+  "purpose": "Pre-register format-specific selection and confirmation gates before Yahoo-assisted draft observations can append events.",
+  "scope": {
+    "provider": "yahoo",
+    "transport": "official-fantasy-api-cumulative-draftresults",
+    "formatsEvaluatedIndependently": ["snake", "auction"],
+    "supportedDraftScope": "no-keepers-or-traded-picks",
+    "excludedUntilSeparatelyObserved": [
+      "keeper-picks",
+      "traded-pick-order",
+      "third-round-reversal"
+    ],
+    "runtimeScopeConfirmation": {
+      "requestValue": "no-keepers-or-traded-picks",
+      "requiredBeforePolling": true,
+      "meaning": "The user explicitly confirms that the Yahoo draft has no keepers and no traded picks.",
+      "notReleaseEvidence": true,
+      "providerContradictionBehavior": "hold-without-mutation"
+    }
+  },
+  "productClaims": {
+    "term": "Yahoo-assisted sync",
+    "neverClaim": "live",
+    "manualEntryAlwaysAvailable": true,
+    "providerWrites": false
+  },
+  "pollingPolicy": {
+    "coordination": "one durable database lease per draft across every viewer and process",
+    "activeDraftPollIntervalSeconds": 15,
+    "activeDraftCondition": "Yahoo explicitly reports drafting and reconciliation is not held",
+    "waitingPollIntervalSeconds": 60,
+    "waitingStates": ["predraft", "postdraft", "unknown", "held"],
+    "providerRefreshRateIsWaitingFloor": true,
+    "throttlePolicy": "honor Retry-After up to the bounded 900-second maximum when supplied, otherwise exponential backoff",
+    "retryBehavior": "never retry invisibly inside one poll",
+    "qualityClaim": "The 15-second active cadence is a cautious product experiment, not a provider-guaranteed publication interval or quota."
+  },
+  "evidencePhases": {
+    "selection": {
+      "allowedEvidence": [
+        "authorized historical Yahoo draftresults artifacts",
+        "malformed and adversarial fixtures",
+        "property-generated cumulative boards",
+        "passive shadow observations"
+      ],
+      "rule": "Any artifact inspected while changing the parser, reconciler, service, thresholds, or this protocol is selection evidence and can never confirm the resulting version."
+    },
+    "implementationFreeze": {
+      "requiredBeforeConfirmation": true,
+      "frozenInputs": [
+        "this preregistration artifact and checksum",
+        "Yahoo draftresults and exact-player parsers",
+        "production Yahoo reconciliation and persistence path",
+        "format-specific thresholds and expected draft configuration builder"
+      ],
+      "record": [
+        "git revision",
+        "preregistration SHA-256",
+        "format",
+        "holdout league fingerprint selected before reveal"
+      ],
+      "failureBehavior": "A parser, reconciler, configuration, or threshold change starts a new protocol version and requires a new unrevealed holdout."
+    },
+    "confirmation": {
+      "holdoutRule": "Use an authorized completed real-league artifact that did not influence implementation and is first evaluated only after the implementation freeze.",
+      "independentTruthRequired": true,
+      "independentTruthSource": "A final Yahoo Draft Results board or Yahoo export retained and transcribed without using shadow telemetry and before the protected confirmation response is manually captured or revealed to the evaluator.",
+      "manifestSchema": "yahooDraftFinalBoardManifestSchema",
+      "manifestTemplate": "docs/yahoo-draft-final-board-manifest-v1.example.json",
+      "executableWorkflow": "docs/yahoo-draft-confirmation-workflow.md",
+      "rawArtifactPolicy": "Capture one official completed draftresults response verbatim in protected operator storage after the independent manifest is frozen; hash it immediately and never retain it in the production database or repository.",
+      "manifestMinimumFields": [
+        "format",
+        "season",
+        "pseudonymous league fingerprint",
+        "ordered overall picks",
+        "team identity per pick",
+        "player identity per pick",
+        "winning cost per pick for auction",
+        "capture provenance and timestamp",
+        "manifest SHA-256"
+      ],
+      "apiArtifactComparedToItselfIsNotConfirmation": true,
+      "reuseOfSelectionArtifactForbidden": true,
+      "confirmationRunner": {
+        "command": "npm run yahoo:draft-confirmation -w @laces-out/api",
+        "networkAccess": false,
+        "databaseAccess": false,
+        "productionMutation": false,
+        "releaseMutation": false,
+        "successMeaning": "eligible-for-manual-release-review"
+      }
+    }
+  },
+  "selectionGate": {
+    "parserValidCorpusPassRate": 1,
+    "parserMalformedCorpusRejectRate": 1,
+    "completedArtifactIdentityResolutionRate": 1,
+    "productionReconcilerReplay": {
+      "implementation": "reconcileYahooDraftSnapshot at the frozen production revision",
+      "configuration": "the exact production draft configuration and exact provider identity maps for the candidate league",
+      "prefixes": "every cumulative prefix from zero through the completed board",
+      "requiredPassRate": 1,
+      "requirements": [
+        "each prefix appends exactly its unseen suffix",
+        "replaying a prefix is idempotent",
+        "the completed prefix produces the independently retained final board",
+        "no prefix rewrites, deletes, or reorders accepted history"
+      ]
+    },
+    "propertyCasesMinimum": 1000,
+    "propertyMatrix": [
+      "snake team counts and roster lengths",
+      "auction team counts, roster lengths, budgets, minimum bids, and prices",
+      "all cumulative prefix lengths",
+      "duplicate replay and concurrent-ledger fences"
+    ],
+    "forbiddenMutationCases": [
+      "sequence-gap",
+      "truncation",
+      "reorder-or-replacement",
+      "unknown-team",
+      "unknown-player",
+      "concurrent-ledger-change",
+      "draft-mode-mismatch",
+      "team-count-mismatch",
+      "completed-count-mismatch",
+      "keeper-or-unconfirmed-standard-scope",
+      "reducer-invariant",
+      "auction-price-missing-or-invalid"
+    ],
+    "forbiddenMutationPassRate": 1,
+    "fakeLeagueRequirement": "none"
+  },
+  "confirmationGate": {
+    "authorizedCompletedPostFreezeHoldoutsMinimumPerFormat": 1,
+    "independentlyRetainedProviderBoardAgreementRate": 1,
+    "everyPrefixReplayPassRate": 1,
+    "requiredIncrementalShadowDrafts": 0,
+    "rationale": "Creating artificial leagues is not required. A protected completed real-league holdout plus independent final-board truth, every-prefix replay, adversarial fixtures, and at least 1,000 property cases can establish mutation safety. Incremental latency remains a quality metric because late or partial cumulative reads leave the ledger unchanged.",
+    "incrementalQualityMetrics": [
+      "first-seen-delay-seconds",
+      "successful-check-rate",
+      "rate-limit-count",
+      "retry-after-seconds",
+      "monotonic-prefix-rate"
+    ]
+  },
+  "formatSpecificEvidence": {
+    "snake": {
+      "requiresExactOverallPick": true,
+      "requiresExactTeamOrder": true,
+      "requiresAuctionCost": false,
+      "cannotBorrowAuctionEvidence": true
+    },
+    "auction": {
+      "requiresExactOverallPick": true,
+      "requiresExactTeamAndPlayer": true,
+      "requiresAuctionCost": true,
+      "requiresExactConfiguredBudgetAndMinimumBid": true,
+      "cannotBorrowSnakeEvidence": true
+    }
+  },
+  "currentEvidence": {
+    "observedAt": "2026-09-05",
+    "snake": {
+      "state": "shadow-only",
+      "observed": "The current authorized 2026 snake league is predraft and has no completed draft board.",
+      "blocker": "No frozen post-selection completed snake holdout has an independently retained Yahoo final-board manifest and a passing every-prefix production-reconciler replay."
+    },
+    "auction": {
+      "state": "shadow-only",
+      "observed": "No authorized Yahoo auction draft artifact is currently available.",
+      "blocker": "No frozen post-selection completed auction holdout has exact winning prices, an independently retained Yahoo final-board manifest, and a passing every-prefix production-reconciler replay."
+    }
+  },
+  "admission": {
+    "initial": {
+      "snake": "shadow-only",
+      "auction": "shadow-only"
+    },
+    "passingState": "append-beta",
+    "failureState": "shadow-only",
+    "noCrossFormatInference": true,
+    "diagnosticAuditCanAdmit": false,
+    "confirmationRunnerCanAdmit": false
+  }
+}

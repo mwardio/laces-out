@@ -1,10 +1,15 @@
-import type { DraftSessionSnapshot, EspnLiveDraftFeedStatus } from "@laces-out/contracts";
+import type {
+  DraftSessionSnapshot,
+  EspnLiveDraftFeedStatus,
+  YahooDraftFeedStatus,
+} from "@laces-out/contracts";
 import { describe, expect, it } from "vitest";
 
 import {
   describeDraftSetupCapability,
   describeLiveDraft,
   describeLiveDraftIssue,
+  describeYahooDraftIssue,
   describeMobileDecision,
   effectiveFeedAgeSeconds,
   formatFeedAge,
@@ -39,6 +44,32 @@ function feed(overrides: Partial<EspnLiveDraftFeedStatus> = {}): EspnLiveDraftFe
     verification: "pending",
     lastIssueCode: null,
     currentAuction: null,
+    ...overrides,
+  };
+}
+
+function yahooFeed(overrides: Partial<YahooDraftFeedStatus> = {}): YahooDraftFeedStatus {
+  return {
+    provider: "yahoo",
+    state: "live",
+    providerLeagueId: "461.l.12345",
+    season: 2026,
+    fresh: true,
+    ageSeconds: 16,
+    lastAcceptedAt: "2026-08-24T17:58:59.000Z",
+    lastMaterialEventAt: "2026-08-24T17:58:59.000Z",
+    pickCount: 14,
+    unresolvedTeams: 0,
+    unresolvedPlayers: 0,
+    manualBackupActive: false,
+    pendingReconciliation: 0,
+    standbySources: 0,
+    verification: "pending",
+    lastIssueCode: null,
+    currentAuction: null,
+    applicationMode: "append",
+    releaseState: "append-beta",
+    pollIntervalSeconds: 15,
     ...overrides,
   };
 }
@@ -133,6 +164,18 @@ function auctionSession(overrides: Partial<DraftSessionSnapshot> = {}): DraftSes
     },
     ...overrides,
   };
+}
+
+function yahooSession(
+  feedOverrides: Partial<YahooDraftFeedStatus> = {},
+  sessionOverrides: Partial<DraftSessionSnapshot> = {},
+): DraftSessionSnapshot {
+  return snakeSession({
+    transport: "yahoo-assisted",
+    providerPolling: true,
+    providerFeed: yahooFeed(feedOverrides),
+    ...sessionOverrides,
+  });
 }
 
 function input(overrides: Partial<LiveDraftStatusInput> = {}): LiveDraftStatusInput {
@@ -490,6 +533,151 @@ describe("live status strip", () => {
   });
 });
 
+describe("Yahoo-assisted draft status", () => {
+  it("starts by checking Yahoo without claiming a live connection or requiring Chrome", () => {
+    const session = yahooSession({
+      state: "waiting",
+      fresh: false,
+      ageSeconds: null,
+      pickCount: 0,
+      lastMaterialEventAt: null,
+      applicationMode: "shadow",
+      releaseState: "shadow-only",
+    });
+    const status = describeLiveDraft(input({ session, streaming: false }));
+    expect(status.entryState).toBe("waiting");
+    expect(status.heading).toBe("Checking Yahoo");
+    expect(status.detail).toContain("not applied automatically");
+    expect(status.detail).toContain("Manual entry remains the primary board");
+    expect(status.sourceRequirement).toBeNull();
+    expect(status.reconnectGuidance).not.toContain("Chrome");
+    expect(status.strip?.lastAcceptedLabel).toBe("no pick observed yet");
+    expect(JSON.stringify(status)).not.toMatch(/live Yahoo|Yahoo live|desktop Chrome/iu);
+  });
+
+  it("uses Yahoo's slower provider cadence for freshness", () => {
+    const status = describeLiveDraft(input({ session: yahooSession() }));
+    expect(status.entryState).toBe("live");
+    expect(status.heading).toBe("Yahoo-assisted sync");
+    expect(status.freshness).toBe("fresh");
+    expect(status.strip?.pickCountHeading).toBe("Confirmed");
+    expect(status.strip?.updateChannelLabel).toBe("Official Yahoo checks at most every 15 seconds");
+    expect(status.transportChip).toContain("manual entry available");
+    expect(status.manualBackup.available).toBe(false);
+  });
+
+  it("does not call a provider-paced waiting check stale", () => {
+    const status = describeLiveDraft(
+      input({
+        session: yahooSession({
+          state: "waiting",
+          ageSeconds: 300,
+          fresh: true,
+          pollIntervalSeconds: 900,
+        }),
+      }),
+    );
+
+    expect(status.entryState).toBe("waiting");
+    expect(status.freshness).toBe("fresh");
+    expect(status.heading).toBe("Checking Yahoo");
+    expect(status.strip?.updateChannelLabel).toBe("Yahoo checks run periodically");
+  });
+
+  it("makes shadow-only observation mode explicit and keeps the manual board primary", () => {
+    const session = yahooSession({
+      applicationMode: "shadow",
+      releaseState: "shadow-only",
+      lastIssueCode: "RELEASE_SHADOW_ONLY",
+    });
+    const status = describeLiveDraft(input({ session }));
+    expect(status.heading).toBe("Yahoo-assisted sync");
+    expect(status.detail).toContain("not applied automatically");
+    expect(status.detail).toContain("Manual entry remains the primary board");
+    expect(status.transportChip).toBe("Yahoo observations only · manual board primary");
+    expect(status.ledgerNote).toContain("shared manual board remains primary");
+    expect(status.strip?.pickCountHeading).toBe("Observed");
+    expect(status.strip?.lastAcceptedLabel).toContain("last observed pick");
+    expect(status.strip?.issueLabel).toBeNull();
+  });
+
+  it("labels delayed, conflicted, and verified-complete results without rewriting claims", () => {
+    const delayed = describeLiveDraft(
+      input({ session: yahooSession({ state: "stale", fresh: false, ageSeconds: 301 }) }),
+    );
+    expect(delayed.heading).toBe("Yahoo check delayed");
+    expect(delayed.detail).toContain("manual entry remains available");
+    expect(delayed.reconnectGuidance).toContain("retry automatically");
+    expect(delayed.reconnectGuidance).not.toContain("Chrome");
+    expect(delayed.strip?.updateChannelLabel).toBe("Yahoo checks backing off automatically");
+
+    const conflict = describeLiveDraft(
+      input({
+        session: yahooSession({ state: "degraded", lastIssueCode: "HISTORY_DIVERGED" }),
+      }),
+    );
+    expect(conflict.heading).toBe("Yahoo update needs review");
+    expect(conflict.detail).toContain("manual board was not rewritten");
+
+    const complete = describeLiveDraft(
+      input({ session: yahooSession({ state: "complete", verification: "verified" }) }),
+    );
+    expect(complete.heading).toBe("Final board matches Yahoo");
+    expect(complete.detail).toContain("exactly matches Yahoo");
+    expect(complete.strip?.verificationLabel).toBe("Final board matches Yahoo");
+  });
+
+  it("describes a completed shadow observation without claiming picks were recorded", () => {
+    const complete = describeLiveDraft(
+      input({
+        session: yahooSession({
+          state: "complete",
+          verification: "pending",
+          applicationMode: "shadow",
+          releaseState: "shadow-only",
+          lastIssueCode: "RELEASE_SHADOW_ONLY",
+        }),
+      }),
+    );
+
+    expect(complete.heading).toBe("Yahoo draft complete");
+    expect(complete.detail).toContain("14 picks observed");
+    expect(complete.detail).toContain("manual board remains primary");
+    expect(complete.detail).not.toContain("recorded");
+    expect(complete.detail).not.toContain("pending");
+    expect(complete.strip?.verificationLabel).toBeNull();
+    expect(complete.strip?.updateChannelLabel).toBe("Yahoo polling finished");
+  });
+
+  it("translates every bounded Yahoo issue without leaking implementation codes", () => {
+    const codes = [
+      "INCOMPLETE_SNAPSHOT",
+      "UNRESOLVED_TEAM",
+      "UNRESOLVED_PLAYER",
+      "PICK_SEQUENCE_GAP",
+      "DRAFT_TYPE_MISMATCH",
+      "TEAM_COUNT_MISMATCH",
+      "KEEPER_SCOPE_UNVALIDATED",
+      "SNAKE_COST_PRESENT",
+      "AUCTION_COST_MISSING",
+      "AUCTION_COST_INVALID",
+      "HISTORY_DIVERGED",
+      "HISTORY_TRUNCATED",
+      "REDUCER_INVARIANT",
+      "PROVIDER_UNAVAILABLE",
+      "POLL_FAILED",
+      "RELEASE_SHADOW_ONLY",
+      "CONCURRENT_LEDGER_CHANGE",
+      "COMPLETED_COUNT_MISMATCH",
+    ] as const;
+    for (const code of codes) {
+      const sentence = describeYahooDraftIssue(code);
+      expect(sentence.endsWith(".")).toBe(true);
+      expect(sentence).not.toContain(code);
+    }
+  });
+});
+
 describe("manual backup controls", () => {
   it("offers nothing to a manual room", () => {
     const status = describeLiveDraft(
@@ -591,8 +779,11 @@ describe("mobile decision summary", () => {
 });
 
 describe("draft setup capability copy", () => {
-  it("names Yahoo's gap without promising anything", () => {
-    expect(describeDraftSetupCapability("yahoo")).toContain("not available");
+  it("offers Yahoo-assisted checks without calling them live", () => {
+    const yahoo = describeDraftSetupCapability("yahoo", true);
+    expect(yahoo).toContain("optional read-only Yahoo-assisted checks");
+    expect(yahoo).not.toMatch(/live/iu);
+    expect(describeDraftSetupCapability("yahoo", false)).toContain("Manual entries are shared");
     expect(describeDraftSetupCapability(null)).toContain("No live draft feed");
   });
 
@@ -600,7 +791,7 @@ describe("draft setup capability copy", () => {
   // provider, and `providerFeed: null` means both "flag off" and "flag on, no source yet". Until
   // the server reports capability, no provider may be promised live sync here.
   it("promises live sync to nobody while capability is not reported", () => {
-    for (const provider of ["espn", "yahoo", "manual", null]) {
+    for (const provider of ["espn", "manual", null]) {
       const copy = describeDraftSetupCapability(provider);
       expect(copy).not.toMatch(/live while/u);
       expect(copy).not.toMatch(/paired desktop Chrome/u);

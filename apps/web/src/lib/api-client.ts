@@ -14,6 +14,7 @@ import {
   espnBridgePairingSessionResponseSchema,
   espnLeagueRefreshStatusSchema,
   espnSessionConnectionListSchema,
+  healthResponseSchema,
   inSeasonDecisionSnapshotSchema,
   jobAcceptedSchema,
   leagueAnalyticsSnapshotSchema,
@@ -47,6 +48,7 @@ import {
   type InSeasonDecisionSnapshot,
   type EspnLeagueRefreshStatus,
   type EspnSessionConnectionList,
+  type HealthResponse,
   type JobAccepted,
   type LeagueAnalyticsSnapshot,
   type LeagueDashboard,
@@ -231,6 +233,11 @@ export function parseAiFeature(value: unknown): AiFeatureWithToolUseResponse | n
 export function parseDraftSession(value: unknown): DraftSessionSnapshot | null {
   const result = draftSessionSnapshotSchema.safeParse(value);
   return result.success ? result.data : null;
+}
+
+export function parseHealthResponse(value: unknown): HealthResponse | null {
+  const parsed = healthResponseSchema.safeParse(value);
+  return parsed.success ? parsed.data : null;
 }
 
 export function parseDraftMutation(value: unknown): DraftMutationResponse | null {

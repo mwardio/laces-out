@@ -434,14 +434,21 @@ export class LeagueSyncService implements LeagueSyncServicePort {
         });
         return { state: "reauthorization-required", connectionId };
       }
-      const circuitFailure = await this.#circuit.recordFailure({
-        provider: target.provider === "espn" ? "espn" : "yahoo",
-        connectionId,
-        leagueSeasonId: job.leagueSeasonId,
-        at: this.#now(),
-        errorCode,
-        errorDetail,
-      });
+      const yahooCircuitAlreadyOpened =
+        target.provider === "yahoo" && error instanceof YahooSyncError && error.cooldown;
+      // YahooSyncService reports `cooldown` only after it has durably opened or observed the shared
+      // connection circuit. Writing the generic failure too would immediately change health to
+      // `degraded`, excluding the connection after expiry and preventing sync/draft self-healing.
+      const circuitFailure = yahooCircuitAlreadyOpened
+        ? { state: "open" as const, consecutiveFailures: target.consecutiveFailures }
+        : await this.#circuit.recordFailure({
+            provider: target.provider === "espn" ? "espn" : "yahoo",
+            connectionId,
+            leagueSeasonId: job.leagueSeasonId,
+            at: this.#now(),
+            errorCode,
+            errorDetail,
+          });
       this.#emit({
         event: "sync-failed",
         provider: target.provider === "espn" ? "espn" : "yahoo",

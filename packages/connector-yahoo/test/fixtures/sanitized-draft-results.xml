@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<fantasy_content refresh_rate="60" xmlns="http://fantasysports.yahooapis.com/fantasy/v2/base.rng">
+  <league>
+    <league_key>449.l.12345</league_key>
+    <league_id>12345</league_id>
+    <name>Sanitized Auction League</name>
+    <draft_status>drafting</draft_status>
+    <draft_results count="3">
+      <draft_result>
+        <pick>1</pick>
+        <round>1</round>
+        <team_key>449.l.12345.t.1</team_key>
+        <player_key>449.p.9001</player_key>
+        <cost>47</cost>
+      </draft_result>
+      <draft_result>
+        <pick>2</pick>
+        <round>1</round>
+        <team_key>449.l.12345.t.2</team_key>
+        <player_key>449.p.9002</player_key>
+        <cost>35</cost>
+      </draft_result>
+      <draft_result>
+        <pick>3</pick>
+        <round>2</round>
+        <team_key>449.l.12345.t.2</team_key>
+        <player_key>449.p.9003</player_key>
+        <cost>18</cost>
+      </draft_result>
+    </draft_results>
+  </league>
+</fantasy_content>

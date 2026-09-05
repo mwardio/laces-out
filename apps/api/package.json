@@ -12,6 +12,9 @@
     "draft-read:mint": "node dist/mint-draft-read.js",
     "bridge:smoke": "tsx scripts/espn-bridge-smoke.ts",
     "yahoo:smoke": "tsx scripts/yahoo-sync-smoke.ts",
+    "yahoo:draft-audit": "tsx scripts/yahoo-draft-audit.ts",
+    "yahoo:draft-audit:dist": "node dist/yahoo-draft-audit.js",
+    "yahoo:draft-confirmation": "tsx scripts/yahoo-draft-confirmation.ts",
     "invitation:smoke": "tsx scripts/invitation-smoke.ts",
     "registration:smoke": "tsx scripts/registration-smoke.ts"
   },

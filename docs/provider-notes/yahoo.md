@@ -70,15 +70,54 @@ scoreboard matchups (optionally by week), standings, transactions, paginated pla
 results. Strict sanitized-fixture parsers now join discovery, settings, teams, rosters, standings,
 and scoreboard responses into one normalized bundle. Cross-resource league/team mismatches fail
 closed before persistence; those five resources then commit atomically with a connection-scoped
-idempotency receipt. Transactions, player collections, and draft results intentionally remain
-validated raw XML artifacts until their own versioned normalizers and approved-account fixtures
-exist; the client does not invent response schemas.
+idempotency receipt. Draft results now have a dedicated strict cumulative-board parser, and the
+bounded exact-player lookup used by Yahoo-assisted drafts has a dedicated identity parser.
+Transactions and generic paginated player collections remain validated raw XML artifacts until
+their own versioned normalizers and approved-account fixtures exist; the client does not invent
+response schemas.
 Pending waiver and pending-trade reads fail closed unless they use Yahoo's required singular type
 filter with a league team key.
 
-Yahoo documents draft-result resources, but no official webhook/live draft channel. Draft reads
-remain `polling-unverified` until both snake and auction mock drafts validate latency,
-completeness, corrections, and auction price fields for the approved 2026 application.
+Yahoo documents cumulative draft-result resources, but no official webhook/live draft channel.
+Laces Out therefore describes this path as **Yahoo-assisted sync**, never live sync. It checks once
+per minute while waiting, may check every 15 seconds only while Yahoo reports an active draft, and
+backs off immediately after throttling or provider failures. One database lease enforces that
+cadence across every viewer of a league. It is read-only: it never submits a draft action to Yahoo,
+and manual Draft Studio entry remains available throughout.
+
+Throttle observations retain only a bounded internal failure class, Yahoo's parsed Retry-After
+seconds capped at 15 minutes, and the effective backoff—not response bodies or credentials. A rate
+limit opens a durable connection-scoped cooldown so draft and ordinary league reads using that
+authorization stop polling too. These fields make the registered rate-limit count and retry-delay
+metrics auditable while the public response exposes only a closed error code and bounded
+`Retry-After` delay.
+
+Snake and auction admission are independent under
+`docs/yahoo-draft-polling-preregistration-v1.json`. Creating two artificial leagues is not a release
+requirement. Selection may use authorized historical artifacts, malformed fixtures, and at least
+1,000 property-generated cases. Confirmation is stricter: after the parser, production reconciler,
+configuration builder, thresholds, and preregistration checksum are frozen, an unrevealed
+format-specific completed holdout must replay every cumulative prefix and agree exactly with a
+Yahoo final-board UI/export manifest retained independently of the API response. Comparing a
+`draftresults` payload with a board reconstructed from that same payload is not independent
+confirmation. Runtime user confirmation that a draft has no keepers or traded picks is required,
+but is a scope attestation rather than release evidence. Passive observations from ordinary
+connected drafts continue measuring publication delay and throttling; latency is a disclosed
+quality metric rather than a mutation-safety gate because a late or partial cumulative response
+leaves the board unchanged. Evidence and release checksums are locked per format; neither normal
+Yahoo league-sync admission nor one draft format can admit the other.
+
+Both formats remain shadow-only. The only currently authorized 2026 snake league is predraft, so it
+has no completed board or independently retained final-board manifest for confirmation. No
+authorized auction artifact is currently available, so exact winning prices and an independent
+auction board also remain unconfirmed.
+
+The executable future confirmation procedure is documented in
+`docs/yahoo-draft-confirmation-workflow.md`. Its offline runner accepts a separately captured,
+protected raw `draftresults` response, a strict independent-board manifest, and a checksum-bound
+production configuration. It performs exact board comparison and every-prefix production
+reconciler replay without importing a database or network client. Even a passing result is only
+eligible for manual release review; the runner cannot change either format's release state.
 
 League deep links accept both observed compound-key families, such as numeric `449.l.12345` and
 alphabetic `nfl.l.12345`, and retain the provider league number in the resulting Yahoo URL. Any

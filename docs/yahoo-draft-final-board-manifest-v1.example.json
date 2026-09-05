@@ -1,0 +1,43 @@
+{
+  "schemaVersion": 1,
+  "evidenceClass": "independent-yahoo-final-board",
+  "format": "snake",
+  "leagueFingerprintSha256": "15f31c7c96b5e5a9e3345a679a3a87bbefc835aaf6d664d3cb5008706e96bab6",
+  "season": 2026,
+  "capturedAt": "2026-09-05T12:00:00.000Z",
+  "source": "yahoo-final-board-ui",
+  "sourceCaptureMediaType": "image/png",
+  "sourceCaptureSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "captureAttestation": "captured-from-yahoo-final-board-without-reference-to-fantasy-api-draftresults",
+  "draftScopeAttestation": "yahoo-final-board-shows-no-keepers-no-traded-picks-and-no-third-round-reversal",
+  "picks": [
+    {
+      "overallPick": 1,
+      "round": 1,
+      "yahooTeamKey": "449.l.12345.t.1",
+      "yahooPlayerKey": "449.p.9001",
+      "cost": null
+    },
+    {
+      "overallPick": 2,
+      "round": 1,
+      "yahooTeamKey": "449.l.12345.t.2",
+      "yahooPlayerKey": "449.p.9002",
+      "cost": null
+    },
+    {
+      "overallPick": 3,
+      "round": 2,
+      "yahooTeamKey": "449.l.12345.t.2",
+      "yahooPlayerKey": "449.p.9003",
+      "cost": null
+    },
+    {
+      "overallPick": 4,
+      "round": 2,
+      "yahooTeamKey": "449.l.12345.t.1",
+      "yahooPlayerKey": "449.p.9004",
+      "cost": null
+    }
+  ]
+}

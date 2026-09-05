@@ -793,14 +793,15 @@ describe("LeagueSyncService", () => {
     const failure = new YahooSyncError(
       "PROVIDER_READ_FAILED",
       "Yahoo did not return a valid, complete league response",
-      { retryable: true, retryAfterMs: 7_001, throttled: true },
+      { retryable: true, retryAfterMs: 7_001, throttled: true, cooldown: true },
     );
     const observe = vi.fn();
     const afterYahooCommit = vi.fn(() => Promise.resolve());
+    const circuit = circuitStore();
     const service = new LeagueSyncService({
       targets: reader(),
       yahooSync: { syncLeague: () => Promise.reject(failure) } as never,
-      circuit: circuitStore(),
+      circuit,
       afterYahooCommit,
       observe,
       now: () => now,
@@ -818,9 +819,10 @@ describe("LeagueSyncService", () => {
       errorCode: "PROVIDER_READ_FAILED",
       throttled: true,
       retryAfterSeconds: 8,
-      circuitState: "closed",
-      consecutiveFailures: 1,
+      circuitState: "open",
+      consecutiveFailures: 0,
     });
+    expect(circuit.recordFailure).not.toHaveBeenCalled();
     expect(JSON.stringify(observe.mock.calls)).not.toContain("authorization");
     expect(JSON.stringify(observe.mock.calls)).not.toContain("access_token");
   });

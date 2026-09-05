@@ -1,0 +1,124 @@
+{
+  "schemaVersion": 1,
+  "evidenceClass": "frozen-yahoo-draft-confirmation-context",
+  "protocol": "yahoo-draft-polling-v1",
+  "format": "snake",
+  "preregistrationSha256": "4a1a6f26f1d96c9f03519a607f31deadb4dfe6dd51a5666d58e8effd7b225ef8",
+  "frozenImplementationGitRevision": "0000000000000000000000000000000000000000",
+  "leagueFingerprintSha256": "15f31c7c96b5e5a9e3345a679a3a87bbefc835aaf6d664d3cb5008706e96bab6",
+  "yahooLeagueKey": "449.l.12345",
+  "season": 2026,
+  "holdoutSelectedAt": "2026-09-05T09:00:00.000Z",
+  "implementationFrozenAt": "2026-09-05T10:00:00.000Z",
+  "artifactCapturedAt": "2026-09-05T13:00:00.000Z",
+  "evidenceFrozenAt": "2026-09-05T14:00:00.000Z",
+  "holdoutSelectionAttestation": "selected-before-reveal-and-did-not-influence-this-implementation",
+  "standardScopeConfirmation": "no-keepers-or-traded-picks",
+  "productionConfigurationAttestation": "exported-or-built-with-the-frozen-production-path-before-artifact-reveal",
+  "identityMappingAttestation": "copied-from-preexisting-provider-mappings-without-using-the-final-artifact",
+  "expectedManifestSha256": "7cc59abcfd23fd0db66b35343b34ccb1fd7f105cb01e32cf2f48fdc33940a07a",
+  "expectedArtifactSha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+  "feedId": "60000000-0000-4000-8000-000000000001",
+  "draftId": "60000000-0000-4000-8000-000000000002",
+  "config": {
+    "mode": "SNAKE",
+    "teams": [
+      {
+        "id": "40000000-0000-4000-8000-00000000000a",
+        "name": "Team A",
+        "rosterSlots": [
+          {
+            "id": "a-slot-1",
+            "type": "BENCH",
+            "label": "Bench 1",
+            "kind": "BENCH",
+            "eligiblePositions": ["RB"]
+          },
+          {
+            "id": "a-slot-2",
+            "type": "BENCH",
+            "label": "Bench 2",
+            "kind": "BENCH",
+            "eligiblePositions": ["RB"]
+          }
+        ]
+      },
+      {
+        "id": "40000000-0000-4000-8000-00000000000b",
+        "name": "Team B",
+        "rosterSlots": [
+          {
+            "id": "b-slot-1",
+            "type": "BENCH",
+            "label": "Bench 1",
+            "kind": "BENCH",
+            "eligiblePositions": ["RB"]
+          },
+          {
+            "id": "b-slot-2",
+            "type": "BENCH",
+            "label": "Bench 2",
+            "kind": "BENCH",
+            "eligiblePositions": ["RB"]
+          }
+        ]
+      }
+    ],
+    "players": [
+      {
+        "id": "50000000-0000-4000-8000-000000000001",
+        "name": "Player 1",
+        "positions": ["RB"]
+      },
+      {
+        "id": "50000000-0000-4000-8000-000000000002",
+        "name": "Player 2",
+        "positions": ["RB"]
+      },
+      {
+        "id": "50000000-0000-4000-8000-000000000003",
+        "name": "Player 3",
+        "positions": ["RB"]
+      },
+      {
+        "id": "50000000-0000-4000-8000-000000000004",
+        "name": "Player 4",
+        "positions": ["RB"]
+      }
+    ],
+    "pickOrder": [
+      "40000000-0000-4000-8000-00000000000a",
+      "40000000-0000-4000-8000-00000000000b",
+      "40000000-0000-4000-8000-00000000000b",
+      "40000000-0000-4000-8000-00000000000a"
+    ]
+  },
+  "teamMappings": [
+    {
+      "yahooTeamKey": "449.l.12345.t.1",
+      "internalTeamId": "40000000-0000-4000-8000-00000000000a"
+    },
+    {
+      "yahooTeamKey": "449.l.12345.t.2",
+      "internalTeamId": "40000000-0000-4000-8000-00000000000b"
+    }
+  ],
+  "playerMappings": [
+    {
+      "yahooPlayerKey": "449.p.9001",
+      "internalPlayerId": "50000000-0000-4000-8000-000000000001"
+    },
+    {
+      "yahooPlayerKey": "449.p.9002",
+      "internalPlayerId": "50000000-0000-4000-8000-000000000002"
+    },
+    {
+      "yahooPlayerKey": "449.p.9003",
+      "internalPlayerId": "50000000-0000-4000-8000-000000000003"
+    },
+    {
+      "yahooPlayerKey": "449.p.9004",
+      "internalPlayerId": "50000000-0000-4000-8000-000000000004"
+    }
+  ]
+}

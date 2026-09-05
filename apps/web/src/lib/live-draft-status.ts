@@ -1,8 +1,10 @@
 import {
   ESPN_LIVE_DRAFT_LIMITS,
   type DraftSessionSnapshot,
-  type EspnLiveDraftFeedStatus,
+  type DraftProviderFeedStatus,
   type EspnLiveDraftIssueCode,
+  type YahooDraftFeedStatus,
+  type YahooDraftIssueCode,
 } from "@laces-out/contracts";
 
 import { unfilledStarterSlots } from "./draft-board";
@@ -11,8 +13,9 @@ import { providerLabel } from "./copy";
 /**
  * Draft Studio entry states from the live-sync plan (§16.1).
  *
- * `manual` is not an ESPN state: it is the pre-existing shared ledger with no provider feed
- * attached. Every other state describes a room whose transport is `espn-live`.
+ * `manual` is the shared ledger with no provider feed attached. The other state keys are retained
+ * across the ESPN and Yahoo presentations, while provider-specific headings keep their claims
+ * distinct (for example, Yahoo is assisted polling and is never described as live).
  */
 export type LiveDraftEntryState =
   | "manual"
@@ -69,6 +72,7 @@ export interface LiveDraftStatusStrip {
   readonly lastAcceptedLabel: string;
   readonly currentActionLabel: string;
   readonly currentActionCaption: string;
+  readonly pickCountHeading: string;
   readonly pickCountLabel: string;
   readonly issueCount: number;
   readonly issueLabel: string | null;
@@ -139,7 +143,7 @@ function pluralize(count: number, singular: string, plural = `${singular}s`): st
  * claiming "updated 2s ago" long after the source browser closed.
  */
 export function effectiveFeedAgeSeconds(
-  feed: EspnLiveDraftFeedStatus,
+  feed: Pick<DraftProviderFeedStatus, "ageSeconds">,
   lastSyncedAt: number | null,
   now: number,
 ): number | null {
@@ -152,6 +156,17 @@ export function liveDraftFreshness(ageSeconds: number | null, fresh = true): Liv
   if (ageSeconds === null) return "missing";
   if (ageSeconds <= FRESH_WINDOW_SECONDS) return fresh ? "fresh" : "aging";
   if (ageSeconds <= FAILOVER_SECONDS) return "aging";
+  return "stale";
+}
+
+function yahooDraftFreshness(
+  feed: YahooDraftFeedStatus,
+  ageSeconds: number | null,
+): LiveDraftFreshness {
+  if (ageSeconds === null) return "missing";
+  const expected = feed.pollIntervalSeconds;
+  if (ageSeconds <= expected * 2) return feed.fresh ? "fresh" : "aging";
+  if (ageSeconds <= expected * 4) return "aging";
   return "stale";
 }
 
@@ -175,6 +190,12 @@ export function formatLastAccepted(occurredAt: string | null, now: number): stri
   if (seconds < 60) return `last pick ${seconds}s ago`;
   if (seconds < 3600) return `last pick ${Math.round(seconds / 60)}m ago`;
   return `last pick ${Math.round(seconds / 3600)}h ago`;
+}
+
+function formatLastObserved(occurredAt: string | null, now: number): string {
+  if (occurredAt === null) return "no pick observed yet";
+  const accepted = formatLastAccepted(occurredAt, now);
+  return accepted.replace(/^last pick/u, "last observed pick");
 }
 
 /**
@@ -218,7 +239,51 @@ export function describeLiveDraftIssue(code: EspnLiveDraftIssueCode): string {
   }
 }
 
-function feedNeedsAttention(feed: EspnLiveDraftFeedStatus): boolean {
+/** Yahoo's official endpoint is cumulative and slower than the ESPN browser source. */
+export function describeYahooDraftIssue(code: YahooDraftIssueCode): string {
+  switch (code) {
+    case "INCOMPLETE_SNAPSHOT":
+      return "Yahoo returned an incomplete draft board, so no picks were applied.";
+    case "UNRESOLVED_TEAM":
+      return "A team in Yahoo's draft results does not match this league yet.";
+    case "UNRESOLVED_PLAYER":
+      return "A player in Yahoo's draft results is not in this room's player pool yet.";
+    case "PICK_SEQUENCE_GAP":
+      return "Yahoo reported picks with a gap, so the update was held rather than guessed.";
+    case "DRAFT_TYPE_MISMATCH":
+      return "Yahoo's draft format does not match this room's format.";
+    case "TEAM_COUNT_MISMATCH":
+      return "Yahoo reports a different number of teams than this room.";
+    case "KEEPER_SCOPE_UNVALIDATED":
+      return "This Yahoo keeper format has not cleared assisted-draft validation, so the update was held.";
+    case "SNAKE_COST_PRESENT":
+      return "Yahoo attached auction data to a snake draft, so the update was held.";
+    case "AUCTION_COST_MISSING":
+      return "Yahoo omitted a sale price, so the auction update was held.";
+    case "AUCTION_COST_INVALID":
+      return "Yahoo returned an invalid sale price, so the auction update was held.";
+    case "HISTORY_DIVERGED":
+      return "Yahoo's draft history differs from this room. The manual board was not rewritten.";
+    case "HISTORY_TRUNCATED":
+      return "Yahoo returned fewer prior picks than before. The manual board was not changed.";
+    case "REDUCER_INVARIANT":
+      return "A Yahoo update failed this room's draft rules and was not applied.";
+    case "PROVIDER_UNAVAILABLE":
+      return "Yahoo draft results are temporarily unavailable. Manual entry remains available.";
+    case "POLL_FAILED":
+      return "The latest Yahoo check failed. Manual entry remains available.";
+    case "RELEASE_SHADOW_ONLY":
+      return "Yahoo observations are being collected but are not applied automatically yet.";
+    case "CONCURRENT_LEDGER_CHANGE":
+      return "The room changed during a Yahoo check, so the update will be compared again.";
+    case "COMPLETED_COUNT_MISMATCH":
+      return "Yahoo's completed pick count differs from this room, so the result needs review.";
+    case "PROVIDER_STATUS_UNSUPPORTED":
+      return "Yahoo returned a draft status Laces Out does not recognize, so the update was held.";
+  }
+}
+
+function feedNeedsAttention(feed: DraftProviderFeedStatus): boolean {
   return (
     feed.state === "degraded" ||
     feed.unresolvedTeams > 0 ||
@@ -235,7 +300,7 @@ function sourceLost(ageSeconds: number | null, fresh: boolean, limitSeconds: num
 export function liveDraftEntryState(input: LiveDraftStatusInput): LiveDraftEntryState {
   const feed = input.session.providerFeed;
   if (feed === null || input.session.transport === "manual") return "manual";
-  if (feed.manualBackupActive) return "manual-backup";
+  if (feed.provider === "espn" && feed.manualBackupActive) return "manual-backup";
   if (feedNeedsAttention(feed)) return "attention";
   if (feed.state === "complete") return "complete";
   // A local reload failure means this client cannot vouch for anything below it, whatever the
@@ -243,6 +308,12 @@ export function liveDraftEntryState(input: LiveDraftStatusInput): LiveDraftEntry
   if (input.pollFailures > 0) return "stale";
   if (feed.state === "stale") return "stale";
   const age = effectiveFeedAgeSeconds(feed, input.lastSyncedAt, input.now);
+  if (feed.provider === "yahoo") {
+    if (feed.state === "live") {
+      return yahooDraftFreshness(feed, age) === "stale" ? "stale" : "live";
+    }
+    return "waiting";
+  }
   if (feed.state === "live")
     return sourceLost(age, feed.fresh, FRESH_WINDOW_SECONDS) ? "stale" : "live";
   if (feed.state === "paused")
@@ -278,20 +349,62 @@ export function liveDraftHeading(state: LiveDraftEntryState): string {
   return HEADINGS[state];
 }
 
-function attentionDetail(feed: EspnLiveDraftFeedStatus): string {
-  if (feed.lastIssueCode !== null) return describeLiveDraftIssue(feed.lastIssueCode);
-  const unresolved = feed.unresolvedTeams + feed.unresolvedPlayers;
-  if (unresolved > 0) {
-    return `${pluralize(unresolved, "ESPN row")} could not be matched to this league, so the board is held rather than guessed.`;
+function headingFor(state: LiveDraftEntryState, feed: DraftProviderFeedStatus | null): string {
+  if (feed?.provider !== "yahoo") return HEADINGS[state];
+  switch (state) {
+    case "waiting":
+    case "ready":
+      return "Checking Yahoo";
+    case "live":
+      return "Yahoo-assisted sync";
+    case "stale":
+    case "paused":
+      return "Yahoo check delayed";
+    case "attention":
+      return "Yahoo update needs review";
+    case "complete":
+      return feed.verification === "verified"
+        ? "Final board matches Yahoo"
+        : "Yahoo draft complete";
+    case "manual":
+      return HEADINGS.manual;
+    case "manual-backup":
+      return HEADINGS["manual-backup"];
   }
-  if (feed.verification === "mismatched") {
-    return "The completed ESPN result differs from this room's ledger. Nothing was rewritten; the difference is waiting for review.";
-  }
-  return "Live sync is holding rather than applying an update it could not verify.";
 }
 
-function completeDetail(feed: EspnLiveDraftFeedStatus): string {
+function attentionDetail(feed: DraftProviderFeedStatus): string {
+  if (feed.lastIssueCode !== null) {
+    return feed.provider === "yahoo"
+      ? describeYahooDraftIssue(feed.lastIssueCode)
+      : describeLiveDraftIssue(feed.lastIssueCode);
+  }
+  const unresolved = feed.unresolvedTeams + feed.unresolvedPlayers;
+  if (unresolved > 0) {
+    return `${pluralize(unresolved, `${providerLabel(feed.provider)} row`)} could not be matched to this league, so the board is held rather than guessed.`;
+  }
+  if (feed.verification === "mismatched") {
+    return `The completed ${providerLabel(feed.provider)} result differs from this room's ledger. Nothing was rewritten; the difference is waiting for review.`;
+  }
+  return feed.provider === "yahoo"
+    ? "The Yahoo update was held rather than changing the board without complete evidence."
+    : "Live sync is holding rather than applying an update it could not verify.";
+}
+
+function completeDetail(feed: DraftProviderFeedStatus): string {
   const picks = `${pluralize(feed.pickCount, "pick")} recorded.`;
+  if (feed.provider === "yahoo") {
+    if (feed.applicationMode === "shadow") {
+      return `Yahoo reported the draft finished. ${pluralize(feed.pickCount, "pick")} observed; the shared manual board remains primary.`;
+    }
+    if (feed.verification === "verified") {
+      return `The final room board exactly matches Yahoo's completed draft results. ${picks}`;
+    }
+    if (feed.verification === "mismatched") {
+      return `Yahoo reported the draft finished, but its final result differs from this room. Nothing was rewritten. ${picks}`;
+    }
+    return `Yahoo reported the draft finished. Final board verification is still pending. ${picks}`;
+  }
   if (feed.verification === "verified") {
     return `ESPN reported the draft finished and the completed ESPN result matches this ledger. ${picks}`;
   }
@@ -303,11 +416,36 @@ function completeDetail(feed: EspnLiveDraftFeedStatus): string {
 
 function entryDetail(
   state: LiveDraftEntryState,
-  feed: EspnLiveDraftFeedStatus | null,
+  feed: DraftProviderFeedStatus | null,
   input: LiveDraftStatusInput,
 ): string {
   if (feed === null) return MANUAL_ENTRY_DETAIL;
   const provider = providerLabel(feed.provider);
+  if (feed.provider === "yahoo") {
+    if (feed.applicationMode === "shadow" && state !== "attention" && state !== "complete") {
+      return "Yahoo observations are not applied automatically yet. Manual entry remains the primary board.";
+    }
+    switch (state) {
+      case "ready":
+      case "waiting":
+        return "Laces Out is checking Yahoo's official draft results. Manual entry remains available.";
+      case "live":
+        return `${pluralize(feed.pickCount, "confirmed pick")} found through Yahoo. Manual entry remains available.`;
+      case "paused":
+      case "stale":
+        return input.pollFailures > 0
+          ? "This device cannot reach Laces Out. Manual entry remains available."
+          : "Yahoo has not returned a recent update. Checks will retry, and manual entry remains available.";
+      case "complete":
+        return completeDetail(feed);
+      case "attention":
+        return attentionDetail(feed);
+      case "manual":
+        return MANUAL_ENTRY_DETAIL;
+      case "manual-backup":
+        return "Manual entry remains available while Yahoo checks are paused.";
+    }
+  }
   switch (state) {
     case "ready":
       return `${provider} draft room is open in paired desktop Chrome.`;
@@ -336,9 +474,9 @@ function entryDetail(
 
 function currentAction(
   session: DraftSessionSnapshot,
-  feed: EspnLiveDraftFeedStatus | null,
+  feed: DraftProviderFeedStatus | null,
 ): { readonly label: string; readonly caption: string } {
-  const auction = feed?.currentAuction ?? null;
+  const auction = feed?.provider === "espn" ? feed.currentAuction : null;
   if (auction) {
     const bid = auction.highBid === null ? "no bid yet" : `high bid $${auction.highBid}`;
     return {
@@ -367,7 +505,18 @@ function currentAction(
   return { label: "Waiting for the first pick", caption: "No pick pending" };
 }
 
-function verificationLabel(feed: EspnLiveDraftFeedStatus): string | null {
+function verificationLabel(feed: DraftProviderFeedStatus): string | null {
+  if (feed.provider === "yahoo") {
+    if (feed.applicationMode === "shadow") return null;
+    switch (feed.verification) {
+      case "verified":
+        return "Final board matches Yahoo";
+      case "mismatched":
+        return "Final board differs from Yahoo; no picks were rewritten";
+      case "pending":
+        return feed.state === "complete" ? "Final Yahoo check pending" : null;
+    }
+  }
   switch (feed.verification) {
     case "verified":
       return "Matches the completed ESPN result";
@@ -380,10 +529,10 @@ function verificationLabel(feed: EspnLiveDraftFeedStatus): string | null {
 
 function manualBackupControls(
   session: DraftSessionSnapshot,
-  feed: EspnLiveDraftFeedStatus | null,
+  feed: DraftProviderFeedStatus | null,
 ): ManualBackupControls {
   const authorized = session.accessRole === "commissioner";
-  if (feed === null) {
+  if (feed === null || feed.provider === "yahoo") {
     return {
       available: false,
       active: false,
@@ -419,11 +568,16 @@ function manualBackupControls(
 
 function transportChip(
   state: LiveDraftEntryState,
-  feed: EspnLiveDraftFeedStatus | null,
+  feed: DraftProviderFeedStatus | null,
   localMock: boolean,
 ): string {
   if (localMock) return "Local memory only";
   if (feed === null) return "Shared app ledger · no provider feed attached";
+  if (feed.provider === "yahoo") {
+    return feed.applicationMode === "shadow"
+      ? "Yahoo observations only · manual board primary"
+      : "Yahoo-assisted checks · read-only · manual entry available";
+  }
   const provider = providerLabel(feed.provider);
   if (state === "manual-backup") return `${provider} sync frozen · manual backup`;
   if (state === "stale" || state === "attention")
@@ -431,10 +585,16 @@ function transportChip(
   return `${provider} live sync · read-only`;
 }
 
-function ledgerNote(feed: EspnLiveDraftFeedStatus | null, localMock: boolean): string {
+function ledgerNote(feed: DraftProviderFeedStatus | null, localMock: boolean): string {
   if (localMock) return "Practice events exist only in this browser tab.";
   if (feed === null) {
     return "Manual entries are saved for league members.";
+  }
+  if (feed.provider === "yahoo" && feed.applicationMode === "shadow") {
+    return "Yahoo observations are not applied automatically. The shared manual board remains primary.";
+  }
+  if (feed.provider === "yahoo") {
+    return "Confirmed Yahoo picks and manual entries are saved here with their source.";
   }
   const provider = providerLabel(feed.provider);
   return `${provider} picks and manual entries are saved here with their source.`;
@@ -446,19 +606,28 @@ export function describeLiveDraft(input: LiveDraftStatusInput): LiveDraftStatus 
   const localMock = input.localMock === true;
   const entryState = liveDraftEntryState(input);
   const age = feed === null ? null : effectiveFeedAgeSeconds(feed, input.lastSyncedAt, input.now);
-  const freshness = feed === null ? "missing" : liveDraftFreshness(age, feed.fresh);
+  const freshness =
+    feed === null
+      ? "missing"
+      : feed.provider === "yahoo"
+        ? yahooDraftFreshness(feed, age)
+        : liveDraftFreshness(age, feed.fresh);
   const freshnessLabel = feed === null ? "app ledger only" : formatFeedAge(age);
   const providerName = feed === null ? "Laces Out" : providerLabel(feed.provider);
   const clientReconnecting = input.pollFailures > 0;
+  const heading = headingFor(entryState, feed);
 
   const reconnectGuidance = clientReconnecting
     ? "Retrying automatically. The last accepted board is shown."
     : entryState === "stale" || entryState === "waiting"
-      ? `Reopen or refocus the ${providerName} draft room in paired desktop Chrome.`
+      ? feed?.provider === "yahoo"
+        ? "Yahoo checks retry automatically. Manual entry remains available."
+        : `Reopen or refocus the ${providerName} draft room in paired desktop Chrome.`
       : null;
 
   const sourceRequirement =
-    feed !== null && (entryState === "ready" || entryState === "waiting" || entryState === "stale")
+    feed?.provider === "espn" &&
+    (entryState === "ready" || entryState === "waiting" || entryState === "stale")
       ? DESKTOP_SOURCE_REQUIREMENT
       : null;
 
@@ -471,28 +640,48 @@ export function describeLiveDraft(input: LiveDraftStatusInput): LiveDraftStatus 
       : {
           providerName,
           sourceLabel: `${providerName} league ${feed.providerLeagueId} · ${feed.season}`,
-          statusLabel: HEADINGS[entryState],
+          statusLabel: heading,
           freshnessLabel,
           freshness,
-          lastAcceptedLabel: formatLastAccepted(feed.lastMaterialEventAt, input.now),
+          lastAcceptedLabel:
+            feed.provider === "yahoo" && feed.applicationMode === "shadow"
+              ? formatLastObserved(feed.lastMaterialEventAt, input.now)
+              : formatLastAccepted(feed.lastMaterialEventAt, input.now),
           currentActionLabel: action.label,
           currentActionCaption: action.caption,
+          pickCountHeading:
+            feed.provider === "yahoo"
+              ? feed.applicationMode === "shadow"
+                ? "Observed"
+                : "Confirmed"
+              : "Accepted",
           pickCountLabel: pluralize(feed.pickCount, "pick"),
           issueCount,
           issueLabel:
-            feed.lastIssueCode !== null
-              ? describeLiveDraftIssue(feed.lastIssueCode)
+            feed.lastIssueCode !== null && feed.lastIssueCode !== "RELEASE_SHADOW_ONLY"
+              ? feed.provider === "yahoo"
+                ? describeYahooDraftIssue(feed.lastIssueCode)
+                : describeLiveDraftIssue(feed.lastIssueCode)
               : issueCount > 0
                 ? `${pluralize(issueCount, "unmatched row")} held for review`
                 : null,
           verificationLabel: verificationLabel(feed),
           standbyLabel:
-            feed.standbySources > 0
+            feed.provider === "espn" && feed.standbySources > 0
               ? `${pluralize(feed.standbySources, "standby browser")} ready to take over`
               : null,
-          updateChannelLabel: input.streaming
-            ? "Live updates streaming"
-            : "Checking for updates every 5 seconds",
+          updateChannelLabel:
+            feed.provider === "yahoo"
+              ? feed.state === "live"
+                ? `Official Yahoo checks at most every ${feed.pollIntervalSeconds} seconds`
+                : feed.state === "complete"
+                  ? "Yahoo polling finished"
+                  : feed.state === "stale" || feed.state === "degraded"
+                    ? "Yahoo checks backing off automatically"
+                    : "Yahoo checks run periodically"
+              : input.streaming
+                ? "Live updates streaming"
+                : "Checking for updates every 5 seconds",
           reconnectGuidance,
         };
 
@@ -506,7 +695,7 @@ export function describeLiveDraft(input: LiveDraftStatusInput): LiveDraftStatus 
     entryState,
     providerBacked: feed !== null,
     providerName,
-    heading: HEADINGS[entryState],
+    heading,
     detail: entryDetail(entryState, feed, input),
     tone: TONES[entryState],
     indicator,
@@ -516,7 +705,7 @@ export function describeLiveDraft(input: LiveDraftStatusInput): LiveDraftStatus 
         ? "Reconnecting"
         : feed === null
           ? "Laces Out ledger"
-          : HEADINGS[entryState],
+          : heading,
     indicatorDetail:
       feed === null
         ? `Event ${session.sequence} · ${clientReconnecting ? "retrying" : "auto-refresh on"}`
@@ -584,7 +773,9 @@ export function describeMobileDecision(
     staleLabel: stale
       ? status.clientReconnecting
         ? "Not connected — showing last accepted board"
-        : `${status.providerName} feed stale — showing last accepted board`
+        : status.providerName === "Yahoo"
+          ? "Yahoo check delayed — manual entry remains available"
+          : `${status.providerName} feed stale — showing last accepted board`
       : null,
   };
 }
@@ -605,12 +796,13 @@ function defaultCaption(session: DraftSessionSnapshot): string {
 
 /**
  * The setup screen has no session yet, so entry copy comes from the league's provider instead.
- * Kept honest in both directions: a league is told only what is actually available to it, and a
- * league without a provider feed is not promised anything.
+ * Yahoo's option is explicitly beta, read-only, and opt-in; the server remains authoritative and
+ * may reject setup when its release switch is off. Every other provider keeps the existing manual
+ * promise until the API exposes a provider-specific setup capability.
  *
  * TODO(espn-live-draft): restore the ESPN branch when `ESPN_LIVE_DRAFT_SYNC` is turned on.
  *
- * ESPN currently gets the neutral line even though the code path exists, because this function
+ * ESPN gets the neutral line even though the code path exists, because this function
  * only knows the league's provider — the server reports `providerFeed: null` both when the flag
  * is off and when it is on with no source connected, so "ESPN" alone cannot tell the difference.
  * Promising live sync here while the flag is off would be a claim a manager could act on, and
@@ -621,9 +813,12 @@ function defaultCaption(session: DraftSessionSnapshot): string {
  *   "Manual event entry is persistent and shared. An ESPN draft can also drive this room live
  *    while a paired desktop Chrome keeps the ESPN draft room open."
  */
-export function describeDraftSetupCapability(provider: string | null): string {
-  if (provider === "yahoo") {
-    return "Manual entry only. Yahoo live draft sync is not available.";
+export function describeDraftSetupCapability(
+  provider: string | null,
+  yahooAssistSupported = false,
+): string {
+  if (provider === "yahoo" && yahooAssistSupported) {
+    return "Start a shared manual room, with optional read-only Yahoo-assisted checks.";
   }
   return "Manual entries are shared. No live draft feed is attached.";
 }

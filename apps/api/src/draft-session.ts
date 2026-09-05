@@ -10,11 +10,12 @@ import {
   leagueSeasons,
   players,
   rosterSlotRules,
+  yahooDraftPollFeeds,
   type Database,
   type DraftEventSource,
   type LeagueMembershipRole,
 } from "@laces-out/db";
-import type { EspnLiveDraftFeedStatus } from "@laces-out/contracts";
+import type { DraftProviderFeedStatus } from "@laces-out/contracts";
 import {
   NFL_POSITIONS,
   NFL_TEAMS,
@@ -51,6 +52,10 @@ import {
   providerCommissionerAuthoritySql,
   publicLeagueAccessRole,
 } from "./public-league-access.js";
+import {
+  YAHOO_DRAFT_PREREGISTRATION_CHECKSUM,
+  yahooDraftApplicationMode,
+} from "./yahoo-draft-release.js";
 
 const uuidSchema = z.string().uuid();
 const idempotencyKeySchema = z.string().trim().min(8).max(200);
@@ -112,13 +117,26 @@ const appendActionSchema = z.discriminatedUnion("type", [
 const createSessionInputSchema = z
   .object({
     leagueSeasonId: uuidSchema,
+    providerAssist: z.literal("yahoo").optional(),
+    yahooScopeConfirmation: z.literal("no-keepers-or-traded-picks").optional(),
     mode: z.enum(["snake", "auction"]).optional(),
     teamOrder: z.array(z.string().trim().min(1).max(200)).min(2).optional(),
     thirdRoundReversal: z.boolean().optional(),
     budgetPerTeam: positiveIntegerSchema.optional(),
     minimumBid: positiveIntegerSchema.optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((value, context) => {
+    const assisted = value.providerAssist === "yahoo";
+    const confirmed = value.yahooScopeConfirmation === "no-keepers-or-traded-picks";
+    if (assisted !== confirmed) {
+      context.addIssue({
+        code: "custom",
+        path: assisted ? ["yahooScopeConfirmation"] : ["providerAssist"],
+        message: "Yahoo assistance requires the standard-draft scope confirmation",
+      });
+    }
+  });
 
 const appendInputSchema = z
   .object({
@@ -198,13 +216,16 @@ const storedSettingsSchema = z
     schemaVersion: z.literal(1),
     // Widened in place rather than version-bumped: no field was added or removed, so every
     // already-stored manual session still parses byte for byte.
-    transport: z.enum(["manual", "espn-live"]),
+    transport: z.enum(["manual", "espn-live", "yahoo-assisted"]),
     providerPolling: z.boolean(),
     source: z
       .object({
         leagueSeasonId: uuidSchema,
         provider: z.enum(["yahoo", "espn", "manual"]),
         sourceDraftType: z.string(),
+        yahooScopeConfirmation: z.literal("no-keepers-or-traded-picks").optional(),
+        yahooScopeConfirmedByUserId: uuidSchema.optional(),
+        yahooScopeConfirmedAt: z.iso.datetime().optional(),
         excludedRosterSlotCodes: z.array(z.string()),
       })
       .strict(),
@@ -276,7 +297,11 @@ const storedEventSchema = z.discriminatedUnion("type", [
     .strict(),
 ]);
 
-const draftEventSources: ReadonlySet<string> = new Set<DraftEventSource>(["manual", "espn"]);
+const draftEventSources: ReadonlySet<string> = new Set<DraftEventSource>([
+  "manual",
+  "espn",
+  "yahoo",
+]);
 
 /**
  * Event IDs are derived, not random, so a replayed write reproduces a byte-identical event. The
@@ -369,6 +394,8 @@ export interface LeagueDraftSourcePlayer {
 export interface LeagueDraftSource {
   readonly leagueId: string;
   readonly leagueSeasonId: string;
+  readonly externalKey: string;
+  readonly season: number;
   readonly provider: "yahoo" | "espn" | "manual";
   readonly draftType: string;
   readonly teamCount: number;
@@ -414,6 +441,14 @@ export interface NewStoredDraft {
   readonly budgetPerTeam: number | null;
   readonly minimumBid: number | null;
   readonly settings: Readonly<Record<string, unknown>>;
+  readonly yahooFeed?: {
+    readonly providerLeagueKey: string;
+    readonly season: number;
+    readonly format: "snake" | "auction";
+    readonly applicationMode: "shadow" | "append";
+    readonly releaseArtifactChecksum: string;
+    readonly standardScopeConfirmed: boolean;
+  };
   readonly now: Date;
 }
 
@@ -429,7 +464,7 @@ export interface PendingDraftEvent {
 
 export type CreateStoredDraftResult =
   | { readonly status: "saved"; readonly draft: StoredDraft }
-  | { readonly status: "not-found" | "forbidden" | "archived" };
+  | { readonly status: "not-found" | "forbidden" | "archived" | "provider-feed-conflict" };
 
 export type AppendStoredEventsResult =
   | { readonly status: "saved" | "idempotent"; readonly events: readonly StoredDraftEvent[] }
@@ -457,7 +492,7 @@ export interface DraftSessionRepository {
    * Optional so manual-only deployments and existing test fakes keep working. A draft with no
    * provider feed simply reports `providerFeed: null`.
    */
-  loadProviderFeedStatus?(draftId: string): Promise<EspnLiveDraftFeedStatus | undefined>;
+  loadProviderFeedStatus?(draftId: string): Promise<DraftProviderFeedStatus | undefined>;
 }
 
 export interface DraftSessionEventRecord {
@@ -472,11 +507,11 @@ export interface DraftSessionEventRecord {
 export interface DraftSessionSnapshot {
   readonly id: string;
   readonly leagueSeasonId: string;
-  readonly transport: "manual" | "espn-live";
+  readonly transport: "manual" | "espn-live" | "yahoo-assisted";
   /** True only while an accepted provider feed is actually supplying this room. */
   readonly providerPolling: boolean;
-  /** Null for a manual room; present whenever an ESPN feed is attached, healthy or not. */
-  readonly providerFeed: EspnLiveDraftFeedStatus | null;
+  /** Null for a manual room; present whenever a provider feed is attached, healthy or not. */
+  readonly providerFeed: DraftProviderFeedStatus | null;
   readonly accessRole: LeagueMembershipRole;
   readonly sequence: number;
   readonly persistedState: string;
@@ -582,7 +617,7 @@ function validatePendingBatch(
 
 /** Injected so the draft session layer never has to know how provider feeds are stored. */
 export interface ProviderFeedStatusSource {
-  loadFeedStatus(draftId: string): Promise<EspnLiveDraftFeedStatus | undefined>;
+  loadFeedStatus(draftId: string): Promise<DraftProviderFeedStatus | undefined>;
 }
 
 export class DrizzleDraftSessionRepository implements DraftSessionRepository {
@@ -594,7 +629,7 @@ export class DrizzleDraftSessionRepository implements DraftSessionRepository {
     this.#providerFeeds = providerFeeds;
   }
 
-  async loadProviderFeedStatus(draftId: string): Promise<EspnLiveDraftFeedStatus | undefined> {
+  async loadProviderFeedStatus(draftId: string): Promise<DraftProviderFeedStatus | undefined> {
     return this.#providerFeeds?.loadFeedStatus(draftId);
   }
 
@@ -608,6 +643,7 @@ export class DrizzleDraftSessionRepository implements DraftSessionRepository {
         ownerUserId: leagues.ownerUserId,
         archived: leagues.archived,
         leagueSeasonId: leagueSeasons.id,
+        externalKey: leagueSeasons.externalKey,
         season: leagueSeasons.season,
         provider: leagueSeasons.provider,
         draftType: leagueSeasons.draftType,
@@ -683,6 +719,8 @@ export class DrizzleDraftSessionRepository implements DraftSessionRepository {
     return {
       leagueId: scope.leagueId,
       leagueSeasonId: scope.leagueSeasonId,
+      externalKey: scope.externalKey,
+      season: scope.season,
       provider: scope.provider,
       draftType: scope.draftType,
       teamCount: scope.teamCount,
@@ -697,6 +735,14 @@ export class DrizzleDraftSessionRepository implements DraftSessionRepository {
 
   async createDraft(input: NewStoredDraft): Promise<CreateStoredDraftResult> {
     return this.#database.transaction(async (transaction) => {
+      if (input.yahooFeed) {
+        // A feed row may not exist yet, so row locking alone cannot serialize two first-time
+        // assisted-room creates. This league-scoped lock turns the unique-index race into the
+        // normal provider-feed-conflict result without blocking unrelated leagues.
+        await transaction.execute(
+          sql`select pg_advisory_xact_lock(hashtextextended(${`yahoo-draft-create:${input.leagueSeasonId}`}, 0))`,
+        );
+      }
       const [scope] = await transaction
         .select({
           ownerUserId: leagues.ownerUserId,
@@ -731,6 +777,16 @@ export class DrizzleDraftSessionRepository implements DraftSessionRepository {
       if (!mayMutate(accessRole)) return { status: "forbidden" };
       if (scope.archived) return { status: "archived" };
 
+      const [existingYahooFeed] = input.yahooFeed
+        ? await transaction
+            .select({ id: yahooDraftPollFeeds.id, draftId: yahooDraftPollFeeds.draftId })
+            .from(yahooDraftPollFeeds)
+            .where(eq(yahooDraftPollFeeds.leagueSeasonId, input.leagueSeasonId))
+            .for("update")
+            .limit(1)
+        : [];
+      if (existingYahooFeed?.draftId) return { status: "provider-feed-conflict" };
+
       const [created] = await transaction
         .insert(drafts)
         .values({
@@ -746,6 +802,32 @@ export class DrizzleDraftSessionRepository implements DraftSessionRepository {
         })
         .returning();
       if (!created) throw new Error("Draft insert returned no row");
+      if (input.yahooFeed) {
+        const values = {
+          draftId: created.id,
+          providerLeagueKey: input.yahooFeed.providerLeagueKey,
+          season: input.yahooFeed.season,
+          format: input.yahooFeed.format,
+          applicationMode: input.yahooFeed.applicationMode,
+          releaseArtifactChecksum: input.yahooFeed.releaseArtifactChecksum,
+          standardScopeConfirmed: input.yahooFeed.standardScopeConfirmed,
+          state: "waiting" as const,
+          nextPollAt: input.now,
+          updatedAt: input.now,
+        };
+        if (existingYahooFeed) {
+          await transaction
+            .update(yahooDraftPollFeeds)
+            .set(values)
+            .where(eq(yahooDraftPollFeeds.id, existingYahooFeed.id));
+        } else {
+          await transaction.insert(yahooDraftPollFeeds).values({
+            ...values,
+            leagueSeasonId: input.leagueSeasonId,
+            createdAt: input.now,
+          });
+        }
+      }
       return { status: "saved", draft: storedDraftFromRow(created, accessRole, false) };
     });
   }
@@ -903,6 +985,26 @@ export class DrizzleDraftSessionRepository implements DraftSessionRepository {
         .update(drafts)
         .set({ state: input.resultingState, updatedAt: input.now })
         .where(eq(drafts.id, input.draftId));
+      // A completed, verified Yahoo comparison describes one exact ledger revision. Reopen only
+      // that terminal comparison after a manual edit. Ordinary manual picks are expected in a
+      // shadow room and must not break an active lease, bypass backoff, or manufacture a warning.
+      if (input.events.some((event) => event.source === "manual")) {
+        await transaction
+          .update(yahooDraftPollFeeds)
+          .set({
+            state: "attention",
+            verification: "pending",
+            lastIssueCode: "CONCURRENT_LEDGER_CHANGE",
+            nextPollAt: input.now,
+            updatedAt: input.now,
+          })
+          .where(
+            and(
+              eq(yahooDraftPollFeeds.draftId, input.draftId),
+              eq(yahooDraftPollFeeds.verification, "verified"),
+            ),
+          );
+      }
       return { status: "saved", events: inserted.map(storedEventFromRow) };
     } catch (error) {
       if (isUniqueViolation(error)) return { status: "idempotency-conflict" };
@@ -1501,10 +1603,16 @@ function activeCorrectionTarget(
 export class DraftSessionService {
   readonly #repository: DraftSessionRepository;
   readonly #now: () => Date;
+  readonly #yahooDraftAssistEnabled: boolean;
 
-  constructor(repository: DraftSessionRepository, now: () => Date = () => new Date()) {
+  constructor(
+    repository: DraftSessionRepository,
+    now: () => Date = () => new Date(),
+    options: { readonly yahooDraftAssistEnabled?: boolean } = {},
+  ) {
     this.#repository = repository;
     this.#now = now;
+    this.#yahooDraftAssistEnabled = options.yahooDraftAssistEnabled ?? false;
   }
 
   async createSession(
@@ -1514,6 +1622,7 @@ export class DraftSessionService {
     const result = createSessionInputSchema.safeParse(unsafeInput);
     if (!result.success) throw parseFailure("Draft session settings are invalid.");
     const input = result.data;
+    const yahooAssisted = input.providerAssist === "yahoo";
     const source = await this.#repository.loadLeagueDraftSource(actorUserId, input.leagueSeasonId);
     if (source === undefined) {
       throw new DraftSessionError(
@@ -1532,6 +1641,20 @@ export class DraftSessionService {
         "DRAFT_FORBIDDEN",
         "Archived leagues cannot start a new draft session.",
       );
+    }
+    if (yahooAssisted) {
+      if (!this.#yahooDraftAssistEnabled) {
+        throw new DraftSessionError(
+          "DRAFT_CONFIG_INVALID",
+          "Yahoo-assisted draft checks are not enabled on this server.",
+        );
+      }
+      if (source.provider !== "yahoo") {
+        throw new DraftSessionError(
+          "DRAFT_CONFIG_INVALID",
+          "Yahoo-assisted draft checks require a synchronized Yahoo league.",
+        );
+      }
     }
     if (source.teams.length !== source.teamCount || source.teams.length < 2) {
       throw new DraftSessionError(
@@ -1583,6 +1706,12 @@ export class DraftSessionService {
         ["thirdRoundReversal"],
         ["draftSettings", "thirdRoundReversal"],
       ]);
+      if (yahooAssisted && thirdRoundReversal) {
+        throw new DraftSessionError(
+          "DRAFT_CONFIG_INVALID",
+          "Yahoo-assisted checks do not yet support third-round reversal drafts.",
+        );
+      }
       config = {
         mode: "SNAKE",
         teams: baseTeams,
@@ -1590,19 +1719,52 @@ export class DraftSessionService {
         pickOrder: createSnakePickOrder(teamOrder, slots.length, { thirdRoundReversal }),
       };
     } else {
-      budgetPerTeam =
-        configuredPositiveInteger(input.budgetPerTeam, source.settings, [
-          ["auctionBudget"],
-          ["draftBudget"],
-          ["draftSettings", "auctionBudget"],
-        ]) ?? null;
-      minimumBid =
-        configuredPositiveInteger(
-          input.minimumBid,
-          source.settings,
-          [["minimumBid"], ["draftSettings", "minimumBid"]],
-          1,
-        ) ?? null;
+      const budgetPaths = [
+        ["auctionBudget"],
+        ["draftBudget"],
+        ["draftSettings", "auctionBudget"],
+      ] as const;
+      const minimumBidPaths = [["minimumBid"], ["draftSettings", "minimumBid"]] as const;
+      const providerBudget = configuredPositiveInteger(undefined, source.settings, budgetPaths);
+      const providerMinimumBid = configuredPositiveInteger(
+        undefined,
+        source.settings,
+        minimumBidPaths,
+        yahooAssisted ? 1 : undefined,
+      );
+      if (yahooAssisted && providerBudget === undefined) {
+        throw new DraftSessionError(
+          "DRAFT_CONFIG_INVALID",
+          "Yahoo-assisted auction checks require a synchronized Yahoo draft budget.",
+        );
+      }
+      if (
+        yahooAssisted &&
+        input.budgetPerTeam !== undefined &&
+        input.budgetPerTeam !== providerBudget
+      ) {
+        throw new DraftSessionError(
+          "DRAFT_CONFIG_INVALID",
+          "The Yahoo-assisted auction budget must match the synchronized Yahoo setting.",
+        );
+      }
+      if (
+        yahooAssisted &&
+        input.minimumBid !== undefined &&
+        input.minimumBid !== providerMinimumBid
+      ) {
+        throw new DraftSessionError(
+          "DRAFT_CONFIG_INVALID",
+          "The Yahoo-assisted minimum bid must match the Yahoo setting.",
+        );
+      }
+      budgetPerTeam = yahooAssisted
+        ? (providerBudget ?? null)
+        : (configuredPositiveInteger(input.budgetPerTeam, source.settings, budgetPaths) ?? null);
+      minimumBid = yahooAssisted
+        ? (providerMinimumBid ?? null)
+        : (configuredPositiveInteger(input.minimumBid, source.settings, minimumBidPaths, 1) ??
+          null);
       if (budgetPerTeam === null || minimumBid === null) {
         throw new DraftSessionError(
           "DRAFT_CONFIG_INVALID",
@@ -1623,12 +1785,19 @@ export class DraftSessionService {
     const id = randomUUID();
     const settings = jsonRecord({
       schemaVersion: 1,
-      transport: "manual",
-      providerPolling: false,
+      transport: yahooAssisted ? "yahoo-assisted" : "manual",
+      providerPolling: yahooAssisted,
       source: {
         leagueSeasonId: source.leagueSeasonId,
         provider: source.provider,
         sourceDraftType: source.draftType,
+        ...(yahooAssisted
+          ? {
+              yahooScopeConfirmation: input.yahooScopeConfirmation,
+              yahooScopeConfirmedByUserId: actorUserId,
+              yahooScopeConfirmedAt: now.toISOString(),
+            }
+          : {}),
         excludedRosterSlotCodes: excludedCodes,
       },
       config,
@@ -1641,6 +1810,18 @@ export class DraftSessionService {
       budgetPerTeam,
       minimumBid,
       settings,
+      ...(yahooAssisted
+        ? {
+            yahooFeed: {
+              providerLeagueKey: source.externalKey,
+              season: source.season,
+              format: mode,
+              applicationMode: yahooDraftApplicationMode(mode),
+              releaseArtifactChecksum: YAHOO_DRAFT_PREREGISTRATION_CHECKSUM,
+              standardScopeConfirmed: input.yahooScopeConfirmation === "no-keepers-or-traded-picks",
+            },
+          }
+        : {}),
       now,
     });
     switch (created.status) {
@@ -1658,6 +1839,11 @@ export class DraftSessionService {
         throw new DraftSessionError(
           "DRAFT_FORBIDDEN",
           "Archived leagues cannot start a new draft session.",
+        );
+      case "provider-feed-conflict":
+        throw new DraftSessionError(
+          "DRAFT_RECONCILIATION_REQUIRED",
+          "This Yahoo league already has an assisted draft room. Reopen that room instead.",
         );
       case "saved":
         return this.getSession(actorUserId, created.draft.id);
@@ -1831,7 +2017,7 @@ export class DraftSessionService {
   #hydrate(
     draft: StoredDraft,
     rows: readonly StoredDraftEvent[],
-    providerFeed: EspnLiveDraftFeedStatus | null = null,
+    providerFeed: DraftProviderFeedStatus | null = null,
   ): DraftSessionSnapshot {
     try {
       const settings = storedSettingsSchema.parse(draft.settings);

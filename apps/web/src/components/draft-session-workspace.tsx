@@ -38,6 +38,7 @@ import {
   parseDraftMarketBaseline,
   parseDraftMutation,
   parseDraftSession,
+  parseHealthResponse,
   parseLeagueDashboard,
   parseLeagueListResponse,
   parseRankingListResponse,
@@ -86,6 +87,16 @@ import {
 } from "../lib/draft-mock";
 import { LatestRequest } from "../lib/latest-request";
 import { useByeWeeks } from "../lib/use-bye-weeks";
+import {
+  draftLedgerStateLabel,
+  draftRoomStartLabel,
+  providerLocksManualDraftEntry,
+  shouldRequestYahooDraftRefresh,
+  yahooAssistAvailable,
+  yahooAssistSelection,
+  YAHOO_DRAFT_ASSIST_COPY,
+  YAHOO_DRAFT_REFRESH_REQUEST_MS,
+} from "../lib/yahoo-draft-assist";
 import { DraftAnalysisPanel } from "./draft-analysis-panel";
 import { DraftWorkspace as DemoDraftWorkspace } from "./draft-workspace";
 
@@ -221,6 +232,7 @@ export function DraftSessionWorkspace() {
   const accountId = useRef("");
   const mutationInFlight = useRef(false);
   const backgroundRefreshInFlight = useRef(false);
+  const yahooRefreshInFlight = useRef(false);
   const selectedRankingVersionRef = useRef("");
   const claimedDraftTeamAppliedRef = useRef("");
   const dashboardRequestRef = useRef<AbortController | null>(null);
@@ -238,6 +250,8 @@ export function DraftSessionWorkspace() {
   const [teamOrder, setTeamOrder] = useState<readonly string[]>([]);
   const [budget, setBudget] = useState("200");
   const [minimumBid, setMinimumBid] = useState("1");
+  const [yahooAssistEnabled, setYahooAssistEnabled] = useState(false);
+  const [yahooAssistSupported, setYahooAssistSupported] = useState(false);
   const [reconnectId, setReconnectId] = useState("");
   const [requestState, setRequestState] = useState<RequestState>("idle");
   const [pollFailures, setPollFailures] = useState(0);
@@ -383,6 +397,28 @@ export function DraftSessionWorkspace() {
     void bootstrap();
   }, [bootstrap]);
 
+  useEffect(() => {
+    let disposed = false;
+    void fetch(`${apiBaseUrl}/health/live`, {
+      headers: { Accept: "application/json" },
+      cache: "no-store",
+    })
+      .then(async (response) => (response.ok ? parseHealthResponse(await response.json()) : null))
+      .then((health) => {
+        if (!disposed) {
+          setYahooAssistSupported(
+            health?.mobileCapabilities.includes("yahoo-assisted-draft-v1") === true,
+          );
+        }
+      })
+      .catch(() => {
+        if (!disposed) setYahooAssistSupported(false);
+      });
+    return () => {
+      disposed = true;
+    };
+  }, []);
+
   const refreshInBackground = useCallback(
     (draftId: string) => {
       if (mutationInFlight.current || backgroundRefreshInFlight.current) return;
@@ -413,6 +449,58 @@ export function DraftSessionWorkspace() {
       document.removeEventListener("visibilitychange", onVisibilityChange);
     };
   }, [refreshInBackground, session?.id]);
+
+  const yahooAssistedDraftId =
+    session && shouldRequestYahooDraftRefresh(session) ? session.id : null;
+  useEffect(() => {
+    if (yahooAssistedDraftId === null) return;
+    const draftId = yahooAssistedDraftId;
+    let disposed = false;
+    const requestProviderRefresh = async () => {
+      if (disposed || document.visibilityState !== "visible" || yahooRefreshInFlight.current) {
+        return;
+      }
+      yahooRefreshInFlight.current = true;
+      try {
+        const response = await fetch(
+          `${apiBaseUrl}/v1/drafts/${encodeURIComponent(draftId)}/provider-refresh`,
+          {
+            method: "POST",
+            credentials: "include",
+            headers: { Accept: "application/json" },
+          },
+        );
+        if (response.ok && !disposed) {
+          const parsed = parseDraftSession(await response.json());
+          if (parsed) {
+            setSession((current) => preferNewerDraftSnapshot(current, parsed));
+            setLastSyncedAt(Date.now());
+            setPollFailures(0);
+          }
+        }
+      } catch {
+        // The session reload loop and provider status are the user-facing health paths. A browser
+        // request failing must not disable manual entry or produce an unhandled rejection.
+      } finally {
+        yahooRefreshInFlight.current = false;
+      }
+    };
+
+    void requestProviderRefresh();
+    const interval = window.setInterval(
+      () => void requestProviderRefresh(),
+      YAHOO_DRAFT_REFRESH_REQUEST_MS,
+    );
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible") void requestProviderRefresh();
+    };
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => {
+      disposed = true;
+      window.clearInterval(interval);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
+  }, [yahooAssistedDraftId]);
 
   useEffect(() => {
     if (!session) return;
@@ -516,6 +604,7 @@ export function DraftSessionWorkspace() {
     setDashboardLeagueId("");
     setTeamOrder([]);
     setDashboardState(leagueId ? "loading" : "idle");
+    setYahooAssistEnabled(false);
     setSelectedLeagueId(leagueId);
   }
 
@@ -836,13 +925,9 @@ export function DraftSessionWorkspace() {
   const selectedPlayer = session?.config.players.find((player) => player.id === selectedPlayerId);
   const selectedBoardRow = boardRows.find((row) => row.player.id === selectedPlayerId);
   const canMutate = session?.accessRole === "commissioner";
-  // Provider and manual control must never interleave invisibly (§16.5): typing a pick into a
-  // room a live feed is still driving is how duplicates get made. Manual backup is the door.
-  const providerLocksManualEntry =
-    session !== null &&
-    session.transport !== "manual" &&
-    session.providerFeed !== null &&
-    !session.providerFeed.manualBackupActive;
+  // ESPN's mutable browser feed still uses manual backup as its explicit control handoff. Yahoo's
+  // cumulative append-only checks are designed to coexist with manual entry and never lock it.
+  const providerLocksManualEntry = providerLocksManualDraftEntry(session);
   const canRecord = localMock !== null || (canMutate && !providerLocksManualEntry);
   const teamStates = activeDraftState?.teams ?? EMPTY_TEAM_STATES;
   const selectedTeam = teamStates.find((team) => team.teamId === selectedTeamId);
@@ -934,6 +1019,11 @@ export function DraftSessionWorkspace() {
   async function createSession() {
     const league = portfolio?.leagues.find((item) => item.id === selectedLeagueId);
     if (!league?.season || !dashboard || dashboardLeagueId !== selectedLeagueId) return;
+    const providerAssist = yahooAssistSelection(
+      league.season.provider,
+      yahooAssistEnabled,
+      yahooAssistSupported,
+    );
     setRequestState("loading");
     setNotice("");
     try {
@@ -943,10 +1033,14 @@ export function DraftSessionWorkspace() {
         headers: { Accept: "application/json", "Content-Type": "application/json" },
         body: JSON.stringify({
           leagueSeasonId: league.season.id,
+          ...(providerAssist ? { providerAssist } : {}),
+          ...(providerAssist ? { yahooScopeConfirmation: "no-keepers-or-traded-picks" } : {}),
           mode,
           ...(mode === "snake"
             ? { teamOrder }
-            : { budgetPerTeam: Number(budget), minimumBid: Number(minimumBid) }),
+            : providerAssist
+              ? {}
+              : { budgetPerTeam: Number(budget), minimumBid: Number(minimumBid) }),
         }),
       });
       if (!response.ok) {
@@ -957,7 +1051,11 @@ export function DraftSessionWorkspace() {
       if (!parsed) throw new Error("The new draft session response was invalid.");
       rememberSession(parsed);
       setNotice(
-        parsed.transport === "espn-live" ? "ESPN draft room created." : "Draft room created.",
+        parsed.transport === "espn-live"
+          ? "ESPN draft room created."
+          : parsed.transport === "yahoo-assisted"
+            ? "Yahoo-assisted draft room created."
+            : "Manual draft room created.",
       );
     } catch (error) {
       setNotice(error instanceof Error ? error.message : "The draft session could not be created.");
@@ -1279,7 +1377,7 @@ export function DraftSessionWorkspace() {
         </span>
         <div>
           <p className="eyebrow">Draft studio</p>
-          <h1>Live draft data is unavailable.</h1>
+          <h1>Draft data is unavailable.</h1>
           <p>{notice}</p>
           <div className="draft-session-actions">
             <button className="button button--dark" type="button" onClick={() => void bootstrap()}>
@@ -1297,6 +1395,9 @@ export function DraftSessionWorkspace() {
   if (!session) {
     const league = portfolio?.leagues.find((item) => item.id === selectedLeagueId);
     const mayCreate = league?.membership.role === "commissioner";
+    const yahooAssistedSetup =
+      yahooAssistSelection(league?.season?.provider, yahooAssistEnabled, yahooAssistSupported) ===
+      "yahoo";
     return (
       <div className="draft-page draft-session-setup">
         <header className="page-heading">
@@ -1306,7 +1407,7 @@ export function DraftSessionWorkspace() {
             </Link>
             <h1>Start or reopen a draft room.</h1>
             <p className="page-subtitle">
-              {describeDraftSetupCapability(league?.season?.provider ?? null)}
+              {describeDraftSetupCapability(league?.season?.provider ?? null, yahooAssistSupported)}
             </p>
           </div>
           <button className="button button--soft" type="button" onClick={() => setShowDemo(true)}>
@@ -1372,7 +1473,16 @@ export function DraftSessionWorkspace() {
                     </button>
                   </div>
                 </fieldset>
-                {mode === "auction" ? (
+                {mode === "auction" && yahooAssistedSetup ? (
+                  <div className="draft-session-order">
+                    <div>
+                      <strong>Yahoo auction settings</strong>
+                      <span>
+                        The synchronized Yahoo budget and minimum bid will be used automatically.
+                      </span>
+                    </div>
+                  </div>
+                ) : mode === "auction" ? (
                   <div className="draft-session-money-grid">
                     <label>
                       <span>Budget per team</span>
@@ -1431,6 +1541,22 @@ export function DraftSessionWorkspace() {
                     })}
                   </div>
                 )}
+                {yahooAssistAvailable(league?.season?.provider, yahooAssistSupported) ? (
+                  <fieldset className="draft-session-yahoo-assist">
+                    <label>
+                      <input
+                        type="checkbox"
+                        checked={yahooAssistEnabled}
+                        onChange={(event) => setYahooAssistEnabled(event.target.checked)}
+                      />
+                      <span>
+                        <strong>{YAHOO_DRAFT_ASSIST_COPY.label}</strong>
+                        <small>{YAHOO_DRAFT_ASSIST_COPY.detail}</small>
+                        <small>{YAHOO_DRAFT_ASSIST_COPY.safety}</small>
+                      </span>
+                    </label>
+                  </fieldset>
+                ) : null}
                 {!mayCreate ? (
                   <p className="draft-session-permission">
                     <ShieldCheck size={14} /> Only a league commissioner can create the shared room.
@@ -1454,7 +1580,11 @@ export function DraftSessionWorkspace() {
                   ) : (
                     <Play size={14} />
                   )}{" "}
-                  Start shared room
+                  {draftRoomStartLabel(
+                    league?.season?.provider,
+                    yahooAssistEnabled,
+                    yahooAssistSupported,
+                  )}
                 </button>
               </div>
             ) : (
@@ -1541,7 +1671,8 @@ export function DraftSessionWorkspace() {
   const liveStrip = liveStatus.strip;
   const manualBackup = liveStatus.manualBackup;
   const mobileDecision = describeMobileDecision(session, activeTeamId, liveStatus);
-  const providerAuction = session.providerFeed?.currentAuction ?? null;
+  const providerAuction =
+    session.providerFeed?.provider === "espn" ? session.providerFeed.currentAuction : null;
   const providerAuctionNominator = providerAuction?.nominatingTeamId
     ? session.config.teams.find((team) => team.id === providerAuction.nominatingTeamId)
     : undefined;
@@ -1655,7 +1786,7 @@ export function DraftSessionWorkspace() {
       {liveStrip ? (
         <section
           className={`draft-live-strip draft-live-strip--${liveStatus.tone}`}
-          aria-label={`${liveStrip.providerName} live draft feed`}
+          aria-label={`${liveStrip.providerName} draft status`}
         >
           <div className="draft-live-strip__status">
             <span
@@ -1679,7 +1810,7 @@ export function DraftSessionWorkspace() {
               </dd>
             </div>
             <div>
-              <dt>Accepted</dt>
+              <dt>{liveStrip.pickCountHeading}</dt>
               <dd>
                 {liveStrip.pickCountLabel} · {liveStrip.updateChannelLabel}
               </dd>
@@ -2086,7 +2217,11 @@ export function DraftSessionWorkspace() {
           <div>
             <span>{localMock ? "Local events" : "Ledger"}</span>
             <strong>{localMock ? generatedMockEvents.length : session.sequence}</strong>
-            <small>{localMock ? "browser memory" : session.persistedState}</small>
+            <small>
+              {localMock
+                ? "browser memory"
+                : draftLedgerStateLabel(session.transport, session.persistedState)}
+            </small>
           </div>
         </article>
         <article>
@@ -2625,11 +2760,11 @@ export function DraftSessionWorkspace() {
           mobileDecision.stale ? " draft-mobile-action--stale" : ""
         }`}
         role="region"
-        aria-label="Live draft controls"
+        aria-label="Draft controls"
       >
         {/* Everything below is decision-critical on a phone (§16.4): who is on the clock or
             nominated, feed health, roster needs, budget, and an unmissable stale state. */}
-        <div className="draft-mobile-action__feed" aria-live="polite">
+        <div className="draft-mobile-action__feed">
           <span className="draft-mobile-action__feed-status">
             <span
               className={`live-freshness-dot live-freshness-dot--${liveStatus.freshness}`}
@@ -2809,7 +2944,9 @@ export function DraftSessionWorkspace() {
                   <strong>{eventLabel(event)}</strong>
                   {/* Provenance is on the record, not assumed: a provider-backed room
                       interleaves observed picks with manual backup entries. */}
-                  <small>{record.source === "espn" ? "ESPN" : "Manual"}</small>
+                  <small>
+                    {record.source === "manual" ? "Manual" : providerLabel(record.source)}
+                  </small>
                 </article>
               );
             })}

@@ -47,6 +47,7 @@ const REPEATED_YAHOO_ELEMENTS = new Set([
   "stat_position_type",
   "team_logo",
   "matchup",
+  "draft_result",
 ]);
 
 /**
@@ -211,6 +212,543 @@ export interface YahooLeaguePage {
   readonly leagues: readonly ExternalLeagueRef[];
   readonly start: number;
   readonly returned: number;
+}
+
+export type YahooDraftStatus = "predraft" | "drafting" | "postdraft" | "unknown";
+
+export interface YahooDraftResultPick {
+  /** Yahoo's one-based overall pick sequence. */
+  readonly pick: number;
+  readonly round: number;
+  /** Present only when Yahoo explicitly supplies it. */
+  readonly roundPick?: number;
+  readonly teamKey: string;
+  readonly teamId: string;
+  readonly playerKey: string;
+  readonly playerId: string;
+  /** Auction price in whole Yahoo budget units; absent for a standard draft. */
+  readonly cost: number | null;
+  /** Present only when Yahoo explicitly identifies a keeper. */
+  readonly keeper: boolean | null;
+}
+
+export interface YahooDraftResultsSnapshot {
+  readonly leagueKey: string;
+  readonly leagueId: string;
+  readonly status: YahooDraftStatus;
+  readonly providerStatus: string | null;
+  readonly declaredCount: number;
+  readonly observedCount: number;
+  /** False means the artifact was truncated and must not be admitted as a complete observation. */
+  readonly collectionComplete: boolean;
+  readonly refreshRateSeconds: number | null;
+  readonly picks: readonly YahooDraftResultPick[];
+  readonly checksumSha256: string;
+}
+
+export interface ParseYahooDraftResultsOptions {
+  /** When provided, a response for any other league is rejected. */
+  readonly expectedLeagueKey?: string;
+}
+
+export interface YahooDraftPlayer {
+  readonly playerKey: string;
+  readonly playerId: string;
+  readonly fullName: string;
+  readonly proTeamAbbreviation: string | null;
+  readonly primaryPosition: string;
+  readonly eligiblePositions: readonly string[];
+}
+
+export interface YahooDraftPlayersSnapshot {
+  readonly leagueKey: string;
+  readonly leagueId: string;
+  readonly declaredCount: number;
+  readonly observedCount: number;
+  readonly collectionComplete: boolean;
+  readonly players: readonly YahooDraftPlayer[];
+  readonly checksumSha256: string;
+}
+
+export const MAX_YAHOO_DRAFT_PLAYER_KEYS = 25;
+const MAX_YAHOO_DRAFT_RESULTS = 10_000;
+
+export interface ParseYahooDraftPlayersOptions {
+  /** When provided, a response for any other league is rejected. */
+  readonly expectedLeagueKey?: string;
+  /** When provided, the response must resolve this exact bounded set of keys. */
+  readonly expectedPlayerKeys?: readonly string[];
+}
+
+interface YahooLeagueKeyIdentity {
+  readonly leagueKey: string;
+  readonly gameKey: string;
+  readonly leagueId: string;
+}
+
+interface YahooScopedKeyIdentity {
+  readonly key: string;
+  readonly id: string;
+}
+
+const YAHOO_LEAGUE_KEY_PATTERN = /^((?:[a-z][a-z0-9-]{0,15}|[0-9]{1,10}))\.l\.([0-9]{1,20})$/u;
+const YAHOO_TEAM_KEY_PATTERN =
+  /^((?:[a-z][a-z0-9-]{0,15}|[0-9]{1,10}))\.l\.([0-9]{1,20})\.t\.([0-9]{1,20})$/u;
+const YAHOO_PLAYER_KEY_PATTERN = /^((?:[a-z][a-z0-9-]{0,15}|[0-9]{1,10}))\.p\.([0-9]{1,20})$/u;
+
+function yahooLeagueKeyIdentity(value: string, label: string): YahooLeagueKeyIdentity {
+  const match = YAHOO_LEAGUE_KEY_PATTERN.exec(value);
+  const gameKey = match?.[1];
+  const leagueId = match?.[2];
+  if (gameKey === undefined || leagueId === undefined) {
+    throw new YahooXmlError("INVALID_CONTRACT", `Yahoo returned an invalid ${label}`);
+  }
+  return { leagueKey: value, gameKey, leagueId };
+}
+
+function yahooTeamKeyIdentity(
+  value: string,
+  league: YahooLeagueKeyIdentity,
+): YahooScopedKeyIdentity {
+  const match = YAHOO_TEAM_KEY_PATTERN.exec(value);
+  const gameKey = match?.[1];
+  const leagueId = match?.[2];
+  const teamId = match?.[3];
+  if (
+    gameKey === undefined ||
+    leagueId === undefined ||
+    teamId === undefined ||
+    gameKey !== league.gameKey ||
+    leagueId !== league.leagueId
+  ) {
+    throw new YahooXmlError(
+      "INVALID_CONTRACT",
+      "Yahoo draft result contained an invalid or out-of-scope team_key",
+    );
+  }
+  return { key: value, id: teamId };
+}
+
+function yahooPlayerKeyIdentity(
+  value: string,
+  gameKey: string,
+  label = "player_key",
+): YahooScopedKeyIdentity {
+  const match = YAHOO_PLAYER_KEY_PATTERN.exec(value);
+  const keyGame = match?.[1];
+  const playerId = match?.[2];
+  if (keyGame === undefined || playerId === undefined || keyGame !== gameKey) {
+    throw new YahooXmlError(
+      "INVALID_CONTRACT",
+      `Yahoo returned an invalid or out-of-scope ${label}`,
+    );
+  }
+  return { key: value, id: playerId };
+}
+
+function boundedOptionalInteger(
+  record: XmlRecord,
+  key: string,
+  label: string,
+  minimum: number,
+  maximum = Number.MAX_SAFE_INTEGER,
+): number | null {
+  if (!Object.hasOwn(record, key)) return null;
+  const parsed = integer(record[key]);
+  if (parsed === null || parsed < minimum || parsed > maximum) {
+    throw new YahooXmlError("INVALID_CONTRACT", `Yahoo returned invalid ${label}`);
+  }
+  return parsed;
+}
+
+function boundedRequiredText(value: unknown, label: string, maximum: number): string {
+  const parsed = text(value);
+  if (parsed === null || parsed.length > maximum || containsAsciiControl(parsed)) {
+    throw new YahooXmlError("INVALID_CONTRACT", `Yahoo returned invalid ${label}`);
+  }
+  return parsed;
+}
+
+function containsAsciiControl(value: string): boolean {
+  for (const character of value) {
+    const codePoint = character.codePointAt(0) ?? 0;
+    if (codePoint < 0x20 || codePoint === 0x7f) return true;
+  }
+  return false;
+}
+
+function boundedOptionalText(value: unknown, label: string, maximum: number): string | null {
+  const parsed = text(value);
+  return parsed === null ? null : boundedRequiredText(parsed, label, maximum);
+}
+
+function explicitBoolean(record: XmlRecord, key: string, label: string): boolean | null {
+  if (!Object.hasOwn(record, key)) return null;
+  const normalized = text(record[key])?.toLowerCase();
+  if (normalized === "1" || normalized === "true" || normalized === "yes") return true;
+  if (normalized === "0" || normalized === "false" || normalized === "no") return false;
+  throw new YahooXmlError("INVALID_CONTRACT", `Yahoo returned invalid ${label}`);
+}
+
+function explicitDraftKeeper(result: XmlRecord): boolean | null {
+  const isKeeper = explicitBoolean(result, "is_keeper", "draft result is_keeper");
+  const keeper = explicitBoolean(result, "keeper", "draft result keeper");
+  if (isKeeper !== null && keeper !== null && isKeeper !== keeper) {
+    throw new YahooXmlError(
+      "INVALID_CONTRACT",
+      "Yahoo draft result contained conflicting keeper fields",
+    );
+  }
+  return isKeeper ?? keeper;
+}
+
+function yahooDraftStatus(value: string | null): YahooDraftStatus {
+  const normalized = value?.toLowerCase().replaceAll(/[\s_-]+/gu, "") ?? "";
+  if (normalized === "predraft") return "predraft";
+  if (normalized === "drafting" || normalized === "indraft") return "drafting";
+  if (normalized === "postdraft") return "postdraft";
+  return "unknown";
+}
+
+function checkedLeagueIdentity(
+  league: XmlRecord,
+  expectedLeagueKey: string | undefined,
+): YahooLeagueKeyIdentity {
+  const leagueKey = requiredText(league, "league_key", "league_key");
+  const identity = yahooLeagueKeyIdentity(leagueKey, "league_key");
+  const explicitLeagueId = requiredText(league, "league_id", "league_id");
+  if (explicitLeagueId !== identity.leagueId) {
+    throw new YahooXmlError(
+      "INVALID_CONTRACT",
+      "Yahoo league_id did not match its compound league_key",
+    );
+  }
+  if (expectedLeagueKey !== undefined) {
+    yahooLeagueKeyIdentity(expectedLeagueKey, "expected league_key");
+    if (expectedLeagueKey !== leagueKey) {
+      throw new YahooXmlError(
+        "INVALID_CONTRACT",
+        "Yahoo draft response belonged to a different league",
+      );
+    }
+  }
+  return identity;
+}
+
+/** Parse Yahoo's provider-shaped draft result collection without inferring draft completion. */
+export function parseYahooDraftResultsXml(
+  xml: string,
+  options: ParseYahooDraftResultsOptions = {},
+): YahooDraftResultsSnapshot {
+  const parsed = parseYahooXml(xml);
+  const content = fantasyContent(parsed);
+  const leagueNode = findLeagueNode(parsed);
+  const league = checkedLeagueIdentity(leagueNode, options.expectedLeagueKey);
+  const providerStatus = boundedOptionalText(leagueNode.draft_status, "draft_status", 32);
+  const status = yahooDraftStatus(providerStatus);
+  const draftResults = child(leagueNode, "draft_results");
+  const emptyPredraftCollection =
+    status === "predraft" &&
+    Object.hasOwn(leagueNode, "draft_results") &&
+    text(leagueNode.draft_results) === null;
+  if (draftResults === null && !emptyPredraftCollection) {
+    throw new YahooXmlError("INVALID_CONTRACT", "Yahoo response omitted draft_results");
+  }
+  const declaredCount =
+    draftResults === null
+      ? 0
+      : boundedOptionalInteger(
+          draftResults,
+          "@_count",
+          "draft result count",
+          0,
+          MAX_YAHOO_DRAFT_RESULTS,
+        );
+  if (declaredCount === null) {
+    throw new YahooXmlError("INVALID_CONTRACT", "Yahoo draft_results omitted its count");
+  }
+  const refreshRateSeconds = boundedOptionalInteger(
+    content,
+    "@_refresh_rate",
+    "refresh_rate",
+    1,
+    3_600,
+  );
+
+  const picks: YahooDraftResultPick[] = [];
+  for (const candidate of asArray(draftResults?.draft_result)) {
+    const result = asRecord(candidate);
+    if (result === null) {
+      throw new YahooXmlError("INVALID_CONTRACT", "Yahoo returned an invalid draft_result");
+    }
+    const team = yahooTeamKeyIdentity(
+      requiredText(result, "team_key", "draft result team_key"),
+      league,
+    );
+    const player = yahooPlayerKeyIdentity(
+      requiredText(result, "player_key", "draft result player_key"),
+      league.gameKey,
+      "draft result player_key",
+    );
+    const pick = boundedOptionalInteger(
+      result,
+      "pick",
+      "draft result pick",
+      1,
+      MAX_YAHOO_DRAFT_RESULTS,
+    );
+    const round = boundedOptionalInteger(
+      result,
+      "round",
+      "draft result round",
+      1,
+      MAX_YAHOO_DRAFT_RESULTS,
+    );
+    if (pick === null || round === null) {
+      throw new YahooXmlError("INVALID_CONTRACT", "Yahoo draft_result omitted its pick or round");
+    }
+    const roundPick = boundedOptionalInteger(result, "round_pick", "draft result round_pick", 1);
+    picks.push({
+      pick,
+      round,
+      ...(roundPick === null ? {} : { roundPick }),
+      teamKey: team.key,
+      teamId: team.id,
+      playerKey: player.key,
+      playerId: player.id,
+      cost: boundedOptionalInteger(result, "cost", "draft result cost", 0),
+      keeper: explicitDraftKeeper(result),
+    });
+  }
+
+  picks.sort((left, right) => left.pick - right.pick);
+  if (picks.some((pick, index) => pick.pick !== index + 1)) {
+    throw new YahooXmlError(
+      "INVALID_CONTRACT",
+      "Yahoo draft results contained duplicate or non-contiguous picks",
+    );
+  }
+  if (new Set(picks.map((pick) => pick.playerKey)).size !== picks.length) {
+    throw new YahooXmlError("INVALID_CONTRACT", "Yahoo draft results repeated a player_key");
+  }
+  if (picks.length > declaredCount) {
+    throw new YahooXmlError(
+      "INVALID_CONTRACT",
+      "Yahoo draft results exceeded their declared count",
+    );
+  }
+  if (picks.length === 0 && status === "postdraft") {
+    throw new YahooXmlError(
+      "INVALID_CONTRACT",
+      "Yahoo returned empty draft results after the draft completed",
+    );
+  }
+  if (picks.length > 0 && status === "predraft") {
+    throw new YahooXmlError(
+      "INVALID_CONTRACT",
+      "Yahoo returned draft picks while the league was still predraft",
+    );
+  }
+
+  const checksumSha256 = createHash("sha256")
+    .update(
+      JSON.stringify([
+        "yahoo-draft-results-v1",
+        league.leagueKey,
+        status,
+        providerStatus,
+        declaredCount,
+        picks.map((pick) => [
+          pick.pick,
+          pick.round,
+          pick.roundPick ?? null,
+          pick.teamKey,
+          pick.playerKey,
+          pick.cost,
+          pick.keeper,
+        ]),
+      ]),
+      "utf8",
+    )
+    .digest("hex");
+  return {
+    leagueKey: league.leagueKey,
+    leagueId: league.leagueId,
+    status,
+    providerStatus,
+    declaredCount,
+    observedCount: picks.length,
+    collectionComplete: declaredCount === picks.length,
+    refreshRateSeconds,
+    picks,
+    checksumSha256,
+  };
+}
+
+function normalizedPosition(value: unknown, label: string): string {
+  const normalized = boundedRequiredText(value, label, 16).toUpperCase();
+  if (!/^[A-Z0-9+./-]+$/u.test(normalized)) {
+    throw new YahooXmlError("INVALID_CONTRACT", `Yahoo returned invalid ${label}`);
+  }
+  return normalized;
+}
+
+function yahooDraftPlayer(player: XmlRecord, gameKey: string): YahooDraftPlayer {
+  const key = yahooPlayerKeyIdentity(
+    requiredText(player, "player_key", "draft player player_key"),
+    gameKey,
+    "draft player player_key",
+  );
+  if (requiredText(player, "player_id", "draft player player_id") !== key.id) {
+    throw new YahooXmlError(
+      "INVALID_CONTRACT",
+      "Yahoo draft player_id did not match its compound player_key",
+    );
+  }
+  const fullName = boundedRequiredText(
+    child(player, "name")?.full ?? player.name,
+    "draft player name",
+    200,
+  );
+  const providerEligiblePositions = asArray(child(player, "eligible_positions")?.position).map(
+    (position) => normalizedPosition(position, "draft player eligible position"),
+  );
+  const displayPositions = (text(player.display_position) ?? "")
+    .split(",")
+    .map((position) => position.trim())
+    .filter(Boolean)
+    .map((position) => normalizedPosition(position, "draft player display position"));
+  const eligiblePositions = [...new Set([...providerEligiblePositions, ...displayPositions])];
+  if (eligiblePositions.length < 1 || eligiblePositions.length > 16) {
+    throw new YahooXmlError("INVALID_CONTRACT", "Yahoo returned invalid draft player positions");
+  }
+  const primaryPosition =
+    (Object.hasOwn(player, "primary_position")
+      ? normalizedPosition(player.primary_position, "draft player primary position")
+      : undefined) ?? eligiblePositions[0];
+  if (primaryPosition === undefined) {
+    throw new YahooXmlError(
+      "INVALID_CONTRACT",
+      "Yahoo response omitted draft player primary position",
+    );
+  }
+  const proTeamAbbreviation = boundedOptionalText(
+    player.editorial_team_abbr,
+    "draft player team abbreviation",
+    16,
+  );
+  return {
+    playerKey: key.key,
+    playerId: key.id,
+    fullName,
+    proTeamAbbreviation: proTeamAbbreviation?.toUpperCase() ?? null,
+    primaryPosition,
+    eligiblePositions,
+  };
+}
+
+function checkedExpectedPlayerKeys(values: readonly string[], gameKey: string): readonly string[] {
+  if (values.length < 1 || values.length > MAX_YAHOO_DRAFT_PLAYER_KEYS) {
+    throw new TypeError(
+      `Yahoo expected player keys must contain between 1 and ${MAX_YAHOO_DRAFT_PLAYER_KEYS} values`,
+    );
+  }
+  if (new Set(values).size !== values.length) {
+    throw new TypeError("Yahoo expected player keys cannot contain duplicates");
+  }
+  return values.map((value) => yahooPlayerKeyIdentity(value, gameKey, "expected player_key").key);
+}
+
+/** Parse a bounded league-scoped response that resolves exact Yahoo player keys. */
+export function parseYahooDraftPlayersXml(
+  xml: string,
+  options: ParseYahooDraftPlayersOptions = {},
+): YahooDraftPlayersSnapshot {
+  const parsed = parseYahooXml(xml);
+  const leagueNode = findLeagueNode(parsed);
+  const league = checkedLeagueIdentity(leagueNode, options.expectedLeagueKey);
+  const collection = child(leagueNode, "players");
+  if (collection === null) {
+    throw new YahooXmlError("INVALID_CONTRACT", "Yahoo response omitted players");
+  }
+  const declaredCount = boundedOptionalInteger(
+    collection,
+    "@_count",
+    "player count",
+    0,
+    MAX_YAHOO_DRAFT_PLAYER_KEYS,
+  );
+  if (declaredCount === null) {
+    throw new YahooXmlError("INVALID_CONTRACT", "Yahoo players omitted its count");
+  }
+  const players = asArray(collection.player).map((candidate) => {
+    const player = asRecord(candidate);
+    if (player === null) {
+      throw new YahooXmlError("INVALID_CONTRACT", "Yahoo returned an invalid draft player");
+    }
+    return yahooDraftPlayer(player, league.gameKey);
+  });
+  if (new Set(players.map((player) => player.playerKey)).size !== players.length) {
+    throw new YahooXmlError("INVALID_CONTRACT", "Yahoo draft players repeated a player_key");
+  }
+  if (players.length !== declaredCount) {
+    throw new YahooXmlError(
+      "INVALID_CONTRACT",
+      "Yahoo draft player response did not match its declared count",
+    );
+  }
+
+  let orderedPlayers = players;
+  if (options.expectedPlayerKeys !== undefined) {
+    const expectedKeys = checkedExpectedPlayerKeys(options.expectedPlayerKeys, league.gameKey);
+    const byKey = new Map(players.map((player) => [player.playerKey, player]));
+    if (
+      byKey.size !== expectedKeys.length ||
+      expectedKeys.some((playerKey) => !byKey.has(playerKey))
+    ) {
+      throw new YahooXmlError(
+        "INVALID_CONTRACT",
+        "Yahoo did not resolve the exact requested player keys",
+      );
+    }
+    orderedPlayers = expectedKeys.map((playerKey) => {
+      const resolved = byKey.get(playerKey);
+      if (resolved === undefined) {
+        throw new YahooXmlError(
+          "INVALID_CONTRACT",
+          "Yahoo did not resolve the exact requested player keys",
+        );
+      }
+      return resolved;
+    });
+  }
+
+  const checksumSha256 = createHash("sha256")
+    .update(
+      JSON.stringify([
+        "yahoo-draft-players-v1",
+        league.leagueKey,
+        orderedPlayers.map((player) => [
+          player.playerKey,
+          player.fullName,
+          player.proTeamAbbreviation,
+          player.primaryPosition,
+          player.eligiblePositions,
+        ]),
+      ]),
+      "utf8",
+    )
+    .digest("hex");
+
+  return {
+    leagueKey: league.leagueKey,
+    leagueId: league.leagueId,
+    declaredCount,
+    observedCount: orderedPlayers.length,
+    collectionComplete: declaredCount === orderedPlayers.length,
+    players: orderedPlayers,
+    checksumSha256,
+  };
 }
 
 /** Parse one bounded page from the logged-in user's Yahoo league collection. */

@@ -275,6 +275,41 @@ describe("Yahoo sync routes", () => {
     await app.close();
   });
 
+  it("returns a bounded retryable response while Yahoo connection reads are cooling down", async () => {
+    const app = await buildApp({
+      environment: yahooEnvironment(),
+      logger: false,
+      requireAuthentication: true,
+      authService: authService(),
+      yahooSync: yahooSync({
+        discoverAndSync: () =>
+          Promise.reject(
+            new YahooSyncError(
+              "PROVIDER_READ_FAILED",
+              "Yahoo is temporarily limiting requests. Try again shortly.",
+              { retryable: true, retryAfterMs: 60 * 60 * 1_000, throttled: true },
+            ),
+          ),
+      }),
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: `/v1/connections/yahoo/${CONNECTION_ID}/discover`,
+      headers: { cookie: COOKIE },
+    });
+    expect(response.statusCode).toBe(429);
+    expect(response.headers["retry-after"]).toBe("900");
+    expect(response.json()).toMatchObject({
+      code: "PROVIDER_READ_FAILED",
+      title: "Yahoo sync failed",
+      detail: "Yahoo is temporarily limiting requests. Try again shortly.",
+      status: 429,
+    });
+    expect(response.body).not.toContain("retryAfterMs");
+    await app.close();
+  });
+
   it("limits discovery requests to eight per minute", async () => {
     const app = await buildApp({
       environment: yahooEnvironment(),
