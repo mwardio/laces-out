@@ -1,14 +1,17 @@
 import { defineConfig } from "tsup";
 
 export default defineConfig({
-  entry: [
-    "src/server.ts",
-    "src/migrate.ts",
-    "src/create-owner.ts",
-    "src/reset-password.ts",
-    "src/mint-draft-read.ts",
-    "scripts/yahoo-draft-audit.ts",
-  ],
+  // Explicit output names keep operational entrypoints at dist/*.js even though the audit CLI
+  // lives outside src/. An array spanning both directories makes tsup preserve src/ and scripts/
+  // in the output tree, which breaks the fixed container commands.
+  entry: {
+    server: "src/server.ts",
+    migrate: "src/migrate.ts",
+    "create-owner": "src/create-owner.ts",
+    "reset-password": "src/reset-password.ts",
+    "mint-draft-read": "src/mint-draft-read.ts",
+    "yahoo-draft-audit": "scripts/yahoo-draft-audit.ts",
+  },
   format: ["esm"],
   platform: "node",
   target: "node22",
