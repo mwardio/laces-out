@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 import { parse } from "csv-parse/sync";
 
 import {
@@ -20,6 +22,10 @@ const MAX_RESPONSE_BYTES = 24 * 1024 * 1024;
 const MAX_ROWS = 25_000;
 const ABSOLUTE_REJECTION_ALLOWANCE = 25;
 const MAXIMUM_REJECTION_RATIO = 0.02;
+// The persisted checksum fingerprints both the upstream bytes and the normalized component
+// contract. Otherwise adding a component to an unchanged historical CSV collides with the prior
+// immutable observations and silently leaves the new field absent.
+const NORMALIZED_COMPONENT_SCHEMA = "nflverse-player-week-components-v2";
 
 export type NflverseSeasonType = "REG" | "POST";
 
@@ -516,10 +522,16 @@ export class NflverseWeeklyStatsSource {
       checksumSha256: result.checksumSha256,
     };
     if (result.state === "unchanged") return { state: "unchanged", ...base };
+    const checksumSha256 = createHash("sha256")
+      .update(`${NORMALIZED_COMPONENT_SCHEMA}:${result.checksumSha256}`)
+      .digest("hex");
+    if (checksumSha256 === previous.checksumSha256) {
+      return { state: "unchanged", ...base, checksumSha256 };
+    }
     return {
       state: "changed",
       ...base,
-      checksumSha256: result.checksumSha256,
+      checksumSha256,
       ...parseWeeklyStats(result.body, season),
     };
   }

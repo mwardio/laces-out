@@ -62,8 +62,10 @@ const currentSeasonCheckIntervalMinutes = 30;
 const historicalCheckIntervalMinutes = 24 * 60;
 const claimMinutes = 45;
 const chunkSize = 500;
-// v3 adds exact kicker distance components and play-by-play-derived fourth-down stops.
-const sourceSchemaVersion = 3;
+// v3 added exact kicker distance components and play-by-play-derived fourth-down stops. v4 makes
+// normalized player-week checksums schema-aware, so an unchanged upstream artifact is replayed
+// into a distinct immutable observation set when its component contract changes.
+const sourceSchemaVersion = 4;
 const fantasyRosterPositions = new Set(["QB", "RB", "FB", "WR", "TE", "K"]);
 
 export interface WeeklyDataRefreshResult {

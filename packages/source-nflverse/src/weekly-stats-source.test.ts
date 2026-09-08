@@ -114,6 +114,25 @@ describe("NflverseWeeklyStatsSource", () => {
     });
   });
 
+  it("versions the normalized observation checksum independently from unchanged upstream bytes", async () => {
+    const source = new NflverseWeeklyStatsSource({
+      fetch: () => Promise.resolve(new Response(fixture)),
+    });
+    const first = await source.check(2025, EMPTY_STATE);
+    if (first.state !== "changed") throw new Error("Expected changed player stats");
+
+    const second = await source.check(2025, {
+      etag: null,
+      lastModified: null,
+      checksumSha256: first.checksumSha256,
+    });
+
+    expect(second).toMatchObject({
+      state: "unchanged",
+      checksumSha256: first.checksumSha256,
+    });
+  });
+
   it("retains exact kicker miss buckets and total made-field-goal distance", async () => {
     const playerId = "00-0039999";
     let kicker = replaceCell(fixture, playerId, "position", "K");
