@@ -192,6 +192,7 @@ interface LeagueRuleRow {
   readonly thresholdLow: string | null;
   readonly thresholdHigh: string | null;
   readonly providerStatId: string | null;
+  readonly positionTypes: readonly string[] | null;
 }
 
 interface LeagueRosterPlayer {
@@ -1119,6 +1120,7 @@ export class FirstPartyProjectionService implements ProjectionRefreshService {
       );
       const baseChecksum = projectionInputChecksum({
         modelVersion: FIRST_PARTY_PROJECTION_MODEL_VERSION,
+        scoringNormalizationVersion: LEAGUE_SCORING_NORMALIZATION_VERSION,
         championPolicy: {
           version: championPolicyVersion,
           minimumModelImprovement: FIRST_PARTY_CHAMPION_MINIMUM_IMPROVEMENT,
@@ -1845,6 +1847,7 @@ export class FirstPartyProjectionService implements ProjectionRefreshService {
           thresholdLow: scoringRules.thresholdLow,
           thresholdHigh: scoringRules.thresholdHigh,
           providerStatId: scoringRules.providerStatId,
+          positionTypes: scoringRules.positionTypes,
         })
         .from(scoringRules)
         .innerJoin(leagueSeasons, eq(leagueSeasons.id, scoringRules.leagueSeasonId))
@@ -2907,6 +2910,7 @@ export function buildFirstPartyLeaguePublications(input: {
         points: rule.points,
         thresholdLow: rule.thresholdLow,
         thresholdHigh: rule.thresholdHigh,
+        positionTypes: rule.positionTypes,
       })),
       availableStatIds: firstPartyAvailableProjectionComponents(),
     });

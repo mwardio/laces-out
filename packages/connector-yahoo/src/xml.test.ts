@@ -52,6 +52,12 @@ describe("Yahoo XML normalization", () => {
       points: 0.04,
       positionTypes: ["O"],
     });
+    expect(bundle.league.settings.scoringRules).toContainEqual({
+      statId: "82",
+      name: "Extra Point Returned",
+      points: 2,
+      positionTypes: ["DT"],
+    });
     expect(bundle.teams).toHaveLength(2);
     expect(bundle.teams[0]).toMatchObject({
       externalId: "449.l.12345.t.1",

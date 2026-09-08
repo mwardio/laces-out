@@ -318,7 +318,142 @@ const ESPN_LEAGUE_C_ROWS: readonly StoredLeagueScoringRule[] = [
   rule("99:slot:16", "ESPN stat 99 override for D/ST", 1, { provider: "espn" }),
 ];
 
+function yahooScopedRule(
+  providerStatId: string,
+  statKey: string,
+  points: number,
+  positionType: "O" | "K" | "DT",
+): StoredLeagueScoringRule {
+  return rule(providerStatId, statKey, points, { positionTypes: [positionType] });
+}
+
+/** Yahoo's current 2026 default half-PPR scoring shape, including stat 82. */
+const YAHOO_DEFAULT_2026_ROWS: readonly StoredLeagueScoringRule[] = [
+  yahooScopedRule("4", "Passing Yards", 0.04, "O"),
+  yahooScopedRule("5", "Passing Touchdowns", 4, "O"),
+  yahooScopedRule("6", "Interceptions", -1, "O"),
+  yahooScopedRule("9", "Rushing Yards", 0.1, "O"),
+  yahooScopedRule("10", "Rushing Touchdowns", 6, "O"),
+  yahooScopedRule("11", "Receptions", 0.5, "O"),
+  yahooScopedRule("12", "Receiving Yards", 0.1, "O"),
+  yahooScopedRule("13", "Receiving Touchdowns", 6, "O"),
+  yahooScopedRule("15", "Return Touchdowns", 6, "O"),
+  yahooScopedRule("16", "2-Point Conversions", 2, "O"),
+  yahooScopedRule("18", "Fumbles Lost", -2, "O"),
+  yahooScopedRule("57", "Offensive Fumble Return TD", 6, "O"),
+  yahooScopedRule("19", "Field Goals 0-19 Yards", 3, "K"),
+  yahooScopedRule("20", "Field Goals 20-29 Yards", 3, "K"),
+  yahooScopedRule("21", "Field Goals 30-39 Yards", 3, "K"),
+  yahooScopedRule("22", "Field Goals 40-49 Yards", 4, "K"),
+  yahooScopedRule("23", "Field Goals 50+ Yards", 5, "K"),
+  yahooScopedRule("29", "Point After Attempt Made", 1, "K"),
+  yahooScopedRule("32", "Sack", 1, "DT"),
+  yahooScopedRule("33", "Interception", 2, "DT"),
+  yahooScopedRule("34", "Fumble Recovery", 2, "DT"),
+  yahooScopedRule("35", "Touchdown", 6, "DT"),
+  yahooScopedRule("36", "Safety", 2, "DT"),
+  yahooScopedRule("37", "Block Kick", 2, "DT"),
+  yahooScopedRule("49", "Kickoff and Punt Return Touchdowns", 6, "DT"),
+  yahooScopedRule("50", "Points Allowed 0 points", 10, "DT"),
+  yahooScopedRule("51", "Points Allowed 1-6 points", 7, "DT"),
+  yahooScopedRule("52", "Points Allowed 7-13 points", 4, "DT"),
+  yahooScopedRule("53", "Points Allowed 14-20 points", 1, "DT"),
+  yahooScopedRule("54", "Points Allowed 21-27 points", 0, "DT"),
+  yahooScopedRule("55", "Points Allowed 28-34 points", -1, "DT"),
+  yahooScopedRule("56", "Points Allowed 35+ points", -4, "DT"),
+  yahooScopedRule("82", "Extra Point Returned", 2, "DT"),
+];
+
+/** Sanitized exact 35-rule profile that exposed Yahoo scope loss after the draft. */
+const YAHOO_SCOPED_CUSTOM_2026_ROWS: readonly StoredLeagueScoringRule[] = [
+  yahooScopedRule("4", "Passing Yards", 0.04, "O"),
+  yahooScopedRule("5", "Passing Touchdowns", 4, "O"),
+  yahooScopedRule("6", "Interceptions", -2, "O"),
+  yahooScopedRule("9", "Rushing Yards", 0.1, "O"),
+  yahooScopedRule("10", "Rushing Touchdowns", 6, "O"),
+  yahooScopedRule("11", "Receptions", 0.5, "O"),
+  yahooScopedRule("12", "Receiving Yards", 0.1, "O"),
+  yahooScopedRule("13", "Receiving Touchdowns", 6, "O"),
+  yahooScopedRule("14", "Return Yards", 0.0066666666666667, "O"),
+  yahooScopedRule("15", "Return Touchdowns", 6, "O"),
+  yahooScopedRule("16", "2-Point Conversions", 2, "O"),
+  yahooScopedRule("18", "Fumbles Lost", -2, "O"),
+  yahooScopedRule("57", "Offensive Fumble Return TD", 6, "O"),
+  yahooScopedRule("24", "Field Goals Missed 0-19 Yards", -1, "K"),
+  yahooScopedRule("25", "Field Goals Missed 20-29 Yards", -1, "K"),
+  yahooScopedRule("29", "Point After Attempt Made", 1, "K"),
+  yahooScopedRule("30", "Point After Attempt Missed", -1, "K"),
+  yahooScopedRule("84", "Field Goals Total Yards", 0.1, "K"),
+  yahooScopedRule("32", "Sack", 1, "DT"),
+  yahooScopedRule("33", "Interception", 2, "DT"),
+  yahooScopedRule("34", "Fumble Recovery", 2, "DT"),
+  yahooScopedRule("35", "Touchdown", 6, "DT"),
+  yahooScopedRule("36", "Safety", 2, "DT"),
+  yahooScopedRule("37", "Block Kick", 2, "DT"),
+  yahooScopedRule("49", "Kickoff and Punt Return Touchdowns", 6, "DT"),
+  yahooScopedRule("50", "Points Allowed 0 points", 15, "DT"),
+  yahooScopedRule("51", "Points Allowed 1-6 points", 10, "DT"),
+  yahooScopedRule("52", "Points Allowed 7-13 points", 6, "DT"),
+  yahooScopedRule("53", "Points Allowed 14-20 points", 3, "DT"),
+  yahooScopedRule("54", "Points Allowed 21-27 points", 0, "DT"),
+  yahooScopedRule("55", "Points Allowed 28-34 points", -1, "DT"),
+  yahooScopedRule("56", "Points Allowed 35+ points", -4, "DT"),
+  yahooScopedRule("67", "4th Down Stops", 1, "DT"),
+  yahooScopedRule("76", "Defensive Yards Allowed 500+", -1, "DT"),
+  yahooScopedRule("82", "Extra Point Returned", 2, "DT"),
+];
+
 describe("normalizeLeagueScoringProfile", () => {
+  it("normalizes Yahoo's current default profile, including Extra Point Returned", () => {
+    const result = normalized(YAHOO_DEFAULT_2026_ROWS);
+    expectAvailable(result);
+    expect(supportedPositions(result)).toEqual(LEAGUE_SCORING_POSITIONS);
+    expect(result.profile.rules).toContainEqual({
+      statId: "defensive_two_point_returns",
+      points: 2,
+    });
+  });
+
+  it("keeps unsupported custom Yahoo K and D/ST rules from withholding offensive positions", () => {
+    const result = normalized(YAHOO_SCOPED_CUSTOM_2026_ROWS);
+    expectAvailable(result);
+    expect(supportedPositions(result)).toEqual(["QB", "RB", "WR", "TE"]);
+    expect(supportFor(result, "K").reasons.map((reason) => reason.providerStatId)).toEqual([
+      "24",
+      "25",
+      "84",
+    ]);
+    expect(supportFor(result, "DST").reasons.map((reason) => reason.providerStatId)).toEqual([
+      "67",
+      "76",
+    ]);
+    for (const position of ["QB", "RB", "WR", "TE"] as const) {
+      expect(supportFor(result, position).reasons).toEqual([]);
+    }
+    expect(result.profile.rules.some((rule) => rule.statId.startsWith("field_goal"))).toBe(false);
+    expect(result.profile.rules.some((rule) => rule.statId.startsWith("defensive_"))).toBe(false);
+  });
+
+  it("uses declared Yahoo scope for a future unknown nonzero category", () => {
+    const result = normalized([
+      yahooScopedRule("4", "Passing Yards", 0.04, "O"),
+      yahooScopedRule("9999", "Future Kicker Metric", 1, "K"),
+    ]);
+    expectAvailable(result);
+    expect(supportedPositions(result)).toEqual(["QB"]);
+    expect(positionReasonCodes(result, "K")).toEqual(["UNKNOWN_NONZERO_RULE"]);
+    expect(positionReasonCodes(result, "QB")).toEqual([]);
+  });
+
+  it("keeps the all-position fail-closed fallback for unknown Yahoo scope codes", () => {
+    const result = normalized([
+      yahooScopedRule("4", "Passing Yards", 0.04, "O"),
+      rule("9999", "Future Unscoped Metric", 1, { positionTypes: ["FUTURE"] }),
+    ]);
+    expect(reasonCodes(result)).toEqual(["UNKNOWN_NONZERO_RULE"]);
+    expect(supportedPositions(result)).toEqual([]);
+  });
+
   it("normalizes a common Yahoo standard profile and scores its raw components", () => {
     const result = normalized([
       rule("4", "Passing Yards", "0.04"),
@@ -653,6 +788,14 @@ describe("normalizeLeagueScoringProfile", () => {
     expect(reasonCodes(result)).toEqual(["CONFLICTING_RULE_IDENTITY"]);
   });
 
+  it("does not treat incompatible scoped unsupported categories as the same identity", () => {
+    const result = normalized([
+      yahooScopedRule("4", "Passing Yards", 0.04, "O"),
+      yahooScopedRule("25", "4th Down Stops", -1, "K"),
+    ]);
+    expect(reasonCodes(result)).toEqual(["CONFLICTING_RULE_IDENTITY"]);
+  });
+
   it("rejects conflicting duplicate canonical aliases instead of double counting", () => {
     const result = normalized([rule("11", "Receptions", 1), rule(null, "Reception", 0.5)]);
     expect(reasonCodes(result)).toContain("DUPLICATE_CANONICAL_RULE");
@@ -704,6 +847,18 @@ describe("normalizeLeagueScoringProfile", () => {
     ],
   ])("rejects overlapping $0", (_name, rows) => {
     expect(reasonCodes(normalized(rows))).toContain("OVERLAPPING_AGGREGATE_RULES");
+  });
+
+  it("attributes an aggregate/bucket overlap only to positions that score those components", () => {
+    const result = normalized([
+      rule("3", "3", 0.04, { provider: "espn" }),
+      rule("83", "83", 3, { provider: "espn" }),
+      rule("77", "77", 4, { provider: "espn" }),
+    ]);
+    expectAvailable(result);
+    expect(supportedPositions(result)).toEqual(["QB"]);
+    expect(positionReasonCodes(result, "K")).toEqual(["OVERLAPPING_AGGREGATE_RULES"]);
+    expect(positionReasonCodes(result, "QB")).toEqual([]);
   });
 
   it("requires every nonzero rule's component to be emitted by the projection run", () => {

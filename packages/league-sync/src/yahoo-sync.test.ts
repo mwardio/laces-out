@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { yahooScoringOperation } from "./yahoo-sync.js";
+import { yahooScoringOperation, yahooScoringPositionTypes } from "./yahoo-sync.js";
 
 describe("Yahoo scoring persistence", () => {
   it("marks Yahoo yardage rules as whole scoring groups when fractional points are off", () => {
@@ -14,5 +14,11 @@ describe("Yahoo scoring persistence", () => {
     expect(yahooScoringOperation("5", false)).toBe("multiply");
     expect(yahooScoringOperation("4", null)).toBe("multiply");
     expect(yahooScoringOperation("4", undefined)).toBe("multiply");
+  });
+
+  it("canonicalizes provider-declared scoring position families for persistence", () => {
+    expect(yahooScoringPositionTypes(["dt", " K ", "DT", ""])).toEqual(["DT", "K"]);
+    expect(yahooScoringPositionTypes([])).toBeNull();
+    expect(yahooScoringPositionTypes(undefined)).toBeNull();
   });
 });

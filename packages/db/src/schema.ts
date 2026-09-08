@@ -843,6 +843,8 @@ export const scoringRules = pgTable(
     thresholdLow: numeric("threshold_low", { precision: 10, scale: 2 }),
     thresholdHigh: numeric("threshold_high", { precision: 10, scale: 2 }),
     providerStatId: text("provider_stat_id"),
+    /** Provider-declared scoring position families (for example Yahoo O/K/DT), when supplied. */
+    positionTypes: text("position_types").array(),
   },
   (table) => [index("scoring_rules_league_idx").on(table.leagueSeasonId)],
 );

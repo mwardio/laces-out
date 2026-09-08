@@ -14,9 +14,15 @@ interface RawRuleRow {
   readonly thresholdLow: string | null;
   readonly thresholdHigh: string | null;
   readonly providerStatId: string | null;
+  readonly positionTypes: readonly string[] | null;
 }
 
-function rawRule(providerStatId: string, statKey: string, points: string): RawRuleRow {
+function rawRule(
+  providerStatId: string,
+  statKey: string,
+  points: string,
+  positionTypes: readonly string[] | null = null,
+): RawRuleRow {
   return {
     statKey,
     operation: "multiply",
@@ -24,6 +30,7 @@ function rawRule(providerStatId: string, statKey: string, points: string): RawRu
     thresholdLow: null,
     thresholdHigh: null,
     providerStatId,
+    positionTypes,
   };
 }
 
@@ -145,6 +152,31 @@ describe("currentManagedProjectionProfileKey", () => {
 });
 
 describe("currentManagedProjectionProfile", () => {
+  it("retains Yahoo position scopes when reporting partial support", async () => {
+    const { database } = mockedDatabase(
+      [
+        rawRule("4", "Passing Yards", "0.04", ["O"]),
+        rawRule("9", "Rushing Yards", "0.1", ["O"]),
+        rawRule("11", "Receptions", "0.5", ["O"]),
+        rawRule("9999", "Future Kicker Metric", "1", ["K"]),
+      ],
+      "yahoo",
+    );
+
+    const profile = await currentManagedProjectionProfile(
+      database,
+      "30000000-0000-4000-8000-000000000009",
+    );
+
+    expect(profile.key).not.toBeNull();
+    expect(
+      profile.positions?.filter((item) => item.supported).map((item) => item.position),
+    ).toEqual(["QB", "RB", "WR", "TE"]);
+    expect(profile.positions?.find((item) => item.position === "K")?.reasons[0]?.code).toBe(
+      "UNKNOWN_NONZERO_RULE",
+    );
+  });
+
   it("reports per-position support for a garagely-shaped rule set (QB supported, D/ST not)", async () => {
     const { database } = mockedDatabase(GARAGELY_SHAPED_ROWS);
 

@@ -4,7 +4,7 @@ import {
 } from "./first-party.js";
 import type { ProjectionScoringBonus, ProjectionScoringProfile } from "./scoring.js";
 
-export const LEAGUE_SCORING_NORMALIZATION_VERSION = "league-scoring-map-v3" as const;
+export const LEAGUE_SCORING_NORMALIZATION_VERSION = "league-scoring-map-v4" as const;
 
 export const LEAGUE_SCORING_MAP_PROVENANCE = {
   version: LEAGUE_SCORING_NORMALIZATION_VERSION,
@@ -83,6 +83,8 @@ function attributedPositions(statId: string): readonly LeagueScoringPosition[] {
 }
 
 const DST_ONLY: readonly LeagueScoringPosition[] = ["DST"];
+const K_ONLY: readonly LeagueScoringPosition[] = ["K"];
+const OFFENSE_ONLY: readonly LeagueScoringPosition[] = ["QB", "RB", "WR", "TE"];
 const TE_ONLY: readonly LeagueScoringPosition[] = ["TE"];
 
 export interface StoredLeagueScoringRule {
@@ -94,6 +96,8 @@ export interface StoredLeagueScoringRule {
   readonly points: number | string;
   readonly thresholdLow?: number | string | null;
   readonly thresholdHigh?: number | string | null;
+  /** Provider-declared scoring position families, such as Yahoo O/K/DT, when retained. */
+  readonly positionTypes?: readonly string[] | null;
 }
 
 export interface NormalizeLeagueScoringInput {
@@ -243,6 +247,18 @@ const IDP_UNSUPPORTED: UnsupportedMapping = {
 };
 /** Yahoo's team yards-allowed brackets: nonlinear like every other bracket, but D/ST-scoped. */
 const DEFENSE_NONLINEAR: UnsupportedMapping = { ...NONLINEAR, positions: DST_ONLY };
+const KICKER_UNSUPPORTED: UnsupportedMapping = {
+  kind: "unsupported",
+  code: "UNSUPPORTED_PLAYER_RULE",
+  reason: "a kicker-only category for which this projection has no exact component.",
+  positions: K_ONLY,
+};
+const DEFENSE_UNSUPPORTED: UnsupportedMapping = {
+  kind: "unsupported",
+  code: "UNSUPPORTED_PLAYER_RULE",
+  reason: "a team D/ST category for which this projection has no exact component.",
+  positions: DST_ONLY,
+};
 
 /** Yahoo NFL transport IDs used by the league settings response. */
 export const YAHOO_PLAYER_SCORING_STAT_ID_MAP_V1: Readonly<Record<string, string>> = {
@@ -267,7 +283,6 @@ export const YAHOO_PLAYER_SCORING_STAT_ID_MAP_V1: Readonly<Record<string, string
   "21": "field_goals_made_30_39",
   "22": "field_goals_made_40_49",
   "23": "field_goals_made_50_plus",
-  "24": "field_goals_missed",
   "29": "extra_points_made",
   "30": "extra_points_missed",
   "31": "points_allowed",
@@ -286,7 +301,15 @@ export const YAHOO_PLAYER_SCORING_STAT_ID_MAP_V1: Readonly<Record<string, string
   "55": "points_allowed_28_34_probability",
   "56": "points_allowed_35_plus_probability",
   "57": "fumble_recovery_touchdowns",
+  // Yahoo lists "Extra Point Returned" under D/ST scoring. It is the same defensive conversion
+  // return priced by the engine's evidence-bounded de minimis component.
+  "82": "defensive_two_point_returns",
 };
+
+/** Distance-specific misses cannot be reconstructed from the projected aggregate miss count. */
+const YAHOO_UNSUPPORTED_KICKER_STAT_IDS = new Set(["24", "25", "26", "27", "28", "84"]);
+/** Linear Yahoo D/ST events for which the ingested model inputs expose no exact component. */
+const YAHOO_UNSUPPORTED_TEAM_DEFENSE_STAT_IDS = new Set(["67"]);
 
 const YAHOO_IDP_STAT_IDS = new Set([
   "38",
@@ -679,9 +702,25 @@ export const PLAYER_SCORING_DISPLAY_NAME_MAP_V1: Readonly<Record<string, string>
   "blocked kicks": "defensive_blocked_kicks",
   "defensive touchdowns": "defensive_touchdowns",
   "kickoff and punt return touchdowns": "special_teams_touchdowns",
+  "extra point returned": "defensive_two_point_returns",
   "defensive yards allowed": "yards_allowed",
   "yards allowed": "yards_allowed",
 };
+
+const SCOPED_UNSUPPORTED_DISPLAY_NAMES = new Map<string, UnsupportedMapping>([
+  ...[
+    "field goals missed 0 19 yards",
+    "field goals missed 20 29 yards",
+    "field goals missed 30 39 yards",
+    "field goals missed 40 49 yards",
+    "field goals missed 50 yards",
+    "field goals total yards",
+  ].map((name): [string, UnsupportedMapping] => [name, KICKER_UNSUPPORTED]),
+  ...["4th down stops", "3 and outs forced"].map((name): [string, UnsupportedMapping] => [
+    name,
+    DEFENSE_UNSUPPORTED,
+  ]),
+]);
 
 const IGNORED_DISPLAY_NAMES = new Map<string, IgnoredMapping>([
   ...["punts", "punt yards", "head coach wins"].map((name): [string, IgnoredMapping] => [
@@ -712,8 +751,6 @@ const UNSUPPORTED_DISPLAY_NAMES = new Set([
   "receiving 40 yd rec",
   "receiving 40 yd td",
   "rushing 40 yd att",
-  "4th down stops",
-  "3 and outs forced",
 ]);
 
 export const NFLVERSE_PROJECTION_SCORING_COMPONENTS_V1 = new Set([
@@ -842,6 +879,8 @@ function mappingFromName(statKey: string): Mapping | null {
   if (playerStatId) return player(playerStatId);
   const ignored = IGNORED_DISPLAY_NAMES.get(normalized);
   if (ignored) return ignored;
+  const scopedUnsupported = SCOPED_UNSUPPORTED_DISPLAY_NAMES.get(normalized);
+  if (scopedUnsupported) return scopedUnsupported;
   if (IDP_DISPLAY_NAMES.has(normalized)) return IDP_UNSUPPORTED;
   if (UNSUPPORTED_DISPLAY_NAMES.has(normalized)) return NONLINEAR;
   return null;
@@ -855,6 +894,8 @@ function mappingFromProviderId(
   if (provider === "yahoo") {
     const playerStatId = YAHOO_PLAYER_SCORING_STAT_ID_MAP_V1[normalized];
     if (playerStatId) return player(playerStatId);
+    if (YAHOO_UNSUPPORTED_KICKER_STAT_IDS.has(normalized)) return KICKER_UNSUPPORTED;
+    if (YAHOO_UNSUPPORTED_TEAM_DEFENSE_STAT_IDS.has(normalized)) return DEFENSE_UNSUPPORTED;
     if (YAHOO_IDP_STAT_IDS.has(normalized)) return IDP_UNSUPPORTED;
     if (YAHOO_YARDS_ALLOWED_BUCKET_IDS.has(normalized)) return DEFENSE_NONLINEAR;
     return null;
@@ -868,13 +909,61 @@ function mappingFromProviderId(
   return ESPN_IGNORED_STAT_IDS.get(normalized) ?? null;
 }
 
+/**
+ * Turns Yahoo's provider-declared scoring families into the modeled positions they can affect.
+ * An unfamiliar family returns null so callers retain their existing fail-closed all-position
+ * behavior; scope is used only when every supplied code has an exact meaning here.
+ */
+function providerDeclaredPositions(
+  provider: LeagueScoringProvider,
+  positionTypes: readonly string[] | null | undefined,
+): readonly LeagueScoringPosition[] | null {
+  if (provider !== "yahoo" || !positionTypes || positionTypes.length === 0) return null;
+  const positions = new Set<LeagueScoringPosition>();
+  for (const raw of positionTypes) {
+    const positionType = raw.trim().toUpperCase();
+    const mapped =
+      positionType === "O"
+        ? OFFENSE_ONLY
+        : positionType === "K"
+          ? K_ONLY
+          : positionType === "DT"
+            ? DST_ONLY
+            : null;
+    if (mapped === null) return null;
+    for (const position of mapped) positions.add(position);
+  }
+  if (positions.size === 0) return null;
+  return LEAGUE_SCORING_POSITIONS.filter((position) => positions.has(position));
+}
+
+/** Explicit mapping scope wins; provider metadata narrows only otherwise-unattributable rules. */
+function failurePositions(
+  provider: LeagueScoringProvider,
+  row: StoredLeagueScoringRule,
+  mappedPositions?: readonly LeagueScoringPosition[],
+): readonly LeagueScoringPosition[] {
+  return (
+    mappedPositions ??
+    providerDeclaredPositions(provider, row.positionTypes) ??
+    LEAGUE_SCORING_POSITIONS
+  );
+}
+
 function sameMapping(left: Mapping, right: Mapping): boolean {
   if (left.kind !== right.kind) return false;
   if (left.kind === "player" && right.kind === "player") return left.statId === right.statId;
   if (left.kind === "ignored" && right.kind === "ignored") {
     return left.category === right.category;
   }
-  return left.kind === "unsupported" && right.kind === "unsupported" && left.code === right.code;
+  return (
+    left.kind === "unsupported" &&
+    right.kind === "unsupported" &&
+    left.code === right.code &&
+    left.reason === right.reason &&
+    (left.positions ?? LEAGUE_SCORING_POSITIONS).join(",") ===
+      (right.positions ?? LEAGUE_SCORING_POSITIONS).join(",")
+  );
 }
 
 /**
@@ -1081,7 +1170,7 @@ export function normalizeLeagueScoringProfile(
       const points = decimal(row.points);
       if (points === null) {
         fail(
-          LEAGUE_SCORING_POSITIONS,
+          failurePositions(provider, row),
           "INVALID_RULE",
           `Rule ${rowIndex} (${ruleIdentity(row)}) has invalid points.`,
           rowIndex,
@@ -1142,7 +1231,7 @@ export function normalizeLeagueScoringProfile(
       const mapping = providerMapping ?? nameMapping;
       if (!mapping) {
         fail(
-          LEAGUE_SCORING_POSITIONS,
+          failurePositions(provider, row),
           "UNKNOWN_NONZERO_RULE",
           `Rule ${rowIndex} (${ruleIdentity(row)}) is a nonzero scoring rule with no exact ${provider} mapping.`,
           rowIndex,
@@ -1169,7 +1258,7 @@ export function normalizeLeagueScoringProfile(
       }
       if (mapping.kind === "unsupported") {
         fail(
-          mapping.positions ?? LEAGUE_SCORING_POSITIONS,
+          failurePositions(provider, row, mapping.positions),
           mapping.code,
           `Rule ${rowIndex} (${ruleIdentity(row)}) is ${mapping.reason}`,
           rowIndex,
@@ -1213,7 +1302,7 @@ export function normalizeLeagueScoringProfile(
         row.thresholdHigh !== null && row.thresholdHigh !== undefined && row.thresholdHigh !== "";
       if ((hasLow && thresholdLow === null) || (hasHigh && thresholdHigh === null)) {
         fail(
-          LEAGUE_SCORING_POSITIONS,
+          attributedPositions(scoringStatId),
           "INVALID_RULE",
           `Rule ${rowIndex} (${ruleIdentity(row)}) has an invalid threshold.`,
           rowIndex,
@@ -1265,7 +1354,7 @@ export function normalizeLeagueScoringProfile(
         continue;
       } else {
         fail(
-          LEAGUE_SCORING_POSITIONS,
+          attributedPositions(scoringStatId),
           "UNSUPPORTED_OPERATION",
           `Rule ${rowIndex} (${ruleIdentity(row)}) uses unsupported operation ${row.operation}.`,
           rowIndex,
@@ -1282,8 +1371,12 @@ export function normalizeLeagueScoringProfile(
     if (!canonical.has(overlap.aggregate)) continue;
     const presentParts = overlap.parts.filter((part) => canonical.has(part));
     if (presentParts.length === 0) continue;
+    const affectedPositions = new Set([
+      ...attributedPositions(overlap.aggregate),
+      ...presentParts.flatMap((part) => attributedPositions(part)),
+    ]);
     fail(
-      LEAGUE_SCORING_POSITIONS,
+      LEAGUE_SCORING_POSITIONS.filter((position) => affectedPositions.has(position)),
       "OVERLAPPING_AGGREGATE_RULES",
       `${overlap.aggregate} overlaps with ${presentParts.join(", ")}; applying both would double count.`,
       null,
@@ -1305,16 +1398,19 @@ export function normalizeLeagueScoringProfile(
           }),
     }));
 
-  // A surviving rule whose component no modeled position projects cannot be attributed to any
-  // position, and attribution is pessimistic: it fails all six. Emitting numbers for the positions
-  // that do map while quietly dropping such a rule would be wrong output rather than withheld
-  // output. Zero-point rules never reach here — they are ignored provenance long before mapping.
+  // A surviving rule whose component no modeled position projects uses exact provider scope when
+  // available and otherwise retains the pessimistic all-six fallback. Emitting numbers for a
+  // potentially affected position while quietly dropping such a rule would be wrong output rather
+  // than withheld output. Zero-point rules never reach here — they are ignored provenance long
+  // before mapping.
   for (const rule of profileRules) {
     if (positionsWithComponent(rule.statId).length > 0) continue;
     const rowIndex = canonical.get(rule.statId)?.rowIndices[0];
     const row = rowIndex === undefined ? undefined : input.rows[rowIndex];
     fail(
-      LEAGUE_SCORING_POSITIONS,
+      row === undefined || provider === null
+        ? LEAGUE_SCORING_POSITIONS
+        : failurePositions(provider, row),
       "UNATTRIBUTABLE_COMPONENT",
       `Rule ${rowIndex ?? "?"} (${row === undefined ? rule.statId : ruleIdentity(row)}) scores ${rule.statId}, which no modeled position (${LEAGUE_SCORING_POSITIONS.join("/")}) projects, so it cannot be attributed or priced.`,
       rowIndex ?? null,

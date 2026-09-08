@@ -140,8 +140,8 @@ try {
     assert.ok(triggerNames.has(triggerName), `missing invariant trigger ${triggerName}`);
   }
 
-  // Migration 0026. Asserted by name so a missing migration fails here rather than at the
-  // first live league sync or recommendation recompute.
+  // High-value additive migration columns. Asserted by name so a missing migration fails here
+  // rather than at the first live sync, projection refresh, or recommendation recompute.
   const columnRows = await sql`
     select table_name, column_name
     from information_schema.columns
@@ -149,7 +149,7 @@ try {
       and table_name in (
         'bridge_devices', 'browser_handoff_tokens', 'provider_connections',
         'provider_league_links', 'league_memberships', 'recommendation_runs',
-        'refresh_requests', 'oauth_states', 'users'
+        'refresh_requests', 'oauth_states', 'scoring_rules', 'users'
       )
   `;
   const columnNames = new Set(columnRows.map((row) => `${row.table_name}.${row.column_name}`));
@@ -171,6 +171,7 @@ try {
     "refresh_requests.required_artifacts",
     "refresh_requests.fulfillment_mode",
     "refresh_requests.fulfilled_by_bridge_device_id",
+    "scoring_rules.position_types",
     "users.email_verified_at",
   ]) {
     assert.ok(columnNames.has(column), `missing migrated column ${column}`);

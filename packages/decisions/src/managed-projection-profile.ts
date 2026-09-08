@@ -69,6 +69,7 @@ export async function currentManagedProjectionProfile(
       thresholdLow: scoringRules.thresholdLow,
       thresholdHigh: scoringRules.thresholdHigh,
       providerStatId: scoringRules.providerStatId,
+      positionTypes: scoringRules.positionTypes,
     })
     .from(scoringRules)
     .where(eq(scoringRules.leagueSeasonId, leagueSeasonId))

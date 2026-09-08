@@ -851,6 +851,7 @@ function espnRule(providerStatId: string, points: number) {
     thresholdLow: null,
     thresholdHigh: null,
     providerStatId,
+    positionTypes: null,
   };
 }
 

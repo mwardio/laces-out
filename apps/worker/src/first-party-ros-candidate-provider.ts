@@ -160,6 +160,7 @@ export interface FirstPartyRosScoringRuleRow {
   readonly points: string;
   readonly thresholdLow: string | null;
   readonly thresholdHigh: string | null;
+  readonly positionTypes: readonly string[] | null;
 }
 
 const UNSUPPORTED_RAIL_POSITIONS: readonly FirstPartyRosWithheldPosition[] =
@@ -214,6 +215,7 @@ export function enumerateFirstPartyRosScoringMatchedLeagues(input: {
         points: rule.points,
         thresholdLow: rule.thresholdLow,
         thresholdHigh: rule.thresholdHigh,
+        positionTypes: rule.positionTypes,
       })),
       availableStatIds: input.availableStatIds,
     });
@@ -1064,6 +1066,7 @@ export function databaseFirstPartyRosCandidateProvider(input: {
           points: scoringRules.points,
           thresholdLow: scoringRules.thresholdLow,
           thresholdHigh: scoringRules.thresholdHigh,
+          positionTypes: scoringRules.positionTypes,
         })
         .from(scoringRules)
         .innerJoin(leagueSeasons, eq(leagueSeasons.id, scoringRules.leagueSeasonId))
@@ -1078,7 +1081,7 @@ export function databaseFirstPartyRosCandidateProvider(input: {
     );
     return {
       aliasPlans,
-      checksum: aggregateChecksum("live-ros-candidate-provider-v3", [
+      checksum: aggregateChecksum("live-ros-candidate-provider-v4", [
         `season:${season}`,
         `window:${window.windowStartWeek}-${window.windowEndWeek}:asof-${window.asOfWeek}`,
         `scenario-count:${input.scenarioCount ?? "default"}`,
@@ -1518,6 +1521,7 @@ async function buildDatabaseFirstPartyRosTargets(
       points: scoringRules.points,
       thresholdLow: scoringRules.thresholdLow,
       thresholdHigh: scoringRules.thresholdHigh,
+      positionTypes: scoringRules.positionTypes,
     })
     .from(scoringRules)
     .innerJoin(leagueSeasons, eq(leagueSeasons.id, scoringRules.leagueSeasonId))

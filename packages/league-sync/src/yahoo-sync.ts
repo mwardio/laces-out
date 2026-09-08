@@ -52,6 +52,18 @@ export function yahooScoringOperation(
     : "multiply";
 }
 
+/** Canonical provider position families persisted with each Yahoo scoring rule. */
+export function yahooScoringPositionTypes(
+  positionTypes: readonly string[] | undefined,
+): string[] | null {
+  const normalized = [
+    ...new Set(
+      positionTypes?.map((position) => position.trim().toUpperCase()).filter(Boolean) ?? [],
+    ),
+  ].sort();
+  return normalized.length > 0 ? normalized : null;
+}
+
 export interface YahooConnectionLeagueStatus {
   readonly leagueId: string;
   readonly leagueSeasonId: string;
@@ -856,6 +868,7 @@ export class DrizzleYahooSyncRepository implements YahooSyncRepository {
             ),
             points: String(rule.points),
             providerStatId: rule.statId,
+            positionTypes: yahooScoringPositionTypes(rule.positionTypes),
           })),
         );
       }

@@ -34,6 +34,7 @@ function espnRule(
     thresholdLow: null,
     thresholdHigh: null,
     providerStatId,
+    positionTypes: null,
   };
 }
 

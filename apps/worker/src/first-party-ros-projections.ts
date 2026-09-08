@@ -914,6 +914,7 @@ export class FirstPartyRosProjectionShadowService implements ProjectionRefreshSe
           points: scoringRules.points,
           thresholdLow: scoringRules.thresholdLow,
           thresholdHigh: scoringRules.thresholdHigh,
+          positionTypes: scoringRules.positionTypes,
         })
         .from(scoringRules)
         .innerJoin(leagueSeasons, eq(leagueSeasons.id, scoringRules.leagueSeasonId))
@@ -926,7 +927,7 @@ export class FirstPartyRosProjectionShadowService implements ProjectionRefreshSe
             // Roster/provider identity semantics live in the candidate provider's resolved alias
             // checksum. Keeping snapshot IDs here would re-run the multi-hour shared simulation on
             // every semantically unchanged roster refresh.
-            version: "ros-publication-scope-v3",
+            version: "ros-publication-scope-v4",
             leagues: [...leagueRows].sort((left, right) => left.id.localeCompare(right.id)),
             scoringRules: [...ruleRows].sort((left, right) => {
               const league = left.leagueSeasonId.localeCompare(right.leagueSeasonId);

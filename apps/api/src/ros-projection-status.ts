@@ -437,6 +437,7 @@ export class RosProjectionStatusService {
         points: scoringRules.points,
         thresholdLow: scoringRules.thresholdLow,
         thresholdHigh: scoringRules.thresholdHigh,
+        positionTypes: scoringRules.positionTypes,
       })
       .from(scoringRules)
       .where(inArray(scoringRules.leagueSeasonId, leagueSeasonIds))
@@ -539,6 +540,7 @@ export class RosProjectionStatusService {
           points: rule.points,
           thresholdLow: rule.thresholdLow,
           thresholdHigh: rule.thresholdHigh,
+          positionTypes: rule.positionTypes,
         })),
         availableStatIds: rosAvailableProjectionStatIds(),
       });

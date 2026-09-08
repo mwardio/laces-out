@@ -57,6 +57,7 @@ function pprRule(
     points,
     thresholdLow: null,
     thresholdHigh: null,
+    positionTypes: null,
     ...overrides,
   };
 }
@@ -82,6 +83,7 @@ function espnRule(
     points,
     thresholdLow: null,
     thresholdHigh: null,
+    positionTypes: null,
     ...overrides,
   };
 }
@@ -125,6 +127,7 @@ function normalizedProfile(
       points: rule.points,
       thresholdLow: rule.thresholdLow,
       thresholdHigh: rule.thresholdHigh,
+      positionTypes: rule.positionTypes,
     })),
     availableStatIds,
   });
@@ -236,6 +239,30 @@ describe("enumerateFirstPartyRosScoringMatchedLeagues", () => {
       { position: "RB", reason: "position-unsupported" },
       { position: "WR", reason: "position-unsupported" },
       { position: "TE", reason: "position-unsupported" },
+      { position: "K", reason: "position-unsupported" },
+      { position: "DST", reason: "position-unsupported" },
+    ]);
+  });
+
+  it("retains offensive ROS matches when an unknown Yahoo rule is declared kicker-only", () => {
+    const scopedOffense = pprRules.map((rule) => ({ ...rule, positionTypes: ["O"] }));
+    const artifactKey = keyForRules(scopedOffense);
+    const report = enumerateFirstPartyRosScoringMatchedLeagues({
+      artifactScoringProfileKey: artifactKey,
+      leagues: [{ id: "L1", provider: "yahoo" }],
+      rules: [
+        ...scopedOffense,
+        pprRule("Future Kicker Metric", "1", {
+          providerStatId: "9999",
+          positionTypes: ["K"],
+        }),
+      ],
+      availableStatIds,
+    });
+
+    expect(report.excluded).toEqual([]);
+    expect(report.matched[0]!.matchedPositions).toEqual(["QB", "RB", "WR", "TE"]);
+    expect(report.matched[0]!.withheldPositions).toEqual([
       { position: "K", reason: "position-unsupported" },
       { position: "DST", reason: "position-unsupported" },
     ]);

@@ -207,6 +207,7 @@ export interface ScheduleEdgeScoringRuleRow {
   readonly thresholdLow: string | null;
   readonly thresholdHigh: string | null;
   readonly providerStatId: string | null;
+  readonly positionTypes: readonly string[] | null;
 }
 
 export type ScheduleEdgeSourceRow = AdmittedSourceRow;
@@ -449,6 +450,7 @@ export class DrizzleScheduleEdgeRepository implements ScheduleEdgeRepository {
         thresholdLow: scoringRules.thresholdLow,
         thresholdHigh: scoringRules.thresholdHigh,
         providerStatId: scoringRules.providerStatId,
+        positionTypes: scoringRules.positionTypes,
       })
       .from(scoringRules)
       .where(eq(scoringRules.leagueSeasonId, leagueSeasonId))
