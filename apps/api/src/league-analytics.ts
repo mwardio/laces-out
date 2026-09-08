@@ -375,8 +375,11 @@ export class DrizzleLeagueAnalyticsRepository implements LeagueAnalyticsReposito
     leagueSeasonId: string,
     limit: number,
   ): Promise<readonly AnalyticsMatchupObservationRow[]> {
+    // Provider syncs append immutable full-schedule snapshots. Bound the latest logical matchups,
+    // not the raw history, or an actively synced league eventually exceeds the read cap even
+    // though its season schedule remains small.
     return this.#database
-      .select({
+      .selectDistinctOn([weeklyMatchups.week, weeklyMatchups.providerMatchupId], {
         matchupId: weeklyMatchups.id,
         snapshotId: matchupSnapshots.id,
         effectiveAt: matchupSnapshots.effectiveAt,
@@ -393,6 +396,8 @@ export class DrizzleLeagueAnalyticsRepository implements LeagueAnalyticsReposito
       .innerJoin(matchupSnapshots, eq(weeklyMatchups.snapshotId, matchupSnapshots.id))
       .where(eq(matchupSnapshots.leagueSeasonId, leagueSeasonId))
       .orderBy(
+        asc(weeklyMatchups.week),
+        asc(weeklyMatchups.providerMatchupId),
         desc(matchupSnapshots.effectiveAt),
         desc(matchupSnapshots.id),
         desc(weeklyMatchups.id),
