@@ -14,6 +14,7 @@ const THIRD_TEAM_ID = "71000000-0000-4000-8000-000000000012";
 const FOURTH_TEAM_ID = "71000000-0000-4000-8000-000000000013";
 const GENERATED_AT = "2026-10-08T18:42:00.000Z";
 const SOURCE_AT = "2026-10-08T17:55:00.000Z";
+const ROS_SOURCE_AT = "2026-10-08T16:30:00.000Z";
 
 export const demoLeaguePortfolio: LeagueListResponse = {
   generatedAt: GENERATED_AT,
@@ -71,6 +72,12 @@ const johnston = decisionPlayer(7, "Quentin Johnston", "WR", "LAC", 13.7);
 const browns = decisionPlayer(8, "Cleveland Browns", "DST", "CLE", 6.1);
 const breece = decisionPlayer(9, "Breece Hall", "RB", "NYJ", 17.2);
 const wright = decisionPlayer(10, "Jaylen Wright", "RB", "MIA", 11.4);
+const bateman = decisionPlayer(11, "Rashod Bateman", "WR", "BAL", 10.8);
+const rosBrowns = { ...browns, projectedPoints: 75.4 };
+const rosEvans = { ...evans, projectedPoints: 109.2 };
+const rosJohnston = { ...johnston, projectedPoints: 145.8 };
+const rosBateman = { ...bateman, projectedPoints: 137.4 };
+const rosOtton = decisionPlayer(12, "Cade Otton", "TE", "TB", 118.6);
 
 const execution = {
   mode: "provider-required" as const,
@@ -120,7 +127,7 @@ export const demoDecisionSnapshot: InSeasonDecisionSnapshot = {
   },
   team: { id: USER_TEAM_ID, name: "Budget Ballers", faabRemaining: 67 },
   provenance: {
-    algorithmVersion: "in-season-decisions-v2",
+    algorithmVersion: "in-season-decisions-v3",
     // Sample data, so a sample digest: the tour must never look like a reproducible real run.
     inputChecksum: "d".repeat(64),
     leagueLastSyncedAt: GENERATED_AT,
@@ -186,6 +193,7 @@ export const demoDecisionSnapshot: InSeasonDecisionSnapshot = {
     state: "available",
     candidateCount: 42,
     evaluatedMoveCount: 117,
+    dropCandidates: [browns, evans, johnston],
     recommendations: [
       {
         add: wright,
@@ -200,10 +208,155 @@ export const demoDecisionSnapshot: InSeasonDecisionSnapshot = {
           observedAt: "2026-09-30T15:00:00.000Z",
         },
         rationale: "Adds contingent running-back upside while removing a redundant second defense.",
+        dropComparisons: [
+          {
+            dropPlayerId: browns.id,
+            weightedGain: 3.2,
+            lineupGain: 0,
+            faab: { low: 5, recommended: 8, high: 11 },
+          },
+          {
+            dropPlayerId: evans.id,
+            weightedGain: -0.1,
+            lineupGain: 0,
+            faab: { low: 0, recommended: 0, high: 0 },
+          },
+          {
+            dropPlayerId: johnston.id,
+            weightedGain: -1.7,
+            lineupGain: -1.5,
+            faab: { low: 0, recommended: 0, high: 0 },
+          },
+        ],
+      },
+      {
+        add: bateman,
+        drop: browns,
+        weightedGain: 2.3,
+        lineupGain: 0,
+        faab: { low: 3, recommended: 5, high: 7 },
+        market: null,
+        rationale: "Adds receiver depth while removing a redundant second defense.",
+        dropComparisons: [
+          {
+            dropPlayerId: browns.id,
+            weightedGain: 2.3,
+            lineupGain: 0,
+            faab: { low: 3, recommended: 5, high: 7 },
+          },
+          {
+            dropPlayerId: evans.id,
+            weightedGain: -0.1,
+            lineupGain: 0,
+            faab: { low: 0, recommended: 0, high: 0 },
+          },
+          {
+            dropPlayerId: johnston.id,
+            weightedGain: -1.9,
+            lineupGain: -1.5,
+            faab: { low: 0, recommended: 0, high: 0 },
+          },
+        ],
       },
     ],
     execution,
     notes: ["FAAB is scaled to the sample team's remaining $67 budget."],
+    restOfSeason: {
+      state: "available",
+      label: "Rest of season · Weeks 7–18",
+      windowStartWeek: 7,
+      windowEndWeek: 18,
+      projectionSet: {
+        id: "73000000-0000-4000-8000-000000000002",
+        source: "Demo rest-of-season projections",
+        version: "ros-weeks-7-18-sample",
+        horizon: "rest-of-season",
+        sourceObservedAt: ROS_SOURCE_AT,
+        sourceObservedAtStatus: "verified",
+        importedAt: "2026-10-08T16:38:00.000Z",
+      },
+      projectionFreshness: {
+        state: "fresh",
+        observedAt: ROS_SOURCE_AT,
+        label: "Demo ROS · 2h old",
+      },
+      candidateCount: 39,
+      evaluatedMoveCount: 104,
+      dropCandidates: [rosBrowns, rosEvans, rosJohnston],
+      recommendations: [
+        {
+          add: rosBateman,
+          drop: rosEvans,
+          weightedGain: 11.4,
+          lineupGain: 8.2,
+          faab: { low: 2, recommended: 4, high: 6 },
+          market: null,
+          rationale:
+            "Adding Rashod Bateman and dropping Mike Evans improves rest-of-season weighted roster value by 11.40 points (Rest of season · Weeks 7–18).",
+          dropComparisons: [
+            {
+              dropPlayerId: rosBrowns.id,
+              weightedGain: 8.7,
+              lineupGain: 5.5,
+              faab: { low: 1, recommended: 3, high: 5 },
+            },
+            {
+              dropPlayerId: rosEvans.id,
+              weightedGain: 11.4,
+              lineupGain: 8.2,
+              faab: { low: 2, recommended: 4, high: 6 },
+            },
+            {
+              dropPlayerId: rosJohnston.id,
+              weightedGain: -1.1,
+              lineupGain: -3.4,
+              faab: null,
+            },
+          ],
+        },
+        {
+          add: rosOtton,
+          drop: rosBrowns,
+          weightedGain: 5.3,
+          lineupGain: 2,
+          faab: { low: 1, recommended: 2, high: 4 },
+          market: {
+            addCount: 23,
+            dropCount: 1,
+            lookbackHours: 24,
+            observedAt: "2026-10-08T15:00:00.000Z",
+          },
+          rationale:
+            "Adding Cade Otton and dropping Cleveland Browns improves rest-of-season weighted roster value by 5.30 points (Rest of season · Weeks 7–18).",
+          dropComparisons: [
+            {
+              dropPlayerId: rosBrowns.id,
+              weightedGain: 5.3,
+              lineupGain: 2,
+              faab: { low: 1, recommended: 2, high: 4 },
+            },
+            {
+              dropPlayerId: rosEvans.id,
+              weightedGain: -1.5,
+              lineupGain: -2.8,
+              faab: null,
+            },
+            {
+              dropPlayerId: rosJohnston.id,
+              weightedGain: -7,
+              lineupGain: -8.7,
+              faab: null,
+            },
+          ],
+        },
+      ],
+      notes: [
+        "Evaluated a position-balanced pool of 39 projected players not rostered in any latest team snapshot.",
+        "ROS FAAB ranges normalize aggregate value changes across the 12-week projection window before applying the heuristic.",
+        "Starting-core impact optimizes one legal lineup against aggregate ROS totals; it is not a week-by-week lineup simulation.",
+        "Sample rest-of-season rankings are illustrative and never mixed with a connected league.",
+      ],
+    },
   },
   trades: {
     state: "available",

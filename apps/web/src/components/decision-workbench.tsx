@@ -36,7 +36,11 @@ import { compactDate, CONNECT_LEAGUE_FIRST, providerLabel } from "../lib/copy";
 import { projectionSourceAsOfText } from "../lib/projection-import-form";
 import { leagueIsUnclaimed } from "../lib/team-claim";
 import { useDefaultLeague } from "../lib/use-default-league";
-import { visibleWaiverNotes } from "../lib/waiver-presentation";
+import {
+  resolveWaiverDropId,
+  visibleWaiverNotes,
+  waiverComparisonRationale,
+} from "../lib/waiver-presentation";
 import {
   DEMO_LEAGUE_ID,
   demoDecisionSnapshot,
@@ -204,7 +208,39 @@ function LineupSection({ snapshot }: { readonly snapshot: InSeasonDecisionSnapsh
 
 function WaiverSection({ snapshot }: { readonly snapshot: InSeasonDecisionSnapshot }) {
   const section = snapshot.waivers;
-  const notes = section.state === "available" ? visibleWaiverNotes(section.notes) : [];
+  const [horizonSelection, setHorizonSelection] = useState<{
+    readonly leagueId: string;
+    readonly horizon: "week" | "rest-of-season";
+  } | null>(null);
+  const [dropSelection, setDropSelection] = useState<{
+    readonly leagueId: string;
+    readonly playerId: string;
+  } | null>(null);
+  const selectedHorizon =
+    horizonSelection?.leagueId === snapshot.league.id ? horizonSelection.horizon : "week";
+  const activeView =
+    section.state === "available" && selectedHorizon === "rest-of-season"
+      ? section.restOfSeason
+      : section;
+  const notes = activeView.state === "available" ? visibleWaiverNotes(activeView.notes) : [];
+  const dropCandidates = activeView.state === "available" ? activeView.dropCandidates : [];
+  const requestedDropId =
+    dropSelection?.leagueId === snapshot.league.id ? dropSelection.playerId : null;
+  const resolvedDropId =
+    activeView.state === "available"
+      ? resolveWaiverDropId(dropCandidates, activeView.recommendations, requestedDropId)
+      : requestedDropId;
+  const selectedDrop = dropCandidates.find((player) => player.id === resolvedDropId);
+  const weekLabel = snapshot.league.week === null ? "This week" : `Week ${snapshot.league.week}`;
+  const isRestOfSeason = selectedHorizon === "rest-of-season";
+
+  useEffect(() => {
+    if (activeView.state !== "available" || resolvedDropId === requestedDropId) return;
+    setDropSelection(
+      resolvedDropId === null ? null : { leagueId: snapshot.league.id, playerId: resolvedDropId },
+    );
+  }, [activeView.state, requestedDropId, resolvedDropId, snapshot.league.id]);
+
   return (
     <section className={styles.section} id="decision-waivers" aria-labelledby="waivers-title">
       <header className={styles.sectionHeader}>
@@ -221,59 +257,237 @@ function WaiverSection({ snapshot }: { readonly snapshot: InSeasonDecisionSnapsh
         <UnavailablePanel title="Waiver analysis" reasons={section.reasons} />
       ) : (
         <>
-          <div className={styles.sectionSummary}>
-            <span>
-              <strong>{section.candidateCount}</strong> candidates
-            </span>
-            <span>
-              <strong>{section.evaluatedMoveCount}</strong> roster-rule-valid moves modeled
+          <div className={styles.waiverHorizonBar}>
+            <fieldset className={styles.waiverHorizonPicker}>
+              <legend>Waiver projection period</legend>
+              <div>
+                <button
+                  type="button"
+                  aria-pressed={!isRestOfSeason}
+                  onClick={() =>
+                    setHorizonSelection({ leagueId: snapshot.league.id, horizon: "week" })
+                  }
+                >
+                  {weekLabel}
+                </button>
+                <button
+                  type="button"
+                  aria-pressed={isRestOfSeason}
+                  aria-describedby={
+                    section.restOfSeason.state === "unavailable"
+                      ? isRestOfSeason
+                        ? "waiver-ros-unavailable-panel"
+                        : "waiver-ros-unavailable-summary"
+                      : undefined
+                  }
+                  onClick={() =>
+                    setHorizonSelection({
+                      leagueId: snapshot.league.id,
+                      horizon: "rest-of-season",
+                    })
+                  }
+                >
+                  Rest of season
+                </button>
+              </div>
+            </fieldset>
+            {section.restOfSeason.state === "available" ? (
+              <p className={styles.waiverHorizonContext}>
+                {isRestOfSeason ? (
+                  <>
+                    <strong>{section.restOfSeason.label}</strong> ·{" "}
+                    {section.restOfSeason.projectionFreshness.label}
+                  </>
+                ) : (
+                  <>
+                    <strong>{weekLabel}</strong> projections ·{" "}
+                    {snapshot.provenance.projectionFreshness.label}
+                  </>
+                )}
+              </p>
+            ) : !isRestOfSeason ? (
+              <p className={styles.waiverHorizonUnavailable} id="waiver-ros-unavailable-summary">
+                <strong>Rest of season unavailable.</strong>{" "}
+                {section.restOfSeason.reasons.map((reason) => reason.message).join(" ")}
+              </p>
+            ) : null}
+            <span className="sr-only" aria-live="polite">
+              {isRestOfSeason && section.restOfSeason.state === "available"
+                ? `Showing rest-of-season waiver recommendations, weeks ${section.restOfSeason.windowStartWeek} through ${section.restOfSeason.windowEndWeek}.`
+                : isRestOfSeason
+                  ? null
+                  : `Showing ${weekLabel} waiver recommendations.`}
             </span>
           </div>
-          {section.recommendations.length === 0 ? (
-            <div className={styles.clearState}>
-              <CheckCircle2 size={17} aria-hidden="true" />
-              <span>No worthwhile add/drop move.</span>
+
+          {activeView.state === "unavailable" ? (
+            <div id="waiver-ros-unavailable-panel">
+              <UnavailablePanel
+                title="Rest-of-season waiver analysis"
+                reasons={activeView.reasons}
+              />
             </div>
           ) : (
-            <div className={styles.waiverList}>
-              {section.recommendations.map((move) => (
-                <article className={styles.waiverRow} key={`${move.add.id}:${move.drop.id}`}>
-                  <div className={styles.playerMove}>
-                    <span>Add</span>
-                    <strong>{move.add.name}</strong>
-                    <small>
-                      {move.add.positions.join("/")} ·{" "}
-                      {projectedPoints.format(move.add.projectedPoints)}
-                    </small>
+            <>
+              <div className={styles.sectionSummary}>
+                <span>
+                  <strong>{activeView.candidateCount}</strong> candidates
+                </span>
+                <span>
+                  <strong>{activeView.evaluatedMoveCount}</strong> roster-rule-valid moves modeled
+                </span>
+              </div>
+              {activeView.recommendations.length === 0 ? (
+                <div className={styles.clearState}>
+                  <CheckCircle2 size={17} aria-hidden="true" />
+                  <span>
+                    {isRestOfSeason
+                      ? "No worthwhile rest-of-season add/drop move."
+                      : "No worthwhile add/drop move this week."}
+                  </span>
+                </div>
+              ) : (
+                <>
+                  <div className={styles.waiverComparisonBar}>
+                    <label htmlFor="waiver-drop-player">
+                      <span>Player to drop</span>
+                      <select
+                        id="waiver-drop-player"
+                        aria-describedby="waiver-drop-help"
+                        value={selectedDrop?.id ?? ""}
+                        onChange={(event) =>
+                          setDropSelection({
+                            leagueId: snapshot.league.id,
+                            playerId: event.target.value,
+                          })
+                        }
+                      >
+                        {dropCandidates.map((player) => (
+                          <option value={player.id} key={player.id}>
+                            {player.name} · {player.positions.join("/")} ·{" "}
+                            {projectedPoints.format(player.projectedPoints)} pts ·{" "}
+                            {isRestOfSeason ? "ROS" : weekLabel}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <p id="waiver-drop-help">
+                      Only players eligible to drop in this view&apos;s stored roster model appear.
+                      Targets stay ranked by their best legal roster fit; impact and bid guidance
+                      use this selection.
+                    </p>
+                    <span className="sr-only" aria-live="polite">
+                      {selectedDrop
+                        ? `Showing ${isRestOfSeason ? "rest-of-season" : weekLabel} waiver impact if you drop ${selectedDrop.name}.`
+                        : "No drop comparison is available."}
+                    </span>
                   </div>
-                  <div className={styles.playerMove}>
-                    <span>Drop</span>
-                    <strong>{move.drop.name}</strong>
-                    <small>
-                      {move.drop.positions.join("/")} ·{" "}
-                      {projectedPoints.format(move.drop.projectedPoints)}
-                    </small>
+                  <div className={styles.waiverList}>
+                    {activeView.recommendations.map((move) => {
+                      const comparison = move.dropComparisons.find(
+                        (candidate) => candidate.dropPlayerId === selectedDrop?.id,
+                      );
+                      const isBestDrop = selectedDrop?.id === move.drop.id;
+                      const clearsValueBar =
+                        comparison !== undefined && comparison.weightedGain > 0;
+                      return (
+                        <article
+                          className={styles.waiverRow}
+                          key={`${selectedHorizon}:${move.add.id}`}
+                        >
+                          <div className={styles.playerMove}>
+                            <span>Waiver target</span>
+                            <strong>{move.add.name}</strong>
+                            <small>
+                              {move.add.positions.join("/")} ·{" "}
+                              {projectedPoints.format(move.add.projectedPoints)} pts ·{" "}
+                              {isRestOfSeason ? "Rest-of-season" : weekLabel} projection
+                            </small>
+                          </div>
+                          <div className={styles.moveValue}>
+                            <span>
+                              {isRestOfSeason ? "ROS roster impact" : `${weekLabel} roster impact`}
+                            </span>
+                            <strong
+                              className={
+                                comparison === undefined
+                                  ? styles.unavailableValue
+                                  : clearsValueBar
+                                    ? styles.positiveValue
+                                    : styles.negativeValue
+                              }
+                            >
+                              {comparison
+                                ? `${points.format(comparison.weightedGain)} pts`
+                                : "Not legal"}
+                            </strong>
+                            <small>
+                              {comparison === undefined
+                                ? "Roster rules block this pairing"
+                                : isBestDrop
+                                  ? "Best modeled drop for this target"
+                                  : `Best: ${points.format(move.weightedGain)} pts dropping ${move.drop.name}`}
+                            </small>
+                          </div>
+                          <div className={styles.moveValue}>
+                            <span>{isRestOfSeason ? "Starting core impact" : "Lineup impact"}</span>
+                            <strong>
+                              {comparison ? `${points.format(comparison.lineupGain)} pts` : "—"}
+                            </strong>
+                            <small>
+                              {isRestOfSeason
+                                ? "Rest-of-season starting core projection"
+                                : `${weekLabel} starting lineup projection`}
+                            </small>
+                          </div>
+                          <div className={styles.moveValue}>
+                            <span>FAAB</span>
+                            <strong>
+                              {comparison === undefined
+                                ? "—"
+                                : !clearsValueBar
+                                  ? "No bid"
+                                  : comparison.faab
+                                    ? `$${comparison.faab.recommended}`
+                                    : "—"}
+                            </strong>
+                            <small>
+                              {comparison === undefined
+                                ? "Not a valid claim"
+                                : !clearsValueBar
+                                  ? "Does not clear the value bar"
+                                  : comparison.faab
+                                    ? `$${comparison.faab.low}–$${comparison.faab.high}`
+                                    : "Budget unavailable"}
+                              {comparison && move.market
+                                ? ` · ${move.market.addCount} adds/${move.market.lookbackHours}h`
+                                : ""}
+                            </small>
+                          </div>
+                          <p className={styles.waiverRationale}>
+                            {comparison === undefined
+                              ? "This combination cannot preserve a legal roster under the stored slots and locks."
+                              : isBestDrop
+                                ? move.rationale
+                                : waiverComparisonRationale({
+                                    addName: move.add.name,
+                                    dropName: selectedDrop?.name ?? "the selected player",
+                                    weightedGain: comparison.weightedGain,
+                                    lineupGain: comparison.lineupGain,
+                                    horizon: isRestOfSeason
+                                      ? { kind: "ros" }
+                                      : { kind: "week", label: weekLabel },
+                                  })}
+                          </p>
+                        </article>
+                      );
+                    })}
                   </div>
-                  <div className={styles.moveValue}>
-                    <span>Roster gain</span>
-                    <strong>{points.format(move.weightedGain)}</strong>
-                    <small>Lineup {points.format(move.lineupGain)}</small>
-                  </div>
-                  <div className={styles.moveValue}>
-                    <span>FAAB</span>
-                    <strong>{move.faab ? `$${move.faab.recommended}` : "—"}</strong>
-                    <small>
-                      {move.faab ? `$${move.faab.low}–$${move.faab.high}` : "Budget unavailable"}
-                      {move.market
-                        ? ` · ${move.market.addCount} adds/${move.market.lookbackHours}h`
-                        : ""}
-                    </small>
-                  </div>
-                </article>
-              ))}
-            </div>
+                </>
+              )}
+              {notes.length > 0 ? <p className={styles.methodNote}>{notes.join(" ")}</p> : null}
+            </>
           )}
-          {notes.length > 0 ? <p className={styles.methodNote}>{notes.join(" ")}</p> : null}
           <ExecutionLink execution={section.execution} />
         </>
       )}
@@ -396,10 +610,10 @@ function demoBuilderRosters(snapshot: InSeasonDecisionSnapshot): BuilderRosters 
     );
   }
   if (snapshot.waivers.state === "available") {
-    collect(
-      user,
-      snapshot.waivers.recommendations.flatMap((move) => (move.drop ? [move.drop] : [])),
-    );
+    collect(user, snapshot.waivers.dropCandidates);
+    if (snapshot.waivers.restOfSeason.state === "available") {
+      collect(user, snapshot.waivers.restOfSeason.dropCandidates);
+    }
   }
   if (snapshot.trades.state === "available") {
     for (const trade of [...snapshot.trades.bestForMe, ...snapshot.trades.fairest]) {

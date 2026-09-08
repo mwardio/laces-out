@@ -327,6 +327,8 @@ export class RosProjectionStatusService {
               and(
                 eq(projectionSets.source, FIRST_PARTY_ROS_RELEASE_SET_SOURCE),
                 eq(projectionSets.season, season),
+                sql`${projectionSets.metadata}->>'releaseCompleteness' = 'full'`,
+                sql`${projectionSets.metadata}->>'preservePriorGoodSet' = 'false'`,
                 inArray(projectionSets.leagueSeasonId, leagueSeasonIds),
               ),
             )

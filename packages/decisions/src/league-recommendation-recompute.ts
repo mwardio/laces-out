@@ -56,6 +56,8 @@ export interface RecommendationSnapshotRequest {
 
 /** The inputs a run is identified by, plus the sections it persists. */
 export interface RecommendationSnapshot {
+  /** Authoritative identity of the Decision Desk facts that produced these sections. */
+  readonly sourceSnapshotChecksum: string;
   readonly week: number | null;
   readonly scoringRulesChecksum: string | null;
   readonly slotRulesChecksum: string | null;
@@ -177,6 +179,7 @@ export async function recomputeLeagueRecommendations(
         projectionSetIds: snapshot.projectionSetIds,
         marketSignalAsOf: snapshot.marketSignalAsOf,
         availabilityAsOf: snapshot.availabilityAsOf,
+        sourceSnapshotChecksum: snapshot.sourceSnapshotChecksum,
       };
       const identity: RecommendationRunIdentity = {
         leagueSeasonId: input.leagueSeasonId,

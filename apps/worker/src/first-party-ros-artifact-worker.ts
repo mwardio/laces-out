@@ -3,6 +3,7 @@ import { createDatabase } from "@laces-out/db";
 import { parentPort, workerData } from "node:worker_threads";
 
 import { databaseFirstPartyRosCandidateProvider } from "./first-party-ros-candidate-provider.js";
+import { buildVerifiedFirstPartyRosTargets } from "./first-party-ros-worker-thread.js";
 import type { FirstPartyRosCandidateContext } from "./first-party-ros-projections.js";
 
 if (parentPort === null) {
@@ -14,7 +15,8 @@ const database = createDatabase(environment.DATABASE_URL, 4);
 
 try {
   const provider = databaseFirstPartyRosCandidateProvider({ database: database.db });
-  const result = await provider.buildTargets(workerData as FirstPartyRosCandidateContext);
+  const context = workerData as FirstPartyRosCandidateContext;
+  const result = await buildVerifiedFirstPartyRosTargets({ provider, context });
   parentPort.postMessage({ ok: true, result });
 } catch (error) {
   parentPort.postMessage({

@@ -38,6 +38,9 @@ export const recommendationRunInputsSchema = z
     projectionSetIds: idListSchema,
     marketSignalAsOf: z.iso.datetime().nullable(),
     availabilityAsOf: z.iso.datetime().nullable(),
+    // Added in v3. Default legacy v1/v2 jsonb rows to null when decoded while requiring every new
+    // producer to supply the exact decision-snapshot checksum through the inferred output type.
+    sourceSnapshotChecksum: checksumSchema.nullable().default(null),
     leagueLastSyncedAt: z.iso.datetime().nullable(),
     rosterEffectiveAt: z.iso.datetime().nullable(),
     freshness: freshnessSchema,

@@ -6,6 +6,8 @@ export interface ProjectionTimestampRow {
   readonly source: string;
   readonly fetchedAt: Date;
   readonly createdAt: Date;
+  /** Explicit model cutoff for windowed managed sets such as rest-of-season forecasts. */
+  readonly asOfAt?: Date;
   readonly metadata: Record<string, unknown>;
 }
 
@@ -16,11 +18,10 @@ export interface ProjectionTimestampProvenance {
 }
 
 /**
- * Managed first-party projections are freshly computed artifacts whose oldest
- * historical input can be much older than the model run itself. Preserve that
- * input timestamp in provenance, but judge the generated set's freshness from
- * when the set was created. Imported/provider projections still use their
- * verified source timestamp.
+ * Managed weekly projections are freshly computed artifacts whose oldest historical input can be
+ * much older than the model run itself, so their freshness comes from creation time. Windowed ROS
+ * releases instead expose their explicit model cutoff. Imported/provider projections continue to
+ * use their verified source timestamp.
  */
 export function projectionFreshnessObservedAt(
   row: ProjectionTimestampRow,
@@ -38,6 +39,17 @@ export function projectionFreshnessObservedAt(
 export function projectionTimestampProvenance(
   row: ProjectionTimestampRow,
 ): ProjectionTimestampProvenance {
+  if (
+    row.source === "laces-out-first-party-ros" &&
+    row.asOfAt &&
+    Number.isFinite(row.asOfAt.getTime())
+  ) {
+    return {
+      sourceObservedAt: row.asOfAt,
+      sourceObservedAtStatus: "verified",
+      importedAt: row.createdAt,
+    };
+  }
   if (row.source !== "user-csv") {
     return {
       sourceObservedAt: row.fetchedAt,

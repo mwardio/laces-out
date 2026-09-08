@@ -34,6 +34,7 @@ import {
   firstPartyRosChampionArtifactIsValid,
   selectFirstPartyRosArtifactForLeague,
   type FirstPartyRosPublicationDecision,
+  type FirstPartyRosPublicationReason,
   type FirstPartyRosRailPosition,
   type FirstPartyRosReleasedPlayer,
   type FirstPartyRosRunConvergence,
@@ -67,11 +68,45 @@ export interface FirstPartyRosPublicationTarget {
    */
   readonly leagueScoringProfile?: ProjectionScoringProfile;
   readonly supportedPositions?: readonly FirstPartyRosRailPosition[];
+  /** Exact coverage assertion produced while assembling the league's projected candidate pool. */
+  readonly candidateUniverse: {
+    readonly expectedPlayerCount: number;
+    readonly evaluatedPlayerCount: number;
+    readonly skippedPlayerCount: number;
+    readonly expectedPositions: readonly FirstPartyRosRailPosition[];
+    readonly evaluatedPositions: readonly FirstPartyRosRailPosition[];
+    /** League roster identities substituted for shared canonical simulation IDs at persistence. */
+    readonly playerAliases: readonly {
+      readonly position: FirstPartyRosRailPosition;
+      readonly team: string | null;
+      readonly canonicalPlayerId: string;
+      readonly playerId: string;
+    }[];
+    /** Ambiguous or unresolved supported roster identities that make publication fail closed. */
+    readonly playerAliasIssues: readonly {
+      readonly position: FirstPartyRosRailPosition;
+      readonly playerId: string;
+      readonly code: string;
+    }[];
+    readonly complete: boolean;
+  };
   readonly futureWindowComplete: boolean;
   readonly evidence: Parameters<typeof evaluateFirstPartyRosPublication>[0]["evidence"];
   readonly convergence: FirstPartyRosRunConvergence;
   readonly released: readonly FirstPartyRosReleasedPlayer[];
   readonly sourceAsOf: Date;
+}
+
+function decisionWithCandidateCoverage(
+  decision: FirstPartyRosPublicationDecision,
+  target: FirstPartyRosPublicationTarget,
+): FirstPartyRosPublicationDecision {
+  if (target.candidateUniverse.complete) return decision;
+  const reasons = new Set<FirstPartyRosPublicationReason>([
+    ...decision.reasons,
+    "ros_candidate_universe_incomplete",
+  ]);
+  return { ...decision, reasons: [...reasons], preservePriorGoodSet: true };
 }
 
 export interface FirstPartyRosCandidateContext {
@@ -81,6 +116,8 @@ export interface FirstPartyRosCandidateContext {
   readonly season: number;
   readonly window: FirstPartyRosWindow;
   readonly now: Date;
+  /** Main-thread input identity that an offloaded build must verify before and after simulation. */
+  readonly candidateProviderChecksum: string;
 }
 
 export interface FirstPartyRosCandidateProvider {
@@ -110,7 +147,7 @@ export const nullFirstPartyRosCandidateProvider: FirstPartyRosCandidateProvider 
 };
 
 export const FIRST_PARTY_ROS_SHADOW_SOURCE_KEY = "laces-out.projections.first-party-ros-shadow";
-export const FIRST_PARTY_ROS_SHADOW_MODEL_VERSION = `${FIRST_PARTY_ROS_MODEL_VERSION}-shadow-rail-v1`;
+export const FIRST_PARTY_ROS_SHADOW_MODEL_VERSION = `${FIRST_PARTY_ROS_MODEL_VERSION}-shadow-rail-v2`;
 
 const scheduleSourceKey = (season: number) => `nflverse.schedules.${season}`;
 const candidateRosterSourceKey = (season: number) => `nflverse.weekly-rosters.${season}`;
@@ -727,6 +764,7 @@ export class FirstPartyRosProjectionShadowService implements ProjectionRefreshSe
               window,
               sourceAsOf,
               now,
+              candidateProviderChecksum,
               context,
             }),
           ),
@@ -885,7 +923,10 @@ export class FirstPartyRosProjectionShadowService implements ProjectionRefreshSe
       .update(
         JSON.stringify(
           normalizeForChecksum({
-            version: "ros-publication-scope-v1",
+            // Roster/provider identity semantics live in the candidate provider's resolved alias
+            // checksum. Keeping snapshot IDs here would re-run the multi-hour shared simulation on
+            // every semantically unchanged roster refresh.
+            version: "ros-publication-scope-v3",
             leagues: [...leagueRows].sort((left, right) => left.id.localeCompare(right.id)),
             scoringRules: [...ruleRows].sort((left, right) => {
               const league = left.leagueSeasonId.localeCompare(right.leagueSeasonId);
@@ -966,6 +1007,7 @@ export class FirstPartyRosProjectionShadowService implements ProjectionRefreshSe
     readonly window: FirstPartyRosWindow;
     readonly sourceAsOf: Date;
     readonly now: Date;
+    readonly candidateProviderChecksum: string;
     readonly context: WorkerJobContext;
   }): Promise<{
     readonly published: number;
@@ -986,6 +1028,7 @@ export class FirstPartyRosProjectionShadowService implements ProjectionRefreshSe
       season: input.season,
       window: input.window,
       now: input.now,
+      candidateProviderChecksum: input.candidateProviderChecksum,
     });
     let published = 0;
     let arbitrationSkippedTargets = 0;
@@ -1013,22 +1056,25 @@ export class FirstPartyRosProjectionShadowService implements ProjectionRefreshSe
         arbitrationSkippedTargets += 1;
         continue;
       }
-      const decision = evaluateFirstPartyRosPublication({
-        artifact: input.artifact,
-        leagueScoringProfileKey: target.leagueScoringProfileKey,
-        evidence: target.evidence,
-        futureWindowComplete: target.futureWindowComplete,
-        // Both halves or neither: matching per position without knowing what normalization
-        // supports would release a position the league cannot actually be scored for.
-        ...(target.leagueScoringProfile === undefined || target.supportedPositions === undefined
-          ? {}
-          : {
-              positionMatching: {
-                leagueScoringProfile: target.leagueScoringProfile,
-                supportedPositions: target.supportedPositions,
-              },
-            }),
-      });
+      const decision = decisionWithCandidateCoverage(
+        evaluateFirstPartyRosPublication({
+          artifact: input.artifact,
+          leagueScoringProfileKey: target.leagueScoringProfileKey,
+          evidence: target.evidence,
+          futureWindowComplete: target.futureWindowComplete,
+          // Both halves or neither: matching per position without knowing what normalization
+          // supports would release a position the league cannot actually be scored for.
+          ...(target.leagueScoringProfile === undefined || target.supportedPositions === undefined
+            ? {}
+            : {
+                positionMatching: {
+                  leagueScoringProfile: target.leagueScoringProfile,
+                  supportedPositions: target.supportedPositions,
+                },
+              }),
+        }),
+        target,
+      );
       if (!decision.canPublish) continue;
       const releasing = new Set(
         decision.releasingBuckets.map((bucket) => `${bucket.position}:${bucket.bucket}`),
@@ -1081,13 +1127,30 @@ export class FirstPartyRosProjectionShadowService implements ProjectionRefreshSe
     const inputChecksum = createHash("sha256")
       .update(
         JSON.stringify({
-          version: "first-party-ros-release-v1",
+          version: "first-party-ros-release-v2",
           artifactChecksum: input.artifact.artifactChecksum,
           leagueSeasonId: input.target.leagueSeasonId,
           season,
           window: `${window.windowStartWeek}-${window.windowEndWeek}`,
           asOfWeek: window.asOfWeek,
           asOfAt: asOfAtIso,
+          preservePriorGoodSet: input.decision.preservePriorGoodSet,
+          candidateUniverse: input.target.candidateUniverse,
+          reasons: [...input.decision.reasons].sort(),
+          cellDecisions: input.decision.buckets
+            .map((bucket) => ({
+              position: bucket.position,
+              bucket: bucket.bucket,
+              state: bucket.state,
+              strategy: bucket.strategy,
+              positionReason: bucket.positionReason ?? null,
+            }))
+            .sort((left, right) =>
+              `${left.position}:${left.bucket}`.localeCompare(`${right.position}:${right.bucket}`),
+            ),
+          withheldPositions: [...input.decision.withheldPositions].sort((left, right) =>
+            left.position.localeCompare(right.position),
+          ),
           players: input.releasedPlayers
             .map((player) => ({
               id: player.playerId,
@@ -1113,7 +1176,10 @@ export class FirstPartyRosProjectionShadowService implements ProjectionRefreshSe
       decision: input.decision,
       convergence: input.target.convergence,
       orchestrationVersion: FIRST_PARTY_ROS_SHADOW_MODEL_VERSION,
-      extraConfiguration: { leagueSeasonId: input.target.leagueSeasonId },
+      extraConfiguration: {
+        leagueSeasonId: input.target.leagueSeasonId,
+        candidateUniverse: input.target.candidateUniverse,
+      },
     });
 
     return this.#database.transaction(async (transaction) => {
@@ -1130,7 +1196,8 @@ export class FirstPartyRosProjectionShadowService implements ProjectionRefreshSe
         })
         .onConflictDoNothing({ target: syncRuns.idempotencyKey })
         .returning({ id: syncRuns.id });
-      if (!run) return true;
+      const authoritative = !input.decision.preservePriorGoodSet;
+      if (!run) return authoritative;
       await transaction.insert(projectionModelRuns).values({
         sourceSyncRunId: run.id,
         sourceId: input.managedSourceId,
@@ -1145,16 +1212,28 @@ export class FirstPartyRosProjectionShadowService implements ProjectionRefreshSe
         trainingWindowStartSeason: Math.max(1999, season - 3),
         trainedThroughSeason: input.artifact.evidenceThroughSeason,
         trainedThroughWeek: null,
-        qualityState: "publishable",
+        qualityState: authoritative ? "publishable" : "degraded",
         playersEvaluated: rows.length,
-        playersPublished: rows.length,
+        playersPublished: authoritative ? rows.length : 0,
         inputChecksum,
-        configuration: runPayload.configuration,
+        configuration: authoritative
+          ? runPayload.configuration
+          : { ...runPayload.configuration, mode: "release-evaluation" },
         calibration: runPayload.calibration,
         metrics: runPayload.metrics,
         sourceAsOf,
         createdAt: now,
       });
+      // Persist the release-mode evaluation so status surfaces can explain why the last complete
+      // set remains in force, but never create a candidate set from a partial cell/position release:
+      // an omitted cell could contain the league's actual best free agent.
+      if (!authoritative) {
+        await transaction
+          .update(syncRuns)
+          .set({ state: "complete", finishedAt: now, recordsWritten: 1 })
+          .where(eq(syncRuns.id, run.id));
+        return false;
+      }
       const [set] = await transaction
         .insert(projectionSets)
         .values({
@@ -1176,6 +1255,9 @@ export class FirstPartyRosProjectionShadowService implements ProjectionRefreshSe
             modelInputChecksum: inputChecksum,
             championArtifactChecksum: input.artifact.artifactChecksum,
             scoringProfileKey: input.artifact.scoringProfileKey,
+            releaseCompleteness: "full",
+            preservePriorGoodSet: false,
+            candidateUniverse: input.target.candidateUniverse,
           },
         })
         .returning({ id: projectionSets.id });

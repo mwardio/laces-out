@@ -400,7 +400,8 @@ export type FirstPartyRosPublicationReason =
   | "ros_scoring_profile_position_withheld"
   | "ros_future_window_incomplete"
   | "ros_release_gate_withheld"
-  | "ros_admitted_cell_blocker_withheld";
+  | "ros_admitted_cell_blocker_withheld"
+  | "ros_candidate_universe_incomplete";
 
 const ARTIFACT_CELL_BLOCKER_PATTERN =
   /^(?:cell|champion|calibration)_(QB|RB|WR|TE|K|DST)_(one-to-four|five-to-eight|nine-plus)_/u;

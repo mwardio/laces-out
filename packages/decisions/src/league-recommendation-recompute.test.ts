@@ -42,6 +42,7 @@ const leagueSeasonId = "league-season-1";
 
 function snapshot(overrides: Record<string, unknown> = {}) {
   return {
+    sourceSnapshotChecksum: "a".repeat(64),
     week: 3,
     scoringRulesChecksum: "scoring-1",
     slotRulesChecksum: "slots-1",

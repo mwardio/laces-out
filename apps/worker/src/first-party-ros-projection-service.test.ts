@@ -255,6 +255,16 @@ function baseTarget(): FirstPartyRosPublicationTarget {
   return {
     leagueSeasonId: "22222222-2222-4222-8222-222222222222",
     leagueScoringProfileKey: SCORING_KEY,
+    candidateUniverse: {
+      expectedPlayerCount: 1,
+      evaluatedPlayerCount: 1,
+      skippedPlayerCount: 0,
+      expectedPositions: ["WR"],
+      evaluatedPositions: ["WR"],
+      playerAliases: [],
+      playerAliasIssues: [],
+      complete: true,
+    },
     futureWindowComplete: true,
     evidence: [liveEvidence],
     convergence: {
@@ -283,6 +293,7 @@ class Harness {
   readonly #artifacts: readonly Row[];
   readonly #candidateLastSuccessfulAt: Date | null;
   readonly #seenSyncKeys = new Set<string>();
+  #skipCompletedLookup = false;
   #syncCounter = 0;
   #setCounter = 0;
 
@@ -314,6 +325,13 @@ class Harness {
 
   lastInsert(table: unknown): Row | undefined {
     return [...this.inserts].reverse().find((entry) => entry.table === table)?.values;
+  }
+
+  expectNewChecksum(): void {
+    // This lightweight facade cannot introspect Drizzle's encoded WHERE expression. Let the next
+    // completed-run lookup miss; the real idempotency key still has to differ for the subsequent
+    // insert to succeed, so the assertion continues to test checksum invalidation.
+    this.#skipCompletedLookup = true;
   }
 
   #select(table: unknown, selection: Row): readonly Row[] {
@@ -362,7 +380,13 @@ class Harness {
     if (table === nflScheduleObservations) return schedule();
     if (table === firstPartyRosChampionArtifacts) return this.#artifacts;
     if (table === leagueSeasons || table === scoringRules) return [];
-    if (table === syncRuns) return this.#seenSyncKeys.size > 0 ? [{ id: "existing" }] : [];
+    if (table === syncRuns) {
+      if (this.#skipCompletedLookup) {
+        this.#skipCompletedLookup = false;
+        return [];
+      }
+      return this.#seenSyncKeys.size > 0 ? [{ id: "existing" }] : [];
+    }
     if (table === projectionModelRuns) return [];
     if (table === projectionObservations) return [{ count: 0 }];
     return [];
@@ -547,10 +571,49 @@ describe("first-party ROS shadow service publication rail", () => {
       horizon: "rest-of-season",
       identityState: "explicit",
       visibility: "league",
+      metadata: {
+        releaseCompleteness: "full",
+        preservePriorGoodSet: false,
+      },
     });
     expect(harness.sourceUpdates.at(-1)?.metadata).toMatchObject({
       result: "released",
       publishedTargets: 1,
+    });
+  });
+
+  it("records but does not publish a gate-cleared incomplete candidate universe", async () => {
+    const target = {
+      ...baseTarget(),
+      candidateUniverse: {
+        ...baseTarget().candidateUniverse,
+        expectedPlayerCount: 2,
+        skippedPlayerCount: 1,
+        complete: false,
+      },
+    };
+    const harness = new Harness({ artifact: artifactRow() });
+    const service = new FirstPartyRosProjectionShadowService({
+      database: harness.database,
+      now: () => now,
+      candidateProvider: fakeProvider(target),
+    });
+
+    await service.refreshProjections(job, context);
+
+    expect(harness.countInserts(projectionSets)).toBe(0);
+    const evaluatedRun = harness.inserts.find(
+      (entry) =>
+        entry.table === projectionModelRuns &&
+        (entry.values.configuration as { mode?: unknown }).mode === "release-evaluation",
+    );
+    expect(evaluatedRun?.values).toMatchObject({
+      qualityState: "degraded",
+      playersPublished: 0,
+      metrics: {
+        preservePriorGoodSet: true,
+        withheldReasons: ["ros_candidate_universe_incomplete"],
+      },
     });
   });
 
@@ -601,22 +664,71 @@ describe("first-party ROS shadow service publication rail", () => {
     expect(harness.sourceUpdates.at(-1)?.metadata).toMatchObject({ result: "unchanged" });
   });
 
-  it("forwards per-position matching and records withheld positions when the live gate releases", async () => {
-    // SYNTHETIC EVIDENCE SHAPE, deliberately. `baseTarget()`'s live evidence carries the ARTIFACT's
-    // key while `leagueScoringProfileKey` is overridden — a combination
-    // `buildFirstPartyRosLeagueTarget` never produces, since it derives both from the same league
-    // profile. Since 2026-07-29 the live release gate's evidence-identity comparison is
-    // position-scoped (`evidenceIdentitiesMatchForPosition`,
-    // `packages/projections/src/rest-of-season.ts`), so the production shape — league-key-stamped
-    // evidence — also publishes its matched positions now; that end-to-end truth is pinned by
-    // "publishes a partially matched league's matched positions in the production evidence shape"
-    // in first-party-ros-publication.test.ts. The synthetic shape is kept here because byte-equal
-    // keys hold the gate's identity comparison on its fast path, isolating the wiring under test.
-    //
-    // What this test pins is the SERVICE WIRING and nothing more: that `positionMatching` is
-    // forwarded from the target, that per-league artifact arbitration keeps a target with its
-    // arbitrated artifact, that the per-position gate — not the whole-profile key — decides
-    // publication, and that withheld positions reach `metrics.cellDecisions`.
+  it("rebuilds and republishes when the provider's resolved persistence identity changes", async () => {
+    let aliasPlayerId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    let builds = 0;
+    const targetForAlias = (): FirstPartyRosPublicationTarget => {
+      const target = baseTarget();
+      return {
+        ...target,
+        candidateUniverse: {
+          ...target.candidateUniverse,
+          playerAliases: [
+            {
+              position: "DST",
+              team: "BUF",
+              canonicalPlayerId: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+              playerId: aliasPlayerId,
+            },
+          ],
+        },
+        released: target.released.map((player) => ({ ...player, playerId: aliasPlayerId })),
+      };
+    };
+    const provider: FirstPartyRosCandidateProvider = {
+      sourceChecksum: async () => (aliasPlayerId.startsWith("a") ? "9".repeat(64) : "8".repeat(64)),
+      async buildTargets() {
+        builds += 1;
+        return [targetForAlias()];
+      },
+    };
+    const harness = new Harness({ artifact: artifactRow() });
+    const service = new FirstPartyRosProjectionShadowService({
+      database: harness.database,
+      now: () => now,
+      candidateProvider: provider,
+    });
+
+    await service.refreshProjections(job, context);
+    aliasPlayerId = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+    harness.expectNewChecksum();
+    await service.refreshProjections(job, context);
+
+    expect(builds).toBe(2);
+    expect(harness.countInserts(projectionSets)).toBe(2);
+    const persistedPlayerIds = harness.inserts
+      .filter((entry) => entry.table === playerProjections)
+      .flatMap((entry) => entry.values as unknown as readonly Row[])
+      .map((row) => row.playerId);
+    const persistedSummaryIds = harness.inserts
+      .filter((entry) => entry.table === playerRosProjectionSummaries)
+      .flatMap((entry) => entry.values as unknown as readonly Row[])
+      .map((row) => row.playerId);
+    expect(persistedPlayerIds).toEqual([
+      "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+    ]);
+    expect(persistedSummaryIds).toEqual(persistedPlayerIds);
+    const releaseChecksums = harness.inserts
+      .filter((entry) => entry.table === projectionSets)
+      .map((entry) => entry.values.inputChecksum);
+    expect(new Set(releaseChecksums).size).toBe(2);
+  });
+
+  it("keeps a partial per-position release off the authoritative projection-set rail", async () => {
+    // The gate may release matched cells for evaluation while asking publication to preserve the
+    // prior complete set. Decision Desk must never treat that partial evidence as the league-wide
+    // "top waiver targets" pool.
     const target = {
       ...baseTarget(),
       leagueScoringProfileKey: "different-profile:v1",
@@ -631,38 +743,30 @@ describe("first-party ROS shadow service publication rail", () => {
     });
     await service.refreshProjections(job, context);
 
-    expect(harness.countInserts(projectionSets)).toBe(1);
-    const publishRun = harness.inserts.find(
-      (entry) => entry.table === projectionModelRuns && entry.values.qualityState === "publishable",
+    expect(harness.countInserts(projectionSets)).toBe(0);
+    expect(harness.countInserts(playerRosProjectionSummaries)).toBe(0);
+    expect(
+      harness.inserts.find(
+        (entry) =>
+          entry.table === projectionModelRuns && entry.values.qualityState === "publishable",
+      ),
+    ).toBeUndefined();
+    const partialRun = harness.inserts.find(
+      (entry) =>
+        entry.table === projectionModelRuns &&
+        (entry.values.configuration as { mode?: unknown }).mode === "release-evaluation",
     );
-    const metrics = publishRun!.values.metrics as {
-      readonly cellDecisions: readonly Record<string, unknown>[];
-      readonly preservePriorGoodSet: boolean;
-      readonly withheldReasons: readonly string[];
-    };
-    expect(metrics.withheldReasons).toContain("ros_scoring_profile_position_withheld");
-    expect(metrics.preservePriorGoodSet).toBe(true);
-    expect(metrics.cellDecisions).toContainEqual({
-      position: "QB",
-      bucket: "nine-plus",
-      state: "withhold",
-      reasons: ["position-unsupported"],
+    expect(partialRun?.values).toMatchObject({
+      qualityState: "degraded",
+      playersPublished: 0,
+      metrics: { preservePriorGoodSet: true },
     });
-    expect(metrics.cellDecisions).toContainEqual({
-      position: "K",
-      bucket: "one-to-four",
-      state: "withhold",
-      reasons: ["position-unsupported"],
-    });
-    expect(metrics.cellDecisions).toContainEqual({
-      position: "WR",
-      bucket: "five-to-eight",
-      state: "release",
-      reasons: [],
+    expect(harness.sourceUpdates.at(-1)?.metadata).toMatchObject({
+      result: "shadow_evidence_recorded",
     });
   });
 
-  it("arbitrates a league matching two artifacts to exactly one and records the skip", async () => {
+  it("arbitrates a partial league to one release evaluation without publishing a set", async () => {
     // Position-scoped identity is what makes double publication possible: the D/ST-augmented
     // artifact's offense-scoped keys equal the league's, so its own live gate would release the
     // same league the whole-key artifact publishes. Arbitration must keep the whole-key winner even
@@ -693,19 +797,26 @@ describe("first-party ROS shadow service publication rail", () => {
     });
     await service.refreshProjections(job, context);
 
-    // Exactly one set publishes, under the whole-key artifact (tie-break rule 1).
-    expect(harness.countInserts(projectionSets)).toBe(1);
-    const publishRun = harness.inserts.find(
-      (entry) => entry.table === projectionModelRuns && entry.values.qualityState === "publishable",
+    // The whole-key artifact wins arbitration (tie-break rule 1), but the missing D/ST position
+    // keeps its release non-authoritative and therefore off the projection-set rail.
+    expect(harness.countInserts(projectionSets)).toBe(0);
+    const evaluatedRun = harness.inserts.find(
+      (entry) =>
+        entry.table === projectionModelRuns &&
+        (entry.values.configuration as { mode?: unknown }).mode === "release-evaluation",
     );
     expect(
-      (publishRun!.values.configuration as { championArtifactChecksum: string })
+      (evaluatedRun!.values.configuration as { championArtifactChecksum: string })
         .championArtifactChecksum,
     ).toBe(wholeKeyArtifact.artifactChecksum);
+    expect(evaluatedRun!.values).toMatchObject({
+      qualityState: "degraded",
+      playersPublished: 0,
+      metrics: { preservePriorGoodSet: true },
+    });
     const metadata = harness.sourceUpdates.at(-1)?.metadata as Record<string, unknown>;
     expect(metadata).toMatchObject({
-      result: "released",
-      publishedTargets: 1,
+      result: "shadow_evidence_recorded",
       arbitrationSkippedTargets: 1,
     });
     expect(String(metadata.diagnostics)).toContain("ros_artifact_arbitration_skipped_targets");

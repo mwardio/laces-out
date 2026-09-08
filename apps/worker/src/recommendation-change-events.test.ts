@@ -51,6 +51,46 @@ describe("decisionFingerprint", () => {
       decisionFingerprint({ waiver: [...claims].reverse() }),
     );
   });
+
+  it("does not announce a waiver again for refreshed provenance or numeric rationale", () => {
+    const waiver = {
+      horizon: "week",
+      horizonRank: 1,
+      projectionSet: { id: "set-a", version: "v1", importedAt: "2026-09-16T10:00:00Z" },
+      projectionFreshness: { state: "fresh", ageHours: 1 },
+      move: {
+        add: { id: "target", name: "Target Player" },
+        drop: { id: "drop", name: "Drop Player" },
+        rationale: "Adding Target Player improves value by 4.24 points.",
+        market: { signal: "add", observedAt: "2026-09-16T10:00:00Z", count: 100 },
+        faab: { low: 3, recommended: 5, high: 7 },
+      },
+    };
+    const refreshed = {
+      ...waiver,
+      projectionSet: { id: "set-b", version: "v2", importedAt: "2026-09-16T11:00:00Z" },
+      projectionFreshness: { state: "fresh", ageHours: 0.1 },
+      move: {
+        ...waiver.move,
+        rationale: "Adding Target Player improves value by 4.31 points.",
+        market: { signal: "add", observedAt: "2026-09-16T11:00:00Z", count: 110 },
+        faab: { low: 4, recommended: 6, high: 8 },
+      },
+    };
+
+    const base = decisionFingerprint({ waiver: [waiver] });
+    expect(decisionFingerprint({ waiver: [refreshed] })).toBe(base);
+    expect(
+      decisionFingerprint({
+        waiver: [
+          {
+            ...refreshed,
+            move: { ...refreshed.move, add: { id: "other", name: "Other Target" } },
+          },
+        ],
+      }),
+    ).not.toBe(base);
+  });
 });
 
 describe("materialAction", () => {

@@ -65,6 +65,48 @@ describe("evaluateWaiverMoves", () => {
     // Dropping the only QB creates an illegal full roster for either add.
     expect(result.allEvaluations).toHaveLength(6);
     expect(result.recommendations[0]!.horizonDeltas).toHaveLength(2);
+    expect(result.recommendations[0]?.explanation).toContain("Of the modeled horizons");
+  });
+
+  it("chooses the best legal drop independently for each waiver target", () => {
+    const quarterback = player("qb-current", "QB");
+    const runningBack = player("rb-current", "RB");
+    const quarterbackTarget = player("qb-target", "QB");
+    const runningBackTarget = player("rb-target", "RB");
+    const constrainedSlots = createRosterSlots([
+      { type: "QB", count: 1 },
+      { type: "RB", count: 1 },
+    ]);
+
+    const result = evaluateWaiverMoves({
+      roster: [quarterback, runningBack],
+      candidates: [quarterbackTarget, runningBackTarget],
+      starterSlots: constrainedSlots,
+      rosterSlots: constrainedSlots,
+      requireDrop: true,
+      horizons: [{ id: "week", label: "Week 1", weight: 1 }],
+      projectionsByHorizon: {
+        week: {
+          "qb-current": value(5),
+          "rb-current": value(10),
+          "qb-target": value(20),
+          "rb-target": value(18),
+        },
+      },
+    });
+
+    expect(result.recommendations).toEqual([
+      expect.objectContaining({
+        addPlayerId: quarterbackTarget.id,
+        dropPlayerId: quarterback.id,
+        weightedDelta: 15,
+      }),
+      expect.objectContaining({
+        addPlayerId: runningBackTarget.id,
+        dropPlayerId: runningBack.id,
+        weightedDelta: 8,
+      }),
+    ]);
   });
 
   it("honors protected players and filters positionally illegal results", () => {
@@ -135,7 +177,7 @@ describe("evaluateWaiverMoves", () => {
       ]),
       starterSlots: createRosterSlots([{ type: "QB", count: 1 }]),
       requireDrop: true,
-      horizons: [{ id: "week", label: "Week", weight: 1 }],
+      horizons: [{ id: "week", label: "Week 1", weight: 1 }],
       projectionsByHorizon: {
         week: { "qb-current": value(10), "qb-add": value(20) },
       },
@@ -148,7 +190,9 @@ describe("evaluateWaiverMoves", () => {
       improvesRoster: true,
     });
     expect(result.recommendations[0]?.horizonDeltas[0]?.lineupDelta).toBe(10);
-    expect(result.recommendations[0]?.explanation).toContain("qb-add for qb-current");
+    expect(result.recommendations[0]?.explanation).toBe(
+      "Adding qb-add and dropping qb-current improves weighted roster value by 10.00 points (Week 1).",
+    );
   });
 
   it("does not use spare capacity to bypass protected players when a drop is required", () => {

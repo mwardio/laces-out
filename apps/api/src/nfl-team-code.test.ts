@@ -6,6 +6,7 @@ describe("NFL team code boundary", () => {
   it("maps nflverse's Rams alias to the app's canonical code in both directions", () => {
     expect(canonicalNflTeamCode("LA")).toBe("LAR");
     expect(canonicalNflTeamCode("lar")).toBe("LAR");
+    expect(canonicalNflTeamCode("WSH")).toBe("WAS");
     expect(nflverseNflTeamCode("LAR")).toBe("LA");
   });
 

@@ -625,8 +625,10 @@ Recommend only players and slot changes present in the Decision Desk lineup resu
     title: "Waiver wire scan",
     instructions: `Apply a strict worth-the-drop standard.
 Recommend only add/drop pairs present in Decision Desk waiver recommendations. Never name an unlisted free agent and never recommend an add without its modeled drop.
+The top-level waiver fields are the independent current-week view; restOfSeason is a separate independent view when available. State which horizon every recommendation comes from, and never add, average, or directly compare Week and ROS point magnitudes.
+Within either view, the top-level drop and gains on each target are its recommended best pairing. Drop comparisons are what-if scenarios for the member's selector; never promote a non-positive comparison as a worthwhile move.
 For each worthwhile move, compare the incoming player with the outgoing player, cite weighted roster gain and lineup gain when supplied, and distinguish immediate help from depth.
-If the recommendation list is empty, say there are no worthwhile waiver additions right now and recommend holding the roster. Do not manufacture an action for the sake of having one.`,
+If both available recommendation views are empty, say there are no worthwhile waiver additions right now and recommend holding the roster. Do not manufacture an action for the sake of having one.`,
   },
   "trade-builder": {
     title: "Trade finder",
@@ -676,7 +678,12 @@ function noActionAnswer(feature: AiFeatureName, decisions: unknown): string | un
   if (feature === "waiver-scan") {
     const waivers = objectValue(decisionRecord?.waivers);
     if (waivers?.state === "available" && Array.isArray(waivers.recommendations)) {
-      return waivers.recommendations.length === 0
+      const ros = objectValue(waivers.restOfSeason);
+      const rosHasRecommendation =
+        ros?.state === "available" &&
+        Array.isArray(ros.recommendations) &&
+        ros.recommendations.length > 0;
+      return waivers.recommendations.length === 0 && !rosHasRecommendation
         ? "There are no worthwhile waiver targets right now. The deterministic waiver engine found no legal add/drop pairing that improves projected roster value, so the best move is to hold the current roster and check again after the next data refresh."
         : undefined;
     }

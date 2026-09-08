@@ -45,6 +45,7 @@ import {
   rosterSnapshots,
   scoringRules,
   syncRuns,
+  teamWeeklyStatObservations,
   users,
   type Database,
 } from "@laces-out/db";
@@ -75,7 +76,10 @@ import {
   firstPartyRosChampionArtifactChecksum,
   type FirstPartyRosChampionArtifactPayload,
 } from "./first-party-ros-publication.js";
-import { firstPartyAvailableProjectionComponents } from "./first-party-projections.js";
+import {
+  firstPartyAvailableProjectionComponents,
+  firstPartyDefensePlayerId,
+} from "./first-party-projections.js";
 import { queueNames } from "./jobs.js";
 
 function dockerIsAvailable(): boolean {
@@ -115,12 +119,14 @@ const REGULAR_SEASON_WEEKS = 18;
 const FIXED_NOW = new Date("2031-10-20T12:00:00.000Z");
 const FRESH = new Date(FIXED_NOW.getTime() - 5 * 60_000);
 
-const NFL_TEAMS = ["BUF", "MIA", "NYJ", "NEP"] as const;
-const WR_COUNT = 8;
-/** Current NFL candidate rows released. Kept small so the suite stays fast at 12288 paths. */
-const CANDIDATE_WR_COUNT = WR_COUNT;
-/** Only half are on the fantasy roster, proving preseason/free-agent candidates still publish. */
-const FANTASY_ROSTERED_WR_COUNT = 4;
+const NFL_TEAMS = ["BUF", "MIA"] as const;
+const OFFENSE_POSITIONS = ["QB", "RB", "WR", "TE", "K"] as const;
+const ROS_POSITIONS = [...OFFENSE_POSITIONS, "DST"] as const;
+const OFFENSE_PLAYER_COUNT = OFFENSE_POSITIONS.length;
+/** Five offensive positions plus one app-owned D/ST candidate per scheduled team. */
+const CANDIDATE_COUNT = OFFENSE_PLAYER_COUNT + NFL_TEAMS.length;
+/** Some modeled positions stay unrostered, proving free-agent candidates still publish. */
+const FANTASY_ROSTERED_PLAYER_COUNT = 3;
 
 function checksumFor(key: string): string {
   return createHash("sha256").update(`ros-pg-test:${key}`, "utf8").digest("hex");
@@ -238,12 +244,21 @@ function jobContext() {
 // persisted rules and the champion evidence must resolve to the same key or nothing publishes.
 // ---------------------------------------------------------------------------------------------
 
+// An authoritative ROS set is all-or-nothing across the six-position rail. Keep one linear rule
+// family for every position so this persistence contract exercises a genuinely complete release,
+// rather than a partial release-evaluation that correctly preserves the prior good set.
 const LEAGUE_SCORING_ROWS = [
+  { statKey: "Passing Yards", points: "0.04" },
+  { statKey: "Passing Touchdowns", points: "4" },
   { statKey: "Receptions", points: "1" },
   { statKey: "Receiving Yards", points: "0.1" },
   { statKey: "Receiving Touchdowns", points: "6" },
   { statKey: "Rushing Yards", points: "0.1" },
   { statKey: "Rushing Touchdowns", points: "6" },
+  { statKey: "Field Goal 0 19 Yards", points: "3" },
+  { statKey: "Point After Attempt Made", points: "1" },
+  { statKey: "Sacks Recorded", points: "1" },
+  { statKey: "Interceptions Made", points: "2" },
 ] as const;
 
 function leagueScoringProfileKey(): string {
@@ -284,7 +299,9 @@ const CORPUS_PER_BLOCK = 10;
 // player in that block. Cover whole blocks rather than 7 of 10 rows inside every block; otherwise
 // every block contains a miss and the fixture correctly appears to have zero calibrated coverage.
 // ceil((36 + 1) * 0.70) = 26, so the derived calibrated block coverage is 26 / 36 = 0.7222.
-const CORPUS_COVERED_BLOCKS = 26;
+// Distribute those covered blocks across all four seasons so every position's walk-forward sample
+// has balanced hits and misses, rather than depending on a narrow exact-binomial boundary.
+const CORPUS_COVERED_CUTOFFS_BY_SEASON = [7, 7, 6, 6] as const;
 
 function heldOutForecast(
   season: number,
@@ -294,13 +311,13 @@ function heldOutForecast(
   const actual = 100;
   const seasonIndex = CORPUS_SEASONS.indexOf(season as (typeof CORPUS_SEASONS)[number]);
   const cutoffIndex = CORPUS_CUTOFFS.indexOf(asOfWeek as (typeof CORPUS_CUTOFFS)[number]);
-  const blockIndex = seasonIndex * CORPUS_CUTOFFS.length + cutoffIndex;
   // Ten blocks deliberately miss, keeping the calibrated block coverage near the 0.70 nominal
   // instead of producing a degenerate 1.0 artifact that the database evidence gate must reject.
-  const shift = blockIndex < CORPUS_COVERED_BLOCKS ? 0 : 60;
+  const coveredCutoffs = CORPUS_COVERED_CUTOFFS_BY_SEASON[seasonIndex] ?? 0;
+  const shift = cutoffIndex < coveredCutoffs ? 0 : 60;
   return {
     playerId: `${season}-${asOfWeek}-${index}`,
-    position: "WR",
+    position: ROS_POSITIONS[index % ROS_POSITIONS.length]!,
     contextualModelVersion: CONTEXTUAL_MODEL_VERSION,
     recencyModelVersion: RECENCY_MODEL_VERSION,
     scoringProfileKey: SCORING_KEY,
@@ -393,7 +410,9 @@ const OBSERVATION_SOURCE_KINDS = [
   "nflverse.snap-counts",
   "nflverse.weekly-rosters",
   "nflverse.injuries",
+  "nflverse.stats-team-week",
 ] as const;
+const PLAYER_CATALOG_SOURCE_KEYS = ["nflverse.players", "sleeper.players"] as const;
 
 function allSeasons(): readonly number[] {
   return [...HISTORY_SEASONS, TEST_SEASON];
@@ -405,9 +424,14 @@ function completedWeeks(season: number): readonly number[] {
 }
 
 async function seedSources(db: Database): Promise<ReadonlyMap<string, string>> {
-  const keys = allSeasons().flatMap((season) =>
-    OBSERVATION_SOURCE_KINDS.map((kind) => `${kind}.${season}`),
-  );
+  const keys = [
+    ...allSeasons().flatMap((season) =>
+      OBSERVATION_SOURCE_KINDS.map((kind) => `${kind}.${season}`),
+    ),
+    // Candidate-provider lineage pins the mutable player catalog and trusted Sleeper identity
+    // source even though this fixture's roster entries already use canonical player IDs.
+    ...PLAYER_CATALOG_SOURCE_KEYS,
+  ];
   const rows = await db
     .insert(dataSources)
     .values(
@@ -446,26 +470,38 @@ interface SeededPlayer {
   readonly id: string;
   readonly externalId: string;
   readonly team: string;
+  readonly position: (typeof OFFENSE_POSITIONS)[number];
 }
 
 async function seedPlayers(db: Database): Promise<readonly SeededPlayer[]> {
   const rows = await db
     .insert(players)
     .values(
-      Array.from({ length: WR_COUNT }, (_, index) => ({
+      Array.from({ length: OFFENSE_PLAYER_COUNT }, (_, index) => ({
         gsisId: externalPlayerId(index),
-        fullName: `ROS Receiver ${index}`,
+        fullName: `ROS ${OFFENSE_POSITIONS[index]} ${index}`,
         nflTeam: teamOf(index),
-        primaryPosition: "WR",
-        eligiblePositions: ["WR"],
+        primaryPosition: OFFENSE_POSITIONS[index]!,
+        eligiblePositions: [OFFENSE_POSITIONS[index]!],
         status: "ACT",
       })),
     )
     .returning({ id: players.id, gsisId: players.gsisId });
+  await db.insert(players).values(
+    NFL_TEAMS.map((team) => ({
+      id: firstPartyDefensePlayerId(team),
+      fullName: `${team} D/ST`,
+      nflTeam: team,
+      primaryPosition: "DST",
+      eligiblePositions: ["DST"],
+      status: "ACT",
+    })),
+  );
   return rows.map((row, index) => ({
     id: row.id,
     externalId: row.gsisId!,
     team: teamOf(index),
+    position: OFFENSE_POSITIONS[index]!,
   }));
 }
 
@@ -538,8 +574,10 @@ async function seedPlayerObservations(
     for (const week of completedWeeks(season)) {
       for (const [index, player] of seeded.entries()) {
         const noise = pseudo(season * 1000 + week * 37 + index);
-        const targets = 6 + Math.round(noise * 6);
-        const receptions = Math.max(1, Math.round(targets * (0.6 + noise * 0.2)));
+        const passingAttempts = 24 + Math.round(noise * 18);
+        const passingCompletions = Math.max(1, Math.round(passingAttempts * (0.58 + noise * 0.15)));
+        const targets = 5 + Math.round(noise * 7);
+        const receptions = Math.max(1, Math.round(targets * (0.58 + noise * 0.2)));
         const gameId = gameIdFor(season, week, player.team);
         statValues.push({
           sourceId: statSource,
@@ -553,12 +591,29 @@ async function seedPlayerObservations(
           team: player.team,
           opponentTeam: opponentOf(player.team),
           components: {
+            passing_attempts: passingAttempts,
+            passing_completions: passingCompletions,
+            passing_yards: 180 + Math.round(noise * 180),
+            passing_touchdowns: noise > 0.75 ? 3 : noise > 0.35 ? 2 : 1,
+            passing_interceptions: noise > 0.8 ? 2 : noise > 0.4 ? 1 : 0,
+            carries: 3 + Math.round(noise * 12),
+            rushing_yards: Math.round(noise * 85),
+            rushing_touchdowns: noise > 0.9 ? 1 : 0,
             targets,
             receptions,
-            receiving_yards: 40 + Math.round(noise * 70),
+            receiving_yards: 35 + Math.round(noise * 80),
             receiving_touchdowns: noise > 0.75 ? 1 : 0,
-            rushing_yards: 0,
-            rushing_touchdowns: 0,
+            field_goals_attempted: 3,
+            field_goals_made: noise > 0.15 ? 3 : 2,
+            field_goals_made_0_19: 1,
+            field_goals_made_20_29: 1,
+            field_goals_made_30_39: noise > 0.15 ? 1 : 0,
+            field_goals_made_0_39: noise > 0.15 ? 3 : 2,
+            field_goals_made_40_49: 0,
+            field_goals_made_50_plus: 0,
+            field_goals_missed: noise > 0.15 ? 0 : 1,
+            extra_points_attempted: 3,
+            extra_points_made: 3,
           },
           advanced: {},
           sourceFantasyPoints: { standard: 10, ppr: 15 },
@@ -578,12 +633,12 @@ async function seedPlayerObservations(
           pfrGameId: `${gameId}-pfr`,
           team: player.team,
           opponentTeam: opponentOf(player.team),
-          offenseSnaps: 45,
-          offenseShare: (0.6 + noise * 0.3).toFixed(5),
+          offenseSnaps: player.position === "K" ? 0 : 45,
+          offenseShare: player.position === "K" ? "0.00000" : (0.6 + noise * 0.3).toFixed(5),
           defenseSnaps: 0,
           defenseShare: "0.00000",
-          specialTeamsSnaps: 2,
-          specialTeamsShare: "0.05000",
+          specialTeamsSnaps: player.position === "K" ? 12 : 2,
+          specialTeamsShare: player.position === "K" ? "0.75000" : "0.05000",
           fetchedAt: FRESH,
           inputChecksum: snapChecksum,
         });
@@ -595,7 +650,7 @@ async function seedPlayerObservations(
           season,
           week,
           team: player.team,
-          position: "WR",
+          position: player.position,
           rosterStatus: "ACT",
           statusDescription: null,
           fetchedAt: FRESH,
@@ -606,6 +661,48 @@ async function seedPlayerObservations(
     await db.insert(playerWeeklyStatObservations).values(statValues);
     await db.insert(playerSnapCountObservations).values(snapValues);
     await db.insert(playerWeeklyRosterObservations).values(rosterValues);
+  }
+}
+
+async function seedTeamObservations(
+  db: Database,
+  sourceIds: ReadonlyMap<string, string>,
+  ingestRunId: string,
+): Promise<void> {
+  for (const season of allSeasons()) {
+    const sourceId = sourceIds.get(`nflverse.stats-team-week.${season}`)!;
+    const inputChecksum = checksumFor(`nflverse.stats-team-week.${season}`);
+    const values = completedWeeks(season).flatMap((week) =>
+      NFL_TEAMS.map((team, index) => {
+        const noise = pseudo(season * 1000 + week * 41 + index);
+        return {
+          sourceId,
+          sourceSyncRunId: ingestRunId,
+          externalTeamId: team,
+          season,
+          week,
+          seasonType: "REG" as const,
+          gameId: gameIdFor(season, week, team),
+          team,
+          opponentTeam: opponentOf(team),
+          components: {
+            defensive_sacks: 2 + (week % 3),
+            defensive_interceptions: noise > 0.45 ? 1 : 0,
+            defensive_fumbles_recovered: noise > 0.7 ? 1 : 0,
+            defensive_safeties: 0,
+            defensive_touchdowns: noise > 0.9 ? 1 : 0,
+            special_teams_touchdowns: 0,
+            field_goals_blocked: 0,
+            extra_points_blocked: 0,
+            punts_blocked: 0,
+            total_offensive_yards: 285 + Math.round(noise * 110),
+          },
+          fetchedAt: FRESH,
+          inputChecksum,
+        };
+      }),
+    );
+    await db.insert(teamWeeklyStatObservations).values(values);
   }
 }
 
@@ -668,11 +765,11 @@ async function seedLeague(
     .returning({ id: rosterSnapshots.id });
   if (!snapshot) throw new Error("Failed to seed the pg-test roster snapshot");
   await db.insert(rosterEntries).values(
-    seeded.slice(0, FANTASY_ROSTERED_WR_COUNT).map((player, index) => ({
+    seeded.slice(0, FANTASY_ROSTERED_PLAYER_COUNT).map((player, index) => ({
       snapshotId: snapshot.id,
       playerId: player.id,
-      slotCode: index < 2 ? "WR" : "BN",
-      isStarter: index < 2,
+      slotCode: index === 0 ? player.position : "BN",
+      isStarter: index === 0,
     })),
   );
   return { leagueSeasonId: leagueSeason.id };
@@ -705,6 +802,7 @@ async function seedChampionArtifact(db: Database): Promise<string> {
 interface PersistedSummary extends Record<string, unknown> {
   readonly scenario_count: number;
   readonly method_version: string;
+  readonly position: string;
 }
 
 describe.skipIf(!dockerAvailable)(
@@ -731,6 +829,7 @@ describe.skipIf(!dockerAvailable)(
       const seeded = await seedPlayers(handle.db);
       await seedSchedules(handle.db, sourceIds, ingestRunId);
       await seedPlayerObservations(handle.db, sourceIds, ingestRunId, seeded);
+      await seedTeamObservations(handle.db, sourceIds, ingestRunId);
       leagueSeasonId = (await seedLeague(handle.db, seeded)).leagueSeasonId;
       await seedChampionArtifact(handle.db);
     }, 180_000);
@@ -793,9 +892,20 @@ describe.skipIf(!dockerAvailable)(
       refreshDurationMs = Number(process.hrtime.bigint() - started) / 1e6;
 
       const summaries = await handle.db.execute<PersistedSummary>(sql`
-          select scenario_count, method_version from player_ros_projection_summaries
+          select summary.scenario_count, summary.method_version, player.primary_position as position
+          from player_ros_projection_summaries summary
+          inner join players player on player.id = summary.player_id
         `);
-      expect(summaries.length).toBe(CANDIDATE_WR_COUNT);
+      expect(summaries.length).toBe(CANDIDATE_COUNT);
+      expect(summaries.map((summary) => summary.position).sort()).toEqual([
+        "DST",
+        "DST",
+        "K",
+        "QB",
+        "RB",
+        "TE",
+        "WR",
+      ]);
       for (const summary of summaries) {
         // The whole defect in one assertion: this used to be capped at 4096.
         expect(Number(summary.scenario_count)).toBe(FIRST_PARTY_ROS_DEFAULT_SCENARIOS);
@@ -819,7 +929,7 @@ describe.skipIf(!dockerAvailable)(
           ),
         );
       expect(releaseRun).toBeDefined();
-      expect(releaseRun?.playersPublished).toBe(CANDIDATE_WR_COUNT);
+      expect(releaseRun?.playersPublished).toBe(CANDIDATE_COUNT);
       const convergence = (
         releaseRun?.metrics as { readonly rosConvergence?: Record<string, unknown> }
       ).rosConvergence;
@@ -848,11 +958,11 @@ describe.skipIf(!dockerAvailable)(
 
     it("reports the real default path's cost against the ROS projection job timeout", () => {
       expect(refreshDurationMs).toBeGreaterThan(0);
-      const perPlayerMs = refreshDurationMs / CANDIDATE_WR_COUNT;
+      const perPlayerMs = refreshDurationMs / CANDIDATE_COUNT;
       const timeoutMs = PROJECTION_REFRESH_JOB_TIMEOUT_SECONDS * 1_000;
       console.info(
         `[ros-scenario-contract] real default candidate-to-publication path: ` +
-          `${refreshDurationMs.toFixed(0)} ms for ${CANDIDATE_WR_COUNT} released players ` +
+          `${refreshDurationMs.toFixed(0)} ms for ${CANDIDATE_COUNT} released players ` +
           `(${perPlayerMs.toFixed(0)} ms/player) against a ` +
           `${PROJECTION_REFRESH_JOB_TIMEOUT_SECONDS}s (${timeoutMs} ms) ` +
           `${queueNames.refreshRosProjections} job timeout; ` +
@@ -943,7 +1053,7 @@ describe.skipIf(!dockerAvailable)(
           select count(*)::text as count from player_ros_projection_summaries
         `);
       expect(after[0]?.count).toBe(before[0]?.count);
-      expect(Number(after[0]?.count)).toBe(CANDIDATE_WR_COUNT);
+      expect(Number(after[0]?.count)).toBe(CANDIDATE_COUNT);
     }, 120_000);
   },
 );

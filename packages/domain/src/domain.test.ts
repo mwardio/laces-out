@@ -75,6 +75,7 @@ describe("NFL team identity", () => {
   it("normalizes nflverse's Rams alias into the app's canonical code", () => {
     expect(canonicalNflTeamCode("LA")).toBe("LAR");
     expect(canonicalNflTeamCode(" lar ")).toBe("LAR");
+    expect(canonicalNflTeamCode("wsh")).toBe("WAS");
     expect(canonicalNflTeamCode("DET")).toBe("DET");
   });
 });

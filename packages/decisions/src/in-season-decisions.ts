@@ -60,15 +60,26 @@ import {
   type TradeHorizon,
   type TradePackage,
 } from "@laces-out/engine-trade";
-import { evaluateWaiverMoves, recommendFaabBid } from "@laces-out/engine-waiver";
+import {
+  evaluateWaiverMoves,
+  recommendFaabBid,
+  type WaiverMoveEvaluation,
+} from "@laces-out/engine-waiver";
+import {
+  projectionScoringProfileKeyForPosition,
+  projectionScoringRulesFromProfileKey,
+  type LeagueScoringPosition,
+} from "@laces-out/projections";
 import {
   and,
   asc,
   count,
   desc,
   eq,
+  gte,
   inArray,
   like,
+  lte,
   ne,
   or,
   sql,
@@ -101,6 +112,9 @@ const MAX_TRADE_PACKAGES_PER_OPPONENT = 48;
 const MAX_TRADE_POOL_PER_TEAM = 6;
 const MAX_ENGINE_STARTERS = 16;
 const TRADE_BUILDER_ALGORITHM_VERSION = "trade-builder-v1";
+const MANAGED_PROJECTION_SET_SOURCE = "laces-out-first-party";
+const MANAGED_ROS_PROJECTION_SET_SOURCE = "laces-out-first-party-ros";
+const AUTHORITATIVE_ROS_RELEASE_COMPLETENESS = "full";
 
 export interface DecisionMembershipRow {
   readonly leagueId: string;
@@ -164,6 +178,10 @@ export interface DecisionProjectionSetRow {
   readonly season: number;
   readonly week: number | null;
   readonly horizon: string;
+  readonly windowStartWeek: number;
+  readonly windowEndWeek: number;
+  readonly asOfWeek: number;
+  readonly asOfAt: Date;
   readonly fetchedAt: Date;
   readonly createdAt: Date;
   readonly metadata: Record<string, unknown>;
@@ -237,6 +255,11 @@ export interface InSeasonDecisionRepository {
   listTopProjectionPlayers(
     projectionSetId: string,
     limit: number,
+  ): Promise<readonly DecisionProjectionPlayerRow[]>;
+  /** Position seeds keep aggregate ROS totals from crowding lower-scoring positions out. */
+  listTopProjectionPlayersByPosition?(
+    projectionSetId: string,
+    limitPerPosition: number,
   ): Promise<readonly DecisionProjectionPlayerRow[]>;
   listProjectionPlayersByIds(
     projectionSetId: string,
@@ -419,61 +442,94 @@ export class DrizzleInSeasonDecisionRepository implements InSeasonDecisionReposi
       this.#database,
       leagueSeasonId,
     );
-    const compatibleManagedSet = managedProfileKey
+    const compatibleWeeklySet = managedProfileKey
       ? or(
-          ne(projectionSets.source, "laces-out-first-party"),
+          ne(projectionSets.source, MANAGED_PROJECTION_SET_SOURCE),
           sql`${projectionSets.metadata}->>'scoringProfileKey' = ${managedProfileKey}`,
         )
-      : ne(projectionSets.source, "laces-out-first-party");
-    return this.#database
-      .select({
-        id: projectionSets.id,
-        source: projectionSets.source,
-        version: projectionSets.version,
-        season: projectionSets.season,
-        week: projectionSets.week,
-        horizon: projectionSets.horizon,
-        fetchedAt: projectionSets.fetchedAt,
-        createdAt: projectionSets.createdAt,
-        metadata: projectionSets.metadata,
-      })
-      .from(projectionSets)
-      .innerJoin(leagueSeasons, eq(leagueSeasons.id, projectionSets.leagueSeasonId))
-      .innerJoin(
-        leagueMemberships,
-        and(
-          eq(leagueMemberships.leagueId, leagueSeasons.leagueId),
-          eq(leagueMemberships.userId, actorUserId),
-        ),
-      )
-      .where(
-        and(
-          eq(projectionSets.leagueSeasonId, leagueSeasonId),
-          eq(projectionSets.season, season),
-          eq(projectionSets.week, week),
-          eq(projectionSets.horizon, "week"),
-          compatibleManagedSet,
-          visibility === "league-only"
-            ? eq(projectionSets.visibility, "league")
-            : or(
-                eq(projectionSets.visibility, "league"),
-                and(
-                  eq(projectionSets.visibility, "private"),
-                  eq(projectionSets.createdByUserId, actorUserId),
-                ),
-              ),
-        ),
-      )
-      .orderBy(
-        sql`case
-          when ${projectionSets.visibility} = 'private' and ${projectionSets.createdByUserId} = ${actorUserId} then 0
-          when ${projectionSets.createdByUserId} is not null then 1
-          else 2
-        end`,
-        desc(projectionSets.fetchedAt),
-        desc(projectionSets.createdAt),
-      )
-      .limit(limit);
+      : ne(projectionSets.source, MANAGED_PROJECTION_SET_SOURCE);
+    const actorVisibleSet =
+      visibility === "league-only"
+        ? eq(projectionSets.visibility, "league")
+        : or(
+            eq(projectionSets.visibility, "league"),
+            and(
+              eq(projectionSets.visibility, "private"),
+              eq(projectionSets.createdByUserId, actorUserId),
+            ),
+          );
+    const read = (horizon: "week" | "rest-of-season") =>
+      this.#database
+        .select({
+          id: projectionSets.id,
+          source: projectionSets.source,
+          version: projectionSets.version,
+          season: projectionSets.season,
+          week: projectionSets.week,
+          horizon: projectionSets.horizon,
+          windowStartWeek: projectionSets.windowStartWeek,
+          windowEndWeek: projectionSets.windowEndWeek,
+          asOfWeek: projectionSets.asOfWeek,
+          asOfAt: projectionSets.asOfAt,
+          fetchedAt: projectionSets.fetchedAt,
+          createdAt: projectionSets.createdAt,
+          metadata: projectionSets.metadata,
+        })
+        .from(projectionSets)
+        .innerJoin(leagueSeasons, eq(leagueSeasons.id, projectionSets.leagueSeasonId))
+        .innerJoin(
+          leagueMemberships,
+          and(
+            eq(leagueMemberships.leagueId, leagueSeasons.leagueId),
+            eq(leagueMemberships.userId, actorUserId),
+          ),
+        )
+        .where(
+          and(
+            eq(projectionSets.leagueSeasonId, leagueSeasonId),
+            eq(projectionSets.season, season),
+            eq(projectionSets.horizon, horizon),
+            ...(horizon === "week"
+              ? [eq(projectionSets.week, week), compatibleWeeklySet, actorVisibleSet]
+              : [
+                  eq(projectionSets.identityState, "explicit"),
+                  eq(projectionSets.source, MANAGED_ROS_PROJECTION_SET_SOURCE),
+                  eq(projectionSets.visibility, "league"),
+                  sql`${projectionSets.metadata}->>'releaseCompleteness' = ${AUTHORITATIVE_ROS_RELEASE_COMPLETENESS}`,
+                  sql`${projectionSets.metadata}->>'preservePriorGoodSet' = 'false'`,
+                  gte(projectionSets.windowStartWeek, week),
+                  lte(projectionSets.windowStartWeek, Math.min(25, week + 1)),
+                  gte(projectionSets.asOfWeek, Math.max(0, week - 1)),
+                  lte(projectionSets.asOfWeek, week),
+                ]),
+          ),
+        )
+        .orderBy(
+          ...(horizon === "week"
+            ? [
+                sql`case
+                  when ${projectionSets.visibility} = 'private' and ${projectionSets.createdByUserId} = ${actorUserId} then 0
+                  when ${projectionSets.createdByUserId} is not null then 1
+                  else 2
+                end`,
+                desc(projectionSets.fetchedAt),
+                desc(projectionSets.createdAt),
+                desc(projectionSets.id),
+              ]
+            : [
+                managedProfileKey
+                  ? sql`case when ${projectionSets.metadata}->>'scoringProfileKey' = ${managedProfileKey} then 0 else 1 end`
+                  : sql`0`,
+                desc(projectionSets.asOfWeek),
+                desc(projectionSets.asOfAt),
+                desc(projectionSets.fetchedAt),
+                desc(projectionSets.createdAt),
+                desc(projectionSets.id),
+              ]),
+        )
+        .limit(limit);
+    const [weekly, restOfSeason] = await Promise.all([read("week"), read("rest-of-season")]);
+    return [...weekly, ...restOfSeason];
   }
 
   async countProjectionPlayers(projectionSetId: string): Promise<number> {
@@ -492,6 +548,36 @@ export class DrizzleInSeasonDecisionRepository implements InSeasonDecisionReposi
       .where(eq(playerProjections.projectionSetId, projectionSetId))
       .orderBy(desc(playerProjections.meanPoints), asc(players.fullName), asc(players.id))
       .limit(limit);
+  }
+
+  async listTopProjectionPlayersByPosition(
+    projectionSetId: string,
+    limitPerPosition: number,
+  ): Promise<readonly DecisionProjectionPlayerRow[]> {
+    const sourcePositions: Readonly<
+      Record<"QB" | "RB" | "WR" | "TE" | "K" | "DST", readonly string[]>
+    > = {
+      QB: ["QB"],
+      RB: ["RB"],
+      WR: ["WR"],
+      TE: ["TE"],
+      K: ["K", "PK"],
+      DST: ["DST", "DEF", "D/ST"],
+    };
+    const rows = await Promise.all(
+      Object.values(sourcePositions).map((positions) =>
+        this.#projectionPlayerQuery()
+          .where(
+            and(
+              eq(playerProjections.projectionSetId, projectionSetId),
+              inArray(sql<string>`upper(btrim(${players.primaryPosition}))`, [...positions]),
+            ),
+          )
+          .orderBy(desc(playerProjections.meanPoints), asc(players.fullName), asc(players.id))
+          .limit(limitPerPosition),
+      ),
+    );
+    return rows.flat();
   }
 
   listProjectionPlayersByIds(
@@ -556,6 +642,7 @@ export class DrizzleInSeasonDecisionRepository implements InSeasonDecisionReposi
         and(
           eq(leagueSupplementalSnapshots.leagueSeasonId, leagueSeasonId),
           eq(leagueSupplementalSnapshots.kind, "available-players"),
+          inArray(leagueSupplementalSnapshots.availability, ["free-agent", "waivers"]),
           ...(week === null ? [] : [eq(leagueSupplementalSnapshots.asOfWeek, week)]),
         ),
       )
@@ -567,31 +654,50 @@ export class DrizzleInSeasonDecisionRepository implements InSeasonDecisionReposi
       .limit(2);
   }
 
-  listEspnPlayerIdentities(
+  async listEspnPlayerIdentities(
     leagueSeasonId: string,
     ids: readonly string[],
   ): Promise<readonly DecisionEspnPlayerIdentityRow[]> {
-    if (ids.length === 0) return Promise.resolve([]);
-    return this.#database
-      .select({
-        playerId: playerExternalIds.playerId,
-        source: playerExternalIds.source,
-        externalId: playerExternalIds.externalId,
-      })
-      .from(playerExternalIds)
-      .where(
-        and(
-          inArray(playerExternalIds.playerId, [...ids]),
-          or(
-            eq(playerExternalIds.source, "espn"),
+    const uniqueIds = [...new Set(ids)];
+    if (uniqueIds.length === 0) return [];
+
+    // The weekly and position-balanced ROS pools can together exceed the old 1,024-row cap,
+    // especially when a player has more than one provider identity. Query every bounded input ID
+    // in chunks so availability filtering never drops an otherwise high-ranked candidate merely
+    // because an unordered SQL limit happened to cut its identity row off.
+    const chunkSize = 400;
+    const chunks = Array.from({ length: Math.ceil(uniqueIds.length / chunkSize) }, (_, index) =>
+      uniqueIds.slice(index * chunkSize, (index + 1) * chunkSize),
+    );
+    const rows = await Promise.all(
+      chunks.map((chunk) =>
+        this.#database
+          .select({
+            playerId: playerExternalIds.playerId,
+            source: playerExternalIds.source,
+            externalId: playerExternalIds.externalId,
+          })
+          .from(playerExternalIds)
+          .where(
             and(
-              eq(playerExternalIds.source, "espn-self-asserted"),
-              like(playerExternalIds.externalId, `${leagueSeasonId}:%`),
+              inArray(playerExternalIds.playerId, chunk),
+              or(
+                eq(playerExternalIds.source, "espn"),
+                and(
+                  eq(playerExternalIds.source, "espn-self-asserted"),
+                  like(playerExternalIds.externalId, `${leagueSeasonId}:%`),
+                ),
+              ),
             ),
+          )
+          .orderBy(
+            asc(playerExternalIds.playerId),
+            asc(playerExternalIds.source),
+            asc(playerExternalIds.externalId),
           ),
-        ),
-      )
-      .limit(MAX_PROJECTION_ROWS * 2);
+      ),
+    );
+    return rows.flat();
   }
 
   findManagedProjectionProfile(leagueSeasonId: string): Promise<ManagedProjectionProfile> {
@@ -599,7 +705,8 @@ export class DrizzleInSeasonDecisionRepository implements InSeasonDecisionReposi
   }
 
   #projectionPlayerQuery() {
-    const observedPosition = latestFantasyPosition(projectionSets.season, projectionSets.week);
+    const projectionWeek = sql<number>`coalesce(${projectionSets.week}, ${projectionSets.asOfWeek})`;
+    const observedPosition = latestFantasyPosition(projectionSets.season, projectionWeek);
     return this.#database
       .select({
         playerId: players.id,
@@ -625,6 +732,7 @@ interface ExpandedSlot extends RosterSlot {
 interface PreparedProjectionPlayer {
   readonly player: Player;
   readonly value: ProjectionValue;
+  readonly primaryPosition: Position;
 }
 
 interface EvaluatedTradePackage {
@@ -675,8 +783,13 @@ export interface DecisionSnapshotChecksumInput {
   readonly claimedFantasyTeamId: string | null;
   readonly slotRules: readonly DecisionSlotRuleRow[];
   readonly rosterSnapshotIds: readonly string[];
-  readonly projectionSetId: string | null;
+  readonly projectionSetIds: readonly string[];
+  readonly scoringProfileChecksum: string | null;
+  readonly marketSignalsChecksum: string | null;
+  readonly marketSignalAsOf: string | null;
+  readonly availabilityChecksum: string | null;
   readonly availabilityAsOf: string | null;
+  readonly modeledFactsChecksum: string | null;
 }
 
 /** Nothing was read yet, so nothing but the season identifies the snapshot. */
@@ -684,8 +797,13 @@ const NO_DECISION_INPUTS: Omit<DecisionSnapshotChecksumInput, "season"> = {
   claimedFantasyTeamId: null,
   slotRules: [],
   rosterSnapshotIds: [],
-  projectionSetId: null,
+  projectionSetIds: [],
+  scoringProfileChecksum: null,
+  marketSignalsChecksum: null,
+  marketSignalAsOf: null,
+  availabilityChecksum: null,
   availabilityAsOf: null,
+  modeledFactsChecksum: null,
 };
 
 /**
@@ -716,12 +834,12 @@ function slotRulesChecksum(rules: readonly DecisionSlotRuleRow[]): string | null
  * `recommendation-run.ts` — called under the `decision-snapshot` scope instead of a run kind, so the
  * on-demand snapshot and the persisted run describe reproducibility with one canonicalization rather
  * than two. It covers the algorithm version, the league season and week, the claimed team, the
- * scoring-rule and slot-rule checksums, every roster-snapshot id, the projection set id, and the
- * availability observation time.
+ * scoring-rule and slot-rule checksums, every roster-snapshot id, every admitted projection-set
+ * id, and the availability observation time.
  *
- * `marketSignalAsOf` is null and honestly so: the waiver market read is scoped to candidates that
- * only exist after this provenance is assembled, so the snapshot has no market time to record. The
- * distinct scope keeps that from being read as a persisted run's hash.
+ * Candidate-scoped market rows and availability artifacts carry both an observed time and a content
+ * checksum. This prevents an in-place correction at the same timestamp—or an unrelated newer row—
+ * from making two materially different snapshots share an identity.
  */
 export function decisionSnapshotInputChecksum(input: DecisionSnapshotChecksumInput): string {
   return recommendationInputChecksum({
@@ -733,9 +851,14 @@ export function decisionSnapshotInputChecksum(input: DecisionSnapshotChecksumInp
     scoringRulesChecksum: input.season ? hash(input.season.settings) : null,
     slotRulesChecksum: slotRulesChecksum(input.slotRules),
     rosterSnapshotIds: input.rosterSnapshotIds,
-    projectionSetIds: input.projectionSetId ? [input.projectionSetId] : [],
-    marketSignalAsOf: null,
+    projectionSetIds: input.projectionSetIds,
+    marketSignalAsOf: input.marketSignalAsOf,
     availabilityAsOf: input.availabilityAsOf,
+    scoringProfileChecksum: input.scoringProfileChecksum,
+    marketSignalsChecksum: input.marketSignalsChecksum,
+    availabilityChecksum: input.availabilityChecksum,
+    modeledFactsChecksum: input.modeledFactsChecksum,
+    sourceSnapshotChecksum: null,
   });
 }
 
@@ -766,29 +889,206 @@ function latestAvailabilityAsOf(rows: readonly DecisionAvailabilitySnapshotRow[]
   return latest?.toISOString() ?? null;
 }
 
-function freshAvailableProviderIds(
+function marketRowsIdentity(rows: readonly DecisionMarketSignalRow[]): {
+  readonly checksum: string | null;
+  readonly observedAt: string | null;
+} {
+  if (rows.length === 0) return { checksum: null, observedAt: null };
+  const latest = rows.reduce(
+    (current, row) => (row.observedAt.getTime() > current.getTime() ? row.observedAt : current),
+    rows[0]!.observedAt,
+  );
+  return {
+    checksum: hash(
+      rows
+        .map((row) =>
+          stableJson({
+            playerId: row.playerId,
+            signal: row.signal,
+            count: row.count,
+            rank: row.rank,
+            lookbackHours: row.lookbackHours,
+            observedAt: row.observedAt,
+          }),
+        )
+        .toSorted(),
+    ),
+    observedAt: latest.toISOString(),
+  };
+}
+
+interface FreshEspnAvailability {
+  readonly providerIds: ReadonlySet<string>;
+  /** Canonical NFL teams whose provider D/ST row is present in the authoritative union. */
+  readonly defenseTeams: ReadonlySet<string>;
+}
+
+function freshEspnAvailability(
   rows: readonly DecisionAvailabilitySnapshotRow[],
   now: Date,
-): ReadonlySet<string> | null {
+): FreshEspnAvailability | null {
   if (rows.length === 0) return null;
-  const ids = new Set<string>();
-  let usableRows = 0;
+  const poolsByAvailability = new Map<
+    "free-agent" | "waivers",
+    { readonly providerIds: Set<string>; readonly defenseTeams: Set<string> }
+  >();
   for (const row of rows) {
     const ageHours = (now.getTime() - row.effectiveAt.getTime()) / 3_600_000;
     if (ageHours < 0 || ageHours > 24 || !isPlainRecord(row.artifact)) continue;
-    if (row.artifact.kind !== "available-players" || !Array.isArray(row.artifact.players)) continue;
-    usableRows += 1;
+    if (
+      (row.availability !== "free-agent" && row.availability !== "waivers") ||
+      row.artifact.kind !== "available-players" ||
+      row.artifact.availability !== row.availability ||
+      row.artifact.truncated !== false ||
+      !Array.isArray(row.artifact.players)
+    ) {
+      continue;
+    }
+    const providerIds = new Set<string>();
+    const defenseTeams = new Set<string>();
     for (const player of row.artifact.players) {
       if (
         isPlainRecord(player) &&
         typeof player.providerPlayerId === "string" &&
         /^-?\d{1,20}$/u.test(player.providerPlayerId)
       ) {
-        ids.add(player.providerPlayerId);
+        providerIds.add(player.providerPlayerId);
+        const position =
+          typeof player.primaryPosition === "string"
+            ? player.primaryPosition.trim().toUpperCase()
+            : "";
+        const team =
+          typeof player.proTeamAbbreviation === "string"
+            ? canonicalNflTeamCode(player.proTeamAbbreviation)
+            : "";
+        if (
+          (position === "DST" || position === "DEF" || position === "D/ST") &&
+          nflTeamSet.has(team)
+        ) {
+          defenseTeams.add(team);
+        }
       }
     }
+    poolsByAvailability.set(row.availability, { providerIds, defenseTeams });
   }
-  return usableRows > 0 ? ids : null;
+  // ESPN exposes free agents and players on waivers through separate feeds. Only their complete,
+  // fresh, untruncated union is an authoritative allowlist; a partial/capped feed is useful
+  // positive evidence but cannot prove that an omitted projection candidate is unavailable.
+  const freeAgents = poolsByAvailability.get("free-agent");
+  const waivers = poolsByAvailability.get("waivers");
+  return freeAgents && waivers
+    ? {
+        providerIds: new Set([...freeAgents.providerIds, ...waivers.providerIds]),
+        defenseTeams: new Set([...freeAgents.defenseTeams, ...waivers.defenseTeams]),
+      }
+    : null;
+}
+
+function availabilityAdmissionIdentity(
+  rows: readonly DecisionAvailabilitySnapshotRow[],
+  now: Date,
+): {
+  readonly providerIds: ReadonlySet<string> | null;
+  readonly defenseTeams: ReadonlySet<string>;
+  readonly checksum: string | null;
+} {
+  if (rows.length === 0) {
+    return { providerIds: null, defenseTeams: new Set(), checksum: null };
+  }
+  const admission = freshEspnAvailability(rows, now);
+  const providerIds = admission?.providerIds ?? null;
+  const defenseTeams = admission?.defenseTeams ?? new Set<string>();
+  return {
+    providerIds,
+    defenseTeams,
+    checksum: hash(
+      stableJson({
+        rows: rows
+          .map((row) => ({
+            availability: row.availability,
+            asOfWeek: row.asOfWeek,
+            effectiveAt: row.effectiveAt,
+            artifact: row.artifact,
+          }))
+          .toSorted((left, right) => stableJson(left).localeCompare(stableJson(right))),
+        // Freshness changes waiver admission at the 24-hour/future-time boundaries. Persist the
+        // derived state and exact allowlist so a replay after either transition cannot reuse a run
+        // produced under materially different free-agent inputs.
+        admission: providerIds === null ? "unusable" : "usable",
+        providerIds: providerIds === null ? [] : [...providerIds].toSorted(),
+        defenseTeams: [...defenseTeams].toSorted(),
+      }),
+    ),
+  };
+}
+
+function preparedPlayerFacts(
+  preparedById: ReadonlyMap<string, PreparedProjectionPlayer>,
+): readonly unknown[] {
+  return [...preparedById.entries()]
+    .map(([id, prepared]) => ({
+      id,
+      player: {
+        name: prepared.player.name,
+        positions: [...prepared.player.positions].toSorted(),
+        nflTeam: prepared.player.nflTeam,
+        status: prepared.player.status,
+      },
+      primaryPosition: prepared.primaryPosition,
+      projection: prepared.value,
+    }))
+    .toSorted((left, right) => left.id.localeCompare(right.id));
+}
+
+/**
+ * Exact mutable facts consumed after the immutable snapshot/set IDs are selected. Player catalog
+ * corrections, admitted position observations, team count/FAAB changes, or roster lock/eligibility
+ * changes can all alter an engine result without changing those IDs, so they travel under one
+ * content checksum instead of relying on database immutability that the read path does not enforce.
+ */
+function modeledDecisionFactsChecksum(input: {
+  readonly season: DecisionSeasonRow;
+  readonly teamRows: readonly DecisionTeamRow[];
+  readonly snapshotRows: readonly DecisionRosterSnapshotRow[];
+  readonly rosterRows: readonly DecisionRosterEntryRow[];
+  readonly weeklyContext: LoadedDecisionProjectionContext;
+  readonly rosContext: LoadedDecisionProjectionContext;
+  readonly weeklySet: DecisionProjectionSetRow | undefined;
+  readonly rosSet: DecisionProjectionSetRow | undefined;
+}): string {
+  return hash(
+    stableJson({
+      season: {
+        provider: input.season.provider,
+        currentWeek: input.season.currentWeek,
+        waiverType: input.season.waiverType,
+      },
+      teams: [...input.teamRows].toSorted((left, right) => left.id.localeCompare(right.id)),
+      snapshots: [...input.snapshotRows].toSorted((left, right) => left.id.localeCompare(right.id)),
+      roster: input.rosterRows
+        .map((row) => ({
+          ...row,
+          eligiblePositions: [...row.eligiblePositions].toSorted(),
+        }))
+        .toSorted((left, right) =>
+          `${left.snapshotId}:${left.playerId}:${left.slotCode}`.localeCompare(
+            `${right.snapshotId}:${right.playerId}:${right.slotCode}`,
+          ),
+        ),
+      weekly: {
+        set: input.weeklySet ?? null,
+        totalPlayers: input.weeklyContext.totalPlayers,
+        queryLimited: input.weeklyContext.queryLimited,
+        players: preparedPlayerFacts(input.weeklyContext.preparedById),
+      },
+      restOfSeason: {
+        set: input.rosSet ?? null,
+        totalPlayers: input.rosContext.totalPlayers,
+        queryLimited: input.rosContext.queryLimited,
+        players: preparedPlayerFacts(input.rosContext.preparedById),
+      },
+    }),
+  );
 }
 
 function finiteDecimal(value: string | null, fallback?: number): number | undefined {
@@ -853,19 +1153,164 @@ function toPlayer(input: {
 
 function prepareProjection(row: DecisionProjectionPlayerRow): PreparedProjectionPlayer | undefined {
   const player = toPlayer(row);
+  const primaryPosition = toPosition(row.primaryPosition);
   const mean = finiteDecimal(row.meanPoints);
-  if (!player || mean === undefined) return undefined;
+  if (!player || !primaryPosition || mean === undefined) return undefined;
   const floor = finiteDecimal(row.floorPoints, mean);
   const ceiling = finiteDecimal(row.ceilingPoints, mean);
   if (floor === undefined || ceiling === undefined) return undefined;
   return {
     player,
+    primaryPosition,
     value: {
       mean,
       floor: Math.min(floor, mean),
       ceiling: Math.max(ceiling, mean),
     },
   };
+}
+
+interface LoadedDecisionProjectionContext {
+  readonly totalPlayers: number;
+  readonly queryLimited: boolean;
+  readonly preparedById: ReadonlyMap<string, PreparedProjectionPlayer>;
+  readonly projectionById: ReadonlyMap<string, ProjectionValue>;
+}
+
+async function loadDecisionProjectionContext(
+  repository: InSeasonDecisionRepository,
+  set: DecisionProjectionSetRow | undefined,
+  rosterPlayerIds: readonly string[],
+  balanceByPosition = false,
+  positionSeedLimit = MAX_WAIVER_CANDIDATES,
+): Promise<LoadedDecisionProjectionContext> {
+  if (!set) {
+    return {
+      totalPlayers: 0,
+      queryLimited: false,
+      preparedById: new Map(),
+      projectionById: new Map(),
+    };
+  }
+  const [totalPlayers, topRows, rosterRows, positionRows] = await Promise.all([
+    repository.countProjectionPlayers(set.id),
+    repository.listTopProjectionPlayers(set.id, MAX_PROJECTION_ROWS + 1),
+    repository.listProjectionPlayersByIds(set.id, rosterPlayerIds),
+    balanceByPosition && repository.listTopProjectionPlayersByPosition
+      ? repository.listTopProjectionPlayersByPosition(set.id, positionSeedLimit)
+      : Promise.resolve([]),
+  ]);
+  const mergedRows = new Map<string, DecisionProjectionPlayerRow>();
+  for (const row of [...topRows.slice(0, MAX_PROJECTION_ROWS), ...positionRows, ...rosterRows]) {
+    mergedRows.set(row.playerId, row);
+  }
+  const preparedById = new Map<string, PreparedProjectionPlayer>();
+  for (const row of mergedRows.values()) {
+    const prepared = prepareProjection(row);
+    if (prepared) preparedById.set(row.playerId, prepared);
+  }
+  return {
+    totalPlayers,
+    queryLimited: topRows.length > MAX_PROJECTION_ROWS,
+    preparedById,
+    projectionById: new Map(
+      [...preparedById].map(([id, prepared]) => [id, prepared.value] as const),
+    ),
+  };
+}
+
+const rosScoringPositions = new Set<Position>(["QB", "RB", "WR", "TE", "K", "DST"]);
+
+/**
+ * A published ROS set is league-scoped, but a league's scoring can change after publication and
+ * the release gate intentionally matches scoring per position. Re-derive those exact scoped keys
+ * for every position this waiver read would use; malformed, unsupported, or stale identities fail
+ * closed rather than assigning a player zero or using a projection scored for different rules.
+ */
+function rosScoringMatchesPositions(
+  set: DecisionProjectionSetRow,
+  profile: ManagedProjectionProfile | undefined,
+  positions: readonly Position[],
+): boolean {
+  const artifactKey = set.metadata.scoringProfileKey;
+  if (
+    typeof artifactKey !== "string" ||
+    !profile?.key ||
+    !profile.positions ||
+    positions.length === 0
+  ) {
+    return false;
+  }
+  let artifactRules;
+  let leagueRules;
+  try {
+    artifactRules = projectionScoringRulesFromProfileKey(artifactKey);
+    leagueRules = projectionScoringRulesFromProfileKey(profile.key);
+  } catch {
+    return false;
+  }
+  const artifactProfile = { id: "published-ros", rules: artifactRules };
+  const leagueProfile = { id: "current-league", rules: leagueRules };
+  const supportByPosition = new Map(
+    profile.positions.map((entry) => [entry.position, entry.supported] as const),
+  );
+  for (const position of new Set(positions)) {
+    if (!rosScoringPositions.has(position)) return false;
+    const scoringPosition = position as LeagueScoringPosition;
+    if (supportByPosition.get(scoringPosition) !== true) return false;
+    try {
+      const artifactPositionKey = projectionScoringProfileKeyForPosition(
+        artifactProfile,
+        scoringPosition,
+      );
+      const leaguePositionKey = projectionScoringProfileKeyForPosition(
+        leagueProfile,
+        scoringPosition,
+      );
+      if (artifactPositionKey === "[]" || artifactPositionKey !== leaguePositionKey) return false;
+    } catch {
+      return false;
+    }
+  }
+  return true;
+}
+
+/**
+ * Chooses the best currently compatible authoritative ROS release without allowing freshness alone
+ * to displace a broader scoring match. Exact whole-profile identity remains the strongest signal;
+ * otherwise this mirrors publication arbitration by preferring the set that matches the most
+ * normalized, supported rail positions. `rows` is already ordered newest-first within equivalent
+ * matches, so retaining the first tie preserves the repository's freshness ordering.
+ *
+ * Returning the first row when none matches preserves the existing unavailable reason path: the
+ * later evaluated-position gate will reject it explicitly as scoring-incompatible rather than
+ * claiming that no admitted release exists.
+ */
+function selectRosProjectionSet(
+  rows: readonly DecisionProjectionSetRow[],
+  profile: ManagedProjectionProfile | undefined,
+): DecisionProjectionSetRow | undefined {
+  if (rows.length === 0) return undefined;
+  if (profile?.key) {
+    const exact = rows.find((row) => row.metadata.scoringProfileKey === profile.key);
+    if (exact) return exact;
+  }
+  const supportedPositions = (profile?.positions ?? []).flatMap((entry) => {
+    const position = entry.position as Position;
+    return entry.supported && rosScoringPositions.has(position) ? [position] : [];
+  });
+  let selected: DecisionProjectionSetRow | undefined;
+  let selectedMatchCount = 0;
+  for (const row of rows) {
+    const matchCount = supportedPositions.filter((position) =>
+      rosScoringMatchesPositions(row, profile, [position]),
+    ).length;
+    if (matchCount > selectedMatchCount) {
+      selected = row;
+      selectedMatchCount = matchCount;
+    }
+  }
+  return selected ?? rows[0];
 }
 
 function decisionPlayer(player: Player, projections: ProjectionLookup): DecisionPlayer {
@@ -906,6 +1351,28 @@ function freshness(
         ? `Updated ${Math.floor(ageHours)}h ago`
         : `Updated ${Math.floor(ageHours / 24)}d ago`;
   return { state, observedAt: observedAt.toISOString(), label };
+}
+
+function decisionProjectionSetReference(set: DecisionProjectionSetRow) {
+  const timestamps = projectionTimestampProvenance(set);
+  return {
+    id: set.id,
+    source: typeof set.metadata.sourceLabel === "string" ? set.metadata.sourceLabel : set.source,
+    version: set.version,
+    horizon: set.horizon,
+    sourceObservedAt: timestamps.sourceObservedAt?.toISOString() ?? null,
+    sourceObservedAtStatus: timestamps.sourceObservedAtStatus,
+    importedAt: timestamps.importedAt.toISOString(),
+  };
+}
+
+function decisionProjectionFreshness(set: DecisionProjectionSetRow, now: Date): Freshness {
+  const timestamps = projectionTimestampProvenance(set);
+  return freshness(
+    projectionFreshnessObservedAt(set, timestamps),
+    now,
+    "Projection source time missing / unverified",
+  );
 }
 
 function providerExecution(season: DecisionSeasonRow) {
@@ -965,8 +1432,6 @@ function isSyntheticProjectionSet(row: DecisionProjectionSetRow): boolean {
     row.metadata.fixture === true
   );
 }
-
-const MANAGED_PROJECTION_SET_SOURCE = "laces-out-first-party";
 
 /**
  * Why managed (`laces-out-first-party`) weekly sets are invisible to `#findProjectionSets`'
@@ -1209,6 +1674,229 @@ function waiverRosterModel(
     rosterCapacity: ordinarySlots.length,
     rosterSlots: ordinarySlots,
     protectedPlayerIds,
+  };
+}
+
+function availableDefenseProjectionIds(input: {
+  readonly preparedById: ReadonlyMap<string, PreparedProjectionPlayer>;
+  readonly rosteredIds: ReadonlySet<string>;
+  readonly rosteredDefenseTeams: ReadonlySet<string>;
+  readonly availableDefenseTeams: ReadonlySet<string>;
+}): readonly string[] {
+  const idsByTeam = new Map<string, string[]>();
+  for (const [id, prepared] of input.preparedById) {
+    const team = prepared.player.nflTeam;
+    if (
+      input.rosteredIds.has(id) ||
+      prepared.primaryPosition !== "DST" ||
+      !team ||
+      input.rosteredDefenseTeams.has(team)
+    ) {
+      continue;
+    }
+    const ids = idsByTeam.get(team) ?? [];
+    ids.push(id);
+    idsByTeam.set(team, ids);
+  }
+  // A provider D/ST row proves team availability, not which of multiple conflicting internal
+  // identities is canonical. Ambiguous same-team projections therefore fail closed for this bridge.
+  return [...idsByTeam]
+    .filter(([team, ids]) => input.availableDefenseTeams.has(team) && ids.length === 1)
+    .map(([, ids]) => ids[0]!);
+}
+
+function waiverCandidates(input: {
+  readonly preparedById: ReadonlyMap<string, PreparedProjectionPlayer>;
+  readonly rosteredIds: ReadonlySet<string>;
+  readonly rosteredDefenseTeams?: ReadonlySet<string>;
+  readonly explicitlyAvailablePlayerIds: ReadonlySet<string> | null;
+  readonly starterSlots: readonly ExpandedSlot[];
+  readonly balanceByPosition?: boolean;
+  readonly requireStarterEligibility?: boolean;
+}): readonly Player[] {
+  const eligible = [...input.preparedById.values()]
+    .filter(
+      (prepared) =>
+        !input.rosteredIds.has(prepared.player.id) &&
+        !(
+          prepared.primaryPosition === "DST" &&
+          prepared.player.nflTeam !== undefined &&
+          input.rosteredDefenseTeams?.has(prepared.player.nflTeam)
+        ) &&
+        (!input.requireStarterEligibility ||
+          input.starterSlots.some((slot) => isPlayerEligibleForSlot(prepared.player, slot))) &&
+        (input.explicitlyAvailablePlayerIds === null ||
+          input.explicitlyAvailablePlayerIds.has(prepared.player.id)),
+    )
+    .sort(
+      (left, right) =>
+        right.value.mean - left.value.mean || left.player.id.localeCompare(right.player.id),
+    );
+  if (!input.balanceByPosition) {
+    return eligible.slice(0, MAX_WAIVER_CANDIDATES).map((prepared) => prepared.player);
+  }
+
+  // Season totals differ sharply by position. Seed the bounded ROS pool with two players from each
+  // represented projection position, then fill the remainder by value. This prevents 24 aggregate
+  // QB totals from crowding every RB/WR/TE/K/DST out before roster-relative value is evaluated.
+  const selected = new Map<string, PreparedProjectionPlayer>();
+  for (const position of ["QB", "RB", "WR", "TE", "K", "DST"] as const) {
+    for (const prepared of eligible
+      .filter((item) => item.primaryPosition === position)
+      .slice(0, 2)) {
+      selected.set(prepared.player.id, prepared);
+    }
+  }
+  for (const prepared of eligible) {
+    if (selected.size >= MAX_WAIVER_CANDIDATES) break;
+    selected.set(prepared.player.id, prepared);
+  }
+  return [...selected.values()]
+    .sort(
+      (left, right) =>
+        right.value.mean - left.value.mean || left.player.id.localeCompare(right.player.id),
+    )
+    .map((prepared) => prepared.player);
+}
+
+type WaiverMarketSignalsByPlayer = ReadonlyMap<
+  string,
+  Partial<Record<"add" | "drop", DecisionMarketSignalRow>>
+>;
+
+class NoLegalWaiverPairingError extends Error {
+  constructor() {
+    super("No legal waiver add/drop pairing survived roster rules and stored locks");
+    this.name = "NoLegalWaiverPairingError";
+  }
+}
+
+function evaluateWaiverDecisionView(input: {
+  readonly roster: WaiverRosterModel;
+  readonly candidates: readonly Player[];
+  readonly starterSlots: readonly ExpandedSlot[];
+  readonly projections: ReadonlyMap<string, ProjectionValue>;
+  readonly allPlayerById: ReadonlyMap<string, Player>;
+  readonly horizon: { readonly id: string; readonly label: string };
+  readonly lineupLocks: readonly LineupLock[];
+  readonly claimedTeam: DecisionTeamRow;
+  readonly leagueTeamCount: number;
+  readonly marketByPlayer: WaiverMarketSignalsByPlayer;
+  readonly peakAddCount: number;
+  readonly faabEnabled: boolean;
+  /** Converts an aggregate horizon gain to the scale used by the weekly FAAB heuristic. */
+  readonly faabValueDivisor?: number;
+}) {
+  const result = evaluateWaiverMoves({
+    roster: input.roster.roster,
+    candidates: input.candidates,
+    starterSlots: input.starterSlots,
+    rosterCapacity: input.roster.rosterCapacity,
+    rosterSlots: input.roster.rosterSlots,
+    horizons: [{ ...input.horizon, weight: 1 }],
+    projectionsByHorizon: { [input.horizon.id]: input.projections },
+    protectedPlayerIds: input.roster.protectedPlayerIds,
+    requireDrop: true,
+    lineupLocks: input.lineupLocks,
+  });
+  if (result.allEvaluations.length === 0) throw new NoLegalWaiverPairingError();
+  const topMoves = result.recommendations.filter((move) => move.improvesRoster).slice(0, 8);
+  const evaluationsByCandidate = new Map<string, WaiverMoveEvaluation[]>();
+  for (const evaluation of result.allEvaluations) {
+    const evaluations = evaluationsByCandidate.get(evaluation.addPlayerId) ?? [];
+    evaluations.push(evaluation);
+    evaluationsByCandidate.set(evaluation.addPlayerId, evaluations);
+  }
+  const displayedDropIds = new Set<string>();
+  for (const move of topMoves) {
+    for (const evaluation of evaluationsByCandidate.get(move.addPlayerId) ?? []) {
+      if (evaluation.dropPlayerId !== null) displayedDropIds.add(evaluation.dropPlayerId);
+    }
+  }
+  const dropCandidates = [...displayedDropIds]
+    .map((id) => {
+      const player = input.allPlayerById.get(id);
+      if (!player) throw new Error("A modeled waiver drop is missing from the current roster");
+      return decisionPlayer(player, input.projections);
+    })
+    .sort(
+      (left, right) =>
+        left.projectedPoints - right.projectedPoints ||
+        left.name.localeCompare(right.name) ||
+        left.id.localeCompare(right.id),
+    );
+  const divisor = input.faabValueDivisor ?? 1;
+  if (!Number.isSafeInteger(divisor) || divisor < 1) {
+    throw new RangeError("FAAB value divisor must be a positive integer");
+  }
+  const recommendations = topMoves.map((move, index) => {
+    const add = input.allPlayerById.get(move.addPlayerId);
+    if (!add) throw new Error("The modeled waiver add is missing from the candidate pool");
+    if (move.dropPlayerId === null) {
+      throw new Error("Decision Desk waiver recommendations require a modeled drop");
+    }
+    const drop = input.allPlayerById.get(move.dropPlayerId);
+    if (!drop) throw new Error("The modeled waiver drop is missing from the current roster");
+    const positionPeers = input.candidates.filter((candidate) =>
+      candidate.positions.some((position) => add.positions.includes(position)),
+    ).length;
+    const marketSignals = input.marketByPlayer.get(add.id);
+    const addSignal = marketSignals?.add;
+    const dropSignal = marketSignals?.drop;
+    const baselineCompetition = Math.min(0.9, 0.35 + input.leagueTeamCount / 40 + index / 100);
+    const marketCompetition = addSignal
+      ? Math.min(0.95, 0.25 + 0.7 * Math.sqrt(addSignal.count / input.peakAddCount))
+      : 0;
+    const faabFor = (evaluation: WaiverMoveEvaluation) => {
+      if (!input.faabEnabled || input.claimedTeam.faabRemaining === null) return null;
+      const normalizedGain = evaluation.weightedDelta / divisor;
+      if (normalizedGain <= 0) return null;
+      const bid = recommendFaabBid({
+        weightedDelta: normalizedGain,
+        remainingBudget: input.claimedTeam.faabRemaining,
+        urgency: Math.min(1, Math.max(0, normalizedGain / 10)),
+        scarcity: Math.max(0, 1 - positionPeers / MAX_WAIVER_CANDIDATES),
+        competition: Math.max(baselineCompetition, marketCompetition),
+      });
+      return { low: bid.lowBid, recommended: bid.recommendedBid, high: bid.highBid };
+    };
+    const dropComparisons = (evaluationsByCandidate.get(move.addPlayerId) ?? []).map(
+      (evaluation) => {
+        if (evaluation.dropPlayerId === null) {
+          throw new Error("Decision Desk waiver comparisons require a modeled drop");
+        }
+        return {
+          dropPlayerId: evaluation.dropPlayerId,
+          weightedGain: rounded(evaluation.weightedDelta),
+          lineupGain: rounded(evaluation.horizonDeltas[0]?.lineupDelta ?? 0),
+          faab: faabFor(evaluation),
+        };
+      },
+    );
+    return {
+      add: decisionPlayer(add, input.projections),
+      drop: decisionPlayer(drop, input.projections),
+      weightedGain: rounded(move.weightedDelta),
+      lineupGain: rounded(move.horizonDeltas[0]?.lineupDelta ?? 0),
+      faab: faabFor(move),
+      market:
+        addSignal || dropSignal
+          ? {
+              addCount: addSignal?.count ?? 0,
+              dropCount: dropSignal?.count ?? 0,
+              lookbackHours: addSignal?.lookbackHours ?? dropSignal!.lookbackHours,
+              observedAt: (addSignal?.observedAt ?? dropSignal!.observedAt).toISOString(),
+            }
+          : null,
+      rationale: move.explanation,
+      dropComparisons,
+    };
+  });
+  return {
+    candidateCount: input.candidates.length,
+    evaluatedMoveCount: result.allEvaluations.length,
+    dropCandidates,
+    recommendations,
   };
 }
 
@@ -1493,11 +2181,18 @@ interface DecisionFacts {
   readonly preparedById: ReadonlyMap<string, PreparedProjectionPlayer>;
   readonly projectionById: ReadonlyMap<string, ProjectionValue>;
   readonly projectionSet: DecisionProjectionSetRow;
+  readonly rosPreparedById: ReadonlyMap<string, PreparedProjectionPlayer>;
+  readonly rosProjectionById: ReadonlyMap<string, ProjectionValue>;
+  readonly rosAllPlayerById: ReadonlyMap<string, Player>;
+  readonly rosProjectionSet: DecisionProjectionSetRow | undefined;
+  readonly managedProjectionProfile: ManagedProjectionProfile | undefined;
   readonly slots: readonly ExpandedSlot[];
   readonly starterSlots: readonly ExpandedSlot[];
   readonly execution: ReturnType<typeof providerExecution>;
-  readonly explicitlyAvailablePlayerIds: ReadonlySet<string> | null;
+  readonly weeklyExplicitlyAvailablePlayerIds: ReadonlySet<string> | null;
+  readonly rosExplicitlyAvailablePlayerIds: ReadonlySet<string> | null;
   readonly base: Omit<InSeasonDecisionSnapshot, "lineup" | "waivers" | "trades">;
+  readonly checksumInputs: Omit<DecisionSnapshotChecksumInput, "season">;
   /** Non-null only when managed weekly projections were withheld and a substitute set is in use. */
   readonly managedProjectionsNote: string | null;
 }
@@ -1567,21 +2262,37 @@ export class InSeasonDecisionService {
           ? this.#repository.findLatestEspnAvailability(season.id, season.currentWeek)
           : Promise.resolve([]),
       ]);
-    const projectionSet = projectionSetRows.find((row) => !isSyntheticProjectionSet(row));
+    const projectionSet = projectionSetRows.find(
+      (row) =>
+        row.week === season.currentWeek &&
+        row.horizon !== "rest-of-season" &&
+        !isSyntheticProjectionSet(row),
+    );
+    const rosProjectionSetRows = projectionSetRows.filter(
+      (row) =>
+        row.week === null &&
+        row.horizon === "rest-of-season" &&
+        row.source === MANAGED_ROS_PROJECTION_SET_SOURCE &&
+        row.metadata.releaseCompleteness === AUTHORITATIVE_ROS_RELEASE_COMPLETENESS &&
+        row.metadata.preservePriorGoodSet === false &&
+        !isSyntheticProjectionSet(row),
+    );
     // Whether a managed set was actually admitted into the (bounded) candidate list `#findProjectionSets`
     // returned — NOT whether one was *selected*. `findProjectionSets`' ORDER BY ranks any user-created
     // row above a managed one (`in-season-decisions.ts` §ORDER BY comment below), so a compatible managed
     // set can lose that tiebreak while still being present; in that case nothing was withheld and no
     // note is warranted, even though the selected `projectionSet` isn't the managed one.
     const managedCandidatePresent = projectionSetRows.some(
-      (row) => row.source === MANAGED_PROJECTION_SET_SOURCE,
+      (row) => row.week === season.currentWeek && row.source === MANAGED_PROJECTION_SET_SOURCE,
     );
     // Read only when it could actually change the story told below: either nothing was found at all,
     // or no managed candidate appeared among the (bounded) results at all.
     const managedProfile =
-      !managedCandidatePresent && this.#repository.findManagedProjectionProfile
+      (rosProjectionSetRows.length > 0 || !managedCandidatePresent) &&
+      this.#repository.findManagedProjectionProfile
         ? await this.#repository.findManagedProjectionProfile(season.id)
         : undefined;
+    const rosProjectionSet = selectRosProjectionSet(rosProjectionSetRows, managedProfile);
     const managedNote = managedProjectionsNote(
       projectionSet,
       managedCandidatePresent,
@@ -1589,12 +2300,20 @@ export class InSeasonDecisionService {
     );
     // Every league fact that could have shaped this read, whether or not the read gets far enough to
     // use it. An unavailable snapshot is still a recommendation-shaped output under ADR 0003.
+    const availabilityAdmission = availabilityAdmissionIdentity(availabilityRows, now);
     const checksumInputs: Omit<DecisionSnapshotChecksumInput, "season"> = {
       claimedFantasyTeamId: membership.claimedFantasyTeamId,
       slotRules: slotRuleRows,
       rosterSnapshotIds: snapshotRows.map((snapshot) => snapshot.id),
-      projectionSetId: projectionSet?.id ?? null,
+      projectionSetIds: [projectionSet?.id, rosProjectionSet?.id].filter(
+        (id): id is string => id !== undefined,
+      ),
+      scoringProfileChecksum: managedProfile ? hash(managedProfile) : null,
+      marketSignalsChecksum: null,
+      marketSignalAsOf: null,
+      availabilityChecksum: availabilityAdmission.checksum,
       availabilityAsOf: latestAvailabilityAsOf(availabilityRows),
+      modeledFactsChecksum: null,
     };
 
     const claimedTeam = teamRows.find((team) => team.id === membership.claimedFantasyTeamId);
@@ -1633,9 +2352,6 @@ export class InSeasonDecisionService {
       };
     }
 
-    const projectionTimestamps = projectionSet
-      ? projectionTimestampProvenance(projectionSet)
-      : null;
     const execution = providerExecution(season);
     const snapshotByTeam = new Map(snapshotRows.map((snapshot) => [snapshot.teamId, snapshot]));
     const claimedSnapshot = snapshotByTeam.get(claimedTeam.id);
@@ -1654,33 +2370,33 @@ export class InSeasonDecisionService {
       ? (entriesBySnapshot.get(claimedSnapshot.id) ?? [])
       : [];
     const rosterPlayerIds = [...new Set(boundedRosterRows.map((entry) => entry.playerId))];
-
-    let totalProjectionPlayers = 0;
-    let topProjectionRows: readonly DecisionProjectionPlayerRow[] = [];
-    let rosterProjectionRows: readonly DecisionProjectionPlayerRow[] = [];
-    if (projectionSet) {
-      [totalProjectionPlayers, topProjectionRows, rosterProjectionRows] = await Promise.all([
-        this.#repository.countProjectionPlayers(projectionSet.id),
-        this.#repository.listTopProjectionPlayers(projectionSet.id, MAX_PROJECTION_ROWS + 1),
-        this.#repository.listProjectionPlayersByIds(projectionSet.id, rosterPlayerIds),
-      ]);
+    const rosterCountsByPosition = new Map<Position, number>();
+    for (const entry of boundedRosterRows) {
+      const position = toPositions(entry.primaryPosition, entry.eligiblePositions)[0];
+      if (position)
+        rosterCountsByPosition.set(position, (rosterCountsByPosition.get(position) ?? 0) + 1);
     }
-    const projectionQueryLimited = topProjectionRows.length > MAX_PROJECTION_ROWS;
-    const mergedProjectionRows = new Map<string, DecisionProjectionPlayerRow>();
-    for (const row of [
-      ...topProjectionRows.slice(0, MAX_PROJECTION_ROWS),
-      ...rosterProjectionRows,
-    ]) {
-      mergedProjectionRows.set(row.playerId, row);
-    }
-    const preparedById = new Map<string, PreparedProjectionPlayer>();
-    for (const row of mergedProjectionRows.values()) {
-      const prepared = prepareProjection(row);
-      if (prepared) preparedById.set(row.playerId, prepared);
-    }
-    const projectionById = new Map<string, ProjectionValue>(
-      [...preparedById].map(([id, prepared]) => [id, prepared.value]),
+    const rosPositionSeedLimit = Math.min(
+      MAX_ROSTER_ENTRIES + MAX_WAIVER_CANDIDATES,
+      MAX_WAIVER_CANDIDATES + Math.max(0, ...rosterCountsByPosition.values()),
     );
+
+    const [weeklyProjectionContext, rosProjectionContext] = await Promise.all([
+      loadDecisionProjectionContext(this.#repository, projectionSet, rosterPlayerIds),
+      loadDecisionProjectionContext(
+        this.#repository,
+        rosProjectionSet,
+        rosterPlayerIds,
+        true,
+        rosPositionSeedLimit,
+      ),
+    ]);
+    const {
+      totalPlayers: totalProjectionPlayers,
+      queryLimited: projectionQueryLimited,
+      preparedById,
+      projectionById,
+    } = weeklyProjectionContext;
     const rosterPlayerById = new Map<string, Player>();
     for (const row of boundedRosterRows) {
       const player = toPlayer(row);
@@ -1688,25 +2404,89 @@ export class InSeasonDecisionService {
     }
     const allPlayerById = new Map<string, Player>(rosterPlayerById);
     for (const [id, prepared] of preparedById) allPlayerById.set(id, prepared.player);
-    const availableProviderIds = freshAvailableProviderIds(availabilityRows, now);
-    let explicitlyAvailablePlayerIds: ReadonlySet<string> | null = null;
+    const rosAllPlayerById = new Map<string, Player>(rosterPlayerById);
+    for (const [id, prepared] of rosProjectionContext.preparedById) {
+      rosAllPlayerById.set(id, prepared.player);
+    }
+    const availableProviderIds = availabilityAdmission.providerIds;
+    let weeklyExplicitlyAvailablePlayerIds: ReadonlySet<string> | null = null;
+    let rosExplicitlyAvailablePlayerIds: ReadonlySet<string> | null = null;
+    let decisionAvailabilityChecksum = checksumInputs.availabilityChecksum;
     if (availableProviderIds && this.#repository.listEspnPlayerIdentities) {
-      const identities = await this.#repository.listEspnPlayerIdentities(season.id, [
-        ...preparedById.keys(),
-      ]);
+      const rosteredPlayerIds = new Set(rosterPlayerIds);
+      const rosteredDefenseTeams = new Set(
+        [...rosterPlayerById.values()].flatMap((player) =>
+          player.positions.includes("DST") && player.nflTeam ? [player.nflTeam] : [],
+        ),
+      );
+      const weeklyCandidateProjectionIds = [...preparedById.keys()].filter(
+        (id) => !rosteredPlayerIds.has(id),
+      );
+      const rosCandidateProjectionIds = [...rosProjectionContext.preparedById.keys()].filter(
+        (id) => !rosteredPlayerIds.has(id),
+      );
+      const candidateProjectionIds = [
+        ...new Set([...weeklyCandidateProjectionIds, ...rosCandidateProjectionIds]),
+      ];
+      const identities = await this.#repository.listEspnPlayerIdentities(
+        season.id,
+        candidateProjectionIds,
+      );
       const prefix = `${season.id}:`;
-      explicitlyAvailablePlayerIds = new Set(
-        identities.flatMap((identity) => {
-          const providerPlayerId =
-            identity.source === "espn"
-              ? identity.externalId
-              : identity.externalId.startsWith(prefix)
-                ? identity.externalId.slice(prefix.length)
-                : "";
-          return availableProviderIds.has(providerPlayerId) ? [identity.playerId] : [];
+      const identityMatchedPlayerIds = identities.flatMap((identity) => {
+        const providerPlayerId =
+          identity.source === "espn"
+            ? identity.externalId
+            : identity.externalId.startsWith(prefix)
+              ? identity.externalId.slice(prefix.length)
+              : "";
+        return availableProviderIds.has(providerPlayerId) ? [identity.playerId] : [];
+      });
+      const identityMatchedPlayerIdSet = new Set(identityMatchedPlayerIds);
+      const weeklyDefenseMatchedPlayerIds = availableDefenseProjectionIds({
+        preparedById,
+        rosteredIds: rosteredPlayerIds,
+        rosteredDefenseTeams,
+        availableDefenseTeams: availabilityAdmission.defenseTeams,
+      });
+      const rosDefenseMatchedPlayerIds = availableDefenseProjectionIds({
+        preparedById: rosProjectionContext.preparedById,
+        rosteredIds: rosteredPlayerIds,
+        rosteredDefenseTeams,
+        availableDefenseTeams: availabilityAdmission.defenseTeams,
+      });
+      weeklyExplicitlyAvailablePlayerIds = new Set([
+        ...weeklyCandidateProjectionIds.filter((id) => identityMatchedPlayerIdSet.has(id)),
+        ...weeklyDefenseMatchedPlayerIds,
+      ]);
+      rosExplicitlyAvailablePlayerIds = new Set([
+        ...rosCandidateProjectionIds.filter((id) => identityMatchedPlayerIdSet.has(id)),
+        ...rosDefenseMatchedPlayerIds,
+      ]);
+      decisionAvailabilityChecksum = hash(
+        stableJson({
+          admissionChecksum: availabilityAdmission.checksum,
+          weeklyExplicitlyAvailablePlayerIds: [...weeklyExplicitlyAvailablePlayerIds].toSorted(),
+          rosExplicitlyAvailablePlayerIds: [...rosExplicitlyAvailablePlayerIds].toSorted(),
+          weeklyDefenseMatchedPlayerIds: weeklyDefenseMatchedPlayerIds.toSorted(),
+          rosDefenseMatchedPlayerIds: rosDefenseMatchedPlayerIds.toSorted(),
         }),
       );
     }
+    const decisionChecksumInputs = {
+      ...checksumInputs,
+      availabilityChecksum: decisionAvailabilityChecksum,
+      modeledFactsChecksum: modeledDecisionFactsChecksum({
+        season,
+        teamRows,
+        snapshotRows,
+        rosterRows: boundedRosterRows,
+        weeklyContext: weeklyProjectionContext,
+        rosContext: rosProjectionContext,
+        weeklySet: projectionSet,
+        rosSet: rosProjectionSet,
+      }),
+    };
 
     const userRoster = claimedRosterRows.flatMap((entry) => {
       const player = rosterPlayerById.get(entry.playerId);
@@ -1732,32 +2512,16 @@ export class InSeasonDecisionService {
       },
       provenance: {
         algorithmVersion: RECOMMENDATION_ALGORITHM_VERSION,
-        inputChecksum: decisionSnapshotInputChecksum({ ...checksumInputs, season }),
+        inputChecksum: decisionSnapshotInputChecksum({
+          ...decisionChecksumInputs,
+          season,
+        }),
         leagueLastSyncedAt: season.lastSyncedAt?.toISOString() ?? null,
         rosterEffectiveAt: claimedSnapshot?.effectiveAt.toISOString() ?? null,
-        projectionSet: projectionSet
-          ? {
-              id: projectionSet.id,
-              source:
-                typeof projectionSet.metadata.sourceLabel === "string"
-                  ? projectionSet.metadata.sourceLabel
-                  : projectionSet.source,
-              version: projectionSet.version,
-              horizon: projectionSet.horizon,
-              sourceObservedAt: projectionTimestamps?.sourceObservedAt?.toISOString() ?? null,
-              sourceObservedAtStatus: projectionTimestamps?.sourceObservedAtStatus ?? "unverified",
-              importedAt:
-                projectionTimestamps?.importedAt.toISOString() ??
-                projectionSet.createdAt.toISOString(),
-            }
-          : null,
-        projectionFreshness: freshness(
-          projectionSet
-            ? projectionFreshnessObservedAt(projectionSet, projectionTimestamps ?? undefined)
-            : null,
-          now,
-          projectionSet ? "Projection source time missing / unverified" : "No projection set",
-        ),
+        projectionSet: projectionSet ? decisionProjectionSetReference(projectionSet) : null,
+        projectionFreshness: projectionSet
+          ? decisionProjectionFreshness(projectionSet, now)
+          : freshness(null, now),
       },
       providerVerification: providerVerification(
         season.provider,
@@ -1779,6 +2543,14 @@ export class InSeasonDecisionService {
     if (!claimedSnapshot || userRoster.length === 0) {
       sharedReasons.push(
         reason("ROSTER_MISSING", "The claimed team has no stored roster snapshot."),
+      );
+    }
+    if (claimedRosterRows.length > 0 && userRoster.length !== claimedRosterRows.length) {
+      sharedReasons.push(
+        reason(
+          "ROSTER_MISSING",
+          `${claimedRosterRows.length - userRoster.length} claimed-roster entr${claimedRosterRows.length - userRoster.length === 1 ? "y could" : "ies could"} not be mapped to a supported fantasy position.`,
+        ),
       );
     }
     if (rosterRows.length > MAX_ROSTER_ENTRIES) {
@@ -1855,11 +2627,18 @@ export class InSeasonDecisionService {
         preparedById,
         projectionById,
         projectionSet,
+        rosPreparedById: rosProjectionContext.preparedById,
+        rosProjectionById: rosProjectionContext.projectionById,
+        rosAllPlayerById,
+        rosProjectionSet,
+        managedProjectionProfile: managedProfile,
         slots,
         starterSlots,
         execution,
-        explicitlyAvailablePlayerIds,
+        weeklyExplicitlyAvailablePlayerIds,
+        rosExplicitlyAvailablePlayerIds,
         base,
+        checksumInputs: decisionChecksumInputs,
         managedProjectionsNote: managedNote,
       },
     };
@@ -1875,6 +2654,7 @@ export class InSeasonDecisionService {
     if (loaded.kind === "unavailable") return loaded.snapshot;
     const {
       now,
+      season,
       claimedTeam,
       teamRows,
       snapshotRows,
@@ -1888,11 +2668,18 @@ export class InSeasonDecisionService {
       preparedById,
       projectionById,
       projectionSet,
+      rosPreparedById,
+      rosProjectionById,
+      rosAllPlayerById,
+      rosProjectionSet,
+      managedProjectionProfile,
       slots,
       starterSlots,
       execution,
-      explicitlyAvailablePlayerIds,
+      weeklyExplicitlyAvailablePlayerIds,
+      rosExplicitlyAvailablePlayerIds,
       base,
+      checksumInputs,
       managedProjectionsNote,
     } = loaded.facts;
 
@@ -1977,28 +2764,51 @@ export class InSeasonDecisionService {
     }
 
     let waivers: InSeasonDecisionSnapshot["waivers"];
-    if (snapshotRows.length !== teamRows.length) {
+    let waiverMarketIdentity: ReturnType<typeof marketRowsIdentity> = {
+      checksum: null,
+      observedAt: null,
+    };
+    if (!lineupMappingComplete) {
+      waivers = unavailable([
+        reason(
+          "SLOT_RULES_UNSUPPORTED",
+          "Waiver analysis is unavailable because the stored lineup cannot be mapped safely enough to preserve true-lock constraints.",
+        ),
+      ]);
+    } else if (snapshotRows.length !== teamRows.length) {
       waivers = unavailable([
         reason(
           "ROSTER_INCOMPLETE",
           `Only ${snapshotRows.length} of ${teamRows.length} teams have roster snapshots, so free-agent status is not reliable.`,
         ),
       ]);
+    } else if (
+      snapshotRows.some((snapshot) => (entriesBySnapshot.get(snapshot.id)?.length ?? 0) === 0)
+    ) {
+      const emptySnapshotCount = snapshotRows.filter(
+        (snapshot) => (entriesBySnapshot.get(snapshot.id)?.length ?? 0) === 0,
+      ).length;
+      waivers = unavailable([
+        reason(
+          "ROSTER_INCOMPLETE",
+          `${emptySnapshotCount} latest team roster snapshot${emptySnapshotCount === 1 ? " has" : "s have"} no entries, so free-agent status is not reliable.`,
+        ),
+      ]);
     } else {
       const rosteredIds = new Set(boundedRosterRows.map((entry) => entry.playerId));
-      const candidates = [...preparedById.values()]
-        .filter(
-          (prepared) =>
-            !rosteredIds.has(prepared.player.id) &&
-            (explicitlyAvailablePlayerIds === null ||
-              explicitlyAvailablePlayerIds.has(prepared.player.id)),
-        )
-        .sort(
-          (left, right) =>
-            right.value.mean - left.value.mean || left.player.id.localeCompare(right.player.id),
-        )
-        .slice(0, MAX_WAIVER_CANDIDATES)
-        .map((prepared) => prepared.player);
+      const rosteredDefenseTeams = new Set(
+        [...rosterPlayerById.values()].flatMap((player) =>
+          player.positions.includes("DST") && player.nflTeam ? [player.nflTeam] : [],
+        ),
+      );
+      const candidates = waiverCandidates({
+        preparedById,
+        rosteredIds,
+        rosteredDefenseTeams,
+        explicitlyAvailablePlayerIds: weeklyExplicitlyAvailablePlayerIds,
+        starterSlots,
+        requireStarterEligibility: true,
+      });
       if (candidates.length === 0) {
         waivers = unavailable([
           reason(
@@ -2008,15 +2818,39 @@ export class InSeasonDecisionService {
         ]);
       } else {
         try {
+          const compatibleRosPreparedById = new Map(
+            rosProjectionSet
+              ? [...rosPreparedById].filter(([, prepared]) =>
+                  rosScoringMatchesPositions(rosProjectionSet, managedProjectionProfile, [
+                    prepared.primaryPosition,
+                  ]),
+                )
+              : [],
+          );
+          const rosCandidates = rosProjectionSet
+            ? waiverCandidates({
+                preparedById: compatibleRosPreparedById,
+                rosteredIds,
+                rosteredDefenseTeams,
+                explicitlyAvailablePlayerIds: rosExplicitlyAvailablePlayerIds,
+                starterSlots,
+                balanceByPosition: true,
+                requireStarterEligibility: true,
+              })
+            : [];
+          const marketCandidateIds = [
+            ...new Set([...candidates, ...rosCandidates].map((candidate) => candidate.id)),
+          ];
           const marketRows = (
             await this.#repository.listLatestMarketSignals(
-              candidates.map((candidate) => candidate.id),
-              MAX_WAIVER_CANDIDATES * 2,
+              marketCandidateIds,
+              marketCandidateIds.length * 2,
             )
           ).filter((signal) => {
             const ageHours = (now.getTime() - signal.observedAt.getTime()) / 3_600_000;
             return ageHours >= 0 && ageHours <= 6;
           });
+          waiverMarketIdentity = marketRowsIdentity(marketRows);
           const marketByPlayer = new Map<
             string,
             Partial<Record<"add" | "drop", DecisionMarketSignalRow>>
@@ -2027,99 +2861,168 @@ export class InSeasonDecisionService {
             current[signal.signal] = signal;
             marketByPlayer.set(signal.playerId, current);
           }
-          const peakAddCount = Math.max(
-            1,
-            ...marketRows.filter((signal) => signal.signal === "add").map((signal) => signal.count),
-          );
+          const peakAddCountFor = (viewCandidates: readonly Player[]) => {
+            const ids = new Set<string>(viewCandidates.map((candidate) => candidate.id));
+            return Math.max(
+              1,
+              ...marketRows
+                .filter((signal) => signal.signal === "add" && signal.playerId !== null)
+                .filter((signal) => ids.has(signal.playerId!))
+                .map((signal) => signal.count),
+            );
+          };
           const waiverRoster = waiverRosterModel(userRoster, claimedRosterRows, slots);
           const waiverPlayerIds = new Set(waiverRoster.roster.map((player) => player.id));
-          const result = evaluateWaiverMoves({
-            roster: waiverRoster.roster,
+          const faabEnabled = season.waiverType?.trim().toLowerCase() === "faab";
+          const weeklyView = evaluateWaiverDecisionView({
+            roster: waiverRoster,
             candidates,
             starterSlots,
-            rosterCapacity: waiverRoster.rosterCapacity,
-            rosterSlots: waiverRoster.rosterSlots,
-            horizons: [{ id: projectionSet.id, label: projectionSet.horizon, weight: 1 }],
-            projectionsByHorizon: { [projectionSet.id]: projectionById },
-            protectedPlayerIds: waiverRoster.protectedPlayerIds,
-            requireDrop: true,
+            projections: projectionById,
+            allPlayerById,
+            horizon: {
+              id: projectionSet.id,
+              label: base.league.week === null ? "Upcoming week" : `Week ${base.league.week}`,
+            },
             lineupLocks: locks.filter((lock) => waiverPlayerIds.has(lock.playerId)),
+            claimedTeam,
+            leagueTeamCount: teamRows.length,
+            marketByPlayer,
+            peakAddCount: peakAddCountFor(candidates),
+            faabEnabled,
           });
-          const recommendations = result.recommendations
-            .filter((move) => move.improvesRoster)
-            .slice(0, 8)
-            .map((move, index) => {
-              const add = allPlayerById.get(move.addPlayerId)!;
-              if (move.dropPlayerId === null) {
-                throw new Error("Decision Desk waiver recommendations require a modeled drop");
-              }
-              const drop = allPlayerById.get(move.dropPlayerId);
-              if (!drop) {
-                throw new Error("The modeled waiver drop is missing from the current roster");
-              }
-              const positionPeers = candidates.filter((candidate) =>
-                candidate.positions.some((position) => add.positions.includes(position)),
-              ).length;
-              const marketSignals = marketByPlayer.get(add.id);
-              const addSignal = marketSignals?.add;
-              const dropSignal = marketSignals?.drop;
-              const baselineCompetition = Math.min(0.9, 0.35 + teamRows.length / 40 + index / 100);
-              const marketCompetition = addSignal
-                ? Math.min(0.95, 0.25 + 0.7 * Math.sqrt(addSignal.count / peakAddCount))
-                : 0;
-              const bid =
-                claimedTeam.faabRemaining === null
-                  ? null
-                  : recommendFaabBid({
-                      weightedDelta: move.weightedDelta,
-                      remainingBudget: claimedTeam.faabRemaining,
-                      urgency: Math.min(1, Math.max(0, move.weightedDelta / 10)),
-                      scarcity: Math.max(0, 1 - positionPeers / MAX_WAIVER_CANDIDATES),
-                      competition: Math.max(baselineCompetition, marketCompetition),
-                    });
-              return {
-                add: decisionPlayer(add, projectionById),
-                drop: decisionPlayer(drop, projectionById),
-                weightedGain: rounded(move.weightedDelta),
-                lineupGain: rounded(move.horizonDeltas[0]?.lineupDelta ?? 0),
-                faab: bid
-                  ? { low: bid.lowBid, recommended: bid.recommendedBid, high: bid.highBid }
-                  : null,
-                market:
-                  addSignal || dropSignal
-                    ? {
-                        addCount: addSignal?.count ?? 0,
-                        dropCount: dropSignal?.count ?? 0,
-                        lookbackHours: addSignal?.lookbackHours ?? dropSignal!.lookbackHours,
-                        observedAt: (addSignal?.observedAt ?? dropSignal!.observedAt).toISOString(),
-                      }
-                    : null,
-                rationale: move.explanation,
-              };
+
+          let restOfSeason: Extract<
+            InSeasonDecisionSnapshot["waivers"],
+            { state: "available" }
+          >["restOfSeason"];
+          if (!rosProjectionSet) {
+            restOfSeason = unavailable([
+              reason(
+                "PROJECTIONS_MISSING",
+                "No current admitted rest-of-season projection release is available for this league.",
+              ),
+            ]);
+          } else {
+            const rosRosterProjected = waiverRoster.roster.every((player) =>
+              rosProjectionById.has(player.id),
+            );
+            const rosPositions = [...waiverRoster.roster, ...rosCandidates].flatMap((player) => {
+              const prepared = rosPreparedById.get(player.id);
+              return prepared ? [prepared.primaryPosition] : [];
             });
+            if (!rosRosterProjected) {
+              restOfSeason = unavailable([
+                reason(
+                  "PROJECTION_COVERAGE_INCOMPLETE",
+                  "The admitted rest-of-season release does not cover every active-roster player, so no ROS add/drop value was inferred.",
+                ),
+              ]);
+            } else if (
+              !rosScoringMatchesPositions(rosProjectionSet, managedProjectionProfile, rosPositions)
+            ) {
+              restOfSeason = unavailable([
+                reason(
+                  "PROJECTIONS_MISSING",
+                  "The available rest-of-season release is not compatible with the current league scoring profile for every evaluated position.",
+                ),
+              ]);
+            } else if (rosCandidates.length === 0) {
+              restOfSeason = unavailable([
+                reason(
+                  "CANDIDATE_POOL_EMPTY",
+                  "No projected unrostered players were found in the bounded rest-of-season candidate pool.",
+                ),
+              ]);
+            } else {
+              const label =
+                rosProjectionSet.windowStartWeek === rosProjectionSet.windowEndWeek
+                  ? `Rest of season · Week ${rosProjectionSet.windowStartWeek}`
+                  : `Rest of season · Weeks ${rosProjectionSet.windowStartWeek}–${rosProjectionSet.windowEndWeek}`;
+              const windowWeeks =
+                rosProjectionSet.windowEndWeek - rosProjectionSet.windowStartWeek + 1;
+              try {
+                const rosView = evaluateWaiverDecisionView({
+                  roster: waiverRoster,
+                  candidates: rosCandidates,
+                  starterSlots,
+                  projections: rosProjectionById,
+                  allPlayerById: rosAllPlayerById,
+                  horizon: { id: rosProjectionSet.id, label },
+                  // Current-week starter locks protect a player from being dropped, but cannot
+                  // define one static starting lineup for an aggregate multi-week projection.
+                  lineupLocks: [],
+                  claimedTeam,
+                  leagueTeamCount: teamRows.length,
+                  marketByPlayer,
+                  peakAddCount: peakAddCountFor(rosCandidates),
+                  faabEnabled,
+                  faabValueDivisor: windowWeeks,
+                });
+                restOfSeason = {
+                  state: "available",
+                  label,
+                  windowStartWeek: rosProjectionSet.windowStartWeek,
+                  windowEndWeek: rosProjectionSet.windowEndWeek,
+                  projectionSet: {
+                    ...decisionProjectionSetReference(rosProjectionSet),
+                    horizon: "rest-of-season" as const,
+                  },
+                  projectionFreshness: decisionProjectionFreshness(rosProjectionSet, now),
+                  ...rosView,
+                  notes: [
+                    rosExplicitlyAvailablePlayerIds === null
+                      ? `Evaluated a position-balanced pool of ${rosCandidates.length} projected players not rostered in any latest team snapshot.`
+                      : `Evaluated a position-balanced pool of ${rosCandidates.length} projected players confirmed in ESPN's latest available-player feeds.`,
+                    rosView.recommendations.length === 0
+                      ? "No bounded add/drop pairing improved aggregate rest-of-season roster value."
+                      : faabEnabled
+                        ? `ROS FAAB ranges normalize aggregate value changes across the ${windowWeeks}-week projection window before applying the heuristic.`
+                        : "This league does not use FAAB, so no rest-of-season bid range is shown.",
+                    "Starting-core impact optimizes one legal lineup against aggregate ROS totals; it is not a week-by-week lineup simulation.",
+                    rosCandidates.some((candidate) => marketByPlayer.has(candidate.id))
+                      ? "Sleeper add/drop momentum informs likely waiver competition, never whether a player clears the roster-value bar."
+                      : "No current cross-platform waiver momentum was available, so bid competition uses league-size heuristics only.",
+                  ],
+                };
+              } catch (error) {
+                restOfSeason = unavailable([
+                  reason(
+                    "ENGINE_INFEASIBLE",
+                    error instanceof NoLegalWaiverPairingError
+                      ? "No legal rest-of-season add/drop pairing satisfies the stored roster rules and true-lock constraints."
+                      : "The waiver engine could not produce a roster-rule-valid rest-of-season result under the stored constraints.",
+                  ),
+                ]);
+              }
+            }
+          }
           waivers = {
             state: "available",
-            candidateCount: candidates.length,
-            evaluatedMoveCount: result.allEvaluations.length,
-            recommendations,
+            ...weeklyView,
             execution,
+            restOfSeason,
             notes: [
-              explicitlyAvailablePlayerIds === null
+              weeklyExplicitlyAvailablePlayerIds === null
                 ? `Evaluated the top ${candidates.length} projected players not rostered in any latest team snapshot.`
                 : `Evaluated ${candidates.length} projected players confirmed in ESPN's latest available-player feeds.`,
-              recommendations.length === 0
+              weeklyView.recommendations.length === 0
                 ? "No bounded add/drop pairing improved projected roster value."
-                : "FAAB ranges are heuristic budget guidance, not bid guarantees.",
-              marketRows.length > 0
+                : faabEnabled
+                  ? "FAAB ranges are heuristic budget guidance, not bid guarantees."
+                  : "This league does not use FAAB, so no bid range is shown.",
+              candidates.some((candidate) => marketByPlayer.has(candidate.id))
                 ? "Sleeper add/drop momentum informs likely waiver competition, never whether a player clears the roster-value bar."
                 : "No current cross-platform waiver momentum was available, so bid competition uses league-size heuristics only.",
             ],
           };
-        } catch {
+        } catch (error) {
           waivers = unavailable([
             reason(
               "ENGINE_INFEASIBLE",
-              "The waiver engine could not produce a roster-rule-valid result under the stored constraints.",
+              error instanceof NoLegalWaiverPairingError
+                ? "No legal add/drop pairing satisfies the stored roster rules and true-lock constraints."
+                : "The waiver engine could not produce a roster-rule-valid result under the stored constraints.",
             ),
           ]);
         }
@@ -2136,7 +3039,9 @@ export class InSeasonDecisionService {
         const player = rosterPlayerById.get(entry.playerId);
         return player ? [player] : [];
       });
-      return roster.length > 0 && roster.every((player) => projectionById.has(player.id))
+      return roster.length > 0 &&
+        roster.length === rows.length &&
+        roster.every((player) => projectionById.has(player.id))
         ? [{ opponent, rows, roster }]
         : [];
     });
@@ -2230,8 +3135,15 @@ export class InSeasonDecisionService {
       };
     }
 
+    const inputChecksum = decisionSnapshotInputChecksum({
+      ...checksumInputs,
+      season,
+      marketSignalsChecksum: waiverMarketIdentity.checksum,
+      marketSignalAsOf: waiverMarketIdentity.observedAt,
+    });
     return {
       ...base,
+      provenance: { ...base.provenance, inputChecksum },
       lineup: withManagedProjectionsNote(lineup, managedProjectionsNote),
       waivers: withManagedProjectionsNote(waivers, managedProjectionsNote),
       trades: withManagedProjectionsNote(trades, managedProjectionsNote),

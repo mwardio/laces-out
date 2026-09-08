@@ -11,6 +11,7 @@ import {
   type ProjectionValue,
   type RosterSlot,
 } from "@laces-out/domain";
+import { projectionScoringProfileKey } from "@laces-out/projections";
 import { describe, expect, it, vi } from "vitest";
 
 import {
@@ -20,6 +21,8 @@ import {
   evaluateTradePackage,
   recommendationInputChecksum,
   resolveTradeHorizons,
+  type DecisionAvailabilitySnapshotRow,
+  type DecisionEspnPlayerIdentityRow,
   type DecisionMembershipRow,
   type DecisionMarketSignalRow,
   type DecisionProjectionPlayerRow,
@@ -42,6 +45,7 @@ const TEAM_B_ID = "40000000-0000-4000-8000-000000000002";
 const SNAPSHOT_A_ID = "50000000-0000-4000-8000-000000000001";
 const SNAPSHOT_B_ID = "50000000-0000-4000-8000-000000000002";
 const PROJECTION_SET_ID = "60000000-0000-4000-8000-000000000001";
+const ROS_SET_ID = "60000000-0000-4000-8000-000000000002";
 const NOW = new Date("2026-09-15T12:00:00.000Z");
 
 const playerIds = {
@@ -144,9 +148,50 @@ const projectionSet: DecisionProjectionSetRow = {
   season: 2026,
   week: 2,
   horizon: "Week 2",
+  windowStartWeek: 2,
+  windowEndWeek: 2,
+  asOfWeek: 1,
+  asOfAt: new Date("2026-09-15T09:00:00.000Z"),
   fetchedAt: new Date("2026-09-15T10:00:00.000Z"),
   createdAt: new Date("2026-09-15T11:00:00.000Z"),
   metadata: { model: "weekly-v1" },
+};
+
+const rosScoringProfileKey = projectionScoringProfileKey({
+  id: "fixture-scoring",
+  rules: [
+    { statId: "passing_yards", points: 0.04 },
+    { statId: "rushing_yards", points: 0.1 },
+  ],
+});
+
+const rosProjectionSet: DecisionProjectionSetRow = {
+  id: ROS_SET_ID,
+  source: "laces-out-first-party-ros",
+  version: "2026-w02-ros-v1",
+  season: 2026,
+  week: null,
+  horizon: "rest-of-season",
+  windowStartWeek: 2,
+  windowEndWeek: 18,
+  asOfWeek: 1,
+  asOfAt: new Date("2026-09-15T09:30:00.000Z"),
+  fetchedAt: new Date("2026-09-15T10:30:00.000Z"),
+  createdAt: new Date("2026-09-15T10:31:00.000Z"),
+  metadata: {
+    scoringProfileKey: rosScoringProfileKey,
+    releaseCompleteness: "full",
+    preservePriorGoodSet: false,
+  },
+};
+
+const managedRosProfile: ManagedProjectionProfile = {
+  key: rosScoringProfileKey,
+  positions: (["QB", "RB", "WR", "TE", "K", "DST"] as const).map((position) => ({
+    position,
+    supported: true,
+    reasons: [],
+  })),
 };
 
 const projectionNames: Readonly<Record<string, readonly [string, "QB" | "RB", number]>> = {
@@ -173,13 +218,112 @@ const projectionRows: readonly DecisionProjectionPlayerRow[] = Object.entries(pr
   }),
 );
 
+const availabilityFreeRb: DecisionProjectionPlayerRow = {
+  playerId: "72000000-0000-4000-8000-000000000001",
+  name: "Available Back",
+  primaryPosition: "RB",
+  eligiblePositions: ["RB"],
+  nflTeam: "CHI",
+  status: "ACTIVE",
+  meanPoints: "35",
+  floorPoints: "29",
+  ceilingPoints: "41",
+};
+
+const unlistedFreeQb: DecisionProjectionPlayerRow = {
+  playerId: "72000000-0000-4000-8000-000000000002",
+  name: "Unlisted Arm",
+  primaryPosition: "QB",
+  eligiblePositions: ["QB"],
+  nflTeam: "CHI",
+  status: "ACTIVE",
+  meanPoints: "40",
+  floorPoints: "34",
+  ceilingPoints: "46",
+};
+
+const dstSlotRule: DecisionSlotRuleRow = {
+  id: "80000000-0000-4000-8000-000000000004",
+  slotCode: "D/ST",
+  count: 1,
+  eligiblePositions: ["D/ST"],
+  isStarter: true,
+};
+
+function defenseProjection(
+  playerId: string,
+  name: string,
+  nflTeam: string,
+  meanPoints: number,
+): DecisionProjectionPlayerRow {
+  return {
+    playerId,
+    name,
+    primaryPosition: "DST",
+    eligiblePositions: ["DST"],
+    nflTeam,
+    status: "ACTIVE",
+    meanPoints: String(meanPoints),
+    floorPoints: String(meanPoints - 3),
+    ceilingPoints: String(meanPoints + 4),
+  };
+}
+
+function defenseRosterEntry(
+  playerId: string,
+  name: string,
+  nflTeam: string,
+): DecisionRosterEntryRow {
+  return {
+    snapshotId: SNAPSHOT_A_ID,
+    playerId,
+    name,
+    primaryPosition: "D/ST",
+    eligiblePositions: ["D/ST"],
+    nflTeam,
+    status: "ACTIVE",
+    slotCode: "D/ST",
+    isStarter: true,
+    locked: false,
+  };
+}
+
+function availabilityFeed(
+  availability: "free-agent" | "waivers",
+  providerPlayerIds: readonly string[],
+  options: {
+    readonly effectiveAt?: Date;
+    readonly truncated?: boolean;
+    readonly playerDetails?: Readonly<
+      Record<string, { readonly primaryPosition: string; readonly proTeamAbbreviation: string }>
+    >;
+  } = {},
+): DecisionAvailabilitySnapshotRow {
+  return {
+    availability,
+    asOfWeek: 2,
+    effectiveAt: options.effectiveAt ?? new Date("2026-09-15T11:00:00.000Z"),
+    artifact: {
+      kind: "available-players",
+      availability,
+      truncated: options.truncated ?? false,
+      players: providerPlayerIds.map((providerPlayerId) => ({
+        providerPlayerId,
+        ...options.playerDetails?.[providerPlayerId],
+      })),
+    },
+  };
+}
+
 class FakeRepository implements InSeasonDecisionRepository {
   membership: DecisionMembershipRow | undefined = membership;
   season: DecisionSeasonRow | undefined = season;
+  teamRows: readonly DecisionTeamRow[] = teams;
   slotRules: readonly DecisionSlotRuleRow[] = slotRules;
   snapshots: readonly DecisionRosterSnapshotRow[] = snapshots;
   projectionSets: readonly DecisionProjectionSetRow[] = [projectionSet];
   projectionRows: readonly DecisionProjectionPlayerRow[] = projectionRows;
+  projectionRowsBySet = new Map<string, readonly DecisionProjectionPlayerRow[]>();
   marketRows: readonly DecisionMarketSignalRow[] = [
     {
       playerId: playerIds.freeQb,
@@ -190,6 +334,8 @@ class FakeRepository implements InSeasonDecisionRepository {
       observedAt: new Date("2026-09-15T11:00:00.000Z"),
     },
   ];
+  availabilityRows: readonly DecisionAvailabilitySnapshotRow[] = [];
+  espnIdentities: readonly DecisionEspnPlayerIdentityRow[] = [];
   rosterRows: readonly DecisionRosterEntryRow[] = rosterRows;
   projectionSetQuery:
     | readonly [
@@ -210,7 +356,7 @@ class FakeRepository implements InSeasonDecisionRepository {
     return Promise.resolve(this.season);
   }
   listTeams(_seasonId: string, limit: number) {
-    return Promise.resolve(teams.slice(0, limit));
+    return Promise.resolve(this.teamRows.slice(0, limit));
   }
   listSlotRules(_seasonId: string, limit: number) {
     return Promise.resolve(this.slotRules.slice(0, limit));
@@ -233,23 +379,46 @@ class FakeRepository implements InSeasonDecisionRepository {
     this.projectionSetQuery = [actorUserId, leagueSeasonId, seasonToFind, week, limit];
     return Promise.resolve(this.projectionSets);
   }
-  countProjectionPlayers() {
-    return Promise.resolve(this.projectionRows.length);
+  projectionRowsFor(setId: string) {
+    return this.projectionRowsBySet.get(setId) ?? this.projectionRows;
   }
-  listTopProjectionPlayers(_setId: string, limit: number) {
+  countProjectionPlayers(setId: string) {
+    return Promise.resolve(this.projectionRowsFor(setId).length);
+  }
+  listTopProjectionPlayers(setId: string, limit: number) {
     return Promise.resolve(
-      [...this.projectionRows]
+      [...this.projectionRowsFor(setId)]
         .sort((left, right) => Number(right.meanPoints) - Number(left.meanPoints))
         .slice(0, limit),
     );
   }
-  listProjectionPlayersByIds(_setId: string, ids: readonly string[]) {
-    return Promise.resolve(this.projectionRows.filter((row) => ids.includes(row.playerId)));
+  listTopProjectionPlayersByPosition(setId: string, limitPerPosition: number) {
+    const positions = ["QB", "RB", "WR", "TE", "K", "DST"] as const;
+    return Promise.resolve(
+      positions.flatMap((position) =>
+        [...this.projectionRowsFor(setId)]
+          .filter((row) => row.primaryPosition === position)
+          .sort((left, right) => Number(right.meanPoints) - Number(left.meanPoints))
+          .slice(0, limitPerPosition),
+      ),
+    );
+  }
+  listProjectionPlayersByIds(setId: string, ids: readonly string[]) {
+    return Promise.resolve(
+      this.projectionRowsFor(setId).filter((row) => ids.includes(row.playerId)),
+    );
   }
   listLatestMarketSignals(ids: readonly string[], limit: number) {
     return Promise.resolve(
       this.marketRows.filter((row) => row.playerId && ids.includes(row.playerId)).slice(0, limit),
     );
+  }
+  findLatestEspnAvailability() {
+    return Promise.resolve(this.availabilityRows);
+  }
+  listEspnPlayerIdentities(seasonId: string, ids: readonly string[]) {
+    void seasonId;
+    return Promise.resolve(this.espnIdentities.filter((row) => ids.includes(row.playerId)));
   }
   findManagedProjectionProfile?: (leagueSeasonId: string) => Promise<ManagedProjectionProfile>;
 }
@@ -316,6 +485,28 @@ describe("InSeasonDecisionService", () => {
         dropCount: 0,
         lookbackHours: 24,
       });
+      expect(snapshot.waivers.dropCandidates.map((player) => player.name)).toEqual([
+        "Low Arm",
+        "Lead Back",
+        "Spare Back",
+      ]);
+      expect(snapshot.waivers.recommendations[0]?.dropComparisons).toEqual([
+        expect.objectContaining({
+          dropPlayerId: playerIds.aQbLow,
+          weightedGain: 20,
+          lineupGain: 20,
+        }),
+        expect.objectContaining({
+          dropPlayerId: playerIds.aRbOne,
+          weightedGain: 19,
+          lineupGain: 20,
+        }),
+        expect.objectContaining({
+          dropPlayerId: playerIds.aRbTwo,
+          weightedGain: 14,
+          lineupGain: 15,
+        }),
+      ]);
       expect(snapshot.waivers.notes.join(" ")).toContain("Sleeper add/drop momentum");
       expect(snapshot.waivers.evaluatedMoveCount).toBeLessThanOrEqual(24 * 3);
     }
@@ -330,6 +521,364 @@ describe("InSeasonDecisionService", () => {
       ).toBe(true);
       expect(snapshot.trades.notes.join(" ")).toContain("member account data is never included");
     }
+  });
+
+  it("publishes an independent rest-of-season waiver ranking with normalized FAAB", async () => {
+    const repository = new FakeRepository();
+    const freeRosBackId = "70000000-0000-4000-8000-000000000009";
+    const rosMeans: Readonly<Record<string, number>> = {
+      [playerIds.aQbLow]: 200,
+      [playerIds.aRbOne]: 140,
+      [playerIds.aRbTwo]: 220,
+      [playerIds.bQbOne]: 240,
+      [playerIds.bQbTwo]: 180,
+      [playerIds.bRbLow]: 130,
+      [playerIds.freeQb]: 100,
+    };
+    const rosRows: readonly DecisionProjectionPlayerRow[] = [
+      ...projectionRows.map((row) => {
+        const mean = rosMeans[row.playerId] ?? 0;
+        return {
+          ...row,
+          meanPoints: String(mean),
+          floorPoints: String(Math.max(0, mean - 20)),
+          ceilingPoints: String(mean + 25),
+        };
+      }),
+      {
+        playerId: freeRosBackId,
+        name: "Season Back",
+        primaryPosition: "RB",
+        eligiblePositions: ["RB"],
+        nflTeam: "CHI",
+        status: "ACTIVE",
+        meanPoints: "260",
+        floorPoints: "220",
+        ceilingPoints: "300",
+      },
+    ];
+    repository.projectionSets = [projectionSet, rosProjectionSet];
+    repository.projectionRowsBySet.set(PROJECTION_SET_ID, projectionRows);
+    repository.projectionRowsBySet.set(ROS_SET_ID, rosRows);
+    repository.findManagedProjectionProfile = () => Promise.resolve(managedRosProfile);
+
+    const snapshot = await new InSeasonDecisionService(repository, () => NOW).getSnapshot(
+      USER_ID,
+      LEAGUE_ID,
+    );
+
+    if (snapshot?.waivers.state !== "available") throw new Error("expected available waivers");
+    expect(snapshot.waivers.recommendations[0]?.add.name).toBe("Free Arm");
+    const ros = snapshot.waivers.restOfSeason;
+    if (ros.state !== "available") throw new Error("expected available ROS waivers");
+    expect(ros).toMatchObject({
+      label: "Rest of season · Weeks 2–18",
+      windowStartWeek: 2,
+      windowEndWeek: 18,
+      projectionSet: {
+        id: ROS_SET_ID,
+        horizon: "rest-of-season",
+        sourceObservedAt: "2026-09-15T09:30:00.000Z",
+      },
+      projectionFreshness: { observedAt: "2026-09-15T09:30:00.000Z" },
+    });
+    expect(ros.recommendations[0]).toMatchObject({
+      add: { id: freeRosBackId, name: "Season Back", projectedPoints: 260 },
+      drop: { id: playerIds.aRbOne, name: "Lead Back" },
+      weightedGain: 48,
+      lineupGain: 40,
+    });
+    expect(ros.recommendations[0]?.rationale).toContain("Rest of season · Weeks 2–18");
+    expect(ros.recommendations[0]?.faab?.recommended).toBeGreaterThan(0);
+    expect(ros.recommendations[0]?.faab?.recommended).toBeLessThan(
+      snapshot.waivers.recommendations[0]?.faab?.recommended ?? 0,
+    );
+    expect(ros.notes.join(" ")).toContain("not a week-by-week lineup simulation");
+    expect(() => inSeasonDecisionSnapshotSchema.parse(snapshot)).not.toThrow();
+  });
+
+  it("selects the exact scoring-compatible ROS set over a newer incompatible release", async () => {
+    const repository = new FakeRepository();
+    const incompatibleScoringProfileKey = projectionScoringProfileKey({
+      id: "incompatible-fixture-scoring",
+      rules: [
+        { statId: "passing_yards", points: 0.04 },
+        { statId: "rushing_yards", points: 0.2 },
+      ],
+    });
+    const incompatibleRosSet: DecisionProjectionSetRow = {
+      ...rosProjectionSet,
+      id: "60000000-0000-4000-8000-000000000003",
+      version: "2026-w02-ros-newer-incompatible",
+      asOfWeek: 2,
+      asOfAt: new Date("2026-09-15T11:30:00.000Z"),
+      fetchedAt: new Date("2026-09-15T11:31:00.000Z"),
+      createdAt: new Date("2026-09-15T11:32:00.000Z"),
+      metadata: {
+        ...rosProjectionSet.metadata,
+        scoringProfileKey: incompatibleScoringProfileKey,
+      },
+    };
+    repository.projectionSets = [projectionSet, incompatibleRosSet, rosProjectionSet];
+    repository.projectionRowsBySet.set(PROJECTION_SET_ID, projectionRows);
+    repository.projectionRowsBySet.set(incompatibleRosSet.id, projectionRows);
+    repository.projectionRowsBySet.set(ROS_SET_ID, projectionRows);
+    repository.findManagedProjectionProfile = () => Promise.resolve(managedRosProfile);
+
+    const snapshot = await snapshotFrom(repository);
+
+    if (snapshot.waivers.state !== "available") throw new Error("expected weekly waivers");
+    const ros = snapshot.waivers.restOfSeason;
+    if (ros.state !== "available") throw new Error("expected available ROS waivers");
+    expect(ros.projectionSet).toMatchObject({
+      id: ROS_SET_ID,
+      version: rosProjectionSet.version,
+      horizon: "rest-of-season",
+    });
+    expect(ros.projectionSet.id).not.toBe(incompatibleRosSet.id);
+  });
+
+  it("does not let a newer partial-position scoring match displace an older compatible ROS set", async () => {
+    const repository = new FakeRepository();
+    const currentScoringProfile = {
+      id: "current-partial-match-fixture",
+      rules: [
+        { statId: "passing_yards", points: 0.04 },
+        { statId: "rushing_yards", points: 0.1 },
+      ],
+    } as const;
+    const olderCompatibleProfileKey = projectionScoringProfileKey({
+      id: "older-compatible-fixture",
+      rules: [...currentScoringProfile.rules, { statId: "field_goals_made", points: 3 }],
+    });
+    const newerPartialProfileKey = projectionScoringProfileKey({
+      id: "newer-partial-fixture",
+      rules: [...currentScoringProfile.rules, { statId: "receiving_yards", points: 0.2 }],
+    });
+    const olderCompatibleSet: DecisionProjectionSetRow = {
+      ...rosProjectionSet,
+      id: "60000000-0000-4000-8000-000000000004",
+      version: "2026-w02-ros-older-position-compatible",
+      metadata: {
+        ...rosProjectionSet.metadata,
+        scoringProfileKey: olderCompatibleProfileKey,
+      },
+    };
+    const newerPartialSet: DecisionProjectionSetRow = {
+      ...rosProjectionSet,
+      id: "60000000-0000-4000-8000-000000000005",
+      version: "2026-w02-ros-newer-partial-match",
+      asOfWeek: 2,
+      asOfAt: new Date("2026-09-15T11:30:00.000Z"),
+      fetchedAt: new Date("2026-09-15T11:31:00.000Z"),
+      createdAt: new Date("2026-09-15T11:32:00.000Z"),
+      metadata: {
+        ...rosProjectionSet.metadata,
+        scoringProfileKey: newerPartialProfileKey,
+      },
+    };
+    repository.projectionSets = [projectionSet, newerPartialSet, olderCompatibleSet];
+    repository.projectionRowsBySet.set(PROJECTION_SET_ID, projectionRows);
+    repository.projectionRowsBySet.set(newerPartialSet.id, projectionRows);
+    repository.projectionRowsBySet.set(olderCompatibleSet.id, projectionRows);
+    repository.findManagedProjectionProfile = () =>
+      Promise.resolve({
+        key: projectionScoringProfileKey(currentScoringProfile),
+        positions: (["QB", "RB"] as const).map((position) => ({
+          position,
+          supported: true,
+          reasons: [],
+        })),
+      });
+
+    const snapshot = await snapshotFrom(repository);
+
+    if (snapshot.waivers.state !== "available") throw new Error("expected weekly waivers");
+    const ros = snapshot.waivers.restOfSeason;
+    if (ros.state !== "available") throw new Error("expected available ROS waivers");
+    expect(ros.projectionSet).toMatchObject({
+      id: olderCompatibleSet.id,
+      version: olderCompatibleSet.version,
+      horizon: "rest-of-season",
+    });
+    expect(ros.projectionSet.id).not.toBe(newerPartialSet.id);
+  });
+
+  it("keeps lower-total positions in the bounded ROS candidate pool", async () => {
+    const repository = new FakeRepository();
+    const seasonBackId = "71000000-0000-4000-8000-000000000001";
+    const rosterMeans: Readonly<Record<string, number>> = {
+      [playerIds.aQbLow]: 1_000,
+      [playerIds.aRbOne]: 100,
+      [playerIds.aRbTwo]: 90,
+      [playerIds.bQbOne]: 300,
+      [playerIds.bQbTwo]: 250,
+      [playerIds.bRbLow]: 80,
+      [playerIds.freeQb]: 600,
+    };
+    const extraQuarterbacks: DecisionProjectionPlayerRow[] = Array.from(
+      { length: 520 },
+      (_, index) => ({
+        playerId: `71000000-0000-4000-8000-${String(index + 2).padStart(12, "0")}`,
+        name: `Free Quarterback ${index + 1}`,
+        primaryPosition: "QB",
+        eligiblePositions: ["QB"],
+        nflTeam: "MIA",
+        status: "ACTIVE",
+        meanPoints: String(599 - index),
+        floorPoints: String(550 - index),
+        ceilingPoints: String(630 - index),
+      }),
+    );
+    const rosRows: DecisionProjectionPlayerRow[] = [
+      ...projectionRows.map((row) => {
+        const mean = rosterMeans[row.playerId] ?? 100;
+        return {
+          ...row,
+          meanPoints: String(mean),
+          floorPoints: String(Math.max(0, mean - 20)),
+          ceilingPoints: String(mean + 20),
+        };
+      }),
+      ...extraQuarterbacks,
+      {
+        playerId: seasonBackId,
+        name: "Position Balanced Back",
+        primaryPosition: "RB",
+        eligiblePositions: ["RB"],
+        nflTeam: "CHI",
+        status: "ACTIVE",
+        meanPoints: "300",
+        floorPoints: "260",
+        ceilingPoints: "340",
+      },
+    ];
+    repository.projectionSets = [projectionSet, rosProjectionSet];
+    repository.projectionRowsBySet.set(PROJECTION_SET_ID, projectionRows);
+    repository.projectionRowsBySet.set(ROS_SET_ID, rosRows);
+    repository.findManagedProjectionProfile = () => Promise.resolve(managedRosProfile);
+
+    const snapshot = await new InSeasonDecisionService(repository, () => NOW).getSnapshot(
+      USER_ID,
+      LEAGUE_ID,
+    );
+
+    if (snapshot?.waivers.state !== "available") throw new Error("expected available waivers");
+    const ros = snapshot.waivers.restOfSeason;
+    if (ros.state !== "available") throw new Error("expected available ROS waivers");
+    expect(ros.candidateCount).toBe(24);
+    expect(ros.recommendations[0]?.add).toMatchObject({
+      id: seasonBackId,
+      name: "Position Balanced Back",
+    });
+  });
+
+  it("seeds ROS beyond 24 higher-ranked players who are already rostered", async () => {
+    const repository = new FakeRepository();
+    const deepTargetId = "74000000-0000-4000-8000-000000000001";
+    const higherRosteredQuarterbacks = Array.from({ length: 25 }, (_, index) => {
+      const id = `74000000-0000-4000-8000-${String(index + 2).padStart(12, "0")}`;
+      return {
+        roster: rosterEntry(
+          SNAPSHOT_B_ID,
+          id,
+          `Rostered Quarterback ${index + 1}`,
+          "QB",
+          "BN",
+          false,
+        ),
+        projection: {
+          playerId: id,
+          name: `Rostered Quarterback ${index + 1}`,
+          primaryPosition: "QB",
+          eligiblePositions: ["QB"],
+          nflTeam: "CHI",
+          status: "ACTIVE",
+          meanPoints: String(200 - index),
+          floorPoints: String(180 - index),
+          ceilingPoints: String(220 - index),
+        } satisfies DecisionProjectionPlayerRow,
+      };
+    });
+    const deepTarget: DecisionProjectionPlayerRow = {
+      playerId: deepTargetId,
+      name: "Deep Available Quarterback",
+      primaryPosition: "QB",
+      eligiblePositions: ["QB"],
+      nflTeam: "CHI",
+      status: "ACTIVE",
+      meanPoints: "100",
+      floorPoints: "90",
+      ceilingPoints: "110",
+    };
+    repository.rosterRows = [
+      ...rosterRows,
+      ...higherRosteredQuarterbacks.map(({ roster }) => roster),
+    ];
+    repository.projectionSets = [projectionSet, rosProjectionSet];
+    repository.projectionRowsBySet.set(PROJECTION_SET_ID, projectionRows);
+    repository.projectionRowsBySet.set(ROS_SET_ID, [
+      ...projectionRows,
+      ...higherRosteredQuarterbacks.map(({ projection }) => projection),
+      deepTarget,
+    ]);
+    repository.findManagedProjectionProfile = () => Promise.resolve(managedRosProfile);
+
+    const snapshot = await snapshotFrom(repository);
+
+    if (snapshot.waivers.state !== "available") throw new Error("expected weekly waivers");
+    const ros = snapshot.waivers.restOfSeason;
+    if (ros.state !== "available") throw new Error("expected available ROS waivers");
+    expect(ros.recommendations.some(({ add }) => add.id === deepTargetId)).toBe(true);
+  });
+
+  it("withholds ROS waivers when the active roster is not fully projected", async () => {
+    const repository = new FakeRepository();
+    repository.projectionSets = [projectionSet, rosProjectionSet];
+    repository.projectionRowsBySet.set(PROJECTION_SET_ID, projectionRows);
+    repository.projectionRowsBySet.set(
+      ROS_SET_ID,
+      projectionRows.filter((row) => row.playerId !== playerIds.aRbTwo),
+    );
+    repository.findManagedProjectionProfile = () => Promise.resolve(managedRosProfile);
+
+    const snapshot = await new InSeasonDecisionService(repository, () => NOW).getSnapshot(
+      USER_ID,
+      LEAGUE_ID,
+    );
+
+    if (snapshot?.waivers.state !== "available") throw new Error("expected weekly waivers");
+    expect(snapshot.waivers.restOfSeason).toMatchObject({
+      state: "unavailable",
+      reasons: [{ code: "PROJECTION_COVERAGE_INCOMPLETE" }],
+    });
+  });
+
+  it("withholds ROS waivers after a relevant scoring-profile change", async () => {
+    const repository = new FakeRepository();
+    const changedKey = projectionScoringProfileKey({
+      id: "changed-fixture-scoring",
+      rules: [
+        { statId: "passing_yards", points: 0.04 },
+        { statId: "rushing_yards", points: 0.2 },
+      ],
+    });
+    repository.projectionSets = [projectionSet, rosProjectionSet];
+    repository.projectionRowsBySet.set(PROJECTION_SET_ID, projectionRows);
+    repository.projectionRowsBySet.set(ROS_SET_ID, projectionRows);
+    repository.findManagedProjectionProfile = () =>
+      Promise.resolve({ ...managedRosProfile, key: changedKey });
+
+    const snapshot = await new InSeasonDecisionService(repository, () => NOW).getSnapshot(
+      USER_ID,
+      LEAGUE_ID,
+    );
+
+    if (snapshot?.waivers.state !== "available") throw new Error("expected weekly waivers");
+    expect(snapshot.waivers.restOfSeason).toMatchObject({
+      state: "unavailable",
+      reasons: [{ code: "PROJECTIONS_MISSING" }],
+    });
   });
 
   it.each([
@@ -417,7 +966,9 @@ describe("InSeasonDecisionService", () => {
         weightedGain: 20,
         lineupGain: 20,
       });
-      expect(snapshot.waivers.recommendations[0]?.rationale).toContain("Free Arm for Low Arm");
+      expect(snapshot.waivers.recommendations[0]?.rationale).toBe(
+        "Adding Free Arm and dropping Low Arm improves weighted roster value by 20.00 points (Week 2).",
+      );
       expect(snapshot.waivers.recommendations[0]?.rationale).not.toContain("open roster spot");
       expect(snapshot.waivers.evaluatedMoveCount).toBeGreaterThan(snapshot.waivers.candidateCount);
     },
@@ -700,6 +1251,256 @@ describe("InSeasonDecisionService", () => {
     expect(snapshot.waivers.notes.join(" ")).toContain("No current cross-platform waiver momentum");
   });
 
+  it("uses only complete fresh ESPN availability feeds as an allowlist", async () => {
+    const identities: readonly DecisionEspnPlayerIdentityRow[] = [
+      { playerId: playerIds.freeQb, source: "espn", externalId: "101" },
+      { playerId: availabilityFreeRb.playerId, source: "espn", externalId: "102" },
+    ];
+    const repositoryWith = (availabilityRows: readonly DecisionAvailabilitySnapshotRow[]) => {
+      const repository = new FakeRepository();
+      repository.projectionRows = [...projectionRows, availabilityFreeRb, unlistedFreeQb];
+      repository.availabilityRows = availabilityRows;
+      repository.espnIdentities = identities;
+      return repository;
+    };
+
+    const completeSnapshot = await snapshotFrom(
+      repositoryWith([
+        availabilityFeed("free-agent", ["101"]),
+        availabilityFeed("waivers", ["102"]),
+      ]),
+    );
+    const missingComponentSnapshot = await snapshotFrom(
+      repositoryWith([availabilityFeed("free-agent", ["101"])]),
+    );
+    const truncatedComponentSnapshot = await snapshotFrom(
+      repositoryWith([
+        availabilityFeed("free-agent", ["101"]),
+        availabilityFeed("waivers", ["102"], { truncated: true }),
+      ]),
+    );
+
+    if (completeSnapshot.waivers.state !== "available") {
+      throw new Error("expected complete-feed waivers");
+    }
+    expect(completeSnapshot.waivers.candidateCount).toBe(2);
+    expect(
+      completeSnapshot.waivers.recommendations.every(
+        (recommendation) => recommendation.add.id !== unlistedFreeQb.playerId,
+      ),
+    ).toBe(true);
+    expect(completeSnapshot.waivers.notes.join(" ")).toContain(
+      "confirmed in ESPN's latest available-player feeds",
+    );
+
+    for (const fallbackSnapshot of [missingComponentSnapshot, truncatedComponentSnapshot]) {
+      if (fallbackSnapshot.waivers.state !== "available") {
+        throw new Error("expected fallback waivers");
+      }
+      expect(fallbackSnapshot.waivers.candidateCount).toBe(3);
+      expect(fallbackSnapshot.waivers.recommendations[0]?.add.id).toBe(unlistedFreeQb.playerId);
+      expect(fallbackSnapshot.waivers.notes.join(" ")).toContain(
+        "not rostered in any latest team snapshot",
+      );
+    }
+  });
+
+  it("team-matches canonical D/ST projections from strict ESPN availability with exact provenance", async () => {
+    const rosterDefenseId = "73000000-0000-4000-8000-000000000001";
+    const ramsDefenseId = "73000000-0000-4000-8000-000000000002";
+    const commandersDefenseId = "73000000-0000-4000-8000-000000000003";
+    const providerDefenseId = "-16028";
+    const repositoryWithDefense = (providerTeam: "LA" | "WSH") => {
+      const repository = new FakeRepository();
+      repository.slotRules = [...slotRules, dstSlotRule];
+      repository.rosterRows = [
+        ...rosterRows,
+        defenseRosterEntry(rosterDefenseId, "Buffalo D/ST provider alias", "BUF"),
+      ];
+      repository.projectionRows = [
+        ...projectionRows,
+        defenseProjection(rosterDefenseId, "Buffalo D/ST provider alias", "BUF", 5),
+        defenseProjection(ramsDefenseId, "Los Angeles Rams D/ST", "LAR", 35),
+        defenseProjection(commandersDefenseId, "Washington Commanders D/ST", "WAS", 34),
+      ];
+      repository.marketRows = [];
+      repository.availabilityRows = [
+        availabilityFeed("free-agent", [providerDefenseId], {
+          playerDetails: {
+            [providerDefenseId]: {
+              primaryPosition: "D/ST",
+              proTeamAbbreviation: providerTeam,
+            },
+          },
+        }),
+        availabilityFeed("waivers", []),
+      ];
+      repository.espnIdentities = [];
+      return repository;
+    };
+
+    const ramsSnapshot = await snapshotFrom(repositoryWithDefense("LA"));
+    const commandersSnapshot = await snapshotFrom(repositoryWithDefense("WSH"));
+
+    if (
+      ramsSnapshot.waivers.state !== "available" ||
+      commandersSnapshot.waivers.state !== "available"
+    ) {
+      throw new Error("expected team-matched D/ST waivers");
+    }
+    expect(ramsSnapshot.waivers.candidateCount).toBe(1);
+    expect(commandersSnapshot.waivers.candidateCount).toBe(1);
+    expect(ramsSnapshot.waivers.recommendations[0]?.add.id).toBe(ramsDefenseId);
+    expect(commandersSnapshot.waivers.recommendations[0]?.add.id).toBe(commandersDefenseId);
+    expect(ramsSnapshot.provenance.inputChecksum).not.toBe(
+      commandersSnapshot.provenance.inputChecksum,
+    );
+  });
+
+  it("keeps ROS available for a rostered D/ST alias without offering its canonical same-team defense", async () => {
+    const rosterDefenseId = "73000000-0000-4000-8000-000000000011";
+    const canonicalRosterDefenseId = "73000000-0000-4000-8000-000000000012";
+    const availableDefenseId = "73000000-0000-4000-8000-000000000013";
+    const rosterDefense = defenseProjection(
+      rosterDefenseId,
+      "Buffalo D/ST provider alias",
+      "BUF",
+      5,
+    );
+    const canonicalRosterDefense = defenseProjection(
+      canonicalRosterDefenseId,
+      "Buffalo Bills D/ST",
+      "BUF",
+      500,
+    );
+    const availableDefense = defenseProjection(
+      availableDefenseId,
+      "Chicago Bears D/ST",
+      "CHI",
+      250,
+    );
+    const dstScoringProfileKey = projectionScoringProfileKey({
+      id: "dst-fixture-scoring",
+      rules: [
+        { statId: "passing_yards", points: 0.04 },
+        { statId: "rushing_yards", points: 0.1 },
+        { statId: "defensive_sacks", points: 1 },
+      ],
+    });
+    const repository = new FakeRepository();
+    repository.slotRules = [...slotRules, dstSlotRule];
+    repository.rosterRows = [
+      ...rosterRows,
+      defenseRosterEntry(rosterDefenseId, "Buffalo D/ST provider alias", "BUF"),
+    ];
+    repository.projectionSets = [
+      projectionSet,
+      {
+        ...rosProjectionSet,
+        metadata: { ...rosProjectionSet.metadata, scoringProfileKey: dstScoringProfileKey },
+      },
+    ];
+    repository.projectionRowsBySet.set(PROJECTION_SET_ID, [
+      ...projectionRows,
+      rosterDefense,
+      canonicalRosterDefense,
+      availableDefense,
+    ]);
+    repository.projectionRowsBySet.set(ROS_SET_ID, [
+      ...projectionRows,
+      rosterDefense,
+      canonicalRosterDefense,
+      availableDefense,
+    ]);
+    repository.findManagedProjectionProfile = () =>
+      Promise.resolve({ ...managedRosProfile, key: dstScoringProfileKey });
+    repository.marketRows = [];
+    repository.availabilityRows = [
+      availabilityFeed("free-agent", ["-16002", "-16005"], {
+        playerDetails: {
+          "-16002": { primaryPosition: "D/ST", proTeamAbbreviation: "BUF" },
+          "-16005": { primaryPosition: "D/ST", proTeamAbbreviation: "CHI" },
+        },
+      }),
+      availabilityFeed("waivers", []),
+    ];
+
+    const snapshot = await snapshotFrom(repository);
+
+    if (snapshot.waivers.state !== "available") throw new Error("expected weekly waivers");
+    const ros = snapshot.waivers.restOfSeason;
+    if (ros.state !== "available") throw new Error("expected available ROS waivers");
+    expect(ros.candidateCount).toBe(1);
+    expect(ros.dropCandidates).toContainEqual(
+      expect.objectContaining({ id: rosterDefenseId, name: "Buffalo D/ST provider alias" }),
+    );
+    expect(ros.recommendations[0]?.add.id).toBe(availableDefenseId);
+    expect(
+      ros.recommendations.some(
+        (recommendation) => recommendation.add.id === canonicalRosterDefenseId,
+      ),
+    ).toBe(false);
+  });
+
+  it("changes provenance when ESPN availability crosses the 24-hour freshness boundary", async () => {
+    const effectiveAt = new Date("2026-09-14T12:00:00.000Z");
+    const repository = new FakeRepository();
+    repository.availabilityRows = [
+      availabilityFeed("free-agent", ["101"], { effectiveAt }),
+      availabilityFeed("waivers", [], { effectiveAt }),
+    ];
+    repository.espnIdentities = [{ playerId: playerIds.freeQb, source: "espn", externalId: "101" }];
+
+    const atBoundary = await new InSeasonDecisionService(repository, () => NOW).getSnapshot(
+      USER_ID,
+      LEAGUE_ID,
+    );
+    const afterBoundary = await new InSeasonDecisionService(
+      repository,
+      () => new Date(NOW.getTime() + 1),
+    ).getSnapshot(USER_ID, LEAGUE_ID);
+
+    if (!atBoundary || !afterBoundary) throw new Error("expected decision snapshots");
+    expect(atBoundary.provenance.inputChecksum).not.toBe(afterBoundary.provenance.inputChecksum);
+  });
+
+  it("changes provenance when ESPN identity mapping changes the admitted candidate", async () => {
+    const repositoryWithIdentity = (playerIdToAdmit: string) => {
+      const repository = new FakeRepository();
+      repository.projectionRows = [...projectionRows, availabilityFreeRb];
+      repository.marketRows = [];
+      repository.availabilityRows = [
+        availabilityFeed("free-agent", ["501"]),
+        availabilityFeed("waivers", []),
+      ];
+      repository.espnIdentities = [
+        { playerId: playerIdToAdmit, source: "espn", externalId: "501" },
+      ];
+      return repository;
+    };
+
+    const quarterbackSnapshot = await snapshotFrom(repositoryWithIdentity(playerIds.freeQb));
+    const runningBackSnapshot = await snapshotFrom(
+      repositoryWithIdentity(availabilityFreeRb.playerId),
+    );
+
+    if (
+      quarterbackSnapshot.waivers.state !== "available" ||
+      runningBackSnapshot.waivers.state !== "available"
+    ) {
+      throw new Error("expected identity-filtered waivers");
+    }
+    expect(quarterbackSnapshot.waivers.candidateCount).toBe(1);
+    expect(runningBackSnapshot.waivers.candidateCount).toBe(1);
+    expect(quarterbackSnapshot.waivers.recommendations[0]?.add.id).toBe(playerIds.freeQb);
+    expect(runningBackSnapshot.waivers.recommendations[0]?.add.id).toBe(
+      availabilityFreeRb.playerId,
+    );
+    expect(quarterbackSnapshot.provenance.inputChecksum).not.toBe(
+      runningBackSnapshot.provenance.inputChecksum,
+    );
+  });
+
   it("never reports legacy user CSV import time as projection freshness", async () => {
     const repository = new FakeRepository();
     repository.projectionSets = [{ ...projectionSet, source: "user-csv", metadata: {} }];
@@ -777,6 +1578,102 @@ describe("InSeasonDecisionService", () => {
       weightedGain: 1,
       lineupGain: 0,
     });
+  });
+
+  it("withholds waiver views for unmappable players or a malformed claimed lineup", async () => {
+    const unmappableRoster = new FakeRepository();
+    unmappableRoster.rosterRows = rosterRows.map((row) =>
+      row.playerId === playerIds.aRbTwo
+        ? { ...row, primaryPosition: "P", eligiblePositions: ["P"] }
+        : row,
+    );
+
+    const malformedLineup = new FakeRepository();
+    malformedLineup.rosterRows = rosterRows.map((row) =>
+      row.playerId === playerIds.aRbTwo ? { ...row, slotCode: "RB", isStarter: true } : row,
+    );
+
+    const [unmappableSnapshot, malformedSnapshot] = await Promise.all([
+      snapshotFrom(unmappableRoster),
+      snapshotFrom(malformedLineup),
+    ]);
+
+    expect(unmappableSnapshot.waivers).toMatchObject({
+      state: "unavailable",
+      reasons: [{ code: "ROSTER_MISSING" }],
+    });
+    expect(malformedSnapshot.waivers).toMatchObject({
+      state: "unavailable",
+      reasons: [{ code: "SLOT_RULES_UNSUPPORTED" }],
+    });
+    expect("recommendations" in unmappableSnapshot.waivers).toBe(false);
+    expect("recommendations" in malformedSnapshot.waivers).toBe(false);
+  });
+
+  it("withholds waiver views when any latest team roster snapshot has no entries", async () => {
+    const repository = new FakeRepository();
+    repository.rosterRows = rosterRows.filter((row) => row.snapshotId !== SNAPSHOT_B_ID);
+
+    const snapshot = await snapshotFrom(repository);
+
+    expect(snapshot.lineup.state).toBe("available");
+    expect(snapshot.waivers).toMatchObject({
+      state: "unavailable",
+      reasons: [{ code: "ROSTER_INCOMPLETE" }],
+    });
+    if (snapshot.waivers.state !== "unavailable") {
+      throw new Error("expected unavailable waivers");
+    }
+    expect(snapshot.waivers.reasons[0]?.message).toContain(
+      "1 latest team roster snapshot has no entries",
+    );
+    expect("restOfSeason" in snapshot.waivers).toBe(false);
+  });
+
+  it("emits no weekly or ROS FAAB guidance for a non-FAAB league", async () => {
+    const repository = new FakeRepository();
+    repository.season = { ...season, waiverType: "rolling-priority" };
+    repository.projectionSets = [projectionSet, rosProjectionSet];
+    repository.projectionRowsBySet.set(PROJECTION_SET_ID, projectionRows);
+    repository.projectionRowsBySet.set(ROS_SET_ID, projectionRows);
+    repository.findManagedProjectionProfile = () => Promise.resolve(managedRosProfile);
+
+    const snapshot = await snapshotFrom(repository);
+
+    if (snapshot.waivers.state !== "available") throw new Error("expected weekly waivers");
+    expect(snapshot.waivers.recommendations.length).toBeGreaterThan(0);
+    for (const recommendation of snapshot.waivers.recommendations) {
+      expect(recommendation.faab).toBeNull();
+      expect(recommendation.dropComparisons.every((comparison) => comparison.faab === null)).toBe(
+        true,
+      );
+    }
+    const ros = snapshot.waivers.restOfSeason;
+    if (ros.state !== "available") throw new Error("expected available ROS waivers");
+    expect(ros.recommendations.length).toBeGreaterThan(0);
+    for (const recommendation of ros.recommendations) {
+      expect(recommendation.faab).toBeNull();
+      expect(recommendation.dropComparisons.every((comparison) => comparison.faab === null)).toBe(
+        true,
+      );
+    }
+  });
+
+  it("returns unavailable instead of available-empty when every roster player is locked", async () => {
+    const repository = new FakeRepository();
+    repository.rosterRows = rosterRows.map((row) =>
+      row.snapshotId === SNAPSHOT_A_ID ? { ...row, locked: true } : row,
+    );
+
+    const snapshot = await snapshotFrom(repository);
+
+    expect(snapshot.waivers).toMatchObject({
+      state: "unavailable",
+      reasons: [{ code: "ENGINE_INFEASIBLE" }],
+    });
+    if (snapshot.waivers.state !== "unavailable") throw new Error("expected unavailable waivers");
+    expect(snapshot.waivers.reasons[0]?.message).toContain("No legal add/drop pairing");
+    expect("recommendations" in snapshot.waivers).toBe(false);
   });
 
   it("builds Yahoo deep links from numeric and alphabetic game prefixes", async () => {
@@ -886,9 +1783,58 @@ describe("InSeasonDecisionSnapshot ADR 0003 provenance", () => {
           { ...projectionSet, id: "60000000-0000-4000-8000-00000000000f" },
         ];
       }),
+      // Independently admitted rest-of-season projection set identity.
+      checksumOf((repository) => {
+        repository.projectionSets = [projectionSet, rosProjectionSet];
+      }),
     ]);
     for (const variant of variants) expect(variant).not.toBe(reference);
     expect(new Set(variants).size).toBe(variants.length);
+  });
+
+  it("changes for corrected market content at the same time or a changed managed scoring profile", async () => {
+    const marketReference = await checksumOf();
+    const marketContentChanged = await checksumOf((repository) => {
+      repository.marketRows = repository.marketRows.map((row) => ({
+        ...row,
+        count: row.count + 1,
+      }));
+    });
+    expect(marketContentChanged).not.toBe(marketReference);
+
+    const profileReference = await checksumOf((repository) => {
+      repository.findManagedProjectionProfile = () => Promise.resolve(managedRosProfile);
+    });
+    const changedScoringProfileKey = projectionScoringProfileKey({
+      id: "changed-checksum-fixture-scoring",
+      rules: [
+        { statId: "passing_yards", points: 0.04 },
+        { statId: "rushing_yards", points: 0.2 },
+      ],
+    });
+    const profileChanged = await checksumOf((repository) => {
+      repository.findManagedProjectionProfile = () =>
+        Promise.resolve({ ...managedRosProfile, key: changedScoringProfileKey });
+    });
+    expect(profileChanged).not.toBe(profileReference);
+  });
+
+  it("changes when FAAB budget or player eligibility facts change", async () => {
+    const reference = await checksumOf();
+    const faabChanged = await checksumOf((repository) => {
+      repository.teamRows = teams.map((team) =>
+        team.id === TEAM_A_ID ? { ...team, faabRemaining: 41 } : team,
+      );
+    });
+    const eligibilityChanged = await checksumOf((repository) => {
+      repository.rosterRows = rosterRows.map((row) =>
+        row.playerId === playerIds.aRbTwo ? { ...row, eligiblePositions: ["RB", "WR"] } : row,
+      );
+    });
+
+    expect(faabChanged).not.toBe(reference);
+    expect(eligibilityChanged).not.toBe(reference);
+    expect(eligibilityChanged).not.toBe(faabChanged);
   });
 
   it("records provenance on an unavailable snapshot too", async () => {
@@ -902,16 +1848,23 @@ describe("InSeasonDecisionSnapshot ADR 0003 provenance", () => {
     expect(snapshot.provenance.inputChecksum).not.toBe(await checksumOf());
   });
 
-  it("is computed from the declared inputs and nothing else", async () => {
-    const snapshot = await snapshotFrom(new FakeRepository());
+  it("is computed from the declared early-unavailable inputs and nothing else", async () => {
+    const repository = new FakeRepository();
+    repository.membership = { ...membership, claimedFantasyTeamId: null };
+    const snapshot = await snapshotFrom(repository);
     expect(snapshot.provenance.inputChecksum).toBe(
       decisionSnapshotInputChecksum({
         season,
-        claimedFantasyTeamId: TEAM_A_ID,
-        slotRules,
-        rosterSnapshotIds: [SNAPSHOT_A_ID, SNAPSHOT_B_ID],
-        projectionSetId: PROJECTION_SET_ID,
+        claimedFantasyTeamId: null,
+        slotRules: [],
+        rosterSnapshotIds: [],
+        projectionSetIds: [],
+        scoringProfileChecksum: null,
+        marketSignalsChecksum: null,
+        marketSignalAsOf: null,
+        availabilityChecksum: null,
         availabilityAsOf: null,
+        modeledFactsChecksum: null,
       }),
     );
   });
@@ -939,14 +1892,14 @@ describe("InSeasonDecisionSnapshot ADR 0003 provenance", () => {
   });
 });
 
-// Frozen by Task 3.1. Any change here means a refactor altered snapshot output.
-const SNAPSHOT_FINGERPRINT = "a1b7ecffa50f07e33ecbc61029943cc8a433d327e5d8aec47ac94343646b2c2a";
+// Any intentional response-contract change must renew this only after semantic assertions pass.
+const SNAPSHOT_FINGERPRINT = "9d8481b12f47dcc3d6c73818abd37202c038898b403c51d0f09c60f9bff1b09c";
 /**
- * The same fixture's fingerprint before the snapshot carried ADR 0003 provenance. Stripping the two
- * fields it gained has to reproduce this byte for byte: adding provenance may not move anything else.
+ * A second guard strips the generated provenance fields so changes elsewhere in the response remain
+ * independently visible.
  */
 const SNAPSHOT_FINGERPRINT_WITHOUT_PROVENANCE =
-  "70b8b600588669c3735c5fce346efd11c396d1414af918072431195f3627b9e6";
+  "238358ac0a4d6edd63b43d7f1504ec287683c3fbb614153bafdf0b0be2f985d7";
 
 describe("InSeasonDecisionService snapshot stability", () => {
   it("produces a byte-identical snapshot for the frozen fixture", async () => {
@@ -958,7 +1911,7 @@ describe("InSeasonDecisionService snapshot stability", () => {
     expect(createHash("sha256").update(serialized).digest("hex")).toBe(SNAPSHOT_FINGERPRINT);
   });
 
-  it("changed from the pre-provenance fingerprint by exactly the two added fields", async () => {
+  it("keeps the response outside generated provenance byte-identical", async () => {
     const snapshot = await snapshotFrom(new FakeRepository());
     const { algorithmVersion, inputChecksum, ...rest } = snapshot.provenance;
     expect(algorithmVersion).toBe(RECOMMENDATION_ALGORITHM_VERSION);
@@ -1081,8 +2034,6 @@ describe("evaluateTradePackage", () => {
     expect(evaluation.diagnostics.map((item) => item.code)).toContain("NO_LEGAL_FORCED_DROP");
   });
 });
-
-const ROS_SET_ID = "60000000-0000-4000-8000-000000000002";
 
 describe("resolveTradeHorizons", () => {
   it("blends the weekly and rest-of-season horizons when a compatible release is supplied", () => {

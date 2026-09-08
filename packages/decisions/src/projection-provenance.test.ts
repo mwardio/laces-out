@@ -86,6 +86,24 @@ describe("projectionTimestampProvenance", () => {
     expect(projectionFreshnessObservedAt(row, provenance)).toEqual(generatedAt);
   });
 
+  it("uses the explicit ROS model cutoff instead of its later publication time", () => {
+    const modelCutoff = new Date("2026-09-15T09:30:00.000Z");
+    const row = {
+      source: "laces-out-first-party-ros",
+      asOfAt: modelCutoff,
+      fetchedAt: SOURCE_TIME,
+      createdAt: IMPORT_TIME,
+      metadata: {},
+    };
+
+    expect(projectionTimestampProvenance(row)).toEqual({
+      sourceObservedAt: modelCutoff,
+      sourceObservedAtStatus: "verified",
+      importedAt: IMPORT_TIME,
+    });
+    expect(projectionFreshnessObservedAt(row)).toEqual(modelCutoff);
+  });
+
   it("continues to judge imported projections from verified source time", () => {
     const row = {
       source: "trusted-weekly-model",

@@ -325,13 +325,27 @@ export function evaluateWaiverMoves(input: EvaluateWaiversInput): WaiverEvaluati
         (left, right) =>
           Math.abs(right.weight * right.totalDelta) - Math.abs(left.weight * left.totalDelta),
       )[0]!;
+      const moveDescription = drop
+        ? `Adding ${candidate.name} and dropping ${drop.name}`
+        : `Adding ${candidate.name} to an open roster spot`;
+      const valueChange =
+        weightedDelta > 1e-9
+          ? `improves weighted roster value by ${weightedDelta.toFixed(2)} points`
+          : weightedDelta < -1e-9
+            ? `reduces weighted roster value by ${Math.abs(weightedDelta).toFixed(2)} points`
+            : "leaves weighted roster value unchanged";
+      const strongestHorizonDetail =
+        horizonDeltas.length > 1
+          ? ` Of the modeled horizons, ${strongest.label} contributes the largest change (${strongest.totalDelta >= 0 ? "+" : ""}${strongest.totalDelta.toFixed(2)} points).`
+          : "";
+      const singleHorizonLabel = horizonDeltas.length === 1 ? ` (${strongest.label})` : "";
       allEvaluations.push({
         addPlayerId: candidate.id,
         dropPlayerId: drop?.id ?? null,
         weightedDelta,
         horizonDeltas,
         improvesRoster: weightedDelta > 1e-9,
-        explanation: `${candidate.name} for ${drop?.name ?? "an open roster spot"} changes weighted roster value by ${weightedDelta.toFixed(2)}; the largest effect is ${strongest.label} (${strongest.totalDelta >= 0 ? "+" : ""}${strongest.totalDelta.toFixed(2)})`,
+        explanation: `${moveDescription} ${valueChange}${singleHorizonLabel}.${strongestHorizonDetail}`,
       });
     }
   }

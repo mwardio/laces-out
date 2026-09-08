@@ -19,6 +19,7 @@ const base: RecommendationRunChecksumInput = {
   projectionSetIds: ["set-2", "set-1"],
   marketSignalAsOf: "2026-09-10T11:00:00.000Z",
   availabilityAsOf: null,
+  sourceSnapshotChecksum: "a".repeat(64),
 };
 
 describe("recommendationInputChecksum", () => {
@@ -52,6 +53,9 @@ describe("recommendationInputChecksum", () => {
     expect(recommendationInputChecksum({ ...base, marketSignalAsOf: null })).not.toBe(reference);
     expect(
       recommendationInputChecksum({ ...base, availabilityAsOf: "2026-09-10T10:00:00.000Z" }),
+    ).not.toBe(reference);
+    expect(
+      recommendationInputChecksum({ ...base, sourceSnapshotChecksum: "b".repeat(64) }),
     ).not.toBe(reference);
   });
 
@@ -108,6 +112,7 @@ describe("recommendationRunProvenance", () => {
       week: 3,
       projectionSetIds: ["set-1", "set-2"],
       rosterSnapshotIds: ["snapshot-a", "snapshot-b"],
+      sourceSnapshotChecksum: "a".repeat(64),
       freshness,
       leagueLastSyncedAt: "2026-09-10T11:30:00.000Z",
       rosterEffectiveAt: "2026-09-10T11:00:00.000Z",

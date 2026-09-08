@@ -83,7 +83,16 @@ export function materialAction(action: unknown): unknown {
   if (action !== null && typeof action === "object") {
     const result: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(action as Record<string, unknown>)) {
-      if (key === "explanation") continue;
+      if (
+        key === "explanation" ||
+        key === "rationale" ||
+        key === "projectionSet" ||
+        key === "projectionFreshness" ||
+        key === "market" ||
+        key === "faab"
+      ) {
+        continue;
+      }
       const material = materialAction(value);
       if (material !== null) result[key] = material;
     }

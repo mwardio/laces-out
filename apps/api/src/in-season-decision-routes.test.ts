@@ -76,6 +76,16 @@ const availableWaiverSnapshot: InSeasonDecisionSnapshot = {
     state: "available",
     candidateCount: 24,
     evaluatedMoveCount: 312,
+    dropCandidates: [
+      {
+        id: "70000000-0000-4000-8000-000000000002",
+        name: "Outgoing Player",
+        positions: ["WR"],
+        nflTeam: "DET",
+        status: "ACTIVE",
+        projectedPoints: 8.1,
+      },
+    ],
     recommendations: [
       {
         add: {
@@ -99,6 +109,14 @@ const availableWaiverSnapshot: InSeasonDecisionSnapshot = {
         faab: null,
         market: null,
         rationale: "Incoming Player for Outgoing Player improves the modeled roster.",
+        dropComparisons: [
+          {
+            dropPlayerId: "70000000-0000-4000-8000-000000000002",
+            weightedGain: 3.49,
+            lineupGain: 1.2,
+            faab: null,
+          },
+        ],
       },
     ],
     execution: {
@@ -108,6 +126,15 @@ const availableWaiverSnapshot: InSeasonDecisionSnapshot = {
       url: "https://fantasy.espn.com/football/league?leagueId=24681012",
     },
     notes: [],
+    restOfSeason: {
+      state: "unavailable",
+      reasons: [
+        {
+          code: "PROJECTIONS_MISSING",
+          message: "No compatible rest-of-season projection release is available.",
+        },
+      ],
+    },
   },
 };
 
@@ -218,6 +245,15 @@ describe("in-season decision route", () => {
       drop: { name: "Outgoing Player", projectedPoints: 8.1 },
       weightedGain: 3.49,
       lineupGain: 1.2,
+    });
+    expect(body.waivers.restOfSeason).toEqual({
+      state: "unavailable",
+      reasons: [
+        {
+          code: "PROJECTIONS_MISSING",
+          message: "No compatible rest-of-season projection release is available.",
+        },
+      ],
     });
     await app.close();
   });

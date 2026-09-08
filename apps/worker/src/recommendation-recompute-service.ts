@@ -18,14 +18,13 @@ import {
   leagueMemberships,
   leagueSeasons,
   leagueSupplementalSnapshots,
-  playerMarketObservations,
   recommendationRuns,
   recommendations,
   rosterSlotRules,
   rosterSnapshots,
   type Database,
 } from "@laces-out/db";
-import { and, asc, desc, eq, isNotNull } from "drizzle-orm";
+import { and, asc, desc, eq } from "drizzle-orm";
 
 import {
   drizzleRecommendationDelta,
@@ -145,6 +144,20 @@ function checksum(value: unknown): string {
     .digest("hex");
 }
 
+function latestWaiverMarketAsOf(snapshot: InSeasonDecisionSnapshot): string | null {
+  if (snapshot.waivers.state !== "available") return null;
+  const rosMoves =
+    snapshot.waivers.restOfSeason.state === "available"
+      ? snapshot.waivers.restOfSeason.recommendations
+      : [];
+  return (
+    [...snapshot.waivers.recommendations, ...rosMoves]
+      .flatMap((move) => (move.market ? [move.market.observedAt] : []))
+      .toSorted()
+      .at(-1) ?? null
+  );
+}
+
 function entriesFrom(section: unknown): readonly RecommendationEntry[] {
   if (section === null || typeof section !== "object") return [];
   const state: unknown = (section as { state?: unknown }).state;
@@ -161,11 +174,45 @@ function entriesFrom(section: unknown): readonly RecommendationEntry[] {
   }));
 }
 
+/** Persists both independent waiver rankings with an explicit horizon on every action. */
+export function waiverEntriesFrom(
+  section: InSeasonDecisionSnapshot["waivers"],
+  provenance: InSeasonDecisionSnapshot["provenance"],
+): readonly RecommendationEntry[] {
+  if (section.state !== "available") return [];
+  const weekly = section.recommendations.map((move, index) => ({
+    horizon: "week" as const,
+    horizonRank: index + 1,
+    projectionSet: provenance.projectionSet,
+    projectionFreshness: provenance.projectionFreshness,
+    move,
+  }));
+  const ros = section.restOfSeason;
+  const restOfSeason =
+    ros.state === "available"
+      ? ros.recommendations.map((move, index) => ({
+          horizon: "rest-of-season" as const,
+          horizonRank: index + 1,
+          windowStartWeek: ros.windowStartWeek,
+          windowEndWeek: ros.windowEndWeek,
+          projectionSet: ros.projectionSet,
+          projectionFreshness: ros.projectionFreshness,
+          move,
+        }))
+      : [];
+  return [...weekly, ...restOfSeason].slice(0, 64).map((item, index) => ({
+    rank: index + 1,
+    action: item,
+    explanation: item.move.rationale,
+    expectedValueDelta: item.move.weightedGain,
+  }));
+}
+
 /**
  * Builds the run-identity inputs and the engine sections for one claimed team.
  *
  * The settings blob and the slot rules are the "exact settings" ADR 0003 asks a run to retain; the
- * roster snapshot ids and the projection set id are the roster and projection versions. They are
+ * roster snapshot ids and projection set ids are the roster and projection versions. They are
  * hashed rather than stored verbatim so the persisted row stays small and comparable.
  */
 export class DecisionRecommendationSnapshotSource {
@@ -223,34 +270,46 @@ export class DecisionRecommendationSnapshotSource {
       .orderBy(asc(rosterSlotRules.slotCode))
       .limit(MAX_SLOT_RULES);
     const rosterSnapshotRows = await this.#database
-      .select({ id: rosterSnapshots.id })
+      .selectDistinctOn([rosterSnapshots.teamId], { id: rosterSnapshots.id })
       .from(rosterSnapshots)
       .innerJoin(fantasyTeams, eq(fantasyTeams.id, rosterSnapshots.teamId))
       .where(eq(fantasyTeams.leagueSeasonId, request.leagueSeasonId))
-      .orderBy(desc(rosterSnapshots.effectiveAt))
+      .orderBy(rosterSnapshots.teamId, desc(rosterSnapshots.effectiveAt), desc(rosterSnapshots.id))
       .limit(MAX_ROSTER_SNAPSHOTS);
-    const [marketRow] = await this.#database
-      .select({ observedAt: playerMarketObservations.observedAt })
-      .from(playerMarketObservations)
-      .where(isNotNull(playerMarketObservations.playerId))
-      .orderBy(desc(playerMarketObservations.observedAt))
-      .limit(1);
-    const [availabilityRow] = await this.#database
-      .select({ effectiveAt: leagueSupplementalSnapshots.effectiveAt })
-      .from(leagueSupplementalSnapshots)
-      .where(eq(leagueSupplementalSnapshots.leagueSeasonId, request.leagueSeasonId))
-      .orderBy(desc(leagueSupplementalSnapshots.effectiveAt))
-      .limit(1);
+    const [availabilityRow] =
+      snapshot.league.provider === "espn"
+        ? await this.#database
+            .select({ effectiveAt: leagueSupplementalSnapshots.effectiveAt })
+            .from(leagueSupplementalSnapshots)
+            .where(
+              and(
+                eq(leagueSupplementalSnapshots.leagueSeasonId, request.leagueSeasonId),
+                eq(leagueSupplementalSnapshots.kind, "available-players"),
+                ...(snapshot.league.week === null
+                  ? []
+                  : [eq(leagueSupplementalSnapshots.asOfWeek, snapshot.league.week)]),
+              ),
+            )
+            .orderBy(desc(leagueSupplementalSnapshots.effectiveAt))
+            .limit(1)
+        : [];
 
     const provenance: InSeasonDecisionSnapshot["provenance"] = snapshot.provenance;
-    const projectionSetIds = provenance.projectionSet ? [provenance.projectionSet.id] : [];
+    const rosProjectionSetId =
+      snapshot.waivers.state === "available" && snapshot.waivers.restOfSeason.state === "available"
+        ? snapshot.waivers.restOfSeason.projectionSet.id
+        : null;
+    const projectionSetIds = [provenance.projectionSet?.id, rosProjectionSetId].filter(
+      (id): id is string => id !== null && id !== undefined,
+    );
     return {
+      sourceSnapshotChecksum: provenance.inputChecksum,
       week: snapshot.league.week,
       scoringRulesChecksum: checksum(seasonRow?.settings ?? null),
       slotRulesChecksum: checksum(slotRuleRows),
       rosterSnapshotIds: rosterSnapshotRows.map((row) => row.id),
       projectionSetIds,
-      marketSignalAsOf: marketRow?.observedAt.toISOString() ?? null,
+      marketSignalAsOf: latestWaiverMarketAsOf(snapshot),
       availabilityAsOf: availabilityRow?.effectiveAt.toISOString() ?? null,
       leagueLastSyncedAt: provenance.leagueLastSyncedAt,
       rosterEffectiveAt: provenance.rosterEffectiveAt,
@@ -258,7 +317,7 @@ export class DecisionRecommendationSnapshotSource {
       warnings: [],
       sections: {
         lineup: entriesFrom(snapshot.lineup),
-        waiver: entriesFrom(snapshot.waivers),
+        waiver: waiverEntriesFrom(snapshot.waivers, provenance),
         trade: entriesFrom(snapshot.trades),
       },
     };
@@ -347,6 +406,9 @@ export class DrizzleRecommendationRunWriter implements RecommendationRunWriter {
             runId,
             rank: entry.rank,
             action: entry.action,
+            expectedValueDelta:
+              entry.expectedValueDelta == null ? null : String(entry.expectedValueDelta),
+            confidence: entry.confidence == null ? null : String(entry.confidence),
             explanation: entry.explanation,
             // Every recommendation carries the run's warnings, including the visibility restriction.
             warnings: [...input.provenance.warnings],

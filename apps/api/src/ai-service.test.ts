@@ -558,6 +558,46 @@ describe("AI service", () => {
     expect(repository.usage).toHaveLength(0);
   });
 
+  it("does not short-circuit a waiver scan when only the ROS view has a worthwhile move", async () => {
+    const complete = vi.fn((input: AiCompletionInput) => {
+      void input;
+      return Promise.resolve({
+        text: "ROS waiver target",
+        requestId: "ros-waiver-request",
+        inputTokens: 20,
+        outputTokens: 6,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+      });
+    });
+    const { service } = serviceFixture(
+      { complete },
+      new MemoryAiRepository(),
+      { apiKey: "managed-gemini-secret", dailyRequestLimit: 50, maxOutputTokens: 2000 },
+      {
+        lineup: { state: "available", changes: [] },
+        waivers: {
+          state: "available",
+          recommendations: [],
+          restOfSeason: { state: "available", recommendations: [{ weightedGain: 12 }] },
+        },
+        trades: { state: "available", bestForMe: [], fairest: [] },
+      },
+    );
+
+    const response = await service.generateFeature({
+      userId: USER_ID,
+      leagueId: LEAGUE_ID,
+      feature: "waiver-scan",
+    });
+
+    expect(response.outcome).toBe("generated");
+    expect(complete).toHaveBeenCalledTimes(1);
+    expect(complete.mock.calls[0]?.[0].prompt).toContain(
+      "never add, average, or directly compare Week and ROS point magnitudes",
+    );
+  });
+
   it("uses feature-specific instructions and records the selected job", async () => {
     const complete = vi.fn((input: AiCompletionInput) => {
       void input;

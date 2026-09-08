@@ -1947,6 +1947,36 @@ const faabRangeSchema = z
     recommended: z.number().int().nonnegative(),
     high: z.number().int().nonnegative(),
   })
+  .strict()
+  .superRefine((range, context) => {
+    if (range.low > range.recommended || range.recommended > range.high) {
+      context.addIssue({
+        code: "custom",
+        path: ["recommended"],
+        message: "FAAB guidance must satisfy low <= recommended <= high",
+      });
+    }
+  });
+
+const decisionProjectionSetReferenceSchema = z
+  .object({
+    id: z.string().uuid(),
+    source: z.string().min(1),
+    version: z.string().min(1),
+    horizon: z.string().min(1),
+    sourceObservedAt: z.iso.datetime().nullable(),
+    sourceObservedAtStatus: projectionSourceObservedAtStatusSchema,
+    importedAt: z.iso.datetime(),
+  })
+  .strict();
+
+const waiverDropComparisonSchema = z
+  .object({
+    dropPlayerId: z.uuid(),
+    weightedGain: z.number().finite(),
+    lineupGain: z.number().finite(),
+    faab: faabRangeSchema.nullable(),
+  })
   .strict();
 
 const waiverMoveDecisionSchema = z
@@ -1966,22 +1996,207 @@ const waiverMoveDecisionSchema = z
       .strict()
       .nullable(),
     rationale: z.string().min(1),
+    /** Every legal impact for this target, keyed to the section's selectable drop candidates. */
+    dropComparisons: z.array(waiverDropComparisonSchema).min(1).max(64),
   })
   .strict();
 
-export const waiverDecisionSectionSchema = z.discriminatedUnion("state", [
-  unavailableDecisionSectionSchema,
-  z
-    .object({
-      state: z.literal("available"),
-      candidateCount: z.number().int().nonnegative(),
-      evaluatedMoveCount: z.number().int().nonnegative(),
-      recommendations: z.array(waiverMoveDecisionSchema).max(8),
-      execution: decisionExecutionSchema,
-      notes: z.array(z.string()),
-    })
-    .strict(),
-]);
+const waiverDecisionViewFields = {
+  candidateCount: z.number().int().nonnegative(),
+  evaluatedMoveCount: z.number().int().nonnegative(),
+  /** Droppable roster players that form a legal pairing with at least one displayed target. */
+  dropCandidates: z.array(decisionPlayerSchema).max(64),
+  recommendations: z.array(waiverMoveDecisionSchema).max(8),
+  notes: z.array(z.string()),
+} as const;
+
+type WaiverDecisionViewForValidation = {
+  readonly dropCandidates: readonly { readonly id: string }[];
+  readonly recommendations: readonly {
+    readonly add: { readonly id: string };
+    readonly drop: { readonly id: string };
+    readonly weightedGain: number;
+    readonly lineupGain: number;
+    readonly faab: {
+      readonly low: number;
+      readonly recommended: number;
+      readonly high: number;
+    } | null;
+    readonly dropComparisons: readonly {
+      readonly dropPlayerId: string;
+      readonly weightedGain: number;
+      readonly lineupGain: number;
+      readonly faab: {
+        readonly low: number;
+        readonly recommended: number;
+        readonly high: number;
+      } | null;
+    }[];
+  }[];
+};
+
+function validateWaiverDecisionView(
+  view: WaiverDecisionViewForValidation,
+  context: z.RefinementCtx,
+): void {
+  const dropCandidateIds = new Set<string>();
+  const recommendationAddIds = new Set<string>();
+  const referencedDropIds = new Set<string>();
+  view.dropCandidates.forEach((player, index) => {
+    if (dropCandidateIds.has(player.id)) {
+      context.addIssue({
+        code: "custom",
+        path: ["dropCandidates", index, "id"],
+        message: "Drop candidates must be unique",
+      });
+    }
+    dropCandidateIds.add(player.id);
+  });
+  view.recommendations.forEach((recommendation, recommendationIndex) => {
+    const addId = recommendation.add.id;
+    if (recommendationAddIds.has(addId)) {
+      context.addIssue({
+        code: "custom",
+        path: ["recommendations", recommendationIndex, "add", "id"],
+        message: "Waiver targets must be unique within a view",
+      });
+    }
+    recommendationAddIds.add(addId);
+    if (dropCandidateIds.has(addId)) {
+      context.addIssue({
+        code: "custom",
+        path: ["recommendations", recommendationIndex, "add", "id"],
+        message: "A waiver target cannot also be a rostered drop candidate",
+      });
+    }
+    if (!dropCandidateIds.has(recommendation.drop.id)) {
+      context.addIssue({
+        code: "custom",
+        path: ["recommendations", recommendationIndex, "drop", "id"],
+        message: "The recommended drop must appear in dropCandidates",
+      });
+    }
+    const comparisonIds = new Set<string>();
+    recommendation.dropComparisons.forEach((comparison, comparisonIndex) => {
+      if (!dropCandidateIds.has(comparison.dropPlayerId)) {
+        context.addIssue({
+          code: "custom",
+          path: [
+            "recommendations",
+            recommendationIndex,
+            "dropComparisons",
+            comparisonIndex,
+            "dropPlayerId",
+          ],
+          message: "A drop comparison must reference a listed drop candidate",
+        });
+      }
+      if (comparisonIds.has(comparison.dropPlayerId)) {
+        context.addIssue({
+          code: "custom",
+          path: [
+            "recommendations",
+            recommendationIndex,
+            "dropComparisons",
+            comparisonIndex,
+            "dropPlayerId",
+          ],
+          message: "Drop comparisons must be unique per waiver target",
+        });
+      }
+      comparisonIds.add(comparison.dropPlayerId);
+      referencedDropIds.add(comparison.dropPlayerId);
+    });
+    if (!comparisonIds.has(recommendation.drop.id)) {
+      context.addIssue({
+        code: "custom",
+        path: ["recommendations", recommendationIndex, "dropComparisons"],
+        message: "Drop comparisons must include the recommended drop",
+      });
+    } else {
+      const recommendedComparison = recommendation.dropComparisons.find(
+        (comparison) => comparison.dropPlayerId === recommendation.drop.id,
+      )!;
+      const recommendationFaab = recommendation.faab;
+      const comparisonFaab = recommendedComparison.faab;
+      const faabMatches =
+        recommendationFaab === null
+          ? comparisonFaab === null
+          : comparisonFaab !== null &&
+            recommendationFaab.low === comparisonFaab.low &&
+            recommendationFaab.recommended === comparisonFaab.recommended &&
+            recommendationFaab.high === comparisonFaab.high;
+      if (
+        recommendedComparison.weightedGain !== recommendation.weightedGain ||
+        recommendedComparison.lineupGain !== recommendation.lineupGain ||
+        !faabMatches
+      ) {
+        context.addIssue({
+          code: "custom",
+          path: ["recommendations", recommendationIndex, "dropComparisons"],
+          message:
+            "The recommended-drop comparison must match the recommendation's impact and FAAB",
+        });
+      }
+    }
+  });
+  view.dropCandidates.forEach((player, index) => {
+    if (!referencedDropIds.has(player.id)) {
+      context.addIssue({
+        code: "custom",
+        path: ["dropCandidates", index, "id"],
+        message: "Every selectable drop candidate must have at least one legal comparison",
+      });
+    }
+  });
+}
+
+const restOfSeasonWaiverDecisionSchema = z
+  .discriminatedUnion("state", [
+    unavailableDecisionSectionSchema,
+    z
+      .object({
+        state: z.literal("available"),
+        label: z.string().min(1),
+        windowStartWeek: z.number().int().min(1).max(25),
+        windowEndWeek: z.number().int().min(1).max(25),
+        projectionSet: decisionProjectionSetReferenceSchema.extend({
+          horizon: z.literal("rest-of-season"),
+        }),
+        projectionFreshness: freshnessSchema,
+        ...waiverDecisionViewFields,
+      })
+      .strict(),
+  ])
+  .superRefine((view, context) => {
+    if (view.state !== "available") return;
+    if (view.windowEndWeek < view.windowStartWeek) {
+      context.addIssue({
+        code: "custom",
+        message: "Rest-of-season window must end on or after its start week",
+        path: ["windowEndWeek"],
+      });
+    }
+    validateWaiverDecisionView(view, context);
+  });
+
+export const waiverDecisionSectionSchema = z
+  .discriminatedUnion("state", [
+    unavailableDecisionSectionSchema,
+    z
+      .object({
+        state: z.literal("available"),
+        ...waiverDecisionViewFields,
+        execution: decisionExecutionSchema,
+        /** Independent ROS rankings; the existing top-level fields remain the weekly view. */
+        restOfSeason: restOfSeasonWaiverDecisionSchema,
+      })
+      .strict(),
+  ])
+  .superRefine((section, context) => {
+    if (section.state !== "available") return;
+    validateWaiverDecisionView(section, context);
+  });
 export type WaiverDecisionSection = z.infer<typeof waiverDecisionSectionSchema>;
 
 export const tradeDecisionSectionSchema = z.discriminatedUnion("state", [
@@ -2028,18 +2243,7 @@ export const inSeasonDecisionSnapshotSchema = z
         inputChecksum: z.string().regex(/^[0-9a-f]{64}$/u),
         leagueLastSyncedAt: z.iso.datetime().nullable(),
         rosterEffectiveAt: z.iso.datetime().nullable(),
-        projectionSet: z
-          .object({
-            id: z.string().uuid(),
-            source: z.string().min(1),
-            version: z.string().min(1),
-            horizon: z.string().min(1),
-            sourceObservedAt: z.iso.datetime().nullable(),
-            sourceObservedAtStatus: projectionSourceObservedAtStatusSchema,
-            importedAt: z.iso.datetime(),
-          })
-          .strict()
-          .nullable(),
+        projectionSet: decisionProjectionSetReferenceSchema.nullable(),
         projectionFreshness: freshnessSchema,
       })
       .strict(),

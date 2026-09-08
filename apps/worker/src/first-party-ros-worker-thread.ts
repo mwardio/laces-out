@@ -6,12 +6,35 @@ import type {
   FirstPartyRosLeagueTargetResult,
 } from "./first-party-ros-candidate-provider.js";
 import type {
+  FirstPartyRosCandidateProvider,
   FirstPartyRosCandidateContext,
   FirstPartyRosPublicationTarget,
 } from "./first-party-ros-projections.js";
 
 type WorkerResponse<Result> =
   { readonly ok: true; readonly result: Result } | { readonly ok: false; readonly error: string };
+
+/**
+ * Pins a long artifact build to the main thread's exact provider inputs. The second read closes the
+ * race where roster/crosswalk/source state changes after simulation starts but before results are
+ * handed back for publication.
+ */
+export async function buildVerifiedFirstPartyRosTargets(input: {
+  readonly provider: FirstPartyRosCandidateProvider;
+  readonly context: FirstPartyRosCandidateContext;
+}): Promise<readonly FirstPartyRosPublicationTarget[]> {
+  const checksumInput = { season: input.context.season, window: input.context.window };
+  const before = await input.provider.sourceChecksum(checksumInput);
+  if (before !== input.context.candidateProviderChecksum) {
+    throw new Error("ROS candidate inputs changed before artifact simulation started");
+  }
+  const targets = await input.provider.buildTargets(input.context);
+  const after = await input.provider.sourceChecksum(checksumInput);
+  if (after !== input.context.candidateProviderChecksum) {
+    throw new Error("ROS candidate inputs changed during artifact simulation");
+  }
+  return targets;
+}
 
 function runRosWorker<Input, Result>(input: {
   readonly entry: string;

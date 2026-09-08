@@ -16,14 +16,22 @@ import {
   calibrateHistoricalRosRole,
 } from "./first-party-ros-backtest.js";
 import {
+  applyFirstPartyRosPlayerAliases,
   buildFirstPartyRosLeagueTarget,
   currentFantasyPlayerPool,
   enumerateFirstPartyRosScoringMatchedLeagues,
   firstPartyRosArtifactOwnedLeagues,
   firstPartyRosCandidateSourceKeys,
+  firstPartyRosEffectiveRosterAliasPosition,
+  firstPartyRosPlayerAliasPlan,
+  firstPartyRosPlayerAliasPlansChecksum,
+  unmatchedCurrentFantasyPlayers,
   type FirstPartyRosScoringRuleRow,
 } from "./first-party-ros-candidate-provider.js";
-import { firstPartyAvailableProjectionComponents } from "./first-party-projections.js";
+import {
+  firstPartyAvailableProjectionComponents,
+  firstPartyDefensePlayerId,
+} from "./first-party-projections.js";
 import type { ProjectionScheduleFact } from "./first-party-projection-inputs.js";
 import {
   firstPartyRosArtifactScoringProfile,
@@ -342,6 +350,8 @@ describe("currentFantasyPlayerPool", () => {
 
     expect(keys).toContain("nflverse.stats-team-week.2026");
     expect(keys).toContain("nflverse.stats-team-week.2025");
+    expect(keys).toContain("nflverse.players");
+    expect(keys).toContain("sleeper.players");
   });
 
   it("builds a preseason candidate pool without fantasy-team roster snapshots", () => {
@@ -414,6 +424,52 @@ describe("currentFantasyPlayerPool", () => {
       rosterStatus: "ACT",
     });
     expect(pool).toHaveLength(6);
+  });
+
+  it("keeps unmatched active current players visible to the release-completeness audit", () => {
+    const unmatched = unmatchedCurrentFantasyPlayers(
+      [
+        {
+          externalPlayerId: "active-unmatched",
+          playerId: "older-match",
+          position: "WR",
+          season: 2026,
+          week: 4,
+          team: "BUF",
+          status: "ACT",
+        },
+        {
+          externalPlayerId: "active-unmatched",
+          playerId: null,
+          position: "WR",
+          season: 2026,
+          week: 5,
+          team: "BUF",
+          status: "ACT",
+        },
+        {
+          externalPlayerId: "latest-cut",
+          playerId: null,
+          position: "RB",
+          season: 2026,
+          week: 5,
+          team: "MIA",
+          status: "CUT",
+        },
+        {
+          externalPlayerId: "old-season",
+          playerId: null,
+          position: "QB",
+          season: 2025,
+          week: 18,
+          team: "NYJ",
+          status: "ACT",
+        },
+      ],
+      2026,
+    );
+
+    expect(unmatched).toEqual([{ externalPlayerId: "active-unmatched", positions: ["WR"] }]);
   });
 });
 
@@ -627,6 +683,7 @@ describe("buildFirstPartyRosLeagueTarget", () => {
     }[];
     matchedPositions?: readonly FirstPartyRosRailPosition[];
     supportedPositions?: readonly FirstPartyRosRailPosition[];
+    unmatchedCandidateCount?: number;
     window?: FirstPartyRosWindow;
     asOfAt?: Date;
   }) {
@@ -641,6 +698,7 @@ describe("buildFirstPartyRosLeagueTarget", () => {
       season: 2026,
       window: targetWindow,
       candidatePlayers: input.candidatePlayers,
+      unmatchedCandidateCount: input.unmatchedCandidateCount ?? 0,
       featureHistory: targetWindow.asOfWeek === 0 ? trainingHistory : featureHistory,
       calibration,
       defenseFeatureHistory: [],
@@ -690,6 +748,425 @@ describe("buildFirstPartyRosLeagueTarget", () => {
     // the two inputs it needs rather than the already-computed answer.
     expect(result.target!.leagueScoringProfile).toBe(scoringProfile);
     expect(result.target!.supportedPositions).toEqual(["QB", "RB", "WR", "TE", "K"]);
+  });
+
+  it("marks the target incomplete when a releasable live player has no internal identity", () => {
+    const result = run({
+      policy: ninePlusPolicy(),
+      candidatePlayers: [{ playerId: "wr-0", position: "WR", team: "BUF" }],
+      matchedPositions: ["WR"],
+      supportedPositions: ["WR"],
+      unmatchedCandidateCount: 1,
+    });
+
+    expect(result.skippedPlayers).toBe(1);
+    expect(result.target?.candidateUniverse).toMatchObject({
+      expectedPlayerCount: 2,
+      evaluatedPlayerCount: 1,
+      skippedPlayerCount: 1,
+      complete: false,
+    });
+  });
+
+  it("re-keys only the league persistence identity for an unambiguous offensive alias", () => {
+    const result = run({
+      policy: ninePlusPolicy(),
+      candidatePlayers: [{ playerId: "wr-0", position: "WR", team: "BUF" }],
+      matchedPositions: ["WR"],
+      supportedPositions: ["WR"],
+    });
+    if (!result.target) throw new Error("expected a target");
+    const canonicalPlayerId = "canonical-wr";
+    const sourcePlayer = result.target.released[0]!;
+    const canonicalTarget = {
+      ...result.target,
+      released: [
+        {
+          ...sourcePlayer,
+          playerId: canonicalPlayerId,
+          projection: {
+            ...sourcePlayer.projection,
+            playerId: canonicalPlayerId,
+          },
+        },
+      ],
+    };
+    const plan = firstPartyRosPlayerAliasPlan({
+      leagueSeasonId: "11111111-1111-4111-8111-111111111111",
+      rosterPlayers: [
+        {
+          playerId: "provider-wr",
+          fullName: "Provider Receiver",
+          position: "WR",
+          team: "BUF",
+        },
+      ],
+      canonicalPlayers: [
+        {
+          playerId: canonicalPlayerId,
+          fullName: "Canonical Receiver",
+          position: "WR",
+          team: "BUF",
+          gsisId: "00-0031234",
+        },
+      ],
+      externalIds: [
+        { playerId: "provider-wr", source: "espn", externalId: "1234" },
+        { playerId: canonicalPlayerId, source: "sleeper-espn", externalId: "1234" },
+      ],
+    });
+
+    const aliased = applyFirstPartyRosPlayerAliases(canonicalTarget, plan);
+
+    expect(aliased.candidateUniverse).toMatchObject({
+      complete: true,
+      playerAliasIssues: [],
+      playerAliases: [{ position: "WR", team: "BUF", canonicalPlayerId, playerId: "provider-wr" }],
+    });
+    expect(aliased.released[0]?.playerId).toBe("provider-wr");
+    // Model provenance remains honest: only the separate persistence ID changes.
+    expect(aliased.released[0]?.projection.playerId).toBe(canonicalPlayerId);
+  });
+
+  it("resolves a D/ST by unique canonical team and normalizes team aliases", () => {
+    const canonicalPlayerId = firstPartyDefensePlayerId("LAR");
+    const plan = firstPartyRosPlayerAliasPlan({
+      leagueSeasonId: "11111111-1111-4111-8111-111111111111",
+      rosterPlayers: [
+        {
+          playerId: "provider-rams-defense",
+          fullName: "Los Angeles Rams",
+          position: "D/ST",
+          team: "LA",
+        },
+      ],
+      canonicalPlayers: [
+        {
+          playerId: canonicalPlayerId,
+          fullName: "Los Angeles Rams",
+          position: "DST",
+          team: "LAR",
+        },
+      ],
+    });
+
+    expect(plan).toEqual({
+      aliases: [
+        {
+          position: "DST",
+          team: "LAR",
+          canonicalPlayerId,
+          playerId: "provider-rams-defense",
+        },
+      ],
+      issues: [],
+    });
+  });
+
+  it("fails closed for conflicting evidence, incompatible positions, and non-bijective aliases", () => {
+    const canonicalPlayers = [
+      {
+        playerId: "canonical-a",
+        fullName: "Same Player",
+        position: "WR",
+        team: "BUF",
+        gsisId: "gsis-a",
+      },
+      {
+        playerId: "canonical-b",
+        fullName: "Other Player",
+        position: "WR",
+        team: "BUF",
+        gsisId: "gsis-b",
+      },
+    ];
+    const plan = firstPartyRosPlayerAliasPlan({
+      leagueSeasonId: "11111111-1111-4111-8111-111111111111",
+      rosterPlayers: [
+        {
+          playerId: "conflict",
+          fullName: "Provider Conflict",
+          position: "WR",
+          team: "BUF",
+          gsisId: "gsis-a",
+        },
+        {
+          playerId: "wrong-position",
+          fullName: "Provider Wrong Position",
+          position: "RB",
+          team: "BUF",
+        },
+        {
+          playerId: "duplicate-a",
+          fullName: "Same Player",
+          position: "WR",
+          team: "BUF",
+        },
+        {
+          playerId: "duplicate-b",
+          fullName: "Same Player",
+          position: "WR",
+          team: "BUF",
+        },
+      ],
+      canonicalPlayers,
+      externalIds: [
+        { playerId: "conflict", source: "espn", externalId: "provider-b" },
+        { playerId: "wrong-position", source: "espn", externalId: "provider-b" },
+        { playerId: "canonical-b", source: "sleeper-espn", externalId: "provider-b" },
+      ],
+    });
+
+    expect(plan.aliases).toEqual([]);
+    expect(plan.issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ playerId: "conflict", code: "identity-evidence-conflict" }),
+        expect.objectContaining({ playerId: "wrong-position", code: "identity-incompatible" }),
+        expect.objectContaining({
+          playerId: "duplicate-a",
+          code: "canonical-identity-not-bijective",
+        }),
+        expect.objectContaining({
+          playerId: "duplicate-b",
+          code: "canonical-identity-not-bijective",
+        }),
+      ]),
+    );
+  });
+
+  it("honors league-scoped ESPN self assertions with direct ESPN fallback", () => {
+    const leagueSeasonId = "11111111-1111-4111-8111-111111111111";
+    const canonicalPlayers = [
+      {
+        playerId: "canonical-wr",
+        fullName: "Canonical Receiver",
+        position: "WR",
+        team: "BUF",
+        gsisId: "gsis-wr",
+      },
+    ];
+    const rosterPlayers = [
+      {
+        playerId: "asserted-wr",
+        fullName: "Provider Receiver",
+        position: "WR",
+        team: "BUF",
+      },
+    ];
+    const externalIds = [
+      {
+        playerId: "asserted-wr",
+        source: "espn-self-asserted",
+        externalId: `${leagueSeasonId}:9876`,
+      },
+      { playerId: "canonical-wr", source: "espn", externalId: "9876" },
+    ];
+
+    expect(
+      firstPartyRosPlayerAliasPlan({
+        leagueSeasonId,
+        rosterPlayers,
+        canonicalPlayers,
+        externalIds,
+      }).aliases,
+    ).toEqual([
+      {
+        position: "WR",
+        team: "BUF",
+        canonicalPlayerId: "canonical-wr",
+        playerId: "asserted-wr",
+      },
+    ]);
+    expect(
+      firstPartyRosPlayerAliasPlan({
+        leagueSeasonId: "22222222-2222-4222-8222-222222222222",
+        rosterPlayers,
+        canonicalPlayers,
+        externalIds,
+      }),
+    ).toMatchObject({
+      aliases: [],
+      issues: [{ position: "WR", playerId: "asserted-wr", code: "identity-unresolved" }],
+    });
+  });
+
+  it("uses exact NFKC name fallback only for trusted-GSIS canonical candidates", () => {
+    const base = {
+      leagueSeasonId: "11111111-1111-4111-8111-111111111111",
+      rosterPlayers: [
+        {
+          playerId: "provider-wr",
+          fullName: "Ａ.J. Receiver",
+          position: "WR",
+          team: "BUF",
+        },
+      ],
+    } as const;
+    const canonical = {
+      playerId: "canonical-wr",
+      fullName: "A.J. Receiver",
+      position: "WR",
+      team: "BUF",
+    } as const;
+
+    expect(
+      firstPartyRosPlayerAliasPlan({
+        ...base,
+        canonicalPlayers: [{ ...canonical, gsisId: null }],
+      }).issues[0]?.code,
+    ).toBe("identity-unresolved");
+    expect(
+      firstPartyRosPlayerAliasPlan({
+        ...base,
+        canonicalPlayers: [{ ...canonical, gsisId: "gsis-wr" }],
+      }).aliases[0]?.canonicalPlayerId,
+    ).toBe("canonical-wr");
+  });
+
+  it("fails closed on conflicting GSIS facts even when only one maps to an active candidate", () => {
+    const plan = firstPartyRosPlayerAliasPlan({
+      leagueSeasonId: "11111111-1111-4111-8111-111111111111",
+      rosterPlayers: [
+        {
+          playerId: "provider-wr",
+          fullName: "Receiver",
+          position: "WR",
+          team: "BUF",
+          gsisId: "gsis-active",
+        },
+      ],
+      canonicalPlayers: [
+        {
+          playerId: "canonical-wr",
+          fullName: "Receiver",
+          position: "WR",
+          team: "BUF",
+          gsisId: "gsis-active",
+        },
+      ],
+      gsisEvidence: [{ playerId: "provider-wr", gsisId: "gsis-stale" }],
+    });
+
+    expect(plan.aliases).toEqual([]);
+    expect(plan.issues).toEqual([
+      { position: "WR", playerId: "provider-wr", code: "identity-ambiguous" },
+    ]);
+  });
+
+  it("does not fall back to an exact name when stronger identity evidence is unresolved", () => {
+    const common = {
+      leagueSeasonId: "11111111-1111-4111-8111-111111111111",
+      rosterPlayers: [
+        {
+          playerId: "provider-wr",
+          fullName: "Exact Receiver",
+          position: "WR",
+          team: "BUF",
+          gsisId: "gsis-not-in-candidate-pool",
+        },
+      ],
+      canonicalPlayers: [
+        {
+          playerId: "canonical-wr",
+          fullName: "Exact Receiver",
+          position: "WR",
+          team: "BUF",
+          gsisId: "gsis-canonical",
+        },
+      ],
+    } as const;
+
+    expect(firstPartyRosPlayerAliasPlan(common)).toMatchObject({
+      aliases: [],
+      issues: [{ position: "WR", playerId: "provider-wr", code: "identity-unresolved" }],
+    });
+    expect(
+      firstPartyRosPlayerAliasPlan({
+        ...common,
+        rosterPlayers: [{ ...common.rosterPlayers[0], gsisId: null }],
+        externalIds: [{ playerId: "provider-wr", source: "espn", externalId: "unmapped" }],
+      }),
+    ).toMatchObject({
+      aliases: [],
+      issues: [{ position: "WR", playerId: "provider-wr", code: "identity-unresolved" }],
+    });
+  });
+
+  it("keeps alias issues position-scoped when applying a plan", () => {
+    const result = run({
+      policy: ninePlusPolicy(),
+      candidatePlayers: [{ playerId: "wr-0", position: "WR", team: "BUF" }],
+      matchedPositions: ["WR"],
+      supportedPositions: ["WR"],
+    });
+    if (!result.target) throw new Error("expected a target");
+
+    const applied = applyFirstPartyRosPlayerAliases(result.target, {
+      aliases: [],
+      issues: [
+        { position: "WR", playerId: "ambiguous-wr", code: "effective-position-ambiguous" },
+        { position: "RB", playerId: "ambiguous-rb", code: "effective-position-ambiguous" },
+      ],
+    });
+
+    expect(applied.candidateUniverse.complete).toBe(false);
+    expect(applied.candidateUniverse.playerAliasIssues).toEqual([
+      { position: "WR", playerId: "ambiguous-wr", code: "effective-position-ambiguous" },
+    ]);
+  });
+
+  it("does not substitute eligible-only fantasy positions for provider alias catalog position", () => {
+    expect(
+      firstPartyRosEffectiveRosterAliasPosition({
+        playerId: "two-way-player",
+        primaryPosition: "DB",
+        eligiblePositions: ["WR"],
+        candidatePositionByPlayerId: new Map(),
+      }),
+    ).toEqual({ ambiguousPositions: ["WR"] });
+    expect(
+      firstPartyRosEffectiveRosterAliasPosition({
+        playerId: "canonical-two-way-player",
+        primaryPosition: "DB",
+        eligiblePositions: ["WR"],
+        candidatePositionByPlayerId: new Map([["canonical-two-way-player", "WR"]]),
+      }),
+    ).toEqual({ position: "WR", ambiguousPositions: [] });
+  });
+
+  it("fingerprints resolved league alias plans without depending on insertion order", () => {
+    const alias = {
+      position: "WR" as const,
+      team: "BUF",
+      canonicalPlayerId: "canonical-wr",
+      playerId: "provider-wr",
+    };
+    const issue = {
+      position: "RB" as const,
+      playerId: "provider-rb",
+      code: "identity-unresolved",
+    };
+    const first = firstPartyRosPlayerAliasPlansChecksum(
+      new Map([
+        ["league-b", { aliases: [], issues: [issue] }],
+        ["league-a", { aliases: [alias], issues: [] }],
+      ]),
+    );
+    const reordered = firstPartyRosPlayerAliasPlansChecksum(
+      new Map([
+        ["league-a", { aliases: [alias], issues: [] }],
+        ["league-b", { aliases: [], issues: [issue] }],
+      ]),
+    );
+    const changed = firstPartyRosPlayerAliasPlansChecksum(
+      new Map([
+        ["league-a", { aliases: [{ ...alias, playerId: "provider-wr-new" }], issues: [] }],
+        ["league-b", { aliases: [], issues: [issue] }],
+      ]),
+    );
+
+    expect(first).toBe(reordered);
+    expect(changed).not.toBe(first);
   });
 
   it("publishes veteran candidates before Week 1 without a fantasy roster", () => {

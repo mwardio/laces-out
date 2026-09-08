@@ -41,11 +41,14 @@ export type NflTeam = (typeof NFL_TEAMS)[number];
 
 /**
  * Converts source/provider aliases into the team-code vocabulary used by Laces Out contracts.
- * nflverse still emits `LA` for the Rams while fantasy providers use `LAR`.
+ * nflverse still emits `LA` for the Rams while fantasy providers use `LAR`; ESPN can emit `WSH`
+ * for Washington while the rest of the app uses `WAS`.
  */
 export function canonicalNflTeamCode(team: string): string {
   const normalized = team.trim().toUpperCase();
-  return normalized === "LA" ? "LAR" : normalized;
+  if (normalized === "LA") return "LAR";
+  if (normalized === "WSH") return "WAS";
+  return normalized;
 }
 
 export const PLAYER_STATUSES = [
