@@ -82,6 +82,7 @@ import {
   like,
   lte,
   max,
+  ne,
   or,
   sql,
   type SQL,
@@ -1017,8 +1018,8 @@ export const espnLiveDraftPulseCurrentAuctionSql = sql<unknown>`${draftProviderO
  */
 function pendingReconciliationCount(heldSince: Date): SQL<number> {
   return sql`count(*) filter (
-          where ${draftProviderObservations.result} = 'held'
-            and ${draftProviderObservations.receivedAt} > ${heldSince}
+          where ${eq(draftProviderObservations.result, "held")}
+            and ${gt(draftProviderObservations.receivedAt, heldSince)}
         )`.mapWith(Number);
 }
 
@@ -2103,12 +2104,16 @@ export class DrizzleEspnLiveDraftRepository implements EspnLiveDraftRepository {
 
     const heldSince = feed.lastMaterialEventAt ?? feed.createdAt;
     const standbySince = new Date(now.getTime() - ESPN_LIVE_DRAFT_LIMITS.disconnectedMs);
+    const nonActiveDevice =
+      feed.activeDeviceId === null
+        ? sql`true`
+        : ne(draftProviderObservations.deviceId, feed.activeDeviceId);
     const [counts] = await this.#database
       .select({
         pendingReconciliation: pendingReconciliationCount(heldSince),
         standbySources: sql`count(distinct ${draftProviderObservations.deviceId}) filter (
-          where ${draftProviderObservations.receivedAt} >= ${standbySince}
-            and ${draftProviderObservations.deviceId} is distinct from ${feed.activeDeviceId}::uuid
+          where ${gt(draftProviderObservations.receivedAt, standbySince)}
+            and ${nonActiveDevice}
         )`.mapWith(Number),
       })
       .from(draftProviderObservations)

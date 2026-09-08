@@ -425,6 +425,22 @@ describe.skipIf(!dockerAvailable)(
       }
     });
 
+    it("loads status for a new server-only feed with encoded timestamp filters", async () => {
+      await db
+        .update(draftProviderFeeds)
+        .set({ activeDeviceId: null, serverNextPollAt: NOW })
+        .where(eq(draftProviderFeeds.id, FEED_ID));
+
+      await expect(repository.loadFeedStatus(DRAFT_ID)).resolves.toMatchObject({
+        provider: "espn",
+        state: "waiting",
+        sourceMode: "server-results",
+        ageSeconds: null,
+        pendingReconciliation: 0,
+        standbySources: 0,
+      });
+    });
+
     it("rejects a forward plan after a concurrent manual append wins the draft lock", async () => {
       const before = await feedAndDraftState();
       const result = await raceWithWinningManualAppend(commitInput());
