@@ -159,6 +159,21 @@ The native implementation uses the contracts documented in the standalone
 [iOS automated-sync handoff](../ios/espn-automated-sync-handoff.md) and production
 [always-on sign-in handoff](../ios/espn-always-on-sync-handoff.md).
 
+### Server-session draft result assistance
+
+When encrypted server-session sync is enabled, an explicitly created ESPN-assisted room polls only
+`mDraftDetail`. Before the scheduled draft it sleeps until five minutes before start; while ESPN
+reports the draft in progress it checks the cumulative completed-pick list about every five
+seconds. Database leases coalesce requests from the API timer and every open client. Each completed
+selection or auction sale is identity-resolved and reconciled through the normal event-sourced
+draft engine before it can append to the shared ledger. The poller is read-only and never observes
+or submits nominations or bids.
+
+This result path is independent of `ESPN_LIVE_DRAFT_SYNC`. It is available under
+`ESPN_SERVER_SESSION_SYNC_ENABLED` because it uses the same encrypted, user-granted ESPN session as
+ordinary automatic league refreshes. The browser observer below remains the optional source for
+the current nomination and live high bid, and remains behind its separate release gate.
+
 ### Browser-local live draft observation
 
 Verified: implementation only. Not yet exercised against a real ESPN draft room.

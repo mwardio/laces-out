@@ -395,6 +395,9 @@ const completedDraftPayloadSchema = z
           .object({
             type: z.enum(["SNAKE", "AUCTION"]),
             auctionBudget: z.number().int().min(0).max(100_000),
+            date: epochMillisecondsSchema.nullable().optional(),
+            availableDate: epochMillisecondsSchema.nullable().optional(),
+            timePerSelection: z.number().int().positive().max(3_600).nullable().optional(),
           })
           .passthrough(),
       })
@@ -943,7 +946,14 @@ function normalizeCompletedDraft(
     draftType,
     budgetPerTeam: draftType === "auction" ? payload.settings.draftSettings.auctionBudget : null,
     state:
-      payload.draftDetail.drafted && !payload.draftDetail.inProgress ? "complete" : "in-progress",
+      payload.draftDetail.drafted && !payload.draftDetail.inProgress
+        ? "complete"
+        : payload.draftDetail.inProgress || picks.length > 0
+          ? "in-progress"
+          : "predraft",
+    scheduledAt: normalizedDate(payload.settings.draftSettings.date),
+    availableAt: normalizedDate(payload.settings.draftSettings.availableDate),
+    secondsPerSelection: payload.settings.draftSettings.timePerSelection ?? null,
     completedAt: normalizedDate(payload.draftDetail.completeDate),
     picks,
     warnings: [],

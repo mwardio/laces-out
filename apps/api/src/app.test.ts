@@ -412,7 +412,7 @@ describe("API", () => {
     await app.close();
   });
 
-  it("advertises Yahoo draft assistance only when the session and refresh services are installed", async () => {
+  it("advertises each provider's draft assistance only when its implementation is installed", async () => {
     const absent = await buildApp({
       environment: loadEnvironment({ NODE_ENV: "test" }),
       logger: false,
@@ -422,6 +422,8 @@ describe("API", () => {
       logger: false,
       draftSessions: {} as never,
       draftProviderRefresh: { refresh: () => Promise.resolve({}) },
+      yahooAssistedDraftAvailable: true,
+      espnAssistedDraftAvailable: true,
     });
 
     const absentHealth = healthResponseSchema.parse(
@@ -431,7 +433,9 @@ describe("API", () => {
       (await present.inject({ method: "GET", url: "/health/live" })).json(),
     );
     expect(absentHealth.mobileCapabilities).not.toContain("yahoo-assisted-draft-v1");
+    expect(absentHealth.mobileCapabilities).not.toContain("espn-assisted-draft-v1");
     expect(presentHealth.mobileCapabilities).toContain("yahoo-assisted-draft-v1");
+    expect(presentHealth.mobileCapabilities).toContain("espn-assisted-draft-v1");
     await absent.close();
     await present.close();
   });

@@ -133,7 +133,7 @@ function yahooSession(overrides: Readonly<Record<string, unknown>> = {}) {
 }
 
 describe("Yahoo-assisted draft contracts", () => {
-  it("admits only the explicit Yahoo transport, event provenance, and create opt-in", () => {
+  it("admits the explicit provider transports, event provenance, and create opt-ins", () => {
     expect(draftTransportSchema.parse("yahoo-assisted")).toBe("yahoo-assisted");
     expect(draftEventSourceSchema.parse("yahoo")).toBe("yahoo");
     expect(
@@ -153,11 +153,11 @@ describe("Yahoo-assisted draft contracts", () => {
     expect(draftTransportSchema.safeParse("yahoo-live").success).toBe(false);
     expect(draftEventSourceSchema.safeParse("yahoo-poll").success).toBe(false);
     expect(
-      draftSessionCreateRequestSchema.safeParse({
+      draftSessionCreateRequestSchema.parse({
         leagueSeasonId: LEAGUE_SEASON_ID,
         providerAssist: "espn",
-      }).success,
-    ).toBe(false);
+      }),
+    ).toEqual({ leagueSeasonId: LEAGUE_SEASON_ID, providerAssist: "espn" });
     expect(
       draftSessionCreateRequestSchema.safeParse({
         leagueSeasonId: LEAGUE_SEASON_ID,

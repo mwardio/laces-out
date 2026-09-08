@@ -45,7 +45,7 @@ const DISCONNECTED_SECONDS = ESPN_LIVE_DRAFT_LIMITS.disconnectedMs / 1000;
  * make Laces Out read ESPN; some league member's desktop Chrome has to be holding the draft room.
  */
 const DESKTOP_SOURCE_REQUIREMENT =
-  "Live picks require a league member's desktop Chrome with the ESPN draft room open.";
+  "Live nominations and bids require a league member's desktop Chrome with the ESPN draft room open.";
 
 const MANUAL_ENTRY_DETAIL =
   "Manual entries are shared with the league. No provider feed is attached.";
@@ -236,6 +236,14 @@ export function describeLiveDraftIssue(code: EspnLiveDraftIssueCode): string {
       return "An ESPN snapshot failed its integrity check and was ignored.";
     case "SESSION_NOT_READY":
       return "This room is not ready for live ESPN picks yet.";
+    case "PROVIDER_UNAVAILABLE":
+      return "The encrypted ESPN result source is temporarily unavailable.";
+    case "POLL_FAILED":
+      return "The latest ESPN result check failed and will retry automatically.";
+    case "CONCURRENT_LEDGER_CHANGE":
+      return "The room changed during an ESPN check, so the result will be compared again.";
+    case "COMPLETED_COUNT_MISMATCH":
+      return "ESPN's completed pick count differs from this room, so the result needs review.";
   }
 }
 
@@ -350,6 +358,22 @@ export function liveDraftHeading(state: LiveDraftEntryState): string {
 }
 
 function headingFor(state: LiveDraftEntryState, feed: DraftProviderFeedStatus | null): string {
+  if (feed?.provider === "espn" && feed.sourceMode === "server-results") {
+    switch (state) {
+      case "waiting":
+      case "ready":
+        return "Checking ESPN results";
+      case "live":
+        return "ESPN result sync";
+      case "stale":
+      case "paused":
+        return "ESPN check delayed";
+      case "attention":
+        return "ESPN result needs review";
+      default:
+        break;
+    }
+  }
   if (feed?.provider !== "yahoo") return HEADINGS[state];
   switch (state) {
     case "waiting":
@@ -448,10 +472,19 @@ function entryDetail(
   }
   switch (state) {
     case "ready":
+      if (feed.sourceMode === "server-results") {
+        return "ESPN completed-pick checks are ready. Current nominations and in-flight bids are not included in this view.";
+      }
       return `${provider} draft room is open in paired desktop Chrome.`;
     case "waiting":
+      if (feed.sourceMode === "server-results") {
+        return "Automatic ESPN completed-pick checks are scheduled. Current nominations and in-flight bids are not included in this view.";
+      }
       return `Open the ${provider} draft room in paired desktop Chrome.`;
     case "live":
+      if (feed.sourceMode === "server-results") {
+        return `${pluralize(feed.pickCount, "completed pick")} synchronized from ESPN. Current nominations and in-flight bids are not included in this view.`;
+      }
       return `${provider} is updating this room. ${pluralize(feed.pickCount, "pick")} accepted.`;
     case "paused":
       return `${provider} draft paused. The last accepted board is shown.`;
@@ -579,6 +612,9 @@ function transportChip(
       : "Yahoo-assisted checks · read-only · manual entry available";
   }
   const provider = providerLabel(feed.provider);
+  if (feed.sourceMode === "server-results") {
+    return `${provider} completed-pick checks · read-only`;
+  }
   if (state === "manual-backup") return `${provider} sync frozen · manual backup`;
   if (state === "stale" || state === "attention")
     return `${provider} live sync · read-only · needs a source`;
@@ -622,11 +658,14 @@ export function describeLiveDraft(input: LiveDraftStatusInput): LiveDraftStatus 
     : entryState === "stale" || entryState === "waiting"
       ? feed?.provider === "yahoo"
         ? "Yahoo checks retry automatically. Manual entry remains available."
-        : `Reopen or refocus the ${providerName} draft room in paired desktop Chrome.`
+        : feed?.provider === "espn" && feed.sourceMode === "server-results"
+          ? "ESPN result checks retry automatically. The last accepted board is shown."
+          : `Reopen or refocus the ${providerName} draft room in paired desktop Chrome.`
       : null;
 
   const sourceRequirement =
     feed?.provider === "espn" &&
+    feed.sourceMode !== "server-results" &&
     (entryState === "ready" || entryState === "waiting" || entryState === "stale")
       ? DESKTOP_SOURCE_REQUIREMENT
       : null;
@@ -679,9 +718,11 @@ export function describeLiveDraft(input: LiveDraftStatusInput): LiveDraftStatus 
                   : feed.state === "stale" || feed.state === "degraded"
                     ? "Yahoo checks backing off automatically"
                     : "Yahoo checks run periodically"
-              : input.streaming
-                ? "Live updates streaming"
-                : "Checking for updates every 5 seconds",
+              : feed.sourceMode === "server-results"
+                ? `Checking ESPN completed picks every ${feed.pollIntervalSeconds ?? 5} seconds during the draft`
+                : input.streaming
+                  ? "Live updates streaming"
+                  : "Checking for updates every 5 seconds",
           reconnectGuidance,
         };
 
@@ -800,23 +841,18 @@ function defaultCaption(session: DraftSessionSnapshot): string {
  * may reject setup when its release switch is off. Every other provider keeps the existing manual
  * promise until the API exposes a provider-specific setup capability.
  *
- * TODO(espn-live-draft): restore the ESPN branch when `ESPN_LIVE_DRAFT_SYNC` is turned on.
- *
- * ESPN gets the neutral line even though the code path exists, because this function
- * only knows the league's provider — the server reports `providerFeed: null` both when the flag
- * is off and when it is on with no source connected, so "ESPN" alone cannot tell the difference.
- * Promising live sync here while the flag is off would be a claim a manager could act on, and
- * draft day happens once. Restoring the branch needs the server to report capability rather than
- * this function inferring it; see the release gate in docs/provider-notes/espn.md.
- *
- * The sentence to restore, once capability is real and reported:
- *   "Manual event entry is persistent and shared. An ESPN draft can also drive this room live
- *    while a paired desktop Chrome keeps the ESPN draft room open."
+ * ESPN assistance is advertised only from the explicit health capability. The server-session
+ * path covers cumulative completed picks; it must not be described as live nomination/bid sync.
+ * The browser observer remains separately release-gated in docs/provider-notes/espn.md.
  */
 export function describeDraftSetupCapability(
   provider: string | null,
   yahooAssistSupported = false,
+  espnAssistSupported = false,
 ): string {
+  if (provider === "espn" && espnAssistSupported) {
+    return "Start a shared ESPN-assisted room with automatic completed-pick checks. Current nominations and in-flight bids remain manual until the separate live observer is enabled.";
+  }
   if (provider === "yahoo" && yahooAssistSupported) {
     return "Start a shared manual room, with optional read-only Yahoo-assisted checks.";
   }

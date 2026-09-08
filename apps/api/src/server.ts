@@ -30,6 +30,7 @@ import { DraftAnalysisService, DrizzleDraftProjectionSource } from "./draft-anal
 import { DraftSessionService, DrizzleDraftSessionRepository } from "./draft-session.js";
 import { DraftMarketService } from "./draft-market.js";
 import { EspnBridgeService } from "./espn-bridge.js";
+import { DrizzleEspnDraftPollRepository, EspnDraftPollService } from "./espn-draft-service.js";
 import { DrizzleEspnLiveDraftRepository } from "./espn-live-draft-persistence.js";
 import { EspnLiveDraftService } from "./espn-live-draft-service.js";
 import { DrizzleEspnRefreshRepository, EspnRefreshCoordinator } from "./espn-refresh.js";
@@ -109,6 +110,8 @@ const draftSessions = new DraftSessionService(
   {
     yahooDraftAssistEnabled:
       environment.YAHOO_AUTOMATED_SYNC_ENABLED && yahooConnection !== undefined,
+    espnDraftAssistEnabled:
+      environment.ESPN_SERVER_SESSION_SYNC_ENABLED && credentialKey !== undefined,
   },
 );
 const draftMarket = new DraftMarketService(database.db);
@@ -300,6 +303,29 @@ const yahooDraftPoll =
         tokens: yahooConnection,
       })
     : undefined;
+const espnDraftPoll =
+  environment.ESPN_SERVER_SESSION_SYNC_ENABLED && espnSessionConnections
+    ? new EspnDraftPollService({
+        repository: new DrizzleEspnDraftPollRepository(database.db),
+        sessions: draftSessions,
+        credentials: espnSessionConnections,
+      })
+    : undefined;
+const draftProviderRefresh =
+  yahooDraftPoll || espnDraftPoll
+    ? {
+        refresh: async (userId: string, draftId: string) => {
+          const session = await draftSessions.getSession(userId, draftId);
+          if (session.providerFeed?.provider === "espn" && espnDraftPoll) {
+            return espnDraftPoll.refresh(userId, draftId);
+          }
+          if (session.providerFeed?.provider === "yahoo" && yahooDraftPoll) {
+            return yahooDraftPoll.refresh(userId, draftId);
+          }
+          return session;
+        },
+      }
+    : undefined;
 const jobs = new PgBoss({
   connectionString: environment.DATABASE_URL,
   application_name: "fantasy-api-jobs",
@@ -347,7 +373,7 @@ const app = await buildApp({
   draftSessions,
   draftMarket,
   draftAnalysis,
-  ...(yahooDraftPoll ? { draftProviderRefresh: yahooDraftPoll } : {}),
+  ...(draftProviderRefresh ? { draftProviderRefresh } : {}),
   // Same service, two doors: bridge-authenticated ingest and the cookie-authenticated freeze.
   draftManualBackup: espnLiveDraft,
   espnBridge,
@@ -379,6 +405,8 @@ const app = await buildApp({
   ...(yahooConnection ? { yahooConnection } : {}),
   ...(yahooSync ? { yahooSync } : {}),
   yahooNativeConnectLandingAvailable: true,
+  espnAssistedDraftAvailable: espnDraftPoll !== undefined,
+  yahooAssistedDraftAvailable: yahooDraftPoll !== undefined,
   // Queue and schedule registration completed above; the worker uses this same fail-closed flag.
   yahooAutomatedSyncAvailable: environment.YAHOO_AUTOMATED_SYNC_ENABLED && yahooSync !== undefined,
   requireAuthentication: true,
@@ -413,7 +441,18 @@ const app = await buildApp({
   enqueueRecommendationRecompute: async ({ leagueSeasonId, kinds }) =>
     enqueueRecommendationRecompute(jobs, { leagueSeasonId, kinds }),
 });
+const espnDraftPollTimer =
+  espnDraftPoll === undefined
+    ? null
+    : setInterval(() => {
+        void espnDraftPoll.refreshDue().catch((error: unknown) => {
+          app.log.warn({ err: error }, "ESPN draft result sweep failed");
+        });
+      }, 2_000);
+espnDraftPollTimer?.unref();
+
 app.addHook("onClose", async () => {
+  if (espnDraftPollTimer !== null) clearInterval(espnDraftPollTimer);
   await jobs.stop({ graceful: true, timeout: 10_000 });
   await database.close();
 });

@@ -100,6 +100,10 @@ import {
   type ProviderPlayerCandidate,
   type ProviderTeamCandidate,
 } from "./espn-live-draft-identity.js";
+import {
+  ESPN_DRAFT_ACTIVE_POLL_INTERVAL_SECONDS,
+  ESPN_DRAFT_PREDRAFT_POLL_INTERVAL_SECONDS,
+} from "./espn-draft-service.js";
 import type {
   CommitProviderEventsInput,
   EspnLiveDraftRepository,
@@ -629,6 +633,9 @@ export interface EspnLiveDraftFeedProjection {
   readonly lastObservedAt: Date | null;
   /** Server receipt time of the most recent upload or lease heartbeat. Drives freshness. */
   readonly lastReceivedAt: Date | null;
+  /** Receipt time of the latest cumulative result accepted from the encrypted ESPN session. */
+  readonly serverLastSuccessfulAt?: Date | null;
+  readonly serverNextPollAt?: Date | null;
   readonly lastMaterialEventAt: Date | null;
   readonly lastPickCount: number;
   readonly manualBackupActive: boolean;
@@ -653,23 +660,65 @@ export function projectEspnLiveDraftFeedStatus(
   feed: EspnLiveDraftFeedProjection,
   now: Date,
 ): EspnLiveDraftFeedStatus {
-  const ageMs =
+  const browserAgeMs =
     feed.lastReceivedAt === null
       ? null
       : Math.max(0, now.getTime() - feed.lastReceivedAt.getTime());
-  const disconnected = ageMs !== null && ageMs > ESPN_LIVE_DRAFT_LIMITS.disconnectedMs;
+  const serverLastSuccessfulAt = feed.serverLastSuccessfulAt ?? null;
+  const serverAgeMs =
+    serverLastSuccessfulAt === null
+      ? null
+      : Math.max(0, now.getTime() - serverLastSuccessfulAt.getTime());
+  const browserFresh =
+    browserAgeMs !== null && browserAgeMs <= ESPN_LIVE_DRAFT_LIMITS.freshWindowMs;
+  const serverResultsFresh =
+    serverAgeMs !== null && serverAgeMs <= ESPN_DRAFT_ACTIVE_POLL_INTERVAL_SECONDS * 2_000 + 5_000;
+  const ageMs = [browserAgeMs, serverAgeMs]
+    .filter((age): age is number => age !== null)
+    .reduce<number | null>(
+      (youngest, age) => (youngest === null ? age : Math.min(youngest, age)),
+      null,
+    );
+  const sourceHasReported = browserAgeMs !== null || serverAgeMs !== null;
+  const noRecentSource =
+    sourceHasReported &&
+    (browserAgeMs === null || browserAgeMs > ESPN_LIVE_DRAFT_LIMITS.disconnectedMs) &&
+    (serverAgeMs === null ||
+      serverAgeMs > ESPN_DRAFT_PREDRAFT_POLL_INTERVAL_SECONDS * 2_000 + 5_000);
+  const intentionallyWaiting =
+    feed.state === "waiting" &&
+    feed.serverNextPollAt !== undefined &&
+    feed.serverNextPollAt !== null &&
+    feed.serverNextPollAt > now;
   const state: EspnLiveDraftFeedStatus["state"] =
-    feed.state === "complete" ? "complete" : disconnected ? "stale" : feed.state;
+    feed.state === "complete"
+      ? "complete"
+      : noRecentSource && !intentionallyWaiting
+        ? "stale"
+        : feed.state;
   const auction = espnLiveDraftTransientAuctionSchema.safeParse(feed.currentAuctionState);
   const issue = espnLiveDraftIssueCodeSchema.safeParse(feed.lastErrorCode);
+  const serverResultsConfigured = feed.serverNextPollAt !== undefined;
+  const sourceMode =
+    browserFresh && serverResultsFresh
+      ? "hybrid"
+      : browserFresh
+        ? "browser-live"
+        : serverResultsConfigured || serverLastSuccessfulAt !== null
+          ? "server-results"
+          : "none";
   return {
     provider: "espn",
     state,
     providerLeagueId: feed.providerLeagueId,
     season: feed.season,
-    fresh: ageMs !== null && ageMs <= ESPN_LIVE_DRAFT_LIMITS.freshWindowMs,
+    fresh: browserFresh || serverResultsFresh,
     ageSeconds: ageMs === null ? null : Math.round(ageMs / 100) / 10,
-    lastAcceptedAt: feed.lastObservedAt?.toISOString() ?? null,
+    lastAcceptedAt:
+      [feed.lastObservedAt, serverLastSuccessfulAt]
+        .filter((value): value is Date => value !== null)
+        .sort((left, right) => right.getTime() - left.getTime())[0]
+        ?.toISOString() ?? null,
     lastMaterialEventAt: feed.lastMaterialEventAt?.toISOString() ?? null,
     pickCount: feed.lastPickCount,
     unresolvedTeams: feed.unresolvedTeams,
@@ -679,7 +728,11 @@ export function projectEspnLiveDraftFeedStatus(
     standbySources: feed.standbySources,
     verification: feed.verification,
     lastIssueCode: issue.success ? issue.data : null,
-    currentAuction: auction.success ? auction.data : null,
+    currentAuction: browserFresh && auction.success ? auction.data : null,
+    sourceMode,
+    browserFresh,
+    serverResultsFresh,
+    pollIntervalSeconds: ESPN_DRAFT_ACTIVE_POLL_INTERVAL_SECONDS,
   };
 }
 
@@ -2023,6 +2076,10 @@ export class DrizzleEspnLiveDraftRepository implements EspnLiveDraftRepository {
         activeDeviceId: draftProviderFeeds.activeDeviceId,
         lastObservedAt: draftProviderFeeds.lastObservedAt,
         lastReceivedAt: draftProviderFeeds.lastReceivedAt,
+        serverLastSuccessfulAt: draftProviderFeeds.serverLastSuccessfulAt,
+        serverNextPollAt: draftProviderFeeds.serverNextPollAt,
+        serverUnresolvedTeams: draftProviderFeeds.serverUnresolvedTeams,
+        serverUnresolvedPlayers: draftProviderFeeds.serverUnresolvedPlayers,
         lastMaterialEventAt: draftProviderFeeds.lastMaterialEventAt,
         lastPickCount: draftProviderFeeds.lastPickCount,
         manualBackupActive: draftProviderFeeds.manualBackupActive,
@@ -2064,14 +2121,22 @@ export class DrizzleEspnLiveDraftRepository implements EspnLiveDraftRepository {
         state: feed.state,
         lastObservedAt: feed.lastObservedAt,
         lastReceivedAt: feed.lastReceivedAt,
+        serverLastSuccessfulAt: feed.serverLastSuccessfulAt,
+        serverNextPollAt: feed.serverNextPollAt,
         lastMaterialEventAt: feed.lastMaterialEventAt,
         lastPickCount: feed.lastPickCount,
         manualBackupActive: feed.manualBackupActive,
         verification: feed.verification,
         lastErrorCode: feed.lastErrorCode,
         currentAuctionState: feed.currentAuctionState,
-        unresolvedTeams: summary.success ? (summary.data.unresolvedTeams ?? 0) : 0,
-        unresolvedPlayers: summary.success ? (summary.data.unresolvedPlayers ?? 0) : 0,
+        unresolvedTeams: Math.max(
+          summary.success ? (summary.data.unresolvedTeams ?? 0) : 0,
+          feed.serverUnresolvedTeams,
+        ),
+        unresolvedPlayers: Math.max(
+          summary.success ? (summary.data.unresolvedPlayers ?? 0) : 0,
+          feed.serverUnresolvedPlayers,
+        ),
         pendingReconciliation: counts?.pendingReconciliation ?? 0,
         standbySources: counts?.standbySources ?? 0,
       },

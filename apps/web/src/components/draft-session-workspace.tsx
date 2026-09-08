@@ -88,6 +88,13 @@ import {
 import { LatestRequest } from "../lib/latest-request";
 import { useByeWeeks } from "../lib/use-bye-weeks";
 import {
+  espnAssistAvailable,
+  espnAssistSelection,
+  ESPN_DRAFT_ASSIST_COPY,
+  ESPN_DRAFT_REFRESH_REQUEST_MS,
+  shouldRequestEspnDraftRefresh,
+} from "../lib/espn-draft-assist";
+import {
   draftLedgerStateLabel,
   draftRoomStartLabel,
   providerLocksManualDraftEntry,
@@ -232,7 +239,7 @@ export function DraftSessionWorkspace() {
   const accountId = useRef("");
   const mutationInFlight = useRef(false);
   const backgroundRefreshInFlight = useRef(false);
-  const yahooRefreshInFlight = useRef(false);
+  const providerRefreshInFlight = useRef(false);
   const selectedRankingVersionRef = useRef("");
   const claimedDraftTeamAppliedRef = useRef("");
   const dashboardRequestRef = useRef<AbortController | null>(null);
@@ -252,6 +259,8 @@ export function DraftSessionWorkspace() {
   const [minimumBid, setMinimumBid] = useState("1");
   const [yahooAssistEnabled, setYahooAssistEnabled] = useState(false);
   const [yahooAssistSupported, setYahooAssistSupported] = useState(false);
+  const [espnAssistEnabled, setEspnAssistEnabled] = useState(true);
+  const [espnAssistSupported, setEspnAssistSupported] = useState(false);
   const [reconnectId, setReconnectId] = useState("");
   const [requestState, setRequestState] = useState<RequestState>("idle");
   const [pollFailures, setPollFailures] = useState(0);
@@ -409,10 +418,16 @@ export function DraftSessionWorkspace() {
           setYahooAssistSupported(
             health?.mobileCapabilities.includes("yahoo-assisted-draft-v1") === true,
           );
+          setEspnAssistSupported(
+            health?.mobileCapabilities.includes("espn-assisted-draft-v1") === true,
+          );
         }
       })
       .catch(() => {
-        if (!disposed) setYahooAssistSupported(false);
+        if (!disposed) {
+          setYahooAssistSupported(false);
+          setEspnAssistSupported(false);
+        }
       });
     return () => {
       disposed = true;
@@ -450,17 +465,22 @@ export function DraftSessionWorkspace() {
     };
   }, [refreshInBackground, session?.id]);
 
-  const yahooAssistedDraftId =
-    session && shouldRequestYahooDraftRefresh(session) ? session.id : null;
+  const providerRefresh = session
+    ? shouldRequestEspnDraftRefresh(session)
+      ? { draftId: session.id, intervalMs: ESPN_DRAFT_REFRESH_REQUEST_MS }
+      : shouldRequestYahooDraftRefresh(session)
+        ? { draftId: session.id, intervalMs: YAHOO_DRAFT_REFRESH_REQUEST_MS }
+        : null
+    : null;
   useEffect(() => {
-    if (yahooAssistedDraftId === null) return;
-    const draftId = yahooAssistedDraftId;
+    if (providerRefresh === null) return;
+    const { draftId, intervalMs } = providerRefresh;
     let disposed = false;
     const requestProviderRefresh = async () => {
-      if (disposed || document.visibilityState !== "visible" || yahooRefreshInFlight.current) {
+      if (disposed || document.visibilityState !== "visible" || providerRefreshInFlight.current) {
         return;
       }
-      yahooRefreshInFlight.current = true;
+      providerRefreshInFlight.current = true;
       try {
         const response = await fetch(
           `${apiBaseUrl}/v1/drafts/${encodeURIComponent(draftId)}/provider-refresh`,
@@ -482,15 +502,12 @@ export function DraftSessionWorkspace() {
         // The session reload loop and provider status are the user-facing health paths. A browser
         // request failing must not disable manual entry or produce an unhandled rejection.
       } finally {
-        yahooRefreshInFlight.current = false;
+        providerRefreshInFlight.current = false;
       }
     };
 
     void requestProviderRefresh();
-    const interval = window.setInterval(
-      () => void requestProviderRefresh(),
-      YAHOO_DRAFT_REFRESH_REQUEST_MS,
-    );
+    const interval = window.setInterval(() => void requestProviderRefresh(), intervalMs);
     const onVisibilityChange = () => {
       if (document.visibilityState === "visible") void requestProviderRefresh();
     };
@@ -500,7 +517,7 @@ export function DraftSessionWorkspace() {
       window.clearInterval(interval);
       document.removeEventListener("visibilitychange", onVisibilityChange);
     };
-  }, [yahooAssistedDraftId]);
+  }, [providerRefresh?.draftId, providerRefresh?.intervalMs]);
 
   useEffect(() => {
     if (!session) return;
@@ -1019,11 +1036,9 @@ export function DraftSessionWorkspace() {
   async function createSession() {
     const league = portfolio?.leagues.find((item) => item.id === selectedLeagueId);
     if (!league?.season || !dashboard || dashboardLeagueId !== selectedLeagueId) return;
-    const providerAssist = yahooAssistSelection(
-      league.season.provider,
-      yahooAssistEnabled,
-      yahooAssistSupported,
-    );
+    const providerAssist =
+      espnAssistSelection(league.season.provider, espnAssistEnabled, espnAssistSupported) ??
+      yahooAssistSelection(league.season.provider, yahooAssistEnabled, yahooAssistSupported);
     setRequestState("loading");
     setNotice("");
     try {
@@ -1034,11 +1049,13 @@ export function DraftSessionWorkspace() {
         body: JSON.stringify({
           leagueSeasonId: league.season.id,
           ...(providerAssist ? { providerAssist } : {}),
-          ...(providerAssist ? { yahooScopeConfirmation: "no-keepers-or-traded-picks" } : {}),
+          ...(providerAssist === "yahoo"
+            ? { yahooScopeConfirmation: "no-keepers-or-traded-picks" }
+            : {}),
           mode,
           ...(mode === "snake"
             ? { teamOrder }
-            : providerAssist
+            : providerAssist === "yahoo" || providerAssist === "espn"
               ? {}
               : { budgetPerTeam: Number(budget), minimumBid: Number(minimumBid) }),
         }),
@@ -1398,6 +1415,9 @@ export function DraftSessionWorkspace() {
     const yahooAssistedSetup =
       yahooAssistSelection(league?.season?.provider, yahooAssistEnabled, yahooAssistSupported) ===
       "yahoo";
+    const espnAssistedSetup =
+      espnAssistSelection(league?.season?.provider, espnAssistEnabled, espnAssistSupported) ===
+      "espn";
     return (
       <div className="draft-page draft-session-setup">
         <header className="page-heading">
@@ -1407,7 +1427,11 @@ export function DraftSessionWorkspace() {
             </Link>
             <h1>Start or reopen a draft room.</h1>
             <p className="page-subtitle">
-              {describeDraftSetupCapability(league?.season?.provider ?? null, yahooAssistSupported)}
+              {describeDraftSetupCapability(
+                league?.season?.provider ?? null,
+                yahooAssistSupported,
+                espnAssistSupported,
+              )}
             </p>
           </div>
           <button className="button button--soft" type="button" onClick={() => setShowDemo(true)}>
@@ -1473,12 +1497,12 @@ export function DraftSessionWorkspace() {
                     </button>
                   </div>
                 </fieldset>
-                {mode === "auction" && yahooAssistedSetup ? (
+                {mode === "auction" && (yahooAssistedSetup || espnAssistedSetup) ? (
                   <div className="draft-session-order">
                     <div>
-                      <strong>Yahoo auction settings</strong>
+                      <strong>{yahooAssistedSetup ? "Yahoo" : "ESPN"} auction settings</strong>
                       <span>
-                        The synchronized Yahoo budget and minimum bid will be used automatically.
+                        The synchronized provider budget and minimum bid will be used automatically.
                       </span>
                     </div>
                   </div>
@@ -1557,6 +1581,22 @@ export function DraftSessionWorkspace() {
                     </label>
                   </fieldset>
                 ) : null}
+                {espnAssistAvailable(league?.season?.provider, espnAssistSupported) ? (
+                  <fieldset className="draft-session-yahoo-assist">
+                    <label>
+                      <input
+                        type="checkbox"
+                        checked={espnAssistEnabled}
+                        onChange={(event) => setEspnAssistEnabled(event.target.checked)}
+                      />
+                      <span>
+                        <strong>{ESPN_DRAFT_ASSIST_COPY.label}</strong>
+                        <small>{ESPN_DRAFT_ASSIST_COPY.detail}</small>
+                        <small>{ESPN_DRAFT_ASSIST_COPY.safety}</small>
+                      </span>
+                    </label>
+                  </fieldset>
+                ) : null}
                 {!mayCreate ? (
                   <p className="draft-session-permission">
                     <ShieldCheck size={14} /> Only a league commissioner can create the shared room.
@@ -1580,11 +1620,13 @@ export function DraftSessionWorkspace() {
                   ) : (
                     <Play size={14} />
                   )}{" "}
-                  {draftRoomStartLabel(
-                    league?.season?.provider,
-                    yahooAssistEnabled,
-                    yahooAssistSupported,
-                  )}
+                  {espnAssistedSetup
+                    ? "Start assisted room"
+                    : draftRoomStartLabel(
+                        league?.season?.provider,
+                        yahooAssistEnabled,
+                        yahooAssistSupported,
+                      )}
                 </button>
               </div>
             ) : (

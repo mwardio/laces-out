@@ -365,7 +365,11 @@ export interface NormalizedCompletedDraftSnapshot extends NormalizedSupplemental
   readonly kind: "completed-draft";
   readonly draftType: Extract<DraftType, "snake" | "auction">;
   readonly budgetPerTeam: number | null;
-  readonly state: "in-progress" | "complete";
+  /** ESPN exposes the scheduled room before it starts, so absence of picks is not "in progress". */
+  readonly state: "predraft" | "in-progress" | "complete";
+  readonly scheduledAt: string | null;
+  readonly availableAt: string | null;
+  readonly secondsPerSelection: number | null;
   readonly completedAt: string | null;
   readonly picks: readonly NormalizedCompletedDraftPick[];
 }

@@ -1089,6 +1089,10 @@ export const espnLiveDraftIssueCodeSchema = z.enum([
   "STALE_PAGE_REVISION",
   "CHECKSUM_MISMATCH",
   "SESSION_NOT_READY",
+  "PROVIDER_UNAVAILABLE",
+  "POLL_FAILED",
+  "CONCURRENT_LEDGER_CHANGE",
+  "COMPLETED_COUNT_MISMATCH",
 ]);
 export type EspnLiveDraftIssueCode = z.infer<typeof espnLiveDraftIssueCodeSchema>;
 
@@ -1156,6 +1160,11 @@ export const espnLiveDraftFeedStatusSchema = z
     verification: z.enum(["pending", "verified", "mismatched"]),
     lastIssueCode: espnLiveDraftIssueCodeSchema.nullable(),
     currentAuction: espnLiveDraftTransientAuctionSchema.nullable(),
+    /** Present on servers that can combine the browser observer with session-based result checks. */
+    sourceMode: z.enum(["none", "browser-live", "server-results", "hybrid"]).optional(),
+    browserFresh: z.boolean().optional(),
+    serverResultsFresh: z.boolean().optional(),
+    pollIntervalSeconds: z.number().int().min(5).max(900).optional(),
   })
   .strict();
 export type EspnLiveDraftFeedStatus = z.infer<typeof espnLiveDraftFeedStatusSchema>;
@@ -1532,7 +1541,7 @@ export const draftSessionCreateRequestSchema = z
   .object({
     leagueSeasonId: draftUuidSchema,
     /** Explicit opt-in; omitted sessions remain the existing fully manual room. */
-    providerAssist: z.literal("yahoo").optional(),
+    providerAssist: z.enum(["espn", "yahoo"]).optional(),
     /** Commissioner attestation that keeps this beta inside its validated standard-draft scope. */
     yahooScopeConfirmation: z.literal("no-keepers-or-traded-picks").optional(),
     mode: z.enum(["snake", "auction"]).optional(),
@@ -4079,6 +4088,7 @@ export const mobileCapabilitySchema = z.enum([
   "authenticated-browser-handoff",
   "cookie-authentication",
   "email-verification-v1",
+  "espn-assisted-draft-v1",
   "espn-automated-refresh",
   "espn-native-session-grant-v1",
   "espn-server-session-v1",

@@ -100,6 +100,21 @@ describe("projectEspnLiveDraftFeedStatus", () => {
     expect(status.lastAcceptedAt).toBeNull();
   });
 
+  it("identifies a configured server-result source before its first scheduled check", () => {
+    const waiting = feed({
+      state: "waiting",
+      lastReceivedAt: null,
+      lastObservedAt: null,
+      serverNextPollAt: new Date(NOW.getTime() + 60_000),
+    });
+    expect(projectEspnLiveDraftFeedStatus(waiting, NOW)).toMatchObject({
+      state: "waiting",
+      sourceMode: "server-results",
+      browserFresh: false,
+      serverResultsFresh: false,
+    });
+  });
+
   it("never lets a browser clock produce a negative age", () => {
     const skewed = feed({ lastReceivedAt: new Date(NOW.getTime() + 5_000) });
     expect(projectEspnLiveDraftFeedStatus(skewed, NOW).ageSeconds).toBe(0);
@@ -141,6 +156,7 @@ describe("projectEspnLiveDraftFeedStatus", () => {
     expect(Object.keys(status).sort()).toEqual(
       [
         "ageSeconds",
+        "browserFresh",
         "currentAuction",
         "fresh",
         "lastAcceptedAt",
@@ -151,7 +167,10 @@ describe("projectEspnLiveDraftFeedStatus", () => {
         "pickCount",
         "provider",
         "providerLeagueId",
+        "pollIntervalSeconds",
         "season",
+        "serverResultsFresh",
+        "sourceMode",
         "standbySources",
         "state",
         "unresolvedPlayers",

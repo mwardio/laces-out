@@ -1172,6 +1172,10 @@ capabilities derived from the same root secret.
   profile without creating a disposable league, but calibration alone does not prove paired-room
   identity, history, reconnect, or end-to-end feed behavior. Each unvalidated draft-mode profile
   remains disabled, and landing-page copy may not claim the capability before its gate passes.
+- ESPN-assisted completed-pick polling is a separate read-only fallback. With encrypted
+  server-session sync enabled, an opted-in room checks only `mDraftDetail`, uses one database lease
+  per league, and can keep a snake or auction board current after each completed selection even
+  while the browser-only nomination/bid observer remains disabled.
 - Neither gate enables provider writes. Lineup, waiver, and trade changes remain recommendation-only
   until separately approved, implemented, and shadow-validated.
 

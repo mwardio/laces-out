@@ -16,6 +16,41 @@ function jsonResponse(value: unknown, status = 200): Response {
 }
 
 describe("ESPN server-session read client", () => {
+  it("reads only the cumulative draft result for draft-day polling", async () => {
+    const payload = {
+      id: 123456789,
+      seasonId: 2026,
+      settings: { draftSettings: { type: "AUCTION", auctionBudget: 200 } },
+      draftDetail: { drafted: false, inProgress: false, picks: [] },
+    };
+    const fetch = vi.fn(async (input: string | URL, init?: RequestInit) => {
+      const url = new URL(input);
+      expect(url.origin).toBe("https://lm-api-reads.fantasy.espn.com");
+      expect(url.searchParams.getAll("view")).toEqual(["mDraftDetail"]);
+      expect(url.searchParams.has("scoringPeriodId")).toBe(false);
+      expect(new Headers(init?.headers).get("cookie")).toBe(
+        `SWID=${credential.swid}; espn_s2=${credential.espnS2}`,
+      );
+      return jsonResponse(payload);
+    });
+    const client = new EspnSessionReadClient({
+      fetch,
+      now: () => new Date("2026-09-08T23:55:00.000Z"),
+    });
+
+    await expect(
+      client.fetchCompletedDraft({ credential, leagueId: "123456789", season: 2026 }),
+    ).resolves.toMatchObject({
+      leagueId: "123456789",
+      season: 2026,
+      kind: "completed-draft",
+      week: null,
+      capturedAt: "2026-09-08T23:55:00.000Z",
+      payload,
+    });
+    expect(fetch).toHaveBeenCalledOnce();
+  });
+
   it("uses only the fixed read origin, scopes the cookie header, and isolates supplemental drift", async () => {
     const fetch = vi.fn(async (input: string | URL, init?: RequestInit) => {
       const url = new URL(input);

@@ -390,6 +390,53 @@ describe("DraftSessionService", () => {
     });
   });
 
+  it("creates an ESPN-assisted auction room from synchronized league settings", async () => {
+    const espnSource = leagueSource({
+      provider: "espn",
+      externalKey: "704283",
+      draftType: "auction",
+      settings: { draftSettings: { auctionBudget: 200, minimumBid: 1 } },
+    });
+    const disabledRepository = new MemoryDraftRepository(espnSource);
+    await expect(
+      new DraftSessionService(disabledRepository, () => clock).createSession(ownerId, {
+        leagueSeasonId: seasonId,
+        providerAssist: "espn",
+        mode: "auction",
+      }),
+    ).rejects.toMatchObject({
+      code: "DRAFT_CONFIG_INVALID",
+      message: "ESPN-assisted draft checks are not enabled on this server.",
+    } satisfies Partial<DraftSessionError>);
+
+    const repository = new MemoryDraftRepository(espnSource);
+    const created = await new DraftSessionService(repository, () => clock, {
+      espnDraftAssistEnabled: true,
+    }).createSession(ownerId, {
+      leagueSeasonId: seasonId,
+      providerAssist: "espn",
+      mode: "auction",
+    });
+
+    expect(created).toMatchObject({
+      transport: "espn-live",
+      providerPolling: false,
+      config: { mode: "AUCTION", minimumBid: 1 },
+    });
+    expect(repository.createdInputs).toHaveLength(1);
+    expect(repository.createdInputs[0]).toMatchObject({
+      leagueSeasonId: seasonId,
+      budgetPerTeam: 200,
+      minimumBid: 1,
+      settings: {
+        transport: "espn-live",
+        providerPolling: true,
+        source: { provider: "espn" },
+      },
+      espnFeed: { providerLeagueId: "704283", season: 2026 },
+    });
+  });
+
   it("keeps Yahoo assistance inside its registered snake and auction configuration scope", async () => {
     const assistedInput = {
       leagueSeasonId: seasonId,

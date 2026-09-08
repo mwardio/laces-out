@@ -3183,6 +3183,23 @@ export const draftProviderFeeds = pgTable(
       .notNull()
       .default("pending"),
     lastErrorCode: text("last_error_code"),
+    /** Independent lease and freshness for the encrypted-session cumulative-result fallback. */
+    serverPollGeneration: integer("server_poll_generation").notNull().default(0),
+    serverPollLeaseExpiresAt: timestamp("server_poll_lease_expires_at", { withTimezone: true }),
+    serverNextPollAt: timestamp("server_next_poll_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    serverLastChecksum: text("server_last_checksum"),
+    serverLastCheckedAt: timestamp("server_last_checked_at", { withTimezone: true }),
+    serverLastSuccessfulAt: timestamp("server_last_successful_at", { withTimezone: true }),
+    serverConsecutiveFailures: integer("server_consecutive_failures").notNull().default(0),
+    serverUnresolvedTeams: integer("server_unresolved_teams").notNull().default(0),
+    serverUnresolvedPlayers: integer("server_unresolved_players").notNull().default(0),
+    /** Independent rollback confirmation so alternating browser/server frames cannot reset it. */
+    serverPendingDestructiveChecksum: text("server_pending_destructive_checksum"),
+    serverPendingDestructiveSeenCount: integer("server_pending_destructive_seen_count")
+      .notNull()
+      .default(0),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
@@ -3210,11 +3227,11 @@ export const draftProviderFeeds = pgTable(
     ),
     check(
       "draft_provider_feeds_counts_check",
-      sql`${table.leaseGeneration} >= 0 and ${table.lastPickCount} >= 0 and ${table.pendingDestructiveSeenCount} >= 0 and (${table.lastPageRevision} is null or ${table.lastPageRevision} >= 0)`,
+      sql`${table.leaseGeneration} >= 0 and ${table.lastPickCount} >= 0 and ${table.pendingDestructiveSeenCount} >= 0 and ${table.serverPollGeneration} >= 0 and ${table.serverConsecutiveFailures} >= 0 and ${table.serverUnresolvedTeams} >= 0 and ${table.serverUnresolvedPlayers} >= 0 and ${table.serverPendingDestructiveSeenCount} >= 0 and (${table.lastPageRevision} is null or ${table.lastPageRevision} >= 0)`,
     ),
     check(
       "draft_provider_feeds_checksum_check",
-      sql`(${table.lastChecksum} is null or ${table.lastChecksum} ~ '^[a-f0-9]{64}$') and (${table.pendingDestructiveChecksum} is null or ${table.pendingDestructiveChecksum} ~ '^[a-f0-9]{64}$')`,
+      sql`(${table.lastChecksum} is null or ${table.lastChecksum} ~ '^[a-f0-9]{64}$') and (${table.serverLastChecksum} is null or ${table.serverLastChecksum} ~ '^[a-f0-9]{64}$') and (${table.pendingDestructiveChecksum} is null or ${table.pendingDestructiveChecksum} ~ '^[a-f0-9]{64}$') and (${table.serverPendingDestructiveChecksum} is null or ${table.serverPendingDestructiveChecksum} ~ '^[a-f0-9]{64}$')`,
     ),
   ],
 );

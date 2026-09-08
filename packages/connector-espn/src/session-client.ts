@@ -408,6 +408,28 @@ export class EspnSessionReadClient {
     };
   }
 
+  /**
+   * Reads only ESPN's cumulative draft result. Draft-day callers use this narrow request instead
+   * of refetching free agents, waivers, transactions, and weekly scores on every board check.
+   */
+  async fetchCompletedDraft(
+    input: EspnSessionLeagueRequest,
+  ): Promise<EspnSessionSupplementalArtifact> {
+    const request = this.#validatedRequest(input);
+    const endpoint = requestEndpoint(request.season, request.leagueId, ["mDraftDetail"]);
+    const payload = await this.#read(endpoint, request.credential, null, request.signal);
+    return {
+      leagueId: request.leagueId,
+      season: request.season,
+      endpoint: endpoint.toString(),
+      capturedAt: this.#now().toISOString(),
+      checksumSha256: canonicalEspnPayloadChecksumV1(payload),
+      payload,
+      kind: "completed-draft",
+      week: null,
+    };
+  }
+
   async fetchSupplemental(input: {
     readonly credential: EspnSessionCredential;
     readonly core: EspnSessionArtifact;

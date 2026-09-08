@@ -1,0 +1,15 @@
+ALTER TABLE "draft_provider_feeds" DROP CONSTRAINT "draft_provider_feeds_counts_check";--> statement-breakpoint
+ALTER TABLE "draft_provider_feeds" DROP CONSTRAINT "draft_provider_feeds_checksum_check";--> statement-breakpoint
+ALTER TABLE "draft_provider_feeds" ADD COLUMN "server_poll_generation" integer DEFAULT 0 NOT NULL;--> statement-breakpoint
+ALTER TABLE "draft_provider_feeds" ADD COLUMN "server_poll_lease_expires_at" timestamp with time zone;--> statement-breakpoint
+ALTER TABLE "draft_provider_feeds" ADD COLUMN "server_next_poll_at" timestamp with time zone DEFAULT now() NOT NULL;--> statement-breakpoint
+ALTER TABLE "draft_provider_feeds" ADD COLUMN "server_last_checksum" text;--> statement-breakpoint
+ALTER TABLE "draft_provider_feeds" ADD COLUMN "server_last_checked_at" timestamp with time zone;--> statement-breakpoint
+ALTER TABLE "draft_provider_feeds" ADD COLUMN "server_last_successful_at" timestamp with time zone;--> statement-breakpoint
+ALTER TABLE "draft_provider_feeds" ADD COLUMN "server_consecutive_failures" integer DEFAULT 0 NOT NULL;--> statement-breakpoint
+ALTER TABLE "draft_provider_feeds" ADD COLUMN "server_unresolved_teams" integer DEFAULT 0 NOT NULL;--> statement-breakpoint
+ALTER TABLE "draft_provider_feeds" ADD COLUMN "server_unresolved_players" integer DEFAULT 0 NOT NULL;--> statement-breakpoint
+ALTER TABLE "draft_provider_feeds" ADD COLUMN "server_pending_destructive_checksum" text;--> statement-breakpoint
+ALTER TABLE "draft_provider_feeds" ADD COLUMN "server_pending_destructive_seen_count" integer DEFAULT 0 NOT NULL;--> statement-breakpoint
+ALTER TABLE "draft_provider_feeds" ADD CONSTRAINT "draft_provider_feeds_counts_check" CHECK ("draft_provider_feeds"."lease_generation" >= 0 and "draft_provider_feeds"."last_pick_count" >= 0 and "draft_provider_feeds"."pending_destructive_seen_count" >= 0 and "draft_provider_feeds"."server_poll_generation" >= 0 and "draft_provider_feeds"."server_consecutive_failures" >= 0 and "draft_provider_feeds"."server_unresolved_teams" >= 0 and "draft_provider_feeds"."server_unresolved_players" >= 0 and "draft_provider_feeds"."server_pending_destructive_seen_count" >= 0 and ("draft_provider_feeds"."last_page_revision" is null or "draft_provider_feeds"."last_page_revision" >= 0));--> statement-breakpoint
+ALTER TABLE "draft_provider_feeds" ADD CONSTRAINT "draft_provider_feeds_checksum_check" CHECK (("draft_provider_feeds"."last_checksum" is null or "draft_provider_feeds"."last_checksum" ~ '^[a-f0-9]{64}$') and ("draft_provider_feeds"."server_last_checksum" is null or "draft_provider_feeds"."server_last_checksum" ~ '^[a-f0-9]{64}$') and ("draft_provider_feeds"."pending_destructive_checksum" is null or "draft_provider_feeds"."pending_destructive_checksum" ~ '^[a-f0-9]{64}$') and ("draft_provider_feeds"."server_pending_destructive_checksum" is null or "draft_provider_feeds"."server_pending_destructive_checksum" ~ '^[a-f0-9]{64}$'));

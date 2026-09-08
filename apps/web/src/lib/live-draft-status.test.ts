@@ -678,6 +678,31 @@ describe("Yahoo-assisted draft status", () => {
   });
 });
 
+describe("ESPN server-result draft status", () => {
+  it("distinguishes completed-pick polling from optional live nomination tracking", () => {
+    const session = snakeSession({
+      providerFeed: feed({
+        state: "live",
+        sourceMode: "server-results",
+        browserFresh: false,
+        serverResultsFresh: true,
+        pollIntervalSeconds: 5,
+        currentAuction: null,
+      }),
+    });
+    const status = describeLiveDraft(input({ session, streaming: false }));
+
+    expect(status.heading).toBe("ESPN result sync");
+    expect(status.detail).toContain("completed pick");
+    expect(status.detail).toContain("in-flight bids are not included");
+    expect(status.sourceRequirement).toBeNull();
+    expect(status.transportChip).toBe("ESPN completed-pick checks · read-only");
+    expect(status.strip?.updateChannelLabel).toBe(
+      "Checking ESPN completed picks every 5 seconds during the draft",
+    );
+  });
+});
+
 describe("manual backup controls", () => {
   it("offers nothing to a manual room", () => {
     const status = describeLiveDraft(
@@ -779,6 +804,13 @@ describe("mobile decision summary", () => {
 });
 
 describe("draft setup capability copy", () => {
+  it("offers ESPN completed-pick sync only when the server reports support", () => {
+    const espn = describeDraftSetupCapability("espn", false, true);
+    expect(espn).toContain("automatic completed-pick checks");
+    expect(espn).toContain("in-flight bids remain manual");
+    expect(describeDraftSetupCapability("espn")).toContain("No live draft feed");
+  });
+
   it("offers Yahoo-assisted checks without calling them live", () => {
     const yahoo = describeDraftSetupCapability("yahoo", true);
     expect(yahoo).toContain("optional read-only Yahoo-assisted checks");

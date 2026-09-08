@@ -185,6 +185,9 @@ function draftPayload(type: "AUCTION" | "SNAKE"): Record<string, unknown> {
       draftSettings: {
         type,
         auctionBudget: 200,
+        date: 1_756_100_000_000,
+        availableDate: 1_756_096_400_000,
+        timePerSelection: 45,
       },
     },
     draftDetail: {
@@ -587,7 +590,10 @@ describe("ESPN supplemental snapshot normalizer", () => {
 
     expect(result).toMatchObject({
       kind: "completed-draft",
-      state: "in-progress",
+      state: "predraft",
+      scheduledAt: new Date(1_756_100_000_000).toISOString(),
+      availableAt: new Date(1_756_096_400_000).toISOString(),
+      secondsPerSelection: 45,
       picks: [],
     });
   });
