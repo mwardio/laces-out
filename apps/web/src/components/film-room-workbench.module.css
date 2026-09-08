@@ -719,20 +719,16 @@
     }
 
     .quickQuestions {
+      flex-direction: column;
       flex-wrap: nowrap;
-      overflow-x: auto;
-      padding-bottom: 2px;
-      overscroll-behavior-inline: contain;
-      scrollbar-width: none;
-    }
-
-    .quickQuestions::-webkit-scrollbar {
-      display: none;
+      overflow: visible;
+      padding-bottom: 0;
     }
 
     .quickQuestions button {
       flex: 0 0 auto;
-      white-space: nowrap;
+      width: 100%;
+      white-space: normal;
     }
   }
 

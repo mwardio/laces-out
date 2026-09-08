@@ -1532,11 +1532,20 @@
     }
 
     .provenance summary {
-      grid-template-columns: auto minmax(0, 1fr);
+      grid-template-columns: auto minmax(0, 1fr) auto;
     }
 
-    .provenanceAction {
-      display: none;
+    .provenance summary > .provenanceAction {
+      width: 24px;
+      overflow: hidden;
+      font-size: 0;
+      line-height: 1;
+      text-align: center;
+    }
+
+    .provenance summary > .provenanceAction::after {
+      margin-left: 0;
+      font-size: var(--text-12);
     }
 
     .provenanceDetails {

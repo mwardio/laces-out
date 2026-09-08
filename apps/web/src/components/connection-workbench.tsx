@@ -28,7 +28,7 @@ import {
   type EspnSessionConnectionList,
 } from "../lib/api-client";
 import { sendServerSessionOffer } from "../lib/bridge-extension";
-import { yahooComingSoon } from "../lib/public-site";
+import { publicAppStoreUrl, yahooComingSoon } from "../lib/public-site";
 import { loginUrlForCurrentPath } from "../lib/safe-return-to";
 import { EspnPairingStepper } from "./espn-pairing-stepper";
 
@@ -848,7 +848,10 @@ export function ConnectionWorkbench() {
               {espnPanelState}
             </span>
           </div>
-          <p>The Chrome companion finds and refreshes leagues from your signed-in ESPN account.</p>
+          <p>
+            The Chrome companion finds and refreshes leagues from your signed-in ESPN account. You
+            can also connect ESPN through the <a href={publicAppStoreUrl}>Laces Out iOS app</a>.
+          </p>
 
           <EspnPairingStepper
             signedOut={signedOut}
