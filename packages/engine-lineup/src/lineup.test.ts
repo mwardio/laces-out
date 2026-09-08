@@ -8,6 +8,7 @@ import {
   rosterSlotId,
   type Player,
   type ProjectionValue,
+  type RosterSlot,
 } from "@laces-out/domain";
 
 import { optimizeLineup } from "./index.js";
@@ -106,6 +107,155 @@ describe("optimizeLineup", () => {
 
     expect(optimizeLineup(input).assignments[0]!.playerId).toBe(playerId("a"));
     expect(optimizeLineup(input)).toEqual(optimizeLineup(input));
+  });
+
+  it("preserves WR1, WR2, and FLEX assignments tied within epsilon", () => {
+    const slots = createRosterSlots([
+      { type: "WR", count: 2 },
+      { type: "FLEX", count: 1 },
+    ]);
+    const currentAssignments = [
+      { playerId: playerId("wr-b"), slotId: slots[0]!.id },
+      { playerId: playerId("wr-c"), slotId: slots[1]!.id },
+      { playerId: playerId("wr-a"), slotId: slots[2]!.id },
+    ];
+    const result = optimizeLineup({
+      players: ["wr-a", "wr-b", "wr-c", "wr-d"].map((id) => makePlayer(id, ["WR"])),
+      slots,
+      projections: {
+        "wr-a": projection(10),
+        "wr-b": projection(10),
+        "wr-c": projection(10),
+        "wr-d": projection(10 + 5e-10),
+      },
+      currentAssignments,
+    });
+
+    expect(result.assignments.map(({ playerId, slotId }) => ({ playerId, slotId }))).toEqual(
+      expect.arrayContaining(currentAssignments),
+    );
+    expect(result.benchPlayerIds).toEqual([playerId("wr-d")]);
+    expect(result.changes).toEqual([]);
+  });
+
+  it("uses semantic slot identities across regenerated provider slot-rule IDs", () => {
+    const providerSlots = (ids: readonly [string, string, string]): readonly RosterSlot[] => [
+      {
+        id: rosterSlotId(ids[0]),
+        type: "WR",
+        label: "WR 1",
+        kind: "STARTER",
+        eligiblePositions: ["WR"],
+      },
+      {
+        id: rosterSlotId(ids[1]),
+        type: "WR",
+        label: "WR 2",
+        kind: "STARTER",
+        eligiblePositions: ["WR"],
+      },
+      {
+        id: rosterSlotId(ids[2]),
+        type: "FLEX",
+        label: "FLEX",
+        kind: "STARTER",
+        eligiblePositions: ["RB", "WR", "TE"],
+      },
+    ];
+    const firstSlots = providerSlots(["aaa-rule:1", "bbb-rule:2", "zzz-rule:1"]);
+    const refreshedSlots = providerSlots(["zzz-new-rule:1", "yyy-new-rule:2", "aaa-new-rule:1"]);
+    const players = ["wr-a", "wr-b", "wr-c"].map((id) => makePlayer(id, ["WR"]));
+    const projections = {
+      "wr-a": projection(10),
+      "wr-b": projection(10),
+      "wr-c": projection(10),
+    };
+    const first = optimizeLineup({ players, slots: firstSlots, projections });
+    const refreshed = optimizeLineup({
+      players,
+      slots: refreshedSlots,
+      projections,
+      currentAssignments: first.assignments,
+    });
+    const semanticAssignments = (
+      assignments: typeof first.assignments,
+      slots: readonly RosterSlot[],
+    ) => {
+      const labelById = new Map(slots.map((slot) => [slot.id, slot.label]));
+      return assignments.map((assignment) => [
+        labelById.get(assignment.slotId),
+        assignment.playerId,
+      ]);
+    };
+
+    expect(semanticAssignments(refreshed.assignments, refreshedSlots)).toEqual(
+      semanticAssignments(first.assignments, firstSlots),
+    );
+    expect(refreshed.changes).toEqual([]);
+  });
+
+  it("still emits a real bench-to-starter improvement", () => {
+    const slots = createRosterSlots([{ type: "QB", count: 1 }]);
+    const result = optimizeLineup({
+      players: [makePlayer("current", ["QB"]), makePlayer("upgrade", ["QB"])],
+      slots,
+      projections: { current: projection(10), upgrade: projection(18) },
+      currentAssignments: [{ playerId: playerId("current"), slotId: slots[0]!.id }],
+    });
+
+    expect(result.assignments[0]!.playerId).toBe(playerId("upgrade"));
+    expect(result.changes).toEqual([
+      expect.objectContaining({
+        slotId: slots[0]!.id,
+        removePlayerId: playerId("current"),
+        addPlayerId: playerId("upgrade"),
+        projectedPointDelta: 8,
+      }),
+    ]);
+  });
+
+  it("preserves a locked starter while improving an unlocked slot", () => {
+    const slots = createRosterSlots([{ type: "WR", count: 2 }]);
+    const result = optimizeLineup({
+      players: [
+        makePlayer("locked-low", ["WR"]),
+        makePlayer("current", ["WR"]),
+        makePlayer("upgrade", ["WR"]),
+      ],
+      slots,
+      projections: {
+        "locked-low": projection(5),
+        current: projection(10),
+        upgrade: projection(18),
+      },
+      currentAssignments: [
+        { playerId: playerId("locked-low"), slotId: slots[0]!.id },
+        { playerId: playerId("current"), slotId: slots[1]!.id },
+      ],
+      locks: [{ playerId: playerId("locked-low"), kind: "STARTER", slotId: slots[0]!.id }],
+    });
+
+    expect(result.assignments).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          slotId: slots[0]!.id,
+          playerId: playerId("locked-low"),
+          locked: true,
+        }),
+        expect.objectContaining({
+          slotId: slots[1]!.id,
+          playerId: playerId("upgrade"),
+          locked: false,
+        }),
+      ]),
+    );
+    expect(result.changes).toEqual([
+      expect.objectContaining({
+        slotId: slots[1]!.id,
+        removePlayerId: playerId("current"),
+        addPlayerId: playerId("upgrade"),
+      }),
+    ]);
   });
 
   it("always returns unique, eligible assignments for arbitrary scores", () => {

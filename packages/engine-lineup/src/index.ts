@@ -92,9 +92,54 @@ interface DynamicAssignment {
 interface DynamicCandidate {
   readonly score: number;
   readonly assignments: readonly DynamicAssignment[];
+  readonly preservedCurrentAssignmentCount: number;
 }
 
 const SCORE_EPSILON = 1e-9;
+
+interface SemanticStarterSlots {
+  readonly slots: readonly RosterSlot[];
+  readonly identityBySlotId: ReadonlyMap<RosterSlotId, string>;
+}
+
+function semanticSlotDescriptor(slot: RosterSlot): string {
+  const normalizedLabel = slot.label.trim().replace(/\s+/g, " ").toUpperCase();
+  const eligiblePositions = [...new Set(slot.eligiblePositions)].sort((left, right) =>
+    left.localeCompare(right),
+  );
+  return JSON.stringify([slot.kind, slot.type, normalizedLabel, eligiblePositions]);
+}
+
+/**
+ * Slot-rule row IDs are persistence details and can be regenerated during a provider refresh. Give
+ * the optimizer an identity based on the rule's lineup meaning instead, retaining input order only
+ * to distinguish otherwise identical occurrences of the same semantic slot.
+ */
+function normalizeStarterSlots(slots: readonly RosterSlot[]): SemanticStarterSlots {
+  const ordered = slots
+    .map((slot, inputIndex) => ({
+      slot,
+      inputIndex,
+      descriptor: semanticSlotDescriptor(slot),
+    }))
+    .sort(
+      (left, right) =>
+        left.descriptor.localeCompare(right.descriptor) || left.inputIndex - right.inputIndex,
+    );
+  const occurrenceByDescriptor = new Map<string, number>();
+  const identityBySlotId = new Map<RosterSlotId, string>();
+
+  for (const { slot, descriptor } of ordered) {
+    const occurrence = (occurrenceByDescriptor.get(descriptor) ?? 0) + 1;
+    occurrenceByDescriptor.set(descriptor, occurrence);
+    identityBySlotId.set(slot.id, `${descriptor}#${occurrence}`);
+  }
+
+  return {
+    slots: ordered.map(({ slot }) => slot),
+    identityBySlotId,
+  };
+}
 
 function scoreFor(
   projections: ProjectionLookup,
@@ -132,21 +177,50 @@ function scoreFor(
   return score;
 }
 
-function assignmentSignature(assignments: readonly DynamicAssignment[]): string {
+function assignmentSignature(
+  assignments: readonly DynamicAssignment[],
+  semanticSlotIdentityById: ReadonlyMap<RosterSlotId, string>,
+): string {
   return [...assignments]
-    .sort((left, right) => left.slot.id.localeCompare(right.slot.id))
-    .map((assignment) => `${assignment.slot.id}:${assignment.player.id}`)
+    .sort((left, right) =>
+      semanticSlotIdentityById
+        .get(left.slot.id)!
+        .localeCompare(semanticSlotIdentityById.get(right.slot.id)!),
+    )
+    .map(
+      (assignment) =>
+        `${semanticSlotIdentityById.get(assignment.slot.id)!}:${assignment.player.id}`,
+    )
     .join("|");
 }
 
-function isBetterForSameMask(candidate: DynamicCandidate, incumbent: DynamicCandidate): boolean {
+function isBetterForSameMask(
+  candidate: DynamicCandidate,
+  incumbent: DynamicCandidate,
+  semanticSlotIdentityById: ReadonlyMap<RosterSlotId, string>,
+): boolean {
   if (candidate.score > incumbent.score + SCORE_EPSILON) {
     return true;
   }
   if (Math.abs(candidate.score - incumbent.score) <= SCORE_EPSILON) {
-    return assignmentSignature(candidate.assignments) < assignmentSignature(incumbent.assignments);
+    if (candidate.preservedCurrentAssignmentCount !== incumbent.preservedCurrentAssignmentCount) {
+      return candidate.preservedCurrentAssignmentCount > incumbent.preservedCurrentAssignmentCount;
+    }
+    return (
+      assignmentSignature(candidate.assignments, semanticSlotIdentityById) <
+      assignmentSignature(incumbent.assignments, semanticSlotIdentityById)
+    );
   }
   return false;
+}
+
+function samePlayerMultiset(left: readonly PlayerId[], right: readonly PlayerId[]): boolean {
+  if (left.length !== right.length) {
+    return false;
+  }
+  const orderedLeft = [...left].sort((a, b) => a.localeCompare(b));
+  const orderedRight = [...right].sort((a, b) => a.localeCompare(b));
+  return orderedLeft.every((playerId, index) => playerId === orderedRight[index]);
 }
 
 function bitCount(value: number): number {
@@ -180,12 +254,10 @@ export function optimizeLineup(input: OptimizeLineupInput): LineupOptimizationRe
   const metric = input.metric ?? "mean";
   const diagnostics: LineupDiagnostic[] = [];
   const projectionDiagnostics = new Set<PlayerId>();
-  const starterSlots = input.slots
-    .filter((slot) => slot.kind === "STARTER")
-    .sort((left, right) => left.id.localeCompare(right.id));
+  const inputStarterSlots = input.slots.filter((slot) => slot.kind === "STARTER");
   const orderedPlayers = [...input.players].sort((left, right) => left.id.localeCompare(right.id));
   const playerById = new Map(orderedPlayers.map((player) => [player.id, player]));
-  const slotById = new Map(starterSlots.map((slot) => [slot.id, slot]));
+  const slotById = new Map(inputStarterSlots.map((slot) => [slot.id, slot]));
 
   if (playerById.size !== orderedPlayers.length) {
     diagnostics.push({
@@ -193,7 +265,7 @@ export function optimizeLineup(input: OptimizeLineupInput): LineupOptimizationRe
       message: "A player may appear only once in a lineup optimization roster",
     });
   }
-  if (slotById.size !== starterSlots.length) {
+  if (slotById.size !== inputStarterSlots.length) {
     diagnostics.push({
       code: "DUPLICATE_SLOT",
       message: "Every starter slot must have a unique ID",
@@ -202,6 +274,12 @@ export function optimizeLineup(input: OptimizeLineupInput): LineupOptimizationRe
   if (diagnostics.length > 0) {
     return fatalResult(orderedPlayers, metric, diagnostics);
   }
+
+  const { slots: starterSlots, identityBySlotId: semanticSlotIdentityById } =
+    normalizeStarterSlots(inputStarterSlots);
+  const currentBySlot = new Map(
+    (input.currentAssignments ?? []).map((assignment) => [assignment.slotId, assignment.playerId]),
+  );
 
   const lockedPlayerIds = new Set<PlayerId>();
   const lockedSlotIds = new Set<RosterSlotId>();
@@ -286,7 +364,9 @@ export function optimizeLineup(input: OptimizeLineupInput): LineupOptimizationRe
     throw new RangeError("Lineup optimization supports at most 30 unlocked starter slots");
   }
   const availablePlayers = orderedPlayers.filter((player) => !lockedPlayerIds.has(player.id));
-  let candidates = new Map<number, DynamicCandidate>([[0, { score: 0, assignments: [] }]]);
+  let candidates = new Map<number, DynamicCandidate>([
+    [0, { score: 0, assignments: [], preservedCurrentAssignmentCount: 0 }],
+  ]);
 
   for (const player of availablePlayers) {
     const score = scoreFor(
@@ -309,9 +389,15 @@ export function optimizeLineup(input: OptimizeLineupInput): LineupOptimizationRe
         const nextCandidate: DynamicCandidate = {
           score: candidate.score + score,
           assignments: [...candidate.assignments, { player, slot, score }],
+          preservedCurrentAssignmentCount:
+            candidate.preservedCurrentAssignmentCount +
+            (currentBySlot.get(slot.id) === player.id ? 1 : 0),
         };
         const incumbent = nextCandidates.get(nextMask);
-        if (incumbent === undefined || isBetterForSameMask(nextCandidate, incumbent)) {
+        if (
+          incumbent === undefined ||
+          isBetterForSameMask(nextCandidate, incumbent, semanticSlotIdentityById)
+        ) {
           nextCandidates.set(nextMask, nextCandidate);
         }
       }
@@ -320,11 +406,18 @@ export function optimizeLineup(input: OptimizeLineupInput): LineupOptimizationRe
   }
 
   let bestMask = 0;
-  let best: DynamicCandidate = { score: 0, assignments: [] };
+  let best: DynamicCandidate = {
+    score: 0,
+    assignments: [],
+    preservedCurrentAssignmentCount: 0,
+  };
   for (const [mask, candidate] of candidates) {
     const filled = bitCount(mask);
     const bestFilled = bitCount(bestMask);
-    if (filled > bestFilled || (filled === bestFilled && isBetterForSameMask(candidate, best))) {
+    if (
+      filled > bestFilled ||
+      (filled === bestFilled && isBetterForSameMask(candidate, best, semanticSlotIdentityById))
+    ) {
       bestMask = mask;
       best = candidate;
     }
@@ -349,7 +442,11 @@ export function optimizeLineup(input: OptimizeLineupInput): LineupOptimizationRe
   }
 
   const assignments: LineupAssignment[] = allDynamicAssignments
-    .sort((left, right) => left.slot.id.localeCompare(right.slot.id))
+    .sort((left, right) =>
+      semanticSlotIdentityById
+        .get(left.slot.id)!
+        .localeCompare(semanticSlotIdentityById.get(right.slot.id)!),
+    )
     .map((assignment) => {
       const nextEligibleScore = orderedPlayers
         .filter(
@@ -382,38 +479,60 @@ export function optimizeLineup(input: OptimizeLineupInput): LineupOptimizationRe
       };
     });
 
-  const currentBySlot = new Map(
-    (input.currentAssignments ?? []).map((assignment) => [assignment.slotId, assignment.playerId]),
-  );
   const resultBySlot = new Map(assignments.map((assignment) => [assignment.slotId, assignment]));
-  const changes: LineupChange[] = starterSlots.flatMap((slot) => {
-    const currentPlayerId = currentBySlot.get(slot.id) ?? null;
-    const recommended = resultBySlot.get(slot.id);
-    const recommendedPlayerId = recommended?.playerId ?? null;
-    if (currentPlayerId === recommendedPlayerId) {
-      return [];
-    }
+  const projectedPoints = assignments.reduce(
+    (total, assignment) => total + assignment.projectedPoints,
+    0,
+  );
+  const currentStarterPlayerIds = (input.currentAssignments ?? []).map(
+    (assignment) => assignment.playerId,
+  );
+  const currentProjectedPoints = currentStarterPlayerIds.reduce(
+    (total, playerId) =>
+      total + scoreFor(input.projections, playerId, metric, diagnostics, projectionDiagnostics),
+    0,
+  );
+  const suppressZeroGainPermutation =
+    samePlayerMultiset(
+      currentStarterPlayerIds,
+      assignments.map((assignment) => assignment.playerId),
+    ) && Math.abs(projectedPoints - currentProjectedPoints) <= SCORE_EPSILON;
+  const changes: LineupChange[] = suppressZeroGainPermutation
+    ? []
+    : starterSlots.flatMap((slot) => {
+        const currentPlayerId = currentBySlot.get(slot.id) ?? null;
+        const recommended = resultBySlot.get(slot.id);
+        const recommendedPlayerId = recommended?.playerId ?? null;
+        if (currentPlayerId === recommendedPlayerId) {
+          return [];
+        }
 
-    const oldScore =
-      currentPlayerId === null
-        ? 0
-        : scoreFor(input.projections, currentPlayerId, metric, diagnostics, projectionDiagnostics);
-    const newScore = recommended?.projectedPoints ?? 0;
-    return [
-      {
-        slotId: slot.id,
-        removePlayerId: currentPlayerId,
-        addPlayerId: recommendedPlayerId,
-        projectedPointDelta: newScore - oldScore,
-        explanation:
+        const oldScore =
           currentPlayerId === null
-            ? `Fill ${slot.label} with ${recommendedPlayerId ?? "an eligible player"}`
-            : recommendedPlayerId === null
-              ? `${slot.label} cannot currently be filled`
-              : `Replace ${currentPlayerId} with ${recommendedPlayerId} in ${slot.label}`,
-      },
-    ];
-  });
+            ? 0
+            : scoreFor(
+                input.projections,
+                currentPlayerId,
+                metric,
+                diagnostics,
+                projectionDiagnostics,
+              );
+        const newScore = recommended?.projectedPoints ?? 0;
+        return [
+          {
+            slotId: slot.id,
+            removePlayerId: currentPlayerId,
+            addPlayerId: recommendedPlayerId,
+            projectedPointDelta: newScore - oldScore,
+            explanation:
+              currentPlayerId === null
+                ? `Fill ${slot.label} with ${recommendedPlayerId ?? "an eligible player"}`
+                : recommendedPlayerId === null
+                  ? `${slot.label} cannot currently be filled`
+                  : `Replace ${currentPlayerId} with ${recommendedPlayerId} in ${slot.label}`,
+          },
+        ];
+      });
 
   return {
     feasible: unfilledSlotIds.length === 0,
@@ -423,10 +542,7 @@ export function optimizeLineup(input: OptimizeLineupInput): LineupOptimizationRe
       .filter((player) => !assignedPlayerIds.has(player.id))
       .map((player) => player.id),
     unfilledSlotIds,
-    projectedPoints: assignments.reduce(
-      (total, assignment) => total + assignment.projectedPoints,
-      0,
-    ),
+    projectedPoints,
     changes,
     diagnostics,
   };
