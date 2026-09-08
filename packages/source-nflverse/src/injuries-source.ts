@@ -187,6 +187,7 @@ function parseCsv(body: string): {
   readonly rows: Record<string, string>[];
   readonly hasSeasonType: boolean;
   readonly hasDateModified: boolean;
+  readonly compactDesignationSchema: boolean;
 } {
   let rows: Record<string, string>[];
   try {
@@ -216,8 +217,17 @@ function parseCsv(body: string): {
     rows,
     hasSeasonType: headers.has("season_type"),
     hasDateModified: headers.has("date_modified"),
+    // The 2026 feed removed the duplicated report injury and secondary-injury columns while
+    // retaining report_status and the one canonical practice_primary_injury description.
+    compactDesignationSchema: OPTIONAL_DESIGNATION_COLUMNS.some((column) => !headers.has(column)),
   };
 }
+
+const OPTIONAL_DESIGNATION_COLUMNS = [
+  "report_primary_injury",
+  "report_secondary_injury",
+  "practice_secondary_injury",
+] as const;
 
 const REQUIRED_COLUMNS = [
   "season",
@@ -229,11 +239,8 @@ const REQUIRED_COLUMNS = [
   "full_name",
   "first_name",
   "last_name",
-  "report_primary_injury",
-  "report_secondary_injury",
   "report_status",
   "practice_primary_injury",
-  "practice_secondary_injury",
   "practice_status",
 ] as const;
 
@@ -242,7 +249,10 @@ type RejectionReason = keyof NflverseInjuryRejections;
 function normalizeRow(
   row: Record<string, string>,
   expectedSeason: number,
-  schema: { readonly hasSeasonType: boolean; readonly hasDateModified: boolean },
+  schema: {
+    readonly hasSeasonType: boolean;
+    readonly hasDateModified: boolean;
+  },
 ): { readonly observation: NflversePlayerInjuryReport | null; readonly reason?: RejectionReason } {
   const gsisId = nullableString(row.gsis_id, 20);
   const playerPosition = position(row.position);
@@ -275,10 +285,21 @@ function normalizeRow(
     return { observation: null, reason: "invalidContext" };
   }
 
-  const reportPrimaryInjury = optionalText(row.report_primary_injury, 160);
+  const explicitReportPrimaryInjury = optionalText(row.report_primary_injury, 160);
   const reportSecondaryInjury = optionalText(row.report_secondary_injury, 160);
   const normalizedReportStatus = reportStatus(row.report_status);
+  const practicePrimaryInjury = optionalText(row.practice_primary_injury, 160);
+  const practiceSecondaryInjury = optionalText(row.practice_secondary_injury, 160);
+  const normalizedPracticeStatus = practiceStatus(row.practice_status);
+  // The compact schema carries one injury description. When a game designation is present, it
+  // describes that same injury; preserve the report/practice API shape without inventing text.
+  const reportPrimaryInjury =
+    explicitReportPrimaryInjury ??
+    (normalizedReportStatus !== null && normalizedReportStatus !== undefined
+      ? practicePrimaryInjury
+      : null);
   if (
+    explicitReportPrimaryInjury === undefined ||
     reportPrimaryInjury === undefined ||
     reportSecondaryInjury === undefined ||
     normalizedReportStatus === undefined ||
@@ -288,9 +309,6 @@ function normalizeRow(
     return { observation: null, reason: "invalidReport" };
   }
 
-  const practicePrimaryInjury = optionalText(row.practice_primary_injury, 160);
-  const practiceSecondaryInjury = optionalText(row.practice_secondary_injury, 160);
-  const normalizedPracticeStatus = practiceStatus(row.practice_status);
   if (
     practicePrimaryInjury === undefined ||
     practiceSecondaryInjury === undefined ||
@@ -349,7 +367,10 @@ function observationStateKey(observation: NflversePlayerInjuryReport): string {
     .join("|");
 }
 
-function assertCompleteArtifact(observations: readonly NflversePlayerInjuryReport[]): {
+function assertCompleteArtifact(
+  observations: readonly NflversePlayerInjuryReport[],
+  compactDesignationSchema: boolean,
+): {
   readonly coveredWeeks: readonly number[];
   readonly coveredSeasonTypes: readonly NflverseSeasonType[];
   readonly coveredTeams: readonly string[];
@@ -370,8 +391,10 @@ function assertCompleteArtifact(observations: readonly NflversePlayerInjuryRepor
     coveredTeams.length > 32
   ) {
     throw new NflverseDatasetSourceError(
-      "QUALITY_THRESHOLD",
-      "nflverse injuries failed sparse-artifact coverage validation",
+      compactDesignationSchema ? "NOT_AVAILABLE" : "QUALITY_THRESHOLD",
+      compactDesignationSchema
+        ? "nflverse compact injury feed is not yet complete enough for league-wide admission"
+        : "nflverse injuries failed sparse-artifact coverage validation",
     );
   }
 
@@ -489,7 +512,7 @@ function parseInjuries(body: string, season: number) {
     absoluteRejectionAllowance: ABSOLUTE_REJECTION_ALLOWANCE,
     maximumRejectionRatio: MAXIMUM_REJECTION_RATIO,
   });
-  const coverage = assertCompleteArtifact(observations);
+  const coverage = assertCompleteArtifact(observations, parsed.compactDesignationSchema);
   observations.sort(
     (left, right) =>
       left.week - right.week ||

@@ -61,6 +61,25 @@ function withoutColumn(body: string, name: string): string {
     .join("\n");
 }
 
+function compactDesignationFixture(body: string): string {
+  const rows = csvRows(body);
+  const header = rows[0] ?? [];
+  const reportPrimary = header.indexOf("report_primary_injury");
+  const practicePrimary = header.indexOf("practice_primary_injury");
+  const practiceStatus = header.indexOf("practice_status");
+  for (const row of rows.slice(1)) {
+    if (!row[practicePrimary] && row[reportPrimary]) {
+      row[practicePrimary] = row[reportPrimary];
+      row[practiceStatus] = "Limited Participation in Practice";
+    }
+  }
+  const compactReady = rows.map((row) => row.join(",")).join("\n");
+  return ["report_primary_injury", "report_secondary_injury", "practice_secondary_injury"].reduce(
+    (current, column) => withoutColumn(current, column),
+    compactReady,
+  );
+}
+
 function legacyTimestampFixture(body: string): string {
   const rows = csvRows(body);
   const seasonTypeIndex = rows[0]?.indexOf("season_type") ?? -1;
@@ -76,7 +95,7 @@ function legacyTimestampFixture(body: string): string {
 }
 
 describe("NflverseInjuriesSource", () => {
-  it("tracks the exact current injury-release schema", () => {
+  it("tracks the complete legacy injury-release schema fixture", () => {
     expect(csvRows(fixture)[0]).toEqual([
       "season",
       "season_type",
@@ -95,6 +114,38 @@ describe("NflverseInjuriesSource", () => {
       "practice_secondary_injury",
       "practice_status",
     ]);
+  });
+
+  it("accepts the compact 2026 designation schema without inventing injury text", async () => {
+    const source = new NflverseInjuriesSource({
+      fetch: () => Promise.resolve(new Response(compactDesignationFixture(completeFixture()))),
+    });
+
+    const result = await source.check(2025, EMPTY_STATE);
+
+    if (result.state !== "changed") throw new Error("Expected changed injuries");
+    expect(result).toMatchObject({ rowsRead: 16, rowsRejected: 0, coveredTeams: [...TEAMS] });
+    expect(result.observations.find((row) => row.fullName === "Player 0000001")).toMatchObject({
+      report: { primaryInjury: "Knee", secondaryInjury: null, status: "out" },
+      practice: { primaryInjury: "Knee", secondaryInjury: null, status: "limited" },
+    });
+    expect(result.observations.find((row) => row.fullName === "Player 0000002")).toMatchObject({
+      report: { primaryInjury: null, secondaryInjury: null, status: null },
+      practice: { primaryInjury: "Illness", secondaryInjury: null, status: "limited" },
+    });
+  });
+
+  it("treats a preliminary compact feed as not yet available instead of a failed source", async () => {
+    const compactRows = csvRows(compactDesignationFixture(completeFixture())).slice(0, 9);
+    const source = new NflverseInjuriesSource({
+      fetch: () =>
+        Promise.resolve(new Response(compactRows.map((row) => row.join(",")).join("\n"))),
+    });
+
+    await expect(source.check(2025, EMPTY_STATE)).rejects.toMatchObject({
+      code: "NOT_AVAILABLE",
+      retryable: false,
+    });
   });
 
   it("normalizes sparse current-schema reports without requiring every team or week", async () => {
