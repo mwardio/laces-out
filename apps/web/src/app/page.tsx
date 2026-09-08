@@ -40,7 +40,7 @@ export const metadata: Metadata = {
   robots: { index: true, follow: true },
   openGraph: {
     ...siteOpenGraph,
-    title: "Laces Out: Connect your leagues. Get the next move.",
+    title: "Laces Out: League-Aware Fantasy Analysis",
     description: yahooComingSoon
       ? "A private fantasy football locker room with ESPN sync, backtested weekly forecasts, and ranked decisions."
       : "A private fantasy football locker room that turns fresh Yahoo and ESPN league data into forecasts and ranked decisions.",
@@ -48,7 +48,7 @@ export const metadata: Metadata = {
   },
   twitter: {
     card: "summary_large_image",
-    title: "Laces Out: Automated Fantasy Football Intelligence",
+    title: "Laces Out: League-Aware Fantasy Analysis",
     description: yahooComingSoon
       ? "ESPN league sync, built-in weekly forecasts, and automatic league-aware decision analysis."
       : "Yahoo and ESPN sync with built-in weekly forecasts and automatic, league-aware decision analysis.",

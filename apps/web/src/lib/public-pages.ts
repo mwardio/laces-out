@@ -28,7 +28,7 @@ export const publicPages: readonly PublicPage[] = [
   {
     // apps/web/src/app/page.tsx
     path: "/",
-    lastModified: "2026-09-04",
+    lastModified: "2026-09-08",
     changeFrequency: "weekly",
     priority: 1,
   },
