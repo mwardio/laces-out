@@ -76,6 +76,13 @@ const statDefaults: Readonly<
     field_goals_made_40_49: 0.55,
     field_goals_made_50_59: 0.27,
     field_goals_made_60_plus: 0.03,
+    field_goals_missed_0_19: 0.005,
+    field_goals_missed_20_29: 0.015,
+    field_goals_missed_30_39: 0.06,
+    field_goals_missed_40_49: 0.1,
+    field_goals_missed_50_59: 0.13,
+    field_goals_missed_60_plus: 0.04,
+    field_goals_total_yards: 72,
     extra_points_attempted: 2.7,
     extra_points_made: 2.55,
     extra_points_missed: 0.15,
@@ -237,6 +244,20 @@ describe("first-party component projection", () => {
     expect(kicker.components.field_goals_missed).toBeCloseTo(
       (kicker.components.field_goals_attempted ?? 0) - (kicker.components.field_goals_made ?? 0),
       10,
+    );
+    expect(kicker.components.field_goals_missed_0_39).toBeCloseTo(
+      (kicker.components.field_goals_missed_0_19 ?? 0) +
+        (kicker.components.field_goals_missed_20_29 ?? 0) +
+        (kicker.components.field_goals_missed_30_39 ?? 0),
+      10,
+    );
+    expect(kicker.components.field_goals_missed_50_plus).toBeCloseTo(
+      (kicker.components.field_goals_missed_50_59 ?? 0) +
+        (kicker.components.field_goals_missed_60_plus ?? 0),
+      10,
+    );
+    expect(kicker.components.field_goals_total_yards).toBeLessThanOrEqual(
+      (kicker.components.field_goals_made ?? 0) * 70,
     );
     expect(kicker.components.extra_points_missed).toBeCloseTo(
       (kicker.components.extra_points_attempted ?? 0) - (kicker.components.extra_points_made ?? 0),
@@ -531,6 +552,7 @@ const defenseDefaults = {
   defensive_safeties: 0.05,
   defensive_touchdowns: 0.18,
   defensive_blocked_kicks: 0.12,
+  fourth_down_stops: 0.85,
   special_teams_touchdowns: 0.08,
   points_allowed: 22,
   yards_allowed: 338,
@@ -619,6 +641,11 @@ describe("first-party team-defense projection", () => {
     expect(yahooPointBucketTotal).toBeCloseTo(1, 10);
     expect(espnPointBucketTotal).toBeCloseTo(1, 10);
     expect(yardBucketTotal).toBeCloseTo(1, 10);
+    expect(projection.components.yards_allowed_500_plus_probability).toBeCloseTo(
+      (projection.components.yards_allowed_500_549_probability ?? 0) +
+        (projection.components.yards_allowed_550_plus_probability ?? 0),
+      10,
+    );
     expect(projection.components.points_allowed_21_27_probability).toBeGreaterThan(0);
     expect(projection.components.points_allowed_22_27_probability).toBeGreaterThan(0);
     for (const component of yardsAllowedBucketComponents) {

@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 import { NflverseDatasetSourceError, type NflverseDatasetState } from "./release-source.js";
+import type { NflverseFourthDownStopsLoader } from "./fourth-down-stops-source.js";
 import {
   NFLVERSE_TEAM_WEEKLY_STATS_SOURCE_KEY,
   NflverseTeamWeeklyStatsSource,
@@ -15,6 +16,68 @@ const EMPTY_STATE: NflverseDatasetState = {
   lastModified: null,
   checksumSha256: null,
 };
+const fourthDowns = {
+  load: (season: number) =>
+    Promise.resolve({
+      checkedAt: "2026-07-21T18:00:00.000Z",
+      sourceKey: "nflverse.play-by-play.fourth-down-stops" as const,
+      sourceUrl: `https://github.com/nflverse/nflverse-data/releases/download/pbp/play_by_play_${season}.csv.gz`,
+      attribution: "Fourth-down outcomes derived from nflverse play-by-play (CC BY 4.0)" as const,
+      attributionUrl: "https://github.com/nflverse/nflverse-data" as const,
+      license: "CC BY 4.0" as const,
+      season,
+      etag: '"pbp-v1"',
+      lastModified: "Tue, 21 Jul 2026 17:00:00 GMT",
+      checksumSha256: "b".repeat(64),
+      rowsRead: 8,
+      rowsRejected: 0,
+      coveredGames: 2,
+      observations: [
+        {
+          season,
+          week: 1,
+          seasonType: "REG" as const,
+          gameId: "2024_01_TEN_CHI",
+          team: "CHI",
+          opponentTeam: "TEN",
+          fourthDownStops: 2,
+        },
+        {
+          season,
+          week: 1,
+          seasonType: "REG" as const,
+          gameId: "2024_01_TEN_CHI",
+          team: "TEN",
+          opponentTeam: "CHI",
+          fourthDownStops: 1,
+        },
+        {
+          season,
+          week: 19,
+          seasonType: "POST" as const,
+          gameId: "2024_19_PIT_BAL",
+          team: "BAL",
+          opponentTeam: "PIT",
+          fourthDownStops: 0,
+        },
+        {
+          season,
+          week: 19,
+          seasonType: "POST" as const,
+          gameId: "2024_19_PIT_BAL",
+          team: "PIT",
+          opponentTeam: "BAL",
+          fourthDownStops: 0,
+        },
+      ],
+    }),
+} satisfies NflverseFourthDownStopsLoader;
+
+function teamSource(
+  options: ConstructorParameters<typeof NflverseTeamWeeklyStatsSource>[0] = {},
+): NflverseTeamWeeklyStatsSource {
+  return new NflverseTeamWeeklyStatsSource({ fourthDowns, ...options });
+}
 
 function csvRows(body: string): string[][] {
   return body
@@ -51,7 +114,7 @@ function replaceTeamCell(body: string, team: string, column: string, value: stri
 describe("NflverseTeamWeeklyStatsSource", () => {
   it("normalizes complete reciprocal REG and POST team games for opponent and D/ST models", async () => {
     const requests: Array<{ readonly url: string; readonly headers: Headers }> = [];
-    const source = new NflverseTeamWeeklyStatsSource({
+    const source = teamSource({
       now: () => new Date("2026-07-21T18:00:00.000Z"),
       fetch: (input, init) => {
         requests.push({ url: input.toString(), headers: new Headers(init?.headers) });
@@ -122,6 +185,7 @@ describe("NflverseTeamWeeklyStatsSource", () => {
       defensive_interception_return_yards: 52,
       defensive_touchdowns: 1,
       defensive_safeties: 0,
+      fourth_down_stops: 2,
       special_teams_touchdowns: 1,
       field_goals_made: 3,
       field_goals_attempted: 3,
@@ -148,7 +212,7 @@ describe("NflverseTeamWeeklyStatsSource", () => {
 
   it("retains a nonzero defensive safety without folding it into touchdown totals", async () => {
     const withSafety = replaceTeamCell(fixture, "BAL", "def_safeties", "1");
-    const source = new NflverseTeamWeeklyStatsSource({
+    const source = teamSource({
       fetch: () => Promise.resolve(new Response(withSafety)),
     });
     const result = await source.check(2024, EMPTY_STATE);
@@ -166,7 +230,7 @@ describe("NflverseTeamWeeklyStatsSource", () => {
       "pt_blocked",
       "1",
     );
-    const source = new NflverseTeamWeeklyStatsSource({
+    const source = teamSource({
       fetch: () => Promise.resolve(new Response(withBlockedPunt)),
     });
     const result = await source.check(2024, EMPTY_STATE);
@@ -178,7 +242,7 @@ describe("NflverseTeamWeeklyStatsSource", () => {
   });
 
   it("preserves conditional release state on a 304", async () => {
-    const source = new NflverseTeamWeeklyStatsSource({
+    const source = teamSource({
       fetch: () => Promise.resolve(new Response(null, { status: 304 })),
     });
     await expect(
@@ -195,7 +259,7 @@ describe("NflverseTeamWeeklyStatsSource", () => {
   });
 
   it("fails closed when an upstream model input column disappears", async () => {
-    const source = new NflverseTeamWeeklyStatsSource({
+    const source = teamSource({
       fetch: () => Promise.resolve(new Response(removeColumn(fixture, "def_sacks"))),
     });
     await expect(source.check(2024, EMPTY_STATE)).rejects.toMatchObject({
@@ -209,7 +273,7 @@ describe("NflverseTeamWeeklyStatsSource", () => {
       "def_fumbles_forced,def_sacks",
       "def_fumbles_forced,def_fumbles_forced",
     );
-    const source = new NflverseTeamWeeklyStatsSource({
+    const source = teamSource({
       fetch: () => Promise.resolve(new Response(duplicateHeader)),
     });
     await expect(source.check(2024, EMPTY_STATE)).rejects.toMatchObject({
@@ -220,7 +284,7 @@ describe("NflverseTeamWeeklyStatsSource", () => {
 
   it("rejects internally inconsistent team totals rather than repairing them", async () => {
     const invalid = replaceTeamCell(fixture, "CHI", "completions", "30");
-    const source = new NflverseTeamWeeklyStatsSource({
+    const source = teamSource({
       fetch: () => Promise.resolve(new Response(invalid)),
     });
     await expect(source.check(2024, EMPTY_STATE)).rejects.toMatchObject({
@@ -235,7 +299,7 @@ describe("NflverseTeamWeeklyStatsSource", () => {
       .split("\n")
       .filter((line) => !line.startsWith("2024,1,TEN,"))
       .join("\n");
-    const source = new NflverseTeamWeeklyStatsSource({
+    const source = teamSource({
       fetch: () => Promise.resolve(new Response(partial)),
     });
     await expect(source.check(2024, EMPTY_STATE)).rejects.toMatchObject({
@@ -247,7 +311,7 @@ describe("NflverseTeamWeeklyStatsSource", () => {
   it("rejects duplicate team-game observations instead of selecting one by input order", async () => {
     const lines = fixture.trimEnd().split("\n");
     const duplicate = [...lines, lines[1] ?? ""].join("\n");
-    const source = new NflverseTeamWeeklyStatsSource({
+    const source = teamSource({
       fetch: () => Promise.resolve(new Response(duplicate)),
     });
     await expect(source.check(2024, EMPTY_STATE)).rejects.toMatchObject({
@@ -275,7 +339,7 @@ describe("NflverseTeamWeeklyStatsSource", () => {
       code: "TOO_LARGE",
     },
   ])("rejects $name", async ({ response, code }) => {
-    const source = new NflverseTeamWeeklyStatsSource({
+    const source = teamSource({
       fetch: () => Promise.resolve(response.clone()),
     });
     const error = await source.check(2024, EMPTY_STATE).catch((caught: unknown) => caught);
@@ -285,7 +349,7 @@ describe("NflverseTeamWeeklyStatsSource", () => {
 
   it("validates season context before fetching", async () => {
     let fetched = false;
-    const source = new NflverseTeamWeeklyStatsSource({
+    const source = teamSource({
       fetch: () => {
         fetched = true;
         return Promise.resolve(new Response(fixture));

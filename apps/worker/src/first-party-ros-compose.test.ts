@@ -1,6 +1,10 @@
 import { readFileSync } from "node:fs";
 
-import { rosScoringProfile, type FirstPartyRosChampionPolicy } from "@laces-out/projections";
+import {
+  FIRST_PARTY_ROS_MODEL_VERSION,
+  rosScoringProfile,
+  type FirstPartyRosChampionPolicy,
+} from "@laces-out/projections";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -9,6 +13,7 @@ import {
 } from "./first-party-ros-admission.js";
 import { composeFirstPartyRosValidationReport, sha256Text } from "./first-party-ros-compose.js";
 import { firstPartyRosChampionPolicyChecksum } from "./first-party-ros-publication.js";
+import { HISTORICAL_ROS_KICKER_CALIBRATION_VERSION } from "./first-party-ros-backtest.js";
 
 type JsonObject = Record<string, unknown>;
 
@@ -28,14 +33,21 @@ function publicationPolicy(value: unknown): FirstPartyRosChampionPolicy {
   return object(value) as unknown as FirstPartyRosChampionPolicy;
 }
 
-const baseRaw = readFileSync(
+const pinnedBaseRaw = readFileSync(
   new URL(
     "../../../reports/ros-release-laces-ros-distribution-v8-20260813-n8/full-ppr.json",
     import.meta.url,
   ),
   "utf8",
 );
-const baseFixture = JSON.parse(baseRaw) as JsonObject;
+const baseFixture = JSON.parse(pinnedBaseRaw) as JsonObject;
+// Composition is deliberately numeric-model agnostic, but its final structural rail admits only
+// the running model envelope. Keep the pinned v8 evidence payload intact while advancing the
+// three envelope identities changed by the v9 kicker-vocabulary bump.
+object(baseFixture.champion).modelVersion = FIRST_PARTY_ROS_MODEL_VERSION;
+object(baseFixture.publicationPolicy).modelVersion = FIRST_PARTY_ROS_MODEL_VERSION;
+object(baseFixture.report).kickerCalibrationVersion = HISTORICAL_ROS_KICKER_CALIBRATION_VERSION;
+const baseRaw = JSON.stringify(baseFixture);
 
 function positionSlice(target: string): JsonObject {
   const slice = structuredClone(baseFixture);

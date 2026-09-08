@@ -7,7 +7,7 @@ import {
   type ProjectionStatComponents,
 } from "./scoring.js";
 
-export const FIRST_PARTY_PROJECTION_MODEL_VERSION = "laces-weekly-components-v9";
+export const FIRST_PARTY_PROJECTION_MODEL_VERSION = "laces-weekly-components-v10";
 
 export type FirstPartyProjectionPosition = "QB" | "RB" | "WR" | "TE" | "K";
 
@@ -529,6 +529,15 @@ const POSITION_COMPONENTS: Readonly<Record<FirstPartyProjectionPosition, readonl
     "field_goals_made_50_59",
     "field_goals_made_60_plus",
     "field_goals_made_50_plus",
+    "field_goals_missed_0_19",
+    "field_goals_missed_20_29",
+    "field_goals_missed_30_39",
+    "field_goals_missed_0_39",
+    "field_goals_missed_40_49",
+    "field_goals_missed_50_59",
+    "field_goals_missed_60_plus",
+    "field_goals_missed_50_plus",
+    "field_goals_total_yards",
     "extra_points_attempted",
     "extra_points_made",
     "extra_points_missed",
@@ -576,6 +585,15 @@ const COMPONENT_CAPS: Readonly<Record<string, number>> = {
   field_goals_made_50_59: 5,
   field_goals_made_60_plus: 3,
   field_goals_made_50_plus: 6,
+  field_goals_missed_0_19: 5,
+  field_goals_missed_20_29: 5,
+  field_goals_missed_30_39: 6,
+  field_goals_missed_0_39: 8,
+  field_goals_missed_40_49: 6,
+  field_goals_missed_50_59: 6,
+  field_goals_missed_60_plus: 4,
+  field_goals_missed_50_plus: 8,
+  field_goals_total_yards: 700,
   extra_points_attempted: 10,
   extra_points_made: 10,
   extra_points_missed: 5,
@@ -585,6 +603,7 @@ const COMPONENT_CAPS: Readonly<Record<string, number>> = {
   defensive_safeties: 4,
   defensive_touchdowns: 6,
   defensive_blocked_kicks: 6,
+  fourth_down_stops: 8,
   points_allowed: 80,
   yards_allowed: 800,
   points_allowed_0_probability: 1,
@@ -608,6 +627,7 @@ const COMPONENT_CAPS: Readonly<Record<string, number>> = {
   yards_allowed_450_499_probability: 1,
   yards_allowed_500_549_probability: 1,
   yards_allowed_550_plus_probability: 1,
+  yards_allowed_500_plus_probability: 1,
   ...Object.fromEntries(
     ESPN_EVERY_N_FLOOR_UNIT_COMPONENTS.map(({ component, source, divisor }) => {
       const sourceCap =
@@ -710,15 +730,28 @@ const ESPN_TEAM_DEFENSE_YARDS_ALLOWED_BUCKETS = [
   },
 ] as const;
 
+/** Yahoo provider ID 76 is one inclusive 500-plus bracket, spanning ESPN's last two tiers. */
+const YAHOO_TEAM_DEFENSE_YARDS_ALLOWED_BUCKETS = [
+  {
+    component: "yards_allowed_500_plus_probability",
+    minimum: 500,
+    maximum: Number.POSITIVE_INFINITY,
+  },
+] as const;
+
 /**
- * One ESPN group today. The group shape mirrors `TEAM_DEFENSE_POINTS_ALLOWED_BUCKET_GROUPS` so
- * Yahoo's 12-bucket yards-allowed ladder (provider IDs 70-81) can be admitted later without
- * restructuring; Yahoo's bracket boundaries are not evidence-established and stay unsupported.
+ * The complete ESPN partition and Yahoo's evidence-established 500-plus tier may overlap. Each
+ * group is normalized from the same yards distribution, so overlapping provider vocabularies do
+ * not double-count unless a league explicitly prices both.
  */
 const TEAM_DEFENSE_YARDS_ALLOWED_BUCKET_GROUPS = [
   {
     buckets: ESPN_TEAM_DEFENSE_YARDS_ALLOWED_BUCKETS,
     fallbackComponent: "yards_allowed_300_349_probability",
+  },
+  {
+    buckets: YAHOO_TEAM_DEFENSE_YARDS_ALLOWED_BUCKETS,
+    fallbackComponent: "yards_allowed_500_plus_probability",
   },
 ] as const;
 
@@ -744,6 +777,7 @@ const TEAM_DEFENSE_MODELED_COMPONENTS = [
   "defensive_safeties",
   "defensive_touchdowns",
   "defensive_blocked_kicks",
+  "fourth_down_stops",
   "special_teams_touchdowns",
   "points_allowed",
   "yards_allowed",
@@ -1549,6 +1583,37 @@ function normalizeComponentRelationships(
     components.field_goals_missed = Math.max(
       0,
       (components.field_goals_attempted ?? 0) - (components.field_goals_made ?? 0),
+    );
+    const missedDistanceComponents = [
+      "field_goals_missed_0_19",
+      "field_goals_missed_20_29",
+      "field_goals_missed_30_39",
+      "field_goals_missed_40_49",
+      "field_goals_missed_50_59",
+      "field_goals_missed_60_plus",
+    ] as const;
+    const distanceMisses = missedDistanceComponents.reduce(
+      (sum, component) => sum + (components[component] ?? 0),
+      0,
+    );
+    // `attempted - made` also contains blocked kicks, while the distance buckets contain recorded
+    // misses only. Preserve that legitimate gap; only scale when independently fitted buckets
+    // would otherwise exceed the aggregate non-make ceiling.
+    if (distanceMisses > (components.field_goals_missed ?? 0) && distanceMisses > 0) {
+      const distanceScale = (components.field_goals_missed ?? 0) / distanceMisses;
+      for (const component of missedDistanceComponents) {
+        components[component] = (components[component] ?? 0) * distanceScale;
+      }
+    }
+    components.field_goals_missed_0_39 =
+      (components.field_goals_missed_0_19 ?? 0) +
+      (components.field_goals_missed_20_29 ?? 0) +
+      (components.field_goals_missed_30_39 ?? 0);
+    components.field_goals_missed_50_plus =
+      (components.field_goals_missed_50_59 ?? 0) + (components.field_goals_missed_60_plus ?? 0);
+    components.field_goals_total_yards = Math.min(
+      components.field_goals_total_yards ?? 0,
+      (components.field_goals_made ?? 0) * 70,
     );
     components.extra_points_made = Math.min(
       components.extra_points_made ?? 0,

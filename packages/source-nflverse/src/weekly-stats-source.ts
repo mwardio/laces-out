@@ -64,6 +64,14 @@ export interface NflverseWeeklyStatComponents {
   readonly field_goals_made_40_49: number;
   readonly field_goals_made_50_59: number;
   readonly field_goals_made_60_plus: number;
+  readonly field_goals_missed_0_19: number;
+  readonly field_goals_missed_20_29: number;
+  readonly field_goals_missed_30_39: number;
+  readonly field_goals_missed_40_49: number;
+  readonly field_goals_missed_50_59: number;
+  readonly field_goals_missed_60_plus: number;
+  /** Sum of the official distances of made field goals. */
+  readonly field_goals_total_yards: number;
   readonly extra_points_made: number;
   readonly extra_points_attempted: number;
   readonly extra_points_missed: number;
@@ -264,6 +272,13 @@ const REQUIRED_COLUMNS = [
   "fg_made_40_49",
   "fg_made_50_59",
   "fg_made_60_",
+  "fg_missed_0_19",
+  "fg_missed_20_29",
+  "fg_missed_30_39",
+  "fg_missed_40_49",
+  "fg_missed_50_59",
+  "fg_missed_60_",
+  "fg_made_distance",
   "pat_made",
   "pat_att",
   "pat_missed",
@@ -346,6 +361,13 @@ function normalizeRow(
     field_goals_made_40_49: boundedNumber(row.fg_made_40_49, 0, 20, true) ?? Number.NaN,
     field_goals_made_50_59: boundedNumber(row.fg_made_50_59, 0, 20, true) ?? Number.NaN,
     field_goals_made_60_plus: boundedNumber(row.fg_made_60_, 0, 20, true) ?? Number.NaN,
+    field_goals_missed_0_19: boundedNumber(row.fg_missed_0_19, 0, 20, true) ?? Number.NaN,
+    field_goals_missed_20_29: boundedNumber(row.fg_missed_20_29, 0, 20, true) ?? Number.NaN,
+    field_goals_missed_30_39: boundedNumber(row.fg_missed_30_39, 0, 20, true) ?? Number.NaN,
+    field_goals_missed_40_49: boundedNumber(row.fg_missed_40_49, 0, 20, true) ?? Number.NaN,
+    field_goals_missed_50_59: boundedNumber(row.fg_missed_50_59, 0, 20, true) ?? Number.NaN,
+    field_goals_missed_60_plus: boundedNumber(row.fg_missed_60_, 0, 20, true) ?? Number.NaN,
+    field_goals_total_yards: boundedNumber(row.fg_made_distance, 0, 1_000, true) ?? Number.NaN,
     extra_points_made: boundedNumber(row.pat_made, 0, 20, true) ?? Number.NaN,
     extra_points_attempted: boundedNumber(row.pat_att, 0, 20, true) ?? Number.NaN,
     extra_points_missed: boundedNumber(row.pat_missed, 0, 20, true) ?? Number.NaN,
@@ -366,6 +388,20 @@ function normalizeRow(
   };
   const standard = boundedNumber(row.fantasy_points, -200, 500);
   const ppr = boundedNumber(row.fantasy_points_ppr, -200, 500);
+  const distanceMakes =
+    components.field_goals_made_0_19 +
+    components.field_goals_made_20_29 +
+    components.field_goals_made_30_39 +
+    components.field_goals_made_40_49 +
+    components.field_goals_made_50_59 +
+    components.field_goals_made_60_plus;
+  const distanceMisses =
+    components.field_goals_missed_0_19 +
+    components.field_goals_missed_20_29 +
+    components.field_goals_missed_30_39 +
+    components.field_goals_missed_40_49 +
+    components.field_goals_missed_50_59 +
+    components.field_goals_missed_60_plus;
   if (
     Object.values(components).some((value) => !Number.isFinite(value)) ||
     Object.values(advanced).some((value) => value !== null && !Number.isFinite(value)) ||
@@ -375,7 +411,9 @@ function normalizeRow(
     components.receptions > components.targets ||
     components.sack_fumbles_lost > components.fumbles_lost_total ||
     components.rushing_fumbles_lost > components.fumbles_lost_total ||
-    components.receiving_fumbles_lost > components.fumbles_lost_total
+    components.receiving_fumbles_lost > components.fumbles_lost_total ||
+    distanceMakes !== components.field_goals_made ||
+    distanceMisses !== components.field_goals_missed
   ) {
     return { observation: null, reason: "invalidStats" };
   }

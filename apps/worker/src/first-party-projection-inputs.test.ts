@@ -249,6 +249,7 @@ describe("first-party projection input assembly", () => {
             defensive_fumbles_recovered: 2,
             defensive_safeties: 0,
             defensive_touchdowns: 1,
+            fourth_down_stops: 2,
             special_teams_touchdowns: 0,
             total_offensive_yards: 310,
           },
@@ -282,6 +283,7 @@ describe("first-party projection input assembly", () => {
     expect(history.find((row) => row.team === "CHI")?.components).toMatchObject({
       defensive_sacks: 3,
       defensive_fumble_recoveries: 2,
+      fourth_down_stops: 2,
       defensive_blocked_kicks: 2,
       points_allowed: 17,
       yards_allowed: 275,

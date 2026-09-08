@@ -615,7 +615,7 @@ function clamp(value: number, minimum: number, maximum: number): number {
 export const HISTORICAL_ROS_AVAILABILITY_CALIBRATION_VERSION =
   "historical-ros-availability-curve-matched-v3";
 export const HISTORICAL_ROS_ROLE_CALIBRATION_VERSION = "historical-ros-role-center-two-moment-v4";
-export const HISTORICAL_ROS_KICKER_CALIBRATION_VERSION = "historical-ros-kicker-count-process-v1";
+export const HISTORICAL_ROS_KICKER_CALIBRATION_VERSION = "historical-ros-kicker-count-process-v2";
 
 /**
  * Consecutive played scheduled opportunities entering a week. `returning` players (streak <= 1)
@@ -1238,6 +1238,8 @@ export interface HistoricalRosKickerCalibration {
   readonly centerVolatility: number;
   /** League FG-make share by scoring bucket (0-39, 40-49, 50+); degenerate-input fallback only. */
   readonly leagueBucketMix: readonly [number, number, number];
+  /** League recorded-miss share by distance (0-19 through 60+); degenerate-input fallback only. */
+  readonly leagueMissBucketMix: readonly [number, number, number, number, number, number];
   /** Within-kicker-season dispersion of the five simulated components. Diagnostic, report-surfaced. */
   readonly dispersionAudit: Readonly<
     Record<"made0_39" | "made40_49" | "made50Plus" | "missed" | "extraPointsMade", number>
@@ -1253,6 +1255,24 @@ export interface HistoricalRosKickerCalibration {
 
 const KICKER_FAMILY_AUDIT_BOUNDS = [0.7, 1.3] as const;
 const KICKER_BUCKET_MIX_FALLBACK = [0.57, 0.27, 0.16] as const;
+const KICKER_MISS_BUCKET_KEYS = [
+  "field_goals_missed_0_19",
+  "field_goals_missed_20_29",
+  "field_goals_missed_30_39",
+  "field_goals_missed_40_49",
+  "field_goals_missed_50_59",
+  "field_goals_missed_60_plus",
+] as const;
+// 2023-2025 REG nflverse team-week fallback (426 recorded misses), used only for a corpus too
+// sparse to estimate its own mix. Fractions remain exact and therefore sum to one in validation.
+const KICKER_MISS_BUCKET_MIX_FALLBACK = [
+  0,
+  14 / 426,
+  38 / 426,
+  155 / 426,
+  197 / 426,
+  22 / 426,
+] as const;
 
 function kickerComponentValue(components: ProjectionStatComponents, key: string): number {
   const value = components[key];
@@ -1364,6 +1384,7 @@ export function calibrateHistoricalRosKicker(
   let made0_39Sum = 0;
   let made40_49Sum = 0;
   let made50PlusSum = 0;
+  const missBucketSums = KICKER_MISS_BUCKET_KEYS.map(() => 0);
   for (const row of rows) {
     const value = kickerRowEvents(row.components);
     missedSum += value.missed;
@@ -1371,6 +1392,10 @@ export function calibrateHistoricalRosKicker(
     made0_39Sum += value.made0_39;
     made40_49Sum += value.made40_49;
     made50PlusSum += value.made50Plus;
+    for (const [index, component] of KICKER_MISS_BUCKET_KEYS.entries()) {
+      missBucketSums[index] =
+        (missBucketSums[index] ?? 0) + kickerComponentValue(row.components, component);
+    }
   }
   const recordedMissRatio = derivedMissSum < 50 ? 0.95 : clamp(missedSum / derivedMissSum, 0.85, 1);
   const totalMakes = made0_39Sum + made40_49Sum + made50PlusSum;
@@ -1378,6 +1403,18 @@ export function calibrateHistoricalRosKicker(
     totalMakes < 200
       ? KICKER_BUCKET_MIX_FALLBACK
       : [made0_39Sum / totalMakes, made40_49Sum / totalMakes, made50PlusSum / totalMakes];
+  const totalDistanceMisses = missBucketSums.reduce((sum, value) => sum + value, 0);
+  const leagueMissBucketMix: readonly [number, number, number, number, number, number] =
+    totalDistanceMisses < 50
+      ? KICKER_MISS_BUCKET_MIX_FALLBACK
+      : (missBucketSums.map((value) => value / totalDistanceMisses) as [
+          number,
+          number,
+          number,
+          number,
+          number,
+          number,
+        ]);
 
   // Static center-error volatility: the role calibrator's exact estimator restricted to kicker
   // prediction rows, owned here so the live path (which historically passed no predictions to
@@ -1497,6 +1534,7 @@ export function calibrateHistoricalRosKicker(
     recordedMissRatio,
     centerVolatility,
     leagueBucketMix,
+    leagueMissBucketMix,
     dispersionAudit,
     familyAudit,
     evidence: {
@@ -1507,7 +1545,7 @@ export function calibrateHistoricalRosKicker(
   };
 }
 
-/** Projects the calibration onto the five scalars the kicker simulation branch consumes. */
+/** Projects the calibration onto the kicker simulation branch's fitted inputs. */
 export function historicalRosKickerProcess(
   calibration: HistoricalRosKickerCalibration,
 ): FirstPartyRosKickerProcessInput {
@@ -1517,6 +1555,7 @@ export function historicalRosKickerProcess(
     recordedMissRatio: calibration.recordedMissRatio,
     centerVolatility: calibration.centerVolatility,
     bucketMix: calibration.leagueBucketMix,
+    missBucketMix: calibration.leagueMissBucketMix,
   };
 }
 

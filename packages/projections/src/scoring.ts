@@ -167,6 +167,13 @@ export function normalizeHistoricalPlayerStatComponents(
     field_goals_made_50_plus:
       finiteNonnegativeComponent(components, "field_goals_made_50_59") +
       finiteNonnegativeComponent(components, "field_goals_made_60_plus"),
+    field_goals_missed_0_39:
+      finiteNonnegativeComponent(components, "field_goals_missed_0_19") +
+      finiteNonnegativeComponent(components, "field_goals_missed_20_29") +
+      finiteNonnegativeComponent(components, "field_goals_missed_30_39"),
+    field_goals_missed_50_plus:
+      finiteNonnegativeComponent(components, "field_goals_missed_50_59") +
+      finiteNonnegativeComponent(components, "field_goals_missed_60_plus"),
     return_yards:
       finiteNonnegativeComponent(components, "punt_return_yards") +
       finiteNonnegativeComponent(components, "kickoff_return_yards"),

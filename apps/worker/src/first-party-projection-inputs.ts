@@ -363,6 +363,7 @@ export function buildFirstPartyDefenseHistory(
             defensive_fumble_recoveries: component(row.components, "defensive_fumbles_recovered"),
             defensive_safeties: component(row.components, "defensive_safeties"),
             defensive_touchdowns: component(row.components, "defensive_touchdowns"),
+            fourth_down_stops: component(row.components, "fourth_down_stops"),
             special_teams_touchdowns: component(row.components, "special_teams_touchdowns"),
             defensive_blocked_kicks:
               component(opponent.components, "field_goals_blocked") +

@@ -414,24 +414,22 @@ describe("normalizeLeagueScoringProfile", () => {
     });
   });
 
-  it("keeps unsupported custom Yahoo K and D/ST rules from withholding offensive positions", () => {
+  it("normalizes the drafted custom Yahoo K and D/ST rules without withholding positions", () => {
     const result = normalized(YAHOO_SCOPED_CUSTOM_2026_ROWS);
     expectAvailable(result);
-    expect(supportedPositions(result)).toEqual(["QB", "RB", "WR", "TE"]);
-    expect(supportFor(result, "K").reasons.map((reason) => reason.providerStatId)).toEqual([
-      "24",
-      "25",
-      "84",
-    ]);
-    expect(supportFor(result, "DST").reasons.map((reason) => reason.providerStatId)).toEqual([
-      "67",
-      "76",
-    ]);
-    for (const position of ["QB", "RB", "WR", "TE"] as const) {
+    expect(supportedPositions(result)).toEqual(LEAGUE_SCORING_POSITIONS);
+    for (const position of LEAGUE_SCORING_POSITIONS) {
       expect(supportFor(result, position).reasons).toEqual([]);
     }
-    expect(result.profile.rules.some((rule) => rule.statId.startsWith("field_goal"))).toBe(false);
-    expect(result.profile.rules.some((rule) => rule.statId.startsWith("defensive_"))).toBe(false);
+    expect(result.profile.rules).toEqual(
+      expect.arrayContaining([
+        { statId: "field_goals_missed_0_19", points: -1 },
+        { statId: "field_goals_missed_20_29", points: -1 },
+        { statId: "field_goals_total_yards", points: 0.1 },
+        { statId: "fourth_down_stops", points: 1 },
+        { statId: "yards_allowed_500_plus_probability", points: -1 },
+      ]),
+    );
   });
 
   it("uses declared Yahoo scope for a future unknown nonzero category", () => {
@@ -793,7 +791,10 @@ describe("normalizeLeagueScoringProfile", () => {
       yahooScopedRule("4", "Passing Yards", 0.04, "O"),
       yahooScopedRule("25", "4th Down Stops", -1, "K"),
     ]);
-    expect(reasonCodes(result)).toEqual(["CONFLICTING_RULE_IDENTITY"]);
+    expectAvailable(result);
+    expect(supportedPositions(result)).toEqual(["QB"]);
+    expect(positionReasonCodes(result, "K")).toEqual(["CONFLICTING_RULE_IDENTITY"]);
+    expect(positionReasonCodes(result, "DST")).toEqual(["CONFLICTING_RULE_IDENTITY"]);
   });
 
   it("rejects conflicting duplicate canonical aliases instead of double counting", () => {
@@ -1190,7 +1191,7 @@ describe("normalizeLeagueScoringProfile", () => {
     });
 
     /**
-     * A component no modeled position projects (ESPN 79/82 -> `field_goals_missed_40_49`/`_0_39`)
+     * A component no modeled position projects (ESPN 78/81 -> field-goal attempts by distance)
      * cannot be attributed, so it fails all six positions. Neither of the two lenient alternatives
      * is acceptable: retaining it while K's own rules are excluded would price a kicker at its
      * penalties alone, and dropping it silently would publish numbers that ignore a rule the league
@@ -1202,11 +1203,15 @@ describe("normalizeLeagueScoringProfile", () => {
           rule("3", "3", 0.04, { provider: "espn" }),
           rule("77", "77", 4, { provider: "espn" }),
           rule("80", "80", 3, { provider: "espn" }),
-          rule("79", "79", -1, { provider: "espn" }),
-          rule("82", "82", -1, { provider: "espn" }),
+          rule("78", "78", -1, { provider: "espn" }),
+          rule("81", "81", -1, { provider: "espn" }),
           rule("74", "74", 5, { provider: "espn", thresholdLow: 50 }),
         ],
-        [...rosAvailableProjectionStatIds(), "field_goals_missed_40_49", "field_goals_missed_0_39"],
+        [
+          ...rosAvailableProjectionStatIds(),
+          "field_goals_attempted_40_49",
+          "field_goals_attempted_0_39",
+        ],
       );
       expect(reasonCodes(result)).toEqual([
         "NONLINEAR_RULE",
@@ -1221,8 +1226,8 @@ describe("normalizeLeagueScoringProfile", () => {
         const unattributable = result.reasons.filter(
           (item) => item.code === "UNATTRIBUTABLE_COMPONENT",
         );
-        expect(unattributable.map((item) => item.providerStatId)).toEqual(["82", "79"]);
-        expect(unattributable[0]?.message).toContain("field_goals_missed_0_39");
+        expect(unattributable.map((item) => item.providerStatId)).toEqual(["81", "78"]);
+        expect(unattributable[0]?.message).toContain("field_goals_attempted_0_39");
         expect(unattributable[0]?.message).toContain("no modeled position");
       }
       expect(

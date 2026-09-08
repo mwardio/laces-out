@@ -125,14 +125,26 @@ export type NflverseCsvCheckResult =
       })
   | ({ readonly state: "unchanged" } & NflverseReleaseMetadata);
 
-export async function checkNflverseCsvRelease(input: {
+export type NflverseResponseCheckResult =
+  | ({ readonly state: "changed"; readonly response: Response } & NflverseReleaseMetadata)
+  | ({ readonly state: "unchanged" } & NflverseReleaseMetadata);
+
+/**
+ * Opens an allow-listed nflverse release while retaining its response stream for format-specific
+ * adapters (notably the compressed play-by-play feed). Callers still own bounded stream reads and
+ * content hashing; the declared-size, redirect, status, content-type, and request-timeout boundary
+ * stays shared with the ordinary CSV adapters here.
+ */
+export async function checkNflverseReleaseResponse(input: {
   readonly fetch: NflverseFetchLike;
   readonly now: () => Date;
   readonly sourceUrl: string;
   readonly previous: NflverseDatasetState;
   readonly maximumBytes: number;
   readonly datasetLabel: string;
-}): Promise<NflverseCsvCheckResult> {
+  readonly accept?: string;
+  readonly timeoutMs?: number;
+}): Promise<NflverseResponseCheckResult> {
   const source = new URL(input.sourceUrl);
   if (
     source.protocol !== "https:" ||
@@ -143,7 +155,7 @@ export async function checkNflverseCsvRelease(input: {
   }
 
   const headers: Record<string, string> = {
-    Accept: "text/csv, application/octet-stream;q=0.9, text/plain;q=0.8",
+    Accept: input.accept ?? "text/csv, application/octet-stream;q=0.9, text/plain;q=0.8",
   };
   if (input.previous.etag) headers["If-None-Match"] = input.previous.etag;
   if (input.previous.lastModified) {
@@ -152,13 +164,14 @@ export async function checkNflverseCsvRelease(input: {
 
   let endpoint = source;
   let response: Response | undefined;
+  const timeoutMs = input.timeoutMs ?? REQUEST_TIMEOUT_MS;
   for (let attempt = 0; attempt <= MAX_REDIRECTS; attempt += 1) {
     try {
       response = await input.fetch(endpoint, {
         method: "GET",
         headers,
         redirect: "manual",
-        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+        signal: AbortSignal.timeout(timeoutMs),
       });
     } catch {
       throw new NflverseDatasetSourceError("NETWORK", `${input.datasetLabel} check failed`, true);
@@ -205,25 +218,53 @@ export async function checkNflverseCsvRelease(input: {
     );
   }
   assertContentType(response, input.datasetLabel);
-  const body = await readBounded(response, input.maximumBytes, input.datasetLabel);
+  const declared = Number(response.headers.get("content-length"));
+  if (Number.isFinite(declared) && declared > input.maximumBytes) {
+    throw new NflverseDatasetSourceError(
+      "TOO_LARGE",
+      `${input.datasetLabel} exceeds its ${input.maximumBytes}-byte response limit`,
+    );
+  }
+  return {
+    state: "changed",
+    response,
+    checkedAt,
+    sourceUrl: input.sourceUrl,
+    etag,
+    lastModified,
+    checksumSha256: null,
+  };
+}
+
+export async function checkNflverseCsvRelease(input: {
+  readonly fetch: NflverseFetchLike;
+  readonly now: () => Date;
+  readonly sourceUrl: string;
+  readonly previous: NflverseDatasetState;
+  readonly maximumBytes: number;
+  readonly datasetLabel: string;
+}): Promise<NflverseCsvCheckResult> {
+  const release = await checkNflverseReleaseResponse(input);
+  if (release.state === "unchanged") return release;
+  const body = await readBounded(release.response, input.maximumBytes, input.datasetLabel);
   const checksumSha256 = createHash("sha256").update(body, "utf8").digest("hex");
   if (checksumSha256 === input.previous.checksumSha256) {
     return {
       state: "unchanged",
-      checkedAt,
+      checkedAt: release.checkedAt,
       sourceUrl: input.sourceUrl,
-      etag,
-      lastModified,
+      etag: release.etag,
+      lastModified: release.lastModified,
       checksumSha256,
     };
   }
   return {
     state: "changed",
     body,
-    checkedAt,
+    checkedAt: release.checkedAt,
     sourceUrl: input.sourceUrl,
-    etag,
-    lastModified,
+    etag: release.etag,
+    lastModified: release.lastModified,
     checksumSha256,
   };
 }

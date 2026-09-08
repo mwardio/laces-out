@@ -20,6 +20,20 @@ const EMPTY_STATE: NflverseDatasetState = {
   checksumSha256: null,
 };
 
+function replaceCell(body: string, playerId: string, column: string, value: string): string {
+  const rows = body
+    .trimEnd()
+    .split("\n")
+    .map((line) => line.split(","));
+  const header = rows[0] ?? [];
+  const playerIndex = header.indexOf("player_id");
+  const columnIndex = header.indexOf(column);
+  const row = rows.find((candidate, index) => index > 0 && candidate[playerIndex] === playerId);
+  if (!row || columnIndex < 0) throw new Error(`Fixture omitted ${playerId}:${column}`);
+  row[columnIndex] = value;
+  return rows.map((candidate) => candidate.join(",")).join("\n");
+}
+
 describe("NflverseWeeklyStatsSource", () => {
   it("normalizes an official weekly-stat CSV into scoring and usage observations", async () => {
     const requests: Array<{ readonly url: string; readonly headers: Headers }> = [];
@@ -97,6 +111,31 @@ describe("NflverseWeeklyStatsSource", () => {
       state: "unchanged",
       season: 2025,
       checksumSha256: "a".repeat(64),
+    });
+  });
+
+  it("retains exact kicker miss buckets and total made-field-goal distance", async () => {
+    const playerId = "00-0039999";
+    let kicker = replaceCell(fixture, playerId, "position", "K");
+    kicker = replaceCell(kicker, playerId, "position_group", "SPEC");
+    kicker = replaceCell(kicker, playerId, "fg_made", "2");
+    kicker = replaceCell(kicker, playerId, "fg_att", "4");
+    kicker = replaceCell(kicker, playerId, "fg_missed", "2");
+    kicker = replaceCell(kicker, playerId, "fg_made_20_29", "1");
+    kicker = replaceCell(kicker, playerId, "fg_made_50_59", "1");
+    kicker = replaceCell(kicker, playerId, "fg_missed_0_19", "1");
+    kicker = replaceCell(kicker, playerId, "fg_missed_20_29", "1");
+    kicker = replaceCell(kicker, playerId, "fg_made_distance", "79");
+    const source = new NflverseWeeklyStatsSource({
+      fetch: () => Promise.resolve(new Response(kicker)),
+    });
+
+    const result = await source.check(2025, EMPTY_STATE);
+    if (result.state !== "changed") throw new Error("Expected changed player stats");
+    expect(result.observations[0]?.components).toMatchObject({
+      field_goals_missed_0_19: 1,
+      field_goals_missed_20_29: 1,
+      field_goals_total_yards: 79,
     });
   });
 

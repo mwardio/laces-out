@@ -747,6 +747,7 @@ describe("historical ROS kicker calibration (count-process v1)", () => {
     recordedMissRatio: 0.95,
     centerVolatility: 0.25,
     leagueBucketMix: [0.57, 0.27, 0.16],
+    leagueMissBucketMix: [0, 14 / 426, 38 / 426, 155 / 426, 197 / 426, 22 / 426],
     dispersionAudit: {
       made0_39: 1,
       made40_49: 1,
@@ -795,6 +796,8 @@ describe("historical ROS kicker calibration (count-process v1)", () => {
     expect(calibration.centerVolatility).toBe(0.25);
     const mixSum = calibration.leagueBucketMix.reduce((sum, share) => sum + share, 0);
     expect(mixSum).toBeCloseTo(1, 10);
+    const missMixSum = calibration.leagueMissBucketMix.reduce((sum, share) => sum + share, 0);
+    expect(missMixSum).toBeCloseTo(1, 10);
     expect(calibration.evidence.kickerGames).toBe(rows.length);
   });
 
@@ -1080,6 +1083,7 @@ describe("historical ROS kicker calibration (count-process v1)", () => {
       recordedMissRatio: 0.95,
       centerVolatility: 0.25,
       bucketMix: [0.57, 0.27, 0.16],
+      missBucketMix: [0, 14 / 426, 38 / 426, 155 / 426, 197 / 426, 22 / 426],
     });
   });
 });

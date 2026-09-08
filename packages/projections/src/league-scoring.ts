@@ -283,6 +283,11 @@ export const YAHOO_PLAYER_SCORING_STAT_ID_MAP_V1: Readonly<Record<string, string
   "21": "field_goals_made_30_39",
   "22": "field_goals_made_40_49",
   "23": "field_goals_made_50_plus",
+  "24": "field_goals_missed_0_19",
+  "25": "field_goals_missed_20_29",
+  "26": "field_goals_missed_30_39",
+  "27": "field_goals_missed_40_49",
+  "28": "field_goals_missed_50_plus",
   "29": "extra_points_made",
   "30": "extra_points_missed",
   "31": "points_allowed",
@@ -301,15 +306,16 @@ export const YAHOO_PLAYER_SCORING_STAT_ID_MAP_V1: Readonly<Record<string, string
   "55": "points_allowed_28_34_probability",
   "56": "points_allowed_35_plus_probability",
   "57": "fumble_recovery_touchdowns",
+  "67": "fourth_down_stops",
+  "76": "yards_allowed_500_plus_probability",
   // Yahoo lists "Extra Point Returned" under D/ST scoring. It is the same defensive conversion
   // return priced by the engine's evidence-bounded de minimis component.
   "82": "defensive_two_point_returns",
+  "84": "field_goals_total_yards",
 };
 
-/** Distance-specific misses cannot be reconstructed from the projected aggregate miss count. */
-const YAHOO_UNSUPPORTED_KICKER_STAT_IDS = new Set(["24", "25", "26", "27", "28", "84"]);
-/** Linear Yahoo D/ST events for which the ingested model inputs expose no exact component. */
-const YAHOO_UNSUPPORTED_TEAM_DEFENSE_STAT_IDS = new Set(["67"]);
+const YAHOO_UNSUPPORTED_KICKER_STAT_IDS = new Set<string>();
+const YAHOO_UNSUPPORTED_TEAM_DEFENSE_STAT_IDS = new Set<string>();
 
 const YAHOO_IDP_STAT_IDS = new Set([
   "38",
@@ -678,6 +684,12 @@ export const PLAYER_SCORING_DISPLAY_NAME_MAP_V1: Readonly<Record<string, string>
   "field goals 50 yards": "field_goals_made_50_plus",
   "field goal missed": "field_goals_missed",
   "field goals missed": "field_goals_missed",
+  "field goals missed 0 19 yards": "field_goals_missed_0_19",
+  "field goals missed 20 29 yards": "field_goals_missed_20_29",
+  "field goals missed 30 39 yards": "field_goals_missed_30_39",
+  "field goals missed 40 49 yards": "field_goals_missed_40_49",
+  "field goals missed 50 yards": "field_goals_missed_50_plus",
+  "field goals total yards": "field_goals_total_yards",
   "point after attempt made": "extra_points_made",
   "pat made": "extra_points_made",
   "point after attempt missed": "extra_points_missed",
@@ -703,23 +715,14 @@ export const PLAYER_SCORING_DISPLAY_NAME_MAP_V1: Readonly<Record<string, string>
   "defensive touchdowns": "defensive_touchdowns",
   "kickoff and punt return touchdowns": "special_teams_touchdowns",
   "extra point returned": "defensive_two_point_returns",
+  "4th down stops": "fourth_down_stops",
   "defensive yards allowed": "yards_allowed",
   "yards allowed": "yards_allowed",
+  "defensive yards allowed 500": "yards_allowed_500_plus_probability",
 };
 
 const SCOPED_UNSUPPORTED_DISPLAY_NAMES = new Map<string, UnsupportedMapping>([
-  ...[
-    "field goals missed 0 19 yards",
-    "field goals missed 20 29 yards",
-    "field goals missed 30 39 yards",
-    "field goals missed 40 49 yards",
-    "field goals missed 50 yards",
-    "field goals total yards",
-  ].map((name): [string, UnsupportedMapping] => [name, KICKER_UNSUPPORTED]),
-  ...["4th down stops", "3 and outs forced"].map((name): [string, UnsupportedMapping] => [
-    name,
-    DEFENSE_UNSUPPORTED,
-  ]),
+  ...["3 and outs forced"].map((name): [string, UnsupportedMapping] => [name, DEFENSE_UNSUPPORTED]),
 ]);
 
 const IGNORED_DISPLAY_NAMES = new Map<string, IgnoredMapping>([
@@ -808,6 +811,27 @@ const AGGREGATE_OVERLAPS: ReadonlyArray<{
     parts: ["field_goals_made_50_59", "field_goals_made_60_plus"],
   },
   {
+    aggregate: "field_goals_missed",
+    parts: [
+      "field_goals_missed_0_19",
+      "field_goals_missed_20_29",
+      "field_goals_missed_30_39",
+      "field_goals_missed_40_49",
+      "field_goals_missed_50_59",
+      "field_goals_missed_60_plus",
+      "field_goals_missed_0_39",
+      "field_goals_missed_50_plus",
+    ],
+  },
+  {
+    aggregate: "field_goals_missed_0_39",
+    parts: ["field_goals_missed_0_19", "field_goals_missed_20_29", "field_goals_missed_30_39"],
+  },
+  {
+    aggregate: "field_goals_missed_50_plus",
+    parts: ["field_goals_missed_50_59", "field_goals_missed_60_plus"],
+  },
+  {
     aggregate: "return_touchdowns",
     parts: ["defensive_touchdowns", "special_teams_touchdowns"],
   },
@@ -841,6 +865,10 @@ const AGGREGATE_OVERLAPS: ReadonlyArray<{
       "yards_allowed_500_549_probability",
       "yards_allowed_550_plus_probability",
     ],
+  },
+  {
+    aggregate: "yards_allowed_500_plus_probability",
+    parts: ["yards_allowed_500_549_probability", "yards_allowed_550_plus_probability"],
   },
 ];
 

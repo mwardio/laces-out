@@ -62,8 +62,8 @@ const currentSeasonCheckIntervalMinutes = 30;
 const historicalCheckIntervalMinutes = 24 * 60;
 const claimMinutes = 45;
 const chunkSize = 500;
-// v2 adds complete player fumble-loss components and net team offense for DST yards allowed.
-const sourceSchemaVersion = 2;
+// v3 adds exact kicker distance components and play-by-play-derived fourth-down stops.
+const sourceSchemaVersion = 3;
 const fantasyRosterPositions = new Set(["QB", "RB", "FB", "WR", "TE", "K"]);
 
 export interface WeeklyDataRefreshResult {
@@ -1339,16 +1339,20 @@ export class NflverseWeeklyDataRefresher {
             lastErrorAt: null,
             lastErrorCode: null,
             lastErrorDetail: null,
-            metadata: datasetMetadata({
-              sourceKey: descriptor.key,
-              previous: source.metadata,
-              season,
-              rowsRead: result.rowsRead,
-              rowsRejected: result.rowsRejected,
-              rowsUnmatched: 0,
-              coveredWeeks: result.coveredWeeks,
-              coveredSeasonTypes: result.coveredSeasonTypes,
-            }),
+            metadata: {
+              ...datasetMetadata({
+                sourceKey: descriptor.key,
+                previous: source.metadata,
+                season,
+                rowsRead: result.rowsRead,
+                rowsRejected: result.rowsRejected,
+                rowsUnmatched: 0,
+                coveredWeeks: result.coveredWeeks,
+                coveredSeasonTypes: result.coveredSeasonTypes,
+              }),
+              playByPlaySourceUrl: result.playByPlaySourceUrl,
+              playByPlayChecksumSha256: result.playByPlayChecksumSha256,
+            },
             updatedAt: checkedAt,
           })
           .where(eq(dataSources.id, source.id));

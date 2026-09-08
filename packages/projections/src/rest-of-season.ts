@@ -11,7 +11,7 @@ import {
   type ProjectionStatComponents,
 } from "./scoring.js";
 
-export const FIRST_PARTY_ROS_MODEL_VERSION = "laces-ros-distribution-v8";
+export const FIRST_PARTY_ROS_MODEL_VERSION = "laces-ros-distribution-v9";
 /**
  * Frozen seed-stream lineage, deliberately decoupled from the model version as of v7: the v7
  * change is kicker-branch-only, and reseeding non-kicker positions would falsify the isolation
@@ -251,8 +251,8 @@ export interface FirstPartyRosRoleInput {
 }
 
 /**
- * Kicker count-process parameters (model v7). Kicker weeks are simulated as a joint integer count
- * process on the five scored components — makes per scoring bucket, recorded misses, XP makes —
+ * Kicker count-process parameters (model v9). Kicker weeks are simulated as a joint integer count
+ * process on the scored components — makes per scoring bucket, distance misses, FG yards, XP makes —
  * instead of the lognormal role × production shock, whose smooth unimodal family cannot represent
  * a kicker's discrete, low-count short-window totals.
  */
@@ -267,6 +267,8 @@ export interface FirstPartyRosKickerProcessInput {
   readonly centerVolatility: number;
   /** League FG-make share by scoring bucket (0-39, 40-49, 50+); degenerate-input fallback only. */
   readonly bucketMix: readonly [number, number, number];
+  /** League recorded-miss share by distance (0-19 through 60+); degenerate-input fallback only. */
+  readonly missBucketMix: readonly [number, number, number, number, number, number];
 }
 
 export interface FirstPartyRosProjectionInput {
@@ -284,7 +286,7 @@ export interface FirstPartyRosProjectionInput {
   readonly availability: FirstPartyRosAvailabilityInput;
   readonly role: FirstPartyRosRoleInput;
   readonly scoringProfile: ProjectionScoringProfile;
-  /** Required for position K under model v7; rejected for every other position. */
+  /** Required for position K under model v9; rejected for every other position. */
   readonly kicker?: FirstPartyRosKickerProcessInput;
   /** Exact pinned upstream/model input checksum. */
   readonly inputChecksum: string;
@@ -619,6 +621,10 @@ interface KickerWeekParams {
   readonly fine39: readonly [number, number, number];
   /** Fine-bucket shares within 50+ (50_59, 60_plus) for the cosmetic component split. */
   readonly fine50: readonly [number, number];
+  /** Recorded-miss shares by distance (0_19, 20_29, 30_39, 40_49, 50_59, 60_plus). */
+  readonly missFine: readonly [number, number, number, number, number, number];
+  /** Scale applied to nominal bucket distances so the weekly mean preserves total made-FG yards. */
+  readonly madeYardScale: number;
 }
 
 interface KickerContext {
@@ -641,6 +647,14 @@ function kickerWeekParams(
   const fine3039 = read("field_goals_made_30_39");
   const fine5059 = read("field_goals_made_50_59");
   const fine60 = read("field_goals_made_60_plus");
+  const missedFineRaw = [
+    read("field_goals_missed_0_19"),
+    read("field_goals_missed_20_29"),
+    read("field_goals_missed_30_39"),
+    read("field_goals_missed_40_49"),
+    read("field_goals_missed_50_59"),
+    read("field_goals_missed_60_plus"),
+  ] as const;
   let b39 =
     base["field_goals_made_0_39"] !== undefined
       ? read("field_goals_made_0_39")
@@ -667,6 +681,12 @@ function kickerWeekParams(
   const xpBase = read("extra_points_made");
   const fine39Sum = fine019 + fine2029 + fine3039;
   const fine50Sum = fine5059 + fine60;
+  const missedFineSum = missedFineRaw.reduce((sum, value) => sum + value, 0);
+  const nominalMadeYards =
+    b39 * (fine39Sum > 0 ? (fine019 * 18 + fine2029 * 25 + fine3039 * 35) / fine39Sum : 35) +
+    b49 * 45 +
+    b50 * (fine50Sum > 0 ? (fine5059 * 55 + fine60 * 62) / fine50Sum : 55);
+  const projectedMadeYards = read("field_goals_total_yards");
   return {
     b39,
     b49,
@@ -676,12 +696,25 @@ function kickerWeekParams(
     fine39:
       fine39Sum > 0 ? [fine019 / fine39Sum, fine2029 / fine39Sum, fine3039 / fine39Sum] : [0, 0, 1],
     fine50: fine50Sum > 0 ? [fine5059 / fine50Sum, fine60 / fine50Sum] : [1, 0],
+    missFine:
+      missedFineSum > 0
+        ? (missedFineRaw.map((value) => value / missedFineSum) as [
+            number,
+            number,
+            number,
+            number,
+            number,
+            number,
+          ])
+        : process.missBucketMix,
+    madeYardScale:
+      nominalMadeYards > 0 && projectedMadeYards > 0 ? projectedMadeYards / nominalMadeYards : 1,
   };
 }
 
 /**
- * Samples one kicker game as the five scored integer counts and expands them into the pinned
- * 14-key kicker component vocabulary. Satisfies every football component invariant by
+ * Samples one kicker game as the scored integer counts and expands them into the pinned
+ * complete kicker component vocabulary. Satisfies every football component invariant by
  * construction (made = Σ coarse buckets, attempted = made + missed, fine sums = coarse), so the
  * caller deliberately skips enforceFootballComponentInvariants. Uses exactly the seven supplied
  * uniforms; the antithetic leg inverts them through the same monotone CDF inversions.
@@ -731,17 +764,39 @@ function sampleKickerGame(
   const missed = events - made39 - made49 - made50;
   const extraPoints = underdispersedCount(lambdaXp, process.xpDispersion, u(5), u(6));
   const made = made39 + made49 + made50;
+  const made019 = made39 * params.fine39[0];
+  const made2029 = made39 * params.fine39[1];
+  const made3039 = made39 * params.fine39[2];
+  const made5059 = made50 * params.fine50[0];
+  const made60 = made50 * params.fine50[1];
+  const missed019 = missed * params.missFine[0];
+  const missed2029 = missed * params.missFine[1];
+  const missed3039 = missed * params.missFine[2];
+  const missed4049 = missed * params.missFine[3];
+  const missed5059 = missed * params.missFine[4];
+  const missed60 = missed * params.missFine[5];
   return {
-    field_goals_made_0_19: made39 * params.fine39[0],
-    field_goals_made_20_29: made39 * params.fine39[1],
-    field_goals_made_30_39: made39 * params.fine39[2],
+    field_goals_made_0_19: made019,
+    field_goals_made_20_29: made2029,
+    field_goals_made_30_39: made3039,
     field_goals_made_0_39: made39,
     field_goals_made_40_49: made49,
-    field_goals_made_50_59: made50 * params.fine50[0],
-    field_goals_made_60_plus: made50 * params.fine50[1],
+    field_goals_made_50_59: made5059,
+    field_goals_made_60_plus: made60,
     field_goals_made_50_plus: made50,
     field_goals_made: made,
     field_goals_missed: missed,
+    field_goals_missed_0_19: missed019,
+    field_goals_missed_20_29: missed2029,
+    field_goals_missed_30_39: missed3039,
+    field_goals_missed_0_39: missed019 + missed2029 + missed3039,
+    field_goals_missed_40_49: missed4049,
+    field_goals_missed_50_59: missed5059,
+    field_goals_missed_60_plus: missed60,
+    field_goals_missed_50_plus: missed5059 + missed60,
+    field_goals_total_yards:
+      (made019 * 18 + made2029 * 25 + made3039 * 35 + made49 * 45 + made5059 * 55 + made60 * 62) *
+      params.madeYardScale,
     field_goals_attempted: made + missed,
     extra_points_made: extraPoints,
     extra_points_attempted: extraPoints,
@@ -820,6 +875,14 @@ const FIELD_GOAL_DISTANCE_MAKES = [
   "field_goals_made_40_49",
   "field_goals_made_50_59",
   "field_goals_made_60_plus",
+] as const;
+const FIELD_GOAL_DISTANCE_MISSES = [
+  "field_goals_missed_0_19",
+  "field_goals_missed_20_29",
+  "field_goals_missed_30_39",
+  "field_goals_missed_40_49",
+  "field_goals_missed_50_59",
+  "field_goals_missed_60_plus",
 ] as const;
 const MUTUALLY_EXCLUSIVE_YARDAGE_PROBABILITY_PAIRS = [
   ["passing_yards_300_399_probability", "passing_yards_400_plus_probability"],
@@ -907,6 +970,28 @@ function validateFootballComponentInvariants(
     "field_goals_missed",
     label,
   );
+  if (
+    components.field_goals_missed !== undefined &&
+    hasComponents(components, FIELD_GOAL_DISTANCE_MISSES)
+  ) {
+    const distanceMisses = FIELD_GOAL_DISTANCE_MISSES.reduce(
+      (sum, component) => sum + components[component]!,
+      0,
+    );
+    if (distanceMisses > components.field_goals_missed + FOOTBALL_INVARIANT_TOLERANCE) {
+      throw new RangeError(
+        `${label} requires distance misses not to exceed total field-goal misses`,
+      );
+    }
+  }
+  if (
+    components.field_goals_total_yards !== undefined &&
+    components.field_goals_made !== undefined &&
+    components.field_goals_total_yards >
+      components.field_goals_made * 70 + FOOTBALL_INVARIANT_TOLERANCE
+  ) {
+    throw new RangeError(`${label} requires made field-goal yards not to exceed 70 per make`);
+  }
   assertDifferenceIdentity(
     components,
     "extra_points_attempted",
@@ -1213,7 +1298,7 @@ function validateProjectionInput(input: FirstPartyRosProjectionInput): {
   if (position === "K") {
     const kicker = input.kicker;
     if (!kicker) {
-      throw new Error("ROS kicker process input is required for position K under model v7");
+      throw new Error("ROS kicker process input is required for position K under model v9");
     }
     assertFinite(kicker.fgEventDispersion, "kicker FG event dispersion");
     if (kicker.fgEventDispersion < 0.6 || kicker.fgEventDispersion > 1) {
@@ -1241,6 +1326,17 @@ function validateProjectionInput(input: FirstPartyRosProjectionInput): {
     }
     if (Math.abs(bucketMixSum - 1) > 1e-8) {
       throw new RangeError("kicker bucket mix shares must sum to one");
+    }
+    if (kicker.missBucketMix.length !== 6) {
+      throw new RangeError("kicker miss bucket mix must contain exactly six shares");
+    }
+    let missBucketMixSum = 0;
+    for (const share of kicker.missBucketMix) {
+      assertNonNegative(share, "kicker miss bucket mix share");
+      missBucketMixSum += share;
+    }
+    if (Math.abs(missBucketMixSum - 1) > 1e-8) {
+      throw new RangeError("kicker miss bucket mix shares must sum to one");
     }
   } else if (input.kicker !== undefined) {
     throw new Error("ROS kicker process input is only supported for position K");

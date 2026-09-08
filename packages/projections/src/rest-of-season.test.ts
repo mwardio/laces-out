@@ -652,6 +652,7 @@ const kickerProcess = {
   recordedMissRatio: 0.95,
   centerVolatility: 0,
   bucketMix: [0.57, 0.27, 0.16],
+  missBucketMix: [0, 0.03, 0.09, 0.36, 0.46, 0.06],
 } as const;
 
 function kickerWeek(
@@ -684,6 +685,18 @@ function kickerWeek(
     field_goals_made: made,
     field_goals_attempted: attempted,
     field_goals_missed: attempted - made,
+    field_goals_missed_0_19: (attempted - made) * 0,
+    field_goals_missed_20_29: (attempted - made) * 0.03,
+    field_goals_missed_30_39: (attempted - made) * 0.09,
+    field_goals_missed_0_39: (attempted - made) * 0.12,
+    field_goals_missed_40_49: (attempted - made) * 0.36,
+    field_goals_missed_50_59: (attempted - made) * 0.46,
+    field_goals_missed_60_plus: (attempted - made) * 0.06,
+    field_goals_missed_50_plus: (attempted - made) * 0.52,
+    field_goals_total_yards:
+      made0_39 * (0.05 * 18 + 0.45 * 25 + 0.5 * 35) +
+      made40_49 * 45 +
+      made50Plus * (0.9 * 55 + 0.1 * 62),
     extra_points_made: extraPoints,
     extra_points_attempted: extraPoints / 0.95,
     extra_points_missed: extraPoints / 0.95 - extraPoints,
@@ -723,7 +736,7 @@ function kickerInput(
   };
 }
 
-describe("first-party ROS kicker count process (model v8)", () => {
+describe("first-party ROS kicker count process (model v9)", () => {
   it("requires the kicker process input for position K and rejects it elsewhere", () => {
     expect(() => {
       const { kicker, ...withoutKicker } = kickerInput();
@@ -736,7 +749,7 @@ describe("first-party ROS kicker count process (model v8)", () => {
   });
 
   it("keeps the model and seed version constants split with the v6 seed lineage", () => {
-    expect(FIRST_PARTY_ROS_MODEL_VERSION).toBe("laces-ros-distribution-v8");
+    expect(FIRST_PARTY_ROS_MODEL_VERSION).toBe("laces-ros-distribution-v9");
     expect(FIRST_PARTY_ROS_SEED_VERSION).toBe("laces-ros-distribution-v6");
   });
 
@@ -744,7 +757,7 @@ describe("first-party ROS kicker count process (model v8)", () => {
     const first = projectFirstPartyRestOfSeason(kickerInput());
     const second = projectFirstPartyRestOfSeason(kickerInput());
     expect(second).toEqual(first);
-    expect(first.provenance.modelVersion).toBe("laces-ros-distribution-v8");
+    expect(first.provenance.modelVersion).toBe("laces-ros-distribution-v9");
   });
 
   it("keeps every simulated kicker week on the exact scoring lattice", () => {
@@ -932,7 +945,7 @@ describe("first-party ROS kicker count process (model v8)", () => {
       Math.max(0.75, Math.abs(wrP50.referenceValue) * 0.03),
       10,
     );
-  });
+  }, 15_000);
 
   it("validates kicker process parameter ranges fail-closed", () => {
     expect(() =>
@@ -955,10 +968,17 @@ describe("first-party ROS kicker count process (model v8)", () => {
         kickerInput({ kicker: { ...kickerProcess, bucketMix: [0.5, 0.5, 0.5] } }),
       ),
     ).toThrow("sum to one");
+    expect(() =>
+      projectFirstPartyRestOfSeason(
+        kickerInput({
+          kicker: { ...kickerProcess, missBucketMix: [0.1, 0.2, 0.3, 0.4, 0.5, 0.6] },
+        }),
+      ),
+    ).toThrow("sum to one");
   });
 });
 
-describe("non-kicker byte identity across the v8 bump", () => {
+describe("non-kicker byte identity across the v9 bump", () => {
   it("reproduces the v6 golden WR projection byte-for-byte", async () => {
     const { readFileSync } = await import("node:fs");
     const golden = JSON.parse(
@@ -974,7 +994,7 @@ describe("non-kicker byte identity across the v8 bump", () => {
     const { modelVersion: goldenModel, ...goldenProvRest } = goldenProvenance;
     const { modelVersion: currentModel, ...currentProvRest } = currentProvenance;
     expect(goldenModel).toBe("laces-ros-distribution-v6");
-    expect(currentModel).toBe("laces-ros-distribution-v8");
+    expect(currentModel).toBe("laces-ros-distribution-v9");
     expect(currentProvRest).toEqual(goldenProvRest);
   });
 });

@@ -32,6 +32,11 @@ describe("normalizeHistoricalPlayerStatComponents", () => {
         punt_return_yards: 18,
         kickoff_return_yards: 32,
         special_teams_touchdowns: 1,
+        field_goals_missed_0_19: 1,
+        field_goals_missed_20_29: 2,
+        field_goals_missed_30_39: 3,
+        field_goals_missed_50_59: 4,
+        field_goals_missed_60_plus: 5,
       }),
     ).toMatchObject({
       receptions: 4,
@@ -46,6 +51,8 @@ describe("normalizeHistoricalPlayerStatComponents", () => {
       two_point_conversions: 4,
       return_yards: 50,
       return_touchdowns: 1,
+      field_goals_missed_0_39: 6,
+      field_goals_missed_50_plus: 9,
     });
   });
 

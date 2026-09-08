@@ -1,5 +1,12 @@
+import { createHash } from "node:crypto";
+
 import { parse } from "csv-parse/sync";
 
+import {
+  NflverseFourthDownStopsSource,
+  type NflverseFourthDownStopObservation,
+  type NflverseFourthDownStopsLoader,
+} from "./fourth-down-stops-source.js";
 import {
   NFLVERSE_DATA_LICENSE,
   NFLVERSE_DATA_REPOSITORY_URL,
@@ -120,7 +127,7 @@ const COMPONENT_SPECS = {
 
 type StoredComponentName = keyof typeof COMPONENT_SPECS;
 export type NflverseTeamWeeklyStatComponents = Readonly<
-  Record<StoredComponentName | "total_offensive_yards", number>
+  Record<StoredComponentName | "total_offensive_yards" | "fourth_down_stops", number>
 >;
 
 export interface NflverseTeamWeeklyAdvancedStats {
@@ -173,6 +180,8 @@ export type NflverseTeamWeeklyStatsCheckResult =
       readonly coveredWeeks: readonly number[];
       readonly coveredSeasonTypes: readonly NflverseTeamWeeklySeasonType[];
       readonly coveredTeams: readonly string[];
+      readonly playByPlaySourceUrl: string;
+      readonly playByPlayChecksumSha256: string;
     })
   | (NflverseTeamWeeklyStatsBaseResult & { readonly state: "unchanged" });
 
@@ -340,6 +349,8 @@ function normalizeComponents(row: Record<string, string>): NflverseTeamWeeklySta
     // sack yardage separately, with `sack_yards_lost` represented as a negative value.
     total_offensive_yards:
       components.passing_yards + components.sack_yards_lost + components.rushing_yards,
+    // Filled from the separately licensed nflverse play-by-play artifact before publication.
+    fourth_down_stops: 0,
   };
 }
 
@@ -397,6 +408,35 @@ function normalizeRow(
       },
     },
   };
+}
+
+function mergeFourthDownStops(
+  observations: readonly NflverseTeamWeeklyStats[],
+  fourthDowns: readonly NflverseFourthDownStopObservation[],
+): readonly NflverseTeamWeeklyStats[] {
+  const byGameTeam = new Map(fourthDowns.map((row) => [`${row.gameId}:${row.team}`, row]));
+  return observations.map((observation) => {
+    const fourthDown = byGameTeam.get(`${observation.gameId}:${observation.team}`);
+    if (
+      !fourthDown ||
+      fourthDown.season !== observation.season ||
+      fourthDown.week !== observation.week ||
+      fourthDown.seasonType !== observation.seasonType ||
+      fourthDown.opponentTeam !== observation.opponentTeam
+    ) {
+      throw new NflverseDatasetSourceError(
+        "QUALITY_THRESHOLD",
+        `nflverse play-by-play omitted matching fourth-down coverage for ${observation.gameId}:${observation.team}`,
+      );
+    }
+    return {
+      ...observation,
+      components: {
+        ...observation.components,
+        fourth_down_stops: fourthDown.fourthDownStops,
+      },
+    };
+  });
 }
 
 function parseTeamWeeklyStats(body: string, season: number) {
@@ -491,11 +531,21 @@ function parseTeamWeeklyStats(body: string, season: number) {
 
 export class NflverseTeamWeeklyStatsSource {
   readonly #fetch: NflverseFetchLike;
+  readonly #fourthDowns: NflverseFourthDownStopsLoader;
   readonly #now: () => Date;
 
-  constructor(options: { readonly fetch?: NflverseFetchLike; readonly now?: () => Date } = {}) {
+  constructor(
+    options: {
+      readonly fetch?: NflverseFetchLike;
+      readonly fourthDowns?: NflverseFourthDownStopsLoader;
+      readonly now?: () => Date;
+    } = {},
+  ) {
     this.#fetch = options.fetch ?? globalThis.fetch;
     this.#now = options.now ?? (() => new Date());
+    this.#fourthDowns =
+      options.fourthDowns ??
+      new NflverseFourthDownStopsSource({ fetch: this.#fetch, now: this.#now });
   }
 
   async check(
@@ -524,11 +574,29 @@ export class NflverseTeamWeeklyStatsSource {
       checksumSha256: result.checksumSha256,
     };
     if (result.state === "unchanged") return { state: "unchanged", ...base };
+    const parsed = parseTeamWeeklyStats(result.body, season);
+    const fourthDowns = await this.#fourthDowns.load(season);
+    const checksumSha256 = createHash("sha256")
+      .update(
+        `team-week-with-fourth-downs-v1:${result.checksumSha256}:${fourthDowns.checksumSha256}`,
+      )
+      .digest("hex");
+    if (checksumSha256 === previous.checksumSha256) {
+      return { state: "unchanged", ...base, checksumSha256 };
+    }
     return {
       state: "changed",
       ...base,
-      checksumSha256: result.checksumSha256,
-      ...parseTeamWeeklyStats(result.body, season),
+      checksumSha256,
+      observations: mergeFourthDownStops(parsed.observations, fourthDowns.observations),
+      rowsRead: parsed.rowsRead,
+      rowsRejected: parsed.rowsRejected,
+      rejections: parsed.rejections,
+      coveredWeeks: parsed.coveredWeeks,
+      coveredSeasonTypes: parsed.coveredSeasonTypes,
+      coveredTeams: parsed.coveredTeams,
+      playByPlaySourceUrl: fourthDowns.sourceUrl,
+      playByPlayChecksumSha256: fourthDowns.checksumSha256,
     };
   }
 }
