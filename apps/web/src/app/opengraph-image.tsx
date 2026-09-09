@@ -5,7 +5,7 @@ import { ImageResponse } from "next/og";
 
 import { yahooComingSoon } from "../lib/public-site";
 
-export const alt = "Laces Out: Know who to start, add, and trade.";
+export const alt = "Laces Out: Connect your leagues. Get the next move.";
 export const size = { width: 1200, height: 630 };
 export const contentType = "image/png";
 
@@ -65,7 +65,7 @@ export default async function OpenGraphImage() {
             lineHeight: 1.03,
           }}
         >
-          Know who to start,
+          Connect your leagues.
         </div>
         <div
           style={{
@@ -78,7 +78,7 @@ export default async function OpenGraphImage() {
             lineHeight: 1.03,
           }}
         >
-          add, and trade.
+          Get the next move.
         </div>
       </div>
 

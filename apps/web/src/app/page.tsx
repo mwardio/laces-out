@@ -43,7 +43,7 @@ export const metadata: Metadata = {
   robots: { index: true, follow: true },
   openGraph: {
     ...siteOpenGraph,
-    title: "Know Who to Start, Add, and Trade | Laces Out",
+    title: "Connect Your Leagues. Get the Next Move. | Laces Out",
     description: yahooComingSoon
       ? "Connect ESPN and get fantasy football recommendations based on your scoring, roster, and available players."
       : "Connect ESPN or Yahoo and get fantasy football recommendations based on your scoring, roster, and available players.",
@@ -51,7 +51,7 @@ export const metadata: Metadata = {
   },
   twitter: {
     card: "summary_large_image",
-    title: "Know Who to Start, Add, and Trade | Laces Out",
+    title: "Connect Your Leagues. Get the Next Move. | Laces Out",
     description: yahooComingSoon
       ? "League-aware lineup, waiver, trade, and draft advice for ESPN fantasy football."
       : "League-aware lineup, waiver, trade, and draft advice for ESPN and Yahoo fantasy football.",
@@ -204,6 +204,7 @@ function LandingHeader() {
         <a href="#how-it-works">How it works</a>
         <a href="#in-season">Decisions</a>
         <a href="#league-fun">Recaps</a>
+        <a href="#faq">FAQ</a>
       </nav>
     </header>
   );
@@ -318,6 +319,10 @@ export default function LandingPage() {
                 Recommendations use your league&rsquo;s scoring, your roster, and the players
                 available to you—not a generic rankings list.
               </p>
+              <p className={styles.heroControl}>
+                <ShieldCheck aria-hidden="true" size={15} /> Laces Out recommends the move. You make
+                it happen.
+              </p>
               <div className={styles.heroActions}>
                 <Link className={styles.primaryButton} href="/register">
                   Create a free account <ArrowRight aria-hidden="true" size={16} />
@@ -329,10 +334,6 @@ export default function LandingPage() {
                   <small>No account or league connection required.</small>
                 </div>
               </div>
-              <p className={styles.heroControl}>
-                <ShieldCheck aria-hidden="true" size={15} /> Laces Out recommends the move. You make
-                it happen.
-              </p>
             </div>
 
             <div className={styles.productPreview} aria-label="Illustrative Laces Out dashboard">

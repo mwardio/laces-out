@@ -90,7 +90,7 @@ export const socialImage = {
   url: "/opengraph-image",
   width: 1200,
   height: 630,
-  alt: "Laces Out: Know who to start, add, and trade.",
+  alt: "Laces Out: Connect your leagues. Get the next move.",
   type: "image/png",
 } as const;
 

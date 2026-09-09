@@ -163,6 +163,9 @@ describe("public page Open Graph", () => {
 
   it("describes the social image the way app/opengraph-image.tsx renders it", () => {
     expect(socialImageSource).toContain(`export const alt = ${JSON.stringify(socialImage.alt)};`);
+    expect(socialImageSource).toContain("Connect your leagues.");
+    expect(socialImageSource).toContain("Get the next move.");
+    expect(socialImageSource).not.toContain("Know who to start,");
     expect(socialImageSource).toContain(
       `export const size = { width: ${socialImage.width}, height: ${socialImage.height} };`,
     );

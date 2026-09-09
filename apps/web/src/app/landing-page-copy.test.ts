@@ -34,6 +34,9 @@ describe("landing-page first-time-user copy", () => {
 
   it("states the read-only action boundary and avoids unsupported sync promises", () => {
     expect(pageSource).toMatch(/Laces Out recommends the move\. You make\s+it happen\./u);
+    expect(pageSource.indexOf("styles.heroControl")).toBeLessThan(
+      pageSource.indexOf("styles.heroActions"),
+    );
     expect(pageSource).toContain("Recommendations only—no ESPN roster edits");
     expect(pageSource).not.toContain("You approve every provider-side move");
     expect(pageSource).not.toContain("Automatic sync");
@@ -57,6 +60,7 @@ describe("landing-page first-time-user copy", () => {
     expect(pageSource).toContain("Is AI required, and what does it receive?");
     expect(pageSource).toContain('<a href="#in-season">Decisions</a>');
     expect(pageSource).toContain('<a href="#league-fun">Recaps</a>');
+    expect(pageSource).toContain('<a href="#faq">FAQ</a>');
     expect(styleSource).toContain(".mobileNav");
     expect(styleSource).toContain("@media (max-width: 420px)");
     expect(styleSource).not.toMatch(/\.signInButton\s*\{\s*display:\s*none;/u);
