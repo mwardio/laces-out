@@ -12,8 +12,11 @@ const styleSource = readFileSync(
 describe("landing-page first-time-user copy", () => {
   it("defines the product and league-specific benefit before asking for a connection", () => {
     expect(pageSource).toContain("Your fantasy football companion");
-    expect(pageSource).toContain("Know who to");
-    expect(pageSource).toContain("start, add, and trade.");
+    expect(pageSource).toContain("Connect your leagues.");
+    expect(pageSource).toContain("Get the next move.");
+    expect(pageSource).toContain("Laces Out pairs with your");
+    expect(pageSource).toContain("Bring in the leagues you already play.");
+    expect(pageSource).toContain("You maintain full control.");
     expect(pageSource).toContain("your league&rsquo;s scoring");
     expect(pageSource).toMatch(/the players\s+available to you/u);
   });
@@ -22,8 +25,8 @@ describe("landing-page first-time-user copy", () => {
     expect(pageSource.match(/Create a free account/gu)?.length).toBeGreaterThanOrEqual(3);
     expect(pageSource).toContain("Explore the demo");
     expect(pageSource).toContain("No account or league connection required.");
-    expect(pageSource).toContain("Hosted web app");
-    expect(pageSource).toContain("No server setup");
+    expect(pageSource).not.toContain("ESPN now");
+    expect(pageSource).not.toContain("Yahoo available");
   });
 
   it("states the read-only action boundary and avoids unsupported sync promises", () => {
@@ -49,7 +52,10 @@ describe("landing-page first-time-user copy", () => {
     expect(pageSource).toContain("Do I need to install or host a server?");
     expect(pageSource).toContain("Which scoring rules and league formats work?");
     expect(pageSource).toContain("Is AI required, and what does it receive?");
+    expect(pageSource).toContain('<a href="#in-season">Decisions</a>');
+    expect(pageSource).toContain('<a href="#league-fun">Recaps</a>');
     expect(styleSource).toContain(".mobileNav");
     expect(styleSource).toContain("@media (max-width: 420px)");
+    expect(styleSource).not.toMatch(/\.signInButton\s*\{\s*display:\s*none;/u);
   });
 });

@@ -70,10 +70,10 @@
 
 .headerInner {
   display: grid;
-  min-height: 74px;
+  min-height: 64px;
   grid-template-columns: auto 1fr auto;
   align-items: center;
-  gap: 28px;
+  gap: 24px;
 }
 
 .brand {
@@ -146,6 +146,13 @@
     border-color 140ms ease,
     color 140ms ease,
     transform 140ms ease;
+}
+
+.signInButton,
+.headerCta {
+  min-height: 38px;
+  padding-right: 14px;
+  padding-left: 14px;
 }
 
 .signInButton {
@@ -246,7 +253,7 @@
   margin-top: 13px;
   color: #d5dcd6;
   font-size: var(--text-14);
-  font-weight: 650;
+  font-weight: 400;
   line-height: 1.55;
 }
 
@@ -288,39 +295,6 @@
   flex: 0 0 auto;
   margin-top: 1px;
   color: var(--lime-300);
-}
-
-.heroSetup {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px 13px;
-  margin-top: 20px;
-  padding: 13px 15px;
-  color: #9fa9a1;
-  background: #18211a;
-  border: 1px solid #344138;
-  border-radius: var(--radius-md);
-  font-size: var(--text-11);
-  line-height: 1.45;
-}
-
-.heroSetup span {
-  display: inline-flex;
-  flex-wrap: wrap;
-  gap: 4px;
-}
-
-.heroSetup strong {
-  color: #eef2ed;
-}
-
-.heroSetup i {
-  width: 3px;
-  height: 3px;
-  flex: 0 0 3px;
-  background: #667169;
-  border-radius: 50%;
 }
 
 .heroProof {
@@ -2188,15 +2162,6 @@
     width: 100%;
   }
 
-  .heroSetup {
-    display: grid;
-    gap: 7px;
-  }
-
-  .heroSetup i {
-    display: none;
-  }
-
   .heroActions a,
   .ctaActions a {
     width: 100%;
@@ -2386,12 +2351,9 @@
 }
 
 @media (max-width: 420px) {
-  .signInButton {
-    display: none;
-  }
-
+  .signInButton,
   .headerCta {
-    padding: 0 9px;
+    padding: 0 8px;
   }
 }
 

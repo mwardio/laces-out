@@ -61,8 +61,8 @@ export const metadata: Metadata = {
 const howItWorks = [
   {
     number: "01",
-    label: "Connect your existing league",
-    title: "Bring in the league you already play.",
+    label: "Connect your existing leagues",
+    title: "Bring in the leagues you already play.",
     text: yahooComingSoon
       ? "Create a free account, then connect ESPN through the Chrome companion or iOS app and select your team."
       : "Create a free account, then connect Yahoo directly or use the Chrome companion or iOS app for ESPN and select your team.",
@@ -78,7 +78,7 @@ const howItWorks = [
   {
     number: "03",
     label: yahooComingSoon ? "Make the move in ESPN" : "Make the move in your league app",
-    title: "You stay in control.",
+    title: "You maintain full control.",
     text: yahooComingSoon
       ? "Laces Out recommends the move. You return to ESPN to set the lineup, place the claim, or offer the trade."
       : "Laces Out recommends the move. You return to ESPN or Yahoo to set the lineup, place the claim, or offer the trade.",
@@ -196,15 +196,14 @@ function LandingHeader() {
             Sign In
           </Link>
           <Link className={styles.headerCta} href="/register">
-            Create a free account <ArrowRight aria-hidden="true" size={14} />
+            Join <ArrowRight aria-hidden="true" size={14} />
           </Link>
         </div>
       </div>
       <nav className={styles.mobileNav} aria-label="Landing page sections">
         <a href="#how-it-works">How it works</a>
-        <a href="#in-season">Weekly</a>
-        <a href="#draft-day">Draft</a>
-        <a href="#faq">FAQ</a>
+        <a href="#in-season">Decisions</a>
+        <a href="#league-fun">Recaps</a>
       </nav>
     </header>
   );
@@ -307,11 +306,11 @@ export default function LandingPage() {
                 <Goal aria-hidden="true" size={15} /> Your fantasy football companion
               </p>
               <h1>
-                Know who to
-                <span>start, add, and trade.</span>
+                Connect your leagues.
+                <span>Get the next move.</span>
               </h1>
               <p className={styles.heroLead}>
-                Laces Out connects to your{" "}
+                Laces Out pairs with your{" "}
                 {yahooComingSoon ? "ESPN league" : "ESPN or Yahoo leagues"} and brings lineup
                 advice, waiver pickups, trade ideas, and draft tools into one place.
               </p>
@@ -334,19 +333,6 @@ export default function LandingPage() {
                 <ShieldCheck aria-hidden="true" size={15} /> Laces Out recommends the move. You make
                 it in {yahooComingSoon ? "ESPN" : "ESPN or Yahoo"}.
               </p>
-              <div className={styles.heroSetup} aria-label="Connection and access summary">
-                <span>
-                  <strong>ESPN now</strong> Chrome companion or iOS app
-                </span>
-                <i aria-hidden="true" />
-                <span>
-                  <strong>{yahooComingSoon ? "Yahoo coming soon" : "Yahoo available"}</strong>
-                </span>
-                <i aria-hidden="true" />
-                <span>
-                  <strong>Hosted web app</strong> No server setup
-                </span>
-              </div>
               <div className={styles.heroProof} aria-label="Why recommendations differ by league">
                 <span>
                   <Check aria-hidden="true" size={14} /> Your league&rsquo;s scoring
@@ -474,8 +460,8 @@ export default function LandingPage() {
             <div>
               <p className={styles.sectionKicker}>How it works</p>
               <h2>
-                Connect. Review.
-                <span>Make the move.</span>
+                League context in.
+                <span>Clear advice out.</span>
               </h2>
             </div>
             <p>
