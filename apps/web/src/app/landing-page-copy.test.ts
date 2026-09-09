@@ -19,6 +19,9 @@ describe("landing-page first-time-user copy", () => {
     expect(pageSource).toContain("You maintain full control.");
     expect(pageSource).toContain("your league&rsquo;s scoring");
     expect(pageSource).toMatch(/the players\s+available to you/u);
+    expect(pageSource).not.toContain("className={styles.heroProof}");
+    expect(styleSource).toMatch(/\.heroLead\s*\{[^}]*color: #a7b1a9;/u);
+    expect(styleSource).toMatch(/\.heroPersonalization\s*\{[^}]*color: #a7b1a9;/u);
   });
 
   it("offers one free-account CTA and a clearly scoped no-account demo", () => {
@@ -30,7 +33,7 @@ describe("landing-page first-time-user copy", () => {
   });
 
   it("states the read-only action boundary and avoids unsupported sync promises", () => {
-    expect(pageSource).toContain("Laces Out recommends the move. You make");
+    expect(pageSource).toMatch(/Laces Out recommends the move\. You make\s+it happen\./u);
     expect(pageSource).toContain("Recommendations only—no ESPN roster edits");
     expect(pageSource).not.toContain("You approve every provider-side move");
     expect(pageSource).not.toContain("Automatic sync");

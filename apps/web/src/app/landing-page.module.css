@@ -251,7 +251,7 @@
 .heroPersonalization {
   max-width: 625px;
   margin-top: 13px;
-  color: #d5dcd6;
+  color: #a7b1a9;
   font-size: var(--text-14);
   font-weight: 400;
   line-height: 1.55;
@@ -294,26 +294,6 @@
 .heroControl svg {
   flex: 0 0 auto;
   margin-top: 1px;
-  color: var(--lime-300);
-}
-
-.heroProof {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px 22px;
-  margin-top: 25px;
-  color: #a7b1a9;
-  font-size: var(--text-12);
-  font-weight: 650;
-}
-
-.heroProof span {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.heroProof svg {
   color: var(--lime-300);
 }
 
@@ -2166,13 +2146,6 @@
   .ctaActions a {
     width: 100%;
     min-height: 44px;
-  }
-
-  .heroProof {
-    align-items: flex-start;
-    flex-direction: column;
-    gap: 8px;
-    margin-top: 22px;
   }
 
   .previewTopbar {

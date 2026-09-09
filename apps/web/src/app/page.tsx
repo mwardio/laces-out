@@ -331,19 +331,8 @@ export default function LandingPage() {
               </div>
               <p className={styles.heroControl}>
                 <ShieldCheck aria-hidden="true" size={15} /> Laces Out recommends the move. You make
-                it in {yahooComingSoon ? "ESPN" : "ESPN or Yahoo"}.
+                it happen.
               </p>
-              <div className={styles.heroProof} aria-label="Why recommendations differ by league">
-                <span>
-                  <Check aria-hidden="true" size={14} /> Your league&rsquo;s scoring
-                </span>
-                <span>
-                  <Check aria-hidden="true" size={14} /> Your available players
-                </span>
-                <span>
-                  <Check aria-hidden="true" size={14} /> All your connected teams
-                </span>
-              </div>
             </div>
 
             <div className={styles.productPreview} aria-label="Illustrative Laces Out dashboard">
