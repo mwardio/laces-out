@@ -26,11 +26,12 @@ const applicationId = `${landingUrl}/#app`;
  */
 export const landingFeatureList = [
   "League sync",
-  "Draft studio",
+  "Draft Studio",
   "League Analytics",
   "Trade finder",
   "Decision Desk",
   "Film Room",
+  "Weekly Reckoning",
 ];
 
 export const landingStructuredData = {
@@ -67,7 +68,7 @@ export const landingStructuredData = {
       applicationSubCategory: "Fantasy sports",
       operatingSystem: ["iOS", "Web browser"],
       description:
-        "Fantasy football software that syncs leagues, builds weekly forecasts, and automates draft, lineup, waiver, trade, and opponent analysis.",
+        "A fantasy football companion with league-aware lineup, waiver, trade, analytics, and draft recommendations.",
       featureList: landingFeatureList,
       isAccessibleForFree: true,
       downloadUrl: publicAppStoreUrl,

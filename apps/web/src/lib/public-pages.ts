@@ -28,7 +28,7 @@ export const publicPages: readonly PublicPage[] = [
   {
     // apps/web/src/app/page.tsx
     path: "/",
-    lastModified: "2026-09-08",
+    lastModified: "2026-09-09",
     changeFrequency: "weekly",
     priority: 1,
   },
@@ -90,7 +90,7 @@ export const socialImage = {
   url: "/opengraph-image",
   width: 1200,
   height: 630,
-  alt: "Laces Out: Connect your leagues. Get the next move.",
+  alt: "Laces Out: Know who to start, add, and trade.",
   type: "image/png",
 } as const;
 

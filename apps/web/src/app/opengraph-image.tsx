@@ -5,7 +5,7 @@ import { ImageResponse } from "next/og";
 
 import { yahooComingSoon } from "../lib/public-site";
 
-export const alt = "Laces Out: Connect your leagues. Get the next move.";
+export const alt = "Laces Out: Know who to start, add, and trade.";
 export const size = { width: 1200, height: 630 };
 export const contentType = "image/png";
 
@@ -65,7 +65,7 @@ export default async function OpenGraphImage() {
             lineHeight: 1.03,
           }}
         >
-          Connect your leagues.
+          Know who to start,
         </div>
         <div
           style={{
@@ -78,7 +78,7 @@ export default async function OpenGraphImage() {
             lineHeight: 1.03,
           }}
         >
-          Get the next move.
+          add, and trade.
         </div>
       </div>
 
@@ -91,13 +91,13 @@ export default async function OpenGraphImage() {
           fontSize: 20,
         }}
       >
+        <div style={{ display: "flex" }}>Your league&rsquo;s scoring</div>
+        <div style={{ display: "flex", color: "#566159" }}>•</div>
+        <div style={{ display: "flex" }}>Your available players</div>
+        <div style={{ display: "flex", color: "#566159" }}>•</div>
         <div style={{ display: "flex" }}>
-          {yahooComingSoon ? "ESPN syncing" : "ESPN & Yahoo syncing"}
+          {yahooComingSoon ? "ESPN · Web + iOS" : "ESPN & Yahoo · Web + iOS"}
         </div>
-        <div style={{ display: "flex", color: "#566159" }}>•</div>
-        <div style={{ display: "flex" }}>Access on web + iOS</div>
-        <div style={{ display: "flex", color: "#566159" }}>•</div>
-        <div style={{ display: "flex" }}>Backtested across 4 NFL seasons</div>
       </div>
     </div>,
     {
