@@ -116,6 +116,27 @@ const MANAGED_PROJECTION_SET_SOURCE = "laces-out-first-party";
 const MANAGED_ROS_PROJECTION_SET_SOURCE = "laces-out-first-party-ros";
 const AUTHORITATIVE_ROS_RELEASE_COMPLETENESS = "full";
 
+/**
+ * Orders admitted ROS releases without emitting a bare integer expression. PostgreSQL interprets
+ * an integer in ORDER BY as a select-list position, so the old no-profile SQL expression containing
+ * `0` became the invalid `ORDER BY 0` instead of a harmless constant. When no managed profile
+ * exists there is no profile preference to express, and the release-identity ordering is sufficient.
+ */
+export function restOfSeasonProjectionSetOrderBy(managedProfileKey: string | null) {
+  return [
+    ...(managedProfileKey
+      ? [
+          sql`case when ${projectionSets.metadata}->>'scoringProfileKey' = ${managedProfileKey} then 0 else 1 end`,
+        ]
+      : []),
+    desc(projectionSets.asOfWeek),
+    desc(projectionSets.asOfAt),
+    desc(projectionSets.fetchedAt),
+    desc(projectionSets.createdAt),
+    desc(projectionSets.id),
+  ];
+}
+
 export interface DecisionMembershipRow {
   readonly leagueId: string;
   readonly leagueName: string;
@@ -516,16 +537,7 @@ export class DrizzleInSeasonDecisionRepository implements InSeasonDecisionReposi
                 desc(projectionSets.createdAt),
                 desc(projectionSets.id),
               ]
-            : [
-                managedProfileKey
-                  ? sql`case when ${projectionSets.metadata}->>'scoringProfileKey' = ${managedProfileKey} then 0 else 1 end`
-                  : sql`0`,
-                desc(projectionSets.asOfWeek),
-                desc(projectionSets.asOfAt),
-                desc(projectionSets.fetchedAt),
-                desc(projectionSets.createdAt),
-                desc(projectionSets.id),
-              ]),
+            : [...restOfSeasonProjectionSetOrderBy(managedProfileKey)]),
         )
         .limit(limit);
     const [weekly, restOfSeason] = await Promise.all([read("week"), read("rest-of-season")]);
