@@ -63,6 +63,7 @@ function fakeRepository(
     listStandingsEntries: () => Promise.resolve([]),
     findLatestMatchupSnapshot: () => Promise.resolve(undefined),
     listWeeklyMatchups: () => Promise.resolve([]),
+    findLatestWeeklyBoxScoreSnapshot: () => Promise.resolve(undefined),
     listDataSources: () => Promise.resolve([]),
     claimTeam: () => Promise.resolve({ state: "not-member" }),
     ...overrides,
@@ -265,24 +266,47 @@ describe("LeagueDashboardService", () => {
           Promise.resolve([
             {
               id: matchupId,
+              providerMatchupId: "week-1-game-1",
               week: 1,
               status: "final",
               homeTeamId: teamId,
+              homeProviderTeamId: "1",
               homeTeamName: "Tech Gurus",
               homeAbbreviation: "TG",
               homeManagerDisplayName: "Mack",
               homeLogoUrl: null,
               awayTeamId: otherTeamId,
+              awayProviderTeamId: "2",
               awayTeamName: "Sunday Scaries",
               awayAbbreviation: "SS",
               awayManagerDisplayName: "Friend",
               awayLogoUrl: null,
-              homeScore: "121.5000",
-              awayScore: "110.2500",
+              homeScore: "0.0000",
+              awayScore: "0.0000",
               winnerTeamId: teamId,
               tied: false,
             },
           ]),
+        findLatestWeeklyBoxScoreSnapshot: () =>
+          Promise.resolve({
+            asOfWeek: 1,
+            effectiveAt: new Date("2026-07-16T21:01:00.000Z"),
+            artifact: {
+              kind: "weekly-box-scores",
+              week: 1,
+              matchups: [
+                {
+                  providerMatchupId: "week-1-game-1",
+                  home: { providerTeamId: "1", totalPoints: 0 },
+                  away: { providerTeamId: "2", totalPoints: 0 },
+                },
+              ],
+              playerScores: [
+                { providerTeamId: "1", starter: true, actualPoints: 121.5 },
+                { providerTeamId: "2", starter: true, actualPoints: 110.25 },
+              ],
+            },
+          }),
         listDataSources: () =>
           Promise.resolve([
             {

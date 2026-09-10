@@ -16,9 +16,11 @@ import {
   dataSources,
   fantasyTeams,
   leagueMemberships,
+  leagueSupplementalSnapshots,
   leagues,
   leagueSeasons,
   matchupSnapshots,
+  nflScheduleObservations,
   playerProjections,
   playerWeeklyRosterObservations,
   players,
@@ -68,6 +70,10 @@ import {
   latestProviderCommissionerAuthoritySql,
   publicLeagueAccessRole,
 } from "./public-league-access.js";
+import {
+  mergeEspnWeeklyBoxScores,
+  parseEspnWeeklyBoxScoreArtifact,
+} from "./espn-weekly-box-score.js";
 
 export const LEAGUE_ANALYTICS_LIMITS = {
   teams: 32,
@@ -77,6 +83,7 @@ export const LEAGUE_ANALYTICS_LIMITS = {
   projectionSets: 16,
   projectionRows: 1_024,
   slotRules: 64,
+  nflGames: 32,
 } as const;
 
 /**
@@ -201,8 +208,22 @@ export interface AnalyticsMatchupObservationRow {
   readonly status: WeeklyMatchupStatus;
   readonly homeTeamId: string;
   readonly awayTeamId: string;
+  readonly homeProviderTeamId: string;
+  readonly awayProviderTeamId: string;
   readonly homeScore: string | null;
   readonly awayScore: string | null;
+}
+
+export interface AnalyticsWeeklyBoxScoreRow {
+  readonly effectiveAt: Date;
+  readonly artifact: Record<string, unknown>;
+}
+
+export interface AnalyticsNflGameRow {
+  readonly awayTeam: string;
+  readonly homeTeam: string;
+  readonly kickoffAt: Date | null;
+  readonly status: "scheduled" | "in-progress" | "final" | "postponed" | "cancelled";
 }
 
 export interface AnalyticsSlotRuleRow {
@@ -279,6 +300,15 @@ export interface LeagueAnalyticsRepository {
     playerIds: readonly string[],
     limit: number,
   ): Promise<readonly AnalyticsProjectionRow[]>;
+  findLatestWeeklyBoxScoreSnapshot(
+    leagueSeasonId: string,
+    week: number,
+  ): Promise<AnalyticsWeeklyBoxScoreRow | undefined>;
+  listNflGames(
+    season: number,
+    week: number,
+    limit: number,
+  ): Promise<readonly AnalyticsNflGameRow[]>;
   /**
    * The managed (`laces-out-first-party`) weekly projection profile for this league, so a missing
    * accessible projection set can say WHY managed sets were withheld instead of leaving that
@@ -389,6 +419,8 @@ export class DrizzleLeagueAnalyticsRepository implements LeagueAnalyticsReposito
         status: weeklyMatchups.status,
         homeTeamId: weeklyMatchups.homeTeamId,
         awayTeamId: weeklyMatchups.awayTeamId,
+        homeProviderTeamId: weeklyMatchups.homeProviderTeamId,
+        awayProviderTeamId: weeklyMatchups.awayProviderTeamId,
         homeScore: weeklyMatchups.homeScore,
         awayScore: weeklyMatchups.awayScore,
       })
@@ -401,6 +433,61 @@ export class DrizzleLeagueAnalyticsRepository implements LeagueAnalyticsReposito
         desc(matchupSnapshots.effectiveAt),
         desc(matchupSnapshots.id),
         desc(weeklyMatchups.id),
+      )
+      .limit(limit);
+  }
+
+  async findLatestWeeklyBoxScoreSnapshot(
+    leagueSeasonId: string,
+    week: number,
+  ): Promise<AnalyticsWeeklyBoxScoreRow | undefined> {
+    const [snapshot] = await this.#database
+      .select({
+        effectiveAt: leagueSupplementalSnapshots.effectiveAt,
+        artifact: leagueSupplementalSnapshots.artifact,
+      })
+      .from(leagueSupplementalSnapshots)
+      .where(
+        and(
+          eq(leagueSupplementalSnapshots.leagueSeasonId, leagueSeasonId),
+          eq(leagueSupplementalSnapshots.kind, "weekly-box-scores"),
+          eq(leagueSupplementalSnapshots.asOfWeek, week),
+        ),
+      )
+      .orderBy(
+        desc(leagueSupplementalSnapshots.effectiveAt),
+        desc(leagueSupplementalSnapshots.createdAt),
+        desc(leagueSupplementalSnapshots.id),
+      )
+      .limit(1);
+    return snapshot;
+  }
+
+  listNflGames(
+    season: number,
+    week: number,
+    limit: number,
+  ): Promise<readonly AnalyticsNflGameRow[]> {
+    return this.#database
+      .selectDistinctOn([nflScheduleObservations.externalGameId], {
+        awayTeam: nflScheduleObservations.awayTeam,
+        homeTeam: nflScheduleObservations.homeTeam,
+        kickoffAt: nflScheduleObservations.kickoffAt,
+        status: nflScheduleObservations.status,
+      })
+      .from(nflScheduleObservations)
+      .where(
+        and(
+          eq(nflScheduleObservations.season, season),
+          eq(nflScheduleObservations.week, week),
+          eq(nflScheduleObservations.seasonType, "REG"),
+        ),
+      )
+      .orderBy(
+        asc(nflScheduleObservations.externalGameId),
+        desc(nflScheduleObservations.sourceAsOf),
+        desc(nflScheduleObservations.fetchedAt),
+        desc(nflScheduleObservations.id),
       )
       .limit(limit);
   }
@@ -1157,6 +1244,27 @@ function average(values: readonly (number | null)[]): number | null {
     : available.reduce((sum, value) => sum + value, 0) / available.length;
 }
 
+function startedNflTeams(games: readonly AnalyticsNflGameRow[], now: Date): ReadonlySet<string> {
+  const started = new Set<string>();
+  for (const game of games) {
+    const hasStarted =
+      game.status === "in-progress" ||
+      game.status === "final" ||
+      game.status === "cancelled" ||
+      (game.status === "scheduled" && game.kickoffAt !== null && game.kickoffAt <= now);
+    if (!hasStarted) continue;
+    for (const team of [game.awayTeam, game.homeTeam]) {
+      const canonical = canonicalNflTeamCode(team);
+      if (canonical) started.add(canonical);
+    }
+  }
+  return started;
+}
+
+function roundedPoints(value: number): number {
+  return Math.round((value + Number.EPSILON) * 1_000) / 1_000;
+}
+
 /**
  * Every week the admitted evidence can award, ascending. Computed once so the snapshot can
  * publish the selectable list and the award builder can validate a requested week against it.
@@ -1470,6 +1578,8 @@ function buildOpponentAnalytics(input: {
   readonly scores: BuiltScoreAnalytics;
   readonly positional: BuiltPositionalAnalytics;
   readonly power: LeaguePowerAnalyticsSection;
+  readonly nflGames: readonly AnalyticsNflGameRow[];
+  readonly now: Date;
 }): LeagueOpponentScoutSection {
   if (input.currentWeek === null) {
     return unavailable(
@@ -1568,6 +1678,35 @@ function buildOpponentAnalytics(input: {
       ] as const;
     }),
   );
+  const nflTeamsInProgressOrFinal = startedNflTeams(input.nflGames, input.now);
+  const liveTeamProjection = (
+    details: typeof projectionDetailsByTeam extends Map<string, infer T> ? T : never,
+    officialScore: string | null,
+    matchupStatus: AnalyticsMatchupObservationRow["status"],
+  ) => {
+    const score = numberOrNull(officialScore);
+    if (score === null || matchupStatus === "scheduled") return details.projection;
+    if (matchupStatus === "final") {
+      return { ...details.projection, projectedPoints: score };
+    }
+    const starters = details.players.filter((player) => player.isStarter);
+    const startedStarters = starters.filter(
+      (player) => player.nflTeam !== null && nflTeamsInProgressOrFinal.has(player.nflTeam),
+    );
+    // Without evidence identifying at least one actualized starter, adding the official score to
+    // every pregame projection would double-count points. Retain the disclosed pregame total.
+    if (startedStarters.length === 0) return details.projection;
+    const remainingStarters = starters.filter((player) => !startedStarters.includes(player));
+    if (remainingStarters.some((player) => player.projectedPoints === null)) {
+      return { ...details.projection, projectedPoints: null };
+    }
+    return {
+      ...details.projection,
+      projectedPoints: roundedPoints(
+        score + remainingStarters.reduce((sum, player) => sum + (player.projectedPoints ?? 0), 0),
+      ),
+    };
+  };
   const scoreTeams = input.scores.section.state === "available" ? input.scores.section.teams : [];
   const powerTeams = input.power.state === "available" ? input.power.rankings : [];
   const positionalSection =
@@ -1622,13 +1761,23 @@ function buildOpponentAnalytics(input: {
       },
       players: [],
     };
+    const subjectLiveProjection = liveTeamProjection(
+      subjectProjection,
+      subjectId === matchup.homeTeamId ? matchup.homeScore : matchup.awayScore,
+      matchup.status,
+    );
+    const opponentLiveProjection = liveTeamProjection(
+      opponentProjection,
+      opponentId === matchup.homeTeamId ? matchup.homeScore : matchup.awayScore,
+      matchup.status,
+    );
     const metrics = [
       scoreMetric(
         "projected-lineup-points",
         "Projected lineup",
-        "Sum of mean weekly projections for every player currently in a starting slot. A total is withheld if any starter lacks a projection.",
-        subjectProjection.projection.projectedPoints,
-        opponentProjection.projection.projectedPoints,
+        "Before kickoff, the sum of starter projections. While games are underway, official points already scored replace the original projections for starters whose NFL games have begun; unstarted starters retain their weekly projection.",
+        subjectLiveProjection.projectedPoints,
+        opponentLiveProjection.projectedPoints,
         [...projectionDetailsByTeam.values()].map((team) => team.projection.projectedPoints),
         "pts",
       ),
@@ -1743,8 +1892,8 @@ function buildOpponentAnalytics(input: {
         matchupStatus: matchup.status,
         subject: identity(subject, input.claimedTeamId),
         opponent: identity(opponent, input.claimedTeamId),
-        subjectProjection: subjectProjection.projection,
-        opponentProjection: opponentProjection.projection,
+        subjectProjection: subjectLiveProjection,
+        opponentProjection: opponentLiveProjection,
         subjectPlayers: subjectProjection.players,
         opponentPlayers: opponentProjection.players,
         positionalBreakdown,
@@ -1782,7 +1931,7 @@ function buildOpponentAnalytics(input: {
     defaultMatchupId: defaultMatchup.id,
     matchups,
     definition:
-      "A current-week comparison of any league matchup using stored official results, current starting-lineup projections, power scores, and projection-backed positional strength. Player and team totals use the same accessible weekly projection set.",
+      "A current-week comparison of any league matchup using stored official results, current starting-lineup projections, power scores, and projection-backed positional strength. Live team outlooks combine official points already scored with the same accessible weekly projection set for starters whose NFL games have not begun.",
   };
 }
 
@@ -1812,28 +1961,45 @@ export class LeagueAnalyticsService {
     const season = await this.#repository.findLatestSeason(leagueId);
     if (!season) return this.#noSeason(membership, now);
 
-    const [teamRows, observationRows, slotRuleRows, rosterSnapshotRows, projectionCandidates] =
-      await Promise.all([
-        this.#repository.listTeams(season.id, LEAGUE_ANALYTICS_LIMITS.teams + 1),
-        this.#repository.listMatchupObservations(
-          season.id,
-          LEAGUE_ANALYTICS_LIMITS.matchupObservations + 1,
-        ),
-        this.#repository.listSlotRules(season.id, LEAGUE_ANALYTICS_LIMITS.slotRules + 1),
-        this.#repository.listLatestRosterSnapshots(
-          season.id,
-          LEAGUE_ANALYTICS_LIMITS.rosterSnapshots + 1,
-        ),
-        season.currentWeek === null
-          ? Promise.resolve([])
-          : this.#repository.listProjectionSetCandidates(
-              actorUserId,
-              season.id,
-              season.season,
-              season.currentWeek,
-              LEAGUE_ANALYTICS_LIMITS.projectionSets,
-            ),
-      ]);
+    const [
+      teamRows,
+      observationRows,
+      slotRuleRows,
+      rosterSnapshotRows,
+      projectionCandidates,
+      weeklyBoxScoreSnapshot,
+      nflGameRows,
+    ] = await Promise.all([
+      this.#repository.listTeams(season.id, LEAGUE_ANALYTICS_LIMITS.teams + 1),
+      this.#repository.listMatchupObservations(
+        season.id,
+        LEAGUE_ANALYTICS_LIMITS.matchupObservations + 1,
+      ),
+      this.#repository.listSlotRules(season.id, LEAGUE_ANALYTICS_LIMITS.slotRules + 1),
+      this.#repository.listLatestRosterSnapshots(
+        season.id,
+        LEAGUE_ANALYTICS_LIMITS.rosterSnapshots + 1,
+      ),
+      season.currentWeek === null
+        ? Promise.resolve([])
+        : this.#repository.listProjectionSetCandidates(
+            actorUserId,
+            season.id,
+            season.season,
+            season.currentWeek,
+            LEAGUE_ANALYTICS_LIMITS.projectionSets,
+          ),
+      season.provider === "espn" && season.currentWeek !== null
+        ? this.#repository.findLatestWeeklyBoxScoreSnapshot(season.id, season.currentWeek)
+        : Promise.resolve(undefined),
+      season.currentWeek === null
+        ? Promise.resolve([])
+        : this.#repository.listNflGames(
+            season.season,
+            season.currentWeek,
+            LEAGUE_ANALYTICS_LIMITS.nflGames + 1,
+          ),
+    ]);
 
     if (teamRows.length === 0) {
       return this.#limitedSnapshot(
@@ -1867,7 +2033,14 @@ export class LeagueAnalyticsService {
     }
 
     const teams = teamRows;
-    const matchups = deduplicateMatchupObservations(observationRows);
+    const storedMatchups = deduplicateMatchupObservations(observationRows);
+    const matchups = weeklyBoxScoreSnapshot
+      ? mergeEspnWeeklyBoxScores(
+          storedMatchups,
+          parseEspnWeeklyBoxScoreArtifact(weeklyBoxScoreSnapshot.artifact),
+          weeklyBoxScoreSnapshot.effectiveAt,
+        )
+      : storedMatchups;
     const snapshots = latestRosterSnapshots(rosterSnapshotRows).slice(
       0,
       LEAGUE_ANALYTICS_LIMITS.rosterSnapshots,
@@ -1967,6 +2140,8 @@ export class LeagueAnalyticsService {
       scores,
       positional,
       power,
+      nflGames: nflGameRows.length > LEAGUE_ANALYTICS_LIMITS.nflGames ? [] : nflGameRows,
+      now,
     });
     const latestMatchupObservedAt = matchups.reduce<Date | null>(
       (latest, row) => (!latest || row.effectiveAt > latest ? row.effectiveAt : latest),

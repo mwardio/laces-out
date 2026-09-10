@@ -7,6 +7,7 @@ import {
   selectAccessibleProjectionSet,
   type AnalyticsMatchupObservationRow,
   type AnalyticsMembershipRow,
+  type AnalyticsNflGameRow,
   type AnalyticsProjectionRow,
   type AnalyticsProjectionSetRow,
   type AnalyticsRosterEntryRow,
@@ -81,6 +82,10 @@ function observation(input: {
   homeScore: string | null;
   awayScore: string | null;
 }): AnalyticsMatchupObservationRow {
+  const homeTeamId = input.homeTeamId ?? TEAM_A;
+  const awayTeamId = input.awayTeamId ?? TEAM_B;
+  const providerTeamId = (teamId: string) =>
+    teamId === TEAM_A ? "1" : teamId === TEAM_B ? "2" : teamId === TEAM_C ? "3" : "4";
   return {
     matchupId: input.matchupId,
     snapshotId: input.snapshotId,
@@ -89,8 +94,10 @@ function observation(input: {
     providerMatchupId: input.providerMatchupId,
     week: input.week,
     status: input.status ?? "final",
-    homeTeamId: input.homeTeamId ?? TEAM_A,
-    awayTeamId: input.awayTeamId ?? TEAM_B,
+    homeTeamId,
+    awayTeamId,
+    homeProviderTeamId: providerTeamId(homeTeamId),
+    awayProviderTeamId: providerTeamId(awayTeamId),
     homeScore: input.homeScore,
     awayScore: input.awayScore,
   };
@@ -344,6 +351,10 @@ class FakeRepository implements LeagueAnalyticsRepository {
   projectionRows: readonly AnalyticsProjectionRow[] = projectionRows;
   rosterSnapshots: readonly AnalyticsRosterSnapshotRow[] = rosterSnapshots;
   rosterEntries: readonly AnalyticsRosterEntryRow[] = rosterEntries;
+  weeklyBoxScoreSnapshot: Awaited<
+    ReturnType<LeagueAnalyticsRepository["findLatestWeeklyBoxScoreSnapshot"]>
+  > = undefined;
+  nflGames: readonly AnalyticsNflGameRow[] = [];
   downstreamReads = 0;
 
   findMembership(userId: string, leagueId: string) {
@@ -392,6 +403,14 @@ class FakeRepository implements LeagueAnalyticsRepository {
     return Promise.resolve(
       this.projectionRows.filter((row) => playerIds.includes(row.playerId)).slice(0, limit),
     );
+  }
+  findLatestWeeklyBoxScoreSnapshot() {
+    this.downstreamReads += 1;
+    return Promise.resolve(this.weeklyBoxScoreSnapshot);
+  }
+  listNflGames(_season: number, _week: number, limit: number) {
+    this.downstreamReads += 1;
+    return Promise.resolve(this.nflGames.slice(0, limit));
   }
   findManagedProjectionProfile?: (leagueSeasonId: string) => Promise<ManagedProjectionProfile>;
 }
@@ -509,12 +528,12 @@ describe("LeagueAnalyticsService", () => {
       expect(parsed.opponentScout.matchups[0]).toMatchObject({
         id: "week-2-game-1",
         subjectProjection: {
-          projectedPoints: 24,
+          projectedPoints: 90,
           starterCount: 1,
           projectedStarterCount: 1,
         },
         opponentProjection: {
-          projectedPoints: 18,
+          projectedPoints: 110,
           starterCount: 1,
           projectedStarterCount: 1,
         },
@@ -537,9 +556,9 @@ describe("LeagueAnalyticsService", () => {
       });
       expect(parsed.opponentScout.matchups[0]?.metrics[0]).toMatchObject({
         id: "projected-lineup-points",
-        subjectValue: 24,
-        opponentValue: 18,
-        edgeOwner: "subject",
+        subjectValue: 90,
+        opponentValue: 110,
+        edgeOwner: "opponent",
       });
     }
   });
@@ -604,8 +623,8 @@ describe("LeagueAnalyticsService", () => {
     expect(snapshot.opponentScout.matchups[1]).toMatchObject({
       subject: { id: TEAM_D, isCurrentUser: false },
       opponent: { id: TEAM_C, isCurrentUser: false },
-      subjectProjection: { projectedPoints: 20.25 },
-      opponentProjection: { projectedPoints: 21.5 },
+      subjectProjection: { projectedPoints: 130 },
+      opponentProjection: { projectedPoints: 105 },
       subjectPlayers: [{ playerId: playerD, projectedPoints: 20.25 }],
       opponentPlayers: [{ playerId: playerC, projectedPoints: 21.5 }],
     });
@@ -614,6 +633,9 @@ describe("LeagueAnalyticsService", () => {
   it("withholds a team total instead of presenting a partial starting-lineup projection", async () => {
     const repository = new FakeRepository();
     repository.projectionRows = projectionRows.filter((row) => row.playerId !== PLAYER_A);
+    repository.observations = observations.map((row) =>
+      row.week === 2 ? { ...row, status: "in-progress" as const } : row,
+    );
 
     const snapshot = leagueAnalyticsSnapshotSchema.parse(
       await new LeagueAnalyticsService(repository, () => NOW).getSnapshot(USER_ID, LEAGUE_ID),
@@ -633,6 +655,82 @@ describe("LeagueAnalyticsService", () => {
       id: "projected-lineup-points",
       subjectValue: null,
       edgeOwner: "unknown",
+    });
+  });
+
+  it("replaces started-player projections with live official scoring", async () => {
+    const repository = new FakeRepository();
+    const remainingPlayerId = "60000000-0000-4000-8000-000000000009";
+    repository.observations = observations.map((row) =>
+      row.week === 2
+        ? { ...row, status: "in-progress" as const, homeScore: "0", awayScore: "0" }
+        : row,
+    );
+    repository.weeklyBoxScoreSnapshot = {
+      effectiveAt: new Date("2026-09-16T11:58:00.000Z"),
+      artifact: {
+        kind: "weekly-box-scores",
+        week: 2,
+        matchups: [
+          {
+            providerMatchupId: "week-2-game-1",
+            home: { providerTeamId: "1", totalPoints: 0 },
+            away: { providerTeamId: "2", totalPoints: 0 },
+          },
+        ],
+        playerScores: [
+          { providerTeamId: "1", starter: true, actualPoints: 10 },
+          { providerTeamId: "2", starter: true, actualPoints: 25 },
+        ],
+      },
+    };
+    repository.nflGames = [
+      {
+        awayTeam: "MIA",
+        homeTeam: "BUF",
+        kickoffAt: new Date("2026-09-16T10:00:00.000Z"),
+        status: "in-progress",
+      },
+      {
+        awayTeam: "LAR",
+        homeTeam: "SEA",
+        kickoffAt: new Date("2026-09-16T20:00:00.000Z"),
+        status: "scheduled",
+      },
+    ];
+    repository.rosterEntries = [
+      ...rosterEntries,
+      {
+        snapshotId: SNAPSHOT_A,
+        playerId: remainingPlayerId,
+        name: "Riley Remaining",
+        primaryPosition: "RB",
+        nflTeam: "LAR",
+        status: "ACTIVE",
+        slotCode: "FLEX",
+        isStarter: true,
+      },
+    ];
+    repository.projectionRows = [
+      ...projectionRows,
+      { playerId: remainingPlayerId, meanPoints: "6" },
+    ];
+
+    const snapshot = leagueAnalyticsSnapshotSchema.parse(
+      await new LeagueAnalyticsService(repository, () => NOW).getSnapshot(USER_ID, LEAGUE_ID),
+    );
+
+    expect(snapshot.opponentScout.state).toBe("available");
+    if (snapshot.opponentScout.state !== "available") return;
+    expect(snapshot.opponentScout.matchups[0]).toMatchObject({
+      subjectProjection: { projectedPoints: 16 },
+      opponentProjection: { projectedPoints: 25 },
+    });
+    expect(snapshot.opponentScout.matchups[0]?.metrics[0]).toMatchObject({
+      id: "projected-lineup-points",
+      subjectValue: 16,
+      opponentValue: 25,
+      edgeOwner: "opponent",
     });
   });
 

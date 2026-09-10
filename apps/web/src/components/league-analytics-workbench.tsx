@@ -818,6 +818,21 @@ function projectionCoverage(projection: OpponentScoutMatchup["subjectProjection"
   return `${projection.projectedStarterCount}/${projection.starterCount} starters projected`;
 }
 
+function teamOutlookLabel(status: OpponentScoutMatchup["matchupStatus"]): string {
+  if (status === "final") return "Final score";
+  return status === "in-progress" ? "Live projected finish" : "Projected starters";
+}
+
+function teamOutlookDetail(
+  projection: OpponentScoutMatchup["subjectProjection"],
+  status: OpponentScoutMatchup["matchupStatus"],
+): string {
+  if (status === "final") return "Official provider total";
+  return status === "in-progress"
+    ? "Actual score + unstarted projections"
+    : projectionCoverage(projection);
+}
+
 function ProjectionRoster({
   team,
   projection,
@@ -947,13 +962,18 @@ function OpponentSection({ snapshot }: { readonly snapshot: LeagueAnalyticsSnaps
                 </span>
               </div>
               <div className={styles.teamProjectionTotal}>
-                <small>Projected starters</small>
+                <small>{teamOutlookLabel(selectedMatchup.matchupStatus)}</small>
                 <strong>
                   {selectedMatchup.subjectProjection.projectedPoints === null
                     ? "—"
                     : decimal.format(selectedMatchup.subjectProjection.projectedPoints)}
                 </strong>
-                <span>{projectionCoverage(selectedMatchup.subjectProjection)}</span>
+                <span>
+                  {teamOutlookDetail(
+                    selectedMatchup.subjectProjection,
+                    selectedMatchup.matchupStatus,
+                  )}
+                </span>
               </div>
             </article>
             <div className={styles.matchupVersus}>
@@ -982,13 +1002,18 @@ function OpponentSection({ snapshot }: { readonly snapshot: LeagueAnalyticsSnaps
                 </span>
               </div>
               <div className={styles.teamProjectionTotal}>
-                <small>Projected starters</small>
+                <small>{teamOutlookLabel(selectedMatchup.matchupStatus)}</small>
                 <strong>
                   {selectedMatchup.opponentProjection.projectedPoints === null
                     ? "—"
                     : decimal.format(selectedMatchup.opponentProjection.projectedPoints)}
                 </strong>
-                <span>{projectionCoverage(selectedMatchup.opponentProjection)}</span>
+                <span>
+                  {teamOutlookDetail(
+                    selectedMatchup.opponentProjection,
+                    selectedMatchup.matchupStatus,
+                  )}
+                </span>
               </div>
             </article>
           </div>
@@ -1463,47 +1488,71 @@ export function LeagueAnalyticsWorkbench() {
     return () => controller.abort();
   }, [selectLeague]);
 
-  const loadAnalytics = useCallback(async () => {
-    if (!leagueId) return;
-    analyticsRequest.current?.abort();
-    if (isDemo) {
-      analyticsRequest.current = null;
-      setAnalytics({ state: "ready", snapshot: demoAnalyticsSnapshot });
-      return;
-    }
-    const controller = new AbortController();
-    analyticsRequest.current = controller;
-    setAnalytics({ state: "loading" });
-    try {
-      const response = await fetch(`${apiBaseUrl}/v1/leagues/${leagueId}/analytics`, {
-        credentials: "include",
-        cache: "no-store",
-        signal: controller.signal,
-      });
-      if (!response.ok) {
-        throw new Error(
-          response.status === 404
-            ? "That league is no longer accessible."
-            : "League analytics could not be loaded.",
-        );
+  const loadAnalytics = useCallback(
+    async (options: { readonly silent?: boolean } = {}) => {
+      if (!leagueId) return;
+      analyticsRequest.current?.abort();
+      if (isDemo) {
+        analyticsRequest.current = null;
+        setAnalytics({ state: "ready", snapshot: demoAnalyticsSnapshot });
+        return;
       }
-      const parsed = parseLeagueAnalyticsSnapshot(await response.json());
-      if (!parsed) throw new Error("The analytics response failed its data contract.");
-      if (controller.signal.aborted) return;
-      setAnalytics({ state: "ready", snapshot: parsed });
-    } catch (error) {
-      if (controller.signal.aborted) return;
-      setAnalytics({
-        state: "error",
-        message: error instanceof Error ? error.message : "League analytics could not be loaded.",
-      });
-    }
-  }, [isDemo, leagueId]);
+      const controller = new AbortController();
+      analyticsRequest.current = controller;
+      if (!options.silent) setAnalytics({ state: "loading" });
+      try {
+        const response = await fetch(`${apiBaseUrl}/v1/leagues/${leagueId}/analytics`, {
+          credentials: "include",
+          cache: "no-store",
+          signal: controller.signal,
+        });
+        if (!response.ok) {
+          throw new Error(
+            response.status === 404
+              ? "That league is no longer accessible."
+              : "League analytics could not be loaded.",
+          );
+        }
+        const parsed = parseLeagueAnalyticsSnapshot(await response.json());
+        if (!parsed) throw new Error("The analytics response failed its data contract.");
+        if (controller.signal.aborted) return;
+        setAnalytics({ state: "ready", snapshot: parsed });
+      } catch (error) {
+        if (controller.signal.aborted) return;
+        if (options.silent) return;
+        setAnalytics({
+          state: "error",
+          message: error instanceof Error ? error.message : "League analytics could not be loaded.",
+        });
+      }
+    },
+    [isDemo, leagueId],
+  );
 
   useEffect(() => {
     if (leagueId) void loadAnalytics();
     return () => analyticsRequest.current?.abort();
   }, [leagueId, loadAnalytics]);
+
+  const hasLiveMatchup =
+    analytics.state === "ready" &&
+    analytics.snapshot.opponentScout.state === "available" &&
+    analytics.snapshot.opponentScout.matchups.some(
+      (matchup) => matchup.matchupStatus === "in-progress",
+    );
+
+  useEffect(() => {
+    if (!hasLiveMatchup || isDemo) return;
+    const refreshVisibleAnalytics = () => {
+      if (document.visibilityState === "visible") void loadAnalytics({ silent: true });
+    };
+    const interval = window.setInterval(refreshVisibleAnalytics, 60_000);
+    document.addEventListener("visibilitychange", refreshVisibleAnalytics);
+    return () => {
+      window.clearInterval(interval);
+      document.removeEventListener("visibilitychange", refreshVisibleAnalytics);
+    };
+  }, [hasLiveMatchup, isDemo, loadAnalytics]);
 
   const leagues = useMemo(
     () => (portfolio.state === "ready" ? portfolio.portfolio.leagues : []),

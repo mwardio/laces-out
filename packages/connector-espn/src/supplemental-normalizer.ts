@@ -280,6 +280,7 @@ const boxScoreSideSchema = z
   .object({
     teamId: providerIdSchema,
     totalPoints: finitePointsSchema,
+    adjustment: finitePointsSchema.optional(),
     rosterForCurrentScoringPeriod: z
       .object({
         entries: z.array(boxScoreRosterEntrySchema).max(128),
@@ -765,6 +766,26 @@ function normalizeBoxScores(
       }
     }
   }
+  const observedStarterTotals = new Map<string, number>();
+  for (const player of playerScores) {
+    if (!player.starter || player.actualPoints === null) continue;
+    observedStarterTotals.set(
+      player.providerTeamId,
+      (observedStarterTotals.get(player.providerTeamId) ?? 0) + player.actualPoints,
+    );
+  }
+  let derivedMatchupTotals = 0;
+  const teamTotal = (
+    providerTeamId: string,
+    providerTotal: number,
+    adjustment: number | undefined,
+  ): number => {
+    const observedTotal = observedStarterTotals.get(providerTeamId);
+    if (providerTotal !== 0 || observedTotal === undefined) return providerTotal;
+    const derivedTotal = observedTotal + (adjustment ?? 0);
+    if (derivedTotal !== providerTotal) derivedMatchupTotals += 1;
+    return derivedTotal;
+  };
   return {
     ...commonContext(envelope),
     kind: "weekly-box-scores",
@@ -778,12 +799,20 @@ function normalizeBoxScores(
           home: {
             teamExternalId: teamExternalId(envelope, matchup.home.teamId),
             providerTeamId: matchup.home.teamId,
-            totalPoints: matchup.home.totalPoints,
+            totalPoints: teamTotal(
+              matchup.home.teamId,
+              matchup.home.totalPoints,
+              matchup.home.adjustment,
+            ),
           },
           away: {
             teamExternalId: teamExternalId(envelope, matchup.away.teamId),
             providerTeamId: matchup.away.teamId,
-            totalPoints: matchup.away.totalPoints,
+            totalPoints: teamTotal(
+              matchup.away.teamId,
+              matchup.away.totalPoints,
+              matchup.away.adjustment,
+            ),
           },
         },
       ];
@@ -792,6 +821,9 @@ function normalizeBoxScores(
     warnings: [
       ...(missingActuals > 0 ? [`ACTUAL_STAT_ROWS_MISSING:${missingActuals}`] : []),
       ...(missingProjections > 0 ? [`PROJECTED_STAT_ROWS_MISSING:${missingProjections}`] : []),
+      ...(derivedMatchupTotals > 0
+        ? [`MATCHUP_TOTALS_DERIVED_FROM_STARTERS:${derivedMatchupTotals}`]
+        : []),
     ],
   };
 }

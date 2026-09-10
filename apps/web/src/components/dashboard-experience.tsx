@@ -349,36 +349,41 @@ function LivePortfolio({ portfolio, reloadPortfolio }: LivePortfolioProps) {
   const selectedEspnSeason =
     selectedSummary?.season?.provider === "espn" ? selectedSummary.season : null;
 
-  const loadDashboard = useCallback(async () => {
-    if (!selectedLeagueId) return;
-    dashboardRequest.current?.abort();
-    const controller = new AbortController();
-    dashboardRequest.current = controller;
-    setDashboardState({ status: "loading" });
-    try {
-      const response = await fetch(
-        `${apiBaseUrl}/v1/leagues/${encodeURIComponent(selectedLeagueId)}/dashboard`,
-        {
-          method: "GET",
-          credentials: "include",
-          headers: { Accept: "application/json" },
-          cache: "no-store",
-          signal: controller.signal,
-        },
-      );
-      if (!response.ok) throw new Error("The live league dashboard could not be loaded.");
-      const dashboard = parseLeagueDashboard(await response.json());
-      if (!dashboard) throw new Error("The live dashboard response was invalid.");
-      if (controller.signal.aborted || dashboardRequest.current !== controller) return;
-      setDashboardState({ status: "ready", dashboard });
-    } catch (error) {
-      if (controller.signal.aborted || dashboardRequest.current !== controller) return;
-      setDashboardState({
-        status: "error",
-        message: error instanceof Error ? error.message : "The live dashboard could not be loaded.",
-      });
-    }
-  }, [selectedLeagueId]);
+  const loadDashboard = useCallback(
+    async (options: { readonly silent?: boolean } = {}) => {
+      if (!selectedLeagueId) return;
+      dashboardRequest.current?.abort();
+      const controller = new AbortController();
+      dashboardRequest.current = controller;
+      if (!options.silent) setDashboardState({ status: "loading" });
+      try {
+        const response = await fetch(
+          `${apiBaseUrl}/v1/leagues/${encodeURIComponent(selectedLeagueId)}/dashboard`,
+          {
+            method: "GET",
+            credentials: "include",
+            headers: { Accept: "application/json" },
+            cache: "no-store",
+            signal: controller.signal,
+          },
+        );
+        if (!response.ok) throw new Error("The live league dashboard could not be loaded.");
+        const dashboard = parseLeagueDashboard(await response.json());
+        if (!dashboard) throw new Error("The live dashboard response was invalid.");
+        if (controller.signal.aborted || dashboardRequest.current !== controller) return;
+        setDashboardState({ status: "ready", dashboard });
+      } catch (error) {
+        if (controller.signal.aborted || dashboardRequest.current !== controller) return;
+        if (options.silent) return;
+        setDashboardState({
+          status: "error",
+          message:
+            error instanceof Error ? error.message : "The live dashboard could not be loaded.",
+        });
+      }
+    },
+    [selectedLeagueId],
+  );
 
   useEffect(() => {
     void loadDashboard();
@@ -501,6 +506,23 @@ function LivePortfolio({ portfolio, reloadPortfolio }: LivePortfolioProps) {
   }, [loadDashboard, refreshStatus, reloadPortfolio, selectedEspnSeason]);
 
   const currentDashboard = dashboardState.status === "ready" ? dashboardState.dashboard : undefined;
+  const hasLiveMatchup = currentDashboard?.weeklyInsights.matchups.some(
+    (matchup) => matchup.status === "in-progress",
+  );
+
+  useEffect(() => {
+    if (!hasLiveMatchup) return;
+    const refreshVisibleDashboard = () => {
+      if (document.visibilityState === "visible") void loadDashboard({ silent: true });
+    };
+    const interval = window.setInterval(refreshVisibleDashboard, 60_000);
+    document.addEventListener("visibilitychange", refreshVisibleDashboard);
+    return () => {
+      window.clearInterval(interval);
+      document.removeEventListener("visibilitychange", refreshVisibleDashboard);
+    };
+  }, [hasLiveMatchup, loadDashboard]);
+
   const freshLeagues = portfolio.leagues.filter(
     (league) => league.season?.providerFreshness.state === "fresh",
   ).length;

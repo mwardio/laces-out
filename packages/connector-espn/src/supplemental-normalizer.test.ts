@@ -357,6 +357,69 @@ describe("ESPN supplemental snapshot normalizer", () => {
     });
   });
 
+  it("repairs ESPN's zero live matchup placeholder from observed starter actuals", () => {
+    const result = normalizeEspnSupplementalSnapshot(
+      envelope({
+        kind: "weekly-box-scores",
+        week: 7,
+        matchupPeriodId: 7,
+        views: ["mMatchupScore", "mScoreboard"],
+        payload: {
+          id: "7654321",
+          seasonId: 2025,
+          scoringPeriodId: 7,
+          schedule: [
+            {
+              id: 7001,
+              matchupPeriodId: 7,
+              home: {
+                teamId: 1,
+                totalPoints: 0,
+                rosterForCurrentScoringPeriod: {
+                  entries: [
+                    weeklyPlayer({
+                      id: 5001,
+                      teamId: 1,
+                      lineupSlotId: 0,
+                      actual: 11.82,
+                      projected: 21.25,
+                    }),
+                  ],
+                },
+              },
+              away: {
+                teamId: 2,
+                totalPoints: 0,
+                rosterForCurrentScoringPeriod: {
+                  entries: [
+                    weeklyPlayer({
+                      id: 5002,
+                      teamId: 2,
+                      lineupSlotId: 20,
+                      actual: 30,
+                      projected: 7,
+                    }),
+                  ],
+                },
+              },
+            },
+          ],
+        },
+      }),
+    );
+
+    expect(result).toMatchObject({
+      matchups: [
+        {
+          home: { totalPoints: 11.82 },
+          // Bench points do not contribute to an official team score.
+          away: { totalPoints: 0 },
+        },
+      ],
+      warnings: ["MATCHUP_TOTALS_DERIVED_FROM_STARTERS:1"],
+    });
+  });
+
   it("preserves executed and failed waiver evidence plus structured trade items", () => {
     const payload = [
       {

@@ -19,6 +19,7 @@ import {
   dataSources,
   fantasyTeams,
   leagueMemberships,
+  leagueSupplementalSnapshots,
   leagues,
   leagueSeasons,
   matchupSnapshots,
@@ -43,6 +44,10 @@ import {
   latestProviderCommissionerAuthoritySql,
   publicLeagueAccessRole,
 } from "./public-league-access.js";
+import {
+  mergeEspnWeeklyBoxScores,
+  parseEspnWeeklyBoxScoreArtifact,
+} from "./espn-weekly-box-score.js";
 
 interface MembershipRow {
   readonly membershipId: string;
@@ -159,14 +164,17 @@ interface MatchupSnapshotRow {
 
 interface WeeklyMatchupRow {
   readonly id: string;
+  readonly providerMatchupId: string;
   readonly week: number;
   readonly status: WeeklyMatchupStatus;
   readonly homeTeamId: string;
+  readonly homeProviderTeamId: string;
   readonly homeTeamName: string;
   readonly homeAbbreviation: string | null;
   readonly homeManagerDisplayName: string | null;
   readonly homeLogoUrl: string | null;
   readonly awayTeamId: string;
+  readonly awayProviderTeamId: string;
   readonly awayTeamName: string;
   readonly awayAbbreviation: string | null;
   readonly awayManagerDisplayName: string | null;
@@ -175,6 +183,13 @@ interface WeeklyMatchupRow {
   readonly awayScore: string | null;
   readonly winnerTeamId: string | null;
   readonly tied: boolean;
+  readonly effectiveAt?: Date;
+}
+
+interface WeeklyBoxScoreSnapshotRow {
+  readonly asOfWeek: number | null;
+  readonly effectiveAt: Date;
+  readonly artifact: Record<string, unknown>;
 }
 
 type ClaimResult =
@@ -201,6 +216,10 @@ export interface LeagueDashboardRepository {
   listStandingsEntries(snapshotId: string): Promise<readonly StandingEntryRow[]>;
   findLatestMatchupSnapshot(leagueSeasonId: string): Promise<MatchupSnapshotRow | undefined>;
   listWeeklyMatchups(snapshotId: string): Promise<readonly WeeklyMatchupRow[]>;
+  findLatestWeeklyBoxScoreSnapshot(
+    leagueSeasonId: string,
+    week: number,
+  ): Promise<WeeklyBoxScoreSnapshotRow | undefined>;
   listDataSources(): Promise<readonly DataSourceRow[]>;
   claimTeam(userId: string, leagueId: string, teamId: string, now: Date): Promise<ClaimResult>;
 }
@@ -469,14 +488,17 @@ export class DrizzleLeagueDashboardRepository implements LeagueDashboardReposito
     return this.#database
       .select({
         id: weeklyMatchups.id,
+        providerMatchupId: weeklyMatchups.providerMatchupId,
         week: weeklyMatchups.week,
         status: weeklyMatchups.status,
         homeTeamId: weeklyMatchups.homeTeamId,
+        homeProviderTeamId: weeklyMatchups.homeProviderTeamId,
         homeTeamName: homeFantasyTeam.name,
         homeAbbreviation: homeFantasyTeam.abbreviation,
         homeManagerDisplayName: homeFantasyTeam.managerDisplayName,
         homeLogoUrl: homeFantasyTeam.logoUrl,
         awayTeamId: weeklyMatchups.awayTeamId,
+        awayProviderTeamId: weeklyMatchups.awayProviderTeamId,
         awayTeamName: awayFantasyTeam.name,
         awayAbbreviation: awayFantasyTeam.abbreviation,
         awayManagerDisplayName: awayFantasyTeam.managerDisplayName,
@@ -491,6 +513,33 @@ export class DrizzleLeagueDashboardRepository implements LeagueDashboardReposito
       .innerJoin(awayFantasyTeam, eq(weeklyMatchups.awayTeamId, awayFantasyTeam.id))
       .where(eq(weeklyMatchups.snapshotId, snapshotId))
       .orderBy(asc(weeklyMatchups.week), asc(weeklyMatchups.externalKey));
+  }
+
+  async findLatestWeeklyBoxScoreSnapshot(
+    leagueSeasonId: string,
+    week: number,
+  ): Promise<WeeklyBoxScoreSnapshotRow | undefined> {
+    const [snapshot] = await this.#database
+      .select({
+        asOfWeek: leagueSupplementalSnapshots.asOfWeek,
+        effectiveAt: leagueSupplementalSnapshots.effectiveAt,
+        artifact: leagueSupplementalSnapshots.artifact,
+      })
+      .from(leagueSupplementalSnapshots)
+      .where(
+        and(
+          eq(leagueSupplementalSnapshots.leagueSeasonId, leagueSeasonId),
+          eq(leagueSupplementalSnapshots.kind, "weekly-box-scores"),
+          eq(leagueSupplementalSnapshots.asOfWeek, week),
+        ),
+      )
+      .orderBy(
+        desc(leagueSupplementalSnapshots.effectiveAt),
+        desc(leagueSupplementalSnapshots.createdAt),
+        desc(leagueSupplementalSnapshots.id),
+      )
+      .limit(1);
+    return snapshot;
   }
 
   async listDataSources(): Promise<readonly DataSourceRow[]> {
@@ -1109,6 +1158,7 @@ export class LeagueDashboardService {
       latestSyncRun,
       latestStandingsSnapshot,
       latestMatchupSnapshot,
+      latestWeeklyBoxScoreSnapshot,
       providerTeamMappings,
     ] = await Promise.all([
       this.#repository.listTeams(season.id),
@@ -1117,6 +1167,9 @@ export class LeagueDashboardService {
       this.#repository.findLatestSyncRun(season.id),
       this.#repository.findLatestStandingsSnapshot(season.id),
       this.#repository.findLatestMatchupSnapshot(season.id),
+      season.provider === "espn" && season.currentWeek !== null
+        ? this.#repository.findLatestWeeklyBoxScoreSnapshot(season.id, season.currentWeek)
+        : Promise.resolve(undefined),
       season.provider === "espn" || season.provider === "yahoo"
         ? this.#repository.listProviderTeamMappings(userId, season.id, season.provider)
         : Promise.resolve([]),
@@ -1210,9 +1263,35 @@ export class LeagueDashboardService {
       membership.claimedFantasyTeamId,
       now,
     );
+    const parsedWeeklyBoxScore = latestWeeklyBoxScoreSnapshot
+      ? parseEspnWeeklyBoxScoreArtifact(latestWeeklyBoxScoreSnapshot.artifact)
+      : null;
+    const scoredMatchupRows = latestMatchupSnapshot
+      ? matchupRows.map((row) => ({ ...row, effectiveAt: latestMatchupSnapshot.effectiveAt }))
+      : matchupRows;
+    const liveMatchupRows = latestWeeklyBoxScoreSnapshot
+      ? mergeEspnWeeklyBoxScores(
+          scoredMatchupRows,
+          parsedWeeklyBoxScore,
+          latestWeeklyBoxScoreSnapshot.effectiveAt,
+        )
+      : scoredMatchupRows;
+    const usedWeeklyBoxScore = liveMatchupRows.some(
+      (row, index) =>
+        row.homeScore !== matchupRows[index]?.homeScore ||
+        row.awayScore !== matchupRows[index]?.awayScore,
+    );
+    const liveMatchupSnapshot =
+      usedWeeklyBoxScore && latestWeeklyBoxScoreSnapshot
+        ? {
+            id: latestMatchupSnapshot?.id ?? "espn-weekly-box-score",
+            asOfWeek: latestWeeklyBoxScoreSnapshot.asOfWeek,
+            effectiveAt: latestWeeklyBoxScoreSnapshot.effectiveAt,
+          }
+        : latestMatchupSnapshot;
     const weeklyInsights = weeklyInsightsView(
-      latestMatchupSnapshot,
-      matchupRows,
+      liveMatchupSnapshot,
+      liveMatchupRows,
       season.currentWeek,
       membership.claimedFantasyTeamId,
       now,
