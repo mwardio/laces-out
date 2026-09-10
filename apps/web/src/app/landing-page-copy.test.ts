@@ -25,10 +25,10 @@ describe("landing-page first-time-user copy", () => {
     expect(styleSource).toMatch(/\.heroLead\s*\{[^}]*color: #a7b1a9;/u);
   });
 
-  it("offers one free-account CTA and a clearly scoped no-account demo", () => {
-    expect(pageSource.match(/Create a free account/gu)?.length).toBeGreaterThanOrEqual(3);
+  it("offers account creation and demo CTAs without demo small print", () => {
+    expect(pageSource.match(/Create an account <ArrowRight/gu)?.length).toBe(2);
     expect(pageSource).toContain("Explore the demo");
-    expect(pageSource).toContain("No account or league connection required.");
+    expect(pageSource).not.toContain("No account or league connection required.");
     expect(pageSource).not.toContain("ESPN now");
     expect(pageSource).not.toContain("Yahoo available");
   });

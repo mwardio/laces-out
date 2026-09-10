@@ -34,13 +34,15 @@ const emptyFeed = {
   events: [],
 };
 
-async function appWith(changeEvents: ChangeEventPort) {
+async function appWith(
+  changeEvents: Omit<ChangeEventPort, "dismissAll"> & Partial<Pick<ChangeEventPort, "dismissAll">>,
+) {
   return buildApp({
     environment: loadEnvironment({ NODE_ENV: "test" }),
     logger: false,
     requireAuthentication: true,
     authService: authenticatedService(),
-    changeEvents,
+    changeEvents: { dismissAll: () => Promise.resolve(), ...changeEvents },
   });
 }
 
@@ -159,6 +161,41 @@ describe("change event routes", () => {
       headers: { cookie: COOKIE },
     });
     expect(response.statusCode).toBe(503);
+    await app.close();
+  });
+  it("clears the authenticated member's selected feed or all accessible leagues", async () => {
+    const dismissAll = vi.fn(() => Promise.resolve());
+    const app = await appWith({
+      list: () => Promise.resolve(emptyFeed),
+      markRead: () => Promise.resolve(undefined),
+      dismiss: () => Promise.resolve(undefined),
+      dismissAll,
+    });
+    const leagueId = "20000000-0000-4000-8000-000000000001";
+    const denied = await app.inject({ method: "POST", url: "/v1/change-events/dismiss-all" });
+    expect(denied.statusCode).toBe(401);
+    expect(dismissAll).not.toHaveBeenCalled();
+
+    for (const query of ["?leagueId=nope", "?unknown=1", "?limit=20"]) {
+      const invalid = await app.inject({
+        method: "POST",
+        url: `/v1/change-events/dismiss-all${query}`,
+        headers: { cookie: COOKIE },
+      });
+      expect(invalid.statusCode).toBe(400);
+    }
+    expect(dismissAll).not.toHaveBeenCalled();
+
+    for (const scope of [leagueId, null]) {
+      const response = await app.inject({
+        method: "POST",
+        url: `/v1/change-events/dismiss-all${scope ? `?leagueId=${scope}` : ""}`,
+        headers: { cookie: COOKIE },
+      });
+      expect(response.statusCode).toBe(204);
+      expect(response.body).toBe("");
+      expect(dismissAll).toHaveBeenLastCalledWith(USER_ID, scope);
+    }
     await app.close();
   });
 });

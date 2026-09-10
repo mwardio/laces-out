@@ -98,6 +98,50 @@ export const decisionUnavailableReasonSchema = z
   .strict();
 export type DecisionUnavailableReason = z.infer<typeof decisionUnavailableReasonSchema>;
 
+export const decisionProjectionSetReferenceSchema = z
+  .object({
+    id: z.string().uuid(),
+    source: z.string().min(1),
+    version: z.string().min(1),
+    horizon: z.string().min(1),
+    sourceObservedAt: z.iso.datetime().nullable(),
+    sourceObservedAtStatus: projectionSourceObservedAtStatusSchema,
+    importedAt: z.iso.datetime(),
+  })
+  .strict();
+
+/** Shared snapshot context for the full Decision Desk and its compact overview inbox. */
+export const decisionLeagueSchema = z
+  .object({
+    id: z.string().uuid(),
+    name: z.string().min(1),
+    season: z.number().int().min(2000).max(2200).nullable(),
+    week: z.number().int().min(1).max(30).nullable(),
+    provider: providerSchema.nullable(),
+  })
+  .strict();
+
+export const decisionTeamSchema = z
+  .object({
+    id: z.string().uuid(),
+    name: z.string().min(1),
+    faabRemaining: z.number().int().nonnegative().nullable(),
+  })
+  .strict()
+  .nullable();
+
+export const decisionProvenanceSchema = z
+  .object({
+    /** ADR 0003: recommendation outputs retain algorithm version and input checksum. */
+    algorithmVersion: z.string().min(1).max(120),
+    inputChecksum: z.string().regex(/^[0-9a-f]{64}$/u),
+    leagueLastSyncedAt: z.iso.datetime().nullable(),
+    rosterEffectiveAt: z.iso.datetime().nullable(),
+    projectionSet: decisionProjectionSetReferenceSchema.nullable(),
+    projectionFreshness: freshnessSchema,
+  })
+  .strict();
+
 export const decisionPlayerSchema = z
   .object({
     id: z.string().uuid(),

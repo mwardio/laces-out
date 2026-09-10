@@ -1,0 +1,355 @@
+@layer components {
+  .panel {
+    overflow: hidden;
+    background: var(--white);
+    border: 1px solid var(--ink-150);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-hover);
+  }
+
+  .header {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 22px;
+    border-bottom: 1px solid var(--ink-150);
+  }
+
+  .header .eyebrow {
+    color: var(--ink-600);
+    font-size: var(--text-11);
+    font-weight: 800;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+  }
+
+  .header h2 {
+    margin-top: 5px;
+    font-size: 20px;
+    font-weight: 700;
+    letter-spacing: -0.025em;
+  }
+
+  .subtitle {
+    margin-top: 5px;
+    color: var(--ink-600);
+    line-height: 1.5;
+    overflow-wrap: anywhere;
+  }
+
+  .headerActions,
+  .itemActions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .count {
+    display: grid;
+    min-width: 30px;
+    min-height: 30px;
+    padding: 4px 8px;
+    place-items: center;
+    color: var(--ink-950);
+    background: var(--lime-300);
+    border-radius: var(--radius-sm);
+    font-size: var(--text-13);
+    font-weight: 800;
+  }
+
+  .item {
+    border-bottom: 1px solid var(--ink-150);
+  }
+
+  .summary {
+    display: grid;
+    width: 100%;
+    grid-template-columns: 40px minmax(0, 1fr) minmax(90px, 190px) 18px;
+    align-items: center;
+    gap: 14px;
+    padding: 20px 22px;
+    text-align: left;
+    color: var(--ink-950);
+    background: transparent;
+    border: 0;
+    cursor: pointer;
+  }
+
+  .summary:hover {
+    background: #fafbf8;
+  }
+
+  .summary:focus-visible,
+  .dismiss:focus-visible,
+  .historyToggle:focus-visible,
+  .coverage summary:focus-visible {
+    outline: 3px solid var(--focus-ring-soft);
+    outline-offset: -3px;
+  }
+
+  .icon {
+    display: grid;
+    width: 40px;
+    height: 40px;
+    place-items: center;
+    border-radius: 10px;
+  }
+
+  .lineup {
+    color: #39736d;
+    background: #e1f0ed;
+  }
+  .waiver {
+    color: #396b7b;
+    background: #e0eef2;
+  }
+  .trade {
+    color: #a9562a;
+    background: #f8e7dc;
+  }
+
+  .copy {
+    display: grid;
+    min-width: 0;
+    gap: 4px;
+    overflow-wrap: anywhere;
+  }
+
+  .meta {
+    color: var(--ink-600);
+    font-size: var(--text-10);
+    font-weight: 800;
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
+  }
+
+  .copy strong {
+    font-size: var(--text-14);
+    line-height: 1.4;
+    font-weight: 750;
+  }
+
+  .description {
+    color: var(--ink-600);
+    font-size: var(--text-12);
+    line-height: 1.5;
+  }
+
+  .impact {
+    color: #2e7056;
+    font-size: var(--text-12);
+    font-weight: 750;
+    line-height: 1.5;
+    text-align: right;
+    overflow-wrap: anywhere;
+  }
+
+  .rotated {
+    transform: rotate(180deg);
+  }
+
+  .detail {
+    display: grid;
+    gap: 16px;
+    margin: 0 22px 20px 76px;
+    padding: 16px;
+    background: #f8f9f5;
+    border: 1px solid var(--ink-150);
+    border-radius: var(--radius-sm);
+  }
+
+  .detail[hidden] {
+    display: none;
+  }
+
+  .rationale {
+    display: grid;
+    gap: 7px;
+    color: var(--ink-600);
+    line-height: 1.6;
+    overflow-wrap: anywhere;
+  }
+
+  .dismiss {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    padding: 6px 10px;
+    color: var(--ink-600);
+    background: transparent;
+    border: 0;
+    border-radius: var(--radius-sm);
+    font-size: var(--text-11);
+    font-weight: 700;
+    cursor: pointer;
+  }
+
+  .dismiss:hover:not(:disabled) {
+    color: var(--ink-950);
+    background: var(--ink-100);
+  }
+  .dismiss:disabled {
+    opacity: 0.6;
+    cursor: default;
+  }
+  .saved {
+    background: #fcfcfa;
+  }
+
+  .empty {
+    display: grid;
+    justify-items: center;
+    gap: 10px;
+    padding: 30px 22px;
+    color: var(--ink-600);
+    text-align: center;
+  }
+
+  .empty strong {
+    color: var(--ink-950);
+    font-size: var(--text-14);
+  }
+  .empty p {
+    max-width: 540px;
+    line-height: 1.6;
+  }
+
+  .error {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 10px;
+    padding: 15px 22px;
+    color: #8a3a2d;
+    background: #fff7f2;
+    border-bottom: 1px solid var(--ink-150);
+  }
+
+  .error p {
+    flex: 1;
+    min-width: 160px;
+  }
+  .error a {
+    text-decoration: underline;
+  }
+
+  .coverage {
+    padding: 15px 22px;
+    color: var(--ink-600);
+    background: #fafbf8;
+    border-bottom: 1px solid var(--ink-150);
+    font-size: var(--text-12);
+  }
+
+  .coverage summary {
+    cursor: pointer;
+    font-weight: 700;
+    line-height: 1.5;
+  }
+  .coverage summary svg {
+    vertical-align: middle;
+    margin-right: 5px;
+  }
+  .coverage > div {
+    display: grid;
+    gap: 12px;
+    margin-top: 14px;
+  }
+  .coverage strong {
+    color: var(--ink-900);
+  }
+  .coverage p {
+    margin-top: 4px;
+    line-height: 1.5;
+  }
+
+  .historyToggle {
+    display: flex;
+    width: 100%;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding: 13px 22px;
+    color: var(--ink-600);
+    background: #fafbf8;
+    border: 0;
+    border-bottom: 1px solid var(--ink-150);
+    font-size: var(--text-12);
+    font-weight: 700;
+    cursor: pointer;
+  }
+
+  .footer {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 13px 22px;
+    color: var(--ink-600);
+    font-size: var(--text-11);
+    line-height: 1.5;
+    background: #f8f9f5;
+  }
+
+  .footer > span {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+  }
+  .footer svg {
+    flex-shrink: 0;
+  }
+
+  @media (max-width: 620px) {
+    .header {
+      padding: 18px 15px;
+    }
+    .headerActions {
+      width: 100%;
+    }
+    .headerActions > :last-child {
+      margin-left: auto;
+    }
+    .header h2 {
+      font-size: 19px;
+    }
+    .summary {
+      grid-template-columns: 34px minmax(0, 1fr) 16px;
+      gap: 10px;
+      padding: 18px 15px;
+    }
+    .icon {
+      width: 34px;
+      height: 34px;
+      align-self: start;
+    }
+    .summary > svg {
+      grid-column: 3;
+      grid-row: 1;
+    }
+    .impact {
+      grid-column: 2;
+      text-align: left;
+    }
+    .description {
+      font-size: var(--text-11);
+    }
+    .detail {
+      margin: 0 15px 16px;
+      padding: 13px;
+    }
+    .itemActions > a {
+      width: 100%;
+    }
+    .coverage,
+    .footer,
+    .error {
+      padding: 13px 15px;
+    }
+  }
+}

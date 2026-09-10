@@ -32,12 +32,30 @@
 # NEXT_PUBLIC_CLOUDFLARE_ANALYTICS picks one of these, so the /privacy disclosure and the CSP flip
 # from one flag. Any value other than enabled/disabled names a snippet that does not exist and the
 # gateway fails to start.
-(analytics-csp-disabled) {
+(analytics-csp-disabled-disabled) {
 	import security-headers "" ""
 }
 
-(analytics-csp-enabled) {
+(analytics-csp-enabled-disabled) {
 	import security-headers " https://static.cloudflareinsights.com" " https://cloudflareinsights.com"
+}
+
+# The SDK is bundled locally and all external extensions are disabled. Only the selected
+# ingestion origin is needed; no PostHog script-src wildcard or replay worker permissions.
+(analytics-csp-disabled-us) {
+	import security-headers "" " https://us.i.posthog.com"
+}
+
+(analytics-csp-disabled-eu) {
+	import security-headers "" " https://eu.i.posthog.com"
+}
+
+(analytics-csp-enabled-us) {
+	import security-headers " https://static.cloudflareinsights.com" " https://cloudflareinsights.com https://us.i.posthog.com"
+}
+
+(analytics-csp-enabled-eu) {
+	import security-headers " https://static.cloudflareinsights.com" " https://cloudflareinsights.com https://eu.i.posthog.com"
 }
 
 # WWW_REDIRECT=on adds the canonical-host redirect. It requires a hostname SITE_ADDRESS (not :80)
@@ -74,5 +92,5 @@ import www-redirect-{$WWW_REDIRECT:off}
 	@crawlerMetadata path /robots.txt /sitemap.xml /manifest.webmanifest
 	header @crawlerMetadata >Cache-Control "public, max-age=3600"
 
-	import analytics-csp-{$NEXT_PUBLIC_CLOUDFLARE_ANALYTICS:disabled}
+	import analytics-csp-{$NEXT_PUBLIC_CLOUDFLARE_ANALYTICS:disabled}-{$NEXT_PUBLIC_POSTHOG_REGION:disabled}
 }

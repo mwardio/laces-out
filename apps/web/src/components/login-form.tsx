@@ -6,6 +6,7 @@ import { type FormEvent, useState } from "react";
 
 import { apiBaseUrl } from "../lib/api-client";
 import { AUTH_ERRORS } from "../lib/copy";
+import { captureAuthenticationEvent } from "../lib/product-analytics";
 import { safeReturnTo } from "../lib/safe-return-to";
 
 type LoginError =
@@ -72,6 +73,7 @@ export function LoginForm() {
         return;
       }
 
+      await captureAuthenticationEvent(await response.json().catch(() => null), "login_completed");
       const returnTo = safeReturnTo(new URLSearchParams(window.location.search).get("returnTo"));
       window.location.replace(returnTo);
     } catch {

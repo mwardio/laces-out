@@ -92,11 +92,9 @@ Data is used to operate the deployment, synchronize authorized leagues, provide 
 to authorized league members, generate user-specific analysis, and secure or troubleshoot the
 service. Private rankings, notes, credentials, and personal settings are not shared unless their
 owner explicitly creates a permitted share. Laces Out has no advertising and does not sell personal
-information. The default self-hosted deployment contains no product-analytics beacon, and its
-Content-Security-Policy does not permit one.
+information.
 
-The native iOS app communicates with the Laces Out server the member selects. It contains no ad
-network or third-party product-analytics SDK, stores the selected server origin and app preferences
+The native iOS app communicates with the Laces Out server the member selects. It stores the selected server origin and app preferences
 on device, keeps the authenticated server cookie in system-managed website storage, and invokes the
 system share sheet only after a member chooses to share. Release builds accept only an HTTPS origin
 without credentials, paths, queries, or fragments. Because website cookies are scoped by hostname

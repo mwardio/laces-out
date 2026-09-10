@@ -1,6 +1,6 @@
 "use client";
 
-import { AlertCircle, BellRing, Check, LoaderCircle, RefreshCw, X } from "lucide-react";
+import { AlertCircle, BellRing, LoaderCircle, RefreshCw, X } from "lucide-react";
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 
 import {
@@ -55,6 +55,8 @@ export interface ChangeFeedPanelProps {
 export function ChangeFeedPanel({ leagueId }: ChangeFeedPanelProps) {
   const [state, setState] = useState<FeedState>({ status: "loading" });
   const [pendingEventId, setPendingEventId] = useState<string | null>(null);
+  const [mutationError, setMutationError] = useState<string | null>(null);
+  const mutationController = useRef<AbortController | null>(null);
   const [expanded, setExpanded] = useState(false);
   const overflowId = useId();
   const request = useRef(new LatestRequest());
@@ -100,35 +102,51 @@ export function ChangeFeedPanel({ leagueId }: ChangeFeedPanelProps) {
 
   useEffect(() => {
     setExpanded(false);
+    setPendingEventId(null);
+    setMutationError(null);
     setState({ status: "loading" });
     void load();
-    return () => controller.current?.abort();
+    return () => {
+      controller.current?.abort();
+      mutationController.current?.abort();
+      mutationController.current = null;
+    };
   }, [load]);
 
-  async function mutate(eventId: string, action: "read" | "dismiss") {
-    setPendingEventId(eventId);
+  async function dismiss(eventId: string | null) {
+    if (mutationController.current) return;
+    const abort = new AbortController();
+    mutationController.current = abort;
+    setPendingEventId(eventId ?? "all");
+    setMutationError(null);
     try {
-      const response = await fetch(
-        `${apiBaseUrl}/v1/change-events/${encodeURIComponent(eventId)}/${action}`,
-        {
-          method: "POST",
-          credentials: "include",
-          headers: { Accept: "application/json" },
-          cache: "no-store",
-        },
-      );
-      // A 404 means the event is already gone for this member; refetching is the honest answer.
-      if (!response.ok && response.status !== 404) {
-        throw new Error("That update could not be changed.");
-      }
-      await load();
-    } catch (error) {
-      setState({
-        status: "error",
-        message: error instanceof Error ? error.message : "That update could not be changed.",
+      const path = eventId ? `${encodeURIComponent(eventId)}/dismiss` : "dismiss-all";
+      const url = new URL(`${apiBaseUrl}/v1/change-events/${path}`, absoluteApiOrigin());
+      if (eventId === null && leagueId) url.searchParams.set("leagueId", leagueId);
+      const response = await fetch(url.toString(), {
+        method: "POST",
+        credentials: "include",
+        headers: { Accept: "application/json" },
+        cache: "no-store",
+        signal: abort.signal,
       });
+      // An individual event may already be gone; a missing bulk endpoint is still an error.
+      if (!response.ok && !(eventId !== null && response.status === 404)) {
+        throw new Error(
+          eventId
+            ? "That update could not be dismissed."
+            : "Updates could not be cleared. Try again.",
+        );
+      }
+      if (!abort.signal.aborted) await load();
+    } catch (error) {
+      if (abort.signal.aborted) return;
+      setMutationError(error instanceof Error ? error.message : "Updates could not be dismissed.");
     } finally {
-      setPendingEventId(null);
+      if (!abort.signal.aborted) {
+        mutationController.current = null;
+        setPendingEventId(null);
+      }
     }
   }
 
@@ -150,27 +168,11 @@ export function ChangeFeedPanel({ leagueId }: ChangeFeedPanelProps) {
         <div className={styles.meta}>
           <span className={styles.time}>{relativeTime(entry.occurredAt, renderedAt)}</span>
           <div className={styles.actions}>
-            {entry.state === "unread" ? (
-              <button
-                className={styles.action}
-                type="button"
-                onClick={() => void mutate(entry.id, "read")}
-                disabled={pendingEventId === entry.id}
-                aria-label={`Mark read: ${entry.headline}`}
-              >
-                {pendingEventId === entry.id ? (
-                  <LoaderCircle className={styles.spin} size={12} aria-hidden="true" />
-                ) : (
-                  <Check size={12} aria-hidden="true" />
-                )}
-                Mark read
-              </button>
-            ) : null}
             <button
               className={styles.action}
               type="button"
-              onClick={() => void mutate(entry.id, "dismiss")}
-              disabled={pendingEventId === entry.id}
+              onClick={() => void dismiss(entry.id)}
+              disabled={pendingEventId !== null}
               aria-label={`Dismiss: ${entry.headline}`}
             >
               {pendingEventId === entry.id ? (
@@ -197,11 +199,27 @@ export function ChangeFeedPanel({ leagueId }: ChangeFeedPanelProps) {
             <span className="sr-only">{unreadCount} unread updates</span>
             <span aria-hidden="true">{unreadCount}</span>
           </span>
+          {events.length > 1 || hasAdditionalEvents ? (
+            <button
+              className={styles.action}
+              type="button"
+              onClick={() => void dismiss(null)}
+              disabled={pendingEventId !== null}
+              aria-label="Clear all activity updates in this feed"
+            >
+              {pendingEventId === "all" ? (
+                <LoaderCircle className={styles.spin} size={13} aria-hidden="true" />
+              ) : (
+                <X size={13} aria-hidden="true" />
+              )}
+              {pendingEventId === "all" ? "Clearing…" : "Clear all"}
+            </button>
+          ) : null}
           <button
             className={styles.action}
             type="button"
             onClick={() => void load()}
-            disabled={state.status === "loading"}
+            disabled={state.status === "loading" || pendingEventId !== null}
             aria-label="Refresh the change feed"
           >
             <RefreshCw
@@ -213,6 +231,13 @@ export function ChangeFeedPanel({ leagueId }: ChangeFeedPanelProps) {
           </button>
         </div>
       </div>
+
+      {mutationError ? (
+        <div className={`${styles.state} ${styles.error}`} role="alert">
+          <AlertCircle size={18} aria-hidden="true" />
+          {mutationError}
+        </div>
+      ) : null}
 
       {state.status === "loading" ? (
         <div className={styles.state} role="status">

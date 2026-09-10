@@ -46,6 +46,7 @@ function repository(overrides: Partial<ChangeEventRepository> = {}): ChangeEvent
     findVisibleEvent: () => Promise.resolve(rows[0]),
     upsertReceipt: () => Promise.resolve(NOW),
     updateReceipt: () => Promise.resolve(NOW),
+    dismissVisibleEvents: () => Promise.resolve(),
     ...overrides,
   };
 }

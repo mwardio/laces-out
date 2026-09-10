@@ -160,7 +160,7 @@ describe("bridge extension league discovery", () => {
           {
             leagueId: "111222333",
             leagueName: "  Championship Chasers ",
-            teamName: "Laces Out!",
+            teamName: "Einhorn’s End Zone",
             seasonId: 2026,
           },
           { leagueId: "not-digits", leagueName: "Broken", seasonId: 2026 },
@@ -176,7 +176,7 @@ describe("bridge extension league discovery", () => {
         {
           leagueId: "111222333",
           leagueName: "Championship Chasers",
-          teamName: "Laces Out!",
+          teamName: "Einhorn’s End Zone",
           seasonId: 2026,
         },
       ],

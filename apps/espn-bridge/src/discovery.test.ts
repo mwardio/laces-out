@@ -36,7 +36,7 @@ describe("fan profile league extraction", () => {
         {
           leagueId: "111222333",
           leagueName: "Championship Chasers",
-          teamName: "Laces Out!",
+          teamName: "Einhorn’s End Zone",
           seasonId: 2026,
         },
         // Marker-less entry: kept with name and season fallbacks rather than

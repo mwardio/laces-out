@@ -9919,7 +9919,8 @@
 
   .live-dashboard-page .dashboard-heading {
     display: grid;
-    align-items: start;
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: center;
     gap: 14px;
   }
 
@@ -9934,15 +9935,20 @@
   }
 
   .live-dashboard-page .dashboard-heading__title {
-    display: flex;
+    width: auto;
     max-width: none;
-    align-items: flex-end;
-    gap: var(--space-20);
+  }
+
+  .live-dashboard-page .dashboard-heading__title h1 {
+    margin-top: 0;
   }
 
   .dashboard-league-switcher {
     display: grid;
     width: min(100%, 330px);
+    min-width: 0;
+    grid-column: 2;
+    grid-row: 1;
     gap: 5px;
     margin-left: auto;
   }
@@ -9958,6 +9964,7 @@
   .dashboard-league-switcher select {
     width: 100%;
     min-width: 0;
+    min-height: 40px;
     padding: 0 34px 0 11px;
     overflow: hidden;
     color: var(--ink-900);
@@ -9980,6 +9987,26 @@
 
   .live-dashboard-page .dashboard-heading .heading-actions {
     width: 100%;
+    grid-column: 1 / -1;
+    justify-content: flex-start;
+  }
+
+  @media (min-width: 1440px) {
+    .live-dashboard-page .dashboard-heading {
+      grid-template-columns: auto auto minmax(0, 1fr);
+      gap: var(--space-20);
+    }
+
+    .live-dashboard-page .dashboard-heading .heading-actions {
+      grid-column: 2;
+      grid-row: 1;
+      flex-wrap: nowrap;
+      white-space: nowrap;
+    }
+
+    .dashboard-league-switcher {
+      grid-column: 3;
+    }
   }
 
   .section-heading h2,
@@ -11110,15 +11137,24 @@
       align-items: flex-start;
     }
 
-    .live-dashboard-page .dashboard-heading__title {
-      align-items: stretch;
-      flex-direction: column;
-      gap: var(--space-12);
+    .live-dashboard-page .dashboard-heading {
+      grid-template-columns: minmax(0, 1fr);
     }
 
     .dashboard-league-switcher {
-      width: min(100%, 420px);
+      width: 100%;
+      grid-column: 1;
+      grid-row: 2;
       margin-left: 0;
+    }
+
+    .live-dashboard-page .dashboard-heading .heading-actions {
+      justify-content: center;
+    }
+
+    .live-dashboard-page .dashboard-heading .freshness-label {
+      width: 100%;
+      justify-content: center;
     }
 
     .rankings-heading {

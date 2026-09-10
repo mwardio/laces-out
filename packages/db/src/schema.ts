@@ -3431,6 +3431,37 @@ export const changeEventReceipts = pgTable(
   ],
 );
 
+/** Per-account decisions are identified by their recommendation fingerprint, never by rank. */
+export const decisionInboxReceipts = pgTable(
+  "decision_inbox_receipts",
+  {
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    leagueId: uuid("league_id")
+      .notNull()
+      .references(() => leagues.id, { onDelete: "cascade" }),
+    teamId: uuid("team_id")
+      .notNull()
+      .references(() => fantasyTeams.id, { onDelete: "cascade" }),
+    itemId: text("item_id").notNull(),
+    membershipId: uuid("membership_id")
+      .notNull()
+      .references(() => leagueMemberships.id, { onDelete: "cascade" }),
+    state: text("state").$type<"open" | "reviewed" | "dismissed">().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.userId, table.leagueId, table.teamId, table.itemId] }),
+    index("decision_inbox_receipts_membership_idx").on(table.membershipId),
+    check(
+      "decision_inbox_receipts_state_check",
+      sql`${table.state} in ('open', 'reviewed', 'dismissed')`,
+    ),
+    check("decision_inbox_receipts_item_id_check", sql`${table.itemId} ~ '^[0-9a-f]{64}$'`),
+  ],
+);
+
 export const aiProviderCredentials = pgTable(
   "ai_provider_credentials",
   {

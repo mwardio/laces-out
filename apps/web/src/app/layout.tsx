@@ -3,6 +3,7 @@ import { Sora } from "next/font/google";
 import type { ReactNode } from "react";
 
 import { FinkleCode } from "../components/finkle-code";
+import { ProductAnalytics } from "../components/product-analytics";
 import { siteOpenGraph } from "../lib/public-pages";
 import {
   bingSiteVerification,
@@ -73,6 +74,7 @@ export default function RootLayout({ children }: Readonly<{ children: ReactNode 
   return (
     <html className={brandFont.variable} lang="en">
       <body>
+        <ProductAnalytics />
         <FinkleCode>{children}</FinkleCode>
       </body>
     </html>

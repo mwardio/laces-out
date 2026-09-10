@@ -330,6 +330,13 @@
       "when": 1788891843597,
       "tag": "0046_spooky_rocket_racer",
       "breakpoints": true
+    },
+    {
+      "idx": 47,
+      "version": "7",
+      "when": 1789056087512,
+      "tag": "0047_decision_inbox_receipts",
+      "breakpoints": true
     }
   ]
 }

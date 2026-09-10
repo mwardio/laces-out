@@ -37,6 +37,7 @@ import { leagueIsUnclaimed, providerMappedTeamState, resolvedMemberTeam } from "
 import { useDefaultLeague } from "../lib/use-default-league";
 import { AiCoachPanel } from "./ai-coach-panel";
 import { ChangeFeedPanel } from "./change-feed-panel";
+import { DecisionInboxPanel } from "./decision-inbox-panel";
 import {
   providerForSelectedLeague,
   useFantasyProviderAttribution,
@@ -311,6 +312,7 @@ interface LivePortfolioProps {
 
 function LivePortfolio({ portfolio, reloadPortfolio }: LivePortfolioProps) {
   const [selectedLeagueId, setSelectedLeagueId] = useState("");
+  const [inboxRefreshToken, setInboxRefreshToken] = useState(0);
   const { defaultLeagueId, loaded: preferenceLoaded } = useDefaultLeague();
   const appliedDefault = useRef(false);
   const [dashboardState, setDashboardState] = useState<DashboardState>({ status: "loading" });
@@ -564,28 +566,6 @@ function LivePortfolio({ portfolio, reloadPortfolio }: LivePortfolioProps) {
       <section className="page-heading dashboard-heading">
         <div className="dashboard-heading__title">
           <h1>Your leagues</h1>
-          <label className="dashboard-league-switcher" htmlFor="overview-league">
-            <span>Viewing league</span>
-            <select
-              id="overview-league"
-              value={selectedLeagueId}
-              onChange={(event) => selectLeague(event.target.value)}
-            >
-              {!selectedLeagueId ? (
-                <option value="" disabled>
-                  Choose a league
-                </option>
-              ) : null}
-              {portfolio.leagues.map((league) => (
-                <option value={league.id} key={league.id}>
-                  {league.name}
-                  {league.season
-                    ? ` · ${providerLabel(league.season.provider)}`
-                    : " · setup needed"}
-                </option>
-              ))}
-            </select>
-          </label>
         </div>
         <div className="heading-actions">
           <span className="freshness-label">
@@ -595,7 +575,10 @@ function LivePortfolio({ portfolio, reloadPortfolio }: LivePortfolioProps) {
           <button
             className="button button--outline"
             type="button"
-            onClick={() => void Promise.all([reloadPortfolio(), loadDashboard()])}
+            onClick={() => {
+              setInboxRefreshToken((current) => current + 1);
+              void Promise.all([reloadPortfolio(), loadDashboard()]);
+            }}
           >
             <RefreshCw size={16} /> Reload overview
           </button>
@@ -634,6 +617,26 @@ function LivePortfolio({ portfolio, reloadPortfolio }: LivePortfolioProps) {
                   : ""}
           </span>
         </div>
+        <label className="dashboard-league-switcher" htmlFor="overview-league">
+          <span>Viewing league</span>
+          <select
+            id="overview-league"
+            value={selectedLeagueId}
+            onChange={(event) => selectLeague(event.target.value)}
+          >
+            {!selectedLeagueId ? (
+              <option value="" disabled>
+                Choose a league
+              </option>
+            ) : null}
+            {portfolio.leagues.map((league) => (
+              <option value={league.id} key={league.id}>
+                {league.name}
+                {league.season ? ` · ${providerLabel(league.season.provider)}` : " · setup needed"}
+              </option>
+            ))}
+          </select>
+        </label>
       </section>
 
       {currentDashboard ? <MobileWeekAtGlance dashboard={currentDashboard} /> : null}
@@ -681,6 +684,16 @@ function LivePortfolio({ portfolio, reloadPortfolio }: LivePortfolioProps) {
           </div>
         </article>
       </section>
+
+      {selectedLeagueId ? (
+        <div className="section-block">
+          <DecisionInboxPanel
+            key={selectedLeagueId}
+            leagueId={selectedLeagueId}
+            refreshToken={inboxRefreshToken}
+          />
+        </div>
+      ) : null}
 
       {/* ChangeFeedPanel is a shared component whose own .panel carries no top
           margin (other host pages sit it inside a CSS-grid gap, which supplies

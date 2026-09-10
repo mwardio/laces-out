@@ -137,28 +137,30 @@ putting an installation on the public internet.
 The complete reference is in [.env.docker.example](./.env.docker.example); local-development
 settings are in [.env.example](./.env.example).
 
-| Variable                                  | What it controls                                        |
-| ----------------------------------------- | ------------------------------------------------------- |
-| `PUBLIC_URL`                              | Public origin for cookies, links, OAuth, and metadata   |
-| `POSTGRES_PASSWORD`                       | PostgreSQL password                                     |
-| `SESSION_SECRET`                          | Sessions and capability-key derivation                  |
-| `CREDENTIAL_ENCRYPTION_KEY`               | AES-256-GCM key for stored credentials                  |
-| `REGISTRATION_OPEN`                       | Code-free registration; defaults `false`                |
-| `REGISTRATION_INVITE_CODE`                | Shared-code registration; ignored when open             |
-| `GEMINI_API_KEY`                          | Shared Film Room access                                 |
-| `OPENROUTER_API_KEY`                      | Shared Medium/Scorched Reckoning recaps                 |
-| `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY`  | Game-day push alerts                                    |
-| `SMTP_HOST` / `SMTP_USER` / `EMAIL_FROM`  | Account email: confirmation, password reset, nudge      |
-| `EMAIL_VERIFICATION_ENABLED`              | Confirm-first registration after SMTP validation        |
-| `YAHOO_CLIENT_ID` / `YAHOO_CLIENT_SECRET` | Yahoo OAuth when enabled                                |
-| `NEXT_PUBLIC_YAHOO_ACCESS_STATUS`         | Shared web/API Yahoo release gate; defaults `pending`   |
-| `YAHOO_AUTOMATED_SYNC_ENABLED`            | Unattended Yahoo reads; defaults `false`                |
-| `ESPN_PUBLIC_DIRECT_SYNC_ENABLED`         | Evidence-gated anonymous ESPN reads; defaults `false`   |
-| `ESPN_SERVER_SESSION_SYNC_ENABLED`        | Opt-in encrypted ESPN session reads; defaults `false`   |
-| `NEXT_PUBLIC_CLOUDFLARE_ANALYTICS`        | Privacy disclosure and gateway CSP; defaults `disabled` |
-| `NEXT_PUBLIC_GOOGLE_SITE_VERIFICATION`    | Search Console meta tag; blank renders none             |
-| `NEXT_PUBLIC_BING_SITE_VERIFICATION`      | Bing Webmaster Tools meta tag; blank renders none       |
-| `WWW_REDIRECT`                            | `www.` to canonical-host redirect; defaults `off`       |
+| Variable                                  | What it controls                                                |
+| ----------------------------------------- | --------------------------------------------------------------- |
+| `PUBLIC_URL`                              | Public origin for cookies, links, OAuth, and metadata           |
+| `POSTGRES_PASSWORD`                       | PostgreSQL password                                             |
+| `SESSION_SECRET`                          | Sessions and capability-key derivation                          |
+| `CREDENTIAL_ENCRYPTION_KEY`               | AES-256-GCM key for stored credentials                          |
+| `REGISTRATION_OPEN`                       | Code-free registration; defaults `false`                        |
+| `REGISTRATION_INVITE_CODE`                | Shared-code registration; ignored when open                     |
+| `GEMINI_API_KEY`                          | Shared Film Room access                                         |
+| `OPENROUTER_API_KEY`                      | Shared Medium/Scorched Reckoning recaps                         |
+| `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY`  | Game-day push alerts                                            |
+| `SMTP_HOST` / `SMTP_USER` / `EMAIL_FROM`  | Account email: confirmation, password reset, nudge              |
+| `EMAIL_VERIFICATION_ENABLED`              | Confirm-first registration after SMTP validation                |
+| `YAHOO_CLIENT_ID` / `YAHOO_CLIENT_SECRET` | Yahoo OAuth when enabled                                        |
+| `NEXT_PUBLIC_YAHOO_ACCESS_STATUS`         | Shared web/API Yahoo release gate; defaults `pending`           |
+| `YAHOO_AUTOMATED_SYNC_ENABLED`            | Unattended Yahoo reads; defaults `false`                        |
+| `ESPN_PUBLIC_DIRECT_SYNC_ENABLED`         | Evidence-gated anonymous ESPN reads; defaults `false`           |
+| `ESPN_SERVER_SESSION_SYNC_ENABLED`        | Opt-in encrypted ESPN session reads; defaults `false`           |
+| `NEXT_PUBLIC_CLOUDFLARE_ANALYTICS`        | Privacy disclosure and gateway CSP; defaults `disabled`         |
+| `NEXT_PUBLIC_POSTHOG_REGION`              | Optional product analytics: `disabled` (default), `us`, or `eu` |
+| `NEXT_PUBLIC_POSTHOG_PROJECT_TOKEN`       | Public ingestion token for the selected PostHog project         |
+| `NEXT_PUBLIC_GOOGLE_SITE_VERIFICATION`    | Search Console meta tag; blank renders none                     |
+| `NEXT_PUBLIC_BING_SITE_VERIFICATION`      | Bing Webmaster Tools meta tag; blank renders none               |
+| `WWW_REDIRECT`                            | `www.` to canonical-host redirect; defaults `off`               |
 
 If you're using a reverse proxy (Caddy, Traefik, etc.), keep the included gateway on an unprivileged
 loopback port:

@@ -28,6 +28,8 @@ import {
   type EspnSessionConnectionList,
 } from "../lib/api-client";
 import { sendServerSessionOffer } from "../lib/bridge-extension";
+import { captureProductEvent } from "../lib/product-analytics";
+import { createLeagueSyncObserver } from "../lib/product-analytics-policy";
 import { publicAppStoreUrl, yahooComingSoon } from "../lib/public-site";
 import { loginUrlForCurrentPath } from "../lib/safe-return-to";
 import { EspnPairingStepper } from "./espn-pairing-stepper";
@@ -224,6 +226,7 @@ function espnServerSessionHeading(connection: EspnServerSessionConnection): stri
 }
 
 export function ConnectionWorkbench() {
+  const [observeEspnSyncs] = useState(createLeagueSyncObserver);
   const [bridgeDevices, setBridgeDevices] = useState<readonly BridgeDevice[]>([]);
   const [bridgeDevicesState, setBridgeDevicesState] = useState<RequestState>("working");
   const [bridgeDevicesError, setBridgeDevicesError] = useState<string | null>(null);
@@ -352,67 +355,81 @@ export function ConnectionWorkbench() {
     }
   }, []);
 
-  const refreshEspnLeagueStatuses = useCallback(async (quiet = false) => {
-    if (!quiet) setEspnLeagueStatusesState("working");
-    setEspnLeagueStatusesError(null);
-    try {
-      const leaguesResponse = await fetch(`${apiBaseUrl}/v1/leagues`, {
-        credentials: "include",
-        headers: { Accept: "application/json" },
-        cache: "no-store",
-      });
-      if (leaguesResponse.status === 401) {
-        setEspnLeagueStatusesState("idle");
-        setSignedOut(true);
-        return;
+  const refreshEspnLeagueStatuses = useCallback(
+    async (quiet = false) => {
+      if (!quiet) setEspnLeagueStatusesState("working");
+      setEspnLeagueStatusesError(null);
+      try {
+        const leaguesResponse = await fetch(`${apiBaseUrl}/v1/leagues`, {
+          credentials: "include",
+          headers: { Accept: "application/json" },
+          cache: "no-store",
+        });
+        if (leaguesResponse.status === 401) {
+          setEspnLeagueStatusesState("idle");
+          setSignedOut(true);
+          return;
+        }
+        if (!leaguesResponse.ok) {
+          throw new ConnectionUiError("Connected ESPN leagues could not be loaded.");
+        }
+        const portfolio = parseLeagueListResponse(await leaguesResponse.json());
+        if (!portfolio) throw new ConnectionUiError("The league list response was invalid.");
+        const espnLeagues = portfolio.leagues.filter(
+          (league) => !league.archived && league.season?.provider === "espn",
+        );
+        const statuses = await Promise.all(
+          espnLeagues.map(async (league): Promise<EspnLeagueRefreshItem> => {
+            const season = league.season;
+            if (!season || season.provider !== "espn") {
+              throw new ConnectionUiError("An ESPN league was missing its season.");
+            }
+            const statusResponse = await fetch(
+              `${apiBaseUrl}/v1/leagues/${encodeURIComponent(season.id)}/refresh/status`,
+              {
+                credentials: "include",
+                headers: { Accept: "application/json" },
+                cache: "no-store",
+              },
+            );
+            if (!statusResponse.ok) {
+              throw new ConnectionUiError(`${league.name} refresh health could not be loaded.`);
+            }
+            const status = parseEspnLeagueRefreshStatus(await statusResponse.json());
+            if (!status)
+              throw new ConnectionUiError(`${league.name} returned invalid sync health.`);
+            return {
+              leagueId: league.id,
+              leagueSeasonId: season.id,
+              name: league.name,
+              season: season.season,
+              status,
+            };
+          }),
+        );
+        const completed = observeEspnSyncs(
+          statuses.map(({ leagueSeasonId, status }) => ({
+            id: leagueSeasonId,
+            observedAt:
+              status.artifacts.find((artifact) => artifact.family === "core")?.observedAt ?? null,
+          })),
+        );
+        for (let index = 0; index < completed; index++) {
+          void captureProductEvent("league_sync_completed", { provider: "espn" });
+        }
+        setEspnLeagueStatuses(statuses);
+        setEspnLeagueStatusesState("done");
+      } catch (error) {
+        setEspnLeagueStatusesState("error");
+        setEspnLeagueStatusesError(
+          error instanceof ConnectionUiError
+            ? error.message
+            : "Connected ESPN league health could not be loaded.",
+        );
       }
-      if (!leaguesResponse.ok) {
-        throw new ConnectionUiError("Connected ESPN leagues could not be loaded.");
-      }
-      const portfolio = parseLeagueListResponse(await leaguesResponse.json());
-      if (!portfolio) throw new ConnectionUiError("The league list response was invalid.");
-      const espnLeagues = portfolio.leagues.filter(
-        (league) => !league.archived && league.season?.provider === "espn",
-      );
-      const statuses = await Promise.all(
-        espnLeagues.map(async (league): Promise<EspnLeagueRefreshItem> => {
-          const season = league.season;
-          if (!season || season.provider !== "espn") {
-            throw new ConnectionUiError("An ESPN league was missing its season.");
-          }
-          const statusResponse = await fetch(
-            `${apiBaseUrl}/v1/leagues/${encodeURIComponent(season.id)}/refresh/status`,
-            {
-              credentials: "include",
-              headers: { Accept: "application/json" },
-              cache: "no-store",
-            },
-          );
-          if (!statusResponse.ok) {
-            throw new ConnectionUiError(`${league.name} refresh health could not be loaded.`);
-          }
-          const status = parseEspnLeagueRefreshStatus(await statusResponse.json());
-          if (!status) throw new ConnectionUiError(`${league.name} returned invalid sync health.`);
-          return {
-            leagueId: league.id,
-            leagueSeasonId: season.id,
-            name: league.name,
-            season: season.season,
-            status,
-          };
-        }),
-      );
-      setEspnLeagueStatuses(statuses);
-      setEspnLeagueStatusesState("done");
-    } catch (error) {
-      setEspnLeagueStatusesState("error");
-      setEspnLeagueStatusesError(
-        error instanceof ConnectionUiError
-          ? error.message
-          : "Connected ESPN league health could not be loaded.",
-      );
-    }
-  }, []);
+    },
+    [observeEspnSyncs],
+  );
   useEffect(() => {
     const parameters = new URLSearchParams(window.location.search);
     if (parameters.get("provider") !== "yahoo") return;
@@ -559,6 +576,21 @@ export function ConnectionWorkbench() {
               ? `${league.name} could not be synced.`
               : "Yahoo league discovery could not be completed.",
         );
+      }
+      const receipt: unknown = await response.json().catch(() => null);
+      if (receipt && typeof receipt === "object") {
+        const syncs: readonly unknown[] =
+          "syncs" in receipt && Array.isArray(receipt.syncs) ? receipt.syncs : [receipt];
+        for (const sync of syncs) {
+          if (
+            sync &&
+            typeof sync === "object" &&
+            "state" in sync &&
+            (sync.state === "accepted" || sync.state === "unchanged")
+          ) {
+            void captureProductEvent("league_sync_completed", { provider: "yahoo" });
+          }
+        }
       }
       setYahooActionMessage({
         tone: "success",

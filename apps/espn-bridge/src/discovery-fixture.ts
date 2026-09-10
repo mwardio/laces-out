@@ -15,7 +15,7 @@ export const fanProfileFixture = {
           gameId: 1,
           seasonId: 2026,
           abbrev: "FFL2026",
-          entryMetadata: { teamName: "  Laces   Out!  ", teamAbbrev: "LACE" },
+          entryMetadata: { teamName: "  Einhorn’s   End Zone  ", teamAbbrev: "EE" },
           groups: [
             {
               groupId: 111222333,

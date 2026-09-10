@@ -323,13 +323,12 @@ export default function LandingPage() {
               </p>
               <div className={styles.heroActions}>
                 <Link className={styles.primaryButton} href="/register">
-                  Create a free account <ArrowRight aria-hidden="true" size={16} />
+                  Create an account <ArrowRight aria-hidden="true" size={16} />
                 </Link>
                 <div className={styles.demoAction}>
                   <Link className={styles.secondaryButton} href="/app">
                     Explore the demo <ChevronRight aria-hidden="true" size={16} />
                   </Link>
-                  <small>No account or league connection required.</small>
                 </div>
               </div>
             </div>
@@ -356,8 +355,8 @@ export default function LandingPage() {
                     </div>
                     <div className={styles.matchupTeams}>
                       <div>
-                        <span className={styles.teamMonogram}>LO</span>
-                        <strong>Laces Out</strong>
+                        <span className={styles.teamMonogram}>EE</span>
+                        <strong>Einhorn&rsquo;s End Zone</strong>
                       </div>
                       <strong>126.8</strong>
                     </div>
@@ -373,7 +372,7 @@ export default function LandingPage() {
                     <div
                       className={styles.projectionTrack}
                       role="img"
-                      aria-label="Projected matchup range from 120 to 130 points; Laces Out leads 126.8 to 121.4"
+                      aria-label="Projected matchup range from 120 to 130 points; Einhorn’s End Zone leads 126.8 to 121.4"
                     >
                       <span />
                     </div>
@@ -438,7 +437,7 @@ export default function LandingPage() {
             <span>Freshness and limitations stay visible.</span>
             <i aria-hidden="true" />
             <Link className={styles.signalButton} href="/methodology">
-              See the results and limitations
+              See the forecast methodology
             </Link>
           </div>
         </section>
@@ -897,7 +896,7 @@ export default function LandingPage() {
           </div>
           <div className={styles.ctaActions}>
             <Link className={styles.primaryButton} href="/register">
-              Create a free account <ArrowRight aria-hidden="true" size={16} />
+              Create an account <ArrowRight aria-hidden="true" size={16} />
             </Link>
             <Link className={styles.secondaryButton} href="/app">
               Explore the demo <ChevronRight aria-hidden="true" size={16} />

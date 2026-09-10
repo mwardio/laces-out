@@ -1,5 +1,7 @@
 "use client";
 
+import { captureAuthenticationEvent, captureProductEvent } from "../lib/product-analytics";
+
 import {
   AlertCircle,
   ArrowRight,
@@ -109,6 +111,7 @@ export function InvitationAcceptance() {
         ) {
           window.history.replaceState(null, "", "/invite#confirmation-pending");
           setState("pending-confirmation");
+          void captureProductEvent("signup_verification_required", { method: "invitation" });
           return;
         }
         const detail =
@@ -121,6 +124,16 @@ export function InvitationAcceptance() {
       }
       window.history.replaceState(null, "", "/invite#accepted");
       setState("accepted");
+      const result: unknown = await response.json().catch(() => null);
+      await captureAuthenticationEvent(result, "invitation_accepted", { method: "invitation" });
+      if (
+        result &&
+        typeof result === "object" &&
+        "createdUser" in result &&
+        result.createdUser === true
+      ) {
+        void captureProductEvent("signup_completed", { method: "invitation" });
+      }
       window.setTimeout(() => {
         router.replace("/app");
         router.refresh();

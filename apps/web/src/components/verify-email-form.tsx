@@ -13,6 +13,7 @@ import { type FormEvent, useEffect, useState } from "react";
 
 import { apiBaseUrl } from "../lib/api-client";
 import { AUTH_ERRORS, BACK_TO_SIGN_IN } from "../lib/copy";
+import { captureProductEvent } from "../lib/product-analytics";
 
 type VerifyError = "expired" | "rate-limit" | "unavailable" | "not-configured" | "unknown" | null;
 
@@ -88,6 +89,8 @@ export function VerifyEmailForm() {
         return;
       }
       setConfirmed(true);
+      void captureProductEvent("email_verified");
+      void captureProductEvent("signup_completed", { method: "email_verification" });
     } catch {
       setError("unavailable");
     } finally {

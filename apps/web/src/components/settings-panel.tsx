@@ -1,5 +1,7 @@
 "use client";
 
+import { resetProductAnalytics } from "../lib/product-analytics";
+
 import {
   BellRing,
   CheckCircle2,
@@ -509,6 +511,7 @@ export function SettingsPanel() {
         throw new Error(await problemDetail(response, "Your account could not be deleted."));
       }
       window.localStorage.removeItem(LOCAL_PUSH_DEVICE_KEY);
+      resetProductAnalytics();
       window.location.replace("/account-deleted");
     } catch (error) {
       setDeletionStatus({
