@@ -15,7 +15,8 @@ describe("landing-page first-time-user copy", () => {
     expect(pageSource).toContain("Connect your leagues.");
     expect(pageSource).toContain("Get the next move.");
     expect(pageSource).toContain("Laces Out pairs with your");
-    expect(pageSource).toContain("Bring in the leagues you already play.");
+    expect(pageSource).toContain("Bring the leagues you already play.");
+    expect(pageSource).not.toContain("Bring in the leagues you already play.");
     expect(pageSource).toContain("You maintain full control.");
     expect(pageSource).toContain("your league&rsquo;s scoring");
     expect(pageSource).toMatch(/the players\s+available to you/u);

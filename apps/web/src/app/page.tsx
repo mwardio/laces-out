@@ -62,7 +62,7 @@ const howItWorks = [
   {
     number: "01",
     label: "Connect your existing leagues",
-    title: "Bring in the leagues you already play.",
+    title: "Bring the leagues you already play.",
     text: yahooComingSoon
       ? "Create a free account, then connect ESPN through the Chrome companion or iOS app and select your team."
       : "Create a free account, then connect Yahoo directly or use the Chrome companion or iOS app for ESPN and select your team.",
