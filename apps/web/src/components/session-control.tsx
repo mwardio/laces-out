@@ -14,6 +14,7 @@ import { useEffect, useRef, useState } from "react";
 
 import { apiBaseUrl, parseAuthenticatedSession, type SessionUser } from "../lib/api-client";
 import { commitGuardedNavigation, requestGuardedNavigation } from "../lib/navigation-guard";
+import { identifyProductAnalytics, resetProductAnalytics } from "../lib/product-analytics";
 
 type SessionState =
   | { readonly status: "checking" }
@@ -67,6 +68,7 @@ export function SessionControl({ showDemoChip = true }: { readonly showDemoChip?
         }
 
         const parsed = parseAuthenticatedSession(await response.json());
+        if (parsed) void identifyProductAnalytics(parsed);
         setSession(parsed ? { status: "authenticated", user: parsed.user } : { status: "offline" });
       } catch {
         if (!controller.signal.aborted) setSession({ status: "offline" });
@@ -94,6 +96,7 @@ export function SessionControl({ showDemoChip = true }: { readonly showDemoChip?
         headers: { Accept: "application/json" },
       });
       if (!response.ok && response.status !== 204) throw new Error("Logout failed");
+      resetProductAnalytics();
       commitGuardedNavigation();
       detailsRef.current?.removeAttribute("open");
       window.location.replace("/login");

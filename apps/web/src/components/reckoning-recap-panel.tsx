@@ -1,5 +1,7 @@
 "use client";
 
+import { captureProductEvent } from "../lib/product-analytics";
+
 import {
   PERSONA_CARD_MAX_LENGTH,
   recapSpiceLevelSchema,
@@ -317,6 +319,7 @@ export function ReckoningRecapPanel({ leagueId, snapshot, demo }: ReckoningRecap
         return;
       }
       setRecap({ state: "ready", response: parsed });
+      void captureProductEvent("reckoning_recap_generated");
     } catch {
       setActionError("The recap could not be generated.");
     } finally {

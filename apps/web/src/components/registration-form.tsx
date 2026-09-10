@@ -15,6 +15,7 @@ import { type FormEvent, useState } from "react";
 
 import { apiBaseUrl } from "../lib/api-client";
 import { AUTH_ERRORS, BACK_TO_SIGN_IN } from "../lib/copy";
+import { captureAuthenticationEvent, captureProductEvent } from "../lib/product-analytics";
 
 type RegistrationError =
   | "rejected"
@@ -76,6 +77,10 @@ export function RegistrationForm() {
     setIsSubmitting(true);
     const controller = new AbortController();
     const timeout = window.setTimeout(() => controller.abort(), 10_000);
+    const analyticsProperties = {
+      method: openRegistration ? ("open" as const) : ("invite_code" as const),
+    };
+    void captureProductEvent("signup_submitted", analyticsProperties);
 
     try {
       const response = await fetch(`${apiBaseUrl}/v1/auth/register`, {
@@ -105,12 +110,18 @@ export function RegistrationForm() {
               problem.type === "https://fantasy.local/problems/email-verification-required"))
         ) {
           setPendingVerification(true);
+          void captureProductEvent("signup_verification_required", analyticsProperties);
           return;
         }
         setError(classifyResponse(response.status));
         return;
       }
 
+      await captureAuthenticationEvent(
+        await response.json().catch(() => null),
+        "signup_completed",
+        analyticsProperties,
+      );
       router.replace("/app");
       router.refresh();
     } catch (caught) {

@@ -1,5 +1,7 @@
 "use client";
 
+import { captureProductEvent } from "../lib/product-analytics";
+
 import type {
   AiAnalysisResponse,
   AiProviderConfiguration,
@@ -342,6 +344,7 @@ export function FilmRoomWorkbench() {
       const parsed = parseAiAnalysis(await response.json());
       if (!parsed) throw new Error("The analysis response was not recognized");
       setAnalysis(parsed);
+      void captureProductEvent("film_room_analysis_completed");
       setAnalysisAction({ state: "idle" });
       setLoad((current) => {
         if (current.state !== "ready") return current;

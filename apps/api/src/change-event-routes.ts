@@ -17,6 +17,7 @@ export interface ChangeEventPort {
   list(userId: string, query: ChangeEventQuery): Promise<ChangeEventFeedResponse>;
   markRead(userId: string, eventId: string): Promise<ChangeEventReceiptResponse | undefined>;
   dismiss(userId: string, eventId: string): Promise<ChangeEventReceiptResponse | undefined>;
+  dismissAll(userId: string, leagueId: string | null): Promise<void>;
 }
 
 export interface ChangeEventRouteOptions {
@@ -25,6 +26,7 @@ export interface ChangeEventRouteOptions {
 }
 
 const eventPathSchema = z.object({ eventId: z.string().uuid() }).strict();
+const dismissAllQuerySchema = z.object({ leagueId: z.string().uuid().optional() }).strict();
 const querySchema = z
   .object({
     limit: z.coerce.number().int().min(1).max(50).optional(),
@@ -90,6 +92,15 @@ export function registerChangeEventRoutes(
     bodyLimit: 1024,
     config: { rateLimit: { max: options.isTest ? 10_000 : 120, timeWindow: "10 minutes" } },
   } as const;
+
+  app.post("/v1/change-events/dismiss-all", mutationOptions, async (request, reply) => {
+    const user = authenticatedUser(request, reply);
+    if (!user) return reply;
+    if (!options.changeEvents) return unavailable(request, reply);
+    const query = dismissAllQuerySchema.parse(request.query);
+    await options.changeEvents.dismissAll(user.id, query.leagueId ?? null);
+    return reply.code(204).send();
+  });
 
   app.post("/v1/change-events/:eventId/read", mutationOptions, async (request, reply) => {
     const user = authenticatedUser(request, reply);

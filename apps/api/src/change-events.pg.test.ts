@@ -435,4 +435,95 @@ describe.skipIf(!dockerAvailable)("change-event feed isolation against real Post
     );
     expect(rows[0]?.alive).toBeGreaterThan(0);
   });
+  it("clears every page only for the caller's visible feed and preserves receipt timestamps", async () => {
+    const many = Array.from({ length: 55 }, () => leagueDraft({ recipientUserIds: [] }));
+    const ownPrivate = privateDraft();
+    const othersPrivate = privateDraft({ recipientUserIds: [managerId] });
+    const otherLeague = privateDraft({ leagueId: otherLeagueId });
+    const global = leagueDraft({ visibility: "global", leagueId: null, recipientUserIds: [] });
+    const inaccessible = leagueDraft({ leagueId: otherLeagueId, recipientUserIds: [outsiderId] });
+    const expired = privateDraft({ occurredAt: LONG_AGO });
+    const routine = routineSyncDraft();
+    await emitChangeEvents(
+      db,
+      [...many, ownPrivate, othersPrivate, otherLeague, global, inaccessible, expired, routine],
+      NOW,
+    );
+    const [ownId, othersId, otherLeagueEventId, globalId, inaccessibleId, expiredId, routineId] =
+      await Promise.all(
+        [ownPrivate, othersPrivate, otherLeague, global, inaccessible, expired, routine].map(
+          latestEventId,
+        ),
+      );
+    const firstId = await latestEventId(many[0]!);
+    await service.markRead(ownerId, firstId);
+    await service.dismiss(ownerId, ownId!);
+    const laterService = new ChangeEventService(repository, () => LATER);
+    await laterService.dismissAll(ownerId, leagueId);
+    await laterService.dismissAll(ownerId, leagueId);
+
+    const cleared = await service.list(ownerId, { limit: 50, cursor: null, leagueId });
+    expect(cleared.events).toEqual([]);
+    expect(cleared.unreadCount).toBe(0);
+    const receipt = await repository.findVisibleEvent(ownerId, firstId, feedQuery.retentionFloor);
+    expect(receipt?.readAt).toEqual(NOW);
+    expect(receipt?.firstSeenAt).toEqual(NOW);
+    expect(receipt?.dismissedAt).toEqual(LATER);
+    expect(
+      (await repository.findVisibleEvent(ownerId, ownId!, feedQuery.retentionFloor))?.dismissedAt,
+    ).toEqual(NOW);
+    for (const id of [otherLeagueEventId, globalId]) {
+      expect(
+        (await repository.findVisibleEvent(ownerId, id!, feedQuery.retentionFloor))?.dismissedAt,
+      ).toBeNull();
+    }
+    expect(
+      (await repository.findVisibleEvent(managerId, firstId, feedQuery.retentionFloor))
+        ?.dismissedAt,
+    ).toBeNull();
+    expect(
+      (await repository.findVisibleEvent(managerId, othersId!, feedQuery.retentionFloor))
+        ?.dismissedAt,
+    ).toBeNull();
+
+    await laterService.dismissAll(ownerId, null);
+    for (const id of [otherLeagueEventId, globalId]) {
+      expect(
+        (await repository.findVisibleEvent(ownerId, id!, feedQuery.retentionFloor))?.dismissedAt,
+      ).toEqual(LATER);
+    }
+    const untouched = await db.execute<{ readonly total: number }>(sql`
+      select count(*)::int as total from change_event_receipts
+       where user_id = ${ownerId}::uuid
+         and event_id in (${othersId}::uuid, ${inaccessibleId}::uuid, ${expiredId}::uuid, ${routineId}::uuid)
+         and dismissed_at is not null
+    `);
+    expect(untouched[0]?.total).toBe(0);
+    expect(
+      (await repository.findVisibleEvent(outsiderId, inaccessibleId!, feedQuery.retentionFloor))
+        ?.dismissedAt,
+    ).toBeNull();
+
+    const fresh = privateDraft();
+    await emitChangeEvents(db, [fresh], LATER);
+    const freshId = await latestEventId(fresh);
+    expect(
+      (await service.list(ownerId, { limit: 50, cursor: null, leagueId })).events.map(
+        (event) => event.id,
+      ),
+    ).toContain(freshId);
+  });
+
+  it("does not clear league events after the caller loses membership", async () => {
+    const draft = leagueDraft({ recipientUserIds: [managerId] });
+    await emitChangeEvents(db, [draft], NOW);
+    const id = await latestEventId(draft);
+    await db.delete(leagueMemberships).where(eq(leagueMemberships.userId, managerId));
+    await service.dismissAll(managerId, leagueId);
+    const receipts = await db.execute<{ readonly dismissed_at: string | null }>(sql`
+      select dismissed_at from change_event_receipts
+       where user_id = ${managerId}::uuid and event_id = ${id}::uuid
+    `);
+    expect(receipts[0]?.dismissed_at).toBeNull();
+  });
 });

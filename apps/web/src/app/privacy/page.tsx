@@ -132,11 +132,11 @@ export default function PrivacyPage() {
           </p>
           <p>Laces Out does not sell data or run behavioral advertising.</p>
           <p>
-            The native iOS app communicates with the Laces Out server you select and contains no ad
-            network or third-party product-analytics SDK. It stores the selected server address and
-            app preferences on your device, keeps the authenticated server cookie in system-managed
-            website storage, and uses the system share sheet only when you choose to share. Its
-            bundled demo uses local sample data and does not require an account.
+            The native iOS app communicates with the Laces Out server you select. It stores the
+            selected server address and app preferences on your device, keeps the authenticated
+            server cookie in system-managed website storage, and uses the system share sheet only
+            when you choose to share. Its bundled demo uses local sample data and does not require
+            an account.
           </p>
           {cloudflareWebAnalyticsEnabled ? (
             <p>
@@ -147,12 +147,7 @@ export default function PrivacyPage() {
               filter are not sent. What Cloudflare records and retains is described in its own
               documentation and governed by its terms, not by this policy.
             </p>
-          ) : (
-            <p>
-              This deployment does not include a product-analytics beacon. An operator who adds
-              analytics must update this policy before collecting traffic data.
-            </p>
-          )}
+          ) : null}
           <p>
             Provider and football-data services receive only the requests required to retrieve their
             data. Film room sends your question and a bounded snapshot of your authorized league,

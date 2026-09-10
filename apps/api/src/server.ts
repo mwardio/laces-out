@@ -29,6 +29,7 @@ import { AuthService } from "./auth.js";
 import { DraftAnalysisService, DrizzleDraftProjectionSource } from "./draft-analysis.js";
 import { DraftSessionService, DrizzleDraftSessionRepository } from "./draft-session.js";
 import { DraftMarketService } from "./draft-market.js";
+import { DecisionInboxService, DrizzleDecisionInboxRepository } from "./decision-inbox.js";
 import { EspnBridgeService } from "./espn-bridge.js";
 import { DrizzleEspnDraftPollRepository, EspnDraftPollService } from "./espn-draft-service.js";
 import { DrizzleEspnLiveDraftRepository } from "./espn-live-draft-persistence.js";
@@ -141,6 +142,10 @@ const espnLiveDraft = new EspnLiveDraftService(espnLiveDraftRepository, {
   enabled: environment.ESPN_LIVE_DRAFT_SYNC,
 });
 const decisions = new InSeasonDecisionService(new DrizzleInSeasonDecisionRepository(database.db));
+const decisionInbox = new DecisionInboxService(
+  new DrizzleDecisionInboxRepository(database.db),
+  decisions,
+);
 const analytics = new LeagueAnalyticsService(new DrizzleLeagueAnalyticsRepository(database.db));
 // Also the AiService recap prompt port, so persona cards reach the prompt without the service
 // cycle a RecapService-implemented port would create.
@@ -381,6 +386,7 @@ const app = await buildApp({
   espnRefresh,
   espnLiveDraft,
   decisions,
+  decisionInbox,
   analytics,
   statsCenter,
   schedule,

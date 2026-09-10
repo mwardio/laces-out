@@ -98,6 +98,12 @@ export interface ChangeEventRepository {
     field: ChangeEventReceiptField,
     now: Date,
   ): Promise<Date | undefined>;
+  dismissVisibleEvents(
+    userId: string,
+    leagueId: string | null,
+    retentionFloor: Date,
+    now: Date,
+  ): Promise<void>;
 }
 
 interface RawEventRow {
@@ -171,6 +177,40 @@ export class DrizzleChangeEventRepository implements ChangeEventRepository {
        limit ${query.limit}
     `);
     return [...rows].map(toRow);
+  }
+
+  async dismissVisibleEvents(
+    userId: string,
+    leagueId: string | null,
+    retentionFloor: Date,
+    now: Date,
+  ): Promise<void> {
+    // Match the feed's visibility, scope, and retention in one statement, including every page.
+    // Receipts belong to this member; the underlying events and other members stay untouched.
+    const nowIso = now.toISOString();
+    await this.#database.execute(sql`
+      insert into change_event_receipts (event_id, user_id, first_seen_at, dismissed_at, created_at)
+      select e.id, ${userId}::uuid, ${nowIso}::timestamptz, ${nowIso}::timestamptz, ${nowIso}::timestamptz
+        from change_events e
+        left join change_event_receipts r
+               on r.event_id = e.id and r.user_id = ${userId}::uuid
+       where e.occurred_at > ${retentionFloor.toISOString()}::timestamptz
+         and e.event_type <> ${ROUTINE_SYNC_EVENT_TYPE}
+         and r.dismissed_at is null
+         and (
+               e.visibility = 'global'
+            or (e.visibility = 'league'
+                and e.league_id in (
+                  select lm.league_id from league_memberships lm where lm.user_id = ${userId}::uuid
+                ))
+            or (e.visibility = 'private' and r.event_id is not null)
+             )
+         and (${leagueId}::uuid is null or e.league_id = ${leagueId}::uuid)
+       order by e.id
+      on conflict (event_id, user_id) do update
+         set first_seen_at = coalesce(change_event_receipts.first_seen_at, excluded.first_seen_at),
+             dismissed_at = coalesce(change_event_receipts.dismissed_at, excluded.dismissed_at)
+    `);
   }
 
   async countUnread(
@@ -435,6 +475,11 @@ export class ChangeEventService {
 
   dismiss(userId: string, eventId: string): Promise<ChangeEventReceiptResponse | undefined> {
     return this.#mark(userId, eventId, "dismissed");
+  }
+
+  dismissAll(userId: string, leagueId: string | null): Promise<void> {
+    const now = this.#now();
+    return this.#repository.dismissVisibleEvents(userId, leagueId, this.#retentionFloor(now), now);
   }
 
   async #mark(

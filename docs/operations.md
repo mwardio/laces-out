@@ -38,6 +38,58 @@ Production startup rejects copied `replace-with-...` placeholders and the Compos
 default `fantasy` password. This is intentional: fill in every secret before expecting the stack to
 become healthy.
 
+## Product analytics (optional)
+
+The web app can send selected events to PostHog Cloud. Self-hosted installs default to disabled.
+Set `NEXT_PUBLIC_POSTHOG_REGION=us` or `eu` and `NEXT_PUBLIC_POSTHOG_PROJECT_TOKEN` to that
+project's public ingestion token, then rebuild the web image. The browser only initializes in a
+production build on the exact HTTPS origin configured by `PUBLIC_URL` / `NEXT_PUBLIC_SITE_URL`.
+Development, loopback, and alternate/preview origins send nothing to this project.
+
+The SDK is bundled locally and loaded after hydration. Session replay, autocapture, heatmaps,
+exception collection, surveys, feature flags, and remote script loading are disabled. Only page
+visits and explicitly instrumented events are sent. URL queries/fragments, dynamic route IDs,
+referring paths, form values, emails, league names, prompts, and AI responses are omitted. Member
+identity uses the opaque account ID; logout and account deletion reset the browser identity.
+Analytics requests are best effort and do not determine whether an application action succeeds.
+
+An initial session check excludes admins before the first pageview. Admin exclusion persists in
+that browser, including after logout. Do Not Track is also respected. To exclude another test
+browser, run `localStorage.setItem("laces-out:analytics-excluded", "true")` in its console and
+reload. Remove that key to clear the manual exclusion (a signed-in admin will be excluded again).
+Use a fresh browser context with a member account when verifying real events.
+
+| Event                                     | Meaning                                                                                                         |
+| ----------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| `$pageview`                               | A route visit; query/hash-only changes do not add a pageview                                                    |
+| `tour_started`                            | A guest opens `/app`, once per document lifetime                                                                |
+| `signup_submitted`                        | A valid registration form is submitted                                                                          |
+| `signup_verification_required`            | Registration or invitation acceptance requires email confirmation                                               |
+| `signup_completed`                        | Registration succeeds with a session, invitation acceptance creates an account, or email confirmation completes |
+| `email_verified`                          | An email confirmation succeeds; the member still needs to sign in                                               |
+| `invitation_accepted` / `login_completed` | A successful invitation acceptance or login                                                                     |
+| `league_sync_completed`                   | Browser-observed ESPN core refresh or successful Yahoo manual sync receipt                                      |
+| `feature_viewed`                          | Decision Desk, Draft Studio, Film Room, Weekly Reckoning, or another main tool opens                            |
+| `film_room_analysis_completed`            | A live Film Room response passes validation                                                                     |
+| `reckoning_recap_generated`               | A live recap generation response passes validation                                                              |
+
+Events include `mode=demo|member`; sync events include `provider=espn|yahoo`. These browser events
+measure user journeys, not total scheduled sync throughput. An initial status read does not replay
+historical syncs. The PostHog Web Analytics dashboard uses pageviews; create an activation funnel
+from signup through `league_sync_completed`, and weekly retention using `feature_viewed`.
+Email confirmation may happen in another browser, so its anonymous step may not join the original
+signup journey until an identified login links that browser's activity.
+
+The bundled gateway permits only `https://us.i.posthog.com` or `https://eu.i.posthog.com` in
+`connect-src`, according to the same region flag. A host-level proxy must mirror that allowance.
+No PostHog `script-src` allowance is needed with this configuration. Validate all six combinations
+of Cloudflare (`enabled|disabled`) and PostHog (`disabled|us|eu`) after changing the CSP.
+
+When replacing Cloudflare Web Analytics, set `NEXT_PUBLIC_CLOUDFLARE_ANALYTICS=disabled` and
+rebuild the web image. This removes its disclosure and its bundled gateway CSP allowance; it does
+not turn off a beacon separately injected at Cloudflare's edge. Disable that separately in
+Cloudflare and mirror the CSP change in any host-level proxy.
+
 ## Search presence
 
 Set `PUBLIC_URL` to the canonical HTTPS origin: the exact host you want indexed, no trailing slash.

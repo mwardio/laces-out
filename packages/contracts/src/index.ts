@@ -2,7 +2,11 @@ import { z } from "zod";
 
 import {
   decisionExecutionSchema,
+  decisionLeagueSchema,
   decisionPlayerSchema,
+  decisionProjectionSetReferenceSchema,
+  decisionProvenanceSchema,
+  decisionTeamSchema,
   freshnessSchema,
   projectionSourceObservedAtStatusSchema,
   providerSchema,
@@ -13,6 +17,9 @@ import {
 // Decision primitives shared by the snapshot and the trade builder. A leaf module so the builder
 // contract can import them without a circular read through this barrel.
 export * from "./decision-primitives.js";
+
+// A compact, persisted review inbox for real-account overview recommendations.
+export * from "./decision-inbox.js";
 
 // User-constructed trade package evaluation.
 export * from "./trade-evaluation.js";
@@ -1967,18 +1974,6 @@ const faabRangeSchema = z
     }
   });
 
-const decisionProjectionSetReferenceSchema = z
-  .object({
-    id: z.string().uuid(),
-    source: z.string().min(1),
-    version: z.string().min(1),
-    horizon: z.string().min(1),
-    sourceObservedAt: z.iso.datetime().nullable(),
-    sourceObservedAtStatus: projectionSourceObservedAtStatusSchema,
-    importedAt: z.iso.datetime(),
-  })
-  .strict();
-
 const waiverDropComparisonSchema = z
   .object({
     dropPlayerId: z.uuid(),
@@ -2227,35 +2222,9 @@ export type TradeDecisionSection = z.infer<typeof tradeDecisionSectionSchema>;
 export const inSeasonDecisionSnapshotSchema = z
   .object({
     generatedAt: z.iso.datetime(),
-    league: z
-      .object({
-        id: z.string().uuid(),
-        name: z.string().min(1),
-        season: z.number().int().min(2000).max(2200).nullable(),
-        week: z.number().int().min(1).max(30).nullable(),
-        provider: providerSchema.nullable(),
-      })
-      .strict(),
-    team: z
-      .object({
-        id: z.string().uuid(),
-        name: z.string().min(1),
-        faabRemaining: z.number().int().nonnegative().nullable(),
-      })
-      .strict()
-      .nullable(),
-    provenance: z
-      .object({
-        /** ADR 0003: every recommendation-shaped output retains its algorithm version… */
-        algorithmVersion: z.string().min(1).max(120),
-        /** …and the checksum of the inputs it was computed from. */
-        inputChecksum: z.string().regex(/^[0-9a-f]{64}$/u),
-        leagueLastSyncedAt: z.iso.datetime().nullable(),
-        rosterEffectiveAt: z.iso.datetime().nullable(),
-        projectionSet: decisionProjectionSetReferenceSchema.nullable(),
-        projectionFreshness: freshnessSchema,
-      })
-      .strict(),
+    league: decisionLeagueSchema,
+    team: decisionTeamSchema,
+    provenance: decisionProvenanceSchema,
     providerVerification: z
       .object({
         lockCoverage: z.literal("unavailable"),
