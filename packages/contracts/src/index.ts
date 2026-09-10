@@ -21,6 +21,9 @@ export * from "./decision-primitives.js";
 // A compact, persisted review inbox for real-account overview recommendations.
 export * from "./decision-inbox.js";
 
+// Account-wide ownership and starting-lineup exposure from claimed-team roster snapshots.
+export * from "./player-exposure.js";
+
 // User-constructed trade package evaluation.
 export * from "./trade-evaluation.js";
 

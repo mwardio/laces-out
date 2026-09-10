@@ -82,6 +82,7 @@ import {
 } from "./draft-routes.js";
 import { DraftStreamHub } from "./draft-stream.js";
 import { type DecisionInboxPort, registerDecisionInboxRoutes } from "./decision-inbox-routes.js";
+import { type PlayerExposurePort, registerPlayerExposureRoutes } from "./player-exposure-routes.js";
 import { type InvitationPort, registerInvitationRoutes } from "./invitation-routes.js";
 import {
   type InSeasonDecisionPort,
@@ -339,6 +340,7 @@ export interface BuildAppOptions {
   readonly invitations?: InvitationPort;
   readonly decisions?: InSeasonDecisionPort;
   readonly decisionInbox?: DecisionInboxPort;
+  readonly playerExposure?: PlayerExposurePort;
   readonly analytics?: LeagueAnalyticsPort;
   readonly ai?: AiServicePort;
   readonly recaps?: RecapRoutePort;
@@ -1056,6 +1058,9 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   });
   registerDecisionInboxRoutes(app, {
     ...(options.decisionInbox ? { decisionInbox: options.decisionInbox } : {}),
+  });
+  registerPlayerExposureRoutes(app, {
+    ...(options.playerExposure ? { playerExposure: options.playerExposure } : {}),
   });
   registerLeagueAnalyticsRoutes(app, {
     ...(options.analytics ? { analytics: options.analytics } : {}),

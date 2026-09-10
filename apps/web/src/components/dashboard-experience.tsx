@@ -43,6 +43,7 @@ import {
   useFantasyProviderAttribution,
 } from "./fantasy-provider-attribution";
 import { PortfolioDashboard } from "./portfolio-dashboard";
+import { PlayerExposurePanel } from "./player-exposure-panel";
 import { TeamAvatar } from "./team-avatar";
 import { TourBanner } from "./tour-banner";
 
@@ -768,6 +769,10 @@ function LivePortfolio({ portfolio, reloadPortfolio }: LivePortfolioProps) {
           })}
         </div>
       </section>
+
+      <div className="section-block">
+        <PlayerExposurePanel refreshToken={portfolio.generatedAt} />
+      </div>
 
       {dashboardState.status === "loading" ? (
         <section className="panel live-detail-loading" role="status">
