@@ -313,11 +313,9 @@ export default function LandingPage() {
               <p className={styles.heroLead}>
                 Laces Out pairs with your{" "}
                 {yahooComingSoon ? "ESPN league" : "ESPN or Yahoo leagues"} and brings lineup
-                advice, waiver pickups, trade ideas, and draft tools into one place.
-              </p>
-              <p className={styles.heroPersonalization}>
-                Recommendations use your league&rsquo;s scoring, your roster, and the players
-                available to you—not a generic rankings list.
+                advice, waiver pickups, trade ideas, and draft tools into one place. Recommendations
+                use your league&rsquo;s scoring, your roster, and the players available to you—not a
+                generic rankings list.
               </p>
               <p className={styles.heroControl}>
                 <ShieldCheck aria-hidden="true" size={15} /> Laces Out recommends the move. You make

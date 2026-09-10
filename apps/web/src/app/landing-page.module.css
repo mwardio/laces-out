@@ -248,15 +248,6 @@
   line-height: 1.62;
 }
 
-.heroPersonalization {
-  max-width: 625px;
-  margin-top: 13px;
-  color: #a7b1a9;
-  font-size: var(--text-14);
-  font-weight: 400;
-  line-height: 1.55;
-}
-
 .heroActions {
   margin-top: 30px;
   align-items: flex-start;
