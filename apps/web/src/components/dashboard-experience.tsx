@@ -28,6 +28,7 @@ import {
 } from "../lib/api-client";
 import { shouldRequestEspnRefreshOnView } from "../lib/espn-refresh";
 import { LatestRequest } from "../lib/latest-request";
+import { resolveInitialLeagueId } from "../lib/league-selection";
 import { providerLabel } from "../lib/copy";
 import { yahooComingSoon } from "../lib/public-site";
 import { loginUrlForCurrentPath } from "../lib/safe-return-to";
@@ -312,17 +313,6 @@ function LivePortfolio({ portfolio, reloadPortfolio }: LivePortfolioProps) {
   const [selectedLeagueId, setSelectedLeagueId] = useState("");
   const { defaultLeagueId, loaded: preferenceLoaded } = useDefaultLeague();
   const appliedDefault = useRef(false);
-
-  useEffect(() => {
-    // Applied once, so a member who switches leagues is not pulled back to their default.
-    if (!preferenceLoaded || appliedDefault.current) return;
-    appliedDefault.current = true;
-    const preferred =
-      defaultLeagueId && portfolio.leagues.some((league) => league.id === defaultLeagueId)
-        ? defaultLeagueId
-        : null;
-    setSelectedLeagueId(preferred ?? portfolio.leagues[0]?.id ?? "");
-  }, [defaultLeagueId, portfolio.leagues, preferenceLoaded]);
   const [dashboardState, setDashboardState] = useState<DashboardState>({ status: "loading" });
   const [sourceRefreshState, setSourceRefreshState] = useState<
     "idle" | "working" | "queued" | "deduplicated" | "error"
@@ -332,6 +322,28 @@ function LivePortfolio({ portfolio, reloadPortfolio }: LivePortfolioProps) {
   const [espnRefreshState, setEspnRefreshState] = useState<EspnRefreshUiState>({
     status: "idle",
   });
+
+  useEffect(() => {
+    // Applied once, so a member who switches leagues is not pulled back to their default.
+    if (!preferenceLoaded || appliedDefault.current) return;
+    appliedDefault.current = true;
+    const requestedLeagueId = new URLSearchParams(window.location.search).get("league");
+    setSelectedLeagueId(
+      resolveInitialLeagueId(portfolio.leagues, requestedLeagueId, defaultLeagueId),
+    );
+  }, [defaultLeagueId, portfolio.leagues, preferenceLoaded]);
+
+  function selectLeague(nextLeagueId: string) {
+    if (!nextLeagueId || nextLeagueId === selectedLeagueId) return;
+    dashboardRequest.current?.abort();
+    setDashboardState({ status: "loading" });
+    setSelectedLeagueId(nextLeagueId);
+
+    const url = new URL(window.location.href);
+    url.searchParams.set("league", nextLeagueId);
+    window.history.replaceState(window.history.state, "", url);
+  }
+
   const selectedSummary = portfolio.leagues.find((league) => league.id === selectedLeagueId);
   useFantasyProviderAttribution(providerForSelectedLeague(portfolio.leagues, selectedLeagueId));
   const selectedEspnSeason =
@@ -528,8 +540,30 @@ function LivePortfolio({ portfolio, reloadPortfolio }: LivePortfolioProps) {
   return (
     <div className="dashboard-page live-dashboard-page">
       <section className="page-heading dashboard-heading">
-        <div>
+        <div className="dashboard-heading__title">
           <h1>Your leagues</h1>
+          <label className="dashboard-league-switcher" htmlFor="overview-league">
+            <span>Viewing league</span>
+            <select
+              id="overview-league"
+              value={selectedLeagueId}
+              onChange={(event) => selectLeague(event.target.value)}
+            >
+              {!selectedLeagueId ? (
+                <option value="" disabled>
+                  Choose a league
+                </option>
+              ) : null}
+              {portfolio.leagues.map((league) => (
+                <option value={league.id} key={league.id}>
+                  {league.name}
+                  {league.season
+                    ? ` · ${providerLabel(league.season.provider)}`
+                    : " · setup needed"}
+                </option>
+              ))}
+            </select>
+          </label>
         </div>
         <div className="heading-actions">
           <span className="freshness-label">
@@ -657,13 +691,7 @@ function LivePortfolio({ portfolio, reloadPortfolio }: LivePortfolioProps) {
                 type="button"
                 key={league.id}
                 aria-pressed={selected}
-                onClick={() => {
-                  if (!selected) {
-                    dashboardRequest.current?.abort();
-                    setDashboardState({ status: "loading" });
-                  }
-                  setSelectedLeagueId(league.id);
-                }}
+                onClick={() => selectLeague(league.id)}
               >
                 <div className="league-card__top">
                   <span className="league-monogram" aria-hidden="true">

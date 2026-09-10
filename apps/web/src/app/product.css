@@ -9933,6 +9933,45 @@
     white-space: nowrap;
   }
 
+  .live-dashboard-page .dashboard-heading__title {
+    display: flex;
+    max-width: none;
+    align-items: flex-end;
+    gap: var(--space-20);
+  }
+
+  .dashboard-league-switcher {
+    display: grid;
+    width: min(100%, 330px);
+    gap: 5px;
+    margin-left: auto;
+  }
+
+  .dashboard-league-switcher > span {
+    color: var(--ink-600);
+    font-size: var(--text-10);
+    font-weight: 800;
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
+  }
+
+  .dashboard-league-switcher select {
+    width: 100%;
+    min-width: 0;
+    padding: 0 34px 0 11px;
+    overflow: hidden;
+    color: var(--ink-900);
+    background: var(--white);
+    border: 1px solid var(--ink-200);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .dashboard-league-switcher select:focus-visible {
+    outline: 3px solid var(--focus-ring-soft);
+    outline-offset: 2px;
+  }
+
   .dashboard-heading .heading-actions {
     width: auto;
     flex-wrap: wrap;
@@ -11071,6 +11110,17 @@
       align-items: flex-start;
     }
 
+    .live-dashboard-page .dashboard-heading__title {
+      align-items: stretch;
+      flex-direction: column;
+      gap: var(--space-12);
+    }
+
+    .dashboard-league-switcher {
+      width: min(100%, 420px);
+      margin-left: 0;
+    }
+
     .rankings-heading {
       align-items: stretch;
       flex-direction: column;
@@ -11100,6 +11150,10 @@
 
     .page-heading h1 {
       font-size: 27px;
+    }
+
+    .dashboard-league-switcher {
+      width: 100%;
     }
 
     .live-dashboard-page .dashboard-heading .heading-actions {
