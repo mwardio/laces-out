@@ -1004,6 +1004,68 @@ describe.skipIf(!dockerAvailable)(
       ).rejects.toThrow();
     }, 30_000);
 
+    it("finishes a captured ROS snapshot despite concurrent ingestion and releases the read transaction before simulation", async () => {
+      const { payload, artifactChecksum } = championArtifactPayload(championPolicy());
+      const artifact = { ...payload, artifactChecksum, admittedAt: FRESH };
+      const window = {
+        asOfWeek: 6,
+        currentWeek: 7,
+        windowStartWeek: 7,
+        windowEndWeek: 18,
+        currentWeekStarted: false,
+      } as const;
+      const sourceKey = `nflverse.weekly-rosters.${TEST_SEASON}`;
+      const originalChecksum = checksumFor(sourceKey);
+      let simulations = 0;
+      const provider = databaseFirstPartyRosCandidateProvider({
+        database: handle.db,
+        buildLeagueTarget: async (input) => {
+          simulations += 1;
+          expect(input.candidatePlayers).toHaveLength(CANDIDATE_COUNT);
+          const transactions = await handle.db.execute<{ count: string }>(sql`
+            select count(*)::text as count from pg_stat_activity
+            where datname = current_database() and state = 'idle in transaction'
+          `);
+          expect(Number(transactions[0]?.count)).toBe(0);
+          // Reproduce the production incident: a normal feed changes after simulation begins.
+          await handle.db
+            .update(dataSources)
+            .set({ lastChecksum: "f".repeat(64) })
+            .where(eq(dataSources.key, sourceKey));
+          return { target: null, skippedPlayers: 0 };
+        },
+      });
+      const candidateProviderChecksum = await provider.sourceChecksum({
+        season: TEST_SEASON,
+        window,
+      });
+      const context = {
+        artifact,
+        artifacts: [artifact],
+        season: TEST_SEASON,
+        window,
+        now: FIXED_NOW,
+        candidateProviderChecksum,
+      };
+      try {
+        await expect(provider.buildTargets(context)).resolves.toEqual([]);
+        expect(simulations).toBe(1);
+        expect(await provider.sourceChecksum({ season: TEST_SEASON, window })).not.toBe(
+          candidateProviderChecksum,
+        );
+        // A NEW build with the obsolete identity is still rejected before expensive work.
+        await expect(provider.buildTargets(context)).rejects.toThrow(
+          "changed before target assembly",
+        );
+        expect(simulations).toBe(1);
+      } finally {
+        await handle.db
+          .update(dataSources)
+          .set({ lastChecksum: originalChecksum })
+          .where(eq(dataSources.key, sourceKey));
+      }
+    }, 120_000);
+
     it("still fails closed when the persisted convergence reference is out of contract", async () => {
       // A run whose recorded reference exceeds the engine's maximum is not a bigger, better
       // diagnostic — it is evidence the running code no longer matches the store, so the scope

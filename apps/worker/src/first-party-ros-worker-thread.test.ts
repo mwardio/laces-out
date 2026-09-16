@@ -33,7 +33,7 @@ function providerWithChecksums(checksums: readonly string[]) {
 }
 
 describe("buildVerifiedFirstPartyRosTargets", () => {
-  it("returns targets only when provider inputs match before and after the build", async () => {
+  it("returns targets when the provider input snapshot matches", async () => {
     const fixture = providerWithChecksums([expectedChecksum, expectedChecksum]);
 
     await expect(
@@ -51,12 +51,12 @@ describe("buildVerifiedFirstPartyRosTargets", () => {
     expect(fixture.buildTargets).not.toHaveBeenCalled();
   });
 
-  it("rejects results when inputs change during the build", async () => {
+  it("keeps a materialized snapshot valid when live inputs subsequently change", async () => {
     const fixture = providerWithChecksums([expectedChecksum, changedChecksum]);
 
     await expect(
       buildVerifiedFirstPartyRosTargets({ provider: fixture.provider, context }),
-    ).rejects.toThrow("changed during artifact simulation");
+    ).resolves.toEqual([]);
     expect(fixture.buildTargets).toHaveBeenCalledTimes(1);
   });
 });

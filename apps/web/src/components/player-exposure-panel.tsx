@@ -133,7 +133,11 @@ export function PlayerExposurePanel({ refreshToken }: PlayerExposurePanelProps) 
   const search = query.trim().toLocaleLowerCase();
   const filtered =
     feed?.players.filter((player) => player.name.toLocaleLowerCase().includes(search)) ?? [];
-  const visible = showAll ? filtered : filtered.slice(0, previewLimit);
+  const sharedPlayers = feed?.players.filter((player) => player.leagueIds.length > 1) ?? [];
+  const previewPlayers = search ? filtered : sharedPlayers;
+  const visible = showAll ? filtered : previewPlayers.slice(0, previewLimit);
+  const previewingShared = !showAll && !search;
+  const listedCount = previewingShared ? sharedPlayers.length : filtered.length;
   const empty = feed ? emptyMessage(feed) : null;
 
   return (
@@ -251,11 +255,14 @@ export function PlayerExposurePanel({ refreshToken }: PlayerExposurePanelProps) 
                     {feed.players.length} players · {included.length}{" "}
                     {included.length === 1 ? "league" : "leagues"}
                   </strong>
-                  Most held players first. Roster exposure is the share of included team rosters
-                  holding a player. Starting counts come from saved provider lineups.
+                  {previewingShared
+                    ? "Preview shows players rostered in 2+ leagues. "
+                    : "Most held players first. "}
+                  Roster exposure is the share of included team rosters holding a player. Starting
+                  counts come from saved provider lineups.
                 </p>
                 <div className={styles.search}>
-                  <label htmlFor={searchId}>Find a player</label>
+                  <label htmlFor={searchId}>Find any player</label>
                   <div>
                     <Search size={15} aria-hidden="true" />
                     <input
@@ -272,7 +279,7 @@ export function PlayerExposurePanel({ refreshToken }: PlayerExposurePanelProps) 
                 </div>
               </div>
 
-              {filtered.length > 0 ? (
+              {visible.length > 0 ? (
                 <table
                   className={styles.table}
                   id={tableId}
@@ -366,7 +373,7 @@ export function PlayerExposurePanel({ refreshToken }: PlayerExposurePanelProps) 
                     ))}
                   </tbody>
                 </table>
-              ) : (
+              ) : search ? (
                 <div className={styles.empty} role="status">
                   <p>No players match “{query.trim()}”.</p>
                   <button
@@ -377,13 +384,18 @@ export function PlayerExposurePanel({ refreshToken }: PlayerExposurePanelProps) 
                     Clear search
                   </button>
                 </div>
+              ) : (
+                <div className={styles.empty} id={tableId} role="status">
+                  <p>No players are rostered in multiple leagues yet.</p>
+                </div>
               )}
 
               <div className={styles.listFooter}>
                 <p role="status">
-                  Showing {visible.length} of {filtered.length} {search ? "matching " : ""}players
+                  Showing {visible.length} of {listedCount}{" "}
+                  {previewingShared ? "shared " : search ? "matching " : ""}players
                 </p>
-                {filtered.length > previewLimit ? (
+                {showAll || filtered.length > visible.length ? (
                   <button
                     className="button button--outline button--small"
                     type="button"
@@ -391,7 +403,7 @@ export function PlayerExposurePanel({ refreshToken }: PlayerExposurePanelProps) 
                     aria-controls={tableId}
                     onClick={() => setShowAll((current) => !current)}
                   >
-                    {showAll ? "Show fewer" : `Show all ${filtered.length}`}
+                    {showAll ? "Show preview" : `Show all ${filtered.length}`}
                   </button>
                 ) : null}
               </div>

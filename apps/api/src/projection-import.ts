@@ -36,7 +36,7 @@ import {
   type ProjectionPlayerReference,
   type ProjectionPlayerResolution,
 } from "@laces-out/projections";
-import { and, asc, desc, eq, gte, inArray, isNull, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, isNull, ne, or, sql } from "drizzle-orm";
 
 import { leagueScopedPlayerCatalogFilter } from "./espn-sync-persistence.js";
 import { projectionTimestampProvenance } from "./projection-provenance.js";
@@ -454,6 +454,20 @@ export class DrizzleProjectionImportRepository implements ProjectionImportReposi
       .where(
         and(
           eq(projectionSets.leagueSeasonId, leagueSeasonId),
+          inArray(projectionSets.horizon, ["week", "rest-of-season"]),
+          // Keep the last complete approved ROS publication across model changes or failed
+          // refreshes. A newer partial candidate must not replace it in the browser's default.
+          or(
+            ne(projectionSets.source, "laces-out-first-party-ros"),
+            and(
+              sql`${projectionSets.metadata}->>'releaseCompleteness' = 'full'`,
+              sql`${projectionSets.metadata}->>'preservePriorGoodSet' = 'false'`,
+              sql`exists (
+                select 1 from ${playerProjections}
+                where ${playerProjections.projectionSetId} = ${projectionSets.id}
+              )`,
+            ),
+          ),
           or(
             eq(projectionSets.visibility, "league"),
             and(
@@ -463,8 +477,22 @@ export class DrizzleProjectionImportRepository implements ProjectionImportReposi
           ),
         ),
       )
-      .orderBy(desc(projectionSets.createdAt), desc(projectionSets.id))
+      // Allocate the bounded history across horizons before applying the limit. Frequent weekly
+      // refreshes must not evict the last saved ROS forecast (including from getPlayers access).
+      .orderBy(
+        sql`row_number() over (
+          partition by ${projectionSets.horizon}
+          order by ${projectionSets.createdAt} desc, ${projectionSets.id} desc
+        )`,
+        desc(projectionSets.createdAt),
+        desc(projectionSets.id),
+      )
       .limit(MAX_ACCESSIBLE_SETS);
+    // The browser still receives one newest-first list, regardless of the horizon allocation.
+    rows.sort(
+      (left, right) =>
+        right.createdAt.getTime() - left.createdAt.getTime() || right.id.localeCompare(left.id),
+    );
     return rows.flatMap((row) =>
       row.leagueSeasonId &&
       ((row.horizon === "week" && row.week !== null) ||

@@ -15,9 +15,9 @@ type WorkerResponse<Result> =
   { readonly ok: true; readonly result: Result } | { readonly ok: false; readonly error: string };
 
 /**
- * Pins a long artifact build to the main thread's exact provider inputs. The second read closes the
- * race where roster/crosswalk/source state changes after simulation starts but before results are
- * handed back for publication.
+ * Rejects obsolete work before entering the provider. The database provider then verifies the
+ * expected checksum and materializes every input in a short repeatable-read transaction. Live
+ * writes after that snapshot belong to the next refresh and cannot invalidate this simulation.
  */
 export async function buildVerifiedFirstPartyRosTargets(input: {
   readonly provider: FirstPartyRosCandidateProvider;
@@ -28,12 +28,7 @@ export async function buildVerifiedFirstPartyRosTargets(input: {
   if (before !== input.context.candidateProviderChecksum) {
     throw new Error("ROS candidate inputs changed before artifact simulation started");
   }
-  const targets = await input.provider.buildTargets(input.context);
-  const after = await input.provider.sourceChecksum(checksumInput);
-  if (after !== input.context.candidateProviderChecksum) {
-    throw new Error("ROS candidate inputs changed during artifact simulation");
-  }
-  return targets;
+  return input.provider.buildTargets(input.context);
 }
 
 function runRosWorker<Input, Result>(input: {

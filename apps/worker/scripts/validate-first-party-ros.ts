@@ -33,6 +33,7 @@ import {
   type ProjectionWeeklyFact,
 } from "../src/first-party-projection-inputs.js";
 import { firstPartyRosChampionPolicyChecksum } from "../src/first-party-ros-publication.js";
+import { rosValidationSourceCache } from "../src/ros-validation-source-cache.js";
 import {
   FIRST_PARTY_ROS_RELEASE_MAXIMUM_FORECASTS,
   FIRST_PARTY_ROS_RELEASE_PLAYERS_PER_POSITION,
@@ -128,6 +129,14 @@ function requireChanged<T extends { readonly state: string }>(
 
 async function main(): Promise<void> {
   const startedAt = Date.now();
+  const cacheDirectory = process.argv
+    .find((value) => value.startsWith("--source-cache="))
+    ?.slice("--source-cache=".length);
+  const offline = process.argv.includes("--offline");
+  if (offline && !cacheDirectory) throw new Error("--offline requires --source-cache=<directory>");
+  const sourceOptions = cacheDirectory
+    ? { fetch: rosValidationSourceCache({ directory: cacheDirectory, offline }) }
+    : {};
   const scoringProfile = scoringProfileOption();
   const seasons = integerList("--seasons", "2019,2020,2021,2022,2023,2024,2025");
   const heldOutSeasons = integerList("--holdouts", "2022,2023,2024,2025");
@@ -164,7 +173,7 @@ async function main(): Promise<void> {
     `Loading official nflverse artifacts for ${seasons.join(", ")} (read-only)...\n`,
   );
   const catalog = requireChanged(
-    await new NflversePlayersSource().check(emptyState),
+    await new NflversePlayersSource(sourceOptions).check(emptyState),
     "player catalog",
   );
   const gsisByPfr = new Map(
@@ -189,12 +198,12 @@ async function main(): Promise<void> {
     process.stderr.write(`  ${season}: player/team stats, rosters, injuries, snaps, schedule\n`);
     const [weeklyResult, teamWeeklyResult, rosterResult, injuryResult, snapResult, scheduleResult] =
       await Promise.all([
-        new NflverseWeeklyStatsSource().check(season, emptyState),
-        new NflverseTeamWeeklyStatsSource().check(season, emptyState),
-        new NflverseWeeklyRostersSource().check(season, emptyState),
-        new NflverseInjuriesSource().check(season, emptyState),
-        new NflverseSnapCountsSource().check(season, emptyState),
-        new NflverseSchedulesSource().check(
+        new NflverseWeeklyStatsSource(sourceOptions).check(season, emptyState),
+        new NflverseTeamWeeklyStatsSource(sourceOptions).check(season, emptyState),
+        new NflverseWeeklyRostersSource(sourceOptions).check(season, emptyState),
+        new NflverseInjuriesSource(sourceOptions).check(season, emptyState),
+        new NflverseSnapCountsSource(sourceOptions).check(season, emptyState),
+        new NflverseSchedulesSource(sourceOptions).check(
           season,
           { ...emptyState, selectionKey: null },
           { seasonTypes: ["REG"] },
@@ -373,6 +382,27 @@ async function main(): Promise<void> {
     };
     process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
     if (!process.argv.includes("--allow-incomplete")) process.exitCode = 1;
+    return;
+  }
+
+  if (process.argv.includes("--inputs-only")) {
+    process.stdout.write(
+      `${JSON.stringify(
+        {
+          state: "inputs-qualified",
+          noDatabaseWrites: true,
+          sources: sourceAudit,
+          coverage: {
+            state: coverage.state,
+            fullyHeldOutSeasons: coverage.fullyHeldOutSeasons,
+            completeAsOfBatches: coverage.completeAsOfBatches,
+          },
+          elapsedSeconds: (Date.now() - startedAt) / 1_000,
+        },
+        null,
+        2,
+      )}\n`,
+    );
     return;
   }
 

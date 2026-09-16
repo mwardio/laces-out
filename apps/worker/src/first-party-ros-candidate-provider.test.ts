@@ -1119,6 +1119,58 @@ describe("buildFirstPartyRosLeagueTarget", () => {
     });
   });
 
+  it("allows a scoped unbridged ESPN self assertion to use a unique trusted-GSIS identity", () => {
+    const leagueSeasonId = "11111111-1111-4111-8111-111111111111";
+    const roster = {
+      playerId: "provider-rb",
+      fullName: "Mike Washington Jr.",
+      position: "RB",
+      team: "LV",
+    };
+    const canonical = { ...roster, playerId: "canonical-rb", gsisId: "00-0040878" };
+    const common = {
+      leagueSeasonId,
+      rosterPlayers: [roster],
+      canonicalPlayers: [canonical],
+      externalIds: [
+        {
+          playerId: roster.playerId,
+          source: "espn-self-asserted",
+          externalId: `${leagueSeasonId}:4686658`,
+        },
+      ],
+    };
+    expect(firstPartyRosPlayerAliasPlan(common)).toEqual({
+      aliases: [
+        {
+          position: "RB",
+          team: "LV",
+          canonicalPlayerId: canonical.playerId,
+          playerId: roster.playerId,
+        },
+      ],
+      issues: [],
+    });
+    // A real bridge to a different player still takes precedence and fails incompatible matching.
+    const conflicting = { ...canonical, playerId: "other-rb", team: "BUF" };
+    expect(
+      firstPartyRosPlayerAliasPlan({
+        ...common,
+        canonicalPlayers: [canonical, conflicting],
+        externalIds: [
+          ...common.externalIds,
+          { playerId: conflicting.playerId, source: "espn", externalId: "4686658" },
+        ],
+      }),
+    ).toMatchObject({ aliases: [], issues: [{ code: "identity-incompatible" }] });
+    expect(
+      firstPartyRosPlayerAliasPlan({
+        ...common,
+        canonicalPlayers: [canonical, { ...canonical, playerId: "duplicate-rb" }],
+      }),
+    ).toMatchObject({ aliases: [], issues: [{ code: "identity-ambiguous" }] });
+  });
+
   it("keeps alias issues position-scoped when applying a plan", () => {
     const result = run({
       policy: ninePlusPolicy(),

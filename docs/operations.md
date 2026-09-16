@@ -59,6 +59,18 @@ browser, run `localStorage.setItem("laces-out:analytics-excluded", "true")` in i
 reload. Remove that key to clear the manual exclusion (a signed-in admin will be excluded again).
 Use a fresh browser context with a member account when verifying real events.
 
+If PostHog reports no pageviews, verify from a fresh visitor browser on the canonical production
+origin. `capture_pageview: false` is intentional: the route observer sends one sanitized `$pageview`
+per pathname change, including the initial page. Check browser network requests to the selected
+PostHog `/e/` endpoint, confirm the request batch contains `$pageview`, and check for HTTP 200.
+Then check that project's recent events with the current date range and without restrictive
+filters. Successful ingestion does not itself verify dashboard visibility. Admin exclusion also
+applies after logout in the same browser; use a clean context instead of reusing an admin session.
+For automated smoke checks, account for the SDK's bot filtering (including browser automation),
+and keep any visitor emulation confined to that disposable test browser. Do not disable bot
+filtering or Do Not Track in production just to make a smoke check send events. A test campaign
+such as `utm_source=analytics-smoke` distinguishes verification visits from ordinary traffic.
+
 | Event                                     | Meaning                                                                                                         |
 | ----------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
 | `$pageview`                               | A route visit; query/hash-only changes do not add a pageview                                                    |
@@ -570,6 +582,66 @@ Structured per-league withholding reasons, emitted in this fixed order:
 A withheld cell never removes a league's existing set. `metrics.preservePriorGoodSet` on the release
 run records that the last good set stays authoritative, and `metrics.cellDecisions` records every
 cell decision — released and withheld — so a mixed release is readable without re-deriving it.
+
+Projection Lab retains the newest complete approved ROS set with player rows even when the running
+model has no compatible admission or a newer candidate is partial or empty. The 100-set history
+allocates space across weekly and ROS horizons before applying the limit, then returns the selected
+sets newest first. Frequent weekly refreshes cannot evict the approved ROS fallback or make its
+player-detail route inaccessible. Fallbacks retain their original publication and forecast-window
+timestamps; loading them does not make them fresh or re-admit them under a newer model version.
+
+Decision reads also reconcile current roster IDs against the selected approved ROS release. A
+unique same-team defense, explicit provider crosswalk, or exact name/team/position match to a GSIS
+catalog player can use that player's existing forecast. Direct IDs take precedence, conflicting
+or ambiguous identities remain uncovered, and an already-rostered canonical player cannot become
+an add candidate through a second ID. The lookup searches beyond the 512-player ranking pool and
+fails closed if its 4,096-player identity bound is exceeded. Reconciliation changes no stored
+projection, release timestamp or admission; the original projection player ID is included in the
+decision checksum. Remaining coverage warnings name the unresolved roster players. Deploy changes
+to this shared read path to both the API and ordinary worker; a frozen release-validation container
+can continue on its original image throughout.
+
+The host's `laces-out-ops` Telegram sentinel uses `scripts/ros-publication-health.sql` to measure
+each active league's actual complete ROS publication age, independently of worker completion and
+shadow-source checks. It alerts after 36 hours by default
+(`LACES_OUT_ROS_PROJECTION_MAX_AGE_HOURS`), with the existing three consecutive five-minute checks
+to debounce alerts. A fresh league cannot conceal a stale peer. Missing complete publications also
+alert, and successful Telegram delivery is recorded before suppressing repeated notifications.
+
+The live ROS candidate provider materializes source observations, scoring rules, player identities,
+and roster aliases inside a short read-only repeatable-read transaction. It verifies the requested
+input checksum in that same snapshot, commits, and only then calibrates and simulates. Later source
+or roster changes belong to the next refresh; they must not invalidate a completed simulation by
+comparing it to the changing live database. This does not change the admitted model, convergence
+checks, coverage gates, or the last-approved fallback. `ros-inputs-snapshotted` records each artifact's
+captured checksum and load time; `ros-artifact-built` records target/player counts and elapsed time.
+The dedicated ROS container is capped at four CPUs to leave capacity for weekly work and the app.
+
+The sentinel now alerts on new issue keys after its observation debounce. Clearing a different
+issue no longer repeats every unresolved warning. It sends one ROS recovery confirmation when
+all monitored leagues are fresh, and separately detects a failed or retrying ROS publication job.
+A lock prevents overlapping sentinel processes from racing the delivery state. Delivery failures
+leave the notification pending. The state regression test is
+`/home/mack/stacks/monitoring/laces-out-ops/notify-state.test.sh`.
+
+For a long release replay, freeze and verify the official inputs before starting simulations:
+
+```bash
+npm run ros:validate -w @laces-out/worker -- --inputs-only --full \
+  --source-cache=/absolute/path/to/ros-inputs
+npm run ros:validate -w @laces-out/worker -- --inputs-only --full \
+  --source-cache=/absolute/path/to/ros-inputs --offline
+ROS_VALIDATION_SOURCE_CACHE=/absolute/path/to/ros-inputs \
+  npm run ros:validate:release -w @laces-out/worker
+```
+
+The first command qualifies the full historical input window without modeling. The second proves
+all required responses can be replayed offline. Cached responses retain their bytes, headers,
+redirects, and checksums; missing or corrupted offline inputs fail closed. With
+`ROS_VALIDATION_SOURCE_CACHE` set, every profile reuses those exact files without upstream requests.
+Run the batch from a fixed source/dependency snapshot in a detached container, retain its reports
+on the host, and label it `laces-out.ros-release-validation=true` so the host's scheduled model
+validator defers while that batch is active. This preparation does not change admission gates.
 
 ### Per-profile validation and admission
 
@@ -1286,3 +1358,12 @@ Then:
   backup mode, and ordinary ESPN core/supplemental sync all keep working. Never delete or rewrite
   accepted draft history as a first recovery action; reconcile against the completed `mDraftDetail`
   snapshot before closing an affected draft.
+
+ESPN core sync receipts include the previous accepted receipt in the idempotency identity when
+content changes. A valid A → B → A provider recapture therefore creates a new snapshot; an immediate
+repeat of A still reuses its receipt. This prevents recurring provider content from exhausting
+`league-sync` retries on `sync_runs_idempotency_unique`.
+
+Yahoo's automatic sweep permits degraded accounts after their circuit cooldown, preferring healthy
+linked accounts when available. Accounts requiring reauthorization remain excluded. A transient
+read failure must not permanently strand an account merely because its health is degraded.

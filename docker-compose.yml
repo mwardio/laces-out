@@ -177,6 +177,8 @@ services:
 
   ros-worker:
     <<: *service-defaults
+    # Leave two of Dakoota's six CPUs available for weekly projections, API and queue heartbeats.
+    cpus: 4.0
     build:
       context: .
       target: worker

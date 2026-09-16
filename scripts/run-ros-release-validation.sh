@@ -93,6 +93,10 @@ run_profile() {
   local temp_json="${final_json}.partial.$$"
   local temp_log="${final_log}.partial.$$"
   local status=0
+  local source_options=()
+  if [[ -n "${ROS_VALIDATION_SOURCE_CACHE:-}" ]]; then
+    source_options+=("--source-cache=${ROS_VALIDATION_SOURCE_CACHE}" --offline)
+  fi
 
   if [[ -s "${final_json}" ]] &&
     jq -e --arg model "${source_model_version}" '
@@ -110,7 +114,7 @@ run_profile() {
 
   log "START profile=${profile} players_per_position=8 max_forecasts=6000"
   npm run --silent ros:validate -w @laces-out/worker -- \
-    --scoring-profile="${profile}" --players-per-position=8 --max-forecasts=6000 --full \
+    --scoring-profile="${profile}" --players-per-position=8 --max-forecasts=6000 --full "${source_options[@]}" \
     >"${temp_json}" 2>"${temp_log}" || status=$?
 
   if jq -e . "${temp_json}" >/dev/null 2>&1; then

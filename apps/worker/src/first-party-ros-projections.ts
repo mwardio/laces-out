@@ -116,7 +116,7 @@ export interface FirstPartyRosCandidateContext {
   readonly season: number;
   readonly window: FirstPartyRosWindow;
   readonly now: Date;
-  /** Main-thread input identity that an offloaded build must verify before and after simulation. */
+  /** Main-thread identity verified while materializing the immutable simulation inputs. */
   readonly candidateProviderChecksum: string;
 }
 

@@ -510,12 +510,12 @@ describe.skipIf(!dockerAvailable)("Yahoo provider sweep against real PostgreSQL"
     expect(selected.has(SEASONS.archived)).toBe(false);
   });
 
-  it("filters unhealthy and open-circuit accounts but resumes after cooldown", async () => {
+  it("filters reauthorization and open-circuit accounts while allowing degraded recovery after cooldown", async () => {
     const selected = new Map(
       (await sweepTargets.listDueYahoo(NOW, 100)).map((target) => [target.leagueSeasonId, target]),
     );
 
-    expect(selected.has(SEASONS.degraded)).toBe(false);
+    expect(selected.has(SEASONS.degraded)).toBe(true);
     expect(selected.has(SEASONS.reauthorize)).toBe(false);
     expect(selected.has(SEASONS.circuit)).toBe(false);
     expect(selected.get(SEASONS.cooled)?.connectionId).toBe(CONNECTION_COOLED);

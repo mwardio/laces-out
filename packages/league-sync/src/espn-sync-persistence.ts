@@ -1086,7 +1086,11 @@ export class DrizzleEspnSyncPersistence {
           connectionId: authority.mode === "server-session" ? authority.connectionId : null,
           kind: input.kind,
           state: "processing",
-          idempotencyKey: input.idempotencyKey,
+          // A -> B -> A is a new snapshot, even though its payload checksum was seen before.
+          // The league lock makes the predecessor stable across retries of the same transition.
+          idempotencyKey: latestCore
+            ? `${input.idempotencyKey}:after:${latestCore.id}`
+            : input.idempotencyKey,
           startedAt: now,
           recordsRead,
           artifactChecksum: input.checksumSha256,

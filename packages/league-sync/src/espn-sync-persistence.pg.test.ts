@@ -767,6 +767,29 @@ describe.skipIf(!dockerAvailable)("ESPN server-session identity against real Pos
     expect(state.membership.role).toBe("member");
   });
 
+  it("accepts A-B-A core recaptures with checksum-derived idempotency keys and deduplicates retries", async () => {
+    const scenario = await createScenario();
+    const input = (letter: string, step: number) => ({
+      ...persistenceInput(
+        scenario,
+        bundle(scenario.providerLeagueId, "1"),
+        new Date(FIRST_CAPTURE.getTime() + step * 60_000),
+      ),
+      checksumSha256: letter.repeat(64),
+      idempotencyKey: `espn-recurrence:${scenario.leagueSeasonId}:${letter}`,
+    });
+    const first = await persistence.persist(input("a", 0));
+    const second = await persistence.persist(input("b", 1));
+    const third = await persistence.persist(input("a", 2));
+    expect([first.state, second.state, third.state]).toEqual(["accepted", "accepted", "accepted"]);
+    expect(new Set([first.receiptId, second.receiptId, third.receiptId]).size).toBe(3);
+    const retry = await persistence.persist(input("a", 3));
+    expect(retry).toMatchObject({ state: "unchanged", receiptId: third.receiptId });
+    const fourth = await persistence.persist(input("b", 4));
+    expect(fourth.state).toBe("accepted");
+    expect(fourth.receiptId).not.toBe(second.receiptId);
+  });
+
   it("clears a stale mapping and backfills identity plus evidence on an unchanged sync", async () => {
     const scenario = await createScenario("espn:2031:stale:team:99", "member");
 

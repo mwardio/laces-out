@@ -14,9 +14,30 @@ const environment = loadEnvironment();
 const database = createDatabase(environment.DATABASE_URL, 4);
 
 try {
-  const provider = databaseFirstPartyRosCandidateProvider({ database: database.db });
   const context = workerData as FirstPartyRosCandidateContext;
+  const startedAt = Date.now();
+  const provider = databaseFirstPartyRosCandidateProvider({
+    database: database.db,
+    onSnapshotReady: () =>
+      console.info(
+        JSON.stringify({
+          event: "ros-inputs-snapshotted",
+          artifactChecksum: context.artifact.artifactChecksum,
+          candidateProviderChecksum: context.candidateProviderChecksum,
+          elapsedMs: Date.now() - startedAt,
+        }),
+      ),
+  });
   const result = await buildVerifiedFirstPartyRosTargets({ provider, context });
+  console.info(
+    JSON.stringify({
+      event: "ros-artifact-built",
+      artifactChecksum: context.artifact.artifactChecksum,
+      targets: result.length,
+      players: result.reduce((total, target) => total + target.released.length, 0),
+      elapsedMs: Date.now() - startedAt,
+    }),
+  );
   parentPort.postMessage({ ok: true, result });
 } catch (error) {
   parentPort.postMessage({
