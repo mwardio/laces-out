@@ -59,6 +59,7 @@ import {
 } from "./managed-projection-profile.js";
 import {
   buildPlayoffOddsInput,
+  hasCompleteRegularSeasonSchedule,
   type PlayoffOddsMatchupRow,
   type PlayoffOddsTeamRow,
 } from "./playoff-odds.js";
@@ -1401,6 +1402,7 @@ function playoffOddsSeed(input: {
  */
 function withheldPlayoffOddsReason(input: {
   readonly playoffTeamCount: number;
+  readonly regularSeasonMatchupPeriods: number;
   readonly teams: readonly PlayoffOddsTeamRow[];
   readonly matchups: readonly PlayoffOddsMatchupRow[];
 }): LeagueAnalyticsUnavailableReason {
@@ -1417,7 +1419,14 @@ function withheldPlayoffOddsReason(input: {
     );
   }
   const remaining = input.matchups.filter((row) => row.status !== "final");
-  if (remaining.length === 0) {
+  if (
+    remaining.length === 0 &&
+    hasCompleteRegularSeasonSchedule(
+      input.matchups,
+      new Set(input.teams.map((team) => team.teamId)),
+      input.regularSeasonMatchupPeriods,
+    )
+  ) {
     return reason(
       "PLAYOFF_SEASON_COMPLETE",
       "Every stored matchup for this season is final, so no remaining game is left to simulate.",
@@ -1464,8 +1473,49 @@ function buildPlayoffOdds(input: {
       ),
     );
   }
+  const regularSeasonEnd = input.rules.regularSeasonMatchupPeriods;
+  if (regularSeasonEnd === null) {
+    return unavailable(
+      reason(
+        "PLAYOFF_RULES_MISSING",
+        "The league host did not supply regularSeasonMatchupPeriods, so the end of playoff qualification is unknown; odds are withheld.",
+      ),
+    );
+  }
+  if (input.rules.teamCount !== input.teams.length) {
+    return unavailable(
+      reason(
+        "PLAYOFF_FIELD_UNSUPPORTED",
+        `The league host's team count (${input.rules.teamCount || "unknown"}) does not match the ${input.teams.length} synchronized teams; odds require the complete field.`,
+      ),
+    );
+  }
+  if (input.rules.medianGameEnabled === true) {
+    return unavailable(
+      reason(
+        "PLAYOFF_SIMULATION_UNSUPPORTED",
+        "This league awards an additional result against the weekly median. The playoff simulation does not yet model those results, so odds are withheld.",
+      ),
+    );
+  }
 
-  const scoreByTeam = new Map(input.scores.section.teams.map((team) => [team.team.id, team]));
+  const regularMatchups = input.matchups.filter((row) => row.week <= regularSeasonEnd);
+  const regularScores = buildScoreAnalytics(input.teams, regularMatchups, input.claimedTeamId);
+  if (regularScores.section.state === "unavailable") {
+    return { state: "unavailable", reasons: [...regularScores.section.reasons] };
+  }
+  if (
+    regularScores.section.incompleteFinalMatchups > 0 ||
+    regularScores.section.teams.some((team) => team.incompleteMatchups > 0)
+  ) {
+    return unavailable(
+      reason(
+        "PLAYOFF_SCHEDULE_INCOMPLETE",
+        "Completed regular-season matchups have missing or conflicting official scores; odds are withheld until every completed result can be counted.",
+      ),
+    );
+  }
+  const scoreByTeam = new Map(regularScores.section.teams.map((team) => [team.team.id, team]));
   const teamRows: PlayoffOddsTeamRow[] = input.teams.flatMap((team) => {
     const metrics = scoreByTeam.get(team.id);
     if (!metrics) return [];
@@ -1485,7 +1535,7 @@ function buildPlayoffOdds(input: {
       },
     ];
   });
-  const matchupRows: PlayoffOddsMatchupRow[] = input.matchups.map((row) => ({
+  const matchupRows: PlayoffOddsMatchupRow[] = regularMatchups.map((row) => ({
     week: row.week,
     status: row.status,
     homeTeamId: row.homeTeamId,
@@ -1498,6 +1548,7 @@ function buildPlayoffOdds(input: {
     matchups: matchupRows,
     teams: teamRows,
     playoffTeamCount: input.rules.playoffTeamCount,
+    regularSeasonMatchupPeriods: regularSeasonEnd,
     seed: input.seed,
     simulations: PLAYOFF_ODDS_SIMULATIONS,
   });
@@ -1505,6 +1556,7 @@ function buildPlayoffOdds(input: {
     return unavailable(
       withheldPlayoffOddsReason({
         playoffTeamCount: input.rules.playoffTeamCount,
+        regularSeasonMatchupPeriods: regularSeasonEnd,
         teams: teamRows,
         matchups: matchupRows,
       }),
@@ -2115,19 +2167,22 @@ export class LeagueAnalyticsService {
       weeklyAwardWeeks,
       options?.weeklyAwardsWeek,
     );
-    const matchupSnapshotId = effectiveMatchupSnapshotId(matchups);
+    const rules = parseLeagueRules(season.settings);
+    const playoffMatchupSnapshotId = effectiveMatchupSnapshotId(
+      matchups.filter((row) => row.week <= (rules.regularSeasonMatchupPeriods ?? 30)),
+    );
     const playoffOdds = buildPlayoffOdds({
       teams,
       claimedTeamId: membership.claimedFantasyTeamId,
       scores,
       matchups,
-      rules: parseLeagueRules(season.settings),
+      rules,
       seed: playoffOddsSeed({
         leagueSeasonId: season.id,
         currentWeek: season.currentWeek,
-        matchupSnapshotId,
+        matchupSnapshotId: playoffMatchupSnapshotId,
       }),
-      matchupSnapshotId,
+      matchupSnapshotId: playoffMatchupSnapshotId,
     });
     const opponentScout = buildOpponentAnalytics({
       teams,

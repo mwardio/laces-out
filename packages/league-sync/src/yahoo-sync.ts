@@ -31,7 +31,7 @@ import {
   type ConnectionHealth,
   type Database,
 } from "@laces-out/db";
-import { and, asc, eq, inArray, isNull, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 
 import { YahooConnectionError } from "./yahoo-connection.js";
 
@@ -634,6 +634,54 @@ export class DrizzleYahooSyncRepository implements YahooSyncRepository {
       await transaction.execute(
         sql`select pg_advisory_xact_lock(hashtextextended(${`yahoo:${bundle.league.externalId}:${bundle.league.season}`}, 0))`,
       );
+      const [existingSeason] = await transaction
+        .select()
+        .from(leagueSeasons)
+        .where(
+          and(
+            eq(leagueSeasons.provider, "yahoo"),
+            eq(leagueSeasons.externalKey, bundle.league.externalId),
+            eq(leagueSeasons.season, bundle.league.season),
+          ),
+        )
+        .limit(1);
+      const [latestCore] = existingSeason
+        ? await transaction
+            .select({
+              id: syncRuns.id,
+              connectionId: syncRuns.connectionId,
+              leagueSeasonId: syncRuns.leagueSeasonId,
+              recordsWritten: syncRuns.recordsWritten,
+              artifactChecksum: syncRuns.artifactChecksum,
+            })
+            .from(rosterSnapshots)
+            .innerJoin(fantasyTeams, eq(fantasyTeams.id, rosterSnapshots.teamId))
+            .innerJoin(syncRuns, eq(syncRuns.id, rosterSnapshots.sourceSyncRunId))
+            .where(
+              and(
+                eq(fantasyTeams.leagueSeasonId, existingSeason.id),
+                eq(syncRuns.kind, "yahoo-official-read"),
+                eq(syncRuns.state, "succeeded"),
+              ),
+            )
+            .orderBy(
+              desc(rosterSnapshots.effectiveAt),
+              desc(rosterSnapshots.createdAt),
+              desc(rosterSnapshots.id),
+            )
+            .limit(1)
+        : [];
+      if (
+        existingSeason?.lastSyncedAt &&
+        (fetchedAt < existingSeason.lastSyncedAt ||
+          (fetchedAt.getTime() === existingSeason.lastSyncedAt.getTime() &&
+            latestCore?.artifactChecksum !== checksum))
+      ) {
+        throw new YahooSyncError(
+          "PERSISTENCE_FAILED",
+          "Yahoo sync capture is older than or conflicts with the current league snapshot",
+        );
+      }
       const persistProviderLink = async (leagueSeasonId: string): Promise<void> => {
         const [previousLink] = await transaction
           .select({ providerCommissioner: providerLeagueLinks.providerCommissioner })
@@ -684,15 +732,12 @@ export class DrizzleYahooSyncRepository implements YahooSyncRepository {
           });
         }
       };
-      const [prior] = await transaction
-        .select({
-          id: syncRuns.id,
-          leagueSeasonId: syncRuns.leagueSeasonId,
-          recordsWritten: syncRuns.recordsWritten,
-        })
-        .from(syncRuns)
-        .where(eq(syncRuns.idempotencyKey, idempotencyKey))
-        .limit(1);
+      // Only the current snapshot can be unchanged. A historical checksum match would silently
+      // retain B on an A -> B -> A roster change while falsely advancing its freshness.
+      const prior =
+        latestCore?.artifactChecksum === checksum && latestCore.connectionId === connectionId
+          ? latestCore
+          : undefined;
       if (prior?.leagueSeasonId) {
         const [season] = await transaction
           .select({ id: leagueSeasons.id, leagueId: leagueSeasons.leagueId })
@@ -777,7 +822,7 @@ export class DrizzleYahooSyncRepository implements YahooSyncRepository {
           connectionId,
           kind: "yahoo-official-read",
           state: "processing",
-          idempotencyKey,
+          idempotencyKey: latestCore ? `${idempotencyKey}:after:${latestCore.id}` : idempotencyKey,
           startedAt: now,
           recordsRead,
           artifactChecksum: checksum,
@@ -785,17 +830,6 @@ export class DrizzleYahooSyncRepository implements YahooSyncRepository {
         .returning({ id: syncRuns.id });
       if (!run) throw new Error("Yahoo sync run could not be created");
 
-      const [existingSeason] = await transaction
-        .select()
-        .from(leagueSeasons)
-        .where(
-          and(
-            eq(leagueSeasons.provider, "yahoo"),
-            eq(leagueSeasons.externalKey, bundle.league.externalId),
-            eq(leagueSeasons.season, bundle.league.season),
-          ),
-        )
-        .limit(1);
       let leagueId: string;
       let leagueSeasonId: string;
       let createdLeague = false;

@@ -661,6 +661,24 @@ describe.skipIf(!postgresAvailable)("account data repository against real Postgr
     }
   }, 30_000);
 
+  it("matches login emails literally rather than interpreting valid wildcard characters", async () => {
+    const auth = new DrizzleAuthRepository(db);
+    await db.insert(users).values({
+      id: randomUUID(),
+      email: "literalX@example.test",
+      displayName: "Wildcard collision",
+    });
+    expect(await auth.findUserByEmail("literal_@example.test")).toBeUndefined();
+    expect(await auth.findUserByEmail("literal%@example.test")).toBeUndefined();
+
+    for (const email of ["literal_@example.test", "literal%@example.test"]) {
+      const id = randomUUID();
+      await db.insert(users).values({ id, email, displayName: "Literal email owner" });
+      expect(await auth.findUserByEmail(email)).toMatchObject({ id, email });
+      expect(await auth.findUserByEmail(email.toUpperCase())).toMatchObject({ id, email });
+    }
+  });
+
   it("exports portable member data through explicit secret-free allowlists", async () => {
     const exported = await repository.exportData(deletingUserId);
     expect(exported).toMatchObject({

@@ -570,6 +570,73 @@ describe("ESPN supplemental snapshot normalizer", () => {
     });
   });
 
+  it("preserves newly reported failure codes alongside executed transactions", () => {
+    const transactions = ["EXECUTED", "FAILED_BIDTOOLOW", "FAILED_INSUFFICIENTFUNDS"].map(
+      (status, index) => ({
+        ...transaction({
+          id: `00000000-0000-4000-8000-00000000820${index}`,
+          type: "WAIVER",
+          status: "EXECUTED",
+          teamId: 1,
+          bidAmount: 10,
+          items: [],
+        }),
+        status,
+      }),
+    );
+    const result = normalizeEspnSupplementalSnapshot(
+      envelope({
+        kind: "structured-transactions",
+        week: 7,
+        views: ["mTransactions2"],
+        payload: { id: "7654321", seasonId: 2025, scoringPeriodId: 7, transactions },
+      }),
+    );
+    expect(result).toMatchObject({
+      transactions: [
+        { status: "executed", providerStatus: "EXECUTED" },
+        { status: "failed", providerStatus: "FAILED_BIDTOOLOW" },
+        { status: "failed", providerStatus: "FAILED_INSUFFICIENTFUNDS" },
+      ],
+    });
+  });
+
+  it.each([
+    "NEW_SUCCESS",
+    "FAILED_",
+    "FAILED_lowercase",
+    "FAILED_BAD CODE",
+    `FAILED_${"X".repeat(96)}`,
+  ])("rejects malformed or semantically unknown transaction status %s", (status) => {
+    expect(() =>
+      normalizeEspnSupplementalSnapshot(
+        envelope({
+          kind: "structured-transactions",
+          week: 7,
+          views: ["mTransactions2"],
+          payload: {
+            id: "7654321",
+            seasonId: 2025,
+            scoringPeriodId: 7,
+            transactions: [
+              {
+                ...transaction({
+                  id: "00000000-0000-4000-8000-000000008210",
+                  type: "WAIVER",
+                  status: "EXECUTED",
+                  teamId: 1,
+                  bidAmount: 10,
+                  items: [],
+                }),
+                status,
+              },
+            ],
+          },
+        }),
+      ),
+    ).toThrow(EspnSupplementalNormalizationError);
+  });
+
   it.each([
     ["AUCTION", "auction", 42, 200],
     ["SNAKE", "snake", null, null],

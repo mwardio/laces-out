@@ -35,10 +35,10 @@ export interface AiToolResultInput {
 
 /**
  * Opaque, adapter-owned resume handle. The orchestrator must never inspect it — Gemini needs
- * `previous_interaction_id`, and the message-shaped providers need the accumulated transcript.
+ * its complete stateless step history, and message-shaped providers need the accumulated transcript.
  */
 export type AiConversationState =
-  | { readonly kind: "gemini-interaction"; readonly previousInteractionId: string }
+  | { readonly kind: "gemini-stateless"; readonly steps: readonly unknown[] }
   | { readonly kind: "messages"; readonly messages: readonly unknown[] };
 
 export interface AiCompletionInput {
@@ -378,13 +378,21 @@ class GeminiAdapter implements AiProviderAdapter {
       call_id: result.callId,
       result: [{ type: "text", text: result.resultJson }],
     }));
+    // store:false prevents server-side continuation by previous_interaction_id. Replay every
+    // returned step, including opaque thought signatures, as documented for stateless tools:
+    // https://ai.google.dev/gemini-api/docs/function-calling#stateless-function-calling
+    const history =
+      input.conversation?.kind === "gemini-stateless"
+        ? input.conversation.steps
+        : [{ type: "user_input", content: [{ type: "text", text: input.prompt }] }];
+    const requestInput = usesTools ? [...history, ...(toolResultTurn ?? [])] : input.prompt;
     const { body, response } = await postJson({
       provider: "gemini",
       url: usesTools ? GEMINI_TOOL_INTERACTIONS_URL : GEMINI_INTERACTIONS_URL,
       headers: { "x-goog-api-key": input.apiKey },
       body: {
         model: input.model,
-        input: toolResultTurn?.length ? toolResultTurn : input.prompt,
+        input: requestInput,
         system_instruction: input.system,
         generation_config: {
           max_output_tokens: input.maxOutputTokens,
@@ -405,9 +413,6 @@ class GeminiAdapter implements AiProviderAdapter {
                 parameters: tool.parameters,
               })),
             }
-          : {}),
-        ...(input.conversation?.kind === "gemini-interaction"
-          ? { previous_interaction_id: input.conversation.previousInteractionId }
           : {}),
       },
       fetcher: this.#fetcher,
@@ -443,8 +448,11 @@ class GeminiAdapter implements AiProviderAdapter {
       cacheWriteTokens: 0,
       toolCalls,
       stopReason: toolCalls.length > 0 ? "tool-calls" : "end",
-      conversation: interactionId
-        ? { kind: "gemini-interaction", previousInteractionId: interactionId }
+      conversation: usesTools
+        ? {
+            kind: "gemini-stateless",
+            steps: [...history, ...(toolResultTurn ?? []), ...list(root?.steps)],
+          }
         : null,
     };
   }

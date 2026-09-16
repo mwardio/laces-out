@@ -308,14 +308,26 @@ describe("AI provider adapters", () => {
       { callId: "call_1", name: "get_lineup_recommendation", argumentsValue: { week: 3 } },
     ]);
     expect(result.conversation).toEqual({
-      kind: "gemini-interaction",
-      previousInteractionId: "interaction_1",
+      kind: "gemini-stateless",
+      steps: [
+        { type: "user_input", content: [{ type: "text", text: input.prompt }] },
+        {
+          type: "function_call",
+          id: "call_1",
+          name: "get_lineup_recommendation",
+          arguments: { week: 3 },
+        },
+      ],
     });
     // A tool-only turn carries no prose, and that is not a provider error.
     expect(result.text).toBe("");
   });
 
-  it("returns a Gemini function_result and links it to the prior interaction", async () => {
+  it("returns a Gemini function_result with the preceding stateless history", async () => {
+    const history = [
+      { type: "user_input", content: [{ type: "text", text: input.prompt }] },
+      { type: "function_call", id: "call_1", name: "get_lineup_recommendation", arguments: {} },
+    ];
     const fetcher = vi.fn<Fetcher>(() =>
       Promise.resolve(
         new Response(
@@ -333,15 +345,16 @@ describe("AI provider adapters", () => {
     const result = await adapter.complete({
       ...input,
       model: "gemini-3.6-flash",
-      conversation: { kind: "gemini-interaction", previousInteractionId: "interaction_1" },
+      conversation: { kind: "gemini-stateless", steps: history },
       toolResults: [
         { callId: "call_1", name: "get_lineup_recommendation", resultJson: '{"lineup":{}}' },
       ],
     });
 
     expect(requestBody(fetcher)).toMatchObject({
-      previous_interaction_id: "interaction_1",
+      store: false,
       input: [
+        ...history,
         {
           type: "function_result",
           name: "get_lineup_recommendation",
@@ -350,9 +363,89 @@ describe("AI provider adapters", () => {
         },
       ],
     });
+    expect(requestBody(fetcher)).not.toHaveProperty("previous_interaction_id");
     expect(result.stopReason).toBe("end");
     expect(result.text).toBe("Start Reed.");
     expect(result.toolCalls).toEqual([]);
+  });
+
+  it("replays complete stateless Gemini tool history across three turns", async () => {
+    const firstSteps = [
+      { type: "thought", signature: "opaque-thought-signature", content: [] },
+      { type: "function_call", id: "call_a", name: "get_lineup_recommendation", arguments: {} },
+    ];
+    const secondSteps = [
+      { type: "thought", signature: "second-signature", content: [] },
+      { type: "function_call", id: "call_b", name: "get_lineup_recommendation", arguments: {} },
+    ];
+    const replies = [
+      firstSteps,
+      secondSteps,
+      [{ type: "model_output", content: [{ type: "text", text: "Keep the lineup." }] }],
+    ];
+    const requests: Record<string, unknown>[] = [];
+    const fetcher = vi.fn<Fetcher>((_url, init) => {
+      if (typeof init?.body !== "string") throw new Error("Expected a JSON request body");
+      const body = JSON.parse(init.body) as Record<string, unknown>;
+      requests.push(body);
+      if (body.previous_interaction_id) {
+        return Promise.resolve(
+          new Response('{"error":{"code":"INVALID_ARGUMENT"}}', { status: 400 }),
+        );
+      }
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({
+            id: `unstored-${requests.length}`,
+            steps: replies[requests.length - 1],
+          }),
+          { status: 200 },
+        ),
+      );
+    });
+    const adapter = createAiProviderAdapters("https://laces.test", fetcher).gemini;
+    const base = { ...input, model: "gemini-3.6-flash", tools: [LINEUP_TOOL_SPEC] };
+    const first = await adapter.complete(base);
+    const resultA = {
+      callId: "call_a",
+      name: "get_lineup_recommendation",
+      resultJson: '{"version":1}',
+    };
+    const second = await adapter.complete({
+      ...base,
+      conversation: first.conversation!,
+      toolResults: [resultA],
+    });
+    const resultB = {
+      callId: "call_b",
+      name: "get_lineup_recommendation",
+      resultJson: '{"version":2}',
+    };
+    const third = await adapter.complete({
+      ...base,
+      conversation: second.conversation!,
+      toolResults: [resultB],
+    });
+
+    const userStep = { type: "user_input", content: [{ type: "text", text: input.prompt }] };
+    const functionResult = (result: typeof resultA) => ({
+      type: "function_result",
+      name: result.name,
+      call_id: result.callId,
+      result: [{ type: "text", text: result.resultJson }],
+    });
+    expect(requests.map((request) => request.store)).toEqual([false, false, false]);
+    expect(requests.every((request) => !("previous_interaction_id" in request))).toBe(true);
+    expect(requests[0]?.input).toEqual([userStep]);
+    expect(requests[1]?.input).toEqual([userStep, ...firstSteps, functionResult(resultA)]);
+    expect(requests[2]?.input).toEqual([
+      userStep,
+      ...firstSteps,
+      functionResult(resultA),
+      ...secondSteps,
+      functionResult(resultB),
+    ]);
+    expect(third.text).toBe("Keep the lineup.");
   });
 
   it("publishes a capability matrix and refuses tools a model cannot use", async () => {

@@ -204,12 +204,15 @@ describe.skipIf(!dockerAvailable)("AI usage reservations against real PostgreSQL
     return value!;
   }
 
-  async function credential(userId: string): Promise<string> {
+  async function credential(
+    userId: string,
+    provider: AiUsageReservationRequest["provider"] = "openai",
+  ): Promise<string> {
     const [value] = await db
       .insert(aiProviderCredentials)
       .values({
         userId,
-        provider: "openai",
+        provider,
         label: "Test credential",
         model: "gpt-test",
         credentialFingerprintHash: "f".repeat(64),
@@ -295,6 +298,36 @@ describe.skipIf(!dockerAvailable)("AI usage reservations against real PostgreSQL
     expect(await row(id)).toEqual({ ...before, credentialId: null });
     await db.delete(users).where(eq(users.id, input.userId));
     expect(await row(id)).toEqual({ ...before, credentialId: null, userId: null });
+  });
+
+  it("keeps deleted BYOK usage separate from the included allowance", async () => {
+    const managed = await request({ provider: "gemini", model: "gemini-test" });
+    const credentialId = await credential(managed.userId, "gemini");
+    const byok = {
+      ...managed,
+      credentialId,
+      metadata: { ...managed.metadata, accessMode: "byok" },
+    };
+    const byokId = await reserve(byok);
+    await repository.finalizeUsage(completion(byokId));
+    await db.delete(aiProviderCredentials).where(eq(aiProviderCredentials.id, credentialId));
+
+    expect(await row(byokId)).toMatchObject({
+      credentialId: null,
+      metadata: { accessMode: "byok" },
+    });
+    expect(await repository.countUsageSince(managed.userId, "gemini", SINCE, null)).toBe(0);
+    const managedId = await reserve(managed);
+    expect(managedId).not.toBe(byokId);
+    expect(await repository.countUsageSince(managed.userId, "gemini", SINCE, null)).toBe(1);
+    expect(await repository.reserveDailyRequest(managed)).toBeNull();
+  });
+
+  it("keeps legacy null-credential usage without access-mode metadata counted", async () => {
+    const input = await request({ metadata: { budgetScope: "recap-medium" } });
+    await reserve(input);
+    expect(await repository.countUsageSince(input.userId, input.provider, SINCE, null)).toBe(1);
+    expect(await repository.reserveDailyRequest(input)).toBeNull();
   });
 
   it("refunds only a recorded server accounting failure without erasing its audit row", async () => {

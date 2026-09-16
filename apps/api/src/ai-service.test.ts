@@ -343,9 +343,11 @@ function serviceFixture(
       });
     },
   );
+  const decisionSnapshot = vi.fn(() => Promise.resolve(decisions));
   return {
     repository,
     analyticsSnapshot,
+    decisionSnapshot,
     service: new AiService({
       repository,
       credentialKey: KEY,
@@ -355,7 +357,7 @@ function serviceFixture(
           dashboard instanceof Error ? Promise.reject(dashboard) : Promise.resolve(dashboard),
       },
       decisions: {
-        getSnapshot: () => Promise.resolve(decisions),
+        getSnapshot: decisionSnapshot,
       },
       analytics: { getSnapshot: analyticsSnapshot },
       ...(managedGemini ? { managedGemini } : {}),
@@ -1077,7 +1079,7 @@ describe("AI service", () => {
           { callId: "c1", name: "get_lineup_recommendation", argumentsValue: { week: 3 } },
         ],
         stopReason: "tool-calls",
-        conversation: { kind: "gemini-interaction", previousInteractionId: "i1" },
+        conversation: { kind: "gemini-stateless", steps: [] },
       })
       .mockResolvedValueOnce({
         text: "Your lineup is already optimized under the current projection set.",
@@ -1128,6 +1130,106 @@ describe("AI service", () => {
     expect(complete.mock.calls[0]?.[0].system).toContain("The tool list above is fixed");
   });
 
+  it("retains completed tool-turn usage when a later provider turn fails", async () => {
+    const repository = new MemoryAiRepository();
+    const finalize = vi.spyOn(repository, "finalizeUsage");
+    const complete = vi
+      .fn<FakeAdapter["complete"]>()
+      .mockResolvedValueOnce({
+        text: "",
+        requestId: "completed-first-turn",
+        inputTokens: 123,
+        outputTokens: 17,
+        toolCalls: [{ callId: "call-1", name: "get_lineup_recommendation", argumentsValue: {} }],
+        stopReason: "tool-calls",
+      })
+      .mockRejectedValueOnce(
+        new AiProviderAdapterError({
+          code: "NETWORK_ERROR",
+          message: "gemini could not be reached.",
+          statusCode: 502,
+        }),
+      );
+    const { service } = serviceFixture(
+      { complete, capabilities: () => TOOL_CAPABLE },
+      repository,
+      { apiKey: "managed-gemini-secret", dailyRequestLimit: 2, maxOutputTokens: 2000 },
+      toolSnapshot(),
+    );
+
+    await expect(
+      service.generateFeature({ userId: USER_ID, leagueId: LEAGUE_ID, feature: "start-sit" }),
+    ).rejects.toMatchObject({ code: "PROVIDER_ERROR" });
+    expect(repository.usage).toMatchObject([
+      { succeeded: true, inputTokens: 123, outputTokens: 17, errorCode: null },
+      { succeeded: false, inputTokens: 0, errorCode: "NETWORK_ERROR" },
+    ]);
+    expect(finalize).toHaveBeenCalledTimes(2);
+    expect(repository.usage[0]?.requestIdHash).toBeTruthy();
+    expect(
+      (await service.listProviders(USER_ID)).providers.find(
+        (provider) => provider.provider === "gemini",
+      ),
+    ).toMatchObject({ requestsToday: 2, requestsRemaining: 0 });
+  });
+
+  it.each(["tool", "ledger"] as const)(
+    "does not misclassify an internal %s failure as a provider error",
+    async (failure) => {
+      const repository = new MemoryAiRepository();
+      const finalize = vi.spyOn(repository, "finalizeUsage");
+      const markError = vi.spyOn(repository, "markError");
+      const internalError = new Error(`${failure} database unavailable`);
+      const complete = vi.fn<FakeAdapter["complete"]>().mockResolvedValue({
+        text: "",
+        requestId: "first-turn",
+        inputTokens: 123,
+        outputTokens: 17,
+        toolCalls: [{ callId: "call-1", name: "get_lineup_recommendation", argumentsValue: {} }],
+        stopReason: "tool-calls",
+      });
+      const { service, decisionSnapshot } = serviceFixture(
+        { complete, capabilities: () => TOOL_CAPABLE },
+        repository,
+        { apiKey: "managed-gemini-secret", dailyRequestLimit: 2, maxOutputTokens: 2000 },
+        toolSnapshot(),
+      );
+      if (failure === "tool") {
+        decisionSnapshot.mockResolvedValueOnce(toolSnapshot()).mockRejectedValueOnce(internalError);
+      } else {
+        finalize.mockRejectedValueOnce(internalError);
+      }
+
+      await expect(
+        service.generateFeature({ userId: USER_ID, leagueId: LEAGUE_ID, feature: "start-sit" }),
+      ).rejects.toBe(internalError);
+      expect(complete).toHaveBeenCalledTimes(1);
+      expect(finalize).toHaveBeenCalledTimes(1);
+      expect(markError).not.toHaveBeenCalled();
+      expect(repository.usage).toHaveLength(1);
+      if (failure === "tool") {
+        expect(repository.usage[0]).toMatchObject({
+          succeeded: true,
+          inputTokens: 123,
+          errorCode: null,
+        });
+      } else {
+        // Unknown recording state keeps the reservation counted, rather than retrying and
+        // double-finalizing it or silently refunding a model call that already happened.
+        expect(repository.usage[0]).toMatchObject({
+          succeeded: false,
+          inputTokens: 0,
+          errorCode: null,
+        });
+      }
+      expect(
+        (await service.listProviders(USER_ID)).providers.find(
+          (provider) => provider.provider === "gemini",
+        )?.requestsToday,
+      ).toBe(1);
+    },
+  );
+
   it("degrades clearly when the selected model cannot use tools", async () => {
     const complete = vi.fn<
       (input: AiCompletionInput) => Promise<Partial<AiCompletionResult> & { text: string }>
@@ -1171,7 +1273,7 @@ describe("AI service", () => {
         cacheWriteTokens: 0,
         toolCalls: [{ callId: "c1", name: "get_lineup_recommendation", argumentsValue: {} }],
         stopReason: "tool-calls" as const,
-        conversation: { kind: "gemini-interaction" as const, previousInteractionId: "i1" },
+        conversation: { kind: "gemini-stateless" as const, steps: [] },
       }),
     );
     const { service } = serviceFixture(

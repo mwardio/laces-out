@@ -8,7 +8,11 @@ import {
   type RosterSlot,
   type TeamId,
 } from "@laces-out/domain";
-import { optimizeLineup, type LineupOptimizationResult } from "@laces-out/engine-lineup";
+import {
+  lineupFitsRosterSlots,
+  optimizeLineup,
+  type LineupOptimizationResult,
+} from "@laces-out/engine-lineup";
 
 export interface TradeHorizon {
   readonly id: string;
@@ -130,7 +134,7 @@ function evaluateRoster(
   horizons: readonly TradeHorizon[],
   projectionsByHorizon: Readonly<Record<string, ProjectionLookup | undefined>>,
   benchWeight: number,
-): EvaluatedRoster {
+): EvaluatedRoster | null {
   let weightedValue = 0;
   const values: Record<string, TradeRosterValue> = {};
   for (const horizon of horizons) {
@@ -141,6 +145,12 @@ function evaluateRoster(
       horizon.metric ?? "mean",
       benchWeight,
     );
+    if (
+      team.rosterSlots &&
+      !lineupFitsRosterSlots(roster, value.lineup.assignments, team.rosterSlots)
+    ) {
+      return null;
+    }
     values[horizon.id] = value;
     weightedValue += horizon.weight * value.totalValue;
   }
@@ -211,6 +221,7 @@ function bestResultingRoster(
       continue;
     }
     const evaluated = evaluateRoster(team, resulting, horizons, projectionsByHorizon, benchWeight);
+    if (evaluated === null) continue;
     if (
       best === null ||
       evaluated.weightedValue > best.evaluated.weightedValue + 1e-9 ||
@@ -392,14 +403,14 @@ export function evaluateTrade(input: EvaluateTradeInput): TradeEvaluation {
     if (bestA === null) {
       diagnostics.push({
         code: "NO_LEGAL_FORCED_DROP",
-        message: `Team ${input.teamA.teamId} cannot make the required legal forced drops`,
+        message: `Team ${input.teamA.teamId} cannot make the required legal forced drops while preserving a compatible starting lineup and bench assignment`,
         teamId: input.teamA.teamId,
       });
     }
     if (bestB === null) {
       diagnostics.push({
         code: "NO_LEGAL_FORCED_DROP",
-        message: `Team ${input.teamB.teamId} cannot make the required legal forced drops`,
+        message: `Team ${input.teamB.teamId} cannot make the required legal forced drops while preserving a compatible starting lineup and bench assignment`,
         teamId: input.teamB.teamId,
       });
     }
@@ -428,6 +439,23 @@ export function evaluateTrade(input: EvaluateTradeInput): TradeEvaluation {
     input.projectionsByHorizon,
     benchWeight,
   );
+  if (beforeA === null || beforeB === null) {
+    return {
+      legal: false,
+      teamA: null,
+      teamB: null,
+      mutuallyBeneficial: false,
+      totalWeightedDelta: 0,
+      fairnessGap: 0,
+      diagnostics: [
+        {
+          code: "ILLEGAL_RESULTING_ROSTER",
+          message:
+            "The optimized starting lineup and remaining bench players cannot share one legal roster assignment; trade value is unavailable.",
+        },
+      ],
+    };
+  }
   const teamA = buildSideEvaluation(
     input.teamA,
     input.sendsFromA,

@@ -15,9 +15,10 @@ import {
 } from "@laces-out/contracts";
 import { Clipboard, Flame, LoaderCircle, Megaphone, RefreshCw, Trash2 } from "lucide-react";
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { apiBaseUrl, parseAiProviderList } from "../lib/api-client";
+import { LatestRequest } from "../lib/latest-request";
 import {
   demoHistoricalRecapBodies,
   demoLeagueRecap,
@@ -117,6 +118,7 @@ export function ReckoningRecapPanel({ leagueId, snapshot, demo }: ReckoningRecap
   const [copied, setCopied] = useState(false);
   const [savingSpice, setSavingSpice] = useState(false);
   const [reloadToken, setReloadToken] = useState(0);
+  const recapRequests = useRef(new LatestRequest());
 
   const availableProviders = useMemo(
     () => providers.filter((provider) => provider.available),
@@ -142,9 +144,14 @@ export function ReckoningRecapPanel({ leagueId, snapshot, demo }: ReckoningRecap
   // The recap reloads whenever the selected week changes; League Intel, providers, and the spice
   // dial each load once and are deliberately not coupled to award availability.
   useEffect(() => {
+    const gate = recapRequests.current;
+    const request = gate.begin(`${leagueId}:${selectedWeek}`);
+    setGenerating(false);
+    setActionError(null);
+    setCopied(false);
     if (demo) {
       setRecap({ state: "ready", response: demoRecapFor(selectedWeek) });
-      return;
+      return () => gate.invalidate();
     }
     if (!leagueId) return;
     setRecap({ state: "loading" });
@@ -161,28 +168,34 @@ export function ReckoningRecapPanel({ leagueId, snapshot, demo }: ReckoningRecap
           },
         );
         if (!response.ok) {
+          const message = await problemMessage(
+            response,
+            `The recap could not be loaded (${response.status}).`,
+          );
+          if (!gate.isCurrent(request)) return;
           setRecap({
             state: "error",
-            message: await problemMessage(
-              response,
-              `The recap could not be loaded (${response.status}).`,
-            ),
+            message,
           });
           return;
         }
         const parsed = parseLeagueRecap(await response.json());
+        if (!gate.isCurrent(request)) return;
         setRecap(
-          parsed
+          parsed && parsed.leagueId === leagueId && parsed.week === selectedWeek
             ? { state: "ready", response: parsed }
             : { state: "error", message: "The recap response failed validation." },
         );
       } catch {
-        if (!controller.signal.aborted) {
+        if (gate.isCurrent(request)) {
           setRecap({ state: "error", message: "The recap could not be loaded." });
         }
       }
     })();
-    return () => controller.abort();
+    return () => {
+      controller.abort();
+      gate.invalidate();
+    };
   }, [demo, leagueId, selectedWeek, reloadToken]);
 
   useEffect(() => {
@@ -208,15 +221,15 @@ export function ReckoningRecapPanel({ leagueId, snapshot, demo }: ReckoningRecap
           signal: controller.signal,
         });
         if (!response.ok) {
-          setCardsMessage(
-            await problemMessage(
-              response,
-              `League Intel could not be loaded (${response.status}).`,
-            ),
+          const message = await problemMessage(
+            response,
+            `League Intel could not be loaded (${response.status}).`,
           );
+          if (!controller.signal.aborted) setCardsMessage(message);
           return;
         }
         const parsed = parseRecapPersonaCards(await response.json());
+        if (controller.signal.aborted) return;
         setCards(parsed);
         setCardsMessage(parsed ? null : "The League Intel response failed validation.");
       } catch {
@@ -272,7 +285,11 @@ export function ReckoningRecapPanel({ leagueId, snapshot, demo }: ReckoningRecap
     return () => window.clearTimeout(timer);
   }, [demo, remainingSeconds]);
 
-  const stored = recap.state === "ready" ? recap.response.recap : null;
+  const hasSelectedRecap =
+    recap.state === "ready" &&
+    (demo || recap.response.leagueId === leagueId) &&
+    recap.response.week === selectedWeek;
+  const stored = hasSelectedRecap && recap.state === "ready" ? recap.response.recap : null;
   const configuredSpiceLevel =
     recap.state === "ready" ? recap.response.configuredSpiceLevel : "medium";
   const usesIncludedGrok =
@@ -295,6 +312,9 @@ export function ReckoningRecapPanel({ leagueId, snapshot, demo }: ReckoningRecap
     }
     setGenerating(true);
     setActionError(null);
+    // A late GET or generation for another week must never replace the selected recap.
+    const gate = recapRequests.current;
+    const request = gate.begin(`${leagueId}:${selectedWeek}`);
     try {
       const response = await fetch(`${apiBaseUrl}/v1/leagues/${leagueId}/recap`, {
         method: "POST",
@@ -306,24 +326,28 @@ export function ReckoningRecapPanel({ leagueId, snapshot, demo }: ReckoningRecap
         }),
       });
       if (!response.ok) {
-        setActionError(
-          await problemMessage(response, `The recap could not be generated (${response.status}).`),
+        const message = await problemMessage(
+          response,
+          `The recap could not be generated (${response.status}).`,
         );
+        if (!gate.isCurrent(request)) return;
+        setActionError(message);
         // An in-progress or cooldown answer is state, not an error: re-read so the wait shows.
         if (response.status === 409 || response.status === 429) setReloadToken((t) => t + 1);
         return;
       }
       const parsed = parseLeagueRecap(await response.json());
-      if (!parsed) {
+      if (!gate.isCurrent(request)) return;
+      if (!parsed || parsed.leagueId !== leagueId || parsed.week !== selectedWeek) {
         setActionError("The generated recap failed validation.");
         return;
       }
       setRecap({ state: "ready", response: parsed });
       void captureProductEvent("reckoning_recap_generated");
     } catch {
-      setActionError("The recap could not be generated.");
+      if (gate.isCurrent(request)) setActionError("The recap could not be generated.");
     } finally {
-      setGenerating(false);
+      if (gate.isCurrent(request)) setGenerating(false);
     }
   }, [demo, generating, leagueId, selectedProvider, selectedWeek, stored]);
 
@@ -472,7 +496,7 @@ export function ReckoningRecapPanel({ leagueId, snapshot, demo }: ReckoningRecap
       ? generation.reasons.map((reason) => reason.message)
       : recapUnavailableReasons(snapshot.weeklyAwards);
   const canGenerate =
-    canGenerateRecap(membership) && (generation === null || generation.state === "available");
+    canGenerateRecap(membership) && hasSelectedRecap && generation?.state === "available";
   const noProvider =
     !demo && providers.length > 0 && availableProviders.length === 0 && !usesIncludedGrok;
 

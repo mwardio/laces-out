@@ -54,7 +54,7 @@ import {
   type RosterSlotKind,
   type RosterSlotType,
 } from "@laces-out/domain";
-import { optimizeLineup, type LineupLock } from "@laces-out/engine-lineup";
+import { lineupFitsRosterSlots, optimizeLineup, type LineupLock } from "@laces-out/engine-lineup";
 import {
   evaluateTrade,
   type TradeEvaluation,
@@ -122,7 +122,7 @@ const MAX_TRADE_PACKAGES = 320;
 const MAX_TRADE_PACKAGES_PER_OPPONENT = 48;
 const MAX_TRADE_POOL_PER_TEAM = 6;
 const MAX_ENGINE_STARTERS = 16;
-const TRADE_BUILDER_ALGORITHM_VERSION = "trade-builder-v1";
+const TRADE_BUILDER_ALGORITHM_VERSION = "trade-builder-v2";
 const MANAGED_PROJECTION_SET_SOURCE = "laces-out-first-party";
 const MANAGED_ROS_PROJECTION_SET_SOURCE = "laces-out-first-party-ros";
 const AUTHORITATIVE_ROS_RELEASE_COMPLETENESS = "full";
@@ -1668,14 +1668,19 @@ function withManagedProjectionsNote<T extends { readonly state: string }>(
   return { ...section, notes: [...available.notes, note] };
 }
 
+const reserveSlotCodes = new Set(["IR", "IR+", "IL", "IL+", "RES", "RESERVE", "NA"]);
+const taxiSlotCodes = new Set(["TAXI", "TS"]);
+const RESERVE_ROSTER_NOTE =
+  "IR and taxi slots and their occupants are excluded from active-lineup and trade value. Activate a reserve player at the provider before including that player; empty reserve slots are not ordinary roster openings.";
+
 function slotType(
   row: DecisionSlotRuleRow,
   positions: readonly Position[],
 ): RosterSlotType | undefined {
   const code = normalizedCode(row.slotCode);
   if (!row.isStarter) {
-    if (["IR", "IR+", "IL", "IL+", "RES", "RESERVE", "NA"].includes(code)) return "IR";
-    if (["TAXI", "TS"].includes(code)) return "TAXI";
+    if (reserveSlotCodes.has(code)) return "IR";
+    if (taxiSlotCodes.has(code)) return "TAXI";
     return "BENCH";
   }
   const direct: Readonly<Record<string, RosterSlotType>> = {
@@ -1805,34 +1810,32 @@ function currentLineupLocks(
   });
 }
 
-interface WaiverRosterModel {
+interface OrdinaryRosterModel {
   readonly roster: readonly Player[];
   readonly rosterCapacity: number;
-  readonly rosterSlots: readonly ExpandedSlot[];
+  readonly rosterSlots: readonly RosterSlot[];
   readonly protectedPlayerIds: readonly PlayerId[];
 }
 
 /**
- * Models an ordinary waiver acquisition against only the active starter/bench roster. Empty
- * IR/taxi slots are not active-roster openings, and their occupants remain outside both waiver
+ * Models advice against only the active starter/bench roster. Empty
+ * IR/taxi slots are not active-roster openings, and their occupants remain outside both
  * valuation and legality. The engine's generic slot matcher is intentionally position-only, so
  * including special slots would otherwise let it activate a stashed player and place the incoming
  * player on IR without verifying either move with the provider.
  */
-function waiverRosterModel(
+function ordinaryRosterModel(
   roster: readonly Player[],
   entries: readonly DecisionRosterEntryRow[],
-  slots: readonly ExpandedSlot[],
-): WaiverRosterModel {
+  slots: readonly RosterSlot[],
+): OrdinaryRosterModel {
   const modeledPlayerIds = new Set<string>(roster.map((player) => player.id));
-  const specialSlotCodes = new Set(
-    slots
-      .filter((slot) => slot.kind === "INJURED_RESERVE" || slot.kind === "TAXI")
-      .map((slot) => slot.sourceCode),
-  );
   const specialPlayerIds = new Set(
     entries
-      .filter((entry) => specialSlotCodes.has(normalizedCode(entry.slotCode)))
+      .filter((entry) => {
+        const code = normalizedCode(entry.slotCode);
+        return reserveSlotCodes.has(code) || taxiSlotCodes.has(code);
+      })
       .map((entry) => entry.playerId),
   );
   const ordinaryRoster = roster.filter((player) => !specialPlayerIds.has(player.id));
@@ -1949,7 +1952,7 @@ class NoLegalWaiverPairingError extends Error {
 }
 
 function evaluateWaiverDecisionView(input: {
-  readonly roster: WaiverRosterModel;
+  readonly roster: OrdinaryRosterModel;
   readonly candidates: readonly Player[];
   readonly starterSlots: readonly ExpandedSlot[];
   readonly projections: ReadonlyMap<string, ProjectionValue>;
@@ -2197,7 +2200,7 @@ export interface TradeSideContext {
 export interface TradeEvaluationContext {
   readonly user: TradeSideContext;
   readonly opponent: TradeSideContext;
-  /** Full roster slots; its length is the roster capacity. */
+  /** Full synced slots; only ordinary starter/bench slots count toward active capacity. */
   readonly slots: readonly RosterSlot[];
   readonly starterSlots: readonly RosterSlot[];
   readonly horizons: readonly TradeHorizon[];
@@ -2212,28 +2215,30 @@ export function evaluateTradePackage(
   context: TradeEvaluationContext,
   tradePackage: TradePackage,
 ): TradeEvaluation {
+  const user = ordinaryRosterModel(context.user.roster, context.user.rosterRows, context.slots);
+  const opponent = ordinaryRosterModel(
+    context.opponent.roster,
+    context.opponent.rosterRows,
+    context.slots,
+  );
   return evaluateTrade({
     teamA: {
       teamId: teamId(context.user.team.id),
       name: context.user.team.name,
-      roster: context.user.roster,
+      roster: user.roster,
       starterSlots: context.starterSlots,
-      rosterSlots: context.slots,
-      rosterCapacity: context.slots.length,
-      protectedPlayerIds: context.user.rosterRows
-        .filter((entry) => entry.locked)
-        .map((entry) => playerId(entry.playerId)),
+      rosterSlots: user.rosterSlots,
+      rosterCapacity: user.rosterCapacity,
+      protectedPlayerIds: user.protectedPlayerIds,
     },
     teamB: {
       teamId: teamId(context.opponent.team.id),
       name: context.opponent.team.name,
-      roster: context.opponent.roster,
+      roster: opponent.roster,
       starterSlots: context.starterSlots,
-      rosterSlots: context.slots,
-      rosterCapacity: context.slots.length,
-      protectedPlayerIds: context.opponent.rosterRows
-        .filter((entry) => entry.locked)
-        .map((entry) => playerId(entry.playerId)),
+      rosterSlots: opponent.rosterSlots,
+      rosterCapacity: opponent.rosterCapacity,
+      protectedPlayerIds: opponent.protectedPlayerIds,
     },
     sendsFromA: tradePackage.sendsFromA,
     sendsFromB: tradePackage.sendsFromB,
@@ -2803,15 +2808,21 @@ export class InSeasonDecisionService {
         ),
       );
     }
+    const activeRoster = slots
+      ? ordinaryRosterModel(userRoster, claimedRosterRows, slots).roster
+      : userRoster;
+    const activeRosterProjected = activeRoster.filter((player) =>
+      projectionById.has(player.id),
+    ).length;
     if (!projectionSet) {
       sharedReasons.push(
         reason("PROJECTIONS_MISSING", projectionsMissingMessage(season, managedProfile)),
       );
-    } else if (claimedRosterProjected !== userRoster.length) {
+    } else if (activeRosterProjected !== activeRoster.length) {
       sharedReasons.push(
         reason(
           "PROJECTION_COVERAGE_INCOMPLETE",
-          `Only ${claimedRosterProjected} of ${userRoster.length} claimed-roster players have compatible projections.`,
+          `Only ${activeRosterProjected} of ${activeRoster.length} active-roster players have compatible projections.`,
         ),
       );
     }
@@ -2902,6 +2913,9 @@ export class InSeasonDecisionService {
       managedProjectionsNote,
     } = loaded.facts;
 
+    const ordinaryRoster = ordinaryRosterModel(userRoster, claimedRosterRows, slots);
+    const activeRoster = ordinaryRoster.roster;
+    const activePlayerIds = new Set<string>(activeRoster.map((player) => player.id));
     const mappedCurrentAssignments = currentAssignments(
       claimedRosterRows,
       rosterPlayerById,
@@ -2914,9 +2928,13 @@ export class InSeasonDecisionService {
         !mappedCurrentAssignments.some((assignment) => assignment.playerId === entry.playerId),
     );
     const lineupMappingComplete =
-      mappedCurrentAssignments.length === currentStarters.length && !unmappedLockedStarter;
+      mappedCurrentAssignments.length === currentStarters.length &&
+      !unmappedLockedStarter &&
+      currentStarters.every((entry) => activePlayerIds.has(entry.playerId));
     const locks = lineupMappingComplete
-      ? currentLineupLocks(claimedRosterRows, rosterPlayerById, mappedCurrentAssignments)
+      ? currentLineupLocks(claimedRosterRows, rosterPlayerById, mappedCurrentAssignments).filter(
+          (lock) => activePlayerIds.has(lock.playerId),
+        )
       : [];
     let lineup: InSeasonDecisionSnapshot["lineup"];
     if (!lineupMappingComplete) {
@@ -2928,18 +2946,21 @@ export class InSeasonDecisionService {
       ]);
     } else {
       const result = optimizeLineup({
-        players: userRoster,
+        players: activeRoster,
         slots: starterSlots,
         projections: projectionById,
         metric: "mean",
         currentAssignments: mappedCurrentAssignments,
         locks,
       });
-      if (!result.feasible) {
+      if (
+        !result.feasible ||
+        !lineupFitsRosterSlots(activeRoster, result.assignments, ordinaryRoster.rosterSlots)
+      ) {
         lineup = unavailable([
           reason(
             "ENGINE_INFEASIBLE",
-            "No complete lineup satisfies the stored roster rules, position eligibility, and recorded true-lock constraints.",
+            "No complete optimized lineup and remaining bench assignment jointly satisfy the stored roster rules, position eligibility, and recorded true-lock constraints.",
           ),
         ]);
       } else {
@@ -2947,10 +2968,10 @@ export class InSeasonDecisionService {
         const comparisonNotes: string[] = [];
         if (
           providerComparison &&
-          userRoster.every((player) => providerComparison.points.has(player.id))
+          activeRoster.every((player) => providerComparison.points.has(player.id))
         ) {
           const providerResult = optimizeLineup({
-            players: userRoster,
+            players: activeRoster,
             slots: starterSlots,
             projections: new Map(
               [...providerComparison.points].map(([id, mean]) => [
@@ -2962,7 +2983,14 @@ export class InSeasonDecisionService {
             currentAssignments: result.assignments,
             locks,
           });
-          if (providerResult.feasible) {
+          if (
+            providerResult.feasible &&
+            lineupFitsRosterSlots(
+              activeRoster,
+              providerResult.assignments,
+              ordinaryRoster.rosterSlots,
+            )
+          ) {
             const modeledIds = new Set(result.assignments.map((assignment) => assignment.playerId));
             const providerIds = new Set(
               providerResult.assignments.map((assignment) => assignment.playerId),
@@ -3033,6 +3061,7 @@ export class InSeasonDecisionService {
           execution,
           notes: [
             ...comparisonNotes,
+            ...(activeRoster.length < userRoster.length ? [RESERVE_ROSTER_NOTE] : []),
             locks.length > 0
               ? `${locks.length} stored true lock${locks.length === 1 ? " was" : "s were"} preserved; complete provider lock coverage remains unavailable.`
               : "No stored true locks were present; that does not verify that every player is unlocked at the provider.",
@@ -3149,7 +3178,7 @@ export class InSeasonDecisionService {
                 .map((signal) => signal.count),
             );
           };
-          const waiverRoster = waiverRosterModel(userRoster, claimedRosterRows, slots);
+          const waiverRoster = ordinaryRosterModel(userRoster, claimedRosterRows, slots);
           const waiverPlayerIds = new Set(waiverRoster.roster.map((player) => player.id));
           const faabEnabled = season.waiverType?.trim().toLowerCase() === "faab";
           const weeklyView = evaluateWaiverDecisionView({
@@ -3317,10 +3346,11 @@ export class InSeasonDecisionService {
         const player = rosterPlayerById.get(entry.playerId);
         return player ? [player] : [];
       });
-      return roster.length > 0 &&
+      const activeOpponent = ordinaryRosterModel(roster, rows, slots).roster;
+      return activeOpponent.length > 0 &&
         roster.length === rows.length &&
-        roster.every((player) => projectionById.has(player.id))
-        ? [{ opponent, rows, roster }]
+        activeOpponent.every((player) => projectionById.has(player.id))
+        ? [{ opponent, rows, roster: activeOpponent }]
         : [];
     });
     let trades: InSeasonDecisionSnapshot["trades"];
@@ -3339,7 +3369,7 @@ export class InSeasonDecisionService {
       );
       for (const candidate of validOpponents) {
         const packages = tradePackages(
-          userRoster,
+          activeRoster,
           candidate.roster,
           projectionById,
           perOpponentBudget,
@@ -3406,6 +3436,9 @@ export class InSeasonDecisionService {
         fairest,
         execution,
         notes: [
+          ...(slots.some((slot) => slot.kind === "INJURED_RESERVE" || slot.kind === "TAXI")
+            ? [RESERVE_ROSTER_NOTE]
+            : []),
           `Evaluated at most ${MAX_TRADE_PACKAGES} deterministic 1-for-1, 2-for-1, and 1-for-2 packages.`,
           `${opponentsWithRoster.length - validOpponents.length} opponent roster${opponentsWithRoster.length - validOpponents.length === 1 ? " was" : "s were"} skipped for incomplete projection coverage.`,
           "Only league-shared team, roster, slot, and projection inputs are exposed; member account data is never included.",
@@ -3481,11 +3514,31 @@ export class InSeasonDecisionService {
       return { outcome: "rejected", code: "PLAYER_NOT_ON_ROSTER" };
     }
 
+    const activeUserRoster = ordinaryRosterModel(
+      facts.userRoster,
+      facts.claimedRosterRows,
+      facts.slots,
+    ).roster;
+    const activeOpponentRoster = ordinaryRosterModel(
+      opponentRoster,
+      opponentRows,
+      facts.slots,
+    ).roster;
+    const activeUserIds = new Set<string>(activeUserRoster.map((player) => player.id));
+    const activeOpponentIds = new Set<string>(activeOpponentRoster.map((player) => player.id));
+    if (
+      !request.sendsPlayerIds.every((id) => activeUserIds.has(id)) ||
+      !request.receivesPlayerIds.every((id) => activeOpponentIds.has(id))
+    ) {
+      return unavailableOutcome([reason("SLOT_RULES_UNSUPPORTED", RESERVE_ROSTER_NOTE)]);
+    }
+
     // The same admission gate the generator applies to a candidate opponent.
     if (
-      opponentRoster.length === 0 ||
-      !opponentRoster.every((player) => facts.projectionById.has(player.id)) ||
-      !facts.userRoster.every((player) => facts.projectionById.has(player.id))
+      activeOpponentRoster.length === 0 ||
+      opponentRoster.length !== opponentRows.length ||
+      !activeOpponentRoster.every((player) => facts.projectionById.has(player.id)) ||
+      !activeUserRoster.every((player) => facts.projectionById.has(player.id))
     ) {
       return unavailableOutcome([
         reason(
@@ -3504,7 +3557,7 @@ export class InSeasonDecisionService {
       rosCandidate,
     );
 
-    const involvedPlayerIds = [...new Set([...userRosterIds, ...opponentRosterIds])].sort();
+    const involvedPlayerIds = [...new Set([...activeUserIds, ...activeOpponentIds])].sort();
     const inputChecksum = hash({
       algorithmVersion: TRADE_BUILDER_ALGORITHM_VERSION,
       leagueSeasonId: facts.season.id,
@@ -3589,6 +3642,9 @@ export class InSeasonDecisionService {
       notes: [
         "Only league-shared team, roster, slot, and projection inputs are exposed; member account data is never included.",
         "Roster legality and forced drops are enforced on the server; the submitted package cannot bypass them.",
+        ...(facts.slots.some((slot) => slot.kind === "INJURED_RESERVE" || slot.kind === "TAXI")
+          ? [RESERVE_ROSTER_NOTE]
+          : []),
       ],
     };
     return { outcome: "evaluated", response };

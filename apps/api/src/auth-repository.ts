@@ -1,4 +1,4 @@
-import { and, eq, gt, ilike, lt, ne } from "drizzle-orm";
+import { and, eq, gt, lt, ne, sql } from "drizzle-orm";
 import { browserHandoffTokens, type Database, sessions, users } from "@laces-out/db";
 
 import {
@@ -26,7 +26,7 @@ export class DrizzleAuthRepository implements AuthRepository {
         emailVerifiedAt: users.emailVerifiedAt,
       })
       .from(users)
-      .where(ilike(users.email, email))
+      .where(sql`lower(${users.email}) = lower(${email})`)
       .limit(1);
     return user;
   }

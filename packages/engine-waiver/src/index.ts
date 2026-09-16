@@ -1,6 +1,5 @@
 import {
   assignPlayersToRosterSlots,
-  isPlayerEligibleForSlot,
   projectionFor,
   type Player,
   type PlayerId,
@@ -9,6 +8,7 @@ import {
   type RosterSlot,
 } from "@laces-out/domain";
 import {
+  lineupFitsRosterSlots,
   optimizeLineup,
   type LineupChange,
   type LineupLock,
@@ -125,40 +125,6 @@ function calculateRosterValue(
     totalValue: lineup.projectedPoints + benchDepthPoints * benchValueWeight,
     lineup,
   };
-}
-
-/**
- * Verifies that the optimizer's chosen starters and the remaining players form one legal full-
- * roster assignment. The lineup optimizer intentionally ignores non-starter slots, while the
- * generic roster matcher does not know about fixed lineup locks; checking the residual bench here
- * prevents those two individually feasible assignments from contradicting each other.
- */
-function optimizedLineupFitsRosterSlots(
-  roster: readonly Player[],
-  value: WaiverRosterValue,
-  rosterSlots: readonly RosterSlot[],
-): boolean {
-  const playerById = new Map(roster.map((player) => [player.id, player]));
-  const slotById = new Map(rosterSlots.map((slot) => [slot.id, slot]));
-  const starterPlayerIds = new Set<PlayerId>();
-  for (const assignment of value.lineup.assignments) {
-    const player = playerById.get(assignment.playerId);
-    const slot = slotById.get(assignment.slotId);
-    if (
-      player === undefined ||
-      slot === undefined ||
-      slot.kind !== "STARTER" ||
-      starterPlayerIds.has(player.id) ||
-      !isPlayerEligibleForSlot(player, slot)
-    ) {
-      return false;
-    }
-    starterPlayerIds.add(player.id);
-  }
-
-  const benchPlayers = roster.filter((player) => !starterPlayerIds.has(player.id));
-  const nonStarterSlots = rosterSlots.filter((slot) => slot.kind !== "STARTER");
-  return assignPlayersToRosterSlots(benchPlayers, nonStarterSlots).feasible;
 }
 
 function moveSignature(move: WaiverMoveEvaluation): string {
@@ -309,9 +275,17 @@ export function evaluateWaiverMoves(input: EvaluateWaiversInput): WaiverEvaluati
         horizonDeltas.some(
           (horizon) =>
             (horizon.before.lineup.feasible &&
-              !optimizedLineupFitsRosterSlots(input.roster, horizon.before, rosterSlots)) ||
+              !lineupFitsRosterSlots(
+                input.roster,
+                horizon.before.lineup.assignments,
+                rosterSlots,
+              )) ||
             (horizon.after.lineup.feasible &&
-              !optimizedLineupFitsRosterSlots(resultingRoster, horizon.after, rosterSlots)),
+              !lineupFitsRosterSlots(
+                resultingRoster,
+                horizon.after.lineup.assignments,
+                rosterSlots,
+              )),
         );
       if (incompleteLockedLineup || violatesFullRosterSlots) {
         diagnostics.push({

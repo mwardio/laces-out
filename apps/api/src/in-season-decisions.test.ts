@@ -1073,6 +1073,160 @@ describe("InSeasonDecisionService", () => {
     },
   );
 
+  it("withholds a starter plan that would put the remaining receiver on an RB-only bench", async () => {
+    const repository = new FakeRepository();
+    repository.slotRules = slotRules.map((rule) =>
+      rule.slotCode === "RB"
+        ? { ...rule, slotCode: "FLEX", eligiblePositions: ["RB", "WR", "TE"] }
+        : rule.slotCode === "BN"
+          ? { ...rule, eligiblePositions: ["RB"] }
+          : rule,
+    );
+    repository.rosterRows = rosterRows.map((row) =>
+      row.playerId === playerIds.aRbOne
+        ? { ...row, slotCode: "BN", isStarter: false }
+        : row.playerId === playerIds.aRbTwo
+          ? {
+              ...row,
+              primaryPosition: "WR",
+              eligiblePositions: ["WR"],
+              slotCode: "FLEX",
+              isStarter: true,
+            }
+          : row,
+    );
+    repository.projectionRows = projectionRows.map((row) =>
+      row.playerId === playerIds.aRbOne
+        ? { ...row, meanPoints: "100" }
+        : row.playerId === playerIds.aRbTwo
+          ? { ...row, primaryPosition: "WR", eligiblePositions: ["WR"], meanPoints: "90" }
+          : row,
+    );
+    const snapshot = await new InSeasonDecisionService(repository, () => NOW).getSnapshot(
+      USER_ID,
+      LEAGUE_ID,
+    );
+    expect(snapshot?.lineup).toMatchObject({
+      state: "unavailable",
+      reasons: [{ code: "ENGINE_INFEASIBLE" }],
+    });
+    if (snapshot?.lineup.state !== "unavailable") throw new Error("Expected unavailable lineup");
+    expect(snapshot.lineup.reasons[0]?.message).toContain("remaining bench assignment");
+  });
+
+  it.each(["IR", "IR+", "NA", "TAXI", "TS"])(
+    "keeps %s occupants outside lineup/trade advice even after their injury status clears",
+    async (reserveCode) => {
+      const repository = new FakeRepository();
+      repository.slotRules = [
+        ...slotRules,
+        {
+          id: "80000000-0000-4000-8000-000000000004",
+          slotCode: reserveCode,
+          count: 1,
+          eligiblePositions: [reserveCode],
+          isStarter: false,
+        },
+      ];
+      const stash = "70000000-0000-4000-8000-000000000008";
+      repository.rosterRows = [
+        ...rosterRows,
+        rosterEntry(SNAPSHOT_A_ID, stash, "Ready But Stashed", "RB", reserveCode, false),
+      ];
+      repository.projectionRows = [
+        ...projectionRows,
+        {
+          ...projectionRows[2]!,
+          playerId: stash,
+          name: "Ready But Stashed",
+          meanPoints: "100",
+          floorPoints: "90",
+          ceilingPoints: "110",
+        },
+      ];
+      const service = new InSeasonDecisionService(repository, () => NOW);
+      const snapshot = await service.getSnapshot(USER_ID, LEAGUE_ID);
+      inSeasonDecisionSnapshotSchema.parse(snapshot);
+      if (snapshot?.lineup.state !== "available" || snapshot.trades.state !== "available") {
+        throw new Error("Expected ordinary roster advice to remain available");
+      }
+      expect(snapshot.lineup.optimalProjectedPoints).toBe(35);
+      expect(snapshot.lineup.assignments.some((assignment) => assignment.player.id === stash)).toBe(
+        false,
+      );
+      expect(snapshot.lineup.notes.join(" ")).toContain(
+        "Activate a reserve player at the provider",
+      );
+      const traded = [...snapshot.trades.bestForMe, ...snapshot.trades.fairest].flatMap((trade) => [
+        ...trade.send,
+        ...trade.receive,
+        ...trade.forcedDropsForUser,
+        ...trade.forcedDropsForPartner,
+      ]);
+      expect(traded.some((player) => player.id === stash)).toBe(false);
+      const explicitlyRequested = await service.evaluateBuiltTrade(USER_ID, LEAGUE_ID, {
+        opponentTeamId: TEAM_B_ID,
+        sendsPlayerIds: [stash],
+        receivesPlayerIds: [playerIds.bQbTwo],
+      });
+      expect(explicitlyRequested).toMatchObject({
+        outcome: "evaluated",
+        response: { state: "unavailable", reasons: [{ code: "SLOT_RULES_UNSUPPORTED" }] },
+      });
+    },
+  );
+
+  it("does not let missing reserve projections block complete ordinary rosters on either trade side", async () => {
+    const repository = new FakeRepository();
+    repository.slotRules = [
+      ...slotRules,
+      {
+        id: "80000000-0000-4000-8000-000000000004",
+        slotCode: "IR",
+        count: 1,
+        eligiblePositions: ["IR"],
+        isStarter: false,
+      },
+    ];
+    repository.rosterRows = [
+      ...rosterRows,
+      rosterEntry(
+        SNAPSHOT_A_ID,
+        "70000000-0000-4000-8000-000000000008",
+        "Unprojected Stash A",
+        "RB",
+        "IR",
+        false,
+      ),
+      rosterEntry(
+        SNAPSHOT_B_ID,
+        "70000000-0000-4000-8000-000000000009",
+        "Unprojected Stash B",
+        "RB",
+        "IR",
+        false,
+      ),
+    ];
+    const service = new InSeasonDecisionService(repository, () => NOW);
+    const snapshot = await service.getSnapshot(USER_ID, LEAGUE_ID);
+    inSeasonDecisionSnapshotSchema.parse(snapshot);
+    expect(snapshot?.lineup.state).toBe("available");
+    expect(snapshot?.waivers.state).toBe("available");
+    expect(snapshot?.trades).toMatchObject({ state: "available", eligibleOpponentCount: 1 });
+    const built = await service.evaluateBuiltTrade(USER_ID, LEAGUE_ID, {
+      opponentTeamId: TEAM_B_ID,
+      sendsPlayerIds: [playerIds.aRbTwo],
+      receivesPlayerIds: [playerIds.bQbTwo],
+    });
+    expect(built).toMatchObject({
+      outcome: "evaluated",
+      response: { state: "available", legal: true },
+    });
+    // Removing an ordinary player's projection must still stop the advice.
+    repository.projectionRows = projectionRows.filter((row) => row.playerId !== playerIds.aRbOne);
+    expect((await service.getSnapshot(USER_ID, LEAGUE_ID))?.lineup.state).toBe("unavailable");
+  });
+
   it("keeps injured-reserve occupants outside active-roster waiver legality", async () => {
     const repository = new FakeRepository();
     const injuredPlayerId = "70000000-0000-4000-8000-000000000008";
@@ -2031,8 +2185,8 @@ describe("InSeasonDecisionSnapshot ADR 0003 provenance", () => {
 });
 
 // Any intentional response-contract change must renew this only after semantic assertions pass.
-// V6 also fingerprints the fresh league-scored provider comparison.
-const SNAPSHOT_FINGERPRINT = "6980538a8f5ab6595050502b481144c8af7513f3e559e60505995ca04cd8f159";
+// V7 excludes reserve slots and occupants from ordinary lineup/trade decisions.
+const SNAPSHOT_FINGERPRINT = "73eb26da2d619c1007942fd102e18d18f7236dc737b77c3d29bd67f7dc0f7eed";
 /**
  * A second guard strips the generated provenance fields so changes elsewhere in the response remain
  * independently visible.
@@ -2250,6 +2404,50 @@ const builderRequest = {
 };
 
 describe("InSeasonDecisionService.evaluateBuiltTrade", () => {
+  it.each(["IR", "TAXI"])(
+    "does not use an empty %s slot to avoid an ordinary trade drop",
+    async (reserveCode) => {
+      const repository = new FakeRepository();
+      const service = new InSeasonDecisionService(repository, () => NOW);
+      const request = {
+        opponentTeamId: TEAM_B_ID,
+        sendsPlayerIds: [playerIds.aRbTwo],
+        receivesPlayerIds: [playerIds.bQbTwo, playerIds.bRbLow],
+      };
+      const ordinary = await service.evaluateBuiltTrade(USER_ID, LEAGUE_ID, request);
+      repository.slotRules = [
+        ...slotRules,
+        {
+          id: "80000000-0000-4000-8000-000000000004",
+          slotCode: reserveCode,
+          count: 1,
+          eligiblePositions: [reserveCode],
+          isStarter: false,
+        },
+      ];
+      const withReserve = await service.evaluateBuiltTrade(USER_ID, LEAGUE_ID, request);
+      if (
+        ordinary.outcome !== "evaluated" ||
+        ordinary.response.state !== "available" ||
+        !ordinary.response.package ||
+        withReserve.outcome !== "evaluated" ||
+        withReserve.response.state !== "available" ||
+        !withReserve.response.package
+      ) {
+        throw new Error("Expected comparable legal trade evaluations");
+      }
+      tradeEvaluationResponseSchema.parse(withReserve.response);
+      expect(ordinary.response.package.forcedDropsForUser).toHaveLength(1);
+      expect(withReserve.response.package.forcedDropsForUser).toEqual(
+        ordinary.response.package.forcedDropsForUser,
+      );
+      expect(withReserve.response.package.userGain).toBe(ordinary.response.package.userGain);
+      expect(withReserve.response.notes.join(" ")).toContain(
+        "empty reserve slots are not ordinary roster openings",
+      );
+    },
+  );
+
   it("returns not-found for a league the user is not a member of", async () => {
     const service = new InSeasonDecisionService(new FakeRepository(), () => NOW);
     await expect(
@@ -2265,7 +2463,7 @@ describe("InSeasonDecisionService.evaluateBuiltTrade", () => {
     expect(() => tradeEvaluationResponseSchema.parse(result.response)).not.toThrow();
     if (result.response.state !== "available") throw new Error("Expected an available response");
     expect(result.response.legal).toBe(true);
-    expect(result.response.algorithmVersion).toBe("trade-builder-v1");
+    expect(result.response.algorithmVersion).toBe("trade-builder-v2");
     expect(result.response.inputChecksum).toMatch(/^[0-9a-f]{64}$/u);
     expect(result.response.package).toMatchObject({
       partner: { id: TEAM_B_ID, name: "The Isotoners" },

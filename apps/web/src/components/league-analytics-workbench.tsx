@@ -1690,7 +1690,12 @@ export function LeagueAnalyticsWorkbench() {
           </div>
           <AnalyticsQuickRead snapshot={analytics.snapshot} />
           <AwardsSection snapshot={analytics.snapshot} isDemo={isDemo} />
-          <ReckoningRecapPanel leagueId={leagueId} snapshot={analytics.snapshot} demo={isDemo} />
+          <ReckoningRecapPanel
+            key={leagueId}
+            leagueId={leagueId}
+            snapshot={analytics.snapshot}
+            demo={isDemo}
+          />
           <Provenance snapshot={analytics.snapshot} />
           <AiCoachPanel
             leagueId={leagueId}

@@ -312,18 +312,16 @@ describe.skipIf(!dockerAvailable())("Projection history against disposable Postg
       })),
     );
     await handle.db.insert(projectionSets).values(approved);
-    await handle.db
-      .insert(playerProjections)
-      .values([
-        ...identities.map((row) => ({
-          projectionSetId: approved.id,
-          playerId: row.canonicalId,
-          meanPoints: "84.247",
-          floorPoints: "40.123",
-          ceilingPoints: "120.456",
-        })),
-        ...fillers.map((id) => ({ projectionSetId: approved.id, playerId: id, meanPoints: "500" })),
-      ]);
+    await handle.db.insert(playerProjections).values([
+      ...identities.map((row) => ({
+        projectionSetId: approved.id,
+        playerId: row.canonicalId,
+        meanPoints: "84.247",
+        floorPoints: "40.123",
+        ceilingPoints: "120.456",
+      })),
+      ...fillers.map((id) => ({ projectionSetId: approved.id, playerId: id, meanPoints: "500" })),
+    ]);
     const decisions = new DrizzleInSeasonDecisionRepository(handle.db);
     expect(
       (await decisions.listTopProjectionPlayers(approved.id, 512)).some((row) =>
@@ -349,15 +347,13 @@ describe.skipIf(!dockerAvailable())("Projection history against disposable Postg
     }
     // A later provider sync can introduce yet another ID after the same release was published.
     const nextAliasId = randomUUID();
-    await handle.db
-      .insert(players)
-      .values({
-        id: nextAliasId,
-        fullName: "Mike Washington Jr.",
-        primaryPosition: "RB",
-        eligiblePositions: ["RB"],
-        nflTeam: "LV",
-      });
+    await handle.db.insert(players).values({
+      id: nextAliasId,
+      fullName: "Mike Washington Jr.",
+      primaryPosition: "RB",
+      eligiblePositions: ["RB"],
+      nflTeam: "LV",
+    });
     expect(await decisions.listProjectionPlayersByIds(approved.id, [nextAliasId])).toMatchObject([
       {
         playerId: nextAliasId,

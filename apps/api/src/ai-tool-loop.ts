@@ -75,6 +75,8 @@ export interface AiToolLoopInput {
    * the documented, expected way to say "no budget left"; the loop degrades rather than failing.
    */
   readonly reserveTurn: (turn: number) => Promise<string>;
+  /** Record completed usage before tools or a later provider invocation can fail. */
+  readonly onTurnCompleted?: (turn: AiToolLoopTurn) => Promise<void>;
   readonly now: () => Date;
 }
 
@@ -166,7 +168,7 @@ export async function runAiToolLoop(input: AiToolLoopInput): Promise<AiToolLoopR
     usage.outputTokens += completion.outputTokens;
     usage.cacheReadTokens += completion.cacheReadTokens;
     usage.cacheWriteTokens += completion.cacheWriteTokens;
-    turns.push({
+    const completedTurn: AiToolLoopTurn = {
       index: turn,
       reservationId,
       usage: {
@@ -176,7 +178,9 @@ export async function runAiToolLoop(input: AiToolLoopInput): Promise<AiToolLoopR
         cacheWriteTokens: completion.cacheWriteTokens,
       },
       requestId: completion.requestId,
-    });
+    };
+    turns.push(completedTurn);
+    await input.onTurnCompleted?.(completedTurn);
     if (completion.requestId) requestIds.push(completion.requestId);
     if (completion.text) answer = completion.text;
 

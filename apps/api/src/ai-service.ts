@@ -78,6 +78,16 @@ function countsTowardDailyLimit() {
   );
 }
 
+function usageCredentialScope(credentialId: string | null) {
+  if (credentialId !== null) return eq(aiUsageLedger.credentialId, credentialId);
+  return and(
+    isNull(aiUsageLedger.credentialId),
+    // Deleting a personal key clears its FK, but must not move its spending into the included
+    // allowance. Legacy rows without an access mode retain their previous counted behavior.
+    sql`${aiUsageLedger.metadata}->>'accessMode' is distinct from 'byok'`,
+  );
+}
+
 export interface ManagedGeminiConfiguration {
   readonly apiKey: string;
   readonly dailyRequestLimit: number;
@@ -339,9 +349,7 @@ export class DrizzleAiRepository implements AiRepository {
           eq(aiUsageLedger.provider, provider),
           gte(aiUsageLedger.occurredAt, since),
           countsTowardDailyLimit(),
-          credentialId === null
-            ? isNull(aiUsageLedger.credentialId)
-            : eq(aiUsageLedger.credentialId, credentialId),
+          usageCredentialScope(credentialId),
         ),
       );
     return result?.value ?? 0;
@@ -363,9 +371,7 @@ export class DrizzleAiRepository implements AiRepository {
             eq(aiUsageLedger.provider, input.provider),
             gte(aiUsageLedger.occurredAt, input.since),
             countsTowardDailyLimit(),
-            input.credentialId === null
-              ? isNull(aiUsageLedger.credentialId)
-              : eq(aiUsageLedger.credentialId, input.credentialId),
+            usageCredentialScope(input.credentialId),
             input.budgetScope
               ? sql`${aiUsageLedger.metadata}->>'budgetScope' = ${input.budgetScope}`
               : undefined,
@@ -1211,52 +1217,50 @@ export class AiService {
     });
     const prompt = `Feature requested: ${definition.title}\n\n${definition.instructions}${input.memberInstructions}\n\nCall ${toolNames.join(" and ")} to retrieve the deterministic result before answering.\n\n${leagueData.block}`;
 
-    const reservations: string[] = [];
-    let loop: AiToolLoopResult;
-    try {
-      loop = await runAiToolLoop({
-        adapter: this.#adapters[input.provider],
-        tools: this.#tools,
-        context: {
-          userId: input.userId,
+    const adapter = this.#adapters[input.provider];
+    let reservationId: string | undefined;
+    const loop = await runAiToolLoop({
+      adapter: {
+        capabilities: (model) => adapter.capabilities(model),
+        complete: async (completionInput) => {
+          // Only an adapter failure belongs in the provider failure path. A tool or ledger
+          // failure must never erase a completed turn's usage or invalidate a good API key.
+          try {
+            return await adapter.complete(completionInput);
+          } catch (error) {
+            if (!reservationId) throw error;
+            return this.#handleProviderFailure({
+              error,
+              reservationId,
+              execution: input.execution,
+              started: input.started,
+            });
+          }
+        },
+      },
+      tools: this.#tools,
+      context: {
+        userId: input.userId,
+        leagueId: input.leagueId,
+        draftId: null,
+        now: this.#now(),
+      },
+      completionInput: {
+        apiKey: input.execution.apiKey,
+        model: input.execution.model,
+        system: analystSystem(leagueData.openTag, leagueData.closeTag, toolNames),
+        prompt,
+        maxOutputTokens: input.execution.maxOutputTokens,
+        safetyIdentifier: this.#safetyIdentifier(input.userId),
+      },
+      reserveTurn: async () => {
+        reservationId = await this.#reserve(input.execution, "league-feature", {
           leagueId: input.leagueId,
-          draftId: null,
-          now: this.#now(),
-        },
-        completionInput: {
-          apiKey: input.execution.apiKey,
-          model: input.execution.model,
-          system: analystSystem(leagueData.openTag, leagueData.closeTag, toolNames),
-          prompt,
-          maxOutputTokens: input.execution.maxOutputTokens,
-          safetyIdentifier: this.#safetyIdentifier(input.userId),
-        },
-        reserveTurn: async () => {
-          const reservationId = await this.#reserve(input.execution, "league-feature", {
-            leagueId: input.leagueId,
-            feature: input.feature,
-          });
-          reservations.push(reservationId);
-          return reservationId;
-        },
-        now: this.#now,
-      });
-    } catch (error) {
-      // A reservation that was taken before the failure still counts; reconcile the last one.
-      const reservationId = reservations.at(-1);
-      if (!reservationId) throw error;
-      return this.#handleProviderFailure({
-        error,
-        reservationId,
-        execution: input.execution,
-        started: input.started,
-      });
-    }
-
-    const completedAt = this.#now();
-    const latencyMs = Date.now() - input.started;
-    await Promise.all(
-      loop.turns.map((turn) =>
+          feature: input.feature,
+        });
+        return reservationId;
+      },
+      onTurnCompleted: (turn) =>
         this.#repository.finalizeUsage({
           reservationId: turn.reservationId,
           requestIdHash: turn.requestId
@@ -1266,14 +1270,15 @@ export class AiService {
           outputTokens: turn.usage.outputTokens,
           cacheReadTokens: turn.usage.cacheReadTokens,
           cacheWriteTokens: turn.usage.cacheWriteTokens,
-          latencyMs,
+          latencyMs: Date.now() - input.started,
           succeeded: true,
           errorCode: null,
-          occurredAt: completedAt,
+          occurredAt: this.#now(),
         }),
-      ),
-    );
+      now: this.#now,
+    });
 
+    const completedAt = this.#now();
     const usage = { inputTokens: loop.usage.inputTokens, outputTokens: loop.usage.outputTokens };
     const base = {
       ...input.envelope,

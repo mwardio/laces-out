@@ -1,4 +1,5 @@
 import {
+  assignPlayersToRosterSlots,
   isPlayerEligibleForSlot,
   projectionFor,
   type Player,
@@ -81,6 +82,40 @@ export interface LineupOptimizationResult {
   readonly projectedPoints: number;
   readonly changes: readonly LineupChange[];
   readonly diagnostics: readonly LineupDiagnostic[];
+}
+
+/**
+ * Starter-only optimization and full-roster matching must describe the same assignment.
+ * Constrained bench eligibility can make their independently feasible plans contradict.
+ */
+export function lineupFitsRosterSlots(
+  players: readonly Player[],
+  assignments: readonly LineupAssignmentInput[],
+  rosterSlots: readonly RosterSlot[],
+): boolean {
+  const playerById = new Map(players.map((player) => [player.id, player]));
+  const slotById = new Map(rosterSlots.map((slot) => [slot.id, slot]));
+  const starterPlayerIds = new Set<PlayerId>();
+  const usedSlots = new Set<RosterSlotId>();
+  for (const assignment of assignments) {
+    const player = playerById.get(assignment.playerId);
+    const slot = slotById.get(assignment.slotId);
+    if (
+      player === undefined ||
+      slot === undefined ||
+      slot.kind !== "STARTER" ||
+      starterPlayerIds.has(player.id) ||
+      usedSlots.has(slot.id) ||
+      !isPlayerEligibleForSlot(player, slot)
+    )
+      return false;
+    starterPlayerIds.add(player.id);
+    usedSlots.add(slot.id);
+  }
+  return assignPlayersToRosterSlots(
+    players.filter((player) => !starterPlayerIds.has(player.id)),
+    rosterSlots.filter((slot) => slot.kind !== "STARTER"),
+  ).feasible;
 }
 
 interface DynamicAssignment {

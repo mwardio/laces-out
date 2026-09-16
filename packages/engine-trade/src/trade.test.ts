@@ -56,6 +56,118 @@ const baseInput = {
 } as const;
 
 describe("evaluateTrade", () => {
+  it("rejects a starter optimum whose leftover receiver cannot occupy the RB-only bench", () => {
+    const constrained = createRosterSlots([
+      { type: "QB", count: 1 },
+      { type: "FLEX", count: 1 },
+      { type: "BENCH", count: 1, eligiblePositions: ["RB"] },
+    ]);
+    const a = [player("aq", "QB"), player("ar", "RB"), player("aw", "WR")];
+    const b = [player("bq", "QB"), player("br", "RB"), player("bw", "WR")];
+    const result = evaluateTrade({
+      teamA: {
+        teamId: teamId("a"),
+        name: "A",
+        roster: a,
+        starterSlots: constrained.filter((slot) => slot.kind === "STARTER"),
+        rosterSlots: constrained,
+      },
+      teamB: {
+        teamId: teamId("b"),
+        name: "B",
+        roster: b,
+        starterSlots: constrained.filter((slot) => slot.kind === "STARTER"),
+        rosterSlots: constrained,
+      },
+      sendsFromA: [playerId("aw")],
+      sendsFromB: [playerId("bw")],
+      horizons: [{ id: "week", label: "Week", weight: 1 }],
+      projectionsByHorizon: {
+        week: Object.fromEntries(
+          Object.entries({ aq: 10, ar: 100, aw: 110, bq: 10, br: 5, bw: 90 }).map(
+            ([id, points]) => [id, projection(points)],
+          ),
+        ),
+      },
+    });
+    expect(result.legal).toBe(false);
+    expect(result.teamA).toBeNull();
+  });
+
+  it("does not compare a legal resulting lineup with an impossible starting/bench baseline", () => {
+    const constrained = createRosterSlots([
+      { type: "QB", count: 1 },
+      { type: "FLEX", count: 1 },
+      { type: "BENCH", count: 1, eligiblePositions: ["RB"] },
+    ]);
+    const result = evaluateTrade({
+      teamA: {
+        teamId: teamId("a"),
+        name: "A",
+        roster: [player("aq", "QB"), player("ar", "RB"), player("aw", "WR")],
+        starterSlots: constrained.filter((slot) => slot.kind === "STARTER"),
+        rosterSlots: constrained,
+      },
+      teamB: {
+        teamId: teamId("b"),
+        name: "B",
+        roster: [player("bq", "QB"), player("br", "RB"), player("bw", "WR")],
+        starterSlots: constrained.filter((slot) => slot.kind === "STARTER"),
+        rosterSlots: constrained,
+      },
+      sendsFromA: [playerId("aw")],
+      sendsFromB: [playerId("bw")],
+      horizons: [{ id: "week", label: "Week", weight: 1 }],
+      projectionsByHorizon: {
+        week: Object.fromEntries(
+          Object.entries({ aq: 10, ar: 100, aw: 90, bq: 10, br: 5, bw: 110 }).map(
+            ([id, points]) => [id, projection(points)],
+          ),
+        ),
+      },
+    });
+    expect(result.legal).toBe(false);
+    expect(result.diagnostics[0]?.code).toBe("ILLEGAL_RESULTING_ROSTER");
+    expect(result.diagnostics[0]?.message).toContain("trade value is unavailable");
+  });
+
+  it("retains a lower-valued legal forced-drop alternative when the best starter plan strands a receiver", () => {
+    const constrained = createRosterSlots([
+      { type: "QB", count: 1 },
+      { type: "FLEX", count: 1 },
+      { type: "BENCH", count: 2, eligiblePositions: ["RB"] },
+    ]);
+    const result = evaluateTrade({
+      teamA: {
+        teamId: teamId("a"),
+        name: "A",
+        roster: [player("aq", "QB"), player("ar", "RB"), player("ar2", "RB"), player("aw", "WR")],
+        starterSlots: constrained.filter((slot) => slot.kind === "STARTER"),
+        rosterSlots: constrained,
+      },
+      teamB: {
+        teamId: teamId("b"),
+        name: "B",
+        roster: [player("bq", "QB"), player("br", "RB"), player("br2", "RB"), player("bw", "WR")],
+        starterSlots: constrained.filter((slot) => slot.kind === "STARTER"),
+        rosterSlots: constrained,
+      },
+      sendsFromA: [playerId("aw")],
+      sendsFromB: [playerId("bw"), playerId("br")],
+      horizons: [{ id: "week", label: "Week", weight: 1 }],
+      projectionsByHorizon: {
+        week: Object.fromEntries(
+          Object.entries({ aq: 10, ar: 100, ar2: 5, aw: 110, bq: 10, br: 3, br2: 2, bw: 90 }).map(
+            ([id, points]) => [id, projection(points)],
+          ),
+        ),
+      },
+    });
+    expect(result.legal).toBe(true);
+    expect(result.teamA?.forcedDropPlayerIds).toEqual([playerId("ar")]);
+    expect(result.teamA?.horizons[0]?.after.lineupPoints).toBe(100);
+  });
+
   it("recognizes a needs-based trade that improves both legal lineups", () => {
     const result = evaluateTrade({
       ...baseInput,

@@ -812,7 +812,11 @@ export class DrizzleEspnSyncPersistence {
           leagueSeasonId: season.id,
           kind: `espn-supplemental:${bundle.kind}`,
           state: "processing",
-          idempotencyKey: input.idempotencyKey,
+          // Recurring content is a new transition, just as on the core snapshot rail. The league
+          // lock pins the predecessor; an immediate retry still takes the unchanged branch.
+          idempotencyKey: latestArtifact
+            ? `${input.idempotencyKey}:after:${latestArtifact.id}`
+            : input.idempotencyKey,
           startedAt: now,
           recordsRead,
           artifactChecksum: input.checksumSha256,

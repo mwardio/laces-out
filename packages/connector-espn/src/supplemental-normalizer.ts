@@ -338,13 +338,14 @@ const transactionSchema = z
       "TRADE_ERROR",
     ]),
     status: z
-      .enum([
-        "EXECUTED",
-        "PENDING",
-        "CANCELED",
-        "FAILED_INVALIDPLAYERSOURCE",
-        "FAILED_PLAYERALREADYDROPPED",
-        "FAILED_ROSTERLIMIT",
+      // Failure reasons are provider extensions, not new transaction outcomes. Keep their exact
+      // bounded code without discarding every executed transaction when ESPN adds a reason.
+      .union([
+        z.enum(["EXECUTED", "PENDING", "CANCELED"]),
+        z
+          .string()
+          .max(96)
+          .regex(/^FAILED_[A-Z0-9_]+$/u),
       ])
       .nullable()
       .optional(),

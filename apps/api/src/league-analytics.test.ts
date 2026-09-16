@@ -930,7 +930,14 @@ async function playoffSnapshot(
   const repository = new FakeRepository();
   repository.teams = playoffTeams;
   repository.observations = overrides.observations ?? withRemainingSchedule;
-  if (overrides.settings) repository.season = { ...season, settings: overrides.settings };
+  repository.season = {
+    ...season,
+    settings: overrides.settings ?? {
+      teamCount: 4,
+      playoffTeamCount: 2,
+      operationalRules: { regularSeasonMatchupPeriods: 3, medianGameEnabled: false },
+    },
+  };
   const snapshot = await new LeagueAnalyticsService(repository, () => NOW).getSnapshot(
     USER_ID,
     LEAGUE_ID,
@@ -991,11 +998,106 @@ describe("LeagueAnalyticsService playoff odds", () => {
   });
 
   it("reports a completed season instead of simulating a schedule with nothing left", async () => {
-    const parsed = await playoffSnapshot({ observations: completedSchedule });
+    const parsed = await playoffSnapshot({
+      observations: completedSchedule,
+      settings: {
+        teamCount: 4,
+        playoffTeamCount: 2,
+        operationalRules: { regularSeasonMatchupPeriods: 2 },
+      },
+    });
 
     expect(parsed.playoffOdds).toMatchObject({
       state: "unavailable",
       reasons: [{ code: "PLAYOFF_SEASON_COMPLETE" }],
+    });
+  });
+
+  it("withholds odds when the qualification cutoff or part of the schedule is missing", async () => {
+    const missingRule = await playoffSnapshot({ settings: { teamCount: 4, playoffTeamCount: 2 } });
+    expect(missingRule.playoffOdds).toMatchObject({
+      state: "unavailable",
+      reasons: [{ code: "PLAYOFF_RULES_MISSING" }],
+    });
+    const shortSchedule = await playoffSnapshot({ observations: completedSchedule });
+    expect(shortSchedule.playoffOdds).toMatchObject({
+      state: "unavailable",
+      reasons: [{ code: "PLAYOFF_SCHEDULE_INCOMPLETE" }],
+    });
+  });
+
+  it("does not add postseason games to the qualification race", async () => {
+    const postseason = withRemainingSchedule
+      .filter((row) => row.week === 3)
+      .map((row) => ({
+        ...row,
+        week: 4,
+        matchupId: `postseason-${row.matchupId}`,
+        providerMatchupId: `postseason-${row.providerMatchupId}`,
+      }));
+    const base = await playoffSnapshot();
+    const extra = await playoffSnapshot({
+      observations: [...withRemainingSchedule, ...postseason],
+    });
+    expect(extra.playoffOdds).toEqual(base.playoffOdds);
+  });
+
+  it("excludes final postseason scores from records, scoring means, and the simulation seed", async () => {
+    const postseason = withRemainingSchedule
+      .filter((row) => row.week === 3)
+      .map((row) => ({
+        ...row,
+        week: 4,
+        status: "final" as const,
+        matchupId: `postseason-${row.matchupId}`,
+        providerMatchupId: `postseason-${row.providerMatchupId}`,
+        snapshotId: "83000000-0000-4000-8000-000000000001",
+        effectiveAt: NOW,
+        homeScore: "10000",
+        awayScore: "-10000",
+      }));
+    const base = await playoffSnapshot();
+    const extra = await playoffSnapshot({
+      observations: [...withRemainingSchedule, ...postseason],
+    });
+    expect(extra.playoffOdds).toEqual(base.playoffOdds);
+  });
+
+  it("withholds median-game league odds instead of ignoring the additional weekly result", async () => {
+    const parsed = await playoffSnapshot({
+      settings: {
+        teamCount: 4,
+        playoffTeamCount: 2,
+        operationalRules: { regularSeasonMatchupPeriods: 3, medianGameEnabled: true },
+      },
+    });
+    expect(parsed.playoffOdds).toMatchObject({
+      state: "unavailable",
+      reasons: [{ code: "PLAYOFF_SIMULATION_UNSUPPORTED" }],
+    });
+    expect(parsed.scores.state).toBe("available");
+  });
+
+  it("requires every league team and every completed score before projecting the playoff race", async () => {
+    const partialField = await playoffSnapshot({
+      settings: {
+        teamCount: 6,
+        playoffTeamCount: 2,
+        operationalRules: { regularSeasonMatchupPeriods: 3 },
+      },
+    });
+    expect(partialField.playoffOdds).toMatchObject({
+      state: "unavailable",
+      reasons: [{ code: "PLAYOFF_FIELD_UNSUPPORTED" }],
+    });
+    const missingScore = await playoffSnapshot({
+      observations: withRemainingSchedule.map((row, index) =>
+        index === 0 ? { ...row, homeScore: null } : row,
+      ),
+    });
+    expect(missingScore.playoffOdds).toMatchObject({
+      state: "unavailable",
+      reasons: [{ code: "PLAYOFF_SCHEDULE_INCOMPLETE" }],
     });
   });
 
