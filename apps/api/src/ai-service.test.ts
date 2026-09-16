@@ -9,6 +9,7 @@ import type {
   AiProviderAdapter,
   AiProviderCapabilities,
 } from "./ai-provider-adapters.js";
+import { AiProviderAdapterError } from "./ai-provider-adapters.js";
 import {
   AiService,
   AI_PROVIDER_DEFAULTS,
@@ -31,6 +32,14 @@ const NOW = new Date("2026-09-18T12:00:00.000Z");
 const KEY = parseCredentialKey(`base64:${Buffer.alloc(32, 9).toString("base64")}`, {
   keyId: "ai-test-key",
 });
+
+function recapOutputText(week: number) {
+  return JSON.stringify({
+    week,
+    status: "written",
+    body: `**Week ${week} recap**\n\nThe completed matchups delivered a tight finish and a clear beatdown. The supplied awards tell the story; withheld awards stay out of the recap. The verdict: a rough week for the league's loudest fantasy egos.`,
+  });
+}
 
 type MutableUsageRow = { -readonly [K in keyof AiUsageRecord]: AiUsageRecord[K] } & {
   id: string;
@@ -166,7 +175,6 @@ class MemoryAiRepository implements AiRepository {
       record.latencyMs = input.latencyMs;
       record.succeeded = input.succeeded;
       record.errorCode = input.errorCode;
-      record.occurredAt = input.occurredAt;
     }
     return Promise.resolve();
   }
@@ -314,11 +322,25 @@ function serviceFixture(
     openrouter: wrapped,
   };
   const analyticsSnapshot = vi.fn(
-    (userId: string, leagueId: string, options?: { readonly weeklyAwardsWeek?: number }) => {
+    (
+      userId: string,
+      leagueId: string,
+      options?: { readonly weeklyAwardsWeek?: number },
+    ): Promise<unknown> => {
       void userId;
       void leagueId;
-      void options;
-      return Promise.resolve({ power: { state: "available", rank: 4 }, opponentScout: {} });
+      return Promise.resolve({
+        league: { id: LEAGUE_ID, name: "Wide Right League", season: 2026, currentWeek: 3 },
+        weeklyAwards: {
+          state: "available",
+          week: options?.weeklyAwardsWeek ?? 1,
+          awards: [],
+          withheld: [],
+          definitions: [],
+        },
+        power: { state: "available", rank: 4 },
+        opponentScout: {},
+      });
     },
   );
   return {
@@ -345,6 +367,179 @@ function serviceFixture(
 }
 
 describe("AI service", () => {
+  it.each(["connection-test", "league-analysis", "weekly-recap"] as const)(
+    "does not blame the provider or overwrite successful usage when %s persistence fails",
+    async (operation) => {
+      const complete = vi.fn(() =>
+        Promise.resolve({
+          text: operation === "weekly-recap" ? recapOutputText(1) : "Completed response",
+          inputTokens: 120,
+          outputTokens: 35,
+        }),
+      );
+      const { service, repository } = serviceFixture({ complete });
+      await service.saveProvider(USER_ID, "openai", {
+        apiKey: "test-only-key",
+        model: "test-model",
+        dailyRequestLimit: 10,
+        maxOutputTokens: 700,
+      });
+      const databaseError = new Error("Usage write failed");
+      const finalize = vi.spyOn(repository, "finalizeUsage").mockRejectedValue(databaseError);
+      const markError = vi.spyOn(repository, "markError");
+      const request =
+        operation === "connection-test"
+          ? service.testProvider(USER_ID, "openai")
+          : operation === "league-analysis"
+            ? service.analyzeLeague({
+                userId: USER_ID,
+                leagueId: LEAGUE_ID,
+                provider: "openai",
+                question: "Review the week",
+              })
+            : service.generateFeature({
+                userId: USER_ID,
+                leagueId: LEAGUE_ID,
+                provider: "openai",
+                feature: "weekly-recap",
+                weeklyAwardsWeek: 1,
+              });
+      await expect(request).rejects.toBe(databaseError);
+      expect(complete).toHaveBeenCalledTimes(1);
+      expect(finalize).toHaveBeenCalledTimes(1);
+      expect(finalize.mock.calls[0]?.[0]).toMatchObject({
+        succeeded: true,
+        inputTokens: 120,
+        outputTokens: 35,
+        errorCode: null,
+      });
+      expect(markError).not.toHaveBeenCalled();
+    },
+  );
+
+  it("does not reserve a recap allowance when loading League Intel fails", async () => {
+    const complete = vi.fn(() => Promise.resolve({ text: "Unused" }));
+    const repository = new MemoryAiRepository();
+    const { service } = serviceFixture(
+      { complete },
+      repository,
+      { apiKey: "managed-test-key", dailyRequestLimit: 1, maxOutputTokens: 700 },
+      undefined,
+      undefined,
+      { getPromptInputs: () => Promise.reject(new Error("League Intel unavailable")) },
+    );
+    await expect(
+      service.generateFeature({
+        userId: USER_ID,
+        leagueId: LEAGUE_ID,
+        feature: "weekly-recap",
+        weeklyAwardsWeek: 1,
+      }),
+    ).rejects.toThrow("League Intel unavailable");
+    expect(repository.usage).toHaveLength(0);
+    expect(complete).not.toHaveBeenCalled();
+  });
+
+  it("recaps the selected week without current-week dashboard or Decision Desk dependencies", async () => {
+    const complete = vi.fn((input: AiCompletionInput) => {
+      void input;
+      return Promise.resolve({ text: recapOutputText(1) });
+    });
+    const { service, analyticsSnapshot } = serviceFixture(
+      { complete },
+      new MemoryAiRepository(),
+      { apiKey: "managed-test-key", dailyRequestLimit: 1, maxOutputTokens: 700 },
+      new Error("Current lineup unavailable"),
+      new Error("Current dashboard unavailable"),
+    );
+    analyticsSnapshot.mockResolvedValue({
+      league: { id: LEAGUE_ID, name: "The Test League", season: 2026, currentWeek: 2 },
+      opponentScout: {
+        matchups: Array.from({ length: 200 }, () => "CURRENT-WEEK-TWO".repeat(100)),
+      },
+      weeklyAwards: { state: "available", week: 1, awards: [], withheld: [], definitions: [] },
+    });
+    const response = await service.generateFeature({
+      userId: USER_ID,
+      leagueId: LEAGUE_ID,
+      feature: "weekly-recap",
+      weeklyAwardsWeek: 1,
+    });
+    expect(response.answer).toContain("**Week 1 recap**");
+    expect(response.answer).not.toContain('"status"');
+    const prompt = complete.mock.calls[0]?.[0].prompt ?? "";
+    expect(prompt).toContain("Requested recap week: 1");
+    expect(prompt).toContain('"weeklyAwards":{"state":"available","week":1');
+    expect(prompt).not.toContain("CURRENT-WEEK-TWO");
+    expect(prompt).not.toContain("Decision Desk");
+  });
+
+  it.each([
+    "**Week 2 recap unavailable.** No completed matchup results appear in the supplied data.",
+    recapOutputText(2),
+  ])(
+    "rejects an unusable or wrong-week recap while retaining actual provider usage",
+    async (text) => {
+      const complete = vi.fn(() => Promise.resolve({ text, inputTokens: 90, outputTokens: 30 }));
+      const { service, repository } = serviceFixture({ complete }, new MemoryAiRepository(), {
+        apiKey: "managed-test-key",
+        dailyRequestLimit: 1,
+        maxOutputTokens: 700,
+      });
+      await expect(
+        service.generateFeature({
+          userId: USER_ID,
+          leagueId: LEAGUE_ID,
+          feature: "weekly-recap",
+          weeklyAwardsWeek: 1,
+        }),
+      ).rejects.toMatchObject({ code: "PROVIDER_ERROR", statusCode: 502 });
+      expect(repository.usage).toHaveLength(1);
+      expect(repository.usage[0]).toMatchObject({
+        succeeded: false,
+        errorCode: "INVALID_RECAP_OUTPUT",
+        inputTokens: 90,
+        outputTokens: 30,
+      });
+    },
+  );
+
+  it("records an actual provider failure once and keeps it counted against the allowance", async () => {
+    const complete = vi.fn(() =>
+      Promise.reject(
+        new AiProviderAdapterError({
+          code: "PROVIDER_TIMEOUT",
+          message: "The provider timed out. Try again shortly.",
+          statusCode: 502,
+        }),
+      ),
+    );
+    const { service, repository } = serviceFixture({ complete }, new MemoryAiRepository(), {
+      apiKey: "managed-test-key",
+      dailyRequestLimit: 1,
+      maxOutputTokens: 700,
+    });
+    await expect(
+      service.generateFeature({
+        userId: USER_ID,
+        leagueId: LEAGUE_ID,
+        feature: "weekly-recap",
+      }),
+    ).rejects.toMatchObject({ code: "PROVIDER_ERROR", statusCode: 502 });
+    expect(repository.usage).toHaveLength(1);
+    expect(repository.usage[0]).toMatchObject({
+      succeeded: false,
+      errorCode: "PROVIDER_TIMEOUT",
+    });
+    await expect(
+      service.generateFeature({
+        userId: USER_ID,
+        leagueId: LEAGUE_ID,
+        feature: "weekly-recap",
+      }),
+    ).rejects.toMatchObject({ code: "DAILY_LIMIT" });
+    expect(complete).toHaveBeenCalledTimes(1);
+  });
   it("encrypts a write-only key, tests it, and grounds analysis in all three league sources", async () => {
     const complete = vi.fn((input: AiCompletionInput) =>
       Promise.resolve({
@@ -1054,7 +1249,7 @@ describe("weekly recap personalization", () => {
     return vi.fn((input: AiCompletionInput) => {
       void input;
       return Promise.resolve({
-        text: "The recap",
+        text: recapOutputText(Number(/Requested recap week: (\d+)/u.exec(input.prompt)?.[1] ?? 1)),
         requestId: "recap-request",
         inputTokens: 20,
         outputTokens: 10,

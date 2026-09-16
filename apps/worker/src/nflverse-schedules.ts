@@ -24,7 +24,7 @@ import { and, eq, lte } from "drizzle-orm";
 const checkIntervalMinutes = 45;
 const claimMinutes = 30;
 const chunkSize = 500;
-const sourceSchemaVersion = 2;
+const sourceSchemaVersion = 3;
 
 export interface ScheduleRefreshResult {
   readonly sourceKey: string;
@@ -49,7 +49,7 @@ function sourceKey(season: number): string {
   return `nflverse.schedules.${season}`;
 }
 
-function stableGame(game: NflverseScheduleGame): string {
+function stableGame(game: NflverseScheduleGame, checkedAt: Date): string {
   return JSON.stringify([
     game.gameId,
     game.season,
@@ -66,14 +66,20 @@ function stableGame(game: NflverseScheduleGame): string {
     game.awayRestDays,
     game.homeRestDays,
     game.venue,
-    game.status,
+    conservativeScheduleStatus(game, nflEasternKickoffAt(game), checkedAt),
   ]);
 }
 
-/** Hashes only the selected season rows, so an unrelated historical correction is a no-op. */
-export function scheduleSelectionChecksum(games: readonly NflverseScheduleGame[]): string {
+/** Binds the immutable snapshot to the statuses we persist, including time-based finality. */
+export function scheduleSelectionChecksum(
+  games: readonly NflverseScheduleGame[],
+  checkedAt: Date,
+): string {
   const ordered = [...games].sort((left, right) => left.gameId.localeCompare(right.gameId));
-  return createHash("sha256").update(ordered.map(stableGame).join("\n"), "utf8").digest("hex");
+  return createHash("sha256")
+    .update(`schedule-v${sourceSchemaVersion}\n`, "utf8")
+    .update(ordered.map((game) => stableGame(game, checkedAt)).join("\n"), "utf8")
+    .digest("hex");
 }
 
 /**
@@ -187,6 +193,23 @@ export function conservativeScheduleStatus(
     : "in-progress";
 }
 
+/** A cached artifact must be parsed again when one of its provisional statuses can advance. */
+export function scheduleStatusRecheckAt(
+  games: readonly NflverseScheduleGame[],
+  checkedAt: Date,
+): Date | null {
+  let earliest: number | null = null;
+  for (const game of games) {
+    const kickoffAt = nflEasternKickoffAt(game);
+    if (conservativeScheduleStatus(game, kickoffAt, checkedAt) !== "in-progress" || !kickoffAt) {
+      continue;
+    }
+    const recheckAt = kickoffAt.getTime() + CONSERVATIVE_FINAL_ELAPSED_MS;
+    earliest = earliest === null ? recheckAt : Math.min(earliest, recheckAt);
+  }
+  return earliest === null ? null : new Date(earliest);
+}
+
 function metadataChecksum(metadata: SourceRow["metadata"]): string | null {
   const value = metadata.artifactChecksumSha256;
   return typeof value === "string" && /^[a-f0-9]{64}$/u.test(value) ? value : null;
@@ -288,13 +311,19 @@ export class NflverseScheduleRefresher {
       const selectionKey = `${season}:REG`;
       const source = stableSource;
       const schemaReplay = source.metadata.sourceSchemaVersion !== sourceSchemaVersion;
+      const statusRecheckAt = source.metadata.statusRecheckAt;
+      const statusReplay =
+        typeof statusRecheckAt === "string" && new Date(statusRecheckAt).getTime() <= now.getTime();
+      // A 304 or identical-body checksum cannot tell us that our own four-hour guard elapsed.
+      // Fetch and parse the artifact anew, then publish a distinct immutable snapshot if needed.
+      const replay = schemaReplay || statusReplay;
       const result = await this.#source.check(
         season,
         {
-          etag: schemaReplay ? null : source.etag,
-          lastModified: schemaReplay ? null : source.lastModified,
-          checksumSha256: schemaReplay ? null : metadataChecksum(source.metadata),
-          selectionKey: schemaReplay ? null : selectionKey,
+          etag: replay ? null : source.etag,
+          lastModified: replay ? null : source.lastModified,
+          checksumSha256: replay ? null : metadataChecksum(source.metadata),
+          selectionKey: replay ? null : selectionKey,
         },
         { seasonTypes: ["REG"] },
       );
@@ -336,7 +365,8 @@ export class NflverseScheduleRefresher {
       }
 
       assertCompleteModernRegularSeasonSchedule(season, result.games);
-      const inputChecksum = scheduleSelectionChecksum(result.games);
+      const inputChecksum = scheduleSelectionChecksum(result.games, checkedAt);
+      const nextStatusRecheckAt = scheduleStatusRecheckAt(result.games, checkedAt);
       let rowsWritten = 0;
       await this.#database.transaction(async (transaction) => {
         const idempotencyKey = `${key}:${inputChecksum}:v${sourceSchemaVersion}`;
@@ -423,6 +453,7 @@ export class NflverseScheduleRefresher {
               publishable: true,
               selectionKey: result.selectionKey,
               artifactChecksumSha256: result.checksumSha256,
+              statusRecheckAt: nextStatusRecheckAt?.toISOString() ?? null,
               rowsRead: result.rowsRead,
               rowsRejected: result.rowsRejected,
               coveredWeeks: result.coveredWeeks.join(","),

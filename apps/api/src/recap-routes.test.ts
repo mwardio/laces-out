@@ -1,6 +1,7 @@
 import { loadEnvironment } from "@laces-out/config";
 import { describe, expect, it, vi } from "vitest";
 
+import { AiServiceError } from "./ai-service.js";
 import { buildApp } from "./app.js";
 import { AuthService, type AuthRepository } from "./auth.js";
 import type { RecapRoutePort } from "./recap-routes.js";
@@ -200,6 +201,69 @@ describe("recap routes", () => {
     });
 
     expect(generate).toHaveBeenCalledWith(USER_ID, LEAGUE_ID, { week: 5 });
+    await app.close();
+  });
+
+  it.each([
+    new AiServiceError("PROVIDER_ERROR", "openrouter did not respond within 60 seconds.", 502),
+    new AiServiceError(
+      "PROVIDER_ERROR",
+      "Included Grok access through OpenRouter is temporarily unavailable. The Laces Out host needs to check its AI configuration.",
+      503,
+    ),
+    new AiServiceError(
+      "INVALID_CREDENTIAL",
+      "The saved API key could not be decrypted. Replace it in Film room settings.",
+      500,
+    ),
+    new AiServiceError("DAILY_LIMIT", "Today's included recap allowance has been used.", 429),
+  ])("preserves the controlled AI failure explanation: $code ($statusCode)", async (error) => {
+    const app = await recapApp(port({ generate: () => Promise.reject(error) }));
+
+    const response = await app.inject({
+      method: "POST",
+      url: `/v1/leagues/${LEAGUE_ID}/recap`,
+      headers: { cookie: COOKIE },
+      payload: { week: 5 },
+    });
+
+    expect(response.statusCode).toBe(error.statusCode);
+    expect(response.headers["content-type"]).toContain("application/problem+json");
+    expect(response.json()).toMatchObject({
+      type: "https://fantasy.local/problems/recap-generation-failed",
+      title: "The recap could not be generated",
+      status: error.statusCode,
+      detail: error.message,
+      code: error.code,
+    });
+    expect(response.json<{ correlationId: string }>().correlationId).toEqual(expect.any(String));
+    await app.close();
+  });
+
+  it.each([
+    new Error("Database failure containing PRIVATE_CONNECTION_DETAILS"),
+    Object.assign(new Error("Raw provider failure containing PRIVATE_CONNECTION_DETAILS"), {
+      code: "PROVIDER_ERROR",
+      statusCode: 502,
+    }),
+  ])("keeps unexpected generation failures sanitized", async (error) => {
+    const app = await recapApp(port({ generate: () => Promise.reject(error) }));
+
+    const response = await app.inject({
+      method: "POST",
+      url: `/v1/leagues/${LEAGUE_ID}/recap`,
+      headers: { cookie: COOKIE },
+      payload: { week: 5 },
+    });
+
+    expect(response.statusCode).toBe("statusCode" in error ? error.statusCode : 500);
+    expect(response.json()).toMatchObject({
+      type: "https://fantasy.local/problems/internal",
+      detail: "The request could not be completed.",
+    });
+    expect(response.json<{ correlationId: string }>().correlationId).toEqual(expect.any(String));
+    expect(response.body).not.toContain("PRIVATE_CONNECTION_DETAILS");
+    expect(response.json()).not.toHaveProperty("code");
     await app.close();
   });
 

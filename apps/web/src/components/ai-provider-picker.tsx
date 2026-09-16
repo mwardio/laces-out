@@ -86,7 +86,11 @@ export function AiProviderPicker({
       className={`${styles.picker}${open ? ` ${styles.pickerOpen}` : ""}`}
       ref={pickerRef}
       onBlur={(event) => {
-        if (!event.currentTarget.contains(event.relatedTarget)) setOpen(false);
+        // Safari can blur a button with no related target before a tapped option's click.
+        // Outside presses already close the menu through the pointerdown listener.
+        if (event.relatedTarget && !event.currentTarget.contains(event.relatedTarget)) {
+          setOpen(false);
+        }
       }}
     >
       <button

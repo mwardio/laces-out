@@ -18,6 +18,7 @@ import {
   leagueSeasons,
   leagueSupplementalSnapshots,
   dataSources,
+  nflScheduleObservations,
   playerMarketObservations,
   playerExternalIds,
   playerProjections,
@@ -68,6 +69,9 @@ import {
 import {
   projectionScoringProfileKeyForPosition,
   projectionScoringRulesFromProfileKey,
+  weeklyInputCoverage,
+  weeklyStatsCutoff,
+  type WeeklyCoverageGame,
   type LeagueScoringPosition,
 } from "@laces-out/projections";
 import {
@@ -95,6 +99,12 @@ import {
   projectionFreshnessObservedAt,
   projectionTimestampProvenance,
 } from "./projection-provenance.js";
+import { reconcileRosterProjectionAliases } from "./projection-roster-aliases.js";
+import { assessLineupChange } from "./lineup-advice.js";
+import {
+  providerLineupComparison,
+  type ProviderProjectionSnapshot,
+} from "./provider-lineup-comparison.js";
 import {
   RECOMMENDATION_ALGORITHM_VERSION,
   recommendationInputChecksum,
@@ -105,6 +115,7 @@ const MAX_TEAMS = 32;
 const MAX_SLOT_RULES = 64;
 const MAX_ROSTER_ENTRIES = 1_024;
 const MAX_PROJECTION_ROWS = 512;
+const MAX_ROSTER_ALIAS_PROJECTION_ROWS = 4_096;
 const MAX_PROJECTION_SET_CANDIDATES = 12;
 const MAX_WAIVER_CANDIDATES = 24;
 const MAX_TRADE_PACKAGES = 320;
@@ -210,6 +221,9 @@ export interface DecisionProjectionSetRow {
 
 export interface DecisionProjectionPlayerRow {
   readonly playerId: string;
+  readonly gsisId?: string | null;
+  /** Original projection identity when numbers are read through a current roster alias. */
+  readonly projectionPlayerId?: string;
   readonly name: string;
   readonly primaryPosition: string;
   readonly eligiblePositions: string[];
@@ -304,6 +318,11 @@ export interface InSeasonDecisionRepository {
    * Optional so existing repository implementations and test doubles are unaffected by default.
    */
   findManagedProjectionProfile?(leagueSeasonId: string): Promise<ManagedProjectionProfile>;
+  listProjectionScheduleGames?(season: number): Promise<readonly WeeklyCoverageGame[]>;
+  findProviderProjectionSnapshot?(
+    leagueSeasonId: string,
+    week: number,
+  ): Promise<ProviderProjectionSnapshot | undefined>;
 }
 
 /**
@@ -339,6 +358,55 @@ export class DrizzleInSeasonDecisionRepository implements InSeasonDecisionReposi
 
   constructor(database: Database) {
     this.#database = database;
+  }
+  async findProviderProjectionSnapshot(
+    leagueSeasonId: string,
+    week: number,
+  ): Promise<ProviderProjectionSnapshot | undefined> {
+    const [row] = await this.#database
+      .select({
+        asOfWeek: leagueSupplementalSnapshots.asOfWeek,
+        effectiveAt: leagueSupplementalSnapshots.effectiveAt,
+        artifact: leagueSupplementalSnapshots.artifact,
+      })
+      .from(leagueSupplementalSnapshots)
+      .where(
+        and(
+          eq(leagueSupplementalSnapshots.leagueSeasonId, leagueSeasonId),
+          eq(leagueSupplementalSnapshots.kind, "weekly-box-scores"),
+          eq(leagueSupplementalSnapshots.asOfWeek, week),
+        ),
+      )
+      .orderBy(desc(leagueSupplementalSnapshots.effectiveAt), desc(leagueSupplementalSnapshots.id))
+      .limit(1);
+    return row;
+  }
+
+  listProjectionScheduleGames(season: number): Promise<readonly WeeklyCoverageGame[]> {
+    return this.#database
+      .select({
+        season: nflScheduleObservations.season,
+        week: nflScheduleObservations.week,
+        kickoffAt: nflScheduleObservations.kickoffAt,
+        status: nflScheduleObservations.status,
+      })
+      .from(nflScheduleObservations)
+      .innerJoin(
+        dataSources,
+        and(
+          eq(dataSources.id, nflScheduleObservations.sourceId),
+          eq(dataSources.lastChecksum, nflScheduleObservations.inputChecksum),
+        ),
+      )
+      .where(
+        and(
+          eq(dataSources.key, `nflverse.schedules.${season}`),
+          eq(nflScheduleObservations.season, season),
+          eq(nflScheduleObservations.seasonType, "REG"),
+        ),
+      )
+      .orderBy(asc(nflScheduleObservations.week), asc(nflScheduleObservations.externalGameId))
+      .limit(300);
   }
 
   async findMembership(
@@ -592,20 +660,88 @@ export class DrizzleInSeasonDecisionRepository implements InSeasonDecisionReposi
     return rows.flat();
   }
 
-  listProjectionPlayersByIds(
+  async listProjectionPlayersByIds(
     projectionSetId: string,
     ids: readonly string[],
   ): Promise<readonly DecisionProjectionPlayerRow[]> {
-    if (ids.length === 0) return Promise.resolve([]);
-    return this.#projectionPlayerQuery()
+    if (ids.length === 0) return [];
+    const boundedIds = [...new Set(ids)].slice(0, MAX_ROSTER_ENTRIES);
+    const direct = await this.#projectionPlayerQuery()
       .where(
         and(
           eq(playerProjections.projectionSetId, projectionSetId),
-          inArray(playerProjections.playerId, [...ids]),
+          inArray(playerProjections.playerId, boundedIds),
         ),
       )
       .orderBy(asc(players.id))
       .limit(MAX_ROSTER_ENTRIES);
+    if (direct.length === boundedIds.length) return direct;
+    const [set] = await this.#database
+      .select({
+        leagueSeasonId: projectionSets.leagueSeasonId,
+        source: projectionSets.source,
+        horizon: projectionSets.horizon,
+      })
+      .from(projectionSets)
+      .where(eq(projectionSets.id, projectionSetId))
+      .limit(1);
+    if (
+      !set?.leagueSeasonId ||
+      set.source !== MANAGED_ROS_PROJECTION_SET_SOURCE ||
+      set.horizon !== "rest-of-season"
+    )
+      return direct;
+
+    // Search the release, not the 512-player ranking pool: a rostered player's approved forecast
+    // can be below that cutoff. Overflow fails closed so a truncated pool cannot look unique.
+    const [pool, rosterPlayers] = await Promise.all([
+      this.#projectionPlayerQuery()
+        .where(eq(playerProjections.projectionSetId, projectionSetId))
+        .orderBy(asc(players.id))
+        .limit(MAX_ROSTER_ALIAS_PROJECTION_ROWS + 1),
+      this.#database
+        .select({
+          playerId: players.id,
+          gsisId: players.gsisId,
+          name: players.fullName,
+          primaryPosition: players.primaryPosition,
+          eligiblePositions: players.eligiblePositions,
+          nflTeam: players.nflTeam,
+          status: players.status,
+        })
+        .from(players)
+        .where(inArray(players.id, boundedIds)),
+    ]);
+    if (pool.length > MAX_ROSTER_ALIAS_PROJECTION_ROWS) return direct;
+    const identityIds = [...new Set([...boundedIds, ...pool.map((row) => row.playerId)])];
+    const externalIds = await this.#database
+      .select({
+        playerId: playerExternalIds.playerId,
+        source: playerExternalIds.source,
+        externalId: playerExternalIds.externalId,
+      })
+      .from(playerExternalIds)
+      .where(
+        and(
+          inArray(playerExternalIds.playerId, identityIds),
+          inArray(playerExternalIds.source, [
+            "espn",
+            "sleeper-espn",
+            "yahoo",
+            "sleeper-yahoo",
+            "espn-self-asserted",
+          ]),
+        ),
+      );
+    return [
+      ...direct,
+      ...reconcileRosterProjectionAliases({
+        leagueSeasonId: set.leagueSeasonId,
+        rosterPlayers,
+        projections: pool,
+        externalIds,
+      }),
+    ];
   }
 
   listLatestMarketSignals(
@@ -722,6 +858,7 @@ export class DrizzleInSeasonDecisionRepository implements InSeasonDecisionReposi
     return this.#database
       .select({
         playerId: players.id,
+        gsisId: players.gsisId,
         name: players.fullName,
         primaryPosition: sql<string>`coalesce(${observedPosition}, ${players.primaryPosition})`,
         eligiblePositions: players.eligiblePositions,
@@ -743,6 +880,7 @@ interface ExpandedSlot extends RosterSlot {
 
 interface PreparedProjectionPlayer {
   readonly player: Player;
+  readonly projectionPlayerId: string;
   readonly value: ProjectionValue;
   readonly primaryPosition: Position;
 }
@@ -1047,6 +1185,7 @@ function preparedPlayerFacts(
         status: prepared.player.status,
       },
       primaryPosition: prepared.primaryPosition,
+      projectionPlayerId: prepared.projectionPlayerId,
       projection: prepared.value,
     }))
     .toSorted((left, right) => left.id.localeCompare(right.id));
@@ -1067,9 +1206,18 @@ function modeledDecisionFactsChecksum(input: {
   readonly rosContext: LoadedDecisionProjectionContext;
   readonly weeklySet: DecisionProjectionSetRow | undefined;
   readonly rosSet: DecisionProjectionSetRow | undefined;
+  readonly weeklyInputHealth: ReturnType<typeof weeklyInputCoverage>;
+  readonly providerComparison: ReturnType<typeof providerLineupComparison>;
 }): string {
   return hash(
     stableJson({
+      weeklyInputHealth: input.weeklyInputHealth,
+      providerComparison: input.providerComparison
+        ? {
+            observedAt: input.providerComparison.observedAt,
+            points: [...input.providerComparison.points].sort(([a], [b]) => a.localeCompare(b)),
+          }
+        : null,
       season: {
         provider: input.season.provider,
         currentWeek: input.season.currentWeek,
@@ -1173,6 +1321,7 @@ function prepareProjection(row: DecisionProjectionPlayerRow): PreparedProjection
   if (floor === undefined || ceiling === undefined) return undefined;
   return {
     player,
+    projectionPlayerId: row.projectionPlayerId ?? row.playerId,
     primaryPosition,
     value: {
       mean,
@@ -1215,6 +1364,11 @@ async function loadDecisionProjectionContext(
   const mergedRows = new Map<string, DecisionProjectionPlayerRow>();
   for (const row of [...topRows.slice(0, MAX_PROJECTION_ROWS), ...positionRows, ...rosterRows]) {
     mergedRows.set(row.playerId, row);
+  }
+  for (const row of rosterRows) {
+    if (row.projectionPlayerId && row.projectionPlayerId !== row.playerId) {
+      mergedRows.delete(row.projectionPlayerId);
+    }
   }
   const preparedById = new Map<string, PreparedProjectionPlayer>();
   for (const row of mergedRows.values()) {
@@ -1334,6 +1488,7 @@ function decisionPlayer(player: Player, projections: ProjectionLookup): Decision
     nflTeam: player.nflTeam ?? null,
     status: player.status ?? null,
     projectedPoints: rounded(value?.mean ?? 0),
+    projectedRange: value ? { floor: rounded(value.floor), ceiling: rounded(value.ceiling) } : null,
   };
 }
 
@@ -1375,16 +1530,26 @@ function decisionProjectionSetReference(set: DecisionProjectionSetRow) {
     sourceObservedAt: timestamps.sourceObservedAt?.toISOString() ?? null,
     sourceObservedAtStatus: timestamps.sourceObservedAtStatus,
     importedAt: timestamps.importedAt.toISOString(),
+    statsThrough:
+      set.source === MANAGED_PROJECTION_SET_SOURCE
+        ? weeklyStatsCutoff(set.metadata.statsThrough)
+        : null,
   };
 }
 
 function decisionProjectionFreshness(set: DecisionProjectionSetRow, now: Date): Freshness {
   const timestamps = projectionTimestampProvenance(set);
-  return freshness(
+  const result = freshness(
     projectionFreshnessObservedAt(set, timestamps),
     now,
     "Projection source time missing / unverified",
   );
+  if (set.source !== MANAGED_PROJECTION_SET_SOURCE) return result;
+  const cutoff = weeklyStatsCutoff(set.metadata.statsThrough);
+  return {
+    ...result,
+    label: `${result.label} · ${cutoff ? `Stats through ${cutoff.season} Week ${cutoff.week}` : "Statistical cutoff unverified"}`,
+  };
 }
 
 function providerExecution(season: DecisionSeasonRow) {
@@ -2176,6 +2341,7 @@ function mapTradePackage(
  * slot-rule, roster, or projection admission.
  */
 interface DecisionFacts {
+  readonly providerComparison: ReturnType<typeof providerLineupComparison>;
   readonly now: Date;
   readonly membership: DecisionMembershipRow;
   readonly season: DecisionSeasonRow;
@@ -2280,6 +2446,16 @@ export class InSeasonDecisionService {
         row.horizon !== "rest-of-season" &&
         !isSyntheticProjectionSet(row),
     );
+    const weeklyInputHealth =
+      projectionSet?.source === MANAGED_PROJECTION_SET_SOURCE
+        ? weeklyInputCoverage({
+            season: season.season,
+            targetWeek: season.currentWeek ?? 1,
+            statsThrough: weeklyStatsCutoff(projectionSet.metadata.statsThrough),
+            schedule: (await this.#repository.listProjectionScheduleGames?.(season.season)) ?? [],
+            now,
+          })
+        : { expectedThroughWeek: null, warnings: [] };
     const rosProjectionSetRows = projectionSetRows.filter(
       (row) =>
         row.week === null &&
@@ -2485,6 +2661,27 @@ export class InSeasonDecisionService {
         }),
       );
     }
+    const [providerSnapshot, providerIdentities] =
+      season.provider === "espn" &&
+      season.currentWeek !== null &&
+      this.#repository.findProviderProjectionSnapshot
+        ? await Promise.all([
+            this.#repository.findProviderProjectionSnapshot(season.id, season.currentWeek),
+            this.#repository.listEspnPlayerIdentities?.(
+              season.id,
+              claimedRosterRows.map((row) => row.playerId),
+            ) ?? Promise.resolve([]),
+          ])
+        : [undefined, []];
+    const providerComparison = providerLineupComparison({
+      snapshot: providerSnapshot,
+      identities: providerIdentities,
+      leagueSeasonId: season.id,
+      providerLeagueId: season.externalKey,
+      season: season.season,
+      week: season.currentWeek,
+      now,
+    });
     const decisionChecksumInputs = {
       ...checksumInputs,
       availabilityChecksum: decisionAvailabilityChecksum,
@@ -2497,6 +2694,8 @@ export class InSeasonDecisionService {
         rosContext: rosProjectionContext,
         weeklySet: projectionSet,
         rosSet: rosProjectionSet,
+        weeklyInputHealth,
+        providerComparison,
       }),
     };
 
@@ -2532,7 +2731,10 @@ export class InSeasonDecisionService {
         rosterEffectiveAt: claimedSnapshot?.effectiveAt.toISOString() ?? null,
         projectionSet: projectionSet ? decisionProjectionSetReference(projectionSet) : null,
         projectionFreshness: projectionSet
-          ? decisionProjectionFreshness(projectionSet, now)
+          ? {
+              ...decisionProjectionFreshness(projectionSet, now),
+              ...(weeklyInputHealth.warnings.length ? { state: "stale" as const } : {}),
+            }
           : freshness(null, now),
       },
       providerVerification: providerVerification(
@@ -2552,6 +2754,9 @@ export class InSeasonDecisionService {
     };
 
     const sharedReasons: DecisionUnavailableReason[] = [];
+    for (const warning of weeklyInputHealth.warnings) {
+      sharedReasons.push(reason("PROJECTION_COVERAGE_INCOMPLETE", warning));
+    }
     if (!claimedSnapshot || userRoster.length === 0) {
       sharedReasons.push(
         reason("ROSTER_MISSING", "The claimed team has no stored roster snapshot."),
@@ -2622,6 +2827,7 @@ export class InSeasonDecisionService {
     return {
       kind: "ready",
       facts: {
+        providerComparison,
         now,
         membership,
         season,
@@ -2665,6 +2871,7 @@ export class InSeasonDecisionService {
     if (loaded.kind === "no-membership") return undefined;
     if (loaded.kind === "unavailable") return loaded.snapshot;
     const {
+      providerComparison,
       now,
       season,
       claimedTeam,
@@ -2737,6 +2944,50 @@ export class InSeasonDecisionService {
         ]);
       } else {
         const slotById = new Map(starterSlots.map((slot) => [slot.id, slot]));
+        const comparisonNotes: string[] = [];
+        if (
+          providerComparison &&
+          userRoster.every((player) => providerComparison.points.has(player.id))
+        ) {
+          const providerResult = optimizeLineup({
+            players: userRoster,
+            slots: starterSlots,
+            projections: new Map(
+              [...providerComparison.points].map(([id, mean]) => [
+                id,
+                { mean, floor: mean, ceiling: mean },
+              ]),
+            ),
+            metric: "mean",
+            currentAssignments: result.assignments,
+            locks,
+          });
+          if (providerResult.feasible) {
+            const modeledIds = new Set(result.assignments.map((assignment) => assignment.playerId));
+            const providerIds = new Set(
+              providerResult.assignments.map((assignment) => assignment.playerId),
+            );
+            const preferred = providerResult.assignments.filter(
+              (assignment) => !modeledIds.has(assignment.playerId),
+            );
+            const alternatives = result.assignments.filter(
+              (assignment) => !providerIds.has(assignment.playerId),
+            );
+            if (preferred.length && alternatives.length) {
+              const names = (assignments: typeof preferred) =>
+                assignments
+                  .map(
+                    ({ playerId }) =>
+                      `${allPlayerById.get(playerId)?.name ?? "Player"} (${providerComparison.points.get(playerId)!.toFixed(2)})`,
+                  )
+                  .join(", ");
+              comparisonNotes.push(
+                `Forecast disagreement: ESPN's league-scored projections favor starting ${names(preferred)} instead of ${names(alternatives)}, under the same roster rules and stored locks. Review both forecasts.`,
+                `ESPN comparison observed ${providerComparison.observedAt}.`,
+              );
+            }
+          }
+        }
         const currentProjectedPoints = currentStarters.reduce(
           (sum, entry) => sum + (projectionById.get(entry.playerId)?.mean ?? 0),
           0,
@@ -2764,9 +3015,24 @@ export class InSeasonDecisionService {
               ? decisionPlayer(allPlayerById.get(change.addPlayerId)!, projectionById)
               : null,
             projectedPointDelta: rounded(change.projectedPointDelta),
+            assessment: assessLineupChange(
+              change.addPlayerId ? projectionById.get(change.addPlayerId) : undefined,
+              change.removePlayerId ? projectionById.get(change.removePlayerId) : undefined,
+              providerComparison
+                ? {
+                    add: change.addPlayerId
+                      ? providerComparison.points.get(change.addPlayerId)
+                      : undefined,
+                    remove: change.removePlayerId
+                      ? providerComparison.points.get(change.removePlayerId)
+                      : undefined,
+                  }
+                : undefined,
+            ),
           })),
           execution,
           notes: [
+            ...comparisonNotes,
             locks.length > 0
               ? `${locks.length} stored true lock${locks.length === 1 ? " was" : "s were"} preserved; complete provider lock coverage remains unavailable.`
               : "No stored true locks were present; that does not verify that every player is unlocked at the provider.",
@@ -2916,18 +3182,18 @@ export class InSeasonDecisionService {
               ),
             ]);
           } else {
-            const rosRosterProjected = waiverRoster.roster.every((player) =>
-              rosProjectionById.has(player.id),
+            const missingRosRoster = waiverRoster.roster.filter(
+              (player) => !rosProjectionById.has(player.id),
             );
             const rosPositions = [...waiverRoster.roster, ...rosCandidates].flatMap((player) => {
               const prepared = rosPreparedById.get(player.id);
               return prepared ? [prepared.primaryPosition] : [];
             });
-            if (!rosRosterProjected) {
+            if (missingRosRoster.length > 0) {
               restOfSeason = unavailable([
                 reason(
                   "PROJECTION_COVERAGE_INCOMPLETE",
-                  "The admitted rest-of-season release does not cover every active-roster player, so no ROS add/drop value was inferred.",
+                  `The admitted rest-of-season release has no unambiguous forecast for: ${missingRosRoster.map((player) => player.name).join(", ")}. No ROS add/drop value was inferred.`,
                 ),
               ]);
             } else if (

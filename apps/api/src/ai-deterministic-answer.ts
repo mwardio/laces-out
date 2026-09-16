@@ -27,7 +27,10 @@ function describeChange(change: unknown): string | undefined {
   const remove = playerName(record.remove);
   const delta = numberValue(record.projectedPointDelta);
   const gain = delta === undefined ? "" : ` (${delta > 0 ? "+" : ""}${delta} projected points)`;
-  if (add && remove) return `- Start ${add} over ${remove} at ${slot}${gain}.`;
+  const assessment = objectValue(record.assessment);
+  const caveat = typeof assessment?.explanation === "string" ? ` ${assessment.explanation}` : "";
+  if (add && remove)
+    return `- ${assessment?.strength === "close-call" ? "Close call: the model leans toward" : "Start"} ${add} over ${remove} at ${slot}${gain}.${caveat}`;
   if (add) return `- Start ${add} at ${slot}${gain}.`;
   if (remove) return `- Bench ${remove} from ${slot}${gain}.`;
   return undefined;
@@ -42,14 +45,20 @@ function lineupAnswer(data: unknown): string | undefined {
     .filter((line): line is string => Boolean(line));
   const current = numberValue(lineup.currentProjectedPoints);
   const optimal = numberValue(lineup.optimalProjectedPoints);
+  const freshness = objectValue(objectValue(data)?.projectionFreshness);
+  const cutoff = typeof freshness?.label === "string" ? ` ${freshness.label}.` : "";
+  const notes = Array.isArray(lineup.notes)
+    ? lineup.notes.filter((note): note is string => typeof note === "string").join(" ")
+    : "";
+  const qualifications = `${cutoff}${notes ? `\n\n${notes}` : ""}`;
   const totals =
     current !== undefined && optimal !== undefined
-      ? ` Your current lineup projects ${current}; the optimal one projects ${optimal}.`
+      ? ` Your current lineup projects ${current}; the proposed one projects ${optimal}.`
       : "";
   if (lines.length === 0) {
-    return `Your lineup is already optimized under the current projection set. The deterministic lineup engine found no start/sit change worth making.${totals}`;
+    return `Your starters have the highest total under these projections.${totals}${qualifications}`;
   }
-  return `The deterministic lineup engine recommends these changes:\n\n${lines.join("\n")}\n${totals}`.trim();
+  return `The lineup model suggests these changes:\n\n${lines.join("\n")}\n${totals}${qualifications}`.trim();
 }
 
 function unavailableAnswer(outcome: AiToolLoopCall["outcome"]): string | undefined {

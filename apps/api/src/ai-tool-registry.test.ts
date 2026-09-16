@@ -67,6 +67,10 @@ function snapshot(overrides: Record<string, unknown> = {}) {
           remove: player("p2", "Alcott", 9.1),
           add: player("p1", "Reed", 12.4),
           projectedPointDelta: 2.4,
+          assessment: {
+            strength: "close-call",
+            explanation: "The projected outcome ranges overlap.",
+          },
         },
       ],
       execution: { mode: "provider-required", provider: "espn", label: "Open ESPN", url: null },
@@ -91,6 +95,15 @@ function lineupTool(decisionsSnapshot: () => Promise<unknown>) {
 }
 
 describe("get_lineup_recommendation", () => {
+  it("passes the engine's uncertainty qualification through the bounded tool result", async () => {
+    const { tool } = lineupTool(() => Promise.resolve(snapshot()));
+    const result = await tool.execute(context(), {});
+    expect(result.state).toBe("ok");
+    if (result.state === "ok") {
+      expect(JSON.stringify(result.data)).toContain('"strength":"close-call"');
+      expect(JSON.stringify(result.data)).toContain("The projected outcome ranges overlap.");
+    }
+  });
   it("registers exactly the declared tools, all read-only", () => {
     const tools = createAiToolRegistry({ decisions: { getSnapshot: () => Promise.resolve({}) } });
     expect([...tools.keys()]).toEqual(["get_lineup_recommendation"]);

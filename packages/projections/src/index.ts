@@ -499,3 +499,4 @@ export function groupProjectionConsensus(
     .sort(([left], [right]) => compareStrings(left, right))
     .map(([, group]) => buildProjectionConsensus(group, options));
 }
+export * from "./weekly-input-coverage.js";

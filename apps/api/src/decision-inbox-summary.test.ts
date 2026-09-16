@@ -177,6 +177,38 @@ function snapshot(overrides: Partial<InSeasonDecisionSnapshot> = {}): InSeasonDe
 }
 
 describe("buildDecisionInboxSummary", () => {
+  it("renews review identity for changed forecast disagreements but not their refresh clocks", () => {
+    const plan = lineup();
+    const source = snapshot({ lineup: plan });
+    const item = () =>
+      buildDecisionInboxSummary(source).items.find((row) => row.kind === "lineup")!;
+    const originalId = item().id;
+    const disagreement = "Forecast disagreement: ESPN favors Player 3 instead of Player 2.";
+    plan.notes = [disagreement, `ESPN comparison observed ${NOW}.`];
+    const revisedId = item().id;
+    expect(revisedId).not.toBe(originalId);
+    expect(item().detail).toContain(disagreement);
+    plan.notes = [disagreement, `ESPN comparison observed ${LATER}.`];
+    expect(item().id).toBe(revisedId);
+  });
+  it("preserves close-call qualifications in the inbox title and details", () => {
+    const plan = lineup();
+    plan.changes = [
+      {
+        ...plan.changes[0]!,
+        assessment: {
+          strength: "close-call",
+          explanation: "The projected outcome ranges overlap.",
+        },
+      },
+    ];
+    const source = snapshot({ lineup: plan });
+    source.provenance.projectionFreshness.label = "Stats through 2026 Week 1";
+    const item = buildDecisionInboxSummary(source).items.find((item) => item.kind === "lineup");
+    expect(item?.title).toContain("Close call: lean");
+    expect(item?.detail).toContain("The projected outcome ranges overlap.");
+    expect(item?.detail).toContain("Stats through 2026 Week 1");
+  });
   it("produces a validated bounded live inbox in decision order with original provenance", () => {
     const source = snapshot();
     expect(inSeasonDecisionSnapshotSchema.safeParse(source).success).toBe(true);

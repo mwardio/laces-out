@@ -113,7 +113,7 @@ export function buildDecisionInboxSummary(
     const onlyChange = changes.length === 1 ? changes[0] : undefined;
     const title = onlyChange?.add
       ? onlyChange.remove
-        ? `Start ${onlyChange.add.name} over ${onlyChange.remove.name}`
+        ? `${onlyChange.assessment?.strength === "close-call" ? "Close call: lean" : "Start"} ${onlyChange.add.name} over ${onlyChange.remove.name}`
         : `Start ${onlyChange.add.name} in ${onlyChange.slotLabel}`
       : "Improve your starting lineup";
     items.push({
@@ -121,6 +121,9 @@ export function buildDecisionInboxSummary(
         projectedGain: lineup.projectedGain,
         currentProjectedPoints: lineup.currentProjectedPoints,
         optimalProjectedPoints: lineup.optimalProjectedPoints,
+        forecastDisagreements: lineup.notes.filter((note) =>
+          note.startsWith("Forecast disagreement:"),
+        ),
         assignments: [...lineup.assignments]
           .sort((left, right) => left.slotId.localeCompare(right.slotId))
           .map((assignment) => ({
@@ -133,18 +136,21 @@ export function buildDecisionInboxSummary(
           remove: playerIdentity(change.remove),
           add: playerIdentity(change.add),
           projectedPointDelta: change.projectedPointDelta,
+          assessment: change.assessment ?? null,
         })),
       }),
       kind: "lineup",
       title,
       summary: `${changes.length} slot ${changes.length === 1 ? "change improves" : "changes together improve"} the projected starting lineup from ${lineup.currentProjectedPoints.toFixed(2)} to ${lineup.optimalProjectedPoints.toFixed(2)} points.`,
       detail: [
+        snapshot.provenance.projectionFreshness.label,
         "Review the complete lineup plan together; individual slot changes can depend on each other.",
         ...changes.map(
           (change) =>
             `${change.slotLabel}: ${change.add ? `start ${change.add.name}` : "leave empty"}${change.remove ? ` in place of ${change.remove.name}` : ""} (${signed(change.projectedPointDelta)} projected points).`,
         ),
         ...lineup.notes.filter(Boolean),
+        ...changes.flatMap((change) => (change.assessment ? [change.assessment.explanation] : [])),
         actionWarning,
       ],
       impact: {

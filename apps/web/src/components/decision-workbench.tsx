@@ -130,8 +130,9 @@ function LineupSection({ snapshot }: { readonly snapshot: InSeasonDecisionSnapsh
           <p className={styles.kicker}>Start / sit</p>
           <h2 id="lineup-title">Lineup check</h2>
         </div>
-        <span className={styles.sectionTag}>Roster-rule optimum</span>
+        <span className={styles.sectionTag}>Projection-based advice</span>
       </header>
+      <p>{snapshot.provenance.projectionFreshness.label}</p>
       {section.state === "unavailable" ? (
         <UnavailablePanel title="Lineup analysis" reasons={section.reasons} />
       ) : (
@@ -142,7 +143,7 @@ function LineupSection({ snapshot }: { readonly snapshot: InSeasonDecisionSnapsh
               <strong>{projectedPoints.format(section.currentProjectedPoints)}</strong>
             </div>
             <div>
-              <span>Optimized</span>
+              <span>Proposed</span>
               <strong>{projectedPoints.format(section.optimalProjectedPoints)}</strong>
             </div>
             <div className={section.projectedGain > 0 ? styles.positiveMetric : undefined}>
@@ -153,11 +154,11 @@ function LineupSection({ snapshot }: { readonly snapshot: InSeasonDecisionSnapsh
 
           <div className={styles.twoColumn}>
             <div>
-              <h3>Recommended changes</h3>
+              <h3>Modeled changes</h3>
               {section.changes.length === 0 ? (
                 <div className={styles.clearState}>
                   <CheckCircle2 size={17} aria-hidden="true" />
-                  <span>Lineup is already optimal.</span>
+                  <span>Your starters have the highest total under these projections.</span>
                 </div>
               ) : (
                 <div className={styles.changeList}>
@@ -167,15 +168,41 @@ function LineupSection({ snapshot }: { readonly snapshot: InSeasonDecisionSnapsh
                       <div>
                         <small>Bench</small>
                         <strong>{change.remove?.name ?? "Open slot"}</strong>
+                        {change.remove?.projectedRange ? (
+                          <small>
+                            Range {projectedPoints.format(change.remove.projectedRange.floor)}–
+                            {projectedPoints.format(change.remove.projectedRange.ceiling)}
+                          </small>
+                        ) : null}
                       </div>
                       <ArrowUpRight size={15} aria-hidden="true" />
                       <div>
-                        <small>Start</small>
+                        <small>
+                          {change.assessment?.strength === "close-call" ? "Model lean" : "Start"}
+                        </small>
                         <strong>{change.add?.name ?? "No eligible player"}</strong>
+                        {change.add?.projectedRange ? (
+                          <small>
+                            Range {projectedPoints.format(change.add.projectedRange.floor)}–
+                            {projectedPoints.format(change.add.projectedRange.ceiling)}
+                          </small>
+                        ) : null}
                       </div>
                       <span className={styles.gain}>
                         {points.format(change.projectedPointDelta)}
                       </span>
+                      {change.assessment ? (
+                        <p className={styles.changeExplanation}>
+                          <strong>
+                            {change.assessment.strength === "close-call"
+                              ? "Close call. "
+                              : change.assessment.strength === "unrated"
+                                ? "Uncertainty unavailable. "
+                                : "Model edge. "}
+                          </strong>
+                          {change.assessment.explanation}
+                        </p>
+                      ) : null}
                     </article>
                   ))}
                 </div>
@@ -183,7 +210,7 @@ function LineupSection({ snapshot }: { readonly snapshot: InSeasonDecisionSnapsh
             </div>
 
             <div>
-              <h3>Optimal starters</h3>
+              <h3>Starters by projected points</h3>
               <div className={styles.lineupList}>
                 {section.assignments.map((assignment) => (
                   <div key={assignment.slotId}>
@@ -199,6 +226,9 @@ function LineupSection({ snapshot }: { readonly snapshot: InSeasonDecisionSnapsh
               </div>
             </div>
           </div>
+          {section.notes.length > 0 ? (
+            <p className={styles.methodNote}>{section.notes.join(" ")}</p>
+          ) : null}
           <ExecutionLink execution={section.execution} />
         </>
       )}

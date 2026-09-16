@@ -8,7 +8,10 @@ import {
   conservativeScheduleStatus,
   nflEasternKickoffAt,
   scheduleSelectionChecksum,
+  scheduleStatusRecheckAt,
 } from "./nflverse-schedules.js";
+
+const CHECKED_AT = new Date("2026-09-16T12:00:00.000Z");
 
 function game(overrides: Partial<NflverseScheduleGame> = {}): NflverseScheduleGame {
   return {
@@ -62,27 +65,59 @@ describe("nflverse schedule worker helpers", () => {
   it("hashes a selected season deterministically independent of source order", () => {
     const first = game();
     const second = game({ gameId: "2026_01_BUF_MIA", awayTeam: "BUF", homeTeam: "MIA" });
-    expect(scheduleSelectionChecksum([first, second])).toBe(
-      scheduleSelectionChecksum([second, first]),
+    expect(scheduleSelectionChecksum([first, second], CHECKED_AT)).toBe(
+      scheduleSelectionChecksum([second, first], CHECKED_AT),
     );
-    expect(scheduleSelectionChecksum([first])).toMatch(/^[a-f0-9]{64}$/u);
+    expect(scheduleSelectionChecksum([first], CHECKED_AT)).toMatch(/^[a-f0-9]{64}$/u);
   });
 
   it("changes when projection-relevant schedule context changes", () => {
-    const baseline = scheduleSelectionChecksum([game()]);
-    expect(scheduleSelectionChecksum([game({ homeTeam: "MIN" })])).not.toBe(baseline);
-    expect(scheduleSelectionChecksum([game({ startTimeEastern: null, timeTbd: true })])).not.toBe(
-      baseline,
-    );
+    const baseline = scheduleSelectionChecksum([game()], CHECKED_AT);
+    expect(scheduleSelectionChecksum([game({ homeTeam: "MIN" })], CHECKED_AT)).not.toBe(baseline);
     expect(
-      scheduleSelectionChecksum([game({ awayScore: 17, homeScore: 20, status: "final" })]),
+      scheduleSelectionChecksum([game({ startTimeEastern: null, timeTbd: true })], CHECKED_AT),
+    ).not.toBe(baseline);
+    expect(
+      scheduleSelectionChecksum(
+        [game({ awayScore: 17, homeScore: 20, status: "final" })],
+        CHECKED_AT,
+      ),
     ).not.toBe(baseline);
   });
 
   it("does not use a weak or truncated digest", () => {
-    const checksum = scheduleSelectionChecksum([game()]);
+    const checksum = scheduleSelectionChecksum([game()], CHECKED_AT);
     expect(checksum).toHaveLength(64);
     expect(checksum).not.toBe(createHash("md5").update("schedule").digest("hex"));
+  });
+
+  it("advances an unchanged score artifact only when its provisional status matures", () => {
+    const games = [game({ awayScore: 10, homeScore: 31, status: "final" })];
+    const before = new Date("2026-09-13T20:30:00.000Z");
+    const boundary = new Date("2026-09-13T21:00:00.000Z");
+    expect(scheduleStatusRecheckAt(games, before)).toEqual(boundary);
+    expect(scheduleSelectionChecksum(games, before)).toBe(
+      scheduleSelectionChecksum(games, new Date("2026-09-13T20:59:59.999Z")),
+    );
+    expect(scheduleSelectionChecksum(games, before)).not.toBe(
+      scheduleSelectionChecksum(games, boundary),
+    );
+    expect(scheduleSelectionChecksum(games, boundary)).toBe(
+      scheduleSelectionChecksum(games, CHECKED_AT),
+    );
+    expect(scheduleStatusRecheckAt(games, boundary)).toBeNull();
+  });
+
+  it("rechecks only scored games with a pending finality guard", () => {
+    const before = new Date("2026-09-13T20:00:00.000Z");
+    expect(scheduleStatusRecheckAt([game()], before)).toBeNull();
+    expect(scheduleStatusRecheckAt([game({ status: "final", timeTbd: true })], before)).toBeNull();
+    expect(
+      scheduleStatusRecheckAt(
+        [game({ status: "final", startTimeEastern: "16:00" }), game({ status: "final" })],
+        before,
+      ),
+    ).toEqual(new Date("2026-09-13T21:00:00.000Z"));
   });
 
   it("requires the complete modern 272-game ledger before admission", () => {

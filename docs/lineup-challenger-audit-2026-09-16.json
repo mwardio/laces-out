@@ -1,0 +1,1491 @@
+{
+  "historySha256": "e8cc812431659a40458d56b8455fbd735577660b5f734b75428cfb36dd8bd92a",
+  "historyRows": 135106,
+  "evaluation": {
+    "policy": "recent-fantasy-relevant",
+    "maximumWeekBatches": 20,
+    "completedWeekBatches": 20,
+    "fantasyRelevantTargets": 9143,
+    "firstEvaluated": {
+      "season": 2024,
+      "week": 18
+    },
+    "lastEvaluated": {
+      "season": 2026,
+      "week": 1
+    }
+  },
+  "note": "Fixed offline ablations against recency-only. Cohort errors and pair regret use raw component centers. Separate rolling champion/point-calibration results use prior observations; final-policy calibration is a diagnostic with a policy selected over the full window. No production promotion. Includes prior-relevant DNP outcomes. Pair regret is an all-pairs FLEX benchmark, not a roster replay.",
+  "results": [
+    {
+      "variant": "recent-role",
+      "scoringProfile": "standard",
+      "overall": {
+        "samples": 7392,
+        "weekBatches": 20,
+        "baselineMae": 3.326989694101846,
+        "candidateMae": 3.2907363265553373,
+        "improvement": 0.010896747774956847,
+        "comparisonPairs": 125537,
+        "baselineRegret": 2.6974294431123735,
+        "candidateRegret": 2.689046257278726
+      },
+      "earlySeason": {
+        "samples": 1549,
+        "weekBatches": 5,
+        "baselineMae": 3.489141793256819,
+        "candidateMae": 3.4550967601996083,
+        "improvement": 0.009757423193006,
+        "comparisonPairs": 28450,
+        "baselineRegret": 2.7069982425307586,
+        "candidateRegret": 2.771261862917397
+      },
+      "roleChanges": {
+        "samples": 3117,
+        "weekBatches": 20,
+        "baselineMae": 2.5743933544257427,
+        "candidateMae": 2.47655465787069,
+        "improvement": 0.03800456382737867,
+        "comparisonPairs": 7729,
+        "baselineRegret": 2.575132617414913,
+        "candidateRegret": 2.433678354250218
+      },
+      "limitedHistory": {
+        "samples": 540,
+        "weekBatches": 20,
+        "baselineMae": 2.4777457258524413,
+        "candidateMae": 2.417101114081868,
+        "improvement": 0.02447572046550867,
+        "comparisonPairs": 307,
+        "baselineRegret": 2.6374592833876225,
+        "candidateRegret": 2.6625407166123787
+      },
+      "byPosition": {
+        "RB": {
+          "samples": 2046,
+          "weekBatches": 20,
+          "baselineMae": 4.10056625123296,
+          "candidateMae": 4.083817201818602,
+          "improvement": 0.00408456988332346,
+          "comparisonPairs": 15082,
+          "baselineRegret": 2.866655615966066,
+          "candidateRegret": 2.9013724970163217
+        },
+        "WR": {
+          "samples": 3342,
+          "weekBatches": 20,
+          "baselineMae": 3.3813074361108764,
+          "candidateMae": 3.3215348584055917,
+          "improvement": 0.017677356713246425,
+          "comparisonPairs": 29708,
+          "baselineRegret": 2.6581964454019396,
+          "candidateRegret": 2.7224619631076044
+        },
+        "TE": {
+          "samples": 2004,
+          "weekBatches": 20,
+          "baselineMae": 2.4466166752972307,
+          "candidateMae": 2.4296723723476332,
+          "improvement": 0.006925605927842774,
+          "comparisonPairs": 3841,
+          "baselineRegret": 2.8077844311377236,
+          "candidateRegret": 2.54824264514449
+        }
+      },
+      "clearsResearchGate": false,
+      "championPolicy": {
+        "QB": {
+          "strategy": "recency-only",
+          "reason": "insufficient-samples",
+          "samples": 0,
+          "completedWeekBatches": 0,
+          "modelMae": 0,
+          "baselineMae": 0,
+          "modelImprovement": 0
+        },
+        "RB": {
+          "strategy": "recency-only",
+          "reason": "baseline-defended",
+          "samples": 2046,
+          "completedWeekBatches": 20,
+          "modelMae": 4.083817201818602,
+          "baselineMae": 4.10056625123296,
+          "modelImprovement": 0.00408456988332346
+        },
+        "WR": {
+          "strategy": "recency-only",
+          "reason": "baseline-defended",
+          "samples": 3342,
+          "completedWeekBatches": 20,
+          "modelMae": 3.3215348584055917,
+          "baselineMae": 3.3813074361108764,
+          "modelImprovement": 0.017677356713246425
+        },
+        "TE": {
+          "strategy": "recency-only",
+          "reason": "baseline-defended",
+          "samples": 2004,
+          "completedWeekBatches": 20,
+          "modelMae": 2.4296723723476332,
+          "baselineMae": 2.4466166752972307,
+          "modelImprovement": 0.006925605927842774
+        },
+        "K": {
+          "strategy": "recency-only",
+          "reason": "insufficient-samples",
+          "samples": 0,
+          "completedWeekBatches": 0,
+          "modelMae": 0,
+          "baselineMae": 0,
+          "modelImprovement": 0
+        }
+      },
+      "rollingPointCalibration": {
+        "byPosition": {
+          "RB": {
+            "samples": 2046,
+            "centerAdjustment": -0.8316261695640612,
+            "lowerError": -4.828869506063281,
+            "upperError": 4.177089228017923,
+            "mae": 3.9095977393245858,
+            "rmse": 5.884595289275542,
+            "bias": -0.0004839403650753998,
+            "baselineMae": 3.9095977393245858,
+            "improvement": 0,
+            "beatsBaseline": false,
+            "intervalCoverage": 0.7048755186721992,
+            "intervalCoverageSamples": 1928
+          },
+          "WR": {
+            "samples": 3342,
+            "centerAdjustment": -1.0679439429396254,
+            "lowerError": -3.8165801630773672,
+            "upperError": 3.3433085395858244,
+            "mae": 3.1113629319117617,
+            "rmse": 4.539381006788895,
+            "bias": -0.08616930092686591,
+            "baselineMae": 3.1113629319117617,
+            "improvement": 0,
+            "beatsBaseline": false,
+            "intervalCoverage": 0.7324255858138062,
+            "intervalCoverageSamples": 3158
+          },
+          "TE": {
+            "samples": 2004,
+            "centerAdjustment": -0.7258310047361339,
+            "lowerError": -2.7310931430748395,
+            "upperError": 2.1327927366280677,
+            "mae": 2.2933155955785476,
+            "rmse": 3.5946600800586834,
+            "bias": -0.046094945863068906,
+            "baselineMae": 2.2933155955785476,
+            "improvement": 0,
+            "beatsBaseline": false,
+            "intervalCoverage": 0.6976744186046512,
+            "intervalCoverageSamples": 1892
+          }
+        },
+        "overall": {
+          "samples": 7392,
+          "centerAdjustment": -0.9103222674624382,
+          "lowerError": -3.731338717030132,
+          "upperError": 3.236300627515323,
+          "mae": 3.110527103171894,
+          "rmse": 4.7332792122512055,
+          "bias": -0.051588503408295516,
+          "baselineMae": 3.110527103171894,
+          "improvement": 0,
+          "beatsBaseline": false,
+          "intervalCoverage": 0.7153912295786758,
+          "intervalCoverageSamples": 6978
+        }
+      },
+      "finalPolicyPointCalibration": {
+        "byPosition": {
+          "RB": {
+            "samples": 2046,
+            "centerAdjustment": -0.8316261695640612,
+            "lowerError": -4.828869506063281,
+            "upperError": 4.177089228017923,
+            "mae": 3.9095977393245858,
+            "rmse": 5.884595289275542,
+            "bias": -0.0004839403650753998,
+            "baselineMae": 3.9095977393245858,
+            "improvement": 0,
+            "beatsBaseline": false,
+            "intervalCoverage": 0.7048755186721992,
+            "intervalCoverageSamples": 1928
+          },
+          "WR": {
+            "samples": 3342,
+            "centerAdjustment": -1.0679439429396254,
+            "lowerError": -3.8165801630773672,
+            "upperError": 3.3433085395858244,
+            "mae": 3.1113629319117617,
+            "rmse": 4.539381006788895,
+            "bias": -0.08616930092686591,
+            "baselineMae": 3.1113629319117617,
+            "improvement": 0,
+            "beatsBaseline": false,
+            "intervalCoverage": 0.7324255858138062,
+            "intervalCoverageSamples": 3158
+          },
+          "TE": {
+            "samples": 2004,
+            "centerAdjustment": -0.7258310047361339,
+            "lowerError": -2.7310931430748395,
+            "upperError": 2.1327927366280677,
+            "mae": 2.2933155955785476,
+            "rmse": 3.5946600800586834,
+            "bias": -0.046094945863068906,
+            "baselineMae": 2.2933155955785476,
+            "improvement": 0,
+            "beatsBaseline": false,
+            "intervalCoverage": 0.6976744186046512,
+            "intervalCoverageSamples": 1892
+          }
+        },
+        "overall": {
+          "samples": 7392,
+          "centerAdjustment": -0.9103222674624382,
+          "lowerError": -3.731338717030132,
+          "upperError": 3.236300627515323,
+          "mae": 3.110527103171894,
+          "rmse": 4.7332792122512055,
+          "bias": -0.051588503408295516,
+          "baselineMae": 3.110527103171894,
+          "improvement": 0,
+          "beatsBaseline": false,
+          "intervalCoverage": 0.7153912295786758,
+          "intervalCoverageSamples": 6978
+        }
+      },
+      "promotion": "disabled-pending-independent-calibration-and-publication-gates"
+    },
+    {
+      "variant": "regressed-touchdowns",
+      "scoringProfile": "standard",
+      "overall": {
+        "samples": 7392,
+        "weekBatches": 20,
+        "baselineMae": 3.326989694101846,
+        "candidateMae": 3.318153190911078,
+        "improvement": 0.002656005579588454,
+        "comparisonPairs": 125537,
+        "baselineRegret": 2.6974294431123735,
+        "candidateRegret": 2.5956459051912923
+      },
+      "earlySeason": {
+        "samples": 1549,
+        "weekBatches": 5,
+        "baselineMae": 3.489141793256819,
+        "candidateMae": 3.4618416586730896,
+        "improvement": 0.0078243121665305,
+        "comparisonPairs": 28450,
+        "baselineRegret": 2.7069982425307586,
+        "candidateRegret": 2.5696063268892884
+      },
+      "roleChanges": {
+        "samples": 3117,
+        "weekBatches": 20,
+        "baselineMae": 2.5743933544257427,
+        "candidateMae": 2.5617707094405735,
+        "improvement": 0.004903153188874221,
+        "comparisonPairs": 7729,
+        "baselineRegret": 2.575132617414913,
+        "candidateRegret": 2.4484668133005414
+      },
+      "limitedHistory": {
+        "samples": 540,
+        "weekBatches": 20,
+        "baselineMae": 2.4777457258524413,
+        "candidateMae": 2.418159983631369,
+        "improvement": 0.02404836848243278,
+        "comparisonPairs": 307,
+        "baselineRegret": 2.6374592833876225,
+        "candidateRegret": 1.703583061889251
+      },
+      "byPosition": {
+        "RB": {
+          "samples": 2046,
+          "weekBatches": 20,
+          "baselineMae": 4.10056625123296,
+          "candidateMae": 4.104069521117878,
+          "improvement": -0.0008543380768117018,
+          "comparisonPairs": 15082,
+          "baselineRegret": 2.866655615966066,
+          "candidateRegret": 2.7695332184060586
+        },
+        "WR": {
+          "samples": 3342,
+          "weekBatches": 20,
+          "baselineMae": 3.3813074361108764,
+          "candidateMae": 3.3618092030857745,
+          "improvement": 0.00576647743321691,
+          "comparisonPairs": 29708,
+          "baselineRegret": 2.6581964454019396,
+          "candidateRegret": 2.54716574660027
+        },
+        "TE": {
+          "samples": 2004,
+          "weekBatches": 20,
+          "baselineMae": 2.4466166752972307,
+          "candidateMae": 2.442961971205009,
+          "improvement": 0.0014937787881209093,
+          "comparisonPairs": 3841,
+          "baselineRegret": 2.8077844311377236,
+          "candidateRegret": 2.7821400676907047
+        }
+      },
+      "clearsResearchGate": false,
+      "championPolicy": {
+        "QB": {
+          "strategy": "recency-only",
+          "reason": "insufficient-samples",
+          "samples": 0,
+          "completedWeekBatches": 0,
+          "modelMae": 0,
+          "baselineMae": 0,
+          "modelImprovement": 0
+        },
+        "RB": {
+          "strategy": "recency-only",
+          "reason": "baseline-defended",
+          "samples": 2046,
+          "completedWeekBatches": 20,
+          "modelMae": 4.104069521117878,
+          "baselineMae": 4.10056625123296,
+          "modelImprovement": -0.0008543380768117018
+        },
+        "WR": {
+          "strategy": "recency-only",
+          "reason": "baseline-defended",
+          "samples": 3342,
+          "completedWeekBatches": 20,
+          "modelMae": 3.3618092030857745,
+          "baselineMae": 3.3813074361108764,
+          "modelImprovement": 0.00576647743321691
+        },
+        "TE": {
+          "strategy": "recency-only",
+          "reason": "baseline-defended",
+          "samples": 2004,
+          "completedWeekBatches": 20,
+          "modelMae": 2.442961971205009,
+          "baselineMae": 2.4466166752972307,
+          "modelImprovement": 0.0014937787881209093
+        },
+        "K": {
+          "strategy": "recency-only",
+          "reason": "insufficient-samples",
+          "samples": 0,
+          "completedWeekBatches": 0,
+          "modelMae": 0,
+          "baselineMae": 0,
+          "modelImprovement": 0
+        }
+      },
+      "rollingPointCalibration": {
+        "byPosition": {
+          "RB": {
+            "samples": 2046,
+            "centerAdjustment": -0.8316261695640612,
+            "lowerError": -4.828869506063281,
+            "upperError": 4.177089228017923,
+            "mae": 3.9095977393245858,
+            "rmse": 5.884595289275542,
+            "bias": -0.0004839403650753998,
+            "baselineMae": 3.9095977393245858,
+            "improvement": 0,
+            "beatsBaseline": false,
+            "intervalCoverage": 0.7048755186721992,
+            "intervalCoverageSamples": 1928
+          },
+          "WR": {
+            "samples": 3342,
+            "centerAdjustment": -1.0679439429396254,
+            "lowerError": -3.8165801630773672,
+            "upperError": 3.3433085395858244,
+            "mae": 3.1113629319117617,
+            "rmse": 4.539381006788895,
+            "bias": -0.08616930092686591,
+            "baselineMae": 3.1113629319117617,
+            "improvement": 0,
+            "beatsBaseline": false,
+            "intervalCoverage": 0.7324255858138062,
+            "intervalCoverageSamples": 3158
+          },
+          "TE": {
+            "samples": 2004,
+            "centerAdjustment": -0.7258310047361339,
+            "lowerError": -2.7310931430748395,
+            "upperError": 2.1327927366280677,
+            "mae": 2.2933155955785476,
+            "rmse": 3.5946600800586834,
+            "bias": -0.046094945863068906,
+            "baselineMae": 2.2933155955785476,
+            "improvement": 0,
+            "beatsBaseline": false,
+            "intervalCoverage": 0.6976744186046512,
+            "intervalCoverageSamples": 1892
+          }
+        },
+        "overall": {
+          "samples": 7392,
+          "centerAdjustment": -0.9103222674624382,
+          "lowerError": -3.731338717030132,
+          "upperError": 3.236300627515323,
+          "mae": 3.110527103171894,
+          "rmse": 4.7332792122512055,
+          "bias": -0.051588503408295516,
+          "baselineMae": 3.110527103171894,
+          "improvement": 0,
+          "beatsBaseline": false,
+          "intervalCoverage": 0.7153912295786758,
+          "intervalCoverageSamples": 6978
+        }
+      },
+      "finalPolicyPointCalibration": {
+        "byPosition": {
+          "RB": {
+            "samples": 2046,
+            "centerAdjustment": -0.8316261695640612,
+            "lowerError": -4.828869506063281,
+            "upperError": 4.177089228017923,
+            "mae": 3.9095977393245858,
+            "rmse": 5.884595289275542,
+            "bias": -0.0004839403650753998,
+            "baselineMae": 3.9095977393245858,
+            "improvement": 0,
+            "beatsBaseline": false,
+            "intervalCoverage": 0.7048755186721992,
+            "intervalCoverageSamples": 1928
+          },
+          "WR": {
+            "samples": 3342,
+            "centerAdjustment": -1.0679439429396254,
+            "lowerError": -3.8165801630773672,
+            "upperError": 3.3433085395858244,
+            "mae": 3.1113629319117617,
+            "rmse": 4.539381006788895,
+            "bias": -0.08616930092686591,
+            "baselineMae": 3.1113629319117617,
+            "improvement": 0,
+            "beatsBaseline": false,
+            "intervalCoverage": 0.7324255858138062,
+            "intervalCoverageSamples": 3158
+          },
+          "TE": {
+            "samples": 2004,
+            "centerAdjustment": -0.7258310047361339,
+            "lowerError": -2.7310931430748395,
+            "upperError": 2.1327927366280677,
+            "mae": 2.2933155955785476,
+            "rmse": 3.5946600800586834,
+            "bias": -0.046094945863068906,
+            "baselineMae": 2.2933155955785476,
+            "improvement": 0,
+            "beatsBaseline": false,
+            "intervalCoverage": 0.6976744186046512,
+            "intervalCoverageSamples": 1892
+          }
+        },
+        "overall": {
+          "samples": 7392,
+          "centerAdjustment": -0.9103222674624382,
+          "lowerError": -3.731338717030132,
+          "upperError": 3.236300627515323,
+          "mae": 3.110527103171894,
+          "rmse": 4.7332792122512055,
+          "bias": -0.051588503408295516,
+          "baselineMae": 3.110527103171894,
+          "improvement": 0,
+          "beatsBaseline": false,
+          "intervalCoverage": 0.7153912295786758,
+          "intervalCoverageSamples": 6978
+        }
+      },
+      "promotion": "disabled-pending-independent-calibration-and-publication-gates"
+    },
+    {
+      "variant": "role-and-touchdowns",
+      "scoringProfile": "standard",
+      "overall": {
+        "samples": 7392,
+        "weekBatches": 20,
+        "baselineMae": 3.326989694101846,
+        "candidateMae": 3.2830083901156297,
+        "improvement": 0.01321954921116443,
+        "comparisonPairs": 125537,
+        "baselineRegret": 2.6974294431123735,
+        "candidateRegret": 2.6072560281032815
+      },
+      "earlySeason": {
+        "samples": 1549,
+        "weekBatches": 5,
+        "baselineMae": 3.489141793256819,
+        "candidateMae": 3.42993149753824,
+        "improvement": 0.0169698737474671,
+        "comparisonPairs": 28450,
+        "baselineRegret": 2.7069982425307586,
+        "candidateRegret": 2.6464885764499138
+      },
+      "roleChanges": {
+        "samples": 3117,
+        "weekBatches": 20,
+        "baselineMae": 2.5743933544257427,
+        "candidateMae": 2.4673138126587513,
+        "improvement": 0.041594087237254045,
+        "comparisonPairs": 7729,
+        "baselineRegret": 2.575132617414913,
+        "candidateRegret": 2.374731530599035
+      },
+      "limitedHistory": {
+        "samples": 540,
+        "weekBatches": 20,
+        "baselineMae": 2.4777457258524413,
+        "candidateMae": 2.373377871078735,
+        "improvement": 0.04212210061942483,
+        "comparisonPairs": 307,
+        "baselineRegret": 2.6374592833876225,
+        "candidateRegret": 1.8592833876221497
+      },
+      "byPosition": {
+        "RB": {
+          "samples": 2046,
+          "weekBatches": 20,
+          "baselineMae": 4.10056625123296,
+          "candidateMae": 4.0826989684197335,
+          "improvement": 0.004357272073790924,
+          "comparisonPairs": 15082,
+          "baselineRegret": 2.866655615966066,
+          "candidateRegret": 2.792315342792739
+        },
+        "WR": {
+          "samples": 3342,
+          "weekBatches": 20,
+          "baselineMae": 3.3813074361108764,
+          "candidateMae": 3.305919488670693,
+          "improvement": 0.02229550221759582,
+          "comparisonPairs": 29708,
+          "baselineRegret": 2.6581964454019396,
+          "candidateRegret": 2.653002558233494
+        },
+        "TE": {
+          "samples": 2004,
+          "weekBatches": 20,
+          "baselineMae": 2.4466166752972307,
+          "candidateMae": 2.4283498000052224,
+          "improvement": 0.007466177875939289,
+          "comparisonPairs": 3841,
+          "baselineRegret": 2.8077844311377236,
+          "candidateRegret": 2.480551939599061
+        }
+      },
+      "clearsResearchGate": false,
+      "championPolicy": {
+        "QB": {
+          "strategy": "recency-only",
+          "reason": "insufficient-samples",
+          "samples": 0,
+          "completedWeekBatches": 0,
+          "modelMae": 0,
+          "baselineMae": 0,
+          "modelImprovement": 0
+        },
+        "RB": {
+          "strategy": "recency-only",
+          "reason": "baseline-defended",
+          "samples": 2046,
+          "completedWeekBatches": 20,
+          "modelMae": 4.0826989684197335,
+          "baselineMae": 4.10056625123296,
+          "modelImprovement": 0.004357272073790924
+        },
+        "WR": {
+          "strategy": "first-party-model",
+          "reason": "model-cleared-margin",
+          "samples": 3342,
+          "completedWeekBatches": 20,
+          "modelMae": 3.305919488670693,
+          "baselineMae": 3.3813074361108764,
+          "modelImprovement": 0.02229550221759582
+        },
+        "TE": {
+          "strategy": "recency-only",
+          "reason": "baseline-defended",
+          "samples": 2004,
+          "completedWeekBatches": 20,
+          "modelMae": 2.4283498000052224,
+          "baselineMae": 2.4466166752972307,
+          "modelImprovement": 0.007466177875939289
+        },
+        "K": {
+          "strategy": "recency-only",
+          "reason": "insufficient-samples",
+          "samples": 0,
+          "completedWeekBatches": 0,
+          "modelMae": 0,
+          "baselineMae": 0,
+          "modelImprovement": 0
+        }
+      },
+      "rollingPointCalibration": {
+        "byPosition": {
+          "RB": {
+            "samples": 2046,
+            "centerAdjustment": -0.8316261695640612,
+            "lowerError": -4.793229530734357,
+            "upperError": 4.179183678262705,
+            "mae": 3.9120086076001015,
+            "rmse": 5.888613271577784,
+            "bias": -0.0003681233084205321,
+            "baselineMae": 3.9095977393245858,
+            "improvement": -0.000616653793116892,
+            "beatsBaseline": false,
+            "intervalCoverage": 0.7064315352697096,
+            "intervalCoverageSamples": 1928
+          },
+          "WR": {
+            "samples": 3342,
+            "centerAdjustment": -1.0299823840715225,
+            "lowerError": -3.8051025492447064,
+            "upperError": 3.3457347735223957,
+            "mae": 3.108523367642406,
+            "rmse": 4.539195225252598,
+            "bias": -0.07445630149491833,
+            "baselineMae": 3.1113629319117617,
+            "improvement": 0.0009126432150461929,
+            "beatsBaseline": true,
+            "intervalCoverage": 0.7324255858138062,
+            "intervalCoverageSamples": 3158
+          },
+          "TE": {
+            "samples": 2004,
+            "centerAdjustment": -0.7258310047361339,
+            "lowerError": -2.7310931430748395,
+            "upperError": 2.1327927366280677,
+            "mae": 2.2933155955785476,
+            "rmse": 3.5946600800586834,
+            "bias": -0.046094945863068906,
+            "baselineMae": 2.2933155955785476,
+            "improvement": 0,
+            "beatsBaseline": false,
+            "intervalCoverage": 0.6976744186046512,
+            "intervalCoverageSamples": 1892
+          }
+        },
+        "overall": {
+          "samples": 7392,
+          "centerAdjustment": -0.8930365213448379,
+          "lowerError": -3.7140596618583164,
+          "upperError": 3.248658618336018,
+          "mae": 3.1099106005614505,
+          "rmse": 4.7345815843906465,
+          "bias": -0.04626087816485871,
+          "baselineMae": 3.110527103171894,
+          "improvement": 0.00019819875860100088,
+          "beatsBaseline": true,
+          "intervalCoverage": 0.7158211521926053,
+          "intervalCoverageSamples": 6978
+        }
+      },
+      "finalPolicyPointCalibration": {
+        "byPosition": {
+          "RB": {
+            "samples": 2046,
+            "centerAdjustment": -0.8316261695640612,
+            "lowerError": -4.828869506063281,
+            "upperError": 4.177089228017923,
+            "mae": 3.9095977393245858,
+            "rmse": 5.884595289275542,
+            "bias": -0.0004839403650753998,
+            "baselineMae": 3.9095977393245858,
+            "improvement": 0,
+            "beatsBaseline": false,
+            "intervalCoverage": 0.7048755186721992,
+            "intervalCoverageSamples": 1928
+          },
+          "WR": {
+            "samples": 3342,
+            "centerAdjustment": -0.9378859333128412,
+            "lowerError": -3.7014005517498116,
+            "upperError": 3.2746298541832,
+            "mae": 3.0729179699838394,
+            "rmse": 4.554429884617571,
+            "bias": -0.06479102657738803,
+            "baselineMae": 3.1113629319117617,
+            "improvement": 0.012356309041806329,
+            "beatsBaseline": true,
+            "intervalCoverage": 0.7314756174794174,
+            "intervalCoverageSamples": 3158
+          },
+          "TE": {
+            "samples": 2004,
+            "centerAdjustment": -0.7258310047361339,
+            "lowerError": -2.7310931430748395,
+            "upperError": 2.1327927366280677,
+            "mae": 2.2933155955785476,
+            "rmse": 3.5946600800586834,
+            "bias": -0.046094945863068906,
+            "baselineMae": 2.2933155955785476,
+            "improvement": 0,
+            "beatsBaseline": false,
+            "intervalCoverage": 0.6976744186046512,
+            "intervalCoverageSamples": 1892
+          }
+        },
+        "overall": {
+          "samples": 7392,
+          "centerAdjustment": -0.8511005230978282,
+          "lowerError": -3.6552473739363505,
+          "upperError": 3.1700264708246357,
+          "mae": 3.093145736456102,
+          "rmse": 4.73981056093213,
+          "bias": -0.04192316346295536,
+          "baselineMae": 3.110527103171894,
+          "improvement": 0.005587916819007153,
+          "beatsBaseline": true,
+          "intervalCoverage": 0.7149613069647464,
+          "intervalCoverageSamples": 6978
+        }
+      },
+      "promotion": "disabled-pending-independent-calibration-and-publication-gates"
+    },
+    {
+      "variant": "recent-role",
+      "scoringProfile": "ppr",
+      "overall": {
+        "samples": 7392,
+        "weekBatches": 20,
+        "baselineMae": 4.357470732714765,
+        "candidateMae": 4.329483725251697,
+        "improvement": 0.006422764300617949,
+        "comparisonPairs": 215329,
+        "baselineRegret": 2.9291133567703533,
+        "candidateRegret": 2.9320892680503015
+      },
+      "earlySeason": {
+        "samples": 1549,
+        "weekBatches": 5,
+        "baselineMae": 4.4960086834009525,
+        "candidateMae": 4.491102017164385,
+        "improvement": 0.0010913382473398017,
+        "comparisonPairs": 45381,
+        "baselineRegret": 2.9094367686917475,
+        "candidateRegret": 2.981035014653718
+      },
+      "roleChanges": {
+        "samples": 3129,
+        "weekBatches": 20,
+        "baselineMae": 3.446672908312872,
+        "candidateMae": 3.348915371422741,
+        "improvement": 0.02836287036531787,
+        "comparisonPairs": 19570,
+        "baselineRegret": 2.6654931016862218,
+        "candidateRegret": 2.545656617271303
+      },
+      "limitedHistory": {
+        "samples": 540,
+        "weekBatches": 20,
+        "baselineMae": 3.1999304811769855,
+        "candidateMae": 3.1132843791254396,
+        "improvement": 0.02707749513973068,
+        "comparisonPairs": 778,
+        "baselineRegret": 3.2563624678663214,
+        "candidateRegret": 2.984511568123392
+      },
+      "byPosition": {
+        "RB": {
+          "samples": 2046,
+          "weekBatches": 20,
+          "baselineMae": 4.651113085004553,
+          "candidateMae": 4.6541148461033375,
+          "improvement": -0.0006453855332956953,
+          "comparisonPairs": 16833,
+          "baselineRegret": 3.233553139666154,
+          "candidateRegret": 3.2106932810550877
+        },
+        "WR": {
+          "samples": 3342,
+          "weekBatches": 20,
+          "baselineMae": 4.651197214802948,
+          "candidateMae": 4.589381404472627,
+          "improvement": 0.013290300857074975,
+          "comparisonPairs": 51381,
+          "baselineRegret": 2.8584661645355185,
+          "candidateRegret": 2.912229228703207
+        },
+        "TE": {
+          "samples": 2004,
+          "weekBatches": 20,
+          "baselineMae": 3.5678369223736146,
+          "candidateMae": 3.564626780531778,
+          "improvement": 0.0008997445543842314,
+          "comparisonPairs": 11352,
+          "baselineRegret": 2.7802677942212775,
+          "candidateRegret": 2.7006871035940803
+        }
+      },
+      "clearsResearchGate": false,
+      "championPolicy": {
+        "QB": {
+          "strategy": "recency-only",
+          "reason": "insufficient-samples",
+          "samples": 0,
+          "completedWeekBatches": 0,
+          "modelMae": 0,
+          "baselineMae": 0,
+          "modelImprovement": 0
+        },
+        "RB": {
+          "strategy": "recency-only",
+          "reason": "baseline-defended",
+          "samples": 2046,
+          "completedWeekBatches": 20,
+          "modelMae": 4.6541148461033375,
+          "baselineMae": 4.651113085004553,
+          "modelImprovement": -0.0006453855332956953
+        },
+        "WR": {
+          "strategy": "recency-only",
+          "reason": "baseline-defended",
+          "samples": 3342,
+          "completedWeekBatches": 20,
+          "modelMae": 4.589381404472627,
+          "baselineMae": 4.651197214802948,
+          "modelImprovement": 0.013290300857074975
+        },
+        "TE": {
+          "strategy": "recency-only",
+          "reason": "baseline-defended",
+          "samples": 2004,
+          "completedWeekBatches": 20,
+          "modelMae": 3.564626780531778,
+          "baselineMae": 3.5678369223736146,
+          "modelImprovement": 0.0008997445543842314
+        },
+        "K": {
+          "strategy": "recency-only",
+          "reason": "insufficient-samples",
+          "samples": 0,
+          "completedWeekBatches": 0,
+          "modelMae": 0,
+          "baselineMae": 0,
+          "modelImprovement": 0
+        }
+      },
+      "rollingPointCalibration": {
+        "byPosition": {
+          "RB": {
+            "samples": 2046,
+            "centerAdjustment": -1.0181113061213614,
+            "lowerError": -5.424690886090192,
+            "upperError": 5.179336080857012,
+            "mae": 4.445423520229645,
+            "rmse": 6.544666830735648,
+            "bias": 0.019057132425849093,
+            "baselineMae": 4.445423520229645,
+            "improvement": 0,
+            "beatsBaseline": false,
+            "intervalCoverage": 0.6976141078838174,
+            "intervalCoverageSamples": 1928
+          },
+          "WR": {
+            "samples": 3342,
+            "centerAdjustment": -1.663709273073287,
+            "lowerError": -5.27332926123743,
+            "upperError": 4.825264561276182,
+            "mae": 4.277547830842184,
+            "rmse": 6.0742131105862365,
+            "bias": -0.1463015202765047,
+            "baselineMae": 4.277547830842184,
+            "improvement": 0,
+            "beatsBaseline": false,
+            "intervalCoverage": 0.7330588980367321,
+            "intervalCoverageSamples": 3158
+          },
+          "TE": {
+            "samples": 2004,
+            "centerAdjustment": -1.2135037120020011,
+            "lowerError": -4.004485687266591,
+            "upperError": 3.55923203063883,
+            "mae": 3.322494888277924,
+            "rmse": 4.938319893443019,
+            "bias": -0.08758232187995593,
+            "baselineMae": 3.322494888277924,
+            "improvement": 0,
+            "beatsBaseline": false,
+            "intervalCoverage": 0.709830866807611,
+            "intervalCoverageSamples": 1892
+          }
+        },
+        "overall": {
+          "samples": 7392,
+          "centerAdjustment": -1.3654788320930455,
+          "lowerError": -4.84492524167369,
+          "upperError": 4.444002230546637,
+          "mae": 4.065094849725822,
+          "rmse": 5.928572795374618,
+          "bias": -0.08461360401355804,
+          "baselineMae": 4.065094849725822,
+          "improvement": 0,
+          "beatsBaseline": false,
+          "intervalCoverage": 0.7169676124964173,
+          "intervalCoverageSamples": 6978
+        }
+      },
+      "finalPolicyPointCalibration": {
+        "byPosition": {
+          "RB": {
+            "samples": 2046,
+            "centerAdjustment": -1.0181113061213614,
+            "lowerError": -5.424690886090192,
+            "upperError": 5.179336080857012,
+            "mae": 4.445423520229645,
+            "rmse": 6.544666830735648,
+            "bias": 0.019057132425849093,
+            "baselineMae": 4.445423520229645,
+            "improvement": 0,
+            "beatsBaseline": false,
+            "intervalCoverage": 0.6976141078838174,
+            "intervalCoverageSamples": 1928
+          },
+          "WR": {
+            "samples": 3342,
+            "centerAdjustment": -1.663709273073287,
+            "lowerError": -5.27332926123743,
+            "upperError": 4.825264561276182,
+            "mae": 4.277547830842184,
+            "rmse": 6.0742131105862365,
+            "bias": -0.1463015202765047,
+            "baselineMae": 4.277547830842184,
+            "improvement": 0,
+            "beatsBaseline": false,
+            "intervalCoverage": 0.7330588980367321,
+            "intervalCoverageSamples": 3158
+          },
+          "TE": {
+            "samples": 2004,
+            "centerAdjustment": -1.2135037120020011,
+            "lowerError": -4.004485687266591,
+            "upperError": 3.55923203063883,
+            "mae": 3.322494888277924,
+            "rmse": 4.938319893443019,
+            "bias": -0.08758232187995593,
+            "baselineMae": 3.322494888277924,
+            "improvement": 0,
+            "beatsBaseline": false,
+            "intervalCoverage": 0.709830866807611,
+            "intervalCoverageSamples": 1892
+          }
+        },
+        "overall": {
+          "samples": 7392,
+          "centerAdjustment": -1.3654788320930455,
+          "lowerError": -4.84492524167369,
+          "upperError": 4.444002230546637,
+          "mae": 4.065094849725822,
+          "rmse": 5.928572795374618,
+          "bias": -0.08461360401355804,
+          "baselineMae": 4.065094849725822,
+          "improvement": 0,
+          "beatsBaseline": false,
+          "intervalCoverage": 0.7169676124964173,
+          "intervalCoverageSamples": 6978
+        }
+      },
+      "promotion": "disabled-pending-independent-calibration-and-publication-gates"
+    },
+    {
+      "variant": "regressed-touchdowns",
+      "scoringProfile": "ppr",
+      "overall": {
+        "samples": 7392,
+        "weekBatches": 20,
+        "baselineMae": 4.357470732714765,
+        "candidateMae": 4.350459996471531,
+        "improvement": 0.0016089003629098128,
+        "comparisonPairs": 215329,
+        "baselineRegret": 2.9291133567703533,
+        "candidateRegret": 2.851770778668925
+      },
+      "earlySeason": {
+        "samples": 1549,
+        "weekBatches": 5,
+        "baselineMae": 4.4960086834009525,
+        "candidateMae": 4.467926584998478,
+        "improvement": 0.006246006264656887,
+        "comparisonPairs": 45381,
+        "baselineRegret": 2.9094367686917475,
+        "candidateRegret": 2.771676472532564
+      },
+      "roleChanges": {
+        "samples": 3129,
+        "weekBatches": 20,
+        "baselineMae": 3.446672908312872,
+        "candidateMae": 3.4355651861064374,
+        "improvement": 0.003222737550651943,
+        "comparisonPairs": 19570,
+        "baselineRegret": 2.6654931016862218,
+        "candidateRegret": 2.596290240163484
+      },
+      "limitedHistory": {
+        "samples": 540,
+        "weekBatches": 20,
+        "baselineMae": 3.1999304811769855,
+        "candidateMae": 3.1400568231470665,
+        "improvement": 0.0187109246223051,
+        "comparisonPairs": 778,
+        "baselineRegret": 3.2563624678663214,
+        "candidateRegret": 2.5651028277634973
+      },
+      "byPosition": {
+        "RB": {
+          "samples": 2046,
+          "weekBatches": 20,
+          "baselineMae": 4.651113085004553,
+          "candidateMae": 4.6543139140463845,
+          "improvement": -0.0006881855984432904,
+          "comparisonPairs": 16833,
+          "baselineRegret": 3.233553139666154,
+          "candidateRegret": 3.142606784292781
+        },
+        "WR": {
+          "samples": 3342,
+          "weekBatches": 20,
+          "baselineMae": 4.651197214802948,
+          "candidateMae": 4.63413169675414,
+          "improvement": 0.003669059225116292,
+          "comparisonPairs": 51381,
+          "baselineRegret": 2.8584661645355185,
+          "candidateRegret": 2.785104416029268
+        },
+        "TE": {
+          "samples": 2004,
+          "weekBatches": 20,
+          "baselineMae": 3.5678369223736146,
+          "candidateMae": 3.5671686103924287,
+          "improvement": 0.00018731573099514649,
+          "comparisonPairs": 11352,
+          "baselineRegret": 2.7802677942212775,
+          "candidateRegret": 2.754245947850595
+        }
+      },
+      "clearsResearchGate": false,
+      "championPolicy": {
+        "QB": {
+          "strategy": "recency-only",
+          "reason": "insufficient-samples",
+          "samples": 0,
+          "completedWeekBatches": 0,
+          "modelMae": 0,
+          "baselineMae": 0,
+          "modelImprovement": 0
+        },
+        "RB": {
+          "strategy": "recency-only",
+          "reason": "baseline-defended",
+          "samples": 2046,
+          "completedWeekBatches": 20,
+          "modelMae": 4.6543139140463845,
+          "baselineMae": 4.651113085004553,
+          "modelImprovement": -0.0006881855984432904
+        },
+        "WR": {
+          "strategy": "recency-only",
+          "reason": "baseline-defended",
+          "samples": 3342,
+          "completedWeekBatches": 20,
+          "modelMae": 4.63413169675414,
+          "baselineMae": 4.651197214802948,
+          "modelImprovement": 0.003669059225116292
+        },
+        "TE": {
+          "strategy": "recency-only",
+          "reason": "baseline-defended",
+          "samples": 2004,
+          "completedWeekBatches": 20,
+          "modelMae": 3.5671686103924287,
+          "baselineMae": 3.5678369223736146,
+          "modelImprovement": 0.00018731573099514649
+        },
+        "K": {
+          "strategy": "recency-only",
+          "reason": "insufficient-samples",
+          "samples": 0,
+          "completedWeekBatches": 0,
+          "modelMae": 0,
+          "baselineMae": 0,
+          "modelImprovement": 0
+        }
+      },
+      "rollingPointCalibration": {
+        "byPosition": {
+          "RB": {
+            "samples": 2046,
+            "centerAdjustment": -1.0181113061213614,
+            "lowerError": -5.424690886090192,
+            "upperError": 5.179336080857012,
+            "mae": 4.445423520229645,
+            "rmse": 6.544666830735648,
+            "bias": 0.019057132425849093,
+            "baselineMae": 4.445423520229645,
+            "improvement": 0,
+            "beatsBaseline": false,
+            "intervalCoverage": 0.6976141078838174,
+            "intervalCoverageSamples": 1928
+          },
+          "WR": {
+            "samples": 3342,
+            "centerAdjustment": -1.663709273073287,
+            "lowerError": -5.27332926123743,
+            "upperError": 4.825264561276182,
+            "mae": 4.277547830842184,
+            "rmse": 6.0742131105862365,
+            "bias": -0.1463015202765047,
+            "baselineMae": 4.277547830842184,
+            "improvement": 0,
+            "beatsBaseline": false,
+            "intervalCoverage": 0.7330588980367321,
+            "intervalCoverageSamples": 3158
+          },
+          "TE": {
+            "samples": 2004,
+            "centerAdjustment": -1.2135037120020011,
+            "lowerError": -4.004485687266591,
+            "upperError": 3.55923203063883,
+            "mae": 3.322494888277924,
+            "rmse": 4.938319893443019,
+            "bias": -0.08758232187995593,
+            "baselineMae": 3.322494888277924,
+            "improvement": 0,
+            "beatsBaseline": false,
+            "intervalCoverage": 0.709830866807611,
+            "intervalCoverageSamples": 1892
+          }
+        },
+        "overall": {
+          "samples": 7392,
+          "centerAdjustment": -1.3654788320930455,
+          "lowerError": -4.84492524167369,
+          "upperError": 4.444002230546637,
+          "mae": 4.065094849725822,
+          "rmse": 5.928572795374618,
+          "bias": -0.08461360401355804,
+          "baselineMae": 4.065094849725822,
+          "improvement": 0,
+          "beatsBaseline": false,
+          "intervalCoverage": 0.7169676124964173,
+          "intervalCoverageSamples": 6978
+        }
+      },
+      "finalPolicyPointCalibration": {
+        "byPosition": {
+          "RB": {
+            "samples": 2046,
+            "centerAdjustment": -1.0181113061213614,
+            "lowerError": -5.424690886090192,
+            "upperError": 5.179336080857012,
+            "mae": 4.445423520229645,
+            "rmse": 6.544666830735648,
+            "bias": 0.019057132425849093,
+            "baselineMae": 4.445423520229645,
+            "improvement": 0,
+            "beatsBaseline": false,
+            "intervalCoverage": 0.6976141078838174,
+            "intervalCoverageSamples": 1928
+          },
+          "WR": {
+            "samples": 3342,
+            "centerAdjustment": -1.663709273073287,
+            "lowerError": -5.27332926123743,
+            "upperError": 4.825264561276182,
+            "mae": 4.277547830842184,
+            "rmse": 6.0742131105862365,
+            "bias": -0.1463015202765047,
+            "baselineMae": 4.277547830842184,
+            "improvement": 0,
+            "beatsBaseline": false,
+            "intervalCoverage": 0.7330588980367321,
+            "intervalCoverageSamples": 3158
+          },
+          "TE": {
+            "samples": 2004,
+            "centerAdjustment": -1.2135037120020011,
+            "lowerError": -4.004485687266591,
+            "upperError": 3.55923203063883,
+            "mae": 3.322494888277924,
+            "rmse": 4.938319893443019,
+            "bias": -0.08758232187995593,
+            "baselineMae": 3.322494888277924,
+            "improvement": 0,
+            "beatsBaseline": false,
+            "intervalCoverage": 0.709830866807611,
+            "intervalCoverageSamples": 1892
+          }
+        },
+        "overall": {
+          "samples": 7392,
+          "centerAdjustment": -1.3654788320930455,
+          "lowerError": -4.84492524167369,
+          "upperError": 4.444002230546637,
+          "mae": 4.065094849725822,
+          "rmse": 5.928572795374618,
+          "bias": -0.08461360401355804,
+          "baselineMae": 4.065094849725822,
+          "improvement": 0,
+          "beatsBaseline": false,
+          "intervalCoverage": 0.7169676124964173,
+          "intervalCoverageSamples": 6978
+        }
+      },
+      "promotion": "disabled-pending-independent-calibration-and-publication-gates"
+    },
+    {
+      "variant": "role-and-touchdowns",
+      "scoringProfile": "ppr",
+      "overall": {
+        "samples": 7392,
+        "weekBatches": 20,
+        "baselineMae": 4.357470732714765,
+        "candidateMae": 4.32228340321594,
+        "improvement": 0.00807517288289441,
+        "comparisonPairs": 215329,
+        "baselineRegret": 2.9291133567703533,
+        "candidateRegret": 2.8740673573926685
+      },
+      "earlySeason": {
+        "samples": 1549,
+        "weekBatches": 5,
+        "baselineMae": 4.4960086834009525,
+        "candidateMae": 4.464250613558986,
+        "improvement": 0.007063613991497858,
+        "comparisonPairs": 45381,
+        "baselineRegret": 2.9094367686917475,
+        "candidateRegret": 2.877275732134605
+      },
+      "roleChanges": {
+        "samples": 3129,
+        "weekBatches": 20,
+        "baselineMae": 3.446672908312872,
+        "candidateMae": 3.3402535411757044,
+        "improvement": 0.030875969367589136,
+        "comparisonPairs": 19570,
+        "baselineRegret": 2.6654931016862218,
+        "candidateRegret": 2.520061318344375
+      },
+      "limitedHistory": {
+        "samples": 540,
+        "weekBatches": 20,
+        "baselineMae": 3.1999304811769855,
+        "candidateMae": 3.0740454242278394,
+        "improvement": 0.03933993494222523,
+        "comparisonPairs": 778,
+        "baselineRegret": 3.2563624678663214,
+        "candidateRegret": 2.5219151670951168
+      },
+      "byPosition": {
+        "RB": {
+          "samples": 2046,
+          "weekBatches": 20,
+          "baselineMae": 4.651113085004553,
+          "candidateMae": 4.6530317483180985,
+          "improvement": -0.0004125170208677929,
+          "comparisonPairs": 16833,
+          "baselineRegret": 3.233553139666154,
+          "candidateRegret": 3.1225568823145196
+        },
+        "WR": {
+          "samples": 3342,
+          "weekBatches": 20,
+          "baselineMae": 4.651197214802948,
+          "candidateMae": 4.575867191954945,
+          "improvement": 0.016195835043987517,
+          "comparisonPairs": 51381,
+          "baselineRegret": 2.8584661645355185,
+          "candidateRegret": 2.8630086997138977
+        },
+        "TE": {
+          "samples": 2004,
+          "weekBatches": 20,
+          "baselineMae": 3.5678369223736146,
+          "candidateMae": 3.561710481037913,
+          "improvement": 0.0017171304263608517,
+          "comparisonPairs": 11352,
+          "baselineRegret": 2.7802677942212775,
+          "candidateRegret": 2.6762332628611714
+        }
+      },
+      "clearsResearchGate": false,
+      "championPolicy": {
+        "QB": {
+          "strategy": "recency-only",
+          "reason": "insufficient-samples",
+          "samples": 0,
+          "completedWeekBatches": 0,
+          "modelMae": 0,
+          "baselineMae": 0,
+          "modelImprovement": 0
+        },
+        "RB": {
+          "strategy": "recency-only",
+          "reason": "baseline-defended",
+          "samples": 2046,
+          "completedWeekBatches": 20,
+          "modelMae": 4.6530317483180985,
+          "baselineMae": 4.651113085004553,
+          "modelImprovement": -0.0004125170208677929
+        },
+        "WR": {
+          "strategy": "recency-only",
+          "reason": "baseline-defended",
+          "samples": 3342,
+          "completedWeekBatches": 20,
+          "modelMae": 4.575867191954945,
+          "baselineMae": 4.651197214802948,
+          "modelImprovement": 0.016195835043987517
+        },
+        "TE": {
+          "strategy": "recency-only",
+          "reason": "baseline-defended",
+          "samples": 2004,
+          "completedWeekBatches": 20,
+          "modelMae": 3.561710481037913,
+          "baselineMae": 3.5678369223736146,
+          "modelImprovement": 0.0017171304263608517
+        },
+        "K": {
+          "strategy": "recency-only",
+          "reason": "insufficient-samples",
+          "samples": 0,
+          "completedWeekBatches": 0,
+          "modelMae": 0,
+          "baselineMae": 0,
+          "modelImprovement": 0
+        }
+      },
+      "rollingPointCalibration": {
+        "byPosition": {
+          "RB": {
+            "samples": 2046,
+            "centerAdjustment": -1.0181113061213614,
+            "lowerError": -5.424690886090192,
+            "upperError": 5.179336080857012,
+            "mae": 4.445423520229645,
+            "rmse": 6.544666830735648,
+            "bias": 0.019057132425849093,
+            "baselineMae": 4.445423520229645,
+            "improvement": 0,
+            "beatsBaseline": false,
+            "intervalCoverage": 0.6976141078838174,
+            "intervalCoverageSamples": 1928
+          },
+          "WR": {
+            "samples": 3342,
+            "centerAdjustment": -1.663709273073287,
+            "lowerError": -5.27332926123743,
+            "upperError": 4.825264561276182,
+            "mae": 4.277547830842184,
+            "rmse": 6.0742131105862365,
+            "bias": -0.1463015202765047,
+            "baselineMae": 4.277547830842184,
+            "improvement": 0,
+            "beatsBaseline": false,
+            "intervalCoverage": 0.7330588980367321,
+            "intervalCoverageSamples": 3158
+          },
+          "TE": {
+            "samples": 2004,
+            "centerAdjustment": -1.2135037120020011,
+            "lowerError": -4.004485687266591,
+            "upperError": 3.55923203063883,
+            "mae": 3.322494888277924,
+            "rmse": 4.938319893443019,
+            "bias": -0.08758232187995593,
+            "baselineMae": 3.322494888277924,
+            "improvement": 0,
+            "beatsBaseline": false,
+            "intervalCoverage": 0.709830866807611,
+            "intervalCoverageSamples": 1892
+          }
+        },
+        "overall": {
+          "samples": 7392,
+          "centerAdjustment": -1.3654788320930455,
+          "lowerError": -4.84492524167369,
+          "upperError": 4.444002230546637,
+          "mae": 4.065094849725822,
+          "rmse": 5.928572795374618,
+          "bias": -0.08461360401355804,
+          "baselineMae": 4.065094849725822,
+          "improvement": 0,
+          "beatsBaseline": false,
+          "intervalCoverage": 0.7169676124964173,
+          "intervalCoverageSamples": 6978
+        }
+      },
+      "finalPolicyPointCalibration": {
+        "byPosition": {
+          "RB": {
+            "samples": 2046,
+            "centerAdjustment": -1.0181113061213614,
+            "lowerError": -5.424690886090192,
+            "upperError": 5.179336080857012,
+            "mae": 4.445423520229645,
+            "rmse": 6.544666830735648,
+            "bias": 0.019057132425849093,
+            "baselineMae": 4.445423520229645,
+            "improvement": 0,
+            "beatsBaseline": false,
+            "intervalCoverage": 0.6976141078838174,
+            "intervalCoverageSamples": 1928
+          },
+          "WR": {
+            "samples": 3342,
+            "centerAdjustment": -1.663709273073287,
+            "lowerError": -5.27332926123743,
+            "upperError": 4.825264561276182,
+            "mae": 4.277547830842184,
+            "rmse": 6.0742131105862365,
+            "bias": -0.1463015202765047,
+            "baselineMae": 4.277547830842184,
+            "improvement": 0,
+            "beatsBaseline": false,
+            "intervalCoverage": 0.7330588980367321,
+            "intervalCoverageSamples": 3158
+          },
+          "TE": {
+            "samples": 2004,
+            "centerAdjustment": -1.2135037120020011,
+            "lowerError": -4.004485687266591,
+            "upperError": 3.55923203063883,
+            "mae": 3.322494888277924,
+            "rmse": 4.938319893443019,
+            "bias": -0.08758232187995593,
+            "baselineMae": 3.322494888277924,
+            "improvement": 0,
+            "beatsBaseline": false,
+            "intervalCoverage": 0.709830866807611,
+            "intervalCoverageSamples": 1892
+          }
+        },
+        "overall": {
+          "samples": 7392,
+          "centerAdjustment": -1.3654788320930455,
+          "lowerError": -4.84492524167369,
+          "upperError": 4.444002230546637,
+          "mae": 4.065094849725822,
+          "rmse": 5.928572795374618,
+          "bias": -0.08461360401355804,
+          "baselineMae": 4.065094849725822,
+          "improvement": 0,
+          "beatsBaseline": false,
+          "intervalCoverage": 0.7169676124964173,
+          "intervalCoverageSamples": 6978
+        }
+      },
+      "promotion": "disabled-pending-independent-calibration-and-publication-gates"
+    }
+  ]
+}

@@ -2,6 +2,7 @@ import { z } from "zod";
 
 import {
   decisionExecutionSchema,
+  decisionProjectionSetReferenceSchema,
   freshnessSchema,
   projectionSourceObservedAtStatusSchema,
   tradePackageDecisionSchema,
@@ -110,6 +111,7 @@ const tradeEvaluationProvenanceSchema = z
         sourceObservedAt: z.iso.datetime().nullable(),
         sourceObservedAtStatus: projectionSourceObservedAtStatusSchema,
         importedAt: z.iso.datetime(),
+        statsThrough: decisionProjectionSetReferenceSchema.shape.statsThrough,
       })
       .strict()
       .nullable(),

@@ -3558,6 +3558,8 @@ export const aiUsageLedger = pgTable(
     cacheWriteTokens: integer("cache_write_tokens").notNull().default(0),
     cost: numeric("cost", { precision: 16, scale: 6 }).notNull().default("0"),
     currency: text("currency").notNull().default("USD"),
+    // An untouched reservation has null latency; a terminal success/failure has a value.
+    // Migration 0048 permits that one transition while preserving all audit identity fields.
     latencyMs: integer("latency_ms"),
     succeeded: boolean("succeeded").notNull().default(true),
     errorCode: text("error_code"),

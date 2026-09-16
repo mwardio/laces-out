@@ -13,6 +13,7 @@ import {
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 
+import { AiServiceError } from "./ai-service.js";
 import type {
   RecapCardDeleteResult,
   RecapCardSaveResult,
@@ -142,11 +143,29 @@ export function registerRecapRoutes(app: FastifyInstance, options: RecapRouteOpt
       if (!user || !availableService(request, reply, options.recaps)) return reply;
       const { leagueId } = leaguePathSchema.parse(request.params);
       const input = recapGenerateRequestSchema.parse(request.body);
-      const result = await options.recaps.generate(user.id, leagueId, {
-        week: input.week,
-        ...(input.provider ? { provider: input.provider } : {}),
-        ...(input.expectedSpiceLevel ? { expectedSpiceLevel: input.expectedSpiceLevel } : {}),
-      });
+      let result: RecapGenerateResult | undefined;
+      try {
+        result = await options.recaps.generate(user.id, leagueId, {
+          week: input.week,
+          ...(input.provider ? { provider: input.provider } : {}),
+          ...(input.expectedSpiceLevel ? { expectedSpiceLevel: input.expectedSpiceLevel } : {}),
+        });
+      } catch (error) {
+        // AiServiceError contains the service's controlled public explanation, never a raw
+        // provider response. Unexpected failures still reach the global sanitizing handler.
+        if (!(error instanceof AiServiceError)) throw error;
+        if (error.statusCode >= 500) {
+          request.log.error({ err: error, aiErrorCode: error.code }, "recap generation failed");
+        }
+        return reply.code(error.statusCode).type("application/problem+json").send({
+          type: "https://fantasy.local/problems/recap-generation-failed",
+          title: "The recap could not be generated",
+          status: error.statusCode,
+          detail: error.message,
+          code: error.code,
+          correlationId: request.id,
+        });
+      }
       if (!result) return leagueNotFound(request, reply);
       if (result.state === "forbidden") return recapForbidden(request, reply);
       if (result.state === "unconfigured") {

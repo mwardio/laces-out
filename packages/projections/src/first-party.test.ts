@@ -131,6 +131,28 @@ function historyForAllPositions(weeks = 8): FirstPartyWeeklyStatLine[] {
 }
 
 describe("first-party component projection", () => {
+  it("keeps cached recency position priors isolated by history, position, and half-life", () => {
+    const history = [
+      line("peer", "WR", 1, { components: { ...statDefaults.WR, receiving_yards: 20 } }),
+      line("peer", "WR", 8, { components: { ...statDefaults.WR, receiving_yards: 100 } }),
+      line("back", "RB", 8, { components: { ...statDefaults.RB, receiving_yards: 7 } }),
+    ];
+    const target = { playerId: "rookie", position: "WR", season: 2025, week: 9, team: "AAA" };
+    const forecast = (halfLife: number, rows = history, position = "WR") =>
+      projectFirstPartyRecencyBaselineComponents({
+        target: { ...target, position },
+        history: rows,
+        config: { recencyHalfLifeWeeks: halfLife },
+      }).components.receiving_yards;
+    const expected = (halfLife: number) =>
+      (20 * 0.5 ** (8 / halfLife) + 100 * 0.5 ** (1 / halfLife)) /
+      (0.5 ** (8 / halfLife) + 0.5 ** (1 / halfLife));
+    expect(forecast(6)).toBeCloseTo(expected(6), 10);
+    expect(forecast(1)).toBeCloseTo(expected(1), 10);
+    expect(forecast(6)).toBeCloseTo(expected(6), 10);
+    expect(forecast(6, history, "RB")).toBe(7);
+    expect(forecast(6, [history[0]!])).toBe(20);
+  });
   it("is deterministic regardless of input ordering", () => {
     const history = historyForAllPositions();
     const input = {

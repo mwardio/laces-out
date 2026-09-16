@@ -1938,6 +1938,13 @@ const lineupChangeDecisionSchema = z
     remove: decisionPlayerSchema.nullable(),
     add: decisionPlayerSchema.nullable(),
     projectedPointDelta: z.number().finite(),
+    assessment: z
+      .object({
+        strength: z.enum(["close-call", "model-edge", "unrated"]),
+        explanation: z.string().min(1),
+      })
+      .strict()
+      .optional(),
   })
   .strict();
 

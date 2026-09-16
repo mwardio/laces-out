@@ -47,6 +47,7 @@ import {
   runFirstPartyProjectionBacktest,
   runFirstPartyTeamDefenseBacktest,
   scoreProjectionStatComponents,
+  weeklyInputCoverage,
   type FirstPartyPointResidualCalibration,
   type FirstPartyPlayerStatus,
   type FirstPartyProjectionChampionPolicy,
@@ -87,9 +88,8 @@ export const FIRST_PARTY_PROJECTION_SET_SOURCE = "laces-out-first-party";
 
 const projectionCheckIntervalMinutes = 60;
 const historySeasonCount = 4;
-// v6 also canonicalizes nflverse team aliases and admits current offensive role evidence for
-// two-way players without rewriting the underlying source observations.
-const sourceSchemaVersion = 6;
+// v7 refuses publication when prior-week schedule or statistics coverage is unresolved.
+const sourceSchemaVersion = 7;
 const championPolicyVersion = "walk-forward-mae-v1";
 const chunkSize = 500;
 const supportedPositions = ["QB", "RB", "WR", "TE", "K"] as const;
@@ -2271,12 +2271,38 @@ export class FirstPartyProjectionService implements ProjectionRefreshService {
       input.season,
       input.week,
     );
-    const releaseGate: ModelGate = unknownKickoff
-      ? {
-          state: input.gate.state === "rejected" ? "rejected" : "degraded",
-          reasons: [...new Set([...input.gate.reasons, "scheduled_game_kickoff_unknown"])],
-        }
-      : input.gate;
+    const historyThrough = input.playerHistory
+      .filter(
+        (row) =>
+          row.season < input.season || (row.season === input.season && row.week < input.week),
+      )
+      .reduce<{ season: number; week: number } | null>(
+        (latest, row) =>
+          !latest || row.season * 100 + row.week > latest.season * 100 + latest.week
+            ? { season: row.season, week: row.week }
+            : latest,
+        null,
+      );
+    const inputCoverage = weeklyInputCoverage({
+      season: input.season,
+      targetWeek: input.week,
+      statsThrough: historyThrough,
+      schedule: input.schedules,
+      now: input.now,
+    });
+    const releaseGate: ModelGate =
+      unknownKickoff || inputCoverage.warnings.length > 0
+        ? {
+            state: input.gate.state === "rejected" ? "rejected" : "degraded",
+            reasons: [
+              ...new Set([
+                ...input.gate.reasons,
+                ...(unknownKickoff ? ["scheduled_game_kickoff_unknown"] : []),
+                ...inputCoverage.warnings,
+              ]),
+            ],
+          }
+        : input.gate;
     const [existing] = await this.#database
       .select({ id: syncRuns.id })
       .from(syncRuns)

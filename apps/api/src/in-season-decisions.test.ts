@@ -154,7 +154,7 @@ const projectionSet: DecisionProjectionSetRow = {
   asOfAt: new Date("2026-09-15T09:00:00.000Z"),
   fetchedAt: new Date("2026-09-15T10:00:00.000Z"),
   createdAt: new Date("2026-09-15T11:00:00.000Z"),
-  metadata: { model: "weekly-v1" },
+  metadata: { model: "weekly-v1", statsThrough: { season: 2026, week: 1 } },
 };
 
 const rosScoringProfileKey = projectionScoringProfileKey({
@@ -316,6 +316,14 @@ function availabilityFeed(
 }
 
 class FakeRepository implements InSeasonDecisionRepository {
+  findProviderProjectionSnapshot?: NonNullable<
+    InSeasonDecisionRepository["findProviderProjectionSnapshot"]
+  >;
+  listProjectionScheduleGames() {
+    return Promise.resolve([
+      { season: 2026, week: 1, kickoffAt: new Date("2026-09-15T00:15:00Z"), status: "final" },
+    ]);
+  }
   membership: DecisionMembershipRow | undefined = membership;
   season: DecisionSeasonRow | undefined = season;
   teamRows: readonly DecisionTeamRow[] = teams;
@@ -324,6 +332,7 @@ class FakeRepository implements InSeasonDecisionRepository {
   projectionSets: readonly DecisionProjectionSetRow[] = [projectionSet];
   projectionRows: readonly DecisionProjectionPlayerRow[] = projectionRows;
   projectionRowsBySet = new Map<string, readonly DecisionProjectionPlayerRow[]>();
+  projectionAliasesBySet = new Map<string, readonly DecisionProjectionPlayerRow[]>();
   marketRows: readonly DecisionMarketSignalRow[] = [
     {
       playerId: playerIds.freeQb,
@@ -405,7 +414,9 @@ class FakeRepository implements InSeasonDecisionRepository {
   }
   listProjectionPlayersByIds(setId: string, ids: readonly string[]) {
     return Promise.resolve(
-      this.projectionRowsFor(setId).filter((row) => ids.includes(row.playerId)),
+      [...this.projectionRowsFor(setId), ...(this.projectionAliasesBySet.get(setId) ?? [])].filter(
+        (row) => ids.includes(row.playerId),
+      ),
     );
   }
   listLatestMarketSignals(ids: readonly string[], limit: number) {
@@ -424,6 +435,61 @@ class FakeRepository implements InSeasonDecisionRepository {
 }
 
 describe("InSeasonDecisionService", () => {
+  it("cross-checks ESPN forecasts without replacing model points and fingerprints changed evidence", async () => {
+    const repository = new FakeRepository();
+    const playerScores = [
+      { providerPlayerId: "1", projectedPoints: 10 },
+      { providerPlayerId: "2", projectedPoints: 30 },
+      { providerPlayerId: "3", projectedPoints: 2 },
+    ];
+    repository.espnIdentities = [playerIds.aQbLow, playerIds.aRbOne, playerIds.aRbTwo].map(
+      (playerId, i) => ({ playerId, source: "espn", externalId: String(i + 1) }),
+    );
+    repository.findProviderProjectionSnapshot = () =>
+      Promise.resolve({
+        asOfWeek: 2,
+        effectiveAt: NOW,
+        artifact: {
+          kind: "weekly-box-scores",
+          provider: "espn",
+          season: 2026,
+          week: 2,
+          providerLeagueId: season.externalKey,
+          playerScores,
+        },
+      });
+    const service = new InSeasonDecisionService(repository, () => NOW);
+    const result = await service.getSnapshot(USER_ID, LEAGUE_ID);
+    expect(result?.lineup.state).toBe("available");
+    if (result?.lineup.state !== "available") throw new Error("Expected available lineup");
+    expect(result.lineup.changes[0]?.add?.projectedPoints).toBe(25);
+    expect(result.lineup.changes[0]?.assessment?.explanation).toContain("Forecasts disagree");
+    expect(result.lineup.notes.join(" ")).toContain(
+      "favor starting Lead Back (30.00) instead of Spare Back (2.00)",
+    );
+    playerScores[2]!.projectedPoints = 35;
+    const revised = await service.getSnapshot(USER_ID, LEAGUE_ID);
+    expect(revised?.provenance.inputChecksum).not.toBe(result.provenance.inputChecksum);
+    if (revised?.lineup.state !== "available") throw new Error("Expected available lineup");
+    expect(revised.lineup.notes.join(" ")).not.toContain("Forecast disagreement");
+    expect(revised.lineup.changes[0]?.add?.projectedPoints).toBe(25);
+
+    playerScores[2]!.projectedPoints = 2;
+    const qbScore = playerScores.shift()!;
+    const partial = await service.getSnapshot(USER_ID, LEAGUE_ID);
+    if (partial?.lineup.state !== "available") throw new Error("Expected available lineup");
+    expect(partial.lineup.notes.join(" ")).not.toContain("Forecast disagreement");
+    expect(partial.lineup.changes[0]?.assessment?.explanation).toContain("Forecasts disagree");
+
+    playerScores.unshift(qbScore);
+    repository.rosterRows = rosterRows.map((row) =>
+      row.playerId === playerIds.aRbOne ? { ...row, locked: true } : row,
+    );
+    const locked = await service.getSnapshot(USER_ID, LEAGUE_ID);
+    if (locked?.lineup.state !== "available") throw new Error("Expected available lineup");
+    expect(locked.lineup.notes.join(" ")).not.toContain("Forecast disagreement");
+    expect(locked.lineup.assignments.some((row) => row.player.id === playerIds.aRbOne)).toBe(true);
+  });
   it("isolates league reads to an authenticated membership", async () => {
     const service = new InSeasonDecisionService(new FakeRepository(), () => NOW);
     await expect(service.getSnapshot(OTHER_USER_ID, LEAGUE_ID)).resolves.toBeUndefined();
@@ -850,8 +916,41 @@ describe("InSeasonDecisionService", () => {
     if (snapshot?.waivers.state !== "available") throw new Error("expected weekly waivers");
     expect(snapshot.waivers.restOfSeason).toMatchObject({
       state: "unavailable",
-      reasons: [{ code: "PROJECTION_COVERAGE_INCOMPLETE" }],
+      reasons: [
+        {
+          code: "PROJECTION_COVERAGE_INCOMPLETE",
+          message:
+            "The admitted rest-of-season release has no unambiguous forecast for: Spare Back. No ROS add/drop value was inferred.",
+        },
+      ],
     });
+  });
+
+  it("uses a current offensive roster alias without offering its canonical player as an add", async () => {
+    const repository = new FakeRepository();
+    const canonicalId = "73000000-0000-4000-8000-000000000021";
+    const original = projectionRows.find((row) => row.playerId === playerIds.aRbTwo)!;
+    repository.projectionSets = [projectionSet, rosProjectionSet];
+    repository.projectionRowsBySet.set(PROJECTION_SET_ID, projectionRows);
+    repository.projectionRowsBySet.set(ROS_SET_ID, [
+      ...projectionRows.filter((row) => row.playerId !== original.playerId),
+      { ...original, playerId: canonicalId, meanPoints: "500" },
+    ]);
+    repository.projectionAliasesBySet.set(ROS_SET_ID, [
+      {
+        ...original,
+        meanPoints: "500",
+        projectionPlayerId: canonicalId,
+      },
+    ]);
+    repository.findManagedProjectionProfile = () => Promise.resolve(managedRosProfile);
+    const snapshot = await snapshotFrom(repository);
+    if (snapshot.waivers.state !== "available") throw new Error("expected weekly waivers");
+    const ros = snapshot.waivers.restOfSeason;
+    if (ros.state !== "available") throw new Error("expected available ROS waivers");
+    expect(ros.dropCandidates).toContainEqual(expect.objectContaining({ id: original.playerId }));
+    expect(ros.recommendations.some(({ add }) => add.id === canonicalId)).toBe(false);
+    expect(ros.candidateCount).toBe(1);
   });
 
   it("withholds ROS waivers after a relevant scoring-profile change", async () => {
@@ -1168,7 +1267,10 @@ describe("InSeasonDecisionService", () => {
         source: "laces-out-first-party",
         fetchedAt: sourceObservedAt,
         createdAt: new Date("2026-09-15T11:00:00.000Z"),
-        metadata: { sourceAsOf: sourceObservedAt.toISOString() },
+        metadata: {
+          sourceAsOf: sourceObservedAt.toISOString(),
+          statsThrough: { season: 2026, week: 1 },
+        },
       },
     ];
 
@@ -1185,8 +1287,36 @@ describe("InSeasonDecisionService", () => {
     expect(snapshot?.provenance.projectionFreshness).toEqual({
       state: "fresh",
       observedAt: "2026-09-15T11:00:00.000Z",
-      label: "Updated 1h ago",
+      label: "Updated 1h ago · Stats through 2026 Week 1",
     });
+  });
+
+  it("pauses newly computed managed lineup advice until completed-week inputs arrive", async () => {
+    const repository = new FakeRepository();
+    repository.projectionSets = [
+      {
+        ...projectionSet,
+        source: "laces-out-first-party",
+        metadata: { statsThrough: { season: 2025, week: 18 } },
+      },
+    ];
+    const service = new InSeasonDecisionService(repository, () => NOW);
+    const stale = await service.getSnapshot(USER_ID, LEAGUE_ID);
+    expect(stale?.lineup.state).toBe("unavailable");
+    if (stale?.lineup.state === "unavailable") {
+      expect(stale.lineup.reasons.map((reason) => reason.code)).toContain(
+        "PROJECTION_COVERAGE_INCOMPLETE",
+      );
+    }
+    expect(stale?.provenance.projectionFreshness.state).toBe("stale");
+    repository.projectionSets = [{ ...projectionSet, source: "laces-out-first-party" }];
+    const recovered = await service.getSnapshot(USER_ID, LEAGUE_ID);
+    expect(recovered?.lineup.state).toBe("available");
+    expect(recovered?.provenance.projectionSet?.statsThrough).toEqual({ season: 2026, week: 1 });
+    if (recovered?.lineup.state === "available") {
+      expect(recovered.lineup.changes[0]?.assessment).toBeDefined();
+      expect(recovered.lineup.changes[0]?.add?.projectedRange).toBeDefined();
+    }
   });
 
   // Regression for review Finding 1: a compatible managed set that genuinely exists but loses
@@ -1408,9 +1538,17 @@ describe("InSeasonDecisionService", () => {
     ]);
     repository.projectionRowsBySet.set(ROS_SET_ID, [
       ...projectionRows,
-      rosterDefense,
       canonicalRosterDefense,
       availableDefense,
+    ]);
+    repository.projectionAliasesBySet.set(ROS_SET_ID, [
+      {
+        ...rosterDefense,
+        meanPoints: canonicalRosterDefense.meanPoints,
+        floorPoints: canonicalRosterDefense.floorPoints,
+        ceilingPoints: canonicalRosterDefense.ceilingPoints,
+        projectionPlayerId: canonicalRosterDefenseId,
+      },
     ]);
     repository.findManagedProjectionProfile = () =>
       Promise.resolve({ ...managedRosProfile, key: dstScoringProfileKey });
@@ -1893,13 +2031,14 @@ describe("InSeasonDecisionSnapshot ADR 0003 provenance", () => {
 });
 
 // Any intentional response-contract change must renew this only after semantic assertions pass.
-const SNAPSHOT_FINGERPRINT = "9d8481b12f47dcc3d6c73818abd37202c038898b403c51d0f09c60f9bff1b09c";
+// V6 also fingerprints the fresh league-scored provider comparison.
+const SNAPSHOT_FINGERPRINT = "6980538a8f5ab6595050502b481144c8af7513f3e559e60505995ca04cd8f159";
 /**
  * A second guard strips the generated provenance fields so changes elsewhere in the response remain
  * independently visible.
  */
 const SNAPSHOT_FINGERPRINT_WITHOUT_PROVENANCE =
-  "238358ac0a4d6edd63b43d7f1504ec287683c3fbb614153bafdf0b0be2f985d7";
+  "ca0345ed8bd6b4ca6ee0c8c5f72d70d74987e493a67be6eb4a11d8b092acd51f";
 
 describe("InSeasonDecisionService snapshot stability", () => {
   it("produces a byte-identical snapshot for the frozen fixture", async () => {

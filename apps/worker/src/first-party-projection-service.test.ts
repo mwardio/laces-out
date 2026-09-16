@@ -357,6 +357,31 @@ function latestSourceMetadata(harness: ProjectionDatabaseHarness): Row {
 }
 
 describe("first-party projection service release safety", () => {
+  it("records a coverage failure when a completed prior week is missing from training", async () => {
+    const now = new Date("2026-09-16T12:00:00Z");
+    const prior = scheduleFixture().map((row) => ({
+      ...row,
+      status: "final",
+      awayScore: 10,
+      homeScore: 17,
+    }));
+    const next = scheduleFixture().map((row) => ({
+      ...row,
+      week: 2,
+      gameId: String(row.gameId).replace("_01_", "_02_"),
+      kickoffAt: new Date("2026-09-20T17:00:00Z"),
+    }));
+    const harness = new ProjectionDatabaseHarness({ now, schedule: [...prior, ...next] });
+    await new FirstPartyProjectionService({
+      database: harness.database,
+      now: () => now,
+    }).refreshProjections({ season: 2026, week: 2 }, jobContext());
+    const metrics = harness.modelRuns[0]?.metrics as { gate?: { reasons?: string[] } };
+    expect(metrics.gate?.reasons?.join(" ")).toContain(
+      "Forecast history has not advanced through 2026 Week 1",
+    );
+    expect(harness.modelRuns[0]?.playersPublished).toBe(0);
+  });
   it.each([
     ["source loss", { availability: "not-published", publishable: false }],
     [

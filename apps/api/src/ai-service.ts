@@ -27,7 +27,7 @@ import {
   type CredentialEnvelopeV1,
   type CredentialKey,
 } from "@laces-out/security";
-import { and, count, eq, gte, isNull, sql } from "drizzle-orm";
+import { and, count, eq, gte, isNull, ne, or, sql } from "drizzle-orm";
 
 import { boundedValue, neutralizeLeagueDataDelimiters, objectValue } from "./ai-bounded-text.js";
 import { deterministicFeatureAnswer } from "./ai-deterministic-answer.js";
@@ -42,6 +42,11 @@ import {
 } from "./ai-provider-adapters.js";
 import { runAiToolLoop, type AiToolLoopResult } from "./ai-tool-loop.js";
 import { createAiToolRegistry, type AiExecutableTool } from "./ai-tool-registry.js";
+import { buildRecapPromptContext } from "./recap-prompt-context.js";
+import {
+  parseWeeklyRecapOutput,
+  WEEKLY_RECAP_OUTPUT_INSTRUCTIONS,
+} from "./recap-generation-output.js";
 
 export const AI_PROVIDER_DEFAULTS: Readonly<
   Record<
@@ -62,6 +67,16 @@ const MAX_CONTEXT_JSON_CHARS = 48_000;
 export const MANAGED_GEMINI_MODEL = "gemini-3.6-flash";
 export const MANAGED_RECAP_OPENROUTER_MODEL = "x-ai/grok-4.3";
 const MANAGED_RECAP_DAILY_LIMIT_PER_SPICE = 1;
+
+/** Operator-confirmed recording failures can be refunded without deleting their audit rows. */
+export const AI_USAGE_RECORDING_FAILURE_CODE = "AI_USAGE_RECORDING_FAILED";
+
+function countsTowardDailyLimit() {
+  return or(
+    isNull(aiUsageLedger.errorCode),
+    ne(aiUsageLedger.errorCode, AI_USAGE_RECORDING_FAILURE_CODE),
+  );
+}
 
 export interface ManagedGeminiConfiguration {
   readonly apiKey: string;
@@ -323,6 +338,7 @@ export class DrizzleAiRepository implements AiRepository {
           eq(aiUsageLedger.userId, userId),
           eq(aiUsageLedger.provider, provider),
           gte(aiUsageLedger.occurredAt, since),
+          countsTowardDailyLimit(),
           credentialId === null
             ? isNull(aiUsageLedger.credentialId)
             : eq(aiUsageLedger.credentialId, credentialId),
@@ -346,6 +362,7 @@ export class DrizzleAiRepository implements AiRepository {
             eq(aiUsageLedger.userId, input.userId),
             eq(aiUsageLedger.provider, input.provider),
             gte(aiUsageLedger.occurredAt, input.since),
+            countsTowardDailyLimit(),
             input.credentialId === null
               ? isNull(aiUsageLedger.credentialId)
               : eq(aiUsageLedger.credentialId, input.credentialId),
@@ -395,7 +412,7 @@ export class DrizzleAiRepository implements AiRepository {
         latencyMs: input.latencyMs,
         succeeded: input.succeeded,
         errorCode: input.errorCode,
-        occurredAt: input.occurredAt,
+        // The reservation stays in the UTC-day budget in which it was admitted.
       })
       .where(eq(aiUsageLedger.id, input.reservationId));
   }
@@ -469,7 +486,12 @@ export interface RecapPromptPort {
 
 export class AiServiceError extends Error {
   readonly code:
-    "NOT_CONFIGURED" | "LEAGUE_NOT_FOUND" | "DAILY_LIMIT" | "INVALID_CREDENTIAL" | "PROVIDER_ERROR";
+    | "NOT_CONFIGURED"
+    | "LEAGUE_NOT_FOUND"
+    | "DAILY_LIMIT"
+    | "INVALID_CREDENTIAL"
+    | "PROVIDER_ERROR"
+    | "RECAP_WEEK_UNAVAILABLE";
   readonly statusCode: number;
 
   constructor(code: AiServiceError["code"], message: string, statusCode: number) {
@@ -618,6 +640,7 @@ Separate facts from recommendations. If the current week, opponent, projections,
   "start-sit": {
     title: "Start / sit review",
     instructions: `Review the deterministic lineup result for the member's claimed team.
+Preserve each change's uncertainty assessment and the lineup's forecast-disagreement notes. A close-call assessment can mean overlapping projected ranges or disagreement with ESPN: describe a model lean, never a must-start or a confident upgrade. Report supplied ESPN alternatives as separate comparisons; do not blend their points with Laces Out's. Projection quality scores are not probabilities that one player outscores another. State the statistical cutoff when supplied; if completed-week coverage is missing and advice is unavailable, do not infer a replacement lineup.
 Confirm the clear calls, explain only the genuinely close decisions, and flag bye, injury-status, lock, or eligibility risk only when it appears in the supplied data.
 Recommend only players and slot changes present in the Decision Desk lineup result. If there are no changes, clearly say the lineup is already optimized under the current projection set.`,
   },
@@ -671,6 +694,7 @@ interface LeagueAiContext {
   readonly decisions: unknown;
   readonly analytics: unknown;
   readonly leagueName: string;
+  readonly recap?: Extract<ReturnType<typeof buildRecapPromptContext>, { state: "available" }>;
 }
 
 function noActionAnswer(feature: AiFeatureName, decisions: unknown): string | undefined {
@@ -870,8 +894,9 @@ export class AiService {
     const started = Date.now();
     const execution = await this.#byokCredential(userId, provider);
     const reservationId = await this.#reserve(execution, "connection-test", {});
+    let completion: AiCompletionResult;
     try {
-      const completion = await this.#adapters[provider].complete({
+      completion = await this.#adapters[provider].complete({
         apiKey: execution.apiKey,
         model: execution.model,
         system: "Return a short confirmation that the API connection works.",
@@ -879,25 +904,6 @@ export class AiService {
         maxOutputTokens: 32,
         safetyIdentifier: this.#safetyIdentifier(userId),
       });
-      const validatedAt = this.#now();
-      const latencyMs = Date.now() - started;
-      await Promise.all([
-        this.#repository.markValidated(execution.credential.id, validatedAt),
-        this.#finalizeSuccess({
-          reservationId,
-          execution,
-          completion,
-          latencyMs,
-          occurredAt: validatedAt,
-        }),
-      ]);
-      return {
-        provider,
-        model: execution.model,
-        ok: true,
-        validatedAt: validatedAt.toISOString(),
-        latencyMs,
-      };
     } catch (error) {
       return this.#handleProviderFailure({
         error,
@@ -906,6 +912,26 @@ export class AiService {
         started,
       });
     }
+
+    const validatedAt = this.#now();
+    const latencyMs = Date.now() - started;
+    await Promise.all([
+      this.#repository.markValidated(execution.credential.id, validatedAt),
+      this.#finalizeCompletion({
+        reservationId,
+        execution,
+        completion,
+        latencyMs,
+        occurredAt: validatedAt,
+      }),
+    ]);
+    return {
+      provider,
+      model: execution.model,
+      ok: true,
+      validatedAt: validatedAt.toISOString(),
+      latencyMs,
+    };
   }
 
   async analyzeLeague(input: {
@@ -930,8 +956,9 @@ export class AiService {
       "League analytics": analytics,
     });
     const prompt = `Question from the signed-in league member:\n${input.question}\n\n${leagueData.block}`;
+    let completion: AiCompletionResult;
     try {
-      const completion = await this.#adapters[provider].complete({
+      completion = await this.#adapters[provider].complete({
         apiKey: execution.apiKey,
         model: execution.model,
         system: analystSystem(leagueData.openTag, leagueData.closeTag),
@@ -939,26 +966,6 @@ export class AiService {
         maxOutputTokens: execution.maxOutputTokens,
         safetyIdentifier: this.#safetyIdentifier(input.userId),
       });
-      const generatedAt = this.#now();
-      await this.#finalizeSuccess({
-        reservationId,
-        execution,
-        completion,
-        latencyMs: Date.now() - started,
-        occurredAt: generatedAt,
-      });
-      return {
-        provider,
-        accessMode: execution.accessMode,
-        model: execution.model,
-        league: { id: input.leagueId, name: leagueName },
-        answer: withoutInlineSourceTags(completion.text.slice(0, 30_000)),
-        generatedAt: generatedAt.toISOString(),
-        usage: {
-          inputTokens: completion.inputTokens,
-          outputTokens: completion.outputTokens,
-        },
-      };
     } catch (error) {
       return this.#handleProviderFailure({
         error,
@@ -967,6 +974,27 @@ export class AiService {
         started,
       });
     }
+
+    const generatedAt = this.#now();
+    await this.#finalizeCompletion({
+      reservationId,
+      execution,
+      completion,
+      latencyMs: Date.now() - started,
+      occurredAt: generatedAt,
+    });
+    return {
+      provider,
+      accessMode: execution.accessMode,
+      model: execution.model,
+      league: { id: input.leagueId, name: leagueName },
+      answer: withoutInlineSourceTags(completion.text.slice(0, 30_000)),
+      generatedAt: generatedAt.toISOString(),
+      usage: {
+        inputTokens: completion.inputTokens,
+        outputTokens: completion.outputTokens,
+      },
+    };
   }
 
   async generateFeature(input: {
@@ -1011,11 +1039,9 @@ export class AiService {
       : this.#executionCredential(input.userId, input.provider ?? "gemini");
     const [execution, context] = await Promise.all([
       executionPromise,
-      this.#leagueContext(input.userId, input.leagueId, {
-        ...(input.weeklyAwardsWeek === undefined
-          ? {}
-          : { weeklyAwardsWeek: input.weeklyAwardsWeek }),
-      }),
+      input.feature === "weekly-recap"
+        ? this.#recapContext(input.userId, input.leagueId, input.weeklyAwardsWeek)
+        : this.#leagueContext(input.userId, input.leagueId),
     ]);
     const provider = execution.provider;
     const definition = FEATURE_DEFINITIONS[input.feature];
@@ -1067,10 +1093,6 @@ export class AiService {
         }
       : { state: "not-requested" };
 
-    const reservationId = await this.#reserve(execution, "league-feature", {
-      leagueId: input.leagueId,
-      feature: input.feature,
-    });
     // Persona cards ride inside the untrusted block with every other synced string; the spice
     // level is a validated enum and therefore trusted instruction text outside it.
     const recapInputs =
@@ -1079,22 +1101,29 @@ export class AiService {
         : undefined;
     const spiceLevel: RecapSpiceLevel =
       input.recapSpiceLevel ?? recapInputs?.spiceLevel ?? "medium";
-    const sections: Record<string, unknown> = {
-      "League overview": context.dashboard,
-      "Decision Desk": context.decisions,
-      "League analytics": context.analytics,
-    };
+    const sections: Record<string, unknown> = context.recap
+      ? { ...context.recap.sections }
+      : {
+          "League overview": context.dashboard,
+          "Decision Desk": context.decisions,
+          "League analytics": context.analytics,
+        };
     if (recapInputs && recapInputs.personaCards.length > 0) {
       sections["League Intel"] = recapInputs.personaCards;
     }
     const leagueData = serializeLeagueData(sections);
     const instructions =
       input.feature === "weekly-recap"
-        ? `${definition.instructions}${PERSONA_USAGE_CLAUSE}${SPICE_INSTRUCTION_CLAUSES[spiceLevel]}`
+        ? `${definition.instructions}${PERSONA_USAGE_CLAUSE}${SPICE_INSTRUCTION_CLAUSES[spiceLevel]}\nRequested recap week: ${context.recap!.week}. Recap only that completed week.\n${WEEKLY_RECAP_OUTPUT_INSTRUCTIONS}`
         : definition.instructions;
     const prompt = `Feature requested: ${definition.title}\n\n${instructions}${memberInstructions}\n\n${leagueData.block}`;
+    const reservationId = await this.#reserve(execution, "league-feature", {
+      leagueId: input.leagueId,
+      feature: input.feature,
+    });
+    let completion: AiCompletionResult;
     try {
-      const completion = await this.#adapters[provider].complete({
+      completion = await this.#adapters[provider].complete({
         apiKey: execution.apiKey,
         model: execution.model,
         system: analystSystem(
@@ -1107,25 +1136,6 @@ export class AiService {
         maxOutputTokens: execution.maxOutputTokens,
         safetyIdentifier: this.#safetyIdentifier(input.userId),
       });
-      const completedAt = this.#now();
-      await this.#finalizeSuccess({
-        reservationId,
-        execution,
-        completion,
-        latencyMs: Date.now() - started,
-        occurredAt: completedAt,
-      });
-      return {
-        ...envelope,
-        outcome: "generated",
-        answer: withoutInlineSourceTags(completion.text.slice(0, 30_000)),
-        generatedAt: completedAt.toISOString(),
-        usage: {
-          inputTokens: completion.inputTokens,
-          outputTokens: completion.outputTokens,
-        },
-        toolUse,
-      };
     } catch (error) {
       return this.#handleProviderFailure({
         error,
@@ -1134,6 +1144,39 @@ export class AiService {
         started,
       });
     }
+
+    const completedAt = this.#now();
+    const recapOutput = context.recap
+      ? parseWeeklyRecapOutput(completion.text, context.recap.week)
+      : undefined;
+    await this.#finalizeCompletion({
+      reservationId,
+      execution,
+      completion,
+      latencyMs: Date.now() - started,
+      occurredAt: completedAt,
+      ...(recapOutput?.state === "invalid" ? { errorCode: "INVALID_RECAP_OUTPUT" } : {}),
+    });
+    if (recapOutput?.state === "invalid") {
+      throw new AiServiceError(
+        "PROVIDER_ERROR",
+        `The model did not return a complete recap for Week ${context.recap!.week}. No recap was saved.`,
+        502,
+      );
+    }
+    return {
+      ...envelope,
+      outcome: "generated",
+      answer: withoutInlineSourceTags(
+        recapOutput?.state === "written" ? recapOutput.body : completion.text.slice(0, 30_000),
+      ),
+      generatedAt: completedAt.toISOString(),
+      usage: {
+        inputTokens: completion.inputTokens,
+        outputTokens: completion.outputTokens,
+      },
+      toolUse,
+    };
   }
 
   /**
@@ -1266,6 +1309,21 @@ export class AiService {
       answer: deterministicFeatureAnswer(loop.toolResults).slice(0, 30_000),
       toolUse: degraded,
     };
+  }
+
+  async #recapContext(
+    userId: string,
+    leagueId: string,
+    weeklyAwardsWeek?: number,
+  ): Promise<LeagueAiContext> {
+    const analytics = await this.#analytics.getSnapshot(userId, leagueId, {
+      ...(weeklyAwardsWeek === undefined ? {} : { weeklyAwardsWeek }),
+    });
+    if (!analytics) throw new AiServiceError("LEAGUE_NOT_FOUND", "League not found", 404);
+    const recap = buildRecapPromptContext(analytics, weeklyAwardsWeek);
+    if (recap.state === "unavailable")
+      throw new AiServiceError("RECAP_WEEK_UNAVAILABLE", recap.message, 409);
+    return { dashboard: null, decisions: null, analytics, leagueName: recap.leagueName, recap };
   }
 
   async #leagueContext(
@@ -1420,12 +1478,13 @@ export class AiService {
     return `lo_${keyedHash(this.#key, "safety-identifier", userId).slice(0, 40)}`;
   }
 
-  async #finalizeSuccess(input: {
+  async #finalizeCompletion(input: {
     readonly reservationId: string;
     readonly execution: AiExecution;
     readonly completion: AiCompletionResult;
     readonly latencyMs: number;
     readonly occurredAt: Date;
+    readonly errorCode?: string;
   }): Promise<void> {
     await this.#repository.finalizeUsage({
       reservationId: input.reservationId,
@@ -1441,8 +1500,8 @@ export class AiService {
       cacheReadTokens: input.completion.cacheReadTokens,
       cacheWriteTokens: input.completion.cacheWriteTokens,
       latencyMs: input.latencyMs,
-      succeeded: true,
-      errorCode: null,
+      succeeded: input.errorCode === undefined,
+      errorCode: input.errorCode ?? null,
       occurredAt: input.occurredAt,
     });
   }

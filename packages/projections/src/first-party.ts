@@ -1027,6 +1027,7 @@ interface PreparedFirstPartyHistory {
   >;
   readonly teamWeeks: Map<string, readonly TeamWeekValue[]>;
   readonly positionPriors: Map<string, number>;
+  readonly baselinePositionMeans: Map<string, Readonly<Record<string, number | undefined>>>;
   readonly teamMultipliers: Map<string, { readonly multiplier: number; readonly samples: number }>;
   readonly opponentMultipliers: Map<
     string,
@@ -1101,6 +1102,7 @@ function prepareFirstPartyHistory(
     byPositionOpponent,
     teamWeeks: new Map(),
     positionPriors: new Map(),
+    baselinePositionMeans: new Map(),
     teamMultipliers: new Map(),
     opponentMultipliers: new Map(),
   };
@@ -1150,16 +1152,18 @@ function recencyWeight(
   return 0.5 ** (distance / halfLife);
 }
 
+function thresholdIndicator(
+  row: FirstPartyWeeklyStatLine,
+  baseComponent: string,
+  lower: number,
+  upper?: number,
+): number | undefined {
+  const base = row.components[baseComponent];
+  if (base === undefined || !Number.isFinite(base) || base < 0) return undefined;
+  return base >= lower && (upper === undefined || base < upper) ? 1 : 0;
+}
+
 function componentValue(row: FirstPartyWeeklyStatLine, component: string): number | undefined {
-  const thresholdIndicator = (
-    baseComponent: string,
-    lower: number,
-    upper?: number,
-  ): number | undefined => {
-    const base = row.components[baseComponent];
-    if (base === undefined || !Number.isFinite(base) || base < 0) return undefined;
-    return base >= lower && (upper === undefined || base < upper) ? 1 : 0;
-  };
   const value =
     row.components[component] ??
     espnEveryNFloorUnitValue(row.components, component) ??
@@ -1179,17 +1183,17 @@ function componentValue(row: FirstPartyWeeklyStatLine, component: string): numbe
               ? (row.components.field_goals_made_50_59 ?? 0) +
                 (row.components.field_goals_made_60_plus ?? 0)
               : component === "passing_yards_300_399_probability"
-                ? thresholdIndicator("passing_yards", 300, 400)
+                ? thresholdIndicator(row, "passing_yards", 300, 400)
                 : component === "passing_yards_400_plus_probability"
-                  ? thresholdIndicator("passing_yards", 400)
+                  ? thresholdIndicator(row, "passing_yards", 400)
                   : component === "rushing_yards_100_199_probability"
-                    ? thresholdIndicator("rushing_yards", 100, 200)
+                    ? thresholdIndicator(row, "rushing_yards", 100, 200)
                     : component === "rushing_yards_200_plus_probability"
-                      ? thresholdIndicator("rushing_yards", 200)
+                      ? thresholdIndicator(row, "rushing_yards", 200)
                       : component === "receiving_yards_100_199_probability"
-                        ? thresholdIndicator("receiving_yards", 100, 200)
+                        ? thresholdIndicator(row, "receiving_yards", 100, 200)
                         : component === "receiving_yards_200_plus_probability"
-                          ? thresholdIndicator("receiving_yards", 200)
+                          ? thresholdIndicator(row, "receiving_yards", 200)
                           : undefined);
   return value === undefined || !Number.isFinite(value) || value < 0 ? undefined : value;
 }
@@ -1215,12 +1219,18 @@ function weightedComponentMean(
   target: FirstPartyProjectionTarget,
   halfLife: number,
 ): number | undefined {
-  return weightedMean(
-    rows.flatMap((row) => {
-      const value = componentValue(row, component);
-      return value === undefined ? [] : [{ value, weight: recencyWeight(row, target, halfLife) }];
-    }),
-  );
+  // Preserve the original summation order without allocating a sample object/array per row.
+  let numerator = 0;
+  let denominator = 0;
+  for (const row of rows) {
+    const value = componentValue(row, component);
+    if (value === undefined) continue;
+    const weight = recencyWeight(row, target, halfLife);
+    if (!Number.isFinite(weight) || weight <= 0) continue;
+    numerator += value * weight;
+    denominator += weight;
+  }
+  return denominator === 0 ? undefined : numerator / denominator;
 }
 
 function targetRoleValue(
@@ -1266,23 +1276,18 @@ function positionPriorMean(
   halfLife: number,
   wantedRole: number | undefined,
 ): number {
-  return (
-    weightedMean(
-      rows.flatMap((row) => {
-        const value = componentValue(row, component);
-        return value === undefined
-          ? []
-          : [
-              {
-                value,
-                weight:
-                  recencyWeight(row, target, halfLife) *
-                  roleSimilarityWeight(row, component, wantedRole),
-              },
-            ];
-      }),
-    ) ?? 0
-  );
+  let numerator = 0;
+  let denominator = 0;
+  for (const row of rows) {
+    const value = componentValue(row, component);
+    if (value === undefined) continue;
+    const weight =
+      recencyWeight(row, target, halfLife) * roleSimilarityWeight(row, component, wantedRole);
+    if (!Number.isFinite(weight) || weight <= 0) continue;
+    numerator += value * weight;
+    denominator += weight;
+  }
+  return denominator === 0 ? 0 : numerator / denominator;
 }
 
 function roleMultiplier(
@@ -2071,6 +2076,19 @@ function recencyOnlyBaseline(
 ): ProjectionStatComponents {
   const prepared = prepareFirstPartyHistory(trainingRows);
   const positionRows = prepared.byPosition.get(position) ?? [];
+  // These means depend on the immutable history, position, week, and half-life, not the player.
+  // Reusing them avoids rescanning every NFL player for every individual forecast.
+  const priorKey = `${position}:${ordinal(target.season, target.week)}:${config.recencyHalfLifeWeeks}`;
+  let positionMeans = prepared.baselinePositionMeans.get(priorKey);
+  if (positionMeans === undefined) {
+    positionMeans = Object.fromEntries(
+      POSITION_COMPONENTS[position].map((component) => [
+        component,
+        weightedComponentMean(positionRows, component, target, config.recencyHalfLifeWeeks),
+      ]),
+    );
+    prepared.baselinePositionMeans.set(priorKey, positionMeans);
+  }
   const playerRows = (prepared.byPlayer.get(target.playerId) ?? [])
     .filter((row) => normalizedPosition(row.position) === position)
     .slice(-config.maxPlayerGames);
@@ -2082,12 +2100,7 @@ function recencyOnlyBaseline(
         target,
         config.recencyHalfLifeWeeks,
       );
-      const positionMean = weightedComponentMean(
-        positionRows,
-        component,
-        target,
-        config.recencyHalfLifeWeeks,
-      );
+      const positionMean = positionMeans[component];
       // Kickers (weekly model v8): evidence-weighted blend toward the position mean instead of
       // the hard player-mean switch. A kicker's slot is binary — whoever holds it inherits the
       // team's kicking volume — so one or two games of personal history carry almost no signal
@@ -2904,8 +2917,21 @@ export function evaluateFirstPartyBacktestForScoringProfile(
       FirstPartyProjectionPosition,
       { readonly model: number; readonly baseline: number }
     >();
+    const intervalByPosition = new Map<
+      FirstPartyProjectionPosition,
+      { lower: number; upper: number }
+    >();
     for (const position of new Set(weekSamples.map((sample) => sample.position))) {
       const recentRawSamples = recentPointSamples(priorRawByPosition.get(position) ?? []);
+      const priorErrors = priorAdjustedByPosition.get(position) ?? [];
+      // Errors remain frozen for the whole target week. Sorting the same errors per player
+      // adds cost without adding information or changing the locked calibration boundary.
+      if (priorErrors.length >= minimumIntervalSamples) {
+        intervalByPosition.set(position, {
+          lower: quantile(priorErrors, lowerQuantile),
+          upper: quantile(priorErrors, upperQuantile),
+        });
+      }
       centerByPosition.set(position, {
         model:
           recentRawSamples.length < minimumIntervalSamples
@@ -2918,7 +2944,7 @@ export function evaluateFirstPartyBacktestForScoringProfile(
       });
     }
     for (const sample of weekSamples) {
-      const priorAdjustedErrors = priorAdjustedByPosition.get(sample.position) ?? [];
+      const interval = intervalByPosition.get(sample.position);
       const center = centerByPosition.get(sample.position) ?? { model: 0, baseline: 0 };
       const centerAdjustment = center.model;
       const baselineCenterAdjustment = center.baseline;
@@ -2930,12 +2956,10 @@ export function evaluateFirstPartyBacktestForScoringProfile(
         squaredError: error * error,
         absoluteError: Math.abs(error),
         baselineAbsoluteError: Math.abs(baselineError),
-        ...(priorAdjustedErrors.length < minimumIntervalSamples
+        ...(interval === undefined
           ? {}
           : {
-              intervalCovered:
-                error >= quantile(priorAdjustedErrors, lowerQuantile) &&
-                error <= quantile(priorAdjustedErrors, upperQuantile),
+              intervalCovered: error >= interval.lower && error <= interval.upper,
             }),
       };
       withCoverage.push(adjustedSample);

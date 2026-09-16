@@ -107,6 +107,14 @@ export const decisionProjectionSetReferenceSchema = z
     sourceObservedAt: z.iso.datetime().nullable(),
     sourceObservedAtStatus: projectionSourceObservedAtStatusSchema,
     importedAt: z.iso.datetime(),
+    statsThrough: z
+      .object({
+        season: z.number().int().min(2000).max(2200),
+        week: z.number().int().min(1).max(18),
+      })
+      .strict()
+      .nullable()
+      .optional(),
   })
   .strict();
 
@@ -150,6 +158,11 @@ export const decisionPlayerSchema = z
     nflTeam: z.enum(NFL_TEAMS).nullable(),
     status: z.enum(PLAYER_STATUSES).nullable(),
     projectedPoints: z.number().finite(),
+    projectedRange: z
+      .object({ floor: z.number().finite(), ceiling: z.number().finite() })
+      .strict()
+      .nullable()
+      .optional(),
   })
   .strict();
 export type DecisionPlayer = z.infer<typeof decisionPlayerSchema>;
