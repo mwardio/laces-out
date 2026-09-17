@@ -1,14 +1,18 @@
 import { defineConfig } from "tsup";
 
 export default defineConfig({
-  entry: [
-    "src/worker.ts",
-    "src/ros-worker.ts",
-    "src/ros-validation-worker.ts",
-    "src/ros-profile-validator-entry.ts",
-    "src/first-party-ros-simulation-worker.ts",
-    "src/first-party-ros-artifact-worker.ts",
-  ],
+  // Explicit output names keep service commands and sibling worker URLs stable when a CLI
+  // entry outside src/ joins the bundle; inferred roots would otherwise move services to src/.
+  entry: {
+    worker: "src/worker.ts",
+    "ros-worker": "src/ros-worker.ts",
+    "ros-validation-worker": "src/ros-validation-worker.ts",
+    "ros-profile-validator-entry": "src/ros-profile-validator-entry.ts",
+    "ros-outcome-simulation-worker": "src/ros-outcome-simulation-worker.ts",
+    "first-party-ros-simulation-worker": "src/first-party-ros-simulation-worker.ts",
+    "first-party-ros-artifact-worker": "src/first-party-ros-artifact-worker.ts",
+    "adopt-ros-shared-corpus": "scripts/adopt-ros-shared-corpus.ts",
+  },
   format: ["esm"],
   platform: "node",
   target: "node22",

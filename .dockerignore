@@ -8,5 +8,11 @@
 **/dist
 **/node_modules
 coverage
+reports
+backups
+tmp
+playwright-report
+test-results
+*.tsbuildinfo
 *.log
 npm-debug.log*

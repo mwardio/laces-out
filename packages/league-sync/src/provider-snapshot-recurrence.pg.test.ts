@@ -1,6 +1,7 @@
 /** Real snapshot ordering and recurrence regressions; uses only a disposable PostgreSQL. */
 import { execFileSync } from "node:child_process";
 import { randomBytes, randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 import type { LeagueSupplementalBundle, LeagueSyncBundle } from "@laces-out/connectors";
@@ -15,10 +16,11 @@ import {
   providerLeagueLinks,
   rosterEntries,
   rosterSnapshots,
+  scoringRules,
   syncRuns,
   users,
 } from "@laces-out/db";
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, sql } from "drizzle-orm";
 import { migrate } from "drizzle-orm/postgres-js/migrator";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
@@ -254,6 +256,84 @@ describe.skipIf(!dockerAvailable())("Provider snapshot recurrence against Postgr
     const [league] = await handle.db.select().from(leagues).where(eq(leagues.id, s.leagueId));
     expect(league?.name).toBe("League a");
     expect((await persist("b", 4)).state).toBe("accepted");
+  });
+
+  it("preserves fractional provider rates and repairs only verified legacy rounding", async () => {
+    const s = await scenario("yahoo");
+    const repository = new DrizzleYahooSyncRepository(handle.db, () => capture(10));
+    const base = yahooBundle(s.externalKey, "a", 0);
+    const rate = 1 / 150;
+    const bundle: LeagueSyncBundle = {
+      ...base,
+      league: {
+        ...base.league,
+        settings: {
+          ...base.league.settings,
+          scoringRules: [
+            { statId: "14", name: "Return Yards", points: rate },
+            { statId: "15", name: "Manual edit", points: 6 },
+            { statId: "16", name: "Negative rate", points: -rate },
+          ],
+        },
+      },
+    };
+    await repository.persistBundle(s.userId, s.connectionId, bundle);
+    const saved = async (): Promise<Record<string, number>> =>
+      Object.fromEntries<number>(
+        (
+          await handle.db
+            .select({ stat: scoringRules.providerStatId, points: scoringRules.points })
+            .from(scoringRules)
+            .where(eq(scoringRules.leagueSeasonId, s.leagueSeasonId))
+        ).map((row) => [row.stat!, Number(row.points)]),
+      );
+    expect(await saved()).toEqual({ "14": rate, "15": 6, "16": -rate });
+    // Reproduce values written by numeric(10,4), plus an intentional later manual override.
+    for (const [stat, points] of [
+      ["14", "0.0067"],
+      ["15", "9"],
+      ["16", "-0.0067"],
+    ]) {
+      await handle.db
+        .update(scoringRules)
+        .set({ points })
+        .where(
+          and(
+            eq(scoringRules.leagueSeasonId, s.leagueSeasonId),
+            eq(scoringRules.providerStatId, stat!),
+          ),
+        );
+    }
+    const migration = readFileSync(
+      new URL("../../db/migrations/0050_preserve_scoring_precision.sql", import.meta.url),
+      "utf8",
+    );
+    for (const statement of migration.split("--> statement-breakpoint")) {
+      await handle.db.execute(sql.raw(statement));
+    }
+    expect(await saved()).toEqual({ "14": rate, "15": 9, "16": -rate });
+    // Reapplying the repair remains safe and does not invent provider changes.
+    for (const statement of migration.split("--> statement-breakpoint")) {
+      await handle.db.execute(sql.raw(statement));
+    }
+    expect(await saved()).toEqual({ "14": rate, "15": 9, "16": -rate });
+    await handle.db.execute(sql`
+      update league_seasons set settings = jsonb_set(settings, '{scoringRules}',
+        (settings->'scoringRules') || jsonb_build_array(jsonb_build_object('statId', '14', 'points', ${rate}::numeric)))
+      where id = ${s.leagueSeasonId}`);
+    await handle.db
+      .update(scoringRules)
+      .set({ points: "0.0067" })
+      .where(
+        and(
+          eq(scoringRules.leagueSeasonId, s.leagueSeasonId),
+          eq(scoringRules.providerStatId, "14"),
+        ),
+      );
+    for (const statement of migration.split("--> statement-breakpoint")) {
+      await handle.db.execute(sql.raw(statement));
+    }
+    expect(await saved()).toEqual({ "14": 0.0067, "15": 9, "16": -rate });
   });
 
   it("rejects Yahoo captures older than an unchanged freshness check and equal-time conflicts", async () => {

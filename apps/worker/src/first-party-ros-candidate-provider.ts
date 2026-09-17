@@ -23,6 +23,7 @@ import {
   LEAGUE_SCORING_NORMALIZATION_VERSION,
   normalizeLeagueScoringProfile,
   projectionScoringProfileKey,
+  projectFirstPartyRestOfSeason,
   runFirstPartyProjectionBacktest,
   runFirstPartyTeamDefenseBacktest,
   type FirstPartyProjectionCalibration,
@@ -34,6 +35,8 @@ import {
   type LeagueScoringPositionSupport,
   type ProjectionScoringProfile,
 } from "@laces-out/projections";
+import { createRosLiveProjectionReuse } from "./ros-live-reuse.js";
+import { assertFootballSourceCoherence } from "./football-source-coherence.js";
 import { and, desc, eq, inArray } from "drizzle-orm";
 
 import {
@@ -77,8 +80,8 @@ import type {
   FirstPartyRosWindow,
 } from "./first-party-ros-projections.js";
 import {
-  firstPartyRosArtifactScoringProfile,
   matchFirstPartyRosPositions,
+  firstPartyRosChampionArtifactIsValid,
   selectFirstPartyRosArtifactForLeague,
   type FirstPartyRosRailPosition,
   type FirstPartyRosReleasedPlayer,
@@ -779,6 +782,7 @@ export type FirstPartyRosLeagueTargetBuilder = (
 
 export function buildFirstPartyRosLeagueTarget(
   input: FirstPartyRosLeagueTargetInput,
+  project = projectFirstPartyRestOfSeason,
 ): FirstPartyRosLeagueTargetResult {
   const scoringProfileKey = projectionScoringProfileKey(input.scoringProfile);
   const window = {
@@ -832,7 +836,7 @@ export function buildFirstPartyRosLeagueTarget(
         calibration: input.defenseCalibration,
         schedules: input.schedules,
         scoringProfile: input.scoringProfile,
-        seed: `live-ros:${scoringProfileKey}:${input.season}:${window.asOfWeek}:${player.playerId}`,
+        seed: `live-ros-football:${input.season}:${window.asOfWeek}:${player.playerId}`,
         asOfAt: input.asOfAt.toISOString(),
         ...(input.scenarioCount === undefined ? {} : { scenarioCount: input.scenarioCount }),
       });
@@ -840,7 +844,7 @@ export function buildFirstPartyRosLeagueTarget(
         skip(player, "candidate-inputs-unavailable");
         continue;
       }
-      const candidate = simulateFirstPartyRosCandidate(assembled);
+      const candidate = simulateFirstPartyRosCandidate(assembled, project);
       const choice = input.artifact.policy.choices.find(
         (candidate_) =>
           candidate_.position === candidate.position && candidate_.bucket === candidate.bucket,
@@ -887,7 +891,7 @@ export function buildFirstPartyRosLeagueTarget(
       injuries: input.injuries,
       schedules: input.schedules,
       scoringProfile: input.scoringProfile,
-      seed: `live-ros:${scoringProfileKey}:${input.season}:${window.asOfWeek}:${player.playerId}`,
+      seed: `live-ros-football:${input.season}:${window.asOfWeek}:${player.playerId}`,
       asOfAt: input.asOfAt.toISOString(),
       ...(input.scenarioCount === undefined ? {} : { scenarioCount: input.scenarioCount }),
     };
@@ -900,7 +904,7 @@ export function buildFirstPartyRosLeagueTarget(
       skip(player, "candidate-inputs-unavailable");
       continue;
     }
-    const candidate = simulateFirstPartyRosCandidate(assembled);
+    const candidate = simulateFirstPartyRosCandidate(assembled, project);
     // The champion policy authorizes exactly one strategy per position/bucket; without a matching
     // choice the player cannot be released (no default, no approximation).
     const choice = input.artifact.policy.choices.find(
@@ -963,11 +967,13 @@ export function buildFirstPartyRosLeagueTarget(
       projectionInput: representative.assembled.contextualInput,
       releaseProjection: representative.candidate.contextual,
       ...scenarioOverrides,
+      project,
     });
     const recencyConvergence = diagnoseBoundedFirstPartyRosConvergence({
       projectionInput: representative.assembled.recencyInput,
       releaseProjection: representative.candidate.recency,
       ...scenarioOverrides,
+      project,
     });
     bucketConvergences.push(contextualConvergence);
     const meanCoverage = {
@@ -1066,7 +1072,6 @@ type RosReadDatabase = Pick<Database, "select" | "selectDistinctOn">;
 export function calibrateFirstPartyRosPlayerHistory(input: {
   readonly trainingHistory: readonly FirstPartyWeeklyStatLine[];
   readonly schedules: readonly ProjectionScheduleFact[];
-  readonly scoringProfile: ProjectionScoringProfile;
 }): {
   readonly weekly: FirstPartyProjectionCalibration;
   readonly availability: HistoricalRosAvailabilityCalibration;
@@ -1076,24 +1081,26 @@ export function calibrateFirstPartyRosPlayerHistory(input: {
   const weeklyBacktest = runFirstPartyProjectionBacktest(input.trainingHistory);
   return {
     weekly: weeklyBacktest.calibration,
-    availability: calibrateHistoricalRosAvailability(
-      input.trainingHistory,
-      input.schedules,
-      input.scoringProfile,
-    ),
+    availability: calibrateHistoricalRosAvailability(input.trainingHistory, input.schedules),
     role: calibrateHistoricalRosRole(
       input.trainingHistory,
       input.schedules,
-      input.scoringProfile,
       weeklyBacktest.predictions,
     ),
     kicker: calibrateHistoricalRosKicker(
       input.trainingHistory,
       input.schedules,
-      input.scoringProfile,
       weeklyBacktest.predictions,
     ),
   };
+}
+
+interface FirstPartyRosRefreshReuse {
+  calibration?: {
+    readonly player: ReturnType<typeof calibrateFirstPartyRosPlayerHistory>;
+    readonly defense: FirstPartyTeamDefenseCalibration;
+  };
+  project?: ReturnType<typeof createRosLiveProjectionReuse>;
 }
 
 export function databaseFirstPartyRosCandidateProvider(input: {
@@ -1107,7 +1114,11 @@ export function databaseFirstPartyRosCandidateProvider(input: {
    * fixtures keep the direct deterministic builder unless they explicitly provide an override.
    */
   readonly buildLeagueTarget?: FirstPartyRosLeagueTargetBuilder;
-}): FirstPartyRosCandidateProvider {
+}): FirstPartyRosCandidateProvider & {
+  buildTargetBatch(
+    context: FirstPartyRosCandidateContext,
+  ): Promise<Readonly<Record<string, readonly FirstPartyRosPublicationTarget[]>>>;
+} {
   const resolveSourceSnapshot = async (
     database: RosReadDatabase,
     sourceInput: { readonly season: number; readonly window: FirstPartyRosWindow },
@@ -1176,6 +1187,30 @@ export function databaseFirstPartyRosCandidateProvider(input: {
     };
   };
   const snapshotConfig = { isolationLevel: "repeatable read", accessMode: "read only" } as const;
+  const prepareBatch = async (
+    context: FirstPartyRosCandidateContext,
+    artifacts: readonly LoadedFirstPartyRosChampionArtifact[],
+  ) => {
+    // All profiles consume one captured fact set. A later feed refresh belongs to the next job,
+    // including when it lands between two artifacts' long simulations.
+    const simulate = await input.database.transaction(async (transaction) => {
+      const snapshot = await resolveSourceSnapshot(transaction, context);
+      if (snapshot.checksum !== context.candidateProviderChecksum)
+        throw new Error("ROS candidate-provider inputs changed before target assembly");
+      return prepareDatabaseFirstPartyRosTargets(
+        {
+          ...input,
+          database: transaction,
+          pinnedAliasPlans: snapshot.aliasPlans,
+          reuse: {},
+          buildArtifacts: artifacts,
+        },
+        context,
+      );
+    }, snapshotConfig);
+    input.onSnapshotReady?.();
+    return simulate();
+  };
   return {
     sourceChecksum: ({ season, window }) =>
       input.database.transaction(
@@ -1184,22 +1219,11 @@ export function databaseFirstPartyRosCandidateProvider(input: {
         snapshotConfig,
       ),
     buildTargets: async (context) => {
-      // Materialize all source, scoring, catalog and roster reads in ONE database snapshot.
-      // Commit before calibration/simulation: routine ingestion can proceed, and PostgreSQL need
-      // not retain a multi-hour transaction. The model computes only from these captured inputs.
-      const simulate = await input.database.transaction(async (transaction) => {
-        const snapshot = await resolveSourceSnapshot(transaction, context);
-        if (snapshot.checksum !== context.candidateProviderChecksum) {
-          throw new Error("ROS candidate-provider inputs changed before target assembly");
-        }
-        return prepareDatabaseFirstPartyRosTargets(
-          { ...input, database: transaction, pinnedAliasPlans: snapshot.aliasPlans },
-          context,
-        );
-      }, snapshotConfig);
-      input.onSnapshotReady?.();
-      return simulate();
+      const result = await prepareBatch(context, [context.artifact]);
+      return result[context.artifact.artifactChecksum] ?? [];
     },
+    buildTargetBatch: (context) =>
+      prepareBatch(context, context.artifacts.filter(firstPartyRosChampionArtifactIsValid)),
   };
 }
 
@@ -1232,9 +1256,11 @@ async function pinnedSourceChecksums(
       id: dataSources.id,
       key: dataSources.key,
       lastChecksum: dataSources.lastChecksum,
+      metadata: dataSources.metadata,
     })
     .from(dataSources)
     .where(inArray(dataSources.key, keys));
+  assertFootballSourceCoherence(rows.filter((row) => row.lastChecksum !== null));
   const result = new Map<string, { readonly id: string; readonly checksum: string }>();
   for (const row of rows) {
     if (row.lastChecksum) result.set(row.key, { id: row.id, checksum: row.lastChecksum });
@@ -1549,18 +1575,23 @@ async function prepareDatabaseFirstPartyRosTargets(
     readonly convergenceReferenceScenarioCount?: number;
     readonly buildLeagueTarget?: FirstPartyRosLeagueTargetBuilder;
     readonly pinnedAliasPlans: ReadonlyMap<string, FirstPartyRosPlayerAliasPlan>;
+    readonly reuse: FirstPartyRosRefreshReuse;
+    readonly buildArtifacts: readonly LoadedFirstPartyRosChampionArtifact[];
   },
   context: FirstPartyRosCandidateContext,
-): Promise<() => Promise<readonly FirstPartyRosPublicationTarget[]>> {
+): Promise<() => Promise<Readonly<Record<string, readonly FirstPartyRosPublicationTarget[]>>>> {
   const database = options.database;
-  const { season, window, artifact } = context;
+  const { season, window } = context;
+  const targetsByArtifact: Record<string, FirstPartyRosPublicationTarget[]> = Object.fromEntries(
+    options.buildArtifacts.map((artifact) => [artifact.artifactChecksum, []]),
+  );
   const seasons = projectionHistorySeasons(season);
 
   const leagueRows = await database
     .select({ id: leagueSeasons.id, provider: leagueSeasons.provider })
     .from(leagueSeasons)
     .where(eq(leagueSeasons.season, season));
-  if (leagueRows.length === 0) return () => Promise.resolve([]);
+  if (leagueRows.length === 0) return () => Promise.resolve(targetsByArtifact);
   if (
     options.pinnedAliasPlans.size !== leagueRows.length ||
     leagueRows.some((league) => !options.pinnedAliasPlans.has(league.id))
@@ -1587,18 +1618,24 @@ async function prepareDatabaseFirstPartyRosTargets(
   // its own normalization rather than reading these. It is returned so the reasons are available to
   // a caller and are covered by tests; if a diagnostics channel is ever added, this is where the
   // exclusions are already computed.
-  const matchReport = enumerateFirstPartyRosScoringMatchedLeagues({
-    artifactScoringProfileKey: artifact.scoringProfileKey,
-    leagues: leagueRows,
-    rules: ruleRows,
-    availableStatIds: firstPartyAvailableProjectionComponents(),
-  });
-  const matched = firstPartyRosArtifactOwnedLeagues({
+  const matches = options.buildArtifacts.map((artifact) => ({
     artifact,
-    artifacts: context.artifacts,
-    leagues: matchReport.matched,
+    matched: firstPartyRosArtifactOwnedLeagues({
+      artifact,
+      artifacts: context.artifacts,
+      leagues: enumerateFirstPartyRosScoringMatchedLeagues({
+        artifactScoringProfileKey: artifact.scoringProfileKey,
+        leagues: leagueRows,
+        rules: ruleRows,
+        availableStatIds: firstPartyAvailableProjectionComponents(),
+      }).matched,
+    }),
+  }));
+  if (matches.every(({ matched }) => matched.length === 0))
+    return () => Promise.resolve(targetsByArtifact);
+  options.reuse.project = createRosLiveProjectionReuse({
+    profiles: matches.flatMap(({ matched }) => matched.map((league) => league.profile)),
   });
-  if (matched.length === 0) return () => Promise.resolve([]);
 
   const sourceKeys = firstPartyRosCandidateSourceKeys(season);
   const sources = await pinnedSourceChecksums(database, sourceKeys);
@@ -1606,7 +1643,7 @@ async function prepareDatabaseFirstPartyRosTargets(
     const source = sources.get(`nflverse.schedules.${candidate}`);
     return source ? [source] : [];
   });
-  if (scheduleSources.length === 0) return () => Promise.resolve([]);
+  if (scheduleSources.length === 0) return () => Promise.resolve(targetsByArtifact);
   const statSources = [...seasons].flatMap((candidate) => {
     const source = sources.get(`nflverse.stats-player-week.${candidate}`);
     return source ? [source] : [];
@@ -1903,41 +1940,30 @@ async function prepareDatabaseFirstPartyRosTargets(
     const defenseTrainingHistory = defenseHistory.filter((row) => row.season < season);
     // Availability/role calibration must be trained strictly before the current season so a live
     // forecast can never leak its own season into its publication decision.
-    if (trainingHistory.length === 0) return [];
+    if (trainingHistory.length === 0) return targetsByArtifact;
     let calibration: FirstPartyProjectionCalibration;
     let availabilityCalibration: HistoricalRosAvailabilityCalibration;
     let roleCalibration: HistoricalRosRoleCalibration;
     let kickerCalibration: HistoricalRosKickerCalibration;
     let defenseCalibration: FirstPartyTeamDefenseCalibration;
     try {
-      // These three calibrations are fitted ONCE per artifact and shared by every matched league, so
-      // their reference profile must not depend on which leagues matched or on their order. It is the
-      // artifact's own profile, recovered from the key that IS its identity: deterministic, exact
-      // with respect to the artifact, and league-independent. Under per-position matching any single
-      // league's profile would be an approximation for every other matched league, since matched
-      // leagues now agree only on the positions they share.
-      //
-      // A position the artifact prices nothing for cannot be matched by any league (a supported
-      // position's league-side scoped key is never `"[]"`, so it cannot equal the artifact's empty
-      // one), so it is withheld with a stated reason before any player is simulated and a
-      // calibration that is degenerate for it can never reach a released projection.
-      const referenceProfile = firstPartyRosArtifactScoringProfile(artifact.scoringProfileKey);
-      const fitted = calibrateFirstPartyRosPlayerHistory({
-        trainingHistory,
-        schedules,
-        scoringProfile: referenceProfile,
-      });
+      // Football-process fits use the model's fixed training loss, independent of every artifact's
+      // league coefficients. Exact league evaluation still controls publication downstream.
+      options.reuse.calibration ??= {
+        player: calibrateFirstPartyRosPlayerHistory({ trainingHistory, schedules }),
+        defense: runFirstPartyTeamDefenseBacktest(defenseTrainingHistory).calibration,
+      };
+      const fitted = options.reuse.calibration.player;
       calibration = fitted.weekly;
       availabilityCalibration = fitted.availability;
       roleCalibration = fitted.role;
       // Total by contract (documented fallbacks, never throws), so the kicker calibration cannot
       // trip this league-wide fail-closed catch on a sparse corpus.
       kickerCalibration = fitted.kicker;
-      defenseCalibration = runFirstPartyTeamDefenseBacktest(defenseTrainingHistory).calibration;
+      defenseCalibration = options.reuse.calibration.defense;
     } catch {
-      // A calibration that cannot be fitted — including one whose reference profile cannot be
-      // recovered from a corrupt artifact key — is a league-wide missing piece: yield nothing.
-      return [];
+      // A calibration that cannot be fitted is an explicitly missing model input.
+      return targetsByArtifact;
     }
 
     const futureWindowComplete = futureWindowIsComplete(schedules, season, window);
@@ -1950,83 +1976,89 @@ async function prepareDatabaseFirstPartyRosTargets(
         : new Date(Math.max(...scheduleDates.map((value) => value.getTime())));
 
     const candidatePool = currentFantasyPlayerPool(rosters, schedules, season);
-    if (candidatePool.length === 0) return [];
+    if (candidatePool.length === 0) return targetsByArtifact;
     const unmatchedCandidates = unmatchedCurrentFantasyPlayers(rosterUniverseRows, season);
     const aliasPlansByLeague = options.pinnedAliasPlans;
 
-    const targets: FirstPartyRosPublicationTarget[] = [];
-    const targetTemplates = new Map<
-      string,
-      Omit<FirstPartyRosPublicationTarget, "leagueSeasonId"> | null
-    >();
-    for (const league of matched) {
-      const leagueScoringProfileKey = projectionScoringProfileKey(league.profile);
-      const matchedUnresolvedCandidates = unmatchedCandidates.filter((candidate) =>
-        candidate.positions.some((position) => league.matchedPositions.includes(position)),
-      );
-      const unmatchedCandidateCount = matchedUnresolvedCandidates.length;
-      const templateKey = aggregateChecksum("live-ros-target-template-v1", [
-        leagueScoringProfileKey,
-        ...league.matchedPositions,
-        "supported",
-        ...league.supportedPositions,
-        `unmatched:${unmatchedCandidateCount}`,
-      ]);
-      if (targetTemplates.has(templateKey)) {
-        const template = targetTemplates.get(templateKey);
-        if (template !== null && template !== undefined) {
-          targets.push(
-            applyFirstPartyRosPlayerAliases(
-              { leagueSeasonId: league.leagueSeasonId, ...template },
-              aliasPlansByLeague.get(league.leagueSeasonId) ?? { aliases: [], issues: [] },
-            ),
-          );
+    for (const { artifact, matched } of matches) {
+      const targets = targetsByArtifact[artifact.artifactChecksum]!;
+      const targetTemplates = new Map<
+        string,
+        Omit<FirstPartyRosPublicationTarget, "leagueSeasonId"> | null
+      >();
+      for (const league of matched) {
+        const leagueScoringProfileKey = projectionScoringProfileKey(league.profile);
+        const matchedUnresolvedCandidates = unmatchedCandidates.filter((candidate) =>
+          candidate.positions.some((position) => league.matchedPositions.includes(position)),
+        );
+        const unmatchedCandidateCount = matchedUnresolvedCandidates.length;
+        const templateKey = aggregateChecksum("live-ros-target-template-v1", [
+          leagueScoringProfileKey,
+          ...league.matchedPositions,
+          "supported",
+          ...league.supportedPositions,
+          `unmatched:${unmatchedCandidateCount}`,
+        ]);
+        if (targetTemplates.has(templateKey)) {
+          const template = targetTemplates.get(templateKey);
+          if (template !== null && template !== undefined) {
+            targets.push(
+              applyFirstPartyRosPlayerAliases(
+                { leagueSeasonId: league.leagueSeasonId, ...template },
+                aliasPlansByLeague.get(league.leagueSeasonId) ?? { aliases: [], issues: [] },
+              ),
+            );
+          }
+          continue;
         }
-        continue;
+        const build =
+          options.buildLeagueTarget ??
+          ((target: FirstPartyRosLeagueTargetInput) =>
+            buildFirstPartyRosLeagueTarget(target, options.reuse.project));
+        const result = await build({
+          artifact,
+          leagueSeasonId: league.leagueSeasonId,
+          scoringProfile: league.profile,
+          matchedPositions: league.matchedPositions,
+          supportedPositions: league.supportedPositions,
+          season,
+          window,
+          candidatePlayers: candidatePool,
+          unmatchedCandidateCount,
+          unmatchedCandidates: matchedUnresolvedCandidates,
+          featureHistory,
+          calibration,
+          defenseFeatureHistory,
+          defenseCalibration,
+          availabilityCalibration,
+          roleCalibration,
+          kickerCalibration,
+          injuries,
+          schedules,
+          futureWindowComplete,
+          sourceAsOf,
+          asOfAt: context.now,
+          ...(options.scenarioCount === undefined ? {} : { scenarioCount: options.scenarioCount }),
+          ...(options.convergenceReferenceScenarioCount === undefined
+            ? {}
+            : { convergenceReferenceScenarioCount: options.convergenceReferenceScenarioCount }),
+        });
+        if (result.target === null) {
+          targetTemplates.set(templateKey, null);
+          continue;
+        }
+        const { leagueSeasonId: ignoredLeagueSeasonId, ...template } = result.target;
+        void ignoredLeagueSeasonId;
+        targetTemplates.set(templateKey, template);
+        targets.push(
+          applyFirstPartyRosPlayerAliases(
+            { leagueSeasonId: league.leagueSeasonId, ...template },
+            aliasPlansByLeague.get(league.leagueSeasonId) ?? { aliases: [], issues: [] },
+          ),
+        );
       }
-      const result = await (options.buildLeagueTarget ?? buildFirstPartyRosLeagueTarget)({
-        artifact,
-        leagueSeasonId: league.leagueSeasonId,
-        scoringProfile: league.profile,
-        matchedPositions: league.matchedPositions,
-        supportedPositions: league.supportedPositions,
-        season,
-        window,
-        candidatePlayers: candidatePool,
-        unmatchedCandidateCount,
-        unmatchedCandidates: matchedUnresolvedCandidates,
-        featureHistory,
-        calibration,
-        defenseFeatureHistory,
-        defenseCalibration,
-        availabilityCalibration,
-        roleCalibration,
-        kickerCalibration,
-        injuries,
-        schedules,
-        futureWindowComplete,
-        sourceAsOf,
-        asOfAt: context.now,
-        ...(options.scenarioCount === undefined ? {} : { scenarioCount: options.scenarioCount }),
-        ...(options.convergenceReferenceScenarioCount === undefined
-          ? {}
-          : { convergenceReferenceScenarioCount: options.convergenceReferenceScenarioCount }),
-      });
-      if (result.target === null) {
-        targetTemplates.set(templateKey, null);
-        continue;
-      }
-      const { leagueSeasonId: ignoredLeagueSeasonId, ...template } = result.target;
-      void ignoredLeagueSeasonId;
-      targetTemplates.set(templateKey, template);
-      targets.push(
-        applyFirstPartyRosPlayerAliases(
-          { leagueSeasonId: league.leagueSeasonId, ...template },
-          aliasPlansByLeague.get(league.leagueSeasonId) ?? { aliases: [], issues: [] },
-        ),
-      );
     }
-    return targets;
+    return targetsByArtifact;
   };
 }
 

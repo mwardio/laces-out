@@ -1,14 +1,21 @@
 import { readFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 
 import { describe, expect, it } from "vitest";
 
 import {
   NFLVERSE_WEEKLY_STATS_SOURCE_KEY,
+  NFLVERSE_WEEKLY_STATS_COMPONENT_SCHEMA,
   NflverseDatasetSourceError,
   NflverseWeeklyStatsSource,
   buildNflverseWeeklyStatsUrl,
   type NflverseDatasetState,
 } from "./index.js";
+
+import {
+  weeklyStatsPlayByPlayFixture,
+  weeklyStatsPlayByPlayLoader,
+} from "./weekly-stats-source.test-fixtures.js";
 
 const fixture = readFileSync(
   new URL("./fixtures/player-weekly-stats.csv", import.meta.url),
@@ -38,6 +45,7 @@ describe("NflverseWeeklyStatsSource", () => {
   it("normalizes an official weekly-stat CSV into scoring and usage observations", async () => {
     const requests: Array<{ readonly url: string; readonly headers: Headers }> = [];
     const source = new NflverseWeeklyStatsSource({
+      playByPlay: weeklyStatsPlayByPlayLoader,
       now: () => new Date("2026-07-21T15:00:00.000Z"),
       fetch: (input, init) => {
         requests.push({ url: input.toString(), headers: new Headers(init?.headers) });
@@ -60,7 +68,7 @@ describe("NflverseWeeklyStatsSource", () => {
 
     expect(requests).toHaveLength(1);
     expect(requests[0]?.url).toBe(buildNflverseWeeklyStatsUrl(2025));
-    expect(requests[0]?.headers.get("if-none-match")).toBe('"stats-2025-v1"');
+    expect(requests[0]?.headers.get("if-none-match")).toBeNull();
     expect(result).toMatchObject({
       state: "changed",
       sourceKey: NFLVERSE_WEEKLY_STATS_SOURCE_KEY,
@@ -97,8 +105,9 @@ describe("NflverseWeeklyStatsSource", () => {
     }
   });
 
-  it("conditionally checks the immutable season artifact and accepts a 304", async () => {
+  it("rejects an unconditioned304 because it cannot establish a complete composite snapshot", async () => {
     const source = new NflverseWeeklyStatsSource({
+      playByPlay: weeklyStatsPlayByPlayLoader,
       fetch: () => Promise.resolve(new Response(null, { status: 304 })),
     });
     await expect(
@@ -107,15 +116,12 @@ describe("NflverseWeeklyStatsSource", () => {
         lastModified: "Tue, 21 Jul 2026 14:00:00 GMT",
         checksumSha256: "a".repeat(64),
       }),
-    ).resolves.toMatchObject({
-      state: "unchanged",
-      season: 2025,
-      checksumSha256: "a".repeat(64),
-    });
+    ).rejects.toMatchObject({ code: "UPSTREAM" });
   });
 
   it("versions the normalized observation checksum independently from unchanged upstream bytes", async () => {
     const source = new NflverseWeeklyStatsSource({
+      playByPlay: weeklyStatsPlayByPlayLoader,
       fetch: () => Promise.resolve(new Response(fixture)),
     });
     const first = await source.check(2025, EMPTY_STATE);
@@ -131,6 +137,169 @@ describe("NflverseWeeklyStatsSource", () => {
       state: "unchanged",
       checksumSha256: first.checksumSha256,
     });
+    const rawChecksum = createHash("sha256").update(fixture).digest("hex");
+    const previousChecksum = createHash("sha256")
+      .update(`nflverse-player-week-components-v2:${rawChecksum}`)
+      .digest("hex");
+    expect(first.checksumSha256).toBe(
+      createHash("sha256")
+        .update(`${NFLVERSE_WEEKLY_STATS_COMPONENT_SCHEMA}:${rawChecksum}:${"b".repeat(64)}`)
+        .digest("hex"),
+    );
+    expect(first.checksumSha256).not.toBe(previousChecksum);
+    await expect(
+      source.check(2025, { ...EMPTY_STATE, checksumSha256: previousChecksum }),
+    ).resolves.toMatchObject({ state: "changed", checksumSha256: first.checksumSha256 });
+  });
+
+  it("detects PBP-only corrections while the player CSV stays byte-identical", async () => {
+    const original = weeklyStatsPlayByPlayFixture();
+    let corrected = false;
+    const source = new NflverseWeeklyStatsSource({
+      fetch: () => Promise.resolve(new Response(fixture)),
+      playByPlay: {
+        load: () =>
+          Promise.resolve(
+            corrected
+              ? {
+                  ...original,
+                  checksumSha256: "c".repeat(64),
+                  playerTouchdowns: original.playerTouchdowns.map((row) =>
+                    row.gsisId === "00-0039999" ? { ...row, receiving_touchdowns_40_plus: 0 } : row,
+                  ),
+                }
+              : original,
+          ),
+      },
+    });
+    const first = await source.check(2025, EMPTY_STATE);
+    corrected = true;
+    const second = await source.check(2025, {
+      ...EMPTY_STATE,
+      checksumSha256: first.checksumSha256,
+    });
+    expect(second.state).toBe("changed");
+    expect(second.checksumSha256).not.toBe(first.checksumSha256);
+    if (second.state === "changed")
+      expect(second.observations[0]!.components.receiving_touchdowns_40_plus).toBe(0);
+  });
+
+  it.each(["missing-game", "missing-player", "wrong-total", "nested-count", "wrong-season"])(
+    "withholds the entire snapshot for %s PBP evidence",
+    async (failure) => {
+      const original = weeklyStatsPlayByPlayFixture();
+      const invalid = {
+        ...original,
+        ...(failure === "wrong-season" ? { season: 2024 } : {}),
+        ...(failure === "missing-game" ? { observations: [] } : {}),
+        ...(failure === "missing-player"
+          ? { playerTouchdowns: original.playerTouchdowns.slice(1) }
+          : {}),
+        ...(["wrong-total", "nested-count"].includes(failure)
+          ? {
+              playerTouchdowns: original.playerTouchdowns.map((row) =>
+                row.gsisId === "00-0039999"
+                  ? {
+                      ...row,
+                      ...(failure === "wrong-total"
+                        ? { receiving_touchdowns: 2 }
+                        : { receiving_touchdowns_50_plus: 2 }),
+                    }
+                  : row,
+              ),
+            }
+          : {}),
+      };
+      const source = new NflverseWeeklyStatsSource({
+        fetch: () => Promise.resolve(new Response(fixture)),
+        playByPlay: { load: () => Promise.resolve(invalid) },
+      });
+      await expect(source.check(2025, EMPTY_STATE)).rejects.toMatchObject({
+        code: "QUALITY_THRESHOLD",
+      });
+    },
+  );
+
+  it("includes the official blocked-kick distances in both total and fine misses", async () => {
+    // Joshua Karty 2025 week 3: two blocks at 36 and 44 yards, no ordinary misses.
+    let body = replaceCell(fixture, "00-0039999", "fg_att", "2");
+    body = replaceCell(body, "00-0039999", "fg_blocked", "2");
+    body = replaceCell(body, "00-0039999", "fg_blocked_list", "36;44");
+    const result = await new NflverseWeeklyStatsSource({
+      playByPlay: weeklyStatsPlayByPlayLoader,
+      fetch: () => Promise.resolve(new Response(body)),
+    }).check(2025, EMPTY_STATE);
+    if (result.state !== "changed") throw new Error("Expected changed player stats");
+    expect(result.rejections.invalidStats).toBe(0);
+    expect(result.observations[0]?.components).toMatchObject({
+      field_goals_missed: 2,
+      field_goals_missed_unblocked: 0,
+      field_goals_blocked: 2,
+      field_goals_blocked_30_39: 1,
+      field_goals_blocked_40_49: 1,
+      field_goals_missed_30_39: 1,
+      field_goals_missed_40_49: 1,
+    });
+  });
+
+  it("attributes blocked kicks exactly at fine-distance boundaries and preserves explicit zero", async () => {
+    let body = replaceCell(fixture, "00-0039999", "fg_att", "11");
+    body = replaceCell(body, "00-0039999", "fg_blocked", "11");
+    body = replaceCell(body, "00-0039999", "fg_blocked_list", "19;20;29;30;39;40;49;50;59;60;100");
+    const result = await new NflverseWeeklyStatsSource({
+      playByPlay: weeklyStatsPlayByPlayLoader,
+      fetch: () => Promise.resolve(new Response(body)),
+    }).check(2025, EMPTY_STATE);
+    if (result.state !== "changed") throw new Error("Expected changed player stats");
+    expect(result.observations[0]?.components).toMatchObject({
+      field_goals_missed: 11,
+      field_goals_missed_0_19: 1,
+      field_goals_missed_20_29: 2,
+      field_goals_missed_30_39: 2,
+      field_goals_missed_40_49: 2,
+      field_goals_missed_50_59: 2,
+      field_goals_missed_60_plus: 2,
+    });
+    expect(result.observations[1]?.components).toMatchObject({
+      field_goals_blocked: 0,
+      field_goals_missed: 0,
+      field_goals_missed_unblocked: 0,
+    });
+  });
+
+  it.each(["", "36;", "36;44;50", "36;NaN", "36;4e1", "36;44.5", "36;101", "36;0", "36;-1"])(
+    "rejects missing, malformed, mismatched, or out-of-bounds blocked distances: %s",
+    async (list) => {
+      let body = replaceCell(fixture, "00-0039999", "fg_att", "2");
+      body = replaceCell(body, "00-0039999", "fg_blocked", "2");
+      body = replaceCell(body, "00-0039999", "fg_blocked_list", list);
+      await expect(
+        new NflverseWeeklyStatsSource({
+          playByPlay: weeklyStatsPlayByPlayLoader,
+          fetch: () => Promise.resolve(new Response(body)),
+        }).check(2025, EMPTY_STATE),
+      ).rejects.toMatchObject({ code: "QUALITY_THRESHOLD" });
+    },
+  );
+
+  it("rejects inconsistent attempt totals and a missing blocked-distance column", async () => {
+    const inconsistent = replaceCell(fixture, "00-0039999", "fg_att", "1");
+    await expect(
+      new NflverseWeeklyStatsSource({
+        playByPlay: weeklyStatsPlayByPlayLoader,
+        fetch: () => Promise.resolve(new Response(inconsistent)),
+      }).check(2025, EMPTY_STATE),
+    ).rejects.toMatchObject({ code: "QUALITY_THRESHOLD" });
+    const missingColumn = fixture
+      .split("\n")
+      .map((row) => row.split(",").slice(0, -1).join(","))
+      .join("\n");
+    await expect(
+      new NflverseWeeklyStatsSource({
+        playByPlay: weeklyStatsPlayByPlayLoader,
+        fetch: () => Promise.resolve(new Response(missingColumn)),
+      }).check(2025, EMPTY_STATE),
+    ).rejects.toMatchObject({ code: "INVALID_CSV" });
   });
 
   it("retains exact kicker miss buckets and total made-field-goal distance", async () => {
@@ -138,14 +307,17 @@ describe("NflverseWeeklyStatsSource", () => {
     let kicker = replaceCell(fixture, playerId, "position", "K");
     kicker = replaceCell(kicker, playerId, "position_group", "SPEC");
     kicker = replaceCell(kicker, playerId, "fg_made", "2");
-    kicker = replaceCell(kicker, playerId, "fg_att", "4");
+    kicker = replaceCell(kicker, playerId, "fg_att", "5");
     kicker = replaceCell(kicker, playerId, "fg_missed", "2");
     kicker = replaceCell(kicker, playerId, "fg_made_20_29", "1");
     kicker = replaceCell(kicker, playerId, "fg_made_50_59", "1");
     kicker = replaceCell(kicker, playerId, "fg_missed_0_19", "1");
     kicker = replaceCell(kicker, playerId, "fg_missed_20_29", "1");
+    kicker = replaceCell(kicker, playerId, "fg_blocked", "1");
+    kicker = replaceCell(kicker, playerId, "fg_blocked_list", "27");
     kicker = replaceCell(kicker, playerId, "fg_made_distance", "79");
     const source = new NflverseWeeklyStatsSource({
+      playByPlay: weeklyStatsPlayByPlayLoader,
       fetch: () => Promise.resolve(new Response(kicker)),
     });
 
@@ -153,7 +325,10 @@ describe("NflverseWeeklyStatsSource", () => {
     if (result.state !== "changed") throw new Error("Expected changed player stats");
     expect(result.observations[0]?.components).toMatchObject({
       field_goals_missed_0_19: 1,
-      field_goals_missed_20_29: 1,
+      field_goals_missed_20_29: 2,
+      field_goals_missed: 3,
+      field_goals_missed_unblocked: 2,
+      field_goals_blocked: 1,
       field_goals_total_yards: 79,
     });
   });
@@ -162,6 +337,7 @@ describe("NflverseWeeklyStatsSource", () => {
     const [header, row, ...remaining] = fixture.trimEnd().split("\n");
     const body = [header, row, ...remaining, row].join("\n");
     const source = new NflverseWeeklyStatsSource({
+      playByPlay: weeklyStatsPlayByPlayLoader,
       fetch: () => Promise.resolve(new Response(body)),
     });
     const result = await source.check(2025, EMPTY_STATE);
@@ -179,6 +355,7 @@ describe("NflverseWeeklyStatsSource", () => {
     const invalid = valid?.replace("00-0039999", "invalid-id") ?? "";
     const body = [header, valid, ...Array.from({ length: 26 }, () => invalid)].join("\n");
     const source = new NflverseWeeklyStatsSource({
+      playByPlay: weeklyStatsPlayByPlayLoader,
       fetch: () => Promise.resolve(new Response(body)),
     });
     await expect(source.check(2025, EMPTY_STATE)).rejects.toMatchObject({
@@ -215,6 +392,7 @@ describe("NflverseWeeklyStatsSource", () => {
     },
   ])("rejects $name", async ({ response, code }) => {
     const source = new NflverseWeeklyStatsSource({
+      playByPlay: weeklyStatsPlayByPlayLoader,
       fetch: () => Promise.resolve(response.clone()),
     });
     const error = await source.check(2025, EMPTY_STATE).catch((caught: unknown) => caught);
@@ -225,6 +403,7 @@ describe("NflverseWeeklyStatsSource", () => {
   it("validates season context before fetching", async () => {
     let fetched = false;
     const source = new NflverseWeeklyStatsSource({
+      playByPlay: weeklyStatsPlayByPlayLoader,
       fetch: () => {
         fetched = true;
         return Promise.resolve(new Response(fixture));

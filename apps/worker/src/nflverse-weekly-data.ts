@@ -34,12 +34,17 @@ import {
   NFLVERSE_WEEKLY_ROSTERS_ATTRIBUTION_URL,
   NFLVERSE_WEEKLY_STATS_ATTRIBUTION,
   NFLVERSE_WEEKLY_STATS_ATTRIBUTION_URL,
+  NFLVERSE_WEEKLY_STATS_COMPONENT_SCHEMA,
   NflverseDatasetSourceError,
   NflverseInjuriesSource,
   NflverseSnapCountsSource,
   NflverseTeamWeeklyStatsSource,
   NflverseWeeklyRostersSource,
   NflverseWeeklyStatsSource,
+  NflversePlayByPlaySource,
+  snapshotNflversePlayByPlay,
+  fourthDownStopsFromPlayByPlay,
+  type NflversePlayByPlayLoader,
   buildNflverseSnapCountsUrl,
   buildNflverseInjuriesUrl,
   buildNflverseTeamWeeklyStatsUrl,
@@ -51,7 +56,7 @@ import {
   type NflversePlayerWeeklyStats,
   type NflverseWeeklyRosterPlayer,
 } from "@laces-out/source-nflverse";
-import { and, eq, lte } from "drizzle-orm";
+import { and, eq, inArray, lte } from "drizzle-orm";
 
 import { currentNflSeason } from "./nfl-season.js";
 import { resolveNflverseRosterIdentities } from "./nflverse-roster-identities.js";
@@ -88,6 +93,13 @@ interface SourceRow {
   readonly lastChecksum: string | null;
   readonly consecutiveFailures: number;
   readonly metadata: Record<string, JsonPrimitive>;
+}
+
+function hasPlayByPlayCapture(metadata: SourceRow["metadata"]): boolean {
+  return (
+    typeof metadata.playByPlayChecksumSha256 === "string" &&
+    /^[a-f0-9]{64}$/u.test(metadata.playByPlayChecksumSha256)
+  );
 }
 
 interface DatasetDescriptor {
@@ -218,11 +230,25 @@ async function claimSource(
       metadata: dataSources.metadata,
     });
   if (!source?.enabled) return null;
+  // A force/reconciliation request bypasses freshness, never another refresh's live claim.
+  const claimedAt =
+    typeof source.metadata.refreshClaimedAt === "string"
+      ? Date.parse(source.metadata.refreshClaimedAt)
+      : Number.NaN;
+  if (claimedAt > now.getTime() - claimMinutes * 60_000) return null;
+  const pairedStats = descriptor.kind === "weekly_stats" || descriptor.kind === "weekly_team_stats";
+  const replay =
+    source.metadata.sourceSchemaVersion !== sourceSchemaVersion ||
+    (source.metadata.availability === "available" &&
+      ((descriptor.kind === "weekly_stats" &&
+        source.metadata.playerWeeklyComponentSchema !== NFLVERSE_WEEKLY_STATS_COMPONENT_SCHEMA) ||
+        (pairedStats && !hasPlayByPlayCapture(source.metadata))));
   const stableMetadata = { ...source.metadata };
   delete stableMetadata.refreshClaimedAt;
   const stableSource = { ...source, metadata: stableMetadata };
   if (
     !force &&
+    !replay &&
     isReusableArchivedSourceArtifact({
       sourceKey: descriptor.key,
       metadata: stableMetadata,
@@ -241,16 +267,23 @@ async function claimSource(
       updatedAt: now,
     })
     .where(
-      force
-        ? eq(dataSources.id, source.id)
-        : and(eq(dataSources.id, source.id), lte(dataSources.nextCheckAt, now)),
+      and(
+        eq(dataSources.id, source.id),
+        // Protect the interval between reading the claim marker and acquiring it.
+        eq(dataSources.metadata, source.metadata),
+        force || replay ? undefined : lte(dataSources.nextCheckAt, now),
+      ),
     )
     .returning({ id: dataSources.id });
   return claimed.length === 1 ? stableSource : null;
 }
 
-function sourceState(source: SourceRow) {
-  const replay = source.metadata.sourceSchemaVersion !== sourceSchemaVersion;
+function sourceState(source: SourceRow, playerWeekly = false, teamWeekly = false) {
+  const replay =
+    source.metadata.sourceSchemaVersion !== sourceSchemaVersion ||
+    (playerWeekly &&
+      source.metadata.playerWeeklyComponentSchema !== NFLVERSE_WEEKLY_STATS_COMPONENT_SCHEMA) ||
+    ((playerWeekly || teamWeekly) && !hasPlayByPlayCapture(source.metadata));
   return {
     etag: replay ? null : source.etag,
     lastModified: replay ? null : source.lastModified,
@@ -348,6 +381,9 @@ export function datasetMetadata(input: {
   return {
     ...input.previous,
     sourceSchemaVersion,
+    ...(input.sourceKey.startsWith("nflverse.stats-player-week.")
+      ? { playerWeeklyComponentSchema: NFLVERSE_WEEKLY_STATS_COMPONENT_SCHEMA }
+      : {}),
     season: input.season,
     license: NFLVERSE_DATA_LICENSE,
     availability: "available",
@@ -397,6 +433,7 @@ export class NflverseWeeklyDataRefresher {
   readonly #teamWeeklyStatsSource: NflverseTeamWeeklyStatsSource;
   readonly #weeklyRostersSource: NflverseWeeklyRostersSource;
   readonly #injuriesSource: NflverseInjuriesSource;
+  readonly #playByPlaySource: NflversePlayByPlayLoader;
   readonly #now: () => Date;
   /** Absent in an existing fake-database test; emitting is then a stated no-op. */
   readonly #changeEvents: InjuryChangeEventRepository | undefined;
@@ -409,6 +446,7 @@ export class NflverseWeeklyDataRefresher {
     readonly teamWeeklyStatsSource?: NflverseTeamWeeklyStatsSource;
     readonly weeklyRostersSource?: NflverseWeeklyRostersSource;
     readonly injuriesSource?: NflverseInjuriesSource;
+    readonly playByPlaySource?: NflversePlayByPlayLoader;
     readonly changeEvents?: InjuryChangeEventRepository;
     readonly onChangeEventError?: (error: unknown) => void;
     readonly now?: () => Date;
@@ -422,10 +460,15 @@ export class NflverseWeeklyDataRefresher {
       input.teamWeeklyStatsSource ?? new NflverseTeamWeeklyStatsSource();
     this.#weeklyRostersSource = input.weeklyRostersSource ?? new NflverseWeeklyRostersSource();
     this.#injuriesSource = input.injuriesSource ?? new NflverseInjuriesSource();
+    this.#playByPlaySource = input.playByPlaySource ?? new NflversePlayByPlaySource();
     this.#now = input.now ?? (() => new Date());
   }
 
-  async refreshWeeklyStats(season: number, force = false): Promise<WeeklyDataRefreshResult> {
+  async refreshWeeklyStats(
+    season: number,
+    force = false,
+    playByPlay?: NflversePlayByPlayLoader,
+  ): Promise<WeeklyDataRefreshResult> {
     const now = this.#now();
     const descriptor = weeklyStatsDescriptor(season, now);
     const source = await claimSource(this.#database, descriptor, force, now);
@@ -441,7 +484,11 @@ export class NflverseWeeklyDataRefresher {
       };
     }
     try {
-      const result = await this.#weeklyStatsSource.check(season, sourceState(source));
+      const result = await this.#weeklyStatsSource.check(
+        season,
+        sourceState(source, true),
+        playByPlay,
+      );
       const checkedAt = new Date(result.checkedAt);
       const nextCheckAt = new Date(checkedAt.getTime() + descriptor.checkIntervalMinutes * 60_000);
       if (result.state === "unchanged") {
@@ -461,6 +508,10 @@ export class NflverseWeeklyDataRefresher {
             metadata: {
               ...source.metadata,
               sourceSchemaVersion,
+              playerWeeklyComponentSchema: NFLVERSE_WEEKLY_STATS_COMPONENT_SCHEMA,
+              playerWeeklyChecksumSha256: result.playerWeeklyChecksumSha256 ?? null,
+              playByPlayChecksumSha256: result.playByPlayChecksumSha256 ?? null,
+              playByPlaySourceUrl: result.playByPlaySourceUrl ?? null,
               season,
               license: NFLVERSE_DATA_LICENSE,
               availability: "available",
@@ -562,16 +613,21 @@ export class NflverseWeeklyDataRefresher {
             lastErrorAt: null,
             lastErrorCode: null,
             lastErrorDetail: null,
-            metadata: datasetMetadata({
-              sourceKey: descriptor.key,
-              previous: source.metadata,
-              season,
-              rowsRead: result.rowsRead,
-              rowsRejected: result.rowsRejected,
-              rowsUnmatched,
-              coveredWeeks: result.coveredWeeks,
-              coveredSeasonTypes: result.coveredSeasonTypes,
-            }),
+            metadata: {
+              ...datasetMetadata({
+                sourceKey: descriptor.key,
+                previous: source.metadata,
+                season,
+                rowsRead: result.rowsRead,
+                rowsRejected: result.rowsRejected,
+                rowsUnmatched,
+                coveredWeeks: result.coveredWeeks,
+                coveredSeasonTypes: result.coveredSeasonTypes,
+              }),
+              playerWeeklyChecksumSha256: result.playerWeeklyChecksumSha256 ?? null,
+              playByPlayChecksumSha256: result.playByPlayChecksumSha256 ?? null,
+              playByPlaySourceUrl: result.playByPlaySourceUrl ?? null,
+            },
             updatedAt: checkedAt,
           })
           .where(eq(dataSources.id, source.id));
@@ -1240,7 +1296,11 @@ export class NflverseWeeklyDataRefresher {
     }
   }
 
-  async refreshTeamWeeklyStats(season: number, force = false): Promise<WeeklyDataRefreshResult> {
+  async refreshTeamWeeklyStats(
+    season: number,
+    force = false,
+    playByPlay?: NflversePlayByPlayLoader,
+  ): Promise<WeeklyDataRefreshResult> {
     const now = this.#now();
     const descriptor = teamWeeklyStatsDescriptor(season, now);
     const source = await claimSource(this.#database, descriptor, force, now);
@@ -1256,7 +1316,11 @@ export class NflverseWeeklyDataRefresher {
       };
     }
     try {
-      const result = await this.#teamWeeklyStatsSource.check(season, sourceState(source));
+      const result = await this.#teamWeeklyStatsSource.check(
+        season,
+        sourceState(source, false, true),
+        playByPlay ? fourthDownStopsFromPlayByPlay(playByPlay) : undefined,
+      );
       const checkedAt = new Date(result.checkedAt);
       const nextCheckAt = new Date(checkedAt.getTime() + descriptor.checkIntervalMinutes * 60_000);
       if (result.state === "unchanged") {
@@ -1404,6 +1468,71 @@ export class NflverseWeeklyDataRefresher {
     }
   }
 
+  /** Keep player events and D/ST on one PBP capture, including independently due archives. */
+  async refreshWeeklyStatsPair(
+    season: number,
+    force = false,
+  ): Promise<{
+    readonly weeklyStats: WeeklyDataRefreshResult;
+    readonly teamWeeklyStats: WeeklyDataRefreshResult;
+  }> {
+    const playByPlay = snapshotNflversePlayByPlay(this.#playByPlaySource, season);
+    const attempts = await Promise.allSettled([
+      this.refreshWeeklyStats(season, force, playByPlay),
+      this.refreshTeamWeeklyStats(season, force, playByPlay),
+    ]);
+    const failed = attempts.filter((attempt) => attempt.status === "rejected");
+    if (failed.length > 0)
+      throw new AggregateError(
+        failed.map((attempt) => attempt.reason as unknown),
+        `${failed.length} nflverse paired weekly dataset refreshes failed`,
+      );
+    const playerAttempt = attempts[0];
+    const teamAttempt = attempts[1];
+    if (playerAttempt.status !== "fulfilled" || teamAttempt.status !== "fulfilled")
+      throw new Error("Paired weekly refresh did not complete");
+    let weeklyStats = playerAttempt.value;
+    let teamWeeklyStats = teamAttempt.value;
+    const keys = [`nflverse.stats-player-week.${season}`, `nflverse.stats-team-week.${season}`];
+    const mismatch = async () => {
+      const sources = await this.#database
+        .select({ key: dataSources.key, metadata: dataSources.metadata })
+        .from(dataSources)
+        .where(inArray(dataSources.key, keys));
+      const player = sources.find((source) => source.key === keys[0]);
+      const team = sources.find((source) => source.key === keys[1]);
+      // Missing/not-published datasets keep their normal unavailable state and retry clock.
+      if (
+        player?.metadata.availability !== "available" ||
+        team?.metadata.availability !== "available"
+      )
+        return false;
+      return (
+        !hasPlayByPlayCapture(player.metadata) ||
+        !hasPlayByPlayCapture(team.metadata) ||
+        player.metadata.playByPlayChecksumSha256 !== team.metadata.playByPlayChecksumSha256
+      );
+    };
+    if (await mismatch()) {
+      const playerChecked = weeklyStats.state === "changed" || weeklyStats.state === "unchanged";
+      const teamChecked =
+        teamWeeklyStats.state === "changed" || teamWeeklyStats.state === "unchanged";
+      // Usually one independent source clock skipped its counterpart. If neither refreshed,
+      // recover a pre-existing archived mismatch once, using this same lazy snapshot.
+      if (!playerChecked || teamChecked)
+        weeklyStats = await this.refreshWeeklyStats(season, true, playByPlay);
+      if (!teamChecked || playerChecked)
+        teamWeeklyStats = await this.refreshTeamWeeklyStats(season, true, playByPlay);
+      if (await mismatch())
+        throw new NflverseDatasetSourceError(
+          "UPSTREAM",
+          "nflverse player and team PBP captures remain inconsistent; a source may still be refreshing. Retry is required.",
+          true,
+        );
+    }
+    return { weeklyStats, teamWeeklyStats };
+  }
+
   async refreshCurrentWindow(
     currentSeason: number,
     force = false,
@@ -1411,12 +1540,17 @@ export class NflverseWeeklyDataRefresher {
     const results: Record<string, WeeklyDataRefreshResult> = {};
     const errors: unknown[] = [];
     for (const season of uniqueSeasonWindow(currentSeason)) {
+      try {
+        const paired = await this.refreshWeeklyStatsPair(season, force);
+        results[`weeklyStats${season}`] = paired.weeklyStats;
+        results[`teamWeeklyStats${season}`] = paired.teamWeeklyStats;
+      } catch (error) {
+        errors.push(error);
+      }
       for (const [label, refresh] of [
-        [`weeklyStats${season}`, () => this.refreshWeeklyStats(season, force)],
         [`snapCounts${season}`, () => this.refreshSnapCounts(season, force)],
         [`weeklyRosters${season}`, () => this.refreshWeeklyRosters(season, force)],
         [`injuries${season}`, () => this.refreshInjuries(season, force)],
-        [`teamWeeklyStats${season}`, () => this.refreshTeamWeeklyStats(season, force)],
       ] as const) {
         try {
           results[label] = await refresh();

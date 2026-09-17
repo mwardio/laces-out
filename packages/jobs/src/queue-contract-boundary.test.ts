@@ -35,6 +35,9 @@ const queueConfigurationKeys = [
 /** pg-boss `SendOptions` serialization keys. Any of these in an app is a second singleton key. */
 const dispatchSerializationKeys = ["singletonKey", "singletonSeconds", "singletonMinutes"] as const;
 
+/** Runtime construction must install the shared error listener before startup can emit. */
+const directPgBossConstruction = /\bnew\s+PgBoss\s*\(/u;
+
 async function collectSourceFiles(directory: string): Promise<string[]> {
   const entries = await readdir(directory, { withFileTypes: true });
   const files: string[] = [];
@@ -54,8 +57,10 @@ async function collectSourceFiles(directory: string): Promise<string[]> {
   return files;
 }
 
-async function appSources(): Promise<readonly { path: string; source: string }[]> {
-  const roots = ["apps/api", "apps/worker"].map((relative) => join(repositoryRoot, relative));
+async function appSources(
+  relativeRoots: readonly string[] = ["apps/api", "apps/worker"],
+): Promise<readonly { path: string; source: string }[]> {
+  const roots = relativeRoots.map((relative) => join(repositoryRoot, relative));
   const files = (await Promise.all(roots.map(collectSourceFiles))).flat();
   return await Promise.all(
     files.map(async (path) => ({
@@ -76,6 +81,26 @@ function offenders(
 }
 
 describe("queue contract boundary", () => {
+  it("requires every app to construct pg-boss through the protected shared runtime", async () => {
+    // Include all apps so a future scheduler or worker entrypoint cannot omit the listener.
+    const sources = await appSources(["apps"]);
+
+    expect(offenders(sources, directPgBossConstruction)).toEqual([]);
+  });
+
+  it("detects reintroduced direct queue construction, including multiline formatting", () => {
+    expect(
+      offenders(
+        [
+          { path: "/apps/api/src/server.ts", source: "const jobs = new PgBoss({" },
+          { path: "/apps/future-worker/src/server.ts", source: "const boss = new\n  PgBoss\n({" },
+          { path: "/apps/worker/src/worker.ts", source: "const boss = createJobQueue({" },
+        ],
+        directPgBossConstruction,
+      ),
+    ).toEqual(["/apps/api/src/server.ts", "/apps/future-worker/src/server.ts"]);
+  });
+
   it("lets no app declare a pg-boss queue", async () => {
     const sources = await appSources();
 

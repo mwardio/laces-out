@@ -15,14 +15,29 @@ source_model_version="$(
     "${repo_root}/packages/projections/src/rest-of-season.ts" | head -n 1
 )"
 readonly model_version="${ROS_VALIDATION_MODEL_VERSION:-${source_model_version:-unknown-model}}"
-readonly report_dir="${repo_root}/reports/ros-release-${model_version}-${run_id}"
+readonly report_dir="${ROS_VALIDATION_REPORT_DIR:-${repo_root}/reports/ros-release-${model_version}-${run_id}}"
+readonly outcome_dir="${ROS_VALIDATION_OUTCOME_CACHE:-${report_dir}/outcomes}"
+readonly season="${ROS_VALIDATION_SEASON:-$(date -u +%Y)}"
+corpus_identity="${ROS_VALIDATION_CORPUS_SHA:-}"
 readonly lock_file="${XDG_RUNTIME_DIR:-/tmp}/laces-out-ros-release-validation.lock"
 readonly profiles_default="full-ppr half-ppr standard espn-standard-2pt espn-standard-2pt-nxm espn-ppr-yardage-bonus-6pt-pass espn-ppr-4pt-pass espn-half-ppr-yardage-bonus-4pt-pass yahoo-half-ppr yahoo-half-ppr-return-yards-fg-distance"
 read -r -a profiles <<< "${ROS_VALIDATION_PROFILES:-${profiles_default}}"
 lock_backend=""
+if ((${#profiles[@]} == 0)); then
+  printf 'At least one ROS validation profile is required\n' >&2
+  exit 2
+fi
 
 if [[ ! "${concurrency}" =~ ^[1-3]$ ]]; then
   printf 'ROS_VALIDATION_CONCURRENCY must be 1, 2, or 3\n' >&2
+  exit 2
+fi
+if [[ ! "${season}" =~ ^[0-9]{4}$ ]] || ((season < 2007 || season > 2200)); then
+  printf 'ROS_VALIDATION_SEASON must be a supported four-digit target season\n' >&2
+  exit 2
+fi
+if [[ -n "${corpus_identity}" && ! "${corpus_identity}" =~ ^[a-f0-9]{64}$ ]]; then
+  printf 'ROS_VALIDATION_CORPUS_SHA must be a SHA-256 corpus identity\n' >&2
   exit 2
 fi
 
@@ -60,6 +75,13 @@ profiles_manifest="$(node --import tsx --input-type=module -e '
   import { rosScoringProfileCatalog } from "./packages/projections/src/ros-scoring-profiles.ts";
   console.log(JSON.stringify(Object.fromEntries(rosScoringProfileCatalog().map(p => [p.key, p.digest]))));
 ')" || exit 2
+protocol="$(node --import tsx --input-type=module -e '
+  import { rosSharedCorpusRequest } from "./apps/worker/src/ros-shared-corpus-runner.ts";
+  console.log(JSON.stringify(rosSharedCorpusRequest(Number(process.argv[1]))));
+' "${season}")" || exit 2
+protocol_identity="$(jq -er '.identity' <<< "${protocol}")" || exit 2
+source_seasons="$(jq -er '.protocol.sourceSeasons | join(",")' <<< "${protocol}")" || exit 2
+held_out_seasons="$(jq -er '.protocol.heldOutSeasons | join(",")' <<< "${protocol}")" || exit 2
 for profile in "${profiles[@]}"; do
   if ! jq -e --arg profile "${profile}" 'has($profile)' <<< "${profiles_manifest}" >/dev/null; then
     printf 'Unknown ROS scoring profile: %s\n' "${profile}" >&2
@@ -91,7 +113,13 @@ resource_snapshot() {
 }
 
 watch_resources() {
-  while sleep 1800; do
+  local sleeper_pid=""
+  trap 'if [[ -n "${sleeper_pid}" ]]; then kill "${sleeper_pid}" 2>/dev/null || true; wait "${sleeper_pid}" 2>/dev/null || true; fi; exit 0' INT TERM
+  while true; do
+    sleep 1800 &
+    sleeper_pid=$!
+    wait "${sleeper_pid}" || return
+    sleeper_pid=""
     log "RESOURCE $(resource_snapshot)"
   done
 }
@@ -106,15 +134,20 @@ run_profile() {
   local digest
   digest="$(jq -r --arg profile "${profile}" '.[$profile]' <<< "${profiles_manifest}")"
   local status=0
-  local source_options=()
-  if [[ -n "${ROS_VALIDATION_SOURCE_CACHE:-}" ]]; then
+  local source_options=("--outcome-cache=${outcome_dir}")
+  if [[ -n "${corpus_identity}" ]]; then
+    source_options+=("--replay-corpus=${corpus_identity}")
+  elif [[ -n "${ROS_VALIDATION_SOURCE_CACHE:-}" ]]; then
     source_options+=("--source-cache=${ROS_VALIDATION_SOURCE_CACHE}" --offline)
   fi
 
   if [[ -s "${final_json}" ]] &&
-    jq -e --arg model "${source_model_version}" --arg digest "${digest}" '
+    [[ "$(cat "${final_json}.protocol" 2>/dev/null)" == "${protocol_identity}" ]] &&
+    jq -e --arg model "${source_model_version}" --arg digest "${digest}" --arg corpus "${corpus_identity}" '
       .champion.modelVersion == $model and
       .scoringProfile.digest == $digest and
+      (.outcomeCorpusIdentity | type == "string" and test("^[a-f0-9]{64}$")) and
+      ($corpus == "" or .outcomeCorpusIdentity == $corpus) and
       .report.playersPerPosition >= 8 and
       .report.maximumForecasts >= 6000 and
       .report.forecasts >= 2965 and
@@ -128,13 +161,18 @@ run_profile() {
 
   log "START profile=${profile} players_per_position=8 max_forecasts=6000"
   npm run --silent ros:validate -w @laces-out/worker -- \
-    --scoring-profile="${profile}" --players-per-position=8 --max-forecasts=6000 --full "${source_options[@]}" \
+    --scoring-profile="${profile}" --seasons="${source_seasons}" --holdouts="${held_out_seasons}" \
+    --players-per-position=8 --max-forecasts=6000 --full "${source_options[@]}" \
     >"${temp_json}" 2>"${temp_log}" || status=$?
 
-  if jq -e . "${temp_json}" >/dev/null 2>&1; then
+  if ((status <= 1)) && jq -e --arg corpus "${corpus_identity}" '
+    (.outcomeCorpusIdentity | type == "string" and test("^[a-f0-9]{64}$")) and
+    ($corpus == "" or .outcomeCorpusIdentity == $corpus)
+  ' "${temp_json}" >/dev/null 2>&1; then
     mv -f "${temp_json}" "${final_json}"
     mv -f "${temp_log}" "${final_log}"
     printf '%s\n' "${status}" >"${exit_file}"
+    printf '%s\n' "${protocol_identity}" >"${final_json}.protocol"
     log "END profile=${profile} validation_status=${status}"
     return 0
   else
@@ -151,6 +189,7 @@ watch_resources &
 watchdog_pid=$!
 cleanup() {
   kill "${watchdog_pid}" 2>/dev/null || true
+  wait "${watchdog_pid}" 2>/dev/null || true
   if [[ "${lock_backend}" == "shlock" ]]; then
     rm -f -- "${lock_file}"
   fi
@@ -159,6 +198,16 @@ trap cleanup EXIT
 trap 'cleanup; exit 143' INT TERM
 
 overall_status=0
+# Only one profile builds football outcomes. Every later profile is cache-only, including when
+# the first profile's statistical gate withholds its report. Infrastructure failures stop here.
+if [[ -z "${corpus_identity}" ]]; then
+  if ! run_profile "${profiles[0]}"; then
+    log "SHARED_BUILD_FAILED"
+    exit 1
+  fi
+  corpus_identity="$(jq -er '.outcomeCorpusIdentity' "${report_dir}/${profiles[0]}.json")" || exit 1
+fi
+log "SHARED_CORPUS identity=${corpus_identity} protocol=${protocol_identity}"
 for ((offset = 0; offset < ${#profiles[@]}; offset += concurrency)); do
   pids=()
   wave_profiles=()

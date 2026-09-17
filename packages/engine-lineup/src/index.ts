@@ -582,3 +582,121 @@ export function optimizeLineup(input: OptimizeLineupInput): LineupOptimizationRe
     diagnostics,
   };
 }
+
+/** Keeps a legal current lineup when the entire available improvement is below the caller's bar. */
+export function preserveCurrentLineupBelowGain(
+  input: OptimizeLineupInput,
+  optimum: LineupOptimizationResult,
+  options: { readonly maximumGain: number; readonly rosterSlots: readonly RosterSlot[] },
+): {
+  readonly result: LineupOptimizationResult;
+  readonly preserved: boolean;
+  /** Zero when the current lineup cannot be safely compared with the optimum. */
+  readonly availableGain: number;
+} {
+  const unchanged = { result: optimum, preserved: false, availableGain: 0 };
+  const metric = input.metric ?? "mean";
+  if (
+    !Number.isFinite(options.maximumGain) ||
+    options.maximumGain <= 0 ||
+    !optimum.feasible ||
+    !Number.isFinite(optimum.projectedPoints) ||
+    optimum.metric !== metric ||
+    optimum.changes.length === 0 ||
+    optimum.diagnostics.some(
+      ({ code }) => code === "MISSING_PROJECTION" || code === "INVALID_PROJECTION",
+    )
+  )
+    return unchanged;
+
+  const current = input.currentAssignments ?? [];
+  const starterSlots = input.slots.filter(({ kind }) => kind === "STARTER");
+  const rosterStarterSlots = options.rosterSlots.filter(({ kind }) => kind === "STARTER");
+  const slotById = new Map(starterSlots.map((slot) => [slot.id, slot]));
+  const playerById = new Map(input.players.map((player) => [player.id, player]));
+  if (
+    current.length !== starterSlots.length ||
+    slotById.size !== starterSlots.length ||
+    playerById.size !== input.players.length ||
+    new Set(options.rosterSlots.map(({ id }) => id)).size !== options.rosterSlots.length ||
+    rosterStarterSlots.length !== starterSlots.length ||
+    rosterStarterSlots.some(({ id }) => !slotById.has(id)) ||
+    !lineupFitsRosterSlots(input.players, optimum.assignments, options.rosterSlots)
+  )
+    return unchanged;
+
+  const currentBySlot = new Map<RosterSlotId, PlayerId>();
+  const currentPlayers = new Set<PlayerId>();
+  for (const assignment of current) {
+    const player = playerById.get(assignment.playerId);
+    const slot = slotById.get(assignment.slotId);
+    const value = projectionFor(input.projections, assignment.playerId)?.[metric];
+    if (
+      player === undefined ||
+      slot === undefined ||
+      currentPlayers.has(assignment.playerId) ||
+      currentBySlot.has(assignment.slotId) ||
+      !isPlayerEligibleForSlot(player, slot) ||
+      value === undefined ||
+      !Number.isFinite(value)
+    )
+      return unchanged;
+    currentBySlot.set(assignment.slotId, assignment.playerId);
+    currentPlayers.add(assignment.playerId);
+  }
+  if (!lineupFitsRosterSlots(input.players, current, options.rosterSlots)) return unchanged;
+
+  const originallyLockedPlayers = new Set<PlayerId>();
+  const originalStarterLocks = new Set<RosterSlotId>();
+  for (const lock of input.locks ?? []) {
+    if (!playerById.has(lock.playerId) || originallyLockedPlayers.has(lock.playerId))
+      return unchanged;
+    originallyLockedPlayers.add(lock.playerId);
+    if (lock.kind === "BENCH") {
+      if (currentPlayers.has(lock.playerId)) return unchanged;
+    } else {
+      if (currentBySlot.get(lock.slotId) !== lock.playerId) return unchanged;
+      originalStarterLocks.add(lock.slotId);
+    }
+  }
+
+  const pinned = optimizeLineup({
+    ...input,
+    locks: [
+      ...current.map(({ playerId, slotId }): LineupLock => ({
+        playerId,
+        slotId,
+        kind: "STARTER",
+      })),
+      ...(input.locks ?? []).filter((lock) => lock.kind === "BENCH"),
+    ],
+  });
+  if (!pinned.feasible || pinned.changes.length > 0 || !Number.isFinite(pinned.projectedPoints))
+    return unchanged;
+  const availableGain = optimum.projectedPoints - pinned.projectedPoints;
+  if (!Number.isFinite(availableGain) || availableGain < 0) return unchanged;
+  // Subtraction can put an exact decimal threshold a few ulps below its representation. Treat
+  // only that arithmetic noise as equality; never round individual swaps or their combined gain.
+  const roundoff =
+    Number.EPSILON *
+    Math.max(1, Math.abs(optimum.projectedPoints), Math.abs(pinned.projectedPoints)) *
+    4;
+  if (availableGain >= options.maximumGain || options.maximumGain - availableGain <= roundoff)
+    return { ...unchanged, availableGain };
+
+  return {
+    result: {
+      ...pinned,
+      assignments: pinned.assignments.map((assignment) => {
+        if (originalStarterLocks.has(assignment.slotId)) return assignment;
+        return {
+          ...assignment,
+          locked: false,
+          explanation: `${playerById.get(assignment.playerId)!.name} remains in ${slotById.get(assignment.slotId)!.label} because the available total lineup gain is below ${options.maximumGain} ${metric} points`,
+        };
+      }),
+    },
+    preserved: true,
+    availableGain,
+  };
+}

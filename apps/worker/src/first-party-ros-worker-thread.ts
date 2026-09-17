@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { Worker } from "node:worker_threads";
 
 import type {
@@ -35,28 +36,52 @@ function runRosWorker<Input, Result>(input: {
   readonly entry: string;
   readonly workerData: Input;
   readonly description: string;
+  readonly signal?: AbortSignal;
 }): Promise<Result> {
   return new Promise<Result>((resolve, reject) => {
+    input.signal?.throwIfAborted();
     const worker = new Worker(new URL(input.entry, import.meta.url), {
       workerData: input.workerData,
+      // Isolate an unexpectedly large fit from the queue owner and the API on the same host.
+      // Allocation failure rejects this job and retains prior publication instead of host OOM.
+      resourceLimits: { maxOldGenerationSizeMb: 2_048 },
     });
     let settled = false;
+    let terminating = false;
     const finish = (callback: () => void) => {
       if (settled) return;
       settled = true;
+      input.signal?.removeEventListener("abort", abort);
       callback();
     };
+    const abort = () => {
+      if (settled || terminating) return;
+      terminating = true;
+      void worker.terminate().then(
+        () => finish(() => reject(new Error(`${input.description} aborted`))),
+        (error: unknown) =>
+          finish(() =>
+            reject(error instanceof Error ? error : new Error("ROS worker termination failed")),
+          ),
+      );
+    };
+    input.signal?.addEventListener("abort", abort, { once: true });
+    if (input.signal?.aborted) abort();
     worker.once("message", (message: WorkerResponse<Result>) => {
+      if (terminating) return;
       finish(() => {
         if (message.ok) resolve(message.result);
         else reject(new Error(message.error));
       });
     });
-    worker.once("error", (error) => finish(() => reject(error)));
+    worker.once("error", (error) => {
+      if (!terminating) finish(() => reject(error));
+    });
     worker.once("exit", (code) => {
-      if (code !== 0) {
-        finish(() => reject(new Error(`${input.description} exited with code ${code}`)));
-      }
+      if (terminating) return;
+      finish(() =>
+        reject(new Error(`${input.description} exited without a result (code ${code})`)),
+      );
     });
   });
 }
@@ -71,17 +96,55 @@ export const buildFirstPartyRosLeagueTargetInWorker: FirstPartyRosLeagueTargetBu
     description: "ROS simulation worker",
   });
 
-/**
- * Runs an admitted scoring profile's complete database load, calibration, and simulation away from
- * the pg-boss event loop. Keeping only the final publication transaction in the parent prevents a
- * long calibration from starving queue heartbeats or other profiles' PostgreSQL handshakes.
- */
-export function buildFirstPartyRosTargetsInWorker(
-  context: FirstPartyRosCandidateContext,
-): Promise<readonly FirstPartyRosPublicationTarget[]> {
-  return runRosWorker<FirstPartyRosCandidateContext, readonly FirstPartyRosPublicationTarget[]>({
-    entry: "./first-party-ros-artifact-worker.js",
-    workerData: context,
-    description: "ROS artifact worker",
-  });
+export type FirstPartyRosTargetBatch = Readonly<
+  Record<string, readonly FirstPartyRosPublicationTarget[]>
+>;
+
+/** All profiles for one immutable refresh share one worker and its bounded football caches. */
+export function createSharedFirstPartyRosTargetBuilder(
+  runBatch: (
+    context: FirstPartyRosCandidateContext,
+    signal?: AbortSignal,
+  ) => Promise<FirstPartyRosTargetBatch>,
+): FirstPartyRosCandidateProvider["buildTargets"] {
+  const pending = new Map<string, Promise<FirstPartyRosTargetBatch>>();
+  return async (context, signal) => {
+    signal?.throwIfAborted();
+    const key = createHash("sha256")
+      .update(
+        JSON.stringify({
+          season: context.season,
+          window: context.window,
+          now: context.now.toISOString(),
+          checksum: context.candidateProviderChecksum,
+          artifacts: context.artifacts.map((artifact) => artifact.artifactChecksum).sort(),
+        }),
+      )
+      .digest("hex");
+    let result = pending.get(key);
+    if (!result) {
+      result = runBatch(context, signal);
+      pending.set(key, result);
+      const current = result;
+      const remove = () => {
+        if (pending.get(key) === current) pending.delete(key);
+      };
+      void result.then(remove, remove);
+    }
+    const batch = await result;
+    signal?.throwIfAborted();
+    const targets = batch[context.artifact.artifactChecksum];
+    if (!targets) throw new Error("ROS batch omitted the requested admitted artifact");
+    return targets;
+  };
 }
+
+export const buildFirstPartyRosTargetsInWorker = createSharedFirstPartyRosTargetBuilder(
+  (context, signal) =>
+    runRosWorker<FirstPartyRosCandidateContext, FirstPartyRosTargetBatch>({
+      entry: "./first-party-ros-artifact-worker.js",
+      workerData: context,
+      description: "ROS refresh worker",
+      ...(signal ? { signal } : {}),
+    }),
+);

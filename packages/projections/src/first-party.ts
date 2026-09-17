@@ -1,13 +1,17 @@
 import {
-  ESPN_EVERY_N_FLOOR_UNIT_COMPONENTS,
-  espnEveryNFloorUnitValue,
+  SCORING_LONG_TOUCHDOWN_COMPONENTS,
+  SCORING_WHOLE_GROUP_COMPONENTS,
+  scoringDerivedComponentValue,
+  scoringWholeGroupSourceExpectation,
+  SCORING_SIGNED_YARDAGE_COMPONENTS,
+  YAHOO_NONNEGATIVE_YARDAGE_COMPONENTS,
   projectionScoringProfileKey,
   scoreProjectionStatComponents,
   type ProjectionScoringProfile,
   type ProjectionStatComponents,
 } from "./scoring.js";
 
-export const FIRST_PARTY_PROJECTION_MODEL_VERSION = "laces-weekly-components-v10";
+export const FIRST_PARTY_PROJECTION_MODEL_VERSION = "laces-weekly-components-v14";
 
 export type FirstPartyProjectionPosition = "QB" | "RB" | "WR" | "TE" | "K";
 
@@ -392,7 +396,7 @@ export const FIRST_PARTY_CHAMPION_MINIMUM_WEEK_BATCHES = 8;
 
 function everyNFloorUnitComponentsForSources(sources: readonly string[]): readonly string[] {
   const allowed = new Set(sources);
-  return ESPN_EVERY_N_FLOOR_UNIT_COMPONENTS.filter(({ source }) => allowed.has(source)).map(
+  return SCORING_WHOLE_GROUP_COMPONENTS.filter(({ source }) => allowed.has(source)).map(
     ({ component }) => component,
   );
 }
@@ -401,12 +405,20 @@ const QB_EVERY_N_FLOOR_UNIT_COMPONENTS = everyNFloorUnitComponentsForSources([
   "passing_yards",
   "passing_completions",
   "passing_incompletions",
+  "passing_yards_nonnegative",
+  "rushing_yards_nonnegative",
+  "return_yards_nonnegative",
+  "return_yards",
   "rushing_yards",
   "carries",
   "kickoff_return_yards",
   "punt_return_yards",
 ]);
 const SKILL_EVERY_N_FLOOR_UNIT_COMPONENTS = everyNFloorUnitComponentsForSources([
+  "rushing_yards_nonnegative",
+  "receiving_yards_nonnegative",
+  "return_yards_nonnegative",
+  "return_yards",
   "rushing_yards",
   "carries",
   "receiving_yards",
@@ -420,16 +432,22 @@ const POSITION_COMPONENTS: Readonly<Record<FirstPartyProjectionPosition, readonl
     "passing_attempts",
     "passing_completions",
     "passing_yards",
+    "passing_yards_nonnegative",
     ...QB_EVERY_N_FLOOR_UNIT_COMPONENTS,
     "passing_yards_300_399_probability",
     "passing_yards_400_plus_probability",
     "passing_touchdowns",
+    "passing_touchdowns_40_plus",
+    "passing_touchdowns_50_plus",
     "passing_interceptions",
     "carries",
     "rushing_yards",
+    "rushing_yards_nonnegative",
     "rushing_yards_100_199_probability",
     "rushing_yards_200_plus_probability",
     "rushing_touchdowns",
+    "rushing_touchdowns_40_plus",
+    "rushing_touchdowns_50_plus",
     "passing_two_point_conversions",
     "rushing_two_point_conversions",
     "receiving_two_point_conversions",
@@ -437,24 +455,33 @@ const POSITION_COMPONENTS: Readonly<Record<FirstPartyProjectionPosition, readonl
     "special_teams_touchdowns",
     "fumble_recovery_touchdowns",
     "punt_return_yards",
+    "punt_return_yards_nonnegative",
     "kickoff_return_yards",
+    "kickoff_return_yards_nonnegative",
     "return_yards",
+    "return_yards_nonnegative",
     "return_touchdowns",
     "fumbles_lost",
   ],
   RB: [
     "carries",
     "rushing_yards",
+    "rushing_yards_nonnegative",
     "rushing_yards_100_199_probability",
     "rushing_yards_200_plus_probability",
     "rushing_touchdowns",
+    "rushing_touchdowns_40_plus",
+    "rushing_touchdowns_50_plus",
     "targets",
     "receptions",
     "receiving_yards",
+    "receiving_yards_nonnegative",
     ...SKILL_EVERY_N_FLOOR_UNIT_COMPONENTS,
     "receiving_yards_100_199_probability",
     "receiving_yards_200_plus_probability",
     "receiving_touchdowns",
+    "receiving_touchdowns_40_plus",
+    "receiving_touchdowns_50_plus",
     "passing_two_point_conversions",
     "rushing_two_point_conversions",
     "receiving_two_point_conversions",
@@ -462,8 +489,11 @@ const POSITION_COMPONENTS: Readonly<Record<FirstPartyProjectionPosition, readonl
     "special_teams_touchdowns",
     "fumble_recovery_touchdowns",
     "punt_return_yards",
+    "punt_return_yards_nonnegative",
     "kickoff_return_yards",
+    "kickoff_return_yards_nonnegative",
     "return_yards",
+    "return_yards_nonnegative",
     "return_touchdowns",
     "fumbles_lost",
   ],
@@ -471,15 +501,21 @@ const POSITION_COMPONENTS: Readonly<Record<FirstPartyProjectionPosition, readonl
     "targets",
     "receptions",
     "receiving_yards",
+    "receiving_yards_nonnegative",
     ...SKILL_EVERY_N_FLOOR_UNIT_COMPONENTS,
     "receiving_yards_100_199_probability",
     "receiving_yards_200_plus_probability",
     "receiving_touchdowns",
+    "receiving_touchdowns_40_plus",
+    "receiving_touchdowns_50_plus",
     "carries",
     "rushing_yards",
+    "rushing_yards_nonnegative",
     "rushing_yards_100_199_probability",
     "rushing_yards_200_plus_probability",
     "rushing_touchdowns",
+    "rushing_touchdowns_40_plus",
+    "rushing_touchdowns_50_plus",
     "passing_two_point_conversions",
     "rushing_two_point_conversions",
     "receiving_two_point_conversions",
@@ -487,8 +523,11 @@ const POSITION_COMPONENTS: Readonly<Record<FirstPartyProjectionPosition, readonl
     "special_teams_touchdowns",
     "fumble_recovery_touchdowns",
     "punt_return_yards",
+    "punt_return_yards_nonnegative",
     "kickoff_return_yards",
+    "kickoff_return_yards_nonnegative",
     "return_yards",
+    "return_yards_nonnegative",
     "return_touchdowns",
     "fumbles_lost",
   ],
@@ -496,15 +535,21 @@ const POSITION_COMPONENTS: Readonly<Record<FirstPartyProjectionPosition, readonl
     "targets",
     "receptions",
     "receiving_yards",
+    "receiving_yards_nonnegative",
     ...SKILL_EVERY_N_FLOOR_UNIT_COMPONENTS,
     "receiving_yards_100_199_probability",
     "receiving_yards_200_plus_probability",
     "receiving_touchdowns",
+    "receiving_touchdowns_40_plus",
+    "receiving_touchdowns_50_plus",
     "carries",
     "rushing_yards",
+    "rushing_yards_nonnegative",
     "rushing_yards_100_199_probability",
     "rushing_yards_200_plus_probability",
     "rushing_touchdowns",
+    "rushing_touchdowns_40_plus",
+    "rushing_touchdowns_50_plus",
     "passing_two_point_conversions",
     "rushing_two_point_conversions",
     "receiving_two_point_conversions",
@@ -512,8 +557,11 @@ const POSITION_COMPONENTS: Readonly<Record<FirstPartyProjectionPosition, readonl
     "special_teams_touchdowns",
     "fumble_recovery_touchdowns",
     "punt_return_yards",
+    "punt_return_yards_nonnegative",
     "kickoff_return_yards",
+    "kickoff_return_yards_nonnegative",
     "return_yards",
+    "return_yards_nonnegative",
     "return_touchdowns",
     "fumbles_lost",
   ],
@@ -538,11 +586,50 @@ const POSITION_COMPONENTS: Readonly<Record<FirstPartyProjectionPosition, readonl
     "field_goals_missed_60_plus",
     "field_goals_missed_50_plus",
     "field_goals_total_yards",
+    ...everyNFloorUnitComponentsForSources(["field_goals_total_yards"]),
     "extra_points_attempted",
     "extra_points_made",
     "extra_points_missed",
   ],
 };
+
+const LONG_TOUCHDOWN_COMPONENT_DEFINITIONS = new Map<
+  string,
+  (typeof SCORING_LONG_TOUCHDOWN_COMPONENTS)[number]
+>(
+  SCORING_LONG_TOUCHDOWN_COMPONENTS.flatMap((definition) => [
+    [definition.fortyPlus, definition],
+    [definition.fiftyPlus, definition],
+  ]),
+);
+const LONG_TOUCHDOWN_COMPONENT_NAMES: ReadonlySet<string> = new Set(
+  LONG_TOUCHDOWN_COMPONENT_DEFINITIONS.keys(),
+);
+
+const LONG_TOUCHDOWN_COVERAGE = new WeakMap<
+  readonly FirstPartyWeeklyStatLine[],
+  ReadonlySet<string>
+>();
+
+function knownLongTouchdownComponents(
+  rows: readonly FirstPartyWeeklyStatLine[],
+): ReadonlySet<string> {
+  const cached = LONG_TOUCHDOWN_COVERAGE.get(rows);
+  if (cached !== undefined) return cached;
+  const known = new Set<string>();
+  // Complete source coverage is required: a synthetic zero or one enriched game must not make
+  // missing legacy touchdown-distance observations elsewhere in the prior pool look like zero.
+  if (rows.length > 0) {
+    for (const { fortyPlus, fiftyPlus } of SCORING_LONG_TOUCHDOWN_COMPONENTS) {
+      if (rows.every((row) => componentValue(row, fortyPlus) !== undefined)) {
+        known.add(fortyPlus);
+        known.add(fiftyPlus);
+      }
+    }
+  }
+  LONG_TOUCHDOWN_COVERAGE.set(rows, known);
+  return known;
+}
 
 const COMPONENT_CAPS: Readonly<Record<string, number>> = {
   passing_attempts: 70,
@@ -551,18 +638,24 @@ const COMPONENT_CAPS: Readonly<Record<string, number>> = {
   passing_yards_300_399_probability: 1,
   passing_yards_400_plus_probability: 1,
   passing_touchdowns: 7,
+  passing_touchdowns_40_plus: 7,
+  passing_touchdowns_50_plus: 7,
   passing_interceptions: 6,
   carries: 45,
   rushing_yards: 350,
   rushing_yards_100_199_probability: 1,
   rushing_yards_200_plus_probability: 1,
   rushing_touchdowns: 5,
+  rushing_touchdowns_40_plus: 5,
+  rushing_touchdowns_50_plus: 5,
   targets: 25,
   receptions: 20,
   receiving_yards: 350,
   receiving_yards_100_199_probability: 1,
   receiving_yards_200_plus_probability: 1,
   receiving_touchdowns: 5,
+  receiving_touchdowns_40_plus: 5,
+  receiving_touchdowns_50_plus: 5,
   passing_two_point_conversions: 3,
   rushing_two_point_conversions: 3,
   receiving_two_point_conversions: 3,
@@ -629,7 +722,8 @@ const COMPONENT_CAPS: Readonly<Record<string, number>> = {
   yards_allowed_550_plus_probability: 1,
   yards_allowed_500_plus_probability: 1,
   ...Object.fromEntries(
-    ESPN_EVERY_N_FLOOR_UNIT_COMPONENTS.map(({ component, source, divisor }) => {
+    SCORING_WHOLE_GROUP_COMPONENTS.map(({ component, source: originalSource, divisor }) => {
+      const source = originalSource.replace(/_nonnegative$/u, "");
       const sourceCap =
         source === "passing_yards"
           ? 600
@@ -645,7 +739,11 @@ const COMPONENT_CAPS: Readonly<Record<string, number>> = {
                     ? 20
                     : source === "kickoff_return_yards"
                       ? 500
-                      : 350;
+                      : source === "return_yards"
+                        ? 800
+                        : source === "field_goals_total_yards"
+                          ? 700
+                          : 350;
       return [component, Math.floor(sourceCap / divisor)];
     }),
   ),
@@ -1028,6 +1126,7 @@ interface PreparedFirstPartyHistory {
   readonly teamWeeks: Map<string, readonly TeamWeekValue[]>;
   readonly positionPriors: Map<string, number>;
   readonly baselinePositionMeans: Map<string, Readonly<Record<string, number | undefined>>>;
+  readonly teamLeagueMeans: Map<string, { readonly mean: number | undefined }>;
   readonly teamMultipliers: Map<string, { readonly multiplier: number; readonly samples: number }>;
   readonly opponentMultipliers: Map<
     string,
@@ -1103,6 +1202,7 @@ function prepareFirstPartyHistory(
     teamWeeks: new Map(),
     positionPriors: new Map(),
     baselinePositionMeans: new Map(),
+    teamLeagueMeans: new Map(),
     teamMultipliers: new Map(),
     opponentMultipliers: new Map(),
   };
@@ -1159,14 +1259,36 @@ function thresholdIndicator(
   upper?: number,
 ): number | undefined {
   const base = row.components[baseComponent];
-  if (base === undefined || !Number.isFinite(base) || base < 0) return undefined;
+  if (base === undefined || !Number.isFinite(base)) return undefined;
   return base >= lower && (upper === undefined || base < upper) ? 1 : 0;
 }
 
 function componentValue(row: FirstPartyWeeklyStatLine, component: string): number | undefined {
+  const longTouchdown = LONG_TOUCHDOWN_COMPONENT_DEFINITIONS.get(component);
+  if (longTouchdown !== undefined) {
+    const total = row.components[longTouchdown.total];
+    const forty = row.components[longTouchdown.fortyPlus];
+    const fifty = row.components[longTouchdown.fiftyPlus];
+    // Both nested events need explicit, coherent source evidence. Older aggregate-only rows
+    // and partial game enrichments must not become observed zeroes or establish capability.
+    if (
+      total === undefined ||
+      forty === undefined ||
+      fifty === undefined ||
+      !Number.isFinite(total) ||
+      !Number.isFinite(forty) ||
+      !Number.isFinite(fifty) ||
+      total < 0 ||
+      forty < 0 ||
+      fifty < 0 ||
+      fifty > forty ||
+      forty > total
+    )
+      return undefined;
+  }
   const value =
     row.components[component] ??
-    espnEveryNFloorUnitValue(row.components, component) ??
+    scoringDerivedComponentValue(row.components, component) ??
     (component === "two_point_conversions"
       ? (row.components.passing_two_point_conversions ?? 0) +
         (row.components.rushing_two_point_conversions ?? 0) +
@@ -1195,7 +1317,11 @@ function componentValue(row: FirstPartyWeeklyStatLine, component: string): numbe
                         : component === "receiving_yards_200_plus_probability"
                           ? thresholdIndicator(row, "receiving_yards", 200)
                           : undefined);
-  return value === undefined || !Number.isFinite(value) || value < 0 ? undefined : value;
+  return value === undefined ||
+    !Number.isFinite(value) ||
+    (value < 0 && !SIGNED_YARDAGE_COMPONENTS.has(component))
+    ? undefined
+    : value;
 }
 
 function weightedMean(
@@ -1369,6 +1495,7 @@ function learnedTeamMultiplier(
   component: string,
   config: FirstPartyProjectionConfig,
   preparedTeamWeeks?: readonly TeamWeekValue[],
+  preparedLeagueMean?: { readonly mean: number | undefined },
 ): { readonly multiplier: number; readonly samples: number } {
   const teamWeeks = preparedTeamWeeks ?? aggregateTeamWeeks(rows, component);
   const targetTeam = target.team.trim().toUpperCase();
@@ -1379,12 +1506,15 @@ function learnedTeamMultiplier(
       weight: recencyWeight(row, target, config.recencyHalfLifeWeeks),
     })),
   );
-  const leagueMean = weightedMean(
-    teamWeeks.map((row) => ({
-      value: row.value,
-      weight: recencyWeight(row, target, config.recencyHalfLifeWeeks),
-    })),
-  );
+  const leagueMean =
+    preparedLeagueMean === undefined
+      ? weightedMean(
+          teamWeeks.map((row) => ({
+            value: row.value,
+            weight: recencyWeight(row, target, config.recencyHalfLifeWeeks),
+          })),
+        )
+      : preparedLeagueMean.mean;
   if (ownMean === undefined || leagueMean === undefined || leagueMean <= 0) {
     return { multiplier: 1, samples: own.length };
   }
@@ -1401,6 +1531,7 @@ function learnedOpponentMultiplier(
   component: string,
   config: FirstPartyProjectionConfig,
   preparedOpponentRows?: readonly FirstPartyWeeklyStatLine[],
+  preparedPositionMeans?: Readonly<Record<string, number | undefined>>,
 ): { readonly multiplier: number; readonly samples: number } {
   const opponent = target.opponent?.trim().toUpperCase();
   if (!opponent) return { multiplier: 1, samples: 0 };
@@ -1412,7 +1543,10 @@ function learnedOpponentMultiplier(
     target,
     config.recencyHalfLifeWeeks,
   );
-  const leagueMean = weightedComponentMean(rows, component, target, config.recencyHalfLifeWeeks);
+  const leagueMean =
+    preparedPositionMeans === undefined
+      ? weightedComponentMean(rows, component, target, config.recencyHalfLifeWeeks)
+      : preparedPositionMeans[component];
   if (opponentMean === undefined || leagueMean === undefined || leagueMean <= 0) {
     return { multiplier: 1, samples: knownOpponentRows.length };
   }
@@ -1503,14 +1637,35 @@ function intervalFor(
   return fallbackInterval(positionRows, component, center, target, config);
 }
 
+const SIGNED_YARDAGE_COMPONENTS: ReadonlySet<string> = new Set(SCORING_SIGNED_YARDAGE_COMPONENTS);
+
 function capFor(component: string): number {
-  return COMPONENT_CAPS[component] ?? Number.MAX_SAFE_INTEGER;
+  return (
+    COMPONENT_CAPS[component] ??
+    COMPONENT_CAPS[component.replace(/_nonnegative$/u, "")] ??
+    Number.MAX_SAFE_INTEGER
+  );
+}
+
+function floorFor(component: string): number {
+  return SIGNED_YARDAGE_COMPONENTS.has(component) ? -capFor(component) : 0;
 }
 
 function normalizeComponentRelationships(
   components: Record<string, number>,
   position: FirstPartyProjectionPosition,
 ): void {
+  // Long-touchdown counts are nested events, not mutually exclusive distance bins. Preserve
+  // each independently fitted expectation while bounding it by its parent event count.
+  for (const { total, fortyPlus, fiftyPlus } of SCORING_LONG_TOUCHDOWN_COMPONENTS) {
+    if (components[total] === undefined) continue;
+    if (components[fortyPlus] !== undefined) {
+      components[fortyPlus] = Math.min(components[fortyPlus], components[total]);
+    }
+    if (components[fiftyPlus] !== undefined && components[fortyPlus] !== undefined) {
+      components[fiftyPlus] = Math.min(components[fiftyPlus], components[fortyPlus]);
+    }
+  }
   // Each pair represents mutually exclusive ESPN yardage-game buckets. The component models are
   // fitted independently, so gently renormalize only when their expected probabilities would
   // otherwise exceed one; this preserves their ratio without inventing impossible expected bonus
@@ -1541,18 +1696,6 @@ function normalizeComponentRelationships(
     if (position !== "K") {
       components.receptions = Math.min(components.receptions ?? 0, components.targets ?? 0);
     }
-  }
-  // A learned whole-group expectation cannot exceed the corresponding raw-stat expectation divided
-  // by N (`floor(x / N) <= x / N`). Keep each independently fitted component inside that exact
-  // bound while preserving the learned expectation below it.
-  for (const { component, source, divisor } of ESPN_EVERY_N_FLOOR_UNIT_COMPONENTS) {
-    if (components[component] === undefined) continue;
-    const sourceValue =
-      source === "passing_incompletions"
-        ? Math.max(0, (components.passing_attempts ?? 0) - (components.passing_completions ?? 0))
-        : components[source];
-    if (sourceValue === undefined) continue;
-    components[component] = Math.min(components[component], sourceValue / divisor);
   }
   if (position === "K") {
     const distanceMakes =
@@ -1629,6 +1772,20 @@ function normalizeComponentRelationships(
       (components.extra_points_attempted ?? 0) - (components.extra_points_made ?? 0),
     );
   }
+  for (const { component, source } of YAHOO_NONNEGATIVE_YARDAGE_COMPONENTS) {
+    if (components[component] === undefined) continue;
+    // Jensen's inequality: E[max(0, X)] >= max(0, E[X]). Retain the fitted expectation above it.
+    components[component] = Math.max(components[component], components[source] ?? 0, 0);
+  }
+  // A learned whole-group expectation cannot exceed the positive-part source expectation divided
+  // by N. Keep each independently fitted component inside that exact bound without replacing
+  // E[max(0, X)] with max(0, E[X]) for signed yardage.
+  for (const { component, source, divisor } of SCORING_WHOLE_GROUP_COMPONENTS) {
+    if (components[component] === undefined) continue;
+    const sourceValue = scoringWholeGroupSourceExpectation(components, source);
+    if (sourceValue === undefined) continue;
+    components[component] = Math.min(components[component], sourceValue / divisor);
+  }
 }
 
 /**
@@ -1660,11 +1817,21 @@ function normalizedComponents(
   position: FirstPartyProjectionPosition,
 ): ProjectionStatComponents {
   for (const component of POSITION_COMPONENTS[position]) {
-    components[component] = clamp(components[component] ?? 0, 0, capFor(component));
+    if (LONG_TOUCHDOWN_COMPONENT_NAMES.has(component) && components[component] === undefined)
+      continue;
+    components[component] = clamp(
+      components[component] ?? 0,
+      floorFor(component),
+      capFor(component),
+    );
   }
   normalizeComponentRelationships(components, position);
   return Object.fromEntries(
-    POSITION_COMPONENTS[position].map((component) => [component, components[component] ?? 0]),
+    POSITION_COMPONENTS[position].flatMap((component) =>
+      LONG_TOUCHDOWN_COMPONENT_NAMES.has(component) && components[component] === undefined
+        ? []
+        : [[component, components[component] ?? 0]],
+    ),
   );
 }
 
@@ -1856,6 +2023,10 @@ export function projectFirstPartyWeeklyComponents(
   let opponentGames = 0;
   let teamGames = 0;
   const targetOrdinal = ordinal(target.season, target.week);
+  const positionMeans = allRowsArePrior
+    ? preparedPositionComponentMeans(prepared, position, target, config)
+    : undefined;
+  const knownLongTouchdowns = knownLongTouchdownComponents(positionRows);
 
   for (const component of POSITION_COMPONENTS[position]) {
     const playerMean = weightedComponentMean(
@@ -1864,6 +2035,12 @@ export function projectFirstPartyWeeklyComponents(
       target,
       config.recencyHalfLifeWeeks,
     );
+    if (
+      LONG_TOUCHDOWN_COMPONENT_NAMES.has(component) &&
+      (!knownLongTouchdowns.has(component) ||
+        !playerRows.every((row) => componentValue(row, component) !== undefined))
+    )
+      continue;
     const exactRoleValue = targetRoleValue(target.role, component);
     const roleBucket =
       exactRoleValue === undefined ? undefined : Math.round(clamp(exactRoleValue, 0, 1) * 10) / 10;
@@ -1901,7 +2078,27 @@ export function projectFirstPartyWeeklyComponents(
     const teamCacheKey = `${position}:${component}:${targetOrdinal}:${config.recencyHalfLifeWeeks}:${config.teamPriorGames}:${target.team.trim().toUpperCase()}`;
     let team = allRowsArePrior ? prepared.teamMultipliers.get(teamCacheKey) : undefined;
     if (team === undefined) {
-      team = learnedTeamMultiplier(positionRows, target, component, config, preparedTeamWeeks);
+      const leagueMeanKey = `${position}:${component}:${targetOrdinal}:${config.recencyHalfLifeWeeks}`;
+      let leagueMean = allRowsArePrior ? prepared.teamLeagueMeans.get(leagueMeanKey) : undefined;
+      if (allRowsArePrior && leagueMean === undefined && preparedTeamWeeks !== undefined) {
+        leagueMean = {
+          mean: weightedMean(
+            preparedTeamWeeks.map((row) => ({
+              value: row.value,
+              weight: recencyWeight(row, target, config.recencyHalfLifeWeeks),
+            })),
+          ),
+        };
+        prepared.teamLeagueMeans.set(leagueMeanKey, leagueMean);
+      }
+      team = learnedTeamMultiplier(
+        positionRows,
+        target,
+        component,
+        config,
+        preparedTeamWeeks,
+        leagueMean,
+      );
       if (allRowsArePrior) prepared.teamMultipliers.set(teamCacheKey, team);
     }
     const opponentCacheKey = `${position}:${component}:${targetOrdinal}:${config.recencyHalfLifeWeeks}:${config.opponentPriorGames}:${target.opponent?.trim().toUpperCase() ?? "none"}`;
@@ -1913,6 +2110,7 @@ export function projectFirstPartyWeeklyComponents(
         component,
         config,
         preparedOpponentRows,
+        positionMeans,
       );
       if (allRowsArePrior) prepared.opponentMultipliers.set(opponentCacheKey, opponent);
     }
@@ -1925,7 +2123,7 @@ export function projectFirstPartyWeeklyComponents(
       explicitTeamMultiplier(target, component) *
       opponent.multiplier *
       statusMultiplier(target.status);
-    const center = clamp(projected, 0, capFor(component));
+    const center = clamp(projected, floorFor(component), capFor(component));
     const interval = intervalFor(
       input.calibration,
       position,
@@ -1938,7 +2136,7 @@ export function projectFirstPartyWeeklyComponents(
     if (interval.fallback) fallbackComponents += 1;
     else calibratedComponents += 1;
     components[component] = center;
-    floors[component] = clamp(center + interval.lowerError, 0, center);
+    floors[component] = clamp(center + interval.lowerError, floorFor(component), center);
     ceilings[component] = clamp(center + interval.upperError, center, capFor(component));
   }
 
@@ -1950,6 +2148,8 @@ export function projectFirstPartyWeeklyComponents(
     ...normalizedComponents(ceilings, position),
   };
   for (const component of POSITION_COMPONENTS[position]) {
+    if (LONG_TOUCHDOWN_COMPONENT_NAMES.has(component) && normalizedCenter[component] === undefined)
+      continue;
     normalizedFloor[component] = Math.min(
       normalizedFloor[component] ?? 0,
       normalizedCenter[component] ?? 0,
@@ -2068,16 +2268,15 @@ function metricsFor(samples: readonly MetricSample[]): FirstPartyBacktestCompone
   };
 }
 
-function recencyOnlyBaseline(
+function preparedPositionComponentMeans(
+  prepared: PreparedFirstPartyHistory,
   position: FirstPartyProjectionPosition,
   target: FirstPartyProjectionTarget,
-  trainingRows: readonly FirstPartyWeeklyStatLine[],
   config: FirstPartyProjectionConfig,
-): ProjectionStatComponents {
-  const prepared = prepareFirstPartyHistory(trainingRows);
+): Readonly<Record<string, number | undefined>> {
   const positionRows = prepared.byPosition.get(position) ?? [];
   // These means depend on the immutable history, position, week, and half-life, not the player.
-  // Reusing them avoids rescanning every NFL player for every individual forecast.
+  // Share them across recency and contextual forecasts, including every opponent matchup.
   const priorKey = `${position}:${ordinal(target.season, target.week)}:${config.recencyHalfLifeWeeks}`;
   let positionMeans = prepared.baselinePositionMeans.get(priorKey);
   if (positionMeans === undefined) {
@@ -2089,11 +2288,23 @@ function recencyOnlyBaseline(
     );
     prepared.baselinePositionMeans.set(priorKey, positionMeans);
   }
+  return positionMeans;
+}
+
+function recencyOnlyBaseline(
+  position: FirstPartyProjectionPosition,
+  target: FirstPartyProjectionTarget,
+  trainingRows: readonly FirstPartyWeeklyStatLine[],
+  config: FirstPartyProjectionConfig,
+): ProjectionStatComponents {
+  const prepared = prepareFirstPartyHistory(trainingRows);
+  const positionMeans = preparedPositionComponentMeans(prepared, position, target, config);
+  const knownLongTouchdowns = knownLongTouchdownComponents(prepared.byPosition.get(position) ?? []);
   const playerRows = (prepared.byPlayer.get(target.playerId) ?? [])
     .filter((row) => normalizedPosition(row.position) === position)
     .slice(-config.maxPlayerGames);
   const components = Object.fromEntries(
-    POSITION_COMPONENTS[position].map((component) => {
+    POSITION_COMPONENTS[position].flatMap((component) => {
       const playerMean = weightedComponentMean(
         playerRows,
         component,
@@ -2101,6 +2312,12 @@ function recencyOnlyBaseline(
         config.recencyHalfLifeWeeks,
       );
       const positionMean = positionMeans[component];
+      if (
+        LONG_TOUCHDOWN_COMPONENT_NAMES.has(component) &&
+        (!knownLongTouchdowns.has(component) ||
+          !playerRows.every((row) => componentValue(row, component) !== undefined))
+      )
+        return [];
       // Kickers (weekly model v8): evidence-weighted blend toward the position mean instead of
       // the hard player-mean switch. A kicker's slot is binary — whoever holds it inherits the
       // team's kicking volume — so one or two games of personal history carry almost no signal
@@ -2118,9 +2335,11 @@ function recencyOnlyBaseline(
         const reliability = usablePlayerGames / (usablePlayerGames + config.playerPriorGames);
         const prior = positionMean ?? 0;
         const blended = (playerMean ?? prior) * reliability + prior * (1 - reliability);
-        return [component, clamp(blended, 0, capFor(component))];
+        return [[component, clamp(blended, floorFor(component), capFor(component))]];
       }
-      return [component, clamp(playerMean ?? positionMean ?? 0, 0, capFor(component))];
+      return [
+        [component, clamp(playerMean ?? positionMean ?? 0, floorFor(component), capFor(component))],
+      ];
     }),
   );
   return normalizedComponents(components, position);
@@ -2138,9 +2357,9 @@ function statusAdjustedRecencyBaseline(
   const baseline = recencyOnlyBaseline(position, target, trainingRows, config);
   return normalizedComponents(
     Object.fromEntries(
-      POSITION_COMPONENTS[position].map((component) => [
+      Object.entries(baseline).map(([component, value]) => [
         component,
-        (baseline[component] ?? 0) * statusMultiplier(target.status),
+        value * statusMultiplier(target.status),
       ]),
     ),
     position,
@@ -2214,6 +2433,7 @@ export function projectFirstPartyRecencyBaselineComponents(
   let calibratedComponents = 0;
   let fallbackComponents = 0;
   for (const component of POSITION_COMPONENTS[position]) {
+    if (LONG_TOUCHDOWN_COMPONENT_NAMES.has(component) && center[component] === undefined) continue;
     const value = center[component] ?? 0;
     const interval = intervalFor(
       input.calibration,
@@ -2226,7 +2446,7 @@ export function projectFirstPartyRecencyBaselineComponents(
     );
     if (interval.fallback) fallbackComponents += 1;
     else calibratedComponents += 1;
-    floors[component] = clamp(value + interval.lowerError, 0, value);
+    floors[component] = clamp(value + interval.lowerError, floorFor(component), value);
     ceilings[component] = clamp(value + interval.upperError, value, capFor(component));
   }
   const normalizedFloor: Record<string, number> = {
@@ -2236,6 +2456,7 @@ export function projectFirstPartyRecencyBaselineComponents(
     ...normalizedComponents(ceilings, position),
   };
   for (const component of POSITION_COMPONENTS[position]) {
+    if (LONG_TOUCHDOWN_COMPONENT_NAMES.has(component) && center[component] === undefined) continue;
     normalizedFloor[component] = Math.min(normalizedFloor[component] ?? 0, center[component] ?? 0);
     normalizedCeiling[component] = Math.max(
       normalizedCeiling[component] ?? 0,
@@ -2409,6 +2630,11 @@ export function runFirstPartyProjectionBacktest(
       for (const component of POSITION_COMPONENTS[position]) {
         const actualValue = componentValue(actual, component);
         if (actualValue === undefined) continue;
+        if (
+          LONG_TOUCHDOWN_COMPONENT_NAMES.has(component) &&
+          projection.components[component] === undefined
+        )
+          continue;
         const predictedValue = projection.components[component] ?? 0;
         resultResiduals.push({
           position,
@@ -2435,10 +2661,11 @@ export function runFirstPartyProjectionBacktest(
           floor: projection.floorComponents,
           ceiling: projection.ceilingComponents,
           actual: Object.fromEntries(
-            POSITION_COMPONENTS[position].map((component) => [
-              component,
-              componentValue(actual, component) ?? 0,
-            ]),
+            POSITION_COMPONENTS[position].flatMap((component) => {
+              const value = componentValue(actual, component);
+              if (value === undefined && LONG_TOUCHDOWN_COMPONENT_NAMES.has(component)) return [];
+              return [[component, value ?? 0]];
+            }),
           ),
           trainingRows: trainingRows.length,
           calibrationRows: previousResiduals.length,
@@ -3320,7 +3547,7 @@ export function projectFirstPartyTeamDefenseComponents(
     if (interval.fallback) fallbackComponents += 1;
     else calibratedComponents += 1;
     components[component] = center;
-    lower[component] = clamp(center + interval.lowerError, 0, center);
+    lower[component] = clamp(center + interval.lowerError, floorFor(component), center);
     upper[component] = clamp(center + interval.upperError, center, capFor(component));
   }
 

@@ -3,7 +3,6 @@ import { createDatabase } from "@laces-out/db";
 import { parentPort, workerData } from "node:worker_threads";
 
 import { databaseFirstPartyRosCandidateProvider } from "./first-party-ros-candidate-provider.js";
-import { buildVerifiedFirstPartyRosTargets } from "./first-party-ros-worker-thread.js";
 import type { FirstPartyRosCandidateContext } from "./first-party-ros-projections.js";
 
 if (parentPort === null) {
@@ -28,13 +27,15 @@ try {
         }),
       ),
   });
-  const result = await buildVerifiedFirstPartyRosTargets({ provider, context });
+  const result = await provider.buildTargetBatch(context);
+  const targets = Object.values(result).flat();
   console.info(
     JSON.stringify({
       event: "ros-artifact-built",
       artifactChecksum: context.artifact.artifactChecksum,
-      targets: result.length,
-      players: result.reduce((total, target) => total + target.released.length, 0),
+      targets: targets.length,
+      artifacts: Object.keys(result).length,
+      players: targets.reduce((total, target) => total + target.released.length, 0),
       elapsedMs: Date.now() - startedAt,
     }),
   );

@@ -551,13 +551,14 @@ export class NflverseTeamWeeklyStatsSource {
   async check(
     season: number,
     previous: NflverseDatasetState,
+    fourthDownsOverride?: NflverseFourthDownStopsLoader,
   ): Promise<NflverseTeamWeeklyStatsCheckResult> {
     const sourceUrl = buildNflverseTeamWeeklyStatsUrl(season);
     const result = await checkNflverseCsvRelease({
       fetch: this.#fetch,
       now: this.#now,
       sourceUrl,
-      previous,
+      previous: { etag: null, lastModified: null, checksumSha256: null },
       maximumBytes: MAX_RESPONSE_BYTES,
       datasetLabel: "nflverse team weekly stats",
     });
@@ -573,9 +574,14 @@ export class NflverseTeamWeeklyStatsSource {
       lastModified: result.lastModified,
       checksumSha256: result.checksumSha256,
     };
-    if (result.state === "unchanged") return { state: "unchanged", ...base };
+    if (result.state === "unchanged")
+      throw new NflverseDatasetSourceError(
+        "UPSTREAM",
+        "nflverse team stats unexpectedly returned an unconditioned 304",
+        true,
+      );
     const parsed = parseTeamWeeklyStats(result.body, season);
-    const fourthDowns = await this.#fourthDowns.load(season);
+    const fourthDowns = await (fourthDownsOverride ?? this.#fourthDowns).load(season);
     const checksumSha256 = createHash("sha256")
       .update(
         `team-week-with-fourth-downs-v1:${result.checksumSha256}:${fourthDowns.checksumSha256}`,

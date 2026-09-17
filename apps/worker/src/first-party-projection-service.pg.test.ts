@@ -9,7 +9,7 @@
  * checksum unique index, and the surrounding `database.transaction(...)` really enforce
  * idempotency and atomicity once they hit real PostgreSQL.
  *
- * This file starts a disposable, single-use PostgreSQL 16 container (never the ambient/default
+ * This file starts a disposable, single-use PostgreSQL 17 container (never the ambient/default
  * `DATABASE_URL`), applies every migration in `packages/db/migrations` with Drizzle's own
  * postgres-js migrator, and then exercises the same service against the real database:
  *
@@ -35,15 +35,29 @@ import { fileURLToPath } from "node:url";
 import {
   createDatabase,
   dataSources,
+  leagues,
+  leagueSeasons,
   nflScheduleObservations,
+  playerProjections,
+  players,
   projectionModelRuns,
+  projectionObservations,
+  projectionSets,
   syncRuns,
+  users,
 } from "@laces-out/db";
 import type { Database } from "@laces-out/db";
+import {
+  applyFirstPartyProjectionChampionPolicy,
+  runFirstPartyProjectionBacktest,
+  runFirstPartyTeamDefenseBacktest,
+} from "@laces-out/projections";
 import { and, count, eq, sql } from "drizzle-orm";
 import { migrate } from "drizzle-orm/postgres-js/migrator";
 import postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { NFLVERSE_WEEKLY_STATS_COMPONENT_SCHEMA } from "@laces-out/source-nflverse";
+import { databaseFirstPartyRosCandidateProvider } from "./first-party-ros-candidate-provider.js";
 
 import {
   FIRST_PARTY_PROJECTION_SOURCE_KEY,
@@ -147,7 +161,7 @@ async function startDisposablePostgres(): Promise<DisposablePostgres> {
       `POSTGRES_DB=${databaseName}`,
       "-p",
       "127.0.0.1::5432",
-      "postgres:16",
+      "postgres:17-alpine",
     ],
     { stdio: "ignore" },
   );
@@ -308,6 +322,144 @@ async function modelRunRow(db: Database, season: number, week: number) {
   return row;
 }
 
+async function preparedScoredWeek(db: Database) {
+  const season = TEST_SEASON + 10;
+  const now = new Date("2041-09-01T12:00:00.000Z");
+  const [owner] = await db
+    .insert(users)
+    .values({ email: `weekly-gate-${randomUUID()}@example.test`, displayName: "Weekly test" })
+    .returning();
+  const [league] = await db
+    .insert(leagues)
+    .values({ ownerUserId: owner!.id, name: "Receiving yards league" })
+    .returning();
+  const [leagueSeason] = await db
+    .insert(leagueSeasons)
+    .values({
+      leagueId: league!.id,
+      provider: "espn",
+      externalKey: randomUUID(),
+      season,
+      teamCount: 12,
+      draftType: "snake",
+      currentWeek: 1,
+    })
+    .returning();
+  const [player] = await db
+    .insert(players)
+    .values({
+      gsisId: `pg-${randomUUID()}`,
+      fullName: "Weekly Receiver",
+      nflTeam: "BUF",
+      primaryPosition: "WR",
+      eligiblePositions: ["WR"],
+      lastSeason: season,
+    })
+    .returning();
+  const [source] = await db
+    .insert(dataSources)
+    .values({
+      key: `weekly-publication-${randomUUID()}`,
+      name: "Weekly publication",
+      kind: "projection",
+    })
+    .returning();
+  const profile = { id: "yards", rules: [{ statId: "receiving_yards", points: 0.1 }] };
+  // Locked component predictions with a stable, symmetric error distribution and a weaker
+  // recency challenger. No database test injects a passing gate or bypasses the league scorer.
+  const backtest = {
+    ...runFirstPartyProjectionBacktest([]),
+    predictions: Array.from({ length: 20 }, (_, batch) => {
+      let state = 4 + batch * 5;
+      const rawErrors = Array.from({ length: 12 }, () => {
+        state = (state + 0x6d2b79f5) >>> 0;
+        let value = state;
+        value = Math.imul(value ^ (value >>> 15), value | 1);
+        value ^= value + Math.imul(value ^ (value >>> 7), value | 61);
+        return (((value ^ (value >>> 14)) >>> 0) / 4294967296 - 0.5) * 12;
+      });
+      const center = rawErrors.reduce((sum, value) => sum + value, 0) / rawErrors.length;
+      return rawErrors.map((rawError, index) => {
+        const error = rawError - center;
+        // Distinct player roles preserve a useful signal beneath the forecast noise; otherwise
+        // affine calibration correctly learns the artificial constant eight-point outcome.
+        const actual = 80 + index * 15;
+        return {
+          playerId: `held-out-${index}`,
+          position: "WR" as const,
+          season: season - 2 + Math.floor(batch / 10),
+          week: (batch % 10) + 1,
+          actual: { receiving_yards: actual },
+          predicted: { receiving_yards: actual - error * 10 },
+          baseline: { receiving_yards: actual - error * 12.5 },
+          floor: { receiving_yards: actual - 80 },
+          ceiling: { receiving_yards: actual + 80 },
+          trainingRows: 48,
+          calibrationRows: 48,
+        };
+      });
+    }).flat(),
+  };
+  const input = {
+    sourceId: source!.id,
+    season,
+    week: 1,
+    now,
+    sourceAsOf: now,
+    inputChecksum: checksumFor(randomUUID()),
+    inputEpoch: checksumFor("pinned-input-epoch"),
+    gate: { state: "rejected" as const, reasons: ["defense_backtest_sample_too_small"] },
+    playerHistory: [
+      {
+        playerId: player!.id,
+        position: "WR",
+        team: "BUF",
+        season: season - 1,
+        week: 18,
+        played: true,
+        components: { targets: 7, receptions: 5, receiving_yards: 80, receiving_touchdowns: 0.3 },
+      },
+    ],
+    defenseHistory: [],
+    playerBacktest: backtest,
+    basePlayerBacktest: backtest,
+    playerChampionPolicy: applyFirstPartyProjectionChampionPolicy(backtest, profile).policy,
+    defenseBacktest: runFirstPartyTeamDefenseBacktest([]),
+    players: [player!],
+    statusByPlayer: new Map<string, readonly string[]>(),
+    schedules: [
+      {
+        season,
+        week: 1,
+        gameId: `weekly-${randomUUID()}`,
+        awayTeam: "BUF",
+        homeTeam: "NYJ",
+        awayScore: null,
+        homeScore: null,
+        kickoffAt: new Date("2041-09-05T17:00:00.000Z"),
+        status: "scheduled" as const,
+      },
+    ],
+    leagues: [leagueSeason!],
+    rules: [
+      {
+        leagueSeasonId: leagueSeason!.id,
+        statKey: "receiving_yards",
+        providerStatId: "42",
+        operation: "multiply",
+        points: "0.1",
+        thresholdLow: null,
+        thresholdHigh: null,
+        positionTypes: [],
+      },
+    ],
+    rosters: [],
+    leagueSeasonScopesByPlayer: new Map<string, readonly string[]>(),
+    canonicalMatchByPlayer: new Map<string, string>(),
+  } satisfies Parameters<FirstPartyProjectionService["publishPreparedWeek"]>[0];
+  return { input, leagueSeason: leagueSeason!, player: player! };
+}
+
 // A bare JS `Date` interpolated into a raw Drizzle `sql` fragment is never routed through
 // Drizzle's column-aware value mapping (which is what normally turns a `Date` into an ISO string
 // for a plain `.set({ column: date })`), so postgres-js's parameter binder receives a raw `Date`
@@ -333,7 +485,7 @@ function deepestErrorMessage(error: unknown): string {
 }
 
 describe.skipIf(!dockerAvailable)(
-  "FirstPartyProjectionService against a disposable PostgreSQL 16 database",
+  "FirstPartyProjectionService against a disposable PostgreSQL 17 database",
   () => {
     let container: DisposablePostgres;
     let mainHandle: ReturnType<typeof createDatabase>;
@@ -465,6 +617,55 @@ describe.skipIf(!dockerAvailable)(
         })
         .where(eq(dataSources.key, "nflverse.players"));
     }, 10_000);
+
+    it("rejects mixed play-by-play captures before either weekly or ROS can publish", async () => {
+      const season = TEST_SEASON - 1;
+      const sourceKey = `nflverse.stats-player-week.${season}`;
+      const [original] = await mainHandle.db
+        .select({ metadata: dataSources.metadata })
+        .from(dataSources)
+        .where(eq(dataSources.key, sourceKey));
+      if (!original) throw new Error("Expected historical player source");
+      const before = await modelRunCount(mainHandle.db, TEST_SEASON, 1);
+      try {
+        await mainHandle.db
+          .update(dataSources)
+          .set({
+            metadata: {
+              ...original.metadata,
+              playerWeeklyComponentSchema: NFLVERSE_WEEKLY_STATS_COMPONENT_SCHEMA,
+              playByPlayChecksumSha256: "a".repeat(64),
+            },
+          })
+          .where(eq(dataSources.key, sourceKey));
+        const service = new FirstPartyProjectionService({
+          database: mainHandle.db,
+          now: () => FIXED_NOW,
+        });
+        await expect(
+          service.refreshProjections({ season: TEST_SEASON, week: 1 }, jobContext()),
+        ).rejects.toThrow(/do not share a verified play-by-play capture/);
+        const provider = databaseFirstPartyRosCandidateProvider({ database: mainHandle.db });
+        await expect(
+          provider.sourceChecksum({
+            season: TEST_SEASON,
+            window: {
+              asOfWeek: 0,
+              currentWeek: 1,
+              windowStartWeek: 1,
+              windowEndWeek: 18,
+              currentWeekStarted: false,
+            },
+          }),
+        ).rejects.toThrow(/do not share a verified play-by-play capture/);
+        expect(await modelRunCount(mainHandle.db, TEST_SEASON, 1)).toBe(before);
+      } finally {
+        await mainHandle.db
+          .update(dataSources)
+          .set({ metadata: original.metadata })
+          .where(eq(dataSources.key, sourceKey));
+      }
+    }, 20_000);
 
     it("persists an immutable audit run once and is idempotent on an exact rerun (real unique-index-backed count verification)", async () => {
       const week = 1;
@@ -617,6 +818,90 @@ describe.skipIf(!dockerAvailable)(
       const run = await modelRunRow(mainHandle.db, TEST_SEASON, week);
       expect(run?.qualityState).toBe("rejected");
       expect(run?.playersPublished).toBe(0);
+    }, 20_000);
+
+    it("atomically publishes an exact league's passing position despite a rejected reference profile", async () => {
+      const fixture = await preparedScoredWeek(mainHandle.db);
+      const service = new FirstPartyProjectionService({ database: mainHandle.db });
+      const first = await service.publishPreparedWeek(fixture.input);
+      const [run] = await mainHandle.db
+        .select()
+        .from(projectionModelRuns)
+        .where(eq(projectionModelRuns.inputChecksum, fixture.input.inputChecksum));
+      expect(first, JSON.stringify(run!.metrics.leagues)).toMatchObject({
+        committed: true,
+        published: true,
+        gate: { state: "rejected" },
+      });
+      const sets = await mainHandle.db
+        .select()
+        .from(projectionSets)
+        .where(eq(projectionSets.leagueSeasonId, fixture.leagueSeason.id));
+      expect(sets).toHaveLength(1);
+      expect(sets[0]!.metadata.publishedPositions).toEqual(["WR"]);
+      const rows = await mainHandle.db
+        .select()
+        .from(playerProjections)
+        .where(eq(playerProjections.projectionSetId, sets[0]!.id));
+      expect(rows.map((row) => row.playerId)).toEqual([fixture.player.id]);
+      expect(run!.qualityState).toBe("rejected");
+      expect(run!.playersPublished).toBe(0);
+      expect(run!.metrics.leagues).toMatchObject({ published: 1, rowsPublished: 1 });
+      const raw = await mainHandle.db
+        .select()
+        .from(projectionObservations)
+        .where(eq(projectionObservations.sourceSyncRunId, run!.sourceSyncRunId));
+      expect(raw).toHaveLength(0);
+      const second = await service.publishPreparedWeek(fixture.input);
+      expect(second).toMatchObject({ committed: false, published: false });
+      const repeatSets = await mainHandle.db
+        .select()
+        .from(projectionSets)
+        .where(eq(projectionSets.leagueSeasonId, fixture.leagueSeason.id));
+      expect(repeatSets).toHaveLength(1);
+    }, 20_000);
+
+    it("rolls back the run and entire league set if a scored player insert fails", async () => {
+      const fixture = await preparedScoredWeek(mainHandle.db);
+      const service = new FirstPartyProjectionService({ database: mainHandle.db });
+      await mainHandle.db.execute(
+        sql.raw(`
+        CREATE FUNCTION fail_weekly_player_insert() RETURNS trigger LANGUAGE plpgsql AS $$
+        BEGIN
+          IF NEW.player_id = '${fixture.player.id}'::uuid THEN
+            RAISE EXCEPTION 'deliberate weekly player insert failure';
+          END IF;
+          RETURN NEW;
+        END $$;
+        CREATE TRIGGER fail_weekly_player_insert BEFORE INSERT ON player_projections
+          FOR EACH ROW EXECUTE FUNCTION fail_weekly_player_insert();
+      `),
+      );
+      try {
+        await expect(service.publishPreparedWeek(fixture.input)).rejects.toThrow();
+      } finally {
+        await mainHandle.db.execute(
+          sql.raw(`
+          DROP TRIGGER fail_weekly_player_insert ON player_projections;
+          DROP FUNCTION fail_weekly_player_insert();
+        `),
+        );
+      }
+      const sets = await mainHandle.db
+        .select()
+        .from(projectionSets)
+        .where(eq(projectionSets.leagueSeasonId, fixture.leagueSeason.id));
+      const runs = await mainHandle.db
+        .select()
+        .from(projectionModelRuns)
+        .where(eq(projectionModelRuns.inputChecksum, fixture.input.inputChecksum));
+      const sync = await mainHandle.db
+        .select()
+        .from(syncRuns)
+        .where(eq(syncRuns.artifactChecksum, fixture.input.inputChecksum));
+      expect(sets).toHaveLength(0);
+      expect(runs).toHaveLength(0);
+      expect(sync).toHaveLength(0);
     }, 20_000);
   },
 );

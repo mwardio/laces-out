@@ -11,8 +11,10 @@ import {
   FIRST_PARTY_ROS_MAX_AVAILABILITY_MAE,
   FIRST_PARTY_ROS_MAX_NINE_PLUS_AVAILABILITY_MAE,
   FIRST_PARTY_ROS_MODEL_VERSION,
+  FIRST_PARTY_ROS_DEFAULT_SCENARIOS,
+  FIRST_PARTY_ROS_CONVERGENCE_REFERENCE_SCENARIOS,
   canonicalFirstPartyTeamDefenseOutcomes,
-  diagnoseFirstPartyRosConvergence,
+  evaluateFirstPartyRosConvergence,
   evaluateFirstPartyRosChampionPolicy,
   firstPartyProjectionComponentsForPosition,
   firstPartyRecentRoleContext,
@@ -26,6 +28,7 @@ import {
   runFirstPartyProjectionBacktest,
   runFirstPartyTeamDefenseBacktest,
   scoreProjectionStatComponents,
+  compileProjectionScorer,
   type FirstPartyBacktestPrediction,
   type FirstPartyPlayerStatus,
   type FirstPartyProjectionCalibration,
@@ -33,6 +36,7 @@ import {
   type FirstPartyRosAvailabilityInput,
   type FirstPartyRosChampionEvaluation,
   type FirstPartyRosConvergenceDiagnostic,
+  type FirstPartyRosConvergenceSummary,
   type FirstPartyRosHeldOutForecast,
   type FirstPartyRosHeldOutSeason,
   type FirstPartyRosPosition,
@@ -95,6 +99,37 @@ export const HISTORICAL_ROS_SCORING_PROFILE: ProjectionScoringProfile = {
   ],
 };
 
+/**
+ * Fixed training loss and cohort basis for the shared football model, never a league scoring
+ * fallback. The existing production-variance estimator is fitted against this declared reference
+ * metric for ALL leagues; league points are applied only after football outcomes are generated.
+ * Transfer to each scoring configuration must still pass its own held-out quality checks.
+ */
+export const HISTORICAL_ROS_PRODUCTION_BASIS_VERSION = "fixed-reference-production-loss-v1";
+export const HISTORICAL_ROS_COHORT_SELECTION_VERSION =
+  "football-activity-reference-quantiles-return-specialists-v1";
+const scoreReferenceProduction = compileProjectionScorer(HISTORICAL_ROS_SCORING_PROFILE);
+
+/** Participation is a football fact even when a league awards zero or negative fantasy points. */
+export function historicalRosFootballActivity(components: ProjectionStatComponents): number {
+  const value = (key: string) => Math.max(0, components[key] ?? 0);
+  return (
+    Math.max(value("passing_attempts"), value("passing_completions")) +
+    value("carries") +
+    Math.max(value("targets"), value("receptions")) +
+    Math.max(
+      value("field_goals_attempted"),
+      value("field_goals_made") + value("field_goals_missed"),
+    ) +
+    Math.max(
+      value("extra_points_attempted"),
+      value("extra_points_made") + value("extra_points_missed"),
+    ) +
+    Number((components.kickoff_return_yards ?? 0) !== 0) +
+    Number((components.punt_return_yards ?? 0) !== 0)
+  );
+}
+
 const positionSet = new Set<string>(HISTORICAL_ROS_SUPPORTED_POSITIONS);
 const inactiveStatuses = new Set<FirstPartyPlayerStatus>([
   "doubtful",
@@ -129,8 +164,20 @@ export interface HistoricalRosBacktestInput {
   readonly coverage: RosHistoricalCoverageReport;
   readonly scoringProfile: ProjectionScoringProfile;
   readonly options: HistoricalRosBacktestOptions;
+  /** Shared football evidence can be generated once, then repriced without fresh simulation. */
+  readonly projectionEvaluator?: HistoricalRosProjectionEvaluator;
+  readonly onPrepared?: (prepared: HistoricalRosPreparation) => void | Promise<void>;
   readonly onProgress?: (event: HistoricalRosBacktestProgress) => void;
 }
+
+export type HistoricalRosProjectionEvaluator = (
+  input: FirstPartyRosProjectionInput,
+) => Promise<FirstPartyRosConvergenceSummary>;
+
+const simulateHistoricalProjection: HistoricalRosProjectionEvaluator = (input) => {
+  const projection = projectFirstPartyRestOfSeason(input);
+  return Promise.resolve({ ...projection, ...projection.provenance });
+};
 
 export interface HistoricalRosBacktestProgress {
   readonly stage:
@@ -172,9 +219,10 @@ export interface HistoricalRosBacktestReport {
     readonly targetOutcomeUse: "evaluation-only";
   };
   readonly selectionPolicy: {
-    readonly strategy: "recent-production-stratified";
+    readonly strategy: "football-activity-and-reference-production-stratified";
+    readonly productionBasis: typeof HISTORICAL_ROS_PRODUCTION_BASIS_VERSION;
     readonly tiers: readonly ["high", "middle", "lower"];
-    readonly excludesNonPositiveRecentProduction: true;
+    readonly excludesNonPositiveRecentProduction: false;
   };
   readonly unsupportedPositions: readonly string[];
   readonly blockers: readonly string[];
@@ -197,7 +245,6 @@ export interface HistoricalRosBacktestReport {
     readonly fitted: {
       readonly fgEventDispersion: number;
       readonly xpDispersion: number;
-      readonly recordedMissRatio: number;
       readonly centerVolatility: number;
       readonly evidence: HistoricalRosKickerCalibration["evidence"];
     };
@@ -309,16 +356,20 @@ interface CandidatePlayer {
   readonly team: string;
   readonly rosterStatus?: string | null;
   readonly recentPoints: number;
+  readonly recentActivity: number;
+  readonly recentReturnYards: number;
   readonly selectionTier: HistoricalRosSelectionTier;
 }
 
 interface CandidateDefense {
   readonly team: string;
   readonly recentPoints: number;
+  readonly recentActivity: number;
+  readonly recentReturnYards: number;
   readonly selectionTier: HistoricalRosSelectionTier;
 }
 
-interface HistoricalRosDraft {
+export interface HistoricalRosDraft {
   readonly forecast: Omit<FirstPartyRosHeldOutForecast, "evidence">;
   readonly contextualInput: FirstPartyRosProjectionInput;
   readonly recencyInput: FirstPartyRosProjectionInput;
@@ -327,6 +378,15 @@ interface HistoricalRosDraft {
   readonly scheduledGames: number;
   readonly contextualExpectedGames: number;
   readonly recencyExpectedGames: number;
+  readonly actualComponents: ProjectionStatComponents;
+}
+
+export interface HistoricalRosPreparation {
+  readonly drafts: readonly HistoricalRosDraft[];
+  readonly options: Required<HistoricalRosBacktestOptions>;
+  readonly qualifiedSeasons: readonly number[];
+  readonly skippedForecasts: number;
+  readonly kickerFamilyAudits: HistoricalRosBacktestReport["kickerFamilyAudit"];
 }
 
 function sha256(value: string): string {
@@ -456,16 +516,42 @@ export function canonicalHistoricalRosDefenseOutcomes(
   return canonicalFirstPartyTeamDefenseOutcomes(history);
 }
 
-function stratifiedRecentProductionSelection<T extends { readonly recentPoints: number }>(
+function stratifiedRecentProductionSelection<
+  T extends {
+    readonly recentPoints: number;
+    readonly recentActivity: number;
+    readonly recentReturnYards: number;
+  },
+>(
   candidates: readonly T[],
   count: number,
 ): readonly (T & { readonly selectionTier: HistoricalRosSelectionTier })[] {
-  const eligible = candidates.filter((candidate) => candidate.recentPoints > 0);
+  const eligible = candidates.filter(
+    (candidate) => candidate.recentActivity > 0 || candidate.recentPoints > 0,
+  );
   const selectedCount = Math.min(count, eligible.length);
   if (selectedCount === 0) return [];
-  const indices = Array.from({ length: selectedCount }, (_, index) =>
-    selectedCount === 1 ? 0 : Math.round((index * (eligible.length - 1)) / (selectedCount - 1)),
-  );
+  const referenceCount = selectedCount >= 6 ? selectedCount - 2 : selectedCount;
+  const quantileIndices = (size: number) =>
+    Array.from({ length: size }, (_, index) =>
+      size === 1 ? 0 : Math.round((index * (eligible.length - 1)) / (size - 1)),
+    );
+  const indices = quantileIndices(referenceCount);
+  if (selectedCount >= 6) {
+    // Preserve both opportunity-heavy players and return specialists even when the fixed
+    // reference loss awards their production few or no points. All cohorts remain rule-neutral.
+    for (const field of ["recentActivity", "recentReturnYards"] as const) {
+      let selected = 0;
+      for (let index = 1; index < eligible.length; index += 1)
+        if (eligible[index]![field] > eligible[selected]![field]) selected = index;
+      if (eligible[selected]![field] > 0 && !indices.includes(selected)) indices.push(selected);
+    }
+    for (const index of [...quantileIndices(selectedCount), ...eligible.map((_, index) => index)]) {
+      if (indices.length >= selectedCount) break;
+      if (!indices.includes(index)) indices.push(index);
+    }
+    indices.sort((left, right) => left - right);
+  }
   return [...new Set(indices)].map((candidateIndex, index, selectedIndices) => ({
     ...eligible[candidateIndex]!,
     selectionTier: index === 0 ? "high" : index === selectedIndices.length - 1 ? "lower" : "middle",
@@ -490,14 +576,13 @@ export function selectHistoricalRosDefenses(input: {
     [...rowsByTeam.entries()]
       .map(([team, rows]) => ({
         team,
+        recentActivity: rows.filter((row) => row.played !== false).length,
+        recentReturnYards: 0,
         recentPoints: [...rows]
           .sort((left, right) => ordinal(left) - ordinal(right))
           .filter((row) => row.played !== false)
           .slice(-4)
-          .reduce(
-            (sum, row) => sum + scoreProjectionStatComponents(row.components, input.scoringProfile),
-            0,
-          ),
+          .reduce((sum, row) => sum + scoreReferenceProduction(row.components), 0),
       }))
       .sort(
         (left, right) =>
@@ -528,14 +613,12 @@ function latestRosterByPlayer(
   return result;
 }
 
-function recentFantasyPoints(
-  rows: readonly FirstPartyWeeklyStatLine[],
-  scoringProfile: ProjectionScoringProfile,
-): number {
-  return rows
+function recentReferenceProduction(rows: readonly FirstPartyWeeklyStatLine[]): number {
+  return [...rows]
+    .sort((left, right) => ordinal(left) - ordinal(right))
     .filter((row) => row.played !== false)
     .slice(-4)
-    .reduce((sum, row) => sum + scoreProjectionStatComponents(row.components, scoringProfile), 0);
+    .reduce((sum, row) => sum + scoreReferenceProduction(row.components), 0);
 }
 
 export function selectHistoricalRosPlayers(input: {
@@ -559,13 +642,28 @@ export function selectHistoricalRosPlayers(input: {
       const position = row.position as FirstPartyProjectionPosition;
       const playerRows = historyByPlayer.get(row.playerId);
       if (!playerRows || playerRows.length === 0) return [];
+      const recent = [...playerRows]
+        .sort((left, right) => ordinal(left) - ordinal(right))
+        .filter((entry) => entry.played !== false)
+        .slice(-4);
       return [
         {
           playerId: row.playerId,
           position,
           team: row.team,
           ...(row.status === undefined ? {} : { rosterStatus: row.status }),
-          recentPoints: recentFantasyPoints(playerRows, input.scoringProfile),
+          recentPoints: recentReferenceProduction(playerRows),
+          recentActivity: recent.reduce(
+            (sum, entry) => sum + historicalRosFootballActivity(entry.components),
+            0,
+          ),
+          recentReturnYards: recent.reduce(
+            (sum, entry) =>
+              sum +
+              Math.abs(entry.components.kickoff_return_yards ?? 0) +
+              Math.abs(entry.components.punt_return_yards ?? 0),
+            0,
+          ),
         },
       ];
     },
@@ -606,9 +704,10 @@ function clamp(value: number, minimum: number, maximum: number): number {
 }
 
 export const HISTORICAL_ROS_AVAILABILITY_CALIBRATION_VERSION =
-  "historical-ros-availability-curve-matched-v3";
-export const HISTORICAL_ROS_ROLE_CALIBRATION_VERSION = "historical-ros-role-center-two-moment-v4";
-export const HISTORICAL_ROS_KICKER_CALIBRATION_VERSION = "historical-ros-kicker-count-process-v2";
+  "historical-ros-availability-football-activity-v4";
+export const HISTORICAL_ROS_ROLE_CALIBRATION_VERSION = "historical-ros-role-reference-loss-v5";
+export const HISTORICAL_ROS_KICKER_CALIBRATION_VERSION =
+  "historical-ros-kicker-all-missed-attempts-v4";
 
 /**
  * Consecutive played scheduled opportunities entering a week. `returning` players (streak <= 1)
@@ -783,7 +882,6 @@ const AVAILABILITY_FALLBACK = { absence: 0.08, recovery: 0.3 } as const;
 export function calibrateHistoricalRosAvailability(
   training: readonly FirstPartyWeeklyStatLine[],
   schedules: readonly ProjectionScheduleFact[],
-  scoringProfile: ProjectionScoringProfile,
 ): HistoricalRosAvailabilityCalibration {
   const scheduleIndex = scheduledWeeksByTeamSeason(schedules);
   const byPlayer = new Map<string, FirstPartyWeeklyStatLine[]>();
@@ -845,7 +943,7 @@ export function calibrateHistoricalRosAvailability(
         }
       }
       if (row.played !== false) {
-        trailing.push(scoreProjectionStatComponents(row.components, scoringProfile));
+        trailing.push(historicalRosFootballActivity(row.components));
         if (trailing.length > 4) trailing.shift();
       }
     }
@@ -1015,7 +1113,6 @@ const ROS_ROLE_PERSISTENCE = 0.82;
 export function calibrateHistoricalRosRole(
   training: readonly FirstPartyWeeklyStatLine[],
   schedules: readonly ProjectionScheduleFact[],
-  scoringProfile: ProjectionScoringProfile,
   weeklyPredictions: readonly FirstPartyBacktestPrediction[] = [],
 ): HistoricalRosRoleCalibration {
   // Center-error volatility: the weekly model's own locked backtest residuals, grouped per
@@ -1031,16 +1128,20 @@ export function calibrateHistoricalRosRole(
   {
     const byPlayerSeason = new Map<string, { position: string; residuals: number[] }>();
     for (const prediction of weeklyPredictions) {
-      const predictedPoints = scoreProjectionStatComponents(prediction.predicted, scoringProfile);
-      const actualPoints = scoreProjectionStatComponents(prediction.actual, scoringProfile);
-      if (actualPoints < 0.5) continue; // exclude DNP-style zeros; availability is modeled separately
+      const predictedPoints = scoreReferenceProduction(prediction.predicted);
+      const actualPoints = scoreReferenceProduction(prediction.actual);
+      if (historicalRosFootballActivity(prediction.actual) <= 0) continue;
       const key = `${prediction.playerId}:${prediction.season}`;
       const entry = byPlayerSeason.get(key) ?? {
         position: prediction.position.trim().toUpperCase(),
         residuals: [],
       };
       entry.residuals.push(
-        clamp(Math.log((actualPoints + 4) / (Math.max(predictedPoints, 0) + 4)), -2, 2),
+        clamp(
+          Math.log((Math.max(actualPoints, 0) + 4) / (Math.max(predictedPoints, 0) + 4)),
+          -2,
+          2,
+        ),
       );
       byPlayerSeason.set(key, entry);
     }
@@ -1102,7 +1203,7 @@ export function calibrateHistoricalRosRole(
     const bySeason = new Map<number, number[]>();
     for (const row of rows) {
       if (row.played === false) continue;
-      const points = scoreProjectionStatComponents(row.components, scoringProfile);
+      const points = scoreReferenceProduction(row.components);
       const values = bySeason.get(row.season) ?? [];
       values.push(points);
       bySeason.set(row.season, values);
@@ -1221,17 +1322,15 @@ export function calibrateHistoricalRosRole(
 
 export interface HistoricalRosKickerCalibration {
   readonly version: typeof HISTORICAL_ROS_KICKER_CALIBRATION_VERSION;
-  /** Dispersion index of per-game scored FG events (makes + recorded misses). League, [0.6, 1.0]. */
+  /** Dispersion index of per-game scored FG events (makes + all unsuccessful attempts). League, [0.6, 1.0]. */
   readonly fgEventDispersion: number;
   /** Dispersion index of per-game XP makes. League, [0.7, 1.05]; >= 0.97 samples pure Poisson. */
   readonly xpDispersion: number;
-  /** Sigma(recorded fg_missed) / Sigma(max(0, att - made)): derived-to-recorded miss adapter. */
-  readonly recordedMissRatio: number;
   /** Log-sd of the static mean-one center-error factor, fit from K weekly-model residuals. */
   readonly centerVolatility: number;
   /** League FG-make share by scoring bucket (0-39, 40-49, 50+); degenerate-input fallback only. */
   readonly leagueBucketMix: readonly [number, number, number];
-  /** League recorded-miss share by distance (0-19 through 60+); degenerate-input fallback only. */
+  /** League unsuccessful-attempt share by distance (0-19 through 60+); degenerate-input fallback only. */
   readonly leagueMissBucketMix: readonly [number, number, number, number, number, number];
   /** Within-kicker-season dispersion of the five simulated components. Diagnostic, report-surfaced. */
   readonly dispersionAudit: Readonly<
@@ -1256,16 +1355,9 @@ const KICKER_MISS_BUCKET_KEYS = [
   "field_goals_missed_50_59",
   "field_goals_missed_60_plus",
 ] as const;
-// 2023-2025 REG nflverse team-week fallback (426 recorded misses), used only for a corpus too
-// sparse to estimate its own mix. Fractions remain exact and therefore sum to one in validation.
-const KICKER_MISS_BUCKET_MIX_FALLBACK = [
-  0,
-  14 / 426,
-  38 / 426,
-  155 / 426,
-  197 / 426,
-  22 / 426,
-] as const;
+// Sparse-data fallback is symmetric, independent of any later historical season. Real release
+// corpora estimate their own prior-season mix; a 2023-2025 table must not inform 2022 forecasts.
+const KICKER_MISS_BUCKET_MIX_FALLBACK = [1 / 6, 1 / 6, 1 / 6, 1 / 6, 1 / 6, 1 / 6] as const;
 
 function kickerComponentValue(components: ProjectionStatComponents, key: string): number {
   const value = components[key];
@@ -1297,7 +1389,14 @@ function kickerRowEvents(components: ProjectionStatComponents): {
     made0_39,
     made40_49: kickerComponentValue(components, "field_goals_made_40_49"),
     made50Plus,
-    missed: kickerComponentValue(components, "field_goals_missed"),
+    missed:
+      components.field_goals_attempted !== undefined && components.field_goals_made !== undefined
+        ? Math.max(
+            0,
+            kickerComponentValue(components, "field_goals_attempted") -
+              kickerComponentValue(components, "field_goals_made"),
+          )
+        : kickerComponentValue(components, "field_goals_missed"),
     extraPointsMade: kickerComponentValue(components, "extra_points_made"),
     attempted: kickerComponentValue(components, "field_goals_attempted"),
     made: kickerComponentValue(components, "field_goals_made"),
@@ -1336,7 +1435,6 @@ function pooledWithinSeasonDispersion(groups: readonly (readonly number[])[]): n
 export function calibrateHistoricalRosKicker(
   training: readonly FirstPartyWeeklyStatLine[],
   schedules: readonly ProjectionScheduleFact[],
-  scoringProfile: ProjectionScoringProfile,
   weeklyPredictions: readonly FirstPartyBacktestPrediction[] = [],
 ): HistoricalRosKickerCalibration {
   void schedules; // signature parity with the availability/role calibrators
@@ -1353,8 +1451,7 @@ export function calibrateHistoricalRosKicker(
   }
 
   // Dispersion groups: kicker-seasons with >= 8 played rows, on the exact simulated estimand
-  // (scored FG events = coarse-bucket makes + recorded misses — immune to blocked-kick rows
-  // where attempted > made + missed).
+  // (scored FG events = coarse-bucket makes + all unsuccessful attempts, including blocks).
   const fgEventGroups: number[][] = [];
   const xpGroups: number[][] = [];
   for (const group of bySeason.values()) {
@@ -1371,17 +1468,13 @@ export function calibrateHistoricalRosKicker(
   const xpPooled = xpGroups.length >= 30 ? pooledWithinSeasonDispersion(xpGroups) : null;
   const xpDispersion = xpPooled === null ? 1 : clamp(xpPooled, 0.7, 1.05);
 
-  // Recorded-miss adapter and league bucket mix from pooled sums.
-  let missedSum = 0;
-  let derivedMissSum = 0;
+  // Canonical distance buckets include blocks, so no recorded-miss discount is permitted.
   let made0_39Sum = 0;
   let made40_49Sum = 0;
   let made50PlusSum = 0;
   const missBucketSums = KICKER_MISS_BUCKET_KEYS.map(() => 0);
   for (const row of rows) {
     const value = kickerRowEvents(row.components);
-    missedSum += value.missed;
-    derivedMissSum += Math.max(0, value.attempted - value.made);
     made0_39Sum += value.made0_39;
     made40_49Sum += value.made40_49;
     made50PlusSum += value.made50Plus;
@@ -1390,7 +1483,6 @@ export function calibrateHistoricalRosKicker(
         (missBucketSums[index] ?? 0) + kickerComponentValue(row.components, component);
     }
   }
-  const recordedMissRatio = derivedMissSum < 50 ? 0.95 : clamp(missedSum / derivedMissSum, 0.85, 1);
   const totalMakes = made0_39Sum + made40_49Sum + made50PlusSum;
   const leagueBucketMix: readonly [number, number, number] =
     totalMakes < 200
@@ -1440,8 +1532,8 @@ export function calibrateHistoricalRosKicker(
       ) {
         continue;
       }
-      const predictedPoints = scoreProjectionStatComponents(prediction.predicted, scoringProfile);
-      const actualPoints = scoreProjectionStatComponents(prediction.actual, scoringProfile);
+      const predictedPoints = scoreReferenceProduction(prediction.predicted);
+      const actualPoints = scoreReferenceProduction(prediction.actual);
       const key = `${prediction.playerId}:${prediction.season}`;
       const residuals = residualsByKickerSeason.get(key) ?? [];
       // Floor the numerator: an all-miss game can reach -4 points or below, where the raw log
@@ -1524,7 +1616,6 @@ export function calibrateHistoricalRosKicker(
     version: HISTORICAL_ROS_KICKER_CALIBRATION_VERSION,
     fgEventDispersion,
     xpDispersion,
-    recordedMissRatio,
     centerVolatility,
     leagueBucketMix,
     leagueMissBucketMix,
@@ -1545,7 +1636,6 @@ export function historicalRosKickerProcess(
   return {
     fgEventDispersion: calibration.fgEventDispersion,
     xpDispersion: calibration.xpDispersion,
-    recordedMissRatio: calibration.recordedMissRatio,
     centerVolatility: calibration.centerVolatility,
     bucketMix: calibration.leagueBucketMix,
     missBucketMix: calibration.leagueMissBucketMix,
@@ -1631,17 +1721,16 @@ function aggregateActual(input: {
       row.week >= input.windowStartWeek &&
       row.week <= input.windowEndWeek,
   );
-  const components: Record<string, number> = {};
-  for (const row of rows) {
-    for (const [component, value] of Object.entries(row.components)) {
-      components[component] = (components[component] ?? 0) + value;
-    }
-  }
   return {
+    actualComponents: aggregateActualComponents(rows),
     actualGames: new Set(
       rows.filter((row) => row.played !== false).map((row) => `${row.season}:${row.week}`),
     ).size,
-    actualPoints: scoreProjectionStatComponents(components, input.scoringProfile),
+    // League operations apply to each week's realized stats, never a season-total threshold.
+    actualPoints: rows.reduce(
+      (sum, row) => sum + scoreProjectionStatComponents(row.components, input.scoringProfile),
+      0,
+    ),
   };
 }
 
@@ -1661,6 +1750,7 @@ function aggregateDefenseActual(input: {
       row.week <= input.windowEndWeek,
   );
   return {
+    actualComponents: aggregateActualComponents(rows),
     actualGames: new Set(
       rows.filter((row) => row.played !== false).map((row) => `${row.season}:${row.week}`),
     ).size,
@@ -1671,11 +1761,22 @@ function aggregateDefenseActual(input: {
   };
 }
 
+function aggregateActualComponents(
+  rows: readonly { readonly components: ProjectionStatComponents }[],
+): ProjectionStatComponents {
+  const components: Record<string, number> = {};
+  for (const row of rows) {
+    for (const [key, value] of Object.entries(row.components))
+      components[key] = (components[key] ?? 0) + value;
+  }
+  return components;
+}
+
 function projectionIsUsable(projection: FirstPartyWeeklyProjection, scheduled: boolean): boolean {
   return !scheduled || projection.state === "projected" || projection.state === "zero";
 }
 
-function convergenceChecksum(input: {
+export function historicalRosConvergenceChecksum(input: {
   readonly season: number;
   readonly position: FirstPartyRosPosition;
   readonly bucket: FirstPartyRosRemainingWeeksBucket;
@@ -1685,7 +1786,7 @@ function convergenceChecksum(input: {
   return historicalRosChecksum({ version: "stratified-convergence-v2", ...input });
 }
 
-function createDraft(input: {
+async function createDraft(input: {
   readonly player: CandidatePlayer;
   readonly season: number;
   readonly asOfWeek: number;
@@ -1698,7 +1799,8 @@ function createDraft(input: {
   readonly injuries: readonly ProjectionInjuryFact[];
   readonly schedules: readonly ProjectionScheduleFact[];
   readonly scoringProfile: ProjectionScoringProfile;
-}): HistoricalRosDraft | null {
+  readonly evaluateProjection: HistoricalRosProjectionEvaluator;
+}): Promise<HistoricalRosDraft | null> {
   const windowStartWeek = input.asOfWeek + 1;
   const windowEndWeek = 18;
   const injury = latestInjuryStatus(
@@ -1807,12 +1909,12 @@ function createDraft(input: {
   }
   const asOfAt = historicalRosAsOfAt(input.schedules, input.season, input.asOfWeek);
   const availability = { state: availabilityState, ...availabilityBase };
-  // Kicker fields spread conditionally so every non-K checksum and input stays byte-identical
-  // to its pre-v7 value (the payload version string deliberately stays historical-ros-input-v2).
+  // The football checksum contains all process inputs, and deliberately excludes league rules.
   const kicker =
     input.player.position === "K" ? historicalRosKickerProcess(input.kickerCalibration) : undefined;
   const inputChecksum = historicalRosChecksum({
-    version: "historical-ros-input-v2",
+    version: "historical-ros-football-input-v3",
+    productionBasis: HISTORICAL_ROS_PRODUCTION_BASIS_VERSION,
     playerId: input.player.playerId,
     position: input.player.position,
     team: input.player.team,
@@ -1829,7 +1931,6 @@ function createDraft(input: {
     role,
     roleCalibrationVersion: input.roleCalibration.version,
     ...(kicker ? { kicker, kickerCalibrationVersion: input.kickerCalibration.version } : {}),
-    scoringProfileKey: projectionScoringProfileKey(input.scoringProfile),
   });
   const common = {
     playerId: input.player.playerId,
@@ -1853,8 +1954,10 @@ function createDraft(input: {
     ...common,
     strategy: "availability-aware-recency",
   };
-  const contextual = projectFirstPartyRestOfSeason(contextualInput);
-  const recency = projectFirstPartyRestOfSeason(recencyInput);
+  const [contextual, recency] = await Promise.all([
+    input.evaluateProjection(contextualInput),
+    input.evaluateProjection(recencyInput),
+  ]);
   const actual = aggregateActual({
     history: input.outcomeHistory,
     playerId: input.player.playerId,
@@ -1900,13 +2003,14 @@ function createDraft(input: {
       recency: scheduledGames === 0 ? 0 : recencyPresent / scheduledGames,
     },
     actualGames: actual.actualGames,
+    actualComponents: actual.actualComponents,
     scheduledGames,
     contextualExpectedGames: contextual.expectedGames,
     recencyExpectedGames: recency.expectedGames,
   };
 }
 
-function createDefenseDraft(input: {
+async function createDefenseDraft(input: {
   readonly defense: CandidateDefense;
   readonly season: number;
   readonly asOfWeek: number;
@@ -1916,7 +2020,8 @@ function createDefenseDraft(input: {
   readonly calibration: FirstPartyTeamDefenseCalibration;
   readonly schedules: readonly ProjectionScheduleFact[];
   readonly scoringProfile: ProjectionScoringProfile;
-}): HistoricalRosDraft | null {
+  readonly evaluateProjection: HistoricalRosProjectionEvaluator;
+}): Promise<HistoricalRosDraft | null> {
   const windowStartWeek = input.asOfWeek + 1;
   const windowEndWeek = 18;
   const weeks = [];
@@ -1994,7 +2099,8 @@ function createDefenseDraft(input: {
     maximumMultiplier: 1,
   };
   const inputChecksum = historicalRosChecksum({
-    version: "historical-ros-defense-input-v2",
+    version: "historical-ros-defense-football-input-v3",
+    productionBasis: HISTORICAL_ROS_PRODUCTION_BASIS_VERSION,
     playerId,
     position: "DST",
     team: input.defense.team,
@@ -2007,7 +2113,6 @@ function createDefenseDraft(input: {
     fingerprints,
     availability,
     role,
-    scoringProfileKey: projectionScoringProfileKey(input.scoringProfile),
   });
   const common = {
     playerId,
@@ -2030,8 +2135,10 @@ function createDefenseDraft(input: {
     ...common,
     strategy: "availability-aware-recency",
   };
-  const contextual = projectFirstPartyRestOfSeason(contextualInput);
-  const recency = projectFirstPartyRestOfSeason(recencyInput);
+  const [contextual, recency] = await Promise.all([
+    input.evaluateProjection(contextualInput),
+    input.evaluateProjection(recencyInput),
+  ]);
   const actual = aggregateDefenseActual({
     history: input.outcomeHistory,
     team: input.defense.team,
@@ -2075,6 +2182,7 @@ function createDefenseDraft(input: {
       recency: scheduledGames === 0 ? 0 : recencyPresent / scheduledGames,
     },
     actualGames: actual.actualGames,
+    actualComponents: actual.actualComponents,
     scheduledGames,
     contextualExpectedGames: contextual.expectedGames,
     recencyExpectedGames: recency.expectedGames,
@@ -2102,19 +2210,24 @@ export interface HistoricalRosConvergenceAuditEntry {
   readonly worstToleranceRatio: number;
 }
 
-interface ConvergenceStrategyEvidence {
+export interface ConvergenceStrategyEvidence {
   readonly state: "converged" | "unstable";
   readonly checksum: string;
   readonly worstMetric: string;
   readonly worstToleranceRatio: number;
 }
 
-function convergenceEvidence(drafts: readonly HistoricalRosDraft[]): ReadonlyMap<
-  string,
-  {
-    readonly contextual: ConvergenceStrategyEvidence;
-    readonly recency: ConvergenceStrategyEvidence;
-  }
+async function convergenceEvidence(
+  drafts: readonly HistoricalRosDraft[],
+  evaluateProjection: HistoricalRosProjectionEvaluator,
+): Promise<
+  ReadonlyMap<
+    string,
+    {
+      readonly contextual: ConvergenceStrategyEvidence;
+      readonly recency: ConvergenceStrategyEvidence;
+    }
+  >
 > {
   const byStratum = new Map<string, HistoricalRosDraft[]>();
   for (const draft of drafts) {
@@ -2141,8 +2254,20 @@ function convergenceEvidence(drafts: readonly HistoricalRosDraft[]): ReadonlyMap
       const rightHash = historicalRosChecksum(right.forecast.inputChecksum);
       return leftHash.localeCompare(rightHash);
     })[0]!;
-    const contextualDiagnostics = [diagnoseFirstPartyRosConvergence(sample.contextualInput)];
-    const recencyDiagnostics = [diagnoseFirstPartyRosConvergence(sample.recencyInput)];
+    const diagnose = async (projectionInput: FirstPartyRosProjectionInput) =>
+      evaluateFirstPartyRosConvergence({
+        position: projectionInput.position,
+        release: await evaluateProjection({
+          ...projectionInput,
+          scenarioCount: FIRST_PARTY_ROS_DEFAULT_SCENARIOS,
+        }),
+        reference: await evaluateProjection({
+          ...projectionInput,
+          scenarioCount: FIRST_PARTY_ROS_CONVERGENCE_REFERENCE_SCENARIOS,
+        }),
+      });
+    const contextualDiagnostics = [await diagnose(sample.contextualInput)];
+    const recencyDiagnostics = [await diagnose(sample.recencyInput)];
     const position = sample.forecast.position;
     const bucket = historicalRosBucket(
       sample.forecast.windowStartWeek,
@@ -2159,7 +2284,7 @@ function convergenceEvidence(drafts: readonly HistoricalRosDraft[]): ReadonlyMap
         state: diagnostics.every((diagnostic) => diagnostic.state === "converged")
           ? "converged"
           : "unstable",
-        checksum: convergenceChecksum({
+        checksum: historicalRosConvergenceChecksum({
           season: sample.forecast.forecastSeason,
           position,
           bucket,
@@ -2221,10 +2346,11 @@ export function evaluateHistoricalRosCells(input: {
   );
 }
 
-export function buildHistoricalRosBacktest(
+export async function buildHistoricalRosBacktest(
   input: HistoricalRosBacktestInput,
-): HistoricalRosBacktestResult {
+): Promise<HistoricalRosBacktestResult> {
   const options = resolveOptions(input.options);
+  const evaluateProjection = input.projectionEvaluator ?? simulateHistoricalProjection;
   const includedPositions = new Set(options.positions);
   const includesPlayers = options.positions.some((position) => position !== "DST");
   const includesDefense = includedPositions.has("DST");
@@ -2251,21 +2377,11 @@ export function buildHistoricalRosBacktest(
         ? null
         : {
             weekly: weeklyBacktest.calibration,
-            availability: calibrateHistoricalRosAvailability(
-              training,
-              input.schedules,
-              input.scoringProfile,
-            ),
-            role: calibrateHistoricalRosRole(
-              training,
-              input.schedules,
-              input.scoringProfile,
-              weeklyBacktest.predictions,
-            ),
+            availability: calibrateHistoricalRosAvailability(training, input.schedules),
+            role: calibrateHistoricalRosRole(training, input.schedules, weeklyBacktest.predictions),
             kicker: calibrateHistoricalRosKicker(
               training,
               input.schedules,
-              input.scoringProfile,
               weeklyBacktest.predictions,
             ),
           };
@@ -2277,7 +2393,6 @@ export function buildHistoricalRosBacktest(
         fitted: {
           fgEventDispersion: playerCalibration.kicker.fgEventDispersion,
           xpDispersion: playerCalibration.kicker.xpDispersion,
-          recordedMissRatio: playerCalibration.kicker.recordedMissRatio,
           centerVolatility: playerCalibration.kicker.centerVolatility,
           evidence: playerCalibration.kicker.evidence,
         },
@@ -2306,7 +2421,8 @@ export function buildHistoricalRosBacktest(
         }).filter((player) => includedPositions.has(player.position));
         for (const player of players) {
           if (drafts.length >= options.maximumForecasts) break;
-          const draft = createDraft({
+          const draft = await createDraft({
+            evaluateProjection,
             player,
             season,
             asOfWeek,
@@ -2339,7 +2455,8 @@ export function buildHistoricalRosBacktest(
         });
         for (const defense of defenses) {
           if (drafts.length >= options.maximumForecasts) break;
-          const draft = createDefenseDraft({
+          const draft = await createDefenseDraft({
+            evaluateProjection,
             defense,
             season,
             asOfWeek,
@@ -2356,8 +2473,15 @@ export function buildHistoricalRosBacktest(
     }
     input.onProgress?.({ stage: "season-forecasts-ready", season, forecasts: drafts.length });
   }
+  await input.onPrepared?.({
+    drafts,
+    options,
+    qualifiedSeasons: [...qualifiedSeasons],
+    skippedForecasts,
+    kickerFamilyAudits,
+  });
   input.onProgress?.({ stage: "convergence-started", forecasts: drafts.length });
-  const convergence = convergenceEvidence(drafts);
+  const convergence = await convergenceEvidence(drafts, evaluateProjection);
   input.onProgress?.({
     stage: "convergence-ready",
     forecasts: drafts.length,
@@ -2395,6 +2519,36 @@ export function buildHistoricalRosBacktest(
       },
     };
   });
+  return evaluateHistoricalRosForecasts({
+    forecasts,
+    options,
+    qualifiedSeasons: [...qualifiedSeasons],
+    skippedForecasts,
+    kickerFamilyAudits,
+    convergence,
+    ...(input.onProgress ? { onProgress: input.onProgress } : {}),
+  });
+}
+
+/** Shared locked statistical gates for new simulations and immutable corpus rescoring alike. */
+export function evaluateHistoricalRosForecasts(input: {
+  readonly forecasts: readonly FirstPartyRosHeldOutForecast[];
+  readonly options: HistoricalRosBacktestOptions;
+  readonly qualifiedSeasons: readonly number[];
+  readonly skippedForecasts: number;
+  readonly kickerFamilyAudits: HistoricalRosBacktestReport["kickerFamilyAudit"];
+  readonly convergence: ReadonlyMap<
+    string,
+    {
+      readonly contextual: ConvergenceStrategyEvidence;
+      readonly recency: ConvergenceStrategyEvidence;
+    }
+  >;
+  readonly onProgress?: (event: HistoricalRosBacktestProgress) => void;
+}): HistoricalRosBacktestResult {
+  const { forecasts, skippedForecasts, kickerFamilyAudits, convergence } = input;
+  const options = resolveOptions(input.options);
+  const qualifiedSeasons = new Set(input.qualifiedSeasons);
   const heldOutSeasons = options.heldOutSeasons
     .filter((season) => qualifiedSeasons.has(season))
     .map((season): FirstPartyRosHeldOutSeason => ({
@@ -2472,9 +2626,10 @@ export function buildHistoricalRosBacktest(
         targetOutcomeUse: "evaluation-only",
       },
       selectionPolicy: {
-        strategy: "recent-production-stratified",
+        strategy: "football-activity-and-reference-production-stratified",
+        productionBasis: HISTORICAL_ROS_PRODUCTION_BASIS_VERSION,
         tiers: ["high", "middle", "lower"],
-        excludesNonPositiveRecentProduction: true,
+        excludesNonPositiveRecentProduction: false,
       },
       unsupportedPositions: [],
       blockers: [...new Set(blockers)],

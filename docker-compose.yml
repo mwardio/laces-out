@@ -177,8 +177,9 @@ services:
 
   ros-worker:
     <<: *service-defaults
-    # Reserve capacity for two proof subprocesses and time-sensitive weekly/API work.
-    cpus: 3.0
+    # One shared live football fit; contain its heap/array growth independently of the API.
+    cpus: 2.0
+    mem_limit: 3g
     build:
       context: .
       target: worker
@@ -208,7 +209,7 @@ services:
 
   ros-validation-worker:
     <<: *service-defaults
-    # Two isolated proofs at a time, with a hard CPU/memory budget.
+    # One shared football corpus build; two cheap exact-scoring replays may run concurrently.
     cpus: 2.0
     mem_limit: 5g
     build:
@@ -230,8 +231,10 @@ services:
     environment:
       <<: *app-environment
       ROS_VALIDATION_SOURCE_CACHE: /tmp/laces-ros-source-cache
+      ROS_VALIDATION_OUTCOME_CACHE: /tmp/laces-ros-outcome-cache
     volumes:
       - ros_validation_sources:/tmp/laces-ros-source-cache
+      - ros_validation_outcomes:/tmp/laces-ros-outcome-cache
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -324,6 +327,7 @@ services:
 
 volumes:
   ros_validation_sources:
+  ros_validation_outcomes:
   fantasy_postgres:
   caddy_data:
   caddy_config:

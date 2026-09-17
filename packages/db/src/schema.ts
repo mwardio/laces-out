@@ -839,7 +839,9 @@ export const scoringRules = pgTable(
       .references(() => leagueSeasons.id, { onDelete: "cascade" }),
     statKey: text("stat_key").notNull(),
     operation: text("operation").notNull(),
-    points: numeric("points", { precision: 10, scale: 4 }).notNull(),
+    // Provider rates such as one point per 150 return yards need more than four decimals.
+    // Unconstrained numeric preserves the imported decimal and its exact scoring identity.
+    points: numeric("points").notNull(),
     thresholdLow: numeric("threshold_low", { precision: 10, scale: 2 }),
     thresholdHigh: numeric("threshold_high", { precision: 10, scale: 2 }),
     providerStatId: text("provider_stat_id"),

@@ -15,12 +15,16 @@ export interface RosProfileValidationRunInput {
   readonly scoringProfileKey: string;
   readonly season: number;
   readonly signal: AbortSignal;
+  /** Immutable shared football corpus. Replay must never fetch, fit, or simulate. */
+  readonly replayCorpusIdentity?: string;
 }
 export type RosProfileValidationRunner = (
   input: RosProfileValidationRunInput,
 ) => Promise<Record<string, unknown>>;
 
 export const ROS_PROFILE_VALIDATION_TIMEOUT_MS = 22 * 60 * 60 * 1_000;
+/** Includes shared-build waiting and child execution; leaves 30 minutes inside pg-boss's lease. */
+export const ROS_PROFILE_VALIDATION_JOB_TIMEOUT_MS = (22 * 60 + 30) * 60 * 1_000;
 export const ROS_PROFILE_VALIDATION_MAXIMUM_REPORT_BYTES = 8 * 1_024 * 1_024;
 
 /** No inherited NODE_OPTIONS, database URLs, provider tokens, or application secrets. */
@@ -32,6 +36,7 @@ export function createRosProfileValidationRunner(
   options: {
     readonly validatorPath?: string;
     readonly sourceCacheDirectory?: string;
+    readonly outcomeCacheDirectory?: string;
     readonly offline?: boolean;
     readonly timeoutMs?: number;
     readonly maximumReportBytes?: number;
@@ -59,6 +64,11 @@ export function createRosProfileValidationRunner(
   return async (input) => {
     input.signal.throwIfAborted();
     rosProfileDefinitionFromKey(input.scoringProfileKey);
+    if (
+      input.replayCorpusIdentity !== undefined &&
+      (!options.outcomeCacheDirectory || !/^[a-f0-9]{64}$/u.test(input.replayCorpusIdentity))
+    )
+      throw new Error("ROS corpus replay requires an outcome cache and a valid identity");
     if (!Number.isSafeInteger(input.season) || input.season < 2007 || input.season > 2200) {
       throw new RangeError("Invalid ROS validation target season");
     }
@@ -77,6 +87,10 @@ export function createRosProfileValidationRunner(
         `--max-forecasts=${FIRST_PARTY_ROS_RELEASE_MAXIMUM_FORECASTS}`,
         "--full",
         ...(options.sourceCacheDirectory ? [`--source-cache=${options.sourceCacheDirectory}`] : []),
+        ...(options.outcomeCacheDirectory
+          ? [`--outcome-cache=${options.outcomeCacheDirectory}`]
+          : []),
+        ...(input.replayCorpusIdentity ? [`--replay-corpus=${input.replayCorpusIdentity}`] : []),
         ...(options.offline ? ["--offline"] : []),
       ];
       return await new Promise<Record<string, unknown>>((resolve, reject) => {
@@ -84,16 +98,31 @@ export function createRosProfileValidationRunner(
           cwd: directory,
           env: rosProfileValidationChildEnvironment(),
           stdio: ["ignore", "pipe", "pipe"],
+          // Linux/Darwin: the validator owns every simulator descendant in one process group.
+          detached: process.platform !== "win32",
         });
         const chunks: Buffer[] = [];
         let outputBytes = 0;
         let stderrBytes = 0;
         let failure: Error | undefined;
         let killTimer: ReturnType<typeof setTimeout> | undefined;
+        const terminate = (signal: NodeJS.Signals) => {
+          if (process.platform === "win32" || child.pid === undefined) {
+            child.kill(signal);
+            return;
+          }
+          try {
+            process.kill(-child.pid, signal);
+          } catch (error) {
+            if ((error as NodeJS.ErrnoException).code !== "ESRCH") {
+              failure ??= new Error("ROS validator process group could not be terminated");
+            }
+          }
+        };
         const stop = (error: Error) => {
           failure ??= error;
-          child.kill("SIGTERM");
-          killTimer ??= setTimeout(() => child.kill("SIGKILL"), 5_000);
+          terminate("SIGTERM");
+          killTimer ??= setTimeout(() => terminate("SIGKILL"), 5_000);
           killTimer.unref();
         };
         const abort = () => stop(new Error("ROS profile validation aborted"));
@@ -121,6 +150,9 @@ export function createRosProfileValidationRunner(
           failure ??= new Error("ROS profile validator process could not start");
         });
         child.on("close", (code, signal) => {
+          // A hard-killed leader cannot execute finally. Interrupt any synchronous CPU child
+          // before its owning promise settles; an IPC disconnect callback alone is insufficient.
+          terminate("SIGKILL");
           clearTimeout(timer);
           if (killTimer) clearTimeout(killTimer);
           input.signal.removeEventListener("abort", abort);

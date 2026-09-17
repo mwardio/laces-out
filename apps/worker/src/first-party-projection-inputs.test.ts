@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { projectFirstPartyRecencyBaselineComponents } from "@laces-out/projections";
 
 import {
   buildFirstPartyDefenseHistory,
@@ -30,7 +31,9 @@ describe("first-party projection input assembly", () => {
             receiving_fumbles_lost: 0,
             fumbles_lost_total: 1,
             passing_two_point_conversions: 1,
+            rushing_two_point_conversions: 0,
             receiving_two_point_conversions: 1,
+            field_goals_made_0_19: 0,
             field_goals_made_20_29: 1,
             field_goals_made_30_39: 1,
             field_goals_made_50_59: 1,
@@ -134,8 +137,65 @@ describe("first-party projection input assembly", () => {
       opponent: "GB",
       snapShare: 0.44,
       played: true,
-      components: { fumbles_lost: 0, two_point_conversions: 0 },
+      components: {
+        fumbles_lost: 0,
+        two_point_conversions: 0,
+        receiving_yards: 0,
+        receptions: 0,
+        targets: 0,
+        receiving_yards_nonnegative: 0,
+        receiving_yards_per_10_units: 0,
+        receiving_yards_100_199_probability: 0,
+      },
     });
+  });
+
+  it("includes a played zero-stat game when estimating raw production and its transforms", () => {
+    const history = buildFirstPartyPlayerHistory(
+      [
+        {
+          playerId: "receiver",
+          position: "WR",
+          season: 2025,
+          week: 1,
+          gameId: "game-1",
+          team: "CHI",
+          opponentTeam: "GB",
+          components: { receiving_yards: 100, receptions: 10, targets: 10 },
+          advanced: {},
+        },
+      ],
+      [
+        {
+          playerId: "receiver",
+          position: "WR",
+          season: 2025,
+          week: 2,
+          gameId: "game-2",
+          team: "CHI",
+          opponentTeam: "MIN",
+          offenseShare: 0.3,
+          specialTeamsShare: 0,
+        },
+      ],
+    );
+    const projection = projectFirstPartyRecencyBaselineComponents({
+      target: { playerId: "receiver", position: "WR", season: 2025, week: 3, team: "CHI" },
+      history,
+    });
+    expect(projection.components.receiving_yards).toBeCloseTo(47.1150945100074, 10);
+    expect(projection.components.receiving_yards_nonnegative).toBeCloseTo(
+      projection.components.receiving_yards!,
+      10,
+    );
+    expect(projection.components.receiving_yards_per_10_units).toBeCloseTo(
+      projection.components.receiving_yards! / 10,
+      10,
+    );
+    expect(projection.components.receiving_yards_100_199_probability).toBeCloseTo(
+      projection.components.receiving_yards! / 100,
+      10,
+    );
   });
 
   it("adds completed rostered DNPs without inventing future or bye-week zeroes", () => {

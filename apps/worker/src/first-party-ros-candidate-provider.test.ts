@@ -603,29 +603,22 @@ describe("live ROS player calibration", () => {
     const historical = calibrateHistoricalRosRole(
       trainingHistory,
       schedules,
-      scoringProfile,
       weeklyBacktest.predictions,
     );
-    const missingResiduals = calibrateHistoricalRosRole(trainingHistory, schedules, scoringProfile);
+    const missingResiduals = calibrateHistoricalRosRole(trainingHistory, schedules);
     expect(missingResiduals.byPosition.WR?.centerVolatility).toBe(0.25);
     expect(historical.byPosition.WR?.centerVolatility).not.toBe(0.25);
 
     const live = calibrateFirstPartyRosPlayerHistory({
       trainingHistory,
       schedules,
-      scoringProfile,
     });
     expect(live.role).toEqual(historical);
     expect(live.weekly).toEqual(weeklyBacktest.calibration);
     expect(live.kicker).toEqual(
-      calibrateHistoricalRosKicker(
-        trainingHistory,
-        schedules,
-        scoringProfile,
-        weeklyBacktest.predictions,
-      ),
+      calibrateHistoricalRosKicker(trainingHistory, schedules, weeklyBacktest.predictions),
     );
-  }, 15_000);
+  }, 45_000);
 });
 
 function ninePlusForecast(
@@ -732,17 +725,9 @@ describe("buildFirstPartyRosLeagueTarget", () => {
   const trainingHistory = history.filter((row) => row.season < 2026);
   const featureHistory = history.filter((row) => row.season * 32 + row.week <= 2026 * 32 + 6);
   const calibration = runFirstPartyProjectionBacktest(trainingHistory).calibration;
-  const availabilityCalibration = calibrateHistoricalRosAvailability(
-    trainingHistory,
-    schedules,
-    scoringProfile,
-  );
-  const roleCalibration = calibrateHistoricalRosRole(trainingHistory, schedules, scoringProfile);
-  const kickerCalibration = calibrateHistoricalRosKicker(
-    trainingHistory,
-    schedules,
-    scoringProfile,
-  );
+  const availabilityCalibration = calibrateHistoricalRosAvailability(trainingHistory, schedules);
+  const roleCalibration = calibrateHistoricalRosRole(trainingHistory, schedules);
+  const kickerCalibration = calibrateHistoricalRosKicker(trainingHistory, schedules);
 
   function run(input: {
     policy: FirstPartyRosChampionPolicy;
@@ -794,10 +779,10 @@ describe("buildFirstPartyRosLeagueTarget", () => {
         intervals: {},
       },
       availabilityCalibration: input.history
-        ? calibrateHistoricalRosAvailability(selectedTrainingHistory, schedules, scoringProfile)
+        ? calibrateHistoricalRosAvailability(selectedTrainingHistory, schedules)
         : availabilityCalibration,
       roleCalibration: input.history
-        ? calibrateHistoricalRosRole(selectedTrainingHistory, schedules, scoringProfile)
+        ? calibrateHistoricalRosRole(selectedTrainingHistory, schedules)
         : roleCalibration,
       kickerCalibration,
       injuries: [],

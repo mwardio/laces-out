@@ -7,6 +7,7 @@ import {
   FIRST_PARTY_ROS_MAXIMUM_SCENARIOS,
   FIRST_PARTY_ROS_MINIMUM_SCENARIOS,
   FIRST_PARTY_ROS_MODEL_VERSION,
+  FIRST_PARTY_ROS_SEED_VERSION,
   firstPartyProjectionComponentsForPosition,
   firstPartyRecentRoleContext,
   firstPartyTeamDefenseProjectionComponents,
@@ -38,6 +39,7 @@ import {
 import {
   HISTORICAL_ROS_CANDIDATE_PAIR_VERSION,
   HISTORICAL_ROS_INTERVAL_METHOD_VERSION,
+  HISTORICAL_ROS_PRODUCTION_BASIS_VERSION,
   historicalRosActiveStreak,
   historicalRosAsOfAt,
   historicalRosAvailabilityFor,
@@ -324,7 +326,8 @@ export function assembleFirstPartyRosDefenseCandidateInputs(
     maximumMultiplier: 1,
   };
   const inputChecksum = historicalRosChecksum({
-    version: "live-ros-defense-input-v1",
+    version: "live-ros-defense-football-input-v2",
+    productionBasis: HISTORICAL_ROS_PRODUCTION_BASIS_VERSION,
     playerId: input.defense.playerId,
     position: "DST",
     team,
@@ -336,7 +339,6 @@ export function assembleFirstPartyRosDefenseCandidateInputs(
     fingerprints,
     availability,
     role,
-    scoringProfileKey,
   });
   const common = {
     playerId: input.defense.playerId,
@@ -488,12 +490,12 @@ export function assembleFirstPartyRosCandidateInputs(
 
   const asOfAt = input.asOfAt ?? historicalRosAsOfAt(input.schedules, season, asOfWeek);
   const scoringProfileKey = projectionScoringProfileKey(input.scoringProfile);
-  // Kicker fields spread conditionally so every non-K checksum and input stays byte-identical
-  // to its pre-v7 value (the payload version string deliberately stays live-ros-input-v1).
+  // Football inputs are shared across scoring configurations; points remain separate provenance.
   const kicker =
     input.player.position === "K" ? historicalRosKickerProcess(input.kickerCalibration) : undefined;
   const inputChecksum = historicalRosChecksum({
-    version: "live-ros-input-v1",
+    version: "live-ros-football-input-v2",
+    productionBasis: HISTORICAL_ROS_PRODUCTION_BASIS_VERSION,
     playerId: input.player.playerId,
     position: input.player.position,
     team: input.player.team,
@@ -509,7 +511,6 @@ export function assembleFirstPartyRosCandidateInputs(
     role,
     roleCalibrationVersion: input.roleCalibration.version,
     ...(kicker ? { kicker, kickerCalibrationVersion: input.kickerCalibration.version } : {}),
-    scoringProfileKey,
   });
   const common = {
     playerId: input.player.playerId,
@@ -571,9 +572,10 @@ export function buildFirstPartyRosPlayerCandidate(
  */
 export function simulateFirstPartyRosCandidate(
   assembled: FirstPartyRosAssembledCandidateInputs,
+  project = projectFirstPartyRestOfSeason,
 ): FirstPartyRosCandidate {
-  const contextual = projectFirstPartyRestOfSeason(assembled.contextualInput);
-  const recency = projectFirstPartyRestOfSeason(assembled.recencyInput);
+  const contextual = project(assembled.contextualInput);
+  const recency = project(assembled.recencyInput);
   return {
     playerId: assembled.playerId,
     position: contextual.position,
@@ -604,12 +606,23 @@ function reuseOrSimulateRelease(
   projectionInput: FirstPartyRosProjectionInput,
   scenarioCount: number,
   supplied: FirstPartyRosProjection | undefined,
+  project = projectFirstPartyRestOfSeason,
 ): FirstPartyRosProjection {
   if (supplied === undefined) {
-    return projectFirstPartyRestOfSeason({ ...projectionInput, scenarioCount });
+    return project({ ...projectionInput, scenarioCount });
   }
   const provenance = supplied.provenance;
+  const expectedSeed = createHash("sha256")
+    .update(
+      `${FIRST_PARTY_ROS_SEED_VERSION}|${projectionInput.seed}|${projectionInput.inputChecksum}|${projectionInput.playerId}|${projectionInput.strategy}|${projectionInput.season}|${projectionInput.asOfWeek}|${projectionInput.asOfAt}|${projectionInput.windowStartWeek}|${projectionInput.windowEndWeek}`,
+    )
+    .digest("hex");
   if (
+    provenance.modelVersion !== FIRST_PARTY_ROS_MODEL_VERSION ||
+    provenance.seedHash !== expectedSeed ||
+    provenance.scoringProfileKey !== projectionScoringProfileKey(projectionInput.scoringProfile) ||
+    provenance.asOfAt !== projectionInput.asOfAt ||
+    supplied.position !== projectionInput.position ||
     provenance.scenarioCount !== scenarioCount ||
     provenance.inputChecksum !== projectionInput.inputChecksum ||
     provenance.strategy !== projectionInput.strategy ||
@@ -643,6 +656,7 @@ export function diagnoseBoundedFirstPartyRosConvergence(input: {
   readonly releaseScenarioCount?: number;
   readonly referenceScenarioCount?: number;
   readonly releaseProjection?: FirstPartyRosProjection;
+  readonly project?: typeof projectFirstPartyRestOfSeason;
 }): {
   readonly state: "converged" | "unstable";
   readonly lowerScenarioCount: number;
@@ -673,8 +687,13 @@ export function diagnoseBoundedFirstPartyRosConvergence(input: {
   if (reference < lower) {
     throw new RangeError("Live ROS convergence reference must be at least the release path count");
   }
-  const release = reuseOrSimulateRelease(input.projectionInput, lower, input.releaseProjection);
-  const referenceRun = projectFirstPartyRestOfSeason({
+  const release = reuseOrSimulateRelease(
+    input.projectionInput,
+    lower,
+    input.releaseProjection,
+    input.project,
+  );
+  const referenceRun = (input.project ?? projectFirstPartyRestOfSeason)({
     ...input.projectionInput,
     scenarioCount: reference,
   });

@@ -12,11 +12,10 @@ interface SeasonRefreshService {
 }
 
 interface WeeklyInputRefreshService {
-  refreshWeeklyStats(season: number, force?: boolean): Promise<unknown>;
+  refreshWeeklyStatsPair(season: number, force?: boolean): Promise<unknown>;
   refreshSnapCounts(season: number, force?: boolean): Promise<unknown>;
   refreshWeeklyRosters(season: number, force?: boolean): Promise<unknown>;
   refreshInjuries(season: number, force?: boolean): Promise<unknown>;
-  refreshTeamWeeklyStats(season: number, force?: boolean): Promise<unknown>;
 }
 
 export interface ProjectionRefreshOrchestratorInput {
@@ -65,11 +64,10 @@ export class ProjectionRefreshOrchestrator implements ProjectionRefreshService {
     // window and conditional request, so overlapping/manual sweeps coalesce and unchanged
     // artifacts do not produce new immutable observations.
     await this.#input.catalog.refresh(forceCurrentInputs);
-    await this.#input.weeklyData.refreshWeeklyStats(effectiveJob.season, forceCurrentInputs);
+    await this.#input.weeklyData.refreshWeeklyStatsPair(effectiveJob.season, forceCurrentInputs);
     await this.#input.weeklyData.refreshSnapCounts(effectiveJob.season, forceCurrentInputs);
     await this.#input.weeklyData.refreshWeeklyRosters(effectiveJob.season, forceCurrentInputs);
     await this.#input.weeklyData.refreshInjuries(effectiveJob.season, forceCurrentInputs);
-    await this.#input.weeklyData.refreshTeamWeeklyStats(effectiveJob.season, forceCurrentInputs);
     await this.#input.sleeperCatalog.refreshCatalog(forceCurrentInputs);
     await this.#input.schedule.refresh(effectiveJob.season, forceCurrentInputs);
     await this.#input.weeklyProjections.refreshProjections(effectiveJob, context);

@@ -1,6 +1,5 @@
 import {
   applyFirstPartyProjectionChampionPolicy,
-  applyFirstPartyProjectionFinalPolicy,
   evaluateFirstPartyBacktestForScoringProfile,
   evaluateFirstPartyTeamDefenseBacktestForScoringProfile,
   runFirstPartyProjectionBacktest,
@@ -18,6 +17,9 @@ import {
   NflverseTeamWeeklyStatsSource,
   NflverseWeeklyRostersSource,
   NflverseWeeklyStatsSource,
+  NflversePlayByPlaySource,
+  snapshotNflversePlayByPlay,
+  fourthDownStopsFromPlayByPlay,
   type NflverseDatasetState,
 } from "@laces-out/source-nflverse";
 
@@ -363,13 +365,16 @@ async function main(): Promise<void> {
   const sources: Array<Record<string, unknown>> = [];
 
   for (const season of seasons) {
+    const playByPlay = snapshotNflversePlayByPlay(new NflversePlayByPlaySource(), season);
     const [weeklyResult, snapResult, rosterResult, injuryResult, teamResult, scheduleResult] =
       await Promise.all([
-        new NflverseWeeklyStatsSource().check(season, emptyState),
+        new NflverseWeeklyStatsSource({ playByPlay }).check(season, emptyState),
         new NflverseSnapCountsSource().check(season, emptyState),
         new NflverseWeeklyRostersSource().check(season, emptyState),
         new NflverseInjuriesSource().check(season, emptyState),
-        new NflverseTeamWeeklyStatsSource().check(season, emptyState),
+        new NflverseTeamWeeklyStatsSource({
+          fourthDowns: fourthDownStopsFromPlayByPlay(playByPlay),
+        }).check(season, emptyState),
         new NflverseSchedulesSource().check(
           season,
           { ...emptyState, selectionKey: null },
@@ -517,16 +522,12 @@ async function main(): Promise<void> {
   const playerHistory = buildFirstPartyPlayerHistory(weekly, snaps, rosters, schedules, injuries);
   const basePlayerBacktest = runFirstPartyProjectionBacktest(playerHistory);
   const champion = applyFirstPartyProjectionChampionPolicy(basePlayerBacktest, validationProfile);
-  const publicationBacktest = applyFirstPartyProjectionFinalPolicy(
-    basePlayerBacktest,
-    champion.policy,
-  );
   const candidateEvaluation = evaluateFirstPartyBacktestForScoringProfile(
     basePlayerBacktest,
     validationProfile,
   );
   const playerEvaluation = evaluateFirstPartyBacktestForScoringProfile(
-    publicationBacktest,
+    champion.backtest,
     validationProfile,
   );
   const defenseHistory = buildFirstPartyDefenseHistory(teams, schedules);
@@ -538,7 +539,7 @@ async function main(): Promise<void> {
   const gate = projectionModelGate({
     player: playerEvaluation,
     defense: defenseEvaluation,
-    playerPredictions: publicationBacktest.predictions.length,
+    playerPredictions: champion.backtest.predictions.length,
     defensePredictions: defenseBacktest.predictions.length,
   });
   const result = {

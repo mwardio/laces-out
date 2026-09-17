@@ -490,26 +490,26 @@ describe("normalizeLeagueScoringProfile", () => {
     ).toBe(18);
   });
 
-  it("prices Yahoo whole-group yardage exactly when fractional points are disabled", () => {
+  it("prices Yahoo nonnegative whole-group yardage exactly when fractional points are disabled", () => {
     const result = normalized([
-      rule("4", "Passing Yards", 0.04, { operation: "floor-groups" }),
-      rule("9", "Rushing Yards", 0.1, { operation: "floor-groups" }),
-      rule("12", "Receiving Yards", 0.1, { operation: "floor-groups" }),
+      rule("4", "Passing Yards", 0.04, { operation: "floor-groups-nonnegative" }),
+      rule("9", "Rushing Yards", 0.1, { operation: "floor-groups-nonnegative" }),
+      rule("12", "Receiving Yards", 0.1, { operation: "floor-groups-nonnegative" }),
     ]);
     expectAvailable(result);
     expect(result.profile.rules).toEqual(
       expect.arrayContaining([
-        { statId: "passing_yards_per_25_units", points: 1 },
-        { statId: "rushing_yards_per_10_units", points: 1 },
-        { statId: "receiving_yards_per_10_units", points: 1 },
+        { statId: "passing_yards_nonnegative_per_25_units", points: 1 },
+        { statId: "rushing_yards_nonnegative_per_10_units", points: 1 },
+        { statId: "receiving_yards_nonnegative_per_10_units", points: 1 },
       ]),
     );
     expect(
       scoreProjectionStatComponents(
         {
-          passing_yards_per_25_units: 10.4,
-          rushing_yards_per_10_units: 5.2,
-          receiving_yards_per_10_units: 7.1,
+          passing_yards_nonnegative_per_25_units: 10.4,
+          rushing_yards_nonnegative_per_10_units: 5.2,
+          receiving_yards_nonnegative_per_10_units: 7.1,
         },
         result.profile,
       ),
@@ -522,9 +522,53 @@ describe("normalizeLeagueScoringProfile", () => {
     expect(positionReasonCodes(result, "QB")).toEqual(["NONLINEAR_RULE"]);
   });
 
-  it("fails closed on combined Yahoo return-yard groups rather than flooring split projections", () => {
-    const result = normalized([rule("14", "Return Yards", 0.04, { operation: "floor-groups" })]);
-    expect(reasonCodes(result)).toEqual(["NONLINEAR_RULE"]);
+  it("scores combined nonnegative Yahoo return-yard groups using a directly modeled combined component", () => {
+    const result = normalized([
+      rule("14", "Return Yards", 0.04, { operation: "floor-groups-nonnegative" }),
+    ]);
+    expectAvailable(result);
+    expect(result.profile.rules).toEqual([
+      { statId: "return_yards_nonnegative_per_25_units", points: 1 },
+    ]);
+  });
+
+  it("withholds signed whole-group Yahoo rounding until its negative boundary behavior is verified", () => {
+    expect(
+      reasonCodes(normalized([rule("9", "Rushing Yards", 0.1, { operation: "floor-groups" })])),
+    ).toContain("NONLINEAR_RULE");
+  });
+
+  it("uses learned positive-only yardage expectations when Yahoo negative points are disabled", () => {
+    const result = normalized([
+      rule("9", "Rushing Yards", 0.1, { operation: "multiply-nonnegative" }),
+    ]);
+    expectAvailable(result);
+    expect(
+      scoreProjectionStatComponents(
+        { rushing_yards: 0, rushing_yards_nonnegative: 5 },
+        result.profile,
+      ),
+    ).toBe(0.5);
+    const grouped = normalized([
+      rule("9", "Rushing Yards", 0.1, { operation: "floor-groups-nonnegative" }),
+    ]);
+    expectAvailable(grouped);
+    expect(grouped.profile.rules).toEqual([
+      { statId: "rushing_yards_nonnegative_per_10_units", points: 1 },
+    ]);
+  });
+
+  it("rounds Yahoo total field-goal yardage through a learned whole-group expectation", () => {
+    const result = normalized([
+      rule("84", "Field Goals Total Yards", 0.1, { operation: "floor-groups" }),
+    ]);
+    expectAvailable(result);
+    expect(
+      scoreProjectionStatComponents(
+        { field_goals_total_yards: 40, field_goals_total_yards_per_10_units: 3.5 },
+        result.profile,
+      ),
+    ).toBe(3.5);
   });
 
   it.each([
@@ -674,7 +718,7 @@ describe("normalizeLeagueScoringProfile", () => {
     );
   });
 
-  it("rejects at-least bonuses until the projection supplies threshold probabilities", () => {
+  it("prices cumulative yardage bonuses from exact event probabilities rather than thresholding a mean", () => {
     const result = normalized([
       rule("4", "Passing Yards", 0.04),
       rule("4", "Passing Yards", 3, {
@@ -686,18 +730,67 @@ describe("normalizeLeagueScoringProfile", () => {
         thresholdLow: 400,
       }),
     ]);
-    expect(reasonCodes(result)).toEqual(["NONLINEAR_RULE", "NONLINEAR_RULE"]);
-    if (result.state === "unavailable") {
-      expect(result.reasons[0]?.message).toContain("projected threshold probability");
-    }
+    expectAvailable(result);
+    // Half the outcomes have 200 yards and half have 400. The mean is 300, but the 300+ bonus
+    // happens only half the time; the 400+ outcomes also earn the second cumulative bonus.
+    expect(
+      scoreProjectionStatComponents(
+        {
+          passing_yards: 300,
+          passing_yards_300_399_probability: 0,
+          passing_yards_400_plus_probability: 0.5,
+        },
+        result.profile,
+      ),
+    ).toBe(14.5);
+  });
+
+  it("lowers ESPN incomplete-pass scoring onto attempts and completions exactly", () => {
+    const result = normalized([
+      rule("0", "0", 0.1, { provider: "espn" }),
+      rule("1", "1", 0.2, { provider: "espn" }),
+      rule("2", "2", -0.3, { provider: "espn" }),
+    ]);
+    expectAvailable(result);
+    expect(
+      scoreProjectionStatComponents(
+        { passing_attempts: 30, passing_completions: 20 },
+        result.profile,
+      ),
+    ).toBeCloseTo(4);
+    expect(result.profile.rules.every((item) => item.statId !== "passing_incompletions")).toBe(
+      true,
+    );
+  });
+
+  it("supports exactly modeled bounded yardage bonuses and rejects missing probability inputs", () => {
+    const bonus = rule("4", "Passing Yards", 3, {
+      operation: "bonus",
+      thresholdLow: 300,
+      thresholdHigh: 399,
+    });
+    const result = normalized([bonus]);
+    expectAvailable(result);
+    expect(
+      scoreProjectionStatComponents(
+        {
+          passing_yards: 500,
+          passing_yards_300_399_probability: 0.2,
+          passing_yards_400_plus_probability: 0.8,
+        },
+        result.profile,
+      ),
+    ).toBeCloseTo(0.6);
+    expect(reasonCodes(normalized([bonus], ["passing_yards"]))).toContain("COMPONENT_UNAVAILABLE");
+    expect(reasonCodes(normalized([bonus, bonus]))).toContain("DUPLICATE_BONUS_THRESHOLD");
   });
 
   it.each([
     {
-      name: "bounded bonus",
+      name: "unmodeled bounded bonus",
       row: rule("4", "Passing Yards", 3, {
         operation: "bonus",
-        thresholdLow: 300,
+        thresholdLow: 275,
         thresholdHigh: 399,
       }),
       code: "NONLINEAR_RULE",
@@ -713,8 +806,8 @@ describe("normalizeLeagueScoringProfile", () => {
       code: "UNSUPPORTED_OPERATION",
     },
     {
-      name: "ESPN long-play bonus",
-      row: rule("15", "15", 1, { provider: "espn" }),
+      name: "unmodeled ESPN efficiency rule",
+      row: rule("21", "21", 1, { provider: "espn" }),
       code: "NONLINEAR_RULE",
     },
     {
@@ -1339,8 +1432,73 @@ describe("normalizeLeagueScoringProfile", () => {
       ).toBeCloseTo(14.7, 8);
     });
 
-    it("keeps an ESPN nonlinear ID with no recorded base component pessimistically attributed to all six positions", () => {
-      const result = normalized([rule("45", "45", 1, { provider: "espn" })]);
+    it.each([
+      ["15", "40+ yard TD pass bonus", "passing_touchdowns_40_plus"],
+      ["16", "50+ yard TD pass bonus", "passing_touchdowns_50_plus"],
+      ["35", "40+ yard TD rush bonus", "rushing_touchdowns_40_plus"],
+      ["36", "50+ yard TD rush bonus", "rushing_touchdowns_50_plus"],
+      ["45", "40+ yard TD rec bonus", "receiving_touchdowns_40_plus"],
+      ["46", "50+ yard TD rec bonus", "receiving_touchdowns_50_plus"],
+    ])("maps long-TD bonus %s by exact ID and official display name", (id, name, component) => {
+      for (const providerStatId of [id, null]) {
+        const result = normalized([
+          ...ESPN_LEAGUE_A_ROWS,
+          rule(providerStatId, name, 1, { provider: "espn" }),
+        ]);
+        expectAvailable(result);
+        expect(supportedPositions(result)).toEqual(LEAGUE_SCORING_POSITIONS);
+        expect(result.profile.rules).toContainEqual({ statId: component, points: 1 });
+      }
+    });
+
+    it("scores 50+ touchdowns in both additive long-TD tiers alongside the base award", () => {
+      const result = normalized([
+        rule("4", "4", 4, { provider: "espn" }),
+        rule("15", "15", 1, { provider: "espn" }),
+        rule("16", "16", 2, { provider: "espn" }),
+      ]);
+      expectAvailable(result);
+      expect(
+        scoreProjectionStatComponents(
+          {
+            passing_touchdowns: 2,
+            passing_touchdowns_40_plus: 2,
+            passing_touchdowns_50_plus: 1,
+          },
+          result.profile,
+        ),
+      ).toBe(12);
+    });
+
+    it("withholds affected positions when the long-TD source component is unavailable", () => {
+      const result = normalized(
+        [...ESPN_LEAGUE_A_ROWS, rule("45", "45", 1, { provider: "espn" })],
+        [...NFLVERSE_PROJECTION_SCORING_COMPONENTS_V1].filter(
+          (component) => component !== "receiving_touchdowns_40_plus",
+        ),
+      );
+      expectAvailable(result);
+      expect(supportedPositions(result)).toEqual(["QB", "K", "DST"]);
+      for (const position of ["RB", "WR", "TE"] as const) {
+        expect(positionReasonCodes(result, position)).toContain("COMPONENT_UNAVAILABLE");
+      }
+    });
+
+    it("keeps unknown rules globally withholding even alongside a known offense-only bonus", () => {
+      const result = normalized([
+        ...ESPN_LEAGUE_A_ROWS,
+        rule("45", "45", 1, { provider: "espn" }),
+        rule("999999", "unrecognized scoring event", 1, { provider: "espn" }),
+      ]);
+      expect(result.state).toBe("unavailable");
+      expect(supportedPositions(result)).toEqual([]);
+      for (const position of LEAGUE_SCORING_POSITIONS) {
+        expect(positionReasonCodes(result, position)).toContain("UNKNOWN_NONZERO_RULE");
+      }
+    });
+
+    it("keeps an unfamiliar ESPN nonlinear ID pessimistically attributed to all six positions", () => {
+      const result = normalized([rule("137", "137", 1, { provider: "espn" })]);
       expect(reasonCodes(result)).toEqual(["NONLINEAR_RULE"]);
       expect(supportedPositions(result)).toEqual([]);
       for (const position of LEAGUE_SCORING_POSITIONS) {

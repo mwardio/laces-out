@@ -158,7 +158,7 @@ function LineupSection({ snapshot }: { readonly snapshot: InSeasonDecisionSnapsh
               {section.changes.length === 0 ? (
                 <div className={styles.clearState}>
                   <CheckCircle2 size={17} aria-hidden="true" />
-                  <span>Your starters have the highest total under these projections.</span>
+                  <span>Keep your current starters under these projections.</span>
                 </div>
               ) : (
                 <div className={styles.changeList}>

@@ -54,7 +54,12 @@ import {
   type RosterSlotKind,
   type RosterSlotType,
 } from "@laces-out/domain";
-import { lineupFitsRosterSlots, optimizeLineup, type LineupLock } from "@laces-out/engine-lineup";
+import {
+  lineupFitsRosterSlots,
+  optimizeLineup,
+  preserveCurrentLineupBelowGain,
+  type LineupLock,
+} from "@laces-out/engine-lineup";
 import {
   evaluateTrade,
   type TradeEvaluation,
@@ -100,7 +105,13 @@ import {
   projectionTimestampProvenance,
 } from "./projection-provenance.js";
 import { reconcileRosterProjectionAliases } from "./projection-roster-aliases.js";
-import { assessLineupChange } from "./lineup-advice.js";
+import {
+  assessLineupChange,
+  LINEUP_NEGLIGIBLE_GAIN,
+  projectionHasLimitedConfidence,
+  starterAllowsNearTieRetention,
+  type LineupAdviceProjection,
+} from "./lineup-advice.js";
 import {
   providerLineupComparison,
   type ProviderProjectionSnapshot,
@@ -232,6 +243,7 @@ export interface DecisionProjectionPlayerRow {
   readonly meanPoints: string;
   readonly floorPoints: string | null;
   readonly ceilingPoints: string | null;
+  readonly confidence?: string | null;
 }
 
 export interface DecisionMarketSignalRow {
@@ -319,6 +331,8 @@ export interface InSeasonDecisionRepository {
    */
   findManagedProjectionProfile?(leagueSeasonId: string): Promise<ManagedProjectionProfile>;
   listProjectionScheduleGames?(season: number): Promise<readonly WeeklyCoverageGame[]>;
+  /** A positive schedule match is required before retaining a near-tied current lineup. */
+  listLineupScheduledTeams?(season: number, week: number): Promise<readonly string[]>;
   findProviderProjectionSnapshot?(
     leagueSeasonId: string,
     week: number,
@@ -407,6 +421,42 @@ export class DrizzleInSeasonDecisionRepository implements InSeasonDecisionReposi
       )
       .orderBy(asc(nflScheduleObservations.week), asc(nflScheduleObservations.externalGameId))
       .limit(300);
+  }
+
+  async listLineupScheduledTeams(season: number, week: number): Promise<readonly string[]> {
+    const games = await this.#database
+      .select({
+        homeTeam: nflScheduleObservations.homeTeam,
+        awayTeam: nflScheduleObservations.awayTeam,
+      })
+      .from(nflScheduleObservations)
+      .innerJoin(
+        dataSources,
+        and(
+          eq(dataSources.id, nflScheduleObservations.sourceId),
+          eq(dataSources.lastChecksum, nflScheduleObservations.inputChecksum),
+        ),
+      )
+      .where(
+        and(
+          eq(dataSources.key, `nflverse.schedules.${season}`),
+          eq(dataSources.enabled, true),
+          eq(nflScheduleObservations.season, season),
+          eq(nflScheduleObservations.week, week),
+          eq(nflScheduleObservations.seasonType, "REG"),
+          ne(nflScheduleObservations.status, "cancelled"),
+          ne(nflScheduleObservations.status, "postponed"),
+        ),
+      )
+      .limit(32);
+    return [
+      ...new Set(
+        games.flatMap((game) => [
+          canonicalNflTeamCode(game.homeTeam),
+          canonicalNflTeamCode(game.awayTeam),
+        ]),
+      ),
+    ].sort();
   }
 
   async findMembership(
@@ -867,6 +917,7 @@ export class DrizzleInSeasonDecisionRepository implements InSeasonDecisionReposi
         meanPoints: playerProjections.meanPoints,
         floorPoints: playerProjections.floorPoints,
         ceilingPoints: playerProjections.ceilingPoints,
+        confidence: playerProjections.confidence,
       })
       .from(playerProjections)
       .innerJoin(projectionSets, eq(playerProjections.projectionSetId, projectionSets.id))
@@ -881,7 +932,7 @@ interface ExpandedSlot extends RosterSlot {
 interface PreparedProjectionPlayer {
   readonly player: Player;
   readonly projectionPlayerId: string;
-  readonly value: ProjectionValue;
+  readonly value: LineupAdviceProjection;
   readonly primaryPosition: Position;
 }
 
@@ -1208,10 +1259,12 @@ function modeledDecisionFactsChecksum(input: {
   readonly rosSet: DecisionProjectionSetRow | undefined;
   readonly weeklyInputHealth: ReturnType<typeof weeklyInputCoverage>;
   readonly providerComparison: ReturnType<typeof providerLineupComparison>;
+  readonly lineupScheduledTeams: readonly string[] | null;
 }): string {
   return hash(
     stableJson({
       weeklyInputHealth: input.weeklyInputHealth,
+      lineupScheduledTeams: input.lineupScheduledTeams?.toSorted() ?? null,
       providerComparison: input.providerComparison
         ? {
             observedAt: input.providerComparison.observedAt,
@@ -1318,6 +1371,7 @@ function prepareProjection(row: DecisionProjectionPlayerRow): PreparedProjection
   if (!player || !primaryPosition || mean === undefined) return undefined;
   const floor = finiteDecimal(row.floorPoints, mean);
   const ceiling = finiteDecimal(row.ceilingPoints, mean);
+  const confidence = finiteDecimal(row.confidence ?? null);
   if (floor === undefined || ceiling === undefined) return undefined;
   return {
     player,
@@ -1327,6 +1381,8 @@ function prepareProjection(row: DecisionProjectionPlayerRow): PreparedProjection
       mean,
       floor: Math.min(floor, mean),
       ceiling: Math.max(ceiling, mean),
+      // Missing or malformed stored evidence cannot imply high-quality advice.
+      confidence: confidence !== undefined && confidence >= 0 && confidence <= 1 ? confidence : 0,
     },
   };
 }
@@ -2347,6 +2403,7 @@ function mapTradePackage(
  */
 interface DecisionFacts {
   readonly providerComparison: ReturnType<typeof providerLineupComparison>;
+  readonly lineupScheduledTeams: readonly string[] | null;
   readonly now: Date;
   readonly membership: DecisionMembershipRow;
   readonly season: DecisionSeasonRow;
@@ -2428,23 +2485,32 @@ export class InSeasonDecisionService {
       };
     }
 
-    const [teamRows, slotRuleRows, snapshotRows, projectionSetRows, availabilityRows] =
-      await Promise.all([
-        this.#repository.listTeams(season.id, MAX_TEAMS + 1),
-        this.#repository.listSlotRules(season.id, MAX_SLOT_RULES + 1),
-        this.#repository.listLatestRosterSnapshots(season.id, MAX_TEAMS + 1),
-        this.#repository.findProjectionSets(
-          userId,
-          season.id,
-          season.season,
-          season.currentWeek,
-          MAX_PROJECTION_SET_CANDIDATES,
-          visibility,
-        ),
-        season.provider === "espn" && this.#repository.findLatestEspnAvailability
-          ? this.#repository.findLatestEspnAvailability(season.id, season.currentWeek)
-          : Promise.resolve([]),
-      ]);
+    const [
+      teamRows,
+      slotRuleRows,
+      snapshotRows,
+      projectionSetRows,
+      availabilityRows,
+      lineupScheduledTeams,
+    ] = await Promise.all([
+      this.#repository.listTeams(season.id, MAX_TEAMS + 1),
+      this.#repository.listSlotRules(season.id, MAX_SLOT_RULES + 1),
+      this.#repository.listLatestRosterSnapshots(season.id, MAX_TEAMS + 1),
+      this.#repository.findProjectionSets(
+        userId,
+        season.id,
+        season.season,
+        season.currentWeek,
+        MAX_PROJECTION_SET_CANDIDATES,
+        visibility,
+      ),
+      season.provider === "espn" && this.#repository.findLatestEspnAvailability
+        ? this.#repository.findLatestEspnAvailability(season.id, season.currentWeek)
+        : Promise.resolve([]),
+      season.currentWeek !== null && this.#repository.listLineupScheduledTeams
+        ? this.#repository.listLineupScheduledTeams(season.season, season.currentWeek)
+        : Promise.resolve(null),
+    ]);
     const projectionSet = projectionSetRows.find(
       (row) =>
         row.week === season.currentWeek &&
@@ -2701,6 +2767,7 @@ export class InSeasonDecisionService {
         rosSet: rosProjectionSet,
         weeklyInputHealth,
         providerComparison,
+        lineupScheduledTeams,
       }),
     };
 
@@ -2838,6 +2905,7 @@ export class InSeasonDecisionService {
     return {
       kind: "ready",
       facts: {
+        lineupScheduledTeams,
         providerComparison,
         now,
         membership,
@@ -2883,6 +2951,7 @@ export class InSeasonDecisionService {
     if (loaded.kind === "unavailable") return loaded.snapshot;
     const {
       providerComparison,
+      lineupScheduledTeams,
       now,
       season,
       claimedTeam,
@@ -2916,6 +2985,10 @@ export class InSeasonDecisionService {
     const ordinaryRoster = ordinaryRosterModel(userRoster, claimedRosterRows, slots);
     const activeRoster = ordinaryRoster.roster;
     const activePlayerIds = new Set<string>(activeRoster.map((player) => player.id));
+    const limitedConfidencePlayers = activeRoster
+      .filter((player) => projectionHasLimitedConfidence(projectionById.get(player.id)))
+      .map((player) => player.name)
+      .sort();
     const mappedCurrentAssignments = currentAssignments(
       claimedRosterRows,
       rosterPlayerById,
@@ -2945,14 +3018,31 @@ export class InSeasonDecisionService {
         ),
       ]);
     } else {
-      const result = optimizeLineup({
+      const optimizationInput = {
         players: activeRoster,
         slots: starterSlots,
         projections: projectionById,
-        metric: "mean",
+        metric: "mean" as const,
         currentAssignments: mappedCurrentAssignments,
         locks,
-      });
+      };
+      const optimum = optimizeLineup(optimizationInput);
+      const currentCanStay = currentStarters.every((entry) =>
+        starterAllowsNearTieRetention({
+          statuses: [entry.status, preparedById.get(entry.playerId)?.player.status],
+          projection: projectionById.get(entry.playerId),
+          scheduled: Boolean(
+            entry.nflTeam && lineupScheduledTeams?.includes(canonicalNflTeamCode(entry.nflTeam)),
+          ),
+        }),
+      );
+      const retention = currentCanStay
+        ? preserveCurrentLineupBelowGain(optimizationInput, optimum, {
+            maximumGain: LINEUP_NEGLIGIBLE_GAIN,
+            rosterSlots: ordinaryRoster.rosterSlots,
+          })
+        : { result: optimum, preserved: false, availableGain: 0 };
+      const result = retention.result;
       if (
         !result.feasible ||
         !lineupFitsRosterSlots(activeRoster, result.assignments, ordinaryRoster.rosterSlots)
@@ -3060,7 +3150,17 @@ export class InSeasonDecisionService {
           })),
           execution,
           notes: [
+            ...(retention.preserved
+              ? [
+                  `Keep your current starters: the best alternative adds only ${retention.availableGain.toFixed(3)} projected points. Treat this as an effective tie.`,
+                ]
+              : []),
             ...comparisonNotes,
+            ...(limitedConfidencePlayers.length > 0
+              ? [
+                  `Limited forecast evidence for ${limitedConfidencePlayers.slice(0, 3).join(", ")}${limitedConfidencePlayers.length > 3 ? ` and ${limitedConfidencePlayers.length - 3} more rostered players` : ""}; treat comparisons involving these players cautiously, including a recommendation to keep your lineup. The projected ranges may not reliably capture player uncertainty. Recheck current usage and injury news.`,
+                ]
+              : []),
             ...(activeRoster.length < userRoster.length ? [RESERVE_ROSTER_NOTE] : []),
             locks.length > 0
               ? `${locks.length} stored true lock${locks.length === 1 ? " was" : "s were"} preserved; complete provider lock coverage remains unavailable.`

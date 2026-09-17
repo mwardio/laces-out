@@ -3,6 +3,7 @@ import { createDatabase } from "@laces-out/db";
 import { currentNflSeason } from "@laces-out/domain";
 import { EspnSessionConnectionService } from "@laces-out/league-sync";
 import {
+  createJobQueue,
   enqueueDataRefresh,
   enqueueLeagueSync,
   enqueueProjectionRefresh,
@@ -13,7 +14,7 @@ import {
 } from "@laces-out/jobs";
 import { parseCredentialKey } from "@laces-out/security";
 import { sql } from "drizzle-orm";
-import { PgBoss } from "pg-boss";
+import pino from "pino";
 
 import { createSmtpEmailTransport, type SmtpSendFailure } from "@laces-out/email";
 
@@ -333,16 +334,19 @@ const draftProviderRefresh =
         },
       }
     : undefined;
-const jobs = new PgBoss({
-  connectionString: environment.DATABASE_URL,
-  application_name: "fantasy-api-jobs",
-  schema: "pgboss",
-  supervise: false,
-  // Scheduling stays in the lightweight API process. Projection assembly can occupy the worker's
-  // event loop for twenty minutes; letting that process own cron silently dropped one-minute
-  // schedule windows while a model run was active.
-  schedule: true,
-});
+const jobs = createJobQueue(
+  {
+    connectionString: environment.DATABASE_URL,
+    application_name: "fantasy-api-jobs",
+    schema: "pgboss",
+    supervise: false,
+    // Scheduling stays in the lightweight API process. Projection assembly can occupy the worker's
+    // event loop for twenty minutes; letting that process own cron silently dropped one-minute
+    // schedule windows while a model run was active.
+    schedule: true,
+  },
+  pino({ level: environment.LOG_LEVEL, name: "fantasy-api-jobs" }),
+);
 await jobs.start();
 // One registration function for both processes. The API used to hand-copy two queue definitions
 // here and had already lost the dead-letter target and retention settings the worker applied.

@@ -1,9 +1,78 @@
 import type { ProjectionValue } from "@laces-out/domain";
 
+export interface LineupAdviceProjection extends ProjectionValue {
+  readonly confidence?: number;
+}
+
+/** Half of the decision UI's 0.1-point display unit; this is a presentation rule, not a model gate. */
+export const LINEUP_NEGLIGIBLE_GAIN = 0.05;
+
+/** Matches the projection model's high-quality boundary; confidence is not a win probability. */
+export function projectionHasLimitedConfidence(
+  projection: LineupAdviceProjection | undefined,
+): boolean {
+  const confidence = projection?.confidence;
+  return (
+    confidence !== undefined &&
+    (!Number.isFinite(confidence) || confidence < 0.75 || confidence > 1)
+  );
+}
+
+/** Never retain a starter with a known absence, no scheduled game, or a zero/missing forecast. */
+export function starterAllowsNearTieRetention(input: {
+  readonly statuses: readonly (string | null | undefined)[];
+  readonly projection: ProjectionValue | undefined;
+  readonly scheduled: boolean;
+}): boolean {
+  if (
+    !input.scheduled ||
+    !input.projection ||
+    !Number.isFinite(input.projection.mean) ||
+    input.projection.mean <= 0
+  )
+    return false;
+  const unavailable = new Set([
+    "OUT",
+    "O",
+    "IR",
+    "INJUREDRESERVE",
+    "RESERVEINJURED",
+    "PUP",
+    "RESERVEPUP",
+    "SUSPENDED",
+    "SUSP",
+    "SUS",
+    "INACTIVE",
+    "INA",
+    "NA",
+    "RES",
+    "RESERVE",
+    "DEV",
+    "CUT",
+    "NWT",
+    "RET",
+    "TRC",
+    "TRD",
+    "TRT",
+    "EXE",
+    "BYE",
+    "DOUBTFUL",
+    "D",
+  ]);
+  return !input.statuses.some((status) =>
+    unavailable.has(
+      status
+        ?.trim()
+        .toUpperCase()
+        .replaceAll(/[\s_/-]/gu, "") ?? "",
+    ),
+  );
+}
+
 /** Descriptive interval comparison, deliberately not a probability of winning the matchup. */
 export function assessLineupChange(
-  add?: ProjectionValue,
-  remove?: ProjectionValue,
+  add?: LineupAdviceProjection,
+  remove?: LineupAdviceProjection,
   provider?: { add: number | undefined; remove: number | undefined },
 ) {
   if (!add || !remove)
@@ -44,6 +113,12 @@ export function assessLineupChange(
       strength: "unrated" as const,
       explanation:
         "Comparable outcome ranges are unavailable. The point estimate alone does not establish confidence in this change.",
+    };
+  if (projectionHasLimitedConfidence(add) || projectionHasLimitedConfidence(remove))
+    return {
+      strength: "close-call" as const,
+      explanation:
+        "Limited evidence behind one or both forecasts makes this an uncertain call. The projected ranges may not reliably capture player uncertainty. Recheck current usage and injury news before changing your lineup; the point gap is not a win probability.",
     };
   const overlap = add.floor <= remove.ceiling && remove.floor <= add.ceiling;
   return overlap

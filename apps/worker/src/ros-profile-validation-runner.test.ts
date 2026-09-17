@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -60,6 +60,29 @@ describe("isolated ROS profile validation runner", () => {
       state: "blocked-before-modeling",
     });
   });
+  it("passes an explicit cache-only corpus identity without weakening release arguments", async () => {
+    const validatorPath = await validator(
+      `process.stdout.write(JSON.stringify({args: process.argv.slice(2)}));`,
+    );
+    const identity = "a".repeat(64);
+    const report = await createRosProfileValidationRunner({
+      validatorPath,
+      outcomeCacheDirectory: "/pinned/outcomes",
+    })({ ...input(), replayCorpusIdentity: identity });
+    expect(report.args).toEqual(
+      expect.arrayContaining([
+        "--outcome-cache=/pinned/outcomes",
+        `--replay-corpus=${identity}`,
+        "--full",
+      ]),
+    );
+    await expect(
+      createRosProfileValidationRunner({ validatorPath })({
+        ...input(),
+        replayCorpusIdentity: identity,
+      }),
+    ).rejects.toThrow(/requires an outcome cache/);
+  });
   it("stops a timed-out process", async () => {
     const validatorPath = await validator("setInterval(() => {}, 1000);");
     await expect(
@@ -76,6 +99,69 @@ describe("isolated ROS profile validation runner", () => {
     setTimeout(() => controller.abort(), 100);
     await expect(promise).rejects.toThrow(/abort/i);
   });
+  it.skipIf(process.platform === "win32")(
+    "kills a CPU-bound grandchild when the validator leader exits on abort",
+    async () => {
+      const controller = new AbortController();
+      const validatorPath = await validator(`
+      import { spawn } from 'node:child_process';
+      import { fileURLToPath } from 'node:url';
+      const marker = fileURLToPath(new URL('./grandchild.pid', import.meta.url));
+      process.on('SIGTERM', () => process.exit(0));
+      spawn(process.execPath, ['-e', \
+        "process.on('SIGTERM',()=>{});require('node:fs').writeFileSync(process.argv[1],String(process.pid));while(true){}", marker], {stdio:'ignore'});
+      setInterval(() => {}, 1000);
+    `);
+      const marker = path.join(path.dirname(validatorPath), "grandchild.pid");
+      const pending = createRosProfileValidationRunner({ validatorPath })({
+        ...input(),
+        signal: controller.signal,
+      });
+      // Handle rejection immediately while waiting for the nested process to establish its handler.
+      const rejection = expect(pending).rejects.toThrow(/abort/i);
+      let pid: number | undefined;
+      try {
+        for (let attempt = 0; attempt < 100; attempt += 1) {
+          if (existsSync(marker)) {
+            pid = Number(await readFile(marker, "utf8"));
+            break;
+          }
+          await new Promise((resolve) => setTimeout(resolve, 20));
+        }
+        expect(pid).toBeGreaterThan(1);
+        controller.abort();
+        await rejection;
+        let running = true;
+        for (let attempt = 0; attempt < 100 && running; attempt += 1) {
+          try {
+            process.kill(pid!, 0);
+            if (process.platform === "linux") {
+              const stat = await readFile(`/proc/${pid}/stat`, "utf8");
+              // A reparented zombie consumes no CPU and cannot resume; init owns its reaping.
+              if (stat.slice(stat.lastIndexOf(")") + 2).startsWith("Z ")) running = false;
+            }
+          } catch (error) {
+            if (["ESRCH", "ENOENT"].includes((error as NodeJS.ErrnoException).code ?? ""))
+              running = false;
+            else throw error;
+          }
+          if (running) await new Promise((resolve) => setTimeout(resolve, 20));
+        }
+        expect(running).toBe(false);
+      } finally {
+        controller.abort();
+        if (pid !== undefined) {
+          try {
+            process.kill(pid, "SIGKILL");
+          } catch {
+            /* already terminated */
+          }
+        }
+        await rejection;
+      }
+    },
+    10_000,
+  );
   it("rejects oversized output before parsing", async () => {
     const validatorPath = await validator("process.stdout.write('x'.repeat(1000));");
     await expect(

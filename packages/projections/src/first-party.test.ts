@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { SCORING_LONG_TOUCHDOWN_COMPONENTS, SCORING_SIGNED_YARDAGE_COMPONENTS } from "./scoring.js";
 
 import {
   FIRST_PARTY_PROJECTION_MODEL_VERSION,
@@ -89,6 +90,59 @@ const statDefaults: Readonly<
     extra_points_missed: 0.15,
   },
 };
+
+describe("signed and transformed yardage observations", () => {
+  it("fits positive-only yardage separately from signed yards without clamping a mean", () => {
+    const history = [-10, 10].map((yards, index) =>
+      line("test", "RB", index + 1, { components: { ...statDefaults.RB, rushing_yards: yards } }),
+    );
+    const result = projectFirstPartyRecencyBaselineComponents({
+      target: {
+        playerId: "test",
+        position: "RB",
+        season: 2025,
+        week: 3,
+        team: "AAA",
+        opponent: "BBB",
+      },
+      history,
+    });
+    expect(result.components.rushing_yards_nonnegative).toBeGreaterThan(
+      Math.max(0, result.components.rushing_yards!),
+    );
+    expect(result.components.rushing_yards_per_5_units).toBeCloseTo(
+      result.components.rushing_yards_nonnegative! / 5,
+    );
+  });
+
+  it("retains negative historical yardage in a signed baseline", () => {
+    const history = [1, 2, 3].map((week) =>
+      line("test", "RB", week, {
+        components: {
+          ...statDefaults.RB,
+          rushing_yards: -10,
+          punt_return_yards: -4,
+          kickoff_return_yards: 1,
+        },
+      }),
+    );
+    const result = projectFirstPartyRecencyBaselineComponents({
+      target: {
+        playerId: "test",
+        position: "RB",
+        season: 2025,
+        week: 4,
+        team: "AAA",
+        opponent: "BBB",
+      },
+      history,
+    });
+    expect(result.components.rushing_yards).toBe(-10);
+    expect(result.components.rushing_yards_nonnegative).toBe(0);
+    expect(result.components.rushing_yards_per_5_units).toBe(0);
+    expect(result.components.return_yards).toBe(-3);
+  });
+});
 
 function line(
   playerId: string,
@@ -428,7 +482,16 @@ describe("first-party component projection", () => {
 
     expect(projection.state).toBe("projected");
     expect(projection.components).toEqual(
-      Object.fromEntries(firstPartyProjectionComponentsForPosition("TE").map((key) => [key, 0])),
+      Object.fromEntries(
+        firstPartyProjectionComponentsForPosition("TE")
+          .filter(
+            (key) =>
+              !SCORING_LONG_TOUCHDOWN_COMPONENTS.some(
+                ({ fortyPlus, fiftyPlus }) => key === fortyPlus || key === fiftyPlus,
+              ),
+          )
+          .map((key) => [key, 0]),
+      ),
     );
     expect(projection.quality.grade).toBe("low");
     expect(projection.quality.degraded).toBe(true);
@@ -437,7 +500,7 @@ describe("first-party component projection", () => {
     );
   });
 
-  it("keeps all components finite, non-negative, plausible, and intervals ordered", () => {
+  it("keeps components plausible and intervals ordered, allowing signed yardage", () => {
     const history = [
       ...historyForAllPositions(),
       line("qb-one", "QB", 7, {
@@ -462,7 +525,7 @@ describe("first-party component projection", () => {
         },
         history,
       });
-      for (const component of firstPartyProjectionComponentsForPosition(position)) {
+      for (const component of Object.keys(projection.components)) {
         const floor = projection.floorComponents[component];
         const center = projection.components[component];
         const ceiling = projection.ceilingComponents[component];
@@ -470,7 +533,8 @@ describe("first-party component projection", () => {
         expect(center).toBeTypeOf("number");
         expect(ceiling).toBeTypeOf("number");
         expect(Number.isFinite(floor)).toBe(true);
-        expect(floor).toBeGreaterThanOrEqual(0);
+        if (!(SCORING_SIGNED_YARDAGE_COMPONENTS as readonly string[]).includes(component))
+          expect(floor).toBeGreaterThanOrEqual(0);
         expect(center).toBeGreaterThanOrEqual(floor ?? 0);
         expect(ceiling).toBeGreaterThanOrEqual(center ?? 0);
       }
@@ -536,7 +600,7 @@ describe("first-party component projection", () => {
     });
 
     expect(projection.coverage.calibratedComponents).toBe(
-      firstPartyProjectionComponentsForPosition("WR").length,
+      Object.keys(projection.components).length,
     );
     expect(projection.coverage.fallbackComponents).toBe(0);
     expect(projection.quality.flags).not.toContain("uncertainty_fallback");
@@ -1564,5 +1628,188 @@ describe("first-party rolling backtest", () => {
     expect(sameWeek.quality.flags).toContain("uncertainty_fallback");
     expect(wrongVersion.coverage.calibratedComponents).toBe(0);
     expect(sameWeek.coverage.calibratedComponents).toBe(0);
+  });
+});
+
+describe("long-touchdown physical components", () => {
+  it.each(["QB", "RB", "WR", "TE"] as const)(
+    "fits nested %s centers and intervals for both strategies without future leakage",
+    (position) => {
+      const vocabulary = firstPartyProjectionComponentsForPosition(position);
+      const groups = SCORING_LONG_TOUCHDOWN_COMPONENTS.filter(({ total }) =>
+        vocabulary.includes(total),
+      );
+      expect(groups).toHaveLength(2);
+      const history = Array.from({ length: 6 }, (_, index) =>
+        line("long-td", position, index + 1, {
+          components: {
+            ...statDefaults[position],
+            ...Object.fromEntries(
+              groups.flatMap(({ total, fortyPlus, fiftyPlus }) => [
+                [total, index % 3],
+                [fortyPlus, index % 3 === 2 ? 1 : 0],
+                [fiftyPlus, index === 5 ? 1 : 0],
+              ]),
+            ),
+          },
+        }),
+      );
+      const target = { playerId: "long-td", position, season: 2025, week: 7, team: "AAA" } as const;
+      for (const project of [
+        projectFirstPartyWeeklyComponents,
+        projectFirstPartyRecencyBaselineComponents,
+      ]) {
+        const projected = project({ target, history });
+        const sentinel = line("long-td", position, 7, {
+          components: Object.fromEntries(
+            groups.flatMap(({ total, fortyPlus, fiftyPlus }) => [
+              [total, 99],
+              [fortyPlus, 99],
+              [fiftyPlus, 99],
+            ]),
+          ),
+        });
+        expect(
+          project({ target, history: [...history, sentinel, { ...sentinel, week: 8 }] }),
+        ).toEqual(projected);
+        for (const { total, fortyPlus, fiftyPlus } of groups) {
+          expect(projected.components[fiftyPlus]).toBeGreaterThan(0);
+          for (const components of [
+            projected.components,
+            projected.floorComponents,
+            projected.ceilingComponents,
+          ]) {
+            expect(components[fiftyPlus]).toBeGreaterThanOrEqual(0);
+            expect(components[fiftyPlus]).toBeLessThanOrEqual(components[fortyPlus]!);
+            expect(components[fortyPlus]).toBeLessThanOrEqual(components[total]!);
+          }
+          for (const component of [total, fortyPlus, fiftyPlus]) {
+            expect(projected.floorComponents[component]).toBeLessThanOrEqual(
+              projected.components[component]!,
+            );
+            expect(projected.ceilingComponents[component]).toBeGreaterThanOrEqual(
+              projected.components[component]!,
+            );
+          }
+        }
+        const inactive = project({ target: { ...target, status: "out" }, history });
+        for (const { fortyPlus, fiftyPlus } of groups) {
+          expect(inactive.components[fortyPlus]).toBe(0);
+          expect(inactive.components[fiftyPlus]).toBe(0);
+        }
+      }
+    },
+  );
+
+  it.each([
+    {},
+    { receiving_touchdowns_40_plus: 1 },
+    { receiving_touchdowns_40_plus: 1, receiving_touchdowns_50_plus: 2 },
+    { receiving_touchdowns_40_plus: 2, receiving_touchdowns_50_plus: 1 },
+    { receiving_touchdowns_40_plus: Number.NaN, receiving_touchdowns_50_plus: 0 },
+  ])("preserves unknown event components for legacy, partial, or invalid history %j", (events) => {
+    const history = [1, 2].map((week) =>
+      line("long-td", "WR", week, {
+        components: { ...statDefaults.WR, receiving_touchdowns: 1, receiving_40: 2, ...events },
+      }),
+    );
+    const target = {
+      playerId: "long-td",
+      position: "WR",
+      season: 2025,
+      week: 3,
+      team: "AAA",
+    } as const;
+    for (const project of [
+      projectFirstPartyWeeklyComponents,
+      projectFirstPartyRecencyBaselineComponents,
+    ]) {
+      const projected = project({ target, history });
+      expect(projected.state).toBe("projected");
+      expect(projected.components.receiving_yards).toBeGreaterThan(0);
+      for (const stats of [
+        projected.components,
+        projected.floorComponents,
+        projected.ceilingComponents,
+      ]) {
+        expect(stats.receiving_touchdowns_40_plus).toBeUndefined();
+        expect(stats.receiving_touchdowns_50_plus).toBeUndefined();
+      }
+      const observedZero = line("peer", "WR", 2, {
+        components: {
+          ...statDefaults.WR,
+          receiving_touchdowns_40_plus: 0,
+          receiving_touchdowns_50_plus: 0,
+        },
+      });
+      const withEvidence = project({ target, history: [...history, observedZero] });
+      expect(withEvidence.components.receiving_touchdowns_40_plus).toBeUndefined();
+      expect(withEvidence.components.receiving_touchdowns_50_plus).toBeUndefined();
+      const completeEvidence = project({ target, history: [observedZero] });
+      expect(completeEvidence.components.receiving_touchdowns_40_plus).toBe(0);
+      expect(completeEvidence.components.receiving_touchdowns_50_plus).toBe(0);
+    }
+  });
+
+  it("rechecks complete event coverage at each chronological cutoff using the same input history", () => {
+    const history = [
+      ...[1, 2].map((week) =>
+        line("long-td", "WR", week, {
+          components: {
+            ...statDefaults.WR,
+            receiving_touchdowns: 1,
+            receiving_touchdowns_40_plus: 1,
+            receiving_touchdowns_50_plus: 0,
+          },
+        }),
+      ),
+      line("long-td", "WR", 4, { components: { ...statDefaults.WR, receiving_touchdowns: 1 } }),
+    ];
+    const target = {
+      playerId: "long-td",
+      position: "WR",
+      season: 2025,
+      week: 3,
+      team: "AAA",
+    } as const;
+    for (const project of [
+      projectFirstPartyWeeklyComponents,
+      projectFirstPartyRecencyBaselineComponents,
+    ]) {
+      const before = project({ target, history });
+      expect(before.components.receiving_touchdowns_40_plus).toBeGreaterThan(0);
+      expect(
+        project({ target: { ...target, week: 4 }, history }).components
+          .receiving_touchdowns_40_plus,
+      ).toBeGreaterThan(0);
+      const after = project({ target: { ...target, week: 5 }, history });
+      expect(after.components.receiving_touchdowns_40_plus).toBeUndefined();
+      expect(after.components.receiving_touchdowns_50_plus).toBeUndefined();
+      expect(project({ target, history })).toEqual(before);
+    }
+  });
+
+  it("keeps missing event observations absent while retaining explicitly observed zeroes in backtests", () => {
+    const history = [1, 2, 3, 4].map((week) =>
+      line("long-td", "WR", week, {
+        components: {
+          ...statDefaults.WR,
+          receiving_40: 3,
+          ...(week >= 3
+            ? { receiving_touchdowns_40_plus: 0, receiving_touchdowns_50_plus: 0 }
+            : {}),
+        },
+      }),
+    );
+    const result = runFirstPartyProjectionBacktest(history);
+    expect(
+      result.predictions.find(({ week }) => week === 2)?.actual.receiving_touchdowns_40_plus,
+    ).toBeUndefined();
+    expect(
+      result.predictions.find(({ week }) => week === 3)?.actual.receiving_touchdowns_40_plus,
+    ).toBe(0);
+    expect(result.metrics.WR?.receiving_touchdowns_40_plus).toBeUndefined();
+    const complete = runFirstPartyProjectionBacktest(history.slice(2));
+    expect(complete.metrics.WR?.receiving_touchdowns_40_plus?.samples).toBe(1);
   });
 });

@@ -2,9 +2,14 @@ import {
   firstPartyProjectionComponentsForPosition,
   firstPartyTeamDefenseProjectionComponents,
 } from "./first-party.js";
-import type { ProjectionScoringBonus, ProjectionScoringProfile } from "./scoring.js";
+import {
+  SCORING_WHOLE_GROUP_COMPONENTS,
+  YAHOO_NONNEGATIVE_YARDAGE_COMPONENTS,
+  type ProjectionScoringBonus,
+  type ProjectionScoringProfile,
+} from "./scoring.js";
 
-export const LEAGUE_SCORING_NORMALIZATION_VERSION = "league-scoring-map-v4" as const;
+export const LEAGUE_SCORING_NORMALIZATION_VERSION = "league-scoring-map-v7" as const;
 
 export const LEAGUE_SCORING_MAP_PROVENANCE = {
   version: LEAGUE_SCORING_NORMALIZATION_VERSION,
@@ -247,6 +252,7 @@ const IDP_UNSUPPORTED: UnsupportedMapping = {
 };
 /** Yahoo's team yards-allowed brackets: nonlinear like every other bracket, but D/ST-scoped. */
 const DEFENSE_NONLINEAR: UnsupportedMapping = { ...NONLINEAR, positions: DST_ONLY };
+const OFFENSE_NONLINEAR: UnsupportedMapping = { ...NONLINEAR, positions: OFFENSE_ONLY };
 const KICKER_UNSUPPORTED: UnsupportedMapping = {
   kind: "unsupported",
   code: "UNSUPPORTED_PLAYER_RULE",
@@ -347,9 +353,8 @@ const YAHOO_YARDS_ALLOWED_BUCKET_IDS = new Set([
 
 const YAHOO_WHOLE_GROUP_DIVISORS = new Set([5, 10, 20, 25, 50, 100]);
 const YAHOO_WHOLE_GROUP_COMPONENT_BASES = new Set([
-  "passing_yards",
-  "rushing_yards",
-  "receiving_yards",
+  "field_goals_total_yards",
+  ...YAHOO_NONNEGATIVE_YARDAGE_COMPONENTS.map(({ component }) => component),
 ]);
 
 function yahooWholeGroupRule(
@@ -379,6 +384,7 @@ function yahooWholeGroupRule(
 export const ESPN_PLAYER_SCORING_STAT_ID_MAP_V1: Readonly<Record<string, string>> = {
   "0": "passing_attempts",
   "1": "passing_completions",
+  "2": "passing_incompletions",
   "3": "passing_yards",
   "4": "passing_touchdowns",
   "5": "passing_yards_per_5_units",
@@ -391,6 +397,8 @@ export const ESPN_PLAYER_SCORING_STAT_ID_MAP_V1: Readonly<Record<string, string>
   "12": "passing_completions_per_10_units",
   "13": "passing_incompletions_per_5_units",
   "14": "passing_incompletions_per_10_units",
+  "15": "passing_touchdowns_40_plus",
+  "16": "passing_touchdowns_50_plus",
   "17": "passing_yards_300_399_probability",
   "18": "passing_yards_400_plus_probability",
   "19": "passing_two_point_conversions",
@@ -407,12 +415,16 @@ export const ESPN_PLAYER_SCORING_STAT_ID_MAP_V1: Readonly<Record<string, string>
   "32": "rushing_yards_per_100_units",
   "33": "carries_per_5_units",
   "34": "carries_per_10_units",
+  "35": "rushing_touchdowns_40_plus",
+  "36": "rushing_touchdowns_50_plus",
   "37": "rushing_yards_100_199_probability",
   "38": "rushing_yards_200_plus_probability",
   "41": "receptions",
   "42": "receiving_yards",
   "43": "receiving_touchdowns",
   "44": "receiving_two_point_conversions",
+  "45": "receiving_touchdowns_40_plus",
+  "46": "receiving_touchdowns_50_plus",
   "47": "receiving_yards_per_5_units",
   "48": "receiving_yards_per_10_units",
   "49": "receiving_yards_per_20_units",
@@ -535,17 +547,10 @@ const TEAM_DEFENSE_SCORING_COMPONENTS: ReadonlySet<string> = new Set(
 );
 
 const ESPN_NONLINEAR_STAT_IDS = new Set([
-  "2",
-  "15",
-  "16",
   "21",
   "22",
-  "35",
-  "36",
   "39",
   "40",
-  "45",
-  "46",
   "59",
   "60",
   "61",
@@ -637,10 +642,15 @@ export const PLAYER_SCORING_DISPLAY_NAME_MAP_V1: Readonly<Record<string, string>
   completions: "passing_completions",
   "pass completions": "passing_completions",
   "each pass completed": "passing_completions",
+  incompletions: "passing_incompletions",
+  "incomplete passes": "passing_incompletions",
+  "each incomplete pass": "passing_incompletions",
   "passing yards": "passing_yards",
   "pass yds": "passing_yards",
   "passing touchdowns": "passing_touchdowns",
   "passing touchdown": "passing_touchdowns",
+  "50 yard td pass bonus": "passing_touchdowns_50_plus",
+  "40 yard td pass bonus": "passing_touchdowns_40_plus",
   "td pass": "passing_touchdowns",
   "pass td": "passing_touchdowns",
   "interceptions thrown": "passing_interceptions",
@@ -651,6 +661,8 @@ export const PLAYER_SCORING_DISPLAY_NAME_MAP_V1: Readonly<Record<string, string>
   "rush yds": "rushing_yards",
   "rushing touchdowns": "rushing_touchdowns",
   "rushing touchdown": "rushing_touchdowns",
+  "50 yard td rush bonus": "rushing_touchdowns_50_plus",
+  "40 yard td rush bonus": "rushing_touchdowns_40_plus",
   "rush td": "rushing_touchdowns",
   receptions: "receptions",
   reception: "receptions",
@@ -661,6 +673,8 @@ export const PLAYER_SCORING_DISPLAY_NAME_MAP_V1: Readonly<Record<string, string>
   "rec yds": "receiving_yards",
   "receiving touchdowns": "receiving_touchdowns",
   "receiving touchdown": "receiving_touchdowns",
+  "50 yard td rec bonus": "receiving_touchdowns_50_plus",
+  "40 yard td rec bonus": "receiving_touchdowns_40_plus",
   "rec td": "receiving_touchdowns",
   "2 point conversion": "two_point_conversions",
   "2 point conversions": "two_point_conversions",
@@ -723,6 +737,10 @@ export const PLAYER_SCORING_DISPLAY_NAME_MAP_V1: Readonly<Record<string, string>
 
 const SCOPED_UNSUPPORTED_DISPLAY_NAMES = new Map<string, UnsupportedMapping>([
   ...["3 and outs forced"].map((name): [string, UnsupportedMapping] => [name, DEFENSE_UNSUPPORTED]),
+  ...["passing 40 yd td", "receiving 40 yd td"].map((name): [string, UnsupportedMapping] => [
+    name,
+    OFFENSE_NONLINEAR,
+  ]),
 ]);
 
 const IGNORED_DISPLAY_NAMES = new Map<string, IgnoredMapping>([
@@ -759,6 +777,8 @@ const UNSUPPORTED_DISPLAY_NAMES = new Set([
 export const NFLVERSE_PROJECTION_SCORING_COMPONENTS_V1 = new Set([
   ...Object.values(YAHOO_PLAYER_SCORING_STAT_ID_MAP_V1),
   ...Object.values(ESPN_PLAYER_SCORING_STAT_ID_MAP_V1),
+  ...SCORING_WHOLE_GROUP_COMPONENTS.map(({ component }) => component),
+  ...YAHOO_NONNEGATIVE_YARDAGE_COMPONENTS.map(({ component }) => component),
 ]);
 
 const AGGREGATE_OVERLAPS: ReadonlyArray<{
@@ -1137,6 +1157,29 @@ interface AttributedFailure {
   readonly positions: readonly LeagueScoringPosition[];
 }
 
+/** Exact unions of modeled, disjoint per-game yardage events; never threshold a projected mean. */
+function yardageBonusComponents(
+  statId: string,
+  lower: number | null,
+  upper: number | null,
+): readonly string[] | null {
+  const boundaries =
+    statId === "passing_yards"
+      ? [300, 400]
+      : statId === "rushing_yards" || statId === "receiving_yards"
+        ? [100, 200]
+        : null;
+  if (!boundaries) return null;
+  const [first, second] = boundaries as [number, number];
+  if (lower === first && (upper === null || upper === second - 1)) {
+    return [
+      `${statId}_${first}_${second - 1}_probability`,
+      ...(upper === null ? [`${statId}_${second}_plus_probability`] : []),
+    ];
+  }
+  return lower === second && upper === null ? [`${statId}_${second}_plus_probability`] : null;
+}
+
 export function normalizeLeagueScoringProfile(
   input: NormalizeLeagueScoringInput,
 ): LeagueScoringNormalizationResult {
@@ -1191,6 +1234,46 @@ export function normalizeLeagueScoringProfile(
   const provider = providers.size === 1 ? ([...providers][0] ?? null) : null;
   const available = new Set(input.availableStatIds);
   const canonical = new Map<string, MutableCanonicalRule>();
+  const additive = new Map<string, { points: number; rowIndices: number[] }>();
+  const derivedIdentities = new Map<string, number>();
+
+  function addDerivedRules(
+    rules: readonly { statId: string; points: number }[],
+    row: StoredLeagueScoringRule,
+    rowIndex: number,
+    identity: string,
+    duplicateCode: "DUPLICATE_CANONICAL_RULE" | "DUPLICATE_BONUS_THRESHOLD",
+  ): void {
+    const affected = [...new Set(rules.flatMap((rule) => attributedPositions(rule.statId)))];
+    if (derivedIdentities.has(identity)) {
+      fail(
+        affected,
+        duplicateCode,
+        `Rule ${rowIndex} repeats the scoring event ${identity}.`,
+        rowIndex,
+        row,
+      );
+      return;
+    }
+    const missing = rules.filter((rule) => !available.has(rule.statId));
+    if (missing.length > 0) {
+      fail(
+        affected,
+        "COMPONENT_UNAVAILABLE",
+        `Rule ${rowIndex} requires projection components ${missing.map((rule) => rule.statId).join(", ")}.`,
+        rowIndex,
+        row,
+      );
+      return;
+    }
+    derivedIdentities.set(identity, rowIndex);
+    for (const rule of rules) {
+      const value = additive.get(rule.statId) ?? { points: 0, rowIndices: [] };
+      value.points += rule.points;
+      value.rowIndices.push(rowIndex);
+      additive.set(rule.statId, value);
+    }
+  }
 
   if (provider !== null && failures.every((item) => item.reason.code !== "MIXED_PROVIDERS")) {
     for (const [rowIndex, row] of input.rows.entries()) {
@@ -1294,11 +1377,59 @@ export function normalizeLeagueScoringProfile(
         );
         continue;
       }
-      const operation = normalizeName(row.operation).replace(/ /gu, "-");
+      const requestedOperation = normalizeName(row.operation).replace(/ /gu, "-");
+      const nonnegative =
+        provider === "yahoo" &&
+        (requestedOperation === "multiply-nonnegative" ||
+          requestedOperation === "floor-groups-nonnegative");
+      const operation = nonnegative
+        ? requestedOperation.replace(/-nonnegative$/u, "")
+        : requestedOperation;
+      const scoringBaseStatId = nonnegative
+        ? YAHOO_NONNEGATIVE_YARDAGE_COMPONENTS.find(({ source }) => source === mapping.statId)
+            ?.component
+        : mapping.statId;
+      if (scoringBaseStatId === undefined) {
+        fail(
+          attributedPositions(mapping.statId),
+          "UNSUPPORTED_OPERATION",
+          `Rule ${rowIndex} cannot apply nonnegative yardage scoring to ${mapping.statId}.`,
+          rowIndex,
+          row,
+        );
+        continue;
+      }
+      if (mapping.statId === "passing_incompletions" && operation === "multiply") {
+        if (
+          (row.thresholdLow != null && row.thresholdLow !== "") ||
+          (row.thresholdHigh != null && row.thresholdHigh !== "")
+        ) {
+          fail(
+            ["QB"],
+            "NONLINEAR_RULE",
+            `Rule ${rowIndex} applies a threshold to incomplete passes.`,
+            rowIndex,
+            row,
+          );
+        } else {
+          // Linearity gives E[A-C] = E[A]-E[C]; no independent synthetic stat model is needed.
+          addDerivedRules(
+            [
+              { statId: "passing_attempts", points },
+              { statId: "passing_completions", points: -points },
+            ],
+            row,
+            rowIndex,
+            "passing_incompletions",
+            "DUPLICATE_CANONICAL_RULE",
+          );
+        }
+        continue;
+      }
       const wholeGroupRule =
         operation === "floor-groups"
-          ? yahooWholeGroupRule(mapping.statId, points)
-          : { statId: mapping.statId, points };
+          ? yahooWholeGroupRule(scoringBaseStatId, points)
+          : { statId: scoringBaseStatId, points };
       if (operation === "floor-groups" && wholeGroupRule === null) {
         fail(
           attributedPositions(mapping.statId),
@@ -1309,7 +1440,7 @@ export function normalizeLeagueScoringProfile(
         );
         continue;
       }
-      const scoringStatId = wholeGroupRule?.statId ?? mapping.statId;
+      const scoringStatId = wholeGroupRule?.statId ?? scoringBaseStatId;
       const scoringPoints = wholeGroupRule?.points ?? points;
       if (!available.has(scoringStatId)) {
         fail(
@@ -1372,6 +1503,17 @@ export function normalizeLeagueScoringProfile(
         }
         entry.points = scoringPoints;
       } else if (operation === "bonus" || operation === "at-least-bonus") {
+        const components = yardageBonusComponents(scoringStatId, thresholdLow, thresholdHigh);
+        if (hasLow && components !== null) {
+          addDerivedRules(
+            components.map((statId) => ({ statId, points: scoringPoints })),
+            row,
+            rowIndex,
+            `${scoringStatId}:${thresholdLow}:${thresholdHigh ?? "plus"}`,
+            "DUPLICATE_BONUS_THRESHOLD",
+          );
+          continue;
+        }
         fail(
           attributedPositions(scoringStatId),
           "NONLINEAR_RULE",
@@ -1393,6 +1535,13 @@ export function normalizeLeagueScoringProfile(
       entry.rowIndices.push(rowIndex);
       canonical.set(scoringStatId, entry);
     }
+  }
+
+  for (const [statId, contribution] of additive) {
+    const entry = canonical.get(statId) ?? { points: null, bonuses: [], rowIndices: [] };
+    entry.points = (entry.points ?? 0) + contribution.points;
+    entry.rowIndices.push(...contribution.rowIndices);
+    canonical.set(statId, entry);
   }
 
   for (const overlap of AGGREGATE_OVERLAPS) {

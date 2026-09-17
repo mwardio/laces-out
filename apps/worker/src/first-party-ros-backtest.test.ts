@@ -31,6 +31,7 @@ import {
   historicalRosTrainingRows,
   selectHistoricalRosPlayers,
   selectHistoricalRosDefenses,
+  historicalRosFootballActivity,
   type HistoricalRosAvailabilityCalibration,
 } from "./first-party-ros-backtest.js";
 import type { ProjectionScheduleFact } from "./first-party-projection-inputs.js";
@@ -85,6 +86,86 @@ function scheduleWeeks(
 }
 
 describe("historical ROS leakage boundaries", () => {
+  it("uses the same held-out population even when league rules reverse player rankings", () => {
+    const history = [
+      row("yardage", 2023, 1, 120, { components: { receiving_yards: 120, receptions: 1 } }),
+      row("volume", 2023, 1, 20, { components: { receiving_yards: 20, receptions: 12 } }),
+      row("middle", 2023, 1, 60),
+    ];
+    const common = {
+      history,
+      rosters: history.map((entry) => ({
+        playerId: entry.playerId,
+        position: "WR",
+        season: 2023,
+        week: 1,
+        team: "AAA",
+      })),
+      season: 2023,
+      asOfWeek: 1,
+      playersPerPosition: 2,
+    };
+    const reference = selectHistoricalRosPlayers({
+      ...common,
+      scoringProfile: HISTORICAL_ROS_SCORING_PROFILE,
+    });
+    const unusual = selectHistoricalRosPlayers({
+      ...common,
+      scoringProfile: { id: "penalty", rules: [{ statId: "receptions", points: -10 }] },
+    });
+    expect(reference).toHaveLength(2);
+    expect(unusual).toEqual(reference);
+    expect(
+      selectHistoricalRosPlayers({
+        ...common,
+        history: [...history].reverse(),
+        scoringProfile: HISTORICAL_ROS_SCORING_PROFILE,
+      }),
+    ).toEqual(reference);
+  });
+
+  it("recognizes football participation despite zero or negative fantasy production", () => {
+    expect(historicalRosFootballActivity({ passing_attempts: 30, passing_interceptions: 5 })).toBe(
+      30,
+    );
+    expect(historicalRosFootballActivity({ targets: 8, receptions: 0, receiving_yards: -3 })).toBe(
+      8,
+    );
+    expect(historicalRosFootballActivity({ field_goals_attempted: 3, field_goals_missed: 3 })).toBe(
+      3,
+    );
+    expect(historicalRosFootballActivity({})).toBe(0);
+  });
+
+  it("includes opportunity-heavy players and return specialists with no reference points", () => {
+    const history = [
+      ...Array.from({ length: 12 }, (_, index) =>
+        row(`receiver-${index}`, 2023, 1, 10 + index * 10),
+      ),
+      row("opportunities", 2023, 1, 0, { components: { targets: 20, receptions: 0 } }),
+      row("return-specialist", 2023, 1, 0, {
+        components: { kickoff_return_yards: 150, receptions: 0 },
+      }),
+    ];
+    const selected = selectHistoricalRosPlayers({
+      history,
+      rosters: history.map((entry) => ({
+        playerId: entry.playerId,
+        position: "WR",
+        season: 2023,
+        week: 1,
+        team: "AAA",
+      })),
+      season: 2023,
+      asOfWeek: 1,
+      playersPerPosition: 8,
+      scoringProfile: HISTORICAL_ROS_SCORING_PROFILE,
+    });
+    expect(selected).toHaveLength(8);
+    expect(selected.map((entry) => entry.playerId)).toContain("opportunities");
+    expect(selected.map((entry) => entry.playerId)).toContain("return-specialist");
+  });
+
   it("trains a held-out season only on earlier seasons", () => {
     const history = [row("p", 2022, 18, 50), row("p", 2023, 1, 60), row("p", 2024, 1, 70)];
     expect(historicalRosTrainingRows(history, 2023)).toEqual([history[0]]);
@@ -188,11 +269,7 @@ describe("historical ROS availability calibration (curve-matched v3)", () => {
     const weeks = Array.from({ length: 10 }, (_, index) => index + 1);
     const schedules = scheduleWeeks(2022, weeks);
     const training = alwaysAvailableTraining(2022, weeks);
-    const calibration = calibrateHistoricalRosAvailability(
-      training,
-      schedules,
-      HISTORICAL_ROS_SCORING_PROFILE,
-    );
+    const calibration = calibrateHistoricalRosAvailability(training, schedules);
 
     expect(calibration.version).toBe(HISTORICAL_ROS_AVAILABILITY_CALIBRATION_VERSION);
     expect(calibration.global.newAbsenceProbability).toBeGreaterThan(0);
@@ -225,11 +302,7 @@ describe("historical ROS availability calibration (curve-matched v3)", () => {
     const weeks = Array.from({ length: 12 }, (_, index) => index + 1);
     const schedules = scheduleWeeks(2022, weeks);
     const training = alwaysAvailableTraining(2022, weeks);
-    const calibration = calibrateHistoricalRosAvailability(
-      training,
-      schedules,
-      HISTORICAL_ROS_SCORING_PROFILE,
-    );
+    const calibration = calibrateHistoricalRosAvailability(training, schedules);
 
     expect(calibration.newAbsenceByPositionStreak["WR:established"]).toBeLessThanOrEqual(0.01);
     expect(calibration.asymptoteByPositionStreak["WR:established"]).toBeGreaterThanOrEqual(0.95);
@@ -245,11 +318,7 @@ describe("historical ROS availability calibration (curve-matched v3)", () => {
     const training = Array.from({ length: 10 }, (_, playerIndex) =>
       rowWeeks.map((weekNumber) => row(`stops-${playerIndex}`, 2022, weekNumber, 50)),
     ).flat();
-    const calibration = calibrateHistoricalRosAvailability(
-      training,
-      schedules,
-      HISTORICAL_ROS_SCORING_PROFILE,
-    );
+    const calibration = calibrateHistoricalRosAvailability(training, schedules);
 
     expect(calibration.asymptoteByPositionStreak["WR:settling"]).toBeLessThanOrEqual(0.7);
   });
@@ -637,11 +706,7 @@ describe("historical ROS evidence helpers", () => {
       ),
     ).flat();
 
-    const calibration = calibrateHistoricalRosRole(
-      training,
-      schedules,
-      HISTORICAL_ROS_SCORING_PROFILE,
-    );
+    const calibration = calibrateHistoricalRosRole(training, schedules);
 
     const expectedFallback = {
       currentMultiplier: 1,
@@ -744,10 +809,10 @@ describe("historical ROS kicker calibration (count-process v1)", () => {
     version: HISTORICAL_ROS_KICKER_CALIBRATION_VERSION,
     fgEventDispersion: 1,
     xpDispersion: 1,
-    recordedMissRatio: 0.95,
+
     centerVolatility: 0.25,
     leagueBucketMix: [0.57, 0.27, 0.16],
-    leagueMissBucketMix: [0, 14 / 426, 38 / 426, 155 / 426, 197 / 426, 22 / 426],
+    leagueMissBucketMix: [1 / 6, 1 / 6, 1 / 6, 1 / 6, 1 / 6, 1 / 6],
     dispersionAudit: {
       made0_39: 1,
       made40_49: 1,
@@ -760,7 +825,7 @@ describe("historical ROS kicker calibration (count-process v1)", () => {
   };
 
   it("resolves an empty kicker corpus to the exact documented fallback object", () => {
-    const calibration = calibrateHistoricalRosKicker([], schedules, HISTORICAL_ROS_SCORING_PROFILE);
+    const calibration = calibrateHistoricalRosKicker([], schedules);
     expect(calibration).toEqual(sparseFallback);
     expect(calibration.version).toBe(HISTORICAL_ROS_KICKER_CALIBRATION_VERSION);
   });
@@ -782,17 +847,11 @@ describe("historical ROS kicker calibration (count-process v1)", () => {
         );
       }
     }
-    const calibration = calibrateHistoricalRosKicker(
-      rows,
-      schedules,
-      HISTORICAL_ROS_SCORING_PROFILE,
-    );
+    const calibration = calibrateHistoricalRosKicker(rows, schedules);
     expect(calibration.fgEventDispersion).toBeGreaterThanOrEqual(0.6);
     expect(calibration.fgEventDispersion).toBeLessThanOrEqual(1);
     expect(calibration.xpDispersion).toBeGreaterThanOrEqual(0.7);
     expect(calibration.xpDispersion).toBeLessThanOrEqual(1.05);
-    expect(calibration.recordedMissRatio).toBeGreaterThanOrEqual(0.85);
-    expect(calibration.recordedMissRatio).toBeLessThanOrEqual(1);
     expect(calibration.centerVolatility).toBe(0.25);
     const mixSum = calibration.leagueBucketMix.reduce((sum, share) => sum + share, 0);
     expect(mixSum).toBeCloseTo(1, 10);
@@ -808,11 +867,7 @@ describe("historical ROS kicker calibration (count-process v1)", () => {
         rows.push(kickerRow(`k-${kicker}`, 2023, week, { made0_39: 1, made40_49: 1 }));
       }
     }
-    const calibration = calibrateHistoricalRosKicker(
-      rows,
-      schedules,
-      HISTORICAL_ROS_SCORING_PROFILE,
-    );
+    const calibration = calibrateHistoricalRosKicker(rows, schedules);
     expect(calibration.fgEventDispersion).toBe(0.6);
   });
 
@@ -833,49 +888,33 @@ describe("historical ROS kicker calibration (count-process v1)", () => {
         );
       }
     }
-    const calibration = calibrateHistoricalRosKicker(
-      rows,
-      schedules,
-      HISTORICAL_ROS_SCORING_PROFILE,
-    );
+    const calibration = calibrateHistoricalRosKicker(rows, schedules);
     expect(calibration.fgEventDispersion).toBeGreaterThan(0.9);
     expect(calibration.xpDispersion).toBeGreaterThan(0.9);
   });
 
-  it("fits the recorded-miss ratio from blocked-kick rows as a sum ratio below one", () => {
-    const rows: FirstPartyWeeklyStatLine[] = [];
-    // 30 kickers x 10 games: 2 recorded misses per game in half the games, one blocked kick per
-    // game (attempted = made + missed + 1), so sum(missed) / sum(att - made) = 300 / 600 -> clamps
-    // to the 0.85 floor... use milder blocking: blocked on every 5th game only.
-    for (let kicker = 0; kicker < 30; kicker += 1) {
-      for (let week = 1; week <= 10; week += 1) {
-        rows.push(
-          kickerRow(`k-${kicker}`, 2023, week, {
-            made0_39: 2,
-            missed: 1,
-            blocked: week % 5 === 0 ? 1 : 0,
-          }),
-        );
-      }
-    }
-    // sum(missed) = 300; sum(att - made) = 300 + 60 = 360 -> ratio 300/360 = 0.8333 clamps to 0.85.
-    const clamped = calibrateHistoricalRosKicker(rows, schedules, HISTORICAL_ROS_SCORING_PROFILE);
-    expect(clamped.recordedMissRatio).toBe(0.85);
-    const lighter: FirstPartyWeeklyStatLine[] = [];
-    for (let kicker = 0; kicker < 30; kicker += 1) {
-      for (let week = 1; week <= 10; week += 1) {
-        lighter.push(
-          kickerRow(`k-${kicker}`, 2023, week, {
-            made0_39: 2,
-            missed: 1,
-            blocked: kicker < 3 ? 1 : 0,
-          }),
-        );
-      }
-    }
-    // 30 blocked among 300 misses -> 300 / 330 = 0.9091, inside the clamp.
-    const fitted = calibrateHistoricalRosKicker(lighter, schedules, HISTORICAL_ROS_SCORING_PROFILE);
-    expect(fitted.recordedMissRatio).toBeCloseTo(300 / 330, 10);
+  it("includes blocked attempts in the calibrated FG event distribution", () => {
+    const rows = Array.from({ length: 30 }, (_, kicker) =>
+      Array.from({ length: 10 }, (_, index) =>
+        kickerRow(`k-${kicker}`, 2023, index + 1, {
+          made0_39: 2,
+          missed: 0,
+          blocked: index % 2 === 0 ? 3 : 0,
+        }),
+      ),
+    ).flat();
+    const canonical = rows.map((row) => ({
+      ...row,
+      components: {
+        ...row.components,
+        field_goals_missed:
+          row.components.field_goals_attempted! - row.components.field_goals_made!,
+      },
+    }));
+    const fitted = calibrateHistoricalRosKicker(rows, schedules);
+    expect(fitted).toEqual(calibrateHistoricalRosKicker(canonical, schedules));
+    expect(fitted.dispersionAudit.missed).toBeGreaterThan(1);
+    expect(fitted).not.toHaveProperty("recordedMissRatio");
   });
 
   it("pools the league bucket mix exactly above the makes floor and falls back below it", () => {
@@ -887,17 +926,9 @@ describe("historical ROS kicker calibration (count-process v1)", () => {
         );
       }
     }
-    const calibration = calibrateHistoricalRosKicker(
-      rows,
-      schedules,
-      HISTORICAL_ROS_SCORING_PROFILE,
-    );
+    const calibration = calibrateHistoricalRosKicker(rows, schedules);
     expect(calibration.leagueBucketMix).toEqual([0.5, 0.25, 0.25]);
-    const sparse = calibrateHistoricalRosKicker(
-      rows.slice(0, 40),
-      schedules,
-      HISTORICAL_ROS_SCORING_PROFILE,
-    );
+    const sparse = calibrateHistoricalRosKicker(rows.slice(0, 40), schedules);
     expect(sparse.leagueBucketMix).toEqual([0.57, 0.27, 0.16]);
   });
 
@@ -925,21 +956,11 @@ describe("historical ROS kicker calibration (count-process v1)", () => {
       }
     }
     const rows = [kickerRow("k-0", 2023, 1)];
-    const fitted = calibrateHistoricalRosKicker(
-      rows,
-      schedules,
-      HISTORICAL_ROS_SCORING_PROFILE,
-      predictions,
-    );
+    const fitted = calibrateHistoricalRosKicker(rows, schedules, predictions);
     expect(fitted.centerVolatility).toBeGreaterThan(0.25);
     expect(fitted.centerVolatility).toBeLessThanOrEqual(0.5);
     expect(fitted.evidence.centerResidualGroups).toBe(25);
-    const sparse = calibrateHistoricalRosKicker(
-      rows,
-      schedules,
-      HISTORICAL_ROS_SCORING_PROFILE,
-      predictions.slice(0, 10 * 8),
-    );
+    const sparse = calibrateHistoricalRosKicker(rows, schedules, predictions.slice(0, 10 * 8));
     expect(sparse.centerVolatility).toBe(0.25);
   });
 
@@ -979,12 +1000,7 @@ describe("historical ROS kicker calibration (count-process v1)", () => {
         );
       }
     }
-    const uglyFit = calibrateHistoricalRosKicker(
-      rows,
-      schedules,
-      HISTORICAL_ROS_SCORING_PROFILE,
-      playedUgly,
-    );
+    const uglyFit = calibrateHistoricalRosKicker(rows, schedules, playedUgly);
     expect(uglyFit.evidence.centerResidualGroups).toBe(25);
     // True DNP rows (all-zero kicking components) stay excluded.
     const dnps = [];
@@ -993,21 +1009,14 @@ describe("historical ROS kicker calibration (count-process v1)", () => {
         dnps.push(makePrediction(`k-${kicker}`, week, {}));
       }
     }
-    const dnpFit = calibrateHistoricalRosKicker(
-      rows,
-      schedules,
-      HISTORICAL_ROS_SCORING_PROFILE,
-      dnps,
-    );
+    const dnpFit = calibrateHistoricalRosKicker(rows, schedules, dnps);
     expect(dnpFit.evidence.centerResidualGroups).toBe(0);
     expect(dnpFit.centerVolatility).toBe(0.25);
     // A non-finite predicted component is skipped, never thrown on (live-rail totality).
     const poisoned = [
       makePrediction("k-x", 1, { field_goals_made_0_39: 1 }, { field_goals_made_0_39: Number.NaN }),
     ];
-    expect(() =>
-      calibrateHistoricalRosKicker(rows, schedules, HISTORICAL_ROS_SCORING_PROFILE, poisoned),
-    ).not.toThrow();
+    expect(() => calibrateHistoricalRosKicker(rows, schedules, poisoned)).not.toThrow();
     // Deep-negative games stay finite through the floored numerator.
     const deepNegative = [];
     for (let week = 1; week <= 8; week += 1) {
@@ -1015,12 +1024,7 @@ describe("historical ROS kicker calibration (count-process v1)", () => {
         makePrediction("k-deep", week, { field_goals_missed: 6, field_goals_attempted: 6 }),
       );
     }
-    const deepFit = calibrateHistoricalRosKicker(
-      rows,
-      schedules,
-      HISTORICAL_ROS_SCORING_PROFILE,
-      deepNegative,
-    );
+    const deepFit = calibrateHistoricalRosKicker(rows, schedules, deepNegative);
     expect(Number.isFinite(deepFit.centerVolatility)).toBe(true);
   });
 
@@ -1037,11 +1041,7 @@ describe("historical ROS kicker calibration (count-process v1)", () => {
         );
       }
     }
-    const calibration = calibrateHistoricalRosKicker(
-      rows,
-      schedules,
-      HISTORICAL_ROS_SCORING_PROFILE,
-    );
+    const calibration = calibrateHistoricalRosKicker(rows, schedules);
     expect(calibration.familyAudit).toBe("out-of-bounds");
     expect(calibration.dispersionAudit.missed).toBeGreaterThan(1.3);
     expect(calibration.fgEventDispersion).toBeGreaterThanOrEqual(0.6);
@@ -1062,7 +1062,7 @@ describe("historical ROS kicker calibration (count-process v1)", () => {
         );
       }
     }
-    const withZeros = calibrateHistoricalRosKicker(rows, schedules, HISTORICAL_ROS_SCORING_PROFILE);
+    const withZeros = calibrateHistoricalRosKicker(rows, schedules);
     expect(withZeros.evidence.kickerGames).toBe(rows.length);
     // Alternating 0/2 events per game: within-group mean 1, variance ~1.07 -> dispersion near 1,
     // far above the 0.6 constant-corpus floor, proving the zero games entered the fit.
@@ -1070,20 +1070,19 @@ describe("historical ROS kicker calibration (count-process v1)", () => {
     const dnpFiltered = calibrateHistoricalRosKicker(
       rows.map((row) => (row.components.field_goals_made === 0 ? { ...row, played: false } : row)),
       schedules,
-      HISTORICAL_ROS_SCORING_PROFILE,
     );
     expect(dnpFiltered.evidence.kickerGames).toBe(rows.length / 2);
   });
 
   it("projects the calibration onto the exact five scalars the simulation consumes", () => {
-    const calibration = calibrateHistoricalRosKicker([], schedules, HISTORICAL_ROS_SCORING_PROFILE);
+    const calibration = calibrateHistoricalRosKicker([], schedules);
     expect(historicalRosKickerProcess(calibration)).toEqual({
       fgEventDispersion: 1,
       xpDispersion: 1,
-      recordedMissRatio: 0.95,
+
       centerVolatility: 0.25,
       bucketMix: [0.57, 0.27, 0.16],
-      missBucketMix: [0, 14 / 426, 38 / 426, 155 / 426, 197 / 426, 22 / 426],
+      missBucketMix: [1 / 6, 1 / 6, 1 / 6, 1 / 6, 1 / 6, 1 / 6],
     });
   });
 });

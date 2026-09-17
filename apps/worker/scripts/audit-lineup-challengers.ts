@@ -9,8 +9,13 @@ import {
 } from "@laces-out/projections";
 import {
   auditLineupChallenger,
+  auditLineupProduction,
   LINEUP_CHALLENGERS,
 } from "../../../packages/projections/src/lineup-model-audit.js";
+import {
+  buildLineupColdStartForecasts,
+  evaluateLineupColdStartForecasts,
+} from "../../../packages/projections/src/lineup-cold-start-audit.js";
 
 const path = process.argv[2];
 if (!path)
@@ -81,6 +86,12 @@ const profiles: ProjectionScoringProfile[] = [0, 1].map((ppr) => ({
     { statId: "fumbles_lost", points: -2 },
   ],
 }));
+console.error("Evaluating at most 512 observed cold-start targets using strictly prior history...");
+const coldStarts = buildLineupColdStartForecasts({
+  history,
+  evaluationWeeks: backtest.predictions.map(({ season, week }) => ({ season, week })),
+  maximumTargets: 512,
+});
 const results = [];
 for (const profile of profiles)
   for (const variant of LINEUP_CHALLENGERS) {
@@ -95,7 +106,15 @@ console.log(
       historySha256,
       historyRows: history.length,
       evaluation: backtest.evaluation,
-      note: "Fixed offline ablations against recency-only. Cohort errors and pair regret use raw component centers. Separate rolling champion/point-calibration results use prior observations; final-policy calibration is a diagnostic with a policy selected over the full window. No production promotion. Includes prior-relevant DNP outcomes. Pair regret is an all-pairs FLEX benchmark, not a roster replay.",
+      production: profiles.map((profile) =>
+        auditLineupProduction({
+          history,
+          backtest: { ...runFirstPartyProjectionBacktest([]), ...backtest },
+          profile,
+        }),
+      ),
+      coldStarts: profiles.map((profile) => evaluateLineupColdStartForecasts(coldStarts, profile)),
+      note: "Fixed offline ablations against recency-only. Cohort errors and pair regret use raw component centers. Production and challenger policies are selected from strictly earlier week batches; point calibration uses prior residuals. The final live policy is reported but never applied retroactively. No production promotion. Includes prior-relevant DNP outcomes. Pair regret is an all-pairs FLEX benchmark, not a roster replay; missing cold-start forecasts are reported as unmeasured coverage.",
       results,
     },
     null,

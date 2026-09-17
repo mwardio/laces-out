@@ -34,6 +34,13 @@ import {
   applyFirstPartyProjectionChampionPolicy,
   applyFirstPartyProjectionFinalPolicy,
   evaluateFirstPartyBacktestForScoringProfile,
+  evaluateWeeklyPointCalibration,
+  missingLongTouchdownScoringComponents,
+  applyWeeklyPointCalibration,
+  weeklyPointEvidenceConfidence,
+  storedWeeklyPointPolicyVersion,
+  WEEKLY_POINT_CALIBRATION_POLICY_VERSION,
+  UNCALIBRATED_STARTER_INTERVALS,
   evaluateFirstPartyTeamDefenseBacktestForScoringProfile,
   firstPartyChampionStrategyForPosition,
   firstPartyProjectionComponentsForPosition,
@@ -49,6 +56,8 @@ import {
   scoreProjectionStatComponents,
   weeklyInputCoverage,
   type FirstPartyPointResidualCalibration,
+  type WeeklyPointResidualCalibration,
+  type WeeklyPointCalibrationEvaluation,
   type FirstPartyPlayerStatus,
   type FirstPartyProjectionChampionPolicy,
   type FirstPartyProjectionBacktest,
@@ -64,6 +73,7 @@ import {
   type ProjectionStatComponents,
 } from "@laces-out/projections";
 import { and, count, desc, eq, inArray, or, sql, type SQLWrapper } from "drizzle-orm";
+import { assertFootballSourceCoherence } from "./football-source-coherence.js";
 
 import {
   buildFirstPartyDefenseHistory,
@@ -90,7 +100,8 @@ const projectionCheckIntervalMinutes = 60;
 const historySeasonCount = 4;
 // v7 refuses publication when prior-week schedule or statistics coverage is unresolved.
 const sourceSchemaVersion = 7;
-const championPolicyVersion = "walk-forward-mae-v1";
+export const FIRST_PARTY_PUBLICATION_POLICY_VERSION = "walk-forward-affine-sqrt-fixed-recency-v4";
+const championPolicyVersion = FIRST_PARTY_PUBLICATION_POLICY_VERSION;
 const chunkSize = 500;
 const supportedPositions = ["QB", "RB", "WR", "TE", "K"] as const;
 const defensePositions = new Set(["D/ST", "DST", "DEF"]);
@@ -228,6 +239,9 @@ export interface ScoredProjectionRow {
   readonly ceiling: number;
   readonly confidence: number;
   readonly components: Record<string, number>;
+  /** The scoring identity of a persisted forecast, used to preserve its kickoff lock. */
+  readonly scoringProfileKey?: string;
+  readonly pointPolicyVersion?: string;
 }
 
 interface LeaguePublication {
@@ -248,7 +262,7 @@ interface LeaguePublication {
  */
 export interface WithheldLeaguePosition {
   readonly position: LeagueScoringPosition;
-  readonly source: "normalization" | "backtest-gate";
+  readonly source: "normalization" | "backtest-gate" | "component-coverage";
   readonly reasons: readonly string[];
 }
 
@@ -755,35 +769,106 @@ function pointBiasLimit(evaluation: FirstPartyPointResidualCalibration): number 
 
 export function leagueScoredInterval(
   mean: number,
-  calibration: FirstPartyPointResidualCalibration,
+  calibration: WeeklyPointResidualCalibration,
+  rawMean?: number,
 ): { readonly floor: number; readonly ceiling: number } {
+  if (calibration.pointPolicy !== undefined) {
+    if (rawMean === undefined) throw new Error("Point policy requires its raw scored forecast");
+    const interval = applyWeeklyPointCalibration(rawMean, calibration);
+    if (Math.abs(interval.mean - mean) > 1e-9)
+      throw new Error("Point center does not match its calibration");
+    return { floor: interval.floor, ceiling: interval.ceiling };
+  }
   const lower = mean + calibration.lowerError;
   const upper = mean + calibration.upperError;
-  return {
-    floor: Math.min(mean, lower, upper),
-    ceiling: Math.max(mean, lower, upper),
-  };
+  return { floor: Math.min(mean, lower, upper), ceiling: Math.max(mean, lower, upper) };
 }
 
 export function leagueScoredMean(
   rawMean: number,
-  calibration: FirstPartyPointResidualCalibration,
+  calibration: WeeklyPointResidualCalibration,
 ): number {
-  return rawMean + calibration.centerAdjustment;
+  return applyWeeklyPointCalibration(rawMean, calibration).mean;
+}
+
+function deterministicZeroProjection(row: ScoredProjectionRow): boolean {
+  return (
+    row.mean === 0 &&
+    row.floor === 0 &&
+    row.ceiling === 0 &&
+    Object.values(row.components).every((value) => value === 0)
+  );
+}
+
+export function frozenProjectionSupportsScoringProfile(
+  row: ScoredProjectionRow,
+  profile: ProjectionScoringProfile,
+  position: LeagueScoringPosition,
+): boolean {
+  if (
+    row.scoringProfileKey === projectionScoringProfileKey(profile) ||
+    deterministicZeroProjection(row)
+  ) {
+    return true;
+  }
+  const components = new Set(
+    position === "DST"
+      ? firstPartyTeamDefenseProjectionComponents()
+      : [
+          ...firstPartyProjectionComponentsForPosition(position),
+          ...(position === "K" ? ["field_goals_made_50_plus"] : []),
+        ],
+  );
+  return profile.rules.every(
+    (rule) =>
+      !components.has(rule.statId) ||
+      (rule.points === 0 && (rule.bonuses ?? []).every((bonus) => bonus.points === 0)) ||
+      Number.isFinite(row.components[rule.statId]),
+  );
 }
 
 export function rescoreFrozenProjection(
   row: ScoredProjectionRow,
   profile: ProjectionScoringProfile,
-  calibration: FirstPartyPointResidualCalibration,
+  calibration: WeeklyPointResidualCalibration,
+  position?: string,
 ): ScoredProjectionRow {
+  const scoringProfileKey = projectionScoringProfileKey(profile);
+  // New data may change the point-residual fit while a game is in progress. A scoring rule
+  // correction is the only reason to change an already locked fantasy forecast.
+  if (row.scoringProfileKey === scoringProfileKey) {
+    const evidence =
+      row.pointPolicyVersion === WEEKLY_POINT_CALIBRATION_POLICY_VERSION
+        ? calibration
+        : { ...calibration, starterIntervalQuality: undefined };
+    const confidence = deterministicZeroProjection(row)
+      ? row.confidence
+      : weeklyPointEvidenceConfidence(row.confidence, evidence, position);
+    return confidence === row.confidence ? row : { ...row, confidence };
+  }
+  // A confirmed inactive/bye projection has no scoring events. A position-wide residual offset
+  // cannot turn that deterministic zero into expected points, even when league rules change.
+  if (deterministicZeroProjection(row)) {
+    return {
+      ...row,
+      scoringProfileKey,
+      pointPolicyVersion: WEEKLY_POINT_CALIBRATION_POLICY_VERSION,
+    };
+  }
   const rawMean = scoreProjectionStatComponents(row.components, profile);
   const mean = leagueScoredMean(rawMean, calibration);
   const interval =
     row.floor === row.mean && row.ceiling === row.mean
       ? { floor: mean, ceiling: mean }
-      : leagueScoredInterval(mean, calibration);
-  return { ...row, mean, ...interval };
+      : leagueScoredInterval(mean, calibration, rawMean);
+  return {
+    ...row,
+    mean,
+    ...interval,
+    scoringProfileKey,
+    confidence: weeklyPointEvidenceConfidence(row.confidence, calibration, position),
+    pointPolicyVersion: WEEKLY_POINT_CALIBRATION_POLICY_VERSION,
+  };
 }
 
 function augmentedKickerComponents(components: ProjectionStatComponents): Record<string, number> {
@@ -811,10 +896,10 @@ export function firstPartyAvailableProjectionComponents(): readonly string[] {
 }
 
 function residualForPlayer(
-  evaluation: FirstPartyScoredBacktestEvaluation,
+  evaluation: WeeklyPointCalibrationEvaluation,
   _playerId: string,
   position: string,
-): FirstPartyPointResidualCalibration {
+): WeeklyPointResidualCalibration {
   return (
     evaluation.byPosition[position.trim().toUpperCase() as keyof typeof evaluation.byPosition] ??
     evaluation.overall
@@ -915,6 +1000,100 @@ function playerPositionEvaluationClearsGate(
   if (!relevant) return true;
   const positionEvaluation = evaluation.byPosition[position];
   return positionEvaluation !== undefined && pointEvaluationClearsGate(positionEvaluation);
+}
+
+/**
+ * The constant recency candidate was available in every locked historical week. It gets its own
+ * chronological point correction and interval calibration; it never borrows the hindsight winner
+ * or the adaptive strategy's residuals. Selection happens at publication, and both candidates'
+ * evidence remains visible. The unchanged position gates also apply to this simpler candidate.
+ */
+export function evaluateFirstPartyPublicationCandidates(
+  backtest: FirstPartyProjectionBacktest,
+  profile: ProjectionScoringProfile,
+) {
+  const champion = applyFirstPartyProjectionChampionPolicy(backtest, profile);
+  const adaptiveEvaluation = evaluateWeeklyPointCalibration(champion.backtest, profile);
+  const fixedRecencyBacktest = {
+    ...backtest,
+    // Only the point scorer consumes this view; stale component metrics/intervals are not read.
+    predictions: backtest.predictions.map((prediction) => ({
+      ...prediction,
+      predicted: prediction.baseline,
+    })),
+  };
+  const fixedRecencyEvaluation = evaluateWeeklyPointCalibration(fixedRecencyBacktest, profile);
+  const fixedRecencyPositions = supportedPositions.filter(
+    (position) =>
+      !playerPositionEvaluationClearsGate(adaptiveEvaluation, profile, position) &&
+      playerPositionEvaluationClearsGate(fixedRecencyEvaluation, profile, position),
+  );
+  const fallbackPositions = new Set(fixedRecencyPositions);
+  const playerEvaluation =
+    fixedRecencyPositions.length === 0
+      ? adaptiveEvaluation
+      : evaluateWeeklyPointCalibration(
+          {
+            ...champion.backtest,
+            predictions: champion.backtest.predictions.map((prediction) =>
+              fallbackPositions.has(prediction.position)
+                ? { ...prediction, predicted: prediction.baseline }
+                : prediction,
+            ),
+          },
+          profile,
+        );
+  const byPosition = { ...champion.policy.byPosition };
+  for (const position of fixedRecencyPositions) {
+    const original = byPosition[position];
+    if (original === undefined) throw new Error("Fixed recency evidence lacks a position policy");
+    byPosition[position] = { ...original, strategy: "recency-only", reason: "baseline-defended" };
+  }
+  const policy = { ...champion.policy, byPosition };
+  // A future forecast may fit its selected constant strategy on all completed observations.
+  // This retrospective fit is NEVER release evidence: the strategy was chosen using these games.
+  const fittedLiveCalibration = evaluateWeeklyPointCalibration(
+    {
+      ...backtest,
+      predictions: backtest.predictions.map((prediction) => ({
+        ...prediction,
+        predicted:
+          firstPartyChampionStrategyForPosition(policy, prediction.position) === "recency-only"
+            ? prediction.baseline
+            : prediction.predicted,
+      })),
+    },
+    profile,
+  );
+  // The selected future strategy may be refit for a future center. Confidence must instead
+  // use the honest chronological release forecasts, never that retrospective strategy fit.
+  const liveCalibration: WeeklyPointCalibrationEvaluation = {
+    ...fittedLiveCalibration,
+    byPosition: Object.fromEntries(
+      supportedPositions.flatMap((position) => {
+        const fit = fittedLiveCalibration.byPosition[position];
+        if (fit === undefined) return [];
+        return [
+          [
+            position,
+            {
+              ...fit,
+              starterIntervalQuality: playerEvaluation.byPosition[position]?.starterIntervalQuality,
+            },
+          ],
+        ];
+      }),
+    ),
+  };
+  return {
+    champion,
+    policy,
+    liveCalibration,
+    adaptiveEvaluation,
+    fixedRecencyEvaluation,
+    playerEvaluation,
+    fixedRecencyPositions,
+  };
 }
 
 /** The long-standing flat reason string for one normalization failure; shape unchanged. */
@@ -1120,6 +1299,8 @@ export class FirstPartyProjectionService implements ProjectionRefreshService {
       );
       const baseChecksum = projectionInputChecksum({
         modelVersion: FIRST_PARTY_PROJECTION_MODEL_VERSION,
+        pointCalibrationPolicyVersion: WEEKLY_POINT_CALIBRATION_POLICY_VERSION,
+        publicationPolicyVersion: FIRST_PARTY_PUBLICATION_POLICY_VERSION,
         scoringNormalizationVersion: LEAGUE_SCORING_NORMALIZATION_VERSION,
         championPolicy: {
           version: championPolicyVersion,
@@ -1205,7 +1386,8 @@ export class FirstPartyProjectionService implements ProjectionRefreshService {
             ? { lastPublishedAt: priorOutputs.lastPublishedAt }
             : {}),
           result:
-            priorOutputs.qualityState === "publishable"
+            priorOutputs.qualityState === "publishable" ||
+            priorOutputs.lastPublishedAt !== undefined
               ? "unchanged"
               : "prior_good_output_preserved",
         });
@@ -1288,8 +1470,10 @@ export class FirstPartyProjectionService implements ProjectionRefreshService {
           playerChampion.policy,
         );
         const defenseBacktest = runFirstPartyTeamDefenseBacktest(backtestDefenseHistory);
+        // The final strategy can fit intervals for a future forecast, but it was selected using
+        // these outcomes. Release evidence must retain the strategy chosen before each week.
         const gatePlayer = evaluateFirstPartyBacktestForScoringProfile(
-          publicationPlayerBacktest,
+          playerChampion.backtest,
           publicationGateProfile,
         );
         const gateDefense = evaluateFirstPartyTeamDefenseBacktestForScoringProfile(
@@ -1340,7 +1524,7 @@ export class FirstPartyProjectionService implements ProjectionRefreshService {
       for (const week of targetWeeks) {
         if (context.signal.aborted) throw new Error("Projection refresh was cancelled");
         const inputChecksum = projectionInputChecksum({ baseChecksum, season: job.season, week });
-        const publication = await this.#publishWeek({
+        const publication = await this.publishPreparedWeek({
           sourceId: source.id,
           season: job.season,
           week,
@@ -1466,10 +1650,14 @@ export class FirstPartyProjectionService implements ProjectionRefreshService {
         )
         .limit(1);
       if (!run) return { complete: false };
-      if (qualityState !== undefined && qualityState !== run.qualityState) {
-        return { complete: false, immutableOutputIncomplete: true };
-      }
-      qualityState = run.qualityState;
+      // Adjacent weeks can legitimately have different gates (for example one postponed game).
+      // Their immutable row counts, not matching quality labels, establish completeness.
+      qualityState =
+        qualityState === "rejected" || run.qualityState === "rejected"
+          ? "rejected"
+          : qualityState === "degraded" || run.qualityState === "degraded"
+            ? "degraded"
+            : "publishable";
       const gateReasons = (() => {
         const gate = (run.metrics as { gate?: unknown }).gate;
         if (!gate || typeof gate !== "object") return undefined;
@@ -1478,11 +1666,10 @@ export class FirstPartyProjectionService implements ProjectionRefreshService {
           ? reasons.join("|") || "none"
           : undefined;
       })();
-      qualityReasons = gateReasons ?? qualityReasons;
-      if (run.qualityState === "publishable") {
-        const candidate = run.createdAt.toISOString();
-        if (!lastPublishedAt || candidate > lastPublishedAt) lastPublishedAt = candidate;
-      }
+      qualityReasons =
+        [...new Set([qualityReasons, gateReasons].flatMap((value) => value?.split("|") ?? []))]
+          .filter((reason) => reason !== "none")
+          .join("|") || "none";
       const [raw] = await this.#database
         .select({ count: count() })
         .from(projectionObservations)
@@ -1508,6 +1695,10 @@ export class FirstPartyProjectionService implements ProjectionRefreshService {
           ? rowsPublished
           : 0;
       })();
+      if (run.qualityState === "publishable" || expectedLeagueSets > 0) {
+        const candidate = run.createdAt.toISOString();
+        if (!lastPublishedAt || candidate > lastPublishedAt) lastPublishedAt = candidate;
+      }
       if (expectedLeagueSets > 0) {
         const sets = await this.#database
           .select({ id: projectionSets.id })
@@ -1605,7 +1796,7 @@ export class FirstPartyProjectionService implements ProjectionRefreshService {
         "Current-season weekly rosters are required once completed player observations are available",
       );
     }
-    return allKeys.flatMap((key): SelectedSource[] => {
+    const selected = allKeys.flatMap((key): SelectedSource[] => {
       const row = byKey.get(key);
       if (!row?.enabled || !sourceIsUsableForProjection(row, now, season)) return [];
       return [
@@ -1620,6 +1811,8 @@ export class FirstPartyProjectionService implements ProjectionRefreshService {
         },
       ];
     });
+    assertFootballSourceCoherence(selected);
+    return selected;
   }
 
   /** Maps each required source key to its `{key, checksum, asOf}` epoch triple, missing-safe. */
@@ -2240,7 +2433,11 @@ export class FirstPartyProjectionService implements ProjectionRefreshService {
     return result;
   }
 
-  async #publishWeek(input: {
+  /**
+   * Publishes one pinned, prepared week. Exact league evidence governs league sets; the reference
+   * profile independently governs shared raw observations. Both persist in the same transaction.
+   */
+  async publishPreparedWeek(input: {
     readonly sourceId: string;
     readonly season: number;
     readonly week: number;
@@ -2477,7 +2674,7 @@ export class FirstPartyProjectionService implements ProjectionRefreshService {
     );
 
     const leaguePlan: LeaguePublicationPlan =
-      releaseGate.state === "publishable"
+      !unknownKickoff && inputCoverage.warnings.length === 0
         ? buildFirstPartyLeaguePublications({
             ...input,
             publishedPlayers,
@@ -2540,7 +2737,8 @@ export class FirstPartyProjectionService implements ProjectionRefreshService {
           historySeasons: historySeasonCount,
           publicationGate: "walk-forward champion MAE <= recency-only baseline",
           championPolicy: input.playerChampionPolicy,
-          pointIntervals: "league-scored residual quantiles",
+          pointIntervals:
+            "league-scored residual quantiles; RB/WR/TE scale with the raw point forecast",
           byes: "explicit zero",
           defenseMethodWarnings,
           // The cross-source completed-batch identity proving every required source (player
@@ -2615,42 +2813,45 @@ export class FirstPartyProjectionService implements ProjectionRefreshService {
         for (const batch of chunks(observationRows)) {
           await transaction.insert(projectionObservations).values([...batch]);
         }
+      }
 
-        for (const publication of leaguePublications) {
-          const [set] = await transaction
-            .insert(projectionSets)
-            .values({
-              leagueSeasonId: publication.league.id,
-              createdByUserId: null,
-              visibility: "league",
-              source: FIRST_PARTY_PROJECTION_SET_SOURCE,
-              version: publication.version,
-              season: input.season,
-              week: input.week,
-              horizon: "week",
-              fetchedAt: input.sourceAsOf,
-              inputChecksum: publication.inputChecksum,
-              metadata: publication.metadata,
-              createdAt: input.now,
-            })
-            .onConflictDoNothing({
-              target: [projectionSets.source, projectionSets.version],
-            })
-            .returning({ id: projectionSets.id });
-          if (!set) continue;
-          for (const batch of chunks(publication.rows)) {
-            await transaction.insert(playerProjections).values(
-              batch.map((row) => ({
-                projectionSetId: set.id,
-                playerId: row.playerId,
-                meanPoints: row.mean.toFixed(3),
-                floorPoints: row.floor.toFixed(3),
-                ceilingPoints: row.ceiling.toFixed(3),
-                confidence: row.confidence.toFixed(4),
-                components: row.components,
-              })),
-            );
-          }
+      // A default-profile K or D/ST failure cannot overrule another league's own passing
+      // position evidence. The planner has already enforced its complete roster/locked-row
+      // contract; never fill missing rows from a different set or scoring profile here.
+      for (const publication of leaguePublications) {
+        const [set] = await transaction
+          .insert(projectionSets)
+          .values({
+            leagueSeasonId: publication.league.id,
+            createdByUserId: null,
+            visibility: "league",
+            source: FIRST_PARTY_PROJECTION_SET_SOURCE,
+            version: publication.version,
+            season: input.season,
+            week: input.week,
+            horizon: "week",
+            fetchedAt: input.sourceAsOf,
+            inputChecksum: publication.inputChecksum,
+            metadata: publication.metadata,
+            createdAt: input.now,
+          })
+          .onConflictDoNothing({
+            target: [projectionSets.source, projectionSets.version],
+          })
+          .returning({ id: projectionSets.id });
+        if (!set) continue;
+        for (const batch of chunks(publication.rows)) {
+          await transaction.insert(playerProjections).values(
+            batch.map((row) => ({
+              projectionSetId: set.id,
+              playerId: row.playerId,
+              meanPoints: row.mean.toFixed(3),
+              floorPoints: row.floor.toFixed(3),
+              ceilingPoints: row.ceiling.toFixed(3),
+              confidence: row.confidence.toFixed(4),
+              components: row.components,
+            })),
+          );
         }
       }
 
@@ -2659,17 +2860,18 @@ export class FirstPartyProjectionService implements ProjectionRefreshService {
         .set({
           state: "complete",
           finishedAt: input.now,
-          recordsWritten:
-            releaseGate.state === "publishable"
-              ? rawCount + leaguePublications.reduce((sum, league) => sum + league.rows.length, 0)
-              : 1,
+          recordsWritten: Math.max(
+            1,
+            (releaseGate.state === "publishable" ? rawCount : 0) +
+              leaguePublications.reduce((sum, league) => sum + league.rows.length, 0),
+          ),
         })
         .where(eq(syncRuns.id, run.id));
       return true;
     });
     return {
       committed: inserted,
-      published: inserted && releaseGate.state === "publishable",
+      published: inserted && (releaseGate.state === "publishable" || leaguePublications.length > 0),
       gate: releaseGate,
     };
   }
@@ -2728,7 +2930,11 @@ export class FirstPartyProjectionService implements ProjectionRefreshService {
   ): Promise<ReadonlyMap<string, ReadonlyMap<string, ScoredProjectionRow>>> {
     if (leagueSeasonIds.length === 0) return new Map();
     const sets = await this.#database
-      .select({ id: projectionSets.id, leagueSeasonId: projectionSets.leagueSeasonId })
+      .select({
+        id: projectionSets.id,
+        leagueSeasonId: projectionSets.leagueSeasonId,
+        metadata: projectionSets.metadata,
+      })
       .from(projectionSets)
       .where(
         and(
@@ -2739,12 +2945,23 @@ export class FirstPartyProjectionService implements ProjectionRefreshService {
           eq(projectionSets.horizon, "week"),
         ),
       )
-      .orderBy(desc(projectionSets.fetchedAt), desc(projectionSets.createdAt));
+      // fetchedAt describes the oldest contributing source, not publication chronology.
+      .orderBy(desc(projectionSets.createdAt), desc(projectionSets.id));
     const latestSetByLeague = new Map<string, string>();
+    const scoringKeyBySet = new Map<string, string>();
+    const pointPolicyBySet = new Map<string, string>();
+    const frozenPolicyBySet = new Map<string, Record<string, unknown>>();
     for (const set of sets) {
       if (set.leagueSeasonId === null) continue;
       if (!latestSetByLeague.has(set.leagueSeasonId)) {
         latestSetByLeague.set(set.leagueSeasonId, set.id);
+        pointPolicyBySet.set(set.id, storedWeeklyPointPolicyVersion(set.metadata) ?? "unknown");
+        const frozen = set.metadata.frozenPointPolicyVersions;
+        if (frozen !== null && typeof frozen === "object" && !Array.isArray(frozen))
+          frozenPolicyBySet.set(set.id, frozen as Record<string, unknown>);
+        if (typeof set.metadata.scoringProfileKey === "string") {
+          scoringKeyBySet.set(set.id, set.metadata.scoringProfileKey);
+        }
       }
     }
     const selectedSetIds = [...latestSetByLeague.values()];
@@ -2777,6 +2994,17 @@ export class FirstPartyProjectionService implements ProjectionRefreshService {
         ceiling: row.ceilingPoints === null ? mean : numeric(row.ceilingPoints),
         confidence: row.confidence === null ? 0 : numeric(row.confidence),
         components: row.components,
+        pointPolicyVersion: (() => {
+          const frozen = frozenPolicyBySet.get(row.projectionSetId);
+          if (frozen !== undefined && Object.hasOwn(frozen, row.playerId))
+            return frozen[row.playerId] === WEEKLY_POINT_CALIBRATION_POLICY_VERSION
+              ? WEEKLY_POINT_CALIBRATION_POLICY_VERSION
+              : "unknown";
+          return pointPolicyBySet.get(row.projectionSetId) ?? "unknown";
+        })(),
+        ...(scoringKeyBySet.has(row.projectionSetId)
+          ? { scoringProfileKey: scoringKeyBySet.get(row.projectionSetId)! }
+          : {}),
       });
       result.set(leagueSeasonId, leagueRows);
     }
@@ -2907,6 +3135,16 @@ export function buildFirstPartyLeaguePublications(input: {
   const publications: LeaguePublication[] = [];
   const withheld: WithheldLeague[] = [];
   const notes: LeaguePublicationNote[] = [];
+  // Every league with the same semantic rules shares this evidence. Labels and provider rule
+  // order do not justify replaying the same locked historical projections again.
+  const scoringEvidence = new Map<
+    string,
+    {
+      readonly candidates: ReturnType<typeof evaluateFirstPartyPublicationCandidates>;
+      readonly player: FirstPartyScoredBacktestEvaluation;
+      readonly defense: FirstPartyScoredTeamDefenseEvaluation;
+    }
+  >();
   for (const league of input.leagues) {
     const visiblePlayers = input.publishedPlayers.filter(
       (player) =>
@@ -2951,22 +3189,22 @@ export function buildFirstPartyLeaguePublications(input: {
     }
     const profile = normalization.profile;
     const profileKey = projectionScoringProfileKey(profile);
-    const playerChampion = applyFirstPartyProjectionChampionPolicy(
-      input.basePlayerBacktest,
-      profile,
-    );
-    const publicationPlayerBacktest = applyFirstPartyProjectionFinalPolicy(
-      input.basePlayerBacktest,
-      playerChampion.policy,
-    );
-    const playerEvaluation = evaluateFirstPartyBacktestForScoringProfile(
-      publicationPlayerBacktest,
-      profile,
-    );
-    const defenseEvaluation = evaluateFirstPartyTeamDefenseBacktestForScoringProfile(
-      input.defenseBacktest,
-      profile,
-    );
+    let evidence = scoringEvidence.get(profileKey);
+    if (evidence === undefined) {
+      const candidates = evaluateFirstPartyPublicationCandidates(input.basePlayerBacktest, profile);
+      evidence = {
+        candidates,
+        player: candidates.playerEvaluation,
+        defense: evaluateFirstPartyTeamDefenseBacktestForScoringProfile(
+          input.defenseBacktest,
+          profile,
+        ),
+      };
+      scoringEvidence.set(profileKey, evidence);
+    }
+    const publicationCandidates = evidence.candidates;
+    const playerEvaluation = evidence.player;
+    const defenseEvaluation = evidence.defense;
     // Normalization decides which positions this league's rules can be priced for at all; each
     // surviving position then answers for its own backtest. Neither verdict is collapsed into a
     // league-wide one: a D/ST the model cannot price, or a K whose residuals miss the gate, must
@@ -2980,6 +3218,26 @@ export function buildFirstPartyLeaguePublications(input: {
     const publishablePlayerPositions = new Set<(typeof supportedPositions)[number]>();
     for (const position of supportedPositions) {
       if (!supportedByLeague.has(position)) continue;
+      const incompleteLiveRows = leaguePlayers.some((player) => {
+        if (player.position !== position || player.gameStarted) return false;
+        const selected =
+          firstPartyChampionStrategyForPosition(publicationCandidates.policy, position) ===
+          "first-party-model"
+            ? player.modelProjection
+            : player.baselineProjection;
+        return (
+          selected.state !== "zero" &&
+          missingLongTouchdownScoringComponents(selected.components, profile, position).length > 0
+        );
+      });
+      if (incompleteLiveRows) {
+        withheldPositions.push({
+          position,
+          source: "component-coverage",
+          reasons: ["Current player forecasts are missing required long-touchdown event evidence."],
+        });
+        continue;
+      }
       if (playerPositionEvaluationClearsGate(playerEvaluation, profile, position)) {
         publishablePlayerPositions.add(position);
         continue;
@@ -3093,6 +3351,7 @@ export function buildFirstPartyLeaguePublications(input: {
     const previousRows =
       input.previousRowsByLeague.get(league.id) ?? new Map<string, ScoredProjectionRow>();
     const lockedRosterWithoutBaseline: string[] = [];
+    const lockedRosterScoringIncomplete: string[] = [];
     let frozenPlayerCount = 0;
     const frozenPlayerIds = new Set<string>();
     for (const player of leaguePlayers) {
@@ -3102,42 +3361,61 @@ export function buildFirstPartyLeaguePublications(input: {
       if (rowPosition === undefined) continue;
       if (player.gameStarted) {
         const previous = previousRows.get(player.playerId);
-        if (previous) {
+        if (previous && frozenProjectionSupportsScoringProfile(previous, profile, rowPosition)) {
           scored.set(
             player.playerId,
             rescoreFrozenProjection(
               previous,
               profile,
-              residualForPlayer(playerEvaluation, player.playerId, player.position),
+              residualForPlayer(
+                publicationCandidates.liveCalibration,
+                player.playerId,
+                player.position,
+              ),
+              rowPosition,
             ),
           );
           rowPositions.set(player.playerId, rowPosition);
           frozenPlayerCount += 1;
           frozenPlayerIds.add(player.playerId);
         } else if (leagueRosterIds.has(player.playerId)) {
-          lockedRosterWithoutBaseline.push(player.playerId);
+          (previous ? lockedRosterScoringIncomplete : lockedRosterWithoutBaseline).push(
+            player.playerId,
+          );
         }
         continue;
       }
       const selectedProjection =
-        firstPartyChampionStrategyForPosition(playerChampion.policy, player.position) ===
+        firstPartyChampionStrategyForPosition(publicationCandidates.policy, player.position) ===
         "first-party-model"
           ? player.modelProjection
           : player.baselineProjection;
       const components = projectionComponents(player.position, selectedProjection.components);
       const rawMean = scoreProjectionStatComponents(components, profile);
-      const calibration = residualForPlayer(playerEvaluation, player.playerId, player.position);
+      const calibration = residualForPlayer(
+        publicationCandidates.liveCalibration,
+        player.playerId,
+        player.position,
+      );
       const mean =
         selectedProjection.state === "zero" ? rawMean : leagueScoredMean(rawMean, calibration);
       const interval =
         selectedProjection.state === "zero"
           ? { floor: mean, ceiling: mean }
-          : leagueScoredInterval(mean, calibration);
+          : leagueScoredInterval(mean, calibration, rawMean);
       scored.set(player.playerId, {
         playerId: player.playerId,
         mean,
         ...interval,
-        confidence: selectedProjection.quality.confidence,
+        pointPolicyVersion: WEEKLY_POINT_CALIBRATION_POLICY_VERSION,
+        confidence:
+          selectedProjection.state === "zero"
+            ? selectedProjection.quality.confidence
+            : weeklyPointEvidenceConfidence(
+                selectedProjection.quality.confidence,
+                calibration,
+                rowPosition,
+              ),
         components,
       });
       rowPositions.set(player.playerId, rowPosition);
@@ -3152,7 +3430,7 @@ export function buildFirstPartyLeaguePublications(input: {
       for (const outputPlayerId of outputPlayerIds) {
         if (defense.gameStarted) {
           const previous = previousRows.get(outputPlayerId);
-          if (previous) {
+          if (previous && frozenProjectionSupportsScoringProfile(previous, profile, "DST")) {
             scored.set(
               outputPlayerId,
               rescoreFrozenProjection(previous, profile, residualForDefense(defenseEvaluation)),
@@ -3161,7 +3439,9 @@ export function buildFirstPartyLeaguePublications(input: {
             frozenPlayerCount += 1;
             frozenPlayerIds.add(outputPlayerId);
           } else if (leagueRosterIds.has(outputPlayerId)) {
-            lockedRosterWithoutBaseline.push(outputPlayerId);
+            (previous ? lockedRosterScoringIncomplete : lockedRosterWithoutBaseline).push(
+              outputPlayerId,
+            );
           }
           continue;
         }
@@ -3174,23 +3454,33 @@ export function buildFirstPartyLeaguePublications(input: {
           reason.includes("confirmed bye"),
         )
           ? { floor: mean, ceiling: mean }
-          : leagueScoredInterval(mean, calibration);
+          : leagueScoredInterval(mean, calibration, rawMean);
         scored.set(outputPlayerId, {
           playerId: outputPlayerId,
           mean,
           ...interval,
           confidence: defense.projection.quality.confidence,
+          pointPolicyVersion: WEEKLY_POINT_CALIBRATION_POLICY_VERSION,
           components: { ...components },
         });
         rowPositions.set(outputPlayerId, "DST");
       }
     }
-    if (lockedRosterWithoutBaseline.length > 0) {
+    if (lockedRosterWithoutBaseline.length > 0 || lockedRosterScoringIncomplete.length > 0) {
       withheld.push({
         leagueSeasonId: league.id,
         scope: "league",
         reasons: [
-          `No pre-kickoff forecast was available for ${lockedRosterWithoutBaseline.length} locked roster player${lockedRosterWithoutBaseline.length === 1 ? "" : "s"}.`,
+          ...(lockedRosterWithoutBaseline.length > 0
+            ? [
+                `No pre-kickoff forecast was available for ${lockedRosterWithoutBaseline.length} locked roster player${lockedRosterWithoutBaseline.length === 1 ? "" : "s"}.`,
+              ]
+            : []),
+          ...(lockedRosterScoringIncomplete.length > 0
+            ? [
+                `The pre-kickoff forecast lacks a component required by the current scoring rules for ${lockedRosterScoringIncomplete.length} locked roster player${lockedRosterScoringIncomplete.length === 1 ? "" : "s"}.`,
+              ]
+            : []),
         ],
         ...(withheldPositions.length === 0 ? {} : { positions: withheldPositions }),
       });
@@ -3218,6 +3508,8 @@ export function buildFirstPartyLeaguePublications(input: {
     }
 
     const setChecksum = projectionInputChecksum({
+      publicationPolicyVersion: FIRST_PARTY_PUBLICATION_POLICY_VERSION,
+      pointCalibrationPolicyVersion: WEEKLY_POINT_CALIBRATION_POLICY_VERSION,
       modelInputChecksum: input.inputChecksum,
       leagueSeasonId: league.id,
       profileKey,
@@ -3254,7 +3546,49 @@ export function buildFirstPartyLeaguePublications(input: {
         scoringProfile: profile,
         scoringProfileKey: profileKey,
         scoringMappingVersion: LEAGUE_SCORING_NORMALIZATION_VERSION,
-        championPolicy: playerChampion.policy,
+        championPolicy: publicationCandidates.policy,
+        adaptiveChampionPolicy: publicationCandidates.champion.policy,
+        publicationPolicyVersion: FIRST_PARTY_PUBLICATION_POLICY_VERSION,
+        publicationCandidateEvidence: supportedPositions
+          .filter((position) => supportedByLeague.has(position))
+          .map((position) => ({
+            position,
+            selected: !publishablePlayerPositions.has(position)
+              ? "withheld"
+              : publicationCandidates.fixedRecencyPositions.includes(position)
+                ? "fixed-recency"
+                : "adaptive-champion",
+            adaptive: publicationCandidates.adaptiveEvaluation.byPosition[position],
+            fixedRecency: publicationCandidates.fixedRecencyEvaluation.byPosition[position],
+          })),
+        livePointCalibration: {
+          method: "selected-future-strategy-prior-games",
+          policyVersion: WEEKLY_POINT_CALIBRATION_POLICY_VERSION,
+          conditionalEvidence:
+            "prior-baseline-ranked starters; confidence uses chronological release predictions",
+          limitation:
+            "Population residual ranges are not calibrated individual-player probabilities.",
+          byPosition: Object.fromEntries(
+            supportedPositions
+              .filter((position) => publishablePlayerPositions.has(position))
+              .map((position) => {
+                const calibration = publicationCandidates.liveCalibration.byPosition[position];
+                return [
+                  position,
+                  calibration === undefined
+                    ? null
+                    : {
+                        samples: calibration.samples,
+                        pointPolicy: calibration.pointPolicy,
+                        starterIntervalQuality: calibration.starterIntervalQuality,
+                        centerAdjustment: calibration.centerAdjustment,
+                        lowerError: calibration.lowerError,
+                        upperError: calibration.upperError,
+                      },
+                ];
+              }),
+          ),
+        },
         scoringWarnings: normalization.warnings,
         // Coverage is per position, so state it per position. `supportedPositions` is what the
         // league's rules can be priced for; `publishedPositions` is derived from the rows this set
@@ -3281,6 +3615,16 @@ export function buildFirstPartyLeaguePublications(input: {
           ...normalization.warnings.map((warning) => warning.message),
           ...defenseMethodWarnings,
           availabilityMethodWarning,
+          ...supportedPositions.flatMap((position) => {
+            if (!publishablePlayerPositions.has(position)) return [];
+            const calibration = publicationCandidates.liveCalibration.byPosition[position];
+            return calibration?.pointPolicy !== undefined &&
+              calibration.starterIntervalQuality?.state !== "available"
+              ? [
+                  `${UNCALIBRATED_STARTER_INTERVALS}: ${position} forecast ranges have insufficient or unreliable historical starter coverage; advice confidence is limited.`,
+                ]
+              : [];
+          }),
           ...(frozenPlayerCount > 0
             ? ["Players whose games started retain their last pre-kickoff forecast."]
             : []),
@@ -3288,7 +3632,8 @@ export function buildFirstPartyLeaguePublications(input: {
         backtest: backtestSummaryForSupportedPositions(playerEvaluation, supportedByLeague),
         season: input.season,
         week: input.week,
-        pointIntervals: "league-scored residual quantiles",
+        pointIntervals:
+          "league-scored residual quantiles; RB/WR/TE scale with the raw point forecast",
         baseline: "recency-only",
         playerBacktest: playerEvaluation.overall,
         defenseBacktest: defenseEvaluation.overall,
@@ -3297,6 +3642,11 @@ export function buildFirstPartyLeaguePublications(input: {
         rosterCoverage,
         rosterCoverageChecked: rosterCoverage === "complete",
         frozenPlayerCount,
+        frozenPointPolicyVersions: Object.fromEntries(
+          [...scored.values()]
+            .filter((row) => frozenPlayerIds.has(row.playerId))
+            .map((row) => [row.playerId, row.pointPolicyVersion ?? "unknown"]),
+        ),
       },
     });
     if (rosterCoverage === "pre-draft") {

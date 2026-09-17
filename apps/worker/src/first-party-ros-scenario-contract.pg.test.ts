@@ -261,7 +261,7 @@ const LEAGUE_SCORING_ROWS = [
   { statKey: "Interceptions Made", points: "2" },
 ] as const;
 
-function leagueScoringProfileKey(): string {
+function leagueScoringProfileKey(receptionPoints = "1"): string {
   const normalization = normalizeLeagueScoringProfile({
     id: "league:ros-pg-test",
     label: "League scoring",
@@ -270,7 +270,7 @@ function leagueScoringProfileKey(): string {
       statKey: row.statKey,
       providerStatId: null,
       operation: "multiply",
-      points: row.points,
+      points: row.statKey === "Receptions" ? receptionPoints : row.points,
       thresholdLow: null,
       thresholdHigh: null,
     })),
@@ -357,15 +357,16 @@ function heldOutForecast(
   };
 }
 
-function championPolicy(): FirstPartyRosChampionPolicy {
+function championPolicy(scoringProfileKey = SCORING_KEY): FirstPartyRosChampionPolicy {
   return evaluateFirstPartyRosChampionPolicy(
     CORPUS_SEASONS.map((season) => ({
       season,
       complete: true,
       forecasts: CORPUS_CUTOFFS.flatMap((asOfWeek) =>
-        Array.from({ length: CORPUS_PER_BLOCK }, (_, index) =>
-          heldOutForecast(season, asOfWeek, index),
-        ),
+        Array.from({ length: CORPUS_PER_BLOCK }, (_, index) => ({
+          ...heldOutForecast(season, asOfWeek, index),
+          scoringProfileKey,
+        })),
       ),
     })),
     // Relaxed *policy* thresholds so a conformal artifact exists early enough in the walk-forward
@@ -383,10 +384,13 @@ function championPolicy(): FirstPartyRosChampionPolicy {
   ).livePolicy;
 }
 
-function championArtifactPayload(policy: FirstPartyRosChampionPolicy) {
+function championArtifactPayload(
+  policy: FirstPartyRosChampionPolicy,
+  scoringProfileKey = SCORING_KEY,
+) {
   const payload: FirstPartyRosChampionArtifactPayload = {
     season: TEST_SEASON,
-    scoringProfileKey: SCORING_KEY,
+    scoringProfileKey,
     modelVersion: FIRST_PARTY_ROS_MODEL_VERSION,
     policyVersion: FIRST_PARTY_ROS_POLICY_VERSION,
     calibrationVersion: FIRST_PARTY_ROS_INTERVAL_CALIBRATION_VERSION,
@@ -709,6 +713,7 @@ async function seedTeamObservations(
 async function seedLeague(
   db: Database,
   seeded: readonly SeededPlayer[],
+  receptionPoints = "1",
 ): Promise<{ readonly leagueSeasonId: string }> {
   const [user] = await db
     .insert(users)
@@ -738,7 +743,7 @@ async function seedLeague(
       leagueSeasonId: leagueSeason.id,
       statKey: row.statKey,
       operation: "multiply",
-      points: row.points,
+      points: row.statKey === "Receptions" ? receptionPoints : row.points,
       thresholdLow: null,
       thresholdHigh: null,
       providerStatId: null,
@@ -811,6 +816,7 @@ describe.skipIf(!dockerAvailable)(
     let container: DisposablePostgres;
     let handle: ReturnType<typeof createDatabase>;
     let leagueSeasonId: string;
+    let seededPlayers: readonly SeededPlayer[];
     let refreshDurationMs = 0;
 
     beforeAll(async () => {
@@ -827,6 +833,7 @@ describe.skipIf(!dockerAvailable)(
       const sourceIds = await seedSources(handle.db);
       const ingestRunId = await seedIngestRun(handle.db, "observations");
       const seeded = await seedPlayers(handle.db);
+      seededPlayers = seeded;
       await seedSchedules(handle.db, sourceIds, ingestRunId);
       await seedPlayerObservations(handle.db, sourceIds, ingestRunId, seeded);
       await seedTeamObservations(handle.db, sourceIds, ingestRunId);
@@ -1063,6 +1070,94 @@ describe.skipIf(!dockerAvailable)(
           .update(dataSources)
           .set({ lastChecksum: originalChecksum })
           .where(eq(dataSources.key, sourceKey));
+      }
+    }, 120_000);
+
+    it("uses one captured fact set for multiple artifacts despite ingestion between their simulations", async () => {
+      const secondLeague = await seedLeague(handle.db, seededPlayers, "0.5");
+      const halfKey = leagueScoringProfileKey("0.5");
+      const artifacts = [SCORING_KEY, halfKey].map((key) => {
+        const { payload, artifactChecksum } = championArtifactPayload(championPolicy(key), key);
+        return { ...payload, artifactChecksum, admittedAt: FRESH };
+      });
+      const window = {
+        asOfWeek: 6,
+        currentWeek: 7,
+        windowStartWeek: 7,
+        windowEndWeek: 18,
+        currentWeekStarted: false,
+      } as const;
+      const sourceKey = `nflverse.weekly-rosters.${TEST_SEASON}`;
+      let snapshots = 0;
+      const seenArtifacts: string[] = [];
+      let firstHistory: unknown;
+      let firstCalibration: unknown;
+      const provider = databaseFirstPartyRosCandidateProvider({
+        database: handle.db,
+        onSnapshotReady: () => {
+          snapshots += 1;
+        },
+        buildLeagueTarget: async (input) => {
+          expect(input.candidatePlayers).toHaveLength(CANDIDATE_COUNT);
+          seenArtifacts.push(input.artifact.artifactChecksum);
+          if (seenArtifacts.length === 1) {
+            firstHistory = input.featureHistory;
+            firstCalibration = input.calibration;
+          } else {
+            // Physical inputs and fitted processes are the same captured objects, not a later
+            // snapshot accidentally paired with the earlier artifact's calibration.
+            expect(input.featureHistory).toBe(firstHistory);
+            expect(input.calibration).toBe(firstCalibration);
+          }
+          const transactions = await handle.db.execute<{ count: string }>(sql`
+            select count(*)::text as count from pg_stat_activity
+            where datname = current_database() and state = 'idle in transaction'
+          `);
+          expect(Number(transactions[0]?.count)).toBe(0);
+          await handle.db
+            .update(dataSources)
+            .set({ lastChecksum: "e".repeat(64) })
+            .where(eq(dataSources.key, sourceKey));
+          return { target: null, skippedPlayers: 0 };
+        },
+      });
+      const candidateProviderChecksum = await provider.sourceChecksum({
+        season: TEST_SEASON,
+        window,
+      });
+      const context = {
+        artifact: artifacts[0]!,
+        artifacts,
+        season: TEST_SEASON,
+        window,
+        now: FIXED_NOW,
+        candidateProviderChecksum,
+      };
+      try {
+        const batch = await provider.buildTargetBatch(context);
+        expect(Object.keys(batch).sort()).toEqual(
+          artifacts.map((artifact) => artifact.artifactChecksum).sort(),
+        );
+        expect(new Set(seenArtifacts)).toEqual(
+          new Set(artifacts.map((artifact) => artifact.artifactChecksum)),
+        );
+        expect(seenArtifacts).toHaveLength(2);
+        expect(snapshots).toBe(1);
+        expect(await provider.sourceChecksum({ season: TEST_SEASON, window })).not.toBe(
+          candidateProviderChecksum,
+        );
+        await expect(provider.buildTargetBatch(context)).rejects.toThrow(
+          "changed before target assembly",
+        );
+        expect(seenArtifacts).toHaveLength(2);
+      } finally {
+        await handle.db
+          .update(dataSources)
+          .set({ lastChecksum: checksumFor(sourceKey) })
+          .where(eq(dataSources.key, sourceKey));
+        await handle.db
+          .delete(leagueSeasons)
+          .where(eq(leagueSeasons.id, secondLeague.leagueSeasonId));
       }
     }, 120_000);
 

@@ -23,9 +23,43 @@ export interface ProjectionScoringProfile {
 
 export type ProjectionStatComponents = Readonly<Record<string, number>>;
 
+/** Nested per-game touchdown counts: a 50+ yard touchdown also earns the 40+ yard bonus. */
+export const SCORING_LONG_TOUCHDOWN_COMPONENTS = [
+  {
+    total: "passing_touchdowns",
+    fortyPlus: "passing_touchdowns_40_plus",
+    fiftyPlus: "passing_touchdowns_50_plus",
+  },
+  {
+    total: "rushing_touchdowns",
+    fortyPlus: "rushing_touchdowns_40_plus",
+    fiftyPlus: "rushing_touchdowns_50_plus",
+  },
+  {
+    total: "receiving_touchdowns",
+    fortyPlus: "receiving_touchdowns_40_plus",
+    fiftyPlus: "receiving_touchdowns_50_plus",
+  },
+] as const;
+
+/** Yardage can be negative in official per-game stat lines; counts and probabilities cannot. */
+export const SCORING_SIGNED_YARDAGE_COMPONENTS = [
+  "passing_yards",
+  "rushing_yards",
+  "receiving_yards",
+  "punt_return_yards",
+  "kickoff_return_yards",
+  "return_yards",
+] as const;
+
+/** Yahoo's negative-points toggle acts on a realized game total, before taking expectations. */
+export const YAHOO_NONNEGATIVE_YARDAGE_COMPONENTS = [...SCORING_SIGNED_YARDAGE_COMPONENTS].map(
+  (source) => ({ component: `${source}_nonnegative`, source }),
+);
+
 /**
  * ESPN's "every N" categories score whole groups rather than a fractional share of the raw stat.
- * Each component below is therefore the realized `floor(stat / divisor)` count in historical
+ * Each component below is therefore the realized `floor(max(0, stat) / divisor)` count in historical
  * data. The projection model learns the expected count directly; callers must never approximate
  * it by flooring a projected mean.
  */
@@ -79,9 +113,75 @@ export const ESPN_EVERY_N_FLOOR_UNIT_COMPONENTS = [
 
 export type EspnEveryNFloorUnitComponent = (typeof ESPN_EVERY_N_FLOOR_UNIT_COMPONENTS)[number];
 
+export const SCORING_WHOLE_GROUP_COMPONENTS = [
+  ...ESPN_EVERY_N_FLOOR_UNIT_COMPONENTS,
+  ...[
+    "return_yards",
+    "field_goals_total_yards",
+    ...YAHOO_NONNEGATIVE_YARDAGE_COMPONENTS.map(({ component }) => component),
+  ].flatMap((source) =>
+    [5, 10, 20, 25, 50, 100].map((divisor) => ({
+      component: `${source}_per_${divisor}_units`,
+      source,
+      divisor,
+    })),
+  ),
+] as const;
+
+/** Positive-part expectation required by E[floor(max(0, X) / N)] <= E[max(0, X)] / N. */
+export function scoringWholeGroupSourceExpectation(
+  components: ProjectionStatComponents,
+  source: string,
+): number | undefined {
+  if (source === "passing_incompletions") {
+    const attempts = components.passing_attempts;
+    const completions = components.passing_completions;
+    return attempts === undefined ||
+      completions === undefined ||
+      !Number.isFinite(attempts) ||
+      !Number.isFinite(completions) ||
+      attempts < 0 ||
+      completions < 0
+      ? undefined
+      : Math.max(0, attempts - completions);
+  }
+  const key = (SCORING_SIGNED_YARDAGE_COMPONENTS as readonly string[]).includes(source)
+    ? `${source}_nonnegative`
+    : source;
+  const value = components[key];
+  return value !== undefined && Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+
 const ESPN_EVERY_N_FLOOR_UNIT_COMPONENT_BY_NAME = new Map(
-  ESPN_EVERY_N_FLOOR_UNIT_COMPONENTS.map((definition) => [definition.component, definition]),
+  SCORING_WHOLE_GROUP_COMPONENTS.map((definition) => [definition.component, definition]),
 );
+
+function rawYardageValue(components: ProjectionStatComponents, source: string): number | undefined {
+  if (source === "return_yards" && components.return_yards === undefined) {
+    const punt = components.punt_return_yards;
+    const kickoff = components.kickoff_return_yards;
+    if (punt === undefined || kickoff === undefined) return undefined;
+    if (!Number.isFinite(punt) || !Number.isFinite(kickoff)) return undefined;
+    return punt + kickoff;
+  }
+  const value = components[source];
+  return value !== undefined && Number.isFinite(value) ? value : undefined;
+}
+
+/** Exact transforms of actual observations, reusable before fitting or scoring realized scenarios. */
+export function scoringDerivedComponentValue(
+  components: ProjectionStatComponents,
+  component: string,
+): number | undefined {
+  const nonnegative = YAHOO_NONNEGATIVE_YARDAGE_COMPONENTS.find(
+    (item) => item.component === component,
+  );
+  if (nonnegative) {
+    const value = rawYardageValue(components, nonnegative.source);
+    return value === undefined ? undefined : Math.max(0, value);
+  }
+  return espnEveryNFloorUnitValue(components, component);
+}
 
 function rawEveryNSourceValue(
   components: ProjectionStatComponents,
@@ -102,8 +202,20 @@ function rawEveryNSourceValue(
     }
     return Math.max(0, attempts - completions);
   }
-  const value = components[source];
-  return value !== undefined && Number.isFinite(value) && value >= 0 ? value : undefined;
+  const nonnegative = YAHOO_NONNEGATIVE_YARDAGE_COMPONENTS.find(
+    (item) => item.component === source,
+  );
+  if (nonnegative) {
+    const value = rawYardageValue(components, nonnegative.source);
+    return value === undefined ? undefined : Math.max(0, value);
+  }
+  const value = rawYardageValue(components, source);
+  if (value === undefined) return undefined;
+  // ESPN's realized every-N categories omit negative yardage groups (provider zero), while
+  // signed per-yard categories retain the loss. See the pinned official API evidence fixture.
+  if ((SCORING_SIGNED_YARDAGE_COMPONENTS as readonly string[]).includes(source))
+    return Math.max(0, value);
+  return value >= 0 ? value : undefined;
 }
 
 /** Returns an exact historical whole-group count for one supported ESPN every-N component. */
@@ -117,68 +229,77 @@ export function espnEveryNFloorUnitValue(
   return source === undefined ? undefined : Math.floor(source / definition.divisor);
 }
 
-function finiteNonnegativeComponent(components: ProjectionStatComponents, key: string): number {
-  const value = components[key];
-  return value !== undefined && Number.isFinite(value) && value >= 0 ? value : 0;
-}
-
 /**
  * Adds the canonical aggregate component names used by league scoring to an nflverse player row.
- * The source's original fields remain intact so callers can audit every derived total.
+ * Source fields remain available except where a canonical category has a different definition:
+ * missed kicks include blocks for both ESPN and Yahoo (nflverse's original miss counts exclude
+ * them). Fine field-goal buckets must already include the source's exact blocked-kick distances.
  */
 export function normalizeHistoricalPlayerStatComponents(
   components: ProjectionStatComponents,
 ): ProjectionStatComponents {
-  const passingYards = finiteNonnegativeComponent(components, "passing_yards");
-  const rushingYards = finiteNonnegativeComponent(components, "rushing_yards");
-  const receivingYards = finiteNonnegativeComponent(components, "receiving_yards");
-  const everyNFloorUnits = Object.fromEntries(
-    ESPN_EVERY_N_FLOOR_UNIT_COMPONENTS.map(({ component }) => [
-      component,
-      espnEveryNFloorUnitValue(components, component) ?? 0,
-    ]),
-  );
-  return {
-    ...components,
-    ...everyNFloorUnits,
-    // ESPN exposes these as mutually exclusive per-game scoring categories. An NFL player has at
-    // most one game in a fantasy week, so the realized historical component is an exact 0/1
-    // indicator. The weekly projection model learns its expectation as a calibrated probability;
-    // scoring that probability by the league's configured bonus is therefore an expected-points
-    // calculation, not the unsafe `projected mean >= threshold` shortcut.
-    passing_yards_300_399_probability: passingYards >= 300 && passingYards < 400 ? 1 : 0,
-    passing_yards_400_plus_probability: passingYards >= 400 ? 1 : 0,
-    rushing_yards_100_199_probability: rushingYards >= 100 && rushingYards < 200 ? 1 : 0,
-    rushing_yards_200_plus_probability: rushingYards >= 200 ? 1 : 0,
-    receiving_yards_100_199_probability: receivingYards >= 100 && receivingYards < 200 ? 1 : 0,
-    receiving_yards_200_plus_probability: receivingYards >= 200 ? 1 : 0,
-    fumbles_lost: finiteNonnegativeComponent(components, "fumbles_lost_total"),
-    turnovers:
-      finiteNonnegativeComponent(components, "passing_interceptions") +
-      finiteNonnegativeComponent(components, "fumbles_lost_total"),
-    two_point_conversions:
-      finiteNonnegativeComponent(components, "passing_two_point_conversions") +
-      finiteNonnegativeComponent(components, "rushing_two_point_conversions") +
-      finiteNonnegativeComponent(components, "receiving_two_point_conversions"),
-    field_goals_made_0_39:
-      finiteNonnegativeComponent(components, "field_goals_made_0_19") +
-      finiteNonnegativeComponent(components, "field_goals_made_20_29") +
-      finiteNonnegativeComponent(components, "field_goals_made_30_39"),
-    field_goals_made_50_plus:
-      finiteNonnegativeComponent(components, "field_goals_made_50_59") +
-      finiteNonnegativeComponent(components, "field_goals_made_60_plus"),
-    field_goals_missed_0_39:
-      finiteNonnegativeComponent(components, "field_goals_missed_0_19") +
-      finiteNonnegativeComponent(components, "field_goals_missed_20_29") +
-      finiteNonnegativeComponent(components, "field_goals_missed_30_39"),
-    field_goals_missed_50_plus:
-      finiteNonnegativeComponent(components, "field_goals_missed_50_59") +
-      finiteNonnegativeComponent(components, "field_goals_missed_60_plus"),
-    return_yards:
-      finiteNonnegativeComponent(components, "punt_return_yards") +
-      finiteNonnegativeComponent(components, "kickoff_return_yards"),
-    return_touchdowns: finiteNonnegativeComponent(components, "special_teams_touchdowns"),
+  // Absence is not evidence of a zero game. Callers with an observed zero-production appearance
+  // supply explicit zeros; canonical-only rows retain values whose raw sources are not present.
+  const canonical: Record<string, number> = { ...components };
+  const finite = (key: string): number | undefined => {
+    const value = canonical[key];
+    return value !== undefined && Number.isFinite(value) ? value : undefined;
   };
+  const aggregate = (key: string, sources: readonly string[], signed = false): void => {
+    const values = sources.map(finite);
+    if (values.every((value): value is number => value !== undefined && (signed || value >= 0)))
+      canonical[key] = values.reduce((sum, value) => sum + value, 0);
+  };
+  aggregate("fumbles_lost", ["fumbles_lost_total"]);
+  aggregate("turnovers", ["passing_interceptions", "fumbles_lost"]);
+  aggregate("two_point_conversions", [
+    "passing_two_point_conversions",
+    "rushing_two_point_conversions",
+    "receiving_two_point_conversions",
+  ]);
+  aggregate("field_goals_made_0_39", [
+    "field_goals_made_0_19",
+    "field_goals_made_20_29",
+    "field_goals_made_30_39",
+  ]);
+  aggregate("field_goals_made_50_plus", ["field_goals_made_50_59", "field_goals_made_60_plus"]);
+  aggregate("field_goals_missed_0_39", [
+    "field_goals_missed_0_19",
+    "field_goals_missed_20_29",
+    "field_goals_missed_30_39",
+  ]);
+  aggregate("field_goals_missed_50_plus", [
+    "field_goals_missed_50_59",
+    "field_goals_missed_60_plus",
+  ]);
+  aggregate("return_yards", ["punt_return_yards", "kickoff_return_yards"], true);
+  aggregate("return_touchdowns", ["special_teams_touchdowns"]);
+  for (const prefix of ["extra_points", "field_goals"]) {
+    const attempts = finite(`${prefix}_attempted`);
+    const makes = finite(`${prefix}_made`);
+    if (attempts !== undefined && makes !== undefined && makes >= 0 && attempts >= makes)
+      canonical[`${prefix}_missed`] = attempts - makes;
+  }
+  for (const { component } of SCORING_WHOLE_GROUP_COMPONENTS) {
+    const value = espnEveryNFloorUnitValue(canonical, component);
+    if (value !== undefined) canonical[component] = value;
+  }
+  for (const { component } of YAHOO_NONNEGATIVE_YARDAGE_COMPONENTS) {
+    const value = scoringDerivedComponentValue(canonical, component);
+    if (value !== undefined) canonical[component] = value;
+  }
+  // Exact realized events become learned probabilities. Never threshold an expected mean here.
+  for (const [source, lower, upper] of [
+    ["passing_yards", 300, 400],
+    ["rushing_yards", 100, 200],
+    ["receiving_yards", 100, 200],
+  ] as const) {
+    const raw = finite(source);
+    if (raw === undefined) continue;
+    canonical[`${source}_${lower}_${upper - 1}_probability`] = Number(raw >= lower && raw < upper);
+    canonical[`${source}_${upper}_plus_probability`] = Number(raw >= upper);
+  }
+  return canonical;
 }
 
 function assertFinite(value: number, label: string): void {

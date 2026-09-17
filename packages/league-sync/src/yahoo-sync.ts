@@ -41,15 +41,19 @@ const MAX_DISCOVERED_LEAGUES = 500;
 const DEFAULT_THROTTLE_RETRY_AFTER_MS = 60 * 1_000;
 
 /** Yahoo rounds these yardage categories to whole scoring units when fractional points are off. */
-const YAHOO_FRACTIONAL_YARDAGE_STAT_IDS = new Set(["4", "9", "12", "14"]);
+const YAHOO_FRACTIONAL_YARDAGE_STAT_IDS = new Set(["4", "9", "12", "14", "84"]);
+const YAHOO_SIGNED_YARDAGE_STAT_IDS = new Set(["4", "9", "12", "14"]);
 
 export function yahooScoringOperation(
   statId: string,
   usesFractionalPoints: boolean | null | undefined,
-): "multiply" | "floor-groups" {
-  return usesFractionalPoints === false && YAHOO_FRACTIONAL_YARDAGE_STAT_IDS.has(statId)
-    ? "floor-groups"
-    : "multiply";
+  usesNegativePoints?: boolean | null,
+): "multiply" | "floor-groups" | "multiply-nonnegative" | "floor-groups-nonnegative" {
+  const wholeGroups =
+    usesFractionalPoints === false && YAHOO_FRACTIONAL_YARDAGE_STAT_IDS.has(statId);
+  const nonnegative = usesNegativePoints === false && YAHOO_SIGNED_YARDAGE_STAT_IDS.has(statId);
+  if (nonnegative) return wholeGroups ? "floor-groups-nonnegative" : "multiply-nonnegative";
+  return wholeGroups ? "floor-groups" : "multiply";
 }
 
 /** Canonical provider position families persisted with each Yahoo scoring rule. */
@@ -899,6 +903,7 @@ export class DrizzleYahooSyncRepository implements YahooSyncRepository {
             operation: yahooScoringOperation(
               rule.statId,
               bundle.league.settings.usesFractionalPoints,
+              bundle.league.settings.usesNegativePoints,
             ),
             points: String(rule.points),
             providerStatId: rule.statId,

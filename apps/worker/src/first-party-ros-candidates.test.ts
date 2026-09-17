@@ -111,13 +111,9 @@ describe("first-party live ROS candidate builder", () => {
   const history = buildHistory();
   const schedules = buildSchedules();
   const calibration = runFirstPartyProjectionBacktest(history).calibration;
-  const availabilityCalibration = calibrateHistoricalRosAvailability(
-    history,
-    schedules,
-    scoringProfile,
-  );
-  const roleCalibration = calibrateHistoricalRosRole(history, schedules, scoringProfile);
-  const kickerCalibration = calibrateHistoricalRosKicker(history, schedules, scoringProfile);
+  const availabilityCalibration = calibrateHistoricalRosAvailability(history, schedules);
+  const roleCalibration = calibrateHistoricalRosRole(history, schedules);
+  const kickerCalibration = calibrateHistoricalRosKicker(history, schedules);
 
   it("builds contextual and recency centers for the whole remaining window", () => {
     const candidate = buildFirstPartyRosPlayerCandidate({
@@ -144,6 +140,45 @@ describe("first-party live ROS candidate builder", () => {
     expect(candidate!.contextual.weekly).toHaveLength(6);
     expect(candidate!.scoringProfileKey).toBe(projectionScoringProfileKey(scoringProfile));
     expect(candidate!.inputChecksum).toMatch(/^[a-f0-9]{64}$/u);
+  });
+
+  it("preserves football inputs, availability and random outcomes across league scoring changes", () => {
+    const common = {
+      player: { playerId: "wr-0", position: "WR" as const, team: "BUF" },
+      window: { season: 2026, asOfWeek: 6, windowStartWeek: 7, windowEndWeek: 12 },
+      featureHistory: history,
+      calibration,
+      availabilityCalibration,
+      roleCalibration,
+      kickerCalibration,
+      injuries: [],
+      schedules,
+      seed: "shared-football:2026:6:wr-0",
+      scenarioCount: 256,
+    };
+    const ppr = buildFirstPartyRosPlayerCandidate({ ...common, scoringProfile })!;
+    const altered = buildFirstPartyRosPlayerCandidate({
+      ...common,
+      scoringProfile: {
+        ...scoringProfile,
+        rules: [
+          ...scoringProfile.rules.map((rule) =>
+            rule.statId === "receptions" ? { ...rule, points: 0.5 } : rule,
+          ),
+          { statId: "defensive_sacks", points: 99 },
+        ],
+      },
+    })!;
+    expect(ppr).not.toBeNull();
+    expect(altered).not.toBeNull();
+    expect(altered.inputChecksum).toBe(ppr.inputChecksum);
+    expect(altered.scoringProfileKey).not.toBe(ppr.scoringProfileKey);
+    for (const strategy of ["contextual", "recency"] as const) {
+      expect(altered[strategy].expectedComponents).toEqual(ppr[strategy].expectedComponents);
+      expect(altered[strategy].expectedGames).toBe(ppr[strategy].expectedGames);
+      expect(altered[strategy].provenance.seedHash).toBe(ppr[strategy].provenance.seedHash);
+      expect(altered[strategy].meanPoints).toBeLessThan(ppr[strategy].meanPoints);
+    }
   });
 
   it("spans the full window, counting a missing team game as a bye rather than truncating", () => {

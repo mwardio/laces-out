@@ -215,6 +215,7 @@ const projectionRows: readonly DecisionProjectionPlayerRow[] = Object.entries(pr
     meanPoints: String(mean),
     floorPoints: String(mean - 3),
     ceilingPoints: String(mean + 4),
+    confidence: "0.95",
   }),
 );
 
@@ -316,6 +317,10 @@ function availabilityFeed(
 }
 
 class FakeRepository implements InSeasonDecisionRepository {
+  scheduledTeams: readonly string[] | null = ["MIA", "BUF"];
+  listLineupScheduledTeams() {
+    return Promise.resolve(this.scheduledTeams ?? []);
+  }
   findProviderProjectionSnapshot?: NonNullable<
     InSeasonDecisionRepository["findProviderProjectionSnapshot"]
   >;
@@ -494,6 +499,129 @@ describe("InSeasonDecisionService", () => {
     const service = new InSeasonDecisionService(new FakeRepository(), () => NOW);
     await expect(service.getSnapshot(OTHER_USER_ID, LEAGUE_ID)).resolves.toBeUndefined();
   });
+
+  it("keeps a legal current lineup when its entire gain rounds to zero on the display", async () => {
+    const repository = new FakeRepository();
+    repository.projectionRows = projectionRows.map((row) =>
+      row.playerId === playerIds.aRbTwo ? { ...row, meanPoints: "20.023" } : row,
+    );
+    const service = new InSeasonDecisionService(repository, () => NOW);
+    const snapshot = await service.getSnapshot(USER_ID, LEAGUE_ID);
+    if (snapshot?.lineup.state !== "available") throw new Error("Expected available lineup");
+    expect(snapshot.lineup.changes).toEqual([]);
+    expect(snapshot.lineup.projectedGain).toBe(0);
+    expect(snapshot.lineup.optimalProjectedPoints).toBe(snapshot.lineup.currentProjectedPoints);
+    expect(snapshot.lineup.assignments.some((row) => row.player.id === playerIds.aRbOne)).toBe(
+      true,
+    );
+    expect(snapshot.lineup.assignments.every((row) => !row.locked)).toBe(true);
+    expect(snapshot.lineup.notes.join(" ")).toContain("Keep your current starters");
+    expect(snapshot.lineup.notes.join(" ")).toContain("0.023 projected points");
+    expect(() => inSeasonDecisionSnapshotSchema.parse(snapshot)).not.toThrow();
+    const previousChecksum = snapshot.provenance.inputChecksum;
+    repository.scheduledTeams = ["BUF"];
+    const bye = await service.getSnapshot(USER_ID, LEAGUE_ID);
+    if (bye?.lineup.state !== "available") throw new Error("Expected available lineup");
+    expect(bye.lineup.changes.some((row) => row.add?.id === playerIds.aRbTwo)).toBe(true);
+    expect(bye.provenance.inputChecksum).not.toBe(previousChecksum);
+  });
+
+  it.each(["inactive", "zero", "empty", "schedule-unverified", "real-gain"])(
+    "does not hide a needed lineup change for %s",
+    async (scenario) => {
+      const repository = new FakeRepository();
+      repository.projectionRows = projectionRows.map((row) =>
+        row.playerId === playerIds.aRbTwo
+          ? {
+              ...row,
+              meanPoints:
+                scenario === "real-gain"
+                  ? "20.1"
+                  : scenario === "zero" || scenario === "empty"
+                    ? "0.023"
+                    : "20.023",
+            }
+          : row.playerId === playerIds.aRbOne && (scenario === "zero" || scenario === "empty")
+            ? { ...row, meanPoints: "0", floorPoints: "0", ceilingPoints: "0" }
+            : row,
+      );
+      if (scenario === "inactive")
+        repository.rosterRows = rosterRows.map((row) =>
+          row.playerId === playerIds.aRbOne ? { ...row, status: "OUT" } : row,
+        );
+      if (scenario === "empty")
+        repository.rosterRows = rosterRows.map((row) =>
+          row.playerId === playerIds.aRbOne ? { ...row, isStarter: false, slotCode: "BN" } : row,
+        );
+      if (scenario === "schedule-unverified") repository.scheduledTeams = null;
+      const snapshot = await new InSeasonDecisionService(repository, () => NOW).getSnapshot(
+        USER_ID,
+        LEAGUE_ID,
+      );
+      if (snapshot?.lineup.state !== "available") throw new Error("Expected available lineup");
+      expect(snapshot.lineup.changes.some((row) => row.add?.id === playerIds.aRbTwo)).toBe(true);
+      expect(snapshot.lineup.notes.join(" ")).not.toContain("Keep your current starters");
+    },
+  );
+
+  it("retains persisted evidence confidence in swap and keep advice without changing point forecasts", async () => {
+    const repository = new FakeRepository();
+    repository.projectionRows = projectionRows.map((row) => ({
+      ...row,
+      confidence: row.playerId === playerIds.aRbTwo ? "0.5925" : "0.95",
+    }));
+    const service = new InSeasonDecisionService(repository, () => NOW);
+    const sparse = await service.getSnapshot(USER_ID, LEAGUE_ID);
+    if (sparse?.lineup.state !== "available") throw new Error("Expected available lineup");
+    const change = sparse.lineup.changes.find((row) => row.add?.id === playerIds.aRbTwo);
+    expect(change?.assessment).toMatchObject({ strength: "close-call" });
+    expect(change?.assessment?.explanation).toContain("Limited evidence");
+    expect(sparse.lineup.notes.join(" ")).toContain("Limited forecast evidence for");
+    const originalPoints = sparse.lineup.optimalProjectedPoints;
+    repository.projectionRows = repository.projectionRows.map((row) => ({
+      ...row,
+      confidence: "0.95",
+    }));
+    const strong = await service.getSnapshot(USER_ID, LEAGUE_ID);
+    if (strong?.lineup.state !== "available") throw new Error("Expected available lineup");
+    expect(strong.lineup.optimalProjectedPoints).toBe(originalPoints);
+    expect(strong.provenance.inputChecksum).not.toBe(sparse.provenance.inputChecksum);
+    expect(strong.lineup.notes.join(" ")).not.toContain("Limited forecast evidence for");
+
+    repository.projectionRows = repository.projectionRows.map((row) =>
+      row.playerId === playerIds.aRbTwo
+        ? { ...row, meanPoints: "20.023", confidence: "0.5925" }
+        : row,
+    );
+    const keep = await service.getSnapshot(USER_ID, LEAGUE_ID);
+    if (keep?.lineup.state !== "available") throw new Error("Expected available lineup");
+    expect(keep.lineup.changes).toEqual([]);
+    expect(keep.lineup.notes.join(" ")).toContain("including a recommendation to keep your lineup");
+    expect(keep.lineup.notes.join(" ")).toContain("Limited forecast evidence for Spare Back");
+  });
+
+  it.each([undefined, null, "NaN", "Infinity", "-0.1", "1.1"])(
+    "keeps missing or malformed stored confidence (%s) cautious despite disjoint ranges",
+    async (confidence) => {
+      const repository = new FakeRepository();
+      repository.projectionRows = projectionRows.map((row) => {
+        if (row.playerId !== playerIds.aRbTwo) return row;
+        const adjusted = { ...row, meanPoints: "45", floorPoints: "40", ceilingPoints: "50" };
+        if (confidence === undefined) delete adjusted.confidence;
+        else adjusted.confidence = confidence;
+        return adjusted;
+      });
+      const snapshot = await new InSeasonDecisionService(repository, () => NOW).getSnapshot(
+        USER_ID,
+        LEAGUE_ID,
+      );
+      if (snapshot?.lineup.state !== "available") throw new Error("Expected available lineup");
+      const change = snapshot.lineup.changes.find((row) => row.add?.id === playerIds.aRbTwo);
+      expect(change?.assessment).toMatchObject({ strength: "close-call" });
+      expect(change?.assessment?.explanation).toContain("Limited evidence");
+      expect(snapshot.lineup.notes.join(" ")).toContain("Limited forecast evidence for Spare Back");
+    },
+  );
 
   it("runs deterministic lineup, waiver, and trade engines on persisted facts", async () => {
     const repository = new FakeRepository();
@@ -2185,8 +2313,8 @@ describe("InSeasonDecisionSnapshot ADR 0003 provenance", () => {
 });
 
 // Any intentional response-contract change must renew this only after semantic assertions pass.
-// V7 excludes reserve slots and occupants from ordinary lineup/trade decisions.
-const SNAPSHOT_FINGERPRINT = "73eb26da2d619c1007942fd102e18d18f7236dc737b77c3d29bd67f7dc0f7eed";
+// V8 binds schedule and confidence evidence and retains legal lineups below display precision.
+const SNAPSHOT_FINGERPRINT = "21c4fe4c31788b7433f2d59925a05c055cdbb39a5805aebb1d884c652cddc620";
 /**
  * A second guard strips the generated provenance fields so changes elsewhere in the response remain
  * independently visible.

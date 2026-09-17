@@ -11,7 +11,11 @@ import {
   type RosterSlot,
 } from "@laces-out/domain";
 
-import { optimizeLineup } from "./index.js";
+import {
+  optimizeLineup,
+  preserveCurrentLineupBelowGain,
+  type OptimizeLineupInput,
+} from "./index.js";
 
 const makePlayer = (id: string, positions: Player["positions"]): Player => ({
   id: playerId(id),
@@ -23,6 +27,257 @@ const projection = (mean: number): ProjectionValue => ({
   floor: mean - 3,
   mean,
   ceiling: mean + 5,
+});
+
+describe("preserveCurrentLineupBelowGain", () => {
+  function fixture(currentMean = 10, optimumMean = 10.023): OptimizeLineupInput {
+    const slots = createRosterSlots([
+      { type: "QB", count: 1 },
+      { type: "BENCH", count: 1 },
+    ]);
+    return {
+      players: [makePlayer("current", ["QB"]), makePlayer("upgrade", ["QB"])],
+      slots,
+      projections: { current: projection(currentMean), upgrade: projection(optimumMean) },
+      currentAssignments: [{ playerId: playerId("current"), slotId: slots[0]!.id }],
+    };
+  }
+
+  function preserve(input: OptimizeLineupInput, rosterSlots = input.slots) {
+    const optimum = optimizeLineup(input);
+    return {
+      optimum,
+      ...preserveCurrentLineupBelowGain(input, optimum, { maximumGain: 0.05, rosterSlots }),
+    };
+  }
+
+  it("keeps a valid current lineup for a 0.023-point total gain without changing mathematical optimization", () => {
+    const input = fixture();
+    const selected = preserve(input);
+
+    expect(selected.optimum.assignments[0]!.playerId).toBe(playerId("upgrade"));
+    expect(selected.optimum.changes).toHaveLength(1);
+    expect(selected.preserved).toBe(true);
+    expect(selected.availableGain).toBeCloseTo(0.023, 12);
+    expect(selected.result.projectedPoints).toBe(10);
+    expect(selected.result.assignments[0]).toMatchObject({
+      playerId: playerId("current"),
+      locked: false,
+    });
+    expect(selected.result.assignments[0]!.explanation).not.toContain("player is locked");
+    expect(selected.result.benchPlayerIds).toEqual([playerId("upgrade")]);
+    expect(selected.result.changes).toEqual([]);
+  });
+
+  it.each([
+    [0, 0.05],
+    [10.05, 10.1],
+    [10, 10.2],
+  ])("retains the optimum at the threshold or above: %s to %s", (current, optimum) => {
+    const selected = preserve(fixture(current, optimum));
+    expect(selected.preserved).toBe(false);
+    expect(selected.result).toBe(selected.optimum);
+    expect(selected.availableGain).toBeCloseTo(optimum - current, 12);
+  });
+
+  it("compares the combined gain instead of suppressing two separate 0.03-point improvements", () => {
+    const slots = createRosterSlots([
+      { type: "QB", count: 1 },
+      { type: "WR", count: 1 },
+      { type: "BENCH", count: 2 },
+    ]);
+    const selected = preserve({
+      players: [
+        makePlayer("qb-current", ["QB"]),
+        makePlayer("qb-upgrade", ["QB"]),
+        makePlayer("wr-current", ["WR"]),
+        makePlayer("wr-upgrade", ["WR"]),
+      ],
+      slots,
+      projections: {
+        "qb-current": projection(10),
+        "qb-upgrade": projection(10.03),
+        "wr-current": projection(10),
+        "wr-upgrade": projection(10.03),
+      },
+      currentAssignments: [
+        { playerId: playerId("qb-current"), slotId: slots[0]!.id },
+        { playerId: playerId("wr-current"), slotId: slots[1]!.id },
+      ],
+    });
+    expect(selected.preserved).toBe(false);
+    expect(selected.availableGain).toBeCloseTo(0.06, 12);
+    expect(selected.result.changes).toHaveLength(2);
+  });
+
+  it("preserves coherent WR/FLEX assignments and actual starter/bench locks", () => {
+    const slots = createRosterSlots([
+      { type: "WR", count: 1 },
+      { type: "FLEX", count: 1 },
+      { type: "BENCH", count: 2 },
+    ]);
+    const currentAssignments = [
+      { playerId: playerId("wr-current"), slotId: slots[0]!.id },
+      { playerId: playerId("rb-locked"), slotId: slots[1]!.id },
+    ];
+    const selected = preserve({
+      players: [
+        makePlayer("wr-current", ["WR"]),
+        makePlayer("wr-upgrade", ["WR"]),
+        makePlayer("rb-locked", ["RB"]),
+        makePlayer("wr-benched", ["WR"]),
+      ],
+      slots,
+      projections: {
+        "wr-current": projection(10),
+        "wr-upgrade": projection(10.023),
+        "rb-locked": projection(20),
+        "wr-benched": projection(40),
+      },
+      currentAssignments,
+      locks: [
+        { ...currentAssignments[1]!, kind: "STARTER" },
+        { playerId: playerId("wr-benched"), kind: "BENCH" },
+      ],
+    });
+    expect(selected.preserved).toBe(true);
+    expect(selected.result.projectedPoints).toBe(30);
+    expect(selected.result.changes).toEqual([]);
+    expect(selected.result.assignments).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ ...currentAssignments[0], locked: false }),
+        expect.objectContaining({ ...currentAssignments[1], locked: true }),
+      ]),
+    );
+    expect(selected.result.benchPlayerIds).toEqual([
+      playerId("wr-benched"),
+      playerId("wr-upgrade"),
+    ]);
+  });
+
+  it("does not report preservation when the optimum already retains the current lineup", () => {
+    const selected = preserve(fixture(10, 10));
+    expect(selected.preserved).toBe(false);
+    expect(selected.result).toBe(selected.optimum);
+    expect(selected.result.changes).toEqual([]);
+  });
+
+  it("refuses an incomplete current lineup", () => {
+    const selected = preserve({ ...fixture(), currentAssignments: [] });
+    expect(selected.preserved).toBe(false);
+    expect(selected.result).toBe(selected.optimum);
+  });
+
+  it("refuses a current starter who is ineligible for the assigned slot", () => {
+    const input = fixture();
+    const selected = preserve({
+      ...input,
+      players: [makePlayer("current", ["WR"]), makePlayer("upgrade", ["QB"])],
+    });
+    expect(selected.optimum.feasible).toBe(true);
+    expect(selected.preserved).toBe(false);
+  });
+
+  it.each(["player", "slot"] as const)("refuses duplicate current %s assignments", (duplicate) => {
+    const slots = createRosterSlots([
+      { type: "WR", count: 2 },
+      { type: "BENCH", count: 1 },
+    ]);
+    const selected = preserve({
+      players: ["first", "second", "upgrade"].map((id) => makePlayer(id, ["WR"])),
+      slots,
+      projections: {
+        first: projection(10),
+        second: projection(10),
+        upgrade: projection(10.023),
+      },
+      currentAssignments: [
+        { playerId: playerId("first"), slotId: slots[0]!.id },
+        {
+          playerId: playerId(duplicate === "player" ? "first" : "second"),
+          slotId: slots[duplicate === "slot" ? 0 : 1]!.id,
+        },
+      ],
+    });
+    expect(selected.preserved).toBe(false);
+  });
+
+  it("requires enough bench capacity for the complete roster", () => {
+    const input = fixture();
+    const selected = preserve(
+      input,
+      input.slots.filter(({ kind }) => kind === "STARTER"),
+    );
+    expect(selected.optimum.feasible).toBe(true);
+    expect(selected.preserved).toBe(false);
+  });
+
+  it("requires the remaining players to fit constrained bench eligibility", () => {
+    const base = fixture();
+    const input = {
+      ...base,
+      players: [makePlayer("current", ["QB", "WR"]), makePlayer("upgrade", ["QB"])],
+    };
+    const rosterSlots = input.slots.map((slot) =>
+      slot.kind === "STARTER" ? slot : { ...slot, eligiblePositions: ["WR"] as const },
+    );
+    const selected = preserve(input, rosterSlots);
+    expect(selected.optimum.feasible).toBe(true);
+    expect(selected.preserved).toBe(false);
+  });
+
+  it("does not describe an optimum with an illegal remaining bench as an available gain", () => {
+    const base = fixture();
+    const input = {
+      ...base,
+      players: [makePlayer("current", ["QB"]), makePlayer("upgrade", ["QB", "WR"])],
+    };
+    const rosterSlots = input.slots.map((slot) =>
+      slot.kind === "STARTER" ? slot : { ...slot, eligiblePositions: ["WR"] as const },
+    );
+    const selected = preserve(input, rosterSlots);
+    expect(selected.optimum.feasible).toBe(true);
+    expect(selected.preserved).toBe(false);
+    expect(selected.availableGain).toBe(0);
+    expect(selected.result).toBe(selected.optimum);
+  });
+
+  it.each(["STARTER", "BENCH"] as const)("never overrides an existing %s lock", (kind) => {
+    const input = fixture();
+    const selected = preserve({
+      ...input,
+      locks: [
+        kind === "STARTER"
+          ? { playerId: playerId("upgrade"), kind, slotId: input.slots[0]!.id }
+          : { playerId: playerId("current"), kind },
+      ],
+    });
+    expect(selected.optimum.feasible).toBe(true);
+    expect(selected.preserved).toBe(false);
+  });
+
+  it.each([undefined, Number.NaN, Number.POSITIVE_INFINITY])(
+    "refuses a current projection that is missing or nonfinite: %s",
+    (value) => {
+      const input = fixture(0, 0.023);
+      const selected = preserve({
+        ...input,
+        projections: {
+          ...(value === undefined ? {} : { current: projection(value) }),
+          upgrade: projection(0.023),
+        },
+      });
+      expect(selected.preserved).toBe(false);
+      expect(selected.result).toBe(selected.optimum);
+    },
+  );
+
+  it("refuses an infeasible optimum", () => {
+    const input = fixture();
+    const selected = preserve({ ...input, players: [] });
+    expect(selected.optimum.feasible).toBe(false);
+    expect(selected.preserved).toBe(false);
+  });
 });
 
 describe("optimizeLineup", () => {

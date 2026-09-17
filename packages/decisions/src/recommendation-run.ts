@@ -21,7 +21,7 @@ import {
  * so an upgraded algorithm cannot replay a stale row and cannot be mistaken for the old one when
  * WP5 diffs consecutive runs.
  */
-export const RECOMMENDATION_ALGORITHM_VERSION = "in-season-decisions-v7";
+export const RECOMMENDATION_ALGORITHM_VERSION = "in-season-decisions-v8";
 
 /**
  * What a digest is computed *for*.

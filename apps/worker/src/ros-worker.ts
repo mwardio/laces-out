@@ -1,6 +1,6 @@
 import { loadEnvironment } from "@laces-out/config";
 import { createDatabase } from "@laces-out/db";
-import { PgBoss } from "pg-boss";
+import { createJobQueue } from "@laces-out/jobs";
 import pino from "pino";
 
 import { databaseFirstPartyRosCandidateProvider } from "./first-party-ros-candidate-provider.js";
@@ -19,13 +19,16 @@ const service = new FirstPartyRosProjectionShadowService({
     buildTargets: buildFirstPartyRosTargetsInWorker,
   },
 });
-const boss = new PgBoss({
-  connectionString: environment.DATABASE_URL,
-  application_name: "fantasy-ros-worker",
-  schema: "pgboss",
-  supervise: true,
-  schedule: false,
-});
+const boss = createJobQueue(
+  {
+    connectionString: environment.DATABASE_URL,
+    application_name: "fantasy-ros-worker",
+    schema: "pgboss",
+    supervise: true,
+    schedule: false,
+  },
+  logger,
+);
 
 async function start(): Promise<void> {
   await boss.start();

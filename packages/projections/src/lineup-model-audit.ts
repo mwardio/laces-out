@@ -1,11 +1,11 @@
 import {
   firstPartyRecentRoleContext,
   applyFirstPartyProjectionChampionPolicy,
-  applyFirstPartyProjectionFinalPolicy,
   evaluateFirstPartyBacktestForScoringProfile,
   runFirstPartyProjectionBacktest,
   type FirstPartyBacktestPrediction,
   type FirstPartyProjectionTarget,
+  type FirstPartyProjectionBacktest,
   type FirstPartyWeeklyStatLine,
 } from "./first-party.js";
 import {
@@ -24,6 +24,7 @@ export type LineupChallenger = (typeof LINEUP_CHALLENGERS)[number];
 const ordinal = (row: { season: number; week: number }) => row.season * 25 + row.week;
 const clamp = (value: number, low: number, high: number) => Math.min(high, Math.max(low, value));
 const supported = (position: string) => ["RB", "WR", "TE"].includes(position);
+const samePoints = (left: number, right: number) => Math.abs(left - right) <= 1e-9;
 interface PreparedAuditHistory {
   readonly prior: readonly FirstPartyWeeklyStatLine[];
   readonly players: ReadonlyMap<string, readonly FirstPartyWeeklyStatLine[]>;
@@ -163,7 +164,10 @@ function metrics(rows: readonly AuditRow[]) {
   }
   let pairs = 0,
     baselineRegret = 0,
-    candidateRegret = 0;
+    candidateRegret = 0,
+    rankedPairs = 0,
+    baselineCorrect = 0,
+    candidateCorrect = 0;
   for (const batch of weeks.values()) {
     for (let a = 0; a < batch.length; a++)
       for (let b = a + 1; b < batch.length; b++) {
@@ -177,16 +181,28 @@ function metrics(rows: readonly AuditRow[]) {
         )
           continue;
         const regret = (leftPrediction: number, rightPrediction: number) => {
-          const chosen =
-            leftPrediction === rightPrediction
-              ? (left.actual + right.actual) / 2
-              : leftPrediction > rightPrediction
-                ? left.actual
-                : right.actual;
+          if (samePoints(left.actual, right.actual)) return 0;
+          const chosen = samePoints(leftPrediction, rightPrediction)
+            ? (left.actual + right.actual) / 2
+            : leftPrediction > rightPrediction
+              ? left.actual
+              : right.actual;
           return Math.max(left.actual, right.actual) - chosen;
         };
         baselineRegret += regret(left.baseline, right.baseline);
         candidateRegret += regret(left.candidate, right.candidate);
+        if (!samePoints(left.actual, right.actual)) {
+          const correct = (leftPrediction: number, rightPrediction: number) =>
+            samePoints(leftPrediction, rightPrediction)
+              ? 0.5
+              : Number(
+                  Math.sign(leftPrediction - rightPrediction) ===
+                    Math.sign(left.actual - right.actual),
+                );
+          baselineCorrect += correct(left.baseline, right.baseline);
+          candidateCorrect += correct(left.candidate, right.candidate);
+          rankedPairs++;
+        }
         pairs++;
       }
   }
@@ -200,6 +216,9 @@ function metrics(rows: readonly AuditRow[]) {
     comparisonPairs: pairs,
     baselineRegret: pairs ? baselineRegret / pairs : null,
     candidateRegret: pairs ? candidateRegret / pairs : null,
+    rankedPairs,
+    baselineRankAccuracy: rankedPairs ? baselineCorrect / rankedPairs : null,
+    candidateRankAccuracy: rankedPairs ? candidateCorrect / rankedPairs : null,
   };
 }
 
@@ -305,10 +324,6 @@ export function auditLineupChallenger(input: {
   };
   const champion = applyFirstPartyProjectionChampionPolicy(challengerBacktest, input.profile);
   const rolling = evaluateFirstPartyBacktestForScoringProfile(champion.backtest, input.profile);
-  const finalPolicy = evaluateFirstPartyBacktestForScoringProfile(
-    applyFirstPartyProjectionFinalPolicy(challengerBacktest, champion.policy),
-    input.profile,
-  );
   return {
     variant: input.variant,
     scoringProfile: input.profile.id,
@@ -320,10 +335,129 @@ export function auditLineupChallenger(input: {
     clearsResearchGate,
     championPolicy: champion.policy.byPosition,
     rollingPointCalibration: { byPosition: rolling.byPosition, overall: rolling.overall },
-    finalPolicyPointCalibration: {
-      byPosition: finalPolicy.byPosition,
-      overall: finalPolicy.overall,
-    },
     promotion: "disabled-pending-independent-calibration-and-publication-gates" as const,
+  };
+}
+
+const HISTORY_COHORTS = ["0", "1-3", "4-11", "12+"] as const;
+type HistoryCohort = (typeof HISTORY_COHORTS)[number];
+const historyCohort = (games: number): HistoryCohort =>
+  games === 0 ? "0" : games <= 3 ? "1-3" : games <= 11 ? "4-11" : "12+";
+const playerWeekKey = (row: { playerId: string; season: number; week: number }) =>
+  `${row.playerId}:${ordinal(row)}`;
+
+/**
+ * Scores locked historical forecasts without retroactively applying the final live strategy.
+ * Coverage counts describe supplied historical outcomes, not a reconstructed preseason roster.
+ */
+export function auditLineupProduction(input: {
+  readonly history: readonly FirstPartyWeeklyStatLine[];
+  readonly backtest: FirstPartyProjectionBacktest;
+  readonly profile: ProjectionScoringProfile;
+}) {
+  const priorGames = new Map<string, number>();
+  const historyCounts = new Map<string, number>();
+  const historyWeeks = new Map<number, FirstPartyWeeklyStatLine[]>();
+  for (const row of input.history) {
+    if (!supported(row.position)) continue;
+    const week = ordinal(row);
+    const batch = historyWeeks.get(week) ?? [];
+    batch.push(row);
+    historyWeeks.set(week, batch);
+  }
+  for (const week of [...historyWeeks.keys()].sort((a, b) => a - b)) {
+    const rows = historyWeeks.get(week)!;
+    for (const row of rows) {
+      const key = playerWeekKey(row);
+      if (priorGames.has(key)) throw new Error("Duplicate historical lineup outcome");
+      priorGames.set(key, historyCounts.get(row.playerId) ?? 0);
+    }
+    for (const row of rows) {
+      if (row.played === false) continue;
+      const key = row.playerId;
+      historyCounts.set(key, (historyCounts.get(key) ?? 0) + 1);
+    }
+  }
+  const champion = applyFirstPartyProjectionChampionPolicy(input.backtest, input.profile);
+  const rolling = evaluateFirstPartyBacktestForScoringProfile(
+    {
+      ...champion.backtest,
+      predictions: champion.backtest.predictions.filter((row) => supported(row.position)),
+    },
+    input.profile,
+  );
+  const rows: Array<AuditRow & { readonly cohort: HistoryCohort }> = [];
+  const seen = new Set<string>();
+  for (const prediction of champion.backtest.predictions) {
+    if (!supported(prediction.position)) continue;
+    const key = playerWeekKey(prediction);
+    const count = priorGames.get(key);
+    if (count === undefined)
+      throw new Error("Backtest outcome is absent from the supplied history");
+    if (seen.has(key)) throw new Error("Duplicate historical lineup prediction");
+    seen.add(key);
+    rows.push({
+      season: prediction.season,
+      week: prediction.week,
+      position: prediction.position,
+      baseline: scoreProjectionStatComponents(prediction.baseline, input.profile),
+      candidate: scoreProjectionStatComponents(prediction.predicted, input.profile),
+      actual: scoreProjectionStatComponents(prediction.actual, input.profile),
+      limitedHistory: count <= 3,
+      roleChanged: false,
+      cohort: historyCohort(count),
+    });
+  }
+  const evaluatedWeeks = new Set(input.backtest.predictions.map(ordinal));
+  const outcomeCounts = new Map<HistoryCohort, number>();
+  for (const [week, batch] of historyWeeks) {
+    if (!evaluatedWeeks.has(week)) continue;
+    for (const row of batch) {
+      const cohort = historyCohort(priorGames.get(playerWeekKey(row))!);
+      outcomeCounts.set(cohort, (outcomeCounts.get(cohort) ?? 0) + 1);
+    }
+  }
+  return {
+    scoringProfile: input.profile.id,
+    comparison: "prior-week-champion-vs-recency-only" as const,
+    pointMetrics: "raw-component-centers" as const,
+    pairPopulation: "same-week-flex-pairs-with-baseline-at-least-5-and-gap-at-most-5" as const,
+    overall: metrics(rows),
+    byPosition: Object.fromEntries(
+      ["RB", "WR", "TE"].map((position) => [
+        position,
+        metrics(rows.filter((row) => row.position === position)),
+      ]),
+    ),
+    byWeek: Object.fromEntries(
+      [...evaluatedWeeks]
+        .sort((a, b) => a - b)
+        .map((week) => {
+          const batch = rows.filter((row) => ordinal(row) === week);
+          return [`${Math.floor(week / 25)}:${week % 25}`, metrics(batch)];
+        }),
+    ),
+    historyCohorts: Object.fromEntries(
+      HISTORY_COHORTS.map((cohort) => {
+        const selected = rows.filter((row) => row.cohort === cohort);
+        const observedOutcomeRows = outcomeCounts.get(cohort) ?? 0;
+        return [
+          cohort,
+          {
+            observedOutcomeRows,
+            predictedRows: selected.length,
+            omittedOutcomeRows: observedOutcomeRows - selected.length,
+            ...metrics(selected),
+          },
+        ];
+      }),
+    ),
+    rollingPointCalibration: { byPosition: rolling.byPosition, overall: rolling.overall },
+    finalLivePolicy: champion.policy.byPosition,
+    limitations: [
+      "History-cohort coverage uses supplied historical outcomes in evaluated weeks; it is not a pre-kickoff roster reconstruction.",
+      "A cohort without locked predictions has no measured accuracy; the existing backtest excludes players without recent prior fantasy relevance.",
+      "Pair rank and regret use raw component centers, not calibrated live fantasy-point centers or user roster choices.",
+    ],
   };
 }

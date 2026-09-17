@@ -6,16 +6,45 @@ import {
   NflverseTeamWeeklyStatsSource,
   NflverseWeeklyRostersSource,
   NflverseWeeklyStatsSource,
+  NflversePlayByPlaySource,
+  snapshotNflversePlayByPlay,
+  fourthDownStopsFromPlayByPlay,
   type NflverseDatasetState,
 } from "@laces-out/source-nflverse";
 
-import type { FirstPartyRosPosition } from "@laces-out/projections";
+import path from "node:path";
+import {
+  FIRST_PARTY_ROS_MODEL_VERSION,
+  FIRST_PARTY_ROS_OUTCOME_SCHEMA_VERSION,
+  type FirstPartyRosPosition,
+} from "@laces-out/projections";
 
 import {
   buildHistoricalRosBacktest,
   historicalRosBucket,
   HISTORICAL_ROS_SUPPORTED_POSITIONS,
+  HISTORICAL_ROS_CANDIDATE_PAIR_VERSION,
+  HISTORICAL_ROS_PRODUCTION_BASIS_VERSION,
+  type HistoricalRosBacktestResult,
 } from "../src/first-party-ros-backtest.js";
+import { createRosOutcomeCache } from "../src/ros-outcome-cache.js";
+import { createRosOutcomeSimulationPool } from "../src/ros-outcome-simulation-pool.js";
+import {
+  createRosHistoricalOutcomeEvaluator,
+  rosHistoricalOutcomeCacheKey,
+} from "../src/ros-historical-outcome-replay.js";
+import {
+  createRosHistoricalCorpusStore,
+  ROS_HISTORICAL_CORPUS_SCHEMA_VERSION,
+} from "../src/ros-historical-corpus.js";
+import { replayRosHistoricalCorpus } from "../src/ros-historical-corpus-replay.js";
+import {
+  ROS_HISTORICAL_CORPUS_BUILD_PROTOCOL,
+  ROS_HISTORICAL_CORPUS_RELEASE_THRESHOLDS,
+  hasCurrentRosHistoricalCoverageThresholds,
+  hasRosHistoricalCorpusReleaseThresholds,
+  isCurrentRosHistoricalCorpusBuildProtocol,
+} from "../src/ros-historical-corpus-protocol.js";
 import {
   buildFirstPartyPlayerHistory,
   buildFirstPartyDefenseHistory,
@@ -39,6 +68,7 @@ import {
   type RosCoveragePosition,
   type RosPlayerCoverageFact,
   type RosScheduleCoverageFact,
+  type RosHistoricalCoverageReport,
 } from "../src/ros-data-coverage.js";
 import { nflEasternKickoffAt } from "../src/nflverse-schedules.js";
 
@@ -109,6 +139,21 @@ function requireChanged<T extends { readonly state: string }>(
 
 async function main(): Promise<void> {
   const startedAt = Date.now();
+  const outcomeDirectory = process.argv
+    .find((value) => value.startsWith("--outcome-cache="))
+    ?.slice("--outcome-cache=".length);
+  const replayCorpus = process.argv
+    .find((value) => value.startsWith("--replay-corpus="))
+    ?.slice("--replay-corpus=".length);
+  if (replayCorpus && !outcomeDirectory)
+    throw new Error("--replay-corpus requires --outcome-cache");
+  const outcomeCache = outcomeDirectory
+    ? createRosOutcomeCache({ directory: outcomeDirectory })
+    : undefined;
+  const corpusStore = outcomeDirectory
+    ? createRosHistoricalCorpusStore({ directory: path.join(outcomeDirectory, "corpora") })
+    : undefined;
+  let outcomeCorpusIdentity: string | undefined;
   const cacheDirectory = process.argv
     .find((value) => value.startsWith("--source-cache="))
     ?.slice("--source-cache=".length);
@@ -146,6 +191,51 @@ async function main(): Promise<void> {
     throw new Error("Every holdout requires at least three earlier source seasons");
   }
 
+  if (replayCorpus) {
+    const loaded = await corpusStore!.read(replayCorpus);
+    if (loaded.state !== "hit") throw new Error(`ROS historical corpus is ${loaded.state}`);
+    const corpus = loaded.corpus;
+    const expectedPositions = positions ?? HISTORICAL_ROS_SUPPORTED_POSITIONS;
+    if (
+      !isCurrentRosHistoricalCorpusBuildProtocol(corpus.buildProtocol) ||
+      !hasRosHistoricalCorpusReleaseThresholds(corpus.options) ||
+      !hasCurrentRosHistoricalCoverageThresholds(corpus.coverage.thresholds) ||
+      JSON.stringify([...corpus.options.heldOutSeasons].sort()) !==
+        JSON.stringify([...heldOutSeasons].sort()) ||
+      JSON.stringify([...corpus.options.asOfWeeks].sort()) !==
+        JSON.stringify([...asOfWeeks].sort()) ||
+      JSON.stringify([...corpus.options.positions].sort()) !==
+        JSON.stringify([...expectedPositions].sort()) ||
+      JSON.stringify(corpus.sourceAudit.map((row) => row.season).sort()) !==
+        JSON.stringify([...seasons].sort()) ||
+      corpus.options.playersPerPosition !== playersPerPosition ||
+      corpus.options.maximumForecasts !== maximumForecasts ||
+      corpus.weeklyModelVersion !== HISTORICAL_ROS_CANDIDATE_PAIR_VERSION ||
+      corpus.productionBasis !== HISTORICAL_ROS_PRODUCTION_BASIS_VERSION
+    )
+      throw new Error(
+        "ROS historical corpus does not match requested model, seasons or validation scope",
+      );
+    process.stderr.write(
+      `Rescoring immutable football corpus ${replayCorpus} (no source fetch, fitting or simulation)...\n`,
+    );
+    const result = await replayRosHistoricalCorpus({
+      corpus,
+      cache: outcomeCache!,
+      scoringProfile: scoringProfile.profile,
+    });
+    emitReport({
+      result,
+      positions,
+      scoringProfile,
+      coverage: corpus.coverage,
+      sourceAudit: corpus.sourceAudit,
+      startedAt,
+      outcomeCorpusIdentity: replayCorpus,
+    });
+    return;
+  }
+
   process.stderr.write(
     `Scoring profile: ${scoringProfile.key} (${scoringProfile.label}, digest ${scoringProfile.digest.slice(0, 12)})\n`,
   );
@@ -172,14 +262,21 @@ async function main(): Promise<void> {
   const schedules: ProjectionScheduleFact[] = [];
   const coveragePlayers: RosPlayerCoverageFact[] = [];
   const coverageSchedules: RosScheduleCoverageFact[] = [];
-  const sourceAudit: Array<Record<string, unknown>> = [];
+  const sourceAudit: Array<Record<string, string | number>> = [];
 
   for (const season of seasons) {
     process.stderr.write(`  ${season}: player/team stats, rosters, injuries, snaps, schedule\n`);
+    const playByPlay = snapshotNflversePlayByPlay(
+      new NflversePlayByPlaySource(sourceOptions),
+      season,
+    );
     const [weeklyResult, teamWeeklyResult, rosterResult, injuryResult, snapResult, scheduleResult] =
       await Promise.all([
-        new NflverseWeeklyStatsSource(sourceOptions).check(season, emptyState),
-        new NflverseTeamWeeklyStatsSource(sourceOptions).check(season, emptyState),
+        new NflverseWeeklyStatsSource({ ...sourceOptions, playByPlay }).check(season, emptyState),
+        new NflverseTeamWeeklyStatsSource({
+          ...sourceOptions,
+          fourthDowns: fourthDownStopsFromPlayByPlay(playByPlay),
+        }).check(season, emptyState),
         new NflverseWeeklyRostersSource(sourceOptions).check(season, emptyState),
         new NflverseInjuriesSource(sourceOptions).check(season, emptyState),
         new NflverseSnapCountsSource(sourceOptions).check(season, emptyState),
@@ -315,6 +412,8 @@ async function main(): Promise<void> {
     sourceAudit.push({
       season,
       weeklyStatsChecksum: weeklyArtifact.checksumSha256,
+      playerWeeklyRawChecksum: weeklyArtifact.playerWeeklyChecksumSha256!,
+      playerTouchdownPlayByPlayChecksum: weeklyArtifact.playByPlayChecksumSha256!,
       teamWeeklyStatsChecksum: teamWeeklyArtifact.checksumSha256,
       weeklyRosterChecksum: rosterArtifact.checksumSha256,
       injuryChecksum: injuryArtifact.checksumSha256,
@@ -392,35 +491,139 @@ async function main(): Promise<void> {
     `Building paired forecasts (${playersPerPosition}/position/cutoff, max ${maximumForecasts}${positions === undefined ? "" : `, positions ${positions.join(",")}`})...\n`,
   );
   let phaseStartedAt = Date.now();
-  const result = buildHistoricalRosBacktest({
-    history,
-    defenseHistory,
-    rosters,
-    injuries,
-    schedules,
-    coverage,
-    scoringProfile: scoringProfile.profile,
-    onProgress: (event) => {
-      const now = Date.now();
+  const simulationAbort = new AbortController();
+  const abortSimulation = () => simulationAbort.abort(new Error("ROS corpus build interrupted"));
+  process.once("SIGTERM", abortSimulation);
+  process.once("SIGINT", abortSimulation);
+  const simulationPool = outcomeCache
+    ? createRosOutcomeSimulationPool({ signal: simulationAbort.signal })
+    : undefined;
+  let result: HistoricalRosBacktestResult;
+  try {
+    result = await buildHistoricalRosBacktest({
+      history,
+      defenseHistory,
+      rosters,
+      injuries,
+      schedules,
+      coverage,
+      scoringProfile: scoringProfile.profile,
+      ...(outcomeCache && corpusStore
+        ? {
+            projectionEvaluator: createRosHistoricalOutcomeEvaluator({
+              cache: outcomeCache,
+              mode: "build",
+              signal: simulationAbort.signal,
+              simulate: simulationPool!.simulate,
+            }),
+            onPrepared: async (prepared) => {
+              const written = await corpusStore.write({
+                schemaVersion: ROS_HISTORICAL_CORPUS_SCHEMA_VERSION,
+                buildProtocol: ROS_HISTORICAL_CORPUS_BUILD_PROTOCOL,
+                modelVersion: FIRST_PARTY_ROS_MODEL_VERSION,
+                outcomeSchemaVersion: FIRST_PARTY_ROS_OUTCOME_SCHEMA_VERSION,
+                weeklyModelVersion: HISTORICAL_ROS_CANDIDATE_PAIR_VERSION,
+                productionBasis: HISTORICAL_ROS_PRODUCTION_BASIS_VERSION,
+                sourceChecksums: {
+                  catalog: catalog.checksumSha256,
+                  ...Object.fromEntries(
+                    sourceAudit.flatMap((row) =>
+                      Object.entries(row)
+                        .filter(([key]) => key.endsWith("Checksum"))
+                        .map(([key, value]) => [`${row.season}:${key}`, String(value)]),
+                    ),
+                  ),
+                },
+                sourceAudit,
+                coverage,
+                options: prepared.options,
+                seasons: prepared.qualifiedSeasons,
+                skippedForecasts: prepared.skippedForecasts,
+                kickerFamilyAudit: prepared.kickerFamilyAudits,
+                forecasts: prepared.drafts.map((draft) => ({
+                  forecast: {
+                    playerId: draft.forecast.playerId,
+                    position: draft.forecast.position,
+                    contextualModelVersion: draft.forecast.contextualModelVersion,
+                    recencyModelVersion: draft.forecast.recencyModelVersion,
+                    intervalMethodVersion: draft.forecast.intervalMethodVersion,
+                    forecastSeason: draft.forecast.forecastSeason,
+                    asOfWeek: draft.forecast.asOfWeek,
+                    windowStartWeek: draft.forecast.windowStartWeek,
+                    windowEndWeek: draft.forecast.windowEndWeek,
+                    trainedThroughSeason: draft.forecast.trainedThroughSeason,
+                    inputChecksum: draft.forecast.inputChecksum,
+                  },
+                  contextualKey: rosHistoricalOutcomeCacheKey(draft.contextualInput),
+                  recencyKey: rosHistoricalOutcomeCacheKey(draft.recencyInput),
+                  actualComponents: draft.actualComponents,
+                  coverage: draft.coverage,
+                  actualGames: Math.min(draft.actualGames, draft.scheduledGames),
+                  scheduledGames: draft.scheduledGames,
+                })),
+              });
+              outcomeCorpusIdentity = written.identity;
+              process.stderr.write(
+                `Reusable football corpus ${written.identity} is ${written.state}\n`,
+              );
+            },
+          }
+        : {}),
+      onProgress: (event) => {
+        const now = Date.now();
+        process.stderr.write(
+          `  ${event.stage}${event.season === undefined ? "" : ` ${event.season}`}: ${event.forecasts} forecasts${event.convergenceStrata === undefined ? "" : `, ${event.convergenceStrata} strata`} (${((now - phaseStartedAt) / 1_000).toFixed(1)}s)\n`,
+        );
+        phaseStartedAt = now;
+      },
+      options: {
+        heldOutSeasons,
+        asOfWeeks,
+        ...(positions === undefined ? {} : { positions }),
+        playersPerPosition,
+        maximumForecasts,
+        ...ROS_HISTORICAL_CORPUS_RELEASE_THRESHOLDS,
+      },
+    });
+  } finally {
+    process.removeListener("SIGTERM", abortSimulation);
+    process.removeListener("SIGINT", abortSimulation);
+    await simulationPool?.close();
+    if (simulationPool)
       process.stderr.write(
-        `  ${event.stage}${event.season === undefined ? "" : ` ${event.season}`}: ${event.forecasts} forecasts${event.convergenceStrata === undefined ? "" : `, ${event.convergenceStrata} strata`} (${((now - phaseStartedAt) / 1_000).toFixed(1)}s)\n`,
+        `ROS simulation worker usage ${JSON.stringify(simulationPool.stats())}\n`,
       );
-      phaseStartedAt = now;
-    },
-    options: {
-      heldOutSeasons,
-      asOfWeeks,
-      ...(positions === undefined ? {} : { positions }),
-      playersPerPosition,
-      maximumForecasts,
-      minimumPortfolioForecasts: 300,
-      minimumPortfolioBatches: 30,
-      minimumCellSamples: 18,
-      minimumCellCutoffs: 3,
-      minimumCellBatches: 9,
-      minimumCellSeasons: 3,
-    },
+  }
+
+  emitReport({
+    result,
+    positions,
+    scoringProfile,
+    coverage,
+    sourceAudit,
+    startedAt,
+    ...(outcomeCorpusIdentity ? { outcomeCorpusIdentity } : {}),
   });
+}
+
+function emitReport(input: {
+  readonly result: HistoricalRosBacktestResult;
+  readonly positions: readonly FirstPartyRosPosition[] | undefined;
+  readonly scoringProfile: ReturnType<typeof rosValidationScoringProfileOption>;
+  readonly coverage: RosHistoricalCoverageReport;
+  readonly sourceAudit: readonly Readonly<Record<string, string | number>>[];
+  readonly startedAt: number;
+  readonly outcomeCorpusIdentity?: string;
+}): void {
+  const {
+    result,
+    positions,
+    scoringProfile,
+    coverage,
+    sourceAudit,
+    startedAt,
+    outcomeCorpusIdentity,
+  } = input;
   // Signed expected-games bias per selected strategy and cell (row-weighted, diagnostic-only):
   // the release gate uses block-weighted MAE, but a signed view identifies systematic hazard
   // mismatch before any threshold tuning is considered.
@@ -461,6 +664,7 @@ async function main(): Promise<void> {
     elapsedSeconds: (Date.now() - startedAt) / 1_000,
     noDatabaseWrites: true,
     sourcePolicy: "official-nflverse-artifacts",
+    ...(outcomeCorpusIdentity ? { outcomeCorpusIdentity } : {}),
     // Recorded so a report can never be misattributed to a profile it was not graded under. The
     // authoritative identity remains `identityAudit.scoringProfileKey`, which admission compares.
     scoringProfile: {

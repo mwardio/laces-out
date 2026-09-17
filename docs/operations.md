@@ -474,6 +474,15 @@ pretending the older artifact was republished. The queue retries four times with
 backoff up to 30 minutes. Exhausted weekly jobs land in `projection-refresh-dead-letter`; exhausted
 ROS jobs land in `ros-projection-refresh-dead-letter`.
 
+Player-stat component schema v4 incorporates touchdown-distance counts from play-by-play. For each
+selected season, weekly publication and the live ROS snapshot require the player and team sources
+to carry the same verified raw play-by-play checksum. Individually fresh source clocks do not
+override this requirement. The paired refresher shares one play-by-play capture and detects
+independent due clocks, missing capture metadata, and archived mismatches. It makes one bounded
+repair attempt for a skipped counterpart while respecting any unexpired refresh claim. A
+failure preserves the last complete observations and published projection sets; it remains
+visible and retryable.
+
 Publication is also gated by locked, strictly prior out-of-sample evaluation. Player forecasts are
 selected per position between the richer contextual model and its transparent recency-only
 challenger using that league's scoring rules. By default, the richer model must reduce MAE by at
@@ -648,7 +657,14 @@ ROS_VALIDATION_SOURCE_CACHE=/absolute/path/to/ros-inputs \
 The first command qualifies the full historical input window without modeling. The second proves
 all required responses can be replayed offline. Cached responses retain their bytes, headers,
 redirects, and checksums; missing or corrupted offline inputs fail closed. With
-`ROS_VALIDATION_SOURCE_CACHE` set, every profile reuses those exact files without upstream requests.
+`ROS_VALIDATION_SOURCE_CACHE` set, the one shared football build uses those exact files without
+upstream requests. The manual release batch saves outcome vectors under its report directory,
+builds them once, then replays each remaining profile without fitting or simulation. A withheld
+first profile still supplies complete shared evidence; an infrastructure failure stops the batch.
+`ROS_VALIDATION_OUTCOME_CACHE` and `ROS_VALIDATION_CORPUS_SHA` can select a verified existing corpus;
+`ROS_VALIDATION_SEASON` selects the target season (default: current UTC year). Resuming a report
+requires the same model/protocol, exact scoring digest and corpus identity. Keep the outcome cache
+alongside reports; completed JSON reports alone cannot rescore a newly added league.
 Run the batch from a fixed source/dependency snapshot in a detached container, retain its reports
 on the host, and label it `laces-out.ros-release-validation=true` so the host's scheduled model
 validator defers while that batch is active. This preparation does not change admission gates.
@@ -661,6 +677,62 @@ the four ESPN/Yahoo variants added September 17. Discovery also accepts fully no
 outside this catalog through the strict `--scoring-profile-key-file` validator interface. It never
 substitutes a nearby scoring format. The manual admission CLI still uses named profiles; the
 isolated service persists dynamically validated profiles through the same admission gates.
+
+The automatic validation worker first builds one scoring-independent historical football corpus
+for each model, target season, source window, and release protocol. The durable
+`ros_validation_outcomes` volume holds immutable outcome vectors, corpus manifests, and a small
+`ready/<protocol-sha256>.json` pointer with source checksums. A reserved PostgreSQL advisory-lock
+session admits one builder across worker processes and model/season identities; a lost session
+aborts its child. Already committed corpora can replay while another corpus builds. The ready
+pointer appears atomically only after the saved corpus and every referenced vector verify.
+Subsequent exact-scoring jobs use `--replay-corpus` to rescore this evidence without downloading
+sources, fitting the football model, or simulating again. Statistical rejection for one profile
+does not invalidate the common football corpus or prevent another profile's independent test.
+Cache misses use two lazy simulator child processes with explicit 512-MiB old-generation heap
+limits; cache-only replays start none. Advanced IPC preserves the joint Float64 component vectors
+without rounding. On Linux and Darwin, the validator runner owns a process group and terminates
+its descendants on cancellation or abnormal exit, including a CPU-bound child that cannot
+process an IPC disconnect callback. The Windows fallback only terminates the direct child.
+The job's 22-hour-30-minute deadline includes waiting for the shared build and replay, leaving
+shutdown time inside its 23-hour queue lease. A retry uses the committed corpus if it became ready
+while the previous attempt was waiting; a child itself remains capped at 22 hours.
+
+`ROS_VALIDATION_OUTCOME_CACHE` selects the mounted directory (default
+`/tmp/laces-ros-outcome-cache`); the source cache remains separate. Model, sampling, cohort,
+calibration, or schema changes create a new protocol identity. A crashed build that never exposed
+a ready pointer can retry. A corrupt ready pointer, missing committed corpus, or corrupted outcome
+fails visibly and never silently starts another per-league build. Preserve the affected identity
+and evidence while investigating; restoring verified cache files or explicitly rebuilding that
+shared protocol is an operator repair. Ordinary league onboarding does not require that repair.
+
+Before building or writing an outcome, corpus, or ready pointer, the cache checks user-available
+filesystem space and reserves 5 GiB plus the pending write's conservative byte budget. Insufficient
+or unverifiable space stops the write with an explicit error and retains committed evidence; reads
+and cache-only replays remain available. This is a best-effort headroom guard, not a filesystem
+quota against unrelated writers. Capacity monitoring must cover the filesystem backing the mounted
+outcome volume, which can differ from the host's temporary filesystem.
+
+After a full CLI build has completed with `--outcome-cache=/absolute/path/to/outcomes`, an operator
+can register its existing corpus for automatic replay using the same directory and the corpus
+`outcomeCorpusIdentity` in the completed report. Run this with the worker's configured `DATABASE_URL` so adoption
+shares its PostgreSQL build lock. The command verifies the current model, complete release scope,
+qualified source coverage, the exact six release thresholds, and every cached outcome before
+atomically publishing the ready pointer. The manifest records immutable model, parser, cohort,
+calibration, interval, and scenario-count versions; adoption and replay reject a different build
+protocol. Each vector must match every referencing forecast's player, strategy, cutoff, checksum,
+and scheduled-game count, even when two references share a key. Adoption does not admit a scoring
+profile or rerun simulations.
+
+`playersPerPosition=8` is a per-cutoff sampling cap, not a guarantee of eight usable forecasts:
+selection takes at most the available eligible players, and unavailable forecasts are counted in
+`skippedForecasts`. Readiness requires every requested season/cutoff/position to be represented;
+statistical admission separately enforces the unchanged portfolio and cell sample minimums.
+
+```bash
+npm run ros:corpus:adopt -w @laces-out/worker -- --season=2026 \
+  --corpus='<64-character lowercase corpus identity from the completed report>' \
+  --outcome-cache=/absolute/path/to/outcomes
+```
 
 ```bash
 npm run ros:validate -w @laces-out/worker -- --scoring-profile=half-ppr --full \

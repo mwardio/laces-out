@@ -1,6 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { auditLineupChallenger, lineupChallengerComponents } from "./lineup-model-audit.js";
-import type { FirstPartyWeeklyStatLine } from "./first-party.js";
+import {
+  auditLineupChallenger,
+  auditLineupProduction,
+  lineupChallengerComponents,
+} from "./lineup-model-audit.js";
+import {
+  runFirstPartyProjectionBacktest,
+  type FirstPartyBacktestPrediction,
+  type FirstPartyWeeklyStatLine,
+} from "./first-party.js";
 
 const target = { playerId: "runner", position: "RB", season: 2026, week: 2, team: "DEN" };
 const baseline = {
@@ -75,6 +83,7 @@ describe("offline lineup challengers", () => {
     expect(result.rollingPointCalibration.overall.mae).toBeCloseTo(6);
     expect(result.rollingPointCalibration.overall.intervalCoverage).toBeNull();
     expect(result.promotion).toContain("disabled");
+    expect(result).not.toHaveProperty("finalPolicyPointCalibration");
   });
   it("reacts to a new-season role within the existing bounded multiplier", () => {
     const projected = lineupChallengerComponents({
@@ -146,5 +155,114 @@ describe("offline lineup challengers", () => {
         baseline: zero,
       }),
     ).toEqual(zero);
+  });
+});
+
+describe("locked production lineup diagnostics", () => {
+  const profile = { id: "yards", rules: [{ statId: "receiving_yards", points: 0.1 }] };
+  const makePrediction = (
+    playerId: string,
+    week: number,
+    actualPoints = 10,
+  ): FirstPartyBacktestPrediction => ({
+    playerId,
+    position: "WR",
+    season: 2025,
+    week,
+    predicted: { receiving_yards: actualPoints * 10 },
+    baseline: { receiving_yards: 80 },
+    actual: { receiving_yards: actualPoints * 10 },
+    floor: { receiving_yards: 0 },
+    ceiling: { receiving_yards: 200 },
+    trainingRows: 100,
+    calibrationRows: 100,
+  });
+  const makeHistory = (
+    predictions: readonly FirstPartyBacktestPrediction[],
+  ): FirstPartyWeeklyStatLine[] =>
+    predictions.map((row) => ({
+      playerId: row.playerId,
+      position: row.position,
+      season: row.season,
+      week: row.week,
+      team: "DEN",
+      played: true,
+      components: row.actual,
+    }));
+  const report = (
+    predictions: readonly FirstPartyBacktestPrediction[],
+    history = makeHistory(predictions),
+  ) =>
+    auditLineupProduction({
+      history,
+      profile,
+      backtest: { ...runFirstPartyProjectionBacktest([]), predictions },
+    });
+
+  it("never backfills early forecasts with the strategy selected after later outcomes", () => {
+    const predictions = Array.from({ length: 9 }, (_, week) =>
+      Array.from({ length: 16 }, (_, player) =>
+        makePrediction(`player-${player}`, week + 1, 10 + (player % 2)),
+      ),
+    ).flat();
+    const result = report(predictions);
+    expect(result.finalLivePolicy.WR?.strategy).toBe("first-party-model");
+    expect(result.byWeek["2025:1"]?.candidateMae).toBe(2.5);
+    expect(result.byWeek["2025:1"]?.candidateMae).toBe(result.byWeek["2025:1"]?.baselineMae);
+    expect(result.byWeek["2025:9"]?.candidateMae).toBe(0);
+    expect(result.byWeek["2025:9"]?.baselineRankAccuracy).toBe(0.5);
+    expect(result.byWeek["2025:9"]?.candidateRankAccuracy).toBe(1);
+    expect(result.byWeek["2025:9"]?.candidateRegret).toBe(0);
+    const prefix = predictions.filter((row) => row.week < 9);
+    const short = report(prefix);
+    for (let week = 1; week < 9; week++)
+      expect(result.byWeek[`2025:${week}`]).toEqual(short.byWeek[`2025:${week}`]);
+  });
+
+  it("reports omitted cold starts separately and counts only prior played games for sparse cohorts", () => {
+    const prediction = makePrediction("experienced", 3);
+    const history = [
+      ...makeHistory([makePrediction("experienced", 1)]),
+      { ...makeHistory([makePrediction("experienced", 2)])[0]!, played: false },
+      ...makeHistory([prediction, makePrediction("rookie", 3)]),
+    ];
+    const result = report([prediction], history);
+    expect(result.historyCohorts["0"]).toMatchObject({
+      observedOutcomeRows: 1,
+      predictedRows: 0,
+      omittedOutcomeRows: 1,
+      candidateMae: null,
+      baselineMae: null,
+    });
+    expect(result.historyCohorts["1-3"]).toMatchObject({
+      observedOutcomeRows: 1,
+      predictedRows: 1,
+      omittedOutcomeRows: 0,
+    });
+    expect(result.overall.samples).toBe(1);
+    expect(result.overall.candidateRankAccuracy).toBeNull();
+    expect(result.overall.comparisonPairs).toBe(0);
+  });
+
+  it("fails on absent or duplicate outcomes instead of silently miscounting cohorts", () => {
+    const prediction = makePrediction("runner", 1);
+    expect(() => report([prediction], [])).toThrow(/absent/);
+    expect(() =>
+      report([prediction], [...makeHistory([prediction]), ...makeHistory([prediction])]),
+    ).toThrow(/Duplicate historical lineup outcome/);
+    expect(() => report([prediction, prediction], makeHistory([prediction]))).toThrow(
+      /Duplicate historical lineup prediction/,
+    );
+  });
+
+  it("treats floating-point noise as tied fantasy scores for rank and regret", () => {
+    const result = report([makePrediction("left", 1, 9), makePrediction("right", 1, 9 + 1e-12)]);
+    expect(result.overall).toMatchObject({
+      comparisonPairs: 1,
+      rankedPairs: 0,
+      baselineRegret: 0,
+      candidateRegret: 0,
+      candidateRankAccuracy: null,
+    });
   });
 });

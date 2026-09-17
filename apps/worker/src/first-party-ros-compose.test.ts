@@ -13,7 +13,11 @@ import {
 } from "./first-party-ros-admission.js";
 import { composeFirstPartyRosValidationReport, sha256Text } from "./first-party-ros-compose.js";
 import { firstPartyRosChampionPolicyChecksum } from "./first-party-ros-publication.js";
-import { HISTORICAL_ROS_KICKER_CALIBRATION_VERSION } from "./first-party-ros-backtest.js";
+import {
+  HISTORICAL_ROS_KICKER_CALIBRATION_VERSION,
+  HISTORICAL_ROS_AVAILABILITY_CALIBRATION_VERSION,
+  HISTORICAL_ROS_ROLE_CALIBRATION_VERSION,
+} from "./first-party-ros-backtest.js";
 
 type JsonObject = Record<string, unknown>;
 
@@ -42,11 +46,14 @@ const pinnedBaseRaw = readFileSync(
 );
 const baseFixture = JSON.parse(pinnedBaseRaw) as JsonObject;
 // Composition is deliberately numeric-model agnostic, but its final structural rail admits only
-// the running model envelope. Keep the pinned v8 evidence payload intact while advancing the
-// three envelope identities changed by the v9 kicker-vocabulary bump.
+// the running model envelope. This synthetic fixture tests composition structure only; changing
+// its version fields never makes the old numerical evidence valid for production admission.
 object(baseFixture.champion).modelVersion = FIRST_PARTY_ROS_MODEL_VERSION;
 object(baseFixture.publicationPolicy).modelVersion = FIRST_PARTY_ROS_MODEL_VERSION;
 object(baseFixture.report).kickerCalibrationVersion = HISTORICAL_ROS_KICKER_CALIBRATION_VERSION;
+object(baseFixture.report).availabilityCalibrationVersion =
+  HISTORICAL_ROS_AVAILABILITY_CALIBRATION_VERSION;
+object(baseFixture.report).roleCalibrationVersion = HISTORICAL_ROS_ROLE_CALIBRATION_VERSION;
 const baseRaw = JSON.stringify(baseFixture);
 
 function positionSlice(target: string): JsonObject {

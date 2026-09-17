@@ -100,16 +100,17 @@ export interface RosHistoricalCoverageReport {
   readonly seasons: readonly RosSeasonCoverage[];
 }
 
-const DEFAULT_THRESHOLDS: RosHistoricalCoverageThresholds = {
-  minimumHeldOutSeasons: 3,
-  minimumAsOfBatches: 30,
-  minimumPriorSeasons: 3,
-  minimumPlayersPerPosition: 1,
-  minimumRosterMatchRate: 0.9,
-  minimumSnapMatchRate: 0.85,
-  maximumSeasons: 12,
-  maximumFacts: 1_000_000,
-};
+export const ROS_HISTORICAL_COVERAGE_DEFAULT_THRESHOLDS: RosHistoricalCoverageThresholds =
+  Object.freeze({
+    minimumHeldOutSeasons: 3,
+    minimumAsOfBatches: 30,
+    minimumPriorSeasons: 3,
+    minimumPlayersPerPosition: 1,
+    minimumRosterMatchRate: 0.9,
+    minimumSnapMatchRate: 0.85,
+    maximumSeasons: 12,
+    maximumFacts: 1_000_000,
+  });
 
 const POSITION_SET = new Set<string>(ROS_COVERAGE_POSITIONS);
 
@@ -141,7 +142,7 @@ function addPlayer(index: Map<string, Set<string>>, key: string, playerId: strin
 function validateThresholds(
   overrides: Partial<RosHistoricalCoverageThresholds> | undefined,
 ): RosHistoricalCoverageThresholds {
-  const thresholds = { ...DEFAULT_THRESHOLDS, ...overrides };
+  const thresholds = { ...ROS_HISTORICAL_COVERAGE_DEFAULT_THRESHOLDS, ...overrides };
   const integerKeys = [
     "minimumHeldOutSeasons",
     "minimumAsOfBatches",

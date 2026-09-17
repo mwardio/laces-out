@@ -4,7 +4,10 @@ import type {
   FirstPartyRosCandidateContext,
   FirstPartyRosCandidateProvider,
 } from "./first-party-ros-projections.js";
-import { buildVerifiedFirstPartyRosTargets } from "./first-party-ros-worker-thread.js";
+import {
+  buildVerifiedFirstPartyRosTargets,
+  createSharedFirstPartyRosTargetBuilder,
+} from "./first-party-ros-worker-thread.js";
 
 const expectedChecksum = "a".repeat(64);
 const changedChecksum = "b".repeat(64);
@@ -58,5 +61,47 @@ describe("buildVerifiedFirstPartyRosTargets", () => {
       buildVerifiedFirstPartyRosTargets({ provider: fixture.provider, context }),
     ).resolves.toEqual([]);
     expect(fixture.buildTargets).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("shared refresh worker", () => {
+  const batchContext = (checksum: string): FirstPartyRosCandidateContext => ({
+    ...context,
+    now: new Date("2026-09-17T12:00:00.000Z"),
+    artifact: { artifactChecksum: checksum } as FirstPartyRosCandidateContext["artifact"],
+    artifacts: ["a", "b"].map(
+      (artifactChecksum) => ({ artifactChecksum }) as FirstPartyRosCandidateContext["artifact"],
+    ),
+  });
+
+  it("shares one batch across simultaneous artifact requests", async () => {
+    const run = vi.fn(async () => ({ a: [], b: [] }));
+    const build = createSharedFirstPartyRosTargetBuilder(run);
+    await Promise.all([build(batchContext("a")), build(batchContext("b"))]);
+    expect(run).toHaveBeenCalledTimes(1);
+    await build(batchContext("a"));
+    expect(run).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not coalesce different source snapshots and clears failed attempts", async () => {
+    const run = vi.fn(async () => ({ a: [], b: [] }));
+    const build = createSharedFirstPartyRosTargetBuilder(run);
+    await Promise.all([
+      build(batchContext("a")),
+      build({ ...batchContext("b"), candidateProviderChecksum: changedChecksum }),
+    ]);
+    expect(run).toHaveBeenCalledTimes(2);
+    run.mockRejectedValueOnce(new Error("worker crashed"));
+    await expect(build(batchContext("a"))).rejects.toThrow("worker crashed");
+    await expect(build(batchContext("b"))).resolves.toEqual([]);
+  });
+
+  it("rejects cancelled work before starting a worker", async () => {
+    const run = vi.fn(async () => ({ a: [], b: [] }));
+    const build = createSharedFirstPartyRosTargetBuilder(run);
+    const controller = new AbortController();
+    controller.abort();
+    await expect(build(batchContext("a"), controller.signal)).rejects.toThrow();
+    expect(run).not.toHaveBeenCalled();
   });
 });

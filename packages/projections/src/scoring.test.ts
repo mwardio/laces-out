@@ -7,9 +7,12 @@ import {
 } from "./scoring-position-keys.js";
 import {
   ESPN_EVERY_N_FLOOR_UNIT_COMPONENTS,
+  SCORING_LONG_TOUCHDOWN_COMPONENTS,
   compileProjectionScorer,
   espnEveryNFloorUnitValue,
   normalizeHistoricalPlayerStatComponents,
+  scoringDerivedComponentValue,
+  scoringWholeGroupSourceExpectation,
   projectionScoringProfileKey,
   projectionScoringProfilesAreCompatible,
   scoreProjectionStatComponents,
@@ -18,6 +21,28 @@ import {
 } from "./scoring.js";
 
 describe("normalizeHistoricalPlayerStatComponents", () => {
+  it("preserves exact long-TD observations without inferring them from explosive plays or game yards", () => {
+    for (const { total, fortyPlus, fiftyPlus } of SCORING_LONG_TOUCHDOWN_COMPONENTS) {
+      const family = total.replace("_touchdowns", "");
+      const missing = normalizeHistoricalPlayerStatComponents({
+        [total]: 2,
+        [`${family}_yards`]: 250,
+        [`${family}_40`]: 3,
+      });
+      expect(missing[fortyPlus]).toBeUndefined();
+      expect(missing[fiftyPlus]).toBeUndefined();
+      const observed = { ...missing, [fortyPlus]: 2, [fiftyPlus]: 1 };
+      expect(normalizeHistoricalPlayerStatComponents(observed)).toMatchObject(observed);
+      expect(
+        normalizeHistoricalPlayerStatComponents({
+          [total]: 0,
+          [fortyPlus]: 0,
+          [fiftyPlus]: 0,
+        }),
+      ).toMatchObject({ [total]: 0, [fortyPlus]: 0, [fiftyPlus]: 0 });
+    }
+  });
+
   it("adds the canonical aggregate fields used by league scoring without dropping source fields", () => {
     expect(
       normalizeHistoricalPlayerStatComponents({
@@ -100,19 +125,152 @@ describe("normalizeHistoricalPlayerStatComponents", () => {
     }
   });
 
-  it("treats absent or non-finite aggregate inputs as zero", () => {
+  it("matches official ESPN negative-yardage every-N zeros without excluding the observation", () => {
+    // Primary API observations and numeric provider IDs are recorded in
+    // docs/scoring-transform-evidence-2026-09-17.md.
+    expect(espnEveryNFloorUnitValue({ rushing_yards: -14 }, "rushing_yards_per_10_units")).toBe(0);
+    expect(espnEveryNFloorUnitValue({ receiving_yards: -5 }, "receiving_yards_per_5_units")).toBe(
+      0,
+    );
+    expect(
+      espnEveryNFloorUnitValue({ punt_return_yards: -10 }, "punt_return_yards_per_10_units"),
+    ).toBe(0);
+    expect(espnEveryNFloorUnitValue({ rushing_yards: 99 }, "rushing_yards_per_10_units")).toBe(9);
+    expect(
+      scoringWholeGroupSourceExpectation(
+        { rushing_yards: 0, rushing_yards_nonnegative: 5 },
+        "rushing_yards",
+      ),
+    ).toBe(5);
+    expect(
+      scoringWholeGroupSourceExpectation({ rushing_yards: 0 }, "rushing_yards"),
+    ).toBeUndefined();
+  });
+
+  it("preserves signed return yardage without inventing missing count or event observations", () => {
     expect(
       normalizeHistoricalPlayerStatComponents({
-        fumbles_lost_total: Number.NaN,
         punt_return_yards: -1,
+        kickoff_return_yards: 0,
       }),
     ).toMatchObject({
-      fumbles_lost: 0,
-      turnovers: 0,
-      two_point_conversions: 0,
-      return_yards: 0,
-      return_touchdowns: 0,
+      return_yards: -1,
     });
+    const unknown = normalizeHistoricalPlayerStatComponents({});
+    expect(unknown).toEqual({});
+    expect(
+      normalizeHistoricalPlayerStatComponents({ punt_return_yards: -1 }).return_yards,
+    ).toBeUndefined();
+  });
+
+  it("preserves canonical-only observations and remains idempotent", () => {
+    const canonical = {
+      fumbles_lost: 1,
+      turnovers: 3,
+      return_yards: 35,
+      passing_yards_400_plus_probability: 1,
+      field_goals_made_0_39: 2,
+      receiving_yards_nonnegative: 12,
+      receiving_yards_per_10_units: 1,
+    };
+    const first = normalizeHistoricalPlayerStatComponents(canonical);
+    expect(first).toMatchObject(canonical);
+    expect(first.return_yards_nonnegative).toBe(35);
+    expect(first).not.toHaveProperty("receiving_yards");
+    expect(normalizeHistoricalPlayerStatComponents(first)).toEqual(first);
+  });
+
+  it("derives complete source aggregates without erasing a canonical aggregate from partial sources", () => {
+    expect(
+      normalizeHistoricalPlayerStatComponents({
+        field_goals_made_0_39: 2,
+        field_goals_made_20_29: 1,
+        fumbles_lost: 1,
+        turnovers: 3,
+      }),
+    ).toMatchObject({ field_goals_made_0_39: 2, fumbles_lost: 1, turnovers: 3 });
+    expect(
+      normalizeHistoricalPlayerStatComponents({
+        field_goals_made_0_39: 9,
+        field_goals_made_0_19: 0,
+        field_goals_made_20_29: 1,
+        field_goals_made_30_39: 1,
+        fumbles_lost_total: 1,
+        passing_interceptions: 2,
+      }),
+    ).toMatchObject({ field_goals_made_0_39: 2, fumbles_lost: 1, turnovers: 3 });
+  });
+
+  it("counts blocked extra points as misses for both providers without inventing absent attempts", () => {
+    // Karty 2025 week 2: nflverse pat_missed=0, pat_blocked=1; ESPN 88 and Yahoo 30 both=1.
+    const normalized = normalizeHistoricalPlayerStatComponents({
+      extra_points_attempted: 4,
+      extra_points_made: 3,
+      extra_points_missed: 0,
+    });
+    expect(normalized.extra_points_missed).toBe(1);
+    expect(normalizeHistoricalPlayerStatComponents(normalized)).toEqual(normalized);
+    expect(
+      normalizeHistoricalPlayerStatComponents({ extra_points_missed: 2 }).extra_points_missed,
+    ).toBe(2);
+    expect(
+      normalizeHistoricalPlayerStatComponents({ extra_points_made: 3 }).extra_points_missed,
+    ).toBeUndefined();
+    expect(
+      normalizeHistoricalPlayerStatComponents({
+        extra_points_attempted: 2,
+        extra_points_made: 3,
+      }).extra_points_missed,
+    ).toBeUndefined();
+  });
+
+  it("retains inclusive field-goal distance buckets and derives total misses without double counting blocks", () => {
+    const normalized = normalizeHistoricalPlayerStatComponents({
+      field_goals_attempted: 6,
+      field_goals_made: 4,
+      field_goals_missed: 0,
+      field_goals_blocked: 2,
+      field_goals_blocked_30_39: 1,
+      field_goals_blocked_40_49: 1,
+      field_goals_missed_0_19: 0,
+      field_goals_missed_20_29: 0,
+      field_goals_missed_30_39: 1,
+      field_goals_missed_40_49: 1,
+    });
+    expect(normalized).toMatchObject({
+      field_goals_missed: 2,
+      field_goals_missed_0_39: 1,
+      field_goals_missed_30_39: 1,
+      field_goals_missed_40_49: 1,
+    });
+    expect(normalizeHistoricalPlayerStatComponents(normalized)).toEqual(normalized);
+  });
+
+  it("derives Yahoo positive-only and combined whole-group game totals before averaging", () => {
+    const low = normalizeHistoricalPlayerStatComponents({
+      rushing_yards: -10,
+      punt_return_yards: 14,
+      kickoff_return_yards: 14,
+      field_goals_total_yards: 39,
+    });
+    const high = normalizeHistoricalPlayerStatComponents({
+      rushing_yards: 10,
+      punt_return_yards: 1,
+      kickoff_return_yards: 1,
+      field_goals_total_yards: 41,
+    });
+    expect(low.rushing_yards_nonnegative).toBe(0);
+    expect(high.rushing_yards_nonnegative).toBe(10);
+    expect((low.rushing_yards_nonnegative! + high.rushing_yards_nonnegative!) / 2).toBe(5);
+    expect(low.return_yards_per_25_units).toBe(1);
+    expect(
+      (low.field_goals_total_yards_per_10_units! + high.field_goals_total_yards_per_10_units!) / 2,
+    ).toBe(3.5);
+    expect(Math.floor((39 + 41) / 2 / 10)).toBe(4);
+    expect(scoringDerivedComponentValue({}, "rushing_yards_nonnegative")).toBeUndefined();
+    expect(
+      scoringDerivedComponentValue({}, "field_goals_total_yards_per_10_units"),
+    ).toBeUndefined();
   });
 });
 

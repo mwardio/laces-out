@@ -14,7 +14,7 @@ import {
   YahooSyncService,
 } from "@laces-out/league-sync";
 import { parseCredentialKey } from "@laces-out/security";
-import { PgBoss } from "pg-boss";
+import { createJobQueue } from "@laces-out/jobs";
 import pino from "pino";
 
 import { DatabaseDataHealthService } from "./data-health.js";
@@ -356,14 +356,17 @@ const logger = pino({
   },
 });
 
-const boss = new PgBoss({
-  connectionString: environment.DATABASE_URL,
-  application_name: "fantasy-worker",
-  schema: "pgboss",
-  supervise: true,
-  // The API owns cron timekeeping so long-running projection work cannot swallow schedule ticks.
-  schedule: false,
-});
+const boss = createJobQueue(
+  {
+    connectionString: environment.DATABASE_URL,
+    application_name: "fantasy-worker",
+    schema: "pgboss",
+    supervise: true,
+    // The API owns cron timekeeping so long-running projection work cannot swallow schedule ticks.
+    schedule: false,
+  },
+  logger,
+);
 const rosProfileDiscovery = new RosProfileDiscoveryService({
   database: database.db,
   enqueueValidation: (job) => enqueueRosProfileValidation(boss, job),
@@ -403,9 +406,6 @@ const providerSyncSweepService = new ProviderSyncSweepService({
     }
   },
 });
-
-boss.on("error", (error) => logger.error({ err: error }, "job queue error"));
-boss.on("warning", (warning) => logger.warn({ warning }, "job queue warning"));
 
 async function start(): Promise<void> {
   await boss.start();

@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 
 import {
   firstPartyRecentRoleContext,
+  firstPartyProjectionComponentsForPosition,
   normalizeHistoricalPlayerStatComponents,
   type FirstPartyPlayerStatus,
   type FirstPartyRoleContext,
@@ -91,6 +92,13 @@ function factKey(input: {
   return `${input.playerId}:${input.season}:${input.week}:${input.gameId}`;
 }
 
+/** A completed, observed zero-production game has zero raw stats as well as zero transforms. */
+function zeroPlayerGameComponents(position: string): ProjectionStatComponents {
+  return normalizeHistoricalPlayerStatComponents(
+    Object.fromEntries(firstPartyProjectionComponentsForPosition(position).map((key) => [key, 0])),
+  );
+}
+
 /** Converts immutable source facts into the model vocabulary without introducing current status. */
 export function buildFirstPartyPlayerHistory(
   weekly: readonly ProjectionWeeklyFact[],
@@ -169,7 +177,7 @@ export function buildFirstPartyPlayerHistory(
         week: row.week,
         team: row.team,
         opponent: row.opponentTeam,
-        components: normalizeHistoricalPlayerStatComponents({}),
+        components: zeroPlayerGameComponents(position),
         played: true,
         snapShare: row.offenseShare,
         ...(injuryStatus === undefined ? {} : { status: injuryStatus }),
@@ -233,7 +241,7 @@ export function buildFirstPartyPlayerHistory(
       week: row.week,
       team: row.team,
       opponent: schedule.awayTeam === row.team ? schedule.homeTeam : schedule.awayTeam,
-      components: normalizeHistoricalPlayerStatComponents({}),
+      components: zeroPlayerGameComponents(row.position),
       played: false,
       snapShare: 0,
       status: firstPartyPlayerStatus(

@@ -1,6 +1,7 @@
 /** Isolated PostgreSQL 17 regression; never opens the application database. */
 import { execFileSync } from "node:child_process";
-import { randomBytes, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 
 import {
@@ -28,6 +29,7 @@ import {
 import { RosProfileDiscoveryService } from "./ros-profile-discovery.js";
 import { DrizzleRosProfileValidationRepository } from "./ros-profile-validation.js";
 import { constants, validReport } from "./ros-profile-validation.test-fixtures.js";
+import { createPostgresRosCorpusLock } from "./ros-corpus-lock.js";
 
 function dockerAvailable(): boolean {
   try {
@@ -41,6 +43,7 @@ function dockerAvailable(): boolean {
 describe.skipIf(!dockerAvailable())("ROS profile lifecycle against PostgreSQL", () => {
   const container = `laces-ros-profile-pg-${randomUUID().slice(0, 8)}`;
   let handle: ReturnType<typeof createDatabase>;
+  let connectionString: string;
   let repository: DrizzleRosProfileValidationRepository;
   let ownerId: string;
   beforeAll(async () => {
@@ -74,10 +77,8 @@ describe.skipIf(!dockerAvailable())("ROS profile lifecycle against PostgreSQL", 
         .split(":")
         .pop(),
     );
-    handle = createDatabase(
-      `postgres://profile_test:${password}@127.0.0.1:${port}/profile_test`,
-      4,
-    );
+    connectionString = `postgres://profile_test:${password}@127.0.0.1:${port}/profile_test`;
+    handle = createDatabase(connectionString, 4);
     const deadline = Date.now() + 30_000;
     for (;;) {
       try {
@@ -135,6 +136,95 @@ describe.skipIf(!dockerAvailable())("ROS profile lifecycle against PostgreSQL", 
     if (admission.state !== "admissible") throw new Error(admission.blockers.join(","));
     return { record: record!, report, admission };
   }
+
+  it("serializes corpus builders on independent reserved sessions and releases after failure", async () => {
+    const identity = randomUUID();
+    const firstLock = createPostgresRosCorpusLock(connectionString, { pollMs: 10 });
+    const secondLock = createPostgresRosCorpusLock(connectionString, { pollMs: 10 });
+    let began!: () => void;
+    const started = new Promise<void>((resolve) => {
+      began = resolve;
+    });
+    let release!: () => void;
+    const untilReleased = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const events: string[] = [];
+    const first = firstLock(identity, new AbortController().signal, async (guard) => {
+      events.push("first-start");
+      began();
+      await untilReleased;
+      await guard.assertHeld();
+      events.push("first-end");
+      throw new Error("Interrupted corpus build");
+    }).catch((error: unknown) => error);
+    await started;
+    const second = secondLock(identity, new AbortController().signal, async (guard) => {
+      await guard.assertHeld();
+      events.push("second-start");
+    });
+    await delay(40);
+    expect(events).toEqual(["first-start"]);
+    release();
+    expect(await first).toMatchObject({ message: "Interrupted corpus build" });
+    await second;
+    expect(events).toEqual(["first-start", "first-end", "second-start"]);
+  });
+
+  it("aborts an orphaned builder when PostgreSQL drops its session and permits recovery", async () => {
+    const identity = randomUUID();
+    const lock = createPostgresRosCorpusLock(connectionString, { pollMs: 10, heartbeatMs: 20 });
+    let began!: () => void;
+    const started = new Promise<void>((resolve) => {
+      began = resolve;
+    });
+    const running = lock(identity, new AbortController().signal, async (guard) => {
+      began();
+      await delay(5_000, undefined, { signal: guard.signal });
+    }).catch((error: unknown) => error);
+    await started;
+    const digest = createHash("sha256").update(`laces-ros-corpus:${identity}`).digest();
+    const [owner] = await handle.db.$client<{ pid: number }[]>`
+      select pid from pg_locks where locktype = 'advisory' and granted
+      and classid = ${digest.readUInt32BE(0)}::bigint
+      and objid = ${digest.readUInt32BE(4)}::bigint and objsubid = 2`;
+    expect(owner).toBeDefined();
+    await handle.db.$client`select pg_terminate_backend(${owner!.pid})`;
+    expect(await running).toBeInstanceOf(Error);
+    await expect(
+      lock(identity, new AbortController().signal, async (guard) => {
+        await guard.assertHeld();
+        return "recovered";
+      }),
+    ).resolves.toBe("recovered");
+  });
+
+  it("holds the session lock until an aborted child has finished its shutdown", async () => {
+    const identity = randomUUID();
+    const lock = createPostgresRosCorpusLock(connectionString, { pollMs: 10 });
+    const controller = new AbortController();
+    let began!: () => void;
+    const started = new Promise<void>((resolve) => {
+      began = resolve;
+    });
+    let childFinished = false;
+    const running = lock(identity, controller.signal, async (guard) => {
+      began();
+      try {
+        await delay(5_000, undefined, { signal: guard.signal });
+      } finally {
+        // The actual runner awaits child close after SIGTERM/SIGKILL; model that asynchronous
+        // cleanup here so cancellation cannot expose a second builder prematurely.
+        await delay(50);
+        childFinished = true;
+      }
+    }).catch((error: unknown) => error);
+    await started;
+    const next = lock(identity, new AbortController().signal, async () => childFinished);
+    controller.abort();
+    expect(await running).toBeInstanceOf(Error);
+    expect(await next).toBe(true);
+  });
 
   it("fences stale claims and atomically persists immutable evidence with admitted registry state", async () => {
     const { record, report, admission } = await seedValidation();

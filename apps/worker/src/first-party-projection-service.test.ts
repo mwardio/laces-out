@@ -50,6 +50,7 @@ interface ProjectionDatabaseFixture {
     readonly metadata: Record<string, unknown>;
   };
   readonly priorRun?: PriorRunFixture;
+  readonly priorRuns?: readonly PriorRunFixture[];
   readonly publishConflict?: boolean;
   readonly leagues?: readonly Row[];
   // Simulates a required source (e.g. weekly stats) completing a concurrent refresh with a new
@@ -153,7 +154,7 @@ class ProjectionDatabaseHarness {
   readonly #database: Database;
   readonly #defensePlayers: Row[] = [];
   readonly #sources: readonly Row[];
-  #priorRunRead = false;
+  #priorRunReads = 0;
   #requiredSourceKeySelects = 0;
 
   constructor(private readonly fixture: ProjectionDatabaseFixture) {
@@ -226,20 +227,19 @@ class ProjectionDatabaseHarness {
       return [];
     }
     if (table === projectionModelRuns) {
-      if (!this.fixture.priorRun || this.#priorRunRead) return [];
-      this.#priorRunRead = true;
-      return [{ ...this.fixture.priorRun }];
+      const run = (this.fixture.priorRuns ??
+        (this.fixture.priorRun ? [this.fixture.priorRun] : []))[this.#priorRunReads++];
+      return run ? [{ ...run }] : [];
     }
+    const priorRun = this.fixture.priorRuns?.[this.#priorRunReads - 1] ?? this.fixture.priorRun;
     if (table === projectionObservations) {
-      return [{ count: this.fixture.priorRun?.rawRows ?? 0 }];
+      return [{ count: priorRun?.rawRows ?? 0 }];
     }
     if (table === projectionSets) {
-      return (this.fixture.priorRun?.leagueSetIds ?? []).map((id) => ({ id }));
+      return (priorRun?.leagueSetIds ?? []).map((id) => ({ id }));
     }
     if (table === playerProjections) {
-      return Object.hasOwn(selection, "count")
-        ? [{ count: this.fixture.priorRun?.leagueRows ?? 0 }]
-        : [];
+      return Object.hasOwn(selection, "count") ? [{ count: priorRun?.leagueRows ?? 0 }] : [];
     }
     throw new Error(`Unexpected projection test select: ${Object.keys(selection).join(",")}`);
   }
@@ -477,35 +477,91 @@ describe("first-party projection service release safety", () => {
     expect(Array.isArray(withheld[0]?.reasons)).toBe(true);
   });
 
-  it("preserves the publication timestamp when an exact, complete output is unchanged", async () => {
+  it.each(["publishable", "rejected"] as const)(
+    "preserves the publication timestamp when complete league output has a %s reference gate",
+    async (qualityState) => {
+      const now = new Date("2026-09-01T12:00:00.000Z");
+      const publishedAt = new Date("2026-09-01T10:15:00.000Z");
+      const harness = new ProjectionDatabaseHarness({
+        now,
+        schedule: scheduleFixture(),
+        priorRun: {
+          sourceSyncRunId: "prior-sync-run",
+          playersPublished: 0,
+          qualityState,
+          createdAt: publishedAt,
+          metrics: {
+            gate: { reasons: [] },
+            leagues: { published: 1, rowsPublished: 2 },
+          },
+          rawRows: 0,
+          leagueSetIds: ["complete-league-set"],
+          leagueRows: 2,
+        },
+      });
+      const service = new FirstPartyProjectionService({
+        database: harness.database,
+        now: () => now,
+      });
+
+      await service.refreshProjections({ season: 2026, week: 1 }, jobContext());
+
+      expect(harness.syncRunInsertAttempts).toBe(0);
+      expect(latestSourceMetadata(harness)).toMatchObject({
+        lastPublishedAt: publishedAt.toISOString(),
+        lastEvaluationAt: now.toISOString(),
+        publishedWeeks: 0,
+        result: "unchanged",
+      });
+    },
+  );
+
+  it("reuses complete adjacent weeks with different gates without treating them as corruption", async () => {
     const now = new Date("2026-09-01T12:00:00.000Z");
     const publishedAt = new Date("2026-09-01T10:15:00.000Z");
     const harness = new ProjectionDatabaseHarness({
       now,
-      schedule: scheduleFixture(),
-      priorRun: {
-        sourceSyncRunId: "prior-sync-run",
-        playersPublished: 0,
-        qualityState: "publishable",
-        createdAt: publishedAt,
-        metrics: {
-          gate: { reasons: [] },
-          leagues: { published: 1, rowsPublished: 2 },
+      schedule: [
+        ...scheduleFixture(),
+        ...scheduleFixture().map((row) => ({
+          ...row,
+          week: 2,
+          gameId: `${String(row.gameId)}-week-2`,
+        })),
+      ],
+      priorRuns: [
+        {
+          sourceSyncRunId: "degraded-week-one",
+          playersPublished: 0,
+          qualityState: "degraded",
+          createdAt: publishedAt,
+          metrics: {
+            gate: { reasons: ["scheduled_game_kickoff_unknown"] },
+            leagues: { published: 0, rowsPublished: 0 },
+          },
+          rawRows: 0,
         },
-        rawRows: 0,
-        leagueSetIds: ["complete-league-set"],
-        leagueRows: 2,
-      },
+        {
+          sourceSyncRunId: "complete-week-two",
+          playersPublished: 0,
+          qualityState: "publishable",
+          createdAt: publishedAt,
+          metrics: { gate: { reasons: [] }, leagues: { published: 1, rowsPublished: 1 } },
+          rawRows: 0,
+          leagueSetIds: ["complete-week-two-set"],
+          leagueRows: 1,
+        },
+      ],
     });
     const service = new FirstPartyProjectionService({ database: harness.database, now: () => now });
 
-    await service.refreshProjections({ season: 2026, week: 1 }, jobContext());
+    await service.refreshProjections({ season: 2026 }, jobContext());
 
     expect(harness.syncRunInsertAttempts).toBe(0);
     expect(latestSourceMetadata(harness)).toMatchObject({
+      qualityState: "degraded",
+      qualityReasons: "scheduled_game_kickoff_unknown",
       lastPublishedAt: publishedAt.toISOString(),
-      lastEvaluationAt: now.toISOString(),
-      publishedWeeks: 0,
       result: "unchanged",
     });
   });

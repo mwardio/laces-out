@@ -7,3 +7,4 @@ export * from "./snap-counts-source.js";
 export * from "./team-weekly-stats-source.js";
 export * from "./weekly-rosters-source.js";
 export * from "./weekly-stats-source.js";
+export * from "./play-by-play-source.js";

@@ -112,6 +112,36 @@ function projectionInput(
   };
 }
 
+function longTouchdownProjectionInput(): FirstPartyRosProjectionInput {
+  const input = projectionInput();
+  const withDistanceCounts = (components: scoring.ProjectionStatComponents) => ({
+    ...components,
+    receiving_touchdowns_40_plus: components.receiving_touchdowns! * 0.25,
+    receiving_touchdowns_50_plus: components.receiving_touchdowns! * 0.1,
+  });
+  return {
+    ...input,
+    scoringProfile: {
+      id: "test-ppr-long-touchdowns",
+      rules: [
+        ...scoringProfile.rules,
+        { statId: "receiving_touchdowns_40_plus", points: 2 },
+        { statId: "receiving_touchdowns_50_plus", points: 3 },
+      ],
+    },
+    weeks: input.weeks.map((value) => ({
+      ...value,
+      contextualComponents: withDistanceCounts(value.contextualComponents),
+      recencyComponents: withDistanceCounts(value.recencyComponents),
+      componentElasticities: {
+        ...value.componentElasticities,
+        receiving_touchdowns_40_plus: { role: 1, production: 1.6 },
+        receiving_touchdowns_50_plus: { role: 1, production: 1.8 },
+      },
+    })),
+  };
+}
+
 describe("first-party ROS distribution", () => {
   it("is deterministic for pinned inputs and independent of week order", () => {
     const input = projectionInput();
@@ -121,11 +151,9 @@ describe("first-party ROS distribution", () => {
     expect(reverse).toEqual(forward);
     expect(forward.provenance.modelVersion).toBe(FIRST_PARTY_ROS_MODEL_VERSION);
     expect(forward.provenance.intervalCalibration).toBe("simulation-only");
-    // The seed material embeds FIRST_PARTY_ROS_SEED_VERSION (split from the model version at v7
-    // so the kicker-only change cannot reseed non-kicker positions); this digest is frozen at its
-    // v6 value and must survive model version bumps that leave non-K draw consumption unchanged.
+    // The long-touchdown model has its own scoring-independent seed lineage.
     expect(forward.provenance.seedHash).toBe(
-      "26c02a1b0d54736ae2da198b64e058d33d41d0560ee53eae4c9e9844ee4501ce",
+      "2267146248fa64e1295b6273a26ae43487149edbe0a5a26557e3a1c802fb267a",
     );
     expect(forward.provenance).toMatchObject({
       asOfWeek: 4,
@@ -517,7 +545,104 @@ describe("first-party ROS distribution", () => {
     ).toThrow(/mutually exclusive probabilities/iu);
   });
 
-  it("rejects an every-N expectation that exceeds its raw-stat bound", () => {
+  it.each(["contextual", "availability-aware-recency"] as const)(
+    "keeps every %s long-touchdown path nested after distinct production shocks",
+    (strategy) => {
+      const components: Record<string, number> = {};
+      const componentElasticities: Record<string, { role: number; production: number }> = {};
+      for (const { total, fortyPlus, fiftyPlus } of scoring.SCORING_LONG_TOUCHDOWN_COMPONENTS) {
+        components[total] = 0.5;
+        components[fortyPlus] = 0.3;
+        components[fiftyPlus] = 0.2;
+        componentElasticities[total] = { role: 0, production: 0 };
+        componentElasticities[fortyPlus] = { role: 0, production: 1 };
+        componentElasticities[fiftyPlus] = { role: 0, production: 2 };
+      }
+      let observedActive = 0;
+      let observedZero = 0;
+      const result = projectFirstPartyRestOfSeason(
+        projectionInput({
+          strategy,
+          windowEndWeek: 6,
+          weeks: [5, 6].map((weekNumber) => ({
+            season: 2026,
+            week: weekNumber,
+            scheduled: weekNumber === 5,
+            bye: weekNumber === 6,
+            contextualComponents: components,
+            recencyComponents: components,
+            componentElasticities,
+          })),
+          role: { ...projectionInput().role, weeklyProductionVolatility: 2 },
+          scoringProfile: {
+            id: "long-touchdown-bonuses",
+            rules: [
+              { statId: "receiving_touchdowns", points: 6 },
+              { statId: "receiving_touchdowns_40_plus", points: 2 },
+              { statId: "receiving_touchdowns_50_plus", points: 3 },
+            ],
+          },
+          scenarioCount: 256,
+        }),
+        undefined,
+        ({ available, components: observed }) => {
+          if (!available) {
+            observedZero += 1;
+            expect(Object.values(observed).every((value) => value === 0)).toBe(true);
+            return;
+          }
+          observedActive += 1;
+          for (const { total, fortyPlus, fiftyPlus } of scoring.SCORING_LONG_TOUCHDOWN_COMPONENTS) {
+            expect(observed[fiftyPlus]).toBeGreaterThanOrEqual(0);
+            expect(observed[fiftyPlus]).toBeLessThanOrEqual(observed[fortyPlus]!);
+            expect(observed[fortyPlus]).toBeLessThanOrEqual(observed[total]!);
+          }
+        },
+      );
+      expect(observedActive).toBeGreaterThan(0);
+      expect(observedZero).toBeGreaterThanOrEqual(256);
+      const expected = result.expectedComponents;
+      expect(result.meanPoints).toBeCloseTo(
+        expected.receiving_touchdowns! * 6 +
+          expected.receiving_touchdowns_40_plus! * 2 +
+          expected.receiving_touchdowns_50_plus! * 3,
+        10,
+      );
+    },
+  );
+
+  it.each(scoring.SCORING_LONG_TOUCHDOWN_COMPONENTS)(
+    "rejects inconsistent or incompletely sourced $total distance counts",
+    ({ total, fortyPlus, fiftyPlus }) => {
+      for (const counts of [
+        { [total]: 0.5, [fortyPlus]: 0.3, [fiftyPlus]: 0.4 },
+        { [total]: 0.5, [fortyPlus]: 0.6, [fiftyPlus]: 0.4 },
+        { [fortyPlus]: 0.3, [fiftyPlus]: 0.2 },
+        { [total]: 0.5, [fiftyPlus]: 0.2 },
+      ]) {
+        const componentElasticities = Object.fromEntries(
+          Object.keys(counts).map((key) => [key, { role: 1, production: 1 }]),
+        );
+        expect(() =>
+          projectFirstPartyRestOfSeason(
+            projectionInput({
+              windowEndWeek: 5,
+              weeks: [
+                {
+                  ...week(60, 5),
+                  contextualComponents: counts,
+                  recencyComponents: counts,
+                  componentElasticities,
+                },
+              ],
+            }),
+          ),
+        ).toThrow(/requires .*touchdowns/);
+      }
+    },
+  );
+
+  it("rejects an every-N expectation that exceeds its positive-part expectation bound", () => {
     const invalidWeek = week(20, 5);
     expect(() =>
       projectFirstPartyRestOfSeason(
@@ -528,14 +653,17 @@ describe("first-party ROS distribution", () => {
               ...invalidWeek,
               contextualComponents: {
                 ...invalidWeek.contextualComponents,
+                receiving_yards_nonnegative: 20,
                 receiving_yards_per_5_units: 5,
               },
               recencyComponents: {
                 ...invalidWeek.recencyComponents,
+                receiving_yards_nonnegative: 20,
                 receiving_yards_per_5_units: 5,
               },
               componentElasticities: {
                 ...invalidWeek.componentElasticities,
+                receiving_yards_nonnegative: { role: 1, production: 1 },
                 receiving_yards_per_5_units: { role: 1, production: 1 },
               },
             },
@@ -652,7 +780,7 @@ const kickerScoringProfile = {
 const kickerProcess = {
   fgEventDispersion: 0.83,
   xpDispersion: 0.85,
-  recordedMissRatio: 0.95,
+
   centerVolatility: 0,
   bucketMix: [0.57, 0.27, 0.16],
   missBucketMix: [0, 0.03, 0.09, 0.36, 0.46, 0.06],
@@ -802,7 +930,7 @@ describe("compiled ROS scoring equivalence", () => {
   );
 });
 
-describe("first-party ROS kicker count process (model v9)", () => {
+describe("first-party ROS kicker count process", () => {
   it("requires the kicker process input for position K and rejects it elsewhere", () => {
     expect(() => {
       const { kicker, ...withoutKicker } = kickerInput();
@@ -814,16 +942,16 @@ describe("first-party ROS kicker count process (model v9)", () => {
     );
   });
 
-  it("keeps the model and seed version constants split with the v6 seed lineage", () => {
-    expect(FIRST_PARTY_ROS_MODEL_VERSION).toBe("laces-ros-distribution-v9");
-    expect(FIRST_PARTY_ROS_SEED_VERSION).toBe("laces-ros-distribution-v6");
+  it("declares the new scoring-independent model and seed lineage", () => {
+    expect(FIRST_PARTY_ROS_MODEL_VERSION).toBe("laces-ros-distribution-v11");
+    expect(FIRST_PARTY_ROS_SEED_VERSION).toBe("laces-ros-distribution-v11");
   });
 
   it("is deterministic and satisfies the prefix property for pinned kicker inputs", () => {
     const first = projectFirstPartyRestOfSeason(kickerInput());
     const second = projectFirstPartyRestOfSeason(kickerInput());
     expect(second).toEqual(first);
-    expect(first.provenance.modelVersion).toBe("laces-ros-distribution-v9");
+    expect(first.provenance.modelVersion).toBe(FIRST_PARTY_ROS_MODEL_VERSION);
   });
 
   it("keeps every simulated kicker week on the exact scoring lattice", () => {
@@ -879,8 +1007,11 @@ describe("first-party ROS kicker count process (model v9)", () => {
       expected.field_goals_made_50_59! + expected.field_goals_made_60_plus!,
       10,
     );
-    expect(expected.extra_points_attempted).toBeCloseTo(expected.extra_points_made!, 10);
-    expect(expected.extra_points_missed).toBe(0);
+    expect(expected.extra_points_attempted).toBeCloseTo(
+      expected.extra_points_made! + expected.extra_points_missed!,
+      10,
+    );
+    expect(expected.extra_points_missed).toBeGreaterThan(0);
   });
 
   it("preserves the pinned per-component means through the count process", () => {
@@ -900,9 +1031,9 @@ describe("first-party ROS kicker count process (model v9)", () => {
     expect(expected.field_goals_made_40_49!).toBeLessThan(4 * 0.45 * 1.1);
     expect(expected.extra_points_made!).toBeGreaterThan(4 * 2.2 * 0.95);
     expect(expected.extra_points_made!).toBeLessThan(4 * 2.2 * 1.05);
-    // Recorded-miss semantics: E[MISS] tracks recordedMissRatio x (att - made), never att - made.
-    expect(expected.field_goals_missed!).toBeGreaterThan(4 * 0.95 * 0.3 * 0.85);
-    expect(expected.field_goals_missed!).toBeLessThan(4 * 0.95 * 0.3 * 1.15);
+    // Miss penalties include every unsuccessful attempt, including blocks.
+    expect(expected.field_goals_missed!).toBeGreaterThan(4 * 0.3 * 0.85);
+    expect(expected.field_goals_missed!).toBeLessThan(4 * 0.3 * 1.15);
   });
 
   it("realizes the calibrated under-dispersion and collapses to Poisson at phi one", () => {
@@ -1026,11 +1157,6 @@ describe("first-party ROS kicker count process (model v9)", () => {
     ).toThrow("between 0.7 and 1.05");
     expect(() =>
       projectFirstPartyRestOfSeason(
-        kickerInput({ kicker: { ...kickerProcess, recordedMissRatio: 0.5 } }),
-      ),
-    ).toThrow("between 0.85 and 1");
-    expect(() =>
-      projectFirstPartyRestOfSeason(
         kickerInput({ kicker: { ...kickerProcess, bucketMix: [0.5, 0.5, 0.5] } }),
       ),
     ).toThrow("sum to one");
@@ -1044,24 +1170,15 @@ describe("first-party ROS kicker count process (model v9)", () => {
   });
 });
 
-describe("non-kicker byte identity across the v9 bump", () => {
-  it("reproduces the v6 golden WR projection byte-for-byte", async () => {
+describe("shared football model golden output", () => {
+  it("reproduces the v11 WR projection byte-for-byte", async () => {
     const { readFileSync } = await import("node:fs");
     const golden = JSON.parse(
-      readFileSync(new URL("./rest-of-season.v6-golden-wr.json", import.meta.url), "utf8"),
+      readFileSync(new URL("./rest-of-season.v11-golden-wr.json", import.meta.url), "utf8"),
     ) as ReturnType<typeof projectFirstPartyRestOfSeason>;
-    const current = projectFirstPartyRestOfSeason(projectionInput());
-    // The provenance model version legitimately advanced; every simulated number, every seed
-    // artifact, and every diagnostic must be byte-identical to the captured v6 output.
-    const { provenance: goldenProvenance, ...goldenRest } = golden;
-    const { provenance: currentProvenance, ...currentRest } = current;
-    expect(currentRest).toEqual(goldenRest);
-    expect(currentProvenance.seedHash).toBe(goldenProvenance.seedHash);
-    const { modelVersion: goldenModel, ...goldenProvRest } = goldenProvenance;
-    const { modelVersion: currentModel, ...currentProvRest } = currentProvenance;
-    expect(goldenModel).toBe("laces-ros-distribution-v6");
-    expect(currentModel).toBe("laces-ros-distribution-v9");
-    expect(currentProvRest).toEqual(goldenProvRest);
+    const current = projectFirstPartyRestOfSeason(longTouchdownProjectionInput());
+    expect(current).toEqual(golden);
+    expect(golden.provenance.modelVersion).toBe("laces-ros-distribution-v11");
   });
 });
 

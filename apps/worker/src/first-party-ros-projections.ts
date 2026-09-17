@@ -137,6 +137,7 @@ export interface FirstPartyRosCandidateProvider {
   }): Promise<string>;
   buildTargets(
     context: FirstPartyRosCandidateContext,
+    signal?: AbortSignal,
   ): Promise<readonly FirstPartyRosPublicationTarget[]>;
 }
 
@@ -1063,14 +1064,17 @@ export class FirstPartyRosProjectionShadowService implements ProjectionRefreshSe
     if (!firstPartyRosChampionArtifactIsValid(input.artifact)) {
       return { published: 0, artifactInvalid: true, arbitrationSkippedTargets: 0 };
     }
-    const targets = await this.#candidateProvider.buildTargets({
-      artifact: input.artifact,
-      artifacts: input.artifacts,
-      season: input.season,
-      window: input.window,
-      now: input.now,
-      candidateProviderChecksum: input.candidateProviderChecksum,
-    });
+    const targets = await this.#candidateProvider.buildTargets(
+      {
+        artifact: input.artifact,
+        artifacts: input.artifacts,
+        season: input.season,
+        window: input.window,
+        now: input.now,
+        candidateProviderChecksum: input.candidateProviderChecksum,
+      },
+      input.context.signal,
+    );
     let published = 0;
     let arbitrationSkippedTargets = 0;
     for (const target of targets) {

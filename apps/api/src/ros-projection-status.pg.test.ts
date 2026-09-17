@@ -779,6 +779,7 @@ describe.skipIf(!dockerAvailable)(
         FIRST_PARTY_ROS_MODEL_VERSION,
         FIRST_PARTY_ROS_POLICY_VERSION,
         FIRST_PARTY_ROS_INTERVAL_CALIBRATION_VERSION,
+        LEAGUE_SCORING_NORMALIZATION_VERSION,
       ])
         expect(healthSql).toContain(version);
       const client = postgres(container.url, { max: 1 });
@@ -792,16 +793,33 @@ describe.skipIf(!dockerAvailable)(
             create temp table projection_sets (id text,league_season_id text,season int,source text,horizon text,metadata jsonb,created_at timestamptz,fetched_at timestamptz) on commit drop;
             create temp table player_projections (projection_set_id text) on commit drop;
             create temp table first_party_ros_profile_validations (id text,season int,scoring_profile_key text,scoring_profile_digest text,model_version text,policy_version text,calibration_version text,state text,requested_at timestamptz) on commit drop;
+            create temp table first_party_ros_champion_artifacts (artifact_checksum text,season int,scoring_profile_key text,model_version text,policy_version text,calibration_version text,admitted_at timestamptz,release_gate jsonb) on commit drop;
             insert into leagues values ('published','Existing',false),('missing','Never|Published',false),('new','New',false),('unsupported','Unsupported',false),('withheld','Withheld',false),('archived','Archived',true),('retired','Old model',false),('unregistered-old','Registrar missed',false),('unregistered-new','Registrar new',false),('nonlinear','Unsupported D/ST',false),('idp','Ignored IDP',false);
+            insert into leagues values ('current-healthy','Current healthy',false),('old-model-fresh','Fresh old model',false),('corrected-profile','Repaired scoring',false),('old-season-fresh','Fresh wrong season',false),('legacy-full','Unproven full set',false),('partial-long-td','Partial K/DST',false),('limited-position','K only',false),('obsolete-mapping','Old mapping',false);
             insert into league_seasons select id,id,extract(year from now() at time zone 'UTC')::int-case when extract(month from now() at time zone 'UTC')<3 then 1 else 0 end,now()-case when id='unregistered-new' then interval '1 hour' else interval '40 hours' end from leagues;
-            insert into projection_sets select id||'-week',id,season,'laces-out-first-party','week',jsonb_build_object('scoringProfileKey',id),now(),now()-interval '7 days' from league_seasons;
+            insert into projection_sets select id||'-week',id,season,'laces-out-first-party','week',jsonb_build_object('scoringProfileKey',id,'scoringMappingVersion','${LEAGUE_SCORING_NORMALIZATION_VERSION}','scoringWarnings','[]'::jsonb,'withheldPositions','[]'::jsonb),now(),now()-interval '7 days' from league_seasons;
             update projection_sets set metadata=metadata || '{"supportedPositions":["QB","RB","WR","TE","K","DST"],"scoringWarnings":[]}' where league_season_id in ('unregistered-old','unregistered-new','idp');
             update projection_sets set metadata=metadata || '{"scoringWarnings":[{"code":"DISPLAY_NAME_FALLBACK"},{"code":"IGNORED_ZERO_POINT_RULE"}]}' where league_season_id='unregistered-old';
             update projection_sets set metadata=metadata || '{"supportedPositions":["QB","RB","WR","TE"],"scoringWarnings":[]}' where league_season_id='nonlinear';
             update projection_sets set metadata=metadata || '{"scoringWarnings":[{"code":"IDP_RULES_IGNORED"}]}' where league_season_id='idp';
-            insert into projection_sets select 'published-ros',id,season,'laces-out-first-party-ros','rest-of-season','{"releaseCompleteness":"full","preservePriorGoodSet":false}',now()-interval '80 hours',now()-interval '80 hours' from league_seasons where id='published';
-            insert into player_projections values ('published-ros');
+            update projection_sets set metadata=metadata || '{"supportedPositions":["K","DST"],"withheldPositions":[{"position":"WR","source":"normalization","reasons":["NONLINEAR_RULE: Long touchdown bonuses are unsupported."]}]}' where league_season_id='partial-long-td';
+            update projection_sets set metadata=metadata || '{"supportedPositions":["K"],"withheldPositions":[{"position":"WR","source":"normalization","reasons":["NO_SUPPORTED_RULES: This league does not price receivers."]}]}' where league_season_id='limited-position';
+            update projection_sets set metadata=metadata || '{"supportedPositions":["QB","RB","WR","TE","K","DST"],"scoringMappingVersion":"league-scoring-map-v5"}' where league_season_id='obsolete-mapping';
+            insert into projection_sets select id||'-ros',id,season-case when id='old-season-fresh' then 1 else 0 end,'laces-out-first-party-ros','rest-of-season',
+              jsonb_build_object('releaseCompleteness','full','preservePriorGoodSet',false,'scoringProfileKey',case when id='corrected-profile' then 'prior-rounded-profile' else id end,'championArtifactChecksum',id||'-artifact'),
+              now()-case when id='published' then interval '80 hours' else interval '1 hour' end,now()-case when id='published' then interval '80 hours' else interval '1 hour' end
+              from league_seasons where id in ('published','current-healthy','old-model-fresh','corrected-profile','old-season-fresh','legacy-full');
+            insert into player_projections select id from projection_sets where horizon='rest-of-season';
           `);
+          await sql`
+            insert into first_party_ros_champion_artifacts
+            select id||'-artifact',season,
+              case when id='corrected-profile' then 'prior-rounded-profile' else id end,
+              case when id='old-model-fresh' then 'laces-ros-distribution-v9' else ${FIRST_PARTY_ROS_MODEL_VERSION} end,
+              ${FIRST_PARTY_ROS_POLICY_VERSION},${FIRST_PARTY_ROS_INTERVAL_CALIBRATION_VERSION},
+              now()-interval '80 hours','{"state":"evidence-ready","blockers":[]}'
+            from league_seasons where id in ('published','current-healthy','old-model-fresh','corrected-profile','old-season-fresh')
+          `;
           await sql`
             insert into first_party_ros_profile_validations
             select id,season,id,encode(sha256(convert_to(id,'UTF8')),'hex'),
@@ -809,14 +827,20 @@ describe.skipIf(!dockerAvailable)(
               ${FIRST_PARTY_ROS_POLICY_VERSION},${FIRST_PARTY_ROS_INTERVAL_CALIBRATION_VERSION},
               case when id='withheld' then 'withheld' else 'pending' end,
               now()-case when id='new' then interval '1 hour' else interval '40 hours' end
-            from league_seasons where id in ('published','missing','new','withheld','archived','retired')
+            from league_seasons where id in ('published','missing','new','withheld','archived','retired','current-healthy','old-model-fresh','corrected-profile','old-season-fresh','legacy-full','partial-long-td','limited-position')
           `;
           const rows =
             await sql.unsafe<
               { id: string; league_name: string; age_hours: string; published_at: string }[]
             >(healthSql);
           expect(rows.map((row) => row.id).sort()).toEqual([
+            "corrected-profile",
+            "current-healthy",
+            "legacy-full",
+            "limited-position",
             "missing",
+            "old-model-fresh",
+            "old-season-fresh",
             "published",
             "unregistered-old",
             "withheld",
@@ -834,6 +858,30 @@ describe.skipIf(!dockerAvailable)(
           expect(
             Number(rows.find((row) => row.id === "published")?.age_hours),
           ).toBeGreaterThanOrEqual(80);
+          expect(Number(rows.find((row) => row.id === "current-healthy")?.age_hours)).toBe(1);
+          for (const id of [
+            "old-model-fresh",
+            "corrected-profile",
+            "old-season-fresh",
+            "legacy-full",
+          ])
+            expect(rows.find((row) => row.id === id)?.age_hours, id).toBe("-1");
+          // A just-requested replacement profile still receives its normal first-publication grace;
+          // the obsolete but recently fetched profile cannot manufacture a current healthy set.
+          await sql`update first_party_ros_profile_validations set requested_at=now() where id='corrected-profile'`;
+          const duringGrace = await sql.unsafe<{ id: string }[]>(healthSql);
+          expect(duringGrace.some((row) => row.id === "corrected-profile")).toBe(false);
+          // Real admission stores the historical report, including honest blockers for other
+          // position/horizon cells; it never rewrites that report to a synthetic "released" state.
+          await sql`update first_party_ros_champion_artifacts set release_gate='{"state":"insufficient","blockers":["cell_K_one-to-four_samples_below_minimum"]}' where artifact_checksum='current-healthy-artifact'`;
+          const admittedWithCellBlockers =
+            await sql.unsafe<{ id: string; age_hours: string }[]>(healthSql);
+          expect(
+            admittedWithCellBlockers.find((row) => row.id === "current-healthy")?.age_hours,
+          ).toBe("1");
+          await sql`update first_party_ros_champion_artifacts set release_gate='{"state":"released","blockers":[]}' where artifact_checksum='current-healthy-artifact'`;
+          const nonReportState = await sql.unsafe<{ id: string; age_hours: string }[]>(healthSql);
+          expect(nonReportState.find((row) => row.id === "current-healthy")?.age_hours).toBe("-1");
         });
       } finally {
         await client.end();

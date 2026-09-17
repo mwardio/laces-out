@@ -1,0 +1,130 @@
+{
+  "state": "projected",
+  "playerId": "player-one",
+  "position": "WR",
+  "expectedGames": 6.810546875,
+  "scheduledGames": 8,
+  "meanPoints": 105.05220073248567,
+  "standardDeviation": 31.907066996981733,
+  "p15Points": 73.1224183180998,
+  "p50Points": 109.89819599914102,
+  "p85Points": 134.83925936571873,
+  "expectedComponents": {
+    "receiving_touchdowns": 2.604022082726905,
+    "receiving_touchdowns_40_plus": 0.6629670221707984,
+    "receiving_touchdowns_50_plus": 0.26539088584772536,
+    "receiving_yards": 476.343937305333,
+    "receptions": 39.671567803706104
+  },
+  "weekly": [
+    {
+      "week": 5,
+      "scheduled": true,
+      "bye": false,
+      "availabilityProbability": 0.9375,
+      "meanPoints": 13.647761263175472,
+      "p15Points": 9.902677248009605,
+      "p50Points": 13.876695980458727,
+      "p85Points": 17.840960565186062
+    },
+    {
+      "week": 6,
+      "scheduled": true,
+      "bye": false,
+      "availabilityProbability": 0.869140625,
+      "meanPoints": 12.861882357687252,
+      "p15Points": 8.090286041033316,
+      "p50Points": 13.768381299338804,
+      "p85Points": 18.449089130792753
+    },
+    {
+      "week": 7,
+      "scheduled": true,
+      "bye": false,
+      "availabilityProbability": 0.880859375,
+      "meanPoints": 13.158583469299627,
+      "p15Points": 8.346496996387625,
+      "p50Points": 13.63829017331857,
+      "p85Points": 18.865414549143548
+    },
+    {
+      "week": 8,
+      "scheduled": true,
+      "bye": false,
+      "availabilityProbability": 0.853515625,
+      "meanPoints": 13.028858598665684,
+      "p15Points": 7.1724197198060935,
+      "p50Points": 13.623238924492128,
+      "p85Points": 18.90274419188621
+    },
+    {
+      "week": 9,
+      "scheduled": true,
+      "bye": false,
+      "availabilityProbability": 0.830078125,
+      "meanPoints": 12.88813431739908,
+      "p15Points": 0,
+      "p50Points": 13.715058690252643,
+      "p85Points": 19.65876917921139
+    },
+    {
+      "week": 10,
+      "scheduled": true,
+      "bye": false,
+      "availabilityProbability": 0.810546875,
+      "meanPoints": 12.994459983980787,
+      "p15Points": 0,
+      "p50Points": 14.064393855593927,
+      "p85Points": 19.93246620204541
+    },
+    {
+      "week": 11,
+      "scheduled": true,
+      "bye": false,
+      "availabilityProbability": 0.8203125,
+      "meanPoints": 13.193854315700445,
+      "p15Points": 0,
+      "p50Points": 13.969644238281429,
+      "p85Points": 20.409251890995975
+    },
+    {
+      "week": 12,
+      "scheduled": true,
+      "bye": false,
+      "availabilityProbability": 0.80859375,
+      "meanPoints": 13.278666426577244,
+      "p15Points": 0,
+      "p50Points": 14.447115671066944,
+      "p85Points": 20.64343690960182
+    }
+  ],
+  "weeklyMeanSemantics": "unconditional-includes-zero-for-bye-or-unavailable",
+  "simulation": {
+    "availabilityLagOneCorrelation": 0.5487602045271973,
+    "roleLagOneCorrelation": 0.7356037857484,
+    "boundedRoleSamples": 0
+  },
+  "provenance": {
+    "modelVersion": "laces-ros-distribution-v11",
+    "strategy": "contextual",
+    "weeklyModelVersion": "weekly-v4",
+    "scoringProfileKey": "[{\"statId\":\"receiving_touchdowns\",\"points\":6,\"bonuses\":[]},{\"statId\":\"receiving_touchdowns_40_plus\",\"points\":2,\"bonuses\":[]},{\"statId\":\"receiving_touchdowns_50_plus\",\"points\":3,\"bonuses\":[]},{\"statId\":\"receiving_yards\",\"points\":0.1,\"bonuses\":[]},{\"statId\":\"receptions\",\"points\":1,\"bonuses\":[]}]",
+    "inputChecksum": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "seedHash": "2267146248fa64e1295b6273a26ae43487149edbe0a5a26557e3a1c802fb267a",
+    "randomGenerator": "xoshiro128**-sha256-128",
+    "scenarioCount": 512,
+    "season": 2026,
+    "asOfWeek": 4,
+    "asOfAt": "2026-10-01T12:00:00.000Z",
+    "windowStartWeek": 5,
+    "windowEndWeek": 12,
+    "intervalCalibration": "simulation-only"
+  },
+  "diagnostics": [
+    {
+      "severity": "warning",
+      "code": "simulation_interval_not_calibrated",
+      "message": "P15/P85 are deterministic simulation quantiles and must not be described as historically calibrated until the season-level evaluator clears its evidence gates."
+    }
+  ]
+}

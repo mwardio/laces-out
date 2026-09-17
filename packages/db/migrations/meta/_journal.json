@@ -351,6 +351,13 @@
       "when": 1789672883036,
       "tag": "0049_ros_profile_validations",
       "breakpoints": true
+    },
+    {
+      "idx": 50,
+      "version": "7",
+      "when": 1789678983704,
+      "tag": "0050_preserve_scoring_precision",
+      "breakpoints": true
     }
   ]
 }

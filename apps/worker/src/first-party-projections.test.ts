@@ -2,10 +2,15 @@ import {
   applyFirstPartyProjectionChampionPolicy,
   applyFirstPartyProjectionFinalPolicy,
   evaluateFirstPartyBacktestForScoringProfile,
+  evaluateWeeklyPointCalibration,
+  WEEKLY_POINT_CALIBRATION_POLICY_VERSION,
+  projectionScoringProfileKey,
+  firstPartyProjectionComponentsForPosition,
   FIRST_PARTY_PROJECTION_MODEL_VERSION,
 } from "@laces-out/projections";
 import type {
   FirstPartyBacktestPrediction,
+  WeeklyPointResidualCalibration,
   FirstPartyProjectionBacktest,
   FirstPartyScoredBacktestEvaluation,
   FirstPartyScoredTeamDefenseEvaluation,
@@ -16,11 +21,14 @@ import { describe, expect, it } from "vitest";
 
 import {
   buildFirstPartyLeaguePublications,
+  type ScoredProjectionRow,
   canonicalProjectionPlayerId,
   effectiveFirstPartyProjectionPositions,
+  evaluateFirstPartyPublicationCandidates,
   firstPartyAvailableProjectionComponents,
   firstPartyDefensePlayerId,
   firstPartyStatusForKickoff,
+  frozenProjectionSupportsScoringProfile,
   espnSelfAssertedProjectionLeague,
   leagueScoredInterval,
   leagueScoredMean,
@@ -512,6 +520,58 @@ describe("first-party projection publication policy", () => {
     expect(leagueScoredMean(12, { ...calibration, centerAdjustment: -1.25 })).toBe(10.75);
   });
 
+  it("uses raw magnitude for affine intervals and refuses a missing raw forecast", () => {
+    const calibration: WeeklyPointResidualCalibration = {
+      ...playerEvaluation().overall,
+      pointPolicy: {
+        version: WEEKLY_POINT_CALIBRATION_POLICY_VERSION,
+        slope: 0.5,
+        intercept: 2,
+        intervalScale: "sqrt-absolute-raw",
+        lowerNormalizedError: -1,
+        upperNormalizedError: 2,
+        trainingSamples: 100,
+        intervalSamples: 100,
+      },
+    };
+    expect(leagueScoredMean(16, calibration)).toBe(10);
+    expect(leagueScoredInterval(10, calibration, 16)).toEqual({ floor: 6, ceiling: 18 });
+    expect(() => leagueScoredInterval(10, calibration)).toThrow("raw scored forecast");
+    expect(() => leagueScoredInterval(16, calibration, 16)).toThrow("does not match");
+    const profile = { id: "receiving", rules: [{ statId: "receiving_yards", points: 1 }] };
+    const row = {
+      playerId: "wr",
+      mean: 20,
+      floor: 18,
+      ceiling: 22,
+      confidence: 0.95,
+      components: { receiving_yards: 16 },
+    };
+    const corrected = rescoreFrozenProjection(row, profile, calibration, "WR");
+    expect(corrected).toMatchObject({ mean: 10, floor: 6, ceiling: 18, confidence: 0.49 });
+    expect(corrected.components).toBe(row.components);
+    const locked = { ...row, scoringProfileKey: projectionScoringProfileKey(profile) };
+    expect(rescoreFrozenProjection(locked, profile, calibration, "WR")).toMatchObject({
+      mean: 20,
+      floor: 18,
+      ceiling: 22,
+      confidence: 0.49,
+    });
+    // Legacy policy metadata must not bypass the new conditional-evidence requirement.
+    expect(
+      rescoreFrozenProjection(locked, profile, playerEvaluation().overall, "WR").confidence,
+    ).toBe(0.49);
+    const zero = {
+      ...locked,
+      mean: 0,
+      floor: 0,
+      ceiling: 0,
+      confidence: 1,
+      components: { receiving_yards: 0 },
+    };
+    expect(rescoreFrozenProjection(zero, profile, calibration, "WR")).toEqual(zero);
+  });
+
   it("freezes raw components but rescores them after a midweek scoring correction", () => {
     const row = {
       playerId: "locked-player",
@@ -542,6 +602,85 @@ describe("first-party projection publication policy", () => {
       rules: [{ statId: "passing_touchdowns", points: 4 }],
     } as const;
     expect(rescoreFrozenProjection(row, oldProfile, playerEvaluation().overall).mean).toBe(8);
+  });
+
+  it("keeps a locked forecast unchanged when new residuals arrive under the same scoring rules", () => {
+    const profile = {
+      id: "original",
+      rules: [{ statId: "passing_touchdowns", points: 4 }],
+    };
+    const row = {
+      playerId: "locked-player",
+      mean: 9,
+      floor: 6,
+      ceiling: 13,
+      confidence: 0.8,
+      components: { passing_touchdowns: 2 },
+      scoringProfileKey: projectionScoringProfileKey(profile),
+    };
+
+    expect(
+      rescoreFrozenProjection(
+        row,
+        { ...profile, id: "same-rules-new-label" },
+        { ...playerEvaluation().overall, centerAdjustment: -2, lowerError: -8, upperError: 10 },
+      ),
+    ).toEqual(row);
+  });
+
+  it("preserves a confirmed zero after kickoff even when scoring and position calibration change", () => {
+    const row = {
+      playerId: "inactive-player",
+      mean: 0,
+      floor: 0,
+      ceiling: 0,
+      confidence: 1,
+      components: { passing_yards: 0, passing_touchdowns: 0 },
+    };
+    const rescored = rescoreFrozenProjection(
+      row,
+      { id: "corrected", rules: [{ statId: "passing_touchdowns", points: 6 }] },
+      { ...playerEvaluation().overall, centerAdjustment: 2.5 },
+    );
+
+    expect(rescored).toMatchObject({ mean: 0, floor: 0, ceiling: 0, components: row.components });
+  });
+
+  it("requires frozen components for a new rule while ignoring other positions' scoring categories", () => {
+    const frozen = {
+      playerId: "locked-receiver",
+      mean: 6,
+      floor: 2,
+      ceiling: 10,
+      confidence: 0.8,
+      components: { receiving_yards: 60 },
+    };
+    expect(
+      frozenProjectionSupportsScoringProfile(
+        frozen,
+        {
+          id: "yards-and-defense",
+          rules: [
+            { statId: "receiving_yards", points: 0.1 },
+            { statId: "defensive_sacks", points: 1 },
+          ],
+        },
+        "WR",
+      ),
+    ).toBe(true);
+    expect(
+      frozenProjectionSupportsScoringProfile(
+        frozen,
+        {
+          id: "new-ppr",
+          rules: [
+            { statId: "receiving_yards", points: 0.1 },
+            { statId: "receptions", points: 1 },
+          ],
+        },
+        "WR",
+      ),
+    ).toBe(false);
   });
 
   it("advertises only model-emitted player, kicker, and D/ST scoring components", () => {
@@ -676,8 +815,11 @@ function playerBacktestFixture(
       const spec = BACKTEST_COMPONENT[position];
       const errors = residualBatch(seed, BACKTEST_PLAYERS_PER_POSITION, 6);
       errors.forEach((error, index) => {
-        const predicted = spec.actual - error / spec.pointsPerUnit;
-        const baseline = spec.actual - (error * 1.25) / spec.pointsPerUnit;
+        // Distinct player roles prevent an affine calibrator from learning an artificial
+        // constant outcome shared by every player in every week.
+        const actual = spec.actual + (index * 1.5) / spec.pointsPerUnit;
+        const predicted = actual - error / spec.pointsPerUnit;
+        const baseline = actual - (error * 1.25) / spec.pointsPerUnit;
         predictions.push({
           playerId: `backtest-${position}-${index}`,
           position,
@@ -687,7 +829,7 @@ function playerBacktestFixture(
           baseline: { [spec.component]: baseline },
           floor: { [spec.component]: predicted - 40 / spec.pointsPerUnit },
           ceiling: { [spec.component]: predicted + 40 / spec.pointsPerUnit },
-          actual: { [spec.component]: spec.actual },
+          actual: { [spec.component]: actual },
           trainingRows: 48,
           calibrationRows: 48,
         });
@@ -970,6 +1112,8 @@ function planPublications(input: {
   readonly defenseBacktest?: FirstPartyTeamDefenseBacktest;
   readonly rosters?: readonly RosterFixtureEntry[];
   readonly startedPositions?: readonly string[];
+  readonly modelMultiplier?: number;
+  readonly previousRows?: ReadonlyMap<string, ScoredProjectionRow>;
 }) {
   const playerBacktest = input.playerBacktest ?? playerBacktestFixture();
   return buildFirstPartyLeaguePublications({
@@ -998,13 +1142,30 @@ function planPublications(input: {
       leagueSeasonId: LEAGUE_SEASON_ID,
       ...entry,
     })),
-    publishedPlayers: BACKTEST_POSITIONS.map((position) =>
-      publishedPlayerFixture(position, PUBLICATION_TEAMS[0], {
+    publishedPlayers: BACKTEST_POSITIONS.map((position) => {
+      const player = publishedPlayerFixture(position, PUBLICATION_TEAMS[0], {
         gameStarted: input.startedPositions?.includes(position) ?? false,
-      }),
-    ),
+      });
+      return input.modelMultiplier === undefined
+        ? player
+        : {
+            ...player,
+            modelProjection: {
+              ...player.modelProjection,
+              components: Object.fromEntries(
+                Object.entries(player.modelProjection.components).map(([component, value]) => [
+                  component,
+                  value * input.modelMultiplier!,
+                ]),
+              ),
+            },
+          };
+    }),
     publishedDefenses: PUBLICATION_TEAMS.map((team) => publishedDefenseFixture(team)),
-    previousRowsByLeague: new Map(),
+    previousRowsByLeague:
+      input.previousRows === undefined
+        ? new Map()
+        : new Map([[LEAGUE_SEASON_ID, input.previousRows]]),
   });
 }
 
@@ -1198,6 +1359,248 @@ describe("weekly league publication withholds unsupported positions, not leagues
 });
 
 describe("published backtest MAE reflects only the league's supported positions", () => {
+  it("includes frozen point-policy provenance in the publication identity while preserving locked points", () => {
+    const first = planPublications({ rules: DST_SUPPORTED_RULES }).publications[0];
+    if (first === undefined) throw new Error("Missing publication fixture");
+    const receiver = first.rows.find((row) => row.playerId === "player-wr");
+    if (receiver === undefined) throw new Error("Missing receiver fixture");
+    const row = {
+      ...receiver,
+      confidence: 0.49,
+      scoringProfileKey: first.profileKey,
+      components: {
+        ...Object.fromEntries(
+          firstPartyProjectionComponentsForPosition("WR").map((key) => [key, 0]),
+        ),
+        ...receiver.components,
+      },
+    };
+    const current = planPublications({
+      rules: DST_SUPPORTED_RULES,
+      startedPositions: ["WR"],
+      previousRows: new Map([
+        [row.playerId, { ...row, pointPolicyVersion: WEEKLY_POINT_CALIBRATION_POLICY_VERSION }],
+      ]),
+    }).publications[0];
+    const legacy = planPublications({
+      rules: DST_SUPPORTED_RULES,
+      startedPositions: ["WR"],
+      previousRows: new Map([[row.playerId, { ...row, pointPolicyVersion: "unknown" }]]),
+    }).publications[0];
+    expect(current?.rows.find((entry) => entry.playerId === row.playerId)).toMatchObject({
+      mean: row.mean,
+      floor: row.floor,
+      ceiling: row.ceiling,
+      confidence: 0.49,
+    });
+    expect(legacy?.rows.find((entry) => entry.playerId === row.playerId)).toMatchObject({
+      mean: row.mean,
+      floor: row.floor,
+      ceiling: row.ceiling,
+      confidence: 0.49,
+    });
+    expect(current?.inputChecksum).not.toBe(legacy?.inputChecksum);
+    expect(legacy?.metadata.frozenPointPolicyVersions).toEqual({ "player-wr": "unknown" });
+  });
+
+  it("refuses legacy live forecasts missing a newly priced long-TD component without losing unaffected positions", () => {
+    const source = playerBacktestFixture();
+    const completeHistory = {
+      ...source,
+      predictions: source.predictions.map((row) => ({
+        ...row,
+        predicted: { ...row.predicted, receiving_touchdowns_40_plus: 0 },
+        baseline: { ...row.baseline, receiving_touchdowns_40_plus: 0 },
+        actual: { ...row.actual, receiving_touchdowns_40_plus: 0 },
+      })),
+    };
+    const plan = planPublications({
+      rules: [...DST_SUPPORTED_RULES, espnRule("45", 2)],
+      playerBacktest: completeHistory,
+    });
+    // Receiving-only bonus evidence is required for RB/WR/TE; QB does not model that family.
+    expect(plan.publications[0]?.metadata.publishedPositions).toEqual(["QB", "K", "DST"]);
+    expect(plan.withheld.flatMap((entry) => entry.positions ?? [])).toContainEqual({
+      position: "WR",
+      source: "component-coverage",
+      reasons: ["Current player forecasts are missing required long-touchdown event evidence."],
+    });
+  });
+
+  it("publishes useful points with cautious confidence when starter intervals lack enough evidence", () => {
+    const source = playerBacktestFixture();
+    const receiverRows: FirstPartyBacktestPrediction[] = Array.from({ length: 3 }, (_, week) =>
+      Array.from({ length: 100 }, (_, player) => ({
+        playerId: `receiver-${String(player).padStart(3, "0")}`,
+        position: "WR" as const,
+        season: BACKTEST_SEASON,
+        week: week + 1,
+        predicted: { receiving_yards: 100 },
+        baseline: { receiving_yards: 100 },
+        actual: { receiving_yards: 100 + (((player * 37) % 100) - 49.5) / 2.5 },
+        floor: {},
+        ceiling: {},
+        trainingRows: 48,
+        calibrationRows: 48,
+      })),
+    ).flat();
+    const plan = planPublications({
+      rules: DST_SUPPORTED_RULES,
+      playerBacktest: {
+        ...source,
+        predictions: [
+          ...source.predictions.filter((row) => row.position !== "WR"),
+          ...receiverRows,
+        ],
+      },
+    });
+    const publication = plan.publications[0];
+    expect(publication?.metadata.publishedPositions).toContain("WR");
+    const receiver = publication?.rows.find((row) => row.playerId === "player-wr");
+    expect(receiver?.mean).toBeGreaterThan(0);
+    expect(receiver?.confidence).toBe(0.49);
+    expect(receiver?.pointPolicyVersion).toBe(WEEKLY_POINT_CALIBRATION_POLICY_VERSION);
+    expect(publication?.metadata.livePointCalibration).toMatchObject({
+      policyVersion: WEEKLY_POINT_CALIBRATION_POLICY_VERSION,
+      byPosition: {
+        WR: {
+          starterIntervalQuality: {
+            state: "insufficient",
+            samples: 72,
+            qualityFlag: "uncalibrated_starter_intervals",
+          },
+        },
+      },
+    });
+    expect(publication?.metadata.warnings).toContain(
+      "uncalibrated_starter_intervals: WR forecast ranges have insufficient or unreliable historical starter coverage; advice confidence is limited.",
+    );
+  });
+
+  it("publishes a separately qualified constant recency candidate when the adaptive strategy loses", () => {
+    const source = playerBacktestFixture();
+    const backtest = {
+      ...source,
+      predictions: source.predictions.map((prediction) => {
+        if (prediction.position !== "WR") return prediction;
+        const actual = prediction.actual.receiving_yards!;
+        const error = actual - prediction.predicted.receiving_yards!;
+        return {
+          ...prediction,
+          predicted: { receiving_yards: actual - error * (prediction.week <= 12 ? 0.1 : 4) },
+        };
+      }),
+    };
+    const plan = planPublications({
+      rules: DST_SUPPORTED_RULES,
+      playerBacktest: backtest,
+      modelMultiplier: 2,
+    });
+    const publication = plan.publications[0]!;
+    expect(publication.metadata.publishedPositions).toContain("WR");
+    const evidence = publication.metadata.publicationCandidateEvidence as {
+      position: string;
+      selected: string;
+      adaptive: { mae: number; baselineMae: number };
+      fixedRecency: { mae: number; baselineMae: number; intervalCoverage: number };
+    }[];
+    const receiver = evidence.find((row) => row.position === "WR")!;
+    expect(receiver.selected).toBe("fixed-recency");
+    expect(receiver.adaptive.mae).toBeGreaterThan(receiver.adaptive.baselineMae);
+    expect(receiver.fixedRecency.mae).toBeLessThanOrEqual(receiver.fixedRecency.baselineMae);
+    expect(receiver.fixedRecency.intervalCoverage).toBeGreaterThanOrEqual(0.62);
+    expect(receiver.fixedRecency.intervalCoverage).toBeLessThanOrEqual(0.78);
+    expect(publication.rows.find((row) => row.playerId === "player-wr")?.components).toEqual({
+      receiving_yards: BACKTEST_COMPONENT.WR.actual,
+    });
+    expect(evidence.find((row) => row.position === "RB")?.selected).toBe("adaptive-champion");
+  });
+
+  it("does not let a hindsight model winner or its residuals change the constant candidate's evidence", () => {
+    const source = playerBacktestFixture();
+    const profile = { id: "receiving-yards", rules: [{ statId: "receiving_yards", points: 0.1 }] };
+    const original = evaluateFirstPartyPublicationCandidates(source, profile);
+    const perfectModel = evaluateFirstPartyPublicationCandidates(
+      {
+        ...source,
+        predictions: source.predictions.map((prediction) => ({
+          ...prediction,
+          predicted: prediction.actual,
+        })),
+      },
+      profile,
+    );
+    const direct = evaluateWeeklyPointCalibration(
+      {
+        ...source,
+        predictions: source.predictions.map((prediction) => ({
+          ...prediction,
+          predicted: prediction.baseline,
+        })),
+      },
+      profile,
+    );
+    expect(perfectModel.fixedRecencyEvaluation).toEqual(original.fixedRecencyEvaluation);
+    expect(original.fixedRecencyEvaluation).toEqual(direct);
+  });
+
+  it("withholds a position whose hindsight winner conceals a losing walk-forward strategy", () => {
+    const source = playerBacktestFixture();
+    const basePlayerBacktest = {
+      ...source,
+      predictions: source.predictions.map((prediction) => {
+        if (prediction.position !== "WR") return prediction;
+        const actual = prediction.actual.receiving_yards!;
+        const error = actual - prediction.predicted.receiving_yards!;
+        return {
+          ...prediction,
+          predicted: { receiving_yards: actual - error * (prediction.week <= 12 ? 1 / 6 : 1) },
+          baseline: { receiving_yards: actual - error * (prediction.week <= 12 ? 5 / 6 : 1 / 6) },
+        };
+      }),
+    };
+    const profile = {
+      id: "receiving-yards",
+      rules: [{ statId: "receiving_yards", points: 0.1 }],
+    };
+    const champion = applyFirstPartyProjectionChampionPolicy(basePlayerBacktest, profile);
+    const hindsight = evaluateWeeklyPointCalibration(
+      applyFirstPartyProjectionFinalPolicy(basePlayerBacktest, champion.policy),
+      profile,
+    );
+    const locked = evaluateWeeklyPointCalibration(champion.backtest, profile);
+    expect(champion.policy.byPosition.WR?.strategy).toBe("first-party-model");
+    expect(hindsight.byPosition.WR!.mae).toBeLessThan(hindsight.byPosition.WR!.baselineMae);
+    expect(locked.byPosition.WR!.mae).toBeGreaterThan(locked.byPosition.WR!.baselineMae);
+    const candidates = evaluateFirstPartyPublicationCandidates(basePlayerBacktest, profile);
+    expect(candidates.liveCalibration.byPosition.WR).toEqual({
+      ...hindsight.byPosition.WR,
+      starterIntervalQuality: locked.byPosition.WR?.starterIntervalQuality,
+    });
+    expect(candidates.playerEvaluation.byPosition.WR).toEqual(locked.byPosition.WR);
+    expect(candidates.fixedRecencyEvaluation.byPosition.WR!.mae).toBeLessThanOrEqual(
+      candidates.fixedRecencyEvaluation.byPosition.WR!.baselineMae,
+    );
+    // A defended baseline MAE alone is insufficient: this regime change leaves its interval evidence
+    // outside the unchanged coverage gate. Both strategies must therefore remain withheld.
+    expect(candidates.fixedRecencyPositions).not.toContain("WR");
+
+    const plan = planPublications({
+      rules: DST_SUPPORTED_RULES,
+      playerBacktest: basePlayerBacktest,
+    });
+    const publication = plan.publications[0];
+    expect(publication).toBeDefined();
+    expect(publication!.metadata.publishedPositions).not.toContain("WR");
+    expect(publication!.metadata.publishedPositions).toContain("RB");
+    expect(publication!.rows.some((row) => row.playerId === "player-wr")).toBe(false);
+    expect(plan.withheld.flatMap((entry) => entry.positions ?? [])).toContainEqual({
+      position: "WR",
+      source: "backtest-gate",
+      reasons: ["The WR league-scored backtest did not clear the recency-only baseline gate."],
+    });
+  });
+
   it("equals the K-position evaluation, not the all-position aggregate, for a kicker-only league", () => {
     const plan = planPublications({ rules: KICKER_ONLY_RULES });
 
@@ -1216,9 +1619,8 @@ describe("published backtest MAE reflects only the league's supported positions"
       basePlayerBacktest,
       publication.profile,
     );
-    const finalBacktest = applyFirstPartyProjectionFinalPolicy(basePlayerBacktest, champion.policy);
     const evaluation = evaluateFirstPartyBacktestForScoringProfile(
-      finalBacktest,
+      champion.backtest,
       publication.profile,
     );
     const kEvaluation = evaluation.byPosition.K;

@@ -138,8 +138,8 @@ describe("NflverseTeamWeeklyStatsSource", () => {
 
     expect(requests).toHaveLength(1);
     expect(requests[0]?.url).toBe(buildNflverseTeamWeeklyStatsUrl(2024));
-    expect(requests[0]?.headers.get("if-none-match")).toBe('"team-2024-v1"');
-    expect(requests[0]?.headers.get("if-modified-since")).toBe("Mon, 20 Jul 2026 17:00:00 GMT");
+    expect(requests[0]?.headers.get("if-none-match")).toBeNull();
+    expect(requests[0]?.headers.get("if-modified-since")).toBeNull();
     expect(result).toMatchObject({
       state: "changed",
       sourceKey: NFLVERSE_TEAM_WEEKLY_STATS_SOURCE_KEY,
@@ -241,7 +241,7 @@ describe("NflverseTeamWeeklyStatsSource", () => {
     });
   });
 
-  it("preserves conditional release state on a 304", async () => {
+  it("rejects unconditioned304 rather than overlooking PBP-only changes", async () => {
     const source = teamSource({
       fetch: () => Promise.resolve(new Response(null, { status: 304 })),
     });
@@ -251,11 +251,7 @@ describe("NflverseTeamWeeklyStatsSource", () => {
         lastModified: "Tue, 21 Jul 2026 17:00:00 GMT",
         checksumSha256: "a".repeat(64),
       }),
-    ).resolves.toMatchObject({
-      state: "unchanged",
-      season: 2024,
-      checksumSha256: "a".repeat(64),
-    });
+    ).rejects.toMatchObject({ code: "UPSTREAM" });
   });
 
   it("fails closed when an upstream model input column disappears", async () => {
