@@ -90,3 +90,18 @@ scoring-profile gaps stay visible until matching evidence is validated and admit
 
 The Mini doctor timed out; validation in this incident ran on Linux. Build, rollout, and live
 recovery artifacts are retained under `/tmp/laces-ros-incident-20260917`.
+
+### Live recovery, 10:31 UTC
+
+Worker and ROS-worker revision `271909345b5838ebea644d50d3fa27de7deca73e` is deployed. Type
+checking, formatting, scoped lint, and the worker build passed. API readiness remains healthy.
+The forced catalog replay completed at 10:30:32 UTC. The roster replay at 10:30:42 UTC wrote
+5,484 new immutable observations with zero unmatched fantasy rows. Henderson now resolves through
+`HEN032810` to one canonical player, retaining a NULL GSIS ID rather than inventing one.
+
+Recovery job `286b4cb5-4962-4de1-b6e0-cce6fbcaa95f` started at 10:30:53 UTC with zero retries.
+All six artifact workers captured the same repaired input checksum; three profiles have live
+targets and are simulating. This is an active recovery run, not verified new publication yet.
+All seven provider connections and the weekly projection source remain healthy. The monitor's
+persisted state now retains only `ros-projection-stale` for this publication incident; the duplicate
+`ros-refresh-incomplete` key is gone.
