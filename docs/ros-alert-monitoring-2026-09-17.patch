@@ -1,0 +1,139 @@
+--- a/laces-out-ops/sentinel.sh
++++ b/laces-out-ops/sentinel.sh
+@@ -127,9 +127,6 @@
+         observations+=("ROS ${ros_league_name}: ${ros_age_hours}h old")
+       fi
+     done <<<"${ros_publications}"
+-    if [[ ${#stale_ros_leagues[@]} -gt 0 ]]; then
+-      add_issue "ros-projection-stale" "ROS projections stale or missing (${ros_projection_max_age_hours}h limit). Last-approved numbers remain the fallback. $(printf '%s; ' "${stale_ros_leagues[@]}")"
+-    fi
+   fi
+ 
+   ros_job="$(psql_query -At -F '|' -c "
+@@ -138,18 +135,7 @@
+            coalesce(started_on > now() - interval '36 hours', false)
+       from pgboss.job where name = 'ros-projection-refresh'
+       order by created_on desc limit 1;")"
+-  if [[ -n "${ros_job}" ]]; then
+-    IFS='|' read -r ros_job_state ros_job_retries ros_job_error ros_job_recent <<<"${ros_job}"
+-    if [[ "${ros_job_state}" == failed || "${ros_job_state}" == retry ||
+-          ( "${ros_job_state}" == active && "${ros_job_retries}" -gt 0 ) ]]; then
+-      add_issue "ros-refresh-failed" "Latest ROS refresh ${ros_job_state}, ${ros_job_retries} retry(s)${ros_job_error:+: ${ros_job_error}}"
+-    elif [[ "${ros_job_state}" == completed && "${ros_job_recent}" == t &&
+-            ${#stale_ros_leagues[@]} -gt 0 ]]; then
+-      add_issue "ros-refresh-incomplete" "ROS refresh completed, but ${#stale_ros_leagues[@]} league(s) still have stale or missing approved numbers"
+-    else
+-      observations+=("latest ROS refresh ${ros_job_state}, ${ros_job_retries} retry(s)")
+-    fi
+-  fi
++  source /ops/ros-publication-issues.sh
+ 
+   gated_optional_sources="$(psql_query -At -c "
+     select count(*)
+--- a/laces-out-ops/Dockerfile
++++ b/laces-out-ops/Dockerfile
+@@ -2,7 +2,7 @@
+ 
+ RUN apk add --no-cache bash coreutils curl findutils jq tzdata util-linux
+ 
+-COPY common.sh sentinel.sh notify-state.sh backup.sh restore-verify.sh projection-scorecard.sh model-validation.sh acknowledge-dead-letters.sh /ops/
++COPY common.sh sentinel.sh notify-state.sh ros-publication-issues.sh backup.sh restore-verify.sh projection-scorecard.sh model-validation.sh acknowledge-dead-letters.sh /ops/
+ COPY crontab /etc/crontabs/root
+ COPY entrypoint.sh /entrypoint.sh
+ RUN chmod 0755 /entrypoint.sh /ops/*.sh
+--- /dev/null
++++ b/laces-out-ops/ros-publication-issues.sh
+@@ -0,0 +1,20 @@
++#!/usr/bin/env bash
++# Sourced after read-only publication/job queries. Publication health owns the incident lifetime:
++# a new running job does not recover stale numbers, and its completion does not start a new issue.
++ros_job_detail=""
++if [[ -n "${ros_job}" ]]; then
++  IFS='|' read -r ros_job_state ros_job_retries ros_job_error ros_job_recent <<<"${ros_job}"
++  ros_job_detail="Latest ROS refresh ${ros_job_state}, ${ros_job_retries} retry(s)."
++  if [[ "${ros_job_state}" == failed || "${ros_job_state}" == retry ||
++        ( "${ros_job_state}" == active && "${ros_job_retries}" -gt 0 ) ]]; then
++    add_issue "ros-refresh-failed" "Latest ROS refresh ${ros_job_state}, ${ros_job_retries} retry(s)${ros_job_error:+: ${ros_job_error}}"
++  elif [[ "${ros_job_state}" == completed && "${ros_job_recent}" == t &&
++          ${#stale_ros_leagues[@]} -gt 0 ]]; then
++    ros_job_detail="Latest ROS refresh completed, but ${#stale_ros_leagues[@]} league(s) still have stale or missing approved numbers."
++  else
++    observations+=("latest ROS refresh ${ros_job_state}, ${ros_job_retries} retry(s)")
++  fi
++fi
++if [[ ${#stale_ros_leagues[@]} -gt 0 ]]; then
++  add_issue "ros-projection-stale" "ROS projections stale or missing (${ros_projection_max_age_hours}h limit). Last-approved numbers remain the fallback. ${ros_job_detail} $(printf '%s; ' "${stale_ros_leagues[@]}")"
++fi
+--- /dev/null
++++ b/laces-out-ops/ros-publication-issues.test.sh
+@@ -0,0 +1,70 @@
++#!/usr/bin/env bash
++set -Eeuo pipefail
++script_root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
++STATE_ROOT="$(mktemp -d)"
++trap 'rm -rf "$STATE_ROOT"' EXIT
++alert_observations=2
++ros_projection_max_age_hours=36
++messages="${STATE_ROOT}/messages"
++timestamp() { printf 'test'; }
++# No live notification function or common.sh is loaded by this regression test.
++send_telegram() { printf '%s\n' "$1" >>"${messages}"; }
++add_issue() { issue_keys+=("$1"); issue_details+=("$2"); }
++probe() {
++  issue_keys=()
++  issue_details=()
++  observations=()
++  source "${script_root}/ros-publication-issues.sh"
++  source "${script_root}/notify-state.sh"
++}
++stale_ros_leagues=('League A: 219h old' 'League B: never published')
++ros_job='completed|0||t'
++probe; probe
++[[ $(grep -c 'needs attention' "$messages") -eq 1 ]]
++grep -q 'completed, but 2 league(s)' "$messages"
++grep -Fxq ros-projection-stale "${STATE_ROOT}/sentinel.notified.state"
++! grep -Fxq ros-refresh-incomplete "${STATE_ROOT}/sentinel.notified.state"
++
++# A nightly queued/running job never clears the ongoing publication incident. Completion with
++# the same stale outputs adds detail to the report, not a second "new issue" notification.
++for ros_job in 'created|0||f' 'active|0||t' 'completed|0||t'; do
++  probe; probe
++  grep -Fxq ros-projection-stale "${STATE_ROOT}/sentinel.notified.state"
++done
++[[ $(grep -c 'needs attention' "$messages") -eq 1 ]]
++[[ "${issue_details[0]}" == *'completed, but 2 league(s)'* ]]
++! grep -q 'fresh again' "$messages"
++
++# Existing persisted state from the previous version loses only the duplicate symptom key.
++printf '%s\n' ros-projection-stale ros-refresh-incomplete >"${STATE_ROOT}/sentinel.notified.state"
++probe; probe
++[[ $(grep -c 'needs attention' "$messages") -eq 1 ]]
++! grep -q 'fresh again' "$messages"
++
++# A real refresh failure remains independently actionable and cannot masquerade as success.
++ros_job='failed|4|Simulation failed|t'
++probe; probe
++[[ $(grep -c 'needs attention' "$messages") -eq 2 ]]
++grep -q 'Simulation failed' "$messages"
++ros_job='active|0||t'
++probe; probe
++[[ $(grep -c 'needs attention' "$messages") -eq 2 ]]
++! grep -q 'fresh again' "$messages"
++
++# Fresh published numbers, rather than job status, resolve the incident exactly once.
++stale_ros_leagues=()
++ros_job='completed|0||t'
++probe; probe; probe
++[[ $(grep -c 'fresh again' "$messages") -eq 1 ]]
++stale_ros_leagues=('League A: 36h old')
++ros_job='completed|0||f'
++probe; probe
++[[ $(grep -c 'needs attention' "$messages") -eq 3 ]]
++grep -q '36h old' "$messages"
++
++# Missing queue history must not suppress known stale publication data.
++ros_job=''
++probe; probe
++grep -Fxq ros-projection-stale "${STATE_ROOT}/sentinel.notified.state"
++[[ $(grep -c 'needs attention' "$messages") -eq 3 ]]
++printf 'ROS publication alert regression checks passed\n'

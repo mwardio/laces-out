@@ -54,6 +54,7 @@ import {
 import { and, eq, lte } from "drizzle-orm";
 
 import { currentNflSeason } from "./nfl-season.js";
+import { resolveNflverseRosterIdentities } from "./nflverse-roster-identities.js";
 
 // Active-season artifacts are checked during the game-aware near-lock sweep. Completed seasons
 // are admitted once and reused until an operator forces a refresh or a parser/schema release
@@ -66,6 +67,7 @@ const chunkSize = 500;
 // normalized player-week checksums schema-aware, so an unchanged upstream artifact is replayed
 // into a distinct immutable observation set when its component contract changes.
 const sourceSchemaVersion = 4;
+const rosterIdentityVersion = 1;
 const fantasyRosterPositions = new Set(["QB", "RB", "FB", "WR", "TE", "K"]);
 
 export interface WeeklyDataRefreshResult {
@@ -783,7 +785,22 @@ export class NflverseWeeklyDataRefresher {
       };
     }
     try {
-      const result = await this.#weeklyRostersSource.check(season, sourceState(source));
+      // Roster selection binds normalized identity as well as source bytes. A schema migration or
+      // explicit repair replays unchanged bytes into a new immutable selection; a normal 304
+      // keeps the existing selection checksum rather than replacing it with the raw checksum.
+      const replayIdentities =
+        force ||
+        source.metadata.sourceSchemaVersion !== sourceSchemaVersion ||
+        source.metadata.rosterIdentityVersion !== rosterIdentityVersion;
+      const result = await this.#weeklyRostersSource.check(season, {
+        etag: replayIdentities ? null : source.etag,
+        lastModified: replayIdentities ? null : source.lastModified,
+        checksumSha256: replayIdentities
+          ? null
+          : typeof source.metadata.rawRosterChecksum === "string"
+            ? source.metadata.rawRosterChecksum
+            : null,
+      });
       const checkedAt = new Date(result.checkedAt);
       const nextCheckAt = new Date(checkedAt.getTime() + descriptor.checkIntervalMinutes * 60_000);
       if (result.state === "unchanged") {
@@ -795,7 +812,7 @@ export class NflverseWeeklyDataRefresher {
             nextCheckAt,
             etag: result.etag,
             lastModified: result.lastModified,
-            lastChecksum: result.checksumSha256,
+            lastChecksum: source.lastChecksum,
             consecutiveFailures: 0,
             lastErrorAt: null,
             lastErrorCode: null,
@@ -821,19 +838,25 @@ export class NflverseWeeklyDataRefresher {
         };
       }
 
-      const identityRows = await this.#database
-        .select({ id: players.id, externalId: players.gsisId })
-        .from(players);
-      const identity = new Map(
-        identityRows.flatMap((row) =>
-          row.externalId ? ([[row.externalId, row.id]] as const) : [],
-        ),
+      const identity = await resolveNflverseRosterIdentities(
+        this.#database,
+        result.observations,
+        checkedAt,
       );
       const resolved = result.observations.map((observation) => ({
         observation,
         externalPlayerId: weeklyRosterIdentityKey(observation),
-        playerId: observation.gsisId ? (identity.get(observation.gsisId) ?? null) : null,
+        playerId: identity.get(observation) ?? null,
       }));
+      const selectionChecksum = createHash("sha256")
+        .update(
+          JSON.stringify({
+            schema: "nflverse-roster-identities-v1",
+            rawChecksum: result.checksumSha256,
+            identities: resolved.map((row) => [row.externalPlayerId, row.playerId]),
+          }),
+        )
+        .digest("hex");
       const modelEligible = resolved.filter(({ observation }) =>
         fantasyRosterPositions.has(observation.position),
       );
@@ -848,7 +871,7 @@ export class NflverseWeeklyDataRefresher {
         matchRate >= sourceMatchRateThreshold(descriptor.key).minimumMatchRate;
       let rowsWritten = 0;
       await this.#database.transaction(async (transaction) => {
-        const idempotencyKey = `${descriptor.key}:${result.checksumSha256}:v${sourceSchemaVersion}`;
+        const idempotencyKey = `${descriptor.key}:${selectionChecksum}:v${sourceSchemaVersion}`;
         const [createdRun] = await transaction
           .insert(syncRuns)
           .values({
@@ -857,7 +880,7 @@ export class NflverseWeeklyDataRefresher {
             idempotencyKey,
             startedAt: now,
             recordsRead: result.rowsRead,
-            artifactChecksum: result.checksumSha256,
+            artifactChecksum: selectionChecksum,
           })
           .onConflictDoNothing({ target: syncRuns.idempotencyKey })
           .returning({ id: syncRuns.id });
@@ -889,7 +912,7 @@ export class NflverseWeeklyDataRefresher {
                   rosterStatus: observation.status,
                   statusDescription: observation.statusDescriptionAbbr,
                   fetchedAt: checkedAt,
-                  inputChecksum: result.checksumSha256,
+                  inputChecksum: selectionChecksum,
                 })),
             )
             .onConflictDoNothing()
@@ -909,7 +932,7 @@ export class NflverseWeeklyDataRefresher {
             nextCheckAt,
             etag: result.etag,
             lastModified: result.lastModified,
-            lastChecksum: result.checksumSha256,
+            lastChecksum: selectionChecksum,
             consecutiveFailures: 0,
             lastErrorAt: null,
             lastErrorCode: null,
@@ -926,6 +949,8 @@ export class NflverseWeeklyDataRefresher {
                 coveredSeasonTypes: result.coveredSeasonTypes,
               }),
               matchRate,
+              rosterIdentityVersion,
+              rawRosterChecksum: result.checksumSha256,
               matchDenominator: modelEligible.length,
               publishable: rosterPublishable,
               qualityState: rosterPublishable ? "publishable" : "degraded",

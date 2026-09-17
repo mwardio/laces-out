@@ -636,14 +636,15 @@ function ninePlusForecast(
   };
 }
 
-function ninePlusPolicy(): FirstPartyRosChampionPolicy {
+function ninePlusPolicy(position: FirstPartyRosRailPosition = "WR"): FirstPartyRosChampionPolicy {
   const evaluationSeasons = [2023, 2024, 2025].map((season) => ({
     season,
     complete: true,
     forecasts: [6, 7, 8].flatMap((asOfWeek) =>
-      Array.from({ length: 7 }, (_, index) =>
-        ninePlusForecast(season, asOfWeek, `${season}-${asOfWeek}-${index}`),
-      ),
+      Array.from({ length: 7 }, (_, index) => ({
+        ...ninePlusForecast(season, asOfWeek, `${season}-${asOfWeek}-${index}`),
+        position,
+      })),
     ),
   }));
   return evaluateFirstPartyRosChampionPolicy(evaluationSeasons, {
@@ -707,15 +708,23 @@ describe("buildFirstPartyRosLeagueTarget", () => {
       playerId: string;
       position: string;
       team: string | null;
+      rosterStatus?: string | null;
     }[];
     matchedPositions?: readonly FirstPartyRosRailPosition[];
     supportedPositions?: readonly FirstPartyRosRailPosition[];
     unmatchedCandidateCount?: number;
+    unmatchedCandidates?: readonly {
+      externalPlayerId: string;
+      positions: readonly FirstPartyRosRailPosition[];
+    }[];
+    history?: readonly FirstPartyWeeklyStatLine[];
     window?: FirstPartyRosWindow;
     asOfAt?: Date;
   }) {
     const matchedPositions = input.matchedPositions ?? ["QB", "RB", "WR", "TE", "K"];
     const targetWindow = input.window ?? window;
+    const selectedHistory = input.history ?? history;
+    const selectedTrainingHistory = selectedHistory.filter((row) => row.season < 2026);
     return buildFirstPartyRosLeagueTarget({
       artifact: artifact(input.policy),
       leagueSeasonId: "22222222-2222-4222-8222-222222222222",
@@ -726,15 +735,28 @@ describe("buildFirstPartyRosLeagueTarget", () => {
       window: targetWindow,
       candidatePlayers: input.candidatePlayers,
       unmatchedCandidateCount: input.unmatchedCandidateCount ?? 0,
-      featureHistory: targetWindow.asOfWeek === 0 ? trainingHistory : featureHistory,
-      calibration,
+      ...(input.unmatchedCandidates ? { unmatchedCandidates: input.unmatchedCandidates } : {}),
+      featureHistory: input.history
+        ? selectedHistory.filter(
+            (row) => row.season * 32 + row.week <= 2026 * 32 + targetWindow.asOfWeek,
+          )
+        : targetWindow.asOfWeek === 0
+          ? trainingHistory
+          : featureHistory,
+      calibration: input.history
+        ? runFirstPartyProjectionBacktest(selectedTrainingHistory).calibration
+        : calibration,
       defenseFeatureHistory: [],
       defenseCalibration: {
         modelVersion: "laces-first-party-v1",
         intervals: {},
       },
-      availabilityCalibration,
-      roleCalibration,
+      availabilityCalibration: input.history
+        ? calibrateHistoricalRosAvailability(selectedTrainingHistory, schedules, scoringProfile)
+        : availabilityCalibration,
+      roleCalibration: input.history
+        ? calibrateHistoricalRosRole(selectedTrainingHistory, schedules, scoringProfile)
+        : roleCalibration,
       kickerCalibration,
       injuries: [],
       schedules,
@@ -771,6 +793,14 @@ describe("buildFirstPartyRosLeagueTarget", () => {
     expect(result.target!.evidence[0]!.bucket).toBe("nine-plus");
     expect(result.target!.evidence[0]!.inputChecksum).toMatch(/^[a-f0-9]{64}$/u);
     expect(result.skippedPlayers).toBe(1);
+    expect(result.target!.candidateUniverse?.skippedCandidates).toEqual([
+      {
+        playerId: "wr-off",
+        externalPlayerId: null,
+        position: "WR",
+        reason: "projection-unavailable",
+      },
+    ]);
     // The publication layer re-derives the per-position match for itself, so the target carries
     // the two inputs it needs rather than the already-computed answer.
     expect(result.target!.leagueScoringProfile).toBe(scoringProfile);
@@ -784,6 +814,7 @@ describe("buildFirstPartyRosLeagueTarget", () => {
       matchedPositions: ["WR"],
       supportedPositions: ["WR"],
       unmatchedCandidateCount: 1,
+      unmatchedCandidates: [{ externalPlayerId: "ESB-MISSING", positions: ["WR"] }],
     });
 
     expect(result.skippedPlayers).toBe(1);
@@ -792,6 +823,72 @@ describe("buildFirstPartyRosLeagueTarget", () => {
       evaluatedPlayerCount: 1,
       skippedPlayerCount: 1,
       complete: false,
+      skippedCandidates: [
+        {
+          playerId: null,
+          externalPlayerId: "ESB-MISSING",
+          position: "WR",
+          reason: "identity-unresolved",
+        },
+      ],
+      skippedCandidatesTruncated: false,
+    });
+  });
+
+  it("bounds skipped identity diagnostics without reducing the completeness denominator", () => {
+    const result = run({
+      policy: ninePlusPolicy(),
+      candidatePlayers: [{ playerId: "wr-0", position: "WR", team: "BUF" }],
+      matchedPositions: ["WR"],
+      supportedPositions: ["WR"],
+      unmatchedCandidateCount: 25,
+      unmatchedCandidates: Array.from({ length: 25 }, (_, index) => ({
+        externalPlayerId: `ESB-MISSING-${index}`,
+        positions: ["WR"],
+      })),
+    });
+    expect(result.target?.candidateUniverse).toMatchObject({
+      expectedPlayerCount: 26,
+      evaluatedPlayerCount: 1,
+      skippedPlayerCount: 25,
+      complete: false,
+      skippedCandidatesTruncated: true,
+    });
+    expect(result.target?.candidateUniverse?.skippedCandidates).toHaveLength(20);
+  });
+
+  it("covers a resolved practice-squad running back without personal history", () => {
+    const runningBackHistory = history.map((row) => ({
+      ...row,
+      playerId: row.playerId.replace("wr-", "rb-"),
+      position: "RB",
+      components: {
+        ...row.components,
+        rushing_attempts: 12,
+        rushing_yards: 55,
+        rushing_touchdowns: 0,
+      },
+    }));
+    const result = run({
+      policy: ninePlusPolicy("RB"),
+      candidatePlayers: [
+        { playerId: "resolved-henderson", position: "RB", team: "NYJ", rosterStatus: "DEV" },
+      ],
+      matchedPositions: ["RB"],
+      supportedPositions: ["RB"],
+      history: runningBackHistory,
+    });
+    expect(runningBackHistory.some((row) => row.playerId === "resolved-henderson")).toBe(false);
+    expect(result.target?.released.map((player) => player.playerId)).toEqual([
+      "resolved-henderson",
+    ]);
+    expect(result.target?.released[0]?.projection.expectedGames).toBeGreaterThan(0);
+    expect(result.target?.candidateUniverse).toMatchObject({
+      expectedPlayerCount: 1,
+      evaluatedPlayerCount: 1,
+      skippedPlayerCount: 0,
+      complete: true,
+      skippedCandidates: [],
     });
   });
 

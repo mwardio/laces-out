@@ -607,6 +607,12 @@ shadow-source checks. It alerts after 36 hours by default
 (`LACES_OUT_ROS_PROJECTION_MAX_AGE_HOURS`), with the existing three consecutive five-minute checks
 to debounce alerts. A fresh league cannot conceal a stale peer. Missing complete publications also
 alert, and successful Telegram delivery is recorded before suppressing repeated notifications.
+Publication staleness stays one incident across queued, running, and completed refresh jobs. A
+completed job that publishes nothing adds detail to that incident; it does not count as a new
+failure on every nightly run. Only fresh approved sets resolve the publication incident. Refresh
+failures remain independently actionable. Source metadata `publishedTargets` and
+`arbitrationSkippedTargets` describe the current refresh and reset to zero for blocked or unchanged
+runs; they are never inherited from an older successful release.
 
 The live ROS candidate provider materializes source observations, scoring rules, player identities,
 and roster aliases inside a short read-only repeatable-read transaction. It verifies the requested

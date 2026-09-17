@@ -73,6 +73,14 @@ export interface FirstPartyRosPublicationTarget {
     readonly expectedPlayerCount: number;
     readonly evaluatedPlayerCount: number;
     readonly skippedPlayerCount: number;
+    /** Bounded identity/input failures, so an incomplete universe has an actionable explanation. */
+    readonly skippedCandidates?: readonly {
+      readonly playerId: string | null;
+      readonly externalPlayerId: string | null;
+      readonly position: string;
+      readonly reason: string;
+    }[];
+    readonly skippedCandidatesTruncated?: boolean;
     readonly expectedPositions: readonly FirstPartyRosRailPosition[];
     readonly evaluatedPositions: readonly FirstPartyRosRailPosition[];
     /** League roster identities substituted for shared canonical simulation IDs at persistence. */
@@ -876,8 +884,8 @@ export class FirstPartyRosProjectionShadowService implements ProjectionRefreshSe
           // the metadata carries the count.
           ...(arbitrationSkippedTargets > 0 ? ["ros_artifact_arbitration_skipped_targets"] : []),
         ].join("|"),
-        ...(publishedTargets > 0 ? { publishedTargets } : {}),
-        ...(arbitrationSkippedTargets > 0 ? { arbitrationSkippedTargets } : {}),
+        publishedTargets,
+        arbitrationSkippedTargets,
       });
     } catch (error) {
       await this.#recordFailure(
@@ -1395,6 +1403,11 @@ export class FirstPartyRosProjectionShadowService implements ProjectionRefreshSe
           mode: "shadow",
           publishable: false,
           recommendationEligible: false,
+          // These describe this refresh, not a cumulative total or the last successful release.
+          // A blocked/unchanged run must not inherit a previous run's publication count or cause.
+          publishedTargets: 0,
+          arbitrationSkippedTargets: 0,
+          diagnostics: "",
           ...metadata,
         },
         updatedAt: now,

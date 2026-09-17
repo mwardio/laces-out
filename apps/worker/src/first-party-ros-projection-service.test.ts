@@ -375,7 +375,13 @@ class Harness {
           },
         ];
       }
-      return [{ metadata: {}, lastChecksum: null, consecutiveFailures: 0 }];
+      return [
+        {
+          metadata: this.sourceUpdates.at(-1)?.metadata ?? {},
+          lastChecksum: null,
+          consecutiveFailures: 0,
+        },
+      ];
     }
     if (table === nflScheduleObservations) return schedule();
     if (table === firstPartyRosChampionArtifacts) return this.#artifacts;
@@ -593,6 +599,13 @@ describe("first-party ROS shadow service publication rail", () => {
       },
     };
     const harness = new Harness({ artifact: artifactRow() });
+    harness.sourceUpdates.push({
+      metadata: {
+        publishedTargets: 7,
+        arbitrationSkippedTargets: 3,
+        diagnostics: "old_run_diagnostic",
+      },
+    });
     const service = new FirstPartyRosProjectionShadowService({
       database: harness.database,
       now: () => now,
@@ -615,6 +628,13 @@ describe("first-party ROS shadow service publication rail", () => {
         withheldReasons: ["ros_candidate_universe_incomplete"],
       },
     });
+    expect(harness.sourceUpdates.at(-1)?.metadata).toMatchObject({
+      result: "shadow_evidence_recorded",
+      publishedTargets: 0,
+      arbitrationSkippedTargets: 0,
+    });
+    const metadata = harness.sourceUpdates.at(-1)?.metadata as Record<string, unknown>;
+    expect(String(metadata.diagnostics)).not.toContain("old_run_diagnostic");
   });
 
   it("withholds publication when the candidate roster was checked recently but not verified recently", async () => {
@@ -654,6 +674,12 @@ describe("first-party ROS shadow service publication rail", () => {
     ).length;
     await service.refreshProjections(job, context);
     expect(harness.countInserts(projectionSets)).toBe(setsAfterFirst);
+    expect(harness.sourceUpdates.at(-1)?.metadata).toMatchObject({
+      result: "unchanged",
+      publishedTargets: 0,
+      arbitrationSkippedTargets: 0,
+      diagnostics: "",
+    });
     expect(
       harness.inserts.filter(
         (entry) =>

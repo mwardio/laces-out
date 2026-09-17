@@ -30,6 +30,8 @@ export interface NflversePlayer {
   readonly lastName: string | null;
   readonly espnId: string | null;
   readonly pfrId: string | null;
+  readonly esbId: string | null;
+  readonly smartId: string | null;
   readonly position: string;
   readonly positionGroup: string | null;
   readonly latestTeam: string | null;
@@ -185,6 +187,8 @@ function parsePlayers(csv: string): {
       lastName: nullable(row.last_name),
       espnId: rawEspnId && /^\d{1,20}$/u.test(rawEspnId) ? rawEspnId : null,
       pfrId: rawPfrId && /^[A-Za-z0-9.-]{1,20}$/u.test(rawPfrId) ? rawPfrId : null,
+      esbId: nullable(row.esb_id, 64),
+      smartId: nullable(row.smart_id, 64),
       position,
       positionGroup: nullable(row.position_group, 16),
       latestTeam: nullable(row.latest_team, 8),

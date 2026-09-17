@@ -8,6 +8,23 @@ bad,Rejected Player,Rejected,Player,,,QB,QB,FA,RET,,2010,2020
 `;
 
 describe("NflversePlayersSource", () => {
+  it("preserves exact ESB and SMART identities when the official catalog supplies them", async () => {
+    const source = new NflversePlayersSource({
+      fetch: () =>
+        Promise.resolve(
+          new Response(
+            "gsis_id,display_name,pfr_id,position,latest_team,status,esb_id,smart_id\n00-0039999,Example Runner,,RB,CHI,ACT,PLY0099999,smart-9999\n",
+            { status: 200 },
+          ),
+        ),
+    });
+    const result = await source.check({ etag: null, lastModified: null, checksumSha256: null });
+    expect(result.state).toBe("changed");
+    if (result.state === "changed") {
+      expect(result.players[0]).toMatchObject({ esbId: "PLY0099999", smartId: "smart-9999" });
+    }
+  });
+
   it("conditionally checks, validates, and normalizes the official player catalog", async () => {
     const requests: Array<{ readonly url: string; readonly headers: Headers }> = [];
     const source = new NflversePlayersSource({

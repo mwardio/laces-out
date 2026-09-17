@@ -750,6 +750,7 @@ export interface FirstPartyRosLeagueTargetInput {
   readonly candidatePlayers: readonly FirstPartyRosCandidatePlayer[];
   /** Current releasable upstream identities with no safe internal player match. */
   readonly unmatchedCandidateCount: number;
+  readonly unmatchedCandidates?: readonly FirstPartyRosUnmatchedCandidate[];
   readonly featureHistory: readonly FirstPartyWeeklyStatLine[];
   readonly calibration: FirstPartyProjectionCalibration;
   readonly defenseFeatureHistory: readonly FirstPartyTeamDefenseWeeklyStatLine[];
@@ -788,6 +789,27 @@ export function buildFirstPartyRosLeagueTarget(
   } as const;
 
   let skippedPlayers = input.unmatchedCandidateCount;
+  const skippedCandidates: {
+    playerId: string | null;
+    externalPlayerId: string | null;
+    position: string;
+    reason: string;
+  }[] = (input.unmatchedCandidates ?? []).slice(0, 20).map((candidate) => ({
+    playerId: null,
+    externalPlayerId: candidate.externalPlayerId,
+    position: candidate.positions.join("|"),
+    reason: "identity-unresolved",
+  }));
+  const skip = (player: FirstPartyRosCandidatePlayer, reason: string) => {
+    skippedPlayers += 1;
+    if (skippedCandidates.length < 20)
+      skippedCandidates.push({
+        playerId: player.playerId,
+        externalPlayerId: null,
+        position: player.position,
+        reason,
+      });
+  };
   let expectedPlayers = input.unmatchedCandidateCount;
   const accepted: AcceptedCandidate[] = [];
   const seenPlayers = new Set<string>();
@@ -815,7 +837,7 @@ export function buildFirstPartyRosLeagueTarget(
         ...(input.scenarioCount === undefined ? {} : { scenarioCount: input.scenarioCount }),
       });
       if (assembled === null) {
-        skippedPlayers += 1;
+        skip(player, "candidate-inputs-unavailable");
         continue;
       }
       const candidate = simulateFirstPartyRosCandidate(assembled);
@@ -824,13 +846,16 @@ export function buildFirstPartyRosLeagueTarget(
           candidate_.position === candidate.position && candidate_.bucket === candidate.bucket,
       );
       if (choice === undefined) {
-        skippedPlayers += 1;
+        skip(player, "champion-choice-missing");
         continue;
       }
       const projection =
         choice.strategy === "contextual" ? candidate.contextual : candidate.recency;
       if (projection.state !== "projected" || projection.expectedGames <= 0) {
-        skippedPlayers += 1;
+        skip(
+          player,
+          projection.state !== "projected" ? "projection-unavailable" : "no-expected-games",
+        );
         continue;
       }
       accepted.push({
@@ -872,7 +897,7 @@ export function buildFirstPartyRosLeagueTarget(
     // pipeline previously performed it twice for every accepted player.
     const assembled = assembleFirstPartyRosCandidateInputs(builderInput);
     if (assembled === null) {
-      skippedPlayers += 1;
+      skip(player, "candidate-inputs-unavailable");
       continue;
     }
     const candidate = simulateFirstPartyRosCandidate(assembled);
@@ -883,12 +908,15 @@ export function buildFirstPartyRosLeagueTarget(
         candidate_.position === candidate.position && candidate_.bucket === candidate.bucket,
     );
     if (choice === undefined) {
-      skippedPlayers += 1;
+      skip(player, "champion-choice-missing");
       continue;
     }
     const projection = choice.strategy === "contextual" ? candidate.contextual : candidate.recency;
     if (projection.state !== "projected" || projection.expectedGames <= 0) {
-      skippedPlayers += 1;
+      skip(
+        player,
+        projection.state !== "projected" ? "projection-unavailable" : "no-expected-games",
+      );
       continue;
     }
     accepted.push({
@@ -1005,6 +1033,8 @@ export function buildFirstPartyRosLeagueTarget(
         expectedPlayerCount: expectedPlayers,
         evaluatedPlayerCount: accepted.length,
         skippedPlayerCount: skippedPlayers,
+        skippedCandidates,
+        skippedCandidatesTruncated: skippedPlayers > skippedCandidates.length,
         expectedPositions,
         evaluatedPositions,
         playerAliases: [],
@@ -1902,9 +1932,10 @@ async function prepareDatabaseFirstPartyRosTargets(
     >();
     for (const league of matched) {
       const leagueScoringProfileKey = projectionScoringProfileKey(league.profile);
-      const unmatchedCandidateCount = unmatchedCandidates.filter((candidate) =>
+      const matchedUnresolvedCandidates = unmatchedCandidates.filter((candidate) =>
         candidate.positions.some((position) => league.matchedPositions.includes(position)),
-      ).length;
+      );
+      const unmatchedCandidateCount = matchedUnresolvedCandidates.length;
       const templateKey = aggregateChecksum("live-ros-target-template-v1", [
         leagueScoringProfileKey,
         ...league.matchedPositions,
@@ -1934,6 +1965,7 @@ async function prepareDatabaseFirstPartyRosTargets(
         window,
         candidatePlayers: candidatePool,
         unmatchedCandidateCount,
+        unmatchedCandidates: matchedUnresolvedCandidates,
         featureHistory,
         calibration,
         defenseFeatureHistory,

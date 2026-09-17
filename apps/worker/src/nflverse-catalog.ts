@@ -5,14 +5,27 @@ import {
   NFLVERSE_PLAYERS_URL,
   NflversePlayersSource,
 } from "@laces-out/source-nflverse";
-import { and, eq, lte, sql } from "drizzle-orm";
+import { and, eq, inArray, isNull, lte, sql } from "drizzle-orm";
+
+import {
+  NFLVERSE_ESB_ID_SOURCE,
+  NFLVERSE_ROSTER_IDENTITY_LOCK,
+  NFLVERSE_SMART_ID_SOURCE,
+} from "./nflverse-roster-identities.js";
 
 const sourceKey = "nflverse.players";
 const checkIntervalMinutes = 24 * 60;
 const claimMinutes = 15;
 const chunkSize = 500;
 // Increment whenever stored player fields require a full source replay rather than a 304 check.
-const catalogSchemaVersion = 3;
+const catalogSchemaVersion = 4;
+const rosterIdentitySources = [NFLVERSE_ESB_ID_SOURCE, NFLVERSE_SMART_ID_SOURCE];
+const identityName = (name: string) =>
+  name
+    .trim()
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]/gu, "");
+const identityPosition = (position: string) => (position === "FB" ? "RB" : position);
 
 export interface CatalogRefreshResult {
   readonly state: "changed" | "unchanged" | "not-due";
@@ -121,6 +134,94 @@ export class NflverseCatalogRefresher {
 
       let recordsWritten = 0;
       await this.#database.transaction(async (transaction) => {
+        // Share the weekly-roster resolver's lock and exact-ID namespaces. A catalog row can
+        // supply GSIS before the next roster refresh, so attach it to its existing fallback
+        // canonical node before the GSIS upsert could create a second player.
+        await transaction.execute(
+          sql`select pg_advisory_xact_lock(hashtext(${NFLVERSE_ROSTER_IDENTITY_LOCK}))`,
+        );
+        const catalog = await transaction
+          .select({
+            id: players.id,
+            gsisId: players.gsisId,
+            fullName: players.fullName,
+            primaryPosition: players.primaryPosition,
+          })
+          .from(players);
+        const aliases = await transaction
+          .select({
+            source: playerExternalIds.source,
+            externalId: playerExternalIds.externalId,
+            playerId: playerExternalIds.playerId,
+          })
+          .from(playerExternalIds)
+          .where(inArray(playerExternalIds.source, rosterIdentitySources));
+        const byId = new Map(catalog.map((player) => [player.id, player]));
+        const byGsis = new Map(
+          catalog.flatMap((player) => (player.gsisId ? [[player.gsisId, player.id] as const] : [])),
+        );
+        const byAlias = new Map(
+          aliases.map((alias) => [`${alias.source}:${alias.externalId}`, alias.playerId]),
+        );
+        const proposedAliases = new Map<string, string>();
+        const proposedCanonical = new Map<string, string>();
+        const attachments = new Map<string, string>();
+        for (const player of result.players) {
+          const keys = [
+            ...(player.esbId ? [`${NFLVERSE_ESB_ID_SOURCE}:${player.esbId}`] : []),
+            ...(player.smartId ? [`${NFLVERSE_SMART_ID_SOURCE}:${player.smartId}`] : []),
+          ];
+          const owners = new Set([
+            ...(byGsis.has(player.gsisId) ? [byGsis.get(player.gsisId)!] : []),
+            ...keys.flatMap((key) => (byAlias.has(key) ? [byAlias.get(key)!] : [])),
+          ]);
+          if (
+            owners.size > 1 ||
+            keys.some(
+              (key) => proposedAliases.has(key) && proposedAliases.get(key) !== player.gsisId,
+            )
+          ) {
+            throw new Error(
+              "NFL player catalog contains conflicting authoritative roster identities",
+            );
+          }
+          for (const key of keys) proposedAliases.set(key, player.gsisId);
+          const ownerId = [...owners][0];
+          if (!ownerId) continue;
+          const existing = byId.get(ownerId)!;
+          if (
+            (existing.gsisId && existing.gsisId !== player.gsisId) ||
+            (proposedCanonical.has(ownerId) && proposedCanonical.get(ownerId) !== player.gsisId)
+          ) {
+            throw new Error(
+              "NFL player catalog contains conflicting authoritative roster identities",
+            );
+          }
+          proposedCanonical.set(ownerId, player.gsisId);
+          if (existing.gsisId === null) {
+            if (
+              !identityName(player.displayName) ||
+              identityName(existing.fullName) !== identityName(player.displayName) ||
+              identityPosition(existing.primaryPosition) !== identityPosition(player.position)
+            ) {
+              throw new Error(
+                "NFL player catalog identity conflicts with an existing roster player",
+              );
+            }
+            attachments.set(ownerId, player.gsisId);
+          }
+        }
+        // Preflight the entire batch before any attachment: conflicting ESB/SMART evidence must
+        // not make the accepted identity depend on source row order.
+        for (const [id, gsisId] of attachments) {
+          const attached = await transaction
+            .update(players)
+            .set({ gsisId, updatedAt: checkedAt })
+            .where(and(eq(players.id, id), isNull(players.gsisId)))
+            .returning({ id: players.id });
+          if (attached.length !== 1)
+            throw new Error("NFL roster identity changed during catalog attachment");
+        }
         const playerIds = new Map<string, string>();
         for (let index = 0; index < result.players.length; index += chunkSize) {
           const batch = result.players.slice(index, index + chunkSize);
@@ -167,6 +268,14 @@ export class NflverseCatalogRefresher {
           const playerId = playerIds.get(player.gsisId);
           if (!playerId) return [];
           return [
+            ...(
+              [
+                [NFLVERSE_ESB_ID_SOURCE, player.esbId],
+                [NFLVERSE_SMART_ID_SOURCE, player.smartId],
+              ] as const
+            ).flatMap(([source, externalId]) =>
+              externalId ? [{ playerId, source, externalId, confidence: "1", verified: true }] : [],
+            ),
             ...(player.espnId
               ? [
                   {
@@ -212,7 +321,7 @@ export class NflverseCatalogRefresher {
           .values({
             kind: "player-catalog",
             state: "succeeded",
-            idempotencyKey: `${sourceKey}:${result.checksumSha256}`,
+            idempotencyKey: `${sourceKey}:${result.checksumSha256}:v${catalogSchemaVersion}`,
             startedAt: now,
             finishedAt: checkedAt,
             recordsRead: result.rowsRead,
