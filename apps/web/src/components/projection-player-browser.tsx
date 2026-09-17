@@ -16,6 +16,7 @@ import {
 import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 
 import { apiBaseUrl, parseProjectionPlayerList } from "../lib/api-client";
+import { preferredProjectionSet, projectionScoringNotice } from "../lib/projection-set-selection";
 import styles from "./projection-player-browser.module.css";
 
 type Horizon = "week" | "rest-of-season";
@@ -48,6 +49,7 @@ const SAMPLE_SEASON_ID = "70000000-0000-4000-8000-000000000003";
 
 function sampleManaged(computedAt: string) {
   return {
+    scoringCompatibility: "current" as const,
     modelVersion: "first-party-v1",
     computedAt,
     inputCheckedAt: "2026-10-08T18:40:00.000Z",
@@ -285,7 +287,13 @@ function setLabel(set: ProjectionSetSummary): string {
       : set.isOwnedByCurrentUser
         ? "My set"
         : (set.creatorDisplayName ?? "League set");
-  return `${window} · ${owner} · ${set.sourceLabel}`;
+  const scoring =
+    set.origin !== "laces-out" || set.managed?.scoringCompatibility === "current"
+      ? ""
+      : set.managed?.scoringCompatibility === "changed"
+        ? " · previous scoring"
+        : " · scoring unverified";
+  return `${window} · ${owner} · ${set.sourceLabel}${scoring}`;
 }
 
 /** Which timestamp the context line is actually showing. */
@@ -294,24 +302,6 @@ function timestampLabel(set: ProjectionSetSummary | undefined): string {
   if (set.origin === "laces-out" && set.managed) return "inputs checked";
   if (set.sourceObservedAt) return "source as of";
   return "imported";
-}
-
-function preferredSet(
-  sets: readonly ProjectionSetSummary[],
-  horizon: Horizon,
-  currentWeek: number | null,
-): ProjectionSetSummary | undefined {
-  const candidates = sets.filter((set) => set.horizon === horizon);
-  if (horizon === "week") {
-    return (
-      candidates.find(
-        (set) => set.origin === "laces-out" && currentWeek !== null && set.week === currentWeek,
-      ) ??
-      candidates.find((set) => set.origin === "laces-out") ??
-      candidates[0]
-    );
-  }
-  return candidates.find((set) => set.origin === "laces-out") ?? candidates[0];
 }
 
 function ProjectionBoard({
@@ -340,7 +330,7 @@ function ProjectionBoard({
   );
   const activeSet =
     candidateSets.find((set) => set.id === selectedSetId) ??
-    preferredSet(projectionSets, horizon, currentWeek);
+    preferredProjectionSet(projectionSets, horizon, currentWeek);
 
   useEffect(() => {
     abortRef.current?.abort();
@@ -441,6 +431,9 @@ function ProjectionBoard({
   const renderedPlayers = useMemo(() => visiblePlayers.slice(0, 200), [visiblePlayers]);
 
   const resolvedSet = detail.state === "ready" ? detail.detail.projectionSet : activeSet;
+  // A refreshed list can identify changed scoring before a previously loaded detail is replaced.
+  // Keep that warning while the historical rows are explicitly selected or being refreshed.
+  const scoringNotice = projectionScoringNotice(activeSet) ?? projectionScoringNotice(resolvedSet);
   const rosWindow = horizon === "rest-of-season" ? players.find((player) => player.ros)?.ros : null;
 
   return (
@@ -501,6 +494,11 @@ function ProjectionBoard({
               value={activeSet?.id ?? ""}
               onChange={(event) => setSelectedSetId(event.target.value)}
             >
+              {!activeSet ? (
+                <option value="" disabled>
+                  Choose a saved forecast to view its history
+                </option>
+              ) : null}
               {candidateSets.map((set) => (
                 <option key={set.id} value={set.id}>
                   {setLabel(set)}
@@ -525,7 +523,13 @@ function ProjectionBoard({
         <div className={styles.empty}>
           <BarChart3 size={21} aria-hidden="true" />
           <div>
-            <strong>No {horizon === "week" ? "weekly" : "rest-of-season"} forecast yet.</strong>
+            <strong>
+              No {horizon === "week" ? "weekly" : "rest-of-season"} forecast matched to the current
+              rules yet.
+            </strong>
+            {candidateSets.length > 0 ? (
+              <p>Saved forecasts remain available in the projection set menu.</p>
+            ) : null}
           </div>
         </div>
       ) : detail.state === "loading" || detail.state === "idle" ? (
@@ -540,7 +544,16 @@ function ProjectionBoard({
         </div>
       ) : (
         <>
-          {withheldNewerRun && horizon === "week" && resolvedSet?.origin === "laces-out" ? (
+          {scoringNotice ? (
+            <div className={styles.withheldNotice} role="status">
+              <AlertTriangle size={15} aria-hidden="true" />
+              <span>{scoringNotice}</span>
+            </div>
+          ) : null}
+          {!scoringNotice &&
+          withheldNewerRun &&
+          horizon === "week" &&
+          resolvedSet?.origin === "laces-out" ? (
             <div className={styles.withheldNotice} role="status">
               <AlertTriangle size={15} aria-hidden="true" />
               <span>A newer run was withheld. Showing the last passing set.</span>
@@ -549,8 +562,9 @@ function ProjectionBoard({
 
           <div className={styles.context}>
             <div>
-              {resolvedSet?.origin === "custom" &&
-              resolvedSet.sourceObservedAtStatus === "unverified" ? (
+              {scoringNotice ||
+              (resolvedSet?.origin === "custom" &&
+                resolvedSet.sourceObservedAtStatus === "unverified") ? (
                 <AlertTriangle size={16} aria-hidden="true" />
               ) : (
                 <CheckCircle2 size={16} aria-hidden="true" />

@@ -5,6 +5,7 @@ import {
 } from "@laces-out/contracts";
 import {
   decisionInboxReceipts,
+  dataSources,
   fantasyTeams,
   leagueMemberships,
   leagueSeasons,
@@ -67,6 +68,15 @@ export class DrizzleDecisionInboxRepository implements DecisionInboxRepository {
         week: leagueSeasons.currentWeek,
         seasonUpdatedAt: leagueSeasons.updatedAt,
         lastSyncedAt: leagueSeasons.lastSyncedAt,
+        healthRevision: sql<string>`(
+          select coalesce(jsonb_agg(jsonb_build_array(
+            health.key, health.enabled, health.last_checksum, health.last_successful_at,
+            health.last_checked_at, health.last_changed_at, health.consecutive_failures, health.metadata
+          ) order by health.key)::text, '[]')
+          from ${dataSources} health
+          where health.key in ('sleeper.players', 'nflverse.injuries.' || ${leagueSeasons.season}::text,
+            'nflverse.schedules.' || ${leagueSeasons.season}::text)
+        )`,
       })
       .from(leagueMemberships)
       .leftJoin(
@@ -92,6 +102,7 @@ export class DrizzleDecisionInboxRepository implements DecisionInboxRepository {
         row.week,
         row.seasonUpdatedAt,
         row.lastSyncedAt,
+        row.healthRevision,
       ]),
     };
   }

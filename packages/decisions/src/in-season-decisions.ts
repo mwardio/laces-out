@@ -106,6 +106,11 @@ import {
 } from "./projection-provenance.js";
 import { reconcileRosterProjectionAliases } from "./projection-roster-aliases.js";
 import {
+  loadDecisionPlayerStatuses,
+  normalizedDecisionStatus,
+  type DecisionPlayerStatusRequest,
+} from "./decision-player-status.js";
+import {
   assessLineupChange,
   LINEUP_NEGLIGIBLE_GAIN,
   projectionHasLimitedConfidence,
@@ -272,6 +277,9 @@ export interface DecisionEspnPlayerIdentityRow {
 export type DecisionProjectionVisibility = "actor" | "league-only";
 
 export interface InSeasonDecisionRepository {
+  listCurrentPlayerStatuses?(
+    request: DecisionPlayerStatusRequest,
+  ): Promise<ReadonlyMap<string, PlayerStatus>>;
   findMembership(userId: string, leagueId: string): Promise<DecisionMembershipRow | undefined>;
   findLatestSeason(leagueId: string): Promise<DecisionSeasonRow | undefined>;
   listTeams(leagueSeasonId: string, limit: number): Promise<readonly DecisionTeamRow[]>;
@@ -372,6 +380,10 @@ export class DrizzleInSeasonDecisionRepository implements InSeasonDecisionReposi
 
   constructor(database: Database) {
     this.#database = database;
+  }
+
+  listCurrentPlayerStatuses(request: DecisionPlayerStatusRequest) {
+    return loadDecisionPlayerStatuses(this.#database, request);
   }
   async findProviderProjectionSnapshot(
     leagueSeasonId: string,
@@ -1260,10 +1272,18 @@ function modeledDecisionFactsChecksum(input: {
   readonly weeklyInputHealth: ReturnType<typeof weeklyInputCoverage>;
   readonly providerComparison: ReturnType<typeof providerLineupComparison>;
   readonly lineupScheduledTeams: readonly string[] | null;
+  readonly currentPlayerStatuses: ReadonlyMap<string, PlayerStatus>;
 }): string {
   return hash(
     stableJson({
       weeklyInputHealth: input.weeklyInputHealth,
+      ...(input.currentPlayerStatuses.size > 0
+        ? {
+            currentPlayerStatuses: [...input.currentPlayerStatuses].toSorted(([left], [right]) =>
+              left.localeCompare(right),
+            ),
+          }
+        : {}),
       lineupScheduledTeams: input.lineupScheduledTeams?.toSorted() ?? null,
       providerComparison: input.providerComparison
         ? {
@@ -2640,7 +2660,7 @@ export class InSeasonDecisionService {
       MAX_WAIVER_CANDIDATES + Math.max(0, ...rosterCountsByPosition.values()),
     );
 
-    const [weeklyProjectionContext, rosProjectionContext] = await Promise.all([
+    const [weeklyProjectionContext, rosProjectionContext, currentStatuses] = await Promise.all([
       loadDecisionProjectionContext(this.#repository, projectionSet, rosterPlayerIds),
       loadDecisionProjectionContext(
         this.#repository,
@@ -2649,23 +2669,50 @@ export class InSeasonDecisionService {
         true,
         rosPositionSeedLimit,
       ),
+      season.currentWeek !== null && this.#repository.listCurrentPlayerStatuses
+        ? this.#repository.listCurrentPlayerStatuses({
+            playerIds: rosterPlayerIds,
+            leagueSeasonId: season.id,
+            season: season.season,
+            week: season.currentWeek,
+            now,
+          })
+        : Promise.resolve(new Map<string, PlayerStatus>()),
     ]);
     const {
       totalPlayers: totalProjectionPlayers,
       queryLimited: projectionQueryLimited,
-      preparedById,
       projectionById,
     } = weeklyProjectionContext;
+    const preparedById = new Map(
+      [...weeklyProjectionContext.preparedById].map(([id, prepared]) => [
+        id,
+        currentStatuses.has(id)
+          ? { ...prepared, player: { ...prepared.player, status: currentStatuses.get(id)! } }
+          : prepared,
+      ]),
+    );
     const rosterPlayerById = new Map<string, Player>();
     for (const row of boundedRosterRows) {
       const player = toPlayer(row);
-      if (player) rosterPlayerById.set(row.playerId, player);
+      if (player)
+        rosterPlayerById.set(
+          row.playerId,
+          currentStatuses.has(row.playerId)
+            ? { ...player, status: currentStatuses.get(row.playerId)! }
+            : player,
+        );
     }
     const allPlayerById = new Map<string, Player>(rosterPlayerById);
     for (const [id, prepared] of preparedById) allPlayerById.set(id, prepared.player);
     const rosAllPlayerById = new Map<string, Player>(rosterPlayerById);
     for (const [id, prepared] of rosProjectionContext.preparedById) {
-      rosAllPlayerById.set(id, prepared.player);
+      rosAllPlayerById.set(
+        id,
+        currentStatuses.has(id)
+          ? { ...prepared.player, status: currentStatuses.get(id)! }
+          : prepared.player,
+      );
     }
     const availableProviderIds = availabilityAdmission.providerIds;
     let weeklyExplicitlyAvailablePlayerIds: ReadonlySet<string> | null = null;
@@ -2768,6 +2815,7 @@ export class InSeasonDecisionService {
         weeklyInputHealth,
         providerComparison,
         lineupScheduledTeams,
+        currentPlayerStatuses: currentStatuses,
       }),
     };
 
@@ -3150,6 +3198,27 @@ export class InSeasonDecisionService {
           })),
           execution,
           notes: [
+            ...result.assignments.flatMap(({ playerId }) => {
+              const player = allPlayerById.get(playerId);
+              const storedStatus = normalizedDecisionStatus(
+                claimedRosterRows.find((row) => row.playerId === playerId)?.status,
+              );
+              if (
+                player?.status === "UNKNOWN" &&
+                storedStatus &&
+                storedStatus !== "ACTIVE" &&
+                storedStatus !== "UNKNOWN"
+              ) {
+                return [
+                  `Current availability for ${player.name} could not be verified. The last stored designation was ${storedStatus === "NA" ? "inactive" : storedStatus.toLowerCase()}; verify it before keeping this player in your lineup.`,
+                ];
+              }
+              return player?.status && !["ACTIVE", "UNKNOWN"].includes(player.status)
+                ? [
+                    `${player.name} is ${player.status === "NA" ? "inactive" : player.status.toLowerCase()}. Recheck current availability before kickoff; these projections do not guarantee that the player will play.`,
+                  ]
+                : [];
+            }),
             ...(retention.preserved
               ? [
                   `Keep your current starters: the best alternative adds only ${retention.availableGain.toFixed(3)} projected points. Treat this as an effective tie.`,

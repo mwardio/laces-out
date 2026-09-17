@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { projectionSetListResponseSchema, projectionSetSummarySchema } from "@laces-out/contracts";
+import { projectionScoringProfileKey } from "@laces-out/projections";
 
 import {
   managedRunWithholdingScope,
@@ -23,6 +24,10 @@ const SET_ID = "50000000-0000-4000-8000-000000000001";
 const CHECKSUM = `sha256:${"a".repeat(64)}`;
 const NOW = new Date("2026-09-10T12:00:00.000Z");
 const SOURCE_OBSERVED_AT = "2026-09-10T11:55:00.000Z";
+const SCORING_KEY = projectionScoringProfileKey({
+  id: "fixture",
+  rules: [{ statId: "receiving_yards", points: 0.1 }],
+});
 
 const scope: ProjectionLeagueScope = {
   leagueSeasonId: SEASON_ID,
@@ -43,6 +48,10 @@ const catalog: readonly ProjectionResolverPlayer[] = [
 ];
 
 class FakeRepository implements ProjectionImportRepository {
+  scoringKey: string | null = SCORING_KEY;
+  currentScoringProfileKey() {
+    return Promise.resolve(this.scoringKey);
+  }
   scope: ProjectionLeagueScope | undefined = scope;
   catalog: readonly ProjectionResolverPlayer[] = catalog;
   sets: readonly StoredProjectionSet[] = [];
@@ -129,6 +138,7 @@ function managedWeeklySet(): StoredProjectionSet {
     horizon: "week",
     inputChecksum: CHECKSUM,
     metadata: {
+      scoringProfileKey: SCORING_KEY,
       sourceLabel: "Laces Out Week 2 forecast",
       modelVersion: "first-party-v1",
       computedAt: MANAGED_COMPUTED_AT,
@@ -539,6 +549,71 @@ describe("ProjectionImportService", () => {
   // when this status reads "withheld", so mistaking a partial withholding for a whole-league one
   // would delete a league's QB/RB/WR/TE/K from the UI because its D/ST could not be priced.
   describe("managed forecast status", () => {
+    it("keeps differently scored history accessible but refuses to call it the current forecast", async () => {
+      const repository = new FakeRepository();
+      repository.sets = [managedWeeklySet()];
+      repository.scoringKey = projectionScoringProfileKey({
+        id: "changed",
+        rules: [{ statId: "receiving_yards", points: 0.2 }],
+      });
+      const service = new ProjectionImportService(repository, () => NOW);
+      const response = projectionSetListResponseSchema.parse(
+        await service.list(USER_ID, SEASON_ID),
+      );
+      expect(response.managedForecastStatus).toMatchObject({
+        state: "withheld",
+        qualityState: null,
+      });
+      expect(response.managedForecastStatus.reasons.join(" ")).toContain("League scoring changed");
+      expect(response.projectionSets[0]?.managed?.scoringCompatibility).toBe("changed");
+      expect(
+        (await service.getPlayers(USER_ID, SEASON_ID, SET_ID)).projectionSet.managed
+          ?.scoringCompatibility,
+      ).toBe("changed");
+    });
+
+    it.each([undefined, "legacy-format-label", "[]"])(
+      "does not claim compatible scoring from an unknown saved key %s",
+      async (saved) => {
+        const repository = new FakeRepository();
+        const set = managedWeeklySet();
+        repository.sets = [{ ...set, metadata: { ...set.metadata, scoringProfileKey: saved } }];
+        const response = await new ProjectionImportService(repository).list(USER_ID, SEASON_ID);
+        expect(response.managedForecastStatus.state).toBe("withheld");
+        expect(response.projectionSets[0]?.managed?.scoringCompatibility).toBe("unknown");
+      },
+    );
+
+    it("preserves compatible earlier models while a newer differently scored set remains history", async () => {
+      const repository = new FakeRepository();
+      const current = managedWeeklySet();
+      repository.sets = [
+        {
+          ...current,
+          id: "50000000-0000-4000-8000-000000000002",
+          metadata: {
+            ...current.metadata,
+            scoringProfileKey: projectionScoringProfileKey({
+              id: "different",
+              rules: [{ statId: "receiving_yards", points: 0.2 }],
+            }),
+          },
+        },
+        current,
+      ];
+      const response = await new ProjectionImportService(repository).list(USER_ID, SEASON_ID);
+      expect(response.managedForecastStatus.state).toBe("published");
+      expect(response.projectionSets.map((row) => row.managed?.scoringCompatibility)).toEqual([
+        "changed",
+        "current",
+      ]);
+      repository.scoringKey = null;
+      expect(
+        (
+          await new ProjectionImportService(repository).list(USER_ID, SEASON_ID)
+        ).projectionSets.every((row) => row.managed?.scoringCompatibility === "unknown"),
+      ).toBe(true);
+    });
     it("reads a per-position withholding as published, with the withheld positions as a note", async () => {
       const repository = new FakeRepository();
       repository.sets = [managedWeeklySet()];

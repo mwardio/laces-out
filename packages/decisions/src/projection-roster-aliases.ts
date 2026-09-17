@@ -58,6 +58,16 @@ export function reconcileRosterProjectionAliases(input: {
   readonly projections: readonly DecisionProjectionPlayerRow[];
   readonly externalIds: readonly ProjectionExternalIdentity[];
 }): DecisionProjectionPlayerRow[] {
+  return reconcileRosterIdentityAliases(input);
+}
+
+/** The same conservative identity join also binds stored health observations to roster aliases. */
+export function reconcileRosterIdentityAliases<T extends ProjectionRosterIdentity>(input: {
+  readonly leagueSeasonId: string;
+  readonly rosterPlayers: readonly ProjectionRosterIdentity[];
+  readonly projections: readonly T[];
+  readonly externalIds: readonly ProjectionExternalIdentity[];
+}): (T & { readonly projectionPlayerId: string })[] {
   const projections = new Map(input.projections.map((row) => [row.playerId, row]));
   const roster = new Map(input.rosterPlayers.map((row) => [row.playerId, row]));
   const keys = new Map<string, Set<string>>();
@@ -71,13 +81,13 @@ export function reconcileRosterProjectionAliases(input: {
   const canonical = [...projections.values()].filter(
     (row) => row.gsisId?.trim() || position(row.primaryPosition) === "DST",
   );
-  const proposed: DecisionProjectionPlayerRow[] = [];
+  const proposed: (T & { readonly projectionPlayerId: string })[] = [];
   for (const row of roster.values()) {
     if (projections.has(row.playerId) || row.gsisId?.trim()) continue;
     const rosterTeam = team(row.nflTeam);
     const rosterPosition = position(row.primaryPosition);
     if (!rosterTeam || !["QB", "RB", "WR", "TE", "K", "DST"].includes(rosterPosition)) continue;
-    const compatible = (candidate: DecisionProjectionPlayerRow) =>
+    const compatible = (candidate: ProjectionRosterIdentity) =>
       team(candidate.nflTeam) === rosterTeam &&
       position(candidate.primaryPosition) === rosterPosition;
     const rosterKeys = keys.get(row.playerId) ?? new Set<string>();
@@ -115,8 +125,8 @@ export function reconcileRosterProjectionAliases(input: {
   }
   const uses = new Map<string, number>();
   for (const row of proposed) {
-    const id = row.projectionPlayerId!;
+    const id = row.projectionPlayerId;
     uses.set(id, (uses.get(id) ?? 0) + 1);
   }
-  return proposed.filter((row) => uses.get(row.projectionPlayerId!) === 1);
+  return proposed.filter((row) => uses.get(row.projectionPlayerId) === 1);
 }

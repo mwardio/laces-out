@@ -278,7 +278,7 @@ Production weekly verification, 22:48 UTC:
   Smith is currently starting. Its recommendation regeneration is still being checked.
 - FF 2026 has a new v8 lineup run referencing the new projection set. Harvey remains in FLEX
   at 9.242 versus Tate 6.021, both confidence 0.49, with broad overlapping intervals. The app
-  marks Harvey questionable; the upstream injury observation still records Wednesday DNP,
+  model sees Harvey as questionable; the upstream injury observation still records Wednesday DNP,
   while the Broncos' Thursday report improves him to limited. No manual model overrides were made.
 - The initial cold weekly fit occupied the ordinary worker's event loop long enough for a
   provider sweep to time out; that sweep recovered on retry. A persistent isolated weekly process
@@ -303,3 +303,74 @@ Operational follow-up verification, 23:02 UTC:
 - Process isolation and its production image remain separate follow-up checks. The exact model,
   historical simulation rules, and release thresholds are unchanged throughout this operational
   work. The Mini remains unreachable; these results are Linux x64 only.
+
+Operational deployment and live verification, 23:32 UTC:
+
+- Commit `3390569` is pushed and running in the API, web app, and ordinary worker. The weekly
+  computation now runs in one persistent child with a 2 GiB old-generation heap allowance and a
+  two-connection database pool. All nine flat worker entrypoints passed an actual Linux container
+  canary; graceful shutdown and process replacement passed lifecycle and real-database tests.
+- The old worker exited normally after its active work drained. The new worker completed a cold
+  refresh in 671.202 seconds and reused its child for another refresh in 35.649 seconds. Thirteen
+  league syncs completed during the first roughly 70 seconds of the cold calculation; queue
+  heartbeats and provider synchronization remained responsive. These are observed job timings,
+  not a guaranteed refresh latency.
+- Read-only verification at 23:31:50 found current, valid weekly outputs for all 16 normalizable
+  leagues, all 26 required sources usable, and all four historical PBP pairs coherent. The
+  Decision Desk GET path recalculates from current facts; an older persisted background run is
+  not its response cache. Both ROS consumers remain paused pending the completed corpus.
+- Queue warnings now retain bounded categories, queue names, and numeric measurements. The
+  visible ROS backlog is expected while its consumers are paused; historical raw warnings
+  cannot be reconstructed because pg-boss warning persistence was disabled.
+- After Docker builds finished, the historical service's CPU allowance increased from 2.5 to
+  3 CPUs without restarting it or changing any numerical input. Its 4 GiB memory limit and
+  512 MiB swap limit remain in force. Completion, exact-profile admission, and live ROS
+  publication still require separate verification.
+
+Starter accuracy and presentation review:
+
+- A read-only diagnostic reproduced the locked 9,282 weekly predictions and all nine exact
+  scoring-profile audit results. Prior-baseline starter cohorts use RB24, WR36, and TE12,
+  selected before outcomes. Their point MAE improves over the release baseline by 1.58–2.73%
+  for RB, 4.32–6.35% for WR, and 8.27–9.53% for TE across the profiles. The selected raw RB/WR/TE
+  forecasts equal recency in these profiles; the measured gains come from chronological point
+  calibration. This is not evidence that the contextual candidate beat recency.
+- The weekly sample contains 20 batches, mostly from 2025. Starter interval coverage and TE
+  positive bias remain limitations. The 0.49 confidence cap communicates limited evidence but
+  does not repair interval calibration or supply a probability that a recommendation wins.
+  No tuning to these diagnostic cohorts or release-threshold changes were made.
+- A separate presentation review found two concrete gaps: Projection Lab could label an older,
+  differently scored forecast as current, and the model's Harvey injury evidence was absent
+  beside his lineup assignment. Read and display fixes are being validated separately from
+  the frozen numerical release. The earlier weekly checkpoint refers to the model's injury
+  evidence, not a visible Decision Desk injury label.
+
+Read-path validation checkpoint, 23:41 UTC:
+
+- The staged API services were exercised using the two existing claimed-team memberships and
+  read-only database sessions. Both returned their latest weekly v14 set and valid contract
+  responses. Projection Lab marked the matching rules as current. The lineup responses retained
+  limited-evidence cautions and the independent ESPN forecast-disagreement notes.
+- This smoke test caught a defect in the proposed injury reader before deployment: two current
+  feed rows for an unrelated player caused a global ambiguity guard to discard all player status
+  evidence. The guard is being narrowed to the ambiguous player. Direct, current NFL injury
+  evidence must also remain usable when the separate Sleeper catalog is unavailable. Final
+  injury-label verification and deployment remain pending at this checkpoint.
+
+Presentation fixes verified before deployment, 23:46 UTC:
+
+- Projection Lab annotates managed sets with exact scoring compatibility and only automatically
+  selects matching forecasts. Historical access remains explicit, including when cached detail
+  metadata disagrees with a newer list response. Older-model forecasts with the same rules remain
+  eligible. All 41 focused tests pass, including eight PostgreSQL cases; mobile and desktop browser
+  checks confirm that a scoring change removes the automatic selection without hiding history.
+- The injury reader now isolates duplicate evidence to the affected player, requires the current
+  catalog capture, admits direct canonical NFL injury reports independently of Sleeper availability,
+  and distinguishes practice participation from official game designations. Current health changes
+  enter the decision fingerprint and invalidate the inbox cache. Source outages leave an explicit
+  unresolved-availability note when a stored injury cannot be verified.
+- All 152 decision/status regressions pass, including 11 real PostgreSQL cases and rendered status
+  badges. A final read-only request against production data returns Harvey as `QUESTIONABLE`,
+  retains his 9.242 projected points, and includes the availability caution. Both leagues' proposed
+  swaps are close calls. No scoring, simulation, calibration, source-ingestion, or numerical model
+  version changed in these presentation fixes.

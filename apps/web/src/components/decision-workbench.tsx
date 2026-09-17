@@ -53,6 +53,7 @@ import {
 } from "./fantasy-provider-attribution";
 import { TeamClaimCallout } from "./team-claim-callout";
 import { TourBanner } from "./tour-banner";
+import { LineupPlayerStatus } from "./lineup-player-status";
 import styles from "./decision-workbench.module.css";
 
 type PortfolioState =
@@ -167,7 +168,10 @@ function LineupSection({ snapshot }: { readonly snapshot: InSeasonDecisionSnapsh
                       <span className={styles.slot}>{change.slotLabel}</span>
                       <div>
                         <small>Bench</small>
-                        <strong>{change.remove?.name ?? "Open slot"}</strong>
+                        <strong>
+                          {change.remove?.name ?? "Open slot"}
+                          <LineupPlayerStatus status={change.remove?.status ?? null} />
+                        </strong>
                         {change.remove?.projectedRange ? (
                           <small>
                             Range {projectedPoints.format(change.remove.projectedRange.floor)}–
@@ -180,7 +184,10 @@ function LineupSection({ snapshot }: { readonly snapshot: InSeasonDecisionSnapsh
                         <small>
                           {change.assessment?.strength === "close-call" ? "Model lean" : "Start"}
                         </small>
-                        <strong>{change.add?.name ?? "No eligible player"}</strong>
+                        <strong>
+                          {change.add?.name ?? "No eligible player"}
+                          <LineupPlayerStatus status={change.add?.status ?? null} />
+                        </strong>
                         {change.add?.projectedRange ? (
                           <small>
                             Range {projectedPoints.format(change.add.projectedRange.floor)}–
@@ -215,7 +222,10 @@ function LineupSection({ snapshot }: { readonly snapshot: InSeasonDecisionSnapsh
                 {section.assignments.map((assignment) => (
                   <div key={assignment.slotId}>
                     <span className={styles.slot}>{assignment.slotLabel}</span>
-                    <strong>{assignment.player.name}</strong>
+                    <strong>
+                      {assignment.player.name}
+                      <LineupPlayerStatus status={assignment.player.status} />
+                    </strong>
                     <small>
                       {assignment.player.positions.join("/")} ·{" "}
                       {projectedPoints.format(assignment.player.projectedPoints)}

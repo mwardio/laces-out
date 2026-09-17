@@ -2337,6 +2337,8 @@ const projectionWeekReferenceSchema = z
 
 const managedProjectionDetailsSchema = z
   .object({
+    // Missing on older cached payloads; readers must treat that as unverified.
+    scoringCompatibility: z.enum(["current", "changed", "unknown"]).optional(),
     modelVersion: z.string().min(1).max(120).nullable(),
     computedAt: z.iso.datetime(),
     inputCheckedAt: z.iso.datetime(),

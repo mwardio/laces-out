@@ -41,6 +41,7 @@ import {
   sourceObservedAtIso,
 } from "../lib/projection-import-form";
 import { loginUrlForCurrentPath } from "../lib/safe-return-to";
+import { isCurrentManagedProjection } from "../lib/projection-set-selection";
 import { useFantasyProviderAttribution } from "./fantasy-provider-attribution";
 import { ProjectionPlayerBrowser, ProjectionPlayerTour } from "./projection-player-browser";
 import styles from "./projection-import-workbench.module.css";
@@ -653,7 +654,7 @@ export function ProjectionImportWorkbench() {
   const managedSets =
     sets.state === "ready"
       ? sets.data.projectionSets.filter(
-          (set) => set.origin === "laces-out" && set.managed && set.horizon === "week",
+          (set) => isCurrentManagedProjection(set) && set.horizon === "week",
         )
       : [];
   const currentWeek = sets.state === "ready" ? sets.data.league.currentWeek : null;

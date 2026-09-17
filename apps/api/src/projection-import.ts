@@ -29,6 +29,7 @@ import {
   ProjectionCsvError,
   ProjectionImportMetadataError,
   previewProjectionImport,
+  projectionScoringRulesFromProfileKey,
   validateProjectionImportMetadata,
   type NormalizedProjectionImport,
   type ProjectionImportMetadata,
@@ -40,6 +41,7 @@ import { and, asc, desc, eq, gte, inArray, isNull, ne, or, sql } from "drizzle-o
 
 import { leagueScopedPlayerCatalogFilter } from "./espn-sync-persistence.js";
 import { projectionTimestampProvenance } from "./projection-provenance.js";
+import { currentManagedProjectionProfileKey } from "./managed-projection-profile.js";
 import {
   hasCommissionerAuthority,
   providerCommissionerAuthoritySql,
@@ -122,6 +124,7 @@ export interface CommitProjectionSetInput {
 }
 
 export interface ProjectionImportRepository {
+  currentScoringProfileKey(leagueSeasonId: string): Promise<string | null>;
   findScope(
     actorUserId: string,
     leagueSeasonId: string,
@@ -134,6 +137,7 @@ export interface ProjectionImportRepository {
   listAccessibleSets(
     actorUserId: string,
     leagueSeasonId: string,
+    currentScoringProfileKey?: string | null,
   ): Promise<readonly StoredProjectionSet[]>;
   listProjectionPlayers(projectionSetId: string): Promise<readonly StoredProjectionPlayer[]>;
   latestManagedRunStatus?(
@@ -361,6 +365,10 @@ export class DrizzleProjectionImportRepository implements ProjectionImportReposi
     this.#database = database;
   }
 
+  currentScoringProfileKey(leagueSeasonId: string): Promise<string | null> {
+    return currentManagedProjectionProfileKey(this.#database, leagueSeasonId);
+  }
+
   async findScope(
     actorUserId: string,
     leagueSeasonId: string,
@@ -419,7 +427,17 @@ export class DrizzleProjectionImportRepository implements ProjectionImportReposi
   async listAccessibleSets(
     actorUserId: string,
     leagueSeasonId: string,
+    currentScoringProfileKey?: string | null,
   ): Promise<readonly StoredProjectionSet[]> {
+    const currentKey =
+      currentScoringProfileKey === undefined
+        ? await this.currentScoringProfileKey(leagueSeasonId)
+        : currentScoringProfileKey;
+    // Reserve the newest compatible set within each horizon's bounded history. Many newer
+    // publications under former rules must not evict a still-compatible prior-model fallback.
+    const scoringPriority = currentKey
+      ? sql`case when ${projectionSets.metadata}->>'scoringProfileKey' = ${currentKey} then 0 else 1 end`
+      : sql`0`;
     const rows = await this.#database
       .select({
         id: projectionSets.id,
@@ -482,7 +500,7 @@ export class DrizzleProjectionImportRepository implements ProjectionImportReposi
       .orderBy(
         sql`row_number() over (
           partition by ${projectionSets.horizon}
-          order by ${projectionSets.createdAt} desc, ${projectionSets.id} desc
+          order by ${scoringPriority}, ${projectionSets.createdAt} desc, ${projectionSets.id} desc
         )`,
         desc(projectionSets.createdAt),
         desc(projectionSets.id),
@@ -862,7 +880,25 @@ function canShareLeague(scope: ProjectionLeagueScope): boolean {
   );
 }
 
-function summary(row: StoredProjectionSet, actorUserId: string): ProjectionSetSummary {
+function managedScoringCompatibility(
+  metadata: Record<string, unknown>,
+  currentScoringProfileKey: string | null,
+): "current" | "changed" | "unknown" {
+  const saved = metadataString(metadata, "scoringProfileKey");
+  if (!saved || !currentScoringProfileKey) return "unknown";
+  try {
+    projectionScoringRulesFromProfileKey(saved);
+  } catch {
+    return "unknown";
+  }
+  return saved === currentScoringProfileKey ? "current" : "changed";
+}
+
+function summary(
+  row: StoredProjectionSet,
+  actorUserId: string,
+  currentScoringProfileKey: string | null = null,
+): ProjectionSetSummary {
   const isManaged = row.source !== "user-csv";
   const sourceLabel =
     metadataString(row.metadata, "sourceLabel") ??
@@ -886,6 +922,7 @@ function summary(row: StoredProjectionSet, actorUserId: string): ProjectionSetSu
     origin: isManaged ? "laces-out" : "custom",
     managed: isManaged
       ? {
+          scoringCompatibility: managedScoringCompatibility(row.metadata, currentScoringProfileKey),
           modelVersion: modelVersion && modelVersion.length <= 120 ? modelVersion : null,
           computedAt: metadataIsoDate(row.metadata, "computedAt") ?? row.createdAt.toISOString(),
           // For managed sets fetchedAt is the persisted critical-input check time. It deliberately
@@ -991,8 +1028,10 @@ export class ProjectionImportService {
 
   async list(actorUserId: string, leagueSeasonId: string): Promise<ProjectionSetListResponse> {
     const scope = await this.#requireScope(actorUserId, leagueSeasonId);
+    const currentScoringProfileKey =
+      await this.#repository.currentScoringProfileKey(leagueSeasonId);
     const [sets, managedRun] = await Promise.all([
-      this.#repository.listAccessibleSets(actorUserId, leagueSeasonId),
+      this.#repository.listAccessibleSets(actorUserId, leagueSeasonId, currentScoringProfileKey),
       scope.currentWeek && this.#repository.latestManagedRunStatus
         ? this.#repository.latestManagedRunStatus(leagueSeasonId, scope.season, scope.currentWeek)
         : Promise.resolve(undefined),
@@ -1004,16 +1043,24 @@ export class ProjectionImportService {
           (row.visibility === "league" ||
             (row.creatorUserId !== null && row.creatorUserId === actorUserId)),
       )
-      .map((row) => summary(row, actorUserId));
+      .map((row) => summary(row, actorUserId, currentScoringProfileKey));
     const currentManaged =
       scope.currentWeek === null
         ? undefined
         : summaries.find(
             (projection) =>
               projection.origin === "laces-out" &&
+              projection.managed?.scoringCompatibility === "current" &&
               projection.horizon === "week" &&
               projection.week === scope.currentWeek,
           );
+    const incompatibleCurrentManaged = summaries.find(
+      (projection) =>
+        projection.origin === "laces-out" &&
+        projection.horizon === "week" &&
+        projection.week === scope.currentWeek &&
+        projection.managed?.scoringCompatibility !== "current",
+    );
     const currentManagedAt = currentManaged?.managed?.computedAt ?? currentManaged?.importedAt;
     // A `scope: "positions"` run published this league and withheld only some of its positions, so
     // it is not a withholding signal at all: `projection-import-workbench.tsx` hides the published
@@ -1044,36 +1091,52 @@ export class ProjectionImportService {
         }),
         canShareLeague: canShareLeague(scope),
       },
-      managedForecastStatus: newerWithheldRun
-        ? {
-            state: "withheld",
-            evaluatedAt: newerWithheldRun.evaluatedAt.toISOString(),
-            qualityState: newerWithheldRun.qualityState,
-            reasons: [...newerWithheldRun.reasons],
-          }
-        : currentManaged
+      managedForecastStatus:
+        !currentManaged && incompatibleCurrentManaged
           ? {
-              state: "published",
-              evaluatedAt: currentManaged.managed?.computedAt ?? currentManaged.importedAt,
-              qualityState: currentManaged.managed?.qualityState ?? null,
-              reasons: [...partialCoverageReasons].slice(0, 10),
+              state: "withheld",
+              evaluatedAt:
+                incompatibleCurrentManaged.managed?.computedAt ??
+                incompatibleCurrentManaged.importedAt,
+              qualityState: null,
+              reasons: [
+                incompatibleCurrentManaged.managed?.scoringCompatibility === "changed"
+                  ? "League scoring changed. Waiting for a forecast matched to the current rules. Saved projections remain available as history."
+                  : "The saved forecast cannot be verified against this league's current scoring rules. Waiting for a matching forecast; saved projections remain available as history.",
+              ],
             }
-          : managedRun
+          : newerWithheldRun
             ? {
                 state: "withheld",
-                evaluatedAt: managedRun.evaluatedAt.toISOString(),
-                qualityState: managedRun.qualityState,
-                reasons:
-                  managedRun.reasons.length > 0
-                    ? [...managedRun.reasons]
-                    : ["The latest managed forecast did not produce a league-safe publication."],
+                evaluatedAt: newerWithheldRun.evaluatedAt.toISOString(),
+                qualityState: newerWithheldRun.qualityState,
+                reasons: [...newerWithheldRun.reasons],
               }
-            : {
-                state: "pending",
-                evaluatedAt: null,
-                qualityState: null,
-                reasons: [],
-              },
+            : currentManaged
+              ? {
+                  state: "published",
+                  evaluatedAt: currentManaged.managed?.computedAt ?? currentManaged.importedAt,
+                  qualityState: currentManaged.managed?.qualityState ?? null,
+                  reasons: [...partialCoverageReasons].slice(0, 10),
+                }
+              : managedRun
+                ? {
+                    state: "withheld",
+                    evaluatedAt: managedRun.evaluatedAt.toISOString(),
+                    qualityState: managedRun.qualityState,
+                    reasons:
+                      managedRun.reasons.length > 0
+                        ? [...managedRun.reasons]
+                        : [
+                            "The latest managed forecast did not produce a league-safe publication.",
+                          ],
+                  }
+                : {
+                    state: "pending",
+                    evaluatedAt: null,
+                    qualityState: null,
+                    reasons: [],
+                  },
       projectionSets: summaries,
     };
   }
@@ -1084,7 +1147,13 @@ export class ProjectionImportService {
     projectionSetId: string,
   ): Promise<ProjectionPlayerListResponse> {
     await this.#requireScope(actorUserId, leagueSeasonId);
-    const accessibleSets = await this.#repository.listAccessibleSets(actorUserId, leagueSeasonId);
+    const currentScoringProfileKey =
+      await this.#repository.currentScoringProfileKey(leagueSeasonId);
+    const accessibleSets = await this.#repository.listAccessibleSets(
+      actorUserId,
+      leagueSeasonId,
+      currentScoringProfileKey,
+    );
     const projectionSet = accessibleSets.find(
       (candidate) =>
         candidate.id === projectionSetId && candidate.leagueSeasonId === leagueSeasonId,
@@ -1098,7 +1167,7 @@ export class ProjectionImportService {
     }
     const storedPlayers = await this.#repository.listProjectionPlayers(projectionSet.id);
     return {
-      projectionSet: summary(projectionSet, actorUserId),
+      projectionSet: summary(projectionSet, actorUserId, currentScoringProfileKey),
       players: playerRows(storedPlayers),
     };
   }

@@ -15,6 +15,7 @@ import {
   playerProjections,
   players,
   projectionSets,
+  scoringRules,
   users,
 } from "@laces-out/db";
 import { DrizzleInSeasonDecisionRepository } from "@laces-out/decisions";
@@ -179,6 +180,66 @@ describe.skipIf(!dockerAvailable())("Projection history against disposable Postg
     };
   }
 
+  it("marks saved weekly and ROS sets as history immediately after an exact scoring change and keeps authorized player access", async () => {
+    const [rule] = await handle.db
+      .insert(scoringRules)
+      .values({
+        leagueSeasonId: seasonId,
+        statKey: "42",
+        providerStatId: "42",
+        operation: "multiply",
+        points: "0.1",
+      })
+      .returning();
+    const key = await repository.currentScoringProfileKey(seasonId);
+    expect(key).not.toBeNull();
+    const saved = (["week", "rest-of-season"] as const).map((horizon) => {
+      const row = setRow(horizon, NOW);
+      return {
+        ...row,
+        metadata: { ...row.metadata, scoringProfileKey: key, qualityState: "publishable" },
+      };
+    });
+    await handle.db.insert(projectionSets).values(saved);
+    await handle.db
+      .insert(playerProjections)
+      .values(saved.map((row) => ({ projectionSetId: row.id, playerId, meanPoints: "20" })));
+    expect(
+      (await service.list(userId, seasonId)).projectionSets.map(
+        (row) => row.managed?.scoringCompatibility,
+      ),
+    ).toEqual(["current", "current"]);
+    // Exact decimal semantics matter; this is not a change to a coarse PPR label.
+    await handle.db
+      .update(scoringRules)
+      .set({ points: "0.1000001" })
+      .where(eq(scoringRules.id, rule!.id));
+    const changed = projectionSetListResponseSchema.parse(await service.list(userId, seasonId));
+    expect(changed.managedForecastStatus).toMatchObject({ state: "withheld", qualityState: null });
+    expect(changed.managedForecastStatus.reasons.join(" ")).toContain("League scoring changed");
+    expect(changed.projectionSets.map((row) => row.managed?.scoringCompatibility)).toEqual([
+      "changed",
+      "changed",
+    ]);
+    for (const row of saved) {
+      const detail = await service.getPlayers(userId, seasonId, row.id);
+      expect(detail.projectionSet.managed?.scoringCompatibility).toBe("changed");
+      expect(detail.players[0]?.meanPoints).toBe(20);
+      await expect(service.getPlayers(otherUserId, seasonId, row.id)).rejects.toMatchObject({
+        statusCode: 404,
+      });
+    }
+    // An older model's exact-scoring release remains compatible even with no new model admission.
+    await handle.db
+      .update(scoringRules)
+      .set({ points: "0.1" })
+      .where(eq(scoringRules.id, rule!.id));
+    expect((await service.list(userId, seasonId)).managedForecastStatus.state).toBe("published");
+    expect(
+      (await service.getPlayers(userId, seasonId, saved[1]!.id)).projectionSet.managed,
+    ).toMatchObject({ scoringCompatibility: "current", modelVersion: "laces-ros-distribution-v8" });
+  });
+
   it.each(["week", "rest-of-season"] as const)(
     "retains the other horizon and loads its players after 150 newer %s sets",
     async (busyHorizon) => {
@@ -235,6 +296,42 @@ describe.skipIf(!dockerAvailable())("Projection history against disposable Postg
         .reverse()
         .slice(0, 100),
     );
+  });
+
+  it("keeps a compatible older ROS model inside bounded history after many newer differently-scored publications", async () => {
+    await handle.db
+      .insert(scoringRules)
+      .values({
+        leagueSeasonId: seasonId,
+        statKey: "42",
+        providerStatId: "42",
+        operation: "multiply",
+        points: "0.1",
+      });
+    const key = await repository.currentScoringProfileKey(seasonId);
+    const earlier = setRow("rest-of-season", new Date("2026-09-01T12:00:00.000Z"));
+    const compatible = { ...earlier, metadata: { ...earlier.metadata, scoringProfileKey: key } };
+    const newer = Array.from({ length: 150 }, () => setRow("rest-of-season", NOW));
+    await handle.db.insert(projectionSets).values([compatible, ...newer]);
+    await handle.db
+      .insert(playerProjections)
+      .values(
+        [compatible, ...newer].map((row) => ({
+          projectionSetId: row.id,
+          playerId,
+          meanPoints: "20",
+        })),
+      );
+    const response = await service.list(userId, seasonId);
+    expect(response.projectionSets).toHaveLength(100);
+    expect(
+      response.projectionSets.find((row) => row.id === compatible.id)?.managed
+        ?.scoringCompatibility,
+    ).toBe("current");
+    expect(
+      (await service.getPlayers(userId, seasonId, compatible.id)).projectionSet.managed
+        ?.scoringCompatibility,
+    ).toBe("current");
   });
 
   it("defaults to the last approved ROS numbers when newer candidates are partial or empty", async () => {
