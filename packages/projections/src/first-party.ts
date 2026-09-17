@@ -3060,6 +3060,39 @@ function defenseComponentValue(
   return yardsAllowed >= yardBucket.minimum && yardsAllowed <= yardBucket.maximum ? 1 : 0;
 }
 
+function teamDefenseActualComponents(
+  row: FirstPartyTeamDefenseWeeklyStatLine,
+): Record<string, number> {
+  const components: Record<string, number> = {};
+  for (const component of TEAM_DEFENSE_MODELED_COMPONENTS) {
+    components[component] = defenseComponentValue(row, component) ?? 0;
+  }
+  applyTeamDefenseDeMinimisZeros(components);
+  return components;
+}
+
+/** Canonical realized D/ST stat lines, without fitting forecasts that outcome consumers discard. */
+export function canonicalFirstPartyTeamDefenseOutcomes(
+  history: readonly FirstPartyTeamDefenseWeeklyStatLine[],
+): readonly FirstPartyTeamDefenseWeeklyStatLine[] {
+  return history
+    .filter((row) => row.played !== false)
+    .sort(compareDefenseLines)
+    .map((row) => {
+      if (row.team.trim().length === 0)
+        throw new TypeError("defense target team must not be empty");
+      assertPositiveInteger(row.season, "defense target season");
+      assertPositiveInteger(row.week, "defense target week");
+      return {
+        team: row.team,
+        season: row.season,
+        week: row.week,
+        components: teamDefenseActualComponents(row),
+        played: true,
+      };
+    });
+}
+
 function defenseRecencyWeight(
   row: Pick<FirstPartyTeamDefenseWeeklyStatLine, "season" | "week">,
   target: FirstPartyTeamDefenseTarget,
@@ -3489,16 +3522,15 @@ export function runFirstPartyTeamDefenseBacktest(
         trainingRows,
         config,
       );
-      const actualComponents: Record<string, number> = {};
+      const actualComponents = teamDefenseActualComponents(actual);
       // Modeled components only. The de minimis constants are graded by the same league-scored gate
       // as everything else — they simply contribute 0 to predicted, baseline AND actual on every
       // line, so they can move no metric. Pushing always-zero residuals into these streams would
       // dilute the measurements of the components that ARE forecasts, which is the opposite of
       // grading them.
       for (const component of TEAM_DEFENSE_MODELED_COMPONENTS) {
-        const actualValue = defenseComponentValue(actual, component) ?? 0;
+        const actualValue = actualComponents[component] ?? 0;
         const predicted = projection.components[component] ?? 0;
-        actualComponents[component] = actualValue;
         weekResiduals.push({ component, error: actualValue - predicted });
         metricSamples.push({
           component,
@@ -3508,7 +3540,6 @@ export function runFirstPartyTeamDefenseBacktest(
             actualValue <= (projection.upperComponents[component] ?? 0),
         });
       }
-      applyTeamDefenseDeMinimisZeros(actualComponents);
       predictions.push({
         team: actual.team,
         season: actual.season,

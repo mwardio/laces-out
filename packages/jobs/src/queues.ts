@@ -16,6 +16,7 @@ export const queueNames = {
   syncLeague: "league-sync",
   refreshProjections: "projection-refresh",
   refreshRosProjections: "ros-projection-refresh",
+  validateRosProfile: "ros-profile-validation",
   recomputeRecommendations: "recommendation-recompute",
   dataHealth: "data-health-check",
   dataRefresh: "data-refresh",
@@ -28,6 +29,7 @@ export const deadLetterQueueNames = {
   syncLeague: "league-sync-dead-letter",
   refreshProjections: "projection-refresh-dead-letter",
   refreshRosProjections: "ros-projection-refresh-dead-letter",
+  validateRosProfile: "ros-profile-validation-dead-letter",
   recomputeRecommendations: "recommendation-recompute-dead-letter",
   dataHealth: "data-health-check-dead-letter",
   dataRefresh: "data-refresh-dead-letter",
@@ -58,6 +60,10 @@ export interface ProjectionRefreshJob {
   readonly horizon?: "weekly" | "full";
   /** Scheduled jobs re-resolve the active NFL season when they execute across a March rollover. */
   readonly reason?: "scheduled" | "lock-window" | "on-demand";
+}
+
+export interface RosProfileValidationJob {
+  readonly profileValidationId: string;
 }
 
 export const recommendationKinds = ["draft", "lineup", "waiver", "trade"] as const;
@@ -158,6 +164,18 @@ const queueConfigurations: Readonly<Record<keyof typeof queueNames, QueueConfigu
     deleteAfterSeconds: 7 * DAY_SECONDS,
     deadLetter: deadLetterQueueNames.refreshRosProjections,
     warningQueueSize: 3,
+  },
+  validateRosProfile: {
+    retryLimit: 2,
+    retryDelay: 5 * 60,
+    retryBackoff: true,
+    retryDelayMax: 60 * 60,
+    expireInSeconds: 23 * 60 * 60,
+    heartbeatSeconds: 5 * 60,
+    retentionSeconds: 14 * DAY_SECONDS,
+    deleteAfterSeconds: 7 * DAY_SECONDS,
+    deadLetter: deadLetterQueueNames.validateRosProfile,
+    warningQueueSize: 10,
   },
   recomputeRecommendations: {
     retryLimit: 3,
@@ -338,6 +356,42 @@ export function enqueueRosProjectionRefresh(
       5 * 60,
     ),
   );
+}
+
+/** Durable exact-profile proofs are isolated from league sync and live projection queues. */
+export async function enqueueRosProfileValidation(
+  boss: PgBoss,
+  job: RosProfileValidationJob,
+): Promise<string | null> {
+  assertRosProfileValidationJob(job);
+  const existing = await boss.findJobs<RosProfileValidationJob>(queueNames.validateRosProfile, {
+    data: job,
+  });
+  if (
+    existing.some(
+      (entry) => entry.state === "created" || entry.state === "retry" || entry.state === "active",
+    )
+  )
+    return null;
+  return boss.send(
+    queueNames.validateRosProfile,
+    job,
+    dispatchOptions(
+      "ros-profile-validation",
+      `ros-profile-validation:${job.profileValidationId}`,
+      23 * 60 * 60,
+    ),
+  );
+}
+
+export function assertRosProfileValidationJob(job: RosProfileValidationJob): void {
+  if (
+    !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/iu.test(
+      job.profileValidationId,
+    )
+  ) {
+    throw new Error("Invalid worker job: profileValidationId must be a UUID");
+  }
 }
 
 /** Deduplicates equivalent work while serializing all recomputations for one league season. */

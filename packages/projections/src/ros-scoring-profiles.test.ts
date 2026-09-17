@@ -22,7 +22,7 @@ describe("rosScoringProfileCatalog", () => {
     ).toEqual(["full-ppr", "half-ppr", "standard"]);
   });
 
-  it("covers every admitted profile shape in fixed order — order is load bearing", () => {
+  it("covers every catalog profile shape in fixed order — order is load bearing", () => {
     expect([...ROS_SCORING_PROFILE_KEYS]).toEqual([
       "full-ppr",
       "half-ppr",
@@ -30,6 +30,10 @@ describe("rosScoringProfileCatalog", () => {
       "espn-standard-2pt",
       "espn-standard-2pt-nxm",
       "espn-ppr-yardage-bonus-6pt-pass",
+      "espn-ppr-4pt-pass",
+      "espn-half-ppr-yardage-bonus-4pt-pass",
+      "yahoo-half-ppr",
+      "yahoo-half-ppr-return-yards-fg-distance",
     ]);
     expect(rosScoringProfileCatalog().map((entry) => entry.key)).toEqual([
       ...ROS_SCORING_PROFILE_KEYS,
@@ -113,6 +117,10 @@ describe("rosScoringProfileCatalog", () => {
       "Standard + 2-pt, split kicker brackets, XP-missed penalty",
       "Standard + 2-pt, split kicker brackets, no XP-missed penalty",
       "Full PPR + yardage-game bonuses, 6-pt passing TD",
+      "ESPN full PPR, 4-pt passing TD",
+      "ESPN half PPR + 3/5-point yardage bonuses, 4-pt passing TD",
+      "Yahoo half PPR, -1 interception",
+      "Yahoo half PPR + return yards, distance FGs, custom defense",
     ]);
   });
 

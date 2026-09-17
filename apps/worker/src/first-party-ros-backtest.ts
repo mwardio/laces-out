@@ -11,6 +11,7 @@ import {
   FIRST_PARTY_ROS_MAX_AVAILABILITY_MAE,
   FIRST_PARTY_ROS_MAX_NINE_PLUS_AVAILABILITY_MAE,
   FIRST_PARTY_ROS_MODEL_VERSION,
+  canonicalFirstPartyTeamDefenseOutcomes,
   diagnoseFirstPartyRosConvergence,
   evaluateFirstPartyRosChampionPolicy,
   firstPartyProjectionComponentsForPosition,
@@ -452,15 +453,7 @@ export function historicalRosDefenseFeatureRows(
 export function canonicalHistoricalRosDefenseOutcomes(
   history: readonly FirstPartyTeamDefenseWeeklyStatLine[],
 ): readonly FirstPartyTeamDefenseWeeklyStatLine[] {
-  return runFirstPartyTeamDefenseBacktest(history).predictions.map(
-    (prediction): FirstPartyTeamDefenseWeeklyStatLine => ({
-      team: prediction.team,
-      season: prediction.season,
-      week: prediction.week,
-      components: prediction.actual,
-      played: true,
-    }),
-  );
+  return canonicalFirstPartyTeamDefenseOutcomes(history);
 }
 
 function stratifiedRecentProductionSelection<T extends { readonly recentPoints: number }>(
@@ -2238,8 +2231,8 @@ export function buildHistoricalRosBacktest(
   const qualifiedSeasons = new Set(input.coverage.fullyHeldOutSeasons);
   const drafts: HistoricalRosDraft[] = [];
   const kickerFamilyAudits: Array<HistoricalRosBacktestReport["kickerFamilyAudit"][number]> = [];
-  // The official D/ST backtest is also the canonical raw-outcome normalizer: its `actual` rows
-  // materialize one-hot points-allowed buckets. These rows are joined only after each forecast.
+  // Share the D/ST backtest's canonical actual components without fitting discarded forecasts.
+  // These rows materialize one-hot outcome buckets and are joined only after each forecast.
   const defenseOutcomeHistory = canonicalHistoricalRosDefenseOutcomes(input.defenseHistory);
   input.onProgress?.({ stage: "defense-outcomes-ready", forecasts: drafts.length });
   let skippedForecasts = 0;

@@ -73,7 +73,7 @@ export type RosAdmittedArtifact = z.infer<typeof rosAdmittedArtifactSchema>;
 export const rosAdmittedArtifactStateSchema = z
   .object({
     state: z.enum(["admitted", "none"]),
-    artifacts: z.array(rosAdmittedArtifactSchema).max(8),
+    artifacts: z.array(rosAdmittedArtifactSchema).max(128),
   })
   .strict();
 export type RosAdmittedArtifactState = z.infer<typeof rosAdmittedArtifactStateSchema>;
@@ -94,14 +94,10 @@ export type RosUnsupportedScoringProfile = z.infer<typeof rosUnsupportedScoringP
 export const rosScoringProfileCoverageSchema = z
   .object({
     // `deriveScoringProfileCoverage` (apps/api) iterates the whole `rosScoringProfileCatalog()`
-    // uncapped and splits every entry into `supported` or `unsupported` — the two arrays together
-    // always equal the catalog size, never a request-scoped or evidence-scoped count. The catalog
-    // is a small, hand-curated list of scoring-rule shapes (5 entries as of this session, started
-    // at 3) but grows over time; capping here would silently blank real catalog profiles out of
-    // the response rather than truncate noisy evidence, so the bound stays generous headroom
-    // rather than tracking the current catalog size.
-    supported: z.array(rosScoringProfileIdentitySchema).max(64),
-    unsupported: z.array(rosUnsupportedScoringProfileSchema).max(64),
+    // Includes the public catalog plus exact admitted profiles for up to 64 caller leagues.
+    // The bound leaves room for both rather than dropping a caller profile behind catalog rows.
+    supported: z.array(rosScoringProfileIdentitySchema).max(128),
+    unsupported: z.array(rosUnsupportedScoringProfileSchema).max(128),
   })
   .strict();
 export type RosScoringProfileCoverage = z.infer<typeof rosScoringProfileCoverageSchema>;
@@ -123,6 +119,15 @@ export const rosLeaguePositionReadinessSchema = z
   .strict();
 export type RosLeaguePositionReadiness = z.infer<typeof rosLeaguePositionReadinessSchema>;
 
+export const rosScoringValidationSchema = z
+  .object({
+    state: z.enum(["pending", "validating", "admitted", "withheld", "failed"]),
+    requestedAt: z.iso.datetime(),
+    blockers: z.array(z.string().min(1).max(400)).max(32),
+  })
+  .strict();
+export type RosScoringValidation = z.infer<typeof rosScoringValidationSchema>;
+
 /** 3. League input readiness. `leagueSeasonId` is null only for the no-league-synced case. */
 export const rosLeagueReadinessSchema = z
   .object({
@@ -133,6 +138,7 @@ export const rosLeagueReadinessSchema = z
     reasons: z.array(rosWithholdingReasonSchema).max(8),
     scoringProfile: rosScoringProfileIdentitySchema.nullable(),
     positions: z.array(rosLeaguePositionReadinessSchema).max(6),
+    scoringValidation: rosScoringValidationSchema.optional(),
   })
   .strict();
 export type RosLeagueReadiness = z.infer<typeof rosLeagueReadinessSchema>;

@@ -8,6 +8,7 @@ import {
   enqueueLeagueSync,
   enqueueProjectionRefresh,
   enqueueRosProjectionRefresh,
+  enqueueRosProfileValidation,
   enqueueProviderSyncSweep,
   enqueueRecommendationRecompute,
   queueNames,
@@ -317,6 +318,24 @@ describe("shared queue dispatch contract", () => {
         singletonKey: "ros-projection-refresh:2026:scheduled",
       }),
     );
+  });
+
+  it("deduplicates scoring proofs even when a backlog outlives the singleton window", async () => {
+    const { boss, send } = sendHarness();
+    boss.findJobs = vi.fn().mockResolvedValue([{ state: "created" }]);
+    const job = { profileValidationId: "12345678-1234-4234-8234-123456789abc" };
+    expect(await enqueueRosProfileValidation(boss, job)).toBeNull();
+    expect(send).not.toHaveBeenCalled();
+    boss.findJobs = vi.fn().mockResolvedValue([{ state: "completed" }]);
+    await enqueueRosProfileValidation(boss, job);
+    expect(send).toHaveBeenCalledWith(
+      queueNames.validateRosProfile,
+      job,
+      expect.objectContaining({ group: { id: "ros-profile-validation" } }),
+    );
+    await expect(
+      enqueueRosProfileValidation(boss, { profileValidationId: "bad-id" }),
+    ).rejects.toThrow("UUID");
   });
 
   it("coalesces data health checks onto one globally serialized key", async () => {

@@ -177,8 +177,8 @@ services:
 
   ros-worker:
     <<: *service-defaults
-    # Leave two of Dakoota's six CPUs available for weekly projections, API and queue heartbeats.
-    cpus: 4.0
+    # Reserve capacity for two proof subprocesses and time-sensitive weekly/API work.
+    cpus: 3.0
     build:
       context: .
       target: worker
@@ -196,6 +196,42 @@ services:
         NEXT_PUBLIC_BING_SITE_VERIFICATION: ${NEXT_PUBLIC_BING_SITE_VERIFICATION:-}
     command: ["node", "apps/worker/dist/ros-worker.js"]
     environment: *app-environment
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    stop_grace_period: 40s
+    cap_drop:
+      - ALL
+    networks:
+      - data
+      - egress
+
+  ros-validation-worker:
+    <<: *service-defaults
+    # Two isolated proofs at a time, with a hard CPU/memory budget.
+    cpus: 2.0
+    mem_limit: 5g
+    build:
+      context: .
+      target: worker
+      args:
+        NEXT_PUBLIC_API_URL: ${PUBLIC_URL:-http://localhost:3000}
+        NEXT_PUBLIC_API_SAME_ORIGIN: "true"
+        NEXT_PUBLIC_SITE_URL: ${PUBLIC_URL:-http://localhost:3000}
+        NEXT_PUBLIC_CONTACT_EMAIL: ${NEXT_PUBLIC_CONTACT_EMAIL:-}
+        NEXT_PUBLIC_CLOUDFLARE_ANALYTICS: ${NEXT_PUBLIC_CLOUDFLARE_ANALYTICS:-disabled}
+        NEXT_PUBLIC_POSTHOG_REGION: ${NEXT_PUBLIC_POSTHOG_REGION:-disabled}
+        NEXT_PUBLIC_POSTHOG_PROJECT_TOKEN: ${NEXT_PUBLIC_POSTHOG_PROJECT_TOKEN:-}
+        NEXT_PUBLIC_REGISTRATION_OPEN: ${REGISTRATION_OPEN:-false}
+        NEXT_PUBLIC_YAHOO_ACCESS_STATUS: ${NEXT_PUBLIC_YAHOO_ACCESS_STATUS:-pending}
+        NEXT_PUBLIC_GOOGLE_SITE_VERIFICATION: ${NEXT_PUBLIC_GOOGLE_SITE_VERIFICATION:-}
+        NEXT_PUBLIC_BING_SITE_VERIFICATION: ${NEXT_PUBLIC_BING_SITE_VERIFICATION:-}
+    command: ["node", "apps/worker/dist/ros-validation-worker.js"]
+    environment:
+      <<: *app-environment
+      ROS_VALIDATION_SOURCE_CACHE: /tmp/laces-ros-source-cache
+    volumes:
+      - ros_validation_sources:/tmp/laces-ros-source-cache
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -287,6 +323,7 @@ services:
       - egress
 
 volumes:
+  ros_validation_sources:
   fantasy_postgres:
   caddy_data:
   caddy_config:

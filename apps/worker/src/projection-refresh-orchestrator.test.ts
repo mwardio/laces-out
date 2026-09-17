@@ -18,6 +18,7 @@ function harness(lockState: ProjectionLockWindowState) {
   const refreshSleeperCatalog = vi.fn(() => Promise.resolve());
   const refreshSchedule = vi.fn(() => Promise.resolve());
   const refreshWeeklyProjections = vi.fn(() => Promise.resolve());
+  const discoverRosProfiles = vi.fn(() => Promise.resolve());
   const enqueueRosProjections = vi.fn(() => Promise.resolve());
   const checkLockWindow = vi.fn(() => Promise.resolve(lockState));
   const currentSeason = vi.fn(() => 2027);
@@ -35,6 +36,7 @@ function harness(lockState: ProjectionLockWindowState) {
     sleeperCatalog: { refreshCatalog: refreshSleeperCatalog },
     schedule: { refresh: refreshSchedule },
     weeklyProjections: { refreshProjections: refreshWeeklyProjections },
+    discoverRosProfiles,
     enqueueRosProjections,
   });
   return {
@@ -50,11 +52,25 @@ function harness(lockState: ProjectionLockWindowState) {
     refreshSleeperCatalog,
     refreshSchedule,
     refreshWeeklyProjections,
+    discoverRosProfiles,
     enqueueRosProjections,
   };
 }
 
 describe("projection refresh orchestration", () => {
+  it("discovers scoring support after a provider-sync weekly refresh", async () => {
+    const input = harness({ active: false, forceFinalCheck: false, nextKickoffAt: null });
+    await input.service.refreshProjections(
+      { season: 2026, horizon: "weekly", reason: "on-demand" },
+      context,
+    );
+    expect(input.discoverRosProfiles).toHaveBeenCalledWith(2026);
+    expect(input.discoverRosProfiles.mock.invocationCallOrder[0]).toBeGreaterThan(
+      input.refreshWeeklyProjections.mock.invocationCallOrder[0] ?? 0,
+    );
+    expect(input.enqueueRosProjections).not.toHaveBeenCalled();
+  });
+
   it("runs weekly and ROS horizons during the nightly full refresh", async () => {
     const input = harness({ active: false, forceFinalCheck: false, nextKickoffAt: null });
 
@@ -105,6 +121,7 @@ describe("projection refresh orchestration", () => {
     expect(input.refreshSchedule).toHaveBeenCalledWith(2027, false);
     expect(input.refreshWeeklyProjections).toHaveBeenCalledOnce();
     expect(input.enqueueRosProjections).not.toHaveBeenCalled();
+    expect(input.discoverRosProfiles).not.toHaveBeenCalled();
   });
 
   it("forces the final source checks but still keeps ROS off the lock path", async () => {

@@ -4,9 +4,8 @@ import {
 } from "./scoring-position-keys.js";
 import {
   ESPN_EVERY_N_FLOOR_UNIT_COMPONENTS,
+  compileProjectionScorer,
   projectionScoringProfileKey,
-  scoreProjectionStatComponents,
-  validateProjectionScoringProfile,
   type ProjectionScoringProfile,
   type ProjectionStatComponents,
 } from "./scoring.js";
@@ -1162,6 +1161,7 @@ function validateProjectionInput(input: FirstPartyRosProjectionInput): {
   readonly position: FirstPartyRosPosition;
   readonly weeks: readonly FirstPartyRosWeeklyScenarioInput[];
   readonly scenarioCount: number;
+  readonly scoreComponents: (components: ProjectionStatComponents) => number;
 } {
   assertNonEmpty(input.playerId, "ROS playerId");
   assertNonEmpty(input.inputChecksum, "ROS inputChecksum");
@@ -1341,7 +1341,7 @@ function validateProjectionInput(input: FirstPartyRosProjectionInput): {
   } else if (input.kicker !== undefined) {
     throw new Error("ROS kicker process input is only supported for position K");
   }
-  validateProjectionScoringProfile(input.scoringProfile);
+  const scoreComponents = compileProjectionScorer(input.scoringProfile);
   const scenarioCount = input.scenarioCount ?? FIRST_PARTY_ROS_DEFAULT_SCENARIOS;
   if (
     !Number.isSafeInteger(scenarioCount) ||
@@ -1353,7 +1353,7 @@ function validateProjectionInput(input: FirstPartyRosProjectionInput): {
       `ROS scenarioCount must be an even integer between ${FIRST_PARTY_ROS_MINIMUM_SCENARIOS} and ${FIRST_PARTY_ROS_MAXIMUM_SCENARIOS}`,
     );
   }
-  return { position, weeks, scenarioCount };
+  return { position, weeks, scenarioCount, scoreComponents };
 }
 
 function initialState(
@@ -1454,6 +1454,7 @@ function simulatePair(
   componentSums: Record<string, number>,
   audit: ScenarioPairAudit,
   kickerContext: KickerContext | null,
+  scoreComponents: (components: ProjectionStatComponents) => number,
 ): {
   readonly left: ScenarioAccumulator;
   readonly right: ScenarioAccumulator;
@@ -1556,7 +1557,7 @@ function simulatePair(
             );
         addComponents(scenario.result.components, components);
         addComponents(componentSums, components);
-        points = scoreProjectionStatComponents(components, input.scoringProfile);
+        points = scoreComponents(components);
         scenario.result.games += 1;
         audit[side === 0 ? "roleLeft" : "roleRight"].push(roleMultiplier);
       } else if (week.scheduled) {
@@ -1640,6 +1641,7 @@ export function projectFirstPartyRestOfSeason(
       componentSums,
       audit,
       kickerContext,
+      validated.scoreComponents,
     );
     totalPoints.push(pair.left.totalPoints, pair.right.totalPoints);
     games.push(pair.left.games, pair.right.games);

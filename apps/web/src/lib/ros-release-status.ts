@@ -91,6 +91,11 @@ export interface RosLeagueReadiness {
   readonly scoringProfile: RosScoringProfileIdentity | null;
   /** Always all six of QB/RB/WR/TE/K/DST when present; a missing or malformed field defaults to []. */
   readonly positions: readonly RosLeaguePositionReadiness[];
+  readonly scoringValidation?: {
+    readonly state: "pending" | "validating" | "admitted" | "withheld" | "failed";
+    readonly requestedAt: string;
+    readonly blockers: readonly string[];
+  };
 }
 
 export interface RosCellGateDecision {
@@ -263,6 +268,25 @@ function parseReadiness(value: unknown): readonly RosLeagueReadiness[] | null {
     const scoringProfile =
       entry.scoringProfile === null ? null : parseProfile(entry.scoringProfile);
     if (entry.scoringProfile !== null && !scoringProfile) return null;
+    let scoringValidation: RosLeagueReadiness["scoringValidation"];
+    if (entry.scoringValidation !== undefined) {
+      const validation = entry.scoringValidation;
+      if (
+        !isRecord(validation) ||
+        typeof validation.state !== "string" ||
+        !["pending", "validating", "admitted", "withheld", "failed"].includes(validation.state) ||
+        !isString(validation.requestedAt) ||
+        !Number.isFinite(Date.parse(validation.requestedAt)) ||
+        !Array.isArray(validation.blockers) ||
+        !validation.blockers.every(isString)
+      )
+        return null;
+      scoringValidation = {
+        state: validation.state as NonNullable<RosLeagueReadiness["scoringValidation"]>["state"],
+        requestedAt: validation.requestedAt,
+        blockers: validation.blockers,
+      };
+    }
     readiness.push({
       leagueSeasonId: entry.leagueSeasonId,
       leagueName: isString(entry.leagueName) ? entry.leagueName : null,
@@ -270,6 +294,7 @@ function parseReadiness(value: unknown): readonly RosLeagueReadiness[] | null {
       reasons: entry.reasons,
       scoringProfile,
       positions: parsePositionReadiness(entry.positions),
+      ...(scoringValidation ? { scoringValidation } : {}),
     });
   }
   return readiness;
@@ -444,6 +469,81 @@ export function leagueLabelFor(name: string | null, leagueSeasonId: string | nul
   return leagueSeasonId ? `League ${leagueSeasonId.slice(0, 8)}` : "League";
 }
 
+/** Explains the caller's league independently of another league's publication or model check. */
+export function describeRosLeagueReadiness(
+  league: RosLeagueReadiness,
+  hasPublishedSet: boolean,
+): {
+  readonly heading: string;
+  readonly messages: readonly string[];
+  readonly positionMessages: readonly string[];
+  readonly showConnections: boolean;
+} {
+  const validation = league.scoringValidation?.state;
+  const reasonMessages: Readonly<Record<string, string>> = {
+    "scoring-rules-unsupported":
+      "Some scoring rules are not supported yet. Your league settings are saved; changing a model or reconnecting will not add support for those rules.",
+    "no-admitted-scoring-profile":
+      "A forecast for these scoring rules must pass validation before it can be published.",
+    "incomplete-schedule":
+      "The NFL schedule is incomplete. Forecasts will update after the missing games arrive.",
+    "missing-candidate-pool":
+      "The current NFL player pool is not available yet. Laces Out is waiting for that data.",
+    "insufficient-candidate-inputs":
+      "There is not enough verified player data to produce a complete forecast yet.",
+    "non-converged-cell":
+      "This league's latest simulation did not produce stable results. A new forecast will wait for a passing check.",
+    "stale-source": "The NFL inputs need to be refreshed before a new forecast can be published.",
+    "no-league-synced":
+      "Connect a league and finish its first sync to prepare a forecast for your scoring rules.",
+  };
+  const messages = league.reasons.map(
+    (reason) => reasonMessages[reason] ?? "A required forecast check has not passed yet.",
+  );
+  let heading = hasPublishedSet ? "Forecast available" : "Waiting for first forecast";
+  if (validation === "pending" || validation === "validating") {
+    heading =
+      validation === "pending" ? "Scoring validation queued" : "Checking your scoring rules";
+    messages.unshift(
+      "Laces Out is testing a forecast against your league's exact scoring rules. This runs automatically and can take several hours.",
+    );
+  } else if (validation === "failed") {
+    heading = "Scoring check interrupted";
+    messages.unshift(
+      "The scoring check could not finish. Laces Out needs to resolve this check; your league connection does not need to be changed.",
+    );
+  } else if (validation === "withheld") {
+    heading = "Scoring validation has not passed";
+    messages.unshift(
+      "The forecast has not passed the accuracy checks for these scoring rules. Existing approved numbers are retained when available.",
+    );
+  } else if (league.state === "withheld") {
+    heading = hasPublishedSet ? "Latest approved forecast retained" : "Forecast waiting on inputs";
+  } else if (!hasPublishedSet) {
+    messages.push(
+      "The available inputs are ready. Your league is waiting for its first complete forecast.",
+    );
+  }
+  const positionMessages = league.positions
+    .filter((position) => position.decision === "withheld")
+    .map((position) => {
+      const explanations = position.reasons
+        .filter((reason) => reason !== "position-unsupported")
+        .map((reason) =>
+          reason === "scoring-profile-position-mismatch"
+            ? "This position does not have an approved forecast for your scoring rules."
+            : reason,
+        );
+      return `${position.position === "DST" ? "D/ST" : position.position}: ${explanations.join(" ") || "These scoring rules are not supported yet."}`;
+    });
+  return {
+    heading,
+    messages: [...new Set(messages)],
+    positionMessages,
+    showConnections: league.reasons.includes("no-league-synced"),
+  };
+}
+
 /** Builds the copy and counts used by the rest-of-season status panel. */
 export function describeRosRelease(status: RosReleaseStatus): RosReleaseDescription {
   const supported = status.scoringProfiles.supported;
@@ -451,7 +551,7 @@ export function describeRosRelease(status: RosReleaseStatus): RosReleaseDescript
 
   const artifactHeadline =
     status.admittedArtifacts.state === "admitted" && artifact
-      ? `Ready for ${artifact.scoringProfile.label} scoring`
+      ? `Ready for ${artifact.scoringProfile.label}${artifact.scoringProfile.label.endsWith("scoring") ? "" : " scoring"}`
       : "Not ready for this season yet";
 
   const coversFullPpr = supported.some((profile) => profile.label === "Full PPR");
@@ -466,8 +566,18 @@ export function describeRosRelease(status: RosReleaseStatus): RosReleaseDescript
           : null,
     supported.some((profile) => profile.label.startsWith("Standard")) ? "Standard" : null,
   ].filter((family): family is string => family !== null);
+  const otherFormatCount = supported.filter(
+    (profile) =>
+      profile.label !== "Full PPR" &&
+      profile.label !== "Half PPR" &&
+      !profile.label.startsWith("Standard"),
+  ).length;
+  if (otherFormatCount > 0)
+    supportedScoringFamilies.push(
+      `${otherFormatCount} additional league ${otherFormatCount === 1 ? "format" : "formats"}`,
+    );
   const supportedProfileSummary =
-    supportedScoringFamilies.length === 0
+    supported.length === 0
       ? "No scoring formats ready yet"
       : `Covers ${new Intl.ListFormat("en", { style: "long", type: "conjunction" }).format(
           supportedScoringFamilies,

@@ -18,6 +18,7 @@
  */
 import { execFileSync } from "node:child_process";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -26,11 +27,13 @@ import {
   dataSources,
   fantasyTeams,
   firstPartyRosChampionArtifacts,
+  firstPartyRosProfileValidations,
   leagueMemberships,
   leagueSeasons,
   leagues,
   nflScheduleObservations,
   playerWeeklyRosterObservations,
+  projectionModelRuns,
   players,
   rosterEntries,
   rosterSnapshots,
@@ -41,11 +44,14 @@ import {
 } from "@laces-out/db";
 import {
   FIRST_PARTY_ROS_MODEL_VERSION,
+  FIRST_PARTY_ROS_POLICY_VERSION,
+  FIRST_PARTY_ROS_INTERVAL_CALIBRATION_VERSION,
   LEAGUE_SCORING_NORMALIZATION_VERSION,
   normalizeLeagueScoringProfile,
   projectionScoringProfileKey,
   rosAvailableProjectionStatIds,
   rosScoringProfile,
+  rosScoringProfileCatalog,
 } from "@laces-out/projections";
 import { migrate } from "drizzle-orm/postgres-js/migrator";
 import postgres from "postgres";
@@ -441,6 +447,7 @@ describe.skipIf(!dockerAvailable)(
     let nonPprLeague: SeededLeague;
     let garagelyLeague: SeededLeague;
     let zeroPositionLeague: SeededLeague;
+    let callerId: string;
 
     beforeAll(async () => {
       container = await startDisposablePostgres();
@@ -463,6 +470,7 @@ describe.skipIf(!dockerAvailable)(
         })
         .returning({ id: users.id });
       if (!user) throw new Error("Failed to seed the pg-test user");
+      callerId = user.id;
 
       fullPprLeague = await seedLeague(db, user.id, "Full PPR league", FULL_PPR_LEAGUE_ROWS);
       nonPprLeague = await seedLeague(db, user.id, "Non-PPR league", NON_PPR_LEAGUE_ROWS);
@@ -617,13 +625,11 @@ describe.skipIf(!dockerAvailable)(
       expect(status.scoringProfiles.supported.map((profile) => profile.profileId)).toEqual([
         "laces-out-historical-ros-full-ppr",
       ]);
-      expect(status.scoringProfiles.unsupported.map((entry) => entry.profile.profileId)).toEqual([
-        "laces-out-historical-ros-half-ppr",
-        "laces-out-historical-ros-standard",
-        "laces-out-historical-ros-espn-standard-2pt",
-        "laces-out-historical-ros-espn-standard-2pt-nxm",
-        "laces-out-historical-ros-espn-ppr-yardage-bonus-6pt-pass",
-      ]);
+      expect(status.scoringProfiles.unsupported.map((entry) => entry.profile.profileId)).toEqual(
+        rosScoringProfileCatalog()
+          .filter((profile) => profile.key !== "full-ppr")
+          .map((profile) => profile.profile.id),
+      );
       for (const entry of status.scoringProfiles.unsupported) {
         expect(entry.blockers).toEqual(["no_admitted_artifact"]);
       }
@@ -634,7 +640,7 @@ describe.skipIf(!dockerAvailable)(
             entry.evidenceReport,
           ]),
         ),
-      ).toEqual({
+      ).toMatchObject({
         "laces-out-historical-ros-half-ppr": "ros-validation-v8-half-ppr-n8-2026-07-28",
         "laces-out-historical-ros-standard": "ros-validation-v8-standard-n8-2026-07-28",
         "laces-out-historical-ros-espn-standard-2pt":
@@ -643,6 +649,226 @@ describe.skipIf(!dockerAvailable)(
           "ros-validation-v9-espn-standard-2pt-nxm-n8-2026-08-03",
         "laces-out-historical-ros-espn-ppr-yardage-bonus-6pt-pass": null,
       });
+    });
+
+    it("shows exact scoring validation for a never-published caller league", async () => {
+      const key = normalizedLeagueKey(FULL_PPR_LEAGUE_ROWS)!;
+      await db.insert(firstPartyRosProfileValidations).values({
+        season: SEASON,
+        modelVersion: FIRST_PARTY_ROS_MODEL_VERSION,
+        policyVersion: FIRST_PARTY_ROS_POLICY_VERSION,
+        calibrationVersion: FIRST_PARTY_ROS_INTERVAL_CALIBRATION_VERSION,
+        scoringProfileKey: key,
+        scoringProfileDigest: createHash("sha256").update(key).digest("hex"),
+        state: "validating",
+        requestedAt: NOW,
+        blockers: [],
+      });
+      const current = await new RosProjectionStatusService(db, () => NOW).getStatus({
+        season: SEASON,
+        userId: callerId,
+      });
+      expect(
+        current.leagueReadiness.find(
+          (league) => league.leagueSeasonId === fullPprLeague.leagueSeasonId,
+        ),
+      ).toMatchObject({
+        scoringValidation: { state: "validating", requestedAt: NOW.toISOString(), blockers: [] },
+        scoringProfile: { label: "Exact league scoring", scoringProfileKey: key },
+      });
+      expect(
+        current.leagueReadiness.find(
+          (league) => league.leagueSeasonId === zeroPositionLeague.leagueSeasonId,
+        )?.scoringValidation,
+      ).toBeUndefined();
+      expect(current.publishedSets).toEqual([]);
+    });
+
+    it("attributes unstable simulations only to their league and replaces old failures with the latest evaluation", async () => {
+      const [source] = await db
+        .insert(dataSources)
+        .values({
+          key: "laces-out.projections.first-party-ros-shadow",
+          name: "ROS test",
+          kind: "projection",
+          checkIntervalMinutes: 60,
+          nextCheckAt: NOW,
+        })
+        .returning();
+      const addEvaluation = async (leagueSeasonId: string, state: string, createdAt: Date) => {
+        const [run] = await db
+          .insert(syncRuns)
+          .values({
+            kind: "first-party-ros-projection",
+            state: "complete",
+            idempotencyKey: randomUUID(),
+            startedAt: createdAt,
+            finishedAt: createdAt,
+          })
+          .returning();
+        await db.insert(projectionModelRuns).values({
+          sourceSyncRunId: run!.id,
+          sourceId: source!.id,
+          season: SEASON,
+          horizon: "rest-of-season",
+          windowStartWeek: 2,
+          windowEndWeek: 18,
+          asOfWeek: 1,
+          asOfAt: FRESH,
+          modelVersion: FIRST_PARTY_ROS_MODEL_VERSION,
+          trainingWindowStartSeason: 2023,
+          trainedThroughSeason: 2025,
+          qualityState: "degraded",
+          playersEvaluated: 0,
+          playersPublished: 0,
+          inputChecksum: createHash("sha256").update(run!.id).digest("hex"),
+          configuration: { mode: "release-evaluation", leagueSeasonId },
+          calibration: {},
+          metrics: {
+            rosConvergence: { state },
+            cellDecisions: [
+              {
+                position: "K",
+                bucket: "nine-plus",
+                state: "withheld",
+                reasons: ["scoring-profile-position-mismatch"],
+              },
+            ],
+          },
+          sourceAsOf: FRESH,
+          createdAt,
+        });
+      };
+      await addEvaluation(fullPprLeague.leagueSeasonId, "unstable", NOW);
+      let current = await new RosProjectionStatusService(db, () => NOW).getStatus({
+        season: SEASON,
+        userId: callerId,
+      });
+      expect(
+        current.leagueReadiness.find(
+          (league) => league.leagueSeasonId === fullPprLeague.leagueSeasonId,
+        )?.reasons,
+      ).toContain("non-converged-cell");
+      expect(
+        current.leagueReadiness.find(
+          (league) => league.leagueSeasonId === nonPprLeague.leagueSeasonId,
+        )?.reasons,
+      ).not.toContain("non-converged-cell");
+      await addEvaluation(
+        fullPprLeague.leagueSeasonId,
+        "converged",
+        new Date(NOW.getTime() + 1_000),
+      );
+      current = await new RosProjectionStatusService(db, () => NOW).getStatus({
+        season: SEASON,
+        userId: callerId,
+      });
+      expect(
+        current.leagueReadiness.find(
+          (league) => league.leagueSeasonId === fullPprLeague.leagueSeasonId,
+        )?.reasons,
+      ).not.toContain("non-converged-cell");
+    });
+
+    it("monitors never-published eligible leagues after grace without false unsupported or archived outages", async () => {
+      const healthSql = readFileSync(
+        fileURLToPath(new URL("../../../scripts/ros-publication-health.sql", import.meta.url)),
+        "utf8",
+      );
+      for (const version of [
+        FIRST_PARTY_ROS_MODEL_VERSION,
+        FIRST_PARTY_ROS_POLICY_VERSION,
+        FIRST_PARTY_ROS_INTERVAL_CALIBRATION_VERSION,
+      ])
+        expect(healthSql).toContain(version);
+      const client = postgres(container.url, { max: 1 });
+      try {
+        await client.begin(async (sql) => {
+          // Query the real monitor against isolated temporary tables. They shadow public tables
+          // only within this session and are dropped on commit; production is never contacted.
+          await sql.unsafe(`
+            create temp table leagues (id text,name text,archived boolean) on commit drop;
+            create temp table league_seasons (id text,league_id text,season int,created_at timestamptz) on commit drop;
+            create temp table projection_sets (id text,league_season_id text,season int,source text,horizon text,metadata jsonb,created_at timestamptz,fetched_at timestamptz) on commit drop;
+            create temp table player_projections (projection_set_id text) on commit drop;
+            create temp table first_party_ros_profile_validations (id text,season int,scoring_profile_key text,scoring_profile_digest text,model_version text,policy_version text,calibration_version text,state text,requested_at timestamptz) on commit drop;
+            insert into leagues values ('published','Existing',false),('missing','Never|Published',false),('new','New',false),('unsupported','Unsupported',false),('withheld','Withheld',false),('archived','Archived',true),('retired','Old model',false),('unregistered-old','Registrar missed',false),('unregistered-new','Registrar new',false),('nonlinear','Unsupported D/ST',false),('idp','Ignored IDP',false);
+            insert into league_seasons select id,id,extract(year from now() at time zone 'UTC')::int-case when extract(month from now() at time zone 'UTC')<3 then 1 else 0 end,now()-case when id='unregistered-new' then interval '1 hour' else interval '40 hours' end from leagues;
+            insert into projection_sets select id||'-week',id,season,'laces-out-first-party','week',jsonb_build_object('scoringProfileKey',id),now(),now()-interval '7 days' from league_seasons;
+            update projection_sets set metadata=metadata || '{"supportedPositions":["QB","RB","WR","TE","K","DST"],"scoringWarnings":[]}' where league_season_id in ('unregistered-old','unregistered-new','idp');
+            update projection_sets set metadata=metadata || '{"scoringWarnings":[{"code":"DISPLAY_NAME_FALLBACK"},{"code":"IGNORED_ZERO_POINT_RULE"}]}' where league_season_id='unregistered-old';
+            update projection_sets set metadata=metadata || '{"supportedPositions":["QB","RB","WR","TE"],"scoringWarnings":[]}' where league_season_id='nonlinear';
+            update projection_sets set metadata=metadata || '{"scoringWarnings":[{"code":"IDP_RULES_IGNORED"}]}' where league_season_id='idp';
+            insert into projection_sets select 'published-ros',id,season,'laces-out-first-party-ros','rest-of-season','{"releaseCompleteness":"full","preservePriorGoodSet":false}',now()-interval '80 hours',now()-interval '80 hours' from league_seasons where id='published';
+            insert into player_projections values ('published-ros');
+          `);
+          await sql`
+            insert into first_party_ros_profile_validations
+            select id,season,id,encode(sha256(convert_to(id,'UTF8')),'hex'),
+              case when id='retired' then 'old-model' else ${FIRST_PARTY_ROS_MODEL_VERSION} end,
+              ${FIRST_PARTY_ROS_POLICY_VERSION},${FIRST_PARTY_ROS_INTERVAL_CALIBRATION_VERSION},
+              case when id='withheld' then 'withheld' else 'pending' end,
+              now()-case when id='new' then interval '1 hour' else interval '40 hours' end
+            from league_seasons where id in ('published','missing','new','withheld','archived','retired')
+          `;
+          const rows =
+            await sql.unsafe<
+              { id: string; league_name: string; age_hours: string; published_at: string }[]
+            >(healthSql);
+          expect(rows.map((row) => row.id).sort()).toEqual([
+            "missing",
+            "published",
+            "unregistered-old",
+            "withheld",
+          ]);
+          expect(rows.find((row) => row.id === "missing")).toMatchObject({
+            league_name: "Never Published",
+            age_hours: "-1",
+          });
+          expect(rows.find((row) => row.id === "withheld")?.published_at).toContain(
+            "validation withheld",
+          );
+          expect(rows.find((row) => row.id === "unregistered-old")?.published_at).toContain(
+            "validation unavailable",
+          );
+          expect(
+            Number(rows.find((row) => row.id === "published")?.age_hours),
+          ).toBeGreaterThanOrEqual(80);
+        });
+      } finally {
+        await client.end();
+      }
+    });
+
+    it("keeps distinct scoring profiles visible despite many newer admissions for one profile", async () => {
+      const halfPpr = rosScoringProfile("half-ppr");
+      const [base] = await db.select().from(firstPartyRosChampionArtifacts).limit(1);
+      if (!base) throw new Error("Missing seeded artifact");
+      const rows = Array.from({ length: 131 }, (_, index) => ({
+        season: base.season,
+        scoringProfileKey: index === 0 ? halfPpr.scoringProfileKey : base.scoringProfileKey,
+        modelVersion: base.modelVersion,
+        policyVersion: base.policyVersion,
+        calibrationVersion: base.calibrationVersion,
+        evidenceThroughSeason: base.evidenceThroughSeason,
+        sourceChecksums: base.sourceChecksums,
+        policy: base.policy,
+        releaseGate: base.releaseGate,
+        artifactChecksum: createHash("sha256").update(`repeat-admission-${index}`).digest("hex"),
+        admittedAt: new Date(FRESH.getTime() + index * 1_000),
+      }));
+      await db.insert(firstPartyRosChampionArtifacts).values(rows);
+      const current = await new RosProjectionStatusService(db, () => NOW).getStatus({
+        season: SEASON,
+        userId: callerId,
+      });
+      expect(current.admittedArtifacts.artifacts).toHaveLength(2);
+      expect(
+        current.admittedArtifacts.artifacts.map((artifact) => artifact.scoringProfile.label),
+      ).toContain("Half PPR");
+      expect(current.admittedArtifacts.artifacts[0]?.artifactChecksum).toBe(
+        rows[130]!.artifactChecksum,
+      );
     });
 
     it("keeps the positions that match even when the league differs elsewhere", () => {

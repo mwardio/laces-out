@@ -1,0 +1,1830 @@
+[
+  {
+    "key": "espn-ppr-4pt-pass",
+    "provider": "espn",
+    "digest": "f5e63a616d1eb7f55883e3a138f1cd625be51a2e4b5431bbb1b2a5bf4333820f",
+    "rules": [
+      {
+        "statKey": "20",
+        "providerStatId": "20",
+        "operation": "multiply",
+        "points": -2.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": null
+      },
+      {
+        "statKey": "72",
+        "providerStatId": "72",
+        "operation": "multiply",
+        "points": -2.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": null
+      },
+      {
+        "statKey": "85",
+        "providerStatId": "85",
+        "operation": "multiply",
+        "points": -1.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": null
+      },
+      {
+        "statKey": "89",
+        "providerStatId": "89",
+        "operation": "multiply",
+        "points": 0.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": null
+      },
+      {
+        "statKey": "ESPN stat 89 override for D/ST",
+        "providerStatId": "89:slot:16",
+        "operation": "multiply",
+        "points": 5.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": null
+      },
+      {
+        "statKey": "90",
+        "providerStatId": "90",
+        "operation": "multiply",
+        "points": 0.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": null
+      },
+      {
+        "statKey": "ESPN stat 90 override for D/ST",
+        "providerStatId": "90:slot:16",
+        "operation": "multiply",
+        "points": 4.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": null
+      },
+      {
+        "statKey": "91",
+        "providerStatId": "91",
+        "operation": "multiply",
+        "points": 0.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": null
+      },
+      {
+        "statKey": "ESPN stat 91 override for D/ST",
+        "providerStatId": "91:slot:16",
+        "operation": "multiply",
+        "points": 3.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": null
+      },
+      {
+        "statKey": "92",
+        "providerStatId": "92",
+        "operation": "multiply",
+        "points": 0.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": null
+      },
+      {
+        "statKey": "ESPN stat 92 override for D/ST",
+        "providerStatId": "92:slot:16",
+        "operation": "multiply",
+        "points": 1.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": null
+      },
+      {
+        "statKey": "95",
+        "providerStatId": "95",
+        "operation": "multiply",
+        "points": 0.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": null
+      },
+      {
+        "statKey": "ESPN stat 95 override for D/ST",
+        "providerStatId": "95:slot:16",
+        "operation": "multiply",
+        "points": 2.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": null
+      },
+      {
+        "statKey": "96",
+        "providerStatId": "96",
+        "operation": "multiply",
+        "points": 0.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": null
+      },
+      {
+        "statKey": "ESPN stat 96 override for D/ST",
+        "providerStatId": "96:slot:16",
+        "operation": "multiply",
+        "points": 2.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": null
+      },
+      {
+        "statKey": "97",
+        "providerStatId": "97",
+        "operation": "multiply",
+        "points": 0.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": null
+      },
+      {
+        "statKey": "ESPN stat 97 override for D/ST",
+        "providerStatId": "97:slot:16",
+        "operation": "multiply",
+        "points": 2.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": null
+      },
+      {
+        "statKey": "98",
+        "providerStatId": "98",
+        "operation": "multiply",
+        "points": 0.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": null
+      },
+      {
+        "statKey": "ESPN stat 98 override for D/ST",
+        "providerStatId": "98:slot:16",
+        "operation": "multiply",
+        "points": 2.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": null
+      },
+      {
+        "statKey": "99",
+        "providerStatId": "99",
+        "operation": "multiply",
+        "points": 0.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": null
+      },
+      {
+        "statKey": "ESPN stat 99 override for D/ST",
+        "providerStatId": "99:slot:16",
+        "operation": "multiply",
+        "points": 1.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": null
+      },
+      {
+        "statKey": "123",
+        "providerStatId": "123",
+        "operation": "multiply",
+        "points": 0.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": null
+      },
+      {
+        "statKey": "ESPN stat 123 override for D/ST",
+        "providerStatId": "123:slot:16",
+        "operation": "multiply",
+        "points": -1.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": null
+      },
+      {
+        "statKey": "124",
+        "providerStatId": "124",
+        "operation": "multiply",
+        "points": 0.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": null
+      },
+      {
+        "statKey": "ESPN stat 124 override for D/ST",
+        "providerStatId": "124:slot:16",
+        "operation": "multiply",
+        "points": -3.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": null
+      },
+      {
+        "statKey": "125",
+        "providerStatId": "125",
+        "operation": "multiply",
+        "points": 0.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": null
+      },
+      {
+        "statKey": "ESPN stat 125 override for D/ST",
+        "providerStatId": "125:slot:16",
+        "operation": "multiply",
+        "points": -5.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": null
+      },
+      {
+        "statKey": "128",
+        "providerStatId": "128",
+        "operation": "multiply",
+        "points": 0.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": null
+      },
+      {
+        "statKey": "ESPN stat 128 override for D/ST",
+        "providerStatId": "128:slot:16",
+        "operation": "multiply",
+        "points": 5.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": null
+      },
+      {
+        "statKey": "129",
+        "providerStatId": "129",
+        "operation": "multiply",
+        "points": 0.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": null
+      },
+      {
+        "statKey": "ESPN stat 129 override for D/ST",
+        "providerStatId": "129:slot:16",
+        "operation": "multiply",
+        "points": 3.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": null
+      },
+      {
+        "statKey": "130",
+        "providerStatId": "130",
+        "operation": "multiply",
+        "points": 0.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": null
+      },
+      {
+        "statKey": "ESPN stat 130 override for D/ST",
+        "providerStatId": "130:slot:16",
+        "operation": "multiply",
+        "points": 2.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": null
+      },
+      {
+        "statKey": "132",
+        "providerStatId": "132",
+        "operation": "multiply",
+        "points": 0.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": null
+      },
+      {
+        "statKey": "ESPN stat 132 override for D/ST",
+        "providerStatId": "132:slot:16",
+        "operation": "multiply",
+        "points": -1.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": null
+      },
+      {
+        "statKey": "133",
+        "providerStatId": "133",
+        "operation": "multiply",
+        "points": 0.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": null
+      },
+      {
+        "statKey": "ESPN stat 133 override for D/ST",
+        "providerStatId": "133:slot:16",
+        "operation": "multiply",
+        "points": -3.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": null
+      },
+      {
+        "statKey": "134",
+        "providerStatId": "134",
+        "operation": "multiply",
+        "points": 0.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": null
+      },
+      {
+        "statKey": "ESPN stat 134 override for D/ST",
+        "providerStatId": "134:slot:16",
+        "operation": "multiply",
+        "points": -5.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": null
+      },
+      {
+        "statKey": "135",
+        "providerStatId": "135",
+        "operation": "multiply",
+        "points": 0.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": null
+      },
+      {
+        "statKey": "ESPN stat 135 override for D/ST",
+        "providerStatId": "135:slot:16",
+        "operation": "multiply",
+        "points": -6.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": null
+      },
+      {
+        "statKey": "136",
+        "providerStatId": "136",
+        "operation": "multiply",
+        "points": 0.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": null
+      },
+      {
+        "statKey": "ESPN stat 136 override for D/ST",
+        "providerStatId": "136:slot:16",
+        "operation": "multiply",
+        "points": -7.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": null
+      },
+      {
+        "statKey": "3",
+        "providerStatId": "3",
+        "operation": "multiply",
+        "points": 0.04,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": null
+      },
+      {
+        "statKey": "24",
+        "providerStatId": "24",
+        "operation": "multiply",
+        "points": 0.1,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": null
+      },
+      {
+        "statKey": "42",
+        "providerStatId": "42",
+        "operation": "multiply",
+        "points": 0.1,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": null
+      },
+      {
+        "statKey": "53",
+        "providerStatId": "53",
+        "operation": "multiply",
+        "points": 1.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": null
+      },
+      {
+        "statKey": "86",
+        "providerStatId": "86",
+        "operation": "multiply",
+        "points": 1.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": null
+      },
+      {
+        "statKey": "209",
+        "providerStatId": "209",
+        "operation": "multiply",
+        "points": 1.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": null
+      },
+      {
+        "statKey": "ESPN stat 209 override for D/ST",
+        "providerStatId": "209:slot:16",
+        "operation": "multiply",
+        "points": 1.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": null
+      },
+      {
+        "statKey": "19",
+        "providerStatId": "19",
+        "operation": "multiply",
+        "points": 2.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": null
+      },
+      {
+        "statKey": "26",
+        "providerStatId": "26",
+        "operation": "multiply",
+        "points": 2.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": null
+      },
+      {
+        "statKey": "44",
+        "providerStatId": "44",
+        "operation": "multiply",
+        "points": 2.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": null
+      },
+      {
+        "statKey": "206",
+        "providerStatId": "206",
+        "operation": "multiply",
+        "points": 2.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": null
+      },
+      {
+        "statKey": "ESPN stat 206 override for D/ST",
+        "providerStatId": "206:slot:16",
+        "operation": "multiply",
+        "points": 2.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": null
+      },
+      {
+        "statKey": "80",
+        "providerStatId": "80",
+        "operation": "multiply",
+        "points": 3.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": null
+      },
+      {
+        "statKey": "4",
+        "providerStatId": "4",
+        "operation": "multiply",
+        "points": 4.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": null
+      },
+      {
+        "statKey": "77",
+        "providerStatId": "77",
+        "operation": "multiply",
+        "points": 4.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": null
+      },
+      {
+        "statKey": "198",
+        "providerStatId": "198",
+        "operation": "multiply",
+        "points": 5.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": null
+      },
+      {
+        "statKey": "25",
+        "providerStatId": "25",
+        "operation": "multiply",
+        "points": 6.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": null
+      },
+      {
+        "statKey": "43",
+        "providerStatId": "43",
+        "operation": "multiply",
+        "points": 6.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": null
+      },
+      {
+        "statKey": "63",
+        "providerStatId": "63",
+        "operation": "multiply",
+        "points": 6.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": null
+      },
+      {
+        "statKey": "93",
+        "providerStatId": "93",
+        "operation": "multiply",
+        "points": 6.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": null
+      },
+      {
+        "statKey": "ESPN stat 93 override for D/ST",
+        "providerStatId": "93:slot:16",
+        "operation": "multiply",
+        "points": 6.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": null
+      },
+      {
+        "statKey": "101",
+        "providerStatId": "101",
+        "operation": "multiply",
+        "points": 6.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": null
+      },
+      {
+        "statKey": "ESPN stat 101 override for D/ST",
+        "providerStatId": "101:slot:16",
+        "operation": "multiply",
+        "points": 6.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": null
+      },
+      {
+        "statKey": "102",
+        "providerStatId": "102",
+        "operation": "multiply",
+        "points": 6.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": null
+      },
+      {
+        "statKey": "ESPN stat 102 override for D/ST",
+        "providerStatId": "102:slot:16",
+        "operation": "multiply",
+        "points": 6.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": null
+      },
+      {
+        "statKey": "103",
+        "providerStatId": "103",
+        "operation": "multiply",
+        "points": 6.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": null
+      },
+      {
+        "statKey": "ESPN stat 103 override for D/ST",
+        "providerStatId": "103:slot:16",
+        "operation": "multiply",
+        "points": 6.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": null
+      },
+      {
+        "statKey": "104",
+        "providerStatId": "104",
+        "operation": "multiply",
+        "points": 6.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": null
+      },
+      {
+        "statKey": "ESPN stat 104 override for D/ST",
+        "providerStatId": "104:slot:16",
+        "operation": "multiply",
+        "points": 6.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": null
+      },
+      {
+        "statKey": "201",
+        "providerStatId": "201",
+        "operation": "multiply",
+        "points": 6.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": null
+      }
+    ]
+  },
+  {
+    "key": "espn-half-ppr-yardage-bonus-4pt-pass",
+    "provider": "espn",
+    "digest": "a3fe2ccf5413db10191a3f57585f61a3b384eb38239d0c0213f39ef7fa7d1481",
+    "rules": [
+      {
+        "statKey": "89",
+        "providerStatId": "89",
+        "operation": "multiply",
+        "points": 0.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": null
+      },
+      {
+        "statKey": "ESPN stat 89 override for D/ST",
+        "providerStatId": "89:slot:16",
+        "operation": "multiply",
+        "points": 5.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": null
+      },
+      {
+        "statKey": "93",
+        "providerStatId": "93",
+        "operation": "multiply",
+        "points": 0.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": null
+      },
+      {
+        "statKey": "ESPN stat 93 override for D/ST",
+        "providerStatId": "93:slot:16",
+        "operation": "multiply",
+        "points": 6.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": null
+      },
+      {
+        "statKey": "90",
+        "providerStatId": "90",
+        "operation": "multiply",
+        "points": 0.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": null
+      },
+      {
+        "statKey": "ESPN stat 90 override for D/ST",
+        "providerStatId": "90:slot:16",
+        "operation": "multiply",
+        "points": 4.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": null
+      },
+      {
+        "statKey": "123",
+        "providerStatId": "123",
+        "operation": "multiply",
+        "points": 0.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": null
+      },
+      {
+        "statKey": "ESPN stat 123 override for D/ST",
+        "providerStatId": "123:slot:16",
+        "operation": "multiply",
+        "points": -1.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": null
+      },
+      {
+        "statKey": "37",
+        "providerStatId": "37",
+        "operation": "multiply",
+        "points": 3.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": null
+      },
+      {
+        "statKey": "25",
+        "providerStatId": "25",
+        "operation": "multiply",
+        "points": 6.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": null
+      },
+      {
+        "statKey": "72",
+        "providerStatId": "72",
+        "operation": "multiply",
+        "points": -2.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": null
+      },
+      {
+        "statKey": "95",
+        "providerStatId": "95",
+        "operation": "multiply",
+        "points": 0.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": null
+      },
+      {
+        "statKey": "ESPN stat 95 override for D/ST",
+        "providerStatId": "95:slot:16",
+        "operation": "multiply",
+        "points": 2.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": null
+      },
+      {
+        "statKey": "98",
+        "providerStatId": "98",
+        "operation": "multiply",
+        "points": 0.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": null
+      },
+      {
+        "statKey": "ESPN stat 98 override for D/ST",
+        "providerStatId": "98:slot:16",
+        "operation": "multiply",
+        "points": 2.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": null
+      },
+      {
+        "statKey": "91",
+        "providerStatId": "91",
+        "operation": "multiply",
+        "points": 0.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": null
+      },
+      {
+        "statKey": "ESPN stat 91 override for D/ST",
+        "providerStatId": "91:slot:16",
+        "operation": "multiply",
+        "points": 3.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": null
+      },
+      {
+        "statKey": "38",
+        "providerStatId": "38",
+        "operation": "multiply",
+        "points": 5.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": null
+      },
+      {
+        "statKey": "96",
+        "providerStatId": "96",
+        "operation": "multiply",
+        "points": 0.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": null
+      },
+      {
+        "statKey": "ESPN stat 96 override for D/ST",
+        "providerStatId": "96:slot:16",
+        "operation": "multiply",
+        "points": 2.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": null
+      },
+      {
+        "statKey": "19",
+        "providerStatId": "19",
+        "operation": "multiply",
+        "points": 2.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": null
+      },
+      {
+        "statKey": "43",
+        "providerStatId": "43",
+        "operation": "multiply",
+        "points": 6.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": null
+      },
+      {
+        "statKey": "97",
+        "providerStatId": "97",
+        "operation": "multiply",
+        "points": 0.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": null
+      },
+      {
+        "statKey": "ESPN stat 97 override for D/ST",
+        "providerStatId": "97:slot:16",
+        "operation": "multiply",
+        "points": 2.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": null
+      },
+      {
+        "statKey": "102",
+        "providerStatId": "102",
+        "operation": "multiply",
+        "points": 6.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": null
+      },
+      {
+        "statKey": "ESPN stat 102 override for D/ST",
+        "providerStatId": "102:slot:16",
+        "operation": "multiply",
+        "points": 6.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": null
+      },
+      {
+        "statKey": "4",
+        "providerStatId": "4",
+        "operation": "multiply",
+        "points": 4.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": null
+      },
+      {
+        "statKey": "20",
+        "providerStatId": "20",
+        "operation": "multiply",
+        "points": -2.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": null
+      },
+      {
+        "statKey": "24",
+        "providerStatId": "24",
+        "operation": "multiply",
+        "points": 0.1,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": null
+      },
+      {
+        "statKey": "53",
+        "providerStatId": "53",
+        "operation": "multiply",
+        "points": 0.5,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": null
+      },
+      {
+        "statKey": "101",
+        "providerStatId": "101",
+        "operation": "multiply",
+        "points": 6.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": null
+      },
+      {
+        "statKey": "ESPN stat 101 override for D/ST",
+        "providerStatId": "101:slot:16",
+        "operation": "multiply",
+        "points": 6.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": null
+      },
+      {
+        "statKey": "63",
+        "providerStatId": "63",
+        "operation": "multiply",
+        "points": 6.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": null
+      },
+      {
+        "statKey": "80",
+        "providerStatId": "80",
+        "operation": "multiply",
+        "points": 3.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": null
+      },
+      {
+        "statKey": "17",
+        "providerStatId": "17",
+        "operation": "multiply",
+        "points": 3.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": null
+      },
+      {
+        "statKey": "104",
+        "providerStatId": "104",
+        "operation": "multiply",
+        "points": 6.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": null
+      },
+      {
+        "statKey": "ESPN stat 104 override for D/ST",
+        "providerStatId": "104:slot:16",
+        "operation": "multiply",
+        "points": 6.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": null
+      },
+      {
+        "statKey": "26",
+        "providerStatId": "26",
+        "operation": "multiply",
+        "points": 2.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": null
+      },
+      {
+        "statKey": "57",
+        "providerStatId": "57",
+        "operation": "multiply",
+        "points": 5.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": null
+      },
+      {
+        "statKey": "77",
+        "providerStatId": "77",
+        "operation": "multiply",
+        "points": 4.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": null
+      },
+      {
+        "statKey": "92",
+        "providerStatId": "92",
+        "operation": "multiply",
+        "points": 0.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": null
+      },
+      {
+        "statKey": "ESPN stat 92 override for D/ST",
+        "providerStatId": "92:slot:16",
+        "operation": "multiply",
+        "points": 1.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": null
+      },
+      {
+        "statKey": "99",
+        "providerStatId": "99",
+        "operation": "multiply",
+        "points": 0.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": null
+      },
+      {
+        "statKey": "ESPN stat 99 override for D/ST",
+        "providerStatId": "99:slot:16",
+        "operation": "multiply",
+        "points": 1.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": null
+      },
+      {
+        "statKey": "125",
+        "providerStatId": "125",
+        "operation": "multiply",
+        "points": 0.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": null
+      },
+      {
+        "statKey": "ESPN stat 125 override for D/ST",
+        "providerStatId": "125:slot:16",
+        "operation": "multiply",
+        "points": -5.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": null
+      },
+      {
+        "statKey": "3",
+        "providerStatId": "3",
+        "operation": "multiply",
+        "points": 0.04,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": null
+      },
+      {
+        "statKey": "85",
+        "providerStatId": "85",
+        "operation": "multiply",
+        "points": -1.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": null
+      },
+      {
+        "statKey": "124",
+        "providerStatId": "124",
+        "operation": "multiply",
+        "points": 0.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": null
+      },
+      {
+        "statKey": "ESPN stat 124 override for D/ST",
+        "providerStatId": "124:slot:16",
+        "operation": "multiply",
+        "points": -3.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": null
+      },
+      {
+        "statKey": "18",
+        "providerStatId": "18",
+        "operation": "multiply",
+        "points": 5.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": null
+      },
+      {
+        "statKey": "86",
+        "providerStatId": "86",
+        "operation": "multiply",
+        "points": 1.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": null
+      },
+      {
+        "statKey": "42",
+        "providerStatId": "42",
+        "operation": "multiply",
+        "points": 0.1,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": null
+      },
+      {
+        "statKey": "44",
+        "providerStatId": "44",
+        "operation": "multiply",
+        "points": 2.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": null
+      },
+      {
+        "statKey": "103",
+        "providerStatId": "103",
+        "operation": "multiply",
+        "points": 0.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": null
+      },
+      {
+        "statKey": "ESPN stat 103 override for D/ST",
+        "providerStatId": "103:slot:16",
+        "operation": "multiply",
+        "points": 6.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": null
+      },
+      {
+        "statKey": "201",
+        "providerStatId": "201",
+        "operation": "multiply",
+        "points": 5.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": null
+      },
+      {
+        "statKey": "56",
+        "providerStatId": "56",
+        "operation": "multiply",
+        "points": 3.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": null
+      },
+      {
+        "statKey": "198",
+        "providerStatId": "198",
+        "operation": "multiply",
+        "points": 5.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": null
+      }
+    ]
+  },
+  {
+    "key": "yahoo-half-ppr",
+    "provider": "yahoo",
+    "digest": "8707a75b97ee66d9ea33ec2e131c497196b6069265c760866be43b2e38827640",
+    "rules": [
+      {
+        "statKey": "Passing Yards",
+        "providerStatId": "4",
+        "operation": "multiply",
+        "points": 0.04,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": ["O"]
+      },
+      {
+        "statKey": "Passing Touchdowns",
+        "providerStatId": "5",
+        "operation": "multiply",
+        "points": 4.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": ["O"]
+      },
+      {
+        "statKey": "Interceptions",
+        "providerStatId": "6",
+        "operation": "multiply",
+        "points": -1.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": ["O"]
+      },
+      {
+        "statKey": "Rushing Yards",
+        "providerStatId": "9",
+        "operation": "multiply",
+        "points": 0.1,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": ["O"]
+      },
+      {
+        "statKey": "Rushing Touchdowns",
+        "providerStatId": "10",
+        "operation": "multiply",
+        "points": 6.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": ["O"]
+      },
+      {
+        "statKey": "Receptions",
+        "providerStatId": "11",
+        "operation": "multiply",
+        "points": 0.5,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": ["O"]
+      },
+      {
+        "statKey": "Receiving Yards",
+        "providerStatId": "12",
+        "operation": "multiply",
+        "points": 0.1,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": ["O"]
+      },
+      {
+        "statKey": "Receiving Touchdowns",
+        "providerStatId": "13",
+        "operation": "multiply",
+        "points": 6.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": ["O"]
+      },
+      {
+        "statKey": "Return Touchdowns",
+        "providerStatId": "15",
+        "operation": "multiply",
+        "points": 6.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": ["O"]
+      },
+      {
+        "statKey": "2-Point Conversions",
+        "providerStatId": "16",
+        "operation": "multiply",
+        "points": 2.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": ["O"]
+      },
+      {
+        "statKey": "Fumbles Lost",
+        "providerStatId": "18",
+        "operation": "multiply",
+        "points": -2.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": ["O"]
+      },
+      {
+        "statKey": "Offensive Fumble Return TD",
+        "providerStatId": "57",
+        "operation": "multiply",
+        "points": 6.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": ["O"]
+      },
+      {
+        "statKey": "Field Goals 0-19 Yards",
+        "providerStatId": "19",
+        "operation": "multiply",
+        "points": 3.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": ["K"]
+      },
+      {
+        "statKey": "Field Goals 20-29 Yards",
+        "providerStatId": "20",
+        "operation": "multiply",
+        "points": 3.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": ["K"]
+      },
+      {
+        "statKey": "Field Goals 30-39 Yards",
+        "providerStatId": "21",
+        "operation": "multiply",
+        "points": 3.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": ["K"]
+      },
+      {
+        "statKey": "Field Goals 40-49 Yards",
+        "providerStatId": "22",
+        "operation": "multiply",
+        "points": 4.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": ["K"]
+      },
+      {
+        "statKey": "Field Goals 50+ Yards",
+        "providerStatId": "23",
+        "operation": "multiply",
+        "points": 5.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": ["K"]
+      },
+      {
+        "statKey": "Point After Attempt Made",
+        "providerStatId": "29",
+        "operation": "multiply",
+        "points": 1.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": ["K"]
+      },
+      {
+        "statKey": "Sack",
+        "providerStatId": "32",
+        "operation": "multiply",
+        "points": 1.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": ["DT"]
+      },
+      {
+        "statKey": "Interception",
+        "providerStatId": "33",
+        "operation": "multiply",
+        "points": 2.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": ["DT"]
+      },
+      {
+        "statKey": "Fumble Recovery",
+        "providerStatId": "34",
+        "operation": "multiply",
+        "points": 2.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": ["DT"]
+      },
+      {
+        "statKey": "Touchdown",
+        "providerStatId": "35",
+        "operation": "multiply",
+        "points": 6.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": ["DT"]
+      },
+      {
+        "statKey": "Safety",
+        "providerStatId": "36",
+        "operation": "multiply",
+        "points": 2.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": ["DT"]
+      },
+      {
+        "statKey": "Block Kick",
+        "providerStatId": "37",
+        "operation": "multiply",
+        "points": 2.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": ["DT"]
+      },
+      {
+        "statKey": "Kickoff and Punt Return Touchdowns",
+        "providerStatId": "49",
+        "operation": "multiply",
+        "points": 6.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": ["DT"]
+      },
+      {
+        "statKey": "Points Allowed 0 points",
+        "providerStatId": "50",
+        "operation": "multiply",
+        "points": 10.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": ["DT"]
+      },
+      {
+        "statKey": "Points Allowed 1-6 points",
+        "providerStatId": "51",
+        "operation": "multiply",
+        "points": 7.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": ["DT"]
+      },
+      {
+        "statKey": "Points Allowed 7-13 points",
+        "providerStatId": "52",
+        "operation": "multiply",
+        "points": 4.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": ["DT"]
+      },
+      {
+        "statKey": "Points Allowed 14-20 points",
+        "providerStatId": "53",
+        "operation": "multiply",
+        "points": 1.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": ["DT"]
+      },
+      {
+        "statKey": "Points Allowed 21-27 points",
+        "providerStatId": "54",
+        "operation": "multiply",
+        "points": 0.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": ["DT"]
+      },
+      {
+        "statKey": "Points Allowed 28-34 points",
+        "providerStatId": "55",
+        "operation": "multiply",
+        "points": -1.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": ["DT"]
+      },
+      {
+        "statKey": "Points Allowed 35+ points",
+        "providerStatId": "56",
+        "operation": "multiply",
+        "points": -4.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": ["DT"]
+      },
+      {
+        "statKey": "Extra Point Returned",
+        "providerStatId": "82",
+        "operation": "multiply",
+        "points": 2.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": ["DT"]
+      }
+    ]
+  },
+  {
+    "key": "yahoo-half-ppr-return-yards-fg-distance",
+    "provider": "yahoo",
+    "digest": "01f307ff974dcaff9c38300a9f1599c0eff6642fcdb9074a660297fb8d00f8de",
+    "rules": [
+      {
+        "statKey": "Points Allowed 21-27 points",
+        "providerStatId": "54",
+        "operation": "multiply",
+        "points": 0.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": ["DT"]
+      },
+      {
+        "statKey": "Passing Yards",
+        "providerStatId": "4",
+        "operation": "multiply",
+        "points": 0.04,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": ["O"]
+      },
+      {
+        "statKey": "Passing Touchdowns",
+        "providerStatId": "5",
+        "operation": "multiply",
+        "points": 4.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": ["O"]
+      },
+      {
+        "statKey": "Interceptions",
+        "providerStatId": "6",
+        "operation": "multiply",
+        "points": -2.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": ["O"]
+      },
+      {
+        "statKey": "Rushing Yards",
+        "providerStatId": "9",
+        "operation": "multiply",
+        "points": 0.1,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": ["O"]
+      },
+      {
+        "statKey": "Rushing Touchdowns",
+        "providerStatId": "10",
+        "operation": "multiply",
+        "points": 6.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": ["O"]
+      },
+      {
+        "statKey": "Receptions",
+        "providerStatId": "11",
+        "operation": "multiply",
+        "points": 0.5,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": ["O"]
+      },
+      {
+        "statKey": "Receiving Yards",
+        "providerStatId": "12",
+        "operation": "multiply",
+        "points": 0.1,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": ["O"]
+      },
+      {
+        "statKey": "Receiving Touchdowns",
+        "providerStatId": "13",
+        "operation": "multiply",
+        "points": 6.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": ["O"]
+      },
+      {
+        "statKey": "Return Yards",
+        "providerStatId": "14",
+        "operation": "multiply",
+        "points": 0.0067,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": ["O"]
+      },
+      {
+        "statKey": "Return Touchdowns",
+        "providerStatId": "15",
+        "operation": "multiply",
+        "points": 6.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": ["O"]
+      },
+      {
+        "statKey": "2-Point Conversions",
+        "providerStatId": "16",
+        "operation": "multiply",
+        "points": 2.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": ["O"]
+      },
+      {
+        "statKey": "Fumbles Lost",
+        "providerStatId": "18",
+        "operation": "multiply",
+        "points": -2.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": ["O"]
+      },
+      {
+        "statKey": "Offensive Fumble Return TD",
+        "providerStatId": "57",
+        "operation": "multiply",
+        "points": 6.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": ["O"]
+      },
+      {
+        "statKey": "Field Goals Missed 0-19 Yards",
+        "providerStatId": "24",
+        "operation": "multiply",
+        "points": -1.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": ["K"]
+      },
+      {
+        "statKey": "Field Goals Missed 20-29 Yards",
+        "providerStatId": "25",
+        "operation": "multiply",
+        "points": -1.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": ["K"]
+      },
+      {
+        "statKey": "Point After Attempt Made",
+        "providerStatId": "29",
+        "operation": "multiply",
+        "points": 1.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": ["K"]
+      },
+      {
+        "statKey": "Point After Attempt Missed",
+        "providerStatId": "30",
+        "operation": "multiply",
+        "points": -1.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": ["K"]
+      },
+      {
+        "statKey": "Field Goals Total Yards",
+        "providerStatId": "84",
+        "operation": "multiply",
+        "points": 0.1,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": ["K"]
+      },
+      {
+        "statKey": "Sack",
+        "providerStatId": "32",
+        "operation": "multiply",
+        "points": 1.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": ["DT"]
+      },
+      {
+        "statKey": "Interception",
+        "providerStatId": "33",
+        "operation": "multiply",
+        "points": 2.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": ["DT"]
+      },
+      {
+        "statKey": "Fumble Recovery",
+        "providerStatId": "34",
+        "operation": "multiply",
+        "points": 2.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": ["DT"]
+      },
+      {
+        "statKey": "Touchdown",
+        "providerStatId": "35",
+        "operation": "multiply",
+        "points": 6.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": ["DT"]
+      },
+      {
+        "statKey": "Safety",
+        "providerStatId": "36",
+        "operation": "multiply",
+        "points": 2.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": ["DT"]
+      },
+      {
+        "statKey": "Block Kick",
+        "providerStatId": "37",
+        "operation": "multiply",
+        "points": 2.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": ["DT"]
+      },
+      {
+        "statKey": "Kickoff and Punt Return Touchdowns",
+        "providerStatId": "49",
+        "operation": "multiply",
+        "points": 6.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": ["DT"]
+      },
+      {
+        "statKey": "Points Allowed 0 points",
+        "providerStatId": "50",
+        "operation": "multiply",
+        "points": 15.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": ["DT"]
+      },
+      {
+        "statKey": "Points Allowed 1-6 points",
+        "providerStatId": "51",
+        "operation": "multiply",
+        "points": 10.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": ["DT"]
+      },
+      {
+        "statKey": "Points Allowed 7-13 points",
+        "providerStatId": "52",
+        "operation": "multiply",
+        "points": 6.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": ["DT"]
+      },
+      {
+        "statKey": "Points Allowed 14-20 points",
+        "providerStatId": "53",
+        "operation": "multiply",
+        "points": 3.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": ["DT"]
+      },
+      {
+        "statKey": "Points Allowed 28-34 points",
+        "providerStatId": "55",
+        "operation": "multiply",
+        "points": -1.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": ["DT"]
+      },
+      {
+        "statKey": "Points Allowed 35+ points",
+        "providerStatId": "56",
+        "operation": "multiply",
+        "points": -4.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": ["DT"]
+      },
+      {
+        "statKey": "4th Down Stops",
+        "providerStatId": "67",
+        "operation": "multiply",
+        "points": 1.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": ["DT"]
+      },
+      {
+        "statKey": "Defensive Yards Allowed 500+",
+        "providerStatId": "76",
+        "operation": "multiply",
+        "points": -1.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": ["DT"]
+      },
+      {
+        "statKey": "Extra Point Returned",
+        "providerStatId": "82",
+        "operation": "multiply",
+        "points": 2.0,
+        "thresholdLow": null,
+        "thresholdHigh": null,
+        "positionTypes": ["DT"]
+      }
+    ]
+  }
+]

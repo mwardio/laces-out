@@ -9,13 +9,7 @@ import {
   type NflverseDatasetState,
 } from "@laces-out/source-nflverse";
 
-import {
-  ROS_SCORING_PROFILE_KEYS,
-  isRosScoringProfileKey,
-  rosScoringProfile,
-  type FirstPartyRosPosition,
-  type RosScoringProfileEntry,
-} from "@laces-out/projections";
+import type { FirstPartyRosPosition } from "@laces-out/projections";
 
 import {
   buildHistoricalRosBacktest,
@@ -34,6 +28,7 @@ import {
 } from "../src/first-party-projection-inputs.js";
 import { firstPartyRosChampionPolicyChecksum } from "../src/first-party-ros-publication.js";
 import { rosValidationSourceCache } from "../src/ros-validation-source-cache.js";
+import { rosValidationScoringProfileOption } from "../src/ros-validation-profile-option.js";
 import {
   FIRST_PARTY_ROS_RELEASE_MAXIMUM_FORECASTS,
   FIRST_PARTY_ROS_RELEASE_PLAYERS_PER_POSITION,
@@ -95,21 +90,6 @@ function positionListOption(): readonly FirstPartyRosPosition[] | undefined {
   return [...new Set(positions as FirstPartyRosPosition[])].sort();
 }
 
-/**
- * Resolves `--scoring-profile=`. The frozen validation process is run once per profile; an unknown
- * name throws before any work starts rather than silently validating the default.
- */
-function scoringProfileOption(): RosScoringProfileEntry {
-  const raw = process.argv.find((argument) => argument.startsWith("--scoring-profile="));
-  const value = raw?.slice("--scoring-profile=".length) ?? "full-ppr";
-  if (!isRosScoringProfileKey(value)) {
-    throw new Error(
-      `--scoring-profile must be one of ${ROS_SCORING_PROFILE_KEYS.join(", ")} (received ${value})`,
-    );
-  }
-  return rosScoringProfile(value);
-}
-
 function normalizePosition(value: string): RosCoveragePosition | null {
   const normalized = value.trim().toUpperCase();
   const position =
@@ -137,7 +117,7 @@ async function main(): Promise<void> {
   const sourceOptions = cacheDirectory
     ? { fetch: rosValidationSourceCache({ directory: cacheDirectory, offline }) }
     : {};
-  const scoringProfile = scoringProfileOption();
+  const scoringProfile = rosValidationScoringProfileOption(process.argv);
   const seasons = integerList("--seasons", "2019,2020,2021,2022,2023,2024,2025");
   const heldOutSeasons = integerList("--holdouts", "2022,2023,2024,2025");
   const asOfWeeks = integerList("--cutoffs", "1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17");

@@ -3,6 +3,7 @@ export * from "./scoring.js";
 export * from "./first-party.js";
 export * from "./rest-of-season.js";
 export * from "./ros-scoring-profiles.js";
+export * from "./ros-profile-definition.js";
 export * from "./league-scoring.js";
 export * from "./scoring-position-keys.js";
 

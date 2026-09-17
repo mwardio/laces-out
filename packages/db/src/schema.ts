@@ -2040,9 +2040,8 @@ export const playerRosProjectionSummaries = pgTable(
  * Immutable, checksummed rest-of-season champion/calibration artifact. It is the ONLY thing that
  * can authorize live ROS publication: the shadow rail fails closed until a row exists here whose
  * checksum validates, whose model/policy/calibration identities match the running code, and whose
- * scoring-profile identity matches the target league exactly. There is deliberately no automated
- * code path that inserts these rows; admission happens through a separate release-proof step, so in
- * normal operation this table stays empty and the rail records only degraded audit evidence.
+ * scoring-profile identity matches the target league exactly. Admission requires a separate, locked historical release-proof step, including when an
+ * exact new league scoring profile is validated by the isolated automatic validation worker.
  *
  * Rows are append-only and immutable (enforced by trigger). `policy` is the serialized
  * `FirstPartyRosChampionPolicy` (its choices, interval-calibration artifacts, walk-forward and
@@ -2101,6 +2100,56 @@ export const firstPartyRosChampionArtifacts = pgTable(
     check(
       "first_party_ros_champion_artifacts_admitted_check",
       sql`${table.admittedAt} >= '2000-01-01'::timestamptz`,
+    ),
+  ],
+);
+
+/** Deduplicated exact-scoring release proofs, shared across leagues without storing member data. */
+export const firstPartyRosProfileValidations = pgTable(
+  "first_party_ros_profile_validations",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    season: integer("season").notNull(),
+    modelVersion: text("model_version").notNull(),
+    policyVersion: text("policy_version").notNull(),
+    calibrationVersion: text("calibration_version").notNull(),
+    scoringProfileKey: text("scoring_profile_key").notNull(),
+    scoringProfileDigest: text("scoring_profile_digest").notNull(),
+    state: text("state")
+      .$type<"pending" | "validating" | "admitted" | "withheld" | "failed">()
+      .notNull()
+      .default("pending"),
+    blockers: jsonb("blockers").$type<readonly string[]>().notNull().default([]),
+    report: jsonb("report").$type<Record<string, unknown>>(),
+    artifactId: uuid("artifact_id").references(() => firstPartyRosChampionArtifacts.id, {
+      onDelete: "restrict",
+    }),
+    publicationScopeDigest: text("publication_scope_digest"),
+    requestedAt: timestamp("requested_at", { withTimezone: true }).notNull().defaultNow(),
+    startedAt: timestamp("started_at", { withTimezone: true }),
+    completedAt: timestamp("completed_at", { withTimezone: true }),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("first_party_ros_profile_validations_identity_unique").on(
+      table.season,
+      table.modelVersion,
+      table.policyVersion,
+      table.calibrationVersion,
+      table.scoringProfileDigest,
+    ),
+    index("first_party_ros_profile_validations_state_idx").on(table.state, table.requestedAt),
+    check(
+      "first_party_ros_profile_validations_identity_check",
+      sql`${table.season} between 2000 and 2200 and char_length(${table.scoringProfileKey}) between 1 and 8192 and ${table.scoringProfileDigest} ~ '^[a-f0-9]{64}$' and char_length(${table.modelVersion}) between 1 and 128 and char_length(${table.policyVersion}) between 1 and 128 and char_length(${table.calibrationVersion}) between 1 and 128`,
+    ),
+    check(
+      "first_party_ros_profile_validations_state_check",
+      sql`${table.state} in ('pending', 'validating', 'admitted', 'withheld', 'failed') and (${table.state} <> 'admitted' or ${table.artifactId} is not null)`,
+    ),
+    check(
+      "first_party_ros_profile_validations_payload_check",
+      sql`jsonb_typeof(${table.blockers}) = 'array' and (${table.report} is null or jsonb_typeof(${table.report}) = 'object') and (${table.publicationScopeDigest} is null or ${table.publicationScopeDigest} ~ '^[a-f0-9]{64}$')`,
     ),
   ],
 );

@@ -103,6 +103,7 @@ ENV NODE_ENV=production \
 COPY --from=worker-production-dependencies --chown=node:node /app/node_modules ./node_modules
 COPY --from=builder --chown=node:node /app/apps/worker/package.json ./apps/worker/package.json
 COPY --from=builder --chown=node:node /app/apps/worker/dist ./apps/worker/dist
+RUN mkdir -p /tmp/laces-ros-source-cache && chown node:node /tmp/laces-ros-source-cache
 USER node
 CMD ["node", "apps/worker/dist/worker.js"]
 

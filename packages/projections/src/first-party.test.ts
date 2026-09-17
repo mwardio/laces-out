@@ -4,6 +4,7 @@ import {
   FIRST_PARTY_PROJECTION_MODEL_VERSION,
   applyFirstPartyProjectionChampionPolicy,
   applyFirstPartyProjectionFinalPolicy,
+  canonicalFirstPartyTeamDefenseOutcomes,
   evaluateFirstPartyBacktestForScoringProfile,
   evaluateFirstPartyTeamDefenseBacktestForScoringProfile,
   firstPartyChampionStrategyForPosition,
@@ -608,6 +609,68 @@ const yardsAllowedBucketComponents = [
 ] as const;
 
 describe("first-party team-defense projection", () => {
+  it("extracts identical canonical outcomes without fitting discarded forecasts", () => {
+    const history: readonly FirstPartyTeamDefenseWeeklyStatLine[] = [
+      {
+        team: "BBB",
+        season: 2025,
+        week: 2,
+        components: { points_allowed: 21, yards_allowed: 300, defensive_sacks: 2 },
+      },
+      {
+        team: "AAA",
+        season: 2024,
+        week: 18,
+        components: { points_allowed: 0, yards_allowed: 100, defensive_sacks: 4 },
+        played: false,
+      },
+      {
+        team: "AAA",
+        season: 2025,
+        week: 2,
+        components: {
+          points_allowed: 0,
+          yards_allowed: 400,
+          defensive_sacks: -1,
+          defensive_interceptions: Number.NaN,
+          defensive_two_point_returns: 2,
+          one_point_safeties: 1,
+          points_allowed_0_probability: 0.75,
+        },
+      },
+      {
+        team: "AAA",
+        season: 2024,
+        week: 17,
+        components: { points_allowed: 35, yards_allowed: 500, defensive_sacks: 1 },
+        played: true,
+      },
+    ];
+    const oldPath = runFirstPartyTeamDefenseBacktest(history).predictions.map((prediction) => ({
+      team: prediction.team,
+      season: prediction.season,
+      week: prediction.week,
+      components: prediction.actual,
+      played: true,
+    }));
+    const outcomes = canonicalFirstPartyTeamDefenseOutcomes(history);
+    expect(JSON.stringify(outcomes)).toBe(JSON.stringify(oldPath));
+    expect(outcomes).toHaveLength(3);
+    expect(outcomes[1]?.components).toMatchObject({
+      defensive_sacks: 0,
+      defensive_interceptions: 0,
+      defensive_two_point_returns: 0,
+      one_point_safeties: 0,
+      points_allowed_0_probability: 0.75,
+    });
+    expect(outcomes[2]?.components).toMatchObject({
+      points_allowed_21_27_probability: 1,
+      points_allowed_18_21_probability: 1,
+    });
+    expect(history[0]?.team).toBe("BBB");
+    expect(canonicalFirstPartyTeamDefenseOutcomes([])).toEqual([]);
+  });
+
   it("uses a separate team-week path with complete raw DST components", () => {
     const history = Array.from({ length: 8 }, (_, index) => [
       defenseLine("AAA", index + 1),

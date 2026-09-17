@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { deriveRunAudit, type RosModelRunRow } from "./ros-projection-status.js";
+import {
+  deriveRunAudit,
+  rosLeagueConvergenceFailure,
+  type RosModelRunRow,
+} from "./ros-projection-status.js";
 
 function shadowRun(overrides: Partial<RosModelRunRow> = {}): RosModelRunRow {
   return {
@@ -26,6 +30,16 @@ function shadowRun(overrides: Partial<RosModelRunRow> = {}): RosModelRunRow {
 }
 
 describe("deriveRunAudit", () => {
+  it("does not mislabel withheld scoring cells as unstable simulations", () => {
+    expect(
+      rosLeagueConvergenceFailure({
+        rosConvergence: { state: "converged" },
+        cellDecisions: [{ state: "withheld" }],
+      }),
+    ).toBe(0);
+    expect(rosLeagueConvergenceFailure({ rosConvergence: { state: "unstable" } })).toBe(1);
+    expect(rosLeagueConvergenceFailure({ cellDecisions: [{ state: "withheld" }] })).toBe(0);
+  });
   it("surfaces shadow diagnostics as reasons and never permits publication", () => {
     const audit = deriveRunAudit(shadowRun());
     expect(audit.mode).toBe("shadow");

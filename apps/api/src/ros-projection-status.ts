@@ -1,6 +1,7 @@
 import {
   dataSources,
   firstPartyRosChampionArtifacts,
+  firstPartyRosProfileValidations,
   leagueMemberships,
   leagueSeasons,
   leagues,
@@ -14,11 +15,14 @@ import {
 } from "@laces-out/db";
 import {
   FIRST_PARTY_ROS_MODEL_VERSION,
+  FIRST_PARTY_ROS_POLICY_VERSION,
+  FIRST_PARTY_ROS_INTERVAL_CALIBRATION_VERSION,
   LEAGUE_SCORING_NORMALIZATION_VERSION,
   normalizeLeagueScoringProfile,
   projectionScoringProfileKey,
   rosAvailableProjectionStatIds,
   rosScoringProfileCatalog,
+  rosProfileDefinitionFromKey,
   type LeagueScoringProvider,
 } from "@laces-out/projections";
 import { and, desc, eq, inArray, sql } from "drizzle-orm";
@@ -31,9 +35,9 @@ import {
   deriveScoringProfileCoverage,
   deriveShadowAudit,
   type RosCellDecisionRow,
-  type RosCellGateState,
   type RosLeagueInputRow,
   type RosReleaseStatus,
+  type RosScoringProfileIdentity,
 } from "./ros-release-status.js";
 
 /**
@@ -49,7 +53,7 @@ import {
  */
 
 /** Bounds. Each read withholds rather than truncating silently past these limits. */
-const MAXIMUM_ARTIFACT_ROWS = 64;
+const MAXIMUM_ARTIFACT_ROWS = 128;
 const MAXIMUM_LEAGUE_ROWS = 64;
 const MAXIMUM_PUBLISHED_SET_ROWS = 64;
 const MAXIMUM_SCORING_RULE_ROWS = 4_000;
@@ -174,6 +178,15 @@ export function deriveRunAudit(row: RosModelRunRow): RosModelRunAudit {
   };
 }
 
+/** Withheld scoring/coverage cells are not evidence that a simulation failed to converge. */
+export function rosLeagueConvergenceFailure(metrics: unknown): number {
+  return isRecord(metrics) &&
+    isRecord(metrics.rosConvergence) &&
+    metrics.rosConvergence.state === "unstable"
+    ? 1
+    : 0;
+}
+
 export class RosProjectionStatusService {
   readonly #database: Database;
   readonly #now: () => Date;
@@ -194,51 +207,6 @@ export class RosProjectionStatusService {
   }): Promise<RosProjectionStatusResponse> {
     const { season, userId } = input;
 
-    // 1. Admitted artifact state: every running-catalog profile admitted for the season, not just
-    // the newest row. Immutable rows for retired scoring identities remain in PostgreSQL as audit
-    // history but cannot describe what this build is eligible to publish.
-    const artifactRows = await this.#database
-      .select({
-        season: firstPartyRosChampionArtifacts.season,
-        scoringProfileKey: firstPartyRosChampionArtifacts.scoringProfileKey,
-        modelVersion: firstPartyRosChampionArtifacts.modelVersion,
-        policyVersion: firstPartyRosChampionArtifacts.policyVersion,
-        calibrationVersion: firstPartyRosChampionArtifacts.calibrationVersion,
-        evidenceThroughSeason: firstPartyRosChampionArtifacts.evidenceThroughSeason,
-        sourceChecksums: firstPartyRosChampionArtifacts.sourceChecksums,
-        artifactChecksum: firstPartyRosChampionArtifacts.artifactChecksum,
-        admittedAt: firstPartyRosChampionArtifacts.admittedAt,
-      })
-      .from(firstPartyRosChampionArtifacts)
-      .where(eq(firstPartyRosChampionArtifacts.season, season))
-      .orderBy(desc(firstPartyRosChampionArtifacts.admittedAt))
-      .limit(MAXIMUM_ARTIFACT_ROWS);
-
-    const activeCatalogKeys = new Set(
-      rosScoringProfileCatalog().map((profile) => profile.scoringProfileKey),
-    );
-    const admittedArtifacts = deriveAdmittedArtifacts(
-      artifactRows
-        .filter((row) => activeCatalogKeys.has(row.scoringProfileKey))
-        .map((row) => ({
-          season: row.season,
-          scoringProfileKey: row.scoringProfileKey,
-          modelVersion: row.modelVersion,
-          policyVersion: row.policyVersion,
-          calibrationVersion: row.calibrationVersion,
-          evidenceThroughSeason: row.evidenceThroughSeason,
-          artifactChecksum: row.artifactChecksum,
-          admittedAt: row.admittedAt,
-          sourceChecksumCount: (row.sourceChecksums ?? []).length,
-        })),
-    );
-
-    // 2. Supported scoring-profile identity.
-    const scoringProfiles = deriveScoringProfileCoverage(admittedArtifacts, ROS_EVIDENCE_REPORTS);
-    const admittedScoringProfileKeys = admittedArtifacts.artifacts.map(
-      (artifact) => artifact.scoringProfile.scoringProfileKey,
-    );
-
     const [shadowSource] = await this.#database
       .select({ id: dataSources.id })
       .from(dataSources)
@@ -249,7 +217,6 @@ export class RosProjectionStatusService {
     // two separate, explicitly moded queries. A shadow run must never stand in for a release run.
     let cellGates = deriveCellGates(null);
     let shadowAudit = deriveShadowAudit(null);
-    let preservePriorGoodSet = true;
     if (shadowSource) {
       const [releaseRow] = await this.#runQuery(shadowSource.id, season, "release");
       const [shadowRow] = await this.#runQuery(shadowSource.id, season, "shadow");
@@ -260,7 +227,6 @@ export class RosProjectionStatusService {
           createdAt: releaseRow.createdAt,
           cellDecisions: parseCellDecisions(metrics.cellDecisions),
         });
-        preservePriorGoodSet = metrics.preservePriorGoodSet !== false;
       }
       if (shadowRow) {
         const audit = deriveRunAudit(shadowRow);
@@ -290,16 +256,162 @@ export class RosProjectionStatusService {
       .limit(MAXIMUM_LEAGUE_ROWS);
 
     const leagueSeasonIds = leagueRows.map((row) => row.leagueSeasonId);
+    const evaluatedLeagueId = sql<string>`${projectionModelRuns.configuration}->>'leagueSeasonId'`;
+    const leagueEvaluations =
+      leagueSeasonIds.length === 0 || !shadowSource
+        ? []
+        : await this.#database
+            .selectDistinctOn([evaluatedLeagueId], {
+              leagueSeasonId: evaluatedLeagueId,
+              metrics: projectionModelRuns.metrics,
+            })
+            .from(projectionModelRuns)
+            .where(
+              and(
+                eq(projectionModelRuns.sourceId, shadowSource.id),
+                eq(projectionModelRuns.season, season),
+                eq(projectionModelRuns.horizon, "rest-of-season"),
+                eq(projectionModelRuns.modelVersion, FIRST_PARTY_ROS_MODEL_VERSION),
+                inArray(evaluatedLeagueId, leagueSeasonIds),
+                sql`${projectionModelRuns.configuration}->>'mode' in ('release', 'release-evaluation')`,
+              ),
+            )
+            .orderBy(
+              evaluatedLeagueId,
+              desc(projectionModelRuns.createdAt),
+              desc(projectionModelRuns.sourceSyncRunId),
+            )
+            .limit(MAXIMUM_LEAGUE_ROWS);
     const leagueInputs = await this.#leagueInputs(
       leagueRows,
       season,
-      cellGatesWithheldCount(cellGates),
+      new Map(
+        leagueEvaluations.map((row) => [
+          row.leagueSeasonId,
+          rosLeagueConvergenceFailure(row.metrics),
+        ]),
+      ),
     );
 
+    const leagueKeys = [
+      ...new Set(
+        leagueInputs.flatMap((league) =>
+          league.scoringProfileKey ? [league.scoringProfileKey] : [],
+        ),
+      ),
+    ];
+    const validationRows =
+      leagueKeys.length === 0
+        ? []
+        : await this.#database
+            .select({
+              scoringProfileKey: firstPartyRosProfileValidations.scoringProfileKey,
+              scoringProfileDigest: firstPartyRosProfileValidations.scoringProfileDigest,
+              state: firstPartyRosProfileValidations.state,
+              requestedAt: firstPartyRosProfileValidations.requestedAt,
+              blockers: firstPartyRosProfileValidations.blockers,
+            })
+            .from(firstPartyRosProfileValidations)
+            .where(
+              and(
+                eq(firstPartyRosProfileValidations.season, season),
+                eq(firstPartyRosProfileValidations.modelVersion, FIRST_PARTY_ROS_MODEL_VERSION),
+                eq(firstPartyRosProfileValidations.policyVersion, FIRST_PARTY_ROS_POLICY_VERSION),
+                eq(
+                  firstPartyRosProfileValidations.calibrationVersion,
+                  FIRST_PARTY_ROS_INTERVAL_CALIBRATION_VERSION,
+                ),
+                inArray(firstPartyRosProfileValidations.scoringProfileKey, leagueKeys),
+              ),
+            )
+            .limit(MAXIMUM_LEAGUE_ROWS);
+    const additionalProfiles = new Map<string, RosScoringProfileIdentity>();
+    const validationByKey = new Map<string, (typeof validationRows)[number]>();
+    for (const row of validationRows) {
+      try {
+        const definition = rosProfileDefinitionFromKey(row.scoringProfileKey);
+        if (definition.digest !== row.scoringProfileDigest) continue;
+        additionalProfiles.set(row.scoringProfileKey, {
+          profileId: definition.profile.id,
+          label: definition.label,
+          scoringProfileKey: definition.scoringProfileKey,
+          digest: definition.digest,
+        });
+        validationByKey.set(row.scoringProfileKey, row);
+      } catch {
+        /* Invalid identities cannot describe a supported scoring format. */
+      }
+    }
+    // Catalog profiles are public; custom scoring identities are scoped to the caller's leagues.
+    const artifactKeys = [
+      ...new Set([
+        ...rosScoringProfileCatalog().map((profile) => profile.scoringProfileKey),
+        ...additionalProfiles.keys(),
+      ]),
+    ];
+    const artifactRows = await this.#database
+      .selectDistinctOn([firstPartyRosChampionArtifacts.scoringProfileKey], {
+        season: firstPartyRosChampionArtifacts.season,
+        scoringProfileKey: firstPartyRosChampionArtifacts.scoringProfileKey,
+        modelVersion: firstPartyRosChampionArtifacts.modelVersion,
+        policyVersion: firstPartyRosChampionArtifacts.policyVersion,
+        calibrationVersion: firstPartyRosChampionArtifacts.calibrationVersion,
+        evidenceThroughSeason: firstPartyRosChampionArtifacts.evidenceThroughSeason,
+        sourceChecksums: firstPartyRosChampionArtifacts.sourceChecksums,
+        artifactChecksum: firstPartyRosChampionArtifacts.artifactChecksum,
+        admittedAt: firstPartyRosChampionArtifacts.admittedAt,
+      })
+      .from(firstPartyRosChampionArtifacts)
+      .where(
+        and(
+          eq(firstPartyRosChampionArtifacts.season, season),
+          eq(firstPartyRosChampionArtifacts.modelVersion, FIRST_PARTY_ROS_MODEL_VERSION),
+          eq(firstPartyRosChampionArtifacts.policyVersion, FIRST_PARTY_ROS_POLICY_VERSION),
+          eq(
+            firstPartyRosChampionArtifacts.calibrationVersion,
+            FIRST_PARTY_ROS_INTERVAL_CALIBRATION_VERSION,
+          ),
+          inArray(firstPartyRosChampionArtifacts.scoringProfileKey, artifactKeys),
+        ),
+      )
+      .orderBy(
+        firstPartyRosChampionArtifacts.scoringProfileKey,
+        desc(firstPartyRosChampionArtifacts.admittedAt),
+        desc(firstPartyRosChampionArtifacts.createdAt),
+      )
+      .limit(MAXIMUM_ARTIFACT_ROWS);
+    const admittedArtifacts = deriveAdmittedArtifacts(
+      artifactRows.map((row) => ({ ...row, sourceChecksumCount: row.sourceChecksums.length })),
+      additionalProfiles,
+    );
+    const scoringProfiles = deriveScoringProfileCoverage(admittedArtifacts, ROS_EVIDENCE_REPORTS);
+    const admittedScoringProfileKeys = admittedArtifacts.artifacts.map(
+      (artifact) => artifact.scoringProfile.scoringProfileKey,
+    );
+    const leagueKeyById = new Map(
+      leagueInputs.map((league) => [league.leagueSeasonId, league.scoringProfileKey]),
+    );
     const leagueReadiness = deriveLeagueReadiness({
       admittedScoringProfileKeys,
       leagues: leagueInputs,
       now: this.#now(),
+      additionalProfiles,
+    }).map((league) => {
+      const key = league.leagueSeasonId ? leagueKeyById.get(league.leagueSeasonId) : null;
+      const validation = key ? validationByKey.get(key) : undefined;
+      return validation
+        ? {
+            ...league,
+            scoringValidation: {
+              state: validation.state,
+              requestedAt: validation.requestedAt.toISOString(),
+              blockers: validation.blockers
+                .filter((value) => typeof value === "string" && value.trim().length > 0)
+                .slice(0, 32)
+                .map((value) => value.slice(0, 400)),
+            },
+          }
+        : league;
     });
 
     const publishedRows =
@@ -364,7 +476,14 @@ export class RosProjectionStatusService {
           },
         ];
       }),
-      preservePriorGoodSet,
+      preservePriorGoodSet: false,
+      preservePriorGoodSetByLeague: new Map(
+        leagueEvaluations.map((row) => [
+          row.leagueSeasonId,
+          isRecord(row.metrics) && row.metrics.preservePriorGoodSet === true,
+        ]),
+      ),
+      additionalProfiles,
     });
 
     return {
@@ -423,7 +542,7 @@ export class RosProjectionStatusService {
       readonly season: number;
     }[],
     season: number,
-    nonConvergedCells: number,
+    nonConvergedCellsByLeague: ReadonlyMap<string, number>,
   ): Promise<readonly RosLeagueInputRow[]> {
     if (leagueRows.length === 0) return [];
     const leagueSeasonIds = leagueRows.map((row) => row.leagueSeasonId);
@@ -565,14 +684,10 @@ export class RosProjectionStatusService {
             : null,
         candidateInputCount: candidateRow?.candidateInputCount ?? 0,
         sourceVerifiedAt: sourceVerifiedAt === null ? null : new Date(sourceVerifiedAt),
-        nonConvergedCells,
+        nonConvergedCells: nonConvergedCellsByLeague.get(league.leagueSeasonId) ?? 0,
       };
     });
   }
-}
-
-function cellGatesWithheldCount(gates: RosCellGateState): number {
-  return gates.cells.filter((cell) => cell.decision === "withheld").length;
 }
 
 function parseCellDecisions(value: unknown): readonly RosCellDecisionRow[] {

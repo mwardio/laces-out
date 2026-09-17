@@ -10,10 +10,12 @@ import {
   TrendingUp,
 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
+import Link from "next/link";
 
 import { apiBaseUrl } from "../lib/api-client";
 import {
   describeRosRelease,
+  describeRosLeagueReadiness,
   leagueLabelFor,
   parseRosReleaseStatus,
   type RosReleaseStatus,
@@ -232,13 +234,9 @@ function RosStatusBody({ status }: { readonly status: RosReleaseStatus }) {
           <small>{description.supportedProfileSummary}</small>
         </div>
         <div>
-          <span>Positions covered</span>
+          <span>Latest model check</span>
           <strong>{description.cellSummary ?? "Not checked yet"}</strong>
-          <small>
-            {description.withheldCells.length === 0
-              ? "Every position is covered"
-              : `Not covered: ${description.withheldCells.join(", ")}`}
-          </small>
+          <small>Coverage for each league is listed below.</small>
         </div>
         <div>
           <span>Your leagues with a forecast</span>
@@ -267,6 +265,41 @@ function RosStatusBody({ status }: { readonly status: RosReleaseStatus }) {
             forecast built for a different scoring format.
           </p>
         ) : null}
+      </div>
+
+      <div className={styles.section}>
+        <h3>Your league readiness</h3>
+        <div className={styles.setList}>
+          {status.leagueReadiness.map((league) => {
+            const readiness = describeRosLeagueReadiness(
+              league,
+              status.publishedSets.some((set) => set.leagueSeasonId === league.leagueSeasonId),
+            );
+            return (
+              <article key={league.leagueSeasonId ?? "no-league"}>
+                <header>
+                  <strong>{leagueLabelFor(league.leagueName, league.leagueSeasonId)}</strong>
+                  <span>{readiness.heading}</span>
+                </header>
+                {readiness.messages.map((message) => (
+                  <p key={message} className={styles.empty}>
+                    {message}
+                  </p>
+                ))}
+                {readiness.positionMessages.length > 0 ? (
+                  <ul>
+                    {readiness.positionMessages.map((message) => (
+                      <li key={message}>{message}</li>
+                    ))}
+                  </ul>
+                ) : null}
+                {readiness.showConnections ? (
+                  <Link href="/connections">Connect a league</Link>
+                ) : null}
+              </article>
+            );
+          })}
+        </div>
       </div>
 
       <div className={styles.section}>

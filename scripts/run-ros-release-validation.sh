@@ -17,7 +17,7 @@ source_model_version="$(
 readonly model_version="${ROS_VALIDATION_MODEL_VERSION:-${source_model_version:-unknown-model}}"
 readonly report_dir="${repo_root}/reports/ros-release-${model_version}-${run_id}"
 readonly lock_file="${XDG_RUNTIME_DIR:-/tmp}/laces-out-ros-release-validation.lock"
-readonly profiles_default="full-ppr half-ppr standard espn-standard-2pt espn-standard-2pt-nxm espn-ppr-yardage-bonus-6pt-pass"
+readonly profiles_default="full-ppr half-ppr standard espn-standard-2pt espn-standard-2pt-nxm espn-ppr-yardage-bonus-6pt-pass espn-ppr-4pt-pass espn-half-ppr-yardage-bonus-4pt-pass yahoo-half-ppr yahoo-half-ppr-return-yards-fg-distance"
 read -r -a profiles <<< "${ROS_VALIDATION_PROFILES:-${profiles_default}}"
 lock_backend=""
 
@@ -55,6 +55,17 @@ fi
 shopt -u nullglob
 
 cd "${repo_root}"
+# Pin the running semantic identities, so a same-name profile edit cannot reuse retired evidence.
+profiles_manifest="$(node --import tsx --input-type=module -e '
+  import { rosScoringProfileCatalog } from "./packages/projections/src/ros-scoring-profiles.ts";
+  console.log(JSON.stringify(Object.fromEntries(rosScoringProfileCatalog().map(p => [p.key, p.digest]))));
+')" || exit 2
+for profile in "${profiles[@]}"; do
+  if ! jq -e --arg profile "${profile}" 'has($profile)' <<< "${profiles_manifest}" >/dev/null; then
+    printf 'Unknown ROS scoring profile: %s\n' "${profile}" >&2
+    exit 2
+  fi
+done
 
 log() {
   printf '%s %s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$*" | tee -a "${report_dir}/batch.log"
@@ -92,6 +103,8 @@ run_profile() {
   local exit_file="${report_dir}/${profile}.exit"
   local temp_json="${final_json}.partial.$$"
   local temp_log="${final_log}.partial.$$"
+  local digest
+  digest="$(jq -r --arg profile "${profile}" '.[$profile]' <<< "${profiles_manifest}")"
   local status=0
   local source_options=()
   if [[ -n "${ROS_VALIDATION_SOURCE_CACHE:-}" ]]; then
@@ -99,8 +112,9 @@ run_profile() {
   fi
 
   if [[ -s "${final_json}" ]] &&
-    jq -e --arg model "${source_model_version}" '
+    jq -e --arg model "${source_model_version}" --arg digest "${digest}" '
       .champion.modelVersion == $model and
+      .scoringProfile.digest == $digest and
       .report.playersPerPosition >= 8 and
       .report.maximumForecasts >= 6000 and
       .report.forecasts >= 2965 and

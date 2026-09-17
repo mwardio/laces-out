@@ -4,6 +4,8 @@ export default defineConfig({
   entry: [
     "src/worker.ts",
     "src/ros-worker.ts",
+    "src/ros-validation-worker.ts",
+    "src/ros-profile-validator-entry.ts",
     "src/first-party-ros-simulation-worker.ts",
     "src/first-party-ros-artifact-worker.ts",
   ],

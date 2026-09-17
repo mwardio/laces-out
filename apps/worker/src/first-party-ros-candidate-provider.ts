@@ -1062,6 +1062,40 @@ export function buildFirstPartyRosLeagueTarget(
  */
 type RosReadDatabase = Pick<Database, "select" | "selectDistinctOn">;
 
+/** Fits the live player processes from the same locked weekly residuals as historical validation. */
+export function calibrateFirstPartyRosPlayerHistory(input: {
+  readonly trainingHistory: readonly FirstPartyWeeklyStatLine[];
+  readonly schedules: readonly ProjectionScheduleFact[];
+  readonly scoringProfile: ProjectionScoringProfile;
+}): {
+  readonly weekly: FirstPartyProjectionCalibration;
+  readonly availability: HistoricalRosAvailabilityCalibration;
+  readonly role: HistoricalRosRoleCalibration;
+  readonly kicker: HistoricalRosKickerCalibration;
+} {
+  const weeklyBacktest = runFirstPartyProjectionBacktest(input.trainingHistory);
+  return {
+    weekly: weeklyBacktest.calibration,
+    availability: calibrateHistoricalRosAvailability(
+      input.trainingHistory,
+      input.schedules,
+      input.scoringProfile,
+    ),
+    role: calibrateHistoricalRosRole(
+      input.trainingHistory,
+      input.schedules,
+      input.scoringProfile,
+      weeklyBacktest.predictions,
+    ),
+    kicker: calibrateHistoricalRosKicker(
+      input.trainingHistory,
+      input.schedules,
+      input.scoringProfile,
+      weeklyBacktest.predictions,
+    ),
+  };
+}
+
 export function databaseFirstPartyRosCandidateProvider(input: {
   readonly database: Database;
   /** Called after all reads are materialized and the database transaction has closed. */
@@ -1113,7 +1147,7 @@ export function databaseFirstPartyRosCandidateProvider(input: {
     );
     return {
       aliasPlans,
-      checksum: aggregateChecksum("live-ros-candidate-provider-v5", [
+      checksum: aggregateChecksum("live-ros-candidate-provider-v6", [
         `season:${season}`,
         `window:${window.windowStartWeek}-${window.windowEndWeek}:asof-${window.asOfWeek}`,
         `scenario-count:${input.scenarioCount ?? "default"}`,
@@ -1888,22 +1922,17 @@ async function prepareDatabaseFirstPartyRosTargets(
       // one), so it is withheld with a stated reason before any player is simulated and a
       // calibration that is degenerate for it can never reach a released projection.
       const referenceProfile = firstPartyRosArtifactScoringProfile(artifact.scoringProfileKey);
-      const weeklyBacktest = runFirstPartyProjectionBacktest(trainingHistory);
-      calibration = weeklyBacktest.calibration;
-      availabilityCalibration = calibrateHistoricalRosAvailability(
+      const fitted = calibrateFirstPartyRosPlayerHistory({
         trainingHistory,
         schedules,
-        referenceProfile,
-      );
-      roleCalibration = calibrateHistoricalRosRole(trainingHistory, schedules, referenceProfile);
+        scoringProfile: referenceProfile,
+      });
+      calibration = fitted.weekly;
+      availabilityCalibration = fitted.availability;
+      roleCalibration = fitted.role;
       // Total by contract (documented fallbacks, never throws), so the kicker calibration cannot
       // trip this league-wide fail-closed catch on a sparse corpus.
-      kickerCalibration = calibrateHistoricalRosKicker(
-        trainingHistory,
-        schedules,
-        referenceProfile,
-        weeklyBacktest.predictions,
-      );
+      kickerCalibration = fitted.kicker;
       defenseCalibration = runFirstPartyTeamDefenseBacktest(defenseTrainingHistory).calibration;
     } catch {
       // A calibration that cannot be fitted — including one whose reference profile cannot be

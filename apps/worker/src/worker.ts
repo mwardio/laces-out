@@ -24,6 +24,8 @@ import {
   enqueueProjectionRefresh,
   enqueueRecommendationRecompute,
   enqueueRosProjectionRefresh,
+  enqueueRosProfileValidation,
+  queueNames,
   registerQueues,
   registerWorkers,
 } from "./jobs.js";
@@ -56,6 +58,7 @@ import {
 import { NflverseScheduleRefresher } from "./nflverse-schedules.js";
 import { NflverseWeeklyDataRefresher } from "./nflverse-weekly-data.js";
 import { ProjectionLockWindowService } from "./projection-lock-window.js";
+import { RosProfileDiscoveryService } from "./ros-profile-discovery.js";
 import { ProjectionRefreshOrchestrator } from "./projection-refresh-orchestrator.js";
 import {
   DrizzleProviderSyncSweepTargetReader,
@@ -361,6 +364,20 @@ const boss = new PgBoss({
   // The API owns cron timekeeping so long-running projection work cannot swallow schedule ticks.
   schedule: false,
 });
+const rosProfileDiscovery = new RosProfileDiscoveryService({
+  database: database.db,
+  enqueueValidation: (job) => enqueueRosProfileValidation(boss, job),
+  validationJobIsOutstanding: async (id) => {
+    const jobs = await boss.findJobs(queueNames.validateRosProfile, {
+      data: { profileValidationId: id },
+    });
+    return jobs.some(
+      (job) => job.state === "created" || job.state === "retry" || job.state === "active",
+    );
+  },
+  enqueueProjectionRefresh: (season) =>
+    enqueueRosProjectionRefresh(boss, { season, horizon: "full", reason: "on-demand" }),
+});
 const projectionRefreshService = new ProjectionRefreshOrchestrator({
   currentSeason: currentNflSeason,
   lockWindow: projectionLockWindow,
@@ -369,6 +386,7 @@ const projectionRefreshService = new ProjectionRefreshOrchestrator({
   sleeperCatalog: sleeperRefresher,
   schedule: scheduleRefresher,
   weeklyProjections: projectionService,
+  discoverRosProfiles: (season) => rosProfileDiscovery.discover(season),
   enqueueRosProjections: (job) => enqueueRosProjectionRefresh(boss, job),
 });
 const providerSyncSweepService = new ProviderSyncSweepService({
@@ -428,6 +446,14 @@ async function start(): Promise<void> {
     },
     refreshMarketData: (force) => sleeperRefresher.refreshTrends(force),
     refreshAdpData: (force) => adpRefresher.refreshDefaultContexts(currentNflSeason(), force),
+  });
+  // Recover newly linked or newly versioned profiles without waiting for the nightly refresh.
+  // A dispatch outage must not prevent ordinary league-sync workers from starting.
+  await rosProfileDiscovery.discover(currentNflSeason()).catch((error: unknown) => {
+    logger.error(
+      { err: error },
+      "startup ROS scoring discovery failed; weekly discovery will retry",
+    );
   });
   logger.info("fantasy worker started");
 }

@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest";
 import {
   ROS_WITHHOLDING_REASONS,
   describeRosRelease,
+  describeRosLeagueReadiness,
   parseRosReleaseStatus,
   type RosReleaseStatus,
 } from "./ros-release-status";
@@ -91,7 +92,86 @@ const mixedStatus: RosReleaseStatus = {
   ],
 };
 
+describe("league-specific ROS readiness explanations", () => {
+  it("shows a never-published league while its exact scoring validation is running", () => {
+    const league = {
+      ...admittedStatus.leagueReadiness[0]!,
+      scoringValidation: {
+        state: "validating" as const,
+        requestedAt: "2026-09-17T12:00:00Z",
+        blockers: [],
+      },
+    };
+    const parsed = parseRosReleaseStatus({ ...admittedStatus, leagueReadiness: [league] });
+    expect(parsed?.leagueReadiness[0]?.scoringValidation?.state).toBe("validating");
+    expect(describeRosLeagueReadiness(league, false)).toMatchObject({
+      heading: "Checking your scoring rules",
+      showConnections: false,
+    });
+  });
+
+  it("shows the affected position and actual unsupported rule without exposing an internal mismatch code", () => {
+    const description = describeRosLeagueReadiness(
+      {
+        ...admittedStatus.leagueReadiness[0]!,
+        positions: [
+          {
+            position: "DST",
+            decision: "withheld",
+            reasons: ["position-unsupported", "Individual tackles cannot be scored yet."],
+          },
+          { position: "K", decision: "withheld", reasons: ["scoring-profile-position-mismatch"] },
+        ],
+      },
+      false,
+    );
+    expect(description.positionMessages).toContain(
+      "D/ST: Individual tackles cannot be scored yet.",
+    );
+    expect(description.positionMessages.join(" ")).not.toContain(
+      "scoring-profile-position-mismatch",
+    );
+  });
+
+  it("keeps another league's failed run from changing this league's readiness copy", () => {
+    const description = describeRosLeagueReadiness(admittedStatus.leagueReadiness[0]!, false);
+    expect(description.heading).toBe("Waiting for first forecast");
+    expect(description.messages.join(" ")).not.toContain("stable results");
+  });
+
+  it("directs an account with no synced league to connections and explains retained output honestly", () => {
+    const missing = describeRosLeagueReadiness(
+      { ...admittedStatus.leagueReadiness[0]!, reasons: ["no-league-synced"], state: "withheld" },
+      false,
+    );
+    expect(missing.showConnections).toBe(true);
+    const retained = describeRosLeagueReadiness(
+      { ...admittedStatus.leagueReadiness[0]!, reasons: ["stale-source"], state: "withheld" },
+      true,
+    );
+    expect(retained.heading).toBe("Latest approved forecast retained");
+    expect(retained.messages.join(" ")).toContain("NFL inputs");
+  });
+});
+
 describe("describeRosRelease", () => {
+  it("recognizes an approved exact league profile without a catalog scoring family", () => {
+    const exactProfile = { ...profile, profileId: "exact", label: "Exact league scoring" };
+    const description = describeRosRelease({
+      ...admittedStatus,
+      admittedArtifacts: {
+        state: "admitted",
+        artifacts: [
+          { ...admittedStatus.admittedArtifacts.artifacts[0]!, scoringProfile: exactProfile },
+        ],
+      },
+      scoringProfiles: { supported: [exactProfile], unsupported: [] },
+    });
+    expect(description.artifactHeadline).toBe("Ready for Exact league scoring");
+    expect(description.supportedProfileSummary).toContain("1 additional league format");
+    expect(description.supportedProfileSummary).not.toContain("No scoring formats");
+  });
+
   it("never calls an admitted, release-capable artifact globally shadow-only", () => {
     const description = describeRosRelease({
       ...admittedStatus,

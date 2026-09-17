@@ -18,6 +18,7 @@ import {
 import {
   applyFirstPartyRosPlayerAliases,
   buildFirstPartyRosLeagueTarget,
+  calibrateFirstPartyRosPlayerHistory,
   currentFantasyPlayerPool,
   enumerateFirstPartyRosScoringMatchedLeagues,
   firstPartyRosArtifactOwnedLeagues,
@@ -585,6 +586,47 @@ function buildSchedules(): readonly ProjectionScheduleFact[] {
   }
   return schedules;
 }
+
+describe("live ROS player calibration", () => {
+  it("fits center uncertainty from the locked weekly predictions used by historical evidence", () => {
+    // Twenty-four relevant players give the held-out residual fit enough player-season groups;
+    // a sparse fixture would silently use 0.25 with or without the missing predictions argument.
+    const trainingHistory = buildHistory()
+      .filter((row) => row.season < 2026)
+      .flatMap((row) =>
+        Number(row.playerId.slice(3)) < 8
+          ? [row, { ...row, playerId: `${row.playerId}-additional` }]
+          : [row],
+      );
+    const schedules = buildSchedules();
+    const weeklyBacktest = runFirstPartyProjectionBacktest(trainingHistory);
+    const historical = calibrateHistoricalRosRole(
+      trainingHistory,
+      schedules,
+      scoringProfile,
+      weeklyBacktest.predictions,
+    );
+    const missingResiduals = calibrateHistoricalRosRole(trainingHistory, schedules, scoringProfile);
+    expect(missingResiduals.byPosition.WR?.centerVolatility).toBe(0.25);
+    expect(historical.byPosition.WR?.centerVolatility).not.toBe(0.25);
+
+    const live = calibrateFirstPartyRosPlayerHistory({
+      trainingHistory,
+      schedules,
+      scoringProfile,
+    });
+    expect(live.role).toEqual(historical);
+    expect(live.weekly).toEqual(weeklyBacktest.calibration);
+    expect(live.kicker).toEqual(
+      calibrateHistoricalRosKicker(
+        trainingHistory,
+        schedules,
+        scoringProfile,
+        weeklyBacktest.predictions,
+      ),
+    );
+  }, 15_000);
+});
 
 function ninePlusForecast(
   season: number,

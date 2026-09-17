@@ -31,6 +31,7 @@ export interface ProjectionRefreshOrchestratorInput {
   };
   readonly schedule: SeasonRefreshService;
   readonly weeklyProjections: ProjectionRefreshService;
+  readonly discoverRosProfiles?: (season: number) => Promise<void>;
   readonly enqueueRosProjections: (job: ProjectionRefreshJob) => Promise<unknown>;
 }
 
@@ -72,6 +73,12 @@ export class ProjectionRefreshOrchestrator implements ProjectionRefreshService {
     await this.#input.sleeperCatalog.refreshCatalog(forceCurrentInputs);
     await this.#input.schedule.refresh(effectiveJob.season, forceCurrentInputs);
     await this.#input.weeklyProjections.refreshProjections(effectiveJob, context);
+
+    // Registration is cheap and shared across leagues; proof runs on a separate bounded queue.
+    // Keep it off the near-kickoff critical path. Ordinary provider-sync weekly jobs discover it.
+    if (effectiveJob.reason !== "lock-window") {
+      await this.#input.discoverRosProfiles?.(effectiveJob.season);
+    }
 
     // ROS is a shared, multi-hour universe simulation. It belongs to the nightly full run and
     // explicit on-demand runs, never to the frequent game-day lock window.

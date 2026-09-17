@@ -1,4 +1,4 @@
-import { rosScoringProfile } from "@laces-out/projections";
+import { rosScoringProfile, rosScoringProfileCatalog } from "@laces-out/projections";
 import { describe, expect, it } from "vitest";
 
 // Conformance-only import of the canonical wire contract. Production code cannot import it until
@@ -6,6 +6,8 @@ import { describe, expect, it } from "vitest";
 import {
   ROS_WITHHOLDING_REASONS as CONTRACT_ROS_WITHHOLDING_REASONS,
   parseRosReleaseStatus,
+  rosAdmittedArtifactStateSchema,
+  rosScoringProfileCoverageSchema,
 } from "../../../packages/contracts/src/ros-release-status.js";
 import {
   ROS_LEAGUE_POSITIONS,
@@ -357,16 +359,55 @@ describe("deriveAdmittedArtifacts and deriveScoringProfileCoverage", () => {
     const coverage = deriveScoringProfileCoverage(deriveAdmittedArtifacts([artifactRow]));
 
     expect(coverage.supported.map((profile) => profile.label)).toEqual(["Full PPR"]);
-    expect(coverage.unsupported.map((entry) => entry.profile.label)).toEqual([
-      "Half PPR",
-      "Standard (non-PPR)",
-      "Standard + 2-pt, split kicker brackets, XP-missed penalty",
-      "Standard + 2-pt, split kicker brackets, no XP-missed penalty",
-      "Full PPR + yardage-game bonuses, 6-pt passing TD",
-    ]);
+    expect(coverage.unsupported.map((entry) => entry.profile.label)).toEqual(
+      rosScoringProfileCatalog()
+        .filter((profile) => profile.key !== "full-ppr")
+        .map((profile) => profile.label),
+    );
     for (const entry of coverage.unsupported) {
       expect(entry.blockers).toEqual(["no_admitted_artifact"]);
     }
+  });
+
+  it("retains explicitly registered dynamic scoring identities alongside the fixed catalog", () => {
+    const key = '[{"statId":"passing_yards","points":0.05,"bonuses":[]}]';
+    const identity = {
+      profileId: "exact-test-profile",
+      label: "Exact league scoring",
+      scoringProfileKey: key,
+      digest: "e".repeat(64),
+    };
+    const admitted = deriveAdmittedArtifacts(
+      [{ ...artifactRow, scoringProfileKey: key }],
+      new Map([[key, identity]]),
+    );
+    expect(admitted.artifacts[0]?.scoringProfile).toEqual(identity);
+    expect(deriveScoringProfileCoverage(admitted).supported).toContainEqual(identity);
+    expect(deriveAdmittedArtifacts([{ ...artifactRow, scoringProfileKey: key }]).artifacts).toEqual(
+      [],
+    );
+  });
+
+  it("keeps all 64 caller scoring identities alongside the public catalog", () => {
+    const customProfiles = Array.from({ length: 64 }, (_, index) => ({
+      profileId: `caller-profile-${index}`,
+      label: "Exact league scoring",
+      scoringProfileKey: `caller-key-${index}`,
+      digest: "e".repeat(64),
+    }));
+    const keys = [
+      ...rosScoringProfileCatalog().map((profile) => profile.scoringProfileKey),
+      ...customProfiles.map((profile) => profile.scoringProfileKey),
+    ];
+    const admitted = deriveAdmittedArtifacts(
+      keys.map((scoringProfileKey) => ({ ...artifactRow, scoringProfileKey })),
+      new Map(customProfiles.map((profile) => [profile.scoringProfileKey, profile])),
+    );
+    expect(admitted.artifacts).toHaveLength(keys.length);
+    expect(rosAdmittedArtifactStateSchema.safeParse(admitted).success).toBe(true);
+    const coverage = deriveScoringProfileCoverage(admitted);
+    expect(coverage.supported).toHaveLength(keys.length);
+    expect(rosScoringProfileCoverageSchema.safeParse(coverage).success).toBe(true);
   });
 });
 
@@ -438,6 +479,20 @@ describe("derivePublishedSets", () => {
     const [published] = derivePublishedSets({ rows: [setRow], preservePriorGoodSet: false });
 
     expect(published?.retainedFromEarlierRun).toBe(false);
+  });
+
+  it("attributes retained forecasts only to the league whose latest evaluation withheld", () => {
+    const published = derivePublishedSets({
+      rows: [setRow, { ...setRow, leagueSeasonId: "league-2", projectionSetId: "set-2" }],
+      preservePriorGoodSet: false,
+      preservePriorGoodSetByLeague: new Map([["league-1", true]]),
+    });
+    expect(published.find((set) => set.leagueSeasonId === "league-1")?.retainedFromEarlierRun).toBe(
+      true,
+    );
+    expect(published.find((set) => set.leagueSeasonId === "league-2")?.retainedFromEarlierRun).toBe(
+      false,
+    );
   });
 
   it("keeps only the newest set per league", () => {

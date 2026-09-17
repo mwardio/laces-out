@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   FIRST_PARTY_ROS_AVAILABILITY_EVIDENCE_ALPHA,
@@ -17,9 +17,12 @@ import {
   evaluateFirstPartyRosReleaseGate,
   projectFirstPartyRestOfSeason,
   type FirstPartyRosHeldOutForecast,
+  type FirstPartyRosPosition,
   type FirstPartyRosProjectionInput,
   type FirstPartyRosWeeklyScenarioInput,
 } from "./rest-of-season.js";
+import { rosScoringProfile } from "./ros-scoring-profiles.js";
+import * as scoring from "./scoring.js";
 import { projectionScoringProfileKey } from "./scoring.js";
 
 const scoringProfile = {
@@ -735,6 +738,69 @@ function kickerInput(
     ...overrides,
   };
 }
+
+describe("compiled ROS scoring equivalence", () => {
+  const positionComponents = {
+    QB: { passing_yards: 275, passing_touchdowns: 1.7, passing_interceptions: 0.8 },
+    RB: { rushing_yards: 85, rushing_touchdowns: 0.7, receptions: 3, receiving_yards: 22 },
+    WR: { receptions: 6, receiving_yards: 85, receiving_touchdowns: 0.5 },
+    TE: { receptions: 4, receiving_yards: 45, receiving_touchdowns: 0.4 },
+    DST: {
+      defensive_sacks: 2.5,
+      defensive_interceptions: 0.8,
+      points_allowed_7_13_probability: 0.2,
+    },
+  } as const;
+
+  it.each(["QB", "RB", "WR", "TE", "K", "DST"] as const)(
+    "preserves every output and seed for %s across both strategies",
+    (position: FirstPartyRosPosition) => {
+      const base = position === "K" ? kickerInput() : projectionInput();
+      const components = position === "K" ? undefined : positionComponents[position];
+      const input = {
+        ...base,
+        position,
+        scenarioCount: 128,
+        scoringProfile: rosScoringProfile("espn-ppr-yardage-bonus-6pt-pass").profile,
+        weeks:
+          components === undefined
+            ? base.weeks
+            : base.weeks.map((week, index) => ({
+                ...week,
+                scheduled: index !== 2,
+                bye: index === 2,
+                contextualComponents: components,
+                recencyComponents: Object.fromEntries(
+                  Object.entries(components).map(([key, value]) => [key, value * 0.9]),
+                ),
+                componentElasticities: Object.fromEntries(
+                  Object.keys(components).map((key) => [key, { role: 1, production: 0.8 }]),
+                ),
+              })),
+      };
+      for (const seed of ["release-seed-one", "release-seed-two"]) {
+        for (const strategy of ["contextual", "availability-aware-recency"] as const) {
+          const pinned = { ...input, seed, strategy };
+          const compiled = projectFirstPartyRestOfSeason(pinned);
+          // Recreate the previous hot loop: validate and canonicalize the profile on every
+          // available simulated week. JSON equality also covers diagnostics/provenance/order.
+          const legacy = vi
+            .spyOn(scoring, "compileProjectionScorer")
+            .mockImplementation(
+              (profile) => (values) => scoring.scoreProjectionStatComponents(values, profile),
+            );
+          try {
+            expect(JSON.stringify(compiled)).toBe(
+              JSON.stringify(projectFirstPartyRestOfSeason(pinned)),
+            );
+          } finally {
+            legacy.mockRestore();
+          }
+        }
+      }
+    },
+  );
+});
 
 describe("first-party ROS kicker count process (model v9)", () => {
   it("requires the kicker process input for position K and rejects it elsewhere", () => {

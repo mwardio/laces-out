@@ -13,6 +13,8 @@
   image but runs in a separate process so a multi-hour forecast cannot stall time-sensitive jobs;
   Provider sync, projections, recommendation recomputation, and notification sweeps all have
   concrete worker services and fail closed when a required dependency is unavailable;
+- `ros-validation-worker`: isolated historical proofs for newly discovered exact scoring formats;
+  two concurrent jobs share a two-CPU/five-GiB budget and a checksummed source cache;
 - `postgres`: canonical state, audit trail, and pg-boss queues.
 
 ## Docker Compose deployment
@@ -370,7 +372,7 @@ Useful lifecycle commands:
 
 ```bash
 docker compose ps
-docker compose logs -f --tail=200 api worker ros-worker
+docker compose logs -f --tail=200 api worker ros-worker ros-validation-worker
 docker compose up --build -d --wait       # migrate and deploy an update
 docker compose down                       # preserves database and Caddy volumes
 ```
@@ -520,8 +522,13 @@ Release remains artifact-gated: each position/horizon cell requires the configur
 block, row, coverage, availability, convergence, and calibration evidence; sparse or mismatched
 cells remain withheld without replacing a prior good result.
 
-Historical ROS validation is model-release maintenance, not a nightly task. Run the locked release
-replay with `npm run ros:validate:release -w @laces-out/worker`. It always uses eight players per
+Historical ROS validation runs for model releases and newly discovered scoring identities; normal
+nightly refreshes reuse admitted evidence. Worker startup and ordinary weekly refreshes register
+fully normalizable exact profiles automatically. The isolated `ros-profile-validation` queue runs
+the locked proof once per season/model/policy/calibration/scoring digest; successful admission queues
+live publication. Projection Lab exposes pending, validating, admitted, withheld, and failed states.
+See [the scoring onboarding repair](./ros-scoring-onboarding-2026-09-17.md) for retry and recovery
+semantics. Operators can also run the locked bulk release replay with `npm run ros:validate:release -w @laces-out/worker`. It always uses eight players per
 position, a 6,000-forecast cap, complete source lineage, no more than three concurrent profiles, and
 atomic per-profile reports under `reports/`. Restarting with the same `ROS_VALIDATION_RUN_ID` skips
 completed current-model reports. Admission independently rejects a report below that evidence
@@ -533,15 +540,11 @@ worker. The old model's artifacts and published sets remain authoritative until 
 exist; a failed candidate never deletes or overwrites them. Ordinary nightly refreshes then consume
 the admitted artifacts automatically and require no validation rerun.
 
-The current rest-of-season rail uses model `laces-ros-distribution-v7`. Each current profile replay
-grades 3,264 forecasts across 68 batches and converges all 144 release/reference diagnostics. The
-three generic profiles have clean gate-only re-evaluations admitted under the current availability
-rule. The two ESPN-shaped profiles use native-lineage, D/ST-complete v10 artifacts with exact
-executable publication policies; only their D/ST 5–8 week cells are withheld. Historical results
-remain development evidence; the frozen
-[2026 untouched protocol](./ros-v6-2026-untouched-protocol.md) is the final confirmation. See
-[`packages/projections/README.md`](../packages/projections/README.md) for the model and gate
-definitions.
+The running rail uses `laces-ros-distribution-v9`. The authoritative profile and publication states
+are the current-version immutable artifacts, exact-profile registry, and actual complete league
+sets. Historical July/August tables below describe their original releases, not current admission.
+The [2026 untouched protocol](./ros-v6-2026-untouched-protocol.md) remains the final confirmation;
+see [`packages/projections/README.md`](../packages/projections/README.md) for model and gate definitions.
 
 ### Rest-of-season release status
 
@@ -621,7 +624,8 @@ or roster changes belong to the next refresh; they must not invalidate a complet
 comparing it to the changing live database. This does not change the admitted model, convergence
 checks, coverage gates, or the last-approved fallback. `ros-inputs-snapshotted` records each artifact's
 captured checksum and load time; `ros-artifact-built` records target/player counts and elapsed time.
-The dedicated ROS container is capped at four CPUs to leave capacity for weekly work and the app.
+The dedicated ROS container is capped at three CPUs; historical profile validation gets two CPUs,
+leaving capacity on the six-core host for weekly work and the app.
 
 The sentinel now alerts on new issue keys after its observation debounce. Clearing a different
 issue no longer repeats every unresolved warning. It sends one ROS recovery confirmation when
@@ -651,11 +655,12 @@ validator defers while that batch is active. This preparation does not change ad
 
 ### Per-profile validation and admission
 
-The rail is validated and admitted **once per scoring profile**. Profiles come from
-`packages/projections/src/ros-scoring-profiles.ts`: `full-ppr`, `half-ppr`, `standard`,
-`espn-standard-2pt`, and `espn-standard-2pt-nxm`. The first three share one rule list and differ
-only in reception points. The ESPN profiles pin the two live league shapes independently, including
-their complete D/ST brackets and their differing missed-extra-point rules.
+The rail is validated and admitted **once per exact scoring profile and release identity**.
+`packages/projections/src/ros-scoring-profiles.ts` contains ten named regression profiles, including
+the four ESPN/Yahoo variants added September 17. Discovery also accepts fully normalized identities
+outside this catalog through the strict `--scoring-profile-key-file` validator interface. It never
+substitutes a nearby scoring format. The manual admission CLI still uses named profiles; the
+isolated service persists dynamically validated profiles through the same admission gates.
 
 ```bash
 npm run ros:validate -w @laces-out/worker -- --scoring-profile=half-ppr --full \

@@ -281,20 +281,17 @@ export function projectionScoringProfilesAreCompatible(
   return projectionScoringProfileKey(left) === projectionScoringProfileKey(right);
 }
 
-/** Scores a projected stat line under a league's explicit scoring rules. */
-export function scoreProjectionStatComponents(
+function scoreCanonicalProjectionComponents(
   components: ProjectionStatComponents,
-  profile: ProjectionScoringProfile,
+  rules: readonly CanonicalProjectionScoringRule[],
 ): number {
-  validateProjectionScoringProfile(profile);
-
   for (const [statId, value] of Object.entries(components)) {
     assertNonEmpty(statId, "projection component statId");
     assertFinite(value, `projection component ${statId}`);
   }
 
   let total = 0;
-  for (const rule of normalizedScoringRules(profile)) {
+  for (const rule of rules) {
     const value = components[rule.statId] ?? 0;
     total += value * rule.points;
     for (const bonus of rule.bonuses ?? []) {
@@ -303,4 +300,25 @@ export function scoreProjectionStatComponents(
   }
 
   return normalizedNumber(total);
+}
+
+/**
+ * Pins a validated scoring profile for repeated stat lines. The private canonical rule snapshot
+ * preserves the ordinary scorer's exact addition order and cannot change if the caller later
+ * edits its profile. Component names and finite values are still checked on every invocation.
+ */
+export function compileProjectionScorer(
+  profile: ProjectionScoringProfile,
+): (components: ProjectionStatComponents) => number {
+  validateProjectionScoringProfile(profile);
+  const rules = normalizedScoringRules(profile);
+  return (components) => scoreCanonicalProjectionComponents(components, rules);
+}
+
+/** Scores a projected stat line under a league's explicit scoring rules. */
+export function scoreProjectionStatComponents(
+  components: ProjectionStatComponents,
+  profile: ProjectionScoringProfile,
+): number {
+  return compileProjectionScorer(profile)(components);
 }

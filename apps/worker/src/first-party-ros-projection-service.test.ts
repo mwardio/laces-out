@@ -1,6 +1,7 @@
 import {
   dataSources,
   firstPartyRosChampionArtifacts,
+  firstPartyRosProfileValidations,
   nflScheduleObservations,
   playerProjections,
   playerRosProjectionSummaries,
@@ -307,6 +308,8 @@ class Harness {
     const facade = {
       select: (selection: Row) =>
         new SelectQuery(selection, (table, sel) => this.#select(table, sel)),
+      selectDistinctOn: (_keys: unknown, selection: Row) =>
+        new SelectQuery(selection, (table, sel) => this.#select(table, sel)),
       insert: (table: unknown) => new MutationQuery(table, (t, v) => this.#insert(t, v)),
       update: (table: unknown) => new MutationQuery(table, (t, v) => this.#update(t, v)),
       transaction: async <T>(callback: (transaction: Database) => Promise<T>) =>
@@ -384,6 +387,7 @@ class Harness {
       ];
     }
     if (table === nflScheduleObservations) return schedule();
+    if (table === firstPartyRosProfileValidations) return [];
     if (table === firstPartyRosChampionArtifacts) return this.#artifacts;
     if (table === leagueSeasons || table === scoringRules) return [];
     if (table === syncRuns) {
@@ -438,6 +442,7 @@ class Harness {
 
 class SelectQuery implements PromiseLike<readonly Row[]> {
   #table: unknown;
+  #limit: number | undefined;
   constructor(
     private readonly selection: Row,
     private readonly resolve: (table: unknown, selection: Row) => readonly Row[],
@@ -455,14 +460,18 @@ class SelectQuery implements PromiseLike<readonly Row[]> {
   orderBy(): this {
     return this;
   }
-  limit(): this {
+  limit(count: number): this {
+    this.#limit = count;
     return this;
   }
   then<T1 = readonly Row[], T2 = never>(
     onfulfilled?: ((value: readonly Row[]) => T1 | PromiseLike<T1>) | null,
     onrejected?: ((reason: unknown) => T2 | PromiseLike<T2>) | null,
   ): Promise<T1 | T2> {
-    return Promise.resolve(this.resolve(this.#table, this.selection)).then(onfulfilled, onrejected);
+    return Promise.resolve(this.resolve(this.#table, this.selection).slice(0, this.#limit)).then(
+      onfulfilled,
+      onrejected,
+    );
   }
 }
 
@@ -506,6 +515,32 @@ const job: ProjectionRefreshJob = { season: 2026 };
 const context: WorkerJobContext = { signal: new AbortController().signal } as WorkerJobContext;
 
 describe("first-party ROS shadow service publication rail", () => {
+  it("keeps every admitted scoring profile eligible after the catalog grows past 64", async () => {
+    const keys = Array.from({ length: 65 }, (_, index) =>
+      JSON.stringify([{ statId: "receptions", points: 0.1 + index / 100, bonuses: [] }]),
+    );
+    const harness = new Harness({
+      artifacts: keys.map((key) =>
+        artifactRow({ scoringProfileKey: key, policy: releasingPolicy(key) }),
+      ),
+    });
+    const attempted: string[] = [];
+    const service = new FirstPartyRosProjectionShadowService({
+      database: harness.database,
+      now: () => now,
+      acceptedScoringProfileKeys: keys,
+      candidateProvider: {
+        sourceChecksum: async () => "9".repeat(64),
+        buildTargets: async ({ artifact }) => {
+          attempted.push(artifact.scoringProfileKey);
+          return [];
+        },
+      },
+    });
+    await service.refreshProjections(job, context);
+    expect(new Set(attempted)).toEqual(new Set(keys));
+  });
+
   it("records only the degraded shadow audit when no champion artifact exists", async () => {
     const harness = new Harness({ artifact: null });
     const service = new FirstPartyRosProjectionShadowService({

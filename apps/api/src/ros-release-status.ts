@@ -3,6 +3,7 @@ import {
   projectionScoringRulesFromProfileKey,
   rosScoringProfileCatalog,
 } from "@laces-out/projections";
+import type { RosScoringValidation } from "@laces-out/contracts";
 
 /**
  * Pure derivations behind `GET /v1/projections/ros-status`.
@@ -106,6 +107,7 @@ export interface RosLeagueReadiness {
   readonly reasons: readonly RosWithholdingReason[];
   readonly scoringProfile: RosScoringProfileIdentity | null;
   readonly positions: readonly RosLeaguePositionReadiness[];
+  readonly scoringValidation?: RosScoringValidation;
 }
 
 export interface RosCellGateDecision {
@@ -190,8 +192,11 @@ const PROFILE_BY_KEY = new Map<string, RosScoringProfileIdentity>(
  * Resolves a stored scoring key to a named catalog profile. An unrecognized key returns null rather
  * than a nearest match — a league must never be told it has a profile it does not have.
  */
-export function rosScoringProfileIdentityForKey(key: string): RosScoringProfileIdentity | null {
-  return PROFILE_BY_KEY.get(key) ?? null;
+export function rosScoringProfileIdentityForKey(
+  key: string,
+  additionalProfiles: ReadonlyMap<string, RosScoringProfileIdentity> = new Map(),
+): RosScoringProfileIdentity | null {
+  return PROFILE_BY_KEY.get(key) ?? additionalProfiles.get(key) ?? null;
 }
 
 /** Per-position normalization support carried forward from `normalizeLeagueScoringProfile`. */
@@ -290,6 +295,7 @@ export function deriveLeagueReadiness(input: {
   readonly admittedScoringProfileKeys: readonly string[];
   readonly leagues: readonly RosLeagueInputRow[];
   readonly now: Date;
+  readonly additionalProfiles?: ReadonlyMap<string, RosScoringProfileIdentity>;
 }): readonly RosLeagueReadiness[] {
   if (input.leagues.length === 0) {
     return [
@@ -343,7 +349,7 @@ export function deriveLeagueReadiness(input: {
       scoringProfile:
         league.scoringProfileKey === null
           ? null
-          : rosScoringProfileIdentityForKey(league.scoringProfileKey),
+          : rosScoringProfileIdentityForKey(league.scoringProfileKey, input.additionalProfiles),
       positions,
     };
   });
@@ -387,6 +393,7 @@ export interface RosAdmittedArtifactRow {
 /** 1. Admitted artifact state. Latest admission wins within one scoring profile. */
 export function deriveAdmittedArtifacts(
   rows: readonly RosAdmittedArtifactRow[],
+  additionalProfiles: ReadonlyMap<string, RosScoringProfileIdentity> = new Map(),
 ): RosAdmittedArtifactState {
   const latest = new Map<string, RosAdmittedArtifactRow>();
   for (const row of rows) {
@@ -398,9 +405,9 @@ export function deriveAdmittedArtifacts(
 
   const artifacts = [...latest.values()]
     .sort((left, right) => right.admittedAt.getTime() - left.admittedAt.getTime())
-    .slice(0, 8)
+    .slice(0, 128)
     .flatMap((row) => {
-      const profile = rosScoringProfileIdentityForKey(row.scoringProfileKey);
+      const profile = rosScoringProfileIdentityForKey(row.scoringProfileKey, additionalProfiles);
       // An artifact admitted under a profile the running catalog no longer names cannot be
       // described honestly, so it is omitted rather than mislabelled.
       if (!profile) return [];
@@ -450,6 +457,13 @@ export function deriveScoringProfileCoverage(
     }
   }
 
+  const supportedIds = new Set(supported.map((profile) => profile.profileId));
+  for (const artifact of admitted.artifacts) {
+    if (!supportedIds.has(artifact.scoringProfile.profileId)) {
+      supported.push(artifact.scoringProfile);
+      supportedIds.add(artifact.scoringProfile.profileId);
+    }
+  }
   return { supported, unsupported };
 }
 
@@ -511,6 +525,8 @@ export interface RosPublishedSetRow {
 export function derivePublishedSets(input: {
   readonly rows: readonly RosPublishedSetRow[];
   readonly preservePriorGoodSet: boolean;
+  readonly preservePriorGoodSetByLeague?: ReadonlyMap<string, boolean>;
+  readonly additionalProfiles?: ReadonlyMap<string, RosScoringProfileIdentity>;
 }): readonly RosPublishedLeagueSet[] {
   const latest = new Map<string, RosPublishedSetRow>();
   for (const row of input.rows) {
@@ -530,7 +546,7 @@ export function derivePublishedSets(input: {
       scoringProfile:
         row.scoringProfileKey === null
           ? null
-          : rosScoringProfileIdentityForKey(row.scoringProfileKey),
+          : rosScoringProfileIdentityForKey(row.scoringProfileKey, input.additionalProfiles),
       season: row.season,
       playerCount: row.playerCount,
       windowStartWeek: row.windowStartWeek,
@@ -539,6 +555,7 @@ export function derivePublishedSets(input: {
       fetchedAt: row.fetchedAt.toISOString(),
       inputChecksum: row.inputChecksum,
       championArtifactChecksum: row.championArtifactChecksum,
-      retainedFromEarlierRun: input.preservePriorGoodSet,
+      retainedFromEarlierRun:
+        input.preservePriorGoodSetByLeague?.get(row.leagueSeasonId) ?? input.preservePriorGoodSet,
     }));
 }

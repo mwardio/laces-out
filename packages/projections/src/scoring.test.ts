@@ -1,12 +1,13 @@
 import { describe, expect, it } from "vitest";
 
-import { rosScoringProfile } from "./ros-scoring-profiles.js";
+import { ROS_SCORING_PROFILE_KEYS, rosScoringProfile } from "./ros-scoring-profiles.js";
 import {
   projectionScoringProfileKeyForPosition,
   projectionScoringRulesFromProfileKey,
 } from "./scoring-position-keys.js";
 import {
   ESPN_EVERY_N_FLOOR_UNIT_COMPONENTS,
+  compileProjectionScorer,
   espnEveryNFloorUnitValue,
   normalizeHistoricalPlayerStatComponents,
   projectionScoringProfileKey,
@@ -183,6 +184,72 @@ describe("scoreProjectionStatComponents", () => {
     expect(() => scoreProjectionStatComponents({ receptions: Number.NaN }, fullPpr)).toThrow(
       "must be finite",
     );
+  });
+});
+
+describe("compileProjectionScorer", () => {
+  it("preserves canonical floating-point addition and cumulative bonus order", () => {
+    const profile = {
+      id: "order-sensitive",
+      rules: [
+        { statId: "c", points: -1e16 },
+        {
+          statId: "b",
+          points: 1,
+          bonuses: [
+            { atLeast: 1, points: 1 },
+            { atLeast: 0, points: 1 },
+          ],
+        },
+        { statId: "a", points: 1e16 },
+      ],
+    };
+    const components = { a: 1, b: 1, c: 1 };
+    // Each unit addition rounds away before c cancels a. Combining/reordering them yields 2/4.
+    expect(compileProjectionScorer(profile)(components)).toBe(0);
+    expect(compileProjectionScorer(profile)({})).toBe(1);
+  });
+
+  it.each(ROS_SCORING_PROFILE_KEYS)("matches ordinary scoring for %s", (key) => {
+    const profile = rosScoringProfile(key).profile;
+    const compiled = compileProjectionScorer(profile);
+    for (const scale of [0, 0.001, 0.5, 1, 20, 300, 400]) {
+      const components = Object.fromEntries(
+        profile.rules.map((rule, index) => [rule.statId, scale * (index + 1)]),
+      );
+      expect(compiled(components)).toBe(scoreProjectionStatComponents(components, profile));
+    }
+  });
+
+  it("pins nested rule values without caching mutable caller profiles", () => {
+    const profile = {
+      id: "editable-profile",
+      rules: [{ statId: "receptions", points: 1, bonuses: [{ atLeast: 5, points: 2 }] }],
+    };
+    const compiled = compileProjectionScorer(profile);
+    profile.rules[0]!.points = 0.5;
+    profile.rules[0]!.bonuses[0]!.points = 4;
+
+    expect(compiled({ receptions: 6 })).toBe(8);
+    expect(scoreProjectionStatComponents({ receptions: 6 }, profile)).toBe(7);
+  });
+
+  it("rejects invalid profiles at compilation and invalid components on every call", () => {
+    expect(() => compileProjectionScorer({ id: "invalid", rules: [] })).toThrow(
+      "at least one rule",
+    );
+    expect(() =>
+      compileProjectionScorer({ id: "duplicate", rules: [fullPpr.rules[0]!, fullPpr.rules[0]!] }),
+    ).toThrow("duplicate statId");
+    const compiled = compileProjectionScorer(fullPpr);
+    expect(compiled({ receptions: 1 })).toBe(1);
+    for (const value of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
+      expect(() => compiled({ receptions: value })).toThrow("must be finite");
+      expect(() => compiled({ ignored_stat: value })).toThrow("must be finite");
+    }
+    expect(() => compiled({ " ": 1 })).toThrow("must not be empty");
+    expect(Object.is(compiled({ receptions: -0 }), -0)).toBe(false);
+    expect(compiled({ receptions: 2 })).toBe(2);
   });
 });
 

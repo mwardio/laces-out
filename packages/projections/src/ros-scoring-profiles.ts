@@ -12,9 +12,9 @@ const ROS_SUPPORTED_POSITIONS = ["QB", "RB", "WR", "TE", "K", "DST"] as const;
 /**
  * The common redraft scoring profiles the rest-of-season rail can be validated for. Order is fixed
  * and load bearing: reports, status responses, and operator output all enumerate in this order. The
- * first three are the historically admitted PPR/half-PPR/standard trio; the two ESPN-shaped entries
- * are appended after them and exist purely for WHOLE-KEY league matching — see
- * `ESPN_STANDARD_2PT_RULES` / `ESPN_STANDARD_2PT_NXM_RULES` below.
+ * first three are the historically admitted PPR/half-PPR/standard trio. Additional provider
+ * shapes remain separate exact scoring identities. Catalog inclusion enables validation; it does
+ * not admit evidence or authorize publication.
  */
 export const ROS_SCORING_PROFILE_KEYS = [
   "full-ppr",
@@ -23,6 +23,10 @@ export const ROS_SCORING_PROFILE_KEYS = [
   "espn-standard-2pt",
   "espn-standard-2pt-nxm",
   "espn-ppr-yardage-bonus-6pt-pass",
+  "espn-ppr-4pt-pass",
+  "espn-half-ppr-yardage-bonus-4pt-pass",
+  "yahoo-half-ppr",
+  "yahoo-half-ppr-return-yards-fg-distance",
 ] as const;
 
 export type RosScoringProfileKey = (typeof ROS_SCORING_PROFILE_KEYS)[number];
@@ -88,6 +92,12 @@ const LABELS: Readonly<Record<RosScoringProfileKey, string>> = {
   "espn-standard-2pt": "Standard + 2-pt, split kicker brackets, XP-missed penalty",
   "espn-standard-2pt-nxm": "Standard + 2-pt, split kicker brackets, no XP-missed penalty",
   "espn-ppr-yardage-bonus-6pt-pass": "Full PPR + yardage-game bonuses, 6-pt passing TD",
+  "espn-ppr-4pt-pass": "ESPN full PPR, 4-pt passing TD",
+  "espn-half-ppr-yardage-bonus-4pt-pass":
+    "ESPN half PPR + 3/5-point yardage bonuses, 4-pt passing TD",
+  "yahoo-half-ppr": "Yahoo half PPR, -1 interception",
+  "yahoo-half-ppr-return-yards-fg-distance":
+    "Yahoo half PPR + return yards, distance FGs, custom defense",
 };
 
 function finalizeEntry(
@@ -225,11 +235,183 @@ const ESPN_PPR_YARDAGE_BONUS_6PT_PASS_RULES: readonly ProjectionScoringProfile["
     { statId: "field_goals_made_60_plus", points: 6 },
   ];
 
+/**
+ * Exact provider shapes observed 2026-09-17. Rules are standalone so later additions cannot
+ * silently change previously validated profiles. Sanitized provider-row fixtures independently
+ * exercise normalization and pin each semantic digest in ros-scoring-live-shapes.test.ts.
+ */
+const ESPN_PPR_4PT_PASS_RULES: readonly ProjectionScoringProfile["rules"][number][] = [
+  { statId: "defensive_blocked_kicks", points: 2 },
+  { statId: "defensive_fumble_recoveries", points: 2 },
+  { statId: "defensive_interceptions", points: 2 },
+  { statId: "defensive_sacks", points: 1 },
+  { statId: "defensive_safeties", points: 2 },
+  { statId: "defensive_touchdowns", points: 6 },
+  { statId: "defensive_two_point_returns", points: 2 },
+  { statId: "extra_points_made", points: 1 },
+  { statId: "field_goals_made_0_39", points: 3 },
+  { statId: "field_goals_made_40_49", points: 4 },
+  { statId: "field_goals_made_50_59", points: 5 },
+  { statId: "field_goals_made_60_plus", points: 6 },
+  { statId: "field_goals_missed", points: -1 },
+  { statId: "fumble_recovery_touchdowns", points: 6 },
+  { statId: "fumbles_lost", points: -2 },
+  { statId: "one_point_safeties", points: 1 },
+  { statId: "passing_interceptions", points: -2 },
+  { statId: "passing_touchdowns", points: 4 },
+  { statId: "passing_two_point_conversions", points: 2 },
+  { statId: "passing_yards", points: 0.04 },
+  { statId: "points_allowed_0_probability", points: 5 },
+  { statId: "points_allowed_1_6_probability", points: 4 },
+  { statId: "points_allowed_14_17_probability", points: 1 },
+  { statId: "points_allowed_28_34_probability", points: -1 },
+  { statId: "points_allowed_35_45_probability", points: -3 },
+  { statId: "points_allowed_46_plus_probability", points: -5 },
+  { statId: "points_allowed_7_13_probability", points: 3 },
+  { statId: "receiving_touchdowns", points: 6 },
+  { statId: "receiving_two_point_conversions", points: 2 },
+  { statId: "receiving_yards", points: 0.1 },
+  { statId: "receptions", points: 1 },
+  { statId: "rushing_touchdowns", points: 6 },
+  { statId: "rushing_two_point_conversions", points: 2 },
+  { statId: "rushing_yards", points: 0.1 },
+  { statId: "special_teams_touchdowns", points: 6 },
+  { statId: "yards_allowed_0_99_probability", points: 5 },
+  { statId: "yards_allowed_100_199_probability", points: 3 },
+  { statId: "yards_allowed_200_299_probability", points: 2 },
+  { statId: "yards_allowed_350_399_probability", points: -1 },
+  { statId: "yards_allowed_400_449_probability", points: -3 },
+  { statId: "yards_allowed_450_499_probability", points: -5 },
+  { statId: "yards_allowed_500_549_probability", points: -6 },
+  { statId: "yards_allowed_550_plus_probability", points: -7 },
+];
+
+const ESPN_HALF_PPR_YARDAGE_BONUS_4PT_PASS_RULES: readonly ProjectionScoringProfile["rules"][number][] =
+  [
+    { statId: "defensive_blocked_kicks", points: 2 },
+    { statId: "defensive_fumble_recoveries", points: 2 },
+    { statId: "defensive_interceptions", points: 2 },
+    { statId: "defensive_sacks", points: 1 },
+    { statId: "defensive_safeties", points: 2 },
+    { statId: "defensive_touchdowns", points: 6 },
+    { statId: "extra_points_made", points: 1 },
+    { statId: "field_goals_made_0_39", points: 3 },
+    { statId: "field_goals_made_40_49", points: 4 },
+    { statId: "field_goals_made_50_59", points: 5 },
+    { statId: "field_goals_made_60_plus", points: 5 },
+    { statId: "field_goals_missed", points: -1 },
+    { statId: "fumble_recovery_touchdowns", points: 6 },
+    { statId: "fumbles_lost", points: -2 },
+    { statId: "passing_interceptions", points: -2 },
+    { statId: "passing_touchdowns", points: 4 },
+    { statId: "passing_two_point_conversions", points: 2 },
+    { statId: "passing_yards", points: 0.04 },
+    { statId: "passing_yards_300_399_probability", points: 3 },
+    { statId: "passing_yards_400_plus_probability", points: 5 },
+    { statId: "points_allowed_0_probability", points: 5 },
+    { statId: "points_allowed_1_6_probability", points: 4 },
+    { statId: "points_allowed_14_17_probability", points: 1 },
+    { statId: "points_allowed_28_34_probability", points: -1 },
+    { statId: "points_allowed_35_45_probability", points: -3 },
+    { statId: "points_allowed_46_plus_probability", points: -5 },
+    { statId: "points_allowed_7_13_probability", points: 3 },
+    { statId: "receiving_touchdowns", points: 6 },
+    { statId: "receiving_two_point_conversions", points: 2 },
+    { statId: "receiving_yards", points: 0.1 },
+    { statId: "receiving_yards_100_199_probability", points: 3 },
+    { statId: "receiving_yards_200_plus_probability", points: 5 },
+    { statId: "receptions", points: 0.5 },
+    { statId: "rushing_touchdowns", points: 6 },
+    { statId: "rushing_two_point_conversions", points: 2 },
+    { statId: "rushing_yards", points: 0.1 },
+    { statId: "rushing_yards_100_199_probability", points: 3 },
+    { statId: "rushing_yards_200_plus_probability", points: 5 },
+    { statId: "special_teams_touchdowns", points: 6 },
+  ];
+
+const YAHOO_HALF_PPR_RULES: readonly ProjectionScoringProfile["rules"][number][] = [
+  { statId: "defensive_blocked_kicks", points: 2 },
+  { statId: "defensive_fumble_recoveries", points: 2 },
+  { statId: "defensive_interceptions", points: 2 },
+  { statId: "defensive_sacks", points: 1 },
+  { statId: "defensive_safeties", points: 2 },
+  { statId: "defensive_touchdowns", points: 6 },
+  { statId: "defensive_two_point_returns", points: 2 },
+  { statId: "extra_points_made", points: 1 },
+  { statId: "field_goals_made_0_19", points: 3 },
+  { statId: "field_goals_made_20_29", points: 3 },
+  { statId: "field_goals_made_30_39", points: 3 },
+  { statId: "field_goals_made_40_49", points: 4 },
+  { statId: "field_goals_made_50_plus", points: 5 },
+  { statId: "fumble_recovery_touchdowns", points: 6 },
+  { statId: "fumbles_lost", points: -2 },
+  { statId: "passing_interceptions", points: -1 },
+  { statId: "passing_touchdowns", points: 4 },
+  { statId: "passing_yards", points: 0.04 },
+  { statId: "points_allowed_0_probability", points: 10 },
+  { statId: "points_allowed_1_6_probability", points: 7 },
+  { statId: "points_allowed_14_20_probability", points: 1 },
+  { statId: "points_allowed_28_34_probability", points: -1 },
+  { statId: "points_allowed_35_plus_probability", points: -4 },
+  { statId: "points_allowed_7_13_probability", points: 4 },
+  { statId: "receiving_touchdowns", points: 6 },
+  { statId: "receiving_yards", points: 0.1 },
+  { statId: "receptions", points: 0.5 },
+  { statId: "rushing_touchdowns", points: 6 },
+  { statId: "rushing_yards", points: 0.1 },
+  { statId: "special_teams_touchdowns", points: 6 },
+  { statId: "two_point_conversions", points: 2 },
+];
+
+const YAHOO_HALF_PPR_RETURN_YARDS_FG_DISTANCE_RULES: readonly ProjectionScoringProfile["rules"][number][] =
+  [
+    { statId: "defensive_blocked_kicks", points: 2 },
+    { statId: "defensive_fumble_recoveries", points: 2 },
+    { statId: "defensive_interceptions", points: 2 },
+    { statId: "defensive_sacks", points: 1 },
+    { statId: "defensive_safeties", points: 2 },
+    { statId: "defensive_touchdowns", points: 6 },
+    { statId: "defensive_two_point_returns", points: 2 },
+    { statId: "extra_points_made", points: 1 },
+    { statId: "extra_points_missed", points: -1 },
+    { statId: "field_goals_missed_0_19", points: -1 },
+    { statId: "field_goals_missed_20_29", points: -1 },
+    { statId: "field_goals_total_yards", points: 0.1 },
+    { statId: "fourth_down_stops", points: 1 },
+    { statId: "fumble_recovery_touchdowns", points: 6 },
+    { statId: "fumbles_lost", points: -2 },
+    { statId: "passing_interceptions", points: -2 },
+    { statId: "passing_touchdowns", points: 4 },
+    { statId: "passing_yards", points: 0.04 },
+    { statId: "points_allowed_0_probability", points: 15 },
+    { statId: "points_allowed_1_6_probability", points: 10 },
+    { statId: "points_allowed_14_20_probability", points: 3 },
+    { statId: "points_allowed_28_34_probability", points: -1 },
+    { statId: "points_allowed_35_plus_probability", points: -4 },
+    { statId: "points_allowed_7_13_probability", points: 6 },
+    { statId: "receiving_touchdowns", points: 6 },
+    { statId: "receiving_yards", points: 0.1 },
+    { statId: "receptions", points: 0.5 },
+    { statId: "return_yards", points: 0.0067 },
+    { statId: "rushing_touchdowns", points: 6 },
+    { statId: "rushing_yards", points: 0.1 },
+    { statId: "special_teams_touchdowns", points: 6 },
+    { statId: "two_point_conversions", points: 2 },
+    { statId: "yards_allowed_500_plus_probability", points: -1 },
+  ];
+
 const CATALOG: readonly RosScoringProfileEntry[] = [
   ...(["full-ppr", "half-ppr", "standard"] as const).map(buildLegacyEntry),
   finalizeEntry("espn-standard-2pt", ESPN_STANDARD_2PT_RULES),
   finalizeEntry("espn-standard-2pt-nxm", ESPN_STANDARD_2PT_NXM_RULES),
   finalizeEntry("espn-ppr-yardage-bonus-6pt-pass", ESPN_PPR_YARDAGE_BONUS_6PT_PASS_RULES),
+  finalizeEntry("espn-ppr-4pt-pass", ESPN_PPR_4PT_PASS_RULES),
+  finalizeEntry("espn-half-ppr-yardage-bonus-4pt-pass", ESPN_HALF_PPR_YARDAGE_BONUS_4PT_PASS_RULES),
+  finalizeEntry("yahoo-half-ppr", YAHOO_HALF_PPR_RULES),
+  finalizeEntry(
+    "yahoo-half-ppr-return-yards-fg-distance",
+    YAHOO_HALF_PPR_RETURN_YARDS_FG_DISTANCE_RULES,
+  ),
 ];
 
 const BY_KEY = new Map<string, RosScoringProfileEntry>(
