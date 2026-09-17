@@ -92,3 +92,25 @@ Release artifacts are under `/tmp/laces-ros-onboarding-20260917`. Numerical comp
 are under `/tmp/laces-ros-speed-20260917`. The exploratory frozen batch under
 `/srv/backups/laces-out/reports/ros-exact-validation-20260917-optimized` was deliberately stopped
 before forecasts were produced so the initial cohort can exercise the deployed durable queue.
+
+## Live rollout, 19:42 UTC
+
+Commit `39fedef67b0e6efd35d5826e4f3e50ac88675b85` is pushed and deployed to API, web, ordinary
+worker, ROS worker, and the new validation worker. Migration 0049 completed successfully. The
+ordinary worker's active weekly refresh was allowed to finish before replacement. The final suite
+passed all 3,445 tests across 294 files; the full production build, typecheck, ESLint, formatting,
+image validator smoke, and responsive browser checks passed.
+
+Startup discovery registered exactly seven current scoring identities: three reused valid artifacts,
+two started historical proofs, and two queued behind them. Their league-level coverage is six
+validating, six queued, and three admitted; two other leagues remain explicitly unsupported. The
+worker also queued a normal ROS refresh to republish under the corrected live calibration.
+
+A read-only production probe checked all seven owners and all 17 league entries. Wire contracts,
+member isolation, lifecycle statuses, convergence attribution, and retained-set labels passed. All
+eight provider connections were healthy and enabled sources had zero failures. The API readiness
+endpoint and public mobile/desktop routes passed. There were no proof retries at verification.
+
+This is a deployed repair with recovery in progress, not proof that every forecast is fresh. Four
+older sets were still retained. Each successful validation will atomically admit its evidence and
+request live publication; data recovery is complete only when current complete league sets exist.
