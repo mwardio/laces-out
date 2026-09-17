@@ -4,6 +4,7 @@ import {
   assertRosProfileValidationJob,
   createJobQueue,
   enqueueRosProjectionRefresh,
+  enqueueRosProfileValidation,
   queueNames,
   registerQueues,
   type RosProfileValidationJob,
@@ -16,7 +17,12 @@ import {
   ROS_PROFILE_VALIDATION_JOB_TIMEOUT_MS,
 } from "./ros-profile-validation-runner.js";
 import { createPostgresRosCorpusLock } from "./ros-corpus-lock.js";
-import { createSharedRosCorpusValidationRunner } from "./ros-shared-corpus-runner.js";
+import {
+  createSharedRosCorpusValidationRunner,
+  readyRosSharedCorpusIdentity,
+} from "./ros-shared-corpus-runner.js";
+import { RosProfileRecoveryService } from "./ros-profile-recovery.js";
+import { currentNflSeason } from "./nfl-season.js";
 
 const environment = loadEnvironment();
 const database = createDatabase(environment.DATABASE_URL, 3);
@@ -47,6 +53,34 @@ const service = new RosProfileValidationService({
   },
 });
 const shutdown = new AbortController();
+const recovery = new RosProfileRecoveryService({
+  database: database.db,
+  readyCorpusForSeason: (season, signal) =>
+    readyRosSharedCorpusIdentity(outcomeCacheDirectory, season, signal),
+  enqueueValidation: (job) => enqueueRosProfileValidation(boss, job),
+  validationJobIsOutstanding: async (id) => {
+    const jobs = await boss.findJobs(queueNames.validateRosProfile, {
+      data: { profileValidationId: id },
+    });
+    return jobs.some(
+      (job) => job.state === "created" || job.state === "retry" || job.state === "active",
+    );
+  },
+});
+let recoveryRun: Promise<void> | undefined;
+let recoveryTimer: ReturnType<typeof setInterval> | undefined;
+function recoverReadyProfiles(): void {
+  if (shutdown.signal.aborted || recoveryRun) return;
+  recoveryRun = recovery
+    .recover(currentNflSeason(), shutdown.signal)
+    .catch((error: unknown) => {
+      if (!shutdown.signal.aborted)
+        logger.warn({ err: error }, "ready-corpus ROS profile recovery failed; sweep will retry");
+    })
+    .finally(() => {
+      recoveryRun = undefined;
+    });
+}
 
 async function start(): Promise<void> {
   await boss.start();
@@ -77,6 +111,9 @@ async function start(): Promise<void> {
       }
     },
   );
+  recoverReadyProfiles();
+  recoveryTimer = setInterval(recoverReadyProfiles, 5 * 60_000);
+  recoveryTimer.unref();
   logger.info("fantasy ROS validation worker started");
 }
 
@@ -86,6 +123,8 @@ async function stop(signal: string): Promise<void> {
   stopping = true;
   logger.info({ signal }, "stopping fantasy ROS validation worker");
   shutdown.abort(new Error("ROS validation worker is stopping"));
+  if (recoveryTimer) clearInterval(recoveryTimer);
+  await recoveryRun;
   await boss.stop({ graceful: true, timeout: 30_000 });
   await database.close();
   process.exitCode = 0;

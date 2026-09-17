@@ -70,6 +70,72 @@ function setup(overrides: Partial<RosProfileValidationRecord> = {}) {
 }
 
 describe("automatic exact ROS profile validation", () => {
+  const recoveryIdentity = "c".repeat(64);
+  const recoveryReport = {
+    automaticRecovery: {
+      version: "ready-corpus-replay-v1",
+      corpusIdentity: recoveryIdentity,
+      state: "pending-dispatch",
+      requestedAt: "2026-09-17T12:00:00Z",
+    },
+  };
+
+  it("pins recovery to its ready corpus and does not let old queue rows start modeling", async () => {
+    const test = setup({
+      state: "failed",
+      blockers: ["validation_execution_failed"],
+      report: recoveryReport,
+    });
+    await test.service.validateProfile(test.job, test.context);
+    await test.service.validateProfile(
+      { ...test.job, recoveryCorpusIdentity: "d".repeat(64) },
+      test.context,
+    );
+    expect(test.runner).not.toHaveBeenCalled();
+    test.runner.mockResolvedValue({ ...validReport({}), outcomeCorpusIdentity: recoveryIdentity });
+    await test.service.validateProfile(
+      { ...test.job, recoveryCorpusIdentity: recoveryIdentity },
+      test.context,
+    );
+    expect(test.runner).toHaveBeenCalledWith(
+      expect.objectContaining({ requiredReadyCorpusIdentity: recoveryIdentity }),
+    );
+    expect(test.record()).toMatchObject({
+      state: "admitted",
+      report: { automaticRecovery: { state: "attempted", corpusIdentity: recoveryIdentity } },
+    });
+  });
+
+  it("allows queued recovery retries but rejects a report from another corpus", async () => {
+    const test = setup({
+      state: "failed",
+      blockers: ["validation_execution_failed"],
+      report: recoveryReport,
+    });
+    const job = { ...test.job, recoveryCorpusIdentity: recoveryIdentity };
+    await expect(test.service.validateProfile(job, test.context)).rejects.toThrow(
+      "different ready corpus",
+    );
+    expect(test.record().state).toBe("failed");
+    test.runner.mockResolvedValue({ ...validReport({}), outcomeCorpusIdentity: recoveryIdentity });
+    await test.service.validateProfile(job, test.context);
+    expect(test.record().state).toBe("admitted");
+    expect(test.runner).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not repeat a completed statistical recovery rejection", async () => {
+    const test = setup({
+      state: "withheld",
+      blockers: ["portfolio_convergence_below_minimum"],
+      report: { automaticRecovery: { ...recoveryReport.automaticRecovery, state: "attempted" } },
+    });
+    await test.service.validateProfile(
+      { ...test.job, recoveryCorpusIdentity: recoveryIdentity },
+      test.context,
+    );
+    expect(test.runner).not.toHaveBeenCalled();
+  });
+
   it("applies real admission checks, persists an immutable artifact, and retries publication without replaying", async () => {
     const test = setup();
     await test.service.validateProfile(test.job, test.context);

@@ -17,6 +17,8 @@ export interface RosProfileValidationRunInput {
   readonly signal: AbortSignal;
   /** Immutable shared football corpus. Replay must never fetch, fit, or simulate. */
   readonly replayCorpusIdentity?: string;
+  /** Recovery requires this exact ready corpus and cannot fall back to building. */
+  readonly requiredReadyCorpusIdentity?: string;
 }
 export type RosProfileValidationRunner = (
   input: RosProfileValidationRunInput,
@@ -65,8 +67,15 @@ export function createRosProfileValidationRunner(
     input.signal.throwIfAborted();
     rosProfileDefinitionFromKey(input.scoringProfileKey);
     if (
+      input.requiredReadyCorpusIdentity !== undefined &&
+      input.requiredReadyCorpusIdentity !== input.replayCorpusIdentity
+    )
+      throw new Error("ROS recovery requires explicit replay of its ready corpus");
+    if (
       input.replayCorpusIdentity !== undefined &&
-      (!options.outcomeCacheDirectory || !/^[a-f0-9]{64}$/u.test(input.replayCorpusIdentity))
+      (!options.outcomeCacheDirectory ||
+        typeof input.replayCorpusIdentity !== "string" ||
+        !/^[a-f0-9]{64}$/u.test(input.replayCorpusIdentity))
     )
       throw new Error("ROS corpus replay requires an outcome cache and a valid identity");
     if (!Number.isSafeInteger(input.season) || input.season < 2007 || input.season > 2200) {

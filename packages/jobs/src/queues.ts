@@ -64,6 +64,8 @@ export interface ProjectionRefreshJob {
 
 export interface RosProfileValidationJob {
   readonly profileValidationId: string;
+  /** A recovery can replay this already-ready corpus only; it must never initiate modeling. */
+  readonly recoveryCorpusIdentity?: string;
 }
 
 export const recommendationKinds = ["draft", "lineup", "waiver", "trade"] as const;
@@ -365,7 +367,7 @@ export async function enqueueRosProfileValidation(
 ): Promise<string | null> {
   assertRosProfileValidationJob(job);
   const existing = await boss.findJobs<RosProfileValidationJob>(queueNames.validateRosProfile, {
-    data: job,
+    data: { profileValidationId: job.profileValidationId },
   });
   if (
     existing.some(
@@ -378,7 +380,7 @@ export async function enqueueRosProfileValidation(
     job,
     dispatchOptions(
       "ros-profile-validation",
-      `ros-profile-validation:${job.profileValidationId}`,
+      `ros-profile-validation:${job.profileValidationId}${job.recoveryCorpusIdentity ? `:corpus:${job.recoveryCorpusIdentity}` : ""}`,
       23 * 60 * 60,
     ),
   );
@@ -392,6 +394,12 @@ export function assertRosProfileValidationJob(job: RosProfileValidationJob): voi
   ) {
     throw new Error("Invalid worker job: profileValidationId must be a UUID");
   }
+  if (
+    job.recoveryCorpusIdentity !== undefined &&
+    (typeof job.recoveryCorpusIdentity !== "string" ||
+      !/^[a-f0-9]{64}$/u.test(job.recoveryCorpusIdentity))
+  )
+    throw new Error("Invalid worker job: recoveryCorpusIdentity must be a SHA-256 identity");
 }
 
 /** Deduplicates equivalent work while serializing all recomputations for one league season. */

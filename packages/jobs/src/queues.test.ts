@@ -338,6 +338,38 @@ describe("shared queue dispatch contract", () => {
     ).rejects.toThrow("UUID");
   });
 
+  it("deduplicates recovery against normal work and gives each corpus its own dispatch identity", async () => {
+    const { boss, send } = sendHarness();
+    const id = "12345678-1234-4234-8234-123456789abc";
+    const job = { profileValidationId: id, recoveryCorpusIdentity: "a".repeat(64) };
+    const findJobs = vi
+      .fn()
+      .mockResolvedValue([{ state: "active", data: { profileValidationId: id } }]);
+    boss.findJobs = findJobs;
+    expect(await enqueueRosProfileValidation(boss, job)).toBeNull();
+    expect(findJobs).toHaveBeenCalledWith(queueNames.validateRosProfile, {
+      data: { profileValidationId: id },
+    });
+    expect(send).not.toHaveBeenCalled();
+    boss.findJobs = vi.fn().mockResolvedValue([]);
+    await enqueueRosProfileValidation(boss, job);
+    expect(send).toHaveBeenCalledWith(
+      queueNames.validateRosProfile,
+      job,
+      expect.objectContaining({
+        singletonKey: `ros-profile-validation:${id}:corpus:${job.recoveryCorpusIdentity}`,
+      }),
+    );
+    for (const invalid of [["a".repeat(64)], { toString: () => "a".repeat(64) }, "x", 123]) {
+      await expect(
+        enqueueRosProfileValidation(boss, {
+          ...job,
+          recoveryCorpusIdentity: invalid as unknown as string,
+        }),
+      ).rejects.toThrow("SHA-256");
+    }
+  });
+
   it("coalesces data health checks onto one globally serialized key", async () => {
     const { boss, send } = sendHarness();
 

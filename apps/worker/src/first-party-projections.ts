@@ -1096,6 +1096,84 @@ export function evaluateFirstPartyPublicationCandidates(
   };
 }
 
+type CompactPublicationCandidates = Omit<
+  ReturnType<typeof evaluateFirstPartyPublicationCandidates>,
+  "champion"
+> & {
+  readonly champion: Pick<
+    ReturnType<typeof evaluateFirstPartyPublicationCandidates>["champion"],
+    "policy"
+  >;
+};
+
+interface FirstPartyPublicationEvidence {
+  readonly candidates: CompactPublicationCandidates;
+  readonly player: FirstPartyScoredBacktestEvaluation;
+  readonly defense: FirstPartyScoredTeamDefenseEvaluation;
+}
+
+/**
+ * Scoring evidence depends only on immutable training results and semantic scoring rules.
+ * Keep one training pair and a bounded set of compact verdicts across sequential weekly jobs;
+ * never retain a profile's expanded champion backtest or its historical prediction arrays.
+ */
+export class FirstPartyPublicationEvidenceMemo {
+  #basePlayerBacktest: FirstPartyProjectionBacktest | undefined;
+  #defenseBacktest: FirstPartyTeamDefenseBacktest | undefined;
+  readonly #profiles = new Map<string, FirstPartyPublicationEvidence>();
+
+  constructor(private readonly maximumProfiles = 32) {
+    if (!Number.isInteger(maximumProfiles) || maximumProfiles < 1 || maximumProfiles > 32) {
+      throw new Error("Publication evidence memo must hold between 1 and 32 profiles");
+    }
+  }
+
+  get(
+    basePlayerBacktest: FirstPartyProjectionBacktest,
+    defenseBacktest: FirstPartyTeamDefenseBacktest,
+    profile: ProjectionScoringProfile,
+  ): FirstPartyPublicationEvidence {
+    if (
+      this.#basePlayerBacktest !== basePlayerBacktest ||
+      this.#defenseBacktest !== defenseBacktest
+    ) {
+      this.#profiles.clear();
+      this.#basePlayerBacktest = basePlayerBacktest;
+      this.#defenseBacktest = defenseBacktest;
+    }
+    const key = projectionScoringProfileKey(profile);
+    const cached = this.#profiles.get(key);
+    if (cached !== undefined) {
+      this.#profiles.delete(key);
+      this.#profiles.set(key, cached);
+      return cached;
+    }
+    const evaluated = evaluateFirstPartyPublicationCandidates(basePlayerBacktest, profile);
+    const candidates: CompactPublicationCandidates = {
+      champion: { policy: evaluated.champion.policy },
+      policy: evaluated.policy,
+      liveCalibration: evaluated.liveCalibration,
+      adaptiveEvaluation: evaluated.adaptiveEvaluation,
+      fixedRecencyEvaluation: evaluated.fixedRecencyEvaluation,
+      playerEvaluation: evaluated.playerEvaluation,
+      fixedRecencyPositions: evaluated.fixedRecencyPositions,
+    };
+    const evidence: FirstPartyPublicationEvidence = {
+      candidates,
+      player: candidates.playerEvaluation,
+      defense: evaluateFirstPartyTeamDefenseBacktestForScoringProfile(defenseBacktest, profile),
+    };
+    this.#profiles.set(key, evidence);
+    if (this.#profiles.size > this.maximumProfiles) {
+      const oldest = this.#profiles.keys().next().value;
+      if (oldest !== undefined) this.#profiles.delete(oldest);
+    }
+    return evidence;
+  }
+}
+
+const publicationEvidenceMemo = new FirstPartyPublicationEvidenceMemo();
+
 /** The long-standing flat reason string for one normalization failure; shape unchanged. */
 function normalizationReasonText(reason: LeagueScoringUnsupportedReason): string {
   return `${reason.code}: ${reason.message}`;
@@ -3106,6 +3184,7 @@ export function buildFirstPartyLeaguePublications(input: {
   readonly publishedPlayers: readonly PublishedPlayer[];
   readonly publishedDefenses: readonly PublishedDefense[];
   readonly previousRowsByLeague: ReadonlyMap<string, ReadonlyMap<string, ScoredProjectionRow>>;
+  readonly scoringEvidenceMemo?: FirstPartyPublicationEvidenceMemo;
 }): LeaguePublicationPlan {
   const rulesByLeague = new Map<string, LeagueRuleRow[]>();
   for (const rule of input.rules) {
@@ -3135,16 +3214,9 @@ export function buildFirstPartyLeaguePublications(input: {
   const publications: LeaguePublication[] = [];
   const withheld: WithheldLeague[] = [];
   const notes: LeaguePublicationNote[] = [];
-  // Every league with the same semantic rules shares this evidence. Labels and provider rule
-  // order do not justify replaying the same locked historical projections again.
-  const scoringEvidence = new Map<
-    string,
-    {
-      readonly candidates: ReturnType<typeof evaluateFirstPartyPublicationCandidates>;
-      readonly player: FirstPartyScoredBacktestEvaluation;
-      readonly defense: FirstPartyScoredTeamDefenseEvaluation;
-    }
-  >();
+  // Reuse immutable training evidence across leagues and jobs. League-specific forecasts,
+  // rosters, kickoff locks and publication identities are still rebuilt below on every call.
+  const scoringEvidence = input.scoringEvidenceMemo ?? publicationEvidenceMemo;
   for (const league of input.leagues) {
     const visiblePlayers = input.publishedPlayers.filter(
       (player) =>
@@ -3189,19 +3261,7 @@ export function buildFirstPartyLeaguePublications(input: {
     }
     const profile = normalization.profile;
     const profileKey = projectionScoringProfileKey(profile);
-    let evidence = scoringEvidence.get(profileKey);
-    if (evidence === undefined) {
-      const candidates = evaluateFirstPartyPublicationCandidates(input.basePlayerBacktest, profile);
-      evidence = {
-        candidates,
-        player: candidates.playerEvaluation,
-        defense: evaluateFirstPartyTeamDefenseBacktestForScoringProfile(
-          input.defenseBacktest,
-          profile,
-        ),
-      };
-      scoringEvidence.set(profileKey, evidence);
-    }
+    const evidence = scoringEvidence.get(input.basePlayerBacktest, input.defenseBacktest, profile);
     const publicationCandidates = evidence.candidates;
     const playerEvaluation = evidence.player;
     const defenseEvaluation = evidence.defense;

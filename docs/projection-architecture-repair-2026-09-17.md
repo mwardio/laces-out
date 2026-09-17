@@ -240,3 +240,66 @@ Pre-deployment repository verification:
   Container canaries use invented football inputs and no database or network access.
 - The migration preview still identifies exactly one unambiguous historical precision repair.
   Production migration, source reingestion, weekly recovery, and ROS completion follow separately.
+
+Production deployment and source recovery, 22:37 UTC:
+
+- Commit `5c9158a` is pushed. The API and web app are running the verified release images and
+  readiness checks pass. Migration 0050 completed; the sole verified Yahoo decimal discrepancy
+  now stores `0.0066666666666667` exactly.
+- With the ordinary worker paused, the direct source operator refreshed the catalog and all
+  20 datasets for 2023–2026. All are enabled, available, publishable, and free of current failures.
+  Each player/team pair has the same PBP capture; all four player artifacts use component schema
+  v4. Their 58,099 selected player-week observations have all six long-touchdown fields.
+- The ordinary worker restarted on the new image and accepted an immediate week-2 refresh.
+  Published league outputs and regenerated advice still require verification. Both ROS consumers
+  remain paused until the fresh historical corpus is complete and verified for adoption.
+- The running historical corpus builder has two bounded simulator children. Completed vectors are
+  preserved durably, but no complete v11 accuracy report or exact-profile admission exists yet.
+
+Historical process supervision checkpoint, 22:44 UTC:
+
+- The interactive execution wrapper ended with status 143 before the historical report completed.
+  All 288 committed v11 outcome files were retained and SHA-256 recorded in
+  `supervised-restart-manifest.json`; the interrupted logs are archived separately.
+- The identical validation command now runs as the user systemd service
+  `laces-ros-v11-release-20260917.service`, with a 4 GiB total memory limit, 512 MiB swap limit,
+  2.5 CPU quota, priority 15, and process-group shutdown. It can outlive the interactive tool
+  session, and systemd records its final exit status. Cached ensembles remain reusable; prior
+  calibration and feature assembly must run again. No numerical or release-protocol changes
+  accompany this restart.
+
+Production weekly verification, 22:48 UTC:
+
+- All 16 normalizable active leagues now publish weekly v14 with map v7, publication policy v4,
+  and point policy v1. All six supported position groups are present, with no withheld positions,
+  interval-order failures, or violations of the starter-confidence cap. The IDP league remains
+  explicitly unsupported. Source checks and all four PBP pairs remain coherent.
+- Android's Dungeon projects Smith 4.889 versus Johnston 4.722; both have confidence 0.49.
+  Smith is currently starting. Its recommendation regeneration is still being checked.
+- FF 2026 has a new v8 lineup run referencing the new projection set. Harvey remains in FLEX
+  at 9.242 versus Tate 6.021, both confidence 0.49, with broad overlapping intervals. The app
+  marks Harvey questionable; the upstream injury observation still records Wednesday DNP,
+  while the Broncos' Thursday report improves him to limited. No manual model overrides were made.
+- The initial cold weekly fit occupied the ordinary worker's event loop long enough for a
+  provider sweep to time out; that sweep recovered on retry. A persistent isolated weekly process
+  is being prepared so fitting/publication can retain their existing mathematics and cache without
+  blocking queue heartbeats and provider synchronization. This follow-up is not yet deployed.
+- The ROS onboarding review also found transient failed or source-coverage-withheld profiles could
+  remain stuck under the same identity. A fenced, deduplicated recovery using an already-ready
+  corpus is being implemented; statistical withholding must never become an automatic retry loop.
+
+Operational follow-up verification, 23:02 UTC:
+
+- The cross-job scoring-evidence memo reproduces all nine exact-profile v14 audit results from
+  the same 9,282 locked predictions: selected policies, fixed-recency fallbacks, point calibration,
+  and every position's metrics match exactly. Cold evaluation took 155.303 seconds; the warm pass
+  took 0.515 milliseconds and retained 514,032 bytes of compact evidence, with no expanded
+  champion backtests. These timings measure scoring evidence, not an entire refresh. The 53-case
+  publication suite also passes, including changed rosters, leagues, and kickoff locks.
+- Automatic transient ROS recovery passes 73 focused unit cases and 12 real PostgreSQL cases.
+  The tests cover committed dispatch reservations, immediate consumers, queue-send failure,
+  abandoned reservations, deduplication, preserved evidence, and bounded attempts per ready corpus.
+  The full corpus is still building, so production recovery/admission is not yet verified.
+- Process isolation and its production image remain separate follow-up checks. The exact model,
+  historical simulation rules, and release thresholds are unchanged throughout this operational
+  work. The Mini remains unreachable; these results are Linux x64 only.

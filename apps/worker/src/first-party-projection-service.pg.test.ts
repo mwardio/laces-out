@@ -29,8 +29,11 @@
  */
 import { execFileSync } from "node:child_process";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { serialize } from "node:v8";
 
 import {
   createDatabase,
@@ -58,6 +61,7 @@ import postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { NFLVERSE_WEEKLY_STATS_COMPONENT_SCHEMA } from "@laces-out/source-nflverse";
 import { databaseFirstPartyRosCandidateProvider } from "./first-party-ros-candidate-provider.js";
+import { FirstPartyProjectionProcess } from "./first-party-projection-process.js";
 
 import {
   FIRST_PARTY_PROJECTION_SOURCE_KEY,
@@ -860,6 +864,185 @@ describe.skipIf(!dockerAvailable)(
         .where(eq(projectionSets.leagueSeasonId, fixture.leagueSeason.id));
       expect(repeatSets).toHaveLength(1);
     }, 20_000);
+
+    it("isolates a cold prepared publication without changing scored rows and keeps exact replay idempotent", async () => {
+      // Distinct fixture source/league/player/checksum identities ensure the child cannot take
+      // the direct invocation's completed-output fast path. Both actually compute and publish.
+      const direct = await preparedScoredWeek(mainHandle.db);
+      const isolated = await preparedScoredWeek(mainHandle.db);
+      const service = new FirstPartyProjectionService({ database: mainHandle.db });
+      await service.publishPreparedWeek(direct.input);
+      const directory = await mkdtemp(path.join(tmpdir(), "weekly-process-pg-"));
+      const inputPath = path.join(directory, "input.bin");
+      const entryPath = path.join(directory, "worker.mts");
+      await writeFile(inputPath, serialize(isolated.input));
+      const runtimeUrl = new URL("./first-party-projection-process-runtime.ts", import.meta.url)
+        .href;
+      const serviceUrl = new URL("./first-party-projections.ts", import.meta.url).href;
+      await writeFile(
+        entryPath,
+        `
+        import { readFileSync } from 'node:fs';
+        import { deserialize } from 'node:v8';
+        import { startWeeklyProjectionProcess } from ${JSON.stringify(runtimeUrl)};
+        import { FirstPartyProjectionService } from ${JSON.stringify(serviceUrl)};
+        const input = deserialize(readFileSync(${JSON.stringify(inputPath)}));
+        startWeeklyProjectionProcess({connectionString:process.env.DATABASE_URL,createService(database) {
+          const service = new FirstPartyProjectionService({database});
+          return {async refreshProjections(_job,context) {
+            context.signal.throwIfAborted();
+            await service.publishPreparedWeek(input);
+          }};
+        }});
+      `,
+      );
+      const events: Readonly<Record<string, unknown>>[] = [];
+      const child = new FirstPartyProjectionProcess({
+        connectionString: container.url,
+        workerEntry: pathToFileURL(entryPath),
+        onEvent: (event) => events.push(event),
+      });
+      try {
+        const before = await mainHandle.db
+          .select()
+          .from(projectionModelRuns)
+          .where(eq(projectionModelRuns.inputChecksum, isolated.input.inputChecksum));
+        expect(before).toHaveLength(0);
+        await child.refreshProjections(
+          { season: isolated.input.season, week: isolated.input.week, horizon: "weekly" },
+          jobContext(),
+        );
+        const read = async (leagueId: string) => {
+          const [set] = await mainHandle.db
+            .select()
+            .from(projectionSets)
+            .where(eq(projectionSets.leagueSeasonId, leagueId));
+          expect(set).toBeDefined();
+          const rows = await mainHandle.db
+            .select({
+              meanPoints: playerProjections.meanPoints,
+              floorPoints: playerProjections.floorPoints,
+              ceilingPoints: playerProjections.ceilingPoints,
+              confidence: playerProjections.confidence,
+              components: playerProjections.components,
+            })
+            .from(playerProjections)
+            .where(eq(playerProjections.projectionSetId, set!.id));
+          return {
+            rows,
+            publishedPositions: set!.metadata.publishedPositions,
+            livePointCalibration: set!.metadata.livePointCalibration,
+          };
+        };
+        const directRows = await read(direct.leagueSeason.id);
+        const childRows = await read(isolated.leagueSeason.id);
+        expect(childRows.rows).toHaveLength(1);
+        expect(childRows).toEqual(directRows);
+        expect((childRows.rows[0]!.components.receiving_yards ?? 0) > 0).toBe(true);
+        await child.refreshProjections(
+          { season: isolated.input.season, week: isolated.input.week, horizon: "weekly" },
+          jobContext(),
+        );
+        expect(await read(isolated.leagueSeason.id)).toEqual(childRows);
+        const runs = await mainHandle.db
+          .select()
+          .from(projectionModelRuns)
+          .where(eq(projectionModelRuns.inputChecksum, isolated.input.inputChecksum));
+        const sets = await mainHandle.db
+          .select()
+          .from(projectionSets)
+          .where(eq(projectionSets.leagueSeasonId, isolated.leagueSeason.id));
+        expect(runs).toHaveLength(1);
+        expect(sets).toHaveLength(1);
+        expect(
+          events.filter((event) => event.event === "weekly-projection-process-ready"),
+        ).toHaveLength(1);
+      } finally {
+        await child.close();
+        await rm(directory, { recursive: true, force: true });
+      }
+    }, 30_000);
+
+    it("runs the full cold source-selection service in the child with the same immutable rejected audit as direct invocation", async () => {
+      const week = 5;
+      await seedWeekSchedule(mainHandle.db, { season: TEST_SEASON, week, now: FIXED_NOW });
+      // Independent databases preserve every source/player/game identity without removing or
+      // disabling the immutable model-audit constraints. Both runs start without this output.
+      const cloneName = `weekly_process_${randomBytes(8).toString("hex")}`;
+      await mainHandle.db.execute(sql.raw(`create database "${cloneName}"`));
+      const cloneUrl = new URL(container.url);
+      cloneUrl.pathname = `/${cloneName}`;
+      const directHandle = createDatabase(cloneUrl.href, 2);
+      await migrate(directHandle.db, { migrationsFolder });
+      for (const table of [
+        "data_sources",
+        "players",
+        "player_external_ids",
+        "sync_runs",
+        "nfl_schedule_observations",
+      ] as const) {
+        const where = table === "sync_runs" ? " where kind='pg-test-schedule-ingest'" : "";
+        const rows = await mainHandle.db.execute(sql.raw(`select * from ${table}${where}`));
+        if (rows.length > 0) {
+          await directHandle.db.execute(
+            sql`insert into ${sql.identifier(table)} select * from jsonb_populate_recordset(null::${sql.identifier(table)}, ${JSON.stringify(rows)}::jsonb)`,
+          );
+        }
+      }
+      const directory = await mkdtemp(path.join(tmpdir(), "weekly-full-process-pg-"));
+      const entry = path.join(directory, "worker.mts");
+      await writeFile(
+        entry,
+        `
+        import {startWeeklyProjectionProcess} from ${JSON.stringify(new URL("./first-party-projection-process-runtime.ts", import.meta.url).href)};
+        import {FirstPartyProjectionService} from ${JSON.stringify(new URL("./first-party-projections.ts", import.meta.url).href)};
+        startWeeklyProjectionProcess({connectionString:process.env.DATABASE_URL,createService:database=>new FirstPartyProjectionService({database,now:()=>new Date(${JSON.stringify(FIXED_NOW.toISOString())})})});
+      `,
+      );
+      const child = new FirstPartyProjectionProcess({
+        connectionString: container.url,
+        workerEntry: pathToFileURL(entry),
+      });
+      try {
+        expect(await modelRunCount(mainHandle.db, TEST_SEASON, week)).toBe(0);
+        await child.refreshProjections({ season: TEST_SEASON, week }, jobContext());
+        const isolated = await modelRunRow(mainHandle.db, TEST_SEASON, week);
+        expect(isolated).toMatchObject({
+          qualityState: "rejected",
+          playersPublished: 0,
+        });
+        expect(isolated!.playersEvaluated).toBeGreaterThanOrEqual(32);
+        expect(await modelRunCount(directHandle.db, TEST_SEASON, week)).toBe(0);
+        const direct = new FirstPartyProjectionService({
+          database: directHandle.db,
+          now: () => FIXED_NOW,
+        });
+        await direct.refreshProjections({ season: TEST_SEASON, week }, jobContext());
+        const directRun = await modelRunRow(directHandle.db, TEST_SEASON, week);
+        expect(directRun).toBeDefined();
+        const {
+          sourceSyncRunId: _isolatedId,
+          sourceId: _isolatedSourceId,
+          createdAt: _isolatedAt,
+          ...isolatedValues
+        } = isolated!;
+        const {
+          sourceSyncRunId: _directId,
+          sourceId: _directSourceId,
+          createdAt: _directAt,
+          ...directValues
+        } = directRun!;
+        void [_isolatedId, _isolatedSourceId, _isolatedAt, _directId, _directSourceId, _directAt];
+        expect(directValues).toEqual(isolatedValues);
+        await child.refreshProjections({ season: TEST_SEASON, week }, jobContext());
+        expect(await modelRunCount(mainHandle.db, TEST_SEASON, week)).toBe(1);
+      } finally {
+        await child.close();
+        await directHandle.close();
+        await mainHandle.db.execute(sql.raw(`drop database "${cloneName}"`));
+        await rm(directory, { recursive: true, force: true });
+      }
+    }, 30_000);
 
     it("rolls back the run and entire league set if a scored player insert fails", async () => {
       const fixture = await preparedScoredWeek(mainHandle.db);

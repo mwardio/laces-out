@@ -11,6 +11,7 @@ export default defineConfig({
     "ros-outcome-simulation-worker": "src/ros-outcome-simulation-worker.ts",
     "first-party-ros-simulation-worker": "src/first-party-ros-simulation-worker.ts",
     "first-party-ros-artifact-worker": "src/first-party-ros-artifact-worker.ts",
+    "first-party-projection-process-entry": "src/first-party-projection-process-entry.ts",
     "adopt-ros-shared-corpus": "scripts/adopt-ros-shared-corpus.ts",
   },
   format: ["esm"],

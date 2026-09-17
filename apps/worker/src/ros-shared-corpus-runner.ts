@@ -230,6 +230,36 @@ async function writePointer(file: string, pointer: ReadyPointer, signal: AbortSi
   }
 }
 
+async function readyCorpusIdentity(
+  directory: string,
+  request: CorpusRequest,
+  signal: AbortSignal,
+): Promise<string | null> {
+  signal.throwIfAborted();
+  const pointer = await readPointer(
+    path.join(directory, "ready", `${request.identity}.json`),
+    request,
+  );
+  if (!pointer) return null;
+  const store = createRosHistoricalCorpusStore({ directory: path.join(directory, "corpora") });
+  const loaded = await store.read(pointer.corpusIdentity, { signal });
+  if (loaded.state !== "hit")
+    throw new Error(`Shared ROS ready corpus is ${loaded.state}; explicit repair is required`);
+  assertCorpusScope(loaded.corpus, request);
+  if (sourceKey(loaded.corpus.sourceChecksums) !== sourceKey(pointer.sourceChecksums))
+    throw new Error("Shared ROS ready corpus source lineage differs from its pointer");
+  return pointer.corpusIdentity;
+}
+
+/** A ready pointer is committed only after full vector verification; replays verify vectors again. */
+export function readyRosSharedCorpusIdentity(
+  directory: string,
+  season: number,
+  signal: AbortSignal,
+): Promise<string | null> {
+  return readyCorpusIdentity(directory, rosSharedCorpusRequest(season), signal);
+}
+
 /**
  * One durable football build serves all exact-profile proofs. An existing broken pointer or
  * corpus fails visibly; it never silently starts expensive modeling for an individual league.
@@ -239,21 +269,6 @@ export function createSharedRosCorpusValidationRunner(options: {
   readonly lock: RosCorpusLock;
   readonly runner: RosProfileValidationRunner;
 }): RosProfileValidationRunner {
-  const store = createRosHistoricalCorpusStore({
-    directory: path.join(options.directory, "corpora"),
-  });
-  const readyIdentity = async (file: string, request: CorpusRequest, signal: AbortSignal) => {
-    signal.throwIfAborted();
-    const pointer = await readPointer(file, request);
-    if (!pointer) return null;
-    const loaded = await store.read(pointer.corpusIdentity, { signal });
-    if (loaded.state !== "hit")
-      throw new Error(`Shared ROS ready corpus is ${loaded.state}; explicit repair is required`);
-    assertCorpusScope(loaded.corpus, request);
-    if (sourceKey(loaded.corpus.sourceChecksums) !== sourceKey(pointer.sourceChecksums))
-      throw new Error("Shared ROS ready corpus source lineage differs from its pointer");
-    return pointer.corpusIdentity;
-  };
   const replay = async (input: Parameters<RosProfileValidationRunner>[0], identity: string) => {
     const report = await options.runner({ ...input, replayCorpusIdentity: identity });
     if (report.outcomeCorpusIdentity !== identity)
@@ -266,10 +281,21 @@ export function createSharedRosCorpusValidationRunner(options: {
     const request = rosSharedCorpusRequest(input.season);
     const file = path.join(options.directory, "ready", `${request.identity}.json`);
     // Ready data remains usable while a different season or model is building its own corpus.
-    const ready = await readyIdentity(file, request, input.signal);
+    const ready = await readyCorpusIdentity(options.directory, request, input.signal);
+    if (input.requiredReadyCorpusIdentity !== undefined) {
+      if (
+        typeof input.requiredReadyCorpusIdentity !== "string" ||
+        !SHA256.test(input.requiredReadyCorpusIdentity) ||
+        ready !== input.requiredReadyCorpusIdentity
+      )
+        throw new Error(
+          "Required ready ROS corpus is absent or changed; recovery cannot build a replacement",
+        );
+      return replay(input, ready);
+    }
     if (ready) return replay(input, ready);
     const result = await options.lock(GLOBAL_BUILD_LOCK, input.signal, async (guard) => {
-      const identityAfterWait = await readyIdentity(file, request, guard.signal);
+      const identityAfterWait = await readyCorpusIdentity(options.directory, request, guard.signal);
       if (identityAfterWait) return { identity: identityAfterWait };
       await mkdir(options.directory, { recursive: true, mode: 0o700 });
       await assertRosCacheHeadroom(options.directory, POINTER_MAXIMUM_BYTES, guard.signal);

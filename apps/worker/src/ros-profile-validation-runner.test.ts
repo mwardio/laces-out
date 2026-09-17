@@ -83,6 +83,32 @@ describe("isolated ROS profile validation runner", () => {
       }),
     ).rejects.toThrow(/requires an outcome cache/);
   });
+  it("refuses recovery without the exact explicit replay argument before starting a validator", async () => {
+    const identity = "a".repeat(64);
+    const runner = createRosProfileValidationRunner({
+      validatorPath: "/must-not-start-a-builder.js",
+      outcomeCacheDirectory: "/pinned/outcomes",
+    });
+    await expect(runner({ ...input(), requiredReadyCorpusIdentity: identity })).rejects.toThrow(
+      "requires explicit replay",
+    );
+    await expect(
+      runner({
+        ...input(),
+        requiredReadyCorpusIdentity: identity,
+        replayCorpusIdentity: "b".repeat(64),
+      }),
+    ).rejects.toThrow("requires explicit replay");
+    const validatorPath = await validator(
+      `process.stdout.write(JSON.stringify({args: process.argv.slice(2)}));`,
+    );
+    const report = await createRosProfileValidationRunner({
+      validatorPath,
+      outcomeCacheDirectory: "/pinned/outcomes",
+    })({ ...input(), requiredReadyCorpusIdentity: identity, replayCorpusIdentity: identity });
+    expect(report.args).toContain(`--replay-corpus=${identity}`);
+  });
+
   it("stops a timed-out process", async () => {
     const validatorPath = await validator("setInterval(() => {}, 1000);");
     await expect(

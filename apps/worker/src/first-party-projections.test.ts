@@ -2,6 +2,7 @@ import {
   applyFirstPartyProjectionChampionPolicy,
   applyFirstPartyProjectionFinalPolicy,
   evaluateFirstPartyBacktestForScoringProfile,
+  evaluateFirstPartyTeamDefenseBacktestForScoringProfile,
   evaluateWeeklyPointCalibration,
   WEEKLY_POINT_CALIBRATION_POLICY_VERSION,
   projectionScoringProfileKey,
@@ -16,8 +17,9 @@ import type {
   FirstPartyScoredTeamDefenseEvaluation,
   FirstPartyTeamDefenseBacktest,
   FirstPartyTeamDefenseBacktestPrediction,
+  ProjectionScoringProfile,
 } from "@laces-out/projections";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   buildFirstPartyLeaguePublications,
@@ -25,6 +27,7 @@ import {
   canonicalProjectionPlayerId,
   effectiveFirstPartyProjectionPositions,
   evaluateFirstPartyPublicationCandidates,
+  FirstPartyPublicationEvidenceMemo,
   firstPartyAvailableProjectionComponents,
   firstPartyDefensePlayerId,
   firstPartyStatusForKickoff,
@@ -1114,8 +1117,11 @@ function planPublications(input: {
   readonly startedPositions?: readonly string[];
   readonly modelMultiplier?: number;
   readonly previousRows?: ReadonlyMap<string, ScoredProjectionRow>;
+  readonly leagueSeasonId?: string;
+  readonly scoringEvidenceMemo?: FirstPartyPublicationEvidenceMemo;
 }) {
   const playerBacktest = input.playerBacktest ?? playerBacktestFixture();
+  const leagueSeasonId = input.leagueSeasonId ?? LEAGUE_SEASON_ID;
   return buildFirstPartyLeaguePublications({
     season: PUBLICATION_SEASON,
     week: PUBLICATION_WEEK,
@@ -1125,6 +1131,9 @@ function planPublications(input: {
     playerBacktest,
     basePlayerBacktest: playerBacktest,
     defenseBacktest: input.defenseBacktest ?? defenseBacktestFixture(),
+    ...(input.scoringEvidenceMemo === undefined
+      ? {}
+      : { scoringEvidenceMemo: input.scoringEvidenceMemo }),
     players: PUBLICATION_TEAMS.map((team) => ({
       id: firstPartyDefensePlayerId(team),
       gsisId: null,
@@ -1135,11 +1144,11 @@ function planPublications(input: {
       lastSeason: PUBLICATION_SEASON,
     })),
     leagues: [
-      { id: LEAGUE_SEASON_ID, provider: "espn", currentWeek: PUBLICATION_WEEK, teamCount: 12 },
+      { id: leagueSeasonId, provider: "espn", currentWeek: PUBLICATION_WEEK, teamCount: 12 },
     ],
-    rules: [...input.rules],
+    rules: input.rules.map((rule) => ({ ...rule, leagueSeasonId })),
     rosters: (input.rosters ?? []).map((entry) => ({
-      leagueSeasonId: LEAGUE_SEASON_ID,
+      leagueSeasonId,
       ...entry,
     })),
     publishedPlayers: BACKTEST_POSITIONS.map((position) => {
@@ -1165,7 +1174,7 @@ function planPublications(input: {
     previousRowsByLeague:
       input.previousRows === undefined
         ? new Map()
-        : new Map([[LEAGUE_SEASON_ID, input.previousRows]]),
+        : new Map([[leagueSeasonId, input.previousRows]]),
   });
 }
 
@@ -1840,5 +1849,216 @@ describe("weekly league publication for a pre-draft league", () => {
     expect(plan.publications[0]?.metadata.rosterCoverage).toBe("unknown");
     expect(plan.publications[0]?.metadata.rosterCoverageChecked).toBe(false);
     expect(plan.notes).toEqual([]);
+  });
+});
+
+describe("bounded weekly publication evidence memo", () => {
+  function profile(multiplier = 1): ProjectionScoringProfile {
+    return {
+      id: "memo-league-a",
+      label: "First league",
+      version: "fixture-v1",
+      rules: [
+        { statId: "passing_yards", points: 0.04 * multiplier },
+        { statId: "rushing_yards", points: 0.1 * multiplier },
+        { statId: "receiving_yards", points: 0.1 * multiplier },
+        { statId: "field_goals_made_0_39", points: 3 * multiplier },
+        { statId: "defensive_sacks", points: multiplier },
+      ],
+    };
+  }
+
+  it("matches fresh scientific evaluation exactly on cold and semantic warm hits without retaining raw predictions", () => {
+    const players = playerBacktestFixture();
+    const defense = defenseBacktestFixture();
+    const scoring = profile();
+    const evaluated = evaluateFirstPartyPublicationCandidates(players, scoring);
+    const { champion, ...compactCandidates } = evaluated;
+    const expected = {
+      candidates: { ...compactCandidates, champion: { policy: champion.policy } },
+      player: evaluated.playerEvaluation,
+      defense: evaluateFirstPartyTeamDefenseBacktestForScoringProfile(defense, scoring),
+    };
+    const memo = new FirstPartyPublicationEvidenceMemo();
+    const cold = memo.get(players, defense, scoring);
+    expect(cold).toStrictEqual(expected);
+    const warm = memo.get(players, defense, {
+      ...scoring,
+      id: "memo-league-b",
+      label: "A different league name",
+      version: "fixture-v2",
+      rules: [...scoring.rules].reverse(),
+    });
+    expect(warm).toBe(cold);
+    expect(warm).toStrictEqual(expected);
+
+    const rawInputs = new Set<object>([players, defense, players.predictions, defense.predictions]);
+    const seen = new Set<object>();
+    const retained: string[] = [];
+    const inspect = (value: unknown, location: string): void => {
+      if (value === null || typeof value !== "object" || seen.has(value)) return;
+      seen.add(value);
+      if (rawInputs.has(value)) retained.push(location);
+      for (const [key, child] of Object.entries(value)) {
+        const childLocation = `${location}.${key}`;
+        if (key === "predictions") retained.push(childLocation);
+        inspect(child, childLocation);
+      }
+    };
+    inspect(cold, "evidence");
+    expect(retained).toEqual([]);
+    expect(cold.candidates.champion).not.toHaveProperty("backtest");
+  });
+
+  it("recomputes exact evidence when a scoring coefficient changes", () => {
+    const players = playerBacktestFixture();
+    const defense = defenseBacktestFixture();
+    const memo = new FirstPartyPublicationEvidenceMemo();
+    const original = memo.get(players, defense, profile());
+    const changedProfile = profile(2);
+    const changed = memo.get(players, defense, changedProfile);
+    expect(changed).not.toBe(original);
+    expect(changed.player.scoringProfileKey).not.toBe(original.player.scoringProfileKey);
+    expect(changed.player.byPosition.WR?.mae).not.toBe(original.player.byPosition.WR?.mae);
+    expect(changed.player).toStrictEqual(
+      evaluateFirstPartyPublicationCandidates(players, changedProfile).playerEvaluation,
+    );
+    expect(changed.defense).toStrictEqual(
+      evaluateFirstPartyTeamDefenseBacktestForScoringProfile(defense, changedProfile),
+    );
+    expect(memo.get(players, defense, profile())).toBe(original);
+  });
+
+  it("invalidates every stored profile when either immutable backtest reference changes", () => {
+    const players = playerBacktestFixture();
+    const defense = defenseBacktestFixture();
+    const memo = new FirstPartyPublicationEvidenceMemo();
+    const first = memo.get(players, defense, profile());
+    const second = memo.get(players, defense, profile(2));
+    const nextPlayers = {
+      ...players,
+      predictions: players.predictions.map((row) => ({
+        ...row,
+        actual: Object.fromEntries(
+          Object.entries(row.actual).map(([component, value]) => [component, value + 10]),
+        ),
+      })),
+    };
+    const replacedFirst = memo.get(nextPlayers, defense, profile());
+    const replacedSecond = memo.get(nextPlayers, defense, profile(2));
+    expect(replacedFirst).not.toBe(first);
+    expect(replacedSecond).not.toBe(second);
+    expect(replacedFirst.player).not.toStrictEqual(first.player);
+    expect(replacedFirst.player).toStrictEqual(
+      evaluateFirstPartyPublicationCandidates(nextPlayers, profile()).playerEvaluation,
+    );
+    const nextDefense = {
+      ...defense,
+      predictions: defense.predictions.map((row) => ({
+        ...row,
+        actual: { ...row.actual, defensive_sacks: row.actual.defensive_sacks! + 2 },
+      })),
+    };
+    const defenseFirst = memo.get(nextPlayers, nextDefense, profile());
+    const defenseSecond = memo.get(nextPlayers, nextDefense, profile(2));
+    expect(defenseFirst).not.toBe(replacedFirst);
+    expect(defenseSecond).not.toBe(replacedSecond);
+    expect(defenseFirst.defense).not.toStrictEqual(replacedFirst.defense);
+    expect(defenseFirst.defense).toStrictEqual(
+      evaluateFirstPartyTeamDefenseBacktestForScoringProfile(nextDefense, profile()),
+    );
+    // The memo retains only the current training pair, even if an older pair is requested again.
+    expect(memo.get(players, defense, profile())).not.toBe(first);
+  });
+
+  it("evicts the least recently used profile within its configured capacity", () => {
+    const players = playerBacktestFixture();
+    const defense = defenseBacktestFixture();
+    const memo = new FirstPartyPublicationEvidenceMemo(2);
+    const first = memo.get(players, defense, profile());
+    const second = memo.get(players, defense, profile(2));
+    expect(memo.get(players, defense, profile())).toBe(first);
+    memo.get(players, defense, profile(3));
+    expect(memo.get(players, defense, profile())).toBe(first);
+    const reloaded = memo.get(players, defense, profile(2));
+    expect(reloaded).not.toBe(second);
+    expect(reloaded).toStrictEqual(second);
+  });
+
+  it("reuses historical evidence across league, roster and kickoff changes while rebuilding exact current publication results", () => {
+    const sourcePlayers = playerBacktestFixture();
+    const sourceDefense = defenseBacktestFixture();
+    const reads = { players: 0, defense: 0 };
+    const players: FirstPartyProjectionBacktest = {
+      ...sourcePlayers,
+      get predictions() {
+        reads.players += 1;
+        return sourcePlayers.predictions;
+      },
+    };
+    const defense: FirstPartyTeamDefenseBacktest = {
+      ...sourceDefense,
+      get predictions() {
+        reads.defense += 1;
+        return sourceDefense.predictions;
+      },
+    };
+    const memo = new FirstPartyPublicationEvidenceMemo();
+    const get = vi.spyOn(memo, "get");
+    const common = { playerBacktest: players, defenseBacktest: defense, scoringEvidenceMemo: memo };
+    const original = planPublications({
+      ...common,
+      rules: DST_SUPPORTED_RULES,
+      rosters: FULL_ROSTER,
+    });
+    expect(original.publications).toHaveLength(1);
+    expect(reads.players).toBeGreaterThan(0);
+    expect(reads.defense).toBeGreaterThan(0);
+    const coldReads = { ...reads };
+    const secondLeague = "22222222-2222-4222-8222-222222222222";
+    const cases = [
+      {
+        leagueSeasonId: secondLeague,
+        rules: [...DST_SUPPORTED_RULES].reverse(),
+        rosters: FULL_ROSTER,
+      },
+      { leagueSeasonId: secondLeague, rules: DST_SUPPORTED_RULES, rosters: PRE_DRAFT_ROSTER },
+      {
+        leagueSeasonId: secondLeague,
+        rules: DST_SUPPORTED_RULES,
+        rosters: PARTIALLY_SYNCED_ROSTER,
+      },
+      {
+        leagueSeasonId: secondLeague,
+        rules: DST_SUPPORTED_RULES,
+        rosters: FULL_ROSTER,
+        startedPositions: ["WR"],
+      },
+    ];
+    const warmPlans = cases.map((changed) => planPublications({ ...common, ...changed }));
+    expect(reads).toEqual(coldReads);
+    expect(get).toHaveBeenCalledTimes(cases.length + 1);
+    const firstEvidence = get.mock.results[0]?.value as unknown;
+    for (const result of get.mock.results) expect(result.value).toBe(firstEvidence);
+    expect(warmPlans[0]?.publications[0]?.league.id).toBe(secondLeague);
+    expect(warmPlans[0]?.publications[0]?.profile.id).toBe(`league:${secondLeague}`);
+    expect(warmPlans[1]?.publications[0]?.metadata.rosterCoverage).toBe("pre-draft");
+    expect(warmPlans[2]?.publications).toEqual([]);
+    expect(warmPlans[3]?.publications).toEqual([]);
+    for (const [index, changed] of cases.entries()) {
+      const cold = planPublications({
+        playerBacktest: sourcePlayers,
+        defenseBacktest: sourceDefense,
+        scoringEvidenceMemo: new FirstPartyPublicationEvidenceMemo(),
+        ...changed,
+      });
+      expect(warmPlans[index]).toStrictEqual(cold);
+    }
+    get.mockRestore();
+  });
+
+  it("rejects capacities that could disable the bound or grow beyond the supported limit", () => {
+    for (const capacity of [0, -1, 33, 1.5, Number.NaN, Number.POSITIVE_INFINITY])
+      expect(() => new FirstPartyPublicationEvidenceMemo(capacity)).toThrow();
   });
 });

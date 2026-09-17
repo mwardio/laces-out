@@ -12,6 +12,11 @@ import {
   type FirstPartyRosAdmissionValidation,
 } from "./first-party-ros-admission.js";
 import type { WorkerJobContext } from "./jobs.js";
+import type { RosProfileValidationJob } from "@laces-out/jobs";
+import {
+  ROS_PROFILE_RECOVERY_VERSION,
+  rosProfileRecoveryMarker,
+} from "./ros-profile-recovery-state.js";
 import {
   createRosProfileValidationRunner,
   type RosProfileValidationRunner,
@@ -22,7 +27,7 @@ type AdmittedValidation = Extract<FirstPartyRosAdmissionValidation, { state: "ad
 
 export interface RosProfileValidationRepository {
   get(id: string): Promise<RosProfileValidationRecord | null>;
-  begin(id: string, startedAt: Date): Promise<Date | null>;
+  begin(id: string, startedAt: Date, recoveryCorpusIdentity?: string): Promise<Date | null>;
   complete(input: {
     id: string;
     startedAt: Date;
@@ -49,7 +54,7 @@ export class DrizzleRosProfileValidationRepository implements RosProfileValidati
     );
   }
 
-  async begin(id: string, startedAt: Date): Promise<Date | null> {
+  async begin(id: string, startedAt: Date, recoveryCorpusIdentity?: string): Promise<Date | null> {
     // Pg-boss owns the long-running lease. A redelivered job may replace a validating attempt
     // left behind by a dead process; the timestamp fences its old completion transaction.
     const rows = await this.database
@@ -60,11 +65,29 @@ export class DrizzleRosProfileValidationRepository implements RosProfileValidati
         completedAt: null,
         blockers: [],
         updatedAt: startedAt,
+        ...(recoveryCorpusIdentity === undefined
+          ? {}
+          : {
+              report: sql`jsonb_set(${firstPartyRosProfileValidations.report}, '{automaticRecovery,state}', '"attempted"'::jsonb)`,
+            }),
       })
       .where(
         and(
           eq(firstPartyRosProfileValidations.id, id),
-          inArray(firstPartyRosProfileValidations.state, ["pending", "failed", "validating"]),
+          inArray(
+            firstPartyRosProfileValidations.state,
+            recoveryCorpusIdentity === undefined
+              ? ["pending", "failed", "validating"]
+              : ["failed", "withheld", "validating"],
+          ),
+          recoveryCorpusIdentity === undefined
+            ? sql`${firstPartyRosProfileValidations.report} -> 'automaticRecovery' is null`
+            : and(
+                sql`${firstPartyRosProfileValidations.report} -> 'automaticRecovery' ->> 'version' = ${ROS_PROFILE_RECOVERY_VERSION}`,
+                sql`${firstPartyRosProfileValidations.report} -> 'automaticRecovery' ->> 'corpusIdentity' = ${recoveryCorpusIdentity}`,
+                sql`${firstPartyRosProfileValidations.report} -> 'automaticRecovery' ->> 'state' in ('pending-dispatch', 'attempted')`,
+                sql`(${firstPartyRosProfileValidations.state} <> 'withheld' or ${firstPartyRosProfileValidations.report} -> 'automaticRecovery' ->> 'state' = 'pending-dispatch')`,
+              ),
         ),
       )
       .returning({ startedAt: firstPartyRosProfileValidations.startedAt });
@@ -81,11 +104,15 @@ export class DrizzleRosProfileValidationRepository implements RosProfileValidati
         eq(firstPartyRosProfileValidations.startedAt, input.startedAt),
       );
       const [record] = await transaction
-        .select({ id: firstPartyRosProfileValidations.id })
+        .select({
+          id: firstPartyRosProfileValidations.id,
+          report: firstPartyRosProfileValidations.report,
+        })
         .from(firstPartyRosProfileValidations)
         .where(claim)
         .for("update");
       if (!record) return false;
+      const recovery = rosProfileRecoveryMarker(record.report);
       let artifactId: string | null = null;
       if (input.admission) {
         const { payload, artifactChecksum } = input.admission;
@@ -124,7 +151,10 @@ export class DrizzleRosProfileValidationRepository implements RosProfileValidati
         .set({
           state: input.admission ? "admitted" : "withheld",
           blockers: input.blockers,
-          report: input.report,
+          report:
+            recovery === undefined
+              ? input.report
+              : { ...input.report, automaticRecovery: recovery },
           artifactId,
           completedAt: input.completedAt,
           updatedAt: input.completedAt,
@@ -190,10 +220,7 @@ export class RosProfileValidationService {
     this.now = options.now ?? (() => new Date());
   }
 
-  async validateProfile(
-    job: { readonly profileValidationId: string },
-    context: WorkerJobContext,
-  ): Promise<void> {
+  async validateProfile(job: RosProfileValidationJob, context: WorkerJobContext): Promise<void> {
     context.signal.throwIfAborted();
     const record = await this.repository.get(job.profileValidationId);
     if (!record) return;
@@ -202,9 +229,31 @@ export class RosProfileValidationService {
       await this.options.enqueueProjectionRefresh(record.season);
       return;
     }
-    if (record.state === "withheld") return;
-    const startedAt = await this.repository.begin(record.id, this.now());
+    const recovery = rosProfileRecoveryMarker(record.report);
+    if (job.recoveryCorpusIdentity !== undefined) {
+      if (recovery?.corpusIdentity !== job.recoveryCorpusIdentity) return;
+    } else if (
+      recovery ||
+      (object(record.report) && record.report.automaticRecovery !== undefined)
+    ) {
+      // An older unrestricted queue row cannot claim a newly reserved replay-only recovery.
+      return;
+    }
+    if (
+      record.state === "withheld" &&
+      (job.recoveryCorpusIdentity === undefined || recovery?.state !== "pending-dispatch")
+    )
+      return;
+    const startedAt = await this.repository.begin(
+      record.id,
+      this.now(),
+      job.recoveryCorpusIdentity,
+    );
     if (!startedAt) return;
+    const recordedReport = (report: Record<string, unknown> | null) =>
+      recovery === undefined
+        ? report
+        : { ...report, automaticRecovery: { ...recovery, state: "attempted" } };
     try {
       let definition;
       try {
@@ -214,7 +263,7 @@ export class RosProfileValidationService {
           id: record.id,
           startedAt,
           completedAt: this.now(),
-          report: null,
+          report: recordedReport(null),
           blockers: ["scoring_profile_definition_invalid"],
         });
         return;
@@ -230,7 +279,7 @@ export class RosProfileValidationService {
           id: record.id,
           startedAt,
           completedAt: this.now(),
-          report: null,
+          report: recordedReport(null),
           blockers: ["validation_execution_identity_changed"],
         });
         return;
@@ -239,8 +288,16 @@ export class RosProfileValidationService {
         scoringProfileKey: definition.scoringProfileKey,
         season: record.season,
         signal: context.signal,
+        ...(job.recoveryCorpusIdentity === undefined
+          ? {}
+          : { requiredReadyCorpusIdentity: job.recoveryCorpusIdentity }),
       });
       context.signal.throwIfAborted();
+      if (
+        job.recoveryCorpusIdentity !== undefined &&
+        report.outcomeCorpusIdentity !== job.recoveryCorpusIdentity
+      )
+        throw new Error("ROS recovery returned a different ready corpus identity");
       // A qualified historical corpus is a prerequisite, and the CLI can stop before a champion
       // exists. This is a documented data insufficiency, not a subprocess infrastructure failure.
       if (
@@ -254,7 +311,7 @@ export class RosProfileValidationService {
           id: record.id,
           startedAt,
           completedAt: this.now(),
-          report,
+          report: recordedReport(report),
           blockers: ["historical_source_coverage_incomplete"],
         });
         return;
@@ -280,7 +337,7 @@ export class RosProfileValidationService {
           id: record.id,
           startedAt,
           completedAt: this.now(),
-          report,
+          report: recordedReport(report),
           blockers: [...new Set([...admission.blockers, ...reported])],
         });
         return;
@@ -289,7 +346,7 @@ export class RosProfileValidationService {
         id: record.id,
         startedAt,
         completedAt: this.now(),
-        report,
+        report: recordedReport(report),
         blockers: admission.cellBlockers,
         admission,
       });

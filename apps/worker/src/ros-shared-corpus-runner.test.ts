@@ -28,6 +28,7 @@ import type { RosProfileValidationRunInput } from "./ros-profile-validation-runn
 import {
   adoptRosSharedCorpus,
   createSharedRosCorpusValidationRunner,
+  readyRosSharedCorpusIdentity,
   rosSharedCorpusRequest,
 } from "./ros-shared-corpus-runner.js";
 
@@ -243,6 +244,47 @@ async function fixture(scenarioCount?: number) {
 }
 
 describe("durable shared ROS corpus orchestration", { timeout: 30_000 }, () => {
+  it("recovers only through its required ready corpus and never falls back to the build lock", async () => {
+    const prepared = await fixture();
+    expect(await readyRosSharedCorpusIdentity(prepared.directory, 2026, input().signal)).toBeNull();
+    const report = await prepared.createRunner()(input());
+    const identity = report.outcomeCorpusIdentity;
+    if (typeof identity !== "string") throw new Error("Expected a ready corpus");
+    const lockCalled = vi.fn();
+    const lock: RosCorpusLock = (identity, signal, run) => {
+      lockCalled();
+      return prepared.lock(identity, signal, run);
+    };
+    const runner = createSharedRosCorpusValidationRunner({
+      directory: prepared.directory,
+      lock,
+      runner: prepared.runner,
+    });
+    const recovery = { ...input("half-ppr"), requiredReadyCorpusIdentity: identity };
+    expect(await readyRosSharedCorpusIdentity(prepared.directory, 2026, recovery.signal)).toBe(
+      identity,
+    );
+    await expect(runner(recovery)).resolves.toMatchObject({ outcomeCorpusIdentity: identity });
+    expect(prepared.runner.mock.calls.at(-1)?.[0]).toMatchObject({
+      replayCorpusIdentity: identity,
+    });
+    prepared.runner.mockClear();
+    await expect(
+      runner({ ...recovery, requiredReadyCorpusIdentity: "a".repeat(64) }),
+    ).rejects.toThrow("absent or changed");
+    const pointer = path.join(prepared.directory, "ready", `${prepared.request.identity}.json`);
+    const pointerBytes = await readFile(pointer);
+    await rm(pointer);
+    await expect(runner(recovery)).rejects.toThrow("absent or changed");
+    await writeFile(pointer, pointerBytes);
+    await rm(path.join(prepared.directory, "corpora", `${identity}.ros-corpus.json.gz`));
+    await expect(runner(recovery)).rejects.toThrow("missing");
+    await writeFile(pointer, "corrupt");
+    await expect(runner(recovery)).rejects.toThrow();
+    expect(lockCalled).not.toHaveBeenCalled();
+    expect(prepared.runner).not.toHaveBeenCalled();
+  });
+
   it("pins the build envelope and all release thresholds in the durable request identity", () => {
     const { version, ...physicalProtocol } = ROS_HISTORICAL_CORPUS_BUILD_PROTOCOL;
     expect(rosSharedCorpusRequest(2026).protocol).toMatchObject({

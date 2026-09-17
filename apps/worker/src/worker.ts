@@ -51,10 +51,8 @@ import {
   NotificationSender,
 } from "./push-notifications.js";
 import { NflverseCatalogRefresher } from "./nflverse-catalog.js";
-import {
-  FirstPartyProjectionService,
-  projectionHistorySeasons,
-} from "./first-party-projections.js";
+import { projectionHistorySeasons } from "./first-party-projections.js";
+import { FirstPartyProjectionProcess } from "./first-party-projection-process.js";
 import { NflverseScheduleRefresher } from "./nflverse-schedules.js";
 import { NflverseWeeklyDataRefresher } from "./nflverse-weekly-data.js";
 import { ProjectionLockWindowService } from "./projection-lock-window.js";
@@ -79,7 +77,10 @@ const weeklyDataRefresher = new NflverseWeeklyDataRefresher({
 });
 const scheduleRefresher = new NflverseScheduleRefresher({ database: database.db });
 const projectionLockWindow = new ProjectionLockWindowService(database.db);
-const projectionService = new FirstPartyProjectionService({ database: database.db });
+const projectionService = new FirstPartyProjectionProcess({
+  connectionString: environment.DATABASE_URL,
+  onEvent: (event) => logger.info(event, "weekly projection process lifecycle"),
+});
 const sleeperRefresher = new SleeperDataRefresher({ database: database.db });
 const adpRefresher = new FfcAdpRefresher({ database: database.db });
 const dataHealthService = new DatabaseDataHealthService({
@@ -463,6 +464,7 @@ async function stop(signal: string): Promise<void> {
   if (stopping) return;
   stopping = true;
   logger.info({ signal }, "stopping fantasy worker");
+  await projectionService.close();
   await boss.stop({ graceful: true, timeout: 30_000 });
   await database.close();
   process.exitCode = 0;

@@ -19,8 +19,8 @@
 
 ## Docker Compose deployment
 
-The root `Dockerfile` has distinct `web`, `api`, `worker`, and one-shot `migrate` targets. Both
-worker services use the worker image with separate entry points. The Compose stack binds PostgreSQL
+The root `Dockerfile` has distinct `web`, `api`, `worker`, and one-shot `migrate` targets. All
+three worker services use the worker image with separate entry points. The Compose stack binds PostgreSQL
 only to host loopback, blocks application startup until migrations complete, and exposes one Caddy
 gateway so browser cookies, OAuth callbacks, the web UI, and the API share an origin.
 
@@ -452,6 +452,20 @@ rail; the final pass inside ten minutes of kickoff forces one last source check.
 automatic shared-data recovery use the same weekly-only horizon, while an explicit user rerun keeps
 the full weekly + ROS behavior.
 
+The ordinary worker dispatches weekly modeling/publication to one lazy, persistent child process
+with a 2 GiB V8 old-generation heap limit and a separate two-connection database pool. Provider
+syncs, queue heartbeats, and notification sweeps continue in the parent while a cold model fits.
+Sequential jobs reuse the child's football training cache. A bounded 32-entry scoring-evidence
+memo reuses policy selection, validation metrics, and point calibration for semantically identical
+scoring rules; a changed player or defense backtest invalidates it. It retains compact evidence,
+not expanded historical predictions for every league. Rosters, kickoff locks, live forecasts,
+source checks, and publication coverage are still evaluated for each job.
+
+The child receives only the database connection, runtime mode, and UTC timezone. Cancellation,
+startup failure, or worker shutdown terminates it before another request can start; a child crash
+fails the current queue job and a later retry starts a fresh process. Structured lifecycle logs
+include readiness, completion, and bounded memory metrics without raw SQL or environment values.
+
 Before weekly modeling, the worker asks the canonical nflverse player catalog, current-season
 player-stat, team-stat, weekly-roster, injury-report, and snap sources, every schedule season in the
 training window, and the Sleeper status catalog to refresh. Conditional claims make unchanged
@@ -490,13 +504,16 @@ least 2% for that position across at least 100 predictions and eight completed w
 does, recency remains the live strategy. Position-level publication also requires at least 100
 scored targets, at least 100 walk-forward interval observations, 62–78% coverage for the nominal
 70% interval, no regression against the recency challenger, and bounded residual bias. The
-walk-forward backtest applies only the policy available before each whole week. The final selected
-strategy is then replayed on the same locked forecasts for release evidence and live calibration.
-Point centers use the latest eight completed batches, intervals are rebuilt from corrected prior
-residuals, and partially
+walk-forward backtest applies only the policy available before each whole week. Release evidence
+uses those chronological decisions; fitting the final selected strategy against past outcomes is
+allowed only for future forecasts, not as independent release evidence. A fixed recency candidate
+may rescue a failing position only after independently passing the same gates. RB/WR/TE point
+centers use a prior-eight-week affine correction and square-root-scaled residual intervals.
+Insufficient or failed starter-cohort interval evidence caps their confidence at 0.49. Partially
 completed target-week results are excluded. D/ST is evaluated separately and must beat or tie its
-recency baseline. Unknown, nonlinear, IDP, bonus, override, or otherwise unsafe scoring mappings
-withhold only the affected league publication rather than applying a guessed score. Projection Lab
+recency baseline. Supported scoring transforms and long-touchdown bonuses use their modeled
+components; unsupported categories, IDP rules, or bonus forms remain explicit and withhold the
+affected positions or league when safe publication is impossible. Projection Lab
 shows model/input timestamps, training cutoff, coverage, warnings, and backtest metrics; the exact
 champion policy remains attached to the managed-set audit metadata. These are weekly forecasts, not
 calibrated rest-of-season values. Automatic runs publish only the two earliest actionable weeks;
@@ -504,8 +521,10 @@ explicit week requests remain available for research. A successful ESPN or Yahoo
 the same deduplicated refresh immediately. Expensive locked training artifacts are cached while
 their statistical inputs remain unchanged, so roster and scoring updates only redo league work.
 
-The current release reference is model `laces-weekly-components-v8`, re-audited 2026-07-27 against
-the official 2023–2025 replay. The raw audit output is checked in at
+The historical reference below concerns model `laces-weekly-components-v8`, re-audited 2026-07-27
+against the official 2023–2025 replay. Current weekly v14 evidence and its production verification
+are recorded in [the September 17 architecture repair](./projection-architecture-repair-2026-09-17.md).
+The older raw audit output is checked in at
 `apps/web/src/app/methodology/weekly-validation-2026-07-27.json`; the figures below are read from it
 rather than transcribed, and `/methodology` publishes the same numbers from the same file.
 
@@ -536,6 +555,12 @@ nightly refreshes reuse admitted evidence. Worker startup and ordinary weekly re
 fully normalizable exact profiles automatically. The isolated `ros-profile-validation` queue runs
 the locked proof once per season/model/policy/calibration/scoring digest; successful admission queues
 live publication. Projection Lab exposes pending, validating, admitted, withheld, and failed states.
+Every five minutes, the validation worker also checks transient execution failures and historical
+source-coverage withholding for recovery. Recovery requires an already verified, complete shared
+corpus and is pinned to that exact identity: it cannot start another football fit. The durable
+reservation commits before queue dispatch; failed sends and abandoned dispatch reservations are
+retryable. Starting a recovery consumes that corpus's attempt, while queue retries remain allowed.
+Statistical rejections are excluded, and exhausted recovery does not loop against the same corpus.
 See [the scoring onboarding repair](./ros-scoring-onboarding-2026-09-17.md) for retry and recovery
 semantics. Operators can also run the locked bulk release replay with `npm run ros:validate:release -w @laces-out/worker`. It always uses eight players per
 position, a 6,000-forecast cap, complete source lineage, no more than three concurrent profiles, and
@@ -549,9 +574,12 @@ worker. The old model's artifacts and published sets remain authoritative until 
 exist; a failed candidate never deletes or overwrites them. Ordinary nightly refreshes then consume
 the admitted artifacts automatically and require no validation rerun.
 
-The running rail uses `laces-ros-distribution-v9`. The authoritative profile and publication states
-are the current-version immutable artifacts, exact-profile registry, and actual complete league
-sets. Historical July/August tables below describe their original releases, not current admission.
+The most recent admitted production model before the September 17 repair was
+`laces-ros-distribution-v9`. The v11 validation and rollout checkpoint is recorded in
+[the architecture repair](./projection-architecture-repair-2026-09-17.md). The authoritative profile
+and publication states are the current-version immutable artifacts, exact-profile registry, and
+actual complete league sets. Historical July/August tables below describe their original releases,
+not current admission.
 The [2026 untouched protocol](./ros-v6-2026-untouched-protocol.md) remains the final confirmation;
 see [`packages/projections/README.md`](../packages/projections/README.md) for model and gate definitions.
 
@@ -633,7 +661,7 @@ or roster changes belong to the next refresh; they must not invalidate a complet
 comparing it to the changing live database. This does not change the admitted model, convergence
 checks, coverage gates, or the last-approved fallback. `ros-inputs-snapshotted` records each artifact's
 captured checksum and load time; `ros-artifact-built` records target/player counts and elapsed time.
-The dedicated ROS container is capped at three CPUs; historical profile validation gets two CPUs,
+The dedicated ROS container is capped at two CPUs; historical profile validation gets two CPUs,
 leaving capacity on the six-core host for weekly work and the app.
 
 The sentinel now alerts on new issue keys after its observation debounce. Clearing a different
