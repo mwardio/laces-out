@@ -14,11 +14,20 @@ import {
 } from "./scoring.js";
 
 /** A point-layer policy; physical component forecasts and their model version are unchanged. */
-export const WEEKLY_POINT_CALIBRATION_POLICY_VERSION = "prior-affine-sqrt-point-v1";
+export const WEEKLY_POINT_CALIBRATION_POLICY_VERSION = "prior-affine-or-additive-sqrt-point-v2";
 export const UNCALIBRATED_STARTER_INTERVALS = "uncalibrated_starter_intervals";
 const MINIMUM_FIT_SAMPLES = 24;
 const WINDOW_BATCHES = 8;
 const STARTER_COUNTS = { RB: 24, WR: 36, TE: 12 } as const;
+
+export type WeeklyPointCenterStrategy = "affine" | "additive";
+
+export interface WeeklyPointCalibrationOptions {
+  /** RB/WR/TE default to affine centers; their normalized interval treatment is unchanged. */
+  readonly centerStrategyByPosition?: Readonly<
+    Partial<Record<FirstPartyProjectionPosition, WeeklyPointCenterStrategy>>
+  >;
+}
 
 export interface StarterIntervalQuality {
   readonly state: "available" | "insufficient" | "miscalibrated";
@@ -141,7 +150,7 @@ function recentRows<T extends { readonly season: number; readonly week: number }
   return rows.filter((row) => selected.has(ordinal(row)));
 }
 
-function usesAffine(
+function usesNormalizedIntervals(
   position: FirstPartyProjectionPosition,
 ): position is keyof typeof STARTER_COUNTS {
   return Object.hasOwn(STARTER_COUNTS, position);
@@ -150,23 +159,26 @@ function usesAffine(
 function fitPointPolicy(
   prior: readonly LockedPointForecast[],
   position: FirstPartyProjectionPosition,
+  centerStrategy: WeeklyPointCenterStrategy = "affine",
 ): PointFit {
   const recent = recentRows(prior);
-  const normalized = usesAffine(position);
+  const normalized = usesNormalizedIntervals(position);
+  const affineCenter = normalized && centerStrategy === "affine";
   let slope = 1;
   let intercept = 0;
   if (recent.length >= MINIMUM_FIT_SAMPLES) {
     const xbar = mean(recent.map((row) => row.rawMean));
     const ybar = mean(recent.map((row) => row.actual));
-    if (normalized) {
+    if (affineCenter) {
       const xx = recent.reduce((sum, row) => sum + (row.rawMean - xbar) ** 2, 0);
       const xy = recent.reduce((sum, row) => sum + (row.rawMean - xbar) * (row.actual - ybar), 0);
       if (xx > 1e-12) {
         slope = Math.max(0, Math.min(1, (recent.length * (xy / xx) + 24) / (recent.length + 24)));
       }
     }
-    // Preserve the legacy summation order for unchanged QB/K scoring.
-    intercept = normalized
+    // Preserve the baseline's exact residual summation order for additive centers, including
+    // unchanged QB/K scoring. Subtracting separately averaged actual/raw values can round apart.
+    intercept = affineCenter
       ? ybar - slope * xbar
       : mean(recent.map((row) => row.actual - row.rawMean));
   }
@@ -368,6 +380,7 @@ function metrics(
 export function replayWeeklyPointCalibration(
   backtest: FirstPartyProjectionBacktest,
   profile: ProjectionScoringProfile,
+  options: WeeklyPointCalibrationOptions = {},
 ): {
   readonly evaluation: WeeklyPointCalibrationEvaluation;
   readonly forecasts: readonly LockedPointForecast[];
@@ -422,7 +435,7 @@ export function replayWeeklyPointCalibration(
     const locked: LockedPointForecast[] = [];
     for (const position of new Set(batch.map((row) => row.position))) {
       const history = prior.get(position) ?? [];
-      const fit = fitPointPolicy(history, position);
+      const fit = fitPointPolicy(history, position, options.centerStrategyByPosition?.[position]);
       if (fit.trainedThrough !== null && fit.trainedThrough >= week)
         throw new Error("Point calibration used future evidence");
       const recent = recentRows(history);
@@ -464,8 +477,8 @@ export function replayWeeklyPointCalibration(
     { ...legacy.byPosition };
   for (const [position, rows] of prior) {
     const original = legacy.byPosition[position];
-    if (original === undefined || !usesAffine(position)) continue;
-    const fit = fitPointPolicy(rows, position);
+    if (original === undefined || !usesNormalizedIntervals(position)) continue;
+    const fit = fitPointPolicy(rows, position, options.centerStrategyByPosition?.[position]);
     byPosition[position] = {
       ...metrics(rows, original),
       centerAdjustment: fit.intercept,
@@ -499,6 +512,7 @@ export function replayWeeklyPointCalibration(
 export function evaluateWeeklyPointCalibration(
   backtest: FirstPartyProjectionBacktest,
   profile: ProjectionScoringProfile,
+  options: WeeklyPointCalibrationOptions = {},
 ): WeeklyPointCalibrationEvaluation {
-  return replayWeeklyPointCalibration(backtest, profile).evaluation;
+  return replayWeeklyPointCalibration(backtest, profile, options).evaluation;
 }

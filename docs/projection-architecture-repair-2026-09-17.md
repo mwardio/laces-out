@@ -612,3 +612,29 @@ Sparse-production and evaluator review, September 18:
   holdout. Blanket interval widening was rejected because proper interval scores worsened.
   The sparse-production change is based on the model's finite-sample support defect; no named
   player's future score is a fitting target, and no acceptance gate is relaxed.
+
+Weekly center-candidate repair, September 18:
+
+- Fresh v15 physical forecasts improved overall MAE over deployed v14 for all nine exact
+  scoring profiles, but the existing publication policy withheld all nine. Its affine
+  corrections could lose to the prior-only additive recency baseline used by the gate;
+  publication had no way to select that same baseline. This was a missing candidate, not
+  justification to relax an accuracy threshold or regenerate football outcomes per league.
+- Point policy v2 separates center choice from normalized interval treatment. Publication
+  policy v6 retains qualified adaptive forecasts first, then qualified fixed affine recency,
+  then qualified fixed additive recency. Each candidate uses its own chronological errors;
+  additive means exactly match the gate's residual-first baseline arithmetic. Error, bias,
+  coverage, starter-evidence, capability, and availability checks remain unchanged.
+- Selected historical evidence and future live fits use the same position-specific center
+  choice. Publication records `fixed-additive-recency` explicitly. Physical component model
+  versions and the frozen ROS v12 run are unchanged. Regression tests cover future-outcome
+  isolation, prefix invariance, mixed position choices, independent normalized intervals,
+  matching live centers/bounds, and obsolete stored-policy rejection.
+- This candidate was added after inspecting the failed v15 evaluation. The subsequent exact
+  scoring replay is development evidence, not an untouched prospective holdout. The original
+  failed report and physical provenance remain intact; deployment requires a fresh successful
+  policy replay and a separate customer-facing verification.
+- The fresh policy replay completed all nine exact scoring profiles and 9,282 locked player
+  forecasts. All unchanged publication gates passed, and the diagnostic reconstruction matched
+  production selection evidence exactly. All 229 focused unit/integration tests and the full
+  workspace typecheck passed on Linux x86-64; Darwin/ARM64 validation remains unavailable.

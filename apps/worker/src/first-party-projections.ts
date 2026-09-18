@@ -121,7 +121,8 @@ const projectionCheckIntervalMinutes = 60;
 const historySeasonCount = 4;
 // v7 refuses publication when prior-week schedule or statistics coverage is unresolved.
 const sourceSchemaVersion = 7;
-export const FIRST_PARTY_PUBLICATION_POLICY_VERSION = "walk-forward-affine-conditional-interval-v5";
+export const FIRST_PARTY_PUBLICATION_POLICY_VERSION =
+  "walk-forward-additive-recency-conditional-interval-v6";
 const championPolicyVersion = FIRST_PARTY_PUBLICATION_POLICY_VERSION;
 const chunkSize = 500;
 const supportedPositions = ["QB", "RB", "WR", "TE", "K"] as const;
@@ -1041,10 +1042,10 @@ function playerPositionEvaluationClearsGate(
 }
 
 /**
- * The constant recency candidate was available in every locked historical week. It gets its own
- * chronological point correction and interval calibration; it never borrows the hindsight winner
- * or the adaptive strategy's residuals. Selection happens at publication, and both candidates'
- * evidence remains visible. The unchanged position gates also apply to this simpler candidate.
+ * Each constant recency candidate was available in every locked historical week. Its affine or
+ * additive point correction and interval residuals are replayed independently of the adaptive
+ * strategy. Publication retains the adaptive candidate when qualified, then considers fixed
+ * affine recency, then fixed additive recency, under the same position gates.
  */
 export function evaluateFirstPartyPublicationCandidates(
   backtest: FirstPartyProjectionBacktest,
@@ -1065,12 +1066,25 @@ export function evaluateFirstPartyPublicationCandidates(
     fixedRecencyBacktest,
     profile,
   ).evaluation;
+  const additiveRecencyEvaluation = replayWeeklyPointCalibration(fixedRecencyBacktest, profile, {
+    centerStrategyByPosition: { RB: "additive", WR: "additive", TE: "additive" },
+  }).evaluation;
+  const additiveRecencyPositions = supportedPositions.filter(
+    (position) =>
+      !playerPositionEvaluationClearsGate(adaptiveEvaluation, profile, position) &&
+      !playerPositionEvaluationClearsGate(fixedRecencyEvaluation, profile, position) &&
+      playerPositionEvaluationClearsGate(additiveRecencyEvaluation, profile, position),
+  );
   const fixedRecencyPositions = supportedPositions.filter(
     (position) =>
       !playerPositionEvaluationClearsGate(adaptiveEvaluation, profile, position) &&
-      playerPositionEvaluationClearsGate(fixedRecencyEvaluation, profile, position),
+      (playerPositionEvaluationClearsGate(fixedRecencyEvaluation, profile, position) ||
+        additiveRecencyPositions.includes(position)),
   );
   const fallbackPositions = new Set(fixedRecencyPositions);
+  const centerStrategyByPosition: Partial<Record<(typeof supportedPositions)[number], "additive">> =
+    {};
+  for (const position of additiveRecencyPositions) centerStrategyByPosition[position] = "additive";
   const selectedReplay =
     fixedRecencyPositions.length === 0
       ? adaptiveReplay
@@ -1084,6 +1098,7 @@ export function evaluateFirstPartyPublicationCandidates(
             ),
           },
           profile,
+          { centerStrategyByPosition },
         );
   const playerEvaluation = selectedReplay.evaluation;
   const byPosition = { ...champion.policy.byPosition };
@@ -1107,6 +1122,7 @@ export function evaluateFirstPartyPublicationCandidates(
       })),
     },
     profile,
+    { centerStrategyByPosition },
   );
   const fittedLiveCalibration = fittedLiveReplay.evaluation;
   // The selected future strategy may be refit for a future center. Confidence must instead
@@ -1175,8 +1191,10 @@ export function evaluateFirstPartyPublicationCandidates(
     liveCalibration,
     adaptiveEvaluation,
     fixedRecencyEvaluation,
+    additiveRecencyEvaluation,
     playerEvaluation,
     fixedRecencyPositions,
+    additiveRecencyPositions,
     weeklyIntervals,
   };
 }
@@ -1247,8 +1265,10 @@ export class FirstPartyPublicationEvidenceMemo {
       liveCalibration: evaluated.liveCalibration,
       adaptiveEvaluation: evaluated.adaptiveEvaluation,
       fixedRecencyEvaluation: evaluated.fixedRecencyEvaluation,
+      additiveRecencyEvaluation: evaluated.additiveRecencyEvaluation,
       playerEvaluation: evaluated.playerEvaluation,
       fixedRecencyPositions: evaluated.fixedRecencyPositions,
+      additiveRecencyPositions: evaluated.additiveRecencyPositions,
       weeklyIntervals: evaluated.weeklyIntervals,
     };
     const evidence: FirstPartyPublicationEvidence = {
@@ -3836,11 +3856,14 @@ export function buildFirstPartyLeaguePublications(input: {
             position,
             selected: !publishablePlayerPositions.has(position)
               ? "withheld"
-              : publicationCandidates.fixedRecencyPositions.includes(position)
-                ? "fixed-recency"
-                : "adaptive-champion",
+              : publicationCandidates.additiveRecencyPositions.includes(position)
+                ? "fixed-additive-recency"
+                : publicationCandidates.fixedRecencyPositions.includes(position)
+                  ? "fixed-recency"
+                  : "adaptive-champion",
             adaptive: publicationCandidates.adaptiveEvaluation.byPosition[position],
             fixedRecency: publicationCandidates.fixedRecencyEvaluation.byPosition[position],
+            additiveRecency: publicationCandidates.additiveRecencyEvaluation.byPosition[position],
           })),
         livePointCalibration: {
           method: "selected-future-strategy-prior-games",

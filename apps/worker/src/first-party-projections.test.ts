@@ -7,6 +7,7 @@ import {
   WEEKLY_POINT_CALIBRATION_POLICY_VERSION,
   WEEKLY_INTERVAL_CALIBRATION_POLICY_VERSION,
   applyWeeklyIntervalPolicy,
+  applyWeeklyPointCalibration,
   storedWeeklyIntervalPolicyVersion,
   projectionScoringProfileKey,
   firstPartyProjectionComponentsForPosition,
@@ -969,6 +970,39 @@ function playerBacktestFixture(
   };
 }
 
+/** Most outcomes follow the recency center; symmetric outliers pull the squared-error slope away
+ * from the MAE-optimal center. This exercises calibration selection without a physical-model fit. */
+function additiveRecencyBacktestFixture(
+  position: "RB" | "WR" | "TE" = "WR",
+): FirstPartyProjectionBacktest {
+  const source = playerBacktestFixture();
+  const spec = BACKTEST_COMPONENT[position];
+  const rows: FirstPartyBacktestPrediction[] = Array.from({ length: BACKTEST_WEEKS }, (_, week) =>
+    Array.from({ length: 48 }, (_, player) => {
+      const raw = 4 + player / 2;
+      const noise = (((player * 17 + week * 11) % 47) / 46 - 0.5) * 2;
+      const outlier = (player + week) % 3 === 0 ? -(raw - 15.75) * 1.5 : 0;
+      return {
+        playerId: `additive-${position}-${String(player).padStart(2, "0")}`,
+        position,
+        season: BACKTEST_SEASON,
+        week: week + 1,
+        predicted: { [spec.component]: raw / spec.pointsPerUnit },
+        baseline: { [spec.component]: raw / spec.pointsPerUnit },
+        actual: { [spec.component]: (raw + 1.25 + noise + outlier) / spec.pointsPerUnit },
+        floor: {},
+        ceiling: {},
+        trainingRows: 48,
+        calibrationRows: 48,
+      };
+    }),
+  ).flat();
+  return {
+    ...source,
+    predictions: [...source.predictions.filter((row) => row.position !== position), ...rows],
+  };
+}
+
 /**
  * A team-defense backtest expressed in `defensive_sacks`. A league that does not price sacks scores
  * every prediction here identically, which is exactly how a D/ST gate fails for a league whose D/ST
@@ -1773,6 +1807,85 @@ describe("published backtest MAE reflects only the league's supported positions"
     );
     expect(perfectModel.fixedRecencyEvaluation).toEqual(original.fixedRecencyEvaluation);
     expect(original.fixedRecencyEvaluation).toEqual(direct);
+    expect(perfectModel.additiveRecencyEvaluation).toEqual(original.additiveRecencyEvaluation);
+    expect(original.additiveRecencyEvaluation).toEqual(
+      evaluateWeeklyPointCalibration(
+        {
+          ...source,
+          predictions: source.predictions.map((row) => ({ ...row, predicted: row.baseline })),
+        },
+        profile,
+        { centerStrategyByPosition: { RB: "additive", WR: "additive", TE: "additive" } },
+      ),
+    );
+  });
+
+  it.each(["RB", "WR", "TE"] as const)(
+    "qualifies the separately replayed additive recency candidate for %s when affine centers lose",
+    (position) => {
+      const backtest = additiveRecencyBacktestFixture(position);
+      const snapshot = structuredClone(backtest);
+      const spec = BACKTEST_COMPONENT[position];
+      const profile = {
+        id: "additive-candidate",
+        rules: [{ statId: spec.component, points: spec.pointsPerUnit }],
+      };
+      const candidates = evaluateFirstPartyPublicationCandidates(backtest, profile);
+      const adaptive = candidates.adaptiveEvaluation.byPosition[position]!;
+      const affine = candidates.fixedRecencyEvaluation.byPosition[position]!;
+      const additive = candidates.additiveRecencyEvaluation.byPosition[position]!;
+      expect(adaptive.mae).toBeGreaterThan(adaptive.baselineMae);
+      expect(affine.mae).toBeGreaterThan(affine.baselineMae);
+      expect(additive.mae).toBe(additive.baselineMae);
+      expect(additive.intervalCoverage).toBeGreaterThanOrEqual(0.62);
+      expect(additive.intervalCoverage).toBeLessThanOrEqual(0.78);
+      expect(candidates.additiveRecencyPositions).toContain(position);
+      expect(candidates.fixedRecencyPositions).toContain(position);
+      expect(candidates.policy.byPosition[position]?.strategy).toBe("recency-only");
+      expect(candidates.playerEvaluation.byPosition[position]).toEqual(additive);
+      expect(candidates.liveCalibration.byPosition[position]?.pointPolicy?.slope).toBe(1);
+      expect(backtest).toEqual(snapshot);
+    },
+  );
+
+  it("publishes the selected additive center and its own intervals with explicit candidate evidence", () => {
+    const backtest = additiveRecencyBacktestFixture();
+    const plan = planPublications({
+      rules: DST_SUPPORTED_RULES,
+      playerBacktest: backtest,
+      modelMultiplier: 2,
+    });
+    const publication = plan.publications[0]!;
+    const row = publication.rows.find((candidate) => candidate.playerId === "player-wr")!;
+    const candidates = evaluateFirstPartyPublicationCandidates(backtest, publication.profile);
+    const calibration = candidates.liveCalibration.byPosition.WR!;
+    const rawMean = BACKTEST_COMPONENT.WR.actual * BACKTEST_COMPONENT.WR.pointsPerUnit;
+    const interval = applyWeeklyPointCalibration(rawMean, calibration);
+    const overlay = candidates.weeklyIntervals.WR;
+    const expected =
+      overlay?.state === "applied"
+        ? applyWeeklyIntervalPolicy(rawMean, interval, overlay.policy)
+        : interval;
+    expect(row.components).toEqual({ receiving_yards: BACKTEST_COMPONENT.WR.actual });
+    expect(row).toMatchObject(expected);
+    expect(row.mean).toBe(rawMean + calibration.centerAdjustment);
+    expect(calibration.pointPolicy?.slope).toBe(1);
+    expect(calibration.starterIntervalQuality).toEqual(
+      candidates.playerEvaluation.byPosition.WR?.starterIntervalQuality,
+    );
+    expect(publication.metadata.publicationCandidateEvidence).toContainEqual({
+      position: "WR",
+      selected: "fixed-additive-recency",
+      adaptive: candidates.adaptiveEvaluation.byPosition.WR,
+      fixedRecency: candidates.fixedRecencyEvaluation.byPosition.WR,
+      additiveRecency: candidates.additiveRecencyEvaluation.byPosition.WR,
+    });
+    expect(publication.metadata.livePointCalibration).toMatchObject({
+      policyVersion: WEEKLY_POINT_CALIBRATION_POLICY_VERSION,
+      byPosition: {
+        WR: { pointPolicy: { version: WEEKLY_POINT_CALIBRATION_POLICY_VERSION, slope: 1 } },
+      },
+    });
   });
 
   it("withholds a position whose hindsight winner conceals a losing walk-forward strategy", () => {
