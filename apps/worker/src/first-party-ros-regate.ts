@@ -514,6 +514,10 @@ function choiceFromReport(
     get distinctCutoffs(): number {
       return absent(`${path}.distinctCutoffs`);
     },
+    get meanSelectionEvidence(): FirstPartyRosChampionChoice["meanSelectionEvidence"] {
+      if (entry.meanSelectionEvidence === undefined) return absent(`${path}.meanSelectionEvidence`);
+      return entry.meanSelectionEvidence as FirstPartyRosChampionChoice["meanSelectionEvidence"];
+    },
     get contextualMae(): number {
       return absent(`${path}.contextualMae`);
     },

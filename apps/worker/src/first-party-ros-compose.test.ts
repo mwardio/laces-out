@@ -2,6 +2,9 @@ import { readFileSync } from "node:fs";
 
 import {
   FIRST_PARTY_ROS_MODEL_VERSION,
+  FIRST_PARTY_ROS_POLICY_VERSION,
+  evaluateFirstPartyRosChampionPolicy,
+  type FirstPartyRosHeldOutForecast,
   rosScoringProfile,
   type FirstPartyRosChampionPolicy,
 } from "@laces-out/projections";
@@ -54,6 +57,77 @@ object(baseFixture.report).kickerCalibrationVersion = HISTORICAL_ROS_KICKER_CALI
 object(baseFixture.report).availabilityCalibrationVersion =
   HISTORICAL_ROS_AVAILABILITY_CALIBRATION_VERSION;
 object(baseFixture.report).roleCalibrationVersion = HISTORICAL_ROS_ROLE_CALIBRATION_VERSION;
+// Synthetic current mean proof for this structural-only fixture; the pinned legacy numerical
+// report above is not being revalidated or promoted. Real v7 admission requires a corpus replay.
+const basePolicyFixture = publicationPolicy(baseFixture.publicationPolicy);
+const syntheticMeanPolicy = evaluateFirstPartyRosChampionPolicy(
+  [2022, 2023, 2024, 2025].map((season) => ({
+    season,
+    complete: true,
+    forecasts: Array.from({ length: 17 }, (_, index) => index + 1).flatMap((asOfWeek) =>
+      ["QB", "RB", "WR", "TE", "K", "DST"].flatMap((position) =>
+        Array.from({ length: 8 }, (_, index): FirstPartyRosHeldOutForecast => {
+          const remaining = 18 - asOfWeek;
+          const bucket =
+            remaining <= 4 ? "one-to-four" : remaining <= 8 ? "five-to-eight" : "nine-plus";
+          const original = basePolicyFixture.choices.find(
+            (choice) => choice.position === position && choice.bucket === bucket,
+          )!;
+          return {
+            playerId: `${position}:${index}`,
+            position: position as FirstPartyRosHeldOutForecast["position"],
+            contextualModelVersion: "synthetic-contextual",
+            recencyModelVersion: "synthetic-recency",
+            scoringProfileKey: basePolicyFixture.evidenceIdentity!.scoringProfileKey,
+            intervalMethodVersion: basePolicyFixture.evidenceIdentity!.intervalMethodVersion,
+            forecastSeason: season,
+            asOfWeek,
+            windowStartWeek: asOfWeek + 1,
+            windowEndWeek: 18,
+            trainedThroughSeason: season - 1,
+            inputChecksum: "b".repeat(64),
+            actualPoints: 0,
+            contextual: {
+              meanPoints: original.strategy === "contextual" ? 0.5 : 2,
+              p15Points: -5,
+              p50Points: 0,
+              p85Points: 5,
+            },
+            recency: { meanPoints: 1, p15Points: -5, p50Points: 0, p85Points: 5 },
+            evidence: {
+              coverage: { contextual: 1, recency: 1 },
+              availability: {
+                scheduledGames: remaining,
+                actualGames: remaining,
+                contextualExpectedGames: remaining,
+                recencyExpectedGames: remaining,
+              },
+              convergence: {
+                contextual: { state: "converged", diagnosticChecksum: "c".repeat(64) },
+                recency: { state: "converged", diagnosticChecksum: "d".repeat(64) },
+              },
+            },
+          };
+        }),
+      ),
+    ),
+  })),
+).livePolicy;
+for (const target of [object(baseFixture.champion), object(baseFixture.publicationPolicy)]) {
+  target.policyVersion = FIRST_PARTY_ROS_POLICY_VERSION;
+  target.meanSelectionEvidenceVersion = syntheticMeanPolicy.meanSelectionEvidenceVersion;
+  target.legacyPointImprovementMetric = syntheticMeanPolicy.legacyPointImprovementMetric;
+  target.choices = array(target.choices).map((value) => {
+    const choice = object(value);
+    const mean = syntheticMeanPolicy.choices.find(
+      (row) => row.position === choice.position && row.bucket === choice.bucket,
+    )!.meanSelectionEvidence;
+    return { ...choice, meanSelectionEvidence: mean };
+  });
+}
+object(baseFixture.champion).publicationPolicyChecksum = firstPartyRosChampionPolicyChecksum(
+  publicationPolicy(baseFixture.publicationPolicy),
+);
 const baseRaw = JSON.stringify(baseFixture);
 
 function positionSlice(target: string): JsonObject {

@@ -61,6 +61,10 @@ const compatibleEvaluationVersions = [
     calibrationVersion: "season-blocked-split-conformal-cqr-v1",
   },
   {
+    policyVersion: "season-walk-forward-block-wis-cqr-v6",
+    calibrationVersion: "season-blocked-split-conformal-cqr-v1",
+  },
+  {
     policyVersion: FIRST_PARTY_ROS_POLICY_VERSION,
     calibrationVersion: FIRST_PARTY_ROS_INTERVAL_CALIBRATION_VERSION,
   },

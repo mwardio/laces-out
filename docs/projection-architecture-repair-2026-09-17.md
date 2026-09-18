@@ -1,8 +1,8 @@
 # Projection accuracy and scoring resilience repair
 
-Status: in progress. Weekly v14 is deployed; weekly v15 / ROS v12 are the new candidates
-described in the September 18 sparse-production review below. ROS consumers remain paused
-pending complete current-model evidence and verified publication.
+Status: in progress. Weekly v15 with point policy v3 and publication policy v7 is deployed
+and verified. ROS v12 remains in historical validation; its consumers remain paused pending
+complete current-model evidence, the expected-mean evaluation repair, and verified publication.
 
 The acceptance target is accurate, traceable weekly and rest-of-season forecasts for ordinary
 league scoring without training or replaying the football model for every new points configuration.
@@ -709,3 +709,42 @@ Expected-point admission repair, September 18:
   near-zero MSE improved, but that cohort's proper interval score worsened 1.29–2.64%.
   These are forecast-selected cohorts, distinct from deterministic inactive/bye zeros.
   No claim that every player group improved is supported by this release evidence.
+
+Weekly production verification, September 18:
+
+- Release `3b633d7` deployed at 11:01 UTC. The first refresh completed in 701.86 seconds with
+  no retry; subsequent warm refreshes completed in about five seconds. A prior queued retry
+  also recovered. API and web readiness passed against the actual running image identities.
+- At 11:15 UTC, the full-row verifier accepted all 16 supported leagues; one IDP configuration
+  remains explicitly unsupported. All 26 checked sources were usable, with coherent player/team
+  source pairs for 2023–2026. Current mean evidence, its selected historical provenance, quality
+  warnings, and confidence caps passed without missing-proof or cap violations.
+- Actual decision-service requests for The Android's Dungeon and FF 2026 League selected the
+  new weekly sets, with no acceptance issues. Uncertain lineup changes retain close-call and
+  provider-disagreement explanations. These checks establish weekly publication and consumption;
+  they do not establish ROS recovery or eliminate the statistical limitations recorded above.
+
+ROS expected-mean evaluation repair, September 18 (implemented; full validation pending):
+
+- ROS correctly scores its median and interval endpoints with a proper distribution score, but
+  its separate strategy-selection requirement used absolute error on the expected mean. Policy
+  v7 replaces that requirement with paired seasonal squared-loss evidence, retaining the configured
+  1% minimum improvement, now expressed as relative RMSE: `0.9801 * baselineMSE - candidateMSE`. Its existing
+  one-sided seasonal confidence calculation must clear zero, alongside the unchanged interval,
+  sample, coverage, availability, and numerical-convergence requirements.
+- Legacy MAE metrics and confidence bounds remain explicitly labeled diagnostics. New typed
+  mean-selection evidence is required by current-policy consumers; older artifacts cannot acquire
+  that evidence merely through a version change. Sparse evidence remains explicitly insufficient.
+- The frozen v12/v6 full simulation continues unchanged. Physical outcomes from its recognized
+  evaluator provenance can be rescored under v7 only after all physical identity and integrity
+  checks pass. A fresh evaluation and exact-profile admission remain required. Simulation seeds,
+  football forecasts, candidate outcome vectors, and numerical interval fitting are unchanged.
+
+- Focused validation passed 203 core/publication/compose/admission tests, 56 corpus-protocol tests,
+  and 162 consumer/cache integration tests. Follow-up chronology and literal v6-to-v7 cache-replay
+  regressions also pass. The latter reweights the same saved outcomes twice without additional
+  simulation or writes and preserves the original manifest bytes. Type checking, scoped lint, and
+  formatting pass on Linux x86-64. These checks do not substitute for the full historical replay.
+- Source comparison leaves all 76 pre-existing numerical helper bodies unchanged; only policy
+  selection, policy construction, and release admission change. Compact season-level loss evidence
+  is recomputed on ingestion and cannot extend beyond its policy evidence cutoff.

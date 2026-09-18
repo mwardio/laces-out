@@ -369,6 +369,8 @@ export function composeFirstPartyRosValidationReport(
     }
     for (const path of [
       "policyVersion",
+      "meanSelectionEvidenceVersion",
+      "legacyPointImprovementMetric",
       "modelVersion",
       "evidenceThroughSeason",
       "evidenceIdentity",

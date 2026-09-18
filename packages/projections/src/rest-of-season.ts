@@ -23,8 +23,9 @@ export const FIRST_PARTY_ROS_MODEL_VERSION = "laces-ros-distribution-v12";
  * new outcome vectors and fresh validation. Keeping the seed lineage does not permit corpus reuse.
  */
 export const FIRST_PARTY_ROS_SEED_VERSION = "laces-ros-distribution-v11";
-/** v6 measures both prior-calibrated candidates; v5's complete zero-game history stays required. */
-export const FIRST_PARTY_ROS_POLICY_VERSION = "season-walk-forward-block-wis-cqr-v6";
+/** v7 selects expected means by a paired squared-loss RMSE margin; prior CQR/zero-game rules remain. */
+export const FIRST_PARTY_ROS_POLICY_VERSION = "season-walk-forward-mean-rmse-block-wis-cqr-v7";
+export const FIRST_PARTY_ROS_MEAN_SELECTION_VERSION = "paired-season-squared-loss-rmse-margin-v1";
 export const FIRST_PARTY_ROS_INTERVAL_CALIBRATION_VERSION = "season-blocked-split-conformal-cqr-v1";
 /**
  * v4 raised the release path count from 512 to 8192: the declared convergence tolerances carry
@@ -189,6 +190,7 @@ export const FIRST_PARTY_ROS_MINIMUM_CELL_BATCHES = 9;
 export const FIRST_PARTY_ROS_MINIMUM_WALK_FORWARD_SEASONS = 1;
 export const FIRST_PARTY_ROS_MINIMUM_WALK_FORWARD_BATCHES = 3;
 export const FIRST_PARTY_ROS_MINIMUM_WALK_FORWARD_SAMPLES = 18;
+/** Minimum relative RMSE improvement under the expected-mean selection contract. */
 export const FIRST_PARTY_ROS_MINIMUM_MODEL_IMPROVEMENT = 0.01;
 
 export type FirstPartyRosStrategy = "contextual" | "availability-aware-recency";
@@ -2430,6 +2432,7 @@ export interface FirstPartyRosChampionOptions {
   readonly minimumCellSamples?: number;
   readonly minimumCellCutoffs?: number;
   readonly minimumCellBatches?: number;
+  /** Relative RMSE margin; retained legacy MAE improvement fields are diagnostic only. */
   readonly minimumModelImprovement?: number;
 }
 
@@ -2531,6 +2534,38 @@ export interface FirstPartyRosWalkForwardCalibrationEvidence {
   readonly evidenceChecksum: string | null;
 }
 
+export interface FirstPartyRosMeanSeasonEvidence {
+  readonly season: number;
+  readonly blocks: number;
+  readonly samples: number;
+  readonly contextualMse: number | null;
+  readonly recencyMse: number | null;
+}
+
+export interface FirstPartyRosMeanSelectionEvidence {
+  readonly version: typeof FIRST_PARTY_ROS_MEAN_SELECTION_VERSION;
+  readonly state: "available" | "insufficient-evidence";
+  readonly target: "expected-fantasy-points";
+  readonly loss: "squared-error";
+  readonly weighting: "equal-season-equal-cutoff-paired-rows";
+  readonly uncertaintyMethod: "paired-season-one-sided-95-t";
+  readonly minimumRelativeRmseImprovement: number;
+  readonly squaredLossBaselineMultiplier: number;
+  readonly seasons: number;
+  readonly blocks: number;
+  readonly samples: number;
+  readonly seasonEvidence: readonly FirstPartyRosMeanSeasonEvidence[];
+  readonly contextualMse: number | null;
+  readonly recencyMse: number | null;
+  readonly contextualRmse: number | null;
+  readonly recencyRmse: number | null;
+  readonly relativeRmseImprovement: number | null;
+  readonly marginMean: number | null;
+  readonly marginStandardError: number | null;
+  readonly marginLowerBound: number | null;
+  readonly clearsMeanMargin: boolean;
+}
+
 export interface FirstPartyRosChampionChoice {
   readonly position: FirstPartyRosPosition;
   readonly bucket: FirstPartyRosRemainingWeeksBucket;
@@ -2550,13 +2585,17 @@ export interface FirstPartyRosChampionChoice {
   readonly globalSamples: number;
   readonly distinctCutoffs: number;
   readonly samples: number;
+  /** Legacy absolute-loss diagnostics; selection uses meanSelectionEvidence. */
   readonly contextualMae: number;
   readonly recencyMae: number;
   readonly contextualWeightedIntervalScore: number;
   readonly recencyWeightedIntervalScore: number;
+  /** Legacy relative MAE improvement, retained only as a diagnostic. */
   readonly modelImprovement: number;
+  readonly meanSelectionEvidence: FirstPartyRosMeanSelectionEvidence;
   /** One paired block per season/cutoff; player rows inside a block never inflate precision. */
   readonly pairedBlocks: number;
+  /** Legacy relative MAE lower bound; never the active expected-mean admission test. */
   readonly modelImprovementLowerBound: number | null;
   readonly intervalScoreDifferenceUpperBound: number | null;
   readonly uncertaintyMethod: "paired-season-clustered-one-sided-95";
@@ -2575,6 +2614,8 @@ export interface FirstPartyRosChampionChoice {
 
 export interface FirstPartyRosChampionPolicy {
   readonly policyVersion: typeof FIRST_PARTY_ROS_POLICY_VERSION;
+  readonly meanSelectionEvidenceVersion: typeof FIRST_PARTY_ROS_MEAN_SELECTION_VERSION;
+  readonly legacyPointImprovementMetric: "mean-absolute-error";
   readonly modelVersion: typeof FIRST_PARTY_ROS_MODEL_VERSION;
   readonly evidenceThroughSeason: number | null;
   readonly minimumHeldOutSeasons: number;
@@ -3143,6 +3184,187 @@ function walkForwardCalibrationEvidence(
   };
 }
 
+function meanSelectionFromSeasons(
+  seasonEvidence: readonly FirstPartyRosMeanSeasonEvidence[],
+  minimumRelativeRmseImprovement: number,
+): FirstPartyRosMeanSelectionEvidence {
+  const squaredLossBaselineMultiplier = (1 - minimumRelativeRmseImprovement) ** 2;
+  const finite = (value: number | null): value is number =>
+    value !== null && Number.isFinite(value);
+  const complete =
+    seasonEvidence.length > 0 &&
+    seasonEvidence.every((row) => finite(row.contextualMse) && finite(row.recencyMse));
+  const contextualMseValue = complete
+    ? mean(seasonEvidence.map((row) => row.contextualMse!))
+    : null;
+  const recencyMseValue = complete ? mean(seasonEvidence.map((row) => row.recencyMse!)) : null;
+  const contextualMse = finite(contextualMseValue) ? contextualMseValue : null;
+  const recencyMse = finite(recencyMseValue) ? recencyMseValue : null;
+  const margins = complete
+    ? seasonEvidence.map(
+        (row) => squaredLossBaselineMultiplier * row.recencyMse! - row.contextualMse!,
+      )
+    : [];
+  const marginMeanValue = margins.length ? mean(margins) : null;
+  const standardErrorValue = sampleStandardError(margins);
+  const marginMean = finite(marginMeanValue) ? marginMeanValue : null;
+  const marginStandardError = finite(standardErrorValue) ? standardErrorValue : null;
+  const lower =
+    marginMean !== null && marginStandardError !== null
+      ? marginMean - oneSided95CriticalValue(seasonEvidence.length - 1) * marginStandardError
+      : null;
+  const marginLowerBound = finite(lower) ? lower : null;
+  const relative =
+    contextualMse !== null && recencyMse !== null && recencyMse > 0
+      ? 1 - Math.sqrt(contextualMse / recencyMse)
+      : null;
+  const relativeRmseImprovement = finite(relative) ? relative : null;
+  const available =
+    seasonEvidence.length >= 2 &&
+    contextualMse !== null &&
+    recencyMse !== null &&
+    recencyMse > 0 &&
+    relativeRmseImprovement !== null &&
+    marginLowerBound !== null;
+  return {
+    version: FIRST_PARTY_ROS_MEAN_SELECTION_VERSION,
+    state: available ? "available" : "insufficient-evidence",
+    target: "expected-fantasy-points",
+    loss: "squared-error",
+    weighting: "equal-season-equal-cutoff-paired-rows",
+    uncertaintyMethod: "paired-season-one-sided-95-t",
+    minimumRelativeRmseImprovement,
+    squaredLossBaselineMultiplier,
+    seasons: seasonEvidence.length,
+    blocks: seasonEvidence.reduce((total, row) => total + row.blocks, 0),
+    samples: seasonEvidence.reduce((total, row) => total + row.samples, 0),
+    seasonEvidence,
+    contextualMse,
+    recencyMse,
+    contextualRmse: contextualMse === null ? null : Math.sqrt(contextualMse),
+    recencyRmse: recencyMse === null ? null : Math.sqrt(recencyMse),
+    relativeRmseImprovement,
+    marginMean,
+    marginStandardError,
+    marginLowerBound,
+    clearsMeanMargin: available && marginLowerBound >= 0,
+  };
+}
+
+function meanSelectionFromBlocks(
+  blocks: readonly PairedErrorBlock[],
+  minimumRelativeRmseImprovement: number,
+): FirstPartyRosMeanSelectionEvidence {
+  const seasons = [...new Set(blocks.map((block) => block.season))].sort((a, b) => a - b);
+  return meanSelectionFromSeasons(
+    seasons.map((season) => {
+      const selected = blocks.filter((block) => block.season === season);
+      const squared = (key: "contextualAbsoluteError" | "recencyAbsoluteError") => {
+        const value = mean(selected.map((block) => mean(block[key].map((error) => error ** 2))));
+        return Number.isFinite(value) ? value : null;
+      };
+      return {
+        season,
+        blocks: selected.length,
+        samples: selected.reduce((total, block) => total + block.contextualAbsoluteError.length, 0),
+        contextualMse: squared("contextualAbsoluteError"),
+        recencyMse: squared("recencyAbsoluteError"),
+      };
+    }),
+    minimumRelativeRmseImprovement,
+  );
+}
+
+/** Reconstruct the compact proof rather than trusting a stored pass/fail assertion. */
+export function firstPartyRosMeanSelectionEvidenceIsValid(
+  value: unknown,
+  minimumRelativeRmseImprovement: number,
+): value is FirstPartyRosMeanSelectionEvidence {
+  if (
+    !Number.isFinite(minimumRelativeRmseImprovement) ||
+    minimumRelativeRmseImprovement < 0 ||
+    minimumRelativeRmseImprovement > 1 ||
+    value === null ||
+    typeof value !== "object" ||
+    Array.isArray(value)
+  )
+    return false;
+  const candidate = value as Record<string, unknown>;
+  if (!Array.isArray(candidate.seasonEvidence)) return false;
+  let previousSeason = 1999;
+  for (const raw of candidate.seasonEvidence) {
+    if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return false;
+    const row = raw as Record<string, unknown>;
+    if (
+      !Number.isSafeInteger(row.season) ||
+      Number(row.season) <= previousSeason ||
+      Number(row.season) > 2200 ||
+      !Number.isSafeInteger(row.blocks) ||
+      Number(row.blocks) < 1 ||
+      !Number.isSafeInteger(row.samples) ||
+      Number(row.samples) < Number(row.blocks) ||
+      [row.contextualMse, row.recencyMse].some(
+        (metric) =>
+          metric !== null && (typeof metric !== "number" || !Number.isFinite(metric) || metric < 0),
+      )
+    )
+      return false;
+    previousSeason = Number(row.season);
+  }
+  const expected = meanSelectionFromSeasons(
+    candidate.seasonEvidence as FirstPartyRosMeanSeasonEvidence[],
+    minimumRelativeRmseImprovement,
+  );
+  return Object.entries(expected).every(
+    ([key, field]) => key === "seasonEvidence" || candidate[key] === field,
+  );
+}
+
+function hasSufficientMeanSelectionEvidence(
+  policy: FirstPartyRosChampionPolicy,
+  choice: FirstPartyRosChampionChoice,
+): boolean {
+  return (
+    choice.meanSelectionEvidence.state === "available" &&
+    choice.globalSeasons >= policy.minimumHeldOutSeasons &&
+    choice.globalBatches >= policy.minimumBatches &&
+    choice.globalSamples >= policy.minimumSamples &&
+    choice.heldOutSeasons >= policy.minimumCellSeasons &&
+    choice.samples >= policy.minimumCellSamples &&
+    choice.distinctCutoffs >= policy.minimumCellCutoffs &&
+    choice.batches >= policy.minimumCellBatches
+  );
+}
+
+/** Shared by stored-artifact validation and the direct live release gate. */
+export function firstPartyRosChoiceMeanEvidenceIsValid(
+  policy: FirstPartyRosChampionPolicy,
+  choice: FirstPartyRosChampionChoice,
+): boolean {
+  const evidence = choice.meanSelectionEvidence;
+  return (
+    policy.policyVersion === FIRST_PARTY_ROS_POLICY_VERSION &&
+    policy.meanSelectionEvidenceVersion === FIRST_PARTY_ROS_MEAN_SELECTION_VERSION &&
+    policy.legacyPointImprovementMetric === "mean-absolute-error" &&
+    firstPartyRosMeanSelectionEvidenceIsValid(evidence, policy.minimumModelImprovement) &&
+    evidence.seasonEvidence.every(
+      (row) =>
+        Number.isSafeInteger(policy.evidenceThroughSeason) &&
+        policy.evidenceThroughSeason !== null &&
+        row.season <= policy.evidenceThroughSeason,
+    ) &&
+    evidence.samples === choice.samples &&
+    evidence.blocks === choice.batches &&
+    evidence.seasons === choice.heldOutSeasons &&
+    (choice.strategy !== "contextual" ||
+      (hasSufficientMeanSelectionEvidence(policy, choice) &&
+        evidence.clearsMeanMargin &&
+        typeof choice.intervalScoreDifferenceUpperBound === "number" &&
+        Number.isFinite(choice.intervalScoreDifferenceUpperBound) &&
+        choice.intervalScoreDifferenceUpperBound <= 0))
+  );
+}
+
 function choiceFromEvidence(
   position: FirstPartyRosPosition,
   bucket: FirstPartyRosRemainingWeeksBucket,
@@ -3202,13 +3424,14 @@ function choiceFromEvidence(
     distinctCutoffs >= options.minimumCellCutoffs &&
     evidence.blocks.size >= options.minimumCellBatches;
   const enoughCalibrationEvidence = enoughGlobalEvidence && enoughCellEvidence;
+  const meanSelectionEvidence = meanSelectionFromBlocks(blocks, options.minimumModelImprovement);
   const enoughEvidence =
     enoughCalibrationEvidence &&
-    modelImprovementLowerBound !== null &&
+    meanSelectionEvidence.state === "available" &&
     intervalScoreDifferenceUpperBound !== null;
   const clears =
     enoughEvidence &&
-    modelImprovementLowerBound >= options.minimumModelImprovement &&
+    meanSelectionEvidence.clearsMeanMargin &&
     intervalScoreDifferenceUpperBound <= 0;
   const heldOutEvidence = derivedHeldOutEvidence(evidence, enoughEvidence);
   const contextualCalibration = buildIntervalCalibrationArtifact(
@@ -3255,6 +3478,7 @@ function choiceFromEvidence(
     contextualWeightedIntervalScore,
     recencyWeightedIntervalScore,
     modelImprovement,
+    meanSelectionEvidence,
     pairedBlocks: blocks.length,
     modelImprovementLowerBound,
     intervalScoreDifferenceUpperBound,
@@ -3297,6 +3521,8 @@ function policyFromEvidence(
   );
   return {
     policyVersion: FIRST_PARTY_ROS_POLICY_VERSION,
+    meanSelectionEvidenceVersion: FIRST_PARTY_ROS_MEAN_SELECTION_VERSION,
+    legacyPointImprovementMetric: "mean-absolute-error",
     modelVersion: FIRST_PARTY_ROS_MODEL_VERSION,
     evidenceThroughSeason,
     minimumHeldOutSeasons: options.minimumHeldOutSeasons,
@@ -3723,6 +3949,7 @@ export interface FirstPartyRosReleaseGateOptions {
 }
 
 export type FirstPartyRosReleaseGateReason =
+  | "invalid-mean-selection-evidence"
   | "missing-policy-evidence"
   | "evidence-identity-mismatch"
   | "invalid-live-evidence"
@@ -3841,6 +4068,11 @@ export function evaluateFirstPartyRosReleaseGate(
   if (!liveEvidenceIsValid) reasons.add("invalid-live-evidence");
 
   if (choice !== undefined) {
+    if (!firstPartyRosChoiceMeanEvidenceIsValid(policy, choice)) {
+      reasons.add("invalid-mean-selection-evidence");
+    } else if (!hasSufficientMeanSelectionEvidence(policy, choice)) {
+      reasons.add("insufficient-held-out-evidence");
+    }
     const selected = choice.strategy === "contextual" ? "contextual" : "recency";
     selectedCalibration = choice.intervalCalibrationArtifacts[selected];
     const walkForwardCalibration = choice.walkForwardCalibrationEvidence[selected];

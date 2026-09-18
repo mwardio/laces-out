@@ -12,21 +12,24 @@ import {
 } from "./ros-historical-corpus-protocol.js";
 
 describe("immutable historical corpus build protocol", () => {
-  it("reuses identical physical inputs without claiming current evaluation provenance", () => {
-    const original = {
-      ...ROS_HISTORICAL_CORPUS_BUILD_PROTOCOL,
-      policyVersion: "season-walk-forward-block-wis-cqr-v5",
-      calibrationVersion: "season-blocked-split-conformal-cqr-v1",
-    };
-    expect(isCompatibleRosHistoricalCorpusBuildProtocol(original)).toBe(true);
-    expect(isCurrentRosHistoricalCorpusBuildProtocol(original)).toBe(false);
-    expect(isCompatibleRosHistoricalCorpusBuildProtocol(ROS_HISTORICAL_CORPUS_BUILD_PROTOCOL)).toBe(
-      true,
-    );
-    expect(ROS_HISTORICAL_CORPUS_PHYSICAL_PROTOCOL).not.toHaveProperty("policyVersion");
-    expect(ROS_HISTORICAL_CORPUS_PHYSICAL_PROTOCOL).not.toHaveProperty("calibrationVersion");
-    expect(Object.isFrozen(ROS_HISTORICAL_CORPUS_PHYSICAL_PROTOCOL)).toBe(true);
-  });
+  it.each(["season-walk-forward-block-wis-cqr-v5", "season-walk-forward-block-wis-cqr-v6"])(
+    "reuses identical physical inputs from %s without claiming current evaluation",
+    (policyVersion) => {
+      const original = {
+        ...ROS_HISTORICAL_CORPUS_BUILD_PROTOCOL,
+        policyVersion,
+        calibrationVersion: "season-blocked-split-conformal-cqr-v1",
+      };
+      expect(isCompatibleRosHistoricalCorpusBuildProtocol(original)).toBe(true);
+      expect(isCurrentRosHistoricalCorpusBuildProtocol(original)).toBe(false);
+      expect(
+        isCompatibleRosHistoricalCorpusBuildProtocol(ROS_HISTORICAL_CORPUS_BUILD_PROTOCOL),
+      ).toBe(true);
+      expect(ROS_HISTORICAL_CORPUS_PHYSICAL_PROTOCOL).not.toHaveProperty("policyVersion");
+      expect(ROS_HISTORICAL_CORPUS_PHYSICAL_PROTOCOL).not.toHaveProperty("calibrationVersion");
+      expect(Object.isFrozen(ROS_HISTORICAL_CORPUS_PHYSICAL_PROTOCOL)).toBe(true);
+    },
+  );
 
   it("rejects v11/v14 football outcomes even when their evaluator provenance is recognized", () => {
     const priorPhysicalModel = {
@@ -47,16 +50,23 @@ describe("immutable historical corpus build protocol", () => {
   it.each(Object.keys(ROS_HISTORICAL_CORPUS_PHYSICAL_PROTOCOL))(
     "rejects a missing or changed physical %s even for original evaluation provenance",
     (name) => {
-      const original = {
-        ...ROS_HISTORICAL_CORPUS_BUILD_PROTOCOL,
-        policyVersion: "season-walk-forward-block-wis-cqr-v5",
-        calibrationVersion: "season-blocked-split-conformal-cqr-v1",
-      };
-      const missing = Object.fromEntries(Object.entries(original).filter(([key]) => key !== name));
-      expect(isCompatibleRosHistoricalCorpusBuildProtocol(missing)).toBe(false);
-      expect(isCompatibleRosHistoricalCorpusBuildProtocol({ ...original, [name]: "stale" })).toBe(
-        false,
-      );
+      for (const policyVersion of [
+        "season-walk-forward-block-wis-cqr-v5",
+        "season-walk-forward-block-wis-cqr-v6",
+      ]) {
+        const original = {
+          ...ROS_HISTORICAL_CORPUS_BUILD_PROTOCOL,
+          policyVersion,
+          calibrationVersion: "season-blocked-split-conformal-cqr-v1",
+        };
+        const missing = Object.fromEntries(
+          Object.entries(original).filter(([key]) => key !== name),
+        );
+        expect(isCompatibleRosHistoricalCorpusBuildProtocol(missing)).toBe(false);
+        expect(isCompatibleRosHistoricalCorpusBuildProtocol({ ...original, [name]: "stale" })).toBe(
+          false,
+        );
+      }
     },
   );
 
@@ -66,6 +76,7 @@ describe("immutable historical corpus build protocol", () => {
       { policyVersion: "season-walk-forward-block-wis-cqr-v999" },
       { calibrationVersion: "season-blocked-split-conformal-cqr-v999" },
       { policyVersion: "season-walk-forward-block-wis-cqr-v5", calibrationVersion: "unknown" },
+      { policyVersion: "season-walk-forward-block-wis-cqr-v6", calibrationVersion: "unknown" },
       { policyVersion: null },
       { policyVersion: 5 },
       { calibrationVersion: undefined },

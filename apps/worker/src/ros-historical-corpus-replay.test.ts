@@ -1,11 +1,13 @@
 import type * as FileSystemPromises from "node:fs/promises";
-import { mkdtemp, readdir, rm } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
 import {
   FIRST_PARTY_ROS_CONVERGENCE_REFERENCE_SCENARIOS,
   FIRST_PARTY_ROS_DEFAULT_SCENARIOS,
+  FIRST_PARTY_ROS_POLICY_VERSION,
+  FIRST_PARTY_ROS_MEAN_SELECTION_VERSION,
   evaluateFirstPartyRosConvergence,
   projectFirstPartyRestOfSeason,
   simulateFirstPartyRosOutcomes,
@@ -49,7 +51,7 @@ vi.mock("node:fs/promises", async (importOriginal) => ({
 }));
 
 const directories: string[] = [];
-async function preparedCorpus(players = 1) {
+async function preparedCorpus(players = 1, legacyEvaluation = false) {
   const directory = await mkdtemp(path.join(os.tmpdir(), "ros-corpus-replay-"));
   directories.push(directory);
   const cache = createRosOutcomeCache({ directory });
@@ -85,6 +87,17 @@ async function preparedCorpus(players = 1) {
   }
   const corpus: RosHistoricalCorpus = {
     ...original,
+    // This test fixture reuses the identical football vectors under their prior evaluator
+    // provenance. It never labels old admission evidence current.
+    ...(legacyEvaluation
+      ? {
+          buildProtocol: {
+            ...original.buildProtocol,
+            policyVersion: "season-walk-forward-block-wis-cqr-v6" as const,
+            calibrationVersion: "season-blocked-split-conformal-cqr-v1" as const,
+          },
+        }
+      : {}),
     options: { ...original.options, heldOutSeasons: [2023, 2024, 2025] },
     forecasts,
   };
@@ -92,7 +105,14 @@ async function preparedCorpus(players = 1) {
   const saved = await store.write(corpus);
   const restored = await store.read(saved.identity);
   if (restored.state !== "hit") throw new Error("Expected stored corpus");
-  return { directory, cache, simulate, corpus: restored.corpus, inputs };
+  return {
+    directory,
+    cache,
+    simulate,
+    corpus: restored.corpus,
+    inputs,
+    corpusIdentity: saved.identity,
+  };
 }
 
 afterEach(async () => {
@@ -136,9 +156,21 @@ describe("cache-only historical model validation", () => {
     expect(cache.write).not.toHaveBeenCalled();
   });
 
-  it("replays a persisted corpus for new exact rules and preserves all quality/sample gates", async () => {
-    const prepared = await preparedCorpus();
+  it("replays a literal v6 corpus under v7 for new exact rules without rebuilding football", async () => {
+    // The existing two-candidate fixture setup is unchanged; replay must make no additional
+    // simulation calls or cache writes, and preserve the original v6 manifest bytes.
+    const prepared = await preparedCorpus(1, true);
     const before = JSON.stringify(prepared.corpus);
+    const manifestPath = path.join(
+      prepared.directory,
+      "corpora",
+      `${prepared.corpusIdentity}.ros-corpus.json.gz`,
+    );
+    const manifestBefore = await readFile(manifestPath);
+    const write = vi.spyOn(prepared.cache, "write");
+    expect(prepared.corpus.buildProtocol.policyVersion).toBe(
+      "season-walk-forward-block-wis-cqr-v6",
+    );
     const ppr = prepared.inputs[0]!.scoringProfile;
     const halfPpr: ProjectionScoringProfile = {
       id: "new-half-ppr",
@@ -153,6 +185,20 @@ describe("cache-only historical model validation", () => {
       const result = await replayRosHistoricalCorpus({ ...prepared, scoringProfile, onProgress });
       results.push(result);
       expect(result.report.state).toBe("insufficient");
+      expect(result.champion.livePolicy).toMatchObject({
+        policyVersion: FIRST_PARTY_ROS_POLICY_VERSION,
+        meanSelectionEvidenceVersion: FIRST_PARTY_ROS_MEAN_SELECTION_VERSION,
+        legacyPointImprovementMetric: "mean-absolute-error",
+      });
+      expect(result.champion.livePolicy.policyVersion).toBe(
+        "season-walk-forward-mean-rmse-block-wis-cqr-v7",
+      );
+      expect(
+        result.champion.livePolicy.choices.every(
+          (choice) =>
+            choice.meanSelectionEvidence.version === FIRST_PARTY_ROS_MEAN_SELECTION_VERSION,
+        ),
+      ).toBe(true);
       expect(result.report.blockers).toContain("fewer_than_three_qualified_heldout_seasons");
       expect(result.report.forecasts).toBe(1);
       expect(result.report.diagnosedPairs).toBe(1);
@@ -169,6 +215,8 @@ describe("cache-only historical model validation", () => {
       results[1]!.heldOutSeasons[0]!.forecasts[0]!.scoringProfileKey,
     );
     expect(prepared.simulate).toHaveBeenCalledTimes(2);
+    expect(write).not.toHaveBeenCalled();
+    expect(await readFile(manifestPath)).toEqual(manifestBefore);
     expect(JSON.stringify(prepared.corpus)).toBe(before);
     expect(onProgress.mock.calls.at(-1)?.[0]).toMatchObject({ stage: "evaluation-ready" });
   });

@@ -8,6 +8,8 @@ import {
   FIRST_PARTY_ROS_MAX_AVAILABILITY_MAE,
   FIRST_PARTY_ROS_MAX_NINE_PLUS_AVAILABILITY_MAE,
   FIRST_PARTY_ROS_MODEL_VERSION,
+  FIRST_PARTY_ROS_POLICY_VERSION,
+  firstPartyRosMeanSelectionEvidenceIsValid,
   FIRST_PARTY_ROS_SEED_VERSION,
   applyFirstPartyRosIntervalCalibration,
   firstPartyRosAvailabilityEvidenceOfExcessMae,
@@ -1695,6 +1697,17 @@ describe("season-locked ROS champion policy", () => {
           ? {
               ...choice,
               samples,
+              meanSelectionEvidence: {
+                ...choice.meanSelectionEvidence,
+                samples,
+                seasonEvidence: choice.meanSelectionEvidence.seasonEvidence.map(
+                  (row, index, rows) => ({
+                    ...row,
+                    samples:
+                      Math.floor(samples / rows.length) + Number(index < samples % rows.length),
+                  }),
+                ),
+              },
               heldOutEvidence: {
                 ...choice.heldOutEvidence,
                 contextualAvailabilityMae: availabilityMae,
@@ -2479,5 +2492,194 @@ describe("availability MAE evidence test (gate v3)", () => {
     expect(() => firstPartyRosAvailabilityEvidenceOfExcessMae(288, 3, 2.75, 17, 1.5)).toThrow(
       RangeError,
     );
+  });
+});
+
+describe("ROS expected-mean selection evidence", () => {
+  const options = {
+    minimumHeldOutSeasons: 2,
+    minimumBatches: 2,
+    minimumSamples: 2,
+    minimumCellSeasons: 2,
+    minimumCellSamples: 2,
+    minimumCellCutoffs: 1,
+    minimumCellBatches: 2,
+    minimumModelImprovement: 0.01,
+  };
+  function evaluate(
+    input: readonly {
+      season: number;
+      cutoff?: number;
+      actual: number;
+      contextual: number;
+      recency: number;
+    }[],
+  ) {
+    const seasons = [...new Set(input.map((row) => row.season))].map((season) => ({
+      season,
+      complete: true,
+      forecasts: input
+        .filter((row) => row.season === season)
+        .map((row, index) => ({
+          ...heldOutForecast(season, row.cutoff ?? 10, `${season}:${index}`),
+          actualPoints: row.actual,
+          // Keep the proper quantile score identical to isolate the mean-selection requirement.
+          contextual: { meanPoints: row.contextual, p15Points: 0, p50Points: 0, p85Points: 20 },
+          recency: { meanPoints: row.recency, p15Points: 0, p50Points: 0, p85Points: 20 },
+        })),
+    }));
+    const result = evaluateFirstPartyRosChampionPolicy(seasons, options);
+    const choice = result.livePolicy.choices.find(
+      (row) => row.position === "WR" && row.bucket === "five-to-eight",
+    )!;
+    return { ...result, choice, mean: choice.meanSelectionEvidence };
+  }
+
+  it("selects the expected mean when its squared loss wins but its legacy MAE loses", () => {
+    const result = evaluate(
+      [2023, 2024].flatMap((season) =>
+        Array.from({ length: 10 }, (_, i) => ({
+          season,
+          actual: i === 9 ? 20 : 0,
+          contextual: 2,
+          recency: 0,
+        })),
+      ),
+    );
+    expect(result.choice.contextualMae).toBeCloseTo(3.6);
+    expect(result.choice.recencyMae).toBe(2);
+    expect(result.choice.modelImprovement).toBeLessThan(0);
+    expect(result.choice.modelImprovementLowerBound).toBeLessThan(0);
+    expect(result.choice.intervalScoreDifferenceUpperBound).toBe(0);
+    expect(result.mean).toMatchObject({
+      contextualMse: 36,
+      recencyMse: 40,
+      marginStandardError: 0,
+      clearsMeanMargin: true,
+    });
+    expect(result.mean.marginLowerBound).toBeCloseTo(0.9801 * 40 - 36, 12);
+    expect(result.choice.strategy).toBe("contextual");
+    expect(result.livePolicy).toMatchObject({
+      policyVersion: FIRST_PARTY_ROS_POLICY_VERSION,
+      legacyPointImprovementMetric: "mean-absolute-error",
+    });
+  });
+
+  it.each([0.1, 1, 10, 100])(
+    "preserves mean-margin selection under positive point rescaling by %s",
+    (scale) => {
+      const result = evaluate(
+        [2023, 2024].flatMap((season) =>
+          Array.from({ length: 10 }, (_, i) => ({
+            season,
+            actual: (i === 9 ? 20 : 0) * scale,
+            contextual: 2 * scale,
+            recency: 0,
+          })),
+        ),
+      );
+      expect(result.choice.strategy).toBe("contextual");
+      expect(result.mean.relativeRmseImprovement).toBeCloseTo(1 - Math.sqrt(36 / 40), 12);
+      expect(result.mean.marginLowerBound).toBeCloseTo((0.9801 * 40 - 36) * scale ** 2, 9);
+    },
+  );
+
+  it("requires one percent RMSE, not one percent MSE, with no boundary epsilon", () => {
+    const rows = (contextual: number) =>
+      [2023, 2024].map((season) => ({ season, actual: 0, contextual, recency: 1 }));
+    const boundary = evaluate(rows(0.99));
+    expect(boundary.mean.squaredLossBaselineMultiplier).toBe(0.99 ** 2);
+    expect(boundary.mean.marginLowerBound).toBe(0);
+    expect(boundary.choice.strategy).toBe("contextual");
+    const below = evaluate(rows(0.994));
+    expect(1 - below.mean.contextualMse!).toBeGreaterThan(0.01);
+    expect(below.mean.relativeRmseImprovement).toBeLessThan(0.01);
+    expect(below.choice.strategy).toBe("availability-aware-recency");
+    expect(evaluate(rows(0.99 + Number.EPSILON)).mean.clearsMeanMargin).toBe(false);
+  });
+
+  it("uses paired seasonal margin variance and equal cutoff weights within each season", () => {
+    const result = evaluate([
+      { season: 2023, cutoff: 10, actual: 0, contextual: 0.5, recency: 1 },
+      { season: 2024, cutoff: 10, actual: 0, contextual: 1.5, recency: 3 },
+      { season: 2024, cutoff: 11, actual: 0, contextual: 1.5, recency: 3 },
+    ]);
+    expect(result.mean).toMatchObject({
+      contextualMse: 1.25,
+      recencyMse: 5,
+      seasons: 2,
+      blocks: 3,
+      samples: 3,
+    });
+    expect(result.choice.recencyMae).toBe(7 / 3);
+    const margins = [0.9801 - 0.25, 0.9801 * 9 - 2.25];
+    const center = (margins[0]! + margins[1]!) / 2;
+    const se = Math.abs(margins[0]! - margins[1]!) / 2;
+    expect(result.mean.marginMean).toBeCloseTo(center, 12);
+    expect(result.mean.marginStandardError).toBeCloseTo(se, 12);
+    expect(result.mean.marginLowerBound).toBeCloseTo(center - 6.314 * se, 12);
+    expect(result.choice.strategy).toBe("availability-aware-recency");
+  });
+
+  it("fails closed for a perfect comparator or squared-loss overflow", () => {
+    for (const row of [
+      { actual: 0, contextual: 1, recency: 0 },
+      { actual: 1e200, contextual: 0, recency: 0 },
+    ]) {
+      const result = evaluate([2023, 2024].map((season) => ({ season, ...row })));
+      expect(result.mean.state).toBe("insufficient-evidence");
+      expect(result.mean.clearsMeanMargin).toBe(false);
+      expect(result.choice.strategy).toBe("availability-aware-recency");
+      expect(firstPartyRosMeanSelectionEvidenceIsValid(result.mean, 0.01)).toBe(true);
+      expect(JSON.stringify(result.mean)).not.toContain("Infinity");
+    }
+  });
+
+  it("validates the seasonal proof and fails closed on missing, forged or legacy evidence", () => {
+    const result = evaluate(
+      [2023, 2024].map((season) => ({ season, actual: 0, contextual: 0.5, recency: 1 })),
+    );
+    expect(firstPartyRosMeanSelectionEvidenceIsValid(result.mean, 0.01)).toBe(true);
+    for (const change of [
+      { version: "legacy-mae" },
+      { clearsMeanMargin: false },
+      { contextualMse: 0 },
+      { marginLowerBound: 5 },
+      { marginStandardError: Number.NaN },
+      { minimumRelativeRmseImprovement: 0 },
+      { seasonEvidence: [] },
+    ])
+      expect(firstPartyRosMeanSelectionEvidenceIsValid({ ...result.mean, ...change }, 0.01)).toBe(
+        false,
+      );
+    expect(firstPartyRosMeanSelectionEvidenceIsValid(undefined, 0.01)).toBe(false);
+    const malformed = {
+      ...result.livePolicy,
+      choices: result.livePolicy.choices.map((choice) => ({
+        ...choice,
+        meanSelectionEvidence: undefined,
+      })),
+    };
+    const forecast = heldOutForecast(2025, 10, "live");
+    const live = {
+      ...forecast.evidence,
+      inputChecksum: forecast.inputChecksum,
+      position: "WR" as const,
+      bucket: "five-to-eight" as const,
+      contextualModelVersion: forecast.contextualModelVersion,
+      recencyModelVersion: forecast.recencyModelVersion,
+      scoringProfileKey: forecast.scoringProfileKey,
+      intervalMethodVersion: forecast.intervalMethodVersion,
+    };
+    expect(
+      evaluateFirstPartyRosReleaseGate(malformed as unknown as typeof result.livePolicy, live)
+        .reasons,
+    ).toContain("invalid-mean-selection-evidence");
+    // A policy cannot cite future seasons as mean-selection proof even if its internal
+    // numeric summaries are all self-consistent.
+    expect(
+      evaluateFirstPartyRosReleaseGate({ ...result.livePolicy, evidenceThroughSeason: 2023 }, live)
+        .reasons,
+    ).toContain("invalid-mean-selection-evidence");
   });
 });

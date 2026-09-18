@@ -13,9 +13,11 @@ import {
   FIRST_PARTY_ROS_POLICY_VERSION,
   applyFirstPartyRosIntervalCalibration,
   evaluateFirstPartyRosReleaseGate,
+  firstPartyRosChoiceMeanEvidenceIsValid,
   projectionScoringProfileKeyForPosition,
   projectionScoringRulesFromProfileKey,
   type FirstPartyRosChampionPolicy,
+  type FirstPartyRosChampionChoice,
   type FirstPartyRosIntervalCalibrationArtifact,
   type FirstPartyRosLiveReleaseEvidence,
   type FirstPartyRosPosition,
@@ -161,6 +163,14 @@ export function firstPartyRosChampionPolicyIsPublicationReady(
     const cell = `${String(position)}:${String(bucket)}`;
     if (seen.has(cell)) return false;
     seen.add(cell);
+
+    if (
+      !firstPartyRosChoiceMeanEvidenceIsValid(
+        value as unknown as FirstPartyRosChampionPolicy,
+        rawChoice as unknown as FirstPartyRosChampionChoice,
+      )
+    )
+      return false;
 
     const heldOut = rawChoice.heldOutEvidence;
     const artifacts = rawChoice.intervalCalibrationArtifacts;

@@ -1,5 +1,6 @@
 import {
   FIRST_PARTY_ROS_INTERVAL_CALIBRATION_VERSION,
+  FIRST_PARTY_ROS_MEAN_SELECTION_VERSION,
   FIRST_PARTY_ROS_MODEL_VERSION,
   FIRST_PARTY_ROS_POLICY_VERSION,
   evaluateFirstPartyRosChampionPolicy,
@@ -20,6 +21,7 @@ import {
   evaluateFirstPartyRosPublication,
   firstPartyRosChampionArtifactChecksum,
   firstPartyRosChampionArtifactIsValid,
+  firstPartyRosChampionPolicyIsPublicationReady,
   selectFirstPartyRosArtifactForLeague,
   type FirstPartyRosChampionArtifactPayload,
   type LoadedFirstPartyRosChampionArtifact,
@@ -32,9 +34,10 @@ function heldOutForecast(
   asOfWeek: number,
   playerId: string,
   scoringProfileKey: string = SCORING_KEY,
+  contextualError = 1,
 ): FirstPartyRosHeldOutForecast {
   const actual = 100;
-  const contextualMean = actual + 1;
+  const contextualMean = actual + contextualError;
   const recencyMean = actual + 8;
   return {
     playerId,
@@ -78,14 +81,17 @@ function heldOutForecast(
   };
 }
 
-function buildLivePolicy(scoringProfileKey: string = SCORING_KEY): FirstPartyRosChampionPolicy {
+function buildLivePolicy(
+  scoringProfileKey: string = SCORING_KEY,
+  contextualError = 1,
+): FirstPartyRosChampionPolicy {
   const evaluation = evaluateFirstPartyRosChampionPolicy(
     [2023, 2024, 2025].map((season) => ({
       season,
       complete: true,
       forecasts: [
-        heldOutForecast(season, 10, `${season}-one`, scoringProfileKey),
-        heldOutForecast(season, 11, `${season}-two`, scoringProfileKey),
+        heldOutForecast(season, 10, `${season}-one`, scoringProfileKey, contextualError),
+        heldOutForecast(season, 11, `${season}-two`, scoringProfileKey, contextualError),
       ],
     })),
     {
@@ -184,6 +190,109 @@ describe("first-party ROS champion artifact checksum", () => {
 });
 
 describe("first-party ROS champion artifact validity", () => {
+  it("requires the v7 expected-mean contract even for a newly checksummed artifact", () => {
+    const current = loadedArtifact(buildLivePolicy());
+    expect(current.policy).toMatchObject({
+      policyVersion: "season-walk-forward-mean-rmse-block-wis-cqr-v7",
+      meanSelectionEvidenceVersion: FIRST_PARTY_ROS_MEAN_SELECTION_VERSION,
+      legacyPointImprovementMetric: "mean-absolute-error",
+    });
+    expect(firstPartyRosChampionArtifactIsValid(current)).toBe(true);
+
+    const legacyVersion = "season-walk-forward-block-wis-cqr-v6";
+    const legacy = loadedArtifact(
+      { ...current.policy, policyVersion: legacyVersion } as unknown as FirstPartyRosChampionPolicy,
+      { policyVersion: legacyVersion },
+    );
+    expect(firstPartyRosChampionArtifactIsValid(legacy)).toBe(false);
+  });
+
+  it.each([
+    ["missing proof", undefined],
+    ["null proof", null],
+    ["legacy objective", { loss: "absolute-error" }],
+    ["nonfinite RMSE", { contextualRmse: Number.POSITIVE_INFINITY }],
+    ["inconsistent RMSE", { contextualRmse: 2 }],
+    ["negative standard error", { marginStandardError: -1 }],
+    ["forged margin bound", { marginLowerBound: 1_000 }],
+    ["different configured margin", { minimumRelativeRmseImprovement: 0.02 }],
+    ["wrong squared-loss multiplier", { squaredLossBaselineMultiplier: 0.99 }],
+    ["inconsistent sample count", { samples: 1_000 }],
+  ] as const)("rejects %s after recomputing the artifact checksum", (_label, corruption) => {
+    const policy = buildLivePolicy();
+    const malformed = {
+      ...policy,
+      choices: policy.choices.map((choice) =>
+        choice.position === "WR" && choice.bucket === "five-to-eight"
+          ? {
+              ...choice,
+              meanSelectionEvidence:
+                corruption === undefined || corruption === null
+                  ? corruption
+                  : { ...choice.meanSelectionEvidence, ...corruption },
+            }
+          : choice,
+      ),
+    } as unknown as FirstPartyRosChampionPolicy;
+    const artifact = loadedArtifact(malformed);
+    expect(firstPartyRosChampionPolicyIsPublicationReady(malformed)).toBe(false);
+    expect(firstPartyRosChampionArtifactIsValid(artifact)).toBe(false);
+    expect(
+      evaluateFirstPartyRosPublication({
+        artifact,
+        leagueScoringProfileKey: SCORING_KEY,
+        evidence: [liveEvidence],
+        futureWindowComplete: true,
+        gateOptions: releaseOptions,
+      }),
+    ).toMatchObject({
+      canPublish: false,
+      artifactValid: false,
+      preservePriorGoodSet: true,
+      reasons: ["ros_champion_artifact_invalid"],
+    });
+  });
+
+  it("reconstructs a contextual pass from seasonal squared losses instead of trusting its flag", () => {
+    const policy = buildLivePolicy(SCORING_KEY, 12);
+    const choice = policy.choices.find(
+      (candidate) => candidate.position === "WR" && candidate.bucket === "five-to-eight",
+    )!;
+    expect(choice.strategy).toBe("availability-aware-recency");
+    expect(choice.meanSelectionEvidence.clearsMeanMargin).toBe(false);
+    expect(firstPartyRosChampionArtifactIsValid(loadedArtifact(policy))).toBe(true);
+
+    const forged: FirstPartyRosChampionPolicy = {
+      ...policy,
+      choices: policy.choices.map((candidate) =>
+        candidate === choice
+          ? {
+              ...candidate,
+              strategy: "contextual",
+              meanSelectionEvidence: {
+                ...candidate.meanSelectionEvidence,
+                clearsMeanMargin: true,
+              },
+            }
+          : candidate,
+      ),
+    };
+    expect(firstPartyRosChampionArtifactIsValid(loadedArtifact(forged))).toBe(false);
+  });
+
+  it("still requires the independent WIS bound for a contextual mean winner", () => {
+    const policy = buildLivePolicy();
+    const forged: FirstPartyRosChampionPolicy = {
+      ...policy,
+      choices: policy.choices.map((choice) =>
+        choice.strategy === "contextual"
+          ? { ...choice, intervalScoreDifferenceUpperBound: 0.01 }
+          : choice,
+      ),
+    };
+    expect(firstPartyRosChampionArtifactIsValid(loadedArtifact(forged))).toBe(false);
+  });
+
   it("rejects self-consistent v4 evidence assembled before complete zero-game touchdown history", () => {
     const current = loadedArtifact(buildLivePolicy());
     const legacy = {
@@ -219,6 +328,42 @@ describe("first-party ROS champion artifact validity", () => {
 });
 
 describe("first-party ROS publication decision", () => {
+  it("preserves honest null mean metrics in sparse cells while publishing a complete cell", () => {
+    const policy = buildLivePolicy();
+    const sparse = policy.choices.find(
+      (choice) => choice.position === "TE" && choice.bucket === "five-to-eight",
+    )!;
+    expect(sparse).toMatchObject({ strategy: "availability-aware-recency", samples: 0 });
+    expect(sparse.meanSelectionEvidence).toMatchObject({
+      state: "insufficient-evidence",
+      seasonEvidence: [],
+      contextualMse: null,
+      recencyMse: null,
+      contextualRmse: null,
+      recencyRmse: null,
+      relativeRmseImprovement: null,
+      marginMean: null,
+      marginStandardError: null,
+      marginLowerBound: null,
+      clearsMeanMargin: false,
+    });
+    const decision = evaluateFirstPartyRosPublication({
+      artifact: loadedArtifact(policy),
+      leagueScoringProfileKey: SCORING_KEY,
+      evidence: [liveEvidence, { ...liveEvidence, position: "TE" }],
+      futureWindowComplete: true,
+      gateOptions: releaseOptions,
+    });
+    expect(decision.artifactValid).toBe(true);
+    expect(decision.canPublish).toBe(true);
+    expect(decision.preservePriorGoodSet).toBe(true);
+    expect(decision.buckets).toEqual([
+      expect.objectContaining({ position: "WR", state: "release" }),
+      expect.objectContaining({ position: "TE", state: "withhold" }),
+    ]);
+    expect(decision.buckets[1]!.gate.reasons).not.toContain("invalid-mean-selection-evidence");
+  });
+
   it("fails closed with no artifact and preserves the prior good set", () => {
     const decision = evaluateFirstPartyRosPublication({
       artifact: null,

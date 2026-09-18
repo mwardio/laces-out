@@ -4,6 +4,7 @@ import {
   evaluateFirstPartyRosChampionPolicy,
   projectionScoringProfileKey,
   rosScoringProfile,
+  type FirstPartyRosChampionPolicy,
   type FirstPartyRosHeldOutForecast,
 } from "@laces-out/projections";
 
@@ -104,12 +105,13 @@ function validReport(overrides: {
   championOverrides?: Record<string, unknown>;
   evidenceIdentityOverrides?: Record<string, unknown>;
   sources?: unknown;
+  publicationPolicy?: FirstPartyRosChampionPolicy;
 }): Record<string, unknown> {
   const scoringProfileKey =
     typeof overrides.evidenceIdentityOverrides?.scoringProfileKey === "string"
       ? overrides.evidenceIdentityOverrides.scoringProfileKey
       : constants.scoringProfileKey;
-  const policy = publicationPolicy(scoringProfileKey);
+  const policy = overrides.publicationPolicy ?? publicationPolicy(scoringProfileKey);
   return {
     report: {
       state: "evidence-ready",
@@ -180,6 +182,23 @@ describe("validateFirstPartyRosAdmission", () => {
     expect(result.payload.season).toBe(2026);
     expect(result.payload.evidenceThroughSeason).toBe(2025);
     expect(result.payload.scoringProfileKey).toBe(constants.scoringProfileKey);
+    expect(result.payload.policyVersion).toBe("season-walk-forward-mean-rmse-block-wis-cqr-v7");
+    expect(
+      result.payload.policy.choices.find(
+        (choice) => choice.position === "WR" && choice.bucket === "five-to-eight",
+      )?.meanSelectionEvidence,
+    ).toMatchObject({ state: "available", loss: "squared-error", clearsMeanMargin: true });
+    expect(
+      result.payload.policy.choices.find(
+        (choice) => choice.position === "TE" && choice.bucket === "five-to-eight",
+      )?.meanSelectionEvidence,
+    ).toMatchObject({
+      state: "insufficient-evidence",
+      contextualMse: null,
+      recencyMse: null,
+      marginLowerBound: null,
+      clearsMeanMargin: false,
+    });
     expect(result.payload.sourceChecksums.length).toBeGreaterThan(0);
     expect(result.artifactChecksum).toMatch(/^[a-f0-9]{64}$/u);
     expect(firstPartyRosChampionArtifactChecksum(result.payload)).toBe(result.artifactChecksum);
@@ -253,10 +272,78 @@ describe("validateFirstPartyRosAdmission", () => {
     expect(result.blockers).toContain("publication_policy_missing_or_invalid");
   });
 
+  it("rejects a self-consistent v6 report instead of treating its MAE proof as current", () => {
+    const policy = {
+      ...publicationPolicy(constants.scoringProfileKey),
+      policyVersion: "season-walk-forward-block-wis-cqr-v6",
+    } as unknown as FirstPartyRosChampionPolicy;
+    const result = validateFirstPartyRosAdmission({
+      report: validReport({
+        publicationPolicy: policy,
+        championOverrides: { policyVersion: "season-walk-forward-block-wis-cqr-v6" },
+      }),
+      evidenceThroughSeason: 2025,
+      constants,
+    });
+    expect(result.state).toBe("rejected");
+    expect(result.blockers).toEqual(
+      expect.arrayContaining(["policy_version_mismatch", "publication_policy_missing_or_invalid"]),
+    );
+  });
+
+  it.each(["meanSelectionEvidenceVersion", "legacyPointImprovementMetric"] as const)(
+    "rejects a current-version policy missing %s even when its checksum matches",
+    (field) => {
+      const policy = {
+        ...publicationPolicy(constants.scoringProfileKey),
+        [field]: undefined,
+      };
+      const result = validateFirstPartyRosAdmission({
+        report: validReport({ publicationPolicy: policy }),
+        evidenceThroughSeason: 2025,
+        constants,
+      });
+      expect(result.state).toBe("rejected");
+      expect(result.blockers).toContain("publication_policy_missing_or_invalid");
+    },
+  );
+
+  it.each([
+    ["missing mean proof", undefined],
+    ["null mean proof", null],
+    ["nonfinite loss", { contextualMse: Number.NaN }],
+    ["forged bound", { marginLowerBound: 1_000 }],
+    ["forged decision", { clearsMeanMargin: false }],
+    ["inconsistent seasonal losses", { seasonEvidence: [] }],
+  ] as const)("rejects %s despite a matching report checksum", (_label, corruption) => {
+    const original = publicationPolicy(constants.scoringProfileKey);
+    const policy = {
+      ...original,
+      choices: original.choices.map((choice) =>
+        choice.position === "WR" && choice.bucket === "five-to-eight"
+          ? {
+              ...choice,
+              meanSelectionEvidence:
+                corruption === undefined || corruption === null
+                  ? corruption
+                  : { ...choice.meanSelectionEvidence, ...corruption },
+            }
+          : choice,
+      ),
+    } as unknown as FirstPartyRosChampionPolicy;
+    const result = validateFirstPartyRosAdmission({
+      report: validReport({ publicationPolicy: policy }),
+      evidenceThroughSeason: 2025,
+      constants,
+    });
+    expect(result.state).toBe("rejected");
+    expect(result.blockers).toContain("publication_policy_missing_or_invalid");
+  });
+
   it("rejects a complete publication policy that no longer matches the report summary checksum", () => {
     const report = structuredClone(validReport({}));
-    const policy = report.publicationPolicy as { choices: { samples: number }[] };
-    policy.choices[0]!.samples += 1;
+    const policy = report.publicationPolicy as { choices: { contextualMae: number }[] };
+    policy.choices[0]!.contextualMae += 1;
     const result = validateFirstPartyRosAdmission({
       report,
       evidenceThroughSeason: 2025,
