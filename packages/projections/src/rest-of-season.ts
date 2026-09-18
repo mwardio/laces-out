@@ -20,7 +20,8 @@ export const FIRST_PARTY_ROS_MODEL_VERSION = "laces-ros-distribution-v11";
  * proof must include the play-by-play source; earlier outcome vectors cannot certify these bonuses.
  */
 export const FIRST_PARTY_ROS_SEED_VERSION = "laces-ros-distribution-v11";
-export const FIRST_PARTY_ROS_POLICY_VERSION = "season-walk-forward-block-wis-cqr-v4";
+/** v5 requires evidence assembled with complete cross-position zero-game touchdown history. */
+export const FIRST_PARTY_ROS_POLICY_VERSION = "season-walk-forward-block-wis-cqr-v5";
 export const FIRST_PARTY_ROS_INTERVAL_CALIBRATION_VERSION = "season-blocked-split-conformal-cqr-v1";
 /**
  * v4 raised the release path count from 512 to 8192: the declared convergence tolerances carry

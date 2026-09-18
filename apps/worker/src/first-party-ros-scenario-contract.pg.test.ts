@@ -35,6 +35,7 @@ import {
   leagueSeasons,
   leagues,
   nflScheduleObservations,
+  playerInjuryReportObservations,
   playerRosProjectionSummaries,
   playerSnapCountObservations,
   playerWeeklyRosterObservations,
@@ -70,7 +71,10 @@ import postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { HISTORICAL_ROS_INTERVAL_METHOD_VERSION } from "./first-party-ros-backtest.js";
-import { databaseFirstPartyRosCandidateProvider } from "./first-party-ros-candidate-provider.js";
+import {
+  databaseFirstPartyRosCandidateProvider,
+  type FirstPartyRosLeagueTargetInput,
+} from "./first-party-ros-candidate-provider.js";
 import { FirstPartyRosProjectionShadowService } from "./first-party-ros-projections.js";
 import {
   firstPartyRosChampionArtifactChecksum,
@@ -854,6 +858,146 @@ describe.skipIf(!dockerAvailable)(
       }
     }, 30_000);
 
+    it("reads only exact selected source versions across all six live ROS observation feeds", async () => {
+      const { payload, artifactChecksum } = championArtifactPayload(championPolicy());
+      const artifact = { ...payload, artifactChecksum, admittedAt: FRESH };
+      const window = {
+        asOfWeek: 6,
+        currentWeek: 7,
+        windowStartWeek: 7,
+        windowEndWeek: 18,
+        currentWeekStarted: false,
+      } as const;
+      const captured: FirstPartyRosLeagueTargetInput[] = [];
+      const provider = databaseFirstPartyRosCandidateProvider({
+        database: handle.db,
+        buildLeagueTarget: (input) => {
+          captured.push(input);
+          return Promise.resolve({ target: null, skippedPlayers: 0 });
+        },
+      });
+      const candidateProviderChecksum = await provider.sourceChecksum({
+        season: TEST_SEASON,
+        window,
+      });
+      const context = {
+        artifact,
+        artifacts: [artifact],
+        season: TEST_SEASON,
+        window,
+        now: FIXED_NOW,
+        candidateProviderChecksum,
+      };
+      await expect(provider.buildTargets(context)).resolves.toEqual([]);
+      expect(captured).toHaveLength(1);
+
+      // Source A currently selects y, while another season's source B selects x. Retained A:x
+      // facts must stay excluded even though both their source ID and checksum are independently
+      // present in the selection. These intentionally injected cross-pairs model that invariant;
+      // current schedule ingestion normally hashes each season's selected rows separately.
+      const retiredChecksum = (kind: string) => checksumFor(`${kind}.${HISTORY_SEASONS[0]}`);
+      const [schedule] = await handle.db
+        .select()
+        .from(nflScheduleObservations)
+        .where(eq(nflScheduleObservations.season, TEST_SEASON))
+        .limit(1);
+      const [weekly] = await handle.db
+        .select()
+        .from(playerWeeklyStatObservations)
+        .where(eq(playerWeeklyStatObservations.season, TEST_SEASON))
+        .limit(1);
+      const [snap] = await handle.db
+        .select()
+        .from(playerSnapCountObservations)
+        .where(
+          and(
+            eq(playerSnapCountObservations.season, TEST_SEASON),
+            eq(playerSnapCountObservations.playerId, seededPlayers[0]!.id),
+          ),
+        )
+        .limit(1);
+      const [roster] = await handle.db
+        .select()
+        .from(playerWeeklyRosterObservations)
+        .where(eq(playerWeeklyRosterObservations.season, TEST_SEASON))
+        .limit(1);
+      const [team] = await handle.db
+        .select()
+        .from(teamWeeklyStatObservations)
+        .where(eq(teamWeeklyStatObservations.season, TEST_SEASON))
+        .limit(1);
+      const [injurySource] = await handle.db
+        .select({ id: dataSources.id })
+        .from(dataSources)
+        .where(eq(dataSources.key, `nflverse.injuries.${TEST_SEASON}`));
+      await handle.db.insert(nflScheduleObservations).values({
+        ...schedule!,
+        id: randomUUID(),
+        awayScore: 99,
+        inputChecksum: retiredChecksum("nflverse.schedules"),
+      });
+      await handle.db.insert(playerWeeklyStatObservations).values({
+        ...weekly!,
+        id: randomUUID(),
+        components: { ...weekly!.components, targets: 99 },
+        inputChecksum: retiredChecksum("nflverse.stats-player-week"),
+      });
+      await handle.db.insert(playerSnapCountObservations).values({
+        ...snap!,
+        id: randomUUID(),
+        gameId: "retired-snap-game",
+        inputChecksum: retiredChecksum("nflverse.snap-counts"),
+      });
+      await handle.db.insert(playerWeeklyRosterObservations).values({
+        ...roster!,
+        id: randomUUID(),
+        week: CURRENT_WEEK,
+        rosterStatus: "CUT",
+        inputChecksum: retiredChecksum("nflverse.weekly-rosters"),
+      });
+      await handle.db.insert(playerInjuryReportObservations).values({
+        sourceId: injurySource!.id,
+        sourceSyncRunId: weekly!.sourceSyncRunId,
+        externalPlayerId: weekly!.externalPlayerId,
+        playerId: weekly!.playerId,
+        season: TEST_SEASON,
+        week: weekly!.week,
+        seasonType: "REG",
+        gameType: "REG",
+        team: weekly!.team,
+        position: seededPlayers[0]!.position,
+        reportStatus: "out",
+        stateKey: checksumFor("retired-injury-state"),
+        fetchedAt: FRESH,
+        inputChecksum: retiredChecksum("nflverse.injuries"),
+      });
+      await handle.db.insert(teamWeeklyStatObservations).values({
+        ...team!,
+        id: randomUUID(),
+        components: { ...team!.components, sacks: 99 },
+        inputChecksum: retiredChecksum("nflverse.stats-team-week"),
+      });
+
+      expect(await provider.sourceChecksum({ season: TEST_SEASON, window })).toBe(
+        candidateProviderChecksum,
+      );
+      await expect(provider.buildTargets(context)).resolves.toEqual([]);
+      expect(captured).toHaveLength(2);
+      const canonicalRows = (rows: readonly unknown[]) =>
+        rows.map((row) => JSON.stringify(row)).sort();
+      for (const key of [
+        "schedules",
+        "featureHistory",
+        "defenseFeatureHistory",
+        "candidatePlayers",
+        "injuries",
+      ] as const) {
+        expect(canonicalRows(captured[1]![key]), key).toEqual(canonicalRows(captured[0]![key]));
+      }
+      expect(captured[1]!.futureWindowComplete).toBe(captured[0]!.futureWindowComplete);
+      expect(captured[1]!.unmatchedCandidateCount).toBe(captured[0]!.unmatchedCandidateCount);
+    }, 120_000);
+
     it("applies migration 0025 and widens the persisted scenario contract to the engine bounds", async () => {
       const rows = await handle.db.execute<{ definition: string }>(sql`
           select pg_get_constraintdef(oid) as definition
@@ -1072,6 +1216,101 @@ describe.skipIf(!dockerAvailable)(
           .where(eq(dataSources.key, sourceKey));
       }
     }, 120_000);
+
+    it("invalidates historical catalog roles independently of the current candidate pool", async () => {
+      const rollback = new Error("Roll back the append-only historical fixture");
+      await expect(
+        handle.db.transaction(
+          async (transaction) => {
+            const database = transaction as unknown as Database;
+            const provider = databaseFirstPartyRosCandidateProvider({ database: database });
+            const window = {
+              asOfWeek: 6,
+              currentWeek: 7,
+              windowStartWeek: 7,
+              windowEndWeek: 18,
+              currentWeekStarted: false,
+            } as const;
+            const [source] = await database
+              .select({ id: dataSources.id, checksum: dataSources.lastChecksum })
+              .from(dataSources)
+              .where(eq(dataSources.key, `nflverse.stats-player-week.${HISTORY_SEASONS[0]}`));
+            if (!source?.checksum) throw new Error("Seeded history source required");
+            const ingestId = await seedIngestRun(database, "historical-catalog-role");
+            const [historicalPlayer] = await database
+              .insert(players)
+              .values({
+                gsisId: "00-8999999",
+                fullName: "Historical catalog role fixture",
+                nflTeam: "BUF",
+                primaryPosition: "WR",
+                eligiblePositions: ["WR"],
+                status: "ACT",
+                lastSeason: HISTORY_SEASONS[0],
+              })
+              .returning({ id: players.id });
+            if (!historicalPlayer) throw new Error("Historical-only player required");
+            // This player has no current-season roster fact, external alias or fantasy roster entry.
+            // The catalog role still changes the historical training rows consumed by live ROS.
+            await database.insert(playerWeeklyStatObservations).values({
+              sourceId: source.id,
+              sourceSyncRunId: ingestId,
+              externalPlayerId: "00-8999999",
+              playerId: historicalPlayer.id,
+              season: HISTORY_SEASONS[0],
+              week: 1,
+              seasonType: "REG",
+              gameId: gameIdFor(HISTORY_SEASONS[0], 1, "BUF"),
+              team: "BUF",
+              opponentTeam: "MIA",
+              components: { receiving_yards: 10, receptions: 1 },
+              sourceFantasyPoints: { standard: 1, ppr: 2 },
+              fetchedAt: FRESH,
+              inputChecksum: source.checksum,
+            });
+            const original = await provider.sourceChecksum({ season: TEST_SEASON, window });
+            await database
+              .update(players)
+              .set({ updatedAt: FIXED_NOW, status: "RET" })
+              .where(eq(players.id, historicalPlayer.id));
+            expect(await provider.sourceChecksum({ season: TEST_SEASON, window })).toBe(original);
+            await database
+              .update(players)
+              .set({ primaryPosition: "RB" })
+              .where(eq(players.id, historicalPlayer.id));
+            expect(await provider.sourceChecksum({ season: TEST_SEASON, window })).not.toBe(
+              original,
+            );
+            const [unchangedSource] = await database
+              .select({ checksum: dataSources.lastChecksum })
+              .from(dataSources)
+              .where(eq(dataSources.id, source.id));
+            expect(unchangedSource?.checksum).toBe(source.checksum);
+
+            const { payload, artifactChecksum } = championArtifactPayload(championPolicy());
+            const artifact = { ...payload, artifactChecksum, admittedAt: FRESH };
+            await expect(
+              provider.buildTargets({
+                artifact,
+                artifacts: [artifact],
+                season: TEST_SEASON,
+                window,
+                now: FIXED_NOW,
+                candidateProviderChecksum: original,
+              }),
+            ).rejects.toThrow("changed before target assembly");
+            await database
+              .update(players)
+              .set({ primaryPosition: "WR" })
+              .where(eq(players.id, historicalPlayer.id));
+            expect(await provider.sourceChecksum({ season: TEST_SEASON, window })).toBe(original);
+            // Observation rows are append-only; roll back the fixture instead of deleting it.
+            throw rollback;
+          },
+          { isolationLevel: "repeatable read" },
+        ),
+      ).rejects.toBe(rollback);
+    }, 30_000);
 
     it("uses one captured fact set for multiple artifacts despite ingestion between their simulations", async () => {
       const secondLeague = await seedLeague(handle.db, seededPlayers, "0.5");

@@ -332,6 +332,47 @@ describe.skipIf(!dockerAvailable())("ROS profile lifecycle against PostgreSQL", 
     expect(queued.size).toBe(2);
   });
 
+  it.each(["pending", "withheld"] as const)(
+    "discovers a fresh v5 validation despite an older %s v4 history request",
+    async (state) => {
+      const season = state === "pending" ? 2034 : 2035;
+      await seedLeague(season, "0.81");
+      const enqueueValidation = vi.fn(async () => randomUUID());
+      const discovery = new RosProfileDiscoveryService({
+        database: handle.db,
+        enqueueValidation,
+        enqueueProjectionRefresh: async () => randomUUID(),
+      });
+      await discovery.discover(season);
+      const [original] = await handle.db
+        .select()
+        .from(firstPartyRosProfileValidations)
+        .where(eq(firstPartyRosProfileValidations.season, season));
+      await handle.db
+        .update(firstPartyRosProfileValidations)
+        .set({ policyVersion: "season-walk-forward-block-wis-cqr-v4", state })
+        .where(eq(firstPartyRosProfileValidations.id, original!.id));
+      enqueueValidation.mockClear();
+
+      await discovery.discover(season);
+      const rows = await handle.db
+        .select()
+        .from(firstPartyRosProfileValidations)
+        .where(eq(firstPartyRosProfileValidations.season, season));
+      expect(rows).toHaveLength(2);
+      const current = rows.find((row) => row.id !== original!.id)!;
+      expect(current).toMatchObject({
+        state: "pending",
+        policyVersion: "season-walk-forward-block-wis-cqr-v5",
+        scoringProfileDigest: original!.scoringProfileDigest,
+      });
+      expect(rows.find((row) => row.id === original!.id)?.state).toBe(state);
+      expect(enqueueValidation).toHaveBeenCalledExactlyOnceWith({
+        profileValidationId: current.id,
+      });
+    },
+  );
+
   it("retains pending work when queue dispatch fails and recovers on the next discovery", async () => {
     const season = 2028;
     await seedLeague(season, "0.75");

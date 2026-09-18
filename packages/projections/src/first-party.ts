@@ -631,6 +631,75 @@ function knownLongTouchdownComponents(
   return known;
 }
 
+function hasLongTouchdownEvidence(
+  component: string,
+  positionComponents: ReadonlySet<string>,
+  playerRows: readonly FirstPartyWeeklyStatLine[],
+): boolean {
+  return (
+    positionComponents.has(component) &&
+    playerRows.every((row) => componentValue(row, component) !== undefined)
+  );
+}
+
+/**
+ * Inspect the same source-evidence guards used by both weekly candidates without fitting or
+ * calculating forecasts. The immutable history index is local to one inspection batch; it never
+ * fingerprints inputs or produces numerical evidence that could be admitted as a forecast.
+ */
+export function createFirstPartyWeeklyComponentCoverageInspector(
+  history: readonly FirstPartyWeeklyStatLine[],
+  options?: Partial<FirstPartyProjectionConfig>,
+): (target: FirstPartyProjectionTarget) => {
+  readonly contextualMissing: readonly string[];
+  readonly recencyMissing: readonly string[];
+} {
+  const config = resolvedConfig(options);
+  const eligible = history.filter(isTrainingLine).sort(compareLines);
+  const byPosition = new Map<string, FirstPartyWeeklyStatLine[]>();
+  const byPlayer = new Map<string, FirstPartyWeeklyStatLine[]>();
+  for (const row of eligible) {
+    const position = normalizedPosition(row.position);
+    if (position !== undefined) {
+      const rows = byPosition.get(position) ?? [];
+      rows.push(row);
+      byPosition.set(position, rows);
+    }
+    const rows = byPlayer.get(row.playerId) ?? [];
+    rows.push(row);
+    byPlayer.set(row.playerId, rows);
+  }
+  const latest = eligible.at(-1);
+  return (target) => {
+    validateTarget(target);
+    const position = normalizedPosition(target.position);
+    if (position === undefined) throw new RangeError("Unsupported component coverage position");
+    if (
+      target.isBye === true ||
+      target.scheduled === false ||
+      INACTIVE_STATUSES.has(target.status ?? "unknown")
+    )
+      return { contextualMissing: [], recencyMissing: [] };
+    const allPrior = latest === undefined || strictlyBefore(latest, target);
+    const priorRows = (rows: readonly FirstPartyWeeklyStatLine[]) =>
+      allPrior ? rows : rows.filter((row) => strictlyBefore(row, target));
+    const positionRows = priorRows(byPosition.get(position) ?? []);
+    const playerRows = priorRows(byPlayer.get(target.playerId) ?? []);
+    const contextualRows = playerRows.slice(-config.maxPlayerGames);
+    const recencyRows = playerRows
+      .filter((row) => normalizedPosition(row.position) === position)
+      .slice(-config.maxPlayerGames);
+    const known = knownLongTouchdownComponents(positionRows);
+    const missing = (rows: readonly FirstPartyWeeklyStatLine[]) =>
+      POSITION_COMPONENTS[position].filter(
+        (component) =>
+          LONG_TOUCHDOWN_COMPONENT_NAMES.has(component) &&
+          !hasLongTouchdownEvidence(component, known, rows),
+      );
+    return { contextualMissing: missing(contextualRows), recencyMissing: missing(recencyRows) };
+  };
+}
+
 const COMPONENT_CAPS: Readonly<Record<string, number>> = {
   passing_attempts: 70,
   passing_completions: 55,
@@ -2037,8 +2106,7 @@ export function projectFirstPartyWeeklyComponents(
     );
     if (
       LONG_TOUCHDOWN_COMPONENT_NAMES.has(component) &&
-      (!knownLongTouchdowns.has(component) ||
-        !playerRows.every((row) => componentValue(row, component) !== undefined))
+      !hasLongTouchdownEvidence(component, knownLongTouchdowns, playerRows)
     )
       continue;
     const exactRoleValue = targetRoleValue(target.role, component);
@@ -2314,8 +2382,7 @@ function recencyOnlyBaseline(
       const positionMean = positionMeans[component];
       if (
         LONG_TOUCHDOWN_COMPONENT_NAMES.has(component) &&
-        (!knownLongTouchdowns.has(component) ||
-          !playerRows.every((row) => componentValue(row, component) !== undefined))
+        !hasLongTouchdownEvidence(component, knownLongTouchdowns, playerRows)
       )
         return [];
       // Kickers (weekly model v8): evidence-weighted blend toward the position mean instead of

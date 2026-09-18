@@ -9,6 +9,7 @@ import {
   FIRST_PARTY_ROS_SEED_VERSION,
 } from "@laces-out/projections";
 import { NFLVERSE_WEEKLY_STATS_COMPONENT_SCHEMA } from "@laces-out/source-nflverse";
+import { FIRST_PARTY_PLAYER_HISTORY_VERSION } from "./first-party-projection-inputs.js";
 
 import {
   HISTORICAL_ROS_AVAILABILITY_CALIBRATION_VERSION,
@@ -33,6 +34,7 @@ export const ROS_HISTORICAL_CORPUS_BUILD_PROTOCOL = Object.freeze({
   referenceScenarioCount: FIRST_PARTY_ROS_CONVERGENCE_REFERENCE_SCENARIOS,
   weeklyModelVersion: HISTORICAL_ROS_CANDIDATE_PAIR_VERSION,
   weeklyComponentModelVersion: FIRST_PARTY_PROJECTION_MODEL_VERSION,
+  playerHistoryVersion: FIRST_PARTY_PLAYER_HISTORY_VERSION,
   productionBasis: HISTORICAL_ROS_PRODUCTION_BASIS_VERSION,
   cohortStrategy: HISTORICAL_ROS_COHORT_SELECTION_VERSION,
   availabilityVersion: HISTORICAL_ROS_AVAILABILITY_CALIBRATION_VERSION,

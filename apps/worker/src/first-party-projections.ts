@@ -89,12 +89,11 @@ import { assertFootballSourceCoherence } from "./football-source-coherence.js";
 import {
   buildFirstPartyDefenseHistory,
   buildFirstPartyPlayerHistory,
-  firstPartyInputEpoch,
   firstPartyPlayerStatus,
   projectionInputChecksum,
   recentRoleContext,
   FIRST_PARTY_INPUT_EPOCH_VERSION,
-  type ProjectionEpochSource,
+  FIRST_PARTY_PLAYER_HISTORY_VERSION,
   type ProjectionScheduleFact,
   type ProjectionInjuryFact,
   type ProjectionSnapFact,
@@ -103,6 +102,17 @@ import {
   type ProjectionWeeklyFact,
 } from "./first-party-projection-inputs.js";
 import type { ProjectionRefreshJob, ProjectionRefreshService, WorkerJobContext } from "./jobs.js";
+import {
+  WEEKLY_INPUT_SNAPSHOT_VERSION,
+  weeklySourceManifest,
+  weeklyHistoricalRolesChecksum,
+  readWeeklyMutableInputChecksum,
+  lockWeeklyPublicationInputs,
+  weeklyInputChangedError,
+  type WeeklyInputDatabase,
+  type WeeklyInputSnapshot,
+  type WeeklyPublicationBudget,
+} from "./weekly-input-snapshot.js";
 
 export const FIRST_PARTY_PROJECTION_SOURCE_KEY = "laces-out.projections.first-party";
 export const FIRST_PARTY_PROJECTION_SET_SOURCE = "laces-out-first-party";
@@ -563,6 +573,7 @@ export function projectionStatusWindow(
 
 export function projectionTrainingCacheKey(input: {
   readonly firstTargetWeek: number;
+  readonly historicalRolesChecksum?: string;
   readonly statisticalSources: readonly { readonly key: string; readonly checksum: string }[];
   readonly playerPositions: readonly { readonly id: string; readonly position: string }[];
   readonly completedSchedule: readonly {
@@ -577,6 +588,7 @@ export function projectionTrainingCacheKey(input: {
 }): string {
   return projectionInputChecksum({
     modelVersion: FIRST_PARTY_PROJECTION_MODEL_VERSION,
+    playerHistoryVersion: FIRST_PARTY_PLAYER_HISTORY_VERSION,
     sourceSchemaVersion,
     ...input,
   });
@@ -1413,19 +1425,34 @@ export class FirstPartyProjectionService implements ProjectionRefreshService {
   async refreshProjections(job: ProjectionRefreshJob, context: WorkerJobContext): Promise<void> {
     const now = this.#now();
     const source = await this.#ensureManagedSource(now);
+    let publishedWeeks = 0;
     try {
       if (context.signal.aborted) throw new Error("Projection refresh was cancelled");
-      const selectedSources = await this.#selectSources(job.season, now);
-      // Captured immediately once every required source has been validated as fresh and usable.
-      // Recomputed again just before persisting (see below), this proves no required source
-      // (player stats, team stats, rosters, injuries, snaps, schedule, Sleeper availability)
-      // changed mid-assembly - the explicit cross-source "input epoch" identity called out in
-      // weekly-production risk #2.
-      const requiredSourceKeys = requiredFirstPartyProjectionSourceKeys(job.season).required;
-      const startInputEpoch = firstPartyInputEpoch(
-        this.#requiredSourceEpochInputs(requiredSourceKeys, selectedSources),
+      // One database snapshot owns source admission, immutable observations, and mutable
+      // catalog/league facts. It closes before any training or publication-planner computation.
+      const { selectedSources, input, inputSnapshot } = await this.#database.transaction(
+        async (transaction) => {
+          const selectedSources = await this.#selectSources(job.season, now, transaction);
+          const input = await this.#loadInputs(job.season, selectedSources, now, transaction);
+          const sourceManifest = weeklySourceManifest(
+            requiredFirstPartyProjectionSourceKeys(job.season),
+            selectedSources,
+          );
+          const inputSnapshot: WeeklyInputSnapshot = {
+            version: WEEKLY_INPUT_SNAPSHOT_VERSION,
+            sourceManifest,
+            mutableChecksum: await readWeeklyMutableInputChecksum(
+              transaction,
+              job.season,
+              selectedSources.find((entry) => entry.key === "sleeper.players")?.id ?? null,
+            ),
+            historicalRolesChecksum: weeklyHistoricalRolesChecksum(input),
+          };
+          return { selectedSources, input, inputSnapshot };
+        },
+        { isolationLevel: "repeatable read" },
       );
-      const input = await this.#loadInputs(job.season, selectedSources, now);
+      const startInputEpoch = inputSnapshot.sourceManifest.checksum;
       const targetWeeks = projectionTargetWeeks(input.schedules, job.season, job.week, now);
       if (targetWeeks.length === 0) {
         await this.#recordSourceSuccess(source.id, now, null, {
@@ -1440,6 +1467,11 @@ export class FirstPartyProjectionService implements ProjectionRefreshService {
       );
       const baseChecksum = projectionInputChecksum({
         modelVersion: FIRST_PARTY_PROJECTION_MODEL_VERSION,
+        playerHistoryVersion: FIRST_PARTY_PLAYER_HISTORY_VERSION,
+        inputSnapshotVersion: inputSnapshot.version,
+        sourceManifestChecksum: inputSnapshot.sourceManifest.checksum,
+        mutableInputChecksum: inputSnapshot.mutableChecksum,
+        historicalRolesChecksum: inputSnapshot.historicalRolesChecksum,
         pointCalibrationPolicyVersion: WEEKLY_POINT_CALIBRATION_POLICY_VERSION,
         publicationPolicyVersion: FIRST_PARTY_PUBLICATION_POLICY_VERSION,
         scoringNormalizationVersion: LEAGUE_SCORING_NORMALIZATION_VERSION,
@@ -1515,6 +1547,9 @@ export class FirstPartyProjectionService implements ProjectionRefreshService {
         baseChecksum,
       );
       if (priorOutputs.complete) {
+        await this.#database.transaction((transaction) =>
+          this.#assertInputSnapshot(transaction, job.season, inputSnapshot),
+        );
         await this.#recordSourceSuccess(source.id, now, baseChecksum, {
           targetWeeks: targetWeeks.join(","),
           publishedWeeks: 0,
@@ -1550,6 +1585,7 @@ export class FirstPartyProjectionService implements ProjectionRefreshService {
       const completedWeeks = completedScheduleWeekKeys(input.schedules, now);
       const trainingKey = projectionTrainingCacheKey({
         firstTargetWeek,
+        historicalRolesChecksum: inputSnapshot.historicalRolesChecksum,
         statisticalSources: selectedSources
           .filter(
             (selected) =>
@@ -1640,12 +1676,12 @@ export class FirstPartyProjectionService implements ProjectionRefreshService {
       const training = this.#trainingCache;
       const playerBacktest = training.publicationPlayerBacktest;
 
-      // Recomputed from the live `data_sources` rows - not the `selectedSources` snapshot already
-      // in hand - so a required source that finished a concurrent refresh while this run loaded
-      // history and trained is actually detected instead of trivially matching itself.
-      const endInputEpoch = firstPartyInputEpoch(
-        await this.#currentRequiredSourceEpochInputs(requiredSourceKeys),
-      );
+      // Cheap early rejection; the authoritative source/catalog fence runs again with locks
+      // inside each publication transaction, after the expensive league calculations.
+      const endInputEpoch = weeklySourceManifest(
+        requiredFirstPartyProjectionSourceKeys(job.season),
+        await this.#selectSources(job.season, this.#now()),
+      ).checksum;
       if (endInputEpoch !== startInputEpoch) {
         await this.#recordSourceSuccess(source.id, now, null, {
           targetWeeks: targetWeeks.join(","),
@@ -1657,10 +1693,13 @@ export class FirstPartyProjectionService implements ProjectionRefreshService {
           lastEvaluationAt: now.toISOString(),
           result: "input_epoch_changed",
         });
-        return;
+        // The queued request still needs an evaluation of the replacement inputs. Reject this
+        // discarded attempt so the ordinary queue retry survives the isolated-process boundary.
+        throw Object.assign(new Error("Weekly projection inputs changed during refresh"), {
+          code: "PROJECTION_INPUT_EPOCH_CHANGED",
+        });
       }
 
-      let publishedWeeks = 0;
       const publicationGates: ModelGate[] = [];
       for (const week of targetWeeks) {
         if (context.signal.aborted) throw new Error("Projection refresh was cancelled");
@@ -1673,6 +1712,7 @@ export class FirstPartyProjectionService implements ProjectionRefreshService {
           sourceAsOf,
           inputChecksum,
           inputEpoch: startInputEpoch,
+          inputSnapshot,
           gate: training.gate,
           playerHistory: training.completedPlayerHistory,
           defenseHistory: training.completedDefenseHistory,
@@ -1719,6 +1759,20 @@ export class FirstPartyProjectionService implements ProjectionRefreshService {
               : "prior_good_output_preserved",
       });
     } catch (error) {
+      if (
+        error !== null &&
+        typeof error === "object" &&
+        "code" in error &&
+        error.code === "PROJECTION_INPUT_EPOCH_CHANGED"
+      ) {
+        await this.#recordSourceSuccess(source.id, now, null, {
+          modelVersion: FIRST_PARTY_PROJECTION_MODEL_VERSION,
+          publishedWeeks,
+          qualityState: "rejected",
+          qualityReasons: "input_epoch_changed",
+          result: "input_epoch_changed",
+        });
+      }
       await this.#recordSourceFailure(
         source.id,
         now,
@@ -1879,10 +1933,14 @@ export class FirstPartyProjectionService implements ProjectionRefreshService {
     };
   }
 
-  async #selectSources(season: number, now: Date): Promise<readonly SelectedSource[]> {
+  async #selectSources(
+    season: number,
+    now: Date,
+    database: WeeklyInputDatabase = this.#database,
+  ): Promise<readonly SelectedSource[]> {
     const keys = requiredFirstPartyProjectionSourceKeys(season);
     const allKeys = [...keys.required, ...keys.optional];
-    const rows = await this.#database
+    const rows = await database
       .select({
         id: dataSources.id,
         key: dataSources.key,
@@ -1956,41 +2014,57 @@ export class FirstPartyProjectionService implements ProjectionRefreshService {
     return selected;
   }
 
-  /** Maps each required source key to its `{key, checksum, asOf}` epoch triple, missing-safe. */
-  #requiredSourceEpochInputs(
-    keys: readonly string[],
-    sources: readonly SelectedSource[],
-  ): readonly ProjectionEpochSource[] {
-    const byKey = new Map(sources.map((source) => [source.key, source]));
-    return keys.map((key) => {
-      const source = byKey.get(key);
-      return { key, checksum: source?.checksum ?? "", asOf: source?.lastSuccessfulAt ?? "" };
-    });
+  async #assertInputSnapshot(
+    database: WeeklyInputDatabase,
+    season: number,
+    expected: WeeklyInputSnapshot,
+  ): Promise<WeeklyPublicationBudget> {
+    try {
+      const budget = await lockWeeklyPublicationInputs(database);
+      const selected = await this.#selectSources(season, this.#now(), database);
+      budget.check();
+      const current = weeklySourceManifest(
+        requiredFirstPartyProjectionSourceKeys(season),
+        selected,
+      );
+      if (current.checksum !== expected.sourceManifest.checksum) throw weeklyInputChangedError();
+      const mutableChecksum = await readWeeklyMutableInputChecksum(
+        database,
+        season,
+        selected.find((entry) => entry.key === "sleeper.players")?.id ?? null,
+      );
+      budget.check();
+      if (mutableChecksum !== expected.mutableChecksum) throw weeklyInputChangedError();
+      return budget;
+    } catch (error) {
+      let cause: unknown = error;
+      let code: string | undefined;
+      for (let depth = 0; depth < 4 && cause !== null && typeof cause === "object"; depth += 1) {
+        if ("code" in cause && typeof cause.code === "string") {
+          code = cause.code;
+          break;
+        }
+        cause = "cause" in cause ? cause.cause : undefined;
+      }
+      // Source health rejection and lock/serialization contention are transient input failures.
+      // Unexpected SQL errors retain their own identity instead of masquerading as source drift.
+      if (
+        code === undefined ||
+        (typeof code === "string" &&
+          ["55P03", "40001", "40P01", "PROJECTION_INPUT_EPOCH_CHANGED"].includes(code))
+      ) {
+        throw weeklyInputChangedError();
+      }
+      throw error;
+    }
   }
 
-  /**
-   * Re-reads the live `data_sources` rows for the given keys, independent of any prior snapshot,
-   * and maps them to the same `{key, checksum, asOf}` epoch shape as `#requiredSourceEpochInputs`.
-   */
-  async #currentRequiredSourceEpochInputs(
-    keys: readonly string[],
-  ): Promise<readonly ProjectionEpochSource[]> {
-    const rows = await this.#database
-      .select({
-        key: dataSources.key,
-        lastChecksum: dataSources.lastChecksum,
-        lastSuccessfulAt: dataSources.lastSuccessfulAt,
-      })
-      .from(dataSources)
-      .where(inArray(dataSources.key, keys));
-    const byKey = new Map(rows.map((row) => [row.key, row]));
-    return keys.map((key) => {
-      const row = byKey.get(key);
-      return { key, checksum: row?.lastChecksum ?? "", asOf: row?.lastSuccessfulAt ?? "" };
-    });
-  }
-
-  async #loadInputs(season: number, selectedSources: readonly SelectedSource[], now: Date) {
+  async #loadInputs(
+    season: number,
+    selectedSources: readonly SelectedSource[],
+    now: Date,
+    database: WeeklyInputDatabase,
+  ) {
     const selectedByKey = new Map(selectedSources.map((source) => [source.key, source]));
     const weeklyVersion = sourceVersionPredicate(
       selectedSources,
@@ -2044,7 +2118,7 @@ export class FirstPartyProjectionService implements ProjectionRefreshService {
       leagueRows,
       ruleRows,
     ] = await Promise.all([
-      this.#database
+      database
         .select({
           playerId: playerWeeklyStatObservations.playerId,
           catalogPosition: players.primaryPosition,
@@ -2065,7 +2139,7 @@ export class FirstPartyProjectionService implements ProjectionRefreshService {
             eq(playerWeeklyStatObservations.seasonType, "REG"),
           ),
         ),
-      this.#database
+      database
         .select({
           playerId: playerWeeklyRosterObservations.playerId,
           position: playerWeeklyRosterObservations.position,
@@ -2077,7 +2151,7 @@ export class FirstPartyProjectionService implements ProjectionRefreshService {
         .from(playerWeeklyRosterObservations)
         .innerJoin(players, eq(players.id, playerWeeklyRosterObservations.playerId))
         .where(and(rosterVersion, inArray(playerWeeklyRosterObservations.season, seasons))),
-      this.#database
+      database
         .select({
           playerId: playerInjuryReportObservations.playerId,
           season: playerInjuryReportObservations.season,
@@ -2094,7 +2168,7 @@ export class FirstPartyProjectionService implements ProjectionRefreshService {
             eq(playerInjuryReportObservations.seasonType, "REG"),
           ),
         ),
-      this.#database
+      database
         .select({
           playerId: playerSnapCountObservations.playerId,
           catalogPosition: players.primaryPosition,
@@ -2115,7 +2189,7 @@ export class FirstPartyProjectionService implements ProjectionRefreshService {
             eq(playerSnapCountObservations.seasonType, "REG"),
           ),
         ),
-      this.#database
+      database
         .select({
           season: teamWeeklyStatObservations.season,
           week: teamWeeklyStatObservations.week,
@@ -2132,7 +2206,7 @@ export class FirstPartyProjectionService implements ProjectionRefreshService {
             eq(teamWeeklyStatObservations.seasonType, "REG"),
           ),
         ),
-      this.#database
+      database
         .select({
           season: nflScheduleObservations.season,
           week: nflScheduleObservations.week,
@@ -2152,7 +2226,7 @@ export class FirstPartyProjectionService implements ProjectionRefreshService {
             eq(nflScheduleObservations.seasonType, "REG"),
           ),
         ),
-      this.#database
+      database
         .select({
           id: players.id,
           gsisId: players.gsisId,
@@ -2163,7 +2237,7 @@ export class FirstPartyProjectionService implements ProjectionRefreshService {
           lastSeason: players.lastSeason,
         })
         .from(players),
-      this.#database
+      database
         .select({
           id: leagueSeasons.id,
           provider: leagueSeasons.provider,
@@ -2172,7 +2246,7 @@ export class FirstPartyProjectionService implements ProjectionRefreshService {
         })
         .from(leagueSeasons)
         .where(eq(leagueSeasons.season, season)),
-      this.#database
+      database
         .select({
           leagueSeasonId: scoringRules.leagueSeasonId,
           statKey: scoringRules.statKey,
@@ -2212,7 +2286,7 @@ export class FirstPartyProjectionService implements ProjectionRefreshService {
 
     const sleeper = selectedByKey.get("sleeper.players");
     const statusRows = sleeper
-      ? await this.#database
+      ? await database
           .select({
             playerId: playerSourceObservations.playerId,
             gsisId: playerSourceObservations.gsisId,
@@ -2223,7 +2297,7 @@ export class FirstPartyProjectionService implements ProjectionRefreshService {
           .from(playerSourceObservations)
           .where(eq(playerSourceObservations.sourceId, sleeper.id))
       : [];
-    const providerExternalRows = await this.#database
+    const providerExternalRows = await database
       .select({
         playerId: playerExternalIds.playerId,
         source: playerExternalIds.source,
@@ -2261,8 +2335,13 @@ export class FirstPartyProjectionService implements ProjectionRefreshService {
       }
     }
 
-    const defensePlayerRows = await this.#ensureDefensePlayers(normalizedScheduleRows, season, now);
-    const rosters = (await this.#loadLatestRosters(leagueRows)).map(
+    const defensePlayerRows = await this.#ensureDefensePlayers(
+      normalizedScheduleRows,
+      season,
+      now,
+      database,
+    );
+    const rosters = (await this.#loadLatestRosters(leagueRows, database)).map(
       (roster): LeagueRosterPlayer => ({
         ...roster,
         primaryPosition: effectivePositionByPlayer.get(roster.playerId) ?? roster.primaryPosition,
@@ -2425,6 +2504,7 @@ export class FirstPartyProjectionService implements ProjectionRefreshService {
     schedules: readonly ProjectionScheduleFact[],
     season: number,
     now: Date,
+    database: WeeklyInputDatabase,
   ): Promise<readonly PlayerRow[]> {
     const teams = [
       ...new Set(
@@ -2440,7 +2520,7 @@ export class FirstPartyProjectionService implements ProjectionRefreshService {
       throw new Error(`Expected 32 scheduled NFL teams, received ${teams.length}`);
     }
     for (const batch of chunks(teams)) {
-      await this.#database
+      await database
         .insert(players)
         .values(
           batch.map((team) => ({
@@ -2458,7 +2538,7 @@ export class FirstPartyProjectionService implements ProjectionRefreshService {
         .onConflictDoNothing({ target: players.id });
     }
     const ids = teams.map(firstPartyDefensePlayerId);
-    const rows = await this.#database
+    const rows = await database
       .select({
         id: players.id,
         gsisId: players.gsisId,
@@ -2486,9 +2566,12 @@ export class FirstPartyProjectionService implements ProjectionRefreshService {
     });
   }
 
-  async #loadLatestRosters(leagues: readonly LeagueRow[]): Promise<readonly LeagueRosterPlayer[]> {
+  async #loadLatestRosters(
+    leagues: readonly LeagueRow[],
+    database: WeeklyInputDatabase,
+  ): Promise<readonly LeagueRosterPlayer[]> {
     if (leagues.length === 0) return [];
-    const snapshotRows = await this.#database
+    const snapshotRows = await database
       .select({
         leagueSeasonId: fantasyTeams.leagueSeasonId,
         teamId: fantasyTeams.id,
@@ -2518,7 +2601,7 @@ export class FirstPartyProjectionService implements ProjectionRefreshService {
     }
     const latestSnapshots = [...latestSnapshotByTeam.values()];
     if (latestSnapshots.length === 0) return [];
-    const entryRows = await this.#database
+    const entryRows = await database
       .select({
         snapshotId: rosterEntries.snapshotId,
         playerId: rosterEntries.playerId,
@@ -2586,6 +2669,7 @@ export class FirstPartyProjectionService implements ProjectionRefreshService {
     readonly sourceAsOf: Date;
     readonly inputChecksum: string;
     readonly inputEpoch: string;
+    readonly inputSnapshot?: WeeklyInputSnapshot;
     readonly gate: ModelGate;
     readonly playerHistory: ReturnType<typeof buildFirstPartyPlayerHistory>;
     readonly defenseHistory: ReturnType<typeof buildFirstPartyDefenseHistory>;
@@ -2847,72 +2931,87 @@ export class FirstPartyProjectionService implements ProjectionRefreshService {
       .at(-1);
 
     const inserted = await this.#database.transaction(async (transaction) => {
-      const [run] = await transaction
-        .insert(syncRuns)
-        .values({
-          kind: "first-party-projection",
-          state: "running",
-          idempotencyKey,
-          startedAt: input.now,
-          recordsRead: input.playerHistory.length + input.defenseHistory.length,
-          artifactChecksum: input.inputChecksum,
-        })
-        .onConflictDoNothing({ target: syncRuns.idempotencyKey })
-        .returning({ id: syncRuns.id });
+      const budget = input.inputSnapshot
+        ? await this.#assertInputSnapshot(transaction, input.season, input.inputSnapshot)
+        : undefined;
+      const withinBudget = async <T>(query: PromiseLike<T>): Promise<T> => {
+        budget?.check();
+        const result = await query;
+        budget?.check();
+        return result;
+      };
+      const [run] = await withinBudget(
+        transaction
+          .insert(syncRuns)
+          .values({
+            kind: "first-party-projection",
+            state: "running",
+            idempotencyKey,
+            startedAt: input.now,
+            recordsRead: input.playerHistory.length + input.defenseHistory.length,
+            artifactChecksum: input.inputChecksum,
+          })
+          .onConflictDoNothing({ target: syncRuns.idempotencyKey })
+          .returning({ id: syncRuns.id }),
+      );
       if (!run) return false;
 
-      await transaction.insert(projectionModelRuns).values({
-        sourceSyncRunId: run.id,
-        sourceId: input.sourceId,
-        season: input.season,
-        targetWeek: input.week,
-        modelVersion: FIRST_PARTY_PROJECTION_MODEL_VERSION,
-        trainingWindowStartSeason: input.season - 3,
-        trainedThroughSeason: trainedThrough?.season ?? input.season - 1,
-        trainedThroughWeek: trainedThrough?.week ?? null,
-        qualityState: releaseGate.state,
-        playersEvaluated: evaluatedCount,
-        playersPublished: releaseGate.state === "publishable" ? rawCount : 0,
-        inputChecksum: input.inputChecksum,
-        configuration: {
-          historySeasons: historySeasonCount,
-          publicationGate: "walk-forward champion MAE <= recency-only baseline",
-          championPolicy: input.playerChampionPolicy,
-          pointIntervals:
-            "league-scored residual quantiles; RB/WR/TE scale with the raw point forecast",
-          byes: "explicit zero",
-          defenseMethodWarnings,
-          // The cross-source completed-batch identity proving every required source (player
-          // stats, team stats, rosters, injuries, snaps, schedule, Sleeper availability) was the
-          // same at the start of this refresh as it was immediately before this transaction; see
-          // weekly-production risk #2.
-          inputEpoch: { version: FIRST_PARTY_INPUT_EPOCH_VERSION, value: input.inputEpoch },
-        },
-        calibration: {
-          player: input.playerBacktest.calibration,
-          defense: input.defenseBacktest.calibration,
-        },
-        metrics: {
-          gate: releaseGate,
-          player: input.playerBacktest.overall,
-          playerChampionPolicy: input.playerChampionPolicy,
-          defense: input.defenseBacktest.overall,
-          leagues: {
-            eligible: input.leagues.length,
-            published: leaguePublications.length,
-            rowsPublished: leaguePublications.reduce(
-              (total, publication) => total + publication.rows.length,
-              0,
-            ),
-            withheld: leaguePlan.withheld,
-            // Leagues that PUBLISHED under a caveat. Kept out of `withheld` on purpose: every
-            // reader of that array treats an entry as a reason a league did not publish.
-            notes: leaguePlan.notes,
+      await withinBudget(
+        transaction.insert(projectionModelRuns).values({
+          sourceSyncRunId: run.id,
+          sourceId: input.sourceId,
+          season: input.season,
+          targetWeek: input.week,
+          modelVersion: FIRST_PARTY_PROJECTION_MODEL_VERSION,
+          trainingWindowStartSeason: input.season - 3,
+          trainedThroughSeason: trainedThrough?.season ?? input.season - 1,
+          trainedThroughWeek: trainedThrough?.week ?? null,
+          qualityState: releaseGate.state,
+          playersEvaluated: evaluatedCount,
+          playersPublished: releaseGate.state === "publishable" ? rawCount : 0,
+          inputChecksum: input.inputChecksum,
+          configuration: {
+            historySeasons: historySeasonCount,
+            publicationGate: "walk-forward champion MAE <= recency-only baseline",
+            championPolicy: input.playerChampionPolicy,
+            pointIntervals:
+              "league-scored residual quantiles; RB/WR/TE scale with the raw point forecast",
+            byes: "explicit zero",
+            defenseMethodWarnings,
+            // Snapshot provenance includes selected and absent optional sources. Production refreshes
+            // also fence mutable catalog/league facts under short publication locks before writes.
+            inputEpoch: {
+              version: input.inputSnapshot?.version ?? FIRST_PARTY_INPUT_EPOCH_VERSION,
+              value: input.inputEpoch,
+            },
+            ...(input.inputSnapshot ? { inputSnapshot: input.inputSnapshot } : {}),
           },
-        },
-        sourceAsOf: input.sourceAsOf,
-        createdAt: input.now,
-      });
+          calibration: {
+            player: input.playerBacktest.calibration,
+            defense: input.defenseBacktest.calibration,
+          },
+          metrics: {
+            gate: releaseGate,
+            player: input.playerBacktest.overall,
+            playerChampionPolicy: input.playerChampionPolicy,
+            defense: input.defenseBacktest.overall,
+            leagues: {
+              eligible: input.leagues.length,
+              published: leaguePublications.length,
+              rowsPublished: leaguePublications.reduce(
+                (total, publication) => total + publication.rows.length,
+                0,
+              ),
+              withheld: leaguePlan.withheld,
+              // Leagues that PUBLISHED under a caveat. Kept out of `withheld` on purpose: every
+              // reader of that array treats an entry as a reason a league did not publish.
+              notes: leaguePlan.notes,
+            },
+          },
+          sourceAsOf: input.sourceAsOf,
+          createdAt: input.now,
+        }),
+      );
 
       if (releaseGate.state === "publishable") {
         const observationRows = [
@@ -2952,7 +3051,7 @@ export class FirstPartyProjectionService implements ProjectionRefreshService {
           })),
         ];
         for (const batch of chunks(observationRows)) {
-          await transaction.insert(projectionObservations).values([...batch]);
+          await withinBudget(transaction.insert(projectionObservations).values([...batch]));
         }
       }
 
@@ -2960,54 +3059,63 @@ export class FirstPartyProjectionService implements ProjectionRefreshService {
       // position evidence. The planner has already enforced its complete roster/locked-row
       // contract; never fill missing rows from a different set or scoring profile here.
       for (const publication of leaguePublications) {
-        const [set] = await transaction
-          .insert(projectionSets)
-          .values({
-            leagueSeasonId: publication.league.id,
-            createdByUserId: null,
-            visibility: "league",
-            source: FIRST_PARTY_PROJECTION_SET_SOURCE,
-            version: publication.version,
-            season: input.season,
-            week: input.week,
-            horizon: "week",
-            fetchedAt: input.sourceAsOf,
-            inputChecksum: publication.inputChecksum,
-            metadata: publication.metadata,
-            createdAt: input.now,
-          })
-          .onConflictDoNothing({
-            target: [projectionSets.source, projectionSets.version],
-          })
-          .returning({ id: projectionSets.id });
+        const [set] = await withinBudget(
+          transaction
+            .insert(projectionSets)
+            .values({
+              leagueSeasonId: publication.league.id,
+              createdByUserId: null,
+              visibility: "league",
+              source: FIRST_PARTY_PROJECTION_SET_SOURCE,
+              version: publication.version,
+              season: input.season,
+              week: input.week,
+              horizon: "week",
+              fetchedAt: input.sourceAsOf,
+              inputChecksum: publication.inputChecksum,
+              metadata: {
+                ...publication.metadata,
+                ...(input.inputSnapshot ? { inputSnapshot: input.inputSnapshot } : {}),
+              },
+              createdAt: input.now,
+            })
+            .onConflictDoNothing({
+              target: [projectionSets.source, projectionSets.version],
+            })
+            .returning({ id: projectionSets.id }),
+        );
         if (!set) continue;
         for (const batch of chunks(publication.rows)) {
-          await transaction.insert(playerProjections).values(
-            batch.map((row) => ({
-              projectionSetId: set.id,
-              playerId: row.playerId,
-              meanPoints: row.mean.toFixed(3),
-              floorPoints: row.floor.toFixed(3),
-              ceilingPoints: row.ceiling.toFixed(3),
-              confidence: row.confidence.toFixed(4),
-              components: row.components,
-            })),
+          await withinBudget(
+            transaction.insert(playerProjections).values(
+              batch.map((row) => ({
+                projectionSetId: set.id,
+                playerId: row.playerId,
+                meanPoints: row.mean.toFixed(3),
+                floorPoints: row.floor.toFixed(3),
+                ceilingPoints: row.ceiling.toFixed(3),
+                confidence: row.confidence.toFixed(4),
+                components: row.components,
+              })),
+            ),
           );
         }
       }
 
-      await transaction
-        .update(syncRuns)
-        .set({
-          state: "complete",
-          finishedAt: input.now,
-          recordsWritten: Math.max(
-            1,
-            (releaseGate.state === "publishable" ? rawCount : 0) +
-              leaguePublications.reduce((sum, league) => sum + league.rows.length, 0),
-          ),
-        })
-        .where(eq(syncRuns.id, run.id));
+      await withinBudget(
+        transaction
+          .update(syncRuns)
+          .set({
+            state: "complete",
+            finishedAt: input.now,
+            recordsWritten: Math.max(
+              1,
+              (releaseGate.state === "publishable" ? rawCount : 0) +
+                leaguePublications.reduce((sum, league) => sum + league.rows.length, 0),
+            ),
+          })
+          .where(eq(syncRuns.id, run.id)),
+      );
       return true;
     });
     return {

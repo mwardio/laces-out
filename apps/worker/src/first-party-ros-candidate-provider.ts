@@ -36,6 +36,8 @@ import {
   type ProjectionScoringProfile,
 } from "@laces-out/projections";
 import { createRosLiveProjectionReuse } from "./ros-live-reuse.js";
+import { rosSourceVersionPredicate } from "./first-party-ros-source-versions.js";
+import { readRosHistoryCatalogRolesChecksum } from "./ros-history-catalog-checksum.js";
 import { assertFootballSourceCoherence } from "./football-source-coherence.js";
 import { and, desc, eq, inArray } from "drizzle-orm";
 
@@ -59,6 +61,7 @@ import {
 } from "./first-party-ros-candidates.js";
 import {
   buildFirstPartyPlayerHistory,
+  FIRST_PARTY_PLAYER_HISTORY_VERSION,
   buildFirstPartyDefenseHistory,
   type ProjectionInjuryFact,
   type ProjectionRosterFact,
@@ -1129,27 +1132,29 @@ export function databaseFirstPartyRosCandidateProvider(input: {
     const { season, window } = sourceInput;
     const sourceKeys = firstPartyRosCandidateSourceKeys(season);
     const sources = await pinnedSourceChecksums(database, sourceKeys);
-    const [leagueRows, scoringRuleRows, candidatePlayers] = await Promise.all([
-      database
-        .select({ id: leagueSeasons.id, provider: leagueSeasons.provider })
-        .from(leagueSeasons)
-        .where(eq(leagueSeasons.season, season)),
-      database
-        .select({
-          leagueSeasonId: scoringRules.leagueSeasonId,
-          statKey: scoringRules.statKey,
-          providerStatId: scoringRules.providerStatId,
-          operation: scoringRules.operation,
-          points: scoringRules.points,
-          thresholdLow: scoringRules.thresholdLow,
-          thresholdHigh: scoringRules.thresholdHigh,
-          positionTypes: scoringRules.positionTypes,
-        })
-        .from(scoringRules)
-        .innerJoin(leagueSeasons, eq(leagueSeasons.id, scoringRules.leagueSeasonId))
-        .where(eq(leagueSeasons.season, season)),
-      currentAliasCandidatePoolForChecksum(database, season, sources),
-    ]);
+    const [leagueRows, scoringRuleRows, candidatePlayers, historyCatalogChecksum] =
+      await Promise.all([
+        database
+          .select({ id: leagueSeasons.id, provider: leagueSeasons.provider })
+          .from(leagueSeasons)
+          .where(eq(leagueSeasons.season, season)),
+        database
+          .select({
+            leagueSeasonId: scoringRules.leagueSeasonId,
+            statKey: scoringRules.statKey,
+            providerStatId: scoringRules.providerStatId,
+            operation: scoringRules.operation,
+            points: scoringRules.points,
+            thresholdLow: scoringRules.thresholdLow,
+            thresholdHigh: scoringRules.thresholdHigh,
+            positionTypes: scoringRules.positionTypes,
+          })
+          .from(scoringRules)
+          .innerJoin(leagueSeasons, eq(leagueSeasons.id, scoringRules.leagueSeasonId))
+          .where(eq(leagueSeasons.season, season)),
+        currentAliasCandidatePoolForChecksum(database, season, sources),
+        readRosHistoryCatalogRolesChecksum(database, projectionHistorySeasons(season), sources),
+      ]);
     const aliasPlans = await latestLeaguePlayerAliasPlans(
       database,
       leagueRows.map((league) => league.id),
@@ -1158,7 +1163,8 @@ export function databaseFirstPartyRosCandidateProvider(input: {
     );
     return {
       aliasPlans,
-      checksum: aggregateChecksum("live-ros-candidate-provider-v6", [
+      checksum: aggregateChecksum("live-ros-candidate-provider-v7", [
+        `player-history:${FIRST_PARTY_PLAYER_HISTORY_VERSION}`,
         `season:${season}`,
         `window:${window.windowStartWeek}-${window.windowEndWeek}:asof-${window.asOfWeek}`,
         `scenario-count:${input.scenarioCount ?? "default"}`,
@@ -1182,6 +1188,7 @@ export function databaseFirstPartyRosCandidateProvider(input: {
           }),
         )}`,
         `player-alias-plans:${firstPartyRosPlayerAliasPlansChecksum(aliasPlans)}`,
+        `history-catalog-roles:${historyCatalogChecksum}`,
         ...sourceKeys.map((key) => `${key}:${sources.get(key)?.checksum ?? "missing"}`),
       ]),
     };
@@ -1682,13 +1689,10 @@ async function prepareDatabaseFirstPartyRosTargets(
       .from(nflScheduleObservations)
       .where(
         and(
-          inArray(
+          rosSourceVersionPredicate(
+            scheduleSources,
             nflScheduleObservations.sourceId,
-            scheduleSources.map((entry) => entry.id),
-          ),
-          inArray(
             nflScheduleObservations.inputChecksum,
-            scheduleSources.map((entry) => entry.checksum),
           ),
           inArray(nflScheduleObservations.season, seasons),
           eq(nflScheduleObservations.seasonType, "REG"),
@@ -1712,13 +1716,10 @@ async function prepareDatabaseFirstPartyRosTargets(
           .innerJoin(players, eq(players.id, playerWeeklyStatObservations.playerId))
           .where(
             and(
-              inArray(
+              rosSourceVersionPredicate(
+                statSources,
                 playerWeeklyStatObservations.sourceId,
-                statSources.map((entry) => entry.id),
-              ),
-              inArray(
                 playerWeeklyStatObservations.inputChecksum,
-                statSources.map((entry) => entry.checksum),
               ),
               inArray(playerWeeklyStatObservations.season, seasons),
               eq(playerWeeklyStatObservations.seasonType, "REG"),
@@ -1742,13 +1743,10 @@ async function prepareDatabaseFirstPartyRosTargets(
           .innerJoin(players, eq(players.id, playerSnapCountObservations.playerId))
           .where(
             and(
-              inArray(
+              rosSourceVersionPredicate(
+                snapSources,
                 playerSnapCountObservations.sourceId,
-                snapSources.map((entry) => entry.id),
-              ),
-              inArray(
                 playerSnapCountObservations.inputChecksum,
-                snapSources.map((entry) => entry.checksum),
               ),
               inArray(playerSnapCountObservations.season, seasons),
               eq(playerSnapCountObservations.seasonType, "REG"),
@@ -1773,13 +1771,10 @@ async function prepareDatabaseFirstPartyRosTargets(
           .from(playerWeeklyRosterObservations)
           .where(
             and(
-              inArray(
+              rosSourceVersionPredicate(
+                rosterSources,
                 playerWeeklyRosterObservations.sourceId,
-                rosterSources.map((entry) => entry.id),
-              ),
-              inArray(
                 playerWeeklyRosterObservations.inputChecksum,
-                rosterSources.map((entry) => entry.checksum),
               ),
               inArray(playerWeeklyRosterObservations.season, seasons),
             ),
@@ -1798,13 +1793,10 @@ async function prepareDatabaseFirstPartyRosTargets(
           .innerJoin(players, eq(players.id, playerInjuryReportObservations.playerId))
           .where(
             and(
-              inArray(
+              rosSourceVersionPredicate(
+                injurySources,
                 playerInjuryReportObservations.sourceId,
-                injurySources.map((entry) => entry.id),
-              ),
-              inArray(
                 playerInjuryReportObservations.inputChecksum,
-                injurySources.map((entry) => entry.checksum),
               ),
               inArray(playerInjuryReportObservations.season, seasons),
               eq(playerInjuryReportObservations.seasonType, "REG"),
@@ -1824,13 +1816,10 @@ async function prepareDatabaseFirstPartyRosTargets(
           .from(teamWeeklyStatObservations)
           .where(
             and(
-              inArray(
+              rosSourceVersionPredicate(
+                teamStatSources,
                 teamWeeklyStatObservations.sourceId,
-                teamStatSources.map((entry) => entry.id),
-              ),
-              inArray(
                 teamWeeklyStatObservations.inputChecksum,
-                teamStatSources.map((entry) => entry.checksum),
               ),
               inArray(teamWeeklyStatObservations.season, seasons),
               eq(teamWeeklyStatObservations.seasonType, "REG"),

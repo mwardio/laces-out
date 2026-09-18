@@ -25,6 +25,10 @@ import type {
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  FIRST_PARTY_PLAYER_HISTORY_VERSION,
+  projectionInputChecksum,
+} from "./first-party-projection-inputs.js";
+import {
   buildFirstPartyLeaguePublications,
   type ScoredProjectionRow,
   canonicalProjectionPlayerId,
@@ -397,6 +401,28 @@ describe("first-party projection publication policy", () => {
     );
     expect(projectionStatusWindow(kickoff, new Date("2026-09-29T12:00:00.000Z"))).toBe("started");
     expect(projectionStatusWindow(null, new Date("2026-09-01T12:00:00.000Z"))).toBe("unknown-time");
+  });
+
+  it("invalidates pre-correction history assembly caches even with identical source bytes", () => {
+    const input = {
+      firstTargetWeek: 4,
+      statisticalSources: [{ key: "nflverse.stats-player-week.2025", checksum: "a".repeat(64) }],
+      playerPositions: [{ id: "player", position: "TE" }],
+      completedSchedule: [],
+    } as const;
+    const legacyIdentity = {
+      modelVersion: FIRST_PARTY_PROJECTION_MODEL_VERSION,
+      sourceSchemaVersion: 7,
+      ...input,
+    };
+    const current = projectionTrainingCacheKey(input);
+    expect(current).not.toBe(projectionInputChecksum(legacyIdentity));
+    expect(current).toBe(
+      projectionInputChecksum({
+        ...legacyIdentity,
+        playerHistoryVersion: FIRST_PARTY_PLAYER_HISTORY_VERSION,
+      }),
+    );
   });
 
   it("invalidates cached training artifacts after a canonical position correction", () => {

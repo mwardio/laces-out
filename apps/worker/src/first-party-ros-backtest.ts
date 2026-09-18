@@ -14,6 +14,7 @@ import {
   FIRST_PARTY_ROS_DEFAULT_SCENARIOS,
   FIRST_PARTY_ROS_CONVERGENCE_REFERENCE_SCENARIOS,
   canonicalFirstPartyTeamDefenseOutcomes,
+  createFirstPartyWeeklyComponentCoverageInspector,
   evaluateFirstPartyRosConvergence,
   evaluateFirstPartyRosChampionPolicy,
   firstPartyProjectionComponentsForPosition,
@@ -679,6 +680,87 @@ export function selectHistoricalRosPlayers(input: {
       input.playersPerPosition,
     ),
   );
+}
+
+/** Qualify every selected player's conditional component schema before fitting or simulation. */
+export function preflightHistoricalRosComponentCoverage(
+  input: Pick<
+    HistoricalRosBacktestInput,
+    "history" | "rosters" | "schedules" | "coverage" | "scoringProfile" | "options"
+  >,
+) {
+  const options = resolveOptions(input.options);
+  const positions = new Set(options.positions);
+  const failures: Array<{
+    readonly season: number;
+    readonly asOfWeek: number;
+    readonly playerId: string;
+    readonly position: FirstPartyProjectionPosition;
+    readonly firstScheduledWeek: number;
+    readonly contextualMissing: readonly string[];
+    readonly recencyMissing: readonly string[];
+  }> = [];
+  let checkedBatches = 0;
+  let checkedPlayers = 0;
+  let checkedScheduledWeeks = 0;
+  for (const season of options.heldOutSeasons) {
+    if (!input.coverage.fullyHeldOutSeasons.includes(season)) continue;
+    const coverage = input.coverage.seasons.find((candidate) => candidate.season === season);
+    for (const asOfWeek of options.asOfWeeks) {
+      if (!coverage?.weeks.some((week) => week.asOfWeek === asOfWeek && week.complete)) continue;
+      const history = historicalRosFeatureRows(input.history, season, asOfWeek);
+      const inspect = createFirstPartyWeeklyComponentCoverageInspector(history);
+      const players = selectHistoricalRosPlayers({
+        history,
+        rosters: input.rosters,
+        season,
+        asOfWeek,
+        scoringProfile: input.scoringProfile,
+        playersPerPosition: options.playersPerPosition,
+      }).filter((player) => positions.has(player.position));
+      checkedBatches += 1;
+      for (const player of players) {
+        const scheduledWeeks = Array.from(
+          { length: 18 - asOfWeek },
+          (_, index) => asOfWeek + index + 1,
+        ).filter(
+          (week) => scheduleForTeam(input.schedules, season, week, player.team) !== undefined,
+        );
+        const firstScheduledWeek = scheduledWeeks[0];
+        if (firstScheduledWeek === undefined) continue;
+        checkedPlayers += 1;
+        checkedScheduledWeeks += scheduledWeeks.length;
+        // Every future target uses this same strictly cutoff-bounded history. Component presence
+        // depends only on position/player evidence, never opponent, fitting, or forecast distance.
+        const evidence = inspect({
+          playerId: player.playerId,
+          position: player.position,
+          team: player.team,
+          season,
+          week: firstScheduledWeek,
+          status: "active",
+          scheduled: true,
+        });
+        if (evidence.contextualMissing.length > 0 || evidence.recencyMissing.length > 0) {
+          failures.push({
+            season,
+            asOfWeek,
+            playerId: player.playerId,
+            position: player.position,
+            firstScheduledWeek,
+            ...evidence,
+          });
+        }
+      }
+    }
+  }
+  return {
+    state: failures.length === 0 ? ("qualified" as const) : ("blocked" as const),
+    checkedBatches,
+    checkedPlayers,
+    checkedScheduledWeeks,
+    failures,
+  };
 }
 
 function latestInjuryStatus(

@@ -184,6 +184,21 @@ describe("first-party ROS champion artifact checksum", () => {
 });
 
 describe("first-party ROS champion artifact validity", () => {
+  it("rejects self-consistent v4 evidence assembled before complete zero-game touchdown history", () => {
+    const current = loadedArtifact(buildLivePolicy());
+    const legacy = {
+      ...current,
+      policyVersion: "season-walk-forward-block-wis-cqr-v4",
+      policy: {
+        ...current.policy,
+        policyVersion: "season-walk-forward-block-wis-cqr-v4",
+      } as unknown as FirstPartyRosChampionPolicy,
+    };
+    legacy.artifactChecksum = firstPartyRosChampionArtifactChecksum(legacy);
+    expect(firstPartyRosChampionArtifactIsValid(legacy)).toBe(false);
+    expect(firstPartyRosChampionArtifactIsValid(current)).toBe(true);
+  });
+
   it("accepts a self-consistent artifact and rejects tampering", () => {
     const policy = buildLivePolicy();
     const artifact = loadedArtifact(policy);

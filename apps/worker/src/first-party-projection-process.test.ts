@@ -2,7 +2,10 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
+import type { PgBoss, Job } from "pg-boss";
+import type { Logger } from "pino";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { queueNames, registerWorkers, type ProjectionRefreshJob } from "./jobs.js";
 import {
   FirstPartyProjectionProcess,
   WEEKLY_PROJECTION_PROCESS_HEAP_MB,
@@ -185,6 +188,56 @@ describe("persistent weekly projection process", () => {
     expect(JSON.stringify(events)).not.toContain("private");
     expect(JSON.stringify(events)).not.toContain("secret");
   });
+
+  it("propagates a transient input-epoch failure through real IPC to the queue handler, then permits redelivery", async () => {
+    const runtime = new URL("./first-party-projection-process-runtime.ts", import.meta.url).href;
+    const { client, events } = await fixture(`
+      import {startWeeklyProjectionProcess} from ${JSON.stringify(runtime)};
+      let attempts=0;
+      startWeeklyProjectionProcess({
+        connectionString:process.env.DATABASE_URL,
+        createService:()=>({refreshProjections:async()=>{
+          if(++attempts===1)throw Object.assign(new Error('private source payload must not cross IPC'),{
+            code:'PROJECTION_INPUT_EPOCH_CHANGED'
+          });
+        }})
+      });
+    `);
+    type Handler = (jobs: Job<ProjectionRefreshJob>[]) => Promise<void>;
+    const handlers = new Map<string, Handler>();
+    const boss = {
+      work: (name: string, ...args: unknown[]) => {
+        handlers.set(name, args.at(-1) as Handler);
+        return Promise.resolve(name);
+      },
+    } as unknown as PgBoss;
+    const info = vi.fn();
+    await registerWorkers(boss, { info } as unknown as Logger, { projectionRefresh: client });
+    const handler = handlers.get(queueNames.refreshProjections)!;
+    const delivery: Job<ProjectionRefreshJob> = {
+      id: "retryable-weekly-job",
+      name: queueNames.refreshProjections,
+      data: { season: 2026, week: 2, horizon: "weekly", reason: "on-demand" },
+      expireInSeconds: 900,
+      heartbeatSeconds: null,
+      signal: new AbortController().signal,
+    };
+
+    await expect(handler([delivery])).rejects.toThrow("Error, PROJECTION_INPUT_EPOCH_CHANGED");
+    expect(info).not.toHaveBeenCalled();
+    await expect(handler([delivery])).resolves.toBeUndefined();
+    expect(info).toHaveBeenCalledExactlyOnceWith(
+      { jobId: delivery.id, ...delivery.data },
+      "projection refresh completed",
+    );
+    expect(
+      events.filter((event) => event.event === "weekly-projection-process-ready"),
+    ).toHaveLength(1);
+    const results = events.filter((event) => event.event === "weekly-projection-process-result");
+    expect(results.map((event) => event.ok)).toEqual([false, true]);
+    expect(results[0]?.error).toEqual({ name: "Error", code: "PROJECTION_INPUT_EPOCH_CHANGED" });
+    expect(JSON.stringify(events)).not.toContain("private source payload");
+  }, 15_000);
 
   it("validates request envelopes and only serializes safe error tokens", () => {
     expect(

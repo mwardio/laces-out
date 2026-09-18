@@ -4,12 +4,16 @@ import {
   firstPartyRecentRoleContext,
   firstPartyProjectionComponentsForPosition,
   normalizeHistoricalPlayerStatComponents,
+  SCORING_LONG_TOUCHDOWN_COMPONENTS,
   type FirstPartyPlayerStatus,
   type FirstPartyRoleContext,
   type FirstPartyTeamDefenseWeeklyStatLine,
   type FirstPartyWeeklyStatLine,
   type ProjectionStatComponents,
 } from "@laces-out/projections";
+
+/** Input assembly semantics, independent of the fitted projection and simulation model versions. */
+export const FIRST_PARTY_PLAYER_HISTORY_VERSION = "first-party-player-history-v2";
 
 export interface ProjectionWeeklyFact {
   readonly playerId: string;
@@ -94,9 +98,19 @@ function factKey(input: {
 
 /** A completed, observed zero-production game has zero raw stats as well as zero transforms. */
 function zeroPlayerGameComponents(position: string): ProjectionStatComponents {
-  return normalizeHistoricalPlayerStatComponents(
-    Object.fromEntries(firstPartyProjectionComponentsForPosition(position).map((key) => [key, 0])),
+  const components = Object.fromEntries(
+    firstPartyProjectionComponentsForPosition(position).map((key) => [key, 0]),
   );
+  // An observed no-stat appearance has no touchdowns of any kind, including after a player
+  // changes position. Keep the parents and nested events together so an earlier QB zero game
+  // does not become unknown receiving evidence when the same player later projects as a TE.
+  // This helper never enriches aggregate source rows whose event coverage is genuinely unknown.
+  for (const { total, fortyPlus, fiftyPlus } of SCORING_LONG_TOUCHDOWN_COMPONENTS) {
+    components[total] = 0;
+    components[fortyPlus] = 0;
+    components[fiftyPlus] = 0;
+  }
+  return normalizeHistoricalPlayerStatComponents(components);
 }
 
 /** Converts immutable source facts into the model vocabulary without introducing current status. */

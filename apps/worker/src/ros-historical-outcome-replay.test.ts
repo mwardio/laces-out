@@ -19,6 +19,7 @@ import { createRosOutcomeCache, type RosOutcomeCache } from "./ros-outcome-cache
 import { createRosOutcomeSimulationPool } from "./ros-outcome-simulation-pool.js";
 
 import { historicalOutcomeInputFixture as input } from "./ros-historical-outcome.test-fixtures.js";
+import { denseSimulationInput } from "./ros-outcome-simulation.test-fixtures.js";
 
 vi.mock("node:fs/promises", async (importOriginal) => ({
   ...(await importOriginal<typeof FileSystemPromises>()),
@@ -61,6 +62,25 @@ afterEach(async () => {
 });
 
 describe("historical outcome corpus replay", () => {
+  it.each([
+    ["contextual", "fa2b0fc843c800cbe4e17e8bd93b7957e67526f146acfdf637eec6863311a745"],
+    [
+      "availability-aware-recency",
+      "1dae0d06bf91824a4d2de9607513479207b90cd9f06a40e01ff2be6654a22db8",
+    ],
+  ] as const)(
+    "preserves the pre-history-v2 physical D/ST cache key for %s",
+    (strategy, expectedIdentity) => {
+      // Captured before adding playerHistoryVersion to the admission protocol. D/ST inputs do
+      // not use the corrected player zero-game helper; unchanged requests retain their keys.
+      const request = {
+        ...denseSimulationInput("DST", strategy),
+        scoringProfile: input().scoringProfile,
+      };
+      expect(rosHistoricalOutcomeCacheKey(request).identity).toBe(expectedIdentity);
+    },
+  );
+
   it("builds one reference ensemble and replays exact league scores and release prefixes without simulation", async () => {
     const storage = await cache();
     const simulate = vi.fn(simulateFirstPartyRosOutcomes);

@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { projectFirstPartyRecencyBaselineComponents } from "@laces-out/projections";
+import {
+  projectFirstPartyRecencyBaselineComponents,
+  projectFirstPartyWeeklyComponents,
+  projectFirstPartyRestOfSeason,
+  SCORING_LONG_TOUCHDOWN_COMPONENTS,
+} from "@laces-out/projections";
+import { historicalOutcomeInputFixture } from "./ros-historical-outcome.test-fixtures.js";
 
 import {
   buildFirstPartyDefenseHistory,
@@ -197,6 +203,170 @@ describe("first-party projection input assembly", () => {
       10,
     );
   });
+
+  it.each(["QB", "RB", "WR", "TE", "K"])(
+    "retains all touchdown families in an observed %s zero-stat appearance",
+    (position) => {
+      const [appearance] = buildFirstPartyPlayerHistory(
+        [],
+        [
+          {
+            playerId: "zero-game",
+            position,
+            season: 2024,
+            week: 3,
+            gameId: "observed-game",
+            team: "ATL",
+            opponentTeam: "SEA",
+            offenseShare: position === "K" ? 0 : 0.02,
+            specialTeamsShare: position === "K" ? 0.1 : 0,
+          },
+        ],
+      );
+      expect(appearance?.played).toBe(true);
+      for (const { total, fortyPlus, fiftyPlus } of SCORING_LONG_TOUCHDOWN_COMPONENTS) {
+        expect(appearance?.components).toMatchObject({
+          [total]: 0,
+          [fortyPlus]: 0,
+          [fiftyPlus]: 0,
+        });
+      }
+    },
+  );
+
+  it.each([
+    { previousPosition: "QB", position: "TE" },
+    { previousPosition: "TE", position: "QB" },
+  ] as const)(
+    "keeps contextual and recency ROS components compatible after a $previousPosition to $position change",
+    ({ previousPosition, position }) => {
+      const observedTouchdowns = Object.fromEntries(
+        SCORING_LONG_TOUCHDOWN_COMPONENTS.flatMap(({ total, fortyPlus, fiftyPlus }) =>
+          [total, fortyPlus, fiftyPlus].map((key) => [key, 0]),
+        ),
+      );
+      const history = buildFirstPartyPlayerHistory(
+        [
+          {
+            playerId: "position-change",
+            position,
+            season: 2024,
+            week: 4,
+            gameId: "2024-game",
+            team: "CAR",
+            opponentTeam: "CIN",
+            components: { targets: 1, receptions: 0, receiving_yards: 0, ...observedTouchdowns },
+            advanced: {},
+          },
+        ],
+        [
+          {
+            playerId: "position-change",
+            position: previousPosition,
+            season: 2022,
+            week: 3,
+            gameId: "2022-game",
+            team: "ATL",
+            opponentTeam: "SEA",
+            offenseShare: 0.02,
+            specialTeamsShare: 0,
+          },
+        ],
+      );
+      const target = {
+        playerId: "position-change",
+        position,
+        season: 2024,
+        week: 10,
+        team: "CAR",
+        opponent: "NYG",
+        status: "active" as const,
+        scheduled: true,
+      };
+      const contextual = projectFirstPartyWeeklyComponents({ target, history });
+      const recency = projectFirstPartyRecencyBaselineComponents({ target, history });
+      expect(contextual.state).toBe("projected");
+      expect(recency.state).toBe("projected");
+      expect(Object.keys(contextual.components).sort()).toEqual(
+        Object.keys(recency.components).sort(),
+      );
+      const prefix = position === "QB" ? "passing" : "receiving";
+      expect(contextual.components[`${prefix}_touchdowns_40_plus`]).toBe(0);
+      expect(recency.components[`${prefix}_touchdowns_40_plus`]).toBe(0);
+      // Exercise the real engine's strict paired-component validation, which previously threw
+      // "Week 10 contextual candidate is missing component receiving_touchdowns_40_plus".
+      const projected = projectFirstPartyRestOfSeason(
+        historicalOutcomeInputFixture({
+          playerId: target.playerId,
+          position,
+          season: 2024,
+          asOfWeek: 9,
+          asOfAt: "2024-11-05T00:00:00.000Z",
+          windowStartWeek: 10,
+          windowEndWeek: 10,
+          scenarioCount: 256,
+          weeks: [
+            {
+              season: 2024,
+              week: 10,
+              scheduled: true,
+              bye: false,
+              contextualComponents: contextual.components,
+              recencyComponents: recency.components,
+              componentElasticities: Object.fromEntries(
+                Object.keys(contextual.components).map((key) => [key, { role: 1, production: 1 }]),
+              ),
+            },
+          ],
+        }),
+      );
+      expect(projected.expectedComponents[`${prefix}_touchdowns_40_plus`]).toBe(0);
+    },
+  );
+
+  it.each([{}, { receiving_touchdowns_40_plus: 0 }])(
+    "keeps missing or partial touchdown evidence unknown in real aggregate rows: %j",
+    (events) => {
+      const observation = {
+        playerId: "unknown-events",
+        position: "TE",
+        season: 2024,
+        week: 4,
+        gameId: "aggregate-game",
+        team: "CAR",
+        opponentTeam: "CIN",
+        components: { targets: 1, receptions: 0, receiving_touchdowns: 0, ...events },
+        advanced: {},
+      };
+      const history = buildFirstPartyPlayerHistory(
+        [observation],
+        [
+          {
+            ...observation,
+            offenseShare: 0.1,
+            specialTeamsShare: 0,
+          },
+        ],
+      );
+      expect(history).toHaveLength(1);
+      expect(history[0]!.components.receiving_touchdowns_50_plus).toBeUndefined();
+      const target = {
+        playerId: observation.playerId,
+        position: "TE",
+        season: 2024,
+        week: 10,
+        team: "CAR",
+      };
+      for (const project of [
+        projectFirstPartyWeeklyComponents,
+        projectFirstPartyRecencyBaselineComponents,
+      ]) {
+        const projected = project({ target, history });
+        expect(projected.components.receiving_touchdowns_40_plus).toBeUndefined();
+        expect(projected.components.receiving_touchdowns_50_plus).toBeUndefined();
+      }
+    },
+  );
 
   it("adds completed rostered DNPs without inventing future or bye-week zeroes", () => {
     const history = buildFirstPartyPlayerHistory(

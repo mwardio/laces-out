@@ -294,6 +294,18 @@ describe("durable shared ROS corpus orchestration", { timeout: 30_000 }, () => {
     });
   });
 
+  it("requires a new ready pointer after zero-game player history semantics change", () => {
+    const current = rosSharedCorpusRequest(2026);
+    expect(current.protocol.playerHistoryVersion).toBe("first-party-player-history-v2");
+    const legacyProtocol = Object.fromEntries(
+      Object.entries(current.protocol).filter(([key]) => key !== "playerHistoryVersion"),
+    );
+    const legacyIdentity = createHash("sha256")
+      .update(JSON.stringify(legacyProtocol))
+      .digest("hex");
+    expect(current.identity).not.toBe(legacyIdentity);
+  });
+
   it("adopts a complete prebuilt corpus once and subsequent profiles only replay it", async () => {
     const prepared = await fixture();
     const report = await prepared.runner(input());

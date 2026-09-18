@@ -21,8 +21,10 @@ import {
   type Database,
 } from "@laces-out/db";
 import { describe, expect, it } from "vitest";
+import { PgDialect } from "drizzle-orm/pg-core";
+import type { SQL } from "drizzle-orm";
 
-import { FIRST_PARTY_INPUT_EPOCH_VERSION } from "./first-party-projection-inputs.js";
+import { WEEKLY_INPUT_SNAPSHOT_VERSION } from "./weekly-input-snapshot.js";
 import {
   FIRST_PARTY_PROJECTION_SOURCE_KEY,
   FirstPartyProjectionService,
@@ -53,6 +55,13 @@ interface ProjectionDatabaseFixture {
   readonly priorRuns?: readonly PriorRunFixture[];
   readonly publishConflict?: boolean;
   readonly leagues?: readonly Row[];
+  readonly optionalSources?: readonly string[];
+  readonly driftSourceAfterRead?: {
+    readonly key: string;
+    readonly minimumRead: number;
+    readonly patch: Row;
+  };
+  readonly driftMutableChecksumAfterSnapshot?: boolean;
   // Simulates a required source (e.g. weekly stats) completing a concurrent refresh with a new
   // checksum after this run already validated sources and captured its start-of-refresh epoch,
   // but before this run reaches its own persist transaction.
@@ -150,6 +159,13 @@ class ProjectionDatabaseHarness {
   readonly modelRuns: Row[] = [];
   readonly sourceUpdates: Row[] = [];
   syncRunInsertAttempts = 0;
+  readonly transactionEvents: {
+    readonly kind: string;
+    readonly isolationLevel?: unknown;
+    readonly depth: number;
+  }[] = [];
+  #transactionDepth = 0;
+  #mutableChecksumReads = 0;
 
   readonly #database: Database;
   readonly #defensePlayers: Row[] = [];
@@ -158,7 +174,10 @@ class ProjectionDatabaseHarness {
   #requiredSourceKeySelects = 0;
 
   constructor(private readonly fixture: ProjectionDatabaseFixture) {
-    const sourceKeys = requiredFirstPartyProjectionSourceKeys(2026).required;
+    const sourceKeys = [
+      ...requiredFirstPartyProjectionSourceKeys(2026).required,
+      ...(fixture.optionalSources ?? []),
+    ];
     this.#sources = sourceKeys.map((key, index) => ({
       id: `source-${index}`,
       key,
@@ -180,8 +199,42 @@ class ProjectionDatabaseHarness {
         new MutationQuery(table, (target, values) => this.#insertRows(target, values)),
       update: (table: unknown) =>
         new MutationQuery(table, (target, values) => this.#updateRows(target, values)),
-      transaction: async <T>(callback: (transaction: Database) => Promise<T>) =>
-        callback(this.#database),
+      execute: async (statement: SQL) => {
+        const query = new PgDialect().sqlToQuery(statement).sql;
+        const kind = query.includes("lock table")
+          ? "lock"
+          : query.includes("as checksum")
+            ? "mutable-checksum"
+            : "transaction-timeout";
+        this.transactionEvents.push({ kind, depth: this.#transactionDepth });
+        if (kind !== "mutable-checksum") return [];
+        this.#mutableChecksumReads += 1;
+        return [
+          {
+            checksum:
+              this.fixture.driftMutableChecksumAfterSnapshot && this.#mutableChecksumReads > 1
+                ? "b".repeat(64)
+                : "a".repeat(64),
+          },
+        ];
+      },
+      transaction: async <T>(
+        callback: (transaction: Database) => Promise<T>,
+        config?: { isolationLevel?: unknown },
+      ) => {
+        this.#transactionDepth += 1;
+        this.transactionEvents.push({
+          kind: "begin",
+          depth: this.#transactionDepth,
+          isolationLevel: config?.isolationLevel,
+        });
+        try {
+          return await callback(this.#database);
+        } finally {
+          this.transactionEvents.push({ kind: "end", depth: this.#transactionDepth });
+          this.#transactionDepth -= 1;
+        }
+      },
     };
     this.#database = facade as unknown as Database;
   }
@@ -200,6 +253,12 @@ class ProjectionDatabaseHarness {
       // validated); the service's own end-of-assembly epoch recheck performs every read after
       // that. Drifting only from the second read onward reproduces a source that changes
       // concurrently after this run already captured its start epoch.
+      const patch = this.fixture.driftSourceAfterRead;
+      if (patch && this.#requiredSourceKeySelects >= patch.minimumRead) {
+        return this.#sources.map((row) =>
+          row.key === patch.key ? { ...row, ...patch.patch } : row,
+        );
+      }
       const drift = this.fixture.driftRequiredSourceChecksumAfterStart;
       if (drift && this.#requiredSourceKeySelects > 1) {
         return this.#sources.map((row) =>
@@ -349,7 +408,7 @@ function jobContext() {
 }
 
 function latestSourceMetadata(harness: ProjectionDatabaseHarness): Row {
-  const update = harness.sourceUpdates.at(-1);
+  const update = harness.sourceUpdates.filter((row) => Object.hasOwn(row, "metadata")).at(-1);
   if (!update || typeof update.metadata !== "object" || update.metadata === null) {
     throw new Error("Projection service did not record source metadata");
   }
@@ -665,7 +724,7 @@ describe("first-party projection service release safety", () => {
     const firstConfiguration = firstHarness.modelRuns[0]?.configuration as
       | { readonly inputEpoch?: { readonly version?: unknown; readonly value?: unknown } }
       | undefined;
-    expect(firstConfiguration?.inputEpoch?.version).toBe(FIRST_PARTY_INPUT_EPOCH_VERSION);
+    expect(firstConfiguration?.inputEpoch?.version).toBe(WEEKLY_INPUT_SNAPSHOT_VERSION);
     expect(firstConfiguration?.inputEpoch?.value).toMatch(/^[0-9a-f]{64}$/u);
 
     // A second, independent run against a fresh harness with identical source checksums and
@@ -682,7 +741,123 @@ describe("first-party projection service release safety", () => {
     expect(secondConfiguration?.inputEpoch?.value).toBe(firstConfiguration?.inputEpoch?.value);
   });
 
-  it("withholds the run and preserves prior good output when a required source checksum changes mid-assembly", async () => {
+  it("closes repeatable-read assembly before acquiring publication input locks", async () => {
+    const now = new Date("2026-09-01T12:00:00.000Z");
+    const harness = new ProjectionDatabaseHarness({ now, schedule: scheduleFixture() });
+    await new FirstPartyProjectionService({
+      database: harness.database,
+      now: () => now,
+    }).refreshProjections({ season: 2026, week: 1 }, jobContext());
+    expect(harness.transactionEvents[0]).toMatchObject({
+      kind: "begin",
+      isolationLevel: "repeatable read",
+    });
+    const firstEnd = harness.transactionEvents.findIndex((event) => event.kind === "end");
+    const firstLock = harness.transactionEvents.findIndex((event) => event.kind === "lock");
+    expect(firstLock).toBeGreaterThan(firstEnd);
+    expect(
+      harness.transactionEvents
+        .filter((event) => event.kind === "lock")
+        .every((event) => event.depth === 1),
+    ).toBe(true);
+    expect(harness.modelRuns[0]?.configuration).toMatchObject({
+      inputSnapshot: {
+        version: WEEKLY_INPUT_SNAPSHOT_VERSION,
+        sourceManifest: {
+          sources: expect.arrayContaining([
+            {
+              key: "nflverse.injuries.2026",
+              required: false,
+              selected: false,
+              id: null,
+              checksum: null,
+              asOf: null,
+            },
+          ]) as unknown,
+        },
+      },
+    });
+  });
+
+  it.each(["nflverse.weekly-rosters.2026", "nflverse.injuries.2026", "nflverse.snap-counts.2026"])(
+    "retries an optional source changed after the early check: %s",
+    async (key) => {
+      const now = new Date("2026-09-01T12:00:00.000Z");
+      const harness = new ProjectionDatabaseHarness({
+        now,
+        schedule: scheduleFixture(),
+        optionalSources: [key],
+        driftSourceAfterRead: { key, minimumRead: 3, patch: { lastChecksum: "f".repeat(64) } },
+      });
+      await expect(
+        new FirstPartyProjectionService({
+          database: harness.database,
+          now: () => now,
+        }).refreshProjections({ season: 2026, week: 1 }, jobContext()),
+      ).rejects.toMatchObject({ code: "PROJECTION_INPUT_EPOCH_CHANGED" });
+      expect(harness.syncRunInsertAttempts).toBe(0);
+    },
+  );
+
+  it("retries a health-only source rejection at the publication fence", async () => {
+    const now = new Date("2026-09-01T12:00:00.000Z");
+    const key = "nflverse.injuries.2026";
+    const harness = new ProjectionDatabaseHarness({
+      now,
+      schedule: scheduleFixture(),
+      optionalSources: [key],
+      driftSourceAfterRead: {
+        key,
+        minimumRead: 3,
+        patch: { metadata: { availability: "not-published" } },
+      },
+    });
+    await expect(
+      new FirstPartyProjectionService({
+        database: harness.database,
+        now: () => now,
+      }).refreshProjections({ season: 2026, week: 1 }, jobContext()),
+    ).rejects.toMatchObject({ code: "PROJECTION_INPUT_EPOCH_CHANGED" });
+    expect(harness.syncRunInsertAttempts).toBe(0);
+  });
+
+  it("retries a mutable catalog change that leaves source checksums unchanged", async () => {
+    const now = new Date("2026-09-01T12:00:00.000Z");
+    const harness = new ProjectionDatabaseHarness({
+      now,
+      schedule: scheduleFixture(),
+      driftMutableChecksumAfterSnapshot: true,
+    });
+    await expect(
+      new FirstPartyProjectionService({
+        database: harness.database,
+        now: () => now,
+      }).refreshProjections({ season: 2026, week: 1 }, jobContext()),
+    ).rejects.toMatchObject({ code: "PROJECTION_INPUT_EPOCH_CHANGED" });
+    expect(harness.syncRunInsertAttempts).toBe(0);
+  });
+
+  it("allows refreshed check timestamps when admitted facts and mutable semantics stay equal", async () => {
+    const now = new Date("2026-09-01T12:00:00.000Z");
+    const harness = new ProjectionDatabaseHarness({
+      now,
+      schedule: scheduleFixture(),
+      driftSourceAfterRead: {
+        key: "nflverse.schedules.2026",
+        minimumRead: 2,
+        patch: { lastSuccessfulAt: now, lastCheckedAt: now },
+      },
+    });
+    await expect(
+      new FirstPartyProjectionService({
+        database: harness.database,
+        now: () => now,
+      }).refreshProjections({ season: 2026, week: 1 }, jobContext()),
+    ).resolves.toBeUndefined();
+    expect(harness.modelRuns).toHaveLength(1);
+  });
+
+  it("rejects changed inputs without publishing and allows a stable retry to evaluate normally", async () => {
     const now = new Date("2026-09-01T12:00:00.000Z");
     const driftedKey = "nflverse.stats-player-week.2025";
     const harness = new ProjectionDatabaseHarness({
@@ -695,7 +870,12 @@ describe("first-party projection service release safety", () => {
     });
     const service = new FirstPartyProjectionService({ database: harness.database, now: () => now });
 
-    await service.refreshProjections({ season: 2026, week: 1 }, jobContext());
+    await expect(
+      service.refreshProjections({ season: 2026, week: 1 }, jobContext()),
+    ).rejects.toMatchObject({
+      message: "Weekly projection inputs changed during refresh",
+      code: "PROJECTION_INPUT_EPOCH_CHANGED",
+    });
 
     expect(harness.syncRunInsertAttempts).toBe(0);
     expect(harness.modelRuns).toHaveLength(0);
@@ -707,5 +887,15 @@ describe("first-party projection service release safety", () => {
       result: "input_epoch_changed",
     });
     expect(sourceMetadata).not.toHaveProperty("lastPublishedAt");
+    expect(harness.sourceUpdates.at(-1)?.lastErrorCode).toBe("PROJECTION_REFRESH_FAILED");
+
+    // The replacement source remains stable on redelivery. A completed statistical evaluation
+    // may genuinely withhold forecasts, but that is a normal result rather than a transient retry.
+    await expect(
+      service.refreshProjections({ season: 2026, week: 1 }, jobContext()),
+    ).resolves.toBeUndefined();
+    expect(harness.modelRuns).toHaveLength(1);
+    expect(harness.modelRuns[0]?.qualityState).toBe("rejected");
+    expect(latestSourceMetadata(harness).result).toBe("prior_good_output_preserved");
   });
 });

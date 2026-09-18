@@ -22,6 +22,7 @@ import {
 import {
   buildHistoricalRosBacktest,
   historicalRosBucket,
+  preflightHistoricalRosComponentCoverage,
   HISTORICAL_ROS_SUPPORTED_POSITIONS,
   HISTORICAL_ROS_CANDIDATE_PAIR_VERSION,
   HISTORICAL_ROS_PRODUCTION_BASIS_VERSION,
@@ -487,6 +488,49 @@ async function main(): Promise<void> {
 
   const history = buildFirstPartyPlayerHistory(weekly, snaps, rosters, schedules, injuries);
   const defenseHistory = buildFirstPartyDefenseHistory(teamWeekly, schedules);
+  const componentPreflight = preflightHistoricalRosComponentCoverage({
+    history,
+    rosters,
+    schedules,
+    coverage,
+    scoringProfile: scoringProfile.profile,
+    options: {
+      heldOutSeasons,
+      asOfWeeks,
+      playersPerPosition,
+      maximumForecasts,
+      ...(positions === undefined ? {} : { positions }),
+    },
+  });
+  if (componentPreflight.state === "blocked" || process.argv.includes("--preflight-only")) {
+    process.stdout.write(
+      `${JSON.stringify(
+        {
+          state:
+            componentPreflight.state === "qualified"
+              ? "component-preflight-qualified"
+              : "blocked-before-modeling",
+          noDatabaseWrites: true,
+          noSimulation: true,
+          sources: sourceAudit,
+          coverage: {
+            state: coverage.state,
+            fullyHeldOutSeasons: coverage.fullyHeldOutSeasons,
+            completeAsOfBatches: coverage.completeAsOfBatches,
+          },
+          componentPreflight,
+          elapsedSeconds: (Date.now() - startedAt) / 1_000,
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    if (componentPreflight.state === "blocked") process.exitCode = 1;
+    return;
+  }
+  process.stderr.write(
+    `Component preflight qualified ${componentPreflight.checkedPlayers} selected player windows across ${componentPreflight.checkedBatches} batches before fitting or simulation.\n`,
+  );
   process.stderr.write(
     `Building paired forecasts (${playersPerPosition}/position/cutoff, max ${maximumForecasts}${positions === undefined ? "" : `, positions ${positions.join(",")}`})...\n`,
   );
