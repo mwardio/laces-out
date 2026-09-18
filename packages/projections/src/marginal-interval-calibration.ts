@@ -49,10 +49,9 @@ interface MarginalIntervalFitEvidence {
   readonly samples: number;
   readonly blocks: number;
   readonly distinctCutoffs: number;
-  readonly rows: readonly MarginalIntervalWeightedEvidence[];
 }
 
-export type MarginalIntervalCalibrationFit = MarginalIntervalFitEvidence &
+export type MarginalIntervalCalibrationParameters = MarginalIntervalFitEvidence &
   (
     | { readonly state: "fitted"; readonly corrections: MarginalIntervalTriple }
     | {
@@ -66,6 +65,10 @@ export type MarginalIntervalCalibrationFit = MarginalIntervalFitEvidence &
         )[];
       }
   );
+
+export type MarginalIntervalCalibrationFit = MarginalIntervalCalibrationParameters & {
+  readonly rows: readonly MarginalIntervalWeightedEvidence[];
+};
 
 function integer(value: number, minimum: number, maximum: number, label: string): void {
   if (!Number.isSafeInteger(value) || value < minimum || value > maximum)
@@ -263,17 +266,12 @@ export interface MarginalIntervalCorrection extends MarginalIntervalQuantiles {
   };
 }
 
-/**
- * Apply an authenticated fitted candidate, not an admission artifact. This validates the
- * executable fields, not the authenticity of serialized historical evidence; the integrating
- * policy must bind/check that evidence separately and qualify its held-out performance.
- */
-export function applyMarginalIntervalCalibration(
-  forecast: MarginalIntervalForecast,
-  fit: MarginalIntervalCalibrationFit,
-): MarginalIntervalCorrection {
-  validateForecast(forecast);
-  if (fit.state !== "fitted") throw new Error("Marginal interval correction is not fitted");
+/** Validates compact executable fit parameters; historical-row authenticity is a caller contract. */
+export function assertMarginalIntervalCalibrationParameters(
+  fit: MarginalIntervalCalibrationParameters,
+): void {
+  if (fit === null || typeof fit !== "object" || Array.isArray(fit))
+    throw new Error("Marginal interval fit must be an object");
   if (
     fit.version !== MARGINAL_INTERVAL_CALIBRATION_VERSION ||
     fit.target !== "individual-player-marginal-quantiles" ||
@@ -285,19 +283,70 @@ export function applyMarginalIntervalCalibration(
     [0.15, 0.5, 0.85].some((expected, i) => fit.quantiles[i] !== expected)
   )
     throw new Error("Marginal interval fit method is invalid");
-  if (fit.seriesKey !== forecast.seriesKey || fit.forecastSeason !== forecast.forecastSeason)
-    throw new Error("Marginal interval fit scope or forecast season mismatch");
-  boundedArray(fit.priorSeasons, 1, 201, "fit prior seasons");
+  text(fit.seriesKey, 8_192, "fit series identity");
+  integer(fit.forecastSeason, 2000, 2200, "fit forecast season");
+  boundedArray(fit.priorSeasons, 0, 201, "fit prior seasons");
   let previous = 1999;
   for (const season of fit.priorSeasons) {
     integer(season, previous + 1, fit.forecastSeason - 1, "strictly prior season");
     previous = season;
   }
-  integer(fit.samples, 18, MARGINAL_INTERVAL_CALIBRATION_MAX_ROWS, "fit samples");
-  integer(fit.blocks, 3, Math.min(fit.samples, fit.priorSeasons.length * 18), "fit blocks");
-  integer(fit.distinctCutoffs, 3, Math.min(18, fit.blocks), "fit cutoffs");
+  integer(fit.samples, 0, MARGINAL_INTERVAL_CALIBRATION_MAX_ROWS, "fit samples");
+  integer(
+    fit.blocks,
+    fit.priorSeasons.length,
+    Math.min(fit.samples, fit.priorSeasons.length * 18),
+    "fit blocks",
+  );
+  integer(fit.distinctCutoffs, fit.blocks === 0 ? 0 : 1, Math.min(18, fit.blocks), "fit cutoffs");
+  if (
+    (fit.samples === 0) !== (fit.blocks === 0) ||
+    fit.distinctCutoffs > fit.blocks ||
+    fit.blocks > fit.priorSeasons.length * fit.distinctCutoffs
+  )
+    throw new Error("Marginal interval fit support is inconsistent");
+  const reasons = [];
+  if (fit.priorSeasons.length < 1) reasons.push("prior-season-unavailable");
+  if (fit.samples < 18) reasons.push("fewer-than-18-rows");
+  if (fit.distinctCutoffs < 3) reasons.push("fewer-than-3-cutoffs");
+  if (fit.blocks < 3) reasons.push("fewer-than-3-blocks");
+  if (fit.state === "insufficient-evidence") {
+    if (
+      fit.corrections !== null ||
+      reasons.length === 0 ||
+      !Array.isArray(fit.reasons) ||
+      fit.reasons.length !== reasons.length ||
+      reasons.some((reason, i) => fit.reasons[i] !== reason)
+    )
+      throw new Error("Marginal interval insufficient-fit reasons are invalid");
+    return;
+  }
+  if (fit.state !== "fitted" || reasons.length !== 0)
+    throw new Error("Marginal interval correction is not fitted");
   if (!Array.isArray(fit.corrections) || fit.corrections.length !== 3)
     throw new Error("Marginal interval correction triple is missing");
+  for (let i = 0; i < 3; i += 1) {
+    const correction: unknown = fit.corrections[i];
+    if (typeof correction !== "number")
+      throw new Error("Marginal interval correction must be finite");
+    finite(correction, "correction");
+  }
+}
+
+/**
+ * Apply an authenticated fitted candidate, not an admission artifact. This validates the
+ * executable fields, not the authenticity of serialized historical evidence; the integrating
+ * policy must bind/check that evidence separately and qualify its held-out performance.
+ */
+export function applyMarginalIntervalCalibration(
+  forecast: MarginalIntervalForecast,
+  fit: MarginalIntervalCalibrationParameters,
+): MarginalIntervalCorrection {
+  validateForecast(forecast);
+  assertMarginalIntervalCalibrationParameters(fit);
+  if (fit.state !== "fitted") throw new Error("Marginal interval correction is not fitted");
+  if (fit.seriesKey !== forecast.seriesKey || fit.forecastSeason !== forecast.forecastSeason)
+    throw new Error("Marginal interval fit scope or forecast season mismatch");
   const unsorted = ENDPOINTS.map((endpoint, i) =>
     finite(
       forecast[endpoint] + forecast.scheduledGames * finite(fit.corrections[i]!, "correction"),
