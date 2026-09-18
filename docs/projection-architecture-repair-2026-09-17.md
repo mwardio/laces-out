@@ -638,3 +638,69 @@ Weekly center-candidate repair, September 18:
   forecasts. All unchanged publication gates passed, and the diagnostic reconstruction matched
   production selection evidence exactly. All 229 focused unit/integration tests and the full
   workspace typecheck passed on Linux x86-64; Darwin/ARM64 validation remains unavailable.
+- Deployment was then held after a stricter matched-cohort review. Relative to deployed v14,
+  additive fallback increased TE12 starter MAE by 3.47–5.17% and WR36 starter MAE by about 3%
+  in eight of nine profiles, with larger positive bias. The physical v15 forecasts under the
+  previous affine correction improved TE starter error; the additive correction caused this
+  regression. Passing the aggregate gates was insufficient evidence to ship this candidate.
+- The next private experiment is one predeclared proportional least-squares correction, with
+  the existing eight-batch window and prior strength, zero intercept, and independently replayed
+  intervals. It adds no player bands or scoring exceptions. Squared loss preserves the intended
+  conditional-mean forecast; optimizing absolute loss instead would target a median, as explained
+  by [Gneiting (2011)](https://arxiv.org/abs/0912.0902). Its zero
+  intercept is a modeling constraint, not a physical invariant, especially for signed scoring.
+  No gate is relaxed, and the candidate requires matched starter, decision, and near-zero checks.
+- The fixed proportional experiment improved overall and matched-starter squared error, overall
+  MAE, and close-FLEX decision metrics across all nine profiles. Four profiles still failed the
+  existing gate: their directly replayed RB MAE exceeded its baseline by fractions of a hundredth
+  of a point. Those failures were preserved; no tolerance or fitting parameter was adjusted.
+- A separate audit found the original v15 affine forecasts matched or improved baseline squared
+  error for every position in all nine profiles, despite their MAE failures. RB starter squared
+  error still required separate scrutiny. This confirms that the advertised expected-points
+  target and the MAE admission comparator can disagree; a mean-consistent acceptance contract
+  needs explicit review rather than more attempts to fit an MAE-favored center.
+- A synthetic admission test also showed that multiplying every fantasy-point quantity by ten
+  changed a qualified verdict to a rejection solely because bias limits were clamped to fixed
+  0.5/1-point amounts. Error ratios and coverage were identical. This is a gate-level unit
+  inconsistency, not proof of a current customer failure. The existing one-point floor in
+  interval normalization separately prevents claiming full-pipeline scaling invariance.
+
+Expected-point admission repair, September 18:
+
+- Point policy v3 and publication policy v7 evaluate expected points with RMSE against the
+  same prior-only recency benchmark. MAE remains a diagnostic. RB24, WR36, and TE12 starter
+  cohorts also require at least 100 observations and RMSE no worse than their own benchmark;
+  aggregate performance cannot substitute for that conditional check. Existing coverage,
+  sample, capability, and availability requirements remain in force.
+- Marginal bias limits are 15% of MAE, without fixed fantasy-point clamps. This preserves
+  the verdict when consistently scaling locked point evidence. It does not establish full
+  pipeline invariance or remove the interval normalization limitation above.
+- Conditional starter bias is persisted as explicit quality evidence. Missing or unreliable
+  starter mean or interval evidence limits confidence to 0.49, which the lineup service uses
+  to present uncertain changes as close calls. Live fits use the selected chronological
+  evidence for confidence, never retrospective performance of a strategy chosen afterward.
+- The production candidate menu remains adaptive affine, fixed recency affine, then fixed
+  recency additive. The private proportional experiment is excluded. Football forecasts,
+  numerical center fits, fitting windows, and the immutable ROS v12 run are unchanged by
+  this admission repair. Additive fallback ties the comparator by construction; a tie is
+  not proof of absolute predictive accuracy.
+- Native player and defense evaluation now report baseline RMSE from existing locked
+  residuals. Stored current-policy metadata requires valid mean evidence for positions with
+  current forecasts, while unsupported or frozen-only positions cannot invalidate another
+  position's usable evidence. Frozen forecasts preserve their original provenance.
+- The nine-profile replay and matched-cohort comparison remain development evidence from
+  the same previously inspected 20 weekly batches. Prospective accuracy is still unproven;
+  deployment and customer-facing verification remain separate acceptance steps.
+- The replay passed all nine exact profiles and 9,282 locked forecasts, with production
+  selection matching the diagnostic reconstruction exactly. Against deployed v14 on identical
+  player/week outcomes and old-model starter cohorts, overall MSE improved 1.05–1.64%, starter
+  MSE improved 1.63–2.39%, and overall proper interval score improved 0.17–0.56%. TE starter
+  MAE improved 1.71–2.56%; WR starter MAE ranged from 0.89% better to 0.02% worse. RB starter
+  MAE increased 0.15–0.94% while its MSE improved 0.86–1.44%. Some WR starter interval scores
+  worsened by up to 1.07%. Remaining RB/TE starter bias is explicitly provisional, not hidden
+  behind an aggregate release pass.
+- On identical prior-selected close-FLEX pairs, ranking accuracy improved 0.55–1.50 percentage
+  points and mean decision regret fell 1.54–4.71%. These pairs share players and outcomes and
+  are not independent observations or a real-roster optimization test. The 293 focused unit
+  and integration tests, workspace typecheck, and scoped lint/format checks passed on Linux
+  x86-64. Darwin/ARM64 validation was unavailable because the Mini refused SSH connections.

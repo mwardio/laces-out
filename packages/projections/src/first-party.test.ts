@@ -1639,6 +1639,96 @@ describe("first-party rolling backtest", () => {
     expect(scoringEvaluation.overall.samples).toBe(backtest.predictions.length);
   });
 
+  it.each([1, -2])(
+    "measures the prior-corrected player baseline's squared error with scoring weight %s",
+    (points) => {
+      const actuals = [
+        [11, 13],
+        [8, 14],
+        [16, 10],
+      ];
+      const predictions = actuals.flatMap((week, index) =>
+        week.map((actual, player) => ({
+          playerId: `wr-${player}`,
+          position: "WR" as const,
+          season: 2025,
+          week: index + 1,
+          predicted: { receiving_yards: 12 },
+          baseline: { receiving_yards: 10 },
+          actual: { receiving_yards: actual },
+          floor: {},
+          ceiling: {},
+          trainingRows: 1,
+          calibrationRows: 1,
+        })),
+      );
+      const backtest = { ...runFirstPartyProjectionBacktest([]), predictions };
+      const profile = { id: "baseline-rms", rules: [{ statId: "receiving_yards", points }] };
+      const options = { minimumIntervalSamples: 1, minimumPlayerSamples: 1 };
+      const evaluation = evaluateFirstPartyBacktestForScoringProfile(backtest, profile, options);
+      // Locked baseline errors are [1,3], [-4,2], [4.5,-1.5]. In particular,
+      // each week's two outcomes enter the correction only after both forecasts are locked.
+      expect(evaluation.overall.baselineRmse).toBeCloseTo(Math.sqrt(52.5 / 6) * Math.abs(points));
+      expect(evaluation.overall.baselineMae).toBeCloseTo((16 / 6) * Math.abs(points));
+      expect(evaluation.byPosition.WR?.baselineRmse).toBe(evaluation.overall.baselineRmse);
+      expect(evaluation.byPlayer["wr-0"]?.baselineRmse).toBeCloseTo(
+        Math.sqrt(37.25 / 3) * Math.abs(points),
+      );
+      expect(
+        evaluateFirstPartyBacktestForScoringProfile(
+          { ...backtest, predictions: [...predictions].reverse() },
+          profile,
+          options,
+        ),
+      ).toEqual(evaluation);
+    },
+  );
+
+  it.each([1, -2])(
+    "measures the prior-corrected D/ST baseline's squared error with scoring weight %s",
+    (points) => {
+      const actuals = [
+        [11, 13],
+        [8, 14],
+        [16, 10],
+      ];
+      const predictions = actuals.flatMap((week, index) =>
+        week.map((actual, team) => ({
+          team: `TEAM-${team}`,
+          season: 2025,
+          week: index + 1,
+          predicted: { defensive_sacks: 12 },
+          baseline: { defensive_sacks: 10 },
+          actual: { defensive_sacks: actual },
+          lower: {},
+          upper: {},
+          trainingRows: 1,
+          calibrationRows: 1,
+        })),
+      );
+      const backtest = { ...runFirstPartyTeamDefenseBacktest([]), predictions };
+      const profile = { id: "baseline-rms", rules: [{ statId: "defensive_sacks", points }] };
+      const options = { minimumIntervalSamples: 1, minimumPlayerSamples: 1 };
+      const evaluation = evaluateFirstPartyTeamDefenseBacktestForScoringProfile(
+        backtest,
+        profile,
+        options,
+      );
+      expect(evaluation.overall.baselineRmse).toBeCloseTo(Math.sqrt(52.5 / 6) * Math.abs(points));
+      expect(evaluation.overall.baselineMae).toBeCloseTo((16 / 6) * Math.abs(points));
+      expect(evaluation.byTeam["TEAM-0"]?.baselineRmse).toBeCloseTo(
+        Math.sqrt(37.25 / 3) * Math.abs(points),
+      );
+      expect(
+        evaluateFirstPartyTeamDefenseBacktestForScoringProfile(
+          { ...backtest, predictions: [...predictions].reverse() },
+          profile,
+          options,
+        ),
+      ).toEqual(evaluation);
+    },
+  );
+
   it("learns fantasy-point center corrections only from completed prior week batches", () => {
     const source = runFirstPartyProjectionBacktest(
       Array.from({ length: 8 }, (_, index) => [

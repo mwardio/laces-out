@@ -14,8 +14,10 @@ import {
 } from "./scoring.js";
 
 /** A point-layer policy; physical component forecasts and their model version are unchanged. */
-export const WEEKLY_POINT_CALIBRATION_POLICY_VERSION = "prior-affine-or-additive-sqrt-point-v2";
+export const WEEKLY_POINT_CALIBRATION_POLICY_VERSION =
+  "prior-affine-or-additive-sqrt-mean-point-v3";
 export const UNCALIBRATED_STARTER_INTERVALS = "uncalibrated_starter_intervals";
+export const UNCALIBRATED_STARTER_MEANS = "uncalibrated_starter_means";
 const MINIMUM_FIT_SAMPLES = 24;
 const WINDOW_BATCHES = 8;
 const STARTER_COUNTS = { RB: 24, WR: 36, TE: 12 } as const;
@@ -41,6 +43,23 @@ export interface StarterIntervalQuality {
   readonly qualityFlag?: typeof UNCALIBRATED_STARTER_INTERVALS;
 }
 
+/** Conditional point evidence comes from locked chronological forecasts, never the live refit. */
+export interface StarterMeanQuality {
+  readonly state: "available" | "insufficient" | "miscalibrated";
+  readonly cohort: "prior-baseline-position-rank";
+  readonly topPlayersPerWeek: number;
+  readonly samples: number;
+  readonly mae: number | null;
+  readonly rmse: number | null;
+  readonly baselineRmse: number | null;
+  /** Match the residual convention: actual minus forecast. */
+  readonly bias: number | null;
+  readonly biasLimit: number | null;
+  readonly minimumSamples: 100;
+  readonly maximumRelativeBias: 0.15;
+  readonly qualityFlag?: typeof UNCALIBRATED_STARTER_MEANS;
+}
+
 export interface WeeklyPointResidualCalibration extends FirstPartyPointResidualCalibration {
   readonly componentCoverage?: {
     readonly state: "unavailable";
@@ -60,6 +79,7 @@ export interface WeeklyPointResidualCalibration extends FirstPartyPointResidualC
       }
     | undefined;
   readonly starterIntervalQuality?: StarterIntervalQuality | undefined;
+  readonly starterMeanQuality?: StarterMeanQuality | undefined;
 }
 
 export interface WeeklyPointCalibrationEvaluation extends FirstPartyScoredBacktestEvaluation {
@@ -259,14 +279,31 @@ export function weeklyPointEvidenceConfidence(
     position !== undefined && Object.hasOwn(STARTER_COUNTS, position.toUpperCase());
   if (calibration.pointPolicy === undefined && !requiresEvidence) return finite;
   const quality = calibration.starterIntervalQuality;
-  const reliable =
+  const reliableIntervals =
     quality?.state === "available" &&
     quality.samples >= 100 &&
     quality.coverage !== null &&
     Number.isFinite(quality.coverage) &&
     quality.coverage >= 0.6 &&
     quality.coverage <= 0.8;
-  return reliable ? finite : Math.min(0.49, finite);
+  const point = calibration.starterMeanQuality;
+  const reliableMean =
+    point?.state === "available" &&
+    point.samples >= 100 &&
+    point.mae !== null &&
+    Number.isFinite(point.mae) &&
+    point.mae >= 0 &&
+    point.rmse !== null &&
+    Number.isFinite(point.rmse) &&
+    point.rmse >= 0 &&
+    point.baselineRmse !== null &&
+    Number.isFinite(point.baselineRmse) &&
+    point.baselineRmse > 0 &&
+    point.rmse <= point.baselineRmse &&
+    point.bias !== null &&
+    Number.isFinite(point.bias) &&
+    Math.abs(point.bias) <= 0.15 * point.mae;
+  return reliableIntervals && reliableMean ? finite : Math.min(0.49, finite);
 }
 
 /** Stored metadata is provenance, not a trusted runtime policy object. */
@@ -282,7 +319,8 @@ export function storedWeeklyPointPolicyVersion(metadata: unknown): string | unde
   for (const position of Object.keys(STARTER_COUNTS)) {
     const entry = positions[position];
     if (entry === undefined || entry === null) continue;
-    const policy = record(record(entry)?.pointPolicy);
+    const calibration = record(entry);
+    const policy = record(calibration?.pointPolicy);
     if (
       policy?.version !== WEEKLY_POINT_CALIBRATION_POLICY_VERSION ||
       policy.intervalScale !== "sqrt-absolute-raw"
@@ -302,6 +340,30 @@ export function storedWeeklyPointPolicyVersion(metadata: unknown): string | unde
       Number(policy.trainingSamples) < 0 ||
       !Number.isSafeInteger(policy.intervalSamples) ||
       Number(policy.intervalSamples) < 0
+    )
+      return undefined;
+    const starter = record(calibration?.starterMeanQuality);
+    if (
+      !finite(calibration?.rmse) ||
+      calibration.rmse < 0 ||
+      !finite(calibration.baselineRmse) ||
+      calibration.baselineRmse <= 0 ||
+      calibration.rmse > calibration.baselineRmse ||
+      starter?.cohort !== "prior-baseline-position-rank" ||
+      starter.topPlayersPerWeek !== STARTER_COUNTS[position as keyof typeof STARTER_COUNTS] ||
+      starter.minimumSamples !== 100 ||
+      starter.maximumRelativeBias !== 0.15 ||
+      !Number.isSafeInteger(starter.samples) ||
+      Number(starter.samples) < 100 ||
+      !finite(starter.mae) ||
+      starter.mae < 0 ||
+      !finite(starter.rmse) ||
+      starter.rmse < 0 ||
+      !finite(starter.baselineRmse) ||
+      starter.baselineRmse <= 0 ||
+      starter.rmse > starter.baselineRmse ||
+      !finite(starter.bias) ||
+      !["available", "miscalibrated"].includes(String(starter.state))
     )
       return undefined;
   }
@@ -345,6 +407,46 @@ function starterQuality(
   };
 }
 
+function starterMeanQuality(
+  rows: readonly LockedPointForecast[],
+  position: keyof typeof STARTER_COUNTS,
+): StarterMeanQuality {
+  const starters = rows.filter((row) => row.priorBaselineRank <= STARTER_COUNTS[position]);
+  const errors = starters.map((row) => row.actual - row.mean);
+  const mae = starters.length === 0 ? null : mean(errors.map(Math.abs));
+  const rmse = starters.length === 0 ? null : Math.sqrt(mean(errors.map((error) => error ** 2)));
+  const baselineRmse =
+    starters.length === 0
+      ? null
+      : Math.sqrt(mean(starters.map((row) => (row.actual - row.baselineMean) ** 2)));
+  const bias = starters.length === 0 ? null : mean(errors);
+  const biasLimit = mae === null ? null : 0.15 * mae;
+  const sufficient =
+    starters.length >= 100 &&
+    [mae, rmse, baselineRmse, bias].every((value) => value !== null && Number.isFinite(value)) &&
+    baselineRmse !== null &&
+    baselineRmse > 0;
+  const state = !sufficient
+    ? "insufficient"
+    : Math.abs(bias!) > biasLimit!
+      ? "miscalibrated"
+      : "available";
+  return {
+    state,
+    cohort: "prior-baseline-position-rank",
+    topPlayersPerWeek: STARTER_COUNTS[position],
+    samples: starters.length,
+    mae,
+    rmse,
+    baselineRmse,
+    bias,
+    biasLimit,
+    minimumSamples: 100,
+    maximumRelativeBias: 0.15,
+    ...(state === "available" ? {} : { qualityFlag: UNCALIBRATED_STARTER_MEANS }),
+  };
+}
+
 function metrics(
   rows: readonly LockedPointForecast[],
   original: FirstPartyPointResidualCalibration,
@@ -362,6 +464,7 @@ function metrics(
     rmse: Math.sqrt(mean(errors.map((error) => error ** 2))),
     bias: mean(errors),
     baselineMae,
+    baselineRmse: Math.sqrt(mean(rows.map((row) => (row.actual - row.baselineMean) ** 2))),
     improvement: baselineMae === 0 ? (mae === 0 ? 0 : -1) : (baselineMae - mae) / baselineMae,
     beatsBaseline: mae < baselineMae,
     intervalCoverage:
@@ -484,6 +587,7 @@ export function replayWeeklyPointCalibration(
       centerAdjustment: fit.intercept,
       pointPolicy: calibrationFromFit(fit).pointPolicy,
       starterIntervalQuality: starterQuality(rows, position),
+      starterMeanQuality: starterMeanQuality(rows, position),
     };
   }
   for (const [position, missing] of unavailable) {

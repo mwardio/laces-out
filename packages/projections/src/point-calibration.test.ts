@@ -101,6 +101,10 @@ describe("weekly point-layer calibration", () => {
     for (const position of ["RB", "WR", "TE"] as const) {
       const calibration = replay.evaluation.byPosition[position];
       expect(calibration?.mae).toBe(calibration?.baselineMae);
+      expect(calibration?.rmse).toBe(calibration?.baselineRmse);
+      expect(calibration?.starterMeanQuality?.rmse).toBe(
+        calibration?.starterMeanQuality?.baselineRmse,
+      );
       expect(calibration?.improvement).toBe(0);
       expect(calibration?.pointPolicy).toMatchObject({
         slope: 1,
@@ -326,7 +330,8 @@ describe("weekly point-layer calibration", () => {
   it("caps miscalibrated starter evidence even if whole-position evidence passes", () => {
     const calibration = receiverCalibration();
     const quality = calibration.starterIntervalQuality;
-    if (quality === undefined) throw new Error("Missing quality");
+    const point = calibration.starterMeanQuality;
+    if (quality === undefined || point === undefined) throw new Error("Missing quality");
     expect(
       weeklyPointEvidenceConfidence(0.95, {
         ...calibration,
@@ -338,9 +343,97 @@ describe("weekly point-layer calibration", () => {
       weeklyPointEvidenceConfidence(0.95, {
         ...calibration,
         starterIntervalQuality: { ...quality, state: "available", samples: 200, coverage: 0.7 },
+        starterMeanQuality: { ...point, state: "available", bias: 0 },
       }),
     ).toBe(0.95);
     expect(weeklyPointEvidenceConfidence(Number.NaN, calibration)).toBe(0);
+  });
+
+  it("derives mean-loss and starter evidence from the candidate's own locked scores", () => {
+    const replay = replayWeeklyPointCalibration(fixture(), profile);
+    const calibration = replay.evaluation.byPosition.WR!;
+    const rms = (values: readonly number[]) =>
+      Math.sqrt(values.reduce((sum, value) => sum + value ** 2, 0) / values.length);
+    const starters = replay.forecasts.filter((row) => row.priorBaselineRank <= 36);
+    expect(calibration.baselineRmse).toBe(
+      rms(replay.forecasts.map((row) => row.actual - row.baselineMean)),
+    );
+    expect(calibration.starterMeanQuality).toMatchObject({
+      cohort: "prior-baseline-position-rank",
+      samples: starters.length,
+      rmse: rms(starters.map((row) => row.actual - row.mean)),
+      baselineRmse: rms(starters.map((row) => row.actual - row.baselineMean)),
+      minimumSamples: 100,
+      maximumRelativeBias: 0.15,
+    });
+    const perturbed = replayWeeklyPointCalibration(
+      {
+        ...fixture(),
+        predictions: fixture().predictions.map((row) => ({
+          ...row,
+          actual: { receiving_yards: row.playerId.endsWith("00") ? 1_000 : 0 },
+        })),
+      },
+      profile,
+    );
+    expect(
+      perturbed.forecasts.map((row) => [row.playerId, row.week, row.priorBaselineRank]),
+    ).toEqual(replay.forecasts.map((row) => [row.playerId, row.week, row.priorBaselineRank]));
+  });
+
+  it("caps conditional mean bias or missing mean evidence even with reliable intervals", () => {
+    const calibration = receiverCalibration();
+    const intervals = calibration.starterIntervalQuality!;
+    const point = calibration.starterMeanQuality!;
+    const reliable = {
+      ...calibration,
+      starterIntervalQuality: { ...intervals, state: "available" as const, coverage: 0.7 },
+      starterMeanQuality: { ...point, state: "available" as const, bias: 0 },
+    };
+    expect(weeklyPointEvidenceConfidence(0.95, reliable, "WR")).toBe(0.95);
+    for (const starterMeanQuality of [
+      undefined,
+      { ...reliable.starterMeanQuality, samples: 99 },
+      { ...reliable.starterMeanQuality, rmse: Number.NaN },
+      { ...reliable.starterMeanQuality, baselineRmse: null },
+      { ...reliable.starterMeanQuality, bias: (point.mae ?? 0) * 0.2 },
+      { ...reliable.starterMeanQuality, rmse: (point.baselineRmse ?? 0) * 2 },
+    ]) {
+      expect(weeklyPointEvidenceConfidence(0.95, { ...reliable, starterMeanQuality }, "WR")).toBe(
+        0.49,
+      );
+      expect(weeklyPointEvidenceConfidence(0.3, { ...reliable, starterMeanQuality }, "WR")).toBe(
+        0.3,
+      );
+    }
+  });
+
+  it("accepts partial supported metadata while rejecting missing or malformed published mean proof", () => {
+    const calibration = receiverCalibration();
+    const metadata = {
+      livePointCalibration: {
+        policyVersion: WEEKLY_POINT_CALIBRATION_POLICY_VERSION,
+        byPosition: { QB: { samples: 200 }, RB: null, WR: calibration },
+      },
+    };
+    expect(storedWeeklyPointPolicyVersion(metadata)).toBe(WEEKLY_POINT_CALIBRATION_POLICY_VERSION);
+    for (const bad of [
+      { ...calibration, baselineRmse: undefined },
+      { ...calibration, baselineRmse: 0 },
+      { ...calibration, rmse: Number.NaN },
+      { ...calibration, starterMeanQuality: undefined },
+      { ...calibration, starterMeanQuality: { ...calibration.starterMeanQuality, samples: 99 } },
+      {
+        ...calibration,
+        starterMeanQuality: { ...calibration.starterMeanQuality, baselineRmse: Number.NaN },
+      },
+    ]) {
+      expect(
+        storedWeeklyPointPolicyVersion({
+          livePointCalibration: { ...metadata.livePointCalibration, byPosition: { WR: bad } },
+        }),
+      ).toBeUndefined();
+    }
   });
 
   it("binds calibration to exact scoring and rejects duplicate player/week inputs", () => {

@@ -256,6 +256,8 @@ export interface FirstPartyPointResidualCalibration {
   readonly rmse: number;
   readonly bias: number;
   readonly baselineMae: number;
+  /** RMS error of the same prior-corrected baseline; absent in legacy point evidence. */
+  readonly baselineRmse?: number;
   readonly improvement: number;
   readonly beatsBaseline: boolean;
   /** Expanding-window coverage after enough prior residuals existed; null means not measurable. */
@@ -3247,6 +3249,7 @@ function pointResidualSummary(
       rmse: 0,
       bias: 0,
       baselineMae: 0,
+      baselineRmse: 0,
       improvement: 0,
       beatsBaseline: false,
       intervalCoverage: null,
@@ -3270,6 +3273,7 @@ function pointResidualSummary(
     rmse: Math.sqrt(mean(samples.map((sample) => sample.squaredError))),
     bias: mean(errors),
     baselineMae,
+    baselineRmse: Math.sqrt(mean(samples.map((sample) => sample.baselineAbsoluteError ** 2))),
     improvement: baselineMae === 0 ? (mae === 0 ? 0 : -1) : (baselineMae - mae) / baselineMae,
     beatsBaseline: mae < baselineMae,
     intervalCoverage:

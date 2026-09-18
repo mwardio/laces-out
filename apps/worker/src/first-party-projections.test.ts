@@ -9,6 +9,7 @@ import {
   applyWeeklyIntervalPolicy,
   applyWeeklyPointCalibration,
   storedWeeklyIntervalPolicyVersion,
+  storedWeeklyPointPolicyVersion,
   projectionScoringProfileKey,
   firstPartyProjectionComponentsForPosition,
   FIRST_PARTY_PROJECTION_MODEL_VERSION,
@@ -63,6 +64,8 @@ function playerEvaluation(
     readonly samples?: number;
     readonly mae?: number;
     readonly baselineMae?: number;
+    readonly rmse?: number;
+    readonly baselineRmse?: number;
   } = {},
 ): FirstPartyScoredBacktestEvaluation {
   const overall = {
@@ -71,9 +74,10 @@ function playerEvaluation(
     lowerError: -3,
     upperError: 4,
     mae: input.mae ?? 5,
-    rmse: 7,
+    rmse: input.rmse ?? 7,
     bias: 0,
     baselineMae: input.baselineMae ?? 5.2,
+    baselineRmse: input.baselineRmse ?? 7.2,
     improvement: 0.04,
     beatsBaseline: true,
     intervalCoverage: 0.7,
@@ -85,9 +89,27 @@ function playerEvaluation(
     baseline: "recency-only",
     byPosition: {
       QB: overall,
-      RB: overall,
-      WR: overall,
-      TE: overall,
+      ...Object.fromEntries(
+        (["RB", "WR", "TE"] as const).map((position) => [
+          position,
+          {
+            ...overall,
+            starterMeanQuality: {
+              state: "available",
+              cohort: "prior-baseline-position-rank",
+              topPlayersPerWeek: { RB: 24, WR: 36, TE: 12 }[position],
+              samples: overall.samples,
+              mae: overall.mae,
+              rmse: overall.rmse,
+              baselineRmse: overall.baselineRmse,
+              bias: 0,
+              biasLimit: overall.mae * 0.15,
+              minimumSamples: 100,
+              maximumRelativeBias: 0.15,
+            },
+          },
+        ]),
+      ),
       K: overall,
     },
     byPlayer: {},
@@ -100,6 +122,8 @@ function defenseEvaluation(
     readonly samples?: number;
     readonly mae?: number;
     readonly baselineMae?: number;
+    readonly rmse?: number;
+    readonly baselineRmse?: number;
   } = {},
 ): FirstPartyScoredTeamDefenseEvaluation {
   return {
@@ -113,9 +137,10 @@ function defenseEvaluation(
       lowerError: -4,
       upperError: 5,
       mae: input.mae ?? 4,
-      rmse: 6,
+      rmse: input.rmse ?? 6,
       bias: 0,
       baselineMae: input.baselineMae ?? 4.1,
+      baselineRmse: input.baselineRmse ?? 6.2,
       improvement: 0.02,
       beatsBaseline: true,
       intervalCoverage: 0.7,
@@ -573,7 +598,7 @@ describe("first-party projection publication policy", () => {
     ).toBe("rejected");
     expect(
       projectionModelGate({
-        player: playerEvaluation({ mae: 5.4, baselineMae: 5 }),
+        player: playerEvaluation({ rmse: 7.4, baselineRmse: 7 }),
         defense: defenseEvaluation(),
         playerPredictions: 500,
         defensePredictions: 250,
@@ -626,6 +651,116 @@ describe("first-party projection publication policy", () => {
     });
     expect(biasGate.state).toBe("degraded");
     expect(biasGate.reasons).toContain("player_qb_bias_exceeded");
+  });
+
+  it("admits an expected mean that improves squared loss despite higher absolute loss", () => {
+    // Y is 0 with probability .9 and 20 with probability .1: mean 2, median 0.
+    // Mean loss: MSE 36 / MAE 3.6. Median loss: MSE 40 / MAE 2.
+    const expectedMean = playerEvaluation({
+      mae: 3.6,
+      baselineMae: 2,
+      rmse: 6,
+      baselineRmse: Math.sqrt(40),
+    });
+    const input = {
+      player: expectedMean,
+      defense: defenseEvaluation(),
+      playerPredictions: 500,
+      defensePredictions: 250,
+    };
+    expect(projectionModelGate(input).state).toBe("publishable");
+    expect(
+      projectionModelGate({
+        ...input,
+        player: playerEvaluation({
+          mae: 2,
+          baselineMae: 3.6,
+          rmse: Math.sqrt(40),
+          baselineRmse: 6,
+        }),
+      }).state,
+    ).toBe("degraded");
+    expect(
+      projectionModelGate({ ...input, defense: defenseEvaluation({ rmse: 7, baselineRmse: 6 }) })
+        .reasons,
+    ).toContain("defense_model_did_not_clear_recency_baseline");
+  });
+
+  it.each([0.1, 1, 10, 100])(
+    "keeps admission invariant when fantasy-point units scale by %s",
+    (scale) => {
+      const player = playerEvaluation({
+        mae: 30 * scale,
+        baselineMae: 36 * scale,
+        rmse: 40 * scale,
+        baselineRmse: 45 * scale,
+      });
+      const transform = (value: (typeof player)["overall"]) => ({ ...value, bias: 1.5 * scale });
+      const scaled = {
+        ...player,
+        overall: transform(player.overall),
+        byPosition: Object.fromEntries(
+          Object.entries(player.byPosition).map(([position, value]) => [
+            position,
+            transform(value),
+          ]),
+        ),
+      };
+      expect(
+        projectionModelGate({
+          player: scaled,
+          defense: defenseEvaluation(),
+          playerPredictions: 500,
+          defensePredictions: 250,
+        }).state,
+      ).toBe("publishable");
+      expect(
+        projectionModelGate({
+          player: { ...scaled, overall: { ...scaled.overall, bias: 4.6 * scale } },
+          defense: defenseEvaluation(),
+          playerPredictions: 500,
+          defensePredictions: 250,
+        }).state,
+      ).toBe("degraded");
+    },
+  );
+
+  it("fails closed on missing mean benchmarks and conditional starter mean regression", () => {
+    const player = playerEvaluation();
+    const gate = (next: FirstPartyScoredBacktestEvaluation) =>
+      projectionModelGate({
+        player: next,
+        defense: defenseEvaluation(),
+        playerPredictions: 500,
+        defensePredictions: 250,
+      });
+    const { baselineRmse: originalBenchmark, ...legacy } = player.overall;
+    expect(originalBenchmark).toBeGreaterThan(0);
+    for (const baselineRmse of [undefined, 0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
+      const overall = baselineRmse === undefined ? legacy : { ...legacy, baselineRmse };
+      expect(gate({ ...player, overall }).state).toBe("degraded");
+    }
+    const wr = player.byPosition.WR as WeeklyPointResidualCalibration;
+    const missingStarter: WeeklyPointResidualCalibration = {
+      ...wr,
+      starterMeanQuality: undefined,
+    };
+    expect(
+      gate({
+        ...player,
+        byPosition: { ...player.byPosition, WR: missingStarter },
+      }).state,
+    ).toBe("rejected");
+    const regressed: WeeklyPointResidualCalibration = {
+      ...wr,
+      starterMeanQuality: {
+        ...wr.starterMeanQuality!,
+        rmse: wr.starterMeanQuality!.baselineRmse! + 1,
+      },
+    };
+    expect(
+      gate({ ...player, byPosition: { ...player.byPosition, WR: regressed } }).reasons,
+    ).toContain("player_wr_starter_did_not_clear_recency_baseline");
   });
 
   it("builds point intervals from league-scored residuals and always contains the mean", () => {
@@ -972,7 +1107,7 @@ function playerBacktestFixture(
 
 /** Most outcomes follow the recency center; symmetric outliers pull the squared-error slope away
  * from the MAE-optimal center. This exercises calibration selection without a physical-model fit. */
-function additiveRecencyBacktestFixture(
+function meanVsMaeBacktestFixture(
   position: "RB" | "WR" | "TE" = "WR",
 ): FirstPartyProjectionBacktest {
   const source = playerBacktestFixture();
@@ -1000,6 +1135,40 @@ function additiveRecencyBacktestFixture(
   return {
     ...source,
     predictions: [...source.predictions.filter((row) => row.position !== position), ...rows],
+  };
+}
+
+/** A true unit slope with alternating noise correlation makes early affine fits overfit prior
+ * batches. The prior-only additive candidate keeps the correct center without changing gates. */
+function additiveRecencyBacktestFixture(
+  position: "RB" | "WR" | "TE" = "WR",
+): FirstPartyProjectionBacktest {
+  const source = playerBacktestFixture();
+  const spec = BACKTEST_COMPONENT[position];
+  return {
+    ...source,
+    predictions: [
+      ...source.predictions.filter((row) => row.position !== position),
+      ...Array.from({ length: BACKTEST_WEEKS }, (_, week) =>
+        Array.from({ length: 48 }, (_, player) => {
+          const raw = 4 + player / 2;
+          const noise = ((player % 8) - 3.5) * 0.5 * (week % 2 === 0 ? -1 : 1);
+          return {
+            playerId: `unit-slope-${position}-${String(player).padStart(2, "0")}`,
+            position,
+            season: BACKTEST_SEASON,
+            week: week + 1,
+            predicted: { [spec.component]: raw / spec.pointsPerUnit },
+            baseline: { [spec.component]: raw / spec.pointsPerUnit },
+            actual: { [spec.component]: (raw + noise) / spec.pointsPerUnit },
+            floor: {},
+            ceiling: {},
+            trainingRows: 48,
+            calibrationRows: 48,
+          };
+        }),
+      ).flat(),
+    ],
   };
 }
 
@@ -1564,6 +1733,68 @@ describe("published backtest MAE reflects only the league's supported positions"
     expect(candidates.liveCalibration.byPosition.WR?.starterIntervalQuality).toEqual(
       candidates.playerEvaluation.byPosition.WR?.starterIntervalQuality,
     );
+    expect(candidates.liveCalibration.byPosition.WR?.starterMeanQuality).toEqual(
+      candidates.playerEvaluation.byPosition.WR?.starterMeanQuality,
+    );
+    expect(publication.metadata.livePointCalibration).toMatchObject({
+      admissionLoss: "root-mean-squared-error",
+      meanEvidenceSource: "locked-chronological-release-forecasts",
+      byPosition: {
+        WR: {
+          rmse: candidates.playerEvaluation.byPosition.WR?.rmse,
+          baselineRmse: candidates.playerEvaluation.byPosition.WR?.baselineRmse,
+          starterMeanQuality: candidates.playerEvaluation.byPosition.WR?.starterMeanQuality,
+        },
+      },
+    });
+    expect(storedWeeklyPointPolicyVersion(publication.metadata)).toBe(
+      WEEKLY_POINT_CALIBRATION_POLICY_VERSION,
+    );
+  });
+
+  it("preserves a conditional-mean warning and confidence cap when the interval overlay applies", () => {
+    const memo = new FirstPartyPublicationEvidenceMemo();
+    const original = memo.get.bind(memo);
+    vi.spyOn(memo, "get").mockImplementation((...args) => {
+      const result = original(...args);
+      const calibration = result.candidates.liveCalibration.byPosition.WR!;
+      const quality = calibration.starterMeanQuality!;
+      return {
+        ...result,
+        candidates: {
+          ...result.candidates,
+          liveCalibration: {
+            ...result.candidates.liveCalibration,
+            byPosition: {
+              ...result.candidates.liveCalibration.byPosition,
+              WR: {
+                ...calibration,
+                starterMeanQuality: {
+                  ...quality,
+                  state: "miscalibrated",
+                  bias: quality.mae,
+                  qualityFlag: "uncalibrated_starter_means",
+                },
+              },
+            },
+          },
+        },
+      };
+    });
+    const publication = planPublications({ rules: DST_SUPPORTED_RULES, scoringEvidenceMemo: memo })
+      .publications[0]!;
+    const receiver = publication.rows.find((row) => row.playerId === "player-wr")!;
+    expect(receiver.intervalPolicyVersion).toBe(WEEKLY_INTERVAL_CALIBRATION_POLICY_VERSION);
+    expect(receiver.confidence).toBe(0.49);
+    expect(publication.metadata.warnings).toEqual(
+      expect.arrayContaining([
+        "conditional_interval_development: WR forecast ranges use prior-only conditional residuals; advice confidence remains limited pending separate confirmation.",
+        "uncalibrated_starter_means: WR point forecasts have insufficient or biased historical starter evidence; advice confidence is limited.",
+      ]),
+    );
+    expect(publication.metadata.livePointCalibration).toMatchObject({
+      byPosition: { WR: { starterMeanQuality: { qualityFlag: "uncalibrated_starter_means" } } },
+    });
   });
 
   it("preserves deterministic zero/inactive/bye rows and their confidence when interval evidence qualifies", () => {
@@ -1662,6 +1893,10 @@ describe("published backtest MAE reflects only the league's supported positions"
     });
     expect(current?.inputChecksum).not.toBe(legacy?.inputChecksum);
     expect(legacy?.metadata.frozenPointPolicyVersions).toEqual({ "player-wr": "unknown" });
+    expect(legacy?.metadata.livePointCalibration).toMatchObject({ byPosition: { WR: null } });
+    expect(storedWeeklyPointPolicyVersion(legacy?.metadata)).toBe(
+      WEEKLY_POINT_CALIBRATION_POLICY_VERSION,
+    );
   });
 
   it("refuses legacy live forecasts missing a newly priced long-TD component without losing unaffected positions", () => {
@@ -1821,9 +2056,9 @@ describe("published backtest MAE reflects only the league's supported positions"
   });
 
   it.each(["RB", "WR", "TE"] as const)(
-    "qualifies the separately replayed additive recency candidate for %s when affine centers lose",
+    "retains a qualified affine expected mean for %s when the additive center only improves MAE",
     (position) => {
-      const backtest = additiveRecencyBacktestFixture(position);
+      const backtest = meanVsMaeBacktestFixture(position);
       const snapshot = structuredClone(backtest);
       const spec = BACKTEST_COMPONENT[position];
       const profile = {
@@ -1837,13 +2072,15 @@ describe("published backtest MAE reflects only the league's supported positions"
       expect(adaptive.mae).toBeGreaterThan(adaptive.baselineMae);
       expect(affine.mae).toBeGreaterThan(affine.baselineMae);
       expect(additive.mae).toBe(additive.baselineMae);
+      expect(adaptive.rmse).toBeLessThan(adaptive.baselineRmse!);
+      expect(affine.rmse).toBeLessThan(affine.baselineRmse!);
+      expect(additive.rmse).toBe(additive.baselineRmse);
       expect(additive.intervalCoverage).toBeGreaterThanOrEqual(0.62);
       expect(additive.intervalCoverage).toBeLessThanOrEqual(0.78);
-      expect(candidates.additiveRecencyPositions).toContain(position);
-      expect(candidates.fixedRecencyPositions).toContain(position);
-      expect(candidates.policy.byPosition[position]?.strategy).toBe("recency-only");
-      expect(candidates.playerEvaluation.byPosition[position]).toEqual(additive);
-      expect(candidates.liveCalibration.byPosition[position]?.pointPolicy?.slope).toBe(1);
+      expect(candidates.additiveRecencyPositions).not.toContain(position);
+      expect(candidates.fixedRecencyPositions).not.toContain(position);
+      expect(candidates.playerEvaluation.byPosition[position]).toEqual(adaptive);
+      expect(candidates.liveCalibration.byPosition[position]?.pointPolicy?.slope).toBeLessThan(1);
       expect(backtest).toEqual(snapshot);
     },
   );
@@ -1872,6 +2109,9 @@ describe("published backtest MAE reflects only the league's supported positions"
     expect(calibration.pointPolicy?.slope).toBe(1);
     expect(calibration.starterIntervalQuality).toEqual(
       candidates.playerEvaluation.byPosition.WR?.starterIntervalQuality,
+    );
+    expect(calibration.starterMeanQuality).toEqual(
+      candidates.playerEvaluation.byPosition.WR?.starterMeanQuality,
     );
     expect(publication.metadata.publicationCandidateEvidence).toContainEqual({
       position: "WR",
@@ -1920,6 +2160,7 @@ describe("published backtest MAE reflects only the league's supported positions"
     expect(candidates.liveCalibration.byPosition.WR).toEqual({
       ...hindsight.byPosition.WR,
       starterIntervalQuality: locked.byPosition.WR?.starterIntervalQuality,
+      starterMeanQuality: locked.byPosition.WR?.starterMeanQuality,
     });
     expect(candidates.playerEvaluation.byPosition.WR).toEqual(locked.byPosition.WR);
     expect(candidates.fixedRecencyEvaluation.byPosition.WR!.mae).toBeLessThanOrEqual(
@@ -1989,6 +2230,8 @@ describe("published backtest MAE reflects only the league's supported positions"
       samples: kEvaluation.samples,
       mae: kEvaluation.mae,
       baselineMae: kEvaluation.baselineMae,
+      rmse: kEvaluation.rmse,
+      baselineRmse: kEvaluation.baselineRmse,
       intervalCoverage: kEvaluation.intervalCoverage,
     });
     expect(backtest.mae).not.toBeCloseTo(evaluation.overall.mae, 5);

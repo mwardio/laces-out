@@ -49,6 +49,7 @@ import {
   storedWeeklyPointPolicyVersion,
   WEEKLY_POINT_CALIBRATION_POLICY_VERSION,
   UNCALIBRATED_STARTER_INTERVALS,
+  UNCALIBRATED_STARTER_MEANS,
   evaluateFirstPartyTeamDefenseBacktestForScoringProfile,
   firstPartyChampionStrategyForPosition,
   firstPartyProjectionComponentsForPosition,
@@ -122,7 +123,7 @@ const historySeasonCount = 4;
 // v7 refuses publication when prior-week schedule or statistics coverage is unresolved.
 const sourceSchemaVersion = 7;
 export const FIRST_PARTY_PUBLICATION_POLICY_VERSION =
-  "walk-forward-additive-recency-conditional-interval-v6";
+  "walk-forward-expected-mean-conditional-interval-v7";
 const championPolicyVersion = FIRST_PARTY_PUBLICATION_POLICY_VERSION;
 const chunkSize = 500;
 const supportedPositions = ["QB", "RB", "WR", "TE", "K"] as const;
@@ -730,23 +731,49 @@ export function projectionModelGate(input: {
   readonly defensePredictions: number;
 }): ModelGate {
   const reasons: string[] = [];
-  if (input.playerPredictions === 0 || input.player.overall.samples < 100) {
+  if (
+    input.playerPredictions === 0 ||
+    !Number.isSafeInteger(input.player.overall.samples) ||
+    input.player.overall.samples < 100
+  ) {
     reasons.push("player_backtest_sample_too_small");
   }
-  if (input.defensePredictions === 0 || input.defense.overall.samples < 48) {
+  if (
+    input.defensePredictions === 0 ||
+    !Number.isSafeInteger(input.defense.overall.samples) ||
+    input.defense.overall.samples < 48
+  ) {
     reasons.push("defense_backtest_sample_too_small");
   }
   for (const position of supportedPositions) {
     const evaluation = input.player.byPosition[position];
-    if (!evaluation || evaluation.samples < minimumPositionScoredSamples) {
+    if (
+      !evaluation ||
+      !Number.isSafeInteger(evaluation.samples) ||
+      evaluation.samples < minimumPositionScoredSamples
+    ) {
       reasons.push(`player_${position.toLowerCase()}_sample_too_small`);
       continue;
     }
-    if (evaluation.baselineMae <= 0 || evaluation.mae > evaluation.baselineMae) {
+    if (!pointMeanClearsBaseline(evaluation)) {
       reasons.push(`player_${position.toLowerCase()}_did_not_clear_recency_baseline`);
+    }
+    if (isWeeklyIntervalPosition(position)) {
+      const starter = (evaluation as WeeklyPointResidualCalibration).starterMeanQuality;
+      if (
+        starter === undefined ||
+        !Number.isSafeInteger(starter.samples) ||
+        starter.samples < minimumPositionScoredSamples
+      ) {
+        reasons.push(`player_${position.toLowerCase()}_starter_sample_too_small`);
+      } else if (!starterMeanClearsBaseline(evaluation, position)) {
+        reasons.push(`player_${position.toLowerCase()}_starter_did_not_clear_recency_baseline`);
+      }
     }
     if (
       evaluation.intervalCoverage === null ||
+      !Number.isFinite(evaluation.intervalCoverage) ||
+      !Number.isSafeInteger(evaluation.intervalCoverageSamples) ||
       evaluation.intervalCoverageSamples < minimumIntervalCoverageSamples
     ) {
       reasons.push(`player_${position.toLowerCase()}_interval_sample_too_small`);
@@ -756,20 +783,14 @@ export function projectionModelGate(input: {
     ) {
       reasons.push(`player_${position.toLowerCase()}_interval_miscalibrated`);
     }
-    if (Math.abs(evaluation.bias) > pointBiasLimit(evaluation)) {
+    if (!pointBiasClearsGate(evaluation)) {
       reasons.push(`player_${position.toLowerCase()}_bias_exceeded`);
     }
   }
-  if (
-    input.player.overall.baselineMae <= 0 ||
-    input.player.overall.mae > input.player.overall.baselineMae
-  ) {
+  if (!pointMeanClearsBaseline(input.player.overall)) {
     reasons.push("player_model_did_not_clear_recency_baseline");
   }
-  if (
-    input.defense.overall.baselineMae <= 0 ||
-    input.defense.overall.mae > input.defense.overall.baselineMae
-  ) {
+  if (!pointMeanClearsBaseline(input.defense.overall)) {
     reasons.push("defense_model_did_not_clear_recency_baseline");
   }
   for (const [label, evaluation] of [
@@ -778,6 +799,8 @@ export function projectionModelGate(input: {
   ] as const) {
     if (
       evaluation.intervalCoverage === null ||
+      !Number.isFinite(evaluation.intervalCoverage) ||
+      !Number.isSafeInteger(evaluation.intervalCoverageSamples) ||
       evaluation.intervalCoverageSamples < minimumIntervalCoverageSamples
     ) {
       reasons.push(`${label}_interval_sample_too_small`);
@@ -787,7 +810,7 @@ export function projectionModelGate(input: {
     ) {
       reasons.push(`${label}_interval_miscalibrated`);
     }
-    if (Math.abs(evaluation.bias) > pointBiasLimit(evaluation)) {
+    if (!pointBiasClearsGate(evaluation)) {
       reasons.push(`${label}_bias_exceeded`);
     }
   }
@@ -799,8 +822,46 @@ export function projectionModelGate(input: {
     : { state: "degraded", reasons };
 }
 
-function pointBiasLimit(evaluation: FirstPartyPointResidualCalibration): number {
-  return Math.max(0.5, Math.min(1, evaluation.mae * 0.15));
+/** Expected fantasy points target a mean; MAE remains a diagnostic rather than its proper loss. */
+function pointMeanClearsBaseline(evaluation: FirstPartyPointResidualCalibration): boolean {
+  return (
+    Number.isFinite(evaluation.rmse) &&
+    evaluation.rmse >= 0 &&
+    evaluation.baselineRmse !== undefined &&
+    Number.isFinite(evaluation.baselineRmse) &&
+    evaluation.baselineRmse > 0 &&
+    evaluation.rmse <= evaluation.baselineRmse
+  );
+}
+
+function starterMeanClearsBaseline(
+  evaluation: FirstPartyPointResidualCalibration,
+  position: (typeof supportedPositions)[number],
+): boolean {
+  if (!isWeeklyIntervalPosition(position)) return true;
+  const starter = (evaluation as WeeklyPointResidualCalibration).starterMeanQuality;
+  return (
+    starter !== undefined &&
+    starter.cohort === "prior-baseline-position-rank" &&
+    Number.isSafeInteger(starter.samples) &&
+    starter.samples >= minimumPositionScoredSamples &&
+    starter.rmse !== null &&
+    Number.isFinite(starter.rmse) &&
+    starter.rmse >= 0 &&
+    starter.baselineRmse !== null &&
+    Number.isFinite(starter.baselineRmse) &&
+    starter.baselineRmse > 0 &&
+    starter.rmse <= starter.baselineRmse
+  );
+}
+
+function pointBiasClearsGate(evaluation: FirstPartyPointResidualCalibration): boolean {
+  return (
+    Number.isFinite(evaluation.mae) &&
+    evaluation.mae >= 0 &&
+    Number.isFinite(evaluation.bias) &&
+    Math.abs(evaluation.bias) <= evaluation.mae * 0.15
+  );
 }
 
 export function leagueScoredInterval(
@@ -876,7 +937,7 @@ export function rescoreFrozenProjection(
     const evidence =
       row.pointPolicyVersion === WEEKLY_POINT_CALIBRATION_POLICY_VERSION
         ? calibration
-        : { ...calibration, starterIntervalQuality: undefined };
+        : { ...calibration, starterIntervalQuality: undefined, starterMeanQuality: undefined };
     const confidence = deterministicZeroProjection(row)
       ? row.confidence
       : weeklyPointEvidenceConfidence(row.confidence, evidence, position);
@@ -963,11 +1024,16 @@ function backtestSummaryForSupportedPositions(
   readonly samples: number;
   readonly mae: number;
   readonly baselineMae: number;
+  readonly rmse: number | null;
+  readonly baselineRmse: number | null;
   readonly intervalCoverage: number | null;
 } {
   let samples = 0;
   let maeTotal = 0;
   let baselineMaeTotal = 0;
+  let squaredErrorTotal = 0;
+  let baselineSquaredErrorTotal = 0;
+  let hasMeanEvidence = true;
   let coverageSamples = 0;
   let coverageTotal = 0;
   for (const position of supportedPositions) {
@@ -977,6 +1043,17 @@ function backtestSummaryForSupportedPositions(
     samples += positionEvaluation.samples;
     maeTotal += positionEvaluation.mae * positionEvaluation.samples;
     baselineMaeTotal += positionEvaluation.baselineMae * positionEvaluation.samples;
+    if (
+      Number.isFinite(positionEvaluation.rmse) &&
+      positionEvaluation.rmse >= 0 &&
+      positionEvaluation.baselineRmse !== undefined &&
+      Number.isFinite(positionEvaluation.baselineRmse) &&
+      positionEvaluation.baselineRmse >= 0
+    ) {
+      squaredErrorTotal += positionEvaluation.rmse ** 2 * positionEvaluation.samples;
+      baselineSquaredErrorTotal +=
+        positionEvaluation.baselineRmse ** 2 * positionEvaluation.samples;
+    } else hasMeanEvidence = false;
     if (positionEvaluation.intervalCoverage !== null) {
       coverageTotal +=
         positionEvaluation.intervalCoverage * positionEvaluation.intervalCoverageSamples;
@@ -987,6 +1064,12 @@ function backtestSummaryForSupportedPositions(
     samples,
     mae: samples === 0 ? 0 : maeTotal / samples,
     baselineMae: samples === 0 ? 0 : baselineMaeTotal / samples,
+    rmse: !hasMeanEvidence ? null : samples === 0 ? 0 : Math.sqrt(squaredErrorTotal / samples),
+    baselineRmse: !hasMeanEvidence
+      ? null
+      : samples === 0
+        ? 0
+        : Math.sqrt(baselineSquaredErrorTotal / samples),
     intervalCoverage: coverageSamples === 0 ? null : coverageTotal / coverageSamples,
   };
 }
@@ -1003,14 +1086,16 @@ function hasRelevantRules(profile: ProjectionScoringProfile, defense: boolean): 
 
 function pointEvaluationClearsGate(evaluation: FirstPartyPointResidualCalibration): boolean {
   return (
+    Number.isSafeInteger(evaluation.samples) &&
     evaluation.samples >= minimumPositionScoredSamples &&
-    evaluation.baselineMae > 0 &&
-    evaluation.mae <= evaluation.baselineMae &&
+    pointMeanClearsBaseline(evaluation) &&
     evaluation.intervalCoverage !== null &&
+    Number.isFinite(evaluation.intervalCoverage) &&
+    Number.isSafeInteger(evaluation.intervalCoverageSamples) &&
     evaluation.intervalCoverageSamples >= minimumIntervalCoverageSamples &&
     evaluation.intervalCoverage >= minimumIntervalCoverage &&
     evaluation.intervalCoverage <= maximumIntervalCoverage &&
-    Math.abs(evaluation.bias) <= pointBiasLimit(evaluation)
+    pointBiasClearsGate(evaluation)
   );
 }
 
@@ -1038,7 +1123,11 @@ function playerPositionEvaluationClearsGate(
     (position === "K" && scoredStats.has("field_goals_made_50_plus"));
   if (!relevant) return true;
   const positionEvaluation = evaluation.byPosition[position];
-  return positionEvaluation !== undefined && pointEvaluationClearsGate(positionEvaluation);
+  return (
+    positionEvaluation !== undefined &&
+    pointEvaluationClearsGate(positionEvaluation) &&
+    starterMeanClearsBaseline(positionEvaluation, position)
+  );
 }
 
 /**
@@ -1139,6 +1228,7 @@ export function evaluateFirstPartyPublicationCandidates(
             {
               ...fit,
               starterIntervalQuality: playerEvaluation.byPosition[position]?.starterIntervalQuality,
+              starterMeanQuality: playerEvaluation.byPosition[position]?.starterMeanQuality,
             },
           ],
         ];
@@ -1168,6 +1258,7 @@ export function evaluateFirstPartyPublicationCandidates(
     const approved =
       pointEvidence !== undefined &&
       evidence !== undefined &&
+      starterMeanClearsBaseline(pointEvidence, position) &&
       pointEvaluationClearsGate({
         ...pointEvidence,
         intervalCoverage: evidence.coverage,
@@ -3797,9 +3888,13 @@ export function buildFirstPartyLeaguePublications(input: {
               .sort((left, right) => left.playerId.localeCompare(right.playerId)),
     });
     const publishedPositionSet = new Set<LeagueScoringPosition>();
+    const currentPointPositionSet = new Set<LeagueScoringPosition>();
     for (const playerId of scored.keys()) {
       const rowPosition = rowPositions.get(playerId);
-      if (rowPosition !== undefined) publishedPositionSet.add(rowPosition);
+      if (rowPosition !== undefined) {
+        publishedPositionSet.add(rowPosition);
+        if (!frozenPlayerIds.has(playerId)) currentPointPositionSet.add(rowPosition);
+      }
     }
     const profileDigest = sha256(profileKey).slice(0, 16);
     const version = `${FIRST_PARTY_PROJECTION_MODEL_VERSION}:${input.season}:W${input.week}:${league.id}:${profileDigest}:${setChecksum.slice(0, 16)}`;
@@ -3868,6 +3963,8 @@ export function buildFirstPartyLeaguePublications(input: {
         livePointCalibration: {
           method: "selected-future-strategy-prior-games",
           policyVersion: WEEKLY_POINT_CALIBRATION_POLICY_VERSION,
+          admissionLoss: "root-mean-squared-error",
+          meanEvidenceSource: "locked-chronological-release-forecasts",
           conditionalEvidence:
             "prior-baseline-ranked starters; confidence uses chronological release predictions",
           limitation:
@@ -3877,14 +3974,18 @@ export function buildFirstPartyLeaguePublications(input: {
               .filter((position) => publishablePlayerPositions.has(position))
               .map((position) => {
                 const calibration = publicationCandidates.liveCalibration.byPosition[position];
+                const evidence = publicationCandidates.playerEvaluation.byPosition[position];
                 return [
                   position,
-                  calibration === undefined
+                  calibration === undefined || !currentPointPositionSet.has(position)
                     ? null
                     : {
                         samples: calibration.samples,
+                        rmse: evidence?.rmse,
+                        baselineRmse: evidence?.baselineRmse,
                         pointPolicy: calibration.pointPolicy,
                         starterIntervalQuality: calibration.starterIntervalQuality,
+                        starterMeanQuality: calibration.starterMeanQuality,
                         centerAdjustment: calibration.centerAdjustment,
                         lowerError: calibration.lowerError,
                         upperError: calibration.upperError,
@@ -3921,20 +4022,30 @@ export function buildFirstPartyLeaguePublications(input: {
           availabilityMethodWarning,
           ...supportedPositions.flatMap((position) => {
             if (!publishablePlayerPositions.has(position)) return [];
+            const positionWarnings: string[] = [];
+            const calibration = publicationCandidates.liveCalibration.byPosition[position];
             if (
               isWeeklyIntervalPosition(position) &&
               publicationCandidates.weeklyIntervals[position]?.state === "applied"
             )
-              return [
+              positionWarnings.push(
                 `conditional_interval_development: ${position} forecast ranges use prior-only conditional residuals; advice confidence remains limited pending separate confirmation.`,
-              ];
-            const calibration = publicationCandidates.liveCalibration.byPosition[position];
-            return calibration?.pointPolicy !== undefined &&
+              );
+            else if (
+              calibration?.pointPolicy !== undefined &&
               calibration.starterIntervalQuality?.state !== "available"
-              ? [
-                  `${UNCALIBRATED_STARTER_INTERVALS}: ${position} forecast ranges have insufficient or unreliable historical starter coverage; advice confidence is limited.`,
-                ]
-              : [];
+            )
+              positionWarnings.push(
+                `${UNCALIBRATED_STARTER_INTERVALS}: ${position} forecast ranges have insufficient or unreliable historical starter coverage; advice confidence is limited.`,
+              );
+            if (
+              calibration?.pointPolicy !== undefined &&
+              calibration.starterMeanQuality?.state !== "available"
+            )
+              positionWarnings.push(
+                `${UNCALIBRATED_STARTER_MEANS}: ${position} point forecasts have insufficient or biased historical starter evidence; advice confidence is limited.`,
+              );
+            return positionWarnings;
           }),
           ...(frozenPlayerCount > 0
             ? ["Players whose games started retain their last pre-kickoff forecast."]
