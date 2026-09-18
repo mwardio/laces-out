@@ -509,7 +509,7 @@ export interface TradePackage {
 }
 
 /**
- * Reuse unchanged before-trade values within one synchronous search. The fixed context (including
+ * Reuse unchanged before-trade values within one fixed immutable search. The context (including
  * nested rosters, slots, and projection lookups) must remain immutable for this evaluator's lifetime;
  * create a new evaluator for a changed context. No cache is shared between evaluators or requests.
  * Validation and baseline evaluation stay lazy so invalid packages keep their original behavior.

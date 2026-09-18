@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 
 import type {
   DecisionPlayer,
@@ -138,6 +139,20 @@ const MAX_PROJECTION_SET_CANDIDATES = 12;
 const MAX_WAIVER_CANDIDATES = 24;
 const MAX_TRADE_PACKAGES = 320;
 const MAX_TRADE_PACKAGES_PER_OPPONENT = 48;
+
+/**
+ * Scheduling only: the request's facts and clock stay fixed across every checkpoint. Each numerical
+ * engine call remains indivisible, so this budget bounds work between calls, not an individual call.
+ */
+function createDecisionWorkCheckpoint(): (force?: boolean) => Promise<void> {
+  let lastYield = performance.now();
+  return async (force = false) => {
+    if (force || performance.now() - lastYield >= 25) {
+      await yieldToEventLoop();
+      lastYield = performance.now();
+    }
+  };
+}
 const MAX_TRADE_POOL_PER_TEAM = 6;
 const MAX_ENGINE_STARTERS = 16;
 const TRADE_BUILDER_ALGORITHM_VERSION = "trade-builder-v2";
@@ -3007,6 +3022,7 @@ export class InSeasonDecisionService {
     const loaded = await this.#loadDecisionFacts(userId, leagueId, options.visibility ?? "actor");
     if (loaded.kind === "no-membership") return undefined;
     if (loaded.kind === "unavailable") return loaded.snapshot;
+    const workCheckpoint = createDecisionWorkCheckpoint();
     const {
       providerComparison,
       lineupScheduledTeams,
@@ -3360,6 +3376,7 @@ export class InSeasonDecisionService {
           const waiverRoster = ordinaryRosterModel(userRoster, claimedRosterRows, slots);
           const waiverPlayerIds = new Set(waiverRoster.roster.map((player) => player.id));
           const faabEnabled = season.waiverType?.trim().toLowerCase() === "faab";
+          await workCheckpoint(true);
           const weeklyView = evaluateWaiverDecisionView({
             roster: waiverRoster,
             candidates,
@@ -3428,6 +3445,7 @@ export class InSeasonDecisionService {
               const windowWeeks =
                 rosProjectionSet.windowEndWeek - rosProjectionSet.windowStartWeek + 1;
               try {
+                await workCheckpoint(true);
                 const rosView = evaluateWaiverDecisionView({
                   roster: waiverRoster,
                   candidates: rosCandidates,
@@ -3515,6 +3533,7 @@ export class InSeasonDecisionService {
       }
     }
 
+    await workCheckpoint(true);
     const opponentsWithRoster = teamRows.filter(
       (team) => team.id !== claimedTeam.id && snapshotByTeam.has(team.id),
     );
@@ -3547,6 +3566,7 @@ export class InSeasonDecisionService {
         Math.max(1, Math.floor(MAX_TRADE_PACKAGES / validOpponents.length)),
       );
       for (const candidate of validOpponents) {
+        await workCheckpoint();
         const packages = tradePackages(
           activeRoster,
           candidate.roster,
@@ -3574,6 +3594,7 @@ export class InSeasonDecisionService {
         }
         for (const tradePackage of packages) {
           if (evaluated.length >= MAX_TRADE_PACKAGES) break;
+          await workCheckpoint();
           try {
             const evaluation = evaluatePackage(tradePackage);
             if (evaluation.legal && evaluation.teamA && evaluation.teamB) {

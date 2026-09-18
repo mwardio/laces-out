@@ -414,3 +414,37 @@ Decision computation equivalence checks:
   captured snapshots exactly, with zero database reads. Source hashes and the baseline module
   graph are archived alongside that proof; the baseline graph contains only deployed `d951e13`
   project modules.
+
+Decision computation deployment, September 18 00:10 UTC:
+
+- Commit `7f769b5` is pushed and running in the API, web app, and ordinary worker. Full type
+  checking, scoped lint/formatting, production builds, and the nine-entry Linux worker canary pass.
+  Read-only live requests return the current v14 projections, Harvey's injury designation, matching
+  scoring compatibility, and close-call labels. Observed request-service times were 4.4–4.9 seconds
+  under concurrent historical and weekly computation; this is not an HTTP latency guarantee.
+- The preceding cold weekly job completed successfully before replacing the worker. A follow-on
+  job returned to normal queue retry during graceful shutdown, with no abandoned active lease.
+  The current worker began another refresh at 00:08:26 UTC.
+- Verification at 00:10 found all 16 normalizable leagues still passed model, scoring, supported
+  position, range, and confidence checks. Their publications predate a real roster-source update
+  at 00:07:26, so the verifier correctly marks them for attention while the automatic refresh
+  catches up. All 26 checked sources remain usable, including 21 required sources, and all four
+  historical PBP pairs remain coherent. This checkpoint does not claim that publication has
+  caught up with that source update.
+- Captured request replay exposed a separate responsiveness problem: despite the reduced total
+  computation time, one synchronous stretch delayed a 10 ms timer by about 3.9 seconds. A bounded
+  scheduling change is being verified against the same immutable captured facts. The historical
+  ROS model, numerical policy, release thresholds, and active corpus process remain unchanged.
+
+Cooperative decision scheduling verification:
+
+- Request orchestration now yields to an actual event-loop turn between trade packages after
+  approximately 25 ms of work, and at independent waiver/trade phase boundaries. The clock,
+  loaded facts, package order, and per-opponent baseline context remain fixed. No numerical
+  engine or cross-request cache changed. Invalid packages cannot bypass the scheduling checkpoint.
+- All 109 focused trade and decision tests pass, including real timer progress during successful
+  and throwing package paths. The same two captured requests retain byte-identical complete
+  snapshot hashes with no database or network access. Maximum observed 10 ms timer delay fell
+  from roughly 3.9 seconds to 995 ms for FF and 690 ms for Android; 83 and 76 timer ticks ran
+  before completion. Individual synchronous waiver calls still took 610–811 ms, so neither
+  the 25 ms checkpoint target nor these replay measurements establish a request-latency guarantee.

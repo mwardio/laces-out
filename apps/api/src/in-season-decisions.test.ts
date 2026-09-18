@@ -2324,6 +2324,58 @@ const SNAPSHOT_FINGERPRINT_WITHOUT_PROVENANCE =
   "ca0345ed8bd6b4ca6ee0c8c5f72d70d74987e493a67be6eb4a11d8b092acd51f";
 
 describe("InSeasonDecisionService snapshot stability", () => {
+  it.each([false, true])(
+    "lets a heartbeat run between packages, including errors (%s)",
+    async (failFirst) => {
+      const originalFactory = tradeEngine.createTradeEvaluator;
+      let evaluatedPackages = 0;
+      let spendBudget = false;
+      let completed = false;
+      const heartbeatPackageCounts: number[] = [];
+      const factory = vi
+        .spyOn(tradeEngine, "createTradeEvaluator")
+        .mockImplementation((context) => {
+          const evaluate = originalFactory(context);
+          return (tradePackage) => {
+            evaluatedPackages++;
+            if (evaluatedPackages === 1) {
+              if (spendBudget) {
+                // Exercise a spent scheduling budget with real timers, independent of machine speed.
+                const began = performance.now();
+                while (performance.now() - began < 35) {
+                  /* one indivisible evaluation */
+                }
+              }
+              if (failFirst) throw new Error("Unusable first package");
+            }
+            return evaluate(tradePackage);
+          };
+        });
+      const expected = await new InSeasonDecisionService(
+        new FakeRepository(),
+        () => NOW,
+      ).getSnapshot(USER_ID, LEAGUE_ID);
+      evaluatedPackages = 0;
+      spendBudget = true;
+      const interval = setInterval(() => {
+        if (!completed && evaluatedPackages > 0) heartbeatPackageCounts.push(evaluatedPackages);
+      }, 1);
+      try {
+        const actual = await new InSeasonDecisionService(
+          new FakeRepository(),
+          () => NOW,
+        ).getSnapshot(USER_ID, LEAGUE_ID);
+        completed = true;
+        expect(actual).toEqual(expected);
+        expect(heartbeatPackageCounts.some((count) => count < evaluatedPackages)).toBe(true);
+      } finally {
+        completed = true;
+        clearInterval(interval);
+        factory.mockRestore();
+      }
+    },
+  );
+
   it("keeps the entire snapshot identical with and without context-local trade baselines", async () => {
     for (const reserveCode of [null, "IR", "TAXI"] as const) {
       const repository = new FakeRepository();
