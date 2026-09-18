@@ -61,7 +61,9 @@ import {
   type LineupLock,
 } from "@laces-out/engine-lineup";
 import {
+  createTradeEvaluator,
   evaluateTrade,
+  type EvaluateTradeInput,
   type TradeEvaluation,
   type TradeHorizon,
   type TradePackage,
@@ -2291,13 +2293,23 @@ export function evaluateTradePackage(
   context: TradeEvaluationContext,
   tradePackage: TradePackage,
 ): TradeEvaluation {
+  return evaluateTrade({
+    ...tradeInputForContext(context),
+    sendsFromA: tradePackage.sendsFromA,
+    sendsFromB: tradePackage.sendsFromB,
+  });
+}
+
+function tradeInputForContext(
+  context: TradeEvaluationContext,
+): Omit<EvaluateTradeInput, "sendsFromA" | "sendsFromB"> {
   const user = ordinaryRosterModel(context.user.roster, context.user.rosterRows, context.slots);
   const opponent = ordinaryRosterModel(
     context.opponent.roster,
     context.opponent.rosterRows,
     context.slots,
   );
-  return evaluateTrade({
+  return {
     teamA: {
       teamId: teamId(context.user.team.id),
       name: context.user.team.name,
@@ -2316,11 +2328,9 @@ export function evaluateTradePackage(
       rosterCapacity: opponent.rosterCapacity,
       protectedPlayerIds: opponent.protectedPlayerIds,
     },
-    sendsFromA: tradePackage.sendsFromA,
-    sendsFromB: tradePackage.sendsFromB,
     horizons: context.horizons,
     projectionsByHorizon: context.projectionsByHorizon,
-  });
+  };
 }
 
 /**
@@ -3555,10 +3565,17 @@ export class InSeasonDecisionService {
           horizons: [{ id: projectionSet.id, label: projectionSet.horizon, weight: 1 }],
           projectionsByHorizon: { [projectionSet.id]: projectionById },
         };
+        let evaluatePackage: (tradePackage: TradePackage) => TradeEvaluation;
+        try {
+          evaluatePackage = createTradeEvaluator(tradeInputForContext(context));
+        } catch {
+          // Malformed context cannot make any package usable; keep other opponents available.
+          continue;
+        }
         for (const tradePackage of packages) {
           if (evaluated.length >= MAX_TRADE_PACKAGES) break;
           try {
-            const evaluation = evaluateTradePackage(context, tradePackage);
+            const evaluation = evaluatePackage(tradePackage);
             if (evaluation.legal && evaluation.teamA && evaluation.teamB) {
               evaluated.push({ opponent: candidate.opponent, tradePackage, evaluation });
             }

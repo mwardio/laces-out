@@ -102,6 +102,11 @@ interface EvaluatedRoster {
   readonly values: Readonly<Record<string, TradeRosterValue>>;
 }
 
+interface TradeBaselineCache {
+  a?: EvaluatedRoster | null;
+  b?: EvaluatedRoster | null;
+}
+
 function validateWeight(value: number, label: string): void {
   if (!Number.isFinite(value) || value < 0) {
     throw new RangeError(`${label} must be a non-negative finite number`);
@@ -276,6 +281,13 @@ function buildSideEvaluation(
 }
 
 export function evaluateTrade(input: EvaluateTradeInput): TradeEvaluation {
+  return evaluateTradeWithBaselines(input);
+}
+
+function evaluateTradeWithBaselines(
+  input: EvaluateTradeInput,
+  baselines?: TradeBaselineCache,
+): TradeEvaluation {
   const benchWeight = input.benchValueWeight ?? 0.1;
   validateWeight(benchWeight, "Bench value weight");
   if (input.teamA.teamId === input.teamB.teamId) {
@@ -425,20 +437,28 @@ export function evaluateTrade(input: EvaluateTradeInput): TradeEvaluation {
     };
   }
 
-  const beforeA = evaluateRoster(
-    input.teamA,
-    input.teamA.roster,
-    input.horizons,
-    input.projectionsByHorizon,
-    benchWeight,
-  );
-  const beforeB = evaluateRoster(
-    input.teamB,
-    input.teamB.roster,
-    input.horizons,
-    input.projectionsByHorizon,
-    benchWeight,
-  );
+  const beforeA =
+    baselines?.a !== undefined
+      ? baselines.a
+      : evaluateRoster(
+          input.teamA,
+          input.teamA.roster,
+          input.horizons,
+          input.projectionsByHorizon,
+          benchWeight,
+        );
+  if (baselines) baselines.a = beforeA;
+  const beforeB =
+    baselines?.b !== undefined
+      ? baselines.b
+      : evaluateRoster(
+          input.teamB,
+          input.teamB.roster,
+          input.horizons,
+          input.projectionsByHorizon,
+          benchWeight,
+        );
+  if (baselines) baselines.b = beforeB;
   if (beforeA === null || beforeB === null) {
     return {
       legal: false,
@@ -488,27 +508,43 @@ export interface TradePackage {
   readonly sendsFromB: readonly PlayerId[];
 }
 
+/**
+ * Reuse unchanged before-trade values within one synchronous search. The fixed context (including
+ * nested rosters, slots, and projection lookups) must remain immutable for this evaluator's lifetime;
+ * create a new evaluator for a changed context. No cache is shared between evaluators or requests.
+ * Validation and baseline evaluation stay lazy so invalid packages keep their original behavior.
+ */
+export function createTradeEvaluator(
+  input: Omit<EvaluateTradeInput, "sendsFromA" | "sendsFromB">,
+): (tradePackage: TradePackage) => TradeEvaluation {
+  const baselines: TradeBaselineCache = {};
+  return (tradePackage) =>
+    evaluateTradeWithBaselines(
+      { ...input, sendsFromA: tradePackage.sendsFromA, sendsFromB: tradePackage.sendsFromB },
+      baselines,
+    );
+}
+
 export function rankTradePackages(
   input: Omit<EvaluateTradeInput, "sendsFromA" | "sendsFromB">,
   packages: readonly TradePackage[],
 ): readonly TradeEvaluation[] {
-  return packages
-    .map((tradePackage) => evaluateTrade({ ...input, ...tradePackage }))
-    .sort((left, right) => {
-      if (left.legal !== right.legal) {
-        return left.legal ? -1 : 1;
-      }
-      if (left.mutuallyBeneficial !== right.mutuallyBeneficial) {
-        return left.mutuallyBeneficial ? -1 : 1;
-      }
-      const worstLeft = Math.min(
-        left.teamA?.weightedDelta ?? -Infinity,
-        left.teamB?.weightedDelta ?? -Infinity,
-      );
-      const worstRight = Math.min(
-        right.teamA?.weightedDelta ?? -Infinity,
-        right.teamB?.weightedDelta ?? -Infinity,
-      );
-      return worstRight - worstLeft || left.fairnessGap - right.fairnessGap;
-    });
+  const evaluate = createTradeEvaluator(input);
+  return packages.map(evaluate).sort((left, right) => {
+    if (left.legal !== right.legal) {
+      return left.legal ? -1 : 1;
+    }
+    if (left.mutuallyBeneficial !== right.mutuallyBeneficial) {
+      return left.mutuallyBeneficial ? -1 : 1;
+    }
+    const worstLeft = Math.min(
+      left.teamA?.weightedDelta ?? -Infinity,
+      left.teamB?.weightedDelta ?? -Infinity,
+    );
+    const worstRight = Math.min(
+      right.teamA?.weightedDelta ?? -Infinity,
+      right.teamB?.weightedDelta ?? -Infinity,
+    );
+    return worstRight - worstLeft || left.fairnessGap - right.fairnessGap;
+  });
 }

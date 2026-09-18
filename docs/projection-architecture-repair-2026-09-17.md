@@ -316,7 +316,8 @@ Operational deployment and live verification, 23:32 UTC:
   heartbeats and provider synchronization remained responsive. These are observed job timings,
   not a guaranteed refresh latency.
 - Read-only verification at 23:31:50 found current, valid weekly outputs for all 16 normalizable
-  leagues, all 26 required sources usable, and all four historical PBP pairs coherent. The
+  leagues, all 26 checked sources usable (including all 21 required sources), and all four
+  historical PBP pairs coherent. The
   Decision Desk GET path recalculates from current facts; an older persisted background run is
   not its response cache. Both ROS consumers remain paused pending the completed corpus.
 - Queue warnings now retain bounded categories, queue names, and numeric measurements. The
@@ -374,3 +375,42 @@ Presentation fixes verified before deployment, 23:46 UTC:
   retains his 9.242 projected points, and includes the availability caution. Both leagues' proposed
   swaps are close calls. No scoring, simulation, calibration, source-ingestion, or numerical model
   version changed in these presentation fixes.
+
+Presentation deployment verification, 23:50 UTC:
+
+- Commit `d951e13` is pushed and deployed in the API, web app, and ordinary worker. The production
+  build, full repository lint and type check, and nine-entry worker container canary pass.
+  API and web readiness pass; no database migration was needed for this follow-up.
+- Read-only production verification still finds 16 valid weekly league outputs and one explicitly
+  unsupported IDP configuration. All 26 checked sources are usable, including the 21 required
+  sources; all four player/team PBP pairs remain coherent. Actual request services return the
+  latest v14 forecasts, current scoring compatibility, Harvey's visible injury designation,
+  and close-call assessments. Both ROS consumers remain paused for corpus completion.
+- A single isolated read-only CPU profile identified repeated pre-trade roster optimizations as
+  a substantial request cost. A request-scoped reuse improvement is being tested for exact output
+  equivalence. No production API process was profiled or modified during that diagnostic.
+
+Decision computation equivalence checks:
+
+- Each internal lineup candidate now lazily retains its existing exact tie-breaking string. The
+  assignments, semantic slot order, score epsilon, and preference for current assignments are
+  unchanged. All 31 lineup tests and 14 downstream waiver tests pass. A seeded comparison against
+  the deployed optimizer matches complete outputs and errors across 801 cases, including missing
+  and nonfinite projections, locks, duplicate inputs, reordered slots, and epsilon ties. The
+  aggregate output SHA-256 is identical. A dense tied-lineup benchmark improves from roughly
+  190–217 ms to 127–135 ms per 30 optimizations; this is a component benchmark, not HTTP latency.
+- Trade search reuses only the two unchanged pre-trade baseline evaluations inside one fixed,
+  synchronous opponent context. Resulting rosters are still evaluated for each package. Validation
+  remains lazy, invalid context stays isolated, and no cache crosses a request or user boundary.
+  All 107 focused trade and decision cases pass, including generated equality across 35 contexts
+  and eight packages each, null baselines, invalid inputs, and locked/IR/taxi roster integration.
+- A single read-only capture supplied identical deep-cloned repository results and a fixed clock
+  to the full deployed `d951e13` graph and the optimized graph. Complete snapshots match exactly
+  for both reported leagues, including timestamps, provenance, and checksums. Replay wall time
+  fell from 5,921 to 3,951 ms for FF and from 5,854 to 3,912 ms for Android, approximately one-third
+  less computation time. CPU reductions were 15.3% and 30.4%, respectively. These measurements
+  exclude live database reads and are not a service-level latency guarantee.
+- A final replay after preserving the standalone package-field boundary again matched both full
+  captured snapshots exactly, with zero database reads. Source hashes and the baseline module
+  graph are archived alongside that proof; the baseline graph contains only deployed `d951e13`
+  project modules.

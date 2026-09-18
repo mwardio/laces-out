@@ -128,6 +128,9 @@ interface DynamicCandidate {
   readonly score: number;
   readonly assignments: readonly DynamicAssignment[];
   readonly preservedCurrentAssignmentCount: number;
+  // Assignments never change after construction, and candidates belong to one optimization.
+  // Repeated ties can therefore reuse this exact string without sorting the same incumbent again.
+  assignmentSignature?: string;
 }
 
 const SCORE_EPSILON = 1e-9;
@@ -213,10 +216,11 @@ function scoreFor(
 }
 
 function assignmentSignature(
-  assignments: readonly DynamicAssignment[],
+  candidate: DynamicCandidate,
   semanticSlotIdentityById: ReadonlyMap<RosterSlotId, string>,
 ): string {
-  return [...assignments]
+  if (candidate.assignmentSignature !== undefined) return candidate.assignmentSignature;
+  candidate.assignmentSignature = [...candidate.assignments]
     .sort((left, right) =>
       semanticSlotIdentityById
         .get(left.slot.id)!
@@ -227,6 +231,7 @@ function assignmentSignature(
         `${semanticSlotIdentityById.get(assignment.slot.id)!}:${assignment.player.id}`,
     )
     .join("|");
+  return candidate.assignmentSignature;
 }
 
 function isBetterForSameMask(
@@ -242,8 +247,8 @@ function isBetterForSameMask(
       return candidate.preservedCurrentAssignmentCount > incumbent.preservedCurrentAssignmentCount;
     }
     return (
-      assignmentSignature(candidate.assignments, semanticSlotIdentityById) <
-      assignmentSignature(incumbent.assignments, semanticSlotIdentityById)
+      assignmentSignature(candidate, semanticSlotIdentityById) <
+      assignmentSignature(incumbent, semanticSlotIdentityById)
     );
   }
   return false;

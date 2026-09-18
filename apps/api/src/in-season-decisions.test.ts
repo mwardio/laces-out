@@ -12,6 +12,7 @@ import {
   type RosterSlot,
 } from "@laces-out/domain";
 import { projectionScoringProfileKey } from "@laces-out/projections";
+import * as tradeEngine from "@laces-out/engine-trade";
 import { describe, expect, it, vi } from "vitest";
 
 import {
@@ -2323,6 +2324,52 @@ const SNAPSHOT_FINGERPRINT_WITHOUT_PROVENANCE =
   "ca0345ed8bd6b4ca6ee0c8c5f72d70d74987e493a67be6eb4a11d8b092acd51f";
 
 describe("InSeasonDecisionService snapshot stability", () => {
+  it("keeps the entire snapshot identical with and without context-local trade baselines", async () => {
+    for (const reserveCode of [null, "IR", "TAXI"] as const) {
+      const repository = new FakeRepository();
+      repository.rosterRows = rosterRows.map((row) => ({
+        ...row,
+        locked: row.playerId === playerIds.aQbLow,
+        slotCode: reserveCode && row.playerId === playerIds.aRbTwo ? reserveCode : row.slotCode,
+      }));
+      const optimized = await new InSeasonDecisionService(repository, () => NOW).getSnapshot(
+        USER_ID,
+        LEAGUE_ID,
+      );
+      const factory = vi
+        .spyOn(tradeEngine, "createTradeEvaluator")
+        .mockImplementation(
+          (context) => (tradePackage) => tradeEngine.evaluateTrade({ ...context, ...tradePackage }),
+        );
+      try {
+        const original = await new InSeasonDecisionService(repository, () => NOW).getSnapshot(
+          USER_ID,
+          LEAGUE_ID,
+        );
+        expect(optimized).toEqual(original);
+      } finally {
+        factory.mockRestore();
+      }
+    }
+  });
+
+  it("isolates an unusable prepared trade context from the rest of the snapshot", async () => {
+    const factory = vi.spyOn(tradeEngine, "createTradeEvaluator").mockImplementationOnce(() => {
+      throw new Error("Unusable trade context");
+    });
+    try {
+      const snapshot = await new InSeasonDecisionService(
+        new FakeRepository(),
+        () => NOW,
+      ).getSnapshot(USER_ID, LEAGUE_ID);
+      expect(factory).toHaveBeenCalled();
+      expect(snapshot?.lineup.state).toBe("available");
+      expect(snapshot?.trades).toMatchObject({ state: "available", bestForMe: [], fairest: [] });
+    } finally {
+      factory.mockRestore();
+    }
+  });
+
   it("produces a byte-identical snapshot for the frozen fixture", async () => {
     const snapshot = await new InSeasonDecisionService(new FakeRepository(), () => NOW).getSnapshot(
       USER_ID,
@@ -2431,6 +2478,18 @@ function builderContext(locked: readonly string[] = []) {
 }
 
 describe("evaluateTradePackage", () => {
+  it("only takes the sent player IDs from the package, preserving the supplied league context", () => {
+    const context = builderContext();
+    const tradePackage = {
+      sendsFromA: [playerId(playerIds.aRbTwo)],
+      sendsFromB: [playerId(playerIds.bQbOne)],
+    };
+    const extraFields = { ...tradePackage, teamA: { teamId: "foreign-team" }, horizons: [] };
+    expect(evaluateTradePackage(context, extraFields)).toEqual(
+      evaluateTradePackage(context, tradePackage),
+    );
+  });
+
   it("scores both sides of a one-for-one package", () => {
     const evaluation = evaluateTradePackage(builderContext(), {
       sendsFromA: [playerId(playerIds.aRbTwo)],
