@@ -84,6 +84,69 @@ describe("automatic exact ROS profile validation", () => {
     },
   };
 
+  it("defers an initial profile without running a proof while shared data prepares", async () => {
+    const test = setup();
+    const deferForCorpus = vi.fn(async () => {});
+    const requestIdentity = "a".repeat(64);
+    const service = new RosProfileValidationService({
+      repository: { ...test.repository, deferForCorpus },
+      runner: test.runner,
+      enqueueProjectionRefresh: test.enqueueProjectionRefresh,
+      sharedCorpus: async () => ({ requestIdentity, corpusIdentity: null }),
+    });
+    await service.validateProfile(test.job, test.context);
+    expect(deferForCorpus).toHaveBeenCalledWith(
+      test.job.profileValidationId,
+      expect.any(Date),
+      requestIdentity,
+      expect.any(Date),
+    );
+    expect(test.runner).not.toHaveBeenCalled();
+    expect(test.completions).toHaveLength(0);
+    expect(test.enqueueProjectionRefresh).not.toHaveBeenCalled();
+  });
+
+  it("pins initial profile proofs to the shared ready corpus", async () => {
+    const test = setup();
+    const corpusIdentity = "b".repeat(64);
+    test.runner.mockResolvedValue({ ...validReport({}), outcomeCorpusIdentity: corpusIdentity });
+    const service = new RosProfileValidationService({
+      repository: { ...test.repository, deferForCorpus: vi.fn(async () => {}) },
+      runner: test.runner,
+      enqueueProjectionRefresh: test.enqueueProjectionRefresh,
+      sharedCorpus: async () => ({ requestIdentity: "a".repeat(64), corpusIdentity }),
+    });
+    await service.validateProfile(test.job, test.context);
+    expect(test.runner).toHaveBeenCalledWith(
+      expect.objectContaining({ requiredReadyCorpusIdentity: corpusIdentity }),
+    );
+    expect(test.record().state).toBe("admitted");
+  });
+
+  it("does not turn an unavailable exact-corpus recovery into an unpinned bootstrap", async () => {
+    const test = setup({
+      state: "failed",
+      blockers: ["validation_execution_failed"],
+      report: recoveryReport,
+    });
+    const deferForCorpus = vi.fn(async () => {});
+    const service = new RosProfileValidationService({
+      repository: { ...test.repository, deferForCorpus },
+      runner: test.runner,
+      enqueueProjectionRefresh: test.enqueueProjectionRefresh,
+      sharedCorpus: async () => ({ requestIdentity: "a".repeat(64), corpusIdentity: null }),
+    });
+    await expect(
+      service.validateProfile(
+        { ...test.job, recoveryCorpusIdentity: recoveryIdentity },
+        test.context,
+      ),
+    ).rejects.toThrow(/corpus is unavailable/);
+    expect(test.runner).not.toHaveBeenCalled();
+    expect(deferForCorpus).not.toHaveBeenCalled();
+    expect(test.record().state).toBe("failed");
+  });
+
   it("pins recovery to its ready corpus and does not let old queue rows start modeling", async () => {
     const test = setup({
       state: "failed",

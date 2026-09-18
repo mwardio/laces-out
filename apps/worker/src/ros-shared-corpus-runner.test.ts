@@ -585,6 +585,29 @@ describe("durable shared ROS corpus orchestration", { timeout: 30_000 }, () => {
     expect(rosSharedCorpusRequest(2027).identity).not.toBe(prepared.request.identity);
   });
 
+  it("does not expose readiness when its durable claim rejects the commit", async () => {
+    const prepared = await fixture();
+    const commitReady = vi.fn<
+      NonNullable<Parameters<typeof createSharedRosCorpusValidationRunner>[0]["commitReady"]>
+    >(async () => {
+      throw new Error("stale durable claim");
+    });
+    const runner = createSharedRosCorpusValidationRunner({
+      directory: prepared.directory,
+      runner: prepared.runner,
+      lock: sequentialLock(),
+      commitReady,
+    });
+    await expect(runner(input())).rejects.toThrow("stale durable claim");
+    expect(commitReady).toHaveBeenCalledOnce();
+    const committed = commitReady.mock.calls[0]![0];
+    expect(committed.corpusIdentity).toMatch(/^[a-f0-9]{64}$/u);
+    expect(committed.commit).toBeTypeOf("function");
+    expect(
+      await readyRosSharedCorpusIdentity(prepared.directory, 2026, new AbortController().signal),
+    ).toBeNull();
+  });
+
   it("recovers a failed first build without ever publishing a partial ready pointer", async () => {
     const prepared = await fixture();
     prepared.runner.mockRejectedValueOnce(new Error("Builder died"));

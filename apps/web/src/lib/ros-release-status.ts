@@ -95,6 +95,12 @@ export interface RosLeagueReadiness {
     readonly state: "pending" | "validating" | "admitted" | "withheld" | "failed";
     readonly requestedAt: string;
     readonly blockers: readonly string[];
+    readonly historyPreparation?: {
+      readonly state:
+        "pending" | "building" | "ready" | "retry-wait" | "waiting-source" | "blocked-integrity";
+      readonly updatedAt: string;
+      readonly nextAttemptAt: string | null;
+    };
   };
 }
 
@@ -286,6 +292,35 @@ function parseReadiness(value: unknown): readonly RosLeagueReadiness[] | null {
         requestedAt: validation.requestedAt,
         blockers: validation.blockers,
       };
+      const history = validation.historyPreparation;
+      // This additive diagnostic must not blank the entire status on a mixed-version rollout.
+      if (
+        isRecord(history) &&
+        typeof history.state === "string" &&
+        [
+          "pending",
+          "building",
+          "ready",
+          "retry-wait",
+          "waiting-source",
+          "blocked-integrity",
+        ].includes(history.state) &&
+        isString(history.updatedAt) &&
+        Number.isFinite(Date.parse(history.updatedAt)) &&
+        (history.nextAttemptAt === null ||
+          (isString(history.nextAttemptAt) && Number.isFinite(Date.parse(history.nextAttemptAt))))
+      ) {
+        scoringValidation = {
+          ...scoringValidation,
+          historyPreparation: {
+            state: history.state as NonNullable<
+              NonNullable<RosLeagueReadiness["scoringValidation"]>["historyPreparation"]
+            >["state"],
+            updatedAt: history.updatedAt,
+            nextAttemptAt: history.nextAttemptAt,
+          },
+        };
+      }
     }
     readiness.push({
       leagueSeasonId: entry.leagueSeasonId,
@@ -480,6 +515,7 @@ export function describeRosLeagueReadiness(
   readonly showConnections: boolean;
 } {
   const validation = league.scoringValidation?.state;
+  const history = league.scoringValidation?.historyPreparation;
   const reasonMessages: Readonly<Record<string, string>> = {
     "scoring-rules-unsupported":
       "Some scoring rules are not supported yet. Your league settings are saved; changing a model or reconnecting will not add support for those rules.",
@@ -501,7 +537,45 @@ export function describeRosLeagueReadiness(
     (reason) => reasonMessages[reason] ?? "A required forecast check has not passed yet.",
   );
   let heading = hasPublishedSet ? "Forecast available" : "Waiting for first forecast";
-  if (validation === "pending" || validation === "validating") {
+  if (
+    history &&
+    (validation === "pending" || validation === "failed") &&
+    history.state !== "ready"
+  ) {
+    const descriptions = {
+      pending: [
+        "Forecast preparation queued",
+        "Laces Out is preparing the historical player data used to check forecasts. This runs automatically.",
+      ],
+      building: [
+        "Preparing forecast history",
+        "Laces Out is preparing shared historical player data. The initial build can take several hours; your scoring check will follow automatically.",
+      ],
+      "retry-wait": [
+        "Forecast preparation will retry",
+        "Historical data preparation was interrupted. Laces Out will retry automatically; your league connection does not need to be changed.",
+      ],
+      "waiting-source": [
+        "Waiting for historical data",
+        "Some required historical player data is incomplete. Laces Out will check for updated data automatically.",
+      ],
+      "blocked-integrity": [
+        "Forecast preparation needs repair",
+        "Laces Out found a problem with its stored historical data and needs to repair it before this check can continue. Your league connection does not need to be changed.",
+      ],
+    } as const;
+    const description = descriptions[history.state];
+    heading = description[0];
+    messages.unshift(description[1]);
+    if (
+      history.nextAttemptAt !== null &&
+      (history.state === "retry-wait" || history.state === "waiting-source")
+    ) {
+      messages.push(
+        `Next automatic retry is scheduled for ${new Date(history.nextAttemptAt).toLocaleString()}.`,
+      );
+    }
+  } else if (validation === "pending" || validation === "validating") {
     heading =
       validation === "pending" ? "Scoring validation queued" : "Checking your scoring rules";
     messages.unshift(

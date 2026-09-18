@@ -108,6 +108,12 @@ describe("worker queue reliability", () => {
           expireInSeconds: 82_800,
           heartbeatSeconds: 300,
         },
+        bootstrapRosCorpus: {
+          retryLimit: 2,
+          retryDelayMax: 3_600,
+          expireInSeconds: 82_800,
+          heartbeatSeconds: 300,
+        },
         recomputeRecommendations: { retryLimit: 3, retryDelayMax: 300, expireInSeconds: 900 },
         dataHealth: { retryLimit: 2, retryDelayMax: 300, expireInSeconds: 300 },
         dataRefresh: { retryLimit: 5, retryDelayMax: 3_600, expireInSeconds: 1_800 },
@@ -144,7 +150,10 @@ describe("worker queue reliability", () => {
     await registerWorkers(boss, logger);
 
     const mainQueueNames = Object.values(queueNames).filter(
-      (name) => name !== queueNames.refreshRosProjections && name !== queueNames.validateRosProfile,
+      (name) =>
+        name !== queueNames.refreshRosProjections &&
+        name !== queueNames.validateRosProfile &&
+        name !== queueNames.bootstrapRosCorpus,
     );
     expect(work).toHaveBeenCalledTimes(mainQueueNames.length);
     for (const name of mainQueueNames) {

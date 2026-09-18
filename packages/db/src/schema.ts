@@ -2111,6 +2111,65 @@ export const firstPartyRosChampionArtifacts = pgTable(
   ],
 );
 
+/** Durable ownership of one physical ROS corpus; independent of scoring profiles and members. */
+export const firstPartyRosCorpusBootstraps = pgTable(
+  "first_party_ros_corpus_bootstraps",
+  {
+    requestIdentity: text("request_identity").primaryKey(),
+    season: integer("season").notNull(),
+    protocol: jsonb("protocol").$type<Record<string, unknown>>().notNull(),
+    state: text("state")
+      .$type<
+        "pending" | "building" | "ready" | "retry-wait" | "waiting-source" | "blocked-integrity"
+      >()
+      .notNull()
+      .default("pending"),
+    attempt: integer("attempt").notNull().default(0),
+    /** Once set, migration 0052's update trigger forbids clearing or replacing this identity. */
+    corpusIdentity: text("corpus_identity"),
+    requestedAt: timestamp("requested_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+    startedAt: timestamp("started_at", { withTimezone: true }),
+    completedAt: timestamp("completed_at", { withTimezone: true }),
+    nextAttemptAt: timestamp("next_attempt_at", { withTimezone: true }),
+    verifiedAt: timestamp("verified_at", { withTimezone: true }),
+    dispatchReservationId: uuid("dispatch_reservation_id"),
+    dispatchClaimedAt: timestamp("dispatch_claimed_at", { withTimezone: true }),
+    jobId: uuid("job_id"),
+    reasonCode: text("reason_code"),
+    diagnostic: jsonb("diagnostic").$type<Record<string, unknown>>().notNull().default({}),
+    sourceSnapshotId: uuid("source_snapshot_id"),
+    sourceSnapshotState: text("source_snapshot_state").$type<
+      "capturing" | "qualified" | "unqualified"
+    >(),
+    sourceSnapshotCreatedAt: timestamp("source_snapshot_created_at", { withTimezone: true }),
+    sourceSnapshotQualifiedAt: timestamp("source_snapshot_qualified_at", { withTimezone: true }),
+  },
+  (table) => [
+    index("ros_corpus_bootstraps_state_retry_idx").on(table.state, table.nextAttemptAt),
+    check(
+      "ros_corpus_bootstraps_identity_check",
+      sql`${table.requestIdentity} ~ '^[a-f0-9]{64}$' and ${table.season} between 2007 and 2200 and (${table.corpusIdentity} is null or ${table.corpusIdentity} ~ '^[a-f0-9]{64}$')`,
+    ),
+    check(
+      "ros_corpus_bootstraps_state_check",
+      sql`${table.state} in ('pending', 'building', 'ready', 'retry-wait', 'waiting-source', 'blocked-integrity') and ${table.attempt} between 0 and 2147483647 and (${table.state} <> 'ready' or (${table.corpusIdentity} is not null and ${table.verifiedAt} is not null))`,
+    ),
+    check(
+      "ros_corpus_bootstraps_payload_check",
+      sql`jsonb_typeof(${table.protocol}) = 'object' and jsonb_typeof(${table.diagnostic}) = 'object' and octet_length(${table.diagnostic}::text) <= 16384 and (${table.reasonCode} is null or char_length(${table.reasonCode}) between 1 and 128)`,
+    ),
+    check(
+      "ros_corpus_bootstraps_dates_check",
+      sql`isfinite(${table.requestedAt}) and ${table.requestedAt} >= '2000-01-01'::timestamptz and isfinite(${table.updatedAt}) and ${table.updatedAt} >= '2000-01-01'::timestamptz and (${table.startedAt} is null or (isfinite(${table.startedAt}) and ${table.startedAt} >= '2000-01-01'::timestamptz)) and (${table.completedAt} is null or (isfinite(${table.completedAt}) and ${table.completedAt} >= '2000-01-01'::timestamptz)) and (${table.nextAttemptAt} is null or (isfinite(${table.nextAttemptAt}) and ${table.nextAttemptAt} >= '2000-01-01'::timestamptz)) and (${table.verifiedAt} is null or (isfinite(${table.verifiedAt}) and ${table.verifiedAt} >= '2000-01-01'::timestamptz)) and (${table.dispatchClaimedAt} is null or (isfinite(${table.dispatchClaimedAt}) and ${table.dispatchClaimedAt} >= '2000-01-01'::timestamptz)) and (${table.sourceSnapshotCreatedAt} is null or (isfinite(${table.sourceSnapshotCreatedAt}) and ${table.sourceSnapshotCreatedAt} >= '2000-01-01'::timestamptz)) and (${table.sourceSnapshotQualifiedAt} is null or (isfinite(${table.sourceSnapshotQualifiedAt}) and ${table.sourceSnapshotQualifiedAt} >= '2000-01-01'::timestamptz))`,
+    ),
+    check(
+      "ros_corpus_bootstraps_snapshot_check",
+      sql`((${table.sourceSnapshotId} is null and ${table.sourceSnapshotState} is null and ${table.sourceSnapshotCreatedAt} is null and ${table.sourceSnapshotQualifiedAt} is null) or (${table.sourceSnapshotId} is not null and ${table.sourceSnapshotState} is not null and ${table.sourceSnapshotState} in ('capturing', 'qualified', 'unqualified') and ${table.sourceSnapshotCreatedAt} is not null and (${table.sourceSnapshotState} <> 'qualified' or ${table.sourceSnapshotQualifiedAt} is not null)))`,
+    ),
+  ],
+);
+
 /** Deduplicated exact-scoring release proofs, shared across leagues without storing member data. */
 export const firstPartyRosProfileValidations = pgTable(
   "first_party_ros_profile_validations",

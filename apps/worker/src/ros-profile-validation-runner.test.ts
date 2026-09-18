@@ -52,6 +52,29 @@ describe("isolated ROS profile validation runner", () => {
     );
     expect(existsSync(report.keyFile as string)).toBe(false);
   });
+  it("passes source capture bounds and preflight mode explicitly without changing release inputs", async () => {
+    const validatorPath = await validator(
+      `process.stdout.write(JSON.stringify({args:process.argv.slice(2)}));`,
+    );
+    const report = await createRosProfileValidationRunner({
+      validatorPath,
+      sourceCacheDirectory: "/owned/capture",
+      sourceCacheMaximumBytes: 4096,
+      preflightOnly: true,
+      offline: true,
+    })(input());
+    expect(report.args).toEqual(
+      expect.arrayContaining([
+        "--source-cache=/owned/capture",
+        "--source-cache-max-bytes=4096",
+        "--preflight-only",
+        "--offline",
+        "--full",
+        "--players-per-position=8",
+        "--max-forecasts=6000",
+      ]),
+    );
+  });
   it("returns a statistical rejection report from the validator's ordinary exit 1", async () => {
     const validatorPath = await validator(
       `process.stdout.write(JSON.stringify({state:'blocked-before-modeling'})); process.exitCode=1;`,

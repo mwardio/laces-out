@@ -12,9 +12,12 @@ import { and, eq, inArray, sql } from "drizzle-orm";
 import {
   ROS_PROFILE_RECOVERY_VERSION,
   rosProfileRecoveryDelayMs,
+  rosProfileBootstrapWait,
   rosProfileRecoveryMarker,
   rosProfileValidationIsTransient,
 } from "./ros-profile-recovery-state.js";
+
+import { rosSharedCorpusRequest } from "./ros-shared-corpus-runner.js";
 
 /** Operational recovery may only reuse an already verified complete football corpus. */
 export class RosProfileRecoveryService {
@@ -27,6 +30,11 @@ export class RosProfileRecoveryService {
       ) => Promise<string | null>;
       readonly enqueueValidation: (job: RosProfileValidationJob) => Promise<string | null>;
       readonly validationJobIsOutstanding: (id: string) => Promise<boolean>;
+      readonly validationJobIsTerminal?: (
+        profileValidationId: string,
+        corpusIdentity: string,
+        recoveryAttempt: number,
+      ) => Promise<boolean>;
       readonly now?: () => Date;
     },
   ) {}
@@ -45,7 +53,12 @@ export class RosProfileRecoveryService {
     const candidates = await this.input.database
       .select({ id: firstPartyRosProfileValidations.id })
       .from(firstPartyRosProfileValidations)
-      .where(and(identity, inArray(firstPartyRosProfileValidations.state, ["failed", "withheld"])));
+      .where(
+        and(
+          identity,
+          inArray(firstPartyRosProfileValidations.state, ["pending", "failed", "withheld"]),
+        ),
+      );
     if (candidates.length === 0) return;
     const corpusIdentity = await this.input.readyCorpusForSeason(season, signal);
     signal.throwIfAborted();
@@ -60,7 +73,10 @@ export class RosProfileRecoveryService {
           .from(firstPartyRosProfileValidations)
           .where(and(identity, eq(firstPartyRosProfileValidations.id, candidate.id)))
           .for("update");
-        if (!row || !rosProfileValidationIsTransient(row)) return null;
+        const waiting =
+          row?.state === "pending" &&
+          rosProfileBootstrapWait(row.report, rosSharedCorpusRequest(season).identity);
+        if (!row || (!waiting && !rosProfileValidationIsTransient(row))) return null;
         const previous = rosProfileRecoveryMarker(row.report);
         if (row.report?.automaticRecovery !== undefined && previous === undefined) return null;
         const now = this.input.now?.() ?? new Date();
@@ -89,6 +105,47 @@ export class RosProfileRecoveryService {
           return null;
         if (await this.input.validationJobIsOutstanding(row.id)) return null;
         signal.throwIfAborted();
+        if (sameCorpus && previous.state === "pending-dispatch") {
+          const terminal =
+            (await this.input.validationJobIsTerminal?.(row.id, corpusIdentity, previousAttempt)) ??
+            false;
+          signal.throwIfAborted();
+          const missing =
+            previous.dispatchedJobId !== undefined &&
+            typeof previous.dispatchClaimedAt === "string" &&
+            now.getTime() - Date.parse(previous.dispatchClaimedAt) >= 5 * 60_000;
+          if (terminal || missing) {
+            // The queue accepted this exact cycle, but its consumer never changed the durable
+            // marker to attempted. Record an operational failure before applying the existing
+            // cooldown; resending the same singleton can otherwise suppress work for 23 hours.
+            await transaction
+              .update(firstPartyRosProfileValidations)
+              .set({
+                state: "failed",
+                blockers: ["validation_job_lost"],
+                completedAt: now,
+                updatedAt: now,
+                report: {
+                  ...row.report,
+                  automaticRecovery: {
+                    ...previous,
+                    state: "attempted",
+                    dispatchFailure: {
+                      reason: terminal ? "terminal-before-claim" : "missing-before-claim",
+                      detectedAt: now.toISOString(),
+                      previousState: row.state,
+                      previousBlockers: row.blockers,
+                    },
+                  },
+                },
+              })
+              .where(eq(firstPartyRosProfileValidations.id, row.id));
+            return null;
+          }
+          // A known dispatch retains its ID and original timestamp through the full lost-job
+          // grace. A null/error send without queue evidence can retry the same cycle immediately.
+          if (previous.dispatchedJobId !== undefined) return null;
+        }
         const marker = {
           version: ROS_PROFILE_RECOVERY_VERSION,
           corpusIdentity,
@@ -98,6 +155,9 @@ export class RosProfileRecoveryService {
             previous?.corpusIdentity === corpusIdentity ? previous.requestedAt : now.toISOString(),
           dispatchReservationId: randomUUID(),
           dispatchClaimedAt: now.toISOString(),
+          ...(previous?.dispatchFailure === undefined
+            ? {}
+            : { dispatchFailure: previous.dispatchFailure }),
         };
         // Keep the transient state so ordinary discovery cannot enqueue an unrestricted build.
         // Replace one operational marker; preserve the original report without nesting history.
@@ -119,6 +179,7 @@ export class RosProfileRecoveryService {
               eq(firstPartyRosProfileValidations.id, candidate.id),
               sql`${firstPartyRosProfileValidations.report} -> 'automaticRecovery' ->> 'dispatchReservationId' = ${reservation.id}`,
               sql`${firstPartyRosProfileValidations.report} -> 'automaticRecovery' ->> 'state' = 'pending-dispatch'`,
+              sql`${firstPartyRosProfileValidations.report} -> 'automaticRecovery' -> 'dispatchedJobId' is null`,
             ),
           );
       };
@@ -132,6 +193,22 @@ export class RosProfileRecoveryService {
           recoveryAttempt: reservation.recoveryAttempt,
         });
         if (jobId === null) await releaseDispatch();
+        else {
+          if (!/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/iu.test(jobId))
+            throw new Error("Invalid ROS replay dispatch job identity");
+          await this.input.database
+            .update(firstPartyRosProfileValidations)
+            .set({
+              report: sql`jsonb_set(${firstPartyRosProfileValidations.report}, '{automaticRecovery,dispatchedJobId}', ${JSON.stringify(jobId)}::jsonb)`,
+            })
+            .where(
+              and(
+                eq(firstPartyRosProfileValidations.id, candidate.id),
+                sql`${firstPartyRosProfileValidations.report} -> 'automaticRecovery' ->> 'dispatchReservationId' = ${reservation.id}`,
+                sql`${firstPartyRosProfileValidations.report} -> 'automaticRecovery' ->> 'state' = 'pending-dispatch'`,
+              ),
+            );
+        }
       } catch (error) {
         await releaseDispatch();
         throw error;

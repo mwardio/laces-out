@@ -119,11 +119,29 @@ export const rosLeaguePositionReadinessSchema = z
   .strict();
 export type RosLeaguePositionReadiness = z.infer<typeof rosLeaguePositionReadinessSchema>;
 
+/** Shared historical preparation, shown only through a caller's waiting scoring validation. */
+export const rosHistoryPreparationSchema = z
+  .object({
+    state: z.enum([
+      "pending",
+      "building",
+      "ready",
+      "retry-wait",
+      "waiting-source",
+      "blocked-integrity",
+    ]),
+    updatedAt: z.iso.datetime(),
+    nextAttemptAt: z.iso.datetime().nullable(),
+  })
+  .strict();
+export type RosHistoryPreparation = z.infer<typeof rosHistoryPreparationSchema>;
+
 export const rosScoringValidationSchema = z
   .object({
     state: z.enum(["pending", "validating", "admitted", "withheld", "failed"]),
     requestedAt: z.iso.datetime(),
     blockers: z.array(z.string().min(1).max(400)).max(32),
+    historyPreparation: rosHistoryPreparationSchema.optional(),
   })
   .strict();
 export type RosScoringValidation = z.infer<typeof rosScoringValidationSchema>;

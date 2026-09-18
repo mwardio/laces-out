@@ -27,6 +27,7 @@ import {
   dataSources,
   fantasyTeams,
   firstPartyRosChampionArtifacts,
+  firstPartyRosCorpusBootstraps,
   firstPartyRosProfileValidations,
   leagueMemberships,
   leagueSeasons,
@@ -54,6 +55,8 @@ import {
   rosScoringProfileCatalog,
 } from "@laces-out/projections";
 import { migrate } from "drizzle-orm/postgres-js/migrator";
+import { eq } from "drizzle-orm";
+import { rosReleaseStatusSchema } from "@laces-out/contracts";
 import postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
@@ -682,6 +685,102 @@ describe.skipIf(!dockerAvailable)(
         )?.scoringValidation,
       ).toBeUndefined();
       expect(current.publishedSets).toEqual([]);
+    });
+
+    it("shows only the caller's referenced history preparation without leaking operator diagnostics", async () => {
+      const key = normalizedLeagueKey(FULL_PPR_LEAGUE_ROWS)!;
+      const requestIdentity = "a".repeat(64);
+      const nextAttemptAt = new Date(NOW.getTime() + 900_000);
+      await db.insert(firstPartyRosCorpusBootstraps).values([
+        {
+          requestIdentity,
+          season: SEASON,
+          protocol: {},
+          state: "waiting-source",
+          updatedAt: NOW,
+          nextAttemptAt,
+          reasonCode: "private_operator_detail",
+          diagnostic: { path: "/private/source-capture" },
+        },
+        {
+          requestIdentity: "b".repeat(64),
+          season: SEASON,
+          protocol: {},
+          state: "blocked-integrity",
+          updatedAt: new Date(NOW.getTime() + 1_000),
+        },
+      ]);
+      const report = {
+        bootstrapWait: {
+          version: "shared-corpus-wait-v1",
+          requestIdentity,
+          requestedAt: NOW.toISOString(),
+        },
+      };
+      await db
+        .insert(firstPartyRosProfileValidations)
+        .values({
+          season: SEASON,
+          modelVersion: FIRST_PARTY_ROS_MODEL_VERSION,
+          policyVersion: FIRST_PARTY_ROS_POLICY_VERSION,
+          calibrationVersion: FIRST_PARTY_ROS_INTERVAL_CALIBRATION_VERSION,
+          scoringProfileKey: key,
+          scoringProfileDigest: createHash("sha256").update(key).digest("hex"),
+          state: "pending",
+          requestedAt: NOW,
+          blockers: [],
+        })
+        .onConflictDoNothing();
+      await db
+        .update(firstPartyRosProfileValidations)
+        .set({ state: "pending", report })
+        .where(eq(firstPartyRosProfileValidations.scoringProfileKey, key));
+      try {
+        const current = await new RosProjectionStatusService(db, () => NOW).getStatus({
+          season: SEASON,
+          userId: callerId,
+        });
+        const league = current.leagueReadiness.find(
+          (entry) => entry.leagueSeasonId === fullPprLeague.leagueSeasonId,
+        )!;
+        expect(league.scoringValidation?.historyPreparation).toEqual({
+          state: "waiting-source",
+          updatedAt: NOW.toISOString(),
+          nextAttemptAt: nextAttemptAt.toISOString(),
+        });
+        expect(rosReleaseStatusSchema.safeParse(current).success).toBe(true);
+        expect(JSON.stringify(current)).not.toMatch(
+          /private_operator_detail|private\/source-capture|bootstrapWait|requestIdentity/,
+        );
+        expect(
+          current.leagueReadiness
+            .filter((entry) => entry.leagueSeasonId !== fullPprLeague.leagueSeasonId)
+            .every((entry) => entry.scoringValidation?.historyPreparation === undefined),
+        ).toBe(true);
+        const outsider = await new RosProjectionStatusService(db, () => NOW).getStatus({
+          season: SEASON,
+          userId: randomUUID(),
+        });
+        expect(JSON.stringify(outsider)).not.toContain("historyPreparation");
+        await db
+          .update(firstPartyRosProfileValidations)
+          .set({ report: { bootstrapWait: { ...report.bootstrapWait, version: "unknown" } } })
+          .where(eq(firstPartyRosProfileValidations.scoringProfileKey, key));
+        const malformed = await new RosProjectionStatusService(db, () => NOW).getStatus({
+          season: SEASON,
+          userId: callerId,
+        });
+        expect(
+          malformed.leagueReadiness.find(
+            (entry) => entry.leagueSeasonId === fullPprLeague.leagueSeasonId,
+          )?.scoringValidation?.historyPreparation,
+        ).toBeUndefined();
+      } finally {
+        await db
+          .update(firstPartyRosProfileValidations)
+          .set({ state: "validating", report: null })
+          .where(eq(firstPartyRosProfileValidations.scoringProfileKey, key));
+      }
     });
 
     it("attributes unstable simulations only to their league and replaces old failures with the latest evaluation", async () => {

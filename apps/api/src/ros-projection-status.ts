@@ -1,6 +1,7 @@
 import {
   dataSources,
   firstPartyRosChampionArtifacts,
+  firstPartyRosCorpusBootstraps,
   firstPartyRosProfileValidations,
   leagueMemberships,
   leagueSeasons,
@@ -13,6 +14,7 @@ import {
   scoringRules,
   type Database,
 } from "@laces-out/db";
+import { rosHistoryPreparationSchema } from "@laces-out/contracts";
 import {
   FIRST_PARTY_ROS_MODEL_VERSION,
   FIRST_PARTY_ROS_POLICY_VERSION,
@@ -104,6 +106,18 @@ export interface RosModelRunAudit {
  * that all ROS publication was disabled.
  */
 export type RosProjectionStatusResponse = RosReleaseStatus;
+
+function bootstrapWaitIdentity(report: unknown): string | null {
+  if (!isRecord(report) || !isRecord(report.bootstrapWait)) return null;
+  const wait = report.bootstrapWait;
+  return wait.version === "shared-corpus-wait-v1" &&
+    typeof wait.requestIdentity === "string" &&
+    /^[a-f0-9]{64}$/u.test(wait.requestIdentity) &&
+    typeof wait.requestedAt === "string" &&
+    Number.isFinite(Date.parse(wait.requestedAt))
+    ? wait.requestIdentity
+    : null;
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -310,6 +324,7 @@ export class RosProjectionStatusService {
               state: firstPartyRosProfileValidations.state,
               requestedAt: firstPartyRosProfileValidations.requestedAt,
               blockers: firstPartyRosProfileValidations.blockers,
+              report: firstPartyRosProfileValidations.report,
             })
             .from(firstPartyRosProfileValidations)
             .where(
@@ -342,6 +357,44 @@ export class RosProjectionStatusService {
         /* Invalid identities cannot describe a supported scoring format. */
       }
     }
+    // Follow only explicit references from the caller's valid current scoring profiles. A global
+    // newest bootstrap row could belong to another season or an unrelated physical protocol.
+    const bootstrapIds = [
+      ...new Set(
+        [...validationByKey.values()].flatMap((row) => {
+          const identity = bootstrapWaitIdentity(row.report);
+          return identity && (row.state === "pending" || row.state === "failed") ? [identity] : [];
+        }),
+      ),
+    ];
+    const bootstrapRows =
+      bootstrapIds.length === 0
+        ? []
+        : await this.#database
+            .select({
+              requestIdentity: firstPartyRosCorpusBootstraps.requestIdentity,
+              state: firstPartyRosCorpusBootstraps.state,
+              updatedAt: firstPartyRosCorpusBootstraps.updatedAt,
+              nextAttemptAt: firstPartyRosCorpusBootstraps.nextAttemptAt,
+            })
+            .from(firstPartyRosCorpusBootstraps)
+            .where(
+              and(
+                eq(firstPartyRosCorpusBootstraps.season, season),
+                inArray(firstPartyRosCorpusBootstraps.requestIdentity, bootstrapIds),
+              ),
+            )
+            .limit(MAXIMUM_LEAGUE_ROWS);
+    const bootstrapById = new Map(
+      bootstrapRows.flatMap((row) => {
+        const parsed = rosHistoryPreparationSchema.safeParse({
+          state: row.state,
+          updatedAt: row.updatedAt.toISOString(),
+          nextAttemptAt: row.nextAttemptAt?.toISOString() ?? null,
+        });
+        return parsed.success ? [[row.requestIdentity, parsed.data] as const] : [];
+      }),
+    );
     // Catalog profiles are public; custom scoring identities are scoped to the caller's leagues.
     const artifactKeys = [
       ...new Set([
@@ -399,12 +452,18 @@ export class RosProjectionStatusService {
     }).map((league) => {
       const key = league.leagueSeasonId ? leagueKeyById.get(league.leagueSeasonId) : null;
       const validation = key ? validationByKey.get(key) : undefined;
+      const bootstrapId =
+        validation && (validation.state === "pending" || validation.state === "failed")
+          ? bootstrapWaitIdentity(validation.report)
+          : null;
+      const historyPreparation = bootstrapId ? bootstrapById.get(bootstrapId) : undefined;
       return validation
         ? {
             ...league,
             scoringValidation: {
               state: validation.state,
               requestedAt: validation.requestedAt.toISOString(),
+              ...(historyPreparation ? { historyPreparation } : {}),
               blockers: validation.blockers
                 .filter((value) => typeof value === "string" && value.trim().length > 0)
                 .slice(0, 32)

@@ -13,6 +13,7 @@
     "ros:validate": "tsx scripts/validate-first-party-ros.ts",
     "ros:validate:release": "bash ../../scripts/run-ros-release-validation.sh",
     "ros:corpus:adopt": "tsx scripts/adopt-ros-shared-corpus.ts",
+    "ros:bootstrap:health": "tsx scripts/ros-bootstrap-health.ts",
     "ros:compose": "tsx scripts/compose-first-party-ros.ts",
     "ros:admit": "tsx scripts/admit-first-party-ros.ts",
     "ros:regate": "tsx scripts/regate-first-party-ros.ts",

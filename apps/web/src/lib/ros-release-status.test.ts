@@ -154,6 +154,78 @@ describe("league-specific ROS readiness explanations", () => {
   });
 });
 
+describe("shared ROS history preparation", () => {
+  const preparation = {
+    state: "waiting-source" as const,
+    updatedAt: "2026-09-18T12:00:00.000Z",
+    nextAttemptAt: "2026-09-18T12:15:00.000Z",
+  };
+  const waiting = {
+    ...admittedStatus.leagueReadiness[0]!,
+    scoringValidation: {
+      state: "pending" as const,
+      requestedAt: preparation.updatedAt,
+      blockers: ["shared_corpus_preparing"],
+      historyPreparation: preparation,
+    },
+  };
+
+  it.each([
+    ["pending", "Forecast preparation queued"],
+    ["building", "Preparing forecast history"],
+    ["retry-wait", "Forecast preparation will retry"],
+    ["waiting-source", "Waiting for historical data"],
+    ["blocked-integrity", "Forecast preparation needs repair"],
+    ["ready", "Scoring validation queued"],
+  ] as const)("explains %s independently from scoring support", (state, heading) => {
+    const league = {
+      ...waiting,
+      scoringValidation: {
+        ...waiting.scoringValidation,
+        historyPreparation: { ...preparation, state },
+      },
+    };
+    const parsed = parseRosReleaseStatus({ ...admittedStatus, leagueReadiness: [league] });
+    expect(parsed?.leagueReadiness[0]?.scoringValidation?.historyPreparation?.state).toBe(state);
+    expect(describeRosLeagueReadiness(parsed!.leagueReadiness[0]!, false)).toMatchObject({
+      heading,
+      showConnections: false,
+    });
+    if (state === "waiting-source" || state === "retry-wait") {
+      expect(describeRosLeagueReadiness(league, false).messages.join(" ")).toContain(
+        "Next automatic retry",
+      );
+    }
+  });
+
+  it("drops malformed additive history details while preserving the league status", () => {
+    const parsed = parseRosReleaseStatus({
+      ...admittedStatus,
+      leagueReadiness: [
+        {
+          ...waiting,
+          scoringValidation: {
+            ...waiting.scoringValidation,
+            historyPreparation: { ...preparation, nextAttemptAt: "invalid" },
+          },
+        },
+      ],
+    });
+    expect(parsed).not.toBeNull();
+    expect(parsed?.leagueReadiness[0]?.scoringValidation?.historyPreparation).toBeUndefined();
+  });
+
+  it("does not mislabel a statistical rejection as an operational retry", () => {
+    const rejected = {
+      ...waiting,
+      scoringValidation: { ...waiting.scoringValidation, state: "withheld" as const },
+    };
+    const description = describeRosLeagueReadiness(rejected, false);
+    expect(description.heading).toBe("Scoring validation has not passed");
+    expect(description.messages.join(" ")).not.toContain("retry");
+  });
+});
+
 describe("describeRosRelease", () => {
   it("recognizes an approved exact league profile without a catalog scoring family", () => {
     const exactProfile = { ...profile, profileId: "exact", label: "Exact league scoring" };

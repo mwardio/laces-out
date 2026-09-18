@@ -573,6 +573,37 @@ delay, doubling for each failed cycle up to six hours. Each cycle has a distinct
 and a persisted attempt number; jobs from an older cycle cannot claim or complete a newer one.
 Outstanding jobs prevent another reservation. Statistical rejections and repeated source/component
 insufficiency on the same corpus remain withheld; a new verified corpus can trigger reevaluation.
+Shared history preparation has its own durable `first_party_ros_corpus_bootstraps` ledger
+(migration 0052) and `ros-corpus-bootstrap` queue. Its identity contains the season and physical
+model protocol, never a league or scoring setting. A profile that needs this history stays pending;
+once the shared corpus is ready, recovery dispatches an exact-scoring replay. Startup and the
+five-minute sweep also recover initial builds even if every requesting profile has already failed.
+February can prepare the upcoming season. A process-wide capacity limit permits one physical
+builder or two scoring replays; the global database lock also prevents overlapping builders across
+processes and seasons. Waiting for that lock does not reserve simulation capacity.
+
+An initial source preflight captures public inputs in a bounded, owned snapshot. Coverage failures
+receive a fresh capture on a later retry, because successful downloads can contain incomplete data.
+Qualified captures are immutable and reused offline after operational interruptions. Cleanup only
+removes verified unqualified snapshots that no ledger references; it never removes a qualified,
+in-progress, committed, or legacy capture. The first build retries with bounded exponential delay.
+If a previously committed corpus disappears or fails integrity checks, preparation becomes
+`blocked-integrity`; the worker retains its identity and does not silently rebuild it. Restore and
+fully verify that same corpus with the adoption CLI to reconcile the ledger and resume work.
+
+Projection Lab distinguishes shared preparation, source waiting, retry scheduling and repair from
+scoring-validation results. It follows only explicit bootstrap references from the caller's own
+current profile rows. Read-only operator health uses the actual current physical request function:
+
+```bash
+docker compose exec -T ros-validation-worker node apps/worker/dist/ros-bootstrap-health.js
+```
+
+The probe exits 0 for expected progress/readiness, 1 for actionable ledger/cache/retry problems,
+and 2 if it cannot inspect the state. It does not enqueue, admit, or repair anything. Its ready
+check covers the pointer and corpus manifest; full outcome-vector verification occurs during
+adoption and replay. Publication-age monitoring remains necessary: preparation is not publication.
+
 See [the scoring onboarding repair](./ros-scoring-onboarding-2026-09-17.md) for retry and recovery
 semantics. Operators can also run the locked bulk release replay with `npm run ros:validate:release -w @laces-out/worker`. It always uses eight players per
 position, a 6,000-forecast cap, complete source lineage, no more than three concurrent profiles, and

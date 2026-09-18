@@ -160,8 +160,22 @@ async function main(): Promise<void> {
     ?.slice("--source-cache=".length);
   const offline = process.argv.includes("--offline");
   if (offline && !cacheDirectory) throw new Error("--offline requires --source-cache=<directory>");
+  const boundedSourceCache = process.argv.some((value) =>
+    value.startsWith("--source-cache-max-bytes="),
+  );
+  if (boundedSourceCache && !cacheDirectory)
+    throw new Error("--source-cache-max-bytes requires --source-cache=<directory>");
+  const sourceCacheMaxBytes = boundedSourceCache
+    ? integerOption("--source-cache-max-bytes", 0)
+    : undefined;
   const sourceOptions = cacheDirectory
-    ? { fetch: rosValidationSourceCache({ directory: cacheDirectory, offline }) }
+    ? {
+        fetch: rosValidationSourceCache({
+          directory: cacheDirectory,
+          offline,
+          ...(sourceCacheMaxBytes === undefined ? {} : { maxBytes: sourceCacheMaxBytes }),
+        }),
+      }
     : {};
   const scoringProfile = rosValidationScoringProfileOption(process.argv);
   const seasons = integerList("--seasons", "2019,2020,2021,2022,2023,2024,2025");
@@ -441,10 +455,18 @@ async function main(): Promise<void> {
       elapsedSeconds: (Date.now() - startedAt) / 1_000,
       state: "blocked-before-modeling",
       noDatabaseWrites: true,
+      noSimulation: true,
       scoringProfile: {
         key: scoringProfile.key,
         label: scoringProfile.label,
         digest: scoringProfile.digest,
+      },
+      executionIdentity: {
+        modelVersion: ROS_HISTORICAL_CORPUS_BUILD_PROTOCOL.modelVersion,
+        policyVersion: ROS_HISTORICAL_CORPUS_BUILD_PROTOCOL.policyVersion,
+        calibrationVersion: ROS_HISTORICAL_CORPUS_BUILD_PROTOCOL.calibrationVersion,
+        scoringProfileKey: scoringProfile.scoringProfileKey,
+        evidenceThroughSeason: Math.max(...heldOutSeasons),
       },
       coverage: {
         state: coverage.state,

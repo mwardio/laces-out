@@ -17,6 +17,7 @@ export const queueNames = {
   refreshProjections: "projection-refresh",
   refreshRosProjections: "ros-projection-refresh",
   validateRosProfile: "ros-profile-validation",
+  bootstrapRosCorpus: "ros-corpus-bootstrap",
   recomputeRecommendations: "recommendation-recompute",
   dataHealth: "data-health-check",
   dataRefresh: "data-refresh",
@@ -30,6 +31,7 @@ export const deadLetterQueueNames = {
   refreshProjections: "projection-refresh-dead-letter",
   refreshRosProjections: "ros-projection-refresh-dead-letter",
   validateRosProfile: "ros-profile-validation-dead-letter",
+  bootstrapRosCorpus: "ros-corpus-bootstrap-dead-letter",
   recomputeRecommendations: "recommendation-recompute-dead-letter",
   dataHealth: "data-health-check-dead-letter",
   dataRefresh: "data-refresh-dead-letter",
@@ -68,6 +70,15 @@ export interface RosProfileValidationJob {
   readonly recoveryCorpusIdentity?: string;
   /** Distinct replay recovery cycle; omitted legacy jobs belong to cycle 1. */
   readonly recoveryAttempt?: number;
+}
+
+/** Matches the durable bootstrap ledger's PostgreSQL integer counter. */
+export const ROS_CORPUS_BOOTSTRAP_MAXIMUM_ATTEMPTS = 2_147_483_647;
+
+export interface RosCorpusBootstrapJob {
+  readonly requestIdentity: string;
+  readonly season: number;
+  readonly attempt: number;
 }
 
 export const recommendationKinds = ["draft", "lineup", "waiver", "trade"] as const;
@@ -179,6 +190,18 @@ const queueConfigurations: Readonly<Record<keyof typeof queueNames, QueueConfigu
     retentionSeconds: 14 * DAY_SECONDS,
     deleteAfterSeconds: 7 * DAY_SECONDS,
     deadLetter: deadLetterQueueNames.validateRosProfile,
+    warningQueueSize: 10,
+  },
+  bootstrapRosCorpus: {
+    retryLimit: 2,
+    retryDelay: 5 * 60,
+    retryBackoff: true,
+    retryDelayMax: 60 * 60,
+    expireInSeconds: 23 * 60 * 60,
+    heartbeatSeconds: 5 * 60,
+    retentionSeconds: 14 * DAY_SECONDS,
+    deleteAfterSeconds: 7 * DAY_SECONDS,
+    deadLetter: deadLetterQueueNames.bootstrapRosCorpus,
     warningQueueSize: 10,
   },
   recomputeRecommendations: {
@@ -409,6 +432,52 @@ export function assertRosProfileValidationJob(job: RosProfileValidationJob): voi
       job.recoveryAttempt < 1)
   )
     throw new Error("Invalid worker job: recoveryAttempt requires a corpus and positive integer");
+}
+
+/** Shape validation only; the worker re-derives the current physical request before claiming. */
+export function assertRosCorpusBootstrapJob(job: RosCorpusBootstrapJob): void {
+  if (
+    job === null ||
+    typeof job !== "object" ||
+    Array.isArray(job) ||
+    Object.keys(job).length !== 3 ||
+    Object.keys(job).some((key) => !["requestIdentity", "season", "attempt"].includes(key)) ||
+    typeof job.requestIdentity !== "string" ||
+    !/^[a-f0-9]{64}$/u.test(job.requestIdentity) ||
+    !Number.isSafeInteger(job.season) ||
+    job.season < 2007 ||
+    job.season > 2200 ||
+    !Number.isSafeInteger(job.attempt) ||
+    job.attempt < 1 ||
+    job.attempt > ROS_CORPUS_BOOTSTRAP_MAXIMUM_ATTEMPTS
+  )
+    throw new Error("Invalid worker job: expected a physical ROS request, season, and attempt");
+}
+
+/** One shared physical build request, with distinct durable identities for later retry cycles. */
+export async function enqueueRosCorpusBootstrap(
+  boss: PgBoss,
+  job: RosCorpusBootstrapJob,
+): Promise<string | null> {
+  assertRosCorpusBootstrapJob(job);
+  const existing = await boss.findJobs<RosCorpusBootstrapJob>(queueNames.bootstrapRosCorpus, {
+    data: { requestIdentity: job.requestIdentity },
+  });
+  if (
+    existing.some(
+      (entry) => entry.state === "created" || entry.state === "retry" || entry.state === "active",
+    )
+  )
+    return null;
+  return boss.send(
+    queueNames.bootstrapRosCorpus,
+    job,
+    dispatchOptions(
+      "ros-corpus-bootstrap",
+      `ros-corpus-bootstrap:${job.requestIdentity}:attempt:${job.attempt}`,
+      23 * 60 * 60,
+    ),
+  );
 }
 
 /** Deduplicates equivalent work while serializing all recomputations for one league season. */

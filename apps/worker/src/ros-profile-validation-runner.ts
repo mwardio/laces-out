@@ -42,6 +42,8 @@ export function createRosProfileValidationRunner(
     readonly offline?: boolean;
     readonly timeoutMs?: number;
     readonly maximumReportBytes?: number;
+    readonly preflightOnly?: boolean;
+    readonly sourceCacheMaximumBytes?: number;
   } = {},
 ): RosProfileValidationRunner {
   const timeoutMs = options.timeoutMs ?? ROS_PROFILE_VALIDATION_TIMEOUT_MS;
@@ -95,6 +97,10 @@ export function createRosProfileValidationRunner(
         `--players-per-position=${FIRST_PARTY_ROS_RELEASE_PLAYERS_PER_POSITION}`,
         `--max-forecasts=${FIRST_PARTY_ROS_RELEASE_MAXIMUM_FORECASTS}`,
         "--full",
+        ...(options.preflightOnly ? ["--preflight-only"] : []),
+        ...(options.sourceCacheMaximumBytes === undefined
+          ? []
+          : [`--source-cache-max-bytes=${options.sourceCacheMaximumBytes}`]),
         ...(options.sourceCacheDirectory ? [`--source-cache=${options.sourceCacheDirectory}`] : []),
         ...(options.outcomeCacheDirectory
           ? [`--outcome-cache=${options.outcomeCacheDirectory}`]

@@ -21,6 +21,14 @@ export interface RosProfileRecoveryMarker {
   readonly recoveryAttempt?: number;
   readonly dispatchReservationId?: string;
   readonly dispatchClaimedAt?: string;
+  /** Durable evidence that this cycle reached the queue, even if its worker never claimed it. */
+  readonly dispatchedJobId?: string;
+  readonly dispatchFailure?: {
+    readonly reason: "terminal-before-claim" | "missing-before-claim";
+    readonly detectedAt: string;
+    readonly previousState: string;
+    readonly previousBlockers: readonly string[];
+  };
 }
 
 export function rosProfileRecoveryMarker(report: unknown): RosProfileRecoveryMarker | undefined {
@@ -36,7 +44,14 @@ export function rosProfileRecoveryMarker(report: unknown): RosProfileRecoveryMar
     typeof value.requestedAt !== "string" ||
     !Number.isFinite(Date.parse(value.requestedAt)) ||
     (value.recoveryAttempt !== undefined &&
-      (!Number.isSafeInteger(value.recoveryAttempt) || Number(value.recoveryAttempt) < 1))
+      (!Number.isSafeInteger(value.recoveryAttempt) || Number(value.recoveryAttempt) < 1)) ||
+    (value.dispatchedJobId !== undefined &&
+      (typeof value.dispatchedJobId !== "string" ||
+        !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/iu.test(
+          value.dispatchedJobId,
+        ) ||
+        typeof value.dispatchClaimedAt !== "string" ||
+        !Number.isFinite(Date.parse(value.dispatchClaimedAt))))
   )
     return undefined;
   return value as unknown as RosProfileRecoveryMarker;
@@ -58,5 +73,19 @@ export function rosProfileValidationIsTransient(record: {
     record.blockers.every(
       (blocker) => blocker === "validation_execution_failed" || blocker === "validation_job_lost",
     )
+  );
+}
+
+/** Only an explicitly deferred current bootstrap request can promote a pending profile to replay. */
+export function rosProfileBootstrapWait(report: unknown, requestIdentity: string): boolean {
+  if (report === null || typeof report !== "object" || Array.isArray(report)) return false;
+  const value = (report as Record<string, unknown>).bootstrapWait;
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
+  const wait = value as Record<string, unknown>;
+  return (
+    wait.version === "shared-corpus-wait-v1" &&
+    wait.requestIdentity === requestIdentity &&
+    typeof wait.requestedAt === "string" &&
+    Number.isFinite(Date.parse(wait.requestedAt))
   );
 }

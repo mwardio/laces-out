@@ -21,7 +21,9 @@ import { migrate } from "drizzle-orm/postgres-js/migrator";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { RosProfileRecoveryService } from "./ros-profile-recovery.js";
+import { rosSharedCorpusRequest } from "./ros-shared-corpus-runner.js";
 import {
+  rosProfileRecoveryMarker,
   ROS_PROFILE_RECOVERY_MAXIMUM_DELAY_MS,
   ROS_PROFILE_RECOVERY_MINIMUM_DELAY_MS,
 } from "./ros-profile-recovery-state.js";
@@ -199,11 +201,15 @@ describe.skipIf(!dockerAvailable())("Replay-only ROS profile recovery against Po
     let corpus = initialCorpus;
     let now = NOW;
     const outstanding = new Set<string>();
+    const terminal = new Set<string>();
     const readyCorpusForSeason = vi.fn(async (_season: number, signal: AbortSignal) => {
       signal.throwIfAborted();
       return corpus;
     });
     const validationJobIsOutstanding = vi.fn(async (id: string) => outstanding.has(id));
+    const validationJobIsTerminal = vi.fn(async (id: string, identity: string, attempt: number) =>
+      terminal.has(`${id}:${identity}:${attempt}`),
+    );
     const enqueueValidation = vi.fn(
       async (job: RosProfileValidationJob): Promise<string | null> => {
         outstanding.add(job.profileValidationId);
@@ -215,6 +221,7 @@ describe.skipIf(!dockerAvailable())("Replay-only ROS profile recovery against Po
         database: handle.db,
         readyCorpusForSeason,
         validationJobIsOutstanding,
+        validationJobIsTerminal,
         enqueueValidation,
         now: () => now,
       });
@@ -222,8 +229,10 @@ describe.skipIf(!dockerAvailable())("Replay-only ROS profile recovery against Po
       service: createService(),
       createService,
       outstanding,
+      terminal,
       readyCorpusForSeason,
       validationJobIsOutstanding,
+      validationJobIsTerminal,
       enqueueValidation,
       now: () => now,
       selectCorpus: (value: string | null) => {
@@ -264,6 +273,53 @@ describe.skipIf(!dockerAvailable())("Replay-only ROS profile recovery against Po
       expect(await read(row.id)).toEqual(row);
     },
   );
+
+  it("fans deferred profiles into exact-corpus replay after readiness while rejecting unrelated wait markers", async () => {
+    const season = 2060;
+    const row = await seed(season, { state: "pending", blockers: [] });
+    const unrelated = await seed(season, { state: "pending", blockers: [], points: 0.4 });
+    const startedAt = await repository.begin(row.id, NOW);
+    if (!startedAt) throw new Error("Expected profile claim");
+    await repository.deferForCorpus(
+      row.id,
+      startedAt,
+      rosSharedCorpusRequest(season).identity,
+      NOW,
+    );
+    const unrelatedClaim = await repository.begin(unrelated.id, NOW);
+    if (!unrelatedClaim) throw new Error("Expected unrelated profile claim");
+    await repository.deferForCorpus(
+      unrelated.id,
+      unrelatedClaim,
+      rosSharedCorpusRequest(season + 1).identity,
+      NOW,
+    );
+    const before = await read(row.id);
+    expect(before).toMatchObject({
+      state: "pending",
+      blockers: ["shared_corpus_preparing"],
+      completedAt: null,
+    });
+    const prepared = fixture();
+    await prepared.service.recover(season, new AbortController().signal);
+    expect(prepared.enqueueValidation).toHaveBeenCalledExactlyOnceWith({
+      profileValidationId: row.id,
+      recoveryCorpusIdentity: CORPUS_A,
+      recoveryAttempt: 1,
+    });
+    expect(await repository.begin(row.id, NOW)).toBeNull();
+    const replayClaim = await repository.begin(row.id, NOW, CORPUS_A, 1);
+    expect(replayClaim).toBeInstanceOf(Date);
+    // A delayed deferral from the preceding initial job cannot overwrite the replay claim.
+    await repository.deferForCorpus(
+      row.id,
+      startedAt,
+      rosSharedCorpusRequest(season).identity,
+      NOW,
+    );
+    expect(await read(row.id)).toMatchObject({ state: "validating", startedAt: replayClaim });
+    expect((await read(unrelated.id)).report?.automaticRecovery).toBeUndefined();
+  });
 
   it("dispatches only replay jobs with the exact corpus for transient failures and source/component withholding", async () => {
     const rows = await Promise.all([
@@ -392,6 +448,9 @@ describe.skipIf(!dockerAvailable())("Replay-only ROS profile recovery against Po
       corpusIdentity: CORPUS_A,
       state: "attempted",
     });
+    expect(
+      (after.report?.automaticRecovery as Record<string, unknown>).dispatchedJobId,
+    ).toBeUndefined();
     expectOriginalReport(after, row);
   });
 
@@ -464,6 +523,154 @@ describe.skipIf(!dockerAvailable())("Replay-only ROS profile recovery against Po
       expect(prepared.enqueueValidation).toHaveBeenCalledTimes(2);
       expect(prepared.outstanding.has(row.id)).toBe(true);
       expectOriginalReport(await read(row.id), row);
+    },
+  );
+
+  it.each([true, false])(
+    "recovers a terminal pre-claim fanout job with persisted dispatch evidence=%s",
+    async (persisted) => {
+      const season = persisted ? 2061 : 2062;
+      const row = await seed(season, { state: "pending", blockers: [] });
+      const claim = await repository.begin(row.id, NOW);
+      if (!claim) throw new Error("Expected bootstrap deferral claim");
+      await repository.deferForCorpus(row.id, claim, rosSharedCorpusRequest(season).identity, NOW);
+      const original = await read(row.id);
+      const prepared = fixture();
+      await prepared.service.recover(season, new AbortController().signal);
+      const sent = await read(row.id);
+      expect(rosProfileRecoveryMarker(sent.report)?.dispatchedJobId).toBeTypeOf("string");
+      if (!persisted) {
+        const marker = { ...(sent.report?.automaticRecovery as Record<string, unknown>) };
+        delete marker.dispatchedJobId;
+        await handle.db
+          .update(firstPartyRosProfileValidations)
+          .set({ report: { ...sent.report, automaticRecovery: marker } })
+          .where(eq(firstPartyRosProfileValidations.id, row.id));
+      }
+      prepared.outstanding.delete(row.id);
+      prepared.terminal.add(`${row.id}:${CORPUS_A}:1`);
+      prepared.advance(31_000);
+      await prepared.service.recover(season, new AbortController().signal);
+      const failed = await read(row.id);
+      expect(failed).toMatchObject({
+        state: "failed",
+        blockers: ["validation_job_lost"],
+        completedAt: prepared.now(),
+      });
+      expect(failed.report?.automaticRecovery).toMatchObject({
+        state: "attempted",
+        recoveryAttempt: 1,
+        dispatchFailure: {
+          reason: "terminal-before-claim",
+          previousState: "pending",
+          previousBlockers: ["shared_corpus_preparing"],
+        },
+      });
+      expectOriginalReport(failed, original);
+      expect(prepared.enqueueValidation).toHaveBeenCalledTimes(1);
+      prepared.advance(ROS_PROFILE_RECOVERY_MINIMUM_DELAY_MS - 1);
+      await prepared.service.recover(season, new AbortController().signal);
+      expect(prepared.enqueueValidation).toHaveBeenCalledTimes(1);
+      prepared.advance(1);
+      await prepared.service.recover(season, new AbortController().signal);
+      expect(prepared.enqueueValidation).toHaveBeenLastCalledWith({
+        profileValidationId: row.id,
+        recoveryCorpusIdentity: CORPUS_A,
+        recoveryAttempt: 2,
+      });
+      expect(await repository.begin(row.id, prepared.now(), CORPUS_A, 1)).toBeNull();
+      expectOriginalReport(await read(row.id), original);
+    },
+  );
+
+  it("retains dispatched evidence through five-minute grace and recovers a vanished pre-claim job", async () => {
+    const row = await seed(2063, {
+      state: "withheld",
+      blockers: ["historical_source_coverage_incomplete"],
+    });
+    const prepared = fixture();
+    await prepared.service.recover(row.season, new AbortController().signal);
+    const dispatched = await read(row.id);
+    prepared.outstanding.delete(row.id);
+    prepared.advance(31_000);
+    await prepared.service.recover(row.season, new AbortController().signal);
+    expect(await read(row.id)).toEqual(dispatched);
+    prepared.advance(5 * 60_000 - 31_000 - 1);
+    await prepared.service.recover(row.season, new AbortController().signal);
+    expect(await read(row.id)).toEqual(dispatched);
+    prepared.advance(1);
+    await prepared.service.recover(row.season, new AbortController().signal);
+    const failed = await read(row.id);
+    expect(failed).toMatchObject({
+      state: "failed",
+      blockers: ["validation_job_lost"],
+      completedAt: prepared.now(),
+    });
+    expect(failed.report?.automaticRecovery).toMatchObject({
+      dispatchFailure: {
+        reason: "missing-before-claim",
+        previousState: "withheld",
+        previousBlockers: row.blockers,
+      },
+    });
+    expectOriginalReport(failed, row);
+    prepared.advance(ROS_PROFILE_RECOVERY_MINIMUM_DELAY_MS);
+    await prepared.service.recover(row.season, new AbortController().signal);
+    expect(prepared.enqueueValidation).toHaveBeenLastCalledWith({
+      profileValidationId: row.id,
+      recoveryCorpusIdentity: CORPUS_A,
+      recoveryAttempt: 2,
+    });
+  });
+
+  it("keeps a created or retrying pre-claim job despite elapsed grace or stale terminal evidence", async () => {
+    const row = await seed(2064);
+    const prepared = fixture();
+    await prepared.service.recover(row.season, new AbortController().signal);
+    const dispatched = await read(row.id);
+    prepared.terminal.add(`${row.id}:${CORPUS_A}:1`);
+    prepared.advance(ROS_PROFILE_RECOVERY_MAXIMUM_DELAY_MS);
+    await prepared.service.recover(row.season, new AbortController().signal);
+    expect(await read(row.id)).toEqual(dispatched);
+    expect(prepared.validationJobIsTerminal).not.toHaveBeenCalled();
+    expect(prepared.enqueueValidation).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([null, "invalid", 123, "00000000-0000-0000-0000-00000000000x"])(
+    "fails closed on malformed dispatched job ID %s",
+    async (dispatchedJobId) => {
+      const row = await seed(2065, {
+        points:
+          typeof dispatchedJobId === "number"
+            ? 1
+            : dispatchedJobId === null
+              ? 2
+              : dispatchedJobId.length,
+      });
+      await handle.db
+        .update(firstPartyRosProfileValidations)
+        .set({
+          report: {
+            ...row.report,
+            automaticRecovery: {
+              version: "ready-corpus-replay-v1",
+              corpusIdentity: CORPUS_A,
+              recoveryAttempt: 1,
+              state: "pending-dispatch",
+              requestedAt: PRIOR.toISOString(),
+              dispatchClaimedAt: PRIOR.toISOString(),
+              dispatchedJobId,
+            },
+          },
+        })
+        .where(eq(firstPartyRosProfileValidations.id, row.id));
+      const original = await read(row.id);
+      const prepared = fixture();
+      prepared.terminal.add(`${row.id}:${CORPUS_A}:1`);
+      await prepared.service.recover(row.season, new AbortController().signal);
+      expect(await read(row.id)).toEqual(original);
+      expect(prepared.enqueueValidation).not.toHaveBeenCalled();
+      expect(prepared.validationJobIsTerminal).not.toHaveBeenCalled();
     },
   );
 

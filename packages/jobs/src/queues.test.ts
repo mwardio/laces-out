@@ -9,6 +9,10 @@ import {
   enqueueProjectionRefresh,
   enqueueRosProjectionRefresh,
   enqueueRosProfileValidation,
+  enqueueRosCorpusBootstrap,
+  assertRosCorpusBootstrapJob,
+  ROS_CORPUS_BOOTSTRAP_MAXIMUM_ATTEMPTS,
+  type RosCorpusBootstrapJob,
   enqueueProviderSyncSweep,
   enqueueRecommendationRecompute,
   queueNames,
@@ -37,6 +41,67 @@ function registrationHarness() {
 }
 
 describe("shared queue dispatch contract", () => {
+  it("deduplicates physical bootstrap requests and gives new cycles distinct singleton identities", async () => {
+    const { boss, send } = sendHarness();
+    const job = { requestIdentity: "a".repeat(64), season: 2026, attempt: 1 };
+    const findJobs = vi.fn();
+    boss.findJobs = findJobs;
+    for (const state of ["created", "retry", "active"]) {
+      findJobs.mockResolvedValueOnce([{ state }]);
+      expect(await enqueueRosCorpusBootstrap(boss, job)).toBeNull();
+    }
+    expect(send).not.toHaveBeenCalled();
+    expect(findJobs).toHaveBeenCalledWith(queueNames.bootstrapRosCorpus, {
+      data: { requestIdentity: job.requestIdentity },
+    });
+    findJobs.mockResolvedValue([{ state: "failed" }, { state: "completed" }]);
+    for (const attempt of [1, 2]) {
+      await enqueueRosCorpusBootstrap(boss, { ...job, attempt });
+      expect(send).toHaveBeenLastCalledWith(
+        queueNames.bootstrapRosCorpus,
+        { ...job, attempt },
+        {
+          group: { id: "ros-corpus-bootstrap" },
+          singletonKey: `ros-corpus-bootstrap:${job.requestIdentity}:attempt:${attempt}`,
+          singletonSeconds: 23 * 60 * 60,
+        },
+      );
+    }
+  });
+
+  it("rejects malformed or profile-dependent bootstrap jobs before touching the queue", async () => {
+    const { boss, send } = sendHarness();
+    const findJobs = vi.fn();
+    boss.findJobs = findJobs;
+    const job = { requestIdentity: "a".repeat(64), season: 2026, attempt: 1 };
+    const invalid: unknown[] = [
+      null,
+      [],
+      {},
+      { ...job, requestIdentity: "A".repeat(64) },
+      { ...job, requestIdentity: [job.requestIdentity] },
+      { ...job, season: 2006 },
+      { ...job, season: 2201 },
+      { ...job, season: 2026.5 },
+      { ...job, season: "2026" },
+      ...[0, -1, 1.5, Number.NaN, "1", null, ROS_CORPUS_BOOTSTRAP_MAXIMUM_ATTEMPTS + 1].map(
+        (attempt) => ({ ...job, attempt }),
+      ),
+      { ...job, scoringProfileKey: "full-ppr" },
+      { ...job, leagueSeasonId: "a-league" },
+      { ...job, provider: "espn" },
+    ];
+    for (const value of invalid)
+      await expect(enqueueRosCorpusBootstrap(boss, value as RosCorpusBootstrapJob)).rejects.toThrow(
+        "physical ROS request",
+      );
+    expect(findJobs).not.toHaveBeenCalled();
+    expect(send).not.toHaveBeenCalled();
+    expect(() =>
+      assertRosCorpusBootstrapJob({ ...job, attempt: ROS_CORPUS_BOOTSTRAP_MAXIMUM_ATTEMPTS }),
+    ).not.toThrow();
+  });
+
   it("serializes league sync per connection and league season", async () => {
     const { boss, send } = sendHarness();
 
@@ -428,6 +493,16 @@ describe("shared queue dispatch contract", () => {
 });
 
 describe("registerQueues", () => {
+  it("gives shared bootstrap the same bounded execution contract as exact-profile validation", async () => {
+    const { boss, created } = registrationHarness();
+    await registerQueues(boss);
+    const validation = created.get(queueNames.validateRosProfile);
+    expect(created.get(queueNames.bootstrapRosCorpus)).toEqual({
+      ...validation,
+      deadLetter: deadLetterQueueNames.bootstrapRosCorpus,
+    });
+  });
+
   it("registers every queue and its dead-letter queue exactly once", async () => {
     const { boss, created, updated } = registrationHarness();
 

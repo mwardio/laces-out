@@ -32,7 +32,7 @@ import type { RosProfileValidationRunner } from "./ros-profile-validation-runner
 
 const SHA256 = /^[a-f0-9]{64}$/u;
 const POINTER_MAXIMUM_BYTES = 64 * 1_024;
-const GLOBAL_BUILD_LOCK = "all-historical-ros-corpus-builds-v1";
+export const ROS_SHARED_CORPUS_BUILD_LOCK = "all-historical-ros-corpus-builds-v1";
 const object = (value: unknown): value is Record<string, unknown> =>
   value !== null && typeof value === "object" && !Array.isArray(value);
 const errorCode = (error: unknown) => (error as NodeJS.ErrnoException | null)?.code;
@@ -268,6 +268,11 @@ export function createSharedRosCorpusValidationRunner(options: {
   readonly directory: string;
   readonly lock: RosCorpusLock;
   readonly runner: RosProfileValidationRunner;
+  /** Durable bootstrap claim fencing around the final immutable ready-pointer commit. */
+  readonly commitReady?: (input: {
+    readonly corpusIdentity: string;
+    readonly commit: () => Promise<void>;
+  }) => Promise<void>;
 }): RosProfileValidationRunner {
   const replay = async (input: Parameters<RosProfileValidationRunner>[0], identity: string) => {
     const report = await options.runner({ ...input, replayCorpusIdentity: identity });
@@ -294,7 +299,7 @@ export function createSharedRosCorpusValidationRunner(options: {
       return replay(input, ready);
     }
     if (ready) return replay(input, ready);
-    const result = await options.lock(GLOBAL_BUILD_LOCK, input.signal, async (guard) => {
+    const result = await options.lock(ROS_SHARED_CORPUS_BUILD_LOCK, input.signal, async (guard) => {
       const identityAfterWait = await readyCorpusIdentity(options.directory, request, guard.signal);
       if (identityAfterWait) return { identity: identityAfterWait };
       await mkdir(options.directory, { recursive: true, mode: 0o700 });
@@ -307,7 +312,12 @@ export function createSharedRosCorpusValidationRunner(options: {
         throw new Error("Shared ROS builder did not return a valid immutable corpus identity");
       const corpus = await verifySharedCorpus(options.directory, identity, request, guard.signal);
       await guard.assertHeld();
-      await writePointer(file, readyPointer(request, identity, corpus), guard.signal);
+      const commit = async () => {
+        await guard.assertHeld();
+        await writePointer(file, readyPointer(request, identity, corpus), guard.signal);
+      };
+      if (options.commitReady) await options.commitReady({ corpusIdentity: identity, commit });
+      else await commit();
       return { report };
     });
     if ("report" in result) return result.report;
@@ -331,7 +341,7 @@ export async function adoptRosSharedCorpus(options: {
   if (!SHA256.test(options.corpusIdentity)) throw new Error("Invalid ROS corpus identity");
   const request = rosSharedCorpusRequest(options.season);
   const file = path.join(options.directory, "ready", `${request.identity}.json`);
-  return options.lock(GLOBAL_BUILD_LOCK, options.signal, async (guard) => {
+  return options.lock(ROS_SHARED_CORPUS_BUILD_LOCK, options.signal, async (guard) => {
     const existing = await readPointer(file, request);
     if (existing && existing.corpusIdentity !== options.corpusIdentity)
       throw new Error("A conflicting shared ROS corpus is already committed for this protocol");

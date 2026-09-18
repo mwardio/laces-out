@@ -49,6 +49,7 @@ export interface RosProfileValidationRepository {
     admission?: AdmittedValidation;
   }): Promise<boolean>;
   fail(id: string, startedAt: Date, completedAt: Date): Promise<void>;
+  deferForCorpus?(id: string, startedAt: Date, requestIdentity: string, now: Date): Promise<void>;
 }
 
 export class DrizzleRosProfileValidationRepository implements RosProfileValidationRepository {
@@ -102,7 +103,7 @@ export class DrizzleRosProfileValidationRepository implements RosProfileValidati
             firstPartyRosProfileValidations.state,
             recoveryCorpusIdentity === undefined
               ? ["pending", "failed", "validating"]
-              : ["failed", "withheld", "validating"],
+              : ["pending", "failed", "withheld", "validating"],
           ),
           recoveryCorpusIdentity === undefined
             ? sql`${firstPartyRosProfileValidations.report} -> 'automaticRecovery' is null`
@@ -112,7 +113,7 @@ export class DrizzleRosProfileValidationRepository implements RosProfileValidati
                 sql`(${firstPartyRosProfileValidations.report} -> 'automaticRecovery' -> 'recoveryAttempt' is null or jsonb_typeof(${firstPartyRosProfileValidations.report} -> 'automaticRecovery' -> 'recoveryAttempt') = 'number')`,
                 sql`coalesce(${firstPartyRosProfileValidations.report} -> 'automaticRecovery' ->> 'recoveryAttempt', '1') = ${String(recoveryAttempt ?? 1)}`,
                 sql`${firstPartyRosProfileValidations.report} -> 'automaticRecovery' ->> 'state' in ('pending-dispatch', 'attempted')`,
-                sql`(${firstPartyRosProfileValidations.state} <> 'withheld' or ${firstPartyRosProfileValidations.report} -> 'automaticRecovery' ->> 'state' = 'pending-dispatch')`,
+                sql`(${firstPartyRosProfileValidations.state} not in ('pending', 'withheld') or ${firstPartyRosProfileValidations.report} -> 'automaticRecovery' ->> 'state' = 'pending-dispatch')`,
               ),
         ),
       )
@@ -188,6 +189,32 @@ export class DrizzleRosProfileValidationRepository implements RosProfileValidati
         .where(claim);
       return true;
     });
+  }
+
+  async deferForCorpus(
+    id: string,
+    startedAt: Date,
+    requestIdentity: string,
+    now: Date,
+  ): Promise<void> {
+    if (!/^[a-f0-9]{64}$/u.test(requestIdentity))
+      throw new Error("Invalid bootstrap request identity");
+    await this.database
+      .update(firstPartyRosProfileValidations)
+      .set({
+        state: "pending",
+        blockers: ["shared_corpus_preparing"],
+        completedAt: null,
+        updatedAt: now,
+        report: sql`coalesce(${firstPartyRosProfileValidations.report}, '{}'::jsonb) || ${JSON.stringify({ bootstrapWait: { version: "shared-corpus-wait-v1", requestIdentity, requestedAt: now.toISOString() } })}::jsonb`,
+      })
+      .where(
+        and(
+          eq(firstPartyRosProfileValidations.id, id),
+          eq(firstPartyRosProfileValidations.state, "validating"),
+          eq(firstPartyRosProfileValidations.startedAt, startedAt),
+        ),
+      );
   }
 
   async fail(id: string, startedAt: Date, completedAt: Date): Promise<void> {
@@ -354,6 +381,10 @@ export class RosProfileValidationService {
       readonly validatorPath?: string;
       readonly timeoutMs?: number;
       readonly now?: () => Date;
+      readonly sharedCorpus?: (
+        season: number,
+        signal: AbortSignal,
+      ) => Promise<{ requestIdentity: string; corpusIdentity: string | null }>;
     },
   ) {
     if (!options.repository && !options.database)
@@ -362,6 +393,8 @@ export class RosProfileValidationService {
       options.repository ?? new DrizzleRosProfileValidationRepository(options.database!);
     this.runner = options.runner ?? createRosProfileValidationRunner(options);
     this.now = options.now ?? (() => new Date());
+    if (options.sharedCorpus && !this.repository.deferForCorpus)
+      throw new Error("Shared ROS bootstrap requires deferred profile persistence");
   }
 
   async validateProfile(job: RosProfileValidationJob, context: WorkerJobContext): Promise<void> {
@@ -434,18 +467,35 @@ export class RosProfileValidationService {
         });
         return;
       }
+      let requiredReadyCorpusIdentity = job.recoveryCorpusIdentity;
+      if (this.options.sharedCorpus) {
+        const shared = await this.options.sharedCorpus(record.season, context.signal);
+        if (
+          job.recoveryCorpusIdentity !== undefined &&
+          shared.corpusIdentity !== job.recoveryCorpusIdentity
+        )
+          throw new Error("Pinned ROS replay corpus is unavailable");
+        if (shared.corpusIdentity === null) {
+          await this.repository.deferForCorpus!(
+            record.id,
+            startedAt,
+            shared.requestIdentity,
+            this.now(),
+          );
+          return;
+        }
+        requiredReadyCorpusIdentity = shared.corpusIdentity;
+      }
       const report = await this.runner({
         scoringProfileKey: definition.scoringProfileKey,
         season: record.season,
         signal: context.signal,
-        ...(job.recoveryCorpusIdentity === undefined
-          ? {}
-          : { requiredReadyCorpusIdentity: job.recoveryCorpusIdentity }),
+        ...(requiredReadyCorpusIdentity === undefined ? {} : { requiredReadyCorpusIdentity }),
       });
       context.signal.throwIfAborted();
       if (
-        job.recoveryCorpusIdentity !== undefined &&
-        report.outcomeCorpusIdentity !== job.recoveryCorpusIdentity
+        requiredReadyCorpusIdentity !== undefined &&
+        report.outcomeCorpusIdentity !== requiredReadyCorpusIdentity
       )
         throw new Error("ROS recovery returned a different ready corpus identity");
       if (report.state === "blocked-before-modeling" && report.componentPreflight !== undefined) {

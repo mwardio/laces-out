@@ -773,3 +773,20 @@ Onboarding resilience follow-up, September 18 (implemented; release pending):
   shared initial build, keyed by the physical request rather than a league, still needs a bounded
   retry design and verification. Corrupt committed evidence must require explicit repair or
   restoration instead of silently triggering a replacement simulation.
+
+### Shared initial history recovery (September 18)
+
+The ready-corpus retry repair alone cannot recover an exhausted first build at season rollover.
+The physical request now has a separate durable bootstrap ledger and queue, independent of every
+scoring identity. Profiles defer without starting a second simulation. A completed, fully verified
+physical corpus fans out into cache-only exact-scoring checks; statistical failures remain withheld.
+The coordinator fences queue cycles and final readiness commits, resumes qualified source snapshots
+offline, and captures fresh data after source insufficiency. Once readiness has been committed,
+missing or corrupt storage requires explicit verified restoration instead of an automatic rebuild.
+A shared execution budget and existing global build lock bound work across profiles and seasons.
+
+The optional per-league history-preparation status is membership scoped and separate from admission.
+A read-only health CLI derives the real physical identity, checks the ledger and job state, and
+verifies the ready pointer/manifest. Neither observability surface is evidence of forecast accuracy.
+Migration 0052 and final production adoption/consumer verification are required before this work
+can be described as deployed. No football-model numerical parameters change in this repair.

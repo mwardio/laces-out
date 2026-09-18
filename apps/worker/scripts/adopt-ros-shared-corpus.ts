@@ -1,8 +1,10 @@
 import path from "node:path";
 
 import { loadEnvironment } from "@laces-out/config";
+import { createDatabase } from "@laces-out/db";
 
 import { createPostgresRosCorpusLock } from "../src/ros-corpus-lock.js";
+import { recordVerifiedRosCorpusAdoption } from "../src/ros-corpus-bootstrap.js";
 import { RosCacheDiskSpaceError } from "../src/ros-cache-disk-space.js";
 import { adoptRosSharedCorpus } from "../src/ros-shared-corpus-runner.js";
 
@@ -60,6 +62,7 @@ async function main(): Promise<void> {
   process.on("SIGINT", onInterrupt);
   process.on("SIGTERM", onTerminate);
   let stage: "configuration" | "adoption" = "configuration";
+  let database: ReturnType<typeof createDatabase> | undefined;
   try {
     const environment = loadEnvironment();
     stage = "adoption";
@@ -68,6 +71,9 @@ async function main(): Promise<void> {
       lock: createPostgresRosCorpusLock(environment.DATABASE_URL),
       signal: cancellation.signal,
     });
+    cancellation.signal.throwIfAborted();
+    database = createDatabase(environment.DATABASE_URL, 1);
+    await recordVerifiedRosCorpusAdoption(database.db, options.season, result.corpusIdentity);
     process.stdout.write(
       `${JSON.stringify({ state: result.state, requestIdentity: result.requestIdentity, corpusIdentity: result.corpusIdentity })}\n`,
     );
@@ -87,6 +93,7 @@ async function main(): Promise<void> {
     );
     process.exitCode = interrupted === "SIGINT" ? 130 : interrupted === "SIGTERM" ? 143 : 1;
   } finally {
+    await database?.close();
     process.off("SIGINT", onInterrupt);
     process.off("SIGTERM", onTerminate);
   }
