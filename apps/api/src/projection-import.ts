@@ -6,6 +6,7 @@ import type {
   ProjectionImportPreviewResponse,
   ProjectionSetListResponse,
   ProjectionSetSummary,
+  RosIntervalDescriptor,
   ProjectionVisibility as ContractProjectionVisibility,
 } from "@laces-out/contracts";
 import {
@@ -42,6 +43,10 @@ import { and, asc, desc, eq, gte, inArray, isNull, ne, or, sql } from "drizzle-o
 import { leagueScopedPlayerCatalogFilter } from "./espn-sync-persistence.js";
 import { projectionTimestampProvenance } from "./projection-provenance.js";
 import { currentManagedProjectionProfileKey } from "./managed-projection-profile.js";
+import {
+  parseLinkedRosIntervalEvidence,
+  type StoredRosIntervalEvidence,
+} from "./ros-interval-evidence.js";
 import {
   hasCommissionerAuthority,
   providerCommissionerAuthoritySql,
@@ -140,6 +145,9 @@ export interface ProjectionImportRepository {
     currentScoringProfileKey?: string | null,
   ): Promise<readonly StoredProjectionSet[]>;
   listProjectionPlayers(projectionSetId: string): Promise<readonly StoredProjectionPlayer[]>;
+  listRosIntervalEvidence(
+    projectionSetIds: readonly string[],
+  ): Promise<readonly StoredRosIntervalEvidence[]>;
   latestManagedRunStatus?(
     leagueSeasonId: string,
     season: number,
@@ -567,6 +575,73 @@ export class DrizzleProjectionImportRepository implements ProjectionImportReposi
       .limit(5_000);
   }
 
+  async listRosIntervalEvidence(
+    projectionSetIds: readonly string[],
+  ): Promise<readonly StoredRosIntervalEvidence[]> {
+    if (projectionSetIds.length > MAX_ACCESSIBLE_SETS)
+      throw new RangeError("ROS interval lookup requires at most 100 valid projection set IDs");
+    for (const id of projectionSetIds)
+      if (typeof id !== "string" || !UUID_PATTERN.test(id))
+        throw new RangeError("ROS interval lookup requires at most 100 valid projection set IDs");
+    if (projectionSetIds.length === 0) return [];
+    const ids = [...new Set(projectionSetIds)];
+    // Count every linked run before requiring a match. Filtering invalid runs first, or choosing
+    // the latest/first run, could hide ambiguous lineage. This single query serves the complete
+    // bounded request, and never interprets mutable projection_sets.metadata as interval proof.
+    return this.#database.execute<StoredRosIntervalEvidence>(sql`
+      with requested as (
+        select * from ${projectionSets}
+        where ${inArray(projectionSets.id, ids)}
+      ), linked_runs as (
+        select summary.projection_set_id, summary.source_sync_run_id,
+          count(*)::integer as summary_count,
+          bool_and(
+            summary.season = requested.season
+            and summary.window_start_week = requested.window_start_week
+            and summary.window_end_week = requested.window_end_week
+            and summary.as_of_week = requested.as_of_week
+            and summary.as_of_at = requested.as_of_at
+            and summary.input_checksum = requested.input_checksum
+            and summary.method_version = linked_model.model_version
+            and projected.player_id is not null
+          ) as summaries_match
+        from requested
+        inner join ${playerRosProjectionSummaries} summary on summary.projection_set_id = requested.id
+        left join ${projectionModelRuns} linked_model on linked_model.source_sync_run_id = summary.source_sync_run_id
+        left join ${playerProjections} projected on projected.projection_set_id = summary.projection_set_id
+          and projected.player_id = summary.player_id
+        group by summary.projection_set_id, summary.source_sync_run_id
+      ), link_counts as (
+        select projection_set_id, count(*)::integer as run_count
+        from linked_runs group by projection_set_id
+      )
+      select requested.id as "projectionSetId",
+        coalesce(link_counts.run_count, 0)::integer as "linkedRunCount",
+        coalesce(
+          requested.horizon = 'rest-of-season' and requested.identity_state = 'explicit'
+          and link_counts.run_count = 1 and linked_runs.summaries_match
+          and linked_runs.summary_count = (
+            select count(*) from ${playerProjections} projected where projected.projection_set_id = requested.id
+          )
+          and model.horizon = 'rest-of-season' and model.quality_state = 'publishable'
+          and model.season = requested.season
+          and model.window_start_week = requested.window_start_week
+          and model.window_end_week = requested.window_end_week
+          and model.as_of_week = requested.as_of_week and model.as_of_at = requested.as_of_at
+          and model.input_checksum = requested.input_checksum and model.source_as_of <= model.as_of_at
+          and model.configuration->>'simulationModelVersion' = model.model_version
+          and nullif(btrim(model.configuration->>'orchestrationVersion'), '') is not null,
+          false
+        ) as "matchesScope",
+        model.calibration->'rosIntervals' as "rosIntervals"
+      from requested
+      left join link_counts on link_counts.projection_set_id = requested.id
+      left join linked_runs on linked_runs.projection_set_id = requested.id and link_counts.run_count = 1
+      left join ${projectionModelRuns} model on model.source_sync_run_id = linked_runs.source_sync_run_id
+      order by requested.id
+    `);
+  }
+
   async latestManagedRunStatus(leagueSeasonId: string, season: number, week: number) {
     const [run] = await this.#database
       .select({
@@ -898,6 +973,7 @@ function summary(
   row: StoredProjectionSet,
   actorUserId: string,
   currentScoringProfileKey: string | null = null,
+  rosInterval: RosIntervalDescriptor | null = null,
 ): ProjectionSetSummary {
   const isManaged = row.source !== "user-csv";
   const sourceLabel =
@@ -923,6 +999,7 @@ function summary(
     managed: isManaged
       ? {
           scoringCompatibility: managedScoringCompatibility(row.metadata, currentScoringProfileKey),
+          ...(row.horizon === "rest-of-season" ? { rosInterval } : {}),
           modelVersion: modelVersion && modelVersion.length <= 120 ? modelVersion : null,
           computedAt: metadataIsoDate(row.metadata, "computedAt") ?? row.createdAt.toISOString(),
           // For managed sets fetchedAt is the persisted critical-input check time. It deliberately
@@ -1036,14 +1113,16 @@ export class ProjectionImportService {
         ? this.#repository.latestManagedRunStatus(leagueSeasonId, scope.season, scope.currentWeek)
         : Promise.resolve(undefined),
     ]);
-    const summaries = sets
-      .filter(
-        (row) =>
-          row.leagueSeasonId === leagueSeasonId &&
-          (row.visibility === "league" ||
-            (row.creatorUserId !== null && row.creatorUserId === actorUserId)),
-      )
-      .map((row) => summary(row, actorUserId, currentScoringProfileKey));
+    const visibleSets = sets.filter(
+      (row) =>
+        row.leagueSeasonId === leagueSeasonId &&
+        (row.visibility === "league" ||
+          (row.creatorUserId !== null && row.creatorUserId === actorUserId)),
+    );
+    const rosIntervals = await this.#rosIntervalDescriptors(visibleSets);
+    const summaries = visibleSets.map((row) =>
+      summary(row, actorUserId, currentScoringProfileKey, rosIntervals.get(row.id) ?? null),
+    );
     const currentManaged =
       scope.currentWeek === null
         ? undefined
@@ -1156,7 +1235,9 @@ export class ProjectionImportService {
     );
     const projectionSet = accessibleSets.find(
       (candidate) =>
-        candidate.id === projectionSetId && candidate.leagueSeasonId === leagueSeasonId,
+        candidate.id === projectionSetId &&
+        candidate.leagueSeasonId === leagueSeasonId &&
+        (candidate.visibility === "league" || candidate.creatorUserId === actorUserId),
     );
     if (!projectionSet) {
       throw new ProjectionImportRequestError(
@@ -1165,11 +1246,44 @@ export class ProjectionImportService {
         "Projection set was not found in this league season",
       );
     }
-    const storedPlayers = await this.#repository.listProjectionPlayers(projectionSet.id);
+    const [storedPlayers, rosIntervals] = await Promise.all([
+      this.#repository.listProjectionPlayers(projectionSet.id),
+      this.#rosIntervalDescriptors([projectionSet]),
+    ]);
     return {
-      projectionSet: summary(projectionSet, actorUserId, currentScoringProfileKey),
+      projectionSet: summary(
+        projectionSet,
+        actorUserId,
+        currentScoringProfileKey,
+        rosIntervals.get(projectionSet.id) ?? null,
+      ),
       players: playerRows(storedPlayers),
     };
+  }
+
+  async #rosIntervalDescriptors(
+    sets: readonly StoredProjectionSet[],
+  ): Promise<ReadonlyMap<string, RosIntervalDescriptor | null>> {
+    const ids = [
+      ...new Set(
+        sets
+          .filter((set) => set.horizon === "rest-of-season" && set.source !== "user-csv")
+          .map((set) => set.id),
+      ),
+    ];
+    const result = new Map<string, RosIntervalDescriptor | null>();
+    if (ids.length === 0) return result;
+    const requested = new Set(ids);
+    const rows = await this.#repository.listRosIntervalEvidence(ids);
+    for (const row of rows) {
+      if (!requested.has(row.projectionSetId)) continue;
+      // A duplicate repository result is ambiguous too; never let ordering choose its contract.
+      result.set(
+        row.projectionSetId,
+        result.has(row.projectionSetId) ? null : parseLinkedRosIntervalEvidence(row),
+      );
+    }
+    return result;
   }
 
   async preview(

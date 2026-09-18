@@ -9,19 +9,23 @@ import {
 } from "@laces-out/contracts";
 import {
   createDatabase,
+  dataSources,
   leagues,
   leagueSeasons,
   playerExternalIds,
   playerProjections,
+  playerRosProjectionSummaries,
   players,
   projectionSets,
+  projectionModelRuns,
   scoringRules,
   users,
+  syncRuns,
 } from "@laces-out/db";
 import { DrizzleInSeasonDecisionRepository } from "@laces-out/decisions";
 import { eq } from "drizzle-orm";
 import { migrate } from "drizzle-orm/postgres-js/migrator";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { DrizzleProjectionImportRepository, ProjectionImportService } from "./projection-import.js";
 
@@ -180,6 +184,249 @@ describe.skipIf(!dockerAvailable())("Projection history against disposable Postg
     };
   }
 
+  const legacyIntervals = {
+    schemaVersion: 1,
+    state: "calibrated",
+    method: "season-blocked-split-conformal-cqr-v1",
+    evidenceChecksum: "a".repeat(64),
+    heldOutSeasons: 3,
+    batches: 30,
+    samples: 300,
+    nominalCoverage: 0.7,
+    empiricalCoverage: 0.8,
+    maximumAllowedCoverageError: 0.1,
+  };
+
+  async function seedRosRun(
+    set: ReturnType<typeof setRow>,
+    modelVersion: string,
+    intervalMethod = legacyIntervals.method,
+  ) {
+    const sourceId = randomUUID();
+    const runId = randomUUID();
+    await handle.db.insert(dataSources).values({
+      id: sourceId,
+      key: `test:ros:${sourceId}`,
+      name: "Retained ROS evidence",
+      kind: "projection",
+    });
+    await handle.db
+      .insert(syncRuns)
+      .values({ id: runId, kind: "test-ros", state: "complete", idempotencyKey: runId });
+    await handle.db.insert(projectionModelRuns).values({
+      sourceSyncRunId: runId,
+      sourceId,
+      season: set.season,
+      horizon: "rest-of-season",
+      targetWeek: null,
+      windowStartWeek: set.windowStartWeek,
+      windowEndWeek: set.windowEndWeek,
+      asOfWeek: set.asOfWeek,
+      asOfAt: set.asOfAt,
+      modelVersion,
+      trainingWindowStartSeason: 2022,
+      trainedThroughSeason: 2025,
+      trainedThroughWeek: null,
+      qualityState: "publishable",
+      playersEvaluated: 1,
+      playersPublished: 1,
+      inputChecksum: set.inputChecksum,
+      sourceAsOf: set.asOfAt,
+      configuration: {
+        simulationModelVersion: modelVersion,
+        orchestrationVersion: "fixture-orchestration",
+      },
+      calibration: { rosIntervals: { ...legacyIntervals, method: intervalMethod } },
+      metrics: {
+        rosConvergence: {
+          schemaVersion: 1,
+          state: "converged",
+          method: "fixture-convergence",
+          evidenceChecksum: "b".repeat(64),
+          lowerScenarioCount: 128,
+          referenceScenarioCount: 256,
+          maxToleranceRatio: 0.5,
+        },
+      },
+    });
+    return runId;
+  }
+
+  async function seedRosSummary(
+    set: ReturnType<typeof setRow>,
+    runId: string,
+    player: string,
+    modelVersion: string,
+  ) {
+    await handle.db.insert(playerProjections).values({
+      projectionSetId: set.id,
+      playerId: player,
+      meanPoints: "140.000",
+      floorPoints: "150.000",
+      ceilingPoints: "250.000",
+    });
+    await handle.db.insert(playerRosProjectionSummaries).values({
+      projectionSetId: set.id,
+      sourceSyncRunId: runId,
+      playerId: player,
+      season: set.season,
+      windowStartWeek: set.windowStartWeek,
+      windowEndWeek: set.windowEndWeek,
+      asOfWeek: set.asOfWeek,
+      asOfAt: set.asOfAt,
+      scheduledGames: 17,
+      expectedGames: "17.000000",
+      aggregateMeanPoints: "140.000",
+      p15Points: "150.000",
+      p50Points: "210.125",
+      p85Points: "250.000",
+      meanPointsPerExpectedGame: "8.235294",
+      pointsStddev: "20.000",
+      availability: {
+        schemaVersion: 1,
+        semantics: "unconditional-active-probability",
+        weeks: Array.from({ length: 17 }, (_, index) => ({
+          week: index + 2,
+          scheduled: true,
+          bye: false,
+          availabilityProbability: 1,
+        })),
+      },
+      scenarioCount: 128,
+      methodVersion: modelVersion,
+      seedHash: "c".repeat(64),
+      inputChecksum: set.inputChecksum,
+    });
+  }
+
+  it("reads retained legacy interval evidence through its immutable run, independently of mutable set labels", async () => {
+    const saved = setRow("rest-of-season", NOW);
+    await handle.db.insert(projectionSets).values(saved);
+    const runId = await seedRosRun(saved, "retained-legacy-model");
+    await seedRosSummary(saved, runId, playerId, "retained-legacy-model");
+    const descriptor = {
+      kind: "legacy-block-cqr",
+      method: legacyIntervals.method,
+      quantiles: [0.15, 0.5, 0.85],
+      evidenceInterpretation: "historical-descriptive",
+      evidenceChecksum: legacyIntervals.evidenceChecksum,
+    };
+    expect((await service.list(userId, seasonId)).projectionSets[0]?.managed?.rosInterval).toEqual(
+      descriptor,
+    );
+    await handle.db
+      .update(projectionSets)
+      .set({
+        metadata: {
+          ...saved.metadata,
+          modelVersion: "season-prior-weighted-quantile-residuals-v1",
+          rosInterval: { ...descriptor, kind: "player-marginal" },
+          rosIntervals: { schemaVersion: 2, state: "qualified" },
+        },
+      })
+      .where(eq(projectionSets.id, saved.id));
+    const details = projectionPlayerListResponseSchema.parse(
+      await service.getPlayers(userId, seasonId, saved.id),
+    );
+    expect(details.projectionSet.managed?.rosInterval).toEqual(descriptor);
+    expect(details.players[0]).toMatchObject({
+      meanPoints: 140,
+      floorPoints: 150,
+      ceilingPoints: 250,
+      ros: { medianPoints: 210.125, pointsStddev: 20 },
+    });
+    await expect(service.getPlayers(otherUserId, seasonId, saved.id)).rejects.toMatchObject({
+      statusCode: 404,
+    });
+  });
+
+  it("counts every linked run before matching and refuses ambiguous identical legacy contracts", async () => {
+    const saved = setRow("rest-of-season", NOW);
+    await handle.db.insert(projectionSets).values(saved);
+    const firstRunId = await seedRosRun(saved, "legacy-model-one");
+    await seedRosSummary(saved, firstRunId, playerId, "legacy-model-one");
+    const secondPlayer = randomUUID();
+    await handle.db.insert(players).values({
+      id: secondPlayer,
+      fullName: "Second Saved Player",
+      primaryPosition: "WR",
+      eligiblePositions: ["WR"],
+    });
+    const secondRunId = await seedRosRun(saved, "legacy-model-two");
+    await seedRosSummary(saved, secondRunId, secondPlayer, "legacy-model-two");
+    const evidence = await repository.listRosIntervalEvidence([saved.id]);
+    expect(evidence).toMatchObject([
+      { projectionSetId: saved.id, linkedRunCount: 2, matchesScope: false, rosIntervals: null },
+    ]);
+    expect(
+      (await service.getPlayers(userId, seasonId, saved.id)).projectionSet.managed?.rosInterval,
+    ).toBeNull();
+  });
+
+  it("rejects incomplete summary coverage and an unrecognized retained schema-1 method", async () => {
+    const incomplete = setRow("rest-of-season", NOW);
+    const unknown = setRow("rest-of-season", NOW);
+    await handle.db.insert(projectionSets).values([incomplete, unknown]);
+    const runId = await seedRosRun(incomplete, "known-model");
+    await seedRosSummary(incomplete, runId, playerId, "known-model");
+    const extraPlayer = randomUUID();
+    await handle.db.insert(players).values({
+      id: extraPlayer,
+      fullName: "Unsummarized Player",
+      primaryPosition: "WR",
+      eligiblePositions: ["WR"],
+    });
+    await handle.db
+      .insert(playerProjections)
+      .values({ projectionSetId: incomplete.id, playerId: extraPlayer, meanPoints: "100" });
+    const unknownRunId = await seedRosRun(
+      unknown,
+      "unknown-method-model",
+      "future-or-unrecognized-method",
+    );
+    await seedRosSummary(unknown, unknownRunId, playerId, "unknown-method-model");
+    const evidence = await repository.listRosIntervalEvidence([incomplete.id, unknown.id]);
+    expect(evidence.find((entry) => entry.projectionSetId === incomplete.id)).toMatchObject({
+      linkedRunCount: 1,
+      matchesScope: false,
+    });
+    expect(
+      (await service.list(userId, seasonId)).projectionSets.every(
+        (set) => set.managed?.rosInterval === null,
+      ),
+    ).toBe(true);
+  });
+
+  it("uses one bounded evidence query for many sets, skips empty requests and rejects invalid bounds before SQL", async () => {
+    const saved = Array.from({ length: 100 }, () => setRow("rest-of-season", NOW));
+    await handle.db.insert(projectionSets).values(saved);
+    const spy = vi.spyOn(handle.db, "execute");
+    try {
+      const rows = await repository.listRosIntervalEvidence(saved.map((set) => set.id));
+      expect(rows).toHaveLength(100);
+      expect(
+        rows.every(
+          (entry) =>
+            entry.linkedRunCount === 0 && !entry.matchesScope && entry.rosIntervals === null,
+        ),
+      ).toBe(true);
+      expect(spy).toHaveBeenCalledTimes(1);
+      expect(await repository.listRosIntervalEvidence([])).toEqual([]);
+      await expect(
+        repository.listRosIntervalEvidence([...saved.map((set) => set.id), randomUUID()]),
+      ).rejects.toThrow("at most 100");
+      await expect(repository.listRosIntervalEvidence(["invalid"])).rejects.toThrow(
+        "valid projection set IDs",
+      );
+      await expect(repository.listRosIntervalEvidence(new Array<string>(1))).rejects.toThrow(
+        "valid projection set IDs",
+      );
+      expect(spy).toHaveBeenCalledTimes(1);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it("marks saved weekly and ROS sets as history immediately after an exact scoring change and keeps authorized player access", async () => {
     const [rule] = await handle.db
       .insert(scoringRules)
@@ -299,29 +546,25 @@ describe.skipIf(!dockerAvailable())("Projection history against disposable Postg
   });
 
   it("keeps a compatible older ROS model inside bounded history after many newer differently-scored publications", async () => {
-    await handle.db
-      .insert(scoringRules)
-      .values({
-        leagueSeasonId: seasonId,
-        statKey: "42",
-        providerStatId: "42",
-        operation: "multiply",
-        points: "0.1",
-      });
+    await handle.db.insert(scoringRules).values({
+      leagueSeasonId: seasonId,
+      statKey: "42",
+      providerStatId: "42",
+      operation: "multiply",
+      points: "0.1",
+    });
     const key = await repository.currentScoringProfileKey(seasonId);
     const earlier = setRow("rest-of-season", new Date("2026-09-01T12:00:00.000Z"));
     const compatible = { ...earlier, metadata: { ...earlier.metadata, scoringProfileKey: key } };
     const newer = Array.from({ length: 150 }, () => setRow("rest-of-season", NOW));
     await handle.db.insert(projectionSets).values([compatible, ...newer]);
-    await handle.db
-      .insert(playerProjections)
-      .values(
-        [compatible, ...newer].map((row) => ({
-          projectionSetId: row.id,
-          playerId,
-          meanPoints: "20",
-        })),
-      );
+    await handle.db.insert(playerProjections).values(
+      [compatible, ...newer].map((row) => ({
+        projectionSetId: row.id,
+        playerId,
+        meanPoints: "20",
+      })),
+    );
     const response = await service.list(userId, seasonId);
     expect(response.projectionSets).toHaveLength(100);
     expect(

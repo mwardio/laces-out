@@ -17,6 +17,7 @@ import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 
 import { apiBaseUrl, parseProjectionPlayerList } from "../lib/api-client";
 import { preferredProjectionSet, projectionScoringNotice } from "../lib/projection-set-selection";
+import { rosIntervalPresentation } from "../lib/ros-interval-presentation";
 import styles from "./projection-player-browser.module.css";
 
 type Horizon = "week" | "rest-of-season";
@@ -598,8 +599,7 @@ function ProjectionBoard({
 
           {horizon === "rest-of-season" && resolvedSet?.origin === "laces-out" ? (
             <p className={styles.withheldNotice}>
-              These ranges are widened using historical forecast errors. They remain provisional and
-              do not establish a 70% chance for an individual player.
+              {rosIntervalPresentation(resolvedSet.managed?.rosInterval)}
             </p>
           ) : null}
 

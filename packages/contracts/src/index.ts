@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { rosIntervalDescriptorSchema } from "./ros-interval.js";
 
 import {
   decisionExecutionSchema,
@@ -53,6 +54,9 @@ export * from "./ai-tools.js";
 // conflating artifact state with shadow-audit state previously produced the wrong conclusion that
 // all ROS publication was disabled.
 export * from "./ros-release-status.js";
+
+// Published interval presentation semantics; separate from release authorization and model names.
+export * from "./ros-interval.js";
 
 // The Weekly Reckoning recap envelope. Its own module because this barrel is a re-export surface
 // rather than a home for new domains.
@@ -2339,6 +2343,8 @@ const managedProjectionDetailsSchema = z
   .object({
     // Missing on older cached payloads; readers must treat that as unverified.
     scoringCompatibility: z.enum(["current", "changed", "unknown"]).optional(),
+    // Absent on older cached payloads. A missing descriptor means the method is unverified.
+    rosInterval: rosIntervalDescriptorSchema.nullable().optional(),
     modelVersion: z.string().min(1).max(120).nullable(),
     computedAt: z.iso.datetime(),
     inputCheckedAt: z.iso.datetime(),

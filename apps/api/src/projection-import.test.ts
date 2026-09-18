@@ -13,6 +13,7 @@ import {
   type StoredProjectionPlayer,
   type StoredProjectionSet,
 } from "./projection-import.js";
+import type { StoredRosIntervalEvidence } from "./ros-interval-evidence.js";
 
 const USER_ID = "10000000-0000-4000-8000-000000000001";
 const OTHER_USER_ID = "10000000-0000-4000-8000-000000000002";
@@ -56,6 +57,8 @@ class FakeRepository implements ProjectionImportRepository {
   catalog: readonly ProjectionResolverPlayer[] = catalog;
   sets: readonly StoredProjectionSet[] = [];
   projectionPlayers: readonly StoredProjectionPlayer[] = [];
+  intervalEvidence: readonly StoredRosIntervalEvidence[] = [];
+  intervalEvidenceCalls: string[][] = [];
   committed: CommitProjectionSetInput | undefined;
   resolverCalls = 0;
   managedRun:
@@ -84,6 +87,11 @@ class FakeRepository implements ProjectionImportRepository {
 
   listProjectionPlayers() {
     return Promise.resolve(this.projectionPlayers);
+  }
+
+  listRosIntervalEvidence(projectionSetIds: readonly string[]) {
+    this.intervalEvidenceCalls.push([...projectionSetIds]);
+    return Promise.resolve(this.intervalEvidence);
   }
 
   latestManagedRunStatus() {
@@ -152,6 +160,33 @@ function managedWeeklySet(): StoredProjectionSet {
   };
 }
 
+const LEGACY_INTERVALS = {
+  schemaVersion: 1,
+  state: "calibrated",
+  method: "season-blocked-split-conformal-cqr-v1",
+  evidenceChecksum: "c".repeat(64),
+  heldOutSeasons: 3,
+  batches: 30,
+  samples: 300,
+  nominalCoverage: 0.7,
+  empiricalCoverage: 0.8,
+  maximumAllowedCoverageError: 0.1,
+};
+
+function managedRosSet(id = SET_ID): StoredProjectionSet {
+  return {
+    ...managedWeeklySet(),
+    id,
+    source: "laces-out-first-party-ros",
+    horizon: "rest-of-season",
+    week: null,
+  };
+}
+
+function linkedEvidence(projectionSetId = SET_ID): StoredRosIntervalEvidence {
+  return { projectionSetId, linkedRunCount: 1, matchesScope: true, rosIntervals: LEGACY_INTERVALS };
+}
+
 function request(csv: string, visibility: "private" | "league" = "private") {
   return {
     csv,
@@ -168,6 +203,119 @@ function request(csv: string, visibility: "private" | "league" = "private") {
 }
 
 describe("ProjectionImportService", () => {
+  it("labels retained legacy intervals only from one matching immutable model run", async () => {
+    const repository = new FakeRepository();
+    repository.sets = [managedRosSet()];
+    repository.intervalEvidence = [linkedEvidence()];
+    const service = new ProjectionImportService(repository, () => NOW);
+    const response = projectionSetListResponseSchema.parse(await service.list(USER_ID, SEASON_ID));
+    expect(response.projectionSets[0]?.managed?.rosInterval).toEqual({
+      kind: "legacy-block-cqr",
+      method: LEGACY_INTERVALS.method,
+      quantiles: [0.15, 0.5, 0.85],
+      evidenceInterpretation: "historical-descriptive",
+      evidenceChecksum: LEGACY_INTERVALS.evidenceChecksum,
+    });
+    expect(
+      (await service.getPlayers(USER_ID, SEASON_ID, SET_ID)).projectionSet.managed?.rosInterval,
+    ).toEqual(response.projectionSets[0]?.managed?.rosInterval);
+    expect(repository.intervalEvidenceCalls).toEqual([[SET_ID], [SET_ID]]);
+  });
+
+  it("batches all accessible ROS sets once and fetches only the requested set for detail", async () => {
+    const repository = new FakeRepository();
+    const secondId = "50000000-0000-4000-8000-000000000002";
+    const privateId = "50000000-0000-4000-8000-000000000003";
+    const otherLeagueId = "50000000-0000-4000-8000-000000000004";
+    repository.sets = [
+      managedRosSet(),
+      managedRosSet(secondId),
+      { ...managedWeeklySet(), id: "50000000-0000-4000-8000-000000000005" },
+      { ...managedRosSet(privateId), visibility: "private", creatorUserId: OTHER_USER_ID },
+      { ...managedRosSet(otherLeagueId), leagueSeasonId: "30000000-0000-4000-8000-000000000099" },
+    ];
+    repository.intervalEvidence = [
+      linkedEvidence(),
+      linkedEvidence(secondId),
+      linkedEvidence(privateId),
+    ];
+    const service = new ProjectionImportService(repository, () => NOW);
+    const response = await service.list(USER_ID, SEASON_ID);
+    expect(repository.intervalEvidenceCalls).toEqual([[SET_ID, secondId]]);
+    expect(response.projectionSets).toHaveLength(3);
+    expect(response.projectionSets[2]?.managed).not.toHaveProperty("rosInterval");
+    await service.getPlayers(USER_ID, SEASON_ID, secondId);
+    expect(repository.intervalEvidenceCalls).toEqual([[SET_ID, secondId], [secondId]]);
+    await expect(service.getPlayers(USER_ID, SEASON_ID, privateId)).rejects.toMatchObject({
+      statusCode: 404,
+    });
+    expect(repository.intervalEvidenceCalls).toHaveLength(2);
+  });
+
+  it("does not trust model names or mutable set metadata when immutable interval evidence is missing", async () => {
+    const repository = new FakeRepository();
+    repository.sets = [
+      {
+        ...managedRosSet(),
+        metadata: {
+          modelVersion: LEGACY_INTERVALS.method,
+          rosInterval: {
+            kind: "legacy-block-cqr",
+            method: LEGACY_INTERVALS.method,
+            quantiles: [0.15, 0.5, 0.85],
+            evidenceInterpretation: "historical-descriptive",
+            evidenceChecksum: LEGACY_INTERVALS.evidenceChecksum,
+          },
+          rosIntervals: LEGACY_INTERVALS,
+          qualityState: "publishable",
+        },
+      },
+    ];
+    const response = await new ProjectionImportService(repository).list(USER_ID, SEASON_ID);
+    expect(response.projectionSets[0]?.managed?.rosInterval).toBeNull();
+    expect(() => projectionSetSummarySchema.parse(response.projectionSets[0])).not.toThrow();
+  });
+
+  it.each(
+    [
+      [{ ...linkedEvidence(), linkedRunCount: 2 }],
+      [{ ...linkedEvidence(), matchesScope: false }],
+      [{ ...linkedEvidence(), rosIntervals: { ...LEGACY_INTERVALS, schemaVersion: 2 } }],
+      [{ ...linkedEvidence(), rosIntervals: { ...LEGACY_INTERVALS, method: "unknown" } }],
+      [linkedEvidence(), linkedEvidence()],
+    ].map((intervalEvidence) => ({ intervalEvidence })),
+  )(
+    "does not label malformed, unknown or ambiguous interval linkage %#",
+    async ({ intervalEvidence }) => {
+      const repository = new FakeRepository();
+      repository.sets = [managedRosSet()];
+      repository.intervalEvidence = intervalEvidence;
+      const service = new ProjectionImportService(repository);
+      expect(
+        (await service.list(USER_ID, SEASON_ID)).projectionSets[0]?.managed?.rosInterval,
+      ).toBeNull();
+      expect(
+        (await service.getPlayers(USER_ID, SEASON_ID, SET_ID)).projectionSet.managed?.rosInterval,
+      ).toBeNull();
+    },
+  );
+
+  it("does not issue an interval lookup for weekly or custom sets", async () => {
+    const repository = new FakeRepository();
+    repository.sets = [
+      managedWeeklySet(),
+      {
+        ...managedRosSet("50000000-0000-4000-8000-000000000002"),
+        source: "user-csv",
+        creatorUserId: USER_ID,
+      },
+    ];
+    const service = new ProjectionImportService(repository);
+    await service.list(USER_ID, SEASON_ID);
+    await service.getPlayers(USER_ID, SEASON_ID, SET_ID);
+    expect(repository.intervalEvidenceCalls).toEqual([]);
+  });
+
   it("serializes mere internal ownership as member access", async () => {
     const repository = new FakeRepository();
     repository.scope = { ...scope, membershipRole: "owner" };
