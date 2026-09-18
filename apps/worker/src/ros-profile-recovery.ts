@@ -11,6 +11,7 @@ import { and, eq, inArray, sql } from "drizzle-orm";
 
 import {
   ROS_PROFILE_RECOVERY_VERSION,
+  rosProfileRecoveryDelayMs,
   rosProfileRecoveryMarker,
   rosProfileValidationIsTransient,
 } from "./ros-profile-recovery-state.js";
@@ -61,11 +62,27 @@ export class RosProfileRecoveryService {
           .for("update");
         if (!row || !rosProfileValidationIsTransient(row)) return null;
         const previous = rosProfileRecoveryMarker(row.report);
-        if (previous?.corpusIdentity === corpusIdentity && previous.state === "attempted")
-          return null;
+        if (row.report?.automaticRecovery !== undefined && previous === undefined) return null;
         const now = this.input.now?.() ?? new Date();
+        const sameCorpus = previous?.corpusIdentity === corpusIdentity;
+        const previousAttempt = previous?.recoveryAttempt ?? 1;
+        let recoveryAttempt = sameCorpus ? previousAttempt : 1;
+        if (sameCorpus && previous.state === "attempted") {
+          // A completed scientific/data rejection cannot improve on identical evidence. A dead
+          // process or exhausted infrastructure retry can: reserve another replay after backoff.
+          if (
+            row.state !== "failed" ||
+            row.completedAt === null ||
+            !Number.isFinite(row.completedAt.getTime()) ||
+            now.getTime() - row.completedAt.getTime() <
+              rosProfileRecoveryDelayMs(previousAttempt) ||
+            previousAttempt === Number.MAX_SAFE_INTEGER
+          )
+            return null;
+          recoveryAttempt += 1;
+        }
         if (
-          previous?.corpusIdentity === corpusIdentity &&
+          sameCorpus &&
           typeof previous.dispatchClaimedAt === "string" &&
           Date.parse(previous.dispatchClaimedAt) > now.getTime() - 30_000
         )
@@ -75,6 +92,7 @@ export class RosProfileRecoveryService {
         const marker = {
           version: ROS_PROFILE_RECOVERY_VERSION,
           corpusIdentity,
+          recoveryAttempt,
           state: "pending-dispatch" as const,
           requestedAt:
             previous?.corpusIdentity === corpusIdentity ? previous.requestedAt : now.toISOString(),
@@ -87,7 +105,7 @@ export class RosProfileRecoveryService {
           .update(firstPartyRosProfileValidations)
           .set({ report: { ...row.report, automaticRecovery: marker }, updatedAt: now })
           .where(eq(firstPartyRosProfileValidations.id, row.id));
-        return marker.dispatchReservationId;
+        return { id: marker.dispatchReservationId, recoveryAttempt };
       });
       if (reservation === null) continue;
       const releaseDispatch = async () => {
@@ -99,7 +117,7 @@ export class RosProfileRecoveryService {
           .where(
             and(
               eq(firstPartyRosProfileValidations.id, candidate.id),
-              sql`${firstPartyRosProfileValidations.report} -> 'automaticRecovery' ->> 'dispatchReservationId' = ${reservation}`,
+              sql`${firstPartyRosProfileValidations.report} -> 'automaticRecovery' ->> 'dispatchReservationId' = ${reservation.id}`,
               sql`${firstPartyRosProfileValidations.report} -> 'automaticRecovery' ->> 'state' = 'pending-dispatch'`,
             ),
           );
@@ -111,6 +129,7 @@ export class RosProfileRecoveryService {
         const jobId = await this.input.enqueueValidation({
           profileValidationId: candidate.id,
           recoveryCorpusIdentity: corpusIdentity,
+          recoveryAttempt: reservation.recoveryAttempt,
         });
         if (jobId === null) await releaseDispatch();
       } catch (error) {

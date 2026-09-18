@@ -66,6 +66,8 @@ export interface RosProfileValidationJob {
   readonly profileValidationId: string;
   /** A recovery can replay this already-ready corpus only; it must never initiate modeling. */
   readonly recoveryCorpusIdentity?: string;
+  /** Distinct replay recovery cycle; omitted legacy jobs belong to cycle 1. */
+  readonly recoveryAttempt?: number;
 }
 
 export const recommendationKinds = ["draft", "lineup", "waiver", "trade"] as const;
@@ -380,7 +382,7 @@ export async function enqueueRosProfileValidation(
     job,
     dispatchOptions(
       "ros-profile-validation",
-      `ros-profile-validation:${job.profileValidationId}${job.recoveryCorpusIdentity ? `:corpus:${job.recoveryCorpusIdentity}` : ""}`,
+      `ros-profile-validation:${job.profileValidationId}${job.recoveryCorpusIdentity ? `:corpus:${job.recoveryCorpusIdentity}:attempt:${job.recoveryAttempt ?? 1}` : ""}`,
       23 * 60 * 60,
     ),
   );
@@ -400,6 +402,13 @@ export function assertRosProfileValidationJob(job: RosProfileValidationJob): voi
       !/^[a-f0-9]{64}$/u.test(job.recoveryCorpusIdentity))
   )
     throw new Error("Invalid worker job: recoveryCorpusIdentity must be a SHA-256 identity");
+  if (
+    job.recoveryAttempt !== undefined &&
+    (job.recoveryCorpusIdentity === undefined ||
+      !Number.isSafeInteger(job.recoveryAttempt) ||
+      job.recoveryAttempt < 1)
+  )
+    throw new Error("Invalid worker job: recoveryAttempt requires a corpus and positive integer");
 }
 
 /** Deduplicates equivalent work while serializing all recomputations for one league season. */

@@ -357,7 +357,7 @@ describe("shared queue dispatch contract", () => {
       queueNames.validateRosProfile,
       job,
       expect.objectContaining({
-        singletonKey: `ros-profile-validation:${id}:corpus:${job.recoveryCorpusIdentity}`,
+        singletonKey: `ros-profile-validation:${id}:corpus:${job.recoveryCorpusIdentity}:attempt:1`,
       }),
     );
     for (const invalid of [["a".repeat(64)], { toString: () => "a".repeat(64) }, "x", 123]) {
@@ -368,6 +368,44 @@ describe("shared queue dispatch contract", () => {
         }),
       ).rejects.toThrow("SHA-256");
     }
+  });
+
+  it("gives later recovery cycles distinct singleton keys while preserving live job deduplication", async () => {
+    const { boss, send } = sendHarness();
+    const job = {
+      profileValidationId: "12345678-1234-4234-8234-123456789abc",
+      recoveryCorpusIdentity: "a".repeat(64),
+      recoveryAttempt: 2,
+    };
+    boss.findJobs = vi.fn().mockResolvedValue([{ state: "failed" }]);
+    await enqueueRosProfileValidation(boss, job);
+    expect(send).toHaveBeenCalledWith(
+      queueNames.validateRosProfile,
+      job,
+      expect.objectContaining({
+        singletonKey: `ros-profile-validation:${job.profileValidationId}:corpus:${job.recoveryCorpusIdentity}:attempt:2`,
+      }),
+    );
+    send.mockClear();
+    for (const state of ["created", "retry", "active"]) {
+      boss.findJobs = vi.fn().mockResolvedValue([{ state }]);
+      expect(await enqueueRosProfileValidation(boss, job)).toBeNull();
+    }
+    expect(send).not.toHaveBeenCalled();
+    for (const recoveryAttempt of [0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1, NaN, "2", null]) {
+      await expect(
+        enqueueRosProfileValidation(boss, {
+          ...job,
+          recoveryAttempt: recoveryAttempt as number,
+        }),
+      ).rejects.toThrow("recoveryAttempt");
+    }
+    await expect(
+      enqueueRosProfileValidation(boss, {
+        profileValidationId: job.profileValidationId,
+        recoveryAttempt: 2,
+      }),
+    ).rejects.toThrow("recoveryAttempt");
   });
 
   it("coalesces data health checks onto one globally serialized key", async () => {

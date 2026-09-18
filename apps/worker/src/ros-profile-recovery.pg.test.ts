@@ -21,7 +21,16 @@ import { migrate } from "drizzle-orm/postgres-js/migrator";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { RosProfileRecoveryService } from "./ros-profile-recovery.js";
-import { DrizzleRosProfileValidationRepository } from "./ros-profile-validation.js";
+import {
+  ROS_PROFILE_RECOVERY_MAXIMUM_DELAY_MS,
+  ROS_PROFILE_RECOVERY_MINIMUM_DELAY_MS,
+} from "./ros-profile-recovery-state.js";
+import {
+  DrizzleRosProfileValidationRepository,
+  RosProfileValidationService,
+} from "./ros-profile-validation.js";
+import { validReport } from "./ros-profile-validation.test-fixtures.js";
+import type { RosProfileValidationRunner } from "./ros-profile-validation-runner.js";
 
 const CORPUS_A = "a".repeat(64);
 const CORPUS_B = "b".repeat(64);
@@ -216,6 +225,7 @@ describe.skipIf(!dockerAvailable())("Replay-only ROS profile recovery against Po
       readyCorpusForSeason,
       validationJobIsOutstanding,
       enqueueValidation,
+      now: () => now,
       selectCorpus: (value: string | null) => {
         corpus = value;
       },
@@ -277,6 +287,7 @@ describe.skipIf(!dockerAvailable())("Replay-only ROS profile recovery against Po
       expect(prepared.enqueueValidation).toHaveBeenCalledWith({
         profileValidationId: before.id,
         recoveryCorpusIdentity: CORPUS_A,
+        recoveryAttempt: 1,
       });
       const after = await read(before.id);
       expect(after.state).toBe(before.state);
@@ -415,6 +426,7 @@ describe.skipIf(!dockerAvailable())("Replay-only ROS profile recovery against Po
     expect(prepared.enqueueValidation).toHaveBeenCalledExactlyOnceWith({
       profileValidationId: row.id,
       recoveryCorpusIdentity: CORPUS_A,
+      recoveryAttempt: 1,
     });
     const recovered = await read(row.id);
     expect(recovered.report?.automaticRecovery).toMatchObject({
@@ -455,7 +467,7 @@ describe.skipIf(!dockerAvailable())("Replay-only ROS profile recovery against Po
     },
   );
 
-  it("claims the pinned replay once, avoids a same-corpus failure loop, and permits a new ready corpus", async () => {
+  it("does not immediately loop a failed replay and permits a different ready corpus", async () => {
     const row = await seed(2036, {
       state: "withheld",
       blockers: ["historical_source_coverage_incomplete"],
@@ -489,12 +501,178 @@ describe.skipIf(!dockerAvailable())("Replay-only ROS profile recovery against Po
     expect(prepared.enqueueValidation).toHaveBeenLastCalledWith({
       profileValidationId: row.id,
       recoveryCorpusIdentity: CORPUS_B,
+      recoveryAttempt: 1,
     });
     expect((await read(row.id)).report?.automaticRecovery).toMatchObject({
       corpusIdentity: CORPUS_B,
       state: "pending-dispatch",
     });
     expectOriginalReport(await read(row.id), row);
+  });
+
+  it("recovers an exhausted operational failure on the same corpus after cooldown and preserves committed admission after dispatch failure", async () => {
+    const row = await seed(2026);
+    const prepared = fixture();
+    const context = { jobId: "recovery-pg", signal: new AbortController().signal };
+    const runner = vi.fn<RosProfileValidationRunner>(async () => ({
+      ...validReport({ evidenceIdentityOverrides: { scoringProfileKey: row.scoringProfileKey } }),
+      outcomeCorpusIdentity: CORPUS_A,
+    }));
+    runner.mockRejectedValueOnce(new Error("temporary storage outage"));
+    const enqueueProjectionRefresh = vi.fn(async () => {});
+    const validator = new RosProfileValidationService({
+      repository,
+      runner,
+      enqueueProjectionRefresh,
+      now: prepared.now,
+    });
+    await prepared.service.recover(row.season, context.signal);
+    const firstJob = prepared.enqueueValidation.mock.calls[0]![0];
+    await expect(validator.validateProfile(firstJob, context)).rejects.toThrow("storage outage");
+    expect((await read(row.id)).state).toBe("failed");
+    prepared.outstanding.delete(row.id); // The original queue job has exhausted its retries.
+    prepared.advance(ROS_PROFILE_RECOVERY_MINIMUM_DELAY_MS - 1);
+    await prepared.service.recover(row.season, context.signal);
+    expect(prepared.enqueueValidation).toHaveBeenCalledTimes(1);
+    prepared.advance(1);
+    await Promise.all([
+      prepared.service.recover(row.season, context.signal),
+      prepared.createService().recover(row.season, context.signal),
+    ]);
+    expect(prepared.enqueueValidation).toHaveBeenCalledTimes(2);
+    const secondJob = prepared.enqueueValidation.mock.calls[1]![0];
+    expect(secondJob).toEqual({
+      profileValidationId: row.id,
+      recoveryCorpusIdentity: CORPUS_A,
+      recoveryAttempt: 2,
+    });
+    expect(await repository.begin(row.id, prepared.now(), CORPUS_A)).toBeNull();
+    expect(await repository.begin(row.id, prepared.now(), CORPUS_A, 1)).toBeNull();
+    await validator.validateProfile(firstJob, context);
+    expect(runner).toHaveBeenCalledTimes(1);
+
+    enqueueProjectionRefresh.mockRejectedValueOnce(new Error("publication queue unavailable"));
+    await expect(validator.validateProfile(secondJob, context)).rejects.toThrow(
+      "publication queue unavailable",
+    );
+    const admitted = await read(row.id);
+    expect(admitted.state).toBe("admitted");
+    expect(admitted.artifactId).not.toBeNull();
+    expect(admitted.report?.automaticRecovery).toMatchObject({
+      corpusIdentity: CORPUS_A,
+      recoveryAttempt: 2,
+      state: "attempted",
+    });
+    await validator.validateProfile(firstJob, context);
+    expect(enqueueProjectionRefresh).toHaveBeenCalledTimes(1);
+    await validator.validateProfile(secondJob, context);
+    expect(enqueueProjectionRefresh).toHaveBeenCalledTimes(2);
+    expect(runner).toHaveBeenCalledTimes(2);
+    for (const [input] of runner.mock.calls)
+      expect(input).toMatchObject({ requiredReadyCorpusIdentity: CORPUS_A });
+  });
+
+  it.each([
+    [0, 1],
+    [-1, 2],
+    [1.5, 3],
+    [null, 4],
+    ["1", 5],
+    [Number.MAX_SAFE_INTEGER + 1, 6],
+  ] as const)(
+    "does not rewrite or claim a malformed recovery attempt %s",
+    async (recoveryAttempt, points) => {
+      const row = await seed(2050, { points });
+      await handle.db
+        .update(firstPartyRosProfileValidations)
+        .set({
+          report: {
+            ...row.report,
+            automaticRecovery: {
+              version: "ready-corpus-replay-v1",
+              corpusIdentity: CORPUS_A,
+              state: "attempted",
+              requestedAt: PRIOR.toISOString(),
+              recoveryAttempt,
+            },
+          },
+        })
+        .where(eq(firstPartyRosProfileValidations.id, row.id));
+      const before = await read(row.id);
+      const prepared = fixture();
+      prepared.advance(ROS_PROFILE_RECOVERY_MAXIMUM_DELAY_MS);
+      await prepared.service.recover(row.season, new AbortController().signal);
+      expect(prepared.enqueueValidation).not.toHaveBeenCalled();
+      expect(await repository.begin(row.id, prepared.now(), CORPUS_A)).toBeNull();
+      expect(await read(row.id)).toEqual(before);
+    },
+  );
+
+  it.each([
+    [null, 1, 1],
+    [new Date(NOW.getTime() + 24 * 60 * 60_000), 1, 2],
+    [PRIOR, Number.MAX_SAFE_INTEGER, 3],
+  ] as const)(
+    "preserves failed recovery with completion %s and attempt %s when another cycle is unsafe",
+    async (completedAt, recoveryAttempt, points) => {
+      const row = await seed(2052, { points });
+      await handle.db
+        .update(firstPartyRosProfileValidations)
+        .set({
+          completedAt,
+          report: {
+            ...row.report,
+            automaticRecovery: {
+              version: "ready-corpus-replay-v1",
+              corpusIdentity: CORPUS_A,
+              state: "attempted",
+              requestedAt: PRIOR.toISOString(),
+              recoveryAttempt,
+            },
+          },
+        })
+        .where(eq(firstPartyRosProfileValidations.id, row.id));
+      const before = await read(row.id);
+      const prepared = fixture();
+      prepared.advance(ROS_PROFILE_RECOVERY_MAXIMUM_DELAY_MS);
+      await prepared.service.recover(row.season, new AbortController().signal);
+      expect(prepared.enqueueValidation).not.toHaveBeenCalled();
+      expect(await read(row.id)).toEqual(before);
+    },
+  );
+
+  it("retains the new cycle after a null dispatch and applies capped backoff to operational failures", async () => {
+    const row = await seed(2051);
+    await handle.db
+      .update(firstPartyRosProfileValidations)
+      .set({
+        completedAt: NOW,
+        report: {
+          ...row.report,
+          automaticRecovery: {
+            version: "ready-corpus-replay-v1",
+            corpusIdentity: CORPUS_A,
+            state: "attempted",
+            requestedAt: PRIOR.toISOString(),
+            recoveryAttempt: 20,
+          },
+        },
+      })
+      .where(eq(firstPartyRosProfileValidations.id, row.id));
+    const prepared = fixture();
+    prepared.advance(ROS_PROFILE_RECOVERY_MAXIMUM_DELAY_MS - 1);
+    await prepared.service.recover(row.season, new AbortController().signal);
+    expect(prepared.enqueueValidation).not.toHaveBeenCalled();
+    prepared.advance(1);
+    prepared.enqueueValidation.mockResolvedValueOnce(null);
+    await prepared.service.recover(row.season, new AbortController().signal);
+    expect((await read(row.id)).report?.automaticRecovery).toMatchObject({
+      state: "pending-dispatch",
+      recoveryAttempt: 21,
+    });
+    await prepared.service.recover(row.season, new AbortController().signal);
+    expect(prepared.enqueueValidation).toHaveBeenCalledTimes(2);
+    for (const [job] of prepared.enqueueValidation.mock.calls) expect(job.recoveryAttempt).toBe(21);
   });
 
   it("does not steal an outstanding validation job or overwrite its scientific result", async () => {
@@ -540,6 +718,9 @@ describe.skipIf(!dockerAvailable())("Replay-only ROS profile recovery against Po
         corpusIdentity: CORPUS_A,
         state: "attempted",
       });
+      await prepared.service.recover(season, new AbortController().signal);
+      expect(prepared.enqueueValidation).toHaveBeenCalledTimes(1);
+      prepared.advance(2 * ROS_PROFILE_RECOVERY_MAXIMUM_DELAY_MS);
       await prepared.service.recover(season, new AbortController().signal);
       expect(prepared.enqueueValidation).toHaveBeenCalledTimes(1);
       prepared.selectCorpus(CORPUS_B);

@@ -748,3 +748,28 @@ ROS expected-mean evaluation repair, September 18 (implemented; full validation 
 - Source comparison leaves all 76 pre-existing numerical helper bodies unchanged; only policy
   selection, policy construction, and release admission change. Compact season-level loss evidence
   is recomputed on ingestion and cannot extend beyond its policy evidence cutoff.
+
+Onboarding resilience follow-up, September 18 (implemented; release pending):
+
+- An exhausted operational recovery could remain failed indefinitely against the same verified
+  corpus. Ordinary discovery does not restart failed profiles, so a healthy later worker could
+  not repair that state. The correction adds durable recovery cycles with a 15-minute exponential
+  delay capped at six hours, each pinned to the ready corpus. Distinct queue singleton keys and
+  attempt fences prevent the previous 23-hour singleton or obsolete deliveries from obstructing
+  the next cycle. Statistical rejection and unchanged data insufficiency remain withheld.
+- The standalone ROS publication monitor still referenced evaluation policy v6 after the v7 code
+  change. Its identity now matches v7, and all 11 PostgreSQL status/monitor integration tests pass.
+  This check is required when changing release identity; worker completion alone is never evidence
+  that a league received current projections.
+
+- The recovery change passes 133 focused tests, including disposable PostgreSQL lifecycle and
+  recovery integration, shared-corpus behavior, and queue contracts. Combined with the monitor
+  suite, 144 tests pass. Whole-workspace type checking and scoped lint/format checks also pass
+  on Linux x86-64. Old-cycle jobs, malformed counters, concurrent sweeps, dispatch failure,
+  and retrying publication after committed admission are covered without a numerical model run.
+- A separate bootstrap boundary remains open: a new season has no ready corpus, and exhausting
+  the initial builder's queue retries can leave all existing failed profiles waiting indefinitely.
+  The replay recovery deliberately cannot start a new football build. Durable recovery of that
+  shared initial build, keyed by the physical request rather than a league, still needs a bounded
+  retry design and verification. Corrupt committed evidence must require explicit repair or
+  restoration instead of silently triggering a replacement simulation.

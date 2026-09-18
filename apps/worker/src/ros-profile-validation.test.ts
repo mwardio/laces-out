@@ -127,6 +127,33 @@ describe("automatic exact ROS profile validation", () => {
     expect(test.runner).toHaveBeenCalledTimes(2);
   });
 
+  it("fences old recovery cycles before replay and before the admitted publication fast path", async () => {
+    const test = setup({
+      state: "failed",
+      blockers: ["validation_execution_failed"],
+      report: {
+        automaticRecovery: { ...recoveryReport.automaticRecovery, recoveryAttempt: 2 },
+      },
+    });
+    const legacyJob = { ...test.job, recoveryCorpusIdentity: recoveryIdentity };
+    await test.service.validateProfile(legacyJob, test.context);
+    expect(test.runner).not.toHaveBeenCalled();
+    test.runner.mockResolvedValue({ ...validReport({}), outcomeCorpusIdentity: recoveryIdentity });
+    const currentJob = { ...legacyJob, recoveryAttempt: 2 };
+    await test.service.validateProfile(currentJob, test.context);
+    expect(test.record().state).toBe("admitted");
+    test.enqueueProjectionRefresh.mockClear();
+    await test.service.validateProfile(legacyJob, test.context);
+    await test.service.validateProfile(
+      { ...currentJob, recoveryCorpusIdentity: "d".repeat(64) },
+      test.context,
+    );
+    expect(test.enqueueProjectionRefresh).not.toHaveBeenCalled();
+    await test.service.validateProfile(currentJob, test.context);
+    expect(test.enqueueProjectionRefresh).toHaveBeenCalledExactlyOnceWith(2026);
+    expect(test.runner).toHaveBeenCalledTimes(1);
+  });
+
   it("does not repeat a completed statistical recovery rejection", async () => {
     const test = setup({
       state: "withheld",

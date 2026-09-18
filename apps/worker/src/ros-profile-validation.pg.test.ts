@@ -333,7 +333,7 @@ describe.skipIf(!dockerAvailable())("ROS profile lifecycle against PostgreSQL", 
   });
 
   it.each(["pending", "withheld"] as const)(
-    "discovers a fresh v5 validation despite an older %s v4 history request",
+    "discovers a current validation despite an older %s v4 history request",
     async (state) => {
       const season = state === "pending" ? 2034 : 2035;
       await seedLeague(season, "0.81");
@@ -363,7 +363,7 @@ describe.skipIf(!dockerAvailable())("ROS profile lifecycle against PostgreSQL", 
       const current = rows.find((row) => row.id !== original!.id)!;
       expect(current).toMatchObject({
         state: "pending",
-        policyVersion: "season-walk-forward-block-wis-cqr-v5",
+        policyVersion: constants.policyVersion,
         scoringProfileDigest: original!.scoringProfileDigest,
       });
       expect(rows.find((row) => row.id === original!.id)?.state).toBe(state);

@@ -1,10 +1,24 @@
 export const ROS_PROFILE_RECOVERY_VERSION = "ready-corpus-replay-v1";
+export const ROS_PROFILE_RECOVERY_MINIMUM_DELAY_MS = 15 * 60_000;
+export const ROS_PROFILE_RECOVERY_MAXIMUM_DELAY_MS = 6 * 60 * 60_000;
+
+/** Queue retries belong to one cycle; a later operational recovery gets a new fenced cycle. */
+export function rosProfileRecoveryDelayMs(attempt: number): number {
+  if (!Number.isSafeInteger(attempt) || attempt < 1)
+    throw new RangeError("Invalid ROS recovery attempt");
+  return Math.min(
+    ROS_PROFILE_RECOVERY_MAXIMUM_DELAY_MS,
+    ROS_PROFILE_RECOVERY_MINIMUM_DELAY_MS * 2 ** Math.min(attempt - 1, 5),
+  );
+}
 
 export interface RosProfileRecoveryMarker {
   readonly version: typeof ROS_PROFILE_RECOVERY_VERSION;
   readonly corpusIdentity: string;
   readonly state: "pending-dispatch" | "attempted";
   readonly requestedAt: string;
+  /** Missing on legacy markers, which represent cycle 1. */
+  readonly recoveryAttempt?: number;
   readonly dispatchReservationId?: string;
   readonly dispatchClaimedAt?: string;
 }
@@ -20,7 +34,9 @@ export function rosProfileRecoveryMarker(report: unknown): RosProfileRecoveryMar
     !/^[a-f0-9]{64}$/u.test(value.corpusIdentity) ||
     (value.state !== "pending-dispatch" && value.state !== "attempted") ||
     typeof value.requestedAt !== "string" ||
-    !Number.isFinite(Date.parse(value.requestedAt))
+    !Number.isFinite(Date.parse(value.requestedAt)) ||
+    (value.recoveryAttempt !== undefined &&
+      (!Number.isSafeInteger(value.recoveryAttempt) || Number(value.recoveryAttempt) < 1))
   )
     return undefined;
   return value as unknown as RosProfileRecoveryMarker;

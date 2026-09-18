@@ -567,8 +567,12 @@ Every five minutes, the validation worker also checks transient execution failur
 source-coverage withholding for recovery. Recovery requires an already verified, complete shared
 corpus and is pinned to that exact identity: it cannot start another football fit. The durable
 reservation commits before queue dispatch; failed sends and abandoned dispatch reservations are
-retryable. Starting a recovery consumes that corpus's attempt, while queue retries remain allowed.
-Statistical rejections are excluded, and exhausted recovery does not loop against the same corpus.
+retryable. Queue retries share one recovery cycle. If that cycle exhausts its queue retries with
+an operational failure, the sweep can reserve another replay of the same corpus after a 15-minute
+delay, doubling for each failed cycle up to six hours. Each cycle has a distinct queue singleton
+and a persisted attempt number; jobs from an older cycle cannot claim or complete a newer one.
+Outstanding jobs prevent another reservation. Statistical rejections and repeated source/component
+insufficiency on the same corpus remain withheld; a new verified corpus can trigger reevaluation.
 See [the scoring onboarding repair](./ros-scoring-onboarding-2026-09-17.md) for retry and recovery
 semantics. Operators can also run the locked bulk release replay with `npm run ros:validate:release -w @laces-out/worker`. It always uses eight players per
 position, a 6,000-forecast cap, complete source lineage, no more than three concurrent profiles, and
@@ -651,7 +655,10 @@ can continue on its original image throughout.
 
 The host's `laces-out-ops` Telegram sentinel uses `scripts/ros-publication-health.sql` to measure
 each active league's actual complete ROS publication age, independently of worker completion and
-shadow-source checks. It alerts after 36 hours by default
+shadow-source checks. Its release identities must match the deployed projection constants; the
+PostgreSQL suite `apps/api/src/ros-projection-status.pg.test.ts` verifies that binding and exercises
+the actual monitor query against current, obsolete, missing, and unsupported publications. Run
+that suite when changing a ROS release identity. The sentinel alerts after 36 hours by default
 (`LACES_OUT_ROS_PROJECTION_MAX_AGE_HOURS`), with the existing three consecutive five-minute checks
 to debounce alerts. A fresh league cannot conceal a stale peer. Missing complete publications also
 alert, and successful Telegram delivery is recorded before suppressing repeated notifications.

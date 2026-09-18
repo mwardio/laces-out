@@ -34,7 +34,12 @@ type AdmittedValidation = Extract<FirstPartyRosAdmissionValidation, { state: "ad
 
 export interface RosProfileValidationRepository {
   get(id: string): Promise<RosProfileValidationRecord | null>;
-  begin(id: string, startedAt: Date, recoveryCorpusIdentity?: string): Promise<Date | null>;
+  begin(
+    id: string,
+    startedAt: Date,
+    recoveryCorpusIdentity?: string,
+    recoveryAttempt?: number,
+  ): Promise<Date | null>;
   complete(input: {
     id: string;
     startedAt: Date;
@@ -61,7 +66,19 @@ export class DrizzleRosProfileValidationRepository implements RosProfileValidati
     );
   }
 
-  async begin(id: string, startedAt: Date, recoveryCorpusIdentity?: string): Promise<Date | null> {
+  async begin(
+    id: string,
+    startedAt: Date,
+    recoveryCorpusIdentity?: string,
+    recoveryAttempt?: number,
+  ): Promise<Date | null> {
+    if (
+      recoveryAttempt !== undefined &&
+      (recoveryCorpusIdentity === undefined ||
+        !Number.isSafeInteger(recoveryAttempt) ||
+        recoveryAttempt < 1)
+    )
+      return null;
     // Pg-boss owns the long-running lease. A redelivered job may replace a validating attempt
     // left behind by a dead process; the timestamp fences its old completion transaction.
     const rows = await this.database
@@ -92,6 +109,8 @@ export class DrizzleRosProfileValidationRepository implements RosProfileValidati
             : and(
                 sql`${firstPartyRosProfileValidations.report} -> 'automaticRecovery' ->> 'version' = ${ROS_PROFILE_RECOVERY_VERSION}`,
                 sql`${firstPartyRosProfileValidations.report} -> 'automaticRecovery' ->> 'corpusIdentity' = ${recoveryCorpusIdentity}`,
+                sql`(${firstPartyRosProfileValidations.report} -> 'automaticRecovery' -> 'recoveryAttempt' is null or jsonb_typeof(${firstPartyRosProfileValidations.report} -> 'automaticRecovery' -> 'recoveryAttempt') = 'number')`,
+                sql`coalesce(${firstPartyRosProfileValidations.report} -> 'automaticRecovery' ->> 'recoveryAttempt', '1') = ${String(recoveryAttempt ?? 1)}`,
                 sql`${firstPartyRosProfileValidations.report} -> 'automaticRecovery' ->> 'state' in ('pending-dispatch', 'attempted')`,
                 sql`(${firstPartyRosProfileValidations.state} <> 'withheld' or ${firstPartyRosProfileValidations.report} -> 'automaticRecovery' ->> 'state' = 'pending-dispatch')`,
               ),
@@ -349,19 +368,24 @@ export class RosProfileValidationService {
     context.signal.throwIfAborted();
     const record = await this.repository.get(job.profileValidationId);
     if (!record) return;
-    if (record.state === "admitted") {
-      // Retry after an enqueue failure never repeats the expensive historical replay.
-      await this.options.enqueueProjectionRefresh(record.season);
-      return;
-    }
     const recovery = rosProfileRecoveryMarker(record.report);
     if (job.recoveryCorpusIdentity !== undefined) {
-      if (recovery?.corpusIdentity !== job.recoveryCorpusIdentity) return;
+      if (
+        recovery?.corpusIdentity !== job.recoveryCorpusIdentity ||
+        (recovery.recoveryAttempt ?? 1) !== (job.recoveryAttempt ?? 1)
+      )
+        return;
     } else if (
       recovery ||
       (object(record.report) && record.report.automaticRecovery !== undefined)
     ) {
       // An older unrestricted queue row cannot claim a newly reserved replay-only recovery.
+      return;
+    }
+    if (record.state === "admitted") {
+      // Retry after an enqueue failure never repeats the expensive historical replay. Recovery
+      // identity is checked first so an obsolete cycle cannot dispatch a new publication.
+      await this.options.enqueueProjectionRefresh(record.season);
       return;
     }
     if (
@@ -373,6 +397,7 @@ export class RosProfileValidationService {
       record.id,
       this.now(),
       job.recoveryCorpusIdentity,
+      job.recoveryAttempt,
     );
     if (!startedAt) return;
     const recordedReport = (report: Record<string, unknown> | null) =>
