@@ -24,6 +24,7 @@ import {
   type FirstPartyRosWeeklyScenarioInput,
 } from "./rest-of-season.js";
 import { rosScoringProfile } from "./ros-scoring-profiles.js";
+import { firstPartyRosDefenseInputFixture } from "./rest-of-season-defense.test-fixtures.js";
 import * as scoring from "./scoring.js";
 import { projectionScoringProfileKey } from "./scoring.js";
 
@@ -875,18 +876,19 @@ describe("compiled ROS scoring equivalence", () => {
     RB: { rushing_yards: 85, rushing_touchdowns: 0.7, receptions: 3, receiving_yards: 22 },
     WR: { receptions: 6, receiving_yards: 85, receiving_touchdowns: 0.5 },
     TE: { receptions: 4, receiving_yards: 45, receiving_touchdowns: 0.4 },
-    DST: {
-      defensive_sacks: 2.5,
-      defensive_interceptions: 0.8,
-      points_allowed_7_13_probability: 0.2,
-    },
   } as const;
 
   it.each(["QB", "RB", "WR", "TE", "K", "DST"] as const)(
     "preserves every output and seed for %s across both strategies",
     (position: FirstPartyRosPosition) => {
-      const base = position === "K" ? kickerInput() : projectionInput();
-      const components = position === "K" ? undefined : positionComponents[position];
+      const base =
+        position === "K"
+          ? kickerInput()
+          : position === "DST"
+            ? firstPartyRosDefenseInputFixture()
+            : projectionInput();
+      const components =
+        position === "K" || position === "DST" ? undefined : positionComponents[position];
       const input = {
         ...base,
         position,
@@ -945,7 +947,7 @@ describe("first-party ROS kicker count process", () => {
   });
 
   it("declares the new scoring-independent model and seed lineage", () => {
-    expect(FIRST_PARTY_ROS_MODEL_VERSION).toBe("laces-ros-distribution-v12");
+    expect(FIRST_PARTY_ROS_MODEL_VERSION).toBe("laces-ros-distribution-v13");
     expect(FIRST_PARTY_ROS_SEED_VERSION).toBe("laces-ros-distribution-v11");
   });
 

@@ -12,6 +12,22 @@ import {
 } from "./ros-historical-corpus-protocol.js";
 
 describe("immutable historical corpus build protocol", () => {
+  it("requires explicit defense history, sampler, and calibration lineage even under the current model", () => {
+    const defenseFields = [
+      "defenseHistoryVersion",
+      "defenseGameVersion",
+      "defenseCalibrationVersion",
+      "defenseAllowedDistributionVersion",
+    ];
+    const withoutDefenseLineage = Object.fromEntries(
+      Object.entries(ROS_HISTORICAL_CORPUS_BUILD_PROTOCOL).filter(
+        ([name]) => !defenseFields.includes(name),
+      ),
+    );
+    expect(isCurrentRosHistoricalCorpusBuildProtocol(withoutDefenseLineage)).toBe(false);
+    expect(isCompatibleRosHistoricalCorpusBuildProtocol(withoutDefenseLineage)).toBe(false);
+  });
+
   it.each(["season-walk-forward-block-wis-cqr-v5", "season-walk-forward-block-wis-cqr-v6"])(
     "reuses identical physical inputs from %s without claiming current evaluation",
     (policyVersion) => {
@@ -45,6 +61,22 @@ describe("immutable historical corpus build protocol", () => {
       expect(
         isCompatibleRosHistoricalCorpusBuildProtocol({ ...priorPhysicalModel, policyVersion }),
       ).toBe(false);
+  });
+
+  it("rejects v12 physical outcomes under every recognized evaluator after the D/ST model change", () => {
+    for (const policyVersion of [
+      "season-walk-forward-block-wis-cqr-v5",
+      "season-walk-forward-block-wis-cqr-v6",
+      ROS_HISTORICAL_CORPUS_BUILD_PROTOCOL.policyVersion,
+    ]) {
+      const priorPhysicalModel = {
+        ...ROS_HISTORICAL_CORPUS_BUILD_PROTOCOL,
+        modelVersion: "laces-ros-distribution-v12",
+        policyVersion,
+      };
+      expect(isCompatibleRosHistoricalCorpusBuildProtocol(priorPhysicalModel)).toBe(false);
+      expect(isCurrentRosHistoricalCorpusBuildProtocol(priorPhysicalModel)).toBe(false);
+    }
   });
 
   it.each(Object.keys(ROS_HISTORICAL_CORPUS_PHYSICAL_PROTOCOL))(

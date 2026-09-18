@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 
+import { NFL_TEAMS, canonicalNflTeamCode } from "@laces-out/domain";
 import {
   firstPartyRecentRoleContext,
   firstPartyProjectionComponentsForPosition,
@@ -14,6 +15,8 @@ import {
 
 /** Input assembly semantics, independent of the fitted projection and simulation model versions. */
 export const FIRST_PARTY_PLAYER_HISTORY_VERSION = "first-party-player-history-v2";
+/** Shared franchise aliases and reciprocal schedule identity are part of defense input identity. */
+export const FIRST_PARTY_DEFENSE_HISTORY_VERSION = "first-party-defense-history-v2";
 
 export interface ProjectionWeeklyFact {
   readonly playerId: string;
@@ -343,9 +346,17 @@ export function firstPartyPlayerStatus(
   );
 }
 
-function scheduleScoreForTeam(schedule: ProjectionScheduleFact, team: string): number | null {
-  if (schedule.awayTeam === team) return schedule.homeScore;
-  if (schedule.homeTeam === team) return schedule.awayScore;
+const DEFENSE_HISTORY_NFL_TEAMS = new Set<string>(NFL_TEAMS);
+
+function scheduleScoreForTeam(
+  schedule: ProjectionScheduleFact,
+  team: string,
+  opponent: string,
+): number | null {
+  const awayTeam = canonicalNflTeamCode(schedule.awayTeam);
+  const homeTeam = canonicalNflTeamCode(schedule.homeTeam);
+  if (awayTeam === team && homeTeam === opponent) return schedule.homeScore;
+  if (homeTeam === team && awayTeam === opponent) return schedule.awayScore;
   return null;
 }
 
@@ -354,14 +365,36 @@ export function buildFirstPartyDefenseHistory(
   teams: readonly ProjectionTeamWeekFact[],
   schedules: readonly ProjectionScheduleFact[],
 ): readonly FirstPartyTeamDefenseWeeklyStatLine[] {
-  const byGameTeam = new Map(teams.map((row) => [`${row.gameId}:${row.team}`, row]));
+  const byGameTeam = new Map(
+    teams.map((row) => [`${row.gameId}:${canonicalNflTeamCode(row.team)}`, row]),
+  );
   const scheduleByGame = new Map(schedules.map((row) => [row.gameId, row]));
   return teams
     .flatMap((row): FirstPartyTeamDefenseWeeklyStatLine[] => {
-      const opponent = byGameTeam.get(`${row.gameId}:${row.opponentTeam}`);
+      const team = canonicalNflTeamCode(row.team);
+      const opponentTeam = canonicalNflTeamCode(row.opponentTeam);
+      if (
+        !DEFENSE_HISTORY_NFL_TEAMS.has(team) ||
+        !DEFENSE_HISTORY_NFL_TEAMS.has(opponentTeam) ||
+        team === opponentTeam
+      ) {
+        return [];
+      }
+      const opponent = byGameTeam.get(`${row.gameId}:${opponentTeam}`);
       const schedule = scheduleByGame.get(row.gameId);
-      const opponentScore = schedule ? scheduleScoreForTeam(schedule, row.team) : null;
-      if (!opponent || opponentScore === null) return [];
+      if (
+        !opponent ||
+        !schedule ||
+        opponent.season !== row.season ||
+        opponent.week !== row.week ||
+        canonicalNflTeamCode(opponent.opponentTeam) !== team ||
+        schedule.season !== row.season ||
+        schedule.week !== row.week
+      ) {
+        return [];
+      }
+      const opponentScore = scheduleScoreForTeam(schedule, team, opponentTeam);
+      if (opponentScore === null) return [];
       // Yahoo and ESPN do not charge a D/ST for touchdowns scored by the opposing defense, while
       // subsequent PATs still count. Yahoo also excludes safeties. This provider-neutral baseline
       // therefore removes six points per defensive TD and two per defensive safety. A rare blocked-
@@ -374,10 +407,10 @@ export function buildFirstPartyDefenseHistory(
       );
       return [
         {
-          team: row.team,
+          team,
           season: row.season,
           week: row.week,
-          opponent: row.opponentTeam,
+          opponent: opponentTeam,
           played: true,
           components: {
             defensive_sacks: component(row.components, "defensive_sacks"),

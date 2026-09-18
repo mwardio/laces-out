@@ -4,12 +4,14 @@ import { promisify } from "node:util";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  firstPartyRosSeedHash,
   projectFirstPartyRestOfSeason,
   type FirstPartyRosProjection,
   type FirstPartyRosProjectionInput,
   type ProjectionScoringProfile,
 } from "@laces-out/projections";
 import { historicalOutcomeInputFixture } from "./ros-historical-outcome.test-fixtures.js";
+import { denseSimulationInput } from "./ros-outcome-simulation.test-fixtures.js";
 import {
   createRosOutcomeCache,
   type RosOutcomeCache,
@@ -120,6 +122,59 @@ function equivalent(actual: FirstPartyRosLiveProjection, expected: FirstPartyRos
 }
 
 describe("durable live aggregate outcome replay", () => {
+  it.each(["contextual", "availability-aware-recency"] as const)(
+    "replays discrete D/ST outcomes and rejects stale physical provenance for %s",
+    async (strategy) => {
+      const input: FirstPartyRosProjectionInput = {
+        ...denseSimulationInput("DST", strategy),
+        scenarioCount: 128,
+        scoringProfile: {
+          id: "defense-points-allowed",
+          rules: [
+            { statId: "defensive_sacks", points: 1 },
+            { statId: "points_allowed_0_probability", points: 10 },
+            { statId: "points_allowed_35_plus_probability", points: -4 },
+          ],
+        },
+      };
+      const { cache, entries } = memoryCache();
+      const cold = await createRosLiveOutcomeProjector({ cache })(input);
+      equivalent(cold, projectFirstPartyRestOfSeason(input));
+      expect(cold.provenance.seedHash).toBe(firstPartyRosSeedHash(input));
+      const forbidden = vi.fn<typeof projectFirstPartyRestOfSeason>(() => {
+        throw new Error("Replay must not simulate");
+      });
+      const replay = createRosLiveOutcomeProjector({ cache, simulate: forbidden });
+      expect(await replay(input)).toEqual(cold);
+      const changed = {
+        ...input,
+        scoringProfile: {
+          id: "defense-yards-allowed",
+          rules: [
+            { statId: "defensive_interceptions", points: 3 },
+            { statId: "yards_allowed_450_499_probability", points: -5 },
+          ],
+        },
+      };
+      equivalent(await replay(changed), projectFirstPartyRestOfSeason(changed));
+      const key = rosLiveOutcomeCacheKey(input).identity;
+      const original = entries.get(key)!;
+      for (const provenance of [
+        { modelVersion: "laces-ros-distribution-v12" },
+        { seedHash: firstPartyRosSeedHash({ ...input, position: "WR" }) },
+      ]) {
+        const malformed = structuredClone(original);
+        const neutral = malformed.metadata.neutral as Record<string, unknown>;
+        neutral.provenance = { ...(neutral.provenance as Record<string, unknown>), ...provenance };
+        entries.set(key, malformed);
+        await expect(
+          createRosLiveOutcomeProjector({ cache, simulate: forbidden })(input),
+        ).rejects.toThrow("invalid or incomplete");
+      }
+      expect(forbidden).not.toHaveBeenCalled();
+    },
+  );
+
   it.each([128, 130, 256])(
     "replays aggregate forecasts and exact availability across new adapter instances at %i paths",
     async (scenarioCount) => {

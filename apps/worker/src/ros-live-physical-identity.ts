@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto";
 
 import {
+  FIRST_PARTY_DEFENSE_GAME_CALIBRATION_VERSION,
+  FIRST_PARTY_DEFENSE_GAME_VERSION,
   FIRST_PARTY_PROJECTION_MODEL_VERSION,
   FIRST_PARTY_ROS_CONVERGENCE_REFERENCE_SCENARIOS,
   FIRST_PARTY_ROS_DEFAULT_SCENARIOS,
@@ -8,9 +10,14 @@ import {
   FIRST_PARTY_ROS_MINIMUM_SCENARIOS,
   FIRST_PARTY_ROS_MODEL_VERSION,
   FIRST_PARTY_ROS_SEED_VERSION,
+  FIRST_PARTY_TEAM_DEFENSE_ALLOWED_DISTRIBUTION_VERSION,
 } from "@laces-out/projections";
 
-import { FIRST_PARTY_PLAYER_HISTORY_VERSION } from "./first-party-projection-inputs.js";
+import {
+  FIRST_PARTY_DEFENSE_HISTORY_VERSION,
+  FIRST_PARTY_PLAYER_HISTORY_VERSION,
+} from "./first-party-projection-inputs.js";
+import { LIVE_ROS_DEFENSE_ASSEMBLY_VERSION } from "./first-party-ros-candidates.js";
 import {
   HISTORICAL_ROS_AVAILABILITY_CALIBRATION_VERSION,
   HISTORICAL_ROS_CANDIDATE_PAIR_VERSION,
@@ -154,13 +161,17 @@ export function rosLivePhysicalIdentity(input: RosLivePhysicalIdentityInput): st
         rosModel: FIRST_PARTY_ROS_MODEL_VERSION,
         rosSeed: FIRST_PARTY_ROS_SEED_VERSION,
         playerHistory: FIRST_PARTY_PLAYER_HISTORY_VERSION,
+        defenseHistory: FIRST_PARTY_DEFENSE_HISTORY_VERSION,
+        defenseGame: FIRST_PARTY_DEFENSE_GAME_VERSION,
+        defenseCalibration: FIRST_PARTY_DEFENSE_GAME_CALIBRATION_VERSION,
+        defenseAllowedDistribution: FIRST_PARTY_TEAM_DEFENSE_ALLOWED_DISTRIBUTION_VERSION,
         candidatePair: HISTORICAL_ROS_CANDIDATE_PAIR_VERSION,
         productionBasis: HISTORICAL_ROS_PRODUCTION_BASIS_VERSION,
         availabilityCalibration: HISTORICAL_ROS_AVAILABILITY_CALIBRATION_VERSION,
         roleCalibration: HISTORICAL_ROS_ROLE_CALIBRATION_VERSION,
         kickerCalibration: HISTORICAL_ROS_KICKER_CALIBRATION_VERSION,
         playerAssembly: "live-ros-football-input-v2",
-        defenseAssembly: "live-ros-defense-football-input-v2",
+        defenseAssembly: LIVE_ROS_DEFENSE_ASSEMBLY_VERSION,
         defenseRecencyAssembly: "live-ros-defense-recency-adapter-v1",
       },
       season: input.season,

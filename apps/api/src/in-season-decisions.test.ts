@@ -601,6 +601,87 @@ describe("InSeasonDecisionService", () => {
     expect(keep.lineup.notes.join(" ")).toContain("Limited forecast evidence for Spare Back");
   });
 
+  it.each([
+    { floor: "30", ceiling: "35", strength: "model-edge" },
+    { floor: "0", ceiling: "10", strength: "close-call" },
+    { floor: "0", ceiling: "0", strength: "unrated" },
+    { floor: "-10.125", ceiling: "-5.375", strength: "close-call" },
+  ])(
+    "preserves explicit central bounds $floor..$ceiling while optimizing the mean",
+    async (bounds) => {
+      const repository = new FakeRepository();
+      repository.projectionRows = projectionRows.map((row) =>
+        row.playerId === playerIds.aRbTwo
+          ? { ...row, floorPoints: bounds.floor, ceilingPoints: bounds.ceiling }
+          : row,
+      );
+      const snapshot = await new InSeasonDecisionService(repository, () => NOW).getSnapshot(
+        USER_ID,
+        LEAGUE_ID,
+      );
+      if (snapshot?.lineup.state !== "available") throw new Error("Expected available lineup");
+      expect(snapshot.lineup.metric).toBe("mean");
+      expect(snapshot.lineup.optimalProjectedPoints).toBe(35);
+      expect(snapshot.lineup.projectedGain).toBe(5);
+      const change = snapshot.lineup.changes.find((row) => row.add?.id === playerIds.aRbTwo);
+      expect(change?.add?.projectedPoints).toBe(25);
+      expect(change?.add?.projectedRange).toEqual({
+        floor: Number(bounds.floor),
+        ceiling: Number(bounds.ceiling),
+      });
+      expect(change?.assessment?.strength).toBe(bounds.strength);
+      expect(() => inSeasonDecisionSnapshotSchema.parse(snapshot)).not.toThrow();
+    },
+  );
+
+  it.each([
+    { floorPoints: null, ceilingPoints: null },
+    { floorPoints: null, ceilingPoints: "10" },
+    { floorPoints: "30", ceilingPoints: null },
+  ])("uses a mean without inventing a range when a bound is absent: %j", async (bounds) => {
+    const repository = new FakeRepository();
+    repository.projectionRows = projectionRows.map((row) =>
+      row.playerId === playerIds.aRbTwo ? { ...row, ...bounds } : row,
+    );
+    const snapshot = await new InSeasonDecisionService(repository, () => NOW).getSnapshot(
+      USER_ID,
+      LEAGUE_ID,
+    );
+    if (snapshot?.lineup.state !== "available") throw new Error("Expected available lineup");
+    expect(snapshot.lineup.optimalProjectedPoints).toBe(35);
+    const change = snapshot.lineup.changes.find((row) => row.add?.id === playerIds.aRbTwo);
+    expect(change?.add?.projectedPoints).toBe(25);
+    expect(change?.add?.projectedRange).toBeNull();
+    expect(change?.assessment?.strength).toBe("unrated");
+    expect(change?.assessment?.explanation).toContain("outcome ranges are unavailable");
+  });
+
+  it.each([
+    { floorPoints: "30", ceilingPoints: "10" },
+    { floorPoints: "NaN", ceilingPoints: "30" },
+    { floorPoints: "0", ceilingPoints: "Infinity" },
+    { floorPoints: "", ceilingPoints: "30" },
+    { floorPoints: "30", ceilingPoints: " " },
+    { floorPoints: null, ceilingPoints: "NaN" },
+  ])("rejects malformed explicit bounds without treating them as absent: %j", async (bounds) => {
+    const repository = new FakeRepository();
+    repository.projectionRows = projectionRows.map((row) =>
+      row.playerId === playerIds.aRbTwo ? { ...row, ...bounds } : row,
+    );
+    const snapshot = await new InSeasonDecisionService(repository, () => NOW).getSnapshot(
+      USER_ID,
+      LEAGUE_ID,
+    );
+    expect(snapshot).toBeDefined();
+    expect(() => inSeasonDecisionSnapshotSchema.parse(snapshot)).not.toThrow();
+    if (snapshot?.lineup.state === "available") {
+      expect(snapshot.lineup.assignments.some((row) => row.player.id === playerIds.aRbTwo)).toBe(
+        false,
+      );
+      expect(snapshot.lineup.changes.some((row) => row.add?.id === playerIds.aRbTwo)).toBe(false);
+    }
+  });
+
   it.each([undefined, null, "NaN", "Infinity", "-0.1", "1.1"])(
     "keeps missing or malformed stored confidence (%s) cautious despite disjoint ranges",
     async (confidence) => {
@@ -790,6 +871,45 @@ describe("InSeasonDecisionService", () => {
     );
     expect(ros.notes.join(" ")).toContain("not a week-by-week lineup simulation");
     expect(() => inSeasonDecisionSnapshotSchema.parse(snapshot)).not.toThrow();
+  });
+
+  it.each([
+    { floorPoints: "40", ceilingPoints: "50", expectedRange: { floor: 40, ceiling: 50 } },
+    { floorPoints: "0", ceilingPoints: "10", expectedRange: { floor: 0, ceiling: 10 } },
+    { floorPoints: null, ceilingPoints: null, expectedRange: null },
+  ])("preserves ROS ranges separately from mean-based waiver gains: %j", async (bounds) => {
+    const repository = new FakeRepository();
+    repository.projectionSets = [projectionSet, rosProjectionSet];
+    repository.projectionRowsBySet.set(PROJECTION_SET_ID, projectionRows);
+    repository.projectionRowsBySet.set(
+      ROS_SET_ID,
+      projectionRows.map((row) =>
+        row.playerId === playerIds.freeQb
+          ? {
+              ...row,
+              floorPoints: bounds.floorPoints,
+              ceilingPoints: bounds.ceilingPoints,
+              confidence: null,
+            }
+          : row,
+      ),
+    );
+    repository.findManagedProjectionProfile = () => Promise.resolve(managedRosProfile);
+    const snapshot = await new InSeasonDecisionService(repository, () => NOW).getSnapshot(
+      USER_ID,
+      LEAGUE_ID,
+    );
+    if (snapshot?.waivers.state !== "available") throw new Error("Expected available waivers");
+    const ros = snapshot.waivers.restOfSeason;
+    if (ros.state !== "available") throw new Error("Expected available ROS waivers");
+    const recommendation = ros.recommendations.find((move) => move.add.id === playerIds.freeQb);
+    expect(recommendation?.add.projectedPoints).toBe(30);
+    expect(recommendation?.add.projectedRange).toEqual(bounds.expectedRange);
+    expect(recommendation?.lineupGain).toBe(20);
+    expect(snapshot.waivers.recommendations[0]?.add.projectedRange).toEqual({
+      floor: 27,
+      ceiling: 34,
+    });
   });
 
   it("selects the exact scoring-compatible ROS set over a newer incompatible release", async () => {

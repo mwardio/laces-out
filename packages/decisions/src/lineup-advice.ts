@@ -2,6 +2,8 @@ import type { ProjectionValue } from "@laces-out/domain";
 
 export interface LineupAdviceProjection extends ProjectionValue {
   readonly confidence?: number;
+  /** False when numeric endpoints exist only as a mean-only engine fallback. */
+  readonly intervalAvailable?: boolean;
 }
 
 /** Half of the decision UI's 0.1-point display unit; this is a presentation rule, not a model gate. */
@@ -102,10 +104,10 @@ export function assessLineupChange(
     ![add.floor, add.mean, add.ceiling, remove.floor, remove.mean, remove.ceiling].every(
       Number.isFinite,
     ) ||
-    add.floor > add.mean ||
-    add.mean > add.ceiling ||
-    remove.floor > remove.mean ||
-    remove.mean > remove.ceiling ||
+    add.intervalAvailable === false ||
+    remove.intervalAvailable === false ||
+    add.floor > add.ceiling ||
+    remove.floor > remove.ceiling ||
     add.floor === add.ceiling ||
     remove.floor === remove.ceiling
   )
@@ -119,6 +121,14 @@ export function assessLineupChange(
       strength: "close-call" as const,
       explanation:
         "Limited evidence behind one or both forecasts makes this an uncertain call. The projected ranges may not reliably capture player uncertainty. Recheck current usage and injury news before changing your lineup; the point gap is not a win probability.",
+    };
+  // A skewed distribution's mean can lie outside its central interval. Separated ranges only
+  // support the higher-mean player when the ranges point in that same direction.
+  if (add.ceiling < remove.floor)
+    return {
+      strength: "close-call" as const,
+      explanation:
+        "The higher expected-point forecast has a lower central outcome range. The mean and ranges favor different players, so treat this as an uncertain call; the point gap is not a win probability.",
     };
   const overlap = add.floor <= remove.ceiling && remove.floor <= add.ceiling;
   return overlap

@@ -324,6 +324,43 @@ export interface FirstPartyTeamDefenseProjectionInput {
   readonly config?: Partial<FirstPartyProjectionConfig>;
 }
 
+/** Integer supports, dispersion bounds, and discrete-Gaussian mass arithmetic. */
+export const FIRST_PARTY_TEAM_DEFENSE_ALLOWED_DISTRIBUTION_VERSION =
+  "defense-bounded-discrete-gaussian-allowed-v1";
+
+/**
+ * The array index is the nonnegative integer outcome. Normalize each weight by totalWeight;
+ * retaining the original weights preserves the weekly bucket model's exact summation arithmetic.
+ */
+export interface FirstPartyTeamDefenseIntegerMassDistribution {
+  readonly weights: readonly number[];
+  readonly totalWeight: number;
+  readonly parameters?: FirstPartyTeamDefenseDiscreteGaussianParameters;
+}
+
+/** Exact compact representation of the existing bounded discrete-Gaussian allowed model. */
+export interface FirstPartyTeamDefenseDiscreteGaussianParameters {
+  readonly center: number;
+  readonly standardDeviation: number;
+  readonly maximum: 80 | 800;
+}
+
+export interface FirstPartyTeamDefenseGaussianMassDistribution extends FirstPartyTeamDefenseIntegerMassDistribution {
+  readonly parameters: FirstPartyTeamDefenseDiscreteGaussianParameters;
+}
+
+export interface FirstPartyTeamDefenseAllowedDistributionParameters {
+  readonly pointsAllowed: FirstPartyTeamDefenseDiscreteGaussianParameters;
+  readonly yardsAllowed: FirstPartyTeamDefenseDiscreteGaussianParameters;
+}
+
+export interface FirstPartyTeamDefenseAllowedDistributions {
+  /** Integer support 0..80, inclusive. */
+  readonly pointsAllowed: FirstPartyTeamDefenseGaussianMassDistribution;
+  /** Integer support 0..800, inclusive. */
+  readonly yardsAllowed: FirstPartyTeamDefenseGaussianMassDistribution;
+}
+
 export interface FirstPartyTeamDefenseProjection {
   readonly state: "projected" | "unavailable";
   readonly team: string;
@@ -967,12 +1004,14 @@ const TEAM_DEFENSE_MODELED_COMPONENTS = [
  * `one_point_safeties` (ESPN stat 209, 1 pt) at **zero occurrences in NFL history**, whose rule-of-
  * three upper bound over the same exposure is **0.00057 expected points per team-week**.
  *
- * This is a bounded, disclosed model claim graded by the same gates as everything else — NOT a
- * dropped rule (the rule is mapped, carried in the emitted profile, and multiplied into every scored
- * line) and NOT a remembered rate (the number shipped is the floor of a cited bound, not a recalled
- * frequency). No ingested source carries either event — see §1 and §2 — so there is nothing to fit
- * and nothing to grade; the constant is the model.
+ * This is a disclosed constant-zero approximation, not a fitted event rate. The rules remain
+ * mapped and carried in every scored profile. Current defense training history does not include
+ * these events, and both forecasts and canonical actuals use zero; ordinary backtest metrics
+ * therefore cannot independently validate this omission. The July evidence motivates the limited
+ * approximation rather than proving that an individual future game cannot contain either event.
  *
+ * Scoring support is limited to the documented absolute two/one-point awards below. Larger
+ * custom awards need event data or separately validated evidence rather than extrapolating zero.
  * Extending this list requires a new §4 subsection with its own citable bound, first. A future
  * measurement putting either component at or above 0.01 points per team-week revokes its licence:
  * it must then be modeled from data or returned to the unsupported set (§4.1).
@@ -981,6 +1020,10 @@ const TEAM_DEFENSE_DE_MINIMIS_ZERO_COMPONENTS = [
   "defensive_two_point_returns",
   "one_point_safeties",
 ] as const;
+
+/** Conservative scoring scope of the documented rare-event zero assumptions, not fitted rates. */
+export const TEAM_DEFENSE_ZERO_MODEL_MAX_ABSOLUTE_POINTS: Readonly<Record<string, number>> =
+  Object.freeze({ defensive_two_point_returns: 2, one_point_safeties: 1 });
 
 const TEAM_DEFENSE_COMPONENTS = [
   ...TEAM_DEFENSE_MODELED_COMPONENTS,
@@ -994,12 +1037,12 @@ function applyTeamDefenseDeMinimisZeros(...records: Record<string, number>[]): v
   }
 }
 
-function deriveTeamDefensePointBuckets(
-  components: Record<string, number>,
+function teamDefensePointParameters(
+  components: ProjectionStatComponents,
   training: readonly FirstPartyTeamDefenseWeeklyStatLine[],
   target: FirstPartyTeamDefenseTarget,
   config: FirstPartyProjectionConfig,
-): void {
+): FirstPartyTeamDefenseDiscreteGaussianParameters {
   const center = clamp(components.points_allowed ?? 0, 0, capFor("points_allowed"));
   const historical = training.flatMap((row) => {
     const value = row.components.points_allowed;
@@ -1017,17 +1060,22 @@ function deriveTeamDefensePointBuckets(
           })),
         ) ?? 100);
   const standardDeviation = clamp(Math.sqrt(variance), 5, 18);
-  const pointMass = Array.from({ length: 81 }, (_, points) => ({
-    points,
-    mass: Math.exp(-0.5 * ((points - center) / standardDeviation) ** 2),
-  }));
-  const totalMass = pointMass.reduce((sum, row) => sum + row.mass, 0);
+  return { center, standardDeviation, maximum: 80 };
+}
+
+function deriveTeamDefensePointBuckets(
+  components: Record<string, number>,
+  training: readonly FirstPartyTeamDefenseWeeklyStatLine[],
+  target: FirstPartyTeamDefenseTarget,
+  config: FirstPartyProjectionConfig,
+): void {
+  const { weights, totalWeight } = expandTeamDefenseAllowedDistribution(
+    teamDefensePointParameters(components, training, target, config),
+  );
   for (const bucket of TEAM_DEFENSE_POINTS_ALLOWED_BUCKETS) {
-    components[bucket.component] = pointMass.reduce(
-      (sum, row) =>
-        row.points >= bucket.minimum && row.points <= bucket.maximum
-          ? sum + row.mass / totalMass
-          : sum,
+    components[bucket.component] = weights.reduce(
+      (sum, mass, points) =>
+        points >= bucket.minimum && points <= bucket.maximum ? sum + mass / totalWeight : sum,
       0,
     );
   }
@@ -1041,12 +1089,12 @@ function deriveTeamDefensePointBuckets(
  * model's constants: integer grid 0..800 (matching `COMPONENT_CAPS.yards_allowed`), sigma clamped
  * to [55, 115], variance fallback 7225 (sigma 85) when fewer than two usable rows exist.
  */
-function deriveTeamDefenseYardBuckets(
-  components: Record<string, number>,
+function teamDefenseYardParameters(
+  components: ProjectionStatComponents,
   training: readonly FirstPartyTeamDefenseWeeklyStatLine[],
   target: FirstPartyTeamDefenseTarget,
   config: FirstPartyProjectionConfig,
-): void {
+): FirstPartyTeamDefenseDiscreteGaussianParameters {
   const center = clamp(components.yards_allowed ?? 0, 0, capFor("yards_allowed"));
   const historical = training.flatMap((row) => {
     const value = row.components.yards_allowed;
@@ -1064,25 +1112,138 @@ function deriveTeamDefenseYardBuckets(
           })),
         ) ?? 7225);
   const standardDeviation = clamp(Math.sqrt(variance), 55, 115);
-  const yardMass = Array.from({ length: 801 }, (_, yards) => ({
-    yards,
-    mass: Math.exp(-0.5 * ((yards - center) / standardDeviation) ** 2),
-  }));
-  const totalMass = yardMass.reduce((sum, row) => sum + row.mass, 0);
+  return { center, standardDeviation, maximum: 800 };
+}
+
+function deriveTeamDefenseYardBuckets(
+  components: Record<string, number>,
+  training: readonly FirstPartyTeamDefenseWeeklyStatLine[],
+  target: FirstPartyTeamDefenseTarget,
+  config: FirstPartyProjectionConfig,
+): void {
+  const { weights, totalWeight } = expandTeamDefenseAllowedDistribution(
+    teamDefenseYardParameters(components, training, target, config),
+  );
   // Fail-safe: with sigma >= 55 and a clamped in-grid center, the nearest node carries mass ~1, so
   // total mass cannot vanish in practice. If a degenerate input ever produced zero mass anyway,
   // dividing would write NaN probabilities; instead leave the step-one shrinkage centers (already
   // bounded to [0, 1] by the component cap) untouched.
-  if (!(totalMass > 0)) return;
+  if (!(totalWeight > 0)) return;
   for (const bucket of TEAM_DEFENSE_YARDS_ALLOWED_BUCKETS) {
-    components[bucket.component] = yardMass.reduce(
-      (sum, row) =>
-        row.yards >= bucket.minimum && row.yards <= bucket.maximum
-          ? sum + row.mass / totalMass
-          : sum,
+    components[bucket.component] = weights.reduce(
+      (sum, mass, yards) =>
+        yards >= bucket.minimum && yards <= bucket.maximum ? sum + mass / totalWeight : sum,
       0,
     );
   }
+}
+
+/**
+ * Exposes the exact discrete distributions underlying weekly D/ST tier probabilities. Supplied
+ * points/yards centers are expected components, not realized integer outcomes. Truncation at the
+ * support boundaries means a distribution's expectation need not equal its supplied center.
+ * Only played history strictly before the target contributes, in the weekly model's order.
+ */
+export function firstPartyTeamDefenseAllowedDistributions(
+  input: Pick<FirstPartyTeamDefenseProjectionInput, "target" | "history" | "config"> & {
+    readonly components: ProjectionStatComponents;
+  },
+): FirstPartyTeamDefenseAllowedDistributions {
+  const parameters = firstPartyTeamDefenseAllowedDistributionParameters(input);
+  return {
+    pointsAllowed: expandTeamDefenseAllowedDistribution(parameters.pointsAllowed),
+    yardsAllowed: expandTeamDefenseAllowedDistribution(parameters.yardsAllowed),
+  };
+}
+
+/** Computes the exact existing allowed distributions without allocating their integer grids. */
+export function firstPartyTeamDefenseAllowedDistributionParameters(
+  input: Pick<FirstPartyTeamDefenseProjectionInput, "target" | "history" | "config"> & {
+    readonly components: ProjectionStatComponents;
+  },
+): FirstPartyTeamDefenseAllowedDistributionParameters {
+  const { target, components } = input;
+  if (target.team.trim().length === 0) throw new TypeError("defense target team must not be empty");
+  assertPositiveInteger(target.season, "defense target season");
+  assertPositiveInteger(target.week, "defense target week");
+  for (const component of ["points_allowed", "yards_allowed"] as const) {
+    const center = components[component] ?? 0;
+    if (!Number.isFinite(center) || center < 0) {
+      throw new RangeError(`${component} center must be finite and nonnegative`);
+    }
+  }
+  const config = resolvedConfig(input.config);
+  const training = input.history
+    .filter(
+      (row) => defenseOrdinal(row) < ordinal(target.season, target.week) && row.played !== false,
+    )
+    .sort(compareDefenseLines);
+  return {
+    pointsAllowed: teamDefensePointParameters(components, training, target, config),
+    yardsAllowed: teamDefenseYardParameters(components, training, target, config),
+  };
+}
+
+function expandTeamDefenseAllowedDistribution(
+  parameters: FirstPartyTeamDefenseDiscreteGaussianParameters,
+): FirstPartyTeamDefenseGaussianMassDistribution {
+  const { center, standardDeviation, maximum } = parameters;
+  const weights = Array.from({ length: maximum + 1 }, (_, outcome) =>
+    Math.exp(-0.5 * ((outcome - center) / standardDeviation) ** 2),
+  );
+  const totalWeight = weights.reduce((sum, mass) => sum + mass, 0);
+  return { weights, totalWeight, parameters: { center, standardDeviation, maximum } };
+}
+
+/** Restores a serialized descriptor using the same grid and arithmetic as weekly bucket scoring. */
+export function expandFirstPartyTeamDefenseAllowedDistribution(
+  parameters: FirstPartyTeamDefenseDiscreteGaussianParameters,
+): FirstPartyTeamDefenseGaussianMassDistribution {
+  const { center, standardDeviation, maximum } = parameters;
+  if (maximum !== 80 && maximum !== 800) {
+    throw new RangeError("Defense allowed distribution maximum must be 80 or 800");
+  }
+  if (!Number.isFinite(center) || center < 0 || center > maximum) {
+    throw new RangeError("Defense allowed distribution center must be finite and within support");
+  }
+  const minimumSigma = maximum === 80 ? 5 : 55;
+  const maximumSigma = maximum === 80 ? 18 : 115;
+  if (
+    !Number.isFinite(standardDeviation) ||
+    standardDeviation < minimumSigma ||
+    standardDeviation > maximumSigma
+  ) {
+    throw new RangeError("Defense allowed distribution dispersion is outside the model bounds");
+  }
+  return expandTeamDefenseAllowedDistribution(parameters);
+}
+
+/**
+ * Realized 0/1 indicators share the weekly model's provider boundaries, including overlapping
+ * Yahoo/ESPN tiers. Realized values may exceed forecast support: the final tiers are unbounded.
+ */
+export function firstPartyTeamDefenseRealizedAllowedBuckets(input: {
+  readonly pointsAllowed: number;
+  readonly yardsAllowed: number;
+}): ProjectionStatComponents {
+  for (const [label, value] of [
+    ["pointsAllowed", input.pointsAllowed],
+    ["yardsAllowed", input.yardsAllowed],
+  ] as const) {
+    if (!Number.isSafeInteger(value) || value < 0) {
+      throw new RangeError(`${label} must be a nonnegative safe integer`);
+    }
+  }
+  const components: Record<string, number> = {};
+  for (const bucket of TEAM_DEFENSE_POINTS_ALLOWED_BUCKETS) {
+    components[bucket.component] =
+      input.pointsAllowed >= bucket.minimum && input.pointsAllowed <= bucket.maximum ? 1 : 0;
+  }
+  for (const bucket of TEAM_DEFENSE_YARDS_ALLOWED_BUCKETS) {
+    components[bucket.component] =
+      input.yardsAllowed >= bucket.minimum && input.yardsAllowed <= bucket.maximum ? 1 : 0;
+  }
+  return components;
 }
 
 const INACTIVE_STATUSES = new Set<FirstPartyPlayerStatus>([

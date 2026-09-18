@@ -64,6 +64,28 @@ describe("lineup change assessment", () => {
     expect(result.strength).toBe("model-edge");
     expect(result.explanation).toContain("not a guarantee");
   });
+  it.each([
+    [points(20, 5, 10), points(4, 1, 3)],
+    [points(20, 25, 30), points(18, 15, 20)],
+    [points(-2, -10, -5), points(-3, -20, -15)],
+    [points(2, 0, 1), points(1, -2, -1)],
+  ])("accepts ordered central ranges even when the mean is outside them", (add, remove) => {
+    expect(assessLineupChange(add, remove).strength).toBe("model-edge");
+  });
+  it("qualifies a higher mean whose central range favors the other player", () => {
+    const result = assessLineupChange(points(20, 1, 5), points(18, 10, 14));
+    expect(result.strength).toBe("close-call");
+    expect(result.explanation).toContain("mean and ranges favor different players");
+    expect(result.explanation).toContain("not a win probability");
+  });
+  it("keeps skewed forecasts with limited evidence cautious", () => {
+    const result = assessLineupChange(
+      { ...points(20, 25, 30), confidence: 0 },
+      { ...points(18, 15, 20), confidence: 0.95 },
+    );
+    expect(result.strength).toBe("close-call");
+    expect(result.explanation).toContain("Limited evidence");
+  });
   it("qualifies negative deltas as dependent slot moves", () => {
     expect(assessLineupChange(points(3, 1, 4), points(10, 8, 12)).explanation).toContain(
       "complete lineup plan",
@@ -71,7 +93,14 @@ describe("lineup change assessment", () => {
   });
   it("does not infer certainty from absent, degenerate, or malformed intervals", () => {
     expect(assessLineupChange(points(10, 5, 15)).strength).toBe("unrated");
-    for (const add of [points(10, 10, 10), points(10, 12, 14), points(10, 5, NaN)]) {
+    for (const add of [
+      points(10, 10, 10),
+      points(10, 14, 12),
+      points(10, 5, NaN),
+      points(10, -Infinity, 14),
+      points(Infinity, 5, 14),
+      { ...points(10, 5, 14), intervalAvailable: false },
+    ]) {
       expect(assessLineupChange(add, points(5, 1, 10)).strength).toBe("unrated");
     }
   });

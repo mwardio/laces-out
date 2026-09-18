@@ -26,6 +26,7 @@ import {
 import { NFL_TEAMS, canonicalNflTeamCode } from "@laces-out/domain";
 import {
   FIRST_PARTY_ROS_CONVERGENCE_REFERENCE_SCENARIOS,
+  fitFirstPartyDefenseGameCalibration,
   LEAGUE_SCORING_NORMALIZATION_VERSION,
   normalizeLeagueScoringProfile,
   projectionScoringProfileKey,
@@ -877,6 +878,9 @@ function* firstPartyRosLeagueTargetSteps(
   // withheld structurally rather than filtered out later; it is not an audited per-player skip
   // because nothing about the player was missing.
   const releasablePositions = new Set<string>(input.matchedPositions);
+  // This target owns one pinned history snapshot. Reuse its prior-season fit locally, including
+  // an insufficient-history result, without assuming caller-owned array identities are immutable.
+  let defenseGameCalibration: ReturnType<typeof fitFirstPartyDefenseGameCalibration> | undefined;
   for (const player of input.candidatePlayers) {
     const position = normalizePosition(player.position);
     if (!releasablePositions.has(position) || player.team === null) continue;
@@ -885,11 +889,16 @@ function* firstPartyRosLeagueTargetSteps(
     expectedPlayers += 1;
 
     if (position === "DST") {
+      defenseGameCalibration ??= fitFirstPartyDefenseGameCalibration(
+        input.defenseFeatureHistory,
+        input.season,
+      );
       const assembled = assembleFirstPartyRosDefenseCandidateInputs({
         defense: { playerId: player.playerId, team: player.team },
         window,
         featureHistory: input.defenseFeatureHistory,
         calibration: input.defenseCalibration,
+        preparedGameCalibration: defenseGameCalibration,
         schedules: input.schedules,
         scoringProfile: input.scoringProfile,
         seed: `live-ros-football:${input.season}:${window.asOfWeek}:${player.playerId}`,

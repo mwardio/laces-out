@@ -1,5 +1,7 @@
 import {
+  fitFirstPartyDefenseGameCalibration,
   projectionScoringProfileKey,
+  projectFirstPartyRestOfSeason,
   rosScoringProfile,
   runFirstPartyProjectionBacktest,
   runFirstPartyTeamDefenseBacktest,
@@ -7,7 +9,7 @@ import {
   type FirstPartyWeeklyStatLine,
   type ProjectionScoringProfile,
 } from "@laces-out/projections";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   calibrateHistoricalRosAvailability,
@@ -17,6 +19,7 @@ import {
 import {
   assembleFirstPartyRosDefenseCandidateInputs,
   buildFirstPartyRosPlayerCandidate,
+  diagnoseBoundedFirstPartyRosConvergence,
   simulateFirstPartyRosCandidate,
 } from "./first-party-ros-candidates.js";
 import type { ProjectionScheduleFact } from "./first-party-projection-inputs.js";
@@ -34,7 +37,7 @@ const scoringProfile: ProjectionScoringProfile = {
 };
 
 const seasons = [2024, 2025, 2026] as const;
-const teams = ["BUF", "MIA", "NYJ", "NEP"] as const;
+const teams = ["BUF", "MIA", "NYJ", "NE"] as const;
 
 function opponentOf(team: string): string {
   const index = teams.indexOf(team as (typeof teams)[number]);
@@ -212,7 +215,7 @@ describe("first-party live ROS candidate builder", () => {
     expect(byeWeek).toMatchObject({ scheduled: false, bye: true, availabilityProbability: 0 });
   });
 
-  it("builds and scores a complete D/ST remaining-season candidate", () => {
+  it("builds identical D/ST inputs, checksums and outcomes with a prepared game fit", () => {
     const defenseHistory: FirstPartyTeamDefenseWeeklyStatLine[] = [];
     for (const season of seasons) {
       const lastWeek = season === 2026 ? 6 : 16;
@@ -230,6 +233,7 @@ describe("first-party live ROS candidate builder", () => {
               defensive_safeties: 0,
               defensive_touchdowns: week % 7 === 0 ? 1 : 0,
               defensive_blocked_kicks: 0,
+              fourth_down_stops: 0,
               special_teams_touchdowns: 0,
               points_allowed: 17 + (week % 10),
               yards_allowed: 290 + week * 3,
@@ -239,7 +243,7 @@ describe("first-party live ROS candidate builder", () => {
       }
     }
     const defenseProfile = rosScoringProfile("espn-standard-2pt").profile;
-    const assembled = assembleFirstPartyRosDefenseCandidateInputs({
+    const defenseInput = {
       defense: { playerId: "DST:BUF", team: "BUF" },
       window: { season: 2026, asOfWeek: 6, windowStartWeek: 7, windowEndWeek: 12 },
       featureHistory: defenseHistory,
@@ -250,15 +254,83 @@ describe("first-party live ROS candidate builder", () => {
       scoringProfile: defenseProfile,
       seed: "live:2026:6:DST:BUF",
       scenarioCount: 256,
+    };
+    const assembled = assembleFirstPartyRosDefenseCandidateInputs(defenseInput);
+    const preparedGameCalibration = fitFirstPartyDefenseGameCalibration(defenseHistory, 2026);
+    const prepared = assembleFirstPartyRosDefenseCandidateInputs({
+      ...defenseInput,
+      preparedGameCalibration,
     });
 
     expect(assembled).not.toBeNull();
+    expect(prepared).toEqual(assembled);
     const candidate = simulateFirstPartyRosCandidate(assembled!);
+    expect(simulateFirstPartyRosCandidate(prepared!)).toEqual(candidate);
     expect(candidate.position).toBe("DST");
     expect(candidate.scheduledGames).toBe(6);
     expect(candidate.contextual.state).toBe("projected");
     expect(candidate.recency.state).toBe("projected");
     expect(candidate.contextual.meanPoints).toBeGreaterThan(0);
     expect(candidate.inputChecksum).toMatch(/^[a-f0-9]{64}$/u);
+
+    const project = vi.fn(projectFirstPartyRestOfSeason);
+    const convergence = diagnoseBoundedFirstPartyRosConvergence({
+      projectionInput: assembled!.contextualInput,
+      releaseScenarioCount: 256,
+      referenceScenarioCount: 512,
+      releaseProjection: candidate.contextual,
+      project,
+    });
+    expect(convergence).toMatchObject({ lowerScenarioCount: 256, referenceScenarioCount: 512 });
+    // A matching discrete-defense release reuses its existing paths; only the reference runs.
+    expect(project).toHaveBeenCalledExactlyOnceWith({
+      ...assembled!.contextualInput,
+      scenarioCount: 512,
+    });
+    project.mockClear();
+    expect(() =>
+      diagnoseBoundedFirstPartyRosConvergence({
+        projectionInput: assembled!.contextualInput,
+        releaseScenarioCount: 256,
+        referenceScenarioCount: 512,
+        releaseProjection: {
+          ...candidate.contextual,
+          provenance: { ...candidate.contextual.provenance, seedHash: "0".repeat(64) },
+        },
+        project,
+      }),
+    ).toThrow("does not match the convergence diagnostic's own input");
+    expect(project).not.toHaveBeenCalled();
+  });
+
+  it("preserves insufficient-history results and rejects prepared fits from another forecast season", () => {
+    const input = {
+      defense: { playerId: "DST:BUF", team: "BUF" },
+      window: { season: 2026, asOfWeek: 6, windowStartWeek: 7, windowEndWeek: 12 },
+      featureHistory: [],
+      calibration: runFirstPartyTeamDefenseBacktest([]).calibration,
+      schedules,
+      scoringProfile,
+      seed: "prepared-defense-insufficient",
+    };
+    const preparedGameCalibration = fitFirstPartyDefenseGameCalibration([], 2026);
+    expect(assembleFirstPartyRosDefenseCandidateInputs(input)).toBeNull();
+    expect(
+      assembleFirstPartyRosDefenseCandidateInputs({ ...input, preparedGameCalibration }),
+    ).toBeNull();
+    for (const forecastSeason of [2025, 2027]) {
+      expect(() =>
+        assembleFirstPartyRosDefenseCandidateInputs({
+          ...input,
+          preparedGameCalibration: fitFirstPartyDefenseGameCalibration([], forecastSeason),
+        }),
+      ).toThrow("must match the forecast season");
+    }
+    expect(() =>
+      assembleFirstPartyRosDefenseCandidateInputs({
+        ...input,
+        preparedGameCalibration: { ...preparedGameCalibration, throughSeason: 2026 },
+      }),
+    ).toThrow("must match the forecast season");
   });
 });

@@ -1,6 +1,12 @@
 import {
+  DEFENSE_COPULA_COMPONENTS,
+  DEFENSE_EVENT_COMPONENTS,
+  FIRST_PARTY_DEFENSE_GAME_VERSION,
+  defenseGameRankDependence,
   firstPartyProjectionComponentsForPosition,
   firstPartyTeamDefenseProjectionComponents,
+  firstPartyTeamDefenseRealizedAllowedBuckets,
+  type DefenseEventComponent,
   type FirstPartyRosOutcomeInput,
   type FirstPartyRosPosition,
 } from "@laces-out/projections";
@@ -44,16 +50,29 @@ export function denseSimulationInput(
       extra_points_missed: 0.1,
       extra_points_attempted: 2.6,
     });
-  else if (position === "DST")
+  else if (position === "DST") {
+    const low = firstPartyTeamDefenseRealizedAllowedBuckets({
+      pointsAllowed: 0,
+      yardsAllowed: 200,
+    });
+    const high = firstPartyTeamDefenseRealizedAllowedBuckets({
+      pointsAllowed: 44,
+      yardsAllowed: 460,
+    });
     Object.assign(components, {
-      sacks: 2.5,
-      interceptions: 1.1,
-      fumble_recoveries: 0.8,
+      ...Object.fromEntries(Object.keys(low).map((key) => [key, (low[key]! + high[key]!) / 2])),
+      defensive_sacks: 2.5,
+      defensive_interceptions: 1.1,
+      defensive_fumble_recoveries: 0.8,
+      defensive_safeties: 0.05,
+      defensive_blocked_kicks: 0.1,
+      fourth_down_stops: 0.9,
+      special_teams_touchdowns: 0.08,
       points_allowed: 22,
       yards_allowed: 330,
-      touchdowns: 0.15,
+      defensive_touchdowns: 0.15,
     });
-  else
+  } else
     Object.assign(components, {
       passing_attempts: 32,
       passing_completions: 22,
@@ -84,8 +103,23 @@ export function denseSimulationInput(
       components[key] = Math.max(0, components[key.slice(0, -12)] ?? 0);
   }
   const recency = Object.fromEntries(
-    Object.entries(components).map(([key, value]) => [key, value * 0.87]),
+    Object.entries(components).map(([key, value]) => [
+      key,
+      position === "DST" && (key.endsWith("_probability") || key.endsWith("_allowed"))
+        ? value
+        : value * 0.87,
+    ]),
   );
+  const defenseDistributions = {
+    pointsAllowed: {
+      weights: Array.from({ length: 45 }, (_, index) => Number(index === 0 || index === 44)),
+      totalWeight: 2,
+    },
+    yardsAllowed: {
+      weights: Array.from({ length: 461 }, (_, index) => Number(index === 200 || index === 460)),
+      totalWeight: 2,
+    },
+  };
   const { scoringProfile: _profile, ...base } = historicalOutcomeInputFixture();
   void _profile;
   return {
@@ -105,9 +139,47 @@ export function denseSimulationInput(
       contextualComponents: components,
       recencyComponents: recency,
       componentElasticities: Object.fromEntries(
-        Object.keys(components).map((stat) => [stat, { role: 0.7, production: 1.1 }]),
+        Object.keys(components).map((stat) => [
+          stat,
+          position === "DST" ? { role: 0, production: 0 } : { role: 0.7, production: 1.1 },
+        ]),
       ),
+      ...(position === "DST" && week !== 6
+        ? {
+            defenseDistributions: {
+              contextual: defenseDistributions,
+              recency: defenseDistributions,
+            },
+          }
+        : {}),
     })),
+    ...(position === "DST"
+      ? {
+          availability: {
+            state: "active" as const,
+            newAbsenceProbability: 0,
+            recoveryProbability: 1,
+            reserveRecoveryProbability: 1,
+            limitedRoleMultiplier: 1,
+            returnRoleMultiplier: 1,
+          },
+          role: {
+            currentMultiplier: 1,
+            persistence: 1,
+            innovationVolatility: 0,
+            weeklyProductionVolatility: 0,
+            minimumMultiplier: 1,
+            maximumMultiplier: 1,
+          },
+          defense: {
+            version: FIRST_PARTY_DEFENSE_GAME_VERSION,
+            overdispersion: Object.fromEntries(
+              DEFENSE_EVENT_COMPONENTS.map((component) => [component, 0.1]),
+            ) as Record<DefenseEventComponent, number>,
+            dependence: defenseGameRankDependence([DEFENSE_COPULA_COMPONENTS.map(() => 0)]),
+          },
+        }
+      : {}),
     ...(position === "K"
       ? {
           kicker: {

@@ -95,6 +95,7 @@ import {
   recentRoleContext,
   FIRST_PARTY_INPUT_EPOCH_VERSION,
   FIRST_PARTY_PLAYER_HISTORY_VERSION,
+  FIRST_PARTY_DEFENSE_HISTORY_VERSION,
   type ProjectionScheduleFact,
   type ProjectionInjuryFact,
   type ProjectionSnapFact,
@@ -590,6 +591,7 @@ export function projectionTrainingCacheKey(input: {
     fitCacheVersion: "weekly-prior-fit-v1",
     modelVersion: FIRST_PARTY_PROJECTION_MODEL_VERSION,
     playerHistoryVersion: FIRST_PARTY_PLAYER_HISTORY_VERSION,
+    defenseHistoryVersion: FIRST_PARTY_DEFENSE_HISTORY_VERSION,
     sourceSchemaVersion,
     season: input.season,
     firstTargetWeek: input.firstTargetWeek,
@@ -1597,6 +1599,7 @@ export class FirstPartyProjectionService implements ProjectionRefreshService {
       const baseChecksum = projectionInputChecksum({
         modelVersion: FIRST_PARTY_PROJECTION_MODEL_VERSION,
         playerHistoryVersion: FIRST_PARTY_PLAYER_HISTORY_VERSION,
+        defenseHistoryVersion: FIRST_PARTY_DEFENSE_HISTORY_VERSION,
         inputSnapshotVersion: inputSnapshot.version,
         sourceManifestChecksum: inputSnapshot.sourceManifest.checksum,
         mutableInputChecksum: inputSnapshot.mutableChecksum,

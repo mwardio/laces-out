@@ -1,6 +1,9 @@
 import { createHash } from "node:crypto";
 
 import {
+  FIRST_PARTY_DEFENSE_GAME_VERSION,
+  fitFirstPartyDefenseGameCalibration,
+  firstPartyTeamDefenseAllowedDistributionParameters,
   FIRST_PARTY_PROJECTION_MODEL_VERSION,
   FIRST_PARTY_ROS_AVAILABILITY_EVIDENCE_ALPHA,
   FIRST_PARTY_ROS_COVERAGE_EVIDENCE_ALPHA,
@@ -2100,6 +2103,10 @@ async function createDefenseDraft(input: {
   /** Canonical actual components from the official weekly D/ST expanding-window backtest. */
   readonly outcomeHistory: readonly FirstPartyTeamDefenseWeeklyStatLine[];
   readonly calibration: FirstPartyTeamDefenseCalibration;
+  readonly gameCalibration: Extract<
+    ReturnType<typeof fitFirstPartyDefenseGameCalibration>,
+    { readonly state: "fitted" }
+  >;
   readonly schedules: readonly ProjectionScheduleFact[];
   readonly scoringProfile: ProjectionScoringProfile;
   readonly evaluateProjection: HistoricalRosProjectionEvaluator;
@@ -2146,6 +2153,22 @@ async function createDefenseDraft(input: {
       bye: !scheduled,
       contextualComponents,
       recencyComponents,
+      ...(scheduled
+        ? {
+            defenseDistributions: {
+              contextual: firstPartyTeamDefenseAllowedDistributionParameters({
+                components: contextualComponents,
+                history: input.featureHistory,
+                target,
+              }),
+              recency: firstPartyTeamDefenseAllowedDistributionParameters({
+                components: recencyComponents,
+                history: input.featureHistory,
+                target,
+              }),
+            },
+          }
+        : {}),
       componentElasticities: historicalRosComponentElasticities(
         contextualComponents,
         recencyComponents,
@@ -2176,12 +2199,17 @@ async function createDefenseDraft(input: {
     currentMultiplier: 1,
     persistence: 1,
     innovationVolatility: 0,
-    weeklyProductionVolatility: 0.15,
+    weeklyProductionVolatility: 0,
     minimumMultiplier: 1,
     maximumMultiplier: 1,
   };
+  const defense = {
+    version: FIRST_PARTY_DEFENSE_GAME_VERSION,
+    overdispersion: input.gameCalibration.overdispersion,
+    dependence: input.gameCalibration.dependence,
+  } as const;
   const inputChecksum = historicalRosChecksum({
-    version: "historical-ros-defense-football-input-v3",
+    version: "historical-ros-defense-football-input-v4",
     productionBasis: HISTORICAL_ROS_PRODUCTION_BASIS_VERSION,
     playerId,
     position: "DST",
@@ -2195,6 +2223,8 @@ async function createDefenseDraft(input: {
     fingerprints,
     availability,
     role,
+    defense,
+    defenseCalibrationEvidence: input.gameCalibration,
   });
   const common = {
     playerId,
@@ -2207,6 +2237,7 @@ async function createDefenseDraft(input: {
     weeks,
     availability,
     role,
+    defense,
     scoringProfile: input.scoringProfile,
     inputChecksum,
     weeklyModelVersion: HISTORICAL_ROS_CANDIDATE_PAIR_VERSION,
@@ -2454,6 +2485,9 @@ export async function buildHistoricalRosBacktest(
     const defenseCalibration = includesDefense
       ? runFirstPartyTeamDefenseBacktest(defenseTraining).calibration
       : null;
+    const defenseGameCalibration = includesDefense
+      ? fitFirstPartyDefenseGameCalibration(defenseTraining, season)
+      : null;
     const playerCalibration =
       weeklyBacktest === null
         ? null
@@ -2522,7 +2556,7 @@ export async function buildHistoricalRosBacktest(
           else skippedForecasts += 1;
         }
       }
-      if (defenseCalibration !== null) {
+      if (defenseCalibration !== null && defenseGameCalibration?.state === "fitted") {
         const defenseFeatures = historicalRosDefenseFeatureRows(
           input.defenseHistory,
           season,
@@ -2545,6 +2579,7 @@ export async function buildHistoricalRosBacktest(
             featureHistory: defenseFeatures,
             outcomeHistory: defenseOutcomeHistory,
             calibration: defenseCalibration,
+            gameCalibration: defenseGameCalibration,
             schedules: input.schedules,
             scoringProfile: input.scoringProfile,
           });

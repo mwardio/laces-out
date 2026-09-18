@@ -4,22 +4,29 @@ import os from "node:os";
 import path from "node:path";
 
 import {
+  DEFENSE_COPULA_COMPONENTS,
   FIRST_PARTY_ROS_CONVERGENCE_REFERENCE_SCENARIOS,
   FIRST_PARTY_ROS_DEFAULT_SCENARIOS,
+  defenseGameRankDependence,
+  firstPartyRosSeedHash,
   projectFirstPartyRestOfSeason,
   simulateFirstPartyRosOutcomes,
+  type FirstPartyRosProjectionInput,
 } from "@laces-out/projections";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   createRosHistoricalOutcomeEvaluator,
+  restoreCachedRosHistoricalOutcome,
   rosHistoricalOutcomeCacheKey,
+  scoreCachedRosHistoricalOutcome,
 } from "./ros-historical-outcome-replay.js";
 import { createRosOutcomeCache, type RosOutcomeCache } from "./ros-outcome-cache.js";
 import { createRosOutcomeSimulationPool } from "./ros-outcome-simulation-pool.js";
 
 import { historicalOutcomeInputFixture as input } from "./ros-historical-outcome.test-fixtures.js";
 import { denseSimulationInput } from "./ros-outcome-simulation.test-fixtures.js";
+import { rosLiveOutcomeCacheKey } from "./ros-live-outcomes.js";
 
 vi.mock("node:fs/promises", async (importOriginal) => ({
   ...(await importOriginal<typeof FileSystemPromises>()),
@@ -62,6 +69,168 @@ afterEach(async () => {
 });
 
 describe("historical outcome corpus replay", () => {
+  it("pins seventeen D/ST weeks and a full seven-season packed history within unchanged cache bounds", () => {
+    const base = denseSimulationInput("DST", "contextual");
+    const dependence = defenseGameRankDependence(
+      Array.from({ length: 3_808 }, (_, row) =>
+        DEFENSE_COPULA_COMPONENTS.map((_, dimension) => row % (dimension + 2)),
+      ),
+    );
+    const allowed = {
+      pointsAllowed: { center: 22, standardDeviation: 12, maximum: 80 as const },
+      yardsAllowed: { center: 330, standardDeviation: 85, maximum: 800 as const },
+    };
+    const request: FirstPartyRosProjectionInput = {
+      ...base,
+      asOfWeek: 1,
+      asOfAt: "2026-09-15T00:00:00.000Z",
+      windowStartWeek: 2,
+      windowEndWeek: 18,
+      scoringProfile: { id: "defense", rules: [{ statId: "defensive_sacks", points: 1 }] },
+      defense: { ...base.defense!, dependence },
+      weeks: Array.from({ length: 17 }, (_, index) => ({
+        ...base.weeks[0]!,
+        week: index + 2,
+        scheduled: index !== 4,
+        bye: index === 4,
+        defenseDistributions: { contextual: allowed, recency: allowed },
+      })),
+    };
+    expect(Buffer.byteLength(JSON.stringify(request))).toBeLessThan(512 * 1_024);
+    for (const key of [rosHistoricalOutcomeCacheKey, rosLiveOutcomeCacheKey]) {
+      const baseline = key(request);
+      expect(baseline.identity).toMatch(/^[a-f0-9]{64}$/u);
+      for (const changed of [
+        {
+          ...request,
+          defense: {
+            ...request.defense!,
+            overdispersion: { ...request.defense!.overdispersion, defensive_sacks: 0.2 },
+          },
+        },
+        {
+          ...request,
+          defense: {
+            ...request.defense!,
+            dependence: defenseGameRankDependence([DEFENSE_COPULA_COMPONENTS.map(() => 0)]),
+          },
+        },
+        {
+          ...request,
+          weeks: request.weeks.map((week, index) =>
+            index === 0
+              ? {
+                  ...week,
+                  defenseDistributions: {
+                    contextual: {
+                      ...allowed,
+                      pointsAllowed: { ...allowed.pointsAllowed, standardDeviation: 13 },
+                    },
+                    recency: allowed,
+                  },
+                }
+              : week,
+          ),
+        },
+      ])
+        expect(key(changed)).not.toEqual(baseline);
+    }
+  });
+
+  it.each(["contextual", "availability-aware-recency"] as const)(
+    "restores discrete D/ST seeds in full-input and compact corpus replays for %s",
+    async (strategy) => {
+      const storage = await cache();
+      const request = {
+        ...denseSimulationInput("DST", strategy),
+        scenarioCount: 128,
+        scoringProfile: {
+          id: "defense-points-allowed",
+          rules: [
+            { statId: "defensive_sacks", points: 1 },
+            { statId: "points_allowed_0_probability", points: 10 },
+            { statId: "points_allowed_35_plus_probability", points: -4 },
+          ],
+        },
+      };
+      const build = createRosHistoricalOutcomeEvaluator({ cache: storage.cache, mode: "build" });
+      const generated = await build(request);
+      const forbidden = vi.fn(() => {
+        throw new Error("Replay must not simulate");
+      });
+      const replay = createRosHistoricalOutcomeEvaluator({
+        cache: storage.cache,
+        mode: "replay",
+        simulate: forbidden,
+      });
+      expect(await replay(request)).toEqual(generated);
+      const key = rosHistoricalOutcomeCacheKey(request);
+      const expected = {
+        playerId: request.playerId,
+        position: request.position,
+        forecastSeason: request.season,
+        asOfWeek: request.asOfWeek,
+        windowStartWeek: request.windowStartWeek,
+        windowEndWeek: request.windowEndWeek,
+        inputChecksum: request.inputChecksum,
+        strategy: request.strategy,
+        weeklyModelVersion: request.weeklyModelVersion,
+        scheduledGames: 3,
+      };
+      const rescoredProfile = {
+        id: "defense-yards-allowed",
+        rules: [
+          { statId: "defensive_interceptions", points: 3 },
+          { statId: "yards_allowed_450_499_probability", points: -5 },
+        ],
+      };
+      for (const scoringProfile of [request.scoringProfile, rescoredProfile]) {
+        const compact = await scoreCachedRosHistoricalOutcome({
+          cache: storage.cache,
+          key,
+          expected,
+          scoringProfile,
+          scenarioCount: 128,
+        });
+        const direct = projectFirstPartyRestOfSeason({ ...request, scoringProfile });
+        expect(compact.seedHash).toBe(firstPartyRosSeedHash(request));
+        for (const metric of [
+          "meanPoints",
+          "standardDeviation",
+          "p15Points",
+          "p50Points",
+          "p85Points",
+        ] as const)
+          expect(compact[metric]).toBeCloseTo(direct[metric], 10);
+      }
+      expect(forbidden).not.toHaveBeenCalled();
+      const saved = await storage.cache.read(key);
+      if (saved.state !== "hit") throw new Error("Expected saved D/ST evidence");
+      expect(() =>
+        restoreCachedRosHistoricalOutcome(
+          saved.ensemble,
+          {
+            ...key,
+            modelVersion: "laces-ros-distribution-v12",
+          },
+          expected,
+        ),
+      ).toThrow("outcome_evidence_corrupt");
+      for (const provenance of [
+        { modelVersion: "laces-ros-distribution-v12" },
+        // The formerly duplicated formula omits the D/ST process suffix.
+        { seedHash: firstPartyRosSeedHash({ ...request, position: "WR" }) },
+      ]) {
+        const malformed = structuredClone(saved.ensemble);
+        const core = malformed.metadata.core as Record<string, unknown>;
+        core.provenance = { ...(core.provenance as Record<string, unknown>), ...provenance };
+        expect(() => restoreCachedRosHistoricalOutcome(malformed, key, expected)).toThrow(
+          "outcome_evidence_corrupt",
+        );
+      }
+    },
+  );
+
   it.each([
     ["contextual", "fa2b0fc843c800cbe4e17e8bd93b7957e67526f146acfdf637eec6863311a745"],
     [
@@ -69,10 +238,10 @@ describe("historical outcome corpus replay", () => {
       "1dae0d06bf91824a4d2de9607513479207b90cd9f06a40e01ff2be6654a22db8",
     ],
   ] as const)(
-    "invalidates the v11 physical D/ST cache key under the new model identity for %s",
+    "does not reuse captured v11 D/ST cache identities with current physical inputs for %s",
     (strategy, expectedIdentity) => {
-      // These keys were captured under v11. The v12 model identity deliberately invalidates
-      // the entire physical corpus, including positions whose component centers are unchanged.
+      // These keys were captured under v11. The current model and complete discrete-game
+      // inputs have changed; explicit old-model rejection is tested separately above.
       const request = {
         ...denseSimulationInput("DST", strategy),
         scoringProfile: input().scoringProfile,

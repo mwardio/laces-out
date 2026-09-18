@@ -3,6 +3,16 @@ import {
   projectionScoringRulesFromProfileKey,
 } from "./scoring-position-keys.js";
 import {
+  DEFENSE_GAME_UNIFORMS,
+  FIRST_PARTY_DEFENSE_GAME_VERSION,
+  prepareFirstPartyDefenseGame,
+  sampleFirstPartyDefenseGame,
+  type DefenseEventComponent,
+  type DefenseAllowedDistribution,
+  type DefenseGameDependence,
+  type PreparedDefenseGame,
+} from "./team-defense-game.js";
+import {
   SCORING_LONG_TOUCHDOWN_COMPONENTS,
   SCORING_WHOLE_GROUP_COMPONENTS,
   SCORING_SIGNED_YARDAGE_COMPONENTS,
@@ -14,8 +24,8 @@ import {
   type ProjectionStatComponents,
 } from "./scoring.js";
 
-/** v12 consumes weekly v15's opportunity-conditioned priors for sparse player production. */
-export const FIRST_PARTY_ROS_MODEL_VERSION = "laces-ros-distribution-v12";
+/** v13 samples discrete D/ST games and shared provider brackets instead of fractional centers. */
+export const FIRST_PARTY_ROS_MODEL_VERSION = "laces-ros-distribution-v13";
 /**
  * v11 adds nested long-touchdown counts to the scoring-independent football model. Its historical
  * proof must include the play-by-play source; earlier outcome vectors cannot certify these bonuses.
@@ -216,6 +226,16 @@ export interface FirstPartyRosWeeklyScenarioInput {
   readonly recencyComponents: ProjectionStatComponents;
   /** Every component in either candidate must have an explicit elasticity. */
   readonly componentElasticities: Readonly<Record<string, FirstPartyRosComponentElasticity>>;
+  /** Required on scheduled D/ST weeks; both candidates use the weekly model's exact grids. */
+  readonly defenseDistributions?: Readonly<
+    Record<
+      "contextual" | "recency",
+      {
+        readonly pointsAllowed: DefenseAllowedDistribution;
+        readonly yardsAllowed: DefenseAllowedDistribution;
+      }
+    >
+  >;
   readonly newAbsenceProbability?: number;
   readonly recoveryProbability?: number;
 }
@@ -292,6 +312,12 @@ export interface FirstPartyRosProjectionInput {
   readonly scoringProfile: ProjectionScoringProfile;
   /** Required for position K; rejected for every other position. */
   readonly kicker?: FirstPartyRosKickerProcessInput;
+  /** Required for D/ST. Fitted from completed prior seasons, independent of league scoring. */
+  readonly defense?: {
+    readonly version: typeof FIRST_PARTY_DEFENSE_GAME_VERSION;
+    readonly overdispersion: Readonly<Record<DefenseEventComponent, number>>;
+    readonly dependence: DefenseGameDependence;
+  };
   /** Exact pinned upstream/model input checksum. */
   readonly inputChecksum: string;
   /** Version of the weekly candidates supplied to this model. */
@@ -1475,6 +1501,33 @@ function validateProjectionInput(input: FirstPartyRosProjectionInput): {
   } else if (input.kicker !== undefined) {
     throw new Error("ROS kicker process input is only supported for position K");
   }
+  if (position === "DST") {
+    if (input.defense?.version !== FIRST_PARTY_DEFENSE_GAME_VERSION) {
+      throw new Error("ROS defense game process input is required for position DST");
+    }
+    if (weeks.some((week) => week.scheduled && !week.defenseDistributions)) {
+      throw new Error("ROS defense distributions are required for every scheduled week");
+    }
+    if (
+      input.availability.state !== "active" ||
+      input.availability.newAbsenceProbability !== 0 ||
+      weeks.some((week) => (week.newAbsenceProbability ?? 0) !== 0)
+    ) {
+      throw new Error("ROS team defenses cannot use player absence transitions");
+    }
+    if (
+      input.role.currentMultiplier !== 1 ||
+      input.role.minimumMultiplier !== 1 ||
+      input.role.maximumMultiplier !== 1 ||
+      input.role.innovationVolatility !== 0 ||
+      input.role.weeklyProductionVolatility !== 0 ||
+      (input.role.centerVolatility ?? 0) !== 0
+    ) {
+      throw new Error("ROS defense game process cannot also apply player production shocks");
+    }
+  } else if (input.defense !== undefined || weeks.some((week) => week.defenseDistributions)) {
+    throw new Error("ROS defense game process input is only supported for position DST");
+  }
   const scoreComponents = compileProjectionScorer(input.scoringProfile);
   const scenarioCount = input.scenarioCount ?? FIRST_PARTY_ROS_DEFAULT_SCENARIOS;
   if (
@@ -1645,6 +1698,7 @@ function simulatePair(
   componentSums: Record<string, number>,
   audit: ScenarioPairAudit,
   kickerContext: KickerContext | null,
+  defenseGames: readonly (PreparedDefenseGame | null)[] | null,
   componentScaling: readonly PreparedComponentScaling[] | null,
   scoreComponents: (components: ProjectionStatComponents) => number,
   onWeek?: (scenario: FirstPartyRosObservedWeek) => void,
@@ -1663,9 +1717,11 @@ function simulatePair(
   // window. For non-K, when centerVolatility is zero no draw is consumed, preserving the v6
   // stream byte-for-byte. The kicker branch draws unconditionally so its stream layout never
   // depends on a calibrated parameter value.
-  const centerVolatility = kickerContext
-    ? kickerContext.process.centerVolatility
-    : (input.role.centerVolatility ?? 0);
+  const centerVolatility = defenseGames
+    ? 0
+    : kickerContext
+      ? kickerContext.process.centerVolatility
+      : (input.role.centerVolatility ?? 0);
   const centerInnovation = kickerContext || centerVolatility > 0 ? normal(random) : 0;
   const leftCenter =
     centerVolatility > 0
@@ -1691,7 +1747,9 @@ function simulatePair(
     let rightRoleMultiplier = 1;
     let productionInnovation = 0;
     let countUniforms: readonly number[] | null = null;
-    if (kickerContext) {
+    if (defenseGames) {
+      countUniforms = Array.from({ length: DEFENSE_GAME_UNIFORMS }, () => random());
+    } else if (kickerContext) {
       countUniforms = Array.from({ length: KICKER_UNIFORMS_PER_WEEK }, () => random());
     } else {
       const roleInnovation = normal(random);
@@ -1733,15 +1791,22 @@ function simulatePair(
           availabilityRoleMultiplier *= input.availability.returnRoleMultiplier;
         }
         const roleMultiplier = scenario.role * availabilityRoleMultiplier * scenario.center;
-        const components = kickerContext
-          ? sampleKickerGame(
-              kickerContext.weekParams[index]!,
-              kickerContext.process,
-              roleMultiplier,
-              countUniforms!,
-              side === 1,
+        const components = defenseGames
+          ? sampleFirstPartyDefenseGame(
+              defenseGames[index]!,
+              side === 0
+                ? countUniforms!
+                : countUniforms!.map((draw) => Math.min(1 - Number.EPSILON, 1 - draw)),
             )
-          : scaledComponents(componentScaling![index]!, roleMultiplier, scenario.production);
+          : kickerContext
+            ? sampleKickerGame(
+                kickerContext.weekParams[index]!,
+                kickerContext.process,
+                roleMultiplier,
+                countUniforms!,
+                side === 1,
+              )
+            : scaledComponents(componentScaling![index]!, roleMultiplier, scenario.production);
         observedComponents = components;
         addComponents(scenario.result.components, componentSums, components);
         points = scoreComponents(components);
@@ -1797,6 +1862,30 @@ export interface FirstPartyRosObservedWeek {
   readonly components: ProjectionStatComponents;
 }
 
+/** Shared by fresh simulation and both reusable-outcome reconstruction paths. */
+export function firstPartyRosSeedHash(
+  input: Pick<
+    FirstPartyRosProjectionInput,
+    | "position"
+    | "seed"
+    | "inputChecksum"
+    | "playerId"
+    | "strategy"
+    | "season"
+    | "asOfWeek"
+    | "asOfAt"
+    | "windowStartWeek"
+    | "windowEndWeek"
+  >,
+): string {
+  const material = `${FIRST_PARTY_ROS_SEED_VERSION}|${input.seed}|${input.inputChecksum}|${input.playerId}|${input.strategy}|${input.season}|${input.asOfWeek}|${input.asOfAt}|${input.windowStartWeek}|${input.windowEndWeek}`;
+  return sha256Hex(
+    normalizedPosition(input.position) === "DST"
+      ? `${material}|${FIRST_PARTY_DEFENSE_GAME_VERSION}`
+      : material,
+  );
+}
+
 export function projectFirstPartyRestOfSeason(
   input: FirstPartyRosProjectionInput,
   /** Called once per joint path, in stable antithetic order; does not consume random draws. */
@@ -1809,8 +1898,7 @@ export function projectFirstPartyRestOfSeason(
   onWeek?: (scenario: FirstPartyRosObservedWeek) => void,
 ): FirstPartyRosProjection {
   const validated = validateProjectionInput(input);
-  const seedMaterial = `${FIRST_PARTY_ROS_SEED_VERSION}|${input.seed}|${input.inputChecksum}|${input.playerId}|${input.strategy}|${input.season}|${input.asOfWeek}|${input.asOfAt}|${input.windowStartWeek}|${input.windowEndWeek}`;
-  const seedHash = sha256Hex(seedMaterial);
+  const seedHash = firstPartyRosSeedHash(input);
   const random = xoshiro128StarStar(seedHash);
   const totalPoints: number[] = [];
   const games: number[] = [];
@@ -1837,8 +1925,27 @@ export function projectFirstPartyRestOfSeason(
           ),
         }
       : null;
+  const defenseGames =
+    validated.position === "DST"
+      ? validated.weeks.map((week) =>
+          week.scheduled
+            ? prepareFirstPartyDefenseGame({
+                components:
+                  input.strategy === "contextual"
+                    ? week.contextualComponents
+                    : week.recencyComponents,
+                allowed:
+                  week.defenseDistributions![
+                    input.strategy === "contextual" ? "contextual" : "recency"
+                  ],
+                overdispersion: input.defense!.overdispersion,
+                dependence: input.defense!.dependence,
+              })
+            : null,
+        )
+      : null;
   const componentScaling =
-    kickerContext === null
+    kickerContext === null && defenseGames === null
       ? validated.weeks.map((week) =>
           prepareComponentScaling(
             input.strategy === "contextual" ? week.contextualComponents : week.recencyComponents,
@@ -1863,6 +1970,7 @@ export function projectFirstPartyRestOfSeason(
       componentSums,
       audit,
       kickerContext,
+      defenseGames,
       componentScaling,
       validated.scoreComponents,
       onWeek,

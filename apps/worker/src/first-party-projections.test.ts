@@ -28,6 +28,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   FIRST_PARTY_PLAYER_HISTORY_VERSION,
+  FIRST_PARTY_DEFENSE_HISTORY_VERSION,
   projectionInputChecksum,
 } from "./first-party-projection-inputs.js";
 import {
@@ -447,6 +448,7 @@ describe("first-party projection publication policy", () => {
       projectionInputChecksum({
         ...legacyIdentity,
         playerHistoryVersion: FIRST_PARTY_PLAYER_HISTORY_VERSION,
+        defenseHistoryVersion: FIRST_PARTY_DEFENSE_HISTORY_VERSION,
       }),
     );
   });

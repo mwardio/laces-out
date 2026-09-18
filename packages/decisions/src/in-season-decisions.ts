@@ -1341,8 +1341,9 @@ function modeledDecisionFactsChecksum(input: {
   );
 }
 
-function finiteDecimal(value: string | null, fallback?: number): number | undefined {
-  if (value === null) return fallback;
+function finiteDecimal(value: string | null): number | undefined {
+  if (value === null) return undefined;
+  if (value.trim() === "") return undefined;
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : undefined;
 }
@@ -1406,18 +1407,27 @@ function prepareProjection(row: DecisionProjectionPlayerRow): PreparedProjection
   const primaryPosition = toPosition(row.primaryPosition);
   const mean = finiteDecimal(row.meanPoints);
   if (!player || !primaryPosition || mean === undefined) return undefined;
-  const floor = finiteDecimal(row.floorPoints, mean);
-  const ceiling = finiteDecimal(row.ceilingPoints, mean);
+  const floor = finiteDecimal(row.floorPoints);
+  const ceiling = finiteDecimal(row.ceilingPoints);
   const confidence = finiteDecimal(row.confidence ?? null);
-  if (floor === undefined || ceiling === undefined) return undefined;
+  if (
+    (row.floorPoints !== null && floor === undefined) ||
+    (row.ceilingPoints !== null && ceiling === undefined) ||
+    (floor !== undefined && ceiling !== undefined && floor > ceiling)
+  )
+    return undefined;
+  const intervalAvailable = floor !== undefined && ceiling !== undefined;
   return {
     player,
     projectionPlayerId: row.projectionPlayerId ?? row.playerId,
     primaryPosition,
     value: {
       mean,
-      floor: Math.min(floor, mean),
-      ceiling: Math.max(ceiling, mean),
+      // Central quantiles can both lie above or below a skewed distribution's expected mean.
+      // Missing bounds retain mean-based optimization without manufacturing a qualified range.
+      floor: intervalAvailable ? floor : mean,
+      ceiling: intervalAvailable ? ceiling : mean,
+      ...(intervalAvailable ? {} : { intervalAvailable: false }),
       // Missing or malformed stored evidence cannot imply high-quality advice.
       confidence: confidence !== undefined && confidence >= 0 && confidence <= 1 ? confidence : 0,
     },
@@ -1573,7 +1583,7 @@ function selectRosProjectionSet(
 }
 
 function decisionPlayer(player: Player, projections: ProjectionLookup): DecisionPlayer {
-  const value = projectionFor(projections, player.id);
+  const value: LineupAdviceProjection | undefined = projectionFor(projections, player.id);
   return {
     id: player.id,
     name: player.name,
@@ -1581,7 +1591,10 @@ function decisionPlayer(player: Player, projections: ProjectionLookup): Decision
     nflTeam: player.nflTeam ?? null,
     status: player.status ?? null,
     projectedPoints: rounded(value?.mean ?? 0),
-    projectedRange: value ? { floor: rounded(value.floor), ceiling: rounded(value.ceiling) } : null,
+    projectedRange:
+      value && value.intervalAvailable !== false
+        ? { floor: rounded(value.floor), ceiling: rounded(value.ceiling) }
+        : null,
   };
 }
 

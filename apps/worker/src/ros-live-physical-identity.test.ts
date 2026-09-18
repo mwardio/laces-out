@@ -2,7 +2,7 @@ import {
   FIRST_PARTY_ROS_CONVERGENCE_REFERENCE_SCENARIOS,
   FIRST_PARTY_ROS_DEFAULT_SCENARIOS,
 } from "@laces-out/projections";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   canonicalRosLiveRows,
@@ -33,6 +33,31 @@ function fixture(): RosLivePhysicalIdentityInput {
 }
 
 describe("live ROS physical identity", () => {
+  afterEach(() => {
+    vi.doUnmock("@laces-out/projections");
+    vi.doUnmock("./first-party-projection-inputs.js");
+    vi.doUnmock("./first-party-ros-candidates.js");
+    vi.resetModules();
+  });
+
+  it.each([
+    ["@laces-out/projections", "FIRST_PARTY_DEFENSE_GAME_VERSION"],
+    ["@laces-out/projections", "FIRST_PARTY_DEFENSE_GAME_CALIBRATION_VERSION"],
+    ["@laces-out/projections", "FIRST_PARTY_TEAM_DEFENSE_ALLOWED_DISTRIBUTION_VERSION"],
+    ["./first-party-projection-inputs.js", "FIRST_PARTY_DEFENSE_HISTORY_VERSION"],
+    ["./first-party-ros-candidates.js", "LIVE_ROS_DEFENSE_ASSEMBLY_VERSION"],
+  ])("invalidates identical captured facts after %s %s changes", async (module, version) => {
+    const input = fixture();
+    const original = rosLivePhysicalIdentity(input);
+    vi.resetModules();
+    vi.doMock(module, async (importOriginal) => ({
+      ...(await importOriginal<Record<string, unknown>>()),
+      [version]: "changed-defense-semantics",
+    }));
+    const changed = await import("./ros-live-physical-identity.js");
+    expect(changed.rosLivePhysicalIdentity(input)).not.toBe(original);
+  });
+
   it("ignores row, source, family and nested object key order", () => {
     const original = fixture();
     const reordered = {

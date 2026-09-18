@@ -5,13 +5,16 @@ import type {
 import { createHash } from "node:crypto";
 
 import {
+  FIRST_PARTY_DEFENSE_GAME_VERSION,
+  fitFirstPartyDefenseGameCalibration,
+  firstPartyTeamDefenseAllowedDistributionParameters,
   FIRST_PARTY_PROJECTION_MODEL_VERSION,
   FIRST_PARTY_ROS_CONVERGENCE_REFERENCE_SCENARIOS,
   FIRST_PARTY_ROS_DEFAULT_SCENARIOS,
   FIRST_PARTY_ROS_MAXIMUM_SCENARIOS,
   FIRST_PARTY_ROS_MINIMUM_SCENARIOS,
   FIRST_PARTY_ROS_MODEL_VERSION,
-  FIRST_PARTY_ROS_SEED_VERSION,
+  firstPartyRosSeedHash,
   firstPartyProjectionComponentsForPosition,
   firstPartyRecentRoleContext,
   firstPartyTeamDefenseProjectionComponents,
@@ -25,6 +28,7 @@ import {
   type FirstPartyProjectionCalibration,
   type FirstPartyProjectionPosition,
   type FirstPartyTeamDefenseCalibration,
+  type FirstPartyDefenseGameCalibration,
   type FirstPartyTeamDefenseWeeklyStatLine,
   type FirstPartyRosAvailabilityInput,
   type FirstPartyRosConvergenceMetricName,
@@ -105,6 +109,9 @@ const ROS_LIVE_KICKER_P50_TOLERANCE = { absolute: 1, relative: 0.03 } as const;
 export const FIRST_PARTY_ROS_LIVE_RELEASE_SCENARIOS = FIRST_PARTY_ROS_DEFAULT_SCENARIOS;
 export const FIRST_PARTY_ROS_LIVE_CONVERGENCE_REFERENCE_SCENARIOS =
   FIRST_PARTY_ROS_CONVERGENCE_REFERENCE_SCENARIOS;
+
+/** Shared by per-defense inputs and the live generation's physical identity. */
+export const LIVE_ROS_DEFENSE_ASSEMBLY_VERSION = "live-ros-defense-football-input-v3";
 
 function statusToAvailabilityState(
   status: FirstPartyPlayerStatus,
@@ -238,6 +245,8 @@ export interface BuildFirstPartyRosDefenseCandidateInput {
   readonly window: FirstPartyRosCandidateWindow;
   readonly featureHistory: readonly FirstPartyTeamDefenseWeeklyStatLine[];
   readonly calibration: FirstPartyTeamDefenseCalibration;
+  /** Fit from this same owned feature-history snapshot; reused only within its target build. */
+  readonly preparedGameCalibration?: FirstPartyDefenseGameCalibration;
   readonly schedules: readonly ProjectionScheduleFact[];
   readonly scoringProfile: ProjectionScoringProfile;
   readonly seed: string;
@@ -255,6 +264,23 @@ export function assembleFirstPartyRosDefenseCandidateInputs(
   input: BuildFirstPartyRosDefenseCandidateInput,
 ): FirstPartyRosAssembledCandidateInputs | null {
   const { season, asOfWeek, windowStartWeek, windowEndWeek } = input.window;
+  const gameCalibration =
+    input.preparedGameCalibration ??
+    fitFirstPartyDefenseGameCalibration(input.featureHistory, season);
+  if (
+    gameCalibration.forecastSeason !== season ||
+    (gameCalibration.throughSeason !== null &&
+      (!Number.isSafeInteger(gameCalibration.throughSeason) ||
+        gameCalibration.throughSeason >= season))
+  ) {
+    throw new RangeError("Prepared defense game calibration must match the forecast season");
+  }
+  if (gameCalibration.state !== "fitted") return null;
+  const defense = {
+    version: FIRST_PARTY_DEFENSE_GAME_VERSION,
+    overdispersion: gameCalibration.overdispersion,
+    dependence: gameCalibration.dependence,
+  } as const;
   const team = input.defense.team.trim().toUpperCase();
   const weeks: FirstPartyRosProjectionInput["weeks"][number][] = [];
   const fingerprints: unknown[] = [];
@@ -293,6 +319,22 @@ export function assembleFirstPartyRosDefenseCandidateInputs(
       bye: !scheduled,
       contextualComponents,
       recencyComponents,
+      ...(scheduled
+        ? {
+            defenseDistributions: {
+              contextual: firstPartyTeamDefenseAllowedDistributionParameters({
+                components: contextualComponents,
+                history: input.featureHistory,
+                target,
+              }),
+              recency: firstPartyTeamDefenseAllowedDistributionParameters({
+                components: recencyComponents,
+                history: input.featureHistory,
+                target,
+              }),
+            },
+          }
+        : {}),
       componentElasticities: historicalRosComponentElasticities(
         contextualComponents,
         recencyComponents,
@@ -324,12 +366,12 @@ export function assembleFirstPartyRosDefenseCandidateInputs(
     currentMultiplier: 1,
     persistence: 1,
     innovationVolatility: 0,
-    weeklyProductionVolatility: 0.15,
+    weeklyProductionVolatility: 0,
     minimumMultiplier: 1,
     maximumMultiplier: 1,
   };
   const inputChecksum = historicalRosChecksum({
-    version: "live-ros-defense-football-input-v2",
+    version: LIVE_ROS_DEFENSE_ASSEMBLY_VERSION,
     productionBasis: HISTORICAL_ROS_PRODUCTION_BASIS_VERSION,
     playerId: input.defense.playerId,
     position: "DST",
@@ -342,6 +384,8 @@ export function assembleFirstPartyRosDefenseCandidateInputs(
     fingerprints,
     availability,
     role,
+    defense,
+    defenseCalibrationEvidence: gameCalibration,
   });
   const common = {
     playerId: input.defense.playerId,
@@ -354,6 +398,7 @@ export function assembleFirstPartyRosDefenseCandidateInputs(
     weeks,
     availability,
     role,
+    defense,
     scoringProfile: input.scoringProfile,
     inputChecksum,
     weeklyModelVersion: HISTORICAL_ROS_CANDIDATE_PAIR_VERSION,
@@ -615,11 +660,7 @@ function reuseOrSimulateRelease(
     return project({ ...projectionInput, scenarioCount });
   }
   const provenance = supplied.provenance;
-  const expectedSeed = createHash("sha256")
-    .update(
-      `${FIRST_PARTY_ROS_SEED_VERSION}|${projectionInput.seed}|${projectionInput.inputChecksum}|${projectionInput.playerId}|${projectionInput.strategy}|${projectionInput.season}|${projectionInput.asOfWeek}|${projectionInput.asOfAt}|${projectionInput.windowStartWeek}|${projectionInput.windowEndWeek}`,
-    )
-    .digest("hex");
+  const expectedSeed = firstPartyRosSeedHash(projectionInput);
   if (
     provenance.modelVersion !== FIRST_PARTY_ROS_MODEL_VERSION ||
     provenance.seedHash !== expectedSeed ||

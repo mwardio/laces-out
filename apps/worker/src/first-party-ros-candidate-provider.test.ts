@@ -7,9 +7,11 @@ import {
   type FirstPartyRosChampionPolicy,
   type FirstPartyRosHeldOutForecast,
   type FirstPartyWeeklyStatLine,
+  type FirstPartyTeamDefenseWeeklyStatLine,
   type ProjectionScoringProfile,
 } from "@laces-out/projections";
-import { describe, expect, it } from "vitest";
+import * as projectionModules from "@laces-out/projections";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   calibrateHistoricalRosAvailability,
@@ -818,6 +820,36 @@ describe("buildFirstPartyRosLeagueTarget", () => {
   function run(input: Parameters<typeof targetInput>[0]) {
     return buildFirstPartyRosLeagueTarget(targetInput(input));
   }
+
+  it("fits the shared prior defense game process once per target without caching mutable arrays", () => {
+    const defenseFeatureHistory: FirstPartyTeamDefenseWeeklyStatLine[] = [];
+    const input = {
+      ...targetInput({
+        policy: ninePlusPolicy("DST"),
+        candidatePlayers: [
+          { playerId: "dst-buf", position: "DST", team: "BUF" },
+          { playerId: "dst-mia", position: "DST", team: "MIA" },
+        ],
+        matchedPositions: ["DST"],
+      }),
+      defenseFeatureHistory,
+    };
+    const fit = vi.spyOn(projectionModules, "fitFirstPartyDefenseGameCalibration");
+    try {
+      const result = buildFirstPartyRosLeagueTarget(input);
+      expect(result.skippedPlayers).toBe(2);
+      expect(fit).toHaveBeenCalledExactlyOnceWith(defenseFeatureHistory, 2026);
+
+      // Another target must inspect its current snapshot even when the array object is reused.
+      defenseFeatureHistory.push({ team: "BUF", season: 2025, week: 1, components: {} });
+      expect(() => buildFirstPartyRosLeagueTarget(input)).toThrow(
+        "Defense calibration defensive_sacks must be a nonnegative safe integer",
+      );
+      expect(fit).toHaveBeenCalledTimes(2);
+    } finally {
+      fit.mockRestore();
+    }
+  });
 
   it("keeps asynchronous cached-outcome assembly identical to the synchronous release path", async () => {
     const input = targetInput({

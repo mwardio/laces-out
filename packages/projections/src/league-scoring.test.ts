@@ -1661,6 +1661,39 @@ describe("normalizeLeagueScoringProfile", () => {
       ["209", "one_point_safeties", 1],
     ];
 
+    it.each([
+      ["espn", "206", "206", 2],
+      ["espn", "206:slot:16", "ESPN stat 206 override for D/ST", 2],
+      ["espn", "209", "209", 1],
+      ["yahoo", "82", "Extra Point Returned", 2],
+    ] as const)(
+      "enforces rare-event scoring scope for %s %s without dropping the rule",
+      (provider, statId, name, maximum) => {
+        const passing = rule(provider === "espn" ? "3" : "4", "Passing Yards", 0.04, {
+          provider,
+        });
+        for (const points of [-maximum, -maximum / 2, maximum / 2, maximum]) {
+          const result = normalized([passing, rule(statId, name, points, { provider })]);
+          expectAvailable(result);
+          expect(supportFor(result, "DST").supported).toBe(true);
+        }
+        for (const points of [maximum + 0.01, -maximum - 0.01, 1_000]) {
+          const result = normalized([passing, rule(statId, name, points, { provider })]);
+          expectAvailable(result);
+          expect(supportFor(result, "QB").supported).toBe(true);
+          expect(supportFor(result, "DST").supported).toBe(false);
+          expect(positionReasonCodes(result, "DST")).toContain("COMPONENT_VALUE_UNSUPPORTED");
+          expect(
+            result.profile.rules.some(
+              (item) =>
+                item.statId === "defensive_two_point_returns" ||
+                item.statId === "one_point_safeties",
+            ),
+          ).toBe(false);
+        }
+      },
+    );
+
     it("maps each de minimis ID to a component the defense projector actually emits", () => {
       const engine = new Set(firstPartyTeamDefenseProjectionComponents());
       const available = new Set(rosAvailableProjectionStatIds());

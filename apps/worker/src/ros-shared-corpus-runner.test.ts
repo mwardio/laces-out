@@ -6,7 +6,7 @@ import path from "node:path";
 
 import {
   FIRST_PARTY_ROS_OUTCOME_SCHEMA_VERSION,
-  FIRST_PARTY_ROS_SEED_VERSION,
+  firstPartyRosSeedHash,
   rosScoringProfile,
   type RosScoringProfileKey,
 } from "@laces-out/projections";
@@ -218,9 +218,18 @@ async function fixture(scenarioCount?: number) {
                 strategy,
                 weeklyModelVersion: corpus.weeklyModelVersion,
                 inputChecksum: forecast.inputChecksum,
-                seedHash: hash(
-                  `${FIRST_PARTY_ROS_SEED_VERSION}|${seed}|${forecast.inputChecksum}|${forecast.playerId}|${strategy}|${forecast.forecastSeason}|${forecast.asOfWeek}|${asOfAt}|${forecast.windowStartWeek}|${forecast.windowEndWeek}`,
-                ),
+                seedHash: firstPartyRosSeedHash({
+                  position: forecast.position,
+                  seed,
+                  inputChecksum: forecast.inputChecksum,
+                  playerId: forecast.playerId,
+                  strategy,
+                  season: forecast.forecastSeason,
+                  asOfWeek: forecast.asOfWeek,
+                  asOfAt,
+                  windowStartWeek: forecast.windowStartWeek,
+                  windowEndWeek: forecast.windowEndWeek,
+                }),
                 randomGenerator: "xoshiro128**-sha256-128",
                 scenarioCount: count,
                 season: forecast.forecastSeason,

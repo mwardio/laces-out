@@ -1,6 +1,7 @@
 import {
   firstPartyProjectionComponentsForPosition,
   firstPartyTeamDefenseProjectionComponents,
+  TEAM_DEFENSE_ZERO_MODEL_MAX_ABSOLUTE_POINTS,
 } from "./first-party.js";
 import {
   SCORING_WHOLE_GROUP_COMPONENTS,
@@ -9,7 +10,7 @@ import {
   type ProjectionScoringProfile,
 } from "./scoring.js";
 
-export const LEAGUE_SCORING_NORMALIZATION_VERSION = "league-scoring-map-v7" as const;
+export const LEAGUE_SCORING_NORMALIZATION_VERSION = "league-scoring-map-v8" as const;
 
 export const LEAGUE_SCORING_MAP_PROVENANCE = {
   version: LEAGUE_SCORING_NORMALIZATION_VERSION,
@@ -126,6 +127,7 @@ export type LeagueScoringUnsupportedCode =
   | "UNSUPPORTED_PLAYER_RULE"
   | "IDP_RULE"
   | "COMPONENT_UNAVAILABLE"
+  | "COMPONENT_VALUE_UNSUPPORTED"
   /**
    * The run emits the component and the rule maps cleanly, but no modeled position projects it, so
    * the rule cannot be attributed to any position. Distinct from `COMPONENT_UNAVAILABLE` (the run
@@ -1542,6 +1544,22 @@ export function normalizeLeagueScoringProfile(
     entry.points = (entry.points ?? 0) + contribution.points;
     entry.rowIndices.push(...contribution.rowIndices);
     canonical.set(statId, entry);
+  }
+
+  // Check effective canonical awards after provider overrides/derived contributions, so aliases
+  // cannot bypass the model's documented rare-event scope. Withhold the complete affected position.
+  for (const [statId, entry] of canonical) {
+    const maximum = TEAM_DEFENSE_ZERO_MODEL_MAX_ABSOLUTE_POINTS[statId];
+    if (maximum !== undefined && Math.abs(entry.points ?? 0) > maximum) {
+      const rowIndex = entry.rowIndices[0] ?? null;
+      fail(
+        attributedPositions(statId),
+        "COMPONENT_VALUE_UNSUPPORTED",
+        `${statId} is supported only for awards between ${-maximum} and ${maximum} points; larger awards require rare-event projection data.`,
+        rowIndex,
+        rowIndex === null ? undefined : input.rows[rowIndex],
+      );
+    }
   }
 
   for (const overlap of AGGREGATE_OVERLAPS) {

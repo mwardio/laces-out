@@ -200,3 +200,18 @@ the NFL's 2015 rule change is what first made either event possible at all.
   carries this exact class of note (`points_allowed_method=...`,
   `blocked_kicks_classification=...`) into every published weekly set's metadata and every league's
   warning list. No new channel was invented.
+
+## 2026-09-18 support-bound enforcement
+
+The original evidence above supported two-point return awards of two points and one-point safety
+awards of one point. Normalization v8 now enforces those conservative absolute award limits after
+provider overrides and canonical contributions are resolved. The same component limits apply to
+ESPN and Yahoo aliases. A larger positive or negative award withholds D/ST with an explicit reason;
+the rule is not silently discarded while publishing a partial defense score. Other positions retain
+their independent support decisions. Zero and fractional awards inside those bounds remain valid.
+
+This closes an implementation gap; it does not establish a new occurrence-rate bound or claim
+arbitrary rare-event scoring is modeled. The repository now ingests play-by-play for other features,
+but it still does not aggregate these rare events into the defense training history. The earlier
+statement that the repository has no play-by-play source describes the July review, not the current
+code. Extending scoring support requires those observations and model validation or new evidence.
