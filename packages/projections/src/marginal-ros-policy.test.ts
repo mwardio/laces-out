@@ -104,6 +104,331 @@ function deepFreeze<T>(value: T): T {
   return value;
 }
 
+function expandedTraining(input = seasons()): FirstPartyRosHeldOutSeason[] {
+  return input.map((season) => ({
+    ...season,
+    forecasts: [
+      ...season.forecasts,
+      ...[14, 15, 16].flatMap((cutoff) =>
+        Array.from({ length: 18 }, (_, player) => ({
+          ...forecast(season.season, cutoff, player + 6),
+          // Strongly favor the other mean strategy in extra rows. It must not enter selection.
+          contextual: { meanPoints: -100, p15Points: 80, p50Points: 100, p85Points: 120 },
+          recency: { meanPoints: 150, p15Points: 90, p50Points: 110, p85Points: 160 },
+          actualPoints: 150,
+        })),
+      ),
+    ],
+  }));
+}
+
+describe("separate chronological interval training", () => {
+  it("uses the broader prior fit while preserving the exact audit and mean policy", () => {
+    const input = deepFreeze(seasons());
+    const training = deepFreeze(expandedTraining(input));
+    const before = JSON.stringify({ input, training });
+    const original = run(input);
+    const result = evaluateFirstPartyRosMarginalPolicy(input, {
+      forecastSeason: 2026,
+      championOptions,
+      intervalTrainingSeasons: training,
+    });
+    expect(result.legacyEvaluation).toEqual(original.legacyEvaluation);
+    expect(result.livePolicy.meanPolicy).toEqual(original.livePolicy.meanPolicy);
+    expect(result.intervalTraining).toMatchObject({
+      version: "separate-prior-interval-training-cohort-v1",
+      seasons: [2022, 2023, 2024, 2025],
+      evaluationForecasts: 72,
+      trainingForecasts: 288,
+      additionalTrainingForecasts: 216,
+      diagnostics: {
+        zeroScheduledGameForecasts: 0,
+        contextual: { incompleteCoverageForecasts: 0, unstableForecasts: 0 },
+        recency: { incompleteCoverageForecasts: 0, unstableForecasts: 0 },
+      },
+    });
+    expect(
+      result.selected.map(({ identity, predictedMean, strategy }) => [
+        identity,
+        predictedMean,
+        strategy,
+      ]),
+    ).toEqual(
+      original.selected.map(({ identity, predictedMean, strategy }) => [
+        identity,
+        predictedMean,
+        strategy,
+      ]),
+    );
+    expect(result.candidates).toHaveLength(original.candidates.length);
+    const second = cell(result.seasonPolicies[1]!.policy);
+    expect(second.intervalArtifacts.contextual!.fit).toMatchObject({
+      priorSeasons: [2022],
+      samples: 72,
+      blocks: 3,
+    });
+    expect(second.intervalArtifacts.contextual!.fit.corrections).not.toEqual(
+      cell(original.seasonPolicies[1]!.policy).intervalArtifacts.contextual!.fit.corrections,
+    );
+    // Held-out descriptive support still counts the original six players, not all 24 fit rows.
+    expect(cell(result.livePolicy).intervalEvidence.contextual!.overall.samples).toBe(54);
+    expect(JSON.stringify({ input, training })).toBe(before);
+  });
+
+  it("never trains an audit year on extra rows from that year or any later year", () => {
+    const input = seasons();
+    const training = expandedTraining(input);
+    const evaluate = (intervalTrainingSeasons: readonly FirstPartyRosHeldOutSeason[]) =>
+      evaluateFirstPartyRosMarginalPolicy(input, {
+        forecastSeason: 2026,
+        championOptions,
+        intervalTrainingSeasons,
+      });
+    const before = evaluate(training);
+    const changed = evaluate(
+      training.map((season) => ({
+        ...season,
+        forecasts: season.forecasts.map((row) =>
+          season.season >= 2024 && Number(row.playerId.slice(1)) >= 6
+            ? { ...row, actualPoints: row.actualPoints + 700 }
+            : row,
+        ),
+      })),
+    );
+    expect(changed.seasonPolicies.slice(0, 3)).toEqual(before.seasonPolicies.slice(0, 3));
+    expect(changed.candidates.filter((row) => row.forecastSeason <= 2024)).toEqual(
+      before.candidates.filter((row) => row.forecastSeason <= 2024),
+    );
+    expect(changed.legacyEvaluation).toEqual(before.legacyEvaluation);
+    expect(cell(changed.livePolicy).intervalArtifacts.contextual!.artifactChecksum).not.toBe(
+      cell(before.livePolicy).intervalArtifacts.contextual!.artifactChecksum,
+    );
+  });
+
+  it("retains default results exactly and canonicalizes explicit cohort ordering", () => {
+    const input = seasons();
+    const original = run(input);
+    const explicit = evaluateFirstPartyRosMarginalPolicy(input, {
+      forecastSeason: 2026,
+      championOptions,
+      intervalTrainingSeasons: input,
+    });
+    const { intervalTraining, ...same } = explicit;
+    expect(same).toEqual(original);
+    expect(intervalTraining!.evaluationRowsChecksum).toBe(intervalTraining!.trainingRowsChecksum);
+    const reversed = evaluateFirstPartyRosMarginalPolicy(input, {
+      forecastSeason: 2026,
+      championOptions,
+      intervalTrainingSeasons: reordered(
+        [...input].reverse().map((season) => ({
+          ...season,
+          forecasts: [...season.forecasts].reverse(),
+        })),
+      ) as FirstPartyRosHeldOutSeason[],
+    });
+    expect(reversed).toEqual(explicit);
+  });
+
+  it.each([
+    [
+      "actual target",
+      (row: FirstPartyRosHeldOutForecast) => ({ ...row, actualPoints: row.actualPoints + 1 }),
+    ],
+    [
+      "input identity",
+      (row: FirstPartyRosHeldOutForecast) => ({ ...row, inputChecksum: "e".repeat(64) }),
+    ],
+    [
+      "candidate mean",
+      (row: FirstPartyRosHeldOutForecast) => ({
+        ...row,
+        contextual: { ...row.contextual, meanPoints: 900 },
+      }),
+    ],
+    [
+      "raw quantile",
+      (row: FirstPartyRosHeldOutForecast) => ({
+        ...row,
+        contextual: { ...row.contextual, p50Points: 101 },
+      }),
+    ],
+    [
+      "coverage",
+      (row: FirstPartyRosHeldOutForecast) => ({
+        ...row,
+        evidence: { ...row.evidence, coverage: { contextual: 0.5, recency: 1 } },
+      }),
+    ],
+    [
+      "schedule",
+      (row: FirstPartyRosHeldOutForecast) => ({
+        ...row,
+        evidence: {
+          ...row.evidence,
+          availability: {
+            scheduledGames: 1,
+            actualGames: 1,
+            contextualExpectedGames: 1,
+            recencyExpectedGames: 1,
+          },
+        },
+      }),
+    ],
+  ] as const)("rejects a changed original %s", (_name, mutate) => {
+    const training = expandedTraining().map((season, index) =>
+      index
+        ? season
+        : {
+            ...season,
+            forecasts: season.forecasts.map((row, index) => (index ? row : mutate(row))),
+          },
+    );
+    expect(() =>
+      evaluateFirstPartyRosMarginalPolicy(seasons(), {
+        forecastSeason: 2026,
+        championOptions,
+        intervalTrainingSeasons: training,
+      }),
+    ).toThrow("preserve every original audit input and target");
+  });
+
+  it.each([
+    [
+      "missing audit player",
+      (training: FirstPartyRosHeldOutSeason[]) =>
+        training.map((season) => ({ ...season, forecasts: season.forecasts.slice(1) })),
+    ],
+    ["missing prior season", (training: FirstPartyRosHeldOutSeason[]) => training.slice(1)],
+    [
+      "new cutoff",
+      (training: FirstPartyRosHeldOutSeason[]) =>
+        training.map((season) => ({
+          ...season,
+          forecasts: [...season.forecasts, forecast(season.season, 13, 30)],
+        })),
+    ],
+    [
+      "new position",
+      (training: FirstPartyRosHeldOutSeason[]) =>
+        training.map((season) => ({
+          ...season,
+          forecasts: [
+            ...season.forecasts,
+            { ...forecast(season.season, 14, 30), position: "QB" as const },
+          ],
+        })),
+    ],
+    [
+      "duplicate semantic player",
+      (training: FirstPartyRosHeldOutSeason[]) =>
+        training.map((season) => ({
+          ...season,
+          forecasts: [
+            ...season.forecasts,
+            { ...season.forecasts[0]!, inputChecksum: "f".repeat(64) },
+          ],
+        })),
+    ],
+    [
+      "incomplete season",
+      (training: FirstPartyRosHeldOutSeason[]) =>
+        training.map((season) => ({ ...season, complete: false })),
+    ],
+    [
+      "changed model",
+      (training: FirstPartyRosHeldOutSeason[]) =>
+        training.map((season) => ({
+          ...season,
+          forecasts: season.forecasts.map((row) => ({
+            ...row,
+            contextualModelVersion: "different-model",
+          })),
+        })),
+    ],
+  ] as const)("rejects %s in the fit cohort", (_name, mutate) => {
+    expect(() =>
+      evaluateFirstPartyRosMarginalPolicy(seasons(), {
+        forecastSeason: 2026,
+        championOptions,
+        intervalTrainingSeasons: mutate(expandedTraining()),
+      }),
+    ).toThrow();
+  });
+
+  it("binds broader-cohort convergence evidence without replacing an unstable original audit", () => {
+    const input = seasons().map((season) => ({
+      ...season,
+      forecasts: season.forecasts.map((row) => ({
+        ...row,
+        evidence: {
+          ...row.evidence,
+          convergence: {
+            ...row.evidence.convergence,
+            contextual: { state: "unstable" as const, diagnosticChecksum: "a".repeat(64) },
+          },
+        },
+      })),
+    }));
+    const original = run(input);
+    const training = expandedTraining(input).map((season) => ({
+      ...season,
+      forecasts: season.forecasts.map((row) => ({
+        ...row,
+        evidence: {
+          ...row.evidence,
+          convergence: {
+            ...row.evidence.convergence,
+            contextual: { state: "converged" as const, diagnosticChecksum: "e".repeat(64) },
+          },
+        },
+      })),
+    }));
+    const result = evaluateFirstPartyRosMarginalPolicy(input, {
+      forecastSeason: 2026,
+      championOptions,
+      intervalTrainingSeasons: training,
+    });
+    expect(result.legacyEvaluation).toEqual(original.legacyEvaluation);
+    const originalDiagnostics = evaluateFirstPartyRosMarginalPolicy(input, {
+      forecastSeason: 2026,
+      championOptions,
+      intervalTrainingSeasons: expandedTraining(input),
+    });
+    expect(result.intervalTraining!.trainingRowsChecksum).not.toBe(
+      originalDiagnostics.intervalTraining!.trainingRowsChecksum,
+    );
+    expect(result.intervalTraining!.evaluationRowsChecksum).toBe(
+      originalDiagnostics.intervalTraining!.evaluationRowsChecksum,
+    );
+    expect(originalDiagnostics.intervalTraining!.diagnostics.contextual.unstableForecasts).toBe(72);
+    expect(result.intervalTraining!.diagnostics.contextual.unstableForecasts).toBe(0);
+  });
+
+  it("rejects matched empty seasons and a non-boolean completion claim", () => {
+    const empty = seasons().map((season, index) =>
+      index === 0 ? { ...season, forecasts: [] } : season,
+    );
+    expect(() =>
+      evaluateFirstPartyRosMarginalPolicy(empty, {
+        forecastSeason: 2026,
+        championOptions,
+        intervalTrainingSeasons: empty,
+      }),
+    ).toThrow("nonempty, completed seasons");
+    const malformed = seasons().map((season) => ({
+      ...season,
+      complete: "false",
+    })) as unknown as FirstPartyRosHeldOutSeason[];
+    expect(() =>
+      evaluateFirstPartyRosMarginalPolicy(seasons(), {
+        forecastSeason: 2026,
+        championOptions,
+        intervalTrainingSeasons: malformed,
+      }),
+    ).toThrow("nonempty, completed seasons");
+  });
+});
+
 describe("chronological marginal ROS candidate policy", () => {
   it("preserves every legacy mean policy, proof, strategy and selected mean without mutating inputs", () => {
     const input = deepFreeze(seasons());

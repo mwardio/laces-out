@@ -1,4 +1,10 @@
 import { createHash } from "node:crypto";
+import { execFile } from "node:child_process";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { promisify } from "node:util";
+import { NFL_TEAMS } from "@laces-out/domain";
 import { beforeAll, describe, expect, it } from "vitest";
 import {
   FIRST_PARTY_ROS_MODEL_VERSION,
@@ -19,6 +25,7 @@ import { firstPartyRosChampionPolicyChecksum } from "./first-party-ros-publicati
 import {
   buildRosMarginalDevelopmentReport,
   ROS_MARGINAL_DEVELOPMENT_VERSION,
+  ROS_MARGINAL_TRAINING_DEVELOPMENT_VERSION,
 } from "./ros-marginal-development.js";
 
 const SEASONS = [2022, 2023, 2024, 2025];
@@ -46,11 +53,14 @@ const rowBucket = (row: FirstPartyRosHeldOutForecast): FirstPartyRosRemainingWee
   return weeks <= 4 ? "one-to-four" : weeks <= 8 ? "five-to-eight" : "nine-plus";
 };
 
-function forecasts(previous: boolean): FirstPartyRosHeldOutForecast[] {
+function forecasts(
+  previous: boolean,
+  teams: readonly string[] = TEAMS,
+): FirstPartyRosHeldOutForecast[] {
   const model = previous ? "laces-ros-distribution-v12" : FIRST_PARTY_ROS_MODEL_VERSION;
   return SEASONS.flatMap((season) =>
     Array.from({ length: 17 }, (_, cutoffIndex) => cutoffIndex + 1).flatMap((cutoff) =>
-      TEAMS.map((team): FirstPartyRosHeldOutForecast => {
+      teams.map((team): FirstPartyRosHeldOutForecast => {
         const games = 18 - cutoff;
         const playerId = `DST:${previous && team === "LAR" ? "LA" : team}`;
         const candidate = {
@@ -218,9 +228,27 @@ function reportFixture(previous: boolean, raw = forecasts(previous)) {
 }
 
 type Fixture = ReturnType<typeof reportFixture>;
+function trainingFixture(raw = forecasts(false, NFL_TEAMS)) {
+  const report = reportFixture(false, raw);
+  return {
+    ...report,
+    outcomeCorpusIdentity: hash(`${FIRST_PARTY_ROS_MODEL_VERSION}:full-defense-training-corpus`),
+    report: { ...report.report, playersPerPosition: 32 },
+  };
+}
+
+function trainingRequest(report: Fixture) {
+  const intervalTrainingReportJson = JSON.stringify(report);
+  return {
+    intervalTrainingReportJson,
+    intervalTrainingReportChecksum: hash(intervalTrainingReportJson),
+  };
+}
+
 let candidate: Fixture;
 let previous: Fixture;
 let passed: ReturnType<typeof buildRosMarginalDevelopmentReport>;
+let training: Fixture;
 
 function request(nextCandidate = candidate, nextPrevious = previous) {
   const candidateReportJson = JSON.stringify(nextCandidate);
@@ -248,9 +276,20 @@ beforeAll(() => {
   candidate = reportFixture(false);
   previous = reportFixture(true);
   passed = build();
+  training = trainingFixture();
 });
 
 describe("pinned marginal ROS report development wrapper", () => {
+  it("keeps the original v1 payload byte identity when separate training is absent", () => {
+    expect(passed.evidenceChecksum).toMatchInlineSnapshot(
+      `"819ba4c624278306d877c2637a6f339741fb073809891ff243dff6de8f09c92f"`,
+    );
+    expect(passed.schemaVersion).toBe(1);
+    expect(passed).not.toHaveProperty("intervalTraining");
+    expect(passed.provenance).not.toHaveProperty("intervalTraining");
+    expect(passed.marginalDevelopment.evaluation).not.toHaveProperty("intervalTraining");
+  });
+
   it("evaluates the complete 544-row synthetic DST pair without creating an admissible report", () => {
     expect(candidate.diagnostics.candidateForecasts).toHaveLength(544);
     expect(candidate.report.convergenceAudit).toHaveLength(24);
@@ -586,4 +625,332 @@ describe("pinned marginal ROS report development wrapper", () => {
       );
     }
   });
+
+  it("binds all 2,176 training rows while retaining the original 544-row means and audit", () => {
+    const input = { ...request(), ...trainingRequest(training) };
+    const result = buildRosMarginalDevelopmentReport(input);
+    expect(result).toMatchObject({
+      schemaVersion: 2,
+      version: ROS_MARGINAL_TRAINING_DEVELOPMENT_VERSION,
+      state: "development-screen-passed",
+      canAuthorizeRelease: false,
+      noDatabaseWrites: true,
+      provenance: {
+        intervalTraining: {
+          reportChecksum: input.intervalTrainingReportChecksum,
+          physicalCorpusChecksum: training.outcomeCorpusIdentity,
+        },
+      },
+      legacyEvaluation: {
+        candidatePolicy: candidate.publicationPolicy,
+        intervalTraining: { interpretation: "diagnostic-only", fullReport: training },
+      },
+      marginalDevelopment: {
+        evaluation: {
+          intervalTraining: {
+            evaluationForecasts: 544,
+            trainingForecasts: 2176,
+            additionalTrainingForecasts: 1632,
+          },
+        },
+      },
+    });
+    expect(result.marginalDevelopment.evaluation.selected).toHaveLength(544);
+    expect(result.marginalDevelopment.evaluation.intervalTraining!.evaluationRowsChecksum).toMatch(
+      /^[a-f0-9]{64}$/u,
+    );
+    expect(result.marginalDevelopment.evaluation.intervalTraining!.trainingRowsChecksum).toMatch(
+      /^[a-f0-9]{64}$/u,
+    );
+    expect(result.marginalDevelopment.evaluation.candidates).toHaveLength(1088);
+    expect(result.marginalDevelopment.evaluation.legacyEvaluation).toEqual(
+      passed.marginalDevelopment.evaluation.legacyEvaluation,
+    );
+    expect(
+      result.marginalDevelopment.evaluation.selected.map((row) => [
+        row.playerId,
+        row.forecastSeason,
+        row.asOfWeek,
+        row.strategy,
+        row.predictedMean,
+      ]),
+    ).toEqual(
+      passed.marginalDevelopment.evaluation.selected.map((row) => [
+        row.playerId,
+        row.forecastSeason,
+        row.asOfWeek,
+        row.strategy,
+        row.predictedMean,
+      ]),
+    );
+    expect(JSON.parse(JSON.stringify(result))).toEqual(result);
+    expect(
+      validateFirstPartyRosAdmission({
+        report: result,
+        evidenceThroughSeason: 2025,
+        constants: firstPartyRosAdmissionConstants(SCORING.profile),
+      }).state,
+    ).toBe("rejected");
+  });
+
+  it("keeps broader-cohort mean choices and legacy CQR failures diagnostic only", () => {
+    const broader = trainingFixture(
+      training.diagnostics.candidateForecasts.map((row) =>
+        TEAMS.includes(row.playerId.slice(4))
+          ? row
+          : {
+              ...row,
+              contextual: { ...row.contextual, meanPoints: row.actualPoints },
+              recency: { ...row.recency, meanPoints: row.actualPoints + 100 },
+            },
+      ),
+    );
+    const blocker = "calibration_DST_nine-plus_interval_coverage_gate_failed";
+    broader.report.blockers.push(blocker);
+    broader.report.state = "insufficient";
+    const result = buildRosMarginalDevelopmentReport({ ...request(), ...trainingRequest(broader) });
+    expect(result.state).toBe("development-screen-passed");
+    expect(result.marginalDevelopment.reasons).toEqual([]);
+    expect(result.legacyEvaluation.intervalTraining!.fullReport).toEqual(broader);
+    expect(
+      broader.publicationPolicy.choices
+        .filter((choice) => choice.position === "DST")
+        .every((choice) => choice.strategy === "contextual"),
+    ).toBe(true);
+    expect(result.marginalDevelopment.evaluation.legacyEvaluation).toEqual(
+      passed.marginalDevelopment.evaluation.legacyEvaluation,
+    );
+  });
+
+  it.each(["json", "checksum"] as const)("rejects a partial training %s pin", (part) => {
+    const pin = trainingRequest(training);
+    expect(() =>
+      buildRosMarginalDevelopmentReport({
+        ...request(),
+        ...(part === "json"
+          ? { intervalTrainingReportJson: pin.intervalTrainingReportJson }
+          : { intervalTrainingReportChecksum: pin.intervalTrainingReportChecksum }),
+      }),
+    ).toThrow(/supplied together/u);
+  });
+
+  it("rejects training bytes that do not match their independently pinned checksum", () => {
+    expect(() =>
+      buildRosMarginalDevelopmentReport({
+        ...request(),
+        ...trainingRequest(training),
+        intervalTrainingReportChecksum: "0".repeat(64),
+      }),
+    ).toThrow(/pinned SHA256/u);
+  });
+
+  it.each([
+    "missing-team",
+    "count-metadata",
+    "unknown-team",
+    "position",
+    "cutoff",
+    "window",
+  ] as const)("rejects an incomplete or wrong-scope training cohort: %s", (mutation) => {
+    const changed = structuredClone(training);
+    if (mutation === "missing-team") {
+      changed.diagnostics.candidateForecasts.pop();
+      changed.report.forecasts--;
+    } else if (mutation === "count-metadata") changed.report.playersPerPosition = 8;
+    else if (mutation === "unknown-team") {
+      changed.diagnostics.candidateForecasts = changed.diagnostics.candidateForecasts.map((row) =>
+        row.playerId === "DST:ARI" ? { ...row, playerId: "DST:UNKNOWN" } : row,
+      );
+    } else if (mutation === "position") changed.validationScope.positions = ["TE"];
+    else if (mutation === "cutoff")
+      changed.diagnostics.candidateForecasts[0] = {
+        ...changed.diagnostics.candidateForecasts[0]!,
+        asOfWeek: 0,
+      };
+    else
+      changed.diagnostics.candidateForecasts[0] = {
+        ...changed.diagnostics.candidateForecasts[0]!,
+        windowEndWeek: 17,
+      };
+    expect(() =>
+      buildRosMarginalDevelopmentReport({ ...request(), ...trainingRequest(changed) }),
+    ).toThrow(
+      /incomplete forecast count|locked release cohort|canonical defense|defense-only|scope\/window/u,
+    );
+  });
+
+  it("keeps candidate and previous benchmark cohorts fixed at eight teams even with training", () => {
+    expect(() =>
+      buildRosMarginalDevelopmentReport({
+        ...request(training, previous),
+        ...trainingRequest(training),
+      }),
+    ).toThrow(/locked release cohort/u);
+    const broaderPrevious = reportFixture(true, forecasts(true, NFL_TEAMS));
+    broaderPrevious.report.playersPerPosition = 32;
+    expect(() =>
+      buildRosMarginalDevelopmentReport({
+        ...request(candidate, broaderPrevious),
+        ...trainingRequest(training),
+      }),
+    ).toThrow(/locked release cohort/u);
+  });
+
+  it.each(["source", "candidate-corpus", "previous-corpus", "season", "model"] as const)(
+    "rejects a training provenance mismatch: %s",
+    (mutation) => {
+      const changed = structuredClone(training);
+      if (mutation === "source")
+        changed.sources[0]!.scheduleChecksum = hash("changed training schedule");
+      else if (mutation === "candidate-corpus")
+        changed.outcomeCorpusIdentity = candidate.outcomeCorpusIdentity;
+      else if (mutation === "previous-corpus")
+        changed.outcomeCorpusIdentity = previous.outcomeCorpusIdentity;
+      else if (mutation === "season") changed.report.seasons[0] = 2021;
+      else
+        changed.publicationPolicy = {
+          ...changed.publicationPolicy,
+          modelVersion: "laces-ros-distribution-v12",
+        } as unknown as FirstPartyRosChampionPolicy;
+      expect(() =>
+        buildRosMarginalDevelopmentReport({ ...request(), ...trainingRequest(changed) }),
+      ).toThrow(
+        /source checksums differ|distinct physical corpus|frozen held-out seasons|unrecognized/u,
+      );
+    },
+  );
+
+  it("rejects rescored training even when all its legacy proofs are rebuilt", () => {
+    const scoring = rosProfileDefinitionFromKey(rosScoringProfile("half-ppr").scoringProfileKey);
+    const changed = trainingFixture(
+      training.diagnostics.candidateForecasts.map((row) => ({
+        ...row,
+        scoringProfileKey: scoring.scoringProfileKey,
+      })),
+    );
+    changed.scoringProfile = { key: scoring.key, label: scoring.label, digest: scoring.digest };
+    expect(() =>
+      buildRosMarginalDevelopmentReport({ ...request(), ...trainingRequest(changed) }),
+    ).toThrow(/model or scoring profile differs/u);
+  });
+
+  it.each(["target", "physical-mean", "input-checksum"] as const)(
+    "rejects a mutated audit %s in training despite rebuilt legacy proofs",
+    (mutation) => {
+      const changed = trainingFixture(
+        training.diagnostics.candidateForecasts.map((row) =>
+          row.forecastSeason === 2022 && row.asOfWeek === 1 && row.playerId === "DST:LAR"
+            ? {
+                ...row,
+                ...(mutation === "target"
+                  ? { actualPoints: row.actualPoints + 1 }
+                  : mutation === "physical-mean"
+                    ? {
+                        contextual: {
+                          ...row.contextual,
+                          meanPoints: row.contextual.meanPoints + 1,
+                        },
+                      }
+                    : { inputChecksum: hash("mutated training audit input") }),
+              }
+            : row,
+        ),
+      );
+      expect(() =>
+        buildRosMarginalDevelopmentReport({ ...request(), ...trainingRequest(changed) }),
+      ).toThrow(/preserve every original audit input and target/u);
+    },
+  );
+
+  it("preserves every extra training convergence failure and original audit blocker", () => {
+    const changed = trainingFixture(
+      training.diagnostics.candidateForecasts.map((row) =>
+        row.forecastSeason === 2022 && rowBucket(row) === "nine-plus"
+          ? {
+              ...row,
+              evidence: {
+                ...row.evidence,
+                convergence: {
+                  contextual: { ...row.evidence.convergence.contextual, state: "unstable" },
+                  recency: { ...row.evidence.convergence.recency, state: "unstable" },
+                },
+              },
+            }
+          : row,
+      ),
+    );
+    const trainingBlocker = "calibration_DST_nine-plus_convergence_below_minimum";
+    changed.report.blockers = [
+      trainingBlocker,
+      "calibration_DST_nine-plus_interval_coverage_gate_failed",
+    ];
+    changed.report.state = "insufficient";
+    const audit = structuredClone(candidate);
+    const auditBlocker = "calibration_DST_five-to-eight_interval_coverage_gate_failed";
+    audit.report.blockers = [auditBlocker];
+    audit.report.state = "insufficient";
+    const result = buildRosMarginalDevelopmentReport({
+      ...request(audit),
+      ...trainingRequest(changed),
+    });
+    expect(result.state).toBe("rejected-at-development-screen");
+    expect(result.marginalDevelopment.reasons).toEqual([
+      `preserved-legacy:${auditBlocker}`,
+      "interval-training:physical-convergence:2022:DST:nine-plus:contextual",
+      "interval-training:physical-convergence:2022:DST:nine-plus:availability-aware-recency",
+      `interval-training:preserved-legacy:${trainingBlocker}`,
+    ]);
+    expect(result.legacyEvaluation.intervalTraining!.fullReport).toEqual(changed);
+    expect(result.marginalDevelopment.evaluation.intervalTraining!.diagnostics).toMatchObject({
+      contextual: { unstableForecasts: 288 },
+      recency: { unstableForecasts: 288 },
+    });
+  });
+
+  it("round-trips pinned training through the CLI, preserving default v1 output and exclusive writes", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "ros-marginal-training-"));
+    const execute = promisify(execFile);
+    try {
+      const pinned = { ...request(), ...trainingRequest(training) };
+      await Promise.all([
+        writeFile(join(directory, "candidate.json"), pinned.candidateReportJson),
+        writeFile(join(directory, "previous.json"), pinned.previousReportJson),
+        writeFile(join(directory, "training.json"), pinned.intervalTrainingReportJson),
+      ]);
+      const base = [
+        "--import",
+        "tsx",
+        "apps/worker/scripts/evaluate-marginal-ros.ts",
+        `--candidate-report=${join(directory, "candidate.json")}`,
+        `--candidate-sha256=${pinned.candidateReportChecksum}`,
+        `--previous-report=${join(directory, "previous.json")}`,
+        `--previous-sha256=${pinned.previousReportChecksum}`,
+        "--forecast-season=2026",
+        "--evaluation-season=2025",
+        "--positions=DST",
+      ];
+      const extra = [
+        `--interval-training-report=${join(directory, "training.json")}`,
+        `--interval-training-sha256=${pinned.intervalTrainingReportChecksum}`,
+      ];
+      for (const option of extra) {
+        await expect(
+          execute(process.execPath, [...base, option, `--out=${join(directory, "partial.json")}`]),
+        ).rejects.toThrow(/supplied together/u);
+      }
+      const output = join(directory, "v2.json");
+      await execute(process.execPath, [...base, ...extra, `--out=${output}`]);
+      const serialized = await readFile(output, "utf8");
+      expect(JSON.parse(serialized)).toEqual(buildRosMarginalDevelopmentReport(pinned));
+      await expect(
+        execute(process.execPath, [...base, ...extra, `--out=${output}`]),
+      ).rejects.toThrow(/EEXIST/u);
+      expect(await readFile(output, "utf8")).toBe(serialized);
+      const defaultOutput = join(directory, "v1.json");
+      await execute(process.execPath, [...base, `--out=${defaultOutput}`]);
+      expect(await readFile(defaultOutput, "utf8")).toBe(`${JSON.stringify(passed, null, 2)}\n`);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  }, 30_000);
 });

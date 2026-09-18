@@ -34,6 +34,10 @@ import {
   type FirstPartyRosStrategy,
 } from "./rest-of-season.js";
 import { sha256Hex } from "./sha256.js";
+import {
+  validateMarginalRosTrainingCohort,
+  type MarginalRosTrainingCohort,
+} from "./marginal-ros-training.js";
 
 /** Candidate evaluation only. Neither a fitted correction nor a descriptive screen admits it. */
 export const FIRST_PARTY_ROS_MARGINAL_POLICY_VERSION =
@@ -108,6 +112,8 @@ export interface MarginalRosChampionPolicy {
 
 export interface MarginalRosChampionEvaluation {
   readonly policyVersion: typeof FIRST_PARTY_ROS_MARGINAL_POLICY_VERSION;
+  /** Present only for an explicitly supplied, separately bound interval-training cohort. */
+  readonly intervalTraining?: MarginalRosTrainingCohort;
   readonly livePolicy: MarginalRosChampionPolicy;
   readonly seasonPolicies: readonly {
     readonly season: number;
@@ -358,6 +364,8 @@ export function evaluateFirstPartyRosMarginalPolicy(
   options: {
     readonly forecastSeason: number;
     readonly championOptions?: FirstPartyRosChampionOptions;
+    /** Extra prior-fit rows never participate in the mean selector or held-out evaluation. */
+    readonly intervalTrainingSeasons?: readonly FirstPartyRosHeldOutSeason[];
   },
 ): MarginalRosChampionEvaluation {
   if (
@@ -375,6 +383,10 @@ export function evaluateFirstPartyRosMarginalPolicy(
   if (legacyEvaluation.livePolicy.policyVersion !== LEGACY_POLICY_VERSION)
     throw new Error("Marginal evaluator requires the unchanged v7 mean-policy comparator");
   const ordered = [...heldOutSeasons].sort((left, right) => left.season - right.season);
+  const training =
+    options.intervalTrainingSeasons === undefined
+      ? null
+      : validateMarginalRosTrainingCohort(ordered, options.intervalTrainingSeasons);
   // The legacy evaluator validates the broader physical input. Marginal scaling additionally
   // requires actual schedule support within this exact forecast window and one player per block.
   const semanticIdentities = new Set<string>();
@@ -420,13 +432,18 @@ export function evaluateFirstPartyRosMarginalPolicy(
         const candidate = evaluateCandidate(forecast, choice, strategy);
         candidates.push(candidate);
         if (strategy === choice.strategy) selected.push(candidate);
-        // Zero-game forecasts are retained above as withheld diagnostics, never substituted with
-        // an epsilon, expected/realized games, or an unqualified raw interval in fit evidence.
-        if (candidate.scheduledGames > 0) {
-          pending.push(
-            historyRow(forecast, strategy, choice.intervalArtifacts[key(strategy)]!.context),
-          );
-        }
+      }
+    }
+    // Resolve all rows together only after the original audit season has been evaluated. An
+    // explicit training superset changes the interval fit alone, never mean choices or metrics.
+    // Zero-game rows remain excluded without an epsilon or a substitution of expected games.
+    for (const forecast of (training?.ordered[index] ?? season).forecasts) {
+      if (forecast.evidence.availability.scheduledGames === 0) continue;
+      const choice = choices.get(cellKey(forecast.position, bucket(forecast)))!;
+      for (const strategy of STRATEGIES) {
+        pending.push(
+          historyRow(forecast, strategy, choice.intervalArtifacts[key(strategy)]!.context),
+        );
       }
     }
     for (const row of pending) {
@@ -438,6 +455,7 @@ export function evaluateFirstPartyRosMarginalPolicy(
   }
   return {
     policyVersion: FIRST_PARTY_ROS_MARGINAL_POLICY_VERSION,
+    ...(training === null ? {} : { intervalTraining: training.provenance }),
     livePolicy: policyFromPriorSeasons({
       forecastSeason: options.forecastSeason,
       completedSeasons,

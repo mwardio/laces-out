@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { NFL_TEAMS } from "@laces-out/domain";
 import {
   FIRST_PARTY_ROS_MODEL_VERSION,
   FIRST_PARTY_ROS_POLICY_VERSION,
@@ -25,6 +26,8 @@ import {
 import { firstPartyRosChampionPolicyChecksum } from "./first-party-ros-publication.js";
 
 export const ROS_MARGINAL_DEVELOPMENT_VERSION = "pinned-report-marginal-development-v1";
+export const ROS_MARGINAL_TRAINING_DEVELOPMENT_VERSION =
+  "pinned-report-marginal-development-separate-defense-training-v2";
 const POSITIONS = ["QB", "RB", "WR", "TE", "K", "DST"] as const;
 const BUCKETS = ["one-to-four", "five-to-eight", "nine-plus"] as const;
 const SOURCE_FIELDS = [
@@ -126,7 +129,12 @@ const HELD_OUT_SEASONS = [2022, 2023, 2024, 2025];
 const SOURCE_SEASONS = [2019, 2020, 2021, 2022, 2023, 2024, 2025];
 
 /** Parse complete, hash-pinned CLI evidence and reconstruct every executable v7 policy field. */
-function snapshot(value: unknown, reportChecksum: string, previous: boolean) {
+function snapshot(
+  value: unknown,
+  reportChecksum: string,
+  previous: boolean,
+  role: "audit8" | "interval-training32" = "audit8",
+) {
   digest(reportChecksum);
   const root = record(value),
     report = record(root.report),
@@ -152,6 +160,9 @@ function snapshot(value: unknown, reportChecksum: string, previous: boolean) {
   )
     fail("invalid report positions");
   if (scope.completePortfolio !== (positions.length === 6)) fail("inconsistent portfolio scope");
+  if (role === "interval-training32")
+    equal(positions, ["DST"], "interval training requires the complete defense-only cohort");
+  const playersPerPosition = role === "interval-training32" ? 32 : 8;
   const seasons = array(report.seasons, 201).map((value) => integer(value, 2000, 2200));
   equal(seasons, HELD_OUT_SEASONS, "changed frozen held-out seasons");
   equal(
@@ -172,7 +183,7 @@ function snapshot(value: unknown, reportChecksum: string, previous: boolean) {
     report.batches !== batches ||
     coverage.completeAsOfBatches !== batches ||
     coverage.totalAsOfBatches !== batches ||
-    report.playersPerPosition !== 8 ||
+    report.playersPerPosition !== playersPerPosition ||
     report.maximumForecasts !== 6000 ||
     report.skippedForecasts !== 0
   )
@@ -180,7 +191,10 @@ function snapshot(value: unknown, reportChecksum: string, previous: boolean) {
   const raw = array(
     diagnostics.candidateForecasts,
   ) as unknown as readonly FirstPartyRosHeldOutForecast[];
-  if (raw.length !== positions.length * seasons.length * 17 * 8 || report.forecasts !== raw.length)
+  if (
+    raw.length !== positions.length * seasons.length * 17 * playersPerPosition ||
+    report.forecasts !== raw.length
+  )
     fail("incomplete forecast count");
   const counts = new Map<string, Set<string>>();
   const convergence = new Map<string, Record<string, unknown>>();
@@ -258,9 +272,14 @@ function snapshot(value: unknown, reportChecksum: string, previous: boolean) {
   }
   if (
     counts.size !== positions.length * batches ||
-    [...counts.values()].some((players) => players.size !== 8)
+    [...counts.values()].some((players) => players.size !== playersPerPosition)
   )
     fail("missing cutoff/player support");
+  if (
+    role === "interval-training32" &&
+    [...counts.values()].some((players) => NFL_TEAMS.some((team) => !players.has(`DST:${team}`)))
+  )
+    fail("interval training requires all 32 canonical defense identities at every cutoff");
   const heldOutSeasons: FirstPartyRosHeldOutSeason[] = seasons.map((season) => ({
     season,
     complete: true,
@@ -375,12 +394,19 @@ export function buildRosMarginalDevelopmentReport(input: {
   readonly candidateReportChecksum: string;
   readonly previousReportJson: string;
   readonly previousReportChecksum: string;
+  readonly intervalTrainingReportJson?: string;
+  readonly intervalTrainingReportChecksum?: string;
   readonly forecastSeason: number;
   readonly evaluationSeason: number;
   readonly positions: readonly FirstPartyRosPosition[];
 }) {
   integer(input.forecastSeason, 2000, 2200);
   integer(input.evaluationSeason, 2000, 2200);
+  if (
+    (input.intervalTrainingReportJson === undefined) !==
+    (input.intervalTrainingReportChecksum === undefined)
+  )
+    fail("interval training report and pinned SHA256 must be supplied together");
   const candidate = snapshot(
     pinnedJson(input.candidateReportJson, input.candidateReportChecksum),
     input.candidateReportChecksum,
@@ -391,6 +417,15 @@ export function buildRosMarginalDevelopmentReport(input: {
     input.previousReportChecksum,
     true,
   );
+  const training =
+    input.intervalTrainingReportJson === undefined
+      ? null
+      : snapshot(
+          pinnedJson(input.intervalTrainingReportJson, input.intervalTrainingReportChecksum!),
+          input.intervalTrainingReportChecksum!,
+          false,
+          "interval-training32",
+        );
   if (candidate.source.physicalCorpusChecksum === previous.source.physicalCorpusChecksum)
     fail("different physical model versions cannot share one corpus identity");
   equal(candidate.seasons, previous.seasons, "candidate/previous held-out seasons differ");
@@ -417,6 +452,21 @@ export function buildRosMarginalDevelopmentReport(input: {
   // Current repaired v13 report must be graded in its entirety; a wider old report can supply the
   // corresponding previous deployment cells. No failing candidate position may be omitted.
   equal(positions, [...candidate.positions].sort(), "comparison omits candidate positions");
+  if (training !== null) {
+    equal(positions, ["DST"], "separate interval training requires a defense-only audit");
+    equal(training.seasons, candidate.seasons, "interval training/audit held-out seasons differ");
+    equal(training.sources, candidate.sources, "interval training/audit source checksums differ");
+    if (
+      training.source.modelVersion !== candidate.source.modelVersion ||
+      training.source.scoringProfileKey !== candidate.source.scoringProfileKey
+    )
+      fail("interval training/audit model or scoring profile differs");
+    if (
+      training.source.physicalCorpusChecksum === candidate.source.physicalCorpusChecksum ||
+      training.source.physicalCorpusChecksum === previous.source.physicalCorpusChecksum
+    )
+      fail("separate interval training requires a distinct physical corpus identity");
+  }
   const commonKey = (row: FirstPartyRosHeldOutForecast, old: boolean) =>
     JSON.stringify([
       row.position,
@@ -447,6 +497,7 @@ export function buildRosMarginalDevelopmentReport(input: {
   const marginal = evaluateFirstPartyRosMarginalPolicy(candidate.heldOutSeasons, {
     forecastSeason: input.forecastSeason,
     championOptions: candidate.options,
+    ...(training === null ? {} : { intervalTrainingSeasons: training.heldOutSeasons }),
   });
   equal(marginal.legacyEvaluation, candidate.legacy, "marginal evaluator changed the mean policy");
   const cells = positions.flatMap((position) => BUCKETS.map((bucket) => ({ position, bucket })));
@@ -630,9 +681,22 @@ export function buildRosMarginalDevelopmentReport(input: {
   });
   reasons.push(...preservedLegacyBlockers.map((reason) => `preserved-legacy:${reason}`));
   reasons.push(...candidate.physicalBlockers);
+  if (training !== null) {
+    // Broader-cohort mean/CQR gates stay diagnostic. Physical failures still block this experiment,
+    // including failures absent from the original audit's independently sampled convergence check.
+    reasons.push(...training.physicalBlockers.map((reason) => `interval-training:${reason}`));
+    reasons.push(
+      ...training.blockers
+        .filter((reason) => reason.includes("convergence"))
+        .map((reason) => `interval-training:preserved-legacy:${reason}`),
+    );
+  }
   const payload = {
-    schemaVersion: 1,
-    version: ROS_MARGINAL_DEVELOPMENT_VERSION,
+    schemaVersion: training === null ? 1 : 2,
+    version:
+      training === null
+        ? ROS_MARGINAL_DEVELOPMENT_VERSION
+        : ROS_MARGINAL_TRAINING_DEVELOPMENT_VERSION,
     validationMode: "marginal-interval-development-only",
     state: reasons.length ? "rejected-at-development-screen" : "development-screen-passed",
     canAuthorizeRelease: false,
@@ -647,6 +711,7 @@ export function buildRosMarginalDevelopmentReport(input: {
       previous: previous.source,
       sources: candidate.sources,
       sourceComponentEquivalence: "requires-separate-pinned-source-preflight",
+      ...(training === null ? {} : { intervalTraining: training.source }),
     },
     legacyEvaluation: {
       candidatePolicy: candidate.root.publicationPolicy,
@@ -655,6 +720,15 @@ export function buildRosMarginalDevelopmentReport(input: {
       candidateReport: candidate.report,
       previousReport: previous.report,
       physicalBlockers: candidate.physicalBlockers,
+      ...(training === null
+        ? {}
+        : {
+            intervalTraining: {
+              interpretation: "diagnostic-only",
+              fullReport: training.root,
+              physicalBlockers: training.physicalBlockers,
+            },
+          }),
     },
     marginalDevelopment: { evaluation: marginal, cells: cellComparisons, portfolio, reasons },
   } as const;

@@ -3807,16 +3807,13 @@ function addWalkForwardCalibrationEvidence(
   }
 }
 
-/**
- * Applies a season-locked ROS champion policy. Every forecast in a held-out season uses only
- * evidence from fully resolved earlier seasons; overlapping cutoffs from the current season are
- * added together only after the whole season completes.
- */
-export function evaluateFirstPartyRosChampionPolicy(
+/** Validate shared historical inputs without fitting or selecting a policy. */
+export function validateFirstPartyRosHeldOutSeasons(
   heldOutSeasons: readonly FirstPartyRosHeldOutSeason[],
-  options: FirstPartyRosChampionOptions = {},
-): FirstPartyRosChampionEvaluation {
-  const resolvedOptions = resolvedChampionOptions(options);
+): {
+  readonly ordered: readonly FirstPartyRosHeldOutSeason[];
+  readonly evidenceIdentity: FirstPartyRosEvidenceIdentity | null;
+} {
   const ordered = [...heldOutSeasons].sort((left, right) => left.season - right.season);
   const duplicateSeasons = new Set<number>();
   let evidenceIdentity: FirstPartyRosEvidenceIdentity | null = null;
@@ -3848,7 +3845,20 @@ export function evaluateFirstPartyRosChampionPolicy(
       }
     }
   }
+  return { ordered, evidenceIdentity };
+}
 
+/**
+ * Applies a season-locked ROS champion policy. Every forecast in a held-out season uses only
+ * evidence from fully resolved earlier seasons; overlapping cutoffs from the current season are
+ * added together only after the whole season completes.
+ */
+export function evaluateFirstPartyRosChampionPolicy(
+  heldOutSeasons: readonly FirstPartyRosHeldOutSeason[],
+  options: FirstPartyRosChampionOptions = {},
+): FirstPartyRosChampionEvaluation {
+  const resolvedOptions = resolvedChampionOptions(options);
+  const { ordered, evidenceIdentity } = validateFirstPartyRosHeldOutSeasons(heldOutSeasons);
   const evidence = new Map<string, ErrorEvidence>();
   const seasonPolicies: FirstPartyRosSeasonPolicyAudit[] = [];
   const selected: FirstPartyRosSelectedEvaluation[] = [];
