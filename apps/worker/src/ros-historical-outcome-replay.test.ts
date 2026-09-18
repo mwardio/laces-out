@@ -69,15 +69,15 @@ describe("historical outcome corpus replay", () => {
       "1dae0d06bf91824a4d2de9607513479207b90cd9f06a40e01ff2be6654a22db8",
     ],
   ] as const)(
-    "preserves the pre-history-v2 physical D/ST cache key for %s",
+    "invalidates the v11 physical D/ST cache key under the new model identity for %s",
     (strategy, expectedIdentity) => {
-      // Captured before adding playerHistoryVersion to the admission protocol. D/ST inputs do
-      // not use the corrected player zero-game helper; unchanged requests retain their keys.
+      // These keys were captured under v11. The v12 model identity deliberately invalidates
+      // the entire physical corpus, including positions whose component centers are unchanged.
       const request = {
         ...denseSimulationInput("DST", strategy),
         scoringProfile: input().scoringProfile,
       };
-      expect(rosHistoricalOutcomeCacheKey(request).identity).toBe(expectedIdentity);
+      expect(rosHistoricalOutcomeCacheKey(request).identity).not.toBe(expectedIdentity);
     },
   );
 

@@ -3,8 +3,8 @@
 -- Complete weekly normalization also catches a failed registrar, with 36 hours from signup.
 -- Keep release identities synchronized with @laces-out/projections (pinned by the PG test).
 with release_identity as (
-  select 'laces-ros-distribution-v11'::text as model_version,
-         'season-walk-forward-block-wis-cqr-v4'::text as policy_version,
+  select 'laces-ros-distribution-v12'::text as model_version,
+         'season-walk-forward-block-wis-cqr-v6'::text as policy_version,
          'season-blocked-split-conformal-cqr-v1'::text as calibration_version,
          'league-scoring-map-v7'::text as scoring_mapping_version,
          extract(year from now() at time zone 'UTC')::int

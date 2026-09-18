@@ -11,6 +11,7 @@ import {
   firstPartyChampionStrategyForPosition,
   firstPartyProjectionComponentsForPosition,
   firstPartyProjectionPositionIsSupported,
+  firstPartyRecentRoleContext,
   firstPartyTeamDefenseProjectionComponents,
   projectFirstPartyRecencyBaselineComponents,
   projectFirstPartyTeamDefenseComponents,
@@ -19,7 +20,9 @@ import {
   runFirstPartyProjectionBacktest,
   runFirstPartyTeamDefenseBacktest,
   type FirstPartyProjectionCalibration,
+  type FirstPartyProjectionConfig,
   type FirstPartyProjectionPosition,
+  type FirstPartyProjectionTarget,
   type FirstPartyTeamDefenseWeeklyStatLine,
   type FirstPartyWeeklyStatLine,
 } from "./first-party.js";
@@ -184,6 +187,346 @@ function historyForAllPositions(weeks = 8): FirstPartyWeeklyStatLine[] {
   }
   return rows;
 }
+
+describe("opportunity-regularized recency baselines", () => {
+  const target = { playerId: "target", position: "TE", season: 2025, week: 2, team: "AAA" };
+  const oneWeekWeight = 0.5 ** (1 / 6);
+  function forecast(
+    history: readonly FirstPartyWeeklyStatLine[],
+    overrides: Partial<FirstPartyProjectionTarget> = {},
+    config?: Partial<FirstPartyProjectionConfig>,
+  ) {
+    return projectFirstPartyRecencyBaselineComponents({
+      target: { ...target, ...overrides },
+      history,
+      ...(config === undefined ? {} : { config }),
+    });
+  }
+
+  it.each([
+    ["QB", "passing_attempts", "passing_completions"],
+    ["RB", "carries", "rushing_yards"],
+    ["WR", "targets", "receptions"],
+    ["TE", "targets", "receptions"],
+  ] as const)(
+    "supports future %s outcomes after observed opportunities but zero successes",
+    (position, opportunity, outcome) => {
+      const result = forecast(
+        [
+          line("target", position, 1, { components: { [opportunity]: 1, [outcome]: 0 } }),
+          line("peer", position, 1, { components: { [opportunity]: 8, [outcome]: 4 } }),
+        ],
+        { position },
+      );
+      // Prior: 4/9 successes per opportunity, 4.5 opportunities per game, four prior games.
+      // Personal exposure is one recency-weighted opportunity; opportunity volume stays one.
+      expect(result.components[opportunity]).toBe(1);
+      expect(result.components[outcome]).toBeCloseTo(8 / (oneWeekWeight + 18), 12);
+      expect(Object.values(result.components).every(Number.isFinite)).toBe(true);
+    },
+  );
+
+  it("shrinks mature rare-event rates smoothly without making finite zero successes absorbing", () => {
+    const history = Array.from({ length: 8 }, (_, index) => [
+      line("target", "TE", index + 1, { components: { targets: 8, receiving_touchdowns: 0 } }),
+      line("peer", "TE", index + 1, { components: { targets: 8, receiving_touchdowns: 1 } }),
+    ]).flat();
+    const mature = forecast(history, { week: 9 });
+    const sparse = forecast(history.slice(0, 2));
+    expect(mature.components.targets).toBe(8);
+    expect(sparse.components.targets).toBe(8);
+    const weightedGames = Array.from({ length: 8 }, (_, index) => 0.5 ** ((8 - index) / 6)).reduce(
+      (sum, weight) => sum + weight,
+      0,
+    );
+    // Eight recency-weighted games of eight opportunities against four prior games of eight.
+    expect(mature.components.receiving_touchdowns).toBeCloseTo(2 / (weightedGames + 4), 12);
+    expect(sparse.components.receiving_touchdowns).toBeCloseTo(2 / (oneWeekWeight + 4), 12);
+    expect(mature.components.receiving_touchdowns).toBeLessThan(
+      sparse.components.receiving_touchdowns!,
+    );
+  });
+
+  it("uses the same smooth rule for nonzero outcomes and does not punish an added success", () => {
+    const zero = [
+      line("target", "TE", 1, { components: { targets: 1, receptions: 0 } }),
+      line("peer", "TE", 1, { components: { targets: 8, receptions: 4 } }),
+    ];
+    const successful = [
+      line("target", "TE", 1, { components: { targets: 1, receptions: 1 } }),
+      zero[1]!,
+    ];
+    const before = forecast(zero);
+    const after = forecast(successful);
+    expect(after.components.targets).toBe(before.components.targets);
+    expect(after.components.receptions).toBeCloseTo(1 - 8 / (oneWeekWeight + 18), 12);
+    expect(after.components.receptions).toBeGreaterThan(before.components.receptions!);
+  });
+
+  it("counts actual opportunities instead of treating zero-opportunity appearances as failed trials", () => {
+    const history = Array.from({ length: 8 }, (_, index) => [
+      line("target", "TE", index + 1, {
+        components: { targets: index === 7 ? 1 : 0, receptions: 0 },
+      }),
+      line("peer", "TE", index + 1, { components: { targets: 8, receptions: 4 } }),
+    ]).flat();
+    const result = forecast(history, { week: 9 });
+    const weights = Array.from({ length: 8 }, (_, index) => 0.5 ** ((8 - index) / 6));
+    const games = weights.reduce((sum, weight) => sum + weight, 0);
+    const personalOpportunityMean = weights[7]! / games;
+    const priorRate = (4 * games) / (8 * games + weights[7]!);
+    const priorExposure = (4 * (8 + personalOpportunityMean)) / 2;
+    expect(result.components.targets).toBeCloseTo(personalOpportunityMean, 12);
+    expect(result.components.receptions).toBeCloseTo(
+      personalOpportunityMean * priorRate * (priorExposure / (oneWeekWeight + priorExposure)),
+      12,
+    );
+  });
+
+  it("decays old exposure with the personal rate and reduces confidence at farther horizons", () => {
+    const history = [
+      line("target", "QB", 1, {
+        season: 2023,
+        components: { passing_attempts: 40, passing_touchdowns: 0 },
+      }),
+      line("target", "QB", 9, { components: { passing_attempts: 2, passing_touchdowns: 0 } }),
+      line("peer", "QB", 9, { components: { passing_attempts: 32, passing_touchdowns: 2 } }),
+    ];
+    const near = forecast(history, { position: "QB", week: 10 });
+    const far = forecast(history, { position: "QB", week: 16 });
+    const oldWeight = 0.5 ** (59 / 6);
+    const effectiveExposure = 40 * oldWeight + 2 * oneWeekWeight;
+    const personalOpportunityMean = effectiveExposure / (oldWeight + oneWeekWeight);
+    const priorExposure =
+      (4 * (40 * oldWeight + 34 * oneWeekWeight)) / (oldWeight + 2 * oneWeekWeight);
+    const priorRate = (2 * oneWeekWeight) / (40 * oldWeight + 34 * oneWeekWeight);
+    expect(effectiveExposure).toBeLessThan(2);
+    expect(near.components.passing_attempts).toBeCloseTo(personalOpportunityMean, 12);
+    expect(far.components.passing_attempts).toBeCloseTo(personalOpportunityMean, 12);
+    expect(near.components.passing_touchdowns).toBeCloseTo(
+      personalOpportunityMean * priorRate * (priorExposure / (effectiveExposure + priorExposure)),
+      12,
+    );
+    // Six additional weeks halve personal evidence without changing the normalized centers.
+    expect(far.components.passing_touchdowns).toBeCloseTo(
+      personalOpportunityMean *
+        priorRate *
+        (priorExposure / (effectiveExposure / 2 + priorExposure)),
+      12,
+    );
+    expect(far.components.passing_touchdowns).toBeGreaterThan(near.components.passing_touchdowns!);
+  });
+
+  it("ignores unusable recency weights instead of fabricating evidence or nonfinite results", () => {
+    const history = [
+      line("target", "TE", 1, { components: { targets: 1, receptions: 0 } }),
+      line("peer", "TE", 1, { components: { targets: 8, receptions: 4 } }),
+    ];
+    const result = forecast(history, {}, { recencyHalfLifeWeeks: Number.MIN_VALUE });
+    expect(result.components.targets).toBe(0);
+    expect(result.components.receptions).toBe(0);
+    expect(Object.values(result.components).every(Number.isFinite)).toBe(true);
+    // A missing ancient pair whose weight underflows does not contaminate usable recent data.
+    const config = { recencyHalfLifeWeeks: 0.01 };
+    const ancient = line("target", "TE", 1, { season: 2020, components: {} });
+    expect(forecast([...history, ancient], {}, config).components).toEqual(
+      forecast(history, {}, config).components,
+    );
+  });
+
+  it.each([
+    ["zero opportunities", { targets: 0, receiving_yards: 0 }, 0],
+    ["missing opportunities", { receiving_yards: 0 }, 0],
+    ["negative opportunities", { targets: -1, receiving_yards: 0 }, 0],
+    ["nonfinite opportunities", { targets: Number.NaN, receiving_yards: 0 }, 0],
+    ["inconsistent zero opportunities", { targets: 0, receiving_yards: -3 }, -3],
+  ] as const)("retains legacy behavior for %s", (_label, components, expected) => {
+    const result = forecast([
+      line("target", "TE", 1, { components }),
+      line("peer", "TE", 1, { components: { targets: 8, receiving_yards: 80 } }),
+    ]);
+    expect(result.components.receiving_yards).toBe(expected);
+  });
+
+  it("does not turn missing paired capability into personal evidence", () => {
+    const result = forecast(
+      [
+        line("target", "TE", 1, { components: { targets: 1, receiving_yards: 0 } }),
+        line("target", "TE", 2, { components: { targets: 2 } }),
+        line("peer", "TE", 1, { components: { targets: 8, receiving_yards: 80 } }),
+      ],
+      { week: 3 },
+    );
+    expect(result.components.receiving_yards).toBe(0);
+    expect(result.components.receiving_touchdowns_40_plus).toBeUndefined();
+    expect(result.components.receiving_touchdowns_50_plus).toBeUndefined();
+  });
+
+  it("excludes malformed and missing prior pairs while retaining observed zero/zero games", () => {
+    const history = [
+      line("target", "TE", 1, { components: { targets: 1, receiving_yards: 0 } }),
+      line("peer", "TE", 1, { components: { targets: 8, receiving_yards: 80 } }),
+      line("quiet-peer", "TE", 1, { components: { targets: 0, receiving_yards: 0 } }),
+    ];
+    const baseline = forecast(history);
+    const contaminated = forecast([
+      ...history,
+      line("missing-opportunity", "TE", 1, { components: { receiving_yards: 999 } }),
+      line("missing-outcome", "TE", 1, { components: { targets: 999 } }),
+      line("inconsistent-pair", "TE", 1, { components: { targets: 0, receiving_yards: 999 } }),
+    ]);
+    // Zero/zero is a played game in the four-game prior: 9/3 opportunities per game, not 9/2.
+    expect(baseline.components.receiving_yards).toBeCloseTo(
+      (80 / 9) * (12 / (oneWeekWeight + 12)),
+      12,
+    );
+    expect(contaminated.components.receiving_yards).toBe(baseline.components.receiving_yards);
+  });
+
+  it("retains signed yardage and separately learned nonnegative yardage", () => {
+    const result = forecast(
+      [
+        line("target", "RB", 1, { components: { carries: 1, rushing_yards: -1 } }),
+        line("peer", "RB", 1, { components: { carries: 8, rushing_yards: -4 } }),
+      ],
+      { position: "RB" },
+    );
+    expect(result.components.carries).toBe(1);
+    expect(result.components.rushing_yards).toBeCloseTo(-1 + 8 / (oneWeekWeight + 18), 12);
+    expect(result.components.rushing_yards_nonnegative).toBe(0);
+    expect(result.components.rushing_yards_per_5_units).toBe(0);
+  });
+
+  it("preserves scoring transformations, long-touchdown nesting, and probability bounds", () => {
+    const result = forecast([
+      line("target", "TE", 1, {
+        components: {
+          targets: 1,
+          receptions: 0,
+          receiving_yards: 0,
+          receiving_touchdowns: 0,
+          receiving_touchdowns_40_plus: 0,
+          receiving_touchdowns_50_plus: 0,
+          carries: 0,
+          rushing_yards: 0,
+          rushing_touchdowns: 0,
+        },
+      }),
+      line("peer", "TE", 1, {
+        components: {
+          targets: 8,
+          receptions: 6,
+          receiving_yards: 240,
+          receiving_touchdowns: 1,
+          receiving_touchdowns_40_plus: 1,
+          receiving_touchdowns_50_plus: 1,
+          carries: 0,
+          rushing_yards: 0,
+          rushing_touchdowns: 0,
+        },
+      }),
+    ]);
+    expect(result.components.receptions).toBeCloseTo(12 / (oneWeekWeight + 18), 12);
+    expect(result.components.receptions_per_5_units).toBeCloseTo(2 / (oneWeekWeight + 18), 12);
+    expect(result.components.receiving_yards_200_plus_probability).toBeCloseTo(
+      2 / (oneWeekWeight + 18),
+      12,
+    );
+    expect(result.components.receiving_touchdowns_50_plus).toBeGreaterThan(0);
+    expect(result.components.receiving_touchdowns_50_plus).toBeLessThanOrEqual(
+      result.components.receiving_touchdowns_40_plus!,
+    );
+    expect(result.components.receiving_touchdowns_40_plus).toBeLessThanOrEqual(
+      result.components.receiving_touchdowns!,
+    );
+    expect(result.components.receptions).toBeLessThanOrEqual(result.components.targets!);
+    expect(
+      result.components.receiving_yards_100_199_probability! +
+        result.components.receiving_yards_200_plus_probability!,
+    ).toBeLessThanOrEqual(1);
+    expect(result.components.carries).toBe(0);
+    expect(result.components.rushing_yards).toBe(0);
+    expect(result.components.rushing_touchdowns).toBe(0);
+  });
+
+  it("uses only strictly prior played evidence and preserves bye and inactive zeroes", () => {
+    const history = [
+      line("target", "TE", 1, { components: { targets: 1, receptions: 0 } }),
+      line("peer", "TE", 1, { components: { targets: 8, receptions: 4 } }),
+    ];
+    const snapshot = structuredClone(history);
+    const baseline = forecast(history);
+    const noisy = [
+      ...history,
+      line("target", "TE", 2, { components: { targets: 30, receptions: 30 } }),
+      line("peer", "TE", 3, { components: { targets: 30, receptions: 30 } }),
+      line("dnp", "TE", 1, { played: false, components: { targets: 30, receptions: 30 } }),
+      line("inactive", "TE", 1, { status: "out", components: { targets: 30, receptions: 30 } }),
+    ];
+    expect(forecast(noisy).components).toEqual(baseline.components);
+    for (const override of [{ scheduled: false }, { status: "out" }, { status: "ir" }] as const) {
+      expect(
+        Object.values(forecast(history, override).components).every((value) => value === 0),
+      ).toBe(true);
+    }
+    expect(history).toEqual(snapshot);
+  });
+
+  it("isolates cached paired priors by history, component, position, week, half-life, and role", () => {
+    const history = (["TE", "WR"] as const).flatMap((position) => [
+      line("target", position, 1, {
+        components: { targets: 1, receptions: 0, receiving_yards: 0 },
+        targetShare: 0.1,
+      }),
+      line("low-role", position, 1, {
+        components: { targets: 2, receptions: 1, receiving_yards: position === "TE" ? 8 : 4 },
+        targetShare: 0.1,
+      }),
+      line("high-role", position, 2, {
+        components: { targets: 8, receptions: 6, receiving_yards: 100 },
+        targetShare: 0.8,
+      }),
+    ]);
+    const results: number[] = [];
+    for (const position of ["TE", "WR"] as const) {
+      for (const week of [3, 4]) {
+        for (const recencyHalfLifeWeeks of [1, 6]) {
+          for (const targetShare of [0.1, 0.8]) {
+            for (const playerPriorGames of [1, 4]) {
+              const overrides = { position, week, role: { targetShare } };
+              const config = { recencyHalfLifeWeeks, playerPriorGames };
+              const cached = forecast(history, overrides, config).components;
+              const fresh = forecast(structuredClone(history), overrides, config).components;
+              expect(cached).toEqual(fresh);
+              expect(cached.targets).toBe(1);
+              results.push(cached.receiving_yards!);
+            }
+          }
+        }
+      }
+    }
+    expect(new Set(results).size).toBeGreaterThan(8);
+  });
+
+  it("shares the strictly prior role-weighted baseline with rolling weekly backtests", () => {
+    const history = [
+      line("target", "TE", 1, { components: { targets: 1, receptions: 0 }, targetShare: 0.1 }),
+      line("peer", "TE", 1, { components: { targets: 8, receptions: 4 }, targetShare: 0.8 }),
+    ];
+    const role = firstPartyRecentRoleContext(history, "target");
+    const direct = forecast(history, role === undefined ? {} : { role });
+    const result = runFirstPartyProjectionBacktest([
+      ...history,
+      line("target", "TE", 2, { components: { targets: 20, receptions: 20 }, targetShare: 0.9 }),
+    ]);
+    const prediction = result.predictions.find(
+      (row) => row.playerId === "target" && row.week === 2,
+    );
+    expect(prediction?.baseline).toEqual(direct.components);
+    expect(prediction?.baseline.receptions).toBeGreaterThan(0);
+    expect(prediction?.baseline.targets).toBe(1);
+  });
+});
 
 describe("first-party component projection", () => {
   it("keeps cached recency position priors isolated by history, position, and half-life", () => {
@@ -1477,7 +1820,7 @@ describe("first-party rolling backtest", () => {
     ).toBe(true);
   });
 
-  it("blends thin-history kicker baselines toward the position mean and leaves other positions on the hard switch", () => {
+  it("retains the kicker blend while regularizing WR outcomes at the personal opportunity mean", () => {
     // League context: two established kickers at the default rates plus the target kickers.
     const league: FirstPartyWeeklyStatLine[] = [];
     for (let week = 1; week <= 8; week += 1) {
@@ -1519,7 +1862,7 @@ describe("first-party rolling backtest", () => {
     // rows were exactly this shape: a debut game trusted at full weight.
     expect(blended.components.field_goals_made!).toBeGreaterThan(1.2);
     expect(blended.components.field_goals_made!).toBeLessThan(1.85);
-    // A WR with one quiet game keeps the transparent hard switch: player mean verbatim.
+    // A WR keeps personal opportunity volume while sparse outcomes use the opportunity prior.
     const wrLeague: FirstPartyWeeklyStatLine[] = [];
     for (let week = 1; week <= 8; week += 1) {
       wrLeague.push(line("wr-league", "WR", week));
@@ -1531,7 +1874,9 @@ describe("first-party rolling backtest", () => {
       target: { ...target, playerId: "wr-thin", position: "WR" },
       history: [...wrLeague, quietGame],
     });
-    expect(wr.components.receiving_yards!).toBeCloseTo(8, 6);
+    expect(wr.components.targets).toBe(2);
+    expect(wr.components.receiving_yards!).toBeGreaterThan(8);
+    expect(wr.components.receiving_yards!).toBeLessThan((2 * 61) / 7);
   });
 
   it("projects a status-safe recency champion with strictly prior provenance", () => {

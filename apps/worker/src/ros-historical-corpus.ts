@@ -24,8 +24,8 @@ import {
   ROS_HISTORICAL_CORPUS_BUILD_PROTOCOL,
   hasCurrentRosHistoricalCoverageThresholds,
   hasRosHistoricalCorpusReleaseThresholds,
-  isCurrentRosHistoricalCorpusBuildProtocol,
-  type RosHistoricalCorpusBuildProtocol,
+  isCompatibleRosHistoricalCorpusBuildProtocol,
+  type RosHistoricalCorpusBuildProvenance,
 } from "./ros-historical-corpus-protocol.js";
 
 export const ROS_HISTORICAL_CORPUS_SCHEMA_VERSION = "ros-historical-corpus-v2";
@@ -52,7 +52,7 @@ export interface RosHistoricalCorpusForecast {
 /** An immutable evaluation manifest, not an admission artifact and never scored forecasts. */
 export interface RosHistoricalCorpus {
   readonly schemaVersion: typeof ROS_HISTORICAL_CORPUS_SCHEMA_VERSION;
-  readonly buildProtocol: RosHistoricalCorpusBuildProtocol;
+  readonly buildProtocol: RosHistoricalCorpusBuildProvenance;
   readonly modelVersion: string;
   readonly outcomeSchemaVersion: string;
   readonly weeklyModelVersion: string;
@@ -274,7 +274,7 @@ function validateCorpus(value: unknown): asserts value is RosHistoricalCorpus {
   if (
     !object(value) ||
     value.schemaVersion !== ROS_HISTORICAL_CORPUS_SCHEMA_VERSION ||
-    !isCurrentRosHistoricalCorpusBuildProtocol(value.buildProtocol) ||
+    !isCompatibleRosHistoricalCorpusBuildProtocol(value.buildProtocol) ||
     value.modelVersion !== FIRST_PARTY_ROS_MODEL_VERSION ||
     value.outcomeSchemaVersion !== FIRST_PARTY_ROS_OUTCOME_SCHEMA_VERSION ||
     value.weeklyModelVersion !== ROS_HISTORICAL_CORPUS_BUILD_PROTOCOL.weeklyModelVersion ||

@@ -21,8 +21,8 @@ import {
 import {
   hasCurrentRosHistoricalCoverageThresholds,
   hasRosHistoricalCorpusReleaseThresholds,
-  isCurrentRosHistoricalCorpusBuildProtocol,
-  ROS_HISTORICAL_CORPUS_BUILD_PROTOCOL,
+  isCompatibleRosHistoricalCorpusBuildProtocol,
+  ROS_HISTORICAL_CORPUS_PHYSICAL_PROTOCOL,
   ROS_HISTORICAL_CORPUS_COVERAGE_THRESHOLDS,
   ROS_HISTORICAL_CORPUS_RELEASE_THRESHOLDS,
 } from "./ros-historical-corpus-protocol.js";
@@ -45,9 +45,9 @@ export function rosSharedCorpusRequest(season: number) {
   if (!Number.isSafeInteger(season) || season < 2007 || season > 2200)
     throw new RangeError("Invalid ROS shared corpus season");
   const protocol = {
-    ...ROS_HISTORICAL_CORPUS_BUILD_PROTOCOL,
-    version: "shared-historical-football-corpus-v2",
-    buildProtocolVersion: ROS_HISTORICAL_CORPUS_BUILD_PROTOCOL.version,
+    ...ROS_HISTORICAL_CORPUS_PHYSICAL_PROTOCOL,
+    version: "shared-historical-football-corpus-v3",
+    buildProtocolVersion: ROS_HISTORICAL_CORPUS_PHYSICAL_PROTOCOL.version,
     corpusSchemaVersion: ROS_HISTORICAL_CORPUS_SCHEMA_VERSION,
     ...ROS_HISTORICAL_CORPUS_RELEASE_THRESHOLDS,
     coverageThresholds: ROS_HISTORICAL_CORPUS_COVERAGE_THRESHOLDS,
@@ -78,7 +78,7 @@ interface ReadyPointer {
 function assertCorpusScope(corpus: RosHistoricalCorpus, request: CorpusRequest): void {
   const expected = request.protocol;
   if (
-    !isCurrentRosHistoricalCorpusBuildProtocol(corpus.buildProtocol) ||
+    !isCompatibleRosHistoricalCorpusBuildProtocol(corpus.buildProtocol) ||
     !hasRosHistoricalCorpusReleaseThresholds(corpus.options) ||
     !hasCurrentRosHistoricalCoverageThresholds(corpus.coverage.thresholds) ||
     corpus.coverage.state !== "qualified" ||

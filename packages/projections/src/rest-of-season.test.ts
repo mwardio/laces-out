@@ -943,7 +943,7 @@ describe("first-party ROS kicker count process", () => {
   });
 
   it("declares the new scoring-independent model and seed lineage", () => {
-    expect(FIRST_PARTY_ROS_MODEL_VERSION).toBe("laces-ros-distribution-v11");
+    expect(FIRST_PARTY_ROS_MODEL_VERSION).toBe("laces-ros-distribution-v12");
     expect(FIRST_PARTY_ROS_SEED_VERSION).toBe("laces-ros-distribution-v11");
   });
 
@@ -1171,13 +1171,16 @@ describe("first-party ROS kicker count process", () => {
 });
 
 describe("shared football model golden output", () => {
-  it("reproduces the v11 WR projection byte-for-byte", async () => {
+  it("preserves v11 simulation numbers for identical football inputs under the new model identity", async () => {
     const { readFileSync } = await import("node:fs");
     const golden = JSON.parse(
       readFileSync(new URL("./rest-of-season.v11-golden-wr.json", import.meta.url), "utf8"),
     ) as ReturnType<typeof projectFirstPartyRestOfSeason>;
     const current = projectFirstPartyRestOfSeason(longTouchdownProjectionInput());
-    expect(current).toEqual(golden);
+    expect(current).toEqual({
+      ...golden,
+      provenance: { ...golden.provenance, modelVersion: FIRST_PARTY_ROS_MODEL_VERSION },
+    });
     expect(golden.provenance.modelVersion).toBe("laces-ros-distribution-v11");
   });
 });
@@ -1238,7 +1241,212 @@ function heldOutForecast(
   };
 }
 
+function strategySwitchSeasons() {
+  return [2022, 2023, 2024, 2025].map((season) => ({
+    season,
+    complete: true,
+    forecasts: Array.from({ length: 17 }, (_, index) => index + 1).flatMap((asOfWeek) =>
+      Array.from({ length: 8 }, (_, player) => {
+        // Three seasons do not establish a contextual advantage; the fourth clears the same
+        // uncertainty gate. Both candidates nevertheless have prior-trained CQR artifacts.
+        const contextualMean = season === 2023 ? 110 : 108;
+        const base = heldOutForecast(season, asOfWeek, `team-${player}`);
+        const scheduledGames = 18 - asOfWeek;
+        return {
+          ...base,
+          position: "DST" as const,
+          contextual: {
+            meanPoints: contextualMean,
+            p15Points: contextualMean - 5,
+            p50Points: contextualMean,
+            p85Points: contextualMean + 5,
+          },
+          recency: {
+            meanPoints: 110,
+            // One independently missed block in each short window during the held-out year.
+            p15Points: season === 2025 && [10, 14].includes(asOfWeek) ? 101 : 85,
+            p50Points: 110,
+            p85Points: 135,
+          },
+          evidence: {
+            ...base.evidence,
+            availability: {
+              scheduledGames,
+              actualGames: scheduledGames,
+              contextualExpectedGames: scheduledGames,
+              recencyExpectedGames: scheduledGames,
+            },
+          },
+        };
+      }),
+    ),
+  }));
+}
+
 describe("season-locked ROS champion policy", () => {
+  it("measures both prior-calibrated candidates before a live strategy switch without changing selected metrics", () => {
+    const seasons = strategySwitchSeasons();
+    // Use all production minima: three prior seasons, 51 batches and 408 paired forecasts.
+    const prior = evaluateFirstPartyRosChampionPolicy(seasons.slice(0, 3));
+    const evaluation = evaluateFirstPartyRosChampionPolicy(seasons);
+    expect(evaluation.selected.every((row) => row.strategy === "availability-aware-recency")).toBe(
+      true,
+    );
+    expect(
+      evaluation.selected
+        .filter((row) => row.forecastSeason < 2025)
+        .every((row) => row.intervalCalibration === "not-calibrated"),
+    ).toBe(true);
+    for (const bucket of ["one-to-four", "five-to-eight"] as const) {
+      const before = prior.livePolicy.choices.find(
+        (choice) => choice.position === "DST" && choice.bucket === bucket,
+      )!;
+      const live = evaluation.livePolicy.choices.find(
+        (choice) => choice.position === "DST" && choice.bucket === bucket,
+      )!;
+      expect(before.strategy).toBe("availability-aware-recency");
+      for (const strategy of ["contextual", "recency"] as const) {
+        expect(before.intervalCalibrationArtifacts[strategy]).toMatchObject({
+          state: "calibrated",
+          trainedThroughSeason: 2024,
+          seasons: 3,
+          blocks: 12,
+          samples: 96,
+        });
+        expect(before.walkForwardCalibrationEvidence[strategy].state).toBe("unavailable");
+        expect(live.walkForwardCalibrationEvidence[strategy]).toMatchObject({
+          state: "available",
+          seasons: 1,
+          blocks: 4,
+          samples: 32,
+        });
+      }
+      expect(live).toMatchObject({ strategy: "contextual", reason: "model-cleared-margin" });
+      expect(live.walkForwardCalibrationEvidence.contextual.observedBlockCoverage).toBe(1);
+      expect(live.walkForwardCalibrationEvidence.recency.observedBlockCoverage).toBe(0.75);
+      expect(live.walkForwardCalibrationEvidence.contextual.evidenceChecksum).not.toBe(
+        live.walkForwardCalibrationEvidence.recency.evidenceChecksum,
+      );
+      const selected = evaluation.selected.filter(
+        (row) => row.forecastSeason === 2025 && row.bucket === bucket,
+      );
+      expect(selected).toHaveLength(32);
+      expect(selected.every((row) => row.predictedMean === 110 && row.p85Points === 135)).toBe(
+        true,
+      );
+      expect(
+        selected.filter((row) => row.p15Points === 101 && row.intervalCovered === false),
+      ).toHaveLength(8);
+      const decision = evaluateFirstPartyRosReleaseGate(evaluation.livePolicy, {
+        contextualModelVersion: "contextual-v1",
+        recencyModelVersion: "recency-v1",
+        scoringProfileKey: "test-ppr:v1",
+        intervalMethodVersion: "simulation-p15-p85-v1",
+        position: "DST",
+        bucket,
+        inputChecksum: "e".repeat(64),
+        coverage: { contextual: 1, recency: 1 },
+        availability: { scheduledGames: 4, contextualExpectedGames: 4, recencyExpectedGames: 4 },
+        convergence: {
+          contextual: { state: "converged", diagnosticChecksum: "c".repeat(64) },
+          recency: { state: "converged", diagnosticChecksum: "d".repeat(64) },
+        },
+      });
+      expect(decision).toMatchObject({ state: "release", strategy: "contextual", reasons: [] });
+    }
+  });
+
+  it("records unselected candidate misses independently while preserving every season-selected forecast", () => {
+    const seasons = strategySwitchSeasons();
+    const original = evaluateFirstPartyRosChampionPolicy(seasons);
+    const changed = evaluateFirstPartyRosChampionPolicy(
+      seasons.map((season) => ({
+        ...season,
+        forecasts: season.forecasts.map((forecast) =>
+          season.season === 2025
+            ? {
+                ...forecast,
+                contextual: { meanPoints: 141, p15Points: 130, p50Points: 141, p85Points: 152 },
+              }
+            : forecast,
+        ),
+      })),
+    );
+    expect(changed.selected).toEqual(original.selected);
+    expect(changed.seasonPolicies).toEqual(original.seasonPolicies);
+    for (const bucket of ["one-to-four", "five-to-eight"] as const) {
+      const originalChoice = original.livePolicy.choices.find(
+        (choice) => choice.position === "DST" && choice.bucket === bucket,
+      )!;
+      const changedChoice = changed.livePolicy.choices.find(
+        (choice) => choice.position === "DST" && choice.bucket === bucket,
+      )!;
+      expect(changedChoice.walkForwardCalibrationEvidence.contextual).toMatchObject({
+        state: "available",
+        observedBlockCoverage: 0,
+        seasons: 1,
+        blocks: 4,
+        samples: 32,
+      });
+      expect(changedChoice.walkForwardCalibrationEvidence.recency).toEqual(
+        originalChoice.walkForwardCalibrationEvidence.recency,
+      );
+      expect(changedChoice.walkForwardCalibrationEvidence.contextual.evidenceChecksum).not.toBe(
+        originalChoice.walkForwardCalibrationEvidence.contextual.evidenceChecksum,
+      );
+    }
+  });
+
+  it("does not let either candidate's current-season outcomes calibrate their own coverage", () => {
+    const seasons = strategySwitchSeasons();
+    const original = evaluateFirstPartyRosChampionPolicy(seasons);
+    const changed = evaluateFirstPartyRosChampionPolicy(
+      seasons.map((season) => ({
+        ...season,
+        forecasts: season.forecasts.map((forecast) =>
+          season.season === 2025 ? { ...forecast, actualPoints: 1000 } : forecast,
+        ),
+      })),
+    );
+    expect(changed.seasonPolicies).toEqual(original.seasonPolicies);
+    expect(changed.selected.filter((row) => row.forecastSeason < 2025)).toEqual(
+      original.selected.filter((row) => row.forecastSeason < 2025),
+    );
+    const live = changed.livePolicy.choices.find(
+      (choice) => choice.position === "DST" && choice.bucket === "one-to-four",
+    )!;
+    for (const strategy of ["contextual", "recency"] as const) {
+      expect(live.walkForwardCalibrationEvidence[strategy]).toMatchObject({
+        state: "available",
+        observedBlockCoverage: 0,
+        seasons: 1,
+        blocks: 4,
+        samples: 32,
+      });
+      // The live artifact includes this season only after its walk-forward measurements.
+      expect(live.intervalCalibrationArtifacts[strategy].trainedThroughSeason).toBe(2025);
+      const priorChoice = changed.seasonPolicies
+        .at(-1)!
+        .policy.choices.find(
+          (choice) => choice.position === "DST" && choice.bucket === "one-to-four",
+        )!;
+      expect(live.intervalCalibrationArtifacts[strategy].artifactChecksum).not.toBe(
+        priorChoice.intervalCalibrationArtifacts[strategy].artifactChecksum,
+      );
+      if (strategy === "recency") {
+        expect(
+          changed.selected
+            .filter((row) => row.forecastSeason === 2025 && row.bucket === "one-to-four")
+            .every(
+              (row) =>
+                row.calibrationArtifactChecksum ===
+                priorChoice.intervalCalibrationArtifacts.recency.artifactChecksum,
+            ),
+        ).toBe(true);
+      }
+    }
+  });
+
   it("uses conservative simultaneous targets only for the matching nonlinear scoring shapes", () => {
     const identity = {
       contextualModelVersion: "contextual-v1",

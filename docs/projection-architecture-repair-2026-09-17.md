@@ -1,7 +1,8 @@
 # Projection accuracy and scoring resilience repair
 
-Status: in progress. Weekly v14 / ROS v11 supersede the earlier v13 / v10 candidate below.
-The production v9 recovery jobs are paused pending the validated replacement.
+Status: in progress. Weekly v14 is deployed; weekly v15 / ROS v12 are the new candidates
+described in the September 18 sparse-production review below. ROS consumers remain paused
+pending complete current-model evidence and verified publication.
 
 The acceptance target is accurate, traceable weekly and rest-of-season forecasts for ordinary
 league scoring without training or replaying the football model for every new points configuration.
@@ -576,3 +577,38 @@ Weekly fit-cache lifecycle review, September 18:
   source drift on a cache hit, and telemetry filtering. Independent source review found no
   missing fit dependency. The Mini remains unreachable, so these results do not establish
   Darwin/ARM64 compatibility.
+
+Sparse-production and evaluator review, September 18:
+
+- The complete v11/history-v2 ROS run finished all 3,264 paired forecasts across 2022–2025,
+  68 cutoffs, and six positions. Its 144 convergence checks passed. Its statistical report
+  remained insufficient: long-horizon TE coverage failed, and two DST horizons lacked
+  walk-forward evidence for the final selected candidate. A finished corpus is not admission.
+- The DST gap was an evaluator defect. Each season already locked separate prior-only
+  calibration artifacts for both candidates, but recorded coverage only for that season's
+  selected candidate. Policy v6 records both independently, after the entire season resolves;
+  the selected-policy diagnostics and all release thresholds remain unchanged.
+- Physical corpus compatibility now distinguishes football generation from evaluation policy.
+  Every physical input/version and release threshold must still match exactly. Recognized old
+  evaluator provenance may be replayed, but never rewritten or admitted as current evidence.
+  Batch resumes also check current policy and both candidates' calibration versions; stale
+  reports trigger cache-only reevaluation instead of skipping validation or rebuilding vectors.
+- Inspection found active rookie TE paths with positive games and targets but zero catches,
+  yards, and touchdowns in every simulation. The recency baseline accepted finite observed
+  zero means with full confidence, and multiplicative simulation could never leave zero.
+  This was a production-support limitation, not an injury/bye or source-stat correction.
+- Weekly v15 regularizes passing, rushing, and receiving outcomes per opportunity toward
+  strictly prior same-position/role evidence, using the existing four-game prior strength.
+  Personal opportunity means stay unchanged. Reliability uses recency-weighted observed
+  opportunities divided by their sum with prior opportunities, so finite zero successes do
+  not imply impossible future production. Missing/incoherent paired evidence retains the
+  existing fallback; actual inactive/bye handling and component invariants remain in force.
+  This shared baseline feeds weekly backtests/live forecasts and historical/live ROS.
+- ROS v12 records the changed production semantics. Its seed algorithm retains v11 lineage,
+  but weekly v15 and ROS v12 invalidate old physical outcomes. The v11 golden fixture still
+  tests identical simulation numbers for identical supplied inputs, with new model provenance.
+  Fresh weekly predictions and a fresh complete ROS corpus are required before release.
+- Previously inspected 2025 results are development evidence, not an untouched independent
+  holdout. Blanket interval widening was rejected because proper interval scores worsened.
+  The sparse-production change is based on the model's finite-sample support defect; no named
+  player's future score is a fitting target, and no acceptance gate is relaxed.

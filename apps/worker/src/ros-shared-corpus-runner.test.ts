@@ -20,7 +20,7 @@ import {
 } from "./ros-historical-corpus.js";
 import { historicalCorpusFixture } from "./ros-historical-outcome.test-fixtures.js";
 import {
-  ROS_HISTORICAL_CORPUS_BUILD_PROTOCOL,
+  ROS_HISTORICAL_CORPUS_PHYSICAL_PROTOCOL,
   ROS_HISTORICAL_CORPUS_RELEASE_THRESHOLDS,
 } from "./ros-historical-corpus-protocol.js";
 import { createRosOutcomeCache } from "./ros-outcome-cache.js";
@@ -287,12 +287,15 @@ describe("durable shared ROS corpus orchestration", { timeout: 30_000 }, () => {
   });
 
   it("pins the build envelope and all release thresholds in the durable request identity", () => {
-    const { version, ...physicalProtocol } = ROS_HISTORICAL_CORPUS_BUILD_PROTOCOL;
+    const { version, ...physicalProtocol } = ROS_HISTORICAL_CORPUS_PHYSICAL_PROTOCOL;
     expect(rosSharedCorpusRequest(2026).protocol).toMatchObject({
       ...physicalProtocol,
       ...ROS_HISTORICAL_CORPUS_RELEASE_THRESHOLDS,
       buildProtocolVersion: version,
+      version: "shared-historical-football-corpus-v3",
     });
+    expect(rosSharedCorpusRequest(2026).protocol).not.toHaveProperty("policyVersion");
+    expect(rosSharedCorpusRequest(2026).protocol).not.toHaveProperty("calibrationVersion");
   });
 
   it("requires a new ready pointer after zero-game player history semantics change", () => {
@@ -307,12 +310,23 @@ describe("durable shared ROS corpus orchestration", { timeout: 30_000 }, () => {
     expect(current.identity).not.toBe(legacyIdentity);
   });
 
-  it("adopts a complete prebuilt corpus once and subsequent profiles only replay it", async () => {
+  it("adopts original v5 physical corpus bytes unchanged and subsequent profiles must replay it", async () => {
     const prepared = await fixture();
-    const report = await prepared.runner(input());
+    await prepared.runner(input());
+    const original: RosHistoricalCorpus = {
+      ...prepared.corpus,
+      buildProtocol: {
+        ...prepared.corpus.buildProtocol,
+        policyVersion: "season-walk-forward-block-wis-cqr-v5",
+        calibrationVersion: "season-blocked-split-conformal-cqr-v1",
+      },
+    };
+    const { identity } = await prepared.store.write(original);
+    const corpusFile = path.join(prepared.directory, "corpora", `${identity}.ros-corpus.json.gz`);
+    const corpusBytes = await readFile(corpusFile);
     const options = {
       directory: prepared.directory,
-      corpusIdentity: report.outcomeCorpusIdentity,
+      corpusIdentity: identity,
       season: 2026,
       lock: prepared.lock,
       signal: input().signal,
@@ -320,17 +334,21 @@ describe("durable shared ROS corpus orchestration", { timeout: 30_000 }, () => {
     expect(await adoptRosSharedCorpus(options)).toEqual({
       state: "adopted",
       requestIdentity: prepared.request.identity,
-      corpusIdentity: report.outcomeCorpusIdentity,
+      corpusIdentity: identity,
     });
     const file = path.join(prepared.directory, "ready", `${prepared.request.identity}.json`);
-    const original = await readFile(file);
+    const originalPointer = await readFile(file);
     expect((await adoptRosSharedCorpus(options)).state).toBe("existing");
-    expect(await readFile(file)).toEqual(original);
+    expect(await readFile(file)).toEqual(originalPointer);
     expect(prepared.runner).toHaveBeenCalledTimes(1);
     await prepared.createRunner()(input("half-ppr"));
-    expect(prepared.runner.mock.calls.at(-1)?.[0].replayCorpusIdentity).toBe(
-      report.outcomeCorpusIdentity,
-    );
+    expect(prepared.runner.mock.calls.at(-1)?.[0].replayCorpusIdentity).toBe(identity);
+    expect(await readFile(corpusFile)).toEqual(corpusBytes);
+    expect(await prepared.store.read(identity)).toEqual({
+      state: "hit",
+      identity,
+      corpus: original,
+    });
   });
 
   it("does not publish a ready pointer at low space and preserves all prebuilt immutable bytes", async () => {

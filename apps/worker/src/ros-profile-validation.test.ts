@@ -362,16 +362,19 @@ describe("automatic exact ROS profile validation", () => {
       expect(test.runner).not.toHaveBeenCalled();
     },
   );
-  it("retires a queued v4 request without evaluating it under corrected history semantics", async () => {
-    const test = setup({ policyVersion: "season-walk-forward-block-wis-cqr-v4" });
-    await expect(test.service.validateProfile(test.job, test.context)).resolves.toBeUndefined();
-    expect(test.record()).toMatchObject({
-      state: "withheld",
-      blockers: ["validation_execution_identity_changed"],
-    });
-    expect(test.runner).not.toHaveBeenCalled();
-    expect(test.enqueueProjectionRefresh).not.toHaveBeenCalled();
-  });
+  it.each(["season-walk-forward-block-wis-cqr-v4", "season-walk-forward-block-wis-cqr-v5"])(
+    "retires a queued %s request without reusing it as current policy evidence",
+    async (policyVersion) => {
+      const test = setup({ policyVersion });
+      await expect(test.service.validateProfile(test.job, test.context)).resolves.toBeUndefined();
+      expect(test.record()).toMatchObject({
+        state: "withheld",
+        blockers: ["validation_execution_identity_changed"],
+      });
+      expect(test.runner).not.toHaveBeenCalled();
+      expect(test.enqueueProjectionRefresh).not.toHaveBeenCalled();
+    },
+  );
 
   it("rethrows infrastructure failures so the job can retry", async () => {
     const test = setup();

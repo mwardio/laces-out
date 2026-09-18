@@ -14,14 +14,17 @@ import {
   type ProjectionStatComponents,
 } from "./scoring.js";
 
-export const FIRST_PARTY_ROS_MODEL_VERSION = "laces-ros-distribution-v11";
+/** v12 consumes weekly v15's opportunity-conditioned priors for sparse player production. */
+export const FIRST_PARTY_ROS_MODEL_VERSION = "laces-ros-distribution-v12";
 /**
  * v11 adds nested long-touchdown counts to the scoring-independent football model. Its historical
  * proof must include the play-by-play source; earlier outcome vectors cannot certify these bonuses.
+ * v12 retains this random-stream algorithm, but changed weekly centers and model identity require
+ * new outcome vectors and fresh validation. Keeping the seed lineage does not permit corpus reuse.
  */
 export const FIRST_PARTY_ROS_SEED_VERSION = "laces-ros-distribution-v11";
-/** v5 requires evidence assembled with complete cross-position zero-game touchdown history. */
-export const FIRST_PARTY_ROS_POLICY_VERSION = "season-walk-forward-block-wis-cqr-v5";
+/** v6 measures both prior-calibrated candidates; v5's complete zero-game history stays required. */
+export const FIRST_PARTY_ROS_POLICY_VERSION = "season-walk-forward-block-wis-cqr-v6";
 export const FIRST_PARTY_ROS_INTERVAL_CALIBRATION_VERSION = "season-blocked-split-conformal-cqr-v1";
 /**
  * v4 raised the release path count from 512 to 8192: the declared convergence tolerances carry
@@ -3604,31 +3607,54 @@ export function evaluateFirstPartyRosChampionPolicy(
     const walkForwardRecords: PendingWalkForwardCalibrationRecord[] = [];
     for (const forecast of season.forecasts) {
       const choice = choiceForForecast(policy, forecast);
-      const candidate = choice.strategy === "contextual" ? forecast.contextual : forecast.recency;
-      const calibrationArtifact =
-        choice.strategy === "contextual"
-          ? choice.intervalCalibrationArtifacts.contextual
-          : choice.intervalCalibrationArtifacts.recency;
-      const calibratedInterval = applyFirstPartyRosIntervalCalibration(
-        {
-          p15Points: candidate.p15Points,
-          p50Points: candidate.p50Points,
-          p85Points: candidate.p85Points,
-        },
-        calibrationArtifact,
-      );
-      if (
-        calibratedInterval.intervalCalibration === "split-conformal-cqr" &&
-        (calibrationArtifact.trainedThroughSeason === null ||
-          calibrationArtifact.trainedThroughSeason >= season.season)
-      ) {
-        throw new Error("Walk-forward calibration artifact must precede the evaluated season");
-      }
-      const intervalCovered =
-        calibratedInterval.intervalCalibration === "split-conformal-cqr"
-          ? forecast.actualPoints >= calibratedInterval.p15Points &&
-            forecast.actualPoints <= calibratedInterval.p85Points
-          : null;
+      // Each candidate already has its own artifact trained only on earlier seasons. Measure
+      // both before this season updates evidence: a later policy can select the other candidate
+      // without losing its independently observed calibration record. Selected-policy metrics
+      // below still describe only the choice locked before this season began.
+      const calibrateCandidate = (strategy: FirstPartyRosStrategy) => {
+        const key = strategy === "contextual" ? "contextual" : "recency";
+        const candidate = forecast[key];
+        const calibrationArtifact = choice.intervalCalibrationArtifacts[key];
+        const calibratedInterval = applyFirstPartyRosIntervalCalibration(
+          {
+            p15Points: candidate.p15Points,
+            p50Points: candidate.p50Points,
+            p85Points: candidate.p85Points,
+          },
+          calibrationArtifact,
+        );
+        if (
+          calibratedInterval.intervalCalibration === "split-conformal-cqr" &&
+          (calibrationArtifact.trainedThroughSeason === null ||
+            calibrationArtifact.trainedThroughSeason >= season.season)
+        ) {
+          throw new Error("Walk-forward calibration artifact must precede the evaluated season");
+        }
+        const intervalCovered =
+          calibratedInterval.intervalCalibration === "split-conformal-cqr"
+            ? forecast.actualPoints >= calibratedInterval.p15Points &&
+              forecast.actualPoints <= calibratedInterval.p85Points
+            : null;
+        if (intervalCovered !== null && calibratedInterval.calibrationArtifactChecksum !== null) {
+          walkForwardRecords.push({
+            season: season.season,
+            cutoffWeek: forecast.asOfWeek,
+            playerId: forecast.playerId,
+            position: forecast.position,
+            bucket: remainingWeeksBucket(forecast.windowStartWeek, forecast.windowEndWeek),
+            strategy,
+            covered: intervalCovered,
+            artifactChecksum: calibratedInterval.calibrationArtifactChecksum,
+          });
+        }
+        return { candidate, calibratedInterval, intervalCovered };
+      };
+      const candidates = {
+        contextual: calibrateCandidate("contextual"),
+        recency: calibrateCandidate("availability-aware-recency"),
+      };
+      const { candidate, calibratedInterval, intervalCovered } =
+        candidates[choice.strategy === "contextual" ? "contextual" : "recency"];
       selected.push({
         playerId: forecast.playerId,
         forecastSeason: forecast.forecastSeason,
@@ -3645,18 +3671,6 @@ export function evaluateFirstPartyRosChampionPolicy(
         intervalCovered,
         actualPoints: forecast.actualPoints,
       });
-      if (intervalCovered !== null && calibratedInterval.calibrationArtifactChecksum !== null) {
-        walkForwardRecords.push({
-          season: season.season,
-          cutoffWeek: forecast.asOfWeek,
-          playerId: forecast.playerId,
-          position: forecast.position,
-          bucket: remainingWeeksBucket(forecast.windowStartWeek, forecast.windowEndWeek),
-          strategy: choice.strategy,
-          covered: intervalCovered,
-          artifactChecksum: calibratedInterval.calibrationArtifactChecksum,
-        });
-      }
     }
     // The entire season resolves before any of its overlapping cutoff outcomes become evidence.
     addSeasonEvidence(evidence, season);

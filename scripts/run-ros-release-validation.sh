@@ -75,6 +75,12 @@ profiles_manifest="$(node --import tsx --input-type=module -e '
   import { rosScoringProfileCatalog } from "./packages/projections/src/ros-scoring-profiles.ts";
   console.log(JSON.stringify(Object.fromEntries(rosScoringProfileCatalog().map(p => [p.key, p.digest]))));
 ')" || exit 2
+evaluation_versions="$(node --import tsx --input-type=module -e '
+  import { FIRST_PARTY_ROS_POLICY_VERSION, FIRST_PARTY_ROS_INTERVAL_CALIBRATION_VERSION } from "./packages/projections/src/rest-of-season.ts";
+  console.log(JSON.stringify({ policy: FIRST_PARTY_ROS_POLICY_VERSION, calibration: FIRST_PARTY_ROS_INTERVAL_CALIBRATION_VERSION }));
+')" || exit 2
+policy_version="$(jq -er '.policy' <<< "${evaluation_versions}")" || exit 2
+calibration_version="$(jq -er '.calibration' <<< "${evaluation_versions}")" || exit 2
 protocol="$(node --import tsx --input-type=module -e '
   import { rosSharedCorpusRequest } from "./apps/worker/src/ros-shared-corpus-runner.ts";
   console.log(JSON.stringify(rosSharedCorpusRequest(Number(process.argv[1]))));
@@ -124,24 +130,12 @@ watch_resources() {
   done
 }
 
-run_profile() {
+report_matches_physical_request() {
   local profile="$1"
   local final_json="${report_dir}/${profile}.json"
-  local final_log="${report_dir}/${profile}.log"
-  local exit_file="${report_dir}/${profile}.exit"
-  local temp_json="${final_json}.partial.$$"
-  local temp_log="${final_log}.partial.$$"
   local digest
   digest="$(jq -r --arg profile "${profile}" '.[$profile]' <<< "${profiles_manifest}")"
-  local status=0
-  local source_options=("--outcome-cache=${outcome_dir}")
-  if [[ -n "${corpus_identity}" ]]; then
-    source_options+=("--replay-corpus=${corpus_identity}")
-  elif [[ -n "${ROS_VALIDATION_SOURCE_CACHE:-}" ]]; then
-    source_options+=("--source-cache=${ROS_VALIDATION_SOURCE_CACHE}" --offline)
-  fi
-
-  if [[ -s "${final_json}" ]] &&
+  [[ -s "${final_json}" ]] &&
     [[ "$(cat "${final_json}.protocol" 2>/dev/null)" == "${protocol_identity}" ]] &&
     jq -e --arg model "${source_model_version}" --arg digest "${digest}" --arg corpus "${corpus_identity}" '
       .champion.modelVersion == $model and
@@ -152,6 +146,33 @@ run_profile() {
       .report.maximumForecasts >= 6000 and
       .report.forecasts >= 2965 and
       (.sources | type == "array" and length > 0)
+    ' "${final_json}" >/dev/null 2>&1
+}
+
+run_profile() {
+  local profile="$1"
+  local final_json="${report_dir}/${profile}.json"
+  local final_log="${report_dir}/${profile}.log"
+  local exit_file="${report_dir}/${profile}.exit"
+  local temp_json="${final_json}.partial.$$"
+  local temp_log="${final_log}.partial.$$"
+  local status=0
+  local source_options=("--outcome-cache=${outcome_dir}")
+  if [[ -n "${corpus_identity}" ]]; then
+    source_options+=("--replay-corpus=${corpus_identity}")
+  elif [[ -n "${ROS_VALIDATION_SOURCE_CACHE:-}" ]]; then
+    source_options+=("--source-cache=${ROS_VALIDATION_SOURCE_CACHE}" --offline)
+  fi
+
+  if report_matches_physical_request "${profile}" &&
+    jq -e --arg model "${source_model_version}" --arg policy "${policy_version}" --arg calibration "${calibration_version}" '
+      .champion.policyVersion == $policy and
+      .publicationPolicy.modelVersion == $model and
+      .publicationPolicy.policyVersion == $policy and
+      (.publicationPolicy.choices | type == "array" and length > 0 and all(.[];
+        .intervalCalibrationArtifacts.contextual.calibrationVersion == $calibration and
+        .intervalCalibrationArtifacts.recency.calibrationVersion == $calibration
+      ))
     ' "${final_json}" >/dev/null 2>&1; then
     status="$(cat "${exit_file}" 2>/dev/null || printf '0')"
     log "SKIP_COMPLETE profile=${profile} status=${status}"
@@ -201,7 +222,11 @@ overall_status=0
 # Only one profile builds football outcomes. Every later profile is cache-only, including when
 # the first profile's statistical gate withholds its report. Infrastructure failures stop here.
 if [[ -z "${corpus_identity}" ]]; then
-  if ! run_profile "${profiles[0]}"; then
+  # An evaluator-only change invalidates reports, not their exact physical corpus. Recover its
+  # immutable ID before evaluating freshness, so the new policy always takes the cache-only path.
+  if report_matches_physical_request "${profiles[0]}"; then
+    corpus_identity="$(jq -er '.outcomeCorpusIdentity' "${report_dir}/${profiles[0]}.json")" || exit 1
+  elif ! run_profile "${profiles[0]}"; then
     log "SHARED_BUILD_FAILED"
     exit 1
   fi

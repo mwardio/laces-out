@@ -167,10 +167,10 @@ const SEASON = 2026;
 const NOW = new Date("2026-09-10T12:00:00.000Z");
 const FRESH = new Date("2026-09-10T06:00:00.000Z");
 
-// The policy and calibration identities the admission rail pins for the v7 model. They are echoed
-// verbatim by the status surface, which does not re-derive them.
-const POLICY_VERSION = "season-walk-forward-block-wis-cqr-v4";
-const CALIBRATION_VERSION = "season-blocked-split-conformal-cqr-v1";
+// Successful fixtures must describe the current release; retired evaluator identities are
+// deliberately excluded by the status surface even when their model identity matches.
+const POLICY_VERSION = FIRST_PARTY_ROS_POLICY_VERSION;
+const CALIBRATION_VERSION = FIRST_PARTY_ROS_INTERVAL_CALIBRATION_VERSION;
 
 /**
  * A league configured as genuine full PPR: every stat the `full-ppr` catalog profile scores, at the

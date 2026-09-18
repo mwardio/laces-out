@@ -44,7 +44,7 @@ import {
   ROS_HISTORICAL_CORPUS_RELEASE_THRESHOLDS,
   hasCurrentRosHistoricalCoverageThresholds,
   hasRosHistoricalCorpusReleaseThresholds,
-  isCurrentRosHistoricalCorpusBuildProtocol,
+  isCompatibleRosHistoricalCorpusBuildProtocol,
 } from "../src/ros-historical-corpus-protocol.js";
 import {
   buildFirstPartyPlayerHistory,
@@ -198,7 +198,7 @@ async function main(): Promise<void> {
     const corpus = loaded.corpus;
     const expectedPositions = positions ?? HISTORICAL_ROS_SUPPORTED_POSITIONS;
     if (
-      !isCurrentRosHistoricalCorpusBuildProtocol(corpus.buildProtocol) ||
+      !isCompatibleRosHistoricalCorpusBuildProtocol(corpus.buildProtocol) ||
       !hasRosHistoricalCorpusReleaseThresholds(corpus.options) ||
       !hasCurrentRosHistoricalCoverageThresholds(corpus.coverage.thresholds) ||
       JSON.stringify([...corpus.options.heldOutSeasons].sort()) !==
@@ -863,6 +863,8 @@ function emitReport(input: {
           selected: result.champion.selected.filter(
             (row) => positions === undefined || positions.includes(row.position),
           ),
+          // Bounded per-forecast scalar summaries/evidence only; no scenario vectors or histories.
+          candidateForecasts: result.heldOutSeasons.flatMap((season) => season.forecasts),
         }
       : undefined,
     sources: process.argv.includes("--full") ? sourceAudit : undefined,

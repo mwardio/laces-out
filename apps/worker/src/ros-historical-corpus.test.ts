@@ -18,6 +18,7 @@ import { historicalCorpusFixture as corpus } from "./ros-historical-outcome.test
 import { firstPartyAvailableProjectionComponents } from "./first-party-projections.js";
 import {
   ROS_HISTORICAL_CORPUS_BUILD_PROTOCOL,
+  ROS_HISTORICAL_CORPUS_COVERAGE_THRESHOLDS,
   ROS_HISTORICAL_CORPUS_RELEASE_THRESHOLDS,
 } from "./ros-historical-corpus-protocol.js";
 
@@ -51,6 +52,30 @@ afterEach(async () => {
 });
 
 describe("shared historical evaluation corpus", () => {
+  it("reads original v5 corpus bytes without rewriting their provenance or identity", async () => {
+    const storage = await store();
+    const current = corpus();
+    const original: RosHistoricalCorpus = {
+      ...current,
+      buildProtocol: {
+        ...current.buildProtocol,
+        policyVersion: "season-walk-forward-block-wis-cqr-v5",
+        calibrationVersion: "season-blocked-split-conformal-cqr-v1",
+      },
+    };
+    const { identity } = await storage.store.write(original);
+    const file = path.join(storage.directory, `${identity}.ros-corpus.json.gz`);
+    const before = await readFile(file);
+    expect(identity).not.toBe(rosHistoricalCorpusIdentity(current));
+    expect(await storage.store.read(identity)).toEqual({
+      state: "hit",
+      identity,
+      corpus: original,
+    });
+    expect(await readFile(file)).toEqual(before);
+    expect(original.buildProtocol.policyVersion).toBe("season-walk-forward-block-wis-cqr-v5");
+  });
+
   it("accepts the full locked forecast scope with the complete modeled actual-stat vocabulary", () => {
     const manifest = corpus();
     const row = manifest.forecasts[0]!;
@@ -188,6 +213,13 @@ describe("shared historical evaluation corpus", () => {
       ...Object.entries(ROS_HISTORICAL_CORPUS_RELEASE_THRESHOLDS).map(([name, value]) => ({
         ...original,
         options: { ...original.options, [name]: value - 1 },
+      })),
+      ...Object.entries(ROS_HISTORICAL_CORPUS_COVERAGE_THRESHOLDS).map(([name, value]) => ({
+        ...original,
+        coverage: {
+          ...original.coverage,
+          thresholds: { ...original.coverage.thresholds, [name]: value / 2 },
+        },
       })),
     ];
     for (const value of changed) {

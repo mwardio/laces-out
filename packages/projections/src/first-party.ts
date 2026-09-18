@@ -11,7 +11,7 @@ import {
   type ProjectionStatComponents,
 } from "./scoring.js";
 
-export const FIRST_PARTY_PROJECTION_MODEL_VERSION = "laces-weekly-components-v14";
+export const FIRST_PARTY_PROJECTION_MODEL_VERSION = "laces-weekly-components-v15";
 
 export type FirstPartyProjectionPosition = "QB" | "RB" | "WR" | "TE" | "K";
 
@@ -1195,6 +1195,7 @@ interface PreparedFirstPartyHistory {
   readonly teamWeeks: Map<string, readonly TeamWeekValue[]>;
   readonly positionPriors: Map<string, number>;
   readonly baselinePositionMeans: Map<string, Readonly<Record<string, number | undefined>>>;
+  readonly baselineOpportunityPriors: Map<string, OpportunityPrior>;
   readonly teamLeagueMeans: Map<string, { readonly mean: number | undefined }>;
   readonly teamMultipliers: Map<string, { readonly multiplier: number; readonly samples: number }>;
   readonly opponentMultipliers: Map<
@@ -1271,6 +1272,7 @@ function prepareFirstPartyHistory(
     teamWeeks: new Map(),
     positionPriors: new Map(),
     baselinePositionMeans: new Map(),
+    baselineOpportunityPriors: new Map(),
     teamLeagueMeans: new Map(),
     teamMultipliers: new Map(),
     opponentMultipliers: new Map(),
@@ -2359,6 +2361,125 @@ function preparedPositionComponentMeans(
   return positionMeans;
 }
 
+type OutcomeOpportunity = "passing_attempts" | "carries" | "targets";
+
+interface OpportunityPrior {
+  readonly rate: number;
+  readonly opportunitiesPerGame: number;
+}
+
+function outcomeOpportunity(component: string): OutcomeOpportunity | undefined {
+  if (component.startsWith("passing_") && !component.startsWith("passing_attempts")) {
+    return "passing_attempts";
+  }
+  if (component.startsWith("rushing_")) return "carries";
+  if (
+    component === "receptions" ||
+    component.startsWith("receptions_") ||
+    component.startsWith("receiving_")
+  )
+    return "targets";
+  return undefined;
+}
+
+function preparedOpportunityPrior(
+  prepared: PreparedFirstPartyHistory,
+  position: FirstPartyProjectionPosition,
+  component: string,
+  opportunity: OutcomeOpportunity,
+  target: FirstPartyProjectionTarget,
+  config: FirstPartyProjectionConfig,
+): OpportunityPrior {
+  // Reuse the contextual model's role buckets, weighting every outcome in a family by its
+  // opportunity share (including transformed scoring components such as receptions-per-N).
+  const exactRole = targetRoleValue(target.role, opportunity);
+  const roleBucket =
+    exactRole === undefined ? undefined : Math.round(clamp(exactRole, 0, 1) * 10) / 10;
+  const key = `${position}:${component}:${opportunity}:${ordinal(target.season, target.week)}:${config.recencyHalfLifeWeeks}:${roleBucket ?? "none"}`;
+  const cached = prepared.baselineOpportunityPriors.get(key);
+  if (cached !== undefined) return cached;
+  let outcomes = 0;
+  let opportunities = 0;
+  let games = 0;
+  for (const row of prepared.byPosition.get(position) ?? []) {
+    const outcome = componentValue(row, component);
+    const exposure = componentValue(row, opportunity);
+    // Missing capability and inconsistent zero-opportunity/nonzero-outcome rows are not
+    // observed failures. Signed yardage with positive opportunities remains valid evidence.
+    if (outcome === undefined || exposure === undefined || (exposure === 0 && outcome !== 0))
+      continue;
+    const weight =
+      recencyWeight(row, target, config.recencyHalfLifeWeeks) *
+      roleSimilarityWeight(row, opportunity, roleBucket);
+    if (!Number.isFinite(weight) || weight <= 0) continue;
+    outcomes += outcome * weight;
+    opportunities += exposure * weight;
+    games += weight;
+  }
+  const prior = {
+    rate: opportunities > 0 ? outcomes / opportunities : 0,
+    opportunitiesPerGame: games > 0 ? opportunities / games : 0,
+  };
+  prepared.baselineOpportunityPriors.set(key, prior);
+  return prior;
+}
+
+function opportunityRegularizedMean(
+  prepared: PreparedFirstPartyHistory,
+  position: FirstPartyProjectionPosition,
+  component: string,
+  playerMean: number | undefined,
+  playerRows: readonly FirstPartyWeeklyStatLine[],
+  target: FirstPartyProjectionTarget,
+  config: FirstPartyProjectionConfig,
+): number | undefined {
+  const opportunity = outcomeOpportunity(component);
+  if (opportunity === undefined || playerMean === undefined) return playerMean;
+  let effectiveOpportunities = 0;
+  for (const row of playerRows) {
+    const weight = recencyWeight(row, target, config.recencyHalfLifeWeeks);
+    if (!Number.isFinite(weight) || weight <= 0) continue;
+    const exposure = componentValue(row, opportunity);
+    const outcome = componentValue(row, component);
+    // Keep the existing fallback if the personal mean and opportunity evidence are unpaired.
+    if (exposure === undefined || outcome === undefined || (exposure === 0 && outcome !== 0))
+      return playerMean;
+    effectiveOpportunities += exposure * weight;
+  }
+  if (effectiveOpportunities <= 0 || !Number.isFinite(effectiveOpportunities)) return playerMean;
+  const opportunityMean = weightedComponentMean(
+    playerRows,
+    opportunity,
+    target,
+    config.recencyHalfLifeWeeks,
+  );
+  if (opportunityMean === undefined || opportunityMean <= 0 || !Number.isFinite(opportunityMean)) {
+    return playerMean;
+  }
+  const prior = preparedOpportunityPrior(
+    prepared,
+    position,
+    component,
+    opportunity,
+    target,
+    config,
+  );
+  const priorOpportunities = config.playerPriorGames * prior.opportunitiesPerGame;
+  if (
+    priorOpportunities <= 0 ||
+    !Number.isFinite(priorOpportunities) ||
+    !Number.isFinite(prior.rate)
+  ) {
+    return playerMean;
+  }
+  // Express the existing four-game prior in opportunities, keeping the player's opportunity
+  // forecast unchanged. Finite zero successes no longer imply impossible future production;
+  // confidence decays with the same weights as the personal rate, including farther target
+  // weeks. Zero-opportunity appearances add no failed trials, even when recorded as played.
+  const reliability = effectiveOpportunities / (effectiveOpportunities + priorOpportunities);
+  return playerMean + (opportunityMean * prior.rate - playerMean) * (1 - reliability);
+}
+
 function recencyOnlyBaseline(
   position: FirstPartyProjectionPosition,
   target: FirstPartyProjectionTarget,
@@ -2392,9 +2513,8 @@ function recencyOnlyBaseline(
       // weight. That collapsed centers for mid-season debut/replacement kickers (the ROS v7
       // Step 4 verdict's root cause). The blend reuses the contextual model's existing
       // reliability form and playerPriorGames constant verbatim — no new tunable constants, so
-      // there is nothing to fit and nothing to leak. Other positions keep the hard switch
-      // byte-for-byte: their role continuity genuinely is player-specific, and the transparent
-      // baseline stays maximally simple where it is not measurably wrong.
+      // there is nothing to fit and nothing to leak. Other positions retain their personal
+      // opportunity means and regularize supported outcome rates below (weekly model v15).
       if (position === "K") {
         const usablePlayerGames = playerRows.filter(
           (row) => componentValue(row, component) !== undefined,
@@ -2404,8 +2524,20 @@ function recencyOnlyBaseline(
         const blended = (playerMean ?? prior) * reliability + prior * (1 - reliability);
         return [[component, clamp(blended, floorFor(component), capFor(component))]];
       }
+      const regularized = opportunityRegularizedMean(
+        prepared,
+        position,
+        component,
+        playerMean,
+        playerRows,
+        target,
+        config,
+      );
       return [
-        [component, clamp(playerMean ?? positionMean ?? 0, floorFor(component), capFor(component))],
+        [
+          component,
+          clamp(regularized ?? positionMean ?? 0, floorFor(component), capFor(component)),
+        ],
       ];
     }),
   );
@@ -2688,6 +2820,7 @@ export function runFirstPartyProjectionBacktest(
           week: actual.week,
           team: actual.team,
           ...(actual.opponent === undefined ? {} : { opponent: actual.opponent }),
+          ...(role === undefined ? {} : { role }),
         },
         trainingRows,
         config,

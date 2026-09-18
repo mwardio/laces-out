@@ -23,8 +23,8 @@ import {
 import { ROS_HISTORICAL_COVERAGE_DEFAULT_THRESHOLDS } from "./ros-data-coverage.js";
 import { ROS_OUTCOME_CACHE_VERSION } from "./ros-outcome-cache.js";
 
-/** Manifest/admission identity only; never included in a physical outcome cache key or seed. */
-export const ROS_HISTORICAL_CORPUS_BUILD_PROTOCOL = Object.freeze({
+/** Exact football-generation compatibility; evaluation policies never change these paths. */
+export const ROS_HISTORICAL_CORPUS_PHYSICAL_PROTOCOL = Object.freeze({
   version: "historical-ros-build-protocol-v1",
   modelVersion: FIRST_PARTY_ROS_MODEL_VERSION,
   seedVersion: FIRST_PARTY_ROS_SEED_VERSION,
@@ -41,12 +41,33 @@ export const ROS_HISTORICAL_CORPUS_BUILD_PROTOCOL = Object.freeze({
   roleVersion: HISTORICAL_ROS_ROLE_CALIBRATION_VERSION,
   kickerVersion: HISTORICAL_ROS_KICKER_CALIBRATION_VERSION,
   intervalMethodVersion: HISTORICAL_ROS_INTERVAL_METHOD_VERSION,
-  policyVersion: FIRST_PARTY_ROS_POLICY_VERSION,
-  calibrationVersion: FIRST_PARTY_ROS_INTERVAL_CALIBRATION_VERSION,
   weeklySourceParserVersion: NFLVERSE_WEEKLY_STATS_COMPONENT_SCHEMA,
 });
 
+/** Immutable provenance of the original build, including its then-current evaluator. */
+export const ROS_HISTORICAL_CORPUS_BUILD_PROTOCOL = Object.freeze({
+  ...ROS_HISTORICAL_CORPUS_PHYSICAL_PROTOCOL,
+  policyVersion: FIRST_PARTY_ROS_POLICY_VERSION,
+  calibrationVersion: FIRST_PARTY_ROS_INTERVAL_CALIBRATION_VERSION,
+});
+
 export type RosHistoricalCorpusBuildProtocol = typeof ROS_HISTORICAL_CORPUS_BUILD_PROTOCOL;
+
+// Retain only explicitly reviewed historical evaluation provenance. Unknown versions must not
+// become an escape hatch from physical compatibility, even when their names look well formed.
+const compatibleEvaluationVersions = [
+  {
+    policyVersion: "season-walk-forward-block-wis-cqr-v5",
+    calibrationVersion: "season-blocked-split-conformal-cqr-v1",
+  },
+  {
+    policyVersion: FIRST_PARTY_ROS_POLICY_VERSION,
+    calibrationVersion: FIRST_PARTY_ROS_INTERVAL_CALIBRATION_VERSION,
+  },
+] as const;
+
+export type RosHistoricalCorpusBuildProvenance = typeof ROS_HISTORICAL_CORPUS_PHYSICAL_PROTOCOL &
+  (typeof compatibleEvaluationVersions)[number];
 
 /** These six exact options define the release evaluator, independently of cohort size. */
 export const ROS_HISTORICAL_CORPUS_RELEASE_THRESHOLDS = Object.freeze({
@@ -78,6 +99,27 @@ export function isCurrentRosHistoricalCorpusBuildProtocol(
   value: unknown,
 ): value is RosHistoricalCorpusBuildProtocol {
   return matchesFields(value, ROS_HISTORICAL_CORPUS_BUILD_PROTOCOL, true);
+}
+
+/**
+ * Raw corpus reuse only: preserve the original evaluator names while checking every physical
+ * field exactly. A fresh current-policy replay and separate profile admission are still required.
+ */
+export function isCompatibleRosHistoricalCorpusBuildProtocol(
+  value: unknown,
+): value is RosHistoricalCorpusBuildProvenance {
+  if (!matchesFields(value, ROS_HISTORICAL_CORPUS_PHYSICAL_PROTOCOL, false)) return false;
+  const fields = value as Record<string, unknown>;
+  return (
+    Object.keys(fields).length === Object.keys(ROS_HISTORICAL_CORPUS_BUILD_PROTOCOL).length &&
+    Object.hasOwn(fields, "policyVersion") &&
+    Object.hasOwn(fields, "calibrationVersion") &&
+    compatibleEvaluationVersions.some(
+      (version) =>
+        fields.policyVersion === version.policyVersion &&
+        fields.calibrationVersion === version.calibrationVersion,
+    )
+  );
 }
 
 /** Extra scope options are allowed, but none of the six evaluator thresholds may differ. */
