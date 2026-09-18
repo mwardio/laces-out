@@ -506,3 +506,8 @@ export function groupProjectionConsensus(
     .map(([, group]) => buildProjectionConsensus(group, options));
 }
 export * from "./weekly-input-coverage.js";
+export * from "./marginal-interval-artifact.js";
+export * from "./marginal-interval-calibration.js";
+export * from "./marginal-interval-evidence.js";
+export * from "./marginal-interval-comparison.js";
+export * from "./marginal-ros-policy.js";

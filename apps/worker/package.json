@@ -11,6 +11,7 @@
     "projections:validate": "tsx scripts/validate-first-party-projections.ts",
     "schedule-edge:validate": "tsx scripts/validate-schedule-edge.ts",
     "ros:validate": "tsx scripts/validate-first-party-ros.ts",
+    "ros:intervals:evaluate": "tsx scripts/evaluate-marginal-ros.ts",
     "ros:validate:release": "bash ../../scripts/run-ros-release-validation.sh",
     "ros:corpus:adopt": "tsx scripts/adopt-ros-shared-corpus.ts",
     "ros:bootstrap:health": "tsx scripts/ros-bootstrap-health.ts",
