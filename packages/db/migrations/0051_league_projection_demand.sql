@@ -1,0 +1,2 @@
+ALTER TABLE "league_seasons" ADD COLUMN "projection_refresh_demand_id" uuid;--> statement-breakpoint
+CREATE INDEX "league_seasons_projection_demand_idx" ON "league_seasons" USING btree ("season","id") WHERE "league_seasons"."projection_refresh_demand_id" is not null;

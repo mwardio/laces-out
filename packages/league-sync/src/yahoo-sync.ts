@@ -1136,6 +1136,10 @@ export class DrizzleYahooSyncRepository implements YahooSyncRepository {
       }
 
       await transaction
+        .update(leagueSeasons)
+        .set({ projectionRefreshDemandId: run.id })
+        .where(eq(leagueSeasons.id, leagueSeasonId));
+      await transaction
         .update(syncRuns)
         .set({
           leagueSeasonId,

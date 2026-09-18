@@ -1,6 +1,6 @@
 /** Real snapshot ordering and recurrence regressions; uses only a disposable PostgreSQL. */
 import { execFileSync } from "node:child_process";
-import { randomBytes, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
@@ -25,6 +25,10 @@ import { migrate } from "drizzle-orm/postgres-js/migrator";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { DrizzleEspnSyncPersistence } from "./espn-sync-persistence.js";
+import {
+  DrizzleProjectionRefreshDemandRepository,
+  ProjectionRefreshDemandDispatcher,
+} from "./projection-refresh-demand.js";
 import { DrizzleYahooSyncRepository } from "./yahoo-sync.js";
 
 function dockerAvailable(): boolean {
@@ -55,6 +59,8 @@ describe.skipIf(!dockerAvailable())("Provider snapshot recurrence against Postgr
         "--name",
         containerName,
         "--cpus=1",
+        "--memory=384m",
+        "--memory-swap=384m",
         "--tmpfs",
         "/var/lib/postgresql/data",
         "-e",
@@ -120,7 +126,7 @@ describe.skipIf(!dockerAvailable())("Provider snapshot recurrence against Postgr
     }
   }, 30_000);
 
-  async function scenario(provider: "espn" | "yahoo") {
+  async function scenario(provider: "espn" | "yahoo", season = SEASON) {
     const userId = randomUUID();
     const connectionId = randomUUID();
     const leagueId = randomUUID();
@@ -152,7 +158,7 @@ describe.skipIf(!dockerAvailable())("Provider snapshot recurrence against Postgr
       connectionId,
       provider,
       externalKey,
-      season: SEASON,
+      season,
       status: "active",
       teamCount: 2,
       draftType: "snake",
@@ -223,6 +229,357 @@ describe.skipIf(!dockerAvailable())("Provider snapshot recurrence against Postgr
       warnings: [],
     };
   }
+
+  function espnBundle(
+    externalKey: string,
+    letter: "a" | "b" | "c",
+    step: number,
+    identity = false,
+  ): LeagueSyncBundle {
+    const source = yahooBundle(externalKey, letter, step);
+    return {
+      ...source,
+      provider: "espn",
+      league: {
+        ...source.league,
+        externalId: `espn:${SEASON}:${externalKey}`,
+        providerLeagueId: externalKey,
+        provider: "espn",
+      },
+      teams: source.teams.map((team) => ({
+        ...team,
+        externalId: `espn:${SEASON}:${externalKey}:team:${team.providerTeamId}`,
+        isCurrentUser: identity && team.providerTeamId === "1",
+        roster: team.roster.map((player) => ({
+          ...player,
+          externalId: `espn:${player.providerPlayerId}`,
+        })),
+      })),
+      provenance: {
+        ...source.provenance,
+        mode: "server-session",
+        endpoint: "https://lm-api-reads.fantasy.espn.com/apis/v3/games/ffl/seasons/2031",
+      },
+    };
+  }
+
+  function persistCore(
+    provider: "espn" | "yahoo",
+    s: Awaited<ReturnType<typeof scenario>>,
+    letter: "a" | "b" | "c",
+    step: number,
+    identity = false,
+  ) {
+    if (provider === "yahoo") {
+      return new DrizzleYahooSyncRepository(handle.db, () => capture(10)).persistBundle(
+        s.userId,
+        s.connectionId,
+        yahooBundle(s.externalKey, letter, step),
+      );
+    }
+    return new DrizzleEspnSyncPersistence(handle.db).persist({
+      authority: {
+        mode: "server-session",
+        actorUserId: s.userId,
+        connectionId: s.connectionId,
+        leagueSeasonId: s.leagueSeasonId,
+      },
+      bundle: espnBundle(s.externalKey, letter, step, identity),
+      checksumSha256: letter.repeat(64),
+      effectiveAt: capture(step),
+      now: capture(10),
+      idempotencyKey: `espn-session:${s.leagueSeasonId}:${letter}`,
+      kind: "espn-session",
+    });
+  }
+
+  async function demandFor(leagueSeasonId: string): Promise<string | null> {
+    const [row] = await handle.db
+      .select({ demandId: leagueSeasons.projectionRefreshDemandId })
+      .from(leagueSeasons)
+      .where(eq(leagueSeasons.id, leagueSeasonId));
+    if (!row) throw new Error("Test league season disappeared");
+    return row.demandId;
+  }
+
+  async function setDemand(leagueSeasonId: string, demandId: string | null): Promise<void> {
+    await handle.db
+      .update(leagueSeasons)
+      .set({ projectionRefreshDemandId: demandId })
+      .where(eq(leagueSeasons.id, leagueSeasonId));
+  }
+
+  it("applies migration 0051 with nullable UUID demand and the bounded pending-season index", async () => {
+    const columns = await handle.db.execute<{
+      data_type: string;
+      is_nullable: string;
+      column_default: string | null;
+    }>(sql`
+      select data_type, is_nullable, column_default
+      from information_schema.columns
+      where table_schema = 'public' and table_name = 'league_seasons'
+        and column_name = 'projection_refresh_demand_id'
+    `);
+    expect([...columns]).toEqual([{ data_type: "uuid", is_nullable: "YES", column_default: null }]);
+    const indexes = await handle.db.execute<{ indexdef: string }>(sql`
+      select indexdef from pg_catalog.pg_indexes
+      where schemaname = 'public' and tablename = 'league_seasons'
+        and indexname = 'league_seasons_projection_demand_idx'
+    `);
+    expect(indexes).toHaveLength(1);
+    expect(indexes[0]?.indexdef).toContain("USING btree (season, id)");
+    expect(indexes[0]?.indexdef).toContain("WHERE (projection_refresh_demand_id IS NOT NULL)");
+    const migrationHash = createHash("sha256")
+      .update(
+        readFileSync(
+          new URL("../../db/migrations/0051_league_projection_demand.sql", import.meta.url),
+        ),
+      )
+      .digest("hex");
+    const recorded = await handle.db.execute<{ hash: string }>(sql`
+      select hash from drizzle.__drizzle_migrations where hash = ${migrationHash}
+    `);
+    expect([...recorded]).toEqual([{ hash: migrationHash }]);
+  });
+
+  it.each(["espn", "yahoo"] as const)(
+    "records %s core demand for accepted snapshots and preserves unchanged delivery state",
+    async (provider) => {
+      const s = await scenario(provider);
+      expect(await demandFor(s.leagueSeasonId)).toBeNull();
+      const first = await persistCore(provider, s, "a", 0);
+      expect(first.state).toBe("accepted");
+      const firstRunId = "receiptId" in first ? first.receiptId : first.syncRunId;
+      expect(await demandFor(s.leagueSeasonId)).toBe(firstRunId);
+      expect((await persistCore(provider, s, "a", 1)).state).toBe("unchanged");
+      expect(await demandFor(s.leagueSeasonId)).toBe(firstRunId);
+
+      await setDemand(s.leagueSeasonId, null);
+      expect((await persistCore(provider, s, "a", 2)).state).toBe("unchanged");
+      expect(await demandFor(s.leagueSeasonId)).toBeNull();
+      const changed = await persistCore(provider, s, "b", 3);
+      const changedRunId = "receiptId" in changed ? changed.receiptId : changed.syncRunId;
+      expect(changed.state).toBe("accepted");
+      expect(changedRunId).not.toBe(firstRunId);
+      expect(await demandFor(s.leagueSeasonId)).toBe(changedRunId);
+    },
+  );
+
+  it("creates projection demand on the first Yahoo import of a new league season", async () => {
+    const s = await scenario("yahoo");
+    await handle.db.delete(leagues).where(eq(leagues.id, s.leagueId));
+    const receipt = await new DrizzleYahooSyncRepository(handle.db, () =>
+      capture(10),
+    ).persistBundle(s.userId, s.connectionId, yahooBundle(s.externalKey, "a", 0));
+    expect(receipt.state).toBe("accepted");
+    expect(receipt.leagueSeasonId).not.toBe(s.leagueSeasonId);
+    expect(await demandFor(receipt.leagueSeasonId)).toBe(receipt.syncRunId);
+  });
+
+  it.each(["espn", "yahoo"] as const)(
+    "rolls back %s projection demand with a failed core snapshot transaction",
+    async (provider) => {
+      const s = await scenario(provider);
+      const priorDemandId = randomUUID();
+      await setDemand(s.leagueSeasonId, priorDemandId);
+      const triggerName = `reject_snapshot_${randomUUID().replaceAll("-", "")}`;
+      await handle.db.execute(
+        sql.raw(`
+        create function ${triggerName}() returns trigger language plpgsql as $$
+        begin
+          if new.league_season_id = '${s.leagueSeasonId}'::uuid and new.state = 'succeeded' then
+            raise exception 'injected late snapshot failure';
+          end if;
+          return new;
+        end;
+        $$;
+      `),
+      );
+      await handle.db.execute(
+        sql.raw(`
+        create trigger ${triggerName} before update on sync_runs
+        for each row execute function ${triggerName}();
+      `),
+      );
+      try {
+        await expect(persistCore(provider, s, "a", 0)).rejects.toThrow();
+        expect(await demandFor(s.leagueSeasonId)).toBe(priorDemandId);
+        expect(
+          await handle.db
+            .select({ id: fantasyTeams.id })
+            .from(fantasyTeams)
+            .where(eq(fantasyTeams.leagueSeasonId, s.leagueSeasonId)),
+        ).toEqual([]);
+        expect(
+          await handle.db
+            .select({ id: syncRuns.id })
+            .from(syncRuns)
+            .where(eq(syncRuns.leagueSeasonId, s.leagueSeasonId)),
+        ).toEqual([]);
+        const [season] = await handle.db
+          .select({ lastSyncedAt: leagueSeasons.lastSyncedAt })
+          .from(leagueSeasons)
+          .where(eq(leagueSeasons.id, s.leagueSeasonId));
+        expect(season?.lastSyncedAt).toBeNull();
+      } finally {
+        await handle.db.execute(sql.raw(`drop trigger ${triggerName} on sync_runs`));
+        await handle.db.execute(sql.raw(`drop function ${triggerName}()`));
+      }
+      expect((await persistCore(provider, s, "a", 0)).state).toBe("accepted");
+      expect(await demandFor(s.leagueSeasonId)).not.toBe(priorDemandId);
+      expect(await demandFor(s.leagueSeasonId)).not.toBeNull();
+    },
+  );
+
+  it("creates demand when an unchanged ESPN core capture establishes authenticated identity", async () => {
+    const s = await scenario("espn");
+    await persistCore("espn", s, "a", 0);
+    await setDemand(s.leagueSeasonId, null);
+    const identityReceipt = await persistCore("espn", s, "a", 1, true);
+    expect(identityReceipt).toMatchObject({ state: "unchanged", identityChanged: true });
+    const identityDemand = await demandFor(s.leagueSeasonId);
+    expect(identityDemand).toMatch(/^[0-9a-f-]{36}$/u);
+    expect(await persistCore("espn", s, "a", 2, true)).toMatchObject({
+      state: "unchanged",
+      identityChanged: false,
+    });
+    expect(await demandFor(s.leagueSeasonId)).toBe(identityDemand);
+    await setDemand(s.leagueSeasonId, null);
+    await persistCore("espn", s, "a", 3, true);
+    expect(await demandFor(s.leagueSeasonId)).toBeNull();
+  });
+
+  it("acknowledges only captured demand IDs after enqueue while preserving concurrent changes", async () => {
+    const season = 2041;
+    const first = await scenario("espn", season);
+    const second = await scenario("yahoo", season);
+    const arrivedLater = await scenario("espn", season);
+    const firstDemand = randomUUID();
+    const secondDemand = randomUUID();
+    const newerDemand = randomUUID();
+    const laterDemand = randomUUID();
+    await setDemand(first.leagueSeasonId, firstDemand);
+    await setDemand(second.leagueSeasonId, secondDemand);
+    const readFreshness = () =>
+      handle.db
+        .select({
+          id: leagueSeasons.id,
+          updatedAt: leagueSeasons.updatedAt,
+          lastSyncedAt: leagueSeasons.lastSyncedAt,
+        })
+        .from(leagueSeasons)
+        .where(eq(leagueSeasons.season, season))
+        .orderBy(leagueSeasons.id);
+    const freshnessBefore = await readFreshness();
+    const repository = new DrizzleProjectionRefreshDemandRepository(handle.db);
+    let sent = 0;
+    const dispatcher = new ProjectionRefreshDemandDispatcher({
+      repository,
+      enqueue: async (requestedSeason) => {
+        expect(requestedSeason).toBe(season);
+        sent++;
+        if (sent === 1) {
+          expect(await demandFor(first.leagueSeasonId)).toBe(firstDemand);
+          expect(await demandFor(second.leagueSeasonId)).toBe(secondDemand);
+          await setDemand(first.leagueSeasonId, newerDemand);
+          await setDemand(arrivedLater.leagueSeasonId, laterDemand);
+        }
+        return randomUUID();
+      },
+    });
+    expect(await dispatcher.dispatch(season)).toMatch(/^[0-9a-f-]{36}$/u);
+    expect(await demandFor(first.leagueSeasonId)).toBe(newerDemand);
+    expect(await demandFor(second.leagueSeasonId)).toBeNull();
+    expect(await demandFor(arrivedLater.leagueSeasonId)).toBe(laterDemand);
+    await dispatcher.dispatch(season);
+    expect(await demandFor(first.leagueSeasonId)).toBeNull();
+    expect(await demandFor(arrivedLater.leagueSeasonId)).toBeNull();
+    expect(await dispatcher.dispatch(season)).toBeNull();
+    expect(sent).toBe(2);
+    expect(await readFreshness()).toEqual(freshnessBefore);
+  });
+
+  it("retries real stored demand after deduplication, enqueue failure, and send-before-ack failure", async () => {
+    const season = 2042;
+    const s = await scenario("yahoo", season);
+    const demandId = randomUUID();
+    await setDemand(s.leagueSeasonId, demandId);
+    const repository = new DrizzleProjectionRefreshDemandRepository(handle.db);
+    const deduplicated = new ProjectionRefreshDemandDispatcher({
+      repository,
+      enqueue: async () => null,
+    });
+    expect(await deduplicated.dispatch(season)).toBeNull();
+    expect(await demandFor(s.leagueSeasonId)).toBe(demandId);
+    const failed = new ProjectionRefreshDemandDispatcher({
+      repository,
+      enqueue: async () => {
+        throw new Error("Queue unavailable");
+      },
+    });
+    await expect(failed.dispatch(season)).rejects.toThrow("Queue unavailable");
+    expect(await demandFor(s.leagueSeasonId)).toBe(demandId);
+
+    let failAcknowledgement = true;
+    const durableJobs: string[] = [];
+    const recovering = new ProjectionRefreshDemandDispatcher({
+      repository: {
+        capture: (requestedSeason, limit) => repository.capture(requestedSeason, limit),
+        acknowledge: async (demands) => {
+          if (failAcknowledgement) {
+            failAcknowledgement = false;
+            throw new Error("Database unavailable after queue commit");
+          }
+          await repository.acknowledge(demands);
+        },
+      },
+      enqueue: async () => {
+        const jobId = randomUUID();
+        durableJobs.push(jobId);
+        return jobId;
+      },
+    });
+    await expect(recovering.dispatch(season)).rejects.toThrow(
+      "Database unavailable after queue commit",
+    );
+    expect(durableJobs).toHaveLength(1);
+    expect(await demandFor(s.leagueSeasonId)).toBe(demandId);
+    expect(await recovering.dispatch(season)).toBe(durableJobs[1]);
+    expect(durableJobs).toHaveLength(2);
+    expect(await demandFor(s.leagueSeasonId)).toBeNull();
+  });
+
+  it("keeps unchanged explicit refreshes and excludes archived or other-season demand", async () => {
+    const season = 2043;
+    const active = await scenario("yahoo", season);
+    const archived = await scenario("espn", season);
+    const otherSeason = await scenario("espn", season + 1);
+    const archivedDemand = randomUUID();
+    const otherDemand = randomUUID();
+    await setDemand(archived.leagueSeasonId, archivedDemand);
+    await setDemand(otherSeason.leagueSeasonId, otherDemand);
+    await handle.db
+      .update(leagues)
+      .set({ archived: true })
+      .where(eq(leagues.id, archived.leagueId));
+    let sent = 0;
+    const dispatcher = new ProjectionRefreshDemandDispatcher({
+      repository: new DrizzleProjectionRefreshDemandRepository(handle.db),
+      enqueue: async () => {
+        sent++;
+        return randomUUID();
+      },
+    });
+    expect(await dispatcher.dispatch(season)).toBeNull();
+    expect(sent).toBe(0);
+    expect(await dispatcher.dispatch(season, { enqueueWithoutDemand: true })).toMatch(
+      /^[0-9a-f-]{36}$/u,
+    );
+    expect(sent).toBe(1);
+    expect(await demandFor(active.leagueSeasonId)).toBeNull();
+    expect(await demandFor(archived.leagueSeasonId)).toBe(archivedDemand);
+    expect(await demandFor(otherSeason.leagueSeasonId)).toBe(otherDemand);
+  });
 
   it("persists Yahoo A-B-A transitions and deduplicates only the current snapshot", async () => {
     const s = await scenario("yahoo");

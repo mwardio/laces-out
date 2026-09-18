@@ -34,7 +34,15 @@ import {
   applyFirstPartyProjectionChampionPolicy,
   applyFirstPartyProjectionFinalPolicy,
   evaluateFirstPartyBacktestForScoringProfile,
-  evaluateWeeklyPointCalibration,
+  replayWeeklyPointCalibration,
+  replayWeeklyIntervalCalibration,
+  fitWeeklyIntervalPolicy,
+  applyWeeklyIntervalPolicy,
+  isWeeklyIntervalPosition,
+  weeklyIntervalPolicyIsUsable,
+  storedWeeklyIntervalPolicyVersion,
+  WEEKLY_INTERVAL_CALIBRATION_POLICY_VERSION,
+  WEEKLY_INTERVAL_PROVISIONAL_CONFIDENCE_CAP,
   missingLongTouchdownScoringComponents,
   applyWeeklyPointCalibration,
   weeklyPointEvidenceConfidence,
@@ -58,6 +66,9 @@ import {
   type FirstPartyPointResidualCalibration,
   type WeeklyPointResidualCalibration,
   type WeeklyPointCalibrationEvaluation,
+  type WeeklyIntervalPolicy,
+  type WeeklyIntervalEvidence,
+  type WeeklyIntervalPosition,
   type FirstPartyPlayerStatus,
   type FirstPartyProjectionChampionPolicy,
   type FirstPartyProjectionBacktest,
@@ -100,7 +111,7 @@ const projectionCheckIntervalMinutes = 60;
 const historySeasonCount = 4;
 // v7 refuses publication when prior-week schedule or statistics coverage is unresolved.
 const sourceSchemaVersion = 7;
-export const FIRST_PARTY_PUBLICATION_POLICY_VERSION = "walk-forward-affine-sqrt-fixed-recency-v4";
+export const FIRST_PARTY_PUBLICATION_POLICY_VERSION = "walk-forward-affine-conditional-interval-v5";
 const championPolicyVersion = FIRST_PARTY_PUBLICATION_POLICY_VERSION;
 const chunkSize = 500;
 const supportedPositions = ["QB", "RB", "WR", "TE", "K"] as const;
@@ -242,6 +253,7 @@ export interface ScoredProjectionRow {
   /** The scoring identity of a persisted forecast, used to preserve its kickoff lock. */
   readonly scoringProfileKey?: string;
   readonly pointPolicyVersion?: string;
+  readonly intervalPolicyVersion?: string | undefined;
 }
 
 interface LeaguePublication {
@@ -868,6 +880,9 @@ export function rescoreFrozenProjection(
     scoringProfileKey,
     confidence: weeklyPointEvidenceConfidence(row.confidence, calibration, position),
     pointPolicyVersion: WEEKLY_POINT_CALIBRATION_POLICY_VERSION,
+    // Scoring changes use the independently validated point residual path above; they do not
+    // inherit the original scoring profile's conditional interval provenance.
+    intervalPolicyVersion: undefined,
   };
 }
 
@@ -1013,7 +1028,8 @@ export function evaluateFirstPartyPublicationCandidates(
   profile: ProjectionScoringProfile,
 ) {
   const champion = applyFirstPartyProjectionChampionPolicy(backtest, profile);
-  const adaptiveEvaluation = evaluateWeeklyPointCalibration(champion.backtest, profile);
+  const adaptiveReplay = replayWeeklyPointCalibration(champion.backtest, profile);
+  const adaptiveEvaluation = adaptiveReplay.evaluation;
   const fixedRecencyBacktest = {
     ...backtest,
     // Only the point scorer consumes this view; stale component metrics/intervals are not read.
@@ -1022,17 +1038,20 @@ export function evaluateFirstPartyPublicationCandidates(
       predicted: prediction.baseline,
     })),
   };
-  const fixedRecencyEvaluation = evaluateWeeklyPointCalibration(fixedRecencyBacktest, profile);
+  const fixedRecencyEvaluation = replayWeeklyPointCalibration(
+    fixedRecencyBacktest,
+    profile,
+  ).evaluation;
   const fixedRecencyPositions = supportedPositions.filter(
     (position) =>
       !playerPositionEvaluationClearsGate(adaptiveEvaluation, profile, position) &&
       playerPositionEvaluationClearsGate(fixedRecencyEvaluation, profile, position),
   );
   const fallbackPositions = new Set(fixedRecencyPositions);
-  const playerEvaluation =
+  const selectedReplay =
     fixedRecencyPositions.length === 0
-      ? adaptiveEvaluation
-      : evaluateWeeklyPointCalibration(
+      ? adaptiveReplay
+      : replayWeeklyPointCalibration(
           {
             ...champion.backtest,
             predictions: champion.backtest.predictions.map((prediction) =>
@@ -1043,6 +1062,7 @@ export function evaluateFirstPartyPublicationCandidates(
           },
           profile,
         );
+  const playerEvaluation = selectedReplay.evaluation;
   const byPosition = { ...champion.policy.byPosition };
   for (const position of fixedRecencyPositions) {
     const original = byPosition[position];
@@ -1052,7 +1072,7 @@ export function evaluateFirstPartyPublicationCandidates(
   const policy = { ...champion.policy, byPosition };
   // A future forecast may fit its selected constant strategy on all completed observations.
   // This retrospective fit is NEVER release evidence: the strategy was chosen using these games.
-  const fittedLiveCalibration = evaluateWeeklyPointCalibration(
+  const fittedLiveReplay = replayWeeklyPointCalibration(
     {
       ...backtest,
       predictions: backtest.predictions.map((prediction) => ({
@@ -1065,6 +1085,7 @@ export function evaluateFirstPartyPublicationCandidates(
     },
     profile,
   );
+  const fittedLiveCalibration = fittedLiveReplay.evaluation;
   // The selected future strategy may be refit for a future center. Confidence must instead
   // use the honest chronological release forecasts, never that retrospective strategy fit.
   const liveCalibration: WeeklyPointCalibrationEvaluation = {
@@ -1085,6 +1106,46 @@ export function evaluateFirstPartyPublicationCandidates(
       }),
     ),
   };
+  // Interval-only development evidence cannot choose the physical strategy or change centers.
+  // Keep all original selection/point evidence above authoritative, then independently require
+  // the same publication gate and starter guard before replacing any interval endpoints.
+  const intervalReplay = replayWeeklyIntervalCalibration(selectedReplay.forecasts);
+  const weeklyIntervals: Partial<
+    Record<
+      WeeklyIntervalPosition,
+      {
+        readonly state: "applied" | "retained";
+        readonly evidence: WeeklyIntervalEvidence | undefined;
+        readonly policy: WeeklyIntervalPolicy;
+      }
+    >
+  > = {};
+  for (const position of supportedPositions) {
+    if (!isWeeklyIntervalPosition(position)) continue;
+    const evidence = intervalReplay.byPosition[position];
+    const pointEvidence = playerEvaluation.byPosition[position];
+    const intervalPolicy = fitWeeklyIntervalPolicy(fittedLiveReplay.forecasts, position);
+    const starters = evidence?.starters;
+    const approved =
+      pointEvidence !== undefined &&
+      evidence !== undefined &&
+      pointEvaluationClearsGate({
+        ...pointEvidence,
+        intervalCoverage: evidence.coverage,
+        intervalCoverageSamples: evidence.samples,
+      }) &&
+      starters !== undefined &&
+      starters.samples >= 100 &&
+      starters.coverage !== null &&
+      starters.coverage >= 0.6 &&
+      starters.coverage <= 0.8 &&
+      weeklyIntervalPolicyIsUsable(intervalPolicy);
+    weeklyIntervals[position] = {
+      state: approved ? "applied" : "retained",
+      evidence,
+      policy: intervalPolicy,
+    };
+  }
   return {
     champion,
     policy,
@@ -1093,6 +1154,7 @@ export function evaluateFirstPartyPublicationCandidates(
     fixedRecencyEvaluation,
     playerEvaluation,
     fixedRecencyPositions,
+    weeklyIntervals,
   };
 }
 
@@ -1157,6 +1219,7 @@ export class FirstPartyPublicationEvidenceMemo {
       fixedRecencyEvaluation: evaluated.fixedRecencyEvaluation,
       playerEvaluation: evaluated.playerEvaluation,
       fixedRecencyPositions: evaluated.fixedRecencyPositions,
+      weeklyIntervals: evaluated.weeklyIntervals,
     };
     const evidence: FirstPartyPublicationEvidence = {
       candidates,
@@ -3060,6 +3123,7 @@ export class FirstPartyProjectionService implements ProjectionRefreshService {
       [...latestSetByLeague].map(([leagueSeasonId, setId]) => [setId, leagueSeasonId]),
     );
     const result = new Map<string, Map<string, ScoredProjectionRow>>();
+    const metadataBySet = new Map(sets.map((set) => [set.id, set.metadata]));
     for (const row of rows) {
       const leagueSeasonId = leagueBySet.get(row.projectionSetId);
       if (!leagueSeasonId) continue;
@@ -3080,6 +3144,10 @@ export class FirstPartyProjectionService implements ProjectionRefreshService {
               : "unknown";
           return pointPolicyBySet.get(row.projectionSetId) ?? "unknown";
         })(),
+        intervalPolicyVersion: storedWeeklyIntervalPolicyVersion(
+          metadataBySet.get(row.projectionSetId),
+          row.playerId,
+        ),
         ...(scoringKeyBySet.has(row.projectionSetId)
           ? { scoringProfileKey: scoringKeyBySet.get(row.projectionSetId)! }
           : {}),
@@ -3463,19 +3531,33 @@ export function buildFirstPartyLeaguePublications(input: {
         selectedProjection.state === "zero"
           ? { floor: mean, ceiling: mean }
           : leagueScoredInterval(mean, calibration, rawMean);
+      const overlay = isWeeklyIntervalPosition(rowPosition)
+        ? publicationCandidates.weeklyIntervals[rowPosition]
+        : undefined;
+      const applyOverlay = selectedProjection.state !== "zero" && overlay?.state === "applied";
+      const publishedInterval = applyOverlay
+        ? applyWeeklyIntervalPolicy(rawMean, { mean, ...interval }, overlay.policy)
+        : interval;
+      const confidence =
+        selectedProjection.state === "zero"
+          ? selectedProjection.quality.confidence
+          : weeklyPointEvidenceConfidence(
+              selectedProjection.quality.confidence,
+              calibration,
+              rowPosition,
+            );
       scored.set(player.playerId, {
         playerId: player.playerId,
         mean,
-        ...interval,
+        ...publishedInterval,
         pointPolicyVersion: WEEKLY_POINT_CALIBRATION_POLICY_VERSION,
-        confidence:
-          selectedProjection.state === "zero"
-            ? selectedProjection.quality.confidence
-            : weeklyPointEvidenceConfidence(
-                selectedProjection.quality.confidence,
-                calibration,
-                rowPosition,
-              ),
+        ...(applyOverlay
+          ? { intervalPolicyVersion: WEEKLY_INTERVAL_CALIBRATION_POLICY_VERSION }
+          : {}),
+        // Better development-set coverage is not independent proof of higher advice confidence.
+        confidence: applyOverlay
+          ? Math.min(WEEKLY_INTERVAL_PROVISIONAL_CONFIDENCE_CAP, confidence)
+          : confidence,
         components,
       });
       rowPositions.set(player.playerId, rowPosition);
@@ -3570,6 +3652,7 @@ export function buildFirstPartyLeaguePublications(input: {
     const setChecksum = projectionInputChecksum({
       publicationPolicyVersion: FIRST_PARTY_PUBLICATION_POLICY_VERSION,
       pointCalibrationPolicyVersion: WEEKLY_POINT_CALIBRATION_POLICY_VERSION,
+      intervalCalibrationPolicyVersion: WEEKLY_INTERVAL_CALIBRATION_POLICY_VERSION,
       modelInputChecksum: input.inputChecksum,
       leagueSeasonId: league.id,
       profileKey,
@@ -3609,6 +3692,32 @@ export function buildFirstPartyLeaguePublications(input: {
         championPolicy: publicationCandidates.policy,
         adaptiveChampionPolicy: publicationCandidates.champion.policy,
         publicationPolicyVersion: FIRST_PARTY_PUBLICATION_POLICY_VERSION,
+        weeklyIntervalCalibration: {
+          policyVersion: WEEKLY_INTERVAL_CALIBRATION_POLICY_VERSION,
+          evidenceStatus: "development-validated",
+          confidenceCap: WEEKLY_INTERVAL_PROVISIONAL_CONFIDENCE_CAP,
+          coefficientScope:
+            "Position policies describe current unlocked forecasts only; frozen rows retain their original interval endpoints and policy version.",
+          limitation:
+            "Prior-only interval development improves aggregate interval score and starter coverage; some RB scores worsen slightly. Confidence remains conservative pending separate confirmation.",
+          byPosition: Object.fromEntries(
+            Object.entries(publicationCandidates.weeklyIntervals).filter(([position]) =>
+              publishablePlayerPositions.has(position as WeeklyIntervalPosition),
+            ),
+          ),
+        },
+        intervalPolicyByPlayer: Object.fromEntries(
+          [...scored.values()]
+            .filter((row) => row.intervalPolicyVersion !== undefined)
+            .map((row) => [
+              row.playerId,
+              {
+                version: row.intervalPolicyVersion,
+                position: rowPositions.get(row.playerId),
+                origin: frozenPlayerIds.has(row.playerId) ? "frozen" : "current",
+              },
+            ]),
+        ),
         publicationCandidateEvidence: supportedPositions
           .filter((position) => supportedByLeague.has(position))
           .map((position) => ({
@@ -3677,6 +3786,13 @@ export function buildFirstPartyLeaguePublications(input: {
           availabilityMethodWarning,
           ...supportedPositions.flatMap((position) => {
             if (!publishablePlayerPositions.has(position)) return [];
+            if (
+              isWeeklyIntervalPosition(position) &&
+              publicationCandidates.weeklyIntervals[position]?.state === "applied"
+            )
+              return [
+                `conditional_interval_development: ${position} forecast ranges use prior-only conditional residuals; advice confidence remains limited pending separate confirmation.`,
+              ];
             const calibration = publicationCandidates.liveCalibration.byPosition[position];
             return calibration?.pointPolicy !== undefined &&
               calibration.starterIntervalQuality?.state !== "available"
@@ -3693,7 +3809,7 @@ export function buildFirstPartyLeaguePublications(input: {
         season: input.season,
         week: input.week,
         pointIntervals:
-          "league-scored residual quantiles; RB/WR/TE scale with the raw point forecast",
+          "league-scored residual quantiles; eligible RB/WR/TE use prior-only scalar conditional intervals with conservative confidence",
         baseline: "recency-only",
         playerBacktest: playerEvaluation.overall,
         defenseBacktest: defenseEvaluation.overall,
@@ -3706,6 +3822,11 @@ export function buildFirstPartyLeaguePublications(input: {
           [...scored.values()]
             .filter((row) => frozenPlayerIds.has(row.playerId))
             .map((row) => [row.playerId, row.pointPolicyVersion ?? "unknown"]),
+        ),
+        frozenIntervalPolicyVersions: Object.fromEntries(
+          [...scored.values()]
+            .filter((row) => frozenPlayerIds.has(row.playerId))
+            .map((row) => [row.playerId, row.intervalPolicyVersion ?? "unknown"]),
         ),
       },
     });

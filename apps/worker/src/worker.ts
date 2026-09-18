@@ -7,9 +7,11 @@ import { createDatabase } from "@laces-out/db";
 import { createSmtpEmailTransport } from "@laces-out/email";
 import { DrizzleInSeasonDecisionRepository, InSeasonDecisionService } from "@laces-out/decisions";
 import {
+  DrizzleProjectionRefreshDemandRepository,
   DrizzleYahooSyncRepository,
   EspnSessionConnectionService,
   EspnSessionSyncService,
+  ProjectionRefreshDemandDispatcher,
   YahooConnectionService,
   YahooSyncService,
 } from "@laces-out/league-sync";
@@ -218,11 +220,7 @@ const espnDirectSync = createEspnDirectSyncService({
       );
     }
     try {
-      await enqueueProjectionRefresh(boss, {
-        season,
-        horizon: "weekly",
-        reason: "on-demand",
-      });
+      await projectionDemandDispatcher.dispatch(season, { enqueueWithoutDemand: true });
     } catch (error) {
       logger.warn(
         { err: error, season },
@@ -268,11 +266,7 @@ const leagueSyncService = new LeagueSyncService({
       );
     }
     try {
-      await enqueueProjectionRefresh(boss, {
-        season: receipt.season,
-        horizon: "weekly",
-        reason: "on-demand",
-      });
+      await projectionDemandDispatcher.dispatch(receipt.season, { enqueueWithoutDemand: true });
     } catch {
       logger.warn({ season: receipt.season }, "Yahoo sync committed but projection enqueue failed");
     }
@@ -307,11 +301,7 @@ const leagueSyncService = new LeagueSyncService({
       );
     }
     try {
-      await enqueueProjectionRefresh(boss, {
-        season: receipt.season,
-        horizon: "weekly",
-        reason: "on-demand",
-      });
+      await projectionDemandDispatcher.dispatch(receipt.season, { enqueueWithoutDemand: true });
     } catch {
       logger.warn(
         { season: receipt.season },
@@ -368,6 +358,11 @@ const boss = createJobQueue(
   },
   logger,
 );
+const projectionDemandDispatcher = new ProjectionRefreshDemandDispatcher({
+  repository: new DrizzleProjectionRefreshDemandRepository(database.db),
+  enqueue: (season) =>
+    enqueueProjectionRefresh(boss, { season, horizon: "weekly", reason: "on-demand" }),
+});
 const rosProfileDiscovery = new RosProfileDiscoveryService({
   database: database.db,
   enqueueValidation: (job) => enqueueRosProfileValidation(boss, job),
@@ -399,8 +394,10 @@ const providerSyncSweepService = new ProviderSyncSweepService({
   yahooEnabled: environment.YAHOO_AUTOMATED_SYNC_ENABLED && yahooSync !== undefined,
   targets: new DrizzleProviderSyncSweepTargetReader(database.db),
   enqueue: (job) => enqueueLeagueSync(boss, job),
+  reconcileProjectionDemand: (season, signal) =>
+    projectionDemandDispatcher.dispatch(season, { signal }),
   observe: (event) => {
-    if (event.event === "enqueue-failed") {
+    if (event.event === "enqueue-failed" || event.event === "projection-demand-dispatch-failed") {
       logger.warn(event, "provider sync sweep operational event");
     } else {
       logger.info(event, "provider sync sweep operational event");

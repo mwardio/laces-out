@@ -62,6 +62,7 @@ export interface ProviderSyncSweepTargetReader {
 }
 
 export type ProviderSyncSweepOperationalEvent =
+  | { readonly event: "projection-demand-dispatch-failed"; readonly season: number }
   | {
       readonly event: "due-targets-selected";
       readonly espn: number;
@@ -122,6 +123,8 @@ export class ProviderSyncSweepService implements ProviderSyncSweepServicePort {
   readonly #yahooEnabled: boolean;
   readonly #targets: ProviderSyncSweepTargetReader;
   readonly #enqueue: (job: LeagueSyncJob) => Promise<string | null>;
+  readonly #reconcileProjectionDemand:
+    ((season: number, signal: AbortSignal) => Promise<unknown>) | undefined;
   readonly #observe: ((event: ProviderSyncSweepOperationalEvent) => void) | undefined;
   readonly #now: () => Date;
 
@@ -131,6 +134,7 @@ export class ProviderSyncSweepService implements ProviderSyncSweepServicePort {
     readonly yahooEnabled: boolean;
     readonly targets: ProviderSyncSweepTargetReader;
     readonly enqueue: (job: LeagueSyncJob) => Promise<string | null>;
+    readonly reconcileProjectionDemand?: (season: number, signal: AbortSignal) => Promise<unknown>;
     readonly observe?: (event: ProviderSyncSweepOperationalEvent) => void;
     readonly now?: () => Date;
   }) {
@@ -139,6 +143,7 @@ export class ProviderSyncSweepService implements ProviderSyncSweepServicePort {
     this.#yahooEnabled = input.yahooEnabled;
     this.#targets = input.targets;
     this.#enqueue = input.enqueue;
+    this.#reconcileProjectionDemand = input.reconcileProjectionDemand;
     this.#observe = input.observe;
     this.#now = input.now ?? (() => new Date());
   }
@@ -157,6 +162,16 @@ export class ProviderSyncSweepService implements ProviderSyncSweepServicePort {
   ): Promise<ProviderSyncSweepResult> {
     if (context.signal.aborted) throw new Error("Provider sync sweep was aborted during shutdown");
     const now = this.#now();
+    // A committed league change needs projections even when automated provider reads are disabled
+    // or fail. Delivery errors remain retryable but do not stop this sweep's independent sync work.
+    let projectionFailure: { readonly error: unknown } | undefined;
+    try {
+      await this.#reconcileProjectionDemand?.(currentNflSeason(now), context.signal);
+    } catch (error) {
+      context.signal.throwIfAborted();
+      projectionFailure = { error };
+      this.#emit({ event: "projection-demand-dispatch-failed", season: currentNflSeason(now) });
+    }
     const expired = await this.#targets.expireRequests(now);
     const [espnDirectTargets, espnSessionTargets, yahooTargets] = await Promise.all([
       this.#espnEnabled
@@ -222,6 +237,7 @@ export class ProviderSyncSweepService implements ProviderSyncSweepServicePort {
         deduplicated: considered - enqueued[provider],
       });
     }
+    if (projectionFailure) throw projectionFailure.error;
     return {
       expired,
       considered: targets.length,

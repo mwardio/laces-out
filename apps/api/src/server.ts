@@ -1,7 +1,11 @@
 import { loadEnvironment } from "@laces-out/config";
 import { createDatabase } from "@laces-out/db";
 import { currentNflSeason } from "@laces-out/domain";
-import { EspnSessionConnectionService } from "@laces-out/league-sync";
+import {
+  DrizzleProjectionRefreshDemandRepository,
+  EspnSessionConnectionService,
+  ProjectionRefreshDemandDispatcher,
+} from "@laces-out/league-sync";
 import {
   createJobQueue,
   enqueueDataRefresh,
@@ -353,6 +357,11 @@ await jobs.start();
 await registerQueues(jobs);
 await registerSchedules(jobs, currentNflSeason());
 await ensureDailyRefresh(jobs);
+const projectionDemandDispatcher = new ProjectionRefreshDemandDispatcher({
+  repository: new DrizzleProjectionRefreshDemandRepository(database.db),
+  enqueue: (season) =>
+    enqueueProjectionRefresh(jobs, { season, horizon: "weekly", reason: "on-demand" }),
+});
 const espnRefresh = new EspnRefreshCoordinator(new DrizzleEspnRefreshRepository(database.db), {
   directEnabled: environment.ESPN_PUBLIC_DIRECT_SYNC_ENABLED,
   enqueueDirect: ({ leagueSeasonId, refreshRequestId }) =>
@@ -439,7 +448,7 @@ const app = await buildApp({
       requestedAt: requestedAt.toISOString(),
     }),
   enqueueProjectionRefresh: async ({ season }) =>
-    enqueueProjectionRefresh(jobs, { season, horizon: "weekly", reason: "on-demand" }),
+    projectionDemandDispatcher.dispatch(season, { enqueueWithoutDemand: true }),
   ...(environment.ESPN_SERVER_SESSION_SYNC_ENABLED && espnSessionConnections
     ? {
         enqueueEspnIdentityBootstrap: async ({ connectionId, leagueSeasonId }) =>

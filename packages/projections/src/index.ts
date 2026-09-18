@@ -2,6 +2,7 @@ export * from "./projection-import.js";
 export * from "./scoring.js";
 export * from "./first-party.js";
 export * from "./point-calibration.js";
+export * from "./weekly-interval-calibration.js";
 export * from "./rest-of-season.js";
 export * from "./ros-outcomes.js";
 export * from "./ros-scoring-profiles.js";

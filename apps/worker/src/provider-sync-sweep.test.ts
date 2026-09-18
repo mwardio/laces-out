@@ -107,6 +107,73 @@ describe("Yahoo automated sync cadence", () => {
 });
 
 describe("provider sync sweep", () => {
+  it("reconciles committed projection demand even when all provider automation is disabled", async () => {
+    const targets = reader();
+    const reconcileProjectionDemand = vi.fn(async () => "projection-job");
+    const service = new ProviderSyncSweepService({
+      espnEnabled: false,
+      espnSessionEnabled: false,
+      yahooEnabled: false,
+      targets,
+      enqueue: vi.fn(async () => "provider-job"),
+      reconcileProjectionDemand,
+      now: () => NOW,
+    });
+    const jobContext = context();
+    await service.sweepProviderSync({ requestedAt: "scheduled" }, jobContext);
+    expect(reconcileProjectionDemand).toHaveBeenCalledExactlyOnceWith(2026, jobContext.signal);
+    expect(targets.listDueEspn).not.toHaveBeenCalled();
+    expect(targets.listDueYahoo).not.toHaveBeenCalled();
+  });
+
+  it("delivers projection demand before an unrelated provider query failure", async () => {
+    const targets = reader();
+    targets.listDueYahoo.mockRejectedValueOnce(new Error("provider query failed"));
+    const reconcileProjectionDemand = vi.fn(async () => "projection-job");
+    const service = new ProviderSyncSweepService({
+      espnEnabled: false,
+      yahooEnabled: true,
+      targets,
+      enqueue: vi.fn(async () => "provider-job"),
+      reconcileProjectionDemand,
+      now: () => NOW,
+    });
+    await expect(
+      service.sweepProviderSync({ requestedAt: "scheduled" }, context()),
+    ).rejects.toThrow("provider query failed");
+    expect(reconcileProjectionDemand).toHaveBeenCalledOnce();
+    expect(targets.listDueYahoo.mock.invocationCallOrder[0]).toBeGreaterThan(
+      reconcileProjectionDemand.mock.invocationCallOrder[0]!,
+    );
+  });
+
+  it("keeps provider work independent while retrying a failed projection dispatch", async () => {
+    const targets = reader({
+      espn: [{ provider: "espn", leagueSeasonId: "league", directCoreState: "available" }],
+    });
+    const enqueue = vi.fn(async () => "provider-job");
+    const observe = vi.fn();
+    const service = new ProviderSyncSweepService({
+      espnEnabled: true,
+      yahooEnabled: false,
+      targets,
+      enqueue,
+      reconcileProjectionDemand: async () => {
+        throw new Error("projection enqueue failed");
+      },
+      observe,
+      now: () => NOW,
+    });
+    await expect(
+      service.sweepProviderSync({ requestedAt: "scheduled" }, context()),
+    ).rejects.toThrow("projection enqueue failed");
+    expect(enqueue).toHaveBeenCalledOnce();
+    expect(observe).toHaveBeenCalledWith({
+      event: "projection-demand-dispatch-failed",
+      season: 2026,
+    });
+  });
+
   it("expires stale intents without reading targets while both automation paths are disabled", async () => {
     const targets = reader({ expired: 2 });
     const enqueue = vi.fn(async () => "job-1");

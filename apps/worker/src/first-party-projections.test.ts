@@ -5,6 +5,9 @@ import {
   evaluateFirstPartyTeamDefenseBacktestForScoringProfile,
   evaluateWeeklyPointCalibration,
   WEEKLY_POINT_CALIBRATION_POLICY_VERSION,
+  WEEKLY_INTERVAL_CALIBRATION_POLICY_VERSION,
+  applyWeeklyIntervalPolicy,
+  storedWeeklyIntervalPolicyVersion,
   projectionScoringProfileKey,
   firstPartyProjectionComponentsForPosition,
   FIRST_PARTY_PROJECTION_MODEL_VERSION,
@@ -1115,6 +1118,7 @@ function planPublications(input: {
   readonly defenseBacktest?: FirstPartyTeamDefenseBacktest;
   readonly rosters?: readonly RosterFixtureEntry[];
   readonly startedPositions?: readonly string[];
+  readonly zeroPositions?: readonly string[];
   readonly modelMultiplier?: number;
   readonly previousRows?: ReadonlyMap<string, ScoredProjectionRow>;
   readonly leagueSeasonId?: string;
@@ -1155,6 +1159,17 @@ function planPublications(input: {
       const player = publishedPlayerFixture(position, PUBLICATION_TEAMS[0], {
         gameStarted: input.startedPositions?.includes(position) ?? false,
       });
+      if (input.zeroPositions?.includes(position)) {
+        const zero = {
+          ...player.baselineProjection,
+          state: "zero" as const,
+          components: Object.fromEntries(
+            Object.keys(player.baselineProjection.components).map((key) => [key, 0]),
+          ),
+          quality: { ...player.baselineProjection.quality, confidence: 1 },
+        };
+        return { ...player, projection: zero, modelProjection: zero, baselineProjection: zero };
+      }
       return input.modelMultiplier === undefined
         ? player
         : {
@@ -1368,6 +1383,98 @@ describe("weekly league publication withholds unsupported positions, not leagues
 });
 
 describe("published backtest MAE reflects only the league's supported positions", () => {
+  it("adds qualified conditional intervals without changing the selected point policy or allowing higher confidence", () => {
+    const backtest = playerBacktestFixture();
+    const publication = planPublications({ rules: DST_SUPPORTED_RULES, playerBacktest: backtest })
+      .publications[0]!;
+    const candidates = evaluateFirstPartyPublicationCandidates(backtest, publication.profile);
+    const receiver = publication.rows.find((row) => row.playerId === "player-wr")!;
+    const interval = candidates.weeklyIntervals.WR!;
+    expect(interval.state).toBe("applied");
+    const calibration = candidates.liveCalibration.byPosition.WR!;
+    const raw = receiver.components.receiving_yards! * 0.1;
+    const expectedMean = leagueScoredMean(raw, calibration);
+    const priorBounds = leagueScoredInterval(expectedMean, calibration, raw);
+    const expected = applyWeeklyIntervalPolicy(
+      raw,
+      { mean: expectedMean, ...priorBounds },
+      interval.policy,
+    );
+    expect(receiver).toMatchObject(expected);
+    expect(receiver.confidence).toBeLessThanOrEqual(0.49);
+    expect(receiver.pointPolicyVersion).toBe(WEEKLY_POINT_CALIBRATION_POLICY_VERSION);
+    expect(receiver.intervalPolicyVersion).toBe(WEEKLY_INTERVAL_CALIBRATION_POLICY_VERSION);
+    expect(storedWeeklyIntervalPolicyVersion(publication.metadata, receiver.playerId)).toBe(
+      WEEKLY_INTERVAL_CALIBRATION_POLICY_VERSION,
+    );
+    expect(publication.metadata.weeklyIntervalCalibration).toMatchObject({
+      evidenceStatus: "development-validated",
+      confidenceCap: 0.49,
+    });
+    const oldSelected = evaluateWeeklyPointCalibration(
+      applyFirstPartyProjectionChampionPolicy(backtest, publication.profile).backtest,
+      publication.profile,
+    );
+    expect(candidates.adaptiveEvaluation).toEqual(oldSelected);
+    expect(candidates.liveCalibration.byPosition.WR?.starterIntervalQuality).toEqual(
+      candidates.playerEvaluation.byPosition.WR?.starterIntervalQuality,
+    );
+  });
+
+  it("preserves deterministic zero/inactive/bye rows and their confidence when interval evidence qualifies", () => {
+    const publication = planPublications({
+      rules: DST_SUPPORTED_RULES,
+      zeroPositions: ["RB", "WR", "TE"],
+    }).publications[0]!;
+    for (const position of ["rb", "wr", "te"]) {
+      const player = publication.rows.find((row) => row.playerId === `player-${position}`)!;
+      expect(player).toMatchObject({ mean: 0, floor: 0, ceiling: 0, confidence: 1 });
+      expect(player.intervalPolicyVersion).toBeUndefined();
+    }
+  });
+
+  it("retains a locked conditional interval and its conservative confidence despite a newly fitted policy", () => {
+    const publication = planPublications({ rules: DST_SUPPORTED_RULES }).publications[0]!;
+    const original = publication.rows.find((row) => row.playerId === "player-wr")!;
+    const previous = {
+      ...original,
+      mean: 8,
+      floor: 1,
+      ceiling: 19,
+      confidence: 0.32,
+      scoringProfileKey: publication.profileKey,
+      components: {
+        ...Object.fromEntries(
+          firstPartyProjectionComponentsForPosition("WR").map((key) => [key, 0]),
+        ),
+        ...original.components,
+      },
+    };
+    const next = planPublications({
+      rules: DST_SUPPORTED_RULES,
+      startedPositions: ["WR"],
+      previousRows: new Map([[previous.playerId, previous]]),
+    }).publications[0]!;
+    expect(next.rows.find((row) => row.playerId === previous.playerId)).toEqual(previous);
+    expect(next.metadata.frozenIntervalPolicyVersions).toEqual({
+      [previous.playerId]: WEEKLY_INTERVAL_CALIBRATION_POLICY_VERSION,
+    });
+    expect(next.metadata.intervalPolicyByPlayer).toMatchObject({
+      [previous.playerId]: {
+        origin: "frozen",
+        version: WEEKLY_INTERVAL_CALIBRATION_POLICY_VERSION,
+      },
+    });
+    const corrected = rescoreFrozenProjection(
+      previous,
+      { id: "changed", rules: [{ statId: "receiving_yards", points: 0.2 }] },
+      playerEvaluation().overall,
+      "WR",
+    );
+    expect(corrected.intervalPolicyVersion).toBeUndefined();
+    expect(corrected.components).toBe(previous.components);
+  });
+
   it("includes frozen point-policy provenance in the publication identity while preserving locked points", () => {
     const first = planPublications({ rules: DST_SUPPORTED_RULES }).publications[0];
     if (first === undefined) throw new Error("Missing publication fixture");
@@ -1481,6 +1588,10 @@ describe("published backtest MAE reflects only the league's supported positions"
         },
       },
     });
+    expect(publication?.metadata.weeklyIntervalCalibration).toMatchObject({
+      byPosition: { WR: { state: "retained" } },
+    });
+    expect(receiver?.intervalPolicyVersion).toBeUndefined();
     expect(publication?.metadata.warnings).toContain(
       "uncalibrated_starter_intervals: WR forecast ranges have insufficient or unreliable historical starter coverage; advice confidence is limited.",
     );

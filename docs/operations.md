@@ -740,6 +740,16 @@ and cache-only replays remain available. This is a best-effort headroom guard, n
 quota against unrelated writers. Capacity monitoring must cover the filesystem backing the mounted
 outcome volume, which can differ from the host's temporary filesystem.
 
+Plan a model or protocol release in two stages. First use the candidate worker version to build
+and verify its complete shared corpus while production retains its approved forecasts. Preserve
+the immutable vectors, completed manifest, and reports, then stage and adopt that corpus with the
+candidate version before activating its ordinary validation consumers. Keep old consumers from
+claiming new-version jobs during preparation. Exact scoring admission and live publication remain
+separate checks after any scoring migration. This preparation avoids making the first customer
+with a supported scoring profile wait for a multi-hour model rebuild. A successful application
+deployment, completed corpus build, or ready pointer alone does not establish that current league
+forecasts have been admitted and published.
+
 After a full CLI build has completed with `--outcome-cache=/absolute/path/to/outcomes`, an operator
 can register its existing corpus for automatic replay using the same directory and the corpus
 `outcomeCorpusIdentity` in the completed report. Run this with the worker's configured `DATABASE_URL` so adoption
@@ -1073,6 +1083,18 @@ unhealthy, reauthorization-required, and open-circuit targets are excluded. Sele
 by the exact `provider_league_links` row and live league membership; a shared league may use a
 deterministically selected healthy member fallback, but an unlinked account or non-member never
 qualifies. There is no 15-minute live/near-lock cadence in this release.
+
+The same sweep also retries pending weekly projection dispatch for the current season, even when
+provider automation is disabled or a provider read fails. Migration 0051 adds a nullable demand
+UUID to each league season. Changed ESPN/Yahoo core snapshots record it in their persistence
+transaction; unchanged recaptures leave it alone, except an established ESPN identity change.
+Immediate dispatch or a later sweep clears only the captured UUID after a new job is durably
+queued. Failed or coalesced sends leave it pending, and a newer sync cannot be cleared by an older
+dispatch. Each sweep captures at most 100 non-archived league demands and uses the existing weekly
+queue singleton/group. It does not force source refreshes or ROS modeling; ordinary scoring-profile
+discovery and admission still control ROS work. Explicit manual refresh behavior is unchanged.
+Delivery is at least once, with existing projection input checks containing duplicate work; queue
+retry/dead-letter policy still governs jobs after delivery. The migration performs no backfill.
 
 Safe rollout and rollback:
 
@@ -1451,6 +1473,8 @@ Then:
 
 1. Review that release's notes, migration changes, and provider capability changes.
 2. Run `npm ci && npm run check` against the checked-out version.
+   For a model/protocol change, complete the shared-corpus preparation described above before
+   activating the new model, and retain the previous approved forecast sets during the transition.
 3. Create and verify a pre-migration backup.
 4. Apply migrations as an explicit one-shot operation.
 5. Start API/worker/web and verify liveness, readiness, worker startup/catalog scheduling, login,

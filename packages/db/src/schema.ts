@@ -732,6 +732,8 @@ export const leagueSeasons = pgTable(
     waiverType: text("waiver_type"),
     currentWeek: integer("current_week"),
     settings: jsonb("settings").$type<Record<string, unknown>>().notNull().default({}),
+    // A committed provider change remains pending until a weekly refresh is durably queued.
+    projectionRefreshDemandId: uuid("projection_refresh_demand_id"),
     lastSyncedAt: timestamp("last_synced_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
@@ -743,6 +745,9 @@ export const leagueSeasons = pgTable(
       table.season,
     ),
     index("league_seasons_league_idx").on(table.leagueId),
+    index("league_seasons_projection_demand_idx")
+      .on(table.season, table.id)
+      .where(sql`${table.projectionRefreshDemandId} is not null`),
     check("league_seasons_provider_check", sql`${table.provider} in ('yahoo', 'espn', 'manual')`),
     check("league_seasons_team_count_check", sql`${table.teamCount} > 1`),
   ],

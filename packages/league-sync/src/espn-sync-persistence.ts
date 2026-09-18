@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+
 import type {
   LeagueSupplementalBundle,
   LeagueSyncBundle,
@@ -1045,6 +1047,12 @@ export class DrizzleEspnSyncPersistence {
           season.leagueId,
           season.id,
         );
+        if (identityChanged) {
+          await transaction
+            .update(leagueSeasons)
+            .set({ projectionRefreshDemandId: randomUUID() })
+            .where(eq(leagueSeasons.id, season.id));
+        }
         if (authority.mode === "bridge") {
           // An unchanged provider artifact is still proof of league access. Grant membership before
           // linking the device so the database ownership trigger can enforce the same ordering used
@@ -1392,6 +1400,11 @@ export class DrizzleEspnSyncPersistence {
         leagueId,
         leagueSeasonId,
       );
+
+      await transaction
+        .update(leagueSeasons)
+        .set({ projectionRefreshDemandId: run.id })
+        .where(eq(leagueSeasons.id, leagueSeasonId));
 
       await transaction
         .update(syncRuns)

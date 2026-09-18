@@ -448,3 +448,102 @@ Cooperative decision scheduling verification:
   from roughly 3.9 seconds to 995 ms for FF and 690 ms for Android; 83 and 76 timer ticks ran
   before completion. Individual synchronous waiver calls still took 610–811 ms, so neither
   the 25 ms checkpoint target nor these replay measurements establish a request-latency guarantee.
+
+Cooperative deployment and weekly catch-up, September 18 00:21 UTC:
+
+- Commit `3b0ecca` is pushed and deployed in the API, web app, and ordinary worker. Full type
+  checking, scoped lint/formatting, all 109 focused tests, production builds, and the nine-entry
+  Linux worker canary passed. The API and web app are healthy. The two ROS consumers remain
+  stopped while the unchanged historical service builds its 2023 holdout forecasts.
+- The cold weekly refresh completed at 00:19:21 without retry; a subsequent warm refresh
+  completed in 24.7 seconds. Read-only verification at 00:20:35 finds 16 verified weekly league
+  outputs, one unsupported IDP configuration, all 26 checked sources usable (21 required), and
+  four coherent PBP source pairs. The previous roster-source freshness discrepancy is resolved.
+- Actual request-service reads still return current v14 projections, compatible scoring, visible
+  injury status, and close-call assessments. FF took 5.46 seconds and Android 4.04 seconds during
+  the concurrent verification workload. Cooperative yielding improves scheduling responsiveness;
+  these variable live timings do not demonstrate another total-latency reduction.
+- Queue inspection confirms the earlier retried follow-on completed normally. Another follow-on
+  arrived during graceful replacement and returned to normal retry; no active work was force-killed.
+
+Optional historical cache prewarming, September 18 00:29 UTC:
+
+- A separate Linux helper uses the unchanged validation CLI with holdouts `2022,2024,2025`;
+  every source season, cutoff, position, sampling count, and release threshold remains unchanged.
+  The original full four-season run remains the sole release authority. The helper's report must
+  never be substituted for it or adopted. There is no supported single-season CLI mode.
+- Code review confirms each season's training data, calibration, player selection, input identity,
+  and seed are independent of the other holdouts requested. The maximum full cohort is 3,264
+  forecasts, below the unchanged 6,000 cap. Existing vectors are reused; concurrent identical
+  writes use atomic links and verify collisions without overwriting a winner. An initial header
+  inventory finds exactly 1,632 completed 2022 vectors, all with 16,384 scenarios.
+- The helper is limited to two CPUs, low priority, a 3 GiB soft memory threshold, 4 GiB maximum,
+  and 256 MiB swap. A separate guard stops only its cgroup when host available memory falls below
+  2 GiB or the 2024 forecast stage finishes. Three guard checks passed. Shutdown is bounded to
+  30 seconds because the next synchronous calibration can delay the process's signal handler.
+  The original process and its resource limits are unchanged. The Mini remains unreachable.
+
+Conditional interval development evaluation, September 18:
+
+- One prespecified scalar interval candidate partitions prior residuals by a forecast threshold
+  learned only from the previous eight weekly batches. The threshold is the median prior batch's
+  RB24/WR36/TE12 raw forecast. Both partitions retain the existing signed residual quantiles,
+  square-root scale, and 24-observation minimum with pooled fallback. Existing affine centers and
+  physical strategy selections remain unchanged; there was no candidate or parameter sweep.
+- All nine exact scoring profiles and 9,282 locked predictions completed in 161 seconds on
+  Linux x86-64, with peak RSS about 591 MiB. Every mean and selected strategy matched exactly;
+  prefix and target-outcome mutation checks passed. All unchanged position coverage gates and
+  starter quality guards pass for the candidate. The overall proper 70% interval score improves
+  by 0.40–1.01% across profiles. These profiles share observations and are not independent holdouts.
+- Android starter coverage improves from 53.65% to 67.11% for WR and from 45.61% to 62.28% for TE;
+  their proper interval scores improve by 3.92% and 8.52%. RB results are mixed: wider intervals
+  improve coverage, but starter interval score worsens by up to 0.74% in some profiles. This is
+  a measured tradeoff, not a claim of uniform improvement. The existing locked data was previously
+  inspected, so this is development validation rather than untouched prospective confirmation.
+- Integration is authorized only as a separately versioned interval layer after original strategy
+  selection. It must preserve point calibration v1, component model v14, ROS v11 and all ROS cache
+  identities. Provisional interval rows retain a confidence ceiling of 0.49. Frozen and known-zero
+  forecasts remain protected; an old frozen interval cannot acquire stronger confidence merely
+  because a new interval policy passed. This checkpoint is not deployment or live-output proof.
+
+Durable post-sync projection scheduling, implementation verification:
+
+- A nullable UUID on each league season records projection demand in the same transaction as a
+  changed ESPN/Yahoo snapshot. Unchanged recaptures preserve the marker; an accepted ESPN identity
+  change can create new demand. Migration 0051 adds only that column and a partial pending index,
+  without backfilling historical leagues or changing model inputs.
+- Immediate scheduling and the existing five-minute provider sweep share a bounded dispatcher.
+  It captures up to 100 current-season demands, uses the existing weekly queue singleton/group,
+  and clears only captured UUIDs after receiving a new durable job ID. Null/coalesced sends,
+  queue errors, cancellation, and acknowledgement failures leave demand retryable. A newer sync
+  cannot be cleared by an older dispatch. Provider automation flags do not disable reconciliation.
+- All 53 focused tests pass, including PostgreSQL transaction rollback, stable unchanged snapshots,
+  newer/unseen demand, first import, identity changes, disabled automation, and schema smoke through 0051. This closes a lost-dispatch path that otherwise could wait for the nightly refresh; it does
+  not replace downstream job retries, ROS profile admission, or publication checks. Final build,
+  migration, deployment, and live verification remain pending at this checkpoint.
+
+Combined implementation verification, September 18 01:48 UTC:
+
+- The interval integration passes 80 focused tests. Its separate 203.4-second replay matches the
+  prespecified candidate's bounds exactly across all nine profiles and 9,282 predictions, while
+  preserving every mean, physical component, and strategy-selection result. All 27 position/starter
+  gate pairs pass. The original core and point-calibration files are unchanged. A final optional
+  property type amendment produces byte-identical emitted JavaScript.
+- Frozen and freshly fitted interval rows now have explicit provenance. The per-position fitted
+  coefficients apply only to fresh rows; frozen rows retain their original bounds and cannot gain
+  confidence from the new fit. An independent review found no numerical, gate, or kickoff-lock
+  blocker. The interval policy remains provisional and capped at 0.49 confidence.
+- Combined changes pass full application type checking, scoped lint, formatting, and diff checks.
+  The full compiler required about 1.9 GiB; an initial 1.5 GiB heap cap was insufficient, so the
+  successful check used a larger isolated allowance. All validation evidence here is Linux x86-64.
+- The encrypted pre-0051 archive is verified by decryption and full `pg_restore` parsing to
+  `/dev/null`. This is archive verification, not a restore drill or off-host backup confirmation.
+- The optional 2024 helper was intentionally stopped at 01:40 to free release-build memory. Its
+  306 committed 2024 vectors remain cached alongside the completed 2022 and 2023 vectors. The
+  original four-season process continued without restart and completed 2024 calibration in
+  788.1 seconds. The helper's cancellation exit is not a full-run failure or an eligible report.
+- A final bounded cache profile found Float64 decoding accounts for about 14% of sampled read
+  time. That is an upper bound on potential savings before preserving copies and finite checks,
+  not a measured replacement-code speedup. No cache codec or batch-orchestration change is included.
+  Production build, migration, deployment, live weekly verification, and full ROS recovery remain
+  outstanding at this checkpoint.
