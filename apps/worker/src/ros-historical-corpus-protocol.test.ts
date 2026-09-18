@@ -15,6 +15,9 @@ describe("immutable historical corpus build protocol", () => {
   it("requires explicit defense history, sampler, and calibration lineage even under the current model", () => {
     const defenseFields = [
       "defenseHistoryVersion",
+      "defenseInputVersion",
+      "defenseCohortOrderVersion",
+      "defenseScheduleVersion",
       "defenseGameVersion",
       "defenseCalibrationVersion",
       "defenseAllowedDistributionVersion",
@@ -26,6 +29,26 @@ describe("immutable historical corpus build protocol", () => {
     );
     expect(isCurrentRosHistoricalCorpusBuildProtocol(withoutDefenseLineage)).toBe(false);
     expect(isCompatibleRosHistoricalCorpusBuildProtocol(withoutDefenseLineage)).toBe(false);
+  });
+
+  it("rejects the v13 corpus that predates defense schedule identity validation", () => {
+    const prior = Object.fromEntries(
+      Object.entries(ROS_HISTORICAL_CORPUS_BUILD_PROTOCOL).filter(
+        ([name]) =>
+          name !== "defenseInputVersion" &&
+          name !== "defenseScheduleVersion" &&
+          name !== "defenseCohortOrderVersion",
+      ),
+    );
+    expect(prior.modelVersion).toBe("laces-ros-distribution-v13");
+    expect(isCompatibleRosHistoricalCorpusBuildProtocol(prior)).toBe(false);
+    expect(isCurrentRosHistoricalCorpusBuildProtocol(prior)).toBe(false);
+    expect(
+      isCompatibleRosHistoricalCorpusBuildProtocol({
+        ...ROS_HISTORICAL_CORPUS_BUILD_PROTOCOL,
+        defenseInputVersion: "historical-ros-defense-football-input-v4",
+      }),
+    ).toBe(false);
   });
 
   it.each(["season-walk-forward-block-wis-cqr-v5", "season-walk-forward-block-wis-cqr-v6"])(
