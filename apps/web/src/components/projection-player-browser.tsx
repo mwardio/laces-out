@@ -336,7 +336,7 @@ function ProjectionBoard({
     abortRef.current?.abort();
     // Drop the outgoing set's rows immediately. Without this the previous
     // horizon's numbers render under the new horizon's column labels
-    // (Projected/Floor/Ceiling vs ROS Total/P15/P85) until the fetch lands.
+    // (Projected/Floor/Ceiling vs ROS Total/Range low/Range high) until the fetch lands.
     setDetail({ state: "loading" });
     if (!activeSet) {
       setDetail({ state: "idle" });
@@ -596,6 +596,13 @@ function ProjectionBoard({
             </span>
           </div>
 
+          {horizon === "rest-of-season" && resolvedSet?.origin === "laces-out" ? (
+            <p className={styles.withheldNotice}>
+              These ranges are widened using historical forecast errors. They remain provisional and
+              do not establish a 70% chance for an individual player.
+            </p>
+          ) : null}
+
           <div className={styles.filters}>
             <label className={styles.search}>
               <Search size={15} aria-hidden="true" />
@@ -622,8 +629,12 @@ function ProjectionBoard({
               <span className="sr-only">Sort projections</span>
               <select value={sort} onChange={(event) => setSort(event.target.value as SortKey)}>
                 <option value="projection">Highest projection</option>
-                <option value="floor">Highest floor</option>
-                <option value="ceiling">Highest ceiling</option>
+                <option value="floor">
+                  {horizon === "week" ? "Highest floor" : "Highest range low"}
+                </option>
+                <option value="ceiling">
+                  {horizon === "week" ? "Highest ceiling" : "Highest range high"}
+                </option>
                 <option value="name">Player name</option>
               </select>
             </label>
@@ -642,8 +653,8 @@ function ProjectionBoard({
               <span role="columnheader">Pos.</span>
               <div className={styles.metricHeaders}>
                 <span role="columnheader">{horizon === "week" ? "Projected" : "ROS Total"}</span>
-                <span role="columnheader">{horizon === "week" ? "Floor" : "P15"}</span>
-                <span role="columnheader">{horizon === "week" ? "Ceiling" : "P85"}</span>
+                <span role="columnheader">{horizon === "week" ? "Floor" : "Range low"}</span>
+                <span role="columnheader">{horizon === "week" ? "Ceiling" : "Range high"}</span>
                 <span role="columnheader">
                   {horizon === "week" ? "Confidence" : "Expected Games"}
                 </span>
@@ -678,11 +689,11 @@ function ProjectionBoard({
                       ) : null}
                     </div>
                     <div role="cell">
-                      <span>{horizon === "week" ? "Floor" : "P15"}</span>
+                      <span>{horizon === "week" ? "Floor" : "Range low"}</span>
                       <strong>{points(player.floorPoints)}</strong>
                     </div>
                     <div role="cell">
-                      <span>{horizon === "week" ? "Ceiling" : "P85"}</span>
+                      <span>{horizon === "week" ? "Ceiling" : "Range high"}</span>
                       <strong>{points(player.ceilingPoints)}</strong>
                     </div>
                     <div role="cell">

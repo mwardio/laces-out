@@ -216,9 +216,9 @@ export const rosScenarioPaths = {
 } as const;
 
 /**
- * Nominal width of the published interval. The interval method is
- * `simulation-p15-p50-p85-cqr-v1`, so the band runs from the 15th to the 85th percentile and its
- * nominal coverage is the difference between them. Both models publish this same band.
+ * Nominal coverage target for weekly intervals. ROS starts from simulated P15/P85 endpoints but
+ * widens them with a historical conformal correction, so its published bounds are not marginal
+ * 15th/85th percentiles and do not establish an individual player's coverage probability.
  */
 export const nominalIntervalPercent = 85 - 15;
 

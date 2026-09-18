@@ -131,9 +131,11 @@ export default function MethodologyPage() {
               <p>
                 Each rest-of-season projection is simulated over {releasePaths} paths, and
                 convergence is spot-checked per position-and-horizon stratum against a larger{" "}
-                {referencePaths}-path reference run. Both models publish a point estimate inside a
-                nominal {nominalIntervalPercent}% interval, and coverage of that interval is itself
-                gated.
+                {referencePaths}-path reference run. ROS ranges start with simulation percentiles
+                and widen using historical forecast errors. Their coverage target does not establish
+                a probability for an individual player, and the ranges remain provisional. Weekly
+                forecasts use a nominal {nominalIntervalPercent}% interval. Interval coverage is
+                gated separately for each model.
               </p>
             </div>
             <div className={styles.pillar}>
