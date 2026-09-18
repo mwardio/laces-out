@@ -1226,6 +1226,16 @@ export function firstPartyTeamDefenseRealizedAllowedBuckets(input: {
   readonly pointsAllowed: number;
   readonly yardsAllowed: number;
 }): ProjectionStatComponents {
+  const components: Record<string, number> = {};
+  writeFirstPartyTeamDefenseRealizedAllowedBuckets(components, input);
+  return components;
+}
+
+/** Appends authoritative provider indicators to an owned game record without a temporary copy. */
+export function writeFirstPartyTeamDefenseRealizedAllowedBuckets(
+  components: Record<string, number>,
+  input: { readonly pointsAllowed: number; readonly yardsAllowed: number },
+): void {
   for (const [label, value] of [
     ["pointsAllowed", input.pointsAllowed],
     ["yardsAllowed", input.yardsAllowed],
@@ -1234,7 +1244,6 @@ export function firstPartyTeamDefenseRealizedAllowedBuckets(input: {
       throw new RangeError(`${label} must be a nonnegative safe integer`);
     }
   }
-  const components: Record<string, number> = {};
   for (const bucket of TEAM_DEFENSE_POINTS_ALLOWED_BUCKETS) {
     components[bucket.component] =
       input.pointsAllowed >= bucket.minimum && input.pointsAllowed <= bucket.maximum ? 1 : 0;
@@ -1243,7 +1252,6 @@ export function firstPartyTeamDefenseRealizedAllowedBuckets(input: {
     components[bucket.component] =
       input.yardsAllowed >= bucket.minimum && input.yardsAllowed <= bucket.maximum ? 1 : 0;
   }
-  return components;
 }
 
 const INACTIVE_STATUSES = new Set<FirstPartyPlayerStatus>([

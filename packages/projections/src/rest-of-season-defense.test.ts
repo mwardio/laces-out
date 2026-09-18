@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import {
   firstPartyRosSeedHash,
@@ -6,8 +7,44 @@ import {
 } from "./rest-of-season.js";
 import { projectionScoringProfileKey, scoreProjectionStatComponents } from "./scoring.js";
 import { firstPartyRosDefenseInputFixture } from "./rest-of-season-defense.test-fixtures.js";
+import { simulateFirstPartyRosOutcomes } from "./ros-outcomes.js";
 
 describe("ROS discrete defense integration", () => {
+  it.each([
+    [
+      "contextual",
+      "defense-integration",
+      "cf212883465a5af0940105e908fc205e716502137e20d7cf82c6c0c9f2b14e6a",
+    ],
+    [
+      "contextual",
+      "defense-alternate",
+      "17ab26764064d154841b3a182272f83070698d6498965aca08ed09b0c4344fbb",
+    ],
+    [
+      "availability-aware-recency",
+      "defense-integration",
+      "c655251c8c07162a4d0af60d0370c6f0a3b7abdc4bbab421ee0b4c22fd6a8a55",
+    ],
+    [
+      "availability-aware-recency",
+      "defense-alternate",
+      "43e4a6bfb284cb3d4fa0adbf8300d0b2058d71a479fd679b437d4666e3e25cea",
+    ],
+  ] as const)(
+    "preserves physical and scored path bytes for %s / %s",
+    (strategy, seed, expected) => {
+      // Captured from the pre-allocation-optimization engine: includes every physical column,
+      // bye, scored distribution, expected component, seed, and provenance field.
+      const input = { ...firstPartyRosDefenseInputFixture(), strategy, seed };
+      const result = {
+        projection: projectFirstPartyRestOfSeason(input),
+        outcomes: simulateFirstPartyRosOutcomes(input),
+      };
+      expect(createHash("sha256").update(JSON.stringify(result)).digest("hex")).toBe(expected);
+    },
+  );
+
   it("uses realized brackets, preserves bye zeroes, and aggregates per-game scoring", () => {
     const source = firstPartyRosDefenseInputFixture();
     const totals = Array<number>(source.scenarioCount!).fill(0);

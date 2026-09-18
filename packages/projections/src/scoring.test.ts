@@ -409,6 +409,31 @@ describe("compileProjectionScorer", () => {
     expect(Object.is(compiled({ receptions: -0 }), -0)).toBe(false);
     expect(compiled({ receptions: 2 })).toBe(2);
   });
+
+  it("validates own enumerable components in property order, including unused stat names", () => {
+    const compiled = compileProjectionScorer(fullPpr);
+    const components = Object.assign(
+      Object.create({ inherited_invalid: NaN }) as Record<string, number>,
+      {
+        receptions: 2,
+      },
+    );
+    Object.defineProperty(components, "hidden_invalid", { value: NaN, enumerable: false });
+    expect(compiled(components)).toBe(2);
+    expect(
+      compiled(Object.assign(Object.create(null) as Record<string, number>, { receptions: 3 })),
+    ).toBe(3);
+    expect(() => compiled({ unused: NaN, " ": 1 })).toThrow(
+      "projection component unused must be finite",
+    );
+    expect(() => compiled({ " ": 1, unused: NaN })).toThrow(
+      "projection component statId must not be empty",
+    );
+    expect(() => compiled({ unused: NaN, 2: Infinity, 1: NaN })).toThrow(
+      "projection component 1 must be finite",
+    );
+    expect(Object.keys(components)).toEqual(["receptions"]);
+  });
 });
 
 describe("projection scoring profile compatibility", () => {

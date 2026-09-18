@@ -1,5 +1,5 @@
 import {
-  firstPartyTeamDefenseRealizedAllowedBuckets,
+  writeFirstPartyTeamDefenseRealizedAllowedBuckets,
   expandFirstPartyTeamDefenseAllowedDistribution,
   type FirstPartyTeamDefenseIntegerMassDistribution,
   type FirstPartyTeamDefenseDiscreteGaussianParameters,
@@ -355,13 +355,10 @@ export function sampleFirstPartyDefenseGame(
   );
   components.points_allowed = inverse(prepared.pointsAllowedCdf, marginalDraws[7]!);
   components.yards_allowed = inverse(prepared.yardsAllowedCdf, marginalDraws[8]!);
-  Object.assign(
-    components,
-    firstPartyTeamDefenseRealizedAllowedBuckets({
-      pointsAllowed: components.points_allowed,
-      yardsAllowed: components.yards_allowed,
-    }),
-  );
+  writeFirstPartyTeamDefenseRealizedAllowedBuckets(components, {
+    pointsAllowed: components.points_allowed,
+    yardsAllowed: components.yards_allowed,
+  });
   // These rare-event assumptions remain explicit in the existing weekly model and scorer.
   components.defensive_two_point_returns = 0;
   components.one_point_safeties = 0;

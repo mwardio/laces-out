@@ -406,9 +406,9 @@ function scoreCanonicalProjectionComponents(
   components: ProjectionStatComponents,
   rules: readonly CanonicalProjectionScoringRule[],
 ): number {
-  for (const [statId, value] of Object.entries(components)) {
+  for (const statId of Object.keys(components)) {
     assertNonEmpty(statId, "projection component statId");
-    assertFinite(value, `projection component ${statId}`);
+    assertFinite(components[statId]!, `projection component ${statId}`);
   }
 
   let total = 0;

@@ -1684,9 +1684,9 @@ function addComponents(
   total: Record<string, number>,
   source: ProjectionStatComponents,
 ): void {
-  const entries = Object.entries(source);
-  for (const [key, value] of entries) target[key] = (target[key] ?? 0) + value;
-  for (const [key, value] of entries) total[key] = (total[key] ?? 0) + value;
+  const keys = Object.keys(source);
+  for (const key of keys) target[key] = (target[key] ?? 0) + source[key]!;
+  for (const key of keys) total[key] = (total[key] ?? 0) + source[key]!;
 }
 
 function simulatePair(

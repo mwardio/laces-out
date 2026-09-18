@@ -5,6 +5,7 @@ import {
   firstPartyTeamDefenseAllowedDistributionParameters,
   firstPartyTeamDefenseAllowedDistributions,
   firstPartyTeamDefenseRealizedAllowedBuckets,
+  writeFirstPartyTeamDefenseRealizedAllowedBuckets,
   projectFirstPartyTeamDefenseComponents,
   projectFirstPartyTeamDefenseRecencyBaselineComponents,
   type FirstPartyTeamDefenseAllowedDistributionParameters,
@@ -356,6 +357,32 @@ describe("the shared D/ST allowed-outcome distributions", () => {
 });
 
 describe("realized D/ST provider buckets", () => {
+  it("appends to an owned game in the same order as the original temporary-object copy", () => {
+    for (let value = 0; value <= 800; value += 1) {
+      const input = { pointsAllowed: value % 81, yardsAllowed: value };
+      const game = { defensive_sacks: 2, ...input, points_allowed_0_probability: -1 };
+      const expected = Object.assign({ ...game }, expectedIndicators(value % 81, value));
+      writeFirstPartyTeamDefenseRealizedAllowedBuckets(game, input);
+      expect(JSON.stringify(game)).toBe(JSON.stringify(expected));
+    }
+  });
+
+  it("validates both primitives before changing the owned game", () => {
+    for (const field of ["pointsAllowed", "yardsAllowed"] as const) {
+      for (const value of [-1, 0.5, NaN, Infinity, Number.MAX_SAFE_INTEGER + 1]) {
+        const game = { defensive_sacks: 2 };
+        expect(() =>
+          writeFirstPartyTeamDefenseRealizedAllowedBuckets(game, {
+            pointsAllowed: 22,
+            yardsAllowed: 338,
+            [field]: value,
+          }),
+        ).toThrow(`${field} must be a nonnegative safe integer`);
+        expect(game).toEqual({ defensive_sacks: 2 });
+      }
+    }
+  });
+
   it.each([
     0,
     1,
