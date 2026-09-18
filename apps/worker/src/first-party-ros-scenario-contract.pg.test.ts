@@ -24,6 +24,7 @@
  */
 import { execFileSync } from "node:child_process";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -1214,6 +1215,128 @@ describe.skipIf(!dockerAvailable)(
           .update(dataSources)
           .set({ lastChecksum: originalChecksum })
           .where(eq(dataSources.key, sourceKey));
+      }
+    }, 120_000);
+
+    it("reuses durable live ROS across fresh providers when a new same-scoring league joins", async () => {
+      // The reports filesystem has the same storage headroom as production-like outcome caches;
+      // /tmp can be a small tmpfs and must not weaken the cache's five-GiB reserve for this test.
+      const reportsDirectory = path.resolve(
+        path.dirname(fileURLToPath(import.meta.url)),
+        "../../../reports",
+      );
+      await mkdir(reportsDirectory, { recursive: true });
+      const liveCacheDirectory = await mkdtemp(
+        path.join(reportsDirectory, "ros-live-provider-pg-"),
+      );
+      const rollback = new Error("Roll back the durable live ROS onboarding fixture");
+      try {
+        await expect(
+          handle.db.transaction(
+            async (transaction) => {
+              const database = transaction as unknown as Database;
+              const { payload, artifactChecksum } = championArtifactPayload(championPolicy());
+              const artifact = { ...payload, artifactChecksum, admittedAt: FRESH };
+              const window = {
+                asOfWeek: 6,
+                currentWeek: 7,
+                windowStartWeek: 7,
+                windowEndWeek: 18,
+                currentWeekStarted: false,
+              } as const;
+              type ReuseEvent = Parameters<
+                NonNullable<
+                  Parameters<typeof databaseFirstPartyRosCandidateProvider>[0]["onLiveReuse"]
+                >
+              >[0];
+              const coldEvents: ReuseEvent[] = [];
+              const firstProvider = databaseFirstPartyRosCandidateProvider({
+                database,
+                liveCacheDirectory,
+                scenarioCount: 128,
+                convergenceReferenceScenarioCount: 256,
+                onLiveReuse: (event) => coldEvents.push(event),
+              });
+              const firstChecksum = await firstProvider.sourceChecksum({
+                season: TEST_SEASON,
+                window,
+              });
+              const context = {
+                artifact,
+                artifacts: [artifact],
+                season: TEST_SEASON,
+                window,
+                now: FIXED_NOW,
+                candidateProviderChecksum: firstChecksum,
+              };
+              const firstTargets = await firstProvider.buildTargets(context);
+              expect(firstTargets).toHaveLength(1);
+              const first = firstTargets[0]!;
+              expect(first.released).toHaveLength(CANDIDATE_COUNT);
+              expect(first.candidateUniverse.complete).toBe(true);
+              expect(first.sourceAsOf).toBeInstanceOf(Date);
+              expect(coldEvents.map((event) => event.kind)).toEqual([
+                "calibration-fit",
+                "target-build",
+              ]);
+              for (const player of first.released) {
+                expect(player.projection.provenance.asOfAt).toBe(FIXED_NOW.toISOString());
+                expect(player.projection.provenance.scenarioCount).toBe(128);
+              }
+
+              const joined = await seedLeague(database, seededPlayers);
+              const warmEvents: ReuseEvent[] = [];
+              // A fresh provider has no process-local fitted calibration or target summary cache.
+              const secondProvider = databaseFirstPartyRosCandidateProvider({
+                database,
+                liveCacheDirectory,
+                scenarioCount: 128,
+                convergenceReferenceScenarioCount: 256,
+                onLiveReuse: (event) => warmEvents.push(event),
+              });
+              const secondChecksum = await secondProvider.sourceChecksum({
+                season: TEST_SEASON,
+                window,
+              });
+              expect(secondChecksum).not.toBe(firstChecksum);
+              const laterNow = new Date(FIXED_NOW.getTime() + 60 * 60_000);
+              const secondTargets = await secondProvider.buildTargets({
+                ...context,
+                now: laterNow,
+                candidateProviderChecksum: secondChecksum,
+              });
+              expect(secondTargets).toHaveLength(2);
+              expect(secondTargets.map((target) => target.leagueSeasonId).sort()).toEqual(
+                [first.leagueSeasonId, joined.leagueSeasonId].sort(),
+              );
+              expect(warmEvents.map((event) => event.kind)).toEqual([
+                "calibration-hit",
+                "target-hit",
+              ]);
+              expect(
+                new Set([...coldEvents, ...warmEvents].map((event) => event.physicalIdentity)).size,
+              ).toBe(1);
+              const { leagueSeasonId: ignoredOriginalLeague, ...canonicalFirst } = first;
+              void ignoredOriginalLeague;
+              for (const target of secondTargets) {
+                const { leagueSeasonId: ignoredLeague, ...canonicalTarget } = target;
+                void ignoredLeague;
+                // Includes means, components, seeds, convergence, availability and restored Date.
+                expect(canonicalTarget).toEqual(canonicalFirst);
+                expect(target.sourceAsOf).toBeInstanceOf(Date);
+                for (const player of target.released) {
+                  expect(player.projection.provenance.asOfAt).toBe(FIXED_NOW.toISOString());
+                  expect(player.projection.provenance.asOfAt).not.toBe(laterNow.toISOString());
+                }
+              }
+              // League/roster rows are append-only; rolling back avoids affecting later tests.
+              throw rollback;
+            },
+            { isolationLevel: "repeatable read" },
+          ),
+        ).rejects.toBe(rollback);
+      } finally {
+        await rm(liveCacheDirectory, { recursive: true, force: true });
       }
     }, 120_000);
 

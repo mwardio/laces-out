@@ -1,3 +1,7 @@
+import type {
+  FirstPartyRosLiveProjection,
+  FirstPartyRosLiveProjector,
+} from "./ros-live-projection.js";
 import { createHash } from "node:crypto";
 
 import {
@@ -26,7 +30,6 @@ import {
   type FirstPartyRosConvergenceMetricName,
   type FirstPartyRosLiveReleaseEvidence,
   type FirstPartyRosPosition,
-  type FirstPartyRosProjection,
   type FirstPartyRosProjectionInput,
   type FirstPartyRosRemainingWeeksBucket,
   type FirstPartyRosRoleInput,
@@ -173,8 +176,8 @@ export interface FirstPartyRosCandidate {
   readonly asOfAt: string;
   readonly scheduledGames: number;
   readonly coverage: { readonly contextual: number; readonly recency: number };
-  readonly contextual: FirstPartyRosProjection;
-  readonly recency: FirstPartyRosProjection;
+  readonly contextual: FirstPartyRosLiveProjection;
+  readonly recency: FirstPartyRosLiveProjection;
 }
 
 function projectionIsUsable(
@@ -572,7 +575,7 @@ export function buildFirstPartyRosPlayerCandidate(
  */
 export function simulateFirstPartyRosCandidate(
   assembled: FirstPartyRosAssembledCandidateInputs,
-  project = projectFirstPartyRestOfSeason,
+  project: FirstPartyRosLiveProjector = projectFirstPartyRestOfSeason,
 ): FirstPartyRosCandidate {
   const contextual = project(assembled.contextualInput);
   const recency = project(assembled.recencyInput);
@@ -600,14 +603,14 @@ function sha256(value: unknown): string {
 /**
  * Returns the caller's already-simulated release run when its provenance proves it is the run this
  * diagnostic would otherwise compute, and simulates it otherwise. Every identity the seed stream
- * depends on is checked, so reuse is byte-equivalent to recomputation by construction.
+ * depends on is checked, so reuse preserves the original physical paths and provenance.
  */
 function reuseOrSimulateRelease(
   projectionInput: FirstPartyRosProjectionInput,
   scenarioCount: number,
-  supplied: FirstPartyRosProjection | undefined,
-  project = projectFirstPartyRestOfSeason,
-): FirstPartyRosProjection {
+  supplied: FirstPartyRosLiveProjection | undefined,
+  project: FirstPartyRosLiveProjector = projectFirstPartyRestOfSeason,
+): FirstPartyRosLiveProjection {
   if (supplied === undefined) {
     return project({ ...projectionInput, scenarioCount });
   }
@@ -655,8 +658,8 @@ export function diagnoseBoundedFirstPartyRosConvergence(input: {
   readonly projectionInput: FirstPartyRosProjectionInput;
   readonly releaseScenarioCount?: number;
   readonly referenceScenarioCount?: number;
-  readonly releaseProjection?: FirstPartyRosProjection;
-  readonly project?: typeof projectFirstPartyRestOfSeason;
+  readonly releaseProjection?: FirstPartyRosLiveProjection;
+  readonly project?: FirstPartyRosLiveProjector;
 }): {
   readonly state: "converged" | "unstable";
   readonly lowerScenarioCount: number;

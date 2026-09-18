@@ -3,6 +3,7 @@ import { createDatabase } from "@laces-out/db";
 import { parentPort, workerData } from "node:worker_threads";
 
 import { databaseFirstPartyRosCandidateProvider } from "./first-party-ros-candidate-provider.js";
+import { withRosLiveFilesystemLock } from "./ros-live-filesystem-lock.js";
 import type { FirstPartyRosCandidateContext } from "./first-party-ros-projections.js";
 
 if (parentPort === null) {
@@ -17,6 +18,10 @@ try {
   const startedAt = Date.now();
   const provider = databaseFirstPartyRosCandidateProvider({
     database: database.db,
+    ...(process.env.ROS_LIVE_OUTCOME_CACHE
+      ? { liveCacheDirectory: process.env.ROS_LIVE_OUTCOME_CACHE }
+      : {}),
+    onLiveReuse: (event) => console.info(JSON.stringify({ event: "ros-live-reuse", ...event })),
     onSnapshotReady: () =>
       console.info(
         JSON.stringify({
@@ -27,7 +32,13 @@ try {
         }),
       ),
   });
-  const result = await provider.buildTargetBatch(context);
+  // The kernel lock survives a database-session disconnect until this worker actually exits.
+  // Keep its inode permanently: unlinking a held lock would create two independent owners.
+  const result = process.env.ROS_LIVE_OUTCOME_CACHE
+    ? await withRosLiveFilesystemLock(process.env.ROS_LIVE_OUTCOME_CACHE, () =>
+        provider.buildTargetBatch(context),
+      )
+    : await provider.buildTargetBatch(context);
   const targets = Object.values(result).flat();
   console.info(
     JSON.stringify({

@@ -1,3 +1,4 @@
+import type { FirstPartyRosLiveProjection } from "./ros-live-projection.js";
 import { createHash } from "node:crypto";
 
 import type {
@@ -18,7 +19,6 @@ import {
   type FirstPartyRosIntervalCalibrationArtifact,
   type FirstPartyRosLiveReleaseEvidence,
   type FirstPartyRosPosition,
-  type FirstPartyRosProjection,
   type FirstPartyRosReleaseGateDecision,
   type FirstPartyRosReleaseGateOptions,
   type FirstPartyRosRemainingWeeksBucket,
@@ -594,7 +594,7 @@ export interface FirstPartyRosReleasedPlayer {
   readonly playerId: string;
   readonly bucket: FirstPartyRosRemainingWeeksBucket;
   readonly strategy: FirstPartyRosStrategy;
-  readonly projection: FirstPartyRosProjection;
+  readonly projection: FirstPartyRosLiveProjection;
 }
 
 /**

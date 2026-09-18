@@ -2,6 +2,7 @@ import {
   evaluateFirstPartyRosChampionPolicy,
   normalizeLeagueScoringProfile,
   projectionScoringProfileKey,
+  projectFirstPartyRestOfSeason,
   runFirstPartyProjectionBacktest,
   type FirstPartyRosChampionPolicy,
   type FirstPartyRosHeldOutForecast,
@@ -18,6 +19,8 @@ import {
 import {
   applyFirstPartyRosPlayerAliases,
   buildFirstPartyRosLeagueTarget,
+  buildFirstPartyRosLeagueTargetAsync,
+  type FirstPartyRosLeagueTargetInput,
   calibrateFirstPartyRosPlayerHistory,
   currentFantasyPlayerPool,
   enumerateFirstPartyRosScoringMatchedLeagues,
@@ -613,6 +616,21 @@ describe("live ROS player calibration", () => {
       trainingHistory,
       schedules,
     });
+    // Current-season results must not refit unchanged prior-season football calibration.
+    const historicalSchedules = schedules.filter((row) => row.season < 2026);
+    expect(calibrateHistoricalRosAvailability(trainingHistory, historicalSchedules)).toEqual(
+      live.availability,
+    );
+    expect(
+      calibrateHistoricalRosRole(trainingHistory, historicalSchedules, weeklyBacktest.predictions),
+    ).toEqual(live.role);
+    expect(
+      calibrateHistoricalRosKicker(
+        trainingHistory,
+        historicalSchedules,
+        weeklyBacktest.predictions,
+      ),
+    ).toEqual(live.kicker);
     expect(live.role).toEqual(historical);
     expect(live.weekly).toEqual(weeklyBacktest.calibration);
     expect(live.kicker).toEqual(
@@ -729,7 +747,7 @@ describe("buildFirstPartyRosLeagueTarget", () => {
   const roleCalibration = calibrateHistoricalRosRole(trainingHistory, schedules);
   const kickerCalibration = calibrateHistoricalRosKicker(trainingHistory, schedules);
 
-  function run(input: {
+  function targetInput(input: {
     policy: FirstPartyRosChampionPolicy;
     candidatePlayers: readonly {
       playerId: string;
@@ -747,12 +765,12 @@ describe("buildFirstPartyRosLeagueTarget", () => {
     history?: readonly FirstPartyWeeklyStatLine[];
     window?: FirstPartyRosWindow;
     asOfAt?: Date;
-  }) {
+  }): FirstPartyRosLeagueTargetInput {
     const matchedPositions = input.matchedPositions ?? ["QB", "RB", "WR", "TE", "K"];
     const targetWindow = input.window ?? window;
     const selectedHistory = input.history ?? history;
     const selectedTrainingHistory = selectedHistory.filter((row) => row.season < 2026);
-    return buildFirstPartyRosLeagueTarget({
+    return {
       artifact: artifact(input.policy),
       leagueSeasonId: "22222222-2222-4222-8222-222222222222",
       scoringProfile,
@@ -794,8 +812,27 @@ describe("buildFirstPartyRosLeagueTarget", () => {
       // and the production pair (12288/16384) is exercised end to end in the PostgreSQL suite.
       scenarioCount: 128,
       convergenceReferenceScenarioCount: 256,
-    });
+    };
   }
+
+  function run(input: Parameters<typeof targetInput>[0]) {
+    return buildFirstPartyRosLeagueTarget(targetInput(input));
+  }
+
+  it("keeps asynchronous cached-outcome assembly identical to the synchronous release path", async () => {
+    const input = targetInput({
+      policy: ninePlusPolicy(),
+      candidatePlayers: [{ playerId: "wr-0", position: "WR", team: "BUF" }],
+      matchedPositions: ["WR"],
+      supportedPositions: ["WR"],
+    });
+    const expected = buildFirstPartyRosLeagueTarget(input);
+    const actual = await buildFirstPartyRosLeagueTargetAsync(input, async (projection) => {
+      await Promise.resolve();
+      return projectFirstPartyRestOfSeason(projection);
+    });
+    expect(actual).toEqual(expected);
+  });
 
   it("builds a target from supported candidates and audits per-player skips", () => {
     const result = run({

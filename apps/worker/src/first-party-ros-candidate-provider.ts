@@ -1,4 +1,9 @@
+import type {
+  FirstPartyRosLiveProjection,
+  FirstPartyRosLiveProjector,
+} from "./ros-live-projection.js";
 import { createHash } from "node:crypto";
+import path from "node:path";
 
 import {
   dataSources,
@@ -20,6 +25,7 @@ import {
 } from "@laces-out/db";
 import { NFL_TEAMS, canonicalNflTeamCode } from "@laces-out/domain";
 import {
+  FIRST_PARTY_ROS_CONVERGENCE_REFERENCE_SCENARIOS,
   LEAGUE_SCORING_NORMALIZATION_VERSION,
   normalizeLeagueScoringProfile,
   projectionScoringProfileKey,
@@ -29,6 +35,7 @@ import {
   type FirstPartyProjectionCalibration,
   type FirstPartyProjectionPosition,
   type FirstPartyRosLiveReleaseEvidence,
+  type FirstPartyRosProjectionInput,
   type FirstPartyTeamDefenseCalibration,
   type FirstPartyTeamDefenseWeeklyStatLine,
   type FirstPartyWeeklyStatLine,
@@ -36,6 +43,18 @@ import {
   type ProjectionScoringProfile,
 } from "@laces-out/projections";
 import { createRosLiveProjectionReuse } from "./ros-live-reuse.js";
+import { createRosLiveOutcomeProjector, ROS_LIVE_OUTCOME_VERSION } from "./ros-live-outcomes.js";
+import { prepareRosLiveOutcomeCache } from "./ros-live-cache-capacity.js";
+import { createRosLiveGenerationStore } from "./ros-live-generation-store.js";
+import {
+  canonicalRosLiveRows,
+  rosLivePhysicalIdentity,
+  ROS_LIVE_PHYSICAL_IDENTITY_VERSION,
+} from "./ros-live-physical-identity.js";
+import {
+  restoreRosLiveCalibration,
+  restoreRosLiveTargetTemplate,
+} from "./ros-live-generation-validation.js";
 import { rosSourceVersionPredicate } from "./first-party-ros-source-versions.js";
 import { readRosHistoryCatalogRolesChecksum } from "./ros-history-catalog-checksum.js";
 import { assertFootballSourceCoherence } from "./football-source-coherence.js";
@@ -783,10 +802,44 @@ export type FirstPartyRosLeagueTargetBuilder = (
   input: FirstPartyRosLeagueTargetInput,
 ) => FirstPartyRosLeagueTargetResult | Promise<FirstPartyRosLeagueTargetResult>;
 
+/** Both drivers execute the same assembly and release checks; only outcome I/O differs. */
 export function buildFirstPartyRosLeagueTarget(
   input: FirstPartyRosLeagueTargetInput,
-  project = projectFirstPartyRestOfSeason,
+  project: FirstPartyRosLiveProjector = projectFirstPartyRestOfSeason,
 ): FirstPartyRosLeagueTargetResult {
+  const steps = firstPartyRosLeagueTargetSteps(input);
+  let step = steps.next();
+  while (!step.done) step = steps.next(project(step.value));
+  return step.value;
+}
+
+export async function buildFirstPartyRosLeagueTargetAsync(
+  input: FirstPartyRosLeagueTargetInput,
+  project: (input: FirstPartyRosProjectionInput) => Promise<FirstPartyRosLiveProjection>,
+): Promise<FirstPartyRosLeagueTargetResult> {
+  const steps = firstPartyRosLeagueTargetSteps(input);
+  let step = steps.next();
+  while (!step.done) step = steps.next(await project(step.value));
+  return step.value;
+}
+
+function* simulateCandidateSteps(
+  assembled: FirstPartyRosAssembledCandidateInputs,
+): Generator<FirstPartyRosProjectionInput, FirstPartyRosCandidate, FirstPartyRosLiveProjection> {
+  const contextual = yield assembled.contextualInput;
+  const recency = yield assembled.recencyInput;
+  return simulateFirstPartyRosCandidate(assembled, (input) =>
+    input.strategy === "contextual" ? contextual : recency,
+  );
+}
+
+function* firstPartyRosLeagueTargetSteps(
+  input: FirstPartyRosLeagueTargetInput,
+): Generator<
+  FirstPartyRosProjectionInput,
+  FirstPartyRosLeagueTargetResult,
+  FirstPartyRosLiveProjection
+> {
   const scoringProfileKey = projectionScoringProfileKey(input.scoringProfile);
   const window = {
     season: input.season,
@@ -847,7 +900,7 @@ export function buildFirstPartyRosLeagueTarget(
         skip(player, "candidate-inputs-unavailable");
         continue;
       }
-      const candidate = simulateFirstPartyRosCandidate(assembled, project);
+      const candidate = yield* simulateCandidateSteps(assembled);
       const choice = input.artifact.policy.choices.find(
         (candidate_) =>
           candidate_.position === candidate.position && candidate_.bucket === candidate.bucket,
@@ -907,7 +960,7 @@ export function buildFirstPartyRosLeagueTarget(
       skip(player, "candidate-inputs-unavailable");
       continue;
     }
-    const candidate = simulateFirstPartyRosCandidate(assembled, project);
+    const candidate = yield* simulateCandidateSteps(assembled);
     // The champion policy authorizes exactly one strategy per position/bucket; without a matching
     // choice the player cannot be released (no default, no approximation).
     const choice = input.artifact.policy.choices.find(
@@ -966,17 +1019,27 @@ export function buildFirstPartyRosLeagueTarget(
         ? {}
         : { referenceScenarioCount: input.convergenceReferenceScenarioCount }),
     };
+    const referenceScenarioCount =
+      input.convergenceReferenceScenarioCount ?? FIRST_PARTY_ROS_CONVERGENCE_REFERENCE_SCENARIOS;
+    const contextualReference = yield {
+      ...representative.assembled.contextualInput,
+      scenarioCount: referenceScenarioCount,
+    };
     const contextualConvergence = diagnoseBoundedFirstPartyRosConvergence({
       projectionInput: representative.assembled.contextualInput,
       releaseProjection: representative.candidate.contextual,
       ...scenarioOverrides,
-      project,
+      project: () => contextualReference,
     });
+    const recencyReference = yield {
+      ...representative.assembled.recencyInput,
+      scenarioCount: referenceScenarioCount,
+    };
     const recencyConvergence = diagnoseBoundedFirstPartyRosConvergence({
       projectionInput: representative.assembled.recencyInput,
       releaseProjection: representative.candidate.recency,
       ...scenarioOverrides,
-      project,
+      project: () => recencyReference,
     });
     bucketConvergences.push(contextualConvergence);
     const meanCoverage = {
@@ -1108,6 +1171,12 @@ interface FirstPartyRosRefreshReuse {
 
 export function databaseFirstPartyRosCandidateProvider(input: {
   readonly database: Database;
+  /** Separate durable LIVE namespace. Historical evidence is never stored or pruned here. */
+  readonly liveCacheDirectory?: string;
+  readonly onLiveReuse?: (event: {
+    readonly kind: "calibration-hit" | "calibration-fit" | "target-hit" | "target-build";
+    readonly physicalIdentity: string;
+  }) => void;
   /** Called after all reads are materialized and the database transaction has closed. */
   readonly onSnapshotReady?: () => void;
   readonly scenarioCount?: number;
@@ -1163,8 +1232,10 @@ export function databaseFirstPartyRosCandidateProvider(input: {
     );
     return {
       aliasPlans,
-      checksum: aggregateChecksum("live-ros-candidate-provider-v7", [
+      checksum: aggregateChecksum("live-ros-candidate-provider-v8", [
         `player-history:${FIRST_PARTY_PLAYER_HISTORY_VERSION}`,
+        `live-physical:${ROS_LIVE_PHYSICAL_IDENTITY_VERSION}`,
+        `live-outcomes:${ROS_LIVE_OUTCOME_VERSION}`,
         `season:${season}`,
         `window:${window.windowStartWeek}-${window.windowEndWeek}:asof-${window.asOfWeek}`,
         `scenario-count:${input.scenarioCount ?? "default"}`,
@@ -1578,6 +1649,11 @@ async function latestLeaguePlayerAliasPlans(
 async function prepareDatabaseFirstPartyRosTargets(
   options: {
     readonly database: RosReadDatabase;
+    readonly liveCacheDirectory?: string;
+    readonly onLiveReuse?: (event: {
+      readonly kind: "calibration-hit" | "calibration-fit" | "target-hit" | "target-build";
+      readonly physicalIdentity: string;
+    }) => void;
     readonly scenarioCount?: number;
     readonly convergenceReferenceScenarioCount?: number;
     readonly buildLeagueTarget?: FirstPartyRosLeagueTargetBuilder;
@@ -1672,7 +1748,14 @@ async function prepareDatabaseFirstPartyRosTargets(
     return source ? [source] : [];
   });
 
-  const [scheduleRows, weeklyRows, snapRows, rosterRows, injuryRows, teamRows] = await Promise.all([
+  const [
+    capturedSchedules,
+    capturedWeekly,
+    capturedSnaps,
+    capturedRosters,
+    capturedInjuries,
+    capturedTeams,
+  ] = await Promise.all([
     database
       .select({
         season: nflScheduleObservations.season,
@@ -1828,6 +1911,72 @@ async function prepareDatabaseFirstPartyRosTargets(
   ]);
 
   return async () => {
+    // Canonical order governs both identity and assembly, including duplicate/tie handling.
+    const scheduleRows = canonicalRosLiveRows(capturedSchedules);
+    const weeklyRows = canonicalRosLiveRows(capturedWeekly);
+    const snapRows = canonicalRosLiveRows(capturedSnaps);
+    const rosterRows = canonicalRosLiveRows(capturedRosters);
+    const injuryRows = canonicalRosLiveRows(capturedInjuries);
+    const teamRows = canonicalRosLiveRows(capturedTeams);
+    const physicalIdentity = rosLivePhysicalIdentity({
+      season,
+      window,
+      ...(options.scenarioCount === undefined ? {} : { scenarioCount: options.scenarioCount }),
+      ...(options.convergenceReferenceScenarioCount === undefined
+        ? {}
+        : { convergenceReferenceScenarioCount: options.convergenceReferenceScenarioCount }),
+      sources: sourceKeys
+        .filter((key) => key !== "nflverse.players" && key !== "sleeper.players")
+        .map((key) => ({
+          key,
+          id: sources.get(key)?.id ?? null,
+          checksum: sources.get(key)?.checksum ?? null,
+        })),
+      rows: {
+        schedules: scheduleRows,
+        weekly: weeklyRows,
+        snaps: snapRows,
+        rosters: rosterRows,
+        injuries: injuryRows,
+        teams: teamRows,
+      },
+    });
+    const liveOutcomeCache =
+      options.liveCacheDirectory === undefined
+        ? undefined
+        : await prepareRosLiveOutcomeCache({
+            rootDirectory: options.liveCacheDirectory,
+            physicalIdentity,
+          });
+    const liveStore =
+      options.liveCacheDirectory === undefined
+        ? undefined
+        : createRosLiveGenerationStore({
+            directory: path.join(
+              options.liveCacheDirectory,
+              "generations",
+              physicalIdentity,
+              "metadata",
+            ),
+          });
+    const calibrationStore =
+      options.liveCacheDirectory === undefined
+        ? undefined
+        : createRosLiveGenerationStore({
+            directory: path.join(options.liveCacheDirectory, "calibrations"),
+          });
+    const generation = await liveStore?.getOrCreateGeneration(
+      physicalIdentity,
+      context.now.toISOString(),
+    );
+    const asOfAt = generation === undefined ? context.now : new Date(generation.asOfAt);
+    const durableProject =
+      liveOutcomeCache === undefined
+        ? undefined
+        : createRosLiveOutcomeProjector({
+            cache: liveOutcomeCache,
+            profiles: matches.flatMap(({ matched }) => matched.map((league) => league.profile)),
+          });
     const weekly: ProjectionWeeklyFact[] = weeklyRows.flatMap((row) =>
       row.playerId
         ? [
@@ -1935,13 +2084,33 @@ async function prepareDatabaseFirstPartyRosTargets(
     let roleCalibration: HistoricalRosRoleCalibration;
     let kickerCalibration: HistoricalRosKickerCalibration;
     let defenseCalibration: FirstPartyTeamDefenseCalibration;
+    const trainingSchedules = schedules.filter((row) => row.season < season);
+    const calibrationIdentity = rosLivePhysicalIdentity({
+      season,
+      window: { asOfWeek: 0, windowStartWeek: 1, windowEndWeek: 18 },
+      sources: [],
+      rows: { trainingHistory, defenseTrainingHistory, schedules: trainingSchedules },
+    });
     try {
       // Football-process fits use the model's fixed training loss, independent of every artifact's
       // league coefficients. Exact league evaluation still controls publication downstream.
-      options.reuse.calibration ??= {
-        player: calibrateFirstPartyRosPlayerHistory({ trainingHistory, schedules }),
-        defense: runFirstPartyTeamDefenseBacktest(defenseTrainingHistory).calibration,
-      };
+      if (options.reuse.calibration === undefined) {
+        const cachedCalibration = await calibrationStore?.readCalibration(calibrationIdentity);
+        if (cachedCalibration?.state === "hit") {
+          options.reuse.calibration = restoreRosLiveCalibration(cachedCalibration.value);
+          options.onLiveReuse?.({ kind: "calibration-hit", physicalIdentity });
+        } else {
+          options.reuse.calibration = {
+            player: calibrateFirstPartyRosPlayerHistory({
+              trainingHistory,
+              schedules: trainingSchedules,
+            }),
+            defense: runFirstPartyTeamDefenseBacktest(defenseTrainingHistory).calibration,
+          };
+          await calibrationStore?.writeCalibration(calibrationIdentity, options.reuse.calibration);
+          options.onLiveReuse?.({ kind: "calibration-fit", physicalIdentity });
+        }
+      }
       const fitted = options.reuse.calibration.player;
       calibration = fitted.weekly;
       availabilityCalibration = fitted.availability;
@@ -1950,7 +2119,9 @@ async function prepareDatabaseFirstPartyRosTargets(
       // trip this league-wide fail-closed catch on a sparse corpus.
       kickerCalibration = fitted.kicker;
       defenseCalibration = options.reuse.calibration.defense;
-    } catch {
+    } catch (error) {
+      // Cache integrity/storage failures must reach the queue's bounded retry diagnostics.
+      if (liveStore !== undefined) throw error;
       // A calibration that cannot be fitted is an explicitly missing model input.
       return targetsByArtifact;
     }
@@ -1961,7 +2132,7 @@ async function prepareDatabaseFirstPartyRosTargets(
       .filter((value): value is Date => value instanceof Date);
     const sourceAsOf =
       scheduleDates.length === 0
-        ? context.now
+        ? asOfAt
         : new Date(Math.max(...scheduleDates.map((value) => value.getTime())));
 
     const candidatePool = currentFantasyPlayerPool(rosters, schedules, season);
@@ -1982,12 +2153,30 @@ async function prepareDatabaseFirstPartyRosTargets(
         );
         const unmatchedCandidateCount = matchedUnresolvedCandidates.length;
         const templateKey = aggregateChecksum("live-ros-target-template-v1", [
+          physicalIdentity,
+          `as-of:${asOfAt.toISOString()}`,
+          artifact.artifactChecksum,
           leagueScoringProfileKey,
           ...league.matchedPositions,
           "supported",
           ...league.supportedPositions,
           `unmatched:${unmatchedCandidateCount}`,
         ]);
+        if (!targetTemplates.has(templateKey) && liveStore !== undefined) {
+          const cachedTarget = await liveStore.readTargets(templateKey);
+          if (cachedTarget.state === "hit") {
+            targetTemplates.set(
+              templateKey,
+              restoreRosLiveTargetTemplate(cachedTarget.value, {
+                scoringProfileKey: leagueScoringProfileKey,
+                asOfAt: asOfAt.toISOString(),
+                season,
+                window,
+              }),
+            );
+            options.onLiveReuse?.({ kind: "target-hit", physicalIdentity });
+          }
+        }
         if (targetTemplates.has(templateKey)) {
           const template = targetTemplates.get(templateKey);
           if (template !== null && template !== undefined) {
@@ -2003,11 +2192,17 @@ async function prepareDatabaseFirstPartyRosTargets(
         const build =
           options.buildLeagueTarget ??
           ((target: FirstPartyRosLeagueTargetInput) =>
-            buildFirstPartyRosLeagueTarget(target, options.reuse.project));
+            durableProject === undefined
+              ? buildFirstPartyRosLeagueTarget(target, options.reuse.project)
+              : buildFirstPartyRosLeagueTargetAsync(target, durableProject));
+        options.onLiveReuse?.({ kind: "target-build", physicalIdentity });
         const result = await build({
           artifact,
           leagueSeasonId: league.leagueSeasonId,
-          scoringProfile: league.profile,
+          scoringProfile:
+            liveStore === undefined
+              ? league.profile
+              : { ...league.profile, id: `live-ros:${leagueScoringProfileKey}` },
           matchedPositions: league.matchedPositions,
           supportedPositions: league.supportedPositions,
           season,
@@ -2026,7 +2221,7 @@ async function prepareDatabaseFirstPartyRosTargets(
           schedules,
           futureWindowComplete,
           sourceAsOf,
-          asOfAt: context.now,
+          asOfAt,
           ...(options.scenarioCount === undefined ? {} : { scenarioCount: options.scenarioCount }),
           ...(options.convergenceReferenceScenarioCount === undefined
             ? {}
@@ -2034,11 +2229,16 @@ async function prepareDatabaseFirstPartyRosTargets(
         });
         if (result.target === null) {
           targetTemplates.set(templateKey, null);
+          // Failed/incomplete work is not a reusable completed template.
           continue;
         }
         const { leagueSeasonId: ignoredLeagueSeasonId, ...template } = result.target;
         void ignoredLeagueSeasonId;
         targetTemplates.set(templateKey, template);
+        await liveStore?.writeTargets(templateKey, {
+          ...template,
+          sourceAsOf: template.sourceAsOf.toISOString(),
+        });
         targets.push(
           applyFirstPartyRosPlayerAliases(
             { leagueSeasonId: league.leagueSeasonId, ...template },

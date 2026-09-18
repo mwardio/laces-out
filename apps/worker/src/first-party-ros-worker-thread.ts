@@ -139,12 +139,19 @@ export function createSharedFirstPartyRosTargetBuilder(
   };
 }
 
+/** The queue owner wraps this whole batch in the exclusive live-cache lease, then coalesces callers. */
+export function runFirstPartyRosTargetBatchInWorker(
+  context: FirstPartyRosCandidateContext,
+  signal?: AbortSignal,
+): Promise<FirstPartyRosTargetBatch> {
+  return runRosWorker<FirstPartyRosCandidateContext, FirstPartyRosTargetBatch>({
+    entry: "./first-party-ros-artifact-worker.js",
+    workerData: context,
+    description: "ROS refresh worker",
+    ...(signal ? { signal } : {}),
+  });
+}
+
 export const buildFirstPartyRosTargetsInWorker = createSharedFirstPartyRosTargetBuilder(
-  (context, signal) =>
-    runRosWorker<FirstPartyRosCandidateContext, FirstPartyRosTargetBatch>({
-      entry: "./first-party-ros-artifact-worker.js",
-      workerData: context,
-      description: "ROS refresh worker",
-      ...(signal ? { signal } : {}),
-    }),
+  runFirstPartyRosTargetBatchInWorker,
 );

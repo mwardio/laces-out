@@ -5,18 +5,31 @@ import pino from "pino";
 
 import { databaseFirstPartyRosCandidateProvider } from "./first-party-ros-candidate-provider.js";
 import { FirstPartyRosProjectionShadowService } from "./first-party-ros-projections.js";
-import { buildFirstPartyRosTargetsInWorker } from "./first-party-ros-worker-thread.js";
+import {
+  createSharedFirstPartyRosTargetBuilder,
+  runFirstPartyRosTargetBatchInWorker,
+} from "./first-party-ros-worker-thread.js";
 import { registerQueues, registerRosProjectionWorker } from "./jobs.js";
+import { createPostgresRosCorpusLock } from "./ros-corpus-lock.js";
 
 const environment = loadEnvironment();
 const database = createDatabase(environment.DATABASE_URL, 4);
 const logger = pino({ level: environment.LOG_LEVEL });
 const databaseCandidateProvider = databaseFirstPartyRosCandidateProvider({ database: database.db });
+const liveGenerationLock = createPostgresRosCorpusLock(environment.DATABASE_URL);
 const service = new FirstPartyRosProjectionShadowService({
   database: database.db,
   candidateProvider: {
     sourceChecksum: (input) => databaseCandidateProvider.sourceChecksum(input),
-    buildTargets: buildFirstPartyRosTargetsInWorker,
+    // Every live cache reader/writer holds this global session lock. Cancellation terminates
+    // its worker thread before the lock is released, so old cache generations can be pruned.
+    buildTargets: createSharedFirstPartyRosTargetBuilder((context, signal) =>
+      liveGenerationLock(
+        "live-football-generation-v1",
+        signal ?? new AbortController().signal,
+        (guard) => runFirstPartyRosTargetBatchInWorker(context, guard.signal),
+      ),
+    ),
   },
 });
 const boss = createJobQueue(

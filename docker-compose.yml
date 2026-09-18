@@ -196,7 +196,11 @@ services:
         NEXT_PUBLIC_GOOGLE_SITE_VERIFICATION: ${NEXT_PUBLIC_GOOGLE_SITE_VERIFICATION:-}
         NEXT_PUBLIC_BING_SITE_VERIFICATION: ${NEXT_PUBLIC_BING_SITE_VERIFICATION:-}
     command: ["node", "apps/worker/dist/ros-worker.js"]
-    environment: *app-environment
+    environment:
+      <<: *app-environment
+      ROS_LIVE_OUTCOME_CACHE: /tmp/laces-ros-live-cache
+    volumes:
+      - ros_live_outcomes:/tmp/laces-ros-live-cache
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -326,6 +330,7 @@ services:
       - egress
 
 volumes:
+  ros_live_outcomes:
   ros_validation_sources:
   ros_validation_outcomes:
   fantasy_postgres:
