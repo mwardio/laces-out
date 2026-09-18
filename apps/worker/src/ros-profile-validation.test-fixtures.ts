@@ -1,5 +1,6 @@
 import {
   evaluateFirstPartyRosChampionPolicy,
+  rosScoringProfile,
   type FirstPartyRosHeldOutForecast,
 } from "@laces-out/projections";
 import { firstPartyRosAdmissionConstants } from "./first-party-ros-admission.js";
@@ -11,6 +12,48 @@ import {
   FIRST_PARTY_ROS_RELEASE_PLAYERS_PER_POSITION,
 } from "./first-party-ros-validation-contract.js";
 export const constants = firstPartyRosAdmissionConstants();
+
+export function componentBlockedReport(): Record<string, unknown> {
+  const profile = rosScoringProfile("full-ppr");
+  return {
+    validationMode: "read-only-first-party-ros-backtest",
+    validationScope: { positions: ["QB", "RB", "WR", "TE", "K", "DST"], completePortfolio: true },
+    generatedAt: "2026-09-18T02:47:45.000Z",
+    state: "blocked-before-modeling",
+    noDatabaseWrites: true,
+    noSimulation: true,
+    scoringProfile: { key: profile.key, label: profile.label, digest: profile.digest },
+    executionIdentity: {
+      modelVersion: constants.modelVersion,
+      policyVersion: constants.policyVersion,
+      calibrationVersion: constants.calibrationVersion,
+      scoringProfileKey: profile.scoringProfileKey,
+      evidenceThroughSeason: 2025,
+    },
+    coverage: {
+      state: "qualified",
+      fullyHeldOutSeasons: [2022, 2023, 2024, 2025],
+      completeAsOfBatches: 68,
+    },
+    componentPreflight: {
+      state: "blocked",
+      checkedBatches: 68,
+      checkedPlayers: 2720,
+      checkedScheduledWeeks: 23069,
+      failures: [
+        {
+          season: 2024,
+          asOfWeek: 9,
+          playerId: "00-0036825",
+          position: "TE",
+          firstScheduledWeek: 10,
+          contextualMissing: ["receiving_touchdowns_40_plus", "receiving_touchdowns_50_plus"],
+          recencyMissing: [],
+        },
+      ],
+    },
+  };
+}
 
 function sourceAudit(season: number): Record<string, unknown> {
   return {

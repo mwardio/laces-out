@@ -239,17 +239,23 @@ describe.skipIf(!dockerAvailable())("Replay-only ROS profile recovery against Po
     expect(after.scoringProfileDigest).toBe(before.scoringProfileDigest);
   }
 
-  it("does not queue or mutate a failed result when no verified ready corpus exists", async () => {
-    const row = await seed(2030);
-    const prepared = fixture(null);
-    const signal = new AbortController().signal;
-    await prepared.service.recover(2030, signal);
-    expect(prepared.readyCorpusForSeason).toHaveBeenCalledWith(2030, signal);
-    expect(prepared.enqueueValidation).not.toHaveBeenCalled();
-    expect(await read(row.id)).toEqual(row);
-  });
+  it.each([
+    { season: 2030, state: "failed", blockers: ["validation_execution_failed"] },
+    { season: 2048, state: "withheld", blockers: ["historical_component_coverage_incomplete"] },
+  ] as const)(
+    "does not queue or mutate a $state result when no verified ready corpus exists",
+    async ({ season, state, blockers }) => {
+      const row = await seed(season, { state, blockers });
+      const prepared = fixture(null);
+      const signal = new AbortController().signal;
+      await prepared.service.recover(season, signal);
+      expect(prepared.readyCorpusForSeason).toHaveBeenCalledWith(season, signal);
+      expect(prepared.enqueueValidation).not.toHaveBeenCalled();
+      expect(await read(row.id)).toEqual(row);
+    },
+  );
 
-  it("dispatches only replay jobs with the exact corpus for transient failures and source-coverage withholding", async () => {
+  it("dispatches only replay jobs with the exact corpus for transient failures and source/component withholding", async () => {
     const rows = await Promise.all([
       seed(2031),
       seed(2031, { points: 0.5, blockers: ["validation_job_lost"] }),
@@ -258,10 +264,15 @@ describe.skipIf(!dockerAvailable())("Replay-only ROS profile recovery against Po
         state: "withheld",
         blockers: ["historical_source_coverage_incomplete"],
       }),
+      seed(2031, {
+        points: 0.85,
+        state: "withheld",
+        blockers: ["historical_component_coverage_incomplete"],
+      }),
     ]);
     const prepared = fixture();
     await prepared.service.recover(2031, new AbortController().signal);
-    expect(prepared.enqueueValidation).toHaveBeenCalledTimes(3);
+    expect(prepared.enqueueValidation).toHaveBeenCalledTimes(4);
     for (const before of rows) {
       expect(prepared.enqueueValidation).toHaveBeenCalledWith({
         profileValidationId: before.id,
@@ -299,6 +310,11 @@ describe.skipIf(!dockerAvailable())("Replay-only ROS profile recovery against Po
       seed(2032, { points: 0.7, calibrationVersion: "obsolete-calibration" }),
       seed(2032, { points: 0.8, state: "pending", blockers: [] }),
       seed(2032, { points: 0.9, state: "validating", blockers: [] }),
+      seed(2032, {
+        points: 0.95,
+        state: "withheld",
+        blockers: ["historical_component_coverage_incomplete", "report_global_blockers_present"],
+      }),
     ]);
     const prepared = fixture();
     await prepared.service.recover(2032, new AbortController().signal);
@@ -494,6 +510,7 @@ describe.skipIf(!dockerAvailable())("Replay-only ROS profile recovery against Po
   it.each([
     ["scientific rejection", 2038, "report_global_blockers_present", false],
     ["source-coverage withholding", 2039, "historical_source_coverage_incomplete", true],
+    ["component-coverage withholding", 2049, "historical_component_coverage_incomplete", true],
   ] as const)(
     "preserves the attempt marker after %s and prevents same-corpus retry loops",
     async (_name, season, blocker, newCorpusCanRecover) => {

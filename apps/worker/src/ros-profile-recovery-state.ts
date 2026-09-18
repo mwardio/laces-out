@@ -32,7 +32,11 @@ export function rosProfileValidationIsTransient(record: {
 }): boolean {
   if (record.blockers.length === 0) return false;
   if (record.state === "withheld")
-    return record.blockers.every((blocker) => blocker === "historical_source_coverage_incomplete");
+    return record.blockers.every(
+      (blocker) =>
+        blocker === "historical_source_coverage_incomplete" ||
+        blocker === "historical_component_coverage_incomplete",
+    );
   return (
     record.state === "failed" &&
     record.blockers.every(

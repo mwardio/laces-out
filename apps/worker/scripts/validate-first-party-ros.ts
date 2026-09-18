@@ -506,12 +506,30 @@ async function main(): Promise<void> {
     process.stdout.write(
       `${JSON.stringify(
         {
+          validationMode: "read-only-first-party-ros-backtest",
+          validationScope: {
+            positions: positions ?? HISTORICAL_ROS_SUPPORTED_POSITIONS,
+            completePortfolio: positions === undefined,
+          },
+          generatedAt: new Date().toISOString(),
           state:
             componentPreflight.state === "qualified"
               ? "component-preflight-qualified"
               : "blocked-before-modeling",
           noDatabaseWrites: true,
           noSimulation: true,
+          scoringProfile: {
+            key: scoringProfile.key,
+            label: scoringProfile.label,
+            digest: scoringProfile.digest,
+          },
+          executionIdentity: {
+            modelVersion: ROS_HISTORICAL_CORPUS_BUILD_PROTOCOL.modelVersion,
+            policyVersion: ROS_HISTORICAL_CORPUS_BUILD_PROTOCOL.policyVersion,
+            calibrationVersion: ROS_HISTORICAL_CORPUS_BUILD_PROTOCOL.calibrationVersion,
+            scoringProfileKey: scoringProfile.scoringProfileKey,
+            evidenceThroughSeason: Math.max(...heldOutSeasons),
+          },
           sources: sourceAudit,
           coverage: {
             state: coverage.state,

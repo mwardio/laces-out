@@ -25,6 +25,7 @@ import {
 } from "./ros-historical-corpus-protocol.js";
 import { createRosOutcomeCache } from "./ros-outcome-cache.js";
 import type { RosProfileValidationRunInput } from "./ros-profile-validation-runner.js";
+import { componentBlockedReport } from "./ros-profile-validation.test-fixtures.js";
 import {
   adoptRosSharedCorpus,
   createSharedRosCorpusValidationRunner,
@@ -608,6 +609,17 @@ describe("durable shared ROS corpus orchestration", { timeout: 30_000 }, () => {
     await expect(
       readFile(path.join(prepared.directory, "ready", `${prepared.request.identity}.json`)),
     ).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("returns component-evidence diagnostics without publishing a ready corpus", async () => {
+    const prepared = await fixture();
+    const report = componentBlockedReport();
+    prepared.runner.mockResolvedValueOnce(report as Awaited<ReturnType<typeof prepared.runner>>);
+    expect(await prepared.createRunner()(input())).toEqual(report);
+    expect(prepared.runner).toHaveBeenCalledTimes(1);
+    await expect(
+      readyRosSharedCorpusIdentity(prepared.directory, 2026, new AbortController().signal),
+    ).resolves.toBeNull();
   });
 
   it("rejects a replay report that does not identify the selected immutable corpus", async () => {

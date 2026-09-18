@@ -1,7 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import { rosScoringProfile } from "@laces-out/projections";
 import { firstPartyRosChampionArtifactIsValid } from "./first-party-ros-publication.js";
-import { constants, validReport } from "./ros-profile-validation.test-fixtures.js";
+import {
+  componentBlockedReport,
+  constants,
+  validReport,
+} from "./ros-profile-validation.test-fixtures.js";
 import {
   RosProfileValidationService,
   type RosProfileValidationRecord,
@@ -182,6 +186,152 @@ describe("automatic exact ROS profile validation", () => {
       state: "withheld",
       blockers: ["historical_source_coverage_incomplete"],
       artifactId: null,
+    });
+  });
+  it("persists a complete component-evidence diagnostic without admitting, retrying, or publishing", async () => {
+    const test = setup();
+    const report = componentBlockedReport();
+    test.runner.mockResolvedValue(report);
+    await expect(test.service.validateProfile(test.job, test.context)).resolves.toBeUndefined();
+    expect(test.record()).toMatchObject({
+      state: "withheld",
+      artifactId: null,
+      blockers: ["historical_component_coverage_incomplete"],
+      report,
+    });
+    expect(test.completions[0]?.admission).toBeUndefined();
+    expect(test.enqueueProjectionRefresh).not.toHaveBeenCalled();
+    await test.service.validateProfile(test.job, test.context);
+    expect(test.runner).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ["scoring digest", "scoringProfile.digest", "a".repeat(64)],
+    [
+      "scoring key",
+      "executionIdentity.scoringProfileKey",
+      rosScoringProfile("half-ppr").scoringProfileKey,
+    ],
+    ["model", "executionIdentity.modelVersion", "obsolete"],
+    ["policy", "executionIdentity.policyVersion", "obsolete"],
+    ["calibration", "executionIdentity.calibrationVersion", "obsolete"],
+    ["evidence season", "executionIdentity.evidenceThroughSeason", 2024],
+    ["missing identity", "executionIdentity", null],
+    ["mode", "validationMode", "untrusted-report"],
+    ["partial scope", "validationScope.completePortfolio", false],
+    ["wrong positions", "validationScope.positions", ["TE"]],
+    ["simulation performed", "noSimulation", false],
+    ["corpus claimed", "outcomeCorpusIdentity", "a".repeat(64)],
+    ["wrong source season", "coverage.fullyHeldOutSeasons", [2021, 2022, 2023, 2024]],
+    ["wrong source state", "coverage.state", "insufficient"],
+    ["excess batches", "componentPreflight.checkedBatches", 69],
+    ["too many players", "componentPreflight.checkedPlayers", 2721],
+    ["impossible weeks", "componentPreflight.checkedScheduledWeeks", 1],
+    ["empty failures", "componentPreflight.failures", []],
+    ["wrong failure season", "componentPreflight.failures.0.season", 2021],
+    ["wrong failure cutoff", "componentPreflight.failures.0.asOfWeek", 0],
+    ["prior prediction", "componentPreflight.failures.0.firstScheduledWeek", 9],
+    ["unsupported position", "componentPreflight.failures.0.position", "DST"],
+    ["invalid player", "componentPreflight.failures.0.playerId", ""],
+    ["unknown component", "componentPreflight.failures.0.contextualMissing", ["invented_stat"]],
+    [
+      "wrong-position component",
+      "componentPreflight.failures.0.contextualMissing",
+      ["passing_touchdowns_40_plus"],
+    ],
+    [
+      "duplicate component",
+      "componentPreflight.failures.0.contextualMissing",
+      ["receiving_touchdowns_40_plus", "receiving_touchdowns_40_plus"],
+    ],
+    ["non-array missing components", "componentPreflight.failures.0.recencyMissing", null],
+  ])("rejects a malformed component block: %s", async (_label, path, value) => {
+    const test = setup();
+    const report = componentBlockedReport();
+    const segments = path.split(".");
+    let target = report;
+    for (const key of segments.slice(0, -1)) target = target[key] as Record<string, unknown>;
+    target[segments.at(-1)!] = value;
+    test.runner.mockResolvedValue(report);
+    await expect(test.service.validateProfile(test.job, test.context)).rejects.toThrow(
+      /component preflight.*identity contract/,
+    );
+    expect(test.record().state).toBe("failed");
+    expect(test.completions).toHaveLength(0);
+    expect(test.enqueueProjectionRefresh).not.toHaveBeenCalled();
+  });
+
+  it("rejects duplicated failing windows and failures with no missing components", async () => {
+    for (const duplicate of [true, false]) {
+      const test = setup();
+      const report = componentBlockedReport();
+      const preflight = report.componentPreflight as { failures: Array<Record<string, unknown>> };
+      if (duplicate) preflight.failures.push({ ...preflight.failures[0] });
+      else preflight.failures[0]!.contextualMissing = [];
+      test.runner.mockResolvedValue(report);
+      await expect(test.service.validateProfile(test.job, test.context)).rejects.toThrow(
+        /identity contract/,
+      );
+      expect(test.record().state).toBe("failed");
+    }
+  });
+
+  it.each([
+    {
+      fullyHeldOutSeasons: [2023, 2024, 2025],
+      completeAsOfBatches: 59,
+      checkedBatches: 51,
+      checkedPlayers: 2040,
+    },
+    {
+      fullyHeldOutSeasons: [2022, 2023, 2024, 2025],
+      completeAsOfBatches: 64,
+      checkedBatches: 64,
+      checkedPlayers: 2560,
+    },
+  ])(
+    "preserves legitimate qualified source subsets: $checkedBatches inspected batches",
+    async (scope) => {
+      const test = setup();
+      const report = componentBlockedReport();
+      report.coverage = {
+        state: "qualified",
+        fullyHeldOutSeasons: scope.fullyHeldOutSeasons,
+        completeAsOfBatches: scope.completeAsOfBatches,
+      };
+      Object.assign(report.componentPreflight as object, {
+        checkedBatches: scope.checkedBatches,
+        checkedPlayers: scope.checkedPlayers,
+      });
+      test.runner.mockResolvedValue(report);
+      await expect(test.service.validateProfile(test.job, test.context)).resolves.toBeUndefined();
+      expect(test.record()).toMatchObject({
+        state: "withheld",
+        blockers: ["historical_component_coverage_incomplete"],
+        report,
+      });
+    },
+  );
+
+  it("recovers a component block only through its pinned ready corpus", async () => {
+    const test = setup({
+      state: "withheld",
+      blockers: ["historical_component_coverage_incomplete"],
+      report: { ...componentBlockedReport(), ...recoveryReport },
+    });
+    await test.service.validateProfile(test.job, test.context);
+    expect(test.runner).not.toHaveBeenCalled();
+    test.runner.mockResolvedValue({ ...validReport({}), outcomeCorpusIdentity: recoveryIdentity });
+    await test.service.validateProfile(
+      { ...test.job, recoveryCorpusIdentity: recoveryIdentity },
+      test.context,
+    );
+    expect(test.runner).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ requiredReadyCorpusIdentity: recoveryIdentity }),
+    );
+    expect(test.record()).toMatchObject({
+      state: "admitted",
+      report: { automaticRecovery: { state: "attempted" } },
     });
   });
   it("rejects reports graded under a different scoring identity", async () => {
