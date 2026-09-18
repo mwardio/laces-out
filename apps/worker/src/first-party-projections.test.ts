@@ -405,10 +405,10 @@ describe("first-party projection publication policy", () => {
 
   it("invalidates pre-correction history assembly caches even with identical source bytes", () => {
     const input = {
+      season: 2026,
       firstTargetWeek: 4,
-      statisticalSources: [{ key: "nflverse.stats-player-week.2025", checksum: "a".repeat(64) }],
-      playerPositions: [{ id: "player", position: "TE" }],
-      completedSchedule: [],
+      playerHistory: [],
+      defenseHistory: [],
     } as const;
     const legacyIdentity = {
       modelVersion: FIRST_PARTY_PROJECTION_MODEL_VERSION,
@@ -417,7 +417,7 @@ describe("first-party projection publication policy", () => {
     };
     const current = projectionTrainingCacheKey(input);
     expect(current).not.toBe(projectionInputChecksum(legacyIdentity));
-    expect(current).toBe(
+    expect(current).not.toBe(
       projectionInputChecksum({
         ...legacyIdentity,
         playerHistoryVersion: FIRST_PARTY_PLAYER_HISTORY_VERSION,
@@ -425,31 +425,116 @@ describe("first-party projection publication policy", () => {
     );
   });
 
-  it("invalidates cached training artifacts after a canonical position correction", () => {
-    const common = {
+  it("keys fits by every exact prior history field, preserving order and duplicates", () => {
+    const input = {
+      season: 2026,
       firstTargetWeek: 4,
-      statisticalSources: [{ key: "nflverse.stats-player-week.2025", checksum: "a".repeat(64) }],
-      completedSchedule: [
+      playerHistory: [
         {
+          playerId: "player",
+          position: "WR",
           season: 2025,
           week: 3,
-          gameId: "2025_03_AAA_BBB",
-          awayTeam: "AAA",
-          homeTeam: "BBB",
-          awayScore: 17,
-          homeScore: 20,
+          team: "BUF",
+          opponent: "MIA",
+          components: { receiving_yards: 80 },
+          status: "active" as const,
+          played: true,
+          snapShare: 0.8,
+          targetShare: 0.2,
         },
       ],
-    } as const;
-    const receiver = projectionTrainingCacheKey({
-      ...common,
-      playerPositions: [{ id: "player", position: "WR" }],
-    });
-    const tightEnd = projectionTrainingCacheKey({
-      ...common,
-      playerPositions: [{ id: "player", position: "TE" }],
-    });
-    expect(receiver).not.toBe(tightEnd);
+      defenseHistory: [
+        {
+          team: "MIA",
+          opponent: "BUF",
+          season: 2025,
+          week: 3,
+          components: { defensive_points_allowed: 20 },
+          played: true,
+        },
+      ],
+    };
+    const original = projectionTrainingCacheKey(input);
+    for (const patch of [
+      { position: "TE" },
+      { status: "out" as const },
+      { played: false },
+      { snapShare: 0.5 },
+      { targetShare: 0.3 },
+      { opponent: "NYJ" },
+      { components: { receiving_yards: 81 } },
+    ])
+      expect(
+        projectionTrainingCacheKey({
+          ...input,
+          playerHistory: [{ ...input.playerHistory[0]!, ...patch }],
+        }),
+      ).not.toBe(original);
+    for (const patch of [
+      { opponent: "NYJ" },
+      { played: false },
+      { components: { defensive_points_allowed: 21 } },
+    ])
+      expect(
+        projectionTrainingCacheKey({
+          ...input,
+          defenseHistory: [{ ...input.defenseHistory[0]!, ...patch }],
+        }),
+      ).not.toBe(original);
+    expect(projectionTrainingCacheKey({ ...input, firstTargetWeek: 5 })).not.toBe(original);
+    expect(projectionTrainingCacheKey({ ...input, season: 2027 })).not.toBe(original);
+    expect(
+      projectionTrainingCacheKey({
+        ...input,
+        playerHistory: [...input.playerHistory, input.playerHistory[0]!],
+      }),
+    ).not.toBe(original);
+    const second = { ...input.playerHistory[0]!, playerId: "second" };
+    expect(
+      projectionTrainingCacheKey({ ...input, playerHistory: [input.playerHistory[0]!, second] }),
+    ).not.toBe(
+      projectionTrainingCacheKey({ ...input, playerHistory: [second, input.playerHistory[0]!] }),
+    );
+    expect(
+      projectionTrainingCacheKey({
+        ...input,
+        playerHistory: structuredClone(input.playerHistory),
+      }),
+    ).toBe(original);
+    const sourceOnlyChange = {
+      ...input,
+      statisticalSources: [{ key: "current", checksum: "new" }],
+      historicalRolesChecksum: "new",
+      playerPositions: [{ id: "unrelated", position: "TE" }],
+    };
+    expect(projectionTrainingCacheKey(sourceOnlyChange)).toBe(original);
+  });
+
+  it("canonicalizes component property order without dropping values", () => {
+    const input = {
+      season: 2026,
+      firstTargetWeek: 2,
+      defenseHistory: [],
+      playerHistory: [
+        {
+          playerId: "player",
+          position: "WR",
+          season: 2025,
+          week: 3,
+          team: "BUF",
+          components: { receiving_yards: 80, receptions: 5 },
+        },
+      ],
+    };
+    expect(projectionTrainingCacheKey(input)).toBe(
+      projectionTrainingCacheKey({
+        ...input,
+        playerHistory: [
+          { ...input.playerHistory[0]!, components: { receptions: 5, receiving_yards: 80 } },
+        ],
+      }),
+    );
   });
 
   it("extracts only valid league scopes from self-asserted ESPN keys", () => {
@@ -2064,6 +2149,21 @@ describe("bounded weekly publication evidence memo", () => {
       evaluateFirstPartyTeamDefenseBacktestForScoringProfile(defense, changedProfile),
     );
     expect(memo.get(players, defense, profile())).toBe(original);
+  });
+
+  it("releases an invalidated generation without changing rebuilt evidence or another memo", () => {
+    const players = playerBacktestFixture();
+    const defense = defenseBacktestFixture();
+    const memo = new FirstPartyPublicationEvidenceMemo();
+    const other = new FirstPartyPublicationEvidenceMemo();
+    const original = memo.get(players, defense, profile());
+    const independent = other.get(players, defense, profile());
+    memo.clear();
+    const rebuilt = memo.get(players, defense, profile());
+    expect(rebuilt).not.toBe(original);
+    expect(rebuilt).toStrictEqual(original);
+    expect(memo.get(players, defense, profile())).toBe(rebuilt);
+    expect(other.get(players, defense, profile())).toBe(independent);
   });
 
   it("invalidates every stored profile when either immutable backtest reference changes", () => {

@@ -7,6 +7,14 @@ export interface WeeklyProjectionProcessRequest {
   readonly job: ProjectionRefreshJob;
   readonly jobId: string;
 }
+export interface WeeklyProjectionProcessMemory {
+  readonly rss: number;
+  readonly heapLimit: number;
+  readonly heapUsed?: number;
+  readonly heapTotal?: number;
+  readonly external?: number;
+  readonly arrayBuffers?: number;
+}
 export type WeeklyProjectionProcessResponse =
   | { readonly type: "ready"; readonly protocol: 1 }
   | {
@@ -14,8 +22,28 @@ export type WeeklyProjectionProcessResponse =
       readonly id: number;
       readonly ok: boolean;
       readonly error?: { readonly name: string; readonly code?: string };
-      readonly memory?: { readonly rss: number; readonly heapLimit: number };
+      readonly memory?: WeeklyProjectionProcessMemory;
     };
+
+/** Only named, nonnegative byte counts may reach lifecycle logs, including from older children. */
+export function weeklyProjectionProcessMemory(
+  value: unknown,
+): WeeklyProjectionProcessMemory | undefined {
+  if (value === null || typeof value !== "object") return undefined;
+  const memory = value as Record<string, unknown>;
+  const bytes = (candidate: unknown): candidate is number =>
+    typeof candidate === "number" && Number.isSafeInteger(candidate) && candidate >= 0;
+  if (!bytes(memory.rss) || !bytes(memory.heapLimit)) return undefined;
+  return {
+    rss: memory.rss,
+    heapLimit: memory.heapLimit,
+    ...Object.fromEntries(
+      ["heapUsed", "heapTotal", "external", "arrayBuffers"].flatMap((key) =>
+        bytes(memory[key]) ? [[key, memory[key]]] : [],
+      ),
+    ),
+  };
+}
 
 export function isWeeklyProjectionProcessRequest(
   value: unknown,

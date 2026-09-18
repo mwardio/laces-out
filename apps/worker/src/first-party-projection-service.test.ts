@@ -20,16 +20,21 @@ import {
   teamWeeklyStatObservations,
   type Database,
 } from "@laces-out/db";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { PgDialect } from "drizzle-orm/pg-core";
 import type { SQL } from "drizzle-orm";
 
 import { WEEKLY_INPUT_SNAPSHOT_VERSION } from "./weekly-input-snapshot.js";
+import * as projectionInputs from "./first-party-projection-inputs.js";
+import * as projectionModel from "@laces-out/projections";
 import {
   FIRST_PARTY_PROJECTION_SOURCE_KEY,
+  FirstPartyPublicationEvidenceMemo,
   FirstPartyProjectionService,
   requiredFirstPartyProjectionSourceKeys,
 } from "./first-party-projections.js";
+
+afterEach(() => vi.restoreAllMocks());
 
 type Row = Record<string, unknown>;
 
@@ -53,6 +58,7 @@ interface ProjectionDatabaseFixture {
   };
   readonly priorRun?: PriorRunFixture;
   readonly priorRuns?: readonly PriorRunFixture[];
+  readonly reuseRecordedRuns?: boolean;
   readonly publishConflict?: boolean;
   readonly leagues?: readonly Row[];
   readonly optionalSources?: readonly string[];
@@ -73,10 +79,15 @@ interface ProjectionDatabaseFixture {
 
 class SelectQuery implements PromiseLike<readonly Row[]> {
   #table: unknown;
+  #predicate: SQL | undefined;
 
   constructor(
     private readonly selection: Row,
-    private readonly resolveRows: (table: unknown, selection: Row) => readonly Row[],
+    private readonly resolveRows: (
+      table: unknown,
+      selection: Row,
+      predicate?: SQL,
+    ) => readonly Row[],
   ) {}
 
   from(table: unknown): this {
@@ -88,7 +99,8 @@ class SelectQuery implements PromiseLike<readonly Row[]> {
     return this;
   }
 
-  where(): this {
+  where(predicate?: SQL): this {
+    this.#predicate = predicate;
     return this;
   }
 
@@ -104,7 +116,7 @@ class SelectQuery implements PromiseLike<readonly Row[]> {
     onfulfilled?: ((value: readonly Row[]) => TResult1 | PromiseLike<TResult1>) | null,
     onrejected?: ((reason: unknown) => TResult2 | PromiseLike<TResult2>) | null,
   ): Promise<TResult1 | TResult2> {
-    return Promise.resolve(this.resolveRows(this.#table, this.selection)).then(
+    return Promise.resolve(this.resolveRows(this.#table, this.selection, this.#predicate)).then(
       onfulfilled,
       onrejected,
     );
@@ -172,6 +184,7 @@ class ProjectionDatabaseHarness {
   readonly #sources: readonly Row[];
   #priorRunReads = 0;
   #requiredSourceKeySelects = 0;
+  #driftAtSourceRead: { key: string; checksum: string; read: number } | undefined;
 
   constructor(private readonly fixture: ProjectionDatabaseFixture) {
     const sourceKeys = [
@@ -194,7 +207,9 @@ class ProjectionDatabaseHarness {
     }));
     const facade = {
       select: (selection: Row) =>
-        new SelectQuery(selection, (table, selected) => this.#selectRows(table, selected)),
+        new SelectQuery(selection, (table, selected, predicate) =>
+          this.#selectRows(table, selected, predicate),
+        ),
       insert: (table: unknown) =>
         new MutationQuery(table, (target, values) => this.#insertRows(target, values)),
       update: (table: unknown) =>
@@ -243,12 +258,30 @@ class ProjectionDatabaseHarness {
     return this.#database;
   }
 
-  #selectRows(table: unknown, selection: Row): readonly Row[] {
+  setSourceChecksum(key: string, checksum: string): string {
+    const source = this.#sources.find((row) => row.key === key);
+    if (!source) throw new Error("Missing fixture source");
+    const previous = String(source.lastChecksum);
+    source.lastChecksum = checksum;
+    return previous;
+  }
+
+  driftOnNextSourceRecheck(key: string, checksum: string): void {
+    this.#driftAtSourceRead = { key, checksum, read: this.#requiredSourceKeySelects + 2 };
+  }
+
+  #selectRows(table: unknown, selection: Row, predicate?: SQL): readonly Row[] {
     if (table === dataSources) {
       if (!Object.hasOwn(selection, "key")) {
         return [{ metadata: { modelVersion: "retained-version" } }];
       }
       this.#requiredSourceKeySelects += 1;
+      const scheduledDrift = this.#driftAtSourceRead;
+      if (scheduledDrift && this.#requiredSourceKeySelects >= scheduledDrift.read) {
+        return this.#sources.map((row) =>
+          row.key === scheduledDrift.key ? { ...row, lastChecksum: scheduledDrift.checksum } : row,
+        );
+      }
       // `#selectSources` performs the first read (at the start of the refresh, once sources are
       // validated); the service's own end-of-assembly epoch recheck performs every read after
       // that. Drifting only from the second read onward reproduces a source that changes
@@ -286,6 +319,11 @@ class ProjectionDatabaseHarness {
       return [];
     }
     if (table === projectionModelRuns) {
+      if (this.fixture.reuseRecordedRuns) {
+        const params = predicate ? new PgDialect().sqlToQuery(predicate).params : [];
+        const recorded = this.modelRuns.findLast((run) => params.includes(run.inputChecksum));
+        return recorded ? [recorded] : [];
+      }
       const run = (this.fixture.priorRuns ??
         (this.fixture.priorRun ? [this.fixture.priorRun] : []))[this.#priorRunReads++];
       return run ? [{ ...run }] : [];
@@ -897,5 +935,205 @@ describe("first-party projection service release safety", () => {
     expect(harness.modelRuns).toHaveLength(1);
     expect(harness.modelRuns[0]?.qualityState).toBe("rejected");
     expect(latestSourceMetadata(harness).result).toBe("prior_good_output_preserved");
+  });
+
+  it("releases obsolete training before replacement allocation and cannot reuse it after a failed rebuild", async () => {
+    const now = new Date("2026-09-01T12:00:00.000Z");
+    const past = {
+      ...scheduleFixture()[0]!,
+      season: 2025,
+      week: 18,
+      gameId: "past-game",
+      kickoffAt: new Date("2025-12-28T17:00:00Z"),
+      status: "final",
+      awayScore: 10,
+      homeScore: 20,
+    };
+    const harness = new ProjectionDatabaseHarness({ now, schedule: [past, ...scheduleFixture()] });
+    const service = new FirstPartyProjectionService({ database: harness.database, now: () => now });
+    let yards = 80;
+    vi.spyOn(projectionInputs, "buildFirstPartyPlayerHistory").mockImplementation(() => [
+      {
+        playerId: "receiver",
+        position: "WR",
+        season: 2025,
+        week: 18,
+        team: "BUF",
+        components: { receiving_yards: yards },
+      },
+    ]);
+    const build = vi.spyOn(projectionModel, "runFirstPartyProjectionBacktest");
+    const clear = vi.spyOn(FirstPartyPublicationEvidenceMemo.prototype, "clear");
+    const refresh = () => service.refreshProjections({ season: 2026, week: 1 }, jobContext());
+    await refresh();
+    const coldBuilds = build.mock.calls.length;
+    const coldClears = clear.mock.calls.length;
+    await refresh();
+    expect(build).toHaveBeenCalledTimes(coldBuilds);
+    expect(clear).toHaveBeenCalledTimes(coldClears);
+
+    yards = 81;
+    build.mockImplementationOnce(() => {
+      expect(clear).toHaveBeenCalledTimes(coldClears + 1);
+      throw new Error("Replacement allocation failed");
+    });
+    await expect(refresh()).rejects.toThrow("Replacement allocation failed");
+    yards = 80;
+    await refresh();
+    // A failed cold replacement must not leave the old training object pinned or reusable.
+    expect(build).toHaveBeenCalledTimes(coldBuilds + 2);
+    const rebuilt = harness.modelRuns.at(-1);
+    await refresh();
+    expect(build).toHaveBeenCalledTimes(coldBuilds + 2);
+    expect(harness.modelRuns.at(-1)).toStrictEqual(rebuilt);
+  });
+
+  it("reuses identical prior fits after source turnover but passes newly assembled completed histories to every publication", async () => {
+    const now = new Date("2026-09-15T12:00:00Z");
+    const week = (number: number, final: boolean) =>
+      scheduleFixture().map((row) => ({
+        ...row,
+        week: number,
+        gameId: `${String(row.gameId)}-${number}`,
+        kickoffAt: new Date(final ? "2026-09-13T17:00:00Z" : "2026-09-27T17:00:00Z"),
+        status: final ? "final" : "scheduled",
+        awayScore: final ? 10 : null,
+        homeScore: final ? 20 : null,
+      }));
+    const harness = new ProjectionDatabaseHarness({
+      now,
+      schedule: [...week(1, true), ...week(2, false), ...week(3, true), ...week(4, false)],
+      optionalSources: [
+        "nflverse.injuries.2026",
+        "nflverse.weekly-rosters.2026",
+        "nflverse.stats-player-week.2026",
+        "nflverse.stats-team-week.2026",
+      ],
+    });
+    let laterYards = 80;
+    let laterPointsAllowed = 20;
+    vi.spyOn(projectionInputs, "buildFirstPartyPlayerHistory").mockImplementation(() => [
+      {
+        playerId: "receiver",
+        position: "WR",
+        season: 2026,
+        week: 1,
+        team: "BUF",
+        components: { receiving_yards: 70 },
+      },
+      {
+        playerId: "receiver",
+        position: "WR",
+        season: 2026,
+        week: 3,
+        team: "BUF",
+        components: { receiving_yards: laterYards },
+      },
+    ]);
+    vi.spyOn(projectionInputs, "buildFirstPartyDefenseHistory").mockImplementation(() => [
+      { team: "BUF", opponent: "MIA", season: 2026, week: 1, components: { points_allowed: 17 } },
+      {
+        team: "BUF",
+        opponent: "MIA",
+        season: 2026,
+        week: 3,
+        components: { points_allowed: laterPointsAllowed },
+      },
+    ]);
+    const fit = vi.spyOn(projectionModel, "runFirstPartyProjectionBacktest");
+    const defenseFit = vi.spyOn(projectionModel, "runFirstPartyTeamDefenseBacktest");
+    const service = new FirstPartyProjectionService({ database: harness.database, now: () => now });
+    const publish = vi.spyOn(service, "publishPreparedWeek").mockResolvedValue({
+      committed: true,
+      published: true,
+      gate: { state: "publishable", reasons: [] },
+    });
+    await service.refreshProjections({ season: 2026 }, jobContext());
+    const first = publish.mock.calls.at(-1)![0];
+    expect(first.week).toBe(4);
+    expect(fit).toHaveBeenCalledTimes(1);
+    for (const key of [
+      "nflverse.injuries.2026",
+      "nflverse.weekly-rosters.2026",
+      "nflverse.stats-player-week.2026",
+    ])
+      harness.setSourceChecksum(key, "f".repeat(64));
+    laterYards = 100;
+    laterPointsAllowed = 30;
+    await service.refreshProjections({ season: 2026 }, jobContext());
+    const second = publish.mock.calls.at(-1)![0];
+    expect(fit).toHaveBeenCalledTimes(1);
+    expect(defenseFit).toHaveBeenCalledTimes(1);
+    expect(second.basePlayerBacktest).toBe(first.basePlayerBacktest);
+    expect(second.playerHistory).not.toBe(first.playerHistory);
+    expect(second.playerHistory.at(-1)?.components.receiving_yards).toBe(100);
+    expect(first.playerHistory.at(-1)?.components.receiving_yards).toBe(80);
+    expect(second.defenseHistory.at(-1)?.components.points_allowed).toBe(30);
+    expect(first.defenseHistory.at(-1)?.components.points_allowed).toBe(20);
+    expect(second.inputChecksum).not.toBe(first.inputChecksum);
+    expect(second.inputSnapshot?.sourceManifest.checksum).not.toBe(
+      first.inputSnapshot?.sourceManifest.checksum,
+    );
+  });
+
+  it("still rejects source drift during a warm fit before publishing", async () => {
+    const now = new Date("2026-09-01T12:00:00Z");
+    const harness = new ProjectionDatabaseHarness({ now, schedule: scheduleFixture() });
+    const service = new FirstPartyProjectionService({ database: harness.database, now: () => now });
+    const fit = vi.spyOn(projectionModel, "runFirstPartyProjectionBacktest");
+    await service.refreshProjections({ season: 2026, week: 1 }, jobContext());
+    expect(harness.modelRuns).toHaveLength(1);
+    harness.driftOnNextSourceRecheck("nflverse.stats-player-week.2025", "f".repeat(64));
+    await expect(
+      service.refreshProjections({ season: 2026, week: 1 }, jobContext()),
+    ).rejects.toMatchObject({ code: "PROJECTION_INPUT_EPOCH_CHANGED" });
+    expect(fit).toHaveBeenCalledTimes(1);
+    expect(harness.modelRuns).toHaveLength(1);
+  });
+
+  it("refreshes an explicit future week when prior-week finality advances on the clock alone", async () => {
+    let now = new Date("2026-09-13T20:59:00Z");
+    const first = scheduleFixture().map((row) => ({
+      ...row,
+      status: "final",
+      awayScore: 10,
+      homeScore: 20,
+    }));
+    const next = scheduleFixture().map((row) => ({
+      ...row,
+      week: 2,
+      gameId: `${String(row.gameId)}-2`,
+      kickoffAt: new Date("2026-09-20T17:00:00Z"),
+    }));
+    const harness = new ProjectionDatabaseHarness({
+      now,
+      schedule: [...first, ...next],
+      reuseRecordedRuns: true,
+    });
+    vi.spyOn(projectionInputs, "buildFirstPartyPlayerHistory").mockReturnValue([
+      {
+        playerId: "receiver",
+        position: "WR",
+        team: "BUF",
+        season: 2026,
+        week: 1,
+        components: { receiving_yards: 80 },
+      },
+    ]);
+    const fit = vi.spyOn(projectionModel, "runFirstPartyProjectionBacktest");
+    const service = new FirstPartyProjectionService({ database: harness.database, now: () => now });
+    await service.refreshProjections({ season: 2026, week: 2 }, jobContext());
+    const before = harness.modelRuns[0];
+    expect(fit.mock.calls[0]?.[0]).toEqual([]);
+    // With the same complete persisted output and unchanged clock, the early return still works.
+    await service.refreshProjections({ season: 2026, week: 2 }, jobContext());
+    expect(harness.modelRuns).toHaveLength(1);
+    expect(fit).toHaveBeenCalledTimes(1);
+    now = new Date("2026-09-13T21:01:00Z");
+    await service.refreshProjections({ season: 2026, week: 2 }, jobContext());
+    expect(harness.modelRuns).toHaveLength(2);
+    expect(harness.modelRuns[1]?.inputChecksum).not.toBe(before?.inputChecksum);
+    expect(fit).toHaveBeenCalledTimes(2);
+    expect(fit.mock.calls[1]?.[0]).toMatchObject([{ season: 2026, week: 1 }]);
   });
 });

@@ -13,6 +13,7 @@ import {
 import {
   isWeeklyProjectionProcessRequest,
   weeklyProjectionProcessError,
+  weeklyProjectionProcessMemory,
 } from "./first-party-projection-process-protocol.js";
 
 const directories: string[] = [];
@@ -189,6 +190,43 @@ describe("persistent weekly projection process", () => {
     expect(JSON.stringify(events)).not.toContain("secret");
   });
 
+  it("logs only bounded numeric memory fields from child responses", async () => {
+    const { client, events } = await fixture(
+      `${ready} process.on('message',m=>process.send({type:'result',id:m.id,ok:true,memory:{rss:10,heapLimit:100,heapUsed:20,heapTotal:30,external:40,arrayBuffers:5,private:'postgres://secret'}}));`,
+    );
+    await client.refreshProjections({ season: 2026 }, context());
+    expect(
+      events.find((event) => event.event === "weekly-projection-process-result")?.memory,
+    ).toEqual({
+      rss: 10,
+      heapLimit: 100,
+      heapUsed: 20,
+      heapTotal: 30,
+      external: 40,
+      arrayBuffers: 5,
+    });
+    expect(JSON.stringify(events)).not.toContain("secret");
+  });
+
+  it("retains older memory payloads while omitting malformed counters", () => {
+    expect(weeklyProjectionProcessMemory({ rss: 10, heapLimit: 100 })).toEqual({
+      rss: 10,
+      heapLimit: 100,
+    });
+    expect(
+      weeklyProjectionProcessMemory({
+        rss: 10,
+        heapLimit: 100,
+        heapUsed: NaN,
+        heapTotal: -1,
+        external: Infinity,
+        arrayBuffers: "secret",
+      }),
+    ).toEqual({ rss: 10, heapLimit: 100 });
+    for (const value of [null, {}, { rss: -1, heapLimit: 100 }, { rss: 10, heapLimit: Infinity }])
+      expect(weeklyProjectionProcessMemory(value)).toBeUndefined();
+  });
+
   it("propagates a transient input-epoch failure through real IPC to the queue handler, then permits redelivery", async () => {
     const runtime = new URL("./first-party-projection-process-runtime.ts", import.meta.url).href;
     const { client, events } = await fixture(`
@@ -235,6 +273,12 @@ describe("persistent weekly projection process", () => {
     ).toHaveLength(1);
     const results = events.filter((event) => event.event === "weekly-projection-process-result");
     expect(results.map((event) => event.ok)).toEqual([false, true]);
+    const memory = weeklyProjectionProcessMemory(results[1]?.memory);
+    expect(memory).toBeDefined();
+    for (const key of ["heapUsed", "heapTotal", "external", "arrayBuffers"] as const) {
+      expect(Number.isSafeInteger(memory?.[key])).toBe(true);
+      expect(memory?.[key]).toBeGreaterThanOrEqual(0);
+    }
     expect(results[0]?.error).toEqual({ name: "Error", code: "PROJECTION_INPUT_EPOCH_CHANGED" });
     expect(JSON.stringify(events)).not.toContain("private source payload");
   }, 15_000);

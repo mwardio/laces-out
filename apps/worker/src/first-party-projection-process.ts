@@ -6,6 +6,7 @@ import type { ProjectionRefreshService, WorkerJobContext } from "./jobs.js";
 import {
   WEEKLY_PROJECTION_PROCESS_PROTOCOL,
   weeklyProjectionProcessError,
+  weeklyProjectionProcessMemory,
   type WeeklyProjectionProcessResponse,
 } from "./first-party-projection-process-protocol.js";
 
@@ -233,14 +234,12 @@ export class FirstPartyProjectionProcess implements ProjectionRefreshService {
         void this.#terminate(slot, new Error("Invalid weekly projection worker response"));
         return;
       }
+      const memory = weeklyProjectionProcessMemory(message.memory);
       this.#emit({
         event: "weekly-projection-process-result",
         ok: message.ok,
         pid: child.pid,
-        ...(Number.isSafeInteger(message.memory?.rss) &&
-        Number.isSafeInteger(message.memory?.heapLimit)
-          ? { memory: { rss: message.memory!.rss, heapLimit: message.memory!.heapLimit } }
-          : {}),
+        ...(memory ? { memory } : {}),
         ...(message.ok ? {} : { error: weeklyProjectionProcessError(message.error) }),
       });
       const error = weeklyProjectionProcessError(message.error);

@@ -547,3 +547,32 @@ Combined implementation verification, September 18 01:48 UTC:
   not a measured replacement-code speedup. No cache codec or batch-orchestration change is included.
   Production build, migration, deployment, live weekly verification, and full ROS recovery remain
   outstanding at this checkpoint.
+
+Weekly fit-cache lifecycle review, September 18:
+
+- A weekly calculation child aborted with `SIGABRT` at 06:15 UTC. Its parent stayed running,
+  container restart count remained zero, and the cgroup recorded no OOM kill. The queued retry
+  completed at 06:28 UTC in about 701 seconds. Heap exhaustion is plausible, but the signal alone
+  does not establish the cause; raw crash diagnostics are intentionally excluded from logs.
+- Review found that a cold replacement retained the previous histories and backtests until the
+  new fit finished, while a separate module-level evidence memo also retained the old backtests.
+  Each service now owns its memo and releases obsolete fits and evidence before refitting. Live
+  histories are assembled afresh and are no longer retained in the fit cache.
+- Whole-feed injury, roster, and statistical checksums previously forced a refit even when the
+  strictly prior training rows were identical. The cache now identifies the exact assembled
+  player and defense training inputs, their order and duplicates, the cutoff, and fixed fit
+  configuration. Ordered per-row hashes bound temporary serialization memory. Current facts,
+  source snapshots, and publication fences remain independently refreshed and checked.
+- An explicit future-week request could reuse an older publication after a prior game crossed
+  the conservative four-hour finality threshold with unchanged source bytes. The publication
+  identity now includes the completed-week set before the early unchanged-output check. This
+  lets newly eligible history enter the fit without changing the existing finality rule.
+- Child result telemetry now distinguishes RSS, used and allocated JavaScript heap, external
+  memory, and array buffers using an allowlist of nonnegative integer byte counts. It exposes no
+  raw environment or crash output. The forecast algorithms, scoring rules, release gates, and
+  frozen historical ROS run are unchanged. Deployment and live verification are separate steps.
+- All 98 focused tests pass on Linux x86-64, including exact rebuilt evidence, fresh live
+  histories with reused fits, prior-data mutations, failed replacement, clock-only completion,
+  source drift on a cache hit, and telemetry filtering. Independent source review found no
+  missing fit dependency. The Mini remains unreachable, so these results do not establish
+  Darwin/ARM64 compatibility.

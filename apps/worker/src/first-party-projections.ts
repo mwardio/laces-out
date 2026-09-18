@@ -339,8 +339,6 @@ interface PriorOutputsState {
 
 interface CachedTrainingArtifacts {
   readonly key: string;
-  readonly completedPlayerHistory: ReturnType<typeof buildFirstPartyPlayerHistory>;
-  readonly completedDefenseHistory: ReturnType<typeof buildFirstPartyDefenseHistory>;
   readonly basePlayerBacktest: FirstPartyProjectionBacktest;
   readonly playerChampion: ReturnType<typeof applyFirstPartyProjectionChampionPolicy>;
   readonly publicationPlayerBacktest: FirstPartyProjectionBacktest;
@@ -571,26 +569,39 @@ export function projectionStatusWindow(
   return "outside-28d";
 }
 
+function projectionTrainingHistoryChecksum(history: readonly unknown[]): string {
+  const digest = createHash("sha256");
+  digest.update(`weekly-prior-fit-rows-v1:${history.length}:`);
+  // Fixed-length row digests preserve boundaries, order and duplicates without retaining a
+  // canonical JSON string for the full multi-season history alongside the input arrays.
+  for (const row of history) digest.update(projectionInputChecksum(row));
+  return digest.digest("hex");
+}
+
 export function projectionTrainingCacheKey(input: {
+  readonly season: number;
   readonly firstTargetWeek: number;
-  readonly historicalRolesChecksum?: string;
-  readonly statisticalSources: readonly { readonly key: string; readonly checksum: string }[];
-  readonly playerPositions: readonly { readonly id: string; readonly position: string }[];
-  readonly completedSchedule: readonly {
-    readonly season: number;
-    readonly week: number;
-    readonly gameId: string;
-    readonly awayTeam: string;
-    readonly homeTeam: string;
-    readonly awayScore: number | null;
-    readonly homeScore: number | null;
-  }[];
+  readonly playerHistory: ReturnType<typeof buildFirstPartyPlayerHistory>;
+  readonly defenseHistory: ReturnType<typeof buildFirstPartyDefenseHistory>;
 }): string {
   return projectionInputChecksum({
+    fitCacheVersion: "weekly-prior-fit-v1",
     modelVersion: FIRST_PARTY_PROJECTION_MODEL_VERSION,
     playerHistoryVersion: FIRST_PARTY_PLAYER_HISTORY_VERSION,
     sourceSchemaVersion,
-    ...input,
+    season: input.season,
+    firstTargetWeek: input.firstTargetWeek,
+    championPolicy: {
+      version: championPolicyVersion,
+      minimumModelImprovement: FIRST_PARTY_CHAMPION_MINIMUM_IMPROVEMENT,
+      minimumSamples: FIRST_PARTY_CHAMPION_MINIMUM_SAMPLES,
+      minimumWeekBatches: FIRST_PARTY_CHAMPION_MINIMUM_WEEK_BATCHES,
+      gateScoringProfile: projectionScoringProfileKey(publicationGateProfile),
+    },
+    // Exact assembled inputs to the two backtests: preserve order, duplicates, roles, status and
+    // every component. Source snapshots still independently govern publication provenance/fences.
+    playerHistoryChecksum: projectionTrainingHistoryChecksum(input.playerHistory),
+    defenseHistoryChecksum: projectionTrainingHistoryChecksum(input.defenseHistory),
   });
 }
 
@@ -1202,6 +1213,13 @@ export class FirstPartyPublicationEvidenceMemo {
     }
   }
 
+  /** Release the previous training generation before allocating its replacement. */
+  clear(): void {
+    this.#profiles.clear();
+    this.#basePlayerBacktest = undefined;
+    this.#defenseBacktest = undefined;
+  }
+
   get(
     basePlayerBacktest: FirstPartyProjectionBacktest,
     defenseBacktest: FirstPartyTeamDefenseBacktest,
@@ -1211,7 +1229,7 @@ export class FirstPartyPublicationEvidenceMemo {
       this.#basePlayerBacktest !== basePlayerBacktest ||
       this.#defenseBacktest !== defenseBacktest
     ) {
-      this.#profiles.clear();
+      this.clear();
       this.#basePlayerBacktest = basePlayerBacktest;
       this.#defenseBacktest = defenseBacktest;
     }
@@ -1246,8 +1264,6 @@ export class FirstPartyPublicationEvidenceMemo {
     return evidence;
   }
 }
-
-const publicationEvidenceMemo = new FirstPartyPublicationEvidenceMemo();
 
 /** The long-standing flat reason string for one normalization failure; shape unchanged. */
 function normalizationReasonText(reason: LeagueScoringUnsupportedReason): string {
@@ -1415,6 +1431,7 @@ function sourceVersionPredicate(
 export class FirstPartyProjectionService implements ProjectionRefreshService {
   readonly #database: Database;
   readonly #now: () => Date;
+  readonly #publicationEvidenceMemo = new FirstPartyPublicationEvidenceMemo();
   #trainingCache: CachedTrainingArtifacts | undefined;
 
   constructor(input: { readonly database: Database; readonly now?: () => Date }) {
@@ -1462,6 +1479,7 @@ export class FirstPartyProjectionService implements ProjectionRefreshService {
         return;
       }
 
+      const completedWeeks = completedScheduleWeekKeys(input.schedules, now);
       const sourceAsOf = new Date(
         Math.min(...selectedSources.map((selected) => selected.lastSuccessfulAt.getTime())),
       );
@@ -1472,6 +1490,9 @@ export class FirstPartyProjectionService implements ProjectionRefreshService {
         sourceManifestChecksum: inputSnapshot.sourceManifest.checksum,
         mutableInputChecksum: inputSnapshot.mutableChecksum,
         historicalRolesChecksum: inputSnapshot.historicalRolesChecksum,
+        // Finality can advance on the clock alone. A matching source snapshot must not reuse an
+        // older publication that excluded a week which has since crossed the finality boundary.
+        completedScheduleWeeks: [...completedWeeks].sort(),
         pointCalibrationPolicyVersion: WEEKLY_POINT_CALIBRATION_POLICY_VERSION,
         publicationPolicyVersion: FIRST_PARTY_PUBLICATION_POLICY_VERSION,
         scoringNormalizationVersion: LEAGUE_SCORING_NORMALIZATION_VERSION,
@@ -1582,61 +1603,45 @@ export class FirstPartyProjectionService implements ProjectionRefreshService {
 
       const firstTargetWeek = targetWeeks[0];
       if (firstTargetWeek === undefined) throw new Error("Projection target week is required");
-      const completedWeeks = completedScheduleWeekKeys(input.schedules, now);
+      // Always assemble current histories. A source can change only a target/future week, or a
+      // completed week beyond the first actionable target: those live facts must remain fresh
+      // even when the strictly-prior fit payload is identical.
+      const playerHistory = buildFirstPartyPlayerHistory(
+        input.weekly,
+        input.snaps,
+        input.weeklyRosters,
+        input.schedules,
+        input.injuries,
+      );
+      const defenseHistory = buildFirstPartyDefenseHistory(input.teamWeekly, input.schedules);
+      const completedPlayerHistory = playerHistory.filter((row) =>
+        completedWeeks.has(scheduleWeekKey(row.season, row.week)),
+      );
+      const completedDefenseHistory = defenseHistory.filter((row) =>
+        completedWeeks.has(scheduleWeekKey(row.season, row.week)),
+      );
+      // A partially completed NFL week can already exist in the immutable source rows.
+      // Backtests stop before the earliest target so Sunday results cannot leak into Monday.
+      const backtestPlayerHistory = completedPlayerHistory.filter(
+        (row) =>
+          row.season < job.season || (row.season === job.season && row.week < firstTargetWeek),
+      );
+      const backtestDefenseHistory = completedDefenseHistory.filter(
+        (row) =>
+          row.season < job.season || (row.season === job.season && row.week < firstTargetWeek),
+      );
       const trainingKey = projectionTrainingCacheKey({
+        season: job.season,
         firstTargetWeek,
-        historicalRolesChecksum: inputSnapshot.historicalRolesChecksum,
-        statisticalSources: selectedSources
-          .filter(
-            (selected) =>
-              selected.key.includes("stats-player-week") ||
-              selected.key.includes("stats-team-week") ||
-              selected.key.includes("snap-counts") ||
-              selected.key.includes("weekly-rosters") ||
-              selected.key.includes("injuries"),
-          )
-          .map(({ key, checksum }) => ({ key, checksum })),
-        playerPositions: input.playerRows
-          .map((player) => ({ id: player.id, position: player.primaryPosition }))
-          .sort((left, right) => left.id.localeCompare(right.id)),
-        completedSchedule: input.schedules
-          .filter((game) => completedWeeks.has(scheduleWeekKey(game.season, game.week)))
-          .map((game) => ({
-            season: game.season,
-            week: game.week,
-            gameId: game.gameId,
-            awayTeam: game.awayTeam,
-            homeTeam: game.homeTeam,
-            awayScore: game.awayScore,
-            homeScore: game.homeScore,
-          }))
-          .sort((left, right) => left.gameId.localeCompare(right.gameId)),
+        playerHistory: backtestPlayerHistory,
+        defenseHistory: backtestDefenseHistory,
       });
       if (this.#trainingCache?.key !== trainingKey) {
-        const playerHistory = buildFirstPartyPlayerHistory(
-          input.weekly,
-          input.snaps,
-          input.weeklyRosters,
-          input.schedules,
-          input.injuries,
-        );
-        const defenseHistory = buildFirstPartyDefenseHistory(input.teamWeekly, input.schedules);
-        const completedPlayerHistory = playerHistory.filter((row) =>
-          completedWeeks.has(scheduleWeekKey(row.season, row.week)),
-        );
-        const completedDefenseHistory = defenseHistory.filter((row) =>
-          completedWeeks.has(scheduleWeekKey(row.season, row.week)),
-        );
-        // A partially completed NFL week can already exist in the immutable source rows.
-        // Backtests stop before the earliest target so Sunday results cannot leak into Monday.
-        const backtestPlayerHistory = completedPlayerHistory.filter(
-          (row) =>
-            row.season < job.season || (row.season === job.season && row.week < firstTargetWeek),
-        );
-        const backtestDefenseHistory = completedDefenseHistory.filter(
-          (row) =>
-            row.season < job.season || (row.season === job.season && row.week < firstTargetWeek),
-        );
+        // The old generation is unusable for this identity. Release both owners before building
+        // replacement backtests, including when that build later fails. The isolated weekly
+        // process serializes refreshes; this memo belongs to this service, not other callers.
+        this.#trainingCache = undefined;
+        this.#publicationEvidenceMemo.clear();
         const basePlayerBacktest = runFirstPartyProjectionBacktest(backtestPlayerHistory);
         const playerChampion = applyFirstPartyProjectionChampionPolicy(
           basePlayerBacktest,
@@ -1659,8 +1664,6 @@ export class FirstPartyProjectionService implements ProjectionRefreshService {
         );
         this.#trainingCache = {
           key: trainingKey,
-          completedPlayerHistory,
-          completedDefenseHistory,
           basePlayerBacktest,
           playerChampion,
           publicationPlayerBacktest,
@@ -1714,8 +1717,8 @@ export class FirstPartyProjectionService implements ProjectionRefreshService {
           inputEpoch: startInputEpoch,
           inputSnapshot,
           gate: training.gate,
-          playerHistory: training.completedPlayerHistory,
-          defenseHistory: training.completedDefenseHistory,
+          playerHistory: completedPlayerHistory,
+          defenseHistory: completedDefenseHistory,
           playerBacktest,
           basePlayerBacktest: training.basePlayerBacktest,
           playerChampionPolicy: training.playerChampion.policy,
@@ -2905,6 +2908,7 @@ export class FirstPartyProjectionService implements ProjectionRefreshService {
             publishedPlayers,
             publishedDefenses,
             previousRowsByLeague,
+            scoringEvidenceMemo: this.#publicationEvidenceMemo,
           })
         : {
             publications: [],
@@ -3390,9 +3394,9 @@ export function buildFirstPartyLeaguePublications(input: {
   const publications: LeaguePublication[] = [];
   const withheld: WithheldLeague[] = [];
   const notes: LeaguePublicationNote[] = [];
-  // Reuse immutable training evidence across leagues and jobs. League-specific forecasts,
-  // rosters, kickoff locks and publication identities are still rebuilt below on every call.
-  const scoringEvidence = input.scoringEvidenceMemo ?? publicationEvidenceMemo;
+  // Services explicitly own reuse across jobs. A standalone planner call retains evidence only
+  // across its leagues, so a module singleton cannot keep an obsolete training generation alive.
+  const scoringEvidence = input.scoringEvidenceMemo ?? new FirstPartyPublicationEvidenceMemo();
   for (const league of input.leagues) {
     const visiblePlayers = input.publishedPlayers.filter(
       (player) =>

@@ -70,7 +70,7 @@ export function startWeeklyProjectionProcess(input: {
       active = undefined;
       send({
         ...response,
-        memory: { rss: process.memoryUsage().rss, heapLimit: getHeapStatistics().heap_size_limit },
+        memory: { ...process.memoryUsage(), heapLimit: getHeapStatistics().heap_size_limit },
       });
     })().catch(() => {
       void close(1);

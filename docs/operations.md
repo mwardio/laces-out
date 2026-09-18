@@ -455,16 +455,24 @@ the full weekly + ROS behavior.
 The ordinary worker dispatches weekly modeling/publication to one lazy, persistent child process
 with a 2 GiB V8 old-generation heap limit and a separate two-connection database pool. Provider
 syncs, queue heartbeats, and notification sweeps continue in the parent while a cold model fits.
-Sequential jobs reuse the child's football training cache. A bounded 32-entry scoring-evidence
-memo reuses policy selection, validation metrics, and point calibration for semantically identical
-scoring rules; a changed player or defense backtest invalidates it. It retains compact evidence,
-not expanded historical predictions for every league. Rosters, kickoff locks, live forecasts,
-source checks, and publication coverage are still evaluated for each job.
+Sequential jobs reuse historical fits keyed by the exact assembled, completed player and defense
+history strictly before the first target week. Histories used for current forecasts are assembled
+fresh; a current-week injury or roster update does not refit an identical historical payload.
+Completion of a prior week also changes publication identity when its conservative finality
+threshold passes, including for an explicitly requested future week with unchanged source bytes.
+A bounded 32-entry scoring-evidence memo reuses policy selection, validation metrics, and point
+calibration for semantically identical scoring rules. Each projection service owns its memo and
+releases both obsolete fits and their memo before constructing replacement backtests, including
+when replacement fails. The memo retains compact evidence, not expanded historical predictions
+for every league. Rosters, kickoff locks, live forecasts, source checks, and publication coverage
+are still evaluated for each job.
 
 The child receives only the database connection, runtime mode, and UTC timezone. Cancellation,
 startup failure, or worker shutdown terminates it before another request can start; a child crash
 fails the current queue job and a later retry starts a fresh process. Structured lifecycle logs
 include readiness, completion, and bounded memory metrics without raw SQL or environment values.
+Memory metrics distinguish process RSS, used and allocated JavaScript heap, external memory,
+array buffers, and the heap limit. A child abort alone does not establish an out-of-memory cause.
 
 Before weekly modeling, the worker asks the canonical nflverse player catalog, current-season
 player-stat, team-stat, weekly-roster, injury-report, and snap sources, every schedule season in the
