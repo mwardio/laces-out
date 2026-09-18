@@ -704,3 +704,8 @@ Expected-point admission repair, September 18:
   are not independent observations or a real-roster optimization test. The 293 focused unit
   and integration tests, workspace typecheck, and scoped lint/format checks passed on Linux
   x86-64. Darwin/ARM64 validation was unavailable because the Mini refused SSH connections.
+- The old raw-zero forecast cohort also regressed: its 171–198 rows per profile had MAE
+  increases of 0.019–0.140 points (3.70–24.42%) and MSE increases of 6.51–29.57%. Overall
+  near-zero MSE improved, but that cohort's proper interval score worsened 1.29–2.64%.
+  These are forecast-selected cohorts, distinct from deterministic inactive/bye zeros.
+  No claim that every player group improved is supported by this release evidence.
