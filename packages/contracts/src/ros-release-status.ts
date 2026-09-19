@@ -141,6 +141,8 @@ export const rosScoringValidationSchema = z
     state: z.enum(["pending", "validating", "admitted", "withheld", "failed"]),
     requestedAt: z.iso.datetime(),
     blockers: z.array(z.string().min(1).max(400)).max(32),
+    rawBlockers: z.array(z.string().min(1).max(400)).max(32).optional(),
+    supersededIntervalDiagnostics: z.array(z.string().min(1).max(400)).max(32).optional(),
     historyPreparation: rosHistoryPreparationSchema.optional(),
   })
   .strict();

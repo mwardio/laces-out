@@ -43,7 +43,7 @@ export interface FirstPartyRosMarginalAdmissionInput {
   /** Trusted current forecast season; must immediately follow the frozen held-out year. */
   readonly forecastSeason: number;
   readonly scoringProfile: ProjectionScoringProfile;
-  /** A defense-only training experiment cannot yet be composed into this complete admission. */
+  /** Pinned complete32-defense training; composed with the unchanged non-defense audit rows. */
   readonly intervalTrainingReportJson?: string;
   readonly intervalTrainingReportChecksum?: string;
 }
@@ -119,18 +119,25 @@ function fullScope(report: Record<string, unknown>, label: string): void {
  * fresh-confirmation/deployment prerequisites; this function performs no database writes.
  *
  * This first branch intentionally inherits the development builder's fixed 3264-row complete
- * cohort. Legacy-compatible reduced scoring cohorts and separate defense-training composition
- * remain unsupported rather than silently weakening that protocol.
+ * cohort. Optional complete-defense training has its own authenticated composition manifest;
+ * legacy-compatible reduced scoring cohorts remain unsupported by this frozen protocol.
  */
 export function prepareFirstPartyRosMarginalAdmission(
   input: FirstPartyRosMarginalAdmissionInput,
 ): FirstPartyRosAdmissionValidation {
   try {
     if (
-      input.intervalTrainingReportJson !== undefined ||
-      input.intervalTrainingReportChecksum !== undefined
+      (input.intervalTrainingReportJson === undefined) !==
+      (input.intervalTrainingReportChecksum === undefined)
     )
-      return reject("marginal_admission_separate_training_full_scope_composition_unavailable");
+      return reject("marginal_admission_interval_training_pin_incomplete");
+    if (input.intervalTrainingReportJson !== undefined)
+      pinnedText(
+        input.intervalTrainingReportJson,
+        input.intervalTrainingReportChecksum,
+        "interval_training",
+        64 * 1024 * 1024,
+      );
     if (
       !Number.isSafeInteger(input.forecastSeason) ||
       input.forecastSeason < 2001 ||
@@ -184,6 +191,12 @@ export function prepareFirstPartyRosMarginalAdmission(
       evaluationSeason: evidenceThroughSeason,
       positions: POSITIONS,
       qualificationProtocolChecksum: input.qualificationProtocolChecksum,
+      ...(input.intervalTrainingReportJson === undefined
+        ? {}
+        : {
+            intervalTrainingReportJson: input.intervalTrainingReportJson,
+            intervalTrainingReportChecksum: input.intervalTrainingReportChecksum!,
+          }),
     });
     if (!("qualification" in development) || !development.completePortfolio)
       return reject("marginal_admission_complete_qualification_missing");
@@ -236,6 +249,24 @@ export function prepareFirstPartyRosMarginalAdmission(
       legacy.payload.sourceChecksums,
       "marginal_admission_source_list_linkage_mismatch",
     );
+    const trainingSource = development.provenance.intervalTraining ?? null;
+    const composition = development.provenance.intervalTrainingComposition ?? null;
+    if (input.intervalTrainingReportJson !== undefined) {
+      if (
+        trainingSource === null ||
+        composition === null ||
+        composition.constituents[1].source.reportChecksum !==
+          input.intervalTrainingReportChecksum ||
+        composition.evaluation.source.reportChecksum !== input.candidateReportChecksum ||
+        composition.sourceManifestChecksum !== sourceAuditChecksum ||
+        trainingSource.reportChecksum !== hash(canonical(composition)) ||
+        trainingSource.physicalCorpusChecksum !==
+          hash(canonical({ kind: "derived-training-corpus", manifest: composition }))
+      )
+        fail("marginal_admission_training_composition_binding_mismatch");
+    } else if (trainingSource !== null || composition !== null) {
+      fail("marginal_admission_unrequested_training_composition");
+    }
     for (const receipt of qualifications) {
       if (
         receipt.forecastSeason !== input.forecastSeason ||
@@ -248,10 +279,20 @@ export function prepareFirstPartyRosMarginalAdmission(
         receipt.sources.previous.sourceManifestChecksum !== sourceAuditChecksum ||
         receipt.sources.candidate.source.reportChecksum !== input.candidateReportChecksum ||
         receipt.sources.previous.source.reportChecksum !== input.previousReportChecksum ||
-        receipt.sources.candidate.source.scoringProfileKey !== constants.scoringProfileKey ||
-        receipt.sources.intervalTraining !== null
+        receipt.sources.candidate.source.scoringProfileKey !== constants.scoringProfileKey
       )
         fail("marginal_admission_qualification_source_binding_mismatch");
+      equal(
+        receipt.sources.intervalTraining,
+        composition === null
+          ? null
+          : {
+              source: trainingSource,
+              sourceManifestChecksum: sourceAuditChecksum,
+              rowsChecksum: composition.trainingRowsChecksum,
+            },
+        "marginal_admission_qualification_training_binding_mismatch",
+      );
       equal(
         receipt.sourceScope.requiredCells.map((cell) => `${cell.position}:${cell.bucket}`).sort(),
         required,
@@ -264,19 +305,55 @@ export function prepareFirstPartyRosMarginalAdmission(
       "marginal_admission_changed_legacy_mean_policy",
     );
 
-    const physicalBlockers = development.legacyEvaluation.physicalBlockers.map((reason) => {
+    const physicalBlocker = (reason: string, training: boolean) => {
       const match =
         /^physical-convergence:(20[0-9]{2}|21[0-9]{2}|2200):(QB|RB|WR|TE|K|DST):(one-to-four|five-to-eight|nine-plus):(contextual|availability-aware-recency)$/u.exec(
           reason,
         );
       if (!match) fail("marginal_admission_unknown_physical_blocker");
-      return `calibration_${match[2]}_${match[3]}_marginal_physical_convergence_${match[1]}_${match[4]}`;
-    });
+      return `calibration_${match[2]}_${match[3]}_marginal_${training ? "training_" : ""}physical_convergence_${match[1]}_${match[4]}`;
+    };
+    const physicalBlockers = development.legacyEvaluation.physicalBlockers.map((reason) =>
+      physicalBlocker(reason, false),
+    );
+    const trainingAudit = development.legacyEvaluation.intervalTraining;
+    const trainingLegacyConvergenceBlockers =
+      trainingAudit === undefined
+        ? []
+        : (record(trainingAudit.fullReport.report).blockers as string[]).filter((reason) =>
+            reason.includes("convergence"),
+          );
+    // The legacy evaluator reports absent-position failures in a DST-only report. Keep those
+    // diagnostics inspectable, but do not turn unevaluated QB/RB/WR/TE/K cells into new failures.
+    // The complete original audit and its physical checks remain independently authoritative.
+    const ignoredTrainingBlockers = trainingLegacyConvergenceBlockers.filter((reason) =>
+      /^(?:cell|champion|calibration)_(QB|RB|WR|TE|K)_(one-to-four|five-to-eight|nine-plus)_/u.test(
+        reason,
+      ),
+    );
+    const trainingBlockers =
+      trainingAudit === undefined
+        ? []
+        : [
+            ...trainingAudit.physicalBlockers.map((reason) => physicalBlocker(reason, true)),
+            ...trainingLegacyConvergenceBlockers
+              .filter((reason) => !ignoredTrainingBlockers.includes(reason))
+              .map((reason) => {
+                const match =
+                  /^(?:cell|champion|calibration)_(QB|RB|WR|TE|K|DST)_(one-to-four|five-to-eight|nine-plus)_(.+)$/u.exec(
+                    reason,
+                  );
+                return match
+                  ? `calibration_${match[1]}_${match[2]}_marginal_training_${match[3]}`
+                  : `marginal_interval_training_${reason}`;
+              }),
+          ];
     const cellBlockers = [
       ...new Set([
         ...legacy.cellBlockers,
         ...historicalRosCalibrationBlockers(legacy.payload.policy.choices),
         ...physicalBlockers,
+        ...trainingBlockers,
         ...qualifications
           .filter((receipt) => receipt.state !== "qualified")
           .map(
@@ -315,6 +392,9 @@ export function prepareFirstPartyRosMarginalAdmission(
             candidateReportChecksum: input.candidateReportChecksum,
             previousReportChecksum: input.previousReportChecksum,
             qualificationProtocolChecksum: input.qualificationProtocolChecksum,
+            ...(input.intervalTrainingReportChecksum === undefined
+              ? {}
+              : { intervalTrainingReportChecksum: input.intervalTrainingReportChecksum }),
           },
           protocolText,
           sourceAudit,
@@ -323,6 +403,16 @@ export function prepareFirstPartyRosMarginalAdmission(
           developmentReportChecksum: development.qualification.developmentReportChecksum,
           legacyArtifactChecksum: legacy.artifactChecksum,
           portfolio,
+          ...(composition === null
+            ? {}
+            : {
+                intervalTrainingComposition: composition,
+                intervalTrainingDiagnostics: {
+                  physicalBlockers: trainingAudit!.physicalBlockers,
+                  rawLegacyConvergenceBlockers: trainingLegacyConvergenceBlockers,
+                  ignoredOutOfScopeLegacyConvergenceBlockers: ignoredTrainingBlockers,
+                },
+              }),
         },
       },
     };

@@ -45,6 +45,8 @@ import {
 } from "@laces-out/db";
 import {
   FIRST_PARTY_ROS_MODEL_VERSION,
+  firstPartyRosReleaseIdentity,
+  firstPartyRosReleaseArtifactChecksum,
   FIRST_PARTY_ROS_POLICY_VERSION,
   FIRST_PARTY_ROS_INTERVAL_CALIBRATION_VERSION,
   LEAGUE_SCORING_NORMALIZATION_VERSION,
@@ -64,6 +66,8 @@ import {
   RosProjectionStatusService,
   type RosProjectionStatusResponse,
 } from "./ros-projection-status.js";
+
+import { rosMarginalReleaseArtifactFullFixture } from "../../../packages/projections/src/ros-release-artifact.test-fixtures.js";
 
 function dockerIsAvailable(): boolean {
   try {
@@ -687,6 +691,102 @@ describe.skipIf(!dockerAvailable)(
       expect(current.publishedSets).toEqual([]);
     });
 
+    it("selects v8 independently and reports verified effective blockers with retained raw diagnostics", async () => {
+      const key = normalizedLeagueKey(FULL_PPR_LEAGUE_ROWS)!;
+      const replaced = "calibration_DST_one-to-four_coverage_shortfall_above_maximum";
+      const retained = "cell_DST_one-to-four_convergence_failed";
+      const artifact = rosMarginalReleaseArtifactFullFixture({
+        scoringProfileKey: key,
+        blockers: [replaced, retained],
+      });
+      const [admitted] = await db
+        .insert(firstPartyRosChampionArtifacts)
+        .values({
+          ...artifact,
+          policy: artifact.policy as unknown as Record<string, unknown>,
+          admittedAt: NOW,
+        })
+        .returning({ id: firstPartyRosChampionArtifacts.id });
+      const service = new RosProjectionStatusService(db, () => NOW, "marginal-v8");
+      const independentlyAdmitted = await service.getStatus({ season: SEASON, userId: callerId });
+      expect(
+        independentlyAdmitted.admittedArtifacts.artifacts.map((row) => row.artifactChecksum),
+      ).toEqual([artifact.artifactChecksum]);
+      expect(
+        independentlyAdmitted.leagueReadiness.find(
+          (row) => row.leagueSeasonId === fullPprLeague.leagueSeasonId,
+        )?.scoringValidation,
+      ).toBeUndefined();
+      await db.insert(firstPartyRosProfileValidations).values({
+        season: SEASON,
+        ...firstPartyRosReleaseIdentity("marginal-v8"),
+        scoringProfileKey: key,
+        scoringProfileDigest: createHash("sha256").update(key).digest("hex"),
+        state: "admitted",
+        artifactId: admitted!.id,
+        requestedAt: NOW,
+        blockers: [replaced, retained],
+      });
+      const marginal = await service.getStatus({ season: SEASON, userId: callerId });
+      const league = marginal.leagueReadiness.find(
+        (row) => row.leagueSeasonId === fullPprLeague.leagueSeasonId,
+      )!;
+      expect(league.scoringValidation).toMatchObject({
+        state: "admitted",
+        blockers: [retained],
+        rawBlockers: [replaced, retained],
+        supersededIntervalDiagnostics: [replaced],
+      });
+      expect(marginal.admittedArtifacts.artifacts.map((row) => row.policyVersion)).toEqual([
+        firstPartyRosReleaseIdentity("marginal-v8").policyVersion,
+      ]);
+      expect(marginal.scoringProfiles.unsupported.every((row) => row.evidenceReport === null)).toBe(
+        true,
+      );
+      expect(rosReleaseStatusSchema.safeParse(marginal).success).toBe(true);
+      const legacy = await new RosProjectionStatusService(db, () => NOW).getStatus({
+        season: SEASON,
+        userId: callerId,
+      });
+      expect(
+        legacy.leagueReadiness.find((row) => row.leagueSeasonId === fullPprLeague.leagueSeasonId)
+          ?.scoringValidation,
+      ).toMatchObject({ state: "validating", blockers: [] });
+      expect(
+        legacy.admittedArtifacts.artifacts.every(
+          (row) => row.policyVersion === FIRST_PARTY_ROS_POLICY_VERSION,
+        ),
+      ).toBe(true);
+      const forged = {
+        ...artifact,
+        releaseGate: {
+          ...artifact.releaseGate,
+          marginalIntervals: {
+            ...artifact.releaseGate.marginalIntervals,
+            qualifications: artifact.releaseGate.marginalIntervals.qualifications.slice(1),
+          },
+        },
+      };
+      await db.insert(firstPartyRosChampionArtifacts).values({
+        ...forged,
+        policy: forged.policy as unknown as Record<string, unknown>,
+        artifactChecksum: firstPartyRosReleaseArtifactChecksum(forged),
+        admittedAt: new Date(NOW.getTime() + 1_000),
+      });
+      const invalid = await service.getStatus({ season: SEASON, userId: callerId });
+      expect(invalid.admittedArtifacts.artifacts).toEqual([]);
+      expect(invalid.scoringProfiles.supported).toEqual([]);
+      const withheld = invalid.leagueReadiness.find(
+        (row) => row.leagueSeasonId === fullPprLeague.leagueSeasonId,
+      )!;
+      expect(withheld.state).toBe("withheld");
+      expect(withheld.scoringValidation).toMatchObject({
+        state: "failed",
+        blockers: ["admitted_artifact_invalid", replaced, retained],
+      });
+      expect(withheld.scoringValidation?.supersededIntervalDiagnostics).toBeUndefined();
+    }, 60_000);
+
     it("shows only the caller's referenced history preparation without leaking operator diagnostics", async () => {
       const key = normalizedLeagueKey(FULL_PPR_LEAGUE_ROWS)!;
       const requestIdentity = "a".repeat(64);
@@ -981,6 +1081,30 @@ describe.skipIf(!dockerAvailable)(
           await sql`update first_party_ros_champion_artifacts set release_gate='{"state":"released","blockers":[]}' where artifact_checksum='current-healthy-artifact'`;
           const nonReportState = await sql.unsafe<{ id: string; age_hours: string }[]>(healthSql);
           expect(nonReportState.find((row) => row.id === "current-healthy")?.age_hours).toBe("-1");
+          await sql`update first_party_ros_champion_artifacts set release_gate='{"state":"evidence-ready","blockers":[]}' where artifact_checksum='current-healthy-artifact'`;
+          await sql`select set_config('laces.ros_release_rail', 'marginal-v8', true)`;
+          const oldRailOnly = await sql.unsafe<{ id: string; age_hours: string }[]>(healthSql);
+          expect(oldRailOnly.find((row) => row.id === "current-healthy")?.age_hours).toBe("-1");
+          await sql`
+            update first_party_ros_champion_artifacts
+              set policy_version=${firstPartyRosReleaseIdentity("marginal-v8").policyVersion},
+                  calibration_version=${firstPartyRosReleaseIdentity("marginal-v8").calibrationVersion}
+              where artifact_checksum='current-healthy-artifact'
+          `;
+          const v8 = await sql.unsafe<{ id: string; age_hours: string }[]>(healthSql);
+          expect(v8.find((row) => row.id === "current-healthy")?.age_hours).toBe("1");
+          await sql`select set_config('laces.ros_release_rail', 'legacy-v7', true)`;
+          const v7 = await sql.unsafe<{ id: string; age_hours: string }[]>(healthSql);
+          expect(v7.find((row) => row.id === "current-healthy")?.age_hours).toBe("-1");
+          await sql`select set_config('laces.ros_release_rail', 'future-unknown-rail', true)`;
+          expect(await sql.unsafe(healthSql)).toEqual([
+            {
+              id: "configuration-error",
+              league_name: "ROS release rail configuration is invalid",
+              age_hours: "-1",
+              published_at: "unavailable; select legacy-v7 or marginal-v8",
+            },
+          ]);
         });
       } finally {
         await client.end();

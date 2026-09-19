@@ -21,6 +21,7 @@ import {
   createFirstPartyWeeklyComponentCoverageInspector,
   evaluateFirstPartyRosConvergence,
   evaluateFirstPartyRosChampionPolicy,
+  evaluateRetainedV12FirstPartyRosChampionPolicy,
   firstPartyProjectionComponentsForPosition,
   firstPartyRecentRoleContext,
   firstPartyTeamDefenseProjectionComponents,
@@ -2749,6 +2750,8 @@ export async function buildHistoricalRosBacktest(
 
 /** Shared locked statistical gates for new simulations and immutable corpus rescoring alike. */
 export function evaluateHistoricalRosForecasts(input: {
+  /** Only the explicit retained corpus replay uses the previous model's own v7 policy. */
+  readonly evaluationModel?: "retained-v12";
   readonly forecasts: readonly FirstPartyRosHeldOutForecast[];
   readonly options: HistoricalRosBacktestOptions;
   readonly qualifiedSeasons: readonly number[];
@@ -2783,7 +2786,11 @@ export function evaluateHistoricalRosForecasts(input: {
     minimumBatches: options.minimumCellBatches,
     minimumSeasons: options.minimumCellSeasons,
   });
-  const champion = evaluateFirstPartyRosChampionPolicy(heldOutSeasons, {
+  const champion = (
+    input.evaluationModel === "retained-v12"
+      ? evaluateRetainedV12FirstPartyRosChampionPolicy
+      : evaluateFirstPartyRosChampionPolicy
+  )(heldOutSeasons, {
     minimumHeldOutSeasons: 3,
     minimumBatches: options.minimumPortfolioBatches,
     minimumSamples: options.minimumPortfolioForecasts,

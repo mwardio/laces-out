@@ -17,8 +17,12 @@ import {
 import { rosHistoryPreparationSchema } from "@laces-out/contracts";
 import {
   FIRST_PARTY_ROS_MODEL_VERSION,
-  FIRST_PARTY_ROS_POLICY_VERSION,
-  FIRST_PARTY_ROS_INTERVAL_CALIBRATION_VERSION,
+  firstPartyRosReleaseIdentity,
+  deriveVerifiedMarginalRosArtifactBlockers,
+  type FirstPartyRosChampionPolicy,
+  type RosArtifactBlockerDiagnostics,
+  type FirstPartyRosReleaseIdentity,
+  type FirstPartyRosReleaseRail,
   LEAGUE_SCORING_NORMALIZATION_VERSION,
   normalizeLeagueScoringProfile,
   projectionScoringProfileKey,
@@ -129,6 +133,13 @@ function toIso(value: Date | null | undefined): string | null {
   return Number.isFinite(time) ? value.toISOString() : null;
 }
 
+function boundedBlockers(values: readonly string[]): string[] {
+  return values
+    .filter((value) => value.trim().length > 0)
+    .slice(0, 32)
+    .map((value) => value.slice(0, 400));
+}
+
 function stringList(value: unknown): readonly string[] {
   return Array.isArray(value)
     ? value.filter((entry): entry is string => typeof entry === "string")
@@ -204,9 +215,16 @@ export function rosLeagueConvergenceFailure(metrics: unknown): number {
 export class RosProjectionStatusService {
   readonly #database: Database;
   readonly #now: () => Date;
+  readonly #releaseIdentity: FirstPartyRosReleaseIdentity;
+  readonly #artifactDiagnosticsCache = new Map<string, RosArtifactBlockerDiagnostics | null>();
 
-  constructor(database: Database, now: () => Date = () => new Date()) {
+  constructor(
+    database: Database,
+    now: () => Date = () => new Date(),
+    releaseRail: FirstPartyRosReleaseRail = "legacy-v7",
+  ) {
     this.#database = database;
+    this.#releaseIdentity = firstPartyRosReleaseIdentity(releaseRail);
     this.#now = now;
   }
 
@@ -288,6 +306,7 @@ export class RosProjectionStatusService {
                 eq(projectionModelRuns.modelVersion, FIRST_PARTY_ROS_MODEL_VERSION),
                 inArray(evaluatedLeagueId, leagueSeasonIds),
                 sql`${projectionModelRuns.configuration}->>'mode' in ('release', 'release-evaluation')`,
+                this.#releaseRunIdentity(),
               ),
             )
             .orderBy(
@@ -319,6 +338,7 @@ export class RosProjectionStatusService {
         ? []
         : await this.#database
             .select({
+              artifactId: firstPartyRosProfileValidations.artifactId,
               scoringProfileKey: firstPartyRosProfileValidations.scoringProfileKey,
               scoringProfileDigest: firstPartyRosProfileValidations.scoringProfileDigest,
               state: firstPartyRosProfileValidations.state,
@@ -331,10 +351,13 @@ export class RosProjectionStatusService {
               and(
                 eq(firstPartyRosProfileValidations.season, season),
                 eq(firstPartyRosProfileValidations.modelVersion, FIRST_PARTY_ROS_MODEL_VERSION),
-                eq(firstPartyRosProfileValidations.policyVersion, FIRST_PARTY_ROS_POLICY_VERSION),
+                eq(
+                  firstPartyRosProfileValidations.policyVersion,
+                  this.#releaseIdentity.policyVersion,
+                ),
                 eq(
                   firstPartyRosProfileValidations.calibrationVersion,
-                  FIRST_PARTY_ROS_INTERVAL_CALIBRATION_VERSION,
+                  this.#releaseIdentity.calibrationVersion,
                 ),
                 inArray(firstPartyRosProfileValidations.scoringProfileKey, leagueKeys),
               ),
@@ -342,6 +365,22 @@ export class RosProjectionStatusService {
             .limit(MAXIMUM_LEAGUE_ROWS);
     const additionalProfiles = new Map<string, RosScoringProfileIdentity>();
     const validationByKey = new Map<string, (typeof validationRows)[number]>();
+    for (const key of this.#releaseIdentity.policyVersion ===
+    firstPartyRosReleaseIdentity("marginal-v8").policyVersion
+      ? leagueKeys
+      : []) {
+      try {
+        const definition = rosProfileDefinitionFromKey(key);
+        additionalProfiles.set(key, {
+          profileId: definition.profile.id,
+          label: definition.label,
+          scoringProfileKey: key,
+          digest: definition.digest,
+        });
+      } catch {
+        /* Invalid provider identities cannot select evidence. */
+      }
+    }
     for (const row of validationRows) {
       try {
         const definition = rosProfileDefinitionFromKey(row.scoringProfileKey);
@@ -404,6 +443,7 @@ export class RosProjectionStatusService {
     ];
     const artifactRows = await this.#database
       .selectDistinctOn([firstPartyRosChampionArtifacts.scoringProfileKey], {
+        id: firstPartyRosChampionArtifacts.id,
         season: firstPartyRosChampionArtifacts.season,
         scoringProfileKey: firstPartyRosChampionArtifacts.scoringProfileKey,
         modelVersion: firstPartyRosChampionArtifacts.modelVersion,
@@ -419,10 +459,10 @@ export class RosProjectionStatusService {
         and(
           eq(firstPartyRosChampionArtifacts.season, season),
           eq(firstPartyRosChampionArtifacts.modelVersion, FIRST_PARTY_ROS_MODEL_VERSION),
-          eq(firstPartyRosChampionArtifacts.policyVersion, FIRST_PARTY_ROS_POLICY_VERSION),
+          eq(firstPartyRosChampionArtifacts.policyVersion, this.#releaseIdentity.policyVersion),
           eq(
             firstPartyRosChampionArtifacts.calibrationVersion,
-            FIRST_PARTY_ROS_INTERVAL_CALIBRATION_VERSION,
+            this.#releaseIdentity.calibrationVersion,
           ),
           inArray(firstPartyRosChampionArtifacts.scoringProfileKey, artifactKeys),
         ),
@@ -433,11 +473,27 @@ export class RosProjectionStatusService {
         desc(firstPartyRosChampionArtifacts.createdAt),
       )
       .limit(MAXIMUM_ARTIFACT_ROWS);
+    const marginalRail =
+      this.#releaseIdentity.policyVersion ===
+      firstPartyRosReleaseIdentity("marginal-v8").policyVersion;
+    const artifactDiagnosticsById = await this.#artifactDiagnostics(artifactRows);
+    const verifiedArtifactRows = marginalRail
+      ? artifactRows.filter((row) => artifactDiagnosticsById.has(row.id))
+      : artifactRows;
+    const selectedArtifactByKey = new Map(artifactRows.map((row) => [row.scoringProfileKey, row]));
     const admittedArtifacts = deriveAdmittedArtifacts(
-      artifactRows.map((row) => ({ ...row, sourceChecksumCount: row.sourceChecksums.length })),
+      verifiedArtifactRows.map((row) => ({
+        ...row,
+        sourceChecksumCount: row.sourceChecksums.length,
+      })),
       additionalProfiles,
     );
-    const scoringProfiles = deriveScoringProfileCoverage(admittedArtifacts, ROS_EVIDENCE_REPORTS);
+    const scoringProfiles = deriveScoringProfileCoverage(
+      admittedArtifacts,
+      this.#releaseIdentity.policyVersion === firstPartyRosReleaseIdentity().policyVersion
+        ? ROS_EVIDENCE_REPORTS
+        : {},
+    );
     const admittedScoringProfileKeys = admittedArtifacts.artifacts.map(
       (artifact) => artifact.scoringProfile.scoringProfileKey,
     );
@@ -457,14 +513,38 @@ export class RosProjectionStatusService {
           ? bootstrapWaitIdentity(validation.report)
           : null;
       const historyPreparation = bootstrapId ? bootstrapById.get(bootstrapId) : undefined;
+      const selectedArtifact = key ? selectedArtifactByKey.get(key) : undefined;
+      const artifactDiagnostics = selectedArtifact
+        ? artifactDiagnosticsById.get(selectedArtifact.id)
+        : undefined;
+      const invalidAdmittedArtifact =
+        marginalRail &&
+        validation?.state === "admitted" &&
+        selectedArtifact !== undefined &&
+        artifactDiagnostics === undefined;
       return validation
         ? {
             ...league,
             scoringValidation: {
-              state: validation.state,
+              state: invalidAdmittedArtifact
+                ? "failed"
+                : artifactDiagnostics
+                  ? "admitted"
+                  : validation.state,
               requestedAt: validation.requestedAt.toISOString(),
               ...(historyPreparation ? { historyPreparation } : {}),
-              blockers: validation.blockers
+              ...(artifactDiagnostics
+                ? {
+                    rawBlockers: boundedBlockers(artifactDiagnostics.rawBlockers),
+                    supersededIntervalDiagnostics: boundedBlockers(
+                      artifactDiagnostics.supersededIntervalDiagnostics,
+                    ),
+                  }
+                : {}),
+              blockers: (invalidAdmittedArtifact
+                ? ["admitted_artifact_invalid", ...validation.blockers]
+                : (artifactDiagnostics?.effectiveBlockers ?? validation.blockers)
+              )
                 .filter((value) => typeof value === "string" && value.trim().length > 0)
                 .slice(0, 32)
                 .map((value) => value.slice(0, 400)),
@@ -557,6 +637,61 @@ export class RosProjectionStatusService {
     };
   }
 
+  async #artifactDiagnostics(
+    artifacts: readonly { readonly id: string; readonly artifactChecksum: string }[],
+  ): Promise<ReadonlyMap<string, RosArtifactBlockerDiagnostics>> {
+    if (
+      this.#releaseIdentity.policyVersion !==
+      firstPartyRosReleaseIdentity("marginal-v8").policyVersion
+    )
+      return new Map();
+    const missing = artifacts.filter(
+      (row) => !this.#artifactDiagnosticsCache.has(`${row.id}:${row.artifactChecksum}`),
+    );
+    if (missing.length > 0) {
+      // Full receipts are fetched only for visible catalog/caller profiles, once per immutable
+      // artifact. Keep only small derived diagnostics in the bounded cache, never raw proofs.
+      const rows = await this.#database
+        .select()
+        .from(firstPartyRosChampionArtifacts)
+        .where(
+          inArray(
+            firstPartyRosChampionArtifacts.id,
+            missing.map((row) => row.id),
+          ),
+        )
+        .limit(MAXIMUM_ARTIFACT_ROWS);
+      for (const row of rows) {
+        const diagnostics = deriveVerifiedMarginalRosArtifactBlockers({
+          ...row,
+          policy: row.policy as unknown as FirstPartyRosChampionPolicy,
+        });
+        const key = `${row.id}:${row.artifactChecksum}`;
+        this.#artifactDiagnosticsCache.set(key, diagnostics);
+        while (this.#artifactDiagnosticsCache.size > MAXIMUM_ARTIFACT_ROWS) {
+          const oldest = this.#artifactDiagnosticsCache.keys().next().value;
+          if (oldest !== undefined) this.#artifactDiagnosticsCache.delete(oldest);
+        }
+      }
+    }
+    return new Map(
+      artifacts.flatMap((row) => {
+        const diagnostics = this.#artifactDiagnosticsCache.get(`${row.id}:${row.artifactChecksum}`);
+        return diagnostics ? [[row.id, diagnostics] as const] : [];
+      }),
+    );
+  }
+
+  #releaseRunIdentity() {
+    // Pre-versioned run metadata belongs only to the legacy rail. A v8 view requires explicit
+    // matching identities and cannot display a newer legacy admission/run as marginal evidence.
+    const legacy = firstPartyRosReleaseIdentity();
+    return and(
+      sql`coalesce(${projectionModelRuns.configuration}->>'policyVersion', ${legacy.policyVersion}) = ${this.#releaseIdentity.policyVersion}`,
+      sql`coalesce(${projectionModelRuns.configuration}->>'calibrationVersion', ${legacy.calibrationVersion}) = ${this.#releaseIdentity.calibrationVersion}`,
+    );
+  }
+
   async #runQuery(
     sourceId: string,
     season: number,
@@ -586,6 +721,7 @@ export class RosProjectionStatusService {
           eq(projectionModelRuns.season, season),
           eq(projectionModelRuns.horizon, "rest-of-season"),
           sql`${projectionModelRuns.configuration}->>'mode' = ${mode}`,
+          mode === "release" ? this.#releaseRunIdentity() : undefined,
         ),
       )
       .orderBy(desc(projectionModelRuns.createdAt), desc(projectionModelRuns.sourceSyncRunId))

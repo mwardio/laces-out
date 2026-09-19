@@ -21,10 +21,15 @@ import {
 } from "./first-party-ros-backtest.js";
 import {
   snapshotRosHistoricalCorpus,
+  snapshotRetainedV12RosHistoricalCorpus,
+  retainedV12RosHistoricalCorpusIdentity,
   type RosHistoricalCorpus,
   type RosHistoricalCorpusForecast,
 } from "./ros-historical-corpus.js";
-import { scoreCachedRosHistoricalOutcome } from "./ros-historical-outcome-replay.js";
+import {
+  scoreCachedRosHistoricalOutcome,
+  scoreRetainedV12CachedRosHistoricalOutcome,
+} from "./ros-historical-outcome-replay.js";
 import type { RosOutcomeCache } from "./ros-outcome-cache.js";
 
 function stratum(row: RosHistoricalCorpusForecast): string {
@@ -37,16 +42,42 @@ function stratum(row: RosHistoricalCorpusForecast): string {
  * policy selection/calibration/admission evidence gates as the original historical builder.
  * This path has no source fetch, weekly feature assembly, model fitting or scenario generation.
  */
-export async function replayRosHistoricalCorpus(input: {
+interface RosHistoricalCorpusReplayInput {
   readonly corpus: RosHistoricalCorpus;
   readonly cache: RosOutcomeCache;
   readonly scoringProfile: ProjectionScoringProfile;
   readonly onProgress?: (event: HistoricalRosBacktestProgress) => void;
   readonly signal?: AbortSignal;
-}): Promise<HistoricalRosBacktestResult> {
+}
+
+export async function replayRosHistoricalCorpus(
+  input: RosHistoricalCorpusReplayInput,
+): Promise<HistoricalRosBacktestResult> {
+  input.signal?.throwIfAborted();
+  return replayCorpus({ ...input, corpus: snapshotRosHistoricalCorpus(input.corpus) }, false);
+}
+
+/** Explicit pinned previous-model benchmark. Missing paths never trigger simulation or writes. */
+export async function replayRetainedV12RosHistoricalCorpus(
+  input: RosHistoricalCorpusReplayInput & {
+    readonly expectedIdentity: string;
+  },
+): Promise<HistoricalRosBacktestResult> {
+  input.signal?.throwIfAborted();
+  const corpus = snapshotRetainedV12RosHistoricalCorpus(input.corpus);
+  if (retainedV12RosHistoricalCorpusIdentity(corpus) !== input.expectedIdentity)
+    throw new TypeError("Retained v12 historical corpus identity does not match pinned dependency");
+  return replayCorpus({ ...input, corpus }, true);
+}
+
+async function replayCorpus(
+  input: RosHistoricalCorpusReplayInput,
+  retainedV12: boolean,
+): Promise<HistoricalRosBacktestResult> {
   const { cache, signal } = input;
   signal?.throwIfAborted();
-  const corpus = snapshotRosHistoricalCorpus(input.corpus);
+  // Both public entry points already own a bounded snapshot before the first cache await.
+  const corpus = input.corpus;
   const definition = rosProfileDefinitionFromKey(projectionScoringProfileKey(input.scoringProfile));
   const scoringProfile = definition.profile;
   const score = (
@@ -54,7 +85,7 @@ export async function replayRosHistoricalCorpus(input: {
     strategy: "contextual" | "availability-aware-recency",
     scenarioCount: number,
   ) =>
-    scoreCachedRosHistoricalOutcome({
+    (retainedV12 ? scoreRetainedV12CachedRosHistoricalOutcome : scoreCachedRosHistoricalOutcome)({
       cache,
       key: strategy === "contextual" ? row.contextualKey : row.recencyKey,
       scoringProfile,
@@ -187,6 +218,7 @@ export async function replayRosHistoricalCorpus(input: {
   });
   signal?.throwIfAborted();
   return evaluateHistoricalRosForecasts({
+    ...(retainedV12 ? { evaluationModel: "retained-v12" as const } : {}),
     forecasts,
     options: corpus.options,
     qualifiedSeasons: corpus.seasons,

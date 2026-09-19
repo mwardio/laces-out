@@ -5,13 +5,16 @@ import {
   FIRST_PARTY_ROS_DEFAULT_SCENARIOS,
   FIRST_PARTY_ROS_MINIMUM_SCENARIOS,
   FIRST_PARTY_ROS_MODEL_VERSION,
+  FIRST_PARTY_ROS_RETAINED_V12_MODEL_VERSION,
   FIRST_PARTY_ROS_OUTCOME_SCHEMA_VERSION,
   firstPartyRosSeedHash,
   projectionScoringProfileKey,
   rosProfileDefinitionFromKey,
   scoreFirstPartyRosOutcomes,
+  scoreRetainedV12FirstPartyRosOutcomes,
   simulateFirstPartyRosOutcomes,
   type FirstPartyRosOutcomeEnsemble,
+  type RetainedV12FirstPartyRosOutcomeEnsemble,
   type FirstPartyRosOutcomeInput,
   type FirstPartyRosOutcomeScore,
   type FirstPartyRosProjectionInput,
@@ -144,7 +147,19 @@ function restoreEnsemble(
   stored: RosOutcomeCacheEnsemble,
   football: FirstPartyRosOutcomeInput | RosHistoricalCachedOutcomeExpectation,
   identity: string,
-): FirstPartyRosOutcomeEnsemble {
+): FirstPartyRosOutcomeEnsemble;
+function restoreEnsemble(
+  stored: RosOutcomeCacheEnsemble,
+  football: RosHistoricalCachedOutcomeExpectation,
+  identity: string,
+  retainedV12: true,
+): RetainedV12FirstPartyRosOutcomeEnsemble;
+function restoreEnsemble(
+  stored: RosOutcomeCacheEnsemble,
+  football: FirstPartyRosOutcomeInput | RosHistoricalCachedOutcomeExpectation,
+  identity: string,
+  retainedV12 = false,
+): FirstPartyRosOutcomeEnsemble | RetainedV12FirstPartyRosOutcomeEnsemble {
   const invalid = () => new RosHistoricalOutcomeReplayError("outcome_evidence_corrupt", identity);
   const metadata = stored.metadata;
   const core = metadata.core;
@@ -163,6 +178,9 @@ function restoreEnsemble(
     ? football.weeks.filter((week) => week.scheduled).length
     : football.scheduledGames;
   const provenance = core.provenance;
+  const modelVersion = retainedV12
+    ? FIRST_PARTY_ROS_RETAINED_V12_MODEL_VERSION
+    : FIRST_PARTY_ROS_MODEL_VERSION;
   if (
     typeof provenance.asOfAt !== "string" ||
     !Number.isFinite(Date.parse(provenance.asOfAt)) ||
@@ -184,22 +202,26 @@ function restoreEnsemble(
   )
     throw invalid();
   const expectedProvenance = {
-    modelVersion: FIRST_PARTY_ROS_MODEL_VERSION,
+    modelVersion,
     strategy: football.strategy,
     weeklyModelVersion: football.weeklyModelVersion ?? provenance.weeklyModelVersion,
     inputChecksum: football.inputChecksum,
-    seedHash: firstPartyRosSeedHash({
-      position: football.position,
-      seed: metadata.seed,
-      inputChecksum: football.inputChecksum,
-      playerId: football.playerId,
-      strategy: football.strategy,
-      season,
-      asOfWeek: football.asOfWeek,
-      asOfAt: fullInput ? football.asOfAt : provenance.asOfAt,
-      windowStartWeek: football.windowStartWeek,
-      windowEndWeek: football.windowEndWeek,
-    }),
+    seedHash: retainedV12
+      ? hash(
+          `laces-ros-distribution-v11|${metadata.seed}|${football.inputChecksum}|${football.playerId}|${football.strategy}|${season}|${football.asOfWeek}|${provenance.asOfAt}|${football.windowStartWeek}|${football.windowEndWeek}`,
+        )
+      : firstPartyRosSeedHash({
+          position: football.position,
+          seed: metadata.seed,
+          inputChecksum: football.inputChecksum,
+          playerId: football.playerId,
+          strategy: football.strategy,
+          season,
+          asOfWeek: football.asOfWeek,
+          asOfAt: fullInput ? football.asOfAt : provenance.asOfAt,
+          windowStartWeek: football.windowStartWeek,
+          windowEndWeek: football.windowEndWeek,
+        }),
     randomGenerator: "xoshiro128**-sha256-128",
     scenarioCount: FIRST_PARTY_ROS_CONVERGENCE_REFERENCE_SCENARIOS,
     season,
@@ -252,12 +274,12 @@ function restoreEnsemble(
     throw invalid();
   return {
     schemaVersion: FIRST_PARTY_ROS_OUTCOME_SCHEMA_VERSION,
-    modelVersion: FIRST_PARTY_ROS_MODEL_VERSION,
+    modelVersion,
     scenarioCount: stored.scenarioCount,
     columns: stored.columns,
     games: stored.games,
     metadata: core as unknown as FirstPartyRosOutcomeEnsemble["metadata"],
-  };
+  } as FirstPartyRosOutcomeEnsemble | RetainedV12FirstPartyRosOutcomeEnsemble;
 }
 
 /** Validate each manifest reference against its complete immutable physical outcome identity. */
@@ -271,15 +293,43 @@ export function restoreCachedRosHistoricalOutcome(
   return restoreEnsemble(stored, expected, key.identity);
 }
 
+/** v12 uses its original seed, including the pre-v13 DST path; no metadata is translated. */
+export function restoreRetainedV12CachedRosHistoricalOutcome(
+  stored: RosOutcomeCacheEnsemble,
+  key: RosOutcomeCacheKey,
+  expected: RosHistoricalCachedOutcomeExpectation,
+): RetainedV12FirstPartyRosOutcomeEnsemble {
+  if (key.modelVersion !== FIRST_PARTY_ROS_RETAINED_V12_MODEL_VERSION)
+    throw new RosHistoricalOutcomeReplayError("outcome_evidence_corrupt", key.identity);
+  return restoreEnsemble(stored, expected, key.identity, true);
+}
+
 /** Reprice a corpus reference without reconstructing historical weekly features or calibrations. */
-export async function scoreCachedRosHistoricalOutcome(options: {
+interface ScoreCachedRosHistoricalOutcomeOptions {
   readonly cache: RosOutcomeCache;
   readonly key: RosOutcomeCacheKey;
   readonly scoringProfile: ProjectionScoringProfile;
   readonly scenarioCount?: number;
   readonly expected: RosHistoricalCachedOutcomeExpectation;
   readonly signal?: AbortSignal;
-}): Promise<FirstPartyRosOutcomeScore> {
+}
+
+export function scoreCachedRosHistoricalOutcome(
+  options: ScoreCachedRosHistoricalOutcomeOptions,
+): Promise<FirstPartyRosOutcomeScore> {
+  return scoreCachedOutcome(options, false);
+}
+
+export function scoreRetainedV12CachedRosHistoricalOutcome(
+  options: ScoreCachedRosHistoricalOutcomeOptions,
+): Promise<FirstPartyRosOutcomeScore> {
+  return scoreCachedOutcome(options, true);
+}
+
+async function scoreCachedOutcome(
+  options: ScoreCachedRosHistoricalOutcomeOptions,
+  retainedV12: boolean,
+): Promise<FirstPartyRosOutcomeScore> {
   const { cache, signal } = options;
   signal?.throwIfAborted();
   const key = { ...options.key };
@@ -288,7 +338,10 @@ export async function scoreCachedRosHistoricalOutcome(options: {
     projectionScoringProfileKey(options.scoringProfile),
   ).profile;
   const scenarioCount = options.scenarioCount ?? FIRST_PARTY_ROS_DEFAULT_SCENARIOS;
-  if (key.modelVersion !== FIRST_PARTY_ROS_MODEL_VERSION)
+  if (
+    key.modelVersion !==
+    (retainedV12 ? FIRST_PARTY_ROS_RETAINED_V12_MODEL_VERSION : FIRST_PARTY_ROS_MODEL_VERSION)
+  )
     throw new RosHistoricalOutcomeReplayError("outcome_evidence_corrupt", key.identity);
   const read = await cache.read(key, {
     ...(signal ? { signal } : {}),
@@ -299,6 +352,12 @@ export async function scoreCachedRosHistoricalOutcome(options: {
     throw new RosHistoricalOutcomeReplayError("outcome_evidence_not_ready", key.identity);
   if (read.state === "corrupt")
     throw new RosHistoricalOutcomeReplayError("outcome_evidence_corrupt", key.identity);
+  if (retainedV12)
+    return scoreRetainedV12FirstPartyRosOutcomes(
+      restoreRetainedV12CachedRosHistoricalOutcome(read.ensemble, key, expected),
+      scoringProfile,
+      scenarioCount,
+    );
   return scoreFirstPartyRosOutcomes(
     restoreCachedRosHistoricalOutcome(read.ensemble, key, expected),
     scoringProfile,

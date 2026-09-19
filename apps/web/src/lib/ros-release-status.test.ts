@@ -93,6 +93,23 @@ const mixedStatus: RosReleaseStatus = {
 };
 
 describe("league-specific ROS readiness explanations", () => {
+  it("preserves superseded interval diagnostics separately from effective release blockers", () => {
+    const raw = "calibration_DST_one-to-four_coverage_shortfall_above_maximum";
+    const active = "cell_DST_one-to-four_convergence_failed";
+    const scoringValidation = {
+      state: "admitted" as const,
+      requestedAt: "2026-09-17T12:00:00Z",
+      blockers: [active],
+      rawBlockers: [raw, active],
+      supersededIntervalDiagnostics: [raw],
+    };
+    const parsed = parseRosReleaseStatus({
+      ...admittedStatus,
+      leagueReadiness: [{ ...admittedStatus.leagueReadiness[0]!, scoringValidation }],
+    });
+    expect(parsed?.leagueReadiness[0]?.scoringValidation).toEqual(scoringValidation);
+  });
+
   it("shows a never-published league while its exact scoring validation is running", () => {
     const league = {
       ...admittedStatus.leagueReadiness[0]!,

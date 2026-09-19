@@ -8,6 +8,8 @@ import type {
 } from "@laces-out/db";
 import {
   FIRST_PARTY_ROS_INTERVAL_CALIBRATION_VERSION,
+  firstPartyRosMarginalArtifactIntervalsAreConsistent,
+  deriveRosArtifactBlockers,
   FIRST_PARTY_ROS_MAXIMUM_SCENARIOS,
   FIRST_PARTY_ROS_MINIMUM_SCENARIOS,
   FIRST_PARTY_ROS_MODEL_VERSION,
@@ -15,14 +17,12 @@ import {
   FIRST_PARTY_ROS_MARGINAL_POLICY_VERSION,
   FIRST_PARTY_PROJECTION_MODEL_VERSION,
   MARGINAL_INTERVAL_CALIBRATION_VERSION,
-  ROS_MARGINAL_INTERVAL_QUALIFICATION_VERSION,
+  type ROS_MARGINAL_INTERVAL_QUALIFICATION_VERSION,
   applyFirstPartyRosIntervalCalibration,
   evaluateFirstPartyRosReleaseGate,
   evaluateFirstPartyRosMarginalReleaseGate,
   prepareFirstPartyRosMarginalRelease,
   buildRosMarginalIntervalStorage,
-  buildRosMarginalIntervalStoredCells,
-  rosMarginalIntervalQualificationIsStructurallyValid,
   firstPartyRosChoiceMeanEvidenceIsValid,
   projectionScoringProfileKeyForPosition,
   projectionScoringRulesFromProfileKey,
@@ -155,76 +155,7 @@ function marginalIntervals(
 }
 
 function marginalArtifactIsConsistent(artifact: LoadedFirstPartyRosChampionArtifact): boolean {
-  const value = artifact.releaseGate.marginalIntervals;
-  if (
-    !isRecord(value) ||
-    !sameCanonical(Object.keys(value).sort(), [
-      "cells",
-      "qualificationMethod",
-      "qualifications",
-      "schemaVersion",
-    ]) ||
-    value.schemaVersion !== 1 ||
-    value.qualificationMethod !== ROS_MARGINAL_INTERVAL_QUALIFICATION_VERSION ||
-    !Array.isArray(value.qualifications) ||
-    value.qualifications.length !== 18 ||
-    !Array.isArray(value.cells) ||
-    value.cells.length > 18 ||
-    artifact.policy.choices.length !== 18 ||
-    artifact.evidenceThroughSeason >= artifact.season
-  )
-    return false;
-  const blockers = artifact.releaseGate.blockers;
-  if (
-    blockers !== undefined &&
-    (!Array.isArray(blockers) ||
-      blockers.length > 512 ||
-      blockers.some(
-        (blocker) => typeof blocker !== "string" || !blocker.trim() || blocker.length > 1024,
-      ))
-  )
-    return false;
-  const qualifications: RosMarginalIntervalQualification[] = [];
-  const required = HISTORICAL_ROS_SUPPORTED_POSITIONS.flatMap((position) =>
-    FIRST_PARTY_ROS_BUCKETS.map((bucket) => `${position}:${bucket}`),
-  ).sort();
-  for (const raw of value.qualifications) {
-    if (!rosMarginalIntervalQualificationIsStructurallyValid(raw)) return false;
-    const choice = artifact.policy.choices.find(
-      (candidate) =>
-        candidate.position === raw.cell.position && candidate.bucket === raw.cell.bucket,
-    );
-    if (
-      !sameCanonical(
-        raw.sourceScope.requiredCells.map((cell) => `${cell.position}:${cell.bucket}`).sort(),
-        required,
-      ) ||
-      raw.forecastSeason !== artifact.season ||
-      raw.comparisonSeason !== artifact.evidenceThroughSeason ||
-      raw.sources.candidate.source.modelVersion !== artifact.modelVersion ||
-      raw.sources.candidate.source.policyVersion !== FIRST_PARTY_ROS_POLICY_VERSION ||
-      raw.sources.candidate.source.scoringProfileKey !== artifact.scoringProfileKey ||
-      !sameCanonical(raw.liveArtifact.context.evidenceIdentity, artifact.policy.evidenceIdentity) ||
-      !sameCanonical(raw.meanChoice, choice) ||
-      Object.entries(raw.meanSelectorOptions).some(
-        ([key, expected]) => artifact.policy[key as keyof FirstPartyRosChampionPolicy] !== expected,
-      ) ||
-      artifact.policy.globalBatches !== raw.meanChoice.globalBatches ||
-      artifact.policy.globalSeasons !== raw.meanChoice.globalSeasons ||
-      artifact.policy.globalSamples !== raw.meanChoice.globalSamples
-    )
-      return false;
-    qualifications.push(raw);
-  }
-  // The builder checks duplicates, common source/scope/season identities, complete membership,
-  // passing marginal screens and BOTH matched WIS comparators for the selected compact cells.
-  const expected = buildRosMarginalIntervalStoredCells({
-    qualifications,
-    releasedCells: qualifications
-      .filter((receipt) => receipt.state === "qualified")
-      .map((receipt) => receipt.cell),
-  });
-  return sameCanonical(value.cells, expected);
+  return firstPartyRosMarginalArtifactIntervalsAreConsistent(artifact);
 }
 
 /**
@@ -541,61 +472,9 @@ export type FirstPartyRosPublicationReason =
   | "ros_admitted_cell_blocker_withheld"
   | "ros_candidate_universe_incomplete";
 
-const ARTIFACT_CELL_BLOCKER_PATTERN =
-  /^(?:cell|champion|calibration)_(QB|RB|WR|TE|K|DST)_(one-to-four|five-to-eight|nine-plus)_/u;
-
-const REPLACED_LEGACY_INTERVAL_BLOCKERS = new Set([
-  "artifact_unavailable",
-  "walk_forward_unavailable",
-  "walk_forward_seasons_below_minimum",
-  "walk_forward_blocks_below_minimum",
-  "walk_forward_samples_below_minimum",
-  "coverage_shortfall_above_maximum",
-]);
-
-/**
- * Position:bucket cells the admitted evidence itself marked blocked. Most per-cell blocker
- * families are re-derived from the artifact's policy evidence by the live release gate, but not
- * all (the kicker count-family audit has no policy counterpart), so publication must also honor
- * the blockers recorded in the admitted report verbatim — otherwise "admitted with cell blockers"
- * would release exactly the cells admission promised to withhold.
- */
+/** Caller has already validated the complete immutable artifact. */
 function admittedCellBlockers(artifact: LoadedFirstPartyRosChampionArtifact): ReadonlySet<string> {
-  const cells = new Set<string>();
-  const marginal = artifact.policyVersion === FIRST_PARTY_ROS_MARGINAL_POLICY_VERSION;
-  const qualified = new Set(
-    marginal
-      ? marginalIntervals(artifact)
-          .qualifications.filter((receipt) => receipt.state === "qualified")
-          .map((receipt) => `${receipt.cell.position}:${receipt.cell.bucket}`)
-      : [],
-  );
-  const blockers = (artifact.releaseGate as { readonly blockers?: unknown }).blockers;
-  if (!Array.isArray(blockers)) return cells;
-  for (const blocker of blockers) {
-    if (typeof blocker !== "string") continue;
-    const match = ARTIFACT_CELL_BLOCKER_PATTERN.exec(blocker);
-    if (match) {
-      const cell = `${match[1]}:${match[2]}`;
-      // Exact complete suffix only: mixed, unknown, mean/support/availability/convergence and
-      // count-family reasons all remain blocking. A failed marginal cell gets no exemption.
-      if (
-        marginal &&
-        qualified.has(cell) &&
-        blocker.startsWith("calibration_") &&
-        REPLACED_LEGACY_INTERVAL_BLOCKERS.has(blocker.slice(match[0].length))
-      )
-        continue;
-      cells.add(cell);
-    } else if (marginal) {
-      // Admission normally rejects global blockers. Never weaken one into a per-cell exception
-      // if a corrupt or future artifact nevertheless carries it to this boundary.
-      for (const position of HISTORICAL_ROS_SUPPORTED_POSITIONS) {
-        for (const bucket of FIRST_PARTY_ROS_BUCKETS) cells.add(`${position}:${bucket}`);
-      }
-    }
-  }
-  return cells;
+  return deriveRosArtifactBlockers(artifact).blockedCells;
 }
 
 export interface FirstPartyRosBucketDecision {

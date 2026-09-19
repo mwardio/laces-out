@@ -22,7 +22,7 @@ import {
 import { validateMarginalRosTrainingCohort } from "./marginal-ros-training.js";
 import {
   applyFirstPartyRosIntervalCalibration,
-  evaluateFirstPartyRosChampionPolicy,
+  evaluateRetainedV12FirstPartyRosChampionPolicy,
   type FirstPartyRosChampionOptions,
   type FirstPartyRosHeldOutForecast,
   type FirstPartyRosHeldOutSeason,
@@ -384,7 +384,7 @@ function prepare(input: RosMarginalQualificationSetInput) {
     championOptions: MEAN_OPTIONS,
     ...(training === null ? {} : { intervalTrainingSeasons: training.ordered }),
   });
-  const oldPolicy = evaluateFirstPartyRosChampionPolicy(previous.ordered, MEAN_OPTIONS);
+  const oldPolicy = evaluateRetainedV12FirstPartyRosChampionPolicy(previous.ordered, MEAN_OPTIONS);
   return {
     input,
     candidate,

@@ -36,15 +36,20 @@ import {
 } from "../src/ros-historical-outcome-replay.js";
 import {
   createRosHistoricalCorpusStore,
+  createRetainedV12RosHistoricalCorpusReader,
   ROS_HISTORICAL_CORPUS_SCHEMA_VERSION,
 } from "../src/ros-historical-corpus.js";
-import { replayRosHistoricalCorpus } from "../src/ros-historical-corpus-replay.js";
+import {
+  replayRosHistoricalCorpus,
+  replayRetainedV12RosHistoricalCorpus,
+} from "../src/ros-historical-corpus-replay.js";
 import {
   ROS_HISTORICAL_CORPUS_BUILD_PROTOCOL,
   ROS_HISTORICAL_CORPUS_RELEASE_THRESHOLDS,
   hasCurrentRosHistoricalCoverageThresholds,
   hasRosHistoricalCorpusReleaseThresholds,
   isCompatibleRosHistoricalCorpusBuildProtocol,
+  isRetainedV12RosHistoricalCorpusBuildProtocol,
 } from "../src/ros-historical-corpus-protocol.js";
 import {
   buildFirstPartyPlayerHistory,
@@ -143,9 +148,17 @@ async function main(): Promise<void> {
   const outcomeDirectory = process.argv
     .find((value) => value.startsWith("--outcome-cache="))
     ?.slice("--outcome-cache=".length);
-  const replayCorpus = process.argv
+  const currentReplayCorpus = process.argv
     .find((value) => value.startsWith("--replay-corpus="))
     ?.slice("--replay-corpus=".length);
+  const retainedReplayCorpus = process.argv
+    .find((value) => value.startsWith("--replay-retained-v12-corpus="))
+    ?.slice("--replay-retained-v12-corpus=".length);
+  if (currentReplayCorpus !== undefined && retainedReplayCorpus !== undefined)
+    throw new Error("Current and retained-v12 replay modes are mutually exclusive");
+  const replayCorpus = retainedReplayCorpus ?? currentReplayCorpus;
+  if (replayCorpus !== undefined && !/^[a-f0-9]{64}$/u.test(replayCorpus))
+    throw new Error("ROS replay requires a pinned corpus SHA-256 identity");
   if (replayCorpus && !outcomeDirectory)
     throw new Error("--replay-corpus requires --outcome-cache");
   const outcomeCache = outcomeDirectory
@@ -207,12 +220,20 @@ async function main(): Promise<void> {
   }
 
   if (replayCorpus) {
-    const loaded = await corpusStore!.read(replayCorpus);
+    const reader =
+      retainedReplayCorpus !== undefined
+        ? createRetainedV12RosHistoricalCorpusReader({
+            directory: path.join(outcomeDirectory!, "corpora"),
+          })
+        : corpusStore!;
+    const loaded = await reader.read(replayCorpus);
     if (loaded.state !== "hit") throw new Error(`ROS historical corpus is ${loaded.state}`);
     const corpus = loaded.corpus;
     const expectedPositions = positions ?? HISTORICAL_ROS_SUPPORTED_POSITIONS;
     if (
-      !isCompatibleRosHistoricalCorpusBuildProtocol(corpus.buildProtocol) ||
+      !(retainedReplayCorpus !== undefined
+        ? isRetainedV12RosHistoricalCorpusBuildProtocol(corpus.buildProtocol)
+        : isCompatibleRosHistoricalCorpusBuildProtocol(corpus.buildProtocol)) ||
       !hasRosHistoricalCorpusReleaseThresholds(corpus.options) ||
       !hasCurrentRosHistoricalCoverageThresholds(corpus.coverage.thresholds) ||
       JSON.stringify([...corpus.options.heldOutSeasons].sort()) !==
@@ -234,11 +255,18 @@ async function main(): Promise<void> {
     process.stderr.write(
       `Rescoring immutable football corpus ${replayCorpus} (no source fetch, fitting or simulation)...\n`,
     );
-    const result = await replayRosHistoricalCorpus({
+    const replayInput = {
       corpus,
       cache: outcomeCache!,
       scoringProfile: scoringProfile.profile,
-    });
+    };
+    const result =
+      retainedReplayCorpus !== undefined
+        ? await replayRetainedV12RosHistoricalCorpus({
+            ...replayInput,
+            expectedIdentity: replayCorpus,
+          })
+        : await replayRosHistoricalCorpus(replayInput);
     emitReport({
       result,
       positions,

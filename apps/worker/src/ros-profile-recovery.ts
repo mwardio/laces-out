@@ -3,9 +3,8 @@ import { randomUUID } from "node:crypto";
 import { firstPartyRosProfileValidations, type Database } from "@laces-out/db";
 import type { RosProfileValidationJob } from "@laces-out/jobs";
 import {
-  FIRST_PARTY_ROS_MODEL_VERSION,
-  FIRST_PARTY_ROS_POLICY_VERSION,
-  FIRST_PARTY_ROS_INTERVAL_CALIBRATION_VERSION,
+  firstPartyRosReleaseIdentity,
+  type FirstPartyRosReleaseRail,
 } from "@laces-out/projections";
 import { and, eq, inArray, sql } from "drizzle-orm";
 
@@ -24,6 +23,7 @@ export class RosProfileRecoveryService {
   constructor(
     private readonly input: {
       readonly database: Database;
+      readonly releaseRail?: FirstPartyRosReleaseRail;
       readonly readyCorpusForSeason: (
         season: number,
         signal: AbortSignal,
@@ -41,14 +41,12 @@ export class RosProfileRecoveryService {
 
   async recover(season: number, signal: AbortSignal): Promise<void> {
     signal.throwIfAborted();
+    const releaseIdentity = firstPartyRosReleaseIdentity(this.input.releaseRail);
     const identity = and(
       eq(firstPartyRosProfileValidations.season, season),
-      eq(firstPartyRosProfileValidations.modelVersion, FIRST_PARTY_ROS_MODEL_VERSION),
-      eq(firstPartyRosProfileValidations.policyVersion, FIRST_PARTY_ROS_POLICY_VERSION),
-      eq(
-        firstPartyRosProfileValidations.calibrationVersion,
-        FIRST_PARTY_ROS_INTERVAL_CALIBRATION_VERSION,
-      ),
+      eq(firstPartyRosProfileValidations.modelVersion, releaseIdentity.modelVersion),
+      eq(firstPartyRosProfileValidations.policyVersion, releaseIdentity.policyVersion),
+      eq(firstPartyRosProfileValidations.calibrationVersion, releaseIdentity.calibrationVersion),
     );
     const candidates = await this.input.database
       .select({ id: firstPartyRosProfileValidations.id })

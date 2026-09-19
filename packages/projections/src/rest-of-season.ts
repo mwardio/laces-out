@@ -27,6 +27,8 @@ import {
 
 /** v13 samples discrete D/ST games and shared provider brackets instead of fractional centers. */
 export const FIRST_PARTY_ROS_MODEL_VERSION = "laces-ros-distribution-v13";
+/** Closed historical comparator identity; never a simulation or active-release default. */
+export const FIRST_PARTY_ROS_RETAINED_V12_MODEL_VERSION = "laces-ros-distribution-v12";
 /**
  * v11 adds nested long-touchdown counts to the scoring-independent football model. Its historical
  * proof must include the play-by-play source; earlier outcome vectors cannot certify these bonuses.
@@ -2647,7 +2649,8 @@ export interface FirstPartyRosChampionPolicy {
   readonly policyVersion: typeof FIRST_PARTY_ROS_POLICY_VERSION;
   readonly meanSelectionEvidenceVersion: typeof FIRST_PARTY_ROS_MEAN_SELECTION_VERSION;
   readonly legacyPointImprovementMetric: "mean-absolute-error";
-  readonly modelVersion: typeof FIRST_PARTY_ROS_MODEL_VERSION;
+  readonly modelVersion:
+    typeof FIRST_PARTY_ROS_MODEL_VERSION | typeof FIRST_PARTY_ROS_RETAINED_V12_MODEL_VERSION;
   readonly evidenceThroughSeason: number | null;
   readonly minimumHeldOutSeasons: number;
   readonly minimumBatches: number;
@@ -3533,6 +3536,7 @@ function policyFromEvidence(
   evidenceThroughSeason: number | null,
   options: ReturnType<typeof resolvedChampionOptions>,
   evidenceIdentity: FirstPartyRosEvidenceIdentity | null,
+  modelVersion: FirstPartyRosChampionPolicy["modelVersion"] = FIRST_PARTY_ROS_MODEL_VERSION,
 ): FirstPartyRosChampionPolicy {
   const positions: readonly FirstPartyRosPosition[] = ["QB", "RB", "WR", "TE", "K", "DST"];
   const buckets: readonly FirstPartyRosRemainingWeeksBucket[] = [
@@ -3554,7 +3558,7 @@ function policyFromEvidence(
     policyVersion: FIRST_PARTY_ROS_POLICY_VERSION,
     meanSelectionEvidenceVersion: FIRST_PARTY_ROS_MEAN_SELECTION_VERSION,
     legacyPointImprovementMetric: "mean-absolute-error",
-    modelVersion: FIRST_PARTY_ROS_MODEL_VERSION,
+    modelVersion,
     evidenceThroughSeason,
     minimumHeldOutSeasons: options.minimumHeldOutSeasons,
     minimumBatches: options.minimumBatches,
@@ -3857,6 +3861,46 @@ export function evaluateFirstPartyRosChampionPolicy(
   heldOutSeasons: readonly FirstPartyRosHeldOutSeason[],
   options: FirstPartyRosChampionOptions = {},
 ): FirstPartyRosChampionEvaluation {
+  return evaluateRosChampionPolicy(heldOutSeasons, options, FIRST_PARTY_ROS_MODEL_VERSION);
+}
+
+/** Reconstruct the retained model's own v7 choices and prior-only intervals from its raw rows. */
+export function evaluateRetainedV12FirstPartyRosChampionPolicy(
+  heldOutSeasons: readonly FirstPartyRosHeldOutSeason[],
+  options: FirstPartyRosChampionOptions = {},
+): FirstPartyRosChampionEvaluation {
+  if (
+    FIRST_PARTY_ROS_POLICY_VERSION !== "season-walk-forward-mean-rmse-block-wis-cqr-v7" ||
+    FIRST_PARTY_ROS_MEAN_SELECTION_VERSION !== "paired-season-squared-loss-rmse-margin-v1" ||
+    FIRST_PARTY_ROS_INTERVAL_CALIBRATION_VERSION !== "season-blocked-split-conformal-cqr-v1"
+  )
+    throw new TypeError("Retained v12 ROS evaluation requires its frozen v7 evaluator");
+  for (const season of heldOutSeasons) {
+    for (const forecast of season.forecasts) {
+      if (
+        forecast.contextualModelVersion !==
+          `${FIRST_PARTY_ROS_RETAINED_V12_MODEL_VERSION}:contextual:laces-weekly-components-v15` ||
+        forecast.recencyModelVersion !==
+          `${FIRST_PARTY_ROS_RETAINED_V12_MODEL_VERSION}:availability-aware-recency:laces-weekly-components-v15` ||
+        forecast.intervalMethodVersion !== "simulation-p15-p50-p85-cqr-v1"
+      )
+        throw new TypeError(
+          "Retained v12 ROS evaluation requires authentic v12 forecast identities",
+        );
+    }
+  }
+  return evaluateRosChampionPolicy(
+    heldOutSeasons,
+    options,
+    FIRST_PARTY_ROS_RETAINED_V12_MODEL_VERSION,
+  );
+}
+
+function evaluateRosChampionPolicy(
+  heldOutSeasons: readonly FirstPartyRosHeldOutSeason[],
+  options: FirstPartyRosChampionOptions,
+  modelVersion: FirstPartyRosChampionPolicy["modelVersion"],
+): FirstPartyRosChampionEvaluation {
   const resolvedOptions = resolvedChampionOptions(options);
   const { ordered, evidenceIdentity } = validateFirstPartyRosHeldOutSeasons(heldOutSeasons);
   const evidence = new Map<string, ErrorEvidence>();
@@ -3869,6 +3913,7 @@ export function evaluateFirstPartyRosChampionPolicy(
       evidenceThroughSeason,
       resolvedOptions,
       evidenceIdentity,
+      modelVersion,
     );
     seasonPolicies.push({ season: season.season, evidenceThroughSeason, policy });
     const walkForwardRecords: PendingWalkForwardCalibrationRecord[] = [];
@@ -3950,6 +3995,7 @@ export function evaluateFirstPartyRosChampionPolicy(
       evidenceThroughSeason,
       resolvedOptions,
       evidenceIdentity,
+      modelVersion,
     ),
     seasonPolicies,
     selected,

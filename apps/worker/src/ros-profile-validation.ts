@@ -5,8 +5,11 @@ import {
 } from "@laces-out/db";
 import {
   firstPartyProjectionComponentsForPosition,
+  firstPartyRosReleaseIdentity,
+  deriveRosArtifactBlockers,
   rosProfileDefinitionFromKey,
   SCORING_LONG_TOUCHDOWN_COMPONENTS,
+  type FirstPartyRosReleaseRail,
 } from "@laces-out/projections";
 import { and, eq, inArray, sql } from "drizzle-orm";
 
@@ -28,6 +31,12 @@ import {
 } from "./ros-profile-validation-runner.js";
 import { FIRST_PARTY_ROS_RELEASE_PLAYERS_PER_POSITION } from "./first-party-ros-validation-contract.js";
 import { ROS_HISTORICAL_COVERAGE_DEFAULT_THRESHOLDS } from "./ros-data-coverage.js";
+import { prepareFirstPartyRosMarginalAdmission } from "./first-party-ros-marginal-admission.js";
+import {
+  assertRosMarginalProfileEvidenceIdentity,
+  type RosMarginalProfileEvidence,
+  type RosMarginalProfileValidationRunner,
+} from "./ros-profile-marginal-evidence.js";
 
 export type RosProfileValidationRecord = typeof firstPartyRosProfileValidations.$inferSelect;
 type AdmittedValidation = Extract<FirstPartyRosAdmissionValidation, { state: "admissible" }>;
@@ -363,6 +372,10 @@ const STATISTICAL_ADMISSION_BLOCKERS = new Set([
   "release_validation_forecasts_below_minimum",
   "release_validation_batches_below_minimum",
   "release_validation_held_out_seasons_below_minimum",
+  "marginal_admission_portfolio_comparison_failed",
+  ...["previous-deployed", "previous-raw", "same-physics-legacy", "same-physics-raw"].map(
+    (name) => `marginal_admission_portfolio_wis_worse_than_${name}`,
+  ),
 ]);
 
 export class RosProfileValidationService {
@@ -375,6 +388,8 @@ export class RosProfileValidationService {
       readonly database?: Database;
       readonly repository?: RosProfileValidationRepository;
       readonly runner?: RosProfileValidationRunner;
+      readonly releaseRail?: FirstPartyRosReleaseRail;
+      readonly marginalRunner?: RosMarginalProfileValidationRunner;
       readonly enqueueProjectionRefresh: (season: number) => Promise<void>;
       readonly sourceCacheDirectory?: string;
       readonly offline?: boolean;
@@ -393,6 +408,9 @@ export class RosProfileValidationService {
       options.repository ?? new DrizzleRosProfileValidationRepository(options.database!);
     this.runner = options.runner ?? createRosProfileValidationRunner(options);
     this.now = options.now ?? (() => new Date());
+    firstPartyRosReleaseIdentity(options.releaseRail);
+    if (options.releaseRail === "marginal-v8" && !options.marginalRunner)
+      throw new Error("Marginal ROS validation requires paired pinned evidence replay");
     if (options.sharedCorpus && !this.repository.deferForCorpus)
       throw new Error("Shared ROS bootstrap requires deferred profile persistence");
   }
@@ -401,6 +419,15 @@ export class RosProfileValidationService {
     context.signal.throwIfAborted();
     const record = await this.repository.get(job.profileValidationId);
     if (!record) return;
+    const releaseIdentity = firstPartyRosReleaseIdentity(this.options.releaseRail);
+    // A job from a retired rail must not trigger the admitted fast path on a different release.
+    if (
+      record.state === "admitted" &&
+      (record.modelVersion !== releaseIdentity.modelVersion ||
+        record.policyVersion !== releaseIdentity.policyVersion ||
+        record.calibrationVersion !== releaseIdentity.calibrationVersion)
+    )
+      return;
     const recovery = rosProfileRecoveryMarker(record.report);
     if (job.recoveryCorpusIdentity !== undefined) {
       if (
@@ -454,9 +481,9 @@ export class RosProfileValidationService {
       const constants = firstPartyRosAdmissionConstants(definition.profile);
       if (
         definition.digest !== record.scoringProfileDigest ||
-        record.modelVersion !== constants.modelVersion ||
-        record.policyVersion !== constants.policyVersion ||
-        record.calibrationVersion !== constants.calibrationVersion
+        record.modelVersion !== releaseIdentity.modelVersion ||
+        record.policyVersion !== releaseIdentity.policyVersion ||
+        record.calibrationVersion !== releaseIdentity.calibrationVersion
       ) {
         await this.repository.complete({
           id: record.id,
@@ -486,12 +513,25 @@ export class RosProfileValidationService {
         }
         requiredReadyCorpusIdentity = shared.corpusIdentity;
       }
-      const report = await this.runner({
+      const runInput = {
         scoringProfileKey: definition.scoringProfileKey,
         season: record.season,
         signal: context.signal,
         ...(requiredReadyCorpusIdentity === undefined ? {} : { requiredReadyCorpusIdentity }),
-      });
+      };
+      let marginalEvidence: RosMarginalProfileEvidence | undefined;
+      let report: Record<string, unknown>;
+      if (this.options.releaseRail === "marginal-v8") {
+        if (!requiredReadyCorpusIdentity)
+          throw new Error("Marginal ROS profile validation requires a pinned ready corpus");
+        marginalEvidence = await this.options.marginalRunner!(runInput);
+        assertRosMarginalProfileEvidenceIdentity(marginalEvidence, runInput);
+        const parsed: unknown = JSON.parse(marginalEvidence.candidateReportJson);
+        if (!object(parsed)) throw new Error("Marginal ROS candidate report is invalid");
+        report = parsed;
+      } else {
+        report = await this.runner(runInput);
+      }
       context.signal.throwIfAborted();
       if (
         requiredReadyCorpusIdentity !== undefined &&
@@ -528,11 +568,28 @@ export class RosProfileValidationService {
         });
         return;
       }
-      const admission = validateFirstPartyRosAdmission({
-        report,
-        evidenceThroughSeason: record.season - 1,
-        constants,
-      });
+      const admission =
+        marginalEvidence === undefined
+          ? validateFirstPartyRosAdmission({
+              report,
+              evidenceThroughSeason: record.season - 1,
+              constants,
+            })
+          : prepareFirstPartyRosMarginalAdmission({
+              ...marginalEvidence,
+              forecastSeason: record.season,
+              scoringProfile: definition.profile,
+            });
+      // Raw diagnostic bytes are archived by checksum; avoid duplicating tens of MB in the ledger.
+      const ledgerReport =
+        marginalEvidence === undefined
+          ? report
+          : {
+              ...Object.fromEntries(
+                Object.entries(report).filter(([key]) => key !== "diagnostics"),
+              ),
+              marginalEvidence: marginalEvidence.provenance,
+            };
       if (admission.state === "rejected") {
         if (admission.blockers.some((blocker) => !STATISTICAL_ADMISSION_BLOCKERS.has(blocker))) {
           throw new Error(
@@ -549,17 +606,29 @@ export class RosProfileValidationService {
           id: record.id,
           startedAt,
           completedAt: this.now(),
-          report: recordedReport(report),
+          report: recordedReport(ledgerReport),
           blockers: [...new Set([...admission.blockers, ...reported])],
         });
         return;
       }
+      const diagnostics =
+        marginalEvidence === undefined ? undefined : deriveRosArtifactBlockers(admission.payload);
       const committed = await this.repository.complete({
         id: record.id,
         startedAt,
         completedAt: this.now(),
-        report: recordedReport(report),
-        blockers: admission.cellBlockers,
+        report: recordedReport(
+          diagnostics === undefined
+            ? ledgerReport
+            : {
+                ...ledgerReport,
+                releaseDiagnostics: {
+                  rawBlockers: diagnostics.rawBlockers,
+                  supersededIntervalDiagnostics: diagnostics.supersededIntervalDiagnostics,
+                },
+              },
+        ),
+        blockers: diagnostics?.effectiveBlockers ?? admission.cellBlockers,
         admission,
       });
       if (committed) await this.options.enqueueProjectionRefresh(record.season);

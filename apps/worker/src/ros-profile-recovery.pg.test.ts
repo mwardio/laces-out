@@ -258,6 +258,33 @@ describe.skipIf(!dockerAvailable())("Replay-only ROS profile recovery against Po
     expect(after.scoringProfileDigest).toBe(before.scoringProfileDigest);
   }
 
+  it("retries only the selected outer release identity", async () => {
+    const season = 2073;
+    const legacy = await seed(season);
+    const marginal = await seed(season, {
+      policyVersion: "season-walk-forward-mean-rmse-marginal-quantiles-v8",
+      calibrationVersion: "season-prior-weighted-quantile-residuals-v1",
+    });
+    const enqueueValidation = vi.fn<(job: RosProfileValidationJob) => Promise<string>>(async () =>
+      randomUUID(),
+    );
+    const service = new RosProfileRecoveryService({
+      database: handle.db,
+      releaseRail: "marginal-v8",
+      readyCorpusForSeason: async () => CORPUS_A,
+      validationJobIsOutstanding: async () => false,
+      enqueueValidation,
+      now: () => NOW,
+    });
+    await service.recover(season, new AbortController().signal);
+    expect(enqueueValidation).toHaveBeenCalledTimes(1);
+    expect(enqueueValidation.mock.calls[0]?.[0].profileValidationId).toBe(marginal.id);
+    expect(await read(legacy.id)).toEqual(legacy);
+    expect((await read(marginal.id)).report?.automaticRecovery).toMatchObject({
+      corpusIdentity: CORPUS_A,
+    });
+  });
+
   it.each([
     { season: 2030, state: "failed", blockers: ["validation_execution_failed"] },
     { season: 2048, state: "withheld", blockers: ["historical_component_coverage_incomplete"] },

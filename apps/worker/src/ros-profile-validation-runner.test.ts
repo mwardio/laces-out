@@ -1,4 +1,5 @@
 import { existsSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -6,7 +7,11 @@ import path from "node:path";
 import { rosScoringProfile } from "@laces-out/projections";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { createRosProfileValidationRunner } from "./ros-profile-validation-runner.js";
+import {
+  createPinnedRosProfileValidationRunner,
+  createRosProfileValidationRunner,
+  ROS_PROFILE_VALIDATION_MAXIMUM_REPORT_BYTES,
+} from "./ros-profile-validation-runner.js";
 
 const directories: string[] = [];
 afterEach(async () => {
@@ -30,6 +35,87 @@ const input = () => ({
 });
 
 describe("isolated ROS profile validation runner", () => {
+  it("pins original diagnostic bytes and permits a full report larger than the legacy limit", async () => {
+    const raw = `  {"diagnostics":"${"x".repeat(ROS_PROFILE_VALIDATION_MAXIMUM_REPORT_BYTES)}"}\n`;
+    const validatorPath = await validator(`
+      if (!process.argv.includes('--diagnostics')) process.exit(7);
+      process.stdout.write('  {"diagnostics":"' + 'x'.repeat(${ROS_PROFILE_VALIDATION_MAXIMUM_REPORT_BYTES}) + '"}\\n');
+    `);
+    const result = await createPinnedRosProfileValidationRunner({
+      validatorPath,
+      diagnostics: true,
+    })(input());
+    expect(result.reportJson).toBe(raw);
+    expect(result.reportChecksum).toBe(createHash("sha256").update(raw).digest("hex"));
+    expect(result.report.diagnostics).toHaveLength(ROS_PROFILE_VALIDATION_MAXIMUM_REPORT_BYTES);
+    await expect(
+      createPinnedRosProfileValidationRunner({
+        validatorPath,
+        diagnostics: true,
+        maximumReportBytes: 1024,
+      })(input()),
+    ).rejects.toThrow(/size limit/);
+  });
+
+  it("rejects malformed UTF-8 rather than pinning replacement characters", async () => {
+    const validatorPath = await validator(
+      `process.stdout.write(Buffer.from([123,34,120,34,58,34,255,34,125]));`,
+    );
+    await expect(
+      createPinnedRosProfileValidationRunner({ validatorPath })(input()),
+    ).rejects.toThrow(/invalid JSON/);
+  });
+
+  it("isolates retained comparator and full-defense training replay scopes", async () => {
+    const validatorPath = await validator(
+      `process.stdout.write(JSON.stringify({args:process.argv.slice(2)}));`,
+    );
+    const runner = createPinnedRosProfileValidationRunner({
+      validatorPath,
+      outcomeCacheDirectory: "/pinned/outcomes",
+      diagnostics: true,
+    });
+    const replayCorpusIdentity = "d".repeat(64);
+    const previous = await runner({
+      ...input(),
+      replayCorpusIdentity,
+      replayModel: "retained-v12",
+    });
+    expect(previous.report.args).toEqual(
+      expect.arrayContaining([
+        `--replay-retained-v12-corpus=${replayCorpusIdentity}`,
+        "--players-per-position=8",
+        "--diagnostics",
+      ]),
+    );
+    expect(previous.report.args).not.toContain(`--replay-corpus=${replayCorpusIdentity}`);
+    const training = await runner({
+      ...input(),
+      replayCorpusIdentity,
+      replayScope: "full-defense-training",
+    });
+    expect(training.report.args).toEqual(
+      expect.arrayContaining([
+        `--replay-corpus=${replayCorpusIdentity}`,
+        "--positions=DST",
+        "--players-per-position=32",
+      ]),
+    );
+    await expect(runner({ ...input(), replayModel: "retained-v12" })).rejects.toThrow(
+      /explicit supported replay/,
+    );
+    await expect(runner({ ...input(), replayScope: "full-defense-training" })).rejects.toThrow(
+      /explicit supported replay/,
+    );
+    await expect(
+      runner({
+        ...input(),
+        replayCorpusIdentity,
+        replayModel: "retained-v12",
+        replayScope: "full-defense-training",
+      }),
+    ).rejects.toThrow(/explicit supported replay/);
+  });
   it("uses locked release arguments, removes temporary files, and withholds application secrets", async () => {
     vi.stubEnv("DATABASE_URL", "private-database-url");
     vi.stubEnv("OPENAI_API_KEY", "private-provider-key");

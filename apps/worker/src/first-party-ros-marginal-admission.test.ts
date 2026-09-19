@@ -21,62 +21,31 @@ import {
   firstPartyRosChampionArtifactIsValid,
   type FirstPartyRosMarginalArtifactIntervals,
 } from "./first-party-ros-publication.js";
-import { historicalRosCalibrationBlockers } from "./first-party-ros-backtest.js";
 import {
-  forecasts,
   reportFixture,
   hash,
   SCORING,
   rowBucket,
 } from "./ros-marginal-development.test-fixtures.js";
-import { buildRosMarginalDevelopmentReport } from "./ros-marginal-development.js";
+import {
+  buildRosMarginalDevelopmentReport,
+  ROS_MARGINAL_COMPOSITE_TRAINING_VERSION,
+} from "./ros-marginal-development.js";
 
-const POSITIONS = ["QB", "RB", "WR", "TE", "K", "DST"] as const;
+import {
+  MARGINAL_ADMISSION_POSITIONS as POSITIONS,
+  fullReport,
+  defenseTrainingReport,
+  trainingRequest,
+} from "./ros-marginal-admission.test-fixtures.js";
 const PROTOCOL =
   "# Frozen full-portfolio marginal qualification\n\nUse all declared cells, years, fixed mean choices and four matched WIS benchmarks.\n";
 const CONSTANTS = firstPartyRosAdmissionConstants(SCORING.profile);
 
-function fullForecasts(previous: boolean): FirstPartyRosHeldOutForecast[] {
-  return forecasts(previous).flatMap((row) =>
-    POSITIONS.map((position) => {
-      const team = row.playerId.slice(4) === "LA" ? "LAR" : row.playerId.slice(4);
-      return {
-        ...row,
-        position,
-        playerId: position === "DST" ? row.playerId : `${position}:${team}`,
-        inputChecksum: hash(`${row.inputChecksum}:${position}`),
-      };
-    }),
-  );
-}
-
-function fullReport(previous: boolean, raw = fullForecasts(previous)) {
-  const report = reportFixture(previous, raw, POSITIONS);
-  const policy = report.publicationPolicy;
-  const blockers = [...historicalRosCalibrationBlockers(policy.choices)];
-  return {
-    ...report,
-    report: {
-      ...report.report,
-      state: blockers.length === 0 ? "evidence-ready" : "insufficient",
-      blockers,
-      availabilityCalibrationVersion: CONSTANTS.availabilityCalibrationVersion,
-      roleCalibrationVersion: CONSTANTS.roleCalibrationVersion,
-      kickerCalibrationVersion: CONSTANTS.kickerCalibrationVersion,
-    },
-    champion: {
-      ...report.champion,
-      modelVersion: policy.modelVersion,
-      policyVersion: policy.policyVersion,
-      evidenceThroughSeason: policy.evidenceThroughSeason,
-      evidenceIdentity: policy.evidenceIdentity,
-    },
-  };
-}
-
 type Report = ReturnType<typeof fullReport>;
 let candidate: Report;
 let previous: Report;
+let training: ReturnType<typeof defenseTrainingReport>;
 let passed: ReturnType<typeof prepareFirstPartyRosMarginalAdmission>;
 function request(nextCandidate: unknown = candidate, nextPrevious: unknown = previous) {
   const candidateReportJson = JSON.stringify(nextCandidate);
@@ -95,6 +64,7 @@ function request(nextCandidate: unknown = candidate, nextPrevious: unknown = pre
 beforeAll(() => {
   candidate = fullReport(false);
   previous = fullReport(true);
+  training = defenseTrainingReport();
   const pinned = request();
   const before = structuredClone(pinned);
   passed = prepareFirstPartyRosMarginalAdmission(pinned);
@@ -235,18 +205,191 @@ describe("pure full-scope marginal admission preparation", () => {
     },
   );
 
-  it("rejects separate training explicitly until full-scope composition exists", () => {
+  it("rejects partial or malformed separate training pins", () => {
     for (const extra of [
       { intervalTrainingReportJson: "{}" },
       { intervalTrainingReportChecksum: hash("{}") },
       { intervalTrainingReportJson: "{}", intervalTrainingReportChecksum: hash("{}") },
     ]) {
-      expect(prepareFirstPartyRosMarginalAdmission({ ...request(), ...extra })).toEqual({
-        state: "rejected",
-        blockers: ["marginal_admission_separate_training_full_scope_composition_unavailable"],
-      });
+      const result = prepareFirstPartyRosMarginalAdmission({ ...request(), ...extra });
+      expect(result.state).toBe("rejected");
+      expect(result.blockers.join(" ")).toMatch(/pin_incomplete|reconstruction_failed/u);
     }
   });
+
+  it("composes4896 pinned training rows for all18 cells without changing3264 audit means", () => {
+    const pinned = { ...request(), ...trainingRequest(training) };
+    const before = JSON.stringify(pinned);
+    const result = expectAdmissible(prepareFirstPartyRosMarginalAdmission(pinned));
+    expect(JSON.stringify(pinned)).toBe(before);
+    expect(result.payload.policy).toEqual(candidate.publicationPolicy);
+    const proof = result.payload.releaseGate.marginalAdmission as Record<string, unknown>;
+    expect(proof.pins).toMatchObject({
+      intervalTrainingReportChecksum: pinned.intervalTrainingReportChecksum,
+    });
+    const composition = proof.intervalTrainingComposition as {
+      evaluation: { source: { reportChecksum: string }; forecasts: number };
+      constituents: {
+        source: { reportChecksum: string; physicalCorpusChecksum: string };
+        forecasts: number;
+      }[];
+      trainingRowsChecksum: string;
+    };
+    expect(composition).toMatchObject({
+      version: ROS_MARGINAL_COMPOSITE_TRAINING_VERSION,
+      evaluation: { forecasts: 3264, source: { reportChecksum: pinned.candidateReportChecksum } },
+      trainingForecasts: 4896,
+      constituents: [
+        {
+          role: "unchanged-non-defense-audit",
+          forecasts: 2720,
+          source: { physicalCorpusChecksum: candidate.outcomeCorpusIdentity },
+        },
+        {
+          role: "complete-defense-training",
+          forecasts: 2176,
+          source: {
+            physicalCorpusChecksum: training.outcomeCorpusIdentity,
+            reportChecksum: pinned.intervalTrainingReportChecksum,
+          },
+        },
+      ],
+    });
+    const intervals = result.payload.releaseGate
+      .marginalIntervals as FirstPartyRosMarginalArtifactIntervals;
+    const originalIntervals = expectAdmissible(passed).payload.releaseGate
+      .marginalIntervals as FirstPartyRosMarginalArtifactIntervals;
+    expect(intervals.qualifications).toHaveLength(18);
+    expect(
+      new Set(
+        intervals.qualifications.map((receipt) => JSON.stringify(receipt.sources.intervalTraining)),
+      ).size,
+    ).toBe(1);
+    for (const receipt of intervals.qualifications) {
+      expect(receipt.intervalTraining).toMatchObject({
+        evaluationForecasts: 3264,
+        trainingForecasts: 4896,
+        additionalTrainingForecasts: 1632,
+        trainingRowsChecksum: composition.trainingRowsChecksum,
+      });
+      expect(receipt.sources.intervalTraining!.source.physicalCorpusChecksum).not.toBe(
+        candidate.outcomeCorpusIdentity,
+      );
+      expect(receipt.sources.intervalTraining!.source.physicalCorpusChecksum).not.toBe(
+        training.outcomeCorpusIdentity,
+      );
+      if (receipt.cell.position !== "DST") {
+        const original = originalIntervals.qualifications.find(
+          (cell) =>
+            cell.cell.position === receipt.cell.position &&
+            cell.cell.bucket === receipt.cell.bucket,
+        )!;
+        expect(receipt.strategy).toBe(original.strategy);
+        expect(receipt.evidence).toEqual(original.evidence);
+        expect(receipt.liveArtifact).toEqual(original.liveArtifact);
+      }
+    }
+    expect(
+      firstPartyRosChampionArtifactIsValid({
+        ...result.payload,
+        artifactChecksum: result.artifactChecksum,
+      }),
+    ).toBe(true);
+  }, 30_000);
+
+  it.each(["missing-team", "changed-source", "same-corpus", "bad-pin"] as const)(
+    "rejects full training composition with %s",
+    (mutation) => {
+      const changed = structuredClone(training);
+      if (mutation === "missing-team") changed.diagnostics.candidateForecasts.pop();
+      if (mutation === "changed-source")
+        changed.sources[0]!.playerWeeklyRawChecksum = hash("changed raw source");
+      if (mutation === "same-corpus")
+        changed.outcomeCorpusIdentity = candidate.outcomeCorpusIdentity;
+      const pinned = { ...request(), ...trainingRequest(changed) };
+      if (mutation === "bad-pin") pinned.intervalTrainingReportChecksum = "0".repeat(64);
+      const result = prepareFirstPartyRosMarginalAdmission(pinned);
+      expect(result.state).toBe("rejected");
+    },
+    15_000,
+  );
+
+  it.each(["input", "target"] as const)(
+    "rejects a changed original DST %s with rebuilt training proofs",
+    (mutation) => {
+      const changed = defenseTrainingReport(
+        training.diagnostics.candidateForecasts.map((row) =>
+          row.playerId === "DST:LAR" && row.forecastSeason === 2022 && row.asOfWeek === 1
+            ? {
+                ...row,
+                ...(mutation === "input"
+                  ? { inputChecksum: hash("changed audit input") }
+                  : { actualPoints: row.actualPoints + 1 }),
+              }
+            : row,
+        ),
+      );
+      const result = prepareFirstPartyRosMarginalAdmission({
+        ...request(),
+        ...trainingRequest(changed),
+      });
+      expect(result.state).toBe("rejected");
+      expect(result.blockers.join(" ")).toContain("preserve every original audit input and target");
+    },
+    15_000,
+  );
+
+  it("retains separate training physical and original audit convergence blockers", () => {
+    const changed = defenseTrainingReport(
+      training.diagnostics.candidateForecasts.map((row) =>
+        row.forecastSeason === 2022 && rowBucket(row) === "nine-plus"
+          ? {
+              ...row,
+              evidence: {
+                ...row.evidence,
+                convergence: {
+                  contextual: {
+                    ...row.evidence.convergence.contextual,
+                    state: "unstable" as const,
+                  },
+                  recency: { ...row.evidence.convergence.recency },
+                },
+              },
+            }
+          : row,
+      ),
+    );
+    const audit = structuredClone(candidate);
+    audit.report.blockers.push("calibration_QB_one-to-four_convergence_below_minimum");
+    audit.report.state = "insufficient";
+    changed.report.blockers.push("calibration_DST_nine-plus_convergence_below_minimum");
+    changed.report.blockers.push("calibration_QB_five-to-eight_convergence_below_minimum");
+    changed.report.state = "insufficient";
+    const result = expectAdmissible(
+      prepareFirstPartyRosMarginalAdmission({ ...request(audit), ...trainingRequest(changed) }),
+    );
+    expect(result.cellBlockers).toEqual(
+      expect.arrayContaining([
+        "calibration_QB_one-to-four_convergence_below_minimum",
+        "calibration_DST_nine-plus_marginal_training_physical_convergence_2022_contextual",
+        "calibration_DST_nine-plus_marginal_training_convergence_below_minimum",
+      ]),
+    );
+    expect(result.cellBlockers).not.toContain(
+      "calibration_QB_five-to-eight_marginal_training_convergence_below_minimum",
+    );
+    expect(result.payload.releaseGate.marginalAdmission).toMatchObject({
+      intervalTrainingDiagnostics: {
+        ignoredOutOfScopeLegacyConvergenceBlockers: [
+          "calibration_QB_five-to-eight_convergence_below_minimum",
+        ],
+        rawLegacyConvergenceBlockers: [
+          "calibration_DST_nine-plus_convergence_below_minimum",
+          "calibration_QB_five-to-eight_convergence_below_minimum",
+        ],
+      },
+    });
+  }, 30_000);
 
   it.each([
     [

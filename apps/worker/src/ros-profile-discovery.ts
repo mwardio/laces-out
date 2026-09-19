@@ -10,9 +10,9 @@ import {
 } from "@laces-out/db";
 import type { RosProfileValidationJob } from "@laces-out/jobs";
 import {
-  FIRST_PARTY_ROS_MODEL_VERSION,
-  FIRST_PARTY_ROS_POLICY_VERSION,
-  FIRST_PARTY_ROS_INTERVAL_CALIBRATION_VERSION,
+  firstPartyRosReleaseIdentity,
+  deriveRosArtifactBlockers,
+  type FirstPartyRosReleaseRail,
   LEAGUE_SCORING_NORMALIZATION_VERSION,
   normalizeLeagueScoringProfile,
   projectionScoringProfileKey,
@@ -24,12 +24,6 @@ import {
 import { and, desc, eq, inArray } from "drizzle-orm";
 
 import { firstPartyRosChampionArtifactIsValid } from "./first-party-ros-publication.js";
-
-const identity = {
-  modelVersion: FIRST_PARTY_ROS_MODEL_VERSION,
-  policyVersion: FIRST_PARTY_ROS_POLICY_VERSION,
-  calibrationVersion: FIRST_PARTY_ROS_INTERVAL_CALIBRATION_VERSION,
-};
 
 /** Pure exact identity discovery: unsupported scoring never becomes a nearest-profile guess. */
 export function discoverRosScoringProfiles(
@@ -84,6 +78,7 @@ export class RosProfileDiscoveryService {
   constructor(
     private readonly input: {
       readonly database: Database;
+      readonly releaseRail?: FirstPartyRosReleaseRail;
       readonly enqueueValidation: (job: RosProfileValidationJob) => Promise<string | null>;
       readonly enqueueProjectionRefresh: (season: number) => Promise<string | null>;
       readonly validationJobIsOutstanding?: (profileValidationId: string) => Promise<boolean>;
@@ -93,6 +88,7 @@ export class RosProfileDiscoveryService {
 
   async discover(season: number): Promise<void> {
     const db = this.input.database;
+    const identity = firstPartyRosReleaseIdentity(this.input.releaseRail);
     const leagueRows = await db
       .select({ id: leagueSeasons.id, provider: leagueSeasons.provider })
       .from(leagueSeasons)
@@ -167,7 +163,12 @@ export class RosProfileDiscoveryService {
           policy: artifact.policy as unknown as FirstPartyRosChampionPolicy,
         })
       ) {
-        if (row.state !== "admitted" || row.artifactId !== artifact.id) {
+        const diagnostics = deriveRosArtifactBlockers(artifact);
+        if (
+          row.state !== "admitted" ||
+          row.artifactId !== artifact.id ||
+          JSON.stringify(row.blockers) !== JSON.stringify(diagnostics.effectiveBlockers)
+        ) {
           await db
             .update(firstPartyRosProfileValidations)
             .set({
@@ -175,7 +176,15 @@ export class RosProfileDiscoveryService {
               artifactId: artifact.id,
               completedAt: new Date(),
               updatedAt: new Date(),
-              blockers: [],
+              blockers: diagnostics.effectiveBlockers,
+              report: {
+                ...row.report,
+                artifactDiagnostics: {
+                  artifactChecksum: artifact.artifactChecksum,
+                  rawBlockers: diagnostics.rawBlockers,
+                  supersededIntervalDiagnostics: diagnostics.supersededIntervalDiagnostics,
+                },
+              },
             })
             .where(eq(firstPartyRosProfileValidations.id, row.id));
         }

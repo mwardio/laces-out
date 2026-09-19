@@ -25,7 +25,10 @@ import {
   hasCurrentRosHistoricalCoverageThresholds,
   hasRosHistoricalCorpusReleaseThresholds,
   isCompatibleRosHistoricalCorpusBuildProtocol,
+  isRetainedV12RosHistoricalCorpusBuildProtocol,
+  RETAINED_V12_ROS_HISTORICAL_CORPUS_BUILD_PROTOCOL,
   type RosHistoricalCorpusBuildProvenance,
+  type RetainedV12RosHistoricalCorpusBuildProvenance,
 } from "./ros-historical-corpus-protocol.js";
 
 export const ROS_HISTORICAL_CORPUS_SCHEMA_VERSION = "ros-historical-corpus-v2";
@@ -52,7 +55,8 @@ export interface RosHistoricalCorpusForecast {
 /** An immutable evaluation manifest, not an admission artifact and never scored forecasts. */
 export interface RosHistoricalCorpus {
   readonly schemaVersion: typeof ROS_HISTORICAL_CORPUS_SCHEMA_VERSION;
-  readonly buildProtocol: RosHistoricalCorpusBuildProvenance;
+  readonly buildProtocol:
+    RosHistoricalCorpusBuildProvenance | RetainedV12RosHistoricalCorpusBuildProvenance;
   readonly modelVersion: string;
   readonly outcomeSchemaVersion: string;
   readonly weeklyModelVersion: string;
@@ -267,15 +271,20 @@ function validCoverage(value: unknown): value is RosHistoricalCoverageReport {
   return true;
 }
 
-function validateCorpus(value: unknown): asserts value is RosHistoricalCorpus {
+function validateCorpus(value: unknown, retainedV12 = false): asserts value is RosHistoricalCorpus {
   const invalid = () => {
     throw new RosHistoricalCorpusError("invalid_manifest");
   };
   if (
     !object(value) ||
     value.schemaVersion !== ROS_HISTORICAL_CORPUS_SCHEMA_VERSION ||
-    !isCompatibleRosHistoricalCorpusBuildProtocol(value.buildProtocol) ||
-    value.modelVersion !== FIRST_PARTY_ROS_MODEL_VERSION ||
+    !(retainedV12
+      ? isRetainedV12RosHistoricalCorpusBuildProtocol(value.buildProtocol)
+      : isCompatibleRosHistoricalCorpusBuildProtocol(value.buildProtocol)) ||
+    value.modelVersion !==
+      (retainedV12
+        ? RETAINED_V12_ROS_HISTORICAL_CORPUS_BUILD_PROTOCOL.modelVersion
+        : FIRST_PARTY_ROS_MODEL_VERSION) ||
     value.outcomeSchemaVersion !== FIRST_PARTY_ROS_OUTCOME_SCHEMA_VERSION ||
     value.weeklyModelVersion !== ROS_HISTORICAL_CORPUS_BUILD_PROTOCOL.weeklyModelVersion ||
     value.productionBasis !== ROS_HISTORICAL_CORPUS_BUILD_PROTOCOL.productionBasis ||
@@ -384,9 +393,9 @@ function validateCorpus(value: unknown): asserts value is RosHistoricalCorpus {
       forecast.intervalMethodVersion !==
         ROS_HISTORICAL_CORPUS_BUILD_PROTOCOL.intervalMethodVersion ||
       forecast.contextualModelVersion !==
-        `${FIRST_PARTY_ROS_MODEL_VERSION}:contextual:${ROS_HISTORICAL_CORPUS_BUILD_PROTOCOL.weeklyComponentModelVersion}` ||
+        `${corpus.modelVersion}:contextual:${corpus.buildProtocol.weeklyComponentModelVersion}` ||
       forecast.recencyModelVersion !==
-        `${FIRST_PARTY_ROS_MODEL_VERSION}:availability-aware-recency:${ROS_HISTORICAL_CORPUS_BUILD_PROTOCOL.weeklyComponentModelVersion}` ||
+        `${corpus.modelVersion}:availability-aware-recency:${corpus.buildProtocol.weeklyComponentModelVersion}` ||
       ["scoringProfileKey", "contextual", "recency", "actualPoints", "evidence"].some((name) =>
         Object.hasOwn(forecast, name),
       )
@@ -446,10 +455,41 @@ export function snapshotRosHistoricalCorpus(corpus: RosHistoricalCorpus): RosHis
   return JSON.parse(canonical(corpus, ROS_HISTORICAL_CORPUS_MAXIMUM_BYTES)) as RosHistoricalCorpus;
 }
 
+export function retainedV12RosHistoricalCorpusIdentity(corpus: RosHistoricalCorpus): string {
+  validateCorpus(corpus, true);
+  return checksum(canonical(corpus, ROS_HISTORICAL_CORPUS_MAXIMUM_BYTES));
+}
+
+export function snapshotRetainedV12RosHistoricalCorpus(
+  corpus: RosHistoricalCorpus,
+): RosHistoricalCorpus {
+  validateCorpus(corpus, true);
+  return JSON.parse(canonical(corpus, ROS_HISTORICAL_CORPUS_MAXIMUM_BYTES)) as RosHistoricalCorpus;
+}
+
 export function createRosHistoricalCorpusStore(options: {
   readonly directory: string;
   readonly maximumBytes?: number;
 }): RosHistoricalCorpusStore {
+  return createCorpusStore(options, false);
+}
+
+/** Explicit historical reader: it exposes no writer and rejects all current/unknown models. */
+export function createRetainedV12RosHistoricalCorpusReader(options: {
+  readonly directory: string;
+  readonly maximumBytes?: number;
+}): Pick<RosHistoricalCorpusStore, "read"> {
+  const store = createCorpusStore(options, true);
+  return { read: (identity, readOptions) => store.read(identity, readOptions) };
+}
+
+function createCorpusStore(
+  options: {
+    readonly directory: string;
+    readonly maximumBytes?: number;
+  },
+  retainedV12: boolean,
+): RosHistoricalCorpusStore {
   const maximumBytes = options.maximumBytes ?? ROS_HISTORICAL_CORPUS_MAXIMUM_BYTES;
   if (!integer(maximumBytes, 1, ROS_HISTORICAL_CORPUS_MAXIMUM_BYTES))
     throw new RosHistoricalCorpusError("limits_exceeded");
@@ -508,7 +548,7 @@ export function createRosHistoricalCorpusStore(options: {
       const serialized = canonical(envelope.corpus, maximumBytes);
       if (checksum(serialized) !== identity)
         return { state: "corrupt", reason: "checksum_mismatch" };
-      validateCorpus(envelope.corpus);
+      validateCorpus(envelope.corpus, retainedV12);
       return { state: "hit", identity, corpus: envelope.corpus };
     } catch (error) {
       signal?.throwIfAborted();
@@ -530,6 +570,7 @@ export function createRosHistoricalCorpusStore(options: {
     }
   };
   const write: RosHistoricalCorpusStore["write"] = async (corpus, writeOptions = {}) => {
+    if (retainedV12) throw new RosHistoricalCorpusError("invalid_manifest");
     const { signal } = writeOptions;
     signal?.throwIfAborted();
     validateCorpus(corpus);

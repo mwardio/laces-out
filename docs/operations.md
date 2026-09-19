@@ -818,6 +818,31 @@ Supporting this storage contract does not activate v8 admission or select it for
 Keep that activation separate from deploying the compatible schema and code, and verify a real
 admitted publication before considering the rollout complete.
 
+The lifecycle now accepts an explicit `releaseRail`: `legacy-v7` remains the default, while
+`marginal-v8` selects the outer artifact/ledger identity without changing the v7 mean selector.
+Discovery, recovery, the publication loader, profile validation, and status must use the same
+selection. Marginal validation requires a paired-evidence runner; it cannot fall back to the
+single legacy report. The application entry points still need coordinated rollout configuration
+and a verified shared dependency bundle before selecting this path.
+
+The paired runner rescores the pinned current audit, retained v12 comparator, and optional
+complete-defense training corpus sequentially under the same exact scoring key. Retained v12
+uses the explicit `--replay-retained-v12-corpus` reader and its original physical provenance; the
+current reader still rejects those vectors. Full diagnostics have a separate 64-MiB bound per
+report, compared with the legacy 8-MiB output limit. Exact UTF-8 output bytes are hashed and
+archived under their checksums in the configured evidence directory; preserve that directory
+alongside the outcome volume. Cancellation, process-group termination, secret-free child
+environments, and the 5-GiB disk reserve apply. The ledger keeps compact provenance instead of
+duplicating the raw reports.
+
+Optional 32-team defense training is composed with the unchanged 2,720 non-defense audit rows
+into a 4,896-row fitting dataset. Its manifest binds both constituent corpora, source and report
+checksums, row digests, and convergence audits. The original 3,264-row evaluation cohort and mean
+choices remain unchanged. Only absent-position diagnostics from the defense-only training report
+are excluded from effective blockers; all observed training and original audit failures remain.
+Status distinguishes retained legacy interval diagnostics from current release blockers and
+verifies the full immutable marginal proof before suppressing any superseded diagnostic.
+
 After a full CLI build has completed with `--outcome-cache=/absolute/path/to/outcomes`, an operator
 can register its existing corpus for automatic replay using the same directory and the corpus
 `outcomeCorpusIdentity` in the completed report. Run this with the worker's configured `DATABASE_URL` so adoption

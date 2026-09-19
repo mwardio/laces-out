@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -19,6 +20,10 @@ export interface RosProfileValidationRunInput {
   readonly replayCorpusIdentity?: string;
   /** Recovery requires this exact ready corpus and cannot fall back to building. */
   readonly requiredReadyCorpusIdentity?: string;
+  /** Closed retained comparator path; never enables physical rebuilding. */
+  readonly replayModel?: "current" | "retained-v12";
+  /** Broader interval fitting only; the original audit cohort remains eight per position. */
+  readonly replayScope?: "audit" | "full-defense-training";
 }
 export type RosProfileValidationRunner = (
   input: RosProfileValidationRunInput,
@@ -28,6 +33,29 @@ export const ROS_PROFILE_VALIDATION_TIMEOUT_MS = 22 * 60 * 60 * 1_000;
 /** Includes shared-build waiting and child execution; leaves 30 minutes inside pg-boss's lease. */
 export const ROS_PROFILE_VALIDATION_JOB_TIMEOUT_MS = (22 * 60 + 30) * 60 * 1_000;
 export const ROS_PROFILE_VALIDATION_MAXIMUM_REPORT_BYTES = 8 * 1_024 * 1_024;
+export const ROS_PROFILE_VALIDATION_MAXIMUM_DIAGNOSTIC_BYTES = 64 * 1_024 * 1_024;
+
+export interface PinnedRosProfileValidationReport {
+  readonly report: Record<string, unknown>;
+  /** Original UTF-8 stdout bytes, including whitespace; never reconstructed with stringify. */
+  readonly reportJson: string;
+  readonly reportChecksum: string;
+}
+export type PinnedRosProfileValidationRunner = (
+  input: RosProfileValidationRunInput,
+) => Promise<PinnedRosProfileValidationReport>;
+
+export interface RosProfileValidationRunnerOptions {
+  readonly validatorPath?: string;
+  readonly sourceCacheDirectory?: string;
+  readonly outcomeCacheDirectory?: string;
+  readonly offline?: boolean;
+  readonly timeoutMs?: number;
+  readonly maximumReportBytes?: number;
+  readonly preflightOnly?: boolean;
+  readonly sourceCacheMaximumBytes?: number;
+  readonly diagnostics?: boolean;
+}
 
 /** No inherited NODE_OPTIONS, database URLs, provider tokens, or application secrets. */
 export function rosProfileValidationChildEnvironment(): NodeJS.ProcessEnv {
@@ -35,20 +63,20 @@ export function rosProfileValidationChildEnvironment(): NodeJS.ProcessEnv {
 }
 
 export function createRosProfileValidationRunner(
-  options: {
-    readonly validatorPath?: string;
-    readonly sourceCacheDirectory?: string;
-    readonly outcomeCacheDirectory?: string;
-    readonly offline?: boolean;
-    readonly timeoutMs?: number;
-    readonly maximumReportBytes?: number;
-    readonly preflightOnly?: boolean;
-    readonly sourceCacheMaximumBytes?: number;
-  } = {},
+  options: RosProfileValidationRunnerOptions = {},
 ): RosProfileValidationRunner {
+  const runner = createPinnedRosProfileValidationRunner(options);
+  return async (input) => (await runner(input)).report;
+}
+
+export function createPinnedRosProfileValidationRunner(
+  options: RosProfileValidationRunnerOptions = {},
+): PinnedRosProfileValidationRunner {
   const timeoutMs = options.timeoutMs ?? ROS_PROFILE_VALIDATION_TIMEOUT_MS;
-  const maximumReportBytes =
-    options.maximumReportBytes ?? ROS_PROFILE_VALIDATION_MAXIMUM_REPORT_BYTES;
+  const hardMaximum = options.diagnostics
+    ? ROS_PROFILE_VALIDATION_MAXIMUM_DIAGNOSTIC_BYTES
+    : ROS_PROFILE_VALIDATION_MAXIMUM_REPORT_BYTES;
+  const maximumReportBytes = options.maximumReportBytes ?? hardMaximum;
   if (
     !Number.isSafeInteger(timeoutMs) ||
     timeoutMs <= 0 ||
@@ -59,7 +87,7 @@ export function createRosProfileValidationRunner(
   if (
     !Number.isSafeInteger(maximumReportBytes) ||
     maximumReportBytes <= 0 ||
-    maximumReportBytes > ROS_PROFILE_VALIDATION_MAXIMUM_REPORT_BYTES
+    maximumReportBytes > hardMaximum
   ) {
     throw new RangeError("Invalid ROS profile report size limit");
   }
@@ -68,6 +96,18 @@ export function createRosProfileValidationRunner(
   return async (input) => {
     input.signal.throwIfAborted();
     rosProfileDefinitionFromKey(input.scoringProfileKey);
+    if (
+      (input.replayModel !== undefined &&
+        input.replayModel !== "current" &&
+        input.replayModel !== "retained-v12") ||
+      (input.replayScope !== undefined &&
+        input.replayScope !== "audit" &&
+        input.replayScope !== "full-defense-training") ||
+      ((input.replayModel === "retained-v12" || input.replayScope === "full-defense-training") &&
+        (!input.replayCorpusIdentity || options.preflightOnly)) ||
+      (input.replayScope === "full-defense-training" && input.replayModel === "retained-v12")
+    )
+      throw new Error("ROS comparator and training scopes require an explicit supported replay");
     if (
       input.requiredReadyCorpusIdentity !== undefined &&
       input.requiredReadyCorpusIdentity !== input.replayCorpusIdentity
@@ -94,9 +134,11 @@ export function createRosProfileValidationRunner(
         `--scoring-profile-key-file=${keyPath}`,
         `--seasons=${Array.from({ length: 7 }, (_, index) => input.season - 7 + index).join(",")}`,
         `--holdouts=${Array.from({ length: 4 }, (_, index) => input.season - 4 + index).join(",")}`,
-        `--players-per-position=${FIRST_PARTY_ROS_RELEASE_PLAYERS_PER_POSITION}`,
+        `--players-per-position=${input.replayScope === "full-defense-training" ? 32 : FIRST_PARTY_ROS_RELEASE_PLAYERS_PER_POSITION}`,
         `--max-forecasts=${FIRST_PARTY_ROS_RELEASE_MAXIMUM_FORECASTS}`,
         "--full",
+        ...(options.diagnostics ? ["--diagnostics"] : []),
+        ...(input.replayScope === "full-defense-training" ? ["--positions=DST"] : []),
         ...(options.preflightOnly ? ["--preflight-only"] : []),
         ...(options.sourceCacheMaximumBytes === undefined
           ? []
@@ -105,10 +147,14 @@ export function createRosProfileValidationRunner(
         ...(options.outcomeCacheDirectory
           ? [`--outcome-cache=${options.outcomeCacheDirectory}`]
           : []),
-        ...(input.replayCorpusIdentity ? [`--replay-corpus=${input.replayCorpusIdentity}`] : []),
+        ...(input.replayCorpusIdentity
+          ? [
+              `--${input.replayModel === "retained-v12" ? "replay-retained-v12-corpus" : "replay-corpus"}=${input.replayCorpusIdentity}`,
+            ]
+          : []),
         ...(options.offline ? ["--offline"] : []),
       ];
-      return await new Promise<Record<string, unknown>>((resolve, reject) => {
+      return await new Promise<PinnedRosProfileValidationReport>((resolve, reject) => {
         const child = spawn(process.execPath, args, {
           cwd: directory,
           env: rosProfileValidationChildEnvironment(),
@@ -184,10 +230,19 @@ export function createRosProfileValidationRunner(
             return;
           }
           try {
-            const report: unknown = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+            const bytes = Buffer.concat(chunks);
+            // Reject malformed UTF-8 instead of hashing replacement characters as original data.
+            const reportJson = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(
+              bytes,
+            );
+            const report: unknown = JSON.parse(reportJson);
             if (report === null || typeof report !== "object" || Array.isArray(report))
               throw new Error("Invalid report");
-            resolve(report as Record<string, unknown>);
+            resolve({
+              report: report as Record<string, unknown>,
+              reportJson,
+              reportChecksum: createHash("sha256").update(bytes).digest("hex"),
+            });
           } catch {
             reject(new Error("ROS profile validator returned an invalid JSON report"));
           }

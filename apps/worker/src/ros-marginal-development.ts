@@ -11,11 +11,11 @@ import {
   compareMarginalIntervalCell,
   compareMarginalIntervalPortfolio,
   evaluateFirstPartyRosChampionPolicy,
+  evaluateRetainedV12FirstPartyRosChampionPolicy,
   evaluateFirstPartyRosMarginalPolicy,
   buildRosMarginalIntervalQualificationSet,
   validateMarginalRosTrainingCohort,
   type FirstPartyRosChampionOptions,
-  type FirstPartyRosChampionPolicy,
   type FirstPartyRosHeldOutForecast,
   type FirstPartyRosHeldOutSeason,
   type FirstPartyRosPosition,
@@ -32,6 +32,8 @@ export const ROS_MARGINAL_TRAINING_DEVELOPMENT_VERSION =
   "pinned-report-marginal-development-separate-defense-training-v2";
 export const ROS_MARGINAL_QUALIFIED_DEVELOPMENT_VERSION =
   "pinned-report-marginal-development-qualification-v3";
+export const ROS_MARGINAL_COMPOSITE_TRAINING_VERSION =
+  "full-portfolio-audit-and-complete-defense-training-v1";
 const POSITIONS = ["QB", "RB", "WR", "TE", "K", "DST"] as const;
 const BUCKETS = ["one-to-four", "five-to-eight", "nine-plus"] as const;
 const SOURCE_FIELDS = [
@@ -293,14 +295,15 @@ function snapshot(
     OPTION_KEYS.map((key) => [key, policy[key]]),
   ) as FirstPartyRosChampionOptions;
   equal(options, LOCKED_OPTIONS, "changed mean-selector thresholds");
-  // The selector is identical v7 code. Only its physical model label is restored for the retained
-  // v12 report; none of the mean proof, choices, corrections, artifacts or identities is adapted.
-  const legacy = evaluateFirstPartyRosChampionPolicy(heldOutSeasons, options);
-  const restored = { ...legacy.livePolicy, modelVersion } as FirstPartyRosChampionPolicy;
-  equal(restored, policy, "reconstructed v7 executable policy mismatch");
+  // The retained evaluator constructs its own v12 policies and verifies authentic row lineage.
+  // Never relabel current-model policy output to make a previous-model comparison appear valid.
+  const legacy = previous
+    ? evaluateRetainedV12FirstPartyRosChampionPolicy(heldOutSeasons, options)
+    : evaluateFirstPartyRosChampionPolicy(heldOutSeasons, options);
+  equal(legacy.livePolicy, policy, "reconstructed v7 executable policy mismatch");
   if (
     record(root.champion).publicationPolicyChecksum !==
-    firstPartyRosChampionPolicyChecksum(restored)
+    firstPartyRosChampionPolicyChecksum(legacy.livePolicy)
   )
     fail("legacy policy checksum mismatch");
   equal(diagnostics.selected, legacy.selected, "chronological selected means/ranges mismatch");
@@ -392,6 +395,84 @@ function snapshot(
   };
 }
 
+/**
+ * A derived corpus is not an alias for either physical constituent. Retain an inspectable,
+ * content-addressed composition manifest, including the exact scored row digests and both
+ * convergence audits. Non-defense rows are copied from the audit without changing their data;
+ * the shared superset validator independently checks every original defense input and target.
+ */
+function composePortfolioTraining(
+  candidate: ReturnType<typeof snapshot>,
+  training: ReturnType<typeof snapshot>,
+) {
+  equal(
+    [...candidate.positions].sort(),
+    [...POSITIONS].sort(),
+    "incomplete training composition audit",
+  );
+  const nonDefenseSeasons = candidate.heldOutSeasons.map((season) => ({
+    ...season,
+    forecasts: season.forecasts.filter((row) => row.position !== "DST"),
+  }));
+  const heldOutSeasons = candidate.heldOutSeasons.map((season) => ({
+    ...season,
+    forecasts: [
+      ...season.forecasts.filter((row) => row.position !== "DST"),
+      ...training.heldOutSeasons.find((year) => year.season === season.season)!.forecasts,
+    ],
+  }));
+  const checked = validateMarginalRosTrainingCohort(candidate.heldOutSeasons, heldOutSeasons);
+  const rowsChecksum = (seasons: readonly FirstPartyRosHeldOutSeason[]) =>
+    validateMarginalRosTrainingCohort(seasons, seasons).provenance.evaluationRowsChecksum;
+  if (
+    checked.provenance.evaluationForecasts !== 3264 ||
+    checked.provenance.trainingForecasts !== 4896 ||
+    checked.provenance.additionalTrainingForecasts !== 1632
+  )
+    fail("incomplete frozen training composition");
+  const checksum = (value: unknown) => createHash("sha256").update(canonical(value)).digest("hex");
+  const manifest = {
+    schemaVersion: 1,
+    version: ROS_MARGINAL_COMPOSITE_TRAINING_VERSION,
+    seasons: candidate.seasons,
+    sourceManifestChecksum: checksum(candidate.sources),
+    evaluation: {
+      source: candidate.source,
+      rowsChecksum: checked.provenance.evaluationRowsChecksum,
+      forecasts: 3264,
+    },
+    constituents: [
+      {
+        role: "unchanged-non-defense-audit",
+        source: candidate.source,
+        positions: POSITIONS.filter((position) => position !== "DST"),
+        sourceRowsChecksum: checked.provenance.evaluationRowsChecksum,
+        selectedRowsChecksum: rowsChecksum(nonDefenseSeasons),
+        forecasts: 2720,
+        convergenceAuditChecksum: checksum(candidate.report.convergenceAudit),
+      },
+      {
+        role: "complete-defense-training",
+        source: training.source,
+        positions: ["DST"],
+        sourceRowsChecksum: rowsChecksum(training.heldOutSeasons),
+        selectedRowsChecksum: rowsChecksum(training.heldOutSeasons),
+        forecasts: 2176,
+        convergenceAuditChecksum: checksum(training.report.convergenceAudit),
+      },
+    ],
+    trainingForecasts: checked.provenance.trainingForecasts,
+    trainingRowsChecksum: checked.provenance.trainingRowsChecksum,
+  } as const;
+  const source = {
+    ...candidate.source,
+    // Domain separation distinguishes the derived corpus identity from the manifest report pin.
+    physicalCorpusChecksum: checksum({ kind: "derived-training-corpus", manifest }),
+    reportChecksum: checksum(manifest),
+  };
+  return { source, heldOutSeasons: checked.ordered, manifest };
+}
+
 /** Development evidence deliberately has no root publicationPolicy/champion/report admission shape. */
 export function buildRosMarginalDevelopmentReport(input: {
   readonly candidateReportJson: string;
@@ -461,7 +542,12 @@ export function buildRosMarginalDevelopmentReport(input: {
   // corresponding previous deployment cells. No failing candidate position may be omitted.
   equal(positions, [...candidate.positions].sort(), "comparison omits candidate positions");
   if (training !== null) {
-    equal(positions, ["DST"], "separate interval training requires a defense-only audit");
+    if (positions.length !== 6)
+      equal(
+        positions,
+        ["DST"],
+        "separate interval training requires a defense-only or complete audit",
+      );
     equal(training.seasons, candidate.seasons, "interval training/audit held-out seasons differ");
     equal(training.sources, candidate.sources, "interval training/audit source checksums differ");
     if (
@@ -475,6 +561,11 @@ export function buildRosMarginalDevelopmentReport(input: {
     )
       fail("separate interval training requires a distinct physical corpus identity");
   }
+  const composite =
+    training !== null && positions.length === 6
+      ? composePortfolioTraining(candidate, training)
+      : null;
+  const intervalTraining = composite ?? training;
   const commonKey = (row: FirstPartyRosHeldOutForecast, old: boolean) =>
     JSON.stringify([
       row.position,
@@ -505,7 +596,9 @@ export function buildRosMarginalDevelopmentReport(input: {
   const marginal = evaluateFirstPartyRosMarginalPolicy(candidate.heldOutSeasons, {
     forecastSeason: input.forecastSeason,
     championOptions: candidate.options,
-    ...(training === null ? {} : { intervalTrainingSeasons: training.heldOutSeasons }),
+    ...(intervalTraining === null
+      ? {}
+      : { intervalTrainingSeasons: intervalTraining.heldOutSeasons }),
   });
   equal(marginal.legacyEvaluation, candidate.legacy, "marginal evaluator changed the mean policy");
   const cells = positions.flatMap((position) => BUCKETS.map((bucket) => ({ position, bucket })));
@@ -700,11 +793,13 @@ export function buildRosMarginalDevelopmentReport(input: {
     );
   }
   const payload = {
-    schemaVersion: training === null ? 1 : 2,
+    schemaVersion: composite !== null ? 4 : training === null ? 1 : 2,
     version:
-      training === null
-        ? ROS_MARGINAL_DEVELOPMENT_VERSION
-        : ROS_MARGINAL_TRAINING_DEVELOPMENT_VERSION,
+      composite !== null
+        ? ROS_MARGINAL_COMPOSITE_TRAINING_VERSION
+        : training === null
+          ? ROS_MARGINAL_DEVELOPMENT_VERSION
+          : ROS_MARGINAL_TRAINING_DEVELOPMENT_VERSION,
     validationMode: "marginal-interval-development-only",
     state: reasons.length ? "rejected-at-development-screen" : "development-screen-passed",
     canAuthorizeRelease: false,
@@ -719,7 +814,8 @@ export function buildRosMarginalDevelopmentReport(input: {
       previous: previous.source,
       sources: candidate.sources,
       sourceComponentEquivalence: "requires-separate-pinned-source-preflight",
-      ...(training === null ? {} : { intervalTraining: training.source }),
+      ...(intervalTraining === null ? {} : { intervalTraining: intervalTraining.source }),
+      ...(composite === null ? {} : { intervalTrainingComposition: composite.manifest }),
     },
     legacyEvaluation: {
       candidatePolicy: candidate.root.publicationPolicy,
@@ -754,7 +850,10 @@ export function buildRosMarginalDevelopmentReport(input: {
   const sourceManifestChecksum = createHash("sha256")
     .update(canonical(candidate.sources))
     .digest("hex");
-  const qualificationDataset = (source: typeof candidate) => ({
+  const qualificationDataset = (source: {
+    readonly source: MarginalIntervalComparisonSource;
+    readonly heldOutSeasons: readonly FirstPartyRosHeldOutSeason[];
+  }) => ({
     source: source.source,
     sourceManifestChecksum,
     heldOutSeasons: source.heldOutSeasons,
@@ -773,7 +872,9 @@ export function buildRosMarginalDevelopmentReport(input: {
     },
     candidate: qualificationDataset(candidate),
     previous: qualificationDataset(previous),
-    ...(training === null ? {} : { intervalTraining: qualificationDataset(training) }),
+    ...(intervalTraining === null
+      ? {}
+      : { intervalTraining: qualificationDataset(intervalTraining) }),
   });
   // The new shared admission boundary must reproduce every existing cell result exactly. It
   // cannot silently replace the report's cohort, final-live strategy, artifacts or comparisons.

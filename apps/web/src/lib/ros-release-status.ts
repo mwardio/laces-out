@@ -95,6 +95,8 @@ export interface RosLeagueReadiness {
     readonly state: "pending" | "validating" | "admitted" | "withheld" | "failed";
     readonly requestedAt: string;
     readonly blockers: readonly string[];
+    readonly rawBlockers?: readonly string[];
+    readonly supersededIntervalDiagnostics?: readonly string[];
     readonly historyPreparation?: {
       readonly state:
         "pending" | "building" | "ready" | "retry-wait" | "waiting-source" | "blocked-integrity";
@@ -291,6 +293,13 @@ function parseReadiness(value: unknown): readonly RosLeagueReadiness[] | null {
         state: validation.state as NonNullable<RosLeagueReadiness["scoringValidation"]>["state"],
         requestedAt: validation.requestedAt,
         blockers: validation.blockers,
+        ...(Array.isArray(validation.rawBlockers) && validation.rawBlockers.every(isString)
+          ? { rawBlockers: validation.rawBlockers }
+          : {}),
+        ...(Array.isArray(validation.supersededIntervalDiagnostics) &&
+        validation.supersededIntervalDiagnostics.every(isString)
+          ? { supersededIntervalDiagnostics: validation.supersededIntervalDiagnostics }
+          : {}),
       };
       const history = validation.historyPreparation;
       // This additive diagnostic must not blank the entire status on a mixed-version rollout.

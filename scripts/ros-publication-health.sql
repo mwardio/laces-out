@@ -2,13 +2,20 @@
 -- scoring shape is registered; first publication gets 36 hours from the validation request.
 -- Complete weekly normalization also catches a failed registrar, with 36 hours from signup.
 -- Keep release identities synchronized with @laces-out/projections (pinned by the PG test).
-with release_identity as (
-  select 'laces-ros-distribution-v12'::text as model_version,
-         'season-walk-forward-mean-rmse-block-wis-cqr-v7'::text as policy_version,
-         'season-blocked-split-conformal-cqr-v1'::text as calibration_version,
-         'league-scoring-map-v7'::text as scoring_mapping_version,
+-- Deployment may SET laces.ros_release_rail = 'marginal-v8'; the default remains legacy-v7.
+-- An unknown rail emits an actionable configuration failure and selects no model evidence.
+with release_selection as (
+  select coalesce(nullif(current_setting('laces.ros_release_rail', true), ''), 'legacy-v7') as rail
+), release_identity as (
+  select 'laces-ros-distribution-v13'::text as model_version,
+         case rail when 'marginal-v8' then 'season-walk-forward-mean-rmse-marginal-quantiles-v8'
+           else 'season-walk-forward-mean-rmse-block-wis-cqr-v7' end::text as policy_version,
+         case rail when 'marginal-v8' then 'season-prior-weighted-quantile-residuals-v1'
+           else 'season-blocked-split-conformal-cqr-v1' end::text as calibration_version,
+         'league-scoring-map-v8'::text as scoring_mapping_version,
          extract(year from now() at time zone 'UTC')::int
            - case when extract(month from now() at time zone 'UTC') < 3 then 1 else 0 end as season
+    from release_selection where rail in ('legacy-v7', 'marginal-v8')
 ), latest_weekly as (
   select distinct on (s.league_season_id)
          s.league_season_id, s.metadata
@@ -100,4 +107,10 @@ select expected.id::text,
   from expected
   left join latest on latest.league_season_id = expected.id
  where latest.published_at is not null or expected.requested_at is null
-    or expected.requested_at <= now() - interval '36 hours';
+    or expected.requested_at <= now() - interval '36 hours'
+union all
+select 'configuration-error'::text,
+       'ROS release rail configuration is invalid'::text,
+       -1::bigint,
+       'unavailable; select legacy-v7 or marginal-v8'::text
+  from release_selection where rail not in ('legacy-v7', 'marginal-v8');

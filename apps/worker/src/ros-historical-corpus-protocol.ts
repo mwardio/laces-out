@@ -89,6 +89,42 @@ const compatibleEvaluationVersions = [
 export type RosHistoricalCorpusBuildProvenance = typeof ROS_HISTORICAL_CORPUS_PHYSICAL_PROTOCOL &
   (typeof compatibleEvaluationVersions)[number];
 
+/**
+ * Literal archived build contract from v12 revision 2313e6801001265c7b8226319676d0b0d4228138.
+ * It predates the v13 defense-game fields. This is a retained comparator, never compatible with
+ * current football generation. Its original v6 build provenance is not rewritten by v7 replay.
+ */
+export const RETAINED_V12_ROS_HISTORICAL_CORPUS_BUILD_PROTOCOL = Object.freeze({
+  version: "historical-ros-build-protocol-v1",
+  modelVersion: "laces-ros-distribution-v12",
+  seedVersion: "laces-ros-distribution-v11",
+  outcomeSchemaVersion: "ros-joint-component-outcomes-v1",
+  cacheVersion: 1,
+  scenarioCount: 12_288,
+  referenceScenarioCount: 16_384,
+  weeklyModelVersion: "laces-weekly-components-v15:contextual-vs-recency-v1",
+  weeklyComponentModelVersion: "laces-weekly-components-v15",
+  playerHistoryVersion: "first-party-player-history-v2",
+  productionBasis: "fixed-reference-production-loss-v1",
+  cohortStrategy: "football-activity-reference-quantiles-return-specialists-v1",
+  availabilityVersion: "historical-ros-availability-football-activity-v4",
+  roleVersion: "historical-ros-role-reference-loss-v5",
+  kickerVersion: "historical-ros-kicker-all-missed-attempts-v4",
+  intervalMethodVersion: "simulation-p15-p50-p85-cqr-v1",
+  weeklySourceParserVersion: "nflverse-player-week-components-v4",
+  policyVersion: "season-walk-forward-block-wis-cqr-v6",
+  calibrationVersion: "season-blocked-split-conformal-cqr-v1",
+} as const);
+
+export type RetainedV12RosHistoricalCorpusBuildProvenance =
+  typeof RETAINED_V12_ROS_HISTORICAL_CORPUS_BUILD_PROTOCOL;
+
+export function isRetainedV12RosHistoricalCorpusBuildProtocol(
+  value: unknown,
+): value is RetainedV12RosHistoricalCorpusBuildProvenance {
+  return matchesFields(value, RETAINED_V12_ROS_HISTORICAL_CORPUS_BUILD_PROTOCOL, true);
+}
+
 /** These six exact options define the release evaluator, independently of cohort size. */
 export const ROS_HISTORICAL_CORPUS_RELEASE_THRESHOLDS = Object.freeze({
   minimumPortfolioForecasts: 300,

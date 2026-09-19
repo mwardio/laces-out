@@ -20,8 +20,9 @@ import {
   FIRST_PARTY_ROS_MINIMUM_HELD_OUT_SEASONS,
   FIRST_PARTY_ROS_MINIMUM_SAMPLES,
   FIRST_PARTY_ROS_MODEL_VERSION,
-  FIRST_PARTY_ROS_POLICY_VERSION,
-  FIRST_PARTY_ROS_INTERVAL_CALIBRATION_VERSION,
+  firstPartyRosReleaseIdentity,
+  type FirstPartyRosReleaseIdentity,
+  type FirstPartyRosReleaseRail,
   FIRST_PARTY_PROJECTION_MODEL_VERSION,
   rosScoringProfileCatalog,
   type FirstPartyRosChampionPolicy,
@@ -233,6 +234,7 @@ interface ManagedSourceState {
 }
 
 interface RosChecksumInput {
+  readonly releaseIdentity?: FirstPartyRosReleaseIdentity;
   readonly season: number;
   readonly window: FirstPartyRosWindow;
   readonly schedule: { readonly sourceKey: string; readonly checksum: string };
@@ -487,6 +489,98 @@ function earliestDate(values: readonly Date[]): Date {
   return new Date(Math.min(...values.map((value) => value.getTime())));
 }
 
+/** Latest admitted artifact per exact profile on one explicitly selected outer release rail. */
+export async function loadFirstPartyRosChampionArtifacts(input: {
+  readonly database: Database;
+  readonly season: number;
+  readonly acceptedScoringProfileKeys: ReadonlySet<string>;
+  readonly includeRegisteredProfiles: boolean;
+  readonly releaseIdentity: FirstPartyRosReleaseIdentity;
+}): Promise<readonly LoadedFirstPartyRosChampionArtifact[]> {
+  const { season } = input;
+  const acceptedKeys = new Set(input.acceptedScoringProfileKeys);
+  if (input.includeRegisteredProfiles) {
+    const registered = await input.database
+      .select({ scoringProfileKey: firstPartyRosProfileValidations.scoringProfileKey })
+      .from(firstPartyRosProfileValidations)
+      .where(
+        and(
+          eq(firstPartyRosProfileValidations.season, season),
+          eq(firstPartyRosProfileValidations.modelVersion, FIRST_PARTY_ROS_MODEL_VERSION),
+          eq(firstPartyRosProfileValidations.policyVersion, input.releaseIdentity.policyVersion),
+          eq(
+            firstPartyRosProfileValidations.calibrationVersion,
+            input.releaseIdentity.calibrationVersion,
+          ),
+          eq(firstPartyRosProfileValidations.state, "admitted"),
+        ),
+      );
+    for (const row of registered) acceptedKeys.add(row.scoringProfileKey);
+  }
+  const rows = await input.database
+    .selectDistinctOn([firstPartyRosChampionArtifacts.scoringProfileKey], {
+      season: firstPartyRosChampionArtifacts.season,
+      scoringProfileKey: firstPartyRosChampionArtifacts.scoringProfileKey,
+      modelVersion: firstPartyRosChampionArtifacts.modelVersion,
+      policyVersion: firstPartyRosChampionArtifacts.policyVersion,
+      calibrationVersion: firstPartyRosChampionArtifacts.calibrationVersion,
+      evidenceThroughSeason: firstPartyRosChampionArtifacts.evidenceThroughSeason,
+      sourceChecksums: firstPartyRosChampionArtifacts.sourceChecksums,
+      policy: firstPartyRosChampionArtifacts.policy,
+      releaseGate: firstPartyRosChampionArtifacts.releaseGate,
+      artifactChecksum: firstPartyRosChampionArtifacts.artifactChecksum,
+      admittedAt: firstPartyRosChampionArtifacts.admittedAt,
+    })
+    .from(firstPartyRosChampionArtifacts)
+    .where(
+      and(
+        eq(firstPartyRosChampionArtifacts.season, season),
+        eq(firstPartyRosChampionArtifacts.modelVersion, FIRST_PARTY_ROS_MODEL_VERSION),
+        eq(firstPartyRosChampionArtifacts.policyVersion, input.releaseIdentity.policyVersion),
+        eq(
+          firstPartyRosChampionArtifacts.calibrationVersion,
+          input.releaseIdentity.calibrationVersion,
+        ),
+        inArray(firstPartyRosChampionArtifacts.scoringProfileKey, [...acceptedKeys]),
+      ),
+    )
+    .orderBy(
+      firstPartyRosChampionArtifacts.scoringProfileKey,
+      desc(firstPartyRosChampionArtifacts.admittedAt),
+      desc(firstPartyRosChampionArtifacts.createdAt),
+    );
+
+  const loaded = rows
+    // A catalog identity change deliberately retires earlier evidence. Keeping an old artifact
+    // on the publication rail after the running catalog stopped naming it would let superseded
+    // semantics compete with the replacement artifact during per-league arbitration.
+    .filter((row) => acceptedKeys.has(row.scoringProfileKey))
+    .map((row) => ({
+      season: row.season,
+      scoringProfileKey: row.scoringProfileKey,
+      modelVersion: row.modelVersion,
+      policyVersion: row.policyVersion,
+      calibrationVersion: row.calibrationVersion,
+      evidenceThroughSeason: row.evidenceThroughSeason,
+      sourceChecksums: row.sourceChecksums,
+      policy: row.policy as unknown as FirstPartyRosChampionPolicy,
+      releaseGate: row.releaseGate,
+      artifactChecksum: row.artifactChecksum,
+      admittedAt: row.admittedAt,
+    }));
+
+  // Rows arrive newest first, so the first per key is the latest admission for that profile.
+  const latestByProfile = new Map<string, LoadedFirstPartyRosChampionArtifact>();
+  for (const artifact of loaded) {
+    const selected = selectFirstPartyRosArtifactForLeague({
+      artifacts: loaded,
+      leagueScoringProfileKey: artifact.scoringProfileKey,
+    });
+    if (selected) latestByProfile.set(artifact.scoringProfileKey, selected);
+  }
+  return [...latestByProfile.values()];
+}
+
 /**
  * ROS orchestration over immutable weekly inputs. It always records the independent shadow audit;
  * when a current-catalog champion artifact and every live gate clear, it also publishes a
@@ -498,9 +592,11 @@ export class FirstPartyRosProjectionShadowService implements ProjectionRefreshSe
   readonly #candidateProvider: FirstPartyRosCandidateProvider;
   readonly #acceptedScoringProfileKeys: ReadonlySet<string>;
   readonly #includeRegisteredProfiles: boolean;
+  readonly #releaseIdentity: FirstPartyRosReleaseIdentity;
 
   constructor(input: {
     readonly database: Database;
+    readonly releaseRail?: FirstPartyRosReleaseRail;
     readonly now?: () => Date;
     readonly candidateProvider?: FirstPartyRosCandidateProvider;
     /**
@@ -511,6 +607,7 @@ export class FirstPartyRosProjectionShadowService implements ProjectionRefreshSe
     readonly acceptedScoringProfileKeys?: readonly string[];
   }) {
     this.#database = input.database;
+    this.#releaseIdentity = firstPartyRosReleaseIdentity(input.releaseRail);
     this.#now = input.now ?? (() => new Date());
     this.#candidateProvider = input.candidateProvider ?? nullFirstPartyRosCandidateProvider;
     this.#includeRegisteredProfiles = input.acceptedScoringProfileKeys === undefined;
@@ -684,6 +781,7 @@ export class FirstPartyRosProjectionShadowService implements ProjectionRefreshSe
         window,
       });
       const inputChecksum = firstPartyRosLiveChecksum({
+        releaseIdentity: this.#releaseIdentity,
         season: job.season,
         window,
         schedule: {
@@ -822,6 +920,7 @@ export class FirstPartyRosProjectionShadowService implements ProjectionRefreshSe
           inputChecksum,
           configuration: {
             mode: "shadow",
+            releaseIdentity: this.#releaseIdentity,
             sourceSchemaVersion,
             simulationModelVersion: FIRST_PARTY_ROS_MODEL_VERSION,
             orchestrationVersion: FIRST_PARTY_ROS_SHADOW_MODEL_VERSION,
@@ -950,94 +1049,16 @@ export class FirstPartyRosProjectionShadowService implements ProjectionRefreshSe
       .digest("hex");
   }
 
-  /**
-   * Loads the latest admitted artifact for each scoring profile in the season. Latest-admitted-wins
-   * is applied per `scoring_profile_key`, never across profiles.
-   */
   async #loadChampionArtifacts(
     season: number,
   ): Promise<readonly LoadedFirstPartyRosChampionArtifact[]> {
-    const acceptedKeys = new Set(this.#acceptedScoringProfileKeys);
-    if (this.#includeRegisteredProfiles) {
-      const registered = await this.#database
-        .select({ scoringProfileKey: firstPartyRosProfileValidations.scoringProfileKey })
-        .from(firstPartyRosProfileValidations)
-        .where(
-          and(
-            eq(firstPartyRosProfileValidations.season, season),
-            eq(firstPartyRosProfileValidations.modelVersion, FIRST_PARTY_ROS_MODEL_VERSION),
-            eq(firstPartyRosProfileValidations.policyVersion, FIRST_PARTY_ROS_POLICY_VERSION),
-            eq(
-              firstPartyRosProfileValidations.calibrationVersion,
-              FIRST_PARTY_ROS_INTERVAL_CALIBRATION_VERSION,
-            ),
-            eq(firstPartyRosProfileValidations.state, "admitted"),
-          ),
-        );
-      for (const row of registered) acceptedKeys.add(row.scoringProfileKey);
-    }
-    const rows = await this.#database
-      .selectDistinctOn([firstPartyRosChampionArtifacts.scoringProfileKey], {
-        season: firstPartyRosChampionArtifacts.season,
-        scoringProfileKey: firstPartyRosChampionArtifacts.scoringProfileKey,
-        modelVersion: firstPartyRosChampionArtifacts.modelVersion,
-        policyVersion: firstPartyRosChampionArtifacts.policyVersion,
-        calibrationVersion: firstPartyRosChampionArtifacts.calibrationVersion,
-        evidenceThroughSeason: firstPartyRosChampionArtifacts.evidenceThroughSeason,
-        sourceChecksums: firstPartyRosChampionArtifacts.sourceChecksums,
-        policy: firstPartyRosChampionArtifacts.policy,
-        releaseGate: firstPartyRosChampionArtifacts.releaseGate,
-        artifactChecksum: firstPartyRosChampionArtifacts.artifactChecksum,
-        admittedAt: firstPartyRosChampionArtifacts.admittedAt,
-      })
-      .from(firstPartyRosChampionArtifacts)
-      .where(
-        and(
-          eq(firstPartyRosChampionArtifacts.season, season),
-          eq(firstPartyRosChampionArtifacts.modelVersion, FIRST_PARTY_ROS_MODEL_VERSION),
-          eq(firstPartyRosChampionArtifacts.policyVersion, FIRST_PARTY_ROS_POLICY_VERSION),
-          eq(
-            firstPartyRosChampionArtifacts.calibrationVersion,
-            FIRST_PARTY_ROS_INTERVAL_CALIBRATION_VERSION,
-          ),
-          inArray(firstPartyRosChampionArtifacts.scoringProfileKey, [...acceptedKeys]),
-        ),
-      )
-      .orderBy(
-        firstPartyRosChampionArtifacts.scoringProfileKey,
-        desc(firstPartyRosChampionArtifacts.admittedAt),
-        desc(firstPartyRosChampionArtifacts.createdAt),
-      );
-
-    const loaded = rows
-      // A catalog identity change deliberately retires earlier evidence. Keeping an old artifact
-      // on the publication rail after the running catalog stopped naming it would let superseded
-      // semantics compete with the replacement artifact during per-league arbitration.
-      .filter((row) => acceptedKeys.has(row.scoringProfileKey))
-      .map((row) => ({
-        season: row.season,
-        scoringProfileKey: row.scoringProfileKey,
-        modelVersion: row.modelVersion,
-        policyVersion: row.policyVersion,
-        calibrationVersion: row.calibrationVersion,
-        evidenceThroughSeason: row.evidenceThroughSeason,
-        sourceChecksums: row.sourceChecksums,
-        policy: row.policy as unknown as FirstPartyRosChampionPolicy,
-        releaseGate: row.releaseGate,
-        artifactChecksum: row.artifactChecksum,
-        admittedAt: row.admittedAt,
-      }));
-
-    // Rows arrive newest first, so the first per key is the latest admission for that profile.
-    const latestByProfile = new Map<string, LoadedFirstPartyRosChampionArtifact>();
-    for (const artifact of loaded) {
-      const selected = selectFirstPartyRosArtifactForLeague({
-        artifacts: loaded,
-        leagueScoringProfileKey: artifact.scoringProfileKey,
-      });
-      if (selected) latestByProfile.set(artifact.scoringProfileKey, selected);
-    }
-    return [...latestByProfile.values()];
+    return loadFirstPartyRosChampionArtifacts({
+      database: this.#database,
+      season,
+      acceptedScoringProfileKeys: this.#acceptedScoringProfileKeys,
+      includeRegisteredProfiles: this.#includeRegisteredProfiles,
+      releaseIdentity: this.#releaseIdentity,
+    });
   }
 
   async #attemptPublication(input: {

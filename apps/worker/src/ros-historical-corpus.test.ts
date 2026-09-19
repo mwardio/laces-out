@@ -58,7 +58,7 @@ describe("shared historical evaluation corpus", () => {
     const original: RosHistoricalCorpus = {
       ...current,
       buildProtocol: {
-        ...current.buildProtocol,
+        ...ROS_HISTORICAL_CORPUS_BUILD_PROTOCOL,
         policyVersion: "season-walk-forward-block-wis-cqr-v5",
         calibrationVersion: "season-blocked-split-conformal-cqr-v1",
       },

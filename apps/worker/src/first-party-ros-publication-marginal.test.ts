@@ -1,6 +1,8 @@
 import { beforeAll, describe, expect, it } from "vitest";
 import {
   FIRST_PARTY_ROS_MARGINAL_POLICY_VERSION,
+  deriveVerifiedMarginalRosArtifactBlockers,
+  firstPartyRosReleaseArtifactChecksum,
   FIRST_PARTY_ROS_POLICY_VERSION,
   FIRST_PARTY_ROS_MODEL_VERSION,
   FIRST_PARTY_ROS_INTERVAL_CALIBRATION_VERSION,
@@ -651,5 +653,55 @@ describe("marginal publication calibration and persistence linkage", () => {
     });
     expect(run.configuration.policyVersion).toBe(FIRST_PARTY_ROS_POLICY_VERSION);
     expect(firstPartyRosChampionArtifactChecksum(artifact)).toBe(artifact.artifactChecksum);
+  });
+});
+
+describe("shared read-only marginal artifact diagnostics", () => {
+  it("uses the admission checksum and preserves raw interval diagnostics while exposing effective blockers", () => {
+    const raw = "calibration_DST_one-to-four_coverage_shortfall_above_maximum";
+    const physical = "cell_DST_one-to-four_convergence_failed";
+    const artifact = seal({
+      ...base.artifact,
+      releaseGate: { ...base.artifact.releaseGate, blockers: [raw, physical] },
+    });
+    expect(firstPartyRosReleaseArtifactChecksum(artifact)).toBe(artifact.artifactChecksum);
+    const result = deriveVerifiedMarginalRosArtifactBlockers(artifact);
+    expect(result?.rawBlockers).toEqual([raw, physical]);
+    expect(result?.effectiveBlockers).toEqual([physical]);
+    expect(result?.supersededIntervalDiagnostics).toEqual([raw]);
+  });
+
+  it("does not trust a changed checksum, self-sealed missing receipt, or forged claimed qualification", () => {
+    expect(
+      deriveVerifiedMarginalRosArtifactBlockers({
+        ...base.artifact,
+        artifactChecksum: "0".repeat(64),
+      }),
+    ).toBeNull();
+    const omitted = seal({
+      ...base.artifact,
+      releaseGate: {
+        ...base.artifact.releaseGate,
+        marginalIntervals: {
+          ...base.marginalIntervals,
+          qualifications: base.qualifications.slice(1),
+        },
+      },
+    });
+    expect(deriveVerifiedMarginalRosArtifactBlockers(omitted)).toBeNull();
+    const forged = seal({
+      ...partial.artifact,
+      releaseGate: {
+        ...partial.artifact.releaseGate,
+        marginalIntervals: {
+          ...partial.marginalIntervals,
+          qualifications: partial.qualifications.map((receipt) => ({
+            ...receipt,
+            state: "qualified",
+          })),
+        },
+      },
+    });
+    expect(deriveVerifiedMarginalRosArtifactBlockers(forged)).toBeNull();
   });
 });

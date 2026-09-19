@@ -4,6 +4,7 @@ import {
   FIRST_PARTY_ROS_MINIMUM_SCENARIOS,
   FIRST_PARTY_ROS_DEFAULT_SCENARIOS,
   FIRST_PARTY_ROS_MODEL_VERSION,
+  FIRST_PARTY_ROS_RETAINED_V12_MODEL_VERSION,
   projectFirstPartyRestOfSeason,
   type FirstPartyRosProjection,
   type FirstPartyRosProjectionInput,
@@ -54,6 +55,22 @@ export interface FirstPartyRosOutcomeScore {
   readonly scoringProfileKey: string;
   readonly scenarioCount: number;
 }
+
+/** Historical vectors remain labeled with their original physics and provenance. */
+export type RetainedV12FirstPartyRosOutcomeEnsemble = Omit<
+  FirstPartyRosOutcomeEnsemble,
+  "modelVersion" | "metadata"
+> & {
+  readonly modelVersion: typeof FIRST_PARTY_ROS_RETAINED_V12_MODEL_VERSION;
+  readonly metadata: Omit<FirstPartyRosOutcomeEnsemble["metadata"], "provenance"> & {
+    readonly provenance: Omit<
+      FirstPartyRosOutcomeEnsemble["metadata"]["provenance"],
+      "modelVersion"
+    > & {
+      readonly modelVersion: typeof FIRST_PARTY_ROS_RETAINED_V12_MODEL_VERSION;
+    };
+  };
+};
 
 /**
  * Retains one forecast's sufficient joint component vectors. The zero-valued internal scorer
@@ -135,14 +152,17 @@ function quantile(sorted: readonly number[], probability: number): number {
  * A prefix uses exactly the release draws from a larger convergence-reference ensemble.
  */
 function scoreOutcomeDistribution(
-  ensemble: FirstPartyRosOutcomeEnsemble,
+  ensemble: FirstPartyRosOutcomeEnsemble | RetainedV12FirstPartyRosOutcomeEnsemble,
   profile: ProjectionScoringProfile,
   scenarioCount: number,
   retainSamples: boolean,
+  expectedModelVersion:
+    | typeof FIRST_PARTY_ROS_MODEL_VERSION
+    | typeof FIRST_PARTY_ROS_RETAINED_V12_MODEL_VERSION = FIRST_PARTY_ROS_MODEL_VERSION,
 ): { readonly summary: FirstPartyRosOutcomeScore; readonly samples: readonly number[] | null } {
   if (
     ensemble.schemaVersion !== FIRST_PARTY_ROS_OUTCOME_SCHEMA_VERSION ||
-    ensemble.modelVersion !== FIRST_PARTY_ROS_MODEL_VERSION ||
+    ensemble.modelVersion !== expectedModelVersion ||
     ensemble.metadata.provenance.modelVersion !== ensemble.modelVersion ||
     ensemble.metadata.provenance.scenarioCount !== ensemble.scenarioCount
   ) {
@@ -251,6 +271,21 @@ export function scoreFirstPartyRosOutcomes(
   scenarioCount = ensemble.scenarioCount,
 ): FirstPartyRosOutcomeScore {
   return scoreOutcomeDistribution(ensemble, profile, scenarioCount, false).summary;
+}
+
+/** Explicit read-only historical scorer; the current scorer continues rejecting v12 vectors. */
+export function scoreRetainedV12FirstPartyRosOutcomes(
+  ensemble: RetainedV12FirstPartyRosOutcomeEnsemble,
+  profile: ProjectionScoringProfile,
+  scenarioCount = ensemble.scenarioCount,
+): FirstPartyRosOutcomeScore {
+  return scoreOutcomeDistribution(
+    ensemble,
+    profile,
+    scenarioCount,
+    false,
+    FIRST_PARTY_ROS_RETAINED_V12_MODEL_VERSION,
+  ).summary;
 }
 
 /**

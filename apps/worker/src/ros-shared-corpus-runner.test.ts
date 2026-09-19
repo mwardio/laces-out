@@ -21,6 +21,7 @@ import {
 import { historicalCorpusFixture } from "./ros-historical-outcome.test-fixtures.js";
 import {
   ROS_HISTORICAL_CORPUS_PHYSICAL_PROTOCOL,
+  ROS_HISTORICAL_CORPUS_BUILD_PROTOCOL,
   ROS_HISTORICAL_CORPUS_RELEASE_THRESHOLDS,
 } from "./ros-historical-corpus-protocol.js";
 import { createRosOutcomeCache } from "./ros-outcome-cache.js";
@@ -325,7 +326,7 @@ describe("durable shared ROS corpus orchestration", { timeout: 30_000 }, () => {
     const original: RosHistoricalCorpus = {
       ...prepared.corpus,
       buildProtocol: {
-        ...prepared.corpus.buildProtocol,
+        ...ROS_HISTORICAL_CORPUS_BUILD_PROTOCOL,
         policyVersion: "season-walk-forward-block-wis-cqr-v5",
         calibrationVersion: "season-blocked-split-conformal-cqr-v1",
       },

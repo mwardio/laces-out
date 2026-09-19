@@ -26,6 +26,9 @@ import {
   firstPartyRosAdmissionConstants,
   validateFirstPartyRosAdmission,
 } from "./first-party-ros-admission.js";
+import { rosMarginalReleaseArtifactFullFixture } from "../../../packages/projections/src/ros-release-artifact.test-fixtures.js";
+import { firstPartyRosReleaseIdentity } from "@laces-out/projections";
+import { loadFirstPartyRosChampionArtifacts } from "./first-party-ros-projections.js";
 import { RosProfileDiscoveryService } from "./ros-profile-discovery.js";
 import { DrizzleRosProfileValidationRepository } from "./ros-profile-validation.js";
 import { constants, validReport } from "./ros-profile-validation.test-fixtures.js";
@@ -299,6 +302,45 @@ describe.skipIf(!dockerAvailable())("ROS profile lifecycle against PostgreSQL", 
     return leagueSeason!.id;
   }
 
+  it("selects one explicit release rail and preserves the other rail's independent ledger", async () => {
+    const season = 2072;
+    await seedLeague(season, "0.731");
+    const queuedLegacy = vi.fn(async () => randomUUID());
+    const queuedMarginal = vi.fn<(job: { profileValidationId: string }) => Promise<string>>(
+      async () => randomUUID(),
+    );
+    const common = { database: handle.db, enqueueProjectionRefresh: async () => randomUUID() };
+    await new RosProfileDiscoveryService({ ...common, enqueueValidation: queuedLegacy }).discover(
+      season,
+    );
+    const marginal = new RosProfileDiscoveryService({
+      ...common,
+      releaseRail: "marginal-v8",
+      enqueueValidation: queuedMarginal,
+    });
+    await marginal.discover(season);
+    await marginal.discover(season);
+    const rows = await handle.db
+      .select()
+      .from(firstPartyRosProfileValidations)
+      .where(eq(firstPartyRosProfileValidations.season, season));
+    expect(rows).toHaveLength(2);
+    expect(new Set(rows.map((row) => row.scoringProfileKey)).size).toBe(1);
+    expect(rows.map((row) => [row.policyVersion, row.calibrationVersion]).sort()).toEqual([
+      ["season-walk-forward-mean-rmse-block-wis-cqr-v7", "season-blocked-split-conformal-cqr-v1"],
+      [
+        "season-walk-forward-mean-rmse-marginal-quantiles-v8",
+        "season-prior-weighted-quantile-residuals-v1",
+      ],
+    ]);
+    expect(
+      queuedMarginal.mock.calls.every(([job]) =>
+        rows.find((row) => row.id === job.profileValidationId)?.policyVersion.endsWith("v8"),
+      ),
+    ).toBe(true);
+    expect(queuedLegacy).toHaveBeenCalledTimes(1);
+  });
+
   it("deduplicates identical new leagues and creates a distinct request when scoring changes", async () => {
     const season = 2027;
     const first = await seedLeague(season, "0.73");
@@ -501,4 +543,70 @@ describe.skipIf(!dockerAvailable())("ROS profile lifecycle against PostgreSQL", 
     expect((await repository.get(adopted!.id))?.publicationScopeDigest).not.toBe(scopeBefore);
     expect(enqueueProjectionRefresh).toHaveBeenCalledTimes(4);
   });
+  it("loads and reuses admitted v8 proof for a newly linked exact-profile league", async () => {
+    const season = 2026;
+    await seedLeague(season, "0.987");
+    const definition = rosProfileDefinitionFromKey(
+      projectionScoringProfileKey({
+        id: "new-marginal-league",
+        rules: [{ statId: "receptions", points: 0.987 }],
+      }),
+    );
+    const replaced = "calibration_DST_one-to-four_coverage_shortfall_above_maximum";
+    const physical = "cell_DST_one-to-four_convergence_failed";
+    const artifact = rosMarginalReleaseArtifactFullFixture({
+      scoringProfileKey: definition.scoringProfileKey,
+      blockers: [replaced, physical],
+    });
+    const [stored] = await handle.db
+      .insert(firstPartyRosChampionArtifacts)
+      .values({
+        ...artifact,
+        policy: artifact.policy as unknown as Record<string, unknown>,
+        admittedAt: new Date(),
+      })
+      .returning({ id: firstPartyRosChampionArtifacts.id });
+    const enqueueValidation = vi.fn<(job: { profileValidationId: string }) => Promise<string>>(
+      async () => randomUUID(),
+    );
+    const enqueueProjectionRefresh = vi.fn(async () => randomUUID());
+    const discovery = new RosProfileDiscoveryService({
+      database: handle.db,
+      releaseRail: "marginal-v8",
+      enqueueValidation,
+      enqueueProjectionRefresh,
+    });
+    await discovery.discover(season);
+    const [ledger] = await handle.db
+      .select()
+      .from(firstPartyRosProfileValidations)
+      .where(eq(firstPartyRosProfileValidations.artifactId, stored!.id));
+    expect(ledger).toMatchObject({ state: "admitted", blockers: [physical] });
+    expect(ledger!.report?.artifactDiagnostics).toMatchObject({
+      rawBlockers: [replaced, physical],
+      supersededIntervalDiagnostics: [replaced],
+    });
+    const load = (releaseRail: "legacy-v7" | "marginal-v8") =>
+      loadFirstPartyRosChampionArtifacts({
+        database: handle.db,
+        season,
+        acceptedScoringProfileKeys: new Set<string>(),
+        includeRegisteredProfiles: true,
+        releaseIdentity: firstPartyRosReleaseIdentity(releaseRail),
+      });
+    expect((await load("marginal-v8")).map((row) => row.artifactChecksum)).toContain(
+      artifact.artifactChecksum,
+    );
+    expect((await load("legacy-v7")).map((row) => row.artifactChecksum)).not.toContain(
+      artifact.artifactChecksum,
+    );
+    await discovery.discover(season);
+    expect(enqueueProjectionRefresh).toHaveBeenCalledTimes(1);
+    await seedLeague(season, "0.987");
+    await discovery.discover(season);
+    expect(enqueueProjectionRefresh).toHaveBeenCalledTimes(2);
+    expect(
+      enqueueValidation.mock.calls.some(([job]) => job.profileValidationId === ledger!.id),
+    ).toBe(false);
+  }, 60_000);
 });

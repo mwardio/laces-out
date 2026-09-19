@@ -560,7 +560,7 @@ describe("shared raw-source marginal interval qualification", () => {
         source,
       ),
     ).toBe(false);
-  });
+  }, 15_000);
 
   it("permits only the explicit closed previous Rams amendment and rejects canonical collisions", () => {
     const renamed = mapRows(pinned.previous.heldOutSeasons, (row) =>

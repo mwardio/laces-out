@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { firstPartyRosReleaseIdentity } from "@laces-out/projections";
 
 import {
   FIRST_PARTY_ROS_SHADOW_MODEL_VERSION,
@@ -245,6 +246,19 @@ describe("first-party ROS live checksum", () => {
       },
     } as const;
     const checksum = firstPartyRosLiveChecksum(base);
+    expect(
+      firstPartyRosLiveChecksum({
+        ...base,
+        championArtifacts: [],
+        releaseIdentity: firstPartyRosReleaseIdentity("marginal-v8"),
+      }),
+    ).not.toBe(
+      firstPartyRosLiveChecksum({
+        ...base,
+        championArtifacts: [],
+        releaseIdentity: firstPartyRosReleaseIdentity("legacy-v7"),
+      }),
+    );
     expect(checksum).toMatch(/^[a-f0-9]{64}$/u);
     expect(firstPartyRosLiveChecksum({ ...base, weeklyPins: [...base.weeklyPins].reverse() })).toBe(
       checksum,
