@@ -77,7 +77,7 @@ function prepare(input: {
     throw new Error("Conditional artifact needs a fitted, context-bound solution");
   for (const { row } of snapshot.fit.history) windowMatches(row, snapshot.context);
   const apply = prepareConditionalIntervalCalibration(snapshot.fit);
-  const body = {
+  const body: Omit<ConditionalIntervalArtifact, "artifactChecksum"> = {
     schemaVersion: 1 as const,
     artifactVersion: CONDITIONAL_INTERVAL_RELEASE_ARTIFACT_VERSION,
     calibrationVersion: CONDITIONAL_INTERVAL_CALIBRATION_VERSION,

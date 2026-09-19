@@ -608,7 +608,8 @@ export function buildRosConditionalIntervalQualification(
   });
   const body = {
     schemaVersion: 1 as const,
-    qualificationMethod: ROS_CONDITIONAL_INTERVAL_QUALIFICATION_VERSION,
+    qualificationMethod:
+      ROS_CONDITIONAL_INTERVAL_QUALIFICATION_VERSION as typeof ROS_CONDITIONAL_INTERVAL_QUALIFICATION_VERSION,
     state:
       reasons.length === 0
         ? ("qualified-interval-evidence" as const)
