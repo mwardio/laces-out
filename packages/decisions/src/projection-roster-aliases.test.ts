@@ -86,6 +86,54 @@ describe("current roster aliases for approved projections", () => {
     ).toHaveLength(1);
   });
 
+  it.each(["470.p.26686", "461.p.26686", "nfl.p.26686", "26686"])(
+    "joins Yahoo roster key %s to a numeric crosswalk for projections and health",
+    (externalId) => {
+      expect(
+        resolve({
+          rosterPlayers: [{ ...roster, name: "Different Provider Display Name" }],
+          externalIds: [
+            { playerId: roster.playerId, source: "yahoo", externalId },
+            { playerId: canonical.playerId, source: "sleeper-yahoo", externalId: "26686" },
+          ],
+        }),
+      ).toEqual([
+        {
+          ...canonical,
+          ...roster,
+          name: "Different Provider Display Name",
+          projectionPlayerId: canonical.playerId,
+        },
+      ]);
+    },
+  );
+
+  it("rejects conflicting normalized Yahoo identities in either order", () => {
+    const second = { ...canonical, playerId: "second", gsisId: "00-0040888" };
+    const externalIds = [
+      { playerId: roster.playerId, source: "yahoo", externalId: "470.p.26686" },
+      { playerId: canonical.playerId, source: "sleeper-yahoo", externalId: "26686" },
+      { playerId: second.playerId, source: "sleeper-yahoo", externalId: "nfl.p.26686" },
+    ];
+    for (const rows of [externalIds, [...externalIds].reverse()]) {
+      expect(resolve({ projections: [canonical, second], externalIds: rows })).toEqual([]);
+    }
+  });
+
+  it.each(["nba.p.26686", "470.p.26686.extra", "470.p."])(
+    "does not hide invalid Yahoo evidence %s behind exact name matching",
+    (externalId) => {
+      expect(
+        resolve({
+          externalIds: [
+            { playerId: roster.playerId, source: "yahoo", externalId },
+            { playerId: canonical.playerId, source: "sleeper-yahoo", externalId: "26686" },
+          ],
+        }),
+      ).toEqual([]);
+    },
+  );
+
   it("does not borrow a scoped crosswalk from another league", () => {
     expect(
       resolve({
