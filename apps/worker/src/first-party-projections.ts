@@ -105,6 +105,8 @@ import {
 import type { ProjectionRefreshJob, ProjectionRefreshService, WorkerJobContext } from "./jobs.js";
 import {
   WEEKLY_INPUT_SNAPSHOT_VERSION,
+  WEEKLY_PUBLICATION_DEADLINE_MS,
+  WEEKLY_PUBLICATION_STATEMENT_TIMEOUT_MS,
   weeklySourceManifest,
   weeklyHistoricalRolesChecksum,
   readWeeklyMutableInputChecksum,
@@ -117,6 +119,7 @@ import {
 
 export const FIRST_PARTY_PROJECTION_SOURCE_KEY = "laces-out.projections.first-party";
 export const FIRST_PARTY_PROJECTION_SET_SOURCE = "laces-out-first-party";
+export const WEEKLY_PUBLICATION_CLOCK_VERSION = "weekly-publication-clock-v1";
 
 const projectionCheckIntervalMinutes = 60;
 const historySeasonCount = 4;
@@ -571,6 +574,58 @@ export function projectionStatusWindow(
   if (daysToKickoff <= 7) return "short-window";
   if (daysToKickoff <= 28) return "reserve-window";
   return "outside-28d";
+}
+
+/**
+ * The input checksum includes clock-sensitive facts as well as source bytes. Reject a plan when
+ * those facts advance during computation/publication; a retry will freeze newly started games.
+ * The short reserve is operational headroom, not evidence of a pre-kickoff database commit.
+ */
+export function projectionPublicationClockGuard(input: {
+  readonly schedules: readonly ProjectionScheduleFact[];
+  readonly season: number;
+  readonly week: number;
+  readonly statsThrough: { readonly season: number; readonly week: number } | null;
+  readonly preparedAt: Date;
+}): { check(now: Date, reservePublicationBudget?: boolean): void } {
+  const stateAt = (now: Date) =>
+    JSON.stringify({
+      completedWeeks: [...completedScheduleWeekKeys(input.schedules, now)].sort(),
+      statusWindows: input.schedules
+        .filter((game) => game.season === input.season && game.week === input.week)
+        .map((game) => [game.gameId, projectionStatusWindow(game.kickoffAt, now)]),
+      coverage: weeklyInputCoverage({
+        season: input.season,
+        targetWeek: input.week,
+        statsThrough: input.statsThrough,
+        schedule: input.schedules,
+        now,
+      }),
+    });
+  let lastCheckedAt = input.preparedAt.getTime();
+  if (!Number.isFinite(lastCheckedAt)) throw weeklyInputChangedError();
+  const expected = stateAt(input.preparedAt);
+  return {
+    check(now, reservePublicationBudget = false) {
+      const milliseconds = now.getTime();
+      if (
+        !Number.isFinite(milliseconds) ||
+        milliseconds < lastCheckedAt ||
+        stateAt(now) !== expected ||
+        (reservePublicationBudget &&
+          stateAt(
+            new Date(
+              milliseconds +
+                WEEKLY_PUBLICATION_DEADLINE_MS +
+                WEEKLY_PUBLICATION_STATEMENT_TIMEOUT_MS,
+            ),
+          ) !== expected)
+      ) {
+        throw weeklyInputChangedError();
+      }
+      lastCheckedAt = milliseconds;
+    },
+  };
 }
 
 function projectionTrainingHistoryChecksum(history: readonly unknown[]): string {
@@ -1586,7 +1641,7 @@ export class FirstPartyProjectionService implements ProjectionRefreshService {
       const startInputEpoch = inputSnapshot.sourceManifest.checksum;
       const targetWeeks = projectionTargetWeeks(input.schedules, job.season, job.week, now);
       if (targetWeeks.length === 0) {
-        await this.#recordSourceSuccess(source.id, now, null, {
+        await this.#recordSourceSuccess(source.id, this.#now(), null, {
           targetWeeks: "none",
           result: "no_unplayed_regular_season_weeks",
         });
@@ -1594,11 +1649,26 @@ export class FirstPartyProjectionService implements ProjectionRefreshService {
       }
 
       const completedWeeks = completedScheduleWeekKeys(input.schedules, now);
+      const refreshClocks = targetWeeks.map((week) =>
+        projectionPublicationClockGuard({
+          schedules: input.schedules,
+          season: job.season,
+          week,
+          statsThrough: null,
+          preparedAt: now,
+        }),
+      );
+      const checkRefreshClock = () => {
+        const checkedAt = this.#now();
+        for (const clock of refreshClocks) clock.check(checkedAt);
+        return checkedAt;
+      };
       const sourceAsOf = new Date(
         Math.min(...selectedSources.map((selected) => selected.lastSuccessfulAt.getTime())),
       );
       const baseChecksum = projectionInputChecksum({
         modelVersion: FIRST_PARTY_PROJECTION_MODEL_VERSION,
+        publicationClockVersion: WEEKLY_PUBLICATION_CLOCK_VERSION,
         playerHistoryVersion: FIRST_PARTY_PLAYER_HISTORY_VERSION,
         inputSnapshotVersion: inputSnapshot.version,
         sourceManifestChecksum: inputSnapshot.sourceManifest.checksum,
@@ -1607,6 +1677,18 @@ export class FirstPartyProjectionService implements ProjectionRefreshService {
         // Finality can advance on the clock alone. A matching source snapshot must not reuse an
         // older publication that excluded a week which has since crossed the finality boundary.
         completedScheduleWeeks: [...completedWeeks].sort(),
+        // The eight-hour coverage deadline can advance without a source checksum or trusted
+        // finality change. Do not reuse a previously complete result across that boundary.
+        coverageClock: targetWeeks.map((week) => ({
+          week,
+          coverage: weeklyInputCoverage({
+            season: job.season,
+            targetWeek: week,
+            statsThrough: null,
+            schedule: input.schedules,
+            now,
+          }),
+        })),
         pointCalibrationPolicyVersion: WEEKLY_POINT_CALIBRATION_POLICY_VERSION,
         publicationPolicyVersion: FIRST_PARTY_PUBLICATION_POLICY_VERSION,
         scoringNormalizationVersion: LEAGUE_SCORING_NORMALIZATION_VERSION,
@@ -1682,17 +1764,21 @@ export class FirstPartyProjectionService implements ProjectionRefreshService {
         baseChecksum,
       );
       if (priorOutputs.complete) {
-        await this.#database.transaction((transaction) =>
-          this.#assertInputSnapshot(transaction, job.season, inputSnapshot),
-        );
-        await this.#recordSourceSuccess(source.id, now, baseChecksum, {
+        checkRefreshClock();
+        await this.#database.transaction(async (transaction) => {
+          const budget = await this.#assertInputSnapshot(transaction, job.season, inputSnapshot);
+          checkRefreshClock();
+          budget.check();
+        });
+        const checkedAt = checkRefreshClock();
+        await this.#recordSourceSuccess(source.id, checkedAt, baseChecksum, {
           targetWeeks: targetWeeks.join(","),
           publishedWeeks: 0,
           modelVersion: FIRST_PARTY_PROJECTION_MODEL_VERSION,
           sourceAsOf: sourceAsOf.toISOString(),
           qualityState: priorOutputs.qualityState ?? "rejected",
           qualityReasons: priorOutputs.qualityReasons ?? "model_run_quality_missing",
-          lastEvaluationAt: now.toISOString(),
+          lastEvaluationAt: checkedAt.toISOString(),
           ...(priorOutputs.lastPublishedAt
             ? { lastPublishedAt: priorOutputs.lastPublishedAt }
             : {}),
@@ -1800,14 +1886,15 @@ export class FirstPartyProjectionService implements ProjectionRefreshService {
         await this.#selectSources(job.season, this.#now()),
       ).checksum;
       if (endInputEpoch !== startInputEpoch) {
-        await this.#recordSourceSuccess(source.id, now, null, {
+        const checkedAt = this.#now();
+        await this.#recordSourceSuccess(source.id, checkedAt, null, {
           targetWeeks: targetWeeks.join(","),
           publishedWeeks: 0,
           modelVersion: FIRST_PARTY_PROJECTION_MODEL_VERSION,
           sourceAsOf: sourceAsOf.toISOString(),
           qualityState: "rejected",
           qualityReasons: "input_epoch_changed",
-          lastEvaluationAt: now.toISOString(),
+          lastEvaluationAt: checkedAt.toISOString(),
           result: "input_epoch_changed",
         });
         // The queued request still needs an evaluation of the replacement inputs. Reject this
@@ -1859,15 +1946,16 @@ export class FirstPartyProjectionService implements ProjectionRefreshService {
         reasons: [...new Set(publicationGates.flatMap((gate) => gate.reasons))],
       };
 
-      await this.#recordSourceSuccess(source.id, now, baseChecksum, {
+      const finishedAt = this.#now();
+      await this.#recordSourceSuccess(source.id, finishedAt, baseChecksum, {
         targetWeeks: targetWeeks.join(","),
         publishedWeeks,
         modelVersion: FIRST_PARTY_PROJECTION_MODEL_VERSION,
         sourceAsOf: sourceAsOf.toISOString(),
         qualityState: effectiveGate.state,
         qualityReasons: effectiveGate.reasons.join("|") || "none",
-        lastEvaluationAt: now.toISOString(),
-        ...(publishedWeeks > 0 ? { lastPublishedAt: now.toISOString() } : {}),
+        lastEvaluationAt: finishedAt.toISOString(),
+        ...(publishedWeeks > 0 ? { lastPublishedAt: finishedAt.toISOString() } : {}),
         result:
           publishedWeeks > 0
             ? "published"
@@ -1876,13 +1964,14 @@ export class FirstPartyProjectionService implements ProjectionRefreshService {
               : "prior_good_output_preserved",
       });
     } catch (error) {
+      const failedAt = this.#now();
       if (
         error !== null &&
         typeof error === "object" &&
         "code" in error &&
         error.code === "PROJECTION_INPUT_EPOCH_CHANGED"
       ) {
-        await this.#recordSourceSuccess(source.id, now, null, {
+        await this.#recordSourceSuccess(source.id, failedAt, null, {
           modelVersion: FIRST_PARTY_PROJECTION_MODEL_VERSION,
           publishedWeeks,
           qualityState: "rejected",
@@ -1892,7 +1981,7 @@ export class FirstPartyProjectionService implements ProjectionRefreshService {
       }
       await this.#recordSourceFailure(
         source.id,
-        now,
+        failedAt,
         "PROJECTION_REFRESH_FAILED",
         error instanceof Error ? error.message : "First-party projection refresh failed",
       );
@@ -2778,7 +2867,7 @@ export class FirstPartyProjectionService implements ProjectionRefreshService {
    * Publishes one pinned, prepared week. Exact league evidence governs league sets; the reference
    * profile independently governs shared raw observations. Both persist in the same transaction.
    */
-  async publishPreparedWeek(input: {
+  async publishPreparedWeek(prepared: {
     readonly sourceId: string;
     readonly season: number;
     readonly week: number;
@@ -2803,17 +2892,11 @@ export class FirstPartyProjectionService implements ProjectionRefreshService {
     readonly leagueSeasonScopesByPlayer: ReadonlyMap<string, readonly string[]>;
     readonly canonicalMatchByPlayer: ReadonlyMap<string, string>;
   }): Promise<PublicationAttempt> {
-    const idempotencyKey = `${FIRST_PARTY_PROJECTION_SOURCE_KEY}:${FIRST_PARTY_PROJECTION_MODEL_VERSION}:${input.season}:W${input.week}:${input.inputChecksum}`;
-    const matchups = this.#matchups(input.schedules, input.season, input.week, input.now);
-    const unknownKickoff = projectionWeekHasUnknownKickoff(
-      input.schedules,
-      input.season,
-      input.week,
-    );
-    const historyThrough = input.playerHistory
+    const historyThrough = prepared.playerHistory
       .filter(
         (row) =>
-          row.season < input.season || (row.season === input.season && row.week < input.week),
+          row.season < prepared.season ||
+          (row.season === prepared.season && row.week < prepared.week),
       )
       .reduce<{ season: number; week: number } | null>(
         (latest, row) =>
@@ -2822,6 +2905,23 @@ export class FirstPartyProjectionService implements ProjectionRefreshService {
             : latest,
         null,
       );
+    const clock = projectionPublicationClockGuard({
+      ...prepared,
+      statsThrough: historyThrough,
+      preparedAt: prepared.now,
+    });
+    const planningAt = this.#now();
+    // Keep source/calibration identity fixed. A stale clock plan retries from input assembly
+    // instead of silently applying a new availability/lock state under the old checksum.
+    clock.check(planningAt);
+    const input = { ...prepared, now: planningAt };
+    const idempotencyKey = `${FIRST_PARTY_PROJECTION_SOURCE_KEY}:${FIRST_PARTY_PROJECTION_MODEL_VERSION}:${input.season}:W${input.week}:${input.inputChecksum}`;
+    const matchups = this.#matchups(input.schedules, input.season, input.week, input.now);
+    const unknownKickoff = projectionWeekHasUnknownKickoff(
+      input.schedules,
+      input.season,
+      input.week,
+    );
     const inputCoverage = weeklyInputCoverage({
       season: input.season,
       targetWeek: input.week,
@@ -3048,14 +3148,27 @@ export class FirstPartyProjectionService implements ProjectionRefreshService {
       )
       .at(-1);
 
+    clock.check(this.#now(), true);
     const inserted = await this.#database.transaction(async (transaction) => {
       const budget = input.inputSnapshot
         ? await this.#assertInputSnapshot(transaction, input.season, input.inputSnapshot)
         : undefined;
+      const publicationStartedAt = this.#now();
+      clock.check(publicationStartedAt, true);
+      const publicationClock = {
+        version: WEEKLY_PUBLICATION_CLOCK_VERSION,
+        evaluationStartedAt: prepared.now.toISOString(),
+        plannedAt: planningAt.toISOString(),
+        publicationStartedAt: publicationStartedAt.toISOString(),
+        // A transaction-start timestamp does not establish when readers could see the commit.
+        timestampSemantics: "publication-transaction-start; not commit-visibility evidence",
+      };
       const withinBudget = async <T>(query: PromiseLike<T>): Promise<T> => {
         budget?.check();
+        clock.check(this.#now(), true);
         const result = await query;
         budget?.check();
+        clock.check(this.#now(), true);
         return result;
       };
       const [run] = await withinBudget(
@@ -3065,7 +3178,7 @@ export class FirstPartyProjectionService implements ProjectionRefreshService {
             kind: "first-party-projection",
             state: "running",
             idempotencyKey,
-            startedAt: input.now,
+            startedAt: prepared.now,
             recordsRead: input.playerHistory.length + input.defenseHistory.length,
             artifactChecksum: input.inputChecksum,
           })
@@ -3103,6 +3216,7 @@ export class FirstPartyProjectionService implements ProjectionRefreshService {
               value: input.inputEpoch,
             },
             ...(input.inputSnapshot ? { inputSnapshot: input.inputSnapshot } : {}),
+            publicationClock,
           },
           calibration: {
             player: input.playerBacktest.calibration,
@@ -3127,7 +3241,7 @@ export class FirstPartyProjectionService implements ProjectionRefreshService {
             },
           },
           sourceAsOf: input.sourceAsOf,
-          createdAt: input.now,
+          createdAt: publicationStartedAt,
         }),
       );
 
@@ -3148,7 +3262,7 @@ export class FirstPartyProjectionService implements ProjectionRefreshService {
             sourceAsOf: input.sourceAsOf,
             fetchedAt: input.sourceAsOf,
             inputChecksum: input.inputChecksum,
-            createdAt: input.now,
+            createdAt: publicationStartedAt,
           })),
           ...rawDefenses.map((row) => ({
             sourceId: input.sourceId,
@@ -3165,7 +3279,7 @@ export class FirstPartyProjectionService implements ProjectionRefreshService {
             sourceAsOf: input.sourceAsOf,
             fetchedAt: input.sourceAsOf,
             inputChecksum: input.inputChecksum,
-            createdAt: input.now,
+            createdAt: publicationStartedAt,
           })),
         ];
         for (const batch of chunks(observationRows)) {
@@ -3194,8 +3308,9 @@ export class FirstPartyProjectionService implements ProjectionRefreshService {
               metadata: {
                 ...publication.metadata,
                 ...(input.inputSnapshot ? { inputSnapshot: input.inputSnapshot } : {}),
+                publicationClock,
               },
-              createdAt: input.now,
+              createdAt: publicationStartedAt,
             })
             .onConflictDoNothing({
               target: [projectionSets.source, projectionSets.version],
@@ -3225,7 +3340,7 @@ export class FirstPartyProjectionService implements ProjectionRefreshService {
           .update(syncRuns)
           .set({
             state: "complete",
-            finishedAt: input.now,
+            finishedAt: this.#now(),
             recordsWritten: Math.max(
               1,
               (releaseGate.state === "publishable" ? rawCount : 0) +
@@ -3234,6 +3349,7 @@ export class FirstPartyProjectionService implements ProjectionRefreshService {
           })
           .where(eq(syncRuns.id, run.id)),
       );
+      clock.check(this.#now(), true);
       return true;
     });
     return {

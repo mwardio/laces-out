@@ -68,6 +68,8 @@ interface ProjectionDatabaseFixture {
     readonly patch: Row;
   };
   readonly driftMutableChecksumAfterSnapshot?: boolean;
+  readonly onInsert?: (table: unknown) => void;
+  readonly onSelect?: (table: unknown) => void;
   // Simulates a required source (e.g. weekly stats) completing a concurrent refresh with a new
   // checksum after this run already validated sources and captured its start-of-refresh epoch,
   // but before this run reaches its own persist transaction.
@@ -170,6 +172,7 @@ class MutationQuery implements PromiseLike<readonly Row[]> {
 class ProjectionDatabaseHarness {
   readonly modelRuns: Row[] = [];
   readonly sourceUpdates: Row[] = [];
+  readonly syncRunUpdates: Row[] = [];
   syncRunInsertAttempts = 0;
   readonly transactionEvents: {
     readonly kind: string;
@@ -271,6 +274,7 @@ class ProjectionDatabaseHarness {
   }
 
   #selectRows(table: unknown, selection: Row, predicate?: SQL): readonly Row[] {
+    this.fixture.onSelect?.(table);
     if (table === dataSources) {
       if (!Object.hasOwn(selection, "key")) {
         return [{ metadata: { modelVersion: "retained-version" } }];
@@ -342,6 +346,7 @@ class ProjectionDatabaseHarness {
   }
 
   #insertRows(table: unknown, values: unknown): readonly Row[] {
+    this.fixture.onInsert?.(table);
     if (table === dataSources) {
       return [{ id: "managed-projection-source", lastChecksum: null }];
     }
@@ -383,6 +388,7 @@ class ProjectionDatabaseHarness {
 
   #updateRows(table: unknown, values: unknown): readonly Row[] {
     if (table === dataSources) this.sourceUpdates.push(values as Row);
+    if (table === syncRuns) this.syncRunUpdates.push(values as Row);
     if (table === dataSources || table === syncRuns) return [];
     throw new Error("Unexpected projection test update");
   }
@@ -454,6 +460,91 @@ function latestSourceMetadata(harness: ProjectionDatabaseHarness): Row {
 }
 
 describe("first-party projection service release safety", () => {
+  it("rejects a refresh that crosses kickoff during training before it can publish", async () => {
+    let now = new Date("2026-09-13T16:59:00Z");
+    const harness = new ProjectionDatabaseHarness({ now, schedule: scheduleFixture() });
+    const originalBacktest = projectionModel.runFirstPartyProjectionBacktest;
+    vi.spyOn(projectionModel, "runFirstPartyProjectionBacktest").mockImplementation((...args) => {
+      const result = originalBacktest(...args);
+      now = new Date("2026-09-13T17:00:01Z");
+      return result;
+    });
+    const service = new FirstPartyProjectionService({ database: harness.database, now: () => now });
+    await expect(
+      service.refreshProjections({ season: 2026, week: 1 }, jobContext()),
+    ).rejects.toMatchObject({ code: "PROJECTION_INPUT_EPOCH_CHANGED" });
+    expect(harness.syncRunInsertAttempts).toBe(0);
+    expect(harness.modelRuns).toHaveLength(0);
+    expect(harness.sourceUpdates.at(-1)?.lastCheckedAt).toEqual(now);
+  });
+
+  it("rejects a clock boundary crossed after the fresh planning clock", async () => {
+    let now = new Date("2026-09-13T16:59:00Z");
+    const harness = new ProjectionDatabaseHarness({ now, schedule: scheduleFixture() });
+    const originalProjection = projectionModel.projectFirstPartyTeamDefenseComponents;
+    vi.spyOn(projectionModel, "projectFirstPartyTeamDefenseComponents").mockImplementation(
+      (...args) => {
+        const result = originalProjection(...args);
+        now = new Date("2026-09-13T17:00:01Z");
+        return result;
+      },
+    );
+    await expect(
+      new FirstPartyProjectionService({
+        database: harness.database,
+        now: () => now,
+      }).refreshProjections({ season: 2026, week: 1 }, jobContext()),
+    ).rejects.toMatchObject({ code: "PROJECTION_INPUT_EPOCH_CHANGED" });
+    expect(harness.syncRunInsertAttempts).toBe(0);
+    expect(harness.modelRuns).toHaveLength(0);
+  });
+
+  it("checks the clock again after a database write instead of completing a stale plan", async () => {
+    let now = new Date("2026-09-13T16:59:00Z");
+    const harness = new ProjectionDatabaseHarness({
+      now,
+      schedule: scheduleFixture(),
+      onInsert: (table) => {
+        if (table === syncRuns) now = new Date("2026-09-13T17:00:01Z");
+      },
+    });
+    const service = new FirstPartyProjectionService({ database: harness.database, now: () => now });
+    await expect(
+      service.refreshProjections({ season: 2026, week: 1 }, jobContext()),
+    ).rejects.toMatchObject({ code: "PROJECTION_INPUT_EPOCH_CHANGED" });
+    expect(harness.syncRunInsertAttempts).toBe(1);
+    expect(harness.modelRuns).toHaveLength(0);
+    expect(harness.syncRunUpdates).toHaveLength(0);
+    // This fake proves the thrown fence. The PostgreSQL suite proves transactional rollback.
+  });
+
+  it("records the fresh planning/publication time separately from refresh start", async () => {
+    const evaluationStartedAt = new Date("2026-09-01T12:00:00Z");
+    let now = evaluationStartedAt;
+    const plannedAt = new Date("2026-09-01T12:01:00Z");
+    const harness = new ProjectionDatabaseHarness({ now, schedule: scheduleFixture() });
+    const originalBacktest = projectionModel.runFirstPartyProjectionBacktest;
+    vi.spyOn(projectionModel, "runFirstPartyProjectionBacktest").mockImplementation((...args) => {
+      const result = originalBacktest(...args);
+      now = plannedAt;
+      return result;
+    });
+    await new FirstPartyProjectionService({
+      database: harness.database,
+      now: () => now,
+    }).refreshProjections({ season: 2026, week: 1 }, jobContext());
+    expect(harness.modelRuns[0]?.createdAt).toEqual(plannedAt);
+    expect(harness.modelRuns[0]?.configuration).toMatchObject({
+      publicationClock: {
+        evaluationStartedAt: evaluationStartedAt.toISOString(),
+        plannedAt: plannedAt.toISOString(),
+        publicationStartedAt: plannedAt.toISOString(),
+      },
+    });
+    expect(harness.syncRunUpdates.at(-1)?.finishedAt).toEqual(plannedAt);
+    expect(latestSourceMetadata(harness).lastEvaluationAt).toBe(plannedAt.toISOString());
+  });
+
   it("records a coverage failure when a completed prior week is missing from training", async () => {
     const now = new Date("2026-09-16T12:00:00Z");
     const prior = scheduleFixture().map((row) => ({
@@ -1089,6 +1180,60 @@ describe("first-party projection service release safety", () => {
     ).rejects.toMatchObject({ code: "PROJECTION_INPUT_EPOCH_CHANGED" });
     expect(fit).toHaveBeenCalledTimes(1);
     expect(harness.modelRuns).toHaveLength(1);
+  });
+
+  it("invalidates completed output reuse at the prior-week coverage deadline", async () => {
+    let now = new Date("2026-09-14T00:59:00Z");
+    const next = scheduleFixture().map((row) => ({
+      ...row,
+      week: 2,
+      gameId: `${String(row.gameId)}-2`,
+      kickoffAt: new Date("2026-09-20T17:00:00Z"),
+    }));
+    const harness = new ProjectionDatabaseHarness({
+      now,
+      reuseRecordedRuns: true,
+      schedule: [...scheduleFixture(), ...next],
+    });
+    const service = new FirstPartyProjectionService({ database: harness.database, now: () => now });
+    await service.refreshProjections({ season: 2026, week: 2 }, jobContext());
+    await service.refreshProjections({ season: 2026, week: 2 }, jobContext());
+    expect(harness.modelRuns).toHaveLength(1);
+    now = new Date("2026-09-14T01:01:00Z");
+    await service.refreshProjections({ season: 2026, week: 2 }, jobContext());
+    expect(harness.modelRuns).toHaveLength(2);
+    expect(harness.modelRuns[1]?.inputChecksum).not.toBe(harness.modelRuns[0]?.inputChecksum);
+    expect(harness.modelRuns[1]?.metrics).toMatchObject({
+      gate: { reasons: expect.arrayContaining([expect.stringContaining("status is unresolved")]) },
+    });
+  });
+
+  it("rejects a coverage deadline crossed while rechecking reusable output", async () => {
+    let now = new Date("2026-09-14T00:59:00Z");
+    let crossDuringReuse = false;
+    const next = scheduleFixture().map((row) => ({
+      ...row,
+      week: 2,
+      gameId: `${String(row.gameId)}-2`,
+      kickoffAt: new Date("2026-09-20T17:00:00Z"),
+    }));
+    const harness = new ProjectionDatabaseHarness({
+      now,
+      reuseRecordedRuns: true,
+      schedule: [...scheduleFixture(), ...next],
+      onSelect: (table) => {
+        if (crossDuringReuse && table === projectionModelRuns)
+          now = new Date("2026-09-14T01:01:00Z");
+      },
+    });
+    const service = new FirstPartyProjectionService({ database: harness.database, now: () => now });
+    await service.refreshProjections({ season: 2026, week: 2 }, jobContext());
+    crossDuringReuse = true;
+    await expect(
+      service.refreshProjections({ season: 2026, week: 2 }, jobContext()),
+    ).rejects.toMatchObject({ code: "PROJECTION_INPUT_EPOCH_CHANGED" });
+    expect(harness.modelRuns).toHaveLength(1);
+    expect(harness.sourceUpdates.at(-1)?.lastCheckedAt).toEqual(now);
   });
 
   it("refreshes an explicit future week when prior-week finality advances on the clock alone", async () => {
