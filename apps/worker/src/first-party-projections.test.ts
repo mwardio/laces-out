@@ -49,6 +49,7 @@ import {
   projectionGameIsConservativelyFinal,
   projectionHistorySeasons,
   projectionModelGate,
+  projectionPublicationClockGuard,
   projectionRawObservationIsUnlocked,
   projectionStatusWeek,
   projectionStatusWindow,
@@ -60,6 +61,84 @@ import {
   requiredFirstPartyProjectionSourceKeys,
   sourceIsUsableForProjection,
 } from "./first-party-projections.js";
+
+describe("weekly publication clock fence", () => {
+  const kickoffAt = new Date("2026-09-13T17:00:00Z");
+  const game = {
+    season: 2026,
+    week: 1,
+    gameId: "2026_01_BUF_NYJ",
+    awayTeam: "BUF",
+    homeTeam: "NYJ",
+    awayScore: null,
+    homeScore: null,
+    kickoffAt,
+    status: "scheduled" as const,
+  };
+  const guard = (preparedAt: Date) =>
+    projectionPublicationClockGuard({
+      schedules: [game],
+      season: 2026,
+      week: 1,
+      statsThrough: null,
+      preparedAt,
+    });
+
+  it.each([0, 7 * 86_400_000, 28 * 86_400_000])(
+    "rejects crossing the kickoff or availability boundary %i milliseconds before kickoff",
+    (beforeKickoff) => {
+      const boundary = kickoffAt.getTime() - beforeKickoff;
+      const clock = guard(new Date(boundary - 60_000));
+      expect(() => clock.check(new Date(boundary - 1))).not.toThrow();
+      expect(() => clock.check(new Date(boundary))).toThrow(
+        expect.objectContaining({ code: "PROJECTION_INPUT_EPOCH_CHANGED" }),
+      );
+    },
+  );
+
+  it("reserves the bounded write budget without marking the game started early", () => {
+    const clock = guard(new Date(kickoffAt.getTime() - 60_000));
+    expect(() => clock.check(new Date(kickoffAt.getTime() - 10_001), true)).not.toThrow();
+    expect(() => clock.check(new Date(kickoffAt.getTime() - 10_000), true)).toThrow();
+    expect(() => guard(kickoffAt).check(new Date(kickoffAt.getTime() + 1), true)).not.toThrow();
+  });
+
+  it("rejects a prior week's statistics-coverage deadline even with unchanged source bytes", () => {
+    const boundary = kickoffAt.getTime() + 8 * 3_600_000;
+    const clock = projectionPublicationClockGuard({
+      schedules: [
+        game,
+        { ...game, week: 2, gameId: "next", kickoffAt: new Date("2026-09-20T17:00:00Z") },
+      ],
+      season: 2026,
+      week: 2,
+      statsThrough: null,
+      preparedAt: new Date(boundary - 1),
+    });
+    expect(() => clock.check(new Date(boundary))).toThrow();
+  });
+
+  it("rejects newly eligible historical games at the conservative final-time boundary", () => {
+    const boundary = kickoffAt.getTime() + 4 * 3_600_000;
+    const clock = projectionPublicationClockGuard({
+      schedules: [{ ...game, status: "final", awayScore: 10, homeScore: 17 }],
+      season: 2026,
+      week: 2,
+      statsThrough: null,
+      preparedAt: new Date(boundary - 1),
+    });
+    expect(() => clock.check(new Date(boundary))).toThrow();
+  });
+
+  it("rejects nonfinite or backwards clocks instead of backdating a publication", () => {
+    const start = new Date("2026-09-10T12:00:00Z");
+    expect(() => guard(new Date(Number.NaN))).toThrow();
+    expect(() => guard(start).check(new Date(Number.NaN))).toThrow();
+    const clock = guard(start);
+    clock.check(new Date(start.getTime() + 1000));
+    expect(() => clock.check(start)).toThrow();
+  });
+});
 
 function playerEvaluation(
   input: {

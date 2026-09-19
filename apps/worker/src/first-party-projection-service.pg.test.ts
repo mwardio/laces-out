@@ -57,6 +57,8 @@ import {
 } from "@laces-out/projections";
 import { and, count, eq, sql } from "drizzle-orm";
 import { migrate } from "drizzle-orm/postgres-js/migrator";
+import { drizzle } from "drizzle-orm/postgres-js";
+import * as schema from "../../../packages/db/src/schema.js";
 import postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { NFLVERSE_WEEKLY_STATS_COMPONENT_SCHEMA } from "@laces-out/source-nflverse";
@@ -826,7 +828,10 @@ describe.skipIf(!dockerAvailable)(
 
     it("atomically publishes an exact league's passing position despite a rejected reference profile", async () => {
       const fixture = await preparedScoredWeek(mainHandle.db);
-      const service = new FirstPartyProjectionService({ database: mainHandle.db });
+      const service = new FirstPartyProjectionService({
+        database: mainHandle.db,
+        now: () => fixture.input.now,
+      });
       const first = await service.publishPreparedWeek(fixture.input);
       const [run] = await mainHandle.db
         .select()
@@ -870,7 +875,10 @@ describe.skipIf(!dockerAvailable)(
       // the direct invocation's completed-output fast path. Both actually compute and publish.
       const direct = await preparedScoredWeek(mainHandle.db);
       const isolated = await preparedScoredWeek(mainHandle.db);
-      const service = new FirstPartyProjectionService({ database: mainHandle.db });
+      const service = new FirstPartyProjectionService({
+        database: mainHandle.db,
+        now: () => direct.input.now,
+      });
       await service.publishPreparedWeek(direct.input);
       const directory = await mkdtemp(path.join(tmpdir(), "weekly-process-pg-"));
       const inputPath = path.join(directory, "input.bin");
@@ -888,7 +896,7 @@ describe.skipIf(!dockerAvailable)(
         import { FirstPartyProjectionService } from ${JSON.stringify(serviceUrl)};
         const input = deserialize(readFileSync(${JSON.stringify(inputPath)}));
         startWeeklyProjectionProcess({connectionString:process.env.DATABASE_URL,createService(database) {
-          const service = new FirstPartyProjectionService({database});
+          const service = new FirstPartyProjectionService({database,now:()=>input.now});
           return {async refreshProjections(_job,context) {
             context.signal.throwIfAborted();
             await service.publishPreparedWeek(input);
@@ -1044,9 +1052,83 @@ describe.skipIf(!dockerAvailable)(
       }
     }, 30_000);
 
+    it("rolls back a kickoff-crossing write and preserves the prior published set exactly", async () => {
+      const fixture = await preparedScoredWeek(mainHandle.db);
+      await new FirstPartyProjectionService({
+        database: mainHandle.db,
+        now: () => fixture.input.now,
+      }).publishPreparedWeek(fixture.input);
+      const previousSets = await mainHandle.db
+        .select()
+        .from(projectionSets)
+        .where(eq(projectionSets.leagueSeasonId, fixture.leagueSeason.id));
+      expect(previousSets).toHaveLength(1);
+      const previousRows = await mainHandle.db
+        .select()
+        .from(playerProjections)
+        .where(eq(playerProjections.projectionSetId, previousSets[0]!.id));
+      expect(previousRows).toHaveLength(1);
+
+      let now = fixture.input.now;
+      let crossedDuringWrite = false;
+      const client = postgres(container.url, { max: 1, prepare: false });
+      const database = drizzle(client, {
+        schema,
+        logger: {
+          logQuery(query) {
+            // The real row insert executes after the pre-query clock check. Its post-query
+            // check must abort the complete transaction, including its earlier set/run rows.
+            if (query.startsWith('insert into "player_projections"')) {
+              now = fixture.input.schedules[0]!.kickoffAt;
+              crossedDuringWrite = true;
+            }
+          },
+        },
+      });
+      const inputChecksum = checksumFor(randomUUID());
+      try {
+        await expect(
+          new FirstPartyProjectionService({ database, now: () => now }).publishPreparedWeek({
+            ...fixture.input,
+            inputChecksum,
+          }),
+        ).rejects.toMatchObject({ code: "PROJECTION_INPUT_EPOCH_CHANGED" });
+      } finally {
+        await client.end({ timeout: 5 });
+      }
+      expect(crossedDuringWrite).toBe(true);
+      expect(
+        await mainHandle.db
+          .select()
+          .from(projectionSets)
+          .where(eq(projectionSets.leagueSeasonId, fixture.leagueSeason.id)),
+      ).toEqual(previousSets);
+      expect(
+        await mainHandle.db
+          .select()
+          .from(playerProjections)
+          .where(eq(playerProjections.projectionSetId, previousSets[0]!.id)),
+      ).toEqual(previousRows);
+      expect(
+        await mainHandle.db
+          .select()
+          .from(projectionModelRuns)
+          .where(eq(projectionModelRuns.inputChecksum, inputChecksum)),
+      ).toEqual([]);
+      expect(
+        await mainHandle.db
+          .select()
+          .from(syncRuns)
+          .where(eq(syncRuns.artifactChecksum, inputChecksum)),
+      ).toEqual([]);
+    }, 20_000);
+
     it("rolls back the run and entire league set if a scored player insert fails", async () => {
       const fixture = await preparedScoredWeek(mainHandle.db);
-      const service = new FirstPartyProjectionService({ database: mainHandle.db });
+      const service = new FirstPartyProjectionService({
+        database: mainHandle.db,
+        now: () => fixture.input.now,
+      });
       await mainHandle.db.execute(
         sql.raw(`
         CREATE FUNCTION fail_weekly_player_insert() RETURNS trigger LANGUAGE plpgsql AS $$
