@@ -1633,14 +1633,124 @@ describe("buildFirstPartyRosLeagueTarget", () => {
 
     it.each([
       { gsisId: null },
-      { fullName: "A.J. Receiver Jr." },
+      { fullName: "A.J. Other Receiver" },
       { team: "BUF" },
       { position: "RB" },
-    ])("retains trusted identity, exact name, team, and position requirements: %j", (change) => {
+    ])("retains trusted identity, name, team, and position requirements: %j", (change) => {
       expect(
         firstPartyRosPlayerAliasPlan({
           ...common,
           canonicalPlayers: [{ ...canonical, ...change }],
+        }),
+      ).toMatchObject({ aliases: [], issues: [{ code: "identity-unresolved" }] });
+    });
+
+    it.each([
+      ["James Cook III", "James Cook"],
+      ["KC Concepcion Jr.", "KC Concepcion"],
+      ["Travis Etienne Jr.", "Travis Etienne"],
+      ["Kyle Pitts Sr.", "Kyle Pitts"],
+    ])("resolves a unique Yahoo suffix variant %s to %s", (rosterName, catalogName) => {
+      expect(
+        firstPartyRosPlayerAliasPlan({
+          ...common,
+          rosterPlayers: [{ ...roster, fullName: rosterName }],
+          canonicalPlayers: [{ ...canonical, fullName: catalogName }],
+        }),
+      ).toMatchObject({ aliases: [{ canonicalPlayerId: canonical.playerId }], issues: [] });
+    });
+
+    it("rejects different suffixes without pruning ambiguous base-name candidates", () => {
+      const suffixRoster = { ...roster, fullName: "Same Player Jr." };
+      const senior = { ...canonical, fullName: "Same Player Sr." };
+      expect(
+        firstPartyRosPlayerAliasPlan({
+          ...common,
+          rosterPlayers: [suffixRoster],
+          canonicalPlayers: [senior],
+        }),
+      ).toMatchObject({ aliases: [], issues: [{ code: "identity-unresolved" }] });
+      const unsuffixed = { ...canonical, playerId: "another-player", fullName: "Same Player" };
+      for (const canonicalPlayers of [
+        [senior, unsuffixed],
+        [unsuffixed, senior],
+      ]) {
+        expect(
+          firstPartyRosPlayerAliasPlan({
+            ...common,
+            rosterPlayers: [suffixRoster],
+            canonicalPlayers,
+            externalIds: [
+              yahoo,
+              { playerId: senior.playerId, source: "sleeper-yahoo", externalId: "99999" },
+            ],
+          }),
+        ).toMatchObject({ aliases: [], issues: [{ code: "identity-ambiguous" }] });
+      }
+    });
+
+    it("keeps exact names authoritative and suffix aliases bijective", () => {
+      const sameBase = { ...canonical, playerId: "another-player", fullName: "A.J. Receiver Jr." };
+      expect(
+        firstPartyRosPlayerAliasPlan({ ...common, canonicalPlayers: [canonical, sameBase] }),
+      ).toMatchObject({ aliases: [{ canonicalPlayerId: canonical.playerId }], issues: [] });
+      expect(
+        firstPartyRosPlayerAliasPlan({
+          ...common,
+          rosterPlayers: [
+            roster,
+            { ...roster, playerId: "other-alias", fullName: "A.J. Receiver Jr." },
+          ],
+          externalIds: [yahoo, { ...yahoo, playerId: "other-alias" }],
+        }),
+      ).toMatchObject({
+        aliases: [],
+        issues: [
+          { code: "canonical-identity-not-bijective" },
+          { code: "canonical-identity-not-bijective" },
+        ],
+      });
+    });
+
+    it("does not widen a Yahoo suffix match with incomplete or contradictory provider evidence", () => {
+      const suffixInput = {
+        ...common,
+        rosterPlayers: [{ ...roster, fullName: "A.J. Receiver Jr." }],
+      };
+      expect(
+        firstPartyRosPlayerAliasPlan({ ...suffixInput, yahooExternalEvidenceComplete: false }),
+      ).toMatchObject({ aliases: [], issues: [{ code: "identity-unresolved" }] });
+      expect(
+        firstPartyRosPlayerAliasPlan({
+          ...suffixInput,
+          externalIds: [
+            yahoo,
+            { playerId: canonical.playerId, source: "sleeper-yahoo", externalId: "99999" },
+          ],
+        }),
+      ).toMatchObject({ aliases: [], issues: [{ code: "identity-unresolved" }] });
+    });
+
+    it("rejects a scoped ESPN name fallback against a different known ESPN identity", () => {
+      const scoped = {
+        playerId: roster.playerId,
+        source: "espn-self-asserted",
+        externalId: `${common.leagueSeasonId}:123`,
+      };
+      expect(
+        firstPartyRosPlayerAliasPlan({
+          ...common,
+          externalIds: [
+            scoped,
+            { playerId: canonical.playerId, source: "sleeper-espn", externalId: "456" },
+          ],
+        }),
+      ).toMatchObject({ aliases: [], issues: [{ code: "identity-unresolved" }] });
+      expect(
+        firstPartyRosPlayerAliasPlan({
+          ...common,
+          rosterPlayers: [{ ...roster, fullName: "A.J. Receiver Jr." }],
+          externalIds: [scoped],
         }),
       ).toMatchObject({ aliases: [], issues: [{ code: "identity-unresolved" }] });
     });

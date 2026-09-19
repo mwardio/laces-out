@@ -26,6 +26,9 @@ import {
 import {
   canonicalNflTeamCode,
   isArchivedNflverseSource,
+  PLAYER_NAME_IDENTITY_POLICY_VERSION,
+  playerNameIdentityParts,
+  playerNameIdentitiesCompatible,
   providerPlayerCrosswalkId,
 } from "@laces-out/domain";
 import {
@@ -456,9 +459,11 @@ export function effectiveFirstPartyProjectionPositions(
 
 function playerIdentityKey(
   player: Pick<PlayerRow, "fullName" | "nflTeam" | "primaryPosition">,
+  withoutSuffix = false,
 ): string | undefined {
   const team = upper(player.nflTeam);
-  const name = player.fullName.normalize("NFKC").trim().toLocaleLowerCase("en-US");
+  const parts = playerNameIdentityParts(player.fullName);
+  const name = withoutSuffix ? parts.base : parts.exact;
   const position = player.primaryPosition.trim().toUpperCase();
   return name && team && position ? `${name}|${team}|${position}` : undefined;
 }
@@ -545,6 +550,105 @@ export function projectionProviderCanonicalMatches(
               ?.playerId,
       );
     }
+  }
+  return matches;
+}
+
+/** Resolve names against the complete loaded catalog only after explicit identity checks. */
+export function projectionNameCanonicalMatches(input: {
+  readonly players: readonly Pick<
+    PlayerRow,
+    "id" | "gsisId" | "fullName" | "nflTeam" | "primaryPosition"
+  >[];
+  readonly externalIds: readonly {
+    readonly playerId: string;
+    readonly source: string;
+    readonly externalId: string;
+  }[];
+  readonly explicitMatches: ReadonlyMap<string, string | null>;
+}): ReadonlyMap<string, string | null> {
+  type Identity = (typeof input.players)[number];
+  const players = new Map(input.players.map((player) => [player.id, player]));
+  const exact = new Map<string, Identity | null>();
+  const bases = new Map<string, Identity | null>();
+  for (const player of input.players) {
+    if (!player.gsisId || isDefensePosition(player.primaryPosition)) continue;
+    for (const [index, withoutSuffix] of [
+      [exact, false],
+      [bases, true],
+    ] as const) {
+      const key = playerIdentityKey(player, withoutSuffix);
+      if (!key) continue;
+      const previous = index.get(key);
+      index.set(key, previous === undefined || previous?.id === player.id ? player : null);
+    }
+  }
+  const keys = new Map<string, Map<string, Set<string>>>();
+  const invalid = new Set<string>();
+  for (const row of input.externalIds) {
+    const scopedEspn = row.source === espnSelfAssertedPlayerSource;
+    if (scopedEspn && !espnSelfAssertedProjectionLeague(row.externalId)) continue;
+    const family = scopedEspn ? "espn" : row.source.replace(/^sleeper-/, "");
+    if (family !== "espn" && family !== "yahoo") continue;
+    const id = scopedEspn
+      ? row.externalId.slice(row.externalId.indexOf(":") + 1)
+      : providerPlayerCrosswalkId(row.source, row.externalId);
+    if (!id) {
+      invalid.add(row.playerId);
+      continue;
+    }
+    const playerKeys = keys.get(row.playerId) ?? new Map<string, Set<string>>();
+    const values = playerKeys.get(family) ?? new Set<string>();
+    values.add(id);
+    playerKeys.set(family, values);
+    keys.set(row.playerId, playerKeys);
+  }
+  const conflict = (left: string, right: string): boolean => {
+    if (invalid.has(left) || invalid.has(right)) return true;
+    return ["espn", "yahoo"].some((family) => {
+      const a = keys.get(left)?.get(family);
+      const b = keys.get(right)?.get(family);
+      return (
+        (a?.size ?? 0) > 1 ||
+        (b?.size ?? 0) > 1 ||
+        (a?.size === 1 && b?.size === 1 && !b.has([...a][0]!))
+      );
+    });
+  };
+  const matches = new Map(input.explicitMatches);
+  for (const player of input.players) {
+    // The catalog's own GSIS identity and defense identity retain their existing authority.
+    if (player.gsisId || isDefensePosition(player.primaryPosition)) continue;
+    const explicitId = matches.get(player.id);
+    if (explicitId === null) continue;
+    let candidate: Identity | null | undefined;
+    if (explicitId !== undefined) candidate = players.get(explicitId) ?? null;
+    else {
+      const exactKey = playerIdentityKey(player);
+      if (exactKey && exact.has(exactKey)) candidate = exact.get(exactKey);
+      else {
+        const baseKey = playerIdentityKey(player, true);
+        candidate = baseKey ? bases.get(baseKey) : undefined;
+        if (
+          candidate &&
+          !playerNameIdentitiesCompatible(
+            playerNameIdentityParts(player.fullName),
+            playerNameIdentityParts(candidate.fullName),
+          )
+        )
+          candidate = null;
+      }
+    }
+    if (
+      candidate &&
+      (upper(candidate.nflTeam) !== upper(player.nflTeam) ||
+        candidate.primaryPosition.trim().toUpperCase() !==
+          player.primaryPosition.trim().toUpperCase() ||
+        conflict(player.id, candidate.id))
+    )
+      candidate = null;
+    if (candidate === null || invalid.has(player.id)) matches.set(player.id, null);
+    else if (candidate) matches.set(player.id, candidate.id);
   }
   return matches;
 }
@@ -1750,6 +1854,7 @@ export class FirstPartyProjectionService implements ProjectionRefreshService {
       const baseChecksum = projectionInputChecksum({
         modelVersion: FIRST_PARTY_PROJECTION_MODEL_VERSION,
         publicationClockVersion: WEEKLY_PUBLICATION_CLOCK_VERSION,
+        playerNameIdentityPolicyVersion: PLAYER_NAME_IDENTITY_POLICY_VERSION,
         playerHistoryVersion: FIRST_PARTY_PLAYER_HISTORY_VERSION,
         defenseHistoryVersion: FIRST_PARTY_DEFENSE_HISTORY_VERSION,
         inputSnapshotVersion: inputSnapshot.version,
@@ -2648,10 +2753,14 @@ export class FirstPartyProjectionService implements ProjectionRefreshService {
         player.gsisId ? [[player.gsisId, player.id] as const] : [],
       ),
     );
-    const canonicalMatchByPlayer = projectionProviderCanonicalMatches(
-      providerExternalRows,
-      projectionStatusCanonicalMatches(statusRows, canonicalPlayerByGsis),
-    );
+    const canonicalMatchByPlayer = projectionNameCanonicalMatches({
+      players: effectivePlayerRows,
+      externalIds: providerExternalRows,
+      explicitMatches: projectionProviderCanonicalMatches(
+        providerExternalRows,
+        projectionStatusCanonicalMatches(statusRows, canonicalPlayerByGsis),
+      ),
+    });
     for (const row of providerExternalRows.filter(
       (candidate) => candidate.source === espnSelfAssertedPlayerSource,
     )) {
@@ -3000,16 +3109,7 @@ export class FirstPartyProjectionService implements ProjectionRefreshService {
     const rosterIds = new Set(input.rosters.map((row) => row.playerId));
     const latestHistoryByPlayer = new Map<string, (typeof input.playerHistory)[number]>();
     for (const row of input.playerHistory) latestHistoryByPlayer.set(row.playerId, row);
-    const canonicalByIdentity = new Map<string, PlayerRow | null>();
     const playerById = new Map(input.players.map((player) => [player.id, player]));
-    for (const player of input.players) {
-      if (!player.gsisId || isDefensePosition(player.primaryPosition)) continue;
-      const key = playerIdentityKey(player);
-      if (!key) continue;
-      const existing = canonicalByIdentity.get(key);
-      if (existing === undefined) canonicalByIdentity.set(key, player);
-      else if (existing === null || existing.id !== player.id) canonicalByIdentity.set(key, null);
-    }
     const eligiblePlayers = input.players.filter((player) => {
       if (!firstPartyProjectionPositionIsSupported(player.primaryPosition)) return false;
       const scopes = input.leagueSeasonScopesByPlayer.get(player.id);
@@ -3023,18 +3123,13 @@ export class FirstPartyProjectionService implements ProjectionRefreshService {
     });
     const publishedPlayers: PublishedPlayer[] = [];
     for (const player of eligiblePlayers) {
-      const identityKey = playerIdentityKey(player);
       const explicitlyMatchedPlayerId = input.canonicalMatchByPlayer.get(player.id);
-      const exactMatch = identityKey
-        ? (canonicalByIdentity.get(identityKey) ?? undefined)
-        : undefined;
       const canonicalPlayerId = canonicalProjectionPlayerId({
         playerId: player.id,
         hasGsisId: player.gsisId !== null,
         ...(explicitlyMatchedPlayerId !== undefined
           ? { explicitMatchId: explicitlyMatchedPlayerId }
           : {}),
-        ...(exactMatch ? { exactMatchId: exactMatch.id } : {}),
       });
       if (canonicalPlayerId === undefined) continue;
       const canonicalMatch = playerById.get(canonicalPlayerId);
@@ -3681,10 +3776,37 @@ export function buildFirstPartyLeaguePublications(input: {
   // across its leagues, so a module singleton cannot keep an obsolete training generation alive.
   const scoringEvidence = input.scoringEvidenceMemo ?? new FirstPartyPublicationEvidenceMemo();
   for (const league of input.leagues) {
+    const leagueRoster = rosterByLeague.get(league.id) ?? [];
+    const leagueRosterIds = new Set(leagueRoster.map((player) => player.playerId));
     const visiblePlayers = input.publishedPlayers.filter(
       (player) =>
         player.leagueSeasonScopes.length === 0 || player.leagueSeasonScopes.includes(league.id),
     );
+    // Two distinct roster identities may not borrow one NFL player's forecast. Check this
+    // before shadowing canonical rows, and within this league only: aliases in other leagues
+    // are legitimate. Preserve the entire failed population rather than dropping an alias and
+    // then reporting complete roster coverage.
+    const rosterIdsByCanonical = new Map<string, Set<string>>();
+    for (const player of visiblePlayers) {
+      if (!leagueRosterIds.has(player.playerId)) continue;
+      const canonicalId = player.canonicalMatchId ?? player.playerId;
+      const ids = rosterIdsByCanonical.get(canonicalId) ?? new Set<string>();
+      ids.add(player.playerId);
+      rosterIdsByCanonical.set(canonicalId, ids);
+    }
+    const ambiguousRosterPlayerCount = [...rosterIdsByCanonical.values()]
+      .filter((ids) => ids.size > 1)
+      .reduce((count, ids) => count + ids.size, 0);
+    if (ambiguousRosterPlayerCount > 0) {
+      withheld.push({
+        leagueSeasonId: league.id,
+        scope: "league",
+        reasons: [
+          `Roster identity is ambiguous for ${ambiguousRosterPlayerCount} players: multiple roster entries resolve to the same NFL player.`,
+        ],
+      });
+      continue;
+    }
     const shadowedCanonicalIds = new Set(
       visiblePlayers.flatMap((player) =>
         player.leagueSeasonScopes.length > 0 && player.canonicalMatchId
@@ -3817,8 +3939,6 @@ export function buildFirstPartyLeaguePublications(input: {
       continue;
     }
 
-    const leagueRoster = rosterByLeague.get(league.id) ?? [];
-    const leagueRosterIds = new Set(leagueRoster.map((player) => player.playerId));
     const rosteredDefenseByTeam = new Map<string, LeagueRosterPlayer[]>();
     for (const rosterPlayer of leagueRoster) {
       const team = upper(rosterPlayer.nflTeam);
