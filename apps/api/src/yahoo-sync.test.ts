@@ -82,6 +82,7 @@ function repository(overrides: Partial<YahooSyncRepository> = {}): YahooSyncRepo
     persistBundle: (_userId, _connectionId, bundle) => Promise.resolve(receipt(bundle)),
     markFailure: () => Promise.resolve(),
     markDiscoverySuccess: () => Promise.resolve(),
+    markLeagueFailure: () => Promise.resolve(),
     ...overrides,
   };
 }
@@ -114,7 +115,169 @@ function readPort(overrides: Partial<YahooReadPort> = {}): YahooReadPort {
   };
 }
 
+function multiLeagueReadPort(overrides: Partial<YahooReadPort> = {}): YahooReadPort {
+  const keys = ["449.l.12345", "449.l.67890", "449.l.77777"];
+  const read = (name: string, key: string) =>
+    Promise.resolve(artifact(fixture(name).replaceAll("12345", key.split(".").at(-1)!)));
+  return readPort({
+    getUserLeagues: () =>
+      Promise.resolve(
+        artifact(
+          fixture("sanitized-user-leagues-page-1.xml")
+            .replace('count="1"', 'count="3"')
+            .replace(
+              "</leagues>",
+              keys
+                .slice(1)
+                .map(
+                  (key) =>
+                    `<league><league_key>${key}</league_key><league_id>${key.split(".").at(-1)!}</league_id><name>Other League</name><season>2026</season></league>`,
+                )
+                .join("") + "</leagues>",
+            ),
+        ),
+      ),
+    getLeagueSettings: (_request, key) => read("sanitized-settings.xml", key),
+    getLeagueTeams: (_request, key) => read("sanitized-teams.xml", key),
+    getLeagueRosters: (_request, key) => read("sanitized-rosters.xml", key),
+    getLeagueStandings: (_request, key) => read("sanitized-standings.xml", key),
+    getLeagueMatchups: (_request, key) => read("sanitized-scoreboard.xml", key),
+    ...overrides,
+  });
+}
+
 describe("YahooSyncService", () => {
+  it("reports and durably records an incomplete first league while syncing both later leagues", async () => {
+    const client = multiLeagueReadPort();
+    const markLeagueFailure = vi.fn<YahooSyncRepository["markLeagueFailure"]>(async () => {});
+    const markFailure = vi.fn<YahooSyncRepository["markFailure"]>(async () => {});
+    const persistBundle = vi.fn<YahooSyncRepository["persistBundle"]>(
+      async (_user, _connection, bundle) => receipt(bundle),
+    );
+    const service = new YahooSyncService({
+      repository: repository({ markLeagueFailure, markFailure, persistBundle }),
+      tokens: tokens(),
+      client: multiLeagueReadPort({
+        getLeagueRosters: async (request, key) => {
+          const value = await client.getLeagueRosters(request, key);
+          return key === "449.l.12345"
+            ? {
+                ...value,
+                xml: value.xml.replace(/<roster\b[^>]*>[\s\S]*?<\/roster>/u, ""),
+              }
+            : value;
+        },
+      }),
+      now: () => NOW,
+    });
+    const result = await service.discoverAndSync(USER_ID, CONNECTION_ID);
+    expect(result.syncs.map((sync) => sync.externalLeagueKey)).toEqual([
+      "449.l.67890",
+      "449.l.77777",
+    ]);
+    expect(result.failures).toEqual([
+      {
+        externalLeagueKey: "449.l.12345",
+        season: 2026,
+        code: "INCOMPLETE_ROSTER",
+        message:
+          "Yahoo returned incomplete roster data. This league's stored rosters were left unchanged.",
+        failedAt: NOW.toISOString(),
+      },
+    ]);
+    expect(markLeagueFailure).toHaveBeenCalledExactlyOnceWith(
+      USER_ID,
+      CONNECTION_ID,
+      result.failures[0],
+    );
+    expect(persistBundle).toHaveBeenCalledTimes(2);
+    expect(markFailure).not.toHaveBeenCalled();
+    expect(JSON.stringify(result.failures)).not.toContain("sanitized-access-token");
+  });
+
+  it("does not swallow a failure to persist league-specific error visibility", async () => {
+    const persistBundle = vi.fn<YahooSyncRepository["persistBundle"]>();
+    const markFailure = vi.fn<YahooSyncRepository["markFailure"]>(async () => {});
+    const service = new YahooSyncService({
+      repository: repository({
+        persistBundle,
+        markFailure,
+        markLeagueFailure: async () => {
+          throw new Error("private-database-detail");
+        },
+      }),
+      tokens: tokens(),
+      client: multiLeagueReadPort({
+        getLeagueRosters: () =>
+          Promise.resolve(
+            artifact(
+              fixture("sanitized-rosters.xml").replace(/<roster\b[^>]*>[\s\S]*?<\/roster>/u, ""),
+            ),
+          ),
+      }),
+      now: () => NOW,
+    });
+    await expect(service.discoverAndSync(USER_ID, CONNECTION_ID)).rejects.toMatchObject({
+      code: "PERSISTENCE_FAILED",
+      leagueFailure: null,
+      message: "Yahoo league failure could not be recorded",
+    });
+    expect(markFailure).toHaveBeenCalledExactlyOnceWith(
+      USER_ID,
+      CONNECTION_ID,
+      "persistence_failed",
+      NOW,
+    );
+    expect(persistBundle).not.toHaveBeenCalled();
+  });
+
+  it.each(["authorization", "network", "rate-limit", "schema", "database"] as const)(
+    "still aborts discovery on %s failures without treating them as isolated roster data",
+    async (kind) => {
+      const markLeagueFailure = vi.fn<YahooSyncRepository["markLeagueFailure"]>(async () => {});
+      const markFailure = vi.fn<YahooSyncRepository["markFailure"]>(async () => {});
+      const persisted: string[] = [];
+      const client = multiLeagueReadPort();
+      const service = new YahooSyncService({
+        repository: repository({
+          markLeagueFailure,
+          markFailure,
+          persistBundle: async (_user, _connection, bundle) => {
+            persisted.push(bundle.league.externalId);
+            if (kind === "database") throw new Error("database unavailable");
+            return receipt(bundle);
+          },
+        }),
+        tokens: tokens(),
+        client: multiLeagueReadPort({
+          getLeagueRosters: (request, key) => {
+            if (kind === "database") return client.getLeagueRosters(request, key);
+            if (kind === "schema") return Promise.resolve(artifact("<fantasy_content><broken>"));
+            return Promise.reject(
+              new YahooReadClientError({
+                code:
+                  kind === "authorization"
+                    ? "UNAUTHORIZED"
+                    : kind === "rate-limit"
+                      ? "RATE_LIMITED"
+                      : "NETWORK",
+                message: "private-provider-detail",
+                retryable: true,
+                ...(kind === "authorization" ? { status: 401 } : {}),
+              }),
+            );
+          },
+        }),
+        now: () => NOW,
+      });
+      await expect(service.discoverAndSync(USER_ID, CONNECTION_ID)).rejects.toMatchObject({
+        leagueFailure: null,
+      });
+      expect(markLeagueFailure).not.toHaveBeenCalled();
+      expect(markFailure).toHaveBeenCalledOnce();
+      expect(persisted).toEqual(kind === "database" ? ["449.l.12345"] : []);
+    },
+  );
   it("removes only the authenticated user's local connection and remains idempotent", async () => {
     const disconnectOwnedConnection = vi
       .fn<YahooSyncRepository["disconnectOwnedConnection"]>()

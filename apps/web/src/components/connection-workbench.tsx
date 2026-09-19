@@ -67,6 +67,15 @@ interface YahooConnectionStatus {
   readonly lastErrorCode: string | null;
   readonly lastErrorAt: string | null;
   readonly leagues: readonly YahooLeagueStatus[];
+  readonly leagueFailures?: readonly YahooLeagueFailure[];
+}
+
+interface YahooLeagueFailure {
+  readonly externalLeagueKey: string;
+  readonly season: number | null;
+  readonly code: "INCOMPLETE_ROSTER";
+  readonly message: string;
+  readonly failedAt: string;
 }
 
 type RequestState = "idle" | "working" | "done" | "error";
@@ -113,7 +122,21 @@ function isYahooConnectionStatus(value: unknown): value is YahooConnectionStatus
     isNullableString(record.lastErrorCode) &&
     isNullableString(record.lastErrorAt) &&
     Array.isArray(record.leagues) &&
-    record.leagues.every(isYahooLeagueStatus)
+    record.leagues.every(isYahooLeagueStatus) &&
+    (record.leagueFailures === undefined ||
+      (Array.isArray(record.leagueFailures) && record.leagueFailures.every(isYahooLeagueFailure)))
+  );
+}
+
+function isYahooLeagueFailure(value: unknown): value is YahooLeagueFailure {
+  if (typeof value !== "object" || value === null) return false;
+  const record = value as Record<string, unknown>;
+  return (
+    typeof record.externalLeagueKey === "string" &&
+    (record.season === null || typeof record.season === "number") &&
+    record.code === "INCOMPLETE_ROSTER" &&
+    typeof record.message === "string" &&
+    typeof record.failedAt === "string"
   );
 }
 
@@ -446,7 +469,7 @@ export function ConnectionWorkbench() {
           : sync === "failed"
             ? {
                 tone: "warning",
-                text: "Yahoo connected, but the first sync failed.",
+                text: "Yahoo connected, but some leagues could not be synced yet. Check the league errors below.",
               }
             : {
                 tone: "success",
@@ -578,6 +601,13 @@ export function ConnectionWorkbench() {
         );
       }
       const receipt: unknown = await response.json().catch(() => null);
+      const failures =
+        receipt &&
+        typeof receipt === "object" &&
+        "failures" in receipt &&
+        Array.isArray(receipt.failures)
+          ? receipt.failures.filter(isYahooLeagueFailure)
+          : [];
       if (receipt && typeof receipt === "object") {
         const syncs: readonly unknown[] =
           "syncs" in receipt && Array.isArray(receipt.syncs) ? receipt.syncs : [receipt];
@@ -593,10 +623,13 @@ export function ConnectionWorkbench() {
         }
       }
       setYahooActionMessage({
-        tone: "success",
-        text: league
-          ? `${league.name} is up to date.`
-          : "Yahoo league discovery and sync completed.",
+        tone: failures.length > 0 ? "warning" : "success",
+        text:
+          failures.length > 0
+            ? `Yahoo sync completed with ${failures.length} league${failures.length === 1 ? "" : "s"} needing attention. Existing rosters were preserved. See the league errors below.`
+            : league
+              ? `${league.name} is up to date.`
+              : "Yahoo league discovery and sync completed.",
       });
       await refreshYahooConnections();
     } catch (error) {
@@ -1454,6 +1487,15 @@ export function ConnectionWorkbench() {
                           {formatYahooTime(connection.lastErrorAt, "time unavailable")}
                         </p>
                       ) : null}
+                      {connection.leagueFailures?.map((failure) => (
+                        <p className="yahoo-connection-list__error" key={failure.externalLeagueKey}>
+                          {connection.leagues.find(
+                            (league) => league.externalKey === failure.externalLeagueKey,
+                          )?.name ?? failure.externalLeagueKey}
+                          {failure.season === null ? "" : ` · ${failure.season}`}: {failure.message}{" "}
+                          Last attempt {formatYahooTime(failure.failedAt, "time unavailable")}.
+                        </p>
+                      ))}
                       {connection.leagues.length > 0 ? (
                         <ul className="yahoo-league-list">
                           {connection.leagues.map((league) => {

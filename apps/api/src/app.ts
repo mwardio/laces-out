@@ -2145,7 +2145,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
             }
           }
           await emitYahooCallbackChangeEvents(options, discovery.syncs, request);
-          sync = "complete";
+          sync = discovery.failures.length > 0 ? "failed" : "complete";
         } catch (error) {
           request.log.warn(
             { err: error, connectionId: result.connectionId },
