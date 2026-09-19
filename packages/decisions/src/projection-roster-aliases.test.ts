@@ -7,7 +7,7 @@ import {
   type ProjectionRosterIdentity,
 } from "./projection-roster-aliases.js";
 
-const canonical: DecisionProjectionPlayerRow = {
+const canonical = {
   playerId: "canonical",
   gsisId: "00-0040878",
   name: "Mike Washington Jr.",
@@ -18,7 +18,7 @@ const canonical: DecisionProjectionPlayerRow = {
   meanPoints: "84.247",
   floorPoints: "40.123",
   ceilingPoints: "120.456",
-};
+} satisfies DecisionProjectionPlayerRow;
 const roster: ProjectionRosterIdentity = { ...canonical, playerId: "roster", gsisId: null };
 const scopedId: ProjectionExternalIdentity = {
   playerId: roster.playerId,
