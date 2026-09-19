@@ -23,7 +23,11 @@ import {
   teamWeeklyStatObservations,
   type Database,
 } from "@laces-out/db";
-import { canonicalNflTeamCode, isArchivedNflverseSource } from "@laces-out/domain";
+import {
+  canonicalNflTeamCode,
+  isArchivedNflverseSource,
+  providerPlayerCrosswalkId,
+} from "@laces-out/domain";
 import {
   FIRST_PARTY_CHAMPION_MINIMUM_IMPROVEMENT,
   FIRST_PARTY_CHAMPION_MINIMUM_SAMPLES,
@@ -462,11 +466,86 @@ function playerIdentityKey(
 export function canonicalProjectionPlayerId(input: {
   readonly playerId: string;
   readonly hasGsisId: boolean;
-  readonly explicitMatchId?: string;
+  readonly explicitMatchId?: string | null;
   readonly exactMatchId?: string;
-}): string {
+}): string | undefined {
   if (input.hasGsisId) return input.playerId;
+  if (input.explicitMatchId === null) return undefined;
   return input.explicitMatchId ?? input.exactMatchId ?? input.playerId;
+}
+
+/** A null match is conflicting or unavailable explicit identity, not a name-match fallback. */
+export function projectionStatusCanonicalMatches(
+  rows: readonly { readonly playerId: string | null; readonly gsisId: string | null }[],
+  canonicalByGsis: ReadonlyMap<string, string>,
+): ReadonlyMap<string, string | null> {
+  const evidence = new Map<string, Set<string>>();
+  for (const row of rows) {
+    if (!row.playerId || !row.gsisId) continue;
+    const gsisIds = evidence.get(row.playerId) ?? new Set<string>();
+    gsisIds.add(row.gsisId);
+    evidence.set(row.playerId, gsisIds);
+  }
+  const matches = new Map<string, string | null>();
+  for (const [playerId, gsisIds] of evidence) {
+    const canonicalId = gsisIds.size === 1 ? canonicalByGsis.get([...gsisIds][0]!) : undefined;
+    if (canonicalId !== playerId) matches.set(playerId, canonicalId ?? null);
+  }
+  return matches;
+}
+
+/** Canonical crosswalk collisions remain unavailable regardless of source row order. */
+export function projectionProviderCanonicalMatches(
+  rows: readonly {
+    readonly playerId: string;
+    readonly source: string;
+    readonly externalId: string;
+  }[],
+  initialMatches: ReadonlyMap<string, string | null> = new Map(),
+): ReadonlyMap<string, string | null> {
+  const canonical = new Map<string, string | null>();
+  for (const row of rows) {
+    if (row.source !== "sleeper-espn" && row.source !== "sleeper-yahoo") continue;
+    const id = providerPlayerCrosswalkId(row.source, row.externalId);
+    if (id === undefined) continue;
+    const key = `${row.source}:${id}`;
+    const existing = canonical.get(key);
+    canonical.set(key, existing === undefined || existing === row.playerId ? row.playerId : null);
+  }
+  const matches = new Map<string, string | null>(initialMatches);
+  const add = (playerId: string, canonicalId: string | null | undefined): void => {
+    if (canonicalId === undefined || canonicalId === playerId) return;
+    const existing = matches.get(playerId);
+    matches.set(
+      playerId,
+      canonicalId === null || (existing !== undefined && existing !== canonicalId)
+        ? null
+        : canonicalId,
+    );
+  };
+  for (const row of rows) {
+    if (row.source === "espn" || row.source === "yahoo") {
+      const id = providerPlayerCrosswalkId(row.source, row.externalId);
+      if (id !== undefined) add(row.playerId, canonical.get(`sleeper-${row.source}:${id}`));
+      else if (row.source === "yahoo") add(row.playerId, null);
+    }
+    if (
+      row.source === espnSelfAssertedPlayerSource &&
+      espnSelfAssertedProjectionLeague(row.externalId)
+    ) {
+      const id = row.externalId.slice(row.externalId.indexOf(":") + 1);
+      const key = `sleeper-espn:${id}`;
+      // An ambiguous known crosswalk must not be replaced by the older direct-provider fallback.
+      add(
+        row.playerId,
+        canonical.has(key)
+          ? canonical.get(key)
+          : rows.find((candidate) => candidate.source === "espn" && candidate.externalId === id)
+              ?.playerId,
+      );
+    }
+  }
+  return matches;
 }
 
 /** Returns the owning league-season encoded by an ESPN self-asserted player observation. */
@@ -2561,40 +2640,15 @@ export class FirstPartyProjectionService implements ProjectionRefreshService {
       rosterScopes.set(roster.playerId, scopes);
     }
     const espnOwnerScopes = new Map<string, Set<string>>();
-    const canonicalProviderPlayerByExternalId = new Map(
-      providerExternalRows.flatMap((row) =>
-        row.source === "sleeper-espn" || row.source === "sleeper-yahoo"
-          ? [[`${row.source}:${row.externalId}`, row.playerId] as const]
-          : [],
-      ),
-    );
     const canonicalPlayerByGsis = new Map(
       effectivePlayerRows.flatMap((player) =>
         player.gsisId ? [[player.gsisId, player.id] as const] : [],
       ),
     );
-    const canonicalMatchByPlayer = new Map<string, string>();
-    for (const row of statusRows) {
-      const canonicalPlayerId = row.gsisId ? canonicalPlayerByGsis.get(row.gsisId) : undefined;
-      if (row.playerId && canonicalPlayerId && row.playerId !== canonicalPlayerId) {
-        canonicalMatchByPlayer.set(row.playerId, canonicalPlayerId);
-      }
-    }
-    for (const row of providerExternalRows) {
-      const crosswalkSource =
-        row.source === "espn"
-          ? "sleeper-espn"
-          : row.source === "yahoo"
-            ? "sleeper-yahoo"
-            : undefined;
-      if (!crosswalkSource) continue;
-      const canonicalPlayerId = canonicalProviderPlayerByExternalId.get(
-        `${crosswalkSource}:${row.externalId}`,
-      );
-      if (canonicalPlayerId && canonicalPlayerId !== row.playerId) {
-        canonicalMatchByPlayer.set(row.playerId, canonicalPlayerId);
-      }
-    }
+    const canonicalMatchByPlayer = projectionProviderCanonicalMatches(
+      providerExternalRows,
+      projectionStatusCanonicalMatches(statusRows, canonicalPlayerByGsis),
+    );
     for (const row of providerExternalRows.filter(
       (candidate) => candidate.source === espnSelfAssertedPlayerSource,
     )) {
@@ -2603,15 +2657,6 @@ export class FirstPartyProjectionService implements ProjectionRefreshService {
       const scopes = espnOwnerScopes.get(row.playerId) ?? new Set<string>();
       scopes.add(leagueSeasonId);
       espnOwnerScopes.set(row.playerId, scopes);
-      const providerPlayerId = row.externalId.slice(row.externalId.indexOf(":") + 1);
-      const canonicalPlayerId =
-        canonicalProviderPlayerByExternalId.get(`sleeper-espn:${providerPlayerId}`) ??
-        providerExternalRows.find(
-          (candidate) => candidate.source === "espn" && candidate.externalId === providerPlayerId,
-        )?.playerId;
-      if (canonicalPlayerId && canonicalPlayerId !== row.playerId) {
-        canonicalMatchByPlayer.set(row.playerId, canonicalPlayerId);
-      }
     }
     const leagueSeasonScopesByPlayer = new Map<string, readonly string[]>();
     for (const player of effectivePlayerRows) {
@@ -2890,7 +2935,7 @@ export class FirstPartyProjectionService implements ProjectionRefreshService {
     readonly rules: readonly LeagueRuleRow[];
     readonly rosters: readonly LeagueRosterPlayer[];
     readonly leagueSeasonScopesByPlayer: ReadonlyMap<string, readonly string[]>;
-    readonly canonicalMatchByPlayer: ReadonlyMap<string, string>;
+    readonly canonicalMatchByPlayer: ReadonlyMap<string, string | null>;
   }): Promise<PublicationAttempt> {
     const historyThrough = prepared.playerHistory
       .filter(
@@ -2983,9 +3028,12 @@ export class FirstPartyProjectionService implements ProjectionRefreshService {
       const canonicalPlayerId = canonicalProjectionPlayerId({
         playerId: player.id,
         hasGsisId: player.gsisId !== null,
-        ...(explicitlyMatchedPlayerId ? { explicitMatchId: explicitlyMatchedPlayerId } : {}),
+        ...(explicitlyMatchedPlayerId !== undefined
+          ? { explicitMatchId: explicitlyMatchedPlayerId }
+          : {}),
         ...(exactMatch ? { exactMatchId: exactMatch.id } : {}),
       });
+      if (canonicalPlayerId === undefined) continue;
       const canonicalMatch = playerById.get(canonicalPlayerId);
       const historyPlayerId = canonicalMatch?.id ?? player.id;
       const latest = latestHistoryByPlayer.get(historyPlayerId);

@@ -35,6 +35,8 @@ import {
   buildFirstPartyLeaguePublications,
   type ScoredProjectionRow,
   canonicalProjectionPlayerId,
+  projectionProviderCanonicalMatches,
+  projectionStatusCanonicalMatches,
   effectiveFirstPartyProjectionPositions,
   evaluateFirstPartyPublicationCandidates,
   FirstPartyPublicationEvidenceMemo,
@@ -665,6 +667,159 @@ describe("first-party projection publication policy", () => {
         exactMatchId: "different-exact-name-match",
       }),
     ).toBe("different-exact-name-match");
+  });
+
+  it("uses Yahoo numeric crosswalks for compound roster keys across NFL seasons", () => {
+    const rows = [
+      { playerId: "canonical", source: "sleeper-yahoo", externalId: "26686" },
+      { playerId: "old-roster", source: "yahoo", externalId: "461.p.26686" },
+      { playerId: "current-roster", source: "yahoo", externalId: "470.p.26686" },
+      { playerId: "nfl-roster", source: "yahoo", externalId: "nfl.p.26686" },
+    ];
+    const matches = projectionProviderCanonicalMatches(rows);
+    expect([...matches]).toEqual([
+      ["old-roster", "canonical"],
+      ["current-roster", "canonical"],
+      ["nfl-roster", "canonical"],
+    ]);
+    expect(
+      canonicalProjectionPlayerId({
+        playerId: "current-roster",
+        hasGsisId: false,
+        explicitMatchId: matches.get("current-roster") ?? null,
+        exactMatchId: "different-name-match",
+      }),
+    ).toBe("canonical");
+  });
+
+  it("retains conflicting crosswalks in either order without falling back to names", () => {
+    const rows = [
+      { playerId: "canonical-a", source: "sleeper-yahoo", externalId: "26686" },
+      { playerId: "canonical-b", source: "sleeper-yahoo", externalId: "470.p.26686" },
+      { playerId: "alias", source: "yahoo", externalId: "470.p.26686" },
+    ];
+    for (const input of [rows, [...rows].reverse()]) {
+      const matches = projectionProviderCanonicalMatches(input);
+      expect(matches.get("alias")).toBeNull();
+      expect(
+        canonicalProjectionPlayerId({
+          playerId: "alias",
+          hasGsisId: false,
+          explicitMatchId: matches.get("alias") ?? null,
+          exactMatchId: "canonical-a",
+        }),
+      ).toBeUndefined();
+      expect(
+        canonicalProjectionPlayerId({
+          playerId: "already-canonical",
+          hasGsisId: true,
+          explicitMatchId: matches.get("alias") ?? null,
+        }),
+      ).toBe("already-canonical");
+    }
+  });
+
+  it("accepts repeated crosswalks to the same player and rejects conflicting status evidence", () => {
+    const rows = [
+      { playerId: "canonical", source: "sleeper-yahoo", externalId: "26686" },
+      { playerId: "canonical", source: "sleeper-yahoo", externalId: "nfl.p.26686" },
+      { playerId: "alias", source: "yahoo", externalId: "470.p.26686" },
+    ];
+    expect(projectionProviderCanonicalMatches(rows).get("alias")).toBe("canonical");
+    expect(
+      projectionProviderCanonicalMatches(rows, new Map([["alias", "another-player"]])).get("alias"),
+    ).toBeNull();
+  });
+
+  it("retains direct and league-scoped ESPN crosswalk behavior", () => {
+    const rows = [
+      { playerId: "canonical", source: "sleeper-espn", externalId: "provider-7" },
+      { playerId: "direct", source: "espn", externalId: "provider-7" },
+      {
+        playerId: "scoped",
+        source: "espn-self-asserted",
+        externalId: "10000000-0000-4000-8000-000000000001:provider-7",
+      },
+    ];
+    expect(projectionProviderCanonicalMatches(rows)).toEqual(
+      new Map([
+        ["direct", "canonical"],
+        ["scoped", "canonical"],
+      ]),
+    );
+    expect(projectionProviderCanonicalMatches(rows.slice(1)).get("scoped")).toBe("direct");
+  });
+
+  it("does not hide malformed Yahoo crosswalk evidence behind a display name", () => {
+    const matches = projectionProviderCanonicalMatches([
+      { playerId: "alias", source: "yahoo", externalId: "nba.p.26686" },
+      { playerId: "canonical", source: "sleeper-yahoo", externalId: "26686" },
+    ]);
+    expect(matches.get("alias")).toBeNull();
+    expect(
+      canonicalProjectionPlayerId({
+        playerId: "alias",
+        hasGsisId: false,
+        explicitMatchId: matches.get("alias") ?? null,
+        exactMatchId: "canonical",
+      }),
+    ).toBeUndefined();
+  });
+
+  it("does not replace an ambiguous ESPN crosswalk with the direct-provider fallback", () => {
+    const rows = [
+      { playerId: "canonical-a", source: "sleeper-espn", externalId: "provider-7" },
+      { playerId: "canonical-b", source: "sleeper-espn", externalId: "provider-7" },
+      { playerId: "direct", source: "espn", externalId: "provider-7" },
+      {
+        playerId: "scoped",
+        source: "espn-self-asserted",
+        externalId: "10000000-0000-4000-8000-000000000001:provider-7",
+      },
+    ];
+    for (const input of [rows, [...rows].reverse()]) {
+      const matches = projectionProviderCanonicalMatches(input);
+      expect(matches.get("direct")).toBeNull();
+      expect(matches.get("scoped")).toBeNull();
+      expect(
+        canonicalProjectionPlayerId({
+          playerId: "scoped",
+          hasGsisId: false,
+          explicitMatchId: matches.get("scoped") ?? null,
+          exactMatchId: "canonical-a",
+        }),
+      ).toBeUndefined();
+    }
+  });
+
+  it("does not override unknown or conflicting status GSIS with a provider or name match", () => {
+    const known = new Map([["00-0000001", "canonical"]]);
+    const rows = [
+      { playerId: "alias", gsisId: "00-0000001" },
+      { playerId: "alias", gsisId: "00-0000002" },
+    ];
+    for (const input of [rows, [...rows].reverse(), rows.slice(1)]) {
+      const status = projectionStatusCanonicalMatches(input, known);
+      const matches = projectionProviderCanonicalMatches(
+        [
+          { playerId: "alias", source: "yahoo", externalId: "470.p.26686" },
+          { playerId: "canonical", source: "sleeper-yahoo", externalId: "26686" },
+        ],
+        status,
+      );
+      expect(matches.get("alias")).toBeNull();
+      expect(
+        canonicalProjectionPlayerId({
+          playerId: "alias",
+          hasGsisId: false,
+          explicitMatchId: matches.get("alias") ?? null,
+          exactMatchId: "canonical",
+        }),
+      ).toBeUndefined();
+    }
+    expect(projectionStatusCanonicalMatches([rows[0]!, rows[0]!], known).get("alias")).toBe(
+      "canonical",
+    );
   });
 
   it("fails closed on thin backtests and preserves prior output on baseline regression", () => {
