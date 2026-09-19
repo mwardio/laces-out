@@ -23,9 +23,18 @@ import {
   teamWeeklyStatObservations,
   type Database,
 } from "@laces-out/db";
-import { NFL_TEAMS, canonicalNflTeamCode } from "@laces-out/domain";
+import {
+  NFL_TEAMS,
+  canonicalNflTeamCode,
+  playerNameIdentityParts,
+  playerNameIdentitiesCompatible,
+  providerPlayerCrosswalkId,
+} from "@laces-out/domain";
 import {
   FIRST_PARTY_ROS_CONVERGENCE_REFERENCE_SCENARIOS,
+  DEFENSE_POINTS_ALLOWED_DEFINITIONS,
+  defensePointsAllowedDefinitionForProfile,
+  type ProjectionDefensePointsAllowedDefinition,
   LEAGUE_SCORING_NORMALIZATION_VERSION,
   normalizeLeagueScoringProfile,
   projectionScoringProfileKey,
@@ -81,6 +90,7 @@ import {
 import {
   buildFirstPartyPlayerHistory,
   FIRST_PARTY_PLAYER_HISTORY_VERSION,
+  FIRST_PARTY_DEFENSE_HISTORY_VERSION,
   buildFirstPartyDefenseHistory,
   type ProjectionInjuryFact,
   type ProjectionRosterFact,
@@ -358,6 +368,7 @@ const ROS_ALIAS_EXTERNAL_SOURCES = [
   "sleeper-yahoo",
 ] as const;
 const ROS_ALIAS_QUERY_CHUNK_SIZE = 400;
+const ROS_ALIAS_YAHOO_EVIDENCE_LIMIT = 50_000;
 const NFL_TEAM_SET = new Set<string>(NFL_TEAMS);
 
 export interface FirstPartyRosPlayerAliasIdentity {
@@ -372,6 +383,39 @@ export interface FirstPartyRosPlayerAliasExternalId {
   readonly playerId: string;
   readonly source: string;
   readonly externalId: string;
+}
+
+/** A bounded one-hop closure; overflow must not discard already loaded explicit identities. */
+export function firstPartyRosYahooEvidenceClosure(input: {
+  readonly externalIds: readonly FirstPartyRosPlayerAliasExternalId[];
+  readonly sourceRows: readonly FirstPartyRosPlayerAliasExternalId[];
+}): {
+  readonly complete: boolean;
+  readonly externalIds: readonly FirstPartyRosPlayerAliasExternalId[];
+} {
+  if (
+    input.sourceRows.length > ROS_ALIAS_YAHOO_EVIDENCE_LIMIT ||
+    input.sourceRows.some((row) => row.source !== "yahoo" && row.source !== "sleeper-yahoo")
+  ) {
+    return { complete: false, externalIds: input.externalIds };
+  }
+  const requestedIds = new Set(
+    input.externalIds.flatMap((row) => {
+      if (row.source !== "yahoo" && row.source !== "sleeper-yahoo") return [];
+      const id = providerPlayerCrosswalkId(row.source, row.externalId);
+      return id === undefined ? [] : [id];
+    }),
+  );
+  return {
+    complete: true,
+    externalIds: [
+      ...input.externalIds,
+      ...input.sourceRows.filter((row) => {
+        const id = providerPlayerCrosswalkId(row.source, row.externalId);
+        return id !== undefined && requestedIds.has(id);
+      }),
+    ],
+  };
 }
 
 export interface FirstPartyRosPlayerAliasGsisEvidence {
@@ -412,17 +456,16 @@ function aliasTeam(value: string | null): string | undefined {
   }
 }
 
-function aliasName(value: string): string | undefined {
-  const name = value.normalize("NFKC").trim().toLocaleLowerCase("en-US");
-  return name.length > 0 ? name : undefined;
-}
-
-function aliasIdentityKey(input: {
-  readonly fullName: string;
-  readonly position: FirstPartyRosRailPosition;
-  readonly team: string;
-}): string | undefined {
-  const name = aliasName(input.fullName);
+function aliasIdentityKey(
+  input: {
+    readonly fullName: string;
+    readonly position: FirstPartyRosRailPosition;
+    readonly team: string;
+  },
+  withoutSuffix = false,
+): string | undefined {
+  const parts = playerNameIdentityParts(input.fullName);
+  const name = withoutSuffix ? parts.base : parts.exact;
   return name ? `${name}|${input.team}|${input.position}` : undefined;
 }
 
@@ -463,6 +506,8 @@ export function firstPartyRosPlayerAliasPlan(input: {
   readonly rosterPlayers: readonly FirstPartyRosPlayerAliasIdentity[];
   readonly canonicalPlayers: readonly FirstPartyRosPlayerAliasIdentity[];
   readonly externalIds?: readonly FirstPartyRosPlayerAliasExternalId[];
+  /** All Yahoo source rows matching roster suffixes, including outside-pool targets, were read. */
+  readonly yahooExternalEvidenceComplete?: boolean;
   readonly gsisEvidence?: readonly FirstPartyRosPlayerAliasGsisEvidence[];
   readonly initialIssues?: readonly FirstPartyRosPlayerAliasIssue[];
 }): FirstPartyRosPlayerAliasPlan {
@@ -510,6 +555,7 @@ export function firstPartyRosPlayerAliasPlan(input: {
   const canonicalIdsByGsis = new Map<string, Set<string>>();
   const canonicalIdsByDefenseTeam = new Map<string, Set<string>>();
   const canonicalIdsByExactIdentity = new Map<string, Set<string>>();
+  const canonicalIdsByBaseIdentity = new Map<string, Set<string>>();
   for (const candidate of canonicalPlayers) {
     if (candidate.gsisId) addToSetMap(canonicalIdsByGsis, candidate.gsisId, candidate.playerId);
     if (candidate.position === "DST") {
@@ -519,20 +565,52 @@ export function firstPartyRosPlayerAliasPlan(input: {
     if (candidate.gsisId) {
       const key = aliasIdentityKey(candidate);
       if (key) addToSetMap(canonicalIdsByExactIdentity, key, candidate.playerId);
+      const baseKey = aliasIdentityKey(candidate, true);
+      if (baseKey) addToSetMap(canonicalIdsByBaseIdentity, baseKey, candidate.playerId);
     }
   }
 
   const externalIds = input.externalIds ?? [];
   const externalIdsByPlayer = new Map<string, FirstPartyRosPlayerAliasExternalId[]>();
   const canonicalIdsByExternalKey = new Map<string, Set<string>>();
+  const yahooPlayerIdsByExternalKey = new Map<string, Set<string>>();
+  const yahooIdsByPlayer = new Map<string, Set<string>>();
+  const espnIdsByPlayer = new Map<string, Set<string>>();
+  const invalidYahooPlayers = new Set<string>();
   for (const row of externalIds) {
     const externalId = row.externalId.trim();
+    const isYahoo = row.source === "yahoo" || row.source === "sleeper-yahoo";
+    const yahooId = isYahoo ? providerPlayerCrosswalkId(row.source, externalId) : undefined;
+    if (row.source === "espn" || row.source === "sleeper-espn") {
+      const espnId = providerPlayerCrosswalkId(row.source, externalId);
+      if (espnId) addToSetMap(espnIdsByPlayer, row.playerId, espnId);
+    } else if (
+      row.source === "espn-self-asserted" &&
+      espnSelfAssertedProjectionLeague(externalId) === input.leagueSeasonId.toLowerCase()
+    ) {
+      addToSetMap(espnIdsByPlayer, row.playerId, externalId.slice(externalId.indexOf(":") + 1));
+    }
+    if (isYahoo) {
+      if (yahooId === undefined) invalidYahooPlayers.add(row.playerId);
+      else {
+        addToSetMap(yahooIdsByPlayer, row.playerId, yahooId);
+        // Keep known bridges outside the candidate pool: their absence from today's pool does
+        // not authorize a different name match. The loader closes this one-hop evidence set.
+        if (row.source === "sleeper-yahoo" || canonicalById.has(row.playerId)) {
+          addToSetMap(yahooPlayerIdsByExternalKey, `${row.source}:${yahooId}`, row.playerId);
+        }
+      }
+    }
     if (!externalId) continue;
     const rows = externalIdsByPlayer.get(row.playerId) ?? [];
     rows.push({ ...row, externalId });
     externalIdsByPlayer.set(row.playerId, rows);
-    if (canonicalById.has(row.playerId)) {
-      addToSetMap(canonicalIdsByExternalKey, `${row.source}:${externalId}`, row.playerId);
+    const crosswalkId =
+      row.source === "espn-self-asserted"
+        ? externalId
+        : providerPlayerCrosswalkId(row.source, externalId);
+    if (canonicalById.has(row.playerId) && crosswalkId !== undefined) {
+      addToSetMap(canonicalIdsByExternalKey, `${row.source}:${crosswalkId}`, row.playerId);
     }
   }
   const gsisByPlayer = new Map<string, Set<string>>();
@@ -606,7 +684,8 @@ export function firstPartyRosPlayerAliasPlan(input: {
       ...(row.gsisId ? [row.gsisId] : []),
       ...(gsisByPlayer.get(playerId) ?? []),
     ]);
-    let ambiguousEvidence = observedGsisIds.size > 1;
+    const observedYahooIds = yahooIdsByPlayer.get(playerId) ?? new Set<string>();
+    let ambiguousEvidence = observedGsisIds.size > 1 || observedYahooIds.size > 1;
     let strongerFactPresent = observedGsisIds.size > 0;
     const collect = (candidateIds: ReadonlySet<string> | undefined): void => {
       if (!candidateIds || candidateIds.size === 0) return;
@@ -628,8 +707,24 @@ export function firstPartyRosPlayerAliasPlan(input: {
                 ? "yahoo"
                 : undefined;
       if (pairedSource) {
-        strongerFactPresent = true;
-        collect(canonicalIdsByExternalKey.get(`${pairedSource}:${external.externalId}`));
+        const crosswalkId = providerPlayerCrosswalkId(external.source, external.externalId);
+        if (external.source === "yahoo" || external.source === "sleeper-yahoo") {
+          const matches =
+            crosswalkId === undefined
+              ? undefined
+              : yahooPlayerIdsByExternalKey.get(`${pairedSource}:${crosswalkId}`);
+          // An opaque, valid Yahoo ID without a bridge is not contradictory identity evidence.
+          // Permit the existing exact fallback only after the outside-pool lookup is complete.
+          if (crosswalkId === undefined || !input.yahooExternalEvidenceComplete || matches?.size) {
+            strongerFactPresent = true;
+          }
+          collect(matches);
+        } else {
+          strongerFactPresent = true;
+          if (crosswalkId !== undefined) {
+            collect(canonicalIdsByExternalKey.get(`${pairedSource}:${crosswalkId}`));
+          }
+        }
       }
       if (
         external.source === "espn-self-asserted" &&
@@ -646,9 +741,58 @@ export function firstPartyRosPlayerAliasPlan(input: {
 
     // Exact NFKC name + canonical team + effective fantasy position is deliberately last and is
     // only eligible when the canonical side has trusted GSIS identity.
-    if (evidence.size === 0 && !ambiguousEvidence && !strongerFactPresent) {
+    if (
+      evidence.size === 0 &&
+      !ambiguousEvidence &&
+      !strongerFactPresent &&
+      !invalidYahooPlayers.has(playerId)
+    ) {
       const exactKey = aliasIdentityKey(row);
-      if (exactKey) collect(canonicalIdsByExactIdentity.get(exactKey));
+      const exactMatches = exactKey ? canonicalIdsByExactIdentity.get(exactKey) : undefined;
+      const baseKey = aliasIdentityKey(row, true);
+      // Broaden Yahoo names only after its outside-pool bridge lookup is complete. ESPN's
+      // scoped assertion fallback remains exact until equivalent evidence closure is available.
+      const suffixMatches =
+        exactMatches === undefined &&
+        observedYahooIds.size === 1 &&
+        input.yahooExternalEvidenceComplete &&
+        !espnIdsByPlayer.has(playerId) &&
+        baseKey
+          ? canonicalIdsByBaseIdentity.get(baseKey)
+          : undefined;
+      const nameMatches = exactMatches ?? suffixMatches;
+      // Do not prune an ambiguous name cohort into an apparently unique match. A single exact
+      // candidate's own Yahoo facts may veto this fallback but may never select among names.
+      const exactCandidateId = nameMatches?.size === 1 ? [...nameMatches][0]! : undefined;
+      const candidateYahooIds = exactCandidateId
+        ? yahooIdsByPlayer.get(exactCandidateId)
+        : undefined;
+      const candidateYahooConflict =
+        observedYahooIds.size > 0 &&
+        exactCandidateId !== undefined &&
+        (invalidYahooPlayers.has(exactCandidateId) ||
+          [...(candidateYahooIds ?? [])].some((id) => !observedYahooIds.has(id)));
+      const observedEspnIds = espnIdsByPlayer.get(playerId);
+      const candidateEspnIds = exactCandidateId ? espnIdsByPlayer.get(exactCandidateId) : undefined;
+      const candidateEspnConflict =
+        (observedEspnIds?.size ?? 0) > 1 ||
+        (candidateEspnIds?.size ?? 0) > 1 ||
+        (observedEspnIds?.size === 1 &&
+          candidateEspnIds?.size === 1 &&
+          !candidateEspnIds.has([...observedEspnIds][0]!));
+      const suffixConflict =
+        suffixMatches !== undefined &&
+        exactCandidateId !== undefined &&
+        !playerNameIdentitiesCompatible(
+          playerNameIdentityParts(row.fullName),
+          playerNameIdentityParts(canonicalById.get(exactCandidateId)!.fullName),
+        );
+      if (!candidateYahooConflict && !candidateEspnConflict && !suffixConflict)
+        collect(nameMatches);
+    }
+    if (invalidYahooPlayers.has(playerId)) {
+      addIssue(row.position, playerId, "identity-unresolved");
+      continue;
     }
     if (ambiguousEvidence) {
       addIssue(row.position, playerId, "identity-ambiguous");
@@ -1164,7 +1308,9 @@ export function calibrateFirstPartyRosPlayerHistory(input: {
 interface FirstPartyRosRefreshReuse {
   calibration?: {
     readonly player: ReturnType<typeof calibrateFirstPartyRosPlayerHistory>;
-    readonly defense: FirstPartyTeamDefenseCalibration;
+    readonly defenseByDefinition: Readonly<
+      Record<ProjectionDefensePointsAllowedDefinition, FirstPartyTeamDefenseCalibration>
+    >;
   };
   project?: ReturnType<typeof createRosLiveProjectionReuse>;
 }
@@ -1234,6 +1380,8 @@ export function databaseFirstPartyRosCandidateProvider(input: {
       aliasPlans,
       checksum: aggregateChecksum("live-ros-candidate-provider-v8", [
         `player-history:${FIRST_PARTY_PLAYER_HISTORY_VERSION}`,
+        `defense-history:${FIRST_PARTY_DEFENSE_HISTORY_VERSION}`,
+        `scoring-normalization:${LEAGUE_SCORING_NORMALIZATION_VERSION}`,
         `live-physical:${ROS_LIVE_PHYSICAL_IDENTITY_VERSION}`,
         `live-outcomes:${ROS_LIVE_OUTCOME_VERSION}`,
         `season:${season}`,
@@ -1631,6 +1779,27 @@ async function latestLeaguePlayerAliasPlans(
     );
   }
 
+  // One source-indexed bounded read for the whole multi-league request closes bridges outside
+  // today's candidate/roster IDs. Normalize with the same helper as matching, not a second SQL
+  // regex. A capped result disables only the new unbridged fallback, never existing safe joins.
+  const needsYahooClosure = externalIds.some(
+    (row) => row.source === "yahoo" || row.source === "sleeper-yahoo",
+  );
+  const yahooEvidence = needsYahooClosure
+    ? firstPartyRosYahooEvidenceClosure({
+        externalIds,
+        sourceRows: await database
+          .select({
+            playerId: playerExternalIds.playerId,
+            source: playerExternalIds.source,
+            externalId: playerExternalIds.externalId,
+          })
+          .from(playerExternalIds)
+          .where(inArray(playerExternalIds.source, ["yahoo", "sleeper-yahoo"]))
+          .limit(ROS_ALIAS_YAHOO_EVIDENCE_LIMIT + 1),
+      })
+    : { complete: false, externalIds };
+
   return new Map(
     uniqueLeagueIds.map((leagueSeasonId) => [
       leagueSeasonId,
@@ -1638,7 +1807,8 @@ async function latestLeaguePlayerAliasPlans(
         leagueSeasonId,
         rosterPlayers: rosterPlayersByLeague.get(leagueSeasonId) ?? [],
         canonicalPlayers,
-        externalIds,
+        externalIds: yahooEvidence.externalIds,
+        yahooExternalEvidenceComplete: yahooEvidence.complete,
         gsisEvidence,
         initialIssues: initialIssuesByLeague.get(leagueSeasonId) ?? [],
       }),
@@ -2068,14 +2238,34 @@ async function prepareDatabaseFirstPartyRosTargets(
     }));
 
     const history = buildFirstPartyPlayerHistory(weekly, snaps, rosters, schedules, injuries);
-    const defenseHistory = buildFirstPartyDefenseHistory(teamWeekly, schedules);
+    const defenseHistoryByDefinition = Object.fromEntries(
+      DEFENSE_POINTS_ALLOWED_DEFINITIONS.map((definition) => [
+        definition,
+        buildFirstPartyDefenseHistory(teamWeekly, schedules, definition),
+      ]),
+    ) as Record<
+      ProjectionDefensePointsAllowedDefinition,
+      readonly FirstPartyTeamDefenseWeeklyStatLine[]
+    >;
     const cutoff = season * 32 + window.asOfWeek;
     const featureHistory = history.filter((row) => row.season * 32 + row.week <= cutoff);
     const trainingHistory = history.filter((row) => row.season < season);
-    const defenseFeatureHistory = defenseHistory.filter(
-      (row) => row.season * 32 + row.week <= cutoff,
-    );
-    const defenseTrainingHistory = defenseHistory.filter((row) => row.season < season);
+    const defenseFeatureHistoryByDefinition = {
+      "yahoo-2022-v1": defenseHistoryByDefinition["yahoo-2022-v1"].filter(
+        (row) => row.season * 32 + row.week <= cutoff,
+      ),
+      "espn-2019-v1": defenseHistoryByDefinition["espn-2019-v1"].filter(
+        (row) => row.season * 32 + row.week <= cutoff,
+      ),
+    };
+    const defenseTrainingHistoryByDefinition = {
+      "yahoo-2022-v1": defenseHistoryByDefinition["yahoo-2022-v1"].filter(
+        (row) => row.season < season,
+      ),
+      "espn-2019-v1": defenseHistoryByDefinition["espn-2019-v1"].filter(
+        (row) => row.season < season,
+      ),
+    };
     // Availability/role calibration must be trained strictly before the current season so a live
     // forecast can never leak its own season into its publication decision.
     if (trainingHistory.length === 0) return targetsByArtifact;
@@ -2083,13 +2273,20 @@ async function prepareDatabaseFirstPartyRosTargets(
     let availabilityCalibration: HistoricalRosAvailabilityCalibration;
     let roleCalibration: HistoricalRosRoleCalibration;
     let kickerCalibration: HistoricalRosKickerCalibration;
-    let defenseCalibration: FirstPartyTeamDefenseCalibration;
+    let defenseCalibrationByDefinition: Readonly<
+      Record<ProjectionDefensePointsAllowedDefinition, FirstPartyTeamDefenseCalibration>
+    >;
     const trainingSchedules = schedules.filter((row) => row.season < season);
     const calibrationIdentity = rosLivePhysicalIdentity({
       season,
       window: { asOfWeek: 0, windowStartWeek: 1, windowEndWeek: 18 },
       sources: [],
-      rows: { trainingHistory, defenseTrainingHistory, schedules: trainingSchedules },
+      rows: {
+        trainingHistory,
+        yahooDefenseTrainingHistory: defenseTrainingHistoryByDefinition["yahoo-2022-v1"],
+        espnDefenseTrainingHistory: defenseTrainingHistoryByDefinition["espn-2019-v1"],
+        schedules: trainingSchedules,
+      },
     });
     try {
       // Football-process fits use the model's fixed training loss, independent of every artifact's
@@ -2105,7 +2302,13 @@ async function prepareDatabaseFirstPartyRosTargets(
               trainingHistory,
               schedules: trainingSchedules,
             }),
-            defense: runFirstPartyTeamDefenseBacktest(defenseTrainingHistory).calibration,
+            defenseByDefinition: Object.fromEntries(
+              DEFENSE_POINTS_ALLOWED_DEFINITIONS.map((definition) => [
+                definition,
+                runFirstPartyTeamDefenseBacktest(defenseTrainingHistoryByDefinition[definition])
+                  .calibration,
+              ]),
+            ) as Record<ProjectionDefensePointsAllowedDefinition, FirstPartyTeamDefenseCalibration>,
           };
           await calibrationStore?.writeCalibration(calibrationIdentity, options.reuse.calibration);
           options.onLiveReuse?.({ kind: "calibration-fit", physicalIdentity });
@@ -2118,7 +2321,7 @@ async function prepareDatabaseFirstPartyRosTargets(
       // Total by contract (documented fallbacks, never throws), so the kicker calibration cannot
       // trip this league-wide fail-closed catch on a sparse corpus.
       kickerCalibration = fitted.kicker;
-      defenseCalibration = options.reuse.calibration.defense;
+      defenseCalibrationByDefinition = options.reuse.calibration.defenseByDefinition;
     } catch (error) {
       // Cache integrity/storage failures must reach the queue's bounded retry diagnostics.
       if (liveStore !== undefined) throw error;
@@ -2148,6 +2351,12 @@ async function prepareDatabaseFirstPartyRosTargets(
       >();
       for (const league of matched) {
         const leagueScoringProfileKey = projectionScoringProfileKey(league.profile);
+        // Profiles without active PA can share the explicit reference definition because those
+        // components cannot affect their scores. Normalized PA rules always name their provider.
+        const defenseDefinition =
+          defensePointsAllowedDefinitionForProfile(league.profile) ?? "yahoo-2022-v1";
+        const defenseFeatureHistory = defenseFeatureHistoryByDefinition[defenseDefinition];
+        const defenseCalibration = defenseCalibrationByDefinition[defenseDefinition];
         const matchedUnresolvedCandidates = unmatchedCandidates.filter((candidate) =>
           candidate.positions.some((position) => league.matchedPositions.includes(position)),
         );

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { completeDefenseScoringEvents } from "./defense-scoring.test-fixtures.js";
 import {
   projectFirstPartyRecencyBaselineComponents,
   projectFirstPartyWeeklyComponents,
@@ -474,6 +475,12 @@ describe("first-party projection input assembly", () => {
           team: "CHI",
           opponentTeam: "GB",
           components: {
+            ...completeDefenseScoringEvents({
+              scoring_event_defensive_interception_touchdown: 1,
+              scoring_event_offensive_pass_touchdown: 2,
+              scoring_event_field_goal: 1,
+              scoring_event_extra_point: 3,
+            }),
             defensive_sacks: 3,
             defensive_interceptions: 1,
             defensive_fumbles_recovered: 2,
@@ -491,6 +498,11 @@ describe("first-party projection input assembly", () => {
           team: "GB",
           opponentTeam: "CHI",
           components: {
+            ...completeDefenseScoringEvents({
+              scoring_event_offensive_pass_touchdown: 2,
+              scoring_event_field_goal: 1,
+              scoring_event_extra_point: 2,
+            }),
             field_goals_blocked: 1,
             extra_points_blocked: 0,
             punts_blocked: 1,
@@ -509,6 +521,7 @@ describe("first-party projection input assembly", () => {
           homeScore: 17,
         },
       ],
+      "yahoo-2022-v1",
     );
     expect(history.find((row) => row.team === "CHI")?.components).toMatchObject({
       defensive_sacks: 3,
@@ -529,7 +542,11 @@ describe("first-party projection input assembly", () => {
           gameId: "game-2",
           team: "CHI",
           opponentTeam: "GB",
-          components: {},
+          components: completeDefenseScoringEvents({
+            scoring_event_offensive_pass_touchdown: 2,
+            scoring_event_field_goal: 2,
+            scoring_event_extra_point: 2,
+          }),
         },
         {
           season: 2025,
@@ -538,6 +555,13 @@ describe("first-party projection input assembly", () => {
           team: "GB",
           opponentTeam: "CHI",
           components: {
+            ...completeDefenseScoringEvents({
+              scoring_event_defensive_interception_touchdown: 1,
+              scoring_event_safety: 1,
+              scoring_event_punt_return_touchdown: 1,
+              scoring_event_offensive_pass_touchdown: 2,
+              scoring_event_extra_point: 4,
+            }),
             defensive_touchdowns: 1,
             defensive_safeties: 1,
             special_teams_touchdowns: 1,
@@ -556,6 +580,7 @@ describe("first-party projection input assembly", () => {
           homeScore: 30,
         },
       ],
+      "yahoo-2022-v1",
     );
 
     // The defensive TD (6) and safety (2) are excluded; the special-teams TD remains charged.

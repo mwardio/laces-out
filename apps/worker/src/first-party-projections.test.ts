@@ -9,10 +9,13 @@ import {
   applyWeeklyIntervalPolicy,
   applyWeeklyPointCalibration,
   storedWeeklyIntervalPolicyVersion,
+  storedWeeklyIntervalPolicyProvenance,
   storedWeeklyPointPolicyVersion,
   projectionScoringProfileKey,
   firstPartyProjectionComponentsForPosition,
   FIRST_PARTY_PROJECTION_MODEL_VERSION,
+  DEFENSE_POINTS_ALLOWED_EVENT_POINTS,
+  defensePointsAllowedFromScoringEvents,
 } from "@laces-out/projections";
 import type {
   FirstPartyBacktestPrediction,
@@ -28,12 +31,16 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   FIRST_PARTY_PLAYER_HISTORY_VERSION,
+  FIRST_PARTY_DEFENSE_HISTORY_VERSION,
   projectionInputChecksum,
 } from "./first-party-projection-inputs.js";
 import {
   buildFirstPartyLeaguePublications,
   type ScoredProjectionRow,
   canonicalProjectionPlayerId,
+  projectionProviderCanonicalMatches,
+  projectionStatusCanonicalMatches,
+  projectionNameCanonicalMatches,
   effectiveFirstPartyProjectionPositions,
   evaluateFirstPartyPublicationCandidates,
   FirstPartyPublicationEvidenceMemo,
@@ -47,6 +54,7 @@ import {
   projectionGameIsConservativelyFinal,
   projectionHistorySeasons,
   projectionModelGate,
+  projectionPublicationClockGuard,
   projectionRawObservationIsUnlocked,
   projectionStatusWeek,
   projectionStatusWindow,
@@ -58,6 +66,240 @@ import {
   requiredFirstPartyProjectionSourceKeys,
   sourceIsUsableForProjection,
 } from "./first-party-projections.js";
+
+describe("weekly name identity resolution", () => {
+  const alias = {
+    id: "alias",
+    gsisId: null,
+    fullName: "James Cook III",
+    nflTeam: "BUF",
+    primaryPosition: "RB",
+  };
+  const canonical = { ...alias, id: "canonical", gsisId: "00-0037249", fullName: "James Cook" };
+  const yahoo = { playerId: alias.id, source: "yahoo", externalId: "470.p.99999" };
+  const resolve = (input: Partial<Parameters<typeof projectionNameCanonicalMatches>[0]> = {}) =>
+    projectionNameCanonicalMatches({
+      players: [alias, canonical],
+      externalIds: [yahoo],
+      explicitMatches: new Map(),
+      ...input,
+    });
+
+  it.each([
+    ["James Cook III", "James Cook"],
+    ["KC Concepcion Jr.", "KC Concepcion"],
+    ["Travis Etienne Jr.", "Travis Etienne"],
+    ["Kyle Pitts Sr.", "Kyle Pitts"],
+  ])("binds a unique suffix variant %s to %s", (rosterName, catalogName) => {
+    expect(
+      resolve({
+        players: [
+          { ...alias, fullName: rosterName },
+          { ...canonical, fullName: catalogName },
+        ],
+      }).get(alias.id),
+    ).toBe(canonical.id);
+  });
+
+  it("rejects differing suffixes and the entire ambiguous base-name cohort", () => {
+    expect(
+      resolve({ players: [alias, { ...canonical, fullName: "James Cook II" }] }).get(alias.id),
+    ).toBeNull();
+    const sameBase = {
+      ...canonical,
+      id: "other",
+      gsisId: "other-gsis",
+      fullName: "James Cook Jr.",
+    };
+    for (const players of [
+      [alias, canonical, sameBase],
+      [sameBase, canonical, alias],
+    ]) {
+      expect(resolve({ players }).get(alias.id)).toBeNull();
+    }
+  });
+
+  it("prefers a unique exact full name before considering other same-base candidates", () => {
+    const exact = { ...canonical, fullName: alias.fullName };
+    const unsuffixed = { ...canonical, id: "other", gsisId: "other-gsis" };
+    for (const players of [
+      [alias, exact, unsuffixed],
+      [unsuffixed, exact, alias],
+    ]) {
+      expect(resolve({ players }).get(alias.id)).toBe(canonical.id);
+    }
+  });
+
+  it("does not use provider facts to prune an ambiguous name cohort", () => {
+    expect(
+      resolve({
+        players: [alias, canonical, { ...canonical, id: "other", gsisId: "other-gsis" }],
+        externalIds: [yahoo, { playerId: "other", source: "sleeper-yahoo", externalId: "12345" }],
+      }).get(alias.id),
+    ).toBeNull();
+  });
+
+  it.each(["James Cook", "James Cook III"])(
+    "rejects contradictory provider facts for exact or suffix names: %s",
+    (fullName) => {
+      for (const externalId of ["12345", "nba.p.99999", ""]) {
+        expect(
+          resolve({
+            players: [{ ...alias, fullName }, canonical],
+            externalIds: [yahoo, { playerId: canonical.id, source: "sleeper-yahoo", externalId }],
+          }).get(alias.id),
+        ).toBeNull();
+      }
+    },
+  );
+
+  it("keeps unavailable explicit evidence and outside-catalog bridges unavailable", () => {
+    for (const id of [null, "outside-catalog"]) {
+      expect(resolve({ explicitMatches: new Map([[alias.id, id]]) }).get(alias.id)).toBeNull();
+    }
+  });
+
+  it("retains an explicit compatible bridge even when names differ", () => {
+    expect(
+      resolve({
+        players: [alias, { ...canonical, fullName: "Different Display Name" }],
+        explicitMatches: new Map([[alias.id, canonical.id]]),
+      }).get(alias.id),
+    ).toBe(canonical.id);
+  });
+
+  it.each([{ nflTeam: "NYJ" }, { primaryPosition: "WR" }])(
+    "rejects an explicit bridge incompatible with current roster facts: %j",
+    (change) => {
+      expect(
+        resolve({
+          players: [alias, { ...canonical, ...change }],
+          explicitMatches: new Map([[alias.id, canonical.id]]),
+        }).get(alias.id),
+      ).toBeNull();
+    },
+  );
+
+  it("requires trusted GSIS and retains catalog GSIS authority", () => {
+    expect(
+      resolve({ players: [alias, { ...canonical, gsisId: null }] }).get(alias.id),
+    ).toBeUndefined();
+    expect(
+      resolve({
+        players: [alias, canonical],
+        explicitMatches: new Map([[canonical.id, null]]),
+      }).get(canonical.id),
+    ).toBeNull();
+    expect(
+      canonicalProjectionPlayerId({
+        playerId: canonical.id,
+        hasGsisId: true,
+        explicitMatchId: null,
+      }),
+    ).toBe(canonical.id);
+  });
+
+  it("blocks scoped ESPN candidate conflicts and leaves unrelated punctuation intact", () => {
+    expect(
+      resolve({
+        externalIds: [
+          {
+            playerId: alias.id,
+            source: "espn-self-asserted",
+            externalId: "10000000-0000-4000-8000-000000000001:123",
+          },
+          { playerId: canonical.id, source: "sleeper-espn", externalId: "456" },
+        ],
+      }).get(alias.id),
+    ).toBeNull();
+    expect(
+      resolve({
+        players: [
+          { ...alias, fullName: "K.C. Concepcion Jr." },
+          { ...canonical, fullName: "KC Concepcion" },
+        ],
+      }).get(alias.id),
+    ).toBeUndefined();
+  });
+});
+
+describe("weekly publication clock fence", () => {
+  const kickoffAt = new Date("2026-09-13T17:00:00Z");
+  const game = {
+    season: 2026,
+    week: 1,
+    gameId: "2026_01_BUF_NYJ",
+    awayTeam: "BUF",
+    homeTeam: "NYJ",
+    awayScore: null,
+    homeScore: null,
+    kickoffAt,
+    status: "scheduled" as const,
+  };
+  const guard = (preparedAt: Date) =>
+    projectionPublicationClockGuard({
+      schedules: [game],
+      season: 2026,
+      week: 1,
+      statsThrough: null,
+      preparedAt,
+    });
+
+  it.each([0, 7 * 86_400_000, 28 * 86_400_000])(
+    "rejects crossing the kickoff or availability boundary %i milliseconds before kickoff",
+    (beforeKickoff) => {
+      const boundary = kickoffAt.getTime() - beforeKickoff;
+      const clock = guard(new Date(boundary - 60_000));
+      expect(() => clock.check(new Date(boundary - 1))).not.toThrow();
+      expect(() => clock.check(new Date(boundary))).toThrow(
+        expect.objectContaining({ code: "PROJECTION_INPUT_EPOCH_CHANGED" }),
+      );
+    },
+  );
+
+  it("reserves the bounded write budget without marking the game started early", () => {
+    const clock = guard(new Date(kickoffAt.getTime() - 60_000));
+    expect(() => clock.check(new Date(kickoffAt.getTime() - 10_001), true)).not.toThrow();
+    expect(() => clock.check(new Date(kickoffAt.getTime() - 10_000), true)).toThrow();
+    expect(() => guard(kickoffAt).check(new Date(kickoffAt.getTime() + 1), true)).not.toThrow();
+  });
+
+  it("rejects a prior week's statistics-coverage deadline even with unchanged source bytes", () => {
+    const boundary = kickoffAt.getTime() + 8 * 3_600_000;
+    const clock = projectionPublicationClockGuard({
+      schedules: [
+        game,
+        { ...game, week: 2, gameId: "next", kickoffAt: new Date("2026-09-20T17:00:00Z") },
+      ],
+      season: 2026,
+      week: 2,
+      statsThrough: null,
+      preparedAt: new Date(boundary - 1),
+    });
+    expect(() => clock.check(new Date(boundary))).toThrow();
+  });
+
+  it("rejects newly eligible historical games at the conservative final-time boundary", () => {
+    const boundary = kickoffAt.getTime() + 4 * 3_600_000;
+    const clock = projectionPublicationClockGuard({
+      schedules: [{ ...game, status: "final", awayScore: 10, homeScore: 17 }],
+      season: 2026,
+      week: 2,
+      statsThrough: null,
+      preparedAt: new Date(boundary - 1),
+    });
+    expect(() => clock.check(new Date(boundary))).toThrow();
+  });
+
+  it("rejects nonfinite or backwards clocks instead of backdating a publication", () => {
+    const start = new Date("2026-09-10T12:00:00Z");
+    expect(() => guard(new Date(Number.NaN))).toThrow();
+    expect(() => guard(start).check(new Date(Number.NaN))).toThrow();
+    const clock = guard(start);
+    clock.check(new Date(start.getTime() + 1000));
+    expect(() => clock.check(start)).toThrow();
+  });
+});
 
 function playerEvaluation(
   input: {
@@ -447,6 +689,7 @@ describe("first-party projection publication policy", () => {
       projectionInputChecksum({
         ...legacyIdentity,
         playerHistoryVersion: FIRST_PARTY_PLAYER_HISTORY_VERSION,
+        defenseHistoryVersion: FIRST_PARTY_DEFENSE_HISTORY_VERSION,
       }),
     );
   });
@@ -585,6 +828,159 @@ describe("first-party projection publication policy", () => {
         exactMatchId: "different-exact-name-match",
       }),
     ).toBe("different-exact-name-match");
+  });
+
+  it("uses Yahoo numeric crosswalks for compound roster keys across NFL seasons", () => {
+    const rows = [
+      { playerId: "canonical", source: "sleeper-yahoo", externalId: "26686" },
+      { playerId: "old-roster", source: "yahoo", externalId: "461.p.26686" },
+      { playerId: "current-roster", source: "yahoo", externalId: "470.p.26686" },
+      { playerId: "nfl-roster", source: "yahoo", externalId: "nfl.p.26686" },
+    ];
+    const matches = projectionProviderCanonicalMatches(rows);
+    expect([...matches]).toEqual([
+      ["old-roster", "canonical"],
+      ["current-roster", "canonical"],
+      ["nfl-roster", "canonical"],
+    ]);
+    expect(
+      canonicalProjectionPlayerId({
+        playerId: "current-roster",
+        hasGsisId: false,
+        explicitMatchId: matches.get("current-roster") ?? null,
+        exactMatchId: "different-name-match",
+      }),
+    ).toBe("canonical");
+  });
+
+  it("retains conflicting crosswalks in either order without falling back to names", () => {
+    const rows = [
+      { playerId: "canonical-a", source: "sleeper-yahoo", externalId: "26686" },
+      { playerId: "canonical-b", source: "sleeper-yahoo", externalId: "470.p.26686" },
+      { playerId: "alias", source: "yahoo", externalId: "470.p.26686" },
+    ];
+    for (const input of [rows, [...rows].reverse()]) {
+      const matches = projectionProviderCanonicalMatches(input);
+      expect(matches.get("alias")).toBeNull();
+      expect(
+        canonicalProjectionPlayerId({
+          playerId: "alias",
+          hasGsisId: false,
+          explicitMatchId: matches.get("alias") ?? null,
+          exactMatchId: "canonical-a",
+        }),
+      ).toBeUndefined();
+      expect(
+        canonicalProjectionPlayerId({
+          playerId: "already-canonical",
+          hasGsisId: true,
+          explicitMatchId: matches.get("alias") ?? null,
+        }),
+      ).toBe("already-canonical");
+    }
+  });
+
+  it("accepts repeated crosswalks to the same player and rejects conflicting status evidence", () => {
+    const rows = [
+      { playerId: "canonical", source: "sleeper-yahoo", externalId: "26686" },
+      { playerId: "canonical", source: "sleeper-yahoo", externalId: "nfl.p.26686" },
+      { playerId: "alias", source: "yahoo", externalId: "470.p.26686" },
+    ];
+    expect(projectionProviderCanonicalMatches(rows).get("alias")).toBe("canonical");
+    expect(
+      projectionProviderCanonicalMatches(rows, new Map([["alias", "another-player"]])).get("alias"),
+    ).toBeNull();
+  });
+
+  it("retains direct and league-scoped ESPN crosswalk behavior", () => {
+    const rows = [
+      { playerId: "canonical", source: "sleeper-espn", externalId: "provider-7" },
+      { playerId: "direct", source: "espn", externalId: "provider-7" },
+      {
+        playerId: "scoped",
+        source: "espn-self-asserted",
+        externalId: "10000000-0000-4000-8000-000000000001:provider-7",
+      },
+    ];
+    expect(projectionProviderCanonicalMatches(rows)).toEqual(
+      new Map([
+        ["direct", "canonical"],
+        ["scoped", "canonical"],
+      ]),
+    );
+    expect(projectionProviderCanonicalMatches(rows.slice(1)).get("scoped")).toBe("direct");
+  });
+
+  it("does not hide malformed Yahoo crosswalk evidence behind a display name", () => {
+    const matches = projectionProviderCanonicalMatches([
+      { playerId: "alias", source: "yahoo", externalId: "nba.p.26686" },
+      { playerId: "canonical", source: "sleeper-yahoo", externalId: "26686" },
+    ]);
+    expect(matches.get("alias")).toBeNull();
+    expect(
+      canonicalProjectionPlayerId({
+        playerId: "alias",
+        hasGsisId: false,
+        explicitMatchId: matches.get("alias") ?? null,
+        exactMatchId: "canonical",
+      }),
+    ).toBeUndefined();
+  });
+
+  it("does not replace an ambiguous ESPN crosswalk with the direct-provider fallback", () => {
+    const rows = [
+      { playerId: "canonical-a", source: "sleeper-espn", externalId: "provider-7" },
+      { playerId: "canonical-b", source: "sleeper-espn", externalId: "provider-7" },
+      { playerId: "direct", source: "espn", externalId: "provider-7" },
+      {
+        playerId: "scoped",
+        source: "espn-self-asserted",
+        externalId: "10000000-0000-4000-8000-000000000001:provider-7",
+      },
+    ];
+    for (const input of [rows, [...rows].reverse()]) {
+      const matches = projectionProviderCanonicalMatches(input);
+      expect(matches.get("direct")).toBeNull();
+      expect(matches.get("scoped")).toBeNull();
+      expect(
+        canonicalProjectionPlayerId({
+          playerId: "scoped",
+          hasGsisId: false,
+          explicitMatchId: matches.get("scoped") ?? null,
+          exactMatchId: "canonical-a",
+        }),
+      ).toBeUndefined();
+    }
+  });
+
+  it("does not override unknown or conflicting status GSIS with a provider or name match", () => {
+    const known = new Map([["00-0000001", "canonical"]]);
+    const rows = [
+      { playerId: "alias", gsisId: "00-0000001" },
+      { playerId: "alias", gsisId: "00-0000002" },
+    ];
+    for (const input of [rows, [...rows].reverse(), rows.slice(1)]) {
+      const status = projectionStatusCanonicalMatches(input, known);
+      const matches = projectionProviderCanonicalMatches(
+        [
+          { playerId: "alias", source: "yahoo", externalId: "470.p.26686" },
+          { playerId: "canonical", source: "sleeper-yahoo", externalId: "26686" },
+        ],
+        status,
+      );
+      expect(matches.get("alias")).toBeNull();
+      expect(
+        canonicalProjectionPlayerId({
+          playerId: "alias",
+          hasGsisId: false,
+          explicitMatchId: matches.get("alias") ?? null,
+          exactMatchId: "canonical",
+        }),
+      ).toBeUndefined();
+    }
+    expect(projectionStatusCanonicalMatches([rows[0]!, rows[0]!], known).get("alias")).toBe(
+      "canonical",
+    );
   });
 
   it("fails closed on thin backtests and preserves prior output on baseline regression", () => {
@@ -1195,7 +1591,14 @@ function defenseBacktestFixture(): FirstPartyTeamDefenseBacktest {
         baseline: { defensive_sacks: baseline },
         lower: { defensive_sacks: predicted - 4 },
         upper: { defensive_sacks: predicted + 4 },
-        actual: { defensive_sacks: 2.5 },
+        actual: {
+          defensive_sacks: 2.5,
+          defensive_interceptions: 0,
+          defensive_touchdowns: 0,
+          special_teams_touchdowns: 0,
+          defensive_two_point_returns: 0,
+          one_point_safeties: 0,
+        },
         trainingRows: 48,
         calibrationRows: 48,
       });
@@ -1428,6 +1831,13 @@ const PARTIALLY_SYNCED_ROSTER: readonly RosterFixtureEntry[] = [
 
 function planPublications(input: {
   readonly rules: readonly ReturnType<typeof espnRule>[];
+  readonly provider?: "espn" | "yahoo";
+  readonly defenseVariants?: Parameters<
+    typeof buildFirstPartyLeaguePublications
+  >[0]["defenseVariants"];
+  readonly publishedDefenses?: Parameters<
+    typeof buildFirstPartyLeaguePublications
+  >[0]["publishedDefenses"];
   readonly playerBacktest?: FirstPartyProjectionBacktest;
   readonly defenseBacktest?: FirstPartyTeamDefenseBacktest;
   readonly rosters?: readonly RosterFixtureEntry[];
@@ -1449,6 +1859,7 @@ function planPublications(input: {
     playerBacktest,
     basePlayerBacktest: playerBacktest,
     defenseBacktest: input.defenseBacktest ?? defenseBacktestFixture(),
+    ...(input.defenseVariants ? { defenseVariants: input.defenseVariants } : {}),
     ...(input.scoringEvidenceMemo === undefined
       ? {}
       : { scoringEvidenceMemo: input.scoringEvidenceMemo }),
@@ -1462,7 +1873,12 @@ function planPublications(input: {
       lastSeason: PUBLICATION_SEASON,
     })),
     leagues: [
-      { id: leagueSeasonId, provider: "espn", currentWeek: PUBLICATION_WEEK, teamCount: 12 },
+      {
+        id: leagueSeasonId,
+        provider: input.provider ?? "espn",
+        currentWeek: PUBLICATION_WEEK,
+        teamCount: 12,
+      },
     ],
     rules: input.rules.map((rule) => ({ ...rule, leagueSeasonId })),
     rosters: (input.rosters ?? []).map((entry) => ({
@@ -1499,7 +1915,8 @@ function planPublications(input: {
             },
           };
     }),
-    publishedDefenses: PUBLICATION_TEAMS.map((team) => publishedDefenseFixture(team)),
+    publishedDefenses:
+      input.publishedDefenses ?? PUBLICATION_TEAMS.map((team) => publishedDefenseFixture(team)),
     previousRowsByLeague:
       input.previousRows === undefined
         ? new Map()
@@ -1509,7 +1926,415 @@ function planPublications(input: {
 
 const DEFENSE_ROW_IDS = new Set(PUBLICATION_TEAMS.map((team) => firstPartyDefensePlayerId(team)));
 
+describe("weekly roster alias bijection", () => {
+  const secondLeagueId = "20000000-0000-4000-8000-000000000002";
+  const canonicalId = leaguePlayerId("RB");
+
+  function planAliases(input: {
+    readonly aliases: readonly {
+      readonly playerId: string;
+      readonly leagueSeasonScopes: readonly string[];
+    }[];
+    readonly rosters: readonly { readonly leagueSeasonId: string; readonly playerId: string }[];
+    readonly reverse?: boolean;
+  }) {
+    const leagues = [...new Set(input.rosters.map((row) => row.leagueSeasonId))].map((id) => ({
+      id,
+      provider: "espn",
+      currentWeek: PUBLICATION_WEEK,
+      teamCount: 12,
+    }));
+    const backtest = playerBacktestFixture();
+    const canonical = publishedPlayerFixture("RB", PUBLICATION_TEAMS[0]);
+    const publishedPlayers = [
+      ...BACKTEST_POSITIONS.map((position) =>
+        publishedPlayerFixture(position, PUBLICATION_TEAMS[0]),
+      ),
+      ...input.aliases.map((alias) => ({ ...canonical, ...alias, canonicalMatchId: canonicalId })),
+    ];
+    return buildFirstPartyLeaguePublications({
+      season: PUBLICATION_SEASON,
+      week: PUBLICATION_WEEK,
+      now: PUBLICATION_NOW,
+      sourceAsOf: PUBLICATION_NOW,
+      inputChecksum: "b".repeat(64),
+      playerBacktest: backtest,
+      basePlayerBacktest: backtest,
+      defenseBacktest: defenseBacktestFixture(),
+      players: PUBLICATION_TEAMS.map((team) => ({
+        id: firstPartyDefensePlayerId(team),
+        gsisId: null,
+        fullName: `${team} D/ST`,
+        nflTeam: team,
+        primaryPosition: "D/ST",
+        status: null,
+        lastSeason: PUBLICATION_SEASON,
+      })),
+      leagues,
+      rules: leagues.flatMap((league) =>
+        DST_SUPPORTED_RULES.map((rule) => ({
+          ...rule,
+          leagueSeasonId: league.id,
+        })),
+      ),
+      rosters: input.rosters.map((row) => ({
+        ...row,
+        primaryPosition: "RB",
+        nflTeam: PUBLICATION_TEAMS[0],
+      })),
+      publishedPlayers: input.reverse ? publishedPlayers.reverse() : publishedPlayers,
+      publishedDefenses: PUBLICATION_TEAMS.map((team) => publishedDefenseFixture(team)),
+      previousRowsByLeague: new Map(),
+    });
+  }
+
+  it.each([false, true])(
+    "rejects both aliases of one NFL player in the same league (reversed=%s)",
+    (reverse) => {
+      const plan = planAliases({
+        aliases: ["alias-a", "alias-b"].map((playerId) => ({
+          playerId,
+          leagueSeasonScopes: [LEAGUE_SEASON_ID],
+        })),
+        rosters: ["alias-a", "alias-b"].map((playerId) => ({
+          playerId,
+          leagueSeasonId: LEAGUE_SEASON_ID,
+        })),
+        reverse,
+      });
+      expect(plan.publications).toEqual([]);
+      expect(plan.withheld).toEqual([
+        {
+          leagueSeasonId: LEAGUE_SEASON_ID,
+          scope: "league",
+          reasons: [
+            "Roster identity is ambiguous for 2 players: multiple roster entries resolve to the same NFL player.",
+          ],
+        },
+      ]);
+    },
+  );
+
+  it("preserves separate league aliases for the same canonical player", () => {
+    const plan = planAliases({
+      aliases: [
+        { playerId: "alias-a", leagueSeasonScopes: [LEAGUE_SEASON_ID] },
+        { playerId: "alias-b", leagueSeasonScopes: [secondLeagueId] },
+      ],
+      rosters: [
+        { playerId: "alias-a", leagueSeasonId: LEAGUE_SEASON_ID },
+        { playerId: "alias-b", leagueSeasonId: secondLeagueId },
+      ],
+    });
+    expect(plan.withheld).toEqual([]);
+    expect(plan.publications).toHaveLength(2);
+    for (const [league, alias, otherAlias] of [
+      [LEAGUE_SEASON_ID, "alias-a", "alias-b"],
+      [secondLeagueId, "alias-b", "alias-a"],
+    ] as const) {
+      const ids = plan.publications
+        .find((entry) => entry.league.id === league)
+        ?.rows.map((row) => row.playerId);
+      expect(ids).toContain(alias);
+      expect(ids).not.toContain(otherAlias);
+      expect(ids).not.toContain(canonicalId);
+    }
+  });
+
+  it("withholds only the colliding league in a shared multi-league plan", () => {
+    const plan = planAliases({
+      aliases: [
+        { playerId: "alias-a", leagueSeasonScopes: [LEAGUE_SEASON_ID, secondLeagueId] },
+        { playerId: "alias-b", leagueSeasonScopes: [LEAGUE_SEASON_ID] },
+      ],
+      rosters: [
+        { playerId: "alias-a", leagueSeasonId: LEAGUE_SEASON_ID },
+        { playerId: "alias-b", leagueSeasonId: LEAGUE_SEASON_ID },
+        { playerId: "alias-a", leagueSeasonId: secondLeagueId },
+      ],
+    });
+    expect(plan.publications.map((entry) => entry.league.id)).toEqual([secondLeagueId]);
+    expect(plan.publications[0]?.rows.map((row) => row.playerId)).toContain("alias-a");
+    expect(plan.withheld).toMatchObject([{ leagueSeasonId: LEAGUE_SEASON_ID, scope: "league" }]);
+  });
+
+  it("continues to reject a canonical player and its alias both on the roster", () => {
+    const plan = planAliases({
+      aliases: [{ playerId: "alias-a", leagueSeasonScopes: [LEAGUE_SEASON_ID] }],
+      rosters: [canonicalId, "alias-a"].map((playerId) => ({
+        playerId,
+        leagueSeasonId: LEAGUE_SEASON_ID,
+      })),
+    });
+    expect(plan.publications).toEqual([]);
+    expect(plan.withheld).toMatchObject([
+      {
+        leagueSeasonId: LEAGUE_SEASON_ID,
+        scope: "league",
+        reasons: [expect.stringContaining("2 players")],
+      },
+    ]);
+  });
+
+  it("does not count repeated occurrences of the same roster ID as different aliases", () => {
+    const plan = planAliases({
+      aliases: [{ playerId: "alias-a", leagueSeasonScopes: [LEAGUE_SEASON_ID] }],
+      rosters: [
+        { playerId: "alias-a", leagueSeasonId: LEAGUE_SEASON_ID },
+        { playerId: "alias-a", leagueSeasonId: LEAGUE_SEASON_ID },
+      ],
+    });
+    expect(plan.withheld).toEqual([]);
+    expect(plan.publications).toHaveLength(1);
+    expect(plan.publications[0]?.rows.filter((row) => row.playerId === "alias-a")).toHaveLength(1);
+  });
+});
+
+function pointsAllowedVariant(pointsAllowed: number) {
+  const base = defenseBacktestFixture();
+  const component = (row: Readonly<Record<string, number>>) => ({
+    ...row,
+    points_allowed: pointsAllowed + (row.defensive_sacks ?? 2.5) - 2.5,
+  });
+  return {
+    backtest: {
+      ...base,
+      predictions: base.predictions.map((row) => ({
+        ...row,
+        actual: component(row.actual),
+        predicted: component(row.predicted),
+        baseline: component(row.baseline),
+        lower: component(row.lower),
+        upper: component(row.upper),
+      })),
+    },
+    publishedDefenses: PUBLICATION_TEAMS.map((team) => {
+      const defense = publishedDefenseFixture(team);
+      return {
+        ...defense,
+        projection: { ...defense.projection, components: component(defense.projection.components) },
+      };
+    }),
+  };
+}
+
+const pointsAllowedProfile = (
+  definition: "yahoo-2022-v1" | "espn-2019-v1",
+  points = 1,
+): ProjectionScoringProfile => ({
+  id: "provider-pa",
+  rules: [
+    { statId: "receiving_yards", points: 0.1 },
+    { statId: "points_allowed", points, statDefinition: definition },
+  ],
+});
+
+describe("weekly provider-specific defense routing", () => {
+  it("selects distinct blocked-field-goal PA vectors and backtests for equal Yahoo and ESPN weights", () => {
+    const events = {
+      ...Object.fromEntries(
+        Object.keys(DEFENSE_POINTS_ALLOWED_EVENT_POINTS).map((key) => [key, 0]),
+      ),
+      scoring_event_totals_complete: 1,
+      scoring_points_total: 26,
+      scoring_event_offensive_pass_touchdown: 2,
+      scoring_event_extra_point: 2,
+      scoring_event_field_goal: 2,
+      scoring_event_blocked_field_goal_touchdown: 1,
+    };
+    const variants = Object.fromEntries(
+      (["yahoo-2022-v1", "espn-2019-v1"] as const).map((definition) => {
+        const actual = defensePointsAllowedFromScoringEvents({
+          definition,
+          opponentComponents: events,
+          opponentFinalScore: 26,
+        });
+        if (actual.state !== "complete")
+          throw new Error("Expected complete synthetic scoring events");
+        return [definition, pointsAllowedVariant(actual.pointsAllowed)];
+      }),
+    ) as Record<"yahoo-2022-v1" | "espn-2019-v1", ReturnType<typeof pointsAllowedVariant>>;
+    const yahoo = planPublications({
+      provider: "yahoo",
+      rules: [espnRule("31", 1)],
+      defenseVariants: variants,
+      defenseBacktest: variants["yahoo-2022-v1"].backtest,
+      publishedDefenses: variants["yahoo-2022-v1"].publishedDefenses,
+    });
+    const espn = planPublications({
+      rules: [espnRule("120", 1)],
+      defenseVariants: variants,
+      defenseBacktest: variants["yahoo-2022-v1"].backtest,
+      publishedDefenses: variants["yahoo-2022-v1"].publishedDefenses,
+    });
+    expect(yahoo.publications[0]?.metadata.publishedPositions).toEqual(["DST"]);
+    expect(espn.publications[0]?.metadata.publishedPositions).toEqual(["DST"]);
+    expect(yahoo.publications[0]?.rows[0]?.components.points_allowed).toBe(20);
+    expect(espn.publications[0]?.rows[0]?.components.points_allowed).toBe(26);
+    expect(yahoo.publications[0]?.profileKey).not.toBe(espn.publications[0]?.profileKey);
+    expect(yahoo.publications[0]?.metadata.defensePointsAllowedDefinition).toBe("yahoo-2022-v1");
+    expect(espn.publications[0]?.metadata.defensePointsAllowedDefinition).toBe("espn-2019-v1");
+    // Make only the ESPN actual labels unavailable: Yahoo retains its independent gate.
+    const broken = {
+      ...variants,
+      "espn-2019-v1": {
+        ...variants["espn-2019-v1"],
+        backtest: { ...variants["espn-2019-v1"].backtest, predictions: [] },
+      },
+    };
+    expect(
+      planPublications({ rules: [espnRule("120", 1)], defenseVariants: broken }).publications,
+    ).toHaveLength(0);
+    expect(
+      planPublications({ provider: "yahoo", rules: [espnRule("31", 1)], defenseVariants: broken })
+        .publications,
+    ).toHaveLength(1);
+  });
+
+  it("withholds a missing ESPN definition explicitly while preserving offense and unpriced PA leagues", () => {
+    const rules = [...DST_SUPPORTED_RULES, espnRule("120", 1)];
+    const baseline = planPublications({ rules: DST_SUPPORTED_RULES, rosters: FULL_ROSTER });
+    const missing = planPublications({ rules, rosters: FULL_ROSTER });
+    expect(missing.publications).toHaveLength(1);
+    expect(missing.publications[0]?.rows).toEqual(
+      baseline.publications[0]?.rows.filter(
+        (row) => !DEFENSE_ROW_IDS.has(row.playerId) && row.playerId !== "roster-alias-dst-buf",
+      ),
+    );
+    expect(missing.withheld[0]?.positions).toContainEqual({
+      position: "DST",
+      source: "component-coverage",
+      reasons: [
+        "D/ST history and projections are unavailable for points-allowed definition espn-2019-v1.",
+      ],
+    });
+    expect(baseline.publications[0]?.metadata.publishedPositions).toContain("DST");
+  });
+
+  it("never reprices locked PA components from missing or different provider definitions", () => {
+    const yahoo = pointsAllowedProfile("yahoo-2022-v1");
+    const espn = pointsAllowedProfile("espn-2019-v1");
+    const row: ScoredProjectionRow = {
+      playerId: "dst",
+      mean: 20,
+      floor: 10,
+      ceiling: 30,
+      confidence: 0.8,
+      components: { points_allowed: 20 },
+      scoringProfileKey: projectionScoringProfileKey(yahoo),
+    };
+    expect(frozenProjectionSupportsScoringProfile(row, espn, "DST")).toBe(false);
+    expect(
+      frozenProjectionSupportsScoringProfile({ ...row, scoringProfileKey: "legacy" }, yahoo, "DST"),
+    ).toBe(false);
+    expect(
+      frozenProjectionSupportsScoringProfile(row, pointsAllowedProfile("yahoo-2022-v1", 2), "DST"),
+    ).toBe(true);
+    expect(
+      frozenProjectionSupportsScoringProfile(
+        { ...row, mean: 0, floor: 0, ceiling: 0, components: { points_allowed: 0 } },
+        espn,
+        "DST",
+      ),
+    ).toBe(true);
+  });
+
+  it("binds each exact provider history to the training cache identity", () => {
+    const input = {
+      season: 2026,
+      firstTargetWeek: 4,
+      playerHistory: [],
+      defenseHistory: [],
+      defenseHistoriesByDefinition: { "yahoo-2022-v1": [], "espn-2019-v1": [] },
+    } as const;
+    const original = projectionTrainingCacheKey(input);
+    expect(original).not.toBe(
+      projectionTrainingCacheKey({
+        ...input,
+        defenseHistoriesByDefinition: { "yahoo-2022-v1": [] },
+      }),
+    );
+    const history = [
+      {
+        team: "BUF",
+        opponent: "KC",
+        season: 2025,
+        week: 3,
+        pointsAllowedDefinition: "espn-2019-v1" as const,
+        components: { defensive_points_allowed: 26 },
+        played: true,
+      },
+    ];
+    expect(original).not.toBe(
+      projectionTrainingCacheKey({
+        ...input,
+        defenseHistoriesByDefinition: {
+          ...input.defenseHistoriesByDefinition,
+          "espn-2019-v1": history,
+        },
+      }),
+    );
+  });
+
+  it("retains both defense variants and shares player evidence when only one defense generation changes", () => {
+    const players = playerBacktestFixture();
+    const yahoo = pointsAllowedVariant(20).backtest;
+    const espn = pointsAllowedVariant(26).backtest;
+    const memo = new FirstPartyPublicationEvidenceMemo();
+    const firstYahoo = memo.get(players, yahoo, pointsAllowedProfile("yahoo-2022-v1"));
+    const firstEspn = memo.get(players, espn, pointsAllowedProfile("espn-2019-v1"));
+    expect(memo.get(players, yahoo, pointsAllowedProfile("yahoo-2022-v1"))).toBe(firstYahoo);
+    expect(memo.get(players, espn, pointsAllowedProfile("espn-2019-v1"))).toBe(firstEspn);
+    const changed = memo.get(players, { ...espn }, pointsAllowedProfile("espn-2019-v1"));
+    expect(changed).not.toBe(firstEspn);
+    expect(changed.candidates).toBe(firstEspn.candidates);
+    expect(memo.get(players, yahoo, pointsAllowedProfile("yahoo-2022-v1"))).toBe(firstYahoo);
+    expect(memo.get({ ...players }, yahoo, pointsAllowedProfile("yahoo-2022-v1"))).not.toBe(
+      firstYahoo,
+    );
+  });
+});
+
 describe("weekly league publication withholds unsupported positions, not leagues", () => {
+  it("withholds incomplete defensive actuals while publishing offense and preserving later league evaluation", () => {
+    const healthy = defenseBacktestFixture();
+    const broken = {
+      ...healthy,
+      predictions: healthy.predictions.map((row, index) => {
+        if (index !== 0) return row;
+        const actual = { ...row.actual };
+        delete actual.defensive_sacks;
+        return { ...row, actual };
+      }),
+    };
+    const memo = new FirstPartyPublicationEvidenceMemo();
+    const plan = planPublications({
+      rules: DST_SUPPORTED_RULES,
+      defenseBacktest: broken,
+      scoringEvidenceMemo: memo,
+    });
+    expect(plan.publications).toHaveLength(1);
+    expect(plan.publications[0]?.metadata.publishedPositions).toEqual([
+      "QB",
+      "RB",
+      "WR",
+      "TE",
+      "K",
+    ]);
+    expect(plan.withheld[0]?.positions).toContainEqual({
+      position: "DST",
+      source: "component-coverage",
+      reasons: ["Observed defensive scoring is incomplete: missing defensive_sacks."],
+    });
+    const next = planPublications({
+      rules: DST_SUPPORTED_RULES,
+      defenseBacktest: healthy,
+      scoringEvidenceMemo: memo,
+    });
+    expect(next.publications[0]?.metadata.publishedPositions).toContain("DST");
+    expect(next.withheld).toHaveLength(0);
+  });
+
   it("publishes every position a league can be priced for and withholds only D/ST", () => {
     const plan = planPublications({ rules: GARAGELY_SHAPED_RULES });
 
@@ -1848,7 +2673,73 @@ describe("published backtest MAE reflects only the league's supported positions"
       "WR",
     );
     expect(corrected.intervalPolicyVersion).toBeUndefined();
+    expect(corrected.intervalPolicyPosition).toBeUndefined();
     expect(corrected.components).toBe(previous.components);
+  });
+
+  it("keeps a frozen interval's original role when current provider evidence changes the player role", () => {
+    const publication = planPublications({ rules: DST_SUPPORTED_RULES }).publications[0]!;
+    const previous = {
+      ...publication.rows.find((row) => row.playerId === "player-rb")!,
+      // The fixture's current player is now a WR; the locked forecast was generated as an RB.
+      playerId: "player-wr",
+      scoringProfileKey: publication.profileKey,
+      confidence: 0.32,
+    };
+    expect(previous.intervalPolicyPosition).toBe("RB");
+    const next = planPublications({
+      rules: DST_SUPPORTED_RULES,
+      startedPositions: ["WR"],
+      previousRows: new Map([[previous.playerId, previous]]),
+      playerBacktest: playerBacktestFixture({ omitPositions: ["RB"] }),
+    }).publications[0]!;
+    expect(next.rows.find((row) => row.playerId === previous.playerId)).toEqual(previous);
+    expect(next.metadata.intervalPolicyByPlayer).toMatchObject({
+      [previous.playerId]: {
+        origin: "frozen",
+        version: WEEKLY_INTERVAL_CALIBRATION_POLICY_VERSION,
+        position: "RB",
+      },
+    });
+    expect(next.metadata.weeklyIntervalCalibration).not.toHaveProperty("byPosition.RB");
+    const persisted = JSON.parse(JSON.stringify(next.metadata)) as Record<string, unknown>;
+    const provenance = storedWeeklyIntervalPolicyProvenance(persisted, previous.playerId)!;
+    expect(provenance).toEqual({
+      version: WEEKLY_INTERVAL_CALIBRATION_POLICY_VERSION,
+      position: "RB",
+    });
+    const restored = {
+      ...previous,
+      intervalPolicyVersion: provenance.version,
+      intervalPolicyPosition: provenance.position,
+    };
+    const again = planPublications({
+      rules: DST_SUPPORTED_RULES,
+      startedPositions: ["WR"],
+      previousRows: new Map([[restored.playerId, restored]]),
+      playerBacktest: playerBacktestFixture({ omitPositions: ["RB"] }),
+    }).publications[0]!;
+    expect(again.rows.find((row) => row.playerId === previous.playerId)).toEqual(previous);
+    expect(storedWeeklyIntervalPolicyProvenance(again.metadata, previous.playerId)).toEqual(
+      provenance,
+    );
+  });
+
+  it("does not invent an interval role for a legacy frozen row with missing provenance", () => {
+    const publication = planPublications({ rules: DST_SUPPORTED_RULES }).publications[0]!;
+    const previous = {
+      ...publication.rows.find((row) => row.playerId === "player-wr")!,
+      intervalPolicyPosition: undefined,
+      scoringProfileKey: publication.profileKey,
+      confidence: 0.32,
+    };
+    const next = planPublications({
+      rules: DST_SUPPORTED_RULES,
+      startedPositions: ["WR"],
+      previousRows: new Map([[previous.playerId, previous]]),
+    }).publications[0]!;
+    expect(next.rows.find((row) => row.playerId === previous.playerId)).toEqual(previous);
+    expect(next.metadata.intervalPolicyByPlayer).not.toHaveProperty(previous.playerId);
   });
 
   it("includes frozen point-policy provenance in the publication identity while preserving locked points", () => {
@@ -2456,6 +3347,7 @@ describe("bounded weekly publication evidence memo", () => {
       candidates: { ...compactCandidates, champion: { policy: champion.policy } },
       player: evaluated.playerEvaluation,
       defense: evaluateFirstPartyTeamDefenseBacktestForScoringProfile(defense, scoring),
+      defenseComponentCoverage: [],
     };
     const memo = new FirstPartyPublicationEvidenceMemo();
     const cold = memo.get(players, defense, scoring);

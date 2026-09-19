@@ -219,6 +219,7 @@ describe("first-party live ROS candidate builder", () => {
       for (let week = 1; week <= lastWeek; week += 1) {
         for (const team of teams) {
           defenseHistory.push({
+            pointsAllowedDefinition: "espn-2019-v1",
             team,
             season,
             week,

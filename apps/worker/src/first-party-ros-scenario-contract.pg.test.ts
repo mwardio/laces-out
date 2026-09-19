@@ -86,6 +86,7 @@ import {
   firstPartyDefensePlayerId,
 } from "./first-party-projections.js";
 import { queueNames } from "./jobs.js";
+import { completeDefenseScoringEvents } from "./defense-scoring.test-fixtures.js";
 
 function dockerIsAvailable(): boolean {
   try {
@@ -695,6 +696,14 @@ async function seedTeamObservations(
           team,
           opponentTeam: opponentOf(team),
           components: {
+            ...completeDefenseScoringEvents({
+              scoring_event_offensive_pass_touchdown: 2 - Number(noise > 0.9) - Number(noise > 0.8),
+              scoring_event_defensive_interception_touchdown: Number(noise > 0.9),
+              scoring_event_blocked_field_goal_touchdown: Number(noise > 0.8),
+              scoring_event_extra_point: 2,
+              scoring_event_field_goal: index % 2 === 0 ? 2 : 3,
+            }),
+            fourth_down_stops: 1,
             defensive_sacks: 2 + (week % 3),
             defensive_interceptions: noise > 0.45 ? 1 : 0,
             defensive_fumbles_recovered: noise > 0.7 ? 1 : 0,
@@ -1216,6 +1225,108 @@ describe.skipIf(!dockerAvailable)(
           .set({ lastChecksum: originalChecksum })
           .where(eq(dataSources.key, sourceKey));
       }
+    }, 120_000);
+
+    it("uses provider-specific defense history and calibration while sharing the player fit", async () => {
+      const rollback = new Error("Roll back the provider-definition fixture");
+      await expect(
+        handle.db.transaction(async (transaction) => {
+          const database = transaction as unknown as Database;
+          const yahoo = await seedLeague(database, seededPlayers);
+          const espn = await seedLeague(database, seededPlayers);
+          await database
+            .update(leagueSeasons)
+            .set({ provider: "espn" })
+            .where(eq(leagueSeasons.id, espn.leagueSeasonId));
+          await database.insert(scoringRules).values(
+            [yahoo, espn].map((league) => ({
+              leagueSeasonId: league.leagueSeasonId,
+              statKey: "Points Allowed",
+              operation: "multiply",
+              points: "-0.1",
+              providerStatId: null,
+            })),
+          );
+          const artifacts = (["yahoo", "espn"] as const).map((provider) => {
+            const normalized = normalizeLeagueScoringProfile({
+              id: provider,
+              rows: [...LEAGUE_SCORING_ROWS, { statKey: "Points Allowed", points: "-0.1" }].map(
+                (row) => ({
+                  provider,
+                  statKey: row.statKey,
+                  points: row.points,
+                  operation: "multiply",
+                  providerStatId: null,
+                }),
+              ),
+              availableStatIds: firstPartyAvailableProjectionComponents(),
+            });
+            if (normalized.state !== "available") throw new Error("Invalid provider fixture");
+            const key = projectionScoringProfileKey(normalized.profile);
+            const { payload, artifactChecksum } = championArtifactPayload(championPolicy(key), key);
+            return { ...payload, artifactChecksum, admittedAt: FRESH };
+          });
+          const captured = new Map<string, FirstPartyRosLeagueTargetInput>();
+          const provider = databaseFirstPartyRosCandidateProvider({
+            database,
+            buildLeagueTarget: async (input) => {
+              captured.set(input.leagueSeasonId, input);
+              return { target: null, skippedPlayers: 0 };
+            },
+          });
+          const window = {
+            asOfWeek: 6,
+            currentWeek: 7,
+            windowStartWeek: 7,
+            windowEndWeek: 18,
+            currentWeekStarted: false,
+          } as const;
+          const candidateProviderChecksum = await provider.sourceChecksum({
+            season: TEST_SEASON,
+            window,
+          });
+          await provider.buildTargetBatch({
+            artifact: artifacts[0]!,
+            artifacts,
+            season: TEST_SEASON,
+            window,
+            now: FIXED_NOW,
+            candidateProviderChecksum,
+          });
+          const yahooInput = captured.get(yahoo.leagueSeasonId)!;
+          const espnInput = captured.get(espn.leagueSeasonId)!;
+          expect(yahooInput).toBeDefined();
+          expect(espnInput).toBeDefined();
+          expect(yahooInput.calibration).toBe(espnInput.calibration);
+          expect(yahooInput.featureHistory).toBe(espnInput.featureHistory);
+          expect(yahooInput.defenseCalibration).not.toBe(espnInput.defenseCalibration);
+          expect(yahooInput.defenseFeatureHistory.length).toBeGreaterThan(0);
+          expect(yahooInput.defenseFeatureHistory).toHaveLength(
+            espnInput.defenseFeatureHistory.length,
+          );
+          expect(
+            yahooInput.defenseFeatureHistory.every(
+              (row) => row.pointsAllowedDefinition === "yahoo-2022-v1",
+            ),
+          ).toBe(true);
+          expect(
+            espnInput.defenseFeatureHistory.every(
+              (row) => row.pointsAllowedDefinition === "espn-2019-v1",
+            ),
+          ).toBe(true);
+          const differences = yahooInput.defenseFeatureHistory.map((row, index) => {
+            const other = espnInput.defenseFeatureHistory[index]!;
+            expect([other.team, other.season, other.week]).toEqual([
+              row.team,
+              row.season,
+              row.week,
+            ]);
+            return other.components.points_allowed! - row.components.points_allowed!;
+          });
+          expect(new Set(differences)).toEqual(new Set([0, 6]));
+          throw rollback;
+        }),
+      ).rejects.toBe(rollback);
     }, 120_000);
 
     it("reuses durable live ROS across fresh providers when a new same-scoring league joins", async () => {
