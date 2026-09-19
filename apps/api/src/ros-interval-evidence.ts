@@ -1,10 +1,13 @@
 import type { RosIntervalDescriptor } from "@laces-out/contracts";
+import { rosMarginalIntervalStorageIsValid } from "@laces-out/projections";
 
 /** One row from the bounded immutable summary -> model-run lookup, never projection-set metadata. */
 export type StoredRosIntervalEvidence = {
   readonly projectionSetId: string;
   readonly linkedRunCount: number;
   readonly matchesScope: boolean;
+  /** Schema 2 also binds the envelope to the immutable run's admitted artifact and scoring. */
+  readonly marginalScopeMatches?: boolean;
   readonly rosIntervals: unknown;
 };
 
@@ -64,10 +67,23 @@ function legacyCoverageWithinBound(nominal: number, empirical: number, maximum: 
 /**
  * Read-only interpretation of the retained schema-1 contract. This verifies its original support
  * and numeric requirements; it neither re-admits a model nor turns legacy block coverage into an
- * individual target. Schema 2 stays unavailable until its qualification contract is implemented.
+ * individual target. Schema 2 uses the shared closed qualification-storage validator.
  */
 export function parseStoredRosIntervalCalibration(value: unknown): RosIntervalDescriptor | null {
   if (!record(value)) return null;
+  if (value.schemaVersion === 2) {
+    if (!rosMarginalIntervalStorageIsValid(value)) return null;
+    return {
+      kind: "player-marginal",
+      method: value.method,
+      target: value.target,
+      nominalCoverage: value.nominalCoverage,
+      qualificationMethod: value.qualificationMethod,
+      quantiles: [0.15, 0.5, 0.85],
+      evidenceInterpretation: value.interpretation,
+      evidenceChecksum: value.evidenceChecksum,
+    };
+  }
   const keys = Object.keys(value);
   if (keys.length !== LEGACY_KEYS.length || LEGACY_KEYS.some((key) => !Object.hasOwn(value, key)))
     return null;
@@ -101,7 +117,12 @@ export function parseStoredRosIntervalCalibration(value: unknown): RosIntervalDe
 
 /** Ambiguous linkage is unavailable even if both runs happen to carry byte-identical contracts. */
 export function parseLinkedRosIntervalEvidence(value: unknown): RosIntervalDescriptor | null {
-  return record(value) && value.linkedRunCount === 1 && value.matchesScope === true
-    ? parseStoredRosIntervalCalibration(value.rosIntervals)
-    : null;
+  if (!record(value) || value.linkedRunCount !== 1 || value.matchesScope !== true) return null;
+  if (
+    record(value.rosIntervals) &&
+    value.rosIntervals.schemaVersion === 2 &&
+    value.marginalScopeMatches !== true
+  )
+    return null;
+  return parseStoredRosIntervalCalibration(value.rosIntervals);
 }

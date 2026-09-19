@@ -1,4 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
+import {
+  buildRosMarginalIntervalStorage,
+  type RosMarginalIntervalStorage,
+} from "@laces-out/projections";
+import { buildRosMarginalIntervalQualificationFixture } from "../../../packages/projections/src/ros-marginal-interval-test-fixtures.js";
 import {
   parseLinkedRosIntervalEvidence,
   parseStoredRosIntervalCalibration,
@@ -16,8 +21,66 @@ const legacy = {
   empiricalCoverage: 0.7,
   maximumAllowedCoverageError: 0.1,
 };
+let marginal: RosMarginalIntervalStorage;
+beforeAll(() => {
+  marginal = buildRosMarginalIntervalStorage({
+    qualifications: buildRosMarginalIntervalQualificationFixture(),
+    championArtifactChecksum: "a".repeat(64),
+    releasedCells: [{ position: "DST", bucket: "one-to-four" }],
+  });
+}, 15_000);
 
 describe("immutable ROS interval evidence interpretation", () => {
+  it("describes schema-2 player quantiles only from a valid reconstructed storage envelope", () => {
+    expect(parseStoredRosIntervalCalibration(JSON.parse(JSON.stringify(marginal)))).toEqual({
+      kind: "player-marginal",
+      method: "season-prior-weighted-quantile-residuals-v1",
+      target: "individual-player-marginal-quantiles",
+      quantiles: [0.15, 0.5, 0.85],
+      nominalCoverage: 0.7,
+      qualificationMethod: "ros-marginal-interval-qualification-v1",
+      evidenceInterpretation: "historical-descriptive",
+      evidenceChecksum: marginal.evidenceChecksum,
+    });
+  });
+
+  it("does not interpret a method label, copied checksum or altered cell scope as qualification", () => {
+    for (const value of [
+      { ...legacy, schemaVersion: 2, method: marginal.method },
+      { ...marginal, evidenceChecksum: "b".repeat(64) },
+      { ...marginal, releasedCells: [] },
+      { ...marginal, cells: [] },
+      { ...marginal, nominalCoverage: 0.8 },
+      { ...marginal, interpretation: "individual-coverage-guarantee" },
+      { ...marginal, extra: true },
+      { ...marginal, schemaVersion: 3 },
+    ])
+      expect(parseStoredRosIntervalCalibration(value)).toBeNull();
+  });
+
+  it("requires every declared marginal storage field", () => {
+    for (const key of Object.keys(marginal)) {
+      const missing = { ...marginal } as Record<string, unknown>;
+      delete missing[key];
+      expect(parseStoredRosIntervalCalibration(missing), key).toBeNull();
+    }
+  });
+
+  it("requires schema-2 artifact, season and scoring scope to match the uniquely linked run", () => {
+    const linked = {
+      projectionSetId: "set",
+      linkedRunCount: 1,
+      matchesScope: true,
+      marginalScopeMatches: true,
+      rosIntervals: marginal,
+    };
+    expect(parseLinkedRosIntervalEvidence(linked)?.kind).toBe("player-marginal");
+    for (const marginalScopeMatches of [undefined, false, "true", 1])
+      expect(parseLinkedRosIntervalEvidence({ ...linked, marginalScopeMatches })).toBeNull();
+    expect(parseLinkedRosIntervalEvidence({ ...linked, linkedRunCount: 2 })).toBeNull();
+    expect(parseLinkedRosIntervalEvidence({ ...linked, matchesScope: false })).toBeNull();
+  });
+
   it("recognizes exact retained schema-1 evidence without adding an individual coverage target", () => {
     expect(parseStoredRosIntervalCalibration(JSON.parse(JSON.stringify(legacy)))).toEqual({
       kind: "legacy-block-cqr",

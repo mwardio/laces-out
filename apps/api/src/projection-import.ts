@@ -633,6 +633,15 @@ export class DrizzleProjectionImportRepository implements ProjectionImportReposi
           and nullif(btrim(model.configuration->>'orchestrationVersion'), '') is not null,
           false
         ) as "matchesScope",
+        coalesce(
+          model.calibration->'rosIntervals'->'schemaVersion' = '2'::jsonb
+          and model.calibration->'rosIntervals'->>'forecastSeason' = model.season::text
+          and model.calibration->'rosIntervals'->>'championArtifactChecksum'
+            = model.configuration->>'championArtifactChecksum'
+          and model.calibration->'rosIntervals'->>'scoringProfileKey'
+            = model.configuration->>'scoringProfileKey',
+          false
+        ) as "marginalScopeMatches",
         model.calibration->'rosIntervals' as "rosIntervals"
       from requested
       left join link_counts on link_counts.projection_set_id = requested.id
