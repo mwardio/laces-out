@@ -1,5 +1,6 @@
 export * from "./projection-import.js";
 export * from "./scoring.js";
+export * from "./defense-points-allowed.js";
 export * from "./first-party.js";
 export * from "./team-defense-game.js";
 export * from "./team-defense-calibration.js";

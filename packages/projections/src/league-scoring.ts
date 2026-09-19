@@ -6,11 +6,13 @@ import {
 import {
   SCORING_WHOLE_GROUP_COMPONENTS,
   YAHOO_NONNEGATIVE_YARDAGE_COMPONENTS,
+  isDefensePointsAllowedStatId,
+  type ProjectionDefensePointsAllowedDefinition,
   type ProjectionScoringBonus,
   type ProjectionScoringProfile,
 } from "./scoring.js";
 
-export const LEAGUE_SCORING_NORMALIZATION_VERSION = "league-scoring-map-v8" as const;
+export const LEAGUE_SCORING_NORMALIZATION_VERSION = "league-scoring-map-v9" as const;
 
 export const LEAGUE_SCORING_MAP_PROVENANCE = {
   version: LEAGUE_SCORING_NORMALIZATION_VERSION,
@@ -26,6 +28,10 @@ export const LEAGUE_SCORING_MAP_PROVENANCE = {
 } as const;
 
 export type LeagueScoringProvider = "yahoo" | "espn";
+
+const DEFENSE_POINTS_ALLOWED_DEFINITIONS: Readonly<
+  Record<LeagueScoringProvider, ProjectionDefensePointsAllowedDefinition>
+> = { yahoo: "yahoo-2022-v1", espn: "espn-2019-v1" };
 
 /** Fantasy positions league scoring is attributed to. Fixed order; reported in full every time. */
 export type LeagueScoringPosition = "QB" | "RB" | "WR" | "TE" | "K" | "DST";
@@ -1584,6 +1590,9 @@ export function normalizeLeagueScoringProfile(
     .map(([statId, rule]) => ({
       statId,
       points: rule.points ?? 0,
+      ...(provider !== null && isDefensePointsAllowedStatId(statId)
+        ? { statDefinition: DEFENSE_POINTS_ALLOWED_DEFINITIONS[provider] }
+        : {}),
       ...(rule.bonuses.length === 0
         ? {}
         : {

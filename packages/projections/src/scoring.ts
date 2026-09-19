@@ -4,11 +4,16 @@ export interface ProjectionScoringBonus {
   readonly points: number;
 }
 
+/** Provider rules differ in which opposing scoring events count against a D/ST. */
+export type ProjectionDefensePointsAllowedDefinition = "yahoo-2022-v1" | "espn-2019-v1";
+
 export interface ProjectionScoringRule {
   /** Provider-neutral stat identifier, such as `passing_yards` or `receptions`. */
   readonly statId: string;
   /** Points awarded per projected unit. Negative values model turnovers and similar penalties. */
   readonly points: number;
+  /** Explicit interpretation of points allowed; omitted only for legacy/unspecified rules. */
+  readonly statDefinition?: ProjectionDefensePointsAllowedDefinition;
   /** Bonuses are cumulative, allowing an additional award at each reached threshold. */
   readonly bonuses?: readonly ProjectionScoringBonus[];
 }
@@ -326,6 +331,34 @@ export interface CanonicalProjectionScoringRule {
   readonly statId: string;
   readonly points: number;
   readonly bonuses: readonly ProjectionScoringBonus[];
+  readonly statDefinition?: ProjectionDefensePointsAllowedDefinition;
+}
+
+export function isDefensePointsAllowedStatId(statId: string): boolean {
+  return statId === "points_allowed" || /^points_allowed_.+_probability$/u.test(statId);
+}
+
+function pointsAllowedDefinitionFromRules(
+  rules: readonly ProjectionScoringRule[],
+): ProjectionDefensePointsAllowedDefinition | null {
+  const active = rules.filter(
+    (rule) =>
+      isDefensePointsAllowedStatId(rule.statId) &&
+      (rule.points !== 0 || (rule.bonuses ?? []).some((bonus) => bonus.points !== 0)),
+  );
+  const definitions = new Set(active.map((rule) => rule.statDefinition));
+  if (definitions.size > 1) {
+    throw new TypeError("Active points-allowed rules require one consistent statDefinition");
+  }
+  return active[0]?.statDefinition ?? null;
+}
+
+/** Legacy unspecified PA has no default. Inactive rules do not choose an interpretation. */
+export function defensePointsAllowedDefinitionForProfile(
+  profile: ProjectionScoringProfile,
+): ProjectionDefensePointsAllowedDefinition | null {
+  validateProjectionScoringProfile(profile);
+  return pointsAllowedDefinitionFromRules(profile.rules);
 }
 
 /**
@@ -346,6 +379,7 @@ export function canonicalProjectionScoringRules(
           points: normalizedNumber(bonus.points),
         }))
         .sort((left, right) => left.atLeast - right.atLeast || left.points - right.points),
+      ...(rule.statDefinition === undefined ? {} : { statDefinition: rule.statDefinition }),
     }))
     .sort((left, right) => compareStrings(left.statId, right.statId));
 }
@@ -371,6 +405,13 @@ export function validateProjectionScoringProfile(profile: ProjectionScoringProfi
     }
     statIds.add(rule.statId);
     assertFinite(rule.points, `points for ${rule.statId}`);
+    if (
+      rule.statDefinition !== undefined &&
+      (!isDefensePointsAllowedStatId(rule.statId) ||
+        !["yahoo-2022-v1", "espn-2019-v1"].includes(rule.statDefinition))
+    ) {
+      throw new TypeError(`Unsupported statDefinition for ${rule.statId}`);
+    }
 
     const thresholds = new Set<number>();
     for (const bonus of rule.bonuses ?? []) {
@@ -384,6 +425,7 @@ export function validateProjectionScoringProfile(profile: ProjectionScoringProfi
       thresholds.add(bonus.atLeast);
     }
   }
+  pointsAllowedDefinitionFromRules(profile.rules);
 }
 
 /**

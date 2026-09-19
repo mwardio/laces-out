@@ -9,6 +9,7 @@ import {
   ESPN_EVERY_N_FLOOR_UNIT_COMPONENTS,
   SCORING_LONG_TOUCHDOWN_COMPONENTS,
   compileProjectionScorer,
+  defensePointsAllowedDefinitionForProfile,
   espnEveryNFloorUnitValue,
   normalizeHistoricalPlayerStatComponents,
   scoringDerivedComponentValue,
@@ -447,6 +448,107 @@ describe("projection scoring profile compatibility", () => {
     expect(projectionScoringProfilesAreCompatible(fullPpr, equivalentPpr)).toBe(true);
     expect(projectionScoringProfileKey(fullPpr)).toBe(projectionScoringProfileKey(equivalentPpr));
     expect(projectionScoringProfilesAreCompatible(fullPpr, halfPpr)).toBe(false);
+  });
+});
+
+describe("defense points-allowed definitions", () => {
+  it("requires an explicit active definition and gives unspecified legacy rules no default", () => {
+    const profile: ProjectionScoringProfile = {
+      id: "pa",
+      rules: [{ statId: "points_allowed", points: -0.1 }],
+    };
+    expect(defensePointsAllowedDefinitionForProfile(profile)).toBeNull();
+    expect(
+      defensePointsAllowedDefinitionForProfile({
+        ...profile,
+        rules: [{ ...profile.rules[0]!, statDefinition: "yahoo-2022-v1" }],
+      }),
+    ).toBe("yahoo-2022-v1");
+    expect(defensePointsAllowedDefinitionForProfile(fullPpr)).toBeNull();
+  });
+
+  it("ignores zero-award rules but treats a nonzero bonus as active", () => {
+    expect(
+      defensePointsAllowedDefinitionForProfile({
+        id: "pa",
+        rules: [
+          { statId: "points_allowed_0_probability", points: 10, statDefinition: "espn-2019-v1" },
+          { statId: "points_allowed_1_6_probability", points: 0 },
+          {
+            statId: "points_allowed_7_13_probability",
+            points: 0,
+            statDefinition: "yahoo-2022-v1",
+            bonuses: [{ atLeast: 1, points: 0 }],
+          },
+        ],
+      }),
+    ).toBe("espn-2019-v1");
+    expect(
+      defensePointsAllowedDefinitionForProfile({
+        id: "pa-bonus",
+        rules: [
+          {
+            statId: "points_allowed",
+            points: 0,
+            statDefinition: "yahoo-2022-v1",
+            bonuses: [{ atLeast: 20, points: -3 }],
+          },
+        ],
+      }),
+    ).toBe("yahoo-2022-v1");
+    expect(
+      defensePointsAllowedDefinitionForProfile({
+        id: "inactive",
+        rules: [{ statId: "points_allowed", points: 0, statDefinition: "yahoo-2022-v1" }],
+      }),
+    ).toBeNull();
+  });
+
+  it.each([undefined, "espn-2019-v1"] as const)(
+    "rejects mixed active PA definitions including legacy %s rules",
+    (other) => {
+      const profile: ProjectionScoringProfile = {
+        id: "conflict",
+        rules: [
+          { statId: "points_allowed_0_probability", points: 10, statDefinition: "yahoo-2022-v1" },
+          {
+            statId: "points_allowed_1_6_probability",
+            points: 7,
+            ...(other === undefined ? {} : { statDefinition: other }),
+          },
+        ],
+      };
+      expect(() => defensePointsAllowedDefinitionForProfile(profile)).toThrow(
+        "consistent statDefinition",
+      );
+      expect(() => projectionScoringProfileKey(profile)).toThrow("consistent statDefinition");
+      expect(() => compileProjectionScorer(profile)).toThrow("consistent statDefinition");
+    },
+  );
+
+  it.each([
+    { statId: "receptions", points: 1, statDefinition: "yahoo-2022-v1" },
+    { statId: "yards_allowed_0_99_probability", points: 1, statDefinition: "espn-2019-v1" },
+    { statId: "points_allowed", points: -1, statDefinition: "unknown" },
+    { statId: "points_allowed", points: -1, statDefinition: null },
+  ])("rejects unsupported definition metadata on $statId", (rule) => {
+    expect(() =>
+      validateProjectionScoringProfile({
+        id: "bad-definition",
+        rules: [rule],
+      } as ProjectionScoringProfile),
+    ).toThrow("Unsupported statDefinition");
+  });
+
+  it("retains PA metadata without changing arithmetic on already-bound components", () => {
+    for (const statDefinition of ["yahoo-2022-v1", "espn-2019-v1"] as const) {
+      expect(
+        scoreProjectionStatComponents(
+          { points_allowed: 20 },
+          { id: "scored", rules: [{ statId: "points_allowed", points: -0.5, statDefinition }] },
+        ),
+      ).toBe(-10);
+    }
   });
 });
 
