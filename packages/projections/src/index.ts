@@ -512,3 +512,4 @@ export * from "./marginal-interval-evidence.js";
 export * from "./marginal-interval-comparison.js";
 export * from "./marginal-ros-policy.js";
 export * from "./marginal-ros-training.js";
+export * from "./ros-marginal-interval-qualification.js";

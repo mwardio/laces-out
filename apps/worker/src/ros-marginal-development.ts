@@ -12,6 +12,8 @@ import {
   compareMarginalIntervalPortfolio,
   evaluateFirstPartyRosChampionPolicy,
   evaluateFirstPartyRosMarginalPolicy,
+  buildRosMarginalIntervalQualificationSet,
+  validateMarginalRosTrainingCohort,
   type FirstPartyRosChampionOptions,
   type FirstPartyRosChampionPolicy,
   type FirstPartyRosHeldOutForecast,
@@ -28,6 +30,8 @@ import { firstPartyRosChampionPolicyChecksum } from "./first-party-ros-publicati
 export const ROS_MARGINAL_DEVELOPMENT_VERSION = "pinned-report-marginal-development-v1";
 export const ROS_MARGINAL_TRAINING_DEVELOPMENT_VERSION =
   "pinned-report-marginal-development-separate-defense-training-v2";
+export const ROS_MARGINAL_QUALIFIED_DEVELOPMENT_VERSION =
+  "pinned-report-marginal-development-qualification-v3";
 const POSITIONS = ["QB", "RB", "WR", "TE", "K", "DST"] as const;
 const BUCKETS = ["one-to-four", "five-to-eight", "nine-plus"] as const;
 const SOURCE_FIELDS = [
@@ -399,9 +403,13 @@ export function buildRosMarginalDevelopmentReport(input: {
   readonly forecastSeason: number;
   readonly evaluationSeason: number;
   readonly positions: readonly FirstPartyRosPosition[];
+  /** Explicit frozen protocol binding; absence preserves the original report byte identity. */
+  readonly qualificationProtocolChecksum?: string;
 }) {
   integer(input.forecastSeason, 2000, 2200);
   integer(input.evaluationSeason, 2000, 2200);
+  if (input.qualificationProtocolChecksum !== undefined)
+    digest(input.qualificationProtocolChecksum);
   if (
     (input.intervalTrainingReportJson === undefined) !==
     (input.intervalTrainingReportChecksum === undefined)
@@ -732,8 +740,78 @@ export function buildRosMarginalDevelopmentReport(input: {
     },
     marginalDevelopment: { evaluation: marginal, cells: cellComparisons, portfolio, reasons },
   } as const;
-  return {
+  const development = {
     ...payload,
     evidenceChecksum: createHash("sha256").update(canonical(payload)).digest("hex"),
+  };
+  if (input.qualificationProtocolChecksum === undefined) return development;
+
+  // Bind the exact standalone CLI serialization before adding qualification, avoiding a cyclic
+  // checksum. The legacy report remains independently reconstructible from the same pinned inputs.
+  const developmentReportChecksum = createHash("sha256")
+    .update(`${JSON.stringify(development, null, 2)}\n`)
+    .digest("hex");
+  const sourceManifestChecksum = createHash("sha256")
+    .update(canonical(candidate.sources))
+    .digest("hex");
+  const qualificationDataset = (source: typeof candidate) => ({
+    source: source.source,
+    sourceManifestChecksum,
+    heldOutSeasons: source.heldOutSeasons,
+    rowsChecksum: validateMarginalRosTrainingCohort(source.heldOutSeasons, source.heldOutSeasons)
+      .provenance.evaluationRowsChecksum,
+  });
+  const qualifications = buildRosMarginalIntervalQualificationSet({
+    forecastSeason: input.forecastSeason,
+    scope: {
+      sourceSeasons: candidate.seasons,
+      requiredCells: cells,
+      protocolChecksum: input.qualificationProtocolChecksum,
+      sourceManifestChecksum,
+      fullReportChecksum: developmentReportChecksum,
+      identityAmendment: "previous-defense-la-to-lar-v1",
+    },
+    candidate: qualificationDataset(candidate),
+    previous: qualificationDataset(previous),
+    ...(training === null ? {} : { intervalTraining: qualificationDataset(training) }),
+  });
+  // The new shared admission boundary must reproduce every existing cell result exactly. It
+  // cannot silently replace the report's cohort, final-live strategy, artifacts or comparisons.
+  for (const qualification of qualifications) {
+    const prior = cellComparisons.find(
+      (cell) =>
+        cell.position === qualification.cell.position && cell.bucket === qualification.cell.bucket,
+    )!;
+    equal(qualification.evidence, prior.evidence, "qualification changed interval evidence");
+    equal(qualification.comparison, prior.comparison, "qualification changed WIS comparison");
+    equal(
+      qualification.liveArtifact,
+      prior.intervalArtifact,
+      "qualification changed live artifact",
+    );
+    if (
+      qualification.strategy !== prior.strategy ||
+      qualification.previousStrategy !== prior.previousStrategy ||
+      (qualification.state === "qualified") !==
+        (prior.screen?.state === "descriptive-screen-passed" && prior.comparison.state === "passed")
+    )
+      fail("qualification changed cell strategy or verdict");
+  }
+  const qualifiedPayload = {
+    ...payload,
+    schemaVersion: 3,
+    version: ROS_MARGINAL_QUALIFIED_DEVELOPMENT_VERSION,
+    qualification: {
+      protocolChecksum: input.qualificationProtocolChecksum,
+      developmentReportChecksum,
+      developmentSchemaVersion: development.schemaVersion,
+      developmentVersion: development.version,
+      developmentEvidenceChecksum: development.evidenceChecksum,
+      cells: qualifications,
+    },
+  } as const;
+  return {
+    ...qualifiedPayload,
+    evidenceChecksum: createHash("sha256").update(canonical(qualifiedPayload)).digest("hex"),
   };
 }

@@ -2385,7 +2385,7 @@ function recoveredEvidenceScoringProfile(scoringProfileKey: string): ProjectionS
  * byte-identical scoring for the cell being gated, which is what keeps the ROS rail publishing for
  * a league whose whole profile key moves for reasons that cannot touch the rail positions.
  */
-function evidenceIdentitiesMatchForPosition(
+export function evidenceIdentitiesMatchForPosition(
   admitted: FirstPartyRosEvidenceIdentity | null,
   live: FirstPartyRosEvidenceIdentity | null,
   position: FirstPartyRosPosition,

@@ -26,6 +26,7 @@ import {
   buildRosMarginalDevelopmentReport,
   ROS_MARGINAL_DEVELOPMENT_VERSION,
   ROS_MARGINAL_TRAINING_DEVELOPMENT_VERSION,
+  ROS_MARGINAL_QUALIFIED_DEVELOPMENT_VERSION,
 } from "./ros-marginal-development.js";
 
 const SEASONS = [2022, 2023, 2024, 2025];
@@ -280,6 +281,85 @@ beforeAll(() => {
 });
 
 describe("pinned marginal ROS report development wrapper", () => {
+  it.each([false, true])(
+    "reconstructs shared qualification with separate training=%s",
+    (useTraining) => {
+      const pinned = { ...request(), ...(useTraining ? trainingRequest(training) : {}) };
+      const baseline = useTraining ? buildRosMarginalDevelopmentReport(pinned) : passed;
+      const protocol = hash("frozen test qualification protocol");
+      const result = buildRosMarginalDevelopmentReport({
+        ...pinned,
+        qualificationProtocolChecksum: protocol,
+      });
+      expect(result).toMatchObject({
+        schemaVersion: 3,
+        version: ROS_MARGINAL_QUALIFIED_DEVELOPMENT_VERSION,
+        canAuthorizeRelease: false,
+        state: baseline.state,
+      });
+      expect(result.marginalDevelopment).toEqual(baseline.marginalDevelopment);
+      expect(result.legacyEvaluation).toEqual(baseline.legacyEvaluation);
+      if (!("qualification" in result)) throw new Error("missing qualification envelope");
+      expect(result.qualification.developmentReportChecksum).toBe(
+        hash(`${JSON.stringify(baseline, null, 2)}\n`),
+      );
+      expect(result.qualification.developmentEvidenceChecksum).toBe(baseline.evidenceChecksum);
+      expect(result.qualification.cells).toHaveLength(3);
+      for (const proof of result.qualification.cells) {
+        const cell = baseline.marginalDevelopment.cells.find(
+          (candidate) =>
+            candidate.position === proof.cell.position && candidate.bucket === proof.cell.bucket,
+        )!;
+        expect(proof).toMatchObject({
+          state: "qualified",
+          canAuthorizeRelease: false,
+          sourceScope: { protocolChecksum: protocol },
+          requiredEvaluationSeasons: [2023, 2024, 2025],
+          strategy: cell.strategy,
+          evidence: cell.evidence,
+          comparison: cell.comparison,
+          liveArtifact: cell.intervalArtifact,
+        });
+        expect(proof.sourceScope.requiredCells).toHaveLength(3);
+        expect(proof.sources.intervalTraining === null).toBe(!useTraining);
+      }
+      expect(
+        validateFirstPartyRosAdmission({
+          report: result,
+          evidenceThroughSeason: 2025,
+          constants: firstPartyRosAdmissionConstants(SCORING.profile),
+        }).state,
+      ).toBe("rejected");
+    },
+    15_000,
+  );
+
+  it("retains independent legacy blockers even when every interval qualification passes", () => {
+    const changed = structuredClone(candidate);
+    changed.report.state = "insufficient";
+    changed.report.blockers = ["calibration_DST_nine-plus_convergence_below_minimum"];
+    const result = buildRosMarginalDevelopmentReport({
+      ...request(changed),
+      qualificationProtocolChecksum: hash("protocol with independent convergence gates"),
+    });
+    expect(result.state).toBe("rejected-at-development-screen");
+    expect(result.marginalDevelopment.reasons).toContain(
+      "preserved-legacy:calibration_DST_nine-plus_convergence_below_minimum",
+    );
+    if (!("qualification" in result)) throw new Error("missing qualification envelope");
+    expect(result.qualification.cells.every((cell) => cell.state === "qualified")).toBe(true);
+    expect(result.canAuthorizeRelease).toBe(false);
+  }, 15_000);
+
+  it("rejects an invalid qualification protocol checksum before report reconstruction", () => {
+    expect(() =>
+      buildRosMarginalDevelopmentReport({
+        ...request(),
+        qualificationProtocolChecksum: "unknown",
+      }),
+    ).toThrow(/invalid provenance checksum/u);
+  });
+
   it("keeps the original v1 payload byte identity when separate training is absent", () => {
     expect(passed.evidenceChecksum).toMatchInlineSnapshot(
       `"819ba4c624278306d877c2637a6f339741fb073809891ff243dff6de8f09c92f"`,
@@ -949,8 +1029,43 @@ describe("pinned marginal ROS report development wrapper", () => {
       const defaultOutput = join(directory, "v1.json");
       await execute(process.execPath, [...base, `--out=${defaultOutput}`]);
       expect(await readFile(defaultOutput, "utf8")).toBe(`${JSON.stringify(passed, null, 2)}\n`);
+      const protocol = "Frozen qualification CLI protocol.\n";
+      const protocolPath = join(directory, "protocol.md");
+      await writeFile(protocolPath, protocol);
+      const protocolArgs = [
+        `--qualification-protocol=${protocolPath}`,
+        `--qualification-protocol-sha256=${hash(protocol)}`,
+      ];
+      for (const option of protocolArgs) {
+        await expect(
+          execute(process.execPath, [
+            ...base,
+            option,
+            `--out=${join(directory, "partial-protocol.json")}`,
+          ]),
+        ).rejects.toThrow(/supplied together/u);
+      }
+      await expect(
+        execute(process.execPath, [
+          ...base,
+          protocolArgs[0]!,
+          `--qualification-protocol-sha256=${hash("different")}`,
+          `--out=${join(directory, "bad-protocol.json")}`,
+        ]),
+      ).rejects.toThrow(/protocol bytes do not match/u);
+      const qualifiedOutput = join(directory, "v3.json");
+      await execute(process.execPath, [...base, ...protocolArgs, `--out=${qualifiedOutput}`]);
+      const qualified = JSON.parse(await readFile(qualifiedOutput, "utf8")) as ReturnType<
+        typeof buildRosMarginalDevelopmentReport
+      >;
+      expect(qualified.schemaVersion).toBe(3);
+      if (!("qualification" in qualified)) throw new Error("missing CLI qualification envelope");
+      expect(qualified.qualification.developmentReportChecksum).toBe(
+        hash(await readFile(defaultOutput, "utf8")),
+      );
+      expect(qualified.qualification.cells).toHaveLength(3);
     } finally {
       await rm(directory, { recursive: true, force: true });
     }
-  }, 30_000);
+  }, 45_000);
 });

@@ -1,4 +1,5 @@
 import { readFile, stat, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import { buildRosMarginalDevelopmentReport } from "../src/ros-marginal-development.js";
 import type { FirstPartyRosPosition } from "@laces-out/projections";
 
@@ -12,7 +13,12 @@ const required = [
   "--positions",
   "--out",
 ];
-const optional = ["--interval-training-report", "--interval-training-sha256"];
+const optional = [
+  "--interval-training-report",
+  "--interval-training-sha256",
+  "--qualification-protocol",
+  "--qualification-protocol-sha256",
+];
 const allowed = [...required, ...optional];
 const options = new Map<string, string>();
 for (const argument of process.argv.slice(2)) {
@@ -25,8 +31,10 @@ for (const argument of process.argv.slice(2)) {
 }
 for (const name of required)
   if (!options.has(name)) throw new Error(`Required option: ${name}=<value>`);
-if (options.has(optional[0]!) !== options.has(optional[1]!))
+if (options.has("--interval-training-report") !== options.has("--interval-training-sha256"))
   throw new Error("Interval training report and pinned SHA256 must be supplied together");
+if (options.has("--qualification-protocol") !== options.has("--qualification-protocol-sha256"))
+  throw new Error("Qualification protocol and pinned SHA256 must be supplied together");
 const readBounded = async (name: string) => {
   const location = options.get(name)!;
   const info = await stat(location);
@@ -39,13 +47,23 @@ const readBounded = async (name: string) => {
     throw new Error("Report must contain valid UTF-8 bytes");
   return text;
 };
-const [candidateReportJson, previousReportJson, intervalTrainingReportJson] = await Promise.all([
-  readBounded("--candidate-report"),
-  readBounded("--previous-report"),
-  options.has("--interval-training-report")
-    ? readBounded("--interval-training-report")
-    : Promise.resolve(undefined),
-]);
+const [candidateReportJson, previousReportJson, intervalTrainingReportJson, protocol] =
+  await Promise.all([
+    readBounded("--candidate-report"),
+    readBounded("--previous-report"),
+    options.has("--interval-training-report")
+      ? readBounded("--interval-training-report")
+      : Promise.resolve(undefined),
+    options.has("--qualification-protocol")
+      ? readBounded("--qualification-protocol")
+      : Promise.resolve(undefined),
+  ]);
+if (
+  protocol !== undefined &&
+  createHash("sha256").update(protocol).digest("hex") !==
+    options.get("--qualification-protocol-sha256")
+)
+  throw new Error("Qualification protocol bytes do not match pinned SHA256");
 const result = buildRosMarginalDevelopmentReport({
   candidateReportJson,
   previousReportJson,
@@ -60,6 +78,9 @@ const result = buildRosMarginalDevelopmentReport({
   forecastSeason: Number(options.get("--forecast-season")),
   evaluationSeason: Number(options.get("--evaluation-season")),
   positions: options.get("--positions")!.split(",") as FirstPartyRosPosition[],
+  ...(protocol === undefined
+    ? {}
+    : { qualificationProtocolChecksum: options.get("--qualification-protocol-sha256")! }),
 });
 // Exclusive creation preserves prior evidence. A failed or interrupted write cannot be reused as
 // a valid report: it must parse completely and match its separately recorded checksum.
