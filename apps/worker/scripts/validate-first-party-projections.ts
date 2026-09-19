@@ -19,7 +19,6 @@ import {
   NflverseWeeklyStatsSource,
   NflversePlayByPlaySource,
   snapshotNflversePlayByPlay,
-  fourthDownStopsFromPlayByPlay,
   type NflverseDatasetState,
 } from "@laces-out/source-nflverse";
 
@@ -373,7 +372,7 @@ async function main(): Promise<void> {
         new NflverseWeeklyRostersSource().check(season, emptyState),
         new NflverseInjuriesSource().check(season, emptyState),
         new NflverseTeamWeeklyStatsSource({
-          fourthDowns: fourthDownStopsFromPlayByPlay(playByPlay),
+          playByPlay,
         }).check(season, emptyState),
         new NflverseSchedulesSource().check(
           season,

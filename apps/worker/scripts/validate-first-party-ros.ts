@@ -8,7 +8,6 @@ import {
   NflverseWeeklyStatsSource,
   NflversePlayByPlaySource,
   snapshotNflversePlayByPlay,
-  fourthDownStopsFromPlayByPlay,
   type NflverseDatasetState,
 } from "@laces-out/source-nflverse";
 
@@ -37,6 +36,7 @@ import {
 import {
   createRosHistoricalCorpusStore,
   createRetainedV12RosHistoricalCorpusReader,
+  ROS_HISTORICAL_ACTUAL_DEFINITION_VERSION,
   ROS_HISTORICAL_CORPUS_SCHEMA_VERSION,
 } from "../src/ros-historical-corpus.js";
 import {
@@ -318,7 +318,7 @@ async function main(): Promise<void> {
         new NflverseWeeklyStatsSource({ ...sourceOptions, playByPlay }).check(season, emptyState),
         new NflverseTeamWeeklyStatsSource({
           ...sourceOptions,
-          fourthDowns: fourthDownStopsFromPlayByPlay(playByPlay),
+          playByPlay,
         }).check(season, emptyState),
         new NflverseWeeklyRostersSource(sourceOptions).check(season, emptyState),
         new NflverseInjuriesSource(sourceOptions).check(season, emptyState),
@@ -631,6 +631,7 @@ async function main(): Promise<void> {
             onPrepared: async (prepared) => {
               const written = await corpusStore.write({
                 schemaVersion: ROS_HISTORICAL_CORPUS_SCHEMA_VERSION,
+                actualDefinitionVersion: ROS_HISTORICAL_ACTUAL_DEFINITION_VERSION,
                 buildProtocol: ROS_HISTORICAL_CORPUS_BUILD_PROTOCOL,
                 modelVersion: FIRST_PARTY_ROS_MODEL_VERSION,
                 outcomeSchemaVersion: FIRST_PARTY_ROS_OUTCOME_SCHEMA_VERSION,
@@ -776,6 +777,7 @@ function emitReport(input: {
     elapsedSeconds: (Date.now() - startedAt) / 1_000,
     noDatabaseWrites: true,
     sourcePolicy: "official-nflverse-artifacts",
+    actualDefinitionVersion: ROS_HISTORICAL_ACTUAL_DEFINITION_VERSION,
     ...(outcomeCorpusIdentity ? { outcomeCorpusIdentity } : {}),
     // Recorded so a report can never be misattributed to a profile it was not graded under. The
     // authoritative identity remains `identityAudit.scoringProfileKey`, which admission compares.

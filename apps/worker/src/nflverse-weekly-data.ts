@@ -44,7 +44,7 @@ import {
   NflverseWeeklyStatsSource,
   NflversePlayByPlaySource,
   snapshotNflversePlayByPlay,
-  fourthDownStopsFromPlayByPlay,
+  NFLVERSE_DEFENSE_SCORING_EVENTS_VERSION,
   type NflversePlayByPlayLoader,
   buildNflverseSnapCountsUrl,
   buildNflverseInjuriesUrl,
@@ -244,8 +244,10 @@ async function claimSource(
       ((descriptor.kind === "weekly_stats" &&
         source.metadata.playerWeeklyComponentSchema !== NFLVERSE_WEEKLY_STATS_COMPONENT_SCHEMA) ||
         (descriptor.kind === "weekly_team_stats" &&
-          source.metadata.teamWeeklyComponentSchema !==
-            NFLVERSE_TEAM_WEEKLY_STATS_COMPONENT_SCHEMA) ||
+          (source.metadata.teamWeeklyComponentSchema !==
+            NFLVERSE_TEAM_WEEKLY_STATS_COMPONENT_SCHEMA ||
+            source.metadata.teamWeeklyScoringEventsVersion !==
+              NFLVERSE_DEFENSE_SCORING_EVENTS_VERSION)) ||
         (pairedStats && !hasPlayByPlayCapture(source.metadata))));
   const stableMetadata = { ...source.metadata };
   delete stableMetadata.refreshClaimedAt;
@@ -288,7 +290,9 @@ function sourceState(source: SourceRow, playerWeekly = false, teamWeekly = false
     (playerWeekly &&
       source.metadata.playerWeeklyComponentSchema !== NFLVERSE_WEEKLY_STATS_COMPONENT_SCHEMA) ||
     (teamWeekly &&
-      source.metadata.teamWeeklyComponentSchema !== NFLVERSE_TEAM_WEEKLY_STATS_COMPONENT_SCHEMA) ||
+      (source.metadata.teamWeeklyComponentSchema !== NFLVERSE_TEAM_WEEKLY_STATS_COMPONENT_SCHEMA ||
+        source.metadata.teamWeeklyScoringEventsVersion !==
+          NFLVERSE_DEFENSE_SCORING_EVENTS_VERSION)) ||
     ((playerWeekly || teamWeekly) && !hasPlayByPlayCapture(source.metadata));
   return {
     etag: replay ? null : source.etag,
@@ -391,7 +395,10 @@ export function datasetMetadata(input: {
       ? { playerWeeklyComponentSchema: NFLVERSE_WEEKLY_STATS_COMPONENT_SCHEMA }
       : {}),
     ...(input.sourceKey.startsWith("nflverse.stats-team-week.")
-      ? { teamWeeklyComponentSchema: NFLVERSE_TEAM_WEEKLY_STATS_COMPONENT_SCHEMA }
+      ? {
+          teamWeeklyComponentSchema: NFLVERSE_TEAM_WEEKLY_STATS_COMPONENT_SCHEMA,
+          teamWeeklyScoringEventsVersion: NFLVERSE_DEFENSE_SCORING_EVENTS_VERSION,
+        }
       : {}),
     season: input.season,
     license: NFLVERSE_DATA_LICENSE,
@@ -1328,7 +1335,7 @@ export class NflverseWeeklyDataRefresher {
       const result = await this.#teamWeeklyStatsSource.check(
         season,
         sourceState(source, false, true),
-        playByPlay ? fourthDownStopsFromPlayByPlay(playByPlay) : undefined,
+        playByPlay,
       );
       const checkedAt = new Date(result.checkedAt);
       const nextCheckAt = new Date(checkedAt.getTime() + descriptor.checkIntervalMinutes * 60_000);
@@ -1350,6 +1357,7 @@ export class NflverseWeeklyDataRefresher {
               ...source.metadata,
               sourceSchemaVersion,
               teamWeeklyComponentSchema: NFLVERSE_TEAM_WEEKLY_STATS_COMPONENT_SCHEMA,
+              teamWeeklyScoringEventsVersion: result.defenseScoringEventsVersion,
               teamWeeklyChecksumSha256: result.teamWeeklyChecksumSha256,
               season,
               license: NFLVERSE_DATA_LICENSE,
@@ -1453,6 +1461,7 @@ export class NflverseWeeklyDataRefresher {
                 coveredSeasonTypes: result.coveredSeasonTypes,
               }),
               teamWeeklyChecksumSha256: result.teamWeeklyChecksumSha256,
+              teamWeeklyScoringEventsVersion: result.defenseScoringEventsVersion,
               playByPlaySourceUrl: result.playByPlaySourceUrl,
               playByPlayChecksumSha256: result.playByPlayChecksumSha256,
             },

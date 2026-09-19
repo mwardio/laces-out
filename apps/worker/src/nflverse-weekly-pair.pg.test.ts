@@ -15,17 +15,18 @@ import {
 import {
   NFLVERSE_WEEKLY_STATS_COMPONENT_SCHEMA,
   NFLVERSE_TEAM_WEEKLY_STATS_COMPONENT_SCHEMA,
+  NFLVERSE_DEFENSE_SCORING_EVENTS_VERSION,
   NflverseDatasetSourceError,
   NflverseTeamWeeklyStatsSource,
   NflverseWeeklyStatsSource,
   buildNflverseTeamWeeklyStatsUrl,
-  fourthDownStopsFromPlayByPlay,
   type NflversePlayByPlayResult,
 } from "@laces-out/source-nflverse";
 import { eq } from "drizzle-orm";
 import { migrate } from "drizzle-orm/postgres-js/migrator";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
+import { teamScoringEventsFixture } from "../../../packages/source-nflverse/src/team-scoring.test-fixtures.js";
 import { weeklyStatsPlayByPlayFixture } from "../../../packages/source-nflverse/src/weekly-stats-source.test-fixtures.js";
 import { NflverseWeeklyDataRefresher, datasetMetadata } from "./nflverse-weekly-data.js";
 
@@ -82,6 +83,14 @@ function playByPlayFixture(
       ...context,
       fourthDownStops: corrected ? 1 : 0,
     })),
+    defenseScoringEvents: [
+      teamScoringEventsFixture({
+        game: { ...context, week: 1, seasonType: "REG", homeTeam: "GB", awayTeam: "CHI" },
+        checksum: capture.repeat(64),
+        checkedAt: original.checkedAt,
+        events: [],
+      }),
+    ],
     playerTouchdowns: original.playerTouchdowns.map((row) => ({
       ...row,
       ...context,
@@ -238,6 +247,11 @@ describe.skipIf(!dockerAvailable())(
         capture = playByPlayFixture(season, value, corrected);
       };
       return {
+        setDefenseScoringEvents: (
+          events: NonNullable<NflversePlayByPlayResult["defenseScoringEvents"]>,
+        ) => {
+          capture = { ...capture, defenseScoringEvents: events };
+        },
         service,
         loader,
         load,
@@ -384,10 +398,25 @@ describe.skipIf(!dockerAvailable())(
       prepared.teamFetch.mockImplementation(
         async () => new Response(csv, { headers: { etag: '"stable-team-csv"' } }),
       );
+      prepared.setDefenseScoringEvents([
+        teamScoringEventsFixture({
+          game: {
+            season,
+            week: 1,
+            seasonType: "REG",
+            gameId: `${season}_01_CHI_GB`,
+            homeTeam: "GB",
+            awayTeam: "CHI",
+          },
+          checksum: "a".repeat(64),
+          checkedAt: "2026-07-21T15:00:00.000Z",
+          events: [{ team: "CHI", kind: "defensive-two-point-return" }],
+        }),
+      ]);
       await prepared.service.refreshWeeklyStats(season, true, prepared.loader);
       const rawChecksum = createHash("sha256").update(csv).digest("hex");
       const legacyChecksum = createHash("sha256")
-        .update(`team-week-with-fourth-downs-v1:${rawChecksum}:${"a".repeat(64)}`)
+        .update(`nflverse-team-week-components-v2:${rawChecksum}:${"a".repeat(64)}`)
         .digest("hex");
       const sourceKey = `nflverse.stats-team-week.${season}`;
       const metadata: ReturnType<typeof datasetMetadata> = {
@@ -403,7 +432,8 @@ describe.skipIf(!dockerAvailable())(
         }),
         playByPlayChecksumSha256: "a".repeat(64),
       };
-      delete metadata.teamWeeklyComponentSchema;
+      metadata.teamWeeklyComponentSchema = "nflverse-team-week-components-v2";
+      delete metadata.teamWeeklyScoringEventsVersion;
       const oldTime = new Date(prepared.now().getTime() - 60_000);
       const [source] = await handle.db
         .insert(dataSources)
@@ -437,12 +467,16 @@ describe.skipIf(!dockerAvailable())(
         .returning();
       const parsed = await new NflverseTeamWeeklyStatsSource({
         fetch: () => Promise.resolve(new Response(csv)),
-        fourthDowns: fourthDownStopsFromPlayByPlay(prepared.loader),
+        playByPlay: prepared.loader,
       }).check(season, { etag: null, lastModified: null, checksumSha256: null });
       if (parsed.state !== "changed") throw new Error("Expected team fixture observations");
       for (const observation of parsed.observations) {
         const components: Record<string, number> = { ...observation.components };
-        delete components.defensive_two_point_returns;
+        components.defensive_touchdowns = components.raw_defensive_touchdowns!;
+        components.special_teams_touchdowns = components.raw_special_teams_touchdowns!;
+        for (const key of Object.keys(components))
+          if (key.startsWith("scoring_") || key.startsWith("raw_") || key === "one_point_safeties")
+            delete components[key];
         await handle.db.insert(teamWeeklyStatObservations).values({
           sourceId: source!.id,
           sourceSyncRunId: legacyRun!.id,
@@ -471,6 +505,7 @@ describe.skipIf(!dockerAvailable())(
       expect(after.metadata).toMatchObject({
         sourceSchemaVersion: 4,
         teamWeeklyComponentSchema: NFLVERSE_TEAM_WEEKLY_STATS_COMPONENT_SCHEMA,
+        teamWeeklyScoringEventsVersion: NFLVERSE_DEFENSE_SCORING_EVENTS_VERSION,
         teamWeeklyChecksumSha256: rawChecksum,
         playByPlayChecksumSha256: "a".repeat(64),
       });
@@ -503,6 +538,31 @@ describe.skipIf(!dockerAvailable())(
       expect((await prepared.readSource("team")).metadata.teamWeeklyComponentSchema).toBe(
         NFLVERSE_TEAM_WEEKLY_STATS_COMPONENT_SCHEMA,
       );
+    });
+
+    it("revalidates an archived scoring-interpreter contract independently of the team component marker", async () => {
+      const prepared = await fixture(2022);
+      await prepared.seed();
+      const before = await prepared.readSource("team");
+      const rows = await prepared.teamRows();
+      await handle.db
+        .update(dataSources)
+        .set({
+          nextCheckAt: new Date(prepared.now().getTime() + 24 * 60 * 60_000),
+          metadata: { ...before.metadata, teamWeeklyScoringEventsVersion: "legacy-interpreter" },
+        })
+        .where(eq(dataSources.id, before.id));
+      expect(await prepared.service.refreshWeeklyStatsPair(2022)).toMatchObject({
+        weeklyStats: { state: "not-due" },
+        teamWeeklyStats: { state: "changed", rowsWritten: 0 },
+      });
+      expect(prepared.playerFetch).not.toHaveBeenCalled();
+      expect(prepared.teamFetch).toHaveBeenCalledTimes(1);
+      expect(prepared.load).toHaveBeenCalledTimes(1);
+      expect((await prepared.readSource("team")).metadata.teamWeeklyScoringEventsVersion).toBe(
+        NFLVERSE_DEFENSE_SCORING_EVENTS_VERSION,
+      );
+      expect(await prepared.teamRows()).toEqual(rows);
     });
 
     it("refuses to steal active leases even with force and exposes an unresolved mismatch without fetching", async () => {

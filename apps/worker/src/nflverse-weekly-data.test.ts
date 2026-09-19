@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   NFLVERSE_TEAM_WEEKLY_STATS_COMPONENT_SCHEMA,
+  NFLVERSE_DEFENSE_SCORING_EVENTS_VERSION,
   NFLVERSE_WEEKLY_STATS_COMPONENT_SCHEMA,
   type NflversePlayerInjuryReport,
 } from "@laces-out/source-nflverse";
@@ -97,6 +98,7 @@ describe("nflverse weekly worker helpers", () => {
     const player = metadata("nflverse.stats-player-week.2026");
     const snaps = metadata("nflverse.snap-counts.2026");
     expect(team.teamWeeklyComponentSchema).toBe(NFLVERSE_TEAM_WEEKLY_STATS_COMPONENT_SCHEMA);
+    expect(team.teamWeeklyScoringEventsVersion).toBe(NFLVERSE_DEFENSE_SCORING_EVENTS_VERSION);
     expect(team.playerWeeklyComponentSchema).toBeUndefined();
     expect(player.playerWeeklyComponentSchema).toBe(NFLVERSE_WEEKLY_STATS_COMPONENT_SCHEMA);
     expect(player.teamWeeklyComponentSchema).toBeUndefined();
