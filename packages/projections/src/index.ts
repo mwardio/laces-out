@@ -504,3 +504,5 @@ export function groupProjectionConsensus(
     .map(([, group]) => buildProjectionConsensus(group, options));
 }
 export * from "./weekly-input-coverage.js";
+
+export * from "./defense-points-allowed.js";

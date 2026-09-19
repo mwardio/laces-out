@@ -14,6 +14,8 @@ import {
   projectionScoringProfileKey,
   firstPartyProjectionComponentsForPosition,
   FIRST_PARTY_PROJECTION_MODEL_VERSION,
+  DEFENSE_POINTS_ALLOWED_EVENT_POINTS,
+  defensePointsAllowedFromScoringEvents,
 } from "@laces-out/projections";
 import type {
   FirstPartyBacktestPrediction,
@@ -29,6 +31,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   FIRST_PARTY_PLAYER_HISTORY_VERSION,
+  FIRST_PARTY_DEFENSE_HISTORY_VERSION,
   projectionInputChecksum,
 } from "./first-party-projection-inputs.js";
 import {
@@ -686,6 +689,7 @@ describe("first-party projection publication policy", () => {
       projectionInputChecksum({
         ...legacyIdentity,
         playerHistoryVersion: FIRST_PARTY_PLAYER_HISTORY_VERSION,
+        defenseHistoryVersion: FIRST_PARTY_DEFENSE_HISTORY_VERSION,
       }),
     );
   });
@@ -1587,7 +1591,14 @@ function defenseBacktestFixture(): FirstPartyTeamDefenseBacktest {
         baseline: { defensive_sacks: baseline },
         lower: { defensive_sacks: predicted - 4 },
         upper: { defensive_sacks: predicted + 4 },
-        actual: { defensive_sacks: 2.5 },
+        actual: {
+          defensive_sacks: 2.5,
+          defensive_interceptions: 0,
+          defensive_touchdowns: 0,
+          special_teams_touchdowns: 0,
+          defensive_two_point_returns: 0,
+          one_point_safeties: 0,
+        },
         trainingRows: 48,
         calibrationRows: 48,
       });
@@ -1820,6 +1831,13 @@ const PARTIALLY_SYNCED_ROSTER: readonly RosterFixtureEntry[] = [
 
 function planPublications(input: {
   readonly rules: readonly ReturnType<typeof espnRule>[];
+  readonly provider?: "espn" | "yahoo";
+  readonly defenseVariants?: Parameters<
+    typeof buildFirstPartyLeaguePublications
+  >[0]["defenseVariants"];
+  readonly publishedDefenses?: Parameters<
+    typeof buildFirstPartyLeaguePublications
+  >[0]["publishedDefenses"];
   readonly playerBacktest?: FirstPartyProjectionBacktest;
   readonly defenseBacktest?: FirstPartyTeamDefenseBacktest;
   readonly rosters?: readonly RosterFixtureEntry[];
@@ -1841,6 +1859,7 @@ function planPublications(input: {
     playerBacktest,
     basePlayerBacktest: playerBacktest,
     defenseBacktest: input.defenseBacktest ?? defenseBacktestFixture(),
+    ...(input.defenseVariants ? { defenseVariants: input.defenseVariants } : {}),
     ...(input.scoringEvidenceMemo === undefined
       ? {}
       : { scoringEvidenceMemo: input.scoringEvidenceMemo }),
@@ -1854,7 +1873,12 @@ function planPublications(input: {
       lastSeason: PUBLICATION_SEASON,
     })),
     leagues: [
-      { id: leagueSeasonId, provider: "espn", currentWeek: PUBLICATION_WEEK, teamCount: 12 },
+      {
+        id: leagueSeasonId,
+        provider: input.provider ?? "espn",
+        currentWeek: PUBLICATION_WEEK,
+        teamCount: 12,
+      },
     ],
     rules: input.rules.map((rule) => ({ ...rule, leagueSeasonId })),
     rosters: (input.rosters ?? []).map((entry) => ({
@@ -1891,7 +1915,8 @@ function planPublications(input: {
             },
           };
     }),
-    publishedDefenses: PUBLICATION_TEAMS.map((team) => publishedDefenseFixture(team)),
+    publishedDefenses:
+      input.publishedDefenses ?? PUBLICATION_TEAMS.map((team) => publishedDefenseFixture(team)),
     previousRowsByLeague:
       input.previousRows === undefined
         ? new Map()
@@ -2065,7 +2090,251 @@ describe("weekly roster alias bijection", () => {
   });
 });
 
+function pointsAllowedVariant(pointsAllowed: number) {
+  const base = defenseBacktestFixture();
+  const component = (row: Readonly<Record<string, number>>) => ({
+    ...row,
+    points_allowed: pointsAllowed + (row.defensive_sacks ?? 2.5) - 2.5,
+  });
+  return {
+    backtest: {
+      ...base,
+      predictions: base.predictions.map((row) => ({
+        ...row,
+        actual: component(row.actual),
+        predicted: component(row.predicted),
+        baseline: component(row.baseline),
+        lower: component(row.lower),
+        upper: component(row.upper),
+      })),
+    },
+    publishedDefenses: PUBLICATION_TEAMS.map((team) => {
+      const defense = publishedDefenseFixture(team);
+      return {
+        ...defense,
+        projection: { ...defense.projection, components: component(defense.projection.components) },
+      };
+    }),
+  };
+}
+
+const pointsAllowedProfile = (
+  definition: "yahoo-2022-v1" | "espn-2019-v1",
+  points = 1,
+): ProjectionScoringProfile => ({
+  id: "provider-pa",
+  rules: [
+    { statId: "receiving_yards", points: 0.1 },
+    { statId: "points_allowed", points, statDefinition: definition },
+  ],
+});
+
+describe("weekly provider-specific defense routing", () => {
+  it("selects distinct blocked-field-goal PA vectors and backtests for equal Yahoo and ESPN weights", () => {
+    const events = {
+      ...Object.fromEntries(
+        Object.keys(DEFENSE_POINTS_ALLOWED_EVENT_POINTS).map((key) => [key, 0]),
+      ),
+      scoring_event_totals_complete: 1,
+      scoring_points_total: 26,
+      scoring_event_offensive_pass_touchdown: 2,
+      scoring_event_extra_point: 2,
+      scoring_event_field_goal: 2,
+      scoring_event_blocked_field_goal_touchdown: 1,
+    };
+    const variants = Object.fromEntries(
+      (["yahoo-2022-v1", "espn-2019-v1"] as const).map((definition) => {
+        const actual = defensePointsAllowedFromScoringEvents({
+          definition,
+          opponentComponents: events,
+          opponentFinalScore: 26,
+        });
+        if (actual.state !== "complete")
+          throw new Error("Expected complete synthetic scoring events");
+        return [definition, pointsAllowedVariant(actual.pointsAllowed)];
+      }),
+    ) as Record<"yahoo-2022-v1" | "espn-2019-v1", ReturnType<typeof pointsAllowedVariant>>;
+    const yahoo = planPublications({
+      provider: "yahoo",
+      rules: [espnRule("31", 1)],
+      defenseVariants: variants,
+      defenseBacktest: variants["yahoo-2022-v1"].backtest,
+      publishedDefenses: variants["yahoo-2022-v1"].publishedDefenses,
+    });
+    const espn = planPublications({
+      rules: [espnRule("120", 1)],
+      defenseVariants: variants,
+      defenseBacktest: variants["yahoo-2022-v1"].backtest,
+      publishedDefenses: variants["yahoo-2022-v1"].publishedDefenses,
+    });
+    expect(yahoo.publications[0]?.metadata.publishedPositions).toEqual(["DST"]);
+    expect(espn.publications[0]?.metadata.publishedPositions).toEqual(["DST"]);
+    expect(yahoo.publications[0]?.rows[0]?.components.points_allowed).toBe(20);
+    expect(espn.publications[0]?.rows[0]?.components.points_allowed).toBe(26);
+    expect(yahoo.publications[0]?.profileKey).not.toBe(espn.publications[0]?.profileKey);
+    expect(yahoo.publications[0]?.metadata.defensePointsAllowedDefinition).toBe("yahoo-2022-v1");
+    expect(espn.publications[0]?.metadata.defensePointsAllowedDefinition).toBe("espn-2019-v1");
+    // Make only the ESPN actual labels unavailable: Yahoo retains its independent gate.
+    const broken = {
+      ...variants,
+      "espn-2019-v1": {
+        ...variants["espn-2019-v1"],
+        backtest: { ...variants["espn-2019-v1"].backtest, predictions: [] },
+      },
+    };
+    expect(
+      planPublications({ rules: [espnRule("120", 1)], defenseVariants: broken }).publications,
+    ).toHaveLength(0);
+    expect(
+      planPublications({ provider: "yahoo", rules: [espnRule("31", 1)], defenseVariants: broken })
+        .publications,
+    ).toHaveLength(1);
+  });
+
+  it("withholds a missing ESPN definition explicitly while preserving offense and unpriced PA leagues", () => {
+    const rules = [...DST_SUPPORTED_RULES, espnRule("120", 1)];
+    const baseline = planPublications({ rules: DST_SUPPORTED_RULES, rosters: FULL_ROSTER });
+    const missing = planPublications({ rules, rosters: FULL_ROSTER });
+    expect(missing.publications).toHaveLength(1);
+    expect(missing.publications[0]?.rows).toEqual(
+      baseline.publications[0]?.rows.filter(
+        (row) => !DEFENSE_ROW_IDS.has(row.playerId) && row.playerId !== "roster-alias-dst-buf",
+      ),
+    );
+    expect(missing.withheld[0]?.positions).toContainEqual({
+      position: "DST",
+      source: "component-coverage",
+      reasons: [
+        "D/ST history and projections are unavailable for points-allowed definition espn-2019-v1.",
+      ],
+    });
+    expect(baseline.publications[0]?.metadata.publishedPositions).toContain("DST");
+  });
+
+  it("never reprices locked PA components from missing or different provider definitions", () => {
+    const yahoo = pointsAllowedProfile("yahoo-2022-v1");
+    const espn = pointsAllowedProfile("espn-2019-v1");
+    const row: ScoredProjectionRow = {
+      playerId: "dst",
+      mean: 20,
+      floor: 10,
+      ceiling: 30,
+      confidence: 0.8,
+      components: { points_allowed: 20 },
+      scoringProfileKey: projectionScoringProfileKey(yahoo),
+    };
+    expect(frozenProjectionSupportsScoringProfile(row, espn, "DST")).toBe(false);
+    expect(
+      frozenProjectionSupportsScoringProfile({ ...row, scoringProfileKey: "legacy" }, yahoo, "DST"),
+    ).toBe(false);
+    expect(
+      frozenProjectionSupportsScoringProfile(row, pointsAllowedProfile("yahoo-2022-v1", 2), "DST"),
+    ).toBe(true);
+    expect(
+      frozenProjectionSupportsScoringProfile(
+        { ...row, mean: 0, floor: 0, ceiling: 0, components: { points_allowed: 0 } },
+        espn,
+        "DST",
+      ),
+    ).toBe(true);
+  });
+
+  it("binds each exact provider history to the training cache identity", () => {
+    const input = {
+      season: 2026,
+      firstTargetWeek: 4,
+      playerHistory: [],
+      defenseHistory: [],
+      defenseHistoriesByDefinition: { "yahoo-2022-v1": [], "espn-2019-v1": [] },
+    } as const;
+    const original = projectionTrainingCacheKey(input);
+    expect(original).not.toBe(
+      projectionTrainingCacheKey({
+        ...input,
+        defenseHistoriesByDefinition: { "yahoo-2022-v1": [] },
+      }),
+    );
+    const history = [
+      {
+        team: "BUF",
+        opponent: "KC",
+        season: 2025,
+        week: 3,
+        pointsAllowedDefinition: "espn-2019-v1" as const,
+        components: { defensive_points_allowed: 26 },
+        played: true,
+      },
+    ];
+    expect(original).not.toBe(
+      projectionTrainingCacheKey({
+        ...input,
+        defenseHistoriesByDefinition: {
+          ...input.defenseHistoriesByDefinition,
+          "espn-2019-v1": history,
+        },
+      }),
+    );
+  });
+
+  it("retains both defense variants and shares player evidence when only one defense generation changes", () => {
+    const players = playerBacktestFixture();
+    const yahoo = pointsAllowedVariant(20).backtest;
+    const espn = pointsAllowedVariant(26).backtest;
+    const memo = new FirstPartyPublicationEvidenceMemo();
+    const firstYahoo = memo.get(players, yahoo, pointsAllowedProfile("yahoo-2022-v1"));
+    const firstEspn = memo.get(players, espn, pointsAllowedProfile("espn-2019-v1"));
+    expect(memo.get(players, yahoo, pointsAllowedProfile("yahoo-2022-v1"))).toBe(firstYahoo);
+    expect(memo.get(players, espn, pointsAllowedProfile("espn-2019-v1"))).toBe(firstEspn);
+    const changed = memo.get(players, { ...espn }, pointsAllowedProfile("espn-2019-v1"));
+    expect(changed).not.toBe(firstEspn);
+    expect(changed.candidates).toBe(firstEspn.candidates);
+    expect(memo.get(players, yahoo, pointsAllowedProfile("yahoo-2022-v1"))).toBe(firstYahoo);
+    expect(memo.get({ ...players }, yahoo, pointsAllowedProfile("yahoo-2022-v1"))).not.toBe(
+      firstYahoo,
+    );
+  });
+});
+
 describe("weekly league publication withholds unsupported positions, not leagues", () => {
+  it("withholds incomplete defensive actuals while publishing offense and preserving later league evaluation", () => {
+    const healthy = defenseBacktestFixture();
+    const broken = {
+      ...healthy,
+      predictions: healthy.predictions.map((row, index) => {
+        if (index !== 0) return row;
+        const actual = { ...row.actual };
+        delete actual.defensive_sacks;
+        return { ...row, actual };
+      }),
+    };
+    const memo = new FirstPartyPublicationEvidenceMemo();
+    const plan = planPublications({
+      rules: DST_SUPPORTED_RULES,
+      defenseBacktest: broken,
+      scoringEvidenceMemo: memo,
+    });
+    expect(plan.publications).toHaveLength(1);
+    expect(plan.publications[0]?.metadata.publishedPositions).toEqual([
+      "QB",
+      "RB",
+      "WR",
+      "TE",
+      "K",
+    ]);
+    expect(plan.withheld[0]?.positions).toContainEqual({
+      position: "DST",
+      source: "component-coverage",
+      reasons: ["Observed defensive scoring is incomplete: missing defensive_sacks."],
+    });
+    const next = planPublications({
+      rules: DST_SUPPORTED_RULES,
+      defenseBacktest: healthy,
+      scoringEvidenceMemo: memo,
+    });
+    expect(next.publications[0]?.metadata.publishedPositions).toContain("DST");
+    expect(next.withheld).toHaveLength(0);
+  });
+
   it("publishes every position a league can be priced for and withholds only D/ST", () => {
     const plan = planPublications({ rules: GARAGELY_SHAPED_RULES });
 
@@ -3078,6 +3347,7 @@ describe("bounded weekly publication evidence memo", () => {
       candidates: { ...compactCandidates, champion: { policy: champion.policy } },
       player: evaluated.playerEvaluation,
       defense: evaluateFirstPartyTeamDefenseBacktestForScoringProfile(defense, scoring),
+      defenseComponentCoverage: [],
     };
     const memo = new FirstPartyPublicationEvidenceMemo();
     const cold = memo.get(players, defense, scoring);

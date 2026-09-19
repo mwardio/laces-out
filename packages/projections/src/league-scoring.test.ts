@@ -14,7 +14,11 @@ import {
 } from "./league-scoring.js";
 import { rosAvailableProjectionStatIds } from "./ros-scoring-profiles.js";
 import { projectionScoringProfileKeyForPosition } from "./scoring-position-keys.js";
-import { scoreProjectionStatComponents } from "./scoring.js";
+import {
+  defensePointsAllowedDefinitionForProfile,
+  projectionScoringProfileKey,
+  scoreProjectionStatComponents,
+} from "./scoring.js";
 
 function rule(
   providerStatId: string | null,
@@ -404,6 +408,55 @@ const YAHOO_SCOPED_CUSTOM_2026_ROWS: readonly StoredLeagueScoringRule[] = [
 ];
 
 describe("normalizeLeagueScoringProfile", () => {
+  it("binds aggregate and probability PA rules to the provider even when weights are identical", () => {
+    for (const [yahooId, espnId, statKey] of [
+      ["31", "120", "Points Allowed"],
+      ["50", "89", "0 Points Allowed"],
+    ] as const) {
+      const yahoo = normalized([rule(yahooId, statKey, -1), rule("4", "Passing Yards", 0.04)]);
+      const espn = normalized([
+        rule(espnId, statKey, -1, { provider: "espn" }),
+        rule("3", "Passing Yards", 0.04, { provider: "espn" }),
+      ]);
+      expectAvailable(yahoo);
+      expectAvailable(espn);
+      expect(defensePointsAllowedDefinitionForProfile(yahoo.profile)).toBe("yahoo-2022-v1");
+      expect(defensePointsAllowedDefinitionForProfile(espn.profile)).toBe("espn-2019-v1");
+      expect(projectionScoringProfileKey(yahoo.profile)).not.toBe(
+        projectionScoringProfileKey(espn.profile),
+      );
+      expect(projectionScoringProfileKeyForPosition(yahoo.profile, "DST")).not.toBe(
+        projectionScoringProfileKeyForPosition(espn.profile, "DST"),
+      );
+      expect(projectionScoringProfileKeyForPosition(yahoo.profile, "QB")).toBe(
+        projectionScoringProfileKeyForPosition(espn.profile, "QB"),
+      );
+      for (const profile of [yahoo.profile, espn.profile]) {
+        expect(
+          profile.rules.find((item) => item.statId === "passing_yards")?.statDefinition,
+        ).toBeUndefined();
+        const legacy = {
+          ...profile,
+          rules: profile.rules.map((rule) => {
+            const legacyRule = { ...rule };
+            delete legacyRule.statDefinition;
+            return legacyRule;
+          }),
+        };
+        expect(projectionScoringProfileKeyForPosition(profile, "DST")).not.toBe(
+          projectionScoringProfileKeyForPosition(legacy, "DST"),
+        );
+      }
+    }
+  });
+
+  it("does not attach PA semantics when the provider defines no active PA scoring", () => {
+    const result = normalized([rule("50", "0 Points Allowed", 0), rule("32", "Sacks Recorded", 1)]);
+    expectAvailable(result);
+    expect(result.profile.rules).toEqual([{ statId: "defensive_sacks", points: 1 }]);
+    expect(defensePointsAllowedDefinitionForProfile(result.profile)).toBeNull();
+  });
+
   it("normalizes Yahoo's current default profile, including Extra Point Returned", () => {
     const result = normalized(YAHOO_DEFAULT_2026_ROWS);
     expectAvailable(result);
@@ -667,6 +720,7 @@ describe("normalizeLeagueScoringProfile", () => {
     expect(result.profile.rules).toContainEqual({
       statId: "points_allowed_1_6_probability",
       points: 7,
+      statDefinition: "yahoo-2022-v1",
     });
     expect(
       scoreProjectionStatComponents(
@@ -709,8 +763,8 @@ describe("normalizeLeagueScoringProfile", () => {
       expect.arrayContaining([
         { statId: "defensive_sacks", points: 1 },
         { statId: "defensive_blocked_kicks", points: 2 },
-        { statId: "points_allowed_14_17_probability", points: 1 },
-        { statId: "points_allowed_28_34_probability", points: -4 },
+        { statId: "points_allowed_14_17_probability", points: 1, statDefinition: "espn-2019-v1" },
+        { statId: "points_allowed_28_34_probability", points: -4, statDefinition: "espn-2019-v1" },
       ]),
     );
     expect(result.ignoredRules).toContainEqual(
@@ -856,6 +910,7 @@ describe("normalizeLeagueScoringProfile", () => {
     expect(result.profile.rules).toContainEqual({
       statId: "points_allowed_22_27_probability",
       points: -1,
+      statDefinition: "espn-2019-v1",
     });
   });
 
@@ -1660,6 +1715,39 @@ describe("normalizeLeagueScoringProfile", () => {
       ["206", "defensive_two_point_returns", 2],
       ["209", "one_point_safeties", 1],
     ];
+
+    it.each([
+      ["espn", "206", "206", 2],
+      ["espn", "206:slot:16", "ESPN stat 206 override for D/ST", 2],
+      ["espn", "209", "209", 1],
+      ["yahoo", "82", "Extra Point Returned", 2],
+    ] as const)(
+      "enforces rare-event scoring scope for %s %s without dropping the rule",
+      (provider, statId, name, maximum) => {
+        const passing = rule(provider === "espn" ? "3" : "4", "Passing Yards", 0.04, {
+          provider,
+        });
+        for (const points of [-maximum, -maximum / 2, maximum / 2, maximum]) {
+          const result = normalized([passing, rule(statId, name, points, { provider })]);
+          expectAvailable(result);
+          expect(supportFor(result, "DST").supported).toBe(true);
+        }
+        for (const points of [maximum + 0.01, -maximum - 0.01, 1_000]) {
+          const result = normalized([passing, rule(statId, name, points, { provider })]);
+          expectAvailable(result);
+          expect(supportFor(result, "QB").supported).toBe(true);
+          expect(supportFor(result, "DST").supported).toBe(false);
+          expect(positionReasonCodes(result, "DST")).toContain("COMPONENT_VALUE_UNSUPPORTED");
+          expect(
+            result.profile.rules.some(
+              (item) =>
+                item.statId === "defensive_two_point_returns" ||
+                item.statId === "one_point_safeties",
+            ),
+          ).toBe(false);
+        }
+      },
+    );
 
     it("maps each de minimis ID to a component the defense projector actually emits", () => {
       const engine = new Set(firstPartyTeamDefenseProjectionComponents());

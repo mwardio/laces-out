@@ -56,6 +56,7 @@ import {
 } from "./first-party-ros-backtest.js";
 import {
   firstPartyPlayerStatus,
+  requireFirstPartyDefenseHistoryForProfile,
   type ProjectionInjuryFact,
   type ProjectionScheduleFact,
 } from "./first-party-projection-inputs.js";
@@ -254,6 +255,7 @@ export interface BuildFirstPartyRosDefenseCandidateInput {
 export function assembleFirstPartyRosDefenseCandidateInputs(
   input: BuildFirstPartyRosDefenseCandidateInput,
 ): FirstPartyRosAssembledCandidateInputs | null {
+  requireFirstPartyDefenseHistoryForProfile(input.featureHistory, input.scoringProfile);
   const { season, asOfWeek, windowStartWeek, windowEndWeek } = input.window;
   const team = input.defense.team.trim().toUpperCase();
   const weeks: FirstPartyRosProjectionInput["weeks"][number][] = [];
@@ -329,7 +331,8 @@ export function assembleFirstPartyRosDefenseCandidateInputs(
     maximumMultiplier: 1,
   };
   const inputChecksum = historicalRosChecksum({
-    version: "live-ros-defense-football-input-v2",
+    version: "live-ros-defense-football-input-provider-v1",
+    pointsAllowedDefinition: input.featureHistory[0]?.pointsAllowedDefinition ?? null,
     productionBasis: HISTORICAL_ROS_PRODUCTION_BASIS_VERSION,
     playerId: input.defense.playerId,
     position: "DST",

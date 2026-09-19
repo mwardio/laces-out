@@ -8,3 +8,5 @@ export * from "./team-weekly-stats-source.js";
 export * from "./weekly-rosters-source.js";
 export * from "./weekly-stats-source.js";
 export * from "./play-by-play-source.js";
+export * from "./defense-scoring-events.js";
+export * from "./defense-scoring-components.js";

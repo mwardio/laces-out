@@ -1,0 +1,8 @@
+play_id,game_id,season,week,season_type,home_team,away_team,play_deleted,touchdown,pass_touchdown,rush_touchdown,return_touchdown,interception,fumble,fumble_lost,kickoff_attempt,punt_attempt,punt_blocked,field_goal_attempt,extra_point_attempt,two_point_attempt,defensive_two_point_conv,defensive_extra_point_conv,safety,special,special_teams_play,play_type,play_type_nfl,posteam,defteam,td_team,td_player_id,return_team,fumble_recovery_1_team,fumble_recovery_2_team,fumbled_1_team,fumbled_2_team,field_goal_result,extra_point_result,two_point_conv_result,st_play_type,posteam_score,defteam_score,posteam_score_post,defteam_score_post,fumble_recovery_1_player_id,fumble_recovery_2_player_id,fumbled_1_player_id,fumbled_2_player_id
+3108,2023_01_JAX_IND,2023,1,REG,IND,JAX,0,1,0,0,1,0,1,1,0,0,0,0,0,0,0,0,0,0,0,pass,SACK,JAX,IND,IND,00-0032378,,JAX,IND,JAX,JAX,,,,,17,14,17,20,00-0038555,00-0032378,00-0036971,00-0038555
+1127,2023_04_KC_NYJ,2023,4,REG,NYJ,KC,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,no_play,PENALTY,KC,NYJ,,,,,,,,,,,,17,0,17,2,,,,
+3782,2023_07_BUF_NE,2023,7,REG,NE,BUF,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,no_play,PENALTY,BUF,NE,,,,,,,,,,success,,23,22,25,22,,,,
+4297,2023_08_TB_BUF,2023,8,REG,BUF,TB,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,no_play,PENALTY,TB,BUF,,,,,,,,,,success,,16,24,18,24,,,,
+2505,2023_12_GB_DET,2023,12,REG,DET,GB,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,no_play,PENALTY,DET,GB,,,,,,,,,,success,,12,23,14,23,,,,
+3955,2023_16_CLE_HOU,2023,16,REG,HOU,CLE,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,no_play,PENALTY,HOU,CLE,,,,,,,,,,success,,13,36,15,36,,,,
+2650,2023_17_ARI_PHI,2023,17,REG,PHI,ARI,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,no_play,PENALTY,ARI,PHI,,,,,,,,,,success,,19,21,21,21,,,,
