@@ -12,6 +12,7 @@ import {
   type FirstPartyRosStrategy,
 } from "@laces-out/projections";
 import { firstPartyRosChampionPolicyChecksum } from "./first-party-ros-publication.js";
+import { ROS_HISTORICAL_ACTUAL_DEFINITION_VERSION } from "./ros-historical-corpus.js";
 
 export const SEASONS = [2022, 2023, 2024, 2025];
 export const TEAMS = ["LAR", "BUF", "KC", "SF", "DAL", "BAL", "PIT", "MIA"];
@@ -153,6 +154,7 @@ export function reportFixture(
     noDatabaseWrites: true,
     sourcePolicy: "official-nflverse-artifacts",
     outcomeCorpusIdentity: hash(`${modelVersion}:complete-corpus`),
+    actualDefinitionVersion: ROS_HISTORICAL_ACTUAL_DEFINITION_VERSION,
     scoringProfile: { key: SCORING.key, label: SCORING.label, digest: SCORING.digest },
     coverage: {
       state: "qualified",

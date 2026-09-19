@@ -7,6 +7,7 @@ import type { RosCorpusLock } from "./ros-corpus-lock.js";
 import {
   createRosHistoricalCorpusStore,
   createRetainedV12RosHistoricalCorpusReader,
+  ROS_HISTORICAL_ACTUAL_DEFINITION_VERSION,
   type RosHistoricalCorpus,
 } from "./ros-historical-corpus.js";
 import {
@@ -136,6 +137,7 @@ async function readCorpora(
       ? []
       : [["training", manifest.bundle.intervalTrainingCorpusIdentity] as const]),
   ];
+  const validatedCorpora: (readonly [RosMarginalDependency, RosHistoricalCorpus])[] = [];
   for (const [dependency, identity] of dependencies) {
     signal.throwIfAborted();
     const store =
@@ -149,6 +151,8 @@ async function readCorpora(
     const positions = training ? ["DST"] : POSITIONS;
     const count = training ? 32 : 8;
     if (
+      !Object.hasOwn(corpus, "actualDefinitionVersion") ||
+      corpus.actualDefinitionVersion !== ROS_HISTORICAL_ACTUAL_DEFINITION_VERSION ||
       lineage(corpus) !== manifest.sourceLineageChecksum ||
       canonical(corpus.seasons) !== canonical(request.heldOutSeasons) ||
       canonical(corpus.sourceAudit.map((row) => row.season).sort()) !==
@@ -196,7 +200,12 @@ async function readCorpora(
         if ((!training || key.split(":")[2] === "DST") && rows.get(key) !== expected)
           fail(dependency, "incompatible");
       }
-    if (verifyVectors) {
+    validatedCorpora.push([dependency, corpus]);
+  }
+  // A stale actual definition anywhere in the bundle invalidates its evidence before any
+  // candidate or retained benchmark vectors are read.
+  if (verifyVectors) {
+    for (const [dependency, corpus] of validatedCorpora) {
       const cache = createRosOutcomeCache({ directory });
       for (const row of corpus.forecasts)
         for (const [strategy, key] of [

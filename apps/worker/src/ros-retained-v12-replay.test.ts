@@ -163,8 +163,27 @@ function fixture(position: "WR" | "DST" = "WR") {
 }
 
 describe("closed retained-v12 historical replay", () => {
-  it("reads authentic pinned v12 bytes without exposing a writer or widening active v13 compatibility", async () => {
-    const { corpus } = fixture();
+  it("cannot use old benchmark actuals as current truth even when their physical forecasts and label keys are valid", async () => {
+    const prepared = fixture();
+    const corpus = Object.fromEntries(
+      Object.entries(prepared.corpus).filter(([key]) => key !== "actualDefinitionVersion"),
+    ) as unknown as RosHistoricalCorpus;
+    await expect(
+      replayRetainedV12RosHistoricalCorpus({
+        corpus,
+        cache: prepared.cache,
+        scoringProfile: profile,
+        expectedIdentity: retainedV12RosHistoricalCorpusIdentity(corpus),
+      }),
+    ).rejects.toThrow(/actual definition.*recapture/);
+    expect(prepared.cache.read).not.toHaveBeenCalled();
+    expect(prepared.cache.write).not.toHaveBeenCalled();
+  });
+
+  it("preserves unversioned pinned v12 archives without exposing a writer or widening active v13 compatibility", async () => {
+    const corpus = Object.fromEntries(
+      Object.entries(fixture().corpus).filter(([key]) => key !== "actualDefinitionVersion"),
+    ) as unknown as RosHistoricalCorpus;
     const directory = await mkdtemp(path.join(os.tmpdir(), "retained-v12-corpus-"));
     directories.push(directory);
     const serialized = canonical(corpus);

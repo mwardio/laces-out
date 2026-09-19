@@ -7,6 +7,7 @@ import { rosProfileDefinitionFromKey } from "@laces-out/projections";
 
 import type { FirstPartyRosMarginalAdmissionInput } from "./first-party-ros-marginal-admission.js";
 import { assertRosCacheHeadroom } from "./ros-cache-disk-space.js";
+import { ROS_HISTORICAL_ACTUAL_DEFINITION_VERSION } from "./ros-historical-corpus.js";
 import {
   createPinnedRosProfileValidationRunner,
   ROS_PROFILE_VALIDATION_MAXIMUM_DIAGNOSTIC_BYTES,
@@ -193,12 +194,16 @@ function assertReport(
     throw new RosMarginalDependencyError({ dependency, reason: report.reason });
   if (
     !object(report) ||
+    !Object.hasOwn(report, "actualDefinitionVersion") ||
+    report.actualDefinitionVersion !== ROS_HISTORICAL_ACTUAL_DEFINITION_VERSION ||
     report.outcomeCorpusIdentity !== corpusIdentity ||
     !object(report.identityAudit) ||
     report.identityAudit.scoringProfileKey !== scoringProfileKey ||
     !object(report.diagnostics)
   )
-    throw new Error("ROS marginal report omitted its pinned corpus, scoring or diagnostics");
+    throw new Error(
+      "ROS marginal report omitted its current actual definition, pinned corpus, scoring or diagnostics",
+    );
 }
 
 /** Exclusive content-addressed writes retain the exact bytes used by admission across restarts. */

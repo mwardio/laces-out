@@ -3,6 +3,7 @@ import type * as FileSystemPromises from "node:fs/promises";
 import { mkdtemp, readFile, readdir, rm, statfs, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { gzipSync } from "node:zlib";
 
 import {
   FIRST_PARTY_ROS_OUTCOME_SCHEMA_VERSION,
@@ -16,6 +17,9 @@ import type { RosCorpusLock } from "./ros-corpus-lock.js";
 import { ROS_CACHE_MINIMUM_FREE_BYTES } from "./ros-cache-disk-space.js";
 import {
   createRosHistoricalCorpusStore,
+  ROS_HISTORICAL_ACTUAL_DEFINITION_VERSION,
+  rosHistoricalCorpusIdentity,
+  snapshotRosHistoricalCorpus,
   type RosHistoricalCorpus,
 } from "./ros-historical-corpus.js";
 import { historicalCorpusFixture } from "./ros-historical-outcome.test-fixtures.js";
@@ -255,6 +259,44 @@ async function fixture(scenarioCount?: number) {
 }
 
 describe("durable shared ROS corpus orchestration", { timeout: 30_000 }, () => {
+  it("requires a new request and refuses to adopt unversioned labels before any missing vector is read", async () => {
+    const prepared = await fixture();
+    expect(prepared.request.protocol.actualDefinitionVersion).toBe(
+      ROS_HISTORICAL_ACTUAL_DEFINITION_VERSION,
+    );
+    const oldProtocol = Object.fromEntries(
+      Object.entries(prepared.request.protocol).filter(
+        ([key]) => key !== "actualDefinitionVersion",
+      ),
+    );
+    expect(prepared.request.identity).not.toBe(hash(JSON.stringify(oldProtocol)));
+    const written = await prepared.store.write(prepared.corpus);
+    const legacy = Object.fromEntries(
+      Object.entries(snapshotRosHistoricalCorpus(prepared.corpus)).filter(
+        ([key]) => key !== "actualDefinitionVersion",
+      ),
+    ) as unknown as RosHistoricalCorpus;
+    const identity = rosHistoricalCorpusIdentity(legacy);
+    const file = path.join(prepared.directory, "corpora", `${identity}.ros-corpus.json.gz`);
+    const bytes = gzipSync(JSON.stringify({ identity, corpus: legacy }));
+    await writeFile(file, bytes);
+    await expect(
+      adoptRosSharedCorpus({
+        directory: prepared.directory,
+        corpusIdentity: identity,
+        season: 2026,
+        lock: prepared.lock,
+        signal: input().signal,
+      }),
+    ).rejects.toThrow(/actual definition.*recapture/);
+    expect(prepared.runner).not.toHaveBeenCalled();
+    expect(await readFile(file)).toEqual(bytes);
+    expect((await prepared.store.read(written.identity)).state).toBe("hit");
+    await expect(
+      readFile(path.join(prepared.directory, "ready", `${prepared.request.identity}.json`)),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
   it("recovers only through its required ready corpus and never falls back to the build lock", async () => {
     const prepared = await fixture();
     expect(await readyRosSharedCorpusIdentity(prepared.directory, 2026, input().signal)).toBeNull();
@@ -320,7 +362,7 @@ describe("durable shared ROS corpus orchestration", { timeout: 30_000 }, () => {
     expect(current.identity).not.toBe(legacyIdentity);
   });
 
-  it("adopts original v5 physical corpus bytes unchanged and subsequent profiles must replay it", async () => {
+  it("adopts compatible v5 physical forecasts with explicit current actuals and later profiles replay them", async () => {
     const prepared = await fixture();
     await prepared.runner(input());
     const original: RosHistoricalCorpus = {

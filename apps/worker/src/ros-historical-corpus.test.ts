@@ -11,6 +11,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createRosHistoricalCorpusStore,
   rosHistoricalCorpusIdentity,
+  snapshotRosHistoricalCorpus,
   type RosHistoricalCorpus,
 } from "./ros-historical-corpus.js";
 
@@ -52,7 +53,31 @@ afterEach(async () => {
 });
 
 describe("shared historical evaluation corpus", () => {
-  it("reads original v5 corpus bytes without rewriting their provenance or identity", async () => {
+  it("preserves unversioned archives without promoting their observed labels or cache references", async () => {
+    const storage = await store();
+    const current = snapshotRosHistoricalCorpus(corpus());
+    const legacy = Object.fromEntries(
+      Object.entries(current).filter(([key]) => key !== "actualDefinitionVersion"),
+    ) as unknown as RosHistoricalCorpus;
+    const identity = rosHistoricalCorpusIdentity(legacy);
+    expect(identity).not.toBe(rosHistoricalCorpusIdentity(current));
+    expect(legacy.forecasts).toEqual(current.forecasts);
+    const file = path.join(storage.directory, `${identity}.ros-corpus.json.gz`);
+    const bytes = gzipSync(JSON.stringify({ identity, corpus: legacy }));
+    await writeFile(file, bytes);
+    expect(await storage.store.read(identity)).toEqual({ state: "hit", identity, corpus: legacy });
+    await expect(storage.store.write(legacy)).rejects.toThrow(/actual definition.*recapture/);
+    expect(await readFile(file)).toEqual(bytes);
+    expect(await readdir(storage.directory)).toEqual([`${identity}.ros-corpus.json.gz`]);
+    expect(() =>
+      rosHistoricalCorpusIdentity({
+        ...current,
+        actualDefinitionVersion: "invented",
+      } as unknown as RosHistoricalCorpus),
+    ).toThrow(/invalid_manifest/);
+  });
+
+  it("preserves compatible v5 policy provenance with explicitly current actual observations", async () => {
     const storage = await store();
     const current = corpus();
     const original: RosHistoricalCorpus = {

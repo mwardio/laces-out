@@ -7,11 +7,13 @@ import { rosScoringProfile } from "@laces-out/projections";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createRosMarginalProfileValidationRunner,
+  assertRosMarginalProfileEvidenceIdentity,
   ROS_MARGINAL_CORPUS_BUNDLE_VERSION,
   type RosMarginalCorpusBundle,
 } from "./ros-profile-marginal-evidence.js";
 import type { RosProfileValidationRunInput } from "./ros-profile-validation-runner.js";
 import { assertRosCacheHeadroom, RosCacheDiskSpaceError } from "./ros-cache-disk-space.js";
+import { ROS_HISTORICAL_ACTUAL_DEFINITION_VERSION } from "./ros-historical-corpus.js";
 
 vi.mock("./ros-cache-disk-space.js", async (importOriginal) => ({
   ...(await importOriginal<typeof RosCacheDiskSpaceModule>()),
@@ -40,6 +42,7 @@ afterEach(async () => {
 });
 function response(input: RosProfileValidationRunInput) {
   const report = {
+    actualDefinitionVersion: ROS_HISTORICAL_ACTUAL_DEFINITION_VERSION,
     outcomeCorpusIdentity: input.replayCorpusIdentity,
     identityAudit: { scoringProfileKey: input.scoringProfileKey },
     diagnostics: { replayModel: input.replayModel, replayScope: input.replayScope },
@@ -67,6 +70,41 @@ async function setup(overrides: Partial<RosMarginalCorpusBundle> = {}) {
 }
 
 describe("paired cache-only marginal profile evidence", () => {
+  it("rejects unversioned live and persisted report bytes without changing archived evidence", async () => {
+    const test = await setup();
+    const evidence = await test.runner(test.input);
+    const legacyReport = Object.fromEntries(
+      Object.entries(
+        response({ ...test.input, replayCorpusIdentity: bundle.previousCorpusIdentity }).report,
+      ).filter(([key]) => key !== "actualDefinitionVersion"),
+    );
+    const reportJson = JSON.stringify(legacyReport);
+    const reportChecksum = hash(reportJson);
+    const file = path.join(test.reportDirectory, `${reportChecksum}.json`);
+    await writeFile(file, reportJson);
+    expect(() =>
+      assertRosMarginalProfileEvidenceIdentity(
+        {
+          ...evidence,
+          previousReportJson: reportJson,
+          previousReportChecksum: reportChecksum,
+          provenance: { ...evidence.provenance, previousReportChecksum: reportChecksum },
+        },
+        test.input,
+      ),
+    ).toThrow(/current actual definition/);
+    test.reportRunner.mockImplementationOnce(async (input) => {
+      const responseValue = response(input);
+      const legacy = Object.fromEntries(
+        Object.entries(responseValue.report).filter(([key]) => key !== "actualDefinitionVersion"),
+      );
+      const reportJson = JSON.stringify(legacy);
+      return { ...responseValue, reportJson, reportChecksum: hash(reportJson) };
+    });
+    await expect(test.runner(test.input)).rejects.toThrow(/current actual definition/);
+    expect(await readFile(file, "utf8")).toBe(reportJson);
+  });
+
   it("stops without archiving or starting the next cohort when the disk reserve is unavailable", async () => {
     const test = await setup();
     vi.mocked(assertRosCacheHeadroom).mockRejectedValueOnce(

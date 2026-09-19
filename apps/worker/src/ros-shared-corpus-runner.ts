@@ -16,6 +16,8 @@ import type { RosCorpusLock } from "./ros-corpus-lock.js";
 import {
   createRosHistoricalCorpusStore,
   ROS_HISTORICAL_CORPUS_SCHEMA_VERSION,
+  ROS_HISTORICAL_ACTUAL_DEFINITION_VERSION,
+  requireCurrentRosHistoricalActualDefinition,
   type RosHistoricalCorpus,
 } from "./ros-historical-corpus.js";
 import {
@@ -49,6 +51,7 @@ export function rosSharedCorpusRequest(season: number) {
     version: "shared-historical-football-corpus-v3",
     buildProtocolVersion: ROS_HISTORICAL_CORPUS_PHYSICAL_PROTOCOL.version,
     corpusSchemaVersion: ROS_HISTORICAL_CORPUS_SCHEMA_VERSION,
+    actualDefinitionVersion: ROS_HISTORICAL_ACTUAL_DEFINITION_VERSION,
     ...ROS_HISTORICAL_CORPUS_RELEASE_THRESHOLDS,
     coverageThresholds: ROS_HISTORICAL_CORPUS_COVERAGE_THRESHOLDS,
     season,
@@ -76,6 +79,7 @@ interface ReadyPointer {
 }
 
 function assertCorpusScope(corpus: RosHistoricalCorpus, request: CorpusRequest): void {
+  requireCurrentRosHistoricalActualDefinition(corpus);
   const expected = request.protocol;
   if (
     !isCompatibleRosHistoricalCorpusBuildProtocol(corpus.buildProtocol) ||

@@ -142,6 +142,30 @@ async function setup() {
   return { directory, signal, options, assertHeld };
 }
 describe("shared marginal dependency bundle", () => {
+  it.each(["candidate", "previous", "training"] as const)(
+    "refuses unversioned %s actuals before restoring that dependency's vectors",
+    async (dependency) => {
+      const test = await setup();
+      const id =
+        dependency === "candidate"
+          ? bundle.candidateCorpusIdentity
+          : dependency === "previous"
+            ? bundle.previousCorpusIdentity
+            : bundle.intervalTrainingCorpusIdentity!;
+      const legacy = Object.fromEntries(
+        Object.entries(corpora.get(id)!).filter(([key]) => key !== "actualDefinitionVersion"),
+      ) as unknown as RosHistoricalCorpus;
+      corpora.set(id, legacy);
+      await expect(prepareRosMarginalCorpusBundle(test.options)).rejects.toMatchObject({
+        diagnostic: { dependency, reason: "incompatible" },
+      });
+      expect(cacheRead).not.toHaveBeenCalled();
+      await expect(readdir(path.join(test.directory, "marginal-bundles"))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    },
+  );
+
   it("prepares one fenced immutable bundle, verifies all three vector cohorts, then resolves without simulation", async () => {
     const { options, directory, signal, assertHeld } = await setup();
     const checksum = await prepareRosMarginalCorpusBundle(options);

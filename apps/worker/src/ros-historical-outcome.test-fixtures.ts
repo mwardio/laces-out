@@ -6,6 +6,7 @@ import {
 } from "@laces-out/projections";
 import {
   ROS_HISTORICAL_CORPUS_SCHEMA_VERSION,
+  ROS_HISTORICAL_ACTUAL_DEFINITION_VERSION,
   type RosHistoricalCorpus,
 } from "./ros-historical-corpus.js";
 import {
@@ -28,6 +29,7 @@ export function historicalCorpusFixture(): RosHistoricalCorpus {
   );
   return {
     schemaVersion: ROS_HISTORICAL_CORPUS_SCHEMA_VERSION,
+    actualDefinitionVersion: ROS_HISTORICAL_ACTUAL_DEFINITION_VERSION,
     buildProtocol: ROS_HISTORICAL_CORPUS_BUILD_PROTOCOL,
     modelVersion: FIRST_PARTY_ROS_MODEL_VERSION,
     outcomeSchemaVersion: FIRST_PARTY_ROS_OUTCOME_SCHEMA_VERSION,

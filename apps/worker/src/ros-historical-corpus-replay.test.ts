@@ -122,6 +122,153 @@ afterEach(async () => {
 });
 
 describe("cache-only historical model validation", () => {
+  it("rejects unversioned labels even when every required key exists, before reading cached forecasts", async () => {
+    const original = historicalCorpusFixture();
+    const corpus = Object.fromEntries(
+      Object.entries(original).filter(([key]) => key !== "actualDefinitionVersion"),
+    ) as unknown as RosHistoricalCorpus;
+    const cache = {
+      read: vi.fn(async () => ({ state: "missing" as const })),
+      write: vi.fn(async () => {
+        throw new Error("No writes");
+      }),
+    };
+    await expect(
+      replayRosHistoricalCorpus({
+        corpus,
+        cache,
+        scoringProfile: historicalOutcomeInputFixture().scoringProfile,
+      }),
+    ).rejects.toThrow(/actual definition.*recapture/);
+    expect(cache.read).not.toHaveBeenCalled();
+    expect(cache.write).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [
+      "missing passing stat on a receiver",
+      { receptions: 1 },
+      { statId: "passing_yards", points: 0.04 },
+      "missing=passing_yards",
+      "WR",
+    ],
+    [
+      "missing rare event",
+      { receptions: 1 },
+      { statId: "defensive_two_point_returns", points: 2 },
+      "missing=defensive_two_point_returns",
+      "DST",
+    ],
+    [
+      "invalid rare event",
+      { defensive_two_point_returns: -1 },
+      { statId: "defensive_two_point_returns", points: 2 },
+      "invalid=defensive_two_point_returns",
+      "DST",
+    ],
+  ] as const)(
+    "preflights every row for %s before any vector read",
+    async (_name, components, rule, message, position) => {
+      const original = historicalCorpusFixture();
+      const first = {
+        ...original.forecasts[0]!,
+        forecast: { ...original.forecasts[0]!.forecast, position },
+      };
+      const corpus: RosHistoricalCorpus = {
+        ...original,
+        options: { ...original.options, positions: [position] },
+        forecasts: [
+          { ...first, actualComponents: { [rule.statId]: 0 } },
+          {
+            ...first,
+            forecast: { ...first.forecast, playerId: "second-player" },
+            actualComponents: components,
+          },
+        ],
+      };
+      const cache = {
+        read: vi.fn(async () => ({ state: "missing" as const })),
+        write: vi.fn(async () => {
+          throw new Error("No writes");
+        }),
+      };
+      await expect(
+        replayRosHistoricalCorpus({
+          corpus,
+          cache,
+          scoringProfile: { id: "exact", rules: [rule] },
+        }),
+      ).rejects.toThrow(message);
+      expect(cache.read).not.toHaveBeenCalled();
+    },
+  );
+
+  it("ignores offense and zero-weight missing stats on DST while requiring scored observed DST stats", async () => {
+    const original = historicalCorpusFixture();
+    const corpus: RosHistoricalCorpus = {
+      ...original,
+      options: { ...original.options, positions: ["DST"] },
+      forecasts: [
+        {
+          ...original.forecasts[0]!,
+          forecast: { ...original.forecasts[0]!.forecast, position: "DST" },
+          actualComponents: { defensive_two_point_returns: 0 },
+        },
+      ],
+    };
+    const cache = {
+      read: vi.fn(async () => {
+        throw new Error("Actual preflight passed");
+      }),
+      write: vi.fn(async () => {
+        throw new Error("No writes");
+      }),
+    };
+    await expect(
+      replayRosHistoricalCorpus({
+        corpus,
+        cache,
+        scoringProfile: {
+          id: "dst",
+          rules: [
+            { statId: "passing_yards", points: 1 },
+            { statId: "one_point_safeties", points: 0 },
+            { statId: "defensive_two_point_returns", points: 2 },
+          ],
+        },
+      }),
+    ).rejects.toThrow("Actual preflight passed");
+    expect(cache.read).toHaveBeenCalledOnce();
+  });
+
+  it("allows a structural empty schedule but does not treat unobserved scheduled games as zero", async () => {
+    const original = historicalCorpusFixture();
+    const cache = {
+      read: vi.fn(async () => {
+        throw new Error("Actual preflight passed");
+      }),
+      write: vi.fn(async () => {
+        throw new Error("No writes");
+      }),
+    };
+    const replay = (scheduledGames: number, actualComponents: Record<string, number> = {}) =>
+      replayRosHistoricalCorpus({
+        corpus: {
+          ...original,
+          forecasts: [
+            { ...original.forecasts[0]!, actualComponents, scheduledGames, actualGames: 0 },
+          ],
+        },
+        cache,
+        scoringProfile: historicalOutcomeInputFixture().scoringProfile,
+      });
+    await expect(replay(1)).rejects.toThrow(/actual components unavailable/);
+    await expect(replay(0, { receptions: 1 })).rejects.toThrow(/contradict zero observed games/);
+    expect(cache.read).not.toHaveBeenCalled();
+    await expect(replay(0)).rejects.toThrow("Actual preflight passed");
+    expect(cache.read).toHaveBeenCalledOnce();
+  });
+
   it("rejects stale protocol or weakened gates before reading any vectors", async () => {
     const original = historicalCorpusFixture();
     const cache = {
@@ -156,7 +303,7 @@ describe("cache-only historical model validation", () => {
     expect(cache.write).not.toHaveBeenCalled();
   });
 
-  it("replays a literal v6 corpus under v7 for new exact rules without rebuilding football", async () => {
+  it("replays v6 physical forecasts with explicit current actuals under v7 without rebuilding football", async () => {
     // The existing two-candidate fixture setup is unchanged; replay must make no additional
     // simulation calls or cache writes, and preserve the original v6 manifest bytes.
     const prepared = await preparedCorpus(1, true);
@@ -292,7 +439,7 @@ describe("cache-only historical model validation", () => {
     expect(result.report.playersPerPosition).toBe(8);
   });
 
-  it("rejects a valid cache reference belonging to another forecast and handles zero-appearance outcomes", async () => {
+  it("rejects another forecast's cache reference and requires explicit zero-appearance observations", async () => {
     const prepared = await preparedCorpus(2);
     const wrong: RosHistoricalCorpus = {
       ...prepared.corpus,
@@ -314,9 +461,24 @@ describe("cache-only historical model validation", () => {
       ...prepared.corpus,
       forecasts: [{ ...prepared.corpus.forecasts[0]!, actualComponents: {}, actualGames: 0 }],
     };
+    await expect(
+      replayRosHistoricalCorpus({
+        ...prepared,
+        corpus: absent,
+        scoringProfile: prepared.inputs[0]!.scoringProfile,
+      }),
+    ).rejects.toThrow(/actual components unavailable/);
     const result = await replayRosHistoricalCorpus({
       ...prepared,
-      corpus: absent,
+      corpus: {
+        ...absent,
+        forecasts: [
+          {
+            ...absent.forecasts[0]!,
+            actualComponents: { receptions: 0, receiving_yards: 0, receiving_touchdowns: 0 },
+          },
+        ],
+      },
       scoringProfile: prepared.inputs[0]!.scoringProfile,
     });
     expect(result.heldOutSeasons[0]!.forecasts[0]!.actualPoints).toBe(0);

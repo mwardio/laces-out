@@ -32,6 +32,9 @@ import {
 } from "./ros-historical-corpus-protocol.js";
 
 export const ROS_HISTORICAL_CORPUS_SCHEMA_VERSION = "ros-historical-corpus-v2";
+// Actual observation/completeness semantics are independent of simulated football and its cache.
+// This does not certify provider-specific scoring definitions (for example points allowed).
+export const ROS_HISTORICAL_ACTUAL_DEFINITION_VERSION = "observed-weekly-components-complete-v1";
 // The locked 6,000-forecast scope can carry ~150 actual component keys per forecast (~30 MiB
 // before forecast metadata). Bound the complete legitimate manifest, not just small fixtures.
 export const ROS_HISTORICAL_CORPUS_MAXIMUM_BYTES = 64 * 1_024 * 1_024;
@@ -55,6 +58,8 @@ export interface RosHistoricalCorpusForecast {
 /** An immutable evaluation manifest, not an admission artifact and never scored forecasts. */
 export interface RosHistoricalCorpus {
   readonly schemaVersion: typeof ROS_HISTORICAL_CORPUS_SCHEMA_VERSION;
+  // Absent only on retained archives. Never infer current provenance from component key presence.
+  readonly actualDefinitionVersion?: typeof ROS_HISTORICAL_ACTUAL_DEFINITION_VERSION;
   readonly buildProtocol:
     RosHistoricalCorpusBuildProvenance | RetainedV12RosHistoricalCorpusBuildProvenance;
   readonly modelVersion: string;
@@ -278,6 +283,8 @@ function validateCorpus(value: unknown, retainedV12 = false): asserts value is R
   if (
     !object(value) ||
     value.schemaVersion !== ROS_HISTORICAL_CORPUS_SCHEMA_VERSION ||
+    (Object.hasOwn(value, "actualDefinitionVersion") &&
+      value.actualDefinitionVersion !== ROS_HISTORICAL_ACTUAL_DEFINITION_VERSION) ||
     !(retainedV12
       ? isRetainedV12RosHistoricalCorpusBuildProtocol(value.buildProtocol)
       : isCompatibleRosHistoricalCorpusBuildProtocol(value.buildProtocol)) ||
@@ -443,6 +450,17 @@ function validateCorpus(value: unknown, retainedV12 = false): asserts value is R
   }
 }
 
+/** Legacy bytes remain readable, but cannot supply current observed-outcome evidence. */
+export function requireCurrentRosHistoricalActualDefinition(corpus: RosHistoricalCorpus): void {
+  if (
+    !Object.hasOwn(corpus, "actualDefinitionVersion") ||
+    corpus.actualDefinitionVersion !== ROS_HISTORICAL_ACTUAL_DEFINITION_VERSION
+  )
+    throw new TypeError(
+      "ROS historical actual definition is missing or unsupported; corrected-source recapture required",
+    );
+}
+
 /** Canonical content identity includes source/model/config/observed outcomes and all cache refs. */
 export function rosHistoricalCorpusIdentity(corpus: RosHistoricalCorpus): string {
   validateCorpus(corpus);
@@ -574,6 +592,7 @@ function createCorpusStore(
     const { signal } = writeOptions;
     signal?.throwIfAborted();
     validateCorpus(corpus);
+    requireCurrentRosHistoricalActualDefinition(corpus);
     const serialized = canonical(corpus, maximumBytes);
     const identity = checksum(serialized);
     const envelope = `{"identity":${JSON.stringify(identity)},"corpus":${serialized}}`;

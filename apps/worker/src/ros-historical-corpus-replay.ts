@@ -2,6 +2,9 @@ import {
   FIRST_PARTY_ROS_CONVERGENCE_REFERENCE_SCENARIOS,
   FIRST_PARTY_ROS_DEFAULT_SCENARIOS,
   evaluateFirstPartyRosConvergence,
+  firstPartyProjectionComponentsForPosition,
+  firstPartyTeamDefenseProjectionComponents,
+  observedScoringComponentIssues,
   projectionScoringProfileKey,
   rosProfileDefinitionFromKey,
   scoreProjectionStatComponents,
@@ -23,6 +26,7 @@ import {
   snapshotRosHistoricalCorpus,
   snapshotRetainedV12RosHistoricalCorpus,
   retainedV12RosHistoricalCorpusIdentity,
+  requireCurrentRosHistoricalActualDefinition,
   type RosHistoricalCorpus,
   type RosHistoricalCorpusForecast,
 } from "./ros-historical-corpus.js";
@@ -31,6 +35,38 @@ import {
   scoreRetainedV12CachedRosHistoricalOutcome,
 } from "./ros-historical-outcome-replay.js";
 import type { RosOutcomeCache } from "./ros-outcome-cache.js";
+
+const PLAYER_ACTUAL_STAT_IDS = [
+  ...new Set(
+    (["QB", "RB", "WR", "TE", "K"] as const).flatMap(firstPartyProjectionComponentsForPosition),
+  ),
+];
+
+function observedPoints(
+  row: RosHistoricalCorpusForecast,
+  profile: ProjectionScoringProfile,
+): number {
+  // A schedule with no games has no scoring opportunities. No appearances during a scheduled
+  // window alone is not evidence of zero stats: that row still needs explicit observations.
+  if (row.actualGames === 0 && Object.values(row.actualComponents).some((value) => value !== 0))
+    throw new TypeError("ROS historical actual components contradict zero observed games");
+  if (row.scheduledGames === 0 && row.actualGames === 0) return 0;
+  const issues = observedScoringComponentIssues({
+    components: row.actualComponents,
+    profile,
+    applicableStatIds:
+      row.forecast.position === "DST"
+        ? firstPartyTeamDefenseProjectionComponents()
+        : PLAYER_ACTUAL_STAT_IDS,
+  });
+  if (issues.missingComponents.length > 0 || issues.invalidComponents.length > 0)
+    throw new TypeError(
+      `ROS historical actual components unavailable for ${row.forecast.playerId} at ${row.forecast.forecastSeason}:${row.forecast.asOfWeek}; missing=${issues.missingComponents.join(",")}; invalid=${issues.invalidComponents.join(",")}`,
+    );
+  const points = scoreProjectionStatComponents(row.actualComponents, profile);
+  if (!Number.isFinite(points)) throw new RangeError("ROS observed outcome score overflow");
+  return points;
+}
 
 function stratum(row: RosHistoricalCorpusForecast): string {
   const forecast = row.forecast;
@@ -78,8 +114,12 @@ async function replayCorpus(
   signal?.throwIfAborted();
   // Both public entry points already own a bounded snapshot before the first cache await.
   const corpus = input.corpus;
+  requireCurrentRosHistoricalActualDefinition(corpus);
   const definition = rosProfileDefinitionFromKey(projectionScoringProfileKey(input.scoringProfile));
   const scoringProfile = definition.profile;
+  // Validate every label before the first cache read, so a late missing component cannot be
+  // silently turned into zero or discovered only after repricing the entire frozen ensemble.
+  const actualPoints = corpus.forecasts.map((row) => observedPoints(row, scoringProfile));
   const score = (
     row: RosHistoricalCorpusForecast,
     strategy: "contextual" | "availability-aware-recency",
@@ -180,8 +220,6 @@ async function replayCorpus(
   const forecasts = corpus.forecasts.map((row, index): FirstPartyRosHeldOutForecast => {
     const score = scores[index]!;
     const evidence = convergence.get(stratum(row))!;
-    const actualPoints = scoreProjectionStatComponents(row.actualComponents, scoringProfile);
-    if (!Number.isFinite(actualPoints)) throw new RangeError("ROS observed outcome score overflow");
     return {
       ...row.forecast,
       scoringProfileKey: definition.scoringProfileKey,
@@ -197,7 +235,7 @@ async function replayCorpus(
         p50Points: score.recency.p50Points,
         p85Points: score.recency.p85Points,
       },
-      actualPoints,
+      actualPoints: actualPoints[index]!,
       evidence: {
         coverage: row.coverage,
         availability: {
