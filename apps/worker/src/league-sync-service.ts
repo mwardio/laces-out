@@ -160,6 +160,9 @@ function abortIfCancelled(context: WorkerJobContext): void {
 }
 
 function failureCode(error: unknown): string {
+  if (error instanceof YahooSyncError && error.leagueFailure !== null) {
+    return error.leagueFailure.code;
+  }
   if (error !== null && typeof error === "object" && "code" in error) {
     const code: unknown = error.code;
     if (typeof code === "string" && /^[A-Za-z0-9_-]{1,64}$/u.test(code)) return code;
@@ -436,19 +439,28 @@ export class LeagueSyncService implements LeagueSyncServicePort {
       }
       const yahooCircuitAlreadyOpened =
         target.provider === "yahoo" && error instanceof YahooSyncError && error.cooldown;
+      const yahooLeagueFailureRecorded =
+        target.provider === "yahoo" &&
+        error instanceof YahooSyncError &&
+        error.leagueFailure?.code === "INCOMPLETE_ROSTER" &&
+        error.leagueFailure.externalLeagueKey === target.externalKey;
       // YahooSyncService reports `cooldown` only after it has durably opened or observed the shared
       // connection circuit. Writing the generic failure too would immediately change health to
       // `degraded`, excluding the connection after expiry and preventing sync/draft self-healing.
-      const circuitFailure = yahooCircuitAlreadyOpened
-        ? { state: "open" as const, consecutiveFailures: target.consecutiveFailures }
-        : await this.#circuit.recordFailure({
-            provider: target.provider === "espn" ? "espn" : "yahoo",
-            connectionId,
-            leagueSeasonId: job.leagueSeasonId,
-            at: this.#now(),
-            errorCode,
-            errorDetail,
-          });
+      // A recorded roster-data failure is also already durable, but only for this league. Keep
+      // the queue's bounded retries without opening a circuit for every league on that login.
+      const circuitFailure = yahooLeagueFailureRecorded
+        ? { state: "closed" as const, consecutiveFailures: target.consecutiveFailures }
+        : yahooCircuitAlreadyOpened
+          ? { state: "open" as const, consecutiveFailures: target.consecutiveFailures }
+          : await this.#circuit.recordFailure({
+              provider: target.provider === "espn" ? "espn" : "yahoo",
+              connectionId,
+              leagueSeasonId: job.leagueSeasonId,
+              at: this.#now(),
+              errorCode,
+              errorDetail,
+            });
       this.#emit({
         event: "sync-failed",
         provider: target.provider === "espn" ? "espn" : "yahoo",
