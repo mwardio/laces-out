@@ -103,6 +103,42 @@ function espnReceipt(overrides: Partial<EspnSessionSyncReceipt> = {}): EspnSessi
 }
 
 describe("LeagueSyncService", () => {
+  it("retries a durably recorded Yahoo roster failure without poisoning another league's connection", async () => {
+    const failure = new YahooSyncError("PROVIDER_READ_FAILED", "Incomplete roster", {
+      retryable: true,
+      leagueFailure: {
+        externalLeagueKey: "nfl.l.12345",
+        season: 2026,
+        code: "INCOMPLETE_ROSTER",
+        message: "Incomplete roster",
+        failedAt: now.toISOString(),
+      },
+    });
+    const circuit = circuitStore();
+    const observe = vi.fn<(event: LeagueSyncOperationalEvent) => void>();
+    const syncLeague = vi.fn().mockRejectedValueOnce(failure).mockResolvedValueOnce(yahooReceipt());
+    const service = new LeagueSyncService({
+      targets: reader(),
+      yahooSync: { syncLeague } as never,
+      circuit,
+      observe,
+      now: () => now,
+    });
+    await expect(service.runLeagueSync(job(), context())).rejects.toBe(failure);
+    expect(circuit.recordFailure).not.toHaveBeenCalled();
+    expect(observe).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: "sync-failed",
+        provider: "yahoo",
+        circuitState: "closed",
+      }),
+    );
+    await expect(
+      service.runLeagueSync(job({ leagueSeasonId: "league-season-2" }), context()),
+    ).resolves.toMatchObject({ state: "synced" });
+    expect(syncLeague).toHaveBeenCalledTimes(2);
+    expect(circuit.recordSuccess).toHaveBeenCalledOnce();
+  });
   it("refreshes a manual Yahoo league through the shared service without an automation flag", async () => {
     const syncLeague = vi.fn(() =>
       Promise.resolve({ syncRunId: "run-1", state: "accepted" as const, recordsWritten: 42 }),

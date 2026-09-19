@@ -11,6 +11,7 @@ import {
   leagueMemberships,
   leagues,
   leagueSeasons,
+  leagueSyncExclusions,
   leagueSupplementalSnapshots,
   providerConnections,
   providerLeagueLinks,
@@ -674,6 +675,173 @@ describe.skipIf(!dockerAvailable())("Provider snapshot recurrence against Postgr
       .from(leagueSeasons)
       .where(eq(leagueSeasons.id, s.leagueSeasonId));
     expect(advanced?.settings.draftStatus).toBe("postdraft");
+  });
+
+  it("persists isolated Yahoo roster failures across status reloads and clears only the recovered league", async () => {
+    const s = await scenario("yahoo");
+    const other = await scenario("yahoo");
+    const repository = new DrizzleYahooSyncRepository(handle.db, () => capture(10));
+    const original = await repository.persistBundle(
+      s.userId,
+      s.connectionId,
+      yahooBundle(s.externalKey, "a", 0),
+    );
+    await setDemand(s.leagueSeasonId, null);
+    const failure = {
+      externalLeagueKey: s.externalKey,
+      season: SEASON,
+      code: "INCOMPLETE_ROSTER" as const,
+      message: "private-error-must-not-be-persisted",
+      failedAt: capture(1).toISOString(),
+    };
+    await repository.markLeagueFailure(s.userId, s.connectionId, failure);
+    await repository.markLeagueFailure(s.userId, s.connectionId, {
+      ...failure,
+      failedAt: capture(2).toISOString(),
+    });
+    await repository.markLeagueFailure(s.userId, s.connectionId, {
+      ...failure,
+      failedAt: capture(2).toISOString(),
+    });
+    await repository.markLeagueFailure(s.userId, s.connectionId, failure);
+    const unknownKey = "449.l.123456789";
+    await repository.markLeagueFailure(s.userId, s.connectionId, {
+      ...failure,
+      externalLeagueKey: unknownKey,
+    });
+    await repository.markDiscoverySuccess(s.userId, s.connectionId, capture(3));
+    const statuses = await new DrizzleYahooSyncRepository(handle.db).listConnectionStatus(s.userId);
+    expect(statuses).toHaveLength(1);
+    expect(statuses[0]).toMatchObject({ health: "healthy", lastErrorCode: null });
+    expect(statuses[0]?.leagueFailures.map((entry) => entry.externalLeagueKey).sort()).toEqual(
+      [s.externalKey, unknownKey].sort(),
+    );
+    expect(JSON.stringify(statuses)).not.toContain("private-error-must-not-be-persisted");
+    const [link] = await handle.db
+      .select()
+      .from(providerLeagueLinks)
+      .where(
+        and(
+          eq(providerLeagueLinks.connectionId, s.connectionId),
+          eq(providerLeagueLinks.leagueSeasonId, s.leagueSeasonId),
+        ),
+      );
+    expect(link).toMatchObject({
+      lastErrorCode: "INCOMPLETE_ROSTER",
+      consecutiveFailures: 2,
+      lastSyncedAt: capture(0),
+    });
+    const healthRuns = await handle.db
+      .select()
+      .from(syncRuns)
+      .where(
+        and(
+          eq(syncRuns.connectionId, s.connectionId),
+          eq(syncRuns.kind, "yahoo-league-data-health"),
+        ),
+      );
+    expect(healthRuns).toHaveLength(2);
+    expect(healthRuns.every((run) => run.leagueSeasonId === null)).toBe(true);
+    expect(healthRuns.every((run) => run.recordsWritten === 0 && run.state === "failed")).toBe(
+      true,
+    );
+    expect(
+      healthRuns.find((run) => run.errorDetail?.includes(unknownKey))?.leagueSeasonId,
+    ).toBeNull();
+    expect(await demandFor(s.leagueSeasonId)).toBeNull();
+    const snapshots = await handle.db
+      .select({ id: rosterSnapshots.id })
+      .from(rosterSnapshots)
+      .innerJoin(fantasyTeams, eq(fantasyTeams.id, rosterSnapshots.teamId))
+      .where(eq(fantasyTeams.leagueSeasonId, s.leagueSeasonId));
+    expect(snapshots).toHaveLength(2);
+
+    // A stranger cannot publish an error into this user's connection or status stream.
+    await expect(
+      repository.markLeagueFailure(other.userId, s.connectionId, failure),
+    ).rejects.toMatchObject({ code: "CONNECTION_NOT_FOUND" });
+    expect((await repository.listConnectionStatus(other.userId))[0]?.leagueFailures).toEqual([]);
+    // An earlier successful capture cannot erase a later failed observation.
+    await repository.persistBundle(s.userId, s.connectionId, yahooBundle(s.externalKey, "a", 1));
+    expect((await repository.listConnectionStatus(s.userId))[0]?.leagueFailures).toHaveLength(2);
+    const recovered = await repository.persistBundle(
+      s.userId,
+      s.connectionId,
+      yahooBundle(s.externalKey, "a", 4),
+    );
+    expect(recovered).toMatchObject({ state: "unchanged", syncRunId: original.syncRunId });
+    expect(
+      (await repository.listConnectionStatus(s.userId))[0]?.leagueFailures.map(
+        (entry) => entry.externalLeagueKey,
+      ),
+    ).toEqual([unknownKey]);
+    const [cleared] = await handle.db
+      .select()
+      .from(providerLeagueLinks)
+      .where(
+        and(
+          eq(providerLeagueLinks.connectionId, s.connectionId),
+          eq(providerLeagueLinks.leagueSeasonId, s.leagueSeasonId),
+        ),
+      );
+    expect(cleared).toMatchObject({
+      lastErrorCode: null,
+      lastErrorAt: null,
+      lastErrorDetail: null,
+      consecutiveFailures: 0,
+    });
+    await repository.markLeagueFailure(s.userId, s.connectionId, failure);
+    expect(
+      (await repository.listConnectionStatus(s.userId))[0]?.leagueFailures.map(
+        (entry) => entry.externalLeagueKey,
+      ),
+    ).toEqual([unknownKey]);
+    await repository.markLeagueFailure(s.userId, s.connectionId, {
+      ...failure,
+      failedAt: capture(4).toISOString(),
+    });
+    expect(
+      (await repository.listConnectionStatus(s.userId))[0]?.leagueFailures.map(
+        (entry) => entry.externalLeagueKey,
+      ),
+    ).toEqual([unknownKey]);
+    expect(await demandFor(s.leagueSeasonId)).toBeNull();
+    // A delayed first valid import may create its link while a newer failed capture remains in
+    // the health registry. An older failure must not overwrite that independent current record.
+    const earlyImport = await repository.persistBundle(
+      s.userId,
+      s.connectionId,
+      yahooBundle(unknownKey, "a", 0),
+    );
+    await repository.markLeagueFailure(s.userId, s.connectionId, {
+      ...failure,
+      externalLeagueKey: unknownKey,
+      failedAt: new Date(capture(0).getTime() + 30_000).toISOString(),
+    });
+    const [earlyLink] = await handle.db
+      .select()
+      .from(providerLeagueLinks)
+      .where(
+        and(
+          eq(providerLeagueLinks.connectionId, s.connectionId),
+          eq(providerLeagueLinks.leagueSeasonId, earlyImport.leagueSeasonId),
+        ),
+      );
+    expect(earlyLink).toMatchObject({
+      lastErrorCode: null,
+      lastErrorAt: null,
+      consecutiveFailures: 0,
+    });
+    await handle.db.insert(leagueSyncExclusions).values({
+      userId: s.userId,
+      provider: "yahoo",
+      externalKey: unknownKey,
+      season: SEASON,
+    });
+    expect((await repository.listConnectionStatus(s.userId))[0]?.leagueFailures).toEqual([]);
+    await repository.clearLeagueExclusions(s.userId);
+    await repository.persistBundle(s.userId, s.connectionId, yahooBundle(unknownKey, "a", 5));
+    expect((await repository.listConnectionStatus(s.userId))[0]?.leagueFailures).toEqual([]);
   });
 
   it("preserves fractional provider rates and repairs only verified legacy rounding", async () => {

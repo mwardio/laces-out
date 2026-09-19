@@ -31,7 +31,7 @@ import {
   type ConnectionHealth,
   type Database,
 } from "@laces-out/db";
-import { and, asc, desc, eq, inArray, isNull, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, lt, lte, or, sql } from "drizzle-orm";
 
 import { YahooConnectionError } from "./yahoo-connection.js";
 
@@ -39,6 +39,9 @@ const DEFAULT_PAGE_SIZE = 25;
 const MAX_DISCOVERY_PAGES = 40;
 const MAX_DISCOVERED_LEAGUES = 500;
 const DEFAULT_THROTTLE_RETRY_AFTER_MS = 60 * 1_000;
+const LEAGUE_DATA_HEALTH_KIND = "yahoo-league-data-health";
+const INCOMPLETE_ROSTER_MESSAGE =
+  "Yahoo returned incomplete roster data. This league's stored rosters were left unchanged.";
 
 /** Yahoo rounds these yardage categories to whole scoring units when fractional points are off. */
 const YAHOO_FRACTIONAL_YARDAGE_STAT_IDS = new Set(["4", "9", "12", "14", "84"]);
@@ -88,6 +91,15 @@ export interface YahooConnectionStatus {
   readonly lastErrorCode: string | null;
   readonly lastErrorAt: string | null;
   readonly leagues: readonly YahooConnectionLeagueStatus[];
+  readonly leagueFailures: readonly YahooLeagueSyncFailure[];
+}
+
+export interface YahooLeagueSyncFailure {
+  readonly externalLeagueKey: string;
+  readonly season: number | null;
+  readonly code: "INCOMPLETE_ROSTER";
+  readonly message: string;
+  readonly failedAt: string;
 }
 
 export interface YahooSyncReceipt {
@@ -105,6 +117,7 @@ export interface YahooDiscoveryResult {
   readonly connectionId: string;
   readonly discovered: readonly ExternalLeagueRef[];
   readonly syncs: readonly YahooSyncReceipt[];
+  readonly failures: readonly YahooLeagueSyncFailure[];
   readonly generatedAt: string;
 }
 
@@ -123,6 +136,8 @@ export class YahooSyncError extends Error {
   readonly retryAfterMs: number | null;
   readonly throttled: boolean;
   readonly cooldown: boolean;
+  /** Present only after this league's data failure has been durably recorded. */
+  readonly leagueFailure: YahooLeagueSyncFailure | null;
 
   constructor(
     code: YahooSyncError["code"],
@@ -132,6 +147,7 @@ export class YahooSyncError extends Error {
       readonly retryAfterMs?: number | null;
       readonly throttled?: boolean;
       readonly cooldown?: boolean;
+      readonly leagueFailure?: YahooLeagueSyncFailure;
     } = {},
   ) {
     super(message);
@@ -141,6 +157,7 @@ export class YahooSyncError extends Error {
     this.retryAfterMs = options.retryAfterMs ?? null;
     this.throttled = options.throttled ?? false;
     this.cooldown = options.cooldown ?? false;
+    this.leagueFailure = options.leagueFailure ?? null;
     this.statusCode =
       code === "CONNECTION_NOT_FOUND"
         ? 404
@@ -194,6 +211,11 @@ export interface YahooSyncRepository {
     options?: { readonly cooldownUntil: Date },
   ): Promise<void>;
   markDiscoverySuccess(userId: string, connectionId: string, at: Date): Promise<void>;
+  markLeagueFailure(
+    userId: string,
+    connectionId: string,
+    failure: YahooLeagueSyncFailure,
+  ): Promise<void>;
 }
 
 export interface YahooAccessTokenPort {
@@ -250,6 +272,34 @@ function plainRecord(value: unknown): Record<string, unknown> {
   return JSON.parse(JSON.stringify(value)) as Record<string, unknown>;
 }
 
+function leagueDataHealthKey(connectionId: string, leagueKey: string): string {
+  return `${LEAGUE_DATA_HEALTH_KIND}:${connectionId}:${leagueKey}`;
+}
+
+function storedLeagueFailure(detail: string | null, at: Date | null): YahooLeagueSyncFailure {
+  const identity: unknown = detail ? JSON.parse(detail) : null;
+  if (
+    typeof identity !== "object" ||
+    identity === null ||
+    !("externalLeagueKey" in identity) ||
+    typeof identity.externalLeagueKey !== "string" ||
+    !/^(?:[a-z][a-z0-9-]{0,15}|[0-9]{1,10})\.l\.[0-9]{1,20}$/u.test(identity.externalLeagueKey) ||
+    !("season" in identity) ||
+    (identity.season !== null &&
+      (typeof identity.season !== "number" || !Number.isSafeInteger(identity.season))) ||
+    at === null
+  ) {
+    throw new Error("Yahoo league data health record has invalid identity metadata");
+  }
+  return {
+    externalLeagueKey: identity.externalLeagueKey,
+    season: identity.season,
+    code: "INCOMPLETE_ROSTER",
+    message: INCOMPLETE_ROSTER_MESSAGE,
+    failedAt: at.toISOString(),
+  };
+}
+
 function isUniqueViolation(error: unknown): boolean {
   return (
     typeof error === "object" &&
@@ -277,11 +327,9 @@ function boundedRetryAfterMs(value: number | null | undefined): number | null {
 function clientFacingSyncError(error: unknown): YahooSyncError {
   if (error instanceof YahooSyncError) return error;
   if (error instanceof YahooXmlError && error.code === "INCOMPLETE_ROSTER") {
-    return new YahooSyncError(
-      "PROVIDER_READ_FAILED",
-      "Yahoo returned incomplete roster data. This league's stored rosters were left unchanged.",
-      { retryable: true },
-    );
+    return new YahooSyncError("PROVIDER_READ_FAILED", INCOMPLETE_ROSTER_MESSAGE, {
+      retryable: true,
+    });
   }
   if (error instanceof YahooReadClientError) {
     const throttled = error.code === "RATE_LIMITED";
@@ -418,6 +466,42 @@ export class DrizzleYahooSyncRepository implements YahooSyncRepository {
       });
       links.set(row.connectionId, list);
     }
+    const failureRows = await this.#database
+      .select({
+        connectionId: syncRuns.connectionId,
+        detail: syncRuns.errorDetail,
+        failedAt: syncRuns.finishedAt,
+      })
+      .from(syncRuns)
+      .where(
+        and(
+          inArray(
+            syncRuns.connectionId,
+            connectionRows.map((row) => row.id),
+          ),
+          eq(syncRuns.kind, LEAGUE_DATA_HEALTH_KIND),
+          eq(syncRuns.state, "failed"),
+          eq(syncRuns.errorCode, "INCOMPLETE_ROSTER"),
+        ),
+      )
+      .orderBy(desc(syncRuns.finishedAt), asc(syncRuns.id));
+    const failures = new Map<string, YahooLeagueSyncFailure[]>();
+    const exclusions = failureRows.length > 0 ? await this.listLeagueExclusions(userId) : [];
+    for (const row of failureRows) {
+      if (row.connectionId === null) continue;
+      const failure = storedLeagueFailure(row.detail, row.failedAt);
+      if (
+        exclusions.some(
+          (entry) =>
+            entry.externalKey === failure.externalLeagueKey &&
+            (failure.season === null || entry.season === failure.season),
+        )
+      )
+        continue;
+      const list = failures.get(row.connectionId) ?? [];
+      list.push(failure);
+      failures.set(row.connectionId, list);
+    }
     return connectionRows.map((row) => ({
       connectionId: row.id,
       displayName: row.displayName ?? "Yahoo Fantasy",
@@ -427,6 +511,7 @@ export class DrizzleYahooSyncRepository implements YahooSyncRepository {
       lastErrorCode: row.lastErrorCode,
       lastErrorAt: row.lastErrorAt?.toISOString() ?? null,
       leagues: links.get(row.id) ?? [],
+      leagueFailures: failures.get(row.id) ?? [],
     }));
   }
 
@@ -581,6 +666,108 @@ export class DrizzleYahooSyncRepository implements YahooSyncRepository {
       );
   }
 
+  async markLeagueFailure(
+    userId: string,
+    connectionId: string,
+    failure: YahooLeagueSyncFailure,
+  ): Promise<void> {
+    const at = new Date(failure.failedAt);
+    const safeFailure = storedLeagueFailure(
+      JSON.stringify({ externalLeagueKey: failure.externalLeagueKey, season: failure.season }),
+      at,
+    );
+    await this.#database.transaction(async (transaction) => {
+      // The same connection lock serializes failure recording and successful snapshot commits.
+      const [connection] = await transaction
+        .select({ id: providerConnections.id })
+        .from(providerConnections)
+        .where(
+          and(
+            eq(providerConnections.id, connectionId),
+            eq(providerConnections.userId, userId),
+            eq(providerConnections.provider, "yahoo"),
+          ),
+        )
+        .limit(1)
+        .for("update");
+      if (!connection) {
+        throw new YahooSyncError("CONNECTION_NOT_FOUND", "Yahoo connection was not found");
+      }
+      const [linked] = await transaction
+        .select({
+          id: leagueSeasons.id,
+          season: leagueSeasons.season,
+          lastSyncedAt: providerLeagueLinks.lastSyncedAt,
+        })
+        .from(providerLeagueLinks)
+        .innerJoin(leagueSeasons, eq(leagueSeasons.id, providerLeagueLinks.leagueSeasonId))
+        .where(
+          and(
+            eq(providerLeagueLinks.connectionId, connectionId),
+            eq(leagueSeasons.provider, "yahoo"),
+            eq(leagueSeasons.externalKey, safeFailure.externalLeagueKey),
+            ...(safeFailure.season === null ? [] : [eq(leagueSeasons.season, safeFailure.season)]),
+          ),
+        )
+        .limit(1);
+      if (linked?.lastSyncedAt && linked.lastSyncedAt >= at) return;
+      // This is a connection/key-scoped health observation, not an imported snapshot. Leave the
+      // leagueSeasonId null so latest-league-sync readers still select actual snapshot runs.
+      // One current record also keeps failed first imports visible before a league/link exists.
+      const [recorded] = await transaction
+        .insert(syncRuns)
+        .values({
+          connectionId,
+          leagueSeasonId: null,
+          kind: LEAGUE_DATA_HEALTH_KIND,
+          state: "failed",
+          idempotencyKey: leagueDataHealthKey(connectionId, safeFailure.externalLeagueKey),
+          startedAt: at,
+          finishedAt: at,
+          errorCode: safeFailure.code,
+          errorDetail: JSON.stringify({
+            externalLeagueKey: safeFailure.externalLeagueKey,
+            season: linked?.season ?? safeFailure.season,
+          }),
+        })
+        .onConflictDoUpdate({
+          target: syncRuns.idempotencyKey,
+          set: {
+            leagueSeasonId: null,
+            state: "failed",
+            startedAt: at,
+            finishedAt: at,
+            errorCode: safeFailure.code,
+            errorDetail: JSON.stringify({
+              externalLeagueKey: safeFailure.externalLeagueKey,
+              season: linked?.season ?? safeFailure.season,
+            }),
+          },
+          setWhere: lt(syncRuns.finishedAt, at),
+        })
+        .returning({ id: syncRuns.id });
+      if (!recorded) return;
+      if (linked) {
+        await transaction
+          .update(providerLeagueLinks)
+          .set({
+            lastErrorCode: safeFailure.code,
+            lastErrorAt: at,
+            lastErrorDetail: INCOMPLETE_ROSTER_MESSAGE,
+            consecutiveFailures: sql`${providerLeagueLinks.consecutiveFailures} + 1`,
+            updatedAt: at,
+          })
+          .where(
+            and(
+              eq(providerLeagueLinks.connectionId, connectionId),
+              eq(providerLeagueLinks.leagueSeasonId, linked.id),
+              or(isNull(providerLeagueLinks.lastErrorAt), lte(providerLeagueLinks.lastErrorAt, at)),
+            ),
+          );
+      }
+    });
+  }
+
   async persistBundle(
     userId: string,
     connectionId: string,
@@ -720,10 +907,33 @@ export class DrizzleYahooSyncRepository implements YahooSyncRepository {
               currentUserTeamExternalKey: currentUserTeam?.externalId ?? null,
               providerCommissioner,
               providerCommissionerObservedAt: providerCommissioner === null ? null : fetchedAt,
-              lastSyncedAt: fetchedAt,
+              lastSyncedAt: sql`greatest(${providerLeagueLinks.lastSyncedAt}, ${fetchedAt.toISOString()}::timestamptz)`,
+              lastErrorCode: sql`case when ${providerLeagueLinks.lastErrorAt} > ${fetchedAt.toISOString()}::timestamptz then ${providerLeagueLinks.lastErrorCode} else null end`,
+              lastErrorAt: sql`case when ${providerLeagueLinks.lastErrorAt} > ${fetchedAt.toISOString()}::timestamptz then ${providerLeagueLinks.lastErrorAt} else null end`,
+              lastErrorDetail: sql`case when ${providerLeagueLinks.lastErrorAt} > ${fetchedAt.toISOString()}::timestamptz then ${providerLeagueLinks.lastErrorDetail} else null end`,
+              consecutiveFailures: sql`case when ${providerLeagueLinks.lastErrorAt} > ${fetchedAt.toISOString()}::timestamptz then ${providerLeagueLinks.consecutiveFailures} else 0 end`,
+              circuitOpenUntil: sql`case when ${providerLeagueLinks.lastErrorAt} > ${fetchedAt.toISOString()}::timestamptz then ${providerLeagueLinks.circuitOpenUntil} else null end`,
               updatedAt: now,
             },
           });
+        await transaction
+          .update(syncRuns)
+          .set({
+            state: "succeeded",
+            finishedAt: fetchedAt,
+            errorCode: null,
+            errorDetail: null,
+          })
+          .where(
+            and(
+              eq(
+                syncRuns.idempotencyKey,
+                leagueDataHealthKey(connectionId, bundle.league.externalId),
+              ),
+              eq(syncRuns.kind, LEAGUE_DATA_HEALTH_KIND),
+              lte(syncRuns.finishedAt, fetchedAt),
+            ),
+          );
 
         const previousCommissioner = previousLink?.providerCommissioner ?? null;
         if (previousCommissioner !== providerCommissioner) {
@@ -759,7 +969,7 @@ export class DrizzleYahooSyncRepository implements YahooSyncRepository {
         await transaction
           .update(leagueSeasons)
           .set({
-            lastSyncedAt: fetchedAt,
+            lastSyncedAt: sql`greatest(${leagueSeasons.lastSyncedAt}, ${fetchedAt.toISOString()}::timestamptz)`,
             updatedAt: now,
             // A newer normalizer may recognize draft status in unchanged provider bytes. Keep
             // that observed field current without replacing other settings or creating a roster.
@@ -871,7 +1081,7 @@ export class DrizzleYahooSyncRepository implements YahooSyncRepository {
             waiverType: bundle.league.settings.waiverType,
             currentWeek: bundle.league.currentWeek,
             settings: plainRecord(bundle.league.settings),
-            lastSyncedAt: fetchedAt,
+            lastSyncedAt: sql`greatest(${leagueSeasons.lastSyncedAt}, ${fetchedAt.toISOString()}::timestamptz)`,
             updatedAt: now,
           })
           .where(eq(leagueSeasons.id, leagueSeasonId));
@@ -1260,6 +1470,7 @@ export class YahooSyncService {
         (league) => !excluded.has(`${league.externalId}:${league.season}`),
       );
       const syncs: YahooSyncReceipt[] = [];
+      const failures: YahooLeagueSyncFailure[] = [];
       for (const league of eligible) {
         try {
           syncs.push(await this.#syncLeague(userId, connectionId, league.externalId, league));
@@ -1269,6 +1480,10 @@ export class YahooSyncService {
           // leagues from syncing. A later discovery will pick them up once Yahoo reports a real
           // multi-team league.
           if (error instanceof YahooXmlError && error.code === "LEAGUE_NOT_READY") continue;
+          if (error instanceof YahooSyncError && error.leagueFailure !== null) {
+            failures.push(error.leagueFailure);
+            continue;
+          }
           throw error;
         }
       }
@@ -1277,6 +1492,7 @@ export class YahooSyncService {
         connectionId,
         discovered: eligible,
         syncs,
+        failures,
         generatedAt: this.#now().toISOString(),
       };
     } catch (error) {
@@ -1319,6 +1535,7 @@ export class YahooSyncService {
     try {
       return await this.#syncLeague(userId, connectionId, leagueKey);
     } catch (error) {
+      if (error instanceof YahooSyncError && error.leagueFailure !== null) throw error;
       const syncError = clientFacingSyncError(error);
       const failedAt = this.#now();
       if (syncError.throttled) {
@@ -1399,15 +1616,39 @@ export class YahooSyncService {
       return { settings, teams, rosters, standings, matchups };
     });
     const fetchedAt = this.#now();
-    const bundle = parseYahooLeagueSyncArtifacts({
-      settingsXml: artifacts.settings.xml,
-      teamsXml: artifacts.teams.xml,
-      rostersXml: artifacts.rosters.xml,
-      standingsXml: artifacts.standings.xml,
-      matchupsXml: artifacts.matchups.xml,
-      fetchedAt,
-      endpoint: `https://fantasysports.yahooapis.com/fantasy/v2/league/${leagueKey}`,
-    });
+    let bundle: LeagueSyncBundle;
+    try {
+      bundle = parseYahooLeagueSyncArtifacts({
+        settingsXml: artifacts.settings.xml,
+        teamsXml: artifacts.teams.xml,
+        rostersXml: artifacts.rosters.xml,
+        standingsXml: artifacts.standings.xml,
+        matchupsXml: artifacts.matchups.xml,
+        fetchedAt,
+        endpoint: `https://fantasysports.yahooapis.com/fantasy/v2/league/${leagueKey}`,
+      });
+    } catch (error) {
+      if (!(error instanceof YahooXmlError) || error.code !== "INCOMPLETE_ROSTER") throw error;
+      const failure: YahooLeagueSyncFailure = {
+        externalLeagueKey: leagueKey,
+        season: expectedLeague?.season ?? null,
+        code: "INCOMPLETE_ROSTER",
+        message: INCOMPLETE_ROSTER_MESSAGE,
+        failedAt: fetchedAt.toISOString(),
+      };
+      try {
+        await this.#repository.markLeagueFailure(userId, connectionId, failure);
+      } catch {
+        throw new YahooSyncError(
+          "PERSISTENCE_FAILED",
+          "Yahoo league failure could not be recorded",
+        );
+      }
+      throw new YahooSyncError("PROVIDER_READ_FAILED", INCOMPLETE_ROSTER_MESSAGE, {
+        retryable: true,
+        leagueFailure: failure,
+      });
+    }
     if (
       bundle.league.externalId !== leagueKey ||
       (expectedLeague !== undefined && bundle.league.season !== expectedLeague.season)

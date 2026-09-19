@@ -36,6 +36,7 @@ function harness() {
     },
   );
   const markFailure = vi.fn<YahooSyncRepository["markFailure"]>(async () => {});
+  const markLeagueFailure = vi.fn<YahooSyncRepository["markLeagueFailure"]>(async () => {});
   const repository: YahooSyncRepository = {
     findOwnedConnection: async () => ({
       id: "fixture-connection",
@@ -50,6 +51,7 @@ function harness() {
     markDiscoverySuccess: async () => {},
     persistBundle,
     markFailure,
+    markLeagueFailure,
   };
   const client: YahooReadPort = {
     getUserLeagues: () => artifact(fixture("sanitized-user-leagues-page-2.xml")),
@@ -69,6 +71,7 @@ function harness() {
     sync: () => service.syncLeague("fixture-user", "fixture-connection", "449.l.12345"),
     persistBundle,
     markFailure,
+    markLeagueFailure,
     saved: () => saved,
     setRosters: (value: string) => {
       rostersXml = value;
@@ -80,6 +83,26 @@ function harness() {
 }
 
 describe("Yahoo roster sync integrity", () => {
+  it("treats failed roster-error bookkeeping as a persistence fault, not an isolated failure", async () => {
+    const test = harness();
+    test.setRosters(
+      fixture("sanitized-rosters.xml").replace(/<roster\b[^>]*>[\s\S]*?<\/roster>/u, ""),
+    );
+    test.markLeagueFailure.mockRejectedValueOnce(new Error("private-database-detail"));
+    await expect(test.sync()).rejects.toMatchObject({
+      code: "PERSISTENCE_FAILED",
+      leagueFailure: null,
+      message: "Yahoo league failure could not be recorded",
+    });
+    expect(test.markFailure).toHaveBeenCalledExactlyOnceWith(
+      "fixture-user",
+      "fixture-connection",
+      "persistence_failed",
+      NOW,
+    );
+    expect(test.persistBundle).not.toHaveBeenCalled();
+  });
+
   it.each([
     ["missing roster", (xml: string) => xml.replace(/<roster\b[^>]*>[\s\S]*?<\/roster>/u, "")],
     ["missing player identity", (xml: string) => xml.replace("<player_id>9001</player_id>", "")],
@@ -102,11 +125,18 @@ describe("Yahoo roster sync integrity", () => {
       });
       expect(test.persistBundle).toHaveBeenCalledTimes(1);
       expect(test.saved()).toBe(original);
-      expect(test.markFailure).toHaveBeenCalledExactlyOnceWith(
+      expect(test.markFailure).not.toHaveBeenCalled();
+      expect(test.markLeagueFailure).toHaveBeenCalledExactlyOnceWith(
         "fixture-user",
         "fixture-connection",
-        "incomplete_roster",
-        NOW,
+        {
+          externalLeagueKey: "449.l.12345",
+          season: null,
+          code: "INCOMPLETE_ROSTER",
+          message:
+            "Yahoo returned incomplete roster data. This league's stored rosters were left unchanged.",
+          failedAt: NOW.toISOString(),
+        },
       );
     },
   );

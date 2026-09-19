@@ -51,6 +51,7 @@ function yahooSync(overrides: Partial<YahooSyncPort> = {}): YahooSyncPort {
       Promise.resolve({
         connectionId: CONNECTION_ID,
         discovered: [],
+        failures: [],
         syncs: [],
         generatedAt: "2026-07-16T12:00:00.000Z",
       }),
@@ -190,6 +191,7 @@ describe("Yahoo sync routes", () => {
           credentialExpiresAt: "2026-07-16T13:00:00.000Z",
           lastSuccessfulAt: "2026-07-16T12:00:00.000Z",
           lastErrorCode: null,
+          leagueFailures: [],
           lastErrorAt: null,
           leagues: [],
         },
@@ -364,45 +366,77 @@ describe("Yahoo sync routes", () => {
     await app.close();
   });
 
-  it("runs the initial read sync after OAuth but preserves the connection if sync fails", async () => {
-    const complete = vi.fn(() =>
-      Promise.resolve({
-        connectionId: CONNECTION_ID,
-        returnMode: "browser" as const,
-        returnTo: "/connections",
-      }),
-    );
-    const discoverAndSync = vi.fn(() => Promise.reject(new Error("sanitized provider failure")));
-    const yahooConnection: YahooConnectionPort = {
-      start: () => Promise.reject(new Error("not used")),
-      deny: () => Promise.reject(new Error("not used")),
-      complete,
-    };
-    const app = await buildApp({
-      environment: yahooEnvironment({
-        WEB_URL: "https://laces.example",
-      }),
-      logger: false,
-      requireAuthentication: true,
-      authService: authService(),
-      yahooConnection,
-      yahooSync: yahooSync({ discoverAndSync }),
-    });
+  it.each(["failed", "partial"] as const)(
+    "keeps authorization and reports an incomplete initial OAuth sync when discovery is %s",
+    async (state) => {
+      const complete = vi.fn(() =>
+        Promise.resolve({
+          connectionId: CONNECTION_ID,
+          returnMode: "browser" as const,
+          returnTo: "/connections",
+        }),
+      );
+      const discoverAndSync = vi.fn<YahooSyncPort["discoverAndSync"]>(() =>
+        state === "failed"
+          ? Promise.reject(new Error("sanitized provider failure"))
+          : Promise.resolve({
+              connectionId: CONNECTION_ID,
+              discovered: [],
+              syncs: [
+                {
+                  syncRunId: "30000000-0000-4000-8000-000000000001",
+                  leagueId: "40000000-0000-4000-8000-000000000001",
+                  leagueSeasonId: "50000000-0000-4000-8000-000000000001",
+                  externalLeagueKey: "449.l.12345",
+                  season: 2026,
+                  state: "accepted",
+                  recordsWritten: 12,
+                  syncedAt: "2026-07-16T12:00:00.000Z",
+                },
+              ],
+              generatedAt: "2026-07-16T12:00:00.000Z",
+              failures: [
+                {
+                  externalLeagueKey: "449.l.67890",
+                  season: 2026,
+                  code: "INCOMPLETE_ROSTER",
+                  message: "Incomplete roster",
+                  failedAt: "2026-07-16T12:00:00.000Z",
+                },
+              ],
+            }),
+      );
+      const yahooConnection: YahooConnectionPort = {
+        start: () => Promise.reject(new Error("not used")),
+        deny: () => Promise.reject(new Error("not used")),
+        complete,
+      };
+      const app = await buildApp({
+        environment: yahooEnvironment({
+          WEB_URL: "https://laces.example",
+        }),
+        logger: false,
+        requireAuthentication: true,
+        authService: authService(),
+        yahooConnection,
+        yahooSync: yahooSync({ discoverAndSync }),
+      });
 
-    const response = await app.inject({
-      method: "GET",
-      url: "/v1/connections/yahoo/callback?code=code&state=state",
-      headers: { cookie: COOKIE },
-    });
-    expect(response.statusCode).toBe(302);
-    expect(response.headers.location).toBe(
-      "https://laces.example/connections?provider=yahoo&status=connected&sync=failed",
-    );
-    expect(discoverAndSync).toHaveBeenCalledWith(USER_ID, CONNECTION_ID, {
-      restoreRemoved: true,
-    });
-    await app.close();
-  });
+      const response = await app.inject({
+        method: "GET",
+        url: "/v1/connections/yahoo/callback?code=code&state=state",
+        headers: { cookie: COOKIE },
+      });
+      expect(response.statusCode).toBe(302);
+      expect(response.headers.location).toBe(
+        "https://laces.example/connections?provider=yahoo&status=connected&sync=failed",
+      );
+      expect(discoverAndSync).toHaveBeenCalledWith(USER_ID, CONNECTION_ID, {
+        restoreRemoved: true,
+      });
+      await app.close();
+    },
+  );
 
   it("starts the closed native authorization mode without a caller completion URL", async () => {
     const start = vi.fn<YahooConnectionPort["start"]>(() =>
@@ -768,6 +802,16 @@ describe("Yahoo sync routes", () => {
           Promise.resolve({
             connectionId: CONNECTION_ID,
             discovered: [],
+            failures: [
+              {
+                externalLeagueKey: "449.l.67890",
+                season: 2026,
+                code: "INCOMPLETE_ROSTER",
+                message:
+                  "Yahoo returned incomplete roster data. This league's stored rosters were left unchanged.",
+                failedAt: "2026-07-16T12:00:00.000Z",
+              },
+            ],
             syncs: [
               receipt("50000000-0000-4000-8000-000000000001", "accepted"),
               receipt("50000000-0000-4000-8000-000000000001", "accepted"),
@@ -788,6 +832,9 @@ describe("Yahoo sync routes", () => {
     // Two accepted receipts for one league season collapse to one enqueue; the unchanged one adds
     // none. A queue outage is logged rather than failing a sync that already committed.
     expect(discovery.statusCode).toBe(202);
+    expect(discovery.json()).toMatchObject({
+      failures: [{ externalLeagueKey: "449.l.67890", code: "INCOMPLETE_ROSTER" }],
+    });
     expect(enqueueRecommendationRecompute).toHaveBeenCalledTimes(1);
     await app.close();
   });
