@@ -473,8 +473,7 @@ function composePortfolioTraining(
   return { source, heldOutSeasons: checked.ordered, manifest };
 }
 
-/** Development evidence deliberately has no root publicationPolicy/champion/report admission shape. */
-export function buildRosMarginalDevelopmentReport(input: {
+export interface PinnedRosMarginalDevelopmentInput {
   readonly candidateReportJson: string;
   readonly candidateReportChecksum: string;
   readonly previousReportJson: string;
@@ -486,7 +485,10 @@ export function buildRosMarginalDevelopmentReport(input: {
   readonly positions: readonly FirstPartyRosPosition[];
   /** Explicit frozen protocol binding; absence preserves the original report byte identity. */
   readonly qualificationProtocolChecksum?: string;
-}) {
+}
+
+/** Shared pinned-input authentication only; no marginal or conditional candidate is fitted here. */
+export function parsePinnedRosMarginalDevelopmentInputs(input: PinnedRosMarginalDevelopmentInput) {
   integer(input.forecastSeason, 2000, 2200);
   integer(input.evaluationSeason, 2000, 2200);
   if (input.qualificationProtocolChecksum !== undefined)
@@ -593,6 +595,13 @@ export function buildRosMarginalDevelopmentReport(input: {
     ];
     equal(observed(row), observed(old), "all-season outcome/schedule mismatch");
   }
+  return { candidate, previous, training, composite, intervalTraining, positions };
+}
+
+/** Development evidence deliberately has no root publicationPolicy/champion/report admission shape. */
+export function buildRosMarginalDevelopmentReport(input: PinnedRosMarginalDevelopmentInput) {
+  const { candidate, previous, training, composite, intervalTraining, positions } =
+    parsePinnedRosMarginalDevelopmentInputs(input);
   const marginal = evaluateFirstPartyRosMarginalPolicy(candidate.heldOutSeasons, {
     forecastSeason: input.forecastSeason,
     championOptions: candidate.options,

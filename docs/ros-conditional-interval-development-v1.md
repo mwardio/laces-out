@@ -98,6 +98,14 @@ The intended original evaluation remains 3,264 forecasts; broader training, if u
 authenticated composition of 2,720 original non-DST and 2,176 complete-team DST forecasts.
 Fit 2023 from 2022, 2024 from 2022–23, 2025 from 2022–24, and any 2026 live candidate from 2022–25.
 
+The full-portfolio worker wrapper preserves the original development comparison semantics.
+Per-cell scores use the final 2026 live mean-strategy choice, which can depend on 2025 mean errors,
+but score historical intervals fitted only before each historical evaluation year. These cell
+scores are retrospective development selection, not fully held-out selected-policy performance.
+The latest 2025 portfolio separately uses the mean choice and interval fits frozen before 2025.
+All four mandatory portfolio benchmarks remain matched to that chronological population. The
+fixed unconditional v1 candidate is an additional comparator only.
+
 Keep all existing support, mean, physical/numerical, coverage/tail and matched benchmark gates.
 Evaluate both strategies and the unchanged mean policy choices, and retain original diagnostic
 failures. Do not tune this candidate's feature, penalty, thresholds or cohort after grading it.
