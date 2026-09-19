@@ -32,6 +32,9 @@ import {
 } from "@laces-out/domain";
 import {
   FIRST_PARTY_ROS_CONVERGENCE_REFERENCE_SCENARIOS,
+  DEFENSE_POINTS_ALLOWED_DEFINITIONS,
+  defensePointsAllowedDefinitionForProfile,
+  type ProjectionDefensePointsAllowedDefinition,
   LEAGUE_SCORING_NORMALIZATION_VERSION,
   normalizeLeagueScoringProfile,
   projectionScoringProfileKey,
@@ -87,6 +90,7 @@ import {
 import {
   buildFirstPartyPlayerHistory,
   FIRST_PARTY_PLAYER_HISTORY_VERSION,
+  FIRST_PARTY_DEFENSE_HISTORY_VERSION,
   buildFirstPartyDefenseHistory,
   type ProjectionInjuryFact,
   type ProjectionRosterFact,
@@ -1304,7 +1308,9 @@ export function calibrateFirstPartyRosPlayerHistory(input: {
 interface FirstPartyRosRefreshReuse {
   calibration?: {
     readonly player: ReturnType<typeof calibrateFirstPartyRosPlayerHistory>;
-    readonly defense: FirstPartyTeamDefenseCalibration;
+    readonly defenseByDefinition: Readonly<
+      Record<ProjectionDefensePointsAllowedDefinition, FirstPartyTeamDefenseCalibration>
+    >;
   };
   project?: ReturnType<typeof createRosLiveProjectionReuse>;
 }
@@ -1374,6 +1380,8 @@ export function databaseFirstPartyRosCandidateProvider(input: {
       aliasPlans,
       checksum: aggregateChecksum("live-ros-candidate-provider-v8", [
         `player-history:${FIRST_PARTY_PLAYER_HISTORY_VERSION}`,
+        `defense-history:${FIRST_PARTY_DEFENSE_HISTORY_VERSION}`,
+        `scoring-normalization:${LEAGUE_SCORING_NORMALIZATION_VERSION}`,
         `live-physical:${ROS_LIVE_PHYSICAL_IDENTITY_VERSION}`,
         `live-outcomes:${ROS_LIVE_OUTCOME_VERSION}`,
         `season:${season}`,
@@ -2230,14 +2238,34 @@ async function prepareDatabaseFirstPartyRosTargets(
     }));
 
     const history = buildFirstPartyPlayerHistory(weekly, snaps, rosters, schedules, injuries);
-    const defenseHistory = buildFirstPartyDefenseHistory(teamWeekly, schedules);
+    const defenseHistoryByDefinition = Object.fromEntries(
+      DEFENSE_POINTS_ALLOWED_DEFINITIONS.map((definition) => [
+        definition,
+        buildFirstPartyDefenseHistory(teamWeekly, schedules, definition),
+      ]),
+    ) as Record<
+      ProjectionDefensePointsAllowedDefinition,
+      readonly FirstPartyTeamDefenseWeeklyStatLine[]
+    >;
     const cutoff = season * 32 + window.asOfWeek;
     const featureHistory = history.filter((row) => row.season * 32 + row.week <= cutoff);
     const trainingHistory = history.filter((row) => row.season < season);
-    const defenseFeatureHistory = defenseHistory.filter(
-      (row) => row.season * 32 + row.week <= cutoff,
-    );
-    const defenseTrainingHistory = defenseHistory.filter((row) => row.season < season);
+    const defenseFeatureHistoryByDefinition = {
+      "yahoo-2022-v1": defenseHistoryByDefinition["yahoo-2022-v1"].filter(
+        (row) => row.season * 32 + row.week <= cutoff,
+      ),
+      "espn-2019-v1": defenseHistoryByDefinition["espn-2019-v1"].filter(
+        (row) => row.season * 32 + row.week <= cutoff,
+      ),
+    };
+    const defenseTrainingHistoryByDefinition = {
+      "yahoo-2022-v1": defenseHistoryByDefinition["yahoo-2022-v1"].filter(
+        (row) => row.season < season,
+      ),
+      "espn-2019-v1": defenseHistoryByDefinition["espn-2019-v1"].filter(
+        (row) => row.season < season,
+      ),
+    };
     // Availability/role calibration must be trained strictly before the current season so a live
     // forecast can never leak its own season into its publication decision.
     if (trainingHistory.length === 0) return targetsByArtifact;
@@ -2245,13 +2273,20 @@ async function prepareDatabaseFirstPartyRosTargets(
     let availabilityCalibration: HistoricalRosAvailabilityCalibration;
     let roleCalibration: HistoricalRosRoleCalibration;
     let kickerCalibration: HistoricalRosKickerCalibration;
-    let defenseCalibration: FirstPartyTeamDefenseCalibration;
+    let defenseCalibrationByDefinition: Readonly<
+      Record<ProjectionDefensePointsAllowedDefinition, FirstPartyTeamDefenseCalibration>
+    >;
     const trainingSchedules = schedules.filter((row) => row.season < season);
     const calibrationIdentity = rosLivePhysicalIdentity({
       season,
       window: { asOfWeek: 0, windowStartWeek: 1, windowEndWeek: 18 },
       sources: [],
-      rows: { trainingHistory, defenseTrainingHistory, schedules: trainingSchedules },
+      rows: {
+        trainingHistory,
+        yahooDefenseTrainingHistory: defenseTrainingHistoryByDefinition["yahoo-2022-v1"],
+        espnDefenseTrainingHistory: defenseTrainingHistoryByDefinition["espn-2019-v1"],
+        schedules: trainingSchedules,
+      },
     });
     try {
       // Football-process fits use the model's fixed training loss, independent of every artifact's
@@ -2267,7 +2302,13 @@ async function prepareDatabaseFirstPartyRosTargets(
               trainingHistory,
               schedules: trainingSchedules,
             }),
-            defense: runFirstPartyTeamDefenseBacktest(defenseTrainingHistory).calibration,
+            defenseByDefinition: Object.fromEntries(
+              DEFENSE_POINTS_ALLOWED_DEFINITIONS.map((definition) => [
+                definition,
+                runFirstPartyTeamDefenseBacktest(defenseTrainingHistoryByDefinition[definition])
+                  .calibration,
+              ]),
+            ) as Record<ProjectionDefensePointsAllowedDefinition, FirstPartyTeamDefenseCalibration>,
           };
           await calibrationStore?.writeCalibration(calibrationIdentity, options.reuse.calibration);
           options.onLiveReuse?.({ kind: "calibration-fit", physicalIdentity });
@@ -2280,7 +2321,7 @@ async function prepareDatabaseFirstPartyRosTargets(
       // Total by contract (documented fallbacks, never throws), so the kicker calibration cannot
       // trip this league-wide fail-closed catch on a sparse corpus.
       kickerCalibration = fitted.kicker;
-      defenseCalibration = options.reuse.calibration.defense;
+      defenseCalibrationByDefinition = options.reuse.calibration.defenseByDefinition;
     } catch (error) {
       // Cache integrity/storage failures must reach the queue's bounded retry diagnostics.
       if (liveStore !== undefined) throw error;
@@ -2310,6 +2351,12 @@ async function prepareDatabaseFirstPartyRosTargets(
       >();
       for (const league of matched) {
         const leagueScoringProfileKey = projectionScoringProfileKey(league.profile);
+        // Profiles without active PA can share the explicit reference definition because those
+        // components cannot affect their scores. Normalized PA rules always name their provider.
+        const defenseDefinition =
+          defensePointsAllowedDefinitionForProfile(league.profile) ?? "yahoo-2022-v1";
+        const defenseFeatureHistory = defenseFeatureHistoryByDefinition[defenseDefinition];
+        const defenseCalibration = defenseCalibrationByDefinition[defenseDefinition];
         const matchedUnresolvedCandidates = unmatchedCandidates.filter((candidate) =>
           candidate.positions.some((position) => league.matchedPositions.includes(position)),
         );

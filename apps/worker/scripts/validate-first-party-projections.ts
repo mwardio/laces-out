@@ -19,7 +19,6 @@ import {
   NflverseWeeklyStatsSource,
   NflversePlayByPlaySource,
   snapshotNflversePlayByPlay,
-  fourthDownStopsFromPlayByPlay,
   type NflverseDatasetState,
 } from "@laces-out/source-nflverse";
 
@@ -66,13 +65,13 @@ const validationProfile: ProjectionScoringProfile = {
     { statId: "defensive_touchdowns", points: 6 },
     { statId: "defensive_blocked_kicks", points: 2 },
     { statId: "special_teams_touchdowns", points: 6 },
-    { statId: "points_allowed_0_probability", points: 10 },
-    { statId: "points_allowed_1_6_probability", points: 7 },
-    { statId: "points_allowed_7_13_probability", points: 4 },
-    { statId: "points_allowed_14_20_probability", points: 1 },
-    { statId: "points_allowed_21_27_probability", points: 0 },
-    { statId: "points_allowed_28_34_probability", points: -1 },
-    { statId: "points_allowed_35_plus_probability", points: -4 },
+    { statId: "points_allowed_0_probability", points: 10, statDefinition: "yahoo-2022-v1" },
+    { statId: "points_allowed_1_6_probability", points: 7, statDefinition: "yahoo-2022-v1" },
+    { statId: "points_allowed_7_13_probability", points: 4, statDefinition: "yahoo-2022-v1" },
+    { statId: "points_allowed_14_20_probability", points: 1, statDefinition: "yahoo-2022-v1" },
+    { statId: "points_allowed_21_27_probability", points: 0, statDefinition: "yahoo-2022-v1" },
+    { statId: "points_allowed_28_34_probability", points: -1, statDefinition: "yahoo-2022-v1" },
+    { statId: "points_allowed_35_plus_probability", points: -4, statDefinition: "yahoo-2022-v1" },
   ],
 };
 
@@ -95,13 +94,13 @@ const espnDefaultDstProfile: ProjectionScoringProfile = {
     { statId: "defensive_safeties", points: 2 }, // ESPN 98
     { statId: "defensive_touchdowns", points: 6 }, // ESPN 103/104
     { statId: "special_teams_touchdowns", points: 6 }, // ESPN 93/101/102
-    { statId: "points_allowed_0_probability", points: 5 }, // ESPN 89
-    { statId: "points_allowed_1_6_probability", points: 4 }, // ESPN 90
-    { statId: "points_allowed_7_13_probability", points: 3 }, // ESPN 91
-    { statId: "points_allowed_14_17_probability", points: 1 }, // ESPN 92
-    { statId: "points_allowed_28_34_probability", points: -1 }, // ESPN 123
-    { statId: "points_allowed_35_45_probability", points: -3 }, // ESPN 124
-    { statId: "points_allowed_46_plus_probability", points: -5 }, // ESPN 125
+    { statId: "points_allowed_0_probability", points: 5, statDefinition: "espn-2019-v1" }, // ESPN 89
+    { statId: "points_allowed_1_6_probability", points: 4, statDefinition: "espn-2019-v1" }, // ESPN 90
+    { statId: "points_allowed_7_13_probability", points: 3, statDefinition: "espn-2019-v1" }, // ESPN 91
+    { statId: "points_allowed_14_17_probability", points: 1, statDefinition: "espn-2019-v1" }, // ESPN 92
+    { statId: "points_allowed_28_34_probability", points: -1, statDefinition: "espn-2019-v1" }, // ESPN 123
+    { statId: "points_allowed_35_45_probability", points: -3, statDefinition: "espn-2019-v1" }, // ESPN 124
+    { statId: "points_allowed_46_plus_probability", points: -5, statDefinition: "espn-2019-v1" }, // ESPN 125
     { statId: "yards_allowed_0_99_probability", points: 5 }, // ESPN 128
     { statId: "yards_allowed_100_199_probability", points: 3 }, // ESPN 129
     { statId: "yards_allowed_200_299_probability", points: 2 }, // ESPN 130
@@ -373,7 +372,7 @@ async function main(): Promise<void> {
         new NflverseWeeklyRostersSource().check(season, emptyState),
         new NflverseInjuriesSource().check(season, emptyState),
         new NflverseTeamWeeklyStatsSource({
-          fourthDowns: fourthDownStopsFromPlayByPlay(playByPlay),
+          playByPlay,
         }).check(season, emptyState),
         new NflverseSchedulesSource().check(
           season,
@@ -530,7 +529,9 @@ async function main(): Promise<void> {
     champion.backtest,
     validationProfile,
   );
-  const defenseHistory = buildFirstPartyDefenseHistory(teams, schedules);
+  const defenseHistory = buildFirstPartyDefenseHistory(teams, schedules, "yahoo-2022-v1");
+  const espnDefenseHistory = buildFirstPartyDefenseHistory(teams, schedules, "espn-2019-v1");
+  const espnDefenseBacktest = runFirstPartyTeamDefenseBacktest(espnDefenseHistory);
   const defenseBacktest = runFirstPartyTeamDefenseBacktest(defenseHistory);
   const defenseEvaluation = evaluateFirstPartyTeamDefenseBacktestForScoringProfile(
     defenseBacktest,
@@ -573,7 +574,7 @@ async function main(): Promise<void> {
     defense: {
       predictions: defenseBacktest.predictions.length,
       overall: defenseEvaluation.overall,
-      espnDstLadder: evaluateEspnDstLadder(defenseBacktest, defenseHistory),
+      espnDstLadder: evaluateEspnDstLadder(espnDefenseBacktest, espnDefenseHistory),
     },
   };
   const output = process.argv.includes("--summary")

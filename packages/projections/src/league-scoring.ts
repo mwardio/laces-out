@@ -1,15 +1,18 @@
 import {
   firstPartyProjectionComponentsForPosition,
   firstPartyTeamDefenseProjectionComponents,
+  TEAM_DEFENSE_ZERO_MODEL_MAX_ABSOLUTE_POINTS,
 } from "./first-party.js";
 import {
   SCORING_WHOLE_GROUP_COMPONENTS,
   YAHOO_NONNEGATIVE_YARDAGE_COMPONENTS,
+  isDefensePointsAllowedStatId,
+  type ProjectionDefensePointsAllowedDefinition,
   type ProjectionScoringBonus,
   type ProjectionScoringProfile,
 } from "./scoring.js";
 
-export const LEAGUE_SCORING_NORMALIZATION_VERSION = "league-scoring-map-v7" as const;
+export const LEAGUE_SCORING_NORMALIZATION_VERSION = "league-scoring-map-v9" as const;
 
 export const LEAGUE_SCORING_MAP_PROVENANCE = {
   version: LEAGUE_SCORING_NORMALIZATION_VERSION,
@@ -25,6 +28,10 @@ export const LEAGUE_SCORING_MAP_PROVENANCE = {
 } as const;
 
 export type LeagueScoringProvider = "yahoo" | "espn";
+
+const DEFENSE_POINTS_ALLOWED_DEFINITIONS: Readonly<
+  Record<LeagueScoringProvider, ProjectionDefensePointsAllowedDefinition>
+> = { yahoo: "yahoo-2022-v1", espn: "espn-2019-v1" };
 
 /** Fantasy positions league scoring is attributed to. Fixed order; reported in full every time. */
 export type LeagueScoringPosition = "QB" | "RB" | "WR" | "TE" | "K" | "DST";
@@ -126,6 +133,7 @@ export type LeagueScoringUnsupportedCode =
   | "UNSUPPORTED_PLAYER_RULE"
   | "IDP_RULE"
   | "COMPONENT_UNAVAILABLE"
+  | "COMPONENT_VALUE_UNSUPPORTED"
   /**
    * The run emits the component and the rule maps cleanly, but no modeled position projects it, so
    * the rule cannot be attributed to any position. Distinct from `COMPONENT_UNAVAILABLE` (the run
@@ -1544,6 +1552,22 @@ export function normalizeLeagueScoringProfile(
     canonical.set(statId, entry);
   }
 
+  // Check effective canonical awards after provider overrides/derived contributions, so aliases
+  // cannot bypass the model's documented rare-event scope. Withhold the complete affected position.
+  for (const [statId, entry] of canonical) {
+    const maximum = TEAM_DEFENSE_ZERO_MODEL_MAX_ABSOLUTE_POINTS[statId];
+    if (maximum !== undefined && Math.abs(entry.points ?? 0) > maximum) {
+      const rowIndex = entry.rowIndices[0] ?? null;
+      fail(
+        attributedPositions(statId),
+        "COMPONENT_VALUE_UNSUPPORTED",
+        `${statId} is supported only for awards between ${-maximum} and ${maximum} points; larger awards require rare-event projection data.`,
+        rowIndex,
+        rowIndex === null ? undefined : input.rows[rowIndex],
+      );
+    }
+  }
+
   for (const overlap of AGGREGATE_OVERLAPS) {
     if (!canonical.has(overlap.aggregate)) continue;
     const presentParts = overlap.parts.filter((part) => canonical.has(part));
@@ -1566,6 +1590,9 @@ export function normalizeLeagueScoringProfile(
     .map(([statId, rule]) => ({
       statId,
       points: rule.points ?? 0,
+      ...(provider !== null && isDefensePointsAllowedStatId(statId)
+        ? { statDefinition: DEFENSE_POINTS_ALLOWED_DEFINITIONS[provider] }
+        : {}),
       ...(rule.bonuses.length === 0
         ? {}
         : {

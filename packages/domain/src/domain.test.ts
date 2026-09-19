@@ -78,4 +78,19 @@ describe("NFL team identity", () => {
     expect(canonicalNflTeamCode("wsh")).toBe("WAS");
     expect(canonicalNflTeamCode("DET")).toBe("DET");
   });
+
+  it.each([
+    ["OAK", "LV"],
+    [" sd ", "LAC"],
+    ["stl", "LAR"],
+  ])("joins historical franchise code %s to %s", (historical, current) => {
+    expect(canonicalNflTeamCode(historical)).toBe(current);
+    expect(canonicalNflTeamCode(current)).toBe(current);
+  });
+
+  it("does not guess unknown franchise aliases", () => {
+    expect(canonicalNflTeamCode("UNKNOWN")).toBe("UNKNOWN");
+    expect(canonicalNflTeamCode(" oakland ")).toBe("OAKLAND");
+    expect(canonicalNflTeamCode("")).toBe("");
+  });
 });

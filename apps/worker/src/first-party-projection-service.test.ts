@@ -1103,6 +1103,12 @@ describe("first-party projection service release safety", () => {
     });
     let laterYards = 80;
     let laterPointsAllowed = 20;
+    let priorEspnPointsAllowed = 23;
+    const observedDefenseZeros = Object.fromEntries(
+      projectionModel
+        .firstPartyTeamDefenseProjectionComponents()
+        .map((component) => [component, 0]),
+    );
     vi.spyOn(projectionInputs, "buildFirstPartyPlayerHistory").mockImplementation(() => [
       {
         playerId: "receiver",
@@ -1121,16 +1127,32 @@ describe("first-party projection service release safety", () => {
         components: { receiving_yards: laterYards },
       },
     ]);
-    vi.spyOn(projectionInputs, "buildFirstPartyDefenseHistory").mockImplementation(() => [
-      { team: "BUF", opponent: "MIA", season: 2026, week: 1, components: { points_allowed: 17 } },
-      {
-        team: "BUF",
-        opponent: "MIA",
-        season: 2026,
-        week: 3,
-        components: { points_allowed: laterPointsAllowed },
-      },
-    ]);
+    const assembleDefense = vi
+      .spyOn(projectionInputs, "buildFirstPartyDefenseHistory")
+      .mockImplementation((_rows, _schedule, definition) => [
+        {
+          team: "BUF",
+          opponent: "MIA",
+          season: 2026,
+          week: 1,
+          pointsAllowedDefinition: definition,
+          components: {
+            ...observedDefenseZeros,
+            points_allowed: definition === "espn-2019-v1" ? priorEspnPointsAllowed : 17,
+          },
+        },
+        {
+          team: "BUF",
+          opponent: "MIA",
+          season: 2026,
+          week: 3,
+          pointsAllowedDefinition: definition,
+          components: {
+            ...observedDefenseZeros,
+            points_allowed: laterPointsAllowed + (definition === "espn-2019-v1" ? 6 : 0),
+          },
+        },
+      ]);
     const fit = vi.spyOn(projectionModel, "runFirstPartyProjectionBacktest");
     const defenseFit = vi.spyOn(projectionModel, "runFirstPartyTeamDefenseBacktest");
     const service = new FirstPartyProjectionService({ database: harness.database, now: () => now });
@@ -1154,7 +1176,22 @@ describe("first-party projection service release safety", () => {
     await service.refreshProjections({ season: 2026 }, jobContext());
     const second = publish.mock.calls.at(-1)![0];
     expect(fit).toHaveBeenCalledTimes(1);
-    expect(defenseFit).toHaveBeenCalledTimes(1);
+    expect(defenseFit).toHaveBeenCalledTimes(2);
+    expect(assembleDefense.mock.calls.map((args) => args[2])).toEqual([
+      "yahoo-2022-v1",
+      "espn-2019-v1",
+      "yahoo-2022-v1",
+      "espn-2019-v1",
+    ]);
+    expect(
+      second.defenseVariants?.["espn-2019-v1"]?.history.at(-1)?.components.points_allowed,
+    ).toBe(36);
+    expect(first.defenseVariants?.["espn-2019-v1"]?.history.at(-1)?.components.points_allowed).toBe(
+      26,
+    );
+    expect(second.defenseVariants?.["espn-2019-v1"]?.backtest).toBe(
+      first.defenseVariants?.["espn-2019-v1"]?.backtest,
+    );
     expect(second.basePlayerBacktest).toBe(first.basePlayerBacktest);
     expect(second.playerHistory).not.toBe(first.playerHistory);
     expect(second.playerHistory.at(-1)?.components.receiving_yards).toBe(100);
@@ -1165,6 +1202,19 @@ describe("first-party projection service release safety", () => {
     expect(second.inputSnapshot?.sourceManifest.checksum).not.toBe(
       first.inputSnapshot?.sourceManifest.checksum,
     );
+    priorEspnPointsAllowed = 24;
+    harness.setSourceChecksum("nflverse.stats-team-week.2026", "e".repeat(64));
+    await service.refreshProjections({ season: 2026 }, jobContext());
+    const third = publish.mock.calls.at(-1)![0];
+    expect(fit).toHaveBeenCalledTimes(1);
+    expect(defenseFit).toHaveBeenCalledTimes(3);
+    expect(third.basePlayerBacktest).toBe(second.basePlayerBacktest);
+    expect(third.defenseBacktest).toBe(second.defenseBacktest);
+    expect(third.defenseVariants?.["espn-2019-v1"]?.backtest).not.toBe(
+      second.defenseVariants?.["espn-2019-v1"]?.backtest,
+    );
+    expect(defenseFit.mock.calls[2]?.[0][0]?.pointsAllowedDefinition).toBe("espn-2019-v1");
+    expect(defenseFit.mock.calls[2]?.[0][0]?.components.points_allowed).toBe(24);
   });
 
   it("still rejects source drift during a warm fit before publishing", async () => {

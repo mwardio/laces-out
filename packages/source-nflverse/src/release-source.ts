@@ -17,6 +17,11 @@ const ALLOWED_CONTENT_TYPES = new Set([
   "text/csv",
   "text/plain",
 ]);
+const GZIP_CONTENT_TYPES = new Set([
+  "application/gzip",
+  "application/x-gzip",
+  "application/octet-stream",
+]);
 
 export type NflverseFetchLike = (input: string | URL, init?: RequestInit) => Promise<Response>;
 
@@ -105,13 +110,14 @@ async function readBounded(
   return Buffer.concat(chunks, total).toString("utf8");
 }
 
-function assertContentType(response: Response, datasetLabel: string): void {
+function assertContentType(response: Response, datasetLabel: string, format: "csv" | "gzip"): void {
   const contentType = response.headers.get("content-type");
   // GitHub test doubles and some cached release responses omit Content-Type. The CSV parser and
   // required-column checks remain the final admission boundary in that case.
   if (!contentType) return;
   const mediaType = contentType.split(";", 1)[0]?.trim().toLowerCase();
-  if (!mediaType || !ALLOWED_CONTENT_TYPES.has(mediaType)) {
+  const allowed = format === "gzip" ? GZIP_CONTENT_TYPES : ALLOWED_CONTENT_TYPES;
+  if (!mediaType || !allowed.has(mediaType)) {
     throw new NflverseDatasetSourceError(
       "CONTENT_TYPE",
       `${datasetLabel} returned unsupported content type ${mediaType || "unknown"}`,
@@ -143,6 +149,7 @@ export async function checkNflverseReleaseResponse(input: {
   readonly maximumBytes: number;
   readonly datasetLabel: string;
   readonly accept?: string;
+  readonly format?: "csv" | "gzip";
   readonly timeoutMs?: number;
 }): Promise<NflverseResponseCheckResult> {
   const source = new URL(input.sourceUrl);
@@ -217,7 +224,7 @@ export async function checkNflverseReleaseResponse(input: {
       response.status === 408 || response.status === 429 || response.status >= 500,
     );
   }
-  assertContentType(response, input.datasetLabel);
+  assertContentType(response, input.datasetLabel, input.format ?? "csv");
   const declared = Number(response.headers.get("content-length"));
   if (Number.isFinite(declared) && declared > input.maximumBytes) {
     throw new NflverseDatasetSourceError(

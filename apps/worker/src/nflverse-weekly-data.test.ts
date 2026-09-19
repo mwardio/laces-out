@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import type { NflversePlayerInjuryReport } from "@laces-out/source-nflverse";
+import {
+  NFLVERSE_TEAM_WEEKLY_STATS_COMPONENT_SCHEMA,
+  NFLVERSE_DEFENSE_SCORING_EVENTS_VERSION,
+  NFLVERSE_WEEKLY_STATS_COMPONENT_SCHEMA,
+  type NflversePlayerInjuryReport,
+} from "@laces-out/source-nflverse";
 
 import {
   datasetMetadata,
@@ -84,6 +89,26 @@ describe("nflverse weekly worker helpers", () => {
 
     expect(stats.minimumPublishableMatchRate).toBe(0.95);
     expect(snaps.minimumPublishableMatchRate).toBe(0.9);
+  });
+
+  it("versions team and player component contracts independently without replaying other datasets", () => {
+    const metadata = (sourceKey: string) =>
+      datasetMetadata({ ...metadataInput, sourceKey, rowsRead: 32, rowsUnmatched: 0 });
+    const team = metadata("nflverse.stats-team-week.2026");
+    const player = metadata("nflverse.stats-player-week.2026");
+    const snaps = metadata("nflverse.snap-counts.2026");
+    expect(team.teamWeeklyComponentSchema).toBe(NFLVERSE_TEAM_WEEKLY_STATS_COMPONENT_SCHEMA);
+    expect(team.teamWeeklyScoringEventsVersion).toBe(NFLVERSE_DEFENSE_SCORING_EVENTS_VERSION);
+    expect(team.playerWeeklyComponentSchema).toBeUndefined();
+    expect(player.playerWeeklyComponentSchema).toBe(NFLVERSE_WEEKLY_STATS_COMPONENT_SCHEMA);
+    expect(player.teamWeeklyComponentSchema).toBeUndefined();
+    expect(snaps.teamWeeklyComponentSchema).toBeUndefined();
+    expect(snaps.playerWeeklyComponentSchema).toBeUndefined();
+    expect([
+      team.sourceSchemaVersion,
+      player.sourceSchemaVersion,
+      snaps.sourceSchemaVersion,
+    ]).toEqual([4, 4, 4]);
   });
 
   it("writes qualityState beside publishable so the health job sees a degraded source", () => {
