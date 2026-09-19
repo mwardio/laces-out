@@ -134,11 +134,12 @@ function quantile(sorted: readonly number[], probability: number): number {
  * Reprices joint outcomes in O(paths × priced components), with no model fitting or simulation.
  * A prefix uses exactly the release draws from a larger convergence-reference ensemble.
  */
-export function scoreFirstPartyRosOutcomes(
+function scoreOutcomeDistribution(
   ensemble: FirstPartyRosOutcomeEnsemble,
   profile: ProjectionScoringProfile,
-  scenarioCount = ensemble.scenarioCount,
-): FirstPartyRosOutcomeScore {
+  scenarioCount: number,
+  retainSamples: boolean,
+): { readonly summary: FirstPartyRosOutcomeScore; readonly samples: readonly number[] | null } {
   if (
     ensemble.schemaVersion !== FIRST_PARTY_ROS_OUTCOME_SCHEMA_VERSION ||
     ensemble.modelVersion !== FIRST_PARTY_ROS_MODEL_VERSION ||
@@ -222,17 +223,46 @@ export function scoreFirstPartyRosOutcomes(
     points.reduce((sum, value) => sum + (value - meanPoints) ** 2, 0) / scenarioCount;
   if (!Number.isFinite(meanPoints) || !Number.isFinite(variance))
     throw new RangeError("ROS outcome distribution overflow");
+  // Copy only on the explicit diagnostic path. Sorting for quantiles must not destroy physical
+  // antithetic order, and a caller changing retained samples cannot alter the persisted vectors.
+  const samples = retainSamples ? points.slice() : null;
   points.sort((left, right) => left - right);
   return {
-    seedHash: ensemble.metadata.provenance.seedHash,
-    diagnostics: ensemble.metadata.diagnostics,
-    expectedGames: gamesSum / scenarioCount,
-    meanPoints,
-    standardDeviation: Math.sqrt(variance),
-    p15Points: quantile(points, 0.15),
-    p50Points: quantile(points, 0.5),
-    p85Points: quantile(points, 0.85),
-    scoringProfileKey,
-    scenarioCount,
+    samples,
+    summary: {
+      seedHash: ensemble.metadata.provenance.seedHash,
+      diagnostics: ensemble.metadata.diagnostics,
+      expectedGames: gamesSum / scenarioCount,
+      meanPoints,
+      standardDeviation: Math.sqrt(variance),
+      p15Points: quantile(points, 0.15),
+      p50Points: quantile(points, 0.5),
+      p85Points: quantile(points, 0.85),
+      scoringProfileKey,
+      scenarioCount,
+    },
   };
+}
+
+/** Reprice validated paths with the existing summary and type-7 quantile definition unchanged. */
+export function scoreFirstPartyRosOutcomes(
+  ensemble: FirstPartyRosOutcomeEnsemble,
+  profile: ProjectionScoringProfile,
+  scenarioCount = ensemble.scenarioCount,
+): FirstPartyRosOutcomeScore {
+  return scoreOutcomeDistribution(ensemble, profile, scenarioCount, false).summary;
+}
+
+/**
+ * The same validated scorer, additionally retaining scores in original adjacent antithetic-pair
+ * order for numerical diagnostics. This returns a private score copy, never outcome columns.
+ * A sample vector or its summary alone is not a convergence or predictive-accuracy assertion.
+ */
+export function scoreFirstPartyRosOutcomesWithSamples(
+  ensemble: FirstPartyRosOutcomeEnsemble,
+  profile: ProjectionScoringProfile,
+  scenarioCount = ensemble.scenarioCount,
+): { readonly summary: FirstPartyRosOutcomeScore; readonly samples: readonly number[] } {
+  const result = scoreOutcomeDistribution(ensemble, profile, scenarioCount, true);
+  return { summary: result.summary, samples: result.samples! };
 }

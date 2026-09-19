@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   scoreFirstPartyRosOutcomes,
+  scoreFirstPartyRosOutcomesWithSamples,
   simulateFirstPartyRosOutcomes,
   type FirstPartyRosOutcomeInput,
 } from "./ros-outcomes.js";
@@ -9,7 +10,7 @@ import {
   projectFirstPartyRestOfSeason,
   projectFirstPartyRestOfSeasonProfiles,
 } from "./rest-of-season.js";
-import type { ProjectionScoringProfile } from "./scoring.js";
+import { compileProjectionScorer, type ProjectionScoringProfile } from "./scoring.js";
 
 function input(overrides: Partial<FirstPartyRosOutcomeInput> = {}): FirstPartyRosOutcomeInput {
   return {
@@ -71,6 +72,41 @@ const profiles: readonly ProjectionScoringProfile[] = [0, 0.5, 1].map((points) =
 }));
 
 describe("reusable ROS joint football outcomes", () => {
+  it("retains private scores in physical pair order without changing summary or prefix semantics", () => {
+    const ensemble = simulateFirstPartyRosOutcomes(input());
+    const originalColumns = Object.fromEntries(
+      Object.entries(ensemble.columns).map(([name, column]) => [name, column.slice()]),
+    );
+    for (const profile of profiles) {
+      const full = scoreFirstPartyRosOutcomesWithSamples(ensemble, profile);
+      const prefix = scoreFirstPartyRosOutcomesWithSamples(ensemble, profile, 128);
+      expect(full.summary).toEqual(scoreFirstPartyRosOutcomes(ensemble, profile));
+      expect(prefix.summary).toEqual(scoreFirstPartyRosOutcomes(ensemble, profile, 128));
+      expect(prefix.samples).toEqual(full.samples.slice(0, 128));
+      const independentScorer = compileProjectionScorer(profile);
+      for (const [index, value] of full.samples.entries()) {
+        const components = Object.fromEntries(
+          Object.entries(ensemble.columns).map(([name, column]) => [name, column[index]!]),
+        );
+        expect(value).toBeCloseTo(independentScorer(components), 12);
+      }
+      expect(full.samples).not.toEqual([...full.samples].sort((left, right) => left - right));
+      const originalSummary = { ...full.summary };
+      (full.samples as number[]).fill(-9_999);
+      expect(full.summary).toEqual(originalSummary);
+      expect(scoreFirstPartyRosOutcomes(ensemble, profile)).toEqual(originalSummary);
+    }
+    expect(ensemble.columns).toEqual(originalColumns);
+  });
+
+  it("keeps the full persisted-vector validation on the retained-score path", () => {
+    const ensemble = simulateFirstPartyRosOutcomes(input());
+    ensemble.columns.receptions![200] = NaN;
+    expect(() => scoreFirstPartyRosOutcomesWithSamples(ensemble, profiles[0]!, 128)).toThrow(
+      "Non-finite ROS outcome component",
+    );
+  });
+
   it("does not turn a bye's zero vocabulary into evidence for missing touchdown distances", () => {
     const football = input();
     const withByeZeros = {
