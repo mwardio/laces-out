@@ -32,6 +32,7 @@ import {
   firstPartyRosEffectiveRosterAliasPosition,
   firstPartyRosPlayerAliasPlan,
   firstPartyRosPlayerAliasPlansChecksum,
+  firstPartyRosYahooEvidenceClosure,
   unmatchedCurrentFantasyPlayers,
   type FirstPartyRosScoringRuleRow,
 } from "./first-party-ros-candidate-provider.js";
@@ -1434,6 +1435,394 @@ describe("buildFirstPartyRosLeagueTarget", () => {
     ).toMatchObject({
       aliases: [],
       issues: [{ position: "WR", playerId: "provider-wr", code: "identity-unresolved" }],
+    });
+  });
+
+  describe("Yahoo crosswalk identity", () => {
+    const roster = {
+      playerId: "yahoo-wr",
+      fullName: "Provider Name With Suffix",
+      position: "WR",
+      team: "BUF",
+    };
+    const canonical = {
+      playerId: "canonical-wr",
+      fullName: "Different Canonical Name",
+      position: "WR",
+      team: "BUF",
+      gsisId: "00-0031234",
+    };
+    const common = {
+      leagueSeasonId: "11111111-1111-4111-8111-111111111111",
+      rosterPlayers: [roster],
+      canonicalPlayers: [canonical],
+    };
+
+    it.each([
+      ["yahoo", "470.p.26686", "sleeper-yahoo", "26686"],
+      ["yahoo", "nfl.p.26686", "sleeper-yahoo", "26686"],
+      ["yahoo", "26686", "sleeper-yahoo", "nfl.p.26686"],
+      ["yahoo", "470.p.26686", "sleeper-yahoo", "469.p.26686"],
+      ["sleeper-yahoo", "26686", "yahoo", "470.p.26686"],
+    ])(
+      "joins %s %s to %s %s despite different display names",
+      (rosterSource, rosterKey, canonicalSource, canonicalKey) => {
+        const plan = firstPartyRosPlayerAliasPlan({
+          ...common,
+          externalIds: [
+            { playerId: roster.playerId, source: rosterSource, externalId: rosterKey },
+            { playerId: canonical.playerId, source: canonicalSource, externalId: canonicalKey },
+          ],
+        });
+        expect(plan).toEqual({
+          aliases: [
+            {
+              playerId: roster.playerId,
+              canonicalPlayerId: canonical.playerId,
+              position: "WR",
+              team: "BUF",
+            },
+          ],
+          issues: [],
+        });
+      },
+    );
+
+    it.each([false, true])(
+      "rejects colliding normalized canonical keys without name fallback (reversed=%s)",
+      (reverse) => {
+        const other = { ...canonical, playerId: "other-canonical", gsisId: "00-0031235" };
+        const crosswalks = [
+          { playerId: canonical.playerId, source: "sleeper-yahoo", externalId: "26686" },
+          { playerId: other.playerId, source: "sleeper-yahoo", externalId: "nfl.p.26686" },
+        ];
+        const plan = firstPartyRosPlayerAliasPlan({
+          ...common,
+          // Even a unique exact-name fallback must not override the conflicting crosswalk.
+          rosterPlayers: [{ ...roster, fullName: canonical.fullName }],
+          canonicalPlayers: [canonical, { ...other, fullName: "Another Receiver" }],
+          externalIds: [
+            { playerId: roster.playerId, source: "yahoo", externalId: "470.p.26686" },
+            ...(reverse ? [...crosswalks].reverse() : crosswalks),
+          ],
+        });
+        expect(plan).toEqual({
+          aliases: [],
+          issues: [{ position: "WR", playerId: roster.playerId, code: "identity-ambiguous" }],
+        });
+      },
+    );
+
+    it("accepts duplicate normalized keys only when they identify the same canonical player", () => {
+      const plan = firstPartyRosPlayerAliasPlan({
+        ...common,
+        externalIds: [
+          { playerId: roster.playerId, source: "yahoo", externalId: "470.p.26686" },
+          { playerId: canonical.playerId, source: "sleeper-yahoo", externalId: "26686" },
+          { playerId: canonical.playerId, source: "sleeper-yahoo", externalId: "nfl.p.26686" },
+        ],
+      });
+      expect(plan.issues).toEqual([]);
+      expect(plan.aliases).toHaveLength(1);
+      expect(plan.aliases[0]?.canonicalPlayerId).toBe(canonical.playerId);
+    });
+
+    it.each(["470.p.99999", "470.p.26686.extra", "nba.p.26686"])(
+      "keeps unresolved or invalid Yahoo evidence strict instead of matching a name: %s",
+      (externalId) => {
+        const plan = firstPartyRosPlayerAliasPlan({
+          ...common,
+          rosterPlayers: [{ ...roster, fullName: canonical.fullName }],
+          externalIds: [
+            { playerId: roster.playerId, source: "yahoo", externalId },
+            { playerId: canonical.playerId, source: "sleeper-yahoo", externalId: "26686" },
+          ],
+        });
+        expect(plan).toEqual({
+          aliases: [],
+          issues: [{ position: "WR", playerId: roster.playerId, code: "identity-unresolved" }],
+        });
+      },
+    );
+
+    it.each([
+      { team: "MIA", position: "WR" },
+      { team: "BUF", position: "RB" },
+    ])("retains team and position guards after the Yahoo key matches: %j", (different) => {
+      const plan = firstPartyRosPlayerAliasPlan({
+        ...common,
+        canonicalPlayers: [{ ...canonical, ...different }],
+        externalIds: [
+          { playerId: roster.playerId, source: "yahoo", externalId: "470.p.26686" },
+          { playerId: canonical.playerId, source: "sleeper-yahoo", externalId: "26686" },
+        ],
+      });
+      expect(plan).toEqual({
+        aliases: [],
+        issues: [{ position: "WR", playerId: roster.playerId, code: "identity-incompatible" }],
+      });
+    });
+
+    it("rejects two roster Yahoo keys resolving to the same canonical player", () => {
+      const other = { ...roster, playerId: "second-yahoo-wr" };
+      const plan = firstPartyRosPlayerAliasPlan({
+        ...common,
+        rosterPlayers: [roster, other],
+        externalIds: [
+          { playerId: roster.playerId, source: "yahoo", externalId: "470.p.26686" },
+          { playerId: other.playerId, source: "yahoo", externalId: "nfl.p.26686" },
+          { playerId: canonical.playerId, source: "sleeper-yahoo", externalId: "26686" },
+        ],
+      });
+      expect(plan.aliases).toEqual([]);
+      expect(plan.issues).toHaveLength(2);
+      expect(plan.issues).toEqual(
+        expect.arrayContaining(
+          [roster, other].map((player) => ({
+            position: "WR",
+            playerId: player.playerId,
+            code: "canonical-identity-not-bijective",
+          })),
+        ),
+      );
+    });
+  });
+
+  describe("unbridged Yahoo identity fallback", () => {
+    const roster = {
+      playerId: "yahoo-wr",
+      fullName: "Ａ.J. Receiver",
+      position: "WR",
+      team: "WSH",
+    };
+    const canonical = {
+      ...roster,
+      playerId: "canonical-wr",
+      fullName: "A.J. Receiver",
+      team: "WAS",
+      gsisId: "00-0031234",
+    };
+    const yahoo = { playerId: roster.playerId, source: "yahoo", externalId: "470.p.26686" };
+    const common = {
+      leagueSeasonId: "11111111-1111-4111-8111-111111111111",
+      rosterPlayers: [roster],
+      canonicalPlayers: [canonical],
+      externalIds: [yahoo],
+      yahooExternalEvidenceComplete: true,
+    };
+
+    it("uses one trusted-GSIS exact identity only with complete outside-pool evidence", () => {
+      const accepted = firstPartyRosPlayerAliasPlan(common);
+      expect(accepted).toEqual({
+        aliases: [
+          {
+            position: "WR",
+            team: "WAS",
+            playerId: roster.playerId,
+            canonicalPlayerId: canonical.playerId,
+          },
+        ],
+        issues: [],
+      });
+      const { yahooExternalEvidenceComplete: _complete, ...incomplete } = common;
+      expect(firstPartyRosPlayerAliasPlan(incomplete)).toMatchObject({
+        aliases: [],
+        issues: [{ code: "identity-unresolved" }],
+      });
+    });
+
+    it.each([
+      { gsisId: null },
+      { fullName: "A.J. Receiver Jr." },
+      { team: "BUF" },
+      { position: "RB" },
+    ])("retains trusted identity, exact name, team, and position requirements: %j", (change) => {
+      expect(
+        firstPartyRosPlayerAliasPlan({
+          ...common,
+          canonicalPlayers: [{ ...canonical, ...change }],
+        }),
+      ).toMatchObject({ aliases: [], issues: [{ code: "identity-unresolved" }] });
+    });
+
+    it.each(["470.p.99999", "nfl.p.99999", "nba.p.26686", "", "26686.extra"])(
+      "rejects a candidate's different or malformed Yahoo fact: %s",
+      (externalId) => {
+        expect(
+          firstPartyRosPlayerAliasPlan({
+            ...common,
+            externalIds: [yahoo, { playerId: canonical.playerId, source: "yahoo", externalId }],
+          }),
+        ).toMatchObject({ aliases: [], issues: [{ code: "identity-unresolved" }] });
+      },
+    );
+
+    it("retains conflicting and outside-pool GSIS guards", () => {
+      for (const gsisEvidence of [
+        [{ playerId: roster.playerId, gsisId: "00-0099999" }],
+        [
+          { playerId: roster.playerId, gsisId: canonical.gsisId },
+          { playerId: roster.playerId, gsisId: "00-0099999" },
+        ],
+      ]) {
+        expect(firstPartyRosPlayerAliasPlan({ ...common, gsisEvidence }).aliases).toEqual([]);
+      }
+    });
+
+    it("does not use a name when a paired Sleeper bridge points outside today's pool", () => {
+      expect(
+        firstPartyRosPlayerAliasPlan({
+          ...common,
+          externalIds: [
+            yahoo,
+            {
+              playerId: "outside-pool",
+              source: "sleeper-yahoo",
+              externalId: "nfl.p.26686",
+            },
+          ],
+        }),
+      ).toMatchObject({ aliases: [], issues: [{ code: "identity-incompatible" }] });
+    });
+
+    it("does not treat another roster's Yahoo row as an outside-pool canonical bridge", () => {
+      expect(
+        firstPartyRosPlayerAliasPlan({
+          ...common,
+          externalIds: [
+            yahoo,
+            {
+              playerId: "other-roster-alias",
+              source: "yahoo",
+              externalId: "469.p.26686",
+            },
+          ],
+        }),
+      ).toMatchObject({ aliases: [{ canonicalPlayerId: canonical.playerId }], issues: [] });
+    });
+
+    it.each([false, true])(
+      "rejects one active and one outside-pool bridge in either order: %s",
+      (reverse) => {
+        const bridges = [
+          { playerId: canonical.playerId, source: "sleeper-yahoo", externalId: "26686" },
+          { playerId: "outside-pool", source: "sleeper-yahoo", externalId: "nfl.p.26686" },
+        ];
+        expect(
+          firstPartyRosPlayerAliasPlan({
+            ...common,
+            externalIds: [yahoo, ...(reverse ? bridges.reverse() : bridges)],
+          }),
+        ).toMatchObject({ aliases: [], issues: [{ code: "identity-ambiguous" }] });
+      },
+    );
+
+    it("does not use Yahoo facts to prune an ambiguous exact-name cohort", () => {
+      const other = { ...canonical, playerId: "other-canonical", gsisId: "00-0031235" };
+      expect(
+        firstPartyRosPlayerAliasPlan({
+          ...common,
+          canonicalPlayers: [canonical, other],
+          externalIds: [yahoo, { playerId: other.playerId, source: "yahoo", externalId: "99999" }],
+        }),
+      ).toMatchObject({ aliases: [], issues: [{ code: "identity-ambiguous" }] });
+    });
+
+    it("rejects conflicting or malformed anchor facts even when another bridge resolves", () => {
+      for (const externalId of ["99999", "nba.p.26686", " "]) {
+        expect(
+          firstPartyRosPlayerAliasPlan({
+            ...common,
+            externalIds: [
+              yahoo,
+              { ...yahoo, externalId },
+              { playerId: canonical.playerId, source: "sleeper-yahoo", externalId: "26686" },
+            ],
+          }).aliases,
+        ).toEqual([]);
+      }
+    });
+
+    it("retains direct canonical authority and bijection after fallback", () => {
+      expect(
+        firstPartyRosPlayerAliasPlan({
+          ...common,
+          rosterPlayers: [canonical],
+          externalIds: [
+            { playerId: canonical.playerId, source: "yahoo", externalId: "nba.p.26686" },
+          ],
+        }),
+      ).toEqual({ aliases: [], issues: [] });
+      expect(
+        firstPartyRosPlayerAliasPlan({
+          ...common,
+          rosterPlayers: [roster, { ...roster, playerId: "other-yahoo" }],
+          externalIds: [yahoo, { ...yahoo, playerId: "other-yahoo" }],
+        }),
+      ).toMatchObject({
+        aliases: [],
+        issues: [
+          { code: "canonical-identity-not-bijective" },
+          { code: "canonical-identity-not-bijective" },
+        ],
+      });
+    });
+
+    it("keeps ESPN opaque IDs strict even with complete Yahoo evidence", () => {
+      expect(
+        firstPartyRosPlayerAliasPlan({
+          ...common,
+          externalIds: [yahoo, { ...yahoo, source: "espn", externalId: "unmapped" }],
+        }),
+      ).toMatchObject({ aliases: [], issues: [{ code: "identity-unresolved" }] });
+    });
+
+    it("closes only requested Yahoo suffixes, preserving outside-pool targets", () => {
+      const outside = { playerId: "outside", source: "sleeper-yahoo", externalId: "nfl.p.26686" };
+      const closure = firstPartyRosYahooEvidenceClosure({
+        externalIds: [yahoo],
+        sourceRows: [outside, { ...outside, externalId: "99999" }],
+      });
+      expect(closure).toEqual({ complete: true, externalIds: [yahoo, outside] });
+      expect(
+        firstPartyRosPlayerAliasPlan({
+          ...common,
+          externalIds: closure.externalIds,
+          yahooExternalEvidenceComplete: closure.complete,
+        }),
+      ).toMatchObject({ aliases: [], issues: [{ code: "identity-incompatible" }] });
+    });
+
+    it("fails closed beyond the catalog cap without discarding an existing explicit join", () => {
+      const bridge = { playerId: canonical.playerId, source: "sleeper-yahoo", externalId: "26686" };
+      const atCap = Array.from({ length: 50_000 }, () => ({ ...bridge, externalId: "99999" }));
+      expect(
+        firstPartyRosYahooEvidenceClosure({ externalIds: [yahoo], sourceRows: atCap }).complete,
+      ).toBe(true);
+      const overflow = [...atCap, bridge];
+      const incomplete = firstPartyRosYahooEvidenceClosure({
+        externalIds: [yahoo],
+        sourceRows: overflow,
+      });
+      expect(incomplete).toEqual({ complete: false, externalIds: [yahoo] });
+      expect(
+        firstPartyRosPlayerAliasPlan({
+          ...common,
+          externalIds: incomplete.externalIds,
+          yahooExternalEvidenceComplete: incomplete.complete,
+        }),
+      ).toMatchObject({ aliases: [], issues: [{ code: "identity-unresolved" }] });
+      const explicit = firstPartyRosYahooEvidenceClosure({
+        externalIds: [yahoo, bridge],
+        sourceRows: overflow,
+      });
+      expect(
+        firstPartyRosPlayerAliasPlan({
+          ...common,
+          externalIds: explicit.externalIds,
+          yahooExternalEvidenceComplete: explicit.complete,
+        }),
+      ).toMatchObject({ aliases: [{ canonicalPlayerId: canonical.playerId }], issues: [] });
     });
   });
 
