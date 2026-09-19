@@ -5,6 +5,7 @@ import { createDatabase } from "@laces-out/db";
 
 import { currentNflSeason } from "../src/nfl-season.js";
 import { readRosBootstrapHealth } from "../src/ros-bootstrap-health.js";
+import { ROS_CORPUS_POINTS_ALLOWED_DEFINITIONS } from "../src/ros-corpus-routing.js";
 
 // Deliberately read-only: do not import/start the worker or its coordinator here.
 let database: ReturnType<typeof createDatabase> | undefined;
@@ -19,12 +20,19 @@ try {
   if (!path.isAbsolute(directory)) throw new Error("Invalid outcome cache path");
   const environment = loadEnvironment();
   database = createDatabase(environment.DATABASE_URL, 1);
-  const result = await readRosBootstrapHealth({
-    database: database.db,
-    directory,
-    season,
-    signal: AbortSignal.timeout(30_000),
-  });
+  const groups = [];
+  for (const pointsAllowedDefinition of ROS_CORPUS_POINTS_ALLOWED_DEFINITIONS) {
+    groups.push(
+      await readRosBootstrapHealth({
+        database: database.db,
+        directory,
+        season,
+        pointsAllowedDefinition,
+        signal: AbortSignal.timeout(30_000),
+      }),
+    );
+  }
+  const result = { attention: groups.some((group) => group.attention), season, groups };
   process.stdout.write(`${JSON.stringify(result)}\n`);
   process.exitCode = result.attention ? 1 : 0;
 } catch {

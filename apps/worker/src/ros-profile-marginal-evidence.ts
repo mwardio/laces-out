@@ -283,6 +283,7 @@ export function createRosMarginalProfileValidationRunner(options: {
   readonly resolveCorpora: (
     season: number,
     signal: AbortSignal,
+    scoringProfileKey: string,
   ) => Promise<RosMarginalCorpusBundle>;
   readonly reportDirectory: string;
   readonly runnerOptions?: RosProfileValidationRunnerOptions;
@@ -295,7 +296,11 @@ export function createRosMarginalProfileValidationRunner(options: {
     input.signal.throwIfAborted();
     const profile = rosProfileDefinitionFromKey(input.scoringProfileKey);
     rosHistoricalProfilePointsAllowedDefinition(profile.profile);
-    const bundle = await options.resolveCorpora(input.season, input.signal);
+    const bundle = await options.resolveCorpora(
+      input.season,
+      input.signal,
+      input.scoringProfileKey,
+    );
     assertBundle(bundle, input);
     let pointsAllowedDefinition: ProjectionDefensePointsAllowedDefinition | undefined;
     async function replay(

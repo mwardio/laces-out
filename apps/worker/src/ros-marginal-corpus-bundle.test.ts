@@ -225,6 +225,13 @@ describe("shared marginal dependency bundle", () => {
     ).toEqual(bundle);
     expect(cacheRead).not.toHaveBeenCalled();
     expect(await prepareRosMarginalCorpusBundle(options)).toBe(checksum);
+    await expect(
+      createRosMarginalCorpusBundleResolver({
+        directory,
+        bundleChecksum: checksum,
+        pointsAllowedDefinition: "espn-2019-v1",
+      })(2026, signal),
+    ).rejects.toMatchObject({ diagnostic: { dependency: "candidate", reason: "incompatible" } });
   });
   it.each(["candidate", "previous", "training"] as const)(
     "reports missing %s before any profile replay",

@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { constants } from "node:fs";
 import { link, mkdir, open, rm } from "node:fs/promises";
 import path from "node:path";
+import type { ProjectionDefensePointsAllowedDefinition } from "@laces-out/projections";
 import { assertRosCacheHeadroom } from "./ros-cache-disk-space.js";
 import type { RosCorpusLock } from "./ros-corpus-lock.js";
 import {
@@ -128,6 +129,7 @@ async function readCorpora(
   manifest: Manifest,
   signal: AbortSignal,
   verifyVectors: boolean,
+  expectedDefinition?: ProjectionDefensePointsAllowedDefinition,
 ): Promise<void> {
   const request = rosSharedCorpusRequest(manifest.bundle.forecastSeason).protocol;
   let evaluationRows: Map<string, string> | undefined;
@@ -150,6 +152,8 @@ async function readCorpora(
     const corpus = loaded.corpus;
     try {
       const definition = requireRosHistoricalPointsAllowedDefinition(corpus);
+      if (expectedDefinition !== undefined && definition !== expectedDefinition)
+        fail(dependency, "incompatible");
       if (
         validatedCorpora.length > 0 &&
         definition !== validatedCorpora[0]![1].pointsAllowedDefinition
@@ -249,6 +253,7 @@ async function readCorpora(
 export function createRosMarginalCorpusBundleResolver(options: {
   readonly directory: string;
   readonly bundleChecksum?: string | undefined;
+  readonly pointsAllowedDefinition?: ProjectionDefensePointsAllowedDefinition;
 }) {
   return async (season: number, signal: AbortSignal): Promise<RosMarginalCorpusBundle> => {
     signal.throwIfAborted();
@@ -291,7 +296,7 @@ export function createRosMarginalCorpusBundleResolver(options: {
       await handle.close();
     }
     validateManifest(manifest, season);
-    await readCorpora(options.directory, manifest, signal, false);
+    await readCorpora(options.directory, manifest, signal, false, options.pointsAllowedDefinition);
     signal.throwIfAborted();
     return manifest.bundle;
   };

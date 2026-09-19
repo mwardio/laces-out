@@ -16,7 +16,10 @@ import {
   rosProfileValidationIsTransient,
 } from "./ros-profile-recovery-state.js";
 
-import { rosSharedCorpusRequest } from "./ros-shared-corpus-runner.js";
+import {
+  rosCorpusDefinitionForProfileKey,
+  type RosProfileCorpusReadiness,
+} from "./ros-corpus-routing.js";
 
 /** Operational recovery may only reuse an already verified complete football corpus. */
 export class RosProfileRecoveryService {
@@ -24,10 +27,12 @@ export class RosProfileRecoveryService {
     private readonly input: {
       readonly database: Database;
       readonly releaseRail?: FirstPartyRosReleaseRail;
-      readonly readyCorpusForSeason: (
-        season: number,
-        signal: AbortSignal,
-      ) => Promise<string | null>;
+      readonly sharedCorpus: RosProfileCorpusReadiness;
+      readonly onReadinessFailure?: (input: {
+        season: number;
+        definition: string;
+        error: unknown;
+      }) => void;
       readonly enqueueValidation: (job: RosProfileValidationJob) => Promise<string | null>;
       readonly validationJobIsOutstanding: (id: string) => Promise<boolean>;
       readonly validationJobIsTerminal?: (
@@ -49,7 +54,10 @@ export class RosProfileRecoveryService {
       eq(firstPartyRosProfileValidations.calibrationVersion, releaseIdentity.calibrationVersion),
     );
     const candidates = await this.input.database
-      .select({ id: firstPartyRosProfileValidations.id })
+      .select({
+        id: firstPartyRosProfileValidations.id,
+        scoringProfileKey: firstPartyRosProfileValidations.scoringProfileKey,
+      })
       .from(firstPartyRosProfileValidations)
       .where(
         and(
@@ -58,13 +66,35 @@ export class RosProfileRecoveryService {
         ),
       );
     if (candidates.length === 0) return;
-    const corpusIdentity = await this.input.readyCorpusForSeason(season, signal);
-    signal.throwIfAborted();
-    if (corpusIdentity === null) return;
-    if (!/^[a-f0-9]{64}$/u.test(corpusIdentity))
-      throw new Error("Invalid ready ROS corpus identity");
+    const readiness = new Map<string, Awaited<ReturnType<RosProfileCorpusReadiness>> | null>();
     for (const candidate of candidates) {
       signal.throwIfAborted();
+      let group: string;
+      try {
+        group =
+          rosCorpusDefinitionForProfileKey(candidate.scoringProfileKey) ??
+          "unpriced-points-allowed";
+      } catch {
+        continue;
+      }
+      if (!readiness.has(group)) {
+        try {
+          readiness.set(
+            group,
+            await this.input.sharedCorpus(season, signal, candidate.scoringProfileKey),
+          );
+        } catch (error) {
+          signal.throwIfAborted();
+          this.input.onReadinessFailure?.({ season, definition: group, error });
+          readiness.set(group, null);
+        }
+      }
+      const shared = readiness.get(group);
+      signal.throwIfAborted();
+      if (!shared || shared.corpusIdentity === null) continue;
+      const { corpusIdentity, requestIdentity } = shared;
+      if (!/^[a-f0-9]{64}$/u.test(corpusIdentity) || !/^[a-f0-9]{64}$/u.test(requestIdentity))
+        throw new Error("Invalid ready ROS corpus identity");
       const reservation = await this.input.database.transaction(async (transaction) => {
         const [row] = await transaction
           .select()
@@ -72,9 +102,13 @@ export class RosProfileRecoveryService {
           .where(and(identity, eq(firstPartyRosProfileValidations.id, candidate.id)))
           .for("update");
         const waiting =
-          row?.state === "pending" &&
-          rosProfileBootstrapWait(row.report, rosSharedCorpusRequest(season).identity);
-        if (!row || (!waiting && !rosProfileValidationIsTransient(row))) return null;
+          row?.state === "pending" && rosProfileBootstrapWait(row.report, requestIdentity);
+        if (
+          !row ||
+          row.scoringProfileKey !== candidate.scoringProfileKey ||
+          (!waiting && !rosProfileValidationIsTransient(row))
+        )
+          return null;
         const previous = rosProfileRecoveryMarker(row.report);
         if (row.report?.automaticRecovery !== undefined && previous === undefined) return null;
         const now = this.input.now?.() ?? new Date();

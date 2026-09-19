@@ -133,12 +133,22 @@ describe.skipIf(!dockerAvailable())("Replay-only ROS profile recovery against Po
       modelVersion?: string;
       policyVersion?: string;
       calibrationVersion?: string;
+      pointsAllowedDefinition?: "yahoo-2022-v1" | "espn-2019-v1";
     } = {},
   ): Promise<ValidationRow> {
     const definition = rosProfileDefinitionFromKey(
       projectionScoringProfileKey({
         id: "recovery-fixture",
-        rules: [{ statId: "receptions", points: options.points ?? 1 }],
+        rules:
+          options.pointsAllowedDefinition === undefined
+            ? [{ statId: "receptions", points: options.points ?? 1 }]
+            : [
+                {
+                  statId: "points_allowed",
+                  points: -0.1,
+                  statDefinition: options.pointsAllowedDefinition,
+                },
+              ],
       }),
     );
     const identity = {
@@ -219,7 +229,10 @@ describe.skipIf(!dockerAvailable())("Replay-only ROS profile recovery against Po
     const createService = () =>
       new RosProfileRecoveryService({
         database: handle.db,
-        readyCorpusForSeason,
+        sharedCorpus: async (season, signal) => ({
+          requestIdentity: rosSharedCorpusRequest(season).identity,
+          corpusIdentity: await readyCorpusForSeason(season, signal),
+        }),
         validationJobIsOutstanding,
         validationJobIsTerminal,
         enqueueValidation,
@@ -271,7 +284,10 @@ describe.skipIf(!dockerAvailable())("Replay-only ROS profile recovery against Po
     const service = new RosProfileRecoveryService({
       database: handle.db,
       releaseRail: "marginal-v8",
-      readyCorpusForSeason: async () => CORPUS_A,
+      sharedCorpus: async (season) => ({
+        requestIdentity: rosSharedCorpusRequest(season).identity,
+        corpusIdentity: CORPUS_A,
+      }),
       validationJobIsOutstanding: async () => false,
       enqueueValidation,
       now: () => NOW,
@@ -283,6 +299,37 @@ describe.skipIf(!dockerAvailable())("Replay-only ROS profile recovery against Po
     expect((await read(marginal.id)).report?.automaticRecovery).toMatchObject({
       corpusIdentity: CORPUS_A,
     });
+  });
+
+  it("recovers ESPN when Yahoo preparation fails without changing the Yahoo result", async () => {
+    const season = 2074;
+    const yahoo = await seed(season, { pointsAllowedDefinition: "yahoo-2022-v1" });
+    const espn = await seed(season, { pointsAllowedDefinition: "espn-2019-v1" });
+    const enqueueValidation = vi.fn(async () => randomUUID());
+    const onReadinessFailure = vi.fn();
+    const service = new RosProfileRecoveryService({
+      database: handle.db,
+      sharedCorpus: async (requestedSeason, _signal, key) => {
+        if (key === yahoo.scoringProfileKey) throw new Error("Yahoo source unavailable");
+        expect(key).toBe(espn.scoringProfileKey);
+        return {
+          requestIdentity: rosSharedCorpusRequest(requestedSeason, "espn-2019-v1").identity,
+          corpusIdentity: CORPUS_B,
+        };
+      },
+      enqueueValidation,
+      onReadinessFailure,
+      validationJobIsOutstanding: async () => false,
+      now: () => NOW,
+    });
+    await service.recover(season, new AbortController().signal);
+    expect(enqueueValidation).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ profileValidationId: espn.id, recoveryCorpusIdentity: CORPUS_B }),
+    );
+    expect(onReadinessFailure).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ definition: "yahoo-2022-v1" }),
+    );
+    expect(await read(yahoo.id)).toEqual(yahoo);
   });
 
   it.each([

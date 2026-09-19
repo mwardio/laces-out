@@ -115,10 +115,16 @@ describe.skipIf(!dockerAvailable())("Durable shared ROS bootstrap against Postgr
     }
   }, 30_000);
 
-  function fixture(season = 2026) {
+  function fixture(
+    season = 2026,
+    pointsAllowedDefinition: "yahoo-2022-v1" | "espn-2019-v1" = "yahoo-2022-v1",
+  ) {
     let now = NOW;
     let ready: string | null = null;
-    const request = rosSharedCorpusRequest(season);
+    const request = rosSharedCorpusRequest(season, pointsAllowedDefinition);
+    const profile = rosScoringProfile(
+      pointsAllowedDefinition === "espn-2019-v1" ? "espn-ppr-4pt-pass" : "full-ppr",
+    );
     const outstanding = new Set<string>();
     const terminalAttempts = new Set<number>();
     const readyCorpusForSeason = vi.fn(async () => ready);
@@ -155,13 +161,13 @@ describe.skipIf(!dockerAvailable())("Durable shared ROS bootstrap against Postgr
       state: "component-preflight-qualified",
       noDatabaseWrites: true,
       noSimulation: true,
-      scoringProfile: { digest: PROFILE.digest },
+      scoringProfile: { digest: profile.digest },
       coverage: { state: "qualified", fullyHeldOutSeasons: request.protocol.heldOutSeasons },
       componentPreflight: { state: "qualified" },
       executionIdentity: {
         modelVersion: FIRST_PARTY_ROS_MODEL_VERSION,
         policyVersion: FIRST_PARTY_ROS_POLICY_VERSION,
-        scoringProfileKey: PROFILE.scoringProfileKey,
+        scoringProfileKey: profile.scoringProfileKey,
         evidenceThroughSeason: season - 1,
       },
     };
@@ -180,7 +186,7 @@ describe.skipIf(!dockerAvailable())("Durable shared ROS bootstrap against Postgr
       async (input) => {
         const report = await input.runner({
           season,
-          scoringProfileKey: PROFILE.scoringProfileKey,
+          scoringProfileKey: profile.scoringProfileKey,
           signal: input.signal,
         });
         await input.commitReady({ corpusIdentity: CORPUS, commit });
@@ -256,6 +262,7 @@ describe.skipIf(!dockerAvailable())("Durable shared ROS bootstrap against Postgr
       },
       job: (attempt = 1): RosCorpusBootstrapJob => ({
         requestIdentity: request.identity,
+        pointsAllowedDefinition,
         season,
         attempt,
       }),
@@ -280,6 +287,36 @@ describe.skipIf(!dockerAvailable())("Durable shared ROS bootstrap against Postgr
       await test.enqueue.mock.results[0]!.value,
     );
     expect(test.buildCorpus).not.toHaveBeenCalled();
+  });
+
+  it("keeps ESPN and Yahoo bootstrap jobs, source snapshots and ready records separate", async () => {
+    const yahoo = fixture(2026, "yahoo-2022-v1");
+    const espn = fixture(2026, "espn-2019-v1");
+    await yahoo.service.ensure(2026, signal(), "yahoo-2022-v1");
+    await espn.service.ensure(2026, signal(), "espn-2019-v1");
+    expect(yahoo.request.identity).not.toBe(espn.request.identity);
+    expect(espn.enqueue).toHaveBeenCalledExactlyOnceWith(espn.job());
+    // A legacy message cannot claim an ESPN request by omitting its definition.
+    await espn.service.run(
+      { requestIdentity: espn.request.identity, season: 2026, attempt: 1 },
+      context(),
+    );
+    expect(espn.preflight).not.toHaveBeenCalled();
+    await espn.service.run(espn.job(), context());
+    expect(espn.preflight).toHaveBeenCalledWith(
+      expect.objectContaining({
+        scoringProfileKey: rosScoringProfile("espn-ppr-4pt-pass").scoringProfileKey,
+      }),
+    );
+    expect(await espn.service.lookup(2026, "espn-2019-v1")).toMatchObject({
+      state: "ready",
+      corpusIdentity: CORPUS,
+    });
+    expect(await yahoo.service.lookup(2026, "yahoo-2022-v1")).toMatchObject({
+      state: "pending",
+      corpusIdentity: null,
+    });
+    expect(yahoo.modeling).not.toHaveBeenCalled();
   });
 
   it.each(["null", "error"] as const)(

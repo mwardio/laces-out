@@ -43,6 +43,8 @@ import {
   type RosMarginalDependencyDiagnostic,
 } from "./ros-marginal-corpus-bundle.js";
 import { rosSharedCorpusRequest } from "./ros-shared-corpus-runner.js";
+import { rosHistoricalProfilePointsAllowedDefinition } from "./ros-historical-corpus.js";
+import type { RosProfileCorpusReadiness } from "./ros-corpus-routing.js";
 
 export type RosProfileValidationRecord = typeof firstPartyRosProfileValidations.$inferSelect;
 type AdmittedValidation = Extract<FirstPartyRosAdmissionValidation, { state: "admissible" }>;
@@ -413,10 +415,7 @@ export class RosProfileValidationService {
       readonly validatorPath?: string;
       readonly timeoutMs?: number;
       readonly now?: () => Date;
-      readonly sharedCorpus?: (
-        season: number,
-        signal: AbortSignal,
-      ) => Promise<{ requestIdentity: string; corpusIdentity: string | null }>;
+      readonly sharedCorpus?: RosProfileCorpusReadiness;
     },
   ) {
     if (!options.repository && !options.database)
@@ -485,6 +484,7 @@ export class RosProfileValidationService {
       let definition;
       try {
         definition = rosProfileDefinitionFromKey(record.scoringProfileKey);
+        rosHistoricalProfilePointsAllowedDefinition(definition.profile);
       } catch {
         await this.repository.complete({
           id: record.id,
@@ -513,7 +513,11 @@ export class RosProfileValidationService {
       }
       let requiredReadyCorpusIdentity = job.recoveryCorpusIdentity;
       if (this.options.sharedCorpus) {
-        const shared = await this.options.sharedCorpus(record.season, context.signal);
+        const shared = await this.options.sharedCorpus(
+          record.season,
+          context.signal,
+          definition.scoringProfileKey,
+        );
         if (
           job.recoveryCorpusIdentity !== undefined &&
           shared.corpusIdentity !== job.recoveryCorpusIdentity
@@ -658,7 +662,12 @@ export class RosProfileValidationService {
         await this.repository.deferForCorpus(
           record.id,
           startedAt,
-          rosSharedCorpusRequest(record.season).identity,
+          rosSharedCorpusRequest(
+            record.season,
+            rosHistoricalProfilePointsAllowedDefinition(
+              rosProfileDefinitionFromKey(record.scoringProfileKey).profile,
+            ) ?? undefined,
+          ).identity,
           this.now(),
           error.diagnostic,
         );

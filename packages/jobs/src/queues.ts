@@ -79,6 +79,8 @@ export interface RosCorpusBootstrapJob {
   readonly requestIdentity: string;
   readonly season: number;
   readonly attempt: number;
+  /** Omitted only on legacy reference-group messages; newly dispatched jobs always include it. */
+  readonly pointsAllowedDefinition?: "yahoo-2022-v1" | "espn-2019-v1";
 }
 
 export const recommendationKinds = ["draft", "lineup", "waiver", "trade"] as const;
@@ -440,8 +442,13 @@ export function assertRosCorpusBootstrapJob(job: RosCorpusBootstrapJob): void {
     job === null ||
     typeof job !== "object" ||
     Array.isArray(job) ||
-    Object.keys(job).length !== 3 ||
-    Object.keys(job).some((key) => !["requestIdentity", "season", "attempt"].includes(key)) ||
+    ![3, 4].includes(Object.keys(job).length) ||
+    Object.keys(job).some(
+      (key) => !["requestIdentity", "season", "attempt", "pointsAllowedDefinition"].includes(key),
+    ) ||
+    (Object.hasOwn(job, "pointsAllowedDefinition") &&
+      job.pointsAllowedDefinition !== "yahoo-2022-v1" &&
+      job.pointsAllowedDefinition !== "espn-2019-v1") ||
     typeof job.requestIdentity !== "string" ||
     !/^[a-f0-9]{64}$/u.test(job.requestIdentity) ||
     !Number.isSafeInteger(job.season) ||
@@ -471,7 +478,7 @@ export async function enqueueRosCorpusBootstrap(
     return null;
   return boss.send(
     queueNames.bootstrapRosCorpus,
-    job,
+    { ...job, pointsAllowedDefinition: job.pointsAllowedDefinition ?? "yahoo-2022-v1" },
     dispatchOptions(
       "ros-corpus-bootstrap",
       `ros-corpus-bootstrap:${job.requestIdentity}:attempt:${job.attempt}`,

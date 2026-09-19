@@ -6,6 +6,7 @@ import {
   FIRST_PARTY_ROS_MODEL_VERSION,
   FIRST_PARTY_ROS_POLICY_VERSION,
   rosScoringProfile,
+  type ProjectionDefensePointsAllowedDefinition,
 } from "@laces-out/projections";
 import { and, eq, isNotNull } from "drizzle-orm";
 
@@ -23,6 +24,7 @@ import {
   readyRosSharedCorpusIdentity,
   rosSharedCorpusRequest,
   ROS_SHARED_CORPUS_BUILD_LOCK,
+  ROS_SHARED_CORPUS_REFERENCE_POINTS_ALLOWED_DEFINITION,
 } from "./ros-shared-corpus-runner.js";
 
 type Row = typeof firstPartyRosCorpusBootstraps.$inferSelect;
@@ -31,7 +33,6 @@ type CommitReady = NonNullable<
   Parameters<typeof createSharedRosCorpusValidationRunner>[0]["commitReady"]
 >;
 const table = firstPartyRosCorpusBootstraps;
-const PROFILE = rosScoringProfile("full-ppr");
 const object = (value: unknown): value is Record<string, unknown> =>
   value !== null && typeof value === "object" && !Array.isArray(value);
 const canonical = (value: unknown): string =>
@@ -60,10 +61,15 @@ export interface RosCorpusBootstrapDependencies {
   readonly enqueue: (job: RosCorpusBootstrapJob) => Promise<string | null>;
   readonly jobIsOutstanding: (requestIdentity: string) => Promise<boolean>;
   readonly jobIsTerminal?: (requestIdentity: string, attempt: number) => Promise<boolean>;
-  readonly readyCorpusForSeason?: (season: number, signal: AbortSignal) => Promise<string | null>;
+  readonly readyCorpusForSeason?: (
+    season: number,
+    signal: AbortSignal,
+    pointsAllowedDefinition: ProjectionDefensePointsAllowedDefinition,
+  ) => Promise<string | null>;
   /** Test seam at the orchestration boundary; production always uses the shared verifier/lock. */
   readonly buildCorpus?: (input: {
     season: number;
+    pointsAllowedDefinition: ProjectionDefensePointsAllowedDefinition;
     signal: AbortSignal;
     runner: RosProfileValidationRunner;
     commitReady: CommitReady;
@@ -77,9 +83,10 @@ export async function recordVerifiedRosCorpusAdoption(
   season: number,
   corpusIdentity: string,
   now = new Date(),
+  pointsAllowedDefinition: ProjectionDefensePointsAllowedDefinition = ROS_SHARED_CORPUS_REFERENCE_POINTS_ALLOWED_DEFINITION,
 ): Promise<void> {
   if (!sha(corpusIdentity)) throw new Error("Invalid verified ROS corpus identity");
-  const request = rosSharedCorpusRequest(season);
+  const request = rosSharedCorpusRequest(season, pointsAllowedDefinition);
   await database
     .insert(table)
     .values({
@@ -125,10 +132,14 @@ export class RosCorpusBootstrapService {
   private now(): Date {
     return this.input.now?.() ?? new Date();
   }
-  private ready(season: number, signal: AbortSignal) {
+  private ready(
+    season: number,
+    signal: AbortSignal,
+    pointsAllowedDefinition: ProjectionDefensePointsAllowedDefinition,
+  ) {
     return (
-      this.input.readyCorpusForSeason?.(season, signal) ??
-      readyRosSharedCorpusIdentity(this.input.directory, season, signal)
+      this.input.readyCorpusForSeason?.(season, signal, pointsAllowedDefinition) ??
+      readyRosSharedCorpusIdentity(this.input.directory, season, signal, pointsAllowedDefinition)
     );
   }
   private valid(row: Row, request: Request): boolean {
@@ -147,8 +158,11 @@ export class RosCorpusBootstrapService {
     );
   }
 
-  async lookup(season: number): Promise<Row | null> {
-    const request = rosSharedCorpusRequest(season);
+  async lookup(
+    season: number,
+    pointsAllowedDefinition: ProjectionDefensePointsAllowedDefinition = ROS_SHARED_CORPUS_REFERENCE_POINTS_ALLOWED_DEFINITION,
+  ): Promise<Row | null> {
+    const request = rosSharedCorpusRequest(season, pointsAllowedDefinition);
     const [row] = await this.input.database
       .select()
       .from(table)
@@ -159,14 +173,18 @@ export class RosCorpusBootstrapService {
   }
 
   /** Reconciles adopted data and reserves one due cycle. A failed send retains its cycle. */
-  async ensure(season: number, signal: AbortSignal): Promise<string | null> {
+  async ensure(
+    season: number,
+    signal: AbortSignal,
+    pointsAllowedDefinition: ProjectionDefensePointsAllowedDefinition = ROS_SHARED_CORPUS_REFERENCE_POINTS_ALLOWED_DEFINITION,
+  ): Promise<string | null> {
     signal.throwIfAborted();
-    const request = rosSharedCorpusRequest(season);
+    const request = rosSharedCorpusRequest(season, pointsAllowedDefinition);
     await this.input.database
       .insert(table)
       .values({ requestIdentity: request.identity, season, protocol: request.protocol })
       .onConflictDoNothing();
-    const observed = await this.lookup(season);
+    const observed = await this.lookup(season, pointsAllowedDefinition);
     if (!observed || observed.state === "blocked-integrity") return null;
     let ready: string | null = null;
     const reservation = await this.input.database.transaction(async (transaction) => {
@@ -180,7 +198,7 @@ export class RosCorpusBootstrapService {
       const now = this.now();
       let integrityFailure = false;
       try {
-        ready = await this.ready(season, signal);
+        ready = await this.ready(season, signal, pointsAllowedDefinition);
       } catch {
         signal.throwIfAborted();
         integrityFailure = true;
@@ -289,7 +307,8 @@ export class RosCorpusBootstrapService {
         .where(eq(table.requestIdentity, request.identity));
       return { attempt, reservationId };
     });
-    if (!reservation) return (await this.lookup(season))?.state === "ready" ? ready : null;
+    if (!reservation)
+      return (await this.lookup(season, pointsAllowedDefinition))?.state === "ready" ? ready : null;
     const release = async () => {
       await this.input.database
         .update(table)
@@ -307,6 +326,7 @@ export class RosCorpusBootstrapService {
       const id = await this.input.enqueue({
         requestIdentity: request.identity,
         season,
+        pointsAllowedDefinition,
         attempt: reservation.attempt,
       });
       if (id === null) await release();
@@ -329,13 +349,28 @@ export class RosCorpusBootstrapService {
   }
 
   /** Explicit operator reconciliation after adoptRosSharedCorpus has fully verified all vectors. */
-  async recordVerifiedAdoption(season: number, corpusIdentity: string): Promise<void> {
-    await recordVerifiedRosCorpusAdoption(this.input.database, season, corpusIdentity, this.now());
+  async recordVerifiedAdoption(
+    season: number,
+    corpusIdentity: string,
+    pointsAllowedDefinition: ProjectionDefensePointsAllowedDefinition = ROS_SHARED_CORPUS_REFERENCE_POINTS_ALLOWED_DEFINITION,
+  ): Promise<void> {
+    await recordVerifiedRosCorpusAdoption(
+      this.input.database,
+      season,
+      corpusIdentity,
+      this.now(),
+      pointsAllowedDefinition,
+    );
   }
 
   async run(job: RosCorpusBootstrapJob, context: WorkerJobContext): Promise<void> {
     context.signal.throwIfAborted();
-    const request = rosSharedCorpusRequest(job.season);
+    const pointsAllowedDefinition =
+      job.pointsAllowedDefinition ?? ROS_SHARED_CORPUS_REFERENCE_POINTS_ALLOWED_DEFINITION;
+    const profile = rosScoringProfile(
+      pointsAllowedDefinition === "espn-2019-v1" ? "espn-ppr-4pt-pass" : "full-ppr",
+    );
+    const request = rosSharedCorpusRequest(job.season, pointsAllowedDefinition);
     if (
       request.identity !== job.requestIdentity ||
       !Number.isSafeInteger(job.attempt) ||
@@ -438,7 +473,7 @@ export class RosCorpusBootstrapService {
       await this.input.lock(ROS_SHARED_CORPUS_BUILD_LOCK, context.signal, async (guard) => {
         const signal = guard.signal;
         await assertClaim(signal);
-        const ready = await this.ready(job.season, signal);
+        const ready = await this.ready(job.season, signal, pointsAllowedDefinition);
         if (ready !== null) {
           await finishReady({ corpusIdentity: ready, commit: async () => {} });
           return;
@@ -463,7 +498,7 @@ export class RosCorpusBootstrapService {
           await setFailure("waiting-source", "bootstrap_source_coverage_incomplete");
           return;
         }
-        const base = { scoringProfileKey: PROFILE.scoringProfileKey, season: job.season, signal };
+        const base = { scoringProfileKey: profile.scoringProfileKey, season: job.season, signal };
         if (claim.sourceSnapshotState !== "qualified") {
           const preflight = await this.input.capacity.run(1, signal, async () => {
             await assertClaim(signal);
@@ -478,11 +513,11 @@ export class RosCorpusBootstrapService {
             preflight.noDatabaseWrites !== true ||
             preflight.noSimulation !== true ||
             !object(preflight.scoringProfile) ||
-            preflight.scoringProfile.digest !== PROFILE.digest ||
+            preflight.scoringProfile.digest !== profile.digest ||
             !object(preflight.executionIdentity) ||
             preflight.executionIdentity.modelVersion !== FIRST_PARTY_ROS_MODEL_VERSION ||
             preflight.executionIdentity.policyVersion !== FIRST_PARTY_ROS_POLICY_VERSION ||
-            preflight.executionIdentity.scoringProfileKey !== PROFILE.scoringProfileKey ||
+            preflight.executionIdentity.scoringProfileKey !== profile.scoringProfileKey ||
             preflight.executionIdentity.evidenceThroughSeason !== job.season - 1
           )
             throw new Error("ROS bootstrap preflight identity is invalid");
@@ -535,6 +570,7 @@ export class RosCorpusBootstrapService {
         const report = this.input.buildCorpus
           ? await this.input.buildCorpus({
               season: job.season,
+              pointsAllowedDefinition,
               signal,
               runner,
               commitReady: finishReady,
@@ -551,11 +587,11 @@ export class RosCorpusBootstrapService {
               commitReady: finishReady,
             })(base);
         signal.throwIfAborted();
-        const identity = await this.ready(job.season, signal);
+        const identity = await this.ready(job.season, signal, pointsAllowedDefinition);
         if (!sha(report.outcomeCorpusIdentity) || report.outcomeCorpusIdentity !== identity)
           throw new Error("ROS bootstrap completion lacks verified ready data");
         // Another verified builder/adopter may have won while this job waited on the global lock.
-        const current = await this.lookup(job.season);
+        const current = await this.lookup(job.season, pointsAllowedDefinition);
         if (current?.state === "building")
           await finishReady({ corpusIdentity: identity, commit: async () => {} });
       });

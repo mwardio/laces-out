@@ -147,6 +147,21 @@ const environmentSchema = z.object({
       .regex(/^[a-f0-9]{64}$/u)
       .optional(),
   ),
+  /** Exact immutable bundles per PA interpretation; the legacy setting is a Yahoo alias only. */
+  ROS_MARGINAL_BUNDLE_CHECKSUM_YAHOO: z.preprocess(
+    blankToUndefined,
+    z
+      .string()
+      .regex(/^[a-f0-9]{64}$/u)
+      .optional(),
+  ),
+  ROS_MARGINAL_BUNDLE_CHECKSUM_ESPN: z.preprocess(
+    blankToUndefined,
+    z
+      .string()
+      .regex(/^[a-f0-9]{64}$/u)
+      .optional(),
+  ),
   LOG_LEVEL: z.enum(["fatal", "error", "warn", "info", "debug", "trace", "silent"]).default("info"),
 });
 
@@ -188,6 +203,12 @@ export function loadEnvironment(
   if (!parsed.success) {
     throw new ConfigurationError(parsed.error.issues);
   }
+  if (
+    parsed.data.ROS_MARGINAL_BUNDLE_CHECKSUM &&
+    parsed.data.ROS_MARGINAL_BUNDLE_CHECKSUM_YAHOO &&
+    parsed.data.ROS_MARGINAL_BUNDLE_CHECKSUM !== parsed.data.ROS_MARGINAL_BUNDLE_CHECKSUM_YAHOO
+  )
+    throw new Error("Conflicting Yahoo ROS marginal bundle checksums");
 
   if (parsed.data.NODE_ENV === "production") {
     const missing = [

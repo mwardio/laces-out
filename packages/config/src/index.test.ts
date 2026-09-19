@@ -42,6 +42,18 @@ describe("loadEnvironment", () => {
     ).toBe("a".repeat(64));
     expect(() => loadEnvironment({ ROS_RELEASE_RAIL: "latest" })).toThrow();
     expect(() => loadEnvironment({ ROS_MARGINAL_BUNDLE_CHECKSUM: "../../manifest" })).toThrow();
+    expect(
+      loadEnvironment({
+        ROS_MARGINAL_BUNDLE_CHECKSUM_YAHOO: "a".repeat(64),
+        ROS_MARGINAL_BUNDLE_CHECKSUM_ESPN: "e".repeat(64),
+      }).ROS_MARGINAL_BUNDLE_CHECKSUM_ESPN,
+    ).toBe("e".repeat(64));
+    expect(() =>
+      loadEnvironment({
+        ROS_MARGINAL_BUNDLE_CHECKSUM: "a".repeat(64),
+        ROS_MARGINAL_BUNDLE_CHECKSUM_YAHOO: "b".repeat(64),
+      }),
+    ).toThrow("Conflicting Yahoo");
   });
 
   it("requires secrets in production", () => {

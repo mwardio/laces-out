@@ -10,6 +10,7 @@ import {
   FIRST_PARTY_ROS_MODEL_VERSION,
   FIRST_PARTY_ROS_POLICY_VERSION,
   FIRST_PARTY_ROS_INTERVAL_CALIBRATION_VERSION,
+  type ProjectionDefensePointsAllowedDefinition,
 } from "@laces-out/projections";
 import { and, eq, sql } from "drizzle-orm";
 
@@ -17,6 +18,8 @@ import {
   readyRosSharedCorpusIdentity,
   rosSharedCorpusRequest,
 } from "./ros-shared-corpus-runner.js";
+import { rosCorpusDefinitionForProfileKey } from "./ros-corpus-routing.js";
+import { rosProfileBootstrapWait } from "./ros-profile-recovery-state.js";
 
 type BootstrapRow = typeof firstPartyRosCorpusBootstraps.$inferSelect;
 const GRACE_MS = 15 * 60_000;
@@ -74,6 +77,7 @@ export function describeRosBootstrapHealth(input: {
     attention,
     reason,
     season: request.protocol.season,
+    pointsAllowedDefinition: request.protocol.pointsAllowedDefinition,
     requestIdentity: request.identity,
     state: row?.state ?? "unregistered",
     attempt: row?.attempt ?? 0,
@@ -91,9 +95,10 @@ export async function readRosBootstrapHealth(input: {
   readonly season: number;
   readonly signal: AbortSignal;
   readonly now?: Date;
+  readonly pointsAllowedDefinition?: ProjectionDefensePointsAllowedDefinition;
 }) {
   input.signal.throwIfAborted();
-  const request = rosSharedCorpusRequest(input.season);
+  const request = rosSharedCorpusRequest(input.season, input.pointsAllowedDefinition);
   const observed = await input.database.transaction(
     async (transaction) => {
       await transaction.execute(sql`set local statement_timeout = '5s'`);
@@ -101,9 +106,11 @@ export async function readRosBootstrapHealth(input: {
         .select()
         .from(firstPartyRosCorpusBootstraps)
         .where(eq(firstPartyRosCorpusBootstraps.requestIdentity, request.identity));
-      const [demand] = await transaction
+      const demands = await transaction
         .select({
-          requestedAt: sql<Date | null>`min(${firstPartyRosProfileValidations.requestedAt})`,
+          requestedAt: firstPartyRosProfileValidations.requestedAt,
+          scoringProfileKey: firstPartyRosProfileValidations.scoringProfileKey,
+          report: firstPartyRosProfileValidations.report,
         })
         .from(firstPartyRosProfileValidations)
         .where(
@@ -117,6 +124,20 @@ export async function readRosBootstrapHealth(input: {
             ),
           ),
         );
+      const requestedTimes = demands.flatMap((demand) => {
+        try {
+          const definition = rosCorpusDefinitionForProfileKey(demand.scoringProfileKey);
+          const belongs =
+            definition === null
+              ? rosProfileBootstrapWait(demand.report, request.identity) ||
+                (demand.report?.bootstrapWait === undefined &&
+                  request.protocol.pointsAllowedDefinition === "yahoo-2022-v1")
+              : definition === request.protocol.pointsAllowedDefinition;
+          return belongs ? [demand.requestedAt.getTime()] : [];
+        } catch {
+          return [];
+        }
+      });
       const jobs = await transaction.execute<{ count: number }>(sql`
       select count(*)::int as count from pgboss.job
         where name = ${queueNames.bootstrapRosCorpus}
@@ -126,7 +147,7 @@ export async function readRosBootstrapHealth(input: {
     `);
       return {
         row: row ?? null,
-        firstRequestedAt: demand?.requestedAt ? new Date(demand.requestedAt) : null,
+        firstRequestedAt: requestedTimes.length ? new Date(Math.min(...requestedTimes)) : null,
         outstandingJobs: jobs[0]?.count ?? 0,
       };
     },
@@ -139,6 +160,7 @@ export async function readRosBootstrapHealth(input: {
       input.directory,
       input.season,
       input.signal,
+      input.pointsAllowedDefinition,
     );
   } catch {
     input.signal.throwIfAborted();

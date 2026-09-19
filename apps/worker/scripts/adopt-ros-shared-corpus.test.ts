@@ -4,9 +4,17 @@ const dependencies = vi.hoisted(() => ({
   loadEnvironment: vi.fn(),
   createLock: vi.fn(),
   adopt: vi.fn(),
+  recordAdoption: vi.fn(),
+  close: vi.fn(),
 }));
 
 vi.mock("@laces-out/config", () => ({ loadEnvironment: dependencies.loadEnvironment }));
+vi.mock("@laces-out/db", () => ({
+  createDatabase: () => ({ db: "fixture-db", close: dependencies.close }),
+}));
+vi.mock("../src/ros-corpus-bootstrap.js", () => ({
+  recordVerifiedRosCorpusAdoption: dependencies.recordAdoption,
+}));
 vi.mock("../src/ros-corpus-lock.js", () => ({
   createPostgresRosCorpusLock: dependencies.createLock,
 }));
@@ -47,6 +55,7 @@ describe("ROS corpus adoption CLI", () => {
     [...args.slice(0, 2), "--outcome-cache=relative/path"],
     [...args, "--season=2027"],
     [...args, "--unknown=private-secret"],
+    [...args, "--points-allowed-definition=unknown"],
   ])("rejects malformed arguments before loading configuration: %j", async (...selected) => {
     process.argv = ["node", "adopt-ros-shared-corpus.ts", ...selected];
     const stdout = vi.spyOn(process.stdout, "write").mockReturnValue(true);
@@ -79,11 +88,29 @@ describe("ROS corpus adoption CLI", () => {
       season: 2026,
       corpusIdentity,
       directory: "/tmp/ros-outcomes",
+      pointsAllowedDefinition: "yahoo-2022-v1",
       lock: "fixture-lock",
       signal: expect.any(AbortSignal) as AbortSignal,
     });
     expect(stdout).toHaveBeenCalledExactlyOnceWith(
       `${JSON.stringify({ state: "adopted", requestIdentity, corpusIdentity })}\n`,
+    );
+    expect(process.exitCode).toBeUndefined();
+  });
+
+  it("binds ESPN adoption and its durable ready record to the same explicit definition", async () => {
+    process.argv.push("--points-allowed-definition=espn-2019-v1");
+    vi.spyOn(process.stdout, "write").mockReturnValue(true);
+    await import("./adopt-ros-shared-corpus.js");
+    expect(dependencies.adopt).toHaveBeenCalledWith(
+      expect.objectContaining({ pointsAllowedDefinition: "espn-2019-v1" }),
+    );
+    expect(dependencies.recordAdoption).toHaveBeenCalledExactlyOnceWith(
+      "fixture-db",
+      2026,
+      corpusIdentity,
+      expect.any(Date),
+      "espn-2019-v1",
     );
     expect(process.exitCode).toBeUndefined();
   });

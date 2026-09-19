@@ -16,10 +16,7 @@ import {
 } from "@laces-out/jobs";
 import pino from "pino";
 import path from "node:path";
-import {
-  createRosMarginalCorpusBundleResolver,
-  RosMarginalDependencyError,
-} from "./ros-marginal-corpus-bundle.js";
+import { RosMarginalDependencyError } from "./ros-marginal-corpus-bundle.js";
 import { createRosMarginalProfileValidationRunner } from "./ros-profile-marginal-evidence.js";
 
 import { RosProfileValidationService } from "./ros-profile-validation.js";
@@ -30,7 +27,7 @@ import {
 import { createPostgresRosCorpusLock } from "./ros-corpus-lock.js";
 import {
   createSharedRosCorpusValidationRunner,
-  rosSharedCorpusRequest,
+  readyRosSharedCorpusIdentity,
 } from "./ros-shared-corpus-runner.js";
 import { RosProfileRecoveryService } from "./ros-profile-recovery.js";
 import { RosCorpusBootstrapService, rosBootstrapSeasons } from "./ros-corpus-bootstrap.js";
@@ -40,6 +37,11 @@ import {
 } from "./ros-bootstrap-source-snapshots.js";
 import { RosExecutionCapacity } from "./ros-execution-capacity.js";
 import { currentNflSeason } from "./nfl-season.js";
+import {
+  createRosDefinitionAwareMarginalResolver,
+  createRosDefinitionAwareReadiness,
+  rosCorpusDemandGroups,
+} from "./ros-corpus-routing.js";
 
 const environment = loadEnvironment();
 const releaseIdentity = firstPartyRosReleaseIdentity(environment.ROS_RELEASE_RAIL);
@@ -89,14 +91,32 @@ const bootstrap = new RosCorpusBootstrapService({
     );
   },
 });
-const resolveMarginalCorpora = createRosMarginalCorpusBundleResolver({
+const resolveMarginalSelection = createRosDefinitionAwareMarginalResolver({
   directory: outcomeCacheDirectory,
-  bundleChecksum: environment.ROS_MARGINAL_BUNDLE_CHECKSUM,
+  bundleChecksums: {
+    ...((environment.ROS_MARGINAL_BUNDLE_CHECKSUM_YAHOO ?? environment.ROS_MARGINAL_BUNDLE_CHECKSUM)
+      ? {
+          "yahoo-2022-v1": (environment.ROS_MARGINAL_BUNDLE_CHECKSUM_YAHOO ??
+            environment.ROS_MARGINAL_BUNDLE_CHECKSUM)!,
+        }
+      : {}),
+    ...(environment.ROS_MARGINAL_BUNDLE_CHECKSUM_ESPN
+      ? { "espn-2019-v1": environment.ROS_MARGINAL_BUNDLE_CHECKSUM_ESPN }
+      : {}),
+  },
 });
-const readyCorpusForSeason = async (season: number, signal: AbortSignal) => {
-  if (environment.ROS_RELEASE_RAIL === "legacy-v7") return bootstrap.ensure(season, signal);
-  return (await resolveMarginalCorpora(season, signal)).candidateCorpusIdentity;
-};
+const resolveMarginalCorpora = async (
+  season: number,
+  signal: AbortSignal,
+  scoringProfileKey: string,
+) => (await resolveMarginalSelection(season, signal, scoringProfileKey)).bundle;
+const sharedCorpus = createRosDefinitionAwareReadiness({
+  releaseRail: environment.ROS_RELEASE_RAIL,
+  ensure: (season, signal, definition) => bootstrap.ensure(season, signal, definition),
+  ready: (season, signal, definition) =>
+    readyRosSharedCorpusIdentity(outcomeCacheDirectory, season, signal, definition),
+  marginal: resolveMarginalSelection,
+});
 const marginalRunner = createRosMarginalProfileValidationRunner({
   resolveCorpora: resolveMarginalCorpora,
   reportDirectory: path.join(outcomeCacheDirectory, "marginal-reports"),
@@ -107,10 +127,7 @@ const service = new RosProfileValidationService({
   releaseRail: environment.ROS_RELEASE_RAIL,
   marginalRunner,
   database: database.db,
-  sharedCorpus: async (season, signal) => ({
-    requestIdentity: rosSharedCorpusRequest(season).identity,
-    corpusIdentity: await readyCorpusForSeason(season, signal),
-  }),
+  sharedCorpus,
   runner: createSharedRosCorpusValidationRunner({
     directory: outcomeCacheDirectory,
     lock: corpusLock,
@@ -131,17 +148,18 @@ const shutdown = new AbortController();
 const recovery = new RosProfileRecoveryService({
   releaseRail: environment.ROS_RELEASE_RAIL,
   database: database.db,
-  readyCorpusForSeason: async (season, signal) => {
-    try {
-      return await readyCorpusForSeason(season, signal);
-    } catch (error) {
-      if (!(error instanceof RosMarginalDependencyError) || signal.aborted) throw error;
-      logger.warn(
-        { season, ...error.diagnostic },
-        "ROS shared marginal dependency needs preparation; no profile replay started",
-      );
-      return null;
-    }
+  sharedCorpus,
+  onReadinessFailure: ({ season, definition, error }) => {
+    logger.warn(
+      {
+        season,
+        definition,
+        ...(error instanceof RosMarginalDependencyError
+          ? error.diagnostic
+          : { reason: "definition-group-readiness-failed" }),
+      },
+      "ROS corpus group needs preparation; other groups continue",
+    );
   },
   enqueueValidation: (job) => enqueueRosProfileValidation(boss, job),
   validationJobIsTerminal: async (id, corpusIdentity, recoveryAttempt) => {
@@ -172,11 +190,15 @@ function recoverReadyProfiles(): void {
   recoveryRun = (async () => {
     const seasons = rosBootstrapSeasons(currentNflSeason());
     const demand = await database.db
-      .select({ id: firstPartyRosProfileValidations.id })
+      .select({
+        season: firstPartyRosProfileValidations.season,
+        scoringProfileKey: firstPartyRosProfileValidations.scoringProfileKey,
+      })
       .from(firstPartyRosProfileValidations)
       .where(
         and(
           inArray(firstPartyRosProfileValidations.season, [...seasons]),
+          inArray(firstPartyRosProfileValidations.state, ["pending", "failed", "withheld"]),
           eq(firstPartyRosProfileValidations.modelVersion, releaseIdentity.modelVersion),
           eq(firstPartyRosProfileValidations.policyVersion, releaseIdentity.policyVersion),
           eq(
@@ -184,14 +206,28 @@ function recoverReadyProfiles(): void {
             releaseIdentity.calibrationVersion,
           ),
         ),
-      )
-      .limit(1);
+      );
     if (demand.length === 0) return;
-    for (const season of seasons) {
-      if (environment.ROS_RELEASE_RAIL === "legacy-v7")
-        await bootstrap.ensure(season, shutdown.signal);
-      await recovery.recover(season, shutdown.signal);
+    const requested = rosCorpusDemandGroups(demand);
+    if (requested.invalidProfiles > 0)
+      logger.warn(
+        { invalidProfiles: requested.invalidProfiles },
+        "Legacy or invalid PA profiles cannot request a corpus group",
+      );
+    if (environment.ROS_RELEASE_RAIL === "legacy-v7") {
+      for (const group of requested.groups) {
+        try {
+          await sharedCorpus(group.season, shutdown.signal, group.scoringProfileKey);
+        } catch (error) {
+          shutdown.signal.throwIfAborted();
+          logger.warn(
+            { season: group.season, definition: group.pointsAllowedDefinition, err: error },
+            "ROS bootstrap group could not prepare; other groups continue",
+          );
+        }
+      }
     }
+    for (const season of seasons) await recovery.recover(season, shutdown.signal);
   })()
     .catch((error: unknown) => {
       if (!shutdown.signal.aborted)

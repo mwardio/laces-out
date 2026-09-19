@@ -59,7 +59,7 @@ describe("shared queue dispatch contract", () => {
       await enqueueRosCorpusBootstrap(boss, { ...job, attempt });
       expect(send).toHaveBeenLastCalledWith(
         queueNames.bootstrapRosCorpus,
-        { ...job, attempt },
+        { ...job, attempt, pointsAllowedDefinition: "yahoo-2022-v1" },
         {
           group: { id: "ros-corpus-bootstrap" },
           singletonKey: `ros-corpus-bootstrap:${job.requestIdentity}:attempt:${attempt}`,
