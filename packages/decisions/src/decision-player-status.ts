@@ -1,7 +1,6 @@
 import {
   dataSources,
   nflScheduleObservations,
-  playerExternalIds,
   playerInjuryReportObservations,
   playerSourceObservations,
   players,
@@ -13,6 +12,7 @@ import {
   reconcileRosterIdentityAliases,
   type ProjectionRosterIdentity,
 } from "./projection-roster-aliases.js";
+import { loadProjectionIdentityEvidence } from "./projection-identity-evidence.js";
 
 const MAX_PLAYERS = 1_024;
 const MAX_CATALOG = 4_096;
@@ -245,28 +245,13 @@ export async function loadDecisionPlayerStatuses(
         .reduce((first, game) => Math.min(first, game.week), Infinity);
       if (currentWeek !== request.week) return unknown();
       const identityIds = [...new Set([...ids, ...catalog.map((row) => row.playerId)])];
-      const externalIds = await db
-        .select({
-          playerId: playerExternalIds.playerId,
-          source: playerExternalIds.source,
-          externalId: playerExternalIds.externalId,
-        })
-        .from(playerExternalIds)
-        .where(
-          and(
-            inArray(playerExternalIds.playerId, identityIds),
-            inArray(playerExternalIds.source, [
-              "espn",
-              "yahoo",
-              "sleeper-espn",
-              "sleeper-yahoo",
-              "espn-self-asserted",
-            ]),
-          ),
-        )
-        .limit(20_481);
-      if (externalIds.length > 20_480) return unknown();
       const canonicalById = new Map(catalog.map((row) => [row.playerId, row]));
+      const needsAlias = roster.some(
+        (row) => !row.gsisId?.trim() && !canonicalById.has(row.playerId),
+      );
+      const identityEvidence = needsAlias
+        ? await loadProjectionIdentityEvidence(db, identityIds)
+        : { externalIds: [], complete: false };
       const catalogCounts = new Map<string, number>();
       for (const row of catalog)
         catalogCounts.set(row.playerId, (catalogCounts.get(row.playerId) ?? 0) + 1);
@@ -276,7 +261,8 @@ export async function loadDecisionPlayerStatuses(
         projections: [...canonicalById.values()].filter(
           (row) => catalogCounts.get(row.playerId) === 1,
         ),
-        externalIds,
+        externalIds: identityEvidence.externalIds,
+        externalEvidenceComplete: identityEvidence.complete,
       });
       const aliasById = new Map(aliases.map((row) => [row.playerId, row.projectionPlayerId]));
       const healthIds = [...new Set(ids.map((id) => aliasById.get(id) ?? id))];
