@@ -1204,7 +1204,11 @@ describe("first-party projection service release safety", () => {
     expect(harness.modelRuns).toHaveLength(2);
     expect(harness.modelRuns[1]?.inputChecksum).not.toBe(harness.modelRuns[0]?.inputChecksum);
     expect(harness.modelRuns[1]?.metrics).toMatchObject({
-      gate: { reasons: expect.arrayContaining([expect.stringContaining("status is unresolved")]) },
+      gate: {
+        reasons: expect.arrayContaining([
+          expect.stringContaining("status is unresolved"),
+        ]) as unknown,
+      },
     });
   });
 

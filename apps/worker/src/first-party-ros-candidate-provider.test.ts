@@ -1624,7 +1624,12 @@ describe("buildFirstPartyRosLeagueTarget", () => {
         ],
         issues: [],
       });
-      const { yahooExternalEvidenceComplete: _complete, ...incomplete } = common;
+      const incomplete = {
+        leagueSeasonId: common.leagueSeasonId,
+        rosterPlayers: common.rosterPlayers,
+        canonicalPlayers: common.canonicalPlayers,
+        externalIds: common.externalIds,
+      };
       expect(firstPartyRosPlayerAliasPlan(incomplete)).toMatchObject({
         aliases: [],
         issues: [{ code: "identity-unresolved" }],
