@@ -4,7 +4,11 @@ import {
   firstPartyProjectionComponentsForPosition,
   firstPartyTeamDefenseProjectionComponents,
 } from "./first-party.js";
-import { projectionScoringProfileKey, type ProjectionScoringProfile } from "./scoring.js";
+import {
+  isDefensePointsAllowedStatId,
+  projectionScoringProfileKey,
+  type ProjectionScoringProfile,
+} from "./scoring.js";
 
 /** Player positions the rest-of-season rail models. Mirrors the worker's supported set. */
 const ROS_SUPPORTED_POSITIONS = ["QB", "RB", "WR", "TE", "K", "DST"] as const;
@@ -76,7 +80,7 @@ const SHARED_RULES: readonly ProjectionScoringProfile["rules"][number][] = [
   { statId: "points_allowed_35_plus_probability", points: -4 },
 ];
 
-/** The three profiles built from `SHARED_RULES` plus a reception rate. Byte-frozen — see above. */
+/** The three profiles built from `SHARED_RULES` plus a reception rate. */
 type LegacyRosScoringProfileKey = "full-ppr" | "half-ppr" | "standard";
 
 const RECEPTION_POINTS: Readonly<Record<LegacyRosScoringProfileKey, number>> = {
@@ -106,8 +110,14 @@ function finalizeEntry(
 ): RosScoringProfileEntry {
   const profile: ProjectionScoringProfile = {
     id: `laces-out-historical-ros-${key}`,
-    version: "1",
-    rules,
+    version: "2",
+    // The generic trio uses the documented Yahoo points-allowed definition. Provider-specific
+    // profiles carry their own definition even when all point coefficients happen to agree.
+    rules: rules.map((rule) =>
+      isDefensePointsAllowedStatId(rule.statId)
+        ? { ...rule, statDefinition: key.startsWith("espn-") ? "espn-2019-v1" : "yahoo-2022-v1" }
+        : rule,
+    ),
   };
   const scoringProfileKey = projectionScoringProfileKey(profile);
   return {

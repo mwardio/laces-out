@@ -347,6 +347,7 @@ export class NflverseFourthDownStopsSource implements NflverseFourthDownStopsLoa
       maximumBytes: MAX_COMPRESSED_BYTES,
       datasetLabel: "nflverse play-by-play",
       accept: "application/gzip, application/octet-stream;q=0.9",
+      format: "gzip",
       timeoutMs: 60_000,
     });
     if (release.state === "unchanged") {

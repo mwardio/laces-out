@@ -5,6 +5,12 @@ import { createGunzip } from "node:zlib";
 import { parse } from "csv-parse";
 
 import {
+  NFLVERSE_DEFENSE_SCORING_EVENT_COLUMNS,
+  defenseScoringRowsChecksum,
+  extractNflverseDefenseScoringEvents,
+  type DefenseScoringRow,
+} from "./defense-scoring-events.js";
+import {
   NFLVERSE_FOURTH_DOWN_STOPS_SOURCE_KEY,
   NFLVERSE_FOURTH_DOWN_STOPS_ATTRIBUTION,
   type NflverseFourthDownSeasonType,
@@ -63,7 +69,10 @@ const REQUIRED_COLUMNS = [
   "lateral_rusher_player_id",
   "lateral_receiving_yards",
   "lateral_rushing_yards",
+  ...NFLVERSE_DEFENSE_SCORING_EVENT_COLUMNS,
 ] as const;
+
+export type NflverseDefenseScoringEvents = ReturnType<typeof extractNflverseDefenseScoringEvents>;
 
 export interface NflversePlayerTouchdownObservation {
   readonly gsisId: string;
@@ -98,6 +107,8 @@ export interface NflversePlayByPlayResult {
   readonly rowsRejected: number;
   readonly coveredGames: number;
   readonly playerTouchdowns: readonly NflversePlayerTouchdownObservation[];
+  /** Legacy custom loaders may lack this capability; defense consumers must require it. */
+  readonly defenseScoringEvents?: readonly NflverseDefenseScoringEvents[];
 }
 
 export interface NflversePlayByPlayLoader {
@@ -136,6 +147,7 @@ function failedFourthDown(value: unknown): 0 | 1 | null {
 async function parsePlayByPlay(
   response: Response,
   season: number,
+  checkedAt: string,
 ): Promise<{
   readonly checksumSha256: string;
   readonly observations: readonly NflverseFourthDownStopObservation[];
@@ -143,6 +155,7 @@ async function parsePlayByPlay(
   readonly rowsRejected: number;
   readonly coveredGames: number;
   readonly playerTouchdowns: readonly NflversePlayerTouchdownObservation[];
+  readonly defenseScoringEvents: readonly NflverseDefenseScoringEvents[];
 }> {
   if (!response.body) {
     throw new NflverseDatasetSourceError(
@@ -220,6 +233,7 @@ async function parsePlayByPlay(
       readonly homeTeam: string;
       readonly awayTeam: string;
       readonly stops: Map<string, number>;
+      readonly scoringRows: DefenseScoringRow[];
     }
   >();
   const seenPlays = new Set<string>();
@@ -295,8 +309,14 @@ async function parsePlayByPlay(
           [homeTeam, 0],
           [awayTeam, 0],
         ]),
+        scoringRows: [],
       };
       games.set(gameId, game);
+      // Retain every selected game row, including administrative/cancelled plays. The scoring
+      // extractor needs a complete score ledger, not a prefiltered set of touchdown flags.
+      game.scoringRows.push(
+        Object.fromEntries(NFLVERSE_DEFENSE_SCORING_EVENT_COLUMNS.map((key) => [key, row[key]!])),
+      );
       if (failed === 1 && defense) {
         game.stops.set(defense, (game.stops.get(defense) ?? 0) + 1);
       }
@@ -429,12 +449,64 @@ async function parsePlayByPlay(
       "nflverse play-by-play contained no covered games",
     );
   }
+  const checksumSha256 = checksum.digest("hex");
+  const defenseScoringEvents = [...games.entries()].map(([gameId, game]) => {
+    const ends = game.scoringRows.filter(
+      (row) => row.play_type_nfl === "END_GAME" && row.play_deleted === "0",
+    );
+    const end = ends.length === 1 ? ends[0]! : null;
+    const score = (value: unknown): number | null => {
+      if (typeof value !== "string" || !/^\d+(?:\.0+)?$/u.test(value)) return null;
+      const parsed = Number(value);
+      return Number.isSafeInteger(parsed) && parsed <= 200 ? parsed : null;
+    };
+    const homeScore = end
+      ? score(end.posteam === game.homeTeam ? end.posteam_score_post : end.defteam_score_post)
+      : null;
+    const awayScore = end
+      ? score(end.posteam === game.awayTeam ? end.posteam_score_post : end.defteam_score_post)
+      : null;
+    const finality =
+      end && homeScore !== null && awayScore !== null
+        ? {
+            gameId,
+            homeTeam: game.homeTeam,
+            awayTeam: game.awayTeam,
+            homeScore,
+            awayScore,
+            observedAt: checkedAt,
+            sourceChecksumSha256: checksumSha256,
+          }
+        : null;
+    return extractNflverseDefenseScoringEvents({
+      game: {
+        gameId,
+        season,
+        week: game.week,
+        seasonType: game.seasonType,
+        homeTeam: game.homeTeam,
+        awayTeam: game.awayTeam,
+      },
+      rows: game.scoringRows,
+      provenance: {
+        artifactChecksumSha256: checksumSha256,
+        gameRowsChecksumSha256: defenseScoringRowsChecksum(game.scoringRows),
+        gameRowCount: game.scoringRows.length,
+        checkedAt,
+        coverage: "full-game",
+      },
+      // Explicit END_GAME is terminal evidence from this same source, not an independent
+      // scoreboard verification. Prospective weekly evaluation separately requires that proof.
+      finality,
+    });
+  });
   return {
-    checksumSha256: checksum.digest("hex"),
+    checksumSha256,
     observations,
     rowsRead,
     rowsRejected,
     coveredGames: games.size,
+    defenseScoringEvents,
     playerTouchdowns: [...touchdowns.values()].sort(
       (left, right) =>
         left.gameId.localeCompare(right.gameId) || left.gsisId.localeCompare(right.gsisId),
@@ -461,6 +533,7 @@ export class NflversePlayByPlaySource implements NflversePlayByPlayLoader {
       maximumBytes: MAX_COMPRESSED_BYTES,
       datasetLabel: "nflverse play-by-play",
       accept: "application/gzip, application/octet-stream;q=0.9",
+      format: "gzip",
       timeoutMs: 60_000,
     });
     if (release.state === "unchanged") {
@@ -470,7 +543,7 @@ export class NflversePlayByPlaySource implements NflversePlayByPlayLoader {
         true,
       );
     }
-    const parsed = await parsePlayByPlay(release.response, season);
+    const parsed = await parsePlayByPlay(release.response, season, release.checkedAt);
     return {
       checkedAt: release.checkedAt,
       sourceKey: NFLVERSE_PLAY_BY_PLAY_SOURCE_KEY,

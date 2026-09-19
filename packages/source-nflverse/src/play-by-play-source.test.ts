@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { gzipSync } from "node:zlib";
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -6,8 +7,14 @@ import {
   fourthDownStopsFromPlayByPlay,
   snapshotNflversePlayByPlay,
 } from "./play-by-play-source.js";
+import { NFLVERSE_DEFENSE_SCORING_EVENT_COLUMNS } from "./defense-scoring-events.js";
+
+const eventDefaults = Object.fromEntries(
+  NFLVERSE_DEFENSE_SCORING_EVENT_COLUMNS.map((key) => [key, "0"]),
+) as Record<(typeof NFLVERSE_DEFENSE_SCORING_EVENT_COLUMNS)[number], string>;
 
 const base = {
+  ...eventDefaults,
   play_id: "1",
   game_id: "2024_17_DET_SF",
   season: "2024",
@@ -16,6 +23,15 @@ const base = {
   home_team: "SF",
   away_team: "DET",
   defteam: "SF",
+  posteam: "DET",
+  td_team: "DET",
+  touchdown: "1",
+  posteam_score: "0",
+  defteam_score: "0",
+  posteam_score_post: "6",
+  defteam_score_post: "0",
+  fumble_recovery_1_team: "",
+  fumble_recovery_2_team: "",
   fourth_down_failed: "0",
   penalty: "0",
   play_type: "pass",
@@ -44,13 +60,63 @@ function artifact(rows: readonly Partial<typeof base>[] = [{}], omit?: keyof typ
     ].join("\n"),
   );
 }
-function source(bytes: Buffer) {
+function source(bytes: Buffer, contentType?: string) {
   return new NflversePlayByPlaySource({
-    fetch: () => Promise.resolve(new Response(new Uint8Array(bytes))),
+    fetch: () =>
+      Promise.resolve(
+        new Response(new Uint8Array(bytes), {
+          ...(contentType === undefined ? {} : { headers: { "content-type": contentType } }),
+        }),
+      ),
   });
 }
 
 describe("complete play-by-play football event snapshots", () => {
+  it.each(["application/gzip", "application/x-gzip", "application/octet-stream"])(
+    "accepts declared compressed content %s while retaining parser admission",
+    async (contentType) => {
+      await expect(source(artifact(), contentType).load(2024)).resolves.toMatchObject({
+        rowsRead: 1,
+      });
+      await expect(source(Buffer.from("not gzip"), contentType).load(2024)).rejects.toMatchObject({
+        code: "INVALID_CSV",
+      });
+    },
+  );
+
+  it("rejects an HTML error response even when its body resembles a gzip artifact", async () => {
+    await expect(source(artifact(), "text/html").load(2024)).rejects.toMatchObject({
+      code: "CONTENT_TYPE",
+    });
+  });
+
+  it("shares a reconciled real defensive scoring ledger with the player and fourth-down capture", async () => {
+    const csv = readFileSync(new URL("./fixtures/play-by-play-cle-pit-2023.csv", import.meta.url));
+    const bytes = gzipSync(csv);
+    const result = await source(bytes).load(2023);
+    expect(result.rowsRead).toBe(185);
+    expect(result.defenseScoringEvents).toHaveLength(1);
+    const scoring = result.defenseScoringEvents![0]!;
+    expect(scoring.state).toBe("complete");
+    expect(scoring.provenance.artifactChecksumSha256).toBe(result.checksumSha256);
+    expect(scoring.finality?.sourceChecksumSha256).toBe(result.checksumSha256);
+    expect(scoring.teams?.find((row) => row.team === "PIT")).toMatchObject({
+      defensiveTouchdowns: 2,
+      defensiveFumbleTouchdowns: 1,
+      pointsScored: 26,
+    });
+    expect(scoring.teams?.find((row) => row.team === "CLE")?.pointsScored).toBe(22);
+  });
+
+  it("retains unfinished scoring evidence without representing it as complete zero totals", async () => {
+    const result = await source(artifact()).load(2024);
+    expect(result.defenseScoringEvents?.[0]).toMatchObject({ state: "unresolved", teams: null });
+    expect(result.defenseScoringEvents?.[0]?.issues).toContainEqual({
+      playId: null,
+      reason: "explicit-finality-unavailable",
+    });
+  });
+
   it("derives nested long-TD counts from each credited event at exact40/50yard boundaries", async () => {
     const rows = [39, 40, 49, 50].flatMap((yards, index) => [
       { play_id: String(index * 2), passing_yards: String(yards), receiving_yards: String(yards) },

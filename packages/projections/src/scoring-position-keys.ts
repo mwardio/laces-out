@@ -81,9 +81,15 @@ export function projectionScoringRulesFromProfileKey(
   const rules = parsed.map((entry): ProjectionScoringRule => {
     if (typeof entry !== "object" || entry === null) invalidKey(key);
     const candidate = entry as Record<string, unknown>;
-    const { statId, points, bonuses } = candidate;
+    const { statId, points, bonuses, statDefinition } = candidate;
     if (typeof statId !== "string" || statId.trim() === "") invalidKey(key);
     if (!finiteNumber(points)) invalidKey(key);
+    if (
+      statDefinition !== undefined &&
+      statDefinition !== "yahoo-2022-v1" &&
+      statDefinition !== "espn-2019-v1"
+    )
+      invalidKey(key);
     if (bonuses !== undefined && !Array.isArray(bonuses)) invalidKey(key);
     const parsedBonuses = (bonuses ?? []).map((bonus: unknown) => {
       if (typeof bonus !== "object" || bonus === null) invalidKey(key);
@@ -91,9 +97,12 @@ export function projectionScoringRulesFromProfileKey(
       if (!finiteNumber(atLeast) || !finiteNumber(bonusPoints)) invalidKey(key);
       return { atLeast, points: bonusPoints };
     });
-    return parsedBonuses.length === 0
-      ? { statId, points }
-      : { statId, points, bonuses: parsedBonuses };
+    return {
+      statId,
+      points,
+      ...(parsedBonuses.length === 0 ? {} : { bonuses: parsedBonuses }),
+      ...(statDefinition === undefined ? {} : { statDefinition }),
+    };
   });
 
   // Validates (empty list, duplicate statId, non-finite points) and proves the round trip is lossless.

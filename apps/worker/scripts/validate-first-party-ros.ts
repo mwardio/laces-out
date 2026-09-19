@@ -8,7 +8,6 @@ import {
   NflverseWeeklyStatsSource,
   NflversePlayByPlaySource,
   snapshotNflversePlayByPlay,
-  fourthDownStopsFromPlayByPlay,
   type NflverseDatasetState,
 } from "@laces-out/source-nflverse";
 
@@ -17,6 +16,7 @@ import {
   FIRST_PARTY_ROS_MODEL_VERSION,
   FIRST_PARTY_ROS_OUTCOME_SCHEMA_VERSION,
   type FirstPartyRosPosition,
+  defensePointsAllowedDefinitionForProfile,
 } from "@laces-out/projections";
 
 import {
@@ -290,7 +290,7 @@ async function main(): Promise<void> {
         new NflverseWeeklyStatsSource({ ...sourceOptions, playByPlay }).check(season, emptyState),
         new NflverseTeamWeeklyStatsSource({
           ...sourceOptions,
-          fourthDowns: fourthDownStopsFromPlayByPlay(playByPlay),
+          playByPlay,
         }).check(season, emptyState),
         new NflverseWeeklyRostersSource(sourceOptions).check(season, emptyState),
         new NflverseInjuriesSource(sourceOptions).check(season, emptyState),
@@ -509,7 +509,11 @@ async function main(): Promise<void> {
   }
 
   const history = buildFirstPartyPlayerHistory(weekly, snaps, rosters, schedules, injuries);
-  const defenseHistory = buildFirstPartyDefenseHistory(teamWeekly, schedules);
+  const defenseHistory = buildFirstPartyDefenseHistory(
+    teamWeekly,
+    schedules,
+    defensePointsAllowedDefinitionForProfile(scoringProfile.profile) ?? "yahoo-2022-v1",
+  );
   const componentPreflight = preflightHistoricalRosComponentCoverage({
     history,
     rosters,
