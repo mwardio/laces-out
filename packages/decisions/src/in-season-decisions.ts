@@ -108,6 +108,7 @@ import {
   projectionTimestampProvenance,
 } from "./projection-provenance.js";
 import { reconcileRosterProjectionAliases } from "./projection-roster-aliases.js";
+import { loadProjectionIdentityEvidence } from "./projection-identity-evidence.js";
 import {
   loadDecisionPlayerStatuses,
   normalizedDecisionStatus,
@@ -744,83 +745,75 @@ export class DrizzleInSeasonDecisionRepository implements InSeasonDecisionReposi
     ids: readonly string[],
   ): Promise<readonly DecisionProjectionPlayerRow[]> {
     if (ids.length === 0) return [];
-    const boundedIds = [...new Set(ids)].slice(0, MAX_ROSTER_ENTRIES);
-    const direct = await this.#projectionPlayerQuery()
-      .where(
-        and(
-          eq(playerProjections.projectionSetId, projectionSetId),
-          inArray(playerProjections.playerId, boundedIds),
-        ),
-      )
-      .orderBy(asc(players.id))
-      .limit(MAX_ROSTER_ENTRIES);
-    if (direct.length === boundedIds.length) return direct;
-    const [set] = await this.#database
-      .select({
-        leagueSeasonId: projectionSets.leagueSeasonId,
-        source: projectionSets.source,
-        horizon: projectionSets.horizon,
-      })
-      .from(projectionSets)
-      .where(eq(projectionSets.id, projectionSetId))
-      .limit(1);
-    if (
-      !set?.leagueSeasonId ||
-      set.source !== MANAGED_ROS_PROJECTION_SET_SOURCE ||
-      set.horizon !== "rest-of-season"
-    )
-      return direct;
+    // Alias candidates and both provider-evidence reads must see the same catalog revision.
+    return this.#database.transaction(
+      async (db) => {
+        const boundedIds = [...new Set(ids)].slice(0, MAX_ROSTER_ENTRIES);
+        const direct = await this.#projectionPlayerQuery(db)
+          .where(
+            and(
+              eq(playerProjections.projectionSetId, projectionSetId),
+              inArray(playerProjections.playerId, boundedIds),
+            ),
+          )
+          .orderBy(asc(players.id))
+          .limit(MAX_ROSTER_ENTRIES);
+        if (direct.length === boundedIds.length) return direct;
+        const [set] = await db
+          .select({
+            leagueSeasonId: projectionSets.leagueSeasonId,
+            source: projectionSets.source,
+            horizon: projectionSets.horizon,
+          })
+          .from(projectionSets)
+          .where(eq(projectionSets.id, projectionSetId))
+          .limit(1);
+        if (
+          !set?.leagueSeasonId ||
+          set.source !== MANAGED_ROS_PROJECTION_SET_SOURCE ||
+          set.horizon !== "rest-of-season"
+        )
+          return direct;
 
-    // Search the release, not the 512-player ranking pool: a rostered player's approved forecast
-    // can be below that cutoff. Overflow fails closed so a truncated pool cannot look unique.
-    const [pool, rosterPlayers] = await Promise.all([
-      this.#projectionPlayerQuery()
-        .where(eq(playerProjections.projectionSetId, projectionSetId))
-        .orderBy(asc(players.id))
-        .limit(MAX_ROSTER_ALIAS_PROJECTION_ROWS + 1),
-      this.#database
-        .select({
-          playerId: players.id,
-          gsisId: players.gsisId,
-          name: players.fullName,
-          primaryPosition: players.primaryPosition,
-          eligiblePositions: players.eligiblePositions,
-          nflTeam: players.nflTeam,
-          status: players.status,
-        })
-        .from(players)
-        .where(inArray(players.id, boundedIds)),
-    ]);
-    if (pool.length > MAX_ROSTER_ALIAS_PROJECTION_ROWS) return direct;
-    const identityIds = [...new Set([...boundedIds, ...pool.map((row) => row.playerId)])];
-    const externalIds = await this.#database
-      .select({
-        playerId: playerExternalIds.playerId,
-        source: playerExternalIds.source,
-        externalId: playerExternalIds.externalId,
-      })
-      .from(playerExternalIds)
-      .where(
-        and(
-          inArray(playerExternalIds.playerId, identityIds),
-          inArray(playerExternalIds.source, [
-            "espn",
-            "sleeper-espn",
-            "yahoo",
-            "sleeper-yahoo",
-            "espn-self-asserted",
-          ]),
-        ),
-      );
-    return [
-      ...direct,
-      ...reconcileRosterProjectionAliases({
-        leagueSeasonId: set.leagueSeasonId,
-        rosterPlayers,
-        projections: pool,
-        externalIds,
-      }),
-    ];
+        // Search the release, not the 512-player ranking pool: a rostered player's approved forecast
+        // can be below that cutoff. Overflow fails closed so a truncated pool cannot look unique.
+        const [pool, rosterPlayers] = await Promise.all([
+          this.#projectionPlayerQuery(db)
+            .where(eq(playerProjections.projectionSetId, projectionSetId))
+            .orderBy(asc(players.id))
+            .limit(MAX_ROSTER_ALIAS_PROJECTION_ROWS + 1),
+          db
+            .select({
+              playerId: players.id,
+              gsisId: players.gsisId,
+              name: players.fullName,
+              primaryPosition: players.primaryPosition,
+              eligiblePositions: players.eligiblePositions,
+              nflTeam: players.nflTeam,
+              status: players.status,
+            })
+            .from(players)
+            .where(inArray(players.id, boundedIds)),
+        ]);
+        if (pool.length > MAX_ROSTER_ALIAS_PROJECTION_ROWS) return direct;
+        const projectedIds = new Set(pool.map((row) => row.playerId));
+        if (!rosterPlayers.some((row) => !row.gsisId?.trim() && !projectedIds.has(row.playerId)))
+          return direct;
+        const identityIds = [...new Set([...boundedIds, ...pool.map((row) => row.playerId)])];
+        const identityEvidence = await loadProjectionIdentityEvidence(db, identityIds);
+        return [
+          ...direct,
+          ...reconcileRosterProjectionAliases({
+            leagueSeasonId: set.leagueSeasonId,
+            rosterPlayers,
+            projections: pool,
+            externalIds: identityEvidence.externalIds,
+            externalEvidenceComplete: identityEvidence.complete,
+          }),
+        ];
+      },
+      { isolationLevel: "repeatable read", accessMode: "read only" },
+    );
   }
 
   listLatestMarketSignals(
@@ -931,10 +924,10 @@ export class DrizzleInSeasonDecisionRepository implements InSeasonDecisionReposi
     return currentManagedProjectionProfile(this.#database, leagueSeasonId);
   }
 
-  #projectionPlayerQuery() {
+  #projectionPlayerQuery(database: Pick<Database, "select"> = this.#database) {
     const projectionWeek = sql<number>`coalesce(${projectionSets.week}, ${projectionSets.asOfWeek})`;
     const observedPosition = latestFantasyPosition(projectionSets.season, projectionWeek);
-    return this.#database
+    return database
       .select({
         playerId: players.id,
         gsisId: players.gsisId,
