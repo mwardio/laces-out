@@ -615,6 +615,67 @@ describe.skipIf(!dockerAvailable())("Provider snapshot recurrence against Postgr
     expect((await persist("b", 4)).state).toBe("accepted");
   });
 
+  it("refreshes newly parsed Yahoo draft status on unchanged bytes without changing rosters or demand", async () => {
+    const s = await scenario("yahoo");
+    const repository = new DrizzleYahooSyncRepository(handle.db, () => capture(10));
+    const original = yahooBundle(s.externalKey, "a", 0);
+    const first = await repository.persistBundle(s.userId, s.connectionId, original);
+    await handle.db
+      .update(leagueSeasons)
+      .set({
+        settings: { ...original.league.settings, unrelatedSetting: "preserved" },
+      })
+      .where(eq(leagueSeasons.id, s.leagueSeasonId));
+    await setDemand(s.leagueSeasonId, null);
+    const repeated = yahooBundle(s.externalKey, "a", 1);
+    const after = await repository.persistBundle(s.userId, s.connectionId, {
+      ...repeated,
+      league: {
+        ...repeated.league,
+        settings: { ...repeated.league.settings, draftStatus: "predraft" },
+      },
+    });
+    expect(after).toMatchObject({ state: "unchanged", syncRunId: first.syncRunId });
+    const [season] = await handle.db
+      .select({
+        settings: leagueSeasons.settings,
+        lastSyncedAt: leagueSeasons.lastSyncedAt,
+      })
+      .from(leagueSeasons)
+      .where(eq(leagueSeasons.id, s.leagueSeasonId));
+    expect(season?.settings).toEqual({
+      ...original.league.settings,
+      unrelatedSetting: "preserved",
+      draftStatus: "predraft",
+    });
+    expect(season?.lastSyncedAt).toEqual(capture(1));
+    expect(await demandFor(s.leagueSeasonId)).toBeNull();
+    const snapshots = await handle.db
+      .select({ id: rosterSnapshots.id })
+      .from(rosterSnapshots)
+      .innerJoin(fantasyTeams, eq(fantasyTeams.id, rosterSnapshots.teamId))
+      .where(eq(fantasyTeams.leagueSeasonId, s.leagueSeasonId));
+    expect(snapshots).toHaveLength(2);
+    const runs = await handle.db
+      .select({ id: syncRuns.id })
+      .from(syncRuns)
+      .where(eq(syncRuns.leagueSeasonId, s.leagueSeasonId));
+    expect(runs).toEqual([{ id: first.syncRunId }]);
+    const changed = yahooBundle(s.externalKey, "b", 2);
+    await repository.persistBundle(s.userId, s.connectionId, {
+      ...changed,
+      league: {
+        ...changed.league,
+        settings: { ...changed.league.settings, draftStatus: "postdraft" },
+      },
+    });
+    const [advanced] = await handle.db
+      .select({ settings: leagueSeasons.settings })
+      .from(leagueSeasons)
+      .where(eq(leagueSeasons.id, s.leagueSeasonId));
+    expect(advanced?.settings.draftStatus).toBe("postdraft");
+  });
+
   it("preserves fractional provider rates and repairs only verified legacy rounding", async () => {
     const s = await scenario("yahoo");
     const repository = new DrizzleYahooSyncRepository(handle.db, () => capture(10));

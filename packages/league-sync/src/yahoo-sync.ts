@@ -276,6 +276,13 @@ function boundedRetryAfterMs(value: number | null | undefined): number | null {
 
 function clientFacingSyncError(error: unknown): YahooSyncError {
   if (error instanceof YahooSyncError) return error;
+  if (error instanceof YahooXmlError && error.code === "INCOMPLETE_ROSTER") {
+    return new YahooSyncError(
+      "PROVIDER_READ_FAILED",
+      "Yahoo returned incomplete roster data. This league's stored rosters were left unchanged.",
+      { retryable: true },
+    );
+  }
   if (error instanceof YahooReadClientError) {
     const throttled = error.code === "RATE_LIMITED";
     const parsedRetryAfterMs = boundedRetryAfterMs(error.retryAfterMs);
@@ -751,7 +758,17 @@ export class DrizzleYahooSyncRepository implements YahooSyncRepository {
         if (!season) throw new Error("Yahoo idempotent sync referenced a missing league season");
         await transaction
           .update(leagueSeasons)
-          .set({ lastSyncedAt: fetchedAt, updatedAt: now })
+          .set({
+            lastSyncedAt: fetchedAt,
+            updatedAt: now,
+            // A newer normalizer may recognize draft status in unchanged provider bytes. Keep
+            // that observed field current without replacing other settings or creating a roster.
+            ...(bundle.league.settings.draftStatus === undefined
+              ? {}
+              : {
+                  settings: sql`jsonb_set(${leagueSeasons.settings}, '{draftStatus}', ${JSON.stringify(bundle.league.settings.draftStatus)}::jsonb, true)`,
+                }),
+          })
           .where(eq(leagueSeasons.id, season.id));
         await persistProviderLink(season.id);
         const mappedExternalKey = currentUserTeam?.externalId;
