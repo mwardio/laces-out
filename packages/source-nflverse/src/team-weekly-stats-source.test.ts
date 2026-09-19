@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 
 import { describe, expect, it } from "vitest";
 
@@ -6,6 +7,7 @@ import { NflverseDatasetSourceError, type NflverseDatasetState } from "./release
 import type { NflverseFourthDownStopsLoader } from "./fourth-down-stops-source.js";
 import {
   NFLVERSE_TEAM_WEEKLY_STATS_SOURCE_KEY,
+  NFLVERSE_TEAM_WEEKLY_STATS_COMPONENT_SCHEMA,
   NflverseTeamWeeklyStatsSource,
   buildNflverseTeamWeeklyStatsUrl,
 } from "./team-weekly-stats-source.js";
@@ -185,6 +187,7 @@ describe("NflverseTeamWeeklyStatsSource", () => {
       defensive_interception_return_yards: 52,
       defensive_touchdowns: 1,
       defensive_safeties: 0,
+      defensive_two_point_returns: 0,
       fourth_down_stops: 2,
       special_teams_touchdowns: 1,
       field_goals_made: 3,
@@ -221,6 +224,75 @@ describe("NflverseTeamWeeklyStatsSource", () => {
       defensive_safeties: 1,
       defensive_touchdowns: 0,
     });
+  });
+
+  it("stores defensive conversion returns as counts without changing touchdowns or safeties", async () => {
+    const csv = replaceTeamCell(fixture, "BAL", "def_2pt_made", "1");
+    const result = await teamSource({ fetch: () => Promise.resolve(new Response(csv)) }).check(
+      2024,
+      EMPTY_STATE,
+    );
+    if (result.state !== "changed") throw new Error("Expected changed team stats");
+    expect(result.observations.find((row) => row.team === "BAL")?.components).toMatchObject({
+      defensive_two_point_returns: 1,
+      defensive_touchdowns: 0,
+      defensive_safeties: 0,
+    });
+    expect(
+      result.observations.find((row) => row.team === "PIT")?.components.defensive_two_point_returns,
+    ).toBe(0);
+  });
+
+  it.each(["", "NA", "-1", "0.5", "21", "Infinity", "return"])(
+    "rejects malformed defensive conversion count %j instead of inventing zero",
+    async (value) => {
+      const csv = replaceTeamCell(fixture, "BAL", "def_2pt_made", value);
+      await expect(
+        teamSource({ fetch: () => Promise.resolve(new Response(csv)) }).check(2024, EMPTY_STATE),
+      ).rejects.toMatchObject({ code: "QUALITY_THRESHOLD" });
+    },
+  );
+
+  it("requires the official defensive conversion-return column", async () => {
+    const csv = removeColumn(fixture, "def_2pt_made");
+    await expect(
+      teamSource({ fetch: () => Promise.resolve(new Response(csv)) }).check(2024, EMPTY_STATE),
+    ).rejects.toMatchObject({
+      code: "INVALID_CSV",
+      message: "nflverse team weekly stats omitted required column def_2pt_made",
+    });
+  });
+
+  it("replays unchanged upstream bytes under the team component contract and then becomes idempotent", async () => {
+    const raw = createHash("sha256").update(fixture).digest("hex");
+    const legacy = createHash("sha256")
+      .update(`team-week-with-fourth-downs-v1:${raw}:${"b".repeat(64)}`)
+      .digest("hex");
+    const current = createHash("sha256")
+      .update(`${NFLVERSE_TEAM_WEEKLY_STATS_COMPONENT_SCHEMA}:${raw}:${"b".repeat(64)}`)
+      .digest("hex");
+    const source = teamSource({
+      fetch: () =>
+        Promise.resolve(new Response(fixture, { headers: { etag: '"same-team-bytes"' } })),
+    });
+    const result = await source.check(2024, {
+      etag: '"same-team-bytes"',
+      lastModified: null,
+      checksumSha256: legacy,
+    });
+    expect(result).toMatchObject({
+      state: "changed",
+      checksumSha256: current,
+      teamWeeklyChecksumSha256: raw,
+    });
+    expect(current).not.toBe(legacy);
+    expect(
+      await source.check(2024, {
+        etag: '"same-team-bytes"',
+        lastModified: null,
+        checksumSha256: current,
+      }),
+    ).toMatchObject({ state: "unchanged", checksumSha256: current, teamWeeklyChecksumSha256: raw });
   });
 
   it("accepts an official blocked punt that is not credited as a punt attempt", async () => {

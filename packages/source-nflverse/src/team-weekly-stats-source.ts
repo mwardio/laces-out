@@ -19,6 +19,10 @@ import {
 } from "./release-source.js";
 
 export const NFLVERSE_TEAM_WEEKLY_STATS_SOURCE_KEY = "nflverse.stats-team-week" as const;
+// The previous implicit v1 combined team CSV and fourth-down PBP bytes, but did not expose
+// defensive conversion returns. A component-contract change must create new immutable facts
+// even when both official artifacts are byte-for-byte unchanged.
+export const NFLVERSE_TEAM_WEEKLY_STATS_COMPONENT_SCHEMA = "nflverse-team-week-components-v2";
 export const NFLVERSE_TEAM_WEEKLY_STATS_ATTRIBUTION =
   "Weekly team stats provided by nflverse (CC BY 4.0)" as const;
 export const NFLVERSE_TEAM_WEEKLY_STATS_ATTRIBUTION_URL = NFLVERSE_DATA_REPOSITORY_URL;
@@ -88,6 +92,7 @@ const COMPONENT_SPECS = {
   defensive_passes_defended: ["def_pass_defended", 0, 100, true],
   defensive_touchdowns: ["def_tds", 0, 20, true],
   defensive_safeties: ["def_safeties", 0, 10, true],
+  defensive_two_point_returns: ["def_2pt_made", 0, 20, true],
   defensive_fumbles_recovered: ["fumble_recovery_opp", 0, 50, true],
   defensive_fumble_recovery_yards: ["fumble_recovery_yards_opp", -500, 1_000, true],
   fumble_recovery_touchdowns: ["fumble_recovery_tds", 0, 20, true],
@@ -167,6 +172,7 @@ interface NflverseTeamWeeklyStatsBaseResult {
   readonly etag: string | null;
   readonly lastModified: string | null;
   readonly checksumSha256: string | null;
+  readonly teamWeeklyChecksumSha256: string;
 }
 
 export type NflverseTeamWeeklyStatsCheckResult =
@@ -582,17 +588,19 @@ export class NflverseTeamWeeklyStatsSource {
       );
     const parsed = parseTeamWeeklyStats(result.body, season);
     const fourthDowns = await (fourthDownsOverride ?? this.#fourthDowns).load(season);
+    const provenance = { teamWeeklyChecksumSha256: result.checksumSha256 };
     const checksumSha256 = createHash("sha256")
       .update(
-        `team-week-with-fourth-downs-v1:${result.checksumSha256}:${fourthDowns.checksumSha256}`,
+        `${NFLVERSE_TEAM_WEEKLY_STATS_COMPONENT_SCHEMA}:${result.checksumSha256}:${fourthDowns.checksumSha256}`,
       )
       .digest("hex");
     if (checksumSha256 === previous.checksumSha256) {
-      return { state: "unchanged", ...base, checksumSha256 };
+      return { state: "unchanged", ...base, ...provenance, checksumSha256 };
     }
     return {
       state: "changed",
       ...base,
+      ...provenance,
       checksumSha256,
       observations: mergeFourthDownStops(parsed.observations, fourthDowns.observations),
       rowsRead: parsed.rowsRead,
