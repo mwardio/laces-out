@@ -136,11 +136,16 @@ export function weeklyIntervalPolicyIsUsable(value: unknown): value is WeeklyInt
   return isWeeklyIntervalPolicy(value) && (value.pooled?.samples ?? 0) >= MINIMUM_SAMPLES;
 }
 
-/** Version provenance only; stored policies never recalibrate a kickoff-locked row. */
-export function storedWeeklyIntervalPolicyVersion(
+/** Stored policies identify the original interval; they never recalibrate a kickoff-locked row. */
+export function storedWeeklyIntervalPolicyProvenance(
   metadata: unknown,
   playerId: string,
-): string | undefined {
+):
+  | {
+      readonly version: typeof WEEKLY_INTERVAL_CALIBRATION_POLICY_VERSION;
+      readonly position: WeeklyIntervalPosition;
+    }
+  | undefined {
   if (!object(metadata) || !object(metadata.intervalPolicyByPlayer)) return undefined;
   const row = metadata.intervalPolicyByPlayer[playerId];
   if (
@@ -148,7 +153,22 @@ export function storedWeeklyIntervalPolicyVersion(
     row.version !== WEEKLY_INTERVAL_CALIBRATION_POLICY_VERSION ||
     (row.origin !== "current" && row.origin !== "frozen") ||
     typeof row.position !== "string" ||
-    !isWeeklyIntervalPosition(row.position) ||
+    !isWeeklyIntervalPosition(row.position)
+  )
+    return undefined;
+  const provenance = {
+    version: WEEKLY_INTERVAL_CALIBRATION_POLICY_VERSION,
+    position: row.position,
+  } as const;
+  // Current fits describe unlocked rows. A formerly published role can be withheld now without
+  // invalidating the original interval, whose role/version survive in the frozen-row metadata.
+  if (row.origin === "frozen")
+    return object(metadata.frozenIntervalPolicyVersions) &&
+      Object.hasOwn(metadata.frozenIntervalPolicyVersions, playerId) &&
+      metadata.frozenIntervalPolicyVersions[playerId] === row.version
+      ? provenance
+      : undefined;
+  if (
     !object(metadata.weeklyIntervalCalibration) ||
     metadata.weeklyIntervalCalibration.policyVersion !==
       WEEKLY_INTERVAL_CALIBRATION_POLICY_VERSION ||
@@ -159,8 +179,15 @@ export function storedWeeklyIntervalPolicyVersion(
   return object(entry) &&
     isWeeklyIntervalPolicy(entry.policy) &&
     entry.policy.position === row.position
-    ? WEEKLY_INTERVAL_CALIBRATION_POLICY_VERSION
+    ? provenance
     : undefined;
+}
+
+export function storedWeeklyIntervalPolicyVersion(
+  metadata: unknown,
+  playerId: string,
+): string | undefined {
+  return storedWeeklyIntervalPolicyProvenance(metadata, playerId)?.version;
 }
 
 /** Mean is passed through exactly. Invalid/sparse policy preserves the existing validated bounds. */

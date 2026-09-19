@@ -40,7 +40,7 @@ import {
   applyWeeklyIntervalPolicy,
   isWeeklyIntervalPosition,
   weeklyIntervalPolicyIsUsable,
-  storedWeeklyIntervalPolicyVersion,
+  storedWeeklyIntervalPolicyProvenance,
   WEEKLY_INTERVAL_CALIBRATION_POLICY_VERSION,
   WEEKLY_INTERVAL_PROVISIONAL_CONFIDENCE_CAP,
   missingLongTouchdownScoringComponents,
@@ -266,6 +266,8 @@ export interface ScoredProjectionRow {
   readonly scoringProfileKey?: string;
   readonly pointPolicyVersion?: string;
   readonly intervalPolicyVersion?: string | undefined;
+  /** Preserve the role used by the interval even if provider role evidence changes after kickoff. */
+  readonly intervalPolicyPosition?: WeeklyIntervalPosition | undefined;
 }
 
 interface LeaguePublication {
@@ -968,6 +970,7 @@ export function rescoreFrozenProjection(
     // Scoring changes use the independently validated point residual path above; they do not
     // inherit the original scoring profile's conditional interval provenance.
     intervalPolicyVersion: undefined,
+    intervalPolicyPosition: undefined,
   };
 }
 
@@ -3352,6 +3355,10 @@ export class FirstPartyProjectionService implements ProjectionRefreshService {
       if (!leagueSeasonId) continue;
       const leagueRows = result.get(leagueSeasonId) ?? new Map<string, ScoredProjectionRow>();
       const mean = numeric(row.meanPoints);
+      const intervalProvenance = storedWeeklyIntervalPolicyProvenance(
+        metadataBySet.get(row.projectionSetId),
+        row.playerId,
+      );
       leagueRows.set(row.playerId, {
         playerId: row.playerId,
         mean,
@@ -3367,10 +3374,8 @@ export class FirstPartyProjectionService implements ProjectionRefreshService {
               : "unknown";
           return pointPolicyBySet.get(row.projectionSetId) ?? "unknown";
         })(),
-        intervalPolicyVersion: storedWeeklyIntervalPolicyVersion(
-          metadataBySet.get(row.projectionSetId),
-          row.playerId,
-        ),
+        intervalPolicyVersion: intervalProvenance?.version,
+        intervalPolicyPosition: intervalProvenance?.position,
         ...(scoringKeyBySet.has(row.projectionSetId)
           ? { scoringProfileKey: scoringKeyBySet.get(row.projectionSetId)! }
           : {}),
@@ -3775,7 +3780,10 @@ export function buildFirstPartyLeaguePublications(input: {
         ...publishedInterval,
         pointPolicyVersion: WEEKLY_POINT_CALIBRATION_POLICY_VERSION,
         ...(applyOverlay
-          ? { intervalPolicyVersion: WEEKLY_INTERVAL_CALIBRATION_POLICY_VERSION }
+          ? {
+              intervalPolicyVersion: WEEKLY_INTERVAL_CALIBRATION_POLICY_VERSION,
+              intervalPolicyPosition: overlay.policy.position,
+            }
           : {}),
         // Better development-set coverage is not independent proof of higher advice confidence.
         confidence: applyOverlay
@@ -3935,12 +3943,15 @@ export function buildFirstPartyLeaguePublications(input: {
         },
         intervalPolicyByPlayer: Object.fromEntries(
           [...scored.values()]
-            .filter((row) => row.intervalPolicyVersion !== undefined)
+            .filter(
+              (row) =>
+                row.intervalPolicyVersion !== undefined && row.intervalPolicyPosition !== undefined,
+            )
             .map((row) => [
               row.playerId,
               {
                 version: row.intervalPolicyVersion,
-                position: rowPositions.get(row.playerId),
+                position: row.intervalPolicyPosition,
                 origin: frozenPlayerIds.has(row.playerId) ? "frozen" : "current",
               },
             ]),

@@ -6,6 +6,7 @@ import {
   isWeeklyIntervalPolicy,
   replayWeeklyIntervalCalibration,
   storedWeeklyIntervalPolicyVersion,
+  storedWeeklyIntervalPolicyProvenance,
   WEEKLY_INTERVAL_CALIBRATION_POLICY_VERSION,
 } from "./weekly-interval-calibration.js";
 
@@ -140,6 +141,10 @@ describe("separate weekly conditional interval policy", () => {
     expect(storedWeeklyIntervalPolicyVersion(metadata, "player")).toBe(
       WEEKLY_INTERVAL_CALIBRATION_POLICY_VERSION,
     );
+    expect(storedWeeklyIntervalPolicyProvenance(metadata, "player")).toEqual({
+      version: WEEKLY_INTERVAL_CALIBRATION_POLICY_VERSION,
+      position: "WR",
+    });
     expect(storedWeeklyIntervalPolicyVersion(metadata, "missing")).toBeUndefined();
     expect(
       storedWeeklyIntervalPolicyVersion(
@@ -156,5 +161,49 @@ describe("separate weekly conditional interval policy", () => {
     expect(
       storedWeeklyIntervalPolicyVersion({ ...metadata, weeklyIntervalCalibration: {} }, "player"),
     ).toBeUndefined();
+  });
+
+  it("restores the original frozen role and refuses missing or conflicting role evidence", () => {
+    const policy = fitWeeklyIntervalPolicy(fixture(), "WR");
+    const metadata = {
+      intervalPolicyByPlayer: {
+        player: {
+          version: WEEKLY_INTERVAL_CALIBRATION_POLICY_VERSION,
+          position: "WR",
+          origin: "frozen",
+        },
+      },
+      frozenIntervalPolicyVersions: { player: WEEKLY_INTERVAL_CALIBRATION_POLICY_VERSION },
+      weeklyIntervalCalibration: {
+        policyVersion: WEEKLY_INTERVAL_CALIBRATION_POLICY_VERSION,
+        byPosition: { WR: { policy }, TE: { policy: { ...policy, position: "TE" } } },
+      },
+    };
+    expect(storedWeeklyIntervalPolicyProvenance(metadata, "player")?.position).toBe("WR");
+    expect(
+      storedWeeklyIntervalPolicyProvenance({ ...metadata, weeklyIntervalCalibration: {} }, "player")
+        ?.position,
+    ).toBe("WR");
+    for (const frozenIntervalPolicyVersions of [undefined, {}, { player: "unknown" }]) {
+      expect(
+        storedWeeklyIntervalPolicyProvenance(
+          { ...metadata, frozenIntervalPolicyVersions },
+          "player",
+        ),
+      ).toBeUndefined();
+    }
+    for (const position of [undefined, "QB"]) {
+      expect(
+        storedWeeklyIntervalPolicyProvenance(
+          {
+            ...metadata,
+            intervalPolicyByPlayer: {
+              player: { ...metadata.intervalPolicyByPlayer.player, position },
+            },
+          },
+          "player",
+        ),
+      ).toBeUndefined();
+    }
   });
 });
