@@ -10,7 +10,10 @@ import {
   FIRST_PARTY_ROS_SEED_VERSION,
 } from "@laces-out/projections";
 
-import { FIRST_PARTY_PLAYER_HISTORY_VERSION } from "./first-party-projection-inputs.js";
+import {
+  FIRST_PARTY_PLAYER_HISTORY_VERSION,
+  FIRST_PARTY_DEFENSE_HISTORY_VERSION,
+} from "./first-party-projection-inputs.js";
 import {
   HISTORICAL_ROS_AVAILABILITY_CALIBRATION_VERSION,
   HISTORICAL_ROS_CANDIDATE_PAIR_VERSION,
@@ -154,6 +157,7 @@ export function rosLivePhysicalIdentity(input: RosLivePhysicalIdentityInput): st
         rosModel: FIRST_PARTY_ROS_MODEL_VERSION,
         rosSeed: FIRST_PARTY_ROS_SEED_VERSION,
         playerHistory: FIRST_PARTY_PLAYER_HISTORY_VERSION,
+        defenseHistory: FIRST_PARTY_DEFENSE_HISTORY_VERSION,
         candidatePair: HISTORICAL_ROS_CANDIDATE_PAIR_VERSION,
         productionBasis: HISTORICAL_ROS_PRODUCTION_BASIS_VERSION,
         availabilityCalibration: HISTORICAL_ROS_AVAILABILITY_CALIBRATION_VERSION,

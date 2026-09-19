@@ -1,5 +1,7 @@
 import {
   FIRST_PARTY_PROJECTION_MODEL_VERSION,
+  DEFENSE_POINTS_ALLOWED_DEFINITIONS,
+  type ProjectionDefensePointsAllowedDefinition,
   FIRST_PARTY_ROS_MODEL_VERSION,
   projectionScoringProfileKey,
   type ProjectionScoringProfile,
@@ -45,18 +47,23 @@ function intervals(value: unknown): void {
 }
 export function restoreRosLiveCalibration(value: unknown): {
   readonly player: ReturnType<typeof calibrateFirstPartyRosPlayerHistory>;
-  readonly defense: FirstPartyTeamDefenseCalibration;
+  readonly defenseByDefinition: Readonly<
+    Record<ProjectionDefensePointsAllowedDefinition, FirstPartyTeamDefenseCalibration>
+  >;
 } {
   const root = record(value);
   const player = record(root.player);
   const weekly = record(player.weekly);
-  const defense = record(root.defense);
-  requireValue(
-    weekly.modelVersion === FIRST_PARTY_PROJECTION_MODEL_VERSION &&
-      defense.modelVersion === FIRST_PARTY_PROJECTION_MODEL_VERSION,
-  );
+  requireValue(weekly.modelVersion === FIRST_PARTY_PROJECTION_MODEL_VERSION);
   for (const item of Object.values(record(weekly.intervals))) intervals(item);
-  intervals(defense.intervals);
+  const defenses = record(root.defenseByDefinition);
+  requireValue(Object.keys(defenses).length === DEFENSE_POINTS_ALLOWED_DEFINITIONS.length);
+  for (const definition of DEFENSE_POINTS_ALLOWED_DEFINITIONS) {
+    requireValue(Object.hasOwn(defenses, definition));
+    const defense = record(defenses[definition]);
+    requireValue(defense.modelVersion === FIRST_PARTY_PROJECTION_MODEL_VERSION);
+    intervals(defense.intervals);
+  }
   const availability = record(player.availability);
   requireValue(availability.version === HISTORICAL_ROS_AVAILABILITY_CALIBRATION_VERSION);
   numericRecord(availability.global);

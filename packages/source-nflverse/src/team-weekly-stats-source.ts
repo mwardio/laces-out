@@ -2,11 +2,17 @@ import { createHash } from "node:crypto";
 
 import { parse } from "csv-parse/sync";
 
+import type { NflverseFourthDownStopObservation } from "./fourth-down-stops-source.js";
 import {
-  NflverseFourthDownStopsSource,
-  type NflverseFourthDownStopObservation,
-  type NflverseFourthDownStopsLoader,
-} from "./fourth-down-stops-source.js";
+  NflversePlayByPlaySource,
+  type NflversePlayByPlayLoader,
+  type NflversePlayByPlayResult,
+} from "./play-by-play-source.js";
+import { NFLVERSE_DEFENSE_SCORING_EVENTS_VERSION } from "./defense-scoring-events.js";
+import {
+  nflverseDefenseScoringComponents,
+  type NflverseDefenseScoringComponents,
+} from "./defense-scoring-components.js";
 import {
   NFLVERSE_DATA_LICENSE,
   NFLVERSE_DATA_REPOSITORY_URL,
@@ -19,6 +25,10 @@ import {
 } from "./release-source.js";
 
 export const NFLVERSE_TEAM_WEEKLY_STATS_SOURCE_KEY = "nflverse.stats-team-week" as const;
+// v2 added defensive conversion returns. v3 requires complete classified final-game scoring
+// events, preserving raw aggregate TDs while correcting defensive/ST fumble categories.
+// Both this contract and the interpreter version bind unchanged upstream bytes to new facts.
+export const NFLVERSE_TEAM_WEEKLY_STATS_COMPONENT_SCHEMA = "nflverse-team-week-components-v3";
 export const NFLVERSE_TEAM_WEEKLY_STATS_ATTRIBUTION =
   "Weekly team stats provided by nflverse (CC BY 4.0)" as const;
 export const NFLVERSE_TEAM_WEEKLY_STATS_ATTRIBUTION_URL = NFLVERSE_DATA_REPOSITORY_URL;
@@ -88,6 +98,7 @@ const COMPONENT_SPECS = {
   defensive_passes_defended: ["def_pass_defended", 0, 100, true],
   defensive_touchdowns: ["def_tds", 0, 20, true],
   defensive_safeties: ["def_safeties", 0, 10, true],
+  defensive_two_point_returns: ["def_2pt_made", 0, 20, true],
   defensive_fumbles_recovered: ["fumble_recovery_opp", 0, 50, true],
   defensive_fumble_recovery_yards: ["fumble_recovery_yards_opp", -500, 1_000, true],
   fumble_recovery_touchdowns: ["fumble_recovery_tds", 0, 20, true],
@@ -126,9 +137,14 @@ const COMPONENT_SPECS = {
 } as const satisfies Record<string, ComponentSpec>;
 
 type StoredComponentName = keyof typeof COMPONENT_SPECS;
-export type NflverseTeamWeeklyStatComponents = Readonly<
+type ParsedTeamWeeklyStatComponents = Readonly<
   Record<StoredComponentName | "total_offensive_yards" | "fourth_down_stops", number>
 >;
+export type NflverseTeamWeeklyStatComponents = ParsedTeamWeeklyStatComponents &
+  NflverseDefenseScoringComponents & {
+    readonly raw_defensive_touchdowns: number;
+    readonly raw_special_teams_touchdowns: number;
+  };
 
 export interface NflverseTeamWeeklyAdvancedStats {
   readonly passing_epa: number;
@@ -147,6 +163,10 @@ export interface NflverseTeamWeeklyStats {
   readonly components: NflverseTeamWeeklyStatComponents;
   readonly advanced: NflverseTeamWeeklyAdvancedStats;
 }
+
+type ParsedTeamWeeklyStats = Omit<NflverseTeamWeeklyStats, "components"> & {
+  readonly components: ParsedTeamWeeklyStatComponents;
+};
 
 export interface NflverseTeamWeeklyStatsRejections {
   readonly invalidContext: number;
@@ -167,6 +187,8 @@ interface NflverseTeamWeeklyStatsBaseResult {
   readonly etag: string | null;
   readonly lastModified: string | null;
   readonly checksumSha256: string | null;
+  readonly teamWeeklyChecksumSha256: string;
+  readonly defenseScoringEventsVersion: typeof NFLVERSE_DEFENSE_SCORING_EVENTS_VERSION;
 }
 
 export type NflverseTeamWeeklyStatsCheckResult =
@@ -299,7 +321,7 @@ function parseCsv(body: string): readonly Record<string, string>[] {
     );
 }
 
-function normalizeComponents(row: Record<string, string>): NflverseTeamWeeklyStatComponents | null {
+function normalizeComponents(row: Record<string, string>): ParsedTeamWeeklyStatComponents | null {
   const parsed: Partial<Record<StoredComponentName, number>> = {};
   for (const [component, [column, minimum, maximum, integer]] of Object.entries(
     COMPONENT_SPECS,
@@ -357,7 +379,7 @@ function normalizeComponents(row: Record<string, string>): NflverseTeamWeeklySta
 function normalizeRow(
   row: Record<string, string>,
   expectedSeason: number,
-): { readonly observation: NflverseTeamWeeklyStats | null; readonly reason?: RejectionReason } {
+): { readonly observation: ParsedTeamWeeklyStats | null; readonly reason?: RejectionReason } {
   const season = boundedNumber(row.season, EARLIEST_COMPLETE_COMPONENT_SEASON, 2200, true);
   const week = boundedNumber(row.week, 1, 25, true);
   const seasonType = nullableString(row.season_type, 4)?.toUpperCase();
@@ -411,9 +433,9 @@ function normalizeRow(
 }
 
 function mergeFourthDownStops(
-  observations: readonly NflverseTeamWeeklyStats[],
+  observations: readonly ParsedTeamWeeklyStats[],
   fourthDowns: readonly NflverseFourthDownStopObservation[],
-): readonly NflverseTeamWeeklyStats[] {
+): readonly ParsedTeamWeeklyStats[] {
   const byGameTeam = new Map(fourthDowns.map((row) => [`${row.gameId}:${row.team}`, row]));
   return observations.map((observation) => {
     const fourthDown = byGameTeam.get(`${observation.gameId}:${observation.team}`);
@@ -439,9 +461,61 @@ function mergeFourthDownStops(
   });
 }
 
+function mergeScoringEvents(
+  observations: readonly ParsedTeamWeeklyStats[],
+  playByPlay: NflversePlayByPlayResult,
+): readonly NflverseTeamWeeklyStats[] {
+  const hasScoringEvents: boolean = Array.isArray(playByPlay.defenseScoringEvents);
+  if (playByPlay.defenseScoringEvents === undefined || !hasScoringEvents)
+    throw new NflverseDatasetSourceError(
+      "QUALITY_THRESHOLD",
+      "nflverse team stats require complete defense scoring-event capability from the shared PBP loader",
+    );
+  const byGame = new Map<
+    string,
+    NonNullable<NflversePlayByPlayResult["defenseScoringEvents"]>[number]
+  >();
+  for (const result of playByPlay.defenseScoringEvents) {
+    if (byGame.has(result.game.gameId))
+      throw new NflverseDatasetSourceError(
+        "QUALITY_THRESHOLD",
+        "nflverse team scoring has duplicate game results",
+      );
+    byGame.set(result.game.gameId, result);
+  }
+  return observations.map((observation) => {
+    const result = byGame.get(observation.gameId);
+    if (!result || playByPlay.season !== observation.season)
+      throw new NflverseDatasetSourceError(
+        "QUALITY_THRESHOLD",
+        `nflverse team scoring omitted matching game totals for ${observation.gameId}`,
+      );
+    const scoring = nflverseDefenseScoringComponents({
+      ...observation,
+      result,
+      playByPlayChecksumSha256: playByPlay.checksumSha256,
+      playByPlayCheckedAt: playByPlay.checkedAt,
+    });
+    if (scoring.defensive_two_point_returns !== observation.components.defensive_two_point_returns)
+      throw new NflverseDatasetSourceError(
+        "QUALITY_THRESHOLD",
+        `nflverse team scoring conversion-return totals disagree with def_2pt_made for ${observation.gameId}:${observation.team}`,
+      );
+    return {
+      ...observation,
+      components: {
+        ...observation.components,
+        raw_defensive_touchdowns: observation.components.defensive_touchdowns,
+        raw_special_teams_touchdowns: observation.components.special_teams_touchdowns,
+        ...scoring,
+      },
+    };
+  });
+}
+
 function parseTeamWeeklyStats(body: string, season: number) {
   const rows = parseCsv(body);
-  const observations: NflverseTeamWeeklyStats[] = [];
+  const observations: ParsedTeamWeeklyStats[] = [];
   const rejectionCounts: Record<RejectionReason, number> = {
     invalidContext: 0,
     invalidStats: 0,
@@ -473,7 +547,7 @@ function parseTeamWeeklyStats(body: string, season: number) {
     observations.push(normalized.observation);
   }
 
-  const byGame = new Map<string, NflverseTeamWeeklyStats[]>();
+  const byGame = new Map<string, ParsedTeamWeeklyStats[]>();
   for (const observation of observations) {
     byGame.set(observation.gameId, [...(byGame.get(observation.gameId) ?? []), observation]);
   }
@@ -531,27 +605,26 @@ function parseTeamWeeklyStats(body: string, season: number) {
 
 export class NflverseTeamWeeklyStatsSource {
   readonly #fetch: NflverseFetchLike;
-  readonly #fourthDowns: NflverseFourthDownStopsLoader;
+  readonly #playByPlay: NflversePlayByPlayLoader;
   readonly #now: () => Date;
 
   constructor(
     options: {
       readonly fetch?: NflverseFetchLike;
-      readonly fourthDowns?: NflverseFourthDownStopsLoader;
+      readonly playByPlay?: NflversePlayByPlayLoader;
       readonly now?: () => Date;
     } = {},
   ) {
     this.#fetch = options.fetch ?? globalThis.fetch;
     this.#now = options.now ?? (() => new Date());
-    this.#fourthDowns =
-      options.fourthDowns ??
-      new NflverseFourthDownStopsSource({ fetch: this.#fetch, now: this.#now });
+    this.#playByPlay =
+      options.playByPlay ?? new NflversePlayByPlaySource({ fetch: this.#fetch, now: this.#now });
   }
 
   async check(
     season: number,
     previous: NflverseDatasetState,
-    fourthDownsOverride?: NflverseFourthDownStopsLoader,
+    playByPlayOverride?: NflversePlayByPlayLoader,
   ): Promise<NflverseTeamWeeklyStatsCheckResult> {
     const sourceUrl = buildNflverseTeamWeeklyStatsUrl(season);
     const result = await checkNflverseCsvRelease({
@@ -581,28 +654,37 @@ export class NflverseTeamWeeklyStatsSource {
         true,
       );
     const parsed = parseTeamWeeklyStats(result.body, season);
-    const fourthDowns = await (fourthDownsOverride ?? this.#fourthDowns).load(season);
+    const playByPlay = await (playByPlayOverride ?? this.#playByPlay).load(season);
+    const observations = mergeScoringEvents(
+      mergeFourthDownStops(parsed.observations, playByPlay.observations),
+      playByPlay,
+    );
+    const provenance = {
+      teamWeeklyChecksumSha256: result.checksumSha256,
+      defenseScoringEventsVersion: NFLVERSE_DEFENSE_SCORING_EVENTS_VERSION,
+    } as const;
     const checksumSha256 = createHash("sha256")
       .update(
-        `team-week-with-fourth-downs-v1:${result.checksumSha256}:${fourthDowns.checksumSha256}`,
+        `${NFLVERSE_TEAM_WEEKLY_STATS_COMPONENT_SCHEMA}:${NFLVERSE_DEFENSE_SCORING_EVENTS_VERSION}:${result.checksumSha256}:${playByPlay.checksumSha256}`,
       )
       .digest("hex");
     if (checksumSha256 === previous.checksumSha256) {
-      return { state: "unchanged", ...base, checksumSha256 };
+      return { state: "unchanged", ...base, ...provenance, checksumSha256 };
     }
     return {
       state: "changed",
       ...base,
+      ...provenance,
       checksumSha256,
-      observations: mergeFourthDownStops(parsed.observations, fourthDowns.observations),
+      observations,
       rowsRead: parsed.rowsRead,
       rowsRejected: parsed.rowsRejected,
       rejections: parsed.rejections,
       coveredWeeks: parsed.coveredWeeks,
       coveredSeasonTypes: parsed.coveredSeasonTypes,
       coveredTeams: parsed.coveredTeams,
-      playByPlaySourceUrl: fourthDowns.sourceUrl,
-      playByPlayChecksumSha256: fourthDowns.checksumSha256,
+      playByPlaySourceUrl: playByPlay.sourceUrl,
+      playByPlayChecksumSha256: playByPlay.checksumSha256,
     };
   }
 }

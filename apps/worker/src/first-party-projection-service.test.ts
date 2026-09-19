@@ -68,6 +68,8 @@ interface ProjectionDatabaseFixture {
     readonly patch: Row;
   };
   readonly driftMutableChecksumAfterSnapshot?: boolean;
+  readonly onInsert?: (table: unknown) => void;
+  readonly onSelect?: (table: unknown) => void;
   // Simulates a required source (e.g. weekly stats) completing a concurrent refresh with a new
   // checksum after this run already validated sources and captured its start-of-refresh epoch,
   // but before this run reaches its own persist transaction.
@@ -170,6 +172,7 @@ class MutationQuery implements PromiseLike<readonly Row[]> {
 class ProjectionDatabaseHarness {
   readonly modelRuns: Row[] = [];
   readonly sourceUpdates: Row[] = [];
+  readonly syncRunUpdates: Row[] = [];
   syncRunInsertAttempts = 0;
   readonly transactionEvents: {
     readonly kind: string;
@@ -271,6 +274,7 @@ class ProjectionDatabaseHarness {
   }
 
   #selectRows(table: unknown, selection: Row, predicate?: SQL): readonly Row[] {
+    this.fixture.onSelect?.(table);
     if (table === dataSources) {
       if (!Object.hasOwn(selection, "key")) {
         return [{ metadata: { modelVersion: "retained-version" } }];
@@ -342,6 +346,7 @@ class ProjectionDatabaseHarness {
   }
 
   #insertRows(table: unknown, values: unknown): readonly Row[] {
+    this.fixture.onInsert?.(table);
     if (table === dataSources) {
       return [{ id: "managed-projection-source", lastChecksum: null }];
     }
@@ -383,6 +388,7 @@ class ProjectionDatabaseHarness {
 
   #updateRows(table: unknown, values: unknown): readonly Row[] {
     if (table === dataSources) this.sourceUpdates.push(values as Row);
+    if (table === syncRuns) this.syncRunUpdates.push(values as Row);
     if (table === dataSources || table === syncRuns) return [];
     throw new Error("Unexpected projection test update");
   }
@@ -454,6 +460,91 @@ function latestSourceMetadata(harness: ProjectionDatabaseHarness): Row {
 }
 
 describe("first-party projection service release safety", () => {
+  it("rejects a refresh that crosses kickoff during training before it can publish", async () => {
+    let now = new Date("2026-09-13T16:59:00Z");
+    const harness = new ProjectionDatabaseHarness({ now, schedule: scheduleFixture() });
+    const originalBacktest = projectionModel.runFirstPartyProjectionBacktest;
+    vi.spyOn(projectionModel, "runFirstPartyProjectionBacktest").mockImplementation((...args) => {
+      const result = originalBacktest(...args);
+      now = new Date("2026-09-13T17:00:01Z");
+      return result;
+    });
+    const service = new FirstPartyProjectionService({ database: harness.database, now: () => now });
+    await expect(
+      service.refreshProjections({ season: 2026, week: 1 }, jobContext()),
+    ).rejects.toMatchObject({ code: "PROJECTION_INPUT_EPOCH_CHANGED" });
+    expect(harness.syncRunInsertAttempts).toBe(0);
+    expect(harness.modelRuns).toHaveLength(0);
+    expect(harness.sourceUpdates.at(-1)?.lastCheckedAt).toEqual(now);
+  });
+
+  it("rejects a clock boundary crossed after the fresh planning clock", async () => {
+    let now = new Date("2026-09-13T16:59:00Z");
+    const harness = new ProjectionDatabaseHarness({ now, schedule: scheduleFixture() });
+    const originalProjection = projectionModel.projectFirstPartyTeamDefenseComponents;
+    vi.spyOn(projectionModel, "projectFirstPartyTeamDefenseComponents").mockImplementation(
+      (...args) => {
+        const result = originalProjection(...args);
+        now = new Date("2026-09-13T17:00:01Z");
+        return result;
+      },
+    );
+    await expect(
+      new FirstPartyProjectionService({
+        database: harness.database,
+        now: () => now,
+      }).refreshProjections({ season: 2026, week: 1 }, jobContext()),
+    ).rejects.toMatchObject({ code: "PROJECTION_INPUT_EPOCH_CHANGED" });
+    expect(harness.syncRunInsertAttempts).toBe(0);
+    expect(harness.modelRuns).toHaveLength(0);
+  });
+
+  it("checks the clock again after a database write instead of completing a stale plan", async () => {
+    let now = new Date("2026-09-13T16:59:00Z");
+    const harness = new ProjectionDatabaseHarness({
+      now,
+      schedule: scheduleFixture(),
+      onInsert: (table) => {
+        if (table === syncRuns) now = new Date("2026-09-13T17:00:01Z");
+      },
+    });
+    const service = new FirstPartyProjectionService({ database: harness.database, now: () => now });
+    await expect(
+      service.refreshProjections({ season: 2026, week: 1 }, jobContext()),
+    ).rejects.toMatchObject({ code: "PROJECTION_INPUT_EPOCH_CHANGED" });
+    expect(harness.syncRunInsertAttempts).toBe(1);
+    expect(harness.modelRuns).toHaveLength(0);
+    expect(harness.syncRunUpdates).toHaveLength(0);
+    // This fake proves the thrown fence. The PostgreSQL suite proves transactional rollback.
+  });
+
+  it("records the fresh planning/publication time separately from refresh start", async () => {
+    const evaluationStartedAt = new Date("2026-09-01T12:00:00Z");
+    let now = evaluationStartedAt;
+    const plannedAt = new Date("2026-09-01T12:01:00Z");
+    const harness = new ProjectionDatabaseHarness({ now, schedule: scheduleFixture() });
+    const originalBacktest = projectionModel.runFirstPartyProjectionBacktest;
+    vi.spyOn(projectionModel, "runFirstPartyProjectionBacktest").mockImplementation((...args) => {
+      const result = originalBacktest(...args);
+      now = plannedAt;
+      return result;
+    });
+    await new FirstPartyProjectionService({
+      database: harness.database,
+      now: () => now,
+    }).refreshProjections({ season: 2026, week: 1 }, jobContext());
+    expect(harness.modelRuns[0]?.createdAt).toEqual(plannedAt);
+    expect(harness.modelRuns[0]?.configuration).toMatchObject({
+      publicationClock: {
+        evaluationStartedAt: evaluationStartedAt.toISOString(),
+        plannedAt: plannedAt.toISOString(),
+        publicationStartedAt: plannedAt.toISOString(),
+      },
+    });
+    expect(harness.syncRunUpdates.at(-1)?.finishedAt).toEqual(plannedAt);
+    expect(latestSourceMetadata(harness).lastEvaluationAt).toBe(plannedAt.toISOString());
+  });
+
   it("records a coverage failure when a completed prior week is missing from training", async () => {
     const now = new Date("2026-09-16T12:00:00Z");
     const prior = scheduleFixture().map((row) => ({
@@ -1012,6 +1103,12 @@ describe("first-party projection service release safety", () => {
     });
     let laterYards = 80;
     let laterPointsAllowed = 20;
+    let priorEspnPointsAllowed = 23;
+    const observedDefenseZeros = Object.fromEntries(
+      projectionModel
+        .firstPartyTeamDefenseProjectionComponents()
+        .map((component) => [component, 0]),
+    );
     vi.spyOn(projectionInputs, "buildFirstPartyPlayerHistory").mockImplementation(() => [
       {
         playerId: "receiver",
@@ -1030,16 +1127,32 @@ describe("first-party projection service release safety", () => {
         components: { receiving_yards: laterYards },
       },
     ]);
-    vi.spyOn(projectionInputs, "buildFirstPartyDefenseHistory").mockImplementation(() => [
-      { team: "BUF", opponent: "MIA", season: 2026, week: 1, components: { points_allowed: 17 } },
-      {
-        team: "BUF",
-        opponent: "MIA",
-        season: 2026,
-        week: 3,
-        components: { points_allowed: laterPointsAllowed },
-      },
-    ]);
+    const assembleDefense = vi
+      .spyOn(projectionInputs, "buildFirstPartyDefenseHistory")
+      .mockImplementation((_rows, _schedule, definition) => [
+        {
+          team: "BUF",
+          opponent: "MIA",
+          season: 2026,
+          week: 1,
+          pointsAllowedDefinition: definition,
+          components: {
+            ...observedDefenseZeros,
+            points_allowed: definition === "espn-2019-v1" ? priorEspnPointsAllowed : 17,
+          },
+        },
+        {
+          team: "BUF",
+          opponent: "MIA",
+          season: 2026,
+          week: 3,
+          pointsAllowedDefinition: definition,
+          components: {
+            ...observedDefenseZeros,
+            points_allowed: laterPointsAllowed + (definition === "espn-2019-v1" ? 6 : 0),
+          },
+        },
+      ]);
     const fit = vi.spyOn(projectionModel, "runFirstPartyProjectionBacktest");
     const defenseFit = vi.spyOn(projectionModel, "runFirstPartyTeamDefenseBacktest");
     const service = new FirstPartyProjectionService({ database: harness.database, now: () => now });
@@ -1063,7 +1176,22 @@ describe("first-party projection service release safety", () => {
     await service.refreshProjections({ season: 2026 }, jobContext());
     const second = publish.mock.calls.at(-1)![0];
     expect(fit).toHaveBeenCalledTimes(1);
-    expect(defenseFit).toHaveBeenCalledTimes(1);
+    expect(defenseFit).toHaveBeenCalledTimes(2);
+    expect(assembleDefense.mock.calls.map((args) => args[2])).toEqual([
+      "yahoo-2022-v1",
+      "espn-2019-v1",
+      "yahoo-2022-v1",
+      "espn-2019-v1",
+    ]);
+    expect(
+      second.defenseVariants?.["espn-2019-v1"]?.history.at(-1)?.components.points_allowed,
+    ).toBe(36);
+    expect(first.defenseVariants?.["espn-2019-v1"]?.history.at(-1)?.components.points_allowed).toBe(
+      26,
+    );
+    expect(second.defenseVariants?.["espn-2019-v1"]?.backtest).toBe(
+      first.defenseVariants?.["espn-2019-v1"]?.backtest,
+    );
     expect(second.basePlayerBacktest).toBe(first.basePlayerBacktest);
     expect(second.playerHistory).not.toBe(first.playerHistory);
     expect(second.playerHistory.at(-1)?.components.receiving_yards).toBe(100);
@@ -1074,6 +1202,19 @@ describe("first-party projection service release safety", () => {
     expect(second.inputSnapshot?.sourceManifest.checksum).not.toBe(
       first.inputSnapshot?.sourceManifest.checksum,
     );
+    priorEspnPointsAllowed = 24;
+    harness.setSourceChecksum("nflverse.stats-team-week.2026", "e".repeat(64));
+    await service.refreshProjections({ season: 2026 }, jobContext());
+    const third = publish.mock.calls.at(-1)![0];
+    expect(fit).toHaveBeenCalledTimes(1);
+    expect(defenseFit).toHaveBeenCalledTimes(3);
+    expect(third.basePlayerBacktest).toBe(second.basePlayerBacktest);
+    expect(third.defenseBacktest).toBe(second.defenseBacktest);
+    expect(third.defenseVariants?.["espn-2019-v1"]?.backtest).not.toBe(
+      second.defenseVariants?.["espn-2019-v1"]?.backtest,
+    );
+    expect(defenseFit.mock.calls[2]?.[0][0]?.pointsAllowedDefinition).toBe("espn-2019-v1");
+    expect(defenseFit.mock.calls[2]?.[0][0]?.components.points_allowed).toBe(24);
   });
 
   it("still rejects source drift during a warm fit before publishing", async () => {
@@ -1089,6 +1230,64 @@ describe("first-party projection service release safety", () => {
     ).rejects.toMatchObject({ code: "PROJECTION_INPUT_EPOCH_CHANGED" });
     expect(fit).toHaveBeenCalledTimes(1);
     expect(harness.modelRuns).toHaveLength(1);
+  });
+
+  it("invalidates completed output reuse at the prior-week coverage deadline", async () => {
+    let now = new Date("2026-09-14T00:59:00Z");
+    const next = scheduleFixture().map((row) => ({
+      ...row,
+      week: 2,
+      gameId: `${String(row.gameId)}-2`,
+      kickoffAt: new Date("2026-09-20T17:00:00Z"),
+    }));
+    const harness = new ProjectionDatabaseHarness({
+      now,
+      reuseRecordedRuns: true,
+      schedule: [...scheduleFixture(), ...next],
+    });
+    const service = new FirstPartyProjectionService({ database: harness.database, now: () => now });
+    await service.refreshProjections({ season: 2026, week: 2 }, jobContext());
+    await service.refreshProjections({ season: 2026, week: 2 }, jobContext());
+    expect(harness.modelRuns).toHaveLength(1);
+    now = new Date("2026-09-14T01:01:00Z");
+    await service.refreshProjections({ season: 2026, week: 2 }, jobContext());
+    expect(harness.modelRuns).toHaveLength(2);
+    expect(harness.modelRuns[1]?.inputChecksum).not.toBe(harness.modelRuns[0]?.inputChecksum);
+    expect(harness.modelRuns[1]?.metrics).toMatchObject({
+      gate: {
+        reasons: expect.arrayContaining([
+          expect.stringContaining("status is unresolved"),
+        ]) as unknown,
+      },
+    });
+  });
+
+  it("rejects a coverage deadline crossed while rechecking reusable output", async () => {
+    let now = new Date("2026-09-14T00:59:00Z");
+    let crossDuringReuse = false;
+    const next = scheduleFixture().map((row) => ({
+      ...row,
+      week: 2,
+      gameId: `${String(row.gameId)}-2`,
+      kickoffAt: new Date("2026-09-20T17:00:00Z"),
+    }));
+    const harness = new ProjectionDatabaseHarness({
+      now,
+      reuseRecordedRuns: true,
+      schedule: [...scheduleFixture(), ...next],
+      onSelect: (table) => {
+        if (crossDuringReuse && table === projectionModelRuns)
+          now = new Date("2026-09-14T01:01:00Z");
+      },
+    });
+    const service = new FirstPartyProjectionService({ database: harness.database, now: () => now });
+    await service.refreshProjections({ season: 2026, week: 2 }, jobContext());
+    crossDuringReuse = true;
+    await expect(
+      service.refreshProjections({ season: 2026, week: 2 }, jobContext()),
+    ).rejects.toMatchObject({ code: "PROJECTION_INPUT_EPOCH_CHANGED" });
+    expect(harness.modelRuns).toHaveLength(1);
+    expect(harness.sourceUpdates.at(-1)?.lastCheckedAt).toEqual(now);
   });
 
   it("refreshes an explicit future week when prior-week finality advances on the clock alone", async () => {

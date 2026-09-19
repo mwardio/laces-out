@@ -30,6 +30,7 @@ import {
   NFLVERSE_INJURIES_ATTRIBUTION_URL,
   NFLVERSE_TEAM_WEEKLY_STATS_ATTRIBUTION,
   NFLVERSE_TEAM_WEEKLY_STATS_ATTRIBUTION_URL,
+  NFLVERSE_TEAM_WEEKLY_STATS_COMPONENT_SCHEMA,
   NFLVERSE_WEEKLY_ROSTERS_ATTRIBUTION,
   NFLVERSE_WEEKLY_ROSTERS_ATTRIBUTION_URL,
   NFLVERSE_WEEKLY_STATS_ATTRIBUTION,
@@ -43,7 +44,7 @@ import {
   NflverseWeeklyStatsSource,
   NflversePlayByPlaySource,
   snapshotNflversePlayByPlay,
-  fourthDownStopsFromPlayByPlay,
+  NFLVERSE_DEFENSE_SCORING_EVENTS_VERSION,
   type NflversePlayByPlayLoader,
   buildNflverseSnapCountsUrl,
   buildNflverseInjuriesUrl,
@@ -69,8 +70,8 @@ const historicalCheckIntervalMinutes = 24 * 60;
 const claimMinutes = 45;
 const chunkSize = 500;
 // v3 added exact kicker distance components and play-by-play-derived fourth-down stops. v4 makes
-// normalized player-week checksums schema-aware, so an unchanged upstream artifact is replayed
-// into a distinct immutable observation set when its component contract changes.
+// normalized player-week checksums schema-aware. Each player/team component contract now has
+// its own replay marker and checksum identity, so a new team component need not replay all datasets.
 const sourceSchemaVersion = 4;
 const rosterIdentityVersion = 1;
 const fantasyRosterPositions = new Set(["QB", "RB", "FB", "WR", "TE", "K"]);
@@ -242,6 +243,11 @@ async function claimSource(
     (source.metadata.availability === "available" &&
       ((descriptor.kind === "weekly_stats" &&
         source.metadata.playerWeeklyComponentSchema !== NFLVERSE_WEEKLY_STATS_COMPONENT_SCHEMA) ||
+        (descriptor.kind === "weekly_team_stats" &&
+          (source.metadata.teamWeeklyComponentSchema !==
+            NFLVERSE_TEAM_WEEKLY_STATS_COMPONENT_SCHEMA ||
+            source.metadata.teamWeeklyScoringEventsVersion !==
+              NFLVERSE_DEFENSE_SCORING_EVENTS_VERSION)) ||
         (pairedStats && !hasPlayByPlayCapture(source.metadata))));
   const stableMetadata = { ...source.metadata };
   delete stableMetadata.refreshClaimedAt;
@@ -283,6 +289,10 @@ function sourceState(source: SourceRow, playerWeekly = false, teamWeekly = false
     source.metadata.sourceSchemaVersion !== sourceSchemaVersion ||
     (playerWeekly &&
       source.metadata.playerWeeklyComponentSchema !== NFLVERSE_WEEKLY_STATS_COMPONENT_SCHEMA) ||
+    (teamWeekly &&
+      (source.metadata.teamWeeklyComponentSchema !== NFLVERSE_TEAM_WEEKLY_STATS_COMPONENT_SCHEMA ||
+        source.metadata.teamWeeklyScoringEventsVersion !==
+          NFLVERSE_DEFENSE_SCORING_EVENTS_VERSION)) ||
     ((playerWeekly || teamWeekly) && !hasPlayByPlayCapture(source.metadata));
   return {
     etag: replay ? null : source.etag,
@@ -383,6 +393,12 @@ export function datasetMetadata(input: {
     sourceSchemaVersion,
     ...(input.sourceKey.startsWith("nflverse.stats-player-week.")
       ? { playerWeeklyComponentSchema: NFLVERSE_WEEKLY_STATS_COMPONENT_SCHEMA }
+      : {}),
+    ...(input.sourceKey.startsWith("nflverse.stats-team-week.")
+      ? {
+          teamWeeklyComponentSchema: NFLVERSE_TEAM_WEEKLY_STATS_COMPONENT_SCHEMA,
+          teamWeeklyScoringEventsVersion: NFLVERSE_DEFENSE_SCORING_EVENTS_VERSION,
+        }
       : {}),
     season: input.season,
     license: NFLVERSE_DATA_LICENSE,
@@ -1319,7 +1335,7 @@ export class NflverseWeeklyDataRefresher {
       const result = await this.#teamWeeklyStatsSource.check(
         season,
         sourceState(source, false, true),
-        playByPlay ? fourthDownStopsFromPlayByPlay(playByPlay) : undefined,
+        playByPlay,
       );
       const checkedAt = new Date(result.checkedAt);
       const nextCheckAt = new Date(checkedAt.getTime() + descriptor.checkIntervalMinutes * 60_000);
@@ -1340,6 +1356,9 @@ export class NflverseWeeklyDataRefresher {
             metadata: {
               ...source.metadata,
               sourceSchemaVersion,
+              teamWeeklyComponentSchema: NFLVERSE_TEAM_WEEKLY_STATS_COMPONENT_SCHEMA,
+              teamWeeklyScoringEventsVersion: result.defenseScoringEventsVersion,
+              teamWeeklyChecksumSha256: result.teamWeeklyChecksumSha256,
               season,
               license: NFLVERSE_DATA_LICENSE,
               availability: "available",
@@ -1441,6 +1460,8 @@ export class NflverseWeeklyDataRefresher {
                 coveredWeeks: result.coveredWeeks,
                 coveredSeasonTypes: result.coveredSeasonTypes,
               }),
+              teamWeeklyChecksumSha256: result.teamWeeklyChecksumSha256,
+              teamWeeklyScoringEventsVersion: result.defenseScoringEventsVersion,
               playByPlaySourceUrl: result.playByPlaySourceUrl,
               playByPlayChecksumSha256: result.playByPlayChecksumSha256,
             },

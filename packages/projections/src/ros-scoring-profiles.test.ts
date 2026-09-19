@@ -10,7 +10,22 @@ import {
   rosScoringProfileCatalog,
 } from "./ros-scoring-profiles.js";
 import { projectionScoringProfileKeyForPosition } from "./scoring-position-keys.js";
-import { projectionScoringProfileKey, scoreProjectionStatComponents } from "./scoring.js";
+import {
+  projectionScoringProfileKey,
+  scoreProjectionStatComponents,
+  defensePointsAllowedDefinitionForProfile,
+  type ProjectionScoringProfile,
+} from "./scoring.js";
+
+function legacyUnspecifiedKey(profile: ProjectionScoringProfile): string {
+  return projectionScoringProfileKey({
+    ...profile,
+    rules: profile.rules.map(({ statDefinition, ...rule }) => {
+      void statDefinition;
+      return rule;
+    }),
+  });
+}
 
 describe("rosScoringProfileCatalog", () => {
   it("keeps the three legacy redraft profiles first, in fixed order", () => {
@@ -40,17 +55,21 @@ describe("rosScoringProfileCatalog", () => {
     ]);
   });
 
-  it("pins the three legacy profiles' scoringProfileKey strings verbatim", () => {
-    // These are the byte-frozen identities: apps/web/src/app/methodology/evidence.ts publishes
-    // sha256 digests of these exact strings as ROS evidence. A change here means the admitted
-    // profile's semantic key changed shape, which must be fixed rather than re-pinned.
-    expect(rosScoringProfile("full-ppr").scoringProfileKey).toBe(
+  it("retains legacy rule bytes while current PA definitions receive distinct identities", () => {
+    // Keep original evidence identities pinned. Adding provider definitions must preserve the
+    // coefficients while making current scoring incompatible with those unspecified PA labels.
+    for (const key of ["full-ppr", "half-ppr", "standard"] as const) {
+      const entry = rosScoringProfile(key);
+      expect(entry.scoringProfileKey).not.toBe(legacyUnspecifiedKey(entry.profile));
+      expect(defensePointsAllowedDefinitionForProfile(entry.profile)).toBe("yahoo-2022-v1");
+    }
+    expect(legacyUnspecifiedKey(rosScoringProfile("full-ppr").profile)).toBe(
       '[{"statId":"defensive_blocked_kicks","points":2,"bonuses":[]},{"statId":"defensive_fumble_recoveries","points":2,"bonuses":[]},{"statId":"defensive_interceptions","points":2,"bonuses":[]},{"statId":"defensive_sacks","points":1,"bonuses":[]},{"statId":"defensive_safeties","points":2,"bonuses":[]},{"statId":"defensive_touchdowns","points":6,"bonuses":[]},{"statId":"extra_points_made","points":1,"bonuses":[]},{"statId":"field_goals_made_0_39","points":3,"bonuses":[]},{"statId":"field_goals_made_40_49","points":4,"bonuses":[]},{"statId":"field_goals_made_50_plus","points":5,"bonuses":[]},{"statId":"field_goals_missed","points":-1,"bonuses":[]},{"statId":"fumbles_lost","points":-2,"bonuses":[]},{"statId":"passing_interceptions","points":-2,"bonuses":[]},{"statId":"passing_touchdowns","points":4,"bonuses":[]},{"statId":"passing_yards","points":0.04,"bonuses":[]},{"statId":"points_allowed_0_probability","points":10,"bonuses":[]},{"statId":"points_allowed_14_20_probability","points":1,"bonuses":[]},{"statId":"points_allowed_1_6_probability","points":7,"bonuses":[]},{"statId":"points_allowed_21_27_probability","points":0,"bonuses":[]},{"statId":"points_allowed_28_34_probability","points":-1,"bonuses":[]},{"statId":"points_allowed_35_plus_probability","points":-4,"bonuses":[]},{"statId":"points_allowed_7_13_probability","points":4,"bonuses":[]},{"statId":"receiving_touchdowns","points":6,"bonuses":[]},{"statId":"receiving_yards","points":0.1,"bonuses":[]},{"statId":"receptions","points":1,"bonuses":[]},{"statId":"rushing_touchdowns","points":6,"bonuses":[]},{"statId":"rushing_yards","points":0.1,"bonuses":[]},{"statId":"special_teams_touchdowns","points":6,"bonuses":[]}]',
     );
-    expect(rosScoringProfile("half-ppr").scoringProfileKey).toBe(
+    expect(legacyUnspecifiedKey(rosScoringProfile("half-ppr").profile)).toBe(
       '[{"statId":"defensive_blocked_kicks","points":2,"bonuses":[]},{"statId":"defensive_fumble_recoveries","points":2,"bonuses":[]},{"statId":"defensive_interceptions","points":2,"bonuses":[]},{"statId":"defensive_sacks","points":1,"bonuses":[]},{"statId":"defensive_safeties","points":2,"bonuses":[]},{"statId":"defensive_touchdowns","points":6,"bonuses":[]},{"statId":"extra_points_made","points":1,"bonuses":[]},{"statId":"field_goals_made_0_39","points":3,"bonuses":[]},{"statId":"field_goals_made_40_49","points":4,"bonuses":[]},{"statId":"field_goals_made_50_plus","points":5,"bonuses":[]},{"statId":"field_goals_missed","points":-1,"bonuses":[]},{"statId":"fumbles_lost","points":-2,"bonuses":[]},{"statId":"passing_interceptions","points":-2,"bonuses":[]},{"statId":"passing_touchdowns","points":4,"bonuses":[]},{"statId":"passing_yards","points":0.04,"bonuses":[]},{"statId":"points_allowed_0_probability","points":10,"bonuses":[]},{"statId":"points_allowed_14_20_probability","points":1,"bonuses":[]},{"statId":"points_allowed_1_6_probability","points":7,"bonuses":[]},{"statId":"points_allowed_21_27_probability","points":0,"bonuses":[]},{"statId":"points_allowed_28_34_probability","points":-1,"bonuses":[]},{"statId":"points_allowed_35_plus_probability","points":-4,"bonuses":[]},{"statId":"points_allowed_7_13_probability","points":4,"bonuses":[]},{"statId":"receiving_touchdowns","points":6,"bonuses":[]},{"statId":"receiving_yards","points":0.1,"bonuses":[]},{"statId":"receptions","points":0.5,"bonuses":[]},{"statId":"rushing_touchdowns","points":6,"bonuses":[]},{"statId":"rushing_yards","points":0.1,"bonuses":[]},{"statId":"special_teams_touchdowns","points":6,"bonuses":[]}]',
     );
-    expect(rosScoringProfile("standard").scoringProfileKey).toBe(
+    expect(legacyUnspecifiedKey(rosScoringProfile("standard").profile)).toBe(
       '[{"statId":"defensive_blocked_kicks","points":2,"bonuses":[]},{"statId":"defensive_fumble_recoveries","points":2,"bonuses":[]},{"statId":"defensive_interceptions","points":2,"bonuses":[]},{"statId":"defensive_sacks","points":1,"bonuses":[]},{"statId":"defensive_safeties","points":2,"bonuses":[]},{"statId":"defensive_touchdowns","points":6,"bonuses":[]},{"statId":"extra_points_made","points":1,"bonuses":[]},{"statId":"field_goals_made_0_39","points":3,"bonuses":[]},{"statId":"field_goals_made_40_49","points":4,"bonuses":[]},{"statId":"field_goals_made_50_plus","points":5,"bonuses":[]},{"statId":"field_goals_missed","points":-1,"bonuses":[]},{"statId":"fumbles_lost","points":-2,"bonuses":[]},{"statId":"passing_interceptions","points":-2,"bonuses":[]},{"statId":"passing_touchdowns","points":4,"bonuses":[]},{"statId":"passing_yards","points":0.04,"bonuses":[]},{"statId":"points_allowed_0_probability","points":10,"bonuses":[]},{"statId":"points_allowed_14_20_probability","points":1,"bonuses":[]},{"statId":"points_allowed_1_6_probability","points":7,"bonuses":[]},{"statId":"points_allowed_21_27_probability","points":0,"bonuses":[]},{"statId":"points_allowed_28_34_probability","points":-1,"bonuses":[]},{"statId":"points_allowed_35_plus_probability","points":-4,"bonuses":[]},{"statId":"points_allowed_7_13_probability","points":4,"bonuses":[]},{"statId":"receiving_touchdowns","points":6,"bonuses":[]},{"statId":"receiving_yards","points":0.1,"bonuses":[]},{"statId":"receptions","points":0,"bonuses":[]},{"statId":"rushing_touchdowns","points":6,"bonuses":[]},{"statId":"rushing_yards","points":0.1,"bonuses":[]},{"statId":"special_teams_touchdowns","points":6,"bonuses":[]}]',
     );
   });
@@ -90,13 +109,13 @@ describe("rosScoringProfileCatalog", () => {
     }
   });
 
-  it("pins the full-PPR digest already published as ROS evidence", () => {
-    // apps/web/src/app/methodology/evidence.ts:61 publishes this digest for the admitted artifact.
-    // A change here would mean the catalog altered the admitted profile, which must be fixed rather
-    // than re-pinned.
-    expect(rosScoringProfile("full-ppr").digest).toBe(
-      "dd74455ddb551d53f68ba9420f4446aebf63e3e8ea34efd24119cc780c47a484",
-    );
+  it("keeps the published legacy digest distinct from corrected current scoring", () => {
+    const entry = rosScoringProfile("full-ppr");
+    const legacyDigest = createHash("sha256")
+      .update(legacyUnspecifiedKey(entry.profile))
+      .digest("hex");
+    expect(entry.digest).not.toBe(legacyDigest);
+    expect(legacyDigest).toBe("dd74455ddb551d53f68ba9420f4446aebf63e3e8ea34efd24119cc780c47a484");
   });
 
   it("keeps every profile independently valid and stably labelled", () => {
@@ -351,7 +370,7 @@ describe("ESPN-shaped catalog entries", () => {
       frozenDigest: "e6c8565a7d77ef3678fe792b51868eadac7c60951ebc7309f508e1298db0c80a",
     },
   ])(
-    "matches the $key source rows at every rail position, with its digest byte-frozen",
+    "matches the $key source rows at every rail position, with its original coefficient digest retained",
     ({ key, rows, frozenDigest }) => {
       const result = normalizeLeagueScoringProfile({
         id: `${key}-fixture`,
@@ -362,7 +381,11 @@ describe("ESPN-shaped catalog entries", () => {
       if (result.state !== "available") throw new Error("unreachable — asserted above");
 
       const entry = rosScoringProfile(key);
-      expect(entry.digest).toBe(frozenDigest);
+      expect(createHash("sha256").update(legacyUnspecifiedKey(entry.profile)).digest("hex")).toBe(
+        frozenDigest,
+      );
+      expect(entry.digest).not.toBe(frozenDigest);
+      expect(defensePointsAllowedDefinitionForProfile(entry.profile)).toBe("espn-2019-v1");
 
       // What the gate actually compares: each rail position's scoped key, byte-equal.
       for (const position of RAIL_POSITIONS) {

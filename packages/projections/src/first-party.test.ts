@@ -986,6 +986,8 @@ const defenseDefaults = {
   special_teams_touchdowns: 0.08,
   points_allowed: 22,
   yards_allowed: 338,
+  defensive_two_point_returns: 0,
+  one_point_safeties: 0,
 } as const;
 
 function defenseLine(
@@ -1064,12 +1066,12 @@ describe("first-party team-defense projection", () => {
     expect(JSON.stringify(outcomes)).toBe(JSON.stringify(oldPath));
     expect(outcomes).toHaveLength(3);
     expect(outcomes[1]?.components).toMatchObject({
-      defensive_sacks: 0,
-      defensive_interceptions: 0,
-      defensive_two_point_returns: 0,
-      one_point_safeties: 0,
+      defensive_two_point_returns: 2,
+      one_point_safeties: 1,
       points_allowed_0_probability: 0.75,
     });
+    expect(outcomes[1]?.components).not.toHaveProperty("defensive_sacks");
+    expect(outcomes[1]?.components).not.toHaveProperty("defensive_interceptions");
     expect(outcomes[2]?.components).toMatchObject({
       points_allowed_21_27_probability: 1,
       points_allowed_18_21_probability: 1,
@@ -1289,9 +1291,8 @@ describe("first-party team-defense projection", () => {
     expect(scoring.overall.samples).toBe(history.length);
     expect(scoring.overall.baselineMae).toBeGreaterThanOrEqual(0);
 
-    // The de minimis constants are graded by this same gate — and can move nothing through it,
-    // because they are 0 on predicted, baseline and actual alike. Pricing them at an absurd rate
-    // must therefore reproduce the evaluation exactly.
+    // This fixture has no rare events. Adding their scoring rules therefore leaves its score
+    // unchanged; observed rare events are separately tested below and must affect actual scores.
     const withDeMinimis = evaluateFirstPartyTeamDefenseBacktestForScoringProfile(
       backtest,
       {
@@ -1319,8 +1320,8 @@ describe("first-party team-defense projection", () => {
     );
     expect(withDeMinimis.overall).toEqual(scoring.overall);
     expect(withDeMinimis.byTeam).toEqual(scoring.byTeam);
-    // Constants have no residuals to calibrate and no forecast error to measure, so they stay out
-    // of the calibration intervals and the component metric table entirely.
+    // These components currently use a constant forecast rather than a fitted event rate, so
+    // they have no separately fitted calibration interval or component metric table.
     for (const component of ["defensive_two_point_returns", "one_point_safeties"]) {
       expect(backtest.calibration.intervals[component], component).toBeUndefined();
       expect(backtest.metrics[component], component).toBeUndefined();
@@ -1332,6 +1333,60 @@ describe("first-party team-defense projection", () => {
    * emitted on every path so `availableStatIds` can never reject a rule the run does produce, and
    * both are exactly 0 so the disclosed claim is the one the code makes.
    */
+  it("charges a zero forecast for observed defensive conversion and try-safety scores", () => {
+    const history = [
+      defenseLine("AAA", 1, {
+        components: {
+          ...defenseDefaults,
+          defensive_two_point_returns: 1,
+          one_point_safeties: 1,
+        },
+      }),
+    ];
+    const backtest = runFirstPartyTeamDefenseBacktest(history);
+    const prediction = backtest.predictions[0]!;
+    expect(prediction.actual.defensive_two_point_returns).toBe(1);
+    expect(prediction.actual.one_point_safeties).toBe(1);
+    expect(prediction.predicted.defensive_two_point_returns).toBe(0);
+    expect(prediction.baseline.one_point_safeties).toBe(0);
+    expect(canonicalFirstPartyTeamDefenseOutcomes(history)[0]?.components).toEqual(
+      prediction.actual,
+    );
+    const scoring = evaluateFirstPartyTeamDefenseBacktestForScoringProfile(backtest, {
+      id: "observed-rare-defense-events",
+      rules: [
+        { statId: "defensive_two_point_returns", points: 2 },
+        { statId: "one_point_safeties", points: 1 },
+      ],
+    });
+    expect(scoring.overall).toMatchObject({ samples: 1, mae: 3, bias: 3, baselineMae: 3 });
+  });
+
+  it.each([undefined, Number.NaN, -1, 0.5])(
+    "withholds scored defense evidence with a missing or invalid conversion count: %s",
+    (value) => {
+      const components: Record<string, number> = { ...defenseDefaults };
+      if (value === undefined) delete components.defensive_two_point_returns;
+      else components.defensive_two_point_returns = value;
+      const backtest = runFirstPartyTeamDefenseBacktest([defenseLine("AAA", 1, { components })]);
+      expect(() =>
+        evaluateFirstPartyTeamDefenseBacktestForScoringProfile(backtest, {
+          id: "conversion-count-required",
+          rules: [{ statId: "defensive_two_point_returns", points: 2 }],
+        }),
+      ).toThrow(/Incomplete observed D\/ST.*defensive_two_point_returns/);
+      expect(() =>
+        evaluateFirstPartyTeamDefenseBacktestForScoringProfile(backtest, {
+          id: "conversion-not-scored",
+          rules: [
+            { statId: "defensive_two_point_returns", points: 0 },
+            { statId: "passing_touchdowns", points: 4 },
+          ],
+        }),
+      ).not.toThrow();
+    },
+  );
+
   it("emits the de minimis components at exactly zero on every defense path", () => {
     const deMinimis = ["defensive_two_point_returns", "one_point_safeties"] as const;
     const history = Array.from({ length: 8 }, (_, index) => [
