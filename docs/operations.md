@@ -1595,3 +1595,33 @@ repeat of A still reuses its receipt. This prevents recurring provider content f
 Yahoo's automatic sweep permits degraded accounts after their circuit cooldown, preferring healthy
 linked accounts when available. Accounts requiring reauthorization remain excluded. A transient
 read failure must not permanently strand an account merely because its health is degraded.
+
+### Explicit ROS release rail and paired evidence preparation
+
+`ROS_RELEASE_RAIL` selects `legacy-v7` (the default) or `marginal-v8` consistently for API status,
+profile discovery/recovery/validation, and live publication. Compose passes the same value to all
+app services. Selecting a rail does not qualify evidence or change the retained mean policy. Keep
+legacy selected until the applicable scientific release gates, DB0053, and deployment verification
+are complete.
+
+The optional v8 path requires `ROS_MARGINAL_BUNDLE_CHECKSUM`: the SHA-256 of an immutable manifest
+at `$ROS_VALIDATION_OUTCOME_CACHE/marginal-bundles/<checksum>.json`. Use the explicit shared
+`prepareRosMarginalCorpusBundle` interface in `apps/worker/src/ros-marginal-corpus-bundle.ts` to
+prepare it. Supply the frozen candidate, retained-v12 and optional full-defense training corpus
+identities, exact qualification protocol bytes/checksum, and expected common source-lineage digest
+(`rosMarginalCorpusSourceLineageChecksum`). Preparation checks the complete paired observations,
+all reference vectors and source/scope identities, holds the existing global PostgreSQL corpus
+lock, checks fencing before publication, preserves the disk reserve, and creates an exclusive
+content-addressed manifest. It performs no fitting or simulation and grants no admission authority.
+The current manifest protocol is explicitly limited to forecast season 2026; a later season needs
+an independently versioned evidence protocol.
+
+Profile jobs resolve only that shared ready bundle and sequentially rescore its two or three
+corpora. The entire paired proof, including admission, holds both validation capacity units so
+multiple diagnostic report sets cannot overlap builders or other paired proofs. Missing/corrupt
+bundle, candidate, retained comparator or training dependencies persist a closed
+`marginal_dependency_<dependency>_<reason>` blocker. They neither silently build new football data
+nor publish an alternative profile. Repair shared evidence and pin the prepared manifest; the
+existing recovery sweep then queues a fenced replay with bounded backoff. Individual scoring
+jobs never invoke shared physical bootstrap on this rail. Reusing an already admitted exact
+profile remains publication-only.

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  rosProfileValidationIsTransient,
   rosProfileRecoveryDelayMs,
   rosProfileRecoveryMarker,
 } from "./ros-profile-recovery-state.js";
@@ -28,4 +29,21 @@ describe("ROS replay recovery state", () => {
         rosProfileRecoveryMarker({ automaticRecovery: { ...automaticRecovery, recoveryAttempt } }),
       ).toBeUndefined();
   });
+});
+
+it("permits only named dependency failures to recover after shared evidence repair", () => {
+  for (const dependency of ["bundle", "candidate", "previous", "training"])
+    for (const reason of ["unconfigured", "missing", "corrupt", "incompatible"])
+      expect(
+        rosProfileValidationIsTransient({
+          state: "failed",
+          blockers: [`marginal_dependency_${dependency}_${reason}`],
+        }),
+      ).toBe(true);
+  for (const blocker of [
+    "marginal_dependency_other_missing",
+    "marginal_dependency_previous_low_coverage",
+    "marginal_portfolio_failed",
+  ])
+    expect(rosProfileValidationIsTransient({ state: "failed", blockers: [blocker] })).toBe(false);
 });

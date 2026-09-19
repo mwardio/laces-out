@@ -1,3 +1,4 @@
+import type * as RosCacheDiskSpaceModule from "./ros-cache-disk-space.js";
 import { createHash } from "node:crypto";
 import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -13,7 +14,7 @@ import type { RosProfileValidationRunInput } from "./ros-profile-validation-runn
 import { assertRosCacheHeadroom, RosCacheDiskSpaceError } from "./ros-cache-disk-space.js";
 
 vi.mock("./ros-cache-disk-space.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./ros-cache-disk-space.js")>()),
+  ...(await importOriginal<typeof RosCacheDiskSpaceModule>()),
   // Transport fixtures are a few KB; their behavior must not depend on the CI tmpfs capacity.
   assertRosCacheHeadroom: vi.fn(async () => {}),
 }));
@@ -193,3 +194,30 @@ describe("paired cache-only marginal profile evidence", () => {
     expect(await readdir(test.reportDirectory)).toEqual([]);
   });
 });
+
+it.each([
+  [0, "candidate"],
+  [1, "previous"],
+  [2, "training"],
+] as const)(
+  "preserves a closed missing-vector diagnostic for replay %s",
+  async (index, dependency) => {
+    const test = await setup();
+    for (let prior = 0; prior < index; prior++)
+      test.reportRunner.mockImplementationOnce(async (input) => response(input));
+    test.reportRunner.mockImplementationOnce(async () => {
+      const report = { state: "ros-replay-dependency-unavailable-v1", reason: "missing" };
+      const reportJson = JSON.stringify(report);
+      return {
+        report: report as unknown as ReturnType<typeof response>["report"],
+        reportJson,
+        reportChecksum: hash(reportJson),
+      };
+    });
+    await expect(test.runner(test.input)).rejects.toMatchObject({
+      diagnostic: { dependency, reason: "missing" },
+    });
+    expect(test.reportRunner).toHaveBeenCalledTimes(index + 1);
+    expect(await readdir(test.reportDirectory)).toHaveLength(index);
+  },
+);

@@ -38,6 +38,12 @@ import {
   type RosMarginalProfileValidationRunner,
 } from "./ros-profile-marginal-evidence.js";
 
+import {
+  RosMarginalDependencyError,
+  type RosMarginalDependencyDiagnostic,
+} from "./ros-marginal-corpus-bundle.js";
+import { rosSharedCorpusRequest } from "./ros-shared-corpus-runner.js";
+
 export type RosProfileValidationRecord = typeof firstPartyRosProfileValidations.$inferSelect;
 type AdmittedValidation = Extract<FirstPartyRosAdmissionValidation, { state: "admissible" }>;
 
@@ -58,7 +64,13 @@ export interface RosProfileValidationRepository {
     admission?: AdmittedValidation;
   }): Promise<boolean>;
   fail(id: string, startedAt: Date, completedAt: Date): Promise<void>;
-  deferForCorpus?(id: string, startedAt: Date, requestIdentity: string, now: Date): Promise<void>;
+  deferForCorpus?(
+    id: string,
+    startedAt: Date,
+    requestIdentity: string,
+    now: Date,
+    dependency?: RosMarginalDependencyDiagnostic,
+  ): Promise<void>;
 }
 
 export class DrizzleRosProfileValidationRepository implements RosProfileValidationRepository {
@@ -205,17 +217,22 @@ export class DrizzleRosProfileValidationRepository implements RosProfileValidati
     startedAt: Date,
     requestIdentity: string,
     now: Date,
+    dependency?: RosMarginalDependencyDiagnostic,
   ): Promise<void> {
     if (!/^[a-f0-9]{64}$/u.test(requestIdentity))
       throw new Error("Invalid bootstrap request identity");
     await this.database
       .update(firstPartyRosProfileValidations)
       .set({
-        state: "pending",
-        blockers: ["shared_corpus_preparing"],
-        completedAt: null,
+        state: dependency === undefined ? "pending" : "failed",
+        blockers: [
+          dependency === undefined
+            ? "shared_corpus_preparing"
+            : `marginal_dependency_${dependency.dependency}_${dependency.reason}`,
+        ],
+        completedAt: dependency === undefined ? null : now,
         updatedAt: now,
-        report: sql`coalesce(${firstPartyRosProfileValidations.report}, '{}'::jsonb) || ${JSON.stringify({ bootstrapWait: { version: "shared-corpus-wait-v1", requestIdentity, requestedAt: now.toISOString() } })}::jsonb`,
+        report: sql`coalesce(${firstPartyRosProfileValidations.report}, '{}'::jsonb) || ${JSON.stringify({ bootstrapWait: { version: "shared-corpus-wait-v1", requestIdentity, requestedAt: now.toISOString(), ...(dependency === undefined ? {} : { dependency }) } })}::jsonb`,
       })
       .where(
         and(
@@ -633,6 +650,20 @@ export class RosProfileValidationService {
       });
       if (committed) await this.options.enqueueProjectionRefresh(record.season);
     } catch (error) {
+      if (
+        error instanceof RosMarginalDependencyError &&
+        this.repository.deferForCorpus &&
+        !context.signal.aborted
+      ) {
+        await this.repository.deferForCorpus(
+          record.id,
+          startedAt,
+          rosSharedCorpusRequest(record.season).identity,
+          this.now(),
+          error.diagnostic,
+        );
+        return;
+      }
       await this.repository.fail(record.id, startedAt, this.now());
       throw error;
     }

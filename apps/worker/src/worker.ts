@@ -364,6 +364,7 @@ const projectionDemandDispatcher = new ProjectionRefreshDemandDispatcher({
     enqueueProjectionRefresh(boss, { season, horizon: "weekly", reason: "on-demand" }),
 });
 const rosProfileDiscovery = new RosProfileDiscoveryService({
+  releaseRail: environment.ROS_RELEASE_RAIL,
   database: database.db,
   enqueueValidation: (job) => enqueueRosProfileValidation(boss, job),
   validationJobIsOutstanding: async (id) => {

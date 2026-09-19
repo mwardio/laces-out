@@ -71,7 +71,12 @@ export function rosProfileValidationIsTransient(record: {
   return (
     record.state === "failed" &&
     record.blockers.every(
-      (blocker) => blocker === "validation_execution_failed" || blocker === "validation_job_lost",
+      (blocker) =>
+        blocker === "validation_execution_failed" ||
+        blocker === "validation_job_lost" ||
+        /^marginal_dependency_(bundle|candidate|previous|training)_(unconfigured|missing|corrupt|incompatible)$/u.test(
+          blocker,
+        ),
     )
   );
 }

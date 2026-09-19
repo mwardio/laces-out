@@ -30,6 +30,20 @@ describe("loadEnvironment", () => {
     ).toBe(false);
   });
 
+  it("keeps the ROS release rail legacy unless explicitly selected and validates evidence pins", () => {
+    expect(loadEnvironment({}).ROS_RELEASE_RAIL).toBe("legacy-v7");
+    expect(loadEnvironment({}).ROS_MARGINAL_BUNDLE_CHECKSUM).toBeUndefined();
+    expect(loadEnvironment({ ROS_RELEASE_RAIL: "marginal-v8" }).ROS_RELEASE_RAIL).toBe(
+      "marginal-v8",
+    );
+    expect(
+      loadEnvironment({ ROS_MARGINAL_BUNDLE_CHECKSUM: "a".repeat(64) })
+        .ROS_MARGINAL_BUNDLE_CHECKSUM,
+    ).toBe("a".repeat(64));
+    expect(() => loadEnvironment({ ROS_RELEASE_RAIL: "latest" })).toThrow();
+    expect(() => loadEnvironment({ ROS_MARGINAL_BUNDLE_CHECKSUM: "../../manifest" })).toThrow();
+  });
+
   it("requires secrets in production", () => {
     expect(() => loadEnvironment({ NODE_ENV: "production" })).toThrow("Missing production secrets");
   });

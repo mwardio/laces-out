@@ -229,6 +229,37 @@ describe.skipIf(!dockerAvailable())("ROS profile lifecycle against PostgreSQL", 
     expect(await next).toBe(true);
   });
 
+  it("persists named dependency failures without allowing a stale claim to replace newer evidence", async () => {
+    const { record } = await seedValidation();
+    const now = new Date("2026-09-17T19:00:00.000Z");
+    const first = (await repository.begin(record.id, now))!;
+    const second = (await repository.begin(record.id, now))!;
+    await repository.deferForCorpus(record.id, first, "d".repeat(64), now, {
+      dependency: "previous",
+      reason: "missing",
+    });
+    expect((await repository.get(record.id))?.state).toBe("validating");
+    await repository.deferForCorpus(record.id, second, "d".repeat(64), now, {
+      dependency: "previous",
+      reason: "missing",
+    });
+    expect(await repository.get(record.id)).toMatchObject({
+      state: "failed",
+      blockers: ["marginal_dependency_previous_missing"],
+      completedAt: now,
+      report: {
+        bootstrapWait: {
+          version: "shared-corpus-wait-v1",
+          requestIdentity: "d".repeat(64),
+          dependency: { dependency: "previous", reason: "missing" },
+        },
+      },
+    });
+    await handle.db
+      .delete(firstPartyRosProfileValidations)
+      .where(eq(firstPartyRosProfileValidations.id, record.id));
+  });
+
   it("fences stale claims and atomically persists immutable evidence with admitted registry state", async () => {
     const { record, report, admission } = await seedValidation();
     const now = new Date("2026-09-17T19:00:00.000Z");

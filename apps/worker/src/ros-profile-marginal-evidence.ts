@@ -16,6 +16,11 @@ import {
   type RosProfileValidationRunnerOptions,
 } from "./ros-profile-validation-runner.js";
 
+import {
+  RosMarginalDependencyError,
+  type RosMarginalDependency,
+} from "./ros-marginal-dependency.js";
+
 const SHA256 = /^[a-f0-9]{64}$/u;
 export const ROS_MARGINAL_CORPUS_BUNDLE_VERSION = "ros-marginal-corpus-bundle-v1";
 
@@ -167,6 +172,7 @@ function assertReport(
   value: PinnedRosProfileValidationReport,
   corpusIdentity: string,
   scoringProfileKey: string,
+  dependency?: RosMarginalDependency,
 ): void {
   if (
     typeof value.reportJson !== "string" ||
@@ -177,6 +183,14 @@ function assertReport(
     throw new Error("ROS marginal report byte pin is invalid");
   // Parse the captured bytes again at the boundary; an injected runner's parsed object is not proof.
   const report: unknown = JSON.parse(value.reportJson);
+  if (
+    dependency &&
+    object(report) &&
+    Object.keys(report).sort().join() === "reason,state" &&
+    report.state === "ros-replay-dependency-unavailable-v1" &&
+    (report.reason === "missing" || report.reason === "corrupt" || report.reason === "incompatible")
+  )
+    throw new RosMarginalDependencyError({ dependency, reason: report.reason });
   if (
     !object(report) ||
     report.outcomeCorpusIdentity !== corpusIdentity ||
@@ -267,7 +281,16 @@ export function createRosMarginalProfileValidationRunner(options: {
         replayScope: scope,
       });
       input.signal.throwIfAborted();
-      assertReport(result, identity, profile.scoringProfileKey);
+      assertReport(
+        result,
+        identity,
+        profile.scoringProfileKey,
+        model === "retained-v12"
+          ? "previous"
+          : scope === "full-defense-training"
+            ? "training"
+            : "candidate",
+      );
       await archiveReport(options.reportDirectory, result, input.signal);
       // Drop the separately parsed diagnostic tree before reading the next large report.
       return { reportJson: result.reportJson, reportChecksum: result.reportChecksum };

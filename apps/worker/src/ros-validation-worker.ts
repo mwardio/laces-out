@@ -1,11 +1,7 @@
 import { loadEnvironment } from "@laces-out/config";
 import { createDatabase, firstPartyRosProfileValidations } from "@laces-out/db";
 import { and, eq, inArray } from "drizzle-orm";
-import {
-  FIRST_PARTY_ROS_INTERVAL_CALIBRATION_VERSION,
-  FIRST_PARTY_ROS_MODEL_VERSION,
-  FIRST_PARTY_ROS_POLICY_VERSION,
-} from "@laces-out/projections";
+import { firstPartyRosReleaseIdentity } from "@laces-out/projections";
 import {
   assertRosProfileValidationJob,
   assertRosCorpusBootstrapJob,
@@ -19,6 +15,12 @@ import {
   type RosProfileValidationJob,
 } from "@laces-out/jobs";
 import pino from "pino";
+import path from "node:path";
+import {
+  createRosMarginalCorpusBundleResolver,
+  RosMarginalDependencyError,
+} from "./ros-marginal-corpus-bundle.js";
+import { createRosMarginalProfileValidationRunner } from "./ros-profile-marginal-evidence.js";
 
 import { RosProfileValidationService } from "./ros-profile-validation.js";
 import {
@@ -40,6 +42,7 @@ import { RosExecutionCapacity } from "./ros-execution-capacity.js";
 import { currentNflSeason } from "./nfl-season.js";
 
 const environment = loadEnvironment();
+const releaseIdentity = firstPartyRosReleaseIdentity(environment.ROS_RELEASE_RAIL);
 const database = createDatabase(environment.DATABASE_URL, 3);
 const logger = pino({ level: environment.LOG_LEVEL });
 const boss = createJobQueue(
@@ -86,12 +89,27 @@ const bootstrap = new RosCorpusBootstrapService({
     );
   },
 });
+const resolveMarginalCorpora = createRosMarginalCorpusBundleResolver({
+  directory: outcomeCacheDirectory,
+  bundleChecksum: environment.ROS_MARGINAL_BUNDLE_CHECKSUM,
+});
+const readyCorpusForSeason = async (season: number, signal: AbortSignal) => {
+  if (environment.ROS_RELEASE_RAIL === "legacy-v7") return bootstrap.ensure(season, signal);
+  return (await resolveMarginalCorpora(season, signal)).candidateCorpusIdentity;
+};
+const marginalRunner = createRosMarginalProfileValidationRunner({
+  resolveCorpora: resolveMarginalCorpora,
+  reportDirectory: path.join(outcomeCacheDirectory, "marginal-reports"),
+  runnerOptions: { outcomeCacheDirectory, sourceCacheDirectory, offline: true },
+});
 const replay = createRosProfileValidationRunner({ outcomeCacheDirectory });
 const service = new RosProfileValidationService({
+  releaseRail: environment.ROS_RELEASE_RAIL,
+  marginalRunner,
   database: database.db,
   sharedCorpus: async (season, signal) => ({
     requestIdentity: rosSharedCorpusRequest(season).identity,
-    corpusIdentity: await bootstrap.ensure(season, signal),
+    corpusIdentity: await readyCorpusForSeason(season, signal),
   }),
   runner: createSharedRosCorpusValidationRunner({
     directory: outcomeCacheDirectory,
@@ -111,8 +129,20 @@ const service = new RosProfileValidationService({
 });
 const shutdown = new AbortController();
 const recovery = new RosProfileRecoveryService({
+  releaseRail: environment.ROS_RELEASE_RAIL,
   database: database.db,
-  readyCorpusForSeason: (season, signal) => bootstrap.ensure(season, signal),
+  readyCorpusForSeason: async (season, signal) => {
+    try {
+      return await readyCorpusForSeason(season, signal);
+    } catch (error) {
+      if (!(error instanceof RosMarginalDependencyError) || signal.aborted) throw error;
+      logger.warn(
+        { season, ...error.diagnostic },
+        "ROS shared marginal dependency needs preparation; no profile replay started",
+      );
+      return null;
+    }
+  },
   enqueueValidation: (job) => enqueueRosProfileValidation(boss, job),
   validationJobIsTerminal: async (id, corpusIdentity, recoveryAttempt) => {
     const jobs = await boss.findJobs(queueNames.validateRosProfile, {
@@ -147,18 +177,19 @@ function recoverReadyProfiles(): void {
       .where(
         and(
           inArray(firstPartyRosProfileValidations.season, [...seasons]),
-          eq(firstPartyRosProfileValidations.modelVersion, FIRST_PARTY_ROS_MODEL_VERSION),
-          eq(firstPartyRosProfileValidations.policyVersion, FIRST_PARTY_ROS_POLICY_VERSION),
+          eq(firstPartyRosProfileValidations.modelVersion, releaseIdentity.modelVersion),
+          eq(firstPartyRosProfileValidations.policyVersion, releaseIdentity.policyVersion),
           eq(
             firstPartyRosProfileValidations.calibrationVersion,
-            FIRST_PARTY_ROS_INTERVAL_CALIBRATION_VERSION,
+            releaseIdentity.calibrationVersion,
           ),
         ),
       )
       .limit(1);
     if (demand.length === 0) return;
     for (const season of seasons) {
-      await bootstrap.ensure(season, shutdown.signal);
+      if (environment.ROS_RELEASE_RAIL === "legacy-v7")
+        await bootstrap.ensure(season, shutdown.signal);
       await recovery.recover(season, shutdown.signal);
     }
   })()
@@ -195,7 +226,13 @@ async function start(): Promise<void> {
           { jobId: job.id, profileValidationId: job.data.profileValidationId },
           "validating exact ROS scoring profile",
         );
-        await service.validateProfile(job.data, { jobId: job.id, signal });
+        // A paired proof holds one complete slot through replay AND admission. Two retained
+        // report sets plus child heaps must not overlap another builder or marginal proof.
+        if (environment.ROS_RELEASE_RAIL === "marginal-v8")
+          await capacity.run(2, signal, () =>
+            service.validateProfile(job.data, { jobId: job.id, signal }),
+          );
+        else await service.validateProfile(job.data, { jobId: job.id, signal });
         logger.info({ jobId: job.id }, "ROS scoring profile validation finished");
       }
     },

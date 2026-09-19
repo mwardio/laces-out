@@ -13,6 +13,8 @@ import {
   type RosProfileValidationRepository,
 } from "./ros-profile-validation.js";
 
+import { RosMarginalDependencyError } from "./ros-marginal-corpus-bundle.js";
+
 let evidence: RosMarginalProfileEvidence;
 beforeAll(() => {
   const candidate = fullReport(false);
@@ -61,6 +63,7 @@ function setup() {
     updatedAt: new Date(),
   };
   const completions: Parameters<RosProfileValidationRepository["complete"]>[0][] = [];
+  const deferForCorpus = vi.fn(async () => {});
   const repository: RosProfileValidationRepository = {
     get: async () => record,
     begin: async (_id, startedAt) => {
@@ -80,7 +83,7 @@ function setup() {
     fail: async () => {
       record = { ...record, state: "failed" };
     },
-    deferForCorpus: vi.fn(async () => {}),
+    deferForCorpus,
   };
   const runner = vi.fn(async () => ({ mustNotBeUsed: true }));
   const marginalRunner = vi.fn(async () => evidence);
@@ -98,6 +101,7 @@ function setup() {
   };
   return {
     options,
+    deferForCorpus,
     repository,
     runner,
     marginalRunner,
@@ -174,4 +178,27 @@ describe("registered marginal profile admission", () => {
     expect(test.marginalRunner).not.toHaveBeenCalled();
     expect(test.enqueueProjectionRefresh).not.toHaveBeenCalled();
   });
+});
+
+it("defers a named missing dependency without falling back to legacy replay or consuming queue retries", async () => {
+  const test = setup();
+  const diagnostic = { dependency: "previous", reason: "missing" } as const;
+  const service = new RosProfileValidationService({
+    ...test.options,
+    sharedCorpus: async () => {
+      throw new RosMarginalDependencyError(diagnostic);
+    },
+  });
+  await service.validateProfile(test.job, test.context);
+  expect(test.deferForCorpus).toHaveBeenCalledWith(
+    test.job.profileValidationId,
+    expect.any(Date),
+    expect.stringMatching(/^[a-f0-9]{64}$/u),
+    expect.any(Date),
+    diagnostic,
+  );
+  expect(test.runner).not.toHaveBeenCalled();
+  expect(test.marginalRunner).not.toHaveBeenCalled();
+  expect(test.enqueueProjectionRefresh).not.toHaveBeenCalled();
+  expect(test.completions).toEqual([]);
 });

@@ -137,6 +137,16 @@ const environmentSchema = z.object({
    * schema and delivery support can be deployed before legacy clients are exposed to the gate.
    */
   EMAIL_VERIFICATION_ENABLED: booleanFlag,
+  /** Explicit release rail; changes neither the mean policy nor historical physical identities. */
+  ROS_RELEASE_RAIL: z.enum(["legacy-v7", "marginal-v8"]).default("legacy-v7"),
+  /** Immutable, shared paired-corpus manifest. Missing v8 evidence defers profile work visibly. */
+  ROS_MARGINAL_BUNDLE_CHECKSUM: z.preprocess(
+    blankToUndefined,
+    z
+      .string()
+      .regex(/^[a-f0-9]{64}$/u)
+      .optional(),
+  ),
   LOG_LEVEL: z.enum(["fatal", "error", "warn", "info", "debug", "trace", "silent"]).default("info"),
 });
 

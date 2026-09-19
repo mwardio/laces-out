@@ -223,7 +223,11 @@ const projectionImports = new ProjectionImportService(
   new DrizzleProjectionImportRepository(database.db),
 );
 const refreshAuthorization = new DrizzleRefreshAuthorization(database.db);
-const rosProjectionStatus = new RosProjectionStatusService(database.db);
+const rosProjectionStatus = new RosProjectionStatusService(
+  database.db,
+  undefined,
+  environment.ROS_RELEASE_RAIL,
+);
 const rankings = environment.SESSION_SECRET
   ? new RankingService(
       new DrizzleRankingRepository(database.db),

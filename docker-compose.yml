@@ -1,6 +1,8 @@
 name: laces-out
 
 x-app-environment: &app-environment
+  ROS_RELEASE_RAIL: ${ROS_RELEASE_RAIL:-legacy-v7}
+  ROS_MARGINAL_BUNDLE_CHECKSUM: ${ROS_MARGINAL_BUNDLE_CHECKSUM:-}
   NODE_ENV: production
   DATABASE_URL: postgresql://fantasy:${POSTGRES_PASSWORD:-fantasy}@postgres:5432/fantasy
   WEB_URL: ${PUBLIC_URL:-http://localhost:3000}

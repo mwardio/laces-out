@@ -18,6 +18,7 @@ const logger = pino({ level: environment.LOG_LEVEL });
 const databaseCandidateProvider = databaseFirstPartyRosCandidateProvider({ database: database.db });
 const liveGenerationLock = createPostgresRosCorpusLock(environment.DATABASE_URL);
 const service = new FirstPartyRosProjectionShadowService({
+  releaseRail: environment.ROS_RELEASE_RAIL,
   database: database.db,
   candidateProvider: {
     sourceChecksum: (input) => databaseCandidateProvider.sourceChecksum(input),
