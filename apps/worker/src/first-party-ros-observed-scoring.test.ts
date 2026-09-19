@@ -108,6 +108,7 @@ function fixture(missingFinalWeek: boolean): HistoricalRosBacktestInput {
         season,
         week,
         played: true,
+        pointsAllowedDefinition: "yahoo-2022-v1",
         components: {
           defensive_sacks: 2 + (week % 3),
           defensive_interceptions: week % 2,
@@ -184,6 +185,35 @@ function fixture(missingFinalWeek: boolean): HistoricalRosBacktestInput {
 }
 
 describe("historical ROS observed-week scoring boundary", () => {
+  it.each(["missing-week", "unplayed-final-game", "missing-season", "unfinished-game"] as const)(
+    "rejects %s instead of grading a partial or absent realized total",
+    async (failure) => {
+      const input = fixture(false);
+      const projectionEvaluator = vi.fn(async () => {
+        throw new Error("must not project incomplete outcomes");
+      });
+      const defenseHistory = input.defenseHistory.flatMap((row) => {
+        if (row.season !== 2022 || (failure !== "missing-season" && row.week !== 18)) return [row];
+        return failure === "unplayed-final-game" ? [{ ...row, played: false }] : [];
+      });
+      await expect(
+        buildHistoricalRosBacktest({
+          ...input,
+          defenseHistory,
+          schedules: input.schedules.map((game) =>
+            game.season === 2022 && game.week === 18 && failure === "unfinished-game"
+              ? { ...game, status: "scheduled" as const, awayScore: null, homeScore: null }
+              : game,
+          ),
+          projectionEvaluator,
+        }),
+      ).rejects.toThrow(
+        `Historical defense actual game unavailable 2022:${failure === "missing-season" ? 17 : 18}:LAR`,
+      );
+      expect(projectionEvaluator).not.toHaveBeenCalled();
+    },
+  );
+
   it("cannot hide a missing second-week observation behind a first-week value", async () => {
     const projectionEvaluator = vi.fn(async () => {
       throw new Error("must not simulate incomplete outcomes");
@@ -217,6 +247,45 @@ describe("historical ROS observed-week scoring boundary", () => {
     seedHash: "0".repeat(64),
     scoringProfileKey: projectionScoringProfileKey(input.scoringProfile),
   });
+
+  it.each(["one-canceled", "all-canceled", "no-games"] as const)(
+    "preserves explicit %s structural outcomes without inventing an observed game",
+    async (condition) => {
+      const input = fixture(false);
+      const structurallyAbsent = (row: { season: number; week: number }) =>
+        row.season === 2022 && row.week >= (condition === "one-canceled" ? 18 : 17);
+      const stop = new Error("captured structural actuals without qualification");
+      let prepared: HistoricalRosPreparation | undefined;
+      await expect(
+        buildHistoricalRosBacktest({
+          ...input,
+          defenseHistory: input.defenseHistory.filter((row) => !structurallyAbsent(row)),
+          schedules: input.schedules.flatMap((game) =>
+            !structurallyAbsent(game)
+              ? [game]
+              : condition === "no-games"
+                ? []
+                : [{ ...game, status: "cancelled" as const, awayScore: null, homeScore: null }],
+          ),
+          projectionEvaluator: fakeProjection,
+          onPrepared: (value) => {
+            prepared = value;
+            throw stop;
+          },
+        }),
+      ).rejects.toBe(stop);
+      const draft = prepared!.drafts.find((row) => row.forecast.forecastSeason === 2022)!;
+      expect(draft.actualGames).toBe(condition === "one-canceled" ? 1 : 0);
+      expect(draft.forecast.actualPoints).toBe(condition === "one-canceled" ? 2 : 0);
+      expect(draft.actualComponents.defensive_two_point_returns).toBe(
+        condition === "one-canceled" ? 1 : 0,
+      );
+      if (condition !== "one-canceled") {
+        expect(Object.keys(draft.actualComponents).sort()).toEqual([...defenseStats].sort());
+        expect(Object.values(draft.actualComponents).every((value) => value === 0)).toBe(true);
+      }
+    },
+  );
 
   it.each(["missing", "invalid"] as const)(
     "omits %s unpriced weekly components from reusable outcome aggregates",

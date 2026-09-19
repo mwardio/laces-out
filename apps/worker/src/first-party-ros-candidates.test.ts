@@ -1,6 +1,7 @@
 import {
   fitFirstPartyDefenseGameCalibration,
   projectionScoringProfileKey,
+  isDefensePointsAllowedStatId,
   projectFirstPartyRestOfSeason,
   rosScoringProfile,
   runFirstPartyProjectionBacktest,
@@ -225,6 +226,7 @@ describe("first-party live ROS candidate builder", () => {
             team,
             season,
             week,
+            pointsAllowedDefinition: "espn-2019-v1",
             opponent: opponentOf(team),
             components: {
               defensive_sacks: 2 + (week % 3),
@@ -264,6 +266,43 @@ describe("first-party live ROS candidate builder", () => {
 
     expect(assembled).not.toBeNull();
     expect(prepared).toEqual(assembled);
+    const sameNumbersDifferentDefinition = assembleFirstPartyRosDefenseCandidateInputs({
+      ...defenseInput,
+      preparedGameCalibration,
+      featureHistory: defenseHistory.map((row) => ({
+        ...row,
+        pointsAllowedDefinition: "yahoo-2022-v1",
+      })),
+      scoringProfile: {
+        ...defenseProfile,
+        rules: defenseProfile.rules.map((rule) =>
+          isDefensePointsAllowedStatId(rule.statId)
+            ? { ...rule, statDefinition: "yahoo-2022-v1" }
+            : rule,
+        ),
+      },
+    });
+    // Even a window whose numerical distributions coincide carries distinct observation meaning.
+    expect(sameNumbersDifferentDefinition!.contextualInput.weeks).toEqual(
+      assembled!.contextualInput.weeks,
+    );
+    expect(sameNumbersDifferentDefinition!.inputChecksum).not.toBe(assembled!.inputChecksum);
+    for (const mismatched of [undefined, "yahoo-2022-v1"] as const) {
+      expect(() =>
+        assembleFirstPartyRosDefenseCandidateInputs({
+          ...defenseInput,
+          featureHistory: defenseHistory.map((row, index) => {
+            if (index !== 1) return row;
+            const { pointsAllowedDefinition, ...withoutDefinition } = row;
+            void pointsAllowedDefinition;
+            return {
+              ...withoutDefinition,
+              ...(mismatched ? { pointsAllowedDefinition: mismatched } : {}),
+            };
+          }),
+        }),
+      ).toThrow("Defense history points-allowed definition does not match the scoring profile");
+    }
     const candidate = simulateFirstPartyRosCandidate(assembled!);
     expect(simulateFirstPartyRosCandidate(prepared!)).toEqual(candidate);
     expect(candidate.position).toBe("DST");

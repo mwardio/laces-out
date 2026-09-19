@@ -60,6 +60,7 @@ import {
 } from "./first-party-ros-backtest.js";
 import {
   firstPartyPlayerStatus,
+  requireFirstPartyDefenseHistoryForProfile,
   type ProjectionInjuryFact,
   type ProjectionScheduleFact,
 } from "./first-party-projection-inputs.js";
@@ -111,7 +112,7 @@ export const FIRST_PARTY_ROS_LIVE_CONVERGENCE_REFERENCE_SCENARIOS =
   FIRST_PARTY_ROS_CONVERGENCE_REFERENCE_SCENARIOS;
 
 /** Shared by per-defense inputs and the live generation's physical identity. */
-export const LIVE_ROS_DEFENSE_ASSEMBLY_VERSION = "live-ros-defense-football-input-v3";
+export const LIVE_ROS_DEFENSE_ASSEMBLY_VERSION = "live-ros-defense-football-input-v4";
 
 function statusToAvailabilityState(
   status: FirstPartyPlayerStatus,
@@ -264,6 +265,10 @@ export function assembleFirstPartyRosDefenseCandidateInputs(
   input: BuildFirstPartyRosDefenseCandidateInput,
 ): FirstPartyRosAssembledCandidateInputs | null {
   const { season, asOfWeek, windowStartWeek, windowEndWeek } = input.window;
+  const pointsAllowedDefinition = requireFirstPartyDefenseHistoryForProfile(
+    input.featureHistory,
+    input.scoringProfile,
+  );
   const gameCalibration =
     input.preparedGameCalibration ??
     fitFirstPartyDefenseGameCalibration(input.featureHistory, season);
@@ -372,6 +377,8 @@ export function assembleFirstPartyRosDefenseCandidateInputs(
   };
   const inputChecksum = historicalRosChecksum({
     version: LIVE_ROS_DEFENSE_ASSEMBLY_VERSION,
+    pointsAllowedDefinition:
+      pointsAllowedDefinition ?? input.featureHistory[0]?.pointsAllowedDefinition ?? null,
     productionBasis: HISTORICAL_ROS_PRODUCTION_BASIS_VERSION,
     playerId: input.defense.playerId,
     position: "DST",

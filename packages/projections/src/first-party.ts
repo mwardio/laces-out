@@ -9,6 +9,7 @@ import {
   observedScoringComponentIssues,
   scoreProjectionStatComponents,
   type ProjectionScoringProfile,
+  type ProjectionDefensePointsAllowedDefinition,
   type ProjectionStatComponents,
 } from "./scoring.js";
 
@@ -286,6 +287,8 @@ export interface FirstPartyScoredBacktestOptions {
 }
 
 export interface FirstPartyTeamDefenseWeeklyStatLine {
+  /** The observed points_allowed definition used by this complete input history. */
+  readonly pointsAllowedDefinition?: ProjectionDefensePointsAllowedDefinition;
   readonly team: string;
   readonly season: number;
   readonly week: number;
@@ -3694,6 +3697,9 @@ export function canonicalFirstPartyTeamDefenseOutcomes(
         week: row.week,
         components: teamDefenseActualComponents(row),
         played: true,
+        ...(row.pointsAllowedDefinition === undefined
+          ? {}
+          : { pointsAllowedDefinition: row.pointsAllowedDefinition }),
       };
     });
 }
@@ -4128,11 +4134,9 @@ export function runFirstPartyTeamDefenseBacktest(
         config,
       );
       const actualComponents = teamDefenseActualComponents(actual);
-      // Modeled components only. The de minimis constants are graded by the same league-scored gate
-      // as everything else — they simply contribute 0 to predicted, baseline AND actual on every
-      // line, so they can move no metric. Pushing always-zero residuals into these streams would
-      // dilute the measurements of the components that ARE forecasts, which is the opposite of
-      // grading them.
+      // Fit residual distributions for modeled components only. Rare event forecasts retain their
+      // documented constant approximation, while the league-scored evaluation grades their actual
+      // observed counts. Missing observations never become fitted zero residuals.
       for (const component of TEAM_DEFENSE_MODELED_COMPONENTS) {
         const actualValue = actualComponents[component];
         if (actualValue === undefined) continue;

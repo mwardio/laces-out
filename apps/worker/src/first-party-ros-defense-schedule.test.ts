@@ -40,6 +40,7 @@ function outcome(
     team,
     opponent,
     played: true,
+    pointsAllowedDefinition: "yahoo-2022-v1",
     components: {
       defensive_sacks: 2 + (week % 3),
       defensive_interceptions: week % 2,
@@ -113,6 +114,43 @@ function fixture(): HistoricalRosBacktestInput {
 }
 
 describe("historical defense schedule identity", () => {
+  it.each(["espn-2019-v1", undefined] as const)(
+    "rejects %s history under a Yahoo PA profile before any fitting or projection",
+    async (pointsAllowedDefinition) => {
+      const input = fixture();
+      const projectionEvaluator = vi.fn(async () => {
+        throw new Error("must not project incompatible definition");
+      });
+      const onProgress = vi.fn();
+      await expect(
+        buildHistoricalRosBacktest({
+          ...input,
+          defenseHistory: input.defenseHistory.map((row) => {
+            const { pointsAllowedDefinition: previousDefinition, ...rest } = row;
+            void previousDefinition;
+            return {
+              ...rest,
+              ...(pointsAllowedDefinition === undefined ? {} : { pointsAllowedDefinition }),
+            };
+          }),
+          projectionEvaluator,
+          onProgress,
+        }),
+      ).rejects.toThrow(
+        "Defense history points-allowed definition does not match the scoring profile",
+      );
+      expect(projectionEvaluator).not.toHaveBeenCalled();
+      expect(onProgress).not.toHaveBeenCalled();
+    },
+  );
+
+  it("retains scheduled games when a known team has no observations in an entire held-out season", () => {
+    const prepared = prepareHistoricalRosDefenseSchedule(
+      [outcome(2021, 1)],
+      [game(2021, 1), game(2022, 17)],
+    );
+    expect(prepared.byTeamWeek.get("2022:17:LAR")).toMatchObject({ season: 2022, week: 17 });
+  });
   it("retains the same canonical Rams franchise ahead of LAC when tied source names normalize", () => {
     const select = (team: string) =>
       selectHistoricalRosDefenses({
@@ -228,7 +266,7 @@ describe("historical defense schedule identity", () => {
       [17, true, false],
       [18, true, false],
     ]);
-    expect(HISTORICAL_ROS_DEFENSE_INPUT_VERSION).toBe("historical-ros-defense-football-input-v5");
+    expect(HISTORICAL_ROS_DEFENSE_INPUT_VERSION).toBe("historical-ros-defense-football-input-v6");
     expect(HISTORICAL_ROS_DEFENSE_SCHEDULE_VERSION).toBe("historical-defense-schedule-assembly-v1");
   });
 });

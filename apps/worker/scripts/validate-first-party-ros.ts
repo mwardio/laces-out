@@ -16,6 +16,7 @@ import {
   FIRST_PARTY_ROS_MODEL_VERSION,
   FIRST_PARTY_ROS_OUTCOME_SCHEMA_VERSION,
   type FirstPartyRosPosition,
+  type ProjectionDefensePointsAllowedDefinition,
 } from "@laces-out/projections";
 
 import {
@@ -35,6 +36,7 @@ import {
 } from "../src/ros-historical-outcome-replay.js";
 import {
   createRosHistoricalCorpusStore,
+  rosHistoricalProfilePointsAllowedDefinition,
   createRetainedV12RosHistoricalCorpusReader,
   ROS_HISTORICAL_ACTUAL_DEFINITION_VERSION,
   ROS_HISTORICAL_CORPUS_SCHEMA_VERSION,
@@ -191,6 +193,9 @@ async function main(): Promise<void> {
       }
     : {};
   const scoringProfile = rosValidationScoringProfileOption(process.argv);
+  // Unpriced PA may share the explicit reference model; legacy priced PA must never infer one.
+  const pointsAllowedDefinition =
+    rosHistoricalProfilePointsAllowedDefinition(scoringProfile.profile) ?? "yahoo-2022-v1";
   const seasons = integerList("--seasons", "2019,2020,2021,2022,2023,2024,2025");
   const heldOutSeasons = integerList("--holdouts", "2022,2023,2024,2025");
   const asOfWeeks = integerList("--cutoffs", "1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17");
@@ -229,6 +234,8 @@ async function main(): Promise<void> {
     const loaded = await reader.read(replayCorpus);
     if (loaded.state !== "hit") throw new Error(`ROS historical corpus is ${loaded.state}`);
     const corpus = loaded.corpus;
+    if (corpus.pointsAllowedDefinition === undefined)
+      throw new Error("Historical corpus has no points-allowed definition");
     const expectedPositions = positions ?? HISTORICAL_ROS_SUPPORTED_POSITIONS;
     if (
       !(retainedReplayCorpus !== undefined
@@ -275,6 +282,7 @@ async function main(): Promise<void> {
       sourceAudit: corpus.sourceAudit,
       startedAt,
       outcomeCorpusIdentity: replayCorpus,
+      pointsAllowedDefinition: corpus.pointsAllowedDefinition,
     });
     return;
   }
@@ -537,7 +545,11 @@ async function main(): Promise<void> {
   }
 
   const history = buildFirstPartyPlayerHistory(weekly, snaps, rosters, schedules, injuries);
-  const defenseHistory = buildFirstPartyDefenseHistory(teamWeekly, schedules);
+  const defenseHistory = buildFirstPartyDefenseHistory(
+    teamWeekly,
+    schedules,
+    pointsAllowedDefinition,
+  );
   const componentPreflight = preflightHistoricalRosComponentCoverage({
     history,
     rosters,
@@ -632,6 +644,7 @@ async function main(): Promise<void> {
               const written = await corpusStore.write({
                 schemaVersion: ROS_HISTORICAL_CORPUS_SCHEMA_VERSION,
                 actualDefinitionVersion: ROS_HISTORICAL_ACTUAL_DEFINITION_VERSION,
+                pointsAllowedDefinition,
                 buildProtocol: ROS_HISTORICAL_CORPUS_BUILD_PROTOCOL,
                 modelVersion: FIRST_PARTY_ROS_MODEL_VERSION,
                 outcomeSchemaVersion: FIRST_PARTY_ROS_OUTCOME_SCHEMA_VERSION,
@@ -716,6 +729,7 @@ async function main(): Promise<void> {
     sourceAudit,
     startedAt,
     ...(outcomeCorpusIdentity ? { outcomeCorpusIdentity } : {}),
+    pointsAllowedDefinition,
   });
 }
 
@@ -727,6 +741,7 @@ function emitReport(input: {
   readonly sourceAudit: readonly Readonly<Record<string, string | number>>[];
   readonly startedAt: number;
   readonly outcomeCorpusIdentity?: string;
+  readonly pointsAllowedDefinition: ProjectionDefensePointsAllowedDefinition;
 }): void {
   const {
     result,
@@ -736,6 +751,7 @@ function emitReport(input: {
     sourceAudit,
     startedAt,
     outcomeCorpusIdentity,
+    pointsAllowedDefinition,
   } = input;
   // Signed expected-games bias per selected strategy and cell (row-weighted, diagnostic-only):
   // the release gate uses block-weighted MAE, but a signed view identifies systematic hazard
@@ -778,6 +794,7 @@ function emitReport(input: {
     noDatabaseWrites: true,
     sourcePolicy: "official-nflverse-artifacts",
     actualDefinitionVersion: ROS_HISTORICAL_ACTUAL_DEFINITION_VERSION,
+    pointsAllowedDefinition,
     ...(outcomeCorpusIdentity ? { outcomeCorpusIdentity } : {}),
     // Recorded so a report can never be misattributed to a profile it was not graded under. The
     // authoritative identity remains `identityAudit.scoringProfileKey`, which admission compares.

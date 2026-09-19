@@ -3,6 +3,11 @@ import { createHash } from "node:crypto";
 import { NFL_TEAMS, canonicalNflTeamCode } from "@laces-out/domain";
 import {
   firstPartyRecentRoleContext,
+  defensePointsAllowedFromScoringEvents,
+  defensePointsAllowedDefinitionForProfile,
+  isDefensePointsAllowedStatId,
+  inspectDefenseScoringEventComponents,
+  type ProjectionDefensePointsAllowedDefinition,
   firstPartyProjectionComponentsForPosition,
   normalizeHistoricalPlayerStatComponents,
   SCORING_LONG_TOUCHDOWN_COMPONENTS,
@@ -11,12 +16,41 @@ import {
   type FirstPartyTeamDefenseWeeklyStatLine,
   type FirstPartyWeeklyStatLine,
   type ProjectionStatComponents,
+  type ProjectionScoringProfile,
 } from "@laces-out/projections";
 
 /** Input assembly semantics, independent of the fitted projection and simulation model versions. */
 export const FIRST_PARTY_PLAYER_HISTORY_VERSION = "first-party-player-history-v2";
 /** Shared franchise aliases and reciprocal schedule identity are part of defense input identity. */
-export const FIRST_PARTY_DEFENSE_HISTORY_VERSION = "first-party-defense-history-v2";
+export const FIRST_PARTY_DEFENSE_HISTORY_VERSION = "first-party-defense-history-v3";
+
+/** A scoring rule may price its provider's observations only; it cannot relabel a history. */
+export function requireFirstPartyDefenseHistoryForProfile(
+  history: readonly FirstPartyTeamDefenseWeeklyStatLine[],
+  profile: ProjectionScoringProfile,
+): ProjectionDefensePointsAllowedDefinition | null {
+  const definition = defensePointsAllowedDefinitionForProfile(profile);
+  if (definition === null) {
+    if (
+      profile.rules.some(
+        (rule) =>
+          isDefensePointsAllowedStatId(rule.statId) &&
+          (rule.points !== 0 || (rule.bonuses ?? []).some((bonus) => bonus.points !== 0)),
+      )
+    ) {
+      throw new TypeError("Active points-allowed scoring requires an explicit definition");
+    }
+    return null;
+  }
+  for (const row of history) {
+    if (row.played !== false && row.pointsAllowedDefinition !== definition) {
+      throw new TypeError(
+        `Defense history points-allowed definition does not match the scoring profile: ${row.season}:${row.week}:${row.team}`,
+      );
+    }
+  }
+  return definition;
+}
 
 export interface ProjectionWeeklyFact {
   readonly playerId: string;
@@ -360,10 +394,15 @@ function scheduleScoreForTeam(
   return null;
 }
 
-/** Joins reciprocal team rows and final scores into the exact DST component vocabulary. */
+/**
+ * Joins complete observed scoring events under an explicit current provider definition.
+ * Missing components remain missing for position/profile coverage gates; legacy aggregate TDs
+ * cannot stand in for a complete event ledger. Old games are rescored under today's definition.
+ */
 export function buildFirstPartyDefenseHistory(
   teams: readonly ProjectionTeamWeekFact[],
   schedules: readonly ProjectionScheduleFact[],
+  pointsAllowedDefinition: ProjectionDefensePointsAllowedDefinition,
 ): readonly FirstPartyTeamDefenseWeeklyStatLine[] {
   const byGameTeam = new Map(
     teams.map((row) => [`${row.gameId}:${canonicalNflTeamCode(row.team)}`, row]),
@@ -394,17 +433,58 @@ export function buildFirstPartyDefenseHistory(
         return [];
       }
       const opponentScore = scheduleScoreForTeam(schedule, team, opponentTeam);
-      if (opponentScore === null) return [];
-      // Yahoo and ESPN do not charge a D/ST for touchdowns scored by the opposing defense, while
-      // subsequent PATs still count. Yahoo also excludes safeties. This provider-neutral baseline
-      // therefore removes six points per defensive TD and two per defensive safety. A rare blocked-
-      // kick return can be classified differently by a provider and remains a publication warning.
-      const pointsAllowed = Math.max(
-        0,
-        opponentScore -
-          component(opponent.components, "defensive_touchdowns") * 6 -
-          component(opponent.components, "defensive_safeties") * 2,
+      const ownScore = scheduleScoreForTeam(schedule, opponentTeam, team);
+      if (
+        opponentScore === null ||
+        ownScore === null ||
+        (schedule.status !== undefined && schedule.status !== "final")
+      )
+        return [];
+      const components: Record<string, number> = {};
+      const copy = (output: string, source: ProjectionStatComponents, key: string) => {
+        const value = finiteNonnegative(source[key]);
+        if (Object.hasOwn(source, key) && value !== undefined) components[output] = value;
+      };
+      copy("defensive_sacks", row.components, "defensive_sacks");
+      copy("defensive_interceptions", row.components, "defensive_interceptions");
+      copy("defensive_fumble_recoveries", row.components, "defensive_fumbles_recovered");
+      copy("fourth_down_stops", row.components, "fourth_down_stops");
+      copy("yards_allowed", opponent.components, "total_offensive_yards");
+      const blocked = ["field_goals_blocked", "extra_points_blocked", "punts_blocked"].map((key) =>
+        Object.hasOwn(opponent.components, key)
+          ? finiteNonnegative(opponent.components[key])
+          : undefined,
       );
+      if (blocked.every((value): value is number => value !== undefined)) {
+        components.defensive_blocked_kicks = blocked.reduce((sum, value) => sum + value, 0);
+      }
+      const ownEvents = inspectDefenseScoringEventComponents({
+        components: row.components,
+        finalScore: ownScore,
+      });
+      if (ownEvents.state === "complete") {
+        const events = ownEvents.counts;
+        components.defensive_touchdowns =
+          events.scoring_event_defensive_interception_touchdown +
+          events.scoring_event_defensive_fumble_touchdown;
+        components.special_teams_touchdowns =
+          events.scoring_event_kickoff_return_touchdown +
+          events.scoring_event_kickoff_fumble_touchdown +
+          events.scoring_event_punt_return_touchdown +
+          events.scoring_event_punt_fumble_touchdown +
+          events.scoring_event_blocked_punt_touchdown +
+          events.scoring_event_blocked_field_goal_touchdown +
+          events.scoring_event_field_goal_return_touchdown;
+        components.defensive_safeties = events.scoring_event_safety;
+        components.defensive_two_point_returns = events.scoring_event_defensive_two_point_return;
+        components.one_point_safeties = events.scoring_event_one_point_safety;
+      }
+      const allowed = defensePointsAllowedFromScoringEvents({
+        definition: pointsAllowedDefinition,
+        opponentComponents: opponent.components,
+        opponentFinalScore: opponentScore,
+      });
+      if (allowed.state === "complete") components.points_allowed = allowed.pointsAllowed;
       return [
         {
           team,
@@ -412,21 +492,8 @@ export function buildFirstPartyDefenseHistory(
           week: row.week,
           opponent: opponentTeam,
           played: true,
-          components: {
-            defensive_sacks: component(row.components, "defensive_sacks"),
-            defensive_interceptions: component(row.components, "defensive_interceptions"),
-            defensive_fumble_recoveries: component(row.components, "defensive_fumbles_recovered"),
-            defensive_safeties: component(row.components, "defensive_safeties"),
-            defensive_touchdowns: component(row.components, "defensive_touchdowns"),
-            fourth_down_stops: component(row.components, "fourth_down_stops"),
-            special_teams_touchdowns: component(row.components, "special_teams_touchdowns"),
-            defensive_blocked_kicks:
-              component(opponent.components, "field_goals_blocked") +
-              component(opponent.components, "extra_points_blocked") +
-              component(opponent.components, "punts_blocked"),
-            points_allowed: pointsAllowed,
-            yards_allowed: component(opponent.components, "total_offensive_yards"),
-          },
+          pointsAllowedDefinition,
+          components,
         },
       ];
     })

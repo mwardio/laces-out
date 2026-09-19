@@ -31,6 +31,7 @@ import {
   projectFirstPartyTeamDefenseRecencyBaselineComponents,
   projectFirstPartyWeeklyComponents,
   projectionScoringProfileKey,
+  defensePointsAllowedDefinitionForProfile,
   runFirstPartyProjectionBacktest,
   runFirstPartyTeamDefenseBacktest,
   observedScoringComponentIssues,
@@ -61,6 +62,7 @@ import {
 
 import {
   firstPartyPlayerStatus,
+  requireFirstPartyDefenseHistoryForProfile,
   type ProjectionInjuryFact,
   type ProjectionRosterFact,
   type ProjectionScheduleFact,
@@ -69,7 +71,7 @@ import type { RosHistoricalCoverageReport } from "./ros-data-coverage.js";
 
 export const HISTORICAL_ROS_INTERVAL_METHOD_VERSION = "simulation-p15-p50-p85-cqr-v1";
 export const HISTORICAL_ROS_CANDIDATE_PAIR_VERSION = `${FIRST_PARTY_PROJECTION_MODEL_VERSION}:contextual-vs-recency-v1`;
-export const HISTORICAL_ROS_DEFENSE_INPUT_VERSION = "historical-ros-defense-football-input-v5";
+export const HISTORICAL_ROS_DEFENSE_INPUT_VERSION = "historical-ros-defense-football-input-v6";
 export const HISTORICAL_ROS_DEFENSE_SCHEDULE_VERSION = "historical-defense-schedule-assembly-v1";
 export const HISTORICAL_ROS_DEFENSE_COHORT_ORDER_VERSION =
   "canonical-defense-identity-source-team-ties-v1";
@@ -77,7 +79,7 @@ export const HISTORICAL_ROS_DEFAULT_CUTOFFS = Array.from({ length: 17 }, (_, ind
 export const HISTORICAL_ROS_SUPPORTED_POSITIONS = ["QB", "RB", "WR", "TE", "K", "DST"] as const;
 export const HISTORICAL_ROS_SCORING_PROFILE: ProjectionScoringProfile = {
   id: "laces-out-historical-ros-ppr",
-  version: "1",
+  version: "2",
   rules: [
     { statId: "passing_yards", points: 0.04 },
     { statId: "passing_touchdowns", points: 4 },
@@ -100,13 +102,13 @@ export const HISTORICAL_ROS_SCORING_PROFILE: ProjectionScoringProfile = {
     { statId: "defensive_touchdowns", points: 6 },
     { statId: "defensive_blocked_kicks", points: 2 },
     { statId: "special_teams_touchdowns", points: 6 },
-    { statId: "points_allowed_0_probability", points: 10 },
-    { statId: "points_allowed_1_6_probability", points: 7 },
-    { statId: "points_allowed_7_13_probability", points: 4 },
-    { statId: "points_allowed_14_20_probability", points: 1 },
-    { statId: "points_allowed_21_27_probability", points: 0 },
-    { statId: "points_allowed_28_34_probability", points: -1 },
-    { statId: "points_allowed_35_plus_probability", points: -4 },
+    { statId: "points_allowed_0_probability", points: 10, statDefinition: "yahoo-2022-v1" },
+    { statId: "points_allowed_1_6_probability", points: 7, statDefinition: "yahoo-2022-v1" },
+    { statId: "points_allowed_7_13_probability", points: 4, statDefinition: "yahoo-2022-v1" },
+    { statId: "points_allowed_14_20_probability", points: 1, statDefinition: "yahoo-2022-v1" },
+    { statId: "points_allowed_21_27_probability", points: 0, statDefinition: "yahoo-2022-v1" },
+    { statId: "points_allowed_28_34_probability", points: -1, statDefinition: "yahoo-2022-v1" },
+    { statId: "points_allowed_35_plus_probability", points: -4, statDefinition: "yahoo-2022-v1" },
   ],
 };
 
@@ -1804,7 +1806,7 @@ export function prepareHistoricalRosDefenseSchedule(
   readonly byTeamWeek: ReadonlyMap<string, ProjectionScheduleFact>;
 } {
   const knownTeams = new Set<string>(NFL_TEAMS);
-  const teamsBySeason = new Map<number, Set<string>>();
+  const historicalTeams = new Set<string>();
   const normalizedHistory = history.map((row) => {
     const team = canonicalNflTeamCode(row.team);
     const opponent = row.opponent === undefined ? undefined : canonicalNflTeamCode(row.opponent);
@@ -1821,18 +1823,15 @@ export function prepareHistoricalRosDefenseSchedule(
       throw new Error(
         `Invalid historical defense history context ${row.season}:${row.week}:${team}`,
       );
-    const teams = teamsBySeason.get(row.season) ?? new Set<string>();
-    teams.add(team);
-    teamsBySeason.set(row.season, teams);
+    historicalTeams.add(team);
     return { ...row, team, ...(opponent === undefined ? {} : { opponent }) };
   });
   const byTeamWeek = new Map<string, ProjectionScheduleFact>();
   for (const row of schedules) {
-    const teams = teamsBySeason.get(row.season);
-    if (!teams) continue;
     const awayTeam = canonicalNflTeamCode(row.awayTeam);
     const homeTeam = canonicalNflTeamCode(row.homeTeam);
-    if (!teams.has(awayTeam) && !teams.has(homeTeam)) continue;
+    // Missing an entire season of observations must not erase a known team's scheduled games.
+    if (!historicalTeams.has(awayTeam) && !historicalTeams.has(homeTeam)) continue;
     if (
       !Number.isSafeInteger(row.week) ||
       row.week < 1 ||
@@ -1844,7 +1843,7 @@ export function prepareHistoricalRosDefenseSchedule(
       throw new Error(`Invalid historical defense schedule context ${row.season}:${row.week}`);
     const game = { ...row, awayTeam, homeTeam };
     for (const team of [awayTeam, homeTeam]) {
-      if (!teams.has(team)) continue;
+      if (!historicalTeams.has(team)) continue;
       const key = defenseScheduleKey(row.season, row.week, team);
       if (byTeamWeek.has(key)) throw new Error(`Ambiguous historical defense schedule ${key}`);
       byTeamWeek.set(key, game);
@@ -1922,6 +1921,7 @@ function aggregateDefenseActual(input: {
   readonly windowStartWeek: number;
   readonly windowEndWeek: number;
   readonly scoringProfile: ProjectionScoringProfile;
+  readonly defenseSchedule: ReadonlyMap<string, ProjectionScheduleFact>;
 }) {
   const rows = input.history.filter(
     (row) =>
@@ -1930,6 +1930,18 @@ function aggregateDefenseActual(input: {
       row.week >= input.windowStartWeek &&
       row.week <= input.windowEndWeek,
   );
+  const observedByWeek = new Map<number, number>();
+  for (const row of rows) {
+    if (row.played !== false) observedByWeek.set(row.week, (observedByWeek.get(row.week) ?? 0) + 1);
+  }
+  for (let week = input.windowStartWeek; week <= input.windowEndWeek; week += 1) {
+    const key = defenseScheduleKey(input.season, week, input.team);
+    requireHistoricalDefenseGameObservation(
+      key,
+      input.defenseSchedule.get(key),
+      observedByWeek.get(week) ?? 0,
+    );
+  }
   for (const row of rows) {
     requireCompleteHistoricalActual(
       row,
@@ -1938,7 +1950,9 @@ function aggregateDefenseActual(input: {
     );
   }
   return {
-    actualComponents: aggregateActualComponents(rows),
+    // No schedule or explicitly canceled games provide positive proof of zero scoring exposure.
+    // Missing observations for a realized game have already failed above, never becoming zeros.
+    actualComponents: rows.length === 0 ? zeroDefenseComponents() : aggregateActualComponents(rows),
     actualGames: new Set(
       rows.filter((row) => row.played !== false).map((row) => `${row.season}:${row.week}`),
     ).size,
@@ -1947,6 +1961,51 @@ function aggregateDefenseActual(input: {
       0,
     ),
   };
+}
+
+function requireHistoricalDefenseGameObservation(
+  key: string,
+  game: ProjectionScheduleFact | undefined,
+  observed: number,
+): void {
+  if (game === undefined || game.status === "cancelled") {
+    if (observed !== 0)
+      throw new Error(`Historical defense observation exists without a realized game ${key}`);
+    return;
+  }
+  const finalized =
+    game.status === "final" ||
+    (game.status === undefined &&
+      game.awayScore !== null &&
+      game.homeScore !== null &&
+      Number.isSafeInteger(game.awayScore) &&
+      game.awayScore >= 0 &&
+      Number.isSafeInteger(game.homeScore) &&
+      game.homeScore >= 0);
+  if (!finalized || observed !== 1)
+    throw new Error(
+      `Historical defense actual game unavailable ${key}; finalized=${finalized}; observations=${observed}`,
+    );
+}
+
+function requireHistoricalDefenseOutcomeCoverage(input: {
+  readonly history: readonly FirstPartyTeamDefenseWeeklyStatLine[];
+  readonly defenseSchedule: ReadonlyMap<string, ProjectionScheduleFact>;
+  readonly firstOutcomeWeekBySeason: ReadonlyMap<number, number>;
+}): void {
+  const observedByTeamWeek = new Map<string, number>();
+  for (const row of input.history) {
+    if (row.played === false) continue;
+    const key = defenseScheduleKey(row.season, row.week, row.team);
+    observedByTeamWeek.set(key, (observedByTeamWeek.get(key) ?? 0) + 1);
+  }
+  // Validate before cohort selection: a completely absent team's held-out history must not
+  // silently remove that team from selection and leave an apparently complete evaluation.
+  for (const [key, game] of input.defenseSchedule) {
+    const firstOutcomeWeek = input.firstOutcomeWeekBySeason.get(game.season);
+    if (firstOutcomeWeek === undefined || game.week < firstOutcomeWeek || game.week > 18) continue;
+    requireHistoricalDefenseGameObservation(key, game, observedByTeamWeek.get(key) ?? 0);
+  }
 }
 
 function requireCompleteHistoricalActual(
@@ -2253,6 +2312,15 @@ async function createDefenseDraft(input: {
 }): Promise<HistoricalRosDraft | null> {
   const windowStartWeek = input.asOfWeek + 1;
   const windowEndWeek = 18;
+  const actual = aggregateDefenseActual({
+    history: input.outcomeHistory,
+    team: input.defense.team,
+    season: input.season,
+    windowStartWeek,
+    windowEndWeek,
+    scoringProfile: input.scoringProfile,
+    defenseSchedule: input.defenseSchedule,
+  });
   const weeks = [];
   const fingerprints = [];
   let scheduledGames = 0;
@@ -2352,6 +2420,10 @@ async function createDefenseDraft(input: {
   } as const;
   const inputChecksum = historicalRosChecksum({
     version: HISTORICAL_ROS_DEFENSE_INPUT_VERSION,
+    pointsAllowedDefinition:
+      defensePointsAllowedDefinitionForProfile(input.scoringProfile) ??
+      input.featureHistory[0]?.pointsAllowedDefinition ??
+      null,
     scheduleAssemblyVersion: HISTORICAL_ROS_DEFENSE_SCHEDULE_VERSION,
     defenseCohortOrderVersion: HISTORICAL_ROS_DEFENSE_COHORT_ORDER_VERSION,
     productionBasis: HISTORICAL_ROS_PRODUCTION_BASIS_VERSION,
@@ -2392,14 +2464,6 @@ async function createDefenseDraft(input: {
     ...common,
     strategy: "availability-aware-recency",
   };
-  const actual = aggregateDefenseActual({
-    history: input.outcomeHistory,
-    team: input.defense.team,
-    season: input.season,
-    windowStartWeek,
-    windowEndWeek,
-    scoringProfile: input.scoringProfile,
-  });
   if (actual.actualGames > scheduledGames)
     throw new Error(
       `Historical defense actual games exceed schedule ${input.season}:${input.asOfWeek}:${input.defense.team}`,
@@ -2615,6 +2679,9 @@ export async function buildHistoricalRosBacktest(
   const includedPositions = new Set(options.positions);
   const includesPlayers = options.positions.some((position) => position !== "DST");
   const includesDefense = includedPositions.has("DST");
+  if (includesDefense) {
+    requireFirstPartyDefenseHistoryForProfile(input.defenseHistory, input.scoringProfile);
+  }
   const defenseSchedule = includesDefense
     ? prepareHistoricalRosDefenseSchedule(input.defenseHistory, input.schedules)
     : null;
@@ -2625,6 +2692,28 @@ export async function buildHistoricalRosBacktest(
   // Share the D/ST backtest's canonical actual components without fitting discarded forecasts.
   // These rows materialize one-hot outcome buckets and are joined only after each forecast.
   const defenseOutcomeHistory = canonicalHistoricalRosDefenseOutcomes(defenseHistory);
+  if (defenseSchedule !== null) {
+    const firstOutcomeWeekBySeason = new Map<number, number>();
+    for (const season of options.heldOutSeasons) {
+      if (!qualifiedSeasons.has(season)) continue;
+      const coverageSeason = input.coverage.seasons.find(
+        (candidate) => candidate.season === season,
+      );
+      for (const asOfWeek of options.asOfWeeks) {
+        if (!coverageSeason?.weeks.some((week) => week.asOfWeek === asOfWeek && week.complete))
+          continue;
+        firstOutcomeWeekBySeason.set(
+          season,
+          Math.min(firstOutcomeWeekBySeason.get(season) ?? 19, asOfWeek + 1),
+        );
+      }
+    }
+    requireHistoricalDefenseOutcomeCoverage({
+      history: defenseOutcomeHistory,
+      defenseSchedule: defenseSchedule.byTeamWeek,
+      firstOutcomeWeekBySeason,
+    });
+  }
   input.onProgress?.({ stage: "defense-outcomes-ready", forecasts: drafts.length });
   let skippedForecasts = 0;
   for (const season of options.heldOutSeasons) {
