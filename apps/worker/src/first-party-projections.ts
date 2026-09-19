@@ -58,6 +58,8 @@ import {
   UNCALIBRATED_STARTER_INTERVALS,
   UNCALIBRATED_STARTER_MEANS,
   evaluateFirstPartyTeamDefenseBacktestForScoringProfile,
+  defensePointsAllowedDefinitionForProfile,
+  isDefensePointsAllowedStatId,
   firstPartyChampionStrategyForPosition,
   firstPartyProjectionComponentsForPosition,
   firstPartyProjectionPositionIsSupported,
@@ -89,6 +91,7 @@ import {
   type LeagueScoringPosition,
   type LeagueScoringPositionSupport,
   type LeagueScoringUnsupportedReason,
+  type ProjectionDefensePointsAllowedDefinition,
   type ProjectionScoringProfile,
   type ProjectionStatComponents,
 } from "@laces-out/projections";
@@ -193,13 +196,13 @@ const publicationGateProfile: ProjectionScoringProfile = {
     { statId: "defensive_touchdowns", points: 6 },
     { statId: "defensive_blocked_kicks", points: 2 },
     { statId: "special_teams_touchdowns", points: 6 },
-    { statId: "points_allowed_0_probability", points: 10 },
-    { statId: "points_allowed_1_6_probability", points: 7 },
-    { statId: "points_allowed_7_13_probability", points: 4 },
-    { statId: "points_allowed_14_20_probability", points: 1 },
-    { statId: "points_allowed_21_27_probability", points: 0 },
-    { statId: "points_allowed_28_34_probability", points: -1 },
-    { statId: "points_allowed_35_plus_probability", points: -4 },
+    { statId: "points_allowed_0_probability", points: 10, statDefinition: "yahoo-2022-v1" },
+    { statId: "points_allowed_1_6_probability", points: 7, statDefinition: "yahoo-2022-v1" },
+    { statId: "points_allowed_7_13_probability", points: 4, statDefinition: "yahoo-2022-v1" },
+    { statId: "points_allowed_14_20_probability", points: 1, statDefinition: "yahoo-2022-v1" },
+    { statId: "points_allowed_21_27_probability", points: 0, statDefinition: "yahoo-2022-v1" },
+    { statId: "points_allowed_28_34_probability", points: -1, statDefinition: "yahoo-2022-v1" },
+    { statId: "points_allowed_35_plus_probability", points: -4, statDefinition: "yahoo-2022-v1" },
   ],
 };
 
@@ -353,8 +356,27 @@ interface PriorOutputsState {
   readonly lastPublishedAt?: string;
 }
 
+const referenceDefenseDefinition = "yahoo-2022-v1" as const;
+type DefenseDefinition = ProjectionDefensePointsAllowedDefinition;
+function mapDefenseDefinitions<T>(
+  map: (definition: DefenseDefinition) => T,
+): Record<DefenseDefinition, T> {
+  return { "yahoo-2022-v1": map("yahoo-2022-v1"), "espn-2019-v1": map("espn-2019-v1") };
+}
+interface PreparedDefenseVariant {
+  readonly history: ReturnType<typeof buildFirstPartyDefenseHistory>;
+  readonly backtest: FirstPartyTeamDefenseBacktest;
+}
+interface PublishedDefenseVariant {
+  readonly backtest: FirstPartyTeamDefenseBacktest;
+  readonly publishedDefenses: readonly PublishedDefense[];
+}
+
 interface CachedTrainingArtifacts {
   readonly key: string;
+  readonly playerKey: string;
+  readonly defenseKeys: Readonly<Record<DefenseDefinition, string>>;
+  readonly defenseBacktests: Readonly<Record<DefenseDefinition, FirstPartyTeamDefenseBacktest>>;
   readonly basePlayerBacktest: FirstPartyProjectionBacktest;
   readonly playerChampion: ReturnType<typeof applyFirstPartyProjectionChampionPolicy>;
   readonly publicationPlayerBacktest: FirstPartyProjectionBacktest;
@@ -827,9 +849,12 @@ export function projectionTrainingCacheKey(input: {
   readonly firstTargetWeek: number;
   readonly playerHistory: ReturnType<typeof buildFirstPartyPlayerHistory>;
   readonly defenseHistory: ReturnType<typeof buildFirstPartyDefenseHistory>;
+  readonly defenseHistoriesByDefinition?: Readonly<
+    Partial<Record<DefenseDefinition, ReturnType<typeof buildFirstPartyDefenseHistory>>>
+  >;
 }): string {
   return projectionInputChecksum({
-    fitCacheVersion: "weekly-prior-fit-v1",
+    fitCacheVersion: "weekly-prior-fit-v2",
     modelVersion: FIRST_PARTY_PROJECTION_MODEL_VERSION,
     playerHistoryVersion: FIRST_PARTY_PLAYER_HISTORY_VERSION,
     defenseHistoryVersion: FIRST_PARTY_DEFENSE_HISTORY_VERSION,
@@ -847,6 +872,12 @@ export function projectionTrainingCacheKey(input: {
     // every component. Source snapshots still independently govern publication provenance/fences.
     playerHistoryChecksum: projectionTrainingHistoryChecksum(input.playerHistory),
     defenseHistoryChecksum: projectionTrainingHistoryChecksum(input.defenseHistory),
+    defenseVariantHistoryChecksums: Object.fromEntries(
+      Object.entries(input.defenseHistoriesByDefinition ?? {}).map(([definition, history]) => [
+        definition,
+        projectionTrainingHistoryChecksum(history),
+      ]),
+    ),
   });
 }
 
@@ -1150,6 +1181,30 @@ export function frozenProjectionSupportsScoringProfile(
     deterministicZeroProjection(row)
   ) {
     return true;
+  }
+  if (
+    position === "DST" &&
+    profile.rules.some(
+      (rule) =>
+        isDefensePointsAllowedStatId(rule.statId) &&
+        (rule.points !== 0 || (rule.bonuses ?? []).some((bonus) => bonus.points !== 0)),
+    )
+  ) {
+    const definition = defensePointsAllowedDefinitionForProfile(profile);
+    if (!definition || !row.scoringProfileKey) return false;
+    try {
+      const priorRules: unknown = JSON.parse(row.scoringProfileKey);
+      if (
+        !Array.isArray(priorRules) ||
+        defensePointsAllowedDefinitionForProfile({
+          id: "frozen-dst",
+          rules: priorRules as ProjectionScoringProfile["rules"],
+        }) !== definition
+      )
+        return false;
+    } catch {
+      return false;
+    }
   }
   const components = new Set(
     position === "DST"
@@ -1553,13 +1608,17 @@ interface FirstPartyPublicationEvidence {
 
 /**
  * Scoring evidence depends only on immutable training results and semantic scoring rules.
- * Keep one training pair and a bounded set of compact verdicts across sequential weekly jobs;
+ * Keep one player generation, two provider defense variants and bounded compact verdicts;
  * never retain a profile's expanded champion backtest or its historical prediction arrays.
  */
 export class FirstPartyPublicationEvidenceMemo {
   #basePlayerBacktest: FirstPartyProjectionBacktest | undefined;
-  #defenseBacktest: FirstPartyTeamDefenseBacktest | undefined;
-  readonly #profiles = new Map<string, FirstPartyPublicationEvidence>();
+  readonly #defenseBacktests = new Map<DefenseDefinition, FirstPartyTeamDefenseBacktest>();
+  readonly #candidates = new Map<string, CompactPublicationCandidates>();
+  readonly #profiles = new Map<
+    string,
+    { readonly definition: DefenseDefinition; readonly evidence: FirstPartyPublicationEvidence }
+  >();
 
   constructor(private readonly maximumProfiles = 32) {
     if (!Number.isInteger(maximumProfiles) || maximumProfiles < 1 || maximumProfiles > 32) {
@@ -1571,7 +1630,8 @@ export class FirstPartyPublicationEvidenceMemo {
   clear(): void {
     this.#profiles.clear();
     this.#basePlayerBacktest = undefined;
-    this.#defenseBacktest = undefined;
+    this.#defenseBacktests.clear();
+    this.#candidates.clear();
   }
 
   get(
@@ -1579,34 +1639,45 @@ export class FirstPartyPublicationEvidenceMemo {
     defenseBacktest: FirstPartyTeamDefenseBacktest,
     profile: ProjectionScoringProfile,
   ): FirstPartyPublicationEvidence {
-    if (
-      this.#basePlayerBacktest !== basePlayerBacktest ||
-      this.#defenseBacktest !== defenseBacktest
-    ) {
+    if (this.#basePlayerBacktest !== basePlayerBacktest) {
       this.clear();
       this.#basePlayerBacktest = basePlayerBacktest;
-      this.#defenseBacktest = defenseBacktest;
+    }
+    const definition =
+      defensePointsAllowedDefinitionForProfile(profile) ?? referenceDefenseDefinition;
+    if (this.#defenseBacktests.get(definition) !== defenseBacktest) {
+      for (const [key, cached] of this.#profiles)
+        if (cached.definition === definition) this.#profiles.delete(key);
+      this.#defenseBacktests.set(definition, defenseBacktest);
     }
     const key = projectionScoringProfileKey(profile);
     const cached = this.#profiles.get(key);
     if (cached !== undefined) {
       this.#profiles.delete(key);
       this.#profiles.set(key, cached);
-      return cached;
+      return cached.evidence;
     }
-    const evaluated = evaluateFirstPartyPublicationCandidates(basePlayerBacktest, profile);
-    const candidates: CompactPublicationCandidates = {
-      champion: { policy: evaluated.champion.policy },
-      policy: evaluated.policy,
-      liveCalibration: evaluated.liveCalibration,
-      adaptiveEvaluation: evaluated.adaptiveEvaluation,
-      fixedRecencyEvaluation: evaluated.fixedRecencyEvaluation,
-      additiveRecencyEvaluation: evaluated.additiveRecencyEvaluation,
-      playerEvaluation: evaluated.playerEvaluation,
-      fixedRecencyPositions: evaluated.fixedRecencyPositions,
-      additiveRecencyPositions: evaluated.additiveRecencyPositions,
-      weeklyIntervals: evaluated.weeklyIntervals,
-    };
+    let candidates = this.#candidates.get(key);
+    if (candidates === undefined) {
+      const evaluated = evaluateFirstPartyPublicationCandidates(basePlayerBacktest, profile);
+      candidates = {
+        champion: { policy: evaluated.champion.policy },
+        policy: evaluated.policy,
+        liveCalibration: evaluated.liveCalibration,
+        adaptiveEvaluation: evaluated.adaptiveEvaluation,
+        fixedRecencyEvaluation: evaluated.fixedRecencyEvaluation,
+        additiveRecencyEvaluation: evaluated.additiveRecencyEvaluation,
+        playerEvaluation: evaluated.playerEvaluation,
+        fixedRecencyPositions: evaluated.fixedRecencyPositions,
+        additiveRecencyPositions: evaluated.additiveRecencyPositions,
+        weeklyIntervals: evaluated.weeklyIntervals,
+      };
+      this.#candidates.set(key, candidates);
+      if (this.#candidates.size > this.maximumProfiles) {
+        const oldest = this.#candidates.keys().next().value;
+        if (oldest !== undefined) this.#candidates.delete(oldest);
+      }
+    }
     const defenseCoverage = new Set<string>();
     for (const prediction of defenseBacktest.predictions) {
       const issues = observedScoringComponentIssues({
@@ -1631,7 +1702,7 @@ export class FirstPartyPublicationEvidenceMemo {
       ),
       defenseComponentCoverage,
     };
-    this.#profiles.set(key, evidence);
+    this.#profiles.set(key, { definition, evidence });
     if (this.#profiles.size > this.maximumProfiles) {
       const oldest = this.#profiles.keys().next().value;
       if (oldest !== undefined) this.#profiles.delete(oldest);
@@ -2021,45 +2092,82 @@ export class FirstPartyProjectionService implements ProjectionRefreshService {
         input.schedules,
         input.injuries,
       );
-      const defenseHistory = buildFirstPartyDefenseHistory(input.teamWeekly, input.schedules);
+      const completedDefenseHistories = mapDefenseDefinitions((definition) =>
+        buildFirstPartyDefenseHistory(input.teamWeekly, input.schedules, definition).filter((row) =>
+          completedWeeks.has(scheduleWeekKey(row.season, row.week)),
+        ),
+      );
       const completedPlayerHistory = playerHistory.filter((row) =>
         completedWeeks.has(scheduleWeekKey(row.season, row.week)),
       );
-      const completedDefenseHistory = defenseHistory.filter((row) =>
-        completedWeeks.has(scheduleWeekKey(row.season, row.week)),
-      );
+      const completedDefenseHistory = completedDefenseHistories[referenceDefenseDefinition];
       // A partially completed NFL week can already exist in the immutable source rows.
       // Backtests stop before the earliest target so Sunday results cannot leak into Monday.
       const backtestPlayerHistory = completedPlayerHistory.filter(
         (row) =>
           row.season < job.season || (row.season === job.season && row.week < firstTargetWeek),
       );
-      const backtestDefenseHistory = completedDefenseHistory.filter(
-        (row) =>
-          row.season < job.season || (row.season === job.season && row.week < firstTargetWeek),
+      const backtestDefenseHistories = mapDefenseDefinitions((definition) =>
+        completedDefenseHistories[definition].filter(
+          (row) =>
+            row.season < job.season || (row.season === job.season && row.week < firstTargetWeek),
+        ),
       );
+      const backtestDefenseHistory = backtestDefenseHistories[referenceDefenseDefinition];
       const trainingKey = projectionTrainingCacheKey({
         season: job.season,
         firstTargetWeek,
         playerHistory: backtestPlayerHistory,
         defenseHistory: backtestDefenseHistory,
+        defenseHistoriesByDefinition: backtestDefenseHistories,
       });
+      const fitHistoryKey = (history: readonly unknown[]) =>
+        projectionInputChecksum({
+          season: job.season,
+          firstTargetWeek,
+          history: projectionTrainingHistoryChecksum(history),
+        });
+      const playerKey = fitHistoryKey(backtestPlayerHistory);
+      const defenseKeys = mapDefenseDefinitions((definition) =>
+        projectionInputChecksum({
+          definition,
+          history: fitHistoryKey(backtestDefenseHistories[definition]),
+        }),
+      );
       if (this.#trainingCache?.key !== trainingKey) {
+        const reusablePlayer =
+          this.#trainingCache?.playerKey === playerKey
+            ? {
+                base: this.#trainingCache.basePlayerBacktest,
+                champion: this.#trainingCache.playerChampion,
+                publication: this.#trainingCache.publicationPlayerBacktest,
+              }
+            : undefined;
+        const reusableDefense = mapDefenseDefinitions((definition) =>
+          this.#trainingCache?.defenseKeys[definition] === defenseKeys[definition]
+            ? this.#trainingCache.defenseBacktests[definition]
+            : undefined,
+        );
         // The old generation is unusable for this identity. Release both owners before building
-        // replacement backtests, including when that build later fails. The isolated weekly
+        // replacement backtests, retaining only individually unchanged fits. A failed replacement
+        // never leaves the old combined generation reusable. The isolated weekly
         // process serializes refreshes; this memo belongs to this service, not other callers.
         this.#trainingCache = undefined;
         this.#publicationEvidenceMemo.clear();
-        const basePlayerBacktest = runFirstPartyProjectionBacktest(backtestPlayerHistory);
-        const playerChampion = applyFirstPartyProjectionChampionPolicy(
-          basePlayerBacktest,
-          publicationGateProfile,
+        const basePlayerBacktest =
+          reusablePlayer?.base ?? runFirstPartyProjectionBacktest(backtestPlayerHistory);
+        const playerChampion =
+          reusablePlayer?.champion ??
+          applyFirstPartyProjectionChampionPolicy(basePlayerBacktest, publicationGateProfile);
+        const publicationPlayerBacktest =
+          reusablePlayer?.publication ??
+          applyFirstPartyProjectionFinalPolicy(basePlayerBacktest, playerChampion.policy);
+        const defenseBacktests = mapDefenseDefinitions(
+          (definition) =>
+            reusableDefense[definition] ??
+            runFirstPartyTeamDefenseBacktest(backtestDefenseHistories[definition]),
         );
-        const publicationPlayerBacktest = applyFirstPartyProjectionFinalPolicy(
-          basePlayerBacktest,
-          playerChampion.policy,
-        );
-        const defenseBacktest = runFirstPartyTeamDefenseBacktest(backtestDefenseHistory);
+        const defenseBacktest = defenseBacktests[referenceDefenseDefinition];
         // The final strategy can fit intervals for a future forecast, but it was selected using
         // these outcomes. Release evidence must retain the strategy chosen before each week.
         const gatePlayer = evaluateFirstPartyBacktestForScoringProfile(
@@ -2072,10 +2180,13 @@ export class FirstPartyProjectionService implements ProjectionRefreshService {
         );
         this.#trainingCache = {
           key: trainingKey,
+          playerKey,
+          defenseKeys,
           basePlayerBacktest,
           playerChampion,
           publicationPlayerBacktest,
           defenseBacktest,
+          defenseBacktests,
           gate: projectionModelGate({
             player: gatePlayer,
             defense: gateDefense,
@@ -2128,6 +2239,10 @@ export class FirstPartyProjectionService implements ProjectionRefreshService {
           gate: training.gate,
           playerHistory: completedPlayerHistory,
           defenseHistory: completedDefenseHistory,
+          defenseVariants: mapDefenseDefinitions((definition) => ({
+            history: completedDefenseHistories[definition],
+            backtest: training.defenseBacktests[definition],
+          })),
           playerBacktest,
           basePlayerBacktest: training.basePlayerBacktest,
           playerChampionPolicy: training.playerChampion.policy,
@@ -3057,6 +3172,7 @@ export class FirstPartyProjectionService implements ProjectionRefreshService {
     readonly gate: ModelGate;
     readonly playerHistory: ReturnType<typeof buildFirstPartyPlayerHistory>;
     readonly defenseHistory: ReturnType<typeof buildFirstPartyDefenseHistory>;
+    readonly defenseVariants?: Readonly<Partial<Record<DefenseDefinition, PreparedDefenseVariant>>>;
     readonly playerBacktest: FirstPartyProjectionBacktest;
     readonly basePlayerBacktest: FirstPartyProjectionBacktest;
     readonly playerChampionPolicy: FirstPartyProjectionChampionPolicy;
@@ -3238,44 +3354,60 @@ export class FirstPartyProjectionService implements ProjectionRefreshService {
     ]
       .map(canonicalNflTeamCode)
       .sort();
-    const publishedDefenses: PublishedDefense[] = allTeams.map((team) => {
-      const matchup = matchups.get(team);
-      const opponent = matchup?.opponent;
-      const gameStarted =
-        matchup?.final === true ||
-        (matchup?.status !== "postponed" &&
-          matchup?.status !== "cancelled" &&
-          matchup?.kickoffAt !== null &&
-          matchup?.kickoffAt !== undefined &&
-          matchup.kickoffAt.getTime() <= input.now.getTime());
-      const projection = projectFirstPartyTeamDefenseComponents({
-        target: {
+    const projectDefenses = (variant: PreparedDefenseVariant): PublishedDefense[] =>
+      allTeams.map((team) => {
+        const matchup = matchups.get(team);
+        const opponent = matchup?.opponent;
+        const gameStarted =
+          matchup?.final === true ||
+          (matchup?.status !== "postponed" &&
+            matchup?.status !== "cancelled" &&
+            matchup?.kickoffAt !== null &&
+            matchup?.kickoffAt !== undefined &&
+            matchup.kickoffAt.getTime() <= input.now.getTime());
+        const projection = projectFirstPartyTeamDefenseComponents({
+          target: {
+            team,
+            season: input.season,
+            week: input.week,
+            ...(opponent ? { opponent } : {}),
+            scheduled: opponent !== undefined,
+            isBye: opponent === undefined,
+          },
+          history: variant.history,
+          calibration: variant.backtest.calibration,
+        });
+        return {
           team,
-          season: input.season,
-          week: input.week,
-          ...(opponent ? { opponent } : {}),
-          scheduled: opponent !== undefined,
-          isBye: opponent === undefined,
-        },
-        history: input.defenseHistory,
-        calibration: input.defenseBacktest.calibration,
+          gameStarted,
+          projection:
+            opponent === undefined
+              ? {
+                  ...projection,
+                  state: "projected" as const,
+                  components: zeroComponents(firstPartyTeamDefenseProjectionComponents()),
+                  lowerComponents: zeroComponents(firstPartyTeamDefenseProjectionComponents()),
+                  upperComponents: zeroComponents(firstPartyTeamDefenseProjectionComponents()),
+                  reasons: ["This NFL team has a confirmed bye in this week."],
+                }
+              : projection,
+        };
       });
-      return {
-        team,
-        gameStarted,
-        projection:
-          opponent === undefined
-            ? {
-                ...projection,
-                state: "projected" as const,
-                components: zeroComponents(firstPartyTeamDefenseProjectionComponents()),
-                lowerComponents: zeroComponents(firstPartyTeamDefenseProjectionComponents()),
-                upperComponents: zeroComponents(firstPartyTeamDefenseProjectionComponents()),
-                reasons: ["This NFL team has a confirmed bye in this week."],
-              }
-            : projection,
-      };
+    const publishedDefenses = projectDefenses({
+      history: input.defenseHistory,
+      backtest: input.defenseBacktest,
     });
+    const defenseVariants: Partial<Record<DefenseDefinition, PublishedDefenseVariant>> = {
+      [referenceDefenseDefinition]: { backtest: input.defenseBacktest, publishedDefenses },
+    };
+    for (const definition of ["espn-2019-v1"] as const) {
+      const variant = input.defenseVariants?.[definition];
+      if (variant)
+        defenseVariants[definition] = {
+          backtest: variant.backtest,
+          publishedDefenses: projectDefenses(variant),
+        };
+    }
     const previousRowsByLeague = await this.#loadPreviousLeagueProjectionRows(
       input.leagues.map((league) => league.id),
       input.season,
@@ -3288,6 +3420,7 @@ export class FirstPartyProjectionService implements ProjectionRefreshService {
             ...input,
             publishedPlayers,
             publishedDefenses,
+            defenseVariants,
             previousRowsByLeague,
             scoringEvidenceMemo: this.#publicationEvidenceMemo,
           })
@@ -3376,6 +3509,8 @@ export class FirstPartyProjectionService implements ProjectionRefreshService {
               "league-scored residual quantiles; RB/WR/TE scale with the raw point forecast",
             byes: "explicit zero",
             defenseMethodWarnings,
+            rawDefensePointsAllowedDefinition: referenceDefenseDefinition,
+            defensePointsAllowedDefinitions: Object.keys(defenseVariants),
             // Snapshot provenance includes selected and absent optional sources. Production refreshes
             // also fence mutable catalog/league facts under short publication locks before writes.
             inputEpoch: {
@@ -3762,6 +3897,7 @@ export function buildFirstPartyLeaguePublications(input: {
   readonly rosters: readonly LeagueRosterPlayer[];
   readonly publishedPlayers: readonly PublishedPlayer[];
   readonly publishedDefenses: readonly PublishedDefense[];
+  readonly defenseVariants?: Readonly<Partial<Record<DefenseDefinition, PublishedDefenseVariant>>>;
   readonly previousRowsByLeague: ReadonlyMap<string, ReadonlyMap<string, ScoredProjectionRow>>;
   readonly scoringEvidenceMemo?: FirstPartyPublicationEvidenceMemo;
 }): LeaguePublicationPlan {
@@ -3777,15 +3913,15 @@ export function buildFirstPartyLeaguePublications(input: {
     rows.push(player);
     rosterByLeague.set(player.leagueSeasonId, rows);
   }
-  const defenseByTeam = new Map(
-    input.publishedDefenses.map((defense) => [canonicalNflTeamCode(defense.team), defense]),
+  const referenceDefenseTeams = new Set(
+    input.publishedDefenses.map((defense) => canonicalNflTeamCode(defense.team)),
   );
   const canonicalDefensePlayers = input.players.filter((player) => {
     const team = upper(player.nflTeam);
     return (
       isDefensePosition(player.primaryPosition) &&
       team !== null &&
-      defenseByTeam.has(team) &&
+      referenceDefenseTeams.has(team) &&
       player.id === firstPartyDefensePlayerId(team)
     );
   });
@@ -3867,7 +4003,24 @@ export function buildFirstPartyLeaguePublications(input: {
     }
     const profile = normalization.profile;
     const profileKey = projectionScoringProfileKey(profile);
-    const evidence = scoringEvidence.get(input.basePlayerBacktest, input.defenseBacktest, profile);
+    const defenseDefinition =
+      defensePointsAllowedDefinitionForProfile(profile) ?? referenceDefenseDefinition;
+    const defenseVariant =
+      input.defenseVariants?.[defenseDefinition] ??
+      (defenseDefinition === referenceDefenseDefinition
+        ? { backtest: input.defenseBacktest, publishedDefenses: input.publishedDefenses }
+        : undefined);
+    const defenseByTeam = new Map(
+      (defenseVariant?.publishedDefenses ?? []).map((defense) => [
+        canonicalNflTeamCode(defense.team),
+        defense,
+      ]),
+    );
+    const evidence = scoringEvidence.get(
+      input.basePlayerBacktest,
+      defenseVariant?.backtest ?? { ...input.defenseBacktest, predictions: [] },
+      profile,
+    );
     const publicationCandidates = evidence.candidates;
     const playerEvaluation = evidence.player;
     const defenseEvaluation = evidence.defense;
@@ -3929,34 +4082,43 @@ export function buildFirstPartyLeaguePublications(input: {
     const defenseRelevant = hasRelevantRules(profile, true);
     const defensePublishable =
       supportedByLeague.has("DST") &&
+      defenseVariant !== undefined &&
       defenseRelevant &&
       evidence.defenseComponentCoverage.length === 0 &&
       defenseEvaluationClearsGate(defenseEvaluation);
     if (supportedByLeague.has("DST") && !defensePublishable) {
       withheldPositions.push(
-        evidence.defenseComponentCoverage.length > 0
+        defenseVariant === undefined
           ? {
               position: "DST",
               source: "component-coverage",
               reasons: [
-                `Observed defensive scoring is incomplete: ${evidence.defenseComponentCoverage.join(", ")}.`,
+                `D/ST history and projections are unavailable for points-allowed definition ${defenseDefinition}.`,
               ],
             }
-          : defenseRelevant
+          : evidence.defenseComponentCoverage.length > 0
             ? {
                 position: "DST",
-                source: "backtest-gate",
+                source: "component-coverage",
                 reasons: [
-                  "The D/ST league-scored backtest did not clear the recency-only baseline gate.",
+                  `Observed defensive scoring is incomplete: ${evidence.defenseComponentCoverage.join(", ")}.`,
                 ],
               }
-            : {
-                position: "DST",
-                source: "normalization",
-                reasons: [
-                  "The emitted scoring profile carries no D/ST rule this projection run can price.",
-                ],
-              },
+            : defenseRelevant
+              ? {
+                  position: "DST",
+                  source: "backtest-gate",
+                  reasons: [
+                    "The D/ST league-scored backtest did not clear the recency-only baseline gate.",
+                  ],
+                }
+              : {
+                  position: "DST",
+                  source: "normalization",
+                  reasons: [
+                    "The emitted scoring profile carries no D/ST rule this projection run can price.",
+                  ],
+                },
       );
     }
     if (publishablePlayerPositions.size === 0 && !defensePublishable) {
@@ -3990,7 +4152,7 @@ export function buildFirstPartyLeaguePublications(input: {
         : leagueRoster.filter((rosterPlayer) => {
             if (isDefensePosition(rosterPlayer.primaryPosition)) {
               const team = upper(rosterPlayer.nflTeam);
-              return !team || !defenseByTeam.has(team);
+              return !team || !referenceDefenseTeams.has(team);
             }
             // A trusted current weekly-roster fact can supply a supported offensive projection
             // role even when the canonical NFL catalog describes a two-way player's defensive
@@ -4387,6 +4549,7 @@ export function buildFirstPartyLeaguePublications(input: {
         baseline: "recency-only",
         playerBacktest: playerEvaluation.overall,
         defenseBacktest: defenseEvaluation.overall,
+        defensePointsAllowedDefinition: defenseDefinition,
         // What the roster told us, and whether it was actually verifiable. A pre-draft set has no
         // coverage to check, so it must not claim one was performed.
         rosterCoverage,
