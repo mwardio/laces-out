@@ -443,3 +443,45 @@ export function scoreProjectionStatComponents(
 ): number {
   return compileProjectionScorer(profile)(components);
 }
+
+/**
+ * Completeness of an observed stat line, before the projection scorer's missing-as-zero fallback.
+ * The caller supplies the entity's vocabulary: player rules must not make a D/ST row incomplete.
+ * Presence is an observation requirement, not a request to manufacture zeros or drop games.
+ */
+export function observedScoringComponentIssues(input: {
+  readonly components: ProjectionStatComponents;
+  readonly profile: ProjectionScoringProfile;
+  readonly applicableStatIds: readonly string[];
+}): {
+  readonly missingComponents: readonly string[];
+  readonly invalidComponents: readonly string[];
+} {
+  validateProjectionScoringProfile(input.profile);
+  const applicable = new Set(input.applicableStatIds);
+  const missingComponents: string[] = [];
+  const invalidComponents: string[] = [];
+  for (const rule of input.profile.rules) {
+    if (
+      !applicable.has(rule.statId) ||
+      (rule.points === 0 && !(rule.bonuses ?? []).some((bonus) => bonus.points !== 0))
+    )
+      continue;
+    if (!Object.hasOwn(input.components, rule.statId)) {
+      missingComponents.push(rule.statId);
+      continue;
+    }
+    const value = input.components[rule.statId]!;
+    const rareDefenseCount =
+      rule.statId === "defensive_two_point_returns" || rule.statId === "one_point_safeties";
+    if (
+      !Number.isFinite(value) ||
+      (rareDefenseCount && (!Number.isSafeInteger(value) || value < 0))
+    )
+      invalidComponents.push(rule.statId);
+  }
+  return {
+    missingComponents: missingComponents.sort(),
+    invalidComponents: invalidComponents.sort(),
+  };
+}

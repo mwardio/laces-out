@@ -33,6 +33,7 @@ import {
   projectionScoringProfileKey,
   runFirstPartyProjectionBacktest,
   runFirstPartyTeamDefenseBacktest,
+  observedScoringComponentIssues,
   scoreProjectionStatComponents,
   compileProjectionScorer,
   type FirstPartyBacktestPrediction,
@@ -1879,6 +1880,10 @@ export function historicalRosAsOfAt(
   return new Date(Math.max(...timestamps) + 12 * 60 * 60 * 1_000).toISOString();
 }
 
+const HISTORICAL_PLAYER_ACTUAL_STAT_IDS = [
+  ...new Set(["QB", "RB", "WR", "TE", "K"].flatMap(firstPartyProjectionComponentsForPosition)),
+];
+
 function aggregateActual(input: {
   readonly history: readonly FirstPartyWeeklyStatLine[];
   readonly playerId: string;
@@ -1894,6 +1899,9 @@ function aggregateActual(input: {
       row.week >= input.windowStartWeek &&
       row.week <= input.windowEndWeek,
   );
+  for (const row of rows) {
+    requireCompleteHistoricalActual(row, input.scoringProfile, HISTORICAL_PLAYER_ACTUAL_STAT_IDS);
+  }
   return {
     actualComponents: aggregateActualComponents(rows),
     actualGames: new Set(
@@ -1922,6 +1930,13 @@ function aggregateDefenseActual(input: {
       row.week >= input.windowStartWeek &&
       row.week <= input.windowEndWeek,
   );
+  for (const row of rows) {
+    requireCompleteHistoricalActual(
+      row,
+      input.scoringProfile,
+      firstPartyTeamDefenseProjectionComponents(),
+    );
+  }
   return {
     actualComponents: aggregateActualComponents(rows),
     actualGames: new Set(
@@ -1934,13 +1949,49 @@ function aggregateDefenseActual(input: {
   };
 }
 
+function requireCompleteHistoricalActual(
+  row: {
+    readonly season: number;
+    readonly week: number;
+    readonly components: ProjectionStatComponents;
+  },
+  profile: ProjectionScoringProfile,
+  applicableStatIds: readonly string[],
+): void {
+  const issues = observedScoringComponentIssues({
+    components: row.components,
+    profile,
+    applicableStatIds,
+  });
+  if (issues.missingComponents.length > 0 || issues.invalidComponents.length > 0) {
+    // Check individual weeks before summing: a known value in another week cannot establish an
+    // observed zero here. Fail the requested evaluation rather than selecting only complete games.
+    throw new Error(
+      `Historical ROS actual components unavailable at ${row.season}:${row.week}; missing=${issues.missingComponents.join(",")}; invalid=${issues.invalidComponents.join(",")}`,
+    );
+  }
+}
+
 function aggregateActualComponents(
   rows: readonly { readonly components: ProjectionStatComponents }[],
 ): ProjectionStatComponents {
   const components: Record<string, number> = {};
-  for (const row of rows) {
-    for (const [key, value] of Object.entries(row.components))
-      components[key] = (components[key] ?? 0) + value;
+  for (const key of Object.keys(rows[0]?.components ?? {})) {
+    const rareDefenseCount = key === "defensive_two_point_returns" || key === "one_point_safeties";
+    if (
+      !rows.every((row) => {
+        const value = row.components[key]!;
+        return (
+          Object.hasOwn(row.components, key) &&
+          Number.isFinite(value) &&
+          (!rareDefenseCount || (Number.isSafeInteger(value) && value >= 0))
+        );
+      })
+    )
+      continue;
+    // A later profile may price a currently unused component. Preserve its missingness across
+    // the full window instead of recording a partial sum as a complete realized outcome.
+    components[key] = rows.reduce((sum, row) => sum + row.components[key]!, 0);
   }
   return components;
 }
