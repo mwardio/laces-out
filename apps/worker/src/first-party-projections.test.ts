@@ -9,6 +9,7 @@ import {
   applyWeeklyIntervalPolicy,
   applyWeeklyPointCalibration,
   storedWeeklyIntervalPolicyVersion,
+  storedWeeklyIntervalPolicyProvenance,
   storedWeeklyPointPolicyVersion,
   projectionScoringProfileKey,
   firstPartyProjectionComponentsForPosition,
@@ -1850,7 +1851,73 @@ describe("published backtest MAE reflects only the league's supported positions"
       "WR",
     );
     expect(corrected.intervalPolicyVersion).toBeUndefined();
+    expect(corrected.intervalPolicyPosition).toBeUndefined();
     expect(corrected.components).toBe(previous.components);
+  });
+
+  it("keeps a frozen interval's original role when current provider evidence changes the player role", () => {
+    const publication = planPublications({ rules: DST_SUPPORTED_RULES }).publications[0]!;
+    const previous = {
+      ...publication.rows.find((row) => row.playerId === "player-rb")!,
+      // The fixture's current player is now a WR; the locked forecast was generated as an RB.
+      playerId: "player-wr",
+      scoringProfileKey: publication.profileKey,
+      confidence: 0.32,
+    };
+    expect(previous.intervalPolicyPosition).toBe("RB");
+    const next = planPublications({
+      rules: DST_SUPPORTED_RULES,
+      startedPositions: ["WR"],
+      previousRows: new Map([[previous.playerId, previous]]),
+      playerBacktest: playerBacktestFixture({ omitPositions: ["RB"] }),
+    }).publications[0]!;
+    expect(next.rows.find((row) => row.playerId === previous.playerId)).toEqual(previous);
+    expect(next.metadata.intervalPolicyByPlayer).toMatchObject({
+      [previous.playerId]: {
+        origin: "frozen",
+        version: WEEKLY_INTERVAL_CALIBRATION_POLICY_VERSION,
+        position: "RB",
+      },
+    });
+    expect(next.metadata.weeklyIntervalCalibration).not.toHaveProperty("byPosition.RB");
+    const persisted = JSON.parse(JSON.stringify(next.metadata)) as Record<string, unknown>;
+    const provenance = storedWeeklyIntervalPolicyProvenance(persisted, previous.playerId)!;
+    expect(provenance).toEqual({
+      version: WEEKLY_INTERVAL_CALIBRATION_POLICY_VERSION,
+      position: "RB",
+    });
+    const restored = {
+      ...previous,
+      intervalPolicyVersion: provenance.version,
+      intervalPolicyPosition: provenance.position,
+    };
+    const again = planPublications({
+      rules: DST_SUPPORTED_RULES,
+      startedPositions: ["WR"],
+      previousRows: new Map([[restored.playerId, restored]]),
+      playerBacktest: playerBacktestFixture({ omitPositions: ["RB"] }),
+    }).publications[0]!;
+    expect(again.rows.find((row) => row.playerId === previous.playerId)).toEqual(previous);
+    expect(storedWeeklyIntervalPolicyProvenance(again.metadata, previous.playerId)).toEqual(
+      provenance,
+    );
+  });
+
+  it("does not invent an interval role for a legacy frozen row with missing provenance", () => {
+    const publication = planPublications({ rules: DST_SUPPORTED_RULES }).publications[0]!;
+    const previous = {
+      ...publication.rows.find((row) => row.playerId === "player-wr")!,
+      intervalPolicyPosition: undefined,
+      scoringProfileKey: publication.profileKey,
+      confidence: 0.32,
+    };
+    const next = planPublications({
+      rules: DST_SUPPORTED_RULES,
+      startedPositions: ["WR"],
+      previousRows: new Map([[previous.playerId, previous]]),
+    }).publications[0]!;
+    expect(next.rows.find((row) => row.playerId === previous.playerId)).toEqual(previous);
+    expect(next.metadata.intervalPolicyByPlayer).not.toHaveProperty(previous.playerId);
   });
 
   it("includes frozen point-policy provenance in the publication identity while preserving locked points", () => {
