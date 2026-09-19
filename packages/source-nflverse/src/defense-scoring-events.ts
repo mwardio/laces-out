@@ -6,7 +6,7 @@ import { createHash } from "node:crypto";
  * and https://raw.githubusercontent.com/nflverse/nflfastR/master/R/calculate_stats.R .
  * In particular, nflfastR's def_tds excludes separately aggregated fumble-recovery touchdowns.
  */
-export const NFLVERSE_DEFENSE_SCORING_EVENTS_VERSION = "nflverse-defense-scoring-events-v1";
+export const NFLVERSE_DEFENSE_SCORING_EVENTS_VERSION = "nflverse-defense-scoring-events-v2";
 export type DefenseScoringRow = Readonly<Record<string, unknown>>;
 export interface DefenseScoringGame {
   readonly gameId: string;
@@ -164,6 +164,8 @@ const factFields = [
   "return_team",
   "fumble_recovery_1_team",
   "fumble_recovery_2_team",
+  "fumbled_1_team",
+  "fumbled_2_team",
   "field_goal_result",
   "extra_point_result",
   "two_point_conv_result",
@@ -229,9 +231,28 @@ function classify(
   if (is("field_goal_attempt") && row.field_goal_result === "made")
     return points === 3 && scoringTeam === offense && !is("touchdown") ? "field-goal" : null;
   if (!is("touchdown") || points !== 6 || team(row.td_team) !== scoringTeam) return null;
-  // Multiple changes of possession can change which unit receives fantasy credit. Retain the
-  // score and facts, but do not guess from the initial possession or sum all fumble TDs.
-  if (!missing(row.fumble_recovery_2_team) || (is("interception") && is("fumble"))) return null;
+  // Multiple changes of possession can change which unit receives fantasy credit. A second
+  // fumble is not itself a second turnover: 2023 JAX–IND play 3108 has an own-team recovery,
+  // another offensive fumble and the defense's scoring recovery. Require that exact chain.
+  if (is("interception") && is("fumble")) return null;
+  if (!missing(row.fumble_recovery_2_team)) {
+    const understoodChain =
+      !is("interception") &&
+      is("fumble") &&
+      is("fumble_lost") &&
+      is("return_touchdown") &&
+      !is("pass_touchdown") &&
+      !is("rush_touchdown") &&
+      ["kickoff_attempt", "punt_attempt", "punt_blocked", "field_goal_attempt"].every(
+        (key) => flag(row[key]) === 0,
+      ) &&
+      scoringTeam === defense &&
+      team(row.fumbled_1_team) === offense &&
+      team(row.fumbled_2_team) === offense &&
+      team(row.fumble_recovery_1_team) === offense &&
+      team(row.fumble_recovery_2_team) === defense;
+    return understoodChain ? "defensive-fumble-touchdown" : null;
+  }
   if (
     ["interception", "fumble", "pass_touchdown", "rush_touchdown"].some(
       (key) => flag(row[key]) === null,
@@ -441,10 +462,9 @@ export function extractNflverseDefenseScoringEvents(input: {
       else if (saysScore) issue(playId, "scoring-flag-without-score-change");
       continue;
     }
-    if (row.play_type === "no_play") {
-      issue(playId, "cancelled-play-changed-score");
-      continue;
-    }
+    // nflverse's no_play is not synonymous with a cancelled score. It also contains accepted
+    // end-zone penalty safeties and successful tries with penalties enforced between downs.
+    // Positive observed deltas must still match one explicit, noncontradictory scoring event.
     if (
       homeDelta < 0 ||
       awayDelta < 0 ||

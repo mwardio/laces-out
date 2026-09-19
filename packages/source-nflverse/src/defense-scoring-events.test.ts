@@ -108,6 +108,32 @@ function result(rows: readonly DefenseScoringRow[], home = 0, away = 0) {
 function reasons(value: ReturnType<typeof result>) {
   return value.issues.map((issue) => issue.reason);
 }
+function observedEdgeCases(): DefenseScoringRow[] {
+  const csv = readFileSync(
+    new URL("./fixtures/defense-scoring-2023-penalties-and-two-fumbles.csv", import.meta.url),
+    "utf8",
+  );
+  expect(createHash("sha256").update(csv).digest("hex")).toBe(
+    "61da2da3b48ed778eb592de3f66c7e4534aa21db13d0af1f0a4741b47f822acc",
+  );
+  return parse(csv, { columns: true, skip_empty_lines: true });
+}
+function inspectObservedEvent(row: DefenseScoringRow) {
+  const captured = input([row]);
+  return extractNflverseDefenseScoringEvents({
+    ...captured,
+    game: {
+      gameId: String(row.game_id),
+      season: Number(row.season),
+      week: Number(row.week),
+      seasonType: row.season_type as "REG" | "POST",
+      homeTeam: String(row.home_team),
+      awayTeam: String(row.away_team),
+    },
+    provenance: { ...captured.provenance, coverage: "partial-game" },
+    finality: null,
+  });
+}
 
 describe("bound final-game defense scoring events", () => {
   it("recovers BOTH Pittsburgh defensive touchdowns in the complete official 2023 week 2 PBP", () => {
@@ -119,7 +145,7 @@ describe("bound final-game defense scoring events", () => {
       "utf8",
     );
     expect(createHash("sha256").update(csv).digest("hex")).toBe(
-      "3420f5aba4f5feb29dea2bcbbcf8bdf4760af6bf90e4481085dea8cda164b20d",
+      "6606906ffb58f3902e69318e901f3b27ef216d06f4b1577c97b00167cc49c4b2",
     );
     const rows: DefenseScoringRow[] = parse(csv, { columns: true, skip_empty_lines: true });
     const captured = input(rows, 26, 22);
@@ -171,6 +197,40 @@ describe("bound final-game defense scoring events", () => {
       defensiveTouchdowns: 0,
       offensiveFumbleTouchdowns: 1,
     });
+  });
+  it("classifies the seven real 2023 scoring edge cases without calling a partial fixture a complete game", () => {
+    // Same SHA-pinned public 2023 PBP artifact as the full-game fixture above. Six penalty plays
+    // have real scores despite play_type=no_play; one two-fumble chain changes possession once.
+    const cases = observedEdgeCases();
+    expect(cases).toHaveLength(7);
+    for (const observed of cases) {
+      const actual = inspectObservedEvent(observed);
+      const expected =
+        observed.game_id === "2023_01_JAX_IND"
+          ? "defensive-fumble-touchdown"
+          : observed.game_id === "2023_04_KC_NYJ"
+            ? "safety"
+            : "offensive-two-point-conversion";
+      expect(actual.events[0]?.kind, String(observed.game_id)).toBe(expected);
+      expect(reasons(actual)).not.toContain("scoring-event-unresolved");
+      expect(actual.teams).toBeNull();
+      expect(reasons(actual)).toContain("partial-game-selection");
+    }
+  });
+  it("requires both offensive fumbles and the precise recovery chain for the double-fumble exception", () => {
+    const observed = observedEdgeCases().find((row) => row.game_id === "2023_01_JAX_IND")!;
+    for (const mutation of [
+      { fumbled_1_team: "IND" },
+      { fumbled_2_team: "IND" },
+      { fumble_recovery_1_team: "IND" },
+      { fumble_recovery_2_team: "JAX" },
+      { interception: "1" },
+      { kickoff_attempt: "1" },
+    ]) {
+      const actual = inspectObservedEvent({ ...observed, ...mutation });
+      expect(actual.events[0]?.kind).toBeNull();
+      expect(reasons(actual)).toContain("scoring-event-unresolved");
+    }
   });
   it.each([
     [{ kickoff_attempt: "1" }, "kickoff-return-touchdown"],
@@ -303,9 +363,9 @@ describe("bound final-game defense scoring events", () => {
       "defensive-interception-touchdown",
     );
   });
-  it("does not accept a no-play whose score changed", () => {
-    const actual = result([touchdown({ play_type: "no_play" })], 6);
-    expect(reasons(actual)).toContain("cancelled-play-changed-score");
+  it("does not infer a scoring classification merely because a no-play score changed", () => {
+    const actual = result([touchdown({ play_type: "no_play", touchdown: "0" })], 6);
+    expect(reasons(actual)).toContain("scoring-event-unresolved");
     expect(actual.teams).toBeNull();
   });
   it.each([
