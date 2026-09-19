@@ -98,9 +98,9 @@ const PROVIDER_LABELS: Readonly<Record<AiProviderName, string>> = {
 
 const DEMO_ANSWERS: Readonly<Record<AiFeatureName, string>> = {
   "weekly-brief":
-    "Budget Ballers enters Week 6 at 4–1 with the league's strongest power score. Gridiron Dept. has the stronger projected WR group, but your RB advantage is meaningful.\n\n**One move:** Start Quentin Johnston in the FLEX for the modeled 1.5-point edge, then verify his status before lock.",
+    "Budget Ballers enters Week 6 at 4–1 with the league's strongest power score. Gridiron Dept. has the stronger projected WR group, but your RB advantage is meaningful.\n\n**One decision to review:** The model leans toward Quentin Johnston in the FLEX by 1.5 projected points. Recheck usage and player status before making the change.",
   "start-sit":
-    "**The clear call:** Quentin Johnston over Mike Evans in FLEX. The current projection set gives Johnston a 1.5-point edge; the rest of the optimized lineup is unchanged.\n\n**Close call:** This margin is small enough to recheck after the next projection refresh. No stored lock prevents the switch, but complete provider lock coverage is unavailable.",
+    "**Model lean:** Quentin Johnston over Mike Evans in FLEX by 1.5 projected points; the rest of the proposed lineup is unchanged.\n\n**Close call:** Recheck usage, player status, and the next projection refresh before deciding. No stored lock prevents the switch, but complete provider lock coverage is unavailable.",
   "waiver-scan":
     "Jaylen Wright is the only addition that clears the worth-the-drop bar.\n\n- **Add:** Jaylen Wright\n- **Drop:** Your second defense\n- **Suggested bid:** Around $8\n\nThe pairing improves weighted roster value by 2.8 points while preserving a legal lineup. The remaining available players do not improve the roster enough to justify a drop.",
   "trade-builder":

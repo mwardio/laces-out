@@ -111,11 +111,17 @@ export function buildDecisionInboxSummary(
       left.slotId.localeCompare(right.slotId),
     );
     const onlyChange = changes.length === 1 ? changes[0] : undefined;
+    const onlyChangeAction =
+      onlyChange?.assessment?.strength === "model-edge"
+        ? "Start"
+        : onlyChange?.assessment?.strength === "close-call"
+          ? "Close call: lean"
+          : "Review";
     const title = onlyChange?.add
       ? onlyChange.remove
-        ? `${onlyChange.assessment?.strength === "close-call" ? "Close call: lean" : "Start"} ${onlyChange.add.name} over ${onlyChange.remove.name}`
-        : `Start ${onlyChange.add.name} in ${onlyChange.slotLabel}`
-      : "Improve your starting lineup";
+        ? `${onlyChangeAction} ${onlyChange.add.name} over ${onlyChange.remove.name}`
+        : `Review ${onlyChange.add.name} for ${onlyChange.slotLabel}`
+      : "Review your proposed lineup changes";
     items.push({
       id: itemIdentity(snapshot, "lineup", {
         projectedGain: lineup.projectedGain,
@@ -141,13 +147,13 @@ export function buildDecisionInboxSummary(
       }),
       kind: "lineup",
       title,
-      summary: `${changes.length} slot ${changes.length === 1 ? "change improves" : "changes together improve"} the projected starting lineup from ${lineup.currentProjectedPoints.toFixed(2)} to ${lineup.optimalProjectedPoints.toFixed(2)} points.`,
+      summary: `The model projects ${lineup.optimalProjectedPoints.toFixed(2)} points with ${changes.length} slot ${changes.length === 1 ? "change" : "changes"}, compared with ${lineup.currentProjectedPoints.toFixed(2)} for your current lineup.`,
       detail: [
         snapshot.provenance.projectionFreshness.label,
         "Review the complete lineup plan together; individual slot changes can depend on each other.",
         ...changes.map(
           (change) =>
-            `${change.slotLabel}: ${change.add ? `start ${change.add.name}` : "leave empty"}${change.remove ? ` in place of ${change.remove.name}` : ""} (${signed(change.projectedPointDelta)} projected points).`,
+            `${change.slotLabel}: ${change.add ? `proposed ${change.add.name}` : "proposed empty slot"}${change.remove ? ` in place of ${change.remove.name}` : ""} (${signed(change.projectedPointDelta)} projected points).`,
         ),
         ...lineup.notes.filter(Boolean),
         ...changes.flatMap((change) => (change.assessment ? [change.assessment.explanation] : [])),

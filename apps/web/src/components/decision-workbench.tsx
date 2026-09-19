@@ -136,6 +136,16 @@ function LineupSection({ snapshot }: { readonly snapshot: InSeasonDecisionSnapsh
       <p>{snapshot.provenance.projectionFreshness.label}</p>
       {section.state === "unavailable" ? (
         <UnavailablePanel title="Lineup analysis" reasons={section.reasons} />
+      ) : !section.feasible ? (
+        <UnavailablePanel
+          title="Lineup analysis"
+          reasons={[
+            {
+              code: "ENGINE_INFEASIBLE",
+              message: "No complete legal starting lineup was found.",
+            },
+          ]}
+        />
       ) : (
         <>
           <div className={styles.metricGrid}>
@@ -148,7 +158,7 @@ function LineupSection({ snapshot }: { readonly snapshot: InSeasonDecisionSnapsh
               <strong>{projectedPoints.format(section.optimalProjectedPoints)}</strong>
             </div>
             <div className={section.projectedGain > 0 ? styles.positiveMetric : undefined}>
-              <span>Available edge</span>
+              <span>Projected gain</span>
               <strong>{points.format(section.projectedGain)}</strong>
             </div>
           </div>
@@ -167,7 +177,7 @@ function LineupSection({ snapshot }: { readonly snapshot: InSeasonDecisionSnapsh
                     <article className={styles.changeRow} key={change.slotId}>
                       <span className={styles.slot}>{change.slotLabel}</span>
                       <div>
-                        <small>Bench</small>
+                        <small>Current</small>
                         <strong>
                           {change.remove?.name ?? "Open slot"}
                           <LineupPlayerStatus status={change.remove?.status ?? null} />
@@ -182,7 +192,11 @@ function LineupSection({ snapshot }: { readonly snapshot: InSeasonDecisionSnapsh
                       <ArrowUpRight size={15} aria-hidden="true" />
                       <div>
                         <small>
-                          {change.assessment?.strength === "close-call" ? "Model lean" : "Start"}
+                          {change.assessment?.strength === "model-edge"
+                            ? "Start"
+                            : change.assessment?.strength === "close-call"
+                              ? "Model lean"
+                              : "Proposed"}
                         </small>
                         <strong>
                           {change.add?.name ?? "No eligible player"}
