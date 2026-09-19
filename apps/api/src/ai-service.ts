@@ -649,8 +649,9 @@ Separate facts from recommendations. If the current week, opponent, projections,
     title: "Start / sit review",
     instructions: `Review the deterministic lineup result for the member's claimed team.
 Preserve each change's uncertainty assessment and the lineup's forecast-disagreement notes. A close-call assessment can mean overlapping projected ranges or disagreement with ESPN: describe a model lean, never a must-start or a confident upgrade. Report supplied ESPN alternatives as separate comparisons; do not blend their points with Laces Out's. Projection quality scores are not probabilities that one player outscores another. State the statistical cutoff when supplied; if completed-week coverage is missing and advice is unavailable, do not infer a replacement lineup.
+An unrated or missing assessment does not support a confident start recommendation. Describe it as a proposed move to review, preserve its explanation, and evaluate dependent slot moves together. If the lineup is not feasible, say that a complete legal lineup is unavailable; do not present its changes or unchanged starters as an optimized plan.
 Confirm the clear calls, explain only the genuinely close decisions, and flag bye, injury-status, lock, or eligibility risk only when it appears in the supplied data.
-Recommend only players and slot changes present in the Decision Desk lineup result. If there are no changes, clearly say the lineup is already optimized under the current projection set.`,
+Recommend only players and slot changes present in the Decision Desk lineup result. Only when feasible is true and there are no changes, say the lineup is already optimized under the current projection set.`,
   },
   "waiver-scan": {
     title: "Waiver wire scan",

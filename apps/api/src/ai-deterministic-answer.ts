@@ -29,16 +29,25 @@ function describeChange(change: unknown): string | undefined {
   const gain = delta === undefined ? "" : ` (${delta > 0 ? "+" : ""}${delta} projected points)`;
   const assessment = objectValue(record.assessment);
   const caveat = typeof assessment?.explanation === "string" ? ` ${assessment.explanation}` : "";
-  if (add && remove)
-    return `- ${assessment?.strength === "close-call" ? "Close call: the model leans toward" : "Start"} ${add} over ${remove} at ${slot}${gain}.${caveat}`;
-  if (add) return `- Start ${add} at ${slot}${gain}.`;
-  if (remove) return `- Bench ${remove} from ${slot}${gain}.`;
+  if (add && remove) {
+    const action =
+      assessment?.strength === "model-edge"
+        ? "Start"
+        : assessment?.strength === "close-call"
+          ? "Close call: the model leans toward"
+          : "Review the proposed move of";
+    return `- ${action} ${add} over ${remove} at ${slot}${gain}.${caveat}`;
+  }
+  if (add) return `- Proposed for ${slot}: ${add}${gain}.${caveat}`;
+  if (remove) return `- Proposed removal from ${slot}: ${remove}${gain}.${caveat}`;
   return undefined;
 }
 
 function lineupAnswer(data: unknown): string | undefined {
   const lineup = objectValue(objectValue(data)?.lineup);
   if (!lineup || lineup.state !== "available") return undefined;
+  if (lineup.feasible !== true)
+    return "A complete legal starting lineup is unavailable from this result. Open Decision Desk to review the roster and lineup constraints.";
   const changes = Array.isArray(lineup.changes) ? lineup.changes : [];
   const lines = changes
     .map((change) => describeChange(change))

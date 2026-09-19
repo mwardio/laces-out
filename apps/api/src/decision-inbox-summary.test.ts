@@ -209,6 +209,71 @@ describe("buildDecisionInboxSummary", () => {
     expect(item?.detail).toContain("The projected outcome ranges overlap.");
     expect(item?.detail).toContain("Stats through 2026 Week 1");
   });
+  it.each(["unrated", undefined])(
+    "keeps a %s assessment provisional in the inbox heading and move details",
+    (strength) => {
+      const plan = lineup();
+      plan.changes = [
+        {
+          ...plan.changes[0]!,
+          ...(strength === "unrated"
+            ? {
+                assessment: {
+                  strength,
+                  explanation: "Comparable outcome ranges are unavailable.",
+                },
+              }
+            : {}),
+        },
+      ];
+      const item = buildDecisionInboxSummary(snapshot({ lineup: plan })).items.find(
+        (row) => row.kind === "lineup",
+      );
+      expect(item?.title).toMatch(/^Review /u);
+      expect(item?.detail.join(" ")).not.toContain("start Player");
+      expect(item?.impact.value).toBe(plan.projectedGain);
+      if (strength) expect(item?.detail).toContain("Comparable outcome ranges are unavailable.");
+    },
+  );
+  it("preserves a qualified model edge without treating a mixed plan as a confident upgrade", () => {
+    const plan = lineup();
+    plan.changes[0]!.assessment = {
+      strength: "model-edge",
+      explanation: "The supplied outcome ranges do not overlap.",
+    };
+    plan.changes[1]!.assessment = {
+      strength: "close-call",
+      explanation: "Forecasts disagree about this player.",
+    };
+    const item = () =>
+      buildDecisionInboxSummary(snapshot({ lineup: plan })).items.find(
+        (row) => row.kind === "lineup",
+      );
+    expect(item()?.title).toBe("Review your proposed lineup changes");
+    expect(item()?.detail).toContain("Forecasts disagree about this player.");
+    plan.changes = [plan.changes[0]!];
+    expect(item()?.title).toMatch(/^Start /u);
+  });
+  it.each(["add", "remove"])("keeps an %s-only move provisional", (side) => {
+    const plan = lineup();
+    plan.changes = [
+      {
+        ...plan.changes[0]!,
+        ...(side === "add" ? { remove: null } : { add: null }),
+        assessment: {
+          strength: "unrated",
+          explanation: "A two-player uncertainty comparison is unavailable for this slot change.",
+        },
+      },
+    ];
+    const item = buildDecisionInboxSummary(snapshot({ lineup: plan })).items.find(
+      (row) => row.kind === "lineup",
+    );
+    expect(item?.title).toMatch(/^Review /u);
+    expect(item?.detail).toContain(
+      "A two-player uncertainty comparison is unavailable for this slot change.",
+    );
+  });
   it("produces a validated bounded live inbox in decision order with original provenance", () => {
     const source = snapshot();
     expect(inSeasonDecisionSnapshotSchema.safeParse(source).success).toBe(true);
