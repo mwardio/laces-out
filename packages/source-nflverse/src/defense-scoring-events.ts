@@ -6,7 +6,7 @@ import { createHash } from "node:crypto";
  * and https://raw.githubusercontent.com/nflverse/nflfastR/master/R/calculate_stats.R .
  * In particular, nflfastR's def_tds excludes separately aggregated fumble-recovery touchdowns.
  */
-export const NFLVERSE_DEFENSE_SCORING_EVENTS_VERSION = "nflverse-defense-scoring-events-v3";
+export const NFLVERSE_DEFENSE_SCORING_EVENTS_VERSION = "nflverse-defense-scoring-events-v5";
 export type DefenseScoringRow = Readonly<Record<string, unknown>>;
 export interface DefenseScoringGame {
   readonly gameId: string;
@@ -241,9 +241,44 @@ function classify(
     return points === 3 && scoringTeam === offense && !is("touchdown") ? "field-goal" : null;
   if (!is("touchdown") || points !== 6 || team(row.td_team) !== scoringTeam) return null;
   // Multiple changes of possession can change which unit receives fantasy credit. A second
-  // fumble is not itself a second turnover: 2023 JAX–IND play 3108 has an own-team recovery,
-  // another offensive fumble and the defense's scoring recovery. Require that exact chain.
-  if (is("interception") && is("fumble")) return null;
+  // fumble is not itself a second turnover. Admit only the explicitly evidenced chains below.
+  if (is("interception") && is("fumble")) {
+    // One documented return fumble: either the defender retains his pick-six (2024 LA–SEA)
+    // or the original offense recovers the defender's fumble for its own TD (2025 TEN–ARI).
+    // Unit attribution follows the proven possession chain, not return_touchdown alone.
+    const singleReturnFumble =
+      is("return_touchdown") &&
+      !is("pass_touchdown") &&
+      !is("rush_touchdown") &&
+      ["kickoff_attempt", "punt_attempt", "punt_blocked", "field_goal_attempt"].every(
+        (key) => flag(row[key]) === 0,
+      ) &&
+      team(row.return_team) === defense &&
+      team(row.fumbled_1_team) === defense &&
+      playerId(row.fumbled_1_player_id) &&
+      playerId(row.fumble_recovery_1_player_id) &&
+      row.fumble_recovery_1_player_id === row.td_player_id &&
+      missing(row.fumbled_2_team) &&
+      missing(row.fumbled_2_player_id) &&
+      missing(row.fumble_recovery_2_team) &&
+      missing(row.fumble_recovery_2_player_id);
+    if (!singleReturnFumble) return null;
+    if (
+      scoringTeam === defense &&
+      !is("fumble_lost") &&
+      team(row.fumble_recovery_1_team) === defense &&
+      row.fumbled_1_player_id === row.fumble_recovery_1_player_id
+    )
+      return "defensive-interception-touchdown";
+    if (
+      scoringTeam === offense &&
+      is("fumble_lost") &&
+      team(row.fumble_recovery_1_team) === offense &&
+      row.fumbled_1_player_id !== row.fumble_recovery_1_player_id
+    )
+      return "offensive-fumble-touchdown";
+    return null;
+  }
   if (!missing(row.fumble_recovery_2_team)) {
     // These slots identify different PLAYERS, not fumble occurrences. One player may
     // recover his own fumble and fumble again (2019 PIT–BAL play 3380), leaving the
@@ -256,11 +291,10 @@ function classify(
       playerId(row.fumble_recovery_2_player_id) &&
       row.fumble_recovery_2_player_id !== row.fumbled_1_player_id &&
       row.fumble_recovery_2_player_id === row.td_player_id;
-    const understoodChain =
+    const defensiveFumbleScore =
       !is("interception") &&
       is("fumble") &&
       is("fumble_lost") &&
-      is("return_touchdown") &&
       !is("pass_touchdown") &&
       !is("rush_touchdown") &&
       ["kickoff_attempt", "punt_attempt", "punt_blocked", "field_goal_attempt"].every(
@@ -268,10 +302,29 @@ function classify(
       ) &&
       scoringTeam === defense &&
       team(row.fumbled_1_team) === offense &&
-      (team(row.fumbled_2_team) === offense || samePlayerFumbledTwice) &&
-      team(row.fumble_recovery_1_team) === offense &&
       team(row.fumble_recovery_2_team) === defense;
-    return understoodChain ? "defensive-fumble-touchdown" : null;
+    const offenseRecoveredBeforeTurnover =
+      is("return_touchdown") &&
+      (team(row.fumbled_2_team) === offense || samePlayerFumbledTwice) &&
+      team(row.fumble_recovery_1_team) === offense;
+    // 2022 SF–ATL play 690: the defender who recovered the offense's fumble then
+    // fumbles to a teammate in the end zone. The final own-team recovery is not
+    // marked return_touchdown, but all identities prove possession stayed with the
+    // original defense after the first recovery. Never allow an opponent recovery.
+    const defenseRetainedAfterTurnover =
+      team(row.fumble_recovery_1_team) === defense &&
+      team(row.fumbled_2_team) === defense &&
+      playerId(row.fumbled_1_player_id) &&
+      playerId(row.fumbled_2_player_id) &&
+      playerId(row.fumble_recovery_2_player_id) &&
+      row.fumbled_2_player_id === row.fumble_recovery_1_player_id &&
+      row.fumble_recovery_2_player_id === row.td_player_id &&
+      row.fumbled_1_player_id !== row.fumbled_2_player_id &&
+      row.fumbled_2_player_id !== row.fumble_recovery_2_player_id &&
+      row.fumbled_1_player_id !== row.fumble_recovery_2_player_id;
+    return defensiveFumbleScore && (offenseRecoveredBeforeTurnover || defenseRetainedAfterTurnover)
+      ? "defensive-fumble-touchdown"
+      : null;
   }
   if (
     ["interception", "fumble", "pass_touchdown", "rush_touchdown"].some(

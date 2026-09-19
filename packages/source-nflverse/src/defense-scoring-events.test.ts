@@ -128,6 +128,24 @@ function observed2019EdgeCases(): DefenseScoringRow[] {
   );
   return parse(csv, { columns: true, skip_empty_lines: true });
 }
+function observed2022DefenseRecoveryChain(): DefenseScoringRow {
+  const csv = readFileSync(
+    new URL("./fixtures/defense-scoring-2022-defense-recovery-chain.csv", import.meta.url),
+    "utf8",
+  );
+  const rows: DefenseScoringRow[] = parse(csv, { columns: true, skip_empty_lines: true });
+  expect(rows).toHaveLength(1);
+  return rows[0]!;
+}
+function observedInterceptionFumbles(): DefenseScoringRow[] {
+  return parse(
+    readFileSync(
+      new URL("./fixtures/defense-scoring-interception-fumbles.csv", import.meta.url),
+      "utf8",
+    ),
+    { columns: true, skip_empty_lines: true },
+  );
+}
 function inspectObservedEvent(row: DefenseScoringRow) {
   const captured = input([row]);
   return extractNflverseDefenseScoringEvents({
@@ -368,6 +386,75 @@ describe("bound final-game defense scoring events", () => {
       { defensive_extra_point_conv: "1" },
       { defteam_score_post: "39" },
       { defteam_score_post: "38", posteam_score_post: "11" },
+    ])
+      expect(reasons(inspectObservedEvent({ ...original, ...changes }))).toContain(
+        "scoring-event-unresolved",
+      );
+  });
+  it("recognizes the defense retaining possession after its returner fumbles to a teammate", () => {
+    // Official 2022 PBP gzip SHA:
+    // 0c69a71eb39498956c7b1d5c1ca52ce7fe679934a95d1af249facb5ea9829ea4
+    // https://www.atlantafalcons.com/news/atlanta-falcons-grady-jarrett-arthur-smith-49ers-nfl
+    const observed = observed2022DefenseRecoveryChain();
+    expect(observed.return_touchdown).toBe("0");
+    const actual = inspectObservedEvent(observed);
+    expect(actual.events[0]).toMatchObject({
+      playId: "690",
+      scoringTeam: "ATL",
+      points: 6,
+      kind: "defensive-fumble-touchdown",
+    });
+    expect(reasons(actual)).not.toContain("scoring-event-unresolved");
+    expect(actual.state).toBe("unresolved"); // Partial observed fixture is never complete evidence.
+  });
+  it("attributes a return fumble to the unit proved by the complete possession chain", () => {
+    // Official Rams recap confirms Kinchens' 103-yard pick-six; Titans 2025 Week 5 notes
+    // attribute the fumble recovery TD after Arizona's interception to receiver Tyler Lockett.
+    const rows = observedInterceptionFumbles();
+    expect(rows).toHaveLength(2);
+    for (const [index, kind] of [
+      "defensive-interception-touchdown",
+      "offensive-fumble-touchdown",
+    ].entries()) {
+      const original = rows[index]!;
+      expect(inspectObservedEvent(original).events[0]?.kind).toBe(kind);
+      for (const mutation of [
+        { fumbled_1_player_id: "" },
+        { fumble_recovery_1_player_id: "" },
+        { td_player_id: "" },
+        { fumbled_1_team: original.posteam },
+        { return_team: original.posteam },
+        { fumbled_2_team: original.defteam },
+        { fumble_recovery_2_team: original.defteam },
+        { punt_attempt: "1" },
+        { pass_touchdown: "1" },
+        { fumble_lost: index === 0 ? "1" : "0" },
+      ])
+        expect(reasons(inspectObservedEvent({ ...original, ...mutation }))).toContain(
+          "scoring-event-unresolved",
+        );
+    }
+  });
+  it("rejects missing or contradictory identities and possession reversals in that recovery chain", () => {
+    const original = observed2022DefenseRecoveryChain();
+    for (const changes of [
+      { fumbled_1_team: "ATL" },
+      { fumbled_2_team: "SF" },
+      { fumble_recovery_1_team: "SF" },
+      { fumble_recovery_2_team: "SF" },
+      { fumbled_1_player_id: "" },
+      { fumbled_2_player_id: "" },
+      { fumble_recovery_1_player_id: "" },
+      { fumble_recovery_2_player_id: "" },
+      { td_player_id: "" },
+      { fumbled_1_player_id: original.fumbled_2_player_id },
+      { fumbled_1_player_id: original.fumble_recovery_2_player_id },
+      { fumble_recovery_1_player_id: original.fumble_recovery_2_player_id },
+      { fumble_recovery_2_player_id: original.fumbled_2_player_id },
+      { interception: "1" },
+      { punt_attempt: "1" },
+      { rush_touchdown: "1" },
+      { fumble_lost: "0" },
     ])
       expect(reasons(inspectObservedEvent({ ...original, ...changes }))).toContain(
         "scoring-event-unresolved",
