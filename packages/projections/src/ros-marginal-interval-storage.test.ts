@@ -1,6 +1,7 @@
 import { beforeAll, describe, expect, it } from "vitest";
 import {
   buildRosMarginalIntervalStorage,
+  buildRosMarginalIntervalStoredCells,
   rosMarginalIntervalQualificationIsPublicationQualified,
   rosMarginalIntervalQualificationIsStructurallyValid,
   rosMarginalIntervalStorageIsValid,
@@ -340,6 +341,18 @@ describe("bounded immutable qualification receipt validation", () => {
 });
 
 describe("schema-2 immutable interval storage", () => {
+  it("builds admitted compact cells before the champion checksum exists, including an empty eligible set", () => {
+    expect(
+      buildRosMarginalIntervalStoredCells({ qualifications, releasedCells: storage.releasedCells }),
+    ).toEqual(storage.cells);
+    expect(buildRosMarginalIntervalStoredCells({ qualifications, releasedCells: [] })).toEqual([]);
+    expect(() =>
+      buildRosMarginalIntervalStoredCells({
+        qualifications: qualifications.slice(1),
+        releasedCells: [],
+      }),
+    ).toThrow(/incomplete qualification set/u);
+  });
   it("stores compact exact scope and bindings, with no raw player arrays or release authority", () => {
     expect(rosMarginalIntervalStorageIsValid(storage)).toBe(true);
     expect(storage.schemaVersion).toBe(2);

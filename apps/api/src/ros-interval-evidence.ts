@@ -6,7 +6,7 @@ export type StoredRosIntervalEvidence = {
   readonly projectionSetId: string;
   readonly linkedRunCount: number;
   readonly matchesScope: boolean;
-  /** Schema 2 also binds the envelope to the immutable run's admitted artifact and scoring. */
+  /** Schema 2 binds every saved player's calibration to its run and immutable admitted cell. */
   readonly marginalScopeMatches?: boolean;
   readonly rosIntervals: unknown;
 };

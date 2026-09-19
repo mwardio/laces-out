@@ -1,6 +1,6 @@
 /** Projection history and player access against a disposable DB; never uses application data. */
 import { execFileSync } from "node:child_process";
-import { randomBytes, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 
 import {
@@ -10,6 +10,7 @@ import {
 import {
   createDatabase,
   dataSources,
+  firstPartyRosChampionArtifacts,
   leagues,
   leagueSeasons,
   playerExternalIds,
@@ -21,9 +22,22 @@ import {
   scoringRules,
   users,
   syncRuns,
+  type FirstPartyRosPlayerIntervalCalibration,
 } from "@laces-out/db";
 import { DrizzleInSeasonDecisionRepository } from "@laces-out/decisions";
-import { eq } from "drizzle-orm";
+import {
+  FIRST_PARTY_ROS_MARGINAL_POLICY_VERSION,
+  FIRST_PARTY_ROS_MODEL_VERSION,
+  MARGINAL_INTERVAL_CALIBRATION_VERSION,
+  ROS_MARGINAL_INTERVAL_QUALIFICATION_VERSION,
+  buildRosMarginalIntervalQualificationSet,
+  buildRosMarginalIntervalStorage,
+  buildRosMarginalIntervalStoredCells,
+  evaluateFirstPartyRosChampionPolicy,
+  rosMarginalIntervalStorageIsValid,
+} from "@laces-out/projections";
+import { rosMarginalIntervalQualificationFullFixtureInput } from "../../../packages/projections/src/ros-marginal-interval-test-fixtures.js";
+import { eq, sql } from "drizzle-orm";
 import { migrate } from "drizzle-orm/postgres-js/migrator";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -39,6 +53,17 @@ function dockerAvailable() {
 }
 
 const NOW = new Date("2026-09-11T12:00:00.000Z");
+
+function canonicalFixture(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalFixture);
+  if (value !== null && typeof value === "object")
+    return Object.fromEntries(
+      Object.entries(value)
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([key, entry]) => [key, canonicalFixture(entry)]),
+    );
+  return value;
+}
 
 describe.skipIf(!dockerAvailable())("Projection history against disposable PostgreSQL", () => {
   const containerName = `laces-out-projections-pg-${randomUUID().slice(0, 8)}`;
@@ -115,6 +140,7 @@ describe.skipIf(!dockerAvailable())("Projection history against disposable Postg
     });
     repository = new DrizzleProjectionImportRepository(handle.db);
     service = new ProjectionImportService(repository, () => NOW);
+    marginalFixture = createMarginalFixture();
   }, 60_000);
 
   beforeEach(async () => {
@@ -201,6 +227,10 @@ describe.skipIf(!dockerAvailable())("Projection history against disposable Postg
     set: ReturnType<typeof setRow>,
     modelVersion: string,
     intervalMethod = legacyIntervals.method,
+    overrides?: {
+      readonly configuration: Record<string, unknown>;
+      readonly calibration: Record<string, unknown>;
+    },
   ) {
     const sourceId = randomUUID();
     const runId = randomUUID();
@@ -248,6 +278,7 @@ describe.skipIf(!dockerAvailable())("Projection history against disposable Postg
           maxToleranceRatio: 0.5,
         },
       },
+      ...overrides,
     });
     return runId;
   }
@@ -257,6 +288,7 @@ describe.skipIf(!dockerAvailable())("Projection history against disposable Postg
     runId: string,
     player: string,
     modelVersion: string,
+    intervalCalibration?: FirstPartyRosPlayerIntervalCalibration,
   ) {
     await handle.db.insert(playerProjections).values({
       projectionSetId: set.id,
@@ -296,8 +328,237 @@ describe.skipIf(!dockerAvailable())("Projection history against disposable Postg
       methodVersion: modelVersion,
       seedHash: "c".repeat(64),
       inputChecksum: set.inputChecksum,
+      intervalCalibration,
     });
   }
+
+  // These are synthetic physical rows passed through the same qualification and storage builders
+  // used by publication. The database therefore sees complete executable evidence, not hand-made
+  // passing flags. Cache only immutable fixture values; each test gets a separate run and set.
+  let marginalFixture: ReturnType<typeof createMarginalFixture> | undefined;
+  function createMarginalFixture() {
+    const input = rosMarginalIntervalQualificationFullFixtureInput();
+    const qualifications = buildRosMarginalIntervalQualificationSet(input);
+    const policy = evaluateFirstPartyRosChampionPolicy(
+      input.candidate.heldOutSeasons,
+      qualifications[0]!.meanSelectorOptions,
+    ).livePolicy;
+    const payload = {
+      season: 2026,
+      scoringProfileKey: input.candidate.source.scoringProfileKey,
+      modelVersion: FIRST_PARTY_ROS_MODEL_VERSION,
+      policyVersion: FIRST_PARTY_ROS_MARGINAL_POLICY_VERSION,
+      calibrationVersion: MARGINAL_INTERVAL_CALIBRATION_VERSION,
+      evidenceThroughSeason: 2025,
+      sourceChecksums: [{ key: "synthetic-fixture-source", checksum: "1".repeat(64) }],
+      policy,
+      releaseGate: {
+        state: "evidence-ready",
+        blockers: [],
+        marginalIntervals: {
+          schemaVersion: 1,
+          qualificationMethod: ROS_MARGINAL_INTERVAL_QUALIFICATION_VERSION,
+          qualifications,
+          cells: buildRosMarginalIntervalStoredCells({
+            qualifications,
+            releasedCells: qualifications.filter((q) => q.state === "qualified").map((q) => q.cell),
+          }),
+        },
+      },
+    };
+    // Independently encode the immutable admission identity without importing worker application
+    // code into the API. The test exercises retained evidence lookup, not admission authorization.
+    const artifactChecksum = createHash("sha256")
+      .update(
+        JSON.stringify(
+          canonicalFixture({ version: "first-party-ros-champion-artifact-v1", ...payload }),
+        ),
+      )
+      .digest("hex");
+    const qualification = qualifications.find(
+      (q) => q.cell.position === "WR" && q.cell.bucket === "nine-plus",
+    )!;
+    const envelope = buildRosMarginalIntervalStorage({
+      qualifications,
+      championArtifactChecksum: artifactChecksum,
+      releasedCells: [qualification.cell],
+    });
+    const metadata: FirstPartyRosPlayerIntervalCalibration = {
+      schemaVersion: 1,
+      position: qualification.cell.position,
+      bucket: qualification.cell.bucket,
+      strategy: qualification.strategy,
+      qualificationChecksum: qualification.qualificationChecksum,
+      calibrationArtifactChecksum: qualification.liveArtifact.artifactChecksum,
+      releaseEvidenceChecksum: envelope.evidenceChecksum,
+    };
+    return { payload, artifactChecksum, qualification, envelope, metadata };
+  }
+
+  async function seedMarginalRun(set: ReturnType<typeof setRow>) {
+    const fixture = (marginalFixture ??= createMarginalFixture());
+    const { payload, artifactChecksum, qualification, envelope, metadata } = fixture;
+    await handle.db
+      .insert(firstPartyRosChampionArtifacts)
+      .values({
+        ...payload,
+        policy: payload.policy as unknown as Record<string, unknown>,
+        artifactChecksum,
+        admittedAt: NOW,
+      })
+      .onConflictDoNothing();
+    const runId = await seedRosRun(set, FIRST_PARTY_ROS_MODEL_VERSION, undefined, {
+      configuration: {
+        mode: "release",
+        simulationModelVersion: FIRST_PARTY_ROS_MODEL_VERSION,
+        orchestrationVersion: "fixture-orchestration",
+        policyVersion: payload.policyVersion,
+        calibrationVersion: payload.calibrationVersion,
+        championArtifactChecksum: artifactChecksum,
+        scoringProfileKey: payload.scoringProfileKey,
+        releasingBuckets: [
+          {
+            ...qualification.cell,
+            strategy: qualification.strategy,
+            intervalCalibration: {
+              method: envelope.method,
+              qualificationChecksum: qualification.qualificationChecksum,
+              artifactChecksum: qualification.liveArtifact.artifactChecksum,
+              releaseGateEvidenceChecksum: "2".repeat(64),
+              artifact: qualification.liveArtifact,
+            },
+          },
+        ],
+      },
+      calibration: { rosIntervals: envelope },
+    });
+    await seedRosSummary(set, runId, playerId, FIRST_PARTY_ROS_MODEL_VERSION, metadata);
+    return { ...fixture, runId };
+  }
+
+  it("reads each marginal range through its admitted cell and immutable player calibration", async () => {
+    const saved = setRow("rest-of-season", NOW);
+    await handle.db.insert(projectionSets).values(saved);
+    const { envelope } = await seedMarginalRun(saved);
+    const expected = {
+      kind: "player-marginal",
+      method: envelope.method,
+      nominalCoverage: 0.7,
+      evidenceChecksum: envelope.evidenceChecksum,
+    };
+    expect(await repository.listRosIntervalEvidence([saved.id])).toMatchObject([
+      { matchesScope: true, marginalScopeMatches: true },
+    ]);
+    expect(
+      (await service.getPlayers(userId, seasonId, saved.id)).projectionSet.managed?.rosInterval,
+    ).toMatchObject(expected);
+    // A later catalog position edit is not evidence about the position actually simulated.
+    await handle.db
+      .update(players)
+      .set({ primaryPosition: "TE", eligiblePositions: ["TE"] })
+      .where(eq(players.id, playerId));
+    expect(
+      (await service.list(userId, seasonId)).projectionSets[0]?.managed?.rosInterval,
+    ).toMatchObject(expected);
+  });
+
+  it.each([
+    ["missing proof", null],
+    ["wrong position", { position: "DST" }],
+    ["wrong horizon", { bucket: "one-to-four" }],
+    ["wrong strategy", { strategy: "not-a-strategy" }],
+    ["wrong qualification", { qualificationChecksum: "e".repeat(64) }],
+    ["wrong fitted artifact", { calibrationArtifactChecksum: "e".repeat(64) }],
+    ["wrong released run", { releaseEvidenceChecksum: "e".repeat(64) }],
+    ["unknown metadata", { extra: true }],
+    ["wrong schema", { schemaVersion: 2 }],
+  ])(
+    "does not describe marginal ranges with %s even if storage was corrupted",
+    async (_label, mutation) => {
+      const saved = setRow("rest-of-season", NOW);
+      await handle.db.insert(projectionSets).values(saved);
+      const { metadata } = await seedMarginalRun(saved);
+      const corrupted = mutation === null ? null : { ...metadata, ...mutation };
+      // Only this disposable superuser test connection bypasses write-time guards. The API must
+      // independently refuse invalid retained rows rather than trusting that inserts once passed.
+      await handle.db.transaction(async (transaction) => {
+        await transaction.execute(sql`set local session_replication_role = replica`);
+        await transaction.execute(sql`
+        update ${playerRosProjectionSummaries}
+        set interval_calibration = ${corrupted === null ? null : JSON.stringify(corrupted)}::jsonb
+        where projection_set_id = ${saved.id}
+      `);
+      });
+      expect(await repository.listRosIntervalEvidence([saved.id])).toMatchObject([
+        { matchesScope: true, marginalScopeMatches: false },
+      ]);
+      expect(
+        (await service.getPlayers(userId, seasonId, saved.id)).projectionSet.managed?.rosInterval,
+      ).toBeNull();
+    },
+  );
+
+  it("rejects a self-consistent replacement proof that was never admitted for the run", async () => {
+    const saved = setRow("rest-of-season", NOW);
+    await handle.db.insert(projectionSets).values(saved);
+    const original = await seedMarginalRun(saved);
+    const input = rosMarginalIntervalQualificationFullFixtureInput();
+    const replacement = buildRosMarginalIntervalQualificationSet({
+      ...input,
+      scope: { ...input.scope, protocolChecksum: "9".repeat(64) },
+    });
+    const cell = replacement.find(
+      (q) => q.cell.position === "WR" && q.cell.bucket === "nine-plus",
+    )!;
+    const envelope = buildRosMarginalIntervalStorage({
+      qualifications: replacement,
+      championArtifactChecksum: original.artifactChecksum,
+      releasedCells: [cell.cell],
+    });
+    expect(rosMarginalIntervalStorageIsValid(envelope)).toBe(true);
+    const metadata = {
+      ...original.metadata,
+      qualificationChecksum: cell.qualificationChecksum,
+      calibrationArtifactChecksum: cell.liveArtifact.artifactChecksum,
+      releaseEvidenceChecksum: envelope.evidenceChecksum,
+    };
+    await handle.db.transaction(async (transaction) => {
+      await transaction.execute(sql`set local session_replication_role = replica`);
+      await transaction
+        .update(projectionModelRuns)
+        .set({ calibration: { rosIntervals: envelope } })
+        .where(eq(projectionModelRuns.sourceSyncRunId, original.runId));
+      await transaction
+        .update(playerRosProjectionSummaries)
+        .set({ intervalCalibration: metadata })
+        .where(eq(playerRosProjectionSummaries.projectionSetId, saved.id));
+    });
+    expect(await repository.listRosIntervalEvidence([saved.id])).toMatchObject([
+      { matchesScope: true, marginalScopeMatches: false },
+    ]);
+    expect(
+      (await service.list(userId, seasonId)).projectionSets[0]?.managed?.rosInterval,
+    ).toBeNull();
+  }, 30_000);
+
+  it("does not label an unstamped historical run as marginal even when its JSON looks valid", async () => {
+    const saved = setRow("rest-of-season", NOW);
+    await handle.db.insert(projectionSets).values(saved);
+    const { runId } = await seedMarginalRun(saved);
+    await handle.db.transaction(async (transaction) => {
+      await transaction.execute(sql`set local session_replication_role = replica`);
+      await transaction.execute(sql`
+        update ${projectionModelRuns} set marginal_interval_contract_version = null
+        where source_sync_run_id = ${runId}
+      `);
+    });
+    expect(await repository.listRosIntervalEvidence([saved.id])).toMatchObject([
+      { matchesScope: true, marginalScopeMatches: false },
+    ]);
+    expect(
+      (await service.list(userId, seasonId)).projectionSets[0]?.managed?.rosInterval,
+    ).toBeNull();
+  });
 
   it("reads retained legacy interval evidence through its immutable run, independently of mutable set labels", async () => {
     const saved = setRow("rest-of-season", NOW);

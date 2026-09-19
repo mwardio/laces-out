@@ -1340,6 +1340,9 @@ export class FirstPartyRosProjectionShadowService implements ProjectionRefreshSe
           scenarioCount: row.summary.scenarioCount,
           methodVersion: row.summary.methodVersion,
           seedHash: row.summary.seedHash,
+          ...(row.summary.intervalCalibration === undefined
+            ? {}
+            : { intervalCalibration: row.summary.intervalCalibration }),
           inputChecksum,
           createdAt: now,
         })),

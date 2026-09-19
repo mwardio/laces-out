@@ -10,6 +10,7 @@ import type {
   ProjectionVisibility as ContractProjectionVisibility,
 } from "@laces-out/contracts";
 import {
+  firstPartyRosChampionArtifacts,
   leagueMemberships,
   leagues,
   leagueSeasons,
@@ -604,7 +605,26 @@ export class DrizzleProjectionImportRepository implements ProjectionImportReposi
             and summary.input_checksum = requested.input_checksum
             and summary.method_version = linked_model.model_version
             and projected.player_id is not null
-          ) as summaries_match
+          ) as summaries_match,
+          bool_and(coalesce(exists (
+            select 1 from jsonb_array_elements(
+              case when jsonb_typeof(linked_model.calibration->'rosIntervals'->'cells') = 'array'
+                then linked_model.calibration->'rosIntervals'->'cells' else '[]'::jsonb end
+            ) cell
+            where cell->'cell'->>'bucket' = case
+              when summary.window_end_week - summary.window_start_week + 1 <= 4 then 'one-to-four'
+              when summary.window_end_week - summary.window_start_week + 1 <= 8 then 'five-to-eight'
+              else 'nine-plus' end
+            and summary.interval_calibration = jsonb_build_object(
+              'schemaVersion', 1,
+              'position', cell->'cell'->'position',
+              'bucket', cell->'cell'->'bucket',
+              'strategy', cell->'strategy',
+              'qualificationChecksum', cell->'qualificationChecksum',
+              'calibrationArtifactChecksum', cell->'artifactChecksum',
+              'releaseEvidenceChecksum', linked_model.calibration->'rosIntervals'->'evidenceChecksum'
+            )
+          ), false)) as marginal_summaries_match
         from requested
         inner join ${playerRosProjectionSummaries} summary on summary.projection_set_id = requested.id
         left join ${projectionModelRuns} linked_model on linked_model.source_sync_run_id = summary.source_sync_run_id
@@ -635,11 +655,27 @@ export class DrizzleProjectionImportRepository implements ProjectionImportReposi
         ) as "matchesScope",
         coalesce(
           model.calibration->'rosIntervals'->'schemaVersion' = '2'::jsonb
+          and model.configuration->>'mode' = 'release'
+          and model.marginal_interval_contract_version = 2
           and model.calibration->'rosIntervals'->>'forecastSeason' = model.season::text
           and model.calibration->'rosIntervals'->>'championArtifactChecksum'
             = model.configuration->>'championArtifactChecksum'
           and model.calibration->'rosIntervals'->>'scoringProfileKey'
-            = model.configuration->>'scoringProfileKey',
+            = model.configuration->>'scoringProfileKey'
+          and linked_runs.marginal_summaries_match
+          and champion.id is not null
+          and not exists (
+            select 1 from jsonb_array_elements(
+              case when jsonb_typeof(model.calibration->'rosIntervals'->'cells') = 'array'
+                then model.calibration->'rosIntervals'->'cells' else '[]'::jsonb end
+            ) released_cell
+            where not exists (
+              select 1 from jsonb_array_elements(
+                case when jsonb_typeof(champion.release_gate->'marginalIntervals'->'cells') = 'array'
+                  then champion.release_gate->'marginalIntervals'->'cells' else '[]'::jsonb end
+              ) admitted_cell where admitted_cell = released_cell
+            )
+          ),
           false
         ) as "marginalScopeMatches",
         model.calibration->'rosIntervals' as "rosIntervals"
@@ -647,6 +683,12 @@ export class DrizzleProjectionImportRepository implements ProjectionImportReposi
       left join link_counts on link_counts.projection_set_id = requested.id
       left join linked_runs on linked_runs.projection_set_id = requested.id and link_counts.run_count = 1
       left join ${projectionModelRuns} model on model.source_sync_run_id = linked_runs.source_sync_run_id
+      left join ${firstPartyRosChampionArtifacts} champion
+        on champion.artifact_checksum = model.configuration->>'championArtifactChecksum'
+        and champion.season = model.season and champion.model_version = model.model_version
+        and champion.scoring_profile_key = model.configuration->>'scoringProfileKey'
+        and champion.policy_version = model.configuration->>'policyVersion'
+        and champion.calibration_version = model.configuration->>'calibrationVersion'
       order by requested.id
     `);
   }

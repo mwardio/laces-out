@@ -1,6 +1,9 @@
 import {
   FIRST_PARTY_ROS_MAXIMUM_SCENARIOS,
   FIRST_PARTY_ROS_MINIMUM_SCENARIOS,
+  type FirstPartyRosPosition,
+  type FirstPartyRosRemainingWeeksBucket,
+  type FirstPartyRosStrategy,
 } from "@laces-out/projections";
 import { sql } from "drizzle-orm";
 import {
@@ -75,6 +78,16 @@ export type ProjectionIdentityState = "explicit" | "legacy-unknown";
 export type NflScheduleGameStatus =
   "scheduled" | "in-progress" | "final" | "postponed" | "cancelled";
 export type ProjectionModelQualityState = "publishable" | "degraded" | "rejected";
+/** Immutable per-player interval scope; absent for retained legacy CQR summaries. */
+export interface FirstPartyRosPlayerIntervalCalibration {
+  readonly schemaVersion: 1;
+  readonly position: FirstPartyRosPosition;
+  readonly bucket: FirstPartyRosRemainingWeeksBucket;
+  readonly strategy: FirstPartyRosStrategy;
+  readonly qualificationChecksum: string;
+  readonly calibrationArtifactChecksum: string;
+  readonly releaseEvidenceChecksum: string;
+}
 export type AdpScoringFormat = "standard" | "half-ppr" | "ppr";
 export type AdpRosterFormat = "one-qb" | "superflex" | "two-qb" | "unknown";
 export type LeagueSupplementalKind =
@@ -1892,6 +1905,8 @@ export const projectionModelRuns = pgTable(
     inputChecksum: text("input_checksum").notNull(),
     configuration: jsonb("configuration").$type<Record<string, unknown>>().notNull(),
     calibration: jsonb("calibration").$type<Record<string, unknown>>().notNull(),
+    /** DB-derived only: schema2 validation succeeded before the immutable run was inserted. */
+    marginalIntervalContractVersion: integer("marginal_interval_contract_version").$type<2>(),
     metrics: jsonb("metrics").$type<Record<string, unknown>>().notNull(),
     sourceAsOf: timestamp("source_as_of", { withTimezone: true }).notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
@@ -1946,6 +1961,10 @@ export const projectionModelRuns = pgTable(
       sql`jsonb_typeof(${table.configuration}) = 'object' and jsonb_typeof(${table.calibration}) = 'object' and jsonb_typeof(${table.metrics}) = 'object'`,
     ),
     check("projection_model_runs_checksum_check", sql`${table.inputChecksum} ~ '^[a-f0-9]{64}$'`),
+    check(
+      "projection_model_runs_marginal_contract_check",
+      sql`${table.marginalIntervalContractVersion} is null or ${table.marginalIntervalContractVersion} = 2`,
+    ),
   ],
 );
 
@@ -1985,6 +2004,8 @@ export const playerRosProjectionSummaries = pgTable(
     }),
     pointsStddev: numeric("points_stddev", { precision: 10, scale: 3 }).notNull(),
     availability: jsonb("availability").$type<FirstPartyRosAvailabilitySnapshot>().notNull(),
+    intervalCalibration:
+      jsonb("interval_calibration").$type<FirstPartyRosPlayerIntervalCalibration>(),
     scenarioCount: integer("scenario_count").notNull(),
     methodVersion: text("method_version").notNull(),
     seedHash: text("seed_hash").notNull(),

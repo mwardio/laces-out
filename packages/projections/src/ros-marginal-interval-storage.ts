@@ -1093,14 +1093,13 @@ export function rosMarginalIntervalStorageIsValid(
  * consistency, not authenticity. It preserves no release authority and never drops a failed cell
  * that the caller explicitly declares released. Unreleased failures remain in the full report.
  */
-export function buildRosMarginalIntervalStorage(input: {
+export function buildRosMarginalIntervalStoredCells(input: {
   readonly qualifications: readonly RosMarginalIntervalQualification[];
-  readonly championArtifactChecksum: string;
   readonly releasedCells: readonly MarginalIntervalComparisonCell[];
-}): RosMarginalIntervalStorage {
-  object(input, ["qualifications", "championArtifactChecksum", "releasedCells"]);
-  digest(input.championArtifactChecksum);
-  cells(input.releasedCells);
+}): readonly RosMarginalIntervalStoredCell[] {
+  object(input, ["qualifications", "releasedCells"]);
+  array(input.releasedCells, 0, 18);
+  if (input.releasedCells.length > 0) cells(input.releasedCells);
   array(input.qualifications, 1, 18);
   const byCell = new Map<string, RosMarginalIntervalQualification>();
   for (const receipt of input.qualifications) {
@@ -1124,11 +1123,28 @@ export function buildRosMarginalIntervalStorage(input: {
   const releasedCells = [...input.releasedCells].sort((a, b) =>
     cellKey(a) < cellKey(b) ? -1 : cellKey(a) > cellKey(b) ? 1 : 0,
   );
-  const selected = releasedCells.map((cell) => {
+  return releasedCells.map((cell) => {
     const receipt = byCell.get(cellKey(cell));
     check(receipt && receipt.state === "qualified", "released cell lacks interval qualification");
     return storedCell(receipt);
   });
+}
+
+/** Build the publication envelope after the admitted champion checksum is finalized. */
+export function buildRosMarginalIntervalStorage(input: {
+  readonly qualifications: readonly RosMarginalIntervalQualification[];
+  readonly championArtifactChecksum: string;
+  readonly releasedCells: readonly MarginalIntervalComparisonCell[];
+}): RosMarginalIntervalStorage {
+  object(input, ["qualifications", "championArtifactChecksum", "releasedCells"]);
+  digest(input.championArtifactChecksum);
+  cells(input.releasedCells);
+  const selected = buildRosMarginalIntervalStoredCells({
+    qualifications: input.qualifications,
+    releasedCells: input.releasedCells,
+  });
+  const first = input.qualifications[0]!;
+  const releasedCells = selected.map((cell) => cell.cell);
   const body = {
     schemaVersion: 2,
     version: ROS_MARGINAL_INTERVAL_STORAGE_VERSION,

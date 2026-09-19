@@ -136,3 +136,45 @@ export function rosMarginalIntervalQualificationFixtureInput(): RosMarginalQuali
 export function buildRosMarginalIntervalQualificationFixture() {
   return buildRosMarginalIntervalQualificationSet(rosMarginalIntervalQualificationFixtureInput());
 }
+
+/** Full release scope, still synthetic and reconstructed from all original physical rows. */
+export function rosMarginalIntervalQualificationFullFixtureInput(): RosMarginalQualificationSetInput {
+  const source = rosMarginalIntervalQualificationFixtureInput();
+  const positions = ["QB", "RB", "WR", "TE", "K", "DST"] as const;
+  const expand = (value: RosMarginalQualificationDataset): RosMarginalQualificationDataset => {
+    const heldOutSeasons = value.heldOutSeasons.map((year) => ({
+      ...year,
+      forecasts: year.forecasts.flatMap((row) =>
+        positions.map((position) => ({
+          ...row,
+          position,
+          playerId: row.playerId.replace(/^DST/u, position),
+          inputChecksum: sha256Hex(`${row.inputChecksum}:${position}`),
+        })),
+      ),
+    }));
+    return {
+      ...value,
+      heldOutSeasons,
+      rowsChecksum: validateMarginalRosTrainingCohort(heldOutSeasons, heldOutSeasons).provenance
+        .evaluationRowsChecksum,
+    };
+  };
+  return {
+    ...source,
+    scope: {
+      ...source.scope,
+      requiredCells: positions.flatMap((position) =>
+        source.scope.requiredCells.map((cell) => ({ ...cell, position })),
+      ),
+    },
+    candidate: expand(source.candidate),
+    previous: expand(source.previous),
+  };
+}
+
+export function buildRosMarginalIntervalQualificationFullFixture() {
+  return buildRosMarginalIntervalQualificationSet(
+    rosMarginalIntervalQualificationFullFixtureInput(),
+  );
+}

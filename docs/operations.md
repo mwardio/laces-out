@@ -796,6 +796,28 @@ with a supported scoring profile wait for a multi-hour model rebuild. A successf
 deployment, completed corpus build, or ready pointer alone does not establish that current league
 forecasts have been admitted and published.
 
+The v8 marginal-interval publication path requires migration 0053 before the new API or worker
+starts. It retains the frozen v7 mean-selection policy and adds all 18 position/horizon interval
+qualification receipts to the immutable champion artifact. Each released run stores its exact
+qualified subset in `calibration.rosIntervals` schema 2; each player summary stores the position,
+horizon, strategy, qualification, fitted artifact, and run-evidence checksums actually used.
+Publication applies the admitted P15/P50/P85 corrections while preserving the projected mean.
+An interval-qualified cell still has to pass independent source, mean, availability, and numerical
+checks. A partial result continues to preserve the prior good projection set.
+
+The database validates the complete marginal proof once when inserting an immutable model run
+and derives `projection_model_runs.marginal_interval_contract_version = 2`. Caller-supplied values
+cannot bypass that validation. Player inserts still check their own scope, numbers, availability,
+scenario count, convergence, and calibration linkage. Existing runs retain a null stamp; do not
+backfill it or relabel schema-1 evidence. A new run must pass validation to receive the stamp.
+The API requires that stamp and independently links every displayed marginal range to the saved
+player metadata, run, and admitted cell. Mutable player-catalog positions and projection-set
+labels cannot establish calibration provenance.
+
+Supporting this storage contract does not activate v8 admission or select it for live forecasts.
+Keep that activation separate from deploying the compatible schema and code, and verify a real
+admitted publication before considering the rollout complete.
+
 After a full CLI build has completed with `--outcome-cache=/absolute/path/to/outcomes`, an operator
 can register its existing corpus for automatic replay using the same directory and the corpus
 `outcomeCorpusIdentity` in the completed report. Run this with the worker's configured `DATABASE_URL` so adoption

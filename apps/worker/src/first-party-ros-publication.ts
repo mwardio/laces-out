@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 import type {
   FirstPartyRosAvailabilitySnapshot,
   FirstPartyRosChampionArtifactSourceChecksum,
+  FirstPartyRosPlayerIntervalCalibration,
 } from "@laces-out/db";
 import {
   FIRST_PARTY_ROS_INTERVAL_CALIBRATION_VERSION,
@@ -11,8 +12,17 @@ import {
   FIRST_PARTY_ROS_MINIMUM_SCENARIOS,
   FIRST_PARTY_ROS_MODEL_VERSION,
   FIRST_PARTY_ROS_POLICY_VERSION,
+  FIRST_PARTY_ROS_MARGINAL_POLICY_VERSION,
+  FIRST_PARTY_PROJECTION_MODEL_VERSION,
+  MARGINAL_INTERVAL_CALIBRATION_VERSION,
+  ROS_MARGINAL_INTERVAL_QUALIFICATION_VERSION,
   applyFirstPartyRosIntervalCalibration,
   evaluateFirstPartyRosReleaseGate,
+  evaluateFirstPartyRosMarginalReleaseGate,
+  prepareFirstPartyRosMarginalRelease,
+  buildRosMarginalIntervalStorage,
+  buildRosMarginalIntervalStoredCells,
+  rosMarginalIntervalQualificationIsStructurallyValid,
   firstPartyRosChoiceMeanEvidenceIsValid,
   projectionScoringProfileKeyForPosition,
   projectionScoringRulesFromProfileKey,
@@ -22,13 +32,20 @@ import {
   type FirstPartyRosLiveReleaseEvidence,
   type FirstPartyRosPosition,
   type FirstPartyRosReleaseGateDecision,
+  type FirstPartyRosMarginalReleaseDecision,
+  type RosMarginalIntervalQualification,
+  type RosMarginalIntervalStoredCell,
   type FirstPartyRosReleaseGateOptions,
   type FirstPartyRosRemainingWeeksBucket,
   type FirstPartyRosStrategy,
   type ProjectionScoringProfile,
 } from "@laces-out/projections";
 
-import { HISTORICAL_ROS_SUPPORTED_POSITIONS } from "./first-party-ros-backtest.js";
+import {
+  HISTORICAL_ROS_SUPPORTED_POSITIONS,
+  HISTORICAL_ROS_CANDIDATE_PAIR_VERSION,
+  HISTORICAL_ROS_INTERVAL_METHOD_VERSION,
+} from "./first-party-ros-backtest.js";
 
 /**
  * The immutable, checksummed portion of a ROS champion artifact. The stored `artifactChecksum` is a
@@ -116,6 +133,98 @@ const SHA256_PATTERN = /^[a-f0-9]{64}$/u;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+/** The complete admitted receipt set and its derived compact interval-qualified subset. */
+export interface FirstPartyRosMarginalArtifactIntervals {
+  readonly schemaVersion: 1;
+  readonly qualificationMethod: typeof ROS_MARGINAL_INTERVAL_QUALIFICATION_VERSION;
+  readonly qualifications: readonly RosMarginalIntervalQualification[];
+  readonly cells: readonly RosMarginalIntervalStoredCell[];
+}
+
+function sameCanonical(left: unknown, right: unknown): boolean {
+  return JSON.stringify(normalizeForChecksum(left)) === JSON.stringify(normalizeForChecksum(right));
+}
+
+/** Called only after the enclosing artifact has passed its closed v8 validation branch. */
+function marginalIntervals(
+  artifact: LoadedFirstPartyRosChampionArtifact,
+): FirstPartyRosMarginalArtifactIntervals {
+  return artifact.releaseGate.marginalIntervals as FirstPartyRosMarginalArtifactIntervals;
+}
+
+function marginalArtifactIsConsistent(artifact: LoadedFirstPartyRosChampionArtifact): boolean {
+  const value = artifact.releaseGate.marginalIntervals;
+  if (
+    !isRecord(value) ||
+    !sameCanonical(Object.keys(value).sort(), [
+      "cells",
+      "qualificationMethod",
+      "qualifications",
+      "schemaVersion",
+    ]) ||
+    value.schemaVersion !== 1 ||
+    value.qualificationMethod !== ROS_MARGINAL_INTERVAL_QUALIFICATION_VERSION ||
+    !Array.isArray(value.qualifications) ||
+    value.qualifications.length !== 18 ||
+    !Array.isArray(value.cells) ||
+    value.cells.length > 18 ||
+    artifact.policy.choices.length !== 18 ||
+    artifact.evidenceThroughSeason >= artifact.season
+  )
+    return false;
+  const blockers = artifact.releaseGate.blockers;
+  if (
+    blockers !== undefined &&
+    (!Array.isArray(blockers) ||
+      blockers.length > 512 ||
+      blockers.some(
+        (blocker) => typeof blocker !== "string" || !blocker.trim() || blocker.length > 1024,
+      ))
+  )
+    return false;
+  const qualifications: RosMarginalIntervalQualification[] = [];
+  const required = HISTORICAL_ROS_SUPPORTED_POSITIONS.flatMap((position) =>
+    FIRST_PARTY_ROS_BUCKETS.map((bucket) => `${position}:${bucket}`),
+  ).sort();
+  for (const raw of value.qualifications) {
+    if (!rosMarginalIntervalQualificationIsStructurallyValid(raw)) return false;
+    const choice = artifact.policy.choices.find(
+      (candidate) =>
+        candidate.position === raw.cell.position && candidate.bucket === raw.cell.bucket,
+    );
+    if (
+      !sameCanonical(
+        raw.sourceScope.requiredCells.map((cell) => `${cell.position}:${cell.bucket}`).sort(),
+        required,
+      ) ||
+      raw.forecastSeason !== artifact.season ||
+      raw.comparisonSeason !== artifact.evidenceThroughSeason ||
+      raw.sources.candidate.source.modelVersion !== artifact.modelVersion ||
+      raw.sources.candidate.source.policyVersion !== FIRST_PARTY_ROS_POLICY_VERSION ||
+      raw.sources.candidate.source.scoringProfileKey !== artifact.scoringProfileKey ||
+      !sameCanonical(raw.liveArtifact.context.evidenceIdentity, artifact.policy.evidenceIdentity) ||
+      !sameCanonical(raw.meanChoice, choice) ||
+      Object.entries(raw.meanSelectorOptions).some(
+        ([key, expected]) => artifact.policy[key as keyof FirstPartyRosChampionPolicy] !== expected,
+      ) ||
+      artifact.policy.globalBatches !== raw.meanChoice.globalBatches ||
+      artifact.policy.globalSeasons !== raw.meanChoice.globalSeasons ||
+      artifact.policy.globalSamples !== raw.meanChoice.globalSamples
+    )
+      return false;
+    qualifications.push(raw);
+  }
+  // The builder checks duplicates, common source/scope/season identities, complete membership,
+  // passing marginal screens and BOTH matched WIS comparators for the selected compact cells.
+  const expected = buildRosMarginalIntervalStoredCells({
+    qualifications,
+    releasedCells: qualifications
+      .filter((receipt) => receipt.state === "qualified")
+      .map((receipt) => receipt.cell),
+  });
+  return sameCanonical(value.cells, expected);
 }
 
 /**
@@ -223,19 +332,38 @@ export function firstPartyRosChampionPolicyIsPublicationReady(
 }
 
 /**
- * Fail-closed artifact validity. An artifact authorizes publication only when its checksum
- * recomputes exactly, its model/policy/calibration identities match the running code, its champion
- * policy carries evidence identity, and the scoring-profile identity is internally consistent.
+ * Checks immutable artifact consistency, never admission authority. The caller must load this
+ * payload from the authenticated admission store; recomputing a self-consistent hash cannot admit
+ * a model. V8 retains the exact v7 mean policy and adds its complete independently qualified set.
  */
 export function firstPartyRosChampionArtifactIsValid(
   artifact: LoadedFirstPartyRosChampionArtifact,
 ): boolean {
+  try {
+    return championArtifactIsConsistent(artifact);
+  } catch {
+    return false;
+  }
+}
+
+function championArtifactIsConsistent(artifact: LoadedFirstPartyRosChampionArtifact): boolean {
+  const marginal = artifact.policyVersion === FIRST_PARTY_ROS_MARGINAL_POLICY_VERSION;
+  if (
+    marginal &&
+    (!isRecord(artifact.releaseGate) ||
+      !firstPartyRosChampionPolicyIsPublicationReady(artifact.policy) ||
+      !marginalArtifactIsConsistent(artifact))
+  )
+    return false;
   if (!SHA256_PATTERN.test(artifact.artifactChecksum)) return false;
   if (artifact.artifactChecksum !== firstPartyRosChampionArtifactChecksum(artifact)) return false;
   if (
     artifact.modelVersion !== FIRST_PARTY_ROS_MODEL_VERSION ||
-    artifact.policyVersion !== FIRST_PARTY_ROS_POLICY_VERSION ||
-    artifact.calibrationVersion !== FIRST_PARTY_ROS_INTERVAL_CALIBRATION_VERSION
+    (!marginal && artifact.policyVersion !== FIRST_PARTY_ROS_POLICY_VERSION) ||
+    artifact.calibrationVersion !==
+      (marginal
+        ? MARGINAL_INTERVAL_CALIBRATION_VERSION
+        : FIRST_PARTY_ROS_INTERVAL_CALIBRATION_VERSION)
   ) {
     return false;
   }
@@ -416,6 +544,15 @@ export type FirstPartyRosPublicationReason =
 const ARTIFACT_CELL_BLOCKER_PATTERN =
   /^(?:cell|champion|calibration)_(QB|RB|WR|TE|K|DST)_(one-to-four|five-to-eight|nine-plus)_/u;
 
+const REPLACED_LEGACY_INTERVAL_BLOCKERS = new Set([
+  "artifact_unavailable",
+  "walk_forward_unavailable",
+  "walk_forward_seasons_below_minimum",
+  "walk_forward_blocks_below_minimum",
+  "walk_forward_samples_below_minimum",
+  "coverage_shortfall_above_maximum",
+]);
+
 /**
  * Position:bucket cells the admitted evidence itself marked blocked. Most per-cell blocker
  * families are re-derived from the artifact's policy evidence by the live release gate, but not
@@ -425,12 +562,38 @@ const ARTIFACT_CELL_BLOCKER_PATTERN =
  */
 function admittedCellBlockers(artifact: LoadedFirstPartyRosChampionArtifact): ReadonlySet<string> {
   const cells = new Set<string>();
+  const marginal = artifact.policyVersion === FIRST_PARTY_ROS_MARGINAL_POLICY_VERSION;
+  const qualified = new Set(
+    marginal
+      ? marginalIntervals(artifact)
+          .qualifications.filter((receipt) => receipt.state === "qualified")
+          .map((receipt) => `${receipt.cell.position}:${receipt.cell.bucket}`)
+      : [],
+  );
   const blockers = (artifact.releaseGate as { readonly blockers?: unknown }).blockers;
   if (!Array.isArray(blockers)) return cells;
   for (const blocker of blockers) {
     if (typeof blocker !== "string") continue;
     const match = ARTIFACT_CELL_BLOCKER_PATTERN.exec(blocker);
-    if (match) cells.add(`${match[1]}:${match[2]}`);
+    if (match) {
+      const cell = `${match[1]}:${match[2]}`;
+      // Exact complete suffix only: mixed, unknown, mean/support/availability/convergence and
+      // count-family reasons all remain blocking. A failed marginal cell gets no exemption.
+      if (
+        marginal &&
+        qualified.has(cell) &&
+        blocker.startsWith("calibration_") &&
+        REPLACED_LEGACY_INTERVAL_BLOCKERS.has(blocker.slice(match[0].length))
+      )
+        continue;
+      cells.add(cell);
+    } else if (marginal) {
+      // Admission normally rejects global blockers. Never weaken one into a per-cell exception
+      // if a corrupt or future artifact nevertheless carries it to this boundary.
+      for (const position of HISTORICAL_ROS_SUPPORTED_POSITIONS) {
+        for (const bucket of FIRST_PARTY_ROS_BUCKETS) cells.add(`${position}:${bucket}`);
+      }
+    }
   }
   return cells;
 }
@@ -440,7 +603,9 @@ export interface FirstPartyRosBucketDecision {
   readonly bucket: FirstPartyRosRemainingWeeksBucket;
   readonly state: "release" | "withhold";
   readonly strategy: FirstPartyRosStrategy | null;
-  readonly gate: FirstPartyRosReleaseGateDecision;
+  readonly gate: FirstPartyRosReleaseGateDecision | FirstPartyRosMarginalReleaseDecision;
+  /** Retained only for v8 so calibration can recompute the exact live gate before applying a fit. */
+  readonly liveEvidence?: FirstPartyRosLiveReleaseEvidence;
   /**
    * Set when position matching, not the live gate, is what withheld this cell. Every forced
    * withhold states its reason, including a cell for a position this rail does not model.
@@ -449,6 +614,8 @@ export interface FirstPartyRosBucketDecision {
 }
 
 export interface FirstPartyRosPublicationDecision {
+  /** V8 binds downstream calibration and run persistence to this exact admitted artifact. */
+  readonly championArtifactChecksum?: string;
   readonly canPublish: boolean;
   readonly artifactValid: boolean;
   readonly scoringProfileMatches: boolean;
@@ -537,6 +704,9 @@ export function evaluateFirstPartyRosPublication(input: {
   if (!input.futureWindowComplete) reasons.add("ros_future_window_incomplete");
 
   const eligible = artifactValid && scoringProfileMatches && input.futureWindowComplete;
+  const marginal =
+    artifactValid && input.artifact.policyVersion === FIRST_PARTY_ROS_MARGINAL_POLICY_VERSION;
+  const qualifications = marginal ? marginalIntervals(input.artifact).qualifications : [];
   const blockedCells = eligible ? admittedCellBlockers(input.artifact) : new Set<string>();
   const matchedPositions = positionMatch === null ? null : new Set<string>(positionMatch.matched);
   const withheldPositionReasons = new Map<string, FirstPartyRosPositionWithholdReason>(
@@ -545,11 +715,17 @@ export function evaluateFirstPartyRosPublication(input: {
   let blockedCellWithheld = false;
   const buckets: FirstPartyRosBucketDecision[] = eligible
     ? input.evidence.map((live) => {
-        const gate = evaluateFirstPartyRosReleaseGate(
-          input.artifact!.policy,
-          live,
-          input.gateOptions,
-        );
+        const gate = marginal
+          ? evaluateFirstPartyRosMarginalReleaseGate({
+              meanPolicy: input.artifact!.policy,
+              live,
+              admittedQualification: qualifications.find(
+                (receipt) =>
+                  receipt.cell.position === live.position && receipt.cell.bucket === live.bucket,
+              ),
+              expectedForecastSeason: input.artifact!.season,
+            })
+          : evaluateFirstPartyRosReleaseGate(input.artifact!.policy, live, input.gateOptions);
         // The admitted report's own cell blockers and the per-position match both override a
         // releasing gate; the gate decision is preserved unmodified for observability.
         const blocked = blockedCells.has(`${live.position}:${live.bucket}`);
@@ -568,6 +744,7 @@ export function evaluateFirstPartyRosPublication(input: {
           state: blocked || positionReason !== undefined ? "withhold" : gate.state,
           strategy: gate.strategy,
           gate,
+          ...(marginal ? { liveEvidence: structuredClone(live) } : {}),
           ...(positionReason === undefined ? {} : { positionReason }),
         };
       })
@@ -582,6 +759,7 @@ export function evaluateFirstPartyRosPublication(input: {
   const preservePriorGoodSet =
     !canPublish || releasingBuckets.length < buckets.length || withheldPositions.length > 0;
   return {
+    ...(marginal ? { championArtifactChecksum: input.artifact.artifactChecksum } : {}),
     canPublish,
     artifactValid,
     scoringProfileMatches,
@@ -605,6 +783,154 @@ export interface FirstPartyRosReleasedPlayer {
   readonly bucket: FirstPartyRosRemainingWeeksBucket;
   readonly strategy: FirstPartyRosStrategy;
   readonly projection: FirstPartyRosLiveProjection;
+  readonly intervalCalibration?: FirstPartyRosPlayerIntervalCalibration;
+}
+
+function prepareMarginalPublication(input: {
+  readonly artifact: LoadedFirstPartyRosChampionArtifact;
+  readonly decision: FirstPartyRosPublicationDecision;
+}) {
+  const { artifact, decision } = input;
+  if (
+    artifact.policyVersion !== FIRST_PARTY_ROS_MARGINAL_POLICY_VERSION ||
+    !firstPartyRosChampionArtifactIsValid(artifact) ||
+    decision.championArtifactChecksum !== artifact.artifactChecksum ||
+    !decision.artifactValid ||
+    !decision.canPublish ||
+    !decision.scoringProfileMatches ||
+    !decision.futureWindowComplete ||
+    decision.releasingBuckets.length === 0 ||
+    decision.releasingBuckets.length !==
+      decision.buckets.filter((cell) => cell.state === "release").length
+  )
+    throw new Error(
+      "Marginal ROS publication does not match an admitted artifact and release decision",
+    );
+  const intervals = marginalIntervals(artifact);
+  const blocked = admittedCellBlockers(artifact);
+  const prepared = new Map<
+    string,
+    {
+      readonly cell: FirstPartyRosBucketDecision;
+      readonly qualification: RosMarginalIntervalQualification;
+      readonly calibrator: ReturnType<typeof prepareFirstPartyRosMarginalRelease>;
+    }
+  >();
+  for (const cell of decision.releasingBuckets) {
+    const key = `${cell.position}:${cell.bucket}`;
+    const qualification = intervals.qualifications.find(
+      (receipt) => receipt.cell.position === cell.position && receipt.cell.bucket === cell.bucket,
+    );
+    if (
+      prepared.has(key) ||
+      blocked.has(key) ||
+      cell.state !== "release" ||
+      cell.positionReason !== undefined ||
+      cell.liveEvidence === undefined ||
+      cell.liveEvidence.position !== cell.position ||
+      cell.liveEvidence.bucket !== cell.bucket ||
+      qualification === undefined ||
+      !decision.buckets.some((candidate) => sameCanonical(candidate, cell))
+    )
+      throw new Error("Marginal ROS releasing cell is missing, duplicated, blocked or unbound");
+    const calibrator = prepareFirstPartyRosMarginalRelease({
+      meanPolicy: artifact.policy,
+      live: cell.liveEvidence,
+      admittedQualification: qualification,
+      expectedForecastSeason: artifact.season,
+    });
+    if (
+      cell.strategy !== calibrator.decision.strategy ||
+      !sameCanonical(cell.gate, calibrator.decision)
+    ) {
+      throw new Error("Marginal ROS publication gate no longer matches its live evidence");
+    }
+    prepared.set(key, { cell, qualification, calibrator });
+  }
+  const envelope = buildRosMarginalIntervalStorage({
+    qualifications: intervals.qualifications,
+    championArtifactChecksum: artifact.artifactChecksum,
+    releasedCells: decision.releasingBuckets.map(({ position, bucket }) => ({ position, bucket })),
+  });
+  return { prepared, envelope };
+}
+
+function calibrateMarginalReleasedPlayers(input: {
+  readonly artifact: LoadedFirstPartyRosChampionArtifact;
+  readonly decision: FirstPartyRosPublicationDecision;
+  readonly players: readonly FirstPartyRosReleasedPlayer[];
+}): readonly FirstPartyRosReleasedPlayer[] {
+  const { prepared, envelope } = prepareMarginalPublication(input);
+  const players = new Set<string>();
+  return input.players.map((player) => {
+    const projection = player.projection;
+    const provenance = projection.provenance;
+    const key = `${projection.position}:${player.bucket}`;
+    const entry = prepared.get(key);
+    if (
+      entry === undefined ||
+      player.intervalCalibration !== undefined ||
+      players.has(player.playerId) ||
+      player.playerId !== projection.playerId ||
+      player.strategy !== entry.cell.strategy ||
+      provenance.strategy !== player.strategy ||
+      provenance.modelVersion !== input.artifact.modelVersion ||
+      provenance.weeklyModelVersion !== HISTORICAL_ROS_CANDIDATE_PAIR_VERSION ||
+      provenance.intervalCalibration !== "simulation-only" ||
+      projection.weekly.length !== provenance.windowEndWeek - provenance.windowStartWeek + 1 ||
+      new Set(projection.weekly.map((week) => week.week)).size !== projection.weekly.length ||
+      projection.weekly.some(
+        (week) =>
+          !Number.isSafeInteger(week.week) ||
+          week.week < provenance.windowStartWeek ||
+          week.week > provenance.windowEndWeek ||
+          (week.scheduled && week.bye),
+      ) ||
+      projection.weekly.filter((week) => week.scheduled).length !== projection.scheduledGames
+    )
+      throw new Error("Marginal ROS player does not match its raw selected projection");
+    players.add(player.playerId);
+    const corrected = entry.calibrator.apply({
+      playerId: projection.playerId,
+      position: projection.position,
+      strategy: player.strategy,
+      forecastSeason: provenance.season,
+      asOfWeek: provenance.asOfWeek,
+      windowStartWeek: provenance.windowStartWeek,
+      windowEndWeek: provenance.windowEndWeek,
+      scheduledGames: projection.scheduledGames,
+      inputChecksum: provenance.inputChecksum,
+      evidenceIdentity: {
+        contextualModelVersion: `${provenance.modelVersion}:contextual:${FIRST_PARTY_PROJECTION_MODEL_VERSION}`,
+        recencyModelVersion: `${provenance.modelVersion}:availability-aware-recency:${FIRST_PARTY_PROJECTION_MODEL_VERSION}`,
+        scoringProfileKey: provenance.scoringProfileKey,
+        intervalMethodVersion: HISTORICAL_ROS_INTERVAL_METHOD_VERSION,
+      },
+      meanPoints: projection.meanPoints,
+      p15Points: projection.p15Points,
+      p50Points: projection.p50Points,
+      p85Points: projection.p85Points,
+    });
+    return {
+      ...player,
+      projection: {
+        ...projection,
+        p15Points: corrected.p15Points,
+        p50Points: corrected.p50Points,
+        p85Points: corrected.p85Points,
+      },
+      intervalCalibration: {
+        schemaVersion: 1,
+        position: projection.position,
+        bucket: player.bucket,
+        strategy: player.strategy,
+        qualificationChecksum: entry.qualification.qualificationChecksum,
+        calibrationArtifactChecksum: entry.qualification.liveArtifact.artifactChecksum,
+        // Persist the complete run scope, not just the single-cell live gate's checksum.
+        releaseEvidenceChecksum: envelope.evidenceChecksum,
+      },
+    };
+  });
 }
 
 /**
@@ -618,6 +944,9 @@ export function calibrateFirstPartyRosReleasedPlayers(input: {
   readonly decision: FirstPartyRosPublicationDecision;
   readonly players: readonly FirstPartyRosReleasedPlayer[];
 }): readonly FirstPartyRosReleasedPlayer[] {
+  if (input.artifact.policyVersion === FIRST_PARTY_ROS_MARGINAL_POLICY_VERSION) {
+    return calibrateMarginalReleasedPlayers(input);
+  }
   return input.players.map((player) => {
     const cell = input.decision.releasingBuckets.find(
       (candidate) =>
@@ -685,6 +1014,7 @@ export interface FirstPartyRosPlayerPersistenceRow {
     readonly scenarioCount: number;
     readonly methodVersion: string;
     readonly seedHash: string;
+    readonly intervalCalibration?: FirstPartyRosPlayerIntervalCalibration;
   };
 }
 
@@ -698,6 +1028,29 @@ export function buildFirstPartyRosPlayerPersistenceRow(
   player: FirstPartyRosReleasedPlayer,
 ): FirstPartyRosPlayerPersistenceRow {
   const projection = player.projection;
+  const intervalCalibration = player.intervalCalibration;
+  if (
+    intervalCalibration !== undefined &&
+    (!sameCanonical(Object.keys(intervalCalibration).sort(), [
+      "bucket",
+      "calibrationArtifactChecksum",
+      "position",
+      "qualificationChecksum",
+      "releaseEvidenceChecksum",
+      "schemaVersion",
+      "strategy",
+    ]) ||
+      intervalCalibration.schemaVersion !== 1 ||
+      intervalCalibration.position !== projection.position ||
+      intervalCalibration.bucket !== player.bucket ||
+      intervalCalibration.strategy !== player.strategy ||
+      ![
+        intervalCalibration.qualificationChecksum,
+        intervalCalibration.calibrationArtifactChecksum,
+        intervalCalibration.releaseEvidenceChecksum,
+      ].every((checksum) => SHA256_PATTERN.test(checksum)))
+  )
+    throw new Error("Marginal ROS player interval metadata does not match its released row");
   if (projection.state !== "projected" || projection.expectedGames <= 0) {
     throw new RangeError("Only projected players with positive expected games can be persisted");
   }
@@ -751,6 +1104,7 @@ export function buildFirstPartyRosPlayerPersistenceRow(
       scenarioCount,
       methodVersion: FIRST_PARTY_ROS_MODEL_VERSION,
       seedHash: projection.provenance.seedHash,
+      ...(intervalCalibration === undefined ? {} : { intervalCalibration }),
     },
   };
 }
@@ -820,6 +1174,52 @@ export function buildFirstPartyRosRunPayload(input: {
   readonly calibration: Record<string, unknown>;
   readonly metrics: Record<string, unknown>;
 } {
+  if (input.artifact.policyVersion === FIRST_PARTY_ROS_MARGINAL_POLICY_VERSION) {
+    const { prepared, envelope } = prepareMarginalPublication(input);
+    return {
+      configuration: {
+        ...input.extraConfiguration,
+        mode: "release",
+        simulationModelVersion: FIRST_PARTY_ROS_MODEL_VERSION,
+        orchestrationVersion: input.orchestrationVersion,
+        policyVersion: FIRST_PARTY_ROS_MARGINAL_POLICY_VERSION,
+        calibrationVersion: MARGINAL_INTERVAL_CALIBRATION_VERSION,
+        championArtifactChecksum: input.artifact.artifactChecksum,
+        scoringProfileKey: input.artifact.scoringProfileKey,
+        releasingBuckets: envelope.releasedCells.map(({ position, bucket }) => {
+          const entry = prepared.get(`${position}:${bucket}`)!;
+          return {
+            position,
+            bucket,
+            strategy: entry.cell.strategy,
+            intervalCalibration: {
+              method: MARGINAL_INTERVAL_CALIBRATION_VERSION,
+              qualificationChecksum: entry.qualification.qualificationChecksum,
+              artifactChecksum: entry.qualification.liveArtifact.artifactChecksum,
+              releaseGateEvidenceChecksum: entry.calibrator.decision.evidenceChecksum,
+              artifact: entry.qualification.liveArtifact,
+            },
+          };
+        }),
+      },
+      calibration: { state: "calibrated", rosIntervals: envelope },
+      metrics: {
+        rosConvergence: {
+          schemaVersion: 1,
+          state: input.convergence.state,
+          method: "live-bounded-ros-convergence-v1",
+          evidenceChecksum: input.convergence.diagnosticChecksum,
+          lowerScenarioCount: input.convergence.lowerScenarioCount,
+          referenceScenarioCount: input.convergence.referenceScenarioCount,
+          maxToleranceRatio: input.convergence.maxToleranceRatio,
+        },
+        releasingBuckets: input.decision.releasingBuckets.length,
+        withheldReasons: input.decision.reasons,
+        cellDecisions: buildFirstPartyRosCellDecisions(input.decision),
+        preservePriorGoodSet: input.decision.preservePriorGoodSet,
+      },
+    };
+  }
   const policy = input.artifact.policy;
   const releasing = input.decision.releasingBuckets;
   const releasingPolicies = releasing.map((decision) => {
