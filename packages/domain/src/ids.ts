@@ -25,3 +25,16 @@ export const teamId = (value: string): TeamId => makeId(value, "TeamId");
 export const rosterSlotId = (value: string): RosterSlotId => makeId(value, "RosterSlotId");
 export const draftEventId = (value: string): DraftEventId => makeId(value, "DraftEventId");
 export const connectionId = (value: string): ConnectionId => makeId(value, "ConnectionId");
+
+/**
+ * Provider crosswalks use player IDs, while Yahoo rosters retain season-scoped player keys.
+ * Normalize only for identity joins; the original provider key still owns roster/API operations.
+ * Keep IDs as strings so long identifiers and leading zeroes cannot collide through rounding.
+ */
+export function providerPlayerCrosswalkId(source: string, externalId: string): string | undefined {
+  const value = externalId.trim();
+  if (source === "espn" || source === "sleeper-espn") return value || undefined;
+  if (source !== "yahoo" && source !== "sleeper-yahoo") return undefined;
+  if (/^[0-9]{1,32}$/u.test(value)) return value;
+  return /^(?:[0-9]{1,10}|nfl)\.p\.([0-9]{1,32})$/u.exec(value)?.[1];
+}
