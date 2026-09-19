@@ -77,6 +77,19 @@ Apply `q_tau + g*S*(a_tau+b_tau*z)` and sort the three resulting values. Record 
 permutation, crossing flag and maximum movement; grade the sorted endpoints that are returned.
 Preserve the raw mean exactly. Sorting establishes order, not coverage or better predictive loss.
 
+`chronological-conditional-ros-development-v1` applies this candidate to the original audit before
+adding each complete training season. It returns both strategies for every audit row, the unchanged
+v7 mean-policy selection, per-year fits and final live fits. Its eight mean-selector settings are
+literal frozen values, with no caller override. Additional training rows cannot enter the audit or
+mean selector. Forecast identities retain the original physical input checksum.
+
+The adapter preserves the existing explicit structural-zero training exclusion: prior forecasts
+with no scheduled games are named in each cell's exclusion evidence instead of being passed to
+the low-level fit, which rejects zero denominators. Zero-game audit rows remain present and
+unavailable. Original and broader-training coverage/convergence failures are retained separately;
+a successful numerical correction cannot clear them or substitute a passing broader-cohort
+diagnostic for a failed original-audit diagnostic.
+
 ## Historical evaluation prerequisite
 
 Before any historical fitting, freeze implementation and protocol hashes plus exact candidate,
