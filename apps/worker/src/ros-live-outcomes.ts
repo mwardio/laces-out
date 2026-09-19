@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import {
   FIRST_PARTY_ROS_DEFAULT_SCENARIOS,
+  FIRST_PARTY_ROS_CONVERGENCE_REFERENCE_SCENARIOS,
   FIRST_PARTY_ROS_MAXIMUM_SCENARIOS,
   FIRST_PARTY_ROS_MINIMUM_SCENARIOS,
   FIRST_PARTY_ROS_MODEL_VERSION,
@@ -10,6 +11,7 @@ import {
   projectionScoringProfileKey,
   rosProfileDefinitionFromKey,
   scoreFirstPartyRosOutcomes,
+  scoreFirstPartyRosOutcomesWithSamples,
   SCORING_LONG_TOUCHDOWN_COMPONENTS,
   type FirstPartyRosOutcomeEnsemble,
   type FirstPartyRosProjectionInput,
@@ -23,6 +25,8 @@ import {
   type RosOutcomeCacheKey,
 } from "./ros-outcome-cache.js";
 import type { FirstPartyRosLiveProjection } from "./ros-live-projection.js";
+import type { RosNumericalReplicationInput } from "../../../packages/projections/src/ros-numerical-replication.js";
+import type { PinnedRosNumericalEvidenceInput } from "./ros-pinned-numerical-evidence.js";
 
 /** LIVE only. Historical outcome identities and numerical simulation versions are unchanged. */
 export const ROS_LIVE_OUTCOME_VERSION = "live-aggregate-joint-outcomes-v2";
@@ -368,6 +372,69 @@ function rescore(
     p50Points: scored.p50Points,
     p85Points: scored.p85Points,
     provenance: { ...ready.neutral.provenance, scoringProfileKey: scored.scoringProfileKey },
+  };
+}
+
+/**
+ * Reads the original live reference paths for method-specific numerical qualification. A cache
+ * miss stays unavailable: this reader never writes, simulates, substitutes seeds, or changes the
+ * live publication gate. The caller independently pins the manifest and complete family; neither
+ * a self-consistent cache nor these measurements prove predictive accuracy or family membership.
+ */
+export async function readPinnedRosLiveNumericalReplicationInput(
+  input: PinnedRosNumericalEvidenceInput,
+): Promise<{ readonly cacheIdentity: string; readonly input: RosNumericalReplicationInput }> {
+  const { cache, signal } = input;
+  signal?.throwIfAborted();
+  const pinned = pin(input.forecast);
+  const expectedManifestChecksum = input.expectedManifestChecksum;
+  const family = { ...input.family };
+  if (
+    pinned.football.scenarioCount !== FIRST_PARTY_ROS_CONVERGENCE_REFERENCE_SCENARIOS ||
+    typeof pinned.football.seed !== "string" ||
+    !pinned.football.seed.trim() ||
+    typeof pinned.football.asOfAt !== "string" ||
+    !Number.isFinite(Date.parse(pinned.football.asOfAt)) ||
+    new Date(pinned.football.asOfAt).toISOString() !== pinned.football.asOfAt ||
+    typeof expectedManifestChecksum !== "string" ||
+    !/^[a-f0-9]{64}$/u.test(expectedManifestChecksum) ||
+    typeof family.protocolChecksum !== "string" ||
+    !/^[a-f0-9]{64}$/u.test(family.protocolChecksum) ||
+    !Number.isSafeInteger(family.size) ||
+    family.size < 1 ||
+    !Number.isFinite(family.errorBudget) ||
+    family.errorBudget <= 0 ||
+    family.errorBudget >= 1
+  )
+    throw new TypeError("Invalid pinned live numerical evidence input");
+  const read = await cache.read(pinned.key, {
+    expectedScenarioCount: FIRST_PARTY_ROS_CONVERGENCE_REFERENCE_SCENARIOS,
+    ...(signal ? { signal } : {}),
+  });
+  signal?.throwIfAborted();
+  if (read.state !== "hit") throw new Error(`Pinned live numerical outcomes are ${read.state}`);
+  if (read.manifestChecksum !== expectedManifestChecksum)
+    throw new Error("Pinned live numerical manifest mismatch");
+  const ready = restore(read.ensemble, pinned);
+  const scored = scoreFirstPartyRosOutcomesWithSamples(ready.outcomes, pinned.profile);
+  return {
+    cacheIdentity: pinned.key.identity,
+    input: {
+      scores: scored.samples,
+      games: ready.outcomes.games.slice(),
+      position: pinned.football.position,
+      scheduledGames: ready.outcomes.metadata.scheduledGames,
+      provenance: {
+        modelVersion: pinned.key.modelVersion,
+        scorerVersion: "ros-joint-component-exact-scoring-v1",
+        scoringProfileKey: scored.summary.scoringProfileKey,
+        seedHash: firstPartyRosSeedHash(pinned.football),
+        inputChecksum: pinned.football.inputChecksum,
+        vectorChecksum: expectedManifestChecksum,
+      },
+      familySize: family.size,
+      familyErrorBudget: family.errorBudget,
+    },
   };
 }
 
