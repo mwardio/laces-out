@@ -23,12 +23,14 @@ export const MAX_YAHOO_XML_BYTES = 5 * 1024 * 1024;
 
 export class YahooXmlError extends Error {
   public readonly code:
-    "TOO_LARGE" | "UNSAFE_XML" | "INVALID_XML" | "INVALID_CONTRACT" | "LEAGUE_NOT_READY";
+    | "TOO_LARGE"
+    | "UNSAFE_XML"
+    | "INVALID_XML"
+    | "INVALID_CONTRACT"
+    | "LEAGUE_NOT_READY"
+    | "INCOMPLETE_ROSTER";
 
-  public constructor(
-    code: "TOO_LARGE" | "UNSAFE_XML" | "INVALID_XML" | "INVALID_CONTRACT" | "LEAGUE_NOT_READY",
-    message: string,
-  ) {
+  public constructor(code: YahooXmlError["code"], message: string) {
     super(message);
     this.name = "YahooXmlError";
     this.code = code;
@@ -872,9 +874,11 @@ function normalizeScoring(settings: XmlRecord): NormalizedScoringRule[] {
 
 function normalizeSettings(league: XmlRecord): NormalizedLeagueSettings {
   const settings = child(league, "settings") ?? league;
+  const draftStatus = boundedOptionalText(league.draft_status, "draft_status", 32);
   return {
     teamCount: integer(league.num_teams) ?? integer(settings.num_teams) ?? 0,
     draftType: normalizeDraftType(settings.draft_type ?? league.draft_type),
+    ...(draftStatus === null ? {} : { draftStatus: yahooDraftStatus(draftStatus) }),
     auctionBudget: numeric(settings.draft_budget),
     waiverType: normalizeWaiverType(settings),
     faabBudget: numeric(settings.waiver_budget),
@@ -924,6 +928,68 @@ function normalizePlayer(player: XmlRecord): NormalizedRosterPlayer | null {
   };
 }
 
+function incompleteRoster(reason: string): never {
+  // Reasons are fixed parser diagnostics, never raw response values, player names or credentials.
+  throw new YahooXmlError("INCOMPLETE_ROSTER", `Yahoo roster data is incomplete: ${reason}`);
+}
+
+/** A missing or malformed collection is not an explicit empty roster. */
+function normalizeRosterPlayers(
+  team: XmlRecord,
+  teamKey: string,
+  expectedWeek: number | null,
+  draftStatus: NormalizedLeagueSettings["draftStatus"],
+): NormalizedRosterPlayer[] {
+  const roster = child(team, "roster");
+  if (roster === null) incompleteRoster("missing roster collection");
+  if (Object.hasOwn(roster, "player")) incompleteRoster("player outside the players collection");
+  const declaredWeeks = ["@_week", "week"]
+    .filter((key) => Object.hasOwn(roster, key))
+    .map((key) => {
+      const week = integer(roster[key]);
+      if (week === null || week < 1 || week > 30) incompleteRoster("invalid coverage week");
+      return week;
+    });
+  if (
+    new Set(declaredWeeks).size > 1 ||
+    (expectedWeek !== null && declaredWeeks.some((week) => week !== expectedWeek))
+  )
+    incompleteRoster("coverage week does not match the league response");
+  const players = child(roster, "players");
+  // Yahoo explicitly emits <players/> (not a counted collection) before some drafts. Require
+  // that exact present empty element and the provider's predraft status; absence is not evidence.
+  if (
+    players === null &&
+    draftStatus === "predraft" &&
+    Object.hasOwn(roster, "players") &&
+    roster.players === ""
+  )
+    return [];
+  if (players === null) incompleteRoster("missing players collection");
+  const declaredCount = integer(players["@_count"]);
+  if (declaredCount === null || declaredCount < 0)
+    incompleteRoster("missing or invalid player count");
+  if (Object.keys(players).some((key) => key !== "player" && !key.startsWith("@_")))
+    incompleteRoster("unexpected players collection structure");
+  const candidates = asArray(players.player);
+  if (candidates.length !== declaredCount)
+    incompleteRoster("player count does not match the collection");
+  const gameKey = YAHOO_TEAM_KEY_PATTERN.exec(teamKey)?.[1];
+  if (gameKey === undefined) incompleteRoster("invalid team identity");
+  const seen = new Set<string>();
+  return candidates.map((candidate) => {
+    const player = asRecord(candidate);
+    const normalized = player === null ? null : normalizePlayer(player);
+    if (normalized === null) incompleteRoster("player identity is missing or malformed");
+    const identity = YAHOO_PLAYER_KEY_PATTERN.exec(normalized.externalId);
+    if (identity?.[1] !== gameKey || identity[2] !== normalized.providerPlayerId)
+      incompleteRoster("player identity does not match its provider key");
+    if (seen.has(normalized.externalId)) incompleteRoster("duplicate player identity");
+    seen.add(normalized.externalId);
+    return normalized;
+  });
+}
+
 function normalizeManager(manager: XmlRecord): NormalizedManager | null {
   const displayName = text(manager.nickname) ?? text(manager.display_name);
   if (displayName === null) return null;
@@ -937,7 +1003,12 @@ function normalizeManager(manager: XmlRecord): NormalizedManager | null {
   };
 }
 
-function normalizeTeam(team: XmlRecord, warnings: string[]): NormalizedTeam | null {
+function normalizeTeam(
+  team: XmlRecord,
+  warnings: string[],
+  rosterWeek?: number | null,
+  draftStatus?: NormalizedLeagueSettings["draftStatus"],
+): NormalizedTeam | null {
   const externalId = text(team.team_key);
   const providerTeamId = text(team.team_id);
   const name = text(team.name);
@@ -963,20 +1034,11 @@ function normalizeTeam(team: XmlRecord, warnings: string[]): NormalizedTeam | nu
       `Yahoo did not identify exactly one current manager on team ${externalId}; commissioner authority was not inferred`,
     );
   }
-  const roster = child(team, "roster");
-  const players = asArray(child(roster, "players")?.player).flatMap(
-    (candidate): NormalizedRosterPlayer[] => {
-      const record = asRecord(candidate);
-      const normalized = record === null ? null : normalizePlayer(record);
-      if (normalized === null) {
-        warnings.push(
-          `Skipped a Yahoo roster player with incomplete identity on team ${externalId}`,
-        );
-        return [];
-      }
-      return [normalized];
-    },
-  );
+  // The separate teams endpoint does not promise a roster. Combined league snapshots do.
+  const players =
+    rosterWeek === undefined
+      ? []
+      : normalizeRosterPlayers(team, externalId, rosterWeek, draftStatus);
   const logo = firstRecord(child(team, "team_logos")?.team_logo);
   return {
     externalId,
@@ -1002,30 +1064,18 @@ function normalizeTeams(league: XmlRecord, warnings: string[]): NormalizedTeam[]
 
 function rosterByTeam(
   league: XmlRecord,
-  warnings: string[],
+  expectedWeek: number | null,
+  draftStatus: NormalizedLeagueSettings["draftStatus"],
 ): Map<string, NormalizedRosterPlayer[]> {
   const result = new Map<string, NormalizedRosterPlayer[]>();
   for (const candidate of asArray(child(league, "teams")?.team)) {
     const team = asRecord(candidate);
-    if (team === null) continue;
+    if (team === null) incompleteRoster("invalid roster team");
     const teamKey = text(team.team_key);
     if (teamKey === null) {
-      warnings.push("Skipped a Yahoo roster whose team omitted team_key");
-      continue;
+      incompleteRoster("missing roster team identity");
     }
-    const normalized = asArray(child(child(team, "roster"), "players")?.player).flatMap(
-      (playerCandidate): NormalizedRosterPlayer[] => {
-        const player = asRecord(playerCandidate);
-        const value = player === null ? null : normalizePlayer(player);
-        if (value === null) {
-          warnings.push(
-            `Skipped a Yahoo roster player with incomplete identity on team ${teamKey}`,
-          );
-          return [];
-        }
-        return [value];
-      },
-    );
+    const normalized = normalizeRosterPlayers(team, teamKey, expectedWeek, draftStatus);
     if (result.has(teamKey)) {
       throw new YahooXmlError("INVALID_CONTRACT", "Yahoo returned a duplicate team roster");
     }
@@ -1298,7 +1348,11 @@ export function parseYahooLeagueSyncArtifacts(input: YahooLeagueSyncArtifacts): 
     throw new YahooXmlError("INVALID_CONTRACT", "Yahoo team resource was incomplete or duplicated");
   }
 
-  const rosterMap = rosterByTeam(rostersLeague, warnings);
+  const rosterMap = rosterByTeam(
+    rostersLeague,
+    integer(settingsLeague.current_week),
+    settings.draftStatus,
+  );
   const teams = normalizedTeams.map((team) => ({
     ...team,
     roster: rosterMap.get(team.externalId) ?? [],
@@ -1386,12 +1440,15 @@ export function parseYahooLeagueXml(
     throw new YahooXmlError("INVALID_CONTRACT", "Yahoo response omitted a valid league season");
   }
   const warnings: string[] = [];
+  const parsedSettings = normalizeSettings(league);
   const teams = asArray(child(league, "teams")?.team).flatMap((candidate): NormalizedTeam[] => {
     const record = asRecord(candidate);
-    const normalized = record === null ? null : normalizeTeam(record, warnings);
+    const normalized =
+      record === null
+        ? null
+        : normalizeTeam(record, warnings, integer(league.current_week), parsedSettings.draftStatus);
     return normalized === null ? [] : [normalized];
   });
-  const parsedSettings = normalizeSettings(league);
   const settings =
     parsedSettings.teamCount === 0 && teams.length > 0
       ? { ...parsedSettings, teamCount: teams.length }

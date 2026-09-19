@@ -23,6 +23,8 @@ export interface NormalizedScoringRule {
 export interface NormalizedLeagueSettings {
   readonly teamCount: number;
   readonly draftType: DraftType;
+  /** Provider-observed draft lifecycle; never inferred from current week or roster emptiness. */
+  readonly draftStatus?: "predraft" | "drafting" | "postdraft" | "unknown";
   readonly auctionBudget: number | null;
   readonly waiverType: WaiverType;
   readonly faabBudget: number | null;
