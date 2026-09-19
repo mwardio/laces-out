@@ -48,6 +48,11 @@ export interface AiCompletionInput {
   readonly prompt: string;
   readonly maxOutputTokens: number;
   readonly safetyIdentifier: string;
+  /** Explicit Gemini-only controls; other providers must reject accidental cross-provider use. */
+  readonly geminiOptions?: {
+    readonly thinkingLevel?: "minimal";
+    readonly responseSchema?: AiToolParameterSchema;
+  };
   readonly tools?: readonly AiToolSpec[];
   readonly toolChoice?: "auto" | "none";
   /** Present on every turn after the first. */
@@ -233,6 +238,13 @@ function assertToolsSupported(
   model: string,
   input: AiCompletionInput,
 ): void {
+  if (input.geminiOptions !== undefined && provider !== "gemini") {
+    throw new AiProviderAdapterError({
+      code: "PROVIDER_OPTIONS_UNSUPPORTED",
+      message: `Gemini generation options cannot be sent to the ${provider} adapter.`,
+      statusCode: 422,
+    });
+  }
   if (!input.tools?.length && !input.toolResults?.length) return;
   if (aiProviderCapabilities(provider, model).toolUse) return;
   throw new AiProviderAdapterError({
@@ -396,12 +408,24 @@ class GeminiAdapter implements AiProviderAdapter {
         system_instruction: input.system,
         generation_config: {
           max_output_tokens: input.maxOutputTokens,
+          ...(input.geminiOptions?.thinkingLevel
+            ? { thinking_level: input.geminiOptions.thinkingLevel }
+            : {}),
           // `tool_choice` lives inside generation_config, not at the top level. It is sent only to
           // shut tools off; `auto` is the documented default and needs no field.
           ...(input.toolChoice === "none"
             ? { tool_choice: { allowed_tools: { mode: "none", tools: [] } } }
             : {}),
         },
+        ...(input.geminiOptions?.responseSchema
+          ? {
+              response_format: {
+                type: "text",
+                mime_type: "application/json",
+                schema: input.geminiOptions.responseSchema,
+              },
+            }
+          : {}),
         store: false,
         // Flat declarations — there is no `functionDeclarations` wrapper on this surface.
         ...(input.tools?.length
@@ -440,14 +464,21 @@ class GeminiAdapter implements AiProviderAdapter {
     return {
       // A turn that only asks for a tool legitimately carries no prose. Requiring text there would
       // turn a normal tool call into a provider error.
-      text: toolCalls.length > 0 ? (outputText ?? "") : requireText("gemini", outputText),
+      text:
+        toolCalls.length > 0 ||
+        (root?.status === "incomplete" && input.geminiOptions?.responseSchema !== undefined)
+          ? (outputText ?? "")
+          : requireText("gemini", outputText),
       requestId: response.headers.get("x-request-id") ?? interactionId ?? null,
       inputTokens: tokenCount(usage?.total_input_tokens),
       outputTokens: tokenCount(usage?.total_output_tokens),
       cacheReadTokens: tokenCount(usage?.total_cached_tokens),
       cacheWriteTokens: 0,
       toolCalls,
-      stopReason: toolCalls.length > 0 ? "tool-calls" : "end",
+      // HTTP 200 can contain truncated JSON when reasoning exhausts the generation budget.
+      // Preserve that distinction so callers cannot mistake a partial answer for completion.
+      stopReason:
+        root?.status === "incomplete" ? "length" : toolCalls.length > 0 ? "tool-calls" : "end",
       conversation: usesTools
         ? {
             kind: "gemini-stateless",

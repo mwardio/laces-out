@@ -9,7 +9,7 @@ import type {
   AiProviderAdapter,
   AiProviderCapabilities,
 } from "./ai-provider-adapters.js";
-import { AiProviderAdapterError } from "./ai-provider-adapters.js";
+import { AiProviderAdapterError, createAiProviderAdapters } from "./ai-provider-adapters.js";
 import {
   AiService,
   AI_PROVIDER_DEFAULTS,
@@ -369,6 +369,87 @@ function serviceFixture(
 }
 
 describe("AI service", () => {
+  it("uses minimal Gemini Flash thinking for the bounded personal-provider connection test", async () => {
+    const complete = vi.fn((input: AiCompletionInput) => {
+      void input;
+      return Promise.resolve({ text: "Connection ready" });
+    });
+    const { service } = serviceFixture({ complete });
+    await service.saveProvider(USER_ID, "gemini", {
+      apiKey: "synthetic-personal-test-key",
+      model: MANAGED_GEMINI_MODEL,
+      dailyRequestLimit: 1,
+      maxOutputTokens: 2000,
+    });
+    await expect(service.testProvider(USER_ID, "gemini")).resolves.toMatchObject({ ok: true });
+    expect(complete.mock.calls[0]?.[0]).toMatchObject({
+      model: MANAGED_GEMINI_MODEL,
+      maxOutputTokens: 32,
+      prompt: "Reply with exactly: Connection ready",
+      geminiOptions: { thinkingLevel: "minimal" },
+    });
+    expect(complete.mock.calls[0]?.[0].geminiOptions).not.toHaveProperty("responseSchema");
+  });
+
+  it.each(["connection-test", "league-analysis", "weekly-brief", "weekly-recap"] as const)(
+    "does not return a successful blank %s for an incomplete Gemini response",
+    async (operation) => {
+      const fetcher = vi.fn<typeof fetch>(() =>
+        Promise.resolve(
+          new Response(
+            JSON.stringify({
+              status: "incomplete",
+              steps: [],
+              usage: { total_input_tokens: 7, total_output_tokens: 0 },
+            }),
+            { status: 200 },
+          ),
+        ),
+      );
+      const adapter = createAiProviderAdapters("https://laces.test", fetcher).gemini;
+      const { service, repository } = serviceFixture(adapter, new MemoryAiRepository(), {
+        apiKey: "managed-test-key",
+        dailyRequestLimit: 1,
+        maxOutputTokens: 700,
+      });
+      if (operation === "connection-test") {
+        await service.saveProvider(USER_ID, "gemini", {
+          apiKey: "synthetic-personal-test-key",
+          model: MANAGED_GEMINI_MODEL,
+          dailyRequestLimit: 1,
+          maxOutputTokens: 700,
+        });
+      }
+      const request =
+        operation === "connection-test"
+          ? service.testProvider(USER_ID, "gemini")
+          : operation === "league-analysis"
+            ? service.analyzeLeague({
+                userId: USER_ID,
+                leagueId: LEAGUE_ID,
+                provider: "gemini",
+                question: "Review the week",
+              })
+            : service.generateFeature({
+                userId: USER_ID,
+                leagueId: LEAGUE_ID,
+                provider: "gemini",
+                feature: operation,
+                ...(operation === "weekly-recap" ? { weeklyAwardsWeek: 1 } : {}),
+              });
+      await expect(request).rejects.toMatchObject({ code: "PROVIDER_ERROR", statusCode: 502 });
+      expect(fetcher).toHaveBeenCalledTimes(1);
+      expect(repository.usage).toHaveLength(1);
+      expect(repository.usage[0]).toMatchObject({
+        succeeded: false,
+        errorCode: operation === "weekly-recap" ? "INCOMPLETE_RECAP_OUTPUT" : "EMPTY_RESPONSE",
+      });
+      if (operation === "weekly-recap") {
+        expect(repository.usage[0]).toMatchObject({ inputTokens: 7, outputTokens: 0 });
+      }
+    },
+  );
+
   it.each(["connection-test", "league-analysis", "weekly-recap"] as const)(
     "does not blame the provider or overwrite successful usage when %s persistence fails",
     async (operation) => {
@@ -474,6 +555,52 @@ describe("AI service", () => {
     expect(prompt).toContain('"weeklyAwards":{"state":"available","week":1');
     expect(prompt).not.toContain("CURRENT-WEEK-TWO");
     expect(prompt).not.toContain("Decision Desk");
+    expect(complete.mock.calls[0]?.[0]).toMatchObject({
+      model: MANAGED_GEMINI_MODEL,
+      maxOutputTokens: 700,
+      geminiOptions: {
+        thinkingLevel: "minimal",
+        responseSchema: {
+          properties: { week: { minimum: 1, maximum: 1 } },
+          required: ["week", "status", "body"],
+          additionalProperties: false,
+        },
+      },
+    });
+  });
+
+  it("rejects an incomplete provider response even when its recap JSON is valid", async () => {
+    const complete = vi.fn(() =>
+      Promise.resolve({
+        text: recapOutputText(1),
+        stopReason: "length" as const,
+        inputTokens: 90,
+        outputTokens: 30,
+      }),
+    );
+    const { service, repository } = serviceFixture({ complete }, new MemoryAiRepository(), {
+      apiKey: "managed-test-key",
+      dailyRequestLimit: 1,
+      maxOutputTokens: 700,
+    });
+    const request = service.generateFeature({
+      userId: USER_ID,
+      leagueId: LEAGUE_ID,
+      feature: "weekly-recap",
+      weeklyAwardsWeek: 1,
+    });
+    await expect(request).rejects.toMatchObject({
+      code: "PROVIDER_ERROR",
+      statusCode: 502,
+    });
+    await expect(request).rejects.toThrow("stopped before completing");
+    expect(repository.usage).toHaveLength(1);
+    expect(repository.usage[0]).toMatchObject({
+      succeeded: false,
+      errorCode: "INCOMPLETE_RECAP_OUTPUT",
+      inputTokens: 90,
+      outputTokens: 30,
+    });
   });
 
   it.each([
@@ -1437,6 +1564,7 @@ describe("weekly recap personalization", () => {
       apiKey: "managed-openrouter-secret",
       model: MANAGED_RECAP_OPENROUTER_MODEL,
     });
+    expect(complete.mock.calls[0]?.[0]).not.toHaveProperty("geminiOptions");
     expect(repository.usage[0]?.metadata).toMatchObject({
       accessMode: "managed",
       feature: "weekly-recap",
