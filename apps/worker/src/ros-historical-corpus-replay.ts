@@ -27,6 +27,7 @@ import {
   snapshotRetainedV12RosHistoricalCorpus,
   retainedV12RosHistoricalCorpusIdentity,
   requireCurrentRosHistoricalActualDefinition,
+  requireRosHistoricalPointsAllowedDefinition,
   type RosHistoricalCorpus,
   type RosHistoricalCorpusForecast,
 } from "./ros-historical-corpus.js";
@@ -117,6 +118,7 @@ async function replayCorpus(
   requireCurrentRosHistoricalActualDefinition(corpus);
   const definition = rosProfileDefinitionFromKey(projectionScoringProfileKey(input.scoringProfile));
   const scoringProfile = definition.profile;
+  requireRosHistoricalPointsAllowedDefinition(corpus, scoringProfile);
   // Validate every label before the first cache read, so a late missing component cannot be
   // silently turned into zero or discovered only after repricing the entire frozen ensemble.
   const actualPoints = corpus.forecasts.map((row) => observedPoints(row, scoringProfile));

@@ -143,6 +143,43 @@ async function setup() {
 }
 describe("shared marginal dependency bundle", () => {
   it.each(["candidate", "previous", "training"] as const)(
+    "rejects missing %s PA provenance before any vector reads",
+    async (dependency) => {
+      const test = await setup();
+      const id =
+        dependency === "candidate"
+          ? bundle.candidateCorpusIdentity
+          : dependency === "previous"
+            ? bundle.previousCorpusIdentity
+            : bundle.intervalTrainingCorpusIdentity!;
+      const legacy = Object.fromEntries(
+        Object.entries(corpora.get(id)!).filter(([key]) => key !== "pointsAllowedDefinition"),
+      ) as unknown as RosHistoricalCorpus;
+      corpora.set(id, legacy);
+      await expect(prepareRosMarginalCorpusBundle(test.options)).rejects.toMatchObject({
+        diagnostic: { dependency, reason: "incompatible" },
+      });
+      expect(cacheRead).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["previous", "training"] as const)(
+    "rejects cross-definition %s corpora even if raw sources and synthetic labels match",
+    async (dependency) => {
+      const test = await setup();
+      const id =
+        dependency === "previous"
+          ? bundle.previousCorpusIdentity
+          : bundle.intervalTrainingCorpusIdentity!;
+      corpora.set(id, { ...corpora.get(id)!, pointsAllowedDefinition: "espn-2019-v1" });
+      await expect(prepareRosMarginalCorpusBundle(test.options)).rejects.toMatchObject({
+        diagnostic: { dependency, reason: "incompatible" },
+      });
+      expect(cacheRead).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["candidate", "previous", "training"] as const)(
     "refuses unversioned %s actuals before restoring that dependency's vectors",
     async (dependency) => {
       const test = await setup();

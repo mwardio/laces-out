@@ -8,6 +8,7 @@ import {
   createRosHistoricalCorpusStore,
   createRetainedV12RosHistoricalCorpusReader,
   ROS_HISTORICAL_ACTUAL_DEFINITION_VERSION,
+  requireRosHistoricalPointsAllowedDefinition,
   type RosHistoricalCorpus,
 } from "./ros-historical-corpus.js";
 import {
@@ -147,6 +148,16 @@ async function readCorpora(
     const loaded = await store.read(identity, { signal });
     if (loaded.state !== "hit") fail(dependency, loaded.state);
     const corpus = loaded.corpus;
+    try {
+      const definition = requireRosHistoricalPointsAllowedDefinition(corpus);
+      if (
+        validatedCorpora.length > 0 &&
+        definition !== validatedCorpora[0]![1].pointsAllowedDefinition
+      )
+        fail(dependency, "incompatible");
+    } catch {
+      fail(dependency, "incompatible");
+    }
     const training = dependency === "training";
     const positions = training ? ["DST"] : POSITIONS;
     const count = training ? 32 : 8;

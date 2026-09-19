@@ -3,6 +3,10 @@ import { constants } from "node:fs";
 import { link, mkdir, open, rm } from "node:fs/promises";
 import { assertRosCacheHeadroom } from "./ros-cache-disk-space.js";
 import path from "node:path";
+import {
+  rosProfileDefinitionFromKey,
+  type ProjectionDefensePointsAllowedDefinition,
+} from "@laces-out/projections";
 
 import {
   HISTORICAL_ROS_DEFAULT_CUTOFFS,
@@ -18,6 +22,8 @@ import {
   ROS_HISTORICAL_CORPUS_SCHEMA_VERSION,
   ROS_HISTORICAL_ACTUAL_DEFINITION_VERSION,
   requireCurrentRosHistoricalActualDefinition,
+  requireRosHistoricalPointsAllowedDefinition,
+  rosHistoricalProfilePointsAllowedDefinition,
   type RosHistoricalCorpus,
 } from "./ros-historical-corpus.js";
 import {
@@ -35,6 +41,8 @@ import type { RosProfileValidationRunner } from "./ros-profile-validation-runner
 const SHA256 = /^[a-f0-9]{64}$/u;
 const POINTER_MAXIMUM_BYTES = 64 * 1_024;
 export const ROS_SHARED_CORPUS_BUILD_LOCK = "all-historical-ros-corpus-builds-v1";
+/** Reference used by existing season-only administration; profile proofs select explicitly. */
+export const ROS_SHARED_CORPUS_REFERENCE_POINTS_ALLOWED_DEFINITION = "yahoo-2022-v1" as const;
 const object = (value: unknown): value is Record<string, unknown> =>
   value !== null && typeof value === "object" && !Array.isArray(value);
 const errorCode = (error: unknown) => (error as NodeJS.ErrnoException | null)?.code;
@@ -42,16 +50,22 @@ const sorted = (values: readonly (string | number)[]) => JSON.stringify([...valu
 const sourceKey = (sources: Readonly<Record<string, string>>) =>
   JSON.stringify(Object.entries(sources).sort(([left], [right]) => left.localeCompare(right)));
 
-/** No league identity or scoring rules enter this shared model/season/protocol identity. */
-export function rosSharedCorpusRequest(season: number) {
+/** Shared by scoring profiles with the same PA semantics, independent of point weights. */
+export function rosSharedCorpusRequest(
+  season: number,
+  pointsAllowedDefinition: ProjectionDefensePointsAllowedDefinition = ROS_SHARED_CORPUS_REFERENCE_POINTS_ALLOWED_DEFINITION,
+) {
   if (!Number.isSafeInteger(season) || season < 2007 || season > 2200)
     throw new RangeError("Invalid ROS shared corpus season");
+  if (pointsAllowedDefinition !== "yahoo-2022-v1" && pointsAllowedDefinition !== "espn-2019-v1")
+    throw new TypeError("Invalid ROS shared corpus points-allowed definition");
   const protocol = {
     ...ROS_HISTORICAL_CORPUS_PHYSICAL_PROTOCOL,
-    version: "shared-historical-football-corpus-v3",
+    version: "shared-historical-football-corpus-v4",
     buildProtocolVersion: ROS_HISTORICAL_CORPUS_PHYSICAL_PROTOCOL.version,
     corpusSchemaVersion: ROS_HISTORICAL_CORPUS_SCHEMA_VERSION,
     actualDefinitionVersion: ROS_HISTORICAL_ACTUAL_DEFINITION_VERSION,
+    pointsAllowedDefinition,
     ...ROS_HISTORICAL_CORPUS_RELEASE_THRESHOLDS,
     coverageThresholds: ROS_HISTORICAL_CORPUS_COVERAGE_THRESHOLDS,
     season,
@@ -82,6 +96,7 @@ function assertCorpusScope(corpus: RosHistoricalCorpus, request: CorpusRequest):
   requireCurrentRosHistoricalActualDefinition(corpus);
   const expected = request.protocol;
   if (
+    requireRosHistoricalPointsAllowedDefinition(corpus) !== expected.pointsAllowedDefinition ||
     !isCompatibleRosHistoricalCorpusBuildProtocol(corpus.buildProtocol) ||
     !hasRosHistoricalCorpusReleaseThresholds(corpus.options) ||
     !hasCurrentRosHistoricalCoverageThresholds(corpus.coverage.thresholds) ||
@@ -260,12 +275,18 @@ export function readyRosSharedCorpusIdentity(
   directory: string,
   season: number,
   signal: AbortSignal,
+  pointsAllowedDefinition: ProjectionDefensePointsAllowedDefinition = ROS_SHARED_CORPUS_REFERENCE_POINTS_ALLOWED_DEFINITION,
 ): Promise<string | null> {
-  return readyCorpusIdentity(directory, rosSharedCorpusRequest(season), signal);
+  return readyCorpusIdentity(
+    directory,
+    rosSharedCorpusRequest(season, pointsAllowedDefinition),
+    signal,
+  );
 }
 
 /**
- * One durable football build serves all exact-profile proofs. An existing broken pointer or
+ * One durable football build per PA definition serves its exact-profile proofs. Player vectors
+ * retain their scoring-independent input keys and reuse the same physical cache. A broken pointer or
  * corpus fails visibly; it never silently starts expensive modeling for an individual league.
  */
 export function createSharedRosCorpusValidationRunner(options: {
@@ -284,13 +305,50 @@ export function createSharedRosCorpusValidationRunner(options: {
       throw new Error("Shared ROS replay returned a different corpus identity");
     return report;
   };
+  const unpricedReady = async (
+    input: Parameters<RosProfileValidationRunner>[0],
+    signal: AbortSignal,
+  ): Promise<{ request: CorpusRequest; identity: string } | null> => {
+    const errors: unknown[] = [];
+    for (const definition of ["yahoo-2022-v1", "espn-2019-v1"] as const) {
+      const request = rosSharedCorpusRequest(input.season, definition);
+      try {
+        const identity = await readyCorpusIdentity(options.directory, request, signal);
+        if (
+          identity &&
+          (input.requiredReadyCorpusIdentity === undefined ||
+            input.requiredReadyCorpusIdentity === identity)
+        )
+          return { request, identity };
+      } catch (error) {
+        signal.throwIfAborted();
+        errors.push(error);
+      }
+    }
+    // Another healthy group may serve this profile, but corrupt evidence must never trigger a build.
+    if (errors.length > 0) throw errors[0];
+    return null;
+  };
   return async (input) => {
     if (input.replayCorpusIdentity !== undefined)
       throw new Error("Shared ROS runner owns corpus selection");
-    const request = rosSharedCorpusRequest(input.season);
+    const profile = rosProfileDefinitionFromKey(input.scoringProfileKey).profile;
+    const requestedDefinition = rosHistoricalProfilePointsAllowedDefinition(profile);
+    let request = rosSharedCorpusRequest(
+      input.season,
+      requestedDefinition ?? ROS_SHARED_CORPUS_REFERENCE_POINTS_ALLOWED_DEFINITION,
+    );
+    // A profile without priced PA can reuse either complete, explicitly bound group. Recovery
+    // still requires its exact pinned identity and can never fall through to a different group.
+    const reusable = requestedDefinition === null ? await unpricedReady(input, input.signal) : null;
+    if (reusable) request = reusable.request;
     const file = path.join(options.directory, "ready", `${request.identity}.json`);
     // Ready data remains usable while a different season or model is building its own corpus.
-    const ready = await readyCorpusIdentity(options.directory, request, input.signal);
+    const ready =
+      reusable?.identity ??
+      (requestedDefinition === null
+        ? null
+        : await readyCorpusIdentity(options.directory, request, input.signal));
     if (input.requiredReadyCorpusIdentity !== undefined) {
       if (
         typeof input.requiredReadyCorpusIdentity !== "string" ||
@@ -304,6 +362,10 @@ export function createSharedRosCorpusValidationRunner(options: {
     }
     if (ready) return replay(input, ready);
     const result = await options.lock(ROS_SHARED_CORPUS_BUILD_LOCK, input.signal, async (guard) => {
+      if (requestedDefinition === null) {
+        const reusableAfterWait = await unpricedReady(input, guard.signal);
+        if (reusableAfterWait) return { identity: reusableAfterWait.identity };
+      }
       const identityAfterWait = await readyCorpusIdentity(options.directory, request, guard.signal);
       if (identityAfterWait) return { identity: identityAfterWait };
       await mkdir(options.directory, { recursive: true, mode: 0o700 });
@@ -337,13 +399,14 @@ export async function adoptRosSharedCorpus(options: {
   readonly season: number;
   readonly lock: RosCorpusLock;
   readonly signal: AbortSignal;
+  readonly pointsAllowedDefinition?: ProjectionDefensePointsAllowedDefinition;
 }): Promise<{
   readonly state: "adopted" | "existing";
   readonly requestIdentity: string;
   readonly corpusIdentity: string;
 }> {
   if (!SHA256.test(options.corpusIdentity)) throw new Error("Invalid ROS corpus identity");
-  const request = rosSharedCorpusRequest(options.season);
+  const request = rosSharedCorpusRequest(options.season, options.pointsAllowedDefinition);
   const file = path.join(options.directory, "ready", `${request.identity}.json`);
   return options.lock(ROS_SHARED_CORPUS_BUILD_LOCK, options.signal, async (guard) => {
     const existing = await readPointer(file, request);

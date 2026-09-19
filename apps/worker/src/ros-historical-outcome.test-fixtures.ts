@@ -30,6 +30,7 @@ export function historicalCorpusFixture(): RosHistoricalCorpus {
   return {
     schemaVersion: ROS_HISTORICAL_CORPUS_SCHEMA_VERSION,
     actualDefinitionVersion: ROS_HISTORICAL_ACTUAL_DEFINITION_VERSION,
+    pointsAllowedDefinition: "yahoo-2022-v1",
     buildProtocol: ROS_HISTORICAL_CORPUS_BUILD_PROTOCOL,
     modelVersion: FIRST_PARTY_ROS_MODEL_VERSION,
     outcomeSchemaVersion: FIRST_PARTY_ROS_OUTCOME_SCHEMA_VERSION,

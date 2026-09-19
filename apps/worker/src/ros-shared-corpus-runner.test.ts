@@ -9,6 +9,10 @@ import {
   FIRST_PARTY_ROS_OUTCOME_SCHEMA_VERSION,
   firstPartyRosSeedHash,
   rosScoringProfile,
+  projectionScoringProfileKey,
+  defensePointsAllowedDefinitionForProfile,
+  rosProfileDefinitionFromKey,
+  type ProjectionDefensePointsAllowedDefinition,
   type RosScoringProfileKey,
 } from "@laces-out/projections";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -95,13 +99,17 @@ const input = (profile: RosScoringProfileKey = "full-ppr"): RosProfileValidation
   signal: new AbortController().signal,
 });
 
-async function fixture(scenarioCount?: number) {
+async function fixture(
+  scenarioCount?: number,
+  pointsAllowedDefinition: ProjectionDefensePointsAllowedDefinition = "yahoo-2022-v1",
+) {
   const directory = await mkdtemp(path.join(os.tmpdir(), "shared-ros-runner-"));
   directories.push(directory);
-  const request = rosSharedCorpusRequest(2026);
+  const request = rosSharedCorpusRequest(2026, pointsAllowedDefinition);
   const original = historicalCorpusFixture();
   const corpus: RosHistoricalCorpus = {
     ...original,
+    pointsAllowedDefinition,
     weeklyModelVersion: request.protocol.weeklyModelVersion,
     productionBasis: request.protocol.productionBasis,
     seasons: request.protocol.heldOutSeasons,
@@ -189,11 +197,41 @@ async function fixture(scenarioCount?: number) {
       return { state: "complete", outcomeCorpusIdentity: job.replayCorpusIdentity };
     }
     const count = scenarioCount ?? request.protocol.referenceScenarioCount;
+    const selected =
+      defensePointsAllowedDefinitionForProfile(
+        rosProfileDefinitionFromKey(job.scoringProfileKey).profile,
+      ) ?? "yahoo-2022-v1";
+    const selectedCorpus: RosHistoricalCorpus =
+      selected === corpus.pointsAllowedDefinition
+        ? corpus
+        : {
+            ...corpus,
+            pointsAllowedDefinition: selected,
+            forecasts: corpus.forecasts.map((row) =>
+              row.forecast.position !== "DST"
+                ? row
+                : {
+                    ...row,
+                    forecast: {
+                      ...row.forecast,
+                      inputChecksum: hash(`${row.forecast.inputChecksum}:${selected}`),
+                    },
+                    contextualKey: {
+                      ...row.contextualKey,
+                      identity: hash(`${row.contextualKey.identity}:${selected}`),
+                    },
+                    recencyKey: {
+                      ...row.recencyKey,
+                      identity: hash(`${row.recencyKey.identity}:${selected}`),
+                    },
+                  },
+            ),
+          };
     const columns = { receptions: new Float64Array(count).fill(2) };
     const games = new Uint8Array(count).fill(1);
     // These structural fixtures mirror the real outcome metadata contract. Every forecast has
     // distinct immutable references; statistical qualification is deliberately not asserted.
-    for (const row of corpus.forecasts) {
+    for (const row of selectedCorpus.forecasts) {
       for (const [strategy, key] of [
         ["contextual", row.contextualKey],
         ["availability-aware-recency", row.recencyKey],
@@ -250,7 +288,7 @@ async function fixture(scenarioCount?: number) {
         });
       }
     }
-    const written = await store.write(corpus);
+    const written = await store.write(selectedCorpus);
     return { state: "complete", outcomeCorpusIdentity: written.identity };
   });
   const lock = sequentialLock();
@@ -259,6 +297,103 @@ async function fixture(scenarioCount?: number) {
 }
 
 describe("durable shared ROS corpus orchestration", { timeout: 30_000 }, () => {
+  it("builds and reuses distinct PA groups while preserving identical player cache references", async () => {
+    const prepared = await fixture();
+    const runner = prepared.createRunner();
+    const [yahoo, espn] = await Promise.all([runner(input()), runner(input("espn-ppr-4pt-pass"))]);
+    expect(yahoo.outcomeCorpusIdentity).not.toBe(espn.outcomeCorpusIdentity);
+    await runner(input("half-ppr"));
+    await runner(input("espn-standard-2pt"));
+    expect(prepared.runner.mock.calls.filter(([job]) => !job.replayCorpusIdentity)).toHaveLength(2);
+    expect(prepared.runner.mock.calls.filter(([job]) => job.replayCorpusIdentity)).toHaveLength(2);
+    expect((await readdir(path.join(prepared.directory, "ready"))).sort()).toEqual(
+      [
+        rosSharedCorpusRequest(2026, "yahoo-2022-v1").identity,
+        rosSharedCorpusRequest(2026, "espn-2019-v1").identity,
+      ]
+        .map((id) => `${id}.json`)
+        .sort(),
+    );
+    const left = await prepared.store.read(String(yahoo.outcomeCorpusIdentity));
+    const right = await prepared.store.read(String(espn.outcomeCorpusIdentity));
+    if (left.state !== "hit" || right.state !== "hit") throw new Error("Expected both corpora");
+    expect(left.corpus.pointsAllowedDefinition).toBe("yahoo-2022-v1");
+    expect(right.corpus.pointsAllowedDefinition).toBe("espn-2019-v1");
+    for (const [index, row] of left.corpus.forecasts.entries()) {
+      if (row.forecast.position === "DST")
+        expect(row.contextualKey).not.toEqual(right.corpus.forecasts[index]!.contextualKey);
+      else expect(row).toEqual(right.corpus.forecasts[index]);
+    }
+    const calls = prepared.runner.mock.calls.length;
+    await expect(
+      runner({
+        ...input("espn-ppr-4pt-pass"),
+        requiredReadyCorpusIdentity: String(yahoo.outcomeCorpusIdentity),
+      }),
+    ).rejects.toThrow("absent or changed");
+    expect(prepared.runner).toHaveBeenCalledTimes(calls);
+  });
+
+  it("reuses an existing ESPN group for profiles without PA and rejects unspecified active PA", async () => {
+    const prepared = await fixture();
+    const runner = prepared.createRunner();
+    const espn = await runner(input("espn-ppr-4pt-pass"));
+    const noPa = {
+      ...input(),
+      scoringProfileKey: projectionScoringProfileKey({
+        id: "WR",
+        rules: [{ statId: "receptions", points: 1 }],
+      }),
+    };
+    const replay = await runner(noPa);
+    expect(replay.outcomeCorpusIdentity).toBe(espn.outcomeCorpusIdentity);
+    await writeFile(
+      path.join(prepared.directory, "ready", `${prepared.request.identity}.json`),
+      "corrupt unused Yahoo group",
+    );
+    expect(
+      (await runner({ ...noPa, requiredReadyCorpusIdentity: String(espn.outcomeCorpusIdentity) }))
+        .outcomeCorpusIdentity,
+    ).toBe(espn.outcomeCorpusIdentity);
+    expect(prepared.runner.mock.calls.filter(([job]) => !job.replayCorpusIdentity)).toHaveLength(1);
+    await expect(
+      runner({
+        ...input(),
+        scoringProfileKey: projectionScoringProfileKey({
+          id: "legacy",
+          rules: [{ statId: "points_allowed", points: -1 }],
+        }),
+      }),
+    ).rejects.toThrow("explicit definition");
+    expect(prepared.runner).toHaveBeenCalledTimes(3);
+  });
+
+  it("refuses adopting an opposite-definition corpus into the reference group", async () => {
+    const prepared = await fixture();
+    const result = await prepared.runner(input("espn-ppr-4pt-pass"));
+    await expect(
+      adoptRosSharedCorpus({
+        directory: prepared.directory,
+        corpusIdentity: String(result.outcomeCorpusIdentity),
+        season: 2026,
+        lock: prepared.lock,
+        signal: input().signal,
+      }),
+    ).rejects.toThrow("requested model or validation scope");
+    expect(
+      (
+        await adoptRosSharedCorpus({
+          directory: prepared.directory,
+          corpusIdentity: String(result.outcomeCorpusIdentity),
+          season: 2026,
+          pointsAllowedDefinition: "espn-2019-v1",
+          lock: prepared.lock,
+          signal: input().signal,
+        })
+      ).state,
+    ).toBe("adopted");
+  });
+
   it("requires a new request and refuses to adopt unversioned labels before any missing vector is read", async () => {
     const prepared = await fixture();
     expect(prepared.request.protocol.actualDefinitionVersion).toBe(
@@ -344,7 +479,7 @@ describe("durable shared ROS corpus orchestration", { timeout: 30_000 }, () => {
       ...physicalProtocol,
       ...ROS_HISTORICAL_CORPUS_RELEASE_THRESHOLDS,
       buildProtocolVersion: version,
-      version: "shared-historical-football-corpus-v3",
+      version: "shared-historical-football-corpus-v4",
     });
     expect(rosSharedCorpusRequest(2026).protocol).not.toHaveProperty("policyVersion");
     expect(rosSharedCorpusRequest(2026).protocol).not.toHaveProperty("calibrationVersion");

@@ -122,6 +122,73 @@ afterEach(async () => {
 });
 
 describe("cache-only historical model validation", () => {
+  it.each(["espn-2019-v1", undefined] as const)(
+    "rejects a Yahoo corpus for conflicting or unspecified PA (%s) before cache reads",
+    async (statDefinition) => {
+      const cache = {
+        read: vi.fn(async () => ({ state: "missing" as const })),
+        write: vi.fn(async () => {
+          throw new Error("No writes");
+        }),
+      };
+      await expect(
+        replayRosHistoricalCorpus({
+          corpus: historicalCorpusFixture(),
+          cache,
+          scoringProfile: {
+            id: "PA",
+            rules: [
+              {
+                statId: "points_allowed",
+                points: -1,
+                ...(statDefinition === undefined ? {} : { statDefinition }),
+              },
+            ],
+          },
+        }),
+      ).rejects.toThrow(/points-allowed/);
+      expect(cache.read).not.toHaveBeenCalled();
+      expect(cache.write).not.toHaveBeenCalled();
+    },
+  );
+
+  it("rejects missing corpus PA provenance even for a profile without points-allowed scoring", async () => {
+    const corpus = Object.fromEntries(
+      Object.entries(historicalCorpusFixture()).filter(
+        ([key]) => key !== "pointsAllowedDefinition",
+      ),
+    ) as unknown as RosHistoricalCorpus;
+    const cache = {
+      read: vi.fn(async () => ({ state: "missing" as const })),
+      write: vi.fn(async () => {
+        throw new Error("No writes");
+      }),
+    };
+    await expect(
+      replayRosHistoricalCorpus({
+        corpus,
+        cache,
+        scoringProfile: { id: "WR", rules: [{ statId: "receptions", points: 1 }] },
+      }),
+    ).rejects.toThrow(/points-allowed definition.*recapture/);
+    expect(cache.read).not.toHaveBeenCalled();
+  });
+
+  it.each(["yahoo-2022-v1", "espn-2019-v1"] as const)(
+    "allows a profile without PA to reuse validated %s vectors without rebuilding",
+    async (pointsAllowedDefinition) => {
+      const prepared = await preparedCorpus();
+      const calls = prepared.simulate.mock.calls.length;
+      const result = await replayRosHistoricalCorpus({
+        corpus: { ...prepared.corpus, pointsAllowedDefinition },
+        cache: prepared.cache,
+        scoringProfile: { id: "WR", rules: [{ statId: "receptions", points: 1 }] },
+      });
+      expect(result.report.forecasts).toBe(prepared.corpus.forecasts.length);
+      expect(prepared.simulate).toHaveBeenCalledTimes(calls);
+    },
+  );
+
   it("rejects unversioned labels even when every required key exists, before reading cached forecasts", async () => {
     const original = historicalCorpusFixture();
     const corpus = Object.fromEntries(

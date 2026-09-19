@@ -155,6 +155,7 @@ export function reportFixture(
     sourcePolicy: "official-nflverse-artifacts",
     outcomeCorpusIdentity: hash(`${modelVersion}:complete-corpus`),
     actualDefinitionVersion: ROS_HISTORICAL_ACTUAL_DEFINITION_VERSION,
+    pointsAllowedDefinition: "yahoo-2022-v1",
     scoringProfile: { key: SCORING.key, label: SCORING.label, digest: SCORING.digest },
     coverage: {
       state: "qualified",

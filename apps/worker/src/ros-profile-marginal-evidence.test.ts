@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { rosScoringProfile } from "@laces-out/projections";
+import { projectionScoringProfileKey, rosScoringProfile } from "@laces-out/projections";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createRosMarginalProfileValidationRunner,
@@ -43,6 +43,7 @@ afterEach(async () => {
 function response(input: RosProfileValidationRunInput) {
   const report = {
     actualDefinitionVersion: ROS_HISTORICAL_ACTUAL_DEFINITION_VERSION,
+    pointsAllowedDefinition: "yahoo-2022-v1",
     outcomeCorpusIdentity: input.replayCorpusIdentity,
     identityAudit: { scoringProfileKey: input.scoringProfileKey },
     diagnostics: { replayModel: input.replayModel, replayScope: input.replayScope },
@@ -70,6 +71,103 @@ async function setup(overrides: Partial<RosMarginalCorpusBundle> = {}) {
 }
 
 describe("paired cache-only marginal profile evidence", () => {
+  it.each([undefined, "unknown", "espn-2019-v1"])(
+    "rejects captured PA metadata %s even when the runner object claims valid metadata",
+    async (pointsAllowedDefinition) => {
+      const test = await setup();
+      test.reportRunner.mockImplementationOnce(async (input) => {
+        const value = response(input);
+        const report = { ...value.report, pointsAllowedDefinition };
+        const reportJson = JSON.stringify(report);
+        return { ...value, reportJson, reportChecksum: hash(reportJson) };
+      });
+      await expect(test.runner(test.input)).rejects.toThrow(/points-allowed definition/);
+      expect(test.reportRunner).toHaveBeenCalledOnce();
+      expect(await readdir(test.reportDirectory)).toEqual([]);
+    },
+  );
+
+  it("rechecks persisted PA binding and retains every existing archived report byte", async () => {
+    const test = await setup();
+    const evidence = await test.runner(test.input);
+    const report = {
+      ...response({ ...test.input, replayCorpusIdentity: bundle.previousCorpusIdentity }).report,
+      pointsAllowedDefinition: "espn-2019-v1",
+    };
+    const reportJson = JSON.stringify(report),
+      reportChecksum = hash(reportJson);
+    const file = path.join(test.reportDirectory, `${reportChecksum}.json`);
+    await writeFile(file, reportJson);
+    expect(() =>
+      assertRosMarginalProfileEvidenceIdentity(
+        {
+          ...evidence,
+          previousReportJson: reportJson,
+          previousReportChecksum: reportChecksum,
+          provenance: { ...evidence.provenance, previousReportChecksum: reportChecksum },
+        },
+        test.input,
+      ),
+    ).toThrow(/points-allowed definition/);
+    expect(await readFile(file, "utf8")).toBe(reportJson);
+  });
+
+  it("requires paired report definitions to agree even when the profile prices no PA", async () => {
+    const test = await setup();
+    const input = {
+      ...test.input,
+      scoringProfileKey: projectionScoringProfileKey({
+        id: "WR",
+        rules: [{ statId: "receptions", points: 1 }],
+      }),
+    };
+    const evidence = await test.runner(input);
+    const report = {
+      ...response({ ...input, replayCorpusIdentity: bundle.previousCorpusIdentity }).report,
+      pointsAllowedDefinition: "espn-2019-v1",
+    };
+    const reportJson = JSON.stringify(report),
+      reportChecksum = hash(reportJson);
+    expect(() =>
+      assertRosMarginalProfileEvidenceIdentity(
+        {
+          ...evidence,
+          previousReportJson: reportJson,
+          previousReportChecksum: reportChecksum,
+          provenance: { ...evidence.provenance, previousReportChecksum: reportChecksum },
+        },
+        input,
+      ),
+    ).toThrow(/disagree on points-allowed/);
+    test.reportRunner.mockClear();
+    test.reportRunner.mockImplementation(async (job) => {
+      const value = response(job);
+      const reportJson = JSON.stringify({
+        ...value.report,
+        pointsAllowedDefinition:
+          job.replayModel === "retained-v12" ? "espn-2019-v1" : "yahoo-2022-v1",
+      });
+      return { ...value, reportJson, reportChecksum: hash(reportJson) };
+    });
+    await expect(test.runner(input)).rejects.toThrow(/disagree on points-allowed/);
+    expect(test.reportRunner).toHaveBeenCalledTimes(2);
+  });
+
+  it("rejects legacy unspecified active PA profiles before resolving any dependency", async () => {
+    const test = await setup();
+    await expect(
+      test.runner({
+        ...test.input,
+        scoringProfileKey: projectionScoringProfileKey({
+          id: "legacy",
+          rules: [{ statId: "points_allowed", points: -1 }],
+        }),
+      }),
+    ).rejects.toThrow(/explicit definition/);
+    expect(test.resolveCorpora).not.toHaveBeenCalled();
+    expect(test.reportRunner).not.toHaveBeenCalled();
+  });
+
   it("rejects unversioned live and persisted report bytes without changing archived evidence", async () => {
     const test = await setup();
     const evidence = await test.runner(test.input);

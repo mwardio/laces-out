@@ -10,7 +10,11 @@ import { createGunzip, createGzip } from "node:zlib";
 import {
   FIRST_PARTY_ROS_MODEL_VERSION,
   FIRST_PARTY_ROS_OUTCOME_SCHEMA_VERSION,
+  defensePointsAllowedDefinitionForProfile,
+  isDefensePointsAllowedStatId,
   type FirstPartyRosHeldOutForecast,
+  type ProjectionDefensePointsAllowedDefinition,
+  type ProjectionScoringProfile,
   type ProjectionStatComponents,
 } from "@laces-out/projections";
 
@@ -60,6 +64,8 @@ export interface RosHistoricalCorpus {
   readonly schemaVersion: typeof ROS_HISTORICAL_CORPUS_SCHEMA_VERSION;
   // Absent only on retained archives. Never infer current provenance from component key presence.
   readonly actualDefinitionVersion?: typeof ROS_HISTORICAL_ACTUAL_DEFINITION_VERSION;
+  /** Missing only on retained archives; binds both DST football inputs and observed labels. */
+  readonly pointsAllowedDefinition?: ProjectionDefensePointsAllowedDefinition;
   readonly buildProtocol:
     RosHistoricalCorpusBuildProvenance | RetainedV12RosHistoricalCorpusBuildProvenance;
   readonly modelVersion: string;
@@ -285,6 +291,9 @@ function validateCorpus(value: unknown, retainedV12 = false): asserts value is R
     value.schemaVersion !== ROS_HISTORICAL_CORPUS_SCHEMA_VERSION ||
     (Object.hasOwn(value, "actualDefinitionVersion") &&
       value.actualDefinitionVersion !== ROS_HISTORICAL_ACTUAL_DEFINITION_VERSION) ||
+    (Object.hasOwn(value, "pointsAllowedDefinition") &&
+      value.pointsAllowedDefinition !== "yahoo-2022-v1" &&
+      value.pointsAllowedDefinition !== "espn-2019-v1") ||
     !(retainedV12
       ? isRetainedV12RosHistoricalCorpusBuildProtocol(value.buildProtocol)
       : isCompatibleRosHistoricalCorpusBuildProtocol(value.buildProtocol)) ||
@@ -461,6 +470,47 @@ export function requireCurrentRosHistoricalActualDefinition(corpus: RosHistorica
     );
 }
 
+/** Unspecified active PA rules cannot select evidence. No priced PA imposes no definition. */
+export function rosHistoricalProfilePointsAllowedDefinition(
+  profile: ProjectionScoringProfile,
+): ProjectionDefensePointsAllowedDefinition | null {
+  const definition = defensePointsAllowedDefinitionForProfile(profile);
+  if (
+    definition === null &&
+    profile.rules.some(
+      (rule) =>
+        isDefensePointsAllowedStatId(rule.statId) &&
+        (rule.points !== 0 || (rule.bonuses ?? []).some((bonus) => bonus.points !== 0)),
+    )
+  )
+    throw new TypeError(
+      "ROS historical active points-allowed scoring requires an explicit definition",
+    );
+  return definition;
+}
+
+/** Explicit provenance is required even for profiles that do not price points allowed. */
+export function requireRosHistoricalPointsAllowedDefinition(
+  corpus: RosHistoricalCorpus,
+  profile?: ProjectionScoringProfile,
+): ProjectionDefensePointsAllowedDefinition {
+  const definition = corpus.pointsAllowedDefinition;
+  if (
+    !Object.hasOwn(corpus, "pointsAllowedDefinition") ||
+    (definition !== "yahoo-2022-v1" && definition !== "espn-2019-v1")
+  )
+    throw new TypeError(
+      "ROS historical points-allowed definition is missing or unsupported; corrected-source recapture required",
+    );
+  const requested =
+    profile === undefined ? null : rosHistoricalProfilePointsAllowedDefinition(profile);
+  if (requested !== null && requested !== definition)
+    throw new TypeError(
+      "ROS historical points-allowed definition does not match the scoring profile",
+    );
+  return definition;
+}
+
 /** Canonical content identity includes source/model/config/observed outcomes and all cache refs. */
 export function rosHistoricalCorpusIdentity(corpus: RosHistoricalCorpus): string {
   validateCorpus(corpus);
@@ -593,6 +643,7 @@ function createCorpusStore(
     signal?.throwIfAborted();
     validateCorpus(corpus);
     requireCurrentRosHistoricalActualDefinition(corpus);
+    requireRosHistoricalPointsAllowedDefinition(corpus);
     const serialized = canonical(corpus, maximumBytes);
     const identity = checksum(serialized);
     const envelope = `{"identity":${JSON.stringify(identity)},"corpus":${serialized}}`;

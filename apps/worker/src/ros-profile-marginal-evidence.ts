@@ -3,11 +3,17 @@ import { constants } from "node:fs";
 import { link, mkdir, open, rm } from "node:fs/promises";
 import path from "node:path";
 
-import { rosProfileDefinitionFromKey } from "@laces-out/projections";
+import {
+  rosProfileDefinitionFromKey,
+  type ProjectionDefensePointsAllowedDefinition,
+} from "@laces-out/projections";
 
 import type { FirstPartyRosMarginalAdmissionInput } from "./first-party-ros-marginal-admission.js";
 import { assertRosCacheHeadroom } from "./ros-cache-disk-space.js";
-import { ROS_HISTORICAL_ACTUAL_DEFINITION_VERSION } from "./ros-historical-corpus.js";
+import {
+  ROS_HISTORICAL_ACTUAL_DEFINITION_VERSION,
+  rosHistoricalProfilePointsAllowedDefinition,
+} from "./ros-historical-corpus.js";
 import {
   createPinnedRosProfileValidationRunner,
   ROS_PROFILE_VALIDATION_MAXIMUM_DIAGNOSTIC_BYTES,
@@ -91,6 +97,7 @@ export function assertRosMarginalProfileEvidenceIdentity(
     },
     input,
   );
+  let pointsAllowedDefinition: ProjectionDefensePointsAllowedDefinition | undefined;
   for (const [reportJson, reportChecksum, identity] of [
     [
       evidence.candidateReportJson,
@@ -111,12 +118,16 @@ export function assertRosMarginalProfileEvidenceIdentity(
             provenance.intervalTrainingCorpusIdentity!,
           ],
         ]),
-  ])
-    assertReport(
+  ]) {
+    const definition = assertReport(
       { reportJson: reportJson!, reportChecksum: reportChecksum!, report: {} },
       identity!,
       input.scoringProfileKey,
     );
+    if (pointsAllowedDefinition !== undefined && pointsAllowedDefinition !== definition)
+      throw new Error("ROS marginal reports disagree on points-allowed definition");
+    pointsAllowedDefinition = definition;
+  }
 }
 
 function checksum(value: string | Buffer): string {
@@ -174,7 +185,7 @@ function assertReport(
   corpusIdentity: string,
   scoringProfileKey: string,
   dependency?: RosMarginalDependency,
-): void {
+): ProjectionDefensePointsAllowedDefinition {
   if (
     typeof value.reportJson !== "string" ||
     Buffer.byteLength(value.reportJson) > ROS_PROFILE_VALIDATION_MAXIMUM_DIAGNOSTIC_BYTES ||
@@ -204,6 +215,19 @@ function assertReport(
     throw new Error(
       "ROS marginal report omitted its current actual definition, pinned corpus, scoring or diagnostics",
     );
+  const definition = report.pointsAllowedDefinition;
+  const requested = rosHistoricalProfilePointsAllowedDefinition(
+    rosProfileDefinitionFromKey(scoringProfileKey).profile,
+  );
+  if (
+    !Object.hasOwn(report, "pointsAllowedDefinition") ||
+    (definition !== "yahoo-2022-v1" && definition !== "espn-2019-v1") ||
+    (requested !== null && requested !== definition)
+  )
+    throw new Error(
+      "ROS marginal report omitted or mismatched its explicit points-allowed definition",
+    );
+  return definition;
 }
 
 /** Exclusive content-addressed writes retain the exact bytes used by admission across restarts. */
@@ -270,8 +294,10 @@ export function createRosMarginalProfileValidationRunner(options: {
   return async (input) => {
     input.signal.throwIfAborted();
     const profile = rosProfileDefinitionFromKey(input.scoringProfileKey);
+    rosHistoricalProfilePointsAllowedDefinition(profile.profile);
     const bundle = await options.resolveCorpora(input.season, input.signal);
     assertBundle(bundle, input);
+    let pointsAllowedDefinition: ProjectionDefensePointsAllowedDefinition | undefined;
     async function replay(
       identity: string,
       model: "current" | "retained-v12",
@@ -286,7 +312,7 @@ export function createRosMarginalProfileValidationRunner(options: {
         replayScope: scope,
       });
       input.signal.throwIfAborted();
-      assertReport(
+      const definition = assertReport(
         result,
         identity,
         profile.scoringProfileKey,
@@ -296,6 +322,9 @@ export function createRosMarginalProfileValidationRunner(options: {
             ? "training"
             : "candidate",
       );
+      if (pointsAllowedDefinition !== undefined && pointsAllowedDefinition !== definition)
+        throw new Error("ROS marginal reports disagree on points-allowed definition");
+      pointsAllowedDefinition = definition;
       await archiveReport(options.reportDirectory, result, input.signal);
       // Drop the separately parsed diagnostic tree before reading the next large report.
       return { reportJson: result.reportJson, reportChecksum: result.reportChecksum };

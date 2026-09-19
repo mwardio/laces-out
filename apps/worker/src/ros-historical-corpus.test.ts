@@ -53,6 +53,33 @@ afterEach(async () => {
 });
 
 describe("shared historical evaluation corpus", () => {
+  it("retains archives with unspecified PA while requiring explicit semantics for every new write", async () => {
+    const storage = await store();
+    const current = corpus();
+    const legacy = Object.fromEntries(
+      Object.entries(current).filter(([key]) => key !== "pointsAllowedDefinition"),
+    ) as unknown as RosHistoricalCorpus;
+    const identity = rosHistoricalCorpusIdentity(legacy);
+    const file = path.join(storage.directory, `${identity}.ros-corpus.json.gz`);
+    const bytes = gzipSync(JSON.stringify({ identity, corpus: legacy }));
+    await writeFile(file, bytes);
+    expect(await storage.store.read(identity)).toEqual({ state: "hit", identity, corpus: legacy });
+    await expect(storage.store.write(legacy)).rejects.toThrow(
+      /points-allowed definition.*recapture/,
+    );
+    expect(await readFile(file)).toEqual(bytes);
+    const yahoo = await storage.store.write(current);
+    const espn = await storage.store.write({ ...current, pointsAllowedDefinition: "espn-2019-v1" });
+    expect(yahoo.identity).not.toBe(espn.identity);
+    expect(yahoo.identity).not.toBe(identity);
+    expect(() =>
+      rosHistoricalCorpusIdentity({
+        ...current,
+        pointsAllowedDefinition: "unknown",
+      } as unknown as RosHistoricalCorpus),
+    ).toThrow(/invalid_manifest/);
+  });
+
   it("preserves unversioned archives without promoting their observed labels or cache references", async () => {
     const storage = await store();
     const current = snapshotRosHistoricalCorpus(corpus());
