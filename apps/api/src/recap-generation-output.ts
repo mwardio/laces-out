@@ -1,3 +1,34 @@
+import type { AiToolParameterSchema } from "@laces-out/contracts";
+
+/** Provider enforcement complements, but never replaces, the final output validator. */
+export function weeklyRecapOutputSchema(requestedWeek: number): AiToolParameterSchema {
+  if (!Number.isInteger(requestedWeek) || requestedWeek < 1 || requestedWeek > 30) {
+    throw new RangeError("The requested recap week is invalid.");
+  }
+  return {
+    type: "object",
+    properties: {
+      week: {
+        type: "integer",
+        description: "The requested completed recap week.",
+        minimum: requestedWeek,
+        maximum: requestedWeek,
+      },
+      status: {
+        type: "string",
+        description: "Written only when the supplied facts support a complete recap.",
+        enum: ["written", "unavailable"],
+      },
+      body: {
+        type: "string",
+        description: "The complete Markdown recap, or an empty string when unavailable.",
+      },
+    },
+    required: ["week", "status", "body"],
+    additionalProperties: false,
+  };
+}
+
 /** The output envelope is validated before any generated recap can be saved. */
 export const WEEKLY_RECAP_OUTPUT_INSTRUCTIONS = [
   'Return only one JSON object with exactly these keys: {"week": REQUESTED_WEEK, "status": "written", "body": "MARKDOWN_RECAP"}.',

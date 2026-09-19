@@ -45,6 +45,7 @@ import { createAiToolRegistry, type AiExecutableTool } from "./ai-tool-registry.
 import { buildRecapPromptContext } from "./recap-prompt-context.js";
 import {
   parseWeeklyRecapOutput,
+  weeklyRecapOutputSchema,
   WEEKLY_RECAP_OUTPUT_INSTRUCTIONS,
 } from "./recap-generation-output.js";
 
@@ -66,6 +67,7 @@ const PROVIDERS = ["openai", "anthropic", "gemini", "deepseek", "grok", "openrou
 const MAX_CONTEXT_JSON_CHARS = 48_000;
 export const MANAGED_GEMINI_MODEL = "gemini-3.6-flash";
 export const MANAGED_RECAP_OPENROUTER_MODEL = "x-ai/grok-4.3";
+const GEMINI_FLASH_MODEL_PATTERN = /^(?:models\/)?gemini-3(?:\.\d+)?-flash(?:-|$)/u;
 const MANAGED_RECAP_DAILY_LIMIT_PER_SPICE = 1;
 
 /** Operator-confirmed recording failures can be refunded without deleting their audit rows. */
@@ -909,6 +911,9 @@ export class AiService {
         prompt: "Reply with exactly: Connection ready",
         maxOutputTokens: 32,
         safetyIdentifier: this.#safetyIdentifier(userId),
+        ...(provider === "gemini" && GEMINI_FLASH_MODEL_PATTERN.test(execution.model)
+          ? { geminiOptions: { thinkingLevel: "minimal" as const } }
+          : {}),
       });
     } catch (error) {
       return this.#handleProviderFailure({
@@ -1141,6 +1146,18 @@ export class AiService {
         prompt,
         maxOutputTokens: execution.maxOutputTokens,
         safetyIdentifier: this.#safetyIdentifier(input.userId),
+        ...(context.recap && provider === "gemini"
+          ? {
+              geminiOptions: {
+                responseSchema: weeklyRecapOutputSchema(context.recap.week),
+                // Flash recaps summarize supplied facts. Reserve their bounded token budget
+                // for the complete answer instead of the model's default extended reasoning.
+                ...(GEMINI_FLASH_MODEL_PATTERN.test(execution.model)
+                  ? { thinkingLevel: "minimal" as const }
+                  : {}),
+              },
+            }
+          : {}),
       });
     } catch (error) {
       return this.#handleProviderFailure({
@@ -1153,7 +1170,9 @@ export class AiService {
 
     const completedAt = this.#now();
     const recapOutput = context.recap
-      ? parseWeeklyRecapOutput(completion.text, context.recap.week)
+      ? completion.stopReason === "length"
+        ? { state: "invalid" as const }
+        : parseWeeklyRecapOutput(completion.text, context.recap.week)
       : undefined;
     await this.#finalizeCompletion({
       reservationId,
@@ -1161,12 +1180,21 @@ export class AiService {
       completion,
       latencyMs: Date.now() - started,
       occurredAt: completedAt,
-      ...(recapOutput?.state === "invalid" ? { errorCode: "INVALID_RECAP_OUTPUT" } : {}),
+      ...(recapOutput?.state === "invalid"
+        ? {
+            errorCode:
+              completion.stopReason === "length"
+                ? "INCOMPLETE_RECAP_OUTPUT"
+                : "INVALID_RECAP_OUTPUT",
+          }
+        : {}),
     });
     if (recapOutput?.state === "invalid") {
       throw new AiServiceError(
         "PROVIDER_ERROR",
-        `The model did not return a complete recap for Week ${context.recap!.week}. No recap was saved.`,
+        completion.stopReason === "length"
+          ? `The provider stopped before completing the Week ${context.recap!.week} recap. No recap was saved. Try again or choose another provider. Increasing your personal provider's output limit may help.`
+          : `The model did not return a complete recap for Week ${context.recap!.week}. No recap was saved.`,
         502,
       );
     }

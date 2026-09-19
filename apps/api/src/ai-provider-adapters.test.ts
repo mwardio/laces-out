@@ -1,6 +1,7 @@
 import { describe, expect, it, vi, type Mock } from "vitest";
 
 import { createAiProviderAdapters } from "./ai-provider-adapters.js";
+import { weeklyRecapOutputSchema } from "./recap-generation-output.js";
 import type { AiProviderAdapterError, AiToolSpec } from "./ai-provider-adapters.js";
 
 const input = {
@@ -184,6 +185,100 @@ describe("AI provider adapters", () => {
     expect(requestBody(fetcher)).toMatchObject({ model: "current-model", max_tokens: 321 });
     expect(result).toMatchObject({ text: "Hold the current lineup.", requestId: "or_1" });
   });
+
+  it("requests bounded Gemini recap thinking and a native JSON schema without changing defaults", async () => {
+    const fetcher = vi.fn<Fetcher>(() =>
+      Promise.resolve(
+        new Response(
+          JSON.stringify({
+            status: "completed",
+            steps: [{ type: "model_output", content: [{ type: "text", text: "{}" }] }],
+          }),
+          { status: 200 },
+        ),
+      ),
+    );
+    const schema = weeklyRecapOutputSchema(1);
+    await createAiProviderAdapters("https://laces.test", fetcher).gemini.complete({
+      ...input,
+      model: "gemini-3.6-flash",
+      geminiOptions: { thinkingLevel: "minimal", responseSchema: schema },
+    });
+    expect(requestBody(fetcher)).toMatchObject({
+      model: "gemini-3.6-flash",
+      generation_config: { max_output_tokens: 321, thinking_level: "minimal" },
+      response_format: { type: "text", mime_type: "application/json", schema },
+      store: false,
+    });
+    fetcher.mockClear();
+    await createAiProviderAdapters("https://laces.test", fetcher).gemini.complete(input);
+    expect(requestBody(fetcher).generation_config).toEqual({ max_output_tokens: 321 });
+    expect(requestBody(fetcher)).not.toHaveProperty("response_format");
+  });
+
+  it.each(['{"week":1,"body":"Cut short', ""])(
+    "preserves Gemini's incomplete HTTP 200 status with partial or empty text (%j)",
+    async (text) => {
+      const fetcher = vi.fn<Fetcher>(() =>
+        Promise.resolve(
+          new Response(
+            JSON.stringify({
+              status: "incomplete",
+              steps: [
+                {
+                  type: "model_output",
+                  content: [{ type: "text", text }],
+                },
+              ],
+              usage: {
+                total_input_tokens: 1385,
+                total_output_tokens: 182,
+                total_thought_tokens: 2755,
+              },
+            }),
+            { status: 200 },
+          ),
+        ),
+      );
+      const result = await createAiProviderAdapters("https://laces.test", fetcher).gemini.complete({
+        ...input,
+        geminiOptions: { responseSchema: weeklyRecapOutputSchema(1) },
+      });
+      expect(result).toMatchObject({ stopReason: "length", inputTokens: 1385, outputTokens: 182 });
+    },
+  );
+
+  it("continues rejecting an empty incomplete response without the structured recap opt-in", async () => {
+    const fetcher = vi.fn<Fetcher>(() =>
+      Promise.resolve(
+        new Response(
+          JSON.stringify({
+            status: "incomplete",
+            steps: [],
+            usage: { total_output_tokens: 0 },
+          }),
+          { status: 200 },
+        ),
+      ),
+    );
+    await expect(
+      createAiProviderAdapters("https://laces.test", fetcher).gemini.complete(input),
+    ).rejects.toMatchObject({ code: "EMPTY_RESPONSE", statusCode: 502 });
+  });
+
+  it.each(["openai", "anthropic", "openrouter", "grok", "deepseek"] as const)(
+    "rejects Gemini-only generation options before contacting %s",
+    async (provider) => {
+      const fetcher = vi.fn<Fetcher>();
+      await expect(
+        createAiProviderAdapters("https://laces.test", fetcher)[provider].complete({
+          ...input,
+          geminiOptions: { thinkingLevel: "minimal" },
+        }),
+      ).rejects.toMatchObject({ code: "PROVIDER_OPTIONS_UNSUPPORTED", statusCode: 422 });
+      expect(fetcher).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([
     {
