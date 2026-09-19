@@ -6,6 +6,7 @@ import {
   runFirstPartyProjectionBacktest,
   type FirstPartyRosChampionPolicy,
   type FirstPartyRosHeldOutForecast,
+  type FirstPartyRosProjectionInput,
   type FirstPartyWeeklyStatLine,
   type FirstPartyTeamDefenseWeeklyStatLine,
   type ProjectionScoringProfile,
@@ -820,6 +821,130 @@ describe("buildFirstPartyRosLeagueTarget", () => {
   function run(input: Parameters<typeof targetInput>[0]) {
     return buildFirstPartyRosLeagueTarget(targetInput(input));
   }
+
+  function controlledConvergenceProjector(ratio: (input: FirstPartyRosProjectionInput) => number) {
+    return async (input: FirstPartyRosProjectionInput) => ({
+      ...projectFirstPartyRestOfSeason(input),
+      expectedGames: 2,
+      // Reference mean 100 has allowed difference 2; all other checked values are identical.
+      meanPoints: 100 + (input.scenarioCount === 128 ? 2 * ratio(input) : 0),
+      p15Points: 80,
+      p50Points: 100,
+      p85Points: 120,
+    });
+  }
+
+  it.each([128, 256])(
+    "rejects reference=128 with release=%s before preparing any candidate projection",
+    async (scenarioCount) => {
+      const input = targetInput({
+        policy: ninePlusPolicy(),
+        candidatePlayers: [{ playerId: "wr-0", position: "WR", team: "BUF" }],
+        matchedPositions: ["WR"],
+      });
+      const project = vi.fn(async (projection: FirstPartyRosProjectionInput) =>
+        projectFirstPartyRestOfSeason(projection),
+      );
+      await expect(
+        buildFirstPartyRosLeagueTargetAsync(
+          { ...input, scenarioCount, convergenceReferenceScenarioCount: 128 },
+          project,
+        ),
+      ).rejects.toThrow("Live ROS convergence reference must exceed the release path count");
+      expect(project).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    ["contextual", 1, 2],
+    ["contextual", 2, 1],
+    ["availability-aware-recency", 2, 0.5],
+    ["availability-aware-recency", 1, 2],
+  ] as const)(
+    "summarizes selected %s convergence with contextual ratio %s and recency ratio %s",
+    async (strategy, contextualRatio, recencyRatio) => {
+      const policy = ninePlusPolicy();
+      const result = await buildFirstPartyRosLeagueTargetAsync(
+        targetInput({
+          policy: {
+            ...policy,
+            choices: policy.choices.map((choice) => ({ ...choice, strategy })),
+          },
+          candidatePlayers: [{ playerId: "wr-0", position: "WR", team: "BUF" }],
+          matchedPositions: ["WR"],
+        }),
+        controlledConvergenceProjector((input) =>
+          input.strategy === "contextual" ? contextualRatio : recencyRatio,
+        ),
+      );
+      expect(result.target).not.toBeNull();
+      const target = result.target!;
+      const selected = strategy === "contextual" ? "contextual" : "recency";
+      const selectedRatio = strategy === "contextual" ? contextualRatio : recencyRatio;
+      expect(target.released[0]!.strategy).toBe(strategy);
+      expect(target.evidence[0]!.convergence).toMatchObject({
+        contextual: { state: contextualRatio <= 1 ? "converged" : "unstable" },
+        recency: { state: recencyRatio <= 1 ? "converged" : "unstable" },
+      });
+      expect(target.convergence).toMatchObject({
+        state: selectedRatio <= 1 ? "converged" : "unstable",
+        maxToleranceRatio: selectedRatio,
+        diagnosticChecksum: target.evidence[0]!.convergence[selected].diagnosticChecksum,
+      });
+    },
+  );
+
+  it("keeps a selected failure worse than an earlier passing boundary across cells", async () => {
+    const wrPolicy = ninePlusPolicy();
+    const rbPolicy = ninePlusPolicy("RB");
+    const runningBackHistory = history.map((row) => ({
+      ...row,
+      playerId: row.playerId.replace("wr-", "rb-"),
+      position: "RB",
+      components: {
+        ...row.components,
+        rushing_attempts: 12,
+        rushing_yards: 55,
+        rushing_touchdowns: 0,
+      },
+    }));
+    const result = await buildFirstPartyRosLeagueTargetAsync(
+      targetInput({
+        policy: {
+          ...wrPolicy,
+          choices: [
+            ...wrPolicy.choices
+              .filter((choice) => choice.position === "WR")
+              .map((choice) => ({ ...choice, strategy: "contextual" as const })),
+            ...rbPolicy.choices
+              .filter((choice) => choice.position === "RB")
+              .map((choice) => ({ ...choice, strategy: "availability-aware-recency" as const })),
+          ],
+        },
+        // The passing ratio=1 cell is deliberately first. Clipping the later failure to 1
+        // would make the old strict-greater reduction retain this false passing summary.
+        candidatePlayers: [
+          { playerId: "wr-0", position: "WR", team: "BUF" },
+          { playerId: "rb-0", position: "RB", team: "BUF" },
+        ],
+        matchedPositions: ["WR", "RB"],
+        history: [...history, ...runningBackHistory],
+      }),
+      controlledConvergenceProjector((input) =>
+        input.position === "WR" ? 1 : input.strategy === "contextual" ? 2 : 3,
+      ),
+    );
+    expect(result.target).not.toBeNull();
+    const target = result.target!;
+    expect(target.evidence.map((cell) => cell.position)).toEqual(["WR", "RB"]);
+    expect(target.evidence[0]!.convergence.contextual.state).toBe("converged");
+    expect(target.evidence[1]!.convergence.recency.state).toBe("unstable");
+    expect(target.convergence).toMatchObject({
+      state: "unstable",
+      maxToleranceRatio: 3,
+      diagnosticChecksum: target.evidence[1]!.convergence.recency.diagnosticChecksum,
+    });
+  }, 15_000);
 
   it("fits the shared prior defense game process once per target without caching mutable arrays", () => {
     const defenseFeatureHistory: FirstPartyTeamDefenseWeeklyStatLine[] = [];

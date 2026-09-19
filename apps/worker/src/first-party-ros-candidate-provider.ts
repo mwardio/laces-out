@@ -25,7 +25,6 @@ import {
 } from "@laces-out/db";
 import { NFL_TEAMS, canonicalNflTeamCode } from "@laces-out/domain";
 import {
-  FIRST_PARTY_ROS_CONVERGENCE_REFERENCE_SCENARIOS,
   fitFirstPartyDefenseGameCalibration,
   LEAGUE_SCORING_NORMALIZATION_VERSION,
   normalizeLeagueScoringProfile,
@@ -76,6 +75,7 @@ import {
   buildFirstPartyRosLiveReleaseEvidence,
   diagnoseBoundedFirstPartyRosConvergence,
   simulateFirstPartyRosCandidate,
+  validateFirstPartyRosLiveConvergenceCounts,
   type FirstPartyRosAssembledCandidateInputs,
   type FirstPartyRosCandidate,
 } from "./first-party-ros-candidates.js";
@@ -841,6 +841,12 @@ function* firstPartyRosLeagueTargetSteps(
   FirstPartyRosLeagueTargetResult,
   FirstPartyRosLiveProjection
 > {
+  const convergenceCounts = validateFirstPartyRosLiveConvergenceCounts({
+    ...(input.scenarioCount === undefined ? {} : { releaseScenarioCount: input.scenarioCount }),
+    ...(input.convergenceReferenceScenarioCount === undefined
+      ? {}
+      : { referenceScenarioCount: input.convergenceReferenceScenarioCount }),
+  });
   const scoringProfileKey = projectionScoringProfileKey(input.scoringProfile);
   const window = {
     season: input.season,
@@ -1023,13 +1029,10 @@ function* firstPartyRosLeagueTargetSteps(
     // diagnostic compares that run against the larger reference instead of re-simulating it. The
     // diagnostic verifies provenance before accepting the reuse.
     const scenarioOverrides = {
-      ...(input.scenarioCount === undefined ? {} : { releaseScenarioCount: input.scenarioCount }),
-      ...(input.convergenceReferenceScenarioCount === undefined
-        ? {}
-        : { referenceScenarioCount: input.convergenceReferenceScenarioCount }),
+      releaseScenarioCount: convergenceCounts.lower,
+      referenceScenarioCount: convergenceCounts.reference,
     };
-    const referenceScenarioCount =
-      input.convergenceReferenceScenarioCount ?? FIRST_PARTY_ROS_CONVERGENCE_REFERENCE_SCENARIOS;
+    const referenceScenarioCount = convergenceCounts.reference;
     const contextualReference = yield {
       ...representative.assembled.contextualInput,
       scenarioCount: referenceScenarioCount,
@@ -1050,7 +1053,11 @@ function* firstPartyRosLeagueTargetSteps(
       ...scenarioOverrides,
       project: () => recencyReference,
     });
-    bucketConvergences.push(contextualConvergence);
+    bucketConvergences.push(
+      representative.released.strategy === "contextual"
+        ? contextualConvergence
+        : recencyConvergence,
+    );
     const meanCoverage = {
       contextual:
         ordered.reduce((sum, entry) => sum + entry.candidate.coverage.contextual, 0) /
@@ -1090,8 +1097,8 @@ function* firstPartyRosLeagueTargetSteps(
     );
   }
 
-  // The run-level convergence diagnostic is the worst (least stable) per-bucket contextual result,
-  // so a single unstable stratum drags the whole released run's recorded diagnostic down.
+  // The run summary follows each bucket's selected strategy. Both candidates remain in the
+  // per-cell evidence above; an unselected strategy cannot replace the released one's diagnostic.
   const runConvergence = bucketConvergences.reduce((worst, candidate) =>
     candidate.maxToleranceRatio > worst.maxToleranceRatio ? candidate : worst,
   );

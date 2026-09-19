@@ -25,7 +25,7 @@ import {
   type FirstPartyRosProjectionInput,
   type ProjectionScoringProfile,
 } from "@laces-out/projections";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   FIRST_PARTY_ROS_LIVE_CONVERGENCE_REFERENCE_SCENARIOS,
@@ -222,6 +222,110 @@ describe("diagnoseBoundedFirstPartyRosConvergence", () => {
   // by the PostgreSQL suite.
   const releaseScenarioCount = 256;
   const referenceScenarioCount = 512;
+
+  function controlledProjection(scenarioCount: number, meanPoints = 100) {
+    return {
+      ...projectFirstPartyRestOfSeason(projectionInput({ scenarioCount })),
+      expectedGames: 4,
+      meanPoints,
+      p15Points: 80,
+      p50Points: 100,
+      p85Points: 120,
+    };
+  }
+
+  it.each([
+    [256, 256],
+    [512, 256],
+    [255, 512],
+    [256, 511],
+  ])("rejects invalid release/reference counts %s/%s before projection", (lower, reference) => {
+    const project = vi.fn(projectFirstPartyRestOfSeason);
+    expect(() =>
+      diagnoseBoundedFirstPartyRosConvergence({
+        projectionInput: projectionInput(),
+        releaseScenarioCount: lower,
+        referenceScenarioCount: reference,
+        project,
+      }),
+    ).toThrow(RangeError);
+    expect(project).not.toHaveBeenCalled();
+  });
+
+  it("preserves failure severity above one and the exact passing boundary", () => {
+    const reference = controlledProjection(referenceScenarioCount);
+    const evaluate = (meanPoints: number) =>
+      diagnoseBoundedFirstPartyRosConvergence({
+        projectionInput: projectionInput(),
+        releaseScenarioCount,
+        referenceScenarioCount,
+        releaseProjection: controlledProjection(releaseScenarioCount, meanPoints),
+        project: () => reference,
+      });
+    // Pin the existing v1 receipt at its inclusive boundary; successful diagnostic bytes stay
+    // unchanged while failed ratios are no longer clipped onto that same boundary.
+    expect(evaluate(102)).toEqual({
+      state: "converged",
+      lowerScenarioCount: releaseScenarioCount,
+      referenceScenarioCount,
+      maxToleranceRatio: 1,
+      diagnosticChecksum: "2f77c5c602743a23bff5fa37747bcc51afc4e3be66136d6f1a481530543001f4",
+    });
+    expect(evaluate(104)).toMatchObject({ state: "unstable", maxToleranceRatio: 2 });
+  });
+
+  it.each([
+    ["meanPoints", NaN],
+    ["p15Points", -Infinity],
+    ["p85Points", Infinity],
+    ["expectedGames", -1],
+    ["expectedGames", 19],
+    ["p50Points", 200],
+  ] as const)("rejects an invalid reference %s=%s", (metric, value) => {
+    const reference = controlledProjection(referenceScenarioCount);
+    expect(() =>
+      diagnoseBoundedFirstPartyRosConvergence({
+        projectionInput: projectionInput(),
+        releaseScenarioCount,
+        referenceScenarioCount,
+        releaseProjection: controlledProjection(releaseScenarioCount),
+        project: () => ({ ...reference, [metric]: value }),
+      }),
+    ).toThrow("Invalid ROS reference convergence summary");
+  });
+
+  it("rejects an invalid reused release before requesting a reference", () => {
+    const project = vi.fn(projectFirstPartyRestOfSeason);
+    expect(() =>
+      diagnoseBoundedFirstPartyRosConvergence({
+        projectionInput: projectionInput(),
+        releaseScenarioCount,
+        referenceScenarioCount,
+        releaseProjection: { ...controlledProjection(releaseScenarioCount), meanPoints: NaN },
+        project,
+      }),
+    ).toThrow("Invalid ROS release convergence summary");
+    expect(project).not.toHaveBeenCalled();
+  });
+
+  it.each(["seedHash", "scoringProfileKey", "inputChecksum", "strategy"] as const)(
+    "rejects a reference with mismatched %s provenance",
+    (field) => {
+      const reference = controlledProjection(referenceScenarioCount);
+      expect(() =>
+        diagnoseBoundedFirstPartyRosConvergence({
+          projectionInput: projectionInput(),
+          releaseScenarioCount,
+          referenceScenarioCount,
+          releaseProjection: controlledProjection(releaseScenarioCount),
+          project: () => ({
+            ...reference,
+            provenance: { ...reference.provenance, [field]: "foreign-reference" },
+          }),
+        }),
+      ).toThrow("ROS reference projection does not match the convergence diagnostic's own input");
+    },
+  );
 
   it("reuses an already-computed release run instead of simulating it twice", () => {
     const input = projectionInput();

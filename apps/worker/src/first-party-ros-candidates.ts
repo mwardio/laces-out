@@ -646,19 +646,15 @@ function sha256(value: unknown): string {
 }
 
 /**
- * Returns the caller's already-simulated release run when its provenance proves it is the run this
- * diagnostic would otherwise compute, and simulates it otherwise. Every identity the seed stream
- * depends on is checked, so reuse preserves the original physical paths and provenance.
+ * Checks either side of the diagnostic against its own requested input/count. Injected projectors
+ * and reused releases must obey the same identity and finite-summary contract as the engine.
  */
-function reuseOrSimulateRelease(
+function validateConvergenceProjection(
   projectionInput: FirstPartyRosProjectionInput,
   scenarioCount: number,
-  supplied: FirstPartyRosLiveProjection | undefined,
-  project: FirstPartyRosLiveProjector = projectFirstPartyRestOfSeason,
+  supplied: FirstPartyRosLiveProjection,
+  role: "release" | "reference",
 ): FirstPartyRosLiveProjection {
-  if (supplied === undefined) {
-    return project({ ...projectionInput, scenarioCount });
-  }
   const provenance = supplied.provenance;
   const expectedSeed = firstPartyRosSeedHash(projectionInput);
   if (
@@ -678,10 +674,60 @@ function reuseOrSimulateRelease(
     supplied.playerId !== projectionInput.playerId
   ) {
     throw new RangeError(
-      "Reused ROS release projection does not match the convergence diagnostic's own input",
+      `${role === "release" ? "Reused ROS release" : "ROS reference"} projection does not match the convergence diagnostic's own input`,
     );
   }
+  if (
+    [
+      supplied.expectedGames,
+      supplied.meanPoints,
+      supplied.p15Points,
+      supplied.p50Points,
+      supplied.p85Points,
+    ].some((value) => !Number.isFinite(value)) ||
+    supplied.expectedGames < 0 ||
+    supplied.expectedGames > 18 ||
+    supplied.p15Points > supplied.p50Points ||
+    supplied.p50Points > supplied.p85Points
+  ) {
+    throw new RangeError(`Invalid ROS ${role} convergence summary`);
+  }
   return supplied;
+}
+
+/** Shared preflight for direct diagnostics and providers that prepare both runs before diagnosis. */
+export function validateFirstPartyRosLiveConvergenceCounts(input: {
+  readonly releaseScenarioCount?: number;
+  readonly referenceScenarioCount?: number;
+}): {
+  readonly lower: number;
+  readonly reference: number;
+} {
+  const lower = input.releaseScenarioCount ?? FIRST_PARTY_ROS_LIVE_RELEASE_SCENARIOS;
+  const reference =
+    input.referenceScenarioCount ?? FIRST_PARTY_ROS_LIVE_CONVERGENCE_REFERENCE_SCENARIOS;
+  // Fail closed on an out-of-contract pair before any simulation: the engine's admissible range is
+  // the same range the summary store accepts, and a reference no larger than the release run would
+  // make "converged" meaningless.
+  for (const [label, value] of [
+    ["release", lower],
+    ["reference", reference],
+  ] as const) {
+    if (
+      !Number.isSafeInteger(value) ||
+      value % 2 !== 0 ||
+      value < FIRST_PARTY_ROS_MINIMUM_SCENARIOS ||
+      value > FIRST_PARTY_ROS_MAXIMUM_SCENARIOS
+    ) {
+      throw new RangeError(
+        `Live ROS ${label} scenario count must be an even integer between ${FIRST_PARTY_ROS_MINIMUM_SCENARIOS} and ${FIRST_PARTY_ROS_MAXIMUM_SCENARIOS}`,
+      );
+    }
+  }
+  if (reference <= lower) {
+    throw new RangeError("Live ROS convergence reference must exceed the release path count");
+  }
+  return { lower, reference };
 }
 
 /**
@@ -708,39 +754,20 @@ export function diagnoseBoundedFirstPartyRosConvergence(input: {
   readonly maxToleranceRatio: number;
   readonly diagnosticChecksum: string;
 } {
-  const lower = input.releaseScenarioCount ?? FIRST_PARTY_ROS_LIVE_RELEASE_SCENARIOS;
-  const reference =
-    input.referenceScenarioCount ?? FIRST_PARTY_ROS_LIVE_CONVERGENCE_REFERENCE_SCENARIOS;
-  // Fail closed on an out-of-contract pair before any simulation: the engine's admissible range is
-  // the same range the summary store accepts, and a reference no larger than the release run would
-  // make "converged" meaningless.
-  for (const [label, value] of [
-    ["release", lower],
-    ["reference", reference],
-  ] as const) {
-    if (
-      !Number.isSafeInteger(value) ||
-      value < FIRST_PARTY_ROS_MINIMUM_SCENARIOS ||
-      value > FIRST_PARTY_ROS_MAXIMUM_SCENARIOS
-    ) {
-      throw new RangeError(
-        `Live ROS ${label} scenario count must be between ${FIRST_PARTY_ROS_MINIMUM_SCENARIOS} and ${FIRST_PARTY_ROS_MAXIMUM_SCENARIOS}`,
-      );
-    }
-  }
-  if (reference < lower) {
-    throw new RangeError("Live ROS convergence reference must be at least the release path count");
-  }
-  const release = reuseOrSimulateRelease(
+  const { lower, reference } = validateFirstPartyRosLiveConvergenceCounts(input);
+  const project = input.project ?? projectFirstPartyRestOfSeason;
+  const release = validateConvergenceProjection(
     input.projectionInput,
     lower,
-    input.releaseProjection,
-    input.project,
+    input.releaseProjection ?? project({ ...input.projectionInput, scenarioCount: lower }),
+    "release",
   );
-  const referenceRun = (input.project ?? projectFirstPartyRestOfSeason)({
-    ...input.projectionInput,
-    scenarioCount: reference,
-  });
+  const referenceRun = validateConvergenceProjection(
+    input.projectionInput,
+    reference,
+    project({ ...input.projectionInput, scenarioCount: reference }),
+    "reference",
+  );
   const pairs: Record<FirstPartyRosConvergenceMetricName, { release: number; reference: number }> =
     {
       expectedGames: { release: release.expectedGames, reference: referenceRun.expectedGames },
@@ -759,6 +786,9 @@ export function diagnoseBoundedFirstPartyRosConvergence(input: {
     const absoluteDifference = Math.abs(pair.release - pair.reference);
     const allowed = Math.max(tolerance.absolute, Math.abs(pair.reference) * tolerance.relative);
     const ratio = allowed === 0 ? 0 : absoluteDifference / allowed;
+    if (!Number.isFinite(absoluteDifference) || !Number.isFinite(ratio)) {
+      throw new RangeError(`Invalid ROS convergence ${metric} difference`);
+    }
     maxToleranceRatio = Math.max(maxToleranceRatio, ratio);
     return { metric, absoluteDifference, allowed, ratio };
   });
@@ -773,7 +803,7 @@ export function diagnoseBoundedFirstPartyRosConvergence(input: {
     state: maxToleranceRatio <= 1 ? "converged" : "unstable",
     lowerScenarioCount: lower,
     referenceScenarioCount: reference,
-    maxToleranceRatio: Math.min(maxToleranceRatio, 1),
+    maxToleranceRatio,
     diagnosticChecksum,
   };
 }
