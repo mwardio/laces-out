@@ -9,7 +9,10 @@ import {
   scoreFirstPartyRosOutcomesWithSamples,
   type FirstPartyRosProjectionInput,
 } from "@laces-out/projections";
-import { evaluateRosNumericalReplication } from "../../../packages/projections/src/ros-numerical-replication.js";
+import {
+  evaluateRosNumericalReplication,
+  type RosNumericalReplicationInput,
+} from "../../../packages/projections/src/ros-numerical-replication.js";
 import {
   restoreCachedRosHistoricalOutcome,
   rosHistoricalOutcomeCacheKey,
@@ -82,7 +85,7 @@ function canonical(value: unknown): string {
  * IID assumptions, predictive accuracy or release qualification. A frozen execution manifest must
  * separately bind source/build bytes and the complete predeclared family. No live gate invokes it.
  */
-export async function evaluatePinnedRosNumericalEvidence(input: PinnedRosNumericalEvidenceInput) {
+async function capturePinnedRosNumericalEvidence(input: PinnedRosNumericalEvidenceInput) {
   const { cache, signal } = input;
   signal?.throwIfAborted();
   // Capture caller-owned values before the first await. Computing the key validates the bounded
@@ -149,9 +152,9 @@ export async function evaluatePinnedRosNumericalEvidence(input: PinnedRosNumeric
     scoringProfile,
     FIRST_PARTY_ROS_DEFAULT_SCENARIOS,
   );
-  const evaluation = evaluateRosNumericalReplication({
+  const replicationInput = {
     scores: full.samples,
-    games: ensemble.games,
+    games: new Uint8Array(ensemble.games),
     position: forecast.position,
     scheduledGames: ensemble.metadata.scheduledGames,
     provenance: {
@@ -164,7 +167,8 @@ export async function evaluatePinnedRosNumericalEvidence(input: PinnedRosNumeric
     },
     familySize: family.size,
     familyErrorBudget: family.errorBudget,
-  });
+  } satisfies RosNumericalReplicationInput;
+  const evaluation = evaluateRosNumericalReplication(replicationInput);
   for (const [actual, expected] of [
     [evaluation.summaries.release, prefix],
     [evaluation.summaries.reference, full.summary],
@@ -175,6 +179,24 @@ export async function evaluatePinnedRosNumericalEvidence(input: PinnedRosNumeric
     }
   }
   signal?.throwIfAborted();
+  return { key, manifestChecksum, family, evaluation, replicationInput };
+}
+
+/**
+ * Sequential family verification can consume the original ordered values without retaining an
+ * entire family's vectors. Uses the same pinned codec, forecast identity and scorer parity checks
+ * as the single-vector evaluator; it never fetches, simulates or repairs an unavailable vector.
+ */
+export async function readPinnedRosNumericalReplicationInput(
+  input: PinnedRosNumericalEvidenceInput,
+) {
+  const captured = await capturePinnedRosNumericalEvidence(input);
+  return { cacheIdentity: captured.key.identity, input: captured.replicationInput };
+}
+
+export async function evaluatePinnedRosNumericalEvidence(input: PinnedRosNumericalEvidenceInput) {
+  const { key, manifestChecksum, family, evaluation } =
+    await capturePinnedRosNumericalEvidence(input);
   const body = {
     version: ROS_PINNED_NUMERICAL_EVIDENCE_VERSION,
     purpose: "candidate-numerical-evidence-only",

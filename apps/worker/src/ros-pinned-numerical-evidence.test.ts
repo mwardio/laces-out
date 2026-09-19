@@ -20,8 +20,19 @@ import {
 import {
   evaluatePinnedRosNumericalEvidence,
   pinnedRosNumericalEvidenceMatchesSource,
+  readPinnedRosNumericalReplicationInput,
   ROS_PINNED_NUMERICAL_SCORER_VERSION,
 } from "./ros-pinned-numerical-evidence.js";
+import { evaluateRosNumericalReplication } from "../../../packages/projections/src/ros-numerical-replication.js";
+import {
+  evaluateRosNumericalFamily,
+  rosNumericalFamilyExecutionChecksum,
+  rosNumericalFamilyManifestChecksum,
+  ROS_NUMERICAL_FAMILY_EXECUTION_VERSION,
+  ROS_NUMERICAL_FAMILY_VERSION,
+  type RosNumericalFamilyExecution,
+  type RosNumericalFamilyManifest,
+} from "../../../packages/projections/src/ros-numerical-family.js";
 
 vi.mock("node:fs/promises", async (importOriginal) => ({
   ...(await importOriginal<typeof FileSystemPromises>()),
@@ -115,6 +126,96 @@ async function persisted(forecast = fixtureForecast(), ensemble = fixtureEnsembl
 }
 
 describe("pinned ROS numerical evidence", () => {
+  it("exposes the original ordered codec/scorer input for sequential family recomputation", async () => {
+    const { input } = await persisted();
+    const read = vi.spyOn(input.cache, "read");
+    const original = await readPinnedRosNumericalReplicationInput(input);
+    expect(original.cacheIdentity).toBe(rosHistoricalOutcomeCacheKey(input.forecast).identity);
+    expect(read).toHaveBeenCalledExactlyOnceWith(rosHistoricalOutcomeCacheKey(input.forecast), {
+      expectedScenarioCount: 16_384,
+    });
+    const evaluation = evaluateRosNumericalReplication(original.input);
+    expect(evaluation).toEqual((await evaluatePinnedRosNumericalEvidence(input)).evaluation);
+    expect(original.input.scores[0]).toBe(0);
+    expect(original.input.scores[6143]).toBe(100);
+    const decoded = await (read.mock.results[0]!.value as ReturnType<RosOutcomeCache["read"]>);
+    if (decoded.state !== "hit") throw new Error("fixture must decode");
+    decoded.ensemble.games[0] = 0;
+    expect(original.input.games[0]).toBe(1);
+  });
+
+  it("reconstructs a complete declared historical family through the real codec and scorer", async () => {
+    const { input } = await persisted();
+    input.family.size = 1;
+    const evidence = await evaluatePinnedRosNumericalEvidence(input);
+    const { vectorChecksum, ...provenance } = evidence.evaluation.measurement.provenance;
+    const family: RosNumericalFamilyManifest = {
+      version: ROS_NUMERICAL_FAMILY_VERSION,
+      numericalMethod: evidence.evaluation.version,
+      frozenAt: "2026-09-19T00:00:00.000Z",
+      scope: { kind: "historical", corpusChecksum: "a".repeat(64) },
+      sourceManifestChecksum: "c".repeat(64),
+      buildManifestChecksum: "d".repeat(64),
+      protocolChecksum: input.family.protocolChecksum,
+      confirmation: "original-seed-diagnostics",
+      familyErrorBudget: input.family.errorBudget,
+      profiles: [provenance.scoringProfileKey],
+      members: [
+        {
+          id: "synthetic-original",
+          sourceInputIdentity: evidence.source.key.identity,
+          cacheIdentity: evidence.source.key.identity,
+          baselineSeedHash: provenance.seedHash,
+          replicate: 0,
+          position: evidence.evaluation.position,
+          scheduledGames: evidence.evaluation.scheduledGames,
+          provenance,
+        },
+      ],
+    };
+    const execution: RosNumericalFamilyExecution = {
+      version: ROS_NUMERICAL_FAMILY_EXECUTION_VERSION,
+      familyChecksum: rosNumericalFamilyManifestChecksum(family),
+      startedAt: "2026-09-19T00:01:00.000Z",
+      finishedAt: "2026-09-19T00:02:00.000Z",
+      state: "completed" as const,
+      members: [
+        {
+          id: "synthetic-original",
+          state: "evaluated" as const,
+          manifestChecksum: vectorChecksum,
+          scoreVectorChecksum: evidence.evaluation.measurement.scoreVectorChecksum,
+          gamesVectorChecksum: evidence.evaluation.gamesVectorChecksum,
+          evaluationChecksum: evidence.evaluation.evidenceChecksum,
+        },
+      ],
+    };
+    const result = await evaluateRosNumericalFamily({
+      family,
+      execution,
+      expected: {
+        familyChecksum: execution.familyChecksum,
+        executionChecksum: rosNumericalFamilyExecutionChecksum(execution),
+        sourceManifestChecksum: family.sourceManifestChecksum,
+        buildManifestChecksum: family.buildManifestChecksum,
+        protocolChecksum: family.protocolChecksum,
+        scope: family.scope,
+      },
+      readOriginalMember: (_member, receipt) =>
+        readPinnedRosNumericalReplicationInput({
+          ...input,
+          expectedManifestChecksum: receipt.manifestChecksum,
+        }),
+    });
+    expect(result.effectiveNumericalState).toBe("within-tolerance");
+    expect(result.counts).toMatchObject({ declared: 1, evaluated: 1, legacyFailures: 1 });
+    expect(result.members[0]).toEqual({
+      id: "synthetic-original",
+      state: "evaluated",
+      evaluation: evidence.evaluation,
+    });
+  });
+
   it("binds the real codec and scorer while retaining a failed legacy median diagnostic", async () => {
     const { input } = await persisted();
     const read = vi.spyOn(input.cache, "read");
