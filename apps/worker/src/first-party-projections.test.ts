@@ -1589,7 +1589,14 @@ function defenseBacktestFixture(): FirstPartyTeamDefenseBacktest {
         baseline: { defensive_sacks: baseline },
         lower: { defensive_sacks: predicted - 4 },
         upper: { defensive_sacks: predicted + 4 },
-        actual: { defensive_sacks: 2.5 },
+        actual: {
+          defensive_sacks: 2.5,
+          defensive_interceptions: 0,
+          defensive_touchdowns: 0,
+          special_teams_touchdowns: 0,
+          defensive_two_point_returns: 0,
+          one_point_safeties: 0,
+        },
         trainingRows: 48,
         calibrationRows: 48,
       });
@@ -2068,6 +2075,45 @@ describe("weekly roster alias bijection", () => {
 });
 
 describe("weekly league publication withholds unsupported positions, not leagues", () => {
+  it("withholds incomplete defensive actuals while publishing offense and preserving later league evaluation", () => {
+    const healthy = defenseBacktestFixture();
+    const broken = {
+      ...healthy,
+      predictions: healthy.predictions.map((row, index) => {
+        if (index !== 0) return row;
+        const actual = { ...row.actual };
+        delete actual.defensive_sacks;
+        return { ...row, actual };
+      }),
+    };
+    const memo = new FirstPartyPublicationEvidenceMemo();
+    const plan = planPublications({
+      rules: DST_SUPPORTED_RULES,
+      defenseBacktest: broken,
+      scoringEvidenceMemo: memo,
+    });
+    expect(plan.publications).toHaveLength(1);
+    expect(plan.publications[0]?.metadata.publishedPositions).toEqual([
+      "QB",
+      "RB",
+      "WR",
+      "TE",
+      "K",
+    ]);
+    expect(plan.withheld[0]?.positions).toContainEqual({
+      position: "DST",
+      source: "component-coverage",
+      reasons: ["Observed defensive scoring is incomplete: missing defensive_sacks."],
+    });
+    const next = planPublications({
+      rules: DST_SUPPORTED_RULES,
+      defenseBacktest: healthy,
+      scoringEvidenceMemo: memo,
+    });
+    expect(next.publications[0]?.metadata.publishedPositions).toContain("DST");
+    expect(next.withheld).toHaveLength(0);
+  });
+
   it("publishes every position a league can be priced for and withholds only D/ST", () => {
     const plan = planPublications({ rules: GARAGELY_SHAPED_RULES });
 
@@ -3080,6 +3126,7 @@ describe("bounded weekly publication evidence memo", () => {
       candidates: { ...compactCandidates, champion: { policy: champion.policy } },
       player: evaluated.playerEvaluation,
       defense: evaluateFirstPartyTeamDefenseBacktestForScoringProfile(defense, scoring),
+      defenseComponentCoverage: [],
     };
     const memo = new FirstPartyPublicationEvidenceMemo();
     const cold = memo.get(players, defense, scoring);

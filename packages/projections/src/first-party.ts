@@ -6,6 +6,7 @@ import {
   SCORING_SIGNED_YARDAGE_COMPONENTS,
   YAHOO_NONNEGATIVE_YARDAGE_COMPONENTS,
   projectionScoringProfileKey,
+  observedScoringComponentIssues,
   scoreProjectionStatComponents,
   type ProjectionScoringProfile,
   type ProjectionStatComponents,
@@ -1005,9 +1006,10 @@ const TEAM_DEFENSE_MODELED_COMPONENTS = [
  * three upper bound over the same exposure is **0.00057 expected points per team-week**.
  *
  * This is a disclosed constant-zero approximation, not a fitted event rate. The rules remain
- * mapped and carried in every scored profile. Current defense training history does not include
- * these events, and both forecasts and canonical actuals use zero; ordinary backtest metrics
- * therefore cannot independently validate this omission. The July evidence motivates the limited
+ * mapped and carried in every scored profile. This approximation applies only to forecasts;
+ * observed events must retain their actual counts when backtests score the realized outcome.
+ * Historical rows without those observations still need source completeness checks before
+ * qualification. The July evidence motivates the limited
  * approximation rather than proving that an individual future game cannot contain either event.
  *
  * Scoring support is limited to the documented absolute two/one-point awards below. Larger
@@ -3664,10 +3666,13 @@ function teamDefenseActualComponents(
   row: FirstPartyTeamDefenseWeeklyStatLine,
 ): Record<string, number> {
   const components: Record<string, number> = {};
-  for (const component of TEAM_DEFENSE_MODELED_COMPONENTS) {
-    components[component] = defenseComponentValue(row, component) ?? 0;
+  // A small expected contribution is a forecast assumption, never permission to erase an
+  // observed score. Missing or invalid observations stay missing so profile-specific scoring
+  // can withhold incomplete evidence instead of evaluating a fabricated zero.
+  for (const component of TEAM_DEFENSE_COMPONENTS) {
+    const value = defenseComponentValue(row, component);
+    if (value !== undefined) components[component] = value;
   }
-  applyTeamDefenseDeMinimisZeros(components);
   return components;
 }
 
@@ -4129,7 +4134,8 @@ export function runFirstPartyTeamDefenseBacktest(
       // dilute the measurements of the components that ARE forecasts, which is the opposite of
       // grading them.
       for (const component of TEAM_DEFENSE_MODELED_COMPONENTS) {
-        const actualValue = actualComponents[component] ?? 0;
+        const actualValue = actualComponents[component];
+        if (actualValue === undefined) continue;
         const predicted = projection.components[component] ?? 0;
         weekResiduals.push({ component, error: actualValue - predicted });
         metricSamples.push({
@@ -4203,6 +4209,16 @@ export function evaluateFirstPartyTeamDefenseBacktestForScoringProfile(
 
   const scored = backtest.predictions
     .map((prediction) => {
+      const evidence = observedScoringComponentIssues({
+        components: prediction.actual,
+        profile: scoringProfile,
+        applicableStatIds: TEAM_DEFENSE_COMPONENTS,
+      });
+      if (evidence.missingComponents.length > 0 || evidence.invalidComponents.length > 0) {
+        throw new Error(
+          `Incomplete observed D/ST scoring components for ${prediction.team} ${prediction.season} week ${prediction.week}: ${[...evidence.missingComponents, ...evidence.invalidComponents].join(", ")}`,
+        );
+      }
       const actual = scoreProjectionStatComponents(prediction.actual, scoringProfile);
       const projected = scoreProjectionStatComponents(prediction.predicted, scoringProfile);
       const baseline = scoreProjectionStatComponents(prediction.baseline, scoringProfile);

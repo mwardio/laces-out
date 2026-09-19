@@ -63,6 +63,7 @@ import {
   firstPartyProjectionPositionIsSupported,
   firstPartyTeamDefenseProjectionComponents,
   normalizeLeagueScoringProfile,
+  observedScoringComponentIssues,
   projectFirstPartyRecencyBaselineComponents,
   projectFirstPartyTeamDefenseComponents,
   projectFirstPartyWeeklyComponents,
@@ -1547,6 +1548,7 @@ interface FirstPartyPublicationEvidence {
   readonly candidates: CompactPublicationCandidates;
   readonly player: FirstPartyScoredBacktestEvaluation;
   readonly defense: FirstPartyScoredTeamDefenseEvaluation;
+  readonly defenseComponentCoverage: readonly string[];
 }
 
 /**
@@ -1605,10 +1607,29 @@ export class FirstPartyPublicationEvidenceMemo {
       additiveRecencyPositions: evaluated.additiveRecencyPositions,
       weeklyIntervals: evaluated.weeklyIntervals,
     };
+    const defenseCoverage = new Set<string>();
+    for (const prediction of defenseBacktest.predictions) {
+      const issues = observedScoringComponentIssues({
+        components: prediction.actual,
+        profile,
+        applicableStatIds: firstPartyTeamDefenseProjectionComponents(),
+      });
+      for (const name of issues.missingComponents) defenseCoverage.add(`missing ${name}`);
+      for (const name of issues.invalidComponents) defenseCoverage.add(`invalid ${name}`);
+    }
+    const defenseComponentCoverage = [...defenseCoverage].sort();
     const evidence: FirstPartyPublicationEvidence = {
       candidates,
       player: candidates.playerEvaluation,
-      defense: evaluateFirstPartyTeamDefenseBacktestForScoringProfile(defenseBacktest, profile),
+      // Incomplete observations make this profile's defense evidence unavailable. Retain an
+      // explicit zero-sample result and coverage reasons while other positions/leagues proceed.
+      defense: evaluateFirstPartyTeamDefenseBacktestForScoringProfile(
+        defenseComponentCoverage.length === 0
+          ? defenseBacktest
+          : { ...defenseBacktest, predictions: [] },
+        profile,
+      ),
+      defenseComponentCoverage,
     };
     this.#profiles.set(key, evidence);
     if (this.#profiles.size > this.maximumProfiles) {
@@ -3909,24 +3930,33 @@ export function buildFirstPartyLeaguePublications(input: {
     const defensePublishable =
       supportedByLeague.has("DST") &&
       defenseRelevant &&
+      evidence.defenseComponentCoverage.length === 0 &&
       defenseEvaluationClearsGate(defenseEvaluation);
     if (supportedByLeague.has("DST") && !defensePublishable) {
       withheldPositions.push(
-        defenseRelevant
+        evidence.defenseComponentCoverage.length > 0
           ? {
               position: "DST",
-              source: "backtest-gate",
+              source: "component-coverage",
               reasons: [
-                "The D/ST league-scored backtest did not clear the recency-only baseline gate.",
+                `Observed defensive scoring is incomplete: ${evidence.defenseComponentCoverage.join(", ")}.`,
               ],
             }
-          : {
-              position: "DST",
-              source: "normalization",
-              reasons: [
-                "The emitted scoring profile carries no D/ST rule this projection run can price.",
-              ],
-            },
+          : defenseRelevant
+            ? {
+                position: "DST",
+                source: "backtest-gate",
+                reasons: [
+                  "The D/ST league-scored backtest did not clear the recency-only baseline gate.",
+                ],
+              }
+            : {
+                position: "DST",
+                source: "normalization",
+                reasons: [
+                  "The emitted scoring profile carries no D/ST rule this projection run can price.",
+                ],
+              },
       );
     }
     if (publishablePlayerPositions.size === 0 && !defensePublishable) {

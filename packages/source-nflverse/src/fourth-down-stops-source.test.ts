@@ -96,7 +96,10 @@ describe("NflverseFourthDownStopsSource", () => {
 
   it("fails closed on malformed gzip and incomplete play-by-play schemas", async () => {
     const malformed = new NflverseFourthDownStopsSource({
-      fetch: () => Promise.resolve(new Response("not gzip")),
+      fetch: () =>
+        Promise.resolve(
+          new Response("not gzip", { headers: { "content-type": "application/gzip" } }),
+        ),
     });
     await expect(malformed.load(2024)).rejects.toMatchObject({ code: "INVALID_CSV" });
 
