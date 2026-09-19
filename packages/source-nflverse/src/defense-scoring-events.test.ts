@@ -114,7 +114,17 @@ function observedEdgeCases(): DefenseScoringRow[] {
     "utf8",
   );
   expect(createHash("sha256").update(csv).digest("hex")).toBe(
-    "61da2da3b48ed778eb592de3f66c7e4534aa21db13d0af1f0a4741b47f822acc",
+    "05184978b63ea0be3c9d8ec39c43f35b63a2f5138c15b3d499d8fdcbb2846d6c",
+  );
+  return parse(csv, { columns: true, skip_empty_lines: true });
+}
+function observed2019EdgeCases(): DefenseScoringRow[] {
+  const csv = readFileSync(
+    new URL("./fixtures/defense-scoring-2019-try-and-repeated-fumble.csv", import.meta.url),
+    "utf8",
+  );
+  expect(createHash("sha256").update(csv).digest("hex")).toBe(
+    "ede1f238d5ba771d6771c308328b0c5ef49ece758383723afd9f11754c66754f",
   );
   return parse(csv, { columns: true, skip_empty_lines: true });
 }
@@ -145,7 +155,7 @@ describe("bound final-game defense scoring events", () => {
       "utf8",
     );
     expect(createHash("sha256").update(csv).digest("hex")).toBe(
-      "6606906ffb58f3902e69318e901f3b27ef216d06f4b1577c97b00167cc49c4b2",
+      "f72dd995f0c893c23ad185098b56aae3ae2b998cacea8bc746b3646f7e439980",
     );
     const rows: DefenseScoringRow[] = parse(csv, { columns: true, skip_empty_lines: true });
     const captured = input(rows, 26, 22);
@@ -313,6 +323,56 @@ describe("bound final-game defense scoring events", () => {
     expect(actual.state).toBe("complete");
     expect(actual.teams?.[0]).toMatchObject({ safeties: 1, onePointSafeties: 0 });
   });
+  it("recognizes the real 2019 blocked-PAT return and same-player repeated fumble", () => {
+    // Official public 2019 PBP gzip SHA:
+    // b764668137052be23745953cbc33fa17e537a70c81e9b73785a19a15e7288216
+    // https://www.chiefs.com/video/charvarius-ward-runs-back-blocked-point-after-to-close-out-chiefs-win
+    // https://www.steelers.com/news/season-ends-with-loss-to-ravens
+    for (const observed of observed2019EdgeCases()) {
+      const actual = inspectObservedEvent(observed);
+      expect(actual.state).toBe("unresolved"); // A two-row selection never claims full-game coverage.
+      expect(actual.events[0]).toMatchObject({
+        playId: observed.play_id,
+        kind:
+          observed.play_id === "3713" ? "defensive-two-point-return" : "defensive-fumble-touchdown",
+      });
+      expect(reasons(actual)).not.toContain("scoring-event-unresolved");
+    }
+  });
+  it("requires complete player identity proof before allowing an absent second-fumbler slot", () => {
+    const original = observed2019EdgeCases().find((entry) => entry.play_id === "3380")!;
+    for (const changes of [
+      { fumbled_1_player_id: "" },
+      { fumble_recovery_1_player_id: "" },
+      { fumble_recovery_2_player_id: "" },
+      { td_player_id: "" },
+      { fumbled_1_player_id: original.fumble_recovery_2_player_id },
+      { fumble_recovery_2_player_id: original.fumble_recovery_1_player_id },
+      { fumbled_2_player_id: original.fumbled_1_player_id },
+      { fumbled_2_team: "BAL" },
+      { fumble_recovery_1_team: "BAL" },
+      { fumble_recovery_2_team: "PIT" },
+      { interception: "1" },
+      { punt_attempt: "1" },
+    ]) {
+      const actual = inspectObservedEvent({ ...original, ...changes });
+      expect(reasons(actual)).toContain("scoring-event-unresolved");
+      expect(actual.teams).toBeNull();
+    }
+  });
+  it("still requires exactly one try type and a two-point defensive delta for PAT returns", () => {
+    const original = observed2019EdgeCases().find((entry) => entry.play_id === "3713")!;
+    for (const changes of [
+      { extra_point_attempt: "0" },
+      { two_point_attempt: "1" },
+      { defensive_extra_point_conv: "1" },
+      { defteam_score_post: "39" },
+      { defteam_score_post: "38", posteam_score_post: "11" },
+    ])
+      expect(reasons(inspectObservedEvent({ ...original, ...changes }))).toContain(
+        "scoring-event-unresolved",
+      );
+  });
   it("refuses contradictory positive scoring facts rather than choosing one", () => {
     const safetyAndKick = result(
       [
@@ -339,7 +399,14 @@ describe("bound final-game defense scoring events", () => {
     );
     expect(reasons(safetyAndReturn)).toContain("scoring-event-unresolved");
     const wrongTry = result(
-      [row({ extra_point_attempt: "1", defensive_two_point_conv: "1", defteam_score_post: "2" })],
+      [
+        row({
+          extra_point_attempt: "1",
+          two_point_attempt: "1",
+          defensive_two_point_conv: "1",
+          defteam_score_post: "2",
+        }),
+      ],
       2,
     );
     expect(reasons(wrongTry)).toContain("scoring-event-unresolved");

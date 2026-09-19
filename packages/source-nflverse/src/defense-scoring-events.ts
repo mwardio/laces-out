@@ -6,7 +6,7 @@ import { createHash } from "node:crypto";
  * and https://raw.githubusercontent.com/nflverse/nflfastR/master/R/calculate_stats.R .
  * In particular, nflfastR's def_tds excludes separately aggregated fumble-recovery touchdowns.
  */
-export const NFLVERSE_DEFENSE_SCORING_EVENTS_VERSION = "nflverse-defense-scoring-events-v2";
+export const NFLVERSE_DEFENSE_SCORING_EVENTS_VERSION = "nflverse-defense-scoring-events-v3";
 export type DefenseScoringRow = Readonly<Record<string, unknown>>;
 export interface DefenseScoringGame {
   readonly gameId: string;
@@ -89,6 +89,9 @@ function flag(value: unknown): 0 | 1 | null {
 function missing(value: unknown): boolean {
   return value === undefined || value === null || value === "" || value === "NA";
 }
+function playerId(value: unknown): value is string {
+  return typeof value === "string" && /^00-\d{7}$/u.test(value);
+}
 function time(value: string): number {
   return /^\d{4}-\d\d-\d\dT.*(?:Z|[+-]\d\d:\d\d)$/u.test(value) ? Date.parse(value) : NaN;
 }
@@ -164,8 +167,12 @@ const factFields = [
   "return_team",
   "fumble_recovery_1_team",
   "fumble_recovery_2_team",
+  "fumble_recovery_1_player_id",
+  "fumble_recovery_2_player_id",
   "fumbled_1_team",
   "fumbled_2_team",
+  "fumbled_1_player_id",
+  "fumbled_2_player_id",
   "field_goal_result",
   "extra_point_result",
   "two_point_conv_result",
@@ -210,7 +217,9 @@ function classify(
     is("defensive_two_point_conv") || is("defensive_extra_point_conv"),
   ];
   if (declaredKinds.filter(Boolean).length !== 1) return null;
-  if (is("defensive_two_point_conv") && !is("two_point_attempt")) return null;
+  // A two-point defensive score can follow a blocked PAT. The 2019 OAK–KC return
+  // uses defensive_two_point_conv=1 and extra_point_attempt=1 in the official data.
+  if (is("defensive_two_point_conv") && is("defensive_extra_point_conv")) return null;
   if (is("defensive_extra_point_conv") && !is("extra_point_attempt")) return null;
   const tryPlay = is("extra_point_attempt") || is("two_point_attempt");
   if (is("extra_point_attempt") && is("two_point_attempt")) return null;
@@ -236,6 +245,17 @@ function classify(
   // another offensive fumble and the defense's scoring recovery. Require that exact chain.
   if (is("interception") && is("fumble")) return null;
   if (!missing(row.fumble_recovery_2_team)) {
+    // These slots identify different PLAYERS, not fumble occurrences. One player may
+    // recover his own fumble and fumble again (2019 PIT–BAL play 3380), leaving the
+    // second-fumbler slot empty. Require both recovery identities and the TD recipient.
+    const samePlayerFumbledTwice =
+      missing(row.fumbled_2_team) &&
+      missing(row.fumbled_2_player_id) &&
+      playerId(row.fumbled_1_player_id) &&
+      row.fumbled_1_player_id === row.fumble_recovery_1_player_id &&
+      playerId(row.fumble_recovery_2_player_id) &&
+      row.fumble_recovery_2_player_id !== row.fumbled_1_player_id &&
+      row.fumble_recovery_2_player_id === row.td_player_id;
     const understoodChain =
       !is("interception") &&
       is("fumble") &&
@@ -248,7 +268,7 @@ function classify(
       ) &&
       scoringTeam === defense &&
       team(row.fumbled_1_team) === offense &&
-      team(row.fumbled_2_team) === offense &&
+      (team(row.fumbled_2_team) === offense || samePlayerFumbledTwice) &&
       team(row.fumble_recovery_1_team) === offense &&
       team(row.fumble_recovery_2_team) === defense;
     return understoodChain ? "defensive-fumble-touchdown" : null;
