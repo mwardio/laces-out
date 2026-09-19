@@ -1,4 +1,4 @@
-import { NFL_TEAMS, canonicalNflTeamCode } from "@laces-out/domain";
+import { NFL_TEAMS, canonicalNflTeamCode, providerPlayerCrosswalkId } from "@laces-out/domain";
 
 import type { DecisionProjectionPlayerRow } from "./in-season-decisions.js";
 
@@ -39,7 +39,8 @@ function providerKey(row: ProjectionExternalIdentity, leagueSeasonId: string): s
       : undefined;
   }
   if (["espn", "sleeper-espn", "yahoo", "sleeper-yahoo"].includes(row.source)) {
-    return `${row.source.replace("sleeper-", "")}:${row.externalId}`;
+    const id = providerPlayerCrosswalkId(row.source, row.externalId);
+    return id === undefined ? undefined : `${row.source.replace("sleeper-", "")}:${id}`;
   }
   return undefined;
 }
@@ -71,7 +72,14 @@ export function reconcileRosterIdentityAliases<T extends ProjectionRosterIdentit
   const projections = new Map(input.projections.map((row) => [row.playerId, row]));
   const roster = new Map(input.rosterPlayers.map((row) => [row.playerId, row]));
   const keys = new Map<string, Set<string>>();
+  const invalidYahooPlayers = new Set<string>();
   for (const row of input.externalIds) {
+    if (
+      (row.source === "yahoo" || row.source === "sleeper-yahoo") &&
+      providerPlayerCrosswalkId(row.source, row.externalId) === undefined
+    ) {
+      invalidYahooPlayers.add(row.playerId);
+    }
     const key = providerKey(row, input.leagueSeasonId);
     if (!key) continue;
     const values = keys.get(row.playerId) ?? new Set<string>();
@@ -84,6 +92,7 @@ export function reconcileRosterIdentityAliases<T extends ProjectionRosterIdentit
   const proposed: (T & { readonly projectionPlayerId: string })[] = [];
   for (const row of roster.values()) {
     if (projections.has(row.playerId) || row.gsisId?.trim()) continue;
+    if (invalidYahooPlayers.has(row.playerId)) continue;
     const rosterTeam = team(row.nflTeam);
     const rosterPosition = position(row.primaryPosition);
     if (!rosterTeam || !["QB", "RB", "WR", "TE", "K", "DST"].includes(rosterPosition)) continue;
@@ -105,6 +114,7 @@ export function reconcileRosterIdentityAliases<T extends ProjectionRosterIdentit
           );
     if (matches.length !== 1) continue;
     const match = matches[0]!;
+    if (invalidYahooPlayers.has(match.playerId)) continue;
     if (!compatible(match) || roster.has(match.playerId)) continue;
     const candidateKeys = keys.get(match.playerId) ?? new Set<string>();
     const conflict = ["espn:", "yahoo:"].some((prefix) => {
