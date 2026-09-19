@@ -37,6 +37,7 @@ import {
   canonicalProjectionPlayerId,
   projectionProviderCanonicalMatches,
   projectionStatusCanonicalMatches,
+  projectionNameCanonicalMatches,
   effectiveFirstPartyProjectionPositions,
   evaluateFirstPartyPublicationCandidates,
   FirstPartyPublicationEvidenceMemo,
@@ -62,6 +63,162 @@ import {
   requiredFirstPartyProjectionSourceKeys,
   sourceIsUsableForProjection,
 } from "./first-party-projections.js";
+
+describe("weekly name identity resolution", () => {
+  const alias = {
+    id: "alias",
+    gsisId: null,
+    fullName: "James Cook III",
+    nflTeam: "BUF",
+    primaryPosition: "RB",
+  };
+  const canonical = { ...alias, id: "canonical", gsisId: "00-0037249", fullName: "James Cook" };
+  const yahoo = { playerId: alias.id, source: "yahoo", externalId: "470.p.99999" };
+  const resolve = (input: Partial<Parameters<typeof projectionNameCanonicalMatches>[0]> = {}) =>
+    projectionNameCanonicalMatches({
+      players: [alias, canonical],
+      externalIds: [yahoo],
+      explicitMatches: new Map(),
+      ...input,
+    });
+
+  it.each([
+    ["James Cook III", "James Cook"],
+    ["KC Concepcion Jr.", "KC Concepcion"],
+    ["Travis Etienne Jr.", "Travis Etienne"],
+    ["Kyle Pitts Sr.", "Kyle Pitts"],
+  ])("binds a unique suffix variant %s to %s", (rosterName, catalogName) => {
+    expect(
+      resolve({
+        players: [
+          { ...alias, fullName: rosterName },
+          { ...canonical, fullName: catalogName },
+        ],
+      }).get(alias.id),
+    ).toBe(canonical.id);
+  });
+
+  it("rejects differing suffixes and the entire ambiguous base-name cohort", () => {
+    expect(
+      resolve({ players: [alias, { ...canonical, fullName: "James Cook II" }] }).get(alias.id),
+    ).toBeNull();
+    const sameBase = {
+      ...canonical,
+      id: "other",
+      gsisId: "other-gsis",
+      fullName: "James Cook Jr.",
+    };
+    for (const players of [
+      [alias, canonical, sameBase],
+      [sameBase, canonical, alias],
+    ]) {
+      expect(resolve({ players }).get(alias.id)).toBeNull();
+    }
+  });
+
+  it("prefers a unique exact full name before considering other same-base candidates", () => {
+    const exact = { ...canonical, fullName: alias.fullName };
+    const unsuffixed = { ...canonical, id: "other", gsisId: "other-gsis" };
+    for (const players of [
+      [alias, exact, unsuffixed],
+      [unsuffixed, exact, alias],
+    ]) {
+      expect(resolve({ players }).get(alias.id)).toBe(canonical.id);
+    }
+  });
+
+  it("does not use provider facts to prune an ambiguous name cohort", () => {
+    expect(
+      resolve({
+        players: [alias, canonical, { ...canonical, id: "other", gsisId: "other-gsis" }],
+        externalIds: [yahoo, { playerId: "other", source: "sleeper-yahoo", externalId: "12345" }],
+      }).get(alias.id),
+    ).toBeNull();
+  });
+
+  it.each(["James Cook", "James Cook III"])(
+    "rejects contradictory provider facts for exact or suffix names: %s",
+    (fullName) => {
+      for (const externalId of ["12345", "nba.p.99999", ""]) {
+        expect(
+          resolve({
+            players: [{ ...alias, fullName }, canonical],
+            externalIds: [yahoo, { playerId: canonical.id, source: "sleeper-yahoo", externalId }],
+          }).get(alias.id),
+        ).toBeNull();
+      }
+    },
+  );
+
+  it("keeps unavailable explicit evidence and outside-catalog bridges unavailable", () => {
+    for (const id of [null, "outside-catalog"]) {
+      expect(resolve({ explicitMatches: new Map([[alias.id, id]]) }).get(alias.id)).toBeNull();
+    }
+  });
+
+  it("retains an explicit compatible bridge even when names differ", () => {
+    expect(
+      resolve({
+        players: [alias, { ...canonical, fullName: "Different Display Name" }],
+        explicitMatches: new Map([[alias.id, canonical.id]]),
+      }).get(alias.id),
+    ).toBe(canonical.id);
+  });
+
+  it.each([{ nflTeam: "NYJ" }, { primaryPosition: "WR" }])(
+    "rejects an explicit bridge incompatible with current roster facts: %j",
+    (change) => {
+      expect(
+        resolve({
+          players: [alias, { ...canonical, ...change }],
+          explicitMatches: new Map([[alias.id, canonical.id]]),
+        }).get(alias.id),
+      ).toBeNull();
+    },
+  );
+
+  it("requires trusted GSIS and retains catalog GSIS authority", () => {
+    expect(
+      resolve({ players: [alias, { ...canonical, gsisId: null }] }).get(alias.id),
+    ).toBeUndefined();
+    expect(
+      resolve({
+        players: [alias, canonical],
+        explicitMatches: new Map([[canonical.id, null]]),
+      }).get(canonical.id),
+    ).toBeNull();
+    expect(
+      canonicalProjectionPlayerId({
+        playerId: canonical.id,
+        hasGsisId: true,
+        explicitMatchId: null,
+      }),
+    ).toBe(canonical.id);
+  });
+
+  it("blocks scoped ESPN candidate conflicts and leaves unrelated punctuation intact", () => {
+    expect(
+      resolve({
+        externalIds: [
+          {
+            playerId: alias.id,
+            source: "espn-self-asserted",
+            externalId: "10000000-0000-4000-8000-000000000001:123",
+          },
+          { playerId: canonical.id, source: "sleeper-espn", externalId: "456" },
+        ],
+      }).get(alias.id),
+    ).toBeNull();
+    expect(
+      resolve({
+        players: [
+          { ...alias, fullName: "K.C. Concepcion Jr." },
+          { ...canonical, fullName: "KC Concepcion" },
+        ],
+      }).get(alias.id),
+    ).toBeUndefined();
+  });
+});
 
 describe("weekly publication clock fence", () => {
   const kickoffAt = new Date("2026-09-13T17:00:00Z");
@@ -1743,6 +1900,170 @@ function planPublications(input: {
 }
 
 const DEFENSE_ROW_IDS = new Set(PUBLICATION_TEAMS.map((team) => firstPartyDefensePlayerId(team)));
+
+describe("weekly roster alias bijection", () => {
+  const secondLeagueId = "20000000-0000-4000-8000-000000000002";
+  const canonicalId = leaguePlayerId("RB");
+
+  function planAliases(input: {
+    readonly aliases: readonly {
+      readonly playerId: string;
+      readonly leagueSeasonScopes: readonly string[];
+    }[];
+    readonly rosters: readonly { readonly leagueSeasonId: string; readonly playerId: string }[];
+    readonly reverse?: boolean;
+  }) {
+    const leagues = [...new Set(input.rosters.map((row) => row.leagueSeasonId))].map((id) => ({
+      id,
+      provider: "espn",
+      currentWeek: PUBLICATION_WEEK,
+      teamCount: 12,
+    }));
+    const backtest = playerBacktestFixture();
+    const canonical = publishedPlayerFixture("RB", PUBLICATION_TEAMS[0]);
+    const publishedPlayers = [
+      ...BACKTEST_POSITIONS.map((position) =>
+        publishedPlayerFixture(position, PUBLICATION_TEAMS[0]),
+      ),
+      ...input.aliases.map((alias) => ({ ...canonical, ...alias, canonicalMatchId: canonicalId })),
+    ];
+    return buildFirstPartyLeaguePublications({
+      season: PUBLICATION_SEASON,
+      week: PUBLICATION_WEEK,
+      now: PUBLICATION_NOW,
+      sourceAsOf: PUBLICATION_NOW,
+      inputChecksum: "b".repeat(64),
+      playerBacktest: backtest,
+      basePlayerBacktest: backtest,
+      defenseBacktest: defenseBacktestFixture(),
+      players: PUBLICATION_TEAMS.map((team) => ({
+        id: firstPartyDefensePlayerId(team),
+        gsisId: null,
+        fullName: `${team} D/ST`,
+        nflTeam: team,
+        primaryPosition: "D/ST",
+        status: null,
+        lastSeason: PUBLICATION_SEASON,
+      })),
+      leagues,
+      rules: leagues.flatMap((league) =>
+        DST_SUPPORTED_RULES.map((rule) => ({
+          ...rule,
+          leagueSeasonId: league.id,
+        })),
+      ),
+      rosters: input.rosters.map((row) => ({
+        ...row,
+        primaryPosition: "RB",
+        nflTeam: PUBLICATION_TEAMS[0],
+      })),
+      publishedPlayers: input.reverse ? publishedPlayers.reverse() : publishedPlayers,
+      publishedDefenses: PUBLICATION_TEAMS.map((team) => publishedDefenseFixture(team)),
+      previousRowsByLeague: new Map(),
+    });
+  }
+
+  it.each([false, true])(
+    "rejects both aliases of one NFL player in the same league (reversed=%s)",
+    (reverse) => {
+      const plan = planAliases({
+        aliases: ["alias-a", "alias-b"].map((playerId) => ({
+          playerId,
+          leagueSeasonScopes: [LEAGUE_SEASON_ID],
+        })),
+        rosters: ["alias-a", "alias-b"].map((playerId) => ({
+          playerId,
+          leagueSeasonId: LEAGUE_SEASON_ID,
+        })),
+        reverse,
+      });
+      expect(plan.publications).toEqual([]);
+      expect(plan.withheld).toEqual([
+        {
+          leagueSeasonId: LEAGUE_SEASON_ID,
+          scope: "league",
+          reasons: [
+            "Roster identity is ambiguous for 2 players: multiple roster entries resolve to the same NFL player.",
+          ],
+        },
+      ]);
+    },
+  );
+
+  it("preserves separate league aliases for the same canonical player", () => {
+    const plan = planAliases({
+      aliases: [
+        { playerId: "alias-a", leagueSeasonScopes: [LEAGUE_SEASON_ID] },
+        { playerId: "alias-b", leagueSeasonScopes: [secondLeagueId] },
+      ],
+      rosters: [
+        { playerId: "alias-a", leagueSeasonId: LEAGUE_SEASON_ID },
+        { playerId: "alias-b", leagueSeasonId: secondLeagueId },
+      ],
+    });
+    expect(plan.withheld).toEqual([]);
+    expect(plan.publications).toHaveLength(2);
+    for (const [league, alias, otherAlias] of [
+      [LEAGUE_SEASON_ID, "alias-a", "alias-b"],
+      [secondLeagueId, "alias-b", "alias-a"],
+    ] as const) {
+      const ids = plan.publications
+        .find((entry) => entry.league.id === league)
+        ?.rows.map((row) => row.playerId);
+      expect(ids).toContain(alias);
+      expect(ids).not.toContain(otherAlias);
+      expect(ids).not.toContain(canonicalId);
+    }
+  });
+
+  it("withholds only the colliding league in a shared multi-league plan", () => {
+    const plan = planAliases({
+      aliases: [
+        { playerId: "alias-a", leagueSeasonScopes: [LEAGUE_SEASON_ID, secondLeagueId] },
+        { playerId: "alias-b", leagueSeasonScopes: [LEAGUE_SEASON_ID] },
+      ],
+      rosters: [
+        { playerId: "alias-a", leagueSeasonId: LEAGUE_SEASON_ID },
+        { playerId: "alias-b", leagueSeasonId: LEAGUE_SEASON_ID },
+        { playerId: "alias-a", leagueSeasonId: secondLeagueId },
+      ],
+    });
+    expect(plan.publications.map((entry) => entry.league.id)).toEqual([secondLeagueId]);
+    expect(plan.publications[0]?.rows.map((row) => row.playerId)).toContain("alias-a");
+    expect(plan.withheld).toMatchObject([{ leagueSeasonId: LEAGUE_SEASON_ID, scope: "league" }]);
+  });
+
+  it("continues to reject a canonical player and its alias both on the roster", () => {
+    const plan = planAliases({
+      aliases: [{ playerId: "alias-a", leagueSeasonScopes: [LEAGUE_SEASON_ID] }],
+      rosters: [canonicalId, "alias-a"].map((playerId) => ({
+        playerId,
+        leagueSeasonId: LEAGUE_SEASON_ID,
+      })),
+    });
+    expect(plan.publications).toEqual([]);
+    expect(plan.withheld).toMatchObject([
+      {
+        leagueSeasonId: LEAGUE_SEASON_ID,
+        scope: "league",
+        reasons: [expect.stringContaining("2 players")],
+      },
+    ]);
+  });
+
+  it("does not count repeated occurrences of the same roster ID as different aliases", () => {
+    const plan = planAliases({
+      aliases: [{ playerId: "alias-a", leagueSeasonScopes: [LEAGUE_SEASON_ID] }],
+      rosters: [
+        { playerId: "alias-a", leagueSeasonId: LEAGUE_SEASON_ID },
+        { playerId: "alias-a", leagueSeasonId: LEAGUE_SEASON_ID },
+      ],
+    });
+    expect(plan.withheld).toEqual([]);
+    expect(plan.publications).toHaveLength(1);
+    expect(plan.publications[0]?.rows.filter((row) => row.playerId === "alias-a")).toHaveLength(1);
+  });
+});
 
 describe("weekly league publication withholds unsupported positions, not leagues", () => {
   it("publishes every position a league can be priced for and withholds only D/ST", () => {

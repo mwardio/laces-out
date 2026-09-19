@@ -23,7 +23,13 @@ import {
   teamWeeklyStatObservations,
   type Database,
 } from "@laces-out/db";
-import { NFL_TEAMS, canonicalNflTeamCode, providerPlayerCrosswalkId } from "@laces-out/domain";
+import {
+  NFL_TEAMS,
+  canonicalNflTeamCode,
+  playerNameIdentityParts,
+  playerNameIdentitiesCompatible,
+  providerPlayerCrosswalkId,
+} from "@laces-out/domain";
 import {
   FIRST_PARTY_ROS_CONVERGENCE_REFERENCE_SCENARIOS,
   LEAGUE_SCORING_NORMALIZATION_VERSION,
@@ -446,17 +452,16 @@ function aliasTeam(value: string | null): string | undefined {
   }
 }
 
-function aliasName(value: string): string | undefined {
-  const name = value.normalize("NFKC").trim().toLocaleLowerCase("en-US");
-  return name.length > 0 ? name : undefined;
-}
-
-function aliasIdentityKey(input: {
-  readonly fullName: string;
-  readonly position: FirstPartyRosRailPosition;
-  readonly team: string;
-}): string | undefined {
-  const name = aliasName(input.fullName);
+function aliasIdentityKey(
+  input: {
+    readonly fullName: string;
+    readonly position: FirstPartyRosRailPosition;
+    readonly team: string;
+  },
+  withoutSuffix = false,
+): string | undefined {
+  const parts = playerNameIdentityParts(input.fullName);
+  const name = withoutSuffix ? parts.base : parts.exact;
   return name ? `${name}|${input.team}|${input.position}` : undefined;
 }
 
@@ -546,6 +551,7 @@ export function firstPartyRosPlayerAliasPlan(input: {
   const canonicalIdsByGsis = new Map<string, Set<string>>();
   const canonicalIdsByDefenseTeam = new Map<string, Set<string>>();
   const canonicalIdsByExactIdentity = new Map<string, Set<string>>();
+  const canonicalIdsByBaseIdentity = new Map<string, Set<string>>();
   for (const candidate of canonicalPlayers) {
     if (candidate.gsisId) addToSetMap(canonicalIdsByGsis, candidate.gsisId, candidate.playerId);
     if (candidate.position === "DST") {
@@ -555,6 +561,8 @@ export function firstPartyRosPlayerAliasPlan(input: {
     if (candidate.gsisId) {
       const key = aliasIdentityKey(candidate);
       if (key) addToSetMap(canonicalIdsByExactIdentity, key, candidate.playerId);
+      const baseKey = aliasIdentityKey(candidate, true);
+      if (baseKey) addToSetMap(canonicalIdsByBaseIdentity, baseKey, candidate.playerId);
     }
   }
 
@@ -563,11 +571,21 @@ export function firstPartyRosPlayerAliasPlan(input: {
   const canonicalIdsByExternalKey = new Map<string, Set<string>>();
   const yahooPlayerIdsByExternalKey = new Map<string, Set<string>>();
   const yahooIdsByPlayer = new Map<string, Set<string>>();
+  const espnIdsByPlayer = new Map<string, Set<string>>();
   const invalidYahooPlayers = new Set<string>();
   for (const row of externalIds) {
     const externalId = row.externalId.trim();
     const isYahoo = row.source === "yahoo" || row.source === "sleeper-yahoo";
     const yahooId = isYahoo ? providerPlayerCrosswalkId(row.source, externalId) : undefined;
+    if (row.source === "espn" || row.source === "sleeper-espn") {
+      const espnId = providerPlayerCrosswalkId(row.source, externalId);
+      if (espnId) addToSetMap(espnIdsByPlayer, row.playerId, espnId);
+    } else if (
+      row.source === "espn-self-asserted" &&
+      espnSelfAssertedProjectionLeague(externalId) === input.leagueSeasonId.toLowerCase()
+    ) {
+      addToSetMap(espnIdsByPlayer, row.playerId, externalId.slice(externalId.indexOf(":") + 1));
+    }
     if (isYahoo) {
       if (yahooId === undefined) invalidYahooPlayers.add(row.playerId);
       else {
@@ -727,9 +745,21 @@ export function firstPartyRosPlayerAliasPlan(input: {
     ) {
       const exactKey = aliasIdentityKey(row);
       const exactMatches = exactKey ? canonicalIdsByExactIdentity.get(exactKey) : undefined;
+      const baseKey = aliasIdentityKey(row, true);
+      // Broaden Yahoo names only after its outside-pool bridge lookup is complete. ESPN's
+      // scoped assertion fallback remains exact until equivalent evidence closure is available.
+      const suffixMatches =
+        exactMatches === undefined &&
+        observedYahooIds.size === 1 &&
+        input.yahooExternalEvidenceComplete &&
+        !espnIdsByPlayer.has(playerId) &&
+        baseKey
+          ? canonicalIdsByBaseIdentity.get(baseKey)
+          : undefined;
+      const nameMatches = exactMatches ?? suffixMatches;
       // Do not prune an ambiguous name cohort into an apparently unique match. A single exact
       // candidate's own Yahoo facts may veto this fallback but may never select among names.
-      const exactCandidateId = exactMatches?.size === 1 ? [...exactMatches][0]! : undefined;
+      const exactCandidateId = nameMatches?.size === 1 ? [...nameMatches][0]! : undefined;
       const candidateYahooIds = exactCandidateId
         ? yahooIdsByPlayer.get(exactCandidateId)
         : undefined;
@@ -738,7 +768,23 @@ export function firstPartyRosPlayerAliasPlan(input: {
         exactCandidateId !== undefined &&
         (invalidYahooPlayers.has(exactCandidateId) ||
           [...(candidateYahooIds ?? [])].some((id) => !observedYahooIds.has(id)));
-      if (!candidateYahooConflict) collect(exactMatches);
+      const observedEspnIds = espnIdsByPlayer.get(playerId);
+      const candidateEspnIds = exactCandidateId ? espnIdsByPlayer.get(exactCandidateId) : undefined;
+      const candidateEspnConflict =
+        (observedEspnIds?.size ?? 0) > 1 ||
+        (candidateEspnIds?.size ?? 0) > 1 ||
+        (observedEspnIds?.size === 1 &&
+          candidateEspnIds?.size === 1 &&
+          !candidateEspnIds.has([...observedEspnIds][0]!));
+      const suffixConflict =
+        suffixMatches !== undefined &&
+        exactCandidateId !== undefined &&
+        !playerNameIdentitiesCompatible(
+          playerNameIdentityParts(row.fullName),
+          playerNameIdentityParts(canonicalById.get(exactCandidateId)!.fullName),
+        );
+      if (!candidateYahooConflict && !candidateEspnConflict && !suffixConflict)
+        collect(nameMatches);
     }
     if (invalidYahooPlayers.has(playerId)) {
       addIssue(row.position, playerId, "identity-unresolved");
