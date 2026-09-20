@@ -14,9 +14,14 @@ import {
   calibrateFirstPartyRosReleasedPlayers,
   evaluateFirstPartyRosPublication,
   firstPartyRosChampionArtifactChecksum,
+  type FirstPartyRosPublicationPlayerIdentity,
   type FirstPartyRosReleasedPlayer,
 } from "./first-party-ros-publication.js";
 import { HISTORICAL_ROS_CANDIDATE_PAIR_VERSION } from "./first-party-ros-backtest.js";
+import {
+  applyFirstPartyRosPlayerAliases,
+  firstPartyRosPlayerAliasPlan,
+} from "./first-party-ros-candidate-provider.js";
 
 const fixture = pointRosReleaseFixture();
 const artifact = {
@@ -161,6 +166,150 @@ describe("separate expected-point ROS publication", () => {
     expect(() =>
       buildFirstPartyRosPlayerPersistenceRow({ ...player(), forecastKind: "point-only" }),
     ).toThrow(/exact release evidence/);
+  });
+  it("publishes a provider-resolved alias while preserving the canonical simulation exactly", () => {
+    const raw = player();
+    const plan = firstPartyRosPlayerAliasPlan({
+      leagueSeasonId: "league",
+      rosterPlayers: [
+        { playerId: "provider-defense", fullName: "Chicago", position: "DST", team: "CHI" },
+      ],
+      canonicalPlayers: [
+        { playerId: raw.playerId, fullName: "Chicago", position: "DST", team: "CHI" },
+      ],
+    });
+    const target = applyFirstPartyRosPlayerAliases(
+      {
+        leagueSeasonId: "league",
+        leagueScoringProfileKey: artifact.scoringProfileKey,
+        candidateUniverse: {
+          expectedPlayerCount: 1,
+          evaluatedPlayerCount: 1,
+          skippedPlayerCount: 0,
+          expectedPositions: ["DST"],
+          evaluatedPositions: ["DST"],
+          playerAliases: [],
+          playerAliasIssues: [],
+          complete: true,
+        },
+        evidence: [fixture.live],
+        futureWindowComplete: true,
+        convergence: extractFirstPartyRosPointConvergence({
+          position: "DST",
+          scoringProfileKey: artifact.scoringProfileKey,
+          diagnostic: fixture.live.pointConvergence!.contextual,
+        }),
+        released: [raw],
+        sourceAsOf: new Date(raw.projection.provenance.asOfAt),
+      },
+      plan,
+    );
+    expect(target.candidateUniverse.playerAliases).toHaveLength(1);
+    const [released] = calibrateFirstPartyRosReleasedPlayers({
+      artifact,
+      decision: decide(),
+      players: target.released,
+      playerIdentity: target.candidateUniverse,
+    });
+    expect(released?.playerId).toBe("provider-defense");
+    expect(released?.projection).toBe(raw.projection);
+    expect(released?.projection.playerId).toBe("DST:CHI");
+    const row = buildFirstPartyRosPlayerPersistenceRow(released!);
+    expect(row.playerId).toBe("provider-defense");
+    expect(row.summary.aggregateMeanPoints).toBe("10.000");
+    expect(row.summary.seedHash).toBe(raw.projection.provenance.seedHash);
+  });
+  it.each([
+    "missing",
+    "canonical",
+    "persistence",
+    "position",
+    "duplicate-persistence",
+    "duplicate-canonical",
+    "unresolved",
+    "unbound",
+    "canonical-collision",
+    "duplicate-projection",
+    "chain",
+  ])("rejects a %s alias mismatch before granting point evidence", (kind) => {
+    const raw = player();
+    const aliased = { ...raw, playerId: "provider-defense" };
+    let players = [aliased];
+    const alias = {
+      position: "DST" as const,
+      canonicalPlayerId: raw.playerId,
+      playerId: aliased.playerId,
+    };
+    let identity: FirstPartyRosPublicationPlayerIdentity = {
+      playerAliases: [alias],
+      playerAliasIssues: [],
+    };
+    if (kind === "missing") identity = { ...identity, playerAliases: [] };
+    if (kind === "canonical")
+      identity = { ...identity, playerAliases: [{ ...alias, canonicalPlayerId: "DST:NYJ" }] };
+    if (kind === "persistence")
+      identity = { ...identity, playerAliases: [{ ...alias, playerId: "other-provider" }] };
+    if (kind === "position")
+      identity = { ...identity, playerAliases: [{ ...alias, position: "WR" }] };
+    if (kind === "duplicate-persistence")
+      identity = {
+        ...identity,
+        playerAliases: [alias, { ...alias, canonicalPlayerId: "DST:NYJ" }],
+      };
+    if (kind === "duplicate-canonical")
+      identity = { ...identity, playerAliases: [alias, { ...alias, playerId: "other-provider" }] };
+    if (kind === "unresolved")
+      identity = { ...identity, playerAliasIssues: [{ code: "identity-unresolved" }] };
+    if (kind === "unbound")
+      identity = {
+        ...identity,
+        playerAliases: [
+          alias,
+          { ...alias, canonicalPlayerId: "DST:NYJ", playerId: "other-provider" },
+        ],
+      };
+    if (kind === "canonical-collision")
+      players = [
+        aliased,
+        {
+          ...raw,
+          playerId: aliased.playerId,
+          projection: { ...raw.projection, playerId: aliased.playerId },
+        },
+      ];
+    if (kind === "duplicate-projection")
+      players = [aliased, { ...raw, playerId: "other-provider" }];
+    if (kind === "chain")
+      identity = {
+        ...identity,
+        playerAliases: [
+          alias,
+          { position: "WR", canonicalPlayerId: aliased.playerId, playerId: "other-provider" },
+        ],
+      };
+    expect(() =>
+      calibrateFirstPartyRosReleasedPlayers({
+        artifact,
+        decision: decide(),
+        players,
+        playerIdentity: identity,
+      }),
+    ).toThrow(/Point ROS player/);
+  });
+  it("does not apply aliases for withheld positions to a releasing position", () => {
+    const raw = player();
+    const [released] = calibrateFirstPartyRosReleasedPlayers({
+      artifact,
+      decision: decide(),
+      players: [raw],
+      playerIdentity: {
+        playerAliases: [
+          { position: "WR", canonicalPlayerId: "canonical-wr", playerId: "provider-wr" },
+        ],
+        playerAliasIssues: [],
+      },
+    });
+    expect(released?.projection).toBe(raw.projection);
   });
   it.each(["checksum", "mean", "window", "bucket"])(
     "rejects malformed raw %s before granting point evidence",

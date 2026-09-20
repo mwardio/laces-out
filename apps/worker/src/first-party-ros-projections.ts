@@ -1148,6 +1148,7 @@ export class FirstPartyRosProjectionShadowService implements ProjectionRefreshSe
       const releasedPlayers = calibrateFirstPartyRosReleasedPlayers({
         artifact: input.artifact,
         decision,
+        playerIdentity: target.candidateUniverse,
         players: target.released.filter((player) =>
           releasing.has(`${player.projection.position}:${player.bucket}`),
         ),

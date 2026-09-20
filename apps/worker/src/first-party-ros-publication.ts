@@ -776,24 +776,84 @@ function preparePointPublication(input: {
   return prepared;
 }
 
+/** Provider-resolved persistence identities; simulation IDs and provenance remain canonical. */
+export interface FirstPartyRosPublicationPlayerIdentity {
+  readonly playerAliases: readonly {
+    readonly position: FirstPartyRosPosition;
+    readonly canonicalPlayerId: string;
+    readonly playerId: string;
+  }[];
+  readonly playerAliasIssues: readonly unknown[];
+}
+
+function preparePointPlayerAliases(input: {
+  readonly players: readonly FirstPartyRosReleasedPlayer[];
+  readonly playerIdentity?: FirstPartyRosPublicationPlayerIdentity;
+}) {
+  const aliases = input.playerIdentity?.playerAliases ?? [];
+  if ((input.playerIdentity?.playerAliasIssues.length ?? 0) > 0)
+    throw new Error("Point ROS player identity plan has unresolved issues");
+  const byPlayerId = new Map<string, (typeof aliases)[number]>();
+  const canonicalAliases = new Set<string>();
+  const canonicalPlayers = new Set(input.players.map((player) => player.projection.playerId));
+  if (canonicalPlayers.size !== input.players.length)
+    throw new Error("Point ROS player identity plan duplicates a canonical projection");
+  for (const alias of aliases) {
+    if (
+      !alias.playerId ||
+      !alias.canonicalPlayerId ||
+      alias.playerId === alias.canonicalPlayerId ||
+      !HISTORICAL_ROS_SUPPORTED_POSITIONS.includes(alias.position) ||
+      byPlayerId.has(alias.playerId) ||
+      canonicalAliases.has(alias.canonicalPlayerId) ||
+      canonicalPlayers.has(alias.playerId)
+    )
+      throw new Error("Point ROS player identity plan is not one-to-one");
+    byPlayerId.set(alias.playerId, alias);
+    canonicalAliases.add(alias.canonicalPlayerId);
+  }
+  if (aliases.some((alias) => canonicalAliases.has(alias.playerId)))
+    throw new Error("Point ROS player identity plan contains an alias chain");
+  const releasedPositions = new Set(input.players.map((player) => player.projection.position));
+  const releasedPlayers = new Map(input.players.map((player) => [player.playerId, player]));
+  for (const alias of aliases) {
+    // A partial decision can leave other positions unreleased. Their aliases cannot authorize
+    // any released player, but must still satisfy the plan's global one-to-one checks above.
+    if (!releasedPositions.has(alias.position)) continue;
+    const player = releasedPlayers.get(alias.playerId);
+    if (
+      player === undefined ||
+      player.projection.playerId !== alias.canonicalPlayerId ||
+      player.projection.position !== alias.position
+    )
+      throw new Error("Point ROS player alias does not match its canonical projection");
+  }
+  return byPlayerId;
+}
+
 function preparePointReleasedPlayers(input: {
   readonly artifact: LoadedFirstPartyRosChampionArtifact;
   readonly decision: FirstPartyRosPublicationDecision;
   readonly players: readonly FirstPartyRosReleasedPlayer[];
+  readonly playerIdentity?: FirstPartyRosPublicationPlayerIdentity;
 }): readonly FirstPartyRosReleasedPlayer[] {
   const prepared = preparePointPublication(input);
+  const aliases = preparePointPlayerAliases(input);
   const seen = new Set<string>();
   return input.players.map((player) => {
     const projection = player.projection;
     const provenance = projection.provenance;
     const entry = prepared.get(`${projection.position}:${player.bucket}`);
+    const alias = aliases.get(player.playerId);
     if (
       entry === undefined ||
       seen.has(player.playerId) ||
       player.intervalCalibration !== undefined ||
       player.forecastKind !== undefined ||
       player.pointEvidence !== undefined ||
-      player.playerId !== projection.playerId ||
+      (player.playerId !== projection.playerId &&
+        (alias?.canonicalPlayerId !== projection.playerId ||
+          alias.position !== projection.position)) ||
       player.strategy !== entry.cell.strategy ||
       provenance.strategy !== player.strategy ||
       provenance.modelVersion !== input.artifact.modelVersion ||
@@ -1005,6 +1065,7 @@ export function calibrateFirstPartyRosReleasedPlayers(input: {
   readonly artifact: LoadedFirstPartyRosChampionArtifact;
   readonly decision: FirstPartyRosPublicationDecision;
   readonly players: readonly FirstPartyRosReleasedPlayer[];
+  readonly playerIdentity?: FirstPartyRosPublicationPlayerIdentity;
 }): readonly FirstPartyRosReleasedPlayer[] {
   if (input.artifact.policyVersion === FIRST_PARTY_ROS_POINT_POLICY_VERSION)
     return preparePointReleasedPlayers(input);
