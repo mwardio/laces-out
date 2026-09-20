@@ -591,11 +591,21 @@ export function createRosDerivedOutcomeCache(options: {
   >();
   const sources = new Set<string>();
   const receipts = new Map<string, RosDerivedOutcomeReceipt>();
-  let bytes = 0;
+  // A dependency repeats the source manifest/forecast and carries its independent audit proof.
+  // Bound the two input populations independently: only reconstructed records are retained by
+  // this cache; caller-owned dependencies are consumed one at a time. The complete authenticated
+  // release cohort is about 37 MB of records plus 127 MB of dependencies, not one 128 MiB file.
+  let recordBytes = 0;
+  let dependencyBytes = 0;
   for (const [index, submitted] of options.records.entries()) {
     const dependency = options.dependencies[index]!;
-    bytes += Buffer.byteLength(canonical(submitted)) + Buffer.byteLength(canonical(dependency));
-    assert(bytes <= MAX_TOTAL_JSON, "Reference population JSON exceeded bounds");
+    recordBytes += Buffer.byteLength(canonical(submitted));
+    dependencyBytes += Buffer.byteLength(canonical(dependency));
+    assert(recordBytes <= MAX_TOTAL_JSON, "Reference record population JSON exceeded bounds");
+    assert(
+      dependencyBytes <= MAX_TOTAL_JSON,
+      "Reference dependency population JSON exceeded bounds",
+    );
     const record = createRosDerivedOutcomeRecord(dependency);
     same(submitted, record, "Independent record reconstruction");
     const directory = roots[record.source.namespace];

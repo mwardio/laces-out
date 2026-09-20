@@ -524,6 +524,67 @@ describe("authenticated derived ROS vector references", () => {
       }),
     ).toThrow(/population/);
   });
+
+  it("bounds records and repeated independent proof metadata separately before file access", async () => {
+    const f = await fixture();
+    const dependencies: RosDerivedOutcomeDependencies[] = [];
+    const records: RosDerivedOutcomeRecord[] = [];
+    const dependencySize = 1_024 * 1_024;
+    // This is the metadata boundary only: distinct, authenticated mappings need no physical
+    // vector reads. Large complete-input proof fields exercise the exact 128 MiB limit with
+    // 128 entries; the real 6,528-entry release contains 126.5 MB of independent dependencies.
+    for (let index = 0; index < 129; index++) {
+      const sourceKey = { modelVersion: V12, identity: hash(`population-source-${index}`) };
+      const targetKey = { modelVersion: V13, identity: hash(`population-target-${index}`) };
+      const manifest = {
+        ...f.source.manifest,
+        identity: sourceKey.identity,
+        metadata: {
+          ...(f.source.manifest.metadata as Record<string, unknown>),
+          identity: sourceKey.identity,
+        },
+      };
+      const source: RosDerivedOutcomeSource = {
+        ...f.source,
+        key: sourceKey,
+        filename: `${digest({ version: 1, ...sourceKey })}.ros-outcomes`,
+        manifest,
+        manifestChecksum: digest(manifest),
+      };
+      const auditVector = {
+        ...f.dependencies.auditVector,
+        originalKey: sourceKey,
+        currentProposedKey: targetKey,
+        originalManifest: manifest,
+        originalCacheFile: source.filename,
+        originalManifestChecksum: source.manifestChecksum,
+        normalizedInputEvidence: "",
+      };
+      const dependency: RosDerivedOutcomeDependencies = {
+        ...f.dependencies,
+        sourceRow: { ...f.sourceRow, contextualKey: sourceKey },
+        targetRow: { ...f.targetRow, contextualKey: targetKey },
+        source,
+        auditVector,
+      };
+      auditVector.normalizedInputEvidence = "x".repeat(
+        dependencySize - Buffer.byteLength(canonical(dependency)),
+      );
+      expect(Buffer.byteLength(canonical(dependency))).toBe(dependencySize);
+      dependencies.push(dependency);
+      records.push(createRosDerivedOutcomeRecord(dependency));
+    }
+    const bounded = {
+      sourceRoots: f.options.sourceRoots,
+      dependencies: dependencies.slice(0, 128),
+      records: records.slice(0, 128),
+    };
+    expect(() => createRosDerivedOutcomeCache(bounded)).not.toThrow();
+    expect(() => createRosDerivedOutcomeCache({ ...bounded, dependencies, records })).toThrow(
+      "Reference dependency population JSON exceeded bounds",
+    );
+    expect(await readdir(f.directory)).toEqual([path.basename(f.file)]);
+  }, 60_000);
 });
 
 it("inventories the exact retained bytes read-only for package staging without granting compatibility", async () => {
