@@ -736,7 +736,15 @@ function verifyRankProfile(
       const ranks = metadata.ranks.rows.filter(
         (row) => row.season === season && row.asOfWeek === cutoff,
       );
-      if (canonical(ordered) !== canonical(ranks.map((row) => row.canonicalTeam)))
+      const orderedUniverseChecksum = hash(JSON.stringify(ordered));
+      if (
+        canonical(ordered) !== canonical(ranks.map((row) => row.canonicalTeam)) ||
+        ranks.some(
+          (row, index) =>
+            row.ordinalRank !== index + 1 ||
+            row.orderedUniverseChecksum !== orderedUniverseChecksum,
+        )
+      )
         fail("rank sidecar current report order mismatch");
     }
   return metadata.ranks;

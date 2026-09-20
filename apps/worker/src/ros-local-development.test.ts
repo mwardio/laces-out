@@ -1,4 +1,5 @@
 import { NFL_TEAMS } from "@laces-out/domain";
+import { localRosDefenseRanksChecksum } from "../../../packages/projections/src/local-ros-development.js";
 import { beforeAll, describe, expect, it } from "vitest";
 import {
   buildLocalRosDefenseRankSidecar,
@@ -243,5 +244,32 @@ describe("pinned full-portfolio local development adapter", () => {
         rankSidecarChecksum: hash(rankSidecarJson),
       }),
     ).toThrow(/forecast input\/model join mismatch/);
+  });
+
+  it("rejects self-consistent forged ordinals that disagree with authenticated training order", () => {
+    const forgedOrder = [ORDER[1]!, ORDER[0]!, ...ORDER.slice(2)];
+    const rows = sidecar.ranks.rows.map((row, index) =>
+      index >= 32
+        ? row
+        : {
+            ...row,
+            ordinalRank: index === 0 ? 2 : index === 1 ? 1 : row.ordinalRank,
+            orderedUniverseChecksum: hash(JSON.stringify(forgedOrder)),
+          },
+    );
+    const forged = {
+      ...sidecar,
+      ranks: { ...sidecar.ranks, rows, checksum: localRosDefenseRanksChecksum(rows) },
+    };
+    // Every profile shares the forged ranks, team-array order and all input bindings are unchanged,
+    // and the alternate ordinal universe is internally consistent. Only report order disproves it.
+    const rankSidecarJson = JSON.stringify(forged);
+    expect(() =>
+      buildRosLocalDevelopmentReport({
+        ...request(),
+        rankSidecarJson,
+        rankSidecarChecksum: hash(rankSidecarJson),
+      }),
+    ).toThrow(/current report order mismatch/);
   });
 });
