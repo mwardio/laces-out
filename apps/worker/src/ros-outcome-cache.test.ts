@@ -142,6 +142,67 @@ describe("bounded reusable ROS outcome storage", () => {
     expect(hash(gunzipSync(disk.compressed))).toBe(disk.envelope.manifest.dataChecksum);
   });
 
+  it.each(["LE", "BE"] as const)(
+    "preserves exact values and independent buffers through the %s decoder across inflate chunks",
+    async (endianness) => {
+      const actualOs = await vi.importActual<typeof os>("node:os");
+      vi.doMock("node:os", () => ({ ...actualOs, endianness: () => endianness }));
+      vi.resetModules();
+      try {
+        const { createRosOutcomeCache: createCache } = await import("./ros-outcome-cache.js");
+        const dir = await directory();
+        const cache = createCache({ directory: dir });
+        const values = [
+          Number.MIN_VALUE,
+          -0,
+          0,
+          -3.5,
+          1.0000000000000002,
+          Number.MAX_VALUE,
+          -Number.MIN_VALUE,
+          -Number.MAX_VALUE,
+        ];
+        const count = 16_384;
+        const original: RosOutcomeCacheEnsemble = {
+          scenarioCount: count,
+          columns: Object.fromEntries(
+            ["first", "middle", "last"].map((name, column) => [
+              name,
+              Float64Array.from({ length: count }, (_, index) => values[(index + column) % 8]!),
+            ]),
+          ),
+          games: Uint8Array.from({ length: count }, (_, index) => index % 19),
+          metadata: { decoder: "exact-format-parity" },
+        };
+        await cache.write(key, original);
+        const diskBefore = await readEntry(dir);
+        const first = await cache.read(key);
+        const second = await cache.read(key);
+        if (first.state !== "hit" || second.state !== "hit") throw new Error("Expected hits");
+        expect(first.manifestChecksum).toBe(second.manifestChecksum);
+        expect(first.ensemble.metadata).toEqual(original.metadata);
+        for (const name of Object.keys(original.columns)) {
+          const decoded = first.ensemble.columns[name]!;
+          expect(Buffer.from(decoded.buffer)).toEqual(Buffer.from(original.columns[name]!.buffer));
+          expect(decoded.buffer.byteLength).toBe(count * 8);
+          expect(decoded.buffer).not.toBe(second.ensemble.columns[name]!.buffer);
+          decoded.fill(123);
+          expect(second.ensemble.columns[name]).toEqual(original.columns[name]);
+        }
+        first.ensemble.games.fill(255);
+        expect(second.ensemble.games).toEqual(original.games);
+        expect(
+          new Set(Object.values(first.ensemble.columns).map((column) => column.buffer)).size,
+        ).toBe(3);
+        expect(first.ensemble.games.buffer).not.toBe(second.ensemble.games.buffer);
+        expect((await readEntry(dir)).bytes).toEqual(diskBefore.bytes);
+      } finally {
+        vi.doUnmock("node:os");
+        vi.resetModules();
+      }
+    },
+  );
+
   it("has one atomic winner for concurrent identical writers and preserves immutable conflicting input", async () => {
     const dir = await directory();
     const cache = createRosOutcomeCache({ directory: dir });
@@ -287,18 +348,25 @@ describe("bounded reusable ROS outcome storage", () => {
     expect(await cache.read(key)).toEqual({ state: "corrupt", reason: "payload_invalid" });
   });
 
-  it("rejects validly checksummed nonfinite binary components", async () => {
-    const dir = await directory();
-    const cache = createRosOutcomeCache({ directory: dir });
-    await cache.write(key, ensemble());
-    await alterEntry(dir, ({ payload }) => {
-      payload.writeDoubleLE(Number.NaN, 24);
-    });
-    expect(await cache.read(key)).toEqual({ state: "corrupt", reason: "nonfinite_component" });
-    await expect(cache.write(key, ensemble())).rejects.toMatchObject({
-      code: "existing_entry_corrupt",
-    });
-  });
+  it.each([
+    [Number.NaN, 24],
+    [Infinity, 24 + 3 * 8],
+    [-Infinity, 24 + 7 * 8],
+  ])(
+    "rejects validly checksummed nonfinite binary components (%s at %s)",
+    async (value, offset) => {
+      const dir = await directory();
+      const cache = createRosOutcomeCache({ directory: dir });
+      await cache.write(key, ensemble());
+      await alterEntry(dir, ({ payload }) => {
+        payload.writeDoubleLE(value, offset);
+      });
+      expect(await cache.read(key)).toEqual({ state: "corrupt", reason: "nonfinite_component" });
+      await expect(cache.write(key, ensemble())).rejects.toMatchObject({
+        code: "existing_entry_corrupt",
+      });
+    },
+  );
 
   it.each([0, 8, 11, 20, -1])(
     "detects an interrupted/truncated entry (%s) and never silently overwrites it",

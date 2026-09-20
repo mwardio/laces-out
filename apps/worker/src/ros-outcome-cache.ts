@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { constants, createReadStream, createWriteStream } from "node:fs";
 import { link, mkdir, mkdtemp, open, rm, writeFile } from "node:fs/promises";
+import { endianness } from "node:os";
 import path from "node:path";
 import { Readable, Transform, Writable } from "node:stream";
 import { pipeline } from "node:stream/promises";
@@ -12,6 +13,7 @@ const FILE_MAGIC = Buffer.from("LOROSC01");
 const DATA_MAGIC = Buffer.from("LOROSD01");
 const FILE_HEADER_BYTES = 12;
 const DATA_HEADER_BYTES = 24;
+const LITTLE_ENDIAN = endianness() === "LE";
 const MAXIMUM_MANIFEST_BYTES = 192 * 1_024;
 const SHA256 = /^[a-f0-9]{64}$/u;
 const COLUMN_NAME = /^[a-z][a-z0-9_]{0,127}$/u;
@@ -284,11 +286,20 @@ function decodePayload(
   for (const name of manifest.columnNames) {
     signal?.throwIfAborted();
     const values = new Float64Array(manifest.scenarioCount);
-    for (let index = 0; index < values.length; index += 1) {
-      const value = payload.readDoubleLE(offset);
-      if (!Number.isFinite(value)) throw new CorruptEntry("nonfinite_component");
-      values[index] = value;
-      offset += 8;
+    if (LITTLE_ENDIAN) {
+      // Copy bytes into owned storage; a view would retain and alias the complete payload.
+      new Uint8Array(values.buffer).set(payload.subarray(offset, offset + values.byteLength));
+      offset += values.byteLength;
+      for (let index = 0; index < values.length; index += 1) {
+        if (!Number.isFinite(values[index])) throw new CorruptEntry("nonfinite_component");
+      }
+    } else {
+      for (let index = 0; index < values.length; index += 1) {
+        const value = payload.readDoubleLE(offset);
+        if (!Number.isFinite(value)) throw new CorruptEntry("nonfinite_component");
+        values[index] = value;
+        offset += 8;
+      }
     }
     columns[name] = values;
   }
@@ -387,7 +398,7 @@ export function createRosOutcomeCache(options: {
           },
           () => new CorruptEntry("limits_exceeded"),
         ),
-        createGunzip(),
+        createGunzip({ chunkSize: 256 * 1_024 }),
         new Writable({
           write(chunk: Buffer, _encoding, callback) {
             rawBytes += chunk.length;
