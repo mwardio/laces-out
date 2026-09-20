@@ -318,6 +318,10 @@ function availabilityFeed(
 }
 
 class FakeRepository implements InSeasonDecisionRepository {
+  startedTeams: readonly string[] = [];
+  listLineupStartedTeams() {
+    return Promise.resolve(this.startedTeams);
+  }
   scheduledTeams: readonly string[] | null = ["MIA", "BUF"];
   listLineupScheduledTeams() {
     return Promise.resolve(this.scheduledTeams ?? []);
@@ -1958,6 +1962,94 @@ describe("InSeasonDecisionService", () => {
     });
   });
 
+  it.each(["stored", "game-start"] as const)(
+    "keeps a %s locked starter without a forecast while comparing movable players",
+    async (lockSource) => {
+      const repository = new FakeRepository();
+      repository.projectionRows = projectionRows.filter((row) => row.playerId !== playerIds.aQbLow);
+      repository.rosterRows = rosterRows.map((row) =>
+        row.playerId === playerIds.aQbLow
+          ? { ...row, locked: lockSource === "stored", nflTeam: "DET" }
+          : row,
+      );
+      if (lockSource === "game-start") repository.startedTeams = ["DET"];
+      const service = new InSeasonDecisionService(repository, () => NOW);
+      const snapshot = await service.getSnapshot(USER_ID, LEAGUE_ID);
+      expect(inSeasonDecisionSnapshotSchema.safeParse(snapshot).success).toBe(true);
+      if (snapshot?.lineup.state !== "available") throw new Error("Expected available lineup");
+      expect(snapshot.lineup.totalsScope).toBe("projected-players-only");
+      expect(
+        snapshot.lineup.assignments.find((row) => row.player.id === playerIds.aQbLow),
+      ).toMatchObject({ locked: true, projectionUnavailable: true });
+      expect(
+        snapshot.lineup.changes.every(
+          (change) => change.remove?.id !== playerIds.aQbLow && change.add?.id !== playerIds.aQbLow,
+        ),
+      ).toBe(true);
+      expect(snapshot.lineup.projectedGain).toBeCloseTo(
+        snapshot.lineup.optimalProjectedPoints - snapshot.lineup.currentProjectedPoints,
+        3,
+      );
+      expect(snapshot.lineup.notes.join(" ")).toContain("excluded from projected totals");
+      expect(snapshot.waivers).toMatchObject({
+        state: "unavailable",
+        reasons: [{ code: "PROJECTION_COVERAGE_INCOMPLETE" }],
+      });
+      expect(snapshot.trades).toMatchObject({
+        state: "unavailable",
+        reasons: [{ code: "PROJECTION_COVERAGE_INCOMPLETE" }],
+      });
+      expect(snapshot.providerVerification.storedLockedPlayerCount).toBe(
+        lockSource === "stored" ? 1 : 0,
+      );
+      const trade = await service.evaluateBuiltTrade(USER_ID, LEAGUE_ID, {
+        opponentTeamId: TEAM_B_ID,
+        sendsPlayerIds: [playerIds.aQbLow],
+        receivesPlayerIds: [playerIds.bQbOne],
+      });
+      expect(trade).toMatchObject({
+        outcome: "evaluated",
+        response: { state: "unavailable", reasons: [{ code: "PROJECTION_COVERAGE_INCOMPLETE" }] },
+      });
+    },
+  );
+
+  it("keeps a locked bench player without a forecast out of the lineup and leaves totals complete", async () => {
+    const repository = new FakeRepository();
+    repository.projectionRows = projectionRows.filter((row) => row.playerId !== playerIds.aRbTwo);
+    repository.rosterRows = rosterRows.map((row) =>
+      row.playerId === playerIds.aRbTwo ? { ...row, locked: true } : row,
+    );
+    const snapshot = await new InSeasonDecisionService(repository, () => NOW).getSnapshot(
+      USER_ID,
+      LEAGUE_ID,
+    );
+    if (snapshot?.lineup.state !== "available") throw new Error("Expected available lineup");
+    expect(snapshot.lineup.totalsScope).toBeUndefined();
+    expect(snapshot.lineup.assignments.some((row) => row.player.id === playerIds.aRbTwo)).toBe(
+      false,
+    );
+    expect(snapshot.lineup.assignments.every((row) => !row.projectionUnavailable)).toBe(true);
+  });
+
+  it("does not excuse a missing movable forecast when another missing player is locked", async () => {
+    const repository = new FakeRepository();
+    repository.projectionRows = projectionRows.filter(
+      (row) => row.playerId !== playerIds.aQbLow && row.playerId !== playerIds.aRbOne,
+    );
+    repository.rosterRows = rosterRows.map((row) =>
+      row.playerId === playerIds.aQbLow ? { ...row, locked: true } : row,
+    );
+    const snapshot = await new InSeasonDecisionService(repository, () => NOW).getSnapshot(
+      USER_ID,
+      LEAGUE_ID,
+    );
+    expect(snapshot?.lineup).toMatchObject({
+      state: "unavailable",
+      reasons: [{ code: "PROJECTION_COVERAGE_INCOMPLETE" }],
+    });
+  });
+
   it("requires a team claim before loading shared roster and projection inputs", async () => {
     const repository = new FakeRepository();
     repository.membership = { ...membership, claimedFantasyTeamId: null };
@@ -2315,7 +2407,7 @@ describe("InSeasonDecisionSnapshot ADR 0003 provenance", () => {
 
 // Any intentional response-contract change must renew this only after semantic assertions pass.
 // V8 binds schedule and confidence evidence and retains legal lineups below display precision.
-const SNAPSHOT_FINGERPRINT = "21c4fe4c31788b7433f2d59925a05c055cdbb39a5805aebb1d884c652cddc620";
+const SNAPSHOT_FINGERPRINT = "1a7ddda4ca19599e73dd8dde024116c8f6014f8022630bce4dca6e0ef38b83fb";
 /**
  * A second guard strips the generated provenance fields so changes elsewhere in the response remain
  * independently visible.

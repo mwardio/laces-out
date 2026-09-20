@@ -150,11 +150,11 @@ function LineupSection({ snapshot }: { readonly snapshot: InSeasonDecisionSnapsh
         <>
           <div className={styles.metricGrid}>
             <div>
-              <span>Current</span>
+              <span>Current{section.totalsScope ? " (partial)" : ""}</span>
               <strong>{projectedPoints.format(section.currentProjectedPoints)}</strong>
             </div>
             <div>
-              <span>Proposed</span>
+              <span>Proposed{section.totalsScope ? " (partial)" : ""}</span>
               <strong>{projectedPoints.format(section.optimalProjectedPoints)}</strong>
             </div>
             <div className={section.projectedGain > 0 ? styles.positiveMetric : undefined}>
@@ -162,6 +162,13 @@ function LineupSection({ snapshot }: { readonly snapshot: InSeasonDecisionSnapsh
               <strong>{points.format(section.projectedGain)}</strong>
             </div>
           </div>
+
+          {section.totalsScope ? (
+            <p className={styles.methodNote}>
+              Totals exclude locked players without a forecast. Those players stay in place;
+              projected gain compares only players who can still move.
+            </p>
+          ) : null}
 
           <div className={styles.twoColumn}>
             <div>
@@ -242,7 +249,9 @@ function LineupSection({ snapshot }: { readonly snapshot: InSeasonDecisionSnapsh
                     </strong>
                     <small>
                       {assignment.player.positions.join("/")} ·{" "}
-                      {projectedPoints.format(assignment.player.projectedPoints)}
+                      {assignment.projectionUnavailable
+                        ? "Forecast unavailable"
+                        : projectedPoints.format(assignment.player.projectedPoints)}
                       {assignment.locked ? " · locked" : ""}
                     </small>
                   </div>
