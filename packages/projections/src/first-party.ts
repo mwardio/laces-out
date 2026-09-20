@@ -1490,13 +1490,34 @@ export function firstPartyRecentRoleContext(
   return Object.keys(role).length > 0 ? role : undefined;
 }
 
+// Exact arithmetic reuse only: never factor weights across future weeks, which changes rounding.
+// Both dimensions are bounded even when callers continually supply different configurations.
+const RECENCY_WEIGHT_TABLES = new Map<number, Map<number, number>>();
+let lastRecencyHalfLife = Number.NaN;
+let lastRecencyWeightTable = new Map<number, number>();
+
 function recencyWeight(
   row: Pick<FirstPartyWeeklyStatLine, "season" | "week">,
   target: Pick<FirstPartyProjectionTarget, "season" | "week">,
   halfLife: number,
 ): number {
   const distance = Math.max(1, ordinal(target.season, target.week) - ordinal(row.season, row.week));
-  return 0.5 ** (distance / halfLife);
+  if (halfLife !== lastRecencyHalfLife) {
+    let table = RECENCY_WEIGHT_TABLES.get(halfLife);
+    if (table === undefined) {
+      if (RECENCY_WEIGHT_TABLES.size >= 8) RECENCY_WEIGHT_TABLES.clear();
+      table = new Map();
+      RECENCY_WEIGHT_TABLES.set(halfLife, table);
+    }
+    lastRecencyHalfLife = halfLife;
+    lastRecencyWeightTable = table;
+  }
+  const cached = lastRecencyWeightTable.get(distance);
+  if (cached !== undefined) return cached;
+  const weight = 0.5 ** (distance / halfLife);
+  if (lastRecencyWeightTable.size >= 1_024) lastRecencyWeightTable.clear();
+  lastRecencyWeightTable.set(distance, weight);
+  return weight;
 }
 
 function thresholdIndicator(

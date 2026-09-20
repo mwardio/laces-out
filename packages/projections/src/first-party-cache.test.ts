@@ -65,3 +65,95 @@ describe("shared contextual projection means", () => {
     }
   });
 });
+
+describe("exact primitive memoization", () => {
+  it("preserves frozen inputs and separates replacement components including missing evidence", () => {
+    const components = Object.freeze({
+      receiving_yards: 42,
+      receptions: 4,
+      targets: 6,
+      receiving_touchdowns: 1,
+      receiving_touchdowns_40_plus: 1,
+      receiving_touchdowns_50_plus: 0,
+    });
+    const makeHistory = (value: typeof components | Readonly<Record<string, number>>) =>
+      Object.freeze(
+        Array.from({ length: 8 }, (_, index) =>
+          Object.freeze({
+            playerId: "receiver",
+            position: "WR",
+            season: 2025,
+            week: index + 1,
+            team: "BUF",
+            opponent: "MIA",
+            components: value,
+          }),
+        ),
+      );
+    const history = makeHistory(components);
+    const before = JSON.stringify(history);
+    const target = Object.freeze({
+      playerId: "receiver",
+      position: "WR",
+      season: 2025,
+      week: 9,
+      team: "BUF",
+      opponent: "MIA",
+    });
+    const original = projectFirstPartyWeeklyComponents({ history, target });
+    projectFirstPartyRecencyBaselineComponents({ history, target });
+    expect(projectFirstPartyWeeklyComponents({ history, target })).toEqual(original);
+    expect(JSON.stringify(history)).toBe(before);
+    expect(() => Object.assign(components, { receiving_yards: 0 })).toThrow(TypeError);
+    const replaced = Object.freeze({ ...components, receiving_yards: 0 });
+    const changed = projectFirstPartyWeeklyComponents({ history: makeHistory(replaced), target });
+    expect(changed.components.receiving_yards).not.toBe(original.components.receiving_yards);
+    const missing = Object.freeze({
+      receiving_yards: 42,
+      receptions: 4,
+      targets: 6,
+      receiving_touchdowns: 1,
+    });
+    expect(
+      projectFirstPartyWeeklyComponents({ history: makeHistory(missing), target }).components,
+    ).not.toHaveProperty("receiving_touchdowns_40_plus");
+    expect(projectFirstPartyWeeklyComponents({ history, target })).toEqual(original);
+  });
+
+  it("preserves exact results after bounded half-life and distance caches cycle", () => {
+    const history = Object.freeze(
+      Array.from({ length: 3 }, (_, index) =>
+        Object.freeze({
+          playerId: "receiver",
+          position: "WR",
+          season: 2025,
+          week: index + 1,
+          team: "BUF",
+          opponent: "MIA",
+          components: Object.freeze({ receiving_yards: 23 + index, targets: 5, receptions: 3 }),
+        }),
+      ),
+    );
+    const target = {
+      playerId: "receiver",
+      position: "WR",
+      season: 2025,
+      week: 4,
+      team: "BUF",
+      opponent: "MIA",
+    };
+    const original = projectFirstPartyWeeklyComponents({ history, target });
+    for (let index = 0; index < 12; index += 1)
+      projectFirstPartyWeeklyComponents({
+        history,
+        target,
+        config: { recencyHalfLifeWeeks: index + 0.125 },
+      });
+    for (let distance = 4; distance < 1_034; distance += 1)
+      projectFirstPartyRecencyBaselineComponents({
+        history,
+        target: { ...target, week: distance },
+      });
+    expect(projectFirstPartyWeeklyComponents({ history, target })).toEqual(original);
+  });
+});
