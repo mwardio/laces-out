@@ -15,6 +15,7 @@ import {
   FIRST_PARTY_ROS_MINIMUM_SCENARIOS,
   FIRST_PARTY_ROS_MODEL_VERSION,
   firstPartyRosSeedHash,
+  evaluateFirstPartyRosConvergence,
   firstPartyProjectionComponentsForPosition,
   firstPartyRecentRoleContext,
   firstPartyTeamDefenseProjectionComponents,
@@ -32,6 +33,7 @@ import {
   type FirstPartyTeamDefenseWeeklyStatLine,
   type FirstPartyRosAvailabilityInput,
   type FirstPartyRosConvergenceMetricName,
+  type FirstPartyRosConvergenceDiagnostic,
   type FirstPartyRosLiveReleaseEvidence,
   type FirstPartyRosPosition,
   type FirstPartyRosProjectionInput,
@@ -760,6 +762,8 @@ export function diagnoseBoundedFirstPartyRosConvergence(input: {
   readonly referenceScenarioCount: number;
   readonly maxToleranceRatio: number;
   readonly diagnosticChecksum: string;
+  /** Complete original-metric evidence; only the standard production path pair qualifies. */
+  readonly fullDiagnostic?: FirstPartyRosConvergenceDiagnostic;
 } {
   const { lower, reference } = validateFirstPartyRosLiveConvergenceCounts(input);
   const project = input.project ?? projectFirstPartyRestOfSeason;
@@ -812,6 +816,16 @@ export function diagnoseBoundedFirstPartyRosConvergence(input: {
     referenceScenarioCount: reference,
     maxToleranceRatio,
     diagnosticChecksum,
+    ...(lower === FIRST_PARTY_ROS_DEFAULT_SCENARIOS &&
+    reference === FIRST_PARTY_ROS_CONVERGENCE_REFERENCE_SCENARIOS
+      ? {
+          fullDiagnostic: evaluateFirstPartyRosConvergence({
+            position: release.position,
+            release: { ...release, ...release.provenance },
+            reference: { ...referenceRun, ...referenceRun.provenance },
+          }),
+        }
+      : {}),
   };
 }
 

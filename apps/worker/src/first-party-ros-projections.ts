@@ -1321,6 +1321,8 @@ export class FirstPartyRosProjectionShadowService implements ProjectionRefreshSe
             modelInputChecksum: inputChecksum,
             championArtifactChecksum: input.artifact.artifactChecksum,
             scoringProfileKey: input.artifact.scoringProfileKey,
+            forecastKind: rows[0]!.summary.forecastKind,
+            intervalAvailable: rows[0]!.summary.forecastKind !== "point-only",
             releaseCompleteness: "full",
             preservePriorGoodSet: false,
             candidateUniverse: input.target.candidateUniverse,
@@ -1350,6 +1352,7 @@ export class FirstPartyRosProjectionShadowService implements ProjectionRefreshSe
           asOfWeek: window.asOfWeek,
           asOfAt,
           scheduledGames: row.summary.scheduledGames,
+          forecastKind: row.summary.forecastKind,
           expectedGames: row.summary.expectedGames,
           aggregateMeanPoints: row.summary.aggregateMeanPoints,
           p15Points: row.summary.p15Points,
@@ -1364,6 +1367,9 @@ export class FirstPartyRosProjectionShadowService implements ProjectionRefreshSe
           ...(row.summary.intervalCalibration === undefined
             ? {}
             : { intervalCalibration: row.summary.intervalCalibration }),
+          ...(row.summary.pointEvidence === undefined
+            ? {}
+            : { pointEvidence: row.summary.pointEvidence }),
           inputChecksum,
           createdAt: now,
         })),

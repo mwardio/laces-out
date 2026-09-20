@@ -15,6 +15,14 @@ import {
   FIRST_PARTY_ROS_MODEL_VERSION,
   FIRST_PARTY_ROS_POLICY_VERSION,
   FIRST_PARTY_ROS_MARGINAL_POLICY_VERSION,
+  FIRST_PARTY_ROS_POINT_POLICY_VERSION,
+  FIRST_PARTY_ROS_POINT_CALIBRATION_VERSION,
+  FIRST_PARTY_ROS_POINT_RELEASE_VERSION,
+  firstPartyRosPointArtifactIsConsistent,
+  evaluateFirstPartyRosPointReleaseGate,
+  extractFirstPartyRosPointConvergence,
+  type FirstPartyRosPointQualification,
+  type FirstPartyRosPointReleaseDecision,
   FIRST_PARTY_PROJECTION_MODEL_VERSION,
   MARGINAL_INTERVAL_CALIBRATION_VERSION,
   type ROS_MARGINAL_INTERVAL_QUALIFICATION_VERSION,
@@ -45,6 +53,7 @@ import {
   HISTORICAL_ROS_SUPPORTED_POSITIONS,
   HISTORICAL_ROS_CANDIDATE_PAIR_VERSION,
   HISTORICAL_ROS_INTERVAL_METHOD_VERSION,
+  historicalRosBucket,
 } from "./first-party-ros-backtest.js";
 
 /**
@@ -279,6 +288,8 @@ export function firstPartyRosChampionArtifactIsValid(
 
 function championArtifactIsConsistent(artifact: LoadedFirstPartyRosChampionArtifact): boolean {
   const marginal = artifact.policyVersion === FIRST_PARTY_ROS_MARGINAL_POLICY_VERSION;
+  const point = artifact.policyVersion === FIRST_PARTY_ROS_POINT_POLICY_VERSION;
+  if (point && !firstPartyRosPointArtifactIsConsistent(artifact)) return false;
   if (
     marginal &&
     (!isRecord(artifact.releaseGate) ||
@@ -290,11 +301,13 @@ function championArtifactIsConsistent(artifact: LoadedFirstPartyRosChampionArtif
   if (artifact.artifactChecksum !== firstPartyRosChampionArtifactChecksum(artifact)) return false;
   if (
     artifact.modelVersion !== FIRST_PARTY_ROS_MODEL_VERSION ||
-    (!marginal && artifact.policyVersion !== FIRST_PARTY_ROS_POLICY_VERSION) ||
+    (!marginal && !point && artifact.policyVersion !== FIRST_PARTY_ROS_POLICY_VERSION) ||
     artifact.calibrationVersion !==
-      (marginal
-        ? MARGINAL_INTERVAL_CALIBRATION_VERSION
-        : FIRST_PARTY_ROS_INTERVAL_CALIBRATION_VERSION)
+      (point
+        ? FIRST_PARTY_ROS_POINT_CALIBRATION_VERSION
+        : marginal
+          ? MARGINAL_INTERVAL_CALIBRATION_VERSION
+          : FIRST_PARTY_ROS_INTERVAL_CALIBRATION_VERSION)
   ) {
     return false;
   }
@@ -482,7 +495,10 @@ export interface FirstPartyRosBucketDecision {
   readonly bucket: FirstPartyRosRemainingWeeksBucket;
   readonly state: "release" | "withhold";
   readonly strategy: FirstPartyRosStrategy | null;
-  readonly gate: FirstPartyRosReleaseGateDecision | FirstPartyRosMarginalReleaseDecision;
+  readonly gate:
+    | FirstPartyRosReleaseGateDecision
+    | FirstPartyRosMarginalReleaseDecision
+    | FirstPartyRosPointReleaseDecision;
   /** Retained only for v8 so calibration can recompute the exact live gate before applying a fit. */
   readonly liveEvidence?: FirstPartyRosLiveReleaseEvidence;
   /**
@@ -585,6 +601,15 @@ export function evaluateFirstPartyRosPublication(input: {
   const eligible = artifactValid && scoringProfileMatches && input.futureWindowComplete;
   const marginal =
     artifactValid && input.artifact.policyVersion === FIRST_PARTY_ROS_MARGINAL_POLICY_VERSION;
+  const point =
+    artifactValid && input.artifact.policyVersion === FIRST_PARTY_ROS_POINT_POLICY_VERSION;
+  const pointQualifications = point
+    ? (
+        input.artifact.releaseGate.pointForecasts as {
+          qualifications: readonly FirstPartyRosPointQualification[];
+        }
+      ).qualifications
+    : [];
   const qualifications = marginal ? marginalIntervals(input.artifact).qualifications : [];
   const blockedCells = eligible ? admittedCellBlockers(input.artifact) : new Set<string>();
   const matchedPositions = positionMatch === null ? null : new Set<string>(positionMatch.matched);
@@ -594,17 +619,26 @@ export function evaluateFirstPartyRosPublication(input: {
   let blockedCellWithheld = false;
   const buckets: FirstPartyRosBucketDecision[] = eligible
     ? input.evidence.map((live) => {
-        const gate = marginal
-          ? evaluateFirstPartyRosMarginalReleaseGate({
+        const gate = point
+          ? evaluateFirstPartyRosPointReleaseGate({
               meanPolicy: input.artifact!.policy,
               live,
-              admittedQualification: qualifications.find(
-                (receipt) =>
-                  receipt.cell.position === live.position && receipt.cell.bucket === live.bucket,
+              admittedQualification: pointQualifications.find(
+                (receipt) => receipt.position === live.position && receipt.bucket === live.bucket,
               ),
               expectedForecastSeason: input.artifact!.season,
             })
-          : evaluateFirstPartyRosReleaseGate(input.artifact!.policy, live, input.gateOptions);
+          : marginal
+            ? evaluateFirstPartyRosMarginalReleaseGate({
+                meanPolicy: input.artifact!.policy,
+                live,
+                admittedQualification: qualifications.find(
+                  (receipt) =>
+                    receipt.cell.position === live.position && receipt.cell.bucket === live.bucket,
+                ),
+                expectedForecastSeason: input.artifact!.season,
+              })
+            : evaluateFirstPartyRosReleaseGate(input.artifact!.policy, live, input.gateOptions);
         // The admitted report's own cell blockers and the per-position match both override a
         // releasing gate; the gate decision is preserved unmodified for observability.
         const blocked = blockedCells.has(`${live.position}:${live.bucket}`);
@@ -623,7 +657,7 @@ export function evaluateFirstPartyRosPublication(input: {
           state: blocked || positionReason !== undefined ? "withhold" : gate.state,
           strategy: gate.strategy,
           gate,
-          ...(marginal ? { liveEvidence: structuredClone(live) } : {}),
+          ...(marginal || point ? { liveEvidence: structuredClone(live) } : {}),
           ...(positionReason === undefined ? {} : { positionReason }),
         };
       })
@@ -638,7 +672,7 @@ export function evaluateFirstPartyRosPublication(input: {
   const preservePriorGoodSet =
     !canPublish || releasingBuckets.length < buckets.length || withheldPositions.length > 0;
   return {
-    ...(marginal ? { championArtifactChecksum: input.artifact.artifactChecksum } : {}),
+    ...(marginal || point ? { championArtifactChecksum: input.artifact.artifactChecksum } : {}),
     canPublish,
     artifactValid,
     scoringProfileMatches,
@@ -663,6 +697,155 @@ export interface FirstPartyRosReleasedPlayer {
   readonly strategy: FirstPartyRosStrategy;
   readonly projection: FirstPartyRosLiveProjection;
   readonly intervalCalibration?: FirstPartyRosPlayerIntervalCalibration;
+  readonly forecastKind?: "point-only";
+  readonly pointEvidence?: FirstPartyRosPlayerPointEvidence;
+}
+
+interface FirstPartyRosPlayerPointEvidence {
+  readonly schemaVersion: 1;
+  readonly position: FirstPartyRosPosition;
+  readonly bucket: FirstPartyRosRemainingWeeksBucket;
+  readonly strategy: FirstPartyRosStrategy;
+  readonly qualificationChecksum: string;
+  readonly releaseEvidenceChecksum: string;
+}
+
+function preparePointPublication(input: {
+  readonly artifact: LoadedFirstPartyRosChampionArtifact;
+  readonly decision: FirstPartyRosPublicationDecision;
+}) {
+  const { artifact, decision } = input;
+  if (
+    artifact.policyVersion !== FIRST_PARTY_ROS_POINT_POLICY_VERSION ||
+    !firstPartyRosChampionArtifactIsValid(artifact) ||
+    decision.championArtifactChecksum !== artifact.artifactChecksum ||
+    !decision.artifactValid ||
+    !decision.canPublish ||
+    !decision.scoringProfileMatches ||
+    !decision.futureWindowComplete ||
+    decision.releasingBuckets.length === 0 ||
+    decision.releasingBuckets.length !==
+      decision.buckets.filter((cell) => cell.state === "release").length
+  )
+    throw new Error("Point ROS publication does not match its admitted artifact");
+  const qualifications = (
+    artifact.releaseGate.pointForecasts as {
+      qualifications: readonly FirstPartyRosPointQualification[];
+    }
+  ).qualifications;
+  const blocked = admittedCellBlockers(artifact);
+  const prepared = new Map<
+    string,
+    {
+      cell: FirstPartyRosBucketDecision;
+      qualification: FirstPartyRosPointQualification;
+      gate: FirstPartyRosPointReleaseDecision;
+    }
+  >();
+  for (const cell of decision.releasingBuckets) {
+    const key = `${cell.position}:${cell.bucket}`;
+    const qualification = qualifications.find(
+      (receipt) => receipt.position === cell.position && receipt.bucket === cell.bucket,
+    );
+    if (
+      prepared.has(key) ||
+      blocked.has(key) ||
+      cell.state !== "release" ||
+      cell.positionReason !== undefined ||
+      cell.liveEvidence === undefined ||
+      cell.liveEvidence.position !== cell.position ||
+      cell.liveEvidence.bucket !== cell.bucket ||
+      qualification === undefined ||
+      !decision.buckets.some((candidate) => sameCanonical(candidate, cell))
+    )
+      throw new Error("Point ROS cell is missing, duplicated, blocked or unbound");
+    const gate = evaluateFirstPartyRosPointReleaseGate({
+      meanPolicy: artifact.policy,
+      live: cell.liveEvidence,
+      admittedQualification: qualification,
+      expectedForecastSeason: artifact.season,
+    });
+    if (
+      gate.state !== "release" ||
+      cell.strategy !== gate.strategy ||
+      !sameCanonical(cell.gate, gate)
+    )
+      throw new Error("Point ROS decision no longer matches its live evidence");
+    prepared.set(key, { cell, qualification, gate });
+  }
+  return prepared;
+}
+
+function preparePointReleasedPlayers(input: {
+  readonly artifact: LoadedFirstPartyRosChampionArtifact;
+  readonly decision: FirstPartyRosPublicationDecision;
+  readonly players: readonly FirstPartyRosReleasedPlayer[];
+}): readonly FirstPartyRosReleasedPlayer[] {
+  const prepared = preparePointPublication(input);
+  const seen = new Set<string>();
+  return input.players.map((player) => {
+    const projection = player.projection;
+    const provenance = projection.provenance;
+    const entry = prepared.get(`${projection.position}:${player.bucket}`);
+    if (
+      entry === undefined ||
+      seen.has(player.playerId) ||
+      player.intervalCalibration !== undefined ||
+      player.forecastKind !== undefined ||
+      player.pointEvidence !== undefined ||
+      player.playerId !== projection.playerId ||
+      player.strategy !== entry.cell.strategy ||
+      provenance.strategy !== player.strategy ||
+      provenance.modelVersion !== input.artifact.modelVersion ||
+      provenance.weeklyModelVersion !== HISTORICAL_ROS_CANDIDATE_PAIR_VERSION ||
+      provenance.season !== input.artifact.season ||
+      !SHA256_PATTERN.test(provenance.inputChecksum) ||
+      !SHA256_PATTERN.test(provenance.seedHash) ||
+      !Number.isFinite(projection.meanPoints) ||
+      !Number.isSafeInteger(provenance.asOfWeek) ||
+      provenance.asOfWeek < 0 ||
+      provenance.asOfWeek >= 18 ||
+      !Number.isSafeInteger(provenance.windowStartWeek) ||
+      !Number.isSafeInteger(provenance.windowEndWeek) ||
+      provenance.windowStartWeek !== provenance.asOfWeek + 1 ||
+      provenance.windowEndWeek < provenance.windowStartWeek ||
+      provenance.windowEndWeek > 18 ||
+      historicalRosBucket(provenance.windowStartWeek, provenance.windowEndWeek) !== player.bucket ||
+      provenance.intervalCalibration !== "simulation-only" ||
+      projectionScoringProfileKeyForPosition(
+        firstPartyRosArtifactScoringProfile(provenance.scoringProfileKey),
+        projection.position,
+      ) !==
+        projectionScoringProfileKeyForPosition(
+          firstPartyRosArtifactScoringProfile(input.artifact.scoringProfileKey),
+          projection.position,
+        ) ||
+      projection.weekly.length !== provenance.windowEndWeek - provenance.windowStartWeek + 1 ||
+      new Set(projection.weekly.map((week) => week.week)).size !== projection.weekly.length ||
+      projection.weekly.some(
+        (week) =>
+          !Number.isSafeInteger(week.week) ||
+          week.week < provenance.windowStartWeek ||
+          week.week > provenance.windowEndWeek ||
+          (week.scheduled && week.bye),
+      ) ||
+      projection.weekly.filter((week) => week.scheduled).length !== projection.scheduledGames
+    )
+      throw new Error("Point ROS player does not match its selected raw projection");
+    seen.add(player.playerId);
+    return {
+      ...player,
+      forecastKind: "point-only" as const,
+      pointEvidence: {
+        schemaVersion: 1 as const,
+        position: projection.position,
+        bucket: player.bucket,
+        strategy: player.strategy,
+        qualificationChecksum: entry.qualification.evidenceChecksum,
+        releaseEvidenceChecksum: entry.gate.evidenceChecksum,
+      },
+    };
+  });
 }
 
 function prepareMarginalPublication(input: {
@@ -823,6 +1006,8 @@ export function calibrateFirstPartyRosReleasedPlayers(input: {
   readonly decision: FirstPartyRosPublicationDecision;
   readonly players: readonly FirstPartyRosReleasedPlayer[];
 }): readonly FirstPartyRosReleasedPlayer[] {
+  if (input.artifact.policyVersion === FIRST_PARTY_ROS_POINT_POLICY_VERSION)
+    return preparePointReleasedPlayers(input);
   if (input.artifact.policyVersion === FIRST_PARTY_ROS_MARGINAL_POLICY_VERSION) {
     return calibrateMarginalReleasedPlayers(input);
   }
@@ -876,24 +1061,26 @@ export interface FirstPartyRosPlayerPersistenceRow {
   readonly playerId: string;
   readonly playerProjection: {
     readonly meanPoints: string;
-    readonly floorPoints: string;
-    readonly ceilingPoints: string;
+    readonly floorPoints: string | null;
+    readonly ceilingPoints: string | null;
     readonly components: Record<string, number>;
   };
   readonly summary: {
+    readonly forecastKind: "point-only" | "calibrated-distribution";
     readonly scheduledGames: number;
     readonly expectedGames: string;
     readonly aggregateMeanPoints: string;
-    readonly p15Points: string;
-    readonly p50Points: string;
-    readonly p85Points: string;
+    readonly p15Points: string | null;
+    readonly p50Points: string | null;
+    readonly p85Points: string | null;
     readonly meanPointsPerExpectedGame: string | null;
-    readonly pointsStddev: string;
+    readonly pointsStddev: string | null;
     readonly availability: FirstPartyRosAvailabilitySnapshot;
     readonly scenarioCount: number;
     readonly methodVersion: string;
     readonly seedHash: string;
     readonly intervalCalibration?: FirstPartyRosPlayerIntervalCalibration;
+    readonly pointEvidence?: FirstPartyRosPlayerPointEvidence;
   };
 }
 
@@ -907,7 +1094,21 @@ export function buildFirstPartyRosPlayerPersistenceRow(
   player: FirstPartyRosReleasedPlayer,
 ): FirstPartyRosPlayerPersistenceRow {
   const projection = player.projection;
+  const pointOnly = player.forecastKind === "point-only";
   const intervalCalibration = player.intervalCalibration;
+  if (pointOnly && intervalCalibration !== undefined)
+    throw new Error("Point-only ROS cannot carry interval calibration");
+  if (
+    pointOnly !== (player.pointEvidence !== undefined) ||
+    (player.pointEvidence !== undefined &&
+      (player.pointEvidence.schemaVersion !== 1 ||
+        player.pointEvidence.position !== projection.position ||
+        player.pointEvidence.bucket !== player.bucket ||
+        player.pointEvidence.strategy !== player.strategy ||
+        !SHA256_PATTERN.test(player.pointEvidence.qualificationChecksum) ||
+        !SHA256_PATTERN.test(player.pointEvidence.releaseEvidenceChecksum)))
+  )
+    throw new Error("Point ROS persistence row lacks its exact release evidence");
   if (
     intervalCalibration !== undefined &&
     (!sameCanonical(Object.keys(intervalCalibration).sort(), [
@@ -966,24 +1167,26 @@ export function buildFirstPartyRosPlayerPersistenceRow(
     playerId: player.playerId,
     playerProjection: {
       meanPoints: aggregateMeanPoints,
-      floorPoints: round(projection.p15Points, 3),
-      ceilingPoints: round(projection.p85Points, 3),
+      floorPoints: pointOnly ? null : round(projection.p15Points, 3),
+      ceilingPoints: pointOnly ? null : round(projection.p85Points, 3),
       components: projection.expectedComponents,
     },
     summary: {
+      forecastKind: pointOnly ? "point-only" : "calibrated-distribution",
       scheduledGames: projection.scheduledGames,
       expectedGames,
       aggregateMeanPoints,
-      p15Points: round(projection.p15Points, 3),
-      p50Points: round(projection.p50Points, 3),
-      p85Points: round(projection.p85Points, 3),
+      p15Points: pointOnly ? null : round(projection.p15Points, 3),
+      p50Points: pointOnly ? null : round(projection.p50Points, 3),
+      p85Points: pointOnly ? null : round(projection.p85Points, 3),
       meanPointsPerExpectedGame,
-      pointsStddev: round(projection.standardDeviation, 3),
+      pointsStddev: pointOnly ? null : round(projection.standardDeviation, 3),
       availability,
       scenarioCount,
       methodVersion: FIRST_PARTY_ROS_MODEL_VERSION,
       seedHash: projection.provenance.seedHash,
       ...(intervalCalibration === undefined ? {} : { intervalCalibration }),
+      ...(player.pointEvidence === undefined ? {} : { pointEvidence: player.pointEvidence }),
     },
   };
 }
@@ -1053,6 +1256,70 @@ export function buildFirstPartyRosRunPayload(input: {
   readonly calibration: Record<string, unknown>;
   readonly metrics: Record<string, unknown>;
 } {
+  if (input.artifact.policyVersion === FIRST_PARTY_ROS_POINT_POLICY_VERSION) {
+    const prepared = preparePointPublication(input);
+    const cells = [...prepared.values()].map(({ cell, qualification, gate }) => ({
+      position: cell.position,
+      bucket: cell.bucket,
+      strategy: cell.strategy!,
+      qualificationChecksum: qualification.evidenceChecksum,
+      releaseEvidenceChecksum: gate.evidenceChecksum,
+    }));
+    const summaries = [...prepared.values()].map(({ cell }) => {
+      const live = cell.liveEvidence!;
+      return extractFirstPartyRosPointConvergence({
+        position: cell.position,
+        scoringProfileKey: live.scoringProfileKey,
+        diagnostic:
+          live.pointConvergence![cell.strategy === "contextual" ? "contextual" : "recency"],
+      });
+    });
+    const worst = summaries.reduce((left, right) =>
+      right.maxToleranceRatio > left.maxToleranceRatio ? right : left,
+    );
+    if (worst.state !== "converged")
+      throw new Error("Point ROS run has an unstable selected live proof");
+    return {
+      configuration: {
+        ...input.extraConfiguration,
+        mode: "release",
+        simulationModelVersion: FIRST_PARTY_ROS_MODEL_VERSION,
+        orchestrationVersion: input.orchestrationVersion,
+        policyVersion: FIRST_PARTY_ROS_POINT_POLICY_VERSION,
+        calibrationVersion: FIRST_PARTY_ROS_POINT_CALIBRATION_VERSION,
+        championArtifactChecksum: input.artifact.artifactChecksum,
+        scoringProfileKey: input.artifact.scoringProfileKey,
+        releasingBuckets: cells,
+      },
+      calibration: {
+        state: "unavailable",
+        rosPoints: {
+          schemaVersion: 1,
+          method: FIRST_PARTY_ROS_POINT_RELEASE_VERSION,
+          state: "validated",
+          championArtifactChecksum: input.artifact.artifactChecksum,
+          scoringProfileKey: input.artifact.scoringProfileKey,
+          intervalAvailable: false,
+          cells,
+        },
+      },
+      metrics: {
+        rosPointConvergence: {
+          schemaVersion: 1,
+          state: worst.state,
+          method: "live-bounded-ros-point-convergence-v1",
+          evidenceChecksum: worst.diagnosticChecksum,
+          lowerScenarioCount: worst.lowerScenarioCount,
+          referenceScenarioCount: worst.referenceScenarioCount,
+          maxToleranceRatio: worst.maxToleranceRatio,
+        },
+        releasingBuckets: cells.length,
+        withheldReasons: input.decision.reasons,
+        cellDecisions: buildFirstPartyRosCellDecisions(input.decision),
+        preservePriorGoodSet: input.decision.preservePriorGoodSet,
+      },
+    };
+  }
   if (input.artifact.policyVersion === FIRST_PARTY_ROS_MARGINAL_POLICY_VERSION) {
     const { prepared, envelope } = prepareMarginalPublication(input);
     return {

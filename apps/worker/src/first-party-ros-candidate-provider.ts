@@ -32,6 +32,8 @@ import {
 } from "@laces-out/domain";
 import {
   fitFirstPartyDefenseGameCalibration,
+  FIRST_PARTY_ROS_POINT_POLICY_VERSION,
+  extractFirstPartyRosPointConvergence,
   DEFENSE_POINTS_ALLOWED_DEFINITIONS,
   defensePointsAllowedDefinitionForProfile,
   LEAGUE_SCORING_NORMALIZATION_VERSION,
@@ -1197,10 +1199,27 @@ function* firstPartyRosLeagueTargetSteps(
       ...scenarioOverrides,
       project: () => recencyReference,
     });
-    bucketConvergences.push(
+    const pointOnly = input.artifact.policyVersion === FIRST_PARTY_ROS_POINT_POLICY_VERSION;
+    if (pointOnly && (!contextualConvergence.fullDiagnostic || !recencyConvergence.fullDiagnostic))
+      throw new Error("Point ROS requires the standard complete convergence evidence");
+    const pointConvergence = pointOnly
+      ? {
+          contextual: contextualConvergence.fullDiagnostic!,
+          recency: recencyConvergence.fullDiagnostic!,
+        }
+      : undefined;
+    const selectedConvergence =
       representative.released.strategy === "contextual"
         ? contextualConvergence
-        : recencyConvergence,
+        : recencyConvergence;
+    bucketConvergences.push(
+      pointOnly
+        ? extractFirstPartyRosPointConvergence({
+            position: representative.candidate.position,
+            scoringProfileKey,
+            diagnostic: selectedConvergence.fullDiagnostic!,
+          })
+        : selectedConvergence,
     );
     const meanCoverage = {
       contextual:
@@ -1209,8 +1228,8 @@ function* firstPartyRosLeagueTargetSteps(
       recency:
         ordered.reduce((sum, entry) => sum + entry.candidate.coverage.recency, 0) / ordered.length,
     };
-    evidence.push(
-      buildFirstPartyRosLiveReleaseEvidence({
+    evidence.push({
+      ...buildFirstPartyRosLiveReleaseEvidence({
         position: representative.candidate.position,
         bucket: representative.candidate.bucket,
         contextualModelVersion: representative.candidate.contextualModelVersion,
@@ -1238,7 +1257,8 @@ function* firstPartyRosLeagueTargetSteps(
           },
         },
       }),
-    );
+      ...(pointConvergence === undefined ? {} : { pointConvergence }),
+    });
   }
 
   // The run summary follows each bucket's selected strategy. Both candidates remain in the

@@ -277,7 +277,10 @@ async function start(): Promise<void> {
         );
         // A paired proof holds one complete slot through replay AND admission. Two retained
         // report sets plus child heaps must not overlap another builder or marginal proof.
-        if (environment.ROS_RELEASE_RAIL === "marginal-v8")
+        if (
+          environment.ROS_RELEASE_RAIL === "marginal-v8" ||
+          environment.ROS_RELEASE_RAIL === "point-v1"
+        )
           await capacity.run(2, signal, () =>
             service.validateProfile(job.data, { jobId: job.id, signal }),
           );

@@ -10,6 +10,7 @@ import {
   type FirstPartyRosPosition,
   rosScoringProfile,
   type FirstPartyRosLiveReleaseEvidence,
+  type FirstPartyRosReleaseGateDecision,
   type FirstPartyRosProjection,
   type ProjectionScoringProfile,
 } from "@laces-out/projections";
@@ -1081,7 +1082,10 @@ describe("first-party ROS run payload cell observability", () => {
           ...decision,
           releasingBuckets: decision.releasingBuckets.map((bucket) => ({
             ...bucket,
-            gate: { ...bucket.gate, calibrationArtifactChecksum: "0".repeat(64) },
+            gate: {
+              ...(bucket.gate as FirstPartyRosReleaseGateDecision),
+              calibrationArtifactChecksum: "0".repeat(64),
+            },
           })),
         },
         convergence,

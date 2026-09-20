@@ -32,6 +32,7 @@ import {
 import { FIRST_PARTY_ROS_RELEASE_PLAYERS_PER_POSITION } from "./first-party-ros-validation-contract.js";
 import { ROS_HISTORICAL_COVERAGE_DEFAULT_THRESHOLDS } from "./ros-data-coverage.js";
 import { prepareFirstPartyRosMarginalAdmission } from "./first-party-ros-marginal-admission.js";
+import { prepareFirstPartyRosPointAdmission } from "./first-party-ros-point-admission.js";
 import {
   assertRosMarginalProfileEvidenceIdentity,
   type RosMarginalProfileEvidence,
@@ -392,6 +393,7 @@ const STATISTICAL_ADMISSION_BLOCKERS = new Set([
   "release_validation_batches_below_minimum",
   "release_validation_held_out_seasons_below_minimum",
   "marginal_admission_portfolio_comparison_failed",
+  "point_admission_mean_or_convergence_failed",
   ...["previous-deployed", "previous-raw", "same-physics-legacy", "same-physics-raw"].map(
     (name) => `marginal_admission_portfolio_wis_worse_than_${name}`,
   ),
@@ -425,7 +427,10 @@ export class RosProfileValidationService {
     this.runner = options.runner ?? createRosProfileValidationRunner(options);
     this.now = options.now ?? (() => new Date());
     firstPartyRosReleaseIdentity(options.releaseRail);
-    if (options.releaseRail === "marginal-v8" && !options.marginalRunner)
+    if (
+      (options.releaseRail === "marginal-v8" || options.releaseRail === "point-v1") &&
+      !options.marginalRunner
+    )
       throw new Error("Marginal ROS validation requires paired pinned evidence replay");
     if (options.sharedCorpus && !this.repository.deferForCorpus)
       throw new Error("Shared ROS bootstrap requires deferred profile persistence");
@@ -542,7 +547,7 @@ export class RosProfileValidationService {
       };
       let marginalEvidence: RosMarginalProfileEvidence | undefined;
       let report: Record<string, unknown>;
-      if (this.options.releaseRail === "marginal-v8") {
+      if (this.options.releaseRail === "marginal-v8" || this.options.releaseRail === "point-v1") {
         if (!requiredReadyCorpusIdentity)
           throw new Error("Marginal ROS profile validation requires a pinned ready corpus");
         marginalEvidence = await this.options.marginalRunner!(runInput);
@@ -596,7 +601,9 @@ export class RosProfileValidationService {
               evidenceThroughSeason: record.season - 1,
               constants,
             })
-          : prepareFirstPartyRosMarginalAdmission({
+          : (this.options.releaseRail === "point-v1"
+              ? prepareFirstPartyRosPointAdmission
+              : prepareFirstPartyRosMarginalAdmission)({
               ...marginalEvidence,
               forecastSeason: record.season,
               scoringProfile: definition.profile,

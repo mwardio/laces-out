@@ -282,7 +282,7 @@ export function createRosDefinitionAwareReadiness(options: {
     signal.throwIfAborted();
     const requested = rosCorpusDefinitionForProfileKey(scoringProfileKey);
     let definition = requested ?? ROS_SHARED_CORPUS_REFERENCE_POINTS_ALLOWED_DEFINITION;
-    if (options.releaseRail === "marginal-v8") {
+    if (options.releaseRail === "marginal-v8" || options.releaseRail === "point-v1") {
       const selected = await options.marginal(season, signal, scoringProfileKey);
       // Bundle resolution has already checked the profile and all dependency definitions. For a
       // no-PA profile the selected bundle identity is sufficient; no physical build is scheduled.
