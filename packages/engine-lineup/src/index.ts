@@ -601,6 +601,7 @@ export function preserveCurrentLineupBelowGain(
 } {
   const unchanged = { result: optimum, preserved: false, availableGain: 0 };
   const metric = input.metric ?? "mean";
+  const lockedPlayers = new Set((input.locks ?? []).map((lock) => lock.playerId));
   if (
     !Number.isFinite(options.maximumGain) ||
     options.maximumGain <= 0 ||
@@ -609,7 +610,9 @@ export function preserveCurrentLineupBelowGain(
     optimum.metric !== metric ||
     optimum.changes.length === 0 ||
     optimum.diagnostics.some(
-      ({ code }) => code === "MISSING_PROJECTION" || code === "INVALID_PROJECTION",
+      ({ code, playerId }) =>
+        code === "INVALID_PROJECTION" ||
+        (code === "MISSING_PROJECTION" && (!playerId || !lockedPlayers.has(playerId))),
     )
   )
     return unchanged;
@@ -642,8 +645,14 @@ export function preserveCurrentLineupBelowGain(
       currentPlayers.has(assignment.playerId) ||
       currentBySlot.has(assignment.slotId) ||
       !isPlayerEligibleForSlot(player, slot) ||
-      value === undefined ||
-      !Number.isFinite(value)
+      (value === undefined
+        ? !(input.locks ?? []).some(
+            (lock) =>
+              lock.kind === "STARTER" &&
+              lock.playerId === assignment.playerId &&
+              lock.slotId === assignment.slotId,
+          )
+        : !Number.isFinite(value))
     )
       return unchanged;
     currentBySlot.set(assignment.slotId, assignment.playerId);
