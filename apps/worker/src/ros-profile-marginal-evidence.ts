@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { constants } from "node:fs";
 import { link, mkdir, open, rm } from "node:fs/promises";
 import path from "node:path";
+import { isDeepStrictEqual } from "node:util";
 
 import {
   rosProfileDefinitionFromKey,
@@ -10,6 +11,11 @@ import {
 
 import type { FirstPartyRosMarginalAdmissionInput } from "./first-party-ros-marginal-admission.js";
 import { assertRosCacheHeadroom } from "./ros-cache-disk-space.js";
+import {
+  validateRosDerivedEvaluation,
+  type RosDerivedEvaluationInput,
+  type RosDerivedEvaluationLineage,
+} from "./ros-derived-evaluation.js";
 import {
   ROS_HISTORICAL_ACTUAL_DEFINITION_VERSION,
   rosHistoricalProfilePointsAllowedDefinition,
@@ -57,7 +63,22 @@ export interface RosMarginalProfileEvidence extends Omit<
     readonly candidateReportChecksum: string;
     readonly previousReportChecksum: string;
     readonly intervalTrainingReportChecksum?: string;
+    readonly derivedEvaluation?: RosDerivedEvaluationLineage;
   };
+}
+
+/**
+ * Supplied by a trusted, cache-only resolver that authenticates the retained physical dependencies.
+ * Native replay cannot produce these comparisons: their observed labels and forecast lineage differ.
+ */
+export interface RosDerivedMarginalProfileReports {
+  readonly candidateReportJson: string;
+  readonly candidateReportChecksum: string;
+  readonly previousReportJson: string;
+  readonly previousReportChecksum: string;
+  readonly intervalTrainingReportJson: string;
+  readonly intervalTrainingReportChecksum: string;
+  readonly derivedEvaluation: RosDerivedEvaluationInput;
 }
 
 export type RosMarginalProfileValidationRunner = (
@@ -69,12 +90,34 @@ export function assertRosMarginalProfileEvidenceIdentity(
   evidence: RosMarginalProfileEvidence,
   input: RosProfileValidationRunInput,
 ): void {
+  const derivedLineage =
+    evidence.derivedEvaluation === undefined
+      ? undefined
+      : validateRosDerivedEvaluation({
+          input: evidence.derivedEvaluation,
+          candidateReportJson: evidence.candidateReportJson,
+          candidateReportChecksum: evidence.candidateReportChecksum,
+          previousReportJson: evidence.previousReportJson,
+          previousReportChecksum: evidence.previousReportChecksum,
+          intervalTrainingReportJson: evidence.intervalTrainingReportJson!,
+          intervalTrainingReportChecksum: evidence.intervalTrainingReportChecksum!,
+        }).lineage;
+  assertEvidenceIdentityWithLineage(evidence, input, derivedLineage);
+}
+
+/** Only callers that just validated the captured bytes may supply authenticated derived lineage. */
+function assertEvidenceIdentityWithLineage(
+  evidence: RosMarginalProfileEvidence,
+  input: RosProfileValidationRunInput,
+  derivedLineage: RosDerivedEvaluationLineage | undefined,
+): void {
   const provenance = evidence.provenance;
   if (
     !object(provenance) ||
     provenance.scoringProfileKey !== input.scoringProfileKey ||
     provenance.candidateReportChecksum !== evidence.candidateReportChecksum ||
     provenance.previousReportChecksum !== evidence.previousReportChecksum ||
+    !isDeepStrictEqual(provenance.derivedEvaluation, derivedLineage) ||
     provenance.intervalTrainingReportChecksum !== evidence.intervalTrainingReportChecksum ||
     provenance.qualificationProtocolChecksum !== evidence.qualificationProtocolChecksum ||
     (provenance.intervalTrainingCorpusIdentity === undefined) !==
@@ -97,17 +140,32 @@ export function assertRosMarginalProfileEvidenceIdentity(
     },
     input,
   );
+  if (
+    derivedLineage !== undefined &&
+    provenance.intervalTrainingCorpusIdentity !== derivedLineage.correctedDstPhysicalCorpus
+  )
+    throw new Error("ROS marginal derived training corpus differs from its physical lineage");
+  if (
+    derivedLineage?.productionQualificationProtocolChecksum !== undefined &&
+    derivedLineage.productionQualificationProtocolChecksum !==
+      evidence.qualificationProtocolChecksum
+  )
+    throw new Error(
+      "ROS marginal derived production package uses a different qualification protocol",
+    );
   let pointsAllowedDefinition: ProjectionDefensePointsAllowedDefinition | undefined;
-  for (const [reportJson, reportChecksum, identity] of [
+  for (const [reportJson, reportChecksum, identity, derived] of [
     [
       evidence.candidateReportJson,
       evidence.candidateReportChecksum,
       provenance.candidateCorpusIdentity,
+      derivedLineage !== undefined,
     ],
     [
       evidence.previousReportJson,
       evidence.previousReportChecksum,
       provenance.previousCorpusIdentity,
+      derivedLineage !== undefined,
     ],
     ...(evidence.intervalTrainingReportJson === undefined
       ? []
@@ -116,13 +174,16 @@ export function assertRosMarginalProfileEvidenceIdentity(
             evidence.intervalTrainingReportJson,
             evidence.intervalTrainingReportChecksum!,
             provenance.intervalTrainingCorpusIdentity!,
-          ],
+            false,
+          ] as const,
         ]),
-  ]) {
+  ] as const) {
     const definition = assertReport(
-      { reportJson: reportJson!, reportChecksum: reportChecksum!, report: {} },
-      identity!,
+      { reportJson, reportChecksum, report: {} },
+      identity,
       input.scoringProfileKey,
+      undefined,
+      derived,
     );
     if (pointsAllowedDefinition !== undefined && pointsAllowedDefinition !== definition)
       throw new Error("ROS marginal reports disagree on points-allowed definition");
@@ -185,6 +246,7 @@ function assertReport(
   corpusIdentity: string,
   scoringProfileKey: string,
   dependency?: RosMarginalDependency,
+  authenticatedDerived = false,
 ): ProjectionDefensePointsAllowedDefinition {
   if (
     typeof value.reportJson !== "string" ||
@@ -206,7 +268,11 @@ function assertReport(
   if (
     !object(report) ||
     !Object.hasOwn(report, "actualDefinitionVersion") ||
-    report.actualDefinitionVersion !== ROS_HISTORICAL_ACTUAL_DEFINITION_VERSION ||
+    report.actualDefinitionVersion !==
+      (authenticatedDerived
+        ? "complete-player-ledger-actuals-v1"
+        : ROS_HISTORICAL_ACTUAL_DEFINITION_VERSION) ||
+    (!authenticatedDerived && Object.hasOwn(report, "correctedComparison")) ||
     report.outcomeCorpusIdentity !== corpusIdentity ||
     !object(report.identityAudit) ||
     report.identityAudit.scoringProfileKey !== scoringProfileKey ||
@@ -233,7 +299,7 @@ function assertReport(
 /** Exclusive content-addressed writes retain the exact bytes used by admission across restarts. */
 async function archiveReport(
   directory: string,
-  report: PinnedRosProfileValidationReport,
+  report: Pick<PinnedRosProfileValidationReport, "reportJson" | "reportChecksum">,
   signal: AbortSignal,
 ): Promise<void> {
   signal.throwIfAborted();
@@ -288,6 +354,11 @@ export function createRosMarginalProfileValidationRunner(options: {
   readonly reportDirectory: string;
   readonly runnerOptions?: RosProfileValidationRunnerOptions;
   readonly reportRunner?: PinnedRosProfileValidationRunner;
+  /** Explicit derived route; failures never fall back to a native replay or a new physical build. */
+  readonly derivedEvidenceProvider?: (
+    input: RosProfileValidationRunInput,
+    bundle: RosMarginalCorpusBundle,
+  ) => Promise<RosDerivedMarginalProfileReports>;
 }): RosMarginalProfileValidationRunner {
   const runner =
     options.reportRunner ??
@@ -296,12 +367,109 @@ export function createRosMarginalProfileValidationRunner(options: {
     input.signal.throwIfAborted();
     const profile = rosProfileDefinitionFromKey(input.scoringProfileKey);
     rosHistoricalProfilePointsAllowedDefinition(profile.profile);
-    const bundle = await options.resolveCorpora(
-      input.season,
-      input.signal,
-      input.scoringProfileKey,
-    );
+    const bundle = Object.freeze({
+      ...(await options.resolveCorpora(input.season, input.signal, input.scoringProfileKey)),
+    });
     assertBundle(bundle, input);
+    if (options.derivedEvidenceProvider !== undefined) {
+      if (bundle.intervalTrainingCorpusIdentity === undefined)
+        throw new Error("ROS marginal derived evidence requires a pinned training dependency");
+      const supplied = await options.derivedEvidenceProvider(input, bundle);
+      input.signal.throwIfAborted();
+      // Capture string values before the first archive await; provider-owned objects are mutable.
+      const reports: RosDerivedMarginalProfileReports = {
+        candidateReportJson: supplied.candidateReportJson,
+        candidateReportChecksum: supplied.candidateReportChecksum,
+        previousReportJson: supplied.previousReportJson,
+        previousReportChecksum: supplied.previousReportChecksum,
+        intervalTrainingReportJson: supplied.intervalTrainingReportJson,
+        intervalTrainingReportChecksum: supplied.intervalTrainingReportChecksum,
+        derivedEvaluation: Object.freeze({
+          comparisonManifestJson: supplied.derivedEvaluation.comparisonManifestJson,
+          comparisonManifestChecksum: supplied.derivedEvaluation.comparisonManifestChecksum,
+          originalCandidateReportJson: supplied.derivedEvaluation.originalCandidateReportJson,
+          originalCandidateReportChecksum:
+            supplied.derivedEvaluation.originalCandidateReportChecksum,
+          originalPreviousReportJson: supplied.derivedEvaluation.originalPreviousReportJson,
+          originalPreviousReportChecksum: supplied.derivedEvaluation.originalPreviousReportChecksum,
+          ...(supplied.derivedEvaluation.productionPackageJson === undefined
+            ? {}
+            : { productionPackageJson: supplied.derivedEvaluation.productionPackageJson }),
+          ...(supplied.derivedEvaluation.productionPackageChecksum === undefined
+            ? {}
+            : { productionPackageChecksum: supplied.derivedEvaluation.productionPackageChecksum }),
+        }),
+      };
+      const { lineage } = validateRosDerivedEvaluation({
+        input: reports.derivedEvaluation,
+        candidateReportJson: reports.candidateReportJson,
+        candidateReportChecksum: reports.candidateReportChecksum,
+        previousReportJson: reports.previousReportJson,
+        previousReportChecksum: reports.previousReportChecksum,
+        intervalTrainingReportJson: reports.intervalTrainingReportJson,
+        intervalTrainingReportChecksum: reports.intervalTrainingReportChecksum,
+      });
+      const evidence: RosMarginalProfileEvidence = {
+        candidateReportJson: reports.candidateReportJson,
+        candidateReportChecksum: reports.candidateReportChecksum,
+        previousReportJson: reports.previousReportJson,
+        previousReportChecksum: reports.previousReportChecksum,
+        intervalTrainingReportJson: reports.intervalTrainingReportJson,
+        intervalTrainingReportChecksum: reports.intervalTrainingReportChecksum,
+        derivedEvaluation: reports.derivedEvaluation,
+        qualificationProtocolText: bundle.qualificationProtocolText,
+        qualificationProtocolChecksum: bundle.qualificationProtocolChecksum,
+        provenance: {
+          version: bundle.version,
+          forecastSeason: bundle.forecastSeason,
+          scoringProfileKey: profile.scoringProfileKey,
+          candidateCorpusIdentity: bundle.candidateCorpusIdentity,
+          previousCorpusIdentity: bundle.previousCorpusIdentity,
+          intervalTrainingCorpusIdentity: bundle.intervalTrainingCorpusIdentity,
+          qualificationProtocolChecksum: bundle.qualificationProtocolChecksum,
+          candidateReportChecksum: reports.candidateReportChecksum,
+          previousReportChecksum: reports.previousReportChecksum,
+          intervalTrainingReportChecksum: reports.intervalTrainingReportChecksum,
+          derivedEvaluation: lineage,
+        },
+      };
+      assertEvidenceIdentityWithLineage(evidence, input, lineage);
+      const archive = [
+        [reports.candidateReportJson, reports.candidateReportChecksum],
+        [reports.previousReportJson, reports.previousReportChecksum],
+        [reports.intervalTrainingReportJson, reports.intervalTrainingReportChecksum],
+        [
+          reports.derivedEvaluation.comparisonManifestJson,
+          reports.derivedEvaluation.comparisonManifestChecksum,
+        ],
+        [
+          reports.derivedEvaluation.originalCandidateReportJson,
+          reports.derivedEvaluation.originalCandidateReportChecksum,
+        ],
+        [
+          reports.derivedEvaluation.originalPreviousReportJson,
+          reports.derivedEvaluation.originalPreviousReportChecksum,
+        ],
+        ...(reports.derivedEvaluation.productionPackageJson === undefined
+          ? []
+          : [
+              [
+                reports.derivedEvaluation.productionPackageJson,
+                reports.derivedEvaluation.productionPackageChecksum!,
+              ] as const,
+            ]),
+      ] as const;
+      input.signal.throwIfAborted();
+      await mkdir(options.reportDirectory, { recursive: true, mode: 0o700 });
+      await assertRosCacheHeadroom(
+        options.reportDirectory,
+        archive.reduce((bytes, [reportJson]) => bytes + Buffer.byteLength(reportJson), 0),
+        input.signal,
+      );
+      for (const [reportJson, reportChecksum] of archive)
+        await archiveReport(options.reportDirectory, { reportJson, reportChecksum }, input.signal);
+      return evidence;
+    }
     let pointsAllowedDefinition: ProjectionDefensePointsAllowedDefinition | undefined;
     async function replay(
       identity: string,

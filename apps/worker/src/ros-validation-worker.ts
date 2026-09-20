@@ -17,7 +17,7 @@ import {
 import pino from "pino";
 import path from "node:path";
 import { RosMarginalDependencyError } from "./ros-marginal-corpus-bundle.js";
-import { createRosMarginalProfileValidationRunner } from "./ros-profile-marginal-evidence.js";
+import { createRosDerivedProfileProvider } from "./ros-derived-profile-provider.js";
 
 import { RosProfileValidationService } from "./ros-profile-validation.js";
 import {
@@ -39,6 +39,7 @@ import { RosExecutionCapacity } from "./ros-execution-capacity.js";
 import { currentNflSeason } from "./nfl-season.js";
 import {
   createRosDefinitionAwareMarginalResolver,
+  createRosDefinitionAwareMarginalValidationRunner,
   createRosDefinitionAwareReadiness,
   rosCorpusDemandGroups,
 } from "./ros-corpus-routing.js";
@@ -104,12 +105,24 @@ const resolveMarginalSelection = createRosDefinitionAwareMarginalResolver({
       ? { "espn-2019-v1": environment.ROS_MARGINAL_BUNDLE_CHECKSUM_ESPN }
       : {}),
   },
+  derivedProviderFactory: (definition, packageChecksum) =>
+    createRosDerivedProfileProvider({
+      directory: outcomeCacheDirectory,
+      packageChecksums: { [definition]: packageChecksum },
+      sourceRoots: {
+        "original-v12": path.join(outcomeCacheDirectory, "derived-vectors", "original-v12"),
+        "native-dst-v13": path.join(outcomeCacheDirectory, "derived-vectors", "native-dst-v13"),
+        "expanded-dst-v13": {
+          [definition]: path.join(
+            outcomeCacheDirectory,
+            "derived-vectors",
+            "expanded-dst-v13",
+            definition,
+          ),
+        },
+      },
+    }),
 });
-const resolveMarginalCorpora = async (
-  season: number,
-  signal: AbortSignal,
-  scoringProfileKey: string,
-) => (await resolveMarginalSelection(season, signal, scoringProfileKey)).bundle;
 const sharedCorpus = createRosDefinitionAwareReadiness({
   releaseRail: environment.ROS_RELEASE_RAIL,
   ensure: (season, signal, definition) => bootstrap.ensure(season, signal, definition),
@@ -117,8 +130,8 @@ const sharedCorpus = createRosDefinitionAwareReadiness({
     readyRosSharedCorpusIdentity(outcomeCacheDirectory, season, signal, definition),
   marginal: resolveMarginalSelection,
 });
-const marginalRunner = createRosMarginalProfileValidationRunner({
-  resolveCorpora: resolveMarginalCorpora,
+const marginalRunner = createRosDefinitionAwareMarginalValidationRunner({
+  resolveSelection: resolveMarginalSelection,
   reportDirectory: path.join(outcomeCacheDirectory, "marginal-reports"),
   runnerOptions: { outcomeCacheDirectory, sourceCacheDirectory, offline: true },
 });
