@@ -1928,6 +1928,7 @@ const lineupAssignmentDecisionSchema = z
     slotLabel: z.string().min(1),
     player: decisionPlayerSchema,
     locked: z.boolean(),
+    projectionUnavailable: z.literal(true).optional(),
   })
   .strict();
 
@@ -1958,6 +1959,7 @@ export const lineupDecisionSectionSchema = z.discriminatedUnion("state", [
       currentProjectedPoints: z.number().finite(),
       optimalProjectedPoints: z.number().finite(),
       projectedGain: z.number().finite(),
+      totalsScope: z.literal("projected-players-only").optional(),
       assignments: z.array(lineupAssignmentDecisionSchema).max(30),
       changes: z.array(lineupChangeDecisionSchema).max(30),
       execution: decisionExecutionSchema,
