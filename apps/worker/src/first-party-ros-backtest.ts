@@ -1891,13 +1891,29 @@ function aggregateActual(input: {
   readonly windowEndWeek: number;
   readonly scoringProfile: ProjectionScoringProfile;
 }) {
-  const rows = input.history.filter(
+  const observedRows = input.history.filter(
     (row) =>
       row.playerId === input.playerId &&
       row.season === input.season &&
       row.week >= input.windowStartWeek &&
       row.week <= input.windowEndWeek,
   );
+  // A proven DNP establishes zero for every player stat, including trick-play and kicking
+  // stats outside the player's listed position. Expand only these rows, locally to observed
+  // outcomes: changing history used by the model would unnecessarily change forecast seeds.
+  const componentIds = new Set([
+    ...HISTORICAL_PLAYER_ACTUAL_STAT_IDS,
+    ...observedRows.flatMap((row) => Object.keys(row.components)),
+  ]);
+  const rows = observedRows.map((row) => {
+    if (row.played !== false) return row;
+    if (Object.values(row.components).some((value) => value !== 0)) {
+      throw new Error(
+        `Historical ROS DNP has invalid or nonzero components at ${row.season}:${row.week}`,
+      );
+    }
+    return { ...row, components: Object.fromEntries([...componentIds].map((key) => [key, 0])) };
+  });
   for (const row of rows) {
     requireCompleteHistoricalActual(row, input.scoringProfile, HISTORICAL_PLAYER_ACTUAL_STAT_IDS);
   }
@@ -1913,6 +1929,8 @@ function aggregateActual(input: {
     ),
   };
 }
+
+export { aggregateActual as aggregateHistoricalRosPlayerActual };
 
 function aggregateDefenseActual(input: {
   readonly history: readonly FirstPartyTeamDefenseWeeklyStatLine[];

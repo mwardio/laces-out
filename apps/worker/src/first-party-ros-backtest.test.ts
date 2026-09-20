@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   evaluateFirstPartyRosChampionPolicy,
+  firstPartyProjectionComponentsForPosition,
   type FirstPartyRosHeldOutSeason,
   type FirstPartyTeamDefenseWeeklyStatLine,
   type FirstPartyWeeklyStatLine,
@@ -11,6 +12,7 @@ import {
   HISTORICAL_ROS_AVAILABILITY_CALIBRATION_VERSION,
   HISTORICAL_ROS_KICKER_CALIBRATION_VERSION,
   HISTORICAL_ROS_SCORING_PROFILE,
+  aggregateHistoricalRosPlayerActual,
   calibrateHistoricalRosAvailability,
   calibrateHistoricalRosKicker,
   calibrateHistoricalRosRole,
@@ -84,6 +86,94 @@ function scheduleWeeks(
 ): readonly ProjectionScheduleFact[] {
   return weeks.map((week) => scheduledGame(season, week, team));
 }
+
+describe("historical ROS player actual completeness", () => {
+  const zeroComponents = Object.fromEntries(
+    [
+      ...new Set(["QB", "RB", "WR", "TE", "K"].flatMap(firstPartyProjectionComponentsForPosition)),
+    ].map((key) => [key, 0]),
+  );
+  const aggregate = (history: readonly FirstPartyWeeklyStatLine[]) =>
+    aggregateHistoricalRosPlayerActual({
+      history,
+      playerId: "player",
+      season: 2024,
+      windowStartWeek: 2,
+      windowEndWeek: 3,
+      scoringProfile: HISTORICAL_ROS_SCORING_PROFILE,
+    });
+
+  it.each([false, true])(
+    "preserves all observed stats around a proven DNP (DNP first: %s)",
+    (first) => {
+      const played = row("player", 2024, first ? 3 : 2, 0, {
+        position: "QB",
+        components: { ...zeroComponents, receiving_yards: 15, receptions: 1, passing_attempts: 3 },
+      });
+      const dnp = row("player", 2024, first ? 2 : 3, 0, {
+        position: "QB",
+        components: { passing_yards: 0 },
+        played: false,
+      });
+      const history = first ? [dnp, played] : [played, dnp];
+      const originalDnp = { ...dnp.components };
+      const actual = aggregate(history);
+      expect(actual.actualComponents).toEqual(played.components);
+      expect(actual.actualGames).toBe(1);
+      expect(actual.actualPoints).toBe(2.5);
+      expect(dnp.components).toEqual(originalDnp);
+    },
+  );
+
+  it.each([true, undefined])(
+    "does not infer missing stats from position or snap share (played: %s)",
+    (played) => {
+      expect(() =>
+        aggregate([
+          {
+            playerId: "player",
+            season: 2024,
+            week: 2,
+            team: "AAA",
+            position: "QB",
+            components: { passing_yards: 0 },
+            ...(played === undefined ? {} : { played }),
+            snapShare: 0.05,
+          },
+        ]),
+      ).toThrow(/Historical ROS actual components unavailable.*receiving_yards/);
+    },
+  );
+
+  it("does not let a proven DNP establish missing stats in a played game", () => {
+    const components = { ...zeroComponents };
+    delete components.receptions;
+    expect(() =>
+      aggregate([
+        row("player", 2024, 2, 0, { components: {}, played: false }),
+        row("player", 2024, 3, 0, { components }),
+      ]),
+    ).toThrow(/missing=receptions/);
+  });
+
+  it.each([1, -1, Number.NaN, Number.POSITIVE_INFINITY])(
+    "rejects contradictory or invalid DNP evidence (%s)",
+    (value) => {
+      expect(() =>
+        aggregate([
+          row("player", 2024, 2, 0, { components: { receiving_yards: value }, played: false }),
+        ]),
+      ).toThrow(/Historical ROS DNP has invalid or nonzero components/);
+    },
+  );
+
+  it("counts an entirely proven DNP window as zero without counting appearances", () => {
+    const actual = aggregate([row("player", 2024, 2, 0, { components: {}, played: false })]);
+    expect(actual.actualGames).toBe(0);
+    expect(actual.actualPoints).toBe(0);
+    expect(actual.actualComponents).toEqual(zeroComponents);
+  });
+});
 
 describe("historical ROS leakage boundaries", () => {
   it("uses the same held-out population even when league rules reverse player rankings", () => {
