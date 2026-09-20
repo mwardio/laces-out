@@ -2032,6 +2032,42 @@ describe("InSeasonDecisionService", () => {
     expect(snapshot.lineup.assignments.every((row) => !row.projectionUnavailable)).toBe(true);
   });
 
+  it("still suppresses negligible movable swaps when a locked starter has no forecast", async () => {
+    const repository = new FakeRepository();
+    repository.projectionRows = projectionRows
+      .filter((row) => row.playerId !== playerIds.aQbLow)
+      .map((row) => (row.playerId === playerIds.aRbTwo ? { ...row, meanPoints: "20.023" } : row));
+    repository.rosterRows = rosterRows.map((row) =>
+      row.playerId === playerIds.aQbLow ? { ...row, locked: true } : row,
+    );
+    const snapshot = await new InSeasonDecisionService(repository, () => NOW).getSnapshot(
+      USER_ID,
+      LEAGUE_ID,
+    );
+    if (snapshot?.lineup.state !== "available") throw new Error("Expected available lineup");
+    expect(snapshot.lineup.totalsScope).toBe("projected-players-only");
+    expect(snapshot.lineup.changes).toEqual([]);
+    expect(snapshot.lineup.projectedGain).toBe(0);
+    expect(snapshot.lineup.notes.join(" ")).toContain("effective tie");
+  });
+
+  it("binds game-start locks into advice identity without claiming provider lock coverage", async () => {
+    const repository = new FakeRepository();
+    repository.rosterRows = rosterRows.map((row) =>
+      row.playerId === playerIds.aRbOne ? { ...row, nflTeam: "Det" } : row,
+    );
+    const service = new InSeasonDecisionService(repository, () => NOW);
+    const before = await service.getSnapshot(USER_ID, LEAGUE_ID);
+    repository.startedTeams = ["DET"];
+    const after = await service.getSnapshot(USER_ID, LEAGUE_ID);
+    expect(before?.provenance.inputChecksum).not.toBe(after?.provenance.inputChecksum);
+    expect(after?.providerVerification.storedLockedPlayerCount).toBe(0);
+    if (after?.lineup.state !== "available") throw new Error("Expected available lineup");
+    expect(after.lineup.assignments.find((row) => row.player.id === playerIds.aRbOne)?.locked).toBe(
+      true,
+    );
+  });
+
   it("does not excuse a missing movable forecast when another missing player is locked", async () => {
     const repository = new FakeRepository();
     repository.projectionRows = projectionRows.filter(

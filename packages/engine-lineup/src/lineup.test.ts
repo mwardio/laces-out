@@ -69,6 +69,46 @@ describe("preserveCurrentLineupBelowGain", () => {
     expect(selected.result.changes).toEqual([]);
   });
 
+  it("retains a near tie with an unprojected fixed starter, but refuses an unprojected movable player", () => {
+    const original = fixture();
+    const slots = createRosterSlots([
+      { type: "QB", count: 1 },
+      { type: "DST", count: 1 },
+      { type: "BENCH", count: 1 },
+    ]);
+    const defense = playerId("defense");
+    const input: OptimizeLineupInput = {
+      ...original,
+      players: [...original.players, makePlayer("defense", ["DST"])],
+      slots,
+      currentAssignments: [
+        { playerId: playerId("current"), slotId: slots[0]!.id },
+        { playerId: defense, slotId: slots[1]!.id },
+      ],
+      locks: [{ playerId: defense, kind: "STARTER", slotId: slots[1]!.id }],
+    };
+    const selected = preserve(input);
+    expect(selected.preserved).toBe(true);
+    expect(selected.availableGain).toBeCloseTo(0.023, 12);
+    expect(selected.result.assignments.find((row) => row.playerId === defense)).toMatchObject({
+      locked: true,
+      slotId: slots[1]!.id,
+    });
+    expect(selected.result.changes).toEqual([]);
+    expect(preserve({ ...input, locks: [] }).preserved).toBe(false);
+    expect(preserve({ ...input, projections: { current: projection(10) } }).preserved).toBe(false);
+    expect(
+      preserve({
+        ...input,
+        projections: {
+          current: projection(10),
+          upgrade: projection(10.023),
+          defense: projection(NaN),
+        },
+      }).preserved,
+    ).toBe(false);
+  });
+
   it.each([
     [0, 0.05],
     [10.05, 10.1],
