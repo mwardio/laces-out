@@ -9,6 +9,7 @@ import {
   NflversePlayByPlaySource,
   snapshotNflversePlayByPlay,
   type NflverseDatasetState,
+  type NflversePlayerStatLedger,
 } from "@laces-out/source-nflverse";
 
 import path from "node:path";
@@ -22,6 +23,7 @@ import {
 import {
   buildHistoricalRosBacktest,
   historicalRosBucket,
+  historicalRosChecksum,
   preflightHistoricalRosComponentCoverage,
   HISTORICAL_ROS_SUPPORTED_POSITIONS,
   HISTORICAL_ROS_CANDIDATE_PAIR_VERSION,
@@ -79,6 +81,7 @@ import {
   type RosHistoricalCoverageReport,
 } from "../src/ros-data-coverage.js";
 import { nflEasternKickoffAt } from "../src/nflverse-schedules.js";
+import { historicalPlayerActualsFromLedgers } from "../src/ros-player-actuals.js";
 
 const emptyState: NflverseDatasetState = {
   etag: null,
@@ -314,6 +317,7 @@ async function main(): Promise<void> {
   const coveragePlayers: RosPlayerCoverageFact[] = [];
   const coverageSchedules: RosScheduleCoverageFact[] = [];
   const sourceAudit: Array<Record<string, string | number>> = [];
+  const playerStatLedgers: NflversePlayerStatLedger[] = [];
 
   for (const season of seasons) {
     process.stderr.write(`  ${season}: player/team stats, rosters, injuries, snaps, schedule\n`);
@@ -338,6 +342,7 @@ async function main(): Promise<void> {
         ),
       ]);
     const weeklyArtifact = requireChanged(weeklyResult, `${season} weekly stats`);
+    if (weeklyArtifact.playerStatLedger) playerStatLedgers.push(weeklyArtifact.playerStatLedger);
     const teamWeeklyArtifact = requireChanged(teamWeeklyResult, `${season} team weekly stats`);
     const rosterArtifact = requireChanged(rosterResult, `${season} weekly rosters`);
     const injuryArtifact = requireChanged(injuryResult, `${season} injuries`);
@@ -471,6 +476,8 @@ async function main(): Promise<void> {
       snapChecksum: snapArtifact.checksumSha256,
       scheduleChecksum: scheduleArtifact.checksumSha256,
       unresolvedSnapRows: unresolvedSnaps,
+      playerZeroLedgerChecksum: historicalRosChecksum(weeklyArtifact.playerStatLedger ?? null),
+      playerZeroLedgerState: weeklyArtifact.playerStatLedger?.state ?? "missing",
     });
   }
 
@@ -545,6 +552,11 @@ async function main(): Promise<void> {
   }
 
   const history = buildFirstPartyPlayerHistory(weekly, snaps, rosters, schedules, injuries);
+  const playerActuals = historicalPlayerActualsFromLedgers({
+    history,
+    schedules,
+    ledgers: playerStatLedgers,
+  });
   const defenseHistory = buildFirstPartyDefenseHistory(
     teamWeekly,
     schedules,
@@ -552,6 +564,7 @@ async function main(): Promise<void> {
   );
   const componentPreflight = preflightHistoricalRosComponentCoverage({
     history,
+    playerActualHistory: playerActuals.history,
     rosters,
     schedules,
     coverage,
@@ -626,6 +639,7 @@ async function main(): Promise<void> {
   try {
     result = await buildHistoricalRosBacktest({
       history,
+      playerActualHistory: playerActuals.history,
       defenseHistory,
       rosters,
       injuries,

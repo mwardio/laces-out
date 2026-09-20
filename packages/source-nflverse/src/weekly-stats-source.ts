@@ -151,6 +151,24 @@ export interface NflverseWeeklyStatsRejections {
   readonly duplicate: number;
 }
 
+/** Complete raw player-stat coverage, separate from the tolerated source-row rejection rate. */
+export interface NflversePlayerStatLedger {
+  readonly version: "nflverse-player-zero-ledger-v1";
+  readonly season: number;
+  readonly sourceChecksum: string;
+  readonly state: "complete" | "incomplete";
+  readonly unknownPlayerProductionRows: number;
+  readonly unassignedZeroProductionRows: number;
+  readonly playerWeeks: readonly string[];
+  readonly games: readonly {
+    readonly season: number;
+    readonly week: number;
+    readonly gameId: string;
+    readonly team: string;
+    readonly opponentTeam: string;
+  }[];
+}
+
 interface NflverseWeeklyStatsBaseResult {
   readonly checkedAt: string;
   readonly sourceKey: typeof NFLVERSE_WEEKLY_STATS_SOURCE_KEY;
@@ -177,6 +195,7 @@ export type NflverseWeeklyStatsCheckResult =
       readonly rejections: NflverseWeeklyStatsRejections;
       readonly coveredWeeks: readonly number[];
       readonly coveredSeasonTypes: readonly NflverseSeasonType[];
+      readonly playerStatLedger?: NflversePlayerStatLedger;
     })
   | (NflverseWeeklyStatsBaseResult & { readonly state: "unchanged" });
 
@@ -553,6 +572,76 @@ function parseWeeklyStats(body: string, season: number) {
   };
 }
 
+/**
+ * An absent player row establishes zero only in a complete raw ledger. Team-only aggregate
+ * rows may be unassigned, but every player scoring component on those rows must be explicit
+ * zero. A rejected identity with offensive production, malformed stats, or a duplicate keeps
+ * the ledger incomplete even when ordinary ingestion's rejection allowance would accept it.
+ */
+export function inspectNflversePlayerStatLedger(
+  body: string,
+  season: number,
+): NflversePlayerStatLedger {
+  const playerWeeks = new Set<string>();
+  const seen = new Set<string>();
+  const games = new Map<string, NflversePlayerStatLedger["games"][number]>();
+  let unknownPlayerProductionRows = 0;
+  let unassignedZeroProductionRows = 0;
+  for (const row of parseCsv(body)) {
+    const normalized = normalizeRow(row, season);
+    const observation = normalized.observation;
+    if (!observation) {
+      const unassigned =
+        row.player_id?.trim() === "" &&
+        row.position?.trim() === "" &&
+        ["", "Team"].includes(row.player_name?.trim() ?? "") &&
+        ["", "Team"].includes(row.player_display_name?.trim() ?? "");
+      const anonymous = unassigned
+        ? normalizeRow(
+            {
+              ...row,
+              player_id: "00-0000000",
+              player_name: "Ledger",
+              player_display_name: "Ledger",
+              position: "QB",
+            },
+            season,
+          ).observation
+        : null;
+      if (anonymous && Object.values(anonymous.components).every((value) => value === 0)) {
+        unassignedZeroProductionRows += 1;
+      } else {
+        unknownPlayerProductionRows += 1;
+      }
+      continue;
+    }
+    const identity = `${observation.gameId}:${observation.gsisId}`;
+    if (seen.has(identity)) unknownPlayerProductionRows += 1;
+    seen.add(identity);
+    if (observation.seasonType !== "REG") continue;
+    playerWeeks.add(`${season}:${observation.week}:${observation.gsisId}`);
+    games.set(`${observation.gameId}:${observation.team}`, {
+      season,
+      week: observation.week,
+      gameId: observation.gameId,
+      team: observation.team,
+      opponentTeam: observation.opponentTeam,
+    });
+  }
+  return {
+    version: "nflverse-player-zero-ledger-v1",
+    season,
+    sourceChecksum: createHash("sha256").update(body).digest("hex"),
+    state: unknownPlayerProductionRows === 0 ? "complete" : "incomplete",
+    unknownPlayerProductionRows,
+    unassignedZeroProductionRows,
+    playerWeeks: [...playerWeeks].sort(),
+    games: [...games.values()].sort((left, right) =>
+      `${left.gameId}:${left.team}`.localeCompare(`${right.gameId}:${right.team}`),
+    ),
+  };
+}
+
 /** A game is known-zero only after complete PBP and exact player TD totals agree. */
 function mergePlayerTouchdowns(
   observations: readonly ParsedWeeklyStats[],
@@ -700,6 +789,7 @@ export class NflverseWeeklyStatsSource {
       ...parsed,
       ...provenance,
       observations,
+      playerStatLedger: inspectNflversePlayerStatLedger(result.body, season),
     };
   }
 }

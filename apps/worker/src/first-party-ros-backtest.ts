@@ -170,6 +170,8 @@ export interface HistoricalRosBacktestOptions {
 
 export interface HistoricalRosBacktestInput {
   readonly history: readonly FirstPartyWeeklyStatLine[];
+  /** Independently certified outcomes; must never supply features or forecast selection. */
+  readonly playerActualHistory?: readonly FirstPartyWeeklyStatLine[];
   readonly defenseHistory: readonly FirstPartyTeamDefenseWeeklyStatLine[];
   readonly rosters: readonly ProjectionRosterFact[];
   readonly injuries: readonly ProjectionInjuryFact[];
@@ -699,11 +701,17 @@ export function selectHistoricalRosPlayers(input: {
   );
 }
 
-/** Qualify every selected player's conditional component schema before fitting or simulation. */
+/** Qualify selected forecast components and observed outcomes before fitting or simulation. */
 export function preflightHistoricalRosComponentCoverage(
   input: Pick<
     HistoricalRosBacktestInput,
-    "history" | "rosters" | "schedules" | "coverage" | "scoringProfile" | "options"
+    | "history"
+    | "playerActualHistory"
+    | "rosters"
+    | "schedules"
+    | "coverage"
+    | "scoringProfile"
+    | "options"
   >,
 ) {
   const options = resolveOptions(input.options);
@@ -717,6 +725,19 @@ export function preflightHistoricalRosComponentCoverage(
     readonly contextualMissing: readonly string[];
     readonly recencyMissing: readonly string[];
   }> = [];
+  const actualFailures: Array<{
+    readonly season: number;
+    readonly asOfWeek: number;
+    readonly playerId: string;
+    readonly reason: string;
+  }> = [];
+  const actualRows = new Map<string, FirstPartyWeeklyStatLine[]>();
+  for (const row of input.playerActualHistory ?? input.history) {
+    const key = `${row.season}:${row.playerId}`;
+    const rows = actualRows.get(key) ?? [];
+    rows.push(row);
+    actualRows.set(key, rows);
+  }
   let checkedBatches = 0;
   let checkedPlayers = 0;
   let checkedScheduledWeeks = 0;
@@ -747,6 +768,23 @@ export function preflightHistoricalRosComponentCoverage(
         if (firstScheduledWeek === undefined) continue;
         checkedPlayers += 1;
         checkedScheduledWeeks += scheduledWeeks.length;
+        try {
+          aggregateActual({
+            history: actualRows.get(`${season}:${player.playerId}`) ?? [],
+            playerId: player.playerId,
+            season,
+            windowStartWeek: asOfWeek + 1,
+            windowEndWeek: 18,
+            scoringProfile: input.scoringProfile,
+          });
+        } catch (error) {
+          actualFailures.push({
+            season,
+            asOfWeek,
+            playerId: player.playerId,
+            reason: error instanceof Error ? error.message : String(error),
+          });
+        }
         // Every future target uses this same strictly cutoff-bounded history. Component presence
         // depends only on position/player evidence, never opponent, fitting, or forecast distance.
         const evidence = inspect({
@@ -772,11 +810,15 @@ export function preflightHistoricalRosComponentCoverage(
     }
   }
   return {
-    state: failures.length === 0 ? ("qualified" as const) : ("blocked" as const),
+    state:
+      failures.length === 0 && actualFailures.length === 0
+        ? ("qualified" as const)
+        : ("blocked" as const),
     checkedBatches,
     checkedPlayers,
     checkedScheduledWeeks,
     failures,
+    actualFailures,
   };
 }
 
@@ -2802,7 +2844,7 @@ export async function buildHistoricalRosBacktest(
             season,
             asOfWeek,
             featureHistory: features,
-            outcomeHistory: input.history,
+            outcomeHistory: input.playerActualHistory ?? input.history,
             calibration: playerCalibration.weekly,
             availabilityCalibration: playerCalibration.availability,
             roleCalibration: playerCalibration.role,

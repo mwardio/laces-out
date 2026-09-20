@@ -108,6 +108,46 @@ function input(corrected: boolean) {
 }
 
 describe("historical ROS component preflight", () => {
+  it("blocks incomplete future actuals before model work without using them as features", () => {
+    const source = input(true);
+    const result = preflightHistoricalRosComponentCoverage({
+      ...source,
+      playerActualHistory: [
+        ...source.history,
+        {
+          playerId: "a",
+          season: 2024,
+          week: 11,
+          position: "TE",
+          team: "ATL",
+          played: true,
+          components: { receptions: 0 },
+        },
+      ],
+    });
+    expect(result.state).toBe("blocked");
+    expect(result.failures).toEqual([]);
+    expect(result.actualFailures).toHaveLength(2);
+    expect(result.actualFailures.every((failure) => failure.playerId === "a")).toBe(true);
+    expect(result.actualFailures[0]?.reason).toMatch(/actual components unavailable/);
+    expect(
+      preflightHistoricalRosComponentCoverage({
+        ...source,
+        playerActualHistory: [
+          {
+            playerId: "a",
+            season: 2024,
+            week: 11,
+            position: "TE",
+            team: "ATL",
+            played: false,
+            components: {},
+          },
+        ],
+      }).state,
+    ).toBe("qualified");
+  });
+
   it("reports every failing selected window before any calibration or draws, including currently inactive players", () => {
     const result = preflightHistoricalRosComponentCoverage(input(false));
     expect(result.state).toBe("blocked");

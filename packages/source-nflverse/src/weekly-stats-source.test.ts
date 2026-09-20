@@ -9,6 +9,7 @@ import {
   NflverseDatasetSourceError,
   NflverseWeeklyStatsSource,
   buildNflverseWeeklyStatsUrl,
+  inspectNflversePlayerStatLedger,
   type NflverseDatasetState,
 } from "./index.js";
 
@@ -26,6 +27,60 @@ const EMPTY_STATE: NflverseDatasetState = {
   lastModified: null,
   checksumSha256: null,
 };
+
+describe("player-stat zero-production ledger", () => {
+  it("records every player identity and game without relying on position", () => {
+    const ledger = inspectNflversePlayerStatLedger(fixture, 2025);
+    expect(ledger.state).toBe("complete");
+    expect(ledger.playerWeeks).toHaveLength(2);
+    expect(ledger.sourceChecksum).toBe(createHash("sha256").update(fixture).digest("hex"));
+  });
+
+  it("does not forgive a rejected identity with observed player production", () => {
+    const ledger = inspectNflversePlayerStatLedger(
+      fixture.replace("00-0039999", "bad-player-id"),
+      2025,
+    );
+    expect(ledger.state).toBe("incomplete");
+    expect(ledger.unknownPlayerProductionRows).toBe(1);
+  });
+
+  it("rejects duplicate player games as completeness evidence", () => {
+    const lines = fixture.trimEnd().split("\n");
+    const ledger = inspectNflversePlayerStatLedger(`${fixture.trimEnd()}\n${lines[1]}\n`, 2025);
+    expect(ledger.state).toBe("incomplete");
+  });
+
+  it("permits an unassigned team row only with explicit zero player components", () => {
+    const lines = fixture.trimEnd().split("\n");
+    const columns = lines[0]!.split(",");
+    const original = lines[1]!.split(",");
+    const zero = original.map((value, index) => {
+      const key = columns[index]!;
+      if (
+        ["player_id", "player_name", "player_display_name", "position", "fg_blocked_list"].includes(
+          key,
+        )
+      )
+        return "";
+      if (["season", "week", "season_type", "game_id", "team", "opponent_team"].includes(key))
+        return value;
+      return "0";
+    });
+    const body = `${fixture.trimEnd()}\n${zero.join(",")}\n`;
+    const ledger = inspectNflversePlayerStatLedger(body, 2025);
+    expect(ledger.state).toBe("complete");
+    expect(ledger.unassignedZeroProductionRows).toBe(1);
+    zero[columns.indexOf("passing_yards")] = "1";
+    expect(
+      inspectNflversePlayerStatLedger(`${fixture.trimEnd()}\n${zero.join(",")}\n`, 2025).state,
+    ).toBe("incomplete");
+    zero[columns.indexOf("passing_yards")] = "";
+    expect(
+      inspectNflversePlayerStatLedger(`${fixture.trimEnd()}\n${zero.join(",")}\n`, 2025).state,
+    ).toBe("incomplete");
+  });
+});
 
 function replaceCell(body: string, playerId: string, column: string, value: string): string {
   const rows = body
