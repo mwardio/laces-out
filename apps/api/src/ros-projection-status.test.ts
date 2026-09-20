@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
+import { firstPartyRosReleaseArtifactChecksum } from "@laces-out/projections";
+import { pointRosReleaseFixture } from "../../../packages/projections/src/point-ros-release.test-fixtures.js";
 
 import {
   deriveRunAudit,
+  deriveVerifiedRosStatusArtifactBlockers,
   rosLeagueConvergenceFailure,
   type RosModelRunRow,
 } from "./ros-projection-status.js";
@@ -75,5 +78,34 @@ describe("deriveRunAudit", () => {
     );
     expect(audit.canPublish).toBe(false);
     expect(audit.reasons).toEqual([]);
+  });
+});
+
+describe("point ROS admission status verification", () => {
+  it("requires full immutable admission evidence before displaying a point rail as admitted", () => {
+    const { artifact } = pointRosReleaseFixture();
+    const stored = {
+      ...artifact,
+      artifactChecksum: firstPartyRosReleaseArtifactChecksum(artifact),
+    };
+    expect(deriveVerifiedRosStatusArtifactBlockers(stored)).toMatchObject({
+      effectiveBlockers: [],
+    });
+    for (const mutation of [
+      { artifactChecksum: "0".repeat(64) },
+      {
+        releaseGate: {
+          pointForecasts: {
+            schemaVersion: 1,
+            method: "point-ros-release-v1",
+            intervalAvailable: false,
+            qualifications: [],
+          },
+        },
+      },
+      { season: 2027 },
+      { calibrationVersion: "season-blocked-split-conformal-cqr-v1" },
+    ])
+      expect(deriveVerifiedRosStatusArtifactBlockers({ ...stored, ...mutation })).toBeNull();
   });
 });

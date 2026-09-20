@@ -1,15 +1,23 @@
 import type { RosIntervalDescriptor } from "@laces-out/contracts";
-import { rosMarginalIntervalStorageIsValid } from "@laces-out/projections";
+import {
+  projectionScoringRulesFromProfileKey,
+  rosMarginalIntervalStorageIsValid,
+} from "@laces-out/projections";
 
 /** One row from the bounded immutable summary -> model-run lookup, never projection-set metadata. */
 export type StoredRosIntervalEvidence = {
   readonly projectionSetId: string;
   readonly linkedRunCount: number;
   readonly matchesScope: boolean;
+  readonly distributionScopeMatches?: boolean;
   /** Schema 2 binds every saved player's calibration to its run and immutable admitted cell. */
   readonly marginalScopeMatches?: boolean;
+  readonly pointScopeMatches?: boolean;
   readonly rosIntervals: unknown;
+  readonly rosPoints?: unknown;
 };
+
+export type RosForecastKind = "point-only" | "calibrated-distribution";
 
 const LEGACY_KEYS = [
   "schemaVersion",
@@ -27,6 +35,73 @@ const SHA256 = /^[a-f0-9]{64}$/u;
 
 function record(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function exactKeys(value: unknown, keys: readonly string[]): value is Record<string, unknown> {
+  return (
+    record(value) &&
+    Object.keys(value).length === keys.length &&
+    keys.every((key) => Object.hasOwn(value, key))
+  );
+}
+
+/** Structural validation complements the database's immutable run/artifact/player binding. */
+export function storedRosPointEvidenceIsValid(value: unknown): boolean {
+  if (
+    !exactKeys(value, [
+      "schemaVersion",
+      "method",
+      "state",
+      "championArtifactChecksum",
+      "scoringProfileKey",
+      "intervalAvailable",
+      "cells",
+    ]) ||
+    value.schemaVersion !== 1 ||
+    value.method !== "point-ros-release-v1" ||
+    value.state !== "validated" ||
+    value.intervalAvailable !== false ||
+    typeof value.championArtifactChecksum !== "string" ||
+    !SHA256.test(value.championArtifactChecksum) ||
+    typeof value.scoringProfileKey !== "string" ||
+    value.scoringProfileKey.length > 100_000 ||
+    !Array.isArray(value.cells) ||
+    value.cells.length < 1 ||
+    value.cells.length > 18
+  )
+    return false;
+  try {
+    projectionScoringRulesFromProfileKey(value.scoringProfileKey);
+  } catch {
+    return false;
+  }
+  const seen = new Set<string>();
+  for (const cell of value.cells) {
+    if (
+      !exactKeys(cell, [
+        "position",
+        "bucket",
+        "strategy",
+        "qualificationChecksum",
+        "releaseEvidenceChecksum",
+      ]) ||
+      typeof cell.position !== "string" ||
+      !["QB", "RB", "WR", "TE", "K", "DST"].includes(cell.position) ||
+      typeof cell.bucket !== "string" ||
+      !["one-to-four", "five-to-eight", "nine-plus"].includes(cell.bucket) ||
+      typeof cell.strategy !== "string" ||
+      !["contextual", "availability-aware-recency"].includes(cell.strategy) ||
+      typeof cell.qualificationChecksum !== "string" ||
+      !SHA256.test(cell.qualificationChecksum) ||
+      typeof cell.releaseEvidenceChecksum !== "string" ||
+      !SHA256.test(cell.releaseEvidenceChecksum)
+    )
+      return false;
+    const key = `${cell.position}:${cell.bucket}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+  }
+  return true;
 }
 
 function probability(value: unknown): value is number {
@@ -117,7 +192,15 @@ export function parseStoredRosIntervalCalibration(value: unknown): RosIntervalDe
 
 /** Ambiguous linkage is unavailable even if both runs happen to carry byte-identical contracts. */
 export function parseLinkedRosIntervalEvidence(value: unknown): RosIntervalDescriptor | null {
-  if (!record(value) || value.linkedRunCount !== 1 || value.matchesScope !== true) return null;
+  if (
+    !record(value) ||
+    value.linkedRunCount !== 1 ||
+    value.matchesScope !== true ||
+    value.distributionScopeMatches !== true ||
+    value.pointScopeMatches === true ||
+    (value.rosPoints !== undefined && value.rosPoints !== null)
+  )
+    return null;
   if (
     record(value.rosIntervals) &&
     value.rosIntervals.schemaVersion === 2 &&
@@ -125,4 +208,16 @@ export function parseLinkedRosIntervalEvidence(value: unknown): RosIntervalDescr
   )
     return null;
   return parseStoredRosIntervalCalibration(value.rosIntervals);
+}
+
+export function parseLinkedRosForecastKind(value: unknown): RosForecastKind | null {
+  if (!record(value) || value.linkedRunCount !== 1 || value.matchesScope !== true) return null;
+  if (
+    value.pointScopeMatches === true &&
+    value.distributionScopeMatches === false &&
+    (value.rosIntervals === null || value.rosIntervals === undefined) &&
+    storedRosPointEvidenceIsValid(value.rosPoints)
+  )
+    return "point-only";
+  return parseLinkedRosIntervalEvidence(value) ? "calibrated-distribution" : null;
 }

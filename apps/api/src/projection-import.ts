@@ -46,6 +46,8 @@ import { projectionTimestampProvenance } from "./projection-provenance.js";
 import { currentManagedProjectionProfileKey } from "./managed-projection-profile.js";
 import {
   parseLinkedRosIntervalEvidence,
+  parseLinkedRosForecastKind,
+  type RosForecastKind,
   type StoredRosIntervalEvidence,
 } from "./ros-interval-evidence.js";
 import {
@@ -118,6 +120,7 @@ export interface StoredProjectionPlayer {
   readonly rosMedianPoints: string | null;
   readonly rosMeanPointsPerExpectedGame: string | null;
   readonly rosPointsStddev: string | null;
+  readonly rosForecastKind?: "point-only" | "calibrated-distribution" | null;
 }
 
 export interface CommitProjectionSetInput {
@@ -561,6 +564,7 @@ export class DrizzleProjectionImportRepository implements ProjectionImportReposi
         rosMedianPoints: playerRosProjectionSummaries.p50Points,
         rosMeanPointsPerExpectedGame: playerRosProjectionSummaries.meanPointsPerExpectedGame,
         rosPointsStddev: playerRosProjectionSummaries.pointsStddev,
+        rosForecastKind: playerRosProjectionSummaries.forecastKind,
       })
       .from(playerProjections)
       .innerJoin(players, eq(players.id, playerProjections.playerId))
@@ -606,6 +610,40 @@ export class DrizzleProjectionImportRepository implements ProjectionImportReposi
             and summary.method_version = linked_model.model_version
             and projected.player_id is not null
           ) as summaries_match,
+          bool_and(
+            summary.forecast_kind = 'calibrated-distribution'
+            and summary.point_evidence is null
+            and summary.p15_points is not null and summary.p50_points is not null
+            and summary.p85_points is not null and summary.points_stddev is not null
+            and projected.mean_points = summary.aggregate_mean_points
+            and projected.floor_points = summary.p15_points
+            and projected.ceiling_points = summary.p85_points
+          ) as distribution_summaries_match,
+          bool_and(coalesce(
+            summary.forecast_kind = 'point-only'
+            and summary.p15_points is null and summary.p50_points is null
+            and summary.p85_points is null and summary.points_stddev is null
+            and summary.interval_calibration is null
+            and projected.floor_points is null and projected.ceiling_points is null
+            and projected.mean_points = summary.aggregate_mean_points
+            and exists (
+              select 1 from jsonb_array_elements(
+                case when jsonb_typeof(linked_model.calibration->'rosPoints'->'cells') = 'array'
+                  then linked_model.calibration->'rosPoints'->'cells' else '[]'::jsonb end
+              ) cell
+              where cell->>'bucket' = case
+                when summary.window_end_week - summary.window_start_week + 1 <= 4 then 'one-to-four'
+                when summary.window_end_week - summary.window_start_week + 1 <= 8 then 'five-to-eight'
+                else 'nine-plus' end
+              and summary.point_evidence = jsonb_build_object(
+                'schemaVersion', 1,
+                'position', cell->'position', 'bucket', cell->'bucket',
+                'strategy', cell->'strategy',
+                'qualificationChecksum', cell->'qualificationChecksum',
+                'releaseEvidenceChecksum', cell->'releaseEvidenceChecksum'
+              )
+            ), false
+          )) as point_summaries_match,
           bool_and(coalesce(exists (
             select 1 from jsonb_array_elements(
               case when jsonb_typeof(linked_model.calibration->'rosIntervals'->'cells') = 'array'
@@ -654,6 +692,11 @@ export class DrizzleProjectionImportRepository implements ProjectionImportReposi
           false
         ) as "matchesScope",
         coalesce(
+          linked_runs.distribution_summaries_match
+          and model.point_forecast_contract_version is null
+          and not (model.calibration ? 'rosPoints'), false
+        ) as "distributionScopeMatches",
+        coalesce(
           model.calibration->'rosIntervals'->'schemaVersion' = '2'::jsonb
           and model.configuration->>'mode' = 'release'
           and model.marginal_interval_contract_version = 2
@@ -678,7 +721,47 @@ export class DrizzleProjectionImportRepository implements ProjectionImportReposi
           ),
           false
         ) as "marginalScopeMatches",
-        model.calibration->'rosIntervals' as "rosIntervals"
+        coalesce(
+          model.point_forecast_contract_version = 1
+          and model.marginal_interval_contract_version is null
+          and model.configuration->>'mode' = 'release'
+          and model.configuration->>'policyVersion' = 'season-walk-forward-mean-only-v1'
+          and model.configuration->>'calibrationVersion' = 'unavailable-point-only-v1'
+          and model.calibration->>'state' = 'unavailable'
+          and not (model.calibration ? 'rosIntervals')
+          and model.calibration = jsonb_build_object('state', 'unavailable', 'rosPoints', model.calibration->'rosPoints')
+          and model.configuration->'releasingBuckets' = model.calibration->'rosPoints'->'cells'
+          and coalesce(ros_point_convergence(model.metrics->'rosPointConvergence'), false)
+          and not (model.metrics ? 'rosConvergence')
+          and model.calibration->'rosPoints'->>'championArtifactChecksum'
+            = model.configuration->>'championArtifactChecksum'
+          and model.calibration->'rosPoints'->>'scoringProfileKey'
+            = model.configuration->>'scoringProfileKey'
+          and linked_runs.point_summaries_match
+          and champion.id is not null
+          and champion.release_gate->'pointForecasts'->>'method' = 'point-ros-release-v1'
+          and champion.release_gate->'pointForecasts'->'intervalAvailable' = 'false'::jsonb
+          and not exists (
+            select 1 from jsonb_array_elements(
+              case when jsonb_typeof(model.calibration->'rosPoints'->'cells') = 'array'
+                then model.calibration->'rosPoints'->'cells' else '[]'::jsonb end
+            ) released_cell
+            where not exists (
+              select 1 from jsonb_array_elements(
+                case when jsonb_typeof(champion.release_gate->'pointForecasts'->'qualifications') = 'array'
+                  then champion.release_gate->'pointForecasts'->'qualifications' else '[]'::jsonb end
+              ) admitted_cell
+              where admitted_cell->'position' = released_cell->'position'
+                and admitted_cell->'bucket' = released_cell->'bucket'
+                and admitted_cell->'selectedStrategy' = released_cell->'strategy'
+                and admitted_cell->'evidenceChecksum' = released_cell->'qualificationChecksum'
+                and admitted_cell->>'scoringProfileKey' = champion.scoring_profile_key
+                and admitted_cell->>'forecastSeason' = champion.season::text
+            )
+          ), false
+        ) as "pointScopeMatches",
+        model.calibration->'rosIntervals' as "rosIntervals",
+        model.calibration->'rosPoints' as "rosPoints"
       from requested
       left join link_counts on link_counts.projection_set_id = requested.id
       left join linked_runs on linked_runs.projection_set_id = requested.id and link_counts.run_count = 1
@@ -1024,7 +1107,7 @@ function summary(
   row: StoredProjectionSet,
   actorUserId: string,
   currentScoringProfileKey: string | null = null,
-  rosInterval: RosIntervalDescriptor | null = null,
+  rosEvidence: RosForecastEvidence | null = null,
 ): ProjectionSetSummary {
   const isManaged = row.source !== "user-csv";
   const sourceLabel =
@@ -1050,7 +1133,12 @@ function summary(
     managed: isManaged
       ? {
           scoringCompatibility: managedScoringCompatibility(row.metadata, currentScoringProfileKey),
-          ...(row.horizon === "rest-of-season" ? { rosInterval } : {}),
+          ...(row.horizon === "rest-of-season"
+            ? {
+                rosInterval: rosEvidence?.interval ?? null,
+                rosForecastKind: rosEvidence?.kind ?? null,
+              }
+            : {}),
           modelVersion: modelVersion && modelVersion.length <= 120 ? modelVersion : null,
           computedAt: metadataIsoDate(row.metadata, "computedAt") ?? row.createdAt.toISOString(),
           // For managed sets fetchedAt is the persisted critical-input check time. It deliberately
@@ -1098,11 +1186,30 @@ function nullableProjectionNumber(value: string | null, field: string): number |
   return value === null ? null : finiteProjectionNumber(value, field);
 }
 
-function playerRows(rows: readonly StoredProjectionPlayer[]) {
+interface RosForecastEvidence {
+  readonly interval: RosIntervalDescriptor | null;
+  readonly kind: RosForecastKind | null;
+}
+
+function playerRows(rows: readonly StoredProjectionPlayer[], verifiedKind: RosForecastKind | null) {
   const positionRanks = new Map<string, number>();
   return rows.map((row, index) => {
     const positionRank = (positionRanks.get(row.primaryPosition) ?? 0) + 1;
     positionRanks.set(row.primaryPosition, positionRank);
+    const pointOnly = row.rosForecastKind === "point-only";
+    if (
+      (pointOnly && verifiedKind !== "point-only") ||
+      (verifiedKind === "point-only" && !pointOnly)
+    )
+      throw new Error("Stored point ROS forecast is missing verified evidence");
+    if (
+      pointOnly &&
+      (row.floorPoints !== null ||
+        row.ceilingPoints !== null ||
+        row.rosMedianPoints !== null ||
+        row.rosPointsStddev !== null)
+    )
+      throw new Error("Stored point ROS forecast contains interval statistics");
     const hasRosSummary =
       row.rosWindowStartWeek !== null &&
       row.rosWindowEndWeek !== null &&
@@ -1110,8 +1217,9 @@ function playerRows(rows: readonly StoredProjectionPlayer[]) {
       row.rosAsOfAt !== null &&
       row.rosScheduledGames !== null &&
       row.rosExpectedGames !== null &&
-      row.rosMedianPoints !== null &&
-      row.rosPointsStddev !== null;
+      (pointOnly || (row.rosMedianPoints !== null && row.rosPointsStddev !== null));
+    if (pointOnly && !hasRosSummary)
+      throw new Error("Stored point ROS forecast has an incomplete summary");
     return {
       playerId: row.playerId,
       fullName: row.fullName,
@@ -1127,18 +1235,21 @@ function playerRows(rows: readonly StoredProjectionPlayer[]) {
       confidence: nullableProjectionNumber(row.confidence, "confidence"),
       ros: hasRosSummary
         ? {
+            forecastKind: pointOnly
+              ? ("point-only" as const)
+              : ("calibrated-distribution" as const),
             windowStartWeek: row.rosWindowStartWeek,
             windowEndWeek: row.rosWindowEndWeek,
             asOfWeek: row.rosAsOfWeek,
             asOfAt: row.rosAsOfAt.toISOString(),
             scheduledGames: row.rosScheduledGames,
             expectedGames: finiteProjectionNumber(row.rosExpectedGames, "expected games"),
-            medianPoints: finiteProjectionNumber(row.rosMedianPoints, "median"),
+            medianPoints: nullableProjectionNumber(row.rosMedianPoints, "median"),
             meanPointsPerExpectedGame: nullableProjectionNumber(
               row.rosMeanPointsPerExpectedGame,
               "mean per expected game",
             ),
-            pointsStddev: finiteProjectionNumber(row.rosPointsStddev, "standard deviation"),
+            pointsStddev: nullableProjectionNumber(row.rosPointsStddev, "standard deviation"),
           }
         : null,
     };
@@ -1170,7 +1281,7 @@ export class ProjectionImportService {
         (row.visibility === "league" ||
           (row.creatorUserId !== null && row.creatorUserId === actorUserId)),
     );
-    const rosIntervals = await this.#rosIntervalDescriptors(visibleSets);
+    const rosIntervals = await this.#rosForecastEvidence(visibleSets);
     const summaries = visibleSets.map((row) =>
       summary(row, actorUserId, currentScoringProfileKey, rosIntervals.get(row.id) ?? null),
     );
@@ -1299,7 +1410,7 @@ export class ProjectionImportService {
     }
     const [storedPlayers, rosIntervals] = await Promise.all([
       this.#repository.listProjectionPlayers(projectionSet.id),
-      this.#rosIntervalDescriptors([projectionSet]),
+      this.#rosForecastEvidence([projectionSet]),
     ]);
     return {
       projectionSet: summary(
@@ -1308,13 +1419,13 @@ export class ProjectionImportService {
         currentScoringProfileKey,
         rosIntervals.get(projectionSet.id) ?? null,
       ),
-      players: playerRows(storedPlayers),
+      players: playerRows(storedPlayers, rosIntervals.get(projectionSet.id)?.kind ?? null),
     };
   }
 
-  async #rosIntervalDescriptors(
+  async #rosForecastEvidence(
     sets: readonly StoredProjectionSet[],
-  ): Promise<ReadonlyMap<string, RosIntervalDescriptor | null>> {
+  ): Promise<ReadonlyMap<string, RosForecastEvidence | null>> {
     const ids = [
       ...new Set(
         sets
@@ -1322,7 +1433,7 @@ export class ProjectionImportService {
           .map((set) => set.id),
       ),
     ];
-    const result = new Map<string, RosIntervalDescriptor | null>();
+    const result = new Map<string, RosForecastEvidence | null>();
     if (ids.length === 0) return result;
     const requested = new Set(ids);
     const rows = await this.#repository.listRosIntervalEvidence(ids);
@@ -1331,7 +1442,12 @@ export class ProjectionImportService {
       // A duplicate repository result is ambiguous too; never let ordering choose its contract.
       result.set(
         row.projectionSetId,
-        result.has(row.projectionSetId) ? null : parseLinkedRosIntervalEvidence(row),
+        result.has(row.projectionSetId)
+          ? null
+          : {
+              interval: parseLinkedRosIntervalEvidence(row),
+              kind: parseLinkedRosForecastKind(row),
+            },
       );
     }
     return result;

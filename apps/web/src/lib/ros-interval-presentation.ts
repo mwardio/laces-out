@@ -1,7 +1,9 @@
 import { parseRosIntervalDescriptor } from "@laces-out/contracts";
 
-/** Explains a validated descriptor; neither horizon nor mutable display metadata identifies a method. */
-export function rosIntervalPresentation(value: unknown): string {
+/** Point-only forecasts are explicit; otherwise only a validated descriptor identifies a method. */
+export function rosIntervalPresentation(value: unknown, forecastKind?: unknown): string {
+  if (forecastKind === "point-only")
+    return "These are point estimates of each player's remaining-season total. Calibrated ranges are not available for this forecast.";
   const descriptor = parseRosIntervalDescriptor(value);
   if (descriptor?.kind === "legacy-block-cqr")
     return "These ranges are widened using historical forecast errors. They remain provisional and do not establish a 70% chance for an individual player.";

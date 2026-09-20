@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { projectionSetListResponseSchema, projectionSetSummarySchema } from "@laces-out/contracts";
+import {
+  projectionPlayerListResponseSchema,
+  projectionSetListResponseSchema,
+  projectionSetSummarySchema,
+} from "@laces-out/contracts";
 import { projectionScoringProfileKey } from "@laces-out/projections";
 
 import {
@@ -184,7 +188,13 @@ function managedRosSet(id = SET_ID): StoredProjectionSet {
 }
 
 function linkedEvidence(projectionSetId = SET_ID): StoredRosIntervalEvidence {
-  return { projectionSetId, linkedRunCount: 1, matchesScope: true, rosIntervals: LEGACY_INTERVALS };
+  return {
+    projectionSetId,
+    linkedRunCount: 1,
+    matchesScope: true,
+    distributionScopeMatches: true,
+    rosIntervals: LEGACY_INTERVALS,
+  };
 }
 
 function request(csv: string, visibility: "private" | "league" = "private") {
@@ -202,7 +212,122 @@ function request(csv: string, visibility: "private" | "league" = "private") {
   };
 }
 
+const POINT_EVIDENCE: StoredRosIntervalEvidence = {
+  projectionSetId: SET_ID,
+  linkedRunCount: 1,
+  matchesScope: true,
+  distributionScopeMatches: false,
+  pointScopeMatches: true,
+  rosIntervals: null,
+  rosPoints: {
+    schemaVersion: 1,
+    method: "point-ros-release-v1",
+    state: "validated",
+    championArtifactChecksum: "a".repeat(64),
+    scoringProfileKey: SCORING_KEY,
+    intervalAvailable: false,
+    cells: [
+      {
+        position: "WR",
+        bucket: "nine-plus",
+        strategy: "contextual",
+        qualificationChecksum: "b".repeat(64),
+        releaseEvidenceChecksum: "c".repeat(64),
+      },
+    ],
+  },
+};
+const POINT_PLAYER: StoredProjectionPlayer = {
+  playerId: PLAYER_ONE,
+  fullName: "Clear Receiver",
+  nflTeam: "DET",
+  primaryPosition: "WR",
+  eligiblePositions: ["WR"],
+  status: null,
+  meanPoints: "180.000",
+  floorPoints: null,
+  ceilingPoints: null,
+  confidence: null,
+  rosForecastKind: "point-only",
+  rosWindowStartWeek: 3,
+  rosWindowEndWeek: 17,
+  rosAsOfWeek: 2,
+  rosAsOfAt: NOW,
+  rosScheduledGames: 15,
+  rosExpectedGames: "14.000000",
+  rosMedianPoints: null,
+  rosMeanPointsPerExpectedGame: "12.857143",
+  rosPointsStddev: null,
+};
+
 describe("ProjectionImportService", () => {
+  it("exposes point-only kind and nullable statistics from verified immutable evidence", async () => {
+    const repository = new FakeRepository();
+    repository.sets = [managedRosSet()];
+    repository.intervalEvidence = [POINT_EVIDENCE];
+    repository.projectionPlayers = [POINT_PLAYER];
+    const service = new ProjectionImportService(repository);
+    const list = projectionSetListResponseSchema.parse(await service.list(USER_ID, SEASON_ID));
+    expect(list.projectionSets[0]?.managed).toMatchObject({
+      rosForecastKind: "point-only",
+      rosInterval: null,
+    });
+    const detail = projectionPlayerListResponseSchema.parse(
+      await service.getPlayers(USER_ID, SEASON_ID, SET_ID),
+    );
+    expect(detail.projectionSet.managed).toMatchObject({
+      rosForecastKind: "point-only",
+      rosInterval: null,
+    });
+    expect(detail.players[0]).toMatchObject({
+      meanPoints: 180,
+      floorPoints: null,
+      ceilingPoints: null,
+      ros: {
+        forecastKind: "point-only",
+        expectedGames: 14,
+        medianPoints: null,
+        pointsStddev: null,
+      },
+    });
+  });
+
+  it("never derives point-only authority from editable projection metadata", async () => {
+    const repository = new FakeRepository();
+    repository.sets = [
+      {
+        ...managedRosSet(),
+        metadata: { rosForecastKind: "point-only", rosPoints: POINT_EVIDENCE.rosPoints },
+      },
+    ];
+    repository.projectionPlayers = [POINT_PLAYER];
+    const service = new ProjectionImportService(repository);
+    expect((await service.list(USER_ID, SEASON_ID)).projectionSets[0]?.managed).toMatchObject({
+      rosForecastKind: null,
+      rosInterval: null,
+    });
+    await expect(service.getPlayers(USER_ID, SEASON_ID, SET_ID)).rejects.toThrow(
+      /missing verified evidence/,
+    );
+  });
+
+  it.each([
+    { floorPoints: "100" },
+    { ceilingPoints: "200" },
+    { rosMedianPoints: "150" },
+    { rosPointsStddev: "30" },
+    { rosForecastKind: "calibrated-distribution" as const },
+    { rosAsOfAt: null },
+  ])("rejects conflicting or incomplete point player rows %#", async (mutation) => {
+    const repository = new FakeRepository();
+    repository.sets = [managedRosSet()];
+    repository.intervalEvidence = [POINT_EVIDENCE];
+    repository.projectionPlayers = [{ ...POINT_PLAYER, ...mutation }];
+    await expect(
+      new ProjectionImportService(repository).getPlayers(USER_ID, SEASON_ID, SET_ID),
+    ).rejects.toThrow(/Stored point ROS forecast/);
+  });
+
   it("labels retained legacy intervals only from one matching immutable model run", async () => {
     const repository = new FakeRepository();
     repository.sets = [managedRosSet()];

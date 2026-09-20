@@ -1,11 +1,14 @@
 import { beforeAll, describe, expect, it } from "vitest";
 import {
   buildRosMarginalIntervalStorage,
+  projectionScoringProfileKey,
   type RosMarginalIntervalStorage,
 } from "@laces-out/projections";
 import { buildRosMarginalIntervalQualificationFixture } from "../../../packages/projections/src/ros-marginal-interval-test-fixtures.js";
 import {
   parseLinkedRosIntervalEvidence,
+  parseLinkedRosForecastKind,
+  storedRosPointEvidenceIsValid,
   parseStoredRosIntervalCalibration,
 } from "./ros-interval-evidence.js";
 
@@ -71,6 +74,7 @@ describe("immutable ROS interval evidence interpretation", () => {
       projectionSetId: "set",
       linkedRunCount: 1,
       matchesScope: true,
+      distributionScopeMatches: true,
       marginalScopeMatches: true,
       rosIntervals: marginal,
     };
@@ -183,6 +187,7 @@ describe("immutable ROS interval evidence interpretation", () => {
       projectionSetId: "set",
       linkedRunCount: 1,
       matchesScope: true,
+      distributionScopeMatches: true,
       rosIntervals: legacy,
     };
     expect(parseLinkedRosIntervalEvidence(linked)).not.toBeNull();
@@ -198,5 +203,106 @@ describe("immutable ROS interval evidence interpretation", () => {
       { ...linked, matchesScope: "true" },
     ])
       expect(parseLinkedRosIntervalEvidence(malformed)).toBeNull();
+  });
+});
+
+const point = {
+  schemaVersion: 1,
+  method: "point-ros-release-v1",
+  state: "validated",
+  championArtifactChecksum: "a".repeat(64),
+  scoringProfileKey: projectionScoringProfileKey({
+    id: "point-test",
+    rules: [{ statId: "receiving_yards", points: 0.1 }],
+  }),
+  intervalAvailable: false,
+  cells: [
+    {
+      position: "WR",
+      bucket: "nine-plus",
+      strategy: "contextual",
+      qualificationChecksum: "b".repeat(64),
+      releaseEvidenceChecksum: "c".repeat(64),
+    },
+  ],
+};
+
+describe("immutable point-only ROS evidence", () => {
+  it("requires the complete closed storage envelope and unique supported cells", () => {
+    expect(storedRosPointEvidenceIsValid(point)).toBe(true);
+    for (const key of Object.keys(point)) {
+      const missing = { ...point } as Record<string, unknown>;
+      delete missing[key];
+      expect(storedRosPointEvidenceIsValid(missing), key).toBe(false);
+    }
+    for (const value of [
+      null,
+      {},
+      { ...point, extra: true },
+      { ...point, schemaVersion: 2 },
+      { ...point, state: "calibrated" },
+      { ...point, intervalAvailable: true },
+      { ...point, method: "unrecognized" },
+      { ...point, scoringProfileKey: "invalid" },
+      { ...point, championArtifactChecksum: "A".repeat(64) },
+      { ...point, cells: [] },
+      { ...point, cells: [...point.cells, ...point.cells] },
+      ...[
+        { position: "IDP" },
+        { bucket: "weekly" },
+        { strategy: "unknown" },
+        { qualificationChecksum: "invalid" },
+        { releaseEvidenceChecksum: "invalid" },
+        { extra: true },
+      ].map((cell) => ({ ...point, cells: [{ ...point.cells[0], ...cell }] })),
+    ])
+      expect(storedRosPointEvidenceIsValid(value)).toBe(false);
+  });
+
+  it("exposes point kind only for uniquely linked, scoped, stamped point proof without intervals", () => {
+    const linked = {
+      projectionSetId: "set",
+      linkedRunCount: 1,
+      matchesScope: true,
+      distributionScopeMatches: false,
+      pointScopeMatches: true,
+      rosPoints: point,
+      rosIntervals: null,
+    };
+    expect(parseLinkedRosForecastKind(linked)).toBe("point-only");
+    expect(parseLinkedRosIntervalEvidence(linked)).toBeNull();
+    for (const mutation of [
+      { linkedRunCount: 0 },
+      { linkedRunCount: 2 },
+      { matchesScope: false },
+      { pointScopeMatches: undefined },
+      { pointScopeMatches: false },
+      { pointScopeMatches: "true" },
+      { distributionScopeMatches: true },
+      { distributionScopeMatches: undefined },
+      { rosIntervals: legacy },
+      { rosPoints: null },
+      { rosPoints: { ...point, intervalAvailable: true } },
+    ])
+      expect(parseLinkedRosForecastKind({ ...linked, ...mutation })).toBeNull();
+  });
+
+  it("does not relabel mixed point and distribution proof as a historical interval", () => {
+    const linked = {
+      linkedRunCount: 1,
+      matchesScope: true,
+      distributionScopeMatches: true,
+      rosIntervals: legacy,
+    };
+    expect(parseLinkedRosForecastKind(linked)).toBe("calibrated-distribution");
+    for (const mutation of [
+      { rosPoints: point },
+      { rosPoints: {} },
+      { pointScopeMatches: true },
+      { distributionScopeMatches: false },
+    ]) {
+      expect(parseLinkedRosIntervalEvidence({ ...linked, ...mutation })).toBeNull();
+      expect(parseLinkedRosForecastKind({ ...linked, ...mutation })).toBeNull();
+    }
   });
 });

@@ -23,9 +23,11 @@ import {
   users,
   syncRuns,
   type FirstPartyRosPlayerIntervalCalibration,
+  type FirstPartyRosPlayerPointEvidence,
 } from "@laces-out/db";
 import { DrizzleInSeasonDecisionRepository } from "@laces-out/decisions";
 import {
+  firstPartyRosReleaseArtifactChecksum,
   FIRST_PARTY_ROS_MARGINAL_POLICY_VERSION,
   FIRST_PARTY_ROS_MODEL_VERSION,
   MARGINAL_INTERVAL_CALIBRATION_VERSION,
@@ -36,6 +38,7 @@ import {
   evaluateFirstPartyRosChampionPolicy,
   rosMarginalIntervalStorageIsValid,
 } from "@laces-out/projections";
+import { pointRosReleaseFixture } from "../../../packages/projections/src/point-ros-release.test-fixtures.js";
 import { rosMarginalIntervalQualificationFullFixtureInput } from "../../../packages/projections/src/ros-marginal-interval-test-fixtures.js";
 import { eq, sql } from "drizzle-orm";
 import { migrate } from "drizzle-orm/postgres-js/migrator";
@@ -230,6 +233,7 @@ describe.skipIf(!dockerAvailable())("Projection history against disposable Postg
     overrides?: {
       readonly configuration: Record<string, unknown>;
       readonly calibration: Record<string, unknown>;
+      readonly metrics?: Record<string, unknown>;
     },
   ) {
     const sourceId = randomUUID();
@@ -289,13 +293,14 @@ describe.skipIf(!dockerAvailable())("Projection history against disposable Postg
     player: string,
     modelVersion: string,
     intervalCalibration?: FirstPartyRosPlayerIntervalCalibration,
+    pointEvidence?: FirstPartyRosPlayerPointEvidence,
   ) {
     await handle.db.insert(playerProjections).values({
       projectionSetId: set.id,
       playerId: player,
       meanPoints: "140.000",
-      floorPoints: "150.000",
-      ceilingPoints: "250.000",
+      floorPoints: pointEvidence ? null : "150.000",
+      ceilingPoints: pointEvidence ? null : "250.000",
     });
     await handle.db.insert(playerRosProjectionSummaries).values({
       projectionSetId: set.id,
@@ -309,11 +314,11 @@ describe.skipIf(!dockerAvailable())("Projection history against disposable Postg
       scheduledGames: 17,
       expectedGames: "17.000000",
       aggregateMeanPoints: "140.000",
-      p15Points: "150.000",
-      p50Points: "210.125",
-      p85Points: "250.000",
+      p15Points: pointEvidence ? null : "150.000",
+      p50Points: pointEvidence ? null : "210.125",
+      p85Points: pointEvidence ? null : "250.000",
       meanPointsPerExpectedGame: "8.235294",
-      pointsStddev: "20.000",
+      pointsStddev: pointEvidence ? null : "20.000",
       availability: {
         schemaVersion: 1,
         semantics: "unconditional-active-probability",
@@ -324,11 +329,13 @@ describe.skipIf(!dockerAvailable())("Projection history against disposable Postg
           availabilityProbability: 1,
         })),
       },
-      scenarioCount: 128,
+      scenarioCount: pointEvidence ? 12_288 : 128,
       methodVersion: modelVersion,
       seedHash: "c".repeat(64),
       inputChecksum: set.inputChecksum,
       intervalCalibration,
+      forecastKind: pointEvidence ? "point-only" : "calibrated-distribution",
+      pointEvidence,
     });
   }
 
@@ -436,6 +443,239 @@ describe.skipIf(!dockerAvailable())("Projection history against disposable Postg
     return { ...fixture, runId };
   }
 
+  let pointFixture: ReturnType<typeof pointRosReleaseFixture> | undefined;
+  async function seedPointRun(set: ReturnType<typeof setRow>) {
+    const fixture = (pointFixture ??= pointRosReleaseFixture());
+    const { artifact, qualifications } = fixture;
+    const artifactChecksum = firstPartyRosReleaseArtifactChecksum(artifact);
+    await handle.db
+      .insert(firstPartyRosChampionArtifacts)
+      .values({
+        ...artifact,
+        policy: artifact.policy as unknown as Record<string, unknown>,
+        artifactChecksum,
+        admittedAt: NOW,
+      })
+      .onConflictDoNothing();
+    const qualification = qualifications.find(
+      (q) => q.position === "WR" && q.bucket === "nine-plus",
+    )!;
+    const cell = {
+      position: qualification.position,
+      bucket: qualification.bucket,
+      strategy: qualification.selectedStrategy,
+      qualificationChecksum: qualification.evidenceChecksum,
+      releaseEvidenceChecksum: "2".repeat(64),
+    };
+    const envelope = {
+      schemaVersion: 1,
+      method: "point-ros-release-v1",
+      state: "validated",
+      championArtifactChecksum: artifactChecksum,
+      scoringProfileKey: artifact.scoringProfileKey,
+      intervalAvailable: false,
+      cells: [cell],
+    };
+    const metadata: FirstPartyRosPlayerPointEvidence = { schemaVersion: 1, ...cell };
+    const runId = await seedRosRun(set, artifact.modelVersion, undefined, {
+      configuration: {
+        mode: "release",
+        simulationModelVersion: artifact.modelVersion,
+        orchestrationVersion: "fixture-orchestration",
+        policyVersion: artifact.policyVersion,
+        calibrationVersion: artifact.calibrationVersion,
+        championArtifactChecksum: artifactChecksum,
+        scoringProfileKey: artifact.scoringProfileKey,
+        releasingBuckets: [cell],
+      },
+      calibration: { state: "unavailable", rosPoints: envelope },
+      metrics: {
+        rosPointConvergence: {
+          schemaVersion: 1,
+          state: "converged",
+          method: "live-bounded-ros-point-convergence-v1",
+          evidenceChecksum: "3".repeat(64),
+          lowerScenarioCount: 12_288,
+          referenceScenarioCount: 16_384,
+          maxToleranceRatio: 0.5,
+        },
+      },
+    });
+    await seedRosSummary(set, runId, playerId, artifact.modelVersion, undefined, metadata);
+    return { artifact, artifactChecksum, runId, metadata, envelope };
+  }
+
+  it("reads point-only totals through the DB-stamped run and exact admitted cell, with no interval claims", async () => {
+    const saved = setRow("rest-of-season", NOW);
+    await handle.db.insert(projectionSets).values(saved);
+    const { runId } = await seedPointRun(saved);
+    const [model] = await handle.db
+      .select()
+      .from(projectionModelRuns)
+      .where(eq(projectionModelRuns.sourceSyncRunId, runId));
+    expect(model?.pointForecastContractVersion).toBe(1);
+    expect(await repository.listRosIntervalEvidence([saved.id])).toMatchObject([
+      {
+        linkedRunCount: 1,
+        matchesScope: true,
+        pointScopeMatches: true,
+        distributionScopeMatches: false,
+        rosIntervals: null,
+      },
+    ]);
+    const detail = projectionPlayerListResponseSchema.parse(
+      await service.getPlayers(userId, seasonId, saved.id),
+    );
+    expect(detail.projectionSet.managed).toMatchObject({
+      rosForecastKind: "point-only",
+      rosInterval: null,
+    });
+    expect(detail.players[0]).toMatchObject({
+      meanPoints: 140,
+      floorPoints: null,
+      ceilingPoints: null,
+      ros: {
+        forecastKind: "point-only",
+        expectedGames: 17,
+        medianPoints: null,
+        pointsStddev: null,
+      },
+    });
+    await handle.db
+      .update(projectionSets)
+      .set({
+        metadata: {
+          ...saved.metadata,
+          rosForecastKind: "calibrated-distribution",
+          rosInterval: legacyIntervals,
+        },
+      })
+      .where(eq(projectionSets.id, saved.id));
+    expect((await service.list(userId, seasonId)).projectionSets[0]?.managed).toMatchObject({
+      rosForecastKind: "point-only",
+      rosInterval: null,
+    });
+  });
+
+  it.each([
+    ["wrong position", { position: "DST" }],
+    ["wrong horizon", { bucket: "one-to-four" }],
+    ["wrong strategy", { strategy: "not-a-strategy" }],
+    ["wrong qualification", { qualificationChecksum: "e".repeat(64) }],
+    ["wrong release", { releaseEvidenceChecksum: "e".repeat(64) }],
+    ["extra metadata", { extra: true }],
+  ])("withholds point-only claims for %s in a retained player proof", async (_name, mutation) => {
+    const saved = setRow("rest-of-season", NOW);
+    await handle.db.insert(projectionSets).values(saved);
+    const { metadata } = await seedPointRun(saved);
+    await handle.db.transaction(async (transaction) => {
+      await transaction.execute(sql`set local session_replication_role = replica`);
+      await transaction.execute(
+        sql`update ${playerRosProjectionSummaries} set point_evidence = ${JSON.stringify({ ...metadata, ...mutation })}::jsonb where projection_set_id = ${saved.id}`,
+      );
+    });
+    expect(await repository.listRosIntervalEvidence([saved.id])).toMatchObject([
+      { matchesScope: true, pointScopeMatches: false },
+    ]);
+    expect((await service.list(userId, seasonId)).projectionSets[0]?.managed).toMatchObject({
+      rosForecastKind: null,
+      rosInterval: null,
+    });
+    await expect(service.getPlayers(userId, seasonId, saved.id)).rejects.toThrow(
+      /missing verified evidence/,
+    );
+  });
+
+  it.each([
+    "unstamped",
+    "wrong admitted qualification",
+    "interval conflict",
+    "wrong scope",
+    "invented bounds",
+    "unstable point convergence",
+    "mixed convergence claims",
+  ])(
+    "rejects %s even when a retained point envelope looks structurally valid",
+    async (mutation) => {
+      const saved = setRow("rest-of-season", NOW);
+      await handle.db.insert(projectionSets).values(saved);
+      const { runId, envelope, metadata } = await seedPointRun(saved);
+      await handle.db.transaction(async (transaction) => {
+        await transaction.execute(sql`set local session_replication_role = replica`);
+        if (mutation === "unstamped")
+          await transaction.execute(
+            sql`update ${projectionModelRuns} set point_forecast_contract_version = null where source_sync_run_id = ${runId}`,
+          );
+        if (mutation === "wrong admitted qualification") {
+          const replacement = {
+            ...envelope,
+            cells: [{ ...envelope.cells[0], qualificationChecksum: "e".repeat(64) }],
+          };
+          await transaction.execute(
+            sql`update ${projectionModelRuns} set calibration = ${JSON.stringify({ state: "unavailable", rosPoints: replacement })}::jsonb,
+              configuration = jsonb_set(configuration, '{releasingBuckets}', ${JSON.stringify(replacement.cells)}::jsonb)
+              where source_sync_run_id = ${runId}`,
+          );
+          await transaction.execute(
+            sql`update ${playerRosProjectionSummaries} set point_evidence = ${JSON.stringify({ ...metadata, qualificationChecksum: "e".repeat(64) })}::jsonb where projection_set_id = ${saved.id}`,
+          );
+        }
+        if (mutation === "interval conflict")
+          await transaction.execute(
+            sql`update ${projectionModelRuns} set calibration = calibration || ${JSON.stringify({ rosIntervals: legacyIntervals })}::jsonb where source_sync_run_id = ${runId}`,
+          );
+        if (mutation === "wrong scope")
+          await transaction.execute(
+            sql`update ${projectionModelRuns} set input_checksum = ${"f".repeat(64)} where source_sync_run_id = ${runId}`,
+          );
+        if (mutation === "invented bounds")
+          await transaction.execute(
+            sql`update ${playerProjections} set floor_points = 100, ceiling_points = 200 where projection_set_id = ${saved.id}`,
+          );
+        if (mutation === "unstable point convergence")
+          await transaction.execute(
+            sql`update ${projectionModelRuns} set metrics = jsonb_set(metrics, '{rosPointConvergence,state}', '"unstable"'::jsonb) where source_sync_run_id = ${runId}`,
+          );
+        if (mutation === "mixed convergence claims")
+          await transaction.execute(
+            sql`update ${projectionModelRuns} set metrics = metrics || '{"rosConvergence":{"state":"converged"}}'::jsonb where source_sync_run_id = ${runId}`,
+          );
+      });
+      expect((await service.list(userId, seasonId)).projectionSets[0]?.managed).toMatchObject({
+        rosForecastKind: null,
+        rosInterval: null,
+      });
+      await expect(service.getPlayers(userId, seasonId, saved.id)).rejects.toThrow(
+        /missing verified evidence/,
+      );
+    },
+  );
+
+  it("withholds point kind if any saved projection lacks its linked summary", async () => {
+    const saved = setRow("rest-of-season", NOW);
+    await handle.db.insert(projectionSets).values(saved);
+    await seedPointRun(saved);
+    const uncovered = randomUUID();
+    await handle.db.insert(players).values({
+      id: uncovered,
+      fullName: "Uncovered Receiver",
+      primaryPosition: "WR",
+      eligiblePositions: ["WR"],
+    });
+    await handle.db
+      .insert(playerProjections)
+      .values({ projectionSetId: saved.id, playerId: uncovered, meanPoints: "50.000" });
+    expect(await repository.listRosIntervalEvidence([saved.id])).toMatchObject([
+      { matchesScope: false },
+    ]);
+    expect(
+      (await service.list(userId, seasonId)).projectionSets[0]?.managed?.rosForecastKind,
+    ).toBeNull();
+    await expect(service.getPlayers(userId, seasonId, saved.id)).rejects.toThrow(
+      /missing verified evidence/,
+    );
+  });
+
   it("reads each marginal range through its admitted cell and immutable player calibration", async () => {
     const saved = setRow("rest-of-season", NOW);
     await handle.db.insert(projectionSets).values(saved);
@@ -461,6 +701,32 @@ describe.skipIf(!dockerAvailable())("Projection history against disposable Postg
       (await service.list(userId, seasonId)).projectionSets[0]?.managed?.rosInterval,
     ).toMatchObject(expected);
   });
+
+  it.each(["legacy", "marginal"])(
+    "withholds %s interval claims when saved projection bounds conflict with the linked summary",
+    async (kind) => {
+      const saved = setRow("rest-of-season", NOW);
+      await handle.db.insert(projectionSets).values(saved);
+      if (kind === "marginal") await seedMarginalRun(saved);
+      else {
+        const runId = await seedRosRun(saved, "retained-legacy-model");
+        await seedRosSummary(saved, runId, playerId, "retained-legacy-model");
+      }
+      await handle.db.transaction(async (transaction) => {
+        await transaction.execute(sql`set local session_replication_role = replica`);
+        await transaction.execute(
+          sql`update ${playerProjections} set floor_points = 100 where projection_set_id = ${saved.id}`,
+        );
+      });
+      expect(await repository.listRosIntervalEvidence([saved.id])).toMatchObject([
+        { distributionScopeMatches: false },
+      ]);
+      expect((await service.list(userId, seasonId)).projectionSets[0]?.managed).toMatchObject({
+        rosForecastKind: null,
+        rosInterval: null,
+      });
+    },
+  );
 
   it.each([
     ["missing proof", null],

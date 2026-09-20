@@ -21,6 +21,29 @@ const marginal: RosIntervalDescriptor = {
 };
 
 describe("ROS interval method presentation", () => {
+  it.each([undefined, null, legacy, marginal])(
+    "makes explicitly point-only forecasts clear without describing intervals %#",
+    (descriptor) => {
+      const copy = rosIntervalPresentation(descriptor, "point-only");
+      expect(copy).toBe(
+        "These are point estimates of each player's remaining-season total. Calibrated ranges are not available for this forecast.",
+      );
+      expect(copy).not.toContain("70%");
+      expect(copy).not.toContain("percentiles");
+    },
+  );
+
+  it.each([undefined, null, "calibrated-distribution", "point-v1", { kind: "point-only" }])(
+    "does not infer point-only behavior from absent or unrecognized forecast kinds %#",
+    (forecastKind) => {
+      expect(rosIntervalPresentation(null, forecastKind)).toBe(rosIntervalPresentation(null));
+      expect(rosIntervalPresentation(legacy, forecastKind)).toBe(rosIntervalPresentation(legacy));
+      expect(rosIntervalPresentation(marginal, forecastKind)).toBe(
+        rosIntervalPresentation(marginal),
+      );
+    },
+  );
+
   it("preserves the meaning of retained legacy CQR ranges", () => {
     const copy = rosIntervalPresentation(legacy);
     expect(copy).toContain("widened using historical forecast errors");

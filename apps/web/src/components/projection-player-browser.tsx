@@ -215,6 +215,7 @@ function sampleRos(
     floorPoints,
     ceilingPoints,
     ros: {
+      forecastKind: "calibrated-distribution",
       windowStartWeek: 7,
       windowEndWeek: 17,
       asOfWeek: 6,
@@ -388,6 +389,12 @@ function ProjectionBoard({
   }, [activeSet, leagueSeasonId, sampleDetails]);
 
   const players = detail.state === "ready" ? detail.detail.players : [];
+  const resolvedSet = detail.state === "ready" ? detail.detail.projectionSet : activeSet;
+  const pointOnly =
+    horizon === "rest-of-season" &&
+    resolvedSet?.origin === "laces-out" &&
+    resolvedSet.managed?.rosForecastKind === "point-only";
+  const effectiveSort = pointOnly && (sort === "floor" || sort === "ceiling") ? "projection" : sort;
   const positions = useMemo(
     () =>
       [...new Set(players.map((player) => player.primaryPosition))].sort((left, right) =>
@@ -409,29 +416,28 @@ function ProjectionBoard({
             player.nflTeam?.toLocaleLowerCase("en-US").includes(normalizedQuery)),
       )
       .sort((left, right) => {
-        if (sort === "name") return left.fullName.localeCompare(right.fullName);
+        if (effectiveSort === "name") return left.fullName.localeCompare(right.fullName);
         const leftValue =
-          sort === "floor"
+          effectiveSort === "floor"
             ? left.floorPoints
-            : sort === "ceiling"
+            : effectiveSort === "ceiling"
               ? left.ceilingPoints
               : left.meanPoints;
         const rightValue =
-          sort === "floor"
+          effectiveSort === "floor"
             ? right.floorPoints
-            : sort === "ceiling"
+            : effectiveSort === "ceiling"
               ? right.ceilingPoints
               : right.meanPoints;
         return (rightValue ?? Number.NEGATIVE_INFINITY) - (leftValue ?? Number.NEGATIVE_INFINITY);
       });
-  }, [players, position, deferredQuery, sort]);
+  }, [players, position, deferredQuery, effectiveSort]);
 
   /* The grid renders every match; on a full projection set that is the whole
      admitted pool. 200 rows is more than a screen can use — the search and
      position filters are the way to reach the tail. */
   const renderedPlayers = useMemo(() => visiblePlayers.slice(0, 200), [visiblePlayers]);
 
-  const resolvedSet = detail.state === "ready" ? detail.detail.projectionSet : activeSet;
   // A refreshed list can identify changed scoring before a previously loaded detail is replaced.
   // Keep that warning while the historical rows are explicitly selected or being refreshed.
   const scoringNotice = projectionScoringNotice(activeSet) ?? projectionScoringNotice(resolvedSet);
@@ -599,7 +605,10 @@ function ProjectionBoard({
 
           {horizon === "rest-of-season" && resolvedSet?.origin === "laces-out" ? (
             <p className={styles.withheldNotice}>
-              {rosIntervalPresentation(resolvedSet.managed?.rosInterval)}
+              {rosIntervalPresentation(
+                resolvedSet.managed?.rosInterval,
+                resolvedSet.managed?.rosForecastKind,
+              )}
             </p>
           ) : null}
 
@@ -627,14 +636,21 @@ function ProjectionBoard({
             </label>
             <label>
               <span className="sr-only">Sort projections</span>
-              <select value={sort} onChange={(event) => setSort(event.target.value as SortKey)}>
+              <select
+                value={effectiveSort}
+                onChange={(event) => setSort(event.target.value as SortKey)}
+              >
                 <option value="projection">Highest projection</option>
-                <option value="floor">
-                  {horizon === "week" ? "Highest floor" : "Highest range low"}
-                </option>
-                <option value="ceiling">
-                  {horizon === "week" ? "Highest ceiling" : "Highest range high"}
-                </option>
+                {!pointOnly ? (
+                  <>
+                    <option value="floor">
+                      {horizon === "week" ? "Highest floor" : "Highest range low"}
+                    </option>
+                    <option value="ceiling">
+                      {horizon === "week" ? "Highest ceiling" : "Highest range high"}
+                    </option>
+                  </>
+                ) : null}
                 <option value="name">Player name</option>
               </select>
             </label>

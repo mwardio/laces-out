@@ -19,6 +19,8 @@ import {
   FIRST_PARTY_ROS_MODEL_VERSION,
   firstPartyRosReleaseIdentity,
   deriveVerifiedMarginalRosArtifactBlockers,
+  deriveVerifiedPointRosArtifactBlockers,
+  type RosArtifactBlockerContext,
   type FirstPartyRosChampionPolicy,
   type RosArtifactBlockerDiagnostics,
   type FirstPartyRosReleaseIdentity,
@@ -57,6 +59,22 @@ import {
  * from the newest run under the managed shadow source — the same source release runs are written
  * under — so a later audit run reported an admitted, release-capable artifact as globally disabled.
  */
+
+/** Both newer rails require independently reconstructed immutable admission evidence. */
+export function deriveVerifiedRosStatusArtifactBlockers(
+  artifact: RosArtifactBlockerContext & { readonly artifactChecksum: string },
+): RosArtifactBlockerDiagnostics | null {
+  return artifact.policyVersion === firstPartyRosReleaseIdentity("point-v1").policyVersion
+    ? deriveVerifiedPointRosArtifactBlockers(artifact)
+    : deriveVerifiedMarginalRosArtifactBlockers(artifact);
+}
+
+function requiresVerifiedArtifact(identity: FirstPartyRosReleaseIdentity): boolean {
+  return (
+    identity.policyVersion === firstPartyRosReleaseIdentity("marginal-v8").policyVersion ||
+    identity.policyVersion === firstPartyRosReleaseIdentity("point-v1").policyVersion
+  );
+}
 
 /** Bounds. Each read withholds rather than truncating silently past these limits. */
 const MAXIMUM_ARTIFACT_ROWS = 128;
@@ -365,10 +383,7 @@ export class RosProjectionStatusService {
             .limit(MAXIMUM_LEAGUE_ROWS);
     const additionalProfiles = new Map<string, RosScoringProfileIdentity>();
     const validationByKey = new Map<string, (typeof validationRows)[number]>();
-    for (const key of this.#releaseIdentity.policyVersion ===
-    firstPartyRosReleaseIdentity("marginal-v8").policyVersion
-      ? leagueKeys
-      : []) {
+    for (const key of requiresVerifiedArtifact(this.#releaseIdentity) ? leagueKeys : []) {
       try {
         const definition = rosProfileDefinitionFromKey(key);
         additionalProfiles.set(key, {
@@ -473,11 +488,9 @@ export class RosProjectionStatusService {
         desc(firstPartyRosChampionArtifacts.createdAt),
       )
       .limit(MAXIMUM_ARTIFACT_ROWS);
-    const marginalRail =
-      this.#releaseIdentity.policyVersion ===
-      firstPartyRosReleaseIdentity("marginal-v8").policyVersion;
+    const verifiedRail = requiresVerifiedArtifact(this.#releaseIdentity);
     const artifactDiagnosticsById = await this.#artifactDiagnostics(artifactRows);
-    const verifiedArtifactRows = marginalRail
+    const verifiedArtifactRows = verifiedRail
       ? artifactRows.filter((row) => artifactDiagnosticsById.has(row.id))
       : artifactRows;
     const selectedArtifactByKey = new Map(artifactRows.map((row) => [row.scoringProfileKey, row]));
@@ -518,7 +531,7 @@ export class RosProjectionStatusService {
         ? artifactDiagnosticsById.get(selectedArtifact.id)
         : undefined;
       const invalidAdmittedArtifact =
-        marginalRail &&
+        verifiedRail &&
         validation?.state === "admitted" &&
         selectedArtifact !== undefined &&
         artifactDiagnostics === undefined;
@@ -640,11 +653,7 @@ export class RosProjectionStatusService {
   async #artifactDiagnostics(
     artifacts: readonly { readonly id: string; readonly artifactChecksum: string }[],
   ): Promise<ReadonlyMap<string, RosArtifactBlockerDiagnostics>> {
-    if (
-      this.#releaseIdentity.policyVersion !==
-      firstPartyRosReleaseIdentity("marginal-v8").policyVersion
-    )
-      return new Map();
+    if (!requiresVerifiedArtifact(this.#releaseIdentity)) return new Map();
     const missing = artifacts.filter(
       (row) => !this.#artifactDiagnosticsCache.has(`${row.id}:${row.artifactChecksum}`),
     );
@@ -662,7 +671,7 @@ export class RosProjectionStatusService {
         )
         .limit(MAXIMUM_ARTIFACT_ROWS);
       for (const row of rows) {
-        const diagnostics = deriveVerifiedMarginalRosArtifactBlockers({
+        const diagnostics = deriveVerifiedRosStatusArtifactBlockers({
           ...row,
           policy: row.policy as unknown as FirstPartyRosChampionPolicy,
         });
@@ -683,8 +692,8 @@ export class RosProjectionStatusService {
   }
 
   #releaseRunIdentity() {
-    // Pre-versioned run metadata belongs only to the legacy rail. A v8 view requires explicit
-    // matching identities and cannot display a newer legacy admission/run as marginal evidence.
+    // Pre-versioned run metadata belongs only to the legacy rail. Newer rails require explicit
+    // matching identities and cannot display a legacy admission/run as newer evidence.
     const legacy = firstPartyRosReleaseIdentity();
     return and(
       sql`coalesce(${projectionModelRuns.configuration}->>'policyVersion', ${legacy.policyVersion}) = ${this.#releaseIdentity.policyVersion}`,
